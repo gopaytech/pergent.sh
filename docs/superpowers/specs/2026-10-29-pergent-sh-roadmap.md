@@ -168,11 +168,24 @@ Each piece gets its own design (and plan) before it is built, and each works on 
    - a simple admin login.
 
    After this piece, MRs are reviewed and approved through pergent.sh.
+
+   Piece 2 must also implement the agent-mode contract (pergent `docs/superpowers/specs/2026-10-29-pergent-agent-mode-design.md`, section 8):
+   - **Tokens:** a Secret per Job, with the git token only in the init container, passed through env-based git config and never in a URL or `.git/config`. Hooks and pushes are disabled in the checkout.
+   - **Cache mounts:** only the repo's own cache folder, read-only, in both containers.
+   - **Fetching:** verify fetching the merge base by SHA (including forks), with a shallow target-branch fallback.
+   - **Deadline:** `activeDeadlineSeconds` = `--timeout` + 2 min + a measured clone allowance, with `terminationGracePeriodSeconds: 30`.
+   - **Head re-check:** re-check the MR head before approving.
+   - **Failure status:** a per-repository commit-status setting for failed reviews, `failed` by default or `neutral`.
 3. **Repository readiness scan:** the checks, the drafted MRs, and the scan feeding the approval advice.
 4. **Skills:** the library, repository skills, assignment, the two improvement signals, and proposals with human approval.
 5. **Organization:** members, roles, SSO, the audit log.
 
-Later, not version 1: analytics, automatic skill improvements.
+Later, not version 1:
+- analytics;
+- automatic skill improvements;
+- an LLM proxy that holds the provider key, with per-Job credentials and cost caps;
+- skipping re-reviews of pushes that don't change the patch;
+- a hardened pod profile: restricted security profile, fail-closed egress policy, optional gVisor/Kata.
 
 ## Stack (builder's defaults, not yet decided with the user)
 
