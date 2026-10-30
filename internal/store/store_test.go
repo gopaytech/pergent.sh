@@ -706,9 +706,13 @@ func TestMigrateTwice(t *testing.T) {
 	if err := s.Migrate(ctx); err != nil {
 		t.Fatalf("second Migrate: %v", err)
 	}
+	entries, err := migrationFS.ReadDir("migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
 	var n int
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil || n != 1 {
-		t.Errorf("schema_migrations rows = %d, %v; want 1", n, err)
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil || n != len(entries) {
+		t.Errorf("schema_migrations rows = %d, %v; want one per migration (%d)", n, err, len(entries))
 	}
 }
 
@@ -967,5 +971,56 @@ func TestPostpone(t *testing.T) {
 	}
 	if got := getRun(t, s, sup).State; got != Superseded {
 		t.Errorf("superseded run state = %s", got)
+	}
+}
+
+// A run claimed but never dispatched (pergent.sh stopped between the claim and
+// MarkDispatched) goes back to the queue once its claim is old enough, without
+// counting an attempt. Dispatched runs and recent claims are left alone.
+func TestRecoverUnlaunched(t *testing.T) {
+	s := newStore(t)
+	stranded := enqueue(t, s, mr1, "aaaa")
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	// One failed attempt before it got stranded: attempts must stay 1.
+	if err := s.Requeue(ctx, stranded, t0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	launched := dispatched(t, s, mr2, "bbbb", "tok")
+	recent := enqueue(t, s, MRKey{Instance: mr1.Instance, ProjectID: 7, IID: 5}, "cccc")
+	if _, err := s.ClaimQueued(ctx, 10, t0.Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := s.RecoverUnlaunched(ctx, t0.Add(5*time.Minute))
+	if err != nil || n != 1 {
+		t.Fatalf("RecoverUnlaunched = %d, %v; want 1", n, err)
+	}
+	r := getRun(t, s, stranded)
+	if r.State != Queued || r.Attempts != 1 {
+		t.Errorf("stranded run = %s with %d attempts, want queued with 1", r.State, r.Attempts)
+	}
+	if r.NotBefore.IsZero() || r.NotBefore.After(time.Now().Add(time.Minute)) {
+		t.Errorf("not_before = %s, want about now", r.NotBefore)
+	}
+	if got := getRun(t, s, launched).State; got != Running {
+		t.Errorf("dispatched run = %s, want running", got)
+	}
+	if got := getRun(t, s, recent).State; got != Running {
+		t.Errorf("recently claimed run = %s, want running", got)
+	}
+
+	// It is claimable again.
+	claimed, err := s.ClaimQueued(ctx, 10, time.Now().Add(time.Minute))
+	if err != nil || len(claimed) != 1 || claimed[0].ID != stranded {
+		t.Errorf("ClaimQueued after recovery = %v, %v; want the stranded run", runIDs(claimed), err)
+	}
+
+	if n, err := s.RecoverUnlaunched(ctx, t0); err != nil || n != 0 {
+		t.Errorf("second RecoverUnlaunched = %d, %v; want 0", n, err)
 	}
 }

@@ -236,7 +236,7 @@ func (s *Store) ClaimQueued(ctx context.Context, limit int, now time.Time) ([]Ru
 	if limit <= 0 {
 		return nil, nil
 	}
-	rows, err := s.pool.Query(ctx, `UPDATE runs SET state = 'running' WHERE id IN (
+	rows, err := s.pool.Query(ctx, `UPDATE runs SET state = 'running', claimed_at = $2 WHERE id IN (
 			SELECT id FROM runs WHERE state = 'queued' AND (not_before IS NULL OR not_before <= $2)
 			ORDER BY created_at, id LIMIT $1 FOR UPDATE SKIP LOCKED)
 		RETURNING `+runColumns, limit, now)
@@ -258,6 +258,21 @@ func sortRuns(runs []Run) {
 		}
 		return runs[i].ID < runs[j].ID
 	})
+}
+
+// RecoverUnlaunched puts running runs that never got a Job back in the queue,
+// due now and without counting an attempt: those claimed before olderThan
+// (or before claims were recorded). Such a run was stranded when pergent.sh
+// stopped between ClaimQueued and MarkDispatched; left alone it would stay
+// running for ever and hold a jobs.max_running slot. It returns how many runs
+// it moved.
+func (s *Store) RecoverUnlaunched(ctx context.Context, olderThan time.Time) (int, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'queued', not_before = now()
+		WHERE state = 'running' AND job_name = '' AND (claimed_at IS NULL OR claimed_at < $1)`, olderThan)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
 }
 
 // Requeue puts a claimed run back in the queue, not to be claimed before
