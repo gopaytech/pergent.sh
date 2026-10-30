@@ -1448,3 +1448,33 @@ func TestPublishRetryClearsRedecide(t *testing.T) {
 		t.Errorf("state %s, want published", r.State)
 	}
 }
+
+// UpsertGitHubProject stores ApproveAvailable as given even without an
+// installation (the review App was uninstalled): a GitHub row never reads as
+// approvable just because its installation is gone.
+func TestUpsertGitHubProjectKeepsApproveAvailable(t *testing.T) {
+	s := newStore(t)
+	gh := Project{Instance: "github", ProjectID: 900, Path: "acme/widgets", HTTPURLToRepo: "https://github.com/acme/widgets.git",
+		InstallationID: 0, ApproveAvailable: false}
+	if err := s.UpsertGitHubProject(ctx, gh); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.Project(ctx, "github", 900)
+	if err != nil || !ok || got.ApproveAvailable || got.InstallationID != 0 || got.HTTPURLToRepo != gh.HTTPURLToRepo {
+		t.Fatalf("Project = %+v, %v, %v; want approve unavailable, no installation", got, ok, err)
+	}
+	gh.InstallationID, gh.ApproveAvailable = 55, true
+	if err := s.UpsertGitHubProject(ctx, gh); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := s.Project(ctx, "github", 900); got.InstallationID != 55 || !got.ApproveAvailable {
+		t.Fatalf("updated = %+v", got)
+	}
+	gh.InstallationID, gh.ApproveAvailable = 0, false
+	if err := s.UpsertGitHubProject(ctx, gh); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := s.Project(ctx, "github", 900); got.InstallationID != 0 || got.ApproveAvailable {
+		t.Fatalf("uninstalled = %+v; want installation 0, approve unavailable", got)
+	}
+}

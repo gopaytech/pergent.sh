@@ -483,3 +483,26 @@ func TestGitHubSecretsMissingEnv(t *testing.T) {
 		}
 	})
 }
+
+// GitHubRepository finds a repository listed under a github instance, with
+// GitHub's case-insensitive owner/name; never a GitLab one.
+func TestGitHubRepository(t *testing.T) {
+	cfg := loadGitHub(t)
+	for _, p := range []string{"acme/widgets", "Acme/Widgets"} {
+		if r, ok := cfg.GitHubRepository("gh", p); !ok || r.GitHub != "gh" || r.Project != "acme/widgets" {
+			t.Errorf("GitHubRepository(gh, %s) = %+v, %v", p, r, ok)
+		}
+	}
+	if r, ok := cfg.GitHubRepository("main", "acme/widgets"); ok {
+		t.Errorf("GitHubRepository(main, ...) = %+v; main is a GitLab instance", r)
+	}
+	if _, ok := cfg.GitHubRepository("gh", "acme/other"); ok {
+		t.Error("GitHubRepository(acme/other) found")
+	}
+	if got := cfg.Repositories[1].Instance(); got != "gh" {
+		t.Errorf("Instance() of the github repository = %q", got)
+	}
+	if got := cfg.Repositories[0].Instance(); got != "main" {
+		t.Errorf("Instance() of the gitlab repository = %q", got)
+	}
+}

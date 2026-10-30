@@ -549,6 +549,26 @@ func (c *Config) Repository(instance, project string) (Repository, bool) {
 	return Repository{}, false
 }
 
+// GitHubRepository returns the repository configured for owner/name project
+// on GitHub instance instance. GitHub names are case-insensitive.
+func (c *Config) GitHubRepository(instance, project string) (Repository, bool) {
+	for _, repo := range c.Repositories {
+		if repo.GitHub == instance && strings.EqualFold(repo.Project, project) {
+			return repo, true
+		}
+	}
+	return Repository{}, false
+}
+
+// Instance is the name of the instance the repository is on, whichever
+// platform it is.
+func (r Repository) Instance() string {
+	if r.GitHub != "" {
+		return r.GitHub
+	}
+	return r.GitLab
+}
+
 // Secrets reads the instance's review token, approve token and webhook
 // secret from the environment. An unset or empty variable is an error that
 // names it.

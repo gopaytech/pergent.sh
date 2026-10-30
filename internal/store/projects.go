@@ -24,9 +24,9 @@ type Project struct {
 	// the repository; 0 on GitLab.
 	InstallationID int64
 	// ApproveAvailable is whether the approve side can reach the repository
-	// (the GitHub approve App is installed on it). A GitLab project, whose
-	// InstallationID is 0, is always stored with true: its approve bot is a
-	// user that can always approve.
+	// (the GitHub approve App is installed on it). A GitLab project
+	// (UpsertProject, InstallationID 0) is always stored with true: its
+	// approve bot is a user that can always approve.
 	ApproveAvailable bool
 }
 
@@ -77,17 +77,27 @@ func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 	return out, rows.Err()
 }
 
-// UpsertProject inserts or updates a project. An update keeps the stored
-// CloneSeconds, which only SetCloneSeconds changes. A project without an
-// installation (GitLab) is stored with ApproveAvailable true whatever p says,
-// so a GitLab row built without the field never reads as missing its
-// approve side.
+// UpsertProject inserts or updates a GitLab project. An update keeps the
+// stored CloneSeconds, which only SetCloneSeconds changes. A project without
+// an installation (GitLab) is stored with ApproveAvailable true whatever p
+// says, so a GitLab row built without the field never reads as missing its
+// approve side. GitHub rows go through UpsertGitHubProject.
 func (s *Store) UpsertProject(ctx context.Context, p Project) error {
+	return s.upsertProject(ctx, p, p.ApproveAvailable || p.InstallationID == 0)
+}
+
+// UpsertGitHubProject inserts or updates a GitHub repository like
+// UpsertProject, storing ApproveAvailable exactly as given, also when the
+// review App isn't installed (InstallationID 0).
+func (s *Store) UpsertGitHubProject(ctx context.Context, p Project) error {
+	return s.upsertProject(ctx, p, p.ApproveAvailable)
+}
+
+func (s *Store) upsertProject(ctx context.Context, p Project, approveAvailable bool) error {
 	var expires *time.Time
 	if !p.DeployTokenExpiresAt.IsZero() {
 		expires = &p.DeployTokenExpiresAt
 	}
-	approveAvailable := p.ApproveAvailable || p.InstallationID == 0
 	_, err := s.pool.Exec(ctx, `INSERT INTO projects (`+projectColumns+`)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (instance, project_id) DO UPDATE SET
