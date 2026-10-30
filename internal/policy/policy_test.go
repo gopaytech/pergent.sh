@@ -341,13 +341,23 @@ const zwsp = "​"
 func TestNeutralizeQuickActions(t *testing.T) {
 	cases := []struct{ name, in, want string }{
 		{"line of its own", "x\n/approve\ny", "x\n" + zwsp + "/approve\ny"},
-		{"indented", "  /merge", "  " + zwsp + "/merge"},
-		{"tab indented", "\t/close", "\t" + zwsp + "/close"},
 		{"first line", "/unapprove", zwsp + "/unapprove"},
-		{"inside a fence", "```\n/target_branch main\n```", "```\n" + zwsp + "/target_branch main\n```"},
-		{"CRLF", "a\r\n/label ~x\r\n", "a\r\n" + zwsp + "/label ~x\r\n"},
+		// GitLab's quick action extractor deletes every "\r" before it
+		// matches a "/" at the start of a line, so a carriage return in front
+		// of the slash doesn't hide it.
+		{"carriage return before the slash", "x\n\r/approve", "x\n" + zwsp + "/approve"},
+		{"carriage returns on the first line", "\r\r/close", zwsp + "/close"},
+		{"CRLF", "x\r\n/approve", "x\n" + zwsp + "/approve"},
+		{"CRLF throughout", "a\r\n/label ~x\r\n", "a\n" + zwsp + "/label ~x\n"},
+		{"column 0 inside a fence", "```\n/merge\n```", "```\n" + zwsp + "/merge\n```"},
+		// GitLab runs only a "/" at column 0: indented lines are left as they
+		// are, so code in a suggested fix stays byte-identical.
+		{"indented code kept", "```go\n    // keep\n```", "```go\n    // keep\n```"},
+		{"indented slash kept", "  /merge", "  /merge"},
+		{"tab indented slash kept", "\t/close", "\t/close"},
 		{"slash mid-line", "use a/b and /approve", "use a/b and /approve"},
 		{"marker and block untouched", Marker + "\nbody\n" + findingsBlock + "\n", Marker + "\nbody\n" + findingsBlock + "\n"},
+		{"no slash", "a\r\nb", "a\nb"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -361,7 +371,7 @@ func TestNeutralizeQuickActions(t *testing.T) {
 // Every comment Decide returns has its quick actions neutralised: model text
 // an MR can steer must never make the review bot run /approve, /close...
 func TestDecideNeutralizesQuickActions(t *testing.T) {
-	steered := Marker + "\n### review\n\nexplanation\n/approve\n  /merge\n```\n/close\n```\n\n" + findingsBlock
+	steered := Marker + "\n### review\n\nexplanation\n/approve\n\r/merge\n```\n/close\n    // keep\n```\n\n" + findingsBlock
 	errRes := &result.Result{SchemaVersion: 1, Status: "error", Error: &result.Error{Code: "x", Message: "boom\n/approve"}}
 	clean := completed(skill("a", "no_blocking_issues", "f.go"))
 	clean.Comment.Markdown = steered
@@ -375,8 +385,9 @@ func TestDecideNeutralizesQuickActions(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := Decide(o, config.FailureStatusFailed)
-			for _, line := range strings.Split(d.Comment, "\n") {
-				if strings.HasPrefix(strings.TrimLeft(line, " \t"), "/") {
+			// GitLab deletes "\r" and then runs a "/" at column 0.
+			for _, line := range strings.Split(strings.ReplaceAll(d.Comment, "\r", ""), "\n") {
+				if strings.HasPrefix(line, "/") {
 					t.Errorf("line %q would run as a quick action in %q", line, d.Comment)
 				}
 			}
@@ -388,6 +399,9 @@ func TestDecideNeutralizesQuickActions(t *testing.T) {
 	d := Decide(Outcome{Result: clean}, config.FailureStatusFailed)
 	if !strings.HasSuffix(d.Comment, "\n"+findingsBlock) {
 		t.Errorf("findings block changed: %q", d.Comment)
+	}
+	if !strings.Contains(d.Comment, "\n    // keep\n") {
+		t.Errorf("indented code in a fence changed: %q", d.Comment)
 	}
 }
 
