@@ -570,16 +570,99 @@ func TestRetryStopsOnContextCancel(t *testing.T) {
 	}
 }
 
+// GitLab (or a proxy in front of it) echoing the token in an error body must
+// not put it in the error, even where the stored body is cut at 4096 bytes.
 func TestAPIErrorNeverContainsToken(t *testing.T) {
-	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "boom", 500)
+	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		tok := r.Header.Get("PRIVATE-TOKEN")
+		// The second copy straddles the 4096-byte cut.
+		pad := strings.Repeat("x", storedBody-len("echo: ")-len(tok)-len(tok)/2)
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, "echo: "+tok+pad+tok)
 	})
 	_, err := c.CurrentUser(context.Background())
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if strings.Contains(err.Error(), testToken) {
-		t.Fatalf("error contains token: %v", err)
+	if len(*reqs) == 0 || (*reqs)[0].Token != testToken {
+		t.Fatal("the server didn't see the token, so the test proves nothing")
+	}
+	var ae *APIError
+	if !errors.As(err, &ae) {
+		t.Fatalf("err = %T %v, want *APIError", err, err)
+	}
+	half := testToken[:len(testToken)/2]
+	for name, text := range map[string]string{"err.Error()": err.Error(), "APIError.Body": ae.Body} {
+		if strings.Contains(text, testToken) || strings.Contains(text, half) {
+			t.Errorf("%s contains (part of) the token, ending %q", name, text[max(0, len(text)-40):])
+		}
+	}
+	if !strings.Contains(ae.Body, "echo: ***") {
+		t.Errorf("body = %q, want the token masked", ae.Body[:40])
+	}
+}
+
+// The token travels in a header Go forwards on every redirect, so a redirect
+// to another host (or port) is refused and nothing reaches that host.
+func TestRedirectToAnotherHostRefused(t *testing.T) {
+	var leaked []string
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked = append(leaked, r.Header.Get("PRIVATE-TOKEN"))
+		_, _ = io.WriteString(w, `{"id":1}`)
+	}))
+	t.Cleanup(other.Close)
+	for _, client := range []struct {
+		name string
+		hc   func(srv *httptest.Server) *http.Client
+	}{
+		{"given client", func(srv *httptest.Server) *http.Client { return srv.Client() }},
+		{"default client", func(*httptest.Server) *http.Client { return nil }},
+	} {
+		t.Run(client.name, func(t *testing.T) {
+			leaked = nil
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, other.URL+"/api/v4/user", http.StatusFound)
+			}))
+			t.Cleanup(srv.Close)
+			hc := client.hc(srv)
+			c := New(srv.URL, testToken, hc)
+			slept := 0
+			c.sleep = func(context.Context, time.Duration) error { slept++; return nil }
+			_, err := c.CurrentUser(context.Background())
+			if err == nil {
+				t.Fatal("followed a redirect to another host")
+			}
+			if len(leaked) != 0 {
+				t.Fatalf("the other host got %d requests", len(leaked))
+			}
+			if strings.Contains(err.Error(), testToken) || !strings.Contains(err.Error(), "redirect") {
+				t.Errorf("err = %v", err)
+			}
+			if slept != 0 {
+				t.Errorf("retried a refused redirect %d times", slept)
+			}
+			if hc != nil && hc.CheckRedirect != nil {
+				t.Error("New changed the caller's http.Client")
+			}
+		})
+	}
+}
+
+// A redirect on the same host is followed, with the token.
+func TestRedirectOnSameHostFollowed(t *testing.T) {
+	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v4/user" {
+			http.Redirect(w, r, "/api/v4/user/moved", http.StatusMovedPermanently)
+			return
+		}
+		jsonReply(map[string]any{"id": 5, "username": "bot"})(w, r)
+	})
+	u, err := c.CurrentUser(context.Background())
+	if err != nil || u.ID != 5 {
+		t.Fatalf("CurrentUser = %+v, %v", u, err)
+	}
+	if len(*reqs) != 2 || (*reqs)[1].Token != testToken {
+		t.Fatalf("requests = %+v", *reqs)
 	}
 }
 

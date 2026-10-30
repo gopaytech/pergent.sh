@@ -2,7 +2,8 @@
 // files, notes, commit statuses, approvals, webhooks and deploy tokens.
 //
 // Errors never contain the token: it travels only in the PRIVATE-TOKEN header,
-// and any copy of it in a response body is masked before it reaches an error.
+// which is never sent to another host on a redirect, and any copy of it in a
+// response body is masked before it reaches an error.
 package gitlab
 
 import (
@@ -38,15 +39,40 @@ type Client struct {
 
 // New returns a client for the GitLab instance at baseURL (for example
 // https://gitlab.example.com). A nil hc gets a client with a 30 s timeout.
+// The client uses a copy of hc that refuses redirects to another host: Go
+// forwards the PRIVATE-TOKEN header on every redirect it follows.
 func New(baseURL, token string, hc *http.Client) *Client {
 	if hc == nil {
 		hc = &http.Client{Timeout: 30 * time.Second}
 	}
+	own := *hc
+	own.CheckRedirect = sameHostRedirects(hc.CheckRedirect)
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		token:   token,
-		hc:      hc,
+		hc:      &own,
 		sleep:   sleepCtx,
+	}
+}
+
+// errCrossHostRedirect is a redirect the client refused to follow.
+var errCrossHostRedirect = errors.New("gitlab: refused a redirect to another host or scheme")
+
+// sameHostRedirects wraps next (nil means Go's default of 10 redirects) so a
+// redirect is followed only to the same scheme and host, port included.
+func sameHostRedirects(next func(*http.Request, []*http.Request) error) func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		first := via[0].URL
+		if req.URL.Host != first.Host || req.URL.Scheme != first.Scheme {
+			return errCrossHostRedirect
+		}
+		if next != nil {
+			return next(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("gitlab: stopped after 10 redirects")
+		}
+		return nil
 	}
 }
 
@@ -148,6 +174,10 @@ func (c *Client) once(ctx context.Context, method, rawURL string, payload []byte
 		req.Header.Set("Content-Type", "application/json")
 	}
 	res, err := c.hc.Do(req)
+	if errors.Is(err, errCrossHostRedirect) {
+		// Not a connection failure: retrying would only be refused again.
+		return nil, 0, errCrossHostRedirect
+	}
 	if err != nil {
 		var ue *url.Error
 		reason := err.Error()
@@ -167,11 +197,12 @@ func (c *Client) once(ctx context.Context, method, rawURL string, payload []byte
 	if res.StatusCode >= 200 && res.StatusCode < 300 {
 		return &response{status: res.StatusCode, header: res.Header, body: data}, 0, nil
 	}
-	stored := data
+	// Mask before cutting: a cut through the token would leave part of it.
+	stored := c.mask(string(data))
 	if len(stored) > storedBody {
-		stored = stored[:storedBody]
+		stored = truncateUTF8(stored, storedBody)
 	}
-	ae := &APIError{Status: res.StatusCode, Body: c.mask(string(stored))}
+	ae := &APIError{Status: res.StatusCode, Body: stored}
 	var ra time.Duration
 	if s, err := strconv.Atoi(strings.TrimSpace(res.Header.Get("Retry-After"))); err == nil && s > 0 {
 		ra = time.Duration(s) * time.Second
