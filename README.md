@@ -289,7 +289,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `github[].api_url` | `https://api.github.com` | GitHub's REST API. Only GitHub.com is supported: another `https` URL (GitHub Enterprise Server) is accepted but untested. |
 | `github[].review_app.app_id` | required | The review App's numeric App ID. |
 | `github[].review_app.private_key_env` | required | Name of the env var with the review App's private key. |
-| `github[].approve_app.app_id`, `.private_key_env` | one of `approve_app` and `approve_token_env` | The approve App: its App ID and the env var with its private key. The default approver. |
+| `github[].approve_app.app_id`, `.private_key_env` | one of `approve_app` and `approve_token_env` | The approve App: its App ID and the env var with its private key. The default approver. Both must differ from `review_app`'s: one App, or one key, can't both review and approve. |
 | `github[].approve_token_env` | one of `approve_app` and `approve_token_env` | Name of the env var with the approve bot user's fine-grained personal access token, instead of an approve App. See [Approving as a bot user](#approving-as-a-bot-user). |
 | `github[].webhook_secret_env` | required | Name of the env var with the review App's webhook secret. GitHub signs each delivery with it (`X-Hub-Signature-256`). |
 | `repositories[].gitlab` | one of `gitlab` and `github` | Name of one of the `gitlab` instances. |
