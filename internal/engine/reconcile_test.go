@@ -270,3 +270,31 @@ func TestReconcileReplacesRecreatedProject(t *testing.T) {
 		t.Errorf("new project = %+v, %v", p, ok)
 	}
 }
+
+// A project of an instance removed from the config can't be reached: its row
+// is dropped with one warning, not reported as an error every hour.
+func TestReconcileForgetsProjectOfRemovedInstance(t *testing.T) {
+	env := newTestEnv(t)
+	serveProject(env, testProjectID, testProjectPath)
+	env.SeedProject(func(p *store.Project) {
+		p.Instance, p.ProjectID, p.Path, p.HookID, p.DeployTokenID = "old", 8, "acme/old", 21, 22
+	})
+
+	reconcile(t, env)
+
+	if _, ok, err := env.Store.Project(env.ctx, "old", 8); err != nil || ok {
+		t.Errorf("the removed instance's project is still stored (%v)", err)
+	}
+	if n := len(env.GitLab.Requests("", "/projects/8/hooks/21")) + len(env.GitLab.Requests("", "/projects/8/deploy_tokens/22")); n != 0 {
+		t.Errorf("made %d requests for a project of a removed instance", n)
+	}
+	if got := strings.Count(env.Logs(), "level=WARN"); got != 1 {
+		t.Errorf("got %d warnings, want 1:\n%s", got, env.Logs())
+	}
+	if strings.Contains(env.Logs(), "level=ERROR") {
+		t.Errorf("logged an error:\n%s", env.Logs())
+	}
+	if _, ok := project(t, env, testProjectID); !ok {
+		t.Errorf("the configured project was removed")
+	}
+}

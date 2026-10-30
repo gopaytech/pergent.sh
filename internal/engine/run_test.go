@@ -45,3 +45,30 @@ func TestRunRecoversStrandedRunAndStops(t *testing.T) {
 		t.Fatal("Run did not return after its context was cancelled")
 	}
 }
+
+// Run reconciles once at start, from its own goroutine.
+func TestRunReconcilesAtStart(t *testing.T) {
+	env := newTestEnv(t)
+	serveProject(env, testProjectID, testProjectPath)
+
+	ctx, cancel := context.WithCancel(env.ctx)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		env.Engine.Run(ctx)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for len(env.GitLab.Requests(http.MethodPost, "/projects/7/hooks")) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("Run didn't reconcile at start:\n%s", env.Logs())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if p, _ := project(t, env, testProjectID); p.HookID != newHookID {
+		t.Errorf("hook id = %d, want %d", p.HookID, newHookID)
+	}
+}

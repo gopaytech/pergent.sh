@@ -8,14 +8,13 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/gopaytech/pergent.sh/internal/callback"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
+	"github.com/gopaytech/pergent.sh/internal/server"
 	"github.com/gopaytech/pergent.sh/internal/store"
-	"github.com/gopaytech/pergent.sh/internal/webhook"
 )
 
-// e2e drives pergent.sh's HTTP side (the real webhook and callback handlers
-// behind the routes main serves) against the engine of a testEnv.
+// e2e drives pergent.sh's HTTP side (server.Routes, which main serves)
+// against the engine of a testEnv.
 type e2e struct {
 	env *testEnv
 	srv *httptest.Server
@@ -23,16 +22,13 @@ type e2e struct {
 
 func newE2E(t *testing.T) *e2e {
 	env := newTestEnv(t)
-	mux := http.NewServeMux()
-	mux.Handle("POST /webhooks/gitlab/{instance}", &webhook.Handler{
-		Config:  env.Engine.Config,
-		Secrets: map[string]string{testInstance: testWebhookSecret},
-		Queue:   env.Store,
-		Wake:    env.Engine.Wake,
-		Log:     env.Engine.Log,
-	})
-	mux.Handle("POST /runs/{id}/result", &callback.Handler{
-		Results: env.Store, Now: env.Now, Wake: env.Engine.Wake, Log: env.Engine.Log,
+	mux := server.Routes(server.Deps{
+		Config:         env.Engine.Config,
+		WebhookSecrets: env.Engine.WebhookSecrets,
+		Store:          env.Store,
+		Wake:           env.Engine.Wake,
+		Now:            env.Now,
+		Log:            env.Engine.Log,
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)

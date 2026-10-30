@@ -160,7 +160,7 @@ func (e *Engine) reconcileRepo(ctx context.Context, repo config.Repository, now 
 		defer cancel()
 		if derr := bots.Review.DeleteDeployToken(sctx, gp.ID, dt.ID); derr != nil {
 			e.log().Warn("couldn't revoke the deploy token that wasn't stored", "instance", repo.GitLab,
-				"project", repo.Project, "deploy_token_id", dt.ID, "error", derr)
+				"project", repo.Project, "deploy_token_id", dt.ID, "error", e.redact(derr.Error()))
 		}
 		return 0, fmt.Errorf("store deploy token: %w", err)
 	}
@@ -176,7 +176,19 @@ func (e *Engine) reconcileRepo(ctx context.Context, repo config.Repository, now 
 
 // removeProject deletes a project's webhook and deploy token from GitLab,
 // then its row. The row stays when GitLab refuses, so the next pass retries.
+// A project of a GitLab instance no longer in the config can't be reached:
+// its row is dropped with a warning, and its deploy token expires on its own
+// within 30 days.
 func (e *Engine) removeProject(ctx context.Context, p store.Project) error {
+	if _, ok := e.Config.Instance(p.Instance); !ok {
+		if err := e.Store.DeleteProject(ctx, p.Instance, p.ProjectID); err != nil {
+			return fmt.Errorf("delete project row: %w", err)
+		}
+		e.log().Warn("forgot a project of a GitLab instance no longer configured; its webhook stays and its deploy token expires on its own",
+			"instance", p.Instance, "project", p.Path, "project_id", p.ProjectID,
+			"hook_id", p.HookID, "deploy_token_id", p.DeployTokenID, "deploy_token_expires_at", p.DeployTokenExpiresAt)
+		return nil
+	}
 	bots, ok := e.Bots[p.Instance]
 	if !ok || bots.Review == nil {
 		return fmt.Errorf("no GitLab bots for instance %q", p.Instance)

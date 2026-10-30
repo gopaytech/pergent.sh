@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -24,15 +25,14 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/gopaytech/pergent.sh/internal/callback"
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/engine"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
+	"github.com/gopaytech/pergent.sh/internal/server"
 	"github.com/gopaytech/pergent.sh/internal/store"
-	"github.com/gopaytech/pergent.sh/internal/webhook"
 )
 
 const (
@@ -143,43 +143,41 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		LLMKey:         llmKey,
 		Log:            log,
 	}
-	if err := eng.Reconcile(ctx); err != nil {
-		// Each failure is logged already; the repositories that did
-		// reconcile are served, and the hourly pass tries the rest again.
-		log.Warn("startup reconcile didn't finish for every repository; serving anyway")
+	handler := server.Routes(server.Deps{
+		Config: cfg, WebhookSecrets: hookSecrets, Store: st, Wake: eng.Wake, Log: log,
+	})
+	ln, err := net.Listen("tcp", cfg.Listen)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", cfg.Listen, err)
 	}
+	log.Info("pergent-sh serving", "listen", cfg.Listen, "repositories", len(cfg.Repositories))
+	// Engine.Run reconciles first, in its own goroutine, so a slow GitLab
+	// at startup never keeps the routes down.
+	return serveUntilDone(ctx, ln, handler, eng.Run, log)
+}
 
-	mux := http.NewServeMux()
-	mux.Handle("POST /webhooks/gitlab/{instance}", &webhook.Handler{
-		Config: cfg, Secrets: hookSecrets, Queue: st, Wake: eng.Wake, Log: log,
-	})
-	mux.Handle("POST /runs/{id}/result", &callback.Handler{Results: st, Wake: eng.Wake, Log: log})
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = io.WriteString(w, "ok")
-	})
+// serveUntilDone serves handler on ln and runs loops next to it until ctx is
+// done or the server fails. Then the server shuts down (20 s for requests in
+// flight) and only after that are the loops stopped and waited for, so a
+// result received during shutdown is still woken for.
+func serveUntilDone(ctx context.Context, ln net.Listener, handler http.Handler, loops func(context.Context), log *slog.Logger) error {
 	srv := &http.Server{
-		Addr:              cfg.Listen,
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
 		WriteTimeout:      60 * time.Second,
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(ln) }()
 
-	// The loops outlive the signal until the HTTP server has drained, so a
-	// result received during shutdown is still woken for.
 	loopCtx, stopLoops := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopLoops()
 	loopsDone := make(chan struct{})
 	go func() {
-		eng.Run(loopCtx)
+		loops(loopCtx)
 		close(loopsDone)
 	}()
-
-	served := make(chan error, 1)
-	go func() { served <- srv.ListenAndServe() }()
-	log.Info("pergent-sh serving", "listen", cfg.Listen, "repositories", len(cfg.Repositories))
 
 	var serveErr error
 	select {

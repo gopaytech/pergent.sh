@@ -1,0 +1,47 @@
+// Package server holds pergent.sh's HTTP routes, so the binary and the
+// end-to-end test serve the same ones.
+package server
+
+import (
+	"io"
+	"log/slog"
+	"net/http"
+	"time"
+
+	"github.com/gopaytech/pergent.sh/internal/callback"
+	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/webhook"
+)
+
+// Deps is what the routes need.
+type Deps struct {
+	Config *config.Config
+	// WebhookSecrets maps an instance name to its webhook secret.
+	WebhookSecrets map[string]string
+	Store          *store.Store
+	// Wake nudges the engine's loops. May be nil.
+	Wake func()
+	// Now is the clock of the result callback; nil means time.Now.
+	Now func() time.Time
+	Log *slog.Logger
+}
+
+// Routes serves:
+//   - POST /webhooks/gitlab/{instance}: GitLab merge request webhooks;
+//   - POST /runs/{id}/result: a review Job's result;
+//   - GET /healthz: 200 "ok".
+func Routes(d Deps) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.Handle("POST /webhooks/gitlab/{instance}", &webhook.Handler{
+		Config: d.Config, Secrets: d.WebhookSecrets, Queue: d.Store, Wake: d.Wake, Log: d.Log,
+	})
+	mux.Handle("POST /runs/{id}/result", &callback.Handler{
+		Results: d.Store, Now: d.Now, Wake: d.Wake, Log: d.Log,
+	})
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = io.WriteString(w, "ok")
+	})
+	return mux
+}

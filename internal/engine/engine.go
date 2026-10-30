@@ -90,15 +90,20 @@ const (
 // this one goroutine, one after another, so no two of them ever overlap (a
 // publish and a cleanup of the same merge request least of all). Errors are
 // logged and never stop the loop. Before the first pass, runs stranded
-// between claim and dispatch by an earlier stop go back to the queue: with
-// one replica, nothing is being dispatched yet. Run does not reconcile at
-// start; the caller does that first.
+// between claim and dispatch by an earlier stop go back to the queue (with
+// one replica, nothing is being dispatched yet), then Reconcile runs once.
+// Run is started next to the HTTP server, never before it, so a slow GitLab
+// at startup delays only the loops.
 func (e *Engine) Run(ctx context.Context) {
 	log := e.log()
 	if n, err := e.Store.RecoverUnlaunched(ctx, e.now()); err != nil {
-		log.Error("couldn't requeue runs stranded before their job started", "error", err)
+		log.Error("couldn't requeue runs stranded before their job started", "error", e.redact(err.Error()))
 	} else if n > 0 {
 		log.Warn("requeued runs stranded before their job started", "runs", n)
+	}
+	if err := e.Reconcile(ctx); err != nil && ctx.Err() == nil {
+		// Each failure is logged already; the hourly pass tries again.
+		log.Error("startup reconcile failed", "error", e.redact(err.Error()))
 	}
 
 	pass := time.NewTicker(passInterval)
