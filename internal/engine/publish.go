@@ -101,6 +101,7 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 		failure = repo.FailureStatus
 	}
 	o := e.outcome(run, log)
+	o.ApprovalOff = ok && !repo.Approve
 	if policy.Decide(o, failure).Approve {
 		// Only a review that would be approved depends on whether the
 		// change is a draft and the approve side can reach the repository.
@@ -307,11 +308,12 @@ func (e *Engine) giveUpStatus(ctx context.Context, run store.Run, log *slog.Logg
 // CleanupOnce deletes the Jobs of superseded runs, sets their commit status
 // to canceled when they had been dispatched, and removes the approve bot's
 // approvals of a head or target branch that is no longer the MR's newest
-// run's. Anything that fails is left for a later pass: a run for the next
-// one, an approval the bot couldn't remove for after its backoff (30 s ×
-// 2^failures, at most 5 minutes), as a refused removal would otherwise cost
-// GitHub calls on every pass. The returned error joins failures to list the
-// work.
+// run's, and every approval it holds in a repository whose "approve clean
+// reviews" is turned off. Anything that fails is left for a later pass: a
+// run for the next one, an approval the bot couldn't remove for after its
+// backoff (30 s × 2^failures, at most 5 minutes), as a refused removal would
+// otherwise cost GitHub calls on every pass. The returned error joins
+// failures to list the work.
 func (e *Engine) CleanupOnce(ctx context.Context) error {
 	var errs []error
 	runs, err := e.Store.RunsToCleanUp(ctx)
@@ -333,29 +335,53 @@ func (e *Engine) CleanupOnce(ctx context.Context) error {
 	if err != nil {
 		errs = append(errs, fmt.Errorf("cleanup: list stale approvals: %w", err))
 	}
+	tried := make(map[store.Approval]bool, len(stale))
 	for _, a := range stale {
+		if ctx.Err() != nil {
+			return errors.Join(errs...)
+		}
+		tried[a] = true
+		e.withdraw(ctx, a, "stale approval removed", "couldn't remove the stale approval; will try again")
+	}
+
+	// Listed after the stale ones were handled: one whose removal just
+	// failed is in its backoff, one removed is gone.
+	off, err := e.approvalOffApprovals(ctx)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	for _, a := range off {
 		if ctx.Err() != nil {
 			break
 		}
-		log := e.log().With("instance", a.MR.Instance, "project_id", a.MR.ProjectID, "mr", a.MR.IID, "approved", a.ApprovedSHA)
-		plat, ok := e.Platforms[a.MR.Instance]
-		if !ok || plat.Approver == nil {
-			// The instance was removed from the config; it stays listed on
-			// every pass, so don't log it above debug.
-			log.Debug("skipping the stale approval: no approve bot for the instance")
+		if tried[a] {
 			continue
 		}
-		if retryAt, err := e.unapprove(ctx, plat.Approver, a); err != nil {
-			attrs := []any{"error", e.redact(err.Error())}
-			if !retryAt.IsZero() {
-				attrs = append(attrs, "retry_at", retryAt)
-			}
-			log.Warn("couldn't remove the stale approval; will try again", attrs...)
-			continue
-		}
-		log.Info("stale approval removed")
+		e.withdraw(ctx, a, "approval withdrawn: approval is turned off for the repository",
+			"couldn't withdraw the approval of a repository with approval turned off; will try again")
 	}
 	return errors.Join(errs...)
+}
+
+// withdraw removes the approve bot's approval a and logs done, or failed
+// with when it is tried again. An instance without an approve bot (removed
+// from the config) is skipped quietly: it stays listed on every pass.
+func (e *Engine) withdraw(ctx context.Context, a store.Approval, done, failed string) {
+	log := e.log().With("instance", a.MR.Instance, "project_id", a.MR.ProjectID, "mr", a.MR.IID, "approved", a.ApprovedSHA)
+	plat, ok := e.Platforms[a.MR.Instance]
+	if !ok || plat.Approver == nil {
+		log.Debug("skipping the approval: no approve bot for the instance")
+		return
+	}
+	if retryAt, err := e.unapprove(ctx, plat.Approver, a); err != nil {
+		attrs := []any{"error", e.redact(err.Error())}
+		if !retryAt.IsZero() {
+			attrs = append(attrs, "retry_at", retryAt)
+		}
+		log.Warn(failed, attrs...)
+		return
+	}
+	log.Info(done)
 }
 
 func (e *Engine) cleanUp(ctx context.Context, run store.Run, log *slog.Logger) error {

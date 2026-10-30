@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"slices"
 	"testing"
 	"time"
 )
@@ -1556,5 +1557,50 @@ func TestUpsertGitHubProjectKeepsApproveAvailable(t *testing.T) {
 	}
 	if got, _, _ := s.Project(ctx, "github", 900); got.InstallationID != 0 || got.ApproveAvailable {
 		t.Fatalf("uninstalled = %+v; want installation 0, approve unavailable", got)
+	}
+}
+
+// ApprovalsDue lists every recorded approval, stale or not, whose unapprove
+// backoff is over, with its project's stored path ("" when the project isn't
+// stored).
+func TestApprovalsDue(t *testing.T) {
+	s := newStore(t)
+	mr3 := MRKey{Instance: mr1.Instance, ProjectID: 9, IID: 1}
+	if err := s.UpsertProject(ctx, Project{Instance: mr1.Instance, ProjectID: mr1.ProjectID, Path: "acme/widgets"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	if got, err := s.ApprovalsDue(ctx, now); err != nil || len(got) != 0 {
+		t.Fatalf("no approvals: %v, %v", got, err)
+	}
+	for _, mr := range []MRKey{mr1, mr2, mr3} {
+		enqueue(t, s, mr, "A")
+		if err := s.SetApprovedSHA(ctx, mr, "A", "main"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// mr2's approval is cleared; it isn't listed.
+	if err := s.ClearApprovedSHA(ctx, mr2, "A", "main"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ApprovalsDue(ctx, now)
+	want := []ProjectApproval{
+		{Approval: Approval{MR: mr1, ApprovedSHA: "A", ApprovedTarget: "main"}, ProjectPath: "acme/widgets"},
+		{Approval: Approval{MR: mr3, ApprovedSHA: "A", ApprovedTarget: "main"}},
+	}
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("ApprovalsDue = %+v, %v; want %+v", got, err, want)
+	}
+
+	// A failed removal puts it aside until its backoff is over.
+	next, err := s.UnapproveFailed(ctx, mr1, "A", "main", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.ApprovalsDue(ctx, next.Add(-time.Second)); len(got) != 1 || got[0].MR != mr3 {
+		t.Errorf("inside the backoff: %+v, want only mr3's", got)
+	}
+	if got, _ := s.ApprovalsDue(ctx, next); len(got) != 2 {
+		t.Errorf("after the backoff: %+v, want both", got)
 	}
 }

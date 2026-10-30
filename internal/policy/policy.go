@@ -41,12 +41,14 @@ const (
 	reasonDraft              = "draft"
 	reasonApproveUnavailable = "the pergent approve App isn't installed on this repository"
 	reasonApproveBotNoReach  = "the pergent approve bot can't reach this repository"
+	reasonApprovalOff        = "approval is turned off"
 
 	noteNothingReviewed    = "**Not approved:** every changed file was skipped by pergent's default rules, so nothing was reviewed. A human needs to look."
 	notePartlySkipped      = "**Not approved:** some changed files were skipped by pergent's default rules, so they weren't reviewed. A human needs to look."
 	noteDraft              = "---\n**Not approved:** this is a draft. It will be approved when it's marked ready."
 	noteApproveUnavailable = "---\n**Not approved:** the pergent approve App isn't installed on this repository."
 	noteApproveBotNoReach  = "---\n**Not approved:** the pergent approve bot can't reach this repository."
+	noteApprovalOff        = "---\n**Not approved:** approval is turned off for this repository."
 
 	// The skipped-files note lists at most maxListedSkipped paths, each cut
 	// to maxListedPath characters with at most maxListedRules rules of
@@ -78,11 +80,13 @@ func blocksApproval(rule string) bool { return !reviewedSkipRules[rule] }
 // Outcome is what a run produced. FailureReason is set when no usable result
 // arrived (the Job died, the result did not parse, the run was cancelled...).
 //
-// Draft and ApproveUnavailable only matter to a review that would otherwise
-// be approved: it still gets its success status, but no approval. Draft is
-// the change being a draft (it is approved once marked ready);
+// ApprovalOff, Draft and ApproveUnavailable only matter to a review that
+// would otherwise be approved: it still gets its success status, but no
+// approval. ApprovalOff is the repository's "approve clean reviews" turned
+// off; Draft is the change being a draft (it is approved once marked ready);
 // ApproveUnavailable is the approve side unable to reach the repository (the
-// approve App isn't installed on it). Draft wins when both are set.
+// approve App isn't installed on it). ApprovalOff wins over the other two (no
+// approval comes while it stays off), and Draft over ApproveUnavailable.
 // ApproveBot says the approve side is a bot user's token (GitHub's
 // approve_token_env) rather than an App, which only changes how an
 // unavailable approve side is worded.
@@ -92,6 +96,7 @@ type Outcome struct {
 	Draft              bool
 	ApproveUnavailable bool
 	ApproveBot         bool
+	ApprovalOff        bool
 }
 
 // Decision is what to do with an outcome.
@@ -209,6 +214,8 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 		}
 	}
 	switch {
+	case o.ApprovalOff:
+		return notApproved(comment, r.Comment.FindingsBlock, reasonApprovalOff, noteApprovalOff)
 	case o.Draft:
 		return notApproved(comment, r.Comment.FindingsBlock, reasonDraft, noteDraft)
 	case o.ApproveUnavailable && o.ApproveBot:

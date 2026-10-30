@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -123,4 +124,43 @@ func (e *Engine) clearApproval(ctx context.Context, a store.Approval) error {
 		return fmt.Errorf("clear recorded approval: %w", err)
 	}
 	return nil
+}
+
+// approvalOffApprovals returns the recorded approvals, past their unapprove
+// backoff, of merge requests in repositories switched on with "approve clean
+// reviews" turned off. A repository switched off, or a project that isn't
+// stored, is left alone. Each repository's settings are read once; one that
+// can't be read is skipped this pass and its error returned.
+func (e *Engine) approvalOffApprovals(ctx context.Context) ([]store.Approval, error) {
+	due, err := e.Store.ApprovalsDue(ctx, e.now())
+	if err != nil {
+		return nil, fmt.Errorf("cleanup: list approvals: %w", err)
+	}
+	type repoKey struct{ instance, project string }
+	approve := map[repoKey]bool{}
+	var (
+		out  []store.Approval
+		errs []error
+	)
+	for _, a := range due {
+		if a.ProjectPath == "" {
+			continue
+		}
+		k := repoKey{a.MR.Instance, strings.ToLower(a.ProjectPath)}
+		on, seen := approve[k]
+		if !seen {
+			repo, ok, err := e.settings().Get(ctx, a.MR.Instance, a.ProjectPath)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("cleanup: load repository settings of %s: %w", a.ProjectPath, err))
+				approve[k] = true // not read again this pass
+				continue
+			}
+			on = !ok || repo.Approve
+			approve[k] = on
+		}
+		if !on {
+			out = append(out, a.Approval)
+		}
+	}
+	return out, errors.Join(errs...)
 }

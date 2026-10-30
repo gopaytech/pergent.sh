@@ -653,3 +653,66 @@ func TestSkippedNoteCapsPathLengthAndSize(t *testing.T) {
 		t.Errorf("note doesn't say how many paths it left out: %q", note)
 	}
 }
+
+const wantNoteApprovalOff = "---\n**Not approved:** approval is turned off for this repository."
+
+// Approval turned off for the repository: a clean review is reviewed,
+// commented and gets its success status, but is never approved.
+func TestDecideApprovalOff(t *testing.T) {
+	d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), ApprovalOff: true}, config.FailureStatusFailed)
+	if d.Approve || d.Status != StatusSuccess ||
+		d.Description != "No blocking issues; not approved: approval is turned off" {
+		t.Fatalf("got %+v", d)
+	}
+	want := Marker + "\n### review\n\nbody\n\n" + wantNoteApprovalOff + "\n\n" + findingsBlock
+	if d.Comment != want {
+		t.Errorf("comment:\n%q\nwant:\n%q", d.Comment, want)
+	}
+}
+
+// Approval off is the reason over a draft or an unreachable approve side:
+// neither would be approved later while it stays off.
+func TestDecideApprovalOffWinsOverDraftAndUnavailable(t *testing.T) {
+	for _, o := range []Outcome{
+		{Draft: true}, {ApproveUnavailable: true}, {ApproveUnavailable: true, ApproveBot: true},
+		{Draft: true, ApproveUnavailable: true},
+	} {
+		o.Result, o.ApprovalOff = completed(skill("a", "no_blocking_issues", "f.go")), true
+		d := Decide(o, config.FailureStatusFailed)
+		if d.Approve || d.Description != "No blocking issues; not approved: approval is turned off" ||
+			!strings.Contains(d.Comment, wantNoteApprovalOff) || strings.Count(d.Comment, "**Not approved:**") != 1 {
+			t.Errorf("%+v: got %+v", o, d)
+		}
+	}
+}
+
+// Approval off only changes a decision that would approve: every other row
+// keeps its own outcome and note.
+func TestDecideApprovalOffKeepsOtherRows(t *testing.T) {
+	partly := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{
+		Reviewed: []string{"f.go"}, Skipped: []result.Skipped{{Path: "go.sum", Rule: "lockfile"}}}})
+	nothing := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{
+		Skipped: []result.Skipped{{Path: "go.sum", Rule: "lockfile"}}}})
+	cases := map[string]Outcome{
+		"blocking":        {Result: completed(skill("a", "has_blocking_issues", "f.go"))},
+		"failed skill":    {Result: completed(skill("a", "failed"))},
+		"failure reason":  {FailureReason: "the job timed out"},
+		"error result":    {Result: &result.Result{Status: "error", Comment: result.Comment{Markdown: Marker + "\nboom"}}},
+		"partly skipped":  {Result: partly},
+		"nothing to do":   {Result: nothing},
+		"no result":       {},
+		"unknown verdict": {Result: completed(skill("a", "weird", "f.go"))},
+	}
+	for name, o := range cases {
+		t.Run(name, func(t *testing.T) {
+			for _, fs := range []config.FailureStatus{config.FailureStatusFailed, config.FailureStatusNeutral} {
+				base := Decide(o, fs)
+				off := o
+				off.ApprovalOff = true
+				if got := Decide(off, fs); got != base {
+					t.Errorf("approval off changed the decision:\n%+v\nwant\n%+v", got, base)
+				}
+			}
+		})
+	}
+}

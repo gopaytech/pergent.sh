@@ -89,6 +89,13 @@ type Approval struct {
 	ApprovedTarget string
 }
 
+// ProjectApproval is a recorded approval with the stored path of its
+// project; ProjectPath is "" when the project isn't stored.
+type ProjectApproval struct {
+	Approval
+	ProjectPath string
+}
+
 const runColumns = `id::text, instance, project_id, mr_iid, project_path, head_sha, base_sha, start_sha, target_branch,
 	state, job_name, token_expires_at, result, failure_reason, publish_error, attempts,
 	created_at, dispatched_at, reported_at, not_before, cleaned_up`
@@ -722,6 +729,32 @@ func (s *Store) StaleApprovals(ctx context.Context, now time.Time) ([]Approval, 
 			OR (m.approved_target <> '' AND newest.target_branch <> m.approved_target))
 			AND (m.unapprove_not_before IS NULL OR m.unapprove_not_before <= $1)
 		ORDER BY m.instance, m.project_id, m.mr_iid`, now)
+}
+
+// ApprovalsDue returns every recorded approval, stale or not, whose
+// unapprove backoff (after a failed removal) is over at now, each with its
+// project's stored path.
+func (s *Store) ApprovalsDue(ctx context.Context, now time.Time) ([]ProjectApproval, error) {
+	rows, err := s.pool.Query(ctx, `SELECT m.instance, m.project_id, m.mr_iid, m.approved_sha, m.approved_target,
+			COALESCE(p.path, '')
+		FROM merge_requests m
+		LEFT JOIN projects p ON p.instance = m.instance AND p.project_id = m.project_id
+		WHERE m.approved_sha <> ''
+			AND (m.unapprove_not_before IS NULL OR m.unapprove_not_before <= $1)
+		ORDER BY m.instance, m.project_id, m.mr_iid`, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ProjectApproval
+	for rows.Next() {
+		var a ProjectApproval
+		if err := rows.Scan(&a.MR.Instance, &a.MR.ProjectID, &a.MR.IID, &a.ApprovedSHA, &a.ApprovedTarget, &a.ProjectPath); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 // Approvals returns every recorded approval.
