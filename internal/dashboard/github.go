@@ -10,6 +10,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/github"
+	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
 type githubAPIError = github.APIError
@@ -96,21 +97,24 @@ func (p *githubProvider) user(ctx context.Context, accessToken string) (int64, s
 
 // canSee: a public repository, or read (pull) access to a private or
 // internal one.
-func (p *githubProvider) canSee(ctx context.Context, accessToken, project string) (bool, error) {
+func (p *githubProvider) canSee(ctx context.Context, accessToken, project string) (int64, bool, error) {
 	owner, name, ok := strings.Cut(project, "/")
 	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
-		return false, nil
+		return 0, false, nil
 	}
 	ctx, cancel := callContext(ctx, p.timeout)
 	defer cancel()
 	a, err := p.client(accessToken).RepoAccess(ctx, owner, name)
 	if errors.Is(err, github.ErrNotFound) || isStatus(err, http.StatusForbidden) {
-		return false, nil
+		return 0, false, nil
 	}
 	if err != nil {
-		return false, err
+		return 0, false, err
 	}
-	return !a.Private || a.Pull, nil
+	if a.ID <= 0 {
+		return 0, false, errors.New("github: the repository answer has no id")
+	}
+	return a.ID, !a.Private || a.Pull, nil
 }
 
 func (p *githubProvider) isAdmin(ctx context.Context, accessToken string, _ int64, username string, admin config.DashboardAdmin) (bool, error) {
@@ -133,25 +137,25 @@ func (p *githubProvider) memberRepos(ctx context.Context, accessToken, search st
 
 // memberRepo: read (pull) access, as GET /repos/{owner}/{repo} reports it
 // to the user.
-func (p *githubProvider) memberRepo(ctx context.Context, accessToken, project string) (string, bool, error) {
+func (p *githubProvider) memberRepo(ctx context.Context, accessToken, project string) (store.VisibleProject, bool, error) {
 	owner, name, ok := strings.Cut(project, "/")
 	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
-		return "", false, nil
+		return store.VisibleProject{}, false, nil
 	}
 	ctx, cancel := callContext(ctx, p.timeout)
 	defer cancel()
 	a, err := p.client(accessToken).RepoAccess(ctx, owner, name)
 	if errors.Is(err, github.ErrNotFound) || isStatus(err, http.StatusForbidden) {
-		return "", false, nil
+		return store.VisibleProject{}, false, nil
 	}
 	if err != nil {
-		return "", false, err
+		return store.VisibleProject{}, false, err
 	}
 	if !a.Pull {
-		return "", false, nil
+		return store.VisibleProject{}, false, nil
 	}
-	if a.FullName == "" {
-		return "", false, errors.New("github: the repository answer has no full name")
+	if a.FullName == "" || a.ID <= 0 {
+		return store.VisibleProject{}, false, errors.New("github: the repository answer has no full name or id")
 	}
-	return a.FullName, true, nil
+	return store.VisibleProject{Path: a.FullName, ID: a.ID}, true, nil
 }

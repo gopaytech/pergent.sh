@@ -808,7 +808,7 @@ func TestRepoAccess(t *testing.T) {
 	c, rec := serve(t, jsonReply(map[string]any{"id": 99, "full_name": "acme/widgets", "private": true,
 		"permissions": map[string]any{"admin": false, "push": false, "pull": true}}))
 	a, err := c.RepoAccess(ctx, "acme", "widgets")
-	if err != nil || a != (RepoAccess{FullName: "acme/widgets", Private: true, Pull: true}) {
+	if err != nil || a != (RepoAccess{ID: 99, FullName: "acme/widgets", Private: true, Pull: true}) {
 		t.Fatalf("RepoAccess = %+v, %v", a, err)
 	}
 	expect(t, rec.get(0), "GET", "/repos/acme/widgets", "")

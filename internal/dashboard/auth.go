@@ -57,9 +57,10 @@ type Session struct {
 	Username           string
 	// IsAdmin is true for a member of the instance's admin group or team.
 	IsAdmin bool
-	// Visible holds the lower-cased paths of the repositories on Instance
-	// the user can see. Use CanSee.
-	Visible map[string]bool
+	// Visible holds the repositories on Instance the user can see: their
+	// platform IDs by lower-cased path. Use CanSee for a repository's own
+	// pages and CanSeeRun for its runs.
+	Visible map[string]int64
 	// CSRFToken is the token writes must send in X-CSRF-Token.
 	CSRFToken string
 
@@ -68,7 +69,14 @@ type Session struct {
 
 // CanSee reports whether the user can see project (on the session's
 // instance), ignoring case.
-func (s Session) CanSee(project string) bool { return s.Visible[lower(project)] }
+func (s Session) CanSee(project string) bool { return s.Visible[lower(project)] > 0 }
+
+// CanSeeRun reports whether the user can see a run of project under that
+// path: the path must be visible and hold the project with that ID, not a
+// project that had the path before (deleted, renamed or transferred).
+func (s Session) CanSeeRun(project string, id int64) bool {
+	return id > 0 && s.Visible[lower(project)] == id
+}
 
 type sessionKey struct{}
 
@@ -390,9 +398,9 @@ func (a *Auth) Require(next http.Handler) http.Handler {
 			writeError(w, http.StatusInternalServerError, "could not load the session")
 			return
 		}
-		visible := make(map[string]bool, len(acc.projects))
+		visible := make(map[string]int64, len(acc.projects))
 		for _, p := range acc.projects {
-			visible[lower(p)] = true
+			visible[lower(p.Path)] = p.ID
 		}
 		s := Session{
 			Platform: se.Platform, Instance: se.Instance, UserID: se.UserID, Username: acc.username,

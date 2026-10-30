@@ -201,7 +201,8 @@ func (e *env) exec(sql string, args ...any) {
 }
 
 // runFix is a run to store. Zero fields take defaults: instance main,
-// target main, published, created an hour before the clock, a 2-minute Job.
+// target main, published, created an hour before the clock, a 2-minute Job,
+// the project ID the fake platforms give its path.
 // outcome, reason, status and approved are the publisher's recorded
 // decision (status defaults from the outcome); model and sources (JSON)
 // what the dispatcher recorded.
@@ -240,7 +241,8 @@ func (e *env) addRun(f runFix) string {
 		f.duration = 2 * time.Minute
 	}
 	if f.projectID == 0 {
-		f.projectID = 7
+		// The ID the fake platforms give the project.
+		f.projectID = testID(f.project)
 	}
 	mr := store.MRKey{Instance: f.instance, ProjectID: f.projectID, IID: f.number}
 	id, _, err := e.st.EnqueueRun(ctx, mr, f.project, f.head, f.target)
@@ -803,7 +805,7 @@ func TestRepositoryDetail(t *testing.T) {
 
 func TestRepositoryInputs(t *testing.T) {
 	e := newEnv(t, func(cfg *config.Config) { cfg.Repositories[0].Skills = []string{"code-review"} })
-	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: 7, Path: "acme/widgets"}); err != nil {
+	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: testID("acme/widgets"), Path: "acme/widgets"}); err != nil {
 		t.Fatal(err)
 	}
 	src := e.src["main"]
@@ -834,7 +836,7 @@ func TestRepositoryInputs(t *testing.T) {
 	src.mu.Lock()
 	refs, ids := src.refs, src.ids
 	src.mu.Unlock()
-	if len(refs) != 1 || !refs["trunk"] || len(ids) != 1 || !ids[7] {
+	if len(refs) != 1 || !refs["trunk"] || len(ids) != 1 || !ids[testID("acme/widgets")] {
 		t.Errorf("read refs %v of projects %v; want trunk of 7", refs, ids)
 	}
 
@@ -858,7 +860,7 @@ func TestRepositoryInputs(t *testing.T) {
 
 func TestRepositoryInputsHidden(t *testing.T) {
 	e := newEnv(t, nil)
-	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: 8, Path: "acme/payments"}); err != nil {
+	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: testID("acme/payments"), Path: "acme/payments"}); err != nil {
 		t.Fatal(err)
 	}
 	c := e.signInGitLab(false, "acme/widgets")
@@ -871,13 +873,22 @@ func TestRepositoryInputsHidden(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "try again in a minute") {
 		t.Errorf("503 body = %s", rec.Body)
 	}
+	// Nor is one stored for a project that had its path before: it is
+	// never read.
+	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: 7, Path: "acme/widgets"}); err != nil {
+		t.Fatal(err)
+	}
+	e.wantStatus(c, "/api/repositories/main/acme/widgets/inputs", http.StatusServiceUnavailable)
+	if n := e.src["main"].callCount(); n != 0 {
+		t.Errorf("%d reads of an earlier project at the path", n)
+	}
 }
 
 // Requests for the same repository while its inputs are being read share
 // that one read.
 func TestRepositoryInputsReadOnce(t *testing.T) {
 	e := newEnv(t, nil)
-	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: 7, Path: "acme/widgets"}); err != nil {
+	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: testID("acme/widgets"), Path: "acme/widgets"}); err != nil {
 		t.Fatal(err)
 	}
 	src := e.src["main"]
@@ -1084,11 +1095,11 @@ func TestNoSecretInIntegrations(t *testing.T) {
 			if err := e.st.PutRunLog(ctx, id, "token [REDACTED]"); err != nil {
 				t.Fatal(err)
 			}
-			if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: 7, Path: "acme/widgets", HookID: 3,
+			if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: testID("acme/widgets"), Path: "acme/widgets", HookID: 3,
 				DeployTokenID: 4, DeployTokenUsername: "deploy-user", DeployTokenSealed: []byte(deployToken)}); err != nil {
 				t.Fatal(err)
 			}
-			if err := e.st.UpsertGitHubProject(ctx, store.Project{Instance: "gh", ProjectID: 900, Path: "acme/widgets",
+			if err := e.st.UpsertGitHubProject(ctx, store.Project{Instance: "gh", ProjectID: testID("acme/widgets"), Path: "acme/widgets",
 				InstallationID: 55, ApproveAvailable: true}); err != nil {
 				t.Fatal(err)
 			}
@@ -1123,5 +1134,46 @@ func TestNoSecretInIntegrations(t *testing.T) {
 				t.Errorf("integrations = %+v", v)
 			}
 		})
+	}
+}
+
+// A path can pass from one project to another (deleted and created again,
+// renamed, transferred): a user who can see only the project at the path
+// now never sees the earlier one's runs, findings or logs.
+func TestReusedPathHidesEarlierProject(t *testing.T) {
+	e := newEnv(t, nil)
+	oldRun := e.addRun(runFix{project: "acme/widgets", projectID: 7, number: 1, head: head('1'),
+		result: blockingResult(head('1')), outcome: OutcomeBlocking, title: "Old project's change"})
+	if err := e.st.PutRunLog(ctx, oldRun, "old project log"); err != nil {
+		t.Fatal(err)
+	}
+	newRun := e.addRun(runFix{project: "acme/widgets", number: 2, head: head('2'),
+		result: cleanResult(head('2')), outcome: OutcomeApproved, approved: true, title: "New project's change"})
+	c := e.signInGitLab(false, "acme/widgets") // the project at the path now: testID("acme/widgets")
+
+	if _, se := e.session(c); se.Visible["acme/widgets"] != testID("acme/widgets") {
+		t.Fatalf("visible = %v", se.Visible)
+	}
+	list := getJSON[ReviewListView](e, c, "/api/reviews")
+	if len(list.Items) != 1 || list.Items[0].Number != 2 {
+		t.Errorf("reviews = %+v; want only the new project's", list.Items)
+	}
+	ov := getJSON[OverviewView](e, c, "/api/overview")
+	if ov.Stats.Reviews != 1 || ov.Stats.Blocking != 0 || len(ov.Recent) != 1 {
+		t.Errorf("overview = %+v; want only the new project's run", ov)
+	}
+	for _, target := range []string{"/api/runs/" + oldRun, "/api/runs/" + oldRun + "/log", "/api/reviews/main/acme/widgets/1"} {
+		rec := e.wantStatus(c, target, http.StatusNotFound)
+		if strings.Contains(rec.Body.String(), "Old project") || strings.Contains(rec.Body.String(), "old project log") {
+			t.Errorf("%s shows the earlier project: %s", target, rec.Body)
+		}
+	}
+	e.wantStatus(c, "/api/runs/"+newRun, http.StatusOK)
+	e.wantStatus(c, "/api/reviews/main/acme/widgets/2", http.StatusOK)
+	repos := getJSON[[]RepositoryView](e, c, "/api/repositories")
+	for _, r := range repos {
+		if strings.EqualFold(r.Project, "acme/widgets") && r.Last7.Reviews != 1 {
+			t.Errorf("acme/widgets last 7 days = %+v; want only the new project's run", r.Last7)
+		}
 	}
 }

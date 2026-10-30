@@ -103,16 +103,27 @@ func session(r *http.Request) Session {
 	return se
 }
 
-// visibleProjects is the session's visible repositories, lower-cased and
-// sorted: the only projects any query reads.
-func visibleProjects(se Session) []string {
-	out := make([]string, 0, len(se.Visible))
-	for p, ok := range se.Visible {
-		if ok {
-			out = append(out, p)
+// visibleProjects is the session's visible repositories, lower-cased with
+// their IDs, sorted: the only projects any query reads.
+func visibleProjects(se Session) []store.VisibleProject {
+	out := make([]store.VisibleProject, 0, len(se.Visible))
+	for p, id := range se.Visible {
+		if id > 0 {
+			out = append(out, store.VisibleProject{Path: p, ID: id})
 		}
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
+}
+
+// visibleOf is the visible projects among repos, with their IDs.
+func visibleOf(se Session, repos []settings.Effective) []store.VisibleProject {
+	out := make([]store.VisibleProject, 0, len(repos))
+	for _, e := range repos {
+		if id := se.Visible[lower(e.Project)]; id > 0 {
+			out = append(out, store.VisibleProject{Path: lower(e.Project), ID: id})
+		}
+	}
 	return out
 }
 
@@ -138,14 +149,6 @@ func byProject(repos []settings.Effective) map[string]settings.Effective {
 		m[lower(e.Project)] = e
 	}
 	return m
-}
-
-func lowerAll(repos []settings.Effective) []string {
-	out := make([]string, 0, len(repos))
-	for _, e := range repos {
-		out = append(out, lower(e.Project))
-	}
-	return out
 }
 
 func (d *Dashboard) summary(r store.RunDigest, platform string, j judged) ReviewSummary {
@@ -302,8 +305,8 @@ func (d *Dashboard) reviews(w http.ResponseWriter, r *http.Request) {
 		Since: d.now().Add(-time.Duration(days) * day), Limit: reviewPageSize + 1}
 	if p := q.Get("project"); p != "" {
 		filter.Projects = nil
-		if se.CanSee(p) {
-			filter.Projects = []string{lower(p)}
+		if id := se.Visible[lower(p)]; id > 0 {
+			filter.Projects = []store.VisibleProject{{Path: lower(p), ID: id}}
 		}
 	}
 	if c := q.Get("cursor"); c != "" {
@@ -347,15 +350,9 @@ func (d *Dashboard) review(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	mr, found, err := d.Store.FindMR(ctx, instance, project, number)
-	if err != nil {
-		d.failed(w, r, "finding a review", err)
-		return
-	}
-	if !found {
-		notFound(w)
-		return
-	}
+	// The merge request of the project the user sees at that path, not of
+	// one that had the path before.
+	mr := store.MRKey{Instance: instance, ProjectID: se.Visible[lower(project)], IID: number}
 	// Only the runs of paths the user can see: a project moved somewhere
 	// they can't see keeps its later runs hidden.
 	runs, err := d.Store.MRRunDigests(ctx, mr, visibleProjects(se))
@@ -421,14 +418,15 @@ func runSummary(run store.RunDigest, prev *store.RunDigest, j judged) RunSummary
 
 // --- GET /api/runs/{id} and /api/runs/{id}/log ---
 
-// visibleRun returns the run id when the session can see its repository;
-// found is false otherwise, as for an unknown id.
+// visibleRun returns the run id when the session can see its repository,
+// its path and its project ID both; found is false otherwise, as for an
+// unknown id.
 func (d *Dashboard) visibleRun(ctx context.Context, se Session, id string) (store.Run, bool, error) {
 	run, found, err := d.Store.Run(ctx, id)
 	if err != nil || !found {
 		return store.Run{}, false, err
 	}
-	if run.MR.Instance != se.Instance || !se.CanSee(run.ProjectPath) {
+	if run.MR.Instance != se.Instance || !se.CanSeeRun(run.ProjectPath, run.MR.ProjectID) {
 		return store.Run{}, false, nil
 	}
 	return run, true, nil
@@ -615,7 +613,7 @@ func (d *Dashboard) repositories(w http.ResponseWriter, r *http.Request) {
 // repositoryViews describes repos with their last 7 days and health.
 func (d *Dashboard) repositoryViews(ctx context.Context, se Session, repos []settings.Effective) ([]RepositoryView, error) {
 	active := byProject(repos)
-	counts, err := d.Store.RunStats(ctx, se.Instance, lowerAll(repos), d.now().Add(-defaultDays*day))
+	counts, err := d.Store.RunStats(ctx, se.Instance, visibleOf(se, repos), d.now().Add(-defaultDays*day))
 	if err != nil {
 		return nil, err
 	}
@@ -669,7 +667,7 @@ func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 	}
 	if project, ok := strings.CutSuffix(rest, "/inputs"); ok {
 		if repo, ok := find(project); ok {
-			d.repositoryInputs(w, r, repo)
+			d.repositoryInputs(w, r, repo, se.Visible[lower(repo.Project)])
 			return
 		}
 	}
@@ -741,8 +739,10 @@ type inputsFlight struct {
 	err  error
 }
 
-func (d *Dashboard) repositoryInputs(w http.ResponseWriter, r *http.Request, repo settings.Effective) {
-	v, err := d.cachedInputs(r.Context(), repo)
+// repositoryInputs serves repo's skills and instructions; id is the
+// platform ID of the project the user sees at its path.
+func (d *Dashboard) repositoryInputs(w http.ResponseWriter, r *http.Request, repo settings.Effective, id int64) {
+	v, err := d.cachedInputs(r.Context(), repo, id)
 	switch {
 	case errors.Is(err, errNotSynced):
 		writeError(w, http.StatusServiceUnavailable, msgNotSynced)
@@ -757,8 +757,8 @@ func (d *Dashboard) repositoryInputs(w http.ResponseWriter, r *http.Request, rep
 // younger than 5 minutes, those of a resolution in progress, or a new
 // resolution, bounded by 10 s and not cut short by the request that
 // started it going away (others may wait for it). Failures aren't kept.
-func (d *Dashboard) cachedInputs(ctx context.Context, repo settings.Effective) (InputsView, error) {
-	c, key := d.inputs, repo.Instance+"\x00"+lower(repo.Project)
+func (d *Dashboard) cachedInputs(ctx context.Context, repo settings.Effective, id int64) (InputsView, error) {
+	c, key := d.inputs, repo.Instance+"\x00"+lower(repo.Project)+"\x00"+strconv.FormatInt(id, 10)
 	c.mu.Lock()
 	now := d.now()
 	if e, ok := c.entries[key]; ok && now.Sub(e.at) < inputsTTL && !now.Before(e.at) {
@@ -779,7 +779,7 @@ func (d *Dashboard) cachedInputs(ctx context.Context, repo settings.Effective) (
 	c.mu.Unlock()
 
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), platformTimeout)
-	f.view, f.err = d.resolveInputs(rctx, repo)
+	f.view, f.err = d.resolveInputs(rctx, repo, id)
 	cancel()
 	if f.err != nil {
 		d.Log.Warn("dashboard: reading skills and instructions failed", "instance", repo.Instance,
@@ -803,8 +803,10 @@ func (d *Dashboard) cachedInputs(ctx context.Context, repo settings.Effective) (
 }
 
 // resolveInputs reads repo's skills and instructions at its default branch,
-// the way a review resolves them.
-func (d *Dashboard) resolveInputs(ctx context.Context, repo settings.Effective) (InputsView, error) {
+// the way a review resolves them, from project id: the stored project at
+// its path must be that one (one that had the path before, not yet
+// replaced by a reconcile, is not synced).
+func (d *Dashboard) resolveInputs(ctx context.Context, repo settings.Effective, id int64) (InputsView, error) {
 	src, ok := d.sources[repo.Instance]
 	if !ok || src == nil {
 		return InputsView{}, errors.New("no reader for the instance")
@@ -813,7 +815,7 @@ func (d *Dashboard) resolveInputs(ctx context.Context, repo settings.Effective) 
 	if err != nil {
 		return InputsView{}, err
 	}
-	if !found {
+	if !found || p.ProjectID != id {
 		return InputsView{}, errNotSynced
 	}
 	branch, err := src.DefaultBranch(ctx, p.ProjectID)

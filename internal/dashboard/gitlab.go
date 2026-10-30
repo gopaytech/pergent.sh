@@ -9,6 +9,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
+	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
 // gitlabReporter is GitLab's Reporter access level, the lowest that reads
@@ -87,18 +88,22 @@ func (p *gitlabProvider) user(ctx context.Context, accessToken string) (int64, s
 // canSee: Reporter or above (through the project, its group, or a share
 // with another group), or a public project whose code and merge requests
 // are open to everyone who can see it.
-func (p *gitlabProvider) canSee(ctx context.Context, accessToken, project string) (bool, error) {
+func (p *gitlabProvider) canSee(ctx context.Context, accessToken, project string) (int64, bool, error) {
 	a, err := p.projectAccess(ctx, accessToken, project)
 	if errors.Is(err, gitlab.ErrNotFound) || isStatus(err, http.StatusForbidden) {
-		return false, nil
+		return 0, false, nil
 	}
 	if err != nil {
-		return false, err
+		return 0, false, err
+	}
+	if a.ID <= 0 {
+		return 0, false, errors.New("gitlab: the project answer has no id")
 	}
 	if a.Visibility == "public" && a.RepositoryAccess == "enabled" && a.MergeRequestsAccess == "enabled" {
-		return true, nil
+		return a.ID, true, nil
 	}
-	return p.reporter(ctx, accessToken, a)
+	ok, err := p.reporter(ctx, accessToken, a)
+	return a.ID, ok, err
 }
 
 // projectAccess reads the token user's access to project.
@@ -116,7 +121,7 @@ func (p *gitlabProvider) reporter(ctx context.Context, accessToken string, a git
 	if a.ProjectAccessLevel >= gitlabReporter || a.GroupAccessLevel >= gitlabReporter {
 		return true, nil
 	}
-	if a.ID == 0 {
+	if a.ID <= 0 {
 		return false, errors.New("gitlab: the project answer has no id")
 	}
 	ctx, cancel := callContext(ctx, p.timeout)
@@ -151,21 +156,21 @@ func (p *gitlabProvider) memberRepos(ctx context.Context, accessToken, search st
 // memberRepo: Reporter or above through the project, its group or a share,
 // as the picker's listing counts it; being able to see a public project
 // isn't enough.
-func (p *gitlabProvider) memberRepo(ctx context.Context, accessToken, project string) (string, bool, error) {
+func (p *gitlabProvider) memberRepo(ctx context.Context, accessToken, project string) (store.VisibleProject, bool, error) {
 	a, err := p.projectAccess(ctx, accessToken, project)
 	if errors.Is(err, gitlab.ErrNotFound) || isStatus(err, http.StatusForbidden) {
-		return "", false, nil
+		return store.VisibleProject{}, false, nil
 	}
 	if err != nil {
-		return "", false, err
+		return store.VisibleProject{}, false, err
 	}
 	if ok, err := p.reporter(ctx, accessToken, a); err != nil || !ok {
-		return "", false, err
+		return store.VisibleProject{}, false, err
 	}
 	if a.Path == "" {
-		return "", false, errors.New("gitlab: the project answer has no path")
+		return store.VisibleProject{}, false, errors.New("gitlab: the project answer has no path")
 	}
-	return a.Path, true, nil
+	return store.VisibleProject{Path: a.Path, ID: a.ID}, true, nil
 }
 
 func (p *gitlabProvider) callTimeout() time.Duration {

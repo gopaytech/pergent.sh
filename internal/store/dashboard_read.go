@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -40,12 +41,12 @@ type ReviewCursor struct {
 	ID string
 }
 
-// ReviewFilter selects the merge requests ReviewDigests lists. Projects
-// holds lower-cased project paths: only runs of those, on Instance, are
-// read, and an empty list reads none.
+// ReviewFilter selects the merge requests ReviewDigests lists. Projects are
+// the visible ones: only runs of those, on Instance, are read (see
+// visibleArgs), and an empty list reads none.
 type ReviewFilter struct {
 	Instance string
-	Projects []string
+	Projects []VisibleProject
 	// Since, when not zero, leaves out reviews last updated before it.
 	Since time.Time
 	// After, when not nil, starts the page after that review.
@@ -56,6 +57,22 @@ type ReviewFilter struct {
 }
 
 const zeroUUID = "00000000-0000-0000-0000-000000000000"
+
+// visibleArgs is the visible projects as the read queries take them: their
+// lower-cased paths and their IDs. A run is read only when both its path
+// and its project ID are among them, so a run of an earlier project at a
+// path now held by another (deleted, renamed or transferred) stays hidden.
+// Its ID being among them means its project is one the user can see, so
+// matching the two lists apart, which the per-project indexes serve, shows
+// nothing more.
+func visibleArgs(projects []VisibleProject) (paths []string, ids []int64) {
+	paths = make([]string, 0, len(projects))
+	ids = make([]int64, 0, len(projects))
+	for _, p := range projects {
+		paths, ids = append(paths, strings.ToLower(p.Path)), append(ids, p.ID)
+	}
+	return paths, ids
+}
 
 // outcomeSQL is run r's outcome: the recorded decision's once it is
 // published, otherwise what its state says. A published run without a
@@ -87,9 +104,9 @@ const digestColumns = `r.id::text, r.instance, r.project_id, r.mr_iid, r.project
 // runs_project_updated_idx: only the runs of the asked-for projects updated
 // in the window ($3, before the cursor $4/$5) are looked at, each kept when
 // no newer run of its merge request exists (runs_mr_idx). $6 is the
-// outcome filter (” for any), $7 the limit.
+// outcome filter (” for any), $7 the limit, $8 the visible project IDs.
 const reviewDigestsSQL = `SELECT ` + digestColumns + ` FROM runs r
-	WHERE r.instance = $1 AND lower(r.project_path) = ANY($2::text[])
+	WHERE r.instance = $1 AND lower(r.project_path) = ANY($2::text[]) AND r.project_id = ANY($8::bigint[])
 	  AND r.updated_at >= $3::timestamptz
 	  AND ($4::timestamptz IS NULL OR (r.updated_at, r.id) < ($4::timestamptz, $5::uuid))
 	  AND NOT EXISTS (SELECT 1 FROM runs n
@@ -100,14 +117,15 @@ const reviewDigestsSQL = `SELECT ` + digestColumns + ` FROM runs r
 	LIMIT $7`
 
 // runStatsSQL counts the runs started since $3 that aren't superseded, per
-// project, by outcome, through runs_project_created_idx.
+// project, by outcome, through runs_project_created_idx; $4 is the visible
+// project IDs.
 const runStatsSQL = `SELECT lower(r.project_path), count(*),
 		count(*) FILTER (WHERE r.state = 'published' AND r.approved),
 		count(*) FILTER (WHERE ` + outcomeSQL + ` = 'blocking'),
 		count(*) FILTER (WHERE ` + outcomeSQL + ` = 'failed')
 	FROM runs r
-	WHERE r.instance = $1 AND lower(r.project_path) = ANY($2::text[]) AND r.created_at >= $3
-	  AND r.state <> 'superseded'
+	WHERE r.instance = $1 AND lower(r.project_path) = ANY($2::text[]) AND r.project_id = ANY($4::bigint[])
+	  AND r.created_at >= $3 AND r.state <> 'superseded'
 	GROUP BY lower(r.project_path)`
 
 func (s *Store) queryDigests(ctx context.Context, sql string, args ...any) ([]RunDigest, error) {
@@ -152,7 +170,8 @@ func (s *Store) ReviewDigests(ctx context.Context, f ReviewFilter) ([]RunDigest,
 		}
 		afterAt, afterID = &f.After.At, f.After.ID
 	}
-	return s.queryDigests(ctx, reviewDigestsSQL, f.Instance, f.Projects, f.Since, afterAt, afterID, f.Outcome, f.Limit)
+	paths, ids := visibleArgs(f.Projects)
+	return s.queryDigests(ctx, reviewDigestsSQL, f.Instance, paths, f.Since, afterAt, afterID, f.Outcome, f.Limit, ids)
 }
 
 // RunCounts counts a project's runs by outcome.
@@ -160,16 +179,17 @@ type RunCounts struct {
 	Reviews, Approved, Blocking, Failed int
 }
 
-// RunStats counts the runs of projects (lower-cased paths) on instance
-// started at or after since that aren't superseded, by lower-cased
-// project. Approved counts the runs the approve bot approved, also when the
-// approval was withdrawn later.
-func (s *Store) RunStats(ctx context.Context, instance string, projects []string, since time.Time) (map[string]RunCounts, error) {
+// RunStats counts the runs of the visible projects on instance started at
+// or after since that aren't superseded, by lower-cased project path.
+// Approved counts the runs the approve bot approved, also when the approval
+// was withdrawn later.
+func (s *Store) RunStats(ctx context.Context, instance string, projects []VisibleProject, since time.Time) (map[string]RunCounts, error) {
 	out := map[string]RunCounts{}
 	if len(projects) == 0 {
 		return out, nil
 	}
-	rows, err := s.pool.Query(ctx, runStatsSQL, instance, projects, since)
+	paths, ids := visibleArgs(projects)
+	rows, err := s.pool.Query(ctx, runStatsSQL, instance, paths, since, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -187,33 +207,17 @@ func (s *Store) RunStats(ctx context.Context, instance string, projects []string
 	return out, rows.Err()
 }
 
-// MRRunDigests returns the runs of a merge request whose project is one of
-// projects (lower-cased paths), oldest first.
-func (s *Store) MRRunDigests(ctx context.Context, mr MRKey, projects []string) ([]RunDigest, error) {
+// MRRunDigests returns the runs of a merge request of one of the visible
+// projects, under one of their paths, oldest first.
+func (s *Store) MRRunDigests(ctx context.Context, mr MRKey, projects []VisibleProject) ([]RunDigest, error) {
 	if len(projects) == 0 {
 		return nil, nil
 	}
+	paths, ids := visibleArgs(projects)
 	return s.queryDigests(ctx, `SELECT `+digestColumns+` FROM runs r
 		WHERE r.instance = $1 AND r.project_id = $2 AND r.mr_iid = $3 AND lower(r.project_path) = ANY($4::text[])
-		ORDER BY r.created_at, r.id`, mr.Instance, mr.ProjectID, mr.IID, projects)
-}
-
-// FindMR returns the merge request number of project (matched ignoring
-// case) on instance has runs for: the one of its newest such run, as a
-// project can be deleted and created again under the same path. ok is false
-// when there is none.
-func (s *Store) FindMR(ctx context.Context, instance, project string, number int64) (MRKey, bool, error) {
-	var id int64
-	err := s.pool.QueryRow(ctx, `SELECT project_id FROM runs
-		WHERE instance = $1 AND lower(project_path) = lower($2) AND mr_iid = $3
-		ORDER BY created_at DESC, id DESC LIMIT 1`, instance, project, number).Scan(&id)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return MRKey{}, false, nil
-	}
-	if err != nil {
-		return MRKey{}, false, err
-	}
-	return MRKey{Instance: instance, ProjectID: id, IID: number}, true, nil
+		  AND r.project_id = ANY($5::bigint[])
+		ORDER BY r.created_at, r.id`, mr.Instance, mr.ProjectID, mr.IID, paths, ids)
 }
 
 // ProjectByPath returns the stored project whose path is project (matched

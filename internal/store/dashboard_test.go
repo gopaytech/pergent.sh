@@ -115,7 +115,7 @@ func TestDashboardMigrationTables(t *testing.T) {
 		`INSERT INTO repo_attention (instance, project, kind, message) VALUES ('main', 'acme/widgets', 'no_hook', 'x')`,
 		`INSERT INTO sessions (id_hash, platform, instance, user_id, username, is_admin, token_sealed, csrf)
 			VALUES ('\x01', 'gitlab', 'main', 1, 'alice', false, '\x02', 'csrf')`,
-		`INSERT INTO user_access (session_hash, instance, project) VALUES ('\x01', 'main', 'acme/widgets')`,
+		`INSERT INTO user_access (session_hash, instance, project, project_id) VALUES ('\x01', 'main', 'acme/widgets', 7)`,
 	} {
 		if _, err := s.pool.Exec(ctx, stmt); err != nil {
 			t.Fatalf("%s: %v", stmt, err)

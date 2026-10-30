@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -74,12 +75,26 @@ func (s *Store) SetSessionToken(ctx context.Context, idHash, sealed []byte) erro
 	return err
 }
 
+// VisibleProject is a repository a session's user can see on the session's
+// instance: its path and its platform ID (the GitLab project ID or GitHub
+// repository ID, as runs.project_id holds it), which tells a project apart
+// from a later one at the same path.
+type VisibleProject struct {
+	Path string
+	ID   int64
+}
+
 // SetSessionAccess records a successful access check: the user's current
 // username, the repositories the user can see on the session's instance
-// (replacing the earlier list; duplicates that differ only in case are one),
-// the admin flag and the time of the check. A session that is gone is left
-// gone.
-func (s *Store) SetSessionAccess(ctx context.Context, idHash []byte, username string, isAdmin bool, projects []string, checkedAt time.Time) error {
+// (replacing the earlier list; duplicates that differ only in case are one,
+// the first kept), the admin flag and the time of the check. Every project
+// needs an ID above 0. A session that is gone is left gone.
+func (s *Store) SetSessionAccess(ctx context.Context, idHash []byte, username string, isAdmin bool, projects []VisibleProject, checkedAt time.Time) error {
+	for _, p := range projects {
+		if p.ID <= 0 {
+			return fmt.Errorf("store: project %s has no ID", p.Path)
+		}
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -99,16 +114,17 @@ func (s *Store) SetSessionAccess(ctx context.Context, idHash []byte, username st
 		return err
 	}
 	seen := make(map[string]bool, len(projects))
-	unique := make([]string, 0, len(projects))
+	paths := make([]string, 0, len(projects))
+	ids := make([]int64, 0, len(projects))
 	for _, p := range projects {
-		if key := strings.ToLower(p); !seen[key] {
+		if key := strings.ToLower(p.Path); !seen[key] {
 			seen[key] = true
-			unique = append(unique, p)
+			paths, ids = append(paths, p.Path), append(ids, p.ID)
 		}
 	}
-	if len(unique) > 0 {
-		if _, err := tx.Exec(ctx, `INSERT INTO user_access (session_hash, instance, project)
-			SELECT $1, $2, unnest($3::text[])`, idHash, instance, unique); err != nil {
+	if len(paths) > 0 {
+		if _, err := tx.Exec(ctx, `INSERT INTO user_access (session_hash, instance, project, project_id)
+			SELECT $1, $2, p, id FROM unnest($3::text[], $4::bigint[]) AS u(p, id)`, idHash, instance, paths, ids); err != nil {
 			return err
 		}
 	}
@@ -116,15 +132,18 @@ func (s *Store) SetSessionAccess(ctx context.Context, idHash []byte, username st
 }
 
 // AddSessionProject adds project to the repositories the session's user can
-// see, on the session's instance, unless it is there already (ignoring
-// case). The time of the last check stays. A session that is gone is left
-// gone.
-func (s *Store) AddSessionProject(ctx context.Context, idHash []byte, project string) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO user_access (session_hash, instance, project)
-		SELECT id_hash, instance, $2 FROM sessions s WHERE id_hash = $1
+// see, on the session's instance, unless its path is there already
+// (ignoring case). The time of the last check stays. A session that is gone
+// is left gone.
+func (s *Store) AddSessionProject(ctx context.Context, idHash []byte, project VisibleProject) error {
+	if project.ID <= 0 {
+		return fmt.Errorf("store: project %s has no ID", project.Path)
+	}
+	_, err := s.pool.Exec(ctx, `INSERT INTO user_access (session_hash, instance, project, project_id)
+		SELECT id_hash, instance, $2, $3 FROM sessions s WHERE id_hash = $1
 		  AND NOT EXISTS (SELECT 1 FROM user_access a
 			WHERE a.session_hash = s.id_hash AND a.instance = s.instance AND lower(a.project) = lower($2))
-		ON CONFLICT DO NOTHING`, idHash, project)
+		ON CONFLICT DO NOTHING`, idHash, project.Path, project.ID)
 	return err
 }
 
@@ -146,14 +165,14 @@ func (s *Store) ClearSessionAccess(ctx context.Context, idHash []byte) error {
 }
 
 // SessionProjects returns the repositories the session's user can see, as
-// of the last check, ordered ignoring case.
-func (s *Store) SessionProjects(ctx context.Context, idHash []byte) ([]string, error) {
-	rows, err := s.pool.Query(ctx, `SELECT project FROM user_access WHERE session_hash = $1
+// of the last check, ordered by path ignoring case.
+func (s *Store) SessionProjects(ctx context.Context, idHash []byte) ([]VisibleProject, error) {
+	rows, err := s.pool.Query(ctx, `SELECT project, project_id FROM user_access WHERE session_hash = $1
 		ORDER BY lower(project)`, idHash)
 	if err != nil {
 		return nil, err
 	}
-	return pgx.CollectRows(rows, pgx.RowTo[string])
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[VisibleProject])
 }
 
 // PruneSessions deletes the sessions created before createdBefore or last

@@ -284,25 +284,25 @@ func (d *Dashboard) catalogRepos(ctx context.Context, instance, search string) (
 // projectAvailable checks project on its own, whatever the lists hold: the
 // session's user must be a member with read access (asked with their
 // token) and the review bot or App must reach it. It returns the path as
-// the platform spells it.
-func (d *Dashboard) projectAvailable(ctx context.Context, se Session, project string) (string, bool, error) {
+// the platform spells it, with the project's ID.
+func (d *Dashboard) projectAvailable(ctx context.Context, se Session, project string) (store.VisibleProject, bool, error) {
 	cat, ok := d.catalogs[se.Instance]
 	if !ok || cat == nil {
-		return "", false, errors.New("no repository list for the instance")
+		return store.VisibleProject{}, false, errors.New("no repository list for the instance")
 	}
 	p, token, err := d.Auth.userToken(ctx, se)
 	if err != nil {
-		return "", false, err
+		return store.VisibleProject{}, false, err
 	}
-	name, ok, err := p.memberRepo(ctx, token, project)
+	repo, ok, err := p.memberRepo(ctx, token, project)
 	if err != nil || !ok {
-		return "", false, err
+		return store.VisibleProject{}, false, err
 	}
-	reached, err := cat.CanReach(ctx, name)
+	reached, err := cat.CanReach(ctx, repo.Path)
 	if err != nil || !reached {
-		return "", false, err
+		return store.VisibleProject{}, false, err
 	}
-	return name, true, nil
+	return repo, true, nil
 }
 
 // --- POST /api/repositories ---
@@ -321,7 +321,7 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 	// reach the repository now. This comes before anything about whether
 	// it is on, so a repository the admin can't reach is 404 the same way,
 	// after the same calls, on or off.
-	name, ok, err := d.projectAvailable(ctx, se, body.Project)
+	avail, ok, err := d.projectAvailable(ctx, se, body.Project)
 	if err != nil {
 		d.Log.Warn("dashboard: checking a repository to switch on failed",
 			"instance", se.Instance, "user", se.Username, "error", err.Error())
@@ -332,6 +332,7 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
+	name := avail.Path
 	if d.Repos.InConfig(se.Instance, name) {
 		writeError(w, http.StatusConflict, msgConfigManaged)
 		return
@@ -351,7 +352,7 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 	d.Log.Info("dashboard: repository switched on", "instance", se.Instance, "project", name, "by", se.Username)
 	d.reconcileSoon()
 	// The admin checked they can see it just now: they see it at once.
-	if err := d.Store.AddSessionProject(ctx, se.idHash, name); err != nil {
+	if err := d.Store.AddSessionProject(ctx, se.idHash, avail); err != nil {
 		d.Log.Warn("dashboard: adding a switched-on repository to the session failed", "error", err.Error())
 	}
 	repo, ok, err := d.Repos.Get(ctx, se.Instance, name)

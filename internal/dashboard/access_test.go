@@ -11,6 +11,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
+	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
 func mustBox(t *testing.T, key string) *secretbox.Box {
@@ -54,6 +55,10 @@ func TestVisibilityRules(t *testing.T) {
 	noFeatureFields := gitlabProject("public", 0, 0)
 	delete(noFeatureFields, "repository_access_level")
 	delete(noFeatureFields, "merge_requests_access_level")
+	sharedReporter := gitlabProject("private", 0, 0)
+	sharedReporter["shared_access"] = 20
+	sharedGuest := gitlabProject("internal", 10, 0)
+	sharedGuest["shared_access"] = 10
 
 	tests := []struct {
 		name    string
@@ -69,6 +74,8 @@ func TestVisibilityRules(t *testing.T) {
 		{name: "gitlab developer", gitlab: gitlabProject("private", 30, 0), want: true},
 		{name: "gitlab reporter through the group", gitlab: gitlabProject("private", 10, 20), want: true},
 		{name: "gitlab guest in the group", gitlab: gitlabProject("private", 0, 10), want: false},
+		{name: "gitlab reporter through a share", gitlab: sharedReporter, want: true},
+		{name: "gitlab guest through a share", gitlab: sharedGuest, want: false},
 		{name: "gitlab public project", gitlab: gitlabProject("public", 0, 0), want: true},
 		{name: "gitlab public project, code for members only", gitlab: featurePrivate, want: false},
 		{name: "gitlab public project, merge requests off", gitlab: mrsDisabled, want: false},
@@ -82,35 +89,40 @@ func TestVisibilityRules(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var got bool
+			var id int64
 			var err error
 			if tt.github != nil {
 				gh.setRepo("acme/widgets", tt.github)
-				got, err = ghp.canSee(ctx, ghTok, "acme/widgets")
+				id, got, err = ghp.canSee(ctx, ghTok, "acme/widgets")
 			} else {
 				gl.set(func(*oauthServer) { delete(gl.projects, "acme/widgets") })
 				if !tt.missing {
 					gl.setProject("acme/widgets", tt.gitlab)
 				}
-				got, err = glp.canSee(ctx, glTok, "acme/widgets")
+				id, got, err = glp.canSee(ctx, glTok, "acme/widgets")
 			}
 			if err != nil || got != tt.want {
 				t.Fatalf("canSee = %v, %v; want %v", got, err, tt.want)
+			}
+			// A visible project comes with its platform ID.
+			if got && id != testID("acme/widgets") {
+				t.Fatalf("canSee id = %d, want %d", id, testID("acme/widgets"))
 			}
 		})
 	}
 
 	// GitHub: a repository not found is not visible; a malformed name is never asked.
-	if got, err := ghp.canSee(ctx, ghTok, "acme/none"); err != nil || got {
+	if _, got, err := ghp.canSee(ctx, ghTok, "acme/none"); err != nil || got {
 		t.Errorf("github not found: %v, %v", got, err)
 	}
-	if got, _ := ghp.canSee(ctx, ghTok, "acme"); got {
+	if _, got, _ := ghp.canSee(ctx, ghTok, "acme"); got {
 		t.Error("github: a name without owner is visible")
 	}
 	// A token the platform refuses is an error, not "not visible".
-	if _, err := glp.canSee(ctx, "revoked", "acme/widgets"); err == nil {
+	if _, _, err := glp.canSee(ctx, "revoked", "acme/widgets"); err == nil {
 		t.Error("gitlab: a refused token gave no error")
 	}
-	if _, err := ghp.canSee(ctx, "revoked", "acme/widgets"); err == nil {
+	if _, _, err := ghp.canSee(ctx, "revoked", "acme/widgets"); err == nil {
 		t.Error("github: a refused token gave no error")
 	}
 }
@@ -210,7 +222,7 @@ func TestAccessRefreshDropsRepository(t *testing.T) {
 		t.Fatalf("visible 5 min after the drop = %v", se.Visible)
 	}
 	projects, err := e.st.SessionProjects(ctx, hashOf(t, c))
-	if err != nil || !slices.Equal(projects, []string{"acme/payments"}) {
+	if err != nil || !slices.Equal(projects, []store.VisibleProject{{Path: "acme/payments", ID: testID("acme/payments")}}) {
 		t.Fatalf("stored user_access = %v, %v", projects, err)
 	}
 
@@ -386,7 +398,7 @@ func TestPlatformCallsTimeOut(t *testing.T) {
 			"exchange": func() error { _, err := p.exchange(ctx, "code", "verifier"); return err },
 			"refresh":  func() error { _, err := p.refresh(ctx, "refresh"); return err },
 			"user":     func() error { _, _, err := p.user(ctx, "token"); return err },
-			"canSee":   func() error { _, err := p.canSee(ctx, "token", "acme/widgets"); return err },
+			"canSee":   func() error { _, _, err := p.canSee(ctx, "token", "acme/widgets"); return err },
 			"isAdmin": func() error {
 				_, err := p.isAdmin(ctx, "token", 9, "alice", config.DashboardAdmin{Group: "acme/platform", Team: "acme/platform"})
 				return err

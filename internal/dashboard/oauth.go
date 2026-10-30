@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
 // provider is one instance's sign-in and access checks. Every method that
@@ -31,9 +32,9 @@ type provider interface {
 	// user is the token's user.
 	user(ctx context.Context, accessToken string) (id int64, username string, err error)
 	// canSee reports whether the user can read the project's code and
-	// merge requests. Not found or forbidden is false; a failure to tell
-	// is an error.
-	canSee(ctx context.Context, accessToken, project string) (bool, error)
+	// merge requests, and the project's platform ID (above 0 when ok).
+	// Not found or forbidden is false; a failure to tell is an error.
+	canSee(ctx context.Context, accessToken, project string) (id int64, ok bool, err error)
 	// isAdmin reports whether the user is in admin's group or team.
 	isAdmin(ctx context.Context, accessToken string, userID int64, username string, admin config.DashboardAdmin) (bool, error)
 	// memberRepos lists, up to limit, the repositories the user is a
@@ -44,9 +45,9 @@ type provider interface {
 	// repositories read before it.
 	memberRepos(ctx context.Context, accessToken, search string, limit int) (repos []string, truncated bool, err error)
 	// memberRepo reports whether the user is such a member of project,
-	// and its path as the platform spells it. Not found or forbidden is
-	// false; a failure to tell is an error.
-	memberRepo(ctx context.Context, accessToken, project string) (canonical string, ok bool, err error)
+	// and its path as the platform spells it and its platform ID. Not
+	// found or forbidden is false; a failure to tell is an error.
+	memberRepo(ctx context.Context, accessToken, project string) (repo store.VisibleProject, ok bool, err error)
 }
 
 // oauthToken is a user's token, stored sealed. Expiry is zero for a token

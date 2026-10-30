@@ -474,6 +474,8 @@ func (c *Client) Repo(ctx context.Context, owner, repo string) (Repository, erro
 
 // RepoAccess is what a user token may do in a repository.
 type RepoAccess struct {
+	// ID is the repository's ID.
+	ID int64
 	// FullName is the repository's owner/name as GitHub spells it.
 	FullName string
 	// Private is true for a private or internal repository.
@@ -492,6 +494,7 @@ func (c *Client) RepoAccess(ctx context.Context, owner, repo string) (RepoAccess
 		return RepoAccess{}, err
 	}
 	var r struct {
+		ID          int64  `json:"id"`
 		FullName    string `json:"full_name"`
 		Private     bool   `json:"private"`
 		Permissions struct {
@@ -501,7 +504,7 @@ func (c *Client) RepoAccess(ctx context.Context, owner, repo string) (RepoAccess
 	if err := c.getJSON(ctx, p, nil, &r); err != nil {
 		return RepoAccess{}, err
 	}
-	return RepoAccess{FullName: r.FullName, Private: r.Private, Pull: r.Permissions.Pull}, nil
+	return RepoAccess{ID: r.ID, FullName: r.FullName, Private: r.Private, Pull: r.Permissions.Pull}, nil
 }
 
 // TeamMembershipActive reports whether username is an active member of the

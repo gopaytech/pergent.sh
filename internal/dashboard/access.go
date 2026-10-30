@@ -29,7 +29,7 @@ var errRecentFailure = errors.New("the last access check failed less than a minu
 type accessResult struct {
 	username string
 	isAdmin  bool
-	projects []string
+	projects []store.VisibleProject
 }
 
 // flight is an access check in progress; requests of the same session wait
@@ -299,13 +299,13 @@ func (a *Auth) checkAccess(ctx context.Context, se store.Session, tok oauthToken
 	return accessResult{username: username, isAdmin: isAdmin, projects: visible}, nil
 }
 
-// checkProjects returns the projects the token's user can see, checking
-// accessWorkers at a time. The first failure stops the rest and is the
-// result.
-func checkProjects(ctx context.Context, p provider, token string, projects []string) ([]string, error) {
+// checkProjects returns the projects the token's user can see, each with
+// its platform ID, checking accessWorkers at a time. The first failure
+// stops the rest and is the result.
+func checkProjects(ctx context.Context, p provider, token string, projects []string) ([]store.VisibleProject, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	seen := make([]bool, len(projects))
+	seen := make([]int64, len(projects))
 	sem := make(chan struct{}, accessWorkers)
 	var (
 		wg       sync.WaitGroup
@@ -325,7 +325,10 @@ func checkProjects(ctx context.Context, p provider, token string, projects []str
 			if ctx.Err() != nil {
 				return
 			}
-			ok, err := p.canSee(ctx, token, project)
+			id, ok, err := p.canSee(ctx, token, project)
+			if err == nil && ok && id <= 0 {
+				err = errors.New("the platform gave no ID")
+			}
 			if err != nil {
 				once.Do(func() {
 					firstErr = fmt.Errorf("checking %s: %w", project, err)
@@ -333,7 +336,9 @@ func checkProjects(ctx context.Context, p provider, token string, projects []str
 				})
 				return
 			}
-			seen[i] = ok
+			if ok {
+				seen[i] = id
+			}
 		}()
 	}
 	wg.Wait()
@@ -343,10 +348,10 @@ func checkProjects(ctx context.Context, p provider, token string, projects []str
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	var out []string
-	for i, ok := range seen {
-		if ok {
-			out = append(out, projects[i])
+	var out []store.VisibleProject
+	for i, id := range seen {
+		if id > 0 {
+			out = append(out, store.VisibleProject{Path: projects[i], ID: id})
 		}
 	}
 	return out, nil

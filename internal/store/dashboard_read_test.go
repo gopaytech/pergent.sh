@@ -86,7 +86,7 @@ func TestReviewDigests(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := ReviewFilter{Instance: mr1.Instance, Projects: []string{"acme/widgets"}, Limit: 10}
+	f := ReviewFilter{Instance: mr1.Instance, Projects: vis(7, "acme/widgets"), Limit: 10}
 	got, err := s.ReviewDigests(ctx, f)
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +128,7 @@ func TestReviewDigests(t *testing.T) {
 	}
 
 	// Since leaves out what was last updated before it.
-	f = ReviewFilter{Instance: mr1.Instance, Projects: []string{"acme/widgets"}, Limit: 10, Since: base.Add(3 * time.Hour)}
+	f = ReviewFilter{Instance: mr1.Instance, Projects: vis(7, "acme/widgets"), Limit: 10, Since: base.Add(3 * time.Hour)}
 	if got, err := s.ReviewDigests(ctx, f); err != nil || len(got) != 1 || got[0].ID != newer {
 		t.Fatalf("since = %+v, %v", got, err)
 	}
@@ -166,7 +166,7 @@ func TestDigestOutcomes(t *testing.T) {
 			t.Fatal(err)
 		}
 		setRun(t, s, id, tc.set)
-		got, err := s.MRRunDigests(ctx, mr, []string{"acme/widgets"})
+		got, err := s.MRRunDigests(ctx, mr, vis(7, "acme/widgets"))
 		if err != nil || len(got) != 1 || got[0].Outcome != tc.want {
 			t.Errorf("%s: digests = %+v, %v; want %s", tc.set, got, err, tc.want)
 		}
@@ -200,7 +200,7 @@ func TestRunStats(t *testing.T) {
 	superseded, _, _ := s.EnqueueRun(ctx, MRKey{Instance: "main", ProjectID: 7, IID: 51}, "acme/widgets", "h", "main")
 	setRun(t, s, superseded, `created_at = $2, state = 'superseded'`, base)
 
-	got, err := s.RunStats(ctx, "main", []string{"acme/widgets", "acme/tools"}, base)
+	got, err := s.RunStats(ctx, "main", vis(7, "acme/widgets", "acme/tools"), base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestMRRunDigestsVisibility(t *testing.T) {
 		t.Fatal(err)
 	}
 	setRun(t, s, b, `title = 'Secret title', web_url = 'https://gitlab.example.com/secret-group/widgets/-/merge_requests/3'`)
-	got, err := s.MRRunDigests(ctx, mr1, []string{"acme/widgets"})
+	got, err := s.MRRunDigests(ctx, mr1, vis(7, "acme/widgets"))
 	if err != nil || len(got) != 1 || got[0].ID != a {
 		t.Fatalf("MRRunDigests = %+v, %v; want the acme/widgets run only", got, err)
 	}
@@ -237,21 +237,42 @@ func TestMRRunDigestsVisibility(t *testing.T) {
 		t.Fatalf("MRRunDigests without projects = %+v, %v", got, err)
 	}
 	// The MR's newest run is hidden, so the review isn't listed.
-	if got, err := s.ReviewDigests(ctx, ReviewFilter{Instance: mr1.Instance, Projects: []string{"acme/widgets"}, Limit: 5}); err != nil || len(got) != 0 {
+	if got, err := s.ReviewDigests(ctx, ReviewFilter{Instance: mr1.Instance, Projects: vis(7, "acme/widgets"), Limit: 5}); err != nil || len(got) != 0 {
 		t.Fatalf("ReviewDigests = %+v, %v; want none", got, err)
 	}
 }
 
-func TestFindMRAndProjectByPath(t *testing.T) {
+// A path can pass from a project to a later one (deleted, renamed or
+// transferred): only the runs of the project ID that is visible are read.
+func TestReadsNeedVisibleProjectID(t *testing.T) {
 	s := newStore(t)
-	enqueue(t, s, mr1, "a1")
-	key, ok, err := s.FindMR(ctx, mr1.Instance, "ACME/Widgets", 3)
-	if err != nil || !ok || key != mr1 {
-		t.Fatalf("FindMR = %+v, %v, %v", key, ok, err)
+	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	oldMR := MRKey{Instance: "main", ProjectID: 7, IID: 1}
+	newMR := MRKey{Instance: "main", ProjectID: 70, IID: 1}
+	oldRun := enqueue(t, s, oldMR, "a1")
+	decided(t, s, oldRun, OutcomeBlocking, false, base)
+	newRun := enqueue(t, s, newMR, "b1")
+	decided(t, s, newRun, OutcomeApproved, true, base.Add(time.Hour))
+	visible := vis(70, "acme/widgets")
+
+	got, err := s.ReviewDigests(ctx, ReviewFilter{Instance: "main", Projects: visible, Limit: 10})
+	if err != nil || len(got) != 1 || got[0].ID != newRun {
+		t.Errorf("ReviewDigests = %+v, %v; want only the new project's run", got, err)
 	}
-	if _, ok, err := s.FindMR(ctx, mr1.Instance, "acme/widgets", 99); ok || err != nil {
-		t.Fatalf("FindMR of a missing MR = %v, %v", ok, err)
+	stats, err := s.RunStats(ctx, "main", visible, base)
+	if want := (RunCounts{Reviews: 1, Approved: 1}); err != nil || stats["acme/widgets"] != want {
+		t.Errorf("RunStats = %+v, %v; want %+v", stats, err, want)
 	}
+	if got, err := s.MRRunDigests(ctx, oldMR, visible); err != nil || len(got) != 0 {
+		t.Errorf("MRRunDigests of the old project = %+v, %v; want none", got, err)
+	}
+	if got, err := s.MRRunDigests(ctx, newMR, visible); err != nil || len(got) != 1 || got[0].ID != newRun {
+		t.Errorf("MRRunDigests of the new project = %+v, %v", got, err)
+	}
+}
+
+func TestProjectByPath(t *testing.T) {
+	s := newStore(t)
 	if err := s.UpsertProject(ctx, Project{Instance: "main", ProjectID: 7, Path: "Acme/Widgets"}); err != nil {
 		t.Fatal(err)
 	}
@@ -285,10 +306,10 @@ func TestDashboardQueriesUseIndexes(t *testing.T) {
 		args             []any
 	}{
 		{"reviews", reviewDigestsSQL, "runs_project_updated_idx",
-			[]any{"main", []string{"acme/repo-7"}, since.Add(-7 * 24 * time.Hour), nil, zeroUUID, "", 51}},
+			[]any{"main", []string{"acme/repo-7"}, since.Add(-7 * 24 * time.Hour), nil, zeroUUID, "", 51, []int64{7}}},
 		{"reviews after a cursor", reviewDigestsSQL, "runs_project_updated_idx",
-			[]any{"main", []string{"acme/repo-7", "acme/repo-8"}, since.Add(-90 * 24 * time.Hour), since.Add(-time.Hour), zeroUUID, "approved", 51}},
-		{"stats", runStatsSQL, "runs_project_created_idx", []any{"main", []string{"acme/repo-7"}, since.Add(-7 * 24 * time.Hour)}},
+			[]any{"main", []string{"acme/repo-7", "acme/repo-8"}, since.Add(-90 * 24 * time.Hour), since.Add(-time.Hour), zeroUUID, "approved", 51, []int64{7, 8}}},
+		{"stats", runStatsSQL, "runs_project_created_idx", []any{"main", []string{"acme/repo-7"}, since.Add(-7 * 24 * time.Hour), []int64{7}}},
 	} {
 		plan := explain(t, s, q.sql, q.args...)
 		if !strings.Contains(plan, q.index) {
