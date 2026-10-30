@@ -149,9 +149,17 @@ func lockMR(ctx context.Context, tx pgx.Tx, mr MRKey) error {
 // head reviewed against one target, so a retargeted merge request gets a new
 // run of the same head. It supersedes the queued, running and reported (not
 // yet published) runs of the same merge request for any other head or
-// target, so an older review's result is never posted over a newer one, and
-// does not create a second run for a head and target that already have a
-// non-superseded run: then created is false and id is that run's.
+// target, so an older review's result is never posted over a newer one.
+//
+// When the merge request's newest non-superseded run is already for this
+// head and target (a repeated webhook, a reopen), no run is created: created
+// is false and id is that run's. Otherwise a new run is created even if an
+// older run of this head and target was published: since then another head
+// or target was reviewed, so the comment and the approval show that review,
+// and the commit status, which is per commit and not per target, may too
+// (retargeted main → develop → main, or pushed A → B → A). That old run is
+// superseded and, being finished and posted, marked cleaned up: there is no
+// Job to delete and no status to cancel.
 func (s *Store) EnqueueRun(ctx context.Context, mr MRKey, projectPath, headSHA, targetBranch string) (id string, created bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -162,34 +170,53 @@ func (s *Store) EnqueueRun(ctx context.Context, mr MRKey, projectPath, headSHA, 
 	if err := lockMR(ctx, tx, mr); err != nil {
 		return "", false, err
 	}
+	// The newest run is read before anything is superseded, so a live run
+	// of another target (not yet published) still counts as newer than an
+	// old published run of this head and target.
+	var newestID, newestHead, newestTarget string
+	err = tx.QueryRow(ctx, `SELECT id::text, head_sha, target_branch FROM runs
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND state <> 'superseded'
+		ORDER BY created_at DESC, id DESC LIMIT 1`,
+		mr.Instance, mr.ProjectID, mr.IID).Scan(&newestID, &newestHead, &newestTarget)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return "", false, err
+	}
+	if err == nil && newestHead == headSHA && newestTarget == targetBranch {
+		// Only one non-superseded run per head and target exists (the
+		// partial unique index), so every other live run is older and has
+		// already been superseded by the enqueue that created this one.
+		if err := tx.Commit(ctx); err != nil {
+			return "", false, err
+		}
+		return newestID, false, nil
+	}
+
 	if _, err := tx.Exec(ctx, `UPDATE runs SET state = 'superseded'
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND (head_sha <> $4 OR target_branch <> $5)
 		  AND state IN ('queued', 'running', 'reported')`,
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch); err != nil {
 		return "", false, err
 	}
-	err = tx.QueryRow(ctx, `SELECT id::text FROM runs
+	// An older run of this head and target is out of the way of the new
+	// one. It is published or publish_failed: a live one would be the
+	// newest run.
+	if _, err := tx.Exec(ctx, `UPDATE runs SET state = 'superseded',
+			cleaned_up = cleaned_up OR state IN ('published', 'publish_failed')
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
 		  AND state <> 'superseded'`,
-		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch).Scan(&id)
-	switch {
-	case err == nil:
-		created = false
-	case errors.Is(err, pgx.ErrNoRows):
-		err = tx.QueryRow(ctx, `INSERT INTO runs (instance, project_id, mr_iid, project_path, head_sha, target_branch)
-			VALUES ($1, $2, $3, $4, $5, $6) RETURNING id::text`,
-			mr.Instance, mr.ProjectID, mr.IID, projectPath, headSHA, targetBranch).Scan(&id)
-		if err != nil {
-			return "", false, err
-		}
-		created = true
-	default:
+		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch); err != nil {
+		return "", false, err
+	}
+	err = tx.QueryRow(ctx, `INSERT INTO runs (instance, project_id, mr_iid, project_path, head_sha, target_branch)
+		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id::text`,
+		mr.Instance, mr.ProjectID, mr.IID, projectPath, headSHA, targetBranch).Scan(&id)
+	if err != nil {
 		return "", false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return "", false, err
 	}
-	return id, created, nil
+	return id, true, nil
 }
 
 // SupersedeMR supersedes the queued, running and reported (not yet published)

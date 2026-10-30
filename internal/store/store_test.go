@@ -1059,6 +1059,107 @@ func TestEnqueueRetargetKeepsPublishedRunsOfOtherTarget(t *testing.T) {
 	}
 }
 
+// published runs head against target on mr through dispatch and a stored
+// result to published, and returns its id.
+func published(t *testing.T, s *Store, mr MRKey, head, target string) string {
+	t.Helper()
+	id, created, err := s.EnqueueRun(ctx, mr, "acme/widgets", head, target)
+	if err != nil || !created {
+		t.Fatalf("EnqueueRun(%s, %s) = %v, %v; want a new run", head, target, created, err)
+	}
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	tok := "tok-" + head + "-" + target
+	if err := s.MarkDispatched(ctx, id, "job-"+id, "base", "start", hash(tok), t0.Add(time.Hour), t0); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := s.StoreResult(ctx, id, tok, []byte(`{"status":"completed"}`), t0.Add(time.Minute)); err != nil || out != ResultStored {
+		t.Fatalf("StoreResult = %v, %v", out, err)
+	}
+	if err := s.MarkPublished(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// Retargeting back to a branch the head was already reviewed against is a
+// fresh run: the comment, the status and the approval show the newest
+// review, and commit statuses are per commit, not per target. The old
+// published run is superseded as history: its Job finished and its status
+// was posted, so there is nothing to clean up or cancel.
+func TestEnqueueRetargetBackIsANewRun(t *testing.T) {
+	s := newStore(t)
+	mainRun := published(t, s, mr1, "aaa", "main")
+	devRun := published(t, s, mr1, "aaa", "develop")
+
+	back, created, err := s.EnqueueRun(ctx, mr1, "acme/widgets", "aaa", "main")
+	if err != nil || !created || back == mainRun {
+		t.Fatalf("retarget back to main = %s %v %v; want a new run", back, created, err)
+	}
+	if r := getRun(t, s, back); r.HeadSHA != "aaa" || r.TargetBranch != "main" || r.State != Queued {
+		t.Errorf("new run = %+v", r)
+	}
+	if r := getRun(t, s, mainRun); r.State != Superseded || !r.CleanedUp {
+		t.Errorf("old main run = %s cleaned_up=%v; want superseded and cleaned up", r.State, r.CleanedUp)
+	}
+	if got := getRun(t, s, devRun).State; got != Published {
+		t.Errorf("develop run = %s, want published (history)", got)
+	}
+	if got, err := s.RunsToCleanUp(ctx); err != nil || len(got) != 0 {
+		t.Errorf("RunsToCleanUp = %v, %v; want nothing to cancel", runIDs(got), err)
+	}
+	// The same head and target again is the same run.
+	if again, created, err := s.EnqueueRun(ctx, mr1, "acme/widgets", "aaa", "main"); err != nil || created || again != back {
+		t.Errorf("same head and target = %s %v %v; want %s", again, created, err, back)
+	}
+}
+
+// A head pushed again after another head (A, B, then A) is reviewed again
+// for the same reason.
+func TestEnqueueHeadBackIsANewRun(t *testing.T) {
+	s := newStore(t)
+	a := published(t, s, mr1, "aaa", "main")
+	published(t, s, mr1, "bbb", "main")
+	a2, created, err := s.EnqueueRun(ctx, mr1, "acme/widgets", "aaa", "main")
+	if err != nil || !created || a2 == a {
+		t.Fatalf("push back to A = %s %v %v; want a new run", a2, created, err)
+	}
+}
+
+// A repeated webhook for the newest run's head and target, published or
+// not, is not a new review.
+func TestEnqueueNewestPublishedRunIsKept(t *testing.T) {
+	s := newStore(t)
+	a := published(t, s, mr1, "aaa", "main")
+	again, created, err := s.EnqueueRun(ctx, mr1, "acme/widgets", "aaa", "main")
+	if err != nil || created || again != a {
+		t.Fatalf("repeat = %s %v %v; want %s", again, created, err, a)
+	}
+	if got := getRun(t, s, a).State; got != Published {
+		t.Errorf("run = %s, want published", got)
+	}
+}
+
+// A run for the newest target that hasn't published yet is newer than the
+// old run of the target the merge request moves back to: moving back while
+// it is live still gives a fresh run.
+func TestEnqueueRetargetBackWhileOtherTargetLive(t *testing.T) {
+	s := newStore(t)
+	mainRun := published(t, s, mr1, "aaa", "main")
+	dev, _, err := s.EnqueueRun(ctx, mr1, "acme/widgets", "aaa", "develop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, created, err := s.EnqueueRun(ctx, mr1, "acme/widgets", "aaa", "main")
+	if err != nil || !created || back == mainRun {
+		t.Fatalf("retarget back = %s %v %v; want a new run", back, created, err)
+	}
+	if got := getRun(t, s, dev).State; got != Superseded {
+		t.Errorf("develop run = %s, want superseded", got)
+	}
+}
+
 func TestStaleApprovalsAfterRetarget(t *testing.T) {
 	s := newStore(t)
 	enqueue(t, s, mr1, "A")
