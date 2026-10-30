@@ -22,7 +22,7 @@ helm install pergent-sh charts/pergent-sh -n pergent-sh -f values.yaml
 | fullnameOverride | string | `""` | Overrides the full resource name. |
 | image.pullPolicy | string | `"Always"` | Image pull policy. |
 | image.repository | string | `"ghcr.io/gopaytech/pergent.sh"` | Image repository. |
-| image.tag | string | `"main"` | Image tag. "main" is the newest build of the main branch (it moves, hence pullPolicy Always). For production pin "sha-<short sha>" or a release tag such as v0.1.0 (then IfNotPresent is enough). Empty means the chart appVersion. |
+| image.tag | string | `"main"` | Image tag. "main" is the newest build of the main branch (it moves, hence pullPolicy Always). For production pin "sha-<short sha>" or a release tag such as v0.1.0 (then IfNotPresent is enough). Empty means the chart appVersion. Releasing the chart: set this to the release version (and pullPolicy to IfNotPresent); "main" must not ship in a released chart. |
 | imagePullSecrets | list | `[]` | Secrets for pulling the image from a private registry. |
 | ingress.annotations | object | `{}` | Ingress annotations. |
 | ingress.className | string | `""` | Ingress class name. |

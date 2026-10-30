@@ -423,7 +423,7 @@ This release is deliberately small:
 
 ## Publishing the chart (at release time)
 
-The chart is not published yet. To publish a version, bump `version` (and `appVersion`) in `charts/pergent-sh/Chart.yaml`, then run:
+The chart is not published yet. To publish a version, bump `version` (and `appVersion`) in `charts/pergent-sh/Chart.yaml` and set `image.tag` in `charts/pergent-sh/values.yaml` to the release version (for example `v0.1.0`, with `image.pullPolicy: IfNotPresent`): the default `main` is a moving development build and must not ship in a released chart. Then run:
 
 ```bash
 make helm.create.releases   # packages the chart into charts/releases and refreshes its index.yaml

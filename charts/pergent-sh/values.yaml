@@ -2,6 +2,7 @@ image:
   # -- Image repository.
   repository: ghcr.io/gopaytech/pergent.sh
   # -- Image tag. "main" is the newest build of the main branch (it moves, hence pullPolicy Always). For production pin "sha-<short sha>" or a release tag such as v0.1.0 (then IfNotPresent is enough). Empty means the chart appVersion.
+  # Releasing the chart: set this to the release version (and pullPolicy to IfNotPresent); "main" must not ship in a released chart.
   tag: main
   # -- Image pull policy.
   pullPolicy: Always
