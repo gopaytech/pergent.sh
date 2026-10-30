@@ -144,6 +144,7 @@ func New(o Options) (*Dashboard, error) {
 //   - GET /auth/{platform}/{instance}/login: redirect to the provider;
 //   - GET /auth/{platform}/{instance}/callback: finish sign-in, redirect to /;
 //   - POST /auth/logout: end the session (X-CSRF-Token required);
+//   - GET /api/instances: the instances to sign in with, without a session;
 //   - GET /api/me: the signed-in user;
 //   - the read API and, for admins, the write API (see view.go for each
 //     endpoint's body).
@@ -154,6 +155,7 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("GET /auth/{platform}/{instance}/login", d.Auth.login)
 	mux.HandleFunc("GET /auth/{platform}/{instance}/callback", d.Auth.callback)
 	mux.HandleFunc("POST /auth/logout", d.Auth.logout)
+	mux.HandleFunc("GET /api/instances", d.instances)
 	mux.Handle("GET /api/me", d.Auth.Require(http.HandlerFunc(d.me)))
 	d.writeRoutes(mux)
 	d.readRoutes(mux)
@@ -182,6 +184,24 @@ func (d *Dashboard) me(w http.ResponseWriter, r *http.Request) {
 		Platform: se.Platform, Instance: se.Instance, Username: se.Username,
 		IsAdmin: se.IsAdmin, CSRFToken: se.CSRFToken,
 	})
+}
+
+// instances lists the instances with sign-in, in the config's order (GitLab
+// first): the sign-in page shows a button for each. It needs no session
+// and says nothing but their names.
+func (d *Dashboard) instances(w http.ResponseWriter, _ *http.Request) {
+	out := []InstanceView{}
+	for _, inst := range d.cfg.GitLab {
+		if inst.HasOAuth() {
+			out = append(out, InstanceView{Platform: config.PlatformGitLab, Instance: inst.Name, Label: "GitLab (" + inst.Name + ")"})
+		}
+	}
+	for _, inst := range d.cfg.GitHub {
+		if inst.HasOAuth() {
+			out = append(out, InstanceView{Platform: config.PlatformGitHub, Instance: inst.Name, Label: "GitHub (" + inst.Name + ")"})
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // writeJSON writes v as the JSON body.
