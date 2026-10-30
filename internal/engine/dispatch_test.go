@@ -820,3 +820,57 @@ func TestDispatchUsesEffectiveTimeoutAndMemory(t *testing.T) {
 		})
 	}
 }
+
+// A dashboard repository's skills that are no longer in the library are
+// dropped with a warning instead of failing the review; with none left,
+// every library skill is reviewed.
+func TestDispatchDashboardRepoDropsMissingSkills(t *testing.T) {
+	const security, style = "Look for security problems.", "Check the style."
+	for _, tc := range []struct {
+		name    string
+		skills  []string
+		want    []string
+		notWant []string
+	}{
+		{"some left", []string{"security", "gone"}, []string{security}, []string{style}},
+		{"none left", []string{"gone", "also-gone"}, []string{security, style}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnv(t)
+			env.Engine.Config.Repositories = nil
+			env.Engine.Library["style"] = []byte("---\nname: style\n---\n" + style + "\n")
+			dashboardRepo(t, env, store.DashboardRepo{Instance: testInstance, Project: testProjectPath,
+				Skills: tc.skills, CreatedBy: "alice"})
+			head := sha('a')
+			id := env.Enqueue(3, head)
+			env.GitLab.SetMR(openMR(3, head))
+			env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+
+			dispatch(t, env)
+
+			cm := env.ConfigMap(id)
+			if cm == nil {
+				r := env.Run(id)
+				t.Fatalf("no job inputs; run state %s, reason %q\n%s", r.State, r.FailureReason, env.Logs())
+			}
+			var all strings.Builder
+			for _, v := range cm.Data {
+				all.WriteString(v)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(all.String(), w) {
+					t.Errorf("inputs lack %q", w)
+				}
+			}
+			for _, w := range tc.notWant {
+				if strings.Contains(all.String(), w) {
+					t.Errorf("inputs have %q", w)
+				}
+			}
+			logs := env.Logs()
+			if !strings.Contains(logs, "level=WARN") || !strings.Contains(logs, "gone") {
+				t.Errorf("the dropped skill was not warned about:\n%s", logs)
+			}
+		})
+	}
+}

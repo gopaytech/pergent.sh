@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
 // Run first puts back a run stranded between claim and dispatch by an earlier
@@ -160,4 +162,67 @@ func TestRunSweepsOnItsOwnInterval(t *testing.T) {
 			t.Errorf("swept %d times in ~15 sweep intervals, want several", n)
 		}
 	})
+}
+
+// ReconcileSoon never blocks, however often it is called with no loop
+// draining it.
+func TestReconcileSoonNeverBlocks(t *testing.T) {
+	e := &Engine{}
+	done := make(chan struct{})
+	go func() {
+		for range 100 {
+			e.ReconcileSoon()
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ReconcileSoon blocked")
+	}
+}
+
+// ReconcileSoon makes the running loop reconcile on its next select, long
+// before the hourly tick: a repository switched on in the dashboard gets its
+// webhook within seconds.
+func TestRunReconcilesSoonOnRequest(t *testing.T) {
+	env := newTestEnv(t)
+	serveProject(env, testProjectID, testProjectPath)
+	serveProject(env, 9, "acme/gadgets")
+
+	ctx, cancel := context.WithCancel(env.ctx)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		env.Engine.Run(ctx)
+		close(done)
+	}()
+	waitFor := func(what string, ok func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for !ok() {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s:\n%s", what, env.Logs())
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	// The startup reconcile has stored acme/widgets: it is done with the
+	// list of repositories.
+	waitFor("Run didn't reconcile at start", func() bool {
+		p, ok := project(t, env, testProjectID)
+		return ok && p.HookID == newHookID
+	})
+
+	dashboardRepo(t, env, store.DashboardRepo{Instance: testInstance, Project: "acme/gadgets", CreatedBy: "alice"})
+	time.Sleep(100 * time.Millisecond)
+	if n := len(env.GitLab.Requests(http.MethodPost, "/projects/9/hooks")); n != 0 {
+		t.Fatalf("acme/gadgets got a webhook before ReconcileSoon")
+	}
+	env.Engine.ReconcileSoon()
+	waitFor("ReconcileSoon didn't reconcile acme/gadgets", func() bool {
+		return len(env.GitLab.Requests(http.MethodPost, "/projects/9/hooks")) > 0
+	})
+	cancel()
+	<-done
 }

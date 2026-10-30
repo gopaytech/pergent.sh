@@ -21,6 +21,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/result"
+	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -210,7 +211,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		}
 	}
 
-	in, err := inputs.Resolve(ctx, source{plat.Forge}, e.Library, config.Repository{Skills: repo.Skills},
+	in, err := inputs.Resolve(ctx, source{plat.Forge}, e.Library, config.Repository{Skills: d.skills(repo)},
 		run.MR.ProjectID, mr.StartSHA, previous)
 	if err != nil {
 		var se *sourceError
@@ -435,6 +436,34 @@ func (d *dispatcher) redact(text string) string {
 		}
 	}
 	return text
+}
+
+// skills is the library skills repo reviews with. The config's skills were
+// checked against the library at startup; a dashboard repository's may name
+// a skill removed from the library since it was set. Such a skill is dropped
+// with a warning, and when none is left every library skill is used: a
+// stale setting never fails a review.
+func (d *dispatcher) skills(repo settings.Effective) []string {
+	if repo.Source != settings.SourceDashboard || len(repo.Skills) == 0 {
+		return repo.Skills
+	}
+	kept := make([]string, 0, len(repo.Skills))
+	var missing []string
+	for _, name := range repo.Skills {
+		if _, ok := d.e.Library[name]; ok {
+			kept = append(kept, name)
+		} else {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		d.log.Warn("reviewing without the repository's skills that are no longer in the skill library",
+			"skills", strings.Join(missing, ","), "all_library_skills", len(kept) == 0)
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return kept
 }
 
 // mintToken returns a fresh result token (32 random bytes, base64url without

@@ -76,6 +76,9 @@ type Engine struct {
 	wakeOnce sync.Once
 	wake     chan struct{}
 
+	reconcileOnce sync.Once
+	reconcileReq  chan struct{}
+
 	// unchecked holds the repositories whose required approvals couldn't
 	// be read, so that is logged once (see checkRequiredApprovals).
 	uncheckedMu sync.Mutex
@@ -100,6 +103,24 @@ func (e *Engine) Wake() {
 func (e *Engine) wakeCh() chan struct{} {
 	e.wakeOnce.Do(func() { e.wake = make(chan struct{}, 1) })
 	return e.wake
+}
+
+// ReconcileSoon asks the loop for a Reconcile on its next select, ahead of
+// the hourly one: the dashboard calls it when a repository is switched on or
+// off. It never blocks; requests that arrive while one is pending are merged
+// into it.
+func (e *Engine) ReconcileSoon() {
+	select {
+	case e.reconcileCh() <- struct{}{}:
+	default:
+	}
+}
+
+// reconcileCh is the reconcile request channel, created on first use with
+// room for one.
+func (e *Engine) reconcileCh() chan struct{} {
+	e.reconcileOnce.Do(func() { e.reconcileReq = make(chan struct{}, 1) })
+	return e.reconcileReq
 }
 
 func (e *Engine) now() time.Time {
@@ -130,7 +151,7 @@ var (
 // Run runs the loops until ctx is done: dispatch, publish and cleanup every
 // 2 s or on Wake, watch every 15 s, sweep the approvals every 5 minutes and
 // reconcile every hour (when it also prunes the review logs older than
-// 30 days). They all run in
+// 30 days) and on ReconcileSoon. They all run in
 // this one goroutine, one after another, so no two of them ever overlap (a
 // publish and a cleanup of the same merge request least of all). Errors are
 // logged and never stop the loop. Before the first pass, runs stranded
@@ -182,6 +203,10 @@ func (e *Engine) Run(ctx context.Context) {
 				log.Error("reconcile failed", "error", e.redact(err.Error()))
 			}
 			e.pruneRunLogs(ctx)
+		case <-e.reconcileCh():
+			if err := e.Reconcile(ctx); err != nil && ctx.Err() == nil {
+				log.Error("reconcile failed", "error", e.redact(err.Error()))
+			}
 		}
 	}
 }
