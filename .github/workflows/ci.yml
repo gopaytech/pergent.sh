@@ -9,6 +9,28 @@ permissions:
   contents: read
 
 jobs:
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Test
+        run: npm test -- --run
+      - name: Build
+        run: npm run build
+
   test:
     runs-on: ubuntu-latest
     services:
@@ -30,6 +52,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # The binary embeds the dashboard build, so test and build the real one.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build the dashboard
+        run: make web
       - name: Vet
         run: go vet ./...
       - name: Test
@@ -56,7 +86,7 @@ jobs:
   # (see release.yml).
   image:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [ test, chart ]
+    needs: [ web, test, chart ]
     runs-on: ubuntu-latest
     # One build at a time; with the tip check below, an older build never
     # overwrites :main after a newer one.

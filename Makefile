@@ -1,7 +1,13 @@
-.PHONY: build test vet clean
+.PHONY: build test vet clean web
 
 build:
 	go build -o bin/pergent-sh ./cmd/pergent-sh
+
+# Builds the dashboard into internal/web/dist, which `build` embeds. It
+# overwrites the committed placeholder index.html; `git checkout
+# internal/web/dist/index.html` restores it.
+web:
+	cd web && npm ci && npm run build
 
 test:
 	go test ./...

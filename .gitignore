@@ -1,1 +1,8 @@
 bin/
+web/node_modules/
+web/coverage/
+# `make web` builds the dashboard here; the committed placeholder keeps
+# `go build` working without Node.
+internal/web/dist/*
+!internal/web/dist/.keep
+!internal/web/dist/index.html

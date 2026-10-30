@@ -12,6 +12,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/web"
 	"github.com/gopaytech/pergent.sh/internal/webhook"
 )
 
@@ -28,14 +29,19 @@ type Deps struct {
 	Wake func()
 	// Now is the clock of the result callback; nil means time.Now.
 	Now func() time.Time
-	Log *slog.Logger
+	// Dashboard serves /auth/ and /api/. Nil turns the dashboard off.
+	Dashboard http.Handler
+	Log       *slog.Logger
 }
 
 // Routes serves:
 //   - POST /webhooks/gitlab/{instance}: GitLab merge request webhooks;
 //   - POST /webhooks/github/{instance}: GitHub pull_request webhooks;
 //   - POST /runs/{id}/result: a review Job's result;
-//   - GET /healthz: 200 "ok".
+//   - GET /healthz: 200 "ok";
+//   - when Dashboard is set and dashboard.url is configured: /auth/ and /api/
+//     (the Dashboard handler) and everything else the embedded app. Without
+//     them none of /, /api/ and /auth/ exist.
 func Routes(d Deps) *http.ServeMux {
 	mux := http.NewServeMux()
 	// Webhooks accept repositories switched on in the config or the dashboard.
@@ -53,5 +59,10 @@ func Routes(d Deps) *http.ServeMux {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = io.WriteString(w, "ok")
 	})
+	if d.Dashboard != nil && d.Config != nil && d.Config.DashboardEnabled() {
+		mux.Handle("/auth/", d.Dashboard)
+		mux.Handle("/api/", d.Dashboard)
+		mux.Handle("/", web.Handler())
+	}
 	return mux
 }
