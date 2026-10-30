@@ -1,10 +1,11 @@
-// Command pergent-sh runs pergent code reviews on GitLab merge requests as
-// Kubernetes Jobs.
+// Command pergent-sh runs pergent code reviews on GitLab merge requests and
+// GitHub pull requests as Kubernetes Jobs.
 //
 //	pergent-sh serve [--config /etc/pergent-sh/config.yaml]
 //
 // It needs DATABASE_URL and PERGENT_SH_SECRET_KEY in the environment, plus the
-// LLM key and the GitLab tokens and webhook secrets the config file names.
+// LLM key, the GitLab tokens, the GitHub App private keys (or approve token)
+// and the webhook secrets the config file names.
 package main
 
 import (
@@ -14,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -27,7 +29,9 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/engine"
+	"github.com/gopaytech/pergent.sh/internal/forge/githubforge"
 	"github.com/gopaytech/pergent.sh/internal/forge/gitlabforge"
+	"github.com/gopaytech/pergent.sh/internal/github"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/kube"
@@ -79,8 +83,8 @@ func parseArgs(args []string, stderr io.Writer) (string, error) {
 }
 
 // serve starts pergent.sh and runs it until ctx is done. Anything wrong with
-// the config, the secrets, the database or a GitLab token stops it before it
-// serves; secrets are never part of the error.
+// the config, the secrets, the database, a GitLab token or a GitHub App or
+// token stops it before it serves; secrets are never part of the error.
 func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -124,6 +128,13 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	githubRepos := func(instance string) githubforge.Repos { return engine.GitHubRepos(st, instance) }
+	githubPlatforms, githubSecrets, err := connectGitHub(ctx, cfg, githubRepos, nil, log)
+	if err != nil {
+		return err
+	}
+	// Instance names are unique across gitlab: and github: (config.Validate).
+	maps.Copy(platforms, githubPlatforms)
 	restCfg, err := kubeConfig()
 	if err != nil {
 		return err
@@ -145,7 +156,8 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		Log:            log,
 	}
 	handler := server.Routes(server.Deps{
-		Config: cfg, WebhookSecrets: hookSecrets, Store: st, Wake: eng.Wake, Log: log,
+		Config: cfg, WebhookSecrets: hookSecrets, GitHubWebhookSecrets: githubSecrets,
+		Store: st, Wake: eng.Wake, Log: log,
 	})
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
@@ -241,6 +253,71 @@ func connectGitLab(ctx context.Context, cfg *config.Config) (map[string]engine.P
 		secrets[inst.Name] = hookSecret
 	}
 	return platforms, secrets, nil
+}
+
+// connectGitHub builds every GitHub instance's review App and approve side
+// (the approve App, or a bot user's token) and looks up their bot users once:
+// the review App's comments and the approve side's reviews are found by
+// them. A key, App or token that doesn't work is an error naming the
+// instance and what failed, never the secret. repos resolves an instance's
+// repository IDs; hc is the HTTP client (nil: the default). It returns the
+// platforms and the review App webhook secrets by instance.
+func connectGitHub(ctx context.Context, cfg *config.Config, repos func(instance string) githubforge.Repos, hc *http.Client, log *slog.Logger) (map[string]engine.Platform, map[string]string, error) {
+	platforms := make(map[string]engine.Platform, len(cfg.GitHub))
+	secrets := make(map[string]string, len(cfg.GitHub))
+	for _, inst := range cfg.GitHub {
+		reviewKey, approveSecret, hookSecret, err := inst.Secrets()
+		if err != nil {
+			return nil, nil, err
+		}
+		reviewApp, reviewBot, err := connectApp(ctx, inst.APIURL, inst.ReviewApp.AppID, reviewKey, hc)
+		if err != nil {
+			return nil, nil, fmt.Errorf("github instance %q: the review App (app_id %d) doesn't work: %w",
+				inst.Name, inst.ReviewApp.AppID, err)
+		}
+		instRepos := repos(inst.Name)
+
+		var approver *githubforge.Approver
+		if inst.ApproveApp != nil {
+			approveApp, approveBot, err := connectApp(ctx, inst.APIURL, inst.ApproveApp.AppID, approveSecret, hc)
+			if err != nil {
+				return nil, nil, fmt.Errorf("github instance %q: the approve App (app_id %d) doesn't work: %w",
+					inst.Name, inst.ApproveApp.AppID, err)
+			}
+			approver = githubforge.NewAppApprover(approveApp, approveBot, instRepos)
+		} else {
+			client := github.NewTokenClient(inst.APIURL, approveSecret, hc)
+			user, err := client.CurrentUser(ctx)
+			if err != nil {
+				return nil, nil, fmt.Errorf("github instance %q: the approve token (%s) doesn't work: %w",
+					inst.Name, inst.ApproveTokenEnv, err)
+			}
+			approver = githubforge.NewTokenApprover(client, user.ID, instRepos, log.With("instance", inst.Name))
+		}
+
+		platforms[inst.Name] = engine.Platform{
+			Kind:     config.PlatformGitHub,
+			Forge:    githubforge.NewForge(reviewApp, reviewBot, instRepos),
+			Approver: approver,
+			GitHub:   &engine.GitHub{App: reviewApp, Approve: approver},
+		}
+		secrets[inst.Name] = hookSecret
+	}
+	return platforms, secrets, nil
+}
+
+// connectApp builds the GitHub App appID and looks up its bot user's ID,
+// which also proves the key belongs to the App.
+func connectApp(ctx context.Context, apiURL string, appID int64, key string, hc *http.Client) (*github.App, int64, error) {
+	app, err := github.NewApp(apiURL, appID, key, hc)
+	if err != nil {
+		return nil, 0, err
+	}
+	bot, err := app.BotUserID(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	return app, bot, nil
 }
 
 // kubeConfig is the in-cluster config or, outside a cluster, the kubeconfig

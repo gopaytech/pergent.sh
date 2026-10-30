@@ -54,7 +54,8 @@ spec:
               containerPort: 8080
               protocol: TCP
           # pergent-sh listens only after it has checked the config, the
-          # database, the migrations and the GitLab tokens, so give it time.
+          # database, the migrations, the GitLab tokens and the GitHub Apps,
+          # so give it time.
           startupProbe:
             httpGet:
               path: /healthz

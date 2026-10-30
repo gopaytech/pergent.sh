@@ -203,6 +203,13 @@ func (f *fakeGitHub) Requests(method, path string) []githubRequest {
 	return out
 }
 
+// Reset forgets the recorded requests (routes and installations stay).
+func (f *fakeGitHub) Reset() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.requests = nil
+}
+
 // Writes are the requests that change something on GitHub, minting tokens
 // aside.
 func (f *fakeGitHub) Writes() []githubRequest {

@@ -15,17 +15,22 @@ fullnameOverride: ""
 #   OPENCODE_API_KEY       the LLM key (the env var named by config.llm.api_key_env)
 #   every env var named by config.gitlab[*].review_token_env, approve_token_env
 #   and webhook_secret_env
+#   every env var named by config.github[*].review_app.private_key_env,
+#   approve_app.private_key_env (or approve_token_env) and webhook_secret_env;
+#   a private key is the App's whole PEM file, e.g.
+#   --from-file=GITHUB_REVIEW_APP_KEY=review-app.private-key.pem
 existingSecret: ""
 
 # The namespace the review Jobs run in. It must already exist. The chart creates
 # the Role, RoleBinding and NetworkPolicy there. Must equal config.jobs.namespace.
 jobsNamespace: pergent
 
-# Where review Jobs may connect over TCP 443 and 80: GitLab, the LLM provider
-# and (unless callback_url is an in-cluster address) the pergent.sh URL.
+# Where review Jobs may connect over TCP 443 and 80: GitLab or GitHub (Jobs
+# clone over HTTPS), the LLM provider and (unless callback_url is an
+# in-cluster address) the pergent.sh URL.
 # The default 0.0.0.0/0 lets a Job reach ANY address on 80/443, including
-# in-cluster services and the cloud metadata endpoint. Narrow it to GitLab and
-# the LLM provider. An EMPTY list allows no external egress at all: Jobs can
+# in-cluster services and the cloud metadata endpoint. Narrow it to GitLab or
+# GitHub and the LLM provider. An EMPTY list allows no external egress at all: Jobs can
 # then only use DNS and the pergent.sh callback (on 8080).
 jobEgress:
   cidrs:
@@ -47,6 +52,16 @@ config:
       review_token_env: GITLAB_REVIEW_TOKEN
       approve_token_env: GITLAB_APPROVE_TOKEN
       webhook_secret_env: GITLAB_WEBHOOK_SECRET
+  # GitHub: one entry per pair of GitHub Apps (see the README), e.g.
+  # github:
+  #   - name: gh
+  #     review_app:
+  #       app_id: 123456
+  #       private_key_env: GITHUB_REVIEW_APP_KEY
+  #     approve_app:
+  #       app_id: 123457
+  #       private_key_env: GITHUB_APPROVE_APP_KEY
+  #     webhook_secret_env: GITHUB_WEBHOOK_SECRET
   repositories: []
   llm:
     provider: anthropic
@@ -75,7 +90,8 @@ ingress:
   className: ""
   annotations: {}
   host: pergent.example.com
-  # GitLab posts to /webhooks/gitlab/<instance>; Jobs post to /runs/<id>/result.
+  # GitLab posts to /webhooks/gitlab/<instance>, GitHub to
+  # /webhooks/github/<instance>; Jobs post to /runs/<id>/result.
   paths:
     - /webhooks/
     - /runs/

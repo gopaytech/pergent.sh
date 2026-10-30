@@ -22,7 +22,7 @@ spec:
         - protocol: TCP
           port: 53
     {{- if .Values.jobEgress.cidrs }}
-    # GitLab and the LLM provider. Only emitted for a non-empty list: a rule
+    # GitLab or GitHub, and the LLM provider. Only emitted for a non-empty list: a rule
     # with an empty "to" would allow every destination.
     - to:
         {{- range .Values.jobEgress.cidrs }}
