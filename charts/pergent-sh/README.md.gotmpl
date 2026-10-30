@@ -1,0 +1,18 @@
+{{ template "chart.header" . }}
+{{ template "chart.description" . }}
+
+{{ template "chart.versionBadge" . }}{{ template "chart.typeBadge" . }}{{ template "chart.appVersionBadge" . }}
+
+pergent.sh runs [pergent](https://github.com/gopaytech/pergent) code reviews on GitLab merge requests and GitHub pull requests, one Kubernetes Job per review. Postgres is not part of this chart. The [repository README](../../README.md) explains the setup: the Secret, the config, the skills and what the chart creates.
+
+## Installing
+
+```console
+helm install pergent-sh charts/pergent-sh -n pergent-sh -f values.yaml
+```
+
+{{ template "chart.requirementsSection" . }}
+
+{{ template "chart.valuesSection" . }}
+
+{{ template "helm-docs.versionFooter" . }}

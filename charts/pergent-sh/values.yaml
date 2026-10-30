@@ -1,0 +1,119 @@
+image:
+  # -- Image repository.
+  repository: ghcr.io/gopaytech/pergent.sh
+  # -- Image tag. "main" is the newest build of the main branch (it moves, hence pullPolicy Always). For production pin "sha-<short sha>" or a release tag such as v0.1.0 (then IfNotPresent is enough). Empty means the chart appVersion.
+  tag: main
+  # -- Image pull policy.
+  pullPolicy: Always
+
+# -- Secrets for pulling the image from a private registry.
+imagePullSecrets: []
+# -- Overrides the chart name in resource names.
+nameOverride: ""
+# -- Overrides the full resource name.
+fullnameOverride: ""
+
+# -- Name of an existing Secret in the release namespace (required). It is mounted with envFrom and holds:
+# DATABASE_URL (PostgreSQL connection URL);
+# PERGENT_SH_SECRET_KEY (32 random bytes, standard base64);
+# OPENCODE_API_KEY (the LLM key, the env var named by config.llm.api_key_env);
+# every env var named by config.gitlab[*].review_token_env, approve_token_env and webhook_secret_env;
+# every env var named by config.github[*].review_app.private_key_env, approve_app.private_key_env (or approve_token_env) and webhook_secret_env.
+# A private key is the App's whole PEM file, e.g. --from-file=GITHUB_REVIEW_APP_KEY=review-app.private-key.pem
+existingSecret: ""
+
+# -- The namespace the review Jobs run in. It must already exist. The chart creates the Role, RoleBinding and NetworkPolicy there. Must equal config.jobs.namespace.
+jobsNamespace: pergent
+
+# Where review Jobs may connect over TCP 443 and 80: GitLab or GitHub (Jobs
+# clone over HTTPS), the LLM provider and (unless callback_url is an
+# in-cluster address) the pergent.sh URL.
+jobEgress:
+  # -- CIDRs the Jobs may reach on TCP 443 and 80. The default 0.0.0.0/0 lets a Job reach ANY address on 80/443, including in-cluster services and the cloud metadata endpoint: narrow it to GitLab or GitHub and the LLM provider. An EMPTY list allows no external egress at all: Jobs can then only use DNS and the pergent.sh callback (on 8080).
+  cidrs:
+    - 0.0.0.0/0
+  # -- Optional ranges carved out of EVERY cidr above (NetworkPolicy "except"), e.g. 169.254.169.254/32. Kubernetes rejects an entry that lies outside its cidr, so use this with broad cidrs such as the default 0.0.0.0/0.
+  except: []
+
+# For GitHub, add a github list (one entry per pair of GitHub Apps) and set
+# gitlab to []. E.g.
+# github:
+#   - name: gh
+#     review_app:
+#       app_id: 123456
+#       private_key_env: GITHUB_REVIEW_APP_KEY
+#     approve_app:
+#       app_id: 123457
+#       private_key_env: GITHUB_APPROVE_APP_KEY
+#     webhook_secret_env: GITHUB_WEBHOOK_SECRET
+
+# -- Rendered verbatim to /etc/pergent-sh/config.yaml. See the repository README for every field and for the GitHub example (config.github). listen and skills_dir are fixed by the chart: leave them as they are. Set config.gitlab to [] when you only use GitHub.
+config:
+  listen: ":8080"
+  skills_dir: /etc/pergent-sh/skills
+  public_url: https://pergent.example.com
+  gitlab:
+    - name: main
+      url: https://gitlab.example.com
+      review_token_env: GITLAB_REVIEW_TOKEN
+      approve_token_env: GITLAB_APPROVE_TOKEN
+      webhook_secret_env: GITLAB_WEBHOOK_SECRET
+  repositories: []
+  llm:
+    provider: anthropic
+    model: claude-sonnet-4
+    api_key_env: OPENCODE_API_KEY
+  jobs:
+    namespace: pergent
+
+# -- The skill library: file name (name.md) -> content. Mounted at /etc/pergent-sh/skills. A ConfigMap key can't hold a "/", so folder-style skills (<name>/SKILL.md) aren't possible here.
+skills: {}
+
+serviceAccount:
+  # -- Create the ServiceAccount.
+  create: true
+  # -- ServiceAccount name. Defaults to the release's full name.
+  name: ""
+  # -- Annotations of the ServiceAccount.
+  annotations: {}
+
+service:
+  # -- Service type.
+  type: ClusterIP
+  # -- Service port.
+  port: 8080
+
+ingress:
+  # -- Create an Ingress.
+  enabled: false
+  # -- Ingress class name.
+  className: ""
+  # -- Ingress annotations.
+  annotations: {}
+  # -- Ingress host.
+  host: pergent.example.com
+  # -- Paths exposed. GitLab posts to /webhooks/gitlab/<instance>, GitHub to /webhooks/github/<instance>; Jobs post to /runs/<id>/result.
+  paths:
+    - /webhooks/
+    - /runs/
+  # -- Ingress TLS, e.g. `[{secretName: pergent-example-com-tls, hosts: [pergent.example.com]}]`.
+  tls: []
+
+# -- Resources of the pergent.sh pod.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+# -- Annotations of the pod.
+podAnnotations: {}
+# -- Extra labels of the pod.
+podLabels: {}
+# -- Node selector of the pod.
+nodeSelector: {}
+# -- Tolerations of the pod.
+tolerations: []
+# -- Affinity of the pod.
+affinity: {}

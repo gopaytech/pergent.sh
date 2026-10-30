@@ -46,10 +46,10 @@ jobs:
       - uses: azure/setup-helm@v4
       - name: Lint
         run: |
-          helm lint deploy/helm/pergent-sh
-          helm lint deploy/helm/pergent-sh -f deploy/helm/pergent-sh/ci-values.yaml
+          helm lint charts/pergent-sh
+          helm lint charts/pergent-sh -f charts/pergent-sh/ci-values.yaml
       - name: Template
-        run: helm template t deploy/helm/pergent-sh --namespace pergent-sh -f deploy/helm/pergent-sh/ci-values.yaml
+        run: helm template t charts/pergent-sh --namespace pergent-sh -f charts/pergent-sh/ci-values.yaml
 
   # Publishes the newest main build as ghcr.io/gopaytech/pergent.sh:main and
   # :sha-<short sha>. Not on pull requests. `latest` stays the release tag

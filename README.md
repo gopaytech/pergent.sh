@@ -31,7 +31,7 @@ In this README a "merge request" is also a GitHub pull request, and the "review 
 
 ## Install with Helm
 
-The chart is in `deploy/helm/pergent-sh`. Postgres is not part of it.
+The chart is in `charts/pergent-sh`. Postgres is not part of it. Every value is listed in the [chart reference](charts/pergent-sh/README.md).
 
 1. Create the namespace the Jobs run in and the one pergent.sh runs in:
 
@@ -108,7 +108,7 @@ The chart is in `deploy/helm/pergent-sh`. Postgres is not part of it.
 4. Install:
 
    ```bash
-   helm install pergent-sh deploy/helm/pergent-sh -n pergent-sh -f values.yaml
+   helm install pergent-sh charts/pergent-sh -n pergent-sh -f values.yaml
    ```
 
    By default the chart runs `ghcr.io/gopaytech/pergent.sh:main`, the newest build of the `main` branch (every push to `main` publishes it, together with `sha-<short sha>`), with `image.pullPolicy: Always`. The tag moves, so a pod restart can pick up a newer build. For production pin an image: `--set image.tag=sha-<short sha>` or a release tag such as `v0.1.0` (then `--set image.pullPolicy=IfNotPresent`).
@@ -408,6 +408,16 @@ This release is deliberately small:
 - A repository is switched off only by removing it from the config.
 - GitHub.com only. `github[].api_url` accepts another URL, but GitHub Enterprise Server is untested.
 - On GitHub, approving after the approve App is installed starts with the next push or ready-for-review; there is no catch-up pass over open pull requests.
+
+## Publishing the chart (at release time)
+
+The chart is not published yet. To publish a version, bump `version` (and `appVersion`) in `charts/pergent-sh/Chart.yaml`, then run:
+
+```bash
+make helm.create.releases   # packages the chart into charts/releases and refreshes its index.yaml
+```
+
+and commit `charts/releases/`. The directory is served by GitHub Pages from this repository (now public); a repository admin has to enable Pages first. `make readme` regenerates the chart reference (`charts/pergent-sh/README.md`) from the comments in `charts/pergent-sh/values.yaml` with [helm-docs](https://github.com/norwoodj/helm-docs); run it after changing a value.
 
 ## Development
 
