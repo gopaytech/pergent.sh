@@ -249,7 +249,7 @@ func (e *Engine) retryPublish(ctx context.Context, run store.Run, text string, l
 
 // CleanupOnce deletes the Jobs of superseded runs, sets their commit status
 // to canceled when they had been dispatched, and removes the approve bot's
-// approvals of commits that are no longer an MR's head. Anything that fails is
+// approvals of a head or target branch that is no longer the MR's newest run's. Anything that fails is
 // left for the next pass; the returned error joins failures to list the work.
 func (e *Engine) CleanupOnce(ctx context.Context) error {
 	var errs []error
