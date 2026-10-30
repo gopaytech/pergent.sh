@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -29,6 +30,15 @@ const (
 	Published     RunState = "published"
 	PublishFailed RunState = "publish_failed"
 	Superseded    RunState = "superseded"
+)
+
+var (
+	// ErrInvalidResult is returned by StoreResult when the body is not valid
+	// JSON. The run is left untouched.
+	ErrInvalidResult = errors.New("store: result is not valid JSON")
+	// ErrNotRunning is returned by MarkDispatched when the run is not in
+	// state running (it was superseded, or does not exist).
+	ErrNotRunning = errors.New("store: run is not running")
 )
 
 // maxPublishAttempts is the number of failed publishes after which a run
@@ -129,10 +139,11 @@ func lockMR(ctx context.Context, tx pgx.Tx, mr MRKey) error {
 	return err
 }
 
-// EnqueueRun queues a review of headSHA. It supersedes the queued and running
-// runs of the same merge request for any other head, and does not create a
-// second run for a head that already has a non-superseded run: then created is
-// false and id is that run's.
+// EnqueueRun queues a review of headSHA. It supersedes the queued, running
+// and reported (not yet published) runs of the same merge request for any
+// other head, so an older head's result is never posted over a newer review,
+// and does not create a second run for a head that already has a non-superseded
+// run: then created is false and id is that run's.
 func (s *Store) EnqueueRun(ctx context.Context, mr MRKey, projectPath, headSHA, targetBranch string) (id string, created bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -144,7 +155,7 @@ func (s *Store) EnqueueRun(ctx context.Context, mr MRKey, projectPath, headSHA, 
 		return "", false, err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE runs SET state = 'superseded'
-		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha <> $4 AND state IN ('queued', 'running')`,
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha <> $4 AND state IN ('queued', 'running', 'reported')`,
 		mr.Instance, mr.ProjectID, mr.IID, headSHA); err != nil {
 		return "", false, err
 	}
@@ -171,13 +182,30 @@ func (s *Store) EnqueueRun(ctx context.Context, mr MRKey, projectPath, headSHA, 
 	return id, created, nil
 }
 
-// SupersedeMR supersedes the queued and running runs of a merge request (for
-// example when it is closed or merged) and returns how many it changed.
+// SupersedeMR supersedes the queued, running and reported (not yet published)
+// runs of a merge request (for example when it is closed or merged) and
+// returns how many it changed. It takes the same per-MR lock as EnqueueRun, so
+// a close racing an enqueue cannot leave a queued run alive.
 func (s *Store) SupersedeMR(ctx context.Context, mr MRKey) (int, error) {
-	tag, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'superseded'
-		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND state IN ('queued', 'running')`,
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+
+	if err := lockMR(ctx, tx, mr); err != nil {
+		return 0, err
+	}
+	tag, err := tx.Exec(ctx, `UPDATE runs SET state = 'superseded'
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND state IN ('queued', 'running', 'reported')`,
 		mr.Instance, mr.ProjectID, mr.IID)
-	return int(tag.RowsAffected()), err
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
 }
 
 // CountRunning returns the number of runs in state running.
@@ -225,11 +253,22 @@ func (s *Store) Requeue(ctx context.Context, id string, notBefore time.Time) err
 }
 
 // MarkDispatched records the Job started for a running run and the SHA-256 of
-// its result token, valid until expires.
+// its result token, valid until expires. It returns ErrNotRunning when the run
+// is not in state running (for example it was superseded after it was claimed).
 func (s *Store) MarkDispatched(ctx context.Context, id, jobName, baseSHA, startSHA string, tokenHash []byte, expires, now time.Time) error {
-	return s.mustUpdate(ctx, id, `UPDATE runs SET job_name = $2, base_sha = $3, start_sha = $4,
-		token_hash = $5, token_expires_at = $6, dispatched_at = $7 WHERE id = $1::uuid`,
+	if !validUUID(id) {
+		return ErrNotRunning
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE runs SET job_name = $2, base_sha = $3, start_sha = $4,
+		token_hash = $5, token_expires_at = $6, dispatched_at = $7 WHERE id = $1::uuid AND state = 'running'`,
 		id, jobName, baseSHA, startSHA, tokenHash, expires, now)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrNotRunning
+	}
+	return nil
 }
 
 // mustUpdate runs an UPDATE that has to touch exactly one run.
@@ -269,11 +308,14 @@ func validUUID(id string) bool {
 }
 
 // StoreResult accepts the result a Job posted. The token is checked against
-// the stored SHA-256 in constant time and must not be expired. The outcome:
+// the stored SHA-256 in constant time and must not be expired. The token hash
+// is kept after the result, so single use is enforced by the run's state. The
+// outcome, in order:
 //   - ResultUnauthorized: unknown run, no token, wrong token or expired;
-//   - ResultDiscarded: the run was superseded; the token is spent, the result dropped;
-//   - ResultConflict: the run already has a result or failure;
-//   - ResultStored: the run is now reported and the token spent.
+//   - ResultDiscarded: the run was superseded; the result is dropped;
+//   - ResultConflict: the run already has a result or failure, or is not running;
+//   - ErrInvalidResult: body is not valid JSON; nothing is stored;
+//   - ResultStored: the run is now reported.
 func (s *Store) StoreResult(ctx context.Context, id string, token string, body []byte, now time.Time) (ResultOutcome, error) {
 	if !validUUID(id) {
 		return ResultUnauthorized, nil
@@ -309,18 +351,15 @@ func (s *Store) StoreResult(ctx context.Context, id string, token string, body [
 
 	switch {
 	case RunState(state) == Superseded:
-		if _, err := tx.Exec(ctx, `UPDATE runs SET token_hash = NULL WHERE id = $1::uuid`, id); err != nil {
-			return 0, err
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return 0, err
-		}
 		return ResultDiscarded, nil
-	case hasRes || failure != "" || (RunState(state) != Running && RunState(state) != Queued):
+	case hasRes || failure != "" || RunState(state) != Running:
 		return ResultConflict, nil
 	}
+	if !json.Valid(body) {
+		return 0, ErrInvalidResult
+	}
 
-	if _, err := tx.Exec(ctx, `UPDATE runs SET result = $2::jsonb, state = 'reported', token_hash = NULL,
+	if _, err := tx.Exec(ctx, `UPDATE runs SET result = $2::jsonb, state = 'reported',
 		reported_at = $3, not_before = $3, attempts = 0 WHERE id = $1::uuid`, id, string(body), now); err != nil {
 		return 0, fmt.Errorf("store: save result: %w", err)
 	}

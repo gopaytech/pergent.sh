@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -130,8 +131,8 @@ func TestEnqueueSupersedesRunningRun(t *testing.T) {
 		t.Fatalf("StoreResult = %v, %v; want discarded", out, err)
 	}
 	out, _ = s.StoreResult(ctx, a, "tok", []byte(`{"status":"completed"}`), t0.Add(time.Minute))
-	if out != ResultUnauthorized {
-		t.Errorf("second late result = %v, want unauthorized", out)
+	if out != ResultDiscarded {
+		t.Errorf("second late result = %v, want discarded", out)
 	}
 	if r := getRun(t, s, a); r.Result != nil || r.State != Superseded {
 		t.Errorf("discarded result was kept: %+v", r)
@@ -266,10 +267,14 @@ func TestStoreResultOutcomes(t *testing.T) {
 		if r.State != Reported || !bytes.Contains(r.Result, []byte("no_blocking_issues")) || !r.ReportedAt.Equal(t0.Add(time.Minute)) {
 			t.Errorf("after store: %+v", r)
 		}
-		// The token is cleared once a result is stored, so a replay is refused.
+		// A retried POST with the right token is a conflict, a wrong token is not.
 		out, err = s.StoreResult(ctx, id, "tok", body, t0.Add(time.Minute))
-		if err != nil || out != ResultUnauthorized && out != ResultConflict {
-			t.Errorf("replay = %v, %v; want refused", out, err)
+		if err != nil || out != ResultConflict {
+			t.Errorf("replay = %v, %v; want conflict", out, err)
+		}
+		out, err = s.StoreResult(ctx, id, "other", body, t0.Add(time.Minute))
+		if err != nil || out != ResultUnauthorized {
+			t.Errorf("replay with wrong token = %v, %v; want unauthorized", out, err)
 		}
 	})
 
@@ -317,6 +322,10 @@ func TestStoreResultOutcomes(t *testing.T) {
 		if err != nil || out != ResultDiscarded {
 			t.Errorf("= %v, %v; want discarded", out, err)
 		}
+		out, err = s.StoreResult(ctx, id, "wrong", body, t0.Add(time.Minute))
+		if err != nil || out != ResultUnauthorized {
+			t.Errorf("wrong token on superseded run = %v, %v; want unauthorized", out, err)
+		}
 	})
 
 	t.Run("after ReportFailure is a conflict", func(t *testing.T) {
@@ -334,19 +343,31 @@ func TestStoreResultOutcomes(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid JSON is an error, not a stored result", func(t *testing.T) {
+	t.Run("invalid JSON is ErrInvalidResult, not a stored result", func(t *testing.T) {
 		id := dispatched(t, s, MRKey{mr1.Instance, 8, 5}, "hhh", "tok")
-		out, err := s.StoreResult(ctx, id, "tok", []byte("not json"), t0.Add(time.Minute))
-		if err == nil {
-			t.Errorf("= %v, nil; want error", out)
+		for _, bad := range []string{"not json", "", `{"status":`} {
+			_, err := s.StoreResult(ctx, id, "tok", []byte(bad), t0.Add(time.Minute))
+			if !errors.Is(err, ErrInvalidResult) {
+				t.Errorf("body %q: err = %v, want ErrInvalidResult", bad, err)
+			}
 		}
 		if r := getRun(t, s, id); r.State != Running || r.Result != nil {
 			t.Errorf("run changed: %+v", r)
 		}
+		// Authentication comes first: a wrong token never learns the body was bad.
+		out, err := s.StoreResult(ctx, id, "wrong", []byte("not json"), t0.Add(time.Minute))
+		if err != nil || out != ResultUnauthorized {
+			t.Errorf("wrong token, bad body = %v, %v; want unauthorized", out, err)
+		}
+		// The run is still usable with a valid body.
+		out, err = s.StoreResult(ctx, id, "tok", body, t0.Add(time.Minute))
+		if err != nil || out != ResultStored {
+			t.Errorf("valid body afterwards = %v, %v", out, err)
+		}
 	})
 }
 
-func TestStoreResultStoresOnlyTheHash(t *testing.T) {
+func TestStoreResultKeepsHashForSingleUse(t *testing.T) {
 	s := newStore(t)
 	id := dispatched(t, s, mr1, "aaa", "super-secret-token")
 	var raw []byte
@@ -359,9 +380,13 @@ func TestStoreResultStoresOnlyTheHash(t *testing.T) {
 	if _, err := s.StoreResult(ctx, id, "super-secret-token", []byte(`{"status":"completed"}`), t0.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	var n int
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM runs WHERE token_hash IS NOT NULL`).Scan(&n); err != nil || n != 0 {
-		t.Errorf("token hash kept after result: %d, %v", n, err)
+	// The hash stays; single use is enforced by the run's state.
+	if err := s.pool.QueryRow(ctx, `SELECT token_hash FROM runs WHERE id = $1`, id).Scan(&raw); err != nil || !bytes.Equal(raw, hash("super-secret-token")) {
+		t.Errorf("token hash after result: %x, %v", raw, err)
+	}
+	out, err := s.StoreResult(ctx, id, "super-secret-token", []byte(`{"status":"completed"}`), t0.Add(time.Minute))
+	if err != nil || out != ResultConflict {
+		t.Errorf("replay = %v, %v; want conflict", out, err)
 	}
 }
 
@@ -500,18 +525,19 @@ func TestPreviousResultSkipsErrorsAndCurrent(t *testing.T) {
 	if _, ok, err := s.PreviousResult(ctx, mr1, ""); err != nil || ok {
 		t.Fatalf("empty MR = %v, %v", ok, err)
 	}
-	first := reported(t, s, mr1, "a", `{"status":"completed","verdict":"first"}`)
-	errored := reported(t, s, mr1, "b", `{"status":"error","error":{"code":"internal"}}`)
-	second := reported(t, s, mr1, "c", `{"status":"completed","verdict":"second"}`)
-	current := reported(t, s, mr1, "d", `{"status":"completed","verdict":"current"}`)
-	unpublished := reported(t, s, mr1, "e", `{"status":"completed","verdict":"unpublished"}`)
-	otherMR := reported(t, s, mr2, "z", `{"status":"completed","verdict":"other-mr"}`)
-	for _, id := range []string{first, errored, second, current, otherMR} {
+	published := func(mr MRKey, head, body string) string {
+		id := reported(t, s, mr, head, body)
 		if err := s.MarkPublished(ctx, id); err != nil {
 			t.Fatal(err)
 		}
+		return id
 	}
-	_ = unpublished
+	published(mr1, "a", `{"status":"completed","verdict":"first"}`)
+	published(mr1, "b", `{"status":"error","error":{"code":"internal"}}`)
+	published(mr1, "c", `{"status":"completed","verdict":"second"}`)
+	current := published(mr1, "d", `{"status":"completed","verdict":"current"}`)
+	reported(t, s, mr1, "e", `{"status":"completed","verdict":"unpublished"}`)
+	published(mr2, "z", `{"status":"completed","verdict":"other-mr"}`)
 
 	got, ok, err := s.PreviousResult(ctx, mr1, current)
 	if err != nil || !ok {
@@ -675,5 +701,119 @@ func TestMigrateConcurrent(t *testing.T) {
 		if err := <-errs; err != nil {
 			t.Errorf("concurrent Migrate: %v", err)
 		}
+	}
+}
+
+func TestEnqueueSupersedesReportedRun(t *testing.T) {
+	s := newStore(t)
+	a := reported(t, s, mr1, "A", `{"status":"completed"}`)
+	other := reported(t, s, mr2, "O", `{"status":"completed"}`)
+	b := enqueue(t, s, mr1, "B")
+	if got := getRun(t, s, a).State; got != Superseded {
+		t.Errorf("reported A state = %s, want superseded", got)
+	}
+	if got := getRun(t, s, b).State; got != Queued {
+		t.Errorf("B state = %s", got)
+	}
+	if got := getRun(t, s, other).State; got != Reported {
+		t.Errorf("other MR's reported run = %s, want reported", got)
+	}
+	if got, _ := s.RunsToPublish(ctx, t0.Add(time.Hour), 10); len(got) != 1 || got[0].ID != other {
+		t.Errorf("RunsToPublish = %v, want only the other MR's run", runIDs(got))
+	}
+	if got, _ := s.RunsToCleanUp(ctx); len(got) != 1 || got[0].ID != a {
+		t.Errorf("RunsToCleanUp = %v, want A", runIDs(got))
+	}
+	// A superseded run's result is never kept, even when it already has one.
+	if err := s.MarkPublished(ctx, a); err == nil {
+		t.Errorf("MarkPublished on a superseded run succeeded")
+	}
+	out, err := s.StoreResult(ctx, a, "tok-A", []byte(`{"status":"completed"}`), t0.Add(time.Minute))
+	if err != nil || out != ResultDiscarded {
+		t.Errorf("StoreResult on superseded reported run = %v, %v; want discarded", out, err)
+	}
+}
+
+func TestSupersedeMRSupersedesReportedRun(t *testing.T) {
+	s := newStore(t)
+	a := reported(t, s, mr1, "A", `{"status":"completed"}`)
+	other := reported(t, s, mr2, "O", `{"status":"completed"}`)
+	n, err := s.SupersedeMR(ctx, mr1)
+	if err != nil || n != 1 {
+		t.Fatalf("SupersedeMR = %d, %v", n, err)
+	}
+	if got := getRun(t, s, a).State; got != Superseded {
+		t.Errorf("state = %s", got)
+	}
+	if got := getRun(t, s, other).State; got != Reported {
+		t.Errorf("other MR = %s", got)
+	}
+}
+
+func TestSupersedeMRWaitsForEnqueueLock(t *testing.T) {
+	s := newStore(t)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	if err := lockMR(ctx, tx, mr1); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := s.SupersedeMR(ctx, mr1); done <- err }()
+	select {
+	case err := <-done:
+		t.Fatalf("SupersedeMR finished while the MR lock was held (err=%v)", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("SupersedeMR did not finish after the lock was released")
+	}
+}
+
+func TestMarkDispatchedRequiresRunning(t *testing.T) {
+	s := newStore(t)
+	mark := func(id string) error {
+		return s.MarkDispatched(ctx, id, "job", "b", "s", hash("tok"), t0.Add(time.Hour), t0)
+	}
+	queued := enqueue(t, s, mr1, "A")
+	if err := mark(queued); !errors.Is(err, ErrNotRunning) {
+		t.Errorf("queued run: %v, want ErrNotRunning", err)
+	}
+	if r := getRun(t, s, queued); r.JobName != "" || r.State != Queued {
+		t.Errorf("queued run changed: %+v", r)
+	}
+	// Claimed, then superseded before the Job was recorded.
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	enqueue(t, s, mr1, "B")
+	if err := mark(queued); !errors.Is(err, ErrNotRunning) {
+		t.Errorf("superseded run: %v, want ErrNotRunning", err)
+	}
+	for _, id := range []string{"00000000-0000-0000-0000-000000000000", "not-a-uuid"} {
+		if err := mark(id); !errors.Is(err, ErrNotRunning) {
+			t.Errorf("id %q: %v, want ErrNotRunning", id, err)
+		}
+	}
+	// The happy path still works on a running run.
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	running, _ := s.RunningRuns(ctx)
+	if len(running) != 1 {
+		t.Fatalf("running = %d", len(running))
+	}
+	if err := mark(running[0].ID); err != nil {
+		t.Errorf("running run: %v", err)
 	}
 }
