@@ -153,6 +153,31 @@ func TestTitleEditIgnored(t *testing.T) {
 	}
 }
 
+// A title edit reports its changes too; only a target branch change counts.
+func TestTitleEditWithChangesIgnored(t *testing.T) {
+	r := newRig(t)
+	body := bytes.Replace(fixture(t, "mr_retarget.json"), []byte(`"target_branch": {"previous": "main", "current": "develop"}`),
+		[]byte(`"title": {"previous": "a", "current": "b"}`), 1)
+	wantStatus(t, r.hook(body), 200)
+	if len(r.q.enqueues)+len(r.q.supersedes) != 0 || r.wakes != 0 {
+		t.Fatalf("title edit touched the queue: %+v %+v wakes=%d", r.q.enqueues, r.q.supersedes, r.wakes)
+	}
+}
+
+// Retargeting a merge request sends "update" without oldrev: the head is
+// reviewed again against the new target branch.
+func TestRetargetEnqueues(t *testing.T) {
+	r := newRig(t)
+	wantStatus(t, r.hook(fixture(t, "mr_retarget.json")), 200)
+	want := enqueueCall{store.MRKey{Instance: "main", ProjectID: 42, IID: 7}, "Acme/Widgets", openHead, "develop"}
+	if len(r.q.enqueues) != 1 || r.q.enqueues[0] != want {
+		t.Fatalf("enqueues = %+v, want %+v", r.q.enqueues, want)
+	}
+	if r.wakes != 1 {
+		t.Errorf("wakes = %d, want 1", r.wakes)
+	}
+}
+
 func TestCloseSupersedes(t *testing.T) {
 	r := newRig(t)
 	wantStatus(t, r.hook(fixture(t, "mr_close.json")), 200)

@@ -175,3 +175,65 @@ func TestEndToEnd(t *testing.T) {
 		t.Errorf("unapprovals = %d, want one by the approve bot", len(unapprovals))
 	}
 }
+
+// postHook posts a merge request webhook with the given object attributes
+// and changes for MR 1 of acme/widgets.
+func (e *e2e) postHook(t *testing.T, attrs, changes map[string]any) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]any{
+		"object_kind":       "merge_request",
+		"project":           map[string]any{"id": testProjectID, "path_with_namespace": testProjectPath},
+		"object_attributes": attrs,
+		"changes":           changes,
+	})
+	req, _ := http.NewRequest(http.MethodPost, e.srv.URL+"/webhooks/gitlab/"+testInstance, bytes.NewReader(body))
+	req.Header.Set("X-Gitlab-Token", testWebhookSecret)
+	req.Header.Set("X-Gitlab-Event", "Merge Request Hook")
+	resp, err := e.srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("webhook: status %d", resp.StatusCode)
+	}
+}
+
+// Retargeting an approved merge request reviews its head again against the
+// new target and withdraws the approval; a title edit does neither.
+func TestE2ERetargetReviewsAgainAndUnapproves(t *testing.T) {
+	e := newE2E(t)
+	env := e.env
+	head := sha('a')
+	approved(t, env, 1, head)
+	env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusCreated, `{}`)
+
+	e.postHook(t, map[string]any{"iid": 1, "action": "update", "target_branch": "main",
+		"last_commit": map[string]any{"id": head}},
+		map[string]any{"title": map[string]any{"previous": "a", "current": "b"}})
+	select {
+	case <-env.Engine.wakeCh():
+		t.Fatalf("a title edit queued a run")
+	default:
+	}
+	cleanup(t, env)
+	if n := len(env.GitLab.Requests(http.MethodPost, unapprovePath(1))); n != 0 {
+		t.Fatalf("a title edit withdrew the approval")
+	}
+
+	e.postHook(t, map[string]any{"iid": 1, "action": "update", "target_branch": "develop",
+		"last_commit": map[string]any{"id": head}},
+		map[string]any{"target_branch": map[string]any{"previous": "main", "current": "develop"}})
+	r := liveRun(t, env, 1, head, "develop")
+	if r.State != store.Queued {
+		t.Errorf("retarget run = %+v, want queued", r)
+	}
+	cleanup(t, env)
+	reqs := env.GitLab.Requests(http.MethodPost, unapprovePath(1))
+	if len(reqs) != 1 || reqs[0].Token != testApproveToken {
+		t.Fatalf("got %d unapprovals, want 1 by the approve bot", len(reqs))
+	}
+	if a := approvals(t, env); len(a) != 0 {
+		t.Errorf("approvals = %v, want none", a)
+	}
+}

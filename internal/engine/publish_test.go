@@ -268,6 +268,11 @@ func TestPublishHeadMovedNoApprove(t *testing.T) {
 			},
 			recorded: sha('a'),
 		},
+		"MR was retargeted": {setup: func(env *testEnv) {
+			mr := openMR(1, sha('a'))
+			mr.TargetBranch = "develop"
+			env.GitLab.SetMR(mr)
+		}},
 		"MR is merged": {setup: func(env *testEnv) {
 			mr := openMR(1, sha('a'))
 			mr.State = "merged"
@@ -738,7 +743,7 @@ func TestCleanupFailureLeavesRun(t *testing.T) {
 func TestStaleApprovalUnapproved(t *testing.T) {
 	env := newTestEnv(t)
 	env.Publish(1, sha('a'), resultFor(t, sha('a'), reviewed("no_blocking_issues", "a.go")))
-	if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), sha('a')); err != nil {
+	if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), sha('a'), "main"); err != nil {
 		t.Fatal(err)
 	}
 	env.Enqueue(1, sha('c'))
@@ -760,13 +765,13 @@ func TestStaleApprovalUnapproved(t *testing.T) {
 func TestStaleApprovalClearIsConditional(t *testing.T) {
 	env := newTestEnv(t)
 	env.Publish(1, sha('a'), resultFor(t, sha('a'), reviewed("no_blocking_issues", "a.go")))
-	if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), sha('a')); err != nil {
+	if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), sha('a'), "main"); err != nil {
 		t.Fatal(err)
 	}
 	env.Enqueue(1, sha('c'))
 	env.GitLab.Handle(http.MethodPost, unapprovePath(1), func(w http.ResponseWriter, _ *http.Request) {
 		// The publisher records an approval of the new head meanwhile.
-		if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), sha('c')); err != nil {
+		if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), sha('c'), "main"); err != nil {
 			t.Error(err)
 		}
 		w.WriteHeader(http.StatusCreated)
@@ -784,7 +789,7 @@ func TestStaleApprovalFailureAndUnknownInstance(t *testing.T) {
 	env.Publish(1, sha('a'), resultFor(t, sha('a'), reviewed("no_blocking_issues", "a.go")))
 	env.Publish(2, sha('a'), resultFor(t, sha('a'), reviewed("no_blocking_issues", "a.go")))
 	for _, iid := range []int64{1, 2} {
-		if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(iid), sha('a')); err != nil {
+		if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(iid), sha('a'), "main"); err != nil {
 			t.Fatal(err)
 		}
 		env.Enqueue(iid, sha('c'))

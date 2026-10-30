@@ -253,6 +253,33 @@ func TestDispatchSupersedesMovedHead(t *testing.T) {
 	})
 }
 
+// A merge request retargeted after the run was queued (its webhook not seen
+// yet) is reviewed against its current target, as a run of its own.
+func TestDispatchSupersedesRetargetedRun(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Enqueue(3, head)
+	mr := openMR(3, head)
+	mr.TargetBranch = "develop"
+	env.GitLab.SetMR(mr)
+
+	dispatch(t, env)
+
+	if r := env.Run(id); r.State != store.Superseded {
+		t.Errorf("run for the old target = %s, want superseded", r.State)
+	}
+	if len(env.Jobs()) != 0 {
+		t.Errorf("a job was launched against the old target")
+	}
+	newID, created, err := env.Store.EnqueueRun(env.ctx, env.MRKey(3), testProjectPath, head, "develop")
+	if err != nil || created {
+		t.Fatalf("no run was queued for the new target (created=%v, %v)", created, err)
+	}
+	if r := env.Run(newID); r.State != store.Queued {
+		t.Errorf("new run = %+v", r)
+	}
+}
+
 func TestDispatchRequeuesWithoutBaseSHA(t *testing.T) {
 	env := newTestEnv(t)
 	head := sha('a')

@@ -181,7 +181,7 @@ func (e *Engine) upsertComment(ctx context.Context, bots Bots, run store.Run, bo
 }
 
 // approve approves the run's head with the approve bot, only while the merge
-// request is open and still at that head. A head that moved is not an error:
+// request is open, still at that head and still targets the run's branch. A head that moved is not an error:
 // the review stands for its own commit and the newer head gets its own run.
 //
 // The approval is recorded before it is made, so an approval that reaches
@@ -197,13 +197,14 @@ func (e *Engine) approve(ctx context.Context, bots Bots, run store.Run, log *slo
 	if err != nil {
 		return fmt.Errorf("get merge request: %w", err)
 	}
-	if mr.State != "opened" || mr.SHA != run.HeadSHA {
-		log.Info("not approving: the merge request is closed or its head moved", "state", mr.State, "mr_head", mr.SHA)
+	if mr.State != "opened" || mr.SHA != run.HeadSHA || mr.TargetBranch != run.TargetBranch {
+		log.Info("not approving: the merge request is closed, or its head or target branch moved",
+			"state", mr.State, "mr_head", mr.SHA, "mr_target", mr.TargetBranch, "run_target", run.TargetBranch)
 		return nil
 	}
 
 	sctx, cancel := settleCtx(ctx)
-	err = e.Store.SetApprovedSHA(sctx, run.MR, run.HeadSHA)
+	err = e.Store.SetApprovedSHA(sctx, run.MR, run.HeadSHA, run.TargetBranch)
 	cancel()
 	if err != nil {
 		return fmt.Errorf("record approval: %w", err)
@@ -320,11 +321,11 @@ func (e *Engine) cleanUp(ctx context.Context, run store.Run, log *slog.Logger) e
 // unapprove removes the approve bot's stale approval, then clears the record
 // only if it still names the stale commit: an approval of a newer head
 // recorded meanwhile is kept.
-func (e *Engine) unapprove(ctx context.Context, bots Bots, a store.StaleApproval) error {
+func (e *Engine) unapprove(ctx context.Context, bots Bots, a store.Approval) error {
 	if err := bots.Approve.Unapprove(ctx, a.MR.ProjectID, a.MR.IID); err != nil {
 		return fmt.Errorf("unapprove: %w", err)
 	}
-	if err := e.Store.ClearApprovedSHA(ctx, a.MR, a.ApprovedSHA); err != nil {
+	if err := e.Store.ClearApprovedSHA(ctx, a.MR, a.ApprovedSHA, a.ApprovedTarget); err != nil {
 		return fmt.Errorf("clear recorded approval: %w", err)
 	}
 	return nil

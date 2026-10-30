@@ -47,13 +47,13 @@ const (
 
 // DispatchOnce claims as many queued runs as jobs.max_running leaves room for
 // and starts a review Job for each. A run whose merge request is closed, or
-// whose head moved, is superseded (a moved head gets a run of its own); a run
-// that can never be reviewed is reported with a failure reason; a GitLab or
-// Kubernetes error requeues it with backoff until the fifth attempt, which
-// reports it. Waiting for GitLab to compute the diff, and a pass cut short by
-// a cancelled ctx, postpone the run without counting an attempt. One run's
-// trouble never stops the others. The returned error joins store failures
-// only.
+// whose head or target branch moved, is superseded (a moved head or target
+// gets a run of its own); a run that can never be reviewed is reported with a
+// failure reason; a GitLab or Kubernetes error requeues it with backoff until
+// the fifth attempt, which reports it. Waiting for GitLab to compute the diff,
+// and a pass cut short by a cancelled ctx, postpone the run without counting
+// an attempt. One run's trouble never stops the others. The returned error
+// joins store failures only.
 func (e *Engine) DispatchOnce(ctx context.Context) error {
 	running, err := e.Store.CountRunning(ctx)
 	if err != nil {
@@ -109,11 +109,13 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		d.log.Info("merge request is no longer open; run superseded", "state", mr.State)
 		return d.supersede(ctx)
 	}
-	if mr.SHA != "" && mr.SHA != run.HeadSHA {
-		// Push webhooks can arrive out of order, so the newest head may have
-		// no run yet: queue one. EnqueueRun supersedes this run (and any
-		// other live run of another head) in the same transaction.
-		d.log.Info("merge request head moved; run superseded", "new_head", mr.SHA)
+	if mr.SHA != "" && (mr.SHA != run.HeadSHA || mr.TargetBranch != run.TargetBranch) {
+		// Push webhooks can arrive out of order, and a retarget's may not
+		// have arrived yet, so the newest head and target may have no run:
+		// queue one. EnqueueRun supersedes this run (and any other live run
+		// of another head or target) in the same transaction.
+		d.log.Info("merge request head or target branch moved; run superseded",
+			"new_head", mr.SHA, "new_target", mr.TargetBranch, "run_target", run.TargetBranch)
 		sctx, cancel := settleCtx(ctx)
 		defer cancel()
 		if _, _, err := e.Store.EnqueueRun(sctx, run.MR, run.ProjectPath, mr.SHA, mr.TargetBranch); err != nil {

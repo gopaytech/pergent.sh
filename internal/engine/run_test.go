@@ -72,3 +72,30 @@ func TestRunReconcilesAtStart(t *testing.T) {
 		t.Errorf("hook id = %d, want %d", p.HookID, newHookID)
 	}
 }
+
+// Run sweeps the approvals once at start, so a push missed while pergent.sh
+// was down withdraws the approval without waiting for the watch tick.
+func TestRunSweepsApprovalsAtStart(t *testing.T) {
+	env := newTestEnv(t)
+	approved(t, env, 1, sha('a'))
+	env.GitLab.SetMR(openMR(1, sha('c')))
+	env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusCreated, `{}`)
+
+	ctx, cancel := context.WithCancel(env.ctx)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		env.Engine.Run(ctx)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for len(env.GitLab.Requests(http.MethodPost, unapprovePath(1))) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("Run didn't sweep the approvals at start:\n%s", env.Logs())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	<-done
+}

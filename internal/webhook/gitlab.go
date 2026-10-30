@@ -61,6 +61,18 @@ type mergeRequestEvent struct {
 			ID string `json:"id"`
 		} `json:"last_commit"`
 	} `json:"object_attributes"`
+	Changes struct {
+		TargetBranch *struct {
+			Previous string `json:"previous"`
+			Current  string `json:"current"`
+		} `json:"target_branch"`
+	} `json:"changes"`
+}
+
+// retargeted reports whether an update event changed the target branch.
+func (ev *mergeRequestEvent) retargeted() bool {
+	tb := ev.Changes.TargetBranch
+	return tb != nil && tb.Previous != tb.Current
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -127,7 +139,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch attrs.Action {
 	case "open", "reopen":
 	case "update":
-		if attrs.OldRev == "" {
+		// A push carries oldrev. A retarget doesn't, but changes the base
+		// the head is reviewed against. Any other edit changes neither.
+		if attrs.OldRev == "" && !ev.retargeted() {
 			log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "not_a_push")
 			w.WriteHeader(http.StatusOK)
 			return

@@ -80,10 +80,13 @@ const (
 	ResultUnauthorized
 )
 
-// StaleApproval is an approval of a commit that is no longer the MR's head.
-type StaleApproval struct {
-	MR          MRKey
-	ApprovedSHA string
+// Approval is the approve bot's recorded approval of a merge request: the
+// commit it approved and the target branch that commit was reviewed against
+// ("" for an approval recorded before targets were).
+type Approval struct {
+	MR             MRKey
+	ApprovedSHA    string
+	ApprovedTarget string
 }
 
 const runColumns = `id::text, instance, project_id, mr_iid, project_path, head_sha, base_sha, start_sha, target_branch,
@@ -142,11 +145,13 @@ func lockMR(ctx context.Context, tx pgx.Tx, mr MRKey) error {
 	return err
 }
 
-// EnqueueRun queues a review of headSHA. It supersedes the queued, running
-// and reported (not yet published) runs of the same merge request for any
-// other head, so an older head's result is never posted over a newer review,
-// and does not create a second run for a head that already has a non-superseded
-// run: then created is false and id is that run's.
+// EnqueueRun queues a review of headSHA against targetBranch. A run is one
+// head reviewed against one target, so a retargeted merge request gets a new
+// run of the same head. It supersedes the queued, running and reported (not
+// yet published) runs of the same merge request for any other head or
+// target, so an older review's result is never posted over a newer one, and
+// does not create a second run for a head and target that already have a
+// non-superseded run: then created is false and id is that run's.
 func (s *Store) EnqueueRun(ctx context.Context, mr MRKey, projectPath, headSHA, targetBranch string) (id string, created bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -158,13 +163,15 @@ func (s *Store) EnqueueRun(ctx context.Context, mr MRKey, projectPath, headSHA, 
 		return "", false, err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE runs SET state = 'superseded'
-		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha <> $4 AND state IN ('queued', 'running', 'reported')`,
-		mr.Instance, mr.ProjectID, mr.IID, headSHA); err != nil {
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND (head_sha <> $4 OR target_branch <> $5)
+		  AND state IN ('queued', 'running', 'reported')`,
+		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch); err != nil {
 		return "", false, err
 	}
 	err = tx.QueryRow(ctx, `SELECT id::text FROM runs
-		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND state <> 'superseded'`,
-		mr.Instance, mr.ProjectID, mr.IID, headSHA).Scan(&id)
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
+		  AND state <> 'superseded'`,
+		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch).Scan(&id)
 	switch {
 	case err == nil:
 		created = false
@@ -557,44 +564,63 @@ func (s *Store) SetNoteID(ctx context.Context, mr MRKey, noteID int64) error {
 	return err
 }
 
-// SetApprovedSHA records the commit the bot approved; "" clears it.
-func (s *Store) SetApprovedSHA(ctx context.Context, mr MRKey, sha string) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO merge_requests (instance, project_id, mr_iid, approved_sha)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (instance, project_id, mr_iid) DO UPDATE SET approved_sha = EXCLUDED.approved_sha`,
-		mr.Instance, mr.ProjectID, mr.IID, sha)
+// SetApprovedSHA records the commit the bot approved and the target branch
+// it was reviewed against; an empty sha clears the approval.
+func (s *Store) SetApprovedSHA(ctx context.Context, mr MRKey, sha, target string) error {
+	if sha == "" {
+		target = ""
+	}
+	_, err := s.pool.Exec(ctx, `INSERT INTO merge_requests (instance, project_id, mr_iid, approved_sha, approved_target)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (instance, project_id, mr_iid) DO UPDATE SET
+			approved_sha = EXCLUDED.approved_sha, approved_target = EXCLUDED.approved_target`,
+		mr.Instance, mr.ProjectID, mr.IID, sha, target)
 	return err
 }
 
-// ClearApprovedSHA clears the recorded approval only while it is still old,
-// so an approval recorded meanwhile (of a newer head) is kept. A merge request
-// without a row, or with another approval, is left alone.
-func (s *Store) ClearApprovedSHA(ctx context.Context, mr MRKey, old string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE merge_requests SET approved_sha = ''
-		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND approved_sha = $4`,
-		mr.Instance, mr.ProjectID, mr.IID, old)
+// ClearApprovedSHA clears the recorded approval only while it is still the
+// old commit and target, so an approval recorded meanwhile (of a newer head
+// or target) is kept. A merge request without a row, or with another
+// approval, is left alone.
+func (s *Store) ClearApprovedSHA(ctx context.Context, mr MRKey, oldSHA, oldTarget string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE merge_requests SET approved_sha = '', approved_target = ''
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND approved_sha = $4 AND approved_target = $5`,
+		mr.Instance, mr.ProjectID, mr.IID, oldSHA, oldTarget)
 	return err
 }
 
-// StaleApprovals returns merge requests whose recorded approval is for a
-// commit other than the head of their newest non-superseded run.
-func (s *Store) StaleApprovals(ctx context.Context) ([]StaleApproval, error) {
-	rows, err := s.pool.Query(ctx, `SELECT m.instance, m.project_id, m.mr_iid, m.approved_sha
+// StaleApprovals returns merge requests whose recorded approval is for
+// another head or another target branch than their newest non-superseded
+// run. An approval recorded without a target is compared by head only.
+func (s *Store) StaleApprovals(ctx context.Context) ([]Approval, error) {
+	return s.queryApprovals(ctx, `SELECT m.instance, m.project_id, m.mr_iid, m.approved_sha, m.approved_target
 		FROM merge_requests m
-		WHERE m.approved_sha <> '' AND m.approved_sha <> (
-			SELECT r.head_sha FROM runs r
+		JOIN LATERAL (
+			SELECT r.head_sha, r.target_branch FROM runs r
 			WHERE r.instance = m.instance AND r.project_id = m.project_id AND r.mr_iid = m.mr_iid
 			  AND r.state <> 'superseded'
-			ORDER BY r.created_at DESC, r.id DESC LIMIT 1)
+			ORDER BY r.created_at DESC, r.id DESC LIMIT 1) newest ON true
+		WHERE m.approved_sha <> '' AND (newest.head_sha <> m.approved_sha
+			OR (m.approved_target <> '' AND newest.target_branch <> m.approved_target))
 		ORDER BY m.instance, m.project_id, m.mr_iid`)
+}
+
+// Approvals returns every recorded approval.
+func (s *Store) Approvals(ctx context.Context) ([]Approval, error) {
+	return s.queryApprovals(ctx, `SELECT instance, project_id, mr_iid, approved_sha, approved_target
+		FROM merge_requests WHERE approved_sha <> '' ORDER BY instance, project_id, mr_iid`)
+}
+
+func (s *Store) queryApprovals(ctx context.Context, sql string) ([]Approval, error) {
+	rows, err := s.pool.Query(ctx, sql)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []StaleApproval
+	var out []Approval
 	for rows.Next() {
-		var a StaleApproval
-		if err := rows.Scan(&a.MR.Instance, &a.MR.ProjectID, &a.MR.IID, &a.ApprovedSHA); err != nil {
+		var a Approval
+		if err := rows.Scan(&a.MR.Instance, &a.MR.ProjectID, &a.MR.IID, &a.ApprovedSHA, &a.ApprovedTarget); err != nil {
 			return nil, err
 		}
 		out = append(out, a)

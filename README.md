@@ -20,7 +20,7 @@ This release covers GitLab only (gitlab.com or any self-managed instance). It ha
 - Nodes that can pull `ghcr.io/gopaytech/pergent.sh` (the service) and `ghcr.io/gopaytech/pergent` (the Jobs).
 - On each GitLab instance, two users:
   - A **review bot** with the **Maintainer** role on every reviewed project, and an access token with the `api` scope. It creates the project webhook and the read-only deploy token, posts the comment and sets the commit status.
-  - An **approve bot** that is an eligible approver of every reviewed project, with an access token with the `api` scope. It only approves, and removes its approval when the merge request gets a new commit. If the project requires specific approvers or forbids approval by certain users, make sure this bot qualifies.
+  - An **approve bot** that is an eligible approver of every reviewed project, with an access token with the `api` scope. It only approves, and removes its approval when the merge request gets a new commit or a new target branch. If the project requires specific approvers or forbids approval by certain users, make sure this bot qualifies.
 - An API key for an LLM provider that opencode supports.
 - A way for GitLab to reach pergent.sh over HTTPS (an Ingress, for example).
 
@@ -184,15 +184,16 @@ pergent.sh decides from what `pergent agent` reports. The result is checked agai
 
 Those five are pergent's default skip rules, and the change itself decides whether they apply: a merge request can, for example, put code under a `vendor/` directory to keep it from the reviewer. A file skipped only because it is outside a skill's `paths`, matches a skill's `exclude`, or has no content changes does not stop the approval. The note lists at most 20 paths.
 
-Before approving, pergent.sh asks GitLab for the merge request. It approves only when the merge request is still **open** and its head is still the commit that was reviewed. If the head moved or the MR was closed, there is no approval; the review and its status still belong to the reviewed commit, and a newer push gets its own run. The approval is recorded before it is made, and a GitLab refusal because the bot already approved is treated as done.
+Before approving, pergent.sh asks GitLab for the merge request. It approves only when the merge request is still **open**, its head is still the commit that was reviewed and its target branch is still the one it was reviewed against. If the head or target moved or the MR was closed, there is no approval; the review and its status still belong to the reviewed commit, and a newer push gets its own run. The approval is recorded before it is made, and a GitLab refusal because the bot already approved is treated as done.
 
-When a merge request gets a new head after the approve bot approved an older one, the approve bot removes its approval at once, whether or not GitLab resets approvals itself.
+When a merge request gets a new head or a new target branch after the approve bot approved it, the approve bot removes its approval, whether or not GitLab resets approvals itself. This happens as soon as the webhook arrives. GitLab doesn't resend a webhook it failed to deliver (pergent.sh was restarting, the hook was disabled), so pergent.sh also checks every approval it holds against GitLab at startup and every 15 seconds: an approval of a commit that is no longer the head, or of a merge request that was retargeted or closed, is removed then, and the current head gets a review if the repository is still configured.
 
 A failed, partial or missing review is never `success` and is never approved.
 
 ### Pushes, edits and failures
 
-- Only pushes (and opening or reopening) start a run. Editing the title, labels, description or assignees does not. Closing or merging supersedes the MR's runs.
+- Only pushes, opening or reopening, and changing the target branch start a run. Editing the title, labels, description or assignees does not. Closing or merging supersedes the MR's runs.
+- A run is one head reviewed against one target branch. Changing the target branch reviews the same head again against the new branch, supersedes the review against the old one and withdraws the bot's approval.
 - Two pushes in quick succession: only the newest head is reviewed. The older Job is deleted, and a late result for it is accepted and discarded. Out-of-order push webhooks are handled: the dispatcher reviews the MR's current head.
 - If GitLab has not computed the merge request's diff after 10 minutes, the run fails with a comment.
 - A Job that dies without a result (out of memory, a failed checkout, the deadline, an image pull error, a failed delivery, a deleted Job) produces an error comment and a non-success status within about 2 minutes.

@@ -86,12 +86,14 @@ const (
 )
 
 // Run runs the loops until ctx is done: dispatch, publish and cleanup every
-// 2 s or on Wake, watch every 15 s and reconcile every hour. They all run in
+// 2 s or on Wake, watch and sweep the approvals every 15 s and reconcile
+// every hour. They all run in
 // this one goroutine, one after another, so no two of them ever overlap (a
 // publish and a cleanup of the same merge request least of all). Errors are
 // logged and never stop the loop. Before the first pass, runs stranded
 // between claim and dispatch by an earlier stop go back to the queue (with
-// one replica, nothing is being dispatched yet), then Reconcile runs once.
+// one replica, nothing is being dispatched yet), then Reconcile and
+// SweepApprovals run once.
 // Run is started next to the HTTP server, never before it, so a slow GitLab
 // at startup delays only the loops.
 func (e *Engine) Run(ctx context.Context) {
@@ -105,6 +107,7 @@ func (e *Engine) Run(ctx context.Context) {
 		// Each failure is logged already; the hourly pass tries again.
 		log.Error("startup reconcile failed", "error", e.redact(err.Error()))
 	}
+	e.sweepApprovals(ctx)
 
 	pass := time.NewTicker(passInterval)
 	defer pass.Stop()
@@ -126,11 +129,22 @@ func (e *Engine) Run(ctx context.Context) {
 			if err := e.WatchOnce(ctx); err != nil && ctx.Err() == nil {
 				log.Error("watch failed", "error", e.redact(err.Error()))
 			}
+			e.sweepApprovals(ctx)
 		case <-reconcile.C:
 			if err := e.Reconcile(ctx); err != nil && ctx.Err() == nil {
 				log.Error("reconcile failed", "error", e.redact(err.Error()))
 			}
 		}
+	}
+}
+
+// sweepApprovals runs SweepApprovals, logging a failure.
+func (e *Engine) sweepApprovals(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+	if err := e.SweepApprovals(ctx); err != nil && ctx.Err() == nil {
+		e.log().Error("approval sweep failed", "error", e.redact(err.Error()))
 	}
 }
 

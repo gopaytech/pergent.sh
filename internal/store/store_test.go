@@ -571,7 +571,7 @@ func TestNoteIDAndApproval(t *testing.T) {
 		t.Errorf("other MR NoteID = %d", id)
 	}
 	// Setting an approval must not lose the note id.
-	if err := s.SetApprovedSHA(ctx, mr1, "aaa"); err != nil {
+	if err := s.SetApprovedSHA(ctx, mr1, "aaa", "main"); err != nil {
 		t.Fatal(err)
 	}
 	if id, _ := s.NoteID(ctx, mr1); id != 556 {
@@ -582,7 +582,7 @@ func TestNoteIDAndApproval(t *testing.T) {
 func TestStaleApprovals(t *testing.T) {
 	s := newStore(t)
 	enqueue(t, s, mr1, "A")
-	if err := s.SetApprovedSHA(ctx, mr1, "A"); err != nil {
+	if err := s.SetApprovedSHA(ctx, mr1, "A", "main"); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.StaleApprovals(ctx); err != nil || len(got) != 0 {
@@ -590,19 +590,19 @@ func TestStaleApprovals(t *testing.T) {
 	}
 	enqueue(t, s, mr1, "B")
 	got, err := s.StaleApprovals(ctx)
-	if err != nil || len(got) != 1 || got[0] != (StaleApproval{MR: mr1, ApprovedSHA: "A"}) {
+	if err != nil || len(got) != 1 || got[0] != (Approval{MR: mr1, ApprovedSHA: "A", ApprovedTarget: "main"}) {
 		t.Fatalf("after new head: %v, %v", got, err)
 	}
-	if err := s.SetApprovedSHA(ctx, mr1, "B"); err != nil {
+	if err := s.SetApprovedSHA(ctx, mr1, "B", "main"); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.StaleApprovals(ctx); len(got) != 0 {
 		t.Errorf("approved B: %v", got)
 	}
-	if err := s.SetApprovedSHA(ctx, mr1, "A"); err != nil {
+	if err := s.SetApprovedSHA(ctx, mr1, "A", "main"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetApprovedSHA(ctx, mr1, ""); err != nil {
+	if err := s.SetApprovedSHA(ctx, mr1, "", "main"); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.StaleApprovals(ctx); len(got) != 0 {
@@ -613,28 +613,28 @@ func TestStaleApprovals(t *testing.T) {
 func TestClearApprovedSHA(t *testing.T) {
 	s := newStore(t)
 	enqueue(t, s, mr1, "A")
-	if err := s.SetApprovedSHA(ctx, mr1, "A"); err != nil {
+	if err := s.SetApprovedSHA(ctx, mr1, "A", "main"); err != nil {
 		t.Fatal(err)
 	}
 	enqueue(t, s, mr1, "B")
 	// Another commit was approved meanwhile: the clear leaves it alone.
-	if err := s.ClearApprovedSHA(ctx, mr1, "X"); err != nil {
+	if err := s.ClearApprovedSHA(ctx, mr1, "X", "main"); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.StaleApprovals(ctx); len(got) != 1 || got[0].ApprovedSHA != "A" {
 		t.Fatalf("after a clear of another commit: %v, want A still recorded", got)
 	}
-	if err := s.ClearApprovedSHA(ctx, mr1, "A"); err != nil {
+	if err := s.ClearApprovedSHA(ctx, mr1, "A", "main"); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.StaleApprovals(ctx); len(got) != 0 {
 		t.Errorf("after clearing A: %v, want none", got)
 	}
 	// A merge request with no row, and an empty old value, are no-ops.
-	if err := s.ClearApprovedSHA(ctx, mr2, "A"); err != nil {
+	if err := s.ClearApprovedSHA(ctx, mr2, "A", "main"); err != nil {
 		t.Errorf("clear on unknown MR: %v", err)
 	}
-	if err := s.ClearApprovedSHA(ctx, mr1, ""); err != nil {
+	if err := s.ClearApprovedSHA(ctx, mr1, "", "main"); err != nil {
 		t.Errorf("clear of empty: %v", err)
 	}
 	if id, _ := s.NoteID(ctx, mr2); id != 0 {
@@ -1022,5 +1022,127 @@ func TestRecoverUnlaunched(t *testing.T) {
 
 	if n, err := s.RecoverUnlaunched(ctx, t0); err != nil || n != 0 {
 		t.Errorf("second RecoverUnlaunched = %d, %v; want 0", n, err)
+	}
+}
+
+func TestEnqueueRetargetIsANewRun(t *testing.T) {
+	s := newStore(t)
+	a := enqueue(t, s, mr1, "aaa")
+	b, created, err := s.EnqueueRun(ctx, mr1, "acme/widgets", "aaa", "develop")
+	if err != nil || !created || b == a {
+		t.Fatalf("retarget = %s %v %v; want a new run", b, created, err)
+	}
+	if got := getRun(t, s, a).State; got != Superseded {
+		t.Errorf("run for the old target = %s, want superseded", got)
+	}
+	if r := getRun(t, s, b); r.HeadSHA != "aaa" || r.TargetBranch != "develop" || r.State != Queued {
+		t.Errorf("new run = %+v", r)
+	}
+	// The same head and target again is the same run.
+	if c, created, err := s.EnqueueRun(ctx, mr1, "acme/widgets", "aaa", "develop"); err != nil || created || c != b {
+		t.Errorf("same head and target = %s %v %v; want %s", c, created, err, b)
+	}
+}
+
+func TestEnqueueRetargetKeepsPublishedRunsOfOtherTarget(t *testing.T) {
+	s := newStore(t)
+	a := reported(t, s, mr1, "aaa", `{"status":"completed"}`)
+	if err := s.MarkPublished(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	b, created, err := s.EnqueueRun(ctx, mr1, "acme/widgets", "aaa", "develop")
+	if err != nil || !created || b == a {
+		t.Fatalf("retarget after publish = %s %v %v", b, created, err)
+	}
+	if got := getRun(t, s, a).State; got != Published {
+		t.Errorf("published run = %s, want published (history)", got)
+	}
+}
+
+func TestStaleApprovalsAfterRetarget(t *testing.T) {
+	s := newStore(t)
+	enqueue(t, s, mr1, "A")
+	if err := s.SetApprovedSHA(ctx, mr1, "A", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.EnqueueRun(ctx, mr1, "acme/widgets", "A", "develop"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.StaleApprovals(ctx)
+	if err != nil || len(got) != 1 || got[0] != (Approval{MR: mr1, ApprovedSHA: "A", ApprovedTarget: "main"}) {
+		t.Fatalf("after retarget: %v, %v; want the approval for main stale", got, err)
+	}
+	// Clearing needs both the commit and the target to match.
+	if err := s.ClearApprovedSHA(ctx, mr1, "A", "develop"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.StaleApprovals(ctx); len(got) != 1 {
+		t.Fatalf("a clear for another target removed the approval: %v", got)
+	}
+	if err := s.ClearApprovedSHA(ctx, mr1, "A", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.StaleApprovals(ctx); len(got) != 0 {
+		t.Errorf("after clear: %v", got)
+	}
+	// An approval recorded without a target (before targets were recorded)
+	// goes stale only on a new head.
+	if err := s.SetApprovedSHA(ctx, mr1, "A", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.StaleApprovals(ctx); len(got) != 0 {
+		t.Errorf("targetless approval of the head: %v", got)
+	}
+}
+
+func TestApprovals(t *testing.T) {
+	s := newStore(t)
+	if got, err := s.Approvals(ctx); err != nil || len(got) != 0 {
+		t.Fatalf("empty: %v, %v", got, err)
+	}
+	if err := s.SetNoteID(ctx, mr2, 9); err != nil { // a row without an approval
+		t.Fatal(err)
+	}
+	if err := s.SetApprovedSHA(ctx, mr1, "A", "main"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Approvals(ctx)
+	if err != nil || len(got) != 1 || got[0] != (Approval{MR: mr1, ApprovedSHA: "A", ApprovedTarget: "main"}) {
+		t.Fatalf("Approvals = %v, %v", got, err)
+	}
+	if err := s.SetApprovedSHA(ctx, mr1, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Approvals(ctx); len(got) != 0 {
+		t.Errorf("after clear: %v", got)
+	}
+}
+
+// Migration 0003 records the target of approvals made before it, from the
+// newest run of the approved commit.
+func TestMigration0003BackfillsApprovedTarget(t *testing.T) {
+	s := newStore(t)
+	enqueue(t, s, mr1, "A")
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET target_branch = 'release'`); err != nil {
+		t.Fatal(err)
+	}
+	// Roll the schema back to before 0003, with an approval of A.
+	if _, err := s.pool.Exec(ctx, `
+		DROP INDEX runs_live_idx;
+		CREATE UNIQUE INDEX runs_live_head_idx ON runs (instance, project_id, mr_iid, head_sha) WHERE state <> 'superseded';
+		ALTER TABLE merge_requests DROP COLUMN approved_target;
+		DELETE FROM schema_migrations WHERE version = 3`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `INSERT INTO merge_requests (instance, project_id, mr_iid, approved_sha) VALUES ($1, $2, $3, 'A')`,
+		mr1.Instance, mr1.ProjectID, mr1.IID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Approvals(ctx)
+	if err != nil || len(got) != 1 || got[0].ApprovedTarget != "release" {
+		t.Errorf("Approvals = %v, %v; want target release", got, err)
 	}
 }
