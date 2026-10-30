@@ -414,6 +414,7 @@ func TestApprovalOffOnlyItsRepositoryWithBackoff(t *testing.T) {
 	approved(t, env, 1, sha('a'))
 	off := false
 	env.Engine.Config.Repositories[0].Approve = &off
+	env.GitLab.SetMR(openMR(1, sha('a')))
 	env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusForbidden, `{"message":"403 Forbidden"}`)
 	attempts := func() int { return len(env.GitLab.Requests(http.MethodPost, unapprovePath(1))) }
 
@@ -438,5 +439,45 @@ func TestApprovalOffOnlyItsRepositoryWithBackoff(t *testing.T) {
 	}
 	if a := approvals(t, env); len(a) != 1 || a[0].MR != ghKey(3) {
 		t.Errorf("approvals = %+v, want only the GitHub one kept", a)
+	}
+}
+
+// With approval off, an approval on a merge request merged or gone since is
+// only forgotten: nothing is written to it. One on a closed merge request,
+// which could be reopened, is withdrawn as on an open one.
+func TestApprovalOffMergedOnlyClears(t *testing.T) {
+	off := false
+	for _, tc := range []struct {
+		name     string
+		state    string // "" for a merge request that is gone
+		withdraw bool
+	}{
+		{"merged", "merged", false},
+		{"gone", "", false},
+		{"closed", "closed", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnv(t)
+			approved(t, env, 1, sha('a'))
+			env.Engine.Config.Repositories[0].Approve = &off
+			if tc.state == "" {
+				env.GitLab.Reply(http.MethodGet, mrPath(1), http.StatusNotFound, `{"message":"404 Not found"}`)
+			} else {
+				mr := openMR(1, sha('a'))
+				mr.State = tc.state
+				env.GitLab.SetMR(mr)
+			}
+			env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusCreated, `{}`)
+			env.GitLab.Reset()
+
+			cleanup(t, env)
+
+			if n := len(env.GitLab.Requests(http.MethodPost, unapprovePath(1))); (n == 1) != tc.withdraw || n > 1 {
+				t.Errorf("got %d unapprovals; want withdrawn %v", n, tc.withdraw)
+			}
+			if a := approvals(t, env); len(a) != 0 {
+				t.Errorf("approvals = %v, want none", a)
+			}
+		})
 	}
 }

@@ -413,10 +413,49 @@ func (e *Engine) CleanupOnce(ctx context.Context) error {
 		if tried[a] {
 			continue
 		}
-		e.withdraw(ctx, a, "approval withdrawn: approval is turned off for the repository",
-			"couldn't withdraw the approval of a repository with approval turned off; will try again")
+		e.withdrawApprovalOff(ctx, a)
 	}
 	return errors.Join(errs...)
+}
+
+// withdrawApprovalOff withdraws approval a of a repository with approval
+// turned off, reading its merge request first as the approval sweep does:
+// merged or gone, the record is only cleared, as there is nothing to
+// withdraw; a merge in progress is left for the next pass. A failure to read
+// it waits out the unapprove backoff.
+func (e *Engine) withdrawApprovalOff(ctx context.Context, a store.Approval) {
+	log := e.log().With("instance", a.MR.Instance, "project_id", a.MR.ProjectID, "mr", a.MR.IID, "approved", a.ApprovedSHA)
+	plat, ok := e.Platforms[a.MR.Instance]
+	if !ok || plat.Forge == nil || plat.Approver == nil {
+		log.Debug("skipping the approval: no bots for the instance")
+		return
+	}
+	mr, err := plat.Forge.GetChange(ctx, a.MR.ProjectID, a.MR.IID)
+	switch {
+	case errors.Is(err, forge.ErrNotFound) || (err == nil && mr.State == forge.StateMerged):
+		if err := e.clearApproval(ctx, a); err != nil {
+			log.Warn("couldn't forget the approval of a merged merge request; will try again", "error", e.redact(err.Error()))
+			return
+		}
+		log.Info("approval forgotten: the merge request is merged or gone")
+		return
+	case err != nil:
+		attrs := []any{"error", e.redact(err.Error())}
+		if ctx.Err() == nil {
+			retryAt, ferr := e.Store.UnapproveFailed(ctx, a.MR, a.ApprovedSHA, a.ApprovedTarget, e.now())
+			if ferr != nil {
+				attrs = append(attrs, "record_error", e.redact(ferr.Error()))
+			} else if !retryAt.IsZero() {
+				attrs = append(attrs, "retry_at", retryAt)
+			}
+		}
+		log.Warn("couldn't read the merge request of an approval to withdraw; will try again", attrs...)
+		return
+	case mr.State != forge.StateOpen && mr.State != forge.StateClosed:
+		return // "locked": a merge is in progress; look again next time
+	}
+	e.withdraw(ctx, a, "approval withdrawn: approval is turned off for the repository",
+		"couldn't withdraw the approval of a repository with approval turned off; will try again")
 }
 
 // withdraw removes the approve bot's approval a and logs done, or failed
