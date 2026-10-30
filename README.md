@@ -7,7 +7,7 @@ When someone opens or pushes to a merge request in a repository you listed in th
 1. GitLab sends a merge request webhook to pergent.sh.
 2. pergent.sh starts a Kubernetes Job. The Job checks out the merge request, runs `pergent agent` over the changes and posts the result back.
 3. pergent.sh posts one comment on the merge request, updated in place on every push, and sets a commit status named `pergent`.
-4. If the review found no blocking issue and actually reviewed something, a second GitLab user (the approve bot) approves the merge request.
+4. If the review found no blocking issue, actually reviewed something and skipped no changed file under pergent's default rules, a second GitLab user (the approve bot) approves the merge request.
 
 Everything that can comment, set statuses or approve stays inside pergent.sh. A Job only ever holds a read-only clone token, the LLM key and a one-time token to hand in its result.
 
@@ -179,7 +179,10 @@ pergent.sh decides from what `pergent agent` reports. The result is checked agai
 | Any skill failed, has an unknown verdict, or is "clean" yet lists files it did not review | The review | `failure_status` ("Review failed for N of M skills") | No |
 | The Job died or sent nothing usable, the result is an error, has no skills, or has an unknown status | An error comment with the reason | `failure_status` | No |
 | Every skill is clean, but no file was reviewed because every changed file was skipped | The review plus a note listing the skipped files and the rules that skipped them | `success` ("Nothing to review: every changed file is skipped") | **No**, a human needs to look |
-| Every skill is clean and at least one file was reviewed | The review | `success` ("No blocking issues") | Yes, see below |
+| Every skill is clean and at least one file was reviewed, but some changed file was skipped as `deleted`, `binary`, `vendored`, `lockfile` or `generated` | The review plus a note listing those files and the rules that skipped them | `success` ("No blocking issues; not approved: some changed files weren't reviewed") | **No**, a human needs to look |
+| Every skill is clean, at least one file was reviewed, and no file was skipped under those rules | The review | `success` ("No blocking issues") | Yes, see below |
+
+Those five are pergent's default skip rules, and the change itself decides whether they apply: a merge request can, for example, put code under a `vendor/` directory to keep it from the reviewer. A file skipped only because it is outside a skill's `paths`, matches a skill's `exclude`, or has no content changes does not stop the approval. The note lists at most 20 paths.
 
 Before approving, pergent.sh asks GitLab for the merge request. It approves only when the merge request is still **open** and its head is still the commit that was reviewed. If the head moved or the MR was closed, there is no approval; the review and its status still belong to the reviewed commit, and a newer push gets its own run. The approval is recorded before it is made, and a GitLab refusal because the bot already approved is treated as done.
 

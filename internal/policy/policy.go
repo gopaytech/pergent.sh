@@ -32,9 +32,22 @@ const (
 	descBlocking        = "Blocking issues found"
 	descNothingToReview = "Nothing to review: every changed file is skipped"
 	descClean           = "No blocking issues"
+	descPartlySkipped   = "No blocking issues; not approved: some changed files weren't reviewed"
+
+	noteNothingReviewed = "**Not approved:** every changed file was skipped by pergent's default rules, so nothing was reviewed. A human needs to look."
+	notePartlySkipped   = "**Not approved:** some changed files were skipped by pergent's default rules, so they weren't reviewed. A human needs to look."
 
 	maxListedSkipped = 20
 )
+
+// defaultSkipRules are the skip rules a change decides on its own (pergent's
+// default exclusions). A file skipped under one of them was never reviewed,
+// so a review that has one is not approved. "out of scope", "excluded by
+// skill" and "no content changes" follow the skill's own scope or leave
+// nothing to review, and don't block approval.
+var defaultSkipRules = map[string]bool{
+	"deleted": true, "binary": true, "vendored": true, "lockfile": true, "generated": true,
+}
 
 // Outcome is what a run produced. FailureReason is set when no usable result
 // arrived (the Job died, the result did not parse, the run was cancelled...).
@@ -141,9 +154,15 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 		}
 	case reviewed == 0:
 		return Decision{
-			Comment:     withNote(comment, r.Comment.FindingsBlock, nothingReviewedNote(r.Skills)),
+			Comment:     withNote(comment, r.Comment.FindingsBlock, skippedNote(noteNothingReviewed, r.Skills, false)),
 			Status:      StatusSuccess,
 			Description: descNothingToReview,
+		}
+	case defaultSkipped(r.Skills):
+		return Decision{
+			Comment:     withNote(comment, r.Comment.FindingsBlock, skippedNote(notePartlySkipped, r.Skills, true)),
+			Status:      StatusSuccess,
+			Description: descPartlySkipped,
 		}
 	}
 	return Decision{Comment: comment, Status: StatusSuccess, Description: descClean, Approve: true}
@@ -168,10 +187,23 @@ func withMarker(comment string) string {
 	return Marker + "\n" + comment
 }
 
-// nothingReviewedNote lists the distinct skipped paths across skills, one line
-// per path. A path skipped under different rules by different skills shows all
-// of its rules, sorted.
-func nothingReviewedNote(skills []result.Skill) string {
+// defaultSkipped reports whether any skill skipped a file under a default rule.
+func defaultSkipped(skills []result.Skill) bool {
+	for _, s := range skills {
+		for _, f := range s.Files.Skipped {
+			if defaultSkipRules[f.Rule] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// skippedNote is title followed by the distinct skipped paths across skills,
+// one line per path, at most 20. A path skipped under different rules by
+// different skills shows all of its rules, sorted. With onlyDefault, only the
+// paths that some skill skipped under a default rule are listed.
+func skippedNote(title string, skills []result.Skill, onlyDefault bool) string {
 	rules := map[string]map[string]bool{}
 	for _, s := range skills {
 		for _, f := range s.Files.Skipped {
@@ -182,13 +214,16 @@ func nothingReviewedNote(skills []result.Skill) string {
 		}
 	}
 	paths := make([]string, 0, len(rules))
-	for p := range rules {
+	for p, rs := range rules {
+		if onlyDefault && !anyDefault(rs) {
+			continue
+		}
 		paths = append(paths, p)
 	}
 	sort.Strings(paths)
 
 	var b strings.Builder
-	b.WriteString("---\n**Not approved:** every changed file was skipped by pergent's default rules, so nothing was reviewed. A human needs to look.\n")
+	b.WriteString("---\n" + title + "\n")
 	if len(paths) > 0 {
 		b.WriteString("\n")
 	}
@@ -205,6 +240,15 @@ func nothingReviewedNote(skills []result.Skill) string {
 		fmt.Fprintf(&b, "- `%s` (%s)\n", p, strings.Join(rs, ", "))
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func anyDefault(rules map[string]bool) bool {
+	for r := range rules {
+		if defaultSkipRules[r] {
+			return true
+		}
+	}
+	return false
 }
 
 // withNote puts note before the hidden findings block when the comment ends

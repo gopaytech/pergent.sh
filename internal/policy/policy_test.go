@@ -3,6 +3,7 @@ package policy
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -124,6 +125,27 @@ func TestDecide(t *testing.T) {
 			failure:    config.FailureStatusFailed,
 			wantStatus: StatusSuccess, wantDesc: "No blocking issues", wantApprove: true,
 			wantComment: Marker + "\n### review\n\nbody\n\n" + findingsBlock,
+		},
+		{
+			name: "vendored skip next to a reviewed file is not approved",
+			outcome: Outcome{Result: completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{
+				Reviewed: []string{"f.go"}, Skipped: []result.Skipped{{Path: "vendor/x.go", Rule: "vendored"}}}})},
+			failure:    config.FailureStatusFailed,
+			wantStatus: StatusSuccess, wantDesc: "No blocking issues; not approved: some changed files weren't reviewed",
+		},
+		{
+			name: "only out-of-scope and excluded skips still approve",
+			outcome: Outcome{Result: completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{
+				Reviewed: []string{"f.go"}, Skipped: []result.Skipped{{Path: "docs/x.md", Rule: "out of scope"}, {Path: "y.go", Rule: "excluded by skill"}, {Path: "z", Rule: "no content changes"}}}})},
+			failure:    config.FailureStatusFailed,
+			wantStatus: StatusSuccess, wantDesc: "No blocking issues", wantApprove: true,
+		},
+		{
+			name: "blocking wins over a default skip",
+			outcome: Outcome{Result: completed(result.Skill{Name: "a", Verdict: "has_blocking_issues", Files: result.Files{
+				Reviewed: []string{"f.go"}, Skipped: []result.Skipped{{Path: "go.sum", Rule: "lockfile"}}}})},
+			failure:    config.FailureStatusFailed,
+			wantStatus: StatusFailed, wantDesc: "Blocking issues found",
 		},
 		{
 			name:       "completed result without skills is not a pass",
@@ -367,4 +389,56 @@ func TestDecideNeutralizesQuickActions(t *testing.T) {
 	if !strings.HasSuffix(d.Comment, "\n"+findingsBlock) {
 		t.Errorf("findings block changed: %q", d.Comment)
 	}
+}
+
+func TestDecidePartlySkippedNotApproved(t *testing.T) {
+	for _, rule := range []string{"deleted", "binary", "vendored", "lockfile", "generated"} {
+		t.Run(rule, func(t *testing.T) {
+			r := completed(
+				result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{
+					Reviewed: []string{"f.go"},
+					Skipped:  []result.Skipped{{Path: "x/skipped", Rule: rule}, {Path: "docs/a.md", Rule: "out of scope"}},
+				}},
+				result.Skill{Name: "b", Verdict: "no_blocking_issues", Files: result.Files{
+					Reviewed: []string{"f.go"},
+					Skipped:  []result.Skipped{{Path: "x/skipped", Rule: "out of scope"}},
+				}},
+			)
+			d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+			if d.Approve || d.Status != StatusSuccess || d.Description != "No blocking issues; not approved: some changed files weren't reviewed" {
+				t.Fatalf("got %+v", d)
+			}
+			want := Marker + "\n### review\n\nbody\n\n" +
+				"---\n**Not approved:** some changed files were skipped by pergent's default rules, so they weren't reviewed. A human needs to look.\n\n" +
+				"- `x/skipped` (" + strings.Join(sorted(rule, "out of scope"), ", ") + ")\n\n" +
+				findingsBlock
+			if d.Comment != want {
+				t.Errorf("comment:\n%q\nwant:\n%q", d.Comment, want)
+			}
+		})
+	}
+}
+
+func TestDecidePartlySkippedCapsAtTwenty(t *testing.T) {
+	var skipped []result.Skipped
+	for i := 0; i < 23; i++ {
+		skipped = append(skipped, result.Skipped{Path: fmt.Sprintf("vendor/%02d.go", i), Rule: "vendored"})
+	}
+	r := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Reviewed: []string{"f.go"}, Skipped: skipped}})
+	r.Comment = result.Comment{Markdown: Marker + "\nbody"}
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	if d.Approve {
+		t.Fatal("approved")
+	}
+	if got := strings.Count(d.Comment, "(vendored)"); got != 20 {
+		t.Errorf("listed %d, want 20", got)
+	}
+	if !strings.HasSuffix(d.Comment, "- …and 3 more\n") {
+		t.Errorf("comment: %q", d.Comment)
+	}
+}
+
+func sorted(s ...string) []string {
+	slices.Sort(s)
+	return s
 }
