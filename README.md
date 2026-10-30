@@ -11,7 +11,7 @@ When someone opens or pushes to a merge request (or pull request) in a repositor
 
 Everything that can comment, set statuses or approve stays inside pergent.sh. A Job only ever holds a read-only clone token, the LLM key and a one-time token to hand in its result.
 
-This release covers GitLab (gitlab.com or any self-managed instance) and GitHub.com; see [GitHub](#github) for the GitHub setup. It has no web UI and no merge request commands; see [Limits](#limits).
+This release covers GitLab (gitlab.com or any self-managed instance) and GitHub.com; see [GitHub](#github) for the GitHub setup. An optional web [dashboard](#dashboard) shows every review and lets admins switch repositories on and change their settings. There are no merge request commands; see [Limits](#limits).
 
 In this README a "merge request" is also a GitHub pull request, and the "review bot" and "approve bot" are the GitHub review App and approver, unless a section says otherwise.
 
@@ -30,6 +30,7 @@ In this README a "merge request" is also a GitHub pull request, and the "review 
 - For GitHub, two GitHub Apps (or one App and a bot user); see [GitHub](#github).
 - An API key for an LLM provider that opencode supports.
 - A way for GitLab or GitHub to reach pergent.sh over HTTPS (an Ingress, for example).
+- For the optional [dashboard](#dashboard): an HTTPS host for it, and a GitLab OAuth application per GitLab instance or user authorization on the GitHub review App.
 
 ## Install with Helm
 
@@ -122,8 +123,9 @@ For GitHub only, set `config.gitlab: []`: the chart's default values contain an 
 What the chart creates:
 
 - A Deployment with **one replica** and the `Recreate` strategy. Do not scale it up: at startup pergent.sh requeues runs it had claimed but not launched, which is only safe when no other pod is dispatching. The pod runs as non-root with a read-only root filesystem, drops all capabilities, and has startup, readiness and liveness probes on `/healthz` (the startup probe allows 150 s, as pergent.sh starts listening only after the database, migrations, GitLab tokens and GitHub Apps check out). The pod restarts on a config or skills change.
-- A Service on port 8080 and, when `ingress.enabled`, an Ingress that by default exposes only `/webhooks/` and `/runs/` (`ingress.paths`).
-- A ServiceAccount, and in `jobsNamespace` a Role and RoleBinding for it: `batch/jobs` (create, get, list, watch, patch, delete), `secrets` and `configmaps` (create, get, delete) and `pods` (get, list). There are no wildcard rules and nothing outside `jobsNamespace`.
+- A Service on port 8080 and, when `ingress.enabled`, an Ingress that by default exposes only `/webhooks/` and `/runs/` (`ingress.paths`). The chart refuses to render it with `/`, `/api/` or `/auth/` in `ingress.paths`: those are the dashboard's.
+- When `dashboardIngress.enabled`, a second Ingress for the [dashboard](#dashboard) on its own host(s), exposing `/`, `/api/` and `/auth/` of the same Service.
+- A ServiceAccount, and in `jobsNamespace` a Role and RoleBinding for it: `batch/jobs` (create, get, list, watch, patch, delete), `secrets` and `configmaps` (create, get, delete), `pods` (get, list) and `pods/log` (get, to keep each review's log). There are no wildcard rules and nothing outside `jobsNamespace`.
 - A NetworkPolicy in `jobsNamespace` for the Job pods (those labelled `app.kubernetes.io/managed-by: pergent-sh`): no ingress; egress to DNS (UDP and TCP 53), to TCP 443 and 80 in `jobEgress.cidrs`, and to TCP 8080 of the pergent.sh pods for the result callback. A NetworkPolicy only takes effect when your CNI enforces them.
 - ConfigMaps for `config.yaml` and the `skills`.
 
@@ -144,6 +146,8 @@ If `public_url` points at a hostname that the Job pods reach through the Ingress
 | each `github[].review_app.private_key_env` | The review App's private key: the whole PEM file GitHub gave you (PKCS#1 `RSA PRIVATE KEY` or PKCS#8 `PRIVATE KEY`). Required, and checked at startup. Never logged. |
 | each `github[].approve_app.private_key_env` or `github[].approve_token_env` | The approve App's private key, or the approve bot user's fine-grained personal access token. Required, and checked at startup. |
 | each `github[].webhook_secret_env` | The review App's webhook secret. Required. |
+| each `gitlab[].oauth_client_id_env`, `oauth_client_secret_env` | The instance's OAuth application, for signing in to the [dashboard](#dashboard). Required when `dashboard.url` is set, and checked at startup. |
+| each `github[].oauth_client_id_env`, `oauth_client_secret_env` | The review App's client ID and a client secret, for signing in to the [dashboard](#dashboard). Required when `dashboard.url` is set, and checked at startup. |
 
 pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is handy for local development.
 
@@ -152,6 +156,7 @@ pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is hand
 - **Don't treat the `pergent` commit status as a gate.** GitLab lets anyone with the Developer role set a commit status of any name on a commit of the project, including the head of their own merge request, so a `pergent` status of `success` proves nothing about who set it. Don't rely on "Pipelines must succeed" (or any other check of commit statuses) to enforce the review. The approval is the gate: it comes from the approve bot, a separate user whose token only pergent.sh holds.
 - **Require approval through approval rules.** Give the default branch an approval rule that needs a human approval as well as the bot's (for example two approvals, or one from a group the approve bot is not in); see the warning under [Requirements](#requirements). pergent.sh logs a warning every hour for a project one approval can merge.
 - **Turn on "Remove all approvals when commits are added to the source branch"** (Settings > Merge requests > Approval settings). It is GitLab's counterpart of GitHub's "Dismiss stale pull request approvals": pergent.sh removes its approval on every push, but this makes GitLab do it too, as a second layer for a webhook pergent.sh missed.
+- **Turn on "Prevent editing approval rules in merge requests"** (same place). Otherwise the author of a merge request can lower its required approvals to one, and the approve bot's approval alone unlocks the merge.
 
 Approval rules and approval settings are GitLab Premium and Ultimate features. On GitLab Free, approvals are optional and don't block a merge, so pergent.sh's approval is advice only.
 
@@ -175,6 +180,8 @@ In the organization's settings, **Developer settings → GitHub Apps → New Git
   - Checks: **Read and write**
   - Issues: **Read and write** (pull request comments are issue comments)
   - Metadata: **Read-only** (always on)
+- **Organization permissions:**
+  - Members: **Read-only**. The [dashboard](#dashboard) checks with it whether a user is in the admin team. Ask for it even if you don't use the dashboard yet: adding a permission later makes every organization approve the App again.
 - **Subscribe to events:** **Pull request**.
 - **Where can this GitHub App be installed:** "Only on this account", or "Any account" to install it on several organizations.
 
@@ -280,6 +287,112 @@ A GitHub App can have several private keys at once:
 
 Installation tokens minted with the old key expire within an hour.
 
+## Dashboard
+
+The dashboard is a web app built into pergent.sh. It is off until `dashboard.url` is set. People sign in with their GitLab or GitHub account and see the repositories pergent.sh reviews that they can see on that platform, with every review run, its findings, its files and its log. Admins also switch repositories on and off and change their settings.
+
+### Turning it on
+
+1. Pick the dashboard's address, for example `https://pergent-dashboard.example.com`. It must be `https` and a bare host, without a path: the dashboard, its API (`/api/`) and its sign-in routes (`/auth/`) are served at `/` of that host, and its cookies only work over https. It can be an internal-only host. Webhooks and Job results stay on `public_url`, which GitHub.com must still reach from the internet.
+2. Set up sign-in on every instance people should sign in with: [a GitLab OAuth application](#sign-in-with-gitlab) or [user authorization on the GitHub review App](#sign-in-with-github). Put the client ID and secret in the Secret.
+3. Add to the config:
+
+   ```yaml
+   config:
+     gitlab:
+       - name: main
+         # ...the tokens as before...
+         oauth_client_id_env: GITLAB_OAUTH_CLIENT_ID
+         oauth_client_secret_env: GITLAB_OAUTH_CLIENT_SECRET
+     dashboard:
+       url: https://pergent-dashboard.example.com
+       admins:
+         - instance: main
+           group: acme/platform     # GitLab: a group path
+         # - instance: gh
+         #   team: acme/platform    # GitHub: org/team-slug
+   ```
+
+4. Turn on the chart's dashboard Ingress, which is separate from the webhook Ingress so the two can be on different hosts:
+
+   ```yaml
+   dashboardIngress:
+     enabled: true
+     className: nginx
+     hosts: [pergent-dashboard.example.com]
+     tls:
+       - secretName: pergent-dashboard-example-com-tls
+         hosts: [pergent-dashboard.example.com]
+   ```
+
+   It exposes `/`, `/api/` and `/auth/` of the pergent.sh Service; the webhook Ingress never does. The chart refuses to render it without `config.dashboard.url`, or when none of `hosts` is that URL's host. Without `dashboard.url` pergent.sh doesn't serve those routes at all.
+
+pergent.sh doesn't start when `dashboard.url` is set and an instance's `oauth_client_id_env` or `oauth_client_secret_env` variable is unset or empty; the error names the instance and the variable. With no `dashboard.admins`, it starts and logs a warning: everyone can sign in, but nobody is an admin.
+
+### Sign in with GitLab
+
+Create one OAuth application per GitLab instance: as an instance administrator under **Admin area → Applications**, or under a group's **Settings → Applications**.
+
+- **Redirect URI:** `<dashboard.url>/auth/gitlab/<instance name>/callback`, for example `https://pergent-dashboard.example.com/auth/gitlab/main/callback`.
+- **Confidential:** yes.
+- **Scopes:** `read_user` and `read_api`.
+
+Put its Application ID and Secret in the Secret (for example `GITLAB_OAUTH_CLIENT_ID` and `GITLAB_OAUTH_CLIENT_SECRET`) and name them in the instance's `oauth_client_id_env` and `oauth_client_secret_env`.
+
+### Sign in with GitHub
+
+GitHub sign-in uses the review App's own user authorization, so there is no second App to create. In the review App's settings:
+
+- Under **Identifying and authorizing users**, set the **Callback URL** to `<dashboard.url>/auth/github/<instance name>/callback`, for example `https://pergent-dashboard.example.com/auth/github/gh/callback`. Keep **Expire user authorization tokens** on (pergent.sh renews them) and leave **Request user authorization (OAuth) during installation** off.
+- Generate a **client secret**, and note the **Client ID** on the same page.
+- Check that the App has **Organization permissions → Members: Read-only** (see [Create the review App](#1-create-the-review-app)). An App created before it was on that list needs it added, and each organization then has to approve the new permission. Without it nobody is found in the admin team.
+
+Put the Client ID and the client secret in the Secret and name them in the GitHub instance's `oauth_client_id_env` and `oauth_client_secret_env`. A user signed in through the App only reaches repositories the App is installed on.
+
+### Who sees what
+
+- **Signing in.** One account per sign-in: someone who uses GitLab and GitHub signs in with one of them at a time and sees that instance's repositories. A new sign-in ends the session the browser had. The user's OAuth token is stored encrypted with `PERGENT_SH_SECRET_KEY` and never sent to the browser.
+- **Sessions** are a cookie (`HttpOnly`, `Secure`, `SameSite=Lax`) holding a random ID. A session ends after 8 hours without use, and 7 days after sign-in whether used or not. pergent.sh deletes ended sessions every hour.
+- **"Can see"** means the user can read the repository's code and merge requests on the platform, because findings and logs contain code:
+  - GitLab: the Reporter role or above, through the project or its group, or a public project whose repository and merge requests are open to everyone. A project the user reaches only through a project or group share is not counted, so it isn't shown to them.
+  - GitHub: read access to the repository, or a public repository.
+- **Checked on the server.** At sign-in pergent.sh asks GitLab or GitHub, with the user's token, about every repository switched on for that instance, and asks whether the user is in the admin group or team. It asks again when the answer is older than 5 minutes and the user makes a request, so lost access stops showing within 5 minutes. If asking fails, the last answer is used for 5 more minutes, then the user sees nothing until it works again. Every API answer is filtered by that list; a repository, review or run the user can't see is answered exactly like one that doesn't exist.
+- **Admins** are the members of the `dashboard.admins` group (GitLab: active members, direct or through a parent group or a group the admin group is shared with) or team (GitHub, active members) on the instance they signed in with. Being an admin on one instance gives nothing on another.
+
+**Everyone signed in** sees, for the repositories they can see:
+
+- **Overview:** the number of reviews, approvals, blocking reviews and failed reviews over the last 7, 30 or 90 days, the most recent reviews, and "Needs attention".
+- **Reviews:** filtered by repository, result and time. Each merge request has a page with every run (commit, what started it, result, duration) and, for a run, the status set on the platform, whether it was approved and why not, the pergent version, model, tokens, each skill's verdict, findings, checks, files (reviewed, skipped with the rule, not reviewed) and the log.
+- **Repositories:** each with its last 7 days and health; its reviews, its setup checks and its skills and instructions. Skills & instructions shows what a review of the default branch would get, read with the review bot or App and kept for 5 minutes.
+- **Skills:** the skill library, read-only.
+
+**Admins** also get:
+
+- the on/off switch of each repository and **Add repository**, which lists the repositories that both the admin (GitLab: Reporter or above as a member; GitHub: read access) and the review bot (GitLab: Maintainer) or review App (GitHub: installed) can reach, at most 500, with a search;
+- each repository's **Settings**: approve clean reviews, the failure status, review drafts, the library skills to run, and the Job's timeout (60 to 7200 seconds) and memory limit (from 256Mi, and not below `jobs.resources.requests.memory`, to 32Gi). Each shows "overridden here" or "default", and "Reset to defaults" clears every override;
+- **Integrations** (their own instance: connection, approver, each repository's setup and whether the approver reaches it, an approve token about to expire) and **Settings** (the defaults and the admin groups or teams), both read-only.
+
+Every write is checked on the server: it needs an admin, a repository the admin can see, and the session's CSRF token. A developer calling the API directly gets 403 and nothing changes.
+
+### Repositories in the config and in the dashboard
+
+- A repository listed in `repositories` is shown as **managed by config** and is read-only in the dashboard; a write to it gets 409. Every dashboard setting has a config key (`approve`, `failure_status`, `review_drafts`, `skills`, `job_timeout`, `job_memory`; see [Config reference](#config-reference)).
+- A repository switched on in the dashboard is stored in Postgres. pergent.sh sets it up (webhook and deploy token on GitLab) the same way as a config repository, in a reconcile it starts at once (switches made within 10 seconds of each other are handled together, at the end of those 10 seconds); switching it off removes them the same way. Other signed-in users see a newly switched-on repository at their next access check, within 5 minutes.
+- A repository can't be in both: when it is added to the config, the next reconcile deletes its dashboard record and the config's settings apply. Removing a repository from the config switches it off; it doesn't fall back to the dashboard. To hand a repository to the dashboard, remove it from the config, redeploy, then switch it on in the dashboard.
+
+### Logs and "Needs attention"
+
+- **Logs.** When a review Job ends, pergent.sh keeps the last 200 KB of the pergent container's log, with the Job's clone token, LLM key and result token replaced by `[REDACTED]`. Logs are deleted after 30 days. A Job that is gone before its log is read (Jobs are removed an hour after they finish) has no log.
+- **Needs attention** lists setup problems that pergent.sh detects, kept up to date by the hourly reconcile and the Job watcher (not computed when the page loads):
+  - one approval is enough to merge, so pergent's approval alone can unlock it;
+  - the GitHub approve App isn't installed on the repository, or the approve bot user can't reach it;
+  - reviews running out of memory (two or more in the last 7 days);
+  - the GitHub approve bot's token expires within 14 days. This one concerns the whole instance and is shown to its admins only.
+
+### Limits of the access check
+
+Each signed-in user costs one platform API call per repository switched on for their instance, at most once every 5 minutes while they use the dashboard, plus one to read the user and one per admin group or team of the instance. GitHub allows 5000 requests an hour per user, so a very large installation (several hundred repositories on one GitHub instance) can run a user into GitHub's rate limit; their check then fails as described above.
+
 ## Config reference
 
 The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/pergent-sh/config.yaml`). Unknown keys are an error. It holds no secrets: tokens and keys are named by environment variable. Every problem found is reported at startup, and pergent.sh does not start with an invalid config, a missing skill, a missing secret, a database it cannot reach, a GitLab token that does not work, or a GitHub App key or approve token that does not work. The error names the instance and what failed, never the key or token.
@@ -302,6 +415,12 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `github[].approve_app.app_id`, `.private_key_env` | one of `approve_app` and `approve_token_env` | The approve App: its App ID and the env var with its private key. The default approver. Both must differ from `review_app`'s: one App, or one key, can't both review and approve. |
 | `github[].approve_token_env` | one of `approve_app` and `approve_token_env` | Name of the env var with the approve bot user's fine-grained personal access token, instead of an approve App. See [Approving as a bot user](#approving-as-a-bot-user). |
 | `github[].webhook_secret_env` | required | Name of the env var with the review App's webhook secret. GitHub signs each delivery with it (`X-Hub-Signature-256`). |
+| `gitlab[].oauth_client_id_env`, `gitlab[].oauth_client_secret_env` | none | Names of the env vars with the instance's OAuth application ID and secret, for [dashboard](#dashboard) sign-in. Both or neither; with neither, nobody signs in with this instance. |
+| `github[].oauth_client_id_env`, `github[].oauth_client_secret_env` | none | Names of the env vars with the review App's client ID and client secret, for [dashboard](#dashboard) sign-in. Both or neither. |
+| `dashboard.url` | none (dashboard off) | The dashboard's `https` address, a bare host without a path or trailing slash. Setting it turns the dashboard on; at least one instance must then have its `oauth_client_*_env` set. The sign-in callbacks are `<dashboard.url>/auth/<gitlab or github>/<instance name>/callback`. |
+| `dashboard.admins[].instance` | none | An instance with sign-in. Its admins are the members of `group` or `team`. Needs `dashboard.url`. |
+| `dashboard.admins[].group` | required on a GitLab instance | A GitLab group path, such as `acme/platform`. |
+| `dashboard.admins[].team` | required on a GitHub instance | A GitHub team as `org/team-slug`, such as `acme/platform`. |
 | `repositories[].gitlab` | one of `gitlab` and `github` | Name of one of the `gitlab` instances. |
 | `repositories[].github` | one of `gitlab` and `github` | Name of one of the `github` instances. |
 | `repositories[].project` | required | Project path, such as `acme/widgets`; on GitHub exactly `owner/name`, matched case-insensitively. Each project appears once per instance. |
@@ -411,9 +530,9 @@ The checkout first tries to fetch the base and head commits by SHA. When the ser
 
 ## Switching a repository off
 
-A repository is on when it is listed in the config. To switch it off, remove it from `repositories` and redeploy. On the next reconcile (at startup and then every hour) pergent.sh deletes its webhook and revokes its deploy token. Runs still queued for it are dropped when they come up for dispatch.
+A repository is on when it is listed in the config or switched on in the [dashboard](#dashboard). To switch a config repository off, remove it from `repositories` and redeploy; a dashboard repository is switched off with its switch. On the next reconcile (at startup and then every hour) pergent.sh deletes its webhook and revokes its deploy token. Runs still queued for it are dropped when they come up for dispatch.
 
-A GitHub repository has nothing to delete: removing it from the config deletes only pergent.sh's own record of it. Installing an App on a repository never switches it on; only the config list does.
+A GitHub repository has nothing to delete: removing it from the config deletes only pergent.sh's own record of it. Installing an App on a repository never switches it on; only the config list or the dashboard does.
 
 If you remove a whole GitLab instance from the config, pergent.sh can no longer reach its projects: it forgets them with a warning in the log, leaves the webhooks in place (pergent.sh answers them with 404, as the instance is unknown) and the deploy tokens expire on their own within 30 days.
 
@@ -427,6 +546,9 @@ Deploy tokens are created per project with the name `pergent-sh`, valid for 30 d
 | `POST /webhooks/github/{instance}` | The GitHub review App's `pull_request` webhook. `X-Hub-Signature-256` (HMAC-SHA256 of the body with the instance's webhook secret) is compared in constant time; a missing or wrong signature gets 401 and is otherwise ignored. A repository that isn't in the config gets 200 and is ignored. |
 | `POST /runs/{id}/result` | A review Job delivering its result, with its one-time bearer token. |
 | `GET /healthz` | Health check. It answers as soon as the server starts: pergent.sh serves right away and runs the startup reconcile in the background. |
+| `GET /auth/{gitlab or github}/{instance}/login`, `GET .../callback`, `POST /auth/logout` | [Dashboard](#dashboard) sign-in and sign-out. Only with `dashboard.url` set. |
+| `/api/...` | The dashboard's JSON API. Every route but `GET /api/instances` needs a session; writes need the `X-CSRF-Token` header. Only with `dashboard.url` set. |
+| `GET /` and every other path | The dashboard's pages. Only with `dashboard.url` set; without it they are 404. |
 
 Logs are JSON on stdout. Secrets are never logged.
 
@@ -434,12 +556,11 @@ Logs are JSON on stdout. Secrets are never logged.
 
 This release is deliberately small:
 
-- No web UI or dashboard.
-- No merge request commands (such as asking for a re-review in a comment).
+- No merge request commands (such as asking for a re-review in a comment), and no re-run or dismiss buttons in the dashboard.
+- The dashboard has two roles, admin and everyone else, and no audit log. Its sign-in is GitLab or GitHub only.
 - No advice on whether a human approval is still needed beyond the hourly warning for a repository that one approval can merge.
 - No repository cache: every checkout is a fresh `git init` plus a shallow fetch.
 - One replica, and PostgreSQL is external.
-- A repository is switched off only by removing it from the config.
 - GitHub.com only. `github[].api_url` accepts another URL, but GitHub Enterprise Server is untested.
 - On GitHub, approving after the approve App is installed starts with the next push or ready-for-review; there is no catch-up pass over open pull requests.
 
