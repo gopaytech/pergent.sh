@@ -193,7 +193,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		CloneAllowance: allowance,
 		Concurrency:    e.Config.Jobs.Concurrency,
 		RepoURL:        project.HTTPURLToRepo,
-		MRIID:          run.MR.IID,
+		ChangeRef:      plat.Forge.ChangeRef(run.MR.IID),
 		TargetBranch:   mr.TargetBranch,
 		BaseSHA:        mr.BaseSHA,
 		HeadSHA:        run.HeadSHA,

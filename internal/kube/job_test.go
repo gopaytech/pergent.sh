@@ -31,7 +31,7 @@ func testParams() JobParams {
 		CloneAllowance: 2 * time.Minute,
 		Concurrency:    4,
 		RepoURL:        "https://gitlab.example.com/acme/widgets.git",
-		MRIID:          42,
+		ChangeRef:      "refs/merge-requests/42/head",
 		TargetBranch:   "main",
 		BaseSHA:        testBase,
 		HeadSHA:        testHead,
@@ -171,12 +171,15 @@ func TestBuildJobShape(t *testing.T) {
 		env[e.Name] = e
 	}
 	for k, v := range map[string]string{
-		"REPO_URL": p.RepoURL, "MR_IID": "42", "TARGET_BRANCH": "main",
+		"REPO_URL": p.RepoURL, "MR_REF": "refs/merge-requests/42/head", "TARGET_BRANCH": "main",
 		"BASE_SHA": testBase, "HEAD_SHA": testHead, "GIT_USERNAME": "gitlab+deploy-token-7",
 	} {
 		if env[k].Value != v {
 			t.Errorf("init env %s = %q, want %q", k, env[k].Value, v)
 		}
+	}
+	if _, ok := env["MR_IID"]; ok {
+		t.Errorf("init env still carries MR_IID")
 	}
 	if len(init.VolumeMounts) != 1 || init.VolumeMounts[0].Name != "work" || init.VolumeMounts[0].MountPath != "/work" {
 		t.Errorf("init mounts = %+v", init.VolumeMounts)
@@ -410,5 +413,35 @@ func TestConfigMapItems(t *testing.T) {
 		if _, ok := cm.Data[it.Key]; !ok {
 			t.Errorf("item key %s not in data", it.Key)
 		}
+	}
+}
+
+// wantCheckoutScript is the exact script the init container runs. The token
+// travels only through GIT_CONFIG env, never on disk, so every byte matters.
+const wantCheckoutScript = `set -eu
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0=http.extraHeader
+export GIT_CONFIG_VALUE_0="Authorization: Basic $(printf '%s:%s' "$GIT_USERNAME" "$GIT_TOKEN" | base64 -w0)"
+git init -q /work/repo
+cd /work/repo
+git config core.hooksPath /dev/null
+git remote add origin "$REPO_URL"
+git remote set-url --push origin pergent-push-disabled:
+if ! git fetch -q --no-tags --depth=1 origin "$BASE_SHA" "$HEAD_SHA"; then
+  echo "fetch by SHA failed; falling back to $MR_REF and $TARGET_BRANCH" >&2
+  git fetch -q --no-tags --depth=1 origin "$MR_REF"
+  depth=50
+  until git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; do
+    if [ "$depth" -gt 3200 ]; then echo "merge base $BASE_SHA not found within depth 3200" >&2; exit 1; fi
+    git fetch -q --no-tags --depth="$depth" origin "$TARGET_BRANCH"
+    depth=$((depth * 2))
+  done
+fi
+git checkout -q --detach "$HEAD_SHA"
+`
+
+func TestCheckoutScriptIsExact(t *testing.T) {
+	if checkoutScript != wantCheckoutScript {
+		t.Errorf("checkout.sh differs from the expected script:\n got:\n%s\nwant:\n%s", checkoutScript, wantCheckoutScript)
 	}
 }

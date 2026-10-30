@@ -47,7 +47,7 @@ type JobParams struct {
 	Timeout, CloneAllowance       time.Duration
 	Concurrency                   int
 	RepoURL                       string // never carries credentials
-	MRIID                         int64
+	ChangeRef                     string // the platform ref the change head can be fetched from
 	TargetBranch, BaseSHA         string
 	HeadSHA, GitUsername          string
 	ResultURL                     string
@@ -162,7 +162,7 @@ func BuildJob(p JobParams) *batchv1.Job {
 		Command: []string{"sh", "-ec", checkoutScript},
 		Env: []corev1.EnvVar{
 			{Name: "REPO_URL", Value: p.RepoURL},
-			{Name: "MR_IID", Value: strconv.FormatInt(p.MRIID, 10)},
+			{Name: "MR_REF", Value: p.ChangeRef},
 			{Name: "TARGET_BRANCH", Value: p.TargetBranch},
 			{Name: "BASE_SHA", Value: p.BaseSHA},
 			{Name: "HEAD_SHA", Value: p.HeadSHA},

@@ -64,7 +64,7 @@ func TestDispatchLaunchesJob(t *testing.T) {
 	for _, v := range job.Spec.Template.Spec.InitContainers[0].Env {
 		env1[v.Name] = v.Value
 	}
-	if env1["REPO_URL"] != testRepoURL || env1["GIT_USERNAME"] != testDeployUser || env1["MR_IID"] != "3" || env1["TARGET_BRANCH"] != "main" {
+	if env1["REPO_URL"] != testRepoURL || env1["GIT_USERNAME"] != testDeployUser || env1["MR_REF"] != "refs/merge-requests/3/head" || env1["TARGET_BRANCH"] != "main" {
 		t.Errorf("checkout env = %v", env1)
 	}
 
