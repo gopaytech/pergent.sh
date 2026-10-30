@@ -108,11 +108,13 @@ On startup pergent.sh creates the merge request webhook and a read-only deploy t
 
 What the chart creates:
 
-- A Deployment with **one replica** and the `Recreate` strategy. Do not scale it up: at startup pergent.sh requeues runs it had claimed but not launched, which is only safe when no other pod is dispatching. The pod runs as non-root with a read-only root filesystem, drops all capabilities, and has readiness and liveness probes on `/healthz`. The pod restarts on a config or skills change.
+- A Deployment with **one replica** and the `Recreate` strategy. Do not scale it up: at startup pergent.sh requeues runs it had claimed but not launched, which is only safe when no other pod is dispatching. The pod runs as non-root with a read-only root filesystem, drops all capabilities, and has startup, readiness and liveness probes on `/healthz` (the startup probe allows 150 s, as pergent.sh starts listening only after the database, migrations and GitLab tokens check out). The pod restarts on a config or skills change.
 - A Service on port 8080 and, when `ingress.enabled`, an Ingress that by default exposes only `/webhooks/` and `/runs/` (`ingress.paths`).
 - A ServiceAccount, and in `jobsNamespace` a Role and RoleBinding for it: `batch/jobs` (create, get, list, watch, patch, delete), `secrets` and `configmaps` (create, get, delete) and `pods` (get, list). There are no wildcard rules and nothing outside `jobsNamespace`.
-- A NetworkPolicy in `jobsNamespace` for the Job pods (those labelled `app.kubernetes.io/managed-by: pergent-sh`): no ingress; egress to DNS (UDP and TCP 53), to TCP 443 and 80 in `jobEgress.cidrs` (default `0.0.0.0/0`), and to TCP 8080 of the pergent.sh pods for the result callback. A NetworkPolicy only takes effect when your CNI enforces them.
+- A NetworkPolicy in `jobsNamespace` for the Job pods (those labelled `app.kubernetes.io/managed-by: pergent-sh`): no ingress; egress to DNS (UDP and TCP 53), to TCP 443 and 80 in `jobEgress.cidrs`, and to TCP 8080 of the pergent.sh pods for the result callback. A NetworkPolicy only takes effect when your CNI enforces them.
 - ConfigMaps for `config.yaml` and the `skills`.
+
+**Narrow `jobEgress.cidrs`.** The default `0.0.0.0/0` lets a Job reach any address on ports 80 and 443, including in-cluster services and the cloud metadata endpoint. Set it to the addresses of GitLab and the LLM provider. An empty list (`cidrs: []`) allows no external egress at all: Jobs then reach only DNS and pergent.sh's port 8080. The optional `jobEgress.except` list is added to every `ipBlock` as NetworkPolicy `except` (for example `169.254.169.254/32`); it applies to every cidr, and Kubernetes rejects an entry outside its cidr, so use it with a broad cidr such as the default `0.0.0.0/0`.
 
 `config.jobs.namespace` must equal `jobsNamespace`, `config.skills_dir` must be `/etc/pergent-sh/skills` and `config.listen` must end in `:8080`; the chart refuses to render otherwise.
 
@@ -192,7 +194,7 @@ A failed, partial or missing review is never `success` and is never approved.
 - If GitLab has not computed the merge request's diff after 10 minutes, the run fails with a comment.
 - A Job that dies without a result (out of memory, a failed checkout, the deadline, an image pull error, a failed delivery, a deleted Job) produces an error comment and a non-success status within about 2 minutes.
 - Runs that were claimed but not launched (for example because pergent.sh crashed) are requeued at startup and after 5 minutes.
-- Publishing to GitLab is retried with backoff, up to 10 attempts.
+- Publishing to GitLab is retried with backoff. After 10 failed attempts the run becomes `publish_failed` and nothing more is posted to the merge request; the failure is only in the logs.
 
 ## What a Job can and cannot see
 

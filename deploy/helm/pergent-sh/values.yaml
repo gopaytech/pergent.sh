@@ -23,10 +23,17 @@ jobsNamespace: pergent
 
 # Where review Jobs may connect over TCP 443 and 80: GitLab, the LLM provider
 # and (unless callback_url is an in-cluster address) the pergent.sh URL.
-# Narrow this to the addresses you need.
+# The default 0.0.0.0/0 lets a Job reach ANY address on 80/443, including
+# in-cluster services and the cloud metadata endpoint. Narrow it to GitLab and
+# the LLM provider. An EMPTY list allows no external egress at all: Jobs can
+# then only use DNS and the pergent.sh callback (on 8080).
 jobEgress:
   cidrs:
     - 0.0.0.0/0
+  # Optional ranges carved out of EVERY cidr above (NetworkPolicy "except"),
+  # e.g. 169.254.169.254/32. Kubernetes rejects an entry that lies outside its
+  # cidr, so use this with broad cidrs such as the default 0.0.0.0/0.
+  except: []
 
 # Rendered verbatim to /etc/pergent-sh/config.yaml. See the README for every
 # field. listen and skills_dir are fixed by the chart: leave them as they are.

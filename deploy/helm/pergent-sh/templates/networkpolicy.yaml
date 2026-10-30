@@ -21,17 +21,24 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    # GitLab and the LLM provider.
+    {{- if .Values.jobEgress.cidrs }}
+    # GitLab and the LLM provider. Only emitted for a non-empty list: a rule
+    # with an empty "to" would allow every destination.
     - to:
         {{- range .Values.jobEgress.cidrs }}
         - ipBlock:
             cidr: {{ . | quote }}
+            {{- with $.Values.jobEgress.except }}
+            except:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
         {{- end }}
       ports:
         - protocol: TCP
           port: 443
         - protocol: TCP
           port: 80
+    {{- end }}
     # The result callback to pergent-sh.
     - to:
         - namespaceSelector:
