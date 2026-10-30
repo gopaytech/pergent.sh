@@ -200,14 +200,22 @@ func (s *Store) PruneRunLogs(ctx context.Context, before time.Time) (int, error)
 	return int(tag.RowsAffected()), nil
 }
 
+// runLogLookback bounds how long before RunsToLog's since a run may have
+// been created: the query then reads only recent rows of the (state,
+// created_at) index, not every published run. A run's Job starts after it
+// waits in the queue and runs for at most its timeout (the dashboard allows
+// 2 h), so a day covers any run whose log is still there to take.
+const runLogLookback = 24 * time.Hour
+
 // RunsToLog returns the runs that have a result or a failure reported since
-// the given time and a Job, but no stored log, oldest first.
+// the given time and a Job, but no stored log, oldest first. Runs created
+// more than runLogLookback before since are left out.
 func (s *Store) RunsToLog(ctx context.Context, since time.Time) ([]Run, error) {
 	return s.queryRuns(ctx, `SELECT `+runColumns+` FROM runs
 		WHERE state IN ('reported', 'published', 'publish_failed') AND job_name <> ''
-		  AND reported_at >= $1
+		  AND created_at >= $2 AND reported_at >= $1
 		  AND NOT EXISTS (SELECT 1 FROM run_logs WHERE run_logs.run_id = runs.id)
-		ORDER BY reported_at, id`, since)
+		ORDER BY reported_at, id`, since, since.Add(-runLogLookback))
 }
 
 // Attention is one setup problem of a repository ("Needs attention"): Kind
