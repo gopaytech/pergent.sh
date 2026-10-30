@@ -345,7 +345,7 @@ func TestHasApproved(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFake(t)
 			f.on(http.MethodGet, mr+"/approvals", http.StatusOK, approvals(tc.ids...))
-			got, err := f.approver(approveUserID).HasApproved(context.Background(), 7, 3)
+			got, err := f.approver(approveUserID).HasApproved(context.Background(), 7, 3, "abc")
 			if err != nil || got != tc.want {
 				t.Fatalf("HasApproved = %v, %v; want %v, nil", got, err, tc.want)
 			}
@@ -357,7 +357,7 @@ func TestHasApproved(t *testing.T) {
 
 	// An approve bot whose user id is unknown never asks.
 	f := newFake(t)
-	if got, err := f.approver(0).HasApproved(context.Background(), 7, 3); err != nil || got {
+	if got, err := f.approver(0).HasApproved(context.Background(), 7, 3, "abc"); err != nil || got {
 		t.Fatalf("HasApproved without a user id = %v, %v; want false, nil", got, err)
 	}
 	if n := len(f.requests()); n != 0 {
@@ -366,7 +366,7 @@ func TestHasApproved(t *testing.T) {
 
 	broken := newFake(t)
 	broken.on(http.MethodGet, mr+"/approvals", http.StatusForbidden, map[string]any{"message": "403"})
-	if _, err := broken.approver(approveUserID).HasApproved(context.Background(), 7, 3); err == nil {
+	if _, err := broken.approver(approveUserID).HasApproved(context.Background(), 7, 3, "abc"); err == nil {
 		t.Fatal("HasApproved on a refused request = nil error")
 	}
 }

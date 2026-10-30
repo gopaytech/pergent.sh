@@ -254,7 +254,7 @@ func (e *Engine) approve(ctx context.Context, plat Platform, run store.Run, log 
 		return nil
 	}
 	if err != nil {
-		if approved, lerr := plat.Approver.HasApproved(ctx, run.MR.ProjectID, run.MR.IID); lerr == nil && approved {
+		if approved, lerr := plat.Approver.HasApproved(ctx, run.MR.ProjectID, run.MR.IID, run.HeadSHA); lerr == nil && approved {
 			log.Info("the approve bot already approves the merge request", "refused_with", e.redact(err.Error()))
 			return nil
 		}

@@ -130,8 +130,9 @@ func (a *Approver) Unapprove(ctx context.Context, projectID, iid int64) error {
 
 // HasApproved reports whether the approve bot's user is among the merge
 // request's approvers. Without a known user ID it is false, and GitLab isn't
-// asked.
-func (a *Approver) HasApproved(ctx context.Context, projectID, iid int64) (bool, error) {
+// asked. sha is ignored: GitLab lists approvals of the merge request, not of
+// a commit.
+func (a *Approver) HasApproved(ctx context.Context, projectID, iid int64, _ string) (bool, error) {
 	if a.user.ID == 0 {
 		return false, nil
 	}

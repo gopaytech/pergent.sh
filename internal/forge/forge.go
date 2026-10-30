@@ -88,8 +88,10 @@ type Approver interface {
 	// Unapprove withdraws the approve bot's approval. Nothing to withdraw is
 	// not an error.
 	Unapprove(ctx context.Context, projectID, number int64) error
-	// HasApproved reports whether the approve bot approves the change now.
-	HasApproved(ctx context.Context, projectID, number int64) (bool, error)
+	// HasApproved reports whether the approve bot approves the change at
+	// sha now. A platform whose approvals aren't tied to a commit (GitLab,
+	// which withdraws them itself on a push) ignores sha.
+	HasApproved(ctx context.Context, projectID, number int64, sha string) (bool, error)
 }
 
 var (
