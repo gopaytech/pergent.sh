@@ -723,3 +723,109 @@ func TestSweepGitHubMovedHead(t *testing.T) {
 		t.Errorf("no run of the current head queued (created=%v, %v)", created, err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Fix round 1
+
+// The review installation's token can't be minted (the review App was
+// uninstalled or reinstalled under another id): the sweep can't read the
+// pull request, so it keeps the approval record and tries again; it never
+// forgets an approval that may still stand.
+func TestSweepGitHubReviewMintFailsKeepsApproval(t *testing.T) {
+	env := newTestEnv(t)
+	gh := addGitHub(t, env, true)
+	ghApproved(t, env, 3, sha('a'))
+	gh.Reply(http.MethodPost, "/app/installations/55/access_tokens", http.StatusNotFound, map[string]string{"message": "Not Found"})
+
+	sweep(t, env)
+
+	if a := approvals(t, env); len(a) != 1 || a[0].ApprovedSHA != sha('a') {
+		t.Errorf("approvals = %+v; want the record kept", a)
+	}
+	if !strings.Contains(env.Logs(), "couldn't check the approval") {
+		t.Errorf("the failure wasn't logged:\n%s", env.Logs())
+	}
+	if w := gh.Writes(); len(w) != 0 {
+		t.Errorf("GitHub writes: %+v", w)
+	}
+}
+
+// reconcileGitHubSetup routes the GitLab project and the GitHub repository
+// for a reconcile pass.
+func reconcileGitHubSetup(env *testEnv, gh *fakeGitHub) {
+	serveProject(env, testProjectID, testProjectPath)
+	gh.Reply(http.MethodGet, ghRepoAPI, http.StatusOK, map[string]any{"id": ghRepoID, "full_name": ghRepoPath, "clone_url": ghCloneURL})
+}
+
+// The approve App is uninstalled after a pass found it (and the approver
+// remembered its installation): the next pass records it as unreachable.
+func TestReconcileGitHubApproveAppUninstalled(t *testing.T) {
+	env := newTestEnv(t)
+	gh := addGitHub(t, env, true)
+	reconcileGitHubSetup(env, gh)
+	reconcile(t, env)
+	if p, _ := ghProject(t, env); !p.ApproveAvailable {
+		t.Fatalf("stored = %+v; want approve available", p)
+	}
+
+	gh.Uninstall(ghApproveApp, ghRepoPath)
+	reconcile(t, env)
+
+	if p, _ := ghProject(t, env); p.ApproveAvailable {
+		t.Fatalf("stored = %+v; want approve unavailable after the uninstall", p)
+	}
+}
+
+// The approve side can't be asked (GitHub refuses the lookup): the pass
+// reports it and keeps the stored answer.
+func TestReconcileGitHubApproveCheckErrorKeepsStored(t *testing.T) {
+	env := newTestEnv(t)
+	gh := addGitHub(t, env, false)
+	reconcileGitHubSetup(env, gh)
+	gh.Handle(http.MethodGet, ghRepoAPI+"/installation", func(w http.ResponseWriter, r *http.Request) {
+		switch jwtApp(r.Header.Get("Authorization")) {
+		case ghReviewApp:
+			writeJSON(w, http.StatusOK, map[string]any{"id": ghInstallation})
+		default:
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"message": "Bad credentials"})
+		}
+	})
+
+	if err := env.Engine.Reconcile(env.ctx); err == nil || !strings.Contains(err.Error(), "approve side") {
+		t.Fatalf("Reconcile = %v; want the approve check's error", err)
+	}
+	if p, _ := ghProject(t, env); p.ApproveAvailable || p.InstallationID != ghInstallation {
+		t.Fatalf("stored = %+v; want approve unavailable kept", p)
+	}
+}
+
+// With approve_token_env the approve side is a bot user: a repository it
+// can't reach is published with that note, not the App's.
+func TestPublishGitHubTokenApproverUnavailable(t *testing.T) {
+	env := newTestEnv(t)
+	gh := addGitHub(t, env, false)
+	inst := &env.Engine.Config.GitHub[len(env.Engine.Config.GitHub)-1]
+	inst.ApproveApp, inst.ApproveTokenEnv = nil, "GITHUB_APPROVE_TOKEN"
+	if err := env.Engine.Config.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	head := sha('a')
+	id := ghReport(t, env, 3, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublishGitHub(gh, 3, head)
+
+	publish(t, env)
+
+	wantPublished(t, env, id)
+	run := onlyCheckRun(t, gh)
+	if out, _ := run["output"].(map[string]any); out["title"] != "No blocking issues; not approved: the pergent approve bot can't reach this repository" {
+		t.Errorf("check run = %v", run)
+	}
+	comments := gh.Requests(http.MethodPost, ghRepoAPI+"/issues/3/comments")
+	if len(comments) != 1 {
+		t.Fatalf("%d comments posted", len(comments))
+	}
+	body, _ := comments[0].JSON(t)["body"].(string)
+	if !strings.Contains(body, "**Not approved:** the pergent approve bot can't reach this repository.") || strings.Contains(body, "approve App") {
+		t.Errorf("comment note: %q", body)
+	}
+}

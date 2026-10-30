@@ -37,11 +37,13 @@ const (
 
 	reasonDraft              = "draft"
 	reasonApproveUnavailable = "the pergent approve App isn't installed on this repository"
+	reasonApproveBotNoReach  = "the pergent approve bot can't reach this repository"
 
 	noteNothingReviewed    = "**Not approved:** every changed file was skipped by pergent's default rules, so nothing was reviewed. A human needs to look."
 	notePartlySkipped      = "**Not approved:** some changed files were skipped by pergent's default rules, so they weren't reviewed. A human needs to look."
 	noteDraft              = "---\n**Not approved:** this is a draft. It will be approved when it's marked ready."
 	noteApproveUnavailable = "---\n**Not approved:** the pergent approve App isn't installed on this repository."
+	noteApproveBotNoReach  = "---\n**Not approved:** the pergent approve bot can't reach this repository."
 
 	maxListedSkipped = 20
 )
@@ -63,11 +65,15 @@ var defaultSkipRules = map[string]bool{
 // the change being a draft (it is approved once marked ready);
 // ApproveUnavailable is the approve side unable to reach the repository (the
 // approve App isn't installed on it). Draft wins when both are set.
+// ApproveBot says the approve side is a bot user's token (GitHub's
+// approve_token_env) rather than an App, which only changes how an
+// unavailable approve side is worded.
 type Outcome struct {
 	Result             *result.Result
 	FailureReason      string
 	Draft              bool
 	ApproveUnavailable bool
+	ApproveBot         bool
 }
 
 // Decision is what to do with an outcome.
@@ -187,6 +193,8 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 	switch {
 	case o.Draft:
 		return notApproved(comment, r.Comment.FindingsBlock, reasonDraft, noteDraft)
+	case o.ApproveUnavailable && o.ApproveBot:
+		return notApproved(comment, r.Comment.FindingsBlock, reasonApproveBotNoReach, noteApproveBotNoReach)
 	case o.ApproveUnavailable:
 		return notApproved(comment, r.Comment.FindingsBlock, reasonApproveUnavailable, noteApproveUnavailable)
 	}

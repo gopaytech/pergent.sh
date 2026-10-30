@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"sync"
@@ -214,10 +213,48 @@ func (a *App) installationToken(ctx context.Context, installationID int64) (stri
 	}
 	tok, err := a.mint(ctx, installationID, nil)
 	if err != nil {
-		return "", fmt.Errorf("github: installation token: %w", err)
+		return "", installationError("github: installation token", err)
 	}
 	ct.token, ct.expires = tok.Token, tok.ExpiresAt
 	return ct.token, nil
+}
+
+// ErrInstallation is matched (errors.Is) by the error of an installation
+// token GitHub didn't mint: the installation token behind App.Client's
+// requests, or a clone token. It never matches ErrNotFound, whatever GitHub
+// answered: a 404 there means the installation is gone, not the repository,
+// file or pull request the request was for. InstallationGone tells a gone
+// installation apart.
+var ErrInstallation = errors.New("github: installation token not minted")
+
+// InstallationError is a failed installation token mint. Status is GitHub's
+// HTTP status, 0 when there was no reply. It doesn't unwrap to the
+// underlying error, so the mint's *APIError is never mistaken for the
+// caller's own.
+type InstallationError struct {
+	Status int
+	msg    string
+}
+
+func (e *InstallationError) Error() string { return e.msg }
+
+// Is makes errors.Is(err, ErrInstallation) match.
+func (e *InstallationError) Is(target error) bool { return target == ErrInstallation }
+
+func installationError(prefix string, err error) error {
+	ie := &InstallationError{msg: prefix + ": " + err.Error()}
+	var ae *APIError
+	if errors.As(err, &ae) {
+		ie.Status = ae.Status
+	}
+	return ie
+}
+
+// InstallationGone reports whether err is an installation token GitHub
+// refused with 404: the App isn't installed under that ID any more.
+func InstallationGone(err error) bool {
+	var ie *InstallationError
+	return errors.As(err, &ie) && ie.Status == 404
 }
 
 type mintedToken struct {
@@ -260,7 +297,7 @@ func (a *App) CloneToken(ctx context.Context, installationID, repoID int64) (str
 		Permissions:   cloneScopePerms{Contents: "read"},
 	})
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("github: clone token: %w", err)
+		return "", time.Time{}, installationError("github: clone token", err)
 	}
 	if t.Permissions["contents"] != "read" {
 		return "", time.Time{}, errors.New("github: clone token: contents access is not read")

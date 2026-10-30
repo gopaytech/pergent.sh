@@ -51,22 +51,25 @@ type Approver struct {
 
 // NewAppApprover returns the approve App's Approver. botUserID is the App's
 // bot user (app.BotUserID), resolved once by the caller. The App's
-// installation on a repository is looked up once and remembered; it is looked
-// up again after a call through it fails with 404.
+// installation on a repository is looked up once and remembered; it is
+// forgotten when a call through it fails with 404 or its token can't be
+// minted, and CanReach always asks GitHub afresh and remembers the answer.
 func NewAppApprover(app *github.App, botUserID int64, repos Repos) *Approver {
 	var (
 		mu    sync.Mutex
 		known = map[string]int64{}
 	)
 	key := func(owner, name string) string { return strings.ToLower(owner + "/" + name) }
-	installation := func(ctx context.Context, owner, name string) (int64, error) {
+	forget := func(owner, name string) {
 		mu.Lock()
-		id, ok := known[key(owner, name)]
+		delete(known, key(owner, name))
 		mu.Unlock()
-		if ok {
-			return id, nil
-		}
+	}
+	lookup := func(ctx context.Context, owner, name string) (int64, error) {
 		id, err := app.Installation(ctx, owner, name)
+		if errors.Is(err, github.ErrNotFound) {
+			forget(owner, name)
+		}
 		if err != nil {
 			return 0, err
 		}
@@ -74,6 +77,15 @@ func NewAppApprover(app *github.App, botUserID int64, repos Repos) *Approver {
 		known[key(owner, name)] = id
 		mu.Unlock()
 		return id, nil
+	}
+	installation := func(ctx context.Context, owner, name string) (int64, error) {
+		mu.Lock()
+		id, ok := known[key(owner, name)]
+		mu.Unlock()
+		if ok {
+			return id, nil
+		}
+		return lookup(ctx, owner, name)
 	}
 	a := newApprover(botUserID, repos)
 	a.clientFor = func(ctx context.Context, r Repo) (*github.Client, error) {
@@ -84,14 +96,12 @@ func NewAppApprover(app *github.App, botUserID int64, repos Repos) *Approver {
 		return app.Client(id), nil
 	}
 	a.failed = func(r Repo, err error) {
-		if errors.Is(err, github.ErrNotFound) {
-			mu.Lock()
-			delete(known, key(r.Owner, r.Name))
-			mu.Unlock()
+		if errors.Is(err, github.ErrNotFound) || errors.Is(err, github.ErrInstallation) {
+			forget(r.Owner, r.Name)
 		}
 	}
 	a.reach = func(ctx context.Context, owner, name string) (bool, error) {
-		_, err := installation(ctx, owner, name)
+		_, err := lookup(ctx, owner, name)
 		if errors.Is(err, github.ErrNotFound) {
 			return false, nil
 		}
@@ -113,8 +123,7 @@ func NewTokenApprover(c *github.Client, botUserID int64, repos Repos, log *slog.
 	a.reach = func(ctx context.Context, owner, name string) (bool, error) {
 		_, err := c.Repo(ctx, owner, name)
 		a.done(c)
-		switch status(err) {
-		case http.StatusNotFound, http.StatusForbidden:
+		if status(err) == http.StatusNotFound {
 			return false, nil
 		}
 		return err == nil, err
@@ -156,7 +165,9 @@ func (a *Approver) warnExpiry(c *github.Client) {
 }
 
 // CanReach reports whether the approve side can reach owner/name: the
-// approve App is installed there, or the token can read the repository.
+// approve App is installed there, or the token can read the repository. It
+// always asks GitHub. Only a 404 is "can't reach"; any other failure is an
+// error.
 func (a *Approver) CanReach(ctx context.Context, owner, name string) (bool, error) {
 	return a.reach(ctx, owner, name)
 }
@@ -170,7 +181,7 @@ func (a *Approver) call(ctx context.Context, repoID int64, fn func(c *github.Cli
 	c, err := a.clientFor(ctx, r)
 	if err != nil {
 		a.failed(r, err)
-		return mapErr(err)
+		return err
 	}
 	err = fn(c, r)
 	a.done(c)
@@ -198,8 +209,11 @@ func (a *Approver) Approve(ctx context.Context, repoID, number int64, sha string
 }
 
 // Unapprove dismisses every approving review of the bot that isn't dismissed
-// yet. A review that is gone (404) or can't be dismissed any more (422) is
-// done; none to dismiss is not an error.
+// yet. A review that is gone (404) is done. GitHub answers 422 both for a
+// review dismissed meanwhile and for a dismissal branch protection doesn't
+// allow, so after a 422 the reviews are listed again: any approval of the bot
+// still standing is an error (the caller keeps its record and tries again).
+// None to dismiss is not an error.
 func (a *Approver) Unapprove(ctx context.Context, repoID, number int64) error {
 	if a.bot == 0 {
 		return errors.New("githubforge: the approve bot user is unknown")
@@ -209,18 +223,34 @@ func (a *Approver) Unapprove(ctx context.Context, repoID, number int64) error {
 		if err != nil {
 			return mapErr(err)
 		}
-		var errs []error
+		var (
+			errs    []error
+			refused bool
+		)
 		for _, rv := range reviews {
 			if rv.User.ID != a.bot || rv.State != "APPROVED" {
 				continue
 			}
 			err := c.DismissReview(ctx, r.Owner, r.Name, number, rv.ID, dismissMessage)
 			switch status(err) {
-			case http.StatusNotFound, http.StatusUnprocessableEntity:
+			case http.StatusNotFound:
 				err = nil
+			case http.StatusUnprocessableEntity:
+				refused, err = true, nil
 			}
 			if err != nil {
 				errs = append(errs, fmt.Errorf("dismiss review %d: %w", rv.ID, err))
+			}
+		}
+		if refused {
+			again, err := c.ListReviews(ctx, r.Owner, r.Name, number)
+			if err != nil {
+				return errors.Join(append(errs, mapErr(err))...)
+			}
+			for _, rv := range again {
+				if rv.User.ID == a.bot && rv.State == "APPROVED" {
+					errs = append(errs, fmt.Errorf("review %d still approves: GitHub refused to dismiss it (422)", rv.ID))
+				}
 			}
 		}
 		return errors.Join(errs...)

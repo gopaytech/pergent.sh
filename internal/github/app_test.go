@@ -474,3 +474,43 @@ func TestAppTokensNeverInErrors(t *testing.T) {
 		}
 	}
 }
+
+// A token that can't be minted (404: the installation is gone) is an
+// installation error and never ErrNotFound: callers would read it as the
+// repository, file or pull request they asked for being missing.
+func TestMintFailureIsInstallationErrorNotNotFound(t *testing.T) {
+	a, _, _ := testApp(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `{"message":"Not Found"}`)
+	})
+	_, err := a.Client(42).Repo(ctx, "acme", "widgets")
+	_, _, cerr := a.CloneToken(ctx, 42, 900)
+	for name, err := range map[string]error{"installation token": err, "clone token": cerr} {
+		if err == nil || errors.Is(err, ErrNotFound) || !errors.Is(err, ErrInstallation) {
+			t.Errorf("%s: err = %v; want ErrInstallation and not ErrNotFound", name, err)
+		}
+		var ae *APIError
+		if errors.As(err, &ae) {
+			t.Errorf("%s: err unwraps to the APIError %v", name, ae)
+		}
+		if !InstallationGone(err) {
+			t.Errorf("%s: InstallationGone(%v) = false, want true", name, err)
+		}
+	}
+	if InstallationGone(&APIError{Status: 404}) || InstallationGone(nil) {
+		t.Error("InstallationGone matches a plain 404 or nil")
+	}
+}
+
+// A mint refused for another reason is an installation error that isn't
+// "gone".
+func TestMintFailureOtherStatus(t *testing.T) {
+	a, _, _ := testApp(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `{"message":"suspended"}`)
+	})
+	_, err := a.Client(42).Repo(ctx, "acme", "widgets")
+	if !errors.Is(err, ErrInstallation) || InstallationGone(err) {
+		t.Fatalf("err = %v; want ErrInstallation, not gone", err)
+	}
+}

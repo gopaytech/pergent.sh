@@ -547,3 +547,21 @@ func TestDecideDraftNoteWithoutBlock(t *testing.T) {
 		t.Errorf("comment:\n%q\nwant:\n%q", d.Comment, want)
 	}
 }
+
+// The approve side is a bot user's token (approve_token_env), not an App:
+// the reason and note say the bot can't reach the repository.
+func TestDecideApproveBotUnavailableNotApproved(t *testing.T) {
+	d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), ApproveUnavailable: true, ApproveBot: true}, config.FailureStatusFailed)
+	if d.Approve || d.Status != StatusSuccess ||
+		d.Description != "No blocking issues; not approved: the pergent approve bot can't reach this repository" {
+		t.Fatalf("got %+v", d)
+	}
+	want := Marker + "\n### review\n\nbody\n\n---\n**Not approved:** the pergent approve bot can't reach this repository.\n\n" + findingsBlock
+	if d.Comment != want {
+		t.Errorf("comment:\n%q\nwant:\n%q", d.Comment, want)
+	}
+	// ApproveBot alone changes nothing.
+	if d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), ApproveBot: true}, config.FailureStatusFailed); !d.Approve {
+		t.Errorf("ApproveBot without ApproveUnavailable: %+v", d)
+	}
+}

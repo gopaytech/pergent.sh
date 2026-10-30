@@ -447,7 +447,15 @@ func TestUnapproveDismissesTheBotsApprovals(t *testing.T) {
 				review(5, approveBotID, "APPROVED", sha('a')),
 			))
 			f.reply("PUT", prPath+"/reviews/1/dismissals", 200, map[string]any{"id": 1})
-			f.reply("PUT", prPath+"/reviews/4/dismissals", 422, map[string]any{"message": "already dismissed"})
+			f.handle("PUT", prPath+"/reviews/4/dismissals", func(w http.ResponseWriter, r *http.Request) {
+				// Already dismissed meanwhile: the next listing says so.
+				f.reply("GET", prPath+"/reviews", 200, reviews(
+					review(1, approveBotID, "DISMISSED", sha('9')),
+					review(3, 77, "APPROVED", sha('a')),
+					review(4, approveBotID, "DISMISSED", sha('a')),
+				))
+				reply(422, map[string]any{"message": "already dismissed"})(w, r)
+			})
 			// review 5: no route, 404 (gone meanwhile)
 			if err := a.Unapprove(ctx, repoID, 3); err != nil {
 				t.Fatal(err)
@@ -460,6 +468,26 @@ func TestUnapproveDismissesTheBotsApprovals(t *testing.T) {
 			want := []string{prPath + "/reviews/1/dismissals", prPath + "/reviews/4/dismissals", prPath + "/reviews/5/dismissals"}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("dismissed %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// GitHub refuses a dismissal with 422 also when branch protection doesn't let
+// the approve side dismiss: the approval is still there, which is an error
+// (the record is kept and the dismissal retried).
+func TestUnapprove422StillApprovedIsError(t *testing.T) {
+	for name := range approvers(t, newFake(t)) {
+		t.Run(name, func(t *testing.T) {
+			f := newFake(t)
+			a := approvers(t, f)[name]
+			f.reply("GET", prPath+"/reviews", 200, reviews(review(4, approveBotID, "APPROVED", sha('a'))))
+			f.reply("PUT", prPath+"/reviews/4/dismissals", 422, map[string]any{"message": "not allowed to dismiss"})
+			if err := a.Unapprove(ctx, repoID, 3); err == nil {
+				t.Fatal("Unapprove with a refused dismissal of a standing approval = nil error")
+			}
+			if n := len(f.requests("GET", prPath+"/reviews")); n != 2 {
+				t.Errorf("reviews listed %d times, want 2 (again after the 422)", n)
 			}
 		})
 	}
@@ -511,6 +539,97 @@ func TestCanReach(t *testing.T) {
 	f.reply("GET", "/repos/acme/broken/installation", 401, map[string]any{"message": "Bad credentials"})
 	if _, err := as["app"].CanReach(ctx, "acme", "broken"); err == nil {
 		t.Error("CanReach on a GitHub error = nil error")
+	}
+}
+
+// CanReach asks GitHub every time, so reconcile sees the approve App being
+// uninstalled, and drops the remembered installation with it.
+func TestAppCanReachSeesUninstall(t *testing.T) {
+	f := newFake(t)
+	a := approvers(t, f)["app"]
+	f.reply("GET", prPath+"/reviews", 200, reviews())
+	if _, err := a.HasApproved(ctx, repoID, 3, sha('a')); err != nil { // remembers installation 66
+		t.Fatal(err)
+	}
+	if ok, err := a.CanReach(ctx, "acme", "widgets"); err != nil || !ok {
+		t.Fatalf("CanReach(installed) = %v, %v", ok, err)
+	}
+	f.reply("GET", "/repos/acme/widgets/installation", 404, map[string]any{"message": "Not Found"})
+	if ok, err := a.CanReach(ctx, "acme", "widgets"); err != nil || ok {
+		t.Fatalf("CanReach(uninstalled) = %v, %v; want false, nil", ok, err)
+	}
+	if n := len(f.requests("GET", "/repos/acme/widgets/installation")); n != 3 {
+		t.Errorf("installation looked up %d times, want 3 (each CanReach asks)", n)
+	}
+	// The remembered installation is gone: the next call looks it up again
+	// and finds none.
+	if _, err := a.HasApproved(ctx, repoID, 3, sha('a')); err == nil {
+		t.Error("HasApproved after the uninstall = nil error")
+	}
+	if n := len(f.requests("GET", "/repos/acme/widgets/installation")); n != 4 {
+		t.Errorf("installation looked up %d times, want 4", n)
+	}
+	// Reinstalled under another id: CanReach remembers the new one.
+	f.reply("GET", "/repos/acme/widgets/installation", 200, map[string]any{"id": 67})
+	if ok, err := a.CanReach(ctx, "acme", "widgets"); err != nil || !ok {
+		t.Fatalf("CanReach(reinstalled) = %v, %v", ok, err)
+	}
+	if _, err := a.HasApproved(ctx, repoID, 3, sha('a')); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(f.requests("POST", "/app/installations/67/access_tokens")); n != 1 {
+		t.Errorf("new installation's token minted %d times, want 1", n)
+	}
+}
+
+// Only a 404 means the token can't reach the repository; a final 403 (a rate
+// limit GitHub kept answering, say) is an error, so reconcile keeps what it
+// stored.
+func TestTokenCanReach403IsError(t *testing.T) {
+	f := newFake(t)
+	a := approvers(t, f)["token"]
+	f.reply("GET", "/repos/acme/widgets", 403, map[string]any{"message": "Resource not accessible"})
+	if ok, err := a.CanReach(ctx, "acme", "widgets"); err == nil {
+		t.Fatalf("CanReach on 403 = %v, nil; want an error", ok)
+	}
+}
+
+// A cached approve installation whose token can no longer be minted (the App
+// was uninstalled): the call fails and the installation is looked up again
+// next time.
+func TestAppApproverForgetsInstallationOnMintFailure(t *testing.T) {
+	f := newFake(t)
+	a := approvers(t, f)["app"]
+	f.reply("GET", prPath+"/reviews", 200, reviews())
+	f.reply("POST", "/app/installations/66/access_tokens", 404, map[string]any{"message": "Not Found"})
+	if _, err := a.HasApproved(ctx, repoID, 3, sha('a')); err == nil {
+		t.Fatal("HasApproved with an unmintable token = nil error")
+	}
+	_, _ = a.HasApproved(ctx, repoID, 3, sha('a'))
+	if n := len(f.requests("GET", "/repos/acme/widgets/installation")); n != 2 {
+		t.Errorf("installation looked up %d times, want 2 (forgotten after the failed mint)", n)
+	}
+}
+
+// The review installation's token can't be minted (404: the App was
+// uninstalled or reinstalled under another id): that is an error, never
+// "not found", or the sweep would forget a live approval and a missing token
+// would read as a missing file.
+func TestForgeMintFailureIsNotNotFound(t *testing.T) {
+	f := newFake(t)
+	f.reply("POST", "/app/installations/55/access_tokens", 404, map[string]any{"message": "Not Found"})
+	fg := f.forge(t)
+	if _, err := fg.GetChange(ctx, repoID, 3); err == nil || errors.Is(err, forge.ErrNotFound) {
+		t.Errorf("GetChange = %v; want an error that isn't forge.ErrNotFound", err)
+	}
+	if b, ok, err := fg.GetFile(ctx, repoID, ".pergent/instructions.md", sha('5')); err == nil || ok || b != nil {
+		t.Errorf("GetFile = %q, %v, %v; want an error, not a missing file", b, ok, err)
+	}
+	if entries, err := fg.ListTree(ctx, repoID, ".pergent/skills", sha('5')); err == nil {
+		t.Errorf("ListTree = %v, nil; want an error, not a missing directory", entries)
+	}
+	if err := fg.UpdateComment(ctx, repoID, 3, 31, "x"); err == nil || errors.Is(err, forge.ErrNotFound) {
+		t.Errorf("UpdateComment = %v; want an error that isn't forge.ErrNotFound", err)
 	}
 }
 

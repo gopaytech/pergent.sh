@@ -216,7 +216,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	d.secrets = append(d.secrets, token)
 	if plat.isGitHub() {
 		if gitToken, err = d.gitHubCloneToken(ctx, plat, project); err != nil {
-			if errors.Is(err, github.ErrNotFound) {
+			if github.InstallationGone(err) {
 				// The installation is gone since reconcile stored it.
 				return d.fail(ctx, reasonNotInstalled)
 			}

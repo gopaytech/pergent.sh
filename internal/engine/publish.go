@@ -124,8 +124,8 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 
 // approveInputs adds to o what decides whether a clean review is approved:
 // the change being a draft (read from the platform) and, on GitHub, whose
-// approve App can be missing from a repository, the stored project saying
-// so. On GitLab the approve bot is a user that can always approve.
+// approve App or bot can be missing from a repository, the stored project
+// saying so (and which of the two the instance uses). On GitLab the approve bot is a user that can always approve.
 func (e *Engine) approveInputs(ctx context.Context, plat Platform, run store.Run, o policy.Outcome) (policy.Outcome, error) {
 	ch, err := plat.Forge.GetChange(ctx, run.MR.ProjectID, run.MR.IID)
 	if err != nil {
@@ -138,6 +138,9 @@ func (e *Engine) approveInputs(ctx context.Context, plat Platform, run store.Run
 			return o, fmt.Errorf("load project: %w", err)
 		}
 		o.ApproveUnavailable = found && !p.ApproveAvailable
+		if gi, ok := e.Config.GitHubInstance(run.MR.Instance); ok {
+			o.ApproveBot = gi.ApproveTokenEnv != ""
+		}
 	}
 	return o, nil
 }
