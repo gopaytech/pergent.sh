@@ -555,16 +555,22 @@ func TestDashboardSources(t *testing.T) {
 		t.Fatal(err)
 	}
 	gh := githubforge.NewForge(app, ghReviewBot, testRepos("gh"))
+	var logs strings.Builder
 	sources, catalogs := dashboardSources(map[string]engine.Platform{
 		"main":  {Kind: config.PlatformGitLab, Forge: gl},
 		"gh":    {Kind: config.PlatformGitHub, Forge: gh},
 		"other": {Kind: config.PlatformGitLab},
-	})
+	}, slog.New(slog.NewTextHandler(&logs, nil)))
 	if sources["main"] != gl || sources["gh"] != gh || len(sources) != 2 {
 		t.Errorf("sources = %v", sources)
 	}
 	if catalogs["main"] != gl || catalogs["gh"] != gh || len(catalogs) != 2 {
 		t.Errorf("catalogs = %v", catalogs)
+	}
+	// An instance whose Forge can't do either is named, with its platform.
+	out := logs.String()
+	if strings.Count(out, "level=WARN") != 1 || !strings.Contains(out, "instance=other") || !strings.Contains(out, "platform=gitlab") {
+		t.Errorf("startup warnings = %q; want one naming instance other on gitlab", out)
 	}
 }
 

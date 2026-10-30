@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -234,7 +235,7 @@ func newDashboard(cfg *config.Config, st *store.Store, secretKey string, lib inp
 	if !cfg.DashboardEnabled() {
 		return nil, nil
 	}
-	sources, catalogs := dashboardSources(platforms)
+	sources, catalogs := dashboardSources(platforms, log)
 	d, err := dashboard.New(dashboard.Options{
 		Config: cfg, Store: st, SecretKey: secretKey, Log: log, Library: lib,
 		Sources: sources, Catalogs: catalogs, ReconcileSoon: reconcileSoon,
@@ -257,15 +258,24 @@ func dashboardHandler(d *dashboard.Dashboard) http.Handler {
 // repositories (Skills & instructions) and list the repositories the review
 // bot or App can set up (the "add repository" picker). gitlabforge.Forge
 // and githubforge.Forge are both.
-func dashboardSources(platforms map[string]engine.Platform) (map[string]dashboard.RepoSource, map[string]dashboard.RepoCatalog) {
+func dashboardSources(platforms map[string]engine.Platform, log *slog.Logger) (map[string]dashboard.RepoSource, map[string]dashboard.RepoCatalog) {
 	sources := make(map[string]dashboard.RepoSource, len(platforms))
 	catalogs := make(map[string]dashboard.RepoCatalog, len(platforms))
 	for name, p := range platforms {
+		var missing []string
 		if s, ok := p.Forge.(dashboard.RepoSource); ok {
 			sources[name] = s
+		} else {
+			missing = append(missing, "Skills & instructions")
 		}
 		if c, ok := p.Forge.(dashboard.RepoCatalog); ok {
 			catalogs[name] = c
+		} else {
+			missing = append(missing, "the add-repository picker")
+		}
+		if len(missing) > 0 {
+			log.Warn("dashboard: the instance's review side can't serve "+strings.Join(missing, " or ")+"; they answer 502 there",
+				"instance", name, "platform", p.Kind)
 		}
 	}
 	return sources, catalogs
