@@ -47,10 +47,17 @@ func (e *Engine) captureLog(ctx context.Context, run store.Run, log *slog.Logger
 	hide := []string{secrets.GitToken, secrets.LLMKey, secrets.ResultToken, e.LLMKey}
 	// More than is kept is read and hidden in first, so a secret across the
 	// point where the kept tail starts is hidden whole, not left in part.
-	text, err := e.Launcher.Logs(ctx, run.JobName, logKeepBytes+logMargin(hide))
+	read := logKeepBytes + logMargin(hide)
+	text, err := e.Launcher.Logs(ctx, run.JobName, read)
 	if err != nil {
 		log.Info("couldn't read the review job's log", "error", e.redact(err.Error()))
 		return
+	}
+	// A read that may have been cut starts within a line, perhaps within a
+	// secret that no longer matches; hiding the secrets after it can leave
+	// less than is kept, so that line is dropped here, not by keepTail.
+	if len(text) > read-utf8.UTFMax {
+		text = afterFirstLine(text)
 	}
 	text = keepTail(store.CleanText(redactAll(text, hide...)), logKeepBytes)
 	if err := e.Store.PutRunLog(ctx, run.ID, text); err != nil {
@@ -162,6 +169,14 @@ func keepTail(text string, keep int) string {
 		tail = tail[1:]
 	}
 	return tail
+}
+
+// afterFirstLine returns text after its first line break; with none, nothing.
+func afterFirstLine(text string) string {
+	if i := strings.IndexByte(text, '\n'); i >= 0 {
+		return text[i+1:]
+	}
+	return ""
 }
 
 // redactAll replaces every non-empty secret in text with [REDACTED], longest

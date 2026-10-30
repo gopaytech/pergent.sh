@@ -176,6 +176,40 @@ func TestRunLogSecretAcrossCut(t *testing.T) {
 	}
 }
 
+// A secret across the start of what is read is hidden too, even when hiding
+// the many secrets after it leaves less than is kept: the read starts within
+// a line, and that partial line is never stored.
+func TestRunLogSecretAcrossReadStart(t *testing.T) {
+	env := newTestEnv(t)
+	now := env.Now()
+	key := "sk-model-key-" + strings.Repeat("k", 80) + "-KEYSUFFIX"
+	read := logKeepBytes + logMargin([]string{key})
+	// Many more copies of the key shrink the read by far more than the
+	// margin.
+	var body strings.Builder
+	for body.Len() < read-len("-KEYSUFFIX")-200 {
+		body.WriteString("calling the model with " + key + "\n")
+	}
+	body.WriteString(strings.Repeat("z", read-len("-KEYSUFFIX")-body.Len()-1) + "\n")
+	serveLog(env, strings.Repeat("early line\n", 1000)+"using "+key+"\n"+body.String())
+
+	id := env.Report(1, sha('1'), []byte(`{"status":"completed"}`))
+	putJob(t, env, id, now.Add(-time.Minute), nil, nil, jobCond(batchv1.JobComplete, "", now.Add(-time.Second)))
+	putJobSecret(t, env, id, kube.Secrets{GitToken: "clone-token-abc", LLMKey: key, ResultToken: "result-token-abc"})
+
+	watch(t, env)
+	text, found := storedLog(t, env, id)
+	if !found {
+		t.Fatal("no log stored")
+	}
+	if strings.Contains(text, "KEYSUFFIX") {
+		t.Errorf("the stored log keeps the end of the key: %q", text[:min(len(text), 80)])
+	}
+	if !strings.HasPrefix(text, "calling the model with [REDACTED]\n") {
+		t.Errorf("stored log starts %q; want the first whole line", text[:min(len(text), 40)])
+	}
+}
+
 // A tail without a line break after the cut is kept as cut, on a character
 // boundary.
 func TestRunLogCutWithoutLineBreak(t *testing.T) {
