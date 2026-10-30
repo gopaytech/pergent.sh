@@ -82,7 +82,10 @@ jobs:
           helm lint charts/pergent-sh
           helm lint charts/pergent-sh -f charts/pergent-sh/ci-values.yaml
       - name: Template
-        run: helm template t charts/pergent-sh --namespace pergent-sh -f charts/pergent-sh/ci-values.yaml
+        run: |
+          helm template t charts/pergent-sh --namespace pergent-sh -f charts/pergent-sh/ci-values.yaml
+          helm template t charts/pergent-sh --namespace pergent-sh -f charts/pergent-sh/ci-values.yaml \
+            --set dashboardIngress.enabled=true --set config.dashboard.url=https://pergent-dashboard.example.com
 
   # Publishes the newest main build as ghcr.io/gopaytech/pergent.sh:main and
   # :sha-<short sha>. Not on pull requests. `latest` stays the release tag

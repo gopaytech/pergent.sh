@@ -1,0 +1,43 @@
+{{- if .Values.dashboardIngress.enabled }}
+{{- if not (and .Values.config.dashboard .Values.config.dashboard.url) }}
+{{- fail "dashboardIngress.enabled needs config.dashboard.url: the dashboard is off without it" }}
+{{- end }}
+{{- $host := (urlParse .Values.config.dashboard.url).host }}
+{{- if not (has $host .Values.dashboardIngress.hosts) }}
+{{- fail (printf "dashboardIngress.hosts must include %s, the host of config.dashboard.url" $host) }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "pergent-sh.fullname" . }}-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pergent-sh.labels" . | nindent 4 }}
+  {{- with .Values.dashboardIngress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.dashboardIngress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.dashboardIngress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.dashboardIngress.hosts }}
+    - host: {{ . | quote }}
+      http:
+        paths:
+          {{- range list "/" "/api/" "/auth/" }}
+          - path: {{ . }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pergent-sh.fullname" $ }}
+                port:
+                  name: http
+          {{- end }}
+    {{- end }}
+{{- end }}

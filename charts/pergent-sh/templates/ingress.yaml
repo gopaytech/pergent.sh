@@ -1,4 +1,9 @@
 {{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.paths }}
+{{- if or (eq (trimSuffix "/" .) "") (hasPrefix "/api" .) (hasPrefix "/auth" .) }}
+{{- fail (printf "ingress.paths must not expose %s: the dashboard (/, /api/, /auth/) goes on dashboardIngress" .) }}
+{{- end }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
