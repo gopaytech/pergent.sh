@@ -239,13 +239,13 @@ func TestRunsToLog(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	// Reported just now, but queued more than a day before: past the
+	// Reported just now, but queued more than a week before: past the
 	// lookback that keeps the query on recent rows.
 	ancient := mk(14, "a", func(id string) {
 		if out, err := s.StoreResult(ctx, id, "tok", []byte(`{}`), now); err != nil || out != ResultStored {
 			t.Fatalf("StoreResult = %v, %v", out, err)
 		}
-		if _, err := s.pool.Exec(ctx, `UPDATE runs SET created_at = $2 WHERE id = $1::uuid`, id, now.Add(-30*time.Hour)); err != nil {
+		if _, err := s.pool.Exec(ctx, `UPDATE runs SET created_at = $2 WHERE id = $1::uuid`, id, now.Add(-8*24*time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 	})

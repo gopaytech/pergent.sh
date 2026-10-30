@@ -204,8 +204,9 @@ func (s *Store) PruneRunLogs(ctx context.Context, before time.Time) (int, error)
 // been created: the query then reads only recent rows of the (state,
 // created_at) index, not every published run. A run's Job starts after it
 // waits in the queue and runs for at most its timeout (the dashboard allows
-// 2 h), so a day covers any run whose log is still there to take.
-const runLogLookback = 24 * time.Hour
+// 2 h, the config file sets no limit), so a week covers any run whose log is
+// still there to take.
+const runLogLookback = 7 * 24 * time.Hour
 
 // RunsToLog returns the runs that have a result or a failure reported since
 // the given time and a Job, but no stored log, oldest first. Runs created
