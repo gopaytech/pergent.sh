@@ -575,3 +575,130 @@ func TestLoadRejectsBadRepositorySettings(t *testing.T) {
 		})
 	}
 }
+
+// dashboardYAML adds a dashboard with admins on both platforms to
+// github.yaml, and OAuth env names to main and gh.
+func dashboardYAML(t *testing.T) string {
+	t.Helper()
+	base, err := os.ReadFile("testdata/github.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Replace(string(base), "    webhook_secret_env: GITLAB_WEBHOOK_SECRET\n",
+		"    webhook_secret_env: GITLAB_WEBHOOK_SECRET\n    oauth_client_id_env: GITLAB_OAUTH_ID\n    oauth_client_secret_env: GITLAB_OAUTH_SECRET\n", 1)
+	body = strings.Replace(body, "    webhook_secret_env: GITHUB_WEBHOOK_SECRET\n",
+		"    webhook_secret_env: GITHUB_WEBHOOK_SECRET\n    oauth_client_id_env: GITHUB_OAUTH_ID\n    oauth_client_secret_env: GITHUB_OAUTH_SECRET\n", 1)
+	body += `
+dashboard:
+  url: https://pergent.example.com
+  admins:
+    - instance: main
+      group: acme/platform
+    - instance: gh
+      team: acme/platform
+`
+	return body
+}
+
+func TestLoadDashboard(t *testing.T) {
+	cfg, err := Load(writeConfig(t, dashboardYAML(t)))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.DashboardEnabled() || cfg.Dashboard.URL != "https://pergent.example.com" {
+		t.Errorf("Dashboard = %+v", cfg.Dashboard)
+	}
+	want := []DashboardAdmin{{Instance: "main", Group: "acme/platform"}, {Instance: "gh", Team: "acme/platform"}}
+	if len(cfg.Dashboard.Admins) != 2 || cfg.Dashboard.Admins[0] != want[0] || cfg.Dashboard.Admins[1] != want[1] {
+		t.Errorf("Admins = %+v, want %+v", cfg.Dashboard.Admins, want)
+	}
+	if inst, _ := cfg.Instance("main"); inst.OAuthClientIDEnv != "GITLAB_OAUTH_ID" || inst.OAuthClientSecretEnv != "GITLAB_OAUTH_SECRET" {
+		t.Errorf("gitlab OAuth envs = %+v", inst)
+	}
+	if gh, _ := cfg.GitHubInstance("gh"); gh.OAuthClientIDEnv != "GITHUB_OAUTH_ID" || gh.OAuthClientSecretEnv != "GITHUB_OAUTH_SECRET" {
+		t.Errorf("github OAuth envs = %+v", gh)
+	}
+
+	// Without a dashboard section the dashboard is off.
+	if loadGitHub(t).DashboardEnabled() {
+		t.Error("DashboardEnabled() without dashboard.url")
+	}
+}
+
+func TestValidateRejectsDashboard(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(c *Config)
+		wantErr string
+	}{
+		{"http url", func(c *Config) { c.Dashboard.URL = "http://pergent.example.com" }, "dashboard.url"},
+		{"url with trailing slash", func(c *Config) { c.Dashboard.URL = "https://pergent.example.com/" }, "trailing slash"},
+		{"url not a url", func(c *Config) { c.Dashboard.URL = "pergent.example.com" }, "dashboard.url"},
+		{"admins without url", func(c *Config) { c.Dashboard.URL = "" }, "dashboard.admins needs dashboard.url"},
+		{"admin of unknown instance", func(c *Config) { c.Dashboard.Admins[0].Instance = "nope" }, "unknown instance"},
+		{"gitlab admin without group", func(c *Config) { c.Dashboard.Admins[0].Group = "" }, "group is required"},
+		{"gitlab admin with team", func(c *Config) { c.Dashboard.Admins[0].Team = "acme/platform" }, "team is for github"},
+		{"github admin without team", func(c *Config) { c.Dashboard.Admins[1].Team = "" }, "org/slug"},
+		{"github admin team without slug", func(c *Config) { c.Dashboard.Admins[1].Team = "acme" }, "org/slug"},
+		{"github admin with group", func(c *Config) { c.Dashboard.Admins[1].Group = "acme" }, "group is for gitlab"},
+		{"gitlab oauth id without secret", func(c *Config) { c.GitLab[0].OAuthClientSecretEnv = "" }, "oauth_client_secret_env"},
+		{"gitlab oauth secret without id", func(c *Config) { c.GitLab[0].OAuthClientIDEnv = "" }, "oauth_client_id_env"},
+		{"github oauth id without secret", func(c *Config) { c.GitHub[0].OAuthClientSecretEnv = "" }, "oauth_client_secret_env"},
+		{"admin of an instance without sign-in", func(c *Config) {
+			c.GitHub[0].OAuthClientIDEnv, c.GitHub[0].OAuthClientSecretEnv = "", ""
+		}, "has no sign-in"},
+		{"no instance has sign-in", func(c *Config) {
+			c.Dashboard.Admins = nil
+			c.GitLab[0].OAuthClientIDEnv, c.GitLab[0].OAuthClientSecretEnv = "", ""
+			c.GitHub[0].OAuthClientIDEnv, c.GitHub[0].OAuthClientSecretEnv = "", ""
+		}, "no instance has oauth_client_id_env"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, dashboardYAML(t)))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			tt.mutate(cfg)
+			err = cfg.Validate()
+			if err == nil {
+				t.Fatalf("Validate() = nil, want error containing %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Validate() = %q, want it to contain %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsUnknownDashboardKey(t *testing.T) {
+	body := dashboardYAML(t) + "  next: /admin\n"
+	if _, err := Load(writeConfig(t, body)); err == nil || !strings.Contains(err.Error(), "next") {
+		t.Fatalf("Load() = %v, want an unknown key error", err)
+	}
+}
+
+func TestOAuthClient(t *testing.T) {
+	const secretValue = "oauth-secret-value"
+	gl := Instance{Name: "main", OAuthClientIDEnv: "PERGENT_TEST_OAUTH_ID", OAuthClientSecretEnv: "PERGENT_TEST_OAUTH_SECRET"}
+	gh := GitHubInstance{Name: "gh", OAuthClientIDEnv: "PERGENT_TEST_OAUTH_ID", OAuthClientSecretEnv: "PERGENT_TEST_OAUTH_SECRET"}
+	t.Setenv("PERGENT_TEST_OAUTH_ID", "client-id")
+	t.Setenv("PERGENT_TEST_OAUTH_SECRET", secretValue)
+	for name, read := range map[string]func() (string, string, error){"gitlab": gl.OAuthClient, "github": gh.OAuthClient} {
+		id, secret, err := read()
+		if err != nil || id != "client-id" || secret != secretValue {
+			t.Errorf("%s OAuthClient() = %q %q %v", name, id, secret, err)
+		}
+	}
+
+	t.Setenv("PERGENT_TEST_OAUTH_ID", "")
+	for name, read := range map[string]func() (string, string, error){"gitlab": gl.OAuthClient, "github": gh.OAuthClient} {
+		_, _, err := read()
+		if err == nil || !strings.Contains(err.Error(), "PERGENT_TEST_OAUTH_ID") || strings.Contains(err.Error(), secretValue) {
+			t.Errorf("%s OAuthClient() with the id unset = %v", name, err)
+		}
+	}
+	if (Instance{Name: "main"}).HasOAuth() || !gl.HasOAuth() || (GitHubInstance{}).HasOAuth() || !gh.HasOAuth() {
+		t.Error("HasOAuth is wrong")
+	}
+}

@@ -56,7 +56,29 @@ type Config struct {
 	Repositories []Repository     `yaml:"repositories"`
 	LLM          LLM              `yaml:"llm"`
 	Jobs         Jobs             `yaml:"jobs"`
+	Dashboard    Dashboard        `yaml:"dashboard"`
 }
+
+// Dashboard is the web dashboard. It is enabled when URL is set.
+type Dashboard struct {
+	// URL is the https address the dashboard is served at; the OAuth
+	// callbacks are under it.
+	URL string `yaml:"url"`
+	// Admins are the groups (GitLab) and teams (GitHub) whose members are
+	// admins on that instance.
+	Admins []DashboardAdmin `yaml:"admins"`
+}
+
+// DashboardAdmin names who is an admin on one instance: the members of
+// Group on a GitLab instance, or of Team ("org/slug") on a GitHub one.
+type DashboardAdmin struct {
+	Instance string `yaml:"instance"`
+	Group    string `yaml:"group"`
+	Team     string `yaml:"team"`
+}
+
+// DashboardEnabled reports whether the dashboard is on: dashboard.url is set.
+func (c *Config) DashboardEnabled() bool { return c.Dashboard.URL != "" }
 
 // Instance is one GitLab server and the env vars holding its secrets.
 type Instance struct {
@@ -65,6 +87,11 @@ type Instance struct {
 	ReviewTokenEnv   string `yaml:"review_token_env"`
 	ApproveTokenEnv  string `yaml:"approve_token_env"`
 	WebhookSecretEnv string `yaml:"webhook_secret_env"`
+	// OAuthClientIDEnv and OAuthClientSecretEnv name the env vars holding
+	// the OAuth application used to sign in to the dashboard. Both or
+	// neither are set; neither means no sign-in with this instance.
+	OAuthClientIDEnv     string `yaml:"oauth_client_id_env"`
+	OAuthClientSecretEnv string `yaml:"oauth_client_secret_env"`
 }
 
 // GitHubInstance is one pair of GitHub Apps (and the webhook that feeds the
@@ -82,6 +109,11 @@ type GitHubInstance struct {
 	ApproveApp       *App   `yaml:"approve_app"`
 	ApproveTokenEnv  string `yaml:"approve_token_env"`
 	WebhookSecretEnv string `yaml:"webhook_secret_env"`
+	// OAuthClientIDEnv and OAuthClientSecretEnv name the env vars holding
+	// the review App's client ID and secret, used to sign in to the
+	// dashboard. Both or neither are set.
+	OAuthClientIDEnv     string `yaml:"oauth_client_id_env"`
+	OAuthClientSecretEnv string `yaml:"oauth_client_secret_env"`
 }
 
 // App is a GitHub App: its numeric ID and the env var holding its PEM
@@ -144,6 +176,7 @@ type fileConfig struct {
 	Repositories []fileRepository `yaml:"repositories"`
 	LLM          LLM              `yaml:"llm"`
 	Jobs         fileJobs         `yaml:"jobs"`
+	Dashboard    Dashboard        `yaml:"dashboard"`
 }
 
 type fileRepository struct {
@@ -267,6 +300,7 @@ func Load(path string) (*Config, error) {
 		GitHub:       raw.GitHub,
 		Repositories: make([]Repository, 0, len(raw.Repositories)),
 		LLM:          raw.LLM,
+		Dashboard:    raw.Dashboard,
 		Jobs: Jobs{
 			Namespace:   raw.Jobs.Namespace,
 			Image:       raw.Jobs.Image,
@@ -443,6 +477,8 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	errs = append(errs, c.checkDashboard()...)
+
 	if c.LLM.Provider == "" {
 		add("llm.provider is required")
 	}
@@ -515,6 +551,76 @@ func checkGitHubInstance(i int, inst GitHubInstance) []error {
 
 	if inst.WebhookSecretEnv == "" {
 		add("%s: webhook_secret_env is required", prefix)
+	}
+	return errs
+}
+
+// checkDashboard returns every problem with dashboard: and the instances'
+// OAuth env names.
+func (c *Config) checkDashboard() []error {
+	var errs []error
+	add := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
+
+	// Both OAuth env names or neither, on every instance.
+	signIn := map[string]bool{}
+	oauth := func(prefix, name, idEnv, secretEnv string) {
+		switch {
+		case idEnv != "" && secretEnv == "":
+			add("%s (%s): oauth_client_secret_env is required with oauth_client_id_env", prefix, name)
+		case idEnv == "" && secretEnv != "":
+			add("%s (%s): oauth_client_id_env is required with oauth_client_secret_env", prefix, name)
+		case idEnv != "":
+			signIn[name] = true
+		}
+	}
+	for i, inst := range c.GitLab {
+		oauth(fmt.Sprintf("gitlab[%d]", i), inst.Name, inst.OAuthClientIDEnv, inst.OAuthClientSecretEnv)
+	}
+	for i, inst := range c.GitHub {
+		oauth(fmt.Sprintf("github[%d]", i), inst.Name, inst.OAuthClientIDEnv, inst.OAuthClientSecretEnv)
+	}
+
+	d := c.Dashboard
+	if d.URL == "" {
+		if len(d.Admins) > 0 {
+			add("dashboard.admins needs dashboard.url: the dashboard is off without it")
+		}
+		return errs
+	}
+	if err := checkURL("dashboard.url", d.URL, true); err != nil {
+		errs = append(errs, err)
+	} else if u, _ := url.Parse(d.URL); u.User != nil {
+		add("dashboard.url must not contain credentials")
+	}
+	if len(signIn) == 0 {
+		add("dashboard.url is set but no instance has oauth_client_id_env and oauth_client_secret_env: nobody could sign in")
+	}
+	for i, a := range d.Admins {
+		prefix := fmt.Sprintf("dashboard.admins[%d]", i)
+		platform, ok := c.Platform(a.Instance)
+		if !ok {
+			add("%s: unknown instance %q", prefix, a.Instance)
+			continue
+		}
+		if !signIn[a.Instance] {
+			add("%s: instance %q has no sign-in (oauth_client_id_env and oauth_client_secret_env)", prefix, a.Instance)
+		}
+		switch platform {
+		case PlatformGitLab:
+			if a.Group == "" {
+				add("%s (%s): group is required for a gitlab instance", prefix, a.Instance)
+			}
+			if a.Team != "" {
+				add("%s (%s): team is for github instances; use group", prefix, a.Instance)
+			}
+		case PlatformGitHub:
+			if !isOwnerName(a.Team) {
+				add("%s (%s): team %q must be org/slug", prefix, a.Instance, a.Team)
+			}
+			if a.Group != "" {
+				add("%s (%s): group is for gitlab instances; use team", prefix, a.Instance)
+			}
+		}
 	}
 	return errs
 }
@@ -659,6 +765,50 @@ func (i Instance) Secrets() (review, approve, webhook string, err error) {
 		return "", "", "", err
 	}
 	return review, approve, webhook, nil
+}
+
+// HasOAuth reports whether the instance is set up for dashboard sign-in.
+func (i Instance) HasOAuth() bool { return i.OAuthClientIDEnv != "" && i.OAuthClientSecretEnv != "" }
+
+// OAuthClient reads the instance's OAuth application ID and secret from the
+// environment. An unset or empty variable is an error that names it, never
+// a value.
+func (i Instance) OAuthClient() (id, secret string, err error) {
+	return readOAuthClient("gitlab", i.Name, i.OAuthClientIDEnv, i.OAuthClientSecretEnv)
+}
+
+// HasOAuth reports whether the instance is set up for dashboard sign-in.
+func (g GitHubInstance) HasOAuth() bool {
+	return g.OAuthClientIDEnv != "" && g.OAuthClientSecretEnv != ""
+}
+
+// OAuthClient reads the review App's client ID and secret from the
+// environment. An unset or empty variable is an error that names it, never
+// a value.
+func (g GitHubInstance) OAuthClient() (id, secret string, err error) {
+	return readOAuthClient("github", g.Name, g.OAuthClientIDEnv, g.OAuthClientSecretEnv)
+}
+
+func readOAuthClient(platform, name, idEnv, secretEnv string) (string, string, error) {
+	read := func(env string) (string, error) {
+		if env == "" {
+			return "", fmt.Errorf("%s instance %q: oauth env var name is empty", platform, name)
+		}
+		v := os.Getenv(env)
+		if v == "" {
+			return "", fmt.Errorf("%s instance %q: env var %s is not set or empty", platform, name, env)
+		}
+		return v, nil
+	}
+	id, err := read(idEnv)
+	if err != nil {
+		return "", "", err
+	}
+	secret, err := read(secretEnv)
+	if err != nil {
+		return "", "", err
+	}
+	return id, secret, nil
 }
 
 // Secrets reads the instance's review App private key, approver secret (the
