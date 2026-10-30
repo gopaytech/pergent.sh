@@ -5,7 +5,9 @@
 //
 // It needs DATABASE_URL and PERGENT_SH_SECRET_KEY in the environment, plus the
 // LLM key, the GitLab tokens, the GitHub App private keys (or approve token)
-// and the webhook secrets the config file names.
+// and the webhook secrets the config file names. With dashboard.url set it
+// also serves the dashboard, and needs the OAuth client ID and secret of
+// every instance the config sets up for sign-in.
 package main
 
 import (
@@ -20,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -28,6 +31,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/dashboard"
 	"github.com/gopaytech/pergent.sh/internal/engine"
 	"github.com/gopaytech/pergent.sh/internal/forge/githubforge"
 	"github.com/gopaytech/pergent.sh/internal/forge/gitlabforge"
@@ -43,6 +47,9 @@ import (
 const (
 	defaultConfigPath = "/etc/pergent-sh/config.yaml"
 	shutdownTimeout   = 20 * time.Second
+	// sessionPruneEvery is how often the dashboard's expired sessions are
+	// deleted.
+	sessionPruneEvery = time.Hour
 	usage             = "usage: pergent-sh serve [--config <path>]"
 )
 
@@ -95,6 +102,9 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		return fmt.Errorf("skill library %s: %w", cfg.SkillsDir, err)
 	}
 	if err := checkSkills(cfg, lib); err != nil {
+		return err
+	}
+	if err := checkDashboardEnv(cfg); err != nil {
 		return err
 	}
 
@@ -161,18 +171,145 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		LLMKey:         llmKey,
 		Log:            log,
 	}
+	dash, err := newDashboard(cfg, st, key, lib, platforms, eng.ReconcileSoon, log)
+	if err != nil {
+		return err
+	}
 	handler := server.Routes(server.Deps{
 		Config: cfg, WebhookSecrets: hookSecrets, GitHubWebhookSecrets: githubSecrets,
-		Store: st, Wake: eng.Wake, Log: log,
+		Store: st, Wake: eng.Wake, Dashboard: dashboardHandler(dash), Log: log,
 	})
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", cfg.Listen, err)
 	}
-	log.Info("pergent-sh serving", "listen", cfg.Listen, "repositories", len(cfg.Repositories))
+	log.Info("pergent-sh serving", "listen", cfg.Listen, "repositories", len(cfg.Repositories),
+		"dashboard", cfg.DashboardEnabled())
 	// Engine.Run reconciles first, in its own goroutine, so a slow GitLab
 	// at startup never keeps the routes down.
-	return serveUntilDone(ctx, ln, handler, eng.Run, log)
+	loops := []func(context.Context){eng.Run}
+	if dash != nil {
+		prune := pruneSessions(dash.Auth.PruneSessions, time.Now, log)
+		loops = append(loops, func(ctx context.Context) { every(ctx, sessionPruneEvery, prune) })
+	}
+	return serveUntilDone(ctx, ln, handler, together(loops...), log)
+}
+
+// checkDashboardEnv makes sure, when the dashboard is on, that every
+// instance set up for sign-in has its OAuth client ID and secret in the
+// environment. The error names the instance and the variable, never a
+// value. With the dashboard off nothing is read.
+func checkDashboardEnv(cfg *config.Config) error {
+	if !cfg.DashboardEnabled() {
+		return nil
+	}
+	var errs []error
+	for _, inst := range cfg.GitLab {
+		if inst.HasOAuth() {
+			if _, _, err := inst.OAuthClient(); err != nil {
+				errs = append(errs, fmt.Errorf("dashboard sign-in: %w", err))
+			}
+		}
+	}
+	for _, inst := range cfg.GitHub {
+		if inst.HasOAuth() {
+			if _, _, err := inst.OAuthClient(); err != nil {
+				errs = append(errs, fmt.Errorf("dashboard sign-in: %w", err))
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// newDashboard builds the dashboard when dashboard.url is set, and returns
+// nil, nil when it isn't. Its Skills & instructions view and "add
+// repository" picker use each instance's review bot or review App (the
+// platform's Forge); switching a repository on or off asks the engine for
+// a reconcile (reconcileSoon). It warns when no admins are configured.
+func newDashboard(cfg *config.Config, st *store.Store, secretKey string, lib inputs.Library,
+	platforms map[string]engine.Platform, reconcileSoon func(), log *slog.Logger) (*dashboard.Dashboard, error) {
+	if !cfg.DashboardEnabled() {
+		return nil, nil
+	}
+	sources, catalogs := dashboardSources(platforms)
+	d, err := dashboard.New(dashboard.Options{
+		Config: cfg, Store: st, SecretKey: secretKey, Log: log, Library: lib,
+		Sources: sources, Catalogs: catalogs, ReconcileSoon: reconcileSoon,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
+// dashboardHandler is d's routes, or nil (no dashboard) when d is nil.
+func dashboardHandler(d *dashboard.Dashboard) http.Handler {
+	if d == nil {
+		return nil
+	}
+	return d.Handler()
+}
+
+// dashboardSources returns, by instance, the platforms' Forges that read
+// repositories (Skills & instructions) and list the repositories the review
+// bot or App can set up (the "add repository" picker). gitlabforge.Forge
+// and githubforge.Forge are both.
+func dashboardSources(platforms map[string]engine.Platform) (map[string]dashboard.RepoSource, map[string]dashboard.RepoCatalog) {
+	sources := make(map[string]dashboard.RepoSource, len(platforms))
+	catalogs := make(map[string]dashboard.RepoCatalog, len(platforms))
+	for name, p := range platforms {
+		if s, ok := p.Forge.(dashboard.RepoSource); ok {
+			sources[name] = s
+		}
+		if c, ok := p.Forge.(dashboard.RepoCatalog); ok {
+			catalogs[name] = c
+		}
+	}
+	return sources, catalogs
+}
+
+// pruneSessions returns a pass that deletes the dashboard sessions that can
+// no longer be used (prune is dashboard.Auth.PruneSessions). It only
+// touches the database; a failure is logged and tried again next time.
+func pruneSessions(prune func(context.Context, time.Time) (int, error), now func() time.Time, log *slog.Logger) func(context.Context) {
+	return func(ctx context.Context) {
+		n, err := prune(ctx, now())
+		switch {
+		case err != nil && ctx.Err() == nil:
+			log.Warn("couldn't prune dashboard sessions", "error", err.Error())
+		case n > 0:
+			log.Info("pruned dashboard sessions", "sessions", n)
+		}
+	}
+}
+
+// every runs f at once and then every interval, until ctx is done.
+func every(ctx context.Context, interval time.Duration, f func(context.Context)) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		f(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// together runs loops side by side and returns when all have returned.
+func together(loops ...func(context.Context)) func(context.Context) {
+	return func(ctx context.Context) {
+		var wg sync.WaitGroup
+		for _, loop := range loops {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				loop(ctx)
+			}()
+		}
+		wg.Wait()
+	}
 }
 
 // serveUntilDone serves handler on ln and runs loops next to it until ctx is

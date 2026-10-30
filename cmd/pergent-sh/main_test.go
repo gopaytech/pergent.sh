@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -21,6 +22,9 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/engine"
 	"github.com/gopaytech/pergent.sh/internal/forge/githubforge"
+	"github.com/gopaytech/pergent.sh/internal/forge/gitlabforge"
+	"github.com/gopaytech/pergent.sh/internal/github"
+	"github.com/gopaytech/pergent.sh/internal/gitlab"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/server"
 )
@@ -406,5 +410,237 @@ func TestConnectGitLabSameUserRefused(t *testing.T) {
 		if strings.Contains(err.Error(), secret) {
 			t.Errorf("error carries a token: %q", err)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard wiring
+
+// dashboardConfig is a config with GitLab instance main and GitHub instance
+// gh, both set up for sign-in through the env vars named, and the dashboard
+// on unless url is "".
+func dashboardConfig(url string, admins ...config.DashboardAdmin) *config.Config {
+	return &config.Config{
+		GitLab: []config.Instance{{Name: "main", URL: "https://gitlab.example.com",
+			OAuthClientIDEnv: "GL_OAUTH_ID", OAuthClientSecretEnv: "GL_OAUTH_SECRET"}},
+		GitHub: []config.GitHubInstance{{Name: "gh", APIURL: "https://api.github.com",
+			OAuthClientIDEnv: "GH_OAUTH_ID", OAuthClientSecretEnv: "GH_OAUTH_SECRET"}},
+		Dashboard: config.Dashboard{URL: url, Admins: admins},
+	}
+}
+
+func setOAuthEnv(t *testing.T) {
+	t.Setenv("GL_OAUTH_ID", "gl-oauth-id-example")
+	t.Setenv("GL_OAUTH_SECRET", "gl-oauth-secret-example")
+	t.Setenv("GH_OAUTH_ID", "gh-oauth-id-example")
+	t.Setenv("GH_OAUTH_SECRET", "gh-oauth-secret-example")
+}
+
+// With the dashboard on, an instance used for sign-in whose OAuth env var is
+// unset stops pergent.sh before it connects to anything, naming the
+// instance and the variable, never a value. With it off, nothing is needed.
+func TestCheckDashboardEnv(t *testing.T) {
+	setOAuthEnv(t)
+	if err := checkDashboardEnv(dashboardConfig("https://dashboard.example.com")); err != nil {
+		t.Fatalf("checkDashboardEnv with every variable set = %v", err)
+	}
+	for _, tc := range []struct{ unset, instance string }{
+		{"GL_OAUTH_ID", `gitlab instance "main"`},
+		{"GL_OAUTH_SECRET", `gitlab instance "main"`},
+		{"GH_OAUTH_ID", `github instance "gh"`},
+		{"GH_OAUTH_SECRET", `github instance "gh"`},
+	} {
+		t.Run(tc.unset, func(t *testing.T) {
+			setOAuthEnv(t)
+			t.Setenv(tc.unset, "")
+			err := checkDashboardEnv(dashboardConfig("https://dashboard.example.com"))
+			if err == nil {
+				t.Fatal("checkDashboardEnv succeeded")
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, tc.instance) || !strings.Contains(msg, tc.unset) || !strings.Contains(msg, "dashboard") {
+				t.Errorf("error = %q; want it to name the dashboard, %s and %s", msg, tc.instance, tc.unset)
+			}
+			if strings.Contains(msg, "-example") {
+				t.Errorf("error %q holds a value", msg)
+			}
+		})
+	}
+	t.Run("dashboard off", func(t *testing.T) {
+		for _, name := range []string{"GL_OAUTH_ID", "GL_OAUTH_SECRET", "GH_OAUTH_ID", "GH_OAUTH_SECRET"} {
+			t.Setenv(name, "")
+		}
+		if err := checkDashboardEnv(dashboardConfig("")); err != nil {
+			t.Errorf("checkDashboardEnv with the dashboard off = %v", err)
+		}
+	})
+}
+
+// testSecretKey is a fixed 32-byte PERGENT_SH_SECRET_KEY, standard base64.
+const testSecretKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+
+// get serves GET path on h and returns the status and body.
+func get(t *testing.T, h http.Handler, path string) (int, string) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	return rec.Code, rec.Body.String()
+}
+
+// With dashboard.url set the routes serve the sign-in instances, the API
+// and the app; without it there is no dashboard and none of them exist.
+func TestNewDashboardRoutes(t *testing.T) {
+	setOAuthEnv(t)
+	var logs strings.Builder
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	cfg := dashboardConfig("https://dashboard.example.com", config.DashboardAdmin{Instance: "main", Group: "acme/platform"})
+	d, err := newDashboard(cfg, nil, testSecretKey, inputs.Library{}, nil, func() {}, log)
+	if err != nil || d == nil {
+		t.Fatalf("newDashboard = %v, %v", d, err)
+	}
+	h := server.Routes(server.Deps{Config: cfg, Dashboard: dashboardHandler(d), Log: log})
+	code, body := get(t, h, "/api/instances")
+	if code != http.StatusOK || !strings.Contains(body, `"instance":"main"`) || !strings.Contains(body, `"instance":"gh"`) {
+		t.Errorf("GET /api/instances = %d %s; want both instances", code, body)
+	}
+	if strings.Contains(body, "example") {
+		t.Errorf("GET /api/instances holds a value from the environment: %s", body)
+	}
+	if code, _ := get(t, h, "/api/me"); code != http.StatusUnauthorized {
+		t.Errorf("GET /api/me without a session = %d, want 401", code)
+	}
+	if code, _ := get(t, h, "/"); code != http.StatusOK {
+		t.Errorf("GET / = %d, want the app", code)
+	}
+	if strings.Contains(logs.String(), "no admins") {
+		t.Errorf("warned about admins although one is configured:\n%s", logs.String())
+	}
+
+	off := dashboardConfig("")
+	d, err = newDashboard(off, nil, testSecretKey, inputs.Library{}, nil, func() {}, log)
+	if err != nil || d != nil {
+		t.Fatalf("newDashboard with the dashboard off = %v, %v; want nil, nil", d, err)
+	}
+	h = server.Routes(server.Deps{Config: off, Dashboard: dashboardHandler(d), Log: log})
+	for _, path := range []string{"/", "/api/instances", "/auth/gitlab/main/login"} {
+		if code, _ := get(t, h, path); code != http.StatusNotFound {
+			t.Errorf("GET %s with the dashboard off = %d, want 404", path, code)
+		}
+	}
+}
+
+// No admins configured: the dashboard starts, and says nobody gets the
+// Admin menu.
+func TestNewDashboardWarnsWithoutAdmins(t *testing.T) {
+	setOAuthEnv(t)
+	var logs strings.Builder
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	d, err := newDashboard(dashboardConfig("https://dashboard.example.com"), nil, testSecretKey, inputs.Library{}, nil, func() {}, log)
+	if err != nil || d == nil {
+		t.Fatalf("newDashboard = %v, %v", d, err)
+	}
+	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "no admins") {
+		t.Errorf("no warning about admins:\n%s", logs.String())
+	}
+}
+
+// The review bot's or App's Forge of every instance reads repositories for
+// Skills & instructions and lists what can be switched on; a platform
+// without such a Forge is left out.
+func TestDashboardSources(t *testing.T) {
+	gl := gitlabforge.NewForge(gitlab.New("https://gitlab.example.com", "glpat-review-example", nil), gitlab.User{ID: 1})
+	app, err := github.NewApp("https://api.github.com", ghReviewAppID, testPEM(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gh := githubforge.NewForge(app, ghReviewBot, testRepos("gh"))
+	sources, catalogs := dashboardSources(map[string]engine.Platform{
+		"main":  {Kind: config.PlatformGitLab, Forge: gl},
+		"gh":    {Kind: config.PlatformGitHub, Forge: gh},
+		"other": {Kind: config.PlatformGitLab},
+	})
+	if sources["main"] != gl || sources["gh"] != gh || len(sources) != 2 {
+		t.Errorf("sources = %v", sources)
+	}
+	if catalogs["main"] != gl || catalogs["gh"] != gh || len(catalogs) != 2 {
+		t.Errorf("catalogs = %v", catalogs)
+	}
+}
+
+// every runs f at once and then every interval until ctx is done.
+func TestEvery(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := make(chan struct{}, 10)
+	done := make(chan struct{})
+	go func() {
+		every(ctx, 10*time.Millisecond, func(context.Context) { calls <- struct{}{} })
+		close(done)
+	}()
+	for i := 0; i < 3; i++ {
+		select {
+		case <-calls:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("only %d runs", i)
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("every didn't return after cancel")
+	}
+}
+
+// pruneSessions logs what it pruned, and a failure as a warning.
+func TestPruneSessions(t *testing.T) {
+	var logs strings.Builder
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	at := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
+	var got time.Time
+	prune := pruneSessions(func(_ context.Context, now time.Time) (int, error) {
+		got = now
+		return 3, nil
+	}, func() time.Time { return at }, log)
+	prune(context.Background())
+	if !got.Equal(at) || !strings.Contains(logs.String(), "sessions=3") {
+		t.Errorf("pruned at %s, logs:\n%s", got, logs.String())
+	}
+	logs.Reset()
+	pruneSessions(func(context.Context, time.Time) (int, error) { return 0, errors.New("database down") },
+		time.Now, log)(context.Background())
+	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "database down") {
+		t.Errorf("a failed prune isn't a warning:\n%s", logs.String())
+	}
+	logs.Reset()
+	pruneSessions(func(context.Context, time.Time) (int, error) { return 0, nil }, time.Now, log)(context.Background())
+	if logs.Len() != 0 {
+		t.Errorf("logged with nothing pruned:\n%s", logs.String())
+	}
+}
+
+// together runs every loop and returns once all of them have returned.
+func TestTogether(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var mu sync.Mutex
+	stopped := 0
+	loop := func(ctx context.Context) {
+		<-ctx.Done()
+		mu.Lock()
+		stopped++
+		mu.Unlock()
+	}
+	done := make(chan struct{})
+	go func() {
+		together(loop, loop, loop)(ctx)
+		close(done)
+	}()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("together didn't return")
+	}
+	if stopped != 3 {
+		t.Errorf("%d loops stopped, want 3", stopped)
 	}
 }
