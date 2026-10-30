@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "status": "error",
+  "pergent_version": "0.1.0",
+  "base": "4f1c2a9e8b7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b",
+  "head": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b",
+  "error": {
+    "code": "commit_missing",
+    "message": "commit 4f1c2a9e8b7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b is not in the checkout"
+  },
+  "comment": {
+    "markdown": "<!-- pergent -->\n⚠️ **pergent couldn't review this MR:** commit 4f1c2a9e8b7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b is not in the checkout"
+  }
+}

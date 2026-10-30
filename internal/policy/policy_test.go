@@ -1,0 +1,245 @@
+package policy
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/result"
+)
+
+const findingsBlock = "<!-- pergent:findings eyJ9 -->"
+
+func skill(name, verdict string, reviewed ...string) result.Skill {
+	return result.Skill{Name: name, Verdict: verdict, Files: result.Files{Reviewed: reviewed}}
+}
+
+func completed(skills ...result.Skill) *result.Result {
+	return &result.Result{
+		SchemaVersion: 1, Status: "completed", Skills: skills,
+		Comment: result.Comment{Markdown: Marker + "\n### review\n\nbody\n\n" + findingsBlock, FindingsBlock: findingsBlock},
+	}
+}
+
+func TestDecide(t *testing.T) {
+	errResult := &result.Result{
+		SchemaVersion: 1, Status: "error",
+		Error:   &result.Error{Code: "commit_missing", Message: "boom"},
+		Comment: result.Comment{Markdown: Marker + "\n⚠️ **pergent couldn't review this MR:** boom"},
+	}
+	cases := []struct {
+		name        string
+		outcome     Outcome
+		failure     config.FailureStatus
+		wantStatus  Status
+		wantDesc    string
+		wantApprove bool
+		wantComment string // exact; "" skips
+	}{
+		{
+			name:       "no result with a reason",
+			outcome:    Outcome{FailureReason: "the job timed out"},
+			failure:    config.FailureStatusFailed,
+			wantStatus: StatusFailed, wantDesc: "pergent couldn't review this MR",
+			wantComment: Marker + "\n⚠️ **pergent couldn't review this MR:** the job timed out.",
+		},
+		{
+			name:       "failure reason wins over a clean result",
+			outcome:    Outcome{FailureReason: "x", Result: completed(skill("a", "no_blocking_issues", "f.go"))},
+			failure:    config.FailureStatusFailed,
+			wantStatus: StatusFailed, wantDesc: "pergent couldn't review this MR",
+		},
+		{
+			name:       "error result",
+			outcome:    Outcome{Result: errResult},
+			failure:    config.FailureStatusFailed,
+			wantStatus: StatusFailed, wantDesc: "pergent couldn't review this MR",
+			wantComment: errResult.Comment.Markdown,
+		},
+		{
+			name:       "nil result and no reason never passes",
+			outcome:    Outcome{},
+			failure:    config.FailureStatusFailed,
+			wantStatus: StatusFailed, wantDesc: "pergent couldn't review this MR",
+		},
+		{
+			name:       "blocking issues",
+			outcome:    Outcome{Result: completed(skill("a", "has_blocking_issues", "f.go"), skill("b", "no_blocking_issues", "f.go"))},
+			failure:    config.FailureStatusNeutral,
+			wantStatus: StatusFailed, wantDesc: "Blocking issues found",
+		},
+		{
+			name:       "mixed blocking and failed",
+			outcome:    Outcome{Result: completed(skill("a", "failed"), skill("b", "has_blocking_issues", "f.go"))},
+			failure:    config.FailureStatusNeutral,
+			wantStatus: StatusFailed, wantDesc: "Blocking issues found",
+		},
+		{
+			name:       "one failed skill of two",
+			outcome:    Outcome{Result: completed(skill("a", "failed"), skill("b", "no_blocking_issues", "f.go"))},
+			failure:    config.FailureStatusFailed,
+			wantStatus: StatusFailed, wantDesc: "Review failed for 1 of 2 skills",
+		},
+		{
+			name:       "unknown verdict is a failure",
+			outcome:    Outcome{Result: completed(skill("a", "weird", "f.go"))},
+			failure:    config.FailureStatusFailed,
+			wantStatus: StatusFailed, wantDesc: "Review failed for 1 of 1 skills",
+		},
+		{
+			name:       "empty verdict is a failure",
+			outcome:    Outcome{Result: completed(skill("a", "", "f.go"))},
+			failure:    config.FailureStatusFailed,
+			wantStatus: StatusFailed, wantDesc: "Review failed for 1 of 1 skills",
+		},
+		{
+			name:       "neutral setting on a failed skill",
+			outcome:    Outcome{Result: completed(skill("a", "failed"))},
+			failure:    config.FailureStatusNeutral,
+			wantStatus: StatusNeutral, wantDesc: "Review failed for 1 of 1 skills",
+		},
+		{
+			name:       "neutral setting on an error result",
+			outcome:    Outcome{Result: errResult},
+			failure:    config.FailureStatusNeutral,
+			wantStatus: StatusNeutral, wantDesc: "pergent couldn't review this MR",
+		},
+		{
+			name:       "neutral setting on no result",
+			outcome:    Outcome{FailureReason: "gone"},
+			failure:    config.FailureStatusNeutral,
+			wantStatus: StatusNeutral, wantDesc: "pergent couldn't review this MR",
+		},
+		{
+			name:       "unset failure setting means failed",
+			outcome:    Outcome{FailureReason: "gone"},
+			failure:    "",
+			wantStatus: StatusFailed, wantDesc: "pergent couldn't review this MR",
+		},
+		{
+			name:       "clean review approves",
+			outcome:    Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go"), skill("b", "no_blocking_issues"))},
+			failure:    config.FailureStatusFailed,
+			wantStatus: StatusSuccess, wantDesc: "No blocking issues", wantApprove: true,
+			wantComment: Marker + "\n### review\n\nbody\n\n" + findingsBlock,
+		},
+		{
+			name:       "completed result without skills is not a pass",
+			outcome:    Outcome{Result: completed()},
+			failure:    config.FailureStatusFailed,
+			wantStatus: StatusFailed, wantDesc: "pergent couldn't review this MR",
+		},
+		{
+			name:       "unknown result status is not a pass",
+			outcome:    Outcome{Result: &result.Result{Status: "weird", Comment: result.Comment{Markdown: "m"}, Skills: []result.Skill{skill("a", "no_blocking_issues", "f.go")}}},
+			failure:    config.FailureStatusFailed,
+			wantStatus: StatusFailed, wantDesc: "pergent couldn't review this MR",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := Decide(tc.outcome, tc.failure)
+			if d.Status != tc.wantStatus || d.Description != tc.wantDesc || d.Approve != tc.wantApprove {
+				t.Errorf("got status=%q desc=%q approve=%v, want %q %q %v", d.Status, d.Description, d.Approve, tc.wantStatus, tc.wantDesc, tc.wantApprove)
+			}
+			if !strings.Contains(d.Comment, Marker) {
+				t.Errorf("comment lacks the marker: %q", d.Comment)
+			}
+			if tc.wantComment != "" && d.Comment != tc.wantComment {
+				t.Errorf("comment = %q, want %q", d.Comment, tc.wantComment)
+			}
+			if d.Approve && d.Status != StatusSuccess {
+				t.Error("approved without success")
+			}
+		})
+	}
+}
+
+func TestDecideNothingReviewed(t *testing.T) {
+	r := completed(
+		result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Skipped: []result.Skipped{{Path: "go.sum", Rule: "lockfile"}, {Path: "vendor/x.go", Rule: "vendored"}}}},
+		result.Skill{Name: "b", Verdict: "no_blocking_issues", Files: result.Files{Skipped: []result.Skipped{{Path: "go.sum", Rule: "lockfile"}}}},
+	)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	if d.Status != StatusSuccess || d.Approve || d.Description != "Nothing to review: every changed file is skipped" {
+		t.Fatalf("got %+v", d)
+	}
+	want := Marker + "\n### review\n\nbody\n\n" +
+		"---\n**Not approved:** every changed file was skipped by pergent's default rules, so nothing was reviewed. A human needs to look.\n\n" +
+		"- `go.sum` (lockfile)\n- `vendor/x.go` (vendored)\n\n" +
+		findingsBlock
+	if d.Comment != want {
+		t.Errorf("comment:\n%q\nwant:\n%q", d.Comment, want)
+	}
+}
+
+func TestDecideNothingReviewedNoteAppendedWithoutBlock(t *testing.T) {
+	r := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Skipped: []result.Skipped{{Path: "go.sum", Rule: "lockfile"}}}})
+	r.Comment = result.Comment{Markdown: Marker + "\nbody"}
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	want := Marker + "\nbody\n\n---\n**Not approved:** every changed file was skipped by pergent's default rules, so nothing was reviewed. A human needs to look.\n\n- `go.sum` (lockfile)\n"
+	if d.Comment != want {
+		t.Errorf("comment:\n%q\nwant:\n%q", d.Comment, want)
+	}
+	if d.Approve {
+		t.Error("approved")
+	}
+}
+
+func TestDecideNothingReviewedCapsAtTwenty(t *testing.T) {
+	var skipped []result.Skipped
+	for i := 0; i < 25; i++ {
+		skipped = append(skipped, result.Skipped{Path: fmt.Sprintf("lock/%02d.lock", i), Rule: "lockfile"})
+	}
+	r := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Skipped: skipped}})
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	if got := strings.Count(d.Comment, "(lockfile)"); got != 20 {
+		t.Errorf("listed %d, want 20", got)
+	}
+	if !strings.Contains(d.Comment, "- …and 5 more") {
+		t.Errorf("missing overflow line: %q", d.Comment)
+	}
+	if !strings.Contains(d.Comment, "lock/19.lock") || strings.Contains(d.Comment, "lock/20.lock") {
+		t.Error("expected the first 20 sorted paths")
+	}
+}
+
+func TestDecideNothingReviewedNoSkippedAtAll(t *testing.T) {
+	// A completed review with nothing reviewed and nothing skipped (an empty diff)
+	// is still not approved.
+	d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues"))}, config.FailureStatusFailed)
+	if d.Approve || d.Status != StatusSuccess {
+		t.Fatalf("got %+v", d)
+	}
+}
+
+func TestDecideAnyReviewedFileMeansApprove(t *testing.T) {
+	// One skill reviewed a file, the other reviewed none: still reviewed.
+	r := completed(skill("a", "no_blocking_issues"), skill("b", "no_blocking_issues", "f.go"))
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	if !d.Approve || d.Description != "No blocking issues" {
+		t.Fatalf("got %+v", d)
+	}
+}
+
+func TestMarkerPrepended(t *testing.T) {
+	r := completed(skill("a", "has_blocking_issues", "f.go"))
+	r.Comment.Markdown = "### no marker here"
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	if d.Comment != Marker+"\n### no marker here" {
+		t.Errorf("comment: %q", d.Comment)
+	}
+	// already present: left alone
+	r.Comment.Markdown = "x\n" + Marker + "\ny"
+	if d := Decide(Outcome{Result: r}, config.FailureStatusFailed); d.Comment != r.Comment.Markdown {
+		t.Errorf("comment: %q", d.Comment)
+	}
+}
+
+func TestErrorComment(t *testing.T) {
+	want := Marker + "\n⚠️ **pergent couldn't review this MR:** reason."
+	if got := ErrorComment("reason"); got != want {
+		t.Errorf("got %q", got)
+	}
+}

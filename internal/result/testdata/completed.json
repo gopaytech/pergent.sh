@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "status": "completed",
+  "pergent_version": "0.1.0",
+  "base": "4f1c2a9e8b7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b",
+  "head": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b",
+  "started_at": "2026-10-29T10:00:00Z",
+  "finished_at": "2026-10-29T10:01:24Z",
+  "budget_seconds": 600,
+  "skills": [
+    {
+      "name": "code-review",
+      "verdict": "has_blocking_issues",
+      "findings": [
+        {
+          "id": "a1b2c3",
+          "fingerprint": "a1b2c3d4e5f6",
+          "file": "api/handler.go",
+          "line": 42,
+          "severity": "blocking",
+          "title": "Request body is used before validation",
+          "explanation": "handleCreate passes req.Name to db.Exec without calling validate(req), so an empty or oversized name reaches the query.",
+          "suggested_fix": "Call validate(req) right after decoding the body and return a 400 on error."
+        },
+        {
+          "id": "d4e5f6",
+          "fingerprint": "d4e5f6a7b8c9",
+          "file": "api/handler.go",
+          "severity": "suggestion",
+          "title": "Error from json.Encoder is ignored",
+          "explanation": "The response encoding error is dropped, so a failed write goes unnoticed."
+        }
+      ],
+      "summaries": [
+        {
+          "batch": 1,
+          "text": "Checked the handler and its tests in api/: the new query is parameterised, but the request body is not validated."
+        }
+      ],
+      "checks": [
+        {
+          "batch": 1,
+          "dropped": 0,
+          "findings": 2,
+          "checks": [
+            {
+              "section": "Input handling",
+              "name": "Request body is validated",
+              "status": "fail",
+              "detail": "api/handler.go:42 uses req.Name without validate(req)"
+            },
+            {
+              "section": "Input handling",
+              "name": "Query is parameterised",
+              "status": "pass",
+              "detail": "db.Exec(\"INSERT ... VALUES ($1)\", req.Name)"
+            }
+          ]
+        }
+      ],
+      "files": {
+        "reviewed": ["api/handler.go", "api/handler_test.go"],
+        "skipped": [
+          { "path": "go.sum", "rule": "lockfile" }
+        ],
+        "not_reviewed": []
+      },
+      "failures": [],
+      "notes": [],
+      "batches": 1,
+      "batches_finished": 1,
+      "duration_seconds": 84.2,
+      "tokens": { "input": 52310, "output": 1840 }
+    },
+    {
+      "name": "security-review",
+      "verdict": "failed",
+      "findings": [],
+      "files": {
+        "reviewed": [],
+        "skipped": [],
+        "not_reviewed": [
+          {
+            "path": "api/router.go",
+            "cause": "Timed out after 10m0s (review budget 10m0s) during step 9; the last tool call was read on api/router.go."
+          }
+        ]
+      },
+      "failures": [
+        {
+          "files": ["api/router.go"],
+          "message": "Timed out after 10m0s (review budget 10m0s) during step 9; the last tool call was read on api/router.go.",
+          "cause": {
+            "kind": "timeout",
+            "message": "Timed out after 10m0s (review budget 10m0s) during step 9; the last tool call was read on api/router.go."
+          }
+        }
+      ],
+      "notes": [],
+      "batches": 1,
+      "batches_finished": 0,
+      "duration_seconds": 600.0,
+      "tokens": { "input": 98120, "output": 2210 }
+    }
+  ],
+  "comment": {
+    "markdown": "### code-review\n\n**1 blocking issue**\n\n...\n\n<!-- pergent:findings ... -->",
+    "findings_block": "<!-- pergent:findings ... -->"
+  }
+}
