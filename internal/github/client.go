@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -497,7 +498,9 @@ func (c *Client) Compare(ctx context.Context, owner, repo, base, head string) (s
 	return out.MergeBaseCommit.SHA, nil
 }
 
-// File returns a file's raw content at ref. A missing file is nil, false, nil.
+// File returns a file's raw content at ref. A missing file is nil, false, nil,
+// and so is a directory: GitHub answers a directory with its JSON listing
+// whatever media type was asked for, which is not a file (as on GitLab).
 func (c *Client) File(ctx context.Context, owner, repo, path, ref string) ([]byte, bool, error) {
 	fp, err := filePath(path)
 	if err != nil {
@@ -514,7 +517,17 @@ func (c *Client) File(ctx context.Context, owner, repo, path, ref string) ([]byt
 	if err != nil {
 		return nil, false, err
 	}
+	if isListing(resp) {
+		return nil, false, nil
+	}
 	return resp.body, true, nil
+}
+
+// isListing reports whether a contents response is a directory listing: JSON
+// (a raw file never is) whose body is an array.
+func isListing(resp *response) bool {
+	mt, _, _ := mime.ParseMediaType(resp.header.Get("Content-Type"))
+	return mt == "application/json" && bytes.HasPrefix(bytes.TrimSpace(resp.body), []byte("["))
 }
 
 // Tree lists one directory at ref (non-recursive) through the contents API.

@@ -245,6 +245,32 @@ func TestFileNotFound(t *testing.T) {
 	}
 }
 
+// A path that is a directory: even with the raw media type GitHub answers
+// with the JSON listing. That is not a file (as on GitLab).
+func TestFileDirectoryIsNotFound(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = io.WriteString(w, ` [{"name":"a.md","path":".pergent/skills/a.md","type":"file"}]`)
+	})
+	b, ok, err := c.File(ctx, "acme", "widgets", ".pergent/skills", "abc")
+	if b != nil || ok || err != nil {
+		t.Fatalf("File(directory) = %q, %v, %v; want nil, false, nil", b, ok, err)
+	}
+}
+
+// A file whose content happens to start with '[' is still a file: the raw
+// media type is not JSON.
+func TestFileStartingWithBracket(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.github.raw+json")
+		_, _ = io.WriteString(w, "[section]\n")
+	})
+	b, ok, err := c.File(ctx, "acme", "widgets", "a.ini", "abc")
+	if string(b) != "[section]\n" || !ok || err != nil {
+		t.Fatalf("File = %q, %v, %v", b, ok, err)
+	}
+}
+
 func TestTree(t *testing.T) {
 	c, rec := serve(t, jsonReply([]map[string]any{
 		{"name": "a.md", "path": ".pergent/skills/a.md", "type": "file"},
