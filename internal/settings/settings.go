@@ -135,6 +135,12 @@ func (r *Resolver) configRepository(instance, project string) (config.Repository
 	return config.Repository{}, false
 }
 
+// Defaults is what a repository of platform on instance gets when it sets
+// nothing: every setting at its default, none overridden, no project.
+func (r *Resolver) Defaults(platform, instance string) Effective {
+	return r.defaults(platform, instance, "", "")
+}
+
 // defaults is a repository of platform on instance with every setting at
 // its default and none overridden.
 func (r *Resolver) defaults(platform, instance, project string, source Source) Effective {

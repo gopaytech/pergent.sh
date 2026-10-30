@@ -253,3 +253,17 @@ func TestResolverBadDashboardMemoryFallsBack(t *testing.T) {
 		wantOverridden(t, eff)
 	}
 }
+
+func TestDefaults(t *testing.T) {
+	cfg := &config.Config{Jobs: config.Jobs{Timeout: 7 * time.Minute}}
+	got := (&Resolver{Config: cfg}).Defaults(config.PlatformGitLab, "main")
+	if !got.Approve || !got.ReviewDrafts || got.FailureStatus != config.FailureStatusFailed ||
+		got.JobTimeout != 7*time.Minute || !got.JobMemory.IsZero() || got.Skills != nil || got.Instance != "main" {
+		t.Errorf("Defaults = %+v", got)
+	}
+	for k, v := range got.Overridden {
+		if v {
+			t.Errorf("%s is overridden", k)
+		}
+	}
+}
