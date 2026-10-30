@@ -1,0 +1,11 @@
+{
+  "object_kind": "merge_request",
+  "project": {"id": 42, "path_with_namespace": "acme/widgets"},
+  "object_attributes": {
+    "iid": 7,
+    "action": "update",
+    "oldrev": "0000000000000000000000000000000000000abc",
+    "target_branch": "main",
+    "last_commit": {"id": "2222222222222222222222222222222222222222"}
+  }
+}
