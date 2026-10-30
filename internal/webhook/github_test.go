@@ -162,14 +162,14 @@ func TestGitHubReadyForReviewRepublishes(t *testing.T) {
 	}
 }
 
-// Nothing was republished (the head's review isn't published yet): the normal
-// flow reads the draft flag when it publishes, so there is nothing to wake.
+// Nothing was republished (the head has no review to decide again): the head
+// is queued, a no-op when a run of it is already queued or running.
 func TestGitHubReadyNothingToRepublish(t *testing.T) {
 	r := newGitHubRig(t)
 	r.q.republished = false
 	wantStatus(t, r.gh(fixture(t, "github_ready.json")), 200)
-	if len(r.q.republishes) != 1 || r.wakes != 0 {
-		t.Fatalf("republishes = %+v, wakes = %d; want one call, no wake", r.q.republishes, r.wakes)
+	if len(r.q.republishes) != 1 || len(r.q.enqueues) != 1 || r.wakes != 1 {
+		t.Fatalf("republishes = %+v, enqueues = %+v, wakes = %d; want one call each and a wake", r.q.republishes, r.q.enqueues, r.wakes)
 	}
 }
 

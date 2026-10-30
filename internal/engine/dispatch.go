@@ -136,6 +136,15 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		d.log.Info("merge request is no longer open; run superseded", "state", mr.State)
 		return d.supersede(ctx)
 	}
+	if mr.Draft && !repo.ReviewDrafts {
+		// The webhook skips drafts of such a repository, so this run was
+		// queued before the merge request became a draft or the setting
+		// changed. Nothing is posted: the review starts when the merge
+		// request is marked ready. This comes before the moved-head check,
+		// so a newer head of a draft isn't queued either.
+		d.log.Info("merge request is a draft and the repository doesn't review drafts; run superseded")
+		return d.supersede(ctx)
+	}
 	if mr.HeadSHA != "" && (mr.HeadSHA != run.HeadSHA || mr.TargetBranch != run.TargetBranch) {
 		// Push webhooks can arrive out of order, and a retarget's may not
 		// have arrived yet, so the newest head and target may have no run:

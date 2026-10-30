@@ -70,11 +70,15 @@ type mergeRequestEvent struct {
 		PathWithNamespace string `json:"path_with_namespace"`
 	} `json:"project"`
 	ObjectAttributes struct {
-		IID          int64  `json:"iid"`
-		Action       string `json:"action"`
-		OldRev       string `json:"oldrev"`
-		TargetBranch string `json:"target_branch"`
-		LastCommit   struct {
+		IID    int64  `json:"iid"`
+		Action string `json:"action"`
+		// Draft is the draft flag, which GitLab before 14 calls
+		// work_in_progress.
+		Draft          bool   `json:"draft"`
+		WorkInProgress bool   `json:"work_in_progress"`
+		OldRev         string `json:"oldrev"`
+		TargetBranch   string `json:"target_branch"`
+		LastCommit     struct {
 			ID string `json:"id"`
 		} `json:"last_commit"`
 	} `json:"object_attributes"`
@@ -159,7 +163,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	attrs := ev.ObjectAttributes
 	log = log.With("project", ev.Project.PathWithNamespace, "iid", attrs.IID, "action", attrs.Action)
-	project, ok, err := lookup(r.Context(), repositories(h.Repos, h.Config), config.PlatformGitLab, name, ev.Project.PathWithNamespace)
+	repo, ok, err := lookup(r.Context(), repositories(h.Repos, h.Config), config.PlatformGitLab, name, ev.Project.PathWithNamespace)
 	if err != nil {
 		log.Error("webhook failed", "outcome", "lookup_error", "err", err)
 		http.Error(w, "storage error", http.StatusInternalServerError)
@@ -171,6 +175,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	project := repo.Project
 	republish := false
 	switch attrs.Action {
 	case "open", "reopen":
@@ -212,6 +217,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A draft is not reviewed while the repository doesn't review drafts. It
+	// is reviewed when it is marked ready, which is handled below.
+	if (attrs.Draft || attrs.WorkInProgress) && !repo.ReviewDrafts {
+		log.Info("webhook handled", "outcome", "draft_skipped")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	head := attrs.LastCommit.ID
 	if !validSHA(head) {
 		unusable(w, log, "bad_head_sha")
@@ -224,12 +237,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
-		if ok && h.Wake != nil {
-			h.Wake()
+		if ok {
+			if h.Wake != nil {
+				h.Wake()
+			}
+			log.Info("webhook handled", "outcome", "marked_ready", "republished", ok)
+			w.WriteHeader(http.StatusOK)
+			return
 		}
-		log.Info("webhook handled", "outcome", "marked_ready", "republished", ok)
-		w.WriteHeader(http.StatusOK)
-		return
+		// The head has no review to decide again (none was queued while it
+		// was a draft): review it now. A run already queued or running for
+		// this head is kept.
 	}
 	id, created, err := h.Queue.EnqueueRun(r.Context(), mr, project, head, attrs.TargetBranch)
 	if err != nil {
@@ -240,7 +258,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if created && h.Wake != nil {
 		h.Wake()
 	}
-	log.Info("webhook handled", "outcome", "enqueued", "run", id, "created", created)
+	log.Info("webhook handled", "outcome", "enqueued", "run", id, "created", created, "marked_ready", republish)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -260,15 +278,15 @@ func (h *Handler) logger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// lookup returns the spelling, as the config or the dashboard has it, of
-// path on instance when that repository is switched on there for platform.
-// Paths are matched ignoring case on both platforms.
-func lookup(ctx context.Context, repos Repositories, platform, instance, path string) (string, bool, error) {
+// lookup returns path on instance, spelled as the config or the dashboard
+// has it, with its settings, when that repository is switched on there for
+// platform. Paths are matched ignoring case on both platforms.
+func lookup(ctx context.Context, repos Repositories, platform, instance, path string) (settings.Effective, bool, error) {
 	eff, ok, err := repos.Get(ctx, instance, path)
 	if err != nil || !ok || eff.Platform != platform {
-		return "", false, err
+		return settings.Effective{}, false, err
 	}
-	return eff.Project, true, nil
+	return eff, true, nil
 }
 
 // tokenMatches compares in constant time. Both sides are hashed first so the

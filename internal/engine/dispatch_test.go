@@ -653,6 +653,80 @@ func TestDispatchUnconfiguredRepositoryIsSuperseded(t *testing.T) {
 	}
 }
 
+// A draft found at dispatch, while the repository doesn't review drafts (the
+// webhook raced a setting change or a conversion to draft), is superseded:
+// no Job, no status, no comment, and no run is queued for a newer head.
+func TestDispatchDraftIsSupersededWhenDraftsAreOff(t *testing.T) {
+	off := false
+	for _, tc := range []struct {
+		name  string
+		setup func(env *testEnv)
+	}{
+		{"config", func(env *testEnv) { env.Engine.Config.Repositories[0].ReviewDrafts = &off }},
+		{"dashboard", func(env *testEnv) {
+			env.Engine.Config.Repositories = nil
+			if err := env.Store.UpsertDashboardRepo(env.ctx, store.DashboardRepo{
+				Instance: testInstance, Project: testProjectPath, ReviewDrafts: &off, CreatedBy: "alice"}); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		for _, newerHead := range []bool{false, true} {
+			name := tc.name
+			if newerHead {
+				name += "/newer head"
+			}
+			t.Run(name, func(t *testing.T) {
+				env := newTestEnv(t)
+				tc.setup(env)
+				head := sha('a')
+				id := env.Enqueue(3, head)
+				current := head
+				if newerHead {
+					current = sha('c')
+				}
+				mr := openMR(3, current)
+				mr.Draft = true
+				env.GitLab.SetMR(mr)
+
+				dispatch(t, env)
+
+				if r := env.Run(id); r.State != store.Superseded {
+					t.Errorf("state = %s, want superseded", r.State)
+				}
+				if len(env.Jobs()) != 0 {
+					t.Errorf("a job was launched for a draft")
+				}
+				for _, req := range env.GitLab.Requests("", "") {
+					if req.Method != http.MethodGet {
+						t.Errorf("a draft got %s %s", req.Method, req.Path)
+					}
+				}
+				if _, created, err := env.Store.EnqueueRun(env.ctx, env.MRKey(3), testProjectPath, current, "main"); err != nil || !created {
+					t.Errorf("a live run is left for the draft (created=%v, %v)", created, err)
+				}
+			})
+		}
+	}
+}
+
+// With drafts on (the default) a draft is reviewed like any other merge request.
+func TestDispatchDraftIsReviewedWhenDraftsAreOn(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Enqueue(3, head)
+	mr := openMR(3, head)
+	mr.Draft = true
+	env.GitLab.SetMR(mr)
+	env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+
+	dispatch(t, env)
+
+	if env.Job(id) == nil {
+		t.Fatalf("no job for a draft; run = %+v", env.Run(id))
+	}
+}
+
 // The Job's timeout and memory limit come from the repository's effective
 // settings; only the memory limit of the resources changes.
 func TestDispatchUsesEffectiveTimeoutAndMemory(t *testing.T) {

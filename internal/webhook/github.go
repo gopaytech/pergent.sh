@@ -42,6 +42,7 @@ type pullRequestEvent struct {
 	Action      string `json:"action"`
 	PullRequest struct {
 		Number int64 `json:"number"`
+		Draft  bool  `json:"draft"`
 		Head   struct {
 			SHA string `json:"sha"`
 		} `json:"head"`
@@ -110,7 +111,7 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	pr := ev.PullRequest
 	log = log.With("repository", ev.Repository.FullName, "number", pr.Number, "action", ev.Action)
-	project, ok, err := lookup(r.Context(), repositories(h.Repos, h.Config), config.PlatformGitHub, name, ev.Repository.FullName)
+	repo, ok, err := lookup(r.Context(), repositories(h.Repos, h.Config), config.PlatformGitHub, name, ev.Repository.FullName)
 	if err != nil {
 		log.Error("webhook failed", "outcome", "lookup_error", "err", err)
 		http.Error(w, "storage error", http.StatusInternalServerError)
@@ -122,6 +123,7 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	project := repo.Project
 	republish := false
 	switch ev.Action {
 	case "opened", "reopened", "synchronize":
@@ -160,6 +162,14 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A draft is not reviewed while the repository doesn't review drafts. It
+	// is reviewed when it is marked ready, which is handled below.
+	if pr.Draft && !repo.ReviewDrafts {
+		log.Info("webhook handled", "outcome", "draft_skipped")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	head := pr.Head.SHA
 	if !validSHA(head) {
 		unusable(w, log, "bad_head_sha")
@@ -172,12 +182,17 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
-		if ok && h.Wake != nil {
-			h.Wake()
+		if ok {
+			if h.Wake != nil {
+				h.Wake()
+			}
+			log.Info("webhook handled", "outcome", "marked_ready", "republished", ok)
+			w.WriteHeader(http.StatusOK)
+			return
 		}
-		log.Info("webhook handled", "outcome", "marked_ready", "republished", ok)
-		w.WriteHeader(http.StatusOK)
-		return
+		// The head has no review to decide again (none was queued while it
+		// was a draft): review it now. A run already queued or running for
+		// this head is kept.
 	}
 	id, created, err := h.Queue.EnqueueRun(r.Context(), mr, project, head, pr.Base.Ref)
 	if err != nil {
@@ -188,7 +203,7 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if created && h.Wake != nil {
 		h.Wake()
 	}
-	log.Info("webhook handled", "outcome", "enqueued", "run", id, "created", created)
+	log.Info("webhook handled", "outcome", "enqueued", "run", id, "created", created, "marked_ready", republish)
 	w.WriteHeader(http.StatusOK)
 }
 
