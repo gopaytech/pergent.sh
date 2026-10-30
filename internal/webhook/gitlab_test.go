@@ -318,12 +318,38 @@ func TestOversizedBodyIs413(t *testing.T) {
 	}
 }
 
-func TestMalformedJSONIs400(t *testing.T) {
+// An authenticated hook GitLab can't fix by sending again is answered 200,
+// with a warning: GitLab counts 4xx answers toward disabling the hook.
+func TestMalformedJSONIs200(t *testing.T) {
 	r := newRig(t)
-	wantStatus(t, r.hook([]byte("{not json")), 400)
+	wantStatus(t, r.hook([]byte("{not json")), 200)
+	if len(r.q.enqueues)+len(r.q.supersedes) != 0 {
+		t.Fatal("queue was called")
+	}
+	if !strings.Contains(r.logs.String(), "level=WARN") || !strings.Contains(r.logs.String(), "malformed_json") {
+		t.Errorf("not logged as a warning: %s", r.logs.String())
+	}
 }
 
-func TestBadHeadSHAIs400(t *testing.T) {
+func TestMissingIDsIs200(t *testing.T) {
+	for name, body := range map[string][]byte{
+		"project id": bytes.Replace(fixture(t, "mr_open.json"), []byte(`"id": 42`), []byte(`"id": 0`), 1),
+		"iid":        bytes.Replace(fixture(t, "mr_open.json"), []byte(`"iid": 7`), []byte(`"iid": 0`), 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t)
+			wantStatus(t, r.hook(body), 200)
+			if len(r.q.enqueues)+len(r.q.supersedes) != 0 {
+				t.Fatal("queue was called")
+			}
+			if !strings.Contains(r.logs.String(), "level=WARN") || !strings.Contains(r.logs.String(), "missing_ids") {
+				t.Errorf("not logged as a warning: %s", r.logs.String())
+			}
+		})
+	}
+}
+
+func TestBadHeadSHAIs200(t *testing.T) {
 	for name, head := range map[string]string{
 		"empty":     "",
 		"short":     "abc123",
@@ -334,9 +360,12 @@ func TestBadHeadSHAIs400(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			r := newRig(t)
 			body := bytes.Replace(fixture(t, "mr_open.json"), []byte(openHead), []byte(head), 1)
-			wantStatus(t, r.hook(body), 400)
+			wantStatus(t, r.hook(body), 200)
 			if len(r.q.enqueues) != 0 {
 				t.Fatal("garbage head was enqueued")
+			}
+			if !strings.Contains(r.logs.String(), "level=WARN") || !strings.Contains(r.logs.String(), "bad_head_sha") {
+				t.Errorf("not logged as a warning: %s", r.logs.String())
 			}
 		})
 	}

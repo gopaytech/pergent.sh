@@ -235,7 +235,7 @@ Deploy tokens are created per project with the name `pergent-sh`, valid for 30 d
 
 | Route | Used by |
 | --- | --- |
-| `POST /webhooks/gitlab/{instance}` | GitLab merge request webhooks. The `X-Gitlab-Token` header is compared in constant time with the instance's secret; a mismatch gets 401 and is otherwise ignored. |
+| `POST /webhooks/gitlab/{instance}` | GitLab merge request webhooks. The `X-Gitlab-Token` header is compared in constant time with the instance's secret; a mismatch gets 401 and is otherwise ignored. An authenticated webhook whose payload can't be used (not JSON, no project id or merge request iid, a malformed head SHA) gets 200 and a warning in the log, because GitLab counts failed deliveries toward disabling the hook. |
 | `POST /runs/{id}/result` | A review Job delivering its result, with its one-time bearer token. |
 | `GET /healthz` | Health check. It answers as soon as the server starts: pergent.sh serves right away and runs the startup reconcile in the background. |
 

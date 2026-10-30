@@ -117,8 +117,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var ev mergeRequestEvent
 	if err := json.Unmarshal(body, &ev); err != nil {
-		log.Warn("webhook rejected", "outcome", "malformed_json")
-		http.Error(w, "malformed json", http.StatusBadRequest)
+		unusable(w, log, "malformed_json")
 		return
 	}
 	if ev.ObjectKind != mrObjectKind {
@@ -154,8 +153,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if ev.Project.ID <= 0 || attrs.IID <= 0 {
-		log.Warn("webhook rejected", "outcome", "missing_ids")
-		http.Error(w, "missing project id or iid", http.StatusBadRequest)
+		unusable(w, log, "missing_ids")
 		return
 	}
 	mr := store.MRKey{Instance: name, ProjectID: ev.Project.ID, IID: attrs.IID}
@@ -174,8 +172,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	head := attrs.LastCommit.ID
 	if !validSHA(head) {
-		log.Warn("webhook rejected", "outcome", "bad_head_sha")
-		http.Error(w, "bad head sha", http.StatusBadRequest)
+		unusable(w, log, "bad_head_sha")
 		return
 	}
 	id, created, err := h.Queue.EnqueueRun(r.Context(), mr, project, head, attrs.TargetBranch)
@@ -188,6 +185,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.Wake()
 	}
 	log.Info("webhook handled", "outcome", "enqueued", "run", id, "created", created)
+	w.WriteHeader(http.StatusOK)
+}
+
+// unusable answers an authenticated hook whose payload can't be used. It is
+// 200, not 4xx: GitLab counts failed deliveries toward disabling the hook,
+// and sending the same payload again would not help. The warning is how an
+// operator hears of it.
+func unusable(w http.ResponseWriter, log *slog.Logger, outcome string) {
+	log.Warn("webhook ignored: unusable payload", "outcome", outcome)
 	w.WriteHeader(http.StatusOK)
 }
 
