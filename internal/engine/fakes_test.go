@@ -53,6 +53,8 @@ const (
 	testDeployToken  = "deploy-token-example"
 	testLLMKey       = "llm-key-example"
 
+	testWebhookSecret = "webhook-secret-example"
+
 	// testApproveUserID is the approve bot's GitLab user id.
 	testApproveUserID = int64(200)
 
@@ -311,12 +313,13 @@ func newTestEnv(t *testing.T) *testEnv {
 			ReviewUser:  gitlab.User{ID: 100, Username: "pergent-review"},
 			ApproveUser: gitlab.User{ID: testApproveUserID, Username: "pergent-approve"},
 		}},
-		Launcher: launcher,
-		Library:  inputs.Library{"security": []byte("---\nname: security\n---\nLook for security problems.\n")},
-		Box:      box,
-		LLMKey:   testLLMKey,
-		Now:      env.Now,
-		Log:      slog.New(slog.NewTextHandler(&env.logs, nil)),
+		WebhookSecrets: map[string]string{testInstance: testWebhookSecret},
+		Launcher:       launcher,
+		Library:        inputs.Library{"security": []byte("---\nname: security\n---\nLook for security problems.\n")},
+		Box:            box,
+		LLMKey:         testLLMKey,
+		Now:            env.Now,
+		Log:            slog.New(slog.NewTextHandler(&env.logs, nil)),
 	}
 	env.SeedProject(nil)
 	return env

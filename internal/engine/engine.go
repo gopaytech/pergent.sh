@@ -5,6 +5,7 @@
 package engine
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"sync"
@@ -28,12 +29,15 @@ type Bots struct {
 
 // Engine holds what the loops share. Bots is keyed by instance name.
 type Engine struct {
-	Store    *store.Store
-	Config   *config.Config
-	Bots     map[string]Bots
-	Launcher *kube.Launcher
-	Library  inputs.Library
-	Box      *secretbox.Box
+	Store  *store.Store
+	Config *config.Config
+	Bots   map[string]Bots
+	// WebhookSecrets maps an instance name to the secret its project hooks
+	// are created with.
+	WebhookSecrets map[string]string
+	Launcher       *kube.Launcher
+	Library        inputs.Library
+	Box            *secretbox.Box
 	// LLMKey is the model provider's API key, handed to each Job's Secret.
 	LLMKey string
 	// Now is the clock; nil means time.Now.
@@ -72,4 +76,74 @@ func (e *Engine) log() *slog.Logger {
 		return e.Log
 	}
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// Loop intervals of Run.
+const (
+	passInterval      = 2 * time.Second
+	watchInterval     = 15 * time.Second
+	reconcileInterval = time.Hour
+)
+
+// Run runs the loops until ctx is done: dispatch, publish and cleanup every
+// 2 s or on Wake, watch every 15 s and reconcile every hour. They all run in
+// this one goroutine, one after another, so no two of them ever overlap (a
+// publish and a cleanup of the same merge request least of all). Errors are
+// logged and never stop the loop. Before the first pass, runs stranded
+// between claim and dispatch by an earlier stop go back to the queue: with
+// one replica, nothing is being dispatched yet. Run does not reconcile at
+// start; the caller does that first.
+func (e *Engine) Run(ctx context.Context) {
+	log := e.log()
+	if n, err := e.Store.RecoverUnlaunched(ctx, e.now()); err != nil {
+		log.Error("couldn't requeue runs stranded before their job started", "error", err)
+	} else if n > 0 {
+		log.Warn("requeued runs stranded before their job started", "runs", n)
+	}
+
+	pass := time.NewTicker(passInterval)
+	defer pass.Stop()
+	watch := time.NewTicker(watchInterval)
+	defer watch.Stop()
+	reconcile := time.NewTicker(reconcileInterval)
+	defer reconcile.Stop()
+
+	e.pass(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-pass.C:
+			e.pass(ctx)
+		case <-e.wakeCh():
+			e.pass(ctx)
+		case <-watch.C:
+			if err := e.WatchOnce(ctx); err != nil && ctx.Err() == nil {
+				log.Error("watch failed", "error", e.redact(err.Error()))
+			}
+		case <-reconcile.C:
+			if err := e.Reconcile(ctx); err != nil && ctx.Err() == nil {
+				log.Error("reconcile failed", "error", e.redact(err.Error()))
+			}
+		}
+	}
+}
+
+// pass dispatches, publishes and cleans up once, logging failures.
+func (e *Engine) pass(ctx context.Context) {
+	for _, step := range []struct {
+		name string
+		fn   func(context.Context) error
+	}{
+		{"dispatch", e.DispatchOnce},
+		{"publish", e.PublishOnce},
+		{"cleanup", e.CleanupOnce},
+	} {
+		if ctx.Err() != nil {
+			return
+		}
+		if err := step.fn(ctx); err != nil && ctx.Err() == nil {
+			e.log().Error(step.name+" failed", "error", e.redact(err.Error()))
+		}
+	}
 }
