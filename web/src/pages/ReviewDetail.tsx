@@ -40,7 +40,7 @@ const triggers: Record<string, string> = {
 function splitChange(rest: string): { project: string; number: number } | null {
   const i = rest.lastIndexOf("/");
   const n = rest.slice(i + 1);
-  if (i <= 0 || !/^[1-9]\d{0,17}$/.test(n)) return null;
+  if (i <= 0 || !/^[1-9]\d{0,14}$/.test(n)) return null;
   return { project: rest.slice(0, i), number: Number(n) };
 }
 

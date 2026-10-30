@@ -173,6 +173,71 @@ describe("RepositoryDetail", () => {
     renderAt("/repos/main/acme/secret", base);
     expect(await screen.findByRole("heading", { name: "Not found" })).toBeInTheDocument();
   });
+
+  it("refreshes the page after saving when the address spells the project differently", async () => {
+    const saved = { ...payments, settings: { ...payments.settings, reviewDrafts: { value: true, overridden: true } } };
+    const fake = fakeApi({
+      ...base,
+      "GET /api/repositories/main/ACME/Payments": { body: payments },
+      "PUT /api/repositories/main/acme/payments/settings": { body: saved },
+    });
+    renderApp("/repos/main/ACME/Payments?tab=settings");
+    const drafts = await screen.findByRole("switch", { name: "Review drafts" });
+    expect(within(drafts.closest(".set") as HTMLElement).getByText("default")).toBeInTheDocument();
+    await userEvent.click(drafts);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")).toHaveLength(1);
+    const row = (await screen.findByText("Saved.")) && screen.getByRole("switch", { name: "Review drafts" }).closest(".set");
+    expect(within(row as HTMLElement).getByText("overridden here")).toBeInTheDocument();
+  });
+
+  it("drops skills no longer in the library when saving the skills", async () => {
+    const stale = {
+      ...payments,
+      settings: { ...payments.settings, skills: { value: ["code-review", "old-skill"], overridden: true } },
+    };
+    const fake = fakeApi({
+      ...base,
+      "GET /api/repositories/main/acme/payments": { body: stale },
+      "PUT /api/repositories/main/acme/payments/settings": { body: payments },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    expect(await screen.findByText(/old-skill is no longer in the library/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("switch", { name: "Skill security-review" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    const [put] = fake.find("PUT", "/api/repositories/main/acme/payments/settings");
+    expect(put.body).toEqual({ skills: ["code-review", "security-review"] });
+  });
+
+  it("retries a write once with a fresh CSRF token after a CSRF 403", async () => {
+    let puts = 0;
+    let mes = 0;
+    const fake = fakeApi({
+      ...base,
+      "GET /api/me": () => ({ body: mes++ === 0 ? admin : { ...admin, csrfToken: "csrf-new" } }),
+      "PUT /api/repositories/main/acme/payments/settings": () =>
+        puts++ === 0 ? { status: 403, body: { error: "missing or wrong CSRF token" } } : { body: payments },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    await userEvent.click(await screen.findByRole("switch", { name: "Review drafts" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved.")).toBeInTheDocument();
+    const calls = fake.find("PUT", "/api/repositories/main/acme/payments/settings");
+    expect(calls.map((c) => c.headers.get("X-CSRF-Token"))).toEqual(["csrf-123", "csrf-new"]);
+  });
+
+  it("doesn't retry a 403 that isn't about the CSRF token", async () => {
+    const fake = fakeApi({
+      ...base,
+      "PUT /api/repositories/main/acme/payments/settings": { status: 403, body: { error: "only admins can do this" } },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    await userEvent.click(await screen.findByRole("switch", { name: "Review drafts" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("only admins can do this");
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")).toHaveLength(1);
+    expect(fake.find("GET", "/api/me")).toHaveLength(1);
+  });
 });
 
 function renderAt(path: string, routes: Parameters<typeof fakeApi>[0]) {

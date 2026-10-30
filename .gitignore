@@ -1,5 +1,5 @@
 bin/
-web/node_modules/
+web/**/node_modules/
 web/coverage/
 # `make web` builds the dashboard here. Nothing in it is tracked except .keep,
 # which keeps the directory (and so `go build`) working without Node.

@@ -155,6 +155,13 @@ describe("ReviewDetail", () => {
     expect(fake.calls.filter((c) => c.url.startsWith("/api/reviews"))).toHaveLength(0);
   });
 
+  it("shows not found for a number longer than 15 digits", async () => {
+    const fake = fakeApi({ "GET /api/me": { body: admin } });
+    renderApp("/reviews/main/acme/payments/1234567890123456");
+    expect(await screen.findByRole("heading", { name: "Not found" })).toBeInTheDocument();
+    expect(fake.calls.filter((c) => c.url.startsWith("/api/reviews"))).toHaveLength(0);
+  });
+
   it("reads a project with nested groups and odd characters", async () => {
     const fake = fakeApi({
       "GET /api/me": { body: admin },

@@ -5,6 +5,7 @@ import { NavLink, Outlet, useNavigate } from "react-router";
 import { api, type Me } from "../api";
 import { ErrorBox, Loading, NotFound, platformName } from "../ui";
 import { MeContext, useMe } from "./me";
+import { useWrite } from "./write";
 
 type NavItem = { to: string; label: string; icon: string; end?: boolean };
 
@@ -39,20 +40,27 @@ function initials(name: string) {
   return name.replace(/[^a-zA-Z0-9]/g, "").slice(0, 2).toUpperCase();
 }
 
-function SignOut({ me }: { me: Me }) {
+// SignOut ends the session. Only once the server says it has ended does
+// the page drop what it loaded and go to sign-in; a failure is shown and
+// the user stays signed in, and knows it.
+function SignOut() {
   const navigate = useNavigate();
   const client = useQueryClient();
+  const write = useWrite();
   const out = useMutation({
-    mutationFn: () => api.post<void>("/auth/logout", undefined, me.csrfToken),
-    onSettled: () => {
+    mutationFn: () => write<void>("POST", "/auth/logout"),
+    onSuccess: () => {
       client.clear();
       navigate("/signin", { replace: true });
     },
   });
   return (
-    <button type="button" className="linkish" onClick={() => out.mutate()} disabled={out.isPending}>
-      Sign out
-    </button>
+    <>
+      <button type="button" className="linkish" onClick={() => out.mutate()} disabled={out.isPending}>
+        Sign out
+      </button>
+      {out.isError && <ErrorBox error={out.error} />}
+    </>
   );
 }
 
@@ -99,7 +107,7 @@ export default function Layout() {
             <span className="grow">
               {user.username} · {user.isAdmin ? "admin" : "developer"}
             </span>
-            <SignOut me={user} />
+            <SignOut />
           </div>
         </aside>
         <main>

@@ -9,32 +9,33 @@ import {
   type RepositoryDetailView,
   type SettingsUpdate,
 } from "../api";
-import { useMe } from "../layout/me";
+import { useWrite } from "../layout/write";
 import { ErrorBox, Loading, Switch } from "../ui";
 
 // SettingsTab edits a repository's settings (admins only; Layout hides the
 // tab from others). A config-managed repository's are shown disabled.
-export default function SettingsTab({ view }: { view: RepositoryDetailView }) {
-  const me = useMe();
+// queryKey is the page's own: the address may spell the project
+// differently from the server.
+export default function SettingsTab({ view, queryKey }: { view: RepositoryDetailView; queryKey: unknown[] }) {
   const client = useQueryClient();
+  const write = useWrite();
   const { repo } = view;
-  const key = ["repo", repo.instance, repo.project];
   const library = useQuery({ queryKey: ["skills"], queryFn: () => api.get<LibrarySkill[]>("/api/skills") });
   const [note, setNote] = useState("");
 
   const done = (detail: RepositoryDetailView, message: string) => {
-    client.setQueryData(key, detail);
+    client.setQueryData(queryKey, detail);
     client.invalidateQueries({ queryKey: ["repositories"] });
     setNote(message);
   };
   const save = useMutation({
     mutationFn: (body: SettingsUpdate) =>
-      api.put<RepositoryDetailView>(paths.apiRepoSettings(repo.instance, repo.project), body, me.csrfToken),
+      write<RepositoryDetailView>("PUT", paths.apiRepoSettings(repo.instance, repo.project), body),
     onMutate: () => setNote(""),
     onSuccess: (d) => done(d, "Saved."),
   });
   const reset = useMutation({
-    mutationFn: () => api.post<RepositoryDetailView>(paths.apiRepoReset(repo.instance, repo.project), {}, me.csrfToken),
+    mutationFn: () => write<RepositoryDetailView>("POST", paths.apiRepoReset(repo.instance, repo.project), {}),
     onMutate: () => setNote(""),
     onSuccess: (d) => done(d, "Every setting is back to its default."),
   });
@@ -112,7 +113,10 @@ function Form({
   const [d, setD] = useState<Draft>(initial);
   const [problem, setProblem] = useState("");
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((old) => ({ ...old, [k]: v }));
-  const skillNames = [...library, ...skillsNow.filter((s) => !library.includes(s))];
+  // Skills the repository names that the library no longer has: shown,
+  // but never sent back (the API would refuse them).
+  const gone = skillsNow.filter((s) => !library.includes(s));
+  const skillNames = [...library, ...gone];
   const disabled = locked || busy;
 
   const submit = () => {
@@ -121,11 +125,12 @@ function Form({
     if (d.reviewDrafts !== initial.reviewDrafts) body.reviewDrafts = d.reviewDrafts;
     if (d.failureStatus !== initial.failureStatus) body.failureStatus = d.failureStatus;
     if (!sameSet(d.skills, initial.skills)) {
-      if (d.skills.length === 0) {
-        setProblem("Keep at least one skill on.");
+      const kept = library.filter((s) => d.skills.includes(s));
+      if (kept.length === 0) {
+        setProblem("Keep at least one library skill on.");
         return;
       }
-      body.skills = skillNames.filter((s) => d.skills.includes(s));
+      body.skills = kept;
     }
     if (d.jobTimeoutSeconds.trim() !== initial.jobTimeoutSeconds) {
       const t = d.jobTimeoutSeconds.trim();
@@ -204,6 +209,12 @@ function Form({
             <span className="src">{library.includes(s) ? "library" : "not in the library"}</span>
           </div>
         ))}
+        {gone.length > 0 && (
+          <div className="pad meta">
+            {gone.join(", ")} {gone.length === 1 ? "is" : "are"} no longer in the library. Saving a change to the skills
+            removes {gone.length === 1 ? "it" : "them"} from this repository.
+          </div>
+        )}
       </section>
 
       <section className="card" aria-label="Review Job">

@@ -1,4 +1,5 @@
 import { screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi } from "./test/fakeApi";
@@ -80,5 +81,37 @@ describe("App shell", () => {
     await screen.findByText("184");
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
+  });
+
+  it("signs out only when the server ended the session, retrying once with a fresh CSRF token", async () => {
+    let logouts = 0;
+    let mes = 0;
+    const fake = fakeApi({
+      ...base,
+      "GET /api/me": () => ({ body: mes++ === 0 ? admin : { ...admin, csrfToken: "csrf-new" } }),
+      "POST /auth/logout": () =>
+        logouts++ === 0 ? { status: 403, body: { error: "missing or wrong CSRF token" } } : { status: 204 },
+      "GET /api/instances": { body: [] },
+    });
+    renderApp("/");
+    await userEvent.click(await screen.findByRole("button", { name: "Sign out" }));
+    expect(await screen.findByRole("heading", { name: "Sign in to pergent.sh" })).toBeInTheDocument();
+    const calls = fake.find("POST", "/auth/logout");
+    expect(calls.map((c) => c.headers.get("X-CSRF-Token"))).toEqual(["csrf-123", "csrf-new"]);
+    expect(fake.find("GET", "/api/me")).toHaveLength(2);
+  });
+
+  it("stays and says so when signing out fails", async () => {
+    const fake = fakeApi({
+      ...base,
+      "GET /api/me": { body: admin },
+      "POST /auth/logout": { status: 500, body: { error: "could not sign out" } },
+    });
+    renderApp("/");
+    await userEvent.click(await screen.findByRole("button", { name: "Sign out" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("could not sign out");
+    expect(screen.getByTestId("location")).toHaveTextContent(/^\/$/);
+    expect(screen.getByRole("navigation", { name: "Main" })).toBeInTheDocument();
+    expect(fake.find("POST", "/auth/logout")).toHaveLength(1);
   });
 });

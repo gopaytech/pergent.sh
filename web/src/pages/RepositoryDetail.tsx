@@ -18,8 +18,9 @@ export default function RepositoryDetail() {
   const params = useParams();
   const instance = params.instance ?? "";
   const project = params["*"] ?? "";
+  const queryKey = ["repo", instance, project];
   const detail = useQuery({
-    queryKey: ["repo", instance, project],
+    queryKey,
     queryFn: () => api.get<RepositoryDetailView>(paths.apiRepo(instance, project)),
     enabled: project !== "",
   });
@@ -48,7 +49,7 @@ export default function RepositoryDetail() {
       <Tabs<Tab> tabs={tabs} value={tab} onChange={(t) => setSearch(t === "reviews" ? {} : { tab: t }, { replace: true })} />
       <div role="tabpanel">
         {tab === "reviews" && <ReviewList filter={{ project: repo.project, days: 90 }} label="Reviews of this repository" />}
-        {tab === "settings" && <SettingsTab view={view} />}
+        {tab === "settings" && <SettingsTab view={view} queryKey={queryKey} />}
         {tab === "inputs" && <Inputs instance={repo.instance} project={repo.project} />}
         {tab === "setup" && (
           <section className="card" aria-label="Setup checks">

@@ -202,6 +202,10 @@ export class ApiError extends Error {
 
 export const isStatus = (err: unknown, status: number) => err instanceof ApiError && err.status === status;
 
+// isCSRFError is the 403 a write gets when its CSRF token is missing or
+// stale (not the 403 of a user who isn't allowed).
+export const isCSRFError = (err: unknown) => isStatus(err, 403) && /csrf/i.test((err as ApiError).message);
+
 // --- 401 ---
 
 type Listener = () => void;
@@ -253,7 +257,10 @@ export const api = {
   post: <T>(path: string, body: unknown, csrf: string) => request<T>("POST", path, body, csrf),
   put: <T>(path: string, body: unknown, csrf: string) => request<T>("PUT", path, body, csrf),
   del: <T>(path: string, csrf: string) => request<T>("DELETE", path, undefined, csrf),
+  write: <T>(method: WriteMethod, path: string, body: unknown, csrf: string) => request<T>(method, path, body, csrf),
 };
+
+export type WriteMethod = "POST" | "PUT" | "DELETE";
 
 // --- paths ---
 

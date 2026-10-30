@@ -4,6 +4,7 @@ import { Link, useNavigate, useSearchParams } from "react-router";
 
 import { api, paths, type AvailableView, type RepositoryDetailView, type RepositoryView } from "../api";
 import { useMe } from "../layout/me";
+import { useWrite } from "../layout/write";
 import { ErrorBox, Loading, Pill, Switch, platformName } from "../ui";
 
 // Repositories lists the repositories pergent reviews that the user can
@@ -48,7 +49,7 @@ export default function Repositories() {
               </thead>
               <tbody>
                 {repos.data.map((r) => (
-                  <Row key={`${r.instance}/${r.project}`} repo={r} admin={me.isAdmin} csrf={me.csrfToken} />
+                  <Row key={`${r.instance}/${r.project}`} repo={r} admin={me.isAdmin} />
                 ))}
               </tbody>
             </table>
@@ -58,10 +59,11 @@ export default function Repositories() {
   );
 }
 
-function Row({ repo, admin, csrf }: { repo: RepositoryView; admin: boolean; csrf: string }) {
+function Row({ repo, admin }: { repo: RepositoryView; admin: boolean }) {
   const client = useQueryClient();
+  const write = useWrite();
   const off = useMutation({
-    mutationFn: () => api.del<RepositoryDetailView>(paths.apiRepo(repo.instance, repo.project), csrf),
+    mutationFn: () => write<RepositoryDetailView>("DELETE", paths.apiRepo(repo.instance, repo.project)),
     onSuccess: () => client.invalidateQueries({ queryKey: ["repositories"] }),
   });
   const config = repo.source === "config";
@@ -101,7 +103,7 @@ function Row({ repo, admin, csrf }: { repo: RepositoryView; admin: boolean; csrf
 // Picker lists the repositories the admin and pergent can both reach, to
 // switch one on.
 function Picker() {
-  const me = useMe();
+  const write = useWrite();
   const navigate = useNavigate();
   const client = useQueryClient();
   const [text, setText] = useState("");
@@ -112,7 +114,7 @@ function Picker() {
     staleTime: 0,
   });
   const on = useMutation({
-    mutationFn: (project: string) => api.post<RepositoryDetailView>("/api/repositories", { project }, me.csrfToken),
+    mutationFn: (project: string) => write<RepositoryDetailView>("POST", "/api/repositories", { project }),
     onSuccess: (detail) => {
       client.invalidateQueries({ queryKey: ["repositories"] });
       client.invalidateQueries({ queryKey: ["available"] });
