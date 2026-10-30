@@ -555,8 +555,10 @@ type env struct {
 	lib inputs.Library
 	src map[string]*fakeSource  // by instance
 	cat map[string]*fakeCatalog // by instance
-	// reconciles counts the dashboard's ReconcileSoon calls.
+	// reconciles counts the dashboard's ReconcileSoon calls; reconciled
+	// lists the instance/project each named.
 	reconciles atomic.Int32
+	reconciled []string
 	gl         *fakeGitLab
 	gh         *fakeGitHub
 	clock      *clock
@@ -619,7 +621,12 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 	}
 	d, err := New(Options{
 		Config: cfg, Store: st, SecretKey: e.key, Now: e.clock.now, Library: e.lib, Sources: sources,
-		Catalogs: catalogs, ReconcileSoon: func() { e.reconciles.Add(1) },
+		Catalogs: catalogs, ReconcileSoon: func(instance, project string) {
+			e.reconciles.Add(1)
+			e.mu.Lock()
+			e.reconciled = append(e.reconciled, instance+"/"+project)
+			e.mu.Unlock()
+		},
 		Log: slog.New(slog.NewTextHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	})
 	if err != nil {

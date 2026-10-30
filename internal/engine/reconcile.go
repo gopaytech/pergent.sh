@@ -45,6 +45,26 @@ func HookURL(publicURL, instance string) string {
 // dashboard's repositories can't be read, nothing is removed. Tokens and keys
 // are never logged.
 func (e *Engine) Reconcile(ctx context.Context) error {
+	return e.reconcile(ctx, nil)
+}
+
+// RepoKey names a repository: its instance and its path (any case).
+type RepoKey struct{ Instance, Project string }
+
+// ReconcileRepos is Reconcile for the repositories keys names alone: each
+// one switched on is set up, and the stored project of each one no longer
+// switched on is removed, as Reconcile does. No other repository's platform
+// is asked anything. The dashboard's switches use it (ReconcileSoon).
+func (e *Engine) ReconcileRepos(ctx context.Context, keys []RepoKey) error {
+	only := make(map[repoKey]bool, len(keys))
+	for _, k := range keys {
+		only[keyOf(k.Instance, k.Project)] = true
+	}
+	return e.reconcile(ctx, only)
+}
+
+// reconcile is Reconcile over every repository (only nil) or those in only.
+func (e *Engine) reconcile(ctx context.Context, only map[repoKey]bool) error {
 	now := e.now()
 	var errs []error
 	fail := func(err error, args ...any) {
@@ -70,6 +90,9 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return errors.Join(append(errs, ctx.Err())...)
 		}
+		if only != nil && !only[keyOf(repo.Instance, repo.Project)] {
+			continue
+		}
 		wanted[keyOf(repo.Instance, repo.Project)] = true
 		e.refreshOutOfMemory(ctx, repo.Instance, repo.Project)
 		var id int64
@@ -93,6 +116,9 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 	for _, p := range stored {
 		if ctx.Err() != nil {
 			return errors.Join(append(errs, ctx.Err())...)
+		}
+		if only != nil && !only[keyOf(p.Instance, p.Path)] {
+			continue
 		}
 		if keep(p, wanted, resolved) {
 			continue

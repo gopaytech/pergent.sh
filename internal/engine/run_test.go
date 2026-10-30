@@ -171,7 +171,7 @@ func TestReconcileSoonNeverBlocks(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		for range 100 {
-			e.ReconcileSoon()
+			e.ReconcileSoon(testInstance, testProjectPath)
 		}
 		close(done)
 	}()
@@ -219,12 +219,17 @@ func TestRunReconcilesSoonOnRequest(t *testing.T) {
 	if n := len(env.GitLab.Requests(http.MethodPost, "/projects/9/hooks")); n != 0 {
 		t.Fatalf("acme/gadgets got a webhook before ReconcileSoon")
 	}
-	env.Engine.ReconcileSoon()
+	widgets := len(env.GitLab.Requests(http.MethodGet, "/projects/acme%2Fwidgets"))
+	env.Engine.ReconcileSoon(testInstance, "acme/gadgets")
 	waitFor("ReconcileSoon didn't reconcile acme/gadgets", func() bool {
 		return len(env.GitLab.Requests(http.MethodPost, "/projects/9/hooks")) > 0
 	})
 	cancel()
 	<-done
+	// Only the repository asked for: acme/widgets isn't looked at again.
+	if n := len(env.GitLab.Requests(http.MethodGet, "/projects/acme%2Fwidgets")); n != widgets {
+		t.Errorf("acme/widgets was read %d more times by a reconcile of acme/gadgets", n-widgets)
+	}
 }
 
 // ReconcileSoon requests are coalesced: one reconciles at once, those that
@@ -262,12 +267,12 @@ func TestReconcileSoonIsDebounced(t *testing.T) {
 	waitFor("no startup reconcile", func() bool { return passes() == 1 })
 
 	// The first request reconciles at once.
-	env.Engine.ReconcileSoon()
+	env.Engine.ReconcileSoon(testInstance, testProjectPath)
 	waitFor("ReconcileSoon didn't reconcile", func() bool { return passes() == 2 })
 
 	// Rapid toggles within the gap: one more reconcile, after the gap.
 	for range 10 {
-		env.Engine.ReconcileSoon()
+		env.Engine.ReconcileSoon(testInstance, "ACME/Widgets")
 		time.Sleep(5 * time.Millisecond)
 	}
 	time.Sleep(100 * time.Millisecond)

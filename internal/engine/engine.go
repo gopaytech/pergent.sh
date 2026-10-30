@@ -78,6 +78,10 @@ type Engine struct {
 
 	reconcileOnce sync.Once
 	reconcileReq  chan struct{}
+	// soonMu guards soonKeys, the repositories ReconcileSoon asked for that
+	// the loop hasn't reconciled yet.
+	soonMu   sync.Mutex
+	soonKeys map[repoKey]RepoKey
 
 	// unchecked holds the repositories whose required approvals couldn't
 	// be read, so that is logged once (see checkRequiredApprovals).
@@ -105,16 +109,37 @@ func (e *Engine) wakeCh() chan struct{} {
 	return e.wake
 }
 
-// ReconcileSoon asks the loop for a Reconcile ahead of the hourly one: the
-// dashboard calls it when a repository is switched on or off. It never
-// blocks; requests that arrive while one is pending are merged into it. The
-// loop starts such a reconcile at most once every 10 s (reconcileSoonGap):
-// one asked for sooner waits for the gap to pass.
-func (e *Engine) ReconcileSoon() {
+// ReconcileSoon asks the loop to reconcile the repository project on
+// instance ahead of the hourly Reconcile: the dashboard calls it when a
+// repository is switched on or off. Only that repository is reconciled
+// (ReconcileRepos), never all of them. It never blocks; requests that
+// arrive while one is pending are merged into it, their repositories
+// together. The loop starts such a reconcile at most once every 10 s
+// (reconcileSoonGap): one asked for sooner waits for the gap to pass.
+func (e *Engine) ReconcileSoon(instance, project string) {
+	e.soonMu.Lock()
+	if e.soonKeys == nil {
+		e.soonKeys = map[repoKey]RepoKey{}
+	}
+	e.soonKeys[keyOf(instance, project)] = RepoKey{Instance: instance, Project: project}
+	e.soonMu.Unlock()
 	select {
 	case e.reconcileCh() <- struct{}{}:
 	default:
 	}
+}
+
+// takeSoonKeys returns the repositories ReconcileSoon asked for since the
+// last call, and forgets them.
+func (e *Engine) takeSoonKeys() []RepoKey {
+	e.soonMu.Lock()
+	defer e.soonMu.Unlock()
+	keys := make([]RepoKey, 0, len(e.soonKeys))
+	for _, k := range e.soonKeys {
+		keys = append(keys, k)
+	}
+	e.soonKeys = nil
+	return keys
 }
 
 // reconcileCh is the reconcile request channel, created on first use with
@@ -155,9 +180,9 @@ var (
 // Run runs the loops until ctx is done: dispatch, publish and cleanup every
 // 2 s or on Wake, watch every 15 s, sweep the approvals every 5 minutes and
 // reconcile every hour (when it also prunes the review logs older than
-// 30 days) and on ReconcileSoon (at most once every 10 s: requests within
-// that gap of the last such reconcile make one more when it ends). They all
-// run in
+// 30 days), and reconcile the repositories ReconcileSoon names (at most
+// once every 10 s: requests within that gap of the last such reconcile make
+// one more when it ends, of all their repositories). They all run in
 // this one goroutine, one after another, so no two of them ever overlap (a
 // publish and a cleanup of the same merge request least of all). Errors are
 // logged and never stop the loop. Before the first pass, runs stranded
@@ -202,7 +227,11 @@ func (e *Engine) Run(ctx context.Context) {
 		}
 	}()
 	reconcileNow := func() {
-		if err := e.Reconcile(ctx); err != nil && ctx.Err() == nil {
+		keys := e.takeSoonKeys()
+		if len(keys) == 0 {
+			return
+		}
+		if err := e.ReconcileRepos(ctx, keys); err != nil && ctx.Err() == nil {
 			log.Error("reconcile failed", "error", e.redact(err.Error()))
 		}
 	}

@@ -409,6 +409,12 @@ func TestSwitchOnTriggersReconcile(t *testing.T) {
 	if n := e.reconciles.Load(); n != 2 {
 		t.Errorf("ReconcileSoon called %d times, want 2", n)
 	}
+	// Each names the repository switched, as the platform spells it.
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if want := []string{"main/acme/gadgets", "main/acme/gadgets"}; !slices.Equal(e.reconciled, want) {
+		t.Errorf("ReconcileSoon got %v, want %v", e.reconciled, want)
+	}
 }
 
 // The client can't switch on a repository that isn't in the available set:

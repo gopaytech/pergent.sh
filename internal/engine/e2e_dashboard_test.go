@@ -387,10 +387,22 @@ func TestEndToEndDashboard(t *testing.T) {
 	default:
 		t.Fatalf("switching on didn't ask the engine to reconcile")
 	}
+	keys := env.Engine.takeSoonKeys()
+	if len(keys) != 1 || !strings.EqualFold(keys[0].Project, gadgetsPath) || keys[0].Instance != testInstance {
+		t.Fatalf("reconcile asked for %+v, want acme/gadgets alone", keys)
+	}
 
-	// 4. The reconcile creates its webhook and deploy token.
+	// 4. The reconcile of that repository creates its webhook and deploy
+	// token, and asks nothing about any other.
 	gl.Reset()
-	reconcile(t, env)
+	if err := env.Engine.ReconcileRepos(env.ctx, keys); err != nil {
+		t.Fatalf("ReconcileRepos: %v", err)
+	}
+	for _, r := range gl.Requests("", "") {
+		if !strings.HasPrefix(r.Path, gadgetsAPI("/")) && !strings.Contains(r.Path, "acme%2Fgadgets") {
+			t.Errorf("the reconcile of acme/gadgets asked about another repository: %s %s", r.Method, r.Path)
+		}
+	}
 	hooks := gl.Requests(http.MethodPost, gadgetsAPI("/hooks"))
 	if len(hooks) != 1 || hooks[0].Token != testReviewToken || hooks[0].JSON(t)["url"] != testHookURL {
 		t.Fatalf("webhook creations on acme/gadgets = %d, want 1 by the review bot", len(hooks))

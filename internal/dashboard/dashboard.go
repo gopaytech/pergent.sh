@@ -55,10 +55,11 @@ type Options struct {
 	// (GitLab) or the review App (GitHub) can set up, for the "add
 	// repository" picker. An instance without one can't add any (502).
 	Catalogs map[string]RepoCatalog
-	// ReconcileSoon asks the engine for an early reconcile after a
-	// repository is switched on or off (engine.Engine.ReconcileSoon). It
-	// must not block. nil leaves it to the hourly reconcile.
-	ReconcileSoon func()
+	// ReconcileSoon asks the engine for an early reconcile of the
+	// repository project on instance after it is switched on or off
+	// (engine.Engine.ReconcileSoon). It must not block. nil leaves it to
+	// the hourly reconcile.
+	ReconcileSoon func(instance, project string)
 }
 
 // RepoCatalog is what the review side of an instance can set up: on GitLab
@@ -96,7 +97,7 @@ type Dashboard struct {
 	library       inputs.Library
 	sources       map[string]RepoSource
 	catalogs      map[string]RepoCatalog
-	reconcileSoon func()
+	reconcileSoon func(instance, project string)
 	// availableBudget bounds the whole picker request; listBudget bounds
 	// each side's listing in it; listLimit is the most repositories read
 	// from each side.
@@ -133,7 +134,7 @@ func New(o Options) (*Dashboard, error) {
 		o.Log.Warn("dashboard has no admins configured")
 	}
 	if o.ReconcileSoon == nil {
-		o.ReconcileSoon = func() {}
+		o.ReconcileSoon = func(string, string) {}
 	}
 	return &Dashboard{Auth: auth, Repos: repos, Store: o.Store, Log: o.Log,
 		cfg: o.Config, library: o.Library, sources: o.Sources, catalogs: o.Catalogs,

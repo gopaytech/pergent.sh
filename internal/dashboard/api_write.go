@@ -350,7 +350,7 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.Log.Info("dashboard: repository switched on", "instance", se.Instance, "project", name, "by", se.Username)
-	d.reconcileSoon()
+	d.reconcileSoon(se.Instance, name)
 	// The admin checked they can see it just now: they see it at once.
 	if err := d.Store.AddSessionProject(ctx, se.idHash, avail); err != nil {
 		d.Log.Warn("dashboard: adding a switched-on repository to the session failed", "error", err.Error())
@@ -438,7 +438,7 @@ func (d *Dashboard) switchOff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.Log.Info("dashboard: repository switched off", "instance", repo.Instance, "project", repo.Project, "by", se.Username)
-	d.reconcileSoon()
+	d.reconcileSoon(repo.Instance, repo.Project)
 	view, err := d.detailView(ctx, se, repo)
 	if err != nil {
 		d.failed(w, r, "loading a repository", err)

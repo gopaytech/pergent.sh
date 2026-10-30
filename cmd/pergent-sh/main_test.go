@@ -495,7 +495,7 @@ func TestNewDashboardRoutes(t *testing.T) {
 	var logs strings.Builder
 	log := slog.New(slog.NewTextHandler(&logs, nil))
 	cfg := dashboardConfig("https://dashboard.example.com", config.DashboardAdmin{Instance: "main", Group: "acme/platform"})
-	d, err := newDashboard(cfg, nil, testSecretKey, inputs.Library{}, nil, func() {}, log)
+	d, err := newDashboard(cfg, nil, testSecretKey, inputs.Library{}, nil, func(string, string) {}, log)
 	if err != nil || d == nil {
 		t.Fatalf("newDashboard = %v, %v", d, err)
 	}
@@ -518,7 +518,7 @@ func TestNewDashboardRoutes(t *testing.T) {
 	}
 
 	off := dashboardConfig("")
-	d, err = newDashboard(off, nil, testSecretKey, inputs.Library{}, nil, func() {}, log)
+	d, err = newDashboard(off, nil, testSecretKey, inputs.Library{}, nil, func(string, string) {}, log)
 	if err != nil || d != nil {
 		t.Fatalf("newDashboard with the dashboard off = %v, %v; want nil, nil", d, err)
 	}
@@ -536,7 +536,7 @@ func TestNewDashboardWarnsWithoutAdmins(t *testing.T) {
 	setOAuthEnv(t)
 	var logs strings.Builder
 	log := slog.New(slog.NewTextHandler(&logs, nil))
-	d, err := newDashboard(dashboardConfig("https://dashboard.example.com"), nil, testSecretKey, inputs.Library{}, nil, func() {}, log)
+	d, err := newDashboard(dashboardConfig("https://dashboard.example.com"), nil, testSecretKey, inputs.Library{}, nil, func(string, string) {}, log)
 	if err != nil || d == nil {
 		t.Fatalf("newDashboard = %v, %v", d, err)
 	}

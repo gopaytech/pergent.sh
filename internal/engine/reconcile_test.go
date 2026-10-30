@@ -522,3 +522,55 @@ func TestReconcileDashboardRepo(t *testing.T) {
 		t.Errorf("webhook and deploy token were not removed")
 	}
 }
+
+// A dashboard switch reconciles only the repositories it names: switching
+// one on sets up that one, switching it off tears down that one, and no
+// other repository's platform is asked anything.
+func TestReconcileReposTouchesOnlyThose(t *testing.T) {
+	env := newTestEnv(t)
+	serveProject(env, testProjectID, testProjectPath)
+	serveProject(env, 9, "acme/gadgets")
+	serveProject(env, 10, "acme/tools")
+	dashboardRepo(t, env, store.DashboardRepo{Instance: testInstance, Project: "acme/tools", CreatedBy: "alice"})
+	reconcile(t, env)
+	env.GitLab.Reset()
+
+	dashboardRepo(t, env, store.DashboardRepo{Instance: testInstance, Project: "acme/gadgets", CreatedBy: "alice"})
+	if err := env.Engine.ReconcileRepos(env.ctx, []RepoKey{{Instance: testInstance, Project: "ACME/Gadgets"}}); err != nil {
+		t.Fatalf("ReconcileRepos: %v", err)
+	}
+	for _, r := range env.GitLab.Requests("", "") {
+		if !strings.HasPrefix(r.Path, "/projects/9") && r.Path != "/projects/acme%2Fgadgets" {
+			t.Errorf("switching acme/gadgets on asked about another repository: %s %s", r.Method, r.Path)
+		}
+	}
+	if p, ok := project(t, env, 9); !ok || p.HookID != newHookID {
+		t.Fatalf("acme/gadgets after ReconcileRepos = %+v, %v; want set up", p, ok)
+	}
+
+	env.GitLab.Reset()
+	env.GitLab.Reply(http.MethodDelete, "/projects/9/hooks/"+strconv.FormatInt(newHookID, 10), http.StatusNoContent, nil)
+	env.GitLab.Reply(http.MethodDelete, "/projects/9/deploy_tokens/"+strconv.FormatInt(newDeployTokenID, 10), http.StatusNoContent, nil)
+	if err := env.Store.DeleteDashboardRepo(env.ctx, testInstance, "acme/gadgets"); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.Engine.ReconcileRepos(env.ctx, []RepoKey{{Instance: testInstance, Project: "acme/gadgets"}}); err != nil {
+		t.Fatalf("ReconcileRepos: %v", err)
+	}
+	for _, r := range env.GitLab.Requests("", "") {
+		if !strings.HasPrefix(r.Path, "/projects/9/") {
+			t.Errorf("switching acme/gadgets off asked about another repository: %s %s", r.Method, r.Path)
+		}
+	}
+	if n := len(env.GitLab.Requests(http.MethodDelete, "")); n != 2 {
+		t.Errorf("%d deletions, want the hook and the deploy token", n)
+	}
+	if _, ok := project(t, env, 9); ok {
+		t.Error("acme/gadgets is still stored after it was switched off")
+	}
+	for _, id := range []int64{testProjectID, 10} {
+		if _, ok := project(t, env, id); !ok {
+			t.Errorf("project %d was removed", id)
+		}
+	}
+}
