@@ -773,7 +773,7 @@ func TestProjectAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := ProjectAccess{Path: "acme/widgets", Visibility: "private", RepositoryAccess: "enabled", MergeRequestsAccess: "private",
+	want := ProjectAccess{ID: 7, Path: "acme/widgets", Visibility: "private", RepositoryAccess: "enabled", MergeRequestsAccess: "private",
 		ProjectAccessLevel: 10, GroupAccessLevel: 30}
 	if a != want {
 		t.Fatalf("ProjectAccess = %+v, want %+v", a, want)
@@ -785,6 +785,27 @@ func TestProjectAccess(t *testing.T) {
 		"permissions": map[string]any{"project_access": nil, "group_access": nil}}))
 	if a, err := c.ProjectAccess(context.Background(), "acme/widgets"); err != nil || a.ProjectAccessLevel != 0 || a.GroupAccessLevel != 0 {
 		t.Fatalf("ProjectAccess without membership = %+v, %v", a, err)
+	}
+}
+
+// HasMemberAccess asks the project listing, which counts shares, narrowed
+// to the one project ID.
+func TestHasMemberAccess(t *testing.T) {
+	c, reqs := serve(t, jsonReply([]map[string]any{{"id": 7, "path_with_namespace": "acme/widgets"}}))
+	ok, err := c.HasMemberAccess(context.Background(), 7, 20)
+	if err != nil || !ok {
+		t.Fatalf("HasMemberAccess = %v, %v; want true", ok, err)
+	}
+	expect(t, (*reqs)[0], "GET", "/api/v4/projects", "id_after=6&id_before=8&min_access_level=20&simple=true")
+
+	// Another project in the answer is not this one.
+	c, _ = serve(t, jsonReply([]map[string]any{{"id": 8, "path_with_namespace": "acme/other"}}))
+	if ok, err := c.HasMemberAccess(context.Background(), 7, 20); err != nil || ok {
+		t.Fatalf("HasMemberAccess with another project = %v, %v; want false", ok, err)
+	}
+	c, _ = serve(t, jsonReply([]map[string]any{}))
+	if ok, err := c.HasMemberAccess(context.Background(), 7, 20); err != nil || ok {
+		t.Fatalf("HasMemberAccess with none = %v, %v; want false", ok, err)
 	}
 }
 

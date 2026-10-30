@@ -84,26 +84,44 @@ func (p *gitlabProvider) user(ctx context.Context, accessToken string) (int64, s
 	return u.ID, u.Username, nil
 }
 
-// canSee: Reporter or above through the project or its group, or a public
-// project whose code and merge requests are open to everyone who can see it.
+// canSee: Reporter or above (through the project, its group, or a share
+// with another group), or a public project whose code and merge requests
+// are open to everyone who can see it.
 func (p *gitlabProvider) canSee(ctx context.Context, accessToken, project string) (bool, error) {
-	ctx, cancel := callContext(ctx, p.timeout)
-	defer cancel()
-	a, err := p.client(accessToken).ProjectAccess(ctx, project)
+	a, err := p.projectAccess(ctx, accessToken, project)
 	if errors.Is(err, gitlab.ErrNotFound) || isStatus(err, http.StatusForbidden) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	return gitlabCanSee(a), nil
+	if a.Visibility == "public" && a.RepositoryAccess == "enabled" && a.MergeRequestsAccess == "enabled" {
+		return true, nil
+	}
+	return p.reporter(ctx, accessToken, a)
 }
 
-func gitlabCanSee(a gitlab.ProjectAccess) bool {
+// projectAccess reads the token user's access to project.
+func (p *gitlabProvider) projectAccess(ctx context.Context, accessToken, project string) (gitlab.ProjectAccess, error) {
+	ctx, cancel := callContext(ctx, p.timeout)
+	defer cancel()
+	return p.client(accessToken).ProjectAccess(ctx, project)
+}
+
+// reporter reports whether the token's user is Reporter or above on the
+// project a describes: as its permissions show (the project or its group),
+// or else through a share, which only the project listing shows (one more
+// call).
+func (p *gitlabProvider) reporter(ctx context.Context, accessToken string, a gitlab.ProjectAccess) (bool, error) {
 	if a.ProjectAccessLevel >= gitlabReporter || a.GroupAccessLevel >= gitlabReporter {
-		return true
+		return true, nil
 	}
-	return a.Visibility == "public" && a.RepositoryAccess == "enabled" && a.MergeRequestsAccess == "enabled"
+	if a.ID == 0 {
+		return false, errors.New("gitlab: the project answer has no id")
+	}
+	ctx, cancel := callContext(ctx, p.timeout)
+	defer cancel()
+	return p.client(accessToken).HasMemberAccess(ctx, a.ID, gitlabReporter)
 }
 
 func (p *gitlabProvider) isAdmin(ctx context.Context, accessToken string, userID int64, _ string, admin config.DashboardAdmin) (bool, error) {
@@ -130,20 +148,19 @@ func (p *gitlabProvider) memberRepos(ctx context.Context, accessToken, search st
 		Search: search, Limit: limit, CallTimeout: p.callTimeout()})
 }
 
-// memberRepo: Reporter or above through the project or its group; being
-// able to see a public project isn't enough.
+// memberRepo: Reporter or above through the project, its group or a share,
+// as the picker's listing counts it; being able to see a public project
+// isn't enough.
 func (p *gitlabProvider) memberRepo(ctx context.Context, accessToken, project string) (string, bool, error) {
-	ctx, cancel := callContext(ctx, p.timeout)
-	defer cancel()
-	a, err := p.client(accessToken).ProjectAccess(ctx, project)
+	a, err := p.projectAccess(ctx, accessToken, project)
 	if errors.Is(err, gitlab.ErrNotFound) || isStatus(err, http.StatusForbidden) {
 		return "", false, nil
 	}
 	if err != nil {
 		return "", false, err
 	}
-	if a.ProjectAccessLevel < gitlabReporter && a.GroupAccessLevel < gitlabReporter {
-		return "", false, nil
+	if ok, err := p.reporter(ctx, accessToken, a); err != nil || !ok {
+		return "", false, err
 	}
 	if a.Path == "" {
 		return "", false, errors.New("gitlab: the project answer has no path")

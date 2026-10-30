@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log/slog"
 	"net/http"
@@ -241,8 +242,39 @@ func newFakeGitLab(t *testing.T) *fakeGitLab {
 	return f
 }
 
+// setProject sets path's GET /projects/:path body; without an "id" it gets
+// testID(path). A "shared_access" level is access through a share: the
+// listing counts it, the project's permissions don't show it.
 func (f *fakeGitLab) setProject(path string, body map[string]any) {
-	f.set(func(*oauthServer) { f.projects[path] = body })
+	f.set(func(*oauthServer) { f.projects[path] = withID(path, body) })
+}
+
+// testID is the platform ID the fakes give path when a test sets none: the
+// same for every spelling of it.
+func testID(path string) int64 {
+	h := fnv.New32a()
+	h.Write([]byte(strings.ToLower(path)))
+	return int64(h.Sum32()%1_000_000) + 1000
+}
+
+// idOf is a fake body's "id" as an int64.
+func idOf(v any) int64 {
+	switch n := v.(type) {
+	case int:
+		return int64(n)
+	case int64:
+		return n
+	}
+	return 0
+}
+
+// withID is a copy of body with an "id", testID(path) unless it has one.
+func withID(path string, body map[string]any) map[string]any {
+	out := map[string]any{"id": testID(path)}
+	for k, v := range body {
+		out[k] = v
+	}
+	return out
 }
 
 func (f *fakeGitLab) setMember(group string, member bool) {
@@ -342,6 +374,8 @@ func (f *fakeGitLab) listProjects(w http.ResponseWriter, r *http.Request) {
 		n, _ := m["access_level"].(int)
 		return n
 	}
+	idAfter, _ := strconv.ParseInt(q.Get("id_after"), 10, 64)
+	idBefore, _ := strconv.ParseInt(q.Get("id_before"), 10, 64)
 	paths := make([]string, 0, len(f.projects))
 	for path := range f.projects {
 		paths = append(paths, path)
@@ -349,10 +383,14 @@ func (f *fakeGitLab) listProjects(w http.ResponseWriter, r *http.Request) {
 	sort.Strings(paths)
 	all := []map[string]any{}
 	for _, path := range paths {
-		perms, _ := f.projects[path]["permissions"].(map[string]any)
-		if max(level(perms["project_access"]), level(perms["group_access"])) >= minLevel && minLevel > 0 &&
-			strings.Contains(strings.ToLower(path), search) {
-			all = append(all, map[string]any{"id": f.projects[path]["id"], "path_with_namespace": path})
+		body := f.projects[path]
+		perms, _ := body["permissions"].(map[string]any)
+		shared, _ := body["shared_access"].(int)
+		id := idOf(body["id"])
+		if max(level(perms["project_access"]), level(perms["group_access"]), shared) >= minLevel && minLevel > 0 &&
+			strings.Contains(strings.ToLower(path), search) &&
+			(q.Get("id_after") == "" || id > idAfter) && (q.Get("id_before") == "" || id < idBefore) {
+			all = append(all, map[string]any{"id": id, "path_with_namespace": path})
 		}
 	}
 	from := min(len(all), (page-1)*perPage)
@@ -417,8 +455,10 @@ func newFakeGitHub(t *testing.T) *fakeGitHub {
 	return f
 }
 
+// setRepo sets full's GET /repos body; without an "id" it gets
+// testID(full).
 func (f *fakeGitHub) setRepo(full string, body map[string]any) {
-	f.set(func(*oauthServer) { f.repos[full] = body })
+	f.set(func(*oauthServer) { f.repos[full] = withID(full, body) })
 }
 
 func (f *fakeGitHub) setTeam(team, state string) {
@@ -743,7 +783,7 @@ func gitlabProject(visibility string, projectLevel, groupLevel int) map[string]a
 		return map[string]any{"access_level": level, "notification_level": 3}
 	}
 	return map[string]any{
-		"id": 1, "visibility": visibility,
+		"visibility":              visibility,
 		"repository_access_level": "enabled", "merge_requests_access_level": "enabled",
 		"permissions": map[string]any{"project_access": perm(projectLevel), "group_access": perm(groupLevel)},
 	}
@@ -751,7 +791,7 @@ func gitlabProject(visibility string, projectLevel, groupLevel int) map[string]a
 
 // githubRepo is a GET /repos body seen with a user token.
 func githubRepo(private, pull bool) map[string]any {
-	return map[string]any{"id": 1, "private": private,
+	return map[string]any{"private": private,
 		"permissions": map[string]any{"admin": false, "push": false, "pull": pull}}
 }
 

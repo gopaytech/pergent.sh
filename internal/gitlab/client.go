@@ -309,6 +309,8 @@ func (c *Client) GetProject(ctx context.Context, path string) (Project, error) {
 // ProjectAccess is what the token's user may do in a project, as GitLab
 // reports it in GET /projects/:path.
 type ProjectAccess struct {
+	// ID is the project's ID.
+	ID int64
 	// Path is the project's full path as GitLab spells it.
 	Path string
 	// Visibility is "public", "internal" or "private".
@@ -330,6 +332,7 @@ func (c *Client) ProjectAccess(ctx context.Context, path string) (ProjectAccess,
 		AccessLevel int `json:"access_level"`
 	}
 	var p struct {
+		ID                  int64  `json:"id"`
 		Path                string `json:"path_with_namespace"`
 		Visibility          string `json:"visibility"`
 		RepositoryAccess    string `json:"repository_access_level"`
@@ -342,7 +345,8 @@ func (c *Client) ProjectAccess(ctx context.Context, path string) (ProjectAccess,
 	if _, err := c.getJSON(ctx, "/projects/"+seg(path), nil, &p); err != nil {
 		return ProjectAccess{}, err
 	}
-	a := ProjectAccess{Path: p.Path, Visibility: p.Visibility, RepositoryAccess: p.RepositoryAccess, MergeRequestsAccess: p.MergeRequestsAccess}
+	a := ProjectAccess{ID: p.ID, Path: p.Path, Visibility: p.Visibility, RepositoryAccess: p.RepositoryAccess,
+		MergeRequestsAccess: p.MergeRequestsAccess}
 	if p.Permissions.ProjectAccess != nil {
 		a.ProjectAccessLevel = p.Permissions.ProjectAccess.AccessLevel
 	}
@@ -350,6 +354,30 @@ func (c *Client) ProjectAccess(ctx context.Context, path string) (ProjectAccess,
 		a.GroupAccessLevel = p.Permissions.GroupAccess.AccessLevel
 	}
 	return a, nil
+}
+
+// HasMemberAccess reports whether the token's user has at least minLevel
+// on project id however GitLab grants it: as a member of the project or
+// its group, or through a group the project or its group is shared with.
+// ProjectAccess's permissions leave shares out; the project listing
+// (GET /projects?min_access_level=, narrowed to the one ID) counts them.
+func (c *Client) HasMemberAccess(ctx context.Context, id int64, minLevel int) (bool, error) {
+	q := url.Values{
+		"min_access_level": {strconv.Itoa(minLevel)}, "simple": {"true"},
+		"id_after": {strconv.FormatInt(id-1, 10)}, "id_before": {strconv.FormatInt(id+1, 10)},
+	}
+	var page []struct {
+		ID int64 `json:"id"`
+	}
+	if _, err := c.getJSON(ctx, "/projects", q, &page); err != nil {
+		return false, err
+	}
+	for _, p := range page {
+		if p.ID == id {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // IsGroupMember reports whether the user is an active member of group (a

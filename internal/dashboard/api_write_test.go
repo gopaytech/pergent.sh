@@ -450,6 +450,35 @@ func TestSwitchOnOnlyAvailable(t *testing.T) {
 	}
 }
 
+// A GitLab project reached only through a share (a group the project or
+// its group is shared with, as Reporter or above) is in the picker, can be
+// switched on, and is then seen: its permissions don't show the share, so
+// the project listing is asked. A share below Reporter is not enough.
+func TestSwitchOnSharedProject(t *testing.T) {
+	e := newEnv(t, nil)
+	e.cat["main"].set("acme/shared", "acme/shared-guest")
+	shared := gitlabProject("private", 0, 0)
+	shared["shared_access"] = 30
+	e.gl.setProject("acme/shared", shared)
+	guest := gitlabProject("private", 0, 0)
+	guest["shared_access"] = 10
+	e.gl.setProject("acme/shared-guest", guest)
+	c := e.signInGitLab(true)
+
+	got := getJSON[availableBody](e, c, "/api/repositories/available")
+	if want := []string{"acme/shared"}; !slices.Equal(projectsOf(got.Items), want) {
+		t.Errorf("available = %v, want %v", projectsOf(got.Items), want)
+	}
+	wantCode(t, e.send(c, "POST", "/api/repositories", `{"project":"acme/shared-guest"}`), "POST a Guest share", http.StatusNotFound)
+	wantCode(t, e.send(c, "POST", "/api/repositories", `{"project":"acme/shared"}`), "POST a Developer share", http.StatusCreated)
+
+	// The next access check keeps it.
+	e.clock.advance(AccessTTL + time.Second)
+	if _, se := e.session(c); !se.CanSee("acme/shared") || se.CanSee("acme/shared-guest") {
+		t.Errorf("visible after the next check = %v", se.Visible)
+	}
+}
+
 // On GitHub the admin needs pull access and the review App an
 // installation on the repository.
 func TestSwitchOnOnlyAvailableGitHub(t *testing.T) {
