@@ -89,6 +89,11 @@ func Decide(o Outcome, failure config.FailureStatus) Decision {
 		case "has_blocking_issues":
 			blocking++
 		case "no_blocking_issues":
+			// A clean verdict that also lists files it could not review is a
+			// contradiction; fail closed.
+			if len(s.Files.NotReviewed) > 0 {
+				failedSkills++
+			}
 		default: // "failed" and anything unknown
 			failedSkills++
 		}
@@ -133,47 +138,55 @@ func withMarker(comment string) string {
 	return Marker + "\n" + comment
 }
 
-// nothingReviewedNote lists the distinct skipped files across skills.
+// nothingReviewedNote lists the distinct skipped paths across skills, one line
+// per path. A path skipped under different rules by different skills shows all
+// of its rules, sorted.
 func nothingReviewedNote(skills []result.Skill) string {
-	seen := map[result.Skipped]bool{}
-	var all []result.Skipped
+	rules := map[string]map[string]bool{}
 	for _, s := range skills {
 		for _, f := range s.Files.Skipped {
-			if !seen[f] {
-				seen[f] = true
-				all = append(all, f)
+			if rules[f.Path] == nil {
+				rules[f.Path] = map[string]bool{}
 			}
+			rules[f.Path][f.Rule] = true
 		}
 	}
-	sort.Slice(all, func(i, j int) bool {
-		if all[i].Path != all[j].Path {
-			return all[i].Path < all[j].Path
-		}
-		return all[i].Rule < all[j].Rule
-	})
+	paths := make([]string, 0, len(rules))
+	for p := range rules {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
 
 	var b strings.Builder
 	b.WriteString("---\n**Not approved:** every changed file was skipped by pergent's default rules, so nothing was reviewed. A human needs to look.\n")
-	if len(all) > 0 {
+	if len(paths) > 0 {
 		b.WriteString("\n")
 	}
-	for i, f := range all {
+	for i, p := range paths {
 		if i == maxListedSkipped {
-			fmt.Fprintf(&b, "- …and %d more\n", len(all)-maxListedSkipped)
+			fmt.Fprintf(&b, "- …and %d more\n", len(paths)-maxListedSkipped)
 			break
 		}
-		fmt.Fprintf(&b, "- `%s` (%s)\n", f.Path, f.Rule)
+		rs := make([]string, 0, len(rules[p]))
+		for r := range rules[p] {
+			rs = append(rs, r)
+		}
+		sort.Strings(rs)
+		fmt.Fprintf(&b, "- `%s` (%s)\n", p, strings.Join(rs, ", "))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
 // withNote puts note before the hidden findings block when the comment ends
-// with it, and appends it otherwise.
+// with it (ignoring trailing newlines on both), and appends it otherwise. The
+// block stays the last line, with the comment's own trailing newlines.
 func withNote(comment, block, note string) string {
 	trimmed := strings.TrimRight(comment, "\n")
-	if block != "" && strings.HasSuffix(trimmed, block) {
-		before := strings.TrimRight(strings.TrimSuffix(trimmed, block), "\n")
-		return before + "\n\n" + note + "\n\n" + block
+	tail := comment[len(trimmed):]
+	tb := strings.TrimRight(block, "\n")
+	if tb != "" && strings.HasSuffix(trimmed, tb) {
+		before := strings.TrimRight(strings.TrimSuffix(trimmed, tb), "\n")
+		return before + "\n\n" + note + "\n\n" + tb + tail
 	}
 	return trimmed + "\n\n" + note + "\n"
 }

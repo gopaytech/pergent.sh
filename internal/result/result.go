@@ -87,12 +87,12 @@ func Parse(data []byte) (*Result, error) {
 }
 
 type trimmed struct {
-	SchemaVersion int           `json:"schema_version"`
-	Status        string        `json:"status"`
-	Skills        []trimmedSkil `json:"skills"`
+	SchemaVersion int            `json:"schema_version"`
+	Status        string         `json:"status"`
+	Skills        []trimmedSkill `json:"skills"`
 }
 
-type trimmedSkil struct {
+type trimmedSkill struct {
 	Name     string            `json:"name"`
 	Findings []json.RawMessage `json:"findings"`
 }
@@ -105,13 +105,13 @@ func Trim(data []byte) ([]byte, error) {
 	if err := json.Unmarshal(data, &r); err != nil {
 		return nil, fmt.Errorf("decode result: %w", err)
 	}
-	t := trimmed{SchemaVersion: r.SchemaVersion, Status: r.Status, Skills: make([]trimmedSkil, 0, len(r.Skills))}
+	t := trimmed{SchemaVersion: r.SchemaVersion, Status: r.Status, Skills: make([]trimmedSkill, 0, len(r.Skills))}
 	for _, s := range r.Skills {
 		f := s.Findings
 		if f == nil {
 			f = []json.RawMessage{}
 		}
-		t.Skills = append(t.Skills, trimmedSkil{Name: s.Name, Findings: f})
+		t.Skills = append(t.Skills, trimmedSkill{Name: s.Name, Findings: f})
 	}
 	return json.Marshal(t)
 }

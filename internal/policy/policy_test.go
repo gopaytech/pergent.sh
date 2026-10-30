@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -241,5 +242,74 @@ func TestErrorComment(t *testing.T) {
 	want := Marker + "\n⚠️ **pergent couldn't review this MR:** reason."
 	if got := ErrorComment("reason"); got != want {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestNoteGoesBeforeRealFindingsBlockShape(t *testing.T) {
+	// pergent's findings_block ends with a newline, and so does the markdown.
+	block := "<!-- pergent:findings eyJ9 -->\n"
+	r := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Skipped: []result.Skipped{{Path: "go.sum", Rule: "lockfile"}}}})
+	r.Comment = result.Comment{Markdown: Marker + "\n### review\n\nbody\n\n" + block, FindingsBlock: block}
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	if d.Approve {
+		t.Fatal("approved")
+	}
+	if !strings.HasSuffix(d.Comment, "\n\n"+block) {
+		t.Fatalf("block must be last: %q", d.Comment)
+	}
+	if strings.Index(d.Comment, "**Not approved:**") > strings.Index(d.Comment, "<!-- pergent:findings") {
+		t.Errorf("note must precede the block: %q", d.Comment)
+	}
+	if strings.Count(d.Comment, "<!-- pergent:findings") != 1 {
+		t.Errorf("block duplicated: %q", d.Comment)
+	}
+}
+
+func TestCleanVerdictWithNotReviewedFilesFailsClosed(t *testing.T) {
+	s := skill("a", "no_blocking_issues", "f.go")
+	s.Files.NotReviewed = []json.RawMessage{json.RawMessage(`{"path":"g.go","cause":"timeout"}`)}
+	for _, tc := range []struct {
+		f    config.FailureStatus
+		want Status
+	}{{config.FailureStatusFailed, StatusFailed}, {config.FailureStatusNeutral, StatusNeutral}} {
+		d := Decide(Outcome{Result: completed(s, skill("b", "no_blocking_issues", "f.go"))}, tc.f)
+		if d.Approve || d.Status != tc.want || d.Description != "Review failed for 1 of 2 skills" {
+			t.Errorf("%s: got %+v", tc.f, d)
+		}
+	}
+}
+
+func TestNothingReviewedListsDistinctPathsWithJoinedRules(t *testing.T) {
+	r := completed(
+		result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Skipped: []result.Skipped{{Path: "go.sum", Rule: "lockfile"}, {Path: "a.go", Rule: "generated"}}}},
+		result.Skill{Name: "b", Verdict: "no_blocking_issues", Files: result.Files{Skipped: []result.Skipped{{Path: "go.sum", Rule: "out of scope"}, {Path: "go.sum", Rule: "lockfile"}}}},
+	)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	if strings.Count(d.Comment, "`go.sum`") != 1 || !strings.Contains(d.Comment, "- `go.sum` (lockfile, out of scope)") {
+		t.Errorf("comment: %q", d.Comment)
+	}
+	if strings.Index(d.Comment, "`a.go`") > strings.Index(d.Comment, "`go.sum`") {
+		t.Errorf("not sorted: %q", d.Comment)
+	}
+}
+
+func TestNothingReviewedCapCountsPaths(t *testing.T) {
+	// 22 paths, each skipped by two skills: the cap counts paths, not pairs.
+	var a, b []result.Skipped
+	for i := 0; i < 22; i++ {
+		p := fmt.Sprintf("p/%02d", i)
+		a = append(a, result.Skipped{Path: p, Rule: "lockfile"})
+		b = append(b, result.Skipped{Path: p, Rule: "vendored"})
+	}
+	r := completed(
+		result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Skipped: a}},
+		result.Skill{Name: "b", Verdict: "no_blocking_issues", Files: result.Files{Skipped: b}},
+	)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	if got := strings.Count(d.Comment, "(lockfile, vendored)"); got != 20 {
+		t.Errorf("listed %d, want 20", got)
+	}
+	if !strings.Contains(d.Comment, "- …and 2 more") {
+		t.Errorf("comment: %q", d.Comment)
 	}
 }
