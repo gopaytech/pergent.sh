@@ -52,7 +52,8 @@ config:
       review_token_env: GITLAB_REVIEW_TOKEN
       approve_token_env: GITLAB_APPROVE_TOKEN
       webhook_secret_env: GITLAB_WEBHOOK_SECRET
-  # GitHub: one entry per pair of GitHub Apps (see the README), e.g.
+  # GitHub: one entry per pair of GitHub Apps (see the README). For GitHub
+  # only, also set gitlab: [] to drop the example GitLab instance above. E.g.
   # github:
   #   - name: gh
   #     review_app:
