@@ -1,0 +1,41 @@
+public_url: https://pergent.example.com
+skills_dir: /skills
+
+gitlab:
+  - name: main
+    url: https://gitlab.example.com
+    review_token_env: GITLAB_REVIEW_TOKEN
+    approve_token_env: GITLAB_APPROVE_TOKEN
+    webhook_secret_env: GITLAB_WEBHOOK_SECRET
+
+github:
+  - name: gh
+    review_app:
+      app_id: 1001
+      private_key_env: GITHUB_REVIEW_APP_KEY
+    approve_app:
+      app_id: 1002
+      private_key_env: GITHUB_APPROVE_APP_KEY
+    webhook_secret_env: GITHUB_WEBHOOK_SECRET
+  - name: gh-token
+    api_url: https://github.example.com/api/v3
+    review_app:
+      app_id: 2001
+      private_key_env: GITHUB_TOKEN_REVIEW_APP_KEY
+    approve_token_env: GITHUB_APPROVE_TOKEN
+    webhook_secret_env: GITHUB_TOKEN_WEBHOOK_SECRET
+
+repositories:
+  - gitlab: main
+    project: acme/widgets
+  - github: gh
+    project: acme/widgets
+    skills: [security]
+    failure_status: neutral
+
+llm:
+  provider: anthropic
+  model: claude-sonnet-4
+
+jobs:
+  namespace: pergent

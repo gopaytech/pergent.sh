@@ -37,16 +37,25 @@ const (
 	FailureStatusNeutral FailureStatus = "neutral"
 )
 
+const defaultGitHubAPIURL = "https://api.github.com"
+
+// Platform names, as returned by Config.Platform.
+const (
+	PlatformGitLab = "gitlab"
+	PlatformGitHub = "github"
+)
+
 // Config is the whole config file after defaults.
 type Config struct {
-	Listen       string       `yaml:"listen"`
-	PublicURL    string       `yaml:"public_url"`
-	CallbackURL  string       `yaml:"callback_url"`
-	SkillsDir    string       `yaml:"skills_dir"`
-	GitLab       []Instance   `yaml:"gitlab"`
-	Repositories []Repository `yaml:"repositories"`
-	LLM          LLM          `yaml:"llm"`
-	Jobs         Jobs         `yaml:"jobs"`
+	Listen       string           `yaml:"listen"`
+	PublicURL    string           `yaml:"public_url"`
+	CallbackURL  string           `yaml:"callback_url"`
+	SkillsDir    string           `yaml:"skills_dir"`
+	GitLab       []Instance       `yaml:"gitlab"`
+	GitHub       []GitHubInstance `yaml:"github"`
+	Repositories []Repository     `yaml:"repositories"`
+	LLM          LLM              `yaml:"llm"`
+	Jobs         Jobs             `yaml:"jobs"`
 }
 
 // Instance is one GitLab server and the env vars holding its secrets.
@@ -58,9 +67,36 @@ type Instance struct {
 	WebhookSecretEnv string `yaml:"webhook_secret_env"`
 }
 
-// Repository is a project that is reviewed. Listing it switches it on.
+// GitHubInstance is one pair of GitHub Apps (and the webhook that feeds the
+// review App) and the env vars holding their secrets. One instance covers
+// every organisation the Apps are installed on.
+//
+// The review App comments, writes the check run and clones; it holds the
+// webhook. Approvals come from exactly one of ApproveApp (a second App, the
+// default) or ApproveTokenEnv (a bot user's fine-grained token, the fallback
+// when App approvals do not count toward required reviews).
+type GitHubInstance struct {
+	Name             string `yaml:"name"`
+	APIURL           string `yaml:"api_url"` // default https://api.github.com
+	ReviewApp        App    `yaml:"review_app"`
+	ApproveApp       *App   `yaml:"approve_app"`
+	ApproveTokenEnv  string `yaml:"approve_token_env"`
+	WebhookSecretEnv string `yaml:"webhook_secret_env"`
+}
+
+// App is a GitHub App: its numeric ID and the env var holding its PEM
+// private key.
+type App struct {
+	AppID         int64  `yaml:"app_id"`
+	PrivateKeyEnv string `yaml:"private_key_env"`
+}
+
+// Repository is a project that is reviewed. Listing it switches it on. It
+// names exactly one of GitLab (an instance under gitlab:) and GitHub (an
+// instance under github:); Project is a GitLab path or a GitHub owner/name.
 type Repository struct {
 	GitLab        string        `yaml:"gitlab"`
+	GitHub        string        `yaml:"github"`
 	Project       string        `yaml:"project"`
 	Skills        []string      `yaml:"skills"`
 	FailureStatus FailureStatus `yaml:"failure_status"`
@@ -87,14 +123,15 @@ type Jobs struct {
 // fileConfig mirrors Config for decoding: Jobs needs string durations and
 // quantities, and pointers tell an omitted number from an explicit 0.
 type fileConfig struct {
-	Listen       string       `yaml:"listen"`
-	PublicURL    string       `yaml:"public_url"`
-	CallbackURL  string       `yaml:"callback_url"`
-	SkillsDir    string       `yaml:"skills_dir"`
-	GitLab       []Instance   `yaml:"gitlab"`
-	Repositories []Repository `yaml:"repositories"`
-	LLM          LLM          `yaml:"llm"`
-	Jobs         fileJobs     `yaml:"jobs"`
+	Listen       string           `yaml:"listen"`
+	PublicURL    string           `yaml:"public_url"`
+	CallbackURL  string           `yaml:"callback_url"`
+	SkillsDir    string           `yaml:"skills_dir"`
+	GitLab       []Instance       `yaml:"gitlab"`
+	GitHub       []GitHubInstance `yaml:"github"`
+	Repositories []Repository     `yaml:"repositories"`
+	LLM          LLM              `yaml:"llm"`
+	Jobs         fileJobs         `yaml:"jobs"`
 }
 
 type fileJobs struct {
@@ -187,6 +224,7 @@ func Load(path string) (*Config, error) {
 		CallbackURL:  raw.CallbackURL,
 		SkillsDir:    raw.SkillsDir,
 		GitLab:       raw.GitLab,
+		GitHub:       raw.GitHub,
 		Repositories: raw.Repositories,
 		LLM:          raw.LLM,
 		Jobs: Jobs{
@@ -234,6 +272,11 @@ func (c *Config) applyDefaults() {
 	if len(c.Jobs.Resources.Requests) == 0 && len(c.Jobs.Resources.Limits) == 0 {
 		c.Jobs.Resources = defaultResources()
 	}
+	for i := range c.GitHub {
+		if c.GitHub[i].APIURL == "" {
+			c.GitHub[i].APIURL = defaultGitHubAPIURL
+		}
+	}
 	for i := range c.Repositories {
 		if c.Repositories[i].FailureStatus == "" {
 			c.Repositories[i].FailureStatus = FailureStatusFailed
@@ -263,15 +306,26 @@ func (c *Config) Validate() error {
 		add("skills_dir is required")
 	}
 
-	instances := make(map[string]bool, len(c.GitLab))
+	// Instance names are unique across gitlab: and github:, so a name alone
+	// tells the platform (Config.Platform).
+	names := make(map[string]string, len(c.GitLab)+len(c.GitHub))
+	claim := func(platform, name string) {
+		switch prev, ok := names[name]; {
+		case !ok:
+			names[name] = platform
+		case prev == platform:
+			add("duplicate %s instance %q", platform, name)
+		default:
+			add("instance name %q is used by both gitlab and github", name)
+		}
+	}
+	gitlabNames := make(map[string]bool, len(c.GitLab))
 	for i, inst := range c.GitLab {
 		if !instanceNameRE.MatchString(inst.Name) {
 			add("gitlab[%d]: instance name %q must match %s", i, inst.Name, instanceNameRE)
 		}
-		if instances[inst.Name] {
-			add("duplicate gitlab instance %q", inst.Name)
-		}
-		instances[inst.Name] = true
+		claim(PlatformGitLab, inst.Name)
+		gitlabNames[inst.Name] = true
 		if err := checkURL(fmt.Sprintf("gitlab[%d].url", i), inst.URL, true); err != nil {
 			errs = append(errs, err)
 		}
@@ -286,17 +340,44 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	seen := make(map[[2]string]bool, len(c.Repositories))
+	githubNames := make(map[string]bool, len(c.GitHub))
+	for i, inst := range c.GitHub {
+		if !instanceNameRE.MatchString(inst.Name) {
+			add("github[%d]: instance name %q must match %s", i, inst.Name, instanceNameRE)
+		}
+		claim(PlatformGitHub, inst.Name)
+		githubNames[inst.Name] = true
+		errs = append(errs, checkGitHubInstance(i, inst)...)
+	}
+
+	seen := make(map[[3]string]bool, len(c.Repositories))
 	for i, repo := range c.Repositories {
-		if !instances[repo.GitLab] {
-			add("repositories[%d]: unknown gitlab instance %q", i, repo.GitLab)
+		platform, instance := PlatformGitLab, repo.GitLab
+		switch {
+		case repo.GitLab != "" && repo.GitHub != "":
+			add("repositories[%d]: exactly one of gitlab and github must be set, got both", i)
+		case repo.GitLab == "" && repo.GitHub == "":
+			add("repositories[%d]: exactly one of gitlab and github must be set, got neither", i)
+		case repo.GitHub != "":
+			platform, instance = PlatformGitHub, repo.GitHub
+			if !githubNames[instance] {
+				add("repositories[%d]: unknown github instance %q", i, instance)
+			}
+		default:
+			if !gitlabNames[instance] {
+				add("repositories[%d]: unknown gitlab instance %q", i, instance)
+			}
 		}
-		if repo.Project == "" {
+		switch {
+		case repo.Project == "":
 			add("repositories[%d]: project is required", i)
+		case platform == PlatformGitHub && !isOwnerName(repo.Project):
+			add("repositories[%d]: github project %q must be owner/name", i, repo.Project)
 		}
-		key := [2]string{repo.GitLab, repo.Project}
+		// Both platforms match project paths case-insensitively.
+		key := [3]string{platform, instance, strings.ToLower(repo.Project)}
 		if seen[key] {
-			add("duplicate repository %s on gitlab instance %q", repo.Project, repo.GitLab)
+			add("duplicate repository %s on %s instance %q", repo.Project, platform, instance)
 		}
 		seen[key] = true
 		if repo.FailureStatus != FailureStatusFailed && repo.FailureStatus != FailureStatusNeutral {
@@ -332,6 +413,51 @@ func (c *Config) Validate() error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// checkGitHubInstance returns every problem with the i-th github instance
+// other than its name.
+func checkGitHubInstance(i int, inst GitHubInstance) []error {
+	var errs []error
+	add := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
+	prefix := fmt.Sprintf("github[%d] (%s)", i, inst.Name)
+
+	field := fmt.Sprintf("github[%d].api_url", i)
+	if err := checkURL(field, inst.APIURL, true); err != nil {
+		errs = append(errs, err)
+	} else if u, _ := url.Parse(inst.APIURL); u.User != nil {
+		add("%s must not contain credentials", field)
+	}
+
+	checkApp := func(name string, app App) {
+		if app.AppID <= 0 {
+			add("%s: %s.app_id must be positive, got %d", prefix, name, app.AppID)
+		}
+		if app.PrivateKeyEnv == "" {
+			add("%s: %s.private_key_env is required", prefix, name)
+		}
+	}
+	checkApp("review_app", inst.ReviewApp)
+
+	switch {
+	case inst.ApproveApp != nil && inst.ApproveTokenEnv != "":
+		add("%s: exactly one of approve_app and approve_token_env must be set, got both", prefix)
+	case inst.ApproveApp == nil && inst.ApproveTokenEnv == "":
+		add("%s: exactly one of approve_app and approve_token_env must be set, got neither", prefix)
+	case inst.ApproveApp != nil:
+		checkApp("approve_app", *inst.ApproveApp)
+	}
+
+	if inst.WebhookSecretEnv == "" {
+		add("%s: webhook_secret_env is required", prefix)
+	}
+	return errs
+}
+
+// isOwnerName reports whether project is exactly owner/name.
+func isOwnerName(project string) bool {
+	owner, name, ok := strings.Cut(project, "/")
+	return ok && owner != "" && name != "" && !strings.Contains(name, "/")
 }
 
 // checkURL requires an absolute URL without a trailing slash. When https is
@@ -379,7 +505,8 @@ func checkImagePinned(image string) error {
 	return nil
 }
 
-// Instance returns the GitLab instance with the given name.
+// Instance returns the GitLab instance with the given name. It knows nothing
+// of GitHub instances: use GitHubInstance, and Platform to tell which a name is.
 func (c *Config) Instance(name string) (Instance, bool) {
 	for _, inst := range c.GitLab {
 		if inst.Name == name {
@@ -389,7 +516,30 @@ func (c *Config) Instance(name string) (Instance, bool) {
 	return Instance{}, false
 }
 
-// Repository returns the repository configured for project on instance.
+// GitHubInstance returns the GitHub instance with the given name.
+func (c *Config) GitHubInstance(name string) (GitHubInstance, bool) {
+	for _, inst := range c.GitHub {
+		if inst.Name == name {
+			return inst, true
+		}
+	}
+	return GitHubInstance{}, false
+}
+
+// Platform reports which platform the named instance is on: "gitlab" or
+// "github". Names are unique across both lists.
+func (c *Config) Platform(instance string) (string, bool) {
+	if _, ok := c.Instance(instance); ok {
+		return PlatformGitLab, true
+	}
+	if _, ok := c.GitHubInstance(instance); ok {
+		return PlatformGitHub, true
+	}
+	return "", false
+}
+
+// Repository returns the GitLab repository configured for project on
+// instance. GitHub repositories are not found here.
 func (c *Config) Repository(instance, project string) (Repository, bool) {
 	for _, repo := range c.Repositories {
 		if repo.GitLab == instance && repo.Project == project {
@@ -423,4 +573,40 @@ func (i Instance) Secrets() (review, approve, webhook string, err error) {
 		return "", "", "", err
 	}
 	return review, approve, webhook, nil
+}
+
+// Secrets reads the instance's review App private key, approver secret (the
+// approve App's private key, or the approve token) and webhook secret from
+// the environment. An unset or empty variable is an error that names it,
+// never its value.
+func (g GitHubInstance) Secrets() (reviewKey, approveKeyOrToken, webhook string, err error) {
+	read := func(env string) (string, error) {
+		if env == "" {
+			return "", fmt.Errorf("github instance %q: env var name is empty", g.Name)
+		}
+		v := os.Getenv(env)
+		if v == "" {
+			return "", fmt.Errorf("github instance %q: env var %s is not set or empty", g.Name, env)
+		}
+		return v, nil
+	}
+	approveEnv := g.ApproveTokenEnv
+	switch {
+	case g.ApproveApp != nil && g.ApproveTokenEnv != "":
+		return "", "", "", fmt.Errorf("github instance %q: both approve_app and approve_token_env are set", g.Name)
+	case g.ApproveApp != nil:
+		approveEnv = g.ApproveApp.PrivateKeyEnv
+	case g.ApproveTokenEnv == "":
+		return "", "", "", fmt.Errorf("github instance %q: neither approve_app nor approve_token_env is set", g.Name)
+	}
+	if reviewKey, err = read(g.ReviewApp.PrivateKeyEnv); err != nil {
+		return "", "", "", err
+	}
+	if approveKeyOrToken, err = read(approveEnv); err != nil {
+		return "", "", "", err
+	}
+	if webhook, err = read(g.WebhookSecretEnv); err != nil {
+		return "", "", "", err
+	}
+	return reviewKey, approveKeyOrToken, webhook, nil
 }

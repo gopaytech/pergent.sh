@@ -243,3 +243,243 @@ func TestSecretsMissingEnv(t *testing.T) {
 		t.Fatalf("error %q does not name the env var", err)
 	}
 }
+
+func loadGitHub(t *testing.T) *Config {
+	t.Helper()
+	cfg, err := Load("testdata/github.yaml")
+	if err != nil {
+		t.Fatalf("Load github.yaml: %v", err)
+	}
+	return cfg
+}
+
+func TestLoadGitHubMixed(t *testing.T) {
+	cfg := loadGitHub(t)
+
+	gh, ok := cfg.GitHubInstance("gh")
+	if !ok {
+		t.Fatal("GitHubInstance(gh) not found")
+	}
+	if gh.APIURL != "https://api.github.com" {
+		t.Errorf("APIURL default = %q", gh.APIURL)
+	}
+	if gh.ReviewApp.AppID != 1001 || gh.ReviewApp.PrivateKeyEnv != "GITHUB_REVIEW_APP_KEY" {
+		t.Errorf("ReviewApp = %+v", gh.ReviewApp)
+	}
+	if gh.ApproveApp == nil || gh.ApproveApp.AppID != 1002 || gh.ApproveApp.PrivateKeyEnv != "GITHUB_APPROVE_APP_KEY" {
+		t.Errorf("ApproveApp = %+v", gh.ApproveApp)
+	}
+	if gh.ApproveTokenEnv != "" || gh.WebhookSecretEnv != "GITHUB_WEBHOOK_SECRET" {
+		t.Errorf("gh = %+v", gh)
+	}
+
+	tok, ok := cfg.GitHubInstance("gh-token")
+	if !ok || tok.ApproveApp != nil || tok.ApproveTokenEnv != "GITHUB_APPROVE_TOKEN" ||
+		tok.APIURL != "https://github.example.com/api/v3" {
+		t.Errorf("gh-token = %+v, %v", tok, ok)
+	}
+	if _, ok := cfg.GitHubInstance("main"); ok {
+		t.Error("GitHubInstance(main) found; main is a GitLab instance")
+	}
+	if _, ok := cfg.Instance("gh"); ok {
+		t.Error("Instance(gh) found; Instance is GitLab-only")
+	}
+
+	for name, want := range map[string]string{"main": "gitlab", "gh": "github", "gh-token": "github"} {
+		if got, ok := cfg.Platform(name); !ok || got != want {
+			t.Errorf("Platform(%q) = %q, %v; want %q", name, got, ok, want)
+		}
+	}
+	if got, ok := cfg.Platform("nope"); ok || got != "" {
+		t.Errorf("Platform(nope) = %q, %v", got, ok)
+	}
+
+	repo := cfg.Repositories[1]
+	if repo.GitHub != "gh" || repo.GitLab != "" || repo.Project != "acme/widgets" ||
+		repo.FailureStatus != FailureStatusNeutral {
+		t.Errorf("github repository = %+v", repo)
+	}
+	if cfg.Repositories[0].FailureStatus != FailureStatusFailed {
+		t.Errorf("gitlab repository default failure_status = %q", cfg.Repositories[0].FailureStatus)
+	}
+	// Repository stays GitLab-only: the same project path on GitHub is not it.
+	if r, ok := cfg.Repository("gh", "acme/widgets"); ok {
+		t.Errorf("Repository(gh, ...) = %+v, want not found", r)
+	}
+}
+
+func TestValidateRejectsGitHub(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(c *Config)
+		wantErr string
+	}{
+		{"name used by both platforms", func(c *Config) { c.GitHub[0].Name = "main" }, "both gitlab and github"},
+		{"duplicate github instance", func(c *Config) { c.GitHub[1].Name = "gh" }, "duplicate github instance"},
+		{"bad github instance name", func(c *Config) { c.GitHub[0].Name = "GH_1" }, "github[0]: instance name"},
+		{"repository with both platforms", func(c *Config) { c.Repositories[1].GitLab = "main" }, "exactly one of gitlab and github"},
+		{"repository with neither platform", func(c *Config) { c.Repositories[1].GitHub = "" }, "exactly one of gitlab and github"},
+		{"unknown github instance", func(c *Config) { c.Repositories[1].GitHub = "nope" }, "unknown github instance"},
+		{"github repository names a gitlab instance", func(c *Config) { c.Repositories[1].GitHub = "main" }, "unknown github instance"},
+		{"gitlab repository names a github instance", func(c *Config) { c.Repositories[0].GitLab = "gh" }, "unknown gitlab instance"},
+		{"project without owner", func(c *Config) { c.Repositories[1].Project = "widgets" }, "owner/name"},
+		{"project with subgroup", func(c *Config) { c.Repositories[1].Project = "acme/team/widgets" }, "owner/name"},
+		{"project with empty owner", func(c *Config) { c.Repositories[1].Project = "/widgets" }, "owner/name"},
+		{"project with empty name", func(c *Config) { c.Repositories[1].Project = "acme/" }, "owner/name"},
+		{"duplicate github repository", func(c *Config) { c.Repositories = append(c.Repositories, c.Repositories[1]) }, "duplicate repository"},
+		{"duplicate github repository, other case", func(c *Config) {
+			r := c.Repositories[1]
+			r.Project = "Acme/Widgets"
+			c.Repositories = append(c.Repositories, r)
+		}, "duplicate repository"},
+		{"duplicate gitlab repository, other case", func(c *Config) {
+			r := c.Repositories[0]
+			r.Project = "Acme/Widgets"
+			c.Repositories = append(c.Repositories, r)
+		}, "duplicate repository"},
+		{"bad failure_status on github repository", func(c *Config) { c.Repositories[1].FailureStatus = "maybe" }, "failure_status"},
+		{"http api_url", func(c *Config) { c.GitHub[0].APIURL = "http://api.github.com" }, "github[0].api_url"},
+		{"api_url with trailing slash", func(c *Config) { c.GitHub[0].APIURL = "https://api.github.com/" }, "trailing slash"},
+		{"api_url with userinfo", func(c *Config) { c.GitHub[0].APIURL = "https://user:pw@api.github.com" }, "credentials"},
+		{"api_url not a url", func(c *Config) { c.GitHub[0].APIURL = "api.github.com" }, "api_url"},
+		{"review app_id zero", func(c *Config) { c.GitHub[0].ReviewApp.AppID = 0 }, "review_app.app_id"},
+		{"review app_id negative", func(c *Config) { c.GitHub[0].ReviewApp.AppID = -3 }, "review_app.app_id"},
+		{"review private_key_env empty", func(c *Config) { c.GitHub[0].ReviewApp.PrivateKeyEnv = "" }, "review_app.private_key_env"},
+		{"webhook_secret_env empty", func(c *Config) { c.GitHub[0].WebhookSecretEnv = "" }, "webhook_secret_env"},
+		{"approve app_id zero", func(c *Config) { c.GitHub[0].ApproveApp.AppID = 0 }, "approve_app.app_id"},
+		{"approve private_key_env empty", func(c *Config) { c.GitHub[0].ApproveApp.PrivateKeyEnv = "" }, "approve_app.private_key_env"},
+		{"both approvers", func(c *Config) { c.GitHub[0].ApproveTokenEnv = "SOME_TOKEN" }, "exactly one of approve_app and approve_token_env"},
+		{"no approver", func(c *Config) { c.GitHub[0].ApproveApp = nil }, "exactly one of approve_app and approve_token_env"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := loadGitHub(t)
+			tt.mutate(cfg)
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("Validate() = nil, want error containing %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Validate() = %q, want it to contain %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoadGitHubRejectsBadYAML(t *testing.T) {
+	base, err := os.ReadFile("testdata/github.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name, from, to, wantErr string
+	}{
+		{"unknown key in review_app", "      app_id: 1001\n", "      app_id: 1001\n      app_idd: 1\n", "app_idd"},
+		{"unknown key in github instance", "    webhook_secret_env: GITHUB_WEBHOOK_SECRET\n", "    webhook_secret_env: GITHUB_WEBHOOK_SECRET\n    secret: x\n", "secret"},
+		{"non-numeric app_id", "app_id: 1001", "app_id: abc", "app_id"},
+		{"unknown key in repository", "    project: acme/widgets\n    skills", "    project: acme/widgets\n    nope: 1\n    skills", "nope"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := strings.Replace(string(base), tt.from, tt.to, 1)
+			if body == string(base) {
+				t.Fatal("test replacement did not apply")
+			}
+			_, err := Load(writeConfig(t, body))
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Load() = %v, want error containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestGitHubSecretsWithApproveApp(t *testing.T) {
+	inst := GitHubInstance{
+		Name:             "gh",
+		ReviewApp:        App{AppID: 1, PrivateKeyEnv: "PERGENT_TEST_GH_REVIEW_KEY"},
+		ApproveApp:       &App{AppID: 2, PrivateKeyEnv: "PERGENT_TEST_GH_APPROVE_KEY"},
+		WebhookSecretEnv: "PERGENT_TEST_GH_WEBHOOK",
+	}
+	t.Setenv("PERGENT_TEST_GH_REVIEW_KEY", "review-pem")
+	t.Setenv("PERGENT_TEST_GH_APPROVE_KEY", "approve-pem")
+	t.Setenv("PERGENT_TEST_GH_WEBHOOK", "hook")
+	review, approve, webhook, err := inst.Secrets()
+	if err != nil || review != "review-pem" || approve != "approve-pem" || webhook != "hook" {
+		t.Fatalf("Secrets() = %q %q %q %v", review, approve, webhook, err)
+	}
+}
+
+func TestGitHubSecretsWithApproveToken(t *testing.T) {
+	inst := GitHubInstance{
+		Name:             "gh",
+		ReviewApp:        App{AppID: 1, PrivateKeyEnv: "PERGENT_TEST_GH_REVIEW_KEY"},
+		ApproveTokenEnv:  "PERGENT_TEST_GH_APPROVE_TOKEN",
+		WebhookSecretEnv: "PERGENT_TEST_GH_WEBHOOK",
+	}
+	t.Setenv("PERGENT_TEST_GH_REVIEW_KEY", "review-pem")
+	t.Setenv("PERGENT_TEST_GH_APPROVE_TOKEN", "tok")
+	t.Setenv("PERGENT_TEST_GH_WEBHOOK", "hook")
+	review, approve, webhook, err := inst.Secrets()
+	if err != nil || review != "review-pem" || approve != "tok" || webhook != "hook" {
+		t.Fatalf("Secrets() = %q %q %q %v", review, approve, webhook, err)
+	}
+}
+
+func TestGitHubSecretsMissingEnv(t *testing.T) {
+	const secretValue = "super-secret-value"
+	full := func() GitHubInstance {
+		return GitHubInstance{
+			Name:             "gh",
+			ReviewApp:        App{AppID: 1, PrivateKeyEnv: "PERGENT_TEST_GH_REVIEW_KEY"},
+			ApproveApp:       &App{AppID: 2, PrivateKeyEnv: "PERGENT_TEST_GH_APPROVE_KEY"},
+			WebhookSecretEnv: "PERGENT_TEST_GH_WEBHOOK",
+		}
+	}
+	tests := []struct {
+		name    string
+		inst    func() GitHubInstance
+		unset   string
+		wantVar string
+	}{
+		{"review key", full, "PERGENT_TEST_GH_REVIEW_KEY", "PERGENT_TEST_GH_REVIEW_KEY"},
+		{"approve key", full, "PERGENT_TEST_GH_APPROVE_KEY", "PERGENT_TEST_GH_APPROVE_KEY"},
+		{"webhook", full, "PERGENT_TEST_GH_WEBHOOK", "PERGENT_TEST_GH_WEBHOOK"},
+		{"approve token", func() GitHubInstance {
+			i := full()
+			i.ApproveApp = nil
+			i.ApproveTokenEnv = "PERGENT_TEST_GH_APPROVE_TOKEN"
+			return i
+		}, "PERGENT_TEST_GH_APPROVE_TOKEN", "PERGENT_TEST_GH_APPROVE_TOKEN"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, v := range []string{
+				"PERGENT_TEST_GH_REVIEW_KEY", "PERGENT_TEST_GH_APPROVE_KEY",
+				"PERGENT_TEST_GH_WEBHOOK", "PERGENT_TEST_GH_APPROVE_TOKEN",
+			} {
+				t.Setenv(v, secretValue)
+			}
+			t.Setenv(tt.unset, "")
+			_, _, _, err := tt.inst().Secrets()
+			if err == nil {
+				t.Fatal("Secrets() = nil error, want error")
+			}
+			if !strings.Contains(err.Error(), tt.wantVar) {
+				t.Errorf("error %q does not name %s", err, tt.wantVar)
+			}
+			if strings.Contains(err.Error(), secretValue) {
+				t.Errorf("error %q leaks a secret value", err)
+			}
+		})
+	}
+
+	t.Run("no approver configured", func(t *testing.T) {
+		inst := full()
+		inst.ApproveApp = nil
+		t.Setenv("PERGENT_TEST_GH_REVIEW_KEY", "k")
+		t.Setenv("PERGENT_TEST_GH_WEBHOOK", "w")
+		if _, _, _, err := inst.Secrets(); err == nil {
+			t.Fatal("Secrets() = nil error, want error")
+		}
+	})
+}
