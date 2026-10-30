@@ -358,6 +358,23 @@ func (c *Client) Approve(ctx context.Context, projectID, iid int64, sha string) 
 	return err
 }
 
+// ApprovedBy returns the ids of the users who approve the merge request now.
+func (c *Client) ApprovedBy(ctx context.Context, projectID, iid int64) ([]int64, error) {
+	var a struct {
+		ApprovedBy []struct {
+			User User `json:"user"`
+		} `json:"approved_by"`
+	}
+	if _, err := c.getJSON(ctx, mrPath(projectID, iid)+"/approvals", nil, &a); err != nil {
+		return nil, err
+	}
+	ids := make([]int64, 0, len(a.ApprovedBy))
+	for _, u := range a.ApprovedBy {
+		ids = append(ids, u.User.ID)
+	}
+	return ids, nil
+}
+
 // Unapprove withdraws this user's approval. Not approved (404) is not an error.
 func (c *Client) Unapprove(ctx context.Context, projectID, iid int64) error {
 	_, err := c.do(ctx, http.MethodPost, mrPath(projectID, iid)+"/unapprove", nil, nil)

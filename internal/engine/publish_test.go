@@ -1,9 +1,13 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -249,33 +253,187 @@ func TestPublishRecreatesDeletedNote(t *testing.T) {
 }
 
 func TestPublishHeadMovedNoApprove(t *testing.T) {
-	cases := map[string]func(env *testEnv){
-		"MR has a new head": func(env *testEnv) { env.GitLab.SetMR(openMR(1, sha('c'))) },
-		"approve says the head moved": func(env *testEnv) {
-			env.GitLab.Reply(http.MethodPost, approvePath(1), http.StatusConflict, `{"message":"SHA does not match HEAD of source branch"}`)
+	cases := map[string]struct {
+		setup func(env *testEnv)
+		// recorded is the approval left recorded. When GitLab refuses the
+		// approval itself, the write-ahead record stays: unapproving the
+		// head later is harmless, and clearing it could lose the record of
+		// an older approval it replaced.
+		recorded string
+	}{
+		"MR has a new head": {setup: func(env *testEnv) { env.GitLab.SetMR(openMR(1, sha('c'))) }},
+		"approve says the head moved": {
+			setup: func(env *testEnv) {
+				env.GitLab.Reply(http.MethodPost, approvePath(1), http.StatusConflict, `{"message":"SHA does not match HEAD of source branch"}`)
+			},
+			recorded: sha('a'),
 		},
-		"MR is merged": func(env *testEnv) {
+		"MR is merged": {setup: func(env *testEnv) {
 			mr := openMR(1, sha('a'))
 			mr.State = "merged"
 			env.GitLab.SetMR(mr)
-		},
+		}},
 	}
-	for name, setup := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			env := newTestEnv(t)
 			head := sha('a')
 			id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
 			servePublish(env, 1, head)
-			setup(env)
+			tc.setup(env)
 
 			publish(t, env)
 
 			wantStatus(t, env, head, gitlab.StatusSuccess, "No blocking issues")
 			wantPublished(t, env, id)
-			if got := recordedApproval(t, env, 1); got != "" {
-				t.Errorf("approval recorded for %s, want none", got)
+			if n := len(env.GitLab.Requests(http.MethodGet, approvalsPath(1))); n != 0 {
+				t.Errorf("listed approvals %d times, want 0", n)
+			}
+			if got := recordedApproval(t, env, 1); got != tc.recorded {
+				t.Errorf("recorded approval = %q, want %q", got, tc.recorded)
 			}
 		})
+	}
+}
+
+// gitlabApprovals is a fake GitLab approval state for merge request 1: once
+// a user approved, approving again gets 401, as GitLab answers.
+type gitlabApprovals struct {
+	mu sync.Mutex
+	by []int64
+	// onApprove, when set, runs inside the approve request before the reply.
+	onApprove func()
+}
+
+func (a *gitlabApprovals) serve(env *testEnv, approver int64) {
+	env.GitLab.Handle(http.MethodPost, approvePath(1), func(w http.ResponseWriter, _ *http.Request) {
+		a.mu.Lock()
+		already := slices.Contains(a.by, approver)
+		if !already {
+			a.by = append(a.by, approver)
+		}
+		hook := a.onApprove
+		a.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if already {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = io.WriteString(w, `{"message":"401 Unauthorized"}`)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{}`)
+	})
+	env.GitLab.Handle(http.MethodGet, approvalsPath(1), func(w http.ResponseWriter, _ *http.Request) {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		by := []map[string]any{}
+		for _, id := range a.by {
+			by = append(by, map[string]any{"user": map[string]any{"id": id}})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"approved_by": by})
+	})
+}
+
+// A shutdown right after the approval reached GitLab: the approval was
+// recorded before it was made, so a stale approval can always be removed.
+func TestPublishRecordsApprovalBeforeApproving(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublish(env, 1, head)
+	ctx, cancel := context.WithCancel(env.ctx)
+	defer cancel()
+	approvals := &gitlabApprovals{onApprove: cancel}
+	approvals.serve(env, testApproveUserID)
+
+	if err := env.Engine.PublishOnce(ctx); err != nil {
+		t.Fatalf("PublishOnce: %v", err)
+	}
+
+	if r := env.Run(id); r.State != store.Reported || r.Attempts != 0 {
+		t.Errorf("run state %s, attempts %d; want reported, 0 (a shutdown is not a failed attempt)", r.State, r.Attempts)
+	}
+	if got := recordedApproval(t, env, 1); got != head {
+		t.Errorf("recorded approval = %q, want %s although the publish was cut short", got, head)
+	}
+}
+
+// The retry after an approval that landed but wasn't followed by the rest of
+// the publish: GitLab refuses the second approval, the bot is listed as an
+// approver, and the run is published without a second comment.
+func TestPublishRetryAfterApprovalLanded(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublish(env, 1, head)
+	env.GitLab.Reply(http.MethodPut, notePath(1, createdNote), http.StatusOK, `{}`)
+	ctx, cancel := context.WithCancel(env.ctx)
+	defer cancel()
+	approvals := &gitlabApprovals{onApprove: cancel}
+	approvals.serve(env, testApproveUserID)
+	if err := env.Engine.PublishOnce(ctx); err != nil {
+		t.Fatalf("PublishOnce: %v", err)
+	}
+	approvals.mu.Lock()
+	approvals.onApprove = nil
+	approvals.mu.Unlock()
+
+	publish(t, env)
+
+	wantPublished(t, env, id)
+	if n := len(env.GitLab.Requests(http.MethodPost, notesPath(1))); n != 1 {
+		t.Errorf("created %d notes, want 1 (the retry updates it)", n)
+	}
+	if n := len(env.GitLab.Requests(http.MethodPut, notePath(1, createdNote))); n != 1 {
+		t.Errorf("updated the note %d times on retry, want 1", n)
+	}
+	if got := recordedApproval(t, env, 1); got != head {
+		t.Errorf("recorded approval = %q, want %s", got, head)
+	}
+}
+
+func TestPublishAlreadyApprovedByBot(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublish(env, 1, head)
+	approvals := &gitlabApprovals{by: []int64{31, testApproveUserID}}
+	approvals.serve(env, testApproveUserID)
+
+	publish(t, env)
+
+	if n := len(env.GitLab.Requests(http.MethodPost, approvePath(1))); n != 1 {
+		t.Errorf("approve called %d times, want 1", n)
+	}
+	wantPublished(t, env, id)
+	if got := recordedApproval(t, env, 1); got != head {
+		t.Errorf("recorded approval = %q, want %s", got, head)
+	}
+}
+
+func TestPublishApproveRefusedNotPublished(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublish(env, 1, head)
+	env.GitLab.Reply(http.MethodPost, approvePath(1), http.StatusUnauthorized, `{"message":"401 Unauthorized"}`)
+	env.GitLab.Reply(http.MethodGet, approvalsPath(1), http.StatusOK, map[string]any{
+		"approved_by": []map[string]any{{"user": map[string]any{"id": 31}}},
+	})
+
+	publish(t, env)
+
+	r := env.Run(id)
+	if r.State != store.Reported || r.Attempts != 1 || !strings.Contains(r.PublishError, "401") {
+		t.Errorf("run state %s, attempts %d, error %q; want reported, 1, the 401", r.State, r.Attempts, r.PublishError)
+	}
+	// The approval was recorded ahead; unapproving later is harmless.
+	if got := recordedApproval(t, env, 1); got != head {
+		t.Errorf("recorded approval = %q, want %s (recorded before approving)", got, head)
 	}
 }
 
@@ -598,6 +756,29 @@ func TestStaleApprovalUnapproved(t *testing.T) {
 	}
 }
 
+// An approval made after the stale list was read is not cleared by it.
+func TestStaleApprovalClearIsConditional(t *testing.T) {
+	env := newTestEnv(t)
+	env.Publish(1, sha('a'), resultFor(t, sha('a'), reviewed("no_blocking_issues", "a.go")))
+	if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), sha('a')); err != nil {
+		t.Fatal(err)
+	}
+	env.Enqueue(1, sha('c'))
+	env.GitLab.Handle(http.MethodPost, unapprovePath(1), func(w http.ResponseWriter, _ *http.Request) {
+		// The publisher records an approval of the new head meanwhile.
+		if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), sha('c')); err != nil {
+			t.Error(err)
+		}
+		w.WriteHeader(http.StatusCreated)
+	})
+
+	cleanup(t, env)
+
+	if got := recordedApproval(t, env, 1); got != sha('c') {
+		t.Errorf("recorded approval = %q, want the new head %s kept", got, sha('c'))
+	}
+}
+
 func TestStaleApprovalFailureAndUnknownInstance(t *testing.T) {
 	env := newTestEnv(t)
 	env.Publish(1, sha('a'), resultFor(t, sha('a'), reviewed("no_blocking_issues", "a.go")))
@@ -618,12 +799,16 @@ func TestStaleApprovalFailureAndUnknownInstance(t *testing.T) {
 		t.Fatalf("StaleApprovals = %v, %v; want only MR 1's, kept for the next pass", stale, err)
 	}
 
-	// Without bots for the instance, the approval is left alone.
+	// Without bots for the instance, the approval is left alone, quietly.
 	env.Engine.Bots = map[string]Bots{}
 	env.GitLab.Reset()
+	before := len(env.Logs())
 	cleanup(t, env)
 	if n := len(env.GitLab.Requests("", "")); n != 0 {
 		t.Errorf("made %d GitLab requests without bots for the instance", n)
+	}
+	if logs := env.Logs()[before:]; strings.Contains(logs, "level=WARN") || strings.Contains(logs, "level=ERROR") {
+		t.Errorf("an unknown instance's stale approval is logged above debug every pass:\n%s", logs)
 	}
 	if stale, _ := env.Store.StaleApprovals(env.ctx); len(stale) != 1 {
 		t.Errorf("StaleApprovals = %v, want MR 1's still", stale)

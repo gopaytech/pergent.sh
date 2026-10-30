@@ -610,6 +610,38 @@ func TestStaleApprovals(t *testing.T) {
 	}
 }
 
+func TestClearApprovedSHA(t *testing.T) {
+	s := newStore(t)
+	enqueue(t, s, mr1, "A")
+	if err := s.SetApprovedSHA(ctx, mr1, "A"); err != nil {
+		t.Fatal(err)
+	}
+	enqueue(t, s, mr1, "B")
+	// Another commit was approved meanwhile: the clear leaves it alone.
+	if err := s.ClearApprovedSHA(ctx, mr1, "X"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.StaleApprovals(ctx); len(got) != 1 || got[0].ApprovedSHA != "A" {
+		t.Fatalf("after a clear of another commit: %v, want A still recorded", got)
+	}
+	if err := s.ClearApprovedSHA(ctx, mr1, "A"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.StaleApprovals(ctx); len(got) != 0 {
+		t.Errorf("after clearing A: %v, want none", got)
+	}
+	// A merge request with no row, and an empty old value, are no-ops.
+	if err := s.ClearApprovedSHA(ctx, mr2, "A"); err != nil {
+		t.Errorf("clear on unknown MR: %v", err)
+	}
+	if err := s.ClearApprovedSHA(ctx, mr1, ""); err != nil {
+		t.Errorf("clear of empty: %v", err)
+	}
+	if id, _ := s.NoteID(ctx, mr2); id != 0 {
+		t.Errorf("clear created a row for mr2 with note %d", id)
+	}
+}
+
 func TestProjects(t *testing.T) {
 	s := newStore(t)
 	inst := "https://gitlab.example.com"

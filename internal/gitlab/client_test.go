@@ -285,6 +285,39 @@ func TestApproveHeadMoved(t *testing.T) {
 	}
 }
 
+func TestApprovedBy(t *testing.T) {
+	c, reqs := serve(t, jsonReply(map[string]any{
+		"approved": true,
+		"approved_by": []map[string]any{
+			{"user": map[string]any{"id": 200, "username": "pergent-approve"}},
+			{"user": map[string]any{"id": 31, "username": "alice"}},
+		},
+	}))
+	ids, err := c.ApprovedBy(context.Background(), 7, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, (*reqs)[0], "GET", "/api/v4/projects/7/merge_requests/3/approvals", "")
+	if len(ids) != 2 || ids[0] != 200 || ids[1] != 31 {
+		t.Fatalf("ids = %v, want [200 31]", ids)
+	}
+}
+
+func TestApprovedByNone(t *testing.T) {
+	c, _ := serve(t, jsonReply(map[string]any{"approved_by": []any{}}))
+	ids, err := c.ApprovedBy(context.Background(), 7, 3)
+	if err != nil || len(ids) != 0 {
+		t.Fatalf("ids = %v, %v; want none", ids, err)
+	}
+}
+
+func TestApprovedByError(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"403 Forbidden"}`, 403) })
+	if _, err := c.ApprovedBy(context.Background(), 7, 3); err == nil {
+		t.Fatal("want an error for a 403")
+	}
+}
+
 func TestUnapprove(t *testing.T) {
 	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(201); _, _ = w.Write([]byte(`{}`)) })
 	if err := c.Unapprove(context.Background(), 7, 3); err != nil {

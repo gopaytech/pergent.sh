@@ -53,6 +53,9 @@ const (
 	testDeployToken  = "deploy-token-example"
 	testLLMKey       = "llm-key-example"
 
+	// testApproveUserID is the approve bot's GitLab user id.
+	testApproveUserID = int64(200)
+
 	// testBoxKey is a fixed 32-byte key, standard base64.
 	testBoxKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 )
@@ -206,6 +209,7 @@ func notePath(iid, noteID int64) string {
 
 func approvePath(iid int64) string   { return mrPath(iid) + "/approve" }
 func unapprovePath(iid int64) string { return mrPath(iid) + "/unapprove" }
+func approvalsPath(iid int64) string { return mrPath(iid) + "/approvals" }
 
 // SetMR serves mr at its merge request endpoint.
 func (f *fakeGitLab) SetMR(mr gitlab.MergeRequest) {
@@ -302,9 +306,10 @@ func newTestEnv(t *testing.T) *testEnv {
 		Store:  st,
 		Config: cfg,
 		Bots: map[string]Bots{testInstance: {
-			Review:     gl.Client(testReviewToken),
-			Approve:    gl.Client(testApproveToken),
-			ReviewUser: gitlab.User{ID: 100, Username: "pergent-review"},
+			Review:      gl.Client(testReviewToken),
+			Approve:     gl.Client(testApproveToken),
+			ReviewUser:  gitlab.User{ID: 100, Username: "pergent-review"},
+			ApproveUser: gitlab.User{ID: testApproveUserID, Username: "pergent-approve"},
 		}},
 		Launcher: launcher,
 		Library:  inputs.Library{"security": []byte("---\nname: security\n---\nLook for security problems.\n")},

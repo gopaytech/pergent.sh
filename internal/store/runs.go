@@ -551,6 +551,16 @@ func (s *Store) SetApprovedSHA(ctx context.Context, mr MRKey, sha string) error 
 	return err
 }
 
+// ClearApprovedSHA clears the recorded approval only while it is still old,
+// so an approval recorded meanwhile (of a newer head) is kept. A merge request
+// without a row, or with another approval, is left alone.
+func (s *Store) ClearApprovedSHA(ctx context.Context, mr MRKey, old string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE merge_requests SET approved_sha = ''
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND approved_sha = $4`,
+		mr.Instance, mr.ProjectID, mr.IID, old)
+	return err
+}
+
 // StaleApprovals returns merge requests whose recorded approval is for a
 // commit other than the head of their newest non-superseded run.
 func (s *Store) StaleApprovals(ctx context.Context) ([]StaleApproval, error) {

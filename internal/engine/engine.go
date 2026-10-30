@@ -19,10 +19,11 @@ import (
 )
 
 // Bots are the two GitLab users of one instance. Their tokens can comment,
-// set statuses and approve, so they never reach a Job.
+// set statuses and approve, so they never reach a Job. ReviewUser and
+// ApproveUser are the users the Review and Approve tokens belong to.
 type Bots struct {
-	Review, Approve *gitlab.Client
-	ReviewUser      gitlab.User
+	Review, Approve         *gitlab.Client
+	ReviewUser, ApproveUser gitlab.User
 }
 
 // Engine holds what the loops share. Bots is keyed by instance name.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -182,6 +183,12 @@ func (e *Engine) upsertComment(ctx context.Context, bots Bots, run store.Run, bo
 // approve approves the run's head with the approve bot, only while the merge
 // request is open and still at that head. A head that moved is not an error:
 // the review stands for its own commit and the newer head gets its own run.
+//
+// The approval is recorded before it is made, so an approval that reaches
+// GitLab is always known and can be removed when it goes stale, even if
+// pergent.sh stops right after it. GitLab refuses a second approval by the
+// same user, so a refused approval counts as made when the approve bot is
+// already among the approvers (a retry after an approval that landed).
 func (e *Engine) approve(ctx context.Context, bots Bots, run store.Run, log *slog.Logger) error {
 	if bots.Approve == nil {
 		return fmt.Errorf("no approve bot for instance %q", run.MR.Instance)
@@ -194,16 +201,28 @@ func (e *Engine) approve(ctx context.Context, bots Bots, run store.Run, log *slo
 		log.Info("not approving: the merge request is closed or its head moved", "state", mr.State, "mr_head", mr.SHA)
 		return nil
 	}
+
+	sctx, cancel := settleCtx(ctx)
+	err = e.Store.SetApprovedSHA(sctx, run.MR, run.HeadSHA)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("record approval: %w", err)
+	}
+
 	err = bots.Approve.Approve(ctx, run.MR.ProjectID, run.MR.IID, run.HeadSHA)
 	if errors.Is(err, gitlab.ErrHeadMoved) {
 		log.Info("not approving: the merge request head moved")
 		return nil
 	}
 	if err != nil {
+		if bots.ApproveUser.ID != 0 {
+			ids, lerr := bots.Approve.ApprovedBy(ctx, run.MR.ProjectID, run.MR.IID)
+			if lerr == nil && slices.Contains(ids, bots.ApproveUser.ID) {
+				log.Info("the approve bot already approves the merge request", "refused_with", e.redact(err.Error()))
+				return nil
+			}
+		}
 		return fmt.Errorf("approve: %w", err)
-	}
-	if err := e.Store.SetApprovedSHA(ctx, run.MR, run.HeadSHA); err != nil {
-		return fmt.Errorf("record approval: %w", err)
 	}
 	return nil
 }
@@ -257,7 +276,14 @@ func (e *Engine) CleanupOnce(ctx context.Context) error {
 			break
 		}
 		log := e.log().With("instance", a.MR.Instance, "project_id", a.MR.ProjectID, "mr", a.MR.IID, "approved", a.ApprovedSHA)
-		if err := e.unapprove(ctx, a); err != nil {
+		bots, ok := e.Bots[a.MR.Instance]
+		if !ok || bots.Approve == nil {
+			// The instance was removed from the config; it stays listed on
+			// every pass, so don't log it above debug.
+			log.Debug("skipping the stale approval: no approve bot for the instance")
+			continue
+		}
+		if err := e.unapprove(ctx, bots, a); err != nil {
 			log.Warn("couldn't remove the stale approval; will try again", "error", e.redact(err.Error()))
 			continue
 		}
@@ -291,15 +317,14 @@ func (e *Engine) cleanUp(ctx context.Context, run store.Run, log *slog.Logger) e
 	return nil
 }
 
-func (e *Engine) unapprove(ctx context.Context, a store.StaleApproval) error {
-	bots, ok := e.Bots[a.MR.Instance]
-	if !ok || bots.Approve == nil {
-		return fmt.Errorf("no approve bot for instance %q", a.MR.Instance)
-	}
+// unapprove removes the approve bot's stale approval, then clears the record
+// only if it still names the stale commit: an approval of a newer head
+// recorded meanwhile is kept.
+func (e *Engine) unapprove(ctx context.Context, bots Bots, a store.StaleApproval) error {
 	if err := bots.Approve.Unapprove(ctx, a.MR.ProjectID, a.MR.IID); err != nil {
 		return fmt.Errorf("unapprove: %w", err)
 	}
-	if err := e.Store.SetApprovedSHA(ctx, a.MR, ""); err != nil {
+	if err := e.Store.ClearApprovedSHA(ctx, a.MR, a.ApprovedSHA); err != nil {
 		return fmt.Errorf("clear recorded approval: %w", err)
 	}
 	return nil
