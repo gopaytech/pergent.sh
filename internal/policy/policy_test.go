@@ -565,3 +565,91 @@ func TestDecideApproveBotUnavailableNotApproved(t *testing.T) {
 		t.Errorf("ApproveBot without ApproveUnavailable: %+v", d)
 	}
 }
+
+// Any skip rule that isn't known to leave the change reviewed blocks
+// approval: a rule pergent adds later (or a result that makes one up) is a
+// file nobody reviewed.
+func TestDecideUnknownSkipRuleNotApproved(t *testing.T) {
+	r := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{
+		Reviewed: []string{"f.go"},
+		Skipped:  []result.Skipped{{Path: "x/new", Rule: "too large"}, {Path: "docs/a.md", Rule: "out of scope"}},
+	}})
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	if d.Approve || d.Status != StatusSuccess || d.Description != "No blocking issues; not approved: some changed files weren't reviewed" {
+		t.Fatalf("got %+v", d)
+	}
+	if !strings.Contains(d.Comment, "\n- `x/new` (too large)\n") {
+		t.Errorf("the note doesn't list the file: %q", d.Comment)
+	}
+	if strings.Contains(d.Comment, "docs/a.md") {
+		t.Errorf("the note lists an out-of-scope file: %q", d.Comment)
+	}
+
+	// Nothing reviewed, only an unknown rule: still not approved.
+	only := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{
+		Skipped: []result.Skipped{{Path: "x/new", Rule: "too large"}}}})
+	if d := Decide(Outcome{Result: only}, config.FailureStatusFailed); d.Approve {
+		t.Fatalf("approved a review of nothing: %+v", d)
+	}
+}
+
+// Paths come from the merge request: a backtick, newline or other control
+// character in one can't break out of its code span or line, and the note
+// stays small whatever the paths.
+func TestSkippedNoteEscapesPaths(t *testing.T) {
+	r := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{
+		Reviewed: []string{"f.go"},
+		Skipped: []result.Skipped{
+			{Path: "a`b\n## pwned\rc\x00d", Rule: "lockfile"},
+			{Path: "e\u202ef", Rule: "binary\n# x`"},
+		},
+	}})
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	if d.Approve {
+		t.Fatal("approved")
+	}
+	for _, want := range []string{
+		"\n- `\"a\\x60b\\n## pwned\\rc\\x00d\"` (lockfile)\n",
+		"\n- `\"e\\u202ef\"` (`\"binary\\n# x\\x60\"`)\n",
+	} {
+		if !strings.Contains(d.Comment, want) {
+			t.Errorf("comment lacks %q:\n%q", want, d.Comment)
+		}
+	}
+	if strings.Contains(d.Comment, "\n## pwned") || strings.Contains(d.Comment, "\x00") || strings.Contains(d.Comment, "\u202e") {
+		t.Errorf("a raw control character reached the comment: %q", d.Comment)
+	}
+}
+
+func TestSkippedNoteCapsPathLengthAndSize(t *testing.T) {
+	long := strings.Repeat("é", 500)
+	r := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{
+		Reviewed: []string{"f.go"},
+		Skipped:  []result.Skipped{{Path: long, Rule: "vendored"}},
+	}})
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	want := "\n- `" + strings.Repeat("é", maxListedPath) + "…` (vendored)\n"
+	if !strings.Contains(d.Comment, want) {
+		t.Errorf("long path not cut at %d characters: %q", maxListedPath, d.Comment)
+	}
+
+	// 20 paths and a rule each at their longest stay under the note's cap.
+	var skipped []result.Skipped
+	for i := 0; i < 40; i++ {
+		skipped = append(skipped,
+			result.Skipped{Path: fmt.Sprintf("%02d", i) + strings.Repeat("\x01", 400), Rule: "lockfile"},
+			result.Skipped{Path: fmt.Sprintf("%02d", i) + strings.Repeat("\x01", 400), Rule: strings.Repeat("\x02", 400)},
+			result.Skipped{Path: fmt.Sprintf("%02d", i) + strings.Repeat("\x01", 400), Rule: strings.Repeat("\x03", 400)},
+		)
+	}
+	big := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Reviewed: []string{"f.go"}, Skipped: skipped}})
+	big.Comment = result.Comment{Markdown: Marker + "\nbody"}
+	d = Decide(Outcome{Result: big}, config.FailureStatusFailed)
+	note := strings.TrimPrefix(d.Comment, Marker+"\nbody\n\n")
+	if len(note) > maxNoteBytes {
+		t.Errorf("note is %d bytes, want at most %d", len(note), maxNoteBytes)
+	}
+	if !strings.Contains(note, "more\n") {
+		t.Errorf("note doesn't say how many paths it left out: %q", note)
+	}
+}

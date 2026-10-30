@@ -9,7 +9,10 @@ package policy
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/result"
@@ -45,17 +48,32 @@ const (
 	noteApproveUnavailable = "---\n**Not approved:** the pergent approve App isn't installed on this repository."
 	noteApproveBotNoReach  = "---\n**Not approved:** the pergent approve bot can't reach this repository."
 
+	// The skipped-files note lists at most maxListedSkipped paths, each cut
+	// to maxListedPath characters with at most maxListedRules rules of
+	// maxListedRule characters, in at most maxNoteBytes: a GitHub comment
+	// can't be over 65,536 characters, and pergent's part of it is held to
+	// 60,000 bytes (kube.CommentLimitGitHub).
 	maxListedSkipped = 20
+	maxListedPath    = 120
+	maxListedRules   = 3
+	maxListedRule    = 40
+	maxNoteBytes     = 4000
 )
 
-// defaultSkipRules are the skip rules a change decides on its own (pergent's
-// default exclusions). A file skipped under one of them was never reviewed,
-// so a review that has one is not approved. "out of scope", "excluded by
-// skill" and "no content changes" follow the skill's own scope or leave
-// nothing to review, and don't block approval.
-var defaultSkipRules = map[string]bool{
-	"deleted": true, "binary": true, "vendored": true, "lockfile": true, "generated": true,
+// reviewedSkipRules are the skip rules that don't block approval: "out of
+// scope" and "excluded by skill" follow the skill's own scope, and "no
+// content changes" leaves nothing to review (a rename or a mode change). Any
+// other rule blocks it: pergent's default exclusions ("deleted", "binary",
+// "vendored", "lockfile", "generated") are decided by the change itself, and a
+// rule pergent.sh doesn't know (one added to pergent later, say) is a file
+// nobody reviewed.
+var reviewedSkipRules = map[string]bool{
+	"out of scope": true, "excluded by skill": true, "no content changes": true,
 }
+
+// blocksApproval reports whether a file skipped under rule keeps a review
+// from being approved.
+func blocksApproval(rule string) bool { return !reviewedSkipRules[rule] }
 
 // Outcome is what a run produced. FailureReason is set when no usable result
 // arrived (the Job died, the result did not parse, the run was cancelled...).
@@ -183,7 +201,7 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 			Status:      StatusSuccess,
 			Description: descNothingToReview,
 		}
-	case defaultSkipped(r.Skills):
+	case blockingSkip(r.Skills):
 		return Decision{
 			Comment:     withNote(comment, r.Comment.FindingsBlock, skippedNote(notePartlySkipped, r.Skills, true)),
 			Status:      StatusSuccess,
@@ -230,11 +248,12 @@ func withMarker(comment string) string {
 	return Marker + "\n" + comment
 }
 
-// defaultSkipped reports whether any skill skipped a file under a default rule.
-func defaultSkipped(skills []result.Skill) bool {
+// blockingSkip reports whether any skill skipped a file under a rule that
+// blocks approval.
+func blockingSkip(skills []result.Skill) bool {
 	for _, s := range skills {
 		for _, f := range s.Files.Skipped {
-			if defaultSkipRules[f.Rule] {
+			if blocksApproval(f.Rule) {
 				return true
 			}
 		}
@@ -243,10 +262,16 @@ func defaultSkipped(skills []result.Skill) bool {
 }
 
 // skippedNote is title followed by the distinct skipped paths across skills,
-// one line per path, at most 20. A path skipped under different rules by
-// different skills shows all of its rules, sorted. With onlyDefault, only the
-// paths that some skill skipped under a default rule are listed.
-func skippedNote(title string, skills []result.Skill, onlyDefault bool) string {
+// one line per path: at most 20 lines and maxNoteBytes in all, then "…and N
+// more" for the rest. A path skipped under different rules by different
+// skills shows its rules sorted (the first three, then "…"). With
+// onlyBlocking, only the paths that some skill skipped under a rule that
+// blocks approval are listed.
+//
+// Paths come from the merge request, so each is shown through listedText: a
+// backtick, newline or control character in one can't end its code span or
+// line, and a long one is cut.
+func skippedNote(title string, skills []result.Skill, onlyBlocking bool) string {
 	rules := map[string]map[string]bool{}
 	for _, s := range skills {
 		for _, f := range s.Files.Skipped {
@@ -258,7 +283,7 @@ func skippedNote(title string, skills []result.Skill, onlyDefault bool) string {
 	}
 	paths := make([]string, 0, len(rules))
 	for p, rs := range rules {
-		if onlyDefault && !anyDefault(rs) {
+		if onlyBlocking && !anyBlocking(rs) {
 			continue
 		}
 		paths = append(paths, p)
@@ -271,8 +296,9 @@ func skippedNote(title string, skills []result.Skill, onlyDefault bool) string {
 		b.WriteString("\n")
 	}
 	for i, p := range paths {
+		more := fmt.Sprintf("- …and %d more\n", len(paths)-i)
 		if i == maxListedSkipped {
-			fmt.Fprintf(&b, "- …and %d more\n", len(paths)-maxListedSkipped)
+			b.WriteString(more)
 			break
 		}
 		rs := make([]string, 0, len(rules[p]))
@@ -280,14 +306,61 @@ func skippedNote(title string, skills []result.Skill, onlyDefault bool) string {
 			rs = append(rs, r)
 		}
 		sort.Strings(rs)
-		fmt.Fprintf(&b, "- `%s` (%s)\n", p, strings.Join(rs, ", "))
+		shown := make([]string, 0, maxListedRules+1)
+		for j, r := range rs {
+			if j == maxListedRules {
+				shown = append(shown, "…")
+				break
+			}
+			shown = append(shown, ruleText(r))
+		}
+		line := "- `" + listedText(p, maxListedPath) + "` (" + strings.Join(shown, ", ") + ")\n"
+		// Room is kept for the "and N more" line after this one.
+		if b.Len()+len(line)+len(fmt.Sprintf("- …and %d more\n", len(paths))) > maxNoteBytes {
+			b.WriteString(more)
+			break
+		}
+		b.WriteString(line)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func anyDefault(rules map[string]bool) bool {
+// listedText is s as it is shown inside a code span of the note: as it is
+// when it is printable text without a backtick, otherwise Go-quoted with each
+// backtick written \x60, so nothing in it can end the span or the line. It is
+// cut to n characters.
+func listedText(s string, n int) string {
+	if utf8.ValidString(s) && !strings.ContainsRune(s, '`') && strings.IndexFunc(s, notPrintable) < 0 {
+		return cut(s, n)
+	}
+	return cut(strings.ReplaceAll(strconv.Quote(s), "`", `\x60`), n)
+}
+
+// ruleText is a skip rule as the note shows it: plain when it is lower-case
+// words like pergent's own rules, otherwise a code span of listedText.
+func ruleText(rule string) string {
+	plain := rule != "" && strings.IndexFunc(rule, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r == ' ' || r == '-' || r == '_')
+	}) < 0
+	if plain {
+		return cut(rule, maxListedRule)
+	}
+	return "`" + listedText(rule, maxListedRule) + "`"
+}
+
+func notPrintable(r rune) bool { return !unicode.IsPrint(r) }
+
+// cut shortens s to n characters, marking a cut with "…".
+func cut(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return string([]rune(s)[:n]) + "…"
+}
+
+func anyBlocking(rules map[string]bool) bool {
 	for r := range rules {
-		if defaultSkipRules[r] {
+		if blocksApproval(r) {
 			return true
 		}
 	}
