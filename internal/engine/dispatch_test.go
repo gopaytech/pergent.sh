@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -262,9 +263,10 @@ func TestDispatchRequeuesWithoutBaseSHA(t *testing.T) {
 
 	dispatch(t, env)
 
+	// Waiting for GitLab is not a failed attempt.
 	r := env.Run(id)
-	if r.State != store.Queued || r.Attempts != 1 || !r.NotBefore.Equal(env.Now().Add(10*time.Second)) {
-		t.Fatalf("run = state %s attempts %d not_before %s", r.State, r.Attempts, r.NotBefore)
+	if r.State != store.Queued || r.Attempts != 0 || !r.NotBefore.Equal(env.Now().Add(10*time.Second)) {
+		t.Fatalf("run = state %s attempts %d not_before %s, want queued 0 now+10s", r.State, r.Attempts, r.NotBefore)
 	}
 	if len(env.Jobs()) != 0 {
 		t.Fatalf("a job was launched without diff refs")
@@ -284,6 +286,97 @@ func TestDispatchRequeuesWithoutBaseSHA(t *testing.T) {
 	dispatch(t, env)
 	if env.Job(id) == nil {
 		t.Errorf("run was not dispatched once the diff refs were there")
+	}
+}
+
+func TestDispatchDiffNotReadyGivesUpAfterTenMinutes(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Enqueue(3, head)
+	mr := openMR(3, head)
+	mr.DiffRefs = gitlab.DiffRefs{}
+	env.GitLab.SetMR(mr)
+	created := env.Run(id).CreatedAt
+
+	// At exactly ten minutes it still waits.
+	env.SetNow(created.Add(10 * time.Minute))
+	dispatch(t, env)
+	if r := env.Run(id); r.State != store.Queued || r.Attempts != 0 {
+		t.Fatalf("at 10m: state %s attempts %d, want queued 0", r.State, r.Attempts)
+	}
+
+	env.SetNow(created.Add(10*time.Minute + 11*time.Second))
+	dispatch(t, env)
+	r := env.Run(id)
+	if r.State != store.Reported {
+		t.Fatalf("past 10m: state = %s, want reported", r.State)
+	}
+	if want := "GitLab hasn't computed this merge request's diff yet"; r.FailureReason != want {
+		t.Errorf("failure reason = %q, want %q", r.FailureReason, want)
+	}
+	if len(env.Jobs()) != 0 {
+		t.Errorf("a job was launched")
+	}
+}
+
+func TestDispatchDiffWaitsKeepRetryBudget(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Enqueue(3, head)
+	mr := openMR(3, head)
+	mr.DiffRefs = gitlab.DiffRefs{}
+	env.GitLab.SetMR(mr)
+
+	for i := 0; i < 6; i++ {
+		dispatch(t, env)
+		r := env.Run(id)
+		if r.State != store.Queued || r.Attempts != 0 {
+			t.Fatalf("wait %d: state %s attempts %d", i, r.State, r.Attempts)
+		}
+		env.SetNow(r.NotBefore)
+	}
+
+	// Now GitLab fails: the run still gets all five attempts, backoff from 10 s.
+	env.GitLab.Reply(http.MethodGet, mrPath(3), http.StatusForbidden, `{"message":"403 Forbidden"}`)
+	for attempt := 0; attempt < 4; attempt++ {
+		dispatch(t, env)
+		r := env.Run(id)
+		wantNB := env.Now().Add(10 * time.Second << attempt)
+		if r.State != store.Queued || r.Attempts != attempt+1 || !r.NotBefore.Equal(wantNB) {
+			t.Fatalf("attempt %d: state %s attempts %d not_before %s, want queued %d %s",
+				attempt, r.State, r.Attempts, r.NotBefore, attempt+1, wantNB)
+		}
+		env.SetNow(r.NotBefore)
+	}
+	dispatch(t, env)
+	if r := env.Run(id); r.State != store.Reported || !strings.HasPrefix(r.FailureReason, "pergent.sh couldn't start the review: ") {
+		t.Errorf("after 5 attempts: state %s reason %q", r.State, r.FailureReason)
+	}
+}
+
+func TestDispatchCancelledPostponesWithoutAttempt(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Enqueue(3, head)
+	ctx, cancel := context.WithCancel(env.ctx)
+	defer cancel()
+	// The service shuts down while GitLab is answering.
+	env.GitLab.Handle(http.MethodGet, mrPath(3), func(w http.ResponseWriter, _ *http.Request) {
+		cancel()
+		w.WriteHeader(http.StatusForbidden)
+	})
+
+	if err := env.Engine.DispatchOnce(ctx); err != nil {
+		t.Fatalf("DispatchOnce: %v", err)
+	}
+
+	r := env.Run(id)
+	if r.State != store.Queued || r.Attempts != 0 || r.FailureReason != "" || !r.NotBefore.Equal(env.Now()) {
+		t.Errorf("run = state %s attempts %d reason %q not_before %s, want queued 0 \"\" now",
+			r.State, r.Attempts, r.FailureReason, r.NotBefore)
+	}
+	if len(env.Jobs()) != 0 {
+		t.Errorf("a job was launched")
 	}
 }
 

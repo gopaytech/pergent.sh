@@ -267,6 +267,20 @@ func (s *Store) Requeue(ctx context.Context, id string, notBefore time.Time) err
 		WHERE id = $1::uuid AND state IN ('queued', 'running')`, id, notBefore)
 }
 
+// Postpone puts a claimed run back in the queue, not to be claimed before
+// notBefore, without counting an attempt: nothing failed, the run only has to
+// wait (GitLab is still computing the diff, or the dispatcher is shutting
+// down). A run that is no longer queued or running, or an unknown id, is left
+// alone and is not an error.
+func (s *Store) Postpone(ctx context.Context, id string, notBefore time.Time) error {
+	if !validUUID(id) {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'queued', not_before = $2
+		WHERE id = $1::uuid AND state IN ('queued', 'running')`, id, notBefore)
+	return err
+}
+
 // MarkDispatched records the Job started for a running run and the SHA-256 of
 // its result token, valid until expires. It returns ErrNotRunning when the run
 // is not in state running (for example it was superseded after it was claimed).

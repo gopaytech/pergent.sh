@@ -28,6 +28,9 @@ const (
 	dispatchBackoff = 10 * time.Second
 	// diffRefsDelay is how long to wait for GitLab to compute diff refs.
 	diffRefsDelay = 10 * time.Second
+	// diffRefsPatience is how long after a run is queued GitLab may take to
+	// compute the merge request's diff before the run fails.
+	diffRefsPatience = 10 * time.Minute
 	// tokenGrace keeps a result token valid a little past the Job deadline.
 	tokenGrace = 60 * time.Second
 	// settleTimeout bounds the store and cleanup calls that record a run's
@@ -37,6 +40,7 @@ const (
 
 	reasonTooLarge     = "the skills and instructions for this repository are larger than 900 KiB"
 	reasonNoCloneToken = "pergent.sh has no clone token for this project yet"
+	reasonNoDiff       = "GitLab hasn't computed this merge request's diff yet"
 	reasonCouldntStart = "pergent.sh couldn't start the review: "
 	runningDescription = "pergent review running"
 )
@@ -46,8 +50,10 @@ const (
 // whose head moved, is superseded (a moved head gets a run of its own); a run
 // that can never be reviewed is reported with a failure reason; a GitLab or
 // Kubernetes error requeues it with backoff until the fifth attempt, which
-// reports it. One run's trouble never stops the others. The returned error
-// joins store failures only.
+// reports it. Waiting for GitLab to compute the diff, and a pass cut short by
+// a cancelled ctx, postpone the run without counting an attempt. One run's
+// trouble never stops the others. The returned error joins store failures
+// only.
 func (e *Engine) DispatchOnce(ctx context.Context) error {
 	running, err := e.Store.CountRunning(ctx)
 	if err != nil {
@@ -105,11 +111,9 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	}
 	if mr.SHA != "" && mr.SHA != run.HeadSHA {
 		// Push webhooks can arrive out of order, so the newest head may have
-		// no run yet: queue one.
+		// no run yet: queue one. EnqueueRun supersedes this run (and any
+		// other live run of another head) in the same transaction.
 		d.log.Info("merge request head moved; run superseded", "new_head", mr.SHA)
-		if err := d.supersede(ctx); err != nil {
-			return err
-		}
 		sctx, cancel := settleCtx(ctx)
 		defer cancel()
 		if _, _, err := e.Store.EnqueueRun(sctx, run.MR, run.ProjectPath, mr.SHA, mr.TargetBranch); err != nil {
@@ -120,9 +124,13 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	}
 	refs := mr.DiffRefs
 	if mr.SHA == "" || refs.BaseSHA == "" || refs.StartSHA == "" || refs.HeadSHA != run.HeadSHA {
-		// GitLab is still computing the merge request's diff.
-		d.log.Info("merge request diff is not ready; retrying", "delay", diffRefsDelay)
-		return d.requeue(ctx, e.now().Add(diffRefsDelay))
+		// GitLab is still computing the merge request's diff. Waiting is
+		// not a failed attempt, but it can't go on for ever.
+		if e.now().Sub(run.CreatedAt) > diffRefsPatience {
+			return d.fail(ctx, reasonNoDiff)
+		}
+		d.log.Info("merge request diff is not ready; waiting", "delay", diffRefsDelay)
+		return d.postpone(ctx, e.now().Add(diffRefsDelay))
 	}
 
 	project, found, err := e.Store.Project(ctx, run.MR.Instance, run.MR.ProjectID)
@@ -251,9 +259,15 @@ func (d *dispatcher) fail(ctx context.Context, reason string) error {
 }
 
 // retry requeues the run after a GitLab or Kubernetes error with backoff
-// 10 s × 2^attempts, or reports it as failed on the fifth attempt.
+// 10 s × 2^attempts, or reports it as failed on the fifth attempt. When the
+// dispatch context was cancelled (shutdown), the error is ours, not GitLab's
+// or Kubernetes': the run is postponed to now and no attempt is counted.
 func (d *dispatcher) retry(ctx context.Context, cause error) error {
 	text := d.redact(cause.Error())
+	if ctx.Err() != nil {
+		d.log.Info("dispatch interrupted; the run goes back to the queue", "error", text)
+		return d.postpone(ctx, d.e.now())
+	}
 	attempt := d.run.Attempts + 1
 	if attempt >= maxDispatchAttempts {
 		d.log.Error("couldn't start the review; giving up", "attempt", attempt, "error", text)
@@ -277,6 +291,16 @@ func (d *dispatcher) requeue(ctx context.Context, notBefore time.Time) error {
 		return nil
 	}
 	return fmt.Errorf("requeue: %w", err)
+}
+
+// postpone puts the run back in the queue without counting an attempt.
+func (d *dispatcher) postpone(ctx context.Context, notBefore time.Time) error {
+	sctx, cancel := settleCtx(ctx)
+	defer cancel()
+	if err := d.e.Store.Postpone(sctx, d.run.ID, notBefore); err != nil {
+		return fmt.Errorf("postpone: %w", err)
+	}
+	return nil
 }
 
 func (d *dispatcher) deleteJob(ctx context.Context, name string) {

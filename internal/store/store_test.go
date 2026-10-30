@@ -895,3 +895,45 @@ func TestSupersede(t *testing.T) {
 		t.Errorf("StoreResult = %v, %v; want discarded", out, err)
 	}
 }
+
+func TestPostpone(t *testing.T) {
+	s := newStore(t)
+	id := enqueue(t, s, mr1, "aaa")
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Requeue(ctx, id, t0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Postpone(ctx, id, t0.Add(time.Minute)); err != nil {
+		t.Fatalf("Postpone: %v", err)
+	}
+	r := getRun(t, s, id)
+	if r.State != Queued || r.Attempts != 1 || !r.NotBefore.Equal(t0.Add(time.Minute)) {
+		t.Errorf("after Postpone: state %s attempts %d not_before %s; want queued, attempts unchanged at 1", r.State, r.Attempts, r.NotBefore)
+	}
+	if got, _ := s.ClaimQueued(ctx, 10, t0); len(got) != 0 {
+		t.Errorf("postponed run was claimed before not_before")
+	}
+
+	// A run that is no longer queued or running is left alone, without error.
+	done := reported(t, s, mr2, "bbb", `{"status":"completed"}`)
+	sup := enqueue(t, s, MRKey{mr1.Instance, 7, 9}, "ccc")
+	if err := s.Supersede(ctx, sup); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{done, sup, "00000000-0000-0000-0000-000000000000", "nope"} {
+		if err := s.Postpone(ctx, id, t0); err != nil {
+			t.Errorf("Postpone(%s): %v", id, err)
+		}
+	}
+	if got := getRun(t, s, done).State; got != Reported {
+		t.Errorf("reported run state = %s", got)
+	}
+	if got := getRun(t, s, sup).State; got != Superseded {
+		t.Errorf("superseded run state = %s", got)
+	}
+}

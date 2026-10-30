@@ -286,7 +286,8 @@ func newTestEnv(t *testing.T) *testEnv {
 
 	env := &testEnv{
 		t: t, ctx: ctx, Store: st, GitLab: gl, Kube: cs, Box: box,
-		now: time.Date(2026, 10, 30, 10, 0, 0, 0, time.UTC),
+		// Wall time, so the runs' created_at (set by the database) is "now".
+		now: time.Now().UTC().Truncate(time.Second),
 	}
 	env.Engine = &Engine{
 		Store:  st,
