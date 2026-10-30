@@ -417,7 +417,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `github[].webhook_secret_env` | required | Name of the env var with the review App's webhook secret. GitHub signs each delivery with it (`X-Hub-Signature-256`). |
 | `gitlab[].oauth_client_id_env`, `gitlab[].oauth_client_secret_env` | none | Names of the env vars with the instance's OAuth application ID and secret, for [dashboard](#dashboard) sign-in. Both or neither; with neither, nobody signs in with this instance. |
 | `github[].oauth_client_id_env`, `github[].oauth_client_secret_env` | none | Names of the env vars with the review App's client ID and client secret, for [dashboard](#dashboard) sign-in. Both or neither. |
-| `dashboard.url` | none (dashboard off) | The dashboard's `https` address, a bare host without a path or trailing slash. Setting it turns the dashboard on; at least one instance must then have its `oauth_client_*_env` set. The sign-in callbacks are `<dashboard.url>/auth/<gitlab or github>/<instance name>/callback`. |
+| `dashboard.url` | none (dashboard off) | The dashboard's `https` address, a bare host without a port, path or trailing slash. Setting it turns the dashboard on; at least one instance must then have its `oauth_client_*_env` set. The sign-in callbacks are `<dashboard.url>/auth/<gitlab or github>/<instance name>/callback`. |
 | `dashboard.admins[].instance` | none | An instance with sign-in. Its admins are the members of `group` or `team`. Needs `dashboard.url`. |
 | `dashboard.admins[].group` | required on a GitLab instance | A GitLab group path, such as `acme/platform`. |
 | `dashboard.admins[].team` | required on a GitHub instance | A GitHub team as `org/team-slug`, such as `acme/platform`. |

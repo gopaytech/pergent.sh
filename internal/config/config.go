@@ -599,6 +599,11 @@ func (c *Config) checkDashboard() []error {
 		if (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.ForceQuery {
 			add("dashboard.url %q must have no path, query or fragment: the dashboard is served at / of its host", d.URL)
 		}
+		// The chart's dashboard Ingress serves a host on 443; a URL with a
+		// port matches none of its hosts.
+		if u.Port() != "" {
+			add("dashboard.url %q must have no port: the dashboard Ingress serves its host on the https port", d.URL)
+		}
 	}
 	if len(signIn) == 0 {
 		add("dashboard.url is set but no instance has oauth_client_id_env and oauth_client_secret_env: nobody could sign in")
