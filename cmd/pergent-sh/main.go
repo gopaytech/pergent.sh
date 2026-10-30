@@ -203,8 +203,8 @@ func checkSkills(cfg *config.Config, lib inputs.Library) error {
 	for _, repo := range cfg.Repositories {
 		for _, name := range repo.Skills {
 			if _, ok := lib[name]; !ok {
-				errs = append(errs, fmt.Errorf("repository %s on gitlab instance %q: skill %q is not in the skill library %s",
-					repo.Project, repo.GitLab, name, cfg.SkillsDir))
+				errs = append(errs, fmt.Errorf("repository %s on instance %q: skill %q is not in the skill library %s",
+					repo.Project, repo.Instance(), name, cfg.SkillsDir))
 			}
 		}
 	}
@@ -233,6 +233,7 @@ func connectGitLab(ctx context.Context, cfg *config.Config) (map[string]engine.P
 			return nil, nil, fmt.Errorf("gitlab instance %q: the approve token (%s) doesn't work: %w", inst.Name, inst.ApproveTokenEnv, err)
 		}
 		platforms[inst.Name] = engine.Platform{
+			Kind:     config.PlatformGitLab,
 			Forge:    gitlabforge.NewForge(review, reviewUser),
 			Approver: gitlabforge.NewApprover(approve, approveUser),
 			GitLab:   review,

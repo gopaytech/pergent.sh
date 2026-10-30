@@ -17,6 +17,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/policy"
@@ -650,16 +651,18 @@ func TestPublishOneFailureDoesNotStopOthers(t *testing.T) {
 	wantPublished(t, env, good)
 }
 
-func TestGitLabState(t *testing.T) {
-	for in, want := range map[policy.Status]gitlab.StatusState{
-		policy.StatusSuccess: gitlab.StatusSuccess,
-		policy.StatusFailed:  gitlab.StatusFailed,
-		policy.StatusNeutral: gitlab.StatusSkipped,
-		"":                   gitlab.StatusFailed,
-		"pending":            gitlab.StatusFailed,
+// A policy status maps onto a forge status; anything pergent.sh doesn't know
+// is failed, never success. (gitlabforge.TestState maps those onto GitLab's.)
+func TestStatusState(t *testing.T) {
+	for in, want := range map[policy.Status]forge.StatusState{
+		policy.StatusSuccess: forge.StatusSuccess,
+		policy.StatusFailed:  forge.StatusFailed,
+		policy.StatusNeutral: forge.StatusNeutral,
+		"":                   forge.StatusFailed,
+		"pending":            forge.StatusFailed,
 	} {
-		if got := GitLabState(in); got != want {
-			t.Errorf("GitLabState(%q) = %q, want %q", in, got, want)
+		if got := StatusState(in); got != want {
+			t.Errorf("StatusState(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -924,7 +927,7 @@ func TestPublishDraftFlagUnreadableRetries(t *testing.T) {
 func TestPublishApproveUnavailable(t *testing.T) {
 	env := newTestEnv(t)
 	plat := env.Engine.Platforms[testInstance]
-	plat.GitLab = nil // not a GitLab instance
+	plat.Kind, plat.GitLab = config.PlatformGitHub, nil // not a GitLab instance
 	env.Engine.Platforms[testInstance] = plat
 	env.SeedProject(func(p *store.Project) { p.InstallationID, p.ApproveAvailable = 99, false })
 	head := sha('a')

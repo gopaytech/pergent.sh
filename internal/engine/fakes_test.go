@@ -309,6 +309,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		Store:  st,
 		Config: cfg,
 		Platforms: map[string]Platform{testInstance: {
+			Kind:     config.PlatformGitLab,
 			Forge:    gitlabforge.NewForge(gl.Client(testReviewToken), gitlab.User{ID: 100, Username: "pergent-review"}),
 			Approver: gitlabforge.NewApprover(gl.Client(testApproveToken), gitlab.User{ID: testApproveUserID, Username: "pergent-approve"}),
 			GitLab:   gl.Client(testReviewToken),

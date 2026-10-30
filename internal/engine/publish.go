@@ -10,8 +10,6 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/forge"
-	"github.com/gopaytech/pergent.sh/internal/forge/gitlabforge"
-	"github.com/gopaytech/pergent.sh/internal/gitlab"
 	"github.com/gopaytech/pergent.sh/internal/policy"
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -41,12 +39,6 @@ func StatusState(s policy.Status) forge.StatusState {
 	default:
 		return forge.StatusFailed
 	}
-}
-
-// GitLabState is the GitLab commit status state a policy status ends up as.
-// GitLab has no neutral state, so neutral is "skipped".
-func GitLabState(s policy.Status) gitlab.StatusState {
-	return gitlabforge.State(StatusState(s))
 }
 
 // publishBackoff is the delay before the next publish of a run that has
@@ -95,10 +87,10 @@ func (e *Engine) PublishOnce(ctx context.Context) error {
 func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) error {
 	plat, ok := e.Platforms[run.MR.Instance]
 	if !ok || plat.Forge == nil {
-		return fmt.Errorf("no GitLab bots for instance %q", run.MR.Instance)
+		return fmt.Errorf("no bots for instance %q", run.MR.Instance)
 	}
 	failure := config.FailureStatusFailed
-	if repo, ok := e.Config.Repository(run.MR.Instance, run.ProjectPath); ok {
+	if repo, ok := e.repository(run.MR.Instance, run.ProjectPath); ok {
 		failure = repo.FailureStatus
 	}
 	o := e.outcome(run, log)
@@ -131,8 +123,8 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 }
 
 // approveInputs adds to o what decides whether a clean review is approved:
-// the change being a draft (read from the platform) and, on a platform whose
-// approve side can be missing from a repository, the stored project saying
+// the change being a draft (read from the platform) and, on GitHub, whose
+// approve App can be missing from a repository, the stored project saying
 // so. On GitLab the approve bot is a user that can always approve.
 func (e *Engine) approveInputs(ctx context.Context, plat Platform, run store.Run, o policy.Outcome) (policy.Outcome, error) {
 	ch, err := plat.Forge.GetChange(ctx, run.MR.ProjectID, run.MR.IID)
@@ -140,7 +132,7 @@ func (e *Engine) approveInputs(ctx context.Context, plat Platform, run store.Run
 		return o, fmt.Errorf("get merge request: %w", err)
 	}
 	o.Draft = ch.Draft
-	if plat.GitLab == nil {
+	if plat.isGitHub() {
 		p, found, err := e.Store.Project(ctx, run.MR.Instance, run.MR.ProjectID)
 		if err != nil {
 			return o, fmt.Errorf("load project: %w", err)
@@ -343,7 +335,7 @@ func (e *Engine) cleanUp(ctx context.Context, run store.Run, log *slog.Logger) e
 		} else {
 			// The instance was removed from the config: nothing can be
 			// posted there any more, so don't keep trying.
-			log.Warn("not setting the canceled status: no GitLab bots for the instance")
+			log.Warn("not setting the canceled status: no bots for the instance")
 		}
 	}
 	if err := e.Store.MarkCleanedUp(ctx, run.ID); err != nil {

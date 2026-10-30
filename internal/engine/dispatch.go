@@ -14,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/gopaytech/pergent.sh/internal/forge"
+	"github.com/gopaytech/pergent.sh/internal/github"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/result"
@@ -40,7 +41,13 @@ const (
 
 	reasonTooLarge     = "the skills and instructions for this repository are larger than 900 KiB"
 	reasonNoCloneToken = "pergent.sh has no clone token for this project yet"
+	// reasonNoRepository is a GitHub repository reconcile hasn't stored.
+	reasonNoRepository = "pergent.sh hasn't looked this repository up on GitHub yet"
+	reasonNotInstalled = "the pergent review App isn't installed on this repository"
+	// gitHubCloneUser is the git username of a GitHub installation token.
+	gitHubCloneUser    = "x-access-token"
 	reasonNoDiff       = "GitLab hasn't computed this merge request's diff yet"
+	reasonNoMergeBase  = "GitHub hasn't computed this pull request's merge base yet"
 	reasonCouldntStart = "pergent.sh couldn't start the review: "
 	runningDescription = "pergent review running"
 )
@@ -93,12 +100,26 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	e, run := d.e, d.run
 
 	plat, havePlat := e.Platforms[run.MR.Instance]
-	repo, haveRepo := e.Config.Repository(run.MR.Instance, run.ProjectPath)
+	repo, haveRepo := e.repository(run.MR.Instance, run.ProjectPath)
 	if !havePlat || plat.Forge == nil || !haveRepo {
 		// The repository was switched off (or its instance removed) after
 		// the run was queued: nothing is reviewed or posted there any more.
 		d.log.Warn("dropping run: its repository is no longer configured")
 		return d.supersede(ctx)
+	}
+	if plat.isGitHub() {
+		// The review App reads the pull request through its installation
+		// on the repository: without one nothing can be read.
+		project, found, err := e.Store.Project(ctx, run.MR.Instance, run.MR.ProjectID)
+		if err != nil {
+			return d.retry(ctx, fmt.Errorf("load project: %w", err))
+		}
+		if !found {
+			return d.fail(ctx, reasonNoRepository)
+		}
+		if project.InstallationID == 0 {
+			return d.fail(ctx, reasonNotInstalled)
+		}
 	}
 
 	mr, err := plat.Forge.GetChange(ctx, run.MR.ProjectID, run.MR.IID)
@@ -129,6 +150,9 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		// head: the forge leaves BaseSHA and StartSHA empty until then).
 		// Waiting is not a failed attempt, but it can't go on for ever.
 		if e.now().Sub(run.CreatedAt) > diffRefsPatience {
+			if plat.isGitHub() {
+				return d.fail(ctx, reasonNoMergeBase)
+			}
 			return d.fail(ctx, reasonNoDiff)
 		}
 		d.log.Info("merge request diff is not ready; waiting", "delay", diffRefsDelay)
@@ -139,12 +163,22 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	if err != nil {
 		return d.retry(ctx, fmt.Errorf("load project: %w", err))
 	}
-	if !found || len(project.DeployTokenSealed) == 0 {
+	// A GitLab project's clone token is its sealed deploy token; a GitHub
+	// repository's is minted for the Job right before it starts.
+	var gitToken []byte
+	gitUser := project.DeployTokenUsername
+	switch {
+	case plat.isGitHub():
+		if !found || project.InstallationID == 0 {
+			return d.fail(ctx, reasonNotInstalled)
+		}
+		gitUser = gitHubCloneUser
+	case !found || len(project.DeployTokenSealed) == 0:
 		return d.fail(ctx, reasonNoCloneToken)
-	}
-	gitToken, err := e.Box.Open(project.DeployTokenSealed)
-	if err != nil {
-		return d.retry(ctx, fmt.Errorf("open the clone token: %w", err))
+	default:
+		if gitToken, err = e.Box.Open(project.DeployTokenSealed); err != nil {
+			return d.retry(ctx, fmt.Errorf("open the clone token: %w", err))
+		}
 	}
 	d.secrets = append(d.secrets, string(gitToken), e.LLMKey)
 
@@ -180,6 +214,15 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		return d.retry(ctx, err)
 	}
 	d.secrets = append(d.secrets, token)
+	if plat.isGitHub() {
+		if gitToken, err = d.gitHubCloneToken(ctx, plat, project); err != nil {
+			if errors.Is(err, github.ErrNotFound) {
+				// The installation is gone since reconcile stored it.
+				return d.fail(ctx, reasonNotInstalled)
+			}
+			return d.retry(ctx, err)
+		}
+	}
 
 	now := e.now()
 	allowance := kube.CloneAllowance(project.CloneSeconds)
@@ -197,7 +240,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		TargetBranch:   mr.TargetBranch,
 		BaseSHA:        mr.BaseSHA,
 		HeadSHA:        run.HeadSHA,
-		GitUsername:    project.DeployTokenUsername,
+		GitUsername:    gitUser,
 		ResultURL:      strings.TrimRight(e.Config.CallbackURL, "/") + "/runs/" + run.ID + "/result",
 		LLM:            e.Config.LLM,
 		Resources:      e.Config.Jobs.Resources,
@@ -231,6 +274,21 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		d.log.Warn("couldn't set the running commit status", "error", d.redact(err.Error()))
 	}
 	return nil
+}
+
+// gitHubCloneToken mints the token the Job clones repository project with:
+// scoped to that one repository, contents:read, never stored. It is added to
+// the run's secrets before anything can log it.
+func (d *dispatcher) gitHubCloneToken(ctx context.Context, plat Platform, project store.Project) ([]byte, error) {
+	if plat.GitHub == nil || plat.GitHub.App == nil {
+		return nil, fmt.Errorf("no review App for instance %q", project.Instance)
+	}
+	tok, _, err := plat.GitHub.App.CloneToken(ctx, project.InstallationID, project.ProjectID)
+	if err != nil {
+		return nil, fmt.Errorf("mint the clone token: %w", err)
+	}
+	d.secrets = append(d.secrets, tok)
+	return []byte(tok), nil
 }
 
 // settleCtx outlives a cancelled dispatch context, so the outcome of a claimed

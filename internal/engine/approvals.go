@@ -40,7 +40,7 @@ func (e *Engine) SweepApprovals(ctx context.Context) error {
 		if !ok || plat.Forge == nil || plat.Approver == nil {
 			// The instance was removed from the config; it is listed on every
 			// sweep, so don't log it above debug.
-			log.Debug("skipping the approval: no GitLab bots for the instance")
+			log.Debug("skipping the approval: no bots for the instance")
 			continue
 		}
 		queued, err := e.sweepApproval(ctx, plat, a, log)
@@ -103,7 +103,7 @@ func (e *Engine) sweepApproval(ctx context.Context, plat Platform, a store.Appro
 	if !found {
 		return false, nil
 	}
-	repo, ok := e.Config.Repository(a.MR.Instance, project.Path)
+	repo, ok := e.repository(a.MR.Instance, project.Path)
 	if !ok {
 		return false, nil
 	}

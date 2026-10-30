@@ -370,3 +370,22 @@ func TestHasApproved(t *testing.T) {
 		t.Fatal("HasApproved on a refused request = nil error")
 	}
 }
+
+// GitLab has no neutral commit status, so neutral is "skipped"; anything
+// pergent.sh doesn't know is failed, never success. (Moved here from the
+// engine's GitLabState test.)
+func TestState(t *testing.T) {
+	for in, want := range map[forge.StatusState]gitlab.StatusState{
+		forge.StatusRunning:  gitlab.StatusRunning,
+		forge.StatusSuccess:  gitlab.StatusSuccess,
+		forge.StatusFailed:   gitlab.StatusFailed,
+		forge.StatusNeutral:  gitlab.StatusSkipped,
+		forge.StatusCanceled: gitlab.StatusCanceled,
+		"":                   gitlab.StatusFailed,
+		"pending":            gitlab.StatusFailed,
+	} {
+		if got := State(in); got != want {
+			t.Errorf("State(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

@@ -91,3 +91,15 @@ func TestServeUntilDoneAnswersWhileLoopsBlock(t *testing.T) {
 		t.Errorf("the loops were not stopped")
 	}
 }
+
+// A GitHub repository's missing skill names its instance, whichever platform
+// it is on.
+func TestCheckSkillsGitHub(t *testing.T) {
+	cfg := &config.Config{SkillsDir: "/skills", Repositories: []config.Repository{
+		{GitHub: "gh", Project: "acme/widgets", Skills: []string{"security"}},
+	}}
+	err := checkSkills(cfg, inputs.Library{})
+	if err == nil || !strings.Contains(err.Error(), `instance "gh"`) || strings.Contains(err.Error(), "gitlab") {
+		t.Errorf("checkSkills = %v, want an error naming instance gh", err)
+	}
+}

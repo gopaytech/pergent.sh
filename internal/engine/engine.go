@@ -13,6 +13,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/forge"
+	"github.com/gopaytech/pergent.sh/internal/github"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/kube"
@@ -20,17 +21,39 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
-// Platform is one configured instance as the engine reaches it. Forge is the
-// review bot and Approver the approve bot; their tokens can comment, set
-// statuses and approve, so they never reach a Job. GitLab is the review bot's
-// own client on a GitLab instance, for what is still GitLab-only: reconcile's
-// webhooks and deploy tokens. Reviewing, publishing, cleaning up and the
-// approval sweep go through Forge and Approver alone.
+// Platform is one configured instance as the engine reaches it. Kind is
+// config.PlatformGitLab or config.PlatformGitHub. Forge is the review bot and
+// Approver the approve bot; their tokens can comment, set statuses and
+// approve, so they never reach a Job. GitLab is the review bot's own client on
+// a GitLab instance, for reconcile's webhooks and deploy tokens; GitHub is a
+// GitHub instance's review App and approve side, for reconcile and the
+// per-Job clone tokens. Reviewing, publishing, cleaning up and the approval
+// sweep go through Forge and Approver alone.
 type Platform struct {
+	Kind     string
 	Forge    forge.Forge
 	Approver forge.Approver
 	GitLab   *gitlab.Client
+	GitHub   *GitHub
 }
+
+// GitHub is what a GitHub instance needs beyond Forge and Approver.
+type GitHub struct {
+	// App is the review App: it finds its installation on a repository,
+	// reads the repository and mints each Job's clone token.
+	App *github.App
+	// Approve tells whether the approve side reaches a repository.
+	Approve ApproveReach
+}
+
+// ApproveReach is the approve side's reachability check
+// (githubforge.Approver.CanReach).
+type ApproveReach interface {
+	CanReach(ctx context.Context, owner, name string) (bool, error)
+}
+
+// isGitHub reports whether the platform is a GitHub instance.
+func (p Platform) isGitHub() bool { return p.Kind == config.PlatformGitHub }
 
 // Engine holds what the loops share. Platforms is keyed by instance name.
 type Engine struct {
