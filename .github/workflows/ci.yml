@@ -58,7 +58,8 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [ test, chart ]
     runs-on: ubuntu-latest
-    # One build at a time, so an older build can't overwrite :main after a newer one.
+    # One build at a time; with the tip check below, an older build never
+    # overwrites :main after a newer one.
     concurrency:
       group: image-main
       cancel-in-progress: false
@@ -71,11 +72,28 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+      # The concurrency group runs one build at a time but doesn't order
+      # them: a build that waited behind a newer push would overwrite :main
+      # with an older commit. Only the tip of main is built; anything older
+      # succeeds without pushing.
+      - name: Check this commit is still the tip of main
+        id: tip
+        run: |
+          git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+          tip="$(git rev-parse refs/remotes/origin/main)"
+          if [ "$tip" = "$GITHUB_SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Not building: main is at $tip now, not $GITHUB_SHA; its own build publishes :main."
+          fi
       # https://github.com/docker/setup-buildx-action
       - name: Set up Docker Buildx
+        if: steps.tip.outputs.current == 'true'
         uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226 # v3.0.0
       # https://github.com/docker/login-action
       - name: Log into registry ${{ env.REGISTRY }}
+        if: steps.tip.outputs.current == 'true'
         uses: docker/login-action@343f7c4344506bcbf9b4de18042ae17996df046d # v3.0.0
         with:
           registry: ${{ env.REGISTRY }}
@@ -85,6 +103,7 @@ jobs:
       # https://github.com/docker/metadata-action
       - name: Extract Docker metadata
         id: meta
+        if: steps.tip.outputs.current == 'true'
         uses: docker/metadata-action@96383f45573cb7f253c731d3b3ab81c87ef81934 # v5.0.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
@@ -94,6 +113,7 @@ jobs:
             type=sha
       # https://github.com/docker/build-push-action
       - name: Build and push Docker image
+        if: steps.tip.outputs.current == 'true'
         uses: docker/build-push-action@0565240e2d4ab88bba5387d719585280857ece09 # v5.0.0
         with:
           context: .
