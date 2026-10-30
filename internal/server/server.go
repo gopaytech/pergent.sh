@@ -60,9 +60,54 @@ func Routes(d Deps) *http.ServeMux {
 		_, _ = io.WriteString(w, "ok")
 	})
 	if d.Dashboard != nil && d.Config != nil && d.Config.DashboardEnabled() {
-		mux.Handle("/auth/", d.Dashboard)
-		mux.Handle("/api/", d.Dashboard)
+		guarded := noStore(d.Dashboard)
+		mux.Handle("/auth/", guarded)
+		mux.Handle("/api/", guarded)
 		mux.Handle("/", web.Handler())
 	}
 	return mux
 }
+
+// noStore makes every response of h uncacheable and not content-sniffed:
+// /api/ and /auth/ answers are per user. The headers are forced when the
+// response starts, so a handler (or an error path) can't leave them out; a
+// response with no Content-Type gets text/plain instead of being sniffed.
+func noStore(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(&noStoreWriter{ResponseWriter: w}, r)
+	})
+}
+
+type noStoreWriter struct {
+	http.ResponseWriter
+	started bool
+}
+
+func (w *noStoreWriter) start(code int) {
+	if w.started {
+		return
+	}
+	w.started = true
+	h := w.Header()
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Content-Type-Options", "nosniff")
+	if h.Get("Content-Type") == "" && code != http.StatusNoContent && code != http.StatusNotModified {
+		h.Set("Content-Type", "text/plain; charset=utf-8")
+	}
+}
+
+func (w *noStoreWriter) WriteHeader(code int) {
+	// 1xx responses are informational; the real one follows.
+	if code >= 200 || code == http.StatusSwitchingProtocols {
+		w.start(code)
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *noStoreWriter) Write(b []byte) (int, error) {
+	w.start(http.StatusOK)
+	return w.ResponseWriter.Write(b)
+}
+
+// Unwrap lets http.ResponseController reach the real writer (Flush, etc.).
+func (w *noStoreWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }

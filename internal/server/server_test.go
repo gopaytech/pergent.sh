@@ -110,3 +110,38 @@ func TestDashboardRoutesMounted(t *testing.T) {
 		t.Errorf("GET /runs/1/result = %d, want 404", rec.Code)
 	}
 }
+
+// Every /api/ and /auth/ response, errors included, is uncacheable and not
+// content-sniffed, whatever the handler set (or forgot to).
+func TestDashboardResponsesNotCachedNorSniffed(t *testing.T) {
+	stub := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/json":
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Cache-Control", "public, max-age=60")
+			_, _ = io.WriteString(w, "{}")
+		case "/api/err":
+			http.Error(w, "boom", http.StatusInternalServerError)
+		case "/auth/redirect":
+			http.Redirect(w, r, "/", http.StatusFound)
+		default:
+			// No headers at all: the body would be sniffed.
+			_, _ = io.WriteString(w, "<html>x</html>")
+		}
+	})
+	mux := Routes(dashboardDeps("https://pergent.example.com", stub))
+	for _, p := range []string{"/api/json", "/api/err", "/api/plain", "/auth/redirect", "/auth/login"} {
+		rec := status(mux, http.MethodGet, p)
+		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("GET %s Cache-Control = %q, want no-store", p, got)
+		}
+		if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Errorf("GET %s X-Content-Type-Options = %q, want nosniff", p, got)
+		}
+	}
+	// A handler that sets no Content-Type still gets one (never left to sniffing).
+	rec := status(mux, http.MethodGet, "/api/plain")
+	if ct := rec.Header().Get("Content-Type"); ct == "" {
+		t.Errorf("GET /api/plain has no Content-Type")
+	}
+}

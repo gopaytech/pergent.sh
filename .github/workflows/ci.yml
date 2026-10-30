@@ -60,6 +60,9 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Build the dashboard
         run: make web
+      # The build output is ignored by git; nothing tracked may change.
+      - name: Check the build left the tree clean
+        run: git diff --exit-code
       - name: Vet
         run: go vet ./...
       - name: Test

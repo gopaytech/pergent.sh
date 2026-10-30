@@ -14,6 +14,7 @@ func testFS() fstest.MapFS {
 		"assets/index-abc.js":  {Data: []byte("console.log(1)")},
 		"assets/index-abc.css": {Data: []byte("body{}")},
 		"favicon.svg":          {Data: []byte("<svg/>")},
+		".keep":                {},
 	}
 }
 
@@ -27,7 +28,7 @@ func get(h http.Handler, method, target string) *httptest.ResponseRecorder {
 // owned by the server's other routes do not.
 func TestSPAFallback(t *testing.T) {
 	h := newHandler(testFS())
-	for _, p := range []string{"/", "/repos", "/repos/acme/widgets/reviews/12", "/index.html", "/missing.txt"} {
+	for _, p := range []string{"/", "/repos", "/repos/acme/widgets/reviews/12", "/index.html"} {
 		rec := get(h, http.MethodGet, p)
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `id="root"`) {
 			t.Errorf("GET %s = %d %q, want index.html", p, rec.Code, rec.Body.String())
@@ -37,6 +38,13 @@ func TestSPAFallback(t *testing.T) {
 		}
 	}
 	for _, p := range []string{"/api/", "/api/me", "/auth/login", "/auth/callback", "/webhooks/gitlab/main", "/runs/1/result", "/healthz", "/healthz/x"} {
+		if rec := get(h, http.MethodGet, p); rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404", p, rec.Code)
+		}
+	}
+	// A path that names a file (has an extension) but isn't one is a 404, not
+	// the HTML shell.
+	for _, p := range []string{"/favicon.ico", "/missing.txt", "/.keep", "/repos/acme/logo.png", "/assets/gone-123.js"} {
 		if rec := get(h, http.MethodGet, p); rec.Code != http.StatusNotFound {
 			t.Errorf("GET %s = %d, want 404", p, rec.Code)
 		}
@@ -98,5 +106,29 @@ func TestEmbeddedHandlerServesAPage(t *testing.T) {
 	rec := get(Handler(), http.MethodGet, "/anything")
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<html") {
 		t.Fatalf("embedded GET = %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+// Without a build (only .keep in dist/) every page is the "not built" notice,
+// still with the security headers and never cached.
+func TestFallbackWhenNotBuilt(t *testing.T) {
+	h := newHandler(fstest.MapFS{".keep": {}})
+	for _, p := range []string{"/", "/repos"} {
+		rec := get(h, http.MethodGet, p)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "dashboard is not built") {
+			t.Errorf("GET %s = %d %q, want the fallback page", p, rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get("Cache-Control"); got != "no-cache" {
+			t.Errorf("GET %s Cache-Control = %q", p, got)
+		}
+		if rec.Header().Get("Content-Security-Policy") == "" {
+			t.Errorf("GET %s has no CSP", p)
+		}
+	}
+	if rec := get(h, http.MethodGet, "/api/me"); rec.Code != http.StatusNotFound {
+		t.Errorf("GET /api/me = %d, want 404", rec.Code)
+	}
+	if rec := get(h, http.MethodGet, "/assets/x.js"); rec.Code != http.StatusNotFound {
+		t.Errorf("missing asset = %d, want 404", rec.Code)
 	}
 }

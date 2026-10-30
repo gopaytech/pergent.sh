@@ -12,11 +12,16 @@ import (
 	"time"
 )
 
-// dist is the Vite build. A committed placeholder index.html lets the binary
-// build without Node; `make web` replaces it with the real app.
+// dist is the Vite build, written by `make web`. Only dist/.keep is tracked,
+// so the binary builds without Node; then fallback is served instead.
 //
 //go:embed all:dist
 var dist embed.FS
+
+// fallback is the page served while dist/ holds no build.
+//
+//go:embed fallback.html
+var fallback []byte
 
 // csp lets the page load only its own scripts, styles and images (and data:
 // images); Vite emits no inline script or style.
@@ -70,10 +75,15 @@ func newHandler(fsys fs.FS) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		data, ok := readFile(fsys, "index.html")
-		if !ok {
+		// Not a file: anything that looks like one (has an extension) is a
+		// 404, so a missing /favicon.ico isn't answered with HTML.
+		if path.Ext(p) != "" {
 			http.NotFound(w, r)
 			return
+		}
+		data, ok := readFile(fsys, "index.html")
+		if !ok {
+			data = fallback
 		}
 		serve(w, r, "index.html", data)
 	})
@@ -81,7 +91,8 @@ func newHandler(fsys fs.FS) http.Handler {
 
 // readFile returns the contents of a regular file in fsys.
 func readFile(fsys fs.FS, name string) ([]byte, bool) {
-	if !fs.ValidPath(name) {
+	// Dotfiles (dist/.keep) are never served.
+	if !fs.ValidPath(name) || strings.HasPrefix(path.Base(name), ".") {
 		return nil, false
 	}
 	info, err := fs.Stat(fsys, name)
