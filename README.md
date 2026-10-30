@@ -221,7 +221,7 @@ At startup pergent.sh reads each App's slug (`GET /app`) and its bot user (`GET 
 The status of a review is a Check Run named `pergent` on the reviewed head commit, created by the review App:
 
 - `in_progress` ("pergent review running") when the Job starts;
-- then `completed` with the conclusion `success`, `failure`, `neutral` (a failed review with `failure_status: neutral`) or `cancelled` (superseded by a newer push).
+- then `completed` with the conclusion `success`, `failure`, `neutral` (a failed review with `failure_status: neutral`) or `cancelled` (the run was superseded: a newer push or a new target branch replaced it, or the pull request was closed).
 
 Its title is the status description from [How approval works](#how-approval-works) and its summary points to the pull request comment; findings are only in the comment. Every change is a new Check Run with the same name, and GitHub shows the latest. To make merging wait for the review, add `pergent` as a required status check in the branch's protection rule or ruleset.
 
@@ -230,7 +230,7 @@ Its title is the status description from [How approval works](#how-approval-work
 - **Turn on "Dismiss stale pull request approvals when new commits are pushed".** pergent.sh dismisses its approval on every push, but this makes GitHub do it too, as a second layer for a webhook pergent.sh missed.
 - **Make a human approval necessary.** If a branch needs one approval and the approver's approval counts, the bot alone unlocks the merge. Require two approvals, or a code owner review where the approver is not a code owner.
 - If you use **"Restrict who can dismiss pull request reviews"**, allow the approve App (or bot user). Otherwise GitHub refuses its dismissals: pergent.sh logs the failure and tries again on every cleanup pass, and the stale approval stays until a dismissal works or GitHub dismisses it itself.
-- **Check that the approval counts.** GitHub may not count a GitHub App's approving review toward a rule's required approvals; this release has not verified it. Open a test pull request, let pergent.sh approve it, and look at the merge box: if the App's approval is listed but the required approvals are still missing, switch to a bot user.
+- **Check that the approval counts.** GitHub may not count a GitHub App's approving review toward a rule's required approvals; this release has not verified it. Use a test branch whose protection requires exactly **one** approval (with more, the result is ambiguous). Open a test pull request into it, let pergent.sh approve it, and look at the merge box: if the App's approval is listed but the required approvals are still missing, switch to a bot user.
 
 ### Approving as a bot user
 
@@ -295,7 +295,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `repositories[].github` | one of `gitlab` and `github` | Name of one of the `github` instances. |
 | `repositories[].project` | required | Project path, such as `acme/widgets`; on GitHub exactly `owner/name`, matched case-insensitively. Each project appears once per instance. |
 | `repositories[].skills` | all library skills | Names of library skills to run. Empty or omitted means all of them. A name that is not in the library stops pergent.sh at startup. |
-| `repositories[].failure_status` | `failed` | Status used when a review could not be done: `failed` or `neutral`. GitLab has no neutral state, so `neutral` is set as `skipped`; a project can count skipped pipelines as successful through a GitLab setting. On GitHub it is the Check Run conclusion `failure` or `neutral`. `failed` is never counted as successful. Blocking findings are always `failed`. |
+| `repositories[].failure_status` | `failed` | Status used when a review could not be done: `failed` or `neutral`. GitLab has no neutral state, so `neutral` is set as `skipped`; a project can count skipped pipelines as successful through a GitLab setting. On GitHub it is the Check Run conclusion `failure` or `neutral`, and GitHub counts a `neutral` conclusion as passing for a required status check: with `neutral`, a failed review does not block the merge. `failed` is never counted as successful. Blocking findings are always `failed`. |
 | `llm.provider` | required | opencode provider ID, such as `anthropic`. |
 | `llm.model` | required | Model name, such as `claude-sonnet-4`. |
 | `llm.base_url` | none | Custom API base URL for the provider. |
@@ -331,6 +331,16 @@ pergent.sh decides from what `pergent agent` reports. The result is checked agai
 | Every skill is clean, at least one file was reviewed, no file was skipped under those rules, and the merge request isn't a draft | The review | `success` ("No blocking issues") | Yes, see below |
 
 Those five are pergent's default skip rules, and a merge request can trigger them on its own: for example, by putting code under a `vendor/` directory, it would keep that code from the reviewer. A file skipped only because it is outside a skill's `paths`, matches a skill's `exclude`, or has no content changes does not stop the approval. The note lists at most 20 paths.
+
+The "Commit status" column is the GitLab commit status. On GitHub the same decision is the conclusion of the `pergent` Check Run:
+
+| Status in the table | GitLab commit status | GitHub Check Run conclusion |
+| --- | --- | --- |
+| `success` | `success` | `success` |
+| `failed` | `failed` | `failure` |
+| `failure_status` | `failed` or `skipped` (`failure_status: neutral`) | `failure` or `neutral` (`failure_status: neutral`) |
+
+A review that is running is `running` on GitLab and an `in_progress` Check Run on GitHub; a superseded run ends as `canceled` on GitLab and `cancelled` on GitHub. See [The `pergent` Check Run](#the-pergent-check-run).
 
 Before approving, pergent.sh asks GitLab (or GitHub) for the merge request. It approves only when the merge request is still **open** and not a draft, its head is still the commit that was reviewed and its target branch is still the one it was reviewed against. If the head or target moved or the MR was closed, there is no approval; the review and its status still belong to the reviewed commit, and a newer push gets its own run. The approval is recorded before it is made, and a refusal when the bot already approves this head is treated as done. On GitHub the approval is a review with `event: APPROVE` on the reviewed commit; GitHub has no commit guard on it, so the head and target check right before is the guard.
 
