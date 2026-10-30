@@ -198,6 +198,15 @@ func filePath(file string) string {
 	return "/projects/" + strconv.FormatInt(testProjectID, 10) + "/repository/files/" + url.PathEscape(file) + "/raw"
 }
 
+func notesPath(iid int64) string { return mrPath(iid) + "/notes" }
+
+func notePath(iid, noteID int64) string {
+	return notesPath(iid) + "/" + strconv.FormatInt(noteID, 10)
+}
+
+func approvePath(iid int64) string   { return mrPath(iid) + "/approve" }
+func unapprovePath(iid int64) string { return mrPath(iid) + "/unapprove" }
+
 // SetMR serves mr at its merge request endpoint.
 func (f *fakeGitLab) SetMR(mr gitlab.MergeRequest) {
 	f.Reply(http.MethodGet, mrPath(mr.IID), http.StatusOK, mr)
@@ -428,22 +437,40 @@ func (e *testEnv) ConfigMap(id string) *corev1.ConfigMap {
 	return c
 }
 
-// Publish moves run id of merge request iid, head, through dispatch and a
-// stored result to published, without the engine, so it can serve as the
-// previous review.
-func (e *testEnv) Publish(iid int64, head string, result []byte) string {
+// Dispatched moves run id of merge request iid, head, to running as if the
+// dispatcher had started its Job (named kube.JobName(id), base sha('b'),
+// start sha('5'), result token "seed-token"), without the engine or a Job.
+// It claims every queued run, so queue other runs after it.
+func (e *testEnv) Dispatched(iid int64, head string) string {
 	e.t.Helper()
 	id := e.Enqueue(iid, head)
 	if _, err := e.Store.ClaimQueued(e.ctx, 100, e.Now().Add(time.Hour)); err != nil {
 		e.t.Fatal(err)
 	}
 	h := hashToken("seed-token")
-	if err := e.Store.MarkDispatched(e.ctx, id, "seed-job", sha('b'), sha('5'), h, e.Now().Add(time.Hour), e.Now()); err != nil {
+	if err := e.Store.MarkDispatched(e.ctx, id, kube.JobName(id), sha('b'), sha('5'), h, e.Now().Add(time.Hour), e.Now()); err != nil {
 		e.t.Fatal(err)
 	}
+	return id
+}
+
+// Report moves run id of merge request iid, head, through dispatch to
+// reported with result stored, so the publisher picks it up.
+func (e *testEnv) Report(iid int64, head string, result []byte) string {
+	e.t.Helper()
+	id := e.Dispatched(iid, head)
 	if out, err := e.Store.StoreResult(e.ctx, id, "seed-token", result, e.Now()); err != nil || out != store.ResultStored {
 		e.t.Fatalf("StoreResult = %v, %v", out, err)
 	}
+	return id
+}
+
+// Publish moves run id of merge request iid, head, through dispatch and a
+// stored result to published, without the engine, so it can serve as the
+// previous review.
+func (e *testEnv) Publish(iid int64, head string, result []byte) string {
+	e.t.Helper()
+	id := e.Report(iid, head, result)
 	if err := e.Store.MarkPublished(e.ctx, id); err != nil {
 		e.t.Fatal(err)
 	}
