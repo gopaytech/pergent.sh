@@ -3,7 +3,12 @@ package kube
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -167,4 +172,109 @@ func TestDeleteUsesBackgroundPropagation(t *testing.T) {
 		t.Errorf("job still there: %v", err)
 	}
 	_ = corev1.Pod{}
+}
+
+// logPod stores a pod of job name created at created.
+func logPod(t *testing.T, cs *fake.Clientset, job, pod string, created time.Time) {
+	t.Helper()
+	_, err := cs.CoreV1().Pods("reviews").Create(context.Background(), &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: pod, Namespace: "reviews", Labels: map[string]string{"job-name": job}, CreationTimestamp: metav1.NewTime(created),
+	}}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLaunchLogsTail(t *testing.T) {
+	l, cs := fakeLauncher()
+	now := time.Now()
+	logPod(t, cs, "job-1", "job-1-old", now.Add(-time.Hour))
+	logPod(t, cs, "job-1", "job-1-new", now)
+
+	// 300 000 bytes, each one telling where it is.
+	var big strings.Builder
+	for i := 0; big.Len() < 300000; i++ {
+		fmt.Fprintf(&big, "line %06d\n", i)
+	}
+	full := big.String()[:300000]
+
+	var gotPod, gotContainer string
+	var gotTail int64
+	l.LogStream = func(_ context.Context, pod, container string, tail int64) (io.ReadCloser, error) {
+		gotPod, gotContainer, gotTail = pod, container, tail
+		return io.NopCloser(strings.NewReader(full)), nil
+	}
+	got, err := l.Logs(context.Background(), "job-1", 204800)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 204800 || got != full[len(full)-204800:] {
+		t.Errorf("Logs returned %d bytes; want the last 204800 of the log", len(got))
+	}
+	if gotPod != "job-1-new" || gotContainer != "pergent" || gotTail != 20000 {
+		t.Errorf("read pod %q container %q tail %d; want the newest pod's pergent container, 20000 lines", gotPod, gotContainer, gotTail)
+	}
+
+	// A small log comes back whole.
+	l.LogStream = func(context.Context, string, string, int64) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader("short\n")), nil
+	}
+	if got, err := l.Logs(context.Background(), "job-1", 204800); err != nil || got != "short\n" {
+		t.Errorf("Logs = %q, %v; want the whole log", got, err)
+	}
+}
+
+func TestLaunchLogsCutOnRuneBoundary(t *testing.T) {
+	l, cs := fakeLauncher()
+	logPod(t, cs, "job-1", "job-1-a", time.Now())
+	// "é" is two bytes: a cut after 5 bytes lands inside the second one.
+	l.LogStream = func(context.Context, string, string, int64) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader("aéééé")), nil // 9 bytes
+	}
+	got, err := l.Logs(context.Background(), "job-1", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "éé" || !utf8.ValidString(got) {
+		t.Errorf("Logs = %q; want %q, cut on a character boundary", got, "éé")
+	}
+}
+
+func TestLaunchLogsErrors(t *testing.T) {
+	l, cs := fakeLauncher()
+	if _, err := l.Logs(context.Background(), "job-1", 100); err == nil {
+		t.Errorf("Logs of a Job without a pod succeeded")
+	}
+	logPod(t, cs, "job-1", "job-1-a", time.Now())
+	l.LogStream = func(context.Context, string, string, int64) (io.ReadCloser, error) {
+		return nil, errors.New("container is waiting to start")
+	}
+	if _, err := l.Logs(context.Background(), "job-1", 100); err == nil {
+		t.Errorf("Logs succeeded though the stream failed")
+	}
+}
+
+// Without an injected stream, the log is read through the pods/log API.
+func TestLaunchLogsViaClient(t *testing.T) {
+	l, cs := fakeLauncher()
+	logPod(t, cs, "job-1", "job-1-a", time.Now())
+	got, err := l.Logs(context.Background(), "job-1", 204800)
+	if err != nil || got != "fake logs" {
+		t.Errorf("Logs = %q, %v; want the fake clientset's log", got, err)
+	}
+}
+
+func TestLaunchJobSecrets(t *testing.T) {
+	l, _ := fakeLauncher()
+	p := testParams()
+	if err := l.Launch(context.Background(), p, Secrets{GitToken: "g1", LLMKey: "l1", ResultToken: "r1"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := l.JobSecrets(context.Background(), p.Name)
+	if err != nil || got != (Secrets{GitToken: "g1", LLMKey: "l1", ResultToken: "r1"}) {
+		t.Errorf("JobSecrets = %+v, %v", got, err)
+	}
+	if _, err := l.JobSecrets(context.Background(), "nope"); err == nil {
+		t.Errorf("JobSecrets of a missing Job succeeded")
+	}
 }

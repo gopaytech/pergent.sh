@@ -3,6 +3,7 @@ package store
 import (
 	"slices"
 	"testing"
+	"time"
 )
 
 func ptrTo[T any](v T) *T { return &v }
@@ -132,5 +133,110 @@ func TestDashboardMigrationTables(t *testing.T) {
 	var n int
 	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM user_access`).Scan(&n); err != nil || n != 0 {
 		t.Errorf("user_access rows after the session went = %d, %v", n, err)
+	}
+}
+
+func TestRunLogRoundTrip(t *testing.T) {
+	s := newStore(t)
+	id := enqueue(t, s, mr1, "aaaa")
+
+	if _, found, err := s.RunLog(ctx, id); err != nil || found {
+		t.Fatalf("RunLog before = found %v, %v; want not found", found, err)
+	}
+	if _, found, err := s.RunLog(ctx, "not-a-uuid"); err != nil || found {
+		t.Fatalf("RunLog of a malformed id = found %v, %v; want not found", found, err)
+	}
+	if err := s.PutRunLog(ctx, id, "first\n"); err != nil {
+		t.Fatal(err)
+	}
+	// An empty log is still a log: it marks the run as recorded.
+	if err := s.PutRunLog(ctx, id, ""); err != nil {
+		t.Fatal(err)
+	}
+	if text, found, err := s.RunLog(ctx, id); err != nil || !found || text != "" {
+		t.Errorf("RunLog = %q, %v, %v; want empty and found", text, found, err)
+	}
+	if err := s.PutRunLog(ctx, id, "second\n"); err != nil {
+		t.Fatal(err)
+	}
+	if text, _, _ := s.RunLog(ctx, id); text != "second\n" {
+		t.Errorf("RunLog = %q, want the latest", text)
+	}
+}
+
+func TestPruneRunLogs(t *testing.T) {
+	s := newStore(t)
+	oldID := enqueue(t, s, mr1, "aaaa")
+	newID := enqueue(t, s, MRKey{Instance: mr1.Instance, ProjectID: 7, IID: 4}, "bbbb")
+	for _, id := range []string{oldID, newID} {
+		if err := s.PutRunLog(ctx, id, "log "+id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE run_logs SET created_at = now() - interval '31 days' WHERE run_id = $1::uuid`, oldID); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := s.PruneRunLogs(ctx, time.Now().Add(-30*24*time.Hour))
+	if err != nil || n != 1 {
+		t.Fatalf("PruneRunLogs = %d, %v; want 1", n, err)
+	}
+	if _, found, _ := s.RunLog(ctx, oldID); found {
+		t.Errorf("the 31-day-old log is still there")
+	}
+	if _, found, _ := s.RunLog(ctx, newID); !found {
+		t.Errorf("the fresh log was pruned")
+	}
+	if n, err := s.PruneRunLogs(ctx, time.Now().Add(-30*24*time.Hour)); err != nil || n != 0 {
+		t.Errorf("second PruneRunLogs = %d, %v; want 0", n, err)
+	}
+}
+
+func TestRunsToLog(t *testing.T) {
+	s := newStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	mk := func(iid int64, head string, finish func(id string)) string {
+		mr := MRKey{Instance: mr1.Instance, ProjectID: 7, IID: iid}
+		id := enqueue(t, s, mr, head)
+		if _, err := s.ClaimQueued(ctx, 100, now.Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.MarkDispatched(ctx, id, "job-"+head, "b", "s", hash("tok"), now.Add(time.Hour), now); err != nil {
+			t.Fatal(err)
+		}
+		finish(id)
+		return id
+	}
+	running := mk(10, "r", func(string) {})
+	reported := mk(11, "p", func(id string) {
+		if out, err := s.StoreResult(ctx, id, "tok", []byte(`{}`), now); err != nil || out != ResultStored {
+			t.Fatalf("StoreResult = %v, %v", out, err)
+		}
+	})
+	logged := mk(12, "l", func(id string) {
+		if _, err := s.ReportFailure(ctx, id, "x", now); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.PutRunLog(ctx, id, "have it"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	old := mk(13, "o", func(id string) {
+		if _, err := s.ReportFailure(ctx, id, "x", now.Add(-5*time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	})
+	_, _, _ = running, logged, old
+
+	runs, err := s.RunsToLog(ctx, now.Add(-3*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].ID != reported {
+		var ids []string
+		for _, r := range runs {
+			ids = append(ids, r.ID+":"+string(r.State))
+		}
+		t.Errorf("RunsToLog = %v; want only the recently reported run %s without a log", ids, reported)
 	}
 }

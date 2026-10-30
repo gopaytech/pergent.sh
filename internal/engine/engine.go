@@ -80,6 +80,11 @@ type Engine struct {
 	// be read, so that is logged once (see checkRequiredApprovals).
 	uncheckedMu sync.Mutex
 	unchecked   map[repoKey]bool
+
+	// logTried holds the runs whose Job log was taken or tried (see
+	// captureLog), with when, so each is tried once.
+	logMu    sync.Mutex
+	logTried map[string]time.Time
 }
 
 // Wake asks the loops for an early pass. It never blocks; wake-ups that
@@ -124,7 +129,8 @@ var (
 
 // Run runs the loops until ctx is done: dispatch, publish and cleanup every
 // 2 s or on Wake, watch every 15 s, sweep the approvals every 5 minutes and
-// reconcile every hour. They all run in
+// reconcile every hour (when it also prunes the review logs older than
+// 30 days). They all run in
 // this one goroutine, one after another, so no two of them ever overlap (a
 // publish and a cleanup of the same merge request least of all). Errors are
 // logged and never stop the loop. Before the first pass, runs stranded
@@ -145,6 +151,7 @@ func (e *Engine) Run(ctx context.Context) {
 		log.Error("startup reconcile failed", "error", e.redact(err.Error()))
 	}
 	e.sweepApprovals(ctx)
+	e.pruneRunLogs(ctx)
 
 	pass := time.NewTicker(passInterval)
 	defer pass.Stop()
@@ -174,6 +181,7 @@ func (e *Engine) Run(ctx context.Context) {
 			if err := e.Reconcile(ctx); err != nil && ctx.Err() == nil {
 				log.Error("reconcile failed", "error", e.redact(err.Error()))
 			}
+			e.pruneRunLogs(ctx)
 		}
 	}
 }

@@ -31,6 +31,9 @@ const (
 //   - a Job finished for 60 s without a result is reported, with why it
 //     failed when the cluster says.
 //
+// Along the way it keeps the log of each finished Job once (see captureLog),
+// whether its run is still running or already reported.
+//
 // It also records the checkout time a Job measured, and requeues runs claimed
 // over 5 minutes ago that never got a Job. A result that wins the race with a
 // report is kept. One Job the cluster can't be asked about is logged and
@@ -64,6 +67,10 @@ func (e *Engine) WatchOnce(ctx context.Context) error {
 		}
 		wake = wake || reported
 	}
+	if err := e.captureReportedLogs(ctx, now); err != nil && ctx.Err() == nil {
+		// The log is a convenience: a failure here is logged, never returned.
+		e.log().Info("couldn't list the runs whose log is to be kept", "error", e.redact(err.Error()))
+	}
 	if wake {
 		e.Wake()
 	}
@@ -78,6 +85,11 @@ func (e *Engine) watch(ctx context.Context, run store.Run, now time.Time) (bool,
 	if err != nil {
 		log.Warn("couldn't inspect the review job; will look again", "error", e.redact(err.Error()))
 		return false, nil
+	}
+
+	if obs.Exists && obs.Finished {
+		// The Job is deleted an hour after it finishes: keep its log now.
+		e.captureLog(ctx, run, log)
 	}
 
 	if obs.Clone > 0 {

@@ -101,3 +101,51 @@ func (s *Store) DeleteDashboardRepo(ctx context.Context, instance, project strin
 		instance, project)
 	return err
 }
+
+// PutRunLog stores the redacted log of a run, replacing an earlier one. An
+// empty text is stored too: it records that the log was taken.
+func (s *Store) PutRunLog(ctx context.Context, runID, text string) error {
+	if !validUUID(runID) {
+		return errors.New("store: malformed run id")
+	}
+	_, err := s.pool.Exec(ctx, `INSERT INTO run_logs (run_id, text) VALUES ($1::uuid, $2)
+		ON CONFLICT (run_id) DO UPDATE SET text = EXCLUDED.text, created_at = now()`, runID, text)
+	return err
+}
+
+// RunLog returns a run's stored log. A run without one, or a malformed id,
+// is reported as not found.
+func (s *Store) RunLog(ctx context.Context, runID string) (string, bool, error) {
+	if !validUUID(runID) {
+		return "", false, nil
+	}
+	var text string
+	err := s.pool.QueryRow(ctx, `SELECT text FROM run_logs WHERE run_id = $1::uuid`, runID).Scan(&text)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return text, true, nil
+}
+
+// PruneRunLogs deletes the logs stored before the given time and returns how
+// many there were.
+func (s *Store) PruneRunLogs(ctx context.Context, before time.Time) (int, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM run_logs WHERE created_at < $1`, before)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}
+
+// RunsToLog returns the runs that have a result or a failure reported since
+// the given time and a Job, but no stored log, oldest first.
+func (s *Store) RunsToLog(ctx context.Context, since time.Time) ([]Run, error) {
+	return s.queryRuns(ctx, `SELECT `+runColumns+` FROM runs
+		WHERE state IN ('reported', 'published', 'publish_failed') AND job_name <> ''
+		  AND reported_at >= $1
+		  AND NOT EXISTS (SELECT 1 FROM run_logs WHERE run_logs.run_id = runs.id)
+		ORDER BY reported_at, id`, since)
+}
