@@ -42,9 +42,16 @@ func TestSPAFallback(t *testing.T) {
 			t.Errorf("GET %s = %d, want 404", p, rec.Code)
 		}
 	}
-	// A path that names a file (has an extension) but isn't one is a 404, not
-	// the HTML shell.
-	for _, p := range []string{"/favicon.ico", "/missing.txt", "/.keep", "/repos/acme/logo.png", "/assets/gone-123.js"} {
+	// A root-level path that names a file (has an extension) but isn't one is a
+	// 404, not the HTML shell. Deeper paths are client routes: repository names
+	// have dots (widgets.io), so they reload to the shell.
+	for _, p := range []string{"/repositories/main/acme/widgets.io", "/reviews/main/org/org.github.io/12", "/repos/acme/logo.png"} {
+		rec := get(h, http.MethodGet, p)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `id="root"`) {
+			t.Errorf("GET %s = %d, want the shell", p, rec.Code)
+		}
+	}
+	for _, p := range []string{"/favicon.ico", "/robots.txt", "/missing.txt", "/.keep", "/assets/gone-123.js", "/assets/sub/gone.js"} {
 		if rec := get(h, http.MethodGet, p); rec.Code != http.StatusNotFound {
 			t.Errorf("GET %s = %d, want 404", p, rec.Code)
 		}

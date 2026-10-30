@@ -75,9 +75,10 @@ func newHandler(fsys fs.FS) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		// Not a file: anything that looks like one (has an extension) is a
-		// 404, so a missing /favicon.ico isn't answered with HTML.
-		if path.Ext(p) != "" {
+		// Not a file: a root-level name that looks like one (/favicon.ico)
+		// is a 404, not HTML. Deeper paths are client routes and may end in
+		// a repository name with a dot (acme/widgets.io).
+		if strings.Count(p, "/") == 1 && path.Ext(p) != "" {
 			http.NotFound(w, r)
 			return
 		}
