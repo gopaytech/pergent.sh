@@ -149,3 +149,62 @@ func (s *Store) RunsToLog(ctx context.Context, since time.Time) ([]Run, error) {
 		  AND NOT EXISTS (SELECT 1 FROM run_logs WHERE run_logs.run_id = runs.id)
 		ORDER BY reported_at, id`, since)
 }
+
+// Attention is one setup problem of a repository ("Needs attention"): Kind
+// names it and Message tells the user. Project is "" for a problem of the
+// whole instance (an expiring token).
+type Attention struct {
+	Instance, Project, Kind, Message string
+	UpdatedAt                        time.Time
+}
+
+// SetAttention records the problem kind of project on instance, replacing the
+// message of one already recorded (the project matched ignoring case).
+func (s *Store) SetAttention(ctx context.Context, instance, project, kind, message string) error {
+	_, err := s.pool.Exec(ctx, `INSERT INTO repo_attention (instance, project, kind, message)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (instance, lower(project), kind) DO UPDATE SET
+			project = EXCLUDED.project, message = EXCLUDED.message, updated_at = now()`,
+		instance, project, kind, message)
+	return err
+}
+
+// ClearAttention removes the problem kind of project on instance, the project
+// matched ignoring case. Clearing one that isn't recorded is not an error.
+func (s *Store) ClearAttention(ctx context.Context, instance, project, kind string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM repo_attention
+		WHERE instance = $1 AND lower(project) = lower($2) AND kind = $3`, instance, project, kind)
+	return err
+}
+
+// Attention returns every recorded problem, ordered by instance, project
+// (ignoring case) and kind.
+func (s *Store) Attention(ctx context.Context) ([]Attention, error) {
+	rows, err := s.pool.Query(ctx, `SELECT instance, project, kind, message, updated_at FROM repo_attention
+		ORDER BY instance, lower(project), kind`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Attention
+	for rows.Next() {
+		var a Attention
+		if err := rows.Scan(&a.Instance, &a.Project, &a.Kind, &a.Message, &a.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// CountFailedRuns counts the runs of project on instance (matched ignoring
+// case) reported since the given time whose failure reason contains
+// substring.
+func (s *Store) CountFailedRuns(ctx context.Context, instance, project, substring string, since time.Time) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM runs
+		WHERE instance = $1 AND lower(project_path) = lower($2)
+		  AND reported_at >= $4 AND strpos(failure_reason, $3) > 0`,
+		instance, project, substring, since).Scan(&n)
+	return n, err
+}

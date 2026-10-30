@@ -675,6 +675,61 @@ func TestTokenApproverExpiryWarning(t *testing.T) {
 	}
 }
 
+// The token approver tells its watcher what GitHub says about the expiry:
+// on the first sighting, and whenever the token turns soon-to-expire, stops
+// being so, or its date moves while it is; not on every call.
+func TestTokenApproverExpiryNotify(t *testing.T) {
+	f := newFake(t)
+	var expiry string
+	f.handle("GET", prPath+"/reviews", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("GitHub-Authentication-Token-Expiration", expiry)
+		reply(200, reviews())(w, nil)
+	})
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	a := NewTokenApprover(github.NewTokenClient(f.srv.URL, patToken, f.srv.Client()), approveBotID, repos(), nil)
+	a.now = func() time.Time { return now }
+	type note struct {
+		exp  time.Time
+		soon bool
+	}
+	var notes []note
+	a.OnTokenExpiry(func(exp time.Time, soon bool) { notes = append(notes, note{exp, soon}) })
+
+	call := func(in time.Duration) time.Time {
+		t.Helper()
+		exp := now.Add(in)
+		expiry = exp.Format("2006-01-02 15:04:05 MST")
+		if _, err := a.HasApproved(ctx, repoID, 3, sha('a')); err != nil {
+			t.Fatal(err)
+		}
+		return exp
+	}
+	day := 24 * time.Hour
+
+	call(30 * day)
+	call(30 * day)
+	if len(notes) != 1 || notes[0].soon {
+		t.Fatalf("notes after two calls 30 days ahead = %+v; want one, not soon", notes)
+	}
+	call(31 * day) // still not soon: nothing new to say
+	if len(notes) != 1 {
+		t.Fatalf("notes = %+v after the date moved while not soon", notes)
+	}
+	exp := call(10 * day)
+	call(10 * day)
+	if len(notes) != 2 || !notes[1].soon || !notes[1].exp.Equal(exp) {
+		t.Fatalf("notes = %+v; want a soon note for %s", notes, exp)
+	}
+	exp = call(9 * day) // the date moved while soon
+	if len(notes) != 3 || !notes[2].soon || !notes[2].exp.Equal(exp) {
+		t.Fatalf("notes = %+v; want a soon note for %s", notes, exp)
+	}
+	call(60 * day) // rotated
+	if len(notes) != 4 || notes[3].soon {
+		t.Fatalf("notes = %+v; want a not-soon note last", notes)
+	}
+}
+
 func jsonEq(t *testing.T, body, want string) {
 	t.Helper()
 	var g, w any

@@ -135,6 +135,12 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	}
 	// Instance names are unique across gitlab: and github: (config.Validate).
 	maps.Copy(platforms, githubPlatforms)
+	// A token approver tells the dashboard when its token is about to expire.
+	for _, inst := range cfg.GitHub {
+		if a, ok := githubPlatforms[inst.Name].Approver.(*githubforge.Approver); ok && inst.ApproveTokenEnv != "" {
+			a.OnTokenExpiry(engine.TokenExpiryRecorder(st, inst.Name, log.With("instance", inst.Name)))
+		}
+	}
 	restCfg, err := kubeConfig()
 	if err != nil {
 		return err

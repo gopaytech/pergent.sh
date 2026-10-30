@@ -47,6 +47,12 @@ type Approver struct {
 	log      *slog.Logger
 	mu       sync.Mutex
 	lastWarn time.Time
+	// onExpiry is told when what GitHub says about the expiry changes (see
+	// OnTokenExpiry); told* is what it was last told.
+	onExpiry    func(expires time.Time, soon bool)
+	told        bool
+	toldSoon    bool
+	toldExpires time.Time
 }
 
 // NewAppApprover returns the approve App's Approver. botUserID is the App's
@@ -143,15 +149,43 @@ func newApprover(botUserID int64, repos Repos) *Approver {
 	}
 }
 
+// OnTokenExpiry sets fn, called when a token approver learns something new
+// about its token's expiry: the first time GitHub reports one, when the token
+// turns soon-to-expire (within 14 days) or stops being so, and when the
+// expiry moves while it is. fn must not block for long. It never sees the
+// token.
+func (a *Approver) OnTokenExpiry(fn func(expires time.Time, soon bool)) {
+	a.mu.Lock()
+	a.onExpiry = fn
+	a.mu.Unlock()
+}
+
+// noteExpiry tells onExpiry about exp when it differs from what it was told.
+func (a *Approver) noteExpiry(exp time.Time, soon bool) {
+	a.mu.Lock()
+	fn := a.onExpiry
+	changed := !a.told || a.toldSoon != soon || (soon && !a.toldExpires.Equal(exp))
+	if fn != nil && changed {
+		a.told, a.toldSoon, a.toldExpires = true, soon, exp
+	}
+	a.mu.Unlock()
+	if fn != nil && changed {
+		fn(exp, soon)
+	}
+}
+
 // warnExpiry logs a warning when c's token expires within 14 days, at most
-// once an hour. The token itself is never logged.
+// once an hour, and reports the expiry to OnTokenExpiry. The token itself is
+// never logged.
 func (a *Approver) warnExpiry(c *github.Client) {
 	exp, ok := c.TokenExpiry()
 	if !ok {
 		return
 	}
 	now := a.now()
-	if exp.Sub(now) > expiryWarnAhead {
+	soon := exp.Sub(now) <= expiryWarnAhead
+	a.noteExpiry(exp, soon)
+	if !soon {
 		return
 	}
 	a.mu.Lock()

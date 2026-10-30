@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -133,5 +134,8 @@ func (e *Engine) watch(ctx context.Context, run store.Run, now time.Time) (bool,
 		return false, nil
 	}
 	log.Warn("review job ended without a result; run reported as failed", "reason", reason)
+	if strings.Contains(reason, "OOMKilled") {
+		e.refreshOutOfMemory(ctx, run.MR.Instance, run.ProjectPath)
+	}
 	return true, nil
 }

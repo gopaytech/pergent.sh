@@ -240,3 +240,91 @@ func TestRunsToLog(t *testing.T) {
 		t.Errorf("RunsToLog = %v; want only the recently reported run %s without a log", ids, reported)
 	}
 }
+
+func TestAttentionSetClearList(t *testing.T) {
+	s := newStore(t)
+
+	if rows, err := s.Attention(ctx); err != nil || len(rows) != 0 {
+		t.Fatalf("Attention on an empty store = %v, %v", rows, err)
+	}
+	if err := s.SetAttention(ctx, "main", "Acme/Widgets", "single_approval", "first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetAttention(ctx, "main", "acme/payments", "out_of_memory", "oom"); err != nil {
+		t.Fatal(err)
+	}
+	// Instance-wide: the project is empty.
+	if err := s.SetAttention(ctx, "gh", "", "token_expiry", "token"); err != nil {
+		t.Fatal(err)
+	}
+	// Setting it again, in another case, replaces the message.
+	if err := s.SetAttention(ctx, "main", "acme/widgets", "single_approval", "second"); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := s.Attention(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("Attention = %+v; want 3 rows", rows)
+	}
+	got := map[string]Attention{}
+	for _, r := range rows {
+		got[r.Instance+"|"+r.Kind] = r
+		if r.UpdatedAt.IsZero() {
+			t.Errorf("row without a time: %+v", r)
+		}
+	}
+	if r := got["main|single_approval"]; r.Message != "second" || r.Project != "acme/widgets" {
+		t.Errorf("single_approval = %+v; want the new message and spelling", r)
+	}
+	if r := got["gh|token_expiry"]; r.Project != "" || r.Message != "token" {
+		t.Errorf("token_expiry = %+v", r)
+	}
+
+	// Clearing ignores case and a missing row is not an error.
+	if err := s.ClearAttention(ctx, "main", "ACME/WIDGETS", "single_approval"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClearAttention(ctx, "main", "acme/widgets", "single_approval"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClearAttention(ctx, "gh", "", "token_expiry"); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ = s.Attention(ctx)
+	if len(rows) != 1 || rows[0].Kind != "out_of_memory" {
+		t.Errorf("after clearing = %+v", rows)
+	}
+}
+
+func TestCountFailedRuns(t *testing.T) {
+	s := newStore(t)
+	t0 := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	fail := func(iid int64, project, reason string, at time.Time) {
+		t.Helper()
+		mr := MRKey{"main", 7, iid}
+		id := dispatched(t, s, mr, "aaa", "tok")
+		if _, err := s.pool.Exec(ctx, `UPDATE runs SET project_path = $2 WHERE id = $1::uuid`, id, project); err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := s.ReportFailure(ctx, id, reason, at); err != nil || !ok {
+			t.Fatalf("ReportFailure = %v, %v", ok, err)
+		}
+	}
+	oom := "the review job ran out of memory (OOMKilled)"
+	fail(1, "acme/widgets", oom, t0.Add(-time.Hour))
+	fail(2, "Acme/Widgets", oom, t0.Add(-24*time.Hour))
+	fail(3, "acme/widgets", oom, t0.Add(-8*24*time.Hour)) // too old
+	fail(4, "acme/widgets", "the review job hit its deadline", t0.Add(-time.Hour))
+	fail(5, "acme/payments", oom, t0.Add(-time.Hour))
+
+	n, err := s.CountFailedRuns(ctx, "main", "acme/widgets", "OOMKilled", t0.Add(-7*24*time.Hour))
+	if err != nil || n != 2 {
+		t.Errorf("CountFailedRuns = %d, %v; want 2", n, err)
+	}
+	if n, err := s.CountFailedRuns(ctx, "other", "acme/widgets", "OOMKilled", t0.Add(-7*24*time.Hour)); err != nil || n != 0 {
+		t.Errorf("another instance = %d, %v; want 0", n, err)
+	}
+}

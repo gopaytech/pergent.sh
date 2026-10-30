@@ -71,6 +71,7 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 			return errors.Join(append(errs, ctx.Err())...)
 		}
 		wanted[keyOf(repo.Instance, repo.Project)] = true
+		e.refreshOutOfMemory(ctx, repo.Instance, repo.Project)
 		var id int64
 		if repo.Platform == config.PlatformGitHub {
 			id, err = e.reconcileGitHubRepo(ctx, repo)
@@ -172,7 +173,7 @@ func (e *Engine) reconcileRepo(ctx context.Context, repo settings.Effective, now
 	}
 	// The approve bot is a GitLab user that can always approve.
 	n, err := gitLabRequiredApprovals(ctx, gl, gp.ID, gp.DefaultBranch)
-	e.checkRequiredApprovals(instance, repo.Project, gp.DefaultBranch, n, err)
+	e.checkRequiredApprovals(ctx, instance, repo.Project, gp.DefaultBranch, n, err)
 
 	hookID, err := gl.EnsureHook(ctx, gp.ID, HookURL(e.Config.PublicURL, instance), secret)
 	if err != nil {
@@ -343,10 +344,12 @@ func (e *Engine) reconcileGitHubRepo(ctx context.Context, repo settings.Effectiv
 	if !reach {
 		e.log().Warn("the approve side can't reach the repository: its reviews are published without approval",
 			"instance", instance, "project", repo.Project, "project_id", gr.ID)
+		e.setAttention(ctx, instance, repo.Project, attApproverUnreachable, e.approverUnreachableNote(instance))
 		return gr.ID, nil
 	}
+	e.clearAttention(ctx, instance, repo.Project, attApproverUnreachable)
 	n, err := gitHubRequiredApprovals(ctx, app.Client(installation), owner, name, gr.DefaultBranch)
-	e.checkRequiredApprovals(instance, repo.Project, gr.DefaultBranch, n, err)
+	e.checkRequiredApprovals(ctx, instance, repo.Project, gr.DefaultBranch, n, err)
 	return gr.ID, nil
 }
 
@@ -356,10 +359,12 @@ const singleApproval = "one approval is enough to merge here, so pergent's appro
 
 // checkRequiredApprovals logs what reading the approvals needed to merge a
 // repository's default branch found: a warning when n is at most 1, as the
-// approve bot's approval alone then unlocks the merge. A read that failed
-// (err) is logged at info, once per repository while pergent.sh runs: the
-// check never fails reconcile.
-func (e *Engine) checkRequiredApprovals(instance, path, branch string, n int, err error) {
+// approve bot's approval alone then unlocks the merge. The dashboard's
+// single_approval item is recorded with that warning and cleared once n is 2
+// or more. A read that failed (err) is logged at info, once per repository
+// while pergent.sh runs, and leaves the item as it was: the check never fails
+// reconcile.
+func (e *Engine) checkRequiredApprovals(ctx context.Context, instance, path, branch string, n int, err error) {
 	if err != nil {
 		key := keyOf(instance, path)
 		e.uncheckedMu.Lock()
@@ -378,7 +383,10 @@ func (e *Engine) checkRequiredApprovals(instance, path, branch string, n int, er
 	if n <= 1 {
 		e.log().Warn(path+": "+singleApproval,
 			"instance", instance, "project", path, "branch", branch, "required_approvals", n)
+		e.setAttention(ctx, instance, path, attSingleApproval, singleApprovalNote)
+		return
 	}
+	e.clearAttention(ctx, instance, path, attSingleApproval)
 }
 
 // gitLabRequiredApprovals is the most approvals any approval rule that
