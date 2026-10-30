@@ -211,6 +211,18 @@ func (s *Store) SupersedeMR(ctx context.Context, mr MRKey) (int, error) {
 	return int(tag.RowsAffected()), nil
 }
 
+// Supersede moves one queued or running run to superseded, for example when
+// the dispatcher finds its merge request closed or its head moved. A run in
+// any other state, or an unknown id, is left alone and is not an error.
+func (s *Store) Supersede(ctx context.Context, id string) error {
+	if !validUUID(id) {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'superseded'
+		WHERE id = $1::uuid AND state IN ('queued', 'running')`, id)
+	return err
+}
+
 // CountRunning returns the number of runs in state running.
 func (s *Store) CountRunning(ctx context.Context) (int, error) {
 	var n int

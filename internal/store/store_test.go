@@ -866,3 +866,32 @@ func TestReplaceWithFailure(t *testing.T) {
 		t.Errorf("malformed id: %v", err)
 	}
 }
+
+func TestSupersede(t *testing.T) {
+	s := newStore(t)
+	queued := enqueue(t, s, mr1, "aaa")
+	running := dispatched(t, s, mr2, "bbb", "tok")
+	done := reported(t, s, MRKey{mr1.Instance, 7, 9}, "ccc", `{"status":"completed"}`)
+
+	for _, id := range []string{queued, running} {
+		if err := s.Supersede(ctx, id); err != nil {
+			t.Fatalf("Supersede(%s): %v", id, err)
+		}
+		if got := getRun(t, s, id).State; got != Superseded {
+			t.Errorf("run %s state = %s, want superseded", id, got)
+		}
+	}
+	// Already superseded, reported, unknown and malformed ids are left alone.
+	for _, id := range []string{queued, done, "00000000-0000-0000-0000-000000000000", "nope"} {
+		if err := s.Supersede(ctx, id); err != nil {
+			t.Errorf("Supersede(%s): %v", id, err)
+		}
+	}
+	if got := getRun(t, s, done).State; got != Reported {
+		t.Errorf("reported run state = %s, want reported", got)
+	}
+	// The superseded running run's late result is discarded.
+	if out, err := s.StoreResult(ctx, running, "tok", []byte(`{"status":"completed"}`), t0.Add(time.Minute)); err != nil || out != ResultDiscarded {
+		t.Errorf("StoreResult = %v, %v; want discarded", out, err)
+	}
+}
