@@ -25,6 +25,9 @@ const (
 
 	reasonUnusableResult  = "pergent sent a result pergent.sh couldn't use: "
 	supersededDescription = "Superseded by a newer push"
+	// gaveUpDescription is the final status of a run whose review couldn't
+	// be posted.
+	gaveUpDescription = "pergent couldn't post its review"
 )
 
 // StatusState maps a policy status to the status set on the head. Anything
@@ -265,7 +268,12 @@ func (e *Engine) retryPublish(ctx context.Context, run store.Run, text string, l
 	sctx, cancel := settleCtx(ctx)
 	defer cancel()
 	notBefore := e.now().Add(publishBackoff(run.Attempts))
-	err := e.Store.PublishRetry(sctx, run.ID, text, notBefore)
+	gaveUp, err := e.Store.PublishRetry(sctx, run.ID, text, notBefore)
+	if err == nil && gaveUp {
+		log.Error("couldn't publish the review; giving up", "attempts", run.Attempts+1, "error", text)
+		e.giveUpStatus(sctx, run, log)
+		return
+	}
 	if err == nil {
 		log.Warn("couldn't publish the review; will retry", "attempt", run.Attempts+1, "retry_at", notBefore, "error", text)
 		return
@@ -275,6 +283,21 @@ func (e *Engine) retryPublish(ctx context.Context, run store.Run, text string, l
 		return
 	}
 	log.Error("couldn't record the failed publish", "error", e.redact(err.Error()), "publish_error", text)
+}
+
+// giveUpStatus makes one best-effort attempt to set a failed status on the
+// head of a run that became publish_failed, so a required check isn't left
+// running (GitHub's Check Run stays in_progress from dispatch otherwise). It
+// runs once, on the transition the store reports; nothing is approved.
+func (e *Engine) giveUpStatus(ctx context.Context, run store.Run, log *slog.Logger) {
+	plat, ok := e.Platforms[run.MR.Instance]
+	if !ok || plat.Forge == nil {
+		log.Warn("couldn't set the final status: no bots for the instance")
+		return
+	}
+	if err := plat.Forge.SetStatus(ctx, run.MR.ProjectID, run.HeadSHA, forge.StatusFailed, gaveUpDescription); err != nil {
+		log.Warn("couldn't set the final status of the review that wasn't posted", "error", e.redact(err.Error()))
+	}
 }
 
 // CleanupOnce deletes the Jobs of superseded runs, sets their commit status

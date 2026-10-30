@@ -420,7 +420,7 @@ func TestRunsToPublishAndMarkPublished(t *testing.T) {
 	enqueue(t, s, MRKey{mr1.Instance, 9, 4}, "queued-not-reported")
 
 	now := t0.Add(time.Hour)
-	if err := s.PublishRetry(ctx, b, "boom", now.Add(time.Hour)); err != nil {
+	if _, err := s.PublishRetry(ctx, b, "boom", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.RunsToPublish(ctx, now, 10)
@@ -458,8 +458,12 @@ func TestPublishRetryGivesUpAtTen(t *testing.T) {
 	s := newStore(t)
 	id := reported(t, s, mr1, "aaa", `{"status":"completed"}`)
 	for i := 1; i <= 10; i++ {
-		if err := s.PublishRetry(ctx, id, "gitlab 502", t0.Add(time.Duration(i)*time.Minute)); err != nil {
+		gaveUp, err := s.PublishRetry(ctx, id, "gitlab 502", t0.Add(time.Duration(i)*time.Minute))
+		if err != nil {
 			t.Fatal(err)
+		}
+		if gaveUp != (i == 10) {
+			t.Errorf("after %d retries: gave up = %v, want %v", i, gaveUp, i == 10)
 		}
 		r := getRun(t, s, id)
 		want := Reported
@@ -1329,7 +1333,7 @@ func TestMigration0003BackfillsApprovedTarget(t *testing.T) {
 func TestRepublish(t *testing.T) {
 	s := newStore(t)
 	id := published(t, s, mr1, "A", "main")
-	if err := s.PublishRetry(ctx, id, "", t0); err == nil {
+	if _, err := s.PublishRetry(ctx, id, "", t0); err == nil {
 		t.Fatal("PublishRetry on a published run should fail")
 	}
 	if _, err := s.pool.Exec(ctx, `UPDATE runs SET attempts = 3, publish_error = 'old', not_before = $2 WHERE id = $1::uuid`, id, t0.Add(time.Hour)); err != nil {
@@ -1494,7 +1498,7 @@ func TestRepublishWhileReported(t *testing.T) {
 func TestRepublishWhileReportedKeepsBackoff(t *testing.T) {
 	s := newStore(t)
 	id := reported(t, s, mr1, "A", `{"status":"completed"}`)
-	if err := s.PublishRetry(ctx, id, "boom", t0.Add(time.Hour)); err != nil {
+	if _, err := s.PublishRetry(ctx, id, "boom", t0.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if ok, err := s.Republish(ctx, mr1, "A"); err != nil || !ok {
@@ -1514,7 +1518,7 @@ func TestPublishRetryClearsRedecide(t *testing.T) {
 	if ok, err := s.Republish(ctx, mr1, "A"); err != nil || !ok {
 		t.Fatalf("Republish = %v, %v", ok, err)
 	}
-	if err := s.PublishRetry(ctx, id, "boom", t0); err != nil {
+	if _, err := s.PublishRetry(ctx, id, "boom", t0); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.MarkPublished(ctx, id); err != nil {

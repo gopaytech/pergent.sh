@@ -980,3 +980,32 @@ func TestSweepGitHubClosedDismisses(t *testing.T) {
 		t.Errorf("want the removal logged and no run queued:\n%s", logs)
 	}
 }
+
+// GitHub refuses the comment every time (too long, say): after the 10th
+// attempt the in-progress Check Run is completed as a failure, once, and the
+// pull request is never approved.
+func TestPublishGitHubFailedCompletesCheckRun(t *testing.T) {
+	env := newTestEnv(t)
+	gh := addGitHub(t, env, true)
+	head := sha('a')
+	id := ghReport(t, env, 3, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublishGitHub(gh, 3, head)
+	gh.Reply(http.MethodPost, ghRepoAPI+"/issues/3/comments", http.StatusUnprocessableEntity,
+		map[string]any{"message": "Validation Failed", "errors": []any{map[string]any{"message": "body is too long (maximum is 65536 characters)"}}})
+
+	publishUntilGivenUp(t, env, id)
+	publish(t, env)
+
+	run := onlyCheckRun(t, gh)
+	out, _ := run["output"].(map[string]any)
+	if run["status"] != "completed" || run["conclusion"] != "failure" || run["head_sha"] != head ||
+		out["title"] != "pergent couldn't post its review" {
+		t.Errorf("check run = %v", run)
+	}
+	if reviews := gh.Requests(http.MethodPost, ghPRPath(3)+"/reviews"); len(reviews) != 0 {
+		t.Errorf("approved %d times", len(reviews))
+	}
+	if a := approvals(t, env); len(a) != 0 {
+		t.Errorf("approvals = %+v, want none", a)
+	}
+}

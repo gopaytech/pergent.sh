@@ -221,7 +221,7 @@ At startup pergent.sh reads each App's slug (`GET /app`) and its bot user (`GET 
 The status of a review is a Check Run named `pergent` on the reviewed head commit, created by the review App:
 
 - `in_progress` ("pergent review running") when the Job starts;
-- then `completed` with the conclusion `success`, `failure`, `neutral` (a failed review with `failure_status: neutral`) or `cancelled` (the run was superseded: a newer push or a new target branch replaced it, or the pull request was closed).
+- then `completed` with the conclusion `success`, `failure`, `neutral` (a failed review with `failure_status: neutral`) or `cancelled` (the run was superseded: a newer push or a new target branch replaced it, or the pull request was closed). A review that couldn't be posted after 10 attempts ends as `failure`, titled "pergent couldn't post its review".
 
 Its title is the status description from [How approval works](#how-approval-works) and its summary points to the pull request comment; findings are only in the comment. Every change is a new Check Run with the same name, and GitHub shows the latest. To make merging wait for the review, add `pergent` as a required status check in the branch's protection rule or ruleset, and **pin it to the review App**: otherwise GitHub accepts a check named `pergent` from any source, and a workflow or another App could satisfy it. In a branch protection rule, set the check's source to the review App instead of "Any source"; in a ruleset, choose the review App as the check's integration. See [Branch protection](#branch-protection).
 
@@ -361,7 +361,8 @@ A failed, partial or missing review is never `success` and is never approved.
 - A Job whose pod can't start because its image can't be pulled (or its container config is invalid) is deleted and reported after about 5 minutes.
 - A Job whose pod the cluster refuses to create (for example, one rejected by an admission policy) is only reported when the Job reaches its deadline, as `DeadlineExceeded`: `jobs.timeout` plus at least 4 minutes, and about a minute more for the report.
 - Runs that were claimed but not launched (for example because pergent.sh crashed) are requeued at startup and after 5 minutes.
-- Publishing is retried with backoff. After 10 failed attempts the run becomes `publish_failed` and nothing more is posted to the merge request; the failure is only in the logs.
+- Publishing is retried with backoff. After 10 failed attempts the run becomes `publish_failed`: pergent.sh makes one last attempt to set the head's status to `failed` (GitHub: the Check Run completed with `failure`) titled "pergent couldn't post its review", so a required check isn't left running, and posts nothing more to the merge request; it is never approved. The failure itself is only in the logs.
+- The comment pergent renders is held to 990,000 bytes on GitLab and 60,000 on GitHub, which refuses a comment over 65,536 characters; the rest of the limit is room for the note pergent.sh adds (the list of skipped files is at most 20 paths and 4000 bytes).
 
 ## What a Job can and cannot see
 

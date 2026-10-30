@@ -1081,3 +1081,65 @@ func TestPublishReadyDuringPublish(t *testing.T) {
 		t.Errorf("recorded approval = %q, want %s", got, head)
 	}
 }
+
+// publishUntilGivenUp runs the publisher 10 times, each when the run's retry
+// is due, so the run that never posts becomes publish_failed.
+func publishUntilGivenUp(t *testing.T, env *testEnv, id string) {
+	t.Helper()
+	for i := 0; i < 10; i++ {
+		publish(t, env)
+		env.SetNow(env.Now().Add(11 * time.Minute))
+	}
+	if r := env.Run(id); r.State != store.PublishFailed {
+		t.Fatalf("run state = %s after 10 failed publishes, want publish_failed", r.State)
+	}
+}
+
+// A run that can't be posted gives up after its 10th attempt; its head then
+// gets one final failed status, so a required check isn't left running, and
+// is never approved.
+func TestPublishFailedSetsFinalStatusOnce(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublish(env, 1, head)
+	env.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusUnprocessableEntity, `{"message":"Note is too long"}`)
+
+	publishUntilGivenUp(t, env, id)
+	wantStatus(t, env, head, gitlab.StatusFailed, "pergent couldn't post its review")
+	wantNoApproval(t, env, 1)
+
+	// It is never posted again.
+	for i := 0; i < 3; i++ {
+		publish(t, env)
+		env.SetNow(env.Now().Add(time.Hour))
+	}
+	if n := len(env.GitLab.Requests(http.MethodPost, statusPath(head))); n != 1 {
+		t.Errorf("%d commit statuses, want the one final status", n)
+	}
+	for _, secret := range []string{testReviewToken, testApproveToken, testLLMKey} {
+		if strings.Contains(env.Logs(), secret) {
+			t.Error("a token reached the log")
+		}
+	}
+}
+
+// The final status is best effort: when it can't be set either, the run stays
+// publish_failed and nothing is tried again.
+func TestPublishFailedFinalStatusRefused(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublish(env, 1, head)
+	env.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusForbidden, `{"message":"403 Forbidden"}`)
+	env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusForbidden, `{"message":"403 Forbidden"}`)
+
+	publishUntilGivenUp(t, env, id)
+	publish(t, env)
+	if n := len(env.GitLab.Requests(http.MethodPost, statusPath(head))); n != 1 {
+		t.Errorf("%d commit status attempts, want 1", n)
+	}
+	if !strings.Contains(env.Logs(), "couldn't set the final status") {
+		t.Errorf("the refused final status isn't logged:\n%s", env.Logs())
+	}
+}

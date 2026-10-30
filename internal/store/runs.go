@@ -533,15 +533,28 @@ func (s *Store) MarkPublished(ctx context.Context, id string) error {
 }
 
 // PublishRetry records a failed publish: the run is tried again at notBefore,
-// or becomes publish_failed when this was the 10th failed attempt. The retry
-// decides afresh, so a pending Republish flag is dropped.
-func (s *Store) PublishRetry(ctx context.Context, id, errText string, notBefore time.Time) error {
+// or becomes publish_failed when this was the 10th failed attempt, which it
+// reports (gaveUp), only on that one transition. The retry decides afresh, so
+// a pending Republish flag is dropped.
+func (s *Store) PublishRetry(ctx context.Context, id, errText string, notBefore time.Time) (gaveUp bool, err error) {
 	if len(errText) > maxPublishError {
 		errText = errText[:maxPublishError]
 	}
-	return s.mustUpdate(ctx, id, `UPDATE runs SET attempts = attempts + 1, publish_error = $2, not_before = $3, redecide = false,
+	if !validUUID(id) {
+		return false, fmt.Errorf("store: run %q not found", id)
+	}
+	var state string
+	err = s.pool.QueryRow(ctx, `UPDATE runs SET attempts = attempts + 1, publish_error = $2, not_before = $3, redecide = false,
 		state = CASE WHEN attempts + 1 >= $4 THEN 'publish_failed' ELSE state END
-		WHERE id = $1::uuid AND state = 'reported'`, id, errText, notBefore, maxPublishAttempts)
+		WHERE id = $1::uuid AND state = 'reported'
+		RETURNING state`, id, errText, notBefore, maxPublishAttempts).Scan(&state)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, fmt.Errorf("store: run %s not found or in the wrong state", id)
+	}
+	if err != nil {
+		return false, err
+	}
+	return RunState(state) == PublishFailed, nil
 }
 
 // Republish asks the publisher to decide the merge request's newest
