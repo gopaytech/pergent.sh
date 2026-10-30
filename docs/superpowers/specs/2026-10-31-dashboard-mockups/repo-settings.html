@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pergent.sh — repository settings mockup</title>
+<style>
+  :root{
+    --bg:#f7f7f9; --panel:#fff; --side:#1f1f2b; --side-2:#2a2a3a; --side-text:#c9c9d6;
+    --text:#1d1d26; --muted:#6b6b7b; --line:#e6e6ee; --accent:#3d4ba8; --accent-soft:#eceefb;
+    --ok:#1f8a4c; --ok-soft:#e6f5ec; --bad:#c2343a; --bad-soft:#fbe9ea; --warn:#a86a00; --warn-soft:#fdf3e1;
+  }
+  *{box-sizing:border-box} body{margin:0;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;color:var(--text);background:var(--bg)}
+  .shell{display:grid;grid-template-columns:232px 1fr;min-height:100vh}
+  aside{background:var(--side);color:var(--side-text);padding:16px 12px;display:flex;flex-direction:column;gap:4px}
+  .brand{display:flex;align-items:center;gap:10px;padding:6px 8px 16px;color:#fff;font-weight:700;font-size:16px}
+  .logo{width:28px;height:28px;border-radius:50%;background:var(--accent);display:grid;place-items:center;font-size:15px}
+  .org{margin:0 4px 12px;padding:8px 10px;border-radius:8px;background:var(--side-2);font-size:13px;display:flex;justify-content:space-between}
+  .nav a{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--side-text);text-decoration:none}
+  .nav a.active{background:var(--side-2);color:#fff;font-weight:600}
+  .section-label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;opacity:.55;margin:14px 10px 4px}
+  .me{margin-top:auto;display:flex;align-items:center;gap:8px;padding:8px 10px;font-size:13px}
+  .avatar{width:24px;height:24px;border-radius:50%;background:#d6825b;display:grid;place-items:center;color:#fff;font-size:11px}
+  main{padding:20px 32px;max-width:1100px}
+  .crumbs{font-size:12px;color:var(--muted);margin-bottom:6px}
+  h1{font-size:20px;margin:0 0 4px} .sub{color:var(--muted);font-size:13px;margin-bottom:14px}
+  .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:16px}
+  .tabs span{padding:9px 12px;font-size:13px;color:var(--muted)} .tabs span.on{color:var(--text);border-bottom:2px solid var(--accent);font-weight:600}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:16px;overflow:hidden}
+  .card h2{font-size:14px;margin:0;padding:12px 16px;border-bottom:1px solid var(--line)}
+  .set{display:grid;grid-template-columns:1fr 280px;gap:16px;padding:14px 16px;border-bottom:1px solid var(--line);align-items:center}
+  .set:last-child{border-bottom:0}
+  .set .name{font-weight:600} .set .help{color:var(--muted);font-size:12px;margin-top:2px}
+  .toggle{width:40px;height:22px;border-radius:11px;background:var(--accent);position:relative;display:inline-block;vertical-align:middle}
+  .toggle::after{content:"";position:absolute;right:3px;top:3px;width:16px;height:16px;border-radius:50%;background:#fff}
+  .toggle.off{background:#cfcfda} .toggle.off::after{right:auto;left:3px}
+  select,input{border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-size:13px;width:100%;background:#fff}
+  .badge{font-size:11px;border-radius:6px;padding:1px 6px;margin-left:6px;background:var(--accent-soft);color:var(--accent);font-weight:600}
+  .badge.cfg{background:#efeff4;color:#55556a}
+  .alert{display:flex;gap:10px;padding:12px 16px;background:var(--warn-soft);color:#6b4500;border-bottom:1px solid #f1dfb8;font-size:13px}
+  .skill{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--line);font-size:13px}
+  .skill:last-child{border-bottom:0}
+  .src{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+  .grow{flex:1}
+  .btn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 12px;font-size:13px}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .foot{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;background:#fafafc}
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside>
+    <div class="brand"><div class="logo">🦉</div>pergent.sh</div>
+    <div class="org"><span>acme</span><span>▾</span></div>
+    <nav class="nav">
+      <a href="#">🏠 Overview</a><a class="active" href="#">📁 Repositories</a><a href="#">🔍 Reviews</a><a href="#">🧩 Skills</a>
+      <div class="section-label">Admin</div><a href="#">🔌 Integrations</a><a href="#">⚙️ Settings</a>
+    </nav>
+    <div class="me"><div class="avatar">PT</div>platform-user · admin</div>
+  </aside>
+
+  <main>
+    <div class="crumbs">Repositories / acme/payments</div>
+    <h1>acme/payments</h1>
+    <div class="sub">GitLab · gitlab.example.com · default branch main</div>
+    <div class="tabs"><span>Reviews</span><span class="on">Settings</span><span>Skills &amp; instructions</span><span>Setup checks</span></div>
+
+    <div class="card">
+      <div class="alert">⚠️ One approval is enough to merge here, so pergent's approval alone can unlock it. Add an approval rule that needs a human.</div>
+      <h2>Reviews</h2>
+      <div class="set"><div><div class="name">Review merge requests</div><div class="help">Every new MR and every push gets a review.</div></div><div><span class="toggle"></span></div></div>
+      <div class="set"><div><div class="name">Approve clean reviews <span class="badge">overridden here</span></div><div class="help">When off, pergent still reviews and comments but never approves.</div></div><div><span class="toggle"></span></div></div>
+      <div class="set"><div><div class="name">Status when a review fails <span class="badge cfg">default</span></div><div class="help">"neutral" won't block merging when the LLM provider is down.</div></div><div><select><option>failed (blocks merge)</option><option>neutral</option></select></div></div>
+      <div class="set"><div><div class="name">Review drafts</div><div class="help">Drafts are reviewed but never approved.</div></div><div><span class="toggle"></span></div></div>
+    </div>
+
+    <div class="card">
+      <h2>Skills used for this repository</h2>
+      <div class="skill"><span class="toggle"></span><div class="grow"><b>code-review</b><div class="help" style="color:var(--muted);font-size:12px">Overridden by the repository's own .pergent/skills/code-review.md</div></div><span class="src">repo</span></div>
+      <div class="skill"><span class="toggle"></span><div class="grow"><b>security-review</b></div><span class="src">library</span></div>
+      <div class="skill"><span class="toggle off"></span><div class="grow"><b>go-style</b></div><span class="src">library</span></div>
+    </div>
+
+    <div class="card">
+      <h2>Review Job</h2>
+      <div class="set"><div><div class="name">Timeout <span class="badge cfg">default</span></div><div class="help">How long one review may run.</div></div><div><input value="10m"></div></div>
+      <div class="set"><div><div class="name">Memory limit <span class="badge">overridden here</span></div><div class="help">Raise it if reviews run out of memory.</div></div><div><input value="6Gi"></div></div>
+      <div class="foot"><button class="btn">Reset to defaults</button><button class="btn primary">Save</button></div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

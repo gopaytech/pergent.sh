@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pergent.sh — dashboard mockup</title>
+<style>
+  :root{
+    --bg:#f7f7f9; --panel:#ffffff; --side:#1f1f2b; --side-2:#2a2a3a; --side-text:#c9c9d6; --side-active:#ffffff;
+    --text:#1d1d26; --muted:#6b6b7b; --line:#e6e6ee; --accent:#3d4ba8; --accent-soft:#eceefb;
+    --ok:#1f8a4c; --ok-soft:#e6f5ec; --bad:#c2343a; --bad-soft:#fbe9ea; --warn:#a86a00; --warn-soft:#fdf3e1; --run:#2f6fd6; --run-soft:#e7f0fd;
+  }
+  *{box-sizing:border-box} body{margin:0;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;color:var(--text);background:var(--bg)}
+  .shell{display:grid;grid-template-columns:232px 1fr;min-height:100vh}
+  aside{background:var(--side);color:var(--side-text);padding:16px 12px;display:flex;flex-direction:column;gap:4px}
+  .brand{display:flex;align-items:center;gap:10px;padding:6px 8px 16px;color:#fff;font-weight:700;font-size:16px}
+  .logo{width:28px;height:28px;border-radius:50%;background:var(--accent);display:grid;place-items:center;font-size:15px}
+  .org{margin:0 4px 12px;padding:8px 10px;border-radius:8px;background:var(--side-2);font-size:13px;display:flex;justify-content:space-between}
+  .nav a{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--side-text);text-decoration:none;font-size:14px}
+  .nav a:hover{background:var(--side-2)} .nav a.active{background:var(--side-2);color:var(--side-active);font-weight:600}
+  .nav .count{margin-left:auto;font-size:12px;background:#3a3a4e;border-radius:10px;padding:0 7px}
+  .section-label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;opacity:.55;margin:14px 10px 4px}
+  .side-foot{margin-top:auto;font-size:12px;opacity:.7;padding:8px 10px}
+  main{padding:24px 32px;overflow:auto}
+  .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+  h1{font-size:20px;margin:0} .sub{color:var(--muted);font-size:13px;margin-top:2px}
+  .btn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 12px;font-size:13px;cursor:pointer}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .stat .k{color:var(--muted);font-size:12px} .stat .v{font-size:22px;font-weight:700;margin-top:4px}
+  .stat .d{font-size:12px;margin-top:2px} .up{color:var(--ok)} .down{color:var(--bad)}
+  .grid{display:grid;grid-template-columns:1.6fr 1fr;gap:16px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .card h2{font-size:14px;margin:0;padding:12px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+  .card h2 a{font-size:12px;color:var(--accent);text-decoration:none;font-weight:500}
+  .row{display:flex;align-items:center;gap:12px;padding:11px 16px;border-bottom:1px solid var(--line)}
+  .row:last-child{border-bottom:0}
+  .pill{font-size:11px;font-weight:600;border-radius:999px;padding:2px 8px;white-space:nowrap}
+  .ok{background:var(--ok-soft);color:var(--ok)} .bad{background:var(--bad-soft);color:var(--bad)}
+  .warn{background:var(--warn-soft);color:var(--warn)} .run{background:var(--run-soft);color:var(--run)} .draft{background:#efeff4;color:#55556a}
+  .mr{font-weight:600} .meta{color:var(--muted);font-size:12px}
+  .grow{flex:1;min-width:0} .title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .plat{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+  .attention .row .why{font-size:12px;color:var(--muted)}
+  .tag{font-size:11px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside>
+    <div class="brand"><div class="logo">🦉</div>pergent.sh</div>
+    <div class="org"><span>acme</span><span>▾</span></div>
+    <nav class="nav">
+      <a class="active" href="#">🏠 Overview</a>
+      <a href="#">📁 Repositories <span class="count">12</span></a>
+      <a href="#">🔍 Reviews</a>
+      <a href="#">🧩 Skills</a>
+      <div class="section-label">Admin</div>
+      <a href="#">🔌 Integrations</a>
+      <a href="#">⚙️ Settings</a>
+      <a href="#">👥 Organization</a>
+    </nav>
+    <div class="side-foot">pergent v0.1.0 · 3 Jobs running</div>
+  </aside>
+
+  <main>
+    <div class="top">
+      <div><h1>Overview</h1><div class="sub">Last 7 days across 12 repositories</div></div>
+      <div style="display:flex;gap:8px"><button class="btn">Last 7 days ▾</button><button class="btn primary">+ Add repository</button></div>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><div class="k">Reviews</div><div class="v">184</div><div class="d up">▲ 12% vs last week</div></div>
+      <div class="stat"><div class="k">Approved by pergent</div><div class="v">121</div><div class="d meta">66% of reviews</div></div>
+      <div class="stat"><div class="k">Blocking findings</div><div class="v">37</div><div class="d meta">in 29 MRs / PRs</div></div>
+      <div class="stat"><div class="k">Failed reviews</div><div class="v">4</div><div class="d down">▲ 2 — see below</div></div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Recent reviews <a href="#">View all →</a></h2>
+        <div class="row"><span class="pill ok">Approved</span><div class="grow"><div class="title"><span class="mr">acme/widgets #128</span> · Add retry to webhook sender</div><div class="meta">3 skills · 14 files · 2 suggestions · 4 min ago</div></div><span class="plat">GitHub</span></div>
+        <div class="row"><span class="pill run">Running</span><div class="grow"><div class="title"><span class="mr">acme/widgets #131</span> · Bump Go to 1.24</div><div class="meta">started 1 min ago · batch 2/3</div></div><span class="plat">GitHub</span></div>
+        <div class="row"><span class="pill bad">2 blocking</span><div class="grow"><div class="title"><span class="mr">acme/payments !77</span> · Refund idempotency key</div><div class="meta">security-review · code-review · 12 min ago</div></div><span class="plat">GitLab</span></div>
+        <div class="row"><span class="pill draft">Draft</span><div class="grow"><div class="title"><span class="mr">acme/widgets #130</span> · WIP: new pricing page</div><div class="meta">reviewed, not approved until ready · 1 h ago</div></div><span class="plat">GitHub</span></div>
+        <div class="row"><span class="pill warn">Failed</span><div class="grow"><div class="title"><span class="mr">acme/payments !76</span> · Migrate ledger tables</div><div class="meta">review job ran out of memory · 30 min ago</div></div><span class="plat">GitLab</span></div>
+      </div>
+
+      <div class="card attention">
+        <h2>Needs attention</h2>
+        <div class="row"><span class="pill warn">Setup</span><div class="grow"><div class="title">acme/payments</div><div class="why">One approval is enough to merge — pergent's approval alone unlocks it</div></div></div>
+        <div class="row"><span class="pill warn">Setup</span><div class="grow"><div class="title">acme/infra</div><div class="why">Approve App isn't installed — reviews run, nothing is approved</div></div></div>
+        <div class="row"><span class="pill bad">Failing</span><div class="grow"><div class="title">acme/payments</div><div class="why">2 reviews ran out of memory this week — raise the Job memory limit</div></div></div>
+        <div class="row"><span class="pill draft">Token</span><div class="grow"><div class="title">GitHub · acme</div><div class="why">Approve bot token expires in 9 days</div></div></div>
+      </div>
+    </div>
+  </main>
+</div>
+</body>
+</html>
