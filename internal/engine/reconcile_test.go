@@ -341,3 +341,116 @@ func TestReconcileForgetsProjectOfRemovedInstance(t *testing.T) {
 		t.Errorf("the configured project was removed")
 	}
 }
+
+const singleApprovalText = "one approval is enough to merge here, so pergent's approval alone can unlock it; add a rule requiring a human approval"
+
+// warnedSingleApproval reports whether the log warns that path needs only one
+// approval.
+func warnedSingleApproval(logs, path string) bool {
+	for _, line := range strings.Split(logs, "\n") {
+		if strings.Contains(line, "level=WARN") && strings.Contains(line, singleApprovalText) && strings.Contains(line, path) {
+			return true
+		}
+	}
+	return false
+}
+
+// Reconcile warns when one approval is enough to merge a GitLab project's
+// default branch: the approve bot's approval alone would unlock it.
+func TestReconcileWarnsSingleApprovalGitLab(t *testing.T) {
+	rule := func(required int, branches ...string) map[string]any {
+		pbs := []any{}
+		for _, b := range branches {
+			pbs = append(pbs, map[string]any{"name": b})
+		}
+		return map[string]any{"rule_type": "any_approver", "approvals_required": required,
+			"applies_to_all_protected_branches": false, "protected_branches": pbs}
+	}
+	for _, tc := range []struct {
+		name      string
+		rules     any
+		approvals any
+		warn      bool
+	}{
+		{name: "one approval required", rules: []any{rule(1)}, warn: true},
+		{name: "none required", rules: []any{rule(0)}, warn: true},
+		{name: "two required", rules: []any{rule(2)}},
+		{name: "two required on the default branch", rules: []any{rule(1, "release/*"), rule(2, "main")}},
+		{name: "only another branch requires two", rules: []any{rule(2, "release/*"), rule(1)}, warn: true},
+		{name: "two required on all protected branches", rules: []any{map[string]any{
+			"rule_type": "regular", "approvals_required": 2, "applies_to_all_protected_branches": true, "protected_branches": []any{}}}},
+		{name: "security report rule doesn't count", rules: []any{
+			map[string]any{"rule_type": "report_approver", "approvals_required": 2, "protected_branches": []any{}}, rule(1)}, warn: true},
+		{name: "no rules, project setting 1", rules: []any{}, approvals: map[string]any{"approvals_before_merge": 1}, warn: true},
+		{name: "no rules, project setting 2", rules: []any{}, approvals: map[string]any{"approvals_before_merge": 2}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnv(t)
+			serveProject(env, testProjectID, testProjectPath)
+			env.GitLab.Reply(http.MethodGet, "/projects/acme%2Fwidgets", http.StatusOK, map[string]any{
+				"id": testProjectID, "path_with_namespace": testProjectPath, "default_branch": "main",
+				"http_url_to_repo": "https://gitlab.example.com/acme/widgets.git",
+			})
+			env.GitLab.Reply(http.MethodGet, "/projects/7/approval_rules", http.StatusOK, tc.rules)
+			if tc.approvals != nil {
+				env.GitLab.Reply(http.MethodGet, "/projects/7/approvals", http.StatusOK, tc.approvals)
+			}
+
+			reconcile(t, env)
+
+			if got := warnedSingleApproval(env.Logs(), testProjectPath); got != tc.warn {
+				t.Errorf("warned = %v, want %v:\n%s", got, tc.warn, env.Logs())
+			}
+			if reqs := env.GitLab.Requests(http.MethodGet, "/projects/7/approval_rules"); len(reqs) != 1 || reqs[0].Token != testReviewToken {
+				t.Errorf("approval rules read = %+v; want once by the review bot", reqs)
+			}
+		})
+	}
+}
+
+// When GitLab won't say (403), reconcile logs it at info once and goes on.
+func TestReconcileSingleApprovalCheckRefusedGitLab(t *testing.T) {
+	env := newTestEnv(t)
+	serveProject(env, testProjectID, testProjectPath)
+	env.GitLab.Reply(http.MethodGet, "/projects/7/approval_rules", http.StatusForbidden, `{"message":"403 Forbidden"}`)
+
+	reconcile(t, env)
+	reconcile(t, env)
+
+	logs := env.Logs()
+	if warnedSingleApproval(logs, testProjectPath) || strings.Contains(logs, "level=ERROR") {
+		t.Errorf("a refused check is more than info:\n%s", logs)
+	}
+	if n := strings.Count(logs, "couldn't check how many approvals"); n != 1 {
+		t.Errorf("logged the refused check %d times, want once:\n%s", n, logs)
+	}
+	for _, line := range strings.Split(logs, "\n") {
+		if strings.Contains(line, "couldn't check how many approvals") && !strings.Contains(line, "level=INFO") {
+			t.Errorf("not at info: %s", line)
+		}
+	}
+	if _, ok := project(t, env, testProjectID); !ok {
+		t.Error("the project wasn't stored")
+	}
+}
+
+func TestWildcardMatch(t *testing.T) {
+	for _, tc := range []struct {
+		pattern, name string
+		want          bool
+	}{
+		{"main", "main", true},
+		{"main", "mainline", false},
+		{"release/*", "release/v1/x", true},
+		{"release/*", "main", false},
+		{"*", "anything", true},
+		{"*-stable", "1-0-stable", true},
+		{"*-stable", "1-0-stable-x", false},
+		{"a*b*c", "axxbyyc", true},
+		{"a*b*c", "axxc", false},
+	} {
+		if got := wildcardMatch(tc.pattern, tc.name); got != tc.want {
+			t.Errorf("wildcardMatch(%q, %q) = %v, want %v", tc.pattern, tc.name, got, tc.want)
+		}
+	}
+}

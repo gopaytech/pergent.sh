@@ -765,3 +765,41 @@ func TestMalformedJSONErrorHasNoToken(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestRulesetApprovals(t *testing.T) {
+	c, rec := serve(t, jsonReply([]map[string]any{
+		{"type": "deletion"},
+		{"type": "pull_request", "parameters": map[string]any{"required_approving_review_count": 1}},
+		{"type": "pull_request", "parameters": map[string]any{"required_approving_review_count": 2}},
+	}))
+	n, found, err := c.RulesetApprovals(context.Background(), "acme", "widgets", "release/v1")
+	if err != nil || !found || n != 2 {
+		t.Fatalf("RulesetApprovals = %d, %v, %v; want 2, true", n, found, err)
+	}
+	expect(t, rec.get(0), http.MethodGet, "/repos/acme/widgets/rules/branches/release/v1", "per_page=100")
+
+	c, _ = serve(t, jsonReply([]any{}))
+	if n, found, err := c.RulesetApprovals(context.Background(), "acme", "widgets", "main"); err != nil || found || n != 0 {
+		t.Errorf("no rules: %d, %v, %v", n, found, err)
+	}
+	if _, _, err := c.RulesetApprovals(context.Background(), "acme", "widgets", ""); err == nil {
+		t.Error("an empty branch was accepted")
+	}
+}
+
+func TestProtectionApprovals(t *testing.T) {
+	c, rec := serve(t, jsonReply(map[string]any{"required_approving_review_count": 2}))
+	n, err := c.ProtectionApprovals(context.Background(), "acme", "widgets", "main")
+	if err != nil || n != 2 {
+		t.Fatalf("ProtectionApprovals = %d, %v", n, err)
+	}
+	expect(t, rec.get(0), http.MethodGet, "/repos/acme/widgets/branches/main/protection/required_pull_request_reviews", "")
+
+	c, _ = serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `{"message":"Resource not accessible by integration"}`)
+	})
+	if _, err := c.ProtectionApprovals(context.Background(), "acme", "widgets", "main"); err == nil {
+		t.Error("a 403 was not an error")
+	}
+}

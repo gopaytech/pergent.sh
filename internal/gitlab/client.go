@@ -279,6 +279,30 @@ func (c *Client) GetProject(ctx context.Context, path string) (Project, error) {
 	return p, err
 }
 
+// ApprovalRules lists the project's approval rules.
+func (c *Client) ApprovalRules(ctx context.Context, projectID int64) ([]ApprovalRule, error) {
+	var all []ApprovalRule
+	err := c.paginate(ctx, projPath(projectID)+"/approval_rules", nil, func(body []byte) (bool, error) {
+		var page []ApprovalRule
+		if err := decode(body, &page); err != nil {
+			return false, err
+		}
+		all = append(all, page...)
+		return false, nil
+	})
+	return all, err
+}
+
+// ApprovalsBeforeMerge is the project's own required approval count (the
+// setting from before approval rules).
+func (c *Client) ApprovalsBeforeMerge(ctx context.Context, projectID int64) (int, error) {
+	var a struct {
+		ApprovalsBeforeMerge int `json:"approvals_before_merge"`
+	}
+	_, err := c.getJSON(ctx, projPath(projectID)+"/approvals", nil, &a)
+	return a.ApprovalsBeforeMerge, err
+}
+
 // GetMergeRequest returns one merge request. Draft is true when GitLab reports
 // either draft or work_in_progress.
 func (c *Client) GetMergeRequest(ctx context.Context, projectID, iid int64) (MergeRequest, error) {

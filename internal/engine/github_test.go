@@ -1009,3 +1009,87 @@ func TestPublishGitHubFailedCompletesCheckRun(t *testing.T) {
 		t.Errorf("approvals = %+v, want none", a)
 	}
 }
+
+// Reconcile warns when one approving review is enough to merge a GitHub
+// repository's default branch and the approve side can reach it.
+func TestReconcileWarnsSingleApprovalGitHub(t *testing.T) {
+	prRule := func(n int) map[string]any {
+		return map[string]any{"type": "pull_request", "parameters": map[string]any{"required_approving_review_count": n}}
+	}
+	for _, tc := range []struct {
+		name       string
+		rules      any
+		protection int // HTTP status of the classic protection read; 0 = not routed
+		classic    int
+		warn       bool
+		infoOnce   bool
+	}{
+		{name: "ruleset requires one", rules: []any{prRule(1)}, protection: http.StatusForbidden, warn: true},
+		{name: "ruleset requires two", rules: []any{map[string]any{"type": "deletion"}, prRule(2)}},
+		{name: "ruleset one, classic two", rules: []any{prRule(1)}, protection: http.StatusOK, classic: 2},
+		{name: "no ruleset, classic one", rules: []any{}, protection: http.StatusOK, classic: 1, warn: true},
+		{name: "no ruleset, classic two", rules: []any{}, protection: http.StatusOK, classic: 2},
+		{name: "no ruleset, classic forbidden", rules: []any{}, protection: http.StatusForbidden, infoOnce: true},
+		{name: "no ruleset, classic not found", rules: []any{}, protection: http.StatusNotFound, infoOnce: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnv(t)
+			gh := addGitHub(t, env, true)
+			serveProject(env, testProjectID, testProjectPath)
+			gh.Reply(http.MethodGet, ghRepoAPI, http.StatusOK, map[string]any{
+				"id": ghRepoID, "full_name": ghRepoPath, "clone_url": ghCloneURL, "default_branch": "main"})
+			gh.Reply(http.MethodGet, ghRepoAPI+"/rules/branches/main", http.StatusOK, tc.rules)
+			switch tc.protection {
+			case http.StatusOK:
+				gh.Reply(http.MethodGet, ghRepoAPI+"/branches/main/protection/required_pull_request_reviews", http.StatusOK,
+					map[string]any{"required_approving_review_count": tc.classic})
+			case 0:
+			default:
+				gh.Reply(http.MethodGet, ghRepoAPI+"/branches/main/protection/required_pull_request_reviews", tc.protection,
+					map[string]any{"message": "Resource not accessible by integration"})
+			}
+
+			reconcile(t, env)
+			reconcile(t, env)
+
+			logs := env.Logs()
+			if got := warnedSingleApproval(logs, ghRepoPath); got != tc.warn {
+				t.Errorf("warned = %v, want %v:\n%s", got, tc.warn, logs)
+			}
+			n := 0
+			for _, line := range strings.Split(logs, "\n") {
+				if strings.Contains(line, "couldn't check how many approvals") && strings.Contains(line, ghRepoPath) {
+					n++
+					if !strings.Contains(line, "level=INFO") {
+						t.Errorf("not at info: %s", line)
+					}
+				}
+			}
+			if tc.infoOnce && n != 1 || !tc.infoOnce && n != 0 {
+				t.Errorf("logged the unchecked repository %d times (want once: %v):\n%s", n, tc.infoOnce, logs)
+			}
+			if strings.Contains(logs, "level=ERROR") {
+				t.Errorf("logged an error:\n%s", logs)
+			}
+			if reqs := gh.Requests(http.MethodGet, ghRepoAPI+"/rules/branches/main"); len(reqs) != 2 || reqs[0].Token != ghReviewToken {
+				t.Errorf("rules read = %+v; want once a pass with the review installation's token", reqs)
+			}
+		})
+	}
+}
+
+// An approve side that can't reach the repository approves nothing there, so
+// the repository's merge rules aren't checked.
+func TestReconcileSingleApprovalSkippedWithoutApprover(t *testing.T) {
+	env := newTestEnv(t)
+	gh := addGitHub(t, env, false)
+	serveProject(env, testProjectID, testProjectPath)
+	gh.Reply(http.MethodGet, ghRepoAPI, http.StatusOK, map[string]any{
+		"id": ghRepoID, "full_name": ghRepoPath, "clone_url": ghCloneURL, "default_branch": "main"})
+
+	reconcile(t, env)
+
+	if reqs := gh.Requests(http.MethodGet, ghRepoAPI+"/rules/branches/main"); len(reqs) != 0 {
+		t.Errorf("read the rules %d times, want never", len(reqs))
+	}
+}

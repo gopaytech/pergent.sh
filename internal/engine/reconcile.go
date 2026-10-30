@@ -140,6 +140,9 @@ func (e *Engine) reconcileRepo(ctx context.Context, repo config.Repository, now 
 	if err := e.Store.UpsertProject(ctx, p); err != nil {
 		return 0, fmt.Errorf("store project: %w", err)
 	}
+	// The approve bot is a GitLab user that can always approve.
+	n, err := gitLabRequiredApprovals(ctx, gl, gp.ID, gp.DefaultBranch)
+	e.checkRequiredApprovals(repo.GitLab, repo.Project, gp.DefaultBranch, n, err)
 
 	hookID, err := gl.EnsureHook(ctx, gp.ID, HookURL(e.Config.PublicURL, repo.GitLab), secret)
 	if err != nil {
@@ -310,8 +313,132 @@ func (e *Engine) reconcileGitHubRepo(ctx context.Context, repo config.Repository
 	if !reach {
 		e.log().Warn("the approve side can't reach the repository: its reviews are published without approval",
 			"instance", instance, "project", repo.Project, "project_id", gr.ID)
+		return gr.ID, nil
 	}
+	n, err := gitHubRequiredApprovals(ctx, app.Client(installation), owner, name, gr.DefaultBranch)
+	e.checkRequiredApprovals(instance, repo.Project, gr.DefaultBranch, n, err)
 	return gr.ID, nil
+}
+
+// singleApproval is the warning for a repository whose default branch can be
+// merged with one approval (or none).
+const singleApproval = "one approval is enough to merge here, so pergent's approval alone can unlock it; add a rule requiring a human approval"
+
+// checkRequiredApprovals logs what reading the approvals needed to merge a
+// repository's default branch found: a warning when n is at most 1, as the
+// approve bot's approval alone then unlocks the merge. A read that failed
+// (err) is logged at info, once per repository while pergent.sh runs: the
+// check never fails reconcile.
+func (e *Engine) checkRequiredApprovals(instance, path, branch string, n int, err error) {
+	if err != nil {
+		key := keyOf(instance, path)
+		e.uncheckedMu.Lock()
+		seen := e.unchecked[key]
+		if e.unchecked == nil {
+			e.unchecked = map[repoKey]bool{}
+		}
+		e.unchecked[key] = true
+		e.uncheckedMu.Unlock()
+		if !seen {
+			e.log().Info("couldn't check how many approvals merging needs; make sure a human approval is required",
+				"instance", instance, "project", path, "branch", branch, "error", e.redact(err.Error()))
+		}
+		return
+	}
+	if n <= 1 {
+		e.log().Warn(path+": "+singleApproval,
+			"instance", instance, "project", path, "branch", branch, "required_approvals", n)
+	}
+}
+
+// gitLabRequiredApprovals is the most approvals any approval rule that
+// applies to branch requires (security report rules aside); with none, the
+// project's own approvals_before_merge.
+func gitLabRequiredApprovals(ctx context.Context, gl *gitlab.Client, projectID int64, branch string) (int, error) {
+	rules, err := gl.ApprovalRules(ctx, projectID)
+	if err != nil {
+		return 0, fmt.Errorf("read the approval rules: %w", err)
+	}
+	n, found := 0, false
+	for _, r := range rules {
+		if r.RuleType == "report_approver" || !ruleApplies(r, branch) {
+			continue
+		}
+		n, found = max(n, r.ApprovalsRequired), true
+	}
+	if found {
+		return n, nil
+	}
+	n, err = gl.ApprovalsBeforeMerge(ctx, projectID)
+	if err != nil {
+		return 0, fmt.Errorf("read the project's approvals: %w", err)
+	}
+	return n, nil
+}
+
+// ruleApplies reports whether a GitLab approval rule applies to branch: one
+// with no protected branches applies to all branches, one for all protected
+// branches is taken to apply (a default branch is protected by default), and
+// otherwise one of its protected branch names, "*" matching anything, has to
+// match.
+func ruleApplies(r gitlab.ApprovalRule, branch string) bool {
+	if r.AppliesToAllProtectedBranches || len(r.ProtectedBranches) == 0 {
+		return true
+	}
+	for _, pb := range r.ProtectedBranches {
+		if wildcardMatch(pb.Name, branch) {
+			return true
+		}
+	}
+	return false
+}
+
+// wildcardMatch matches name against GitLab's protected branch pattern, in
+// which "*" matches any run of characters ("/" included).
+func wildcardMatch(pattern, name string) bool {
+	parts := strings.Split(pattern, "*")
+	if len(parts) == 1 {
+		return pattern == name
+	}
+	if !strings.HasPrefix(name, parts[0]) {
+		return false
+	}
+	name = name[len(parts[0]):]
+	for _, mid := range parts[1 : len(parts)-1] {
+		i := strings.Index(name, mid)
+		if i < 0 {
+			return false
+		}
+		name = name[i+len(mid):]
+	}
+	return strings.HasSuffix(name, parts[len(parts)-1])
+}
+
+// gitHubRequiredApprovals is the most approving reviews branch needs: from
+// the rulesets that apply to it and from its classic protection rule, which
+// GitHub both enforces. The classic rule needs the Administration
+// permission to read; when it can't be read, the rulesets' count stands, and
+// with no ruleset count either, the check fails.
+func gitHubRequiredApprovals(ctx context.Context, c *github.Client, owner, name, branch string) (int, error) {
+	if branch == "" {
+		return 0, errors.New("GitHub returned no default branch")
+	}
+	n, found, err := c.RulesetApprovals(ctx, owner, name, branch)
+	if err != nil {
+		return 0, fmt.Errorf("read the branch's rules: %w", err)
+	}
+	if found && n > 1 {
+		return n, nil
+	}
+	classic, err := c.ProtectionApprovals(ctx, owner, name, branch)
+	switch {
+	case err == nil:
+		return max(n, classic), nil
+	case found:
+		return n, nil
+	default:
+		return 0, fmt.Errorf("no ruleset requires reviews, and the branch protection can't be read: %w", err)
+	}
 }
 
 // forgetInstallation clears the stored installation of instance's repository

@@ -75,6 +75,11 @@ type Engine struct {
 
 	wakeOnce sync.Once
 	wake     chan struct{}
+
+	// unchecked holds the repositories whose required approvals couldn't
+	// be read, so that is logged once (see checkRequiredApprovals).
+	uncheckedMu sync.Mutex
+	unchecked   map[repoKey]bool
 }
 
 // Wake asks the loops for an early pass. It never blocks; wake-ups that

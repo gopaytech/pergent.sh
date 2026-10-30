@@ -461,6 +461,58 @@ func (c *Client) Repo(ctx context.Context, owner, repo string) (Repository, erro
 	return r, err
 }
 
+// RulesetApprovals is the highest required_approving_review_count of the
+// pull_request rules the repository's active rulesets apply to branch
+// (readable with the metadata permission); found is false when none does.
+func (c *Client) RulesetApprovals(ctx context.Context, owner, repo, branch string) (n int, found bool, err error) {
+	b, err := filePath(branch)
+	if err != nil || b == "" {
+		return 0, false, errBadSegment
+	}
+	p, err := repoPath(owner, repo, "/rules/branches", b)
+	if err != nil {
+		return 0, false, err
+	}
+	err = c.paginate(ctx, p, func(body []byte) error {
+		var rules []struct {
+			Type       string `json:"type"`
+			Parameters struct {
+				RequiredApprovingReviewCount int `json:"required_approving_review_count"`
+			} `json:"parameters"`
+		}
+		if err := decode(body, &rules); err != nil {
+			return err
+		}
+		for _, r := range rules {
+			if r.Type == "pull_request" {
+				n, found = max(n, r.Parameters.RequiredApprovingReviewCount), true
+			}
+		}
+		return nil
+	})
+	return n, found, err
+}
+
+// ProtectionApprovals is the required_approving_review_count of branch's
+// classic protection rule. Reading it needs the Administration permission;
+// GitHub answers 404 when the branch has no such rule, or the caller can't
+// see it.
+func (c *Client) ProtectionApprovals(ctx context.Context, owner, repo, branch string) (int, error) {
+	b, err := filePath(branch)
+	if err != nil || b == "" {
+		return 0, errBadSegment
+	}
+	p, err := repoPath(owner, repo, "/branches", b, "/protection/required_pull_request_reviews")
+	if err != nil {
+		return 0, err
+	}
+	var r struct {
+		RequiredApprovingReviewCount int `json:"required_approving_review_count"`
+	}
+	err = c.getJSON(ctx, p, nil, &r)
+	return r.RequiredApprovingReviewCount, err
+}
+
 // PullRequest returns one pull request.
 func (c *Client) PullRequest(ctx context.Context, owner, repo string, number int64) (PullRequest, error) {
 	var pr PullRequest

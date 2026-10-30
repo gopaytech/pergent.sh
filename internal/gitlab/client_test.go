@@ -716,3 +716,28 @@ func TestMalformedJSONErrorHasNoToken(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestApprovalRules(t *testing.T) {
+	c, reqs := serve(t, jsonReply([]map[string]any{{
+		"rule_type": "regular", "approvals_required": 2, "applies_to_all_protected_branches": false,
+		"protected_branches": []map[string]any{{"name": "main"}},
+	}}))
+	rules, err := c.ApprovalRules(context.Background(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, (*reqs)[0], http.MethodGet, "/api/v4/projects/7/approval_rules", "per_page=100")
+	if len(rules) != 1 || rules[0].RuleType != "regular" || rules[0].ApprovalsRequired != 2 ||
+		len(rules[0].ProtectedBranches) != 1 || rules[0].ProtectedBranches[0].Name != "main" {
+		t.Errorf("rules = %+v", rules)
+	}
+}
+
+func TestApprovalsBeforeMerge(t *testing.T) {
+	c, reqs := serve(t, jsonReply(map[string]any{"approvals_before_merge": 2}))
+	n, err := c.ApprovalsBeforeMerge(context.Background(), 7)
+	if err != nil || n != 2 {
+		t.Fatalf("ApprovalsBeforeMerge = %d, %v", n, err)
+	}
+	expect(t, (*reqs)[0], http.MethodGet, "/api/v4/projects/7/approvals", "")
+}

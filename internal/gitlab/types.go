@@ -45,6 +45,21 @@ type Project struct {
 	ID                int64  `json:"id"`
 	PathWithNamespace string `json:"path_with_namespace"`
 	HTTPURLToRepo     string `json:"http_url_to_repo"`
+	DefaultBranch     string `json:"default_branch"`
+}
+
+// ApprovalRule is a project approval rule. A rule with no protected branches
+// that doesn't apply to all protected branches applies to every branch.
+type ApprovalRule struct {
+	RuleType                      string            `json:"rule_type"`
+	ApprovalsRequired             int               `json:"approvals_required"`
+	AppliesToAllProtectedBranches bool              `json:"applies_to_all_protected_branches"`
+	ProtectedBranches             []ProtectedBranch `json:"protected_branches"`
+}
+
+// ProtectedBranch is a protected branch name, which may hold "*" wildcards.
+type ProtectedBranch struct {
+	Name string `json:"name"`
 }
 
 // TreeEntry is one entry of a repository tree: the platform-neutral
