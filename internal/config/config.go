@@ -446,6 +446,14 @@ func checkGitHubInstance(i int, inst GitHubInstance) []error {
 		add("%s: exactly one of approve_app and approve_token_env must be set, got neither", prefix)
 	case inst.ApproveApp != nil:
 		checkApp("approve_app", *inst.ApproveApp)
+		// The same App, or the same key, would review and approve: the
+		// two identities would silently be one.
+		if inst.ApproveApp.AppID > 0 && inst.ApproveApp.AppID == inst.ReviewApp.AppID {
+			add("%s: approve_app.app_id must differ from review_app.app_id, got %d for both", prefix, inst.ReviewApp.AppID)
+		}
+		if inst.ApproveApp.PrivateKeyEnv != "" && inst.ApproveApp.PrivateKeyEnv == inst.ReviewApp.PrivateKeyEnv {
+			add("%s: approve_app.private_key_env must differ from review_app.private_key_env, got %q for both", prefix, inst.ReviewApp.PrivateKeyEnv)
+		}
 	}
 
 	if inst.WebhookSecretEnv == "" {

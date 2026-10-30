@@ -350,6 +350,10 @@ func TestValidateRejectsGitHub(t *testing.T) {
 		{"approve private_key_env empty", func(c *Config) { c.GitHub[0].ApproveApp.PrivateKeyEnv = "" }, "approve_app.private_key_env"},
 		{"both approvers", func(c *Config) { c.GitHub[0].ApproveTokenEnv = "SOME_TOKEN" }, "exactly one of approve_app and approve_token_env"},
 		{"no approver", func(c *Config) { c.GitHub[0].ApproveApp = nil }, "exactly one of approve_app and approve_token_env"},
+		{"approve app is the review app", func(c *Config) { c.GitHub[0].ApproveApp.AppID = c.GitHub[0].ReviewApp.AppID }, "approve_app.app_id must differ from review_app.app_id"},
+		{"approve app shares the review key env", func(c *Config) {
+			c.GitHub[0].ApproveApp.PrivateKeyEnv = c.GitHub[0].ReviewApp.PrivateKeyEnv
+		}, "approve_app.private_key_env must differ from review_app.private_key_env"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
