@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pergent-sh.fullname" . }}-skills
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pergent-sh.labels" . | nindent 4 }}
+{{- with .Values.skills }}
+data:
+  {{- range $name, $content := . }}
+  {{ $name | quote }}: |
+    {{- $content | nindent 4 }}
+  {{- end }}
+{{- end }}

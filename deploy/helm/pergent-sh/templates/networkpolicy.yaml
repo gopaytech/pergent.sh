@@ -1,0 +1,45 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pergent-sh.fullname" . }}-jobs
+  namespace: {{ .Values.jobsNamespace }}
+  labels:
+    {{- include "pergent-sh.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: pergent-sh
+  policyTypes:
+    - Ingress
+    - Egress
+  # Nothing connects to a review Job.
+  ingress: []
+  egress:
+    # DNS.
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # GitLab and the LLM provider.
+    - to:
+        {{- range .Values.jobEgress.cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+    # The result callback to pergent-sh.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            matchLabels:
+              {{- include "pergent-sh.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8080

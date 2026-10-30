@@ -1,0 +1,45 @@
+existingSecret: pergent-sh-env
+jobsNamespace: pergent
+
+jobEgress:
+  cidrs:
+    - 192.0.2.0/24
+    - 198.51.100.0/24
+
+config:
+  listen: ":8080"
+  skills_dir: /etc/pergent-sh/skills
+  public_url: https://pergent.example.com
+  callback_url: http://ci-pergent-sh.pergent-sh.svc:8080
+  gitlab:
+    - name: main
+      url: https://gitlab.example.com
+      review_token_env: GITLAB_REVIEW_TOKEN
+      approve_token_env: GITLAB_APPROVE_TOKEN
+      webhook_secret_env: GITLAB_WEBHOOK_SECRET
+  repositories:
+    - gitlab: main
+      project: acme/widgets
+      skills: [code-review]
+  llm:
+    provider: anthropic
+    model: claude-sonnet-4
+    api_key_env: OPENCODE_API_KEY
+  jobs:
+    namespace: pergent
+
+skills:
+  code-review.md: |
+    ---
+    name: code-review
+    ---
+    Review the change for correctness bugs.
+
+ingress:
+  enabled: true
+  className: nginx
+  host: pergent.example.com
+  tls:
+    - secretName: pergent-example-com-tls
+      hosts:
+        - pergent.example.com

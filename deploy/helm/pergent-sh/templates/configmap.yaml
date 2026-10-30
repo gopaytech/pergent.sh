@@ -1,0 +1,11 @@
+{{- include "pergent-sh.validate" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pergent-sh.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pergent-sh.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    {{- toYaml .Values.config | nindent 4 }}

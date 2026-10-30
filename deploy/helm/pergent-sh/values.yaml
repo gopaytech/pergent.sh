@@ -1,0 +1,91 @@
+image:
+  repository: ghcr.io/gopaytech/pergent.sh
+  # Defaults to the chart appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Name of an existing Secret in the release namespace (required). It is mounted
+# with envFrom and holds:
+#   DATABASE_URL           PostgreSQL connection URL
+#   PERGENT_SH_SECRET_KEY  32 random bytes, standard base64
+#   OPENCODE_API_KEY       the LLM key (the env var named by config.llm.api_key_env)
+#   every env var named by config.gitlab[*].review_token_env, approve_token_env
+#   and webhook_secret_env
+existingSecret: ""
+
+# The namespace the review Jobs run in. It must already exist. The chart creates
+# the Role, RoleBinding and NetworkPolicy there. Must equal config.jobs.namespace.
+jobsNamespace: pergent
+
+# Where review Jobs may connect over TCP 443 and 80: GitLab, the LLM provider
+# and (unless callback_url is an in-cluster address) the pergent.sh URL.
+# Narrow this to the addresses you need.
+jobEgress:
+  cidrs:
+    - 0.0.0.0/0
+
+# Rendered verbatim to /etc/pergent-sh/config.yaml. See the README for every
+# field. listen and skills_dir are fixed by the chart: leave them as they are.
+config:
+  listen: ":8080"
+  skills_dir: /etc/pergent-sh/skills
+  public_url: https://pergent.example.com
+  gitlab:
+    - name: main
+      url: https://gitlab.example.com
+      review_token_env: GITLAB_REVIEW_TOKEN
+      approve_token_env: GITLAB_APPROVE_TOKEN
+      webhook_secret_env: GITLAB_WEBHOOK_SECRET
+  repositories: []
+  llm:
+    provider: anthropic
+    model: claude-sonnet-4
+    api_key_env: OPENCODE_API_KEY
+  jobs:
+    namespace: pergent
+
+# The skill library: file name (name.md) -> content. Mounted at
+# /etc/pergent-sh/skills. A ConfigMap key can't hold a "/", so folder-style
+# skills (<name>/SKILL.md) aren't possible here.
+skills: {}
+
+serviceAccount:
+  create: true
+  # Defaults to the release's full name.
+  name: ""
+  annotations: {}
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: pergent.example.com
+  # GitLab posts to /webhooks/gitlab/<instance>; Jobs post to /runs/<id>/result.
+  paths:
+    - /webhooks/
+    - /runs/
+  tls: []
+  #  - secretName: pergent-example-com-tls
+  #    hosts:
+  #      - pergent.example.com
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

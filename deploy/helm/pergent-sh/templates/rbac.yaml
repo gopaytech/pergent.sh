@@ -1,0 +1,33 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "pergent-sh.fullname" . }}
+  namespace: {{ .Values.jobsNamespace }}
+  labels:
+    {{- include "pergent-sh.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    verbs: ["create", "get", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "pergent-sh.fullname" . }}
+  namespace: {{ .Values.jobsNamespace }}
+  labels:
+    {{- include "pergent-sh.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "pergent-sh.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "pergent-sh.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
