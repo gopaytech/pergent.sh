@@ -20,7 +20,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -40,6 +43,13 @@ var ctx = context.Background()
 // newStore opens a migrated store in a fresh schema, dropped when the test
 // ends. It skips when no test database is set.
 func newStore(t *testing.T) *store.Store {
+	st, _ := newStoreDB(t)
+	return st
+}
+
+// newStoreDB is newStore with a raw connection pool on the same schema, for
+// tests that set columns no store method sets (a run's times).
+func newStoreDB(t *testing.T) (*store.Store, *pgxpool.Pool) {
 	t.Helper()
 	dbURL := os.Getenv(testDBEnv)
 	if dbURL == "" {
@@ -49,11 +59,22 @@ func newStore(t *testing.T) *store.Store {
 	if _, err := rand.Read(b); err != nil {
 		t.Fatal(err)
 	}
-	st, err := store.OpenInSchema(ctx, dbURL, "test_dashboard_"+hex.EncodeToString(b))
+	schema := "test_dashboard_" + hex.EncodeToString(b)
+	st, err := store.OpenInSchema(ctx, dbURL, schema)
 	if err != nil {
 		t.Fatalf("OpenInSchema: %v", err)
 	}
+	pcfg, err := pgxpool.ParseConfig(dbURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pcfg.ConnConfig.RuntimeParams["search_path"] = schema
+	db, err := pgxpool.NewWithConfig(ctx, pcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
+		db.Close()
 		if err := st.DropSchema(context.Background()); err != nil {
 			t.Errorf("DropSchema: %v", err)
 		}
@@ -62,7 +83,7 @@ func newStore(t *testing.T) *store.Store {
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	return st
+	return st, db
 }
 
 // clock is a settable time source.
@@ -378,7 +399,10 @@ func (f *fakeGitHub) token(w http.ResponseWriter, r *http.Request) {
 type env struct {
 	t     *testing.T
 	st    *store.Store
+	db    *pgxpool.Pool // the store's schema, for raw SQL
 	cfg   *config.Config
+	lib   inputs.Library
+	src   map[string]*fakeSource // by instance
 	gl    *fakeGitLab
 	gh    *fakeGitHub
 	clock *clock
@@ -397,7 +421,7 @@ type env struct {
 // the config first.
 func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 	t.Helper()
-	st := newStore(t)
+	st, db := newStoreDB(t)
 	gl, gh := newFakeGitLab(t), newFakeGitHub(t)
 	t.Setenv("PERGENT_TEST_GL_ID", glClientID)
 	t.Setenv("PERGENT_TEST_GL_SECRET", glClientSecret)
@@ -422,10 +446,20 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 	if mutate != nil {
 		mutate(cfg)
 	}
-	e := &env{t: t, st: st, cfg: cfg, gl: gl, gh: gh, logs: &lockedBuffer{}, key: testKey(t),
-		clock: &clock{t: time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)}}
+	e := &env{t: t, st: st, db: db, cfg: cfg, gl: gl, gh: gh, logs: &lockedBuffer{}, key: testKey(t),
+		clock: &clock{t: time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)},
+		lib: inputs.Library{
+			"code-review": []byte("---\nname: code-review\n---\nReview the code.\n"),
+			"style":       []byte("---\nname: style\n---\nCheck the style.\n"),
+		},
+		src: map[string]*fakeSource{"main": newFakeSource(), "gh": newFakeSource()},
+	}
+	sources := map[string]RepoSource{}
+	for name, s := range e.src {
+		sources[name] = s
+	}
 	d, err := New(Options{
-		Config: cfg, Store: st, SecretKey: e.key, Now: e.clock.now,
+		Config: cfg, Store: st, SecretKey: e.key, Now: e.clock.now, Library: e.lib, Sources: sources,
 		Log: slog.New(slog.NewTextHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	})
 	if err != nil {

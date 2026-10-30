@@ -8,10 +8,12 @@
 // user's OAuth token is stored sealed and never leaves the server.
 //
 // Nothing here runs on the engine loop. Calls to GitLab and GitHub are made
-// only for sign-in and access checks, each with a 10 s timeout.
+// only for sign-in, access checks and the Skills & instructions view, each
+// with a 10 s timeout.
 package dashboard
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +23,7 @@ import (
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -41,6 +44,20 @@ type Options struct {
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 	Log *slog.Logger
+	// Library is the skill library: GET /api/skills shows it, and the
+	// Skills & instructions view resolves repositories' skills from it.
+	Library inputs.Library
+	// Sources read repositories' files and default branches, by instance
+	// name: the review bot's Forge on GitLab, the review App's on GitHub.
+	// An instance without one has no Skills & instructions view (502).
+	Sources map[string]RepoSource
+}
+
+// RepoSource reads a repository, named by its platform ID, with the review
+// bot or the review App; gitlabforge.Forge and githubforge.Forge are ones.
+type RepoSource interface {
+	inputs.Source
+	DefaultBranch(ctx context.Context, projectID int64) (string, error)
 }
 
 // Dashboard is the dashboard's routes and what they share.
@@ -51,6 +68,12 @@ type Dashboard struct {
 	Repos *settings.Resolver
 	Store *store.Store
 	Log   *slog.Logger
+
+	cfg     *config.Config
+	library inputs.Library
+	sources map[string]RepoSource
+	now     func() time.Time
+	inputs  *inputsCache
 }
 
 // New builds the dashboard. The config must have dashboard.url; every
@@ -77,14 +100,17 @@ func New(o Options) (*Dashboard, error) {
 	if len(o.Config.Dashboard.Admins) == 0 {
 		o.Log.Warn("dashboard has no admins configured")
 	}
-	return &Dashboard{Auth: auth, Repos: repos, Store: o.Store, Log: o.Log}, nil
+	return &Dashboard{Auth: auth, Repos: repos, Store: o.Store, Log: o.Log,
+		cfg: o.Config, library: o.Library, sources: o.Sources, now: o.Now,
+		inputs: &inputsCache{entries: map[string]inputsEntry{}}}, nil
 }
 
 // Handler serves:
 //   - GET /auth/{platform}/{instance}/login: redirect to the provider;
 //   - GET /auth/{platform}/{instance}/callback: finish sign-in, redirect to /;
 //   - POST /auth/logout: end the session (X-CSRF-Token required);
-//   - GET /api/me: the signed-in user.
+//   - GET /api/me: the signed-in user;
+//   - the read API (see view.go for each endpoint's body).
 //
 // Every response is marked no-store.
 func (d *Dashboard) Handler() http.Handler {
@@ -93,6 +119,7 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("GET /auth/{platform}/{instance}/callback", d.Auth.callback)
 	mux.HandleFunc("POST /auth/logout", d.Auth.logout)
 	mux.Handle("GET /api/me", d.Auth.Require(http.HandlerFunc(d.me)))
+	d.readRoutes(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Cache-Control", "no-store")
