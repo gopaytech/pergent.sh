@@ -32,6 +32,16 @@
 - **Clone token.** `POST /app/installations/{id}/access_tokens` with `repository_ids: [repo id]` and `permissions: {contents: read}`, minted per Job and never stored. The git username is `x-access-token`. The fork fallback ref is `refs/pull/<n>/head`.
 - **Scope.** GitHub.com only (`api_url` defaults to `https://api.github.com`; a different URL is accepted but untested). Repositories are switched on by listing them in config, as in 2a.
 - **Process.** Same as 2a: this plan, then subagent-driven execution.
+- **The bot's approval is meant to count toward required reviews.** Task 1 checks whether an App's approval does. If it doesn't, the approve side becomes a bot user with a fine-grained personal access token ("Pull requests: write"). That token is rotated by hand, and pergent.sh logs a Warn when the `GitHub-Authentication-Token-Expiration` response header says it expires within 14 days.
+- **Approve App not installed on a repository.** Reconcile records it, and reviews still run. The approval is skipped without retries, and the comment says `**Not approved:** the pergent approve App isn't installed on this repository.` Once the App is installed, approvals start with the next push or ready-for-review; there is no catch-up pass.
+- **Repositories are switched on by the config list only.** Installing the App on a repository does not switch it on.
+- **One `github:` instance per App pair** covers every org the Apps are installed on. Installation IDs are looked up per repository.
+- **Check Run output.** The title is the decision's description and the summary is one line pointing to the PR comment. Findings are not duplicated.
+- **The README requires** the branch protection setting "Dismiss stale pull request approvals when new commits are pushed" as a second layer.
+- **Drafts, on both platforms.** Drafts are reviewed and get a status, but are never approved. The description reads `No blocking issues; not approved: draft`, with a note in the comment. Marking a draft ready (GitHub `ready_for_review`; GitLab `update` whose `changes.draft` goes to false) re-runs the publish decision for the same head when that head's review is already published. Otherwise the normal flow covers it. This changes 2a's GitLab behavior.
+- **Inputs are read at `base.sha`** on GitHub, the same rule as GitLab's `start_sha`.
+- **The approval sweep** (the missed-webhook catch) runs every **5 minutes** on both platforms, at startup and then on its own ticker. It no longer runs on the 15 s watch tick, so about 20 approved PRs can't exhaust GitHub's rate limit.
+- **The partial-review rule stays on both platforms.** There is no approval when a changed file was skipped as vendored, lockfile, binary, generated or deleted.
 - **Builder calls made in this plan (the user can overturn any):**
   - **Merge base.** The PR's merge base comes from `GET /repos/{o}/{r}/compare/{base.sha}...{head.sha}` → `merge_base_commit.sha`. Inputs are read at `base.sha`, the target tip that GitHub recorded for the PR. If compare fails or the PR is `closed`, the run is handled like GitLab's not-ready or not-opened cases.
   - **Approval.** The approve App posts `POST /pulls/{n}/reviews` with `event: APPROVE` and `commit_id: head`. GitHub has no SHA guard like GitLab's, so the existing head and target re-check right before approving is the guard.
@@ -39,7 +49,7 @@
   - **ApprovedBy.** pergent.sh lists the PR's reviews; the approve App counts as having approved if its latest review state is `APPROVED`.
   - **Bot user IDs.** The bot users' IDs come from `GET /users/{app-slug}%5Bbot%5D`, using the slug from `GET /app`. Comment search filters on the review App bot's user ID.
   - **Instance names** are unique across `gitlab:` and `github:`. A repository names exactly one of `gitlab:` or `github:`.
-  - **Missing approve App.** Reconcile on GitHub resolves the review App's installation ID for each repository and stores it, plus the repository ID and clone URL. If the approve App is not installed on a repository, reconcile logs an Error and the repository still gets reviews, but approvals fail and are retried until `publish_failed`.
+  - **What reconcile stores.** On GitHub it resolves and stores, per repository, the review App's installation ID, the repository ID, the clone URL, and whether the approve side can reach the repository (`approve_available`).
   - **Nothing to delete on removal.** Removing a GitHub repository from config deletes only its row; there is no per-repository webhook and no stored token.
 
 ## Open risk (Task 1 checks it before anything is built on it)
@@ -66,7 +76,7 @@ If App approvals don't count, the fallback is an approve **bot user with a fine-
   - `Authorization: Bearer <token>`.
 
   Errors are retried as in the GitLab client (429, 5xx and connection errors, 3 times, honoring `Retry-After` and `X-RateLimit-Reset` up to 30 s). Cross-host redirects are refused, and the token is masked before truncation.
-- **Store.** Migration `0004_github.sql` adds `projects.installation_id bigint NOT NULL DEFAULT 0`. `MRKey.ProjectID` is the GitHub repository ID and `MRKey.IID` is the PR number.
+- **Store.** Migration `0004_github.sql` adds `projects.installation_id bigint NOT NULL DEFAULT 0` and `projects.approve_available boolean NOT NULL DEFAULT true`. `MRKey.ProjectID` is the GitHub repository ID and `MRKey.IID` is the PR number.
 
 ## Review Focus
 
@@ -138,7 +148,7 @@ The implementer does not need GitHub credentials. This task produces a checklist
 ```go
 package forge
 type ChangeState string // "open" | "closed" | "merged" | "locked"
-type Change struct { Number int64; State ChangeState; HeadSHA, TargetBranch, BaseSHA, StartSHA string }
+type Change struct { Number int64; State ChangeState; Draft bool; HeadSHA, TargetBranch, BaseSHA, StartSHA string }
 // BaseSHA is the merge base; StartSHA is where repo inputs are read. Empty BaseSHA = not ready yet.
 type StatusState string // "running" | "success" | "failed" | "neutral" | "canceled"
 type Forge interface {
@@ -170,6 +180,33 @@ var ErrNotFound, ErrHeadMoved error
 - [ ] **Step 2:** Implement the interfaces and the adapter, and switch the engine and main over.
 - [ ] **Step 3:** `go vet ./... && go test -count=1 ./...` with the DB set must pass. No GitLab behavior may change: the existing engine and e2e tests pass. A test may change only where it built `Bots` directly.
 - [ ] **Step 4: Commit:** `refactor: engine talks to platforms through Forge and Approver`
+
+---
+
+### Task 2b: Drafts, re-publish on ready, and the 5-minute approval sweep (both platforms)
+
+**Files:**
+- Modify: `internal/policy/policy.go` and its test; `internal/store/runs.go` and its test; `internal/webhook/gitlab.go` and its test; `internal/engine/{publish,approvals,engine}.go` and their tests; `internal/forge/gitlabforge` (Draft from GitLab's `draft`); README.
+
+**Produces:**
+- `policy.Outcome` gains `Draft bool` and `ApproveUnavailable bool`. `Decide` keeps every existing row. When it would otherwise approve:
+  - `Draft` → no approval, description `No blocking issues; not approved: draft`, and the note `**Not approved:** this is a draft. It will be approved when it's marked ready.`;
+  - otherwise `ApproveUnavailable` → no approval, the same description pattern with the reason `the pergent approve App isn't installed on this repository`, and the note from the Decisions section.
+
+  The status is `success` in both cases. Notes go before the findings block, as with the other notes.
+- `func (s *Store) Republish(ctx, mr MRKey, headSHA string) (bool, error)`. If the MR's newest non-superseded run is `published` with this head, it moves back to `reported` with attempts 0, so the publisher decides again. Otherwise it returns false.
+- The GitLab webhook calls `Republish` on `update` when `changes.draft.previous == true && current == false`, then Wakes.
+- Publish passes `Draft` from `GetChange` (already read before approving) and `ApproveUnavailable` from the project row into `Decide`. On GitLab, `ApproveUnavailable` is always false.
+- The approval sweep moves off the watch tick onto its own 5-minute ticker, plus one run at startup.
+
+- [ ] **Step 1:** Write the failing tests:
+  - policy rows for a draft, approve-unavailable, and a draft whose review has blocking findings (failed as before);
+  - store `Republish` (published newest → reported; not newest or another head → false);
+  - webhook: a draft→ready update calls `Republish`, and a ready→draft update doesn't;
+  - an engine test: draft published without approval, then `Republish`, then publish → approved;
+  - the sweep runs on its own interval, not every watch tick.
+- [ ] **Step 2:** Implement it. **Step 3:** `go test -count=1 ./...` with the DB set passes.
+- [ ] **Step 4: Commit:** `feat: drafts are reviewed but approved only when ready; sweep every 5 minutes`
 
 ---
 
@@ -267,7 +304,7 @@ func NewTokenClient(apiURL, token string, hc *http.Client) *Client              
 
 **GitHub Forge:**
 - `GetChange`:
-  - from `PullRequest`: `state` + `merged` → `open`/`closed`/`merged`;
+  - from `PullRequest`: `state` + `merged` → `open`/`closed`/`merged`, and `Draft = draft`;
   - `HeadSHA = head.sha`, `TargetBranch = base.ref`, `StartSHA = base.sha`;
   - `BaseSHA` comes from `Compare(base.sha, head.sha)`. A compare 404 or 422 gives empty `BaseSHA`, which is "not ready".
 - `SetStatus` creates a Check Run on `sha`:
@@ -281,7 +318,7 @@ func NewTokenClient(apiURL, token string, hc *http.Client) *Client              
 - `Unapprove` dismisses every `APPROVED`, non-dismissed review by the approve bot user, with the message `pergent: the reviewed commit or target changed`.
 - `HasApproved` checks whether the approve bot's latest review is `APPROVED`.
 
-**Approver (token fallback):** the same three methods through `NewTokenClient`. The bot user ID comes from `GET /user`. Build this one only if Task 1 says App approvals don't count; otherwise skip it and note that in the README.
+**Approver (token fallback):** the same three methods through `NewTokenClient`. The bot user ID comes from `GET /user`. When a response's `GitHub-Authentication-Token-Expiration` header is within 14 days, it logs a Warn, at most once per hour. Build this one only if Task 1 says App approvals don't count; otherwise skip it and note that in the README.
 
 **Engine:**
 - Dispatch gets clone credentials per platform:
@@ -293,13 +330,14 @@ func NewTokenClient(apiURL, token string, hc *http.Client) *Client              
   - `Installation(owner, repo)` with the review App;
   - `Repo()` for the ID and clone URL;
   - upsert the row;
-  - check the approve side: `Installation` with the approve App, or `GET /repos` with the token. If the approve side can't reach the repository, log an Error.
+  - check the approve side: `Installation` with the approve App, or `GET /repos` with the token. Store the answer as `approve_available`; when it's false, log a Warn (publish then skips approval with the note from Task 2b).
   - Removed GitHub repositories: delete the row.
 
 - [ ] **Step 1:** Write the failing tests:
   - adapter tests per method with `httptest`, including `merged: true` → `merged` and the compare 404 → not ready;
   - dispatch: a GitHub run creates a Job whose `GIT_USERNAME` is `x-access-token`, whose `MR_REF` is `refs/pull/N/head`, and whose Secret holds the minted token, after a token request scoped to the one repo;
-  - reconcile: the installation is stored, and an approve App that isn't installed is logged as an Error.
+  - reconcile: the installation is stored, and an approve App that isn't installed sets `approve_available = false`;
+  - publish for such a repository: no approve call, the note posted, no retry.
 - [ ] **Step 2:** Implement it. **Step 3:** `go test -count=1 ./...` with the DB set passes.
 - [ ] **Step 4: Commit:** `feat: GitHub forge, clone tokens and reconcile`
 
@@ -320,6 +358,7 @@ func NewTokenClient(apiURL, token string, hc *http.Client) *Client              
   - `opened`, `reopened`, `synchronize` → `EnqueueRun`;
   - `edited` with `changes.base` → `EnqueueRun`;
   - `closed` → `SupersedeMR`;
+  - `ready_for_review` → `Republish(mr, head)`, then Wake;
   - anything else → 200.
 - Unusable but authenticated payloads → 200 with a Warn (2a rule). Storage error → 500.
 
