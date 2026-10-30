@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
 
@@ -648,5 +650,78 @@ func TestDispatchUnconfiguredRepositoryIsSuperseded(t *testing.T) {
 	}
 	if n := len(env.GitLab.Requests("", "")); n != 0 {
 		t.Errorf("GitLab got %d requests for a switched-off repository", n)
+	}
+}
+
+// The Job's timeout and memory limit come from the repository's effective
+// settings; only the memory limit of the resources changes.
+func TestDispatchUsesEffectiveTimeoutAndMemory(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(env *testEnv)
+	}{
+		{"config", func(env *testEnv) {
+			timeout, memory := 20*time.Minute, resource.MustParse("6Gi")
+			env.Engine.Config.Repositories[0].JobTimeout = &timeout
+			env.Engine.Config.Repositories[0].JobMemory = &memory
+		}},
+		{"dashboard", func(env *testEnv) {
+			env.Engine.Config.Repositories = nil
+			seconds, memory := 1200, "6Gi"
+			if err := env.Store.UpsertDashboardRepo(env.ctx, store.DashboardRepo{
+				Instance: testInstance, Project: testProjectPath, JobTimeoutSeconds: &seconds, JobMemory: &memory,
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnv(t)
+			env.Engine.Config.Jobs.Resources = corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m"), corev1.ResourceMemory: resource.MustParse("1Gi")},
+				Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"), corev1.ResourceMemory: resource.MustParse("4Gi")},
+			}
+			tc.setup(env)
+			head := sha('a')
+			id := env.Enqueue(3, head)
+			env.GitLab.SetMR(openMR(3, head))
+			env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+
+			dispatch(t, env)
+
+			job := env.Job(id)
+			if job == nil {
+				t.Fatalf("no job; run = %+v", env.Run(id))
+			}
+			if args := job.Spec.Template.Spec.Containers[0].Args; !hasArg(args, "--timeout=20m0s") {
+				t.Errorf("job args %v lack --timeout=20m0s", args)
+			}
+			if got, want := *job.Spec.ActiveDeadlineSeconds, int64(kube.Deadline(20*time.Minute, kube.CloneAllowance(0))/time.Second); got != want {
+				t.Errorf("activeDeadlineSeconds = %d, want %d", got, want)
+			}
+			wantExp := env.Now().Add(kube.Deadline(20*time.Minute, kube.CloneAllowance(0)) + time.Minute)
+			if got := env.Run(id).TokenExpiresAt; !got.Equal(wantExp) {
+				t.Errorf("token expires %s, want %s", got, wantExp)
+			}
+			res := job.Spec.Template.Spec.Containers[0].Resources
+			for _, c := range []struct {
+				list corev1.ResourceList
+				name corev1.ResourceName
+				want string
+			}{
+				{res.Limits, corev1.ResourceMemory, "6Gi"},
+				{res.Limits, corev1.ResourceCPU, "2"},
+				{res.Requests, corev1.ResourceMemory, "1Gi"},
+				{res.Requests, corev1.ResourceCPU, "500m"},
+			} {
+				if got := c.list[c.name]; got.Cmp(resource.MustParse(c.want)) != 0 {
+					t.Errorf("%s = %s, want %s", c.name, got.String(), c.want)
+				}
+			}
+			// The config's own resources are untouched.
+			if got := env.Engine.Config.Jobs.Resources.Limits[corev1.ResourceMemory]; got.Cmp(resource.MustParse("4Gi")) != 0 {
+				t.Errorf("config memory limit changed to %s", got.String())
+			}
+		})
 	}
 }

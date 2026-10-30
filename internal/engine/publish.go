@@ -93,7 +93,11 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 		return fmt.Errorf("no bots for instance %q", run.MR.Instance)
 	}
 	failure := config.FailureStatusFailed
-	if repo, ok := e.repository(run.MR.Instance, run.ProjectPath); ok {
+	repo, ok, err := e.settings().Get(ctx, run.MR.Instance, run.ProjectPath)
+	if err != nil {
+		return fmt.Errorf("load repository settings: %w", err)
+	}
+	if ok {
 		failure = repo.FailureStatus
 	}
 	o := e.outcome(run, log)

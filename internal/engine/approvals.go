@@ -103,7 +103,10 @@ func (e *Engine) sweepApproval(ctx context.Context, plat Platform, a store.Appro
 	if !found {
 		return false, nil
 	}
-	repo, ok := e.repository(a.MR.Instance, project.Path)
+	repo, ok, err := e.settings().Get(ctx, a.MR.Instance, project.Path)
+	if err != nil {
+		return false, fmt.Errorf("load repository settings: %w", err)
+	}
 	if !ok {
 		return false, nil
 	}

@@ -11,8 +11,11 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 
+	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/github"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
@@ -100,7 +103,10 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	e, run := d.e, d.run
 
 	plat, havePlat := e.Platforms[run.MR.Instance]
-	repo, haveRepo := e.repository(run.MR.Instance, run.ProjectPath)
+	repo, haveRepo, err := e.settings().Get(ctx, run.MR.Instance, run.ProjectPath)
+	if err != nil {
+		return d.retry(ctx, fmt.Errorf("load repository settings: %w", err))
+	}
 	if !havePlat || plat.Forge == nil || !haveRepo {
 		// The repository was switched off (or its instance removed) after
 		// the run was queued: nothing is reviewed or posted there any more.
@@ -194,7 +200,8 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		}
 	}
 
-	in, err := inputs.Resolve(ctx, source{plat.Forge}, e.Library, repo, run.MR.ProjectID, mr.StartSHA, previous)
+	in, err := inputs.Resolve(ctx, source{plat.Forge}, e.Library, config.Repository{Skills: repo.Skills},
+		run.MR.ProjectID, mr.StartSHA, previous)
 	if err != nil {
 		var se *sourceError
 		if errors.As(err, &se) {
@@ -226,7 +233,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 
 	now := e.now()
 	allowance := kube.CloneAllowance(project.CloneSeconds)
-	expires := now.Add(kube.Deadline(e.Config.Jobs.Timeout, allowance) + tokenGrace)
+	expires := now.Add(kube.Deadline(repo.JobTimeout, allowance) + tokenGrace)
 	name := kube.JobName(run.ID)
 	commentLimit := kube.CommentLimitGitLab
 	if plat.isGitHub() {
@@ -236,7 +243,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		Name:           name,
 		RunID:          run.ID,
 		Image:          e.Config.Jobs.Image,
-		Timeout:        e.Config.Jobs.Timeout,
+		Timeout:        repo.JobTimeout,
 		CloneAllowance: allowance,
 		Concurrency:    e.Config.Jobs.Concurrency,
 		RepoURL:        project.HTTPURLToRepo,
@@ -248,7 +255,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		ResultURL:      strings.TrimRight(e.Config.CallbackURL, "/") + "/runs/" + run.ID + "/result",
 		MaxCommentSize: commentLimit,
 		LLM:            e.Config.LLM,
-		Resources:      e.Config.Jobs.Resources,
+		Resources:      jobResources(e.Config.Jobs.Resources, repo.JobMemory),
 		Inputs:         in,
 	}
 	secrets := kube.Secrets{GitToken: string(gitToken), LLMKey: e.LLMKey, ResultToken: token}
@@ -279,6 +286,21 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		d.log.Warn("couldn't set the running commit status", "error", d.redact(err.Error()))
 	}
 	return nil
+}
+
+// jobResources is jobs.resources with the memory limit set to memory, the
+// repository's effective one; a zero memory leaves the limits as they are.
+// The config's own lists are never changed.
+func jobResources(base corev1.ResourceRequirements, memory resource.Quantity) corev1.ResourceRequirements {
+	res := *base.DeepCopy()
+	if memory.IsZero() {
+		return res
+	}
+	if res.Limits == nil {
+		res.Limits = corev1.ResourceList{}
+	}
+	res.Limits[corev1.ResourceMemory] = memory.DeepCopy()
+	return res
 }
 
 // gitHubCloneToken mints the token the Job clones repository project with:

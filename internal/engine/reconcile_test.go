@@ -454,3 +454,71 @@ func TestWildcardMatch(t *testing.T) {
 		}
 	}
 }
+
+func boolPtr(b bool) *bool { return &b }
+
+func dashboardRepo(t *testing.T, env *testEnv, r store.DashboardRepo) {
+	t.Helper()
+	if err := env.Store.UpsertDashboardRepo(env.ctx, r); err != nil {
+		t.Fatalf("UpsertDashboardRepo: %v", err)
+	}
+}
+
+// Config wins: a dashboard row for a repository that is also in config is
+// deleted, with an info log; other dashboard rows stay.
+func TestReconcileDropsDashboardRowOfConfigRepo(t *testing.T) {
+	env := newTestEnv(t)
+	serveProject(env, testProjectID, testProjectPath)
+	serveProject(env, 9, "acme/gadgets")
+	dashboardRepo(t, env, store.DashboardRepo{Instance: testInstance, Project: "ACME/Widgets", Approve: boolPtr(false), CreatedBy: "alice"})
+	dashboardRepo(t, env, store.DashboardRepo{Instance: testInstance, Project: "acme/gadgets", CreatedBy: "alice"})
+
+	reconcile(t, env)
+
+	if _, found, err := env.Store.DashboardRepo(env.ctx, testInstance, testProjectPath); err != nil || found {
+		t.Errorf("the dashboard row of the config repository is still there (%v)", err)
+	}
+	if _, found, err := env.Store.DashboardRepo(env.ctx, testInstance, "acme/gadgets"); err != nil || !found {
+		t.Errorf("the dashboard row of acme/gadgets was deleted (%v)", err)
+	}
+	logs := env.Logs()
+	if !strings.Contains(logs, "level=INFO") || !strings.Contains(logs, "ACME/Widgets") ||
+		!strings.Contains(logs, "dashboard record") {
+		t.Errorf("the takeover was not logged at info:\n%s", logs)
+	}
+	if _, ok := project(t, env, testProjectID); !ok {
+		t.Errorf("the config repository's project was removed")
+	}
+}
+
+// A repository switched on in the dashboard is reconciled like a config one,
+// and switching it off removes its webhook and deploy token.
+func TestReconcileDashboardRepo(t *testing.T) {
+	env := newTestEnv(t)
+	serveProject(env, testProjectID, testProjectPath)
+	serveProject(env, 9, "acme/gadgets")
+	dashboardRepo(t, env, store.DashboardRepo{Instance: testInstance, Project: "acme/gadgets", CreatedBy: "alice"})
+
+	reconcile(t, env)
+	if p, ok := project(t, env, 9); !ok || p.Path != "acme/gadgets" || p.HookID != newHookID || p.DeployTokenID != newDeployTokenID {
+		t.Fatalf("dashboard repository = %+v, %v; want reconciled", p, ok)
+	}
+	reconcile(t, env)
+	if n := len(env.GitLab.Requests(http.MethodDelete, "")); n != 0 {
+		t.Errorf("made %d deletes while the dashboard repository is on", n)
+	}
+
+	if err := env.Store.DeleteDashboardRepo(env.ctx, testInstance, "acme/gadgets"); err != nil {
+		t.Fatal(err)
+	}
+	env.GitLab.Reply(http.MethodDelete, "/projects/9/hooks/31", http.StatusNoContent, nil)
+	env.GitLab.Reply(http.MethodDelete, "/projects/9/deploy_tokens/42", http.StatusNoContent, nil)
+	reconcile(t, env)
+	if _, ok := project(t, env, 9); ok {
+		t.Errorf("the switched-off dashboard repository is still stored")
+	}
+	if len(env.GitLab.Requests(http.MethodDelete, "/projects/9/hooks/31")) != 1 ||
+		len(env.GitLab.Requests(http.MethodDelete, "/projects/9/deploy_tokens/42")) != 1 {
+		t.Errorf("webhook and deploy token were not removed")
+	}
+}

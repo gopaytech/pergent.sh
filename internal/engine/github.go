@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/forge/githubforge"
+	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -30,11 +30,7 @@ func GitHubRepos(st *store.Store, instance string) githubforge.Repos {
 	})
 }
 
-// repository returns the configured repository path names on instance,
-// whichever platform the instance is on.
-func (e *Engine) repository(instance, path string) (config.Repository, bool) {
-	if platform, ok := e.Config.Platform(instance); ok && platform == config.PlatformGitHub {
-		return e.Config.GitHubRepository(instance, path)
-	}
-	return e.Config.Repository(instance, path)
+// settings resolves repositories from the config and the dashboard.
+func (e *Engine) settings() *settings.Resolver {
+	return &settings.Resolver{Config: e.Config, Store: e.Store}
 }

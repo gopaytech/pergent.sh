@@ -10,6 +10,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/github"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
+	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -27,19 +28,22 @@ func HookURL(publicURL, instance string) string {
 	return strings.TrimRight(publicURL, "/") + "/webhooks/gitlab/" + instance
 }
 
-// Reconcile makes the platforms match the config. For each configured GitLab
-// repository it stores the project, makes sure its merge request webhook
+// Reconcile makes the platforms match the repositories switched on, in the
+// config or the dashboard (settings.Resolver). First, a dashboard record of a
+// repository the config lists is deleted: the config has taken it over. For
+// each GitLab repository switched on it stores the project, makes sure its merge request webhook
 // exists with the instance's secret, and creates a clone token when there is
 // none, the one it has expires within 7 days, or the stored one can't be
 // decrypted (the secret key changed). The new token is stored before the old
 // one is revoked, so a dispatch never finds none. For each configured GitHub
 // repository it stores the review App's installation, the repository ID and
 // clone URL, and whether the approve side reaches it (see
-// reconcileGitHubRepo). For each stored GitLab project no longer configured
+// reconcileGitHubRepo). For each stored GitLab project no longer switched on
 // it deletes the webhook and the deploy token, then the row; a GitHub
 // repository has nothing to delete but its row. One repository's failure is
-// logged and the rest continue; the returned error joins them all. Tokens
-// and keys are never logged.
+// logged and the rest continue; the returned error joins them all. When the
+// dashboard's repositories can't be read, nothing is removed. Tokens and keys
+// are never logged.
 func (e *Engine) Reconcile(ctx context.Context) error {
 	now := e.now()
 	var errs []error
@@ -48,27 +52,37 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 		errs = append(errs, err)
 	}
 
-	// The project id each configured repository resolved to on this pass.
+	resolver := e.settings()
+	if err := e.dropTakenOver(ctx, resolver); err != nil {
+		fail(err)
+	}
+	repos, err := resolver.List(ctx)
+	if err != nil {
+		// Without the dashboard's repositories every one of them would
+		// look switched off: remove nothing until they can be read.
+		return errors.Join(append(errs, fmt.Errorf("reconcile: %w", err))...)
+	}
+
+	// The project id each repository switched on resolved to on this pass.
+	wanted := make(map[repoKey]bool, len(repos))
 	resolved := map[repoKey]int64{}
-	for _, repo := range e.Config.Repositories {
+	for _, repo := range repos {
 		if ctx.Err() != nil {
 			return errors.Join(append(errs, ctx.Err())...)
 		}
-		var (
-			id  int64
-			err error
-		)
-		if repo.GitHub != "" {
+		wanted[keyOf(repo.Instance, repo.Project)] = true
+		var id int64
+		if repo.Platform == config.PlatformGitHub {
 			id, err = e.reconcileGitHubRepo(ctx, repo)
 		} else {
 			id, err = e.reconcileRepo(ctx, repo, now)
 		}
 		if err != nil {
-			fail(fmt.Errorf("reconcile %s on %s: %w", repo.Project, repo.Instance(), err),
-				"instance", repo.Instance(), "project", repo.Project)
+			fail(fmt.Errorf("reconcile %s on %s: %w", repo.Project, repo.Instance, err),
+				"instance", repo.Instance, "project", repo.Project)
 			continue
 		}
-		resolved[keyOf(repo.Instance(), repo.Project)] = id
+		resolved[keyOf(repo.Instance, repo.Project)] = id
 	}
 
 	stored, err := e.Store.Projects(ctx)
@@ -79,7 +93,7 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return errors.Join(append(errs, ctx.Err())...)
 		}
-		if e.keep(p, resolved) {
+		if keep(p, wanted, resolved) {
 			continue
 		}
 		if err := e.removeProject(ctx, p); err != nil {
@@ -96,55 +110,71 @@ type repoKey struct{ instance, path string }
 
 func keyOf(instance, path string) repoKey { return repoKey{instance, strings.ToLower(path)} }
 
-// keep reports whether a stored project is still wanted: it is configured,
+// keep reports whether a stored project is still wanted: it is switched on,
 // and its path didn't resolve to another project on this pass (one deleted
-// and recreated under the same path). A configured project whose lookup
+// and recreated under the same path). A project switched on whose lookup
 // failed is kept.
-func (e *Engine) keep(p store.Project, resolved map[repoKey]int64) bool {
+func keep(p store.Project, wanted map[repoKey]bool, resolved map[repoKey]int64) bool {
 	key := keyOf(p.Instance, p.Path)
-	configured := false
-	for _, repo := range e.Config.Repositories {
-		if keyOf(repo.Instance(), repo.Project) == key {
-			configured = true
-			break
-		}
-	}
-	if !configured {
+	if !wanted[key] {
 		return false
 	}
 	id, ok := resolved[key]
 	return !ok || id == p.ProjectID
 }
 
-// reconcileRepo brings one configured repository in line and returns its
-// project id.
-func (e *Engine) reconcileRepo(ctx context.Context, repo config.Repository, now time.Time) (int64, error) {
-	gl := e.gitLab(repo.GitLab)
-	if gl == nil {
-		return 0, fmt.Errorf("no bots for instance %q", repo.GitLab)
+// dropTakenOver deletes the dashboard record of every repository the config
+// lists: the config has taken it over, and the record would only mislead.
+func (e *Engine) dropTakenOver(ctx context.Context, resolver *settings.Resolver) error {
+	rows, err := e.Store.DashboardRepos(ctx)
+	if err != nil {
+		return fmt.Errorf("reconcile: list dashboard repositories: %w", err)
 	}
-	secret := e.WebhookSecrets[repo.GitLab]
+	var errs []error
+	for _, row := range rows {
+		if !resolver.InConfig(row.Instance, row.Project) {
+			continue
+		}
+		if err := e.Store.DeleteDashboardRepo(ctx, row.Instance, row.Project); err != nil {
+			errs = append(errs, fmt.Errorf("delete the dashboard record of %s on %s: %w", row.Project, row.Instance, err))
+			continue
+		}
+		e.log().Info("the config lists this repository: its dashboard record is deleted",
+			"instance", row.Instance, "project", row.Project, "created_by", row.CreatedBy)
+	}
+	return errors.Join(errs...)
+}
+
+// reconcileRepo brings one GitLab repository switched on in line and returns
+// its project id.
+func (e *Engine) reconcileRepo(ctx context.Context, repo settings.Effective, now time.Time) (int64, error) {
+	instance := repo.Instance
+	gl := e.gitLab(instance)
+	if gl == nil {
+		return 0, fmt.Errorf("no bots for instance %q", instance)
+	}
+	secret := e.WebhookSecrets[instance]
 	if secret == "" {
-		return 0, fmt.Errorf("no webhook secret for instance %q", repo.GitLab)
+		return 0, fmt.Errorf("no webhook secret for instance %q", instance)
 	}
 
 	gp, err := gl.GetProject(ctx, repo.Project)
 	if err != nil {
 		return 0, fmt.Errorf("get project: %w", err)
 	}
-	p, _, err := e.Store.Project(ctx, repo.GitLab, gp.ID)
+	p, _, err := e.Store.Project(ctx, instance, gp.ID)
 	if err != nil {
 		return 0, fmt.Errorf("load project: %w", err)
 	}
-	p.Instance, p.ProjectID, p.Path, p.HTTPURLToRepo = repo.GitLab, gp.ID, repo.Project, gp.HTTPURLToRepo
+	p.Instance, p.ProjectID, p.Path, p.HTTPURLToRepo = instance, gp.ID, repo.Project, gp.HTTPURLToRepo
 	if err := e.Store.UpsertProject(ctx, p); err != nil {
 		return 0, fmt.Errorf("store project: %w", err)
 	}
 	// The approve bot is a GitLab user that can always approve.
 	n, err := gitLabRequiredApprovals(ctx, gl, gp.ID, gp.DefaultBranch)
-	e.checkRequiredApprovals(repo.GitLab, repo.Project, gp.DefaultBranch, n, err)
+	e.checkRequiredApprovals(instance, repo.Project, gp.DefaultBranch, n, err)
 
-	hookID, err := gl.EnsureHook(ctx, gp.ID, HookURL(e.Config.PublicURL, repo.GitLab), secret)
+	hookID, err := gl.EnsureHook(ctx, gp.ID, HookURL(e.Config.PublicURL, instance), secret)
 	if err != nil {
 		return 0, fmt.Errorf("ensure webhook: %w", err)
 	}
@@ -162,7 +192,7 @@ func (e *Engine) reconcileRepo(ctx context.Context, repo config.Repository, now 
 		// Sealed with another key (PERGENT_SH_SECRET_KEY changed): the
 		// dispatcher can't use it, so replace it now rather than at expiry.
 		e.log().Warn("the stored deploy token can't be decrypted with the current secret key; replacing it",
-			"instance", repo.GitLab, "project", repo.Project, "deploy_token_id", p.DeployTokenID)
+			"instance", instance, "project", repo.Project, "deploy_token_id", p.DeployTokenID)
 	}
 	old := p.DeployTokenID
 	dt, err := gl.CreateDeployToken(ctx, gp.ID, deployTokenName, now.Add(deployTokenLife))
@@ -183,12 +213,12 @@ func (e *Engine) reconcileRepo(ctx context.Context, repo config.Repository, now 
 		sctx, cancel := settleCtx(ctx)
 		defer cancel()
 		if derr := gl.DeleteDeployToken(sctx, gp.ID, dt.ID); derr != nil {
-			e.log().Warn("couldn't revoke the deploy token that wasn't stored", "instance", repo.GitLab,
+			e.log().Warn("couldn't revoke the deploy token that wasn't stored", "instance", instance,
 				"project", repo.Project, "deploy_token_id", dt.ID, "error", e.redact(derr.Error()))
 		}
 		return 0, fmt.Errorf("store deploy token: %w", err)
 	}
-	e.log().Info("deploy token created", "instance", repo.GitLab, "project", repo.Project,
+	e.log().Info("deploy token created", "instance", instance, "project", repo.Project,
 		"deploy_token_id", dt.ID, "expires_at", p.DeployTokenExpiresAt, "replaced", old)
 	if old != 0 && old != dt.ID {
 		if err := gl.DeleteDeployToken(ctx, gp.ID, old); err != nil {
@@ -258,7 +288,7 @@ func (e *Engine) gitLab(instance string) *gitlab.Client {
 	return e.Platforms[instance].GitLab
 }
 
-// reconcileGitHubRepo stores one configured GitHub repository and returns its
+// reconcileGitHubRepo stores one GitHub repository switched on and returns its
 // ID: the review App's installation on it (an App not installed there
 // leaves any stored row without one, so its runs are reported as such), the
 // repository ID and clone URL read through that installation, and whether
@@ -267,8 +297,8 @@ func (e *Engine) gitLab(instance string) *gitlab.Client {
 // approve side can't be asked, the stored answer is kept (a new repository
 // is assumed reachable: a failed approval is retried, never recorded as
 // made).
-func (e *Engine) reconcileGitHubRepo(ctx context.Context, repo config.Repository) (int64, error) {
-	instance := repo.GitHub
+func (e *Engine) reconcileGitHubRepo(ctx context.Context, repo settings.Effective) (int64, error) {
+	instance := repo.Instance
 	plat, ok := e.Platforms[instance]
 	if _, configured := e.Config.GitHubInstance(instance); !configured || !ok || !plat.isGitHub() ||
 		plat.GitHub == nil || plat.GitHub.App == nil || plat.GitHub.Approve == nil {

@@ -12,9 +12,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -35,12 +35,28 @@ type Queue interface {
 	Republish(ctx context.Context, mr store.MRKey, headSHA string) (bool, error)
 }
 
+// Repositories looks up a repository switched on, in the config or the
+// dashboard (settings.Resolver). project is matched ignoring case.
+type Repositories interface {
+	Get(ctx context.Context, instance, project string) (settings.Effective, bool, error)
+}
+
+// repositories is h's Repos, or the config's repositories alone when nil.
+func repositories(repos Repositories, cfg *config.Config) Repositories {
+	if repos != nil {
+		return repos
+	}
+	return &settings.Resolver{Config: cfg}
+}
+
 // Handler serves POST /webhooks/gitlab/{instance}.
 type Handler struct {
 	Config *config.Config
 	// Secrets maps an instance name to its webhook secret.
 	Secrets map[string]string
 	Queue   Queue
+	// Repos finds the repositories switched on; nil means the config's.
+	Repos Repositories
 	// Wake nudges the dispatcher after a new run was queued. May be nil.
 	Wake func()
 	Log  *slog.Logger
@@ -142,8 +158,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	attrs := ev.ObjectAttributes
-	project, ok := h.project(name, ev.Project.PathWithNamespace)
 	log = log.With("project", ev.Project.PathWithNamespace, "iid", attrs.IID, "action", attrs.Action)
+	project, ok, err := lookup(r.Context(), repositories(h.Repos, h.Config), config.PlatformGitLab, name, ev.Project.PathWithNamespace)
+	if err != nil {
+		log.Error("webhook failed", "outcome", "lookup_error", "err", err)
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
 	if !ok {
 		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "unknown_project")
 		w.WriteHeader(http.StatusOK)
@@ -239,15 +260,15 @@ func (h *Handler) logger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// project returns the configured spelling of a project on an instance.
-// GitLab paths are case-insensitive.
-func (h *Handler) project(instance, path string) (string, bool) {
-	for _, repo := range h.Config.Repositories {
-		if repo.GitLab == instance && strings.EqualFold(repo.Project, path) {
-			return repo.Project, true
-		}
+// lookup returns the spelling, as the config or the dashboard has it, of
+// path on instance when that repository is switched on there for platform.
+// Paths are matched ignoring case on both platforms.
+func lookup(ctx context.Context, repos Repositories, platform, instance, path string) (string, bool, error) {
+	eff, ok, err := repos.Get(ctx, instance, path)
+	if err != nil || !ok || eff.Platform != platform {
+		return "", false, err
 	}
-	return "", false
+	return eff.Project, true, nil
 }
 
 // tokenMatches compares in constant time. Both sides are hashed first so the

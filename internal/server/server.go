@@ -10,6 +10,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/callback"
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 	"github.com/gopaytech/pergent.sh/internal/webhook"
 )
@@ -37,11 +38,13 @@ type Deps struct {
 //   - GET /healthz: 200 "ok".
 func Routes(d Deps) *http.ServeMux {
 	mux := http.NewServeMux()
+	// Webhooks accept repositories switched on in the config or the dashboard.
+	repos := &settings.Resolver{Config: d.Config, Store: d.Store}
 	mux.Handle("POST /webhooks/gitlab/{instance}", &webhook.Handler{
-		Config: d.Config, Secrets: d.WebhookSecrets, Queue: d.Store, Wake: d.Wake, Log: d.Log,
+		Config: d.Config, Secrets: d.WebhookSecrets, Queue: d.Store, Repos: repos, Wake: d.Wake, Log: d.Log,
 	})
 	mux.Handle("POST /webhooks/github/{instance}", &webhook.GitHubHandler{
-		Config: d.Config, Secrets: d.GitHubWebhookSecrets, Queue: d.Store, Wake: d.Wake, Log: d.Log,
+		Config: d.Config, Secrets: d.GitHubWebhookSecrets, Queue: d.Store, Repos: repos, Wake: d.Wake, Log: d.Log,
 	})
 	mux.Handle("POST /runs/{id}/result", &callback.Handler{
 		Results: d.Store, Now: d.Now, Wake: d.Wake, Log: d.Log,

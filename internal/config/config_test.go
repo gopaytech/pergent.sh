@@ -510,3 +510,68 @@ func TestGitHubRepository(t *testing.T) {
 		t.Errorf("Instance() of the gitlab repository = %q", got)
 	}
 }
+
+func TestLoadRepositorySettings(t *testing.T) {
+	base, err := os.ReadFile("testdata/valid.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Replace(string(base), "    project: acme/widgets\n", `    project: acme/widgets
+    approve: false
+    review_drafts: false
+    job_timeout: 20m
+    job_memory: 6Gi
+`, 1)
+	cfg, err := Load(writeConfig(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	repo := cfg.Repositories[0]
+	if repo.Approve == nil || *repo.Approve {
+		t.Errorf("Approve = %v, want false", repo.Approve)
+	}
+	if repo.ReviewDrafts == nil || *repo.ReviewDrafts {
+		t.Errorf("ReviewDrafts = %v, want false", repo.ReviewDrafts)
+	}
+	if repo.JobTimeout == nil || *repo.JobTimeout != 20*time.Minute {
+		t.Errorf("JobTimeout = %v, want 20m", repo.JobTimeout)
+	}
+	if repo.JobMemory == nil || repo.JobMemory.Cmp(resource.MustParse("6Gi")) != 0 {
+		t.Errorf("JobMemory = %v, want 6Gi", repo.JobMemory)
+	}
+
+	// Omitted, they stay unset: the resolver applies the defaults.
+	plain := loadValid(t).Repositories[0]
+	if plain.Approve != nil || plain.ReviewDrafts != nil || plain.JobTimeout != nil || plain.JobMemory != nil {
+		t.Errorf("omitted repository settings are set: %+v", plain)
+	}
+}
+
+func TestLoadRejectsBadRepositorySettings(t *testing.T) {
+	base, err := os.ReadFile("testdata/valid.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name, extra, wantErr string
+	}{
+		{"bad job_timeout", "    job_timeout: soon\n", "soon"},
+		{"zero job_timeout", "    job_timeout: 0s\n", "job_timeout"},
+		{"negative job_timeout", "    job_timeout: -1m\n", "job_timeout"},
+		{"bad job_memory", "    job_memory: lots\n", "lots"},
+		{"zero job_memory", "    job_memory: \"0\"\n", "job_memory"},
+		// The default request is 1Gi: a lower limit makes an invalid Job.
+		{"job_memory below the request", "    job_memory: 512Mi\n", "job_memory"},
+		{"approve not a bool", "    approve: sometimes\n", "approve"},
+		{"unknown repository key", "    aprove: false\n", "aprove"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := strings.Replace(string(base), "    project: acme/widgets\n", "    project: acme/widgets\n"+tt.extra, 1)
+			_, err := Load(writeConfig(t, body))
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Load() = %v, want error containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}

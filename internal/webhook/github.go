@@ -30,6 +30,8 @@ type GitHubHandler struct {
 	// Secrets maps an instance name to the review App's webhook secret.
 	Secrets map[string]string
 	Queue   Queue
+	// Repos finds the repositories switched on; nil means the config's.
+	Repos Repositories
 	// Wake nudges the dispatcher after a new run was queued. May be nil.
 	Wake func()
 	Log  *slog.Logger
@@ -107,8 +109,13 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pr := ev.PullRequest
-	project, ok := h.repository(name, ev.Repository.FullName)
 	log = log.With("repository", ev.Repository.FullName, "number", pr.Number, "action", ev.Action)
+	project, ok, err := lookup(r.Context(), repositories(h.Repos, h.Config), config.PlatformGitHub, name, ev.Repository.FullName)
+	if err != nil {
+		log.Error("webhook failed", "outcome", "lookup_error", "err", err)
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
 	if !ok {
 		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "unknown_repository")
 		w.WriteHeader(http.StatusOK)
@@ -190,16 +197,6 @@ func (h *GitHubHandler) logger() *slog.Logger {
 		return h.Log
 	}
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
-}
-
-// repository returns the configured spelling of a repository on an instance.
-// GitHub names are case-insensitive.
-func (h *GitHubHandler) repository(instance, fullName string) (string, bool) {
-	repo, ok := h.Config.GitHubRepository(instance, fullName)
-	if !ok {
-		return "", false
-	}
-	return repo.Project, true
 }
 
 // signatureMatches checks an X-Hub-Signature-256 header ("sha256=<hex>")

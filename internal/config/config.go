@@ -94,12 +94,24 @@ type App struct {
 // Repository is a project that is reviewed. Listing it switches it on. It
 // names exactly one of GitLab (an instance under gitlab:) and GitHub (an
 // instance under github:); Project is a GitLab path or a GitHub owner/name.
+//
+// The per-repository settings left nil take their defaults where they are
+// resolved (settings.Resolver): approval and draft reviews on, the Job
+// timeout of jobs.timeout and the memory limit of jobs.resources.limits.
 type Repository struct {
-	GitLab        string        `yaml:"gitlab"`
-	GitHub        string        `yaml:"github"`
-	Project       string        `yaml:"project"`
-	Skills        []string      `yaml:"skills"`
-	FailureStatus FailureStatus `yaml:"failure_status"`
+	GitLab        string
+	GitHub        string
+	Project       string
+	Skills        []string
+	FailureStatus FailureStatus
+	// Approve is whether a clean review is approved (default true).
+	Approve *bool
+	// ReviewDrafts is whether a draft is reviewed (default true).
+	ReviewDrafts *bool
+	// JobTimeout replaces jobs.timeout for this repository.
+	JobTimeout *time.Duration
+	// JobMemory replaces the memory limit of jobs.resources.limits.
+	JobMemory *resource.Quantity
 }
 
 // LLM is the model every review uses.
@@ -129,9 +141,37 @@ type fileConfig struct {
 	SkillsDir    string           `yaml:"skills_dir"`
 	GitLab       []Instance       `yaml:"gitlab"`
 	GitHub       []GitHubInstance `yaml:"github"`
-	Repositories []Repository     `yaml:"repositories"`
+	Repositories []fileRepository `yaml:"repositories"`
 	LLM          LLM              `yaml:"llm"`
 	Jobs         fileJobs         `yaml:"jobs"`
+}
+
+type fileRepository struct {
+	GitLab        string        `yaml:"gitlab"`
+	GitHub        string        `yaml:"github"`
+	Project       string        `yaml:"project"`
+	Skills        []string      `yaml:"skills"`
+	FailureStatus FailureStatus `yaml:"failure_status"`
+	Approve       *bool         `yaml:"approve"`
+	ReviewDrafts  *bool         `yaml:"review_drafts"`
+	JobTimeout    *duration     `yaml:"job_timeout"`
+	JobMemory     *quantity     `yaml:"job_memory"`
+}
+
+func (f fileRepository) repository() Repository {
+	r := Repository{
+		GitLab: f.GitLab, GitHub: f.GitHub, Project: f.Project, Skills: f.Skills,
+		FailureStatus: f.FailureStatus, Approve: f.Approve, ReviewDrafts: f.ReviewDrafts,
+	}
+	if f.JobTimeout != nil {
+		d := time.Duration(*f.JobTimeout)
+		r.JobTimeout = &d
+	}
+	if f.JobMemory != nil {
+		q := f.JobMemory.Quantity
+		r.JobMemory = &q
+	}
+	return r
 }
 
 type fileJobs struct {
@@ -225,7 +265,7 @@ func Load(path string) (*Config, error) {
 		SkillsDir:    raw.SkillsDir,
 		GitLab:       raw.GitLab,
 		GitHub:       raw.GitHub,
-		Repositories: raw.Repositories,
+		Repositories: make([]Repository, 0, len(raw.Repositories)),
 		LLM:          raw.LLM,
 		Jobs: Jobs{
 			Namespace:   raw.Jobs.Namespace,
@@ -238,6 +278,9 @@ func Load(path string) (*Config, error) {
 				Limits:   toResourceList(raw.Jobs.Resources.Limits),
 			},
 		},
+	}
+	for _, repo := range raw.Repositories {
+		cfg.Repositories = append(cfg.Repositories, repo.repository())
 	}
 	if raw.Jobs.MaxRunning != nil {
 		cfg.Jobs.MaxRunning = *raw.Jobs.MaxRunning
@@ -383,6 +426,20 @@ func (c *Config) Validate() error {
 		if repo.FailureStatus != FailureStatusFailed && repo.FailureStatus != FailureStatusNeutral {
 			add("repositories[%d] (%s): failure_status %q must be %q or %q",
 				i, repo.Project, repo.FailureStatus, FailureStatusFailed, FailureStatusNeutral)
+		}
+		if repo.JobTimeout != nil && *repo.JobTimeout <= 0 {
+			add("repositories[%d] (%s): job_timeout must be positive, got %s", i, repo.Project, *repo.JobTimeout)
+		}
+		if repo.JobMemory != nil {
+			// A limit below the request makes a Job Kubernetes refuses.
+			request := c.Jobs.Resources.Requests[corev1.ResourceMemory]
+			switch {
+			case repo.JobMemory.Sign() <= 0:
+				add("repositories[%d] (%s): job_memory must be positive, got %s", i, repo.Project, repo.JobMemory.String())
+			case repo.JobMemory.Cmp(request) < 0:
+				add("repositories[%d] (%s): job_memory %s is below the memory request %s of jobs.resources.requests",
+					i, repo.Project, repo.JobMemory.String(), request.String())
+			}
 		}
 	}
 
@@ -547,10 +604,11 @@ func (c *Config) Platform(instance string) (string, bool) {
 }
 
 // Repository returns the GitLab repository configured for project on
-// instance. GitHub repositories are not found here.
+// instance. GitLab paths are case-insensitive. GitHub repositories are not
+// found here.
 func (c *Config) Repository(instance, project string) (Repository, bool) {
 	for _, repo := range c.Repositories {
-		if repo.GitLab == instance && repo.Project == project {
+		if repo.GitLab == instance && strings.EqualFold(repo.Project, project) {
 			return repo, true
 		}
 	}
