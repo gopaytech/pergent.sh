@@ -211,8 +211,10 @@ type fakeGitLab struct {
 	groups   map[string]bool           // group path → user 9 is a member
 	checks   int                       // GET /projects/:path calls
 	listings []string                  // GET /projects queries
-	// listFail makes GET /projects answer 400.
-	listFail bool
+	// listFail makes GET /projects answer 400; listFailFrom makes pages
+	// from listFailFrom on (1-based; 0: none) answer 403.
+	listFail     bool
+	listFailFrom int
 	// slowFrom makes GET /projects pages from slowFrom on (1-based; 0:
 	// none) wait slow, or until the request ends.
 	slowFrom int
@@ -283,6 +285,10 @@ func (f *fakeGitLab) serve(w http.ResponseWriter, r *http.Request) {
 		f.listings = append(f.listings, r.URL.RawQuery)
 		if f.listFail {
 			reply(w, 400, map[string]any{"message": "400 Bad request"})
+			return
+		}
+		if page, _ := strconv.Atoi(r.URL.Query().Get("page")); f.listFailFrom > 0 && max(page, 1) >= f.listFailFrom {
+			reply(w, 403, map[string]any{"message": "403 Forbidden"})
 			return
 		}
 		f.listProjects(w, r)

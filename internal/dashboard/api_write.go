@@ -174,15 +174,18 @@ func (d *Dashboard) reachable(ctx context.Context, se Session, search string) (m
 var errOutOfBudget = errors.New("the listing ran out of time")
 
 // withinBudget runs a listing under d.listBudget and whatever is left of
-// ctx's budget. When either runs out after something was read, what was
-// read is the answer, truncated; an error before that, or with nothing
-// read, is an error.
-func (d *Dashboard) withinBudget(ctx context.Context, list func(ctx context.Context) ([]string, bool, error)) ([]string, bool, error) {
+// ctx's budget. When it stops early after something was read (a budget ran
+// out, or a page failed) while the request is still there, what was read is
+// the answer, truncated, and the failure is logged; an error with nothing
+// read is an error.
+func (d *Dashboard) withinBudget(ctx context.Context, side string, list func(ctx context.Context) ([]string, bool, error)) ([]string, bool, error) {
 	bctx, cancel := context.WithTimeoutCause(ctx, d.listBudget, errOutOfBudget)
 	defer cancel()
 	repos, truncated, err := list(bctx)
 	if err != nil {
-		if errors.Is(context.Cause(bctx), errOutOfBudget) && len(repos) > 0 {
+		if len(repos) > 0 && (bctx.Err() == nil || errors.Is(context.Cause(bctx), errOutOfBudget)) {
+			d.Log.Warn("dashboard: a picker listing stopped early; showing what was read",
+				"side", side, "read", len(repos), "error", err.Error())
 			return repos, true, nil
 		}
 		return nil, false, err
@@ -197,8 +200,13 @@ func (d *Dashboard) memberRepos(ctx context.Context, se Session, search string) 
 	if err != nil {
 		return nil, false, err
 	}
-	return d.withinBudget(ctx, func(ctx context.Context) ([]string, bool, error) {
-		return p.memberRepos(ctx, token, search, d.listLimit)
+	return d.withinBudget(ctx, "user", func(ctx context.Context) ([]string, bool, error) {
+		repos, truncated, err := p.memberRepos(ctx, token, search, d.listLimit)
+		if err != nil && token != "" {
+			// The error goes to the log: it must not hold the token.
+			err = errors.New(strings.ReplaceAll(err.Error(), token, "[REDACTED]"))
+		}
+		return repos, truncated, err
 	})
 }
 
@@ -253,7 +261,7 @@ func (d *Dashboard) catalogRepos(ctx context.Context, instance, search string) (
 	c.flights[key] = f
 	c.mu.Unlock()
 
-	f.repos, f.truncated, f.err = d.withinBudget(context.WithoutCancel(ctx), func(ctx context.Context) ([]string, bool, error) {
+	f.repos, f.truncated, f.err = d.withinBudget(context.WithoutCancel(ctx), "review", func(ctx context.Context) ([]string, bool, error) {
 		return cat.ReachableRepos(ctx, search, d.listLimit)
 	})
 

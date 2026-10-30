@@ -621,6 +621,38 @@ func TestAvailableIsIntersection(t *testing.T) {
 			t.Errorf("body leaks upstream detail: %s", rec.Body)
 		}
 	})
+
+	// A page failing after others were read lists what was read,
+	// truncated, and logs the failure without the user's token.
+	t.Run("later page fails", func(t *testing.T) {
+		e := newEnv(t, nil)
+		var all []string
+		for i := range 150 { // two pages of 100
+			p := fmt.Sprintf("acme/repo-%03d", i)
+			all = append(all, p)
+			e.gl.setProject(p, gitlabProject("private", 20, 0))
+		}
+		e.cat["main"].set(all...)
+		c := e.signInGitLab(true)
+		e.gl.set(func(*oauthServer) { e.gl.listFailFrom = 2 })
+		got := getJSON[availableBody](e, c, "/api/repositories/available")
+		if len(got.Items) != 100 || !got.Truncated {
+			t.Errorf("available has %d items, truncated %v; want the first page, truncated", len(got.Items), got.Truncated)
+		}
+		logs := e.logs.String()
+		if !strings.Contains(logs, "listing stopped early") {
+			t.Errorf("the failed page isn't logged:\n%s", logs)
+		}
+		for _, tok := range e.gl.tokens() {
+			if strings.Contains(logs, tok) {
+				t.Errorf("the log holds a token:\n%s", logs)
+			}
+		}
+
+		// The first page failing still has nothing to show: 502.
+		e.gl.set(func(*oauthServer) { e.gl.listFailFrom = 1 })
+		wantCode(t, e.get(c, "/api/repositories/available?search=repo"), "first page fails", http.StatusBadGateway)
+	})
 }
 
 // No write answer ever holds a token.
