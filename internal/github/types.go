@@ -33,12 +33,15 @@ type Ref struct {
 // PullRequest holds the fields pergent.sh reads. State is "open" or "closed";
 // a merged pull request is "closed" with Merged true.
 type PullRequest struct {
-	Number int64  `json:"number"`
-	State  string `json:"state"`
-	Merged bool   `json:"merged"`
-	Draft  bool   `json:"draft"`
-	Head   Ref    `json:"head"`
-	Base   Ref    `json:"base"`
+	Number  int64  `json:"number"`
+	State   string `json:"state"`
+	Merged  bool   `json:"merged"`
+	Draft   bool   `json:"draft"`
+	Title   string `json:"title"`
+	HTMLURL string `json:"html_url"`
+	User    User   `json:"user"`
+	Head    Ref    `json:"head"`
+	Base    Ref    `json:"base"`
 }
 
 // Comment is an issue (pull request conversation) comment.

@@ -50,6 +50,10 @@ func (f *Forge) GetChange(ctx context.Context, projectID, iid int64) (forge.Chan
 		Draft:        mr.Draft,
 		HeadSHA:      mr.SHA,
 		TargetBranch: mr.TargetBranch,
+		Title:        mr.Title,
+		WebURL:       mr.WebURL,
+		SourceBranch: mr.SourceBranch,
+		Author:       mr.Author.Username,
 	}
 	if mr.State == "opened" {
 		ch.State = forge.StateOpen
@@ -58,6 +62,16 @@ func (f *Forge) GetChange(ctx context.Context, projectID, iid int64) (forge.Chan
 		ch.BaseSHA, ch.StartSHA = mr.DiffRefs.BaseSHA, mr.DiffRefs.StartSHA
 	}
 	return ch, nil
+}
+
+// DefaultBranch returns the project's default branch, read with the review
+// bot. A project it can't see is forge.ErrNotFound.
+func (f *Forge) DefaultBranch(ctx context.Context, projectID int64) (string, error) {
+	p, err := f.c.GetProject(ctx, strconv.FormatInt(projectID, 10))
+	if err != nil {
+		return "", mapErr(err)
+	}
+	return p.DefaultBranch, nil
 }
 
 // SetStatus sets the "pergent" commit status on sha.

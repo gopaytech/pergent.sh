@@ -64,7 +64,10 @@ CREATE TABLE user_access (
     PRIMARY KEY (session_hash, instance, project)
 );
 
--- The merge request's title and web address when the run was queued.
+-- The merge request's title, web address, source branch and author, as the
+-- dispatcher last read them.
 ALTER TABLE runs
-    ADD COLUMN title   text NOT NULL DEFAULT '',
-    ADD COLUMN web_url text NOT NULL DEFAULT '';
+    ADD COLUMN title         text NOT NULL DEFAULT '',
+    ADD COLUMN web_url       text NOT NULL DEFAULT '',
+    ADD COLUMN source_branch text NOT NULL DEFAULT '',
+    ADD COLUMN author        text NOT NULL DEFAULT '';

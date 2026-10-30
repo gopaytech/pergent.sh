@@ -24,6 +24,10 @@ const (
 // the merge base and StartSHA is where the repository's review inputs are
 // read. An empty BaseSHA or StartSHA means the platform hasn't computed the
 // change's diff for HeadSHA yet.
+//
+// Title, WebURL (its page on the platform), SourceBranch and Author (the
+// username of whoever opened it) are only shown in the dashboard; the
+// engine decides nothing on them.
 type Change struct {
 	Number       int64
 	State        ChangeState
@@ -32,6 +36,10 @@ type Change struct {
 	TargetBranch string
 	BaseSHA      string
 	StartSHA     string
+	Title        string
+	WebURL       string
+	SourceBranch string
+	Author       string
 }
 
 // StatusState is the state of pergent's status on a commit.

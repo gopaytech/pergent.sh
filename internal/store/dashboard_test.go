@@ -361,3 +361,20 @@ func TestDeleteAttentionForProject(t *testing.T) {
 		t.Errorf("left = %v; want %v", got, want)
 	}
 }
+
+func TestSetRunChange(t *testing.T) {
+	s := newStore(t)
+	id := enqueue(t, s, mr1, "a1")
+	if err := s.SetRunChange(ctx, id, ChangeDetails{Title: "Add login", WebURL: "https://gitlab.example.com/acme/widgets/-/merge_requests/3",
+		SourceBranch: "feature/login", Author: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	r := getRun(t, s, id)
+	if r.Title != "Add login" || r.WebURL != "https://gitlab.example.com/acme/widgets/-/merge_requests/3" ||
+		r.SourceBranch != "feature/login" || r.Author != "alice" {
+		t.Errorf("run = %+v", r)
+	}
+	if err := s.SetRunChange(ctx, "not-a-uuid", ChangeDetails{}); err == nil {
+		t.Error("SetRunChange of a malformed id = nil error")
+	}
+}

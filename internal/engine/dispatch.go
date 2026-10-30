@@ -132,6 +132,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	if err != nil {
 		return d.retry(ctx, fmt.Errorf("get merge request: %w", err))
 	}
+	d.recordChange(ctx, mr)
 	if mr.State != forge.StateOpen {
 		d.log.Info("merge request is no longer open; run superseded", "state", mr.State)
 		return d.supersede(ctx)
@@ -295,6 +296,20 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		d.log.Warn("couldn't set the running commit status", "error", d.redact(err.Error()))
 	}
 	return nil
+}
+
+// recordChange stores the merge request's title, web address, source branch
+// and author on the run for the dashboard, when they changed. It is best
+// effort: a store error is logged and the dispatch goes on.
+func (d *dispatcher) recordChange(ctx context.Context, mr forge.Change) {
+	cd := store.ChangeDetails{Title: mr.Title, WebURL: mr.WebURL, SourceBranch: mr.SourceBranch, Author: mr.Author}
+	run := d.run
+	if cd == (store.ChangeDetails{Title: run.Title, WebURL: run.WebURL, SourceBranch: run.SourceBranch, Author: run.Author}) {
+		return
+	}
+	if err := d.e.Store.SetRunChange(ctx, run.ID, cd); err != nil {
+		d.log.Info("couldn't record the merge request's details for the dashboard", "error", d.redact(err.Error()))
+	}
 }
 
 // jobResources is jobs.resources with the memory limit set to memory, the

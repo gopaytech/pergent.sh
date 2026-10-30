@@ -151,6 +151,8 @@ func sha(c byte) string { return strings.Repeat(string(c), 40) }
 func pr(state string, merged, draft bool) map[string]any {
 	return map[string]any{
 		"number": 3, "state": state, "merged": merged, "draft": draft,
+		"title": "Add login", "html_url": "https://github.example.com/acme/widgets/pull/3",
+		"user": map[string]any{"id": 5, "login": "alice"},
 		"head": map[string]any{"ref": "feature", "sha": sha('a')},
 		"base": map[string]any{"ref": "main", "sha": sha('5')},
 	}
@@ -169,12 +171,29 @@ func TestGetChangeOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := forge.Change{Number: 3, State: forge.StateOpen, Draft: true, HeadSHA: sha('a'),
-		TargetBranch: "main", BaseSHA: sha('b'), StartSHA: sha('5')}
+		TargetBranch: "main", BaseSHA: sha('b'), StartSHA: sha('5'),
+		SourceBranch: "feature", Title: "Add login", Author: "alice",
+		WebURL: "https://github.example.com/acme/widgets/pull/3"}
 	if got != want {
 		t.Fatalf("GetChange = %+v\nwant %+v", got, want)
 	}
 	if reqs := f.requests("GET", prPath); len(reqs) != 1 || reqs[0].Auth != "Bearer "+installToken {
 		t.Errorf("pull request read = %+v; want one with the installation token", reqs)
+	}
+}
+
+func TestDefaultBranch(t *testing.T) {
+	f := newFake(t)
+	f.reply("GET", "/repos/acme/widgets", 200, map[string]any{"id": repoID, "full_name": "acme/widgets", "default_branch": "trunk"})
+	got, err := f.forge(t).DefaultBranch(ctx, repoID)
+	if err != nil || got != "trunk" {
+		t.Fatalf("DefaultBranch = %q, %v; want trunk", got, err)
+	}
+	if reqs := f.requests("GET", "/repos/acme/widgets"); len(reqs) != 1 || reqs[0].Auth != "Bearer "+installToken {
+		t.Errorf("repository read = %+v; want one with the installation token", reqs)
+	}
+	if _, err := f.forge(t).DefaultBranch(ctx, 901); !errors.Is(err, ErrNotInstalled) {
+		t.Errorf("DefaultBranch without the review App = %v; want ErrNotInstalled", err)
 	}
 }
 

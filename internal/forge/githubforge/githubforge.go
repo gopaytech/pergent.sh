@@ -126,6 +126,10 @@ func (f *Forge) GetChange(ctx context.Context, repoID, number int64) (forge.Chan
 		HeadSHA:      pr.Head.SHA,
 		TargetBranch: pr.Base.Ref,
 		StartSHA:     pr.Base.SHA,
+		Title:        pr.Title,
+		WebURL:       pr.HTMLURL,
+		SourceBranch: pr.Head.Ref,
+		Author:       pr.User.Login,
 	}
 	if ch.Number == 0 {
 		ch.Number = number
@@ -150,6 +154,20 @@ func (f *Forge) GetChange(ctx context.Context, repoID, number int64) (forge.Chan
 	}
 	ch.BaseSHA = base
 	return ch, nil
+}
+
+// DefaultBranch returns the repository's default branch, read through the
+// review App's installation.
+func (f *Forge) DefaultBranch(ctx context.Context, repoID int64) (string, error) {
+	c, r, err := f.client(ctx, repoID)
+	if err != nil {
+		return "", err
+	}
+	repo, err := c.Repo(ctx, r.Owner, r.Name)
+	if err != nil {
+		return "", mapErr(err)
+	}
+	return repo.DefaultBranch, nil
 }
 
 // SetStatus creates a "pergent" Check Run on sha. Running is in_progress;

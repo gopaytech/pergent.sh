@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -68,6 +69,9 @@ type Run struct {
 	Attempts                                       int
 	CreatedAt, DispatchedAt, ReportedAt, NotBefore time.Time
 	CleanedUp                                      bool
+	// Title, WebURL, SourceBranch and Author are the merge request's as
+	// the dispatcher last read them ("" before), for the dashboard.
+	Title, WebURL, SourceBranch, Author string
 }
 
 // ResultOutcome is what StoreResult did with a posted result.
@@ -98,7 +102,8 @@ type ProjectApproval struct {
 
 const runColumns = `id::text, instance, project_id, mr_iid, project_path, head_sha, base_sha, start_sha, target_branch,
 	state, job_name, token_expires_at, result, failure_reason, publish_error, attempts,
-	created_at, dispatched_at, reported_at, not_before, cleaned_up`
+	created_at, dispatched_at, reported_at, not_before, cleaned_up,
+	title, web_url, source_branch, author`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var (
@@ -108,7 +113,8 @@ func scanRun(row pgx.Row) (Run, error) {
 	)
 	err := row.Scan(&r.ID, &r.MR.Instance, &r.MR.ProjectID, &r.MR.IID, &r.ProjectPath, &r.HeadSHA, &r.BaseSHA, &r.StartSHA,
 		&r.TargetBranch, &state, &r.JobName, &tokenExp, &r.Result, &r.FailureReason, &r.PublishError, &r.Attempts,
-		&r.CreatedAt, &dispatched, &rep, &notBefore, &r.CleanedUp)
+		&r.CreatedAt, &dispatched, &rep, &notBefore, &r.CleanedUp,
+		&r.Title, &r.WebURL, &r.SourceBranch, &r.Author)
 	if err != nil {
 		return Run{}, err
 	}
@@ -335,6 +341,37 @@ func (s *Store) Postpone(ctx context.Context, id string, notBefore time.Time) er
 	_, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'queued', not_before = $2
 		WHERE id = $1::uuid AND state IN ('queued', 'running')`, id, notBefore)
 	return err
+}
+
+// ChangeDetails is what the dashboard shows of a run's merge request.
+type ChangeDetails struct {
+	Title, WebURL, SourceBranch, Author string
+}
+
+// maxChangeDetail bounds each stored detail, in bytes.
+const maxChangeDetail = 1000
+
+// SetRunChange records the merge request's details on a run, each cut to
+// 1000 bytes. An unknown run is not an error; a malformed id is.
+func (s *Store) SetRunChange(ctx context.Context, id string, d ChangeDetails) error {
+	if !validUUID(id) {
+		return fmt.Errorf("store: run %q not found", id)
+	}
+	_, err := s.pool.Exec(ctx, `UPDATE runs SET title = $2, web_url = $3, source_branch = $4, author = $5
+		WHERE id = $1::uuid`, id, cutText(d.Title), cutText(d.WebURL), cutText(d.SourceBranch), cutText(d.Author))
+	return err
+}
+
+// cutText shortens s to at most maxChangeDetail bytes, on a rune boundary.
+func cutText(s string) string {
+	if len(s) <= maxChangeDetail {
+		return s
+	}
+	s = s[:maxChangeDetail]
+	for len(s) > 0 && !utf8.ValidString(s) {
+		s = s[:len(s)-1]
+	}
+	return s
 }
 
 // MarkDispatched records the Job started for a running run and the SHA-256 of

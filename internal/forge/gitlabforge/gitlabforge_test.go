@@ -169,6 +169,41 @@ func TestGetChange(t *testing.T) {
 	}
 }
 
+// The title, web address, source branch and author are what the
+// dashboard shows of a merge request.
+func TestGetChangeDetails(t *testing.T) {
+	f := newFake(t)
+	f.on(http.MethodGet, mr, http.StatusOK, map[string]any{"iid": 3, "state": "opened", "sha": "h",
+		"target_branch": "main", "source_branch": "feature/login", "title": "Add login",
+		"web_url": "https://gitlab.example.com/acme/widgets/-/merge_requests/3",
+		"author":  map[string]any{"id": 5, "username": "alice"}})
+	got, err := f.forge().GetChange(context.Background(), 7, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := forge.Change{Number: 3, State: forge.StateOpen, HeadSHA: "h", TargetBranch: "main",
+		SourceBranch: "feature/login", Title: "Add login", Author: "alice",
+		WebURL: "https://gitlab.example.com/acme/widgets/-/merge_requests/3"}
+	if got != want {
+		t.Errorf("GetChange = %+v\nwant %+v", got, want)
+	}
+}
+
+func TestDefaultBranch(t *testing.T) {
+	f := newFake(t)
+	f.on(http.MethodGet, "/projects/7", http.StatusOK, map[string]any{"id": 7, "default_branch": "trunk"})
+	got, err := f.forge().DefaultBranch(context.Background(), 7)
+	if err != nil || got != "trunk" {
+		t.Fatalf("DefaultBranch = %q, %v; want trunk", got, err)
+	}
+	if r := f.only(); r.Token != reviewToken {
+		t.Errorf("request = %+v; want the review token", r)
+	}
+	if _, err := newFake(t).forge().DefaultBranch(context.Background(), 7); !errors.Is(err, forge.ErrNotFound) {
+		t.Errorf("DefaultBranch of a missing project = %v; want forge.ErrNotFound", err)
+	}
+}
+
 func TestGetChangeNotFound(t *testing.T) {
 	f := newFake(t)
 	_, err := f.forge().GetChange(context.Background(), 7, 3)

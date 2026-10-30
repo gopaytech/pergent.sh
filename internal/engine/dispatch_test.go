@@ -137,6 +137,27 @@ func TestDispatchLaunchesJob(t *testing.T) {
 	}
 }
 
+// The merge request's title, web address, source branch and author are
+// stored on the run for the dashboard, also when the run can't start.
+func TestDispatchStoresChangeDetails(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Enqueue(3, head)
+	mr := openMR(3, head)
+	mr.Title, mr.SourceBranch = "Add login", "feature/login"
+	mr.WebURL = "https://gitlab.example.com/acme/widgets/-/merge_requests/3"
+	mr.Author = gitlab.User{ID: 5, Username: "alice"}
+	env.GitLab.SetMR(mr)
+	env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+
+	dispatch(t, env)
+
+	run := env.Run(id)
+	if run.Title != "Add login" || run.WebURL != mr.WebURL || run.SourceBranch != "feature/login" || run.Author != "alice" {
+		t.Errorf("run details = %q %q %q %q", run.Title, run.WebURL, run.SourceBranch, run.Author)
+	}
+}
+
 func TestDispatchUsesPreviousResult(t *testing.T) {
 	env := newTestEnv(t)
 	prev := []byte(`{"schema_version":1,"status":"completed","skills":[{"name":"security","verdict":"has_blocking_issues","findings":[{"id":"f1","title":"x"}],"files":{"reviewed":["a.go"]}}]}`)
