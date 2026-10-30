@@ -313,3 +313,58 @@ func TestNothingReviewedCapCountsPaths(t *testing.T) {
 		t.Errorf("comment: %q", d.Comment)
 	}
 }
+
+const zwsp = "​"
+
+func TestNeutralizeQuickActions(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"line of its own", "x\n/approve\ny", "x\n" + zwsp + "/approve\ny"},
+		{"indented", "  /merge", "  " + zwsp + "/merge"},
+		{"tab indented", "\t/close", "\t" + zwsp + "/close"},
+		{"first line", "/unapprove", zwsp + "/unapprove"},
+		{"inside a fence", "```\n/target_branch main\n```", "```\n" + zwsp + "/target_branch main\n```"},
+		{"CRLF", "a\r\n/label ~x\r\n", "a\r\n" + zwsp + "/label ~x\r\n"},
+		{"slash mid-line", "use a/b and /approve", "use a/b and /approve"},
+		{"marker and block untouched", Marker + "\nbody\n" + findingsBlock + "\n", Marker + "\nbody\n" + findingsBlock + "\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := NeutralizeQuickActions(tc.in); got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// Every comment Decide returns has its quick actions neutralised: model text
+// an MR can steer must never make the review bot run /approve, /close...
+func TestDecideNeutralizesQuickActions(t *testing.T) {
+	steered := Marker + "\n### review\n\nexplanation\n/approve\n  /merge\n```\n/close\n```\n\n" + findingsBlock
+	errRes := &result.Result{SchemaVersion: 1, Status: "error", Error: &result.Error{Code: "x", Message: "boom\n/approve"}}
+	clean := completed(skill("a", "no_blocking_issues", "f.go"))
+	clean.Comment.Markdown = steered
+	nothing := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Skipped: []result.Skipped{{Path: "/approve", Rule: "lockfile"}}}})
+	nothing.Comment.Markdown = steered
+	for name, o := range map[string]Outcome{
+		"clean":          {Result: clean},
+		"nothing":        {Result: nothing},
+		"error result":   {Result: errRes},
+		"failure reason": {FailureReason: "x\n/approve"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := Decide(o, config.FailureStatusFailed)
+			for _, line := range strings.Split(d.Comment, "\n") {
+				if strings.HasPrefix(strings.TrimLeft(line, " \t"), "/") {
+					t.Errorf("line %q would run as a quick action in %q", line, d.Comment)
+				}
+			}
+			if !strings.Contains(d.Comment, Marker) {
+				t.Errorf("marker lost: %q", d.Comment)
+			}
+		})
+	}
+	d := Decide(Outcome{Result: clean}, config.FailureStatusFailed)
+	if !strings.HasSuffix(d.Comment, "\n"+findingsBlock) {
+		t.Errorf("findings block changed: %q", d.Comment)
+	}
+}

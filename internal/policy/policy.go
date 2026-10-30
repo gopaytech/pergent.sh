@@ -52,8 +52,38 @@ type Decision struct {
 }
 
 // Decide applies the approval policy. failure is the repository's
-// failure_status; it picks the status of every "could not review" row.
+// failure_status; it picks the status of every "could not review" row. The
+// comment it returns has its quick actions neutralised (NeutralizeQuickActions),
+// whatever the path that built it.
 func Decide(o Outcome, failure config.FailureStatus) Decision {
+	d := decide(o, failure)
+	d.Comment = NeutralizeQuickActions(d.Comment)
+	return d
+}
+
+// NeutralizeQuickActions stops GitLab from running quick actions in a
+// comment. GitLab runs a line such as "/approve" or "/close" in a note
+// created through the API as a command of the note's author, and the comment
+// carries model text a merge request can steer. Every line whose first
+// non-blank character is "/" gets a zero-width space (U+200B) before the
+// slash, inside code fences too, so it renders the same and runs nothing.
+// The marker and the findings block start with "<" and are left alone.
+func NeutralizeQuickActions(comment string) string {
+	if !strings.Contains(comment, "/") {
+		return comment
+	}
+	lines := strings.SplitAfter(comment, "\n")
+	for i, line := range lines {
+		rest := strings.TrimLeft(line, " \t")
+		if strings.HasPrefix(rest, "/") {
+			indent := line[:len(line)-len(rest)]
+			lines[i] = indent + "\u200b" + rest
+		}
+	}
+	return strings.Join(lines, "")
+}
+
+func decide(o Outcome, failure config.FailureStatus) Decision {
 	failed := failureStatus(failure)
 
 	if o.FailureReason != "" {
