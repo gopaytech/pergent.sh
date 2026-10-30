@@ -214,7 +214,7 @@ func TestSweepErrorsAreSkipped(t *testing.T) {
 func TestSweepUnknownInstanceQuiet(t *testing.T) {
 	env := newTestEnv(t)
 	approved(t, env, 1, sha('a'))
-	env.Engine.Bots = map[string]Bots{}
+	env.Engine.Platforms = map[string]Platform{}
 
 	sweep(t, env)
 

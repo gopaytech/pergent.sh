@@ -805,7 +805,7 @@ func TestStaleApprovalFailureAndUnknownInstance(t *testing.T) {
 	}
 
 	// Without bots for the instance, the approval is left alone, quietly.
-	env.Engine.Bots = map[string]Bots{}
+	env.Engine.Platforms = map[string]Platform{}
 	env.GitLab.Reset()
 	before := len(env.Logs())
 	cleanup(t, env)

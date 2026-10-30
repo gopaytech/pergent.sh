@@ -13,7 +13,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
-	"github.com/gopaytech/pergent.sh/internal/gitlab"
+	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/result"
@@ -92,42 +92,42 @@ type dispatcher struct {
 func (d *dispatcher) dispatch(ctx context.Context) error {
 	e, run := d.e, d.run
 
-	bots, haveBots := e.Bots[run.MR.Instance]
+	plat, havePlat := e.Platforms[run.MR.Instance]
 	repo, haveRepo := e.Config.Repository(run.MR.Instance, run.ProjectPath)
-	if !haveBots || bots.Review == nil || !haveRepo {
+	if !havePlat || plat.Forge == nil || !haveRepo {
 		// The repository was switched off (or its instance removed) after
 		// the run was queued: nothing is reviewed or posted there any more.
 		d.log.Warn("dropping run: its repository is no longer configured")
 		return d.supersede(ctx)
 	}
 
-	mr, err := bots.Review.GetMergeRequest(ctx, run.MR.ProjectID, run.MR.IID)
+	mr, err := plat.Forge.GetChange(ctx, run.MR.ProjectID, run.MR.IID)
 	if err != nil {
 		return d.retry(ctx, fmt.Errorf("get merge request: %w", err))
 	}
-	if mr.State != "opened" {
+	if mr.State != forge.StateOpen {
 		d.log.Info("merge request is no longer open; run superseded", "state", mr.State)
 		return d.supersede(ctx)
 	}
-	if mr.SHA != "" && (mr.SHA != run.HeadSHA || mr.TargetBranch != run.TargetBranch) {
+	if mr.HeadSHA != "" && (mr.HeadSHA != run.HeadSHA || mr.TargetBranch != run.TargetBranch) {
 		// Push webhooks can arrive out of order, and a retarget's may not
 		// have arrived yet, so the newest head and target may have no run:
 		// queue one. EnqueueRun supersedes this run (and any other live run
 		// of another head or target) in the same transaction.
 		d.log.Info("merge request head or target branch moved; run superseded",
-			"new_head", mr.SHA, "new_target", mr.TargetBranch, "run_target", run.TargetBranch)
+			"new_head", mr.HeadSHA, "new_target", mr.TargetBranch, "run_target", run.TargetBranch)
 		sctx, cancel := settleCtx(ctx)
 		defer cancel()
-		if _, _, err := e.Store.EnqueueRun(sctx, run.MR, run.ProjectPath, mr.SHA, mr.TargetBranch); err != nil {
-			return fmt.Errorf("enqueue new head %s: %w", mr.SHA, err)
+		if _, _, err := e.Store.EnqueueRun(sctx, run.MR, run.ProjectPath, mr.HeadSHA, mr.TargetBranch); err != nil {
+			return fmt.Errorf("enqueue new head %s: %w", mr.HeadSHA, err)
 		}
 		e.Wake()
 		return nil
 	}
-	refs := mr.DiffRefs
-	if mr.SHA == "" || refs.BaseSHA == "" || refs.StartSHA == "" || refs.HeadSHA != run.HeadSHA {
-		// GitLab is still computing the merge request's diff. Waiting is
-		// not a failed attempt, but it can't go on for ever.
+	if mr.HeadSHA == "" || mr.BaseSHA == "" || mr.StartSHA == "" {
+		// GitLab is still computing the merge request's diff (for this
+		// head: the forge leaves BaseSHA and StartSHA empty until then).
+		// Waiting is not a failed attempt, but it can't go on for ever.
 		if e.now().Sub(run.CreatedAt) > diffRefsPatience {
 			return d.fail(ctx, reasonNoDiff)
 		}
@@ -160,7 +160,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		}
 	}
 
-	in, err := inputs.Resolve(ctx, source{bots.Review}, e.Library, repo, run.MR.ProjectID, refs.StartSHA, previous)
+	in, err := inputs.Resolve(ctx, source{plat.Forge}, e.Library, repo, run.MR.ProjectID, mr.StartSHA, previous)
 	if err != nil {
 		var se *sourceError
 		if errors.As(err, &se) {
@@ -195,7 +195,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		RepoURL:        project.HTTPURLToRepo,
 		MRIID:          run.MR.IID,
 		TargetBranch:   mr.TargetBranch,
-		BaseSHA:        refs.BaseSHA,
+		BaseSHA:        mr.BaseSHA,
 		HeadSHA:        run.HeadSHA,
 		GitUsername:    project.DeployTokenUsername,
 		ResultURL:      strings.TrimRight(e.Config.CallbackURL, "/") + "/runs/" + run.ID + "/result",
@@ -213,7 +213,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		return d.retry(ctx, fmt.Errorf("launch job: %w", err))
 	}
 
-	err = e.Store.MarkDispatched(ctx, run.ID, name, refs.BaseSHA, refs.StartSHA, tokenHash, expires, now)
+	err = e.Store.MarkDispatched(ctx, run.ID, name, mr.BaseSHA, mr.StartSHA, tokenHash, expires, now)
 	if errors.Is(err, store.ErrNotRunning) {
 		d.log.Info("run was superseded while its job started; deleting the job", "job", name)
 		d.deleteJob(ctx, name)
@@ -227,7 +227,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	}
 	d.log.Info("review job started", "job", name)
 
-	if err := bots.Review.SetCommitStatus(ctx, run.MR.ProjectID, run.HeadSHA, gitlab.StatusRunning, runningDescription); err != nil {
+	if err := plat.Forge.SetStatus(ctx, run.MR.ProjectID, run.HeadSHA, forge.StatusRunning, runningDescription); err != nil {
 		d.log.Warn("couldn't set the running commit status", "error", d.redact(err.Error()))
 	}
 	return nil
@@ -356,7 +356,7 @@ func (s source) GetFile(ctx context.Context, projectID int64, path, ref string) 
 	return b, ok, nil
 }
 
-func (s source) ListTree(ctx context.Context, projectID int64, path, ref string) ([]gitlab.TreeEntry, error) {
+func (s source) ListTree(ctx context.Context, projectID int64, path, ref string) ([]forge.TreeEntry, error) {
 	entries, err := s.src.ListTree(ctx, projectID, path, ref)
 	if err != nil {
 		return nil, &sourceError{err}

@@ -28,6 +28,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/forge/gitlabforge"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/kube"
@@ -307,11 +308,10 @@ func newTestEnv(t *testing.T) *testEnv {
 	env.Engine = &Engine{
 		Store:  st,
 		Config: cfg,
-		Bots: map[string]Bots{testInstance: {
-			Review:      gl.Client(testReviewToken),
-			Approve:     gl.Client(testApproveToken),
-			ReviewUser:  gitlab.User{ID: 100, Username: "pergent-review"},
-			ApproveUser: gitlab.User{ID: testApproveUserID, Username: "pergent-approve"},
+		Platforms: map[string]Platform{testInstance: {
+			Forge:    gitlabforge.NewForge(gl.Client(testReviewToken), gitlab.User{ID: 100, Username: "pergent-review"}),
+			Approver: gitlabforge.NewApprover(gl.Client(testApproveToken), gitlab.User{ID: testApproveUserID, Username: "pergent-approve"}),
+			GitLab:   gl.Client(testReviewToken),
 		}},
 		WebhookSecrets: map[string]string{testInstance: testWebhookSecret},
 		Launcher:       launcher,

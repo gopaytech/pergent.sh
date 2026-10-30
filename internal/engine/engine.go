@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/kube"
@@ -19,19 +20,23 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
-// Bots are the two GitLab users of one instance. Their tokens can comment,
-// set statuses and approve, so they never reach a Job. ReviewUser and
-// ApproveUser are the users the Review and Approve tokens belong to.
-type Bots struct {
-	Review, Approve         *gitlab.Client
-	ReviewUser, ApproveUser gitlab.User
+// Platform is one configured instance as the engine reaches it. Forge is the
+// review bot and Approver the approve bot; their tokens can comment, set
+// statuses and approve, so they never reach a Job. GitLab is the review bot's
+// own client on a GitLab instance, for what is still GitLab-only: reconcile's
+// webhooks and deploy tokens. Reviewing, publishing, cleaning up and the
+// approval sweep go through Forge and Approver alone.
+type Platform struct {
+	Forge    forge.Forge
+	Approver forge.Approver
+	GitLab   *gitlab.Client
 }
 
-// Engine holds what the loops share. Bots is keyed by instance name.
+// Engine holds what the loops share. Platforms is keyed by instance name.
 type Engine struct {
-	Store  *store.Store
-	Config *config.Config
-	Bots   map[string]Bots
+	Store     *store.Store
+	Config    *config.Config
+	Platforms map[string]Platform
 	// WebhookSecrets maps an instance name to the secret its project hooks
 	// are created with.
 	WebhookSecrets map[string]string

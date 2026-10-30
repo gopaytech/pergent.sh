@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/gopaytech/pergent.sh/internal/gitlab"
+	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -36,14 +36,14 @@ func (e *Engine) SweepApprovals(ctx context.Context) error {
 		}
 		log := e.log().With("instance", a.MR.Instance, "project_id", a.MR.ProjectID, "mr", a.MR.IID,
 			"approved", a.ApprovedSHA, "approved_target", a.ApprovedTarget)
-		bots, ok := e.Bots[a.MR.Instance]
-		if !ok || bots.Review == nil || bots.Approve == nil {
+		plat, ok := e.Platforms[a.MR.Instance]
+		if !ok || plat.Forge == nil || plat.Approver == nil {
 			// The instance was removed from the config; it is listed on every
 			// sweep, so don't log it above debug.
 			log.Debug("skipping the approval: no GitLab bots for the instance")
 			continue
 		}
-		queued, err := e.sweepApproval(ctx, bots, a, log)
+		queued, err := e.sweepApproval(ctx, plat, a, log)
 		if err != nil {
 			if ctx.Err() != nil {
 				break
@@ -60,9 +60,9 @@ func (e *Engine) SweepApprovals(ctx context.Context) error {
 }
 
 // sweepApproval handles one approval and reports whether it queued a run.
-func (e *Engine) sweepApproval(ctx context.Context, bots Bots, a store.Approval, log *slog.Logger) (bool, error) {
-	mr, err := bots.Review.GetMergeRequest(ctx, a.MR.ProjectID, a.MR.IID)
-	if errors.Is(err, gitlab.ErrNotFound) {
+func (e *Engine) sweepApproval(ctx context.Context, plat Platform, a store.Approval, log *slog.Logger) (bool, error) {
+	mr, err := plat.Forge.GetChange(ctx, a.MR.ProjectID, a.MR.IID)
+	if errors.Is(err, forge.ErrNotFound) {
 		log.Info("approval forgotten: the merge request is gone")
 		return false, e.clearApproval(ctx, a)
 	}
@@ -70,12 +70,12 @@ func (e *Engine) sweepApproval(ctx context.Context, bots Bots, a store.Approval,
 		return false, fmt.Errorf("get merge request: %w", err)
 	}
 	switch mr.State {
-	case "opened":
-	case "merged":
+	case forge.StateOpen:
+	case forge.StateMerged:
 		log.Info("approval forgotten: the merge request is merged")
 		return false, e.clearApproval(ctx, a)
-	case "closed":
-		if err := e.unapprove(ctx, bots, a); err != nil {
+	case forge.StateClosed:
+		if err := e.unapprove(ctx, plat.Approver, a); err != nil {
 			return false, err
 		}
 		log.Info("approval of a closed merge request removed")
@@ -84,16 +84,16 @@ func (e *Engine) sweepApproval(ctx context.Context, bots Bots, a store.Approval,
 		return false, nil
 	}
 	targetMoved := a.ApprovedTarget != "" && mr.TargetBranch != a.ApprovedTarget
-	if mr.SHA == a.ApprovedSHA && !targetMoved {
+	if mr.HeadSHA == a.ApprovedSHA && !targetMoved {
 		return false, nil
 	}
 
-	if err := e.unapprove(ctx, bots, a); err != nil {
+	if err := e.unapprove(ctx, plat.Approver, a); err != nil {
 		return false, err
 	}
 	log.Info("stale approval removed: the merge request moved without a webhook pergent.sh saw",
-		"mr_head", mr.SHA, "mr_target", mr.TargetBranch)
-	if mr.SHA == "" {
+		"mr_head", mr.HeadSHA, "mr_target", mr.TargetBranch)
+	if mr.HeadSHA == "" {
 		return false, nil
 	}
 	project, found, err := e.Store.Project(ctx, a.MR.Instance, a.MR.ProjectID)
@@ -107,11 +107,11 @@ func (e *Engine) sweepApproval(ctx context.Context, bots Bots, a store.Approval,
 	if !ok {
 		return false, nil
 	}
-	id, created, err := e.Store.EnqueueRun(ctx, a.MR, repo.Project, mr.SHA, mr.TargetBranch)
+	id, created, err := e.Store.EnqueueRun(ctx, a.MR, repo.Project, mr.HeadSHA, mr.TargetBranch)
 	if err != nil {
 		return false, fmt.Errorf("enqueue the current head: %w", err)
 	}
-	log.Info("queued a review of the current head", "run", id, "created", created, "head", mr.SHA, "target", mr.TargetBranch)
+	log.Info("queued a review of the current head", "run", id, "created", created, "head", mr.HeadSHA, "target", mr.TargetBranch)
 	return created, nil
 }
 

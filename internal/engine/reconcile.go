@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/gitlab"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -105,8 +106,8 @@ func (e *Engine) keep(p store.Project, resolved map[repoKey]int64) bool {
 // reconcileRepo brings one configured repository in line and returns its
 // project id.
 func (e *Engine) reconcileRepo(ctx context.Context, repo config.Repository, now time.Time) (int64, error) {
-	bots, ok := e.Bots[repo.GitLab]
-	if !ok || bots.Review == nil {
+	gl := e.gitLab(repo.GitLab)
+	if gl == nil {
 		return 0, fmt.Errorf("no GitLab bots for instance %q", repo.GitLab)
 	}
 	secret := e.WebhookSecrets[repo.GitLab]
@@ -114,7 +115,7 @@ func (e *Engine) reconcileRepo(ctx context.Context, repo config.Repository, now 
 		return 0, fmt.Errorf("no webhook secret for instance %q", repo.GitLab)
 	}
 
-	gp, err := bots.Review.GetProject(ctx, repo.Project)
+	gp, err := gl.GetProject(ctx, repo.Project)
 	if err != nil {
 		return 0, fmt.Errorf("get project: %w", err)
 	}
@@ -127,7 +128,7 @@ func (e *Engine) reconcileRepo(ctx context.Context, repo config.Repository, now 
 		return 0, fmt.Errorf("store project: %w", err)
 	}
 
-	hookID, err := bots.Review.EnsureHook(ctx, gp.ID, HookURL(e.Config.PublicURL, repo.GitLab), secret)
+	hookID, err := gl.EnsureHook(ctx, gp.ID, HookURL(e.Config.PublicURL, repo.GitLab), secret)
 	if err != nil {
 		return 0, fmt.Errorf("ensure webhook: %w", err)
 	}
@@ -148,7 +149,7 @@ func (e *Engine) reconcileRepo(ctx context.Context, repo config.Repository, now 
 			"instance", repo.GitLab, "project", repo.Project, "deploy_token_id", p.DeployTokenID)
 	}
 	old := p.DeployTokenID
-	dt, err := bots.Review.CreateDeployToken(ctx, gp.ID, deployTokenName, now.Add(deployTokenLife))
+	dt, err := gl.CreateDeployToken(ctx, gp.ID, deployTokenName, now.Add(deployTokenLife))
 	if err != nil {
 		return 0, fmt.Errorf("create deploy token: %w", err)
 	}
@@ -165,7 +166,7 @@ func (e *Engine) reconcileRepo(ctx context.Context, repo config.Repository, now 
 		// The new token is unknown to the store: revoke it, keep the old.
 		sctx, cancel := settleCtx(ctx)
 		defer cancel()
-		if derr := bots.Review.DeleteDeployToken(sctx, gp.ID, dt.ID); derr != nil {
+		if derr := gl.DeleteDeployToken(sctx, gp.ID, dt.ID); derr != nil {
 			e.log().Warn("couldn't revoke the deploy token that wasn't stored", "instance", repo.GitLab,
 				"project", repo.Project, "deploy_token_id", dt.ID, "error", e.redact(derr.Error()))
 		}
@@ -174,7 +175,7 @@ func (e *Engine) reconcileRepo(ctx context.Context, repo config.Repository, now 
 	e.log().Info("deploy token created", "instance", repo.GitLab, "project", repo.Project,
 		"deploy_token_id", dt.ID, "expires_at", p.DeployTokenExpiresAt, "replaced", old)
 	if old != 0 && old != dt.ID {
-		if err := bots.Review.DeleteDeployToken(ctx, gp.ID, old); err != nil {
+		if err := gl.DeleteDeployToken(ctx, gp.ID, old); err != nil {
 			return 0, fmt.Errorf("revoke the replaced deploy token %d: %w", old, err)
 		}
 	}
@@ -196,18 +197,18 @@ func (e *Engine) removeProject(ctx context.Context, p store.Project) error {
 			"hook_id", p.HookID, "deploy_token_id", p.DeployTokenID, "deploy_token_expires_at", p.DeployTokenExpiresAt)
 		return nil
 	}
-	bots, ok := e.Bots[p.Instance]
-	if !ok || bots.Review == nil {
+	gl := e.gitLab(p.Instance)
+	if gl == nil {
 		return fmt.Errorf("no GitLab bots for instance %q", p.Instance)
 	}
 	var errs []error
 	if p.HookID != 0 {
-		if err := bots.Review.DeleteHook(ctx, p.ProjectID, p.HookID); err != nil {
+		if err := gl.DeleteHook(ctx, p.ProjectID, p.HookID); err != nil {
 			errs = append(errs, fmt.Errorf("delete webhook: %w", err))
 		}
 	}
 	if p.DeployTokenID != 0 {
-		if err := bots.Review.DeleteDeployToken(ctx, p.ProjectID, p.DeployTokenID); err != nil {
+		if err := gl.DeleteDeployToken(ctx, p.ProjectID, p.DeployTokenID); err != nil {
 			errs = append(errs, fmt.Errorf("revoke deploy token: %w", err))
 		}
 	}
@@ -220,4 +221,13 @@ func (e *Engine) removeProject(ctx context.Context, p store.Project) error {
 	e.log().Info("repository switched off: webhook and deploy token removed",
 		"instance", p.Instance, "project", p.Path, "project_id", p.ProjectID)
 	return nil
+}
+
+// gitLab is the review bot's GitLab client of a configured GitLab instance,
+// or nil. Reconcile's webhooks and deploy tokens are GitLab's alone.
+func (e *Engine) gitLab(instance string) *gitlab.Client {
+	if _, ok := e.Config.Instance(instance); !ok {
+		return nil
+	}
+	return e.Platforms[instance].GitLab
 }

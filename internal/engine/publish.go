@@ -5,11 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/forge"
+	"github.com/gopaytech/pergent.sh/internal/forge/gitlabforge"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
 	"github.com/gopaytech/pergent.sh/internal/policy"
 	"github.com/gopaytech/pergent.sh/internal/result"
@@ -28,19 +29,24 @@ const (
 	supersededDescription = "Superseded by a newer push"
 )
 
-// GitLabState maps a policy status to a GitLab commit status state. GitLab
-// has no neutral state, so neutral is "skipped". Anything else, unknown
-// statuses included, is "failed": a status pergent.sh doesn't know is never
-// success.
-func GitLabState(s policy.Status) gitlab.StatusState {
+// StatusState maps a policy status to the status set on the head. Anything
+// but success and neutral, unknown statuses included, is failed: a status
+// pergent.sh doesn't know is never success.
+func StatusState(s policy.Status) forge.StatusState {
 	switch s {
 	case policy.StatusSuccess:
-		return gitlab.StatusSuccess
+		return forge.StatusSuccess
 	case policy.StatusNeutral:
-		return gitlab.StatusSkipped
+		return forge.StatusNeutral
 	default:
-		return gitlab.StatusFailed
+		return forge.StatusFailed
 	}
+}
+
+// GitLabState is the GitLab commit status state a policy status ends up as.
+// GitLab has no neutral state, so neutral is "skipped".
+func GitLabState(s policy.Status) gitlab.StatusState {
+	return gitlabforge.State(StatusState(s))
 }
 
 // publishBackoff is the delay before the next publish of a run that has
@@ -87,8 +93,8 @@ func (e *Engine) PublishOnce(ctx context.Context) error {
 
 // publish posts one run. Any error means the run was not published.
 func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) error {
-	bots, ok := e.Bots[run.MR.Instance]
-	if !ok || bots.Review == nil {
+	plat, ok := e.Platforms[run.MR.Instance]
+	if !ok || plat.Forge == nil {
 		return fmt.Errorf("no GitLab bots for instance %q", run.MR.Instance)
 	}
 	failure := config.FailureStatusFailed
@@ -97,14 +103,14 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 	}
 	d := policy.Decide(e.outcome(run, log), failure)
 
-	if err := e.upsertComment(ctx, bots, run, d.Comment); err != nil {
+	if err := e.upsertComment(ctx, plat.Forge, run, d.Comment); err != nil {
 		return fmt.Errorf("post comment: %w", err)
 	}
-	if err := bots.Review.SetCommitStatus(ctx, run.MR.ProjectID, run.HeadSHA, GitLabState(d.Status), d.Description); err != nil {
+	if err := plat.Forge.SetStatus(ctx, run.MR.ProjectID, run.HeadSHA, StatusState(d.Status), d.Description); err != nil {
 		return fmt.Errorf("set commit status: %w", err)
 	}
 	if d.Approve {
-		if err := e.approve(ctx, bots, run, log); err != nil {
+		if err := e.approve(ctx, plat, run, log); err != nil {
 			return err
 		}
 	}
@@ -140,29 +146,29 @@ func (e *Engine) outcome(run store.Run, log *slog.Logger) policy.Outcome {
 // with the review bot. The stored note is tried first; when it was deleted,
 // the review bot's note carrying the marker is looked up, and only when there
 // is none is a new one created.
-func (e *Engine) upsertComment(ctx context.Context, bots Bots, run store.Run, body string) error {
+func (e *Engine) upsertComment(ctx context.Context, f forge.Forge, run store.Run, body string) error {
 	pid, iid := run.MR.ProjectID, run.MR.IID
 	stored, err := e.Store.NoteID(ctx, run.MR)
 	if err != nil {
 		return fmt.Errorf("load note id: %w", err)
 	}
 	if stored != 0 {
-		err := bots.Review.UpdateNote(ctx, pid, iid, stored, body)
+		err := f.UpdateComment(ctx, pid, iid, stored, body)
 		if err == nil {
 			return nil
 		}
-		if !errors.Is(err, gitlab.ErrNotFound) {
+		if !errors.Is(err, forge.ErrNotFound) {
 			return err
 		}
 	}
 
-	noteID, found, err := bots.Review.FindNote(ctx, pid, iid, bots.ReviewUser.ID, policy.Marker)
+	noteID, found, err := f.FindComment(ctx, pid, iid, policy.Marker)
 	if err != nil {
 		return fmt.Errorf("find note: %w", err)
 	}
 	if found && noteID != stored {
-		err := bots.Review.UpdateNote(ctx, pid, iid, noteID, body)
-		if err != nil && !errors.Is(err, gitlab.ErrNotFound) {
+		err := f.UpdateComment(ctx, pid, iid, noteID, body)
+		if err != nil && !errors.Is(err, forge.ErrNotFound) {
 			return err
 		}
 		found = err == nil
@@ -170,7 +176,7 @@ func (e *Engine) upsertComment(ctx context.Context, bots Bots, run store.Run, bo
 		found = false
 	}
 	if !found {
-		if noteID, err = bots.Review.CreateNote(ctx, pid, iid, body); err != nil {
+		if noteID, err = f.CreateComment(ctx, pid, iid, body); err != nil {
 			return fmt.Errorf("create note: %w", err)
 		}
 	}
@@ -187,19 +193,19 @@ func (e *Engine) upsertComment(ctx context.Context, bots Bots, run store.Run, bo
 // The approval is recorded before it is made, so an approval that reaches
 // GitLab is always known and can be removed when it goes stale, even if
 // pergent.sh stops right after it. GitLab refuses a second approval by the
-// same user, so a refused approval counts as made when the approve bot is
-// already among the approvers (a retry after an approval that landed).
-func (e *Engine) approve(ctx context.Context, bots Bots, run store.Run, log *slog.Logger) error {
-	if bots.Approve == nil {
+// same user, so a refused approval counts as made when the approve bot
+// already approves (a retry after an approval that landed).
+func (e *Engine) approve(ctx context.Context, plat Platform, run store.Run, log *slog.Logger) error {
+	if plat.Approver == nil {
 		return fmt.Errorf("no approve bot for instance %q", run.MR.Instance)
 	}
-	mr, err := bots.Review.GetMergeRequest(ctx, run.MR.ProjectID, run.MR.IID)
+	mr, err := plat.Forge.GetChange(ctx, run.MR.ProjectID, run.MR.IID)
 	if err != nil {
 		return fmt.Errorf("get merge request: %w", err)
 	}
-	if mr.State != "opened" || mr.SHA != run.HeadSHA || mr.TargetBranch != run.TargetBranch {
+	if mr.State != forge.StateOpen || mr.HeadSHA != run.HeadSHA || mr.TargetBranch != run.TargetBranch {
 		log.Info("not approving: the merge request is closed, or its head or target branch moved",
-			"state", mr.State, "mr_head", mr.SHA, "mr_target", mr.TargetBranch, "run_target", run.TargetBranch)
+			"state", mr.State, "mr_head", mr.HeadSHA, "mr_target", mr.TargetBranch, "run_target", run.TargetBranch)
 		return nil
 	}
 
@@ -210,18 +216,15 @@ func (e *Engine) approve(ctx context.Context, bots Bots, run store.Run, log *slo
 		return fmt.Errorf("record approval: %w", err)
 	}
 
-	err = bots.Approve.Approve(ctx, run.MR.ProjectID, run.MR.IID, run.HeadSHA)
-	if errors.Is(err, gitlab.ErrHeadMoved) {
+	err = plat.Approver.Approve(ctx, run.MR.ProjectID, run.MR.IID, run.HeadSHA)
+	if errors.Is(err, forge.ErrHeadMoved) {
 		log.Info("not approving: the merge request head moved")
 		return nil
 	}
 	if err != nil {
-		if bots.ApproveUser.ID != 0 {
-			ids, lerr := bots.Approve.ApprovedBy(ctx, run.MR.ProjectID, run.MR.IID)
-			if lerr == nil && slices.Contains(ids, bots.ApproveUser.ID) {
-				log.Info("the approve bot already approves the merge request", "refused_with", e.redact(err.Error()))
-				return nil
-			}
+		if approved, lerr := plat.Approver.HasApproved(ctx, run.MR.ProjectID, run.MR.IID); lerr == nil && approved {
+			log.Info("the approve bot already approves the merge request", "refused_with", e.redact(err.Error()))
+			return nil
 		}
 		return fmt.Errorf("approve: %w", err)
 	}
@@ -277,14 +280,14 @@ func (e *Engine) CleanupOnce(ctx context.Context) error {
 			break
 		}
 		log := e.log().With("instance", a.MR.Instance, "project_id", a.MR.ProjectID, "mr", a.MR.IID, "approved", a.ApprovedSHA)
-		bots, ok := e.Bots[a.MR.Instance]
-		if !ok || bots.Approve == nil {
+		plat, ok := e.Platforms[a.MR.Instance]
+		if !ok || plat.Approver == nil {
 			// The instance was removed from the config; it stays listed on
 			// every pass, so don't log it above debug.
 			log.Debug("skipping the stale approval: no approve bot for the instance")
 			continue
 		}
-		if err := e.unapprove(ctx, bots, a); err != nil {
+		if err := e.unapprove(ctx, plat.Approver, a); err != nil {
 			log.Warn("couldn't remove the stale approval; will try again", "error", e.redact(err.Error()))
 			continue
 		}
@@ -300,9 +303,9 @@ func (e *Engine) cleanUp(ctx context.Context, run store.Run, log *slog.Logger) e
 		}
 	}
 	if !run.DispatchedAt.IsZero() {
-		bots, ok := e.Bots[run.MR.Instance]
-		if ok && bots.Review != nil {
-			if err := bots.Review.SetCommitStatus(ctx, run.MR.ProjectID, run.HeadSHA, gitlab.StatusCanceled, supersededDescription); err != nil {
+		plat, ok := e.Platforms[run.MR.Instance]
+		if ok && plat.Forge != nil {
+			if err := plat.Forge.SetStatus(ctx, run.MR.ProjectID, run.HeadSHA, forge.StatusCanceled, supersededDescription); err != nil {
 				return fmt.Errorf("set canceled status: %w", err)
 			}
 		} else {
@@ -321,8 +324,8 @@ func (e *Engine) cleanUp(ctx context.Context, run store.Run, log *slog.Logger) e
 // unapprove removes the approve bot's stale approval, then clears the record
 // only if it still names the stale commit: an approval of a newer head
 // recorded meanwhile is kept.
-func (e *Engine) unapprove(ctx context.Context, bots Bots, a store.Approval) error {
-	if err := bots.Approve.Unapprove(ctx, a.MR.ProjectID, a.MR.IID); err != nil {
+func (e *Engine) unapprove(ctx context.Context, ap forge.Approver, a store.Approval) error {
+	if err := ap.Unapprove(ctx, a.MR.ProjectID, a.MR.IID); err != nil {
 		return fmt.Errorf("unapprove: %w", err)
 	}
 	if err := e.Store.ClearApprovedSHA(ctx, a.MR, a.ApprovedSHA, a.ApprovedTarget); err != nil {

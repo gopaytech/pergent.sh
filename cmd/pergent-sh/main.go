@@ -27,6 +27,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/engine"
+	"github.com/gopaytech/pergent.sh/internal/forge/gitlabforge"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/kube"
@@ -119,7 +120,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		return err
 	}
 
-	bots, hookSecrets, err := connectGitLab(ctx, cfg)
+	platforms, hookSecrets, err := connectGitLab(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -135,7 +136,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	eng := &engine.Engine{
 		Store:          st,
 		Config:         cfg,
-		Bots:           bots,
+		Platforms:      platforms,
 		WebhookSecrets: hookSecrets,
 		Launcher:       &kube.Launcher{Client: clientset, Namespace: cfg.Jobs.Namespace},
 		Library:        lib,
@@ -211,30 +212,34 @@ func checkSkills(cfg *config.Config, lib inputs.Library) error {
 }
 
 // connectGitLab builds the review and approve clients of every instance and
-// checks each token by asking who it belongs to. It returns the bots and the
-// webhook secrets by instance.
-func connectGitLab(ctx context.Context, cfg *config.Config) (map[string]engine.Bots, map[string]string, error) {
-	bots := make(map[string]engine.Bots, len(cfg.GitLab))
+// checks each token by asking who it belongs to. It returns the platforms
+// and the webhook secrets by instance.
+func connectGitLab(ctx context.Context, cfg *config.Config) (map[string]engine.Platform, map[string]string, error) {
+	platforms := make(map[string]engine.Platform, len(cfg.GitLab))
 	secrets := make(map[string]string, len(cfg.GitLab))
 	for _, inst := range cfg.GitLab {
-		review, approve, hookSecret, err := inst.Secrets()
+		reviewToken, approveToken, hookSecret, err := inst.Secrets()
 		if err != nil {
 			return nil, nil, err
 		}
-		b := engine.Bots{
-			Review:  gitlab.New(inst.URL, review, nil),
-			Approve: gitlab.New(inst.URL, approve, nil),
-		}
-		if b.ReviewUser, err = b.Review.CurrentUser(ctx); err != nil {
+		review := gitlab.New(inst.URL, reviewToken, nil)
+		approve := gitlab.New(inst.URL, approveToken, nil)
+		reviewUser, err := review.CurrentUser(ctx)
+		if err != nil {
 			return nil, nil, fmt.Errorf("gitlab instance %q: the review token (%s) doesn't work: %w", inst.Name, inst.ReviewTokenEnv, err)
 		}
-		if b.ApproveUser, err = b.Approve.CurrentUser(ctx); err != nil {
+		approveUser, err := approve.CurrentUser(ctx)
+		if err != nil {
 			return nil, nil, fmt.Errorf("gitlab instance %q: the approve token (%s) doesn't work: %w", inst.Name, inst.ApproveTokenEnv, err)
 		}
-		bots[inst.Name] = b
+		platforms[inst.Name] = engine.Platform{
+			Forge:    gitlabforge.NewForge(review, reviewUser),
+			Approver: gitlabforge.NewApprover(approve, approveUser),
+			GitLab:   review,
+		}
 		secrets[inst.Name] = hookSecret
 	}
-	return bots, secrets, nil
+	return platforms, secrets, nil
 }
 
 // kubeConfig is the in-cluster config or, outside a cluster, the kubeconfig

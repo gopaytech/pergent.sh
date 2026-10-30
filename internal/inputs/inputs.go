@@ -14,7 +14,7 @@ import (
 	"strings"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
-	"github.com/gopaytech/pergent.sh/internal/gitlab"
+	"github.com/gopaytech/pergent.sh/internal/forge"
 )
 
 // ConfigMapLimit is the most the inputs may weigh. Kubernetes caps a ConfigMap
@@ -30,10 +30,10 @@ const (
 	repoInstructions = ".pergent/instructions.md"
 )
 
-// Source reads files of a GitLab project at a ref.
+// Source reads files of a project at a ref. Every forge.Forge is one.
 type Source interface {
 	GetFile(ctx context.Context, projectID int64, path, ref string) ([]byte, bool, error)
-	ListTree(ctx context.Context, projectID int64, path, ref string) ([]gitlab.TreeEntry, error)
+	ListTree(ctx context.Context, projectID int64, path, ref string) ([]forge.TreeEntry, error)
 }
 
 // Library is the set of skills mounted into pergent.sh, name → content.

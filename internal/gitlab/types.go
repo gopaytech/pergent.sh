@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 	"unicode/utf8"
+
+	"github.com/gopaytech/pergent.sh/internal/forge"
 )
 
 // StatusState is a GitLab commit status state.
@@ -29,6 +31,7 @@ type DiffRefs struct {
 type MergeRequest struct {
 	IID          int64    `json:"iid"`
 	State        string   `json:"state"`
+	Draft        bool     `json:"draft"`
 	SHA          string   `json:"sha"`
 	TargetBranch string   `json:"target_branch"`
 	DiffRefs     DiffRefs `json:"diff_refs"`
@@ -41,12 +44,9 @@ type Project struct {
 	HTTPURLToRepo     string `json:"http_url_to_repo"`
 }
 
-// TreeEntry is one entry of a repository tree. Type is "blob" or "tree".
-type TreeEntry struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
-	Type string `json:"type"`
-}
+// TreeEntry is one entry of a repository tree: the platform-neutral
+// forge.TreeEntry, which ListTree decodes GitLab's tree entries into.
+type TreeEntry = forge.TreeEntry
 
 // Hook is a project webhook.
 type Hook struct {
