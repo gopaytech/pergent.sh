@@ -836,3 +836,142 @@ func TestPublishGitHubTokenApproverUnavailable(t *testing.T) {
 		t.Errorf("comment note: %q", body)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Final review
+
+// GitHub refuses the approval (422: a second approval of the same commit
+// after a publish that was cut short), but the approve App's latest review
+// already approves the head: the run is published, not retried.
+func TestPublishGitHubApproveRefusedButAlreadyApproved(t *testing.T) {
+	env := newTestEnv(t)
+	gh := addGitHub(t, env, true)
+	head := sha('a')
+	id := ghReport(t, env, 3, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublishGitHub(gh, 3, head)
+	gh.Reply(http.MethodPost, ghPRPath(3)+"/reviews", http.StatusUnprocessableEntity, map[string]string{"message": "Unprocessable Entity"})
+	gh.Reply(http.MethodGet, ghPRPath(3)+"/reviews", http.StatusOK, []map[string]any{
+		{"id": 40, "user": map[string]any{"id": int64(31)}, "state": "COMMENTED", "commit_id": head},
+		{"id": 41, "user": map[string]any{"id": ghApproveBot}, "state": "APPROVED", "commit_id": head},
+	})
+
+	publish(t, env)
+
+	wantPublished(t, env, id)
+	if r := env.Run(id); r.Attempts != 0 || r.PublishError != "" {
+		t.Errorf("attempts %d, publish error %q; want 0, none", r.Attempts, r.PublishError)
+	}
+	if n := len(gh.Requests(http.MethodPost, ghPRPath(3)+"/reviews")); n != 1 {
+		t.Errorf("%d approvals posted, want 1", n)
+	}
+	lists := gh.Requests(http.MethodGet, ghPRPath(3)+"/reviews")
+	if len(lists) != 1 || lists[0].Token != ghApproveToken {
+		t.Errorf("review lists = %+v; want one by the approve App", lists)
+	}
+	if a := approvals(t, env); len(a) != 1 || a[0].MR != ghKey(3) || a[0].ApprovedSHA != head {
+		t.Errorf("approvals = %+v; want the head recorded", a)
+	}
+	if !strings.Contains(env.Logs(), "already approves") {
+		t.Errorf("the fallback isn't logged:\n%s", env.Logs())
+	}
+}
+
+// Without an approval of the head to fall back on, a refused approval is a
+// failed publish, retried later.
+func TestPublishGitHubApproveRefusedNotApproved(t *testing.T) {
+	env := newTestEnv(t)
+	gh := addGitHub(t, env, true)
+	head := sha('a')
+	id := ghReport(t, env, 3, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublishGitHub(gh, 3, head)
+	gh.Reply(http.MethodPost, ghPRPath(3)+"/reviews", http.StatusUnprocessableEntity, map[string]string{"message": "Unprocessable Entity"})
+	gh.Reply(http.MethodGet, ghPRPath(3)+"/reviews", http.StatusOK, []map[string]any{
+		// An approval of an older head is not one of this head.
+		{"id": 41, "user": map[string]any{"id": ghApproveBot}, "state": "APPROVED", "commit_id": sha('9')},
+	})
+
+	publish(t, env)
+
+	if r := env.Run(id); r.State != store.Reported || r.Attempts != 1 || !strings.Contains(r.PublishError, "422") {
+		t.Errorf("run state %s, attempts %d, error %q; want reported, 1, the 422", r.State, r.Attempts, r.PublishError)
+	}
+}
+
+// The approve App reads the pull request itself right before approving and
+// finds another head (a push between the engine's re-check and the
+// approval): no review is posted and the publish is no error. The approval
+// recorded ahead of the attempt stays, as on GitLab: removing it later is
+// harmless.
+func TestPublishGitHubApproverSeesHeadMoved(t *testing.T) {
+	env := newTestEnv(t)
+	gh := addGitHub(t, env, true)
+	head := sha('a')
+	id := ghReport(t, env, 3, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublishGitHub(gh, 3, head)
+	gh.Handle(http.MethodGet, ghPRPath(3), func(w http.ResponseWriter, r *http.Request) {
+		// The review App (the engine's reads) still sees the reviewed head;
+		// the approve App, reading last, sees the push.
+		pr := ghPR(3, head)
+		if strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ") == ghApproveToken {
+			pr = ghPR(3, sha('c'))
+		}
+		writeJSON(w, http.StatusOK, pr)
+	})
+
+	publish(t, env)
+
+	wantPublished(t, env, id)
+	if r := env.Run(id); r.Attempts != 0 || r.PublishError != "" {
+		t.Errorf("attempts %d, publish error %q; want 0, none", r.Attempts, r.PublishError)
+	}
+	reads := gh.Requests(http.MethodGet, ghPRPath(3))
+	if len(reads) == 0 || reads[len(reads)-1].Token != ghApproveToken {
+		t.Fatalf("pull request reads = %+v; want the last by the approve App", reads)
+	}
+	if n := len(gh.Requests(http.MethodPost, ghPRPath(3)+"/reviews")); n != 0 {
+		t.Errorf("%d reviews posted, want none", n)
+	}
+	if n := len(gh.Requests(http.MethodGet, ghPRPath(3)+"/reviews")); n != 0 {
+		t.Errorf("reviews listed %d times; a moved head isn't a refusal to fall back from", n)
+	}
+	if run := onlyCheckRun(t, gh); run["conclusion"] != "success" {
+		t.Errorf("check run = %v", run)
+	}
+	if !strings.Contains(env.Logs(), "head moved") {
+		t.Errorf("the moved head isn't logged:\n%s", env.Logs())
+	}
+	if a := approvals(t, env); len(a) != 1 || a[0].ApprovedSHA != head {
+		t.Errorf("approvals = %+v; want the write-ahead record of %s", a, head)
+	}
+}
+
+// A pull request closed without merging (it could be reopened): the sweep
+// dismisses the approve App's approval, clears the record and queues nothing.
+func TestSweepGitHubClosedDismisses(t *testing.T) {
+	env := newTestEnv(t)
+	gh := addGitHub(t, env, true)
+	ghApproved(t, env, 3, sha('a'))
+	pr := ghPR(3, sha('a'))
+	pr["state"], pr["merged"] = "closed", false
+	gh.Reply(http.MethodGet, ghPRPath(3), http.StatusOK, pr)
+	gh.Reply(http.MethodGet, ghPRPath(3)+"/reviews", http.StatusOK, []map[string]any{
+		{"id": 41, "user": map[string]any{"id": ghApproveBot}, "state": "APPROVED", "commit_id": sha('a')},
+	})
+	gh.Reply(http.MethodPut, ghPRPath(3)+"/reviews/41/dismissals", http.StatusOK, map[string]any{"id": 41})
+
+	sweep(t, env)
+
+	d := gh.Requests(http.MethodPut, ghPRPath(3)+"/reviews/41/dismissals")
+	if len(d) != 1 || d[0].Token != ghApproveToken {
+		t.Fatalf("dismissals = %+v; want one by the approve App", d)
+	}
+	if a := approvals(t, env); len(a) != 0 {
+		t.Errorf("approvals = %+v, want none", a)
+	}
+	if w := gh.Writes(); len(w) != 1 {
+		t.Errorf("GitHub writes = %+v; want only the dismissal", w)
+	}
+	if logs := env.Logs(); !strings.Contains(logs, "approval of a closed merge request removed") || strings.Contains(logs, "queued a review") {
+		t.Errorf("want the removal logged and no run queued:\n%s", logs)
+	}
+}
