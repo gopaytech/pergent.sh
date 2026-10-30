@@ -27,9 +27,10 @@ func HookURL(publicURL, instance string) string {
 
 // Reconcile makes GitLab match the config. For each configured repository it
 // stores the project, makes sure its merge request webhook exists with the
-// instance's secret, and creates a clone token when there is none or the one
-// it has expires within 7 days (the new token is stored before the old one is
-// revoked, so a dispatch never finds none). For each stored project no longer
+// instance's secret, and creates a clone token when there is none, the one it
+// has expires within 7 days, or the stored one can't be decrypted (the secret
+// key changed). The new token is stored before the old one is revoked, so a
+// dispatch never finds none. For each stored project no longer
 // configured it deletes the webhook and the deploy token, then the row. One
 // repository's failure is logged and the rest continue; the returned error
 // joins them all. Tokens are never logged.
@@ -138,7 +139,13 @@ func (e *Engine) reconcileRepo(ctx context.Context, repo config.Repository, now 
 	}
 
 	if len(p.DeployTokenSealed) > 0 && p.DeployTokenID != 0 && p.DeployTokenExpiresAt.After(now.Add(deployTokenRenew)) {
-		return gp.ID, nil
+		if _, err := e.Box.Open(p.DeployTokenSealed); err == nil {
+			return gp.ID, nil
+		}
+		// Sealed with another key (PERGENT_SH_SECRET_KEY changed): the
+		// dispatcher can't use it, so replace it now rather than at expiry.
+		e.log().Warn("the stored deploy token can't be decrypted with the current secret key; replacing it",
+			"instance", repo.GitLab, "project", repo.Project, "deploy_token_id", p.DeployTokenID)
 	}
 	old := p.DeployTokenID
 	dt, err := bots.Review.CreateDeployToken(ctx, gp.ID, deployTokenName, now.Add(deployTokenLife))

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/secretbox"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -159,6 +160,48 @@ func TestReconcileRotatesExpiringToken(t *testing.T) {
 	plain, err := env.Box.Open(p.DeployTokenSealed)
 	if p.DeployTokenID != newDeployTokenID || err != nil || string(plain) != newDeployToken {
 		t.Errorf("project token = %d, %q, %v", p.DeployTokenID, plain, err)
+	}
+}
+
+// A fresh token sealed with another key (PERGENT_SH_SECRET_KEY changed) is
+// useless to the dispatcher: it is replaced at once, not at expiry.
+func TestReconcileReplacesTokenSealedWithAnotherKey(t *testing.T) {
+	env := newTestEnv(t)
+	other, err := secretbox.New("ZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTA=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.SeedProject(func(p *store.Project) { p.DeployTokenSealed = other.Seal([]byte(testDeployToken)) })
+	serveProject(env, testProjectID, testProjectPath)
+	var storedAtDelete store.Project
+	env.GitLab.Handle(http.MethodDelete, "/projects/7/deploy_tokens/12", func(w http.ResponseWriter, _ *http.Request) {
+		storedAtDelete, _ = project(t, env, testProjectID)
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	reconcile(t, env)
+
+	if n := len(env.GitLab.Requests(http.MethodPost, "/projects/7/deploy_tokens")); n != 1 {
+		t.Fatalf("got %d deploy token creations, want 1", n)
+	}
+	if n := len(env.GitLab.Requests(http.MethodDelete, "/projects/7/deploy_tokens/12")); n != 1 {
+		t.Fatalf("old token deletes = %d, want 1", n)
+	}
+	if storedAtDelete.DeployTokenID != newDeployTokenID {
+		t.Errorf("the old token was deleted before the new one was stored (stored id %d)", storedAtDelete.DeployTokenID)
+	}
+	p, _ := project(t, env, testProjectID)
+	plain, err := env.Box.Open(p.DeployTokenSealed)
+	if p.DeployTokenID != newDeployTokenID || err != nil || string(plain) != newDeployToken {
+		t.Errorf("project token = %d, %q, %v", p.DeployTokenID, plain, err)
+	}
+	if !strings.Contains(env.Logs(), "level=WARN") {
+		t.Errorf("the unreadable token wasn't logged as a warning:\n%s", env.Logs())
+	}
+	for _, secret := range []string{newDeployToken, testDeployToken} {
+		if strings.Contains(env.Logs(), secret) {
+			t.Errorf("a token reached the log:\n%s", env.Logs())
+		}
 	}
 }
 

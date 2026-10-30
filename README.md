@@ -125,7 +125,7 @@ If `public_url` points at a hostname that the Job pods reach through the Ingress
 | Variable | Used for |
 | --- | --- |
 | `DATABASE_URL` | PostgreSQL connection URL. Required. |
-| `PERGENT_SH_SECRET_KEY` | Encrypts stored deploy tokens (AES-256-GCM). 32 random bytes, standard base64. Required. |
+| `PERGENT_SH_SECRET_KEY` | Encrypts stored deploy tokens (AES-256-GCM). 32 random bytes, standard base64. Required. To rotate it, change it and restart: the startup reconcile replaces every deploy token it can no longer decrypt with a new one and revokes the old. |
 | the variable named by `llm.api_key_env` (default `OPENCODE_API_KEY`) | The LLM key handed to each Job. Required. |
 | each `gitlab[].review_token_env`, `approve_token_env`, `webhook_secret_env` | The review bot token, the approve bot token and the webhook secret of that instance. Required, and checked at startup. |
 
@@ -229,7 +229,7 @@ A repository is on when it is listed in the config. To switch it off, remove it 
 
 If you remove a whole GitLab instance from the config, pergent.sh can no longer reach its projects: it forgets them with a warning in the log, leaves the webhooks in place (pergent.sh answers them with 404, as the instance is unknown) and the deploy tokens expire on their own within 30 days.
 
-Deploy tokens are created per project with the name `pergent-sh`, valid for 30 days, and replaced when fewer than 7 days remain.
+Deploy tokens are created per project with the name `pergent-sh`, valid for 30 days, and replaced when fewer than 7 days remain, or at once when the stored token can't be decrypted because `PERGENT_SH_SECRET_KEY` changed.
 
 ## HTTP routes
 
