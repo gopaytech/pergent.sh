@@ -728,11 +728,11 @@ func TestAvailableSearch(t *testing.T) {
 	})
 }
 
-// Each listing has an overall budget (60 s): when it runs out, what was
+// Each listing has an overall budget (20 s): when it runs out, what was
 // read is listed, truncated; with nothing read it is 502.
 func TestAvailableListingBudget(t *testing.T) {
-	if listBudget != 60*time.Second || platformTimeout != 10*time.Second {
-		t.Errorf("listBudget %v, platformTimeout %v; want 60s and 10s", listBudget, platformTimeout)
+	if listBudget != 20*time.Second || platformTimeout != 10*time.Second {
+		t.Errorf("listBudget %v, platformTimeout %v; want 20s and 10s", listBudget, platformTimeout)
 	}
 	e := newEnv(t, nil)
 	var all []string
@@ -765,4 +765,53 @@ func TestAvailableListingBudget(t *testing.T) {
 	// Nothing read in time: 502.
 	e.gl.set(func(*oauthServer) { e.gl.slowFrom = 1 })
 	wantCode(t, e.get(c, "/api/repositories/available?search=repo"), "nothing read", http.StatusBadGateway)
+}
+
+// The whole request, renewing the user's token included, has a budget
+// (45 s) below the server's write timeout: when it runs out, what was read
+// is listed, truncated, and a renewal that outlasts it is not waited for.
+func TestAvailableWholeBudget(t *testing.T) {
+	if AvailableBudget != 45*time.Second || listBudget >= AvailableBudget {
+		t.Errorf("AvailableBudget %v, listBudget %v; want 45s and less", AvailableBudget, listBudget)
+	}
+	e := newEnv(t, nil)
+	// A token about to expire: every use renews it first.
+	e.gl.set(func(*oauthServer) { e.gl.expiresIn = 60 })
+	var all []string
+	for i := range 150 { // two pages of 100
+		p := fmt.Sprintf("acme/repo-%03d", i)
+		all = append(all, p)
+		e.gl.setProject(p, gitlabProject("private", 20, 0))
+	}
+	e.cat["main"].set(all...)
+	c := e.signInGitLab(true)
+	e.d.availableBudget = 500 * time.Millisecond
+	e.d.listBudget = time.Minute
+
+	// The listing's own budget is longer: the request's cuts it short.
+	e.gl.set(func(*oauthServer) { e.gl.slowFrom, e.gl.slow = 2, 5*time.Second })
+	start := time.Now()
+	got := getJSON[availableBody](e, c, "/api/repositories/available")
+	if took := time.Since(start); took > 3*time.Second {
+		t.Errorf("available took %v, want about the 500ms budget", took)
+	}
+	if len(got.Items) != 100 || !got.Truncated {
+		t.Errorf("available has %d items, truncated %v; want the first page, truncated", len(got.Items), got.Truncated)
+	}
+
+	// A slow token renewal counts against the same budget.
+	e.gl.set(func(*oauthServer) { e.gl.slowFrom, e.gl.tokenSlow = 0, 2*time.Second })
+	start = time.Now()
+	wantCode(t, e.get(c, "/api/repositories/available?search=repo"), "slow renewal", http.StatusBadGateway)
+	if took := time.Since(start); took > 1500*time.Millisecond {
+		t.Errorf("available took %v with a slow renewal, want about the 500ms budget", took)
+	}
+	// The renewal still finishes and is stored: the next request waits for
+	// it and goes on with the renewed token.
+	e.gl.set(func(*oauthServer) { e.gl.tokenSlow = 0 })
+	e.d.availableBudget = AvailableBudget
+	got = getJSON[availableBody](e, c, "/api/repositories/available?search=repo-00")
+	if len(got.Items) != 10 || got.Truncated {
+		t.Errorf("after the renewal, available has %d items, truncated %v", len(got.Items), got.Truncated)
+	}
 }

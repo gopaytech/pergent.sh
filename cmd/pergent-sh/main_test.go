@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/dashboard"
 	"github.com/gopaytech/pergent.sh/internal/engine"
 	"github.com/gopaytech/pergent.sh/internal/forge/githubforge"
 	"github.com/gopaytech/pergent.sh/internal/forge/gitlabforge"
@@ -642,5 +643,13 @@ func TestTogether(t *testing.T) {
 	}
 	if stopped != 3 {
 		t.Errorf("%d loops stopped, want 3", stopped)
+	}
+}
+
+// The picker's whole budget, token renewal included, ends well before the
+// server's write timeout, so even its truncated answer is written.
+func TestPickerBudgetBelowWriteTimeout(t *testing.T) {
+	if dashboard.AvailableBudget > writeTimeout-10*time.Second {
+		t.Errorf("dashboard.AvailableBudget %v is not well below the write timeout %v", dashboard.AvailableBudget, writeTimeout)
 	}
 }

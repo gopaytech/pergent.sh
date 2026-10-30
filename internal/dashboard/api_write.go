@@ -27,9 +27,15 @@ const (
 	// listLimit is the most repositories read from each side (the admin's
 	// and the review bot's or App's) for the picker.
 	listLimit = 5000
-	// listBudget bounds each side's listing for the picker; each request
-	// of it has platformTimeout. What was read when it runs out is used.
-	listBudget = 60 * time.Second
+	// AvailableBudget bounds the whole GET /api/repositories/available,
+	// renewing the user's token included, so that even a truncated answer
+	// is written well before the server's 60 s WriteTimeout and the 60 s
+	// proxy timeout of an ingress in front of it.
+	AvailableBudget = 45 * time.Second
+	// listBudget bounds each side's listing for the picker, within
+	// AvailableBudget; each request of it has platformTimeout. What was read
+	// when either runs out is used.
+	listBudget = 20 * time.Second
 	// maxSearch is the longest picker search.
 	maxSearch = 100
 	// catalogTTL is how long the review side's list is kept.
@@ -72,7 +78,9 @@ func (d *Dashboard) writeRoutes(mux *http.ServeMux) {
 // --- GET /api/repositories/available ---
 
 func (d *Dashboard) available(w http.ResponseWriter, r *http.Request) {
-	ctx, se := r.Context(), session(r)
+	se := session(r)
+	ctx, cancel := context.WithTimeoutCause(r.Context(), d.availableBudget, errOutOfBudget)
+	defer cancel()
 	search := strings.TrimSpace(r.URL.Query().Get("search"))
 	if len(search) > maxSearch {
 		writeError(w, http.StatusBadRequest, "search must be at most 100 characters")
@@ -161,15 +169,20 @@ func (d *Dashboard) reachable(ctx context.Context, se Session, search string) (m
 	return out, mineTruncated || bot.truncated, nil
 }
 
-// withinBudget runs a listing under d.listBudget. When the budget runs out
-// after something was read, what was read is the answer, truncated; an
-// error before that, or with nothing read, is an error.
+// errOutOfBudget is the cause of a picker listing cut short by its budget
+// or the request's (AvailableBudget), not by the request going away.
+var errOutOfBudget = errors.New("the listing ran out of time")
+
+// withinBudget runs a listing under d.listBudget and whatever is left of
+// ctx's budget. When either runs out after something was read, what was
+// read is the answer, truncated; an error before that, or with nothing
+// read, is an error.
 func (d *Dashboard) withinBudget(ctx context.Context, list func(ctx context.Context) ([]string, bool, error)) ([]string, bool, error) {
-	bctx, cancel := context.WithTimeout(ctx, d.listBudget)
+	bctx, cancel := context.WithTimeoutCause(ctx, d.listBudget, errOutOfBudget)
 	defer cancel()
 	repos, truncated, err := list(bctx)
 	if err != nil {
-		if bctx.Err() != nil && ctx.Err() == nil && len(repos) > 0 {
+		if errors.Is(context.Cause(bctx), errOutOfBudget) && len(repos) > 0 {
 			return repos, true, nil
 		}
 		return nil, false, err

@@ -97,13 +97,15 @@ type Dashboard struct {
 	sources       map[string]RepoSource
 	catalogs      map[string]RepoCatalog
 	reconcileSoon func()
-	// listBudget bounds each side's listing for the picker; listLimit is
-	// the most repositories read from each side.
-	listBudget time.Duration
-	listLimit  int
-	now        func() time.Time
-	inputs     *inputsCache
-	catalog    *catalogCache
+	// availableBudget bounds the whole picker request; listBudget bounds
+	// each side's listing in it; listLimit is the most repositories read
+	// from each side.
+	availableBudget time.Duration
+	listBudget      time.Duration
+	listLimit       int
+	now             func() time.Time
+	inputs          *inputsCache
+	catalog         *catalogCache
 }
 
 // New builds the dashboard. The config must have dashboard.url; every
@@ -135,7 +137,8 @@ func New(o Options) (*Dashboard, error) {
 	}
 	return &Dashboard{Auth: auth, Repos: repos, Store: o.Store, Log: o.Log,
 		cfg: o.Config, library: o.Library, sources: o.Sources, catalogs: o.Catalogs,
-		reconcileSoon: o.ReconcileSoon, now: o.Now, listBudget: listBudget, listLimit: listLimit,
+		reconcileSoon: o.ReconcileSoon, now: o.Now,
+		availableBudget: AvailableBudget, listBudget: listBudget, listLimit: listLimit,
 		inputs:  &inputsCache{entries: map[string]inputsEntry{}, flights: map[string]*inputsFlight{}},
 		catalog: &catalogCache{entries: map[string]catalogEntry{}, flights: map[string]*catalogFlight{}}}, nil
 }

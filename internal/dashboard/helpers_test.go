@@ -217,8 +217,10 @@ type fakeGitLab struct {
 	// none) wait slow, or until the request ends.
 	slowFrom int
 	slow     time.Duration
-	username string         // user 9's username (default alice)
-	member   map[string]any // extra fields of a member answer
+	// tokenSlow makes POST /oauth/token wait that long first.
+	tokenSlow time.Duration
+	username  string         // user 9's username (default alice)
+	member    map[string]any // extra fields of a member answer
 }
 
 func (f *fakeGitLab) setUsername(name string) { f.set(func(*oauthServer) { f.username = name }) }
@@ -247,6 +249,10 @@ func (f *fakeGitLab) setMember(group string, member bool) {
 
 func (f *fakeGitLab) serve(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost && r.URL.Path == "/oauth/token" {
+		f.mu.Lock()
+		slow := f.tokenSlow
+		f.mu.Unlock()
+		time.Sleep(slow)
 		f.token(w, r)
 		return
 	}

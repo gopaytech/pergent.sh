@@ -210,26 +210,41 @@ func (a *Auth) liveToken(ctx context.Context, cur store.Session, now time.Time) 
 // userToken returns the provider of the session's instance and its user's
 // OAuth token, renewed if needed, for a call made with it. A renewal runs
 // to its own deadline even if the request goes away: a refresh token spent
-// with its successor unstored would end the session.
+// with its successor unstored would end the session. The caller waits for
+// it only while ctx lasts.
 func (a *Auth) userToken(ctx context.Context, se Session) (provider, string, error) {
 	p, ok := a.providers[se.Instance]
 	if !ok || p.platform() != se.Platform {
 		return nil, "", fmt.Errorf("instance %q has no %s sign-in", se.Instance, se.Platform)
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), signInTimeout)
-	defer cancel()
-	cur, found, err := a.store.Session(ctx, se.idHash)
-	if err != nil {
-		return nil, "", err
+	type answer struct {
+		token string
+		err   error
 	}
-	if !found {
-		return nil, "", errors.New("the session ended")
+	done := make(chan answer, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), signInTimeout)
+		defer cancel()
+		cur, found, err := a.store.Session(ctx, se.idHash)
+		if err == nil && !found {
+			err = errors.New("the session ended")
+		}
+		if err != nil {
+			done <- answer{err: err}
+			return
+		}
+		tok, err := a.liveToken(ctx, cur, a.now())
+		done <- answer{token: tok.AccessToken, err: err}
+	}()
+	select {
+	case got := <-done:
+		if got.err != nil {
+			return nil, "", got.err
+		}
+		return p, got.token, nil
+	case <-ctx.Done():
+		return nil, "", context.Cause(ctx)
 	}
-	tok, err := a.liveToken(ctx, cur, a.now())
-	if err != nil {
-		return nil, "", err
-	}
-	return p, tok.AccessToken, nil
 }
 
 // checkAccess asks the platform, with the user's token, who the user is now

@@ -47,6 +47,9 @@ import (
 const (
 	defaultConfigPath = "/etc/pergent-sh/config.yaml"
 	shutdownTimeout   = 20 * time.Second
+	// writeTimeout bounds writing a response. It must leave room above the
+	// longest dashboard request (dashboard.AvailableBudget).
+	writeTimeout = 60 * time.Second
 	// sessionPruneEvery is how often the dashboard's expired sessions are
 	// deleted.
 	sessionPruneEvery = time.Hour
@@ -321,7 +324,7 @@ func serveUntilDone(ctx context.Context, ln net.Listener, handler http.Handler, 
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
-		WriteTimeout:      60 * time.Second,
+		WriteTimeout:      writeTimeout,
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
 	served := make(chan error, 1)
