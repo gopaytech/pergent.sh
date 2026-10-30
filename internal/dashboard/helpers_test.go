@@ -109,7 +109,7 @@ type oauthServer struct {
 	n           int
 	access      string
 	refresh     string
-	expiresIn   int // 0: no expiry, no refresh token
+	expiresIn   int  // 0: no expiry, no refresh token
 	failAPI     bool // every API call is refused (401)
 	failAccess  bool // API calls other than GET /user are refused (401)
 	failRefresh bool

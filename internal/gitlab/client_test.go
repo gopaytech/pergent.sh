@@ -789,7 +789,9 @@ func TestProjectAccess(t *testing.T) {
 }
 
 func TestProjectAccessNotFound(t *testing.T) {
-	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"404 Project Not Found"}`, 404) })
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"404 Project Not Found"}`, 404)
+	})
 	if _, err := c.ProjectAccess(context.Background(), "acme/widgets"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
