@@ -347,3 +347,64 @@ func TestConnectGitHubFailures(t *testing.T) {
 		})
 	}
 }
+
+// fakeGitLabUsers answers GET /api/v4/user with the user id each token
+// belongs to.
+func fakeGitLabUsers(t *testing.T, users map[string]int64) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, ok := users[r.Header.Get("PRIVATE-TOKEN")]
+		if r.URL.Path != "/api/v4/user" || !ok {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": id, "username": "user"})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func gitlabConfig(t *testing.T, url string) *config.Config {
+	t.Helper()
+	t.Setenv("GL_REVIEW", "glpat-review-example")
+	t.Setenv("GL_APPROVE", "glpat-approve-example")
+	t.Setenv("GL_HOOK", "hook-secret-example")
+	return &config.Config{GitLab: []config.Instance{{
+		Name: "corp", URL: url, ReviewTokenEnv: "GL_REVIEW", ApproveTokenEnv: "GL_APPROVE", WebhookSecretEnv: "GL_HOOK",
+	}}}
+}
+
+func TestConnectGitLab(t *testing.T) {
+	srv := fakeGitLabUsers(t, map[string]int64{"glpat-review-example": 11, "glpat-approve-example": 12})
+	platforms, secrets, err := connectGitLab(context.Background(), gitlabConfig(t, srv.URL))
+	if err != nil {
+		t.Fatalf("connectGitLab: %v", err)
+	}
+	if p, ok := platforms["corp"]; !ok || p.Kind != config.PlatformGitLab || p.Forge == nil || p.Approver == nil {
+		t.Errorf("platform = %+v", platforms["corp"])
+	}
+	if secrets["corp"] != "hook-secret-example" {
+		t.Errorf("secret = %q", secrets["corp"])
+	}
+}
+
+// The review and approve tokens must be two users: one user's approval of
+// the reviews it posts itself would make the two-identity split pointless.
+func TestConnectGitLabSameUserRefused(t *testing.T) {
+	srv := fakeGitLabUsers(t, map[string]int64{"glpat-review-example": 11, "glpat-approve-example": 11})
+	_, _, err := connectGitLab(context.Background(), gitlabConfig(t, srv.URL))
+	if err == nil {
+		t.Fatal("connectGitLab accepted two tokens of the same user")
+	}
+	for _, want := range []string{`"corp"`, "GL_REVIEW", "GL_APPROVE", "same user"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+	for _, secret := range []string{"glpat-review-example", "glpat-approve-example"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("error carries a token: %q", err)
+		}
+	}
+}

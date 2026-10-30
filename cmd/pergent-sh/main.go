@@ -224,8 +224,8 @@ func checkSkills(cfg *config.Config, lib inputs.Library) error {
 }
 
 // connectGitLab builds the review and approve clients of every instance and
-// checks each token by asking who it belongs to. It returns the platforms
-// and the webhook secrets by instance.
+// checks each token by asking who it belongs to; the two must be different
+// users. It returns the platforms and the webhook secrets by instance.
 func connectGitLab(ctx context.Context, cfg *config.Config) (map[string]engine.Platform, map[string]string, error) {
 	platforms := make(map[string]engine.Platform, len(cfg.GitLab))
 	secrets := make(map[string]string, len(cfg.GitLab))
@@ -243,6 +243,12 @@ func connectGitLab(ctx context.Context, cfg *config.Config) (map[string]engine.P
 		approveUser, err := approve.CurrentUser(ctx)
 		if err != nil {
 			return nil, nil, fmt.Errorf("gitlab instance %q: the approve token (%s) doesn't work: %w", inst.Name, inst.ApproveTokenEnv, err)
+		}
+		if reviewUser.ID == approveUser.ID {
+			// One user would approve the reviews it posts itself: the
+			// approval has to come from a second identity.
+			return nil, nil, fmt.Errorf("gitlab instance %q: the review token (%s) and the approve token (%s) belong to the same user; the approve bot must be a separate user",
+				inst.Name, inst.ReviewTokenEnv, inst.ApproveTokenEnv)
 		}
 		platforms[inst.Name] = engine.Platform{
 			Kind:     config.PlatformGitLab,
