@@ -75,7 +75,7 @@ func (e *Engine) sweepApproval(ctx context.Context, plat Platform, a store.Appro
 		log.Info("approval forgotten: the merge request is merged")
 		return false, e.clearApproval(ctx, a)
 	case forge.StateClosed:
-		if err := e.unapprove(ctx, plat.Approver, a); err != nil {
+		if _, err := e.unapprove(ctx, plat.Approver, a); err != nil {
 			return false, err
 		}
 		log.Info("approval of a closed merge request removed")
@@ -88,7 +88,7 @@ func (e *Engine) sweepApproval(ctx context.Context, plat Platform, a store.Appro
 		return false, nil
 	}
 
-	if err := e.unapprove(ctx, plat.Approver, a); err != nil {
+	if _, err := e.unapprove(ctx, plat.Approver, a); err != nil {
 		return false, err
 	}
 	log.Info("stale approval removed: the merge request moved without a webhook pergent.sh saw",

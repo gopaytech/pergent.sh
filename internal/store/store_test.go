@@ -585,18 +585,18 @@ func TestStaleApprovals(t *testing.T) {
 	if err := s.SetApprovedSHA(ctx, mr1, "A", "main"); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := s.StaleApprovals(ctx); err != nil || len(got) != 0 {
+	if got, err := s.StaleApprovals(ctx, time.Now()); err != nil || len(got) != 0 {
 		t.Fatalf("approved head: %v, %v", got, err)
 	}
 	enqueue(t, s, mr1, "B")
-	got, err := s.StaleApprovals(ctx)
+	got, err := s.StaleApprovals(ctx, time.Now())
 	if err != nil || len(got) != 1 || got[0] != (Approval{MR: mr1, ApprovedSHA: "A", ApprovedTarget: "main"}) {
 		t.Fatalf("after new head: %v, %v", got, err)
 	}
 	if err := s.SetApprovedSHA(ctx, mr1, "B", "main"); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := s.StaleApprovals(ctx); len(got) != 0 {
+	if got, _ := s.StaleApprovals(ctx, time.Now()); len(got) != 0 {
 		t.Errorf("approved B: %v", got)
 	}
 	if err := s.SetApprovedSHA(ctx, mr1, "A", "main"); err != nil {
@@ -605,8 +605,84 @@ func TestStaleApprovals(t *testing.T) {
 	if err := s.SetApprovedSHA(ctx, mr1, "", "main"); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := s.StaleApprovals(ctx); len(got) != 0 {
+	if got, _ := s.StaleApprovals(ctx, time.Now()); len(got) != 0 {
 		t.Errorf("cleared approval: %v", got)
+	}
+}
+
+// A failed unapprove puts the stale approval aside for 30 s × 2^failures,
+// at most 5 minutes; recording or clearing an approval starts over.
+func TestUnapproveFailedBackoff(t *testing.T) {
+	s := newStore(t)
+	enqueue(t, s, mr1, "A")
+	if err := s.SetApprovedSHA(ctx, mr1, "A", "main"); err != nil {
+		t.Fatal(err)
+	}
+	enqueue(t, s, mr1, "B")
+	now := time.Now().UTC().Truncate(time.Second)
+	if got, err := s.StaleApprovals(ctx, now); err != nil || len(got) != 1 {
+		t.Fatalf("stale before any failure: %v, %v", got, err)
+	}
+
+	at := now
+	for i, want := range []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 4 * time.Minute, 5 * time.Minute, 5 * time.Minute} {
+		next, err := s.UnapproveFailed(ctx, mr1, "A", "main", at)
+		if err != nil {
+			t.Fatalf("failure %d: %v", i+1, err)
+		}
+		if !next.Equal(at.Add(want)) {
+			t.Fatalf("failure %d at %s: retry at %s, want %s later", i+1, at, next, want)
+		}
+		if got, _ := s.StaleApprovals(ctx, next.Add(-time.Second)); len(got) != 0 {
+			t.Fatalf("failure %d: listed before its backoff: %v", i+1, got)
+		}
+		if got, _ := s.StaleApprovals(ctx, next); len(got) != 1 {
+			t.Fatalf("failure %d: not listed once its backoff is over: %v", i+1, got)
+		}
+		at = next
+	}
+
+	// A failure of another approval (one replaced meanwhile) changes nothing.
+	if next, err := s.UnapproveFailed(ctx, mr1, "X", "main", at); err != nil || !next.IsZero() {
+		t.Fatalf("failure of another commit = %s, %v; want zero, nil", next, err)
+	}
+	if next, err := s.UnapproveFailed(ctx, mr2, "A", "main", at); err != nil || !next.IsZero() {
+		t.Fatalf("failure on an MR without a row = %s, %v; want zero, nil", next, err)
+	}
+
+	backoff := func() (int, *time.Time) {
+		t.Helper()
+		var (
+			n  int
+			nb *time.Time
+		)
+		if err := s.pool.QueryRow(ctx, `SELECT unapprove_failures, unapprove_not_before FROM merge_requests
+			WHERE instance = $1 AND project_id = $2 AND mr_iid = $3`, mr1.Instance, mr1.ProjectID, mr1.IID).Scan(&n, &nb); err != nil {
+			t.Fatal(err)
+		}
+		return n, nb
+	}
+
+	// Recording an approval starts the backoff over.
+	if err := s.SetApprovedSHA(ctx, mr1, "A", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if n, nb := backoff(); n != 0 || nb != nil {
+		t.Errorf("after a new approval: failures %d, not before %v; want 0, NULL", n, nb)
+	}
+	if got, _ := s.StaleApprovals(ctx, now); len(got) != 1 {
+		t.Errorf("after a new approval: not listed at once: %v", got)
+	}
+
+	// So does clearing it (the unapprove succeeded).
+	if _, err := s.UnapproveFailed(ctx, mr1, "A", "main", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClearApprovedSHA(ctx, mr1, "A", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if n, nb := backoff(); n != 0 || nb != nil {
+		t.Errorf("after the clear: failures %d, not before %v; want 0, NULL", n, nb)
 	}
 }
 
@@ -621,13 +697,13 @@ func TestClearApprovedSHA(t *testing.T) {
 	if err := s.ClearApprovedSHA(ctx, mr1, "X", "main"); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := s.StaleApprovals(ctx); len(got) != 1 || got[0].ApprovedSHA != "A" {
+	if got, _ := s.StaleApprovals(ctx, time.Now()); len(got) != 1 || got[0].ApprovedSHA != "A" {
 		t.Fatalf("after a clear of another commit: %v, want A still recorded", got)
 	}
 	if err := s.ClearApprovedSHA(ctx, mr1, "A", "main"); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := s.StaleApprovals(ctx); len(got) != 0 {
+	if got, _ := s.StaleApprovals(ctx, time.Now()); len(got) != 0 {
 		t.Errorf("after clearing A: %v, want none", got)
 	}
 	// A merge request with no row, and an empty old value, are no-ops.
@@ -1169,7 +1245,7 @@ func TestStaleApprovalsAfterRetarget(t *testing.T) {
 	if _, _, err := s.EnqueueRun(ctx, mr1, "acme/widgets", "A", "develop"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.StaleApprovals(ctx)
+	got, err := s.StaleApprovals(ctx, time.Now())
 	if err != nil || len(got) != 1 || got[0] != (Approval{MR: mr1, ApprovedSHA: "A", ApprovedTarget: "main"}) {
 		t.Fatalf("after retarget: %v, %v; want the approval for main stale", got, err)
 	}
@@ -1177,13 +1253,13 @@ func TestStaleApprovalsAfterRetarget(t *testing.T) {
 	if err := s.ClearApprovedSHA(ctx, mr1, "A", "develop"); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := s.StaleApprovals(ctx); len(got) != 1 {
+	if got, _ := s.StaleApprovals(ctx, time.Now()); len(got) != 1 {
 		t.Fatalf("a clear for another target removed the approval: %v", got)
 	}
 	if err := s.ClearApprovedSHA(ctx, mr1, "A", "main"); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := s.StaleApprovals(ctx); len(got) != 0 {
+	if got, _ := s.StaleApprovals(ctx, time.Now()); len(got) != 0 {
 		t.Errorf("after clear: %v", got)
 	}
 	// An approval recorded without a target (before targets were recorded)
@@ -1191,7 +1267,7 @@ func TestStaleApprovalsAfterRetarget(t *testing.T) {
 	if err := s.SetApprovedSHA(ctx, mr1, "A", ""); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := s.StaleApprovals(ctx); len(got) != 0 {
+	if got, _ := s.StaleApprovals(ctx, time.Now()); len(got) != 0 {
 		t.Errorf("targetless approval of the head: %v", got)
 	}
 }

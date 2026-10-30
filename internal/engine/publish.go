@@ -279,8 +279,12 @@ func (e *Engine) retryPublish(ctx context.Context, run store.Run, text string, l
 
 // CleanupOnce deletes the Jobs of superseded runs, sets their commit status
 // to canceled when they had been dispatched, and removes the approve bot's
-// approvals of a head or target branch that is no longer the MR's newest run's. Anything that fails is
-// left for the next pass; the returned error joins failures to list the work.
+// approvals of a head or target branch that is no longer the MR's newest
+// run's. Anything that fails is left for a later pass: a run for the next
+// one, an approval the bot couldn't remove for after its backoff (30 s ×
+// 2^failures, at most 5 minutes), as a refused removal would otherwise cost
+// GitHub calls on every pass. The returned error joins failures to list the
+// work.
 func (e *Engine) CleanupOnce(ctx context.Context) error {
 	var errs []error
 	runs, err := e.Store.RunsToCleanUp(ctx)
@@ -298,7 +302,7 @@ func (e *Engine) CleanupOnce(ctx context.Context) error {
 		}
 	}
 
-	stale, err := e.Store.StaleApprovals(ctx)
+	stale, err := e.Store.StaleApprovals(ctx, e.now())
 	if err != nil {
 		errs = append(errs, fmt.Errorf("cleanup: list stale approvals: %w", err))
 	}
@@ -314,8 +318,12 @@ func (e *Engine) CleanupOnce(ctx context.Context) error {
 			log.Debug("skipping the stale approval: no approve bot for the instance")
 			continue
 		}
-		if err := e.unapprove(ctx, plat.Approver, a); err != nil {
-			log.Warn("couldn't remove the stale approval; will try again", "error", e.redact(err.Error()))
+		if retryAt, err := e.unapprove(ctx, plat.Approver, a); err != nil {
+			attrs := []any{"error", e.redact(err.Error())}
+			if !retryAt.IsZero() {
+				attrs = append(attrs, "retry_at", retryAt)
+			}
+			log.Warn("couldn't remove the stale approval; will try again", attrs...)
 			continue
 		}
 		log.Info("stale approval removed")
@@ -350,15 +358,26 @@ func (e *Engine) cleanUp(ctx context.Context, run store.Run, log *slog.Logger) e
 
 // unapprove removes the approve bot's stale approval, then clears the record
 // only if it still names the stale commit: an approval of a newer head
-// recorded meanwhile is kept.
-func (e *Engine) unapprove(ctx context.Context, ap forge.Approver, a store.Approval) error {
+// recorded meanwhile is kept. When the bot can't remove it, the record is
+// kept and put aside until the returned time (zero when the record changed
+// meanwhile, or pergent.sh is shutting down: that failure isn't the
+// platform's and doesn't count).
+func (e *Engine) unapprove(ctx context.Context, ap forge.Approver, a store.Approval) (time.Time, error) {
 	if err := ap.Unapprove(ctx, a.MR.ProjectID, a.MR.IID); err != nil {
-		return fmt.Errorf("unapprove: %w", err)
+		err = fmt.Errorf("unapprove: %w", err)
+		if ctx.Err() != nil {
+			return time.Time{}, err
+		}
+		retryAt, ferr := e.Store.UnapproveFailed(ctx, a.MR, a.ApprovedSHA, a.ApprovedTarget, e.now())
+		if ferr != nil {
+			return time.Time{}, errors.Join(err, fmt.Errorf("record the failed unapprove: %w", ferr))
+		}
+		return retryAt, err
 	}
 	if err := e.Store.ClearApprovedSHA(ctx, a.MR, a.ApprovedSHA, a.ApprovedTarget); err != nil {
-		return fmt.Errorf("clear recorded approval: %w", err)
+		return time.Time{}, fmt.Errorf("clear recorded approval: %w", err)
 	}
-	return nil
+	return time.Time{}, nil
 }
 
 // redact removes the secrets the engine knows from text bound for the store

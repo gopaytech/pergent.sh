@@ -653,7 +653,8 @@ func (s *Store) SetApprovedSHA(ctx context.Context, mr MRKey, sha, target string
 	_, err := s.pool.Exec(ctx, `INSERT INTO merge_requests (instance, project_id, mr_iid, approved_sha, approved_target)
 		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (instance, project_id, mr_iid) DO UPDATE SET
-			approved_sha = EXCLUDED.approved_sha, approved_target = EXCLUDED.approved_target`,
+			approved_sha = EXCLUDED.approved_sha, approved_target = EXCLUDED.approved_target,
+			unapprove_failures = 0, unapprove_not_before = NULL`,
 		mr.Instance, mr.ProjectID, mr.IID, sha, target)
 	return err
 }
@@ -661,18 +662,42 @@ func (s *Store) SetApprovedSHA(ctx context.Context, mr MRKey, sha, target string
 // ClearApprovedSHA clears the recorded approval only while it is still the
 // old commit and target, so an approval recorded meanwhile (of a newer head
 // or target) is kept. A merge request without a row, or with another
-// approval, is left alone.
+// approval, is left alone. The unapprove backoff starts over.
 func (s *Store) ClearApprovedSHA(ctx context.Context, mr MRKey, oldSHA, oldTarget string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE merge_requests SET approved_sha = '', approved_target = ''
+	_, err := s.pool.Exec(ctx, `UPDATE merge_requests SET approved_sha = '', approved_target = '',
+			unapprove_failures = 0, unapprove_not_before = NULL
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND approved_sha = $4 AND approved_target = $5`,
 		mr.Instance, mr.ProjectID, mr.IID, oldSHA, oldTarget)
 	return err
 }
 
+// UnapproveFailed records a failed removal of the stale approval of oldSHA
+// against oldTarget: it is not listed by StaleApprovals again before now +
+// 30 s × 2^(earlier failures), at most 5 minutes later. It returns that
+// time, or the zero time when the merge request records another approval
+// (or none) by now, which is left alone.
+func (s *Store) UnapproveFailed(ctx context.Context, mr MRKey, oldSHA, oldTarget string, now time.Time) (time.Time, error) {
+	var next time.Time
+	// The SET expressions read the row before the update: the n-th failure
+	// waits 30 s << (n-1), and from the 5th on the cap (30 s << 4 is past it).
+	err := s.pool.QueryRow(ctx, `UPDATE merge_requests SET unapprove_failures = unapprove_failures + 1,
+			unapprove_not_before = $6::timestamptz + LEAST(
+				interval '30 seconds' * (1 << LEAST(unapprove_failures, 4)), interval '5 minutes')
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND approved_sha = $4 AND approved_target = $5
+			AND approved_sha <> ''
+		RETURNING unapprove_not_before`,
+		mr.Instance, mr.ProjectID, mr.IID, oldSHA, oldTarget, now).Scan(&next)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, nil
+	}
+	return next, err
+}
+
 // StaleApprovals returns merge requests whose recorded approval is for
 // another head or another target branch than their newest non-superseded
-// run. An approval recorded without a target is compared by head only.
-func (s *Store) StaleApprovals(ctx context.Context) ([]Approval, error) {
+// run, and whose unapprove backoff (after a failed removal) is over at now.
+// An approval recorded without a target is compared by head only.
+func (s *Store) StaleApprovals(ctx context.Context, now time.Time) ([]Approval, error) {
 	return s.queryApprovals(ctx, `SELECT m.instance, m.project_id, m.mr_iid, m.approved_sha, m.approved_target
 		FROM merge_requests m
 		JOIN LATERAL (
@@ -682,7 +707,8 @@ func (s *Store) StaleApprovals(ctx context.Context) ([]Approval, error) {
 			ORDER BY r.created_at DESC, r.id DESC LIMIT 1) newest ON true
 		WHERE m.approved_sha <> '' AND (newest.head_sha <> m.approved_sha
 			OR (m.approved_target <> '' AND newest.target_branch <> m.approved_target))
-		ORDER BY m.instance, m.project_id, m.mr_iid`)
+			AND (m.unapprove_not_before IS NULL OR m.unapprove_not_before <= $1)
+		ORDER BY m.instance, m.project_id, m.mr_iid`, now)
 }
 
 // Approvals returns every recorded approval.
@@ -691,8 +717,8 @@ func (s *Store) Approvals(ctx context.Context) ([]Approval, error) {
 		FROM merge_requests WHERE approved_sha <> '' ORDER BY instance, project_id, mr_iid`)
 }
 
-func (s *Store) queryApprovals(ctx context.Context, sql string) ([]Approval, error) {
-	rows, err := s.pool.Query(ctx, sql)
+func (s *Store) queryApprovals(ctx context.Context, sql string, args ...any) ([]Approval, error) {
+	rows, err := s.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}

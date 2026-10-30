@@ -128,16 +128,14 @@ func wantNoteID(t *testing.T, env *testEnv, iid, want int64) {
 }
 
 // recordedApproval returns the approval recorded for merge request iid, or
-// "". The store keeps it only for StaleApprovals, so this queues a run of a
-// newer head (sha('f')) to make any recorded approval stale: call it last.
+// "".
 func recordedApproval(t *testing.T, env *testEnv, iid int64) string {
 	t.Helper()
-	env.Enqueue(iid, sha('f'))
-	stale, err := env.Store.StaleApprovals(env.ctx)
+	all, err := env.Store.Approvals(env.ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, a := range stale {
+	for _, a := range all {
 		if a.MR == env.MRKey(iid) {
 			return a.ApprovedSHA
 		}
@@ -758,7 +756,7 @@ func TestStaleApprovalUnapproved(t *testing.T) {
 	if len(reqs) != 1 || reqs[0].Token != testApproveToken {
 		t.Fatalf("got %d unapprovals, want 1 by the approve bot", len(reqs))
 	}
-	stale, err := env.Store.StaleApprovals(env.ctx)
+	stale, err := env.Store.StaleApprovals(env.ctx, env.Now())
 	if err != nil || len(stale) != 0 {
 		t.Errorf("StaleApprovals = %v, %v; want none", stale, err)
 	}
@@ -802,9 +800,11 @@ func TestStaleApprovalFailureAndUnknownInstance(t *testing.T) {
 
 	cleanup(t, env)
 
-	stale, err := env.Store.StaleApprovals(env.ctx)
+	// MR 1's is kept, and listed again once its backoff is over.
+	env.SetNow(env.Now().Add(30 * time.Second))
+	stale, err := env.Store.StaleApprovals(env.ctx, env.Now())
 	if err != nil || len(stale) != 1 || stale[0].MR != env.MRKey(1) {
-		t.Fatalf("StaleApprovals = %v, %v; want only MR 1's, kept for the next pass", stale, err)
+		t.Fatalf("StaleApprovals = %v, %v; want only MR 1's, kept for a later pass", stale, err)
 	}
 
 	// Without bots for the instance, the approval is left alone, quietly.
@@ -818,8 +818,74 @@ func TestStaleApprovalFailureAndUnknownInstance(t *testing.T) {
 	if logs := env.Logs()[before:]; strings.Contains(logs, "level=WARN") || strings.Contains(logs, "level=ERROR") {
 		t.Errorf("an unknown instance's stale approval is logged above debug every pass:\n%s", logs)
 	}
-	if stale, _ := env.Store.StaleApprovals(env.ctx); len(stale) != 1 {
+	if stale, _ := env.Store.StaleApprovals(env.ctx, env.Now()); len(stale) != 1 {
 		t.Errorf("StaleApprovals = %v, want MR 1's still", stale)
+	}
+}
+
+// A stale approval the approve bot can't remove is not tried on every pass:
+// the next attempt waits 30 s × 2^(failures before), at most 5 minutes. The
+// record is kept throughout, and a removal that works clears it.
+func TestStaleApprovalUnapproveBackoff(t *testing.T) {
+	env := newTestEnv(t)
+	env.Publish(1, sha('a'), resultFor(t, sha('a'), reviewed("no_blocking_issues", "a.go")))
+	if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), sha('a'), "main"); err != nil {
+		t.Fatal(err)
+	}
+	env.Enqueue(1, sha('c'))
+	env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusForbidden, `{"message":"403 Forbidden"}`)
+	attempts := func() int { return len(env.GitLab.Requests(http.MethodPost, unapprovePath(1))) }
+	start := env.Now()
+
+	cleanup(t, env)
+	if n := attempts(); n != 1 {
+		t.Fatalf("first pass: %d unapprovals, want 1", n)
+	}
+	// The next pass, at once (a Wake) or on the 2 s tick, leaves it alone.
+	cleanup(t, env)
+	env.SetNow(start.Add(2 * time.Second))
+	cleanup(t, env)
+	if n := attempts(); n != 1 {
+		t.Fatalf("passes inside the backoff: %d unapprovals, want still 1", n)
+	}
+	if !strings.Contains(env.Logs(), "retry_at") {
+		t.Errorf("the failure's log line doesn't say when it is tried again:\n%s", env.Logs())
+	}
+
+	// Each failure doubles the wait, up to 5 minutes.
+	at := start
+	for i, wait := range []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 4 * time.Minute, 5 * time.Minute} {
+		env.SetNow(at.Add(wait - time.Second))
+		cleanup(t, env)
+		if n := attempts(); n != i+1 {
+			t.Fatalf("a second before backoff %d (%s) is over: %d unapprovals, want %d", i+1, wait, n, i+1)
+		}
+		at = at.Add(wait)
+		env.SetNow(at)
+		cleanup(t, env)
+		if n := attempts(); n != i+2 {
+			t.Fatalf("once backoff %d (%s) is over: %d unapprovals, want %d", i+1, wait, n, i+2)
+		}
+	}
+	if got := recordedApproval(t, env, 1); got != sha('a') {
+		t.Fatalf("recorded approval = %q after the failures, want %s kept", got, sha('a'))
+	}
+
+	// The 6th failure waits the cap too; then the removal works and the
+	// record is cleared.
+	env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusCreated, `{}`)
+	env.SetNow(at.Add(5*time.Minute - time.Second))
+	cleanup(t, env)
+	if n := attempts(); n != 6 {
+		t.Fatalf("inside the capped backoff: %d unapprovals, want 6", n)
+	}
+	env.SetNow(at.Add(5 * time.Minute))
+	cleanup(t, env)
+	if n := attempts(); n != 7 {
+		t.Fatalf("after the capped backoff: %d unapprovals, want 7", n)
+	}
+	if stale, err := env.Store.StaleApprovals(env.ctx, env.Now().Add(time.Hour)); err != nil || len(stale) != 0 {
+		t.Errorf("StaleApprovals = %v, %v; want none once removed", stale, err)
 	}
 }
 
