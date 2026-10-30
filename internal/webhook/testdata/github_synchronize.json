@@ -1,0 +1,12 @@
+{
+  "action": "synchronize",
+  "number": 7,
+  "before": "1111111111111111111111111111111111111111", "after": "2222222222222222222222222222222222222222",
+  "pull_request": {
+    "number": 7,
+    "state": "open",
+    "head": {"sha": "2222222222222222222222222222222222222222", "ref": "feature"},
+    "base": {"ref": "main", "sha": "3333333333333333333333333333333333333333"}
+  },
+  "repository": {"id": 42, "full_name": "acme/widgets"}
+}

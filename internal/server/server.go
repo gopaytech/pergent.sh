@@ -19,7 +19,10 @@ type Deps struct {
 	Config *config.Config
 	// WebhookSecrets maps an instance name to its webhook secret.
 	WebhookSecrets map[string]string
-	Store          *store.Store
+	// GitHubWebhookSecrets maps a GitHub instance name to its review App's
+	// webhook secret.
+	GitHubWebhookSecrets map[string]string
+	Store                *store.Store
 	// Wake nudges the engine's loops. May be nil.
 	Wake func()
 	// Now is the clock of the result callback; nil means time.Now.
@@ -29,12 +32,16 @@ type Deps struct {
 
 // Routes serves:
 //   - POST /webhooks/gitlab/{instance}: GitLab merge request webhooks;
+//   - POST /webhooks/github/{instance}: GitHub pull_request webhooks;
 //   - POST /runs/{id}/result: a review Job's result;
 //   - GET /healthz: 200 "ok".
 func Routes(d Deps) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("POST /webhooks/gitlab/{instance}", &webhook.Handler{
 		Config: d.Config, Secrets: d.WebhookSecrets, Queue: d.Store, Wake: d.Wake, Log: d.Log,
+	})
+	mux.Handle("POST /webhooks/github/{instance}", &webhook.GitHubHandler{
+		Config: d.Config, Secrets: d.GitHubWebhookSecrets, Queue: d.Store, Wake: d.Wake, Log: d.Log,
 	})
 	mux.Handle("POST /runs/{id}/result", &callback.Handler{
 		Results: d.Store, Now: d.Now, Wake: d.Wake, Log: d.Log,

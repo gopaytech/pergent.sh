@@ -1,0 +1,12 @@
+{
+  "action": "edited",
+  "number": 7,
+  "changes": {"base": {"ref": {"from": "develop"}, "sha": {"from": "4444444444444444444444444444444444444444"}}},
+  "pull_request": {
+    "number": 7,
+    "state": "open",
+    "head": {"sha": "1111111111111111111111111111111111111111", "ref": "feature"},
+    "base": {"ref": "main", "sha": "3333333333333333333333333333333333333333"}
+  },
+  "repository": {"id": 42, "full_name": "acme/widgets"}
+}
