@@ -21,6 +21,8 @@ This release covers GitLab only (gitlab.com or any self-managed instance). It ha
 - On each GitLab instance, two users:
   - A **review bot** with the **Maintainer** role on every reviewed project, and an access token with the `api` scope. It creates the project webhook and the read-only deploy token, posts the comment and sets the commit status.
   - An **approve bot** that is an eligible approver of every reviewed project, with an access token with the `api` scope. It only approves, and removes its approval when the merge request gets a new commit or a new target branch. If the project requires specific approvers or forbids approval by certain users, make sure this bot qualifies.
+
+    > **Warning:** if a project needs only one approval and the approve bot is an eligible approver, the bot's approval alone unlocks the merge: a merge request can then be merged on a model's review without any human approving it. Give every reviewed project an approval rule that requires a human approval (for example, one approval from a group the approve bot is not in), so the bot's approval is never enough on its own.
 - An API key for an LLM provider that opencode supports.
 - A way for GitLab to reach pergent.sh over HTTPS (an Ingress, for example).
 
@@ -196,7 +198,9 @@ A failed, partial or missing review is never `success` and is never approved.
 - A run is one head reviewed against one target branch. Changing the target branch reviews the same head again against the new branch, supersedes the review against the old one and withdraws the bot's approval.
 - Two pushes in quick succession: only the newest head is reviewed. The older Job is deleted, and a late result for it is accepted and discarded. Out-of-order push webhooks are handled: the dispatcher reviews the MR's current head.
 - If GitLab has not computed the merge request's diff after 10 minutes, the run fails with a comment.
-- A Job that dies without a result (out of memory, a failed checkout, the deadline, an image pull error, a failed delivery, a deleted Job) produces an error comment and a non-success status within about 2 minutes.
+- A Job that dies without a result (out of memory, a failed checkout, the deadline, a failed delivery, a deleted Job) produces an error comment and a non-success status within about 2 minutes.
+- A Job whose pod can't start because its image can't be pulled (or its container config is invalid) is deleted and reported after about 5 minutes.
+- A Job whose pod the cluster refuses to create (for example, one rejected by an admission policy) is only reported when the Job reaches its deadline, as `DeadlineExceeded`: `jobs.timeout` plus at least 4 minutes, and about a minute more for the report.
 - Runs that were claimed but not launched (for example because pergent.sh crashed) are requeued at startup and after 5 minutes.
 - Publishing to GitLab is retried with backoff. After 10 failed attempts the run becomes `publish_failed` and nothing more is posted to the merge request; the failure is only in the logs.
 
