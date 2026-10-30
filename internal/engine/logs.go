@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -13,6 +14,8 @@ import (
 const (
 	// logKeepBytes is how much of the end of a Job's log is kept.
 	logKeepBytes = 200 * 1024
+	// minLogMargin is the least read of a log beyond what is kept.
+	minLogMargin = 4 * 1024
 	// logRetention is how long a stored log is kept.
 	logRetention = 30 * 24 * time.Hour
 	// logWindow is how long after its result a run's Job is still looked at
@@ -41,12 +44,15 @@ func (e *Engine) captureLog(ctx context.Context, run store.Run, log *slog.Logger
 		log.Info("not keeping the review job's log: its secrets can't be read", "error", e.redact(err.Error()))
 		return
 	}
-	text, err := e.Launcher.Logs(ctx, run.JobName, logKeepBytes)
+	hide := []string{secrets.GitToken, secrets.LLMKey, secrets.ResultToken, e.LLMKey}
+	// More than is kept is read and hidden in first, so a secret across the
+	// point where the kept tail starts is hidden whole, not left in part.
+	text, err := e.Launcher.Logs(ctx, run.JobName, logKeepBytes+logMargin(hide))
 	if err != nil {
 		log.Info("couldn't read the review job's log", "error", e.redact(err.Error()))
 		return
 	}
-	text = redactAll(text, secrets.GitToken, secrets.LLMKey, secrets.ResultToken, e.LLMKey)
+	text = keepTail(store.CleanText(redactAll(text, hide...)), logKeepBytes)
 	if err := e.Store.PutRunLog(ctx, run.ID, text); err != nil {
 		log.Info("couldn't store the review job's log", "error", e.redact(err.Error()))
 	}
@@ -129,6 +135,33 @@ func (e *Engine) pruneRunLogs(ctx context.Context) {
 	if n > 0 {
 		e.log().Info("pruned old review logs", "logs", n)
 	}
+}
+
+// logMargin is how much more than is kept is read of a log: at least
+// minLogMargin, and at least the longest secret.
+func logMargin(secrets []string) int {
+	n := minLogMargin
+	for _, s := range secrets {
+		n = max(n, len(s))
+	}
+	return n
+}
+
+// keepTail returns the last keep bytes of text, starting at the first whole
+// line in them; with no line break in them, as cut, on a character
+// boundary.
+func keepTail(text string, keep int) string {
+	if len(text) <= keep {
+		return text
+	}
+	tail := text[len(text)-keep:]
+	if i := strings.IndexByte(tail, '\n'); i >= 0 {
+		return tail[i+1:]
+	}
+	for len(tail) > 0 && !utf8.RuneStart(tail[0]) {
+		tail = tail[1:]
+	}
+	return tail
 }
 
 // redactAll replaces every non-empty secret in text with [REDACTED], longest

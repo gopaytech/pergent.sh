@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	batchv1 "k8s.io/api/batch/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -144,6 +145,47 @@ func TestRunLogRedacted(t *testing.T) {
 	}
 	if strings.Count(text, "[REDACTED]") != 4 || !strings.Contains(text, "clean line") {
 		t.Errorf("stored log = %q; want four [REDACTED] and the clean line kept", text)
+	}
+}
+
+// A secret across the point where the kept tail starts is hidden whole: no
+// end of it is kept. The tail starts at a whole line.
+func TestRunLogSecretAcrossCut(t *testing.T) {
+	env := newTestEnv(t)
+	now := env.Now()
+	const clone = "glpat-clone-token-START-0123456789-ENDSUFFIX"
+	// The kept tail starts 20 bytes before the token's end.
+	tail := clone[len(clone)-20:] + "\n" + strings.Repeat("x", 99) + "\n"
+	rest := strings.Repeat("y", logKeepBytes-len(tail)-1) + "\n"
+	serveLog(env, strings.Repeat("early line\n", 1000)+"cloning with "+clone[:len(clone)-20]+tail+rest)
+
+	id := env.Report(1, sha('1'), []byte(`{"status":"completed"}`))
+	putJob(t, env, id, now.Add(-time.Minute), nil, nil, jobCond(batchv1.JobComplete, "", now.Add(-time.Second)))
+	putJobSecret(t, env, id, kube.Secrets{GitToken: clone, LLMKey: testLLMKey, ResultToken: "result-token-abc"})
+
+	watch(t, env)
+	text, found := storedLog(t, env, id)
+	if !found {
+		t.Fatal("no log stored")
+	}
+	if strings.Contains(text, "ENDSUFFIX") || strings.Contains(text, "DACTED") {
+		t.Errorf("the stored log keeps part of the token or its mark: %q", text[:min(len(text), 80)])
+	}
+	if len(text) > logKeepBytes || !strings.HasPrefix(text, strings.Repeat("x", 99)+"\n") {
+		t.Errorf("stored log is %d bytes starting %q; want at most %d from the first whole line", len(text), text[:min(len(text), 40)], logKeepBytes)
+	}
+}
+
+// A tail without a line break after the cut is kept as cut, on a character
+// boundary.
+func TestRunLogCutWithoutLineBreak(t *testing.T) {
+	text := strings.Repeat("é", logKeepBytes) // 2 bytes each
+	got := keepTail(text, logKeepBytes)
+	if len(got) > logKeepBytes || len(got) < logKeepBytes-1 || !utf8.ValidString(got) {
+		t.Errorf("keepTail gave %d bytes, valid %v", len(got), utf8.ValidString(got))
+	}
+	if short := "a\nb"; keepTail(short, logKeepBytes) != short {
+		t.Errorf("a short log is changed")
 	}
 }
 

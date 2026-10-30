@@ -164,6 +164,19 @@ func TestRunLogRoundTrip(t *testing.T) {
 	}
 }
 
+// Postgres text takes neither NUL nor invalid UTF-8: such a log is stored
+// with them made safe instead of failing (it is never tried again).
+func TestRunLogNULAndInvalidUTF8(t *testing.T) {
+	s := newStore(t)
+	id := enqueue(t, s, mr1, "aaaa")
+	if err := s.PutRunLog(ctx, id, "a\x00b \xff\xfe c\n"); err != nil {
+		t.Fatalf("PutRunLog with a NUL and invalid bytes: %v", err)
+	}
+	if text, found, err := s.RunLog(ctx, id); err != nil || !found || text != "ab \uFFFD c\n" {
+		t.Errorf("RunLog = %q, %v, %v; want the NUL dropped and the invalid bytes replaced", text, found, err)
+	}
+}
+
 func TestPruneRunLogs(t *testing.T) {
 	s := newStore(t)
 	oldID := enqueue(t, s, mr1, "aaaa")

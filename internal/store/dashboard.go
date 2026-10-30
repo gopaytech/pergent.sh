@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -154,15 +155,22 @@ func (s *Store) DeleteDashboardRepo(ctx context.Context, instance, project strin
 	return err
 }
 
-// PutRunLog stores the redacted log of a run, replacing an earlier one. An
-// empty text is stored too: it records that the log was taken.
+// PutRunLog stores the redacted log of a run, replacing an earlier one,
+// made fit for a text column with CleanText. An empty text is stored too:
+// it records that the log was taken.
 func (s *Store) PutRunLog(ctx context.Context, runID, text string) error {
 	if !validUUID(runID) {
 		return errors.New("store: malformed run id")
 	}
 	_, err := s.pool.Exec(ctx, `INSERT INTO run_logs (run_id, text) VALUES ($1::uuid, $2)
-		ON CONFLICT (run_id) DO UPDATE SET text = EXCLUDED.text, created_at = now()`, runID, text)
+		ON CONFLICT (run_id) DO UPDATE SET text = EXCLUDED.text, created_at = now()`, runID, CleanText(text))
 	return err
+}
+
+// CleanText makes text something Postgres stores as text: each invalid
+// UTF-8 sequence becomes U+FFFD and NUL bytes are dropped.
+func CleanText(text string) string {
+	return strings.ReplaceAll(strings.ToValidUTF8(text, "\uFFFD"), "\x00", "")
 }
 
 // RunLog returns a run's stored log. A run without one, or a malformed id,
