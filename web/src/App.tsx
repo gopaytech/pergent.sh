@@ -1,57 +1,62 @@
-import { NavLink, Route, Routes } from "react-router";
+import { useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
+import { Route, Routes, useNavigate } from "react-router";
 
-import Placeholder from "./Placeholder";
+import { onUnauthorized } from "./api";
+import Layout, { AdminOnly } from "./layout/Layout";
+import AdminSettings from "./pages/AdminSettings";
+import Integrations from "./pages/Integrations";
+import Overview from "./pages/Overview";
+import Repositories from "./pages/Repositories";
+import RepositoryDetail from "./pages/RepositoryDetail";
+import ReviewDetail from "./pages/ReviewDetail";
+import Reviews from "./pages/Reviews";
+import SignIn from "./pages/SignIn";
+import Skills from "./pages/Skills";
+import { NotFound } from "./ui";
 
-type NavItem = { to: string; label: string; end?: boolean };
-
-const main: NavItem[] = [
-  { to: "/", label: "Overview", end: true },
-  { to: "/repos", label: "Repositories" },
-  { to: "/reviews", label: "Reviews" },
-  { to: "/skills", label: "Skills" },
-];
-
-const admin: NavItem[] = [
-  { to: "/integrations", label: "Integrations" },
-  { to: "/settings", label: "Settings" },
-  { to: "/organization", label: "Organization" },
-];
-
-function Nav({ items }: { items: NavItem[] }) {
-  return (
-    <>
-      {items.map((item) => (
-        <NavLink key={item.to} to={item.to} end={item.end}>
-          {item.label}
-        </NavLink>
-      ))}
-    </>
-  );
-}
-
-// App is the dashboard's shell: the dark menu on the left, the page on the right.
+// App routes the pages. A 401 from any call drops what was loaded and
+// sends the browser to the sign-in page.
 export default function App() {
+  const navigate = useNavigate();
+  const client = useQueryClient();
+  useEffect(
+    () =>
+      onUnauthorized(() => {
+        client.clear();
+        navigate("/signin", { replace: true });
+      }),
+    [client, navigate],
+  );
   return (
-    <div className="shell">
-      <aside>
-        <div className="brand">
-          <div className="logo" aria-hidden="true">
-            p
-          </div>
-          pergent.sh
-        </div>
-        <nav className="nav" aria-label="Main">
-          <Nav items={main} />
-          <div className="section-label">Admin</div>
-          <Nav items={admin} />
-        </nav>
-      </aside>
-      <main>
-        <Routes>
-          <Route path="/" element={<Placeholder title="Overview" />} />
-          <Route path="*" element={<Placeholder title="Coming soon" />} />
-        </Routes>
-      </main>
-    </div>
+    <Routes>
+      <Route path="/signin" element={<SignIn />} />
+      <Route element={<Layout />}>
+        <Route index element={<Overview />} />
+        <Route path="reviews" element={<Reviews />} />
+        {/* The project path has slashes: the rest is "{project}/{number}". */}
+        <Route path="reviews/:instance/*" element={<ReviewDetail />} />
+        <Route path="repos" element={<Repositories />} />
+        <Route path="repos/:instance/*" element={<RepositoryDetail />} />
+        <Route path="skills" element={<Skills />} />
+        <Route
+          path="integrations"
+          element={
+            <AdminOnly>
+              <Integrations />
+            </AdminOnly>
+          }
+        />
+        <Route
+          path="settings"
+          element={
+            <AdminOnly>
+              <AdminSettings />
+            </AdminOnly>
+          }
+        />
+        <Route path="*" element={<NotFound />} />
+      </Route>
+    </Routes>
   );
 }
