@@ -16,11 +16,19 @@ import (
 )
 
 // checkCookie asserts the attributes every pergent cookie has.
-func checkCookie(t *testing.T, c *http.Cookie, path string) {
+// Both are __Host- cookies: Secure, Path=/ and no Domain, so no other host
+// (a sibling subdomain) can set or shadow them.
+func checkCookie(t *testing.T, c *http.Cookie, name string) {
 	t.Helper()
-	if !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteLaxMode || c.Path != path {
-		t.Errorf("cookie %s: HttpOnly %v Secure %v SameSite %v Path %q; want HttpOnly, Secure, Lax, %q",
-			c.Name, c.HttpOnly, c.Secure, c.SameSite, c.Path, path)
+	if c.Name != name || !strings.HasPrefix(c.Name, "__Host-") {
+		t.Errorf("cookie name %q, want %q (a __Host- cookie)", c.Name, name)
+	}
+	if !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteLaxMode || c.Path != "/" || c.Domain != "" {
+		t.Errorf("cookie %s: HttpOnly %v Secure %v SameSite %v Path %q Domain %q; want HttpOnly, Secure, Lax, /, no Domain",
+			c.Name, c.HttpOnly, c.Secure, c.SameSite, c.Path, c.Domain)
+	}
+	if strings.Contains(c.String(), "Domain=") {
+		t.Errorf("cookie %s is sent with a Domain: %s", c.Name, c.String())
 	}
 }
 
@@ -51,7 +59,7 @@ func TestGitLabLoginCreatesSession(t *testing.T) {
 	if len(q.Get("state")) < 40 || q.Get("code_challenge") == "" {
 		t.Errorf("state %q, code_challenge %q", q.Get("state"), q.Get("code_challenge"))
 	}
-	checkCookie(t, sc, "/auth/")
+	checkCookie(t, sc, "__Host-pergent_oauth_state")
 	if sc.MaxAge <= 0 || sc.MaxAge > 600 {
 		t.Errorf("state cookie MaxAge = %d, want at most 10 minutes", sc.MaxAge)
 	}
@@ -68,12 +76,14 @@ func TestGitLabLoginCreatesSession(t *testing.T) {
 	}
 	if cleared := cookie(rec, stateCookieName); cleared == nil || cleared.MaxAge >= 0 {
 		t.Error("callback did not clear the state cookie")
+	} else {
+		checkCookie(t, cleared, "__Host-pergent_oauth_state")
 	}
 	c := cookie(rec, SessionCookieName)
 	if c == nil {
 		t.Fatal("no session cookie")
 	}
-	checkCookie(t, c, "/")
+	checkCookie(t, c, "__Host-pergent_session")
 	if id, err := base64.RawURLEncoding.DecodeString(c.Value); err != nil || len(id) != 32 {
 		t.Fatalf("session ID %q is not 32 random bytes", c.Value)
 	}
@@ -132,7 +142,7 @@ func TestGitHubLoginCreatesSession(t *testing.T) {
 		t.Errorf("code_verifier %q does not match the challenge", v)
 	}
 	c := cookie(rec, SessionCookieName)
-	checkCookie(t, c, "/")
+	checkCookie(t, c, "__Host-pergent_session")
 	code, me := e.me(c)
 	if code != 200 || me.Platform != "github" || me.Instance != "gh" || me.Username != "alice" || !me.IsAdmin {
 		t.Fatalf("/api/me = %d %+v", code, me)
@@ -436,6 +446,8 @@ func TestCSRFRequiredOnWrites(t *testing.T) {
 	}
 	if cl := cookie(rec, SessionCookieName); cl == nil || cl.MaxAge >= 0 {
 		t.Error("logout did not clear the cookie")
+	} else {
+		checkCookie(t, cl, "__Host-pergent_session")
 	}
 	if _, found := e.storedSession(c); found {
 		t.Error("logout left the session stored")

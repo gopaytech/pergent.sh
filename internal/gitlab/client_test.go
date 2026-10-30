@@ -797,6 +797,31 @@ func TestProjectAccessNotFound(t *testing.T) {
 	}
 }
 
+// Only an active member counts: a blocked user, or a membership awaiting
+// approval (over the seat limit), is not a member.
+func TestIsGroupMemberRequiresActive(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		member map[string]any
+		want   bool
+	}{
+		{"active", map[string]any{"state": "active", "membership_state": "active"}, true},
+		{"active, no membership_state (older GitLab)", map[string]any{"state": "active"}, true},
+		{"awaiting", map[string]any{"state": "active", "membership_state": "awaiting"}, false},
+		{"state awaiting", map[string]any{"state": "awaiting"}, false},
+		{"blocked user", map[string]any{"state": "blocked", "membership_state": "active"}, false},
+		{"no state", map[string]any{"id": 9}, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c, _ := serve(t, jsonReply(tt.member))
+			got, err := c.IsGroupMember(context.Background(), "acme/platform", 9)
+			if err != nil || got != tt.want {
+				t.Fatalf("IsGroupMember = %v, %v; want %v", got, err, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsGroupMember(t *testing.T) {
 	c, reqs := serve(t, jsonReply(map[string]any{"id": 9, "username": "alice", "access_level": 10, "state": "active"}))
 	ok, err := c.IsGroupMember(context.Background(), "acme/platform", 9)

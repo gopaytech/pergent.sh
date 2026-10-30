@@ -338,18 +338,25 @@ func (c *Client) ProjectAccess(ctx context.Context, path string) (ProjectAccess,
 	return a, nil
 }
 
-// IsGroupMember reports whether the user is a member of group (a path such
-// as acme/platform), directly or through a parent group or shared group. Not
-// a member (404) is false; any other failure is an error.
+// IsGroupMember reports whether the user is an active member of group (a
+// path such as acme/platform), directly or through a parent group or shared
+// group. The user must be active (state) and the membership too
+// (membership_state, when GitLab reports it): a membership awaiting
+// approval is not one. Not a member (404) is false; any other failure is an
+// error.
 func (c *Client) IsGroupMember(ctx context.Context, group string, userID int64) (bool, error) {
-	_, err := c.do(ctx, http.MethodGet, "/groups/"+seg(group)+"/members/all/"+strconv.FormatInt(userID, 10), nil, nil)
+	var m struct {
+		State           string `json:"state"`
+		MembershipState string `json:"membership_state"`
+	}
+	_, err := c.getJSON(ctx, "/groups/"+seg(group)+"/members/all/"+strconv.FormatInt(userID, 10), nil, &m)
 	if isStatus(err, http.StatusNotFound) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	return true, nil
+	return m.State == "active" && (m.MembershipState == "" || m.MembershipState == "active"), nil
 }
 
 // ApprovalRules lists the project's approval rules.

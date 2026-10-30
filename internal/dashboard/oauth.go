@@ -51,6 +51,15 @@ func (t oauthToken) expiresBy(at time.Time) bool {
 	return !t.Expiry.IsZero() && !at.Before(t.Expiry)
 }
 
+// callContext bounds one call to the platform by d (platformTimeout when d
+// is 0), whatever HTTP client makes it.
+func callContext(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if d <= 0 {
+		d = platformTimeout
+	}
+	return context.WithTimeout(ctx, d)
+}
+
 // randomString is n random bytes, base64url without padding.
 func randomString(n int) string {
 	b := make([]byte, n)

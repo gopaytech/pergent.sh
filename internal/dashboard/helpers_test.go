@@ -186,7 +186,11 @@ type fakeGitLab struct {
 	projects map[string]map[string]any // path → GET /projects/:path body
 	groups   map[string]bool           // group path → user 9 is a member
 	checks   int                       // GET /projects/:path calls
+	username string                    // user 9's username (default alice)
+	member   map[string]any            // extra fields of a member answer
 }
+
+func (f *fakeGitLab) setUsername(name string) { f.set(func(*oauthServer) { f.username = name }) }
 
 func (f *fakeGitLab) projectChecks() int {
 	f.mu.Lock()
@@ -196,7 +200,7 @@ func (f *fakeGitLab) projectChecks() int {
 
 func newFakeGitLab(t *testing.T) *fakeGitLab {
 	f := &fakeGitLab{oauthServer: oauthServer{prefix: "gl", expiresIn: 7200},
-		projects: map[string]map[string]any{}, groups: map[string]bool{}}
+		projects: map[string]map[string]any{}, groups: map[string]bool{}, username: "alice"}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -224,7 +228,7 @@ func (f *fakeGitLab) serve(w http.ResponseWriter, r *http.Request) {
 	defer f.mu.Unlock()
 	switch {
 	case p == "/api/v4/user":
-		reply(w, 200, map[string]any{"id": 9, "username": "alice"})
+		reply(w, 200, map[string]any{"id": 9, "username": f.username})
 	case strings.HasPrefix(p, "/api/v4/projects/"):
 		f.checks++
 		path, _ := url.PathUnescape(strings.TrimPrefix(p, "/api/v4/projects/"))
@@ -236,7 +240,11 @@ func (f *fakeGitLab) serve(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(p, "/api/v4/groups/") && strings.HasSuffix(p, "/members/all/9"):
 		group, _ := url.PathUnescape(strings.TrimSuffix(strings.TrimPrefix(p, "/api/v4/groups/"), "/members/all/9"))
 		if f.groups[group] {
-			reply(w, 200, map[string]any{"id": 9, "username": "alice", "access_level": 10, "state": "active"})
+			body := map[string]any{"id": 9, "username": f.username, "access_level": 10, "state": "active", "membership_state": "active"}
+			for k, v := range f.member {
+				body[k] = v
+			}
+			reply(w, 200, body)
 			return
 		}
 		reply(w, 404, map[string]any{"message": "404 Not found"})
@@ -280,12 +288,20 @@ type fakeGitHub struct {
 	oauthServer
 	srv   *httptest.Server
 	repos map[string]map[string]any // owner/name → GET /repos body
-	teams map[string]string         // org/slug → alice's membership state
+	teams map[string]string         // org/slug/login → membership state
+	login string                    // user 7's login (default alice)
+}
+
+func (f *fakeGitHub) setLogin(login string) { f.set(func(*oauthServer) { f.login = login }) }
+
+// setTeamFor sets login's membership state of team org/slug.
+func (f *fakeGitHub) setTeamFor(team, login, state string) {
+	f.set(func(*oauthServer) { f.teams[team+"/"+login] = state })
 }
 
 func newFakeGitHub(t *testing.T) *fakeGitHub {
 	f := &fakeGitHub{oauthServer: oauthServer{prefix: "gh"},
-		repos: map[string]map[string]any{}, teams: map[string]string{}}
+		repos: map[string]map[string]any{}, teams: map[string]string{}, login: "alice"}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -296,7 +312,7 @@ func (f *fakeGitHub) setRepo(full string, body map[string]any) {
 }
 
 func (f *fakeGitHub) setTeam(team, state string) {
-	f.set(func(*oauthServer) { f.teams[team] = state })
+	f.setTeamFor(team, "alice", state)
 }
 
 func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
@@ -313,16 +329,16 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 	defer f.mu.Unlock()
 	switch {
 	case p == "/api/v3/user":
-		reply(w, 200, map[string]any{"id": 7, "login": "alice"})
+		reply(w, 200, map[string]any{"id": 7, "login": f.login})
 	case strings.HasPrefix(p, "/api/v3/repos/"):
 		if body, ok := f.repos[strings.TrimPrefix(p, "/api/v3/repos/")]; ok {
 			reply(w, 200, body)
 			return
 		}
 		reply(w, 404, map[string]any{"message": "Not Found"})
-	case strings.HasPrefix(p, "/api/v3/orgs/") && strings.HasSuffix(p, "/memberships/alice"):
-		parts := strings.Split(strings.TrimPrefix(p, "/api/v3/orgs/"), "/") // org teams slug memberships alice
-		if state, ok := f.teams[parts[0]+"/"+parts[2]]; ok {
+	case strings.HasPrefix(p, "/api/v3/orgs/") && strings.Contains(p, "/memberships/"):
+		parts := strings.Split(strings.TrimPrefix(p, "/api/v3/orgs/"), "/") // org teams slug memberships login
+		if state, ok := f.teams[parts[0]+"/"+parts[2]+"/"+parts[4]]; ok {
 			reply(w, 200, map[string]any{"state": state, "role": "member"})
 			return
 		}

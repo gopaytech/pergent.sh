@@ -26,6 +26,7 @@ type githubProvider struct {
 	redirectURI  string
 	hc           *http.Client
 	now          func() time.Time
+	timeout      time.Duration // each call's deadline
 }
 
 // githubWebURL is the web address that serves /login/oauth for the API at
@@ -54,6 +55,8 @@ func (p *githubProvider) authorizeURL(state, challenge string) string {
 }
 
 func (p *githubProvider) exchange(ctx context.Context, code, verifier string) (oauthToken, error) {
+	ctx, cancel := callContext(ctx, p.timeout)
+	defer cancel()
 	return postToken(ctx, p.hc, p.webURL+"/login/oauth/access_token", url.Values{
 		"client_id":     {p.clientID},
 		"client_secret": {p.clientSecret},
@@ -64,6 +67,8 @@ func (p *githubProvider) exchange(ctx context.Context, code, verifier string) (o
 }
 
 func (p *githubProvider) refresh(ctx context.Context, refreshToken string) (oauthToken, error) {
+	ctx, cancel := callContext(ctx, p.timeout)
+	defer cancel()
 	return postToken(ctx, p.hc, p.webURL+"/login/oauth/access_token", url.Values{
 		"client_id":     {p.clientID},
 		"client_secret": {p.clientSecret},
@@ -77,6 +82,8 @@ func (p *githubProvider) client(accessToken string) *github.Client {
 }
 
 func (p *githubProvider) user(ctx context.Context, accessToken string) (int64, string, error) {
+	ctx, cancel := callContext(ctx, p.timeout)
+	defer cancel()
 	u, err := p.client(accessToken).CurrentUser(ctx)
 	if err != nil {
 		return 0, "", err
@@ -94,6 +101,8 @@ func (p *githubProvider) canSee(ctx context.Context, accessToken, project string
 	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
 		return false, nil
 	}
+	ctx, cancel := callContext(ctx, p.timeout)
+	defer cancel()
 	a, err := p.client(accessToken).RepoAccess(ctx, owner, name)
 	if errors.Is(err, github.ErrNotFound) || isStatus(err, http.StatusForbidden) {
 		return false, nil
@@ -109,5 +118,7 @@ func (p *githubProvider) isAdmin(ctx context.Context, accessToken string, _ int6
 	if !ok || org == "" || slug == "" {
 		return false, nil
 	}
+	ctx, cancel := callContext(ctx, p.timeout)
+	defer cancel()
 	return p.client(accessToken).TeamMembershipActive(ctx, org, slug, username)
 }

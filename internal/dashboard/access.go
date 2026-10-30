@@ -25,8 +25,9 @@ const (
 var errRecentFailure = errors.New("the last access check failed less than a minute ago")
 
 // accessResult is what a session may see: the repositories on its instance
-// and whether its user is an admin there.
+// and whether its user, under their current username, is an admin there.
 type accessResult struct {
+	username string
 	isAdmin  bool
 	projects []string
 }
@@ -76,7 +77,7 @@ func (a *Auth) stored(ctx context.Context, se store.Session) (accessResult, erro
 	if err != nil {
 		return accessResult{}, err
 	}
-	return accessResult{isAdmin: se.IsAdmin, projects: projects}, nil
+	return accessResult{username: se.Username, isAdmin: se.IsAdmin, projects: projects}, nil
 }
 
 // refreshShared runs one access check per session at a time: a request
@@ -179,14 +180,22 @@ func (a *Auth) refresh(ctx context.Context, se store.Session, now time.Time) (ac
 	return a.checkAccess(ctx, cur, tok)
 }
 
-// checkAccess asks the platform, with the user's token, which repositories
-// switched on for the session's instance the user can see and whether they
-// are in one of the instance's admin groups or teams, and stores the answer.
+// checkAccess asks the platform, with the user's token, who the user is now
+// (a GitHub login can change hands after a rename), which repositories
+// switched on for the session's instance they can see and whether they are
+// in one of the instance's admin groups or teams, and stores the answer.
 // Any call that fails fails the whole check: nothing is stored.
 func (a *Auth) checkAccess(ctx context.Context, se store.Session, tok oauthToken) (accessResult, error) {
 	p, ok := a.providers[se.Instance]
 	if !ok || p.platform() != se.Platform {
 		return accessResult{}, fmt.Errorf("instance %q has no %s sign-in", se.Instance, se.Platform)
+	}
+	userID, username, err := p.user(ctx, tok.AccessToken)
+	if err != nil {
+		return accessResult{}, fmt.Errorf("reading the user: %w", err)
+	}
+	if userID != se.UserID {
+		return accessResult{}, fmt.Errorf("the token now belongs to user %d, not %d", userID, se.UserID)
 	}
 	repos, err := a.repos.List(ctx)
 	if err != nil {
@@ -207,7 +216,7 @@ func (a *Auth) checkAccess(ctx context.Context, se store.Session, tok oauthToken
 		if admin.Instance != se.Instance {
 			continue
 		}
-		ok, err := p.isAdmin(ctx, tok.AccessToken, se.UserID, se.Username, admin)
+		ok, err := p.isAdmin(ctx, tok.AccessToken, userID, username, admin)
 		if err != nil {
 			return accessResult{}, fmt.Errorf("admin check: %w", err)
 		}
@@ -216,10 +225,10 @@ func (a *Auth) checkAccess(ctx context.Context, se store.Session, tok oauthToken
 			break
 		}
 	}
-	if err := a.store.SetSessionAccess(ctx, se.IDHash, isAdmin, visible, a.now()); err != nil {
+	if err := a.store.SetSessionAccess(ctx, se.IDHash, username, isAdmin, visible, a.now()); err != nil {
 		return accessResult{}, err
 	}
-	return accessResult{isAdmin: isAdmin, projects: visible}, nil
+	return accessResult{username: username, isAdmin: isAdmin, projects: visible}, nil
 }
 
 // checkProjects returns the projects the token's user can see, checking

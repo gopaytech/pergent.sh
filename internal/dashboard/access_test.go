@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
@@ -144,14 +145,33 @@ func TestAdminByGroupAndTeam(t *testing.T) {
 		}
 	})
 	t.Run("admin rights are per instance", func(t *testing.T) {
-		// The group is named only for gh: a member signing in on main is
-		// no admin there.
+		// acme/platform is the admin group of another GitLab instance; on
+		// main the admins are acme/admins. A member of acme/platform on
+		// main is no admin there: the same group path on another
+		// instance is another group.
 		e := newEnv(t, func(c *config.Config) {
-			c.Dashboard.Admins = []config.DashboardAdmin{{Instance: "gh", Team: "acme/platform"}}
+			c.GitLab = append(c.GitLab, config.Instance{Name: "other", URL: "https://gitlab.example.com"})
+			c.Dashboard.Admins = []config.DashboardAdmin{
+				{Instance: "other", Group: "acme/platform"},
+				{Instance: "main", Group: "acme/admins"},
+			}
 		})
 		e.gl.setMember("acme/platform", true)
 		if _, me := e.me(e.signIn("gitlab", "main")); me.IsAdmin {
-			t.Fatal("admin on main through gh's team")
+			t.Fatal("admin on main through another instance's group")
+		}
+		e.gl.setMember("acme/admins", true)
+		e.clock.advance(AccessTTL + time.Second)
+		if _, me := e.me(e.signIn("gitlab", "main")); !me.IsAdmin {
+			t.Fatal("a member of main's own admin group is not admin")
+		}
+	})
+	t.Run("gitlab member awaiting approval", func(t *testing.T) {
+		e := newEnv(t, nil)
+		e.gl.setMember("acme/platform", true)
+		e.gl.set(func(*oauthServer) { e.gl.member = map[string]any{"membership_state": "awaiting"} })
+		if _, me := e.me(e.signIn("gitlab", "main")); me.IsAdmin {
+			t.Fatal("a member awaiting approval is admin")
 		}
 	})
 	t.Run("membership lost", func(t *testing.T) {
@@ -302,5 +322,103 @@ func TestConcurrentRefreshChecksOnce(t *testing.T) {
 	}
 	if se, _ := e.storedSession(c); !se.AccessCheckedAt.Equal(e.clock.now()) {
 		t.Errorf("access_checked_at = %v", se.AccessCheckedAt)
+	}
+}
+
+// A renamed GitHub login is never used again for the team check: each
+// access check reads /user afresh. Someone else may take the old login.
+func TestRenamedUserChecksCurrentLogin(t *testing.T) {
+	e := newEnv(t, nil)
+	e.gh.setRepo("acme/widgets", githubRepo(true, true))
+	e.gh.setTeam("acme/platform", "active")
+	c := e.signIn("github", "gh")
+	if _, me := e.me(c); !me.IsAdmin || me.Username != "alice" {
+		t.Fatalf("before the rename: %+v", me)
+	}
+
+	// alice renames herself bob; someone else takes "alice" and is in
+	// the admin team, bob isn't.
+	e.gh.setLogin("bob")
+	e.gh.setTeamFor("acme/platform", "bob", "")
+	e.clock.advance(AccessTTL + time.Second)
+	_, me := e.me(c)
+	if me.IsAdmin {
+		t.Fatal("admin through the old login")
+	}
+	if me.Username != "bob" {
+		t.Errorf("username = %q, want bob", me.Username)
+	}
+	if se, _ := e.storedSession(c); se.Username != "bob" {
+		t.Errorf("stored username = %q, want bob", se.Username)
+	}
+}
+
+// GitLab checks admin by user ID, but the username shown follows a rename
+// too.
+func TestRenamedGitLabUserUpdated(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.signIn("gitlab", "main")
+	e.gl.setUsername("alice-renamed")
+	e.clock.advance(AccessTTL + time.Second)
+	if _, me := e.me(c); me.Username != "alice-renamed" {
+		t.Fatalf("username after the rename = %q", me.Username)
+	}
+}
+
+// Every call to the platform gets its own 10 s deadline, even with an
+// injected HTTP client that has none.
+func TestPlatformCallsTimeOut(t *testing.T) {
+	hang := func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(hang))
+	t.Cleanup(srv.Close)
+	noTimeout := &http.Client{}
+	ps := []provider{
+		&gitlabProvider{baseURL: srv.URL, hc: noTimeout, now: time.Now, timeout: 50 * time.Millisecond},
+		&githubProvider{webURL: srv.URL, apiURL: srv.URL, hc: noTimeout, now: time.Now, timeout: 50 * time.Millisecond},
+	}
+	for _, p := range ps {
+		calls := map[string]func() error{
+			"exchange": func() error { _, err := p.exchange(ctx, "code", "verifier"); return err },
+			"refresh":  func() error { _, err := p.refresh(ctx, "refresh"); return err },
+			"user":     func() error { _, _, err := p.user(ctx, "token"); return err },
+			"canSee":   func() error { _, err := p.canSee(ctx, "token", "acme/widgets"); return err },
+			"isAdmin": func() error {
+				_, err := p.isAdmin(ctx, "token", 9, "alice", config.DashboardAdmin{Group: "acme/platform", Team: "acme/platform"})
+				return err
+			},
+		}
+		for name, call := range calls {
+			start := time.Now()
+			err := call()
+			if err == nil || time.Since(start) > 3*time.Second {
+				t.Errorf("%s %s: err %v after %s, want a timeout", p.platform(), name, err, time.Since(start))
+			}
+		}
+	}
+
+	// New gives every provider the 10 s deadline, whatever client it is given.
+	t.Setenv("PERGENT_TEST_ID", "id")
+	t.Setenv("PERGENT_TEST_SECRET", "secret")
+	cfg := &config.Config{
+		GitLab: []config.Instance{{Name: "main", URL: "https://gitlab.example.com",
+			OAuthClientIDEnv: "PERGENT_TEST_ID", OAuthClientSecretEnv: "PERGENT_TEST_SECRET"}},
+		GitHub: []config.GitHubInstance{{Name: "gh", APIURL: "https://api.github.com",
+			OAuthClientIDEnv: "PERGENT_TEST_ID", OAuthClientSecretEnv: "PERGENT_TEST_SECRET"}},
+		Dashboard: config.Dashboard{URL: dashboardURL},
+	}
+	d, err := New(Options{Config: cfg, SecretKey: testKey(t), HTTPClient: noTimeout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Auth.providers["main"].(*gitlabProvider).timeout; got != 10*time.Second {
+		t.Errorf("gitlab call timeout = %s", got)
+	}
+	if got := d.Auth.providers["gh"].(*githubProvider).timeout; got != 10*time.Second {
+		t.Errorf("github call timeout = %s", got)
 	}
 }

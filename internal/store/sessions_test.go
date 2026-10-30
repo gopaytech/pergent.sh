@@ -41,12 +41,12 @@ func TestSessionsCRUD(t *testing.T) {
 		t.Fatal(err)
 	}
 	checked := t0.Add(2 * time.Minute)
-	if err := s.SetSessionAccess(ctx, in.IDHash, true, []string{"acme/widgets", "Acme/Widgets", "acme/payments"}, checked); err != nil {
+	if err := s.SetSessionAccess(ctx, in.IDHash, "alice-renamed", true, []string{"acme/widgets", "Acme/Widgets", "acme/payments"}, checked); err != nil {
 		t.Fatal(err)
 	}
 	got, _, _ = s.Session(ctx, in.IDHash)
 	if !got.LastSeenAt.Equal(t0.Add(time.Minute)) || !bytes.Equal(got.TokenSealed, []byte("resealed")) ||
-		!got.IsAdmin || got.AccessCheckedAt == nil || !got.AccessCheckedAt.Equal(checked) {
+		!got.IsAdmin || got.AccessCheckedAt == nil || !got.AccessCheckedAt.Equal(checked) || got.Username != "alice-renamed" {
 		t.Fatalf("updated session = %+v", got)
 	}
 	projects, err := s.SessionProjects(ctx, in.IDHash)
@@ -55,7 +55,7 @@ func TestSessionsCRUD(t *testing.T) {
 	}
 
 	// A new check replaces the list.
-	if err := s.SetSessionAccess(ctx, in.IDHash, false, []string{"acme/payments"}, checked.Add(time.Minute)); err != nil {
+	if err := s.SetSessionAccess(ctx, in.IDHash, "alice", false, []string{"acme/payments"}, checked.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	if projects, _ := s.SessionProjects(ctx, in.IDHash); !slices.Equal(projects, []string{"acme/payments"}) {
@@ -63,7 +63,7 @@ func TestSessionsCRUD(t *testing.T) {
 	}
 
 	// Clearing denies everything but keeps the time of the last good check.
-	if err := s.SetSessionAccess(ctx, in.IDHash, true, []string{"acme/payments"}, checked); err != nil {
+	if err := s.SetSessionAccess(ctx, in.IDHash, "alice", true, []string{"acme/payments"}, checked); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.ClearSessionAccess(ctx, in.IDHash); err != nil {
@@ -75,7 +75,7 @@ func TestSessionsCRUD(t *testing.T) {
 	}
 
 	// Deleting removes the session and its projects.
-	if err := s.SetSessionAccess(ctx, in.IDHash, false, []string{"acme/widgets"}, checked); err != nil {
+	if err := s.SetSessionAccess(ctx, in.IDHash, "alice", false, []string{"acme/widgets"}, checked); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DeleteSession(ctx, in.IDHash); err != nil {
@@ -88,7 +88,7 @@ func TestSessionsCRUD(t *testing.T) {
 		t.Fatalf("projects left after DeleteSession: %v", projects)
 	}
 	// Access set on a session that's gone is not stored.
-	if err := s.SetSessionAccess(ctx, in.IDHash, true, []string{"acme/widgets"}, checked); err != nil {
+	if err := s.SetSessionAccess(ctx, in.IDHash, "alice", true, []string{"acme/widgets"}, checked); err != nil {
 		t.Fatalf("SetSessionAccess on a deleted session: %v", err)
 	}
 	if _, found, _ := s.Session(ctx, in.IDHash); found {

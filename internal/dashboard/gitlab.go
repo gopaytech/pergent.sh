@@ -24,6 +24,7 @@ type gitlabProvider struct {
 	redirectURI  string
 	hc           *http.Client
 	now          func() time.Time
+	timeout      time.Duration // each call's deadline
 }
 
 func (p *gitlabProvider) platform() string { return config.PlatformGitLab }
@@ -42,6 +43,8 @@ func (p *gitlabProvider) authorizeURL(state, challenge string) string {
 }
 
 func (p *gitlabProvider) exchange(ctx context.Context, code, verifier string) (oauthToken, error) {
+	ctx, cancel := callContext(ctx, p.timeout)
+	defer cancel()
 	return postToken(ctx, p.hc, p.baseURL+"/oauth/token", url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {code},
@@ -53,6 +56,8 @@ func (p *gitlabProvider) exchange(ctx context.Context, code, verifier string) (o
 }
 
 func (p *gitlabProvider) refresh(ctx context.Context, refreshToken string) (oauthToken, error) {
+	ctx, cancel := callContext(ctx, p.timeout)
+	defer cancel()
 	return postToken(ctx, p.hc, p.baseURL+"/oauth/token", url.Values{
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {refreshToken},
@@ -67,6 +72,8 @@ func (p *gitlabProvider) client(accessToken string) *gitlab.Client {
 }
 
 func (p *gitlabProvider) user(ctx context.Context, accessToken string) (int64, string, error) {
+	ctx, cancel := callContext(ctx, p.timeout)
+	defer cancel()
 	u, err := p.client(accessToken).CurrentUser(ctx)
 	if err != nil {
 		return 0, "", err
@@ -80,6 +87,8 @@ func (p *gitlabProvider) user(ctx context.Context, accessToken string) (int64, s
 // canSee: Reporter or above through the project or its group, or a public
 // project whose code and merge requests are open to everyone who can see it.
 func (p *gitlabProvider) canSee(ctx context.Context, accessToken, project string) (bool, error) {
+	ctx, cancel := callContext(ctx, p.timeout)
+	defer cancel()
 	a, err := p.client(accessToken).ProjectAccess(ctx, project)
 	if errors.Is(err, gitlab.ErrNotFound) || isStatus(err, http.StatusForbidden) {
 		return false, nil
@@ -101,6 +110,8 @@ func (p *gitlabProvider) isAdmin(ctx context.Context, accessToken string, userID
 	if admin.Group == "" {
 		return false, nil
 	}
+	ctx, cancel := callContext(ctx, p.timeout)
+	defer cancel()
 	return p.client(accessToken).IsGroupMember(ctx, admin.Group, userID)
 }
 

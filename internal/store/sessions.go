@@ -74,11 +74,12 @@ func (s *Store) SetSessionToken(ctx context.Context, idHash, sealed []byte) erro
 	return err
 }
 
-// SetSessionAccess records a successful access check: the repositories the
-// user can see on the session's instance (replacing the earlier list;
-// duplicates that differ only in case are one), the admin flag and the time
-// of the check. A session that is gone is left gone.
-func (s *Store) SetSessionAccess(ctx context.Context, idHash []byte, isAdmin bool, projects []string, checkedAt time.Time) error {
+// SetSessionAccess records a successful access check: the user's current
+// username, the repositories the user can see on the session's instance
+// (replacing the earlier list; duplicates that differ only in case are one),
+// the admin flag and the time of the check. A session that is gone is left
+// gone.
+func (s *Store) SetSessionAccess(ctx context.Context, idHash []byte, username string, isAdmin bool, projects []string, checkedAt time.Time) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -86,8 +87,8 @@ func (s *Store) SetSessionAccess(ctx context.Context, idHash []byte, isAdmin boo
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 
 	var instance string
-	err = tx.QueryRow(ctx, `UPDATE sessions SET is_admin = $2, access_checked_at = $3
-		WHERE id_hash = $1 RETURNING instance`, idHash, isAdmin, checkedAt).Scan(&instance)
+	err = tx.QueryRow(ctx, `UPDATE sessions SET username = $2, is_admin = $3, access_checked_at = $4
+		WHERE id_hash = $1 RETURNING instance`, idHash, username, isAdmin, checkedAt).Scan(&instance)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}

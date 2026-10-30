@@ -589,8 +589,16 @@ func (c *Config) checkDashboard() []error {
 	}
 	if err := checkURL("dashboard.url", d.URL, true); err != nil {
 		errs = append(errs, err)
-	} else if u, _ := url.Parse(d.URL); u.User != nil {
-		add("dashboard.url must not contain credentials")
+	} else {
+		u, _ := url.Parse(d.URL)
+		if u.User != nil {
+			add("dashboard.url must not contain credentials")
+		}
+		// The dashboard, its API, the OAuth callbacks and its __Host-
+		// cookies all live at / of the host.
+		if (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.ForceQuery {
+			add("dashboard.url %q must have no path, query or fragment: the dashboard is served at / of its host", d.URL)
+		}
 	}
 	if len(signIn) == 0 {
 		add("dashboard.url is set but no instance has oauth_client_id_env and oauth_client_secret_env: nobody could sign in")

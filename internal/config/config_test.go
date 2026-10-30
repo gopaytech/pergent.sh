@@ -619,6 +619,15 @@ func TestLoadDashboard(t *testing.T) {
 		t.Errorf("github OAuth envs = %+v", gh)
 	}
 
+	// A bare host is the only form: the dashboard, its API and the OAuth
+	// callbacks are served from / of that host.
+	for _, ok := range []string{"https://pergent.example.com", "https://pergent.example.com:8443"} {
+		cfg.Dashboard.URL = ok
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("dashboard.url %s: %v", ok, err)
+		}
+	}
+
 	// Without a dashboard section the dashboard is off.
 	if loadGitHub(t).DashboardEnabled() {
 		t.Error("DashboardEnabled() without dashboard.url")
@@ -634,6 +643,10 @@ func TestValidateRejectsDashboard(t *testing.T) {
 		{"http url", func(c *Config) { c.Dashboard.URL = "http://pergent.example.com" }, "dashboard.url"},
 		{"url with trailing slash", func(c *Config) { c.Dashboard.URL = "https://pergent.example.com/" }, "trailing slash"},
 		{"url not a url", func(c *Config) { c.Dashboard.URL = "pergent.example.com" }, "dashboard.url"},
+		{"url with a path", func(c *Config) { c.Dashboard.URL = "https://pergent.example.com/dashboard" }, "dashboard.url"},
+		{"url with a deeper path", func(c *Config) { c.Dashboard.URL = "https://pergent.example.com/a/b" }, "must have no path"},
+		{"url with a query", func(c *Config) { c.Dashboard.URL = "https://pergent.example.com?x=1" }, "must have no path"},
+		{"url with a fragment", func(c *Config) { c.Dashboard.URL = "https://pergent.example.com#x" }, "must have no path"},
 		{"admins without url", func(c *Config) { c.Dashboard.URL = "" }, "dashboard.admins needs dashboard.url"},
 		{"admin of unknown instance", func(c *Config) { c.Dashboard.Admins[0].Instance = "nope" }, "unknown instance"},
 		{"gitlab admin without group", func(c *Config) { c.Dashboard.Admins[0].Group = "" }, "group is required"},

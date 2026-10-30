@@ -23,7 +23,9 @@ import (
 
 const (
 	// SessionCookieName holds the session ID: 32 random bytes, base64url.
-	SessionCookieName = "pergent_session"
+	// The __Host- prefix makes browsers take it only Secure, on Path=/ and
+	// without a Domain, so no other host can set or shadow it.
+	SessionCookieName = "__Host-pergent_session"
 	// CSRFHeader must carry the session's CSRF token on every request
 	// that isn't GET, HEAD or OPTIONS.
 	CSRFHeader = "X-CSRF-Token"
@@ -37,7 +39,7 @@ const (
 	// one for one more AccessTTL, then the session sees nothing.
 	AccessTTL = 5 * time.Minute
 
-	stateCookieName = "pergent_oauth_state"
+	stateCookieName = "__Host-pergent_oauth_state"
 	stateTTL        = 10 * time.Minute
 	touchEvery      = time.Minute
 	sessionIDBytes  = 32
@@ -116,6 +118,7 @@ func newAuth(o Options, repos *settings.Resolver) (*Auth, error) {
 		a.providers[inst.Name] = &gitlabProvider{
 			baseURL: strings.TrimRight(inst.URL, "/"), clientID: id, clientSecret: secret,
 			redirectURI: base + "/auth/gitlab/" + inst.Name + "/callback", hc: o.HTTPClient, now: o.Now,
+			timeout: platformTimeout,
 		}
 	}
 	for _, inst := range o.Config.GitHub {
@@ -129,6 +132,7 @@ func newAuth(o Options, repos *settings.Resolver) (*Auth, error) {
 		a.providers[inst.Name] = &githubProvider{
 			webURL: githubWebURL(inst.APIURL), apiURL: inst.APIURL, clientID: id, clientSecret: secret,
 			redirectURI: base + "/auth/github/" + inst.Name + "/callback", hc: o.HTTPClient, now: o.Now,
+			timeout: platformTimeout,
 		}
 	}
 	return a, nil
@@ -166,7 +170,7 @@ func (a *Auth) setStateCookie(w http.ResponseWriter, st oauthState) {
 	data, _ := json.Marshal(st)
 	payload := base64.RawURLEncoding.EncodeToString(data)
 	http.SetCookie(w, &http.Cookie{
-		Name: stateCookieName, Value: payload + "." + a.sign(payload), Path: "/auth/",
+		Name: stateCookieName, Value: payload + "." + a.sign(payload), Path: "/",
 		MaxAge: int(stateTTL / time.Second), HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
 	})
 }
@@ -231,7 +235,7 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	clearCookie(w, stateCookieName, "/auth/")
+	clearCookie(w, stateCookieName, "/")
 	q := r.URL.Query()
 	st, ok := a.readState(r, platform, instance)
 	if !ok || subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(st.State)) != 1 {
@@ -385,7 +389,7 @@ func (a *Auth) Require(next http.Handler) http.Handler {
 			visible[lower(p)] = true
 		}
 		s := Session{
-			Platform: se.Platform, Instance: se.Instance, UserID: se.UserID, Username: se.Username,
+			Platform: se.Platform, Instance: se.Instance, UserID: se.UserID, Username: acc.username,
 			IsAdmin: acc.isAdmin, Visible: visible, CSRFToken: se.CSRF,
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, sessionKey{}, s)))
