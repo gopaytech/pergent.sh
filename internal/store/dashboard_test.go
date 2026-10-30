@@ -328,3 +328,36 @@ func TestCountFailedRuns(t *testing.T) {
 		t.Errorf("another instance = %d, %v; want 0", n, err)
 	}
 }
+
+func TestDeleteAttentionForProject(t *testing.T) {
+	s := newStore(t)
+	for _, a := range []Attention{
+		{Instance: "main", Project: "Acme/Widgets", Kind: "single_approval"},
+		{Instance: "main", Project: "acme/widgets", Kind: "out_of_memory"},
+		{Instance: "main", Project: "acme/payments", Kind: "single_approval"},
+		{Instance: "other", Project: "acme/widgets", Kind: "single_approval"},
+		{Instance: "main", Project: "", Kind: "token_expiry"},
+	} {
+		if err := s.SetAttention(ctx, a.Instance, a.Project, a.Kind, "x"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.DeleteAttentionForProject(ctx, "main", "ACME/widgets"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteAttentionForProject(ctx, "main", "acme/none"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.Attention(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, r := range rows {
+		got = append(got, r.Instance+"|"+r.Project+"|"+r.Kind)
+	}
+	want := []string{"main||token_expiry", "main|acme/payments|single_approval", "other|acme/widgets|single_approval"}
+	if !slices.Equal(got, want) {
+		t.Errorf("left = %v; want %v", got, want)
+	}
+}

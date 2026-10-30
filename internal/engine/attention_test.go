@@ -2,8 +2,10 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/forge/githubforge"
 	"github.com/gopaytech/pergent.sh/internal/github"
+	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
 const (
@@ -205,6 +208,18 @@ func TestAttentionOutOfMemoryIgnoresOtherFailures(t *testing.T) {
 	}
 }
 
+// eventually waits for cond to hold.
+func eventually(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // The token-expiry recorder stores the instance-wide item with the date, and
 // removes it when the expiry moves beyond 14 days.
 func TestTokenExpiryAttention(t *testing.T) {
@@ -212,13 +227,164 @@ func TestTokenExpiryAttention(t *testing.T) {
 	note := TokenExpiryRecorder(env.Store, ghInstance, nil)
 	key := ghInstance + "||token_expiry"
 
-	note(time.Date(2026, 11, 5, 23, 0, 0, 0, time.UTC), true)
-	if got := attention(t, env); got[key] != "The approve bot's token expires on 2026-11-05." || len(got) != 1 {
+	if err := note(time.Date(2026, 11, 5, 23, 0, 0, 0, time.UTC), true); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the item", func() bool { return attention(t, env)[key] == "The approve bot's token expires on 2026-11-05." })
+	if got := attention(t, env); len(got) != 1 {
 		t.Fatalf("attention = %v", got)
 	}
-	note(time.Date(2026, 12, 30, 0, 0, 0, 0, time.UTC), false)
+	if err := note(time.Date(2026, 12, 30, 0, 0, 0, 0, time.UTC), false); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the item to go", func() bool { return len(attention(t, env)) == 0 })
+}
+
+// fakeAttentionStore records the writes it is given; the first block calls
+// wait for release, the first fail calls fail.
+type fakeAttentionStore struct {
+	mu      sync.Mutex
+	ops     []string
+	started chan struct{}
+	release chan struct{}
+	fail    int
+	blocked bool
+}
+
+func (f *fakeAttentionStore) write(op string) error {
+	f.mu.Lock()
+	first := !f.blocked && f.release != nil
+	f.blocked = true
+	f.mu.Unlock()
+	if first {
+		close(f.started)
+		<-f.release
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fail > 0 {
+		f.fail--
+		return errors.New("store down")
+	}
+	f.ops = append(f.ops, op)
+	return nil
+}
+
+func (f *fakeAttentionStore) SetAttention(_ context.Context, _, _, _, message string) error {
+	return f.write("set " + message)
+}
+
+func (f *fakeAttentionStore) ClearAttention(_ context.Context, _, _, _ string) error {
+	return f.write("clear")
+}
+
+func (f *fakeAttentionStore) Ops() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.ops...)
+}
+
+// A slow store doesn't hold up the approver's call, and updates that pile up
+// behind a write are coalesced into the latest, in order.
+func TestTokenExpiryRecorderDoesNotBlock(t *testing.T) {
+	st := &fakeAttentionStore{started: make(chan struct{}), release: make(chan struct{})}
+	note := TokenExpiryRecorder(st, ghInstance, nil)
+	day := func(d int) time.Time { return time.Date(2026, 11, d, 0, 0, 0, 0, time.UTC) }
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		note(day(1), true)
+		<-st.started // the first write is stuck in the store
+		note(day(2), true)
+		note(day(3), true)
+		note(day(30), false)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the callback waited for the store")
+	}
+	close(st.release)
+	eventually(t, "the last state", func() bool { return len(st.Ops()) == 2 })
+	if got := st.Ops(); got[0] != "set The approve bot's token expires on 2026-11-01." || got[1] != "clear" {
+		t.Errorf("writes = %v; want the first, then only the last state", got)
+	}
+}
+
+// A write that fails is tried again, not forgotten.
+func TestTokenExpiryRecorderRetries(t *testing.T) {
+	old := tokenExpiryRetry
+	tokenExpiryRetry = 5 * time.Millisecond
+	t.Cleanup(func() { tokenExpiryRetry = old })
+	st := &fakeAttentionStore{fail: 2}
+	note := TokenExpiryRecorder(st, ghInstance, nil)
+
+	note(time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC), true)
+
+	eventually(t, "the retried write", func() bool { return len(st.Ops()) == 1 })
+}
+
+// Switching a repository off removes its items, and only its own.
+func TestAttentionClearedWhenRepoSwitchedOff(t *testing.T) {
+	env := newTestEnv(t)
+	serveProject(env, testProjectID, testProjectPath)
+	env.SeedProject(func(p *store.Project) {
+		p.ProjectID, p.Path, p.HookID, p.DeployTokenID = 8, "acme/old", 21, 22
+	})
+	env.GitLab.Reply(http.MethodDelete, "/projects/8/hooks/21", http.StatusNoContent, nil)
+	env.GitLab.Reply(http.MethodDelete, "/projects/8/deploy_tokens/22", http.StatusNoContent, nil)
+	for _, a := range [][3]string{
+		{"acme/old", "single_approval", "x"}, {"Acme/Old", "out_of_memory", "x"},
+		{testProjectPath, "single_approval", "x"}, {"", "token_expiry", "x"},
+	} {
+		if err := env.Store.SetAttention(env.ctx, testInstance, a[0], a[1], a[2]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reconcile(t, env)
+
+	got := attention(t, env)
+	if len(got) != 2 || got[testInstance+"|"+testProjectPath+"|single_approval"] == "" || got[testInstance+"||token_expiry"] == "" {
+		t.Fatalf("attention = %v; want only the configured repository's and the instance's", got)
+	}
+}
+
+// The same for a GitHub repository switched off.
+func TestAttentionClearedWhenGitHubRepoSwitchedOff(t *testing.T) {
+	env := newTestEnv(t)
+	addGitHub(t, env, true)
+	serveProject(env, testProjectID, testProjectPath)
+	cfg := env.Engine.Config
+	cfg.Repositories = cfg.Repositories[:1] // drop the GitHub repository
+	if err := env.Store.SetAttention(env.ctx, ghInstance, ghRepoPath, "approver_unreachable", "x"); err != nil {
+		t.Fatal(err)
+	}
+
+	reconcile(t, env)
+
 	if got := attention(t, env); len(got) != 0 {
-		t.Fatalf("attention after rotating = %v; want none", got)
+		t.Fatalf("attention = %v; want none", got)
+	}
+}
+
+// With the approve side unable to reach the repository the approval check
+// can't run, so its item goes.
+func TestAttentionUnreachableClearsSingleApproval(t *testing.T) {
+	env := newTestEnv(t)
+	gh := addGitHub(t, env, false)
+	serveProject(env, testProjectID, testProjectPath)
+	gh.Reply(http.MethodGet, ghRepoAPI, http.StatusOK, map[string]any{"id": ghRepoID, "full_name": ghRepoPath, "clone_url": ghCloneURL})
+	if err := env.Store.SetAttention(env.ctx, ghInstance, ghRepoPath, "single_approval", "x"); err != nil {
+		t.Fatal(err)
+	}
+
+	reconcile(t, env)
+
+	got := attention(t, env)
+	if len(got) != 1 || got[ghInstance+"|"+ghRepoPath+"|approver_unreachable"] == "" {
+		t.Fatalf("attention = %v; want only approver_unreachable", got)
 	}
 }
 

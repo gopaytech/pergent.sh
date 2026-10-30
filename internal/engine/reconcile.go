@@ -100,6 +100,13 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 		if err := e.removeProject(ctx, p); err != nil {
 			fail(fmt.Errorf("remove %s (project %d) on %s: %w", p.Path, p.ProjectID, p.Instance, err),
 				"instance", p.Instance, "project", p.Path, "project_id", p.ProjectID)
+			continue
+		}
+		// Switched off: its setup problems go too. (A project row dropped
+		// because its path now resolves to another project belongs to a
+		// repository still wanted, whose items stay.)
+		if !wanted[keyOf(p.Instance, p.Path)] {
+			e.dropAttention(ctx, p.Instance, p.Path)
 		}
 	}
 	return errors.Join(errs...)
@@ -345,6 +352,9 @@ func (e *Engine) reconcileGitHubRepo(ctx context.Context, repo settings.Effectiv
 		e.log().Warn("the approve side can't reach the repository: its reviews are published without approval",
 			"instance", instance, "project", repo.Project, "project_id", gr.ID)
 		e.setAttention(ctx, instance, repo.Project, attApproverUnreachable, e.approverUnreachableNote(instance))
+		// Nothing is approved here, so how many approvals merging needs
+		// can't matter: its item would only go stale.
+		e.clearAttention(ctx, instance, repo.Project, attSingleApproval)
 		return gr.ID, nil
 	}
 	e.clearAttention(ctx, instance, repo.Project, attApproverUnreachable)

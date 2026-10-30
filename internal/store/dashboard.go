@@ -177,6 +177,15 @@ func (s *Store) ClearAttention(ctx context.Context, instance, project, kind stri
 	return err
 }
 
+// DeleteAttentionForProject removes every problem recorded for project on
+// instance, matched ignoring case: the repository is switched off. The
+// instance-wide items (project "") stay.
+func (s *Store) DeleteAttentionForProject(ctx context.Context, instance, project string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM repo_attention
+		WHERE instance = $1 AND lower(project) = lower($2)`, instance, project)
+	return err
+}
+
 // Attention returns every recorded problem, ordered by instance, project
 // (ignoring case) and kind.
 func (s *Store) Attention(ctx context.Context) ([]Attention, error) {

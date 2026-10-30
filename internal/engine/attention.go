@@ -2,11 +2,11 @@ package engine
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"strconv"
+	"sync"
 	"time"
-
-	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
 // The kinds of setup problem recorded for the dashboard's "Needs attention"
@@ -51,6 +51,15 @@ func (e *Engine) clearAttention(ctx context.Context, instance, project, kind str
 	}
 }
 
+// dropAttention removes every item of a repository that was switched off,
+// best effort like setAttention.
+func (e *Engine) dropAttention(ctx context.Context, instance, project string) {
+	if err := e.Store.DeleteAttentionForProject(ctx, instance, project); err != nil {
+		e.log().Info("couldn't clear the setup problems of a repository that was switched off",
+			"instance", instance, "project", project, "error", e.redact(err.Error()))
+	}
+}
+
 // approverUnreachableNote words the approver_unreachable item for instance:
 // the App when the instance approves with one, the bot when it uses a token.
 func (e *Engine) approverUnreachableNote(instance string) string {
@@ -80,20 +89,96 @@ func (e *Engine) refreshOutOfMemory(ctx context.Context, instance, project strin
 		"Reviews ran out of memory "+strconv.Itoa(n)+" times in the last 7 days. Raise the Job memory limit.")
 }
 
-// TokenExpiryRecorder returns the function a token approver of instance calls
-// when it learns its token's expiry (githubforge.Approver.OnTokenExpiry): it
-// records the instance-wide token_expiry item while the token expires within
-// 14 days, and clears it otherwise. Writes are best effort; log may be nil.
-func TokenExpiryRecorder(st *store.Store, instance string, log *slog.Logger) func(expires time.Time, soon bool) {
-	e := &Engine{Store: st, Log: log}
-	return func(expires time.Time, soon bool) {
-		ctx, cancel := context.WithTimeout(context.Background(), attentionTimeout)
-		defer cancel()
-		if !soon {
-			e.clearAttention(ctx, instance, "", attTokenExpiry)
-			return
-		}
-		e.setAttention(ctx, instance, "", attTokenExpiry,
-			"The approve bot's token expires on "+expires.UTC().Format("2006-01-02")+".")
+// attentionStore is the part of the store the token-expiry recorder writes.
+type attentionStore interface {
+	SetAttention(ctx context.Context, instance, project, kind, message string) error
+	ClearAttention(ctx context.Context, instance, project, kind string) error
+}
+
+// tokenExpiryRetry is how long the recorder waits before writing again after
+// a write failed. A variable so tests can shorten it.
+var tokenExpiryRetry = 30 * time.Second
+
+// tokenExpiry is one state the recorder is to write.
+type tokenExpiry struct {
+	expires time.Time
+	soon    bool
+}
+
+// expiryRecorder writes the token_expiry item from one goroutine, off the
+// approver's call path. Only the latest state is kept while a write runs.
+type expiryRecorder struct {
+	st       attentionStore
+	instance string
+	log      *slog.Logger
+
+	mu      sync.Mutex
+	pending *tokenExpiry
+	started bool
+	wake    chan struct{}
+}
+
+// TokenExpiryRecorder returns the function a token approver of instance
+// calls when it learns its token's expiry (githubforge.Approver.OnTokenExpiry).
+// It records the instance-wide token_expiry item while the token expires
+// within 14 days and clears it otherwise. The call only hands the state over
+// and returns: a single background goroutine writes it, in order, keeping
+// only the latest state when several arrive during a write, and writes again
+// after a pause when one fails. A store error is logged at info and never
+// reaches the approver. log may be nil.
+func TokenExpiryRecorder(st attentionStore, instance string, log *slog.Logger) func(expires time.Time, soon bool) error {
+	if log == nil {
+		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
+	r := &expiryRecorder{st: st, instance: instance, log: log, wake: make(chan struct{}, 1)}
+	return func(expires time.Time, soon bool) error {
+		r.mu.Lock()
+		r.pending = &tokenExpiry{expires, soon}
+		if !r.started {
+			r.started = true
+			go r.run()
+		}
+		r.mu.Unlock()
+		select {
+		case r.wake <- struct{}{}:
+		default:
+		}
+		return nil
+	}
+}
+
+func (r *expiryRecorder) run() {
+	for range r.wake {
+		for {
+			r.mu.Lock()
+			s := r.pending
+			r.pending = nil
+			r.mu.Unlock()
+			if s == nil {
+				break
+			}
+			err := r.write(*s)
+			if err == nil {
+				continue
+			}
+			r.log.Info("couldn't record the approve token's expiry for the dashboard; will try again",
+				"instance", r.instance, "error", err.Error())
+			time.Sleep(tokenExpiryRetry)
+			r.mu.Lock()
+			if r.pending == nil { // nothing newer arrived meanwhile
+				r.pending = s
+			}
+			r.mu.Unlock()
+		}
+	}
+}
+
+func (r *expiryRecorder) write(s tokenExpiry) error {
+	ctx, cancel := context.WithTimeout(context.Background(), attentionTimeout)
+	defer cancel()
+	if !s.soon {
+		return r.st.ClearAttention(ctx, r.instance, "", attTokenExpiry)
+	}
+	return r.st.SetAttention(ctx, r.instance, "", attTokenExpiry,
+		"The approve bot's token expires on "+s.expires.UTC().Format("2006-01-02")+".")
 }

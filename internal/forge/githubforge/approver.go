@@ -39,8 +39,8 @@ type Approver struct {
 	failed func(r Repo, err error)
 	// reach reports whether the approve side can reach owner/name.
 	reach func(ctx context.Context, owner, name string) (bool, error)
-	// done runs after every call through a client.
-	done func(c *github.Client)
+	// done runs after every call through a client; ok is whether it succeeded.
+	done func(c *github.Client, ok bool)
 
 	// The token approver's expiry warning.
 	now      func() time.Time
@@ -48,8 +48,10 @@ type Approver struct {
 	mu       sync.Mutex
 	lastWarn time.Time
 	// onExpiry is told when what GitHub says about the expiry changes (see
-	// OnTokenExpiry); told* is what it was last told.
-	onExpiry    func(expires time.Time, soon bool)
+	// OnTokenExpiry). notifyMu serialises that and guards told*, what it was
+	// last told successfully.
+	onExpiry    func(expires time.Time, soon bool) error
+	notifyMu    sync.Mutex
 	told        bool
 	toldSoon    bool
 	toldExpires time.Time
@@ -128,7 +130,7 @@ func NewTokenApprover(c *github.Client, botUserID int64, repos Repos, log *slog.
 	a.clientFor = func(context.Context, Repo) (*github.Client, error) { return c, nil }
 	a.reach = func(ctx context.Context, owner, name string) (bool, error) {
 		_, err := c.Repo(ctx, owner, name)
-		a.done(c)
+		a.done(c, err == nil || status(err) == http.StatusNotFound)
 		if status(err) == http.StatusNotFound {
 			return false, nil
 		}
@@ -143,49 +145,66 @@ func newApprover(botUserID int64, repos Repos) *Approver {
 		repos:  repos,
 		bot:    botUserID,
 		failed: func(Repo, error) {},
-		done:   func(*github.Client) {},
+		done:   func(*github.Client, bool) {},
 		now:    time.Now,
 		log:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
 
 // OnTokenExpiry sets fn, called when a token approver learns something new
-// about its token's expiry: the first time GitHub reports one, when the token
-// turns soon-to-expire (within 14 days) or stops being so, and when the
-// expiry moves while it is. fn must not block for long. It never sees the
+// about its token's expiry: the first time after a call, when the token turns
+// soon-to-expire (within 14 days) or stops being so, and when the expiry
+// moves while it is. A token that never reports an expiry is told once, as
+// not soon with a zero time, after a call that succeeded. Calls to fn are
+// serialised, so the last one tells the latest state. When fn returns an
+// error the state isn't counted as told and the next call tells it again. fn
+// runs inside the approver's calls: it must return quickly. It never sees the
 // token.
-func (a *Approver) OnTokenExpiry(fn func(expires time.Time, soon bool)) {
+func (a *Approver) OnTokenExpiry(fn func(expires time.Time, soon bool) error) {
 	a.mu.Lock()
 	a.onExpiry = fn
 	a.mu.Unlock()
 }
 
-// noteExpiry tells onExpiry about exp when it differs from what it was told.
-func (a *Approver) noteExpiry(exp time.Time, soon bool) {
+// noteExpiry reads c's expiry and tells onExpiry when it differs from what it
+// was told. ok is whether the call that just ran succeeded. It reads the
+// expiry under notifyMu, so overlapping calls tell their states in the order
+// they were read.
+func (a *Approver) noteExpiry(c *github.Client, ok bool) {
 	a.mu.Lock()
 	fn := a.onExpiry
-	changed := !a.told || a.toldSoon != soon || (soon && !a.toldExpires.Equal(exp))
-	if fn != nil && changed {
-		a.told, a.toldSoon, a.toldExpires = true, soon, exp
-	}
 	a.mu.Unlock()
-	if fn != nil && changed {
-		fn(exp, soon)
+	if fn == nil {
+		return
 	}
+	a.notifyMu.Lock()
+	defer a.notifyMu.Unlock()
+	exp, has := c.TokenExpiry()
+	if !has && !ok {
+		return
+	}
+	soon := has && exp.Sub(a.now()) <= expiryWarnAhead
+	changed := !a.told || a.toldSoon != soon || (soon && !a.toldExpires.Equal(exp))
+	if !changed {
+		return
+	}
+	if err := fn(exp, soon); err != nil {
+		return
+	}
+	a.told, a.toldSoon, a.toldExpires = true, soon, exp
 }
 
 // warnExpiry logs a warning when c's token expires within 14 days, at most
 // once an hour, and reports the expiry to OnTokenExpiry. The token itself is
 // never logged.
-func (a *Approver) warnExpiry(c *github.Client) {
-	exp, ok := c.TokenExpiry()
-	if !ok {
+func (a *Approver) warnExpiry(c *github.Client, ok bool) {
+	a.noteExpiry(c, ok)
+	exp, has := c.TokenExpiry()
+	if !has {
 		return
 	}
 	now := a.now()
-	soon := exp.Sub(now) <= expiryWarnAhead
-	a.noteExpiry(exp, soon)
-	if !soon {
+	if exp.Sub(now) > expiryWarnAhead {
 		return
 	}
 	a.mu.Lock()
@@ -218,7 +237,7 @@ func (a *Approver) call(ctx context.Context, repoID int64, fn func(c *github.Cli
 		return err
 	}
 	err = fn(c, r)
-	a.done(c)
+	a.done(c, err == nil)
 	if err != nil {
 		a.failed(r, err)
 	}

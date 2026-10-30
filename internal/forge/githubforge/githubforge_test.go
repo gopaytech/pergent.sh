@@ -693,7 +693,7 @@ func TestTokenApproverExpiryNotify(t *testing.T) {
 		soon bool
 	}
 	var notes []note
-	a.OnTokenExpiry(func(exp time.Time, soon bool) { notes = append(notes, note{exp, soon}) })
+	a.OnTokenExpiry(func(exp time.Time, soon bool) error { notes = append(notes, note{exp, soon}); return nil })
 
 	call := func(in time.Duration) time.Time {
 		t.Helper()
@@ -727,6 +727,137 @@ func TestTokenApproverExpiryNotify(t *testing.T) {
 	call(60 * day) // rotated
 	if len(notes) != 4 || notes[3].soon {
 		t.Fatalf("notes = %+v; want a not-soon note last", notes)
+	}
+}
+
+// A failed write is not remembered as told: the next call tells it again.
+func TestTokenApproverExpiryNotifyRetriesAfterFailure(t *testing.T) {
+	f := newFake(t)
+	f.handle("GET", prPath+"/reviews", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("GitHub-Authentication-Token-Expiration", time.Now().Add(48*time.Hour).Format("2006-01-02 15:04:05 MST"))
+		reply(200, reviews())(w, nil)
+	})
+	a := NewTokenApprover(github.NewTokenClient(f.srv.URL, patToken, f.srv.Client()), approveBotID, repos(), nil)
+	var calls int
+	a.OnTokenExpiry(func(time.Time, bool) error {
+		calls++
+		if calls == 1 {
+			return errors.New("store down")
+		}
+		return nil
+	})
+	for range 3 {
+		if _, err := a.HasApproved(ctx, repoID, 3, sha('a')); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("callback ran %d times; want 2 (the failed one, one retry, then settled)", calls)
+	}
+}
+
+// Calls that overlap are serialised, and the state told last is the last
+// one observed.
+func TestTokenApproverExpiryNotifySerialised(t *testing.T) {
+	f := newFake(t)
+	var (
+		mu     sync.Mutex
+		expiry string
+	)
+	f.handle("GET", prPath+"/reviews", func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		w.Header().Set("GitHub-Authentication-Token-Expiration", expiry)
+		mu.Unlock()
+		reply(200, reviews())(w, nil)
+	})
+	setExpiry := func(d time.Duration) {
+		mu.Lock()
+		expiry = time.Now().Add(d).Format("2006-01-02 15:04:05 MST")
+		mu.Unlock()
+	}
+	a := NewTokenApprover(github.NewTokenClient(f.srv.URL, patToken, f.srv.Client()), approveBotID, repos(), nil)
+	var (
+		nmu      sync.Mutex
+		notes    []bool
+		inFlight int
+		overlap  bool
+	)
+	entered, gate := make(chan struct{}), make(chan struct{})
+	a.OnTokenExpiry(func(_ time.Time, soon bool) error {
+		nmu.Lock()
+		inFlight++
+		overlap = overlap || inFlight > 1
+		first := len(notes) == 0
+		nmu.Unlock()
+		if first {
+			close(entered)
+			<-gate
+		}
+		nmu.Lock()
+		notes = append(notes, soon)
+		inFlight--
+		nmu.Unlock()
+		return nil
+	})
+	call := func() {
+		if _, err := a.HasApproved(ctx, repoID, 3, sha('a')); err != nil {
+			t.Error(err)
+		}
+	}
+	var wg sync.WaitGroup
+	setExpiry(30 * 24 * time.Hour)
+	wg.Add(1)
+	go func() { defer wg.Done(); call() }()
+	<-entered
+	setExpiry(48 * time.Hour)
+	wg.Add(1)
+	go func() { defer wg.Done(); call() }()
+	time.Sleep(200 * time.Millisecond)
+	close(gate)
+	wg.Wait()
+
+	nmu.Lock()
+	defer nmu.Unlock()
+	if overlap || len(notes) != 2 || notes[0] || !notes[1] {
+		t.Fatalf("notes = %v, overlap = %v; want [false true] one at a time", notes, overlap)
+	}
+}
+
+// A token that never reports an expiry tells its watcher once, after a call
+// that succeeded; a failed call says nothing.
+func TestTokenApproverNoExpiryHeader(t *testing.T) {
+	f := newFake(t)
+	fail := true
+	f.handle("GET", prPath+"/reviews", func(w http.ResponseWriter, r *http.Request) {
+		if fail {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		reply(200, reviews())(w, r)
+	})
+	a := NewTokenApprover(github.NewTokenClient(f.srv.URL, patToken, f.srv.Client()), approveBotID, repos(), nil)
+	var notes []bool
+	a.OnTokenExpiry(func(exp time.Time, soon bool) error {
+		if !exp.IsZero() {
+			t.Errorf("expiry %s for a token without one", exp)
+		}
+		notes = append(notes, soon)
+		return nil
+	})
+	if _, err := a.HasApproved(ctx, repoID, 3, sha('a')); err == nil {
+		t.Fatal("want the 403 to be an error")
+	}
+	if len(notes) != 0 {
+		t.Fatalf("notes after a failed call = %v", notes)
+	}
+	fail = false
+	for range 2 {
+		if _, err := a.HasApproved(ctx, repoID, 3, sha('a')); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(notes) != 1 || notes[0] {
+		t.Fatalf("notes = %v; want one, not soon", notes)
 	}
 }
 
