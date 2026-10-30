@@ -239,8 +239,8 @@ func TestRefreshFailureFailsClosedAfterOnePeriod(t *testing.T) {
 	if code != 200 || len(se.Visible) != 0 || se.IsAdmin {
 		t.Fatalf("after two periods without a check: %d %+v", code, se)
 	}
-	if _, me := e.me(c); me.IsAdmin {
-		t.Fatal("/api/me still says admin")
+	if _, me := e.me(c); me.IsAdmin || me.Username != "alice" {
+		t.Fatalf("/api/me after failing closed = %+v; want alice, no admin", me)
 	}
 	stored, _ := e.storedSession(c)
 	projects, _ := e.st.SessionProjects(ctx, hashOf(t, c))

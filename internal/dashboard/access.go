@@ -63,7 +63,8 @@ func (a *Auth) access(ctx context.Context, se store.Session, now time.Time) (acc
 	if err := a.store.ClearSessionAccess(ctx, se.IDHash); err != nil {
 		return accessResult{}, err
 	}
-	return accessResult{}, nil
+	// Nothing to see and no admin, but still the user who signed in.
+	return accessResult{username: se.Username}, nil
 }
 
 // fresh reports whether a check at checked is at most ttl old at now.
