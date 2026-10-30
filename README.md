@@ -142,7 +142,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `callback_url` | `public_url` | Base URL where Jobs post their result (`<callback_url>/runs/<id>/result`). `http` or `https`, no trailing slash. Set it to the in-cluster Service to keep that traffic inside the cluster. |
 | `skills_dir` | required | Directory with the skill library: top-level `*.md` files and `<name>/SKILL.md` folders. The chart sets it to `/etc/pergent-sh/skills`. |
 | `gitlab[].name` | required | Instance name, `[a-z0-9-]+`, unique. Part of the webhook URL. |
-| `gitlab[].url` | required | Base URL of the GitLab instance, `http` or `https`, no trailing slash. |
+| `gitlab[].url` | required | Base URL of the GitLab instance. It must be `https` (the bot tokens travel in a header), without a trailing slash. A redirect to another host is never followed. |
 | `gitlab[].review_token_env` | required | Name of the env var with the review bot token. |
 | `gitlab[].approve_token_env` | required | Name of the env var with the approve bot token. |
 | `gitlab[].webhook_secret_env` | required | Name of the env var with the webhook secret. GitLab sends it as `X-Gitlab-Token`. |

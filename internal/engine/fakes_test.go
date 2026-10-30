@@ -103,7 +103,7 @@ type fakeGitLab struct {
 func newFakeGitLab(t *testing.T) *fakeGitLab {
 	t.Helper()
 	f := &fakeGitLab{t: t, routes: map[string]http.HandlerFunc{}}
-	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
+	f.srv = httptest.NewTLSServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
 }

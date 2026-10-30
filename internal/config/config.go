@@ -272,7 +272,7 @@ func (c *Config) Validate() error {
 			add("duplicate gitlab instance %q", inst.Name)
 		}
 		instances[inst.Name] = true
-		if err := checkURL(fmt.Sprintf("gitlab[%d].url", i), inst.URL, false); err != nil {
+		if err := checkURL(fmt.Sprintf("gitlab[%d].url", i), inst.URL, true); err != nil {
 			errs = append(errs, err)
 		}
 		for _, f := range []struct{ field, val string }{

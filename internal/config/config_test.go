@@ -104,6 +104,7 @@ func TestValidateRejects(t *testing.T) {
 		{"empty public_url", func(c *Config) { c.PublicURL = "" }, "public_url"},
 		{"http public_url", func(c *Config) { c.PublicURL = "http://pergent.example.com" }, "https"},
 		{"trailing slash public_url", func(c *Config) { c.PublicURL = "https://pergent.example.com/" }, "trailing slash"},
+		{"http gitlab url", func(c *Config) { c.GitLab[0].URL = "http://gitlab.example.com" }, "https"},
 		{"missing namespace", func(c *Config) { c.Jobs.Namespace = "" }, "namespace"},
 		{"bad instance name", func(c *Config) { c.GitLab[0].Name = "Main_1" }, "instance name"},
 		{"max_running zero", func(c *Config) { c.Jobs.MaxRunning = 0 }, "max_running"},
