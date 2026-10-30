@@ -461,6 +461,61 @@ func (c *Client) Repo(ctx context.Context, owner, repo string) (Repository, erro
 	return r, err
 }
 
+// RepoAccess is what a user token may do in a repository.
+type RepoAccess struct {
+	// Private is true for a private or internal repository.
+	Private bool
+	// Pull is the user's read access (permissions.pull).
+	Pull bool
+}
+
+// RepoAccess returns the token user's access to a repository, from GET
+// /repos/{owner}/{repo}. One the user can't see is ErrNotFound. A token
+// without a user (an App installation's) gets no permissions, so Pull is
+// false.
+func (c *Client) RepoAccess(ctx context.Context, owner, repo string) (RepoAccess, error) {
+	p, err := repoPath(owner, repo)
+	if err != nil {
+		return RepoAccess{}, err
+	}
+	var r struct {
+		Private     bool `json:"private"`
+		Permissions struct {
+			Pull bool `json:"pull"`
+		} `json:"permissions"`
+	}
+	if err := c.getJSON(ctx, p, nil, &r); err != nil {
+		return RepoAccess{}, err
+	}
+	return RepoAccess{Private: r.Private, Pull: r.Permissions.Pull}, nil
+}
+
+// TeamMembershipActive reports whether username is an active member of the
+// team org/slug (GET /orgs/{org}/teams/{slug}/memberships/{username}). A
+// pending invitation is false, so is not a member (404); any other failure
+// is an error.
+func (c *Client) TeamMembershipActive(ctx context.Context, org, slug, username string) (bool, error) {
+	var parts [3]string
+	for i, s := range []string{org, slug, username} {
+		e, err := segment(s)
+		if err != nil {
+			return false, err
+		}
+		parts[i] = e
+	}
+	var m struct {
+		State string `json:"state"`
+	}
+	err := c.getJSON(ctx, "/orgs/"+parts[0]+"/teams/"+parts[1]+"/memberships/"+parts[2], nil, &m)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return m.State == "active", nil
+}
+
 // RulesetApprovals is the highest required_approving_review_count of the
 // pull_request rules the repository's active rulesets apply to branch
 // (readable with the metadata permission); found is false when none does.

@@ -803,3 +803,52 @@ func TestProtectionApprovals(t *testing.T) {
 		t.Error("a 403 was not an error")
 	}
 }
+
+func TestRepoAccess(t *testing.T) {
+	c, rec := serve(t, jsonReply(map[string]any{"id": 99, "full_name": "acme/widgets", "private": true,
+		"permissions": map[string]any{"admin": false, "push": false, "pull": true}}))
+	a, err := c.RepoAccess(ctx, "acme", "widgets")
+	if err != nil || a != (RepoAccess{Private: true, Pull: true}) {
+		t.Fatalf("RepoAccess = %+v, %v", a, err)
+	}
+	expect(t, rec.get(0), "GET", "/repos/acme/widgets", "")
+
+	// No permissions object (an App token never gets one): no pull.
+	c, _ = serve(t, jsonReply(map[string]any{"private": false}))
+	if a, err := c.RepoAccess(ctx, "acme", "widgets"); err != nil || a != (RepoAccess{}) {
+		t.Fatalf("RepoAccess without permissions = %+v, %v", a, err)
+	}
+
+	c, _ = serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"Not Found"}`, 404) })
+	if _, err := c.RepoAccess(ctx, "acme", "widgets"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("RepoAccess of an unseen repository = %v, want ErrNotFound", err)
+	}
+}
+
+func TestTeamMembershipActive(t *testing.T) {
+	for _, tt := range []struct {
+		state string
+		want  bool
+	}{{"active", true}, {"pending", false}} {
+		c, rec := serve(t, jsonReply(map[string]any{"state": tt.state, "role": "member"}))
+		got, err := c.TeamMembershipActive(ctx, "acme", "platform", "alice")
+		if err != nil || got != tt.want {
+			t.Fatalf("state %s: TeamMembershipActive = %v, %v", tt.state, got, err)
+		}
+		expect(t, rec.get(0), "GET", "/orgs/acme/teams/platform/memberships/alice", "")
+	}
+
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"Not Found"}`, 404) })
+	if got, err := c.TeamMembershipActive(ctx, "acme", "platform", "alice"); err != nil || got {
+		t.Fatalf("not a member: %v, %v", got, err)
+	}
+
+	// Anything else is an error: the caller can't tell, so it can't say no.
+	c, _ = serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"Forbidden"}`, 403) })
+	if _, err := c.TeamMembershipActive(ctx, "acme", "platform", "alice"); err == nil {
+		t.Fatal("403 gave no error")
+	}
+	if _, err := c.TeamMembershipActive(ctx, "acme", "..", "alice"); err == nil {
+		t.Fatal("a .. segment was sent")
+	}
+}

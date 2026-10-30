@@ -1,9 +1,10 @@
 // Package gitlab is a small GitLab REST client: merge requests, repository
 // files, notes, commit statuses, approvals, webhooks and deploy tokens.
 //
-// Errors never contain the token: it travels only in the PRIVATE-TOKEN header,
-// which is never sent to another host on a redirect, and any copy of it in a
-// response body is masked before it reaches an error.
+// Errors never contain the token: it travels only in the PRIVATE-TOKEN header
+// (a user's OAuth token: Authorization), which is never sent to another host
+// on a redirect, and any copy of it in a response body is masked before it
+// reaches an error.
 package gitlab
 
 import (
@@ -33,6 +34,7 @@ const (
 type Client struct {
 	baseURL string
 	token   string
+	bearer  bool // token is an OAuth token: Authorization: Bearer
 	hc      *http.Client
 	sleep   func(ctx context.Context, d time.Duration) error // injectable for tests
 }
@@ -53,6 +55,16 @@ func New(baseURL, token string, hc *http.Client) *Client {
 		hc:      &own,
 		sleep:   sleepCtx,
 	}
+}
+
+// NewOAuth is New for a user's OAuth access token, which GitLab takes in
+// the Authorization header as a Bearer token rather than in PRIVATE-TOKEN.
+// The same rules hold: no redirect to another host, the token masked in
+// errors.
+func NewOAuth(baseURL, token string, hc *http.Client) *Client {
+	c := New(baseURL, token, hc)
+	c.bearer = true
+	return c
 }
 
 // errCrossHostRedirect is a redirect the client refused to follow.
@@ -168,7 +180,11 @@ func (c *Client) once(ctx context.Context, method, rawURL string, payload []byte
 	if err != nil {
 		return nil, 0, errors.New("gitlab: building request")
 	}
-	req.Header.Set("PRIVATE-TOKEN", c.token)
+	if c.bearer {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	} else {
+		req.Header.Set("PRIVATE-TOKEN", c.token)
+	}
 	req.Header.Set("Accept", "application/json")
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -277,6 +293,63 @@ func (c *Client) GetProject(ctx context.Context, path string) (Project, error) {
 	var p Project
 	_, err := c.getJSON(ctx, "/projects/"+seg(path), nil, &p)
 	return p, err
+}
+
+// ProjectAccess is what the token's user may do in a project, as GitLab
+// reports it in GET /projects/:path.
+type ProjectAccess struct {
+	// Visibility is "public", "internal" or "private".
+	Visibility string
+	// RepositoryAccess and MergeRequestsAccess are the features' access
+	// levels: "enabled" (everyone who can see the project), "private"
+	// (members only) or "disabled".
+	RepositoryAccess, MergeRequestsAccess string
+	// ProjectAccessLevel and GroupAccessLevel are the user's access level
+	// as a member of the project and of its group (0: not a member).
+	// Reporter is 20.
+	ProjectAccessLevel, GroupAccessLevel int
+}
+
+// ProjectAccess returns the token user's access to the project at path. A
+// project the user can't see is ErrNotFound.
+func (c *Client) ProjectAccess(ctx context.Context, path string) (ProjectAccess, error) {
+	type level struct {
+		AccessLevel int `json:"access_level"`
+	}
+	var p struct {
+		Visibility          string `json:"visibility"`
+		RepositoryAccess    string `json:"repository_access_level"`
+		MergeRequestsAccess string `json:"merge_requests_access_level"`
+		Permissions         struct {
+			ProjectAccess *level `json:"project_access"`
+			GroupAccess   *level `json:"group_access"`
+		} `json:"permissions"`
+	}
+	if _, err := c.getJSON(ctx, "/projects/"+seg(path), nil, &p); err != nil {
+		return ProjectAccess{}, err
+	}
+	a := ProjectAccess{Visibility: p.Visibility, RepositoryAccess: p.RepositoryAccess, MergeRequestsAccess: p.MergeRequestsAccess}
+	if p.Permissions.ProjectAccess != nil {
+		a.ProjectAccessLevel = p.Permissions.ProjectAccess.AccessLevel
+	}
+	if p.Permissions.GroupAccess != nil {
+		a.GroupAccessLevel = p.Permissions.GroupAccess.AccessLevel
+	}
+	return a, nil
+}
+
+// IsGroupMember reports whether the user is a member of group (a path such
+// as acme/platform), directly or through a parent group or shared group. Not
+// a member (404) is false; any other failure is an error.
+func (c *Client) IsGroupMember(ctx context.Context, group string, userID int64) (bool, error) {
+	_, err := c.do(ctx, http.MethodGet, "/groups/"+seg(group)+"/members/all/"+strconv.FormatInt(userID, 10), nil, nil)
+	if isStatus(err, http.StatusNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ApprovalRules lists the project's approval rules.

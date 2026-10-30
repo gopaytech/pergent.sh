@@ -741,3 +741,76 @@ func TestApprovalsBeforeMerge(t *testing.T) {
 	}
 	expect(t, (*reqs)[0], http.MethodGet, "/api/v4/projects/7/approvals", "")
 }
+
+// A user's OAuth token travels as a Bearer token, never as PRIVATE-TOKEN.
+func TestNewOAuthSendsBearer(t *testing.T) {
+	var auth, private string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth, private = r.Header.Get("Authorization"), r.Header.Get("PRIVATE-TOKEN")
+		jsonReply(map[string]any{"id": 9, "username": "alice"})(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	c := NewOAuth(srv.URL, "oauth-user-token", srv.Client())
+	u, err := c.CurrentUser(context.Background())
+	if err != nil || u.ID != 9 || u.Username != "alice" {
+		t.Fatalf("CurrentUser = %+v, %v", u, err)
+	}
+	if auth != "Bearer oauth-user-token" || private != "" {
+		t.Fatalf("Authorization = %q, PRIVATE-TOKEN = %q", auth, private)
+	}
+}
+
+func TestProjectAccess(t *testing.T) {
+	c, reqs := serve(t, jsonReply(map[string]any{
+		"id": 7, "path_with_namespace": "acme/widgets", "visibility": "private",
+		"repository_access_level": "enabled", "merge_requests_access_level": "private",
+		"permissions": map[string]any{
+			"project_access": map[string]any{"access_level": 10},
+			"group_access":   map[string]any{"access_level": 30},
+		},
+	}))
+	a, err := c.ProjectAccess(context.Background(), "acme/widgets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ProjectAccess{Visibility: "private", RepositoryAccess: "enabled", MergeRequestsAccess: "private",
+		ProjectAccessLevel: 10, GroupAccessLevel: 30}
+	if a != want {
+		t.Fatalf("ProjectAccess = %+v, want %+v", a, want)
+	}
+	expect(t, (*reqs)[0], "GET", "/api/v4/projects/acme%2Fwidgets", "")
+
+	// No membership: GitLab sends null permissions.
+	c, _ = serve(t, jsonReply(map[string]any{"visibility": "public",
+		"permissions": map[string]any{"project_access": nil, "group_access": nil}}))
+	if a, err := c.ProjectAccess(context.Background(), "acme/widgets"); err != nil || a.ProjectAccessLevel != 0 || a.GroupAccessLevel != 0 {
+		t.Fatalf("ProjectAccess without membership = %+v, %v", a, err)
+	}
+}
+
+func TestProjectAccessNotFound(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"404 Project Not Found"}`, 404) })
+	if _, err := c.ProjectAccess(context.Background(), "acme/widgets"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestIsGroupMember(t *testing.T) {
+	c, reqs := serve(t, jsonReply(map[string]any{"id": 9, "username": "alice", "access_level": 10, "state": "active"}))
+	ok, err := c.IsGroupMember(context.Background(), "acme/platform", 9)
+	if err != nil || !ok {
+		t.Fatalf("IsGroupMember = %v, %v", ok, err)
+	}
+	expect(t, (*reqs)[0], "GET", "/api/v4/groups/acme%2Fplatform/members/all/9", "")
+
+	c, _ = serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"404 Not found"}`, 404) })
+	if ok, err := c.IsGroupMember(context.Background(), "acme/platform", 9); err != nil || ok {
+		t.Fatalf("IsGroupMember of a non-member = %v, %v", ok, err)
+	}
+
+	// Anything else is an error: the caller can't tell, so it can't say no.
+	c, _ = serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, "boom", 500) })
+	if _, err := c.IsGroupMember(context.Background(), "acme/platform", 9); err == nil {
+		t.Fatal("IsGroupMember on a 500 = nil error")
+	}
+}
