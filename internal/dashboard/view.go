@@ -364,7 +364,8 @@ type AdminView struct {
 
 // --- The write API (admins of the session's instance only) ---
 //
-// Every write needs the X-CSRF-Token header (403 without it) and an admin
+// Every write needs the X-CSRF-Token header (403 with "code": "csrf"
+// without it, so the client knows to fetch the token again) and an admin
 // session (403 otherwise, and nothing changes). A repository the admin
 // can't see is answered exactly like one that doesn't exist (404), whatever
 // the write. A repository listed in the config is read-only here (409).

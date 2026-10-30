@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, api, onUnauthorized, paths, safeHref } from "./api";
+import { ApiError, api, isCSRFError, onUnauthorized, paths, safeHref } from "./api";
 import { fakeApi } from "./test/fakeApi";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -43,6 +43,20 @@ describe("api", () => {
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).status).toBe(400);
     expect((err as ApiError).message).toBe("days must be a number");
+  });
+
+  it("tells a CSRF refusal by its code, not its message", async () => {
+    fakeApi({
+      "PUT /api/a": { status: 403, body: { error: "the token is stale", code: "csrf" } },
+      "PUT /api/b": { status: 403, body: { error: "missing or wrong CSRF token" } },
+      "PUT /api/c": { status: 400, body: { error: "bad", code: "csrf" } },
+    });
+    const a = await api.put("/api/a", {}, "tok").catch((e: unknown) => e);
+    expect(isCSRFError(a)).toBe(true);
+    expect((a as ApiError).message).toBe("the token is stale");
+    expect((a as ApiError).code).toBe("csrf");
+    expect(isCSRFError(await api.put("/api/b", {}, "tok").catch((e: unknown) => e))).toBe(false);
+    expect(isCSRFError(await api.put("/api/c", {}, "tok").catch((e: unknown) => e))).toBe(false);
   });
 
   it("tells the 401 listeners", async () => {

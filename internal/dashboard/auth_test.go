@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -397,6 +398,16 @@ func TestIdleSessionExpires(t *testing.T) {
 	}
 }
 
+// wantCSRFCode checks a CSRF refusal says so in a field the client can
+// test: {"error": ..., "code": "csrf"}.
+func wantCSRFCode(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	var body struct{ Error, Code string }
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.Code != "csrf" || body.Error == "" {
+		t.Errorf("CSRF refusal body = %s; want an error and code \"csrf\"", rec.Body)
+	}
+}
+
 func TestCSRFRequiredOnWrites(t *testing.T) {
 	e := newEnv(t, nil)
 	e.gl.setProject("acme/widgets", gitlabProject("private", 30, 0))
@@ -420,8 +431,12 @@ func TestCSRFRequiredOnWrites(t *testing.T) {
 			if tt.token != "" {
 				h["X-CSRF-Token"] = tt.token
 			}
-			if rec := e.do(tt.method, "/test/session", []*http.Cookie{c}, h); rec.Code != tt.want {
+			rec := e.do(tt.method, "/test/session", []*http.Cookie{c}, h)
+			if rec.Code != tt.want {
 				t.Errorf("%s = %d, want %d", tt.method, rec.Code, tt.want)
+			}
+			if tt.want == http.StatusForbidden {
+				wantCSRFCode(t, rec)
 			}
 		})
 	}
@@ -436,6 +451,8 @@ func TestCSRFRequiredOnWrites(t *testing.T) {
 	// Logout is a write too.
 	if rec := e.do("POST", "/auth/logout", []*http.Cookie{c}, nil); rec.Code != http.StatusForbidden {
 		t.Fatalf("logout without a CSRF token = %d", rec.Code)
+	} else {
+		wantCSRFCode(t, rec)
 	}
 	if code, _ := e.me(c); code != 200 {
 		t.Fatal("logout without a CSRF token ended the session")

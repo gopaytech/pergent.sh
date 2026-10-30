@@ -216,7 +216,7 @@ describe("RepositoryDetail", () => {
       ...base,
       "GET /api/me": () => ({ body: mes++ === 0 ? admin : { ...admin, csrfToken: "csrf-new" } }),
       "PUT /api/repositories/main/acme/payments/settings": () =>
-        puts++ === 0 ? { status: 403, body: { error: "missing or wrong CSRF token" } } : { body: payments },
+        puts++ === 0 ? { status: 403, body: { error: "missing or wrong CSRF token", code: "csrf" } } : { body: payments },
     });
     renderApp("/repos/main/acme/payments?tab=settings");
     await userEvent.click(await screen.findByRole("switch", { name: "Review drafts" }));

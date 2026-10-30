@@ -90,7 +90,7 @@ describe("App shell", () => {
       ...base,
       "GET /api/me": () => ({ body: mes++ === 0 ? admin : { ...admin, csrfToken: "csrf-new" } }),
       "POST /auth/logout": () =>
-        logouts++ === 0 ? { status: 403, body: { error: "missing or wrong CSRF token" } } : { status: 204 },
+        logouts++ === 0 ? { status: 403, body: { error: "missing or wrong CSRF token", code: "csrf" } } : { status: 204 },
       "GET /api/instances": { body: [] },
     });
     renderApp("/");

@@ -190,13 +190,16 @@ export type AvailableView = {
   truncated: boolean;
 };
 
-// ApiError is a non-2xx answer; message is the API's {"error"} text.
+// ApiError is a non-2xx answer; message is the API's {"error"} text, for
+// people, and code its {"code"}, for the client to test.
 export class ApiError extends Error {
   readonly status: number;
-  constructor(status: number, message: string) {
+  readonly code?: string;
+  constructor(status: number, message: string, code?: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -204,7 +207,7 @@ export const isStatus = (err: unknown, status: number) => err instanceof ApiErro
 
 // isCSRFError is the 403 a write gets when its CSRF token is missing or
 // stale (not the 403 of a user who isn't allowed).
-export const isCSRFError = (err: unknown) => isStatus(err, 403) && /csrf/i.test((err as ApiError).message);
+export const isCSRFError = (err: unknown) => isStatus(err, 403) && (err as ApiError).code === "csrf";
 
 // --- 401 ---
 
@@ -238,15 +241,18 @@ async function request<T>(method: string, path: string, body?: unknown, csrf?: s
   }
   if (!res.ok) {
     let message = `request failed (${res.status})`;
+    let code: string | undefined;
     try {
       const data: unknown = await res.json();
-      if (data && typeof data === "object" && typeof (data as { error?: unknown }).error === "string") {
-        message = (data as { error: string }).error;
+      if (data && typeof data === "object") {
+        const { error, code: c } = data as { error?: unknown; code?: unknown };
+        if (typeof error === "string") message = error;
+        if (typeof c === "string") code = c;
       }
     } catch {
       // Not JSON: keep the generic message.
     }
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, code);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;

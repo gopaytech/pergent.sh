@@ -327,7 +327,7 @@ func (a *Auth) logout(w http.ResponseWriter, r *http.Request) {
 		}
 		if found {
 			if !csrfOK(r, se.CSRF) {
-				writeError(w, http.StatusForbidden, "missing or wrong CSRF token")
+				writeCSRFError(w)
 				return
 			}
 			if err := a.store.DeleteSession(r.Context(), hash); err != nil {
@@ -376,7 +376,7 @@ func (a *Auth) Require(next http.Handler) http.Handler {
 			return
 		}
 		if !safeMethod(r.Method) && !csrfOK(r, se.CSRF) {
-			writeError(w, http.StatusForbidden, "missing or wrong CSRF token")
+			writeCSRFError(w)
 			return
 		}
 		if now.Sub(se.LastSeenAt) >= touchEvery {
@@ -414,6 +414,13 @@ func (a *Auth) PruneSessions(ctx context.Context, now time.Time) (int, error) {
 
 func safeMethod(m string) bool {
 	return m == http.MethodGet || m == http.MethodHead || m == http.MethodOptions
+}
+
+// writeCSRFError refuses a write whose X-CSRF-Token is missing or wrong:
+// 403 with code "csrf", which tells the client to fetch the token again,
+// unlike the 403 of a user who isn't allowed.
+func writeCSRFError(w http.ResponseWriter) {
+	writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing or wrong CSRF token", "code": "csrf"})
 }
 
 // csrfOK compares the request's X-CSRF-Token with the session's in
