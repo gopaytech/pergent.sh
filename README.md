@@ -111,6 +111,8 @@ The chart is in `deploy/helm/pergent-sh`. Postgres is not part of it.
    helm install pergent-sh deploy/helm/pergent-sh -n pergent-sh -f values.yaml
    ```
 
+   By default the chart runs `ghcr.io/gopaytech/pergent.sh:main`, the newest build of the `main` branch (every push to `main` publishes it, together with `sha-<short sha>`), with `image.pullPolicy: Always`. The tag moves, so a pod restart can pick up a newer build. For production pin an image: `--set image.tag=sha-<short sha>` or a release tag such as `v0.1.0` (then `--set image.pullPolicy=IfNotPresent`).
+
 On startup pergent.sh creates the merge request webhook and a read-only deploy token on every listed GitLab project. You do not create either by hand. On GitHub there is nothing per repository to create: the review App's webhook covers every repository it is installed on.
 
 For GitHub only, set `config.gitlab: []`: the chart's default values contain an example GitLab instance, and pergent.sh would refuse to start without its tokens.
@@ -423,4 +425,4 @@ export PERGENT_SH_TEST_DATABASE_URL='postgres://postgres:pergent@localhost:55432
 go test -count=1 ./...
 ```
 
-All other tests need no external service. Release images are built by the `release` workflow when a `v*.*.*` tag is pushed and published as `ghcr.io/gopaytech/pergent.sh:<tag>` (linux/amd64).
+All other tests need no external service. Release images are built by the `release` workflow when a `v*.*.*` tag is pushed and published as `ghcr.io/gopaytech/pergent.sh:<tag>` (linux/amd64). The `ci` workflow also publishes `ghcr.io/gopaytech/pergent.sh:main` and `:sha-<short sha>` on every push to `main`, after the test and chart jobs pass; `latest` is only set by releases.
