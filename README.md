@@ -325,7 +325,7 @@ The dashboard is a web app built into pergent.sh. It is off until `dashboard.url
          hosts: [pergent-dashboard.example.com]
    ```
 
-   It exposes `/`, `/api/` and `/auth/` of the pergent.sh Service; the webhook Ingress never does. The chart refuses to render it without `config.dashboard.url`, or when none of `hosts` is that URL's host. Without `dashboard.url` pergent.sh doesn't serve those routes at all.
+   It exposes `/`, `/api/` and `/auth/` of the pergent.sh Service; the webhook Ingress never does. Its `/` is a prefix, so the dashboard host also routes `/webhooks/`, `/runs/` and `/healthz` to pergent.sh; webhooks and results there still need a valid signature or result token, and `/healthz` only answers `ok`. The chart refuses to render it without `config.dashboard.url`, or when none of `hosts` is that URL's host. Without `dashboard.url` pergent.sh doesn't serve those routes at all.
 
 pergent.sh doesn't start when `dashboard.url` is set and an instance's `oauth_client_id_env` or `oauth_client_secret_env` variable is unset or empty; the error names the instance and the variable. With no `dashboard.admins`, it starts and logs a warning: everyone can sign in, but nobody is an admin.
 
@@ -391,7 +391,9 @@ Every write is checked on the server: it needs an admin, a repository the admin 
 
 ### Limits of the access check
 
-Each signed-in user costs one platform API call per repository switched on for their instance, at most once every 5 minutes while they use the dashboard, plus one to read the user and one per admin group or team of the instance. GitHub allows 5000 requests an hour per user, so a very large installation (several hundred repositories on one GitHub instance) can run a user into GitHub's rate limit; their check then fails as described above.
+Each signed-in user costs one platform API call per repository switched on for their instance, at most once every 5 minutes while they use the dashboard, plus one to read the user and one per admin group or team of the instance. On GitLab a repository whose own permissions show less than Reporter (an internal project, or one reached through a share) costs a second call. GitHub allows 5000 requests an hour per user, so a very large installation (several hundred repositories on one GitHub instance) can run a user into GitHub's rate limit; their check then fails as described above.
+
+A sign-in, and each later access check, must finish within 30 seconds in all: the code exchange and reading the user, then the repositories, 8 at a time, then the admin groups or teams one after another, each call with its own 10 second timeout. The repositories take about (number of repositories ÷ 8) × the platform's response time, so an instance with more than roughly 8 × 30 s ÷ that response time repositories switched on can't be checked in time: about 900 at 250 ms a call, 2,400 at 100 ms, and half that on GitLab where most repositories need the second call. Past that, every sign-in on the instance fails with "Could not check which repositories you can see", and sessions already signed in see nothing once their last good check is 10 minutes old. The 30 seconds can't be configured: keep the repositories switched on for an instance below that number, or split them across instances, and run pergent.sh close to GitLab or GitHub so each call is quick.
 
 ## Config reference
 
