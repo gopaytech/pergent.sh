@@ -105,10 +105,11 @@ func (e *Engine) wakeCh() chan struct{} {
 	return e.wake
 }
 
-// ReconcileSoon asks the loop for a Reconcile on its next select, ahead of
-// the hourly one: the dashboard calls it when a repository is switched on or
-// off. It never blocks; requests that arrive while one is pending are merged
-// into it.
+// ReconcileSoon asks the loop for a Reconcile ahead of the hourly one: the
+// dashboard calls it when a repository is switched on or off. It never
+// blocks; requests that arrive while one is pending are merged into it. The
+// loop starts such a reconcile at most once every 10 s (reconcileSoonGap):
+// one asked for sooner waits for the gap to pass.
 func (e *Engine) ReconcileSoon() {
 	select {
 	case e.reconcileCh() <- struct{}{}:
@@ -146,12 +147,17 @@ var (
 	// 20 approved pull requests would use up GitHub's rate limit.
 	sweepInterval     = 5 * time.Minute
 	reconcileInterval = time.Hour
+	// reconcileSoonGap is the least time between two reconciles
+	// ReconcileSoon starts; requests in between are merged into one.
+	reconcileSoonGap = 10 * time.Second
 )
 
 // Run runs the loops until ctx is done: dispatch, publish and cleanup every
 // 2 s or on Wake, watch every 15 s, sweep the approvals every 5 minutes and
 // reconcile every hour (when it also prunes the review logs older than
-// 30 days) and on ReconcileSoon. They all run in
+// 30 days) and on ReconcileSoon (at most once every 10 s: requests within
+// that gap of the last such reconcile make one more when it ends). They all
+// run in
 // this one goroutine, one after another, so no two of them ever overlap (a
 // publish and a cleanup of the same merge request least of all). Errors are
 // logged and never stop the loop. Before the first pass, runs stranded
@@ -183,6 +189,24 @@ func (e *Engine) Run(ctx context.Context) {
 	reconcile := time.NewTicker(reconcileInterval)
 	defer reconcile.Stop()
 
+	// Dashboard requests (ReconcileSoon): the last one's start and, while
+	// one waits for the gap to pass, its timer.
+	var (
+		lastSoon  time.Time
+		soonTimer *time.Timer
+		soon      <-chan time.Time
+	)
+	defer func() {
+		if soonTimer != nil {
+			soonTimer.Stop()
+		}
+	}()
+	reconcileNow := func() {
+		if err := e.Reconcile(ctx); err != nil && ctx.Err() == nil {
+			log.Error("reconcile failed", "error", e.redact(err.Error()))
+		}
+	}
+
 	e.pass(ctx)
 	for {
 		select {
@@ -204,9 +228,21 @@ func (e *Engine) Run(ctx context.Context) {
 			}
 			e.pruneRunLogs(ctx)
 		case <-e.reconcileCh():
-			if err := e.Reconcile(ctx); err != nil && ctx.Err() == nil {
-				log.Error("reconcile failed", "error", e.redact(err.Error()))
+			// Within the gap of the last one, wait for its end; requests
+			// arriving meanwhile are merged into that one.
+			if wait := reconcileSoonGap - time.Since(lastSoon); !lastSoon.IsZero() && wait > 0 {
+				if soonTimer == nil {
+					soonTimer = time.NewTimer(wait)
+					soon = soonTimer.C
+				}
+				continue
 			}
+			lastSoon = time.Now()
+			reconcileNow()
+		case <-soon:
+			soonTimer, soon = nil, nil
+			lastSoon = time.Now()
+			reconcileNow()
 		}
 	}
 }

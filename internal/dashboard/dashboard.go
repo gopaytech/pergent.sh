@@ -61,14 +61,19 @@ type Options struct {
 	ReconcileSoon func()
 }
 
-// RepoCatalog lists the repositories the review side of an instance can
-// set up, up to limit (truncated is true when there were more): on GitLab
+// RepoCatalog is what the review side of an instance can set up: on GitLab
 // the review bot's projects where it is Maintainer or above (it creates
 // their webhooks and deploy tokens), on GitHub the repositories of the
 // review App's installations. gitlabforge.Forge and githubforge.Forge are
-// ones.
+// ones. Each request it makes has its own 10 s.
 type RepoCatalog interface {
-	ReachableRepos(ctx context.Context, limit int) (repos []string, truncated bool, err error)
+	// ReachableRepos lists them, those that hold search ("" for all), up
+	// to limit; truncated is true when there were more. On an error it
+	// also returns those read before it.
+	ReachableRepos(ctx context.Context, search string, limit int) (repos []string, truncated bool, err error)
+	// CanReach reports whether project is one; a failure to tell is an
+	// error.
+	CanReach(ctx context.Context, project string) (bool, error)
 }
 
 // RepoSource reads a repository, named by its platform ID, with the review
@@ -92,9 +97,13 @@ type Dashboard struct {
 	sources       map[string]RepoSource
 	catalogs      map[string]RepoCatalog
 	reconcileSoon func()
-	now           func() time.Time
-	inputs        *inputsCache
-	catalog       *catalogCache
+	// listBudget bounds each side's listing for the picker; listLimit is
+	// the most repositories read from each side.
+	listBudget time.Duration
+	listLimit  int
+	now        func() time.Time
+	inputs     *inputsCache
+	catalog    *catalogCache
 }
 
 // New builds the dashboard. The config must have dashboard.url; every
@@ -126,7 +135,7 @@ func New(o Options) (*Dashboard, error) {
 	}
 	return &Dashboard{Auth: auth, Repos: repos, Store: o.Store, Log: o.Log,
 		cfg: o.Config, library: o.Library, sources: o.Sources, catalogs: o.Catalogs,
-		reconcileSoon: o.ReconcileSoon, now: o.Now,
+		reconcileSoon: o.ReconcileSoon, now: o.Now, listBudget: listBudget, listLimit: listLimit,
 		inputs:  &inputsCache{entries: map[string]inputsEntry{}, flights: map[string]*inputsFlight{}},
 		catalog: &catalogCache{entries: map[string]catalogEntry{}, flights: map[string]*catalogFlight{}}}, nil
 }

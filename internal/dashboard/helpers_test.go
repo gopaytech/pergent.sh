@@ -211,8 +211,12 @@ type fakeGitLab struct {
 	groups   map[string]bool           // group path → user 9 is a member
 	checks   int                       // GET /projects/:path calls
 	listings []string                  // GET /projects queries
-	// listFail makes GET /projects answer 500.
+	// listFail makes GET /projects answer 400.
 	listFail bool
+	// slowFrom makes GET /projects pages from slowFrom on (1-based; 0:
+	// none) wait slow, or until the request ends.
+	slowFrom int
+	slow     time.Duration
 	username string         // user 9's username (default alice)
 	member   map[string]any // extra fields of a member answer
 }
@@ -251,6 +255,19 @@ func (f *fakeGitLab) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := r.URL.EscapedPath()
+	if p == "/api/v4/projects" {
+		f.mu.Lock()
+		slowFrom, slow := f.slowFrom, f.slow
+		f.mu.Unlock()
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		if slowFrom > 0 && max(page, 1) >= slowFrom {
+			select {
+			case <-time.After(slow):
+			case <-r.Context().Done():
+				return
+			}
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	switch {
@@ -259,16 +276,23 @@ func (f *fakeGitLab) serve(w http.ResponseWriter, r *http.Request) {
 	case p == "/api/v4/projects":
 		f.listings = append(f.listings, r.URL.RawQuery)
 		if f.listFail {
-			reply(w, 500, map[string]any{"message": "500 Internal Server Error"})
+			reply(w, 400, map[string]any{"message": "400 Bad request"})
 			return
 		}
 		f.listProjects(w, r)
 	case strings.HasPrefix(p, "/api/v4/projects/"):
 		f.checks++
 		path, _ := url.PathUnescape(strings.TrimPrefix(p, "/api/v4/projects/"))
-		if body, ok := f.projects[path]; ok {
-			reply(w, 200, body)
-			return
+		// GitLab finds a project whatever the case of its path.
+		for key, body := range f.projects {
+			if strings.EqualFold(key, path) {
+				out := map[string]any{"path_with_namespace": key}
+				for k, v := range body {
+					out[k] = v
+				}
+				reply(w, 200, out)
+				return
+			}
 		}
 		reply(w, 404, map[string]any{"message": "404 Project Not Found"})
 	case strings.HasPrefix(p, "/api/v4/groups/") && strings.HasSuffix(p, "/members/all/9"):
@@ -287,11 +311,20 @@ func (f *fakeGitLab) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// listProjects answers GET /projects?min_access_level=N like GitLab: the
-// projects whose member (project or group) access level is at least N, by
-// path. Called with mu held.
+// listProjects answers GET /projects?min_access_level=N&search=S like
+// GitLab: the projects whose member (project or group) access level is at
+// least N and whose path holds S, by path, per_page at a time. Called with
+// mu held.
 func (f *fakeGitLab) listProjects(w http.ResponseWriter, r *http.Request) {
-	min, _ := strconv.Atoi(r.URL.Query().Get("min_access_level"))
+	q := r.URL.Query()
+	minLevel, _ := strconv.Atoi(q.Get("min_access_level"))
+	search := strings.ToLower(q.Get("search"))
+	perPage, _ := strconv.Atoi(q.Get("per_page"))
+	if perPage <= 0 {
+		perPage = 20
+	}
+	page, _ := strconv.Atoi(q.Get("page"))
+	page = max(page, 1)
 	level := func(v any) int {
 		m, _ := v.(map[string]any)
 		n, _ := m["access_level"].(int)
@@ -302,14 +335,20 @@ func (f *fakeGitLab) listProjects(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, path)
 	}
 	sort.Strings(paths)
-	out := []map[string]any{}
+	all := []map[string]any{}
 	for _, path := range paths {
 		perms, _ := f.projects[path]["permissions"].(map[string]any)
-		if max(level(perms["project_access"]), level(perms["group_access"])) >= min && min > 0 {
-			out = append(out, map[string]any{"id": f.projects[path]["id"], "path_with_namespace": path})
+		if max(level(perms["project_access"]), level(perms["group_access"])) >= minLevel && minLevel > 0 &&
+			strings.Contains(strings.ToLower(path), search) {
+			all = append(all, map[string]any{"id": f.projects[path]["id"], "path_with_namespace": path})
 		}
 	}
-	reply(w, 200, out)
+	from := min(len(all), (page-1)*perPage)
+	to := min(len(all), page*perPage)
+	if to < len(all) {
+		w.Header().Set("X-Next-Page", strconv.Itoa(page+1))
+	}
+	reply(w, 200, all[from:to])
 }
 
 func (f *fakeGitLab) token(w http.ResponseWriter, r *http.Request) {
@@ -405,9 +444,16 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		reply(w, 200, out)
 	case strings.HasPrefix(p, "/api/v3/repos/"):
-		if body, ok := f.repos[strings.TrimPrefix(p, "/api/v3/repos/")]; ok {
-			reply(w, 200, body)
-			return
+		// GitHub finds a repository whatever the case of its name.
+		for key, body := range f.repos {
+			if strings.EqualFold(key, strings.TrimPrefix(p, "/api/v3/repos/")) {
+				out := map[string]any{"full_name": key}
+				for k, v := range body {
+					out[k] = v
+				}
+				reply(w, 200, out)
+				return
+			}
 		}
 		reply(w, 404, map[string]any{"message": "Not Found"})
 	case strings.HasPrefix(p, "/api/v3/orgs/") && strings.Contains(p, "/memberships/"):

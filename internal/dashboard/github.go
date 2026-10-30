@@ -123,6 +123,35 @@ func (p *githubProvider) isAdmin(ctx context.Context, accessToken string, _ int6
 	return p.client(accessToken).TeamMembershipActive(ctx, org, slug, username)
 }
 
-func (p *githubProvider) memberRepos(ctx context.Context, accessToken string, limit int) ([]string, bool, error) {
-	return p.client(accessToken).UserRepos(ctx, limit)
+func (p *githubProvider) memberRepos(ctx context.Context, accessToken, search string, limit int) ([]string, bool, error) {
+	timeout := p.timeout
+	if timeout <= 0 {
+		timeout = platformTimeout
+	}
+	return p.client(accessToken).UserRepos(ctx, github.ListOptions{Match: search, Limit: limit, CallTimeout: timeout})
+}
+
+// memberRepo: read (pull) access, as GET /repos/{owner}/{repo} reports it
+// to the user.
+func (p *githubProvider) memberRepo(ctx context.Context, accessToken, project string) (string, bool, error) {
+	owner, name, ok := strings.Cut(project, "/")
+	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+		return "", false, nil
+	}
+	ctx, cancel := callContext(ctx, p.timeout)
+	defer cancel()
+	a, err := p.client(accessToken).RepoAccess(ctx, owner, name)
+	if errors.Is(err, github.ErrNotFound) || isStatus(err, http.StatusForbidden) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if !a.Pull {
+		return "", false, nil
+	}
+	if a.FullName == "" {
+		return "", false, errors.New("github: the repository answer has no full name")
+	}
+	return a.FullName, true, nil
 }

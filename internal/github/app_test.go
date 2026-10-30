@@ -517,7 +517,7 @@ func TestMintFailureOtherStatus(t *testing.T) {
 
 func TestInstallations(t *testing.T) {
 	a, rec, _ := testApp(t, jsonReply([]map[string]any{{"id": 42}, {"id": 43}}))
-	ids, err := a.Installations(ctx)
+	ids, err := a.Installations(ctx, 10*time.Second)
 	if err != nil || len(ids) != 2 || ids[0] != 42 || ids[1] != 43 {
 		t.Fatalf("Installations = %v, %v", ids, err)
 	}

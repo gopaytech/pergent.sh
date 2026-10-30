@@ -808,7 +808,7 @@ func TestRepoAccess(t *testing.T) {
 	c, rec := serve(t, jsonReply(map[string]any{"id": 99, "full_name": "acme/widgets", "private": true,
 		"permissions": map[string]any{"admin": false, "push": false, "pull": true}}))
 	a, err := c.RepoAccess(ctx, "acme", "widgets")
-	if err != nil || a != (RepoAccess{Private: true, Pull: true}) {
+	if err != nil || a != (RepoAccess{FullName: "acme/widgets", Private: true, Pull: true}) {
 		t.Fatalf("RepoAccess = %+v, %v", a, err)
 	}
 	expect(t, rec.get(0), "GET", "/repos/acme/widgets", "")
@@ -859,7 +859,7 @@ func TestUserReposReadableOnly(t *testing.T) {
 		{"full_name": "acme/secret", "private": true, "permissions": map[string]any{"pull": false}},
 		{"full_name": "acme/open", "private": false, "permissions": map[string]any{"pull": true}},
 	}))
-	got, truncated, err := c.UserRepos(ctx, 10)
+	got, truncated, err := c.UserRepos(ctx, ListOptions{Limit: 10})
 	if err != nil || truncated {
 		t.Fatalf("truncated=%v err=%v", truncated, err)
 	}
@@ -867,6 +867,12 @@ func TestUserReposReadableOnly(t *testing.T) {
 		t.Fatalf("repos = %v", got)
 	}
 	expect(t, rec.get(0), "GET", "/user/repos", "per_page=100")
+
+	// Match keeps the names holding it, ignoring case, before the limit.
+	got, truncated, err = c.UserRepos(ctx, ListOptions{Match: "OPEN", Limit: 1})
+	if err != nil || truncated || strings.Join(got, ",") != "acme/open" {
+		t.Fatalf("matched = %v, %v, %v", got, truncated, err)
+	}
 }
 
 func TestUserReposStopsAtLimit(t *testing.T) {
@@ -879,12 +885,31 @@ func TestUserReposStopsAtLimit(t *testing.T) {
 		})(w, r)
 	})
 	srvURL = c.base
-	got, truncated, err := c.UserRepos(ctx, 1)
+	got, truncated, err := c.UserRepos(ctx, ListOptions{Limit: 1})
 	if err != nil || !truncated || len(got) != 1 {
 		t.Fatalf("got=%v truncated=%v err=%v", got, truncated, err)
 	}
 	if n := len(rec.all()); n != 1 {
 		t.Fatalf("requests = %d, want 1", n)
+	}
+}
+
+// Each page has its own deadline; a failed page returns the pages read
+// before it with the error.
+func TestUserReposPageTimeoutKeepsWhatWasRead(t *testing.T) {
+	var srvURL string
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") == "2" {
+			<-r.Context().Done()
+			return
+		}
+		w.Header().Set("Link", `<`+srvURL+`/user/repos?page=2>; rel="next"`)
+		jsonReply([]map[string]any{{"full_name": "acme/a", "permissions": map[string]any{"pull": true}}})(w, r)
+	})
+	srvURL = c.base
+	got, _, err := c.UserRepos(ctx, ListOptions{Limit: 10, CallTimeout: 100 * time.Millisecond})
+	if err == nil || strings.Join(got, ",") != "acme/a" {
+		t.Fatalf("got=%v err=%v", got, err)
 	}
 }
 
@@ -899,9 +924,13 @@ func TestInstallationReposPaginates(t *testing.T) {
 		jsonReply(map[string]any{"total_count": 2, "repositories": []map[string]any{{"full_name": "acme/widgets"}}})(w, r)
 	})
 	srvURL = c.base
-	got, truncated, err := c.InstallationRepos(ctx, 10)
+	got, truncated, err := c.InstallationRepos(ctx, ListOptions{Limit: 10})
 	if err != nil || truncated || strings.Join(got, ",") != "acme/widgets,acme/payments" {
 		t.Fatalf("got=%v truncated=%v err=%v", got, truncated, err)
 	}
 	expect(t, rec.get(0), "GET", "/installation/repositories", "per_page=100")
+	got, _, err = c.InstallationRepos(ctx, ListOptions{Match: "pay", Limit: 10})
+	if err != nil || strings.Join(got, ",") != "acme/payments" {
+		t.Fatalf("matched = %v, %v", got, err)
+	}
 }

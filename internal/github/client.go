@@ -365,6 +365,12 @@ func (c *Client) getJSON(ctx context.Context, path string, query url.Values, out
 // paginate calls fn with each page's body, following the Link header's
 // rel="next" URL, which must be on the API's own scheme and host.
 func (c *Client) paginate(ctx context.Context, path string, fn func(body []byte) error) error {
+	return c.paginateTimed(ctx, path, 0, fn)
+}
+
+// paginateTimed is paginate with each page's request (retries included)
+// bounded by pageTimeout; 0 means only ctx bounds it.
+func (c *Client) paginateTimed(ctx context.Context, path string, pageTimeout time.Duration, fn func(body []byte) error) error {
 	base, err := url.Parse(c.base)
 	if err != nil {
 		return errors.New("github: invalid API URL")
@@ -379,7 +385,12 @@ func (c *Client) paginate(ctx context.Context, path string, fn func(body []byte)
 		if page >= maxPages {
 			return fmt.Errorf("github: more than %d pages", maxPages)
 		}
-		resp, err := c.send(ctx, http.MethodGet, next, nil, acceptJSON)
+		pctx, cancel := ctx, context.CancelFunc(func() {})
+		if pageTimeout > 0 {
+			pctx, cancel = context.WithTimeout(ctx, pageTimeout)
+		}
+		resp, err := c.send(pctx, http.MethodGet, next, nil, acceptJSON)
+		cancel()
 		if err != nil {
 			return err
 		}
@@ -463,6 +474,8 @@ func (c *Client) Repo(ctx context.Context, owner, repo string) (Repository, erro
 
 // RepoAccess is what a user token may do in a repository.
 type RepoAccess struct {
+	// FullName is the repository's owner/name as GitHub spells it.
+	FullName string
 	// Private is true for a private or internal repository.
 	Private bool
 	// Pull is the user's read access (permissions.pull).
@@ -479,7 +492,8 @@ func (c *Client) RepoAccess(ctx context.Context, owner, repo string) (RepoAccess
 		return RepoAccess{}, err
 	}
 	var r struct {
-		Private     bool `json:"private"`
+		FullName    string `json:"full_name"`
+		Private     bool   `json:"private"`
 		Permissions struct {
 			Pull bool `json:"pull"`
 		} `json:"permissions"`
@@ -487,7 +501,7 @@ func (c *Client) RepoAccess(ctx context.Context, owner, repo string) (RepoAccess
 	if err := c.getJSON(ctx, p, nil, &r); err != nil {
 		return RepoAccess{}, err
 	}
-	return RepoAccess{Private: r.Private, Pull: r.Permissions.Pull}, nil
+	return RepoAccess{FullName: r.FullName, Private: r.Private, Pull: r.Permissions.Pull}, nil
 }
 
 // TeamMembershipActive reports whether username is an active member of the
@@ -796,17 +810,34 @@ func (c *Client) DismissReview(ctx context.Context, owner, repo string, number, 
 // errStopPaging ends a paginate early; it is not an error to the caller.
 var errStopPaging = errors.New("github: stop paging")
 
-// collectNames pages through path, adding the full_name of each repository
-// fn finds in a page to the result until limit; truncated is true when
-// there were more.
-func (c *Client) collectNames(ctx context.Context, path string, limit int, page func(body []byte) ([]string, error)) (names []string, truncated bool, err error) {
-	err = c.paginate(ctx, path, func(body []byte) error {
+// ListOptions selects the repositories UserRepos and InstallationRepos
+// list.
+type ListOptions struct {
+	// Match, when not "", keeps the repositories whose full name holds it,
+	// ignoring case (GitHub has no search on these lists: it is filtered
+	// here, before Limit).
+	Match string
+	// Limit is the most names returned.
+	Limit int
+	// CallTimeout bounds each page's request; 0 means only ctx bounds it.
+	CallTimeout time.Duration
+}
+
+// collectNames pages through path, adding the names page finds in each
+// page that hold o.Match until o.Limit; truncated is true when there were
+// more. On an error it also returns the names read before it.
+func (c *Client) collectNames(ctx context.Context, path string, o ListOptions, page func(body []byte) ([]string, error)) (names []string, truncated bool, err error) {
+	match := strings.ToLower(o.Match)
+	err = c.paginateTimed(ctx, path, o.CallTimeout, func(body []byte) error {
 		got, err := page(body)
 		if err != nil {
 			return err
 		}
 		for _, n := range got {
-			if len(names) == limit {
+			if match != "" && !strings.Contains(strings.ToLower(n), match) {
+				continue
+			}
+			if len(names) == o.Limit {
 				truncated = true
 				return errStopPaging
 			}
@@ -814,19 +845,19 @@ func (c *Client) collectNames(ctx context.Context, path string, limit int, page 
 		}
 		return nil
 	})
-	if err != nil && !errors.Is(err, errStopPaging) {
-		return nil, false, err
+	if errors.Is(err, errStopPaging) {
+		err = nil
 	}
-	return names, truncated, nil
+	return names, truncated, err
 }
 
 // UserRepos returns the full names of the repositories the token's user is
 // the owner, a collaborator or an organization member of and can read
-// (permissions.pull), from GET /user/repos, up to limit; truncated is true
+// (permissions.pull), from GET /user/repos, as o selects; truncated is true
 // when there were more. For a GitHub App's user token GitHub lists only the
 // repositories the App's installations reach too.
-func (c *Client) UserRepos(ctx context.Context, limit int) ([]string, bool, error) {
-	return c.collectNames(ctx, "/user/repos", limit, func(body []byte) ([]string, error) {
+func (c *Client) UserRepos(ctx context.Context, o ListOptions) ([]string, bool, error) {
+	return c.collectNames(ctx, "/user/repos", o, func(body []byte) ([]string, error) {
 		var page []struct {
 			FullName    string `json:"full_name"`
 			Permissions struct {
@@ -847,10 +878,10 @@ func (c *Client) UserRepos(ctx context.Context, limit int) ([]string, bool, erro
 }
 
 // InstallationRepos returns the full names of the repositories the client's
-// App installation reaches (GET /installation/repositories), up to limit;
+// App installation reaches (GET /installation/repositories), as o selects;
 // truncated is true when there were more. The client must be App.Client's.
-func (c *Client) InstallationRepos(ctx context.Context, limit int) ([]string, bool, error) {
-	return c.collectNames(ctx, "/installation/repositories", limit, func(body []byte) ([]string, error) {
+func (c *Client) InstallationRepos(ctx context.Context, o ListOptions) ([]string, bool, error) {
+	return c.collectNames(ctx, "/installation/repositories", o, func(body []byte) ([]string, error) {
 		var page struct {
 			Repositories []struct {
 				FullName string `json:"full_name"`

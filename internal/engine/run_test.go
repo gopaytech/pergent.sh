@@ -226,3 +226,59 @@ func TestRunReconcilesSoonOnRequest(t *testing.T) {
 	cancel()
 	<-done
 }
+
+// ReconcileSoon requests are coalesced: one reconciles at once, those that
+// follow within the gap (10 s) make one more reconcile when it ends, so
+// rapid on/off toggles in the dashboard reconcile once, not once each.
+func TestReconcileSoonIsDebounced(t *testing.T) {
+	if reconcileSoonGap != 10*time.Second {
+		t.Errorf("reconcileSoonGap = %v, want 10s", reconcileSoonGap)
+	}
+	old := reconcileSoonGap
+	reconcileSoonGap = 600 * time.Millisecond
+	t.Cleanup(func() { reconcileSoonGap = old })
+
+	env := newTestEnv(t)
+	serveProject(env, testProjectID, testProjectPath)
+	passes := func() int { return len(env.GitLab.Requests(http.MethodGet, "/projects/acme%2Fwidgets")) }
+
+	ctx, cancel := context.WithCancel(env.ctx)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		env.Engine.Run(ctx)
+		close(done)
+	}()
+	waitFor := func(what string, ok func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for !ok() {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s (passes %d):\n%s", what, passes(), env.Logs())
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	waitFor("no startup reconcile", func() bool { return passes() == 1 })
+
+	// The first request reconciles at once.
+	env.Engine.ReconcileSoon()
+	waitFor("ReconcileSoon didn't reconcile", func() bool { return passes() == 2 })
+
+	// Rapid toggles within the gap: one more reconcile, after the gap.
+	for range 10 {
+		env.Engine.ReconcileSoon()
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if n := passes(); n != 2 {
+		t.Errorf("reconciled %d times within the gap, want 2", n)
+	}
+	waitFor("the coalesced request never reconciled", func() bool { return passes() == 3 })
+	time.Sleep(time.Second)
+	if n := passes(); n != 3 {
+		t.Errorf("reconciled %d times, want 3: the toggles must make one reconcile", n)
+	}
+	cancel()
+	<-done
+}

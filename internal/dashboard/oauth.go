@@ -37,10 +37,16 @@ type provider interface {
 	// isAdmin reports whether the user is in admin's group or team.
 	isAdmin(ctx context.Context, accessToken string, userID int64, username string, admin config.DashboardAdmin) (bool, error)
 	// memberRepos lists, up to limit, the repositories the user is a
-	// member of and can read (GitLab: Reporter or above; GitHub: pull),
-	// for the "add repository" picker. A public repository the user isn't
-	// a member of is not listed.
-	memberRepos(ctx context.Context, accessToken string, limit int) (repos []string, truncated bool, err error)
+	// member of and can read (GitLab: Reporter or above; GitHub: pull)
+	// that hold search ("" for all), for the "add repository" picker. A
+	// public repository the user isn't a member of is not listed. Each
+	// request has its own 10 s; on an error it also returns the
+	// repositories read before it.
+	memberRepos(ctx context.Context, accessToken, search string, limit int) (repos []string, truncated bool, err error)
+	// memberRepo reports whether the user is such a member of project,
+	// and its path as the platform spells it. Not found or forbidden is
+	// false; a failure to tell is an error.
+	memberRepo(ctx context.Context, accessToken, project string) (canonical string, ok bool, err error)
 }
 
 // oauthToken is a user's token, stored sealed. Expiry is zero for a token

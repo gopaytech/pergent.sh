@@ -898,22 +898,46 @@ func jsonEq(t *testing.T, body, want string) {
 func TestReachableRepos(t *testing.T) {
 	f := newFake(t)
 	f.reply("GET", "/app/installations", 200, []map[string]any{{"id": 55}, {"id": 56}})
-	f.reply("GET", "/installation/repositories", 200, map[string]any{"total_count": 1,
-		"repositories": []map[string]any{{"full_name": "acme/widgets"}}})
+	f.reply("GET", "/installation/repositories", 200, map[string]any{"total_count": 2,
+		"repositories": []map[string]any{{"full_name": "acme/widgets"}, {"full_name": "acme/payments"}}})
 
-	got, truncated, err := f.forge(t).ReachableRepos(ctx, 10)
+	got, truncated, err := f.forge(t).ReachableRepos(ctx, "", 10)
 	if err != nil || truncated {
 		t.Fatalf("truncated=%v err=%v", truncated, err)
 	}
-	if strings.Join(got, ",") != "acme/widgets,acme/widgets" {
-		t.Errorf("repos = %v (one per installation from the fake)", got)
+	if strings.Join(got, ",") != "acme/widgets,acme/payments,acme/widgets,acme/payments" {
+		t.Errorf("repos = %v (the same from each installation of the fake)", got)
 	}
 	if n := len(f.requests("GET", "/installation/repositories")); n != 2 {
 		t.Errorf("listed %d installations, want 2", n)
 	}
 
-	got, truncated, err = f.forge(t).ReachableRepos(ctx, 1)
+	got, truncated, err = f.forge(t).ReachableRepos(ctx, "", 1)
 	if err != nil || !truncated || len(got) != 1 {
 		t.Errorf("limit 1: got=%v truncated=%v err=%v", got, truncated, err)
+	}
+	got, _, err = f.forge(t).ReachableRepos(ctx, "PAY", 10)
+	if err != nil || strings.Join(got, ",") != "acme/payments,acme/payments" {
+		t.Errorf("search: got=%v err=%v", got, err)
+	}
+}
+
+// The review App reaches a repository when it has an installation there.
+func TestForgeCanReach(t *testing.T) {
+	f := newFake(t)
+	f.reply("GET", "/repos/acme/widgets/installation", 200, map[string]any{"id": 55})
+	f.reply("GET", "/repos/acme/broken/installation", 422, map[string]any{"message": "boom"})
+	fg := f.forge(t)
+	if ok, err := fg.CanReach(ctx, "acme/widgets"); !ok || err != nil {
+		t.Errorf("acme/widgets = %v, %v", ok, err)
+	}
+	if ok, err := fg.CanReach(ctx, "acme/gadgets"); ok || err != nil {
+		t.Errorf("acme/gadgets (not installed) = %v, %v", ok, err)
+	}
+	if ok, err := fg.CanReach(ctx, "acme"); ok || err != nil {
+		t.Errorf("a malformed name = %v, %v", ok, err)
+	}
+	if _, err := fg.CanReach(ctx, "acme/broken"); err == nil {
+		t.Errorf("a failed lookup is no error")
 	}
 }

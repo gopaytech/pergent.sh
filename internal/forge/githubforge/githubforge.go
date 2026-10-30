@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/github"
@@ -271,24 +272,48 @@ type mapped struct{ err, sentinel error }
 func (m *mapped) Error() string   { return m.err.Error() }
 func (m *mapped) Unwrap() []error { return []error{m.err, m.sentinel} }
 
+// callTimeout bounds each request of ReachableRepos and CanReach, which
+// serve the dashboard.
+const callTimeout = 10 * time.Second
+
 // ReachableRepos returns the full names of the repositories of every
-// installation of the review App, up to limit; truncated is true when there
-// were more.
-func (f *Forge) ReachableRepos(ctx context.Context, limit int) ([]string, bool, error) {
-	ids, err := f.app.Installations(ctx)
+// installation of the review App that hold search, ignoring case ("" for
+// all), up to limit; truncated is true when there were more. Each page's
+// request has 10 s; on an error it also returns the names read before it.
+func (f *Forge) ReachableRepos(ctx context.Context, search string, limit int) ([]string, bool, error) {
+	ids, err := f.app.Installations(ctx, callTimeout)
 	if err != nil {
 		return nil, false, err
 	}
 	var out []string
 	for _, id := range ids {
-		names, truncated, err := f.app.Client(id).InstallationRepos(ctx, limit-len(out))
-		if err != nil {
-			return nil, false, err
-		}
+		names, truncated, err := f.app.Client(id).InstallationRepos(ctx,
+			github.ListOptions{Match: search, Limit: limit - len(out), CallTimeout: callTimeout})
 		out = append(out, names...)
+		if err != nil {
+			return out, false, err
+		}
 		if truncated {
 			return out, true, nil
 		}
 	}
 	return out, false, nil
+}
+
+// CanReach reports whether the review App is installed on project
+// (owner/name): GET /repos/{owner}/{repo}/installation with the App's JWT.
+// Not installed, or a malformed name, is false; a failure to tell is an
+// error.
+func (f *Forge) CanReach(ctx context.Context, project string) (bool, error) {
+	owner, name, ok := strings.Cut(project, "/")
+	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+		return false, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	_, err := f.app.Installation(ctx, owner, name)
+	if errors.Is(err, github.ErrNotFound) {
+		return false, nil
+	}
+	return err == nil, err
 }

@@ -125,6 +125,35 @@ func isStatus(err error, status int) bool {
 	return errors.As(err, &gh) && gh.Status == status
 }
 
-func (p *gitlabProvider) memberRepos(ctx context.Context, accessToken string, limit int) ([]string, bool, error) {
-	return p.client(accessToken).ProjectPaths(ctx, gitlabReporter, limit)
+func (p *gitlabProvider) memberRepos(ctx context.Context, accessToken, search string, limit int) ([]string, bool, error) {
+	return p.client(accessToken).ProjectPaths(ctx, gitlab.ProjectListOptions{MinAccessLevel: gitlabReporter,
+		Search: search, Limit: limit, CallTimeout: p.callTimeout()})
+}
+
+// memberRepo: Reporter or above through the project or its group; being
+// able to see a public project isn't enough.
+func (p *gitlabProvider) memberRepo(ctx context.Context, accessToken, project string) (string, bool, error) {
+	ctx, cancel := callContext(ctx, p.timeout)
+	defer cancel()
+	a, err := p.client(accessToken).ProjectAccess(ctx, project)
+	if errors.Is(err, gitlab.ErrNotFound) || isStatus(err, http.StatusForbidden) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if a.ProjectAccessLevel < gitlabReporter && a.GroupAccessLevel < gitlabReporter {
+		return "", false, nil
+	}
+	if a.Path == "" {
+		return "", false, errors.New("gitlab: the project answer has no path")
+	}
+	return a.Path, true, nil
+}
+
+func (p *gitlabProvider) callTimeout() time.Duration {
+	if p.timeout <= 0 {
+		return platformTimeout
+	}
+	return p.timeout
 }

@@ -27,6 +27,11 @@ const (
 	// listLimit is the most repositories read from each side (the admin's
 	// and the review bot's or App's) for the picker.
 	listLimit = 5000
+	// listBudget bounds each side's listing for the picker; each request
+	// of it has platformTimeout. What was read when it runs out is used.
+	listBudget = 60 * time.Second
+	// maxSearch is the longest picker search.
+	maxSearch = 100
 	// catalogTTL is how long the review side's list is kept.
 	catalogTTL = 5 * time.Minute
 	// maxWriteBody bounds a write's body.
@@ -68,12 +73,17 @@ func (d *Dashboard) writeRoutes(mux *http.ServeMux) {
 
 func (d *Dashboard) available(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
+	search := strings.TrimSpace(r.URL.Query().Get("search"))
+	if len(search) > maxSearch {
+		writeError(w, http.StatusBadRequest, "search must be at most 100 characters")
+		return
+	}
 	on, err := d.onProjects(ctx, se)
 	if err != nil {
 		d.failed(w, r, "listing repositories", err)
 		return
 	}
-	reach, truncated, err := d.reachable(ctx, se)
+	reach, truncated, err := d.reachable(ctx, se, search)
 	if err != nil {
 		d.Log.Warn("dashboard: listing the repositories that can be switched on failed",
 			"instance", se.Instance, "user", se.Username, "error", err.Error())
@@ -114,12 +124,12 @@ func (d *Dashboard) onProjects(ctx context.Context, se Session) (map[string]bool
 	return on, nil
 }
 
-// reachable returns the repositories of the session's instance that both
-// its user (a member with read access, asked with their token now) and the
-// review bot or App (asked at most every 5 minutes) reach, by lower-cased
-// path, each spelled as the user's list has it. truncated is true when a
-// list was too long to read whole.
-func (d *Dashboard) reachable(ctx context.Context, se Session) (map[string]string, bool, error) {
+// reachable returns the repositories of the session's instance holding
+// search that both its user (a member with read access, asked with their
+// token now) and the review bot or App (asked at most every 5 minutes)
+// reach, by lower-cased path, each spelled as the user's list has it.
+// truncated is true when a list was too long, or too slow, to read whole.
+func (d *Dashboard) reachable(ctx context.Context, se Session, search string) (map[string]string, bool, error) {
 	type listed struct {
 		repos     []string
 		truncated bool
@@ -127,10 +137,10 @@ func (d *Dashboard) reachable(ctx context.Context, se Session) (map[string]strin
 	}
 	review := make(chan listed, 1)
 	go func() {
-		repos, truncated, err := d.catalogRepos(ctx, se.Instance)
+		repos, truncated, err := d.catalogRepos(ctx, se.Instance, search)
 		review <- listed{repos, truncated, err}
 	}()
-	mine, mineTruncated, err := d.memberRepos(ctx, se)
+	mine, mineTruncated, err := d.memberRepos(ctx, se, search)
 	bot := <-review
 	if err != nil {
 		return nil, false, fmt.Errorf("listing the user's repositories: %w", err)
@@ -151,20 +161,36 @@ func (d *Dashboard) reachable(ctx context.Context, se Session) (map[string]strin
 	return out, mineTruncated || bot.truncated, nil
 }
 
-// memberRepos lists the session user's repositories with their token, in
-// 10 s.
-func (d *Dashboard) memberRepos(ctx context.Context, se Session) ([]string, bool, error) {
+// withinBudget runs a listing under d.listBudget. When the budget runs out
+// after something was read, what was read is the answer, truncated; an
+// error before that, or with nothing read, is an error.
+func (d *Dashboard) withinBudget(ctx context.Context, list func(ctx context.Context) ([]string, bool, error)) ([]string, bool, error) {
+	bctx, cancel := context.WithTimeout(ctx, d.listBudget)
+	defer cancel()
+	repos, truncated, err := list(bctx)
+	if err != nil {
+		if bctx.Err() != nil && ctx.Err() == nil && len(repos) > 0 {
+			return repos, true, nil
+		}
+		return nil, false, err
+	}
+	return repos, truncated, nil
+}
+
+// memberRepos lists the session user's repositories holding search with
+// their token.
+func (d *Dashboard) memberRepos(ctx context.Context, se Session, search string) ([]string, bool, error) {
 	p, token, err := d.Auth.userToken(ctx, se)
 	if err != nil {
 		return nil, false, err
 	}
-	ctx, cancel := callContext(ctx, platformTimeout)
-	defer cancel()
-	return p.memberRepos(ctx, token, listLimit)
+	return d.withinBudget(ctx, func(ctx context.Context) ([]string, bool, error) {
+		return p.memberRepos(ctx, token, search, d.listLimit)
+	})
 }
 
-// catalogCache keeps each instance's review-side list for catalogTTL, and
-// the listings in progress, so requests share one.
+// catalogCache keeps each instance's review-side lists, by search, for
+// catalogTTL, and the listings in progress, so requests share one.
 type catalogCache struct {
 	mu      sync.Mutex
 	entries map[string]catalogEntry
@@ -184,23 +210,24 @@ type catalogFlight struct {
 	err       error
 }
 
-// catalogRepos returns the repositories the review bot or App of instance
-// reaches: a list younger than 5 minutes, the one being made, or a new one,
-// made in 10 s and not cut short by the request that started it going away
-// (others may wait for it). Failures aren't kept.
-func (d *Dashboard) catalogRepos(ctx context.Context, instance string) ([]string, bool, error) {
+// catalogRepos returns the repositories holding search that the review bot
+// or App of instance reaches: a list younger than 5 minutes, the one being
+// made, or a new one, made within the listing budget and not cut short by
+// the request that started it going away (others may wait for it).
+// Failures aren't kept.
+func (d *Dashboard) catalogRepos(ctx context.Context, instance, search string) ([]string, bool, error) {
 	cat, ok := d.catalogs[instance]
 	if !ok || cat == nil {
 		return nil, false, errors.New("no repository list for the instance")
 	}
-	c := d.catalog
+	c, key := d.catalog, instance+"\x00"+strings.ToLower(search)
 	c.mu.Lock()
 	now := d.now()
-	if e, ok := c.entries[instance]; ok && now.Sub(e.at) < catalogTTL && !now.Before(e.at) {
+	if e, ok := c.entries[key]; ok && now.Sub(e.at) < catalogTTL && !now.Before(e.at) {
 		c.mu.Unlock()
 		return e.repos, e.truncated, nil
 	}
-	if f, ok := c.flights[instance]; ok {
+	if f, ok := c.flights[key]; ok {
 		c.mu.Unlock()
 		select {
 		case <-f.done:
@@ -210,21 +237,51 @@ func (d *Dashboard) catalogRepos(ctx context.Context, instance string) ([]string
 		}
 	}
 	f := &catalogFlight{done: make(chan struct{})}
-	c.flights[instance] = f
+	c.flights[key] = f
 	c.mu.Unlock()
 
-	lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), platformTimeout)
-	f.repos, f.truncated, f.err = cat.ReachableRepos(lctx, listLimit)
-	cancel()
+	f.repos, f.truncated, f.err = d.withinBudget(context.WithoutCancel(ctx), func(ctx context.Context) ([]string, bool, error) {
+		return cat.ReachableRepos(ctx, search, d.listLimit)
+	})
 
 	c.mu.Lock()
-	delete(c.flights, instance)
+	delete(c.flights, key)
 	if f.err == nil {
-		c.entries[instance] = catalogEntry{repos: f.repos, truncated: f.truncated, at: d.now()}
+		now := d.now()
+		for k, e := range c.entries {
+			if now.Sub(e.at) >= catalogTTL {
+				delete(c.entries, k)
+			}
+		}
+		c.entries[key] = catalogEntry{repos: f.repos, truncated: f.truncated, at: now}
 	}
 	c.mu.Unlock()
 	close(f.done)
 	return f.repos, f.truncated, f.err
+}
+
+// projectAvailable checks project on its own, whatever the lists hold: the
+// session's user must be a member with read access (asked with their
+// token) and the review bot or App must reach it. It returns the path as
+// the platform spells it.
+func (d *Dashboard) projectAvailable(ctx context.Context, se Session, project string) (string, bool, error) {
+	cat, ok := d.catalogs[se.Instance]
+	if !ok || cat == nil {
+		return "", false, errors.New("no repository list for the instance")
+	}
+	p, token, err := d.Auth.userToken(ctx, se)
+	if err != nil {
+		return "", false, err
+	}
+	name, ok, err := p.memberRepo(ctx, token, project)
+	if err != nil || !ok {
+		return "", false, err
+	}
+	reached, err := cat.CanReach(ctx, name)
+	if err != nil || !reached {
+		return "", false, err
+	}
+	return name, true, nil
 }
 
 // --- POST /api/repositories ---
@@ -238,38 +295,24 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msgBadProjectBody)
 		return
 	}
-	project := body.Project
 
-	// On already: 409 to whoever can see it, 404 to the others.
-	_, onDashboard, err := d.Store.DashboardRepo(ctx, se.Instance, project)
-	if err != nil {
-		d.failed(w, r, "loading a repository", err)
-		return
-	}
-	if inConfig := d.Repos.InConfig(se.Instance, project); inConfig || onDashboard {
-		switch {
-		case !se.CanSee(project):
-			notFound(w)
-		case inConfig:
-			writeError(w, http.StatusConflict, msgConfigManaged)
-		default:
-			writeError(w, http.StatusConflict, msgAlreadyOn)
-		}
-		return
-	}
-
-	// The client's word isn't taken: the repository must be one the
-	// picker would list now.
-	reach, _, err := d.reachable(ctx, se)
+	// The client's word isn't taken: the admin and the review side must
+	// reach the repository now. This comes before anything about whether
+	// it is on, so a repository the admin can't reach is 404 the same way,
+	// after the same calls, on or off.
+	name, ok, err := d.projectAvailable(ctx, se, body.Project)
 	if err != nil {
 		d.Log.Warn("dashboard: checking a repository to switch on failed",
 			"instance", se.Instance, "user", se.Username, "error", err.Error())
 		writeError(w, http.StatusBadGateway, msgListFailed)
 		return
 	}
-	name, ok := reach[lower(project)]
 	if !ok {
 		notFound(w)
+		return
+	}
+	if d.Repos.InConfig(se.Instance, name) {
+		writeError(w, http.StatusConflict, msgConfigManaged)
 		return
 	}
 	created, err := d.Store.InsertDashboardRepo(ctx, store.DashboardRepo{

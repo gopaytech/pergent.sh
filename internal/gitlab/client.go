@@ -254,13 +254,24 @@ func decode(data []byte, out any) error {
 
 // paginate calls fn for each page, following X-Next-Page. fn returns true to stop.
 func (c *Client) paginate(ctx context.Context, path string, query url.Values, fn func(body []byte) (bool, error)) error {
+	return c.paginateTimed(ctx, path, query, 0, fn)
+}
+
+// paginateTimed is paginate with each page's request (retries included)
+// bounded by pageTimeout; 0 means only ctx bounds it.
+func (c *Client) paginateTimed(ctx context.Context, path string, query url.Values, pageTimeout time.Duration, fn func(body []byte) (bool, error)) error {
 	q := url.Values{}
 	for k, v := range query {
 		q[k] = v
 	}
 	q.Set("per_page", "100")
 	for {
-		resp, err := c.do(ctx, http.MethodGet, path, q, nil)
+		pctx, cancel := ctx, context.CancelFunc(func() {})
+		if pageTimeout > 0 {
+			pctx, cancel = context.WithTimeout(ctx, pageTimeout)
+		}
+		resp, err := c.do(pctx, http.MethodGet, path, q, nil)
+		cancel()
 		if err != nil {
 			return err
 		}
@@ -298,6 +309,8 @@ func (c *Client) GetProject(ctx context.Context, path string) (Project, error) {
 // ProjectAccess is what the token's user may do in a project, as GitLab
 // reports it in GET /projects/:path.
 type ProjectAccess struct {
+	// Path is the project's full path as GitLab spells it.
+	Path string
 	// Visibility is "public", "internal" or "private".
 	Visibility string
 	// RepositoryAccess and MergeRequestsAccess are the features' access
@@ -317,6 +330,7 @@ func (c *Client) ProjectAccess(ctx context.Context, path string) (ProjectAccess,
 		AccessLevel int `json:"access_level"`
 	}
 	var p struct {
+		Path                string `json:"path_with_namespace"`
 		Visibility          string `json:"visibility"`
 		RepositoryAccess    string `json:"repository_access_level"`
 		MergeRequestsAccess string `json:"merge_requests_access_level"`
@@ -328,7 +342,7 @@ func (c *Client) ProjectAccess(ctx context.Context, path string) (ProjectAccess,
 	if _, err := c.getJSON(ctx, "/projects/"+seg(path), nil, &p); err != nil {
 		return ProjectAccess{}, err
 	}
-	a := ProjectAccess{Visibility: p.Visibility, RepositoryAccess: p.RepositoryAccess, MergeRequestsAccess: p.MergeRequestsAccess}
+	a := ProjectAccess{Path: p.Path, Visibility: p.Visibility, RepositoryAccess: p.RepositoryAccess, MergeRequestsAccess: p.MergeRequestsAccess}
 	if p.Permissions.ProjectAccess != nil {
 		a.ProjectAccessLevel = p.Permissions.ProjectAccess.AccessLevel
 	}
@@ -616,14 +630,33 @@ func (c *Client) DeleteDeployToken(ctx context.Context, projectID, tokenID int64
 	return err
 }
 
+// ProjectListOptions selects the projects ProjectPaths lists.
+type ProjectListOptions struct {
+	// MinAccessLevel is the least member access level (Reporter is 20,
+	// Maintainer 40).
+	MinAccessLevel int
+	// Search, when not "", keeps the projects whose path, name or
+	// namespace holds it (GitLab's search with search_namespaces).
+	Search string
+	// Limit is the most paths returned.
+	Limit int
+	// CallTimeout bounds each page's request; 0 means only ctx bounds it.
+	CallTimeout time.Duration
+}
+
 // ProjectPaths returns the paths of the projects the token's user is a
-// member of with at least minAccessLevel (Reporter is 20, Maintainer 40),
-// directly or through a group: GET /projects?min_access_level=&simple=true.
-// It stops after limit paths; truncated is true when there were more. A
-// public project the user isn't a member of is not listed.
-func (c *Client) ProjectPaths(ctx context.Context, minAccessLevel, limit int) (paths []string, truncated bool, err error) {
-	q := url.Values{"min_access_level": {strconv.Itoa(minAccessLevel)}, "simple": {"true"}}
-	err = c.paginate(ctx, "/projects", q, func(body []byte) (bool, error) {
+// member of with at least o.MinAccessLevel, directly or through a group:
+// GET /projects?min_access_level=&simple=true. It stops after o.Limit
+// paths; truncated is true when there were more. A public project the user
+// isn't a member of is not listed. On an error it also returns the paths
+// read before it.
+func (c *Client) ProjectPaths(ctx context.Context, o ProjectListOptions) (paths []string, truncated bool, err error) {
+	q := url.Values{"min_access_level": {strconv.Itoa(o.MinAccessLevel)}, "simple": {"true"}}
+	if o.Search != "" {
+		q.Set("search", o.Search)
+		q.Set("search_namespaces", "true")
+	}
+	err = c.paginateTimed(ctx, "/projects", q, o.CallTimeout, func(body []byte) (bool, error) {
 		var page []struct {
 			Path string `json:"path_with_namespace"`
 		}
@@ -634,7 +667,7 @@ func (c *Client) ProjectPaths(ctx context.Context, minAccessLevel, limit int) (p
 			if p.Path == "" {
 				continue
 			}
-			if len(paths) == limit {
+			if len(paths) == o.Limit {
 				truncated = true
 				return true, nil
 			}
@@ -642,8 +675,5 @@ func (c *Client) ProjectPaths(ctx context.Context, minAccessLevel, limit int) (p
 		}
 		return false, nil
 	})
-	if err != nil {
-		return nil, false, err
-	}
-	return paths, truncated, nil
+	return paths, truncated, err
 }

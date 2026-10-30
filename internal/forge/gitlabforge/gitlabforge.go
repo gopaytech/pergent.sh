@@ -7,7 +7,9 @@ package gitlabforge
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
@@ -187,9 +189,33 @@ func (m *mapped) Unwrap() []error { return []error{m.err, m.sentinel} }
 // create a project's webhook and deploy token.
 const maintainer = 40
 
+// callTimeout bounds each request of ReachableRepos and CanReach, which
+// serve the dashboard.
+const callTimeout = 10 * time.Second
+
 // ReachableRepos returns the paths of the projects the review bot can set up
-// (it is Maintainer or above there), up to limit; truncated is true when
-// there were more.
-func (f *Forge) ReachableRepos(ctx context.Context, limit int) ([]string, bool, error) {
-	return f.c.ProjectPaths(ctx, maintainer, limit)
+// (it is Maintainer or above there) whose path, name or namespace holds
+// search ("" for all), up to limit; truncated is true when there were more.
+// Each page's request has 10 s; on an error it also returns the paths read
+// before it.
+func (f *Forge) ReachableRepos(ctx context.Context, search string, limit int) ([]string, bool, error) {
+	return f.c.ProjectPaths(ctx, gitlab.ProjectListOptions{MinAccessLevel: maintainer, Search: search,
+		Limit: limit, CallTimeout: callTimeout})
+}
+
+// CanReach reports whether the review bot can set project up: it is
+// Maintainer or above there, through the project or its group. A project
+// it can't see is false; a failure to tell is an error.
+func (f *Forge) CanReach(ctx context.Context, project string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	a, err := f.c.ProjectAccess(ctx, project)
+	var ae *gitlab.APIError
+	if errors.Is(err, gitlab.ErrNotFound) || (errors.As(err, &ae) && ae.Status == http.StatusForbidden) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return a.ProjectAccessLevel >= maintainer || a.GroupAccessLevel >= maintainer, nil
 }

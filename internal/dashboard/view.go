@@ -359,13 +359,19 @@ type AdminView struct {
 // the write. A repository listed in the config is read-only here (409).
 // Errors are {"error": "message"}.
 //
-//   - GET /api/repositories/available: AvailableView, the repositories that
-//     can be switched on.
+//   - GET /api/repositories/available?search=: AvailableView, the
+//     repositories that can be switched on; search (at most 100
+//     characters) keeps those whose path holds it (GitLab also matches
+//     names), so ones beyond the first 500 can be found.
 //   - POST /api/repositories {"project": "acme/widgets"}: switches on a
-//     repository of AvailableView (checked again; 404 when it isn't there,
-//     409 when it is on already) with every setting at its default. 201,
-//     RepositoryDetailView. pergent.sh sets it up (webhook and clone
-//     credentials) within seconds.
+//     repository with every setting at its default. It is checked on its
+//     own, not against the picker's lists: the admin must be a member with
+//     read access (GitLab: Reporter or above; GitHub: pull) and the review
+//     bot (GitLab: Maintainer or above) or App (GitHub: installed) must
+//     reach it, else 404, whether it is on or not; then 409 when it is on
+//     already. 201, RepositoryDetailView, the project spelled as the
+//     platform does. pergent.sh sets it up (webhook and clone credentials)
+//     within seconds.
 //   - DELETE /api/repositories/{instance}/{project...}: switches it off.
 //     200, RepositoryDetailView with repo.on false and the default
 //     settings. pergent.sh removes its webhook and clone credentials.
@@ -390,7 +396,9 @@ type AdminView struct {
 // Maintainer or above) or review App (GitHub: its installations) reaches,
 // and that aren't switched on, by project ignoring case. 500 at most;
 // truncated is true when there were more, or when a list it is made from
-// was too long to read whole. 502 when GitLab or GitHub can't be asked.
+// was too long (5000) or too slow (60 s, each request 10 s) to read whole.
+// 502 when GitLab or GitHub can't be asked, or nothing could be read in
+// time.
 type AvailableView struct {
 	Items     []AvailableRepo `json:"items"`
 	Truncated bool            `json:"truncated"`

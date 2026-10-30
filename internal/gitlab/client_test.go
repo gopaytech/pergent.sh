@@ -773,7 +773,7 @@ func TestProjectAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := ProjectAccess{Visibility: "private", RepositoryAccess: "enabled", MergeRequestsAccess: "private",
+	want := ProjectAccess{Path: "acme/widgets", Visibility: "private", RepositoryAccess: "enabled", MergeRequestsAccess: "private",
 		ProjectAccessLevel: 10, GroupAccessLevel: 30}
 	if a != want {
 		t.Fatalf("ProjectAccess = %+v, want %+v", a, want)
@@ -852,7 +852,7 @@ func TestProjectPathsPaginatesWithMinAccessLevel(t *testing.T) {
 		w.Header().Set("X-Next-Page", "2")
 		_ = json.NewEncoder(w).Encode([]map[string]any{{"id": 1, "path_with_namespace": "acme/widgets"}, {"id": 2}})
 	})
-	got, truncated, err := c.ProjectPaths(context.Background(), 40, 10)
+	got, truncated, err := c.ProjectPaths(context.Background(), ProjectListOptions{MinAccessLevel: 40, Limit: 10})
 	if err != nil || truncated {
 		t.Fatalf("truncated=%v err=%v", truncated, err)
 	}
@@ -863,6 +863,15 @@ func TestProjectPathsPaginatesWithMinAccessLevel(t *testing.T) {
 	expect(t, (*reqs)[1], "GET", "/api/v4/projects", "min_access_level=40&page=2&per_page=100&simple=true")
 }
 
+func TestProjectPathsSearch(t *testing.T) {
+	c, reqs := serve(t, jsonReply([]map[string]any{{"path_with_namespace": "acme/widgets"}}))
+	if _, _, err := c.ProjectPaths(context.Background(), ProjectListOptions{MinAccessLevel: 20, Search: "wid gets", Limit: 10}); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, (*reqs)[0], "GET", "/api/v4/projects",
+		"min_access_level=20&per_page=100&search=wid+gets&search_namespaces=true&simple=true")
+}
+
 func TestProjectPathsStopsAtLimit(t *testing.T) {
 	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -870,11 +879,34 @@ func TestProjectPathsStopsAtLimit(t *testing.T) {
 		_ = json.NewEncoder(w).Encode([]map[string]any{
 			{"path_with_namespace": "acme/a"}, {"path_with_namespace": "acme/b"}, {"path_with_namespace": "acme/c"}})
 	})
-	got, truncated, err := c.ProjectPaths(context.Background(), 20, 2)
+	got, truncated, err := c.ProjectPaths(context.Background(), ProjectListOptions{MinAccessLevel: 20, Limit: 2})
 	if err != nil || !truncated || len(got) != 2 {
 		t.Fatalf("got=%v truncated=%v err=%v", got, truncated, err)
 	}
 	if len(*reqs) != 1 {
 		t.Fatalf("requests = %d, want 1", len(*reqs))
+	}
+}
+
+// Each page has its own deadline; a failed page returns the pages read
+// before it with the error.
+func TestProjectPathsPageTimeoutKeepsWhatWasRead(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("page") == "2" {
+			<-r.Context().Done()
+			return
+		}
+		w.Header().Set("X-Next-Page", "2")
+		_ = json.NewEncoder(w).Encode([]map[string]any{{"path_with_namespace": "acme/a"}})
+	})
+	start := time.Now()
+	got, _, err := c.ProjectPaths(context.Background(), ProjectListOptions{MinAccessLevel: 20, Limit: 10,
+		CallTimeout: 100 * time.Millisecond})
+	if err == nil || strings.Join(got, ",") != "acme/a" {
+		t.Fatalf("got=%v err=%v", got, err)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Errorf("took %v", time.Since(start))
 	}
 }

@@ -430,11 +430,40 @@ func TestState(t *testing.T) {
 func TestReachableRepos(t *testing.T) {
 	f := newFake(t)
 	f.on("GET", "/projects", 200, []map[string]any{{"path_with_namespace": "acme/widgets"}})
-	got, truncated, err := f.forge().ReachableRepos(context.Background(), 10)
+	got, truncated, err := f.forge().ReachableRepos(context.Background(), "wid", 10)
 	if err != nil || truncated || len(got) != 1 || got[0] != "acme/widgets" {
 		t.Fatalf("got=%v truncated=%v err=%v", got, truncated, err)
 	}
-	if q := f.only().Query; q != "min_access_level=40&per_page=100&simple=true" {
+	if q := f.only().Query; q != "min_access_level=40&per_page=100&search=wid&search_namespaces=true&simple=true" {
 		t.Errorf("query = %q", q)
+	}
+}
+
+func TestCanReach(t *testing.T) {
+	access := func(level int) map[string]any {
+		return map[string]any{"path_with_namespace": "acme/widgets",
+			"permissions": map[string]any{"project_access": nil, "group_access": map[string]any{"access_level": level}}}
+	}
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   any
+		want   bool
+		err    bool
+	}{
+		{"maintainer through the group", 200, access(40), true, false},
+		{"developer", 200, access(30), false, false},
+		{"not found", 404, map[string]any{"message": "404 Project Not Found"}, false, false},
+		{"forbidden", 403, map[string]any{"message": "403 Forbidden"}, false, false},
+		{"broken", 400, map[string]any{"message": "400 Bad request"}, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFake(t)
+			f.on("GET", "/projects/acme%2Fwidgets", tc.status, tc.body)
+			ok, err := f.forge().CanReach(context.Background(), "acme/widgets")
+			if ok != tc.want || (err != nil) != tc.err {
+				t.Fatalf("CanReach = %v, %v", ok, err)
+			}
+		})
 	}
 }

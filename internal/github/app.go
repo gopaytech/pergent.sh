@@ -192,10 +192,12 @@ func (a *App) Installation(ctx context.Context, owner, repo string) (int64, erro
 }
 
 // Installations returns the IDs of the App's installations (GET
-// /app/installations, with the App's JWT).
-func (a *App) Installations(ctx context.Context) ([]int64, error) {
+// /app/installations, with the App's JWT), each page's request bounded by
+// callTimeout (0: only ctx). On an error it also returns the IDs read
+// before it.
+func (a *App) Installations(ctx context.Context, callTimeout time.Duration) ([]int64, error) {
 	var ids []int64
-	err := a.api.paginate(ctx, "/app/installations", func(body []byte) error {
+	err := a.api.paginateTimed(ctx, "/app/installations", callTimeout, func(body []byte) error {
 		var page []struct {
 			ID int64 `json:"id"`
 		}
@@ -209,10 +211,7 @@ func (a *App) Installations(ctx context.Context) ([]int64, error) {
 		}
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	return ids, nil
+	return ids, err
 }
 
 // Client returns a client authenticated as installation installationID. Its

@@ -22,10 +22,12 @@ import (
 
 // fakeCatalog is the review bot's or App's list of repositories.
 type fakeCatalog struct {
-	mu    sync.Mutex
-	repos []string
-	fail  error
-	calls int
+	mu     sync.Mutex
+	repos  []string
+	fail   error
+	calls  int // ReachableRepos and CanReach calls
+	checks int // CanReach calls
+	slow   time.Duration
 }
 
 func (f *fakeCatalog) set(repos ...string) {
@@ -34,23 +36,61 @@ func (f *fakeCatalog) set(repos ...string) {
 	f.repos = repos
 }
 
+func (f *fakeCatalog) setFail(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fail = err
+}
+
 func (f *fakeCatalog) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.calls
 }
 
-func (f *fakeCatalog) ReachableRepos(_ context.Context, limit int) ([]string, bool, error) {
+func (f *fakeCatalog) checkCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.checks
+}
+
+func (f *fakeCatalog) ReachableRepos(ctx context.Context, search string, limit int) ([]string, bool, error) {
+	f.mu.Lock()
+	f.calls++
+	repos, fail, slow := slices.Clone(f.repos), f.fail, f.slow
+	f.mu.Unlock()
+	if fail != nil {
+		return nil, false, fail
+	}
+	var out []string
+	for _, r := range repos {
+		if !strings.Contains(strings.ToLower(r), strings.ToLower(search)) {
+			continue
+		}
+		if len(out) == limit {
+			return out, true, nil
+		}
+		if slow > 0 && len(out) > 0 {
+			select {
+			case <-time.After(slow):
+			case <-ctx.Done():
+				return out, false, ctx.Err()
+			}
+		}
+		out = append(out, r)
+	}
+	return out, false, nil
+}
+
+func (f *fakeCatalog) CanReach(_ context.Context, project string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
+	f.checks++
 	if f.fail != nil {
-		return nil, false, f.fail
+		return false, f.fail
 	}
-	if len(f.repos) > limit {
-		return slices.Clone(f.repos[:limit]), true, nil
-	}
-	return slices.Clone(f.repos), false, nil
+	return slices.ContainsFunc(f.repos, func(r string) bool { return strings.EqualFold(r, project) }), nil
 }
 
 // send makes a write as the session c, with its CSRF token, and records the
@@ -400,16 +440,73 @@ func TestSwitchOnOnlyAvailable(t *testing.T) {
 	}
 
 	// The platforms can't be asked: 502, nothing switched on.
-	e.gl.set(func(*oauthServer) { e.gl.listFail = true })
+	e.gl.set(func(o *oauthServer) { o.failAccess = true })
 	wantCode(t, e.send(c, "POST", "/api/repositories", `{"project":"acme/gadgets"}`), "POST while GitLab fails", http.StatusBadGateway)
-	e.gl.set(func(*oauthServer) { e.gl.listFail = false })
-	e.cat["main"].mu.Lock()
-	e.cat["main"].fail = errors.New("bot down")
-	e.cat["main"].mu.Unlock()
-	e.clock.advance(6 * time.Minute) // past the bot list's cache
+	e.gl.set(func(o *oauthServer) { o.failAccess = false })
+	e.cat["main"].setFail(errors.New("bot down"))
 	wantCode(t, e.send(c, "POST", "/api/repositories", `{"project":"acme/gadgets"}`), "POST while the bot fails", http.StatusBadGateway)
 	if _, found := e.storedRepo("main", "acme/gadgets"); found {
 		t.Errorf("acme/gadgets was switched on")
+	}
+}
+
+// On GitHub the admin needs pull access and the review App an
+// installation on the repository.
+func TestSwitchOnOnlyAvailableGitHub(t *testing.T) {
+	e := newEnv(t, nil)
+	e.gh.setRepo("acme/no-pull", githubRepo(true, false))
+	e.gh.setRepo("acme/user-only", githubRepo(true, true))
+	e.gh.setRepo("Acme/Gadgets", githubRepo(true, true))
+	e.cat["gh"].set("acme/no-pull", "acme/gadgets", "acme/bot-only")
+	c := e.signInGitHub(true)
+	for _, p := range []string{"acme/no-pull", "acme/user-only", "acme/bot-only"} {
+		wantCode(t, e.send(c, "POST", "/api/repositories", `{"project":"`+p+`"}`), "POST "+p, http.StatusNotFound)
+	}
+	wantCode(t, e.send(c, "POST", "/api/repositories", `{"project":"acme/gadgets"}`), "POST acme/gadgets", http.StatusCreated)
+	if r, found := e.storedRepo("gh", "acme/gadgets"); !found || r.Project != "Acme/Gadgets" {
+		t.Errorf("row = %+v, %v; want GitHub's spelling", r, found)
+	}
+}
+
+// Switching on doesn't depend on the picker's lists: a repository beyond
+// what the lists read can be added.
+func TestSwitchOnBeyondListingCap(t *testing.T) {
+	e := newEnv(t, nil)
+	e.d.listLimit = 2
+	var all []string
+	for i := range 5 {
+		p := fmt.Sprintf("acme/repo-%d", i)
+		all = append(all, p)
+		e.gl.setProject(p, gitlabProject("private", 20, 0))
+	}
+	e.cat["main"].set(all...)
+	c := e.signInGitLab(true)
+	got := getJSON[availableBody](e, c, "/api/repositories/available")
+	if len(got.Items) != 2 || !got.Truncated {
+		t.Fatalf("available = %v truncated %v; want the first 2, truncated", projectsOf(got.Items), got.Truncated)
+	}
+	wantCode(t, e.send(c, "POST", "/api/repositories", `{"project":"acme/repo-4"}`), "POST beyond the cap", http.StatusCreated)
+}
+
+// Whether a repository is on is told only to an admin who reaches it on
+// the platform: one that is on but out of the admin's reach gets the same
+// 404, after the same platform check, as one that is off.
+func TestSwitchOnChecksBeforeTellingOnOrOff(t *testing.T) {
+	e := newEnv(t, nil)
+	e.dashboardRepo("main", "acme/hidden", nil)
+	e.cat["main"].set("acme/hidden", "acme/off")
+	c := e.signInGitLab(true)
+
+	for _, p := range []string{"acme/hidden", "acme/off"} {
+		before := e.gl.projectChecks()
+		rec := e.send(c, "POST", "/api/repositories", `{"project":"`+p+`"}`)
+		wantCode(t, rec, "POST "+p, http.StatusNotFound)
+		if rec.Body.String() != `{"error":"not found"}`+"\n" {
+			t.Errorf("POST %s body = %q", p, rec.Body)
+		}
+		if n := e.gl.projectChecks() - before; n != 1 {
+			t.Errorf("POST %s asked GitLab %d times, want 1", p, n)
+		}
 	}
 }
 
@@ -590,4 +687,82 @@ func TestWriteNeedsCSRF(t *testing.T) {
 	if _, found := e.storedRepo("main", "acme/gadgets"); found || e.reconciles.Load() != 0 {
 		t.Errorf("switched on without a CSRF token")
 	}
+}
+
+// ?search= finds repositories beyond the first ones listed: GitLab
+// searches, GitHub's lists are filtered here.
+func TestAvailableSearch(t *testing.T) {
+	t.Run("gitlab", func(t *testing.T) {
+		e := newEnv(t, nil)
+		e.d.listLimit = 3
+		var all []string
+		for i := range 10 {
+			p := fmt.Sprintf("acme/repo-%d", i)
+			all = append(all, p)
+			e.gl.setProject(p, gitlabProject("private", 20, 0))
+		}
+		e.cat["main"].set(all...)
+		c := e.signInGitLab(true)
+		got := getJSON[availableBody](e, c, "/api/repositories/available?search=REPO-9")
+		if !slices.Equal(projectsOf(got.Items), []string{"acme/repo-9"}) || got.Truncated {
+			t.Errorf("search = %v truncated %v", projectsOf(got.Items), got.Truncated)
+		}
+		e.gl.mu.Lock()
+		last := e.gl.listings[len(e.gl.listings)-1]
+		e.gl.mu.Unlock()
+		if !strings.Contains(last, "search=REPO-9") {
+			t.Errorf("GitLab listing query = %q, want the search", last)
+		}
+		wantCode(t, e.get(c, "/api/repositories/available?search="+strings.Repeat("x", 101)), "long search", http.StatusBadRequest)
+	})
+	t.Run("github", func(t *testing.T) {
+		e := newEnv(t, nil)
+		e.gh.setRepo("acme/gadgets", githubRepo(true, true))
+		e.gh.setRepo("acme/tools", githubRepo(true, true))
+		e.cat["gh"].set("acme/gadgets", "acme/tools")
+		c := e.signInGitHub(true)
+		got := getJSON[availableBody](e, c, "/api/repositories/available?search=GAD")
+		if !slices.Equal(projectsOf(got.Items), []string{"acme/gadgets"}) {
+			t.Errorf("search = %v", projectsOf(got.Items))
+		}
+	})
+}
+
+// Each listing has an overall budget (60 s): when it runs out, what was
+// read is listed, truncated; with nothing read it is 502.
+func TestAvailableListingBudget(t *testing.T) {
+	if listBudget != 60*time.Second || platformTimeout != 10*time.Second {
+		t.Errorf("listBudget %v, platformTimeout %v; want 60s and 10s", listBudget, platformTimeout)
+	}
+	e := newEnv(t, nil)
+	var all []string
+	for i := range 150 { // two pages of 100
+		p := fmt.Sprintf("acme/repo-%03d", i)
+		all = append(all, p)
+		e.gl.setProject(p, gitlabProject("private", 20, 0))
+	}
+	e.cat["main"].set(all...)
+	c := e.signInGitLab(true)
+	e.d.listBudget = 300 * time.Millisecond
+
+	e.gl.set(func(*oauthServer) { e.gl.slowFrom, e.gl.slow = 2, 5*time.Second })
+	got := getJSON[availableBody](e, c, "/api/repositories/available")
+	if len(got.Items) != 100 || !got.Truncated {
+		t.Errorf("available has %d items, truncated %v; want the first page, truncated", len(got.Items), got.Truncated)
+	}
+
+	// The review side's listing runs out too: what it read is used.
+	e.gl.set(func(*oauthServer) { e.gl.slowFrom = 0 })
+	e.cat["main"].mu.Lock()
+	e.cat["main"].slow = 200 * time.Millisecond
+	e.cat["main"].mu.Unlock()
+	e.clock.advance(catalogTTL)
+	got = getJSON[availableBody](e, c, "/api/repositories/available")
+	if len(got.Items) == 0 || len(got.Items) >= 150 || !got.Truncated {
+		t.Errorf("available has %d items, truncated %v; want some, truncated", len(got.Items), got.Truncated)
+	}
+
+	// Nothing read in time: 502.
+	e.gl.set(func(*oauthServer) { e.gl.slowFrom = 1 })
+	wantCode(t, e.get(c, "/api/repositories/available?search=repo"), "nothing read", http.StatusBadGateway)
 }
