@@ -102,7 +102,7 @@ func New(o Options) (*Dashboard, error) {
 	}
 	return &Dashboard{Auth: auth, Repos: repos, Store: o.Store, Log: o.Log,
 		cfg: o.Config, library: o.Library, sources: o.Sources, now: o.Now,
-		inputs: &inputsCache{entries: map[string]inputsEntry{}}}, nil
+		inputs: &inputsCache{entries: map[string]inputsEntry{}, flights: map[string]*inputsFlight{}}}, nil
 }
 
 // Handler serves:

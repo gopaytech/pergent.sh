@@ -716,3 +716,28 @@ func TestDecideApprovalOffKeepsOtherRows(t *testing.T) {
 		})
 	}
 }
+
+// Kind says what a decision is, for recording on the run.
+func TestDecideKind(t *testing.T) {
+	skipped := skill("security", "no_blocking_issues")
+	skipped.Files.Skipped = []result.Skipped{{Path: "go.sum", Rule: "lockfile"}}
+	for name, tc := range map[string]struct {
+		o    Outcome
+		want Kind
+	}{
+		"failure":          {Outcome{FailureReason: "boom"}, KindFailed},
+		"no result":        {Outcome{}, KindFailed},
+		"error result":     {Outcome{Result: &result.Result{SchemaVersion: 1, Status: "error"}}, KindFailed},
+		"failed skill":     {Outcome{Result: completed(skill("a", "failed", "x.go"))}, KindFailed},
+		"blocking":         {Outcome{Result: completed(skill("a", "has_blocking_issues", "x.go"))}, KindBlocking},
+		"nothing reviewed": {Outcome{Result: completed(skipped)}, KindNotApproved},
+		"approval off":     {Outcome{Result: completed(skill("a", "no_blocking_issues", "x.go")), ApprovalOff: true}, KindNotApproved},
+		"unavailable":      {Outcome{Result: completed(skill("a", "no_blocking_issues", "x.go")), ApproveUnavailable: true}, KindNotApproved},
+		"draft":            {Outcome{Result: completed(skill("a", "no_blocking_issues", "x.go")), Draft: true}, KindDraft},
+		"clean":            {Outcome{Result: completed(skill("a", "no_blocking_issues", "x.go"))}, KindApprove},
+	} {
+		if got := Decide(tc.o, config.FailureStatusFailed).Kind; got != tc.want {
+			t.Errorf("%s: Kind = %q, want %q", name, got, tc.want)
+		}
+	}
+}

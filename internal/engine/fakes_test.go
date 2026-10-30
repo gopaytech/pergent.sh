@@ -480,7 +480,7 @@ func (e *testEnv) Report(iid int64, head string, result []byte) string {
 func (e *testEnv) Publish(iid int64, head string, result []byte) string {
 	e.t.Helper()
 	id := e.Report(iid, head, result)
-	if err := e.Store.MarkPublished(e.ctx, id); err != nil {
+	if err := e.Store.MarkPublished(e.ctx, id, store.RunDecision{}); err != nil {
 		e.t.Fatal(err)
 	}
 	return id

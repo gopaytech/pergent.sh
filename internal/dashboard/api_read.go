@@ -27,19 +27,16 @@ import (
 const (
 	// reviewPageSize is the most reviews GET /api/reviews returns at once.
 	reviewPageSize = 50
-	// reviewBatch is how many reviews are read from the store at a time
-	// while a page is filled, and maxReviewBatches how many batches one
-	// page reads at most: a filter that matches little returns a shorter
-	// page with a cursor rather than scanning everything.
-	reviewBatch      = 100
-	maxReviewBatches = 10
-	// recentReviews is how many reviews the overview lists.
+	// recentReviews is how many reviews the overview lists, from the last
+	// recentDays days.
 	recentReviews = 10
+	recentDays    = 90
 
-	defaultDays     = 7
-	maxOverviewDays = 90
-	maxReviewDays   = 365
-	day             = 24 * time.Hour
+	defaultDays       = 7
+	maxOverviewDays   = 90
+	defaultReviewDays = 90
+	maxReviewDays     = 365
+	day               = 24 * time.Hour
 
 	// inputsTTL is how long a repository's resolved skills and
 	// instructions are kept.
@@ -50,11 +47,15 @@ const (
 	msgLoadFailed   = "could not load the data, please try again"
 	msgNotFound     = "not found"
 	msgInputsFailed = "could not read the repository's skills and instructions from the platform, please try again"
+	msgNotSynced    = "pergent.sh hasn't set this repository up yet; try again in a minute"
 )
+
+// errNotSynced is a repository reconcile hasn't stored yet.
+var errNotSynced = errors.New("the repository isn't stored yet (reconcile hasn't reached it)")
 
 var outcomes = map[string]bool{
 	OutcomeRunning: true, OutcomeApproved: true, OutcomeBlocking: true, OutcomeDraft: true,
-	OutcomeNoBlocking: true, OutcomeFailed: true, OutcomeSuperseded: true,
+	OutcomeNoBlocking: true, OutcomeFailed: true, OutcomeSuperseded: true, OutcomeUnknown: true,
 }
 
 // readRoutes adds the read API to mux, every route behind Auth.Require.
@@ -147,13 +148,6 @@ func lowerAll(repos []settings.Effective) []string {
 	return out
 }
 
-// judgeDigest decides a listed run's outcome under its repository's
-// settings.
-func (d *Dashboard) judgeDigest(r store.RunDigest, active map[string]settings.Effective) judged {
-	repo, ok := active[lower(r.ProjectPath)]
-	return judge(digestFacts(r), d.policyFor(r.MR.Instance, repo, ok))
-}
-
 func (d *Dashboard) summary(r store.RunDigest, platform string, j judged) ReviewSummary {
 	return ReviewSummary{
 		Instance: r.MR.Instance, Project: r.ProjectPath, Platform: platform, Number: r.MR.IID,
@@ -233,31 +227,27 @@ func (d *Dashboard) overview(w http.ResponseWriter, r *http.Request) {
 	active := byProject(repos)
 	projects := visibleProjects(se)
 
-	runs, err := d.Store.RunDigestsSince(ctx, se.Instance, projects, d.now().Add(-time.Duration(days)*day))
+	counts, err := d.Store.RunStats(ctx, se.Instance, projects, d.now().Add(-time.Duration(days)*day))
 	if err != nil {
 		d.failed(w, r, "counting reviews", err)
 		return
 	}
 	var stats StatsView
-	for _, run := range runs {
-		stats.Reviews++
-		switch d.judgeDigest(run, active).outcome {
-		case OutcomeApproved:
-			stats.Approved++
-		case OutcomeBlocking:
-			stats.Blocking++
-		case OutcomeFailed:
-			stats.Failed++
-		}
+	for _, c := range counts {
+		stats.Reviews += c.Reviews
+		stats.Approved += c.Approved
+		stats.Blocking += c.Blocking
+		stats.Failed += c.Failed
 	}
-	recent, err := d.Store.ReviewDigests(ctx, store.ReviewFilter{Instance: se.Instance, Projects: projects, Limit: recentReviews})
+	recent, err := d.Store.ReviewDigests(ctx, store.ReviewFilter{Instance: se.Instance, Projects: projects,
+		Since: d.now().Add(-recentDays * day), Limit: recentReviews})
 	if err != nil {
 		d.failed(w, r, "listing recent reviews", err)
 		return
 	}
 	view := OverviewView{Stats: stats, Recent: []ReviewSummary{}}
 	for _, run := range recent {
-		view.Recent = append(view.Recent, d.summary(run, platform, d.judgeDigest(run, active)))
+		view.Recent = append(view.Recent, d.summary(run, platform, judge(run)))
 	}
 	if view.Attention, err = d.attention(ctx, se, active, ""); err != nil {
 		d.failed(w, r, "listing setup problems", err)
@@ -302,20 +292,19 @@ func (d *Dashboard) reviews(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "unknown outcome")
 		return
 	}
-	filter := store.ReviewFilter{Instance: se.Instance, Projects: visibleProjects(se), Limit: reviewBatch}
+	days, ok := parseDays(r, defaultReviewDays, maxReviewDays)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "days must be a number from 1 to 365")
+		return
+	}
+	// One more than a page tells whether there is a next one.
+	filter := store.ReviewFilter{Instance: se.Instance, Projects: visibleProjects(se), Outcome: outcome,
+		Since: d.now().Add(-time.Duration(days) * day), Limit: reviewPageSize + 1}
 	if p := q.Get("project"); p != "" {
 		filter.Projects = nil
 		if se.CanSee(p) {
 			filter.Projects = []string{lower(p)}
 		}
-	}
-	if q.Has("days") {
-		days, ok := parseDays(r, 0, maxReviewDays)
-		if !ok {
-			writeError(w, http.StatusBadRequest, "days must be a number from 1 to 365")
-			return
-		}
-		filter.Since = d.now().Add(-time.Duration(days) * day)
 	}
 	if c := q.Get("cursor"); c != "" {
 		cur, ok := decodeCursor(c)
@@ -325,47 +314,20 @@ func (d *Dashboard) reviews(w http.ResponseWriter, r *http.Request) {
 		}
 		filter.After = cur
 	}
-	platform, _ := d.cfg.Platform(se.Instance)
-	repos, err := d.activeRepos(ctx, se)
+	rows, err := d.Store.ReviewDigests(ctx, filter)
 	if err != nil {
-		d.failed(w, r, "listing repositories", err)
+		d.failed(w, r, "listing reviews", err)
 		return
 	}
-	active := byProject(repos)
-
+	platform, _ := d.cfg.Platform(se.Instance)
 	view := ReviewListView{Items: []ReviewSummary{}}
-	var last *store.RunDigest
-	for batch := 0; batch < maxReviewBatches; batch++ {
-		rows, err := d.Store.ReviewDigests(ctx, filter)
-		if err != nil {
-			d.failed(w, r, "listing reviews", err)
-			return
-		}
-		for i := range rows {
-			run := rows[i]
-			j := d.judgeDigest(run, active)
-			if outcome != "" && j.outcome != outcome {
-				last = &rows[i]
-				continue
-			}
-			if len(view.Items) == reviewPageSize {
-				// One more matches: the page ends at its last item.
-				view.NextCursor = encodeCursor(*last)
-				writeJSON(w, http.StatusOK, view)
-				return
-			}
-			view.Items = append(view.Items, d.summary(run, platform, j))
-			last = &rows[i]
-		}
-		if len(rows) < reviewBatch {
-			// Nothing more to read.
-			writeJSON(w, http.StatusOK, view)
-			return
-		}
-		filter.After = &store.ReviewCursor{At: rows[len(rows)-1].UpdatedAt, ID: rows[len(rows)-1].ID}
+	if len(rows) > reviewPageSize {
+		rows = rows[:reviewPageSize]
+		view.NextCursor = encodeCursor(rows[len(rows)-1])
 	}
-	// Read as much as one page may: the next page goes on from here.
-	view.NextCursor = encodeCursor(*last)
+	for _, run := range rows {
+		view.Items = append(view.Items, d.summary(run, platform, judge(run)))
+	}
 	writeJSON(w, http.StatusOK, view)
 }
 
@@ -394,7 +356,9 @@ func (d *Dashboard) review(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	runs, err := d.Store.MRRunDigests(ctx, mr)
+	// Only the runs of paths the user can see: a project moved somewhere
+	// they can't see keeps its later runs hidden.
+	runs, err := d.Store.MRRunDigests(ctx, mr, visibleProjects(se))
 	if err != nil {
 		d.failed(w, r, "listing a review's runs", err)
 		return
@@ -403,12 +367,6 @@ func (d *Dashboard) review(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	repos, err := d.activeRepos(ctx, se)
-	if err != nil {
-		d.failed(w, r, "listing repositories", err)
-		return
-	}
-	active := byProject(repos)
 	platform, _ := d.cfg.Platform(instance)
 
 	newest := runs[len(runs)-1]
@@ -422,7 +380,7 @@ func (d *Dashboard) review(w http.ResponseWriter, r *http.Request) {
 			header.Author = runs[k].Author
 		}
 	}
-	summaries := runSummaries(runs, func(run store.RunDigest) judged { return d.judgeDigest(run, active) })
+	summaries := runSummaries(runs, judge)
 	slices.Reverse(summaries)
 	writeJSON(w, http.StatusOK, ReviewDetailView{Header: header, Runs: summaries})
 }
@@ -487,7 +445,7 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	digests, err := d.Store.MRRunDigests(ctx, run.MR)
+	digests, err := d.Store.MRRunDigests(ctx, run.MR, visibleProjects(se))
 	if err != nil {
 		d.failed(w, r, "listing a review's runs", err)
 		return
@@ -497,30 +455,25 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	repos, err := d.activeRepos(ctx, se)
-	if err != nil {
-		d.failed(w, r, "listing repositories", err)
-		return
-	}
-	repo, ok := byProject(repos)[lower(run.ProjectPath)]
-	pol := d.policyFor(run.MR.Instance, repo, ok)
-	facts := digestFacts(digests[idx])
-	facts.result = run.Result
-	j := judge(facts, pol)
+	j := judge(digests[idx])
 	var prev *store.RunDigest
 	if idx > 0 {
 		prev = &digests[idx-1]
 	}
-
 	view := RunDetailView{
 		Run: runSummary(digests[idx], prev, j), Instance: run.MR.Instance, Project: run.ProjectPath, Number: run.MR.IID,
-		Status: j.status, Approved: j.outcome == OutcomeApproved, ApprovalReason: j.reason, Model: d.cfg.LLM.Model,
+		Status: j.status, Approved: run.Approved, ApprovalReason: j.reason, Model: run.Model,
 		Files:  FilesView{Reviewed: []string{}, Skipped: []SkippedFile{}, NotReviewed: []NotReviewedFile{}},
 		Skills: []SkillView{},
 	}
-	if o, _ := policyOutcome(facts); o.Result != nil {
-		view.PergentVersion = o.Result.PergentVersion
-		d.fillSkills(&view, o.Result, run.Result)
+	if run.Approved {
+		view.ApprovalReason = ""
+	}
+	// The skills of a result the publisher could use: one that parses and
+	// is for the run's own base and head.
+	if res, err := result.Parse(run.Result); err == nil && res.Base == run.BaseSHA && res.Head == run.HeadSHA {
+		view.PergentVersion = res.PergentVersion
+		fillSkills(&view, res, run.Result, run.SkillSources)
 	}
 	writeJSON(w, http.StatusOK, view)
 }
@@ -559,8 +512,9 @@ type notReviewedJSON struct {
 
 // fillSkills adds the skills, findings, checks, files and tokens of a
 // parsed result (raw is the same result, for the fields result.Result
-// doesn't declare). A part that doesn't decode is left out, not guessed.
-func (d *Dashboard) fillSkills(view *RunDetailView, res *result.Result, raw []byte) {
+// doesn't declare), each skill with its recorded source. A part that
+// doesn't decode is left out, not guessed.
+func fillSkills(view *RunDetailView, res *result.Result, raw []byte, sources map[string]string) {
 	var extra struct {
 		Skills []json.RawMessage `json:"skills"`
 	}
@@ -568,10 +522,9 @@ func (d *Dashboard) fillSkills(view *RunDetailView, res *result.Result, raw []by
 
 	reviewed, skipped, notReviewed := map[string]bool{}, map[SkippedFile]bool{}, map[string]bool{}
 	for i, s := range res.Skills {
-		sv := SkillView{Name: s.Name, Verdict: s.Verdict, Source: sourceKindRepo,
-			Findings: []FindingView{}, Checks: []CheckView{}}
-		if _, ok := d.library[s.Name]; ok {
-			sv.Source = sourceKindLibrary
+		sv := SkillView{Name: s.Name, Verdict: s.Verdict, Findings: []FindingView{}, Checks: []CheckView{}}
+		if src, ok := sources[s.Name]; ok {
+			sv.Source = &src
 		}
 		for _, rawFinding := range s.Findings {
 			var f findingJSON
@@ -662,26 +615,9 @@ func (d *Dashboard) repositories(w http.ResponseWriter, r *http.Request) {
 // repositoryViews describes repos with their last 7 days and health.
 func (d *Dashboard) repositoryViews(ctx context.Context, se Session, repos []settings.Effective) ([]RepositoryView, error) {
 	active := byProject(repos)
-	runs, err := d.Store.RunDigestsSince(ctx, se.Instance, lowerAll(repos), d.now().Add(-defaultDays*day))
+	counts, err := d.Store.RunStats(ctx, se.Instance, lowerAll(repos), d.now().Add(-defaultDays*day))
 	if err != nil {
 		return nil, err
-	}
-	last7 := map[string]*Last7View{}
-	for _, e := range repos {
-		last7[lower(e.Project)] = &Last7View{}
-	}
-	for _, run := range runs {
-		l := last7[lower(run.ProjectPath)]
-		if l == nil {
-			continue
-		}
-		l.Reviews++
-		switch d.judgeDigest(run, active).outcome {
-		case OutcomeApproved:
-			l.Approved++
-		case OutcomeFailed:
-			l.Failed++
-		}
 	}
 	items, err := d.attention(ctx, se, active, "")
 	if err != nil {
@@ -693,12 +629,14 @@ func (d *Dashboard) repositoryViews(ctx context.Context, se Session, repos []set
 	}
 	out := make([]RepositoryView, 0, len(repos))
 	for _, e := range repos {
+		c := counts[lower(e.Project)]
 		health := healthOK
 		if troubled[lower(e.Project)] {
 			health = healthNeedsAttention
 		}
 		out = append(out, RepositoryView{Instance: e.Instance, Project: e.Project, Platform: e.Platform,
-			Source: string(e.Source), On: true, Last7: *last7[lower(e.Project)], Health: health})
+			Source: string(e.Source), On: true, Health: health,
+			Last7: Last7View{Reviews: c.Reviews, Approved: c.Approved, Failed: c.Failed}})
 	}
 	return out, nil
 }
@@ -774,10 +712,13 @@ func quantityText(q resource.Quantity) string {
 
 // --- GET /api/repositories/{instance}/{project...}/inputs ---
 
-// inputsCache keeps resolved skills and instructions per repository.
+// inputsCache keeps resolved skills and instructions per repository, and
+// the resolutions in progress, so requests for the same repository share
+// one set of platform calls.
 type inputsCache struct {
 	mu      sync.Mutex
 	entries map[string]inputsEntry
+	flights map[string]*inputsFlight
 }
 
 type inputsEntry struct {
@@ -785,44 +726,71 @@ type inputsEntry struct {
 	at   time.Time
 }
 
-func (c *inputsCache) get(key string, now time.Time) (InputsView, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	e, ok := c.entries[key]
-	if !ok || now.Sub(e.at) >= inputsTTL || now.Before(e.at) {
-		return InputsView{}, false
-	}
-	return e.view, true
-}
-
-func (c *inputsCache) put(key string, v InputsView, now time.Time) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for k, e := range c.entries {
-		if now.Sub(e.at) >= inputsTTL {
-			delete(c.entries, k)
-		}
-	}
-	c.entries[key] = inputsEntry{view: v, at: now}
+type inputsFlight struct {
+	done chan struct{}
+	view InputsView
+	err  error
 }
 
 func (d *Dashboard) repositoryInputs(w http.ResponseWriter, r *http.Request, repo settings.Effective) {
-	key := repo.Instance + "\x00" + lower(repo.Project)
-	if v, ok := d.inputs.get(key, d.now()); ok {
-		writeJSON(w, http.StatusOK, v)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), platformTimeout)
-	defer cancel()
-	v, err := d.resolveInputs(ctx, repo)
-	if err != nil {
-		d.Log.Warn("dashboard: reading skills and instructions failed", "instance", repo.Instance,
-			"project", repo.Project, "error", err.Error())
+	v, err := d.cachedInputs(r.Context(), repo)
+	switch {
+	case errors.Is(err, errNotSynced):
+		writeError(w, http.StatusServiceUnavailable, msgNotSynced)
+	case err != nil:
 		writeError(w, http.StatusBadGateway, msgInputsFailed)
-		return
+	default:
+		writeJSON(w, http.StatusOK, v)
 	}
-	d.inputs.put(key, v, d.now())
-	writeJSON(w, http.StatusOK, v)
+}
+
+// cachedInputs returns repo's resolved skills and instructions: kept ones
+// younger than 5 minutes, those of a resolution in progress, or a new
+// resolution, bounded by 10 s and not cut short by the request that
+// started it going away (others may wait for it). Failures aren't kept.
+func (d *Dashboard) cachedInputs(ctx context.Context, repo settings.Effective) (InputsView, error) {
+	c, key := d.inputs, repo.Instance+"\x00"+lower(repo.Project)
+	c.mu.Lock()
+	now := d.now()
+	if e, ok := c.entries[key]; ok && now.Sub(e.at) < inputsTTL && !now.Before(e.at) {
+		c.mu.Unlock()
+		return e.view, nil
+	}
+	if f, ok := c.flights[key]; ok {
+		c.mu.Unlock()
+		select {
+		case <-f.done:
+			return f.view, f.err
+		case <-ctx.Done():
+			return InputsView{}, ctx.Err()
+		}
+	}
+	f := &inputsFlight{done: make(chan struct{})}
+	c.flights[key] = f
+	c.mu.Unlock()
+
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), platformTimeout)
+	f.view, f.err = d.resolveInputs(rctx, repo)
+	cancel()
+	if f.err != nil {
+		d.Log.Warn("dashboard: reading skills and instructions failed", "instance", repo.Instance,
+			"project", repo.Project, "error", f.err.Error())
+	}
+
+	c.mu.Lock()
+	delete(c.flights, key)
+	if f.err == nil {
+		now := d.now()
+		for k, e := range c.entries {
+			if now.Sub(e.at) >= inputsTTL {
+				delete(c.entries, k)
+			}
+		}
+		c.entries[key] = inputsEntry{view: f.view, at: now}
+	}
+	c.mu.Unlock()
+	close(f.done)
+	return f.view, f.err
 }
 
 // resolveInputs reads repo's skills and instructions at its default branch,
@@ -837,7 +805,7 @@ func (d *Dashboard) resolveInputs(ctx context.Context, repo settings.Effective) 
 		return InputsView{}, err
 	}
 	if !found {
-		return InputsView{}, errors.New("the repository isn't stored yet (reconcile hasn't reached it)")
+		return InputsView{}, errNotSynced
 	}
 	branch, err := src.DefaultBranch(ctx, p.ProjectID)
 	if err != nil {
@@ -850,15 +818,6 @@ func (d *Dashboard) resolveInputs(ctx context.Context, repo settings.Effective) 
 	if err != nil {
 		return InputsView{}, err
 	}
-	picked := map[string]bool{}
-	if len(repo.Skills) == 0 {
-		for name := range d.library {
-			picked[name] = true
-		}
-	}
-	for _, name := range repo.Skills {
-		picked[name] = true
-	}
 	names := make([]string, 0, len(in.Skills))
 	for name := range in.Skills {
 		names = append(names, name)
@@ -866,11 +825,7 @@ func (d *Dashboard) resolveInputs(ctx context.Context, repo settings.Effective) 
 	sort.Strings(names)
 	v := InputsView{Branch: branch, Skills: []InputSkill{}, Instructions: string(in.Instructions)}
 	for _, name := range names {
-		source := sourceKindRepo
-		if _, inLib := d.library[name]; inLib && picked[name] && !slices.Contains(in.Overridden, name) {
-			source = sourceKindLibrary
-		}
-		v.Skills = append(v.Skills, InputSkill{Name: name, Source: source, Content: string(in.Skills[name])})
+		v.Skills = append(v.Skills, InputSkill{Name: name, Source: in.Sources[name], Content: string(in.Skills[name])})
 	}
 	return v, nil
 }

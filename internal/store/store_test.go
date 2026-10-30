@@ -431,7 +431,7 @@ func TestRunsToPublishAndMarkPublished(t *testing.T) {
 	if got, _ := s.RunsToPublish(ctx, now, 1); len(got) != 1 || got[0].ID != a {
 		t.Errorf("limit 1 = %v", runIDs(got))
 	}
-	if err := s.MarkPublished(ctx, a); err != nil {
+	if err := s.MarkPublished(ctx, a, RunDecision{}); err != nil {
 		t.Fatal(err)
 	}
 	if r := getRun(t, s, a); r.State != Published {
@@ -532,7 +532,7 @@ func TestPreviousResultSkipsErrorsAndCurrent(t *testing.T) {
 	}
 	published := func(mr MRKey, head, body string) string {
 		id := reported(t, s, mr, head, body)
-		if err := s.MarkPublished(ctx, id); err != nil {
+		if err := s.MarkPublished(ctx, id, RunDecision{}); err != nil {
 			t.Fatal(err)
 		}
 		return id
@@ -842,7 +842,7 @@ func TestEnqueueSupersedesReportedRun(t *testing.T) {
 		t.Errorf("RunsToCleanUp = %v, want A", runIDs(got))
 	}
 	// A superseded run's result is never kept, even when it already has one.
-	if err := s.MarkPublished(ctx, a); err == nil {
+	if err := s.MarkPublished(ctx, a, RunDecision{}); err == nil {
 		t.Errorf("MarkPublished on a superseded run succeeded")
 	}
 	out, err := s.StoreResult(ctx, a, "tok-A", []byte(`{"status":"completed"}`), t0.Add(time.Minute))
@@ -1128,7 +1128,7 @@ func TestEnqueueRetargetIsANewRun(t *testing.T) {
 func TestEnqueueRetargetKeepsPublishedRunsOfOtherTarget(t *testing.T) {
 	s := newStore(t)
 	a := reported(t, s, mr1, "aaa", `{"status":"completed"}`)
-	if err := s.MarkPublished(ctx, a); err != nil {
+	if err := s.MarkPublished(ctx, a, RunDecision{}); err != nil {
 		t.Fatal(err)
 	}
 	b, created, err := s.EnqueueRun(ctx, mr1, "acme/widgets", "aaa", "develop")
@@ -1158,7 +1158,7 @@ func published(t *testing.T, s *Store, mr MRKey, head, target string) string {
 	if out, err := s.StoreResult(ctx, id, tok, []byte(`{"status":"completed"}`), t0.Add(time.Minute)); err != nil || out != ResultStored {
 		t.Fatalf("StoreResult = %v, %v", out, err)
 	}
-	if err := s.MarkPublished(ctx, id); err != nil {
+	if err := s.MarkPublished(ctx, id, RunDecision{}); err != nil {
 		t.Fatal(err)
 	}
 	return id
@@ -1491,7 +1491,7 @@ func TestRepublishWhileReported(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("Republish while reported = %v, %v; want true", ok, err)
 	}
-	if err := s.MarkPublished(ctx, id); err != nil {
+	if err := s.MarkPublished(ctx, id, RunDecision{}); err != nil {
 		t.Fatalf("MarkPublished: %v", err)
 	}
 	r := getRun(t, s, id)
@@ -1504,7 +1504,7 @@ func TestRepublishWhileReported(t *testing.T) {
 	}
 
 	// Only once: the next publish publishes it.
-	if err := s.MarkPublished(ctx, id); err != nil {
+	if err := s.MarkPublished(ctx, id, RunDecision{}); err != nil {
 		t.Fatal(err)
 	}
 	if r := getRun(t, s, id); r.State != Published {
@@ -1540,7 +1540,7 @@ func TestPublishRetryClearsRedecide(t *testing.T) {
 	if _, err := s.PublishRetry(ctx, id, "boom", t0); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MarkPublished(ctx, id); err != nil {
+	if err := s.MarkPublished(ctx, id, RunDecision{}); err != nil {
 		t.Fatal(err)
 	}
 	if r := getRun(t, s, id); r.State != Published {

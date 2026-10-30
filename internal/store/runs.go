@@ -72,6 +72,41 @@ type Run struct {
 	// Title, WebURL, SourceBranch and Author are the merge request's as
 	// the dispatcher last read them ("" before), for the dashboard.
 	Title, WebURL, SourceBranch, Author string
+	// Model and SkillSources (skill name → "library" or "repo") were
+	// recorded at dispatch; nil before.
+	Model        *string
+	SkillSources map[string]string
+	// Outcome, OutcomeReason, DecisionStatus and Approved are the
+	// publisher's decision (see RunDecision); Outcome is "" until then.
+	Outcome, OutcomeReason, DecisionStatus string
+	Approved                               bool
+}
+
+// A run's outcome, as the publisher records it (RunDecision.Outcome) and as
+// the dashboard shows it. Running, superseded and unknown (published before
+// outcomes were recorded) are never recorded: they follow from the state.
+const (
+	OutcomeRunning    = "running"
+	OutcomeApproved   = "approved"
+	OutcomeBlocking   = "blocking"
+	OutcomeDraft      = "draft"
+	OutcomeNoBlocking = "no_blocking"
+	OutcomeFailed     = "failed"
+	OutcomeSuperseded = "superseded"
+	OutcomeUnknown    = "unknown"
+)
+
+// RunDecision is what the publisher decided for a run.
+type RunDecision struct {
+	// Outcome is OutcomeApproved, OutcomeBlocking, OutcomeDraft,
+	// OutcomeNoBlocking or OutcomeFailed.
+	Outcome string
+	// Reason says why, in a sentence ("" when approved).
+	Reason string
+	// Status is the commit status set: "success", "failed" or "neutral".
+	Status string
+	// Approved is true when the approve bot approved this run.
+	Approved bool
 }
 
 // ResultOutcome is what StoreResult did with a posted result.
@@ -103,20 +138,28 @@ type ProjectApproval struct {
 const runColumns = `id::text, instance, project_id, mr_iid, project_path, head_sha, base_sha, start_sha, target_branch,
 	state, job_name, token_expires_at, result, failure_reason, publish_error, attempts,
 	created_at, dispatched_at, reported_at, not_before, cleaned_up,
-	title, web_url, source_branch, author`
+	title, web_url, source_branch, author, model, skill_sources,
+	outcome, outcome_reason, decision_status, approved`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var (
 		r                                    Run
 		state                                string
 		tokenExp, dispatched, rep, notBefore *time.Time
+		sources                              []byte
 	)
 	err := row.Scan(&r.ID, &r.MR.Instance, &r.MR.ProjectID, &r.MR.IID, &r.ProjectPath, &r.HeadSHA, &r.BaseSHA, &r.StartSHA,
 		&r.TargetBranch, &state, &r.JobName, &tokenExp, &r.Result, &r.FailureReason, &r.PublishError, &r.Attempts,
 		&r.CreatedAt, &dispatched, &rep, &notBefore, &r.CleanedUp,
-		&r.Title, &r.WebURL, &r.SourceBranch, &r.Author)
+		&r.Title, &r.WebURL, &r.SourceBranch, &r.Author, &r.Model, &sources,
+		&r.Outcome, &r.OutcomeReason, &r.DecisionStatus, &r.Approved)
 	if err != nil {
 		return Run{}, err
+	}
+	if sources != nil {
+		if err := json.Unmarshal(sources, &r.SkillSources); err != nil {
+			return Run{}, fmt.Errorf("run %s: skill sources: %w", r.ID, err)
+		}
 	}
 	r.State = RunState(state)
 	r.TokenExpiresAt = deref(tokenExp)
@@ -362,6 +405,25 @@ func (s *Store) SetRunChange(ctx context.Context, id string, d ChangeDetails) er
 	return err
 }
 
+// SetRunInputs records the model and where each skill came from (name →
+// "library" or "repo") when a run is dispatched. An unknown run is not an
+// error; a malformed id is.
+func (s *Store) SetRunInputs(ctx context.Context, id, model string, sources map[string]string) error {
+	if !validUUID(id) {
+		return fmt.Errorf("store: run %q not found", id)
+	}
+	if sources == nil {
+		sources = map[string]string{}
+	}
+	b, err := json.Marshal(sources)
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, `UPDATE runs SET model = $2, skill_sources = $3::jsonb WHERE id = $1::uuid`,
+		id, cutText(model), string(b))
+	return err
+}
+
 // cutText shortens s to at most maxChangeDetail bytes, on a rune boundary.
 func cutText(s string) string {
 	if len(s) <= maxChangeDetail {
@@ -564,16 +626,18 @@ func (s *Store) queryRuns(ctx context.Context, sql string, args ...any) ([]Run, 
 	return scanRuns(rows)
 }
 
-// MarkPublished records that a reported run's comment and status are out. A
-// run Republish flagged meanwhile stays reported instead, once, with no
+// MarkPublished records that a reported run's comment and status are out,
+// and what was decided (each publish replaces the last decision). A run
+// Republish flagged meanwhile stays reported instead, once, with no
 // attempts counted and due now, so the publisher decides it again.
-func (s *Store) MarkPublished(ctx context.Context, id string) error {
+func (s *Store) MarkPublished(ctx context.Context, id string, dec RunDecision) error {
 	return s.mustUpdate(ctx, id, `UPDATE runs SET
 			state = CASE WHEN redecide THEN 'reported' ELSE 'published' END,
 			attempts = CASE WHEN redecide THEN 0 ELSE attempts END,
 			not_before = CASE WHEN redecide THEN NULL ELSE not_before END,
-			publish_error = '', redecide = false
-		WHERE id = $1::uuid AND state = 'reported'`, id)
+			publish_error = '', redecide = false,
+			outcome = $2, outcome_reason = $3, decision_status = $4, approved = $5
+		WHERE id = $1::uuid AND state = 'reported'`, id, dec.Outcome, dec.Reason, dec.Status, dec.Approved)
 }
 
 // PublishRetry records a failed publish: the run is tried again at notBefore,

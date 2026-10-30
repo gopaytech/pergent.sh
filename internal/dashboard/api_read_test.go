@@ -30,6 +30,10 @@ type fakeSource struct {
 	calls  int
 	refs   map[string]bool
 	ids    map[int64]bool
+	// gate, when not nil, holds DefaultBranch until it is closed;
+	// entered is told each time one starts waiting.
+	gate    chan struct{}
+	entered chan struct{}
 }
 
 func newFakeSource() *fakeSource {
@@ -49,6 +53,13 @@ func (f *fakeSource) callCount() int {
 }
 
 func (f *fakeSource) DefaultBranch(_ context.Context, projectID int64) (string, error) {
+	f.mu.Lock()
+	gate, entered := f.gate, f.entered
+	f.mu.Unlock()
+	if gate != nil {
+		entered <- struct{}{}
+		<-gate
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
@@ -191,18 +202,23 @@ func (e *env) exec(sql string, args ...any) {
 
 // runFix is a run to store. Zero fields take defaults: instance main,
 // target main, published, created an hour before the clock, a 2-minute Job.
+// outcome, reason, status and approved are the publisher's recorded
+// decision (status defaults from the outcome); model and sources (JSON)
+// what the dispatcher recorded.
 type runFix struct {
-	instance, project  string
-	projectID, number  int64
-	head, target       string
-	state              store.RunState
-	result, failure    string
-	title, webURL      string
-	at                 time.Time
-	duration           time.Duration
-	approved           bool
-	undispatched       bool
-	sourceBranch, user string
+	instance, project       string
+	projectID, number       int64
+	head, target            string
+	state                   store.RunState
+	result, failure         string
+	title, webURL           string
+	at                      time.Time
+	duration                time.Duration
+	outcome, reason, status string
+	approved                bool
+	undispatched            bool
+	sourceBranch, user      string
+	model, sources          string
 }
 
 // addRun stores f and returns the run's ID.
@@ -241,20 +257,37 @@ func (e *env) addRun(f runFix) string {
 		r := f.at.Add(10*time.Second + f.duration)
 		reported = &r
 	}
-	var result *string
+	var result, model, sources *string
 	if f.result != "" {
 		result = &f.result
 	}
-	e.exec(`UPDATE runs SET state = $2, result = $3::jsonb, failure_reason = $4, base_sha = $5, created_at = $6,
-			dispatched_at = $7, reported_at = $8, title = $9, web_url = $10, source_branch = $11, author = $12
-		WHERE id = $1::uuid`,
-		id, string(f.state), result, f.failure, baseSHA, f.at, dispatched, reported, f.title, f.webURL,
-		f.sourceBranch, f.user)
-	if f.approved {
-		if err := e.st.SetApprovedSHA(ctx, mr, f.head, f.target); err != nil {
-			e.t.Fatal(err)
+	if f.model != "" {
+		model = &f.model
+	}
+	if f.sources != "" {
+		sources = &f.sources
+	}
+	if f.outcome != "" && f.status == "" {
+		f.status = "success"
+		if f.outcome == OutcomeBlocking || f.outcome == OutcomeFailed {
+			f.status = "failed"
 		}
 	}
+	if f.reason == "" {
+		switch f.outcome {
+		case OutcomeBlocking:
+			f.reason = "Blocking issues found"
+		case OutcomeFailed:
+			f.reason = f.failure
+		}
+	}
+	e.exec(`UPDATE runs SET state = $2, result = $3::jsonb, failure_reason = $4, base_sha = $5, created_at = $6,
+			dispatched_at = $7, reported_at = $8, title = $9, web_url = $10, source_branch = $11, author = $12,
+			outcome = $13, outcome_reason = $14, decision_status = $15, approved = $16, model = $17,
+			skill_sources = $18::jsonb
+		WHERE id = $1::uuid`,
+		id, string(f.state), result, f.failure, baseSHA, f.at, dispatched, reported, f.title, f.webURL,
+		f.sourceBranch, f.user, f.outcome, f.reason, f.status, f.approved, model, sources)
 	return id
 }
 
@@ -294,19 +327,19 @@ func blockingResult(h string) string {
 // acme/payments; acme/widgets on gh is another instance.
 func overviewFixture(e *env) {
 	now := e.clock.now()
-	e.addRun(runFix{project: "acme/widgets", number: 1, head: head('1'), result: cleanResult(head('1')), approved: true,
-		title: "Add login", webURL: "https://gitlab.example.com/acme/widgets/-/merge_requests/1", at: now.Add(-6 * time.Hour)})
+	e.addRun(runFix{project: "acme/widgets", number: 1, head: head('1'), result: cleanResult(head('1')),
+		outcome: OutcomeApproved, approved: true, title: "Add login", webURL: "https://gitlab.example.com/acme/widgets/-/merge_requests/1", at: now.Add(-6 * time.Hour)})
 	e.addRun(runFix{project: "acme/widgets", number: 2, head: head('2'), result: blockingResult(head('2')),
-		title: "Refactor", at: now.Add(-5 * time.Hour)})
+		outcome: OutcomeBlocking, title: "Refactor", at: now.Add(-5 * time.Hour)})
 	e.addRun(runFix{project: "acme/widgets", number: 3, head: head('3'), failure: "the review Job ran out of memory (OOMKilled)",
-		at: now.Add(-4 * time.Hour)})
+		outcome: OutcomeFailed, at: now.Add(-4 * time.Hour)})
 	e.addRun(runFix{project: "acme/widgets", number: 4, head: head('4'), state: store.Running, at: now.Add(-3 * time.Hour)})
-	e.addRun(runFix{project: "acme/widgets", number: 6, head: head('6'), result: cleanResult(head('6')), approved: true,
-		at: now.Add(-10 * 24 * time.Hour)})
+	e.addRun(runFix{project: "acme/widgets", number: 6, head: head('6'), result: cleanResult(head('6')),
+		outcome: OutcomeApproved, approved: true, at: now.Add(-10 * 24 * time.Hour)})
 	e.addRun(runFix{project: "acme/payments", projectID: 8, number: 5, head: head('5'), result: blockingResult(head('5')),
-		title: "Payments secret change", at: now.Add(-2 * time.Hour)})
+		outcome: OutcomeBlocking, title: "Payments secret change", at: now.Add(-2 * time.Hour)})
 	e.addRun(runFix{instance: "gh", project: "acme/widgets", projectID: 900, number: 7, head: head('7'),
-		result: blockingResult(head('7')), title: "GitHub change", at: now.Add(-time.Hour)})
+		result: blockingResult(head('7')), outcome: OutcomeBlocking, title: "GitHub change", at: now.Add(-time.Hour)})
 
 	for _, a := range []struct{ instance, project, kind string }{
 		{"main", "acme/widgets", "single_approval"},
@@ -407,6 +440,9 @@ func TestAttentionOnlyForActiveRepos(t *testing.T) {
 func TestReviewsList(t *testing.T) {
 	e := newEnv(t, nil)
 	overviewFixture(e)
+	// Older than the default 90 days.
+	e.addRun(runFix{project: "acme/widgets", number: 8, head: head('8'), outcome: OutcomeApproved, approved: true,
+		at: e.clock.now().Add(-100 * 24 * time.Hour)})
 	c := e.signInGitLab(false, "acme/widgets")
 
 	numbers := func(v ReviewListView) string {
@@ -425,6 +461,7 @@ func TestReviewsList(t *testing.T) {
 		{"?project=acme/payments", ""},
 		{"?project=acme/nothing", ""},
 		{"?outcome=draft", ""},
+		{"?days=365", "4,3,2,1,6,8"},
 	} {
 		v := getJSON[ReviewListView](e, c, "/api/reviews"+tc.query)
 		if got := numbers(v); got != tc.want || v.NextCursor != "" {
@@ -439,32 +476,46 @@ func TestReviewsList(t *testing.T) {
 func TestReviewsListPages(t *testing.T) {
 	e := newEnv(t, nil)
 	now := e.clock.now()
-	for i := 1; i <= 55; i++ {
-		f := runFix{project: "acme/widgets", number: int64(i), head: head('a'), at: now.Add(-time.Duration(i) * time.Minute)}
+	for i := 1; i <= 110; i++ {
+		f := runFix{project: "acme/widgets", number: int64(i), head: head('a'), at: now.Add(-time.Duration(i) * time.Minute),
+			result: cleanResult(head('a')), outcome: OutcomeApproved, approved: true}
 		if i%2 == 0 {
-			f.result = blockingResult(head('a'))
-		} else {
-			f.result = cleanResult(head('a'))
+			f.result, f.outcome, f.approved = blockingResult(head('a')), OutcomeBlocking, false
 		}
 		e.addRun(f)
 	}
 	c := e.signInGitLab(false, "acme/widgets")
 
-	first := getJSON[ReviewListView](e, c, "/api/reviews")
-	if len(first.Items) != 50 || first.NextCursor == "" || first.Items[0].Number != 1 || first.Items[49].Number != 50 {
-		t.Fatalf("first page: %d items, cursor %q", len(first.Items), first.NextCursor)
+	var all []int64
+	cursor := ""
+	for page := 0; ; page++ {
+		v := getJSON[ReviewListView](e, c, "/api/reviews?cursor="+url.QueryEscape(cursor))
+		if want := min(50, 110-50*page); len(v.Items) != want {
+			t.Fatalf("page %d: %d items, want %d", page, len(v.Items), want)
+		}
+		for _, r := range v.Items {
+			all = append(all, r.Number)
+		}
+		if cursor = v.NextCursor; cursor == "" {
+			break
+		}
 	}
-	second := getJSON[ReviewListView](e, c, "/api/reviews?cursor="+url.QueryEscape(first.NextCursor))
-	if len(second.Items) != 5 || second.NextCursor != "" || second.Items[0].Number != 51 {
-		t.Fatalf("second page: %+v", second)
+	for i, n := range all {
+		if n != int64(i+1) {
+			t.Fatalf("paged numbers = %v; want 1 to 110 in order", all)
+		}
 	}
 
-	// Filtered pages hold 50 matches each.
-	blocking := getJSON[ReviewListView](e, c, "/api/reviews?outcome=blocking")
-	if len(blocking.Items) != 27 || blocking.NextCursor != "" {
-		t.Errorf("blocking: %d items, cursor %q", len(blocking.Items), blocking.NextCursor)
+	// The outcome filter pages the same way: 50 matches, then the rest.
+	first := getJSON[ReviewListView](e, c, "/api/reviews?outcome=blocking")
+	if len(first.Items) != 50 || first.NextCursor == "" || first.Items[0].Number != 2 || first.Items[49].Number != 100 {
+		t.Fatalf("blocking page 1: %d items, cursor %q", len(first.Items), first.NextCursor)
 	}
-	for _, r := range blocking.Items {
+	second := getJSON[ReviewListView](e, c, "/api/reviews?outcome=blocking&cursor="+url.QueryEscape(first.NextCursor))
+	if len(second.Items) != 5 || second.NextCursor != "" || second.Items[0].Number != 102 {
+		t.Fatalf("blocking page 2: %+v", second)
+	}
+	for _, r := range append(first.Items, second.Items...) {
 		if r.Outcome != OutcomeBlocking {
 			t.Errorf("blocking filter returned %+v", r)
 		}
@@ -475,11 +526,12 @@ func TestReviewDetail(t *testing.T) {
 	e := newEnv(t, nil)
 	now := e.clock.now()
 	first := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: blockingResult(head('a')),
-		at: now.Add(-3 * time.Hour), title: "Old title"})
+		outcome: OutcomeBlocking, at: now.Add(-3 * time.Hour), title: "Old title"})
 	push := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('b'), result: cleanResult(head('b')),
+		outcome: OutcomeNoBlocking, reason: "No blocking issues; not approved: the change was closed, or its head or target branch moved, before it could be approved",
 		at: now.Add(-2 * time.Hour)})
 	retarget := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('b'), target: "develop",
-		result: cleanResult(head('b')), approved: true, at: now.Add(-time.Hour), duration: 90 * time.Second,
+		result: cleanResult(head('b')), outcome: OutcomeApproved, approved: true, at: now.Add(-time.Hour), duration: 90 * time.Second,
 		title: "Add login", webURL: "https://gitlab.example.com/acme/widgets/-/merge_requests/3",
 		sourceBranch: "feature/login", user: "bob"})
 	c := e.signInGitLab(false, "acme/widgets")
@@ -503,7 +555,7 @@ func TestReviewDetail(t *testing.T) {
 		!r.CreatedAt.Equal(now.Add(-time.Hour)) {
 		t.Errorf("newest run = %+v", r)
 	}
-	if r := v.Runs[1]; !strings.Contains(r.Reason, "newer review") {
+	if r := v.Runs[1]; !strings.Contains(r.Reason, "target branch moved") {
 		t.Errorf("replaced run reason = %q", r.Reason)
 	}
 
@@ -520,59 +572,65 @@ func TestReviewDetail(t *testing.T) {
 	}
 }
 
+// Outcomes are the ones the publisher recorded: settings changed since, an
+// approval withdrawn since (the change merged) change nothing. Runs not
+// published show their state; nothing is guessed.
 func TestReviewOutcomes(t *testing.T) {
 	e := newEnv(t, func(cfg *config.Config) {
 		off := false
-		cfg.Repositories[0].Approve = &off // acme/widgets on main: approval off
-		cfg.GitHub[0].ApproveTokenEnv = "PERGENT_TEST_APPROVE"
+		cfg.Repositories[0].Approve = &off // turned off after the reviews below
 	})
 	now := e.clock.now()
 	add := func(f runFix) {
+		f.project = "acme/widgets"
+		f.head = head(byte('0' + f.number%10))
 		f.at = now.Add(-time.Duration(f.number) * time.Minute)
 		e.addRun(f)
 	}
-	clean := func(h string) string { return cleanResult(h) }
-	errorResult := `{"schema_version":1,"status":"error","base":"` + baseSHA + `","head":"` + head('e') +
-		`","error":{"code":"commit_missing","message":"commit is not in the checkout"},"comment":{"markdown":"x"}}`
-	failedSkill := resultJSON(head('f'), skillJSON("code-review", "failed"))
-	skipped := resultJSON(head('s'), map[string]any{"name": "code-review", "verdict": "no_blocking_issues",
-		"files": map[string]any{"reviewed": []string{}, "skipped": []any{map[string]any{"path": "go.sum", "rule": "lockfile"}}}})
-	// acme/widgets (approval off)
-	add(runFix{project: "acme/widgets", number: 1, head: head('1'), result: clean(head('1'))})
-	add(runFix{project: "acme/widgets", number: 2, head: head('e'), result: errorResult})
-	add(runFix{project: "acme/widgets", number: 3, head: head('f'), result: failedSkill})
-	add(runFix{project: "acme/widgets", number: 4, head: head('s'), result: skipped})
-	add(runFix{project: "acme/widgets", number: 5, head: head('5'), result: clean(head('x'))}) // another head's result
-	add(runFix{project: "acme/widgets", number: 6, head: head('6'), state: store.Queued})
-	add(runFix{project: "acme/widgets", number: 7, head: head('7'), state: store.Superseded})
-	add(runFix{project: "acme/widgets", number: 8, head: head('8'), state: store.PublishFailed, result: clean(head('8'))})
-	add(runFix{project: "acme/widgets", number: 9, head: head('9'), state: store.Reported, result: clean(head('9'))})
-	// acme/payments (approval on)
-	add(runFix{project: "acme/payments", projectID: 8, number: 11, head: head('1'), result: clean(head('1'))})
-	add(runFix{project: "acme/payments", projectID: 8, number: 12, head: head('2'), result: clean(head('2')), approved: true})
-	c := e.signInGitLab(false, "acme/widgets", "acme/payments")
+	// Approved, then merged: the sweep cleared the recorded approval.
+	add(runFix{number: 1, outcome: OutcomeApproved, approved: true})
+	add(runFix{number: 2, outcome: OutcomeNoBlocking,
+		reason: "No blocking issues; not approved: the change was closed, or its head or target branch moved, before it could be approved"})
+	add(runFix{number: 3, outcome: OutcomeDraft, reason: "No blocking issues; not approved: draft"})
+	add(runFix{number: 4}) // published before outcomes were recorded
+	add(runFix{number: 5, state: store.Queued})
+	add(runFix{number: 6, state: store.Running})
+	add(runFix{number: 7, state: store.Superseded})
+	add(runFix{number: 8, state: store.PublishFailed})
+	add(runFix{number: 9, state: store.Reported})
+	add(runFix{number: 10, state: store.Reported, failure: "the review Job ran out of memory (OOMKilled)"})
+	c := e.signInGitLab(false, "acme/widgets")
 
 	byNumber := map[int64]ReviewSummary{}
 	for _, r := range getJSON[ReviewListView](e, c, "/api/reviews").Items {
 		byNumber[r.Number] = r
 	}
 	for n, want := range map[int64]struct{ outcome, reason string }{
-		1:  {OutcomeNoBlocking, "approval is turned off"},
-		2:  {OutcomeFailed, "commit is not in the checkout"},
-		3:  {OutcomeFailed, "Review failed for 1 of 1 skills"},
-		4:  {OutcomeNoBlocking, "every changed file is skipped"},
-		5:  {OutcomeFailed, "couldn't use"},
-		6:  {OutcomeRunning, "Waiting"},
+		1:  {OutcomeApproved, ""},
+		2:  {OutcomeNoBlocking, "closed"},
+		3:  {OutcomeDraft, "draft"},
+		4:  {OutcomeUnknown, "before pergent.sh recorded"},
+		5:  {OutcomeRunning, "Waiting"},
+		6:  {OutcomeRunning, "Reviewing"},
 		7:  {OutcomeSuperseded, "newer push"},
 		8:  {OutcomeFailed, "couldn't post"},
 		9:  {OutcomeRunning, "Posting"},
-		11: {OutcomeDraft, "draft"},
-		12: {OutcomeApproved, ""},
+		10: {OutcomeFailed, "OOMKilled"},
 	} {
 		r := byNumber[n]
 		if r.Outcome != want.outcome || !strings.Contains(r.Reason, want.reason) || (want.reason == "" && r.Reason != "") {
 			t.Errorf("#%d = %s %q; want %s containing %q", n, r.Outcome, r.Reason, want.outcome, want.reason)
 		}
+	}
+	if v := getJSON[ReviewListView](e, c, "/api/reviews?outcome=unknown"); len(v.Items) != 1 || v.Items[0].Number != 4 {
+		t.Errorf("unknown filter = %+v", v.Items)
+	}
+	// The approved-then-merged review counts as approved.
+	if ov := getJSON[OverviewView](e, c, "/api/overview"); ov.Stats.Approved != 1 || ov.Stats.Failed != 2 || ov.Stats.Reviews != 9 {
+		t.Errorf("stats = %+v; want 9 reviews, 1 approved, 2 failed", ov.Stats)
+	}
+	if repos := getJSON[[]RepositoryView](e, c, "/api/repositories"); repos[0].Last7 != (Last7View{Reviews: 9, Approved: 1, Failed: 2}) {
+		t.Errorf("last 7 days = %+v", repos[0].Last7)
 	}
 }
 
@@ -602,9 +660,16 @@ func TestRunDetail(t *testing.T) {
 		"comment": map[string]any{"markdown": "x"},
 	}
 	b, _ := json.Marshal(res)
-	id := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: string(b), duration: time.Minute})
-	failed := e.addRun(runFix{project: "acme/widgets", number: 4, head: head('b'), failure: "the review Job ran out of memory (OOMKilled)"})
-	e.cfg.LLM.Model = "claude-sonnet-4"
+	// code-review is a library skill, but this repository replaced it
+	// with its own when the review ran.
+	id := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: string(b), duration: time.Minute,
+		outcome: OutcomeBlocking, model: "claude-sonnet-4", sources: `{"code-review":"repo","team-rules":"repo"}`})
+	failed := e.addRun(runFix{project: "acme/widgets", number: 4, head: head('b'), outcome: OutcomeFailed,
+		failure: "the review Job ran out of memory (OOMKilled)"})
+	// A run that recorded no model or skill sources.
+	older := e.addRun(runFix{project: "acme/widgets", number: 5, head: head('c'), result: cleanResult(head('c')),
+		outcome: OutcomeApproved, approved: true})
+	e.cfg.LLM.Model = "a-newer-model" // changed since: the runs keep theirs
 	c := e.signInGitLab(false, "acme/widgets")
 
 	v := getJSON[RunDetailView](e, c, "/api/runs/"+id)
@@ -612,8 +677,9 @@ func TestRunDetail(t *testing.T) {
 		v.Project != "acme/widgets" || v.Number != 3 {
 		t.Errorf("run = %+v", v)
 	}
-	if v.Status != "failed" || v.Approved || v.ApprovalReason == "" || v.PergentVersion != "0.1.0" || v.Model != "claude-sonnet-4" {
-		t.Errorf("status %q approved %v reason %q version %q model %q", v.Status, v.Approved, v.ApprovalReason, v.PergentVersion, v.Model)
+	if v.Status != "failed" || v.Approved || v.ApprovalReason == "" || v.PergentVersion != "0.1.0" ||
+		v.Model == nil || *v.Model != "claude-sonnet-4" {
+		t.Errorf("status %q approved %v reason %q version %q model %v", v.Status, v.Approved, v.ApprovalReason, v.PergentVersion, v.Model)
 	}
 	if v.Tokens != (TokensView{In: 52410, Out: 1850}) {
 		t.Errorf("tokens = %+v", v.Tokens)
@@ -627,7 +693,7 @@ func TestRunDetail(t *testing.T) {
 		t.Fatalf("skills = %+v", v.Skills)
 	}
 	cr := v.Skills[0]
-	if cr.Name != "code-review" || cr.Verdict != "has_blocking_issues" || cr.Source != "library" || len(cr.Findings) != 2 {
+	if cr.Name != "code-review" || cr.Verdict != "has_blocking_issues" || cr.Source == nil || *cr.Source != "repo" || len(cr.Findings) != 2 {
 		t.Errorf("code-review = %+v", cr)
 	}
 	wantFinding := FindingView{ID: "a1b2c3", Severity: "blocking", Title: "Request body is used before validation",
@@ -641,14 +707,23 @@ func TestRunDetail(t *testing.T) {
 	if len(cr.Checks) != 1 || cr.Checks[0] != (CheckView{Batch: 1, Section: "Input", Name: "Body validated", Status: "fail", Detail: "line 42"}) {
 		t.Errorf("checks = %+v", cr.Checks)
 	}
-	if tr := v.Skills[1]; tr.Source != "repo" || tr.Verdict != "failed" || tr.Findings == nil || tr.Checks == nil {
+	if tr := v.Skills[1]; tr.Source == nil || *tr.Source != "repo" || tr.Verdict != "failed" || tr.Findings == nil || tr.Checks == nil {
 		t.Errorf("team-rules = %+v", tr)
 	}
 
 	f := getJSON[RunDetailView](e, c, "/api/runs/"+failed)
 	if f.Run.Outcome != OutcomeFailed || f.Run.Reason != "the review Job ran out of memory (OOMKilled)" ||
-		f.Status != "failed" || len(f.Skills) != 0 || f.Files.Reviewed == nil {
+		f.Status != "failed" || len(f.Skills) != 0 || f.Files.Reviewed == nil || f.Model != nil {
 		t.Errorf("failed run = %+v", f)
+	}
+
+	o := getJSON[RunDetailView](e, c, "/api/runs/"+older)
+	if o.Model != nil || len(o.Skills) != 1 || o.Skills[0].Source != nil || !o.Approved || o.ApprovalReason != "" || o.Status != "success" {
+		t.Errorf("run without recorded inputs = %+v", o)
+	}
+	raw := e.get(c, "/api/runs/"+older).Body.String()
+	if !strings.Contains(raw, `"model":null`) || !strings.Contains(raw, `"source":null`) {
+		t.Errorf("body = %s; want null model and source", raw)
 	}
 
 	for _, target := range []string{"/api/runs/not-a-uuid", "/api/runs/00000000-0000-0000-0000-000000000000"} {
@@ -791,8 +866,51 @@ func TestRepositoryInputsHidden(t *testing.T) {
 	if n := e.src["main"].callCount(); n != 0 {
 		t.Errorf("%d reads of a repository the user can't see", n)
 	}
-	// A repository not stored yet can't be read.
-	e.wantStatus(c, "/api/repositories/main/acme/widgets/inputs", http.StatusBadGateway)
+	// A repository reconcile hasn't stored yet: try again soon.
+	rec := e.wantStatus(c, "/api/repositories/main/acme/widgets/inputs", http.StatusServiceUnavailable)
+	if !strings.Contains(rec.Body.String(), "try again in a minute") {
+		t.Errorf("503 body = %s", rec.Body)
+	}
+}
+
+// Requests for the same repository while its inputs are being read share
+// that one read.
+func TestRepositoryInputsReadOnce(t *testing.T) {
+	e := newEnv(t, nil)
+	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: 7, Path: "acme/widgets"}); err != nil {
+		t.Fatal(err)
+	}
+	src := e.src["main"]
+	gate, entered := make(chan struct{}), make(chan struct{}, 10)
+	src.set(func(f *fakeSource) { f.gate, f.entered = gate, entered })
+	c := e.signInGitLab(false, "acme/widgets")
+
+	const n = 5
+	codes := make(chan int, n)
+	var wg sync.WaitGroup
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			codes <- e.get(c, "/api/repositories/main/acme/widgets/inputs").Code
+		}()
+	}
+	<-entered // the first read is under way
+	time.Sleep(200 * time.Millisecond)
+	close(gate)
+	wg.Wait()
+	close(codes)
+	for code := range codes {
+		if code != http.StatusOK {
+			t.Errorf("status = %d", code)
+		}
+	}
+	src.mu.Lock()
+	reads := len(entered)
+	src.mu.Unlock()
+	if reads != 0 {
+		t.Errorf("%d more default-branch reads; want one for all %d requests", reads, n)
+	}
 }
 
 func TestSkills(t *testing.T) {
@@ -896,6 +1014,12 @@ func TestReadAPIHidesInvisibleRepos(t *testing.T) {
 			if err := e.st.PutRunLog(ctx, hidden, "payments log"); err != nil {
 				t.Fatal(err)
 			}
+			// MR 20 moved from acme/widgets into acme/payments: its later
+			// run is hidden.
+			moved := e.addRun(runFix{project: "acme/widgets", number: 20, head: head('a'), outcome: OutcomeBlocking,
+				at: e.clock.now().Add(-2 * time.Hour)})
+			movedHidden := e.addRun(runFix{project: "acme/payments", number: 20, head: head('b'), outcome: OutcomeApproved,
+				approved: true, title: "Moved payments change"})
 			for _, p := range []store.Project{{Instance: "main", ProjectID: 7, Path: "acme/widgets", HookID: 1},
 				{Instance: "main", ProjectID: 8, Path: "acme/payments", HookID: 2}} {
 				if err := e.st.UpsertProject(ctx, p); err != nil {
@@ -919,7 +1043,8 @@ func TestReadAPIHidesInvisibleRepos(t *testing.T) {
 			}
 			for _, target := range []string{
 				"/api/reviews/main/acme/payments/9", "/api/reviews/main/acme/payments/5",
-				"/api/runs/" + hidden, "/api/runs/" + hidden + "/log",
+				"/api/runs/" + hidden, "/api/runs/" + hidden + "/log", "/api/runs/" + movedHidden,
+				"/api/reviews/main/acme/payments/20",
 				"/api/repositories/main/acme/payments", "/api/repositories/main/acme/payments/inputs",
 				// Another instance's repository with the same path.
 				"/api/reviews/gh/acme/widgets/7", "/api/repositories/gh/acme/widgets",
@@ -931,6 +1056,18 @@ func TestReadAPIHidesInvisibleRepos(t *testing.T) {
 			}
 			if n := e.src["main"].callCount(); n != 0 {
 				t.Errorf("%d repository reads for hidden repositories", n)
+			}
+			// The moved MR's visible run is shown, its hidden one isn't.
+			v := getJSON[ReviewDetailView](e, c, "/api/reviews/main/acme/widgets/20")
+			if len(v.Runs) != 1 || v.Runs[0].ID != moved {
+				t.Errorf("moved MR runs = %+v; want only %s", v.Runs, moved)
+			}
+			body := e.get(c, "/api/reviews/main/acme/widgets/20").Body.String()
+			if strings.Contains(body, movedHidden) || strings.Contains(strings.ToLower(body), "payments") {
+				t.Errorf("moved MR shows its hidden run: %s", body)
+			}
+			if d := getJSON[RunDetailView](e, c, "/api/runs/"+moved); d.Run.ID != moved {
+				t.Errorf("moved MR's visible run = %+v", d.Run)
 			}
 		})
 	}

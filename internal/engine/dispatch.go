@@ -291,6 +291,11 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		return d.retry(ctx, fmt.Errorf("record dispatch: %w", err))
 	}
 	d.log.Info("review job started", "job", name)
+	// For the dashboard, best effort: the model and where each skill came
+	// from.
+	if err := e.Store.SetRunInputs(ctx, run.ID, e.Config.LLM.Model, in.Sources); err != nil {
+		d.log.Info("couldn't record the review's model and skills for the dashboard", "error", d.redact(err.Error()))
+	}
 
 	if err := plat.Forge.SetStatus(ctx, run.MR.ProjectID, run.HeadSHA, forge.StatusRunning, runningDescription); err != nil {
 		d.log.Warn("couldn't set the running commit status", "error", d.redact(err.Error()))

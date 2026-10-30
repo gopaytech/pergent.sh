@@ -1,6 +1,10 @@
 package dashboard
 
-import "time"
+import (
+	"time"
+
+	"github.com/gopaytech/pergent.sh/internal/store"
+)
 
 // The JSON API's contract: every body the read API returns, field names in
 // camelCase. The frontend mirrors these types. Times are RFC 3339 strings.
@@ -13,31 +17,38 @@ import "time"
 //
 // Outcomes ("outcome") are one of:
 //   - "running": queued, being reviewed, or reviewed and not posted yet;
-//   - "approved": clean, and the approve bot approves this head now;
+//   - "approved": the approve bot approved this run (also when the approval
+//     was withdrawn later, for example when the change merged);
 //   - "blocking": a skill found blocking issues;
-//   - "draft": clean, not approved while the change is a draft;
+//   - "draft": clean, not approved because the change was a draft;
 //   - "no_blocking": clean but not approved, for the reason given (approval
-//     turned off, files skipped, a newer review replaced it, the approve
-//     side can't reach the repository);
+//     turned off, files skipped, the approve side can't reach the
+//     repository, the change closed or moved before the approval);
 //   - "failed": no usable review (the Job failed, a skill failed, the
 //     result was unusable, or it couldn't be posted);
-//   - "superseded": replaced by a newer push, or the change was closed.
+//   - "superseded": replaced by a newer push, or the change was closed;
+//   - "unknown": published before pergent.sh recorded outcomes.
+//
+// A published run's outcome, reason and status are what the publisher
+// recorded when it posted the review; later changes to settings or to the
+// approval don't change them.
 
 // Outcome values.
 const (
-	OutcomeRunning    = "running"
-	OutcomeApproved   = "approved"
-	OutcomeBlocking   = "blocking"
-	OutcomeDraft      = "draft"
-	OutcomeNoBlocking = "no_blocking"
-	OutcomeFailed     = "failed"
-	OutcomeSuperseded = "superseded"
+	OutcomeRunning    = store.OutcomeRunning
+	OutcomeApproved   = store.OutcomeApproved
+	OutcomeBlocking   = store.OutcomeBlocking
+	OutcomeDraft      = store.OutcomeDraft
+	OutcomeNoBlocking = store.OutcomeNoBlocking
+	OutcomeFailed     = store.OutcomeFailed
+	OutcomeSuperseded = store.OutcomeSuperseded
+	OutcomeUnknown    = store.OutcomeUnknown
 )
 
 // OverviewView is GET /api/overview?days=7 (days 1 to 90, default 7):
 // numbers over the runs started in the last days, the 10 most recently
-// updated reviews and the setup problems of the repositories the user can
-// see (instance-wide ones only for admins).
+// updated reviews of the last 90 days and the setup problems of the
+// repositories the user can see (instance-wide ones only for admins).
 type OverviewView struct {
 	Stats     StatsView       `json:"stats"`
 	Recent    []ReviewSummary `json:"recent"`
@@ -45,7 +56,7 @@ type OverviewView struct {
 }
 
 // StatsView counts the runs started in the period that weren't superseded,
-// by outcome.
+// by outcome; approved counts the runs the approve bot approved.
 type StatsView struct {
 	Reviews  int `json:"reviews"`
 	Approved int `json:"approved"`
@@ -73,8 +84,9 @@ type ReviewSummary struct {
 
 // ReviewListView is GET /api/reviews?project=&outcome=&days=&cursor=: 50
 // reviews at most, the most recently updated first. project (a path) and
-// outcome filter; days (1 to 365) leaves out reviews last updated longer
-// ago. nextCursor, when not "", is passed as cursor for the next page.
+// outcome filter; days (1 to 365, default 90) leaves out reviews last
+// updated longer ago. nextCursor, when not "", is passed as cursor for the
+// next page.
 type ReviewListView struct {
 	Items      []ReviewSummary `json:"items"`
 	NextCursor string          `json:"nextCursor"`
@@ -125,15 +137,17 @@ type RunDetailView struct {
 	Instance string     `json:"instance"`
 	Project  string     `json:"project"`
 	Number   int64      `json:"number"`
-	// Status is the status pergent.sh sets on the commit: "running",
+	// Status is the status pergent.sh set on the commit: "running",
 	// "success", "failed", "neutral", "canceled", or "" when none.
-	Status   string `json:"status"`
-	Approved bool   `json:"approved"`
+	Status string `json:"status"`
+	// Approved: the approve bot approved this run.
+	Approved bool `json:"approved"`
 	// ApprovalReason is why it isn't approved; "" when it is.
 	ApprovalReason string `json:"approvalReason"`
 	PergentVersion string `json:"pergentVersion"`
-	// Model is the model pergent.sh is configured with.
-	Model  string      `json:"model"`
+	// Model is the model the review ran with, as recorded when it started;
+	// null for a run that didn't record it.
+	Model  *string     `json:"model"`
 	Tokens TokensView  `json:"tokens"`
 	Files  FilesView   `json:"files"`
 	Skills []SkillView `json:"skills"`
@@ -170,9 +184,9 @@ type SkillView struct {
 	// Verdict is "no_blocking_issues", "has_blocking_issues" or "failed".
 	Verdict string `json:"verdict"`
 	// Source is "library" for a skill of pergent.sh's library, "repo"
-	// for one the repository has (one that replaces a library skill of
-	// the same name shows as "library").
-	Source   string        `json:"source"`
+	// for the repository's own (also one replacing a library skill), as
+	// recorded when the review started; null when it wasn't recorded.
+	Source   *string       `json:"source"`
 	Findings []FindingView `json:"findings"`
 	Checks   []CheckView   `json:"checks"`
 }
@@ -245,8 +259,8 @@ type SettingView struct {
 
 // InputsView is GET /api/repositories/{instance}/{project...}/inputs: the
 // skills and instructions a review would get, read from the default branch
-// with the review bot or App and kept 5 minutes. 502 when they can't be
-// read.
+// with the review bot or App and kept 5 minutes. 503 while pergent.sh
+// hasn't set the repository up yet, 502 when they can't be read.
 type InputsView struct {
 	Branch       string       `json:"branch"`
 	Skills       []InputSkill `json:"skills"`

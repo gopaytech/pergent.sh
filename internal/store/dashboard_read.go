@@ -8,8 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// RunDigest is a run as the dashboard lists it: everything it shows of a
-// run in a list, with a summary of the result instead of the result.
+// RunDigest is a run as the dashboard lists it.
 type RunDigest struct {
 	ID                                          string
 	MR                                          MRKey
@@ -17,26 +16,21 @@ type RunDigest struct {
 	State                                       RunState
 	FailureReason                               string
 	// Title and WebURL fall back to the newest ones another run of the
-	// merge request has, for a run whose dispatcher never read them.
+	// merge request under the same project path has, for a run whose
+	// dispatcher never read them (never from another path, which may be
+	// one the reader can't see).
 	Title, WebURL, SourceBranch, Author string
 	// DispatchedAt and ReportedAt are zero until the run gets there.
 	CreatedAt, DispatchedAt, ReportedAt time.Time
 	// UpdatedAt is the latest of CreatedAt, DispatchedAt and ReportedAt.
 	UpdatedAt time.Time
-	// Summary is the stored result without its findings, checks,
-	// summaries, failures, notes and comment text (the comment's markdown
-	// is "-" when it had any): what deciding the run's outcome needs. Nil
-	// for a run without a result.
-	Summary []byte
-	// Approved is true when the approve bot's recorded approval of the
-	// merge request is of this run's head and target branch.
-	Approved bool
-	// Newest is true for the merge request's newest run that isn't
-	// superseded.
-	Newest bool
-	// ApproveAvailable is the stored project's (true when the project
-	// isn't stored, as on GitLab).
-	ApproveAvailable bool
+	// Outcome is the recorded decision's while the run is published, and
+	// follows from the state otherwise (see outcomeSQL).
+	Outcome string
+	// OutcomeReason, DecisionStatus and Approved are the recorded
+	// decision's ("", "", false before one).
+	OutcomeReason, DecisionStatus string
+	Approved                      bool
 }
 
 // ReviewCursor is where a page of ReviewDigests starts: after the review
@@ -56,49 +50,65 @@ type ReviewFilter struct {
 	Since time.Time
 	// After, when not nil, starts the page after that review.
 	After *ReviewCursor
-	Limit int
+	// Outcome, when not "", keeps only reviews with that outcome.
+	Outcome string
+	Limit   int
 }
 
-// summarySQL is the result of run r without what deciding its outcome
-// doesn't need. A result that isn't an object, or whose skills aren't an
-// array, is kept as it is or left without skills: it can't be parsed into a
-// review either way.
-const summarySQL = `CASE
-	WHEN r.result IS NULL THEN NULL
-	WHEN jsonb_typeof(r.result) <> 'object' THEN r.result
-	ELSE (r.result - 'comment' - 'skills')
-		|| jsonb_build_object('comment', jsonb_build_object('markdown',
-			CASE WHEN COALESCE(r.result->'comment'->>'markdown', '') = '' THEN '' ELSE '-' END))
-		|| CASE WHEN jsonb_typeof(r.result->'skills') = 'array' THEN jsonb_build_object('skills',
-			(SELECT COALESCE(jsonb_agg(CASE WHEN jsonb_typeof(s) = 'object'
-					THEN s - 'findings' - 'checks' - 'summaries' - 'failures' - 'notes' ELSE s END), '[]'::jsonb)
-			 FROM jsonb_array_elements(r.result->'skills') s))
-		ELSE '{}'::jsonb END
-END`
+const zeroUUID = "00000000-0000-0000-0000-000000000000"
 
-// digestColumns are a RunDigest's columns, of runs r joined by digestJoins.
+// outcomeSQL is run r's outcome: the recorded decision's once it is
+// published, otherwise what its state says. A published run without a
+// recorded decision (published before decisions were recorded) is
+// "unknown": nothing is guessed.
+const outcomeSQL = `(CASE r.state
+	WHEN 'queued' THEN 'running'
+	WHEN 'running' THEN 'running'
+	WHEN 'reported' THEN CASE WHEN r.failure_reason <> '' THEN 'failed' ELSE 'running' END
+	WHEN 'superseded' THEN 'superseded'
+	WHEN 'publish_failed' THEN 'failed'
+	ELSE COALESCE(NULLIF(r.outcome, ''), 'unknown') END)`
+
+// digestColumns are a RunDigest's columns, of runs r.
 const digestColumns = `r.id::text, r.instance, r.project_id, r.mr_iid, r.project_path, r.head_sha, r.base_sha,
 	r.target_branch, r.state, r.failure_reason,
 	COALESCE(NULLIF(r.title, ''), (SELECT t.title FROM runs t
 		WHERE t.instance = r.instance AND t.project_id = r.project_id AND t.mr_iid = r.mr_iid AND t.title <> ''
+		  AND lower(t.project_path) = lower(r.project_path)
 		ORDER BY t.created_at DESC, t.id DESC LIMIT 1), ''),
 	COALESCE(NULLIF(r.web_url, ''), (SELECT t.web_url FROM runs t
 		WHERE t.instance = r.instance AND t.project_id = r.project_id AND t.mr_iid = r.mr_iid AND t.web_url <> ''
+		  AND lower(t.project_path) = lower(r.project_path)
 		ORDER BY t.created_at DESC, t.id DESC LIMIT 1), ''),
-	r.source_branch, r.author, r.created_at, r.dispatched_at, r.reported_at,
-	GREATEST(r.created_at, r.dispatched_at, r.reported_at),
-	` + summarySQL + `,
-	COALESCE(m.approved_sha <> '' AND m.approved_sha = r.head_sha
-		AND (m.approved_target = '' OR m.approved_target = r.target_branch), false),
-	COALESCE(r.id = (SELECT n.id FROM runs n
-		WHERE n.instance = r.instance AND n.project_id = r.project_id AND n.mr_iid = r.mr_iid
-		  AND n.state <> 'superseded'
-		ORDER BY n.created_at DESC, n.id DESC LIMIT 1), false),
-	COALESCE(p.approve_available, true)`
+	r.source_branch, r.author, r.created_at, r.dispatched_at, r.reported_at, r.updated_at,
+	` + outcomeSQL + `, r.outcome_reason, r.decision_status, r.approved`
 
-const digestJoins = `LEFT JOIN merge_requests m
-		ON m.instance = r.instance AND m.project_id = r.project_id AND m.mr_iid = r.mr_iid
-	LEFT JOIN projects p ON p.instance = r.instance AND p.project_id = r.project_id`
+// reviewDigestsSQL lists the newest run of each merge request, read through
+// runs_project_updated_idx: only the runs of the asked-for projects updated
+// in the window ($3, before the cursor $4/$5) are looked at, each kept when
+// no newer run of its merge request exists (runs_mr_idx). $6 is the
+// outcome filter (” for any), $7 the limit.
+const reviewDigestsSQL = `SELECT ` + digestColumns + ` FROM runs r
+	WHERE r.instance = $1 AND lower(r.project_path) = ANY($2::text[])
+	  AND r.updated_at >= $3::timestamptz
+	  AND ($4::timestamptz IS NULL OR (r.updated_at, r.id) < ($4::timestamptz, $5::uuid))
+	  AND NOT EXISTS (SELECT 1 FROM runs n
+		WHERE n.instance = r.instance AND n.project_id = r.project_id AND n.mr_iid = r.mr_iid
+		  AND (n.created_at, n.id) > (r.created_at, r.id))
+	  AND ($6 = '' OR ` + outcomeSQL + ` = $6)
+	ORDER BY r.updated_at DESC, r.id DESC
+	LIMIT $7`
+
+// runStatsSQL counts the runs started since $3 that aren't superseded, per
+// project, by outcome, through runs_project_created_idx.
+const runStatsSQL = `SELECT lower(r.project_path), count(*),
+		count(*) FILTER (WHERE r.state = 'published' AND r.approved),
+		count(*) FILTER (WHERE ` + outcomeSQL + ` = 'blocking'),
+		count(*) FILTER (WHERE ` + outcomeSQL + ` = 'failed')
+	FROM runs r
+	WHERE r.instance = $1 AND lower(r.project_path) = ANY($2::text[]) AND r.created_at >= $3
+	  AND r.state <> 'superseded'
+	GROUP BY lower(r.project_path)`
 
 func (s *Store) queryDigests(ctx context.Context, sql string, args ...any) ([]RunDigest, error) {
 	rows, err := s.pool.Query(ctx, sql, args...)
@@ -115,8 +125,8 @@ func (s *Store) queryDigests(ctx context.Context, sql string, args ...any) ([]Ru
 		)
 		if err := rows.Scan(&d.ID, &d.MR.Instance, &d.MR.ProjectID, &d.MR.IID, &d.ProjectPath, &d.HeadSHA, &d.BaseSHA,
 			&d.TargetBranch, &state, &d.FailureReason, &d.Title, &d.WebURL, &d.SourceBranch, &d.Author,
-			&d.CreatedAt, &dispatched, &rep, &d.UpdatedAt, &d.Summary, &d.Approved, &d.Newest,
-			&d.ApproveAvailable); err != nil {
+			&d.CreatedAt, &dispatched, &rep, &d.UpdatedAt, &d.Outcome, &d.OutcomeReason, &d.DecisionStatus,
+			&d.Approved); err != nil {
 			return nil, err
 		}
 		d.State = RunState(state)
@@ -128,50 +138,64 @@ func (s *Store) queryDigests(ctx context.Context, sql string, args ...any) ([]Ru
 
 // ReviewDigests returns the newest run of each merge request of f's
 // projects on f.Instance, the most recently updated first (ties by run ID,
-// descending), at most f.Limit of them.
+// descending), at most f.Limit of them. A merge request whose newest run
+// is of a project not in f.Projects is left out.
 func (s *Store) ReviewDigests(ctx context.Context, f ReviewFilter) ([]RunDigest, error) {
 	if len(f.Projects) == 0 || f.Limit <= 0 {
 		return nil, nil
 	}
-	var since, afterAt *time.Time
-	afterID := "00000000-0000-0000-0000-000000000000"
-	if !f.Since.IsZero() {
-		since = &f.Since
-	}
+	var afterAt *time.Time
+	afterID := zeroUUID
 	if f.After != nil {
 		if !validUUID(f.After.ID) {
 			return nil, errors.New("store: malformed review cursor")
 		}
 		afterAt, afterID = &f.After.At, f.After.ID
 	}
-	return s.queryDigests(ctx, `WITH latest AS (
-			SELECT DISTINCT ON (r.project_id, r.mr_iid) r.id FROM runs r
-			WHERE r.instance = $1 AND lower(r.project_path) = ANY($2::text[])
-			ORDER BY r.project_id, r.mr_iid, r.created_at DESC, r.id DESC)
-		SELECT `+digestColumns+` FROM runs r JOIN latest USING (id) `+digestJoins+`
-		WHERE ($3::timestamptz IS NULL OR GREATEST(r.created_at, r.dispatched_at, r.reported_at) >= $3)
-		  AND ($4::timestamptz IS NULL OR (GREATEST(r.created_at, r.dispatched_at, r.reported_at), r.id) < ($4, $5::uuid))
-		ORDER BY GREATEST(r.created_at, r.dispatched_at, r.reported_at) DESC, r.id DESC
-		LIMIT $6`, f.Instance, f.Projects, since, afterAt, afterID, f.Limit)
+	return s.queryDigests(ctx, reviewDigestsSQL, f.Instance, f.Projects, f.Since, afterAt, afterID, f.Outcome, f.Limit)
 }
 
-// RunDigestsSince returns the runs of projects (lower-cased paths) on
-// instance created at or after since that aren't superseded, newest first.
-func (s *Store) RunDigestsSince(ctx context.Context, instance string, projects []string, since time.Time) ([]RunDigest, error) {
+// RunCounts counts a project's runs by outcome.
+type RunCounts struct {
+	Reviews, Approved, Blocking, Failed int
+}
+
+// RunStats counts the runs of projects (lower-cased paths) on instance
+// started at or after since that aren't superseded, by lower-cased
+// project. Approved counts the runs the approve bot approved, also when the
+// approval was withdrawn later.
+func (s *Store) RunStats(ctx context.Context, instance string, projects []string, since time.Time) (map[string]RunCounts, error) {
+	out := map[string]RunCounts{}
+	if len(projects) == 0 {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx, runStatsSQL, instance, projects, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			project string
+			c       RunCounts
+		)
+		if err := rows.Scan(&project, &c.Reviews, &c.Approved, &c.Blocking, &c.Failed); err != nil {
+			return nil, err
+		}
+		out[project] = c
+	}
+	return out, rows.Err()
+}
+
+// MRRunDigests returns the runs of a merge request whose project is one of
+// projects (lower-cased paths), oldest first.
+func (s *Store) MRRunDigests(ctx context.Context, mr MRKey, projects []string) ([]RunDigest, error) {
 	if len(projects) == 0 {
 		return nil, nil
 	}
-	return s.queryDigests(ctx, `SELECT `+digestColumns+` FROM runs r `+digestJoins+`
-		WHERE r.instance = $1 AND lower(r.project_path) = ANY($2::text[]) AND r.created_at >= $3
-		  AND r.state <> 'superseded'
-		ORDER BY r.created_at DESC, r.id DESC`, instance, projects, since)
-}
-
-// MRRunDigests returns every run of a merge request, oldest first.
-func (s *Store) MRRunDigests(ctx context.Context, mr MRKey) ([]RunDigest, error) {
-	return s.queryDigests(ctx, `SELECT `+digestColumns+` FROM runs r `+digestJoins+`
-		WHERE r.instance = $1 AND r.project_id = $2 AND r.mr_iid = $3
-		ORDER BY r.created_at, r.id`, mr.Instance, mr.ProjectID, mr.IID)
+	return s.queryDigests(ctx, `SELECT `+digestColumns+` FROM runs r
+		WHERE r.instance = $1 AND r.project_id = $2 AND r.mr_iid = $3 AND lower(r.project_path) = ANY($4::text[])
+		ORDER BY r.created_at, r.id`, mr.Instance, mr.ProjectID, mr.IID, projects)
 }
 
 // FindMR returns the merge request number of project (matched ignoring

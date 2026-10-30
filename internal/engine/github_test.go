@@ -682,7 +682,7 @@ func TestPublishGitHubApproveUnavailable(t *testing.T) {
 func ghApproved(t *testing.T, env *testEnv, n int64, head string) {
 	t.Helper()
 	id := ghReport(t, env, n, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
-	if err := env.Store.MarkPublished(env.ctx, id); err != nil {
+	if err := env.Store.MarkPublished(env.ctx, id, store.RunDecision{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := env.Store.SetApprovedSHA(env.ctx, ghKey(n), head, "main"); err != nil {

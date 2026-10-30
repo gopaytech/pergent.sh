@@ -118,16 +118,67 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 	if err := plat.Forge.SetStatus(ctx, run.MR.ProjectID, run.HeadSHA, StatusState(d.Status), d.Description); err != nil {
 		return fmt.Errorf("set commit status: %w", err)
 	}
+	approved, held := false, approvalMade
 	if d.Approve {
-		if err := e.approve(ctx, plat, run, log); err != nil {
+		var err error
+		if approved, held, err = e.approve(ctx, plat, run, log); err != nil {
 			return err
 		}
 	}
-	if err := e.Store.MarkPublished(ctx, run.ID); err != nil {
+	if err := e.Store.MarkPublished(ctx, run.ID, decisionOf(o, d, approved, held)); err != nil {
 		return fmt.Errorf("mark published: %w", err)
 	}
-	log.Info("review published", "status", d.Status, "approved", d.Approve)
+	log.Info("review published", "status", d.Status, "approved", approved)
 	return nil
+}
+
+// heldBack is why approve didn't approve a review it was asked to.
+type heldBack int
+
+const (
+	approvalMade heldBack = iota
+	// heldDraft: the change became a draft again.
+	heldDraft
+	// heldMoved: the change was closed or merged, or its head or target
+	// branch moved.
+	heldMoved
+)
+
+const (
+	reasonHeldDraft = "No blocking issues; not approved: draft"
+	reasonHeldMoved = "No blocking issues; not approved: the change was closed, or its head or target branch moved, before it could be approved"
+)
+
+// decisionOf is what is recorded on a run for the dashboard: the outcome,
+// why, the status set and whether the approve bot approved it.
+func decisionOf(o policy.Outcome, d policy.Decision, approved bool, held heldBack) store.RunDecision {
+	rd := store.RunDecision{Status: string(d.Status), Approved: approved, Reason: d.Description}
+	switch d.Kind {
+	case policy.KindBlocking:
+		rd.Outcome = store.OutcomeBlocking
+	case policy.KindNotApproved:
+		rd.Outcome = store.OutcomeNoBlocking
+	case policy.KindDraft:
+		rd.Outcome = store.OutcomeDraft
+	case policy.KindApprove:
+		switch {
+		case approved:
+			rd.Outcome, rd.Reason = store.OutcomeApproved, ""
+		case held == heldDraft:
+			rd.Outcome, rd.Reason = store.OutcomeDraft, reasonHeldDraft
+		default:
+			rd.Outcome, rd.Reason = store.OutcomeNoBlocking, reasonHeldMoved
+		}
+	default: // policy.KindFailed and anything unknown
+		rd.Outcome = store.OutcomeFailed
+		switch {
+		case o.FailureReason != "":
+			rd.Reason = o.FailureReason
+		case o.Result != nil && o.Result.Status != "completed" && o.Result.Error != nil && o.Result.Error.Message != "":
+			rd.Reason = o.Result.Error.Message
+		}
+	}
+	return rd
 }
 
 // approveInputs adds to o what decides whether a clean review is approved:
@@ -230,40 +281,45 @@ func (e *Engine) upsertComment(ctx context.Context, f forge.Forge, run store.Run
 // pergent.sh stops right after it. GitLab refuses a second approval by the
 // same user, so a refused approval counts as made when the approve bot
 // already approves (a retry after an approval that landed).
-func (e *Engine) approve(ctx context.Context, plat Platform, run store.Run, log *slog.Logger) error {
+//
+// It reports whether the approval was made and, when not, why.
+func (e *Engine) approve(ctx context.Context, plat Platform, run store.Run, log *slog.Logger) (bool, heldBack, error) {
 	if plat.Approver == nil {
-		return fmt.Errorf("no approve bot for instance %q", run.MR.Instance)
+		return false, approvalMade, fmt.Errorf("no approve bot for instance %q", run.MR.Instance)
 	}
 	mr, err := plat.Forge.GetChange(ctx, run.MR.ProjectID, run.MR.IID)
 	if err != nil {
-		return fmt.Errorf("get merge request: %w", err)
+		return false, approvalMade, fmt.Errorf("get merge request: %w", err)
 	}
 	if mr.State != forge.StateOpen || mr.HeadSHA != run.HeadSHA || mr.TargetBranch != run.TargetBranch || mr.Draft {
 		log.Info("not approving: the merge request is closed or a draft again, or its head or target branch moved",
 			"state", mr.State, "draft", mr.Draft, "mr_head", mr.HeadSHA, "mr_target", mr.TargetBranch, "run_target", run.TargetBranch)
-		return nil
+		if mr.State == forge.StateOpen && mr.HeadSHA == run.HeadSHA && mr.TargetBranch == run.TargetBranch {
+			return false, heldDraft, nil
+		}
+		return false, heldMoved, nil
 	}
 
 	sctx, cancel := settleCtx(ctx)
 	err = e.Store.SetApprovedSHA(sctx, run.MR, run.HeadSHA, run.TargetBranch)
 	cancel()
 	if err != nil {
-		return fmt.Errorf("record approval: %w", err)
+		return false, approvalMade, fmt.Errorf("record approval: %w", err)
 	}
 
 	err = plat.Approver.Approve(ctx, run.MR.ProjectID, run.MR.IID, run.HeadSHA)
 	if errors.Is(err, forge.ErrHeadMoved) {
 		log.Info("not approving: the merge request head moved")
-		return nil
+		return false, heldMoved, nil
 	}
 	if err != nil {
 		if approved, lerr := plat.Approver.HasApproved(ctx, run.MR.ProjectID, run.MR.IID, run.HeadSHA); lerr == nil && approved {
 			log.Info("the approve bot already approves the merge request", "refused_with", e.redact(err.Error()))
-			return nil
+			return true, approvalMade, nil
 		}
-		return fmt.Errorf("approve: %w", err)
+		return false, approvalMade, fmt.Errorf("approve: %w", err)
 	}
-	return nil
+	return true, approvalMade, nil
 }
 
 // retryPublish records a failed publish; the run is tried again after the

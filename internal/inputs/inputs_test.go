@@ -3,6 +3,7 @@ package inputs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -396,5 +397,30 @@ func TestFitTooLarge(t *testing.T) {
 	err := in.Fit(100)
 	if !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// Sources says where each resolved skill came from: a repository skill
+// replacing a library one of the same name is the repository's.
+func TestResolveSources(t *testing.T) {
+	src := &fakeSource{files: map[string]string{
+		".pergent/skills/code-review.md": "# repo review",
+		".pergent/skills/security.md":    "# repo security",
+		".pergent/skills/extra.md":       "# extra",
+	}}
+	in, err := Resolve(context.Background(), src, lib(), config.Repository{Skills: []string{"code-review"}}, 7, "sha1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"code-review": SourceRepo, "security": SourceRepo, "extra": SourceRepo}
+	if fmt.Sprint(in.Sources) != fmt.Sprint(want) {
+		t.Errorf("sources = %v, want %v", in.Sources, want)
+	}
+	in, err = Resolve(context.Background(), &fakeSource{files: map[string]string{}}, lib(), config.Repository{}, 7, "sha1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(in.Sources) != fmt.Sprint(map[string]string{"code-review": SourceLibrary, "security": SourceLibrary}) {
+		t.Errorf("library sources = %v", in.Sources)
 	}
 }

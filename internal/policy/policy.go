@@ -99,12 +99,32 @@ type Outcome struct {
 	ApprovalOff        bool
 }
 
+// Kind is what a decision is, in short.
+type Kind string
+
+const (
+	// KindFailed is no usable review: no result, an error result, an
+	// unknown status or a skill that failed.
+	KindFailed Kind = "failed"
+	// KindBlocking is a review with blocking findings.
+	KindBlocking Kind = "blocking"
+	// KindNotApproved is a clean review that isn't approved: files were
+	// skipped, approval is turned off or the approve side can't reach the
+	// repository.
+	KindNotApproved Kind = "not_approved"
+	// KindDraft is a clean review of a draft, approved once it is ready.
+	KindDraft Kind = "draft"
+	// KindApprove is a clean review to approve.
+	KindApprove Kind = "approve"
+)
+
 // Decision is what to do with an outcome.
 type Decision struct {
 	Comment     string
 	Status      Status
 	Description string
 	Approve     bool
+	Kind        Kind
 }
 
 // Decide applies the approval policy. failure is the repository's
@@ -148,11 +168,11 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 	failed := failureStatus(failure)
 
 	if o.FailureReason != "" {
-		return Decision{Comment: withMarker(ErrorComment(o.FailureReason)), Status: failed, Description: descCouldNotReview}
+		return Decision{Comment: withMarker(ErrorComment(o.FailureReason)), Status: failed, Description: descCouldNotReview, Kind: KindFailed}
 	}
 	r := o.Result
 	if r == nil {
-		return Decision{Comment: ErrorComment("no result was received"), Status: failed, Description: descCouldNotReview}
+		return Decision{Comment: ErrorComment("no result was received"), Status: failed, Description: descCouldNotReview, Kind: KindFailed}
 	}
 	switch r.Status {
 	case "error":
@@ -164,13 +184,13 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 			}
 			comment = ErrorComment(reason)
 		}
-		return Decision{Comment: withMarker(comment), Status: failed, Description: descCouldNotReview}
+		return Decision{Comment: withMarker(comment), Status: failed, Description: descCouldNotReview, Kind: KindFailed}
 	case "completed":
 	default:
-		return Decision{Comment: ErrorComment(fmt.Sprintf("the result has an unknown status %q", r.Status)), Status: failed, Description: descCouldNotReview}
+		return Decision{Comment: ErrorComment(fmt.Sprintf("the result has an unknown status %q", r.Status)), Status: failed, Description: descCouldNotReview, Kind: KindFailed}
 	}
 	if len(r.Skills) == 0 {
-		return Decision{Comment: ErrorComment("the result has no skills"), Status: failed, Description: descCouldNotReview}
+		return Decision{Comment: ErrorComment("the result has no skills"), Status: failed, Description: descCouldNotReview, Kind: KindFailed}
 	}
 
 	comment := withMarker(r.Comment.Markdown)
@@ -193,37 +213,42 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 
 	switch {
 	case blocking > 0:
-		return Decision{Comment: comment, Status: StatusFailed, Description: descBlocking}
+		return Decision{Comment: comment, Status: StatusFailed, Description: descBlocking, Kind: KindBlocking}
 	case failedSkills > 0:
 		return Decision{
 			Comment:     comment,
 			Status:      failed,
 			Description: fmt.Sprintf("Review failed for %d of %d skills", failedSkills, len(r.Skills)),
+			Kind:        KindFailed,
 		}
 	case reviewed == 0:
 		return Decision{
 			Comment:     withNote(comment, r.Comment.FindingsBlock, skippedNote(noteNothingReviewed, r.Skills, false)),
 			Status:      StatusSuccess,
 			Description: descNothingToReview,
+			Kind:        KindNotApproved,
 		}
 	case blockingSkip(r.Skills):
 		return Decision{
 			Comment:     withNote(comment, r.Comment.FindingsBlock, skippedNote(notePartlySkipped, r.Skills, true)),
 			Status:      StatusSuccess,
 			Description: descPartlySkipped,
+			Kind:        KindNotApproved,
 		}
 	}
 	switch {
 	case o.ApprovalOff:
 		return notApproved(comment, r.Comment.FindingsBlock, reasonApprovalOff, noteApprovalOff)
 	case o.Draft:
-		return notApproved(comment, r.Comment.FindingsBlock, reasonDraft, noteDraft)
+		d := notApproved(comment, r.Comment.FindingsBlock, reasonDraft, noteDraft)
+		d.Kind = KindDraft
+		return d
 	case o.ApproveUnavailable && o.ApproveBot:
 		return notApproved(comment, r.Comment.FindingsBlock, reasonApproveBotNoReach, noteApproveBotNoReach)
 	case o.ApproveUnavailable:
 		return notApproved(comment, r.Comment.FindingsBlock, reasonApproveUnavailable, noteApproveUnavailable)
 	}
-	return Decision{Comment: comment, Status: StatusSuccess, Description: descClean, Approve: true}
+	return Decision{Comment: comment, Status: StatusSuccess, Description: descClean, Approve: true, Kind: KindApprove}
 }
 
 // notApproved is a clean review that isn't approved for reason: success, the
@@ -233,6 +258,7 @@ func notApproved(comment, block, reason, note string) Decision {
 		Comment:     withNote(comment, block, note),
 		Status:      StatusSuccess,
 		Description: descNotApproved + reason,
+		Kind:        KindNotApproved,
 	}
 }
 

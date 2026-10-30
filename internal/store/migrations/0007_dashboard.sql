@@ -64,10 +64,30 @@ CREATE TABLE user_access (
     PRIMARY KEY (session_hash, instance, project)
 );
 
--- The merge request's title, web address, source branch and author, as the
--- dispatcher last read them.
+-- What the dashboard shows of a run:
+--   - the merge request's title, web address, source branch and author, as
+--     the dispatcher last read them;
+--   - the model and where each skill came from ({name: "library"|"repo"}),
+--     recorded at dispatch (NULL before);
+--   - the publisher's decision: the outcome ('' until published), its
+--     reason, the commit status set and whether the approve bot approved
+--     this run (kept when the approval is withdrawn later);
+--   - updated_at, the latest of its times, which the review lists sort on.
 ALTER TABLE runs
-    ADD COLUMN title         text NOT NULL DEFAULT '',
-    ADD COLUMN web_url       text NOT NULL DEFAULT '',
-    ADD COLUMN source_branch text NOT NULL DEFAULT '',
-    ADD COLUMN author        text NOT NULL DEFAULT '';
+    ADD COLUMN title           text NOT NULL DEFAULT '',
+    ADD COLUMN web_url         text NOT NULL DEFAULT '',
+    ADD COLUMN source_branch   text NOT NULL DEFAULT '',
+    ADD COLUMN author          text NOT NULL DEFAULT '',
+    ADD COLUMN model           text,
+    ADD COLUMN skill_sources   jsonb,
+    ADD COLUMN outcome         text NOT NULL DEFAULT '',
+    ADD COLUMN outcome_reason  text NOT NULL DEFAULT '',
+    ADD COLUMN decision_status text NOT NULL DEFAULT '',
+    ADD COLUMN approved        boolean NOT NULL DEFAULT false,
+    ADD COLUMN updated_at      timestamptz
+        GENERATED ALWAYS AS (GREATEST(created_at, dispatched_at, reported_at)) STORED;
+
+-- The dashboard reads one repository's runs by time: started since (the
+-- numbers) and last updated (the review lists).
+CREATE INDEX runs_project_created_idx ON runs (instance, lower(project_path), created_at);
+CREATE INDEX runs_project_updated_idx ON runs (instance, lower(project_path), updated_at);

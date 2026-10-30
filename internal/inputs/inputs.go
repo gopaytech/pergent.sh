@@ -96,12 +96,21 @@ func LoadLibrary(dir string) (Library, error) {
 	return lib, nil
 }
 
+// Where a resolved skill comes from (Inputs.Sources).
+const (
+	SourceLibrary = "library"
+	SourceRepo    = "repo"
+)
+
 // Inputs is everything a review gets besides the diff.
 type Inputs struct {
 	Skills       map[string][]byte // name → content
 	Instructions []byte            // nil when none
 	Previous     []byte            // nil when none
 	Overridden   []string          // library skills replaced by repo skills, sorted
+	// Sources maps each skill's name to SourceLibrary or SourceRepo (the
+	// repository's own, also when it replaces a library skill).
+	Sources map[string]string
 }
 
 // Resolve gathers the inputs for one review. Library skills are picked by
@@ -110,7 +119,7 @@ type Inputs struct {
 // rules. A repository skill replaces a library skill of the same name.
 // previous is stored as given.
 func Resolve(ctx context.Context, src Source, lib Library, repo config.Repository, projectID int64, ref string, previous []byte) (*Inputs, error) {
-	in := &Inputs{Skills: map[string][]byte{}, Previous: previous}
+	in := &Inputs{Skills: map[string][]byte{}, Previous: previous, Sources: map[string]string{}}
 
 	if len(repo.Skills) == 0 {
 		for name, content := range lib {
@@ -125,6 +134,9 @@ func Resolve(ctx context.Context, src Source, lib Library, repo config.Repositor
 			in.Skills[name] = content
 		}
 	}
+	for name := range in.Skills {
+		in.Sources[name] = SourceLibrary
+	}
 
 	repoSkills, err := loadRepoSkills(ctx, src, projectID, ref)
 	if err != nil {
@@ -137,6 +149,7 @@ func Resolve(ctx context.Context, src Source, lib Library, repo config.Repositor
 			}
 		}
 		in.Skills[name] = content
+		in.Sources[name] = SourceRepo
 	}
 	sort.Strings(in.Overridden)
 
