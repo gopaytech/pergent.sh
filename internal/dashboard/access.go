@@ -147,37 +147,89 @@ func (a *Auth) refresh(ctx context.Context, se store.Session, now time.Time) (ac
 	if fresh(cur.AccessCheckedAt, now, AccessTTL) {
 		return a.stored(ctx, cur)
 	}
-	tok, err := a.open(cur.TokenSealed)
+	tok, err := a.liveToken(ctx, cur, now)
 	if err != nil {
 		return accessResult{}, err
 	}
-	if tok.expiresBy(now.Add(tokenLeeway)) {
-		if tok.RefreshToken == "" {
-			return accessResult{}, errors.New("the sign-in token expired and can't be renewed")
-		}
-		p, ok := a.providers[cur.Instance]
-		if !ok {
-			return accessResult{}, fmt.Errorf("instance %q has no sign-in", cur.Instance)
-		}
-		renewed, err := p.refresh(ctx, tok.RefreshToken)
-		if err != nil {
-			return accessResult{}, fmt.Errorf("renewing the sign-in token: %w", err)
-		}
-		if renewed.RefreshToken == "" {
-			renewed.RefreshToken = tok.RefreshToken
-		}
-		sealed, err := a.seal(renewed)
-		if err != nil {
-			return accessResult{}, err
-		}
-		// A renewed refresh token replaces the old one at the provider:
-		// store it before anything else can fail.
-		if err := a.store.SetSessionToken(ctx, cur.IDHash, sealed); err != nil {
-			return accessResult{}, err
-		}
-		tok = renewed
-	}
 	return a.checkAccess(ctx, cur, tok)
+}
+
+// liveToken returns the session's OAuth token, renewed first when it expires
+// within tokenLeeway of now. Renewals are made one at a time, each on the
+// token stored when it starts, so a refresh token is never spent twice.
+func (a *Auth) liveToken(ctx context.Context, cur store.Session, now time.Time) (oauthToken, error) {
+	tok, err := a.open(cur.TokenSealed)
+	if err != nil {
+		return oauthToken{}, err
+	}
+	if !tok.expiresBy(now.Add(tokenLeeway)) {
+		return tok, nil
+	}
+	a.renewMu.Lock()
+	defer a.renewMu.Unlock()
+	// Another request may have renewed it meanwhile.
+	cur, found, err := a.store.Session(ctx, cur.IDHash)
+	if err != nil {
+		return oauthToken{}, err
+	}
+	if !found {
+		return oauthToken{}, errors.New("the session ended")
+	}
+	if tok, err = a.open(cur.TokenSealed); err != nil {
+		return oauthToken{}, err
+	}
+	if !tok.expiresBy(now.Add(tokenLeeway)) {
+		return tok, nil
+	}
+	if tok.RefreshToken == "" {
+		return oauthToken{}, errors.New("the sign-in token expired and can't be renewed")
+	}
+	p, ok := a.providers[cur.Instance]
+	if !ok {
+		return oauthToken{}, fmt.Errorf("instance %q has no sign-in", cur.Instance)
+	}
+	renewed, err := p.refresh(ctx, tok.RefreshToken)
+	if err != nil {
+		return oauthToken{}, fmt.Errorf("renewing the sign-in token: %w", err)
+	}
+	if renewed.RefreshToken == "" {
+		renewed.RefreshToken = tok.RefreshToken
+	}
+	sealed, err := a.seal(renewed)
+	if err != nil {
+		return oauthToken{}, err
+	}
+	// A renewed refresh token replaces the old one at the provider: store
+	// it before anything else can fail.
+	if err := a.store.SetSessionToken(ctx, cur.IDHash, sealed); err != nil {
+		return oauthToken{}, err
+	}
+	return renewed, nil
+}
+
+// userToken returns the provider of the session's instance and its user's
+// OAuth token, renewed if needed, for a call made with it. A renewal runs
+// to its own deadline even if the request goes away: a refresh token spent
+// with its successor unstored would end the session.
+func (a *Auth) userToken(ctx context.Context, se Session) (provider, string, error) {
+	p, ok := a.providers[se.Instance]
+	if !ok || p.platform() != se.Platform {
+		return nil, "", fmt.Errorf("instance %q has no %s sign-in", se.Instance, se.Platform)
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), signInTimeout)
+	defer cancel()
+	cur, found, err := a.store.Session(ctx, se.idHash)
+	if err != nil {
+		return nil, "", err
+	}
+	if !found {
+		return nil, "", errors.New("the session ended")
+	}
+	tok, err := a.liveToken(ctx, cur, a.now())
+	if err != nil {
+		return nil, "", err
+	}
+	return p, tok.AccessToken, nil
 }
 
 // checkAccess asks the platform, with the user's token, who the user is now

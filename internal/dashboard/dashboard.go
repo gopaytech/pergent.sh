@@ -8,8 +8,8 @@
 // user's OAuth token is stored sealed and never leaves the server.
 //
 // Nothing here runs on the engine loop. Calls to GitLab and GitHub are made
-// only for sign-in, access checks and the Skills & instructions view, each
-// with a 10 s timeout.
+// only for sign-in, access checks, the "add repository" picker and the
+// Skills & instructions view, each with a 10 s timeout.
 package dashboard
 
 import (
@@ -51,6 +51,24 @@ type Options struct {
 	// name: the review bot's Forge on GitLab, the review App's on GitHub.
 	// An instance without one has no Skills & instructions view (502).
 	Sources map[string]RepoSource
+	// Catalogs list, by instance name, the repositories the review bot
+	// (GitLab) or the review App (GitHub) can set up, for the "add
+	// repository" picker. An instance without one can't add any (502).
+	Catalogs map[string]RepoCatalog
+	// ReconcileSoon asks the engine for an early reconcile after a
+	// repository is switched on or off (engine.Engine.ReconcileSoon). It
+	// must not block. nil leaves it to the hourly reconcile.
+	ReconcileSoon func()
+}
+
+// RepoCatalog lists the repositories the review side of an instance can
+// set up, up to limit (truncated is true when there were more): on GitLab
+// the review bot's projects where it is Maintainer or above (it creates
+// their webhooks and deploy tokens), on GitHub the repositories of the
+// review App's installations. gitlabforge.Forge and githubforge.Forge are
+// ones.
+type RepoCatalog interface {
+	ReachableRepos(ctx context.Context, limit int) (repos []string, truncated bool, err error)
 }
 
 // RepoSource reads a repository, named by its platform ID, with the review
@@ -69,11 +87,14 @@ type Dashboard struct {
 	Store *store.Store
 	Log   *slog.Logger
 
-	cfg     *config.Config
-	library inputs.Library
-	sources map[string]RepoSource
-	now     func() time.Time
-	inputs  *inputsCache
+	cfg           *config.Config
+	library       inputs.Library
+	sources       map[string]RepoSource
+	catalogs      map[string]RepoCatalog
+	reconcileSoon func()
+	now           func() time.Time
+	inputs        *inputsCache
+	catalog       *catalogCache
 }
 
 // New builds the dashboard. The config must have dashboard.url; every
@@ -100,9 +121,14 @@ func New(o Options) (*Dashboard, error) {
 	if len(o.Config.Dashboard.Admins) == 0 {
 		o.Log.Warn("dashboard has no admins configured")
 	}
+	if o.ReconcileSoon == nil {
+		o.ReconcileSoon = func() {}
+	}
 	return &Dashboard{Auth: auth, Repos: repos, Store: o.Store, Log: o.Log,
-		cfg: o.Config, library: o.Library, sources: o.Sources, now: o.Now,
-		inputs: &inputsCache{entries: map[string]inputsEntry{}, flights: map[string]*inputsFlight{}}}, nil
+		cfg: o.Config, library: o.Library, sources: o.Sources, catalogs: o.Catalogs,
+		reconcileSoon: o.ReconcileSoon, now: o.Now,
+		inputs:  &inputsCache{entries: map[string]inputsEntry{}, flights: map[string]*inputsFlight{}},
+		catalog: &catalogCache{entries: map[string]catalogEntry{}, flights: map[string]*catalogFlight{}}}, nil
 }
 
 // Handler serves:
@@ -110,7 +136,8 @@ func New(o Options) (*Dashboard, error) {
 //   - GET /auth/{platform}/{instance}/callback: finish sign-in, redirect to /;
 //   - POST /auth/logout: end the session (X-CSRF-Token required);
 //   - GET /api/me: the signed-in user;
-//   - the read API (see view.go for each endpoint's body).
+//   - the read API and, for admins, the write API (see view.go for each
+//     endpoint's body).
 //
 // Every response is marked no-store.
 func (d *Dashboard) Handler() http.Handler {
@@ -119,6 +146,7 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("GET /auth/{platform}/{instance}/callback", d.Auth.callback)
 	mux.HandleFunc("POST /auth/logout", d.Auth.logout)
 	mux.Handle("GET /api/me", d.Auth.Require(http.HandlerFunc(d.me)))
+	d.writeRoutes(mux)
 	d.readRoutes(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()

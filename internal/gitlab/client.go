@@ -615,3 +615,35 @@ func (c *Client) DeleteDeployToken(ctx context.Context, projectID, tokenID int64
 	}
 	return err
 }
+
+// ProjectPaths returns the paths of the projects the token's user is a
+// member of with at least minAccessLevel (Reporter is 20, Maintainer 40),
+// directly or through a group: GET /projects?min_access_level=&simple=true.
+// It stops after limit paths; truncated is true when there were more. A
+// public project the user isn't a member of is not listed.
+func (c *Client) ProjectPaths(ctx context.Context, minAccessLevel, limit int) (paths []string, truncated bool, err error) {
+	q := url.Values{"min_access_level": {strconv.Itoa(minAccessLevel)}, "simple": {"true"}}
+	err = c.paginate(ctx, "/projects", q, func(body []byte) (bool, error) {
+		var page []struct {
+			Path string `json:"path_with_namespace"`
+		}
+		if err := decode(body, &page); err != nil {
+			return true, err
+		}
+		for _, p := range page {
+			if p.Path == "" {
+				continue
+			}
+			if len(paths) == limit {
+				truncated = true
+				return true, nil
+			}
+			paths = append(paths, p.Path)
+		}
+		return false, nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return paths, truncated, nil
+}

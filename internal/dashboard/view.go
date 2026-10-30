@@ -350,3 +350,56 @@ type AdminView struct {
 	Group    string `json:"group,omitempty"`
 	Team     string `json:"team,omitempty"`
 }
+
+// --- The write API (admins of the session's instance only) ---
+//
+// Every write needs the X-CSRF-Token header (403 without it) and an admin
+// session (403 otherwise, and nothing changes). A repository the admin
+// can't see is answered exactly like one that doesn't exist (404), whatever
+// the write. A repository listed in the config is read-only here (409).
+// Errors are {"error": "message"}.
+//
+//   - GET /api/repositories/available: AvailableView, the repositories that
+//     can be switched on.
+//   - POST /api/repositories {"project": "acme/widgets"}: switches on a
+//     repository of AvailableView (checked again; 404 when it isn't there,
+//     409 when it is on already) with every setting at its default. 201,
+//     RepositoryDetailView. pergent.sh sets it up (webhook and clone
+//     credentials) within seconds.
+//   - DELETE /api/repositories/{instance}/{project...}: switches it off.
+//     200, RepositoryDetailView with repo.on false and the default
+//     settings. pergent.sh removes its webhook and clone credentials.
+//   - PUT /api/repositories/{instance}/{project...}/settings: changes the
+//     settings in the body and leaves the others; a null resets one to its
+//     default. The keys are those of RepositoryDetailView.Settings:
+//     approve and reviewDrafts (true or false), failureStatus ("failed" or
+//     "neutral"), skills (a non-empty list of library skill names),
+//     jobTimeoutSeconds (a whole number, 60 to 7200) and jobMemory (a
+//     Kubernetes quantity such as "6Gi", from 256Mi, and no less than
+//     jobs.resources.requests.memory, to 32Gi). Any other key, or a value
+//     out of bounds, is 400 and nothing changes. 200, RepositoryDetailView.
+//   - POST /api/repositories/{instance}/{project...}/settings/reset: every
+//     setting back to its default. 200, RepositoryDetailView.
+//
+// The admin sees a repository they switch on at once; other users see it
+// within 5 minutes, when their access is checked again.
+
+// AvailableView is GET /api/repositories/available: the repositories of the
+// session's instance that the admin is a member of with read access
+// (GitLab: Reporter or above; GitHub: pull) and the review bot (GitLab:
+// Maintainer or above) or review App (GitHub: its installations) reaches,
+// and that aren't switched on, by project ignoring case. 500 at most;
+// truncated is true when there were more, or when a list it is made from
+// was too long to read whole. 502 when GitLab or GitHub can't be asked.
+type AvailableView struct {
+	Items     []AvailableRepo `json:"items"`
+	Truncated bool            `json:"truncated"`
+}
+
+// AvailableRepo is one repository that can be switched on.
+type AvailableRepo struct {
+	Instance string `json:"instance"`
+	Project  string `json:"project"`
+	// Platform is "gitlab" or "github".
+	Platform string `json:"platform"`
+}

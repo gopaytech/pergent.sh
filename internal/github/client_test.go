@@ -852,3 +852,56 @@ func TestTeamMembershipActive(t *testing.T) {
 		t.Fatal("a .. segment was sent")
 	}
 }
+
+func TestUserReposReadableOnly(t *testing.T) {
+	c, rec := serve(t, jsonReply([]map[string]any{
+		{"full_name": "acme/widgets", "private": true, "permissions": map[string]any{"pull": true}},
+		{"full_name": "acme/secret", "private": true, "permissions": map[string]any{"pull": false}},
+		{"full_name": "acme/open", "private": false, "permissions": map[string]any{"pull": true}},
+	}))
+	got, truncated, err := c.UserRepos(ctx, 10)
+	if err != nil || truncated {
+		t.Fatalf("truncated=%v err=%v", truncated, err)
+	}
+	if strings.Join(got, ",") != "acme/widgets,acme/open" {
+		t.Fatalf("repos = %v", got)
+	}
+	expect(t, rec.get(0), "GET", "/user/repos", "per_page=100")
+}
+
+func TestUserReposStopsAtLimit(t *testing.T) {
+	var srvURL string
+	c, rec := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Link", `<`+srvURL+`/user/repos?page=2>; rel="next"`)
+		jsonReply([]map[string]any{
+			{"full_name": "acme/a", "permissions": map[string]any{"pull": true}},
+			{"full_name": "acme/b", "permissions": map[string]any{"pull": true}},
+		})(w, r)
+	})
+	srvURL = c.base
+	got, truncated, err := c.UserRepos(ctx, 1)
+	if err != nil || !truncated || len(got) != 1 {
+		t.Fatalf("got=%v truncated=%v err=%v", got, truncated, err)
+	}
+	if n := len(rec.all()); n != 1 {
+		t.Fatalf("requests = %d, want 1", n)
+	}
+}
+
+func TestInstallationReposPaginates(t *testing.T) {
+	var srvURL string
+	c, rec := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") == "2" {
+			jsonReply(map[string]any{"total_count": 2, "repositories": []map[string]any{{"full_name": "acme/payments"}}})(w, r)
+			return
+		}
+		w.Header().Set("Link", `<`+srvURL+`/installation/repositories?page=2>; rel="next"`)
+		jsonReply(map[string]any{"total_count": 2, "repositories": []map[string]any{{"full_name": "acme/widgets"}}})(w, r)
+	})
+	srvURL = c.base
+	got, truncated, err := c.InstallationRepos(ctx, 10)
+	if err != nil || truncated || strings.Join(got, ",") != "acme/widgets,acme/payments" {
+		t.Fatalf("got=%v truncated=%v err=%v", got, truncated, err)
+	}
+	expect(t, rec.get(0), "GET", "/installation/repositories", "per_page=100")
+}

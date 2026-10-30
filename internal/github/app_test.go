@@ -514,3 +514,15 @@ func TestMintFailureOtherStatus(t *testing.T) {
 		t.Fatalf("err = %v; want ErrInstallation, not gone", err)
 	}
 }
+
+func TestInstallations(t *testing.T) {
+	a, rec, _ := testApp(t, jsonReply([]map[string]any{{"id": 42}, {"id": 43}}))
+	ids, err := a.Installations(ctx)
+	if err != nil || len(ids) != 2 || ids[0] != 42 || ids[1] != 43 {
+		t.Fatalf("Installations = %v, %v", ids, err)
+	}
+	expect(t, rec.get(0), "GET", "/app/installations", "per_page=100")
+	if !strings.HasPrefix(rec.get(0).Header.Get("Authorization"), "Bearer ey") {
+		t.Fatal("installations listing not authenticated with the JWT")
+	}
+}

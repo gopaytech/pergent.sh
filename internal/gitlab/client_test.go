@@ -841,3 +841,40 @@ func TestIsGroupMember(t *testing.T) {
 		t.Fatal("IsGroupMember on a 500 = nil error")
 	}
 }
+
+func TestProjectPathsPaginatesWithMinAccessLevel(t *testing.T) {
+	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("page") == "2" {
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"id": 3, "path_with_namespace": "acme/payments"}})
+			return
+		}
+		w.Header().Set("X-Next-Page", "2")
+		_ = json.NewEncoder(w).Encode([]map[string]any{{"id": 1, "path_with_namespace": "acme/widgets"}, {"id": 2}})
+	})
+	got, truncated, err := c.ProjectPaths(context.Background(), 40, 10)
+	if err != nil || truncated {
+		t.Fatalf("truncated=%v err=%v", truncated, err)
+	}
+	if strings.Join(got, ",") != "acme/widgets,acme/payments" {
+		t.Fatalf("paths = %v", got)
+	}
+	expect(t, (*reqs)[0], "GET", "/api/v4/projects", "min_access_level=40&per_page=100&simple=true")
+	expect(t, (*reqs)[1], "GET", "/api/v4/projects", "min_access_level=40&page=2&per_page=100&simple=true")
+}
+
+func TestProjectPathsStopsAtLimit(t *testing.T) {
+	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Next-Page", "2")
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"path_with_namespace": "acme/a"}, {"path_with_namespace": "acme/b"}, {"path_with_namespace": "acme/c"}})
+	})
+	got, truncated, err := c.ProjectPaths(context.Background(), 20, 2)
+	if err != nil || !truncated || len(got) != 2 {
+		t.Fatalf("got=%v truncated=%v err=%v", got, truncated, err)
+	}
+	if len(*reqs) != 1 {
+		t.Fatalf("requests = %d, want 1", len(*reqs))
+	}
+}

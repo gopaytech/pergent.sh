@@ -270,3 +270,25 @@ type mapped struct{ err, sentinel error }
 
 func (m *mapped) Error() string   { return m.err.Error() }
 func (m *mapped) Unwrap() []error { return []error{m.err, m.sentinel} }
+
+// ReachableRepos returns the full names of the repositories of every
+// installation of the review App, up to limit; truncated is true when there
+// were more.
+func (f *Forge) ReachableRepos(ctx context.Context, limit int) ([]string, bool, error) {
+	ids, err := f.app.Installations(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	var out []string
+	for _, id := range ids {
+		names, truncated, err := f.app.Client(id).InstallationRepos(ctx, limit-len(out))
+		if err != nil {
+			return nil, false, err
+		}
+		out = append(out, names...)
+		if truncated {
+			return out, true, nil
+		}
+	}
+	return out, false, nil
+}

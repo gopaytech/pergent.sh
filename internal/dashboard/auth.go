@@ -62,6 +62,8 @@ type Session struct {
 	Visible map[string]bool
 	// CSRFToken is the token writes must send in X-CSRF-Token.
 	CSRFToken string
+
+	idHash []byte // the stored session's key
 }
 
 // CanSee reports whether the user can see project (on the session's
@@ -90,6 +92,10 @@ type Auth struct {
 	mu       sync.Mutex
 	flights  map[string]*flight   // access checks in progress, by session hash
 	failedAt map[string]time.Time // last failed access check, by session hash
+
+	// renewMu is held while a token is renewed: a refresh token may be
+	// good for one use only, so two requests must not both spend it.
+	renewMu sync.Mutex
 }
 
 func newAuth(o Options, repos *settings.Resolver) (*Auth, error) {
@@ -390,7 +396,7 @@ func (a *Auth) Require(next http.Handler) http.Handler {
 		}
 		s := Session{
 			Platform: se.Platform, Instance: se.Instance, UserID: se.UserID, Username: acc.username,
-			IsAdmin: acc.isAdmin, Visible: visible, CSRFToken: se.CSRF,
+			IsAdmin: acc.isAdmin, Visible: visible, CSRFToken: se.CSRF, idHash: se.IDHash,
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, sessionKey{}, s)))
 	})

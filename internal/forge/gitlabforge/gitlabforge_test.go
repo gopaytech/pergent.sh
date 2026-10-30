@@ -424,3 +424,17 @@ func TestState(t *testing.T) {
 		}
 	}
 }
+
+// The review bot reaches the projects where it is Maintainer or above: it
+// creates their webhooks and deploy tokens.
+func TestReachableRepos(t *testing.T) {
+	f := newFake(t)
+	f.on("GET", "/projects", 200, []map[string]any{{"path_with_namespace": "acme/widgets"}})
+	got, truncated, err := f.forge().ReachableRepos(context.Background(), 10)
+	if err != nil || truncated || len(got) != 1 || got[0] != "acme/widgets" {
+		t.Fatalf("got=%v truncated=%v err=%v", got, truncated, err)
+	}
+	if q := f.only().Query; q != "min_access_level=40&per_page=100&simple=true" {
+		t.Errorf("query = %q", q)
+	}
+}

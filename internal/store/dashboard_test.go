@@ -378,3 +378,56 @@ func TestSetRunChange(t *testing.T) {
 		t.Error("SetRunChange of a malformed id = nil error")
 	}
 }
+
+// InsertDashboardRepo creates a row only when the repository (ignoring
+// case) has none: a second admin switching it on doesn't reset its settings.
+func TestInsertDashboardRepo(t *testing.T) {
+	s := newStore(t)
+	created, err := s.InsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "acme/widgets", CreatedBy: "alice"})
+	if err != nil || !created {
+		t.Fatalf("first insert = %v, %v", created, err)
+	}
+	if _, err := s.UpdateDashboardRepo(ctx, "main", "acme/widgets", func(r *DashboardRepo) { r.Approve = ptrTo(false) }); err != nil {
+		t.Fatal(err)
+	}
+	created, err = s.InsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "ACME/widgets", CreatedBy: "bob"})
+	if err != nil || created {
+		t.Fatalf("second insert = %v, %v; want not created", created, err)
+	}
+	r, _, err := s.DashboardRepo(ctx, "main", "acme/widgets")
+	if err != nil || r.CreatedBy != "alice" || r.Project != "acme/widgets" || r.Approve == nil || *r.Approve {
+		t.Errorf("row = %+v, %v", r, err)
+	}
+}
+
+// UpdateDashboardRepo changes an existing row's settings and never creates
+// one: a repository switched off meanwhile stays off.
+func TestUpdateDashboardRepo(t *testing.T) {
+	s := newStore(t)
+	found, err := s.UpdateDashboardRepo(ctx, "main", "acme/widgets", func(r *DashboardRepo) { r.Approve = ptrTo(true) })
+	if err != nil || found {
+		t.Fatalf("update of a missing row = %v, %v", found, err)
+	}
+	if _, ok, _ := s.DashboardRepo(ctx, "main", "acme/widgets"); ok {
+		t.Fatal("update created a row")
+	}
+	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "Acme/Widgets",
+		JobMemory: ptrTo("6Gi"), CreatedBy: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	found, err = s.UpdateDashboardRepo(ctx, "main", "acme/WIDGETS", func(r *DashboardRepo) {
+		if r.JobMemory == nil || *r.JobMemory != "6Gi" {
+			t.Errorf("apply got %+v", r)
+		}
+		r.Skills = []string{"style"}
+		r.JobMemory = nil
+		r.Project, r.CreatedBy = "evil/other", "mallory" // not settings: ignored
+	})
+	if err != nil || !found {
+		t.Fatalf("update = %v, %v", found, err)
+	}
+	r, _, _ := s.DashboardRepo(ctx, "main", "acme/widgets")
+	if r.Project != "Acme/Widgets" || r.CreatedBy != "alice" || !slices.Equal(r.Skills, []string{"style"}) || r.JobMemory != nil {
+		t.Errorf("row = %+v", r)
+	}
+}

@@ -122,3 +122,7 @@ func (p *githubProvider) isAdmin(ctx context.Context, accessToken string, _ int6
 	defer cancel()
 	return p.client(accessToken).TeamMembershipActive(ctx, org, slug, username)
 }
+
+func (p *githubProvider) memberRepos(ctx context.Context, accessToken string, limit int) ([]string, bool, error) {
+	return p.client(accessToken).UserRepos(ctx, limit)
+}

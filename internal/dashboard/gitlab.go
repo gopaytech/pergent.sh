@@ -124,3 +124,7 @@ func isStatus(err error, status int) bool {
 	var gh *githubAPIError
 	return errors.As(err, &gh) && gh.Status == status
 }
+
+func (p *gitlabProvider) memberRepos(ctx context.Context, accessToken string, limit int) ([]string, bool, error) {
+	return p.client(accessToken).ProjectPaths(ctx, gitlabReporter, limit)
+}

@@ -893,3 +893,27 @@ func jsonEq(t *testing.T, body, want string) {
 		t.Fatalf("body = %s\nwant %s", body, want)
 	}
 }
+
+// The review App reaches the repositories of every installation.
+func TestReachableRepos(t *testing.T) {
+	f := newFake(t)
+	f.reply("GET", "/app/installations", 200, []map[string]any{{"id": 55}, {"id": 56}})
+	f.reply("GET", "/installation/repositories", 200, map[string]any{"total_count": 1,
+		"repositories": []map[string]any{{"full_name": "acme/widgets"}}})
+
+	got, truncated, err := f.forge(t).ReachableRepos(ctx, 10)
+	if err != nil || truncated {
+		t.Fatalf("truncated=%v err=%v", truncated, err)
+	}
+	if strings.Join(got, ",") != "acme/widgets,acme/widgets" {
+		t.Errorf("repos = %v (one per installation from the fake)", got)
+	}
+	if n := len(f.requests("GET", "/installation/repositories")); n != 2 {
+		t.Errorf("listed %d installations, want 2", n)
+	}
+
+	got, truncated, err = f.forge(t).ReachableRepos(ctx, 1)
+	if err != nil || !truncated || len(got) != 1 {
+		t.Errorf("limit 1: got=%v truncated=%v err=%v", got, truncated, err)
+	}
+}

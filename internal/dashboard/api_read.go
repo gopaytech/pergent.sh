@@ -677,30 +677,39 @@ func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Dashboard) repositoryDetail(w http.ResponseWriter, r *http.Request, se Session, repo settings.Effective) {
-	ctx := r.Context()
-	views, err := d.repositoryViews(ctx, se, []settings.Effective{repo})
+	view, err := d.detailView(r.Context(), se, repo)
 	if err != nil {
 		d.failed(w, r, "loading a repository", err)
 		return
 	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// detailView describes repo, switched on, with its settings and setup
+// problems.
+func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Effective) (RepositoryDetailView, error) {
+	views, err := d.repositoryViews(ctx, se, []settings.Effective{repo})
+	if err != nil {
+		return RepositoryDetailView{}, err
+	}
 	items, err := d.attention(ctx, se, byProject([]settings.Effective{repo}), repo.Project)
 	if err != nil {
-		d.failed(w, r, "listing setup problems", err)
-		return
+		return RepositoryDetailView{}, err
 	}
+	return RepositoryDetailView{Repo: views[0], Settings: settingViews(repo), Attention: items}, nil
+}
+
+// settingViews is repo's settings as RepositoryDetailView shows them.
+func settingViews(repo settings.Effective) map[string]SettingView {
 	ov := repo.Overridden
-	writeJSON(w, http.StatusOK, RepositoryDetailView{
-		Repo: views[0],
-		Settings: map[string]SettingView{
-			"approve":           {repo.Approve, ov[settings.KeyApprove]},
-			"reviewDrafts":      {repo.ReviewDrafts, ov[settings.KeyReviewDrafts]},
-			"failureStatus":     {string(repo.FailureStatus), ov[settings.KeyFailureStatus]},
-			"skills":            {repo.Skills, ov[settings.KeySkills]},
-			"jobTimeoutSeconds": {int64(repo.JobTimeout / time.Second), ov[settings.KeyJobTimeout]},
-			"jobMemory":         {quantityText(repo.JobMemory), ov[settings.KeyJobMemory]},
-		},
-		Attention: items,
-	})
+	return map[string]SettingView{
+		"approve":           {repo.Approve, ov[settings.KeyApprove]},
+		"reviewDrafts":      {repo.ReviewDrafts, ov[settings.KeyReviewDrafts]},
+		"failureStatus":     {string(repo.FailureStatus), ov[settings.KeyFailureStatus]},
+		"skills":            {repo.Skills, ov[settings.KeySkills]},
+		"jobTimeoutSeconds": {int64(repo.JobTimeout / time.Second), ov[settings.KeyJobTimeout]},
+		"jobMemory":         {quantityText(repo.JobMemory), ov[settings.KeyJobMemory]},
+	}
 }
 
 func quantityText(q resource.Quantity) string {

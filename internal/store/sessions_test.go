@@ -116,3 +116,29 @@ func TestPruneSessions(t *testing.T) {
 		t.Fatal("the fresh session was pruned")
 	}
 }
+
+// AddSessionProject adds one repository to a session's visible ones, once
+// whatever its case, on the session's instance.
+func TestAddSessionProject(t *testing.T) {
+	s := newStore(t)
+	in := newSession(1, t0)
+	if err := s.CreateSession(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetSessionAccess(ctx, in.IDHash, "alice", true, []string{"acme/widgets"}, t0); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"acme/gadgets", "ACME/Gadgets", "acme/widgets"} {
+		if err := s.AddSessionProject(ctx, in.IDHash, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.SessionProjects(ctx, in.IDHash)
+	if err != nil || !slices.Equal(got, []string{"acme/gadgets", "acme/widgets"}) {
+		t.Fatalf("projects = %v, %v", got, err)
+	}
+	// A session that is gone stays gone.
+	if err := s.AddSessionProject(ctx, bytes.Repeat([]byte{9}, 32), "acme/gadgets"); err != nil {
+		t.Fatal(err)
+	}
+}

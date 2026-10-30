@@ -182,3 +182,14 @@ type mapped struct{ err, sentinel error }
 
 func (m *mapped) Error() string   { return m.err.Error() }
 func (m *mapped) Unwrap() []error { return []error{m.err, m.sentinel} }
+
+// maintainer is GitLab's Maintainer access level: the review bot needs it to
+// create a project's webhook and deploy token.
+const maintainer = 40
+
+// ReachableRepos returns the paths of the projects the review bot can set up
+// (it is Maintainer or above there), up to limit; truncated is true when
+// there were more.
+func (f *Forge) ReachableRepos(ctx context.Context, limit int) ([]string, bool, error) {
+	return f.c.ProjectPaths(ctx, maintainer, limit)
+}

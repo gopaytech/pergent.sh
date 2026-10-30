@@ -115,6 +115,19 @@ func (s *Store) SetSessionAccess(ctx context.Context, idHash []byte, username st
 	return tx.Commit(ctx)
 }
 
+// AddSessionProject adds project to the repositories the session's user can
+// see, on the session's instance, unless it is there already (ignoring
+// case). The time of the last check stays. A session that is gone is left
+// gone.
+func (s *Store) AddSessionProject(ctx context.Context, idHash []byte, project string) error {
+	_, err := s.pool.Exec(ctx, `INSERT INTO user_access (session_hash, instance, project)
+		SELECT id_hash, instance, $2 FROM sessions s WHERE id_hash = $1
+		  AND NOT EXISTS (SELECT 1 FROM user_access a
+			WHERE a.session_hash = s.id_hash AND a.instance = s.instance AND lower(a.project) = lower($2))
+		ON CONFLICT DO NOTHING`, idHash, project)
+	return err
+}
+
 // ClearSessionAccess takes every repository and the admin flag away from a
 // session, keeping the time of its last successful check.
 func (s *Store) ClearSessionAccess(ctx context.Context, idHash []byte) error {

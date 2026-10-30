@@ -191,6 +191,30 @@ func (a *App) Installation(ctx context.Context, owner, repo string) (int64, erro
 	return out.ID, nil
 }
 
+// Installations returns the IDs of the App's installations (GET
+// /app/installations, with the App's JWT).
+func (a *App) Installations(ctx context.Context) ([]int64, error) {
+	var ids []int64
+	err := a.api.paginate(ctx, "/app/installations", func(body []byte) error {
+		var page []struct {
+			ID int64 `json:"id"`
+		}
+		if err := decode(body, &page); err != nil {
+			return err
+		}
+		for _, in := range page {
+			if in.ID != 0 {
+				ids = append(ids, in.ID)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 // Client returns a client authenticated as installation installationID. Its
 // token comes from the App's cache.
 func (a *App) Client(installationID int64) *Client {

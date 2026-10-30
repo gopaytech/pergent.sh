@@ -15,8 +15,11 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -207,8 +210,11 @@ type fakeGitLab struct {
 	projects map[string]map[string]any // path → GET /projects/:path body
 	groups   map[string]bool           // group path → user 9 is a member
 	checks   int                       // GET /projects/:path calls
-	username string                    // user 9's username (default alice)
-	member   map[string]any            // extra fields of a member answer
+	listings []string                  // GET /projects queries
+	// listFail makes GET /projects answer 500.
+	listFail bool
+	username string         // user 9's username (default alice)
+	member   map[string]any // extra fields of a member answer
 }
 
 func (f *fakeGitLab) setUsername(name string) { f.set(func(*oauthServer) { f.username = name }) }
@@ -250,6 +256,13 @@ func (f *fakeGitLab) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case p == "/api/v4/user":
 		reply(w, 200, map[string]any{"id": 9, "username": f.username})
+	case p == "/api/v4/projects":
+		f.listings = append(f.listings, r.URL.RawQuery)
+		if f.listFail {
+			reply(w, 500, map[string]any{"message": "500 Internal Server Error"})
+			return
+		}
+		f.listProjects(w, r)
 	case strings.HasPrefix(p, "/api/v4/projects/"):
 		f.checks++
 		path, _ := url.PathUnescape(strings.TrimPrefix(p, "/api/v4/projects/"))
@@ -272,6 +285,31 @@ func (f *fakeGitLab) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		reply(w, 404, map[string]any{"message": "404 Not found"})
 	}
+}
+
+// listProjects answers GET /projects?min_access_level=N like GitLab: the
+// projects whose member (project or group) access level is at least N, by
+// path. Called with mu held.
+func (f *fakeGitLab) listProjects(w http.ResponseWriter, r *http.Request) {
+	min, _ := strconv.Atoi(r.URL.Query().Get("min_access_level"))
+	level := func(v any) int {
+		m, _ := v.(map[string]any)
+		n, _ := m["access_level"].(int)
+		return n
+	}
+	paths := make([]string, 0, len(f.projects))
+	for path := range f.projects {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	out := []map[string]any{}
+	for _, path := range paths {
+		perms, _ := f.projects[path]["permissions"].(map[string]any)
+		if max(level(perms["project_access"]), level(perms["group_access"])) >= min && min > 0 {
+			out = append(out, map[string]any{"id": f.projects[path]["id"], "path_with_namespace": path})
+		}
+	}
+	reply(w, 200, out)
 }
 
 func (f *fakeGitLab) token(w http.ResponseWriter, r *http.Request) {
@@ -351,6 +389,21 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case p == "/api/v3/user":
 		reply(w, 200, map[string]any{"id": 7, "login": f.login})
+	case p == "/api/v3/user/repos":
+		names := make([]string, 0, len(f.repos))
+		for name := range f.repos {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		out := []map[string]any{}
+		for _, name := range names {
+			body := map[string]any{"full_name": name}
+			for k, v := range f.repos[name] {
+				body[k] = v
+			}
+			out = append(out, body)
+		}
+		reply(w, 200, out)
 	case strings.HasPrefix(p, "/api/v3/repos/"):
 		if body, ok := f.repos[strings.TrimPrefix(p, "/api/v3/repos/")]; ok {
 			reply(w, 200, body)
@@ -397,19 +450,22 @@ func (f *fakeGitHub) token(w http.ResponseWriter, r *http.Request) {
 // env is a dashboard against fake GitLab "main" and GitHub "gh" instances,
 // on a test clock, recording every response and log line.
 type env struct {
-	t     *testing.T
-	st    *store.Store
-	db    *pgxpool.Pool // the store's schema, for raw SQL
-	cfg   *config.Config
-	lib   inputs.Library
-	src   map[string]*fakeSource // by instance
-	gl    *fakeGitLab
-	gh    *fakeGitHub
-	clock *clock
-	logs  *lockedBuffer
-	key   string // PERGENT_SH_SECRET_KEY
-	d     *Dashboard
-	h     http.Handler
+	t   *testing.T
+	st  *store.Store
+	db  *pgxpool.Pool // the store's schema, for raw SQL
+	cfg *config.Config
+	lib inputs.Library
+	src map[string]*fakeSource  // by instance
+	cat map[string]*fakeCatalog // by instance
+	// reconciles counts the dashboard's ReconcileSoon calls.
+	reconciles atomic.Int32
+	gl         *fakeGitLab
+	gh         *fakeGitHub
+	clock      *clock
+	logs       *lockedBuffer
+	key        string // PERGENT_SH_SECRET_KEY
+	d          *Dashboard
+	h          http.Handler
 
 	mu        sync.Mutex
 	responses []*httptest.ResponseRecorder
@@ -453,13 +509,19 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 			"style":       []byte("---\nname: style\n---\nCheck the style.\n"),
 		},
 		src: map[string]*fakeSource{"main": newFakeSource(), "gh": newFakeSource()},
+		cat: map[string]*fakeCatalog{"main": {}, "gh": {}},
 	}
 	sources := map[string]RepoSource{}
 	for name, s := range e.src {
 		sources[name] = s
 	}
+	catalogs := map[string]RepoCatalog{}
+	for name, c := range e.cat {
+		catalogs[name] = c
+	}
 	d, err := New(Options{
 		Config: cfg, Store: st, SecretKey: e.key, Now: e.clock.now, Library: e.lib, Sources: sources,
+		Catalogs: catalogs, ReconcileSoon: func() { e.reconciles.Add(1) },
 		Log: slog.New(slog.NewTextHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	})
 	if err != nil {

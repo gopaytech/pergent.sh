@@ -94,6 +94,58 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 	return err
 }
 
+// InsertDashboardRepo stores r unless the repository (ignoring case) already
+// has a row, which is left as it is; created tells which.
+func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (created bool, err error) {
+	skills := r.Skills
+	if len(skills) == 0 {
+		skills = nil
+	}
+	tag, err := s.pool.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
+			failure_status, skills, job_timeout_seconds, job_memory, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		ON CONFLICT (instance, lower(project)) DO NOTHING`,
+		r.Instance, r.Project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills,
+		r.JobTimeoutSeconds, r.JobMemory, r.CreatedBy)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// UpdateDashboardRepo changes the settings of the dashboard repository
+// project on instance (matched ignoring case): apply gets the stored row,
+// locked until the change is stored, and its settings (approve through
+// job_memory) are written back; the rest of the row stays. found is false,
+// and nothing is created, when there is no such row.
+func (s *Store) UpdateDashboardRepo(ctx context.Context, instance, project string, apply func(*DashboardRepo)) (found bool, err error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	r, err := scanDashboardRepo(tx.QueryRow(ctx, `SELECT `+dashboardRepoColumns+` FROM dashboard_repos
+		WHERE instance = $1 AND lower(project) = lower($2) FOR UPDATE`, instance, project))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	apply(&r)
+	skills := r.Skills
+	if len(skills) == 0 {
+		skills = nil
+	}
+	if _, err := tx.Exec(ctx, `UPDATE dashboard_repos SET approve = $3, review_drafts = $4, failure_status = $5,
+			skills = $6, job_timeout_seconds = $7, job_memory = $8, updated_at = now()
+		WHERE instance = $1 AND lower(project) = lower($2)`,
+		instance, project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, r.JobTimeoutSeconds, r.JobMemory); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
+}
+
 // DeleteDashboardRepo removes the dashboard repository project on instance,
 // matched ignoring case. Deleting one that isn't there is not an error.
 func (s *Store) DeleteDashboardRepo(ctx context.Context, instance, project string) error {

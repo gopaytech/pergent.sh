@@ -792,3 +792,79 @@ func (c *Client) DismissReview(ctx context.Context, owner, repo string, number, 
 	_, err = c.do(ctx, http.MethodPut, p, nil, map[string]string{"message": message, "event": "DISMISS"}, acceptJSON)
 	return err
 }
+
+// errStopPaging ends a paginate early; it is not an error to the caller.
+var errStopPaging = errors.New("github: stop paging")
+
+// collectNames pages through path, adding the full_name of each repository
+// fn finds in a page to the result until limit; truncated is true when
+// there were more.
+func (c *Client) collectNames(ctx context.Context, path string, limit int, page func(body []byte) ([]string, error)) (names []string, truncated bool, err error) {
+	err = c.paginate(ctx, path, func(body []byte) error {
+		got, err := page(body)
+		if err != nil {
+			return err
+		}
+		for _, n := range got {
+			if len(names) == limit {
+				truncated = true
+				return errStopPaging
+			}
+			names = append(names, n)
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errStopPaging) {
+		return nil, false, err
+	}
+	return names, truncated, nil
+}
+
+// UserRepos returns the full names of the repositories the token's user is
+// the owner, a collaborator or an organization member of and can read
+// (permissions.pull), from GET /user/repos, up to limit; truncated is true
+// when there were more. For a GitHub App's user token GitHub lists only the
+// repositories the App's installations reach too.
+func (c *Client) UserRepos(ctx context.Context, limit int) ([]string, bool, error) {
+	return c.collectNames(ctx, "/user/repos", limit, func(body []byte) ([]string, error) {
+		var page []struct {
+			FullName    string `json:"full_name"`
+			Permissions struct {
+				Pull bool `json:"pull"`
+			} `json:"permissions"`
+		}
+		if err := decode(body, &page); err != nil {
+			return nil, err
+		}
+		var out []string
+		for _, r := range page {
+			if r.FullName != "" && r.Permissions.Pull {
+				out = append(out, r.FullName)
+			}
+		}
+		return out, nil
+	})
+}
+
+// InstallationRepos returns the full names of the repositories the client's
+// App installation reaches (GET /installation/repositories), up to limit;
+// truncated is true when there were more. The client must be App.Client's.
+func (c *Client) InstallationRepos(ctx context.Context, limit int) ([]string, bool, error) {
+	return c.collectNames(ctx, "/installation/repositories", limit, func(body []byte) ([]string, error) {
+		var page struct {
+			Repositories []struct {
+				FullName string `json:"full_name"`
+			} `json:"repositories"`
+		}
+		if err := decode(body, &page); err != nil {
+			return nil, err
+		}
+		var out []string
+		for _, r := range page.Repositories {
+			if r.FullName != "" {
+				out = append(out, r.FullName)
+			}
+		}
+		return out, nil
+	})
+}
