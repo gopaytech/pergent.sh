@@ -41,6 +41,15 @@ const (
 	deliverAllowance  = 2 * time.Minute
 )
 
+// Byte limits for the comment pergent renders (--max-comment-size). GitLab
+// takes a note of up to 1,000,000 characters; GitHub refuses a comment over
+// 65,536, and pergent.sh may append a note of up to 4000 bytes after
+// pergent's part (policy's skipped-files note), so GitHub's is lower.
+const (
+	CommentLimitGitLab = 990000
+	CommentLimitGitHub = 60000
+)
+
 // JobParams is everything one review Job is built from. None of it is secret.
 type JobParams struct {
 	Name, Namespace, RunID, Image string
@@ -51,9 +60,12 @@ type JobParams struct {
 	TargetBranch, BaseSHA         string
 	HeadSHA, GitUsername          string
 	ResultURL                     string
-	LLM                           config.LLM
-	Resources                     corev1.ResourceRequirements
-	Inputs                        *inputs.Inputs
+	// MaxCommentSize is the platform's comment limit (CommentLimitGitLab or
+	// CommentLimitGitHub); 0 is the smaller, GitHub's.
+	MaxCommentSize int
+	LLM            config.LLM
+	Resources      corev1.ResourceRequirements
+	Inputs         *inputs.Inputs
 }
 
 // Secrets are the per-Job credentials, stored in one Secret owned by the Job.
@@ -140,7 +152,7 @@ func BuildJob(p JobParams) *batchv1.Job {
 		"--scrub-instructions",
 		"--timeout="+p.Timeout.String(),
 		"--concurrency="+strconv.Itoa(p.Concurrency),
-		"--max-comment-size=990000",
+		"--max-comment-size="+strconv.Itoa(commentLimit(p.MaxCommentSize)),
 		"--result-url="+p.ResultURL,
 	)
 
@@ -225,6 +237,14 @@ func BuildJob(p JobParams) *batchv1.Job {
 			},
 		},
 	}
+}
+
+// commentLimit is n, or the smaller limit when n is unset.
+func commentLimit(n int) int {
+	if n <= 0 {
+		return CommentLimitGitHub
+	}
+	return n
 }
 
 func skillKey(i int) string { return "skill-" + strconv.Itoa(i) + ".md" }

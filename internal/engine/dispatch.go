@@ -228,6 +228,10 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	allowance := kube.CloneAllowance(project.CloneSeconds)
 	expires := now.Add(kube.Deadline(e.Config.Jobs.Timeout, allowance) + tokenGrace)
 	name := kube.JobName(run.ID)
+	commentLimit := kube.CommentLimitGitLab
+	if plat.isGitHub() {
+		commentLimit = kube.CommentLimitGitHub
+	}
 	params := kube.JobParams{
 		Name:           name,
 		RunID:          run.ID,
@@ -242,6 +246,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		HeadSHA:        run.HeadSHA,
 		GitUsername:    gitUser,
 		ResultURL:      strings.TrimRight(e.Config.CallbackURL, "/") + "/runs/" + run.ID + "/result",
+		MaxCommentSize: commentLimit,
 		LLM:            e.Config.LLM,
 		Resources:      e.Config.Jobs.Resources,
 		Inputs:         in,

@@ -49,6 +49,8 @@ func TestDispatchLaunchesJob(t *testing.T) {
 		"--result-url=" + testCallbackURL + "/runs/" + id + "/result",
 		"--timeout=10m0s",
 		"--concurrency=4",
+		// GitLab takes notes up to 1,000,000 characters.
+		"--max-comment-size=990000",
 	} {
 		if !hasArg(args, want) {
 			t.Errorf("job args %v lack %q", args, want)

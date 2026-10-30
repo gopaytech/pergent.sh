@@ -369,6 +369,11 @@ func TestDispatchGitHub(t *testing.T) {
 	if !hasArg(args, "--base="+sha('b')) || !hasArg(args, "--head="+head) {
 		t.Errorf("job args %v lack the merge base or head", args)
 	}
+	// GitHub refuses a comment over 65,536 characters: pergent's part stays
+	// under 60,000 bytes, leaving room for the notes policy appends.
+	if !hasArg(args, "--max-comment-size=60000") || hasArg(args, "--max-comment-size=990000") {
+		t.Errorf("job args %v: want --max-comment-size=60000 on GitHub", args)
+	}
 	if got := string(env.Secret(id).Data["git-token"]); got != ghCloneToken {
 		t.Errorf("git-token = %q, want the minted clone token", got)
 	}

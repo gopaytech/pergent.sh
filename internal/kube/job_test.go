@@ -37,6 +37,7 @@ func testParams() JobParams {
 		HeadSHA:        testHead,
 		GitUsername:    "gitlab+deploy-token-7",
 		ResultURL:      "https://pergent.example.com/runs/" + runID + "/result",
+		MaxCommentSize: CommentLimitGitLab,
 		LLM: config.LLM{
 			Provider: "anthropic",
 			Model:    "claude-sonnet-4",
@@ -443,5 +444,30 @@ git checkout -q --detach "$HEAD_SHA"
 func TestCheckoutScriptIsExact(t *testing.T) {
 	if checkoutScript != wantCheckoutScript {
 		t.Errorf("checkout.sh differs from the expected script:\n got:\n%s\nwant:\n%s", checkoutScript, wantCheckoutScript)
+	}
+}
+
+// The comment limit is the platform's; an unset one is the smaller, GitHub's.
+func TestBuildJobCommentLimit(t *testing.T) {
+	for in, want := range map[int]string{
+		CommentLimitGitLab: "--max-comment-size=990000",
+		CommentLimitGitHub: "--max-comment-size=60000",
+		0:                  "--max-comment-size=60000",
+	} {
+		p := testParams()
+		p.MaxCommentSize = in
+		args := containerByName(t, BuildJob(p).Spec.Template.Spec.Containers, "pergent").Args
+		n := 0
+		for _, a := range args {
+			if strings.HasPrefix(a, "--max-comment-size=") {
+				n++
+				if a != want {
+					t.Errorf("MaxCommentSize %d: arg %q, want %q", in, a, want)
+				}
+			}
+		}
+		if n != 1 {
+			t.Errorf("MaxCommentSize %d: %d --max-comment-size args, want 1", in, n)
+		}
 	}
 }
