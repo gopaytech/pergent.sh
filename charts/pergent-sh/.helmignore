@@ -1,3 +1,4 @@
 .DS_Store
 .git/
 ci-values.yaml
+README.md.gotmpl
