@@ -1273,9 +1273,10 @@ func TestRepublish(t *testing.T) {
 		t.Errorf("RunsToPublish = %v, %v; want the republished run", runIDs(due), err)
 	}
 
-	// Already reported: nothing to do.
-	if ok, err := s.Republish(ctx, mr1, "A"); err != nil || ok {
-		t.Errorf("second Republish = %v, %v; want false", ok, err)
+	// Already reported again: a second ready event only asks for one more
+	// decision after the coming publish (TestRepublishWhileReported).
+	if ok, err := s.Republish(ctx, mr1, "A"); err != nil || !ok {
+		t.Errorf("second Republish = %v, %v; want true", ok, err)
 	}
 }
 
@@ -1289,7 +1290,6 @@ func TestRepublishOnlyTheNewestPublishedHead(t *testing.T) {
 		head string
 	}{
 		"older head":            {mr1, "A"},
-		"newest not published":  {mr1, "B"},
 		"unknown head":          {mr1, "C"},
 		"another merge request": {mr2, "A"},
 	} {
@@ -1378,5 +1378,73 @@ func TestProjectGitHubFields(t *testing.T) {
 	}
 	if !found {
 		t.Error("Projects lacks the GitHub row")
+	}
+}
+
+// A draft marked ready while its run is being published (reported, the draft
+// flag already read): Republish asks for another decision, and MarkPublished
+// leaves the run reported once so the publisher decides again.
+func TestRepublishWhileReported(t *testing.T) {
+	s := newStore(t)
+	id := reported(t, s, mr1, "A", `{"status":"completed"}`)
+
+	ok, err := s.Republish(ctx, mr1, "A")
+	if err != nil || !ok {
+		t.Fatalf("Republish while reported = %v, %v; want true", ok, err)
+	}
+	if err := s.MarkPublished(ctx, id); err != nil {
+		t.Fatalf("MarkPublished: %v", err)
+	}
+	r := getRun(t, s, id)
+	if r.State != Reported || r.Attempts != 0 || !r.NotBefore.IsZero() {
+		t.Fatalf("after the in-flight publish: state %s, attempts %d, not_before %v; want reported, 0, due", r.State, r.Attempts, r.NotBefore)
+	}
+	due, err := s.RunsToPublish(ctx, t0, 10)
+	if err != nil || len(due) != 1 || due[0].ID != id {
+		t.Errorf("RunsToPublish = %v, %v; want the run again", runIDs(due), err)
+	}
+
+	// Only once: the next publish publishes it.
+	if err := s.MarkPublished(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if r := getRun(t, s, id); r.State != Published {
+		t.Errorf("second MarkPublished: state %s, want published", r.State)
+	}
+}
+
+// Republish of a reported run keeps its backoff: it only asks for another
+// decision after the current one.
+func TestRepublishWhileReportedKeepsBackoff(t *testing.T) {
+	s := newStore(t)
+	id := reported(t, s, mr1, "A", `{"status":"completed"}`)
+	if err := s.PublishRetry(ctx, id, "boom", t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.Republish(ctx, mr1, "A"); err != nil || !ok {
+		t.Fatalf("Republish = %v, %v; want true", ok, err)
+	}
+	r := getRun(t, s, id)
+	if r.State != Reported || r.Attempts != 1 || !r.NotBefore.Equal(t0.Add(time.Hour)) {
+		t.Errorf("run = %s, attempts %d, not_before %v; want the backoff kept", r.State, r.Attempts, r.NotBefore)
+	}
+}
+
+// A failed publish decides afresh on its retry, so it drops the pending
+// request for another decision; the retry's MarkPublished publishes.
+func TestPublishRetryClearsRedecide(t *testing.T) {
+	s := newStore(t)
+	id := reported(t, s, mr1, "A", `{"status":"completed"}`)
+	if ok, err := s.Republish(ctx, mr1, "A"); err != nil || !ok {
+		t.Fatalf("Republish = %v, %v", ok, err)
+	}
+	if err := s.PublishRetry(ctx, id, "boom", t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkPublished(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if r := getRun(t, s, id); r.State != Published {
+		t.Errorf("state %s, want published", r.State)
 	}
 }

@@ -520,30 +520,44 @@ func (s *Store) queryRuns(ctx context.Context, sql string, args ...any) ([]Run, 
 	return scanRuns(rows)
 }
 
-// MarkPublished records that a reported run's comment and status are out.
+// MarkPublished records that a reported run's comment and status are out. A
+// run Republish flagged meanwhile stays reported instead, once, with no
+// attempts counted and due now, so the publisher decides it again.
 func (s *Store) MarkPublished(ctx context.Context, id string) error {
-	return s.mustUpdate(ctx, id, `UPDATE runs SET state = 'published', publish_error = ''
+	return s.mustUpdate(ctx, id, `UPDATE runs SET
+			state = CASE WHEN redecide THEN 'reported' ELSE 'published' END,
+			attempts = CASE WHEN redecide THEN 0 ELSE attempts END,
+			not_before = CASE WHEN redecide THEN NULL ELSE not_before END,
+			publish_error = '', redecide = false
 		WHERE id = $1::uuid AND state = 'reported'`, id)
 }
 
 // PublishRetry records a failed publish: the run is tried again at notBefore,
-// or becomes publish_failed when this was the 10th failed attempt.
+// or becomes publish_failed when this was the 10th failed attempt. The retry
+// decides afresh, so a pending Republish flag is dropped.
 func (s *Store) PublishRetry(ctx context.Context, id, errText string, notBefore time.Time) error {
 	if len(errText) > maxPublishError {
 		errText = errText[:maxPublishError]
 	}
-	return s.mustUpdate(ctx, id, `UPDATE runs SET attempts = attempts + 1, publish_error = $2, not_before = $3,
+	return s.mustUpdate(ctx, id, `UPDATE runs SET attempts = attempts + 1, publish_error = $2, not_before = $3, redecide = false,
 		state = CASE WHEN attempts + 1 >= $4 THEN 'publish_failed' ELSE state END
 		WHERE id = $1::uuid AND state = 'reported'`, id, errText, notBefore, maxPublishAttempts)
 }
 
-// Republish puts the merge request's newest non-superseded run back to
-// reported, with no attempts counted and due now, when it is published and
-// for headSHA, so the publisher decides it again (a draft marked ready is
-// approved then). It reports whether it did; any other newest run (not yet
-// published, of another head, or none) is left alone, as the normal flow
-// covers it. It takes the same per-MR lock as EnqueueRun, so a push racing it
-// can't leave an older head's review to be posted over the newer one.
+// Republish asks the publisher to decide the merge request's newest
+// non-superseded run again, when that run is for headSHA (a draft marked
+// ready is approved then), and reports whether it did:
+//   - published: it goes back to reported, with no attempts counted and due
+//     now;
+//   - reported: a publish may be under way that read the draft flag before
+//     the change, so the run is flagged to stay reported when it is marked
+//     published (see MarkPublished); its backoff is kept.
+//
+// Any other newest run (queued or running, publish_failed, of another head,
+// or none) is left alone: the normal flow reads the flag when it publishes.
+// It takes the same per-MR lock as EnqueueRun, so a push racing it can't
+// leave an older head's review to be posted over the newer one; the update
+// is one statement, so it serialises with MarkPublished on the row.
 func (s *Store) Republish(ctx context.Context, mr MRKey, headSHA string) (bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -554,12 +568,18 @@ func (s *Store) Republish(ctx context.Context, mr MRKey, headSHA string) (bool, 
 	if err := lockMR(ctx, tx, mr); err != nil {
 		return false, err
 	}
-	tag, err := tx.Exec(ctx, `UPDATE runs SET state = 'reported', attempts = 0, publish_error = '', not_before = NULL
+	// In SET, state is the row's state before the update.
+	tag, err := tx.Exec(ctx, `UPDATE runs SET
+			redecide = state = 'reported',
+			attempts = CASE WHEN state = 'published' THEN 0 ELSE attempts END,
+			publish_error = CASE WHEN state = 'published' THEN '' ELSE publish_error END,
+			not_before = CASE WHEN state = 'published' THEN NULL ELSE not_before END,
+			state = 'reported'
 		WHERE id = (
 			SELECT id FROM runs
 			WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND state <> 'superseded'
 			ORDER BY created_at DESC, id DESC LIMIT 1)
-		  AND state = 'published' AND head_sha = $4`,
+		  AND state IN ('published', 'reported') AND head_sha = $4`,
 		mr.Instance, mr.ProjectID, mr.IID, headSHA)
 	if err != nil {
 		return false, err

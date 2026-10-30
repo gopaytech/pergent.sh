@@ -27,14 +27,17 @@ type DiffRefs struct {
 	StartSHA string `json:"start_sha"`
 }
 
-// MergeRequest holds the fields pergent.sh reads.
+// MergeRequest holds the fields pergent.sh reads. GetMergeRequest sets
+// Draft when either draft or work_in_progress (the name some GitLab versions
+// report it under) is true, so a draft is never read as ready.
 type MergeRequest struct {
-	IID          int64    `json:"iid"`
-	State        string   `json:"state"`
-	Draft        bool     `json:"draft"`
-	SHA          string   `json:"sha"`
-	TargetBranch string   `json:"target_branch"`
-	DiffRefs     DiffRefs `json:"diff_refs"`
+	IID            int64    `json:"iid"`
+	State          string   `json:"state"`
+	Draft          bool     `json:"draft"`
+	WorkInProgress bool     `json:"work_in_progress"`
+	SHA            string   `json:"sha"`
+	TargetBranch   string   `json:"target_branch"`
+	DiffRefs       DiffRefs `json:"diff_refs"`
 }
 
 // Project holds the fields pergent.sh reads.

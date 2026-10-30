@@ -958,3 +958,57 @@ func TestPublishGitLabIgnoresApproveAvailable(t *testing.T) {
 	}
 	wantPublished(t, env, id)
 }
+
+// The draft is marked ready while its review is being published: after the
+// draft flag was read and before the run is marked published. The ready
+// webhook's Republish finds the run reported; the publish still ends, and the
+// next pass decides again and approves.
+func TestPublishReadyDuringPublish(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublish(env, 1, head)
+	draft := openMR(1, head)
+	draft.Draft = true
+	env.GitLab.SetMR(draft)
+	env.GitLab.Reply(http.MethodPut, notePath(1, createdNote), http.StatusOK, `{}`)
+	var once sync.Once
+	env.GitLab.Handle(http.MethodPost, statusPath(head), func(w http.ResponseWriter, _ *http.Request) {
+		// The draft flag was read; the comment is out. Marked ready now.
+		once.Do(func() {
+			env.GitLab.SetMR(openMR(1, head))
+			if ok, err := env.Store.Republish(env.ctx, env.MRKey(1), head); err != nil || !ok {
+				t.Errorf("Republish during the publish = %v, %v; want true", ok, err)
+			}
+		})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{}`)
+	})
+
+	publish(t, env)
+
+	if n := len(env.GitLab.Requests(http.MethodPost, approvePath(1))); n != 0 {
+		t.Fatalf("approved %d times on the draft decision", n)
+	}
+	if r := env.Run(id); r.State != store.Reported || r.Attempts != 0 {
+		t.Fatalf("run state %s, attempts %d; want reported, 0 for another decision", r.State, r.Attempts)
+	}
+
+	publish(t, env)
+
+	wantPublished(t, env, id)
+	if n := len(env.GitLab.Requests(http.MethodPost, approvePath(1))); n != 1 {
+		t.Errorf("approve called %d times, want 1", n)
+	}
+	puts := env.GitLab.Requests(http.MethodPut, notePath(1, createdNote))
+	if len(puts) != 1 {
+		t.Fatalf("got %d note updates, want 1", len(puts))
+	}
+	if body, _ := puts[0].JSON(t)["body"].(string); strings.Contains(body, "draft") {
+		t.Errorf("comment still has the draft note: %q", body)
+	}
+	if got := recordedApproval(t, env, 1); got != head {
+		t.Errorf("recorded approval = %q, want %s", got, head)
+	}
+}

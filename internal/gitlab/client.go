@@ -279,10 +279,12 @@ func (c *Client) GetProject(ctx context.Context, path string) (Project, error) {
 	return p, err
 }
 
-// GetMergeRequest returns one merge request.
+// GetMergeRequest returns one merge request. Draft is true when GitLab reports
+// either draft or work_in_progress.
 func (c *Client) GetMergeRequest(ctx context.Context, projectID, iid int64) (MergeRequest, error) {
 	var mr MergeRequest
 	_, err := c.getJSON(ctx, mrPath(projectID, iid), nil, &mr)
+	mr.Draft = mr.Draft || mr.WorkInProgress
 	return mr, err
 }
 

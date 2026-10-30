@@ -119,6 +119,38 @@ func TestGetMergeRequest(t *testing.T) {
 	expect(t, (*reqs)[0], "GET", "/api/v4/projects/7/merge_requests/3", "")
 }
 
+// GitLab versions whose merge request API reports work_in_progress instead of
+// draft: either flag makes a draft, so a draft is never read as ready.
+func TestGetMergeRequestDraftFlags(t *testing.T) {
+	for name, tc := range map[string]struct {
+		fields map[string]any
+		want   bool
+	}{
+		"neither":               {map[string]any{}, false},
+		"draft":                 {map[string]any{"draft": true}, true},
+		"work_in_progress":      {map[string]any{"work_in_progress": true}, true},
+		"both":                  {map[string]any{"draft": true, "work_in_progress": true}, true},
+		"both false":            {map[string]any{"draft": false, "work_in_progress": false}, false},
+		"draft false, wip true": {map[string]any{"draft": false, "work_in_progress": true}, true},
+		"draft true, wip false": {map[string]any{"draft": true, "work_in_progress": false}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := map[string]any{"iid": 3, "state": "opened", "sha": "abc"}
+			for k, v := range tc.fields {
+				body[k] = v
+			}
+			c, _ := serve(t, jsonReply(body))
+			mr, err := c.GetMergeRequest(context.Background(), 7, 3)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mr.Draft != tc.want {
+				t.Errorf("Draft = %v, want %v", mr.Draft, tc.want)
+			}
+		})
+	}
+}
+
 func TestGetFile(t *testing.T) {
 	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("be careful\n")) })
 	b, ok, err := c.GetFile(context.Background(), 7, ".pergent/instructions.md", "deadbeef")
