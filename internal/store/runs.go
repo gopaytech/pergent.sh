@@ -39,6 +39,9 @@ var (
 	// ErrNotRunning is returned by MarkDispatched when the run is not in
 	// state running (it was superseded, or does not exist).
 	ErrNotRunning = errors.New("store: run is not running")
+	// ErrNotReported is returned by ReplaceWithFailure when the run is not in
+	// state reported with a result (or does not exist).
+	ErrNotReported = errors.New("store: run is not reported with a result")
 )
 
 // maxPublishAttempts is the number of failed publishes after which a run
@@ -388,6 +391,43 @@ func (s *Store) ReportFailure(ctx context.Context, id, reason string, now time.T
 		return false, err
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+// Run returns one run. A malformed or unknown id is reported as not found.
+func (s *Store) Run(ctx context.Context, id string) (Run, bool, error) {
+	if !validUUID(id) {
+		return Run{}, false, nil
+	}
+	r, err := s.getRun(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Run{}, false, nil
+	}
+	if err != nil {
+		return Run{}, false, err
+	}
+	return r, true, nil
+}
+
+// ReplaceWithFailure turns the stored result of a reported run into a failure
+// with reason: it clears the result and keeps the state reported, so the
+// publisher posts an error comment. It returns ErrNotReported when the run is
+// not reported with a result.
+func (s *Store) ReplaceWithFailure(ctx context.Context, id, reason string) error {
+	if !validUUID(id) {
+		return ErrNotReported
+	}
+	if reason == "" {
+		reason = "review failed"
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE runs SET result = NULL, failure_reason = $2
+		WHERE id = $1::uuid AND state = 'reported' AND result IS NOT NULL`, id, reason)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrNotReported
+	}
+	return nil
 }
 
 // RunsToPublish returns reported runs that are due at now, oldest first.

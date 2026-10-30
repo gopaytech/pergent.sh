@@ -817,3 +817,52 @@ func TestMarkDispatchedRequiresRunning(t *testing.T) {
 		t.Errorf("running run: %v", err)
 	}
 }
+
+func TestRunLookup(t *testing.T) {
+	s := newStore(t)
+	id := dispatched(t, s, mr1, "aaa", "tok")
+	r, ok, err := s.Run(ctx, id)
+	if err != nil || !ok {
+		t.Fatalf("Run = %v, %v", ok, err)
+	}
+	if r.ID != id || r.HeadSHA != "aaa" || r.BaseSHA != "base-aaa" {
+		t.Errorf("run = %+v", r)
+	}
+	if _, ok, err := s.Run(ctx, "00000000-0000-0000-0000-000000000000"); ok || err != nil {
+		t.Errorf("unknown id = %v, %v", ok, err)
+	}
+	if _, ok, err := s.Run(ctx, "not-a-uuid"); ok || err != nil {
+		t.Errorf("malformed id = %v, %v", ok, err)
+	}
+}
+
+func TestReplaceWithFailure(t *testing.T) {
+	s := newStore(t)
+	id := reported(t, s, mr1, "aaa", `{"status":"completed"}`)
+	if err := s.ReplaceWithFailure(ctx, id, "unusable"); err != nil {
+		t.Fatalf("ReplaceWithFailure: %v", err)
+	}
+	r := getRun(t, s, id)
+	if r.State != Reported || r.FailureReason != "unusable" || r.Result != nil {
+		t.Errorf("run = state %s reason %q result %q", r.State, r.FailureReason, r.Result)
+	}
+
+	// A run with a failure but no result, a queued run, and an unknown or
+	// malformed id are not replaced.
+	if err := s.ReplaceWithFailure(ctx, id, "again"); !errors.Is(err, ErrNotReported) {
+		t.Errorf("run without result: %v", err)
+	}
+	queued := enqueue(t, s, mr2, "bbb")
+	if err := s.ReplaceWithFailure(ctx, queued, "x"); !errors.Is(err, ErrNotReported) {
+		t.Errorf("queued run: %v", err)
+	}
+	if r := getRun(t, s, queued); r.State != Queued || r.FailureReason != "" {
+		t.Errorf("queued run changed: %+v", r)
+	}
+	if err := s.ReplaceWithFailure(ctx, "00000000-0000-0000-0000-000000000000", "x"); !errors.Is(err, ErrNotReported) {
+		t.Errorf("unknown id: %v", err)
+	}
+	if err := s.ReplaceWithFailure(ctx, "nope", "x"); !errors.Is(err, ErrNotReported) {
+		t.Errorf("malformed id: %v", err)
+	}
+}
