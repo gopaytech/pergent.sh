@@ -1,0 +1,16 @@
+{
+  "object_kind": "merge_request",
+  "project": {"id": 42, "path_with_namespace": "acme/widgets"},
+  "object_attributes": {
+    "iid": 7,
+    "action": "update",
+    "draft": false,
+    "target_branch": "main",
+    "last_commit": {"id": "1111111111111111111111111111111111111111"}
+  },
+  "changes": {
+    "draft": {"previous": true, "current": false},
+    "title": {"previous": "Draft: Add widgets", "current": "Add widgets"},
+    "updated_at": {"previous": "2026-10-30 10:00:00 UTC", "current": "2026-10-30 10:05:00 UTC"}
+  }
+}

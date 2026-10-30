@@ -32,6 +32,7 @@ const (
 type Queue interface {
 	EnqueueRun(ctx context.Context, mr store.MRKey, projectPath, headSHA, targetBranch string) (string, bool, error)
 	SupersedeMR(ctx context.Context, mr store.MRKey) (int, error)
+	Republish(ctx context.Context, mr store.MRKey, headSHA string) (bool, error)
 }
 
 // Handler serves POST /webhooks/gitlab/{instance}.
@@ -66,13 +67,27 @@ type mergeRequestEvent struct {
 			Previous string `json:"previous"`
 			Current  string `json:"current"`
 		} `json:"target_branch"`
+		Draft          *boolChange `json:"draft"`
+		WorkInProgress *boolChange `json:"work_in_progress"`
 	} `json:"changes"`
+}
+
+type boolChange struct {
+	Previous bool `json:"previous"`
+	Current  bool `json:"current"`
 }
 
 // retargeted reports whether an update event changed the target branch.
 func (ev *mergeRequestEvent) retargeted() bool {
 	tb := ev.Changes.TargetBranch
 	return tb != nil && tb.Previous != tb.Current
+}
+
+// markedReady reports whether an update event took the merge request out of
+// draft. GitLab before 14 calls the flag work_in_progress.
+func (ev *mergeRequestEvent) markedReady() bool {
+	ready := func(c *boolChange) bool { return c != nil && c.Previous && !c.Current }
+	return ready(ev.Changes.Draft) || ready(ev.Changes.WorkInProgress)
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -135,15 +150,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	republish := false
 	switch attrs.Action {
 	case "open", "reopen":
 	case "update":
 		// A push carries oldrev. A retarget doesn't, but changes the base
-		// the head is reviewed against. Any other edit changes neither.
+		// the head is reviewed against: both queue a review, whose publish
+		// reads the draft flag. A draft marked ready on its own decides the
+		// head's published review again. Any other edit changes nothing.
 		if attrs.OldRev == "" && !ev.retargeted() {
-			log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "not_a_push")
-			w.WriteHeader(http.StatusOK)
-			return
+			if !ev.markedReady() {
+				log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "not_a_push")
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			republish = true
 		}
 	case "close", "merge":
 	default:
@@ -173,6 +194,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	head := attrs.LastCommit.ID
 	if !validSHA(head) {
 		unusable(w, log, "bad_head_sha")
+		return
+	}
+	if republish {
+		ok, err := h.Queue.Republish(r.Context(), mr, head)
+		if err != nil {
+			log.Error("webhook failed", "outcome", "republish_error", "err", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		if ok && h.Wake != nil {
+			h.Wake()
+		}
+		log.Info("webhook handled", "outcome", "marked_ready", "republished", ok)
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 	id, created, err := h.Queue.EnqueueRun(r.Context(), mr, project, head, attrs.TargetBranch)

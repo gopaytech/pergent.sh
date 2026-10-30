@@ -33,9 +33,15 @@ const (
 	descNothingToReview = "Nothing to review: every changed file is skipped"
 	descClean           = "No blocking issues"
 	descPartlySkipped   = "No blocking issues; not approved: some changed files weren't reviewed"
+	descNotApproved     = "No blocking issues; not approved: "
 
-	noteNothingReviewed = "**Not approved:** every changed file was skipped by pergent's default rules, so nothing was reviewed. A human needs to look."
-	notePartlySkipped   = "**Not approved:** some changed files were skipped by pergent's default rules, so they weren't reviewed. A human needs to look."
+	reasonDraft              = "draft"
+	reasonApproveUnavailable = "the pergent approve App isn't installed on this repository"
+
+	noteNothingReviewed    = "**Not approved:** every changed file was skipped by pergent's default rules, so nothing was reviewed. A human needs to look."
+	notePartlySkipped      = "**Not approved:** some changed files were skipped by pergent's default rules, so they weren't reviewed. A human needs to look."
+	noteDraft              = "---\n**Not approved:** this is a draft. It will be approved when it's marked ready."
+	noteApproveUnavailable = "---\n**Not approved:** the pergent approve App isn't installed on this repository."
 
 	maxListedSkipped = 20
 )
@@ -51,9 +57,17 @@ var defaultSkipRules = map[string]bool{
 
 // Outcome is what a run produced. FailureReason is set when no usable result
 // arrived (the Job died, the result did not parse, the run was cancelled...).
+//
+// Draft and ApproveUnavailable only matter to a review that would otherwise
+// be approved: it still gets its success status, but no approval. Draft is
+// the change being a draft (it is approved once marked ready);
+// ApproveUnavailable is the approve side unable to reach the repository (the
+// approve App isn't installed on it). Draft wins when both are set.
 type Outcome struct {
-	Result        *result.Result
-	FailureReason string
+	Result             *result.Result
+	FailureReason      string
+	Draft              bool
+	ApproveUnavailable bool
 }
 
 // Decision is what to do with an outcome.
@@ -170,7 +184,23 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 			Description: descPartlySkipped,
 		}
 	}
+	switch {
+	case o.Draft:
+		return notApproved(comment, r.Comment.FindingsBlock, reasonDraft, noteDraft)
+	case o.ApproveUnavailable:
+		return notApproved(comment, r.Comment.FindingsBlock, reasonApproveUnavailable, noteApproveUnavailable)
+	}
 	return Decision{Comment: comment, Status: StatusSuccess, Description: descClean, Approve: true}
+}
+
+// notApproved is a clean review that isn't approved for reason: success, the
+// note before the findings block.
+func notApproved(comment, block, reason, note string) Decision {
+	return Decision{
+		Comment:     withNote(comment, block, note),
+		Status:      StatusSuccess,
+		Description: descNotApproved + reason,
+	}
 }
 
 // ErrorComment is the comment for a review that could not run.

@@ -27,11 +27,27 @@ type enqueueCall struct {
 	projectPath, head, branch string
 }
 
+type republishCall struct {
+	mr   store.MRKey
+	head string
+}
+
 type fakeQueue struct {
-	enqueues   []enqueueCall
-	supersedes []store.MRKey
-	created    bool
-	err        error
+	enqueues    []enqueueCall
+	supersedes  []store.MRKey
+	republishes []republishCall
+	created     bool
+	// republished is what Republish answers.
+	republished bool
+	err         error
+}
+
+func (q *fakeQueue) Republish(_ context.Context, mr store.MRKey, headSHA string) (bool, error) {
+	q.republishes = append(q.republishes, republishCall{mr, headSHA})
+	if q.err != nil {
+		return false, q.err
+	}
+	return q.republished, nil
 }
 
 func (q *fakeQueue) EnqueueRun(_ context.Context, mr store.MRKey, projectPath, headSHA, targetBranch string) (string, bool, error) {
@@ -59,7 +75,7 @@ type rig struct {
 
 func newRig(t *testing.T) *rig {
 	t.Helper()
-	r := &rig{q: &fakeQueue{created: true}, logs: &bytes.Buffer{}}
+	r := &rig{q: &fakeQueue{created: true, republished: true}, logs: &bytes.Buffer{}}
 	h := &Handler{
 		Config: &config.Config{
 			GitLab:       []config.Instance{{Name: "main", URL: "https://gitlab.example.com"}},
@@ -413,5 +429,92 @@ func TestNeverLogsTokenOrBody(t *testing.T) {
 		if strings.Contains(logs, bad) {
 			t.Fatalf("log leaks %q: %s", bad, logs)
 		}
+	}
+}
+
+// Marking a draft ready re-runs the publish decision for the head: the review
+// is already published and nothing is queued.
+func TestDraftReadyRepublishes(t *testing.T) {
+	r := newRig(t)
+	wantStatus(t, r.hook(fixture(t, "mr_ready.json")), 200)
+	want := republishCall{store.MRKey{Instance: "main", ProjectID: 42, IID: 7}, openHead}
+	if len(r.q.republishes) != 1 || r.q.republishes[0] != want {
+		t.Fatalf("republishes = %+v, want [%+v]", r.q.republishes, want)
+	}
+	if len(r.q.enqueues)+len(r.q.supersedes) != 0 {
+		t.Errorf("ready touched the queue: %+v %+v", r.q.enqueues, r.q.supersedes)
+	}
+	if r.wakes != 1 {
+		t.Errorf("wakes = %d, want 1", r.wakes)
+	}
+}
+
+// GitLab before 14 reports the draft flag as work_in_progress.
+func TestWorkInProgressReadyRepublishes(t *testing.T) {
+	r := newRig(t)
+	body := bytes.Replace(fixture(t, "mr_ready.json"), []byte(`"draft": {"previous"`), []byte(`"work_in_progress": {"previous"`), 1)
+	wantStatus(t, r.hook(body), 200)
+	if len(r.q.republishes) != 1 {
+		t.Fatalf("republishes = %+v, want one", r.q.republishes)
+	}
+}
+
+// Nothing was republished (the head's review isn't published yet): the normal
+// flow reads the draft flag when it publishes, so there is nothing to wake.
+func TestDraftReadyNothingToRepublish(t *testing.T) {
+	r := newRig(t)
+	r.q.republished = false
+	wantStatus(t, r.hook(fixture(t, "mr_ready.json")), 200)
+	if len(r.q.republishes) != 1 || r.wakes != 0 {
+		t.Fatalf("republishes = %+v, wakes = %d; want one call, no wake", r.q.republishes, r.wakes)
+	}
+}
+
+func TestReadyToDraftIgnored(t *testing.T) {
+	for name, body := range map[string][]byte{
+		"draft": bytes.Replace(fixture(t, "mr_ready.json"), []byte(`{"previous": true, "current": false}`), []byte(`{"previous": false, "current": true}`), 1),
+		"work_in_progress": bytes.Replace(bytes.Replace(fixture(t, "mr_ready.json"), []byte(`{"previous": true, "current": false}`), []byte(`{"previous": false, "current": true}`), 1),
+			[]byte(`"draft": {"previous"`), []byte(`"work_in_progress": {"previous"`), 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t)
+			wantStatus(t, r.hook(body), 200)
+			if len(r.q.republishes)+len(r.q.enqueues)+len(r.q.supersedes) != 0 || r.wakes != 0 {
+				t.Fatalf("ready→draft touched the queue: %+v %+v %+v wakes=%d", r.q.republishes, r.q.enqueues, r.q.supersedes, r.wakes)
+			}
+		})
+	}
+}
+
+// A push that also marks the merge request ready is a push: the new head is
+// queued, and its publish reads the draft flag.
+func TestDraftReadyWithPushEnqueues(t *testing.T) {
+	r := newRig(t)
+	body := bytes.Replace(fixture(t, "mr_ready.json"), []byte(`"draft": false,`),
+		[]byte(`"draft": false, "oldrev": "0000000000000000000000000000000000000abc",`), 1)
+	wantStatus(t, r.hook(body), 200)
+	if len(r.q.enqueues) != 1 || len(r.q.republishes) != 0 {
+		t.Fatalf("enqueues = %+v, republishes = %+v; want one enqueue", r.q.enqueues, r.q.republishes)
+	}
+}
+
+func TestDraftReadyBadHeadIs200(t *testing.T) {
+	r := newRig(t)
+	body := bytes.Replace(fixture(t, "mr_ready.json"), []byte(openHead), []byte("abc"), 1)
+	wantStatus(t, r.hook(body), 200)
+	if len(r.q.republishes) != 0 {
+		t.Fatal("garbage head was republished")
+	}
+	if !strings.Contains(r.logs.String(), "bad_head_sha") {
+		t.Errorf("not logged: %s", r.logs.String())
+	}
+}
+
+func TestDraftReadyStoreErrorIs500(t *testing.T) {
+	r := newRig(t)
+	r.q.err = errors.New("db down")
+	wantStatus(t, r.hook(fixture(t, "mr_ready.json")), 500)
+	if r.wakes != 0 {
+		t.Fatal("woke on error")
 	}
 }

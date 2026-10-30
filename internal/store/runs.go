@@ -537,6 +537,39 @@ func (s *Store) PublishRetry(ctx context.Context, id, errText string, notBefore 
 		WHERE id = $1::uuid AND state = 'reported'`, id, errText, notBefore, maxPublishAttempts)
 }
 
+// Republish puts the merge request's newest non-superseded run back to
+// reported, with no attempts counted and due now, when it is published and
+// for headSHA, so the publisher decides it again (a draft marked ready is
+// approved then). It reports whether it did; any other newest run (not yet
+// published, of another head, or none) is left alone, as the normal flow
+// covers it. It takes the same per-MR lock as EnqueueRun, so a push racing it
+// can't leave an older head's review to be posted over the newer one.
+func (s *Store) Republish(ctx context.Context, mr MRKey, headSHA string) (bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+
+	if err := lockMR(ctx, tx, mr); err != nil {
+		return false, err
+	}
+	tag, err := tx.Exec(ctx, `UPDATE runs SET state = 'reported', attempts = 0, publish_error = '', not_before = NULL
+		WHERE id = (
+			SELECT id FROM runs
+			WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND state <> 'superseded'
+			ORDER BY created_at DESC, id DESC LIMIT 1)
+		  AND state = 'published' AND head_sha = $4`,
+		mr.Instance, mr.ProjectID, mr.IID, headSHA)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 // RunsToCleanUp returns superseded runs whose Job has not been cleaned up.
 func (s *Store) RunsToCleanUp(ctx context.Context) ([]Run, error) {
 	return s.queryRuns(ctx, `SELECT `+runColumns+` FROM runs

@@ -456,3 +456,94 @@ func sorted(s ...string) []string {
 	slices.Sort(s)
 	return s
 }
+
+const (
+	wantNoteDraft              = "---\n**Not approved:** this is a draft. It will be approved when it's marked ready."
+	wantNoteApproveUnavailable = "---\n**Not approved:** the pergent approve App isn't installed on this repository."
+)
+
+// A draft is reviewed and gets its status, but is approved only once it is
+// marked ready.
+func TestDecideDraftNotApproved(t *testing.T) {
+	d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), Draft: true}, config.FailureStatusFailed)
+	if d.Approve || d.Status != StatusSuccess || d.Description != "No blocking issues; not approved: draft" {
+		t.Fatalf("got %+v", d)
+	}
+	want := Marker + "\n### review\n\nbody\n\n" + wantNoteDraft + "\n\n" + findingsBlock
+	if d.Comment != want {
+		t.Errorf("comment:\n%q\nwant:\n%q", d.Comment, want)
+	}
+}
+
+// The approve App missing from a repository: reviewed, success, no approval.
+func TestDecideApproveUnavailableNotApproved(t *testing.T) {
+	d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), ApproveUnavailable: true}, config.FailureStatusFailed)
+	if d.Approve || d.Status != StatusSuccess ||
+		d.Description != "No blocking issues; not approved: the pergent approve App isn't installed on this repository" {
+		t.Fatalf("got %+v", d)
+	}
+	want := Marker + "\n### review\n\nbody\n\n" + wantNoteApproveUnavailable + "\n\n" + findingsBlock
+	if d.Comment != want {
+		t.Errorf("comment:\n%q\nwant:\n%q", d.Comment, want)
+	}
+}
+
+// A draft on a repository without the approve App: the draft is the reason.
+func TestDecideDraftWinsOverApproveUnavailable(t *testing.T) {
+	d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), Draft: true, ApproveUnavailable: true}, config.FailureStatusFailed)
+	if d.Approve || d.Description != "No blocking issues; not approved: draft" ||
+		!strings.Contains(d.Comment, wantNoteDraft) || strings.Contains(d.Comment, "approve App") {
+		t.Fatalf("got %+v", d)
+	}
+}
+
+// Draft and approve-unavailable only change a decision that would approve:
+// every other row is decided as before.
+func TestDecideDraftKeepsOtherRows(t *testing.T) {
+	partly := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{
+		Reviewed: []string{"f.go"}, Skipped: []result.Skipped{{Path: "go.sum", Rule: "lockfile"}}}})
+	nothing := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{
+		Skipped: []result.Skipped{{Path: "go.sum", Rule: "lockfile"}}}})
+	cases := map[string]Outcome{
+		"blocking":        {Result: completed(skill("a", "has_blocking_issues", "f.go"))},
+		"failed skill":    {Result: completed(skill("a", "failed"))},
+		"failure reason":  {FailureReason: "the job timed out"},
+		"error result":    {Result: &result.Result{Status: "error", Comment: result.Comment{Markdown: Marker + "\nboom"}}},
+		"partly skipped":  {Result: partly},
+		"nothing to do":   {Result: nothing},
+		"no result":       {},
+		"unknown verdict": {Result: completed(skill("a", "weird", "f.go"))},
+	}
+	for name, o := range cases {
+		for _, flags := range []struct{ draft, unavailable bool }{{true, false}, {false, true}, {true, true}} {
+			t.Run(name, func(t *testing.T) {
+				base := Decide(o, config.FailureStatusFailed)
+				flagged := o
+				flagged.Draft, flagged.ApproveUnavailable = flags.draft, flags.unavailable
+				got := Decide(flagged, config.FailureStatusFailed)
+				if got != base {
+					t.Errorf("draft=%v unavailable=%v changed the decision:\n%+v\nwant\n%+v", flags.draft, flags.unavailable, got, base)
+				}
+			})
+		}
+	}
+}
+
+// A draft with blocking findings is failed, as any review with them.
+func TestDecideDraftWithBlockingFindingsFails(t *testing.T) {
+	d := Decide(Outcome{Result: completed(skill("a", "has_blocking_issues", "f.go")), Draft: true}, config.FailureStatusNeutral)
+	if d.Approve || d.Status != StatusFailed || d.Description != "Blocking issues found" || strings.Contains(d.Comment, "draft") {
+		t.Fatalf("got %+v", d)
+	}
+}
+
+// The draft note goes after the review text and before the findings block,
+// and is appended when there is no block.
+func TestDecideDraftNoteWithoutBlock(t *testing.T) {
+	r := completed(skill("a", "no_blocking_issues", "f.go"))
+	r.Comment = result.Comment{Markdown: Marker + "\nbody"}
+	d := Decide(Outcome{Result: r, Draft: true}, config.FailureStatusFailed)
+	if want := Marker + "\nbody\n\n" + wantNoteDraft + "\n"; d.Comment != want {
+		t.Errorf("comment:\n%q\nwant:\n%q", d.Comment, want)
+	}
+}

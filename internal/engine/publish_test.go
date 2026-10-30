@@ -819,3 +819,142 @@ func TestStaleApprovalFailureAndUnknownInstance(t *testing.T) {
 		t.Errorf("StaleApprovals = %v, want MR 1's still", stale)
 	}
 }
+
+// A draft is reviewed and gets its comment and status but no approval. Marked
+// ready, its published review is decided again: the comment loses the draft
+// note, and the head is approved.
+func TestPublishDraftThenReady(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublish(env, 1, head)
+	draft := openMR(1, head)
+	draft.Draft = true
+	env.GitLab.SetMR(draft)
+
+	publish(t, env)
+
+	wantStatus(t, env, head, gitlab.StatusSuccess, "No blocking issues; not approved: draft")
+	body := createdComment(t, env, 1)
+	if !strings.Contains(body, "**Not approved:** this is a draft. It will be approved when it's marked ready.") {
+		t.Errorf("comment lacks the draft note: %q", body)
+	}
+	if !strings.HasSuffix(body, "<!-- pergent:findings [] -->") {
+		t.Errorf("findings block is not last: %q", body)
+	}
+	wantPublished(t, env, id)
+	if n := len(env.GitLab.Requests(http.MethodPost, approvePath(1))); n != 0 {
+		t.Fatalf("approved a draft %d times", n)
+	}
+
+	// Marked ready: the webhook republishes the head's run.
+	env.GitLab.SetMR(openMR(1, head))
+	env.GitLab.Reply(http.MethodPut, notePath(1, createdNote), http.StatusOK, `{}`)
+	env.GitLab.Reset()
+	if ok, err := env.Store.Republish(env.ctx, env.MRKey(1), head); err != nil || !ok {
+		t.Fatalf("Republish = %v, %v", ok, err)
+	}
+
+	publish(t, env)
+
+	wantStatus(t, env, head, gitlab.StatusSuccess, "No blocking issues")
+	puts := env.GitLab.Requests(http.MethodPut, notePath(1, createdNote))
+	if len(puts) != 1 {
+		t.Fatalf("got %d note updates, want 1", len(puts))
+	}
+	if body, _ := puts[0].JSON(t)["body"].(string); strings.Contains(body, "draft") || !strings.Contains(body, testMarkdown) {
+		t.Errorf("updated comment = %q, want the review without the draft note", body)
+	}
+	if n := len(env.GitLab.Requests(http.MethodPost, notesPath(1))); n != 0 {
+		t.Errorf("created %d notes, want the existing one updated", n)
+	}
+	if n := len(env.GitLab.Requests(http.MethodPost, approvePath(1))); n != 1 {
+		t.Errorf("approve called %d times, want 1", n)
+	}
+	wantPublished(t, env, id)
+	if got := recordedApproval(t, env, 1); got != head {
+		t.Errorf("recorded approval = %q, want %s", got, head)
+	}
+}
+
+// A draft with blocking findings is failed as before, and the MR is never
+// read for the draft flag.
+func TestPublishDraftBlockingFails(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("has_blocking_issues", "a.go")))
+	servePublish(env, 1, head)
+	draft := openMR(1, head)
+	draft.Draft = true
+	env.GitLab.SetMR(draft)
+
+	publish(t, env)
+
+	wantStatus(t, env, head, gitlab.StatusFailed, "Blocking issues found")
+	if body := createdComment(t, env, 1); strings.Contains(body, "draft") {
+		t.Errorf("comment has the draft note: %q", body)
+	}
+	wantPublished(t, env, id)
+	wantNoApproval(t, env, 1)
+}
+
+// The MR can't be read for the draft flag: nothing is posted, and the run is
+// retried, as for any GitLab error.
+func TestPublishDraftFlagUnreadableRetries(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublish(env, 1, head)
+	env.GitLab.Reply(http.MethodGet, mrPath(1), http.StatusForbidden, `{"message":"403 Forbidden"}`)
+
+	publish(t, env)
+
+	if r := env.Run(id); r.State != store.Reported || r.Attempts != 1 {
+		t.Errorf("run state %s, attempts %d; want reported, 1", r.State, r.Attempts)
+	}
+	if n := len(env.GitLab.Requests(http.MethodPost, notesPath(1))) + len(env.GitLab.Requests(http.MethodPost, statusPath(head))); n != 0 {
+		t.Errorf("posted %d comments or statuses without knowing whether the MR is a draft", n)
+	}
+	wantNoApproval(t, env, 1)
+}
+
+// A platform whose approve side can be missing (GitHub, where the approve App
+// may not be installed): a project stored without it is reviewed and gets
+// its status, but isn't approved.
+func TestPublishApproveUnavailable(t *testing.T) {
+	env := newTestEnv(t)
+	plat := env.Engine.Platforms[testInstance]
+	plat.GitLab = nil // not a GitLab instance
+	env.Engine.Platforms[testInstance] = plat
+	env.SeedProject(func(p *store.Project) { p.InstallationID, p.ApproveAvailable = 99, false })
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublish(env, 1, head)
+
+	publish(t, env)
+
+	wantStatus(t, env, head, gitlab.StatusSuccess, "No blocking issues; not approved: the pergent approve App isn't installed on this repository")
+	if body := createdComment(t, env, 1); !strings.Contains(body, "**Not approved:** the pergent approve App isn't installed on this repository.") {
+		t.Errorf("comment lacks the note: %q", body)
+	}
+	wantPublished(t, env, id)
+	wantNoApproval(t, env, 1)
+}
+
+// On GitLab the approve bot is a user that can always approve: the stored
+// flag is never read as missing.
+func TestPublishGitLabIgnoresApproveAvailable(t *testing.T) {
+	env := newTestEnv(t)
+	env.SeedProject(func(p *store.Project) { p.InstallationID, p.ApproveAvailable = 99, false })
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublish(env, 1, head)
+
+	publish(t, env)
+
+	wantStatus(t, env, head, gitlab.StatusSuccess, "No blocking issues")
+	if n := len(env.GitLab.Requests(http.MethodPost, approvePath(1))); n != 1 {
+		t.Errorf("approve called %d times, want 1", n)
+	}
+	wantPublished(t, env, id)
+}

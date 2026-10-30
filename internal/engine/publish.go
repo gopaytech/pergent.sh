@@ -101,7 +101,16 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 	if repo, ok := e.Config.Repository(run.MR.Instance, run.ProjectPath); ok {
 		failure = repo.FailureStatus
 	}
-	d := policy.Decide(e.outcome(run, log), failure)
+	o := e.outcome(run, log)
+	if policy.Decide(o, failure).Approve {
+		// Only a review that would be approved depends on whether the
+		// change is a draft and the approve side can reach the repository.
+		var err error
+		if o, err = e.approveInputs(ctx, plat, run, o); err != nil {
+			return err
+		}
+	}
+	d := policy.Decide(o, failure)
 
 	if err := e.upsertComment(ctx, plat.Forge, run, d.Comment); err != nil {
 		return fmt.Errorf("post comment: %w", err)
@@ -119,6 +128,26 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 	}
 	log.Info("review published", "status", d.Status, "approved", d.Approve)
 	return nil
+}
+
+// approveInputs adds to o what decides whether a clean review is approved:
+// the change being a draft (read from the platform) and, on a platform whose
+// approve side can be missing from a repository, the stored project saying
+// so. On GitLab the approve bot is a user that can always approve.
+func (e *Engine) approveInputs(ctx context.Context, plat Platform, run store.Run, o policy.Outcome) (policy.Outcome, error) {
+	ch, err := plat.Forge.GetChange(ctx, run.MR.ProjectID, run.MR.IID)
+	if err != nil {
+		return o, fmt.Errorf("get merge request: %w", err)
+	}
+	o.Draft = ch.Draft
+	if plat.GitLab == nil {
+		p, found, err := e.Store.Project(ctx, run.MR.Instance, run.MR.ProjectID)
+		if err != nil {
+			return o, fmt.Errorf("load project: %w", err)
+		}
+		o.ApproveUnavailable = found && !p.ApproveAvailable
+	}
+	return o, nil
 }
 
 // outcome is what the run produced. A stored result is checked again: it has
@@ -187,7 +216,10 @@ func (e *Engine) upsertComment(ctx context.Context, f forge.Forge, run store.Run
 }
 
 // approve approves the run's head with the approve bot, only while the merge
-// request is open, still at that head and still targets the run's branch. A head that moved is not an error:
+// request is open, not a draft, still at that head and still targets the
+// run's branch. It reads the merge request again right before approving (the
+// read that decided the comment came before the comment and status were
+// posted). A head that moved is not an error:
 // the review stands for its own commit and the newer head gets its own run.
 //
 // The approval is recorded before it is made, so an approval that reaches
@@ -203,9 +235,9 @@ func (e *Engine) approve(ctx context.Context, plat Platform, run store.Run, log 
 	if err != nil {
 		return fmt.Errorf("get merge request: %w", err)
 	}
-	if mr.State != forge.StateOpen || mr.HeadSHA != run.HeadSHA || mr.TargetBranch != run.TargetBranch {
-		log.Info("not approving: the merge request is closed, or its head or target branch moved",
-			"state", mr.State, "mr_head", mr.HeadSHA, "mr_target", mr.TargetBranch, "run_target", run.TargetBranch)
+	if mr.State != forge.StateOpen || mr.HeadSHA != run.HeadSHA || mr.TargetBranch != run.TargetBranch || mr.Draft {
+		log.Info("not approving: the merge request is closed or a draft again, or its head or target branch moved",
+			"state", mr.State, "draft", mr.Draft, "mr_head", mr.HeadSHA, "mr_target", mr.TargetBranch, "run_target", run.TargetBranch)
 		return nil
 	}
 

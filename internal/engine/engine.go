@@ -83,16 +83,20 @@ func (e *Engine) log() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// Loop intervals of Run.
-const (
-	passInterval      = 2 * time.Second
-	watchInterval     = 15 * time.Second
+// Loop intervals of Run. They are variables so tests can shorten them.
+var (
+	passInterval  = 2 * time.Second
+	watchInterval = 15 * time.Second
+	// sweepInterval is the approval sweep's. The sweep reads every approved
+	// change from its platform, so it doesn't run on the watch tick: about
+	// 20 approved pull requests would use up GitHub's rate limit.
+	sweepInterval     = 5 * time.Minute
 	reconcileInterval = time.Hour
 )
 
 // Run runs the loops until ctx is done: dispatch, publish and cleanup every
-// 2 s or on Wake, watch and sweep the approvals every 15 s and reconcile
-// every hour. They all run in
+// 2 s or on Wake, watch every 15 s, sweep the approvals every 5 minutes and
+// reconcile every hour. They all run in
 // this one goroutine, one after another, so no two of them ever overlap (a
 // publish and a cleanup of the same merge request least of all). Errors are
 // logged and never stop the loop. Before the first pass, runs stranded
@@ -118,6 +122,8 @@ func (e *Engine) Run(ctx context.Context) {
 	defer pass.Stop()
 	watch := time.NewTicker(watchInterval)
 	defer watch.Stop()
+	sweep := time.NewTicker(sweepInterval)
+	defer sweep.Stop()
 	reconcile := time.NewTicker(reconcileInterval)
 	defer reconcile.Stop()
 
@@ -134,6 +140,7 @@ func (e *Engine) Run(ctx context.Context) {
 			if err := e.WatchOnce(ctx); err != nil && ctx.Err() == nil {
 				log.Error("watch failed", "error", e.redact(err.Error()))
 			}
+		case <-sweep.C:
 			e.sweepApprovals(ctx)
 		case <-reconcile.C:
 			if err := e.Reconcile(ctx); err != nil && ctx.Err() == nil {

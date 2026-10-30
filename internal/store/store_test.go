@@ -1247,3 +1247,136 @@ func TestMigration0003BackfillsApprovedTarget(t *testing.T) {
 		t.Errorf("Approvals = %v, %v; want target release", got, err)
 	}
 }
+
+// Republish puts the newest run back to reported when it is published at the
+// given head, so the publisher decides again (a draft marked ready).
+func TestRepublish(t *testing.T) {
+	s := newStore(t)
+	id := published(t, s, mr1, "A", "main")
+	if err := s.PublishRetry(ctx, id, "", t0); err == nil {
+		t.Fatal("PublishRetry on a published run should fail")
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET attempts = 3, publish_error = 'old', not_before = $2 WHERE id = $1::uuid`, id, t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	ok, err := s.Republish(ctx, mr1, "A")
+	if err != nil || !ok {
+		t.Fatalf("Republish = %v, %v; want true", ok, err)
+	}
+	r := getRun(t, s, id)
+	if r.State != Reported || r.Attempts != 0 || r.PublishError != "" || !r.NotBefore.IsZero() {
+		t.Errorf("run = state %s, attempts %d, error %q, not_before %v; want reported, 0, '', unset", r.State, r.Attempts, r.PublishError, r.NotBefore)
+	}
+	due, err := s.RunsToPublish(ctx, t0, 10)
+	if err != nil || len(due) != 1 || due[0].ID != id {
+		t.Errorf("RunsToPublish = %v, %v; want the republished run", runIDs(due), err)
+	}
+
+	// Already reported: nothing to do.
+	if ok, err := s.Republish(ctx, mr1, "A"); err != nil || ok {
+		t.Errorf("second Republish = %v, %v; want false", ok, err)
+	}
+}
+
+func TestRepublishOnlyTheNewestPublishedHead(t *testing.T) {
+	s := newStore(t)
+	old := published(t, s, mr1, "A", "main")
+	newer := reported(t, s, mr1, "B", `{"status":"completed"}`)
+
+	for name, tc := range map[string]struct {
+		mr   MRKey
+		head string
+	}{
+		"older head":            {mr1, "A"},
+		"newest not published":  {mr1, "B"},
+		"unknown head":          {mr1, "C"},
+		"another merge request": {mr2, "A"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if ok, err := s.Republish(ctx, tc.mr, tc.head); err != nil || ok {
+				t.Errorf("Republish = %v, %v; want false", ok, err)
+			}
+		})
+	}
+	if r := getRun(t, s, old); r.State != Published {
+		t.Errorf("old run state = %s, want published", r.State)
+	}
+	if r := getRun(t, s, newer); r.State != Reported || r.Attempts != 0 {
+		t.Errorf("newest run = %s, %d", r.State, r.Attempts)
+	}
+}
+
+// A published run of the head that isn't the newest run (another target was
+// queued since) is not republished.
+func TestRepublishNotNewest(t *testing.T) {
+	s := newStore(t)
+	id := published(t, s, mr1, "A", "main")
+	if _, _, err := s.EnqueueRun(ctx, mr1, "acme/widgets", "A", "develop"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.Republish(ctx, mr1, "A"); err != nil || ok {
+		t.Errorf("Republish = %v, %v; want false", ok, err)
+	}
+	if r := getRun(t, s, id); r.State != Published {
+		t.Errorf("run state = %s, want published", r.State)
+	}
+}
+
+// Migration 0004 adds the GitHub fields; a row stored before it gets
+// installation 0 and an approve side that is available.
+func TestProjectGitHubFields(t *testing.T) {
+	s := newStore(t)
+	inst := "https://gitlab.example.com"
+	if _, err := s.pool.Exec(ctx, `INSERT INTO projects (instance, project_id, path) VALUES ($1, 5, 'acme/old')`, inst); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.Project(ctx, inst, 5)
+	if err != nil || !ok || got.InstallationID != 0 || !got.ApproveAvailable {
+		t.Fatalf("defaults = %+v, %v, %v; want installation 0, approve available", got, ok, err)
+	}
+
+	// A GitLab row (no installation) keeps true whatever the caller passes:
+	// reconcile builds GitLab rows without the field.
+	if err := s.UpsertProject(ctx, Project{Instance: inst, ProjectID: 5, Path: "acme/old"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertProject(ctx, Project{Instance: inst, ProjectID: 6, Path: "acme/new"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{5, 6} {
+		if got, _, _ := s.Project(ctx, inst, id); !got.ApproveAvailable {
+			t.Errorf("GitLab project %d: approve available = false, want true", id)
+		}
+	}
+
+	// A GitHub row stores both fields as given, on insert and on update.
+	gh := Project{Instance: "github", ProjectID: 900, Path: "acme/widgets", InstallationID: 12345, ApproveAvailable: false}
+	if err := s.UpsertProject(ctx, gh); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ = s.Project(ctx, "github", 900)
+	if got.InstallationID != 12345 || got.ApproveAvailable {
+		t.Errorf("GitHub insert = %+v; want installation 12345, approve unavailable", got)
+	}
+	gh.InstallationID, gh.ApproveAvailable = 777, true
+	if err := s.UpsertProject(ctx, gh); err != nil {
+		t.Fatal(err)
+	}
+	all, err := s.Projects(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, p := range all {
+		if p.Instance == "github" {
+			found = true
+			if p.InstallationID != 777 || !p.ApproveAvailable {
+				t.Errorf("GitHub update = %+v; want installation 777, approve available", p)
+			}
+		}
+	}
+	if !found {
+		t.Error("Projects lacks the GitHub row")
+	}
+}

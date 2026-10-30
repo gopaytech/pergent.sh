@@ -99,3 +99,65 @@ func TestRunSweepsApprovalsAtStart(t *testing.T) {
 	cancel()
 	<-done
 }
+
+// runFor runs the engine for d, then stops it.
+func runFor(t *testing.T, env *testEnv, d time.Duration) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(env.ctx)
+	done := make(chan struct{})
+	go func() {
+		env.Engine.Run(ctx)
+		close(done)
+	}()
+	time.Sleep(d)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after its context was cancelled")
+	}
+}
+
+// setIntervals shortens Run's loop intervals for one test.
+func setIntervals(t *testing.T, watch, sweep time.Duration) {
+	t.Helper()
+	oldWatch, oldSweep := watchInterval, sweepInterval
+	watchInterval, sweepInterval = watch, sweep
+	t.Cleanup(func() { watchInterval, sweepInterval = oldWatch, oldSweep })
+}
+
+// The approval sweep reads every approved MR, so it runs on its own interval
+// (5 minutes) and not on the 15 s watch tick: about 20 approved PRs would
+// otherwise use up GitHub's rate limit.
+func TestRunSweepsOnItsOwnInterval(t *testing.T) {
+	if sweepInterval != 5*time.Minute {
+		t.Errorf("sweepInterval = %v, want 5m", sweepInterval)
+	}
+
+	t.Run("not on the watch tick", func(t *testing.T) {
+		env := newTestEnv(t)
+		approved(t, env, 1, sha('a'))
+		env.GitLab.SetMR(openMR(1, sha('a')))
+		setIntervals(t, 10*time.Millisecond, time.Hour)
+
+		runFor(t, env, 300*time.Millisecond)
+
+		// The one at startup only.
+		if n := len(env.GitLab.Requests(http.MethodGet, mrPath(1))); n != 1 {
+			t.Errorf("swept %d times in ~30 watch ticks, want 1 (at startup)", n)
+		}
+	})
+
+	t.Run("on its own ticker", func(t *testing.T) {
+		env := newTestEnv(t)
+		approved(t, env, 1, sha('a'))
+		env.GitLab.SetMR(openMR(1, sha('a')))
+		setIntervals(t, time.Hour, 20*time.Millisecond)
+
+		runFor(t, env, 300*time.Millisecond)
+
+		if n := len(env.GitLab.Requests(http.MethodGet, mrPath(1))); n < 3 {
+			t.Errorf("swept %d times in ~15 sweep intervals, want several", n)
+		}
+	})
+}

@@ -20,10 +20,19 @@ type Project struct {
 	DeployTokenExpiresAt  time.Time
 	// CloneSeconds is the last measured checkout time, 0 when unknown.
 	CloneSeconds int
+	// InstallationID is the GitHub review App's installation that reaches
+	// the repository; 0 on GitLab.
+	InstallationID int64
+	// ApproveAvailable is whether the approve side can reach the repository
+	// (the GitHub approve App is installed on it). A GitLab project, whose
+	// InstallationID is 0, is always stored with true: its approve bot is a
+	// user that can always approve.
+	ApproveAvailable bool
 }
 
 const projectColumns = `instance, project_id, path, http_url_to_repo, hook_id, deploy_token_id,
-	deploy_token_username, deploy_token_sealed, deploy_token_expires_at, clone_seconds`
+	deploy_token_username, deploy_token_sealed, deploy_token_expires_at, clone_seconds,
+	installation_id, approve_available`
 
 func scanProject(row pgx.Row) (Project, error) {
 	var (
@@ -31,7 +40,8 @@ func scanProject(row pgx.Row) (Project, error) {
 		expires *time.Time
 	)
 	err := row.Scan(&p.Instance, &p.ProjectID, &p.Path, &p.HTTPURLToRepo, &p.HookID, &p.DeployTokenID,
-		&p.DeployTokenUsername, &p.DeployTokenSealed, &expires, &p.CloneSeconds)
+		&p.DeployTokenUsername, &p.DeployTokenSealed, &expires, &p.CloneSeconds,
+		&p.InstallationID, &p.ApproveAvailable)
 	p.DeployTokenExpiresAt = deref(expires)
 	return p, err
 }
@@ -68,20 +78,26 @@ func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 }
 
 // UpsertProject inserts or updates a project. An update keeps the stored
-// CloneSeconds, which only SetCloneSeconds changes.
+// CloneSeconds, which only SetCloneSeconds changes. A project without an
+// installation (GitLab) is stored with ApproveAvailable true whatever p says,
+// so a GitLab row built without the field never reads as missing its
+// approve side.
 func (s *Store) UpsertProject(ctx context.Context, p Project) error {
 	var expires *time.Time
 	if !p.DeployTokenExpiresAt.IsZero() {
 		expires = &p.DeployTokenExpiresAt
 	}
+	approveAvailable := p.ApproveAvailable || p.InstallationID == 0
 	_, err := s.pool.Exec(ctx, `INSERT INTO projects (`+projectColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (instance, project_id) DO UPDATE SET
 			path = EXCLUDED.path, http_url_to_repo = EXCLUDED.http_url_to_repo, hook_id = EXCLUDED.hook_id,
 			deploy_token_id = EXCLUDED.deploy_token_id, deploy_token_username = EXCLUDED.deploy_token_username,
-			deploy_token_sealed = EXCLUDED.deploy_token_sealed, deploy_token_expires_at = EXCLUDED.deploy_token_expires_at`,
+			deploy_token_sealed = EXCLUDED.deploy_token_sealed, deploy_token_expires_at = EXCLUDED.deploy_token_expires_at,
+			installation_id = EXCLUDED.installation_id, approve_available = EXCLUDED.approve_available`,
 		p.Instance, p.ProjectID, p.Path, p.HTTPURLToRepo, p.HookID, p.DeployTokenID,
-		p.DeployTokenUsername, p.DeployTokenSealed, expires, p.CloneSeconds)
+		p.DeployTokenUsername, p.DeployTokenSealed, expires, p.CloneSeconds,
+		p.InstallationID, approveAvailable)
 	return err
 }
 
