@@ -58,6 +58,10 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [ test, chart ]
     runs-on: ubuntu-latest
+    # One build at a time, so an older build can't overwrite :main after a newer one.
+    concurrency:
+      group: image-main
+      cancel-in-progress: false
     env:
       REGISTRY: ghcr.io
       IMAGE_NAME: ${{ github.repository }}
