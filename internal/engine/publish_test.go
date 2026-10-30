@@ -920,7 +920,7 @@ func TestPublishDraftThenReady(t *testing.T) {
 	env.GitLab.SetMR(openMR(1, head))
 	env.GitLab.Reply(http.MethodPut, notePath(1, createdNote), http.StatusOK, `{}`)
 	env.GitLab.Reset()
-	if ok, err := env.Store.Republish(env.ctx, env.MRKey(1), head); err != nil || !ok {
+	if ok, err := env.Store.Republish(env.ctx, env.MRKey(1), head, "main"); err != nil || !ok {
 		t.Fatalf("Republish = %v, %v", ok, err)
 	}
 
@@ -1046,7 +1046,7 @@ func TestPublishReadyDuringPublish(t *testing.T) {
 		// The draft flag was read; the comment is out. Marked ready now.
 		once.Do(func() {
 			env.GitLab.SetMR(openMR(1, head))
-			if ok, err := env.Store.Republish(env.ctx, env.MRKey(1), head); err != nil || !ok {
+			if ok, err := env.Store.Republish(env.ctx, env.MRKey(1), head, "main"); err != nil || !ok {
 				t.Errorf("Republish during the publish = %v, %v; want true", ok, err)
 			}
 		})

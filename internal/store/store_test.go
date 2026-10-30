@@ -1341,7 +1341,7 @@ func TestRepublish(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ok, err := s.Republish(ctx, mr1, "A")
+	ok, err := s.Republish(ctx, mr1, "A", "main")
 	if err != nil || !ok {
 		t.Fatalf("Republish = %v, %v; want true", ok, err)
 	}
@@ -1356,7 +1356,7 @@ func TestRepublish(t *testing.T) {
 
 	// Already reported again: a second ready event only asks for one more
 	// decision after the coming publish (TestRepublishWhileReported).
-	if ok, err := s.Republish(ctx, mr1, "A"); err != nil || !ok {
+	if ok, err := s.Republish(ctx, mr1, "A", "main"); err != nil || !ok {
 		t.Errorf("second Republish = %v, %v; want true", ok, err)
 	}
 }
@@ -1375,7 +1375,7 @@ func TestRepublishOnlyTheNewestPublishedHead(t *testing.T) {
 		"another merge request": {mr2, "A"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if ok, err := s.Republish(ctx, tc.mr, tc.head); err != nil || ok {
+			if ok, err := s.Republish(ctx, tc.mr, tc.head, "main"); err != nil || ok {
 				t.Errorf("Republish = %v, %v; want false", ok, err)
 			}
 		})
@@ -1388,6 +1388,24 @@ func TestRepublishOnlyTheNewestPublishedHead(t *testing.T) {
 	}
 }
 
+// The merge request was retargeted while its webhooks were skipped (a draft
+// of a repository that doesn't review drafts): the published review of the
+// head is for the old target and is not decided again for the new one.
+func TestRepublishOtherTarget(t *testing.T) {
+	s := newStore(t)
+	id := published(t, s, mr1, "A", "main")
+	if ok, err := s.Republish(ctx, mr1, "A", "develop"); err != nil || ok {
+		t.Errorf("Republish = %v, %v; want false", ok, err)
+	}
+	if r := getRun(t, s, id); r.State != Published {
+		t.Errorf("run state = %s, want published", r.State)
+	}
+	// The head is then queued for the new target, which supersedes the old run.
+	if _, created, err := s.EnqueueRun(ctx, mr1, "acme/widgets", "A", "develop"); err != nil || !created {
+		t.Errorf("EnqueueRun = %v, %v; want created", created, err)
+	}
+}
+
 // A published run of the head that isn't the newest run (another target was
 // queued since) is not republished.
 func TestRepublishNotNewest(t *testing.T) {
@@ -1396,7 +1414,7 @@ func TestRepublishNotNewest(t *testing.T) {
 	if _, _, err := s.EnqueueRun(ctx, mr1, "acme/widgets", "A", "develop"); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := s.Republish(ctx, mr1, "A"); err != nil || ok {
+	if ok, err := s.Republish(ctx, mr1, "A", "main"); err != nil || ok {
 		t.Errorf("Republish = %v, %v; want false", ok, err)
 	}
 	if r := getRun(t, s, id); r.State != Published {
@@ -1469,7 +1487,7 @@ func TestRepublishWhileReported(t *testing.T) {
 	s := newStore(t)
 	id := reported(t, s, mr1, "A", `{"status":"completed"}`)
 
-	ok, err := s.Republish(ctx, mr1, "A")
+	ok, err := s.Republish(ctx, mr1, "A", "main")
 	if err != nil || !ok {
 		t.Fatalf("Republish while reported = %v, %v; want true", ok, err)
 	}
@@ -1502,7 +1520,7 @@ func TestRepublishWhileReportedKeepsBackoff(t *testing.T) {
 	if _, err := s.PublishRetry(ctx, id, "boom", t0.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := s.Republish(ctx, mr1, "A"); err != nil || !ok {
+	if ok, err := s.Republish(ctx, mr1, "A", "main"); err != nil || !ok {
 		t.Fatalf("Republish = %v, %v; want true", ok, err)
 	}
 	r := getRun(t, s, id)
@@ -1516,7 +1534,7 @@ func TestRepublishWhileReportedKeepsBackoff(t *testing.T) {
 func TestPublishRetryClearsRedecide(t *testing.T) {
 	s := newStore(t)
 	id := reported(t, s, mr1, "A", `{"status":"completed"}`)
-	if ok, err := s.Republish(ctx, mr1, "A"); err != nil || !ok {
+	if ok, err := s.Republish(ctx, mr1, "A", "main"); err != nil || !ok {
 		t.Fatalf("Republish = %v, %v", ok, err)
 	}
 	if _, err := s.PublishRetry(ctx, id, "boom", t0); err != nil {

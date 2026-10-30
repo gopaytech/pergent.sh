@@ -565,8 +565,10 @@ func (s *Store) PublishRetry(ctx context.Context, id, errText string, notBefore 
 }
 
 // Republish asks the publisher to decide the merge request's newest
-// non-superseded run again, when that run is for headSHA (a draft marked
-// ready is approved then), and reports whether it did:
+// non-superseded run again, when that run is for headSHA and targetBranch (a
+// draft marked ready is approved then), and reports whether it did. A run of
+// another target is left alone: the merge request was retargeted since, and
+// that review is not one of the branch it now has.
 //   - published: it goes back to reported, with no attempts counted and due
 //     now;
 //   - reported: a publish may be under way that read the draft flag before
@@ -574,11 +576,11 @@ func (s *Store) PublishRetry(ctx context.Context, id, errText string, notBefore 
 //     published (see MarkPublished); its backoff is kept.
 //
 // Any other newest run (queued or running, publish_failed, of another head,
-// or none) is left alone: the normal flow reads the flag when it publishes.
+// of another target, or none) is left alone: the normal flow reads the flag when it publishes.
 // It takes the same per-MR lock as EnqueueRun, so a push racing it can't
 // leave an older head's review to be posted over the newer one; the update
 // is one statement, so it serialises with MarkPublished on the row.
-func (s *Store) Republish(ctx context.Context, mr MRKey, headSHA string) (bool, error) {
+func (s *Store) Republish(ctx context.Context, mr MRKey, headSHA, targetBranch string) (bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -599,8 +601,8 @@ func (s *Store) Republish(ctx context.Context, mr MRKey, headSHA string) (bool, 
 			SELECT id FROM runs
 			WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND state <> 'superseded'
 			ORDER BY created_at DESC, id DESC LIMIT 1)
-		  AND state IN ('published', 'reported') AND head_sha = $4`,
-		mr.Instance, mr.ProjectID, mr.IID, headSHA)
+		  AND state IN ('published', 'reported') AND head_sha = $4 AND target_branch = $5`,
+		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch)
 	if err != nil {
 		return false, err
 	}

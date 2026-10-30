@@ -32,7 +32,7 @@ const (
 type Queue interface {
 	EnqueueRun(ctx context.Context, mr store.MRKey, projectPath, headSHA, targetBranch string) (string, bool, error)
 	SupersedeMR(ctx context.Context, mr store.MRKey) (int, error)
-	Republish(ctx context.Context, mr store.MRKey, headSHA string) (bool, error)
+	Republish(ctx context.Context, mr store.MRKey, headSHA, targetBranch string) (bool, error)
 }
 
 // Repositories looks up a repository switched on, in the config or the
@@ -231,7 +231,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if republish {
-		ok, err := h.Queue.Republish(r.Context(), mr, head)
+		ok, err := h.Queue.Republish(r.Context(), mr, head, attrs.TargetBranch)
 		if err != nil {
 			log.Error("webhook failed", "outcome", "republish_error", "err", err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
@@ -241,7 +241,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if h.Wake != nil {
 				h.Wake()
 			}
-			log.Info("webhook handled", "outcome", "marked_ready", "republished", ok)
+			log.Info("webhook handled", "outcome", "marked_ready", "result", "republished")
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -258,7 +258,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if created && h.Wake != nil {
 		h.Wake()
 	}
-	log.Info("webhook handled", "outcome", "enqueued", "run", id, "created", created, "marked_ready", republish)
+	if republish {
+		log.Info("webhook handled", "outcome", "marked_ready", "result", "enqueued", "run", id, "created", created)
+	} else {
+		log.Info("webhook handled", "outcome", "enqueued", "run", id, "created", created)
+	}
 	w.WriteHeader(http.StatusOK)
 }
 

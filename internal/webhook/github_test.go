@@ -150,7 +150,7 @@ func TestGitHubClosedDoesNotNeedHead(t *testing.T) {
 func TestGitHubReadyForReviewRepublishes(t *testing.T) {
 	r := newGitHubRig(t)
 	wantStatus(t, r.gh(fixture(t, "github_ready.json")), 200)
-	want := republishCall{store.MRKey{Instance: "gh", ProjectID: 42, IID: 7}, openHead}
+	want := republishCall{store.MRKey{Instance: "gh", ProjectID: 42, IID: 7}, openHead, "main"}
 	if len(r.q.republishes) != 1 || r.q.republishes[0] != want {
 		t.Fatalf("republishes = %+v, want [%+v]", r.q.republishes, want)
 	}

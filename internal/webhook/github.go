@@ -176,7 +176,7 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if republish {
-		ok, err := h.Queue.Republish(r.Context(), mr, head)
+		ok, err := h.Queue.Republish(r.Context(), mr, head, pr.Base.Ref)
 		if err != nil {
 			log.Error("webhook failed", "outcome", "republish_error", "err", err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
@@ -186,7 +186,7 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if h.Wake != nil {
 				h.Wake()
 			}
-			log.Info("webhook handled", "outcome", "marked_ready", "republished", ok)
+			log.Info("webhook handled", "outcome", "marked_ready", "result", "republished")
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -203,7 +203,11 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if created && h.Wake != nil {
 		h.Wake()
 	}
-	log.Info("webhook handled", "outcome", "enqueued", "run", id, "created", created, "marked_ready", republish)
+	if republish {
+		log.Info("webhook handled", "outcome", "marked_ready", "result", "enqueued", "run", id, "created", created)
+	} else {
+		log.Info("webhook handled", "outcome", "enqueued", "run", id, "created", created)
+	}
 	w.WriteHeader(http.StatusOK)
 }
 

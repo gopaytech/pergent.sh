@@ -28,8 +28,8 @@ type enqueueCall struct {
 }
 
 type republishCall struct {
-	mr   store.MRKey
-	head string
+	mr           store.MRKey
+	head, target string
 }
 
 type fakeQueue struct {
@@ -39,15 +39,18 @@ type fakeQueue struct {
 	created     bool
 	// republished is what Republish answers.
 	republished bool
-	err         error
+	// publishedTarget, when set, is the target of the head's published
+	// review: Republish answers false for any other target, as the store does.
+	publishedTarget string
+	err             error
 }
 
-func (q *fakeQueue) Republish(_ context.Context, mr store.MRKey, headSHA string) (bool, error) {
-	q.republishes = append(q.republishes, republishCall{mr, headSHA})
+func (q *fakeQueue) Republish(_ context.Context, mr store.MRKey, headSHA, targetBranch string) (bool, error) {
+	q.republishes = append(q.republishes, republishCall{mr, headSHA, targetBranch})
 	if q.err != nil {
 		return false, q.err
 	}
-	return q.republished, nil
+	return q.republished && (q.publishedTarget == "" || q.publishedTarget == targetBranch), nil
 }
 
 func (q *fakeQueue) EnqueueRun(_ context.Context, mr store.MRKey, projectPath, headSHA, targetBranch string) (string, bool, error) {
@@ -437,7 +440,7 @@ func TestNeverLogsTokenOrBody(t *testing.T) {
 func TestDraftReadyRepublishes(t *testing.T) {
 	r := newRig(t)
 	wantStatus(t, r.hook(fixture(t, "mr_ready.json")), 200)
-	want := republishCall{store.MRKey{Instance: "main", ProjectID: 42, IID: 7}, openHead}
+	want := republishCall{store.MRKey{Instance: "main", ProjectID: 42, IID: 7}, openHead, "main"}
 	if len(r.q.republishes) != 1 || r.q.republishes[0] != want {
 		t.Fatalf("republishes = %+v, want [%+v]", r.q.republishes, want)
 	}

@@ -182,3 +182,54 @@ func TestGitHubReadyForReviewRepublishedIsNotQueued(t *testing.T) {
 		t.Fatalf("republishes = %+v, enqueues = %+v, wakes = %d", r.q.republishes, r.q.enqueues, r.wakes)
 	}
 }
+
+// With drafts off, a retarget of a draft is skipped, so the head's published
+// review (if any) is still the old target's. Marking the draft ready then
+// asks for that target no more: the head is queued against the new one.
+func TestGitLabDraftRetargetedThenReady(t *testing.T) {
+	r := draftRig(t, false)
+	r.q.republished, r.q.publishedTarget = true, "main"
+
+	wantStatus(t, r.hook(gitlabDraft(t, "mr_retarget.json", "draft")), 200)
+	wantDraftSkipped(t, r)
+
+	ready := replaceOnce(t, fixture(t, "mr_ready.json"), `"target_branch": "main"`, `"target_branch": "develop"`)
+	wantStatus(t, r.hook(ready), 200)
+	mr := store.MRKey{Instance: "main", ProjectID: 42, IID: 7}
+	if want := (republishCall{mr, openHead, "develop"}); len(r.q.republishes) != 1 || r.q.republishes[0] != want {
+		t.Fatalf("republishes = %+v, want [%+v]", r.q.republishes, want)
+	}
+	if want := (enqueueCall{mr, "Acme/Widgets", openHead, "develop"}); len(r.q.enqueues) != 1 || r.q.enqueues[0] != want {
+		t.Fatalf("enqueues = %+v, want [%+v]", r.q.enqueues, want)
+	}
+	if r.wakes != 1 {
+		t.Errorf("wakes = %d, want 1", r.wakes)
+	}
+	if !strings.Contains(r.logs.String(), "result=enqueued") {
+		t.Errorf("log doesn't say the ready event enqueued: %s", r.logs.String())
+	}
+}
+
+func TestGitHubDraftRetargetedThenReady(t *testing.T) {
+	r := draftRig(t, false)
+	r.q.republished, r.q.publishedTarget = true, "main"
+
+	wantStatus(t, r.gh(githubDraft(t, "github_edited_base.json")), 200)
+	wantDraftSkipped(t, r)
+
+	ready := replaceOnce(t, fixture(t, "github_ready.json"), `"base": {"ref": "main"`, `"base": {"ref": "develop"`)
+	wantStatus(t, r.gh(ready), 200)
+	mr := store.MRKey{Instance: "gh", ProjectID: 42, IID: 7}
+	if want := (republishCall{mr, openHead, "develop"}); len(r.q.republishes) != 1 || r.q.republishes[0] != want {
+		t.Fatalf("republishes = %+v, want [%+v]", r.q.republishes, want)
+	}
+	if want := (enqueueCall{mr, "Acme/Widgets", openHead, "develop"}); len(r.q.enqueues) != 1 || r.q.enqueues[0] != want {
+		t.Fatalf("enqueues = %+v, want [%+v]", r.q.enqueues, want)
+	}
+	if r.wakes != 1 {
+		t.Errorf("wakes = %d, want 1", r.wakes)
+	}
+	if !strings.Contains(r.logs.String(), "result=enqueued") {
+		t.Errorf("log doesn't say the ready event enqueued: %s", r.logs.String())
+	}
+}
