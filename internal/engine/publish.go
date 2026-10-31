@@ -190,8 +190,10 @@ func (e *Engine) withdrawRedecided(ctx context.Context, plat Platform, run store
 }
 
 // withdrawPending pays one owed withdrawal of approval a. The merge request is
-// read first: merged, closed or gone, the record is only cleared, as there is
-// nothing to withdraw; a merge in progress is left for the next pass. A
+// read first: merged or gone, the record is only cleared, as there is
+// nothing to withdraw; a closed one is withdrawn like an open one, as it could
+// be reopened with the approval in place; a merge in progress is left for the
+// next pass. A
 // failure leaves the debt in place and puts it aside for the unapprove
 // backoff.
 func (e *Engine) withdrawPending(ctx context.Context, plat Platform, a store.Approval, log *slog.Logger) {
@@ -201,17 +203,17 @@ func (e *Engine) withdrawPending(ctx context.Context, plat Platform, a store.App
 	}
 	mr, err := plat.Forge.GetChange(ctx, a.MR.ProjectID, a.MR.IID)
 	switch {
-	case errors.Is(err, forge.ErrNotFound) || (err == nil && (mr.State == forge.StateMerged || mr.State == forge.StateClosed)):
+	case errors.Is(err, forge.ErrNotFound) || (err == nil && mr.State == forge.StateMerged):
 		if err := e.clearApproval(ctx, a); err != nil {
-			log.Warn("couldn't forget the approval of a merge request that is over; will try again", "error", e.redact(err.Error()))
+			log.Warn("couldn't forget the approval of a merge request that is merged or gone; will try again", "error", e.redact(err.Error()))
 			return
 		}
-		log.Info("approval forgotten: the merge request is merged, closed or gone")
+		log.Info("approval forgotten: the merge request is merged or gone")
 		return
 	case err != nil:
 		log.Warn("couldn't read the merge request of an approval to withdraw; will try again", e.unreadableAttrs(ctx, a, err)...)
 		return
-	case mr.State != forge.StateOpen:
+	case mr.State != forge.StateOpen && mr.State != forge.StateClosed:
 		return // "locked": a merge is in progress; look again next time
 	}
 	if retryAt, err := e.unapprove(ctx, plat.Approver, a); err != nil {

@@ -253,18 +253,26 @@ func TestWithdrawalFailureIsRetriedBySweep(t *testing.T) {
 	}
 }
 
-// A merged or closed change has nothing to withdraw: the record is cleared,
-// at publish time and by the sweep.
-func TestWithdrawalOfMergedOrClosedClearsRecord(t *testing.T) {
-	for _, state := range []string{"merged", "closed"} {
+// A merged or gone change has nothing to withdraw: the record is cleared
+// without a call, at publish time and by the sweep. A closed one could be
+// reopened with the approval in place, so it is withdrawn as an open one is.
+func TestWithdrawalOfMergedOrGoneClearsRecord(t *testing.T) {
+	for _, state := range []string{"merged", "gone"} {
+		setState := func(env *testEnv, head string) {
+			if state == "gone" {
+				env.GitLab.Reply(http.MethodGet, mrPath(1), http.StatusNotFound, `{"message":"404 Not found"}`)
+				return
+			}
+			mr := openMR(1, head)
+			mr.State = state
+			env.GitLab.SetMR(mr)
+		}
 		t.Run("publish "+state, func(t *testing.T) {
 			env := newTestEnv(t)
 			head := sha('a')
 			id := env.Report(1, head, resultFor(t, head, skillWithFinding(t, "has_blocking_issues", "blocking")))
 			servePublish(env, 1, head)
-			mr := openMR(1, head)
-			mr.State = state
-			env.GitLab.SetMR(mr)
+			setState(env, head)
 			if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), head, "main"); err != nil {
 				t.Fatal(err)
 			}
@@ -294,9 +302,7 @@ func TestWithdrawalOfMergedOrClosedClearsRecord(t *testing.T) {
 				t.Fatalf("pending withdrawals = %v, want one", p)
 			}
 
-			mr := openMR(1, head)
-			mr.State = state
-			env.GitLab.SetMR(mr)
+			setState(env, head)
 			env.SetNow(env.Now().Add(time.Hour))
 			env.GitLab.Reset()
 			sweep(t, env)
@@ -312,6 +318,68 @@ func TestWithdrawalOfMergedOrClosedClearsRecord(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWithdrawalOfClosedChangeStillUnapproves(t *testing.T) {
+	closed := func(env *testEnv, head string) {
+		mr := openMR(1, head)
+		mr.State = "closed"
+		env.GitLab.SetMR(mr)
+	}
+	t.Run("publish", func(t *testing.T) {
+		env := newTestEnv(t)
+		head := sha('a')
+		id := env.Report(1, head, resultFor(t, head, skillWithFinding(t, "has_blocking_issues", "blocking")))
+		servePublish(env, 1, head)
+		closed(env, head)
+		if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), head, "main"); err != nil {
+			t.Fatal(err)
+		}
+		env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusCreated, `{}`)
+
+		publish(t, env)
+
+		wantPublished(t, env, id)
+		if n := len(env.GitLab.Requests(http.MethodPost, unapprovePath(1))); n != 1 {
+			t.Errorf("got %d unapprovals, want 1", n)
+		}
+		if got := recordedApproval(t, env, 1); got != "" {
+			t.Errorf("recorded approval = %q, want it cleared", got)
+		}
+	})
+	t.Run("sweep retries until it works", func(t *testing.T) {
+		env := newTestEnv(t)
+		head := sha('a')
+		env.Report(1, head, resultFor(t, head, skillWithFinding(t, "has_blocking_issues", "blocking")))
+		servePublish(env, 1, head)
+		closed(env, head)
+		if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), head, "main"); err != nil {
+			t.Fatal(err)
+		}
+		env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusForbidden, `{"message":"403 Forbidden"}`)
+		publish(t, env)
+		if got := recordedApproval(t, env, 1); got != head {
+			t.Fatalf("recorded approval = %q, want it kept after the failed withdrawal", got)
+		}
+		if p := pending(t, env); len(p) != 1 {
+			t.Fatalf("pending withdrawals = %v, want one", p)
+		}
+
+		env.SetNow(env.Now().Add(time.Hour))
+		env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusCreated, `{}`)
+		env.GitLab.Reset()
+		sweep(t, env)
+
+		if n := len(env.GitLab.Requests(http.MethodPost, unapprovePath(1))); n != 1 {
+			t.Errorf("got %d unapprovals, want 1", n)
+		}
+		if got := recordedApproval(t, env, 1); got != "" {
+			t.Errorf("recorded approval = %q, want it cleared", got)
+		}
+		if p := pending(t, env); len(p) != 0 {
+			t.Errorf("pending withdrawals = %v, want none", p)
+		}
+	})
 }
 
 // The change turned into a draft between the draft check and the approval:
