@@ -303,9 +303,8 @@ func (d *Dashboard) dismiss(w http.ResponseWriter, r *http.Request, b reviewButt
 	}
 	// Decided again whether or not the dismissal was new: an earlier press
 	// may have stored it and failed to decide the review, and pressing the
-	// button again is how that is put right. (Republish does nothing to a
-	// review that is not the change's newest published one.)
-	if !d.redecide(r, b.mr, reviewed) {
+	// button again is how that is put right.
+	if !d.redecide(r, b.mr) {
 		writeError(w, http.StatusInternalServerError, msgRedecideFailed)
 		return
 	}
@@ -377,26 +376,26 @@ func (d *Dashboard) restore(w http.ResponseWriter, r *http.Request, b reviewButt
 		d.auditReview(r, b, "finding_restored", reviewed.HeadSHA, "fingerprint="+fingerprint+" severity="+severity)
 	}
 	// Decided again whether or not anything was restored, as dismiss does.
-	if !d.redecide(r, b.mr, reviewed) {
+	if !d.redecide(r, b.mr) {
 		writeError(w, http.StatusInternalServerError, msgRedecideFailed)
 		return
 	}
 	accepted(w, http.StatusOK, status)
 }
 
-// redecide has the review decided again with the dismissals as they are now,
-// without a new run (the engine publishes it), and wakes the engine. A review
-// of another head than the latest run's, or no review at all, has nothing to
-// decide: the change applies to its next review. It reports whether the store
-// accepted the request.
-func (d *Dashboard) redecide(r *http.Request, mr store.MRKey, reviewed store.Run) bool {
+// redecide has the change's newest review decided again with the dismissals
+// as they are now, without a new run (the engine publishes it), and wakes the
+// engine. The newest run is the one to reach whatever its head: one whose
+// first publish is under way has loaded the dismissals already (store.
+// RepublishNewest). A newest run still queued or running, or no run at all,
+// has nothing to decide: it loads them when it is published. It reports
+// whether the store accepted the request.
+func (d *Dashboard) redecide(r *http.Request, mr store.MRKey) bool {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), platformTimeout)
 	defer cancel()
-	if reviewed.ID != "" {
-		if _, err := d.Store.Republish(ctx, mr, reviewed.HeadSHA, reviewed.TargetBranch); err != nil {
-			d.Log.Error("dashboard: deciding a review again failed", "instance", mr.Instance, "mr", mr.IID, "error", err.Error())
-			return false
-		}
+	if _, err := d.Store.RepublishNewest(ctx, mr); err != nil {
+		d.Log.Error("dashboard: deciding a review again failed", "instance", mr.Instance, "mr", mr.IID, "error", err.Error())
+		return false
 	}
 	d.wake()
 	return true

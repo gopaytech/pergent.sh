@@ -915,6 +915,21 @@ func (s *Store) PublishRetry(ctx context.Context, id, errText string, notBefore 
 // leave an older head's review to be posted over the newer one; the update
 // is one statement, so it serialises with MarkPublished on the row.
 func (s *Store) Republish(ctx context.Context, mr MRKey, headSHA, targetBranch string) (bool, error) {
+	return s.republish(ctx, mr, headSHA, targetBranch, false)
+}
+
+// RepublishNewest applies Republish's rules to the merge request's newest
+// non-superseded run whatever its head and target. A dismissal made or
+// restored on the dashboard reaches the review that is shown or about to be
+// shown, which may be of a head the platform doesn't have yet (a push the
+// webhook handled), or a same-head re-run whose first publish is under way.
+// A queued or running newest run needs nothing: it loads the dismissals when
+// it is published.
+func (s *Store) RepublishNewest(ctx context.Context, mr MRKey) (bool, error) {
+	return s.republish(ctx, mr, "", "", true)
+}
+
+func (s *Store) republish(ctx context.Context, mr MRKey, headSHA, targetBranch string, anyHead bool) (bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -935,8 +950,8 @@ func (s *Store) Republish(ctx context.Context, mr MRKey, headSHA, targetBranch s
 			SELECT id FROM runs
 			WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND state <> 'superseded'
 			ORDER BY created_at DESC, id DESC LIMIT 1)
-		  AND state IN ('published', 'reported') AND head_sha = $4 AND target_branch = $5`,
-		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch)
+		  AND state IN ('published', 'reported') AND ($6 OR (head_sha = $4 AND target_branch = $5))`,
+		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch, anyHead)
 	if err != nil {
 		return false, err
 	}

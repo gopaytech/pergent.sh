@@ -1647,6 +1647,92 @@ func TestRepublishWhileReported(t *testing.T) {
 	}
 }
 
+// RepublishNewest acts on the newest run whatever its head and target: a
+// dismissal restored while the run of a new head is being published must be
+// decided again after that publish.
+func TestRepublishNewestWhileReportedOfAnotherHead(t *testing.T) {
+	s := newStore(t)
+	old := published(t, s, mr1, "A", "main")
+	id := reported(t, s, mr1, "B", `{"status":"completed"}`)
+
+	ok, err := s.RepublishNewest(ctx, mr1)
+	if err != nil || !ok {
+		t.Fatalf("RepublishNewest = %v, %v; want true", ok, err)
+	}
+	if err := s.MarkPublished(ctx, id, RunDecision{}); err != nil {
+		t.Fatal(err)
+	}
+	if r := getRun(t, s, id); r.State != Reported || r.Attempts != 0 || !r.NotBefore.IsZero() {
+		t.Errorf("after the in-flight publish: state %s, attempts %d, not_before %v; want reported, 0, due", r.State, r.Attempts, r.NotBefore)
+	}
+	if r := getRun(t, s, old); r.State != Published {
+		t.Errorf("old run state = %s, want published (untouched)", r.State)
+	}
+}
+
+// A same-head re-run (the head is already published) whose publish is under
+// way: the newest run is flagged, though LatestDecidedRun doesn't see it.
+func TestRepublishNewestSameHeadRerun(t *testing.T) {
+	s := newStore(t)
+	published(t, s, mr1, "A", "main")
+	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "A", "main", TriggerRerun, nil, nil)
+	if err != nil || !created {
+		t.Fatalf("EnqueueRerun = %v, %v", created, err)
+	}
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkDispatched(ctx, id, "job-"+id, "base", "start", hash("tok-rerun"), t0.Add(time.Hour), t0); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := s.StoreResult(ctx, id, "tok-rerun", []byte(`{"status":"completed"}`), t0.Add(time.Minute)); err != nil || out != ResultStored {
+		t.Fatalf("StoreResult = %v, %v", out, err)
+	}
+	if _, found, _ := s.LatestDecidedRun(ctx, mr1); found {
+		t.Fatal("the run under publish counted as decided")
+	}
+	if ok, err := s.RepublishNewest(ctx, mr1); err != nil || !ok {
+		t.Fatalf("RepublishNewest = %v, %v; want true", ok, err)
+	}
+	if err := s.MarkPublished(ctx, id, RunDecision{}); err != nil {
+		t.Fatal(err)
+	}
+	if r := getRun(t, s, id); r.State != Reported {
+		t.Errorf("state = %s, want reported (decided again)", r.State)
+	}
+}
+
+func TestRepublishNewestPublishedOfAnotherTarget(t *testing.T) {
+	s := newStore(t)
+	id := published(t, s, mr1, "A", "develop")
+	if ok, err := s.RepublishNewest(ctx, mr1); err != nil || !ok {
+		t.Fatalf("RepublishNewest = %v, %v; want true", ok, err)
+	}
+	if r := getRun(t, s, id); r.State != Reported || r.Attempts != 0 {
+		t.Errorf("run = %s, %d; want reported, 0", r.State, r.Attempts)
+	}
+}
+
+// A queued or running newest run loads the dismissals when it is published,
+// and a change nobody reviewed has nothing: no flag, nothing to do.
+func TestRepublishNewestNothingToDo(t *testing.T) {
+	s := newStore(t)
+	if ok, err := s.RepublishNewest(ctx, mr1); err != nil || ok {
+		t.Errorf("no runs: RepublishNewest = %v, %v; want false", ok, err)
+	}
+	published(t, s, mr1, "A", "main")
+	id := enqueue(t, s, mr1, "B")
+	if ok, err := s.RepublishNewest(ctx, mr1); err != nil || ok {
+		t.Errorf("queued newest: RepublishNewest = %v, %v; want false", ok, err)
+	}
+	if r := getRun(t, s, id); r.State != Queued {
+		t.Errorf("newest run state = %s, want queued", r.State)
+	}
+	if ok, err := s.RepublishNewest(ctx, mr2); err != nil || ok {
+		t.Errorf("another merge request: RepublishNewest = %v, %v; want false", ok, err)
+	}
+}
+
 // Republish of a reported run keeps its backoff: it only asks for another
 // decision after the current one.
 func TestRepublishWhileReportedKeepsBackoff(t *testing.T) {

@@ -817,6 +817,63 @@ func TestRestoreSurvivesAnInterruptedRequest(t *testing.T) {
 	}
 }
 
+// A restore while the run of a new head is being published (its dismissals
+// are already loaded) has that run decided again; the older published review
+// is left as it was.
+func TestRestoreReachesAReviewBeingPublished(t *testing.T) {
+	e := newEnv(t, nil)
+	older := e.buttonBlockingReview()
+	mr := store.MRKey{Instance: "main", ProjectID: testID(buttonProject), IID: 7}
+	if _, err := e.st.Dismiss(ctx, store.Dismissal{MR: mr, Fingerprint: blockingFP, Severity: "blocking", Reason: "x", Actor: "bob"}); err != nil {
+		t.Fatal(err)
+	}
+	newer := e.addRun(runFix{project: buttonProject, number: 7, head: head('2'), user: "bob", state: store.Reported,
+		at:     e.clock.now().Add(-30 * time.Minute),
+		result: resultJSON(head('2'), buttonSkill("code-review"))})
+	c := e.signInRole(store.RoleMaintainer)
+
+	wantCode(t, e.send(c, "POST", buttonURL("restore"), `{"fingerprint":"`+blockingFP+`"}`), "restore", http.StatusOK)
+	rows := map[string]runRow{}
+	for _, r := range e.runRows() {
+		rows[r.ID] = r
+	}
+	if !rows[newer].Redecide || rows[newer].State != "reported" {
+		t.Errorf("newest run = %+v; want reported and flagged to be decided again", rows[newer])
+	}
+	if rows[older].Redecide || rows[older].State != "published" {
+		t.Errorf("older run = %+v; want untouched", rows[older])
+	}
+}
+
+// The same with a re-run of the head that was published: no run is decided
+// yet, and the run being published still has to be decided again.
+func TestRestoreReachesASameHeadRerunBeingPublished(t *testing.T) {
+	e := newEnv(t, nil)
+	e.buttonBlockingReview()
+	mr := store.MRKey{Instance: "main", ProjectID: testID(buttonProject), IID: 7}
+	if _, err := e.st.Dismiss(ctx, store.Dismissal{MR: mr, Fingerprint: blockingFP, Severity: "blocking", Reason: "x", Actor: "bob"}); err != nil {
+		t.Fatal(err)
+	}
+	rerun, created, err := e.st.EnqueueRerun(ctx, mr, buttonProject, head('1'), "main", store.TriggerRerun, nil, nil)
+	if err != nil || !created {
+		t.Fatalf("EnqueueRerun = %v, %v", created, err)
+	}
+	e.exec(`UPDATE runs SET state = 'reported', result = $2::jsonb WHERE id = $1::uuid`, rerun,
+		resultJSON(head('1'), buttonSkill("code-review")))
+	c := e.signInRole(store.RoleMaintainer)
+
+	wantCode(t, e.send(c, "POST", buttonURL("restore"), `{"fingerprint":"`+blockingFP+`"}`), "restore", http.StatusOK)
+	var got runRow
+	for _, r := range e.runRows() {
+		if r.ID == rerun {
+			got = r
+		}
+	}
+	if !got.Redecide || got.State != "reported" {
+		t.Errorf("re-run = %+v; want reported and flagged to be decided again", got)
+	}
+}
+
 // Dismissals are decided again for the newest review only, so an older run
 // shows what was published for it.
 func TestOlderRunsShowWhatWasPublished(t *testing.T) {
