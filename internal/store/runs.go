@@ -275,11 +275,29 @@ func (s *Store) EnqueueRun(ctx context.Context, mr MRKey, projectPath, headSHA, 
 	return id, true, nil
 }
 
+// SupersededDraft is the outcome reason of a run superseded because its merge
+// request is a draft and the repository doesn't review drafts
+// (SupersedeDraftMR, SupersedeDraft). A run superseded otherwise keeps the
+// reason it had.
+const SupersededDraft = "draft_not_reviewed"
+
 // SupersedeMR supersedes the queued, running and reported (not yet published)
 // runs of a merge request (for example when it is closed or merged) and
 // returns how many it changed. It takes the same per-MR lock as EnqueueRun, so
 // a close racing an enqueue cannot leave a queued run alive.
 func (s *Store) SupersedeMR(ctx context.Context, mr MRKey) (int, error) {
+	return s.supersedeMR(ctx, mr, "")
+}
+
+// SupersedeDraftMR is SupersedeMR for a merge request that is a draft the
+// repository doesn't review: the runs get the reason SupersededDraft.
+func (s *Store) SupersedeDraftMR(ctx context.Context, mr MRKey) (int, error) {
+	return s.supersedeMR(ctx, mr, SupersededDraft)
+}
+
+// supersedeMR supersedes the live runs of mr, setting their outcome reason to
+// reason unless it is "".
+func (s *Store) supersedeMR(ctx context.Context, mr MRKey, reason string) (int, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return 0, err
@@ -289,9 +307,9 @@ func (s *Store) SupersedeMR(ctx context.Context, mr MRKey) (int, error) {
 	if err := lockMR(ctx, tx, mr); err != nil {
 		return 0, err
 	}
-	tag, err := tx.Exec(ctx, `UPDATE runs SET state = 'superseded'
+	tag, err := tx.Exec(ctx, `UPDATE runs SET state = 'superseded', outcome_reason = COALESCE(NULLIF($4, ''), outcome_reason)
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND state IN ('queued', 'running', 'reported')`,
-		mr.Instance, mr.ProjectID, mr.IID)
+		mr.Instance, mr.ProjectID, mr.IID, reason)
 	if err != nil {
 		return 0, err
 	}
@@ -305,11 +323,23 @@ func (s *Store) SupersedeMR(ctx context.Context, mr MRKey) (int, error) {
 // the dispatcher finds its merge request closed or its head moved. A run in
 // any other state, or an unknown id, is left alone and is not an error.
 func (s *Store) Supersede(ctx context.Context, id string) error {
+	return s.supersede(ctx, id, "")
+}
+
+// SupersedeDraft is Supersede for a run whose merge request is a draft the
+// repository doesn't review: the run gets the reason SupersededDraft.
+func (s *Store) SupersedeDraft(ctx context.Context, id string) error {
+	return s.supersede(ctx, id, SupersededDraft)
+}
+
+// supersede supersedes run id, setting its outcome reason to reason unless
+// it is "".
+func (s *Store) supersede(ctx context.Context, id, reason string) error {
 	if !validUUID(id) {
 		return nil
 	}
-	_, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'superseded'
-		WHERE id = $1::uuid AND state IN ('queued', 'running')`, id)
+	_, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'superseded', outcome_reason = COALESCE(NULLIF($2, ''), outcome_reason)
+		WHERE id = $1::uuid AND state IN ('queued', 'running')`, id, reason)
 	return err
 }
 

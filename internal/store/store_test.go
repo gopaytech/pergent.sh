@@ -181,6 +181,34 @@ func TestSupersedeMR(t *testing.T) {
 	}
 }
 
+// A draft's runs are superseded with SupersededDraft as their reason, which
+// a plain supersede leaves as it was.
+func TestSupersedeDraft(t *testing.T) {
+	s := newStore(t)
+	a := enqueue(t, s, mr1, "aaa")
+	other := enqueue(t, s, mr2, "ooo")
+	n, err := s.SupersedeDraftMR(ctx, mr1)
+	if err != nil || n != 1 {
+		t.Fatalf("SupersedeDraftMR = %d, %v", n, err)
+	}
+	if r := getRun(t, s, a); r.State != Superseded || r.OutcomeReason != SupersededDraft {
+		t.Errorf("run = %s %q; want superseded, %q", r.State, r.OutcomeReason, SupersededDraft)
+	}
+	if err := s.SupersedeDraft(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	if r := getRun(t, s, other); r.State != Superseded || r.OutcomeReason != SupersededDraft {
+		t.Errorf("run = %s %q; want superseded, %q", r.State, r.OutcomeReason, SupersededDraft)
+	}
+	b := enqueue(t, s, mr1, "bbb")
+	if _, err := s.SupersedeMR(ctx, mr1); err != nil {
+		t.Fatal(err)
+	}
+	if r := getRun(t, s, b); r.State != Superseded || r.OutcomeReason != "" {
+		t.Errorf("run = %s %q; want superseded, no reason", r.State, r.OutcomeReason)
+	}
+}
+
 func TestClaimQueuedRespectsNotBeforeAndLimit(t *testing.T) {
 	s := newStore(t)
 	ids := make([]string, 0, 4)

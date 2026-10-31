@@ -601,6 +601,9 @@ func TestReviewOutcomes(t *testing.T) {
 	add(runFix{number: 8, state: store.PublishFailed})
 	add(runFix{number: 9, state: store.Reported})
 	add(runFix{number: 10, state: store.Reported, failure: "the review Job ran out of memory (OOMKilled)"})
+	add(runFix{number: 11, state: store.Superseded, reason: store.SupersededDraft})
+	// Published, then superseded by a review of the same head again.
+	add(runFix{number: 12, state: store.Superseded, reason: "Blocking issues found"})
 	c := e.signInGitLab(false, "acme/widgets")
 
 	byNumber := map[int64]ReviewSummary{}
@@ -618,6 +621,8 @@ func TestReviewOutcomes(t *testing.T) {
 		8:  {OutcomeFailed, "couldn't post"},
 		9:  {OutcomeRunning, "Posting"},
 		10: {OutcomeFailed, "OOMKilled"},
+		11: {OutcomeSuperseded, "Not reviewed: the change is a draft and drafts are not reviewed here."},
+		12: {OutcomeSuperseded, "newer push"},
 	} {
 		r := byNumber[n]
 		if r.Outcome != want.outcome || !strings.Contains(r.Reason, want.reason) || (want.reason == "" && r.Reason != "") {

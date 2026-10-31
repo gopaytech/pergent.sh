@@ -9,6 +9,7 @@ const (
 	reasonReviewing  = "Reviewing."
 	reasonPosting    = "Posting the review."
 	reasonSuperseded = "Replaced by a newer push, or the change was closed."
+	reasonDraft      = "Not reviewed: the change is a draft and drafts are not reviewed here."
 	reasonNotPosted  = "pergent.sh couldn't post the review."
 	reasonUnknown    = "Published before pergent.sh recorded review outcomes."
 
@@ -48,7 +49,11 @@ func judge(r store.RunDigest) judged {
 		if !r.DispatchedAt.IsZero() {
 			status = statusCanceled
 		}
-		return judged{OutcomeSuperseded, reasonSuperseded, status}
+		reason := reasonSuperseded
+		if r.OutcomeReason == store.SupersededDraft {
+			reason = reasonDraft
+		}
+		return judged{OutcomeSuperseded, reason, status}
 	case OutcomeFailed:
 		switch r.State {
 		case store.PublishFailed:

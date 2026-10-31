@@ -33,10 +33,12 @@ type republishCall struct {
 }
 
 type fakeQueue struct {
-	enqueues    []enqueueCall
-	supersedes  []store.MRKey
-	republishes []republishCall
-	created     bool
+	enqueues   []enqueueCall
+	supersedes []store.MRKey
+	// draftSupersedes are the SupersedeDraftMR calls.
+	draftSupersedes []store.MRKey
+	republishes     []republishCall
+	created         bool
 	// republished is what Republish answers.
 	republished bool
 	// publishedTarget, when set, is the target of the head's published
@@ -63,6 +65,14 @@ func (q *fakeQueue) EnqueueRun(_ context.Context, mr store.MRKey, projectPath, h
 
 func (q *fakeQueue) SupersedeMR(_ context.Context, mr store.MRKey) (int, error) {
 	q.supersedes = append(q.supersedes, mr)
+	if q.err != nil {
+		return 0, q.err
+	}
+	return 1, nil
+}
+
+func (q *fakeQueue) SupersedeDraftMR(_ context.Context, mr store.MRKey) (int, error) {
+	q.draftSupersedes = append(q.draftSupersedes, mr)
 	if q.err != nil {
 		return 0, q.err
 	}

@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -57,8 +58,14 @@ func githubDraft(t *testing.T, fixtureName string) []byte {
     "state": "open",`)
 }
 
-func wantDraftSkipped(t *testing.T, r *rig) {
+// wantDraftSkipped checks that the draft's older runs were superseded as a
+// draft's and nothing else was queued.
+func wantDraftSkipped(t *testing.T, r *rig, mr store.MRKey) {
 	t.Helper()
+	if len(r.q.draftSupersedes) != 1 || r.q.draftSupersedes[0] != mr {
+		t.Fatalf("draft supersedes = %+v, want %+v", r.q.draftSupersedes, mr)
+	}
+	r.q.draftSupersedes = nil
 	noQueueCalls(t, r)
 	if !strings.Contains(r.logs.String(), "outcome=draft_skipped") {
 		t.Errorf("draft_skipped not logged: %s", r.logs.String())
@@ -71,9 +78,21 @@ func TestGitLabDraftSkippedWhenDraftsAreOff(t *testing.T) {
 			t.Run(flag+"/"+fx, func(t *testing.T) {
 				r := draftRig(t, false)
 				wantStatus(t, r.hook(gitlabDraft(t, fx, flag)), 200)
-				wantDraftSkipped(t, r)
+				wantDraftSkipped(t, r, store.MRKey{Instance: "main", ProjectID: 42, IID: 7})
 			})
 		}
+	}
+}
+
+// A draft's runs that can't be superseded fail the webhook, so the platform
+// sends it again.
+func TestDraftSupersedeErrorIs500(t *testing.T) {
+	r := draftRig(t, false)
+	r.q.err = errors.New("db down")
+	wantStatus(t, r.hook(gitlabDraft(t, "mr_push.json", "draft")), 500)
+	wantStatus(t, r.gh(githubDraft(t, "github_synchronize.json")), 500)
+	if len(r.q.draftSupersedes) != 2 || len(r.q.enqueues) != 0 {
+		t.Fatalf("draft supersedes = %+v, enqueues = %+v", r.q.draftSupersedes, r.q.enqueues)
 	}
 }
 
@@ -132,7 +151,7 @@ func TestGitHubDraftSkippedWhenDraftsAreOff(t *testing.T) {
 		t.Run(fx, func(t *testing.T) {
 			r := draftRig(t, false)
 			wantStatus(t, r.gh(githubDraft(t, fx)), 200)
-			wantDraftSkipped(t, r)
+			wantDraftSkipped(t, r, store.MRKey{Instance: "gh", ProjectID: 42, IID: 7})
 		})
 	}
 }
@@ -191,7 +210,7 @@ func TestGitLabDraftRetargetedThenReady(t *testing.T) {
 	r.q.republished, r.q.publishedTarget = true, "main"
 
 	wantStatus(t, r.hook(gitlabDraft(t, "mr_retarget.json", "draft")), 200)
-	wantDraftSkipped(t, r)
+	wantDraftSkipped(t, r, store.MRKey{Instance: "main", ProjectID: 42, IID: 7})
 
 	ready := replaceOnce(t, fixture(t, "mr_ready.json"), `"target_branch": "main"`, `"target_branch": "develop"`)
 	wantStatus(t, r.hook(ready), 200)
@@ -215,7 +234,7 @@ func TestGitHubDraftRetargetedThenReady(t *testing.T) {
 	r.q.republished, r.q.publishedTarget = true, "main"
 
 	wantStatus(t, r.gh(githubDraft(t, "github_edited_base.json")), 200)
-	wantDraftSkipped(t, r)
+	wantDraftSkipped(t, r, store.MRKey{Instance: "gh", ProjectID: 42, IID: 7})
 
 	ready := replaceOnce(t, fixture(t, "github_ready.json"), `"base": {"ref": "main"`, `"base": {"ref": "develop"`)
 	wantStatus(t, r.gh(ready), 200)

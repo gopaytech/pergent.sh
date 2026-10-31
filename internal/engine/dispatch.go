@@ -145,7 +145,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		// request is marked ready. This comes before the moved-head check,
 		// so a newer head of a draft isn't queued either.
 		d.log.Info("merge request is a draft and the repository doesn't review drafts; run superseded")
-		return d.supersede(ctx)
+		return d.supersedeDraft(ctx)
 	}
 	if mr.HeadSHA != "" && (mr.HeadSHA != run.HeadSHA || mr.TargetBranch != run.TargetBranch) {
 		// Push webhooks can arrive out of order, and a retarget's may not
@@ -358,6 +358,17 @@ func (d *dispatcher) supersede(ctx context.Context) error {
 	sctx, cancel := settleCtx(ctx)
 	defer cancel()
 	if err := d.e.Store.Supersede(sctx, d.run.ID); err != nil {
+		return fmt.Errorf("supersede: %w", err)
+	}
+	return nil
+}
+
+// supersedeDraft supersedes the run of a draft the repository doesn't
+// review, with that as its reason.
+func (d *dispatcher) supersedeDraft(ctx context.Context) error {
+	sctx, cancel := settleCtx(ctx)
+	defer cancel()
+	if err := d.e.Store.SupersedeDraft(sctx, d.run.ID); err != nil {
 		return fmt.Errorf("supersede: %w", err)
 	}
 	return nil

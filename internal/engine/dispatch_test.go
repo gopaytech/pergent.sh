@@ -712,8 +712,8 @@ func TestDispatchDraftIsSupersededWhenDraftsAreOff(t *testing.T) {
 
 				dispatch(t, env)
 
-				if r := env.Run(id); r.State != store.Superseded {
-					t.Errorf("state = %s, want superseded", r.State)
+				if r := env.Run(id); r.State != store.Superseded || r.OutcomeReason != store.SupersededDraft {
+					t.Errorf("run = %s %q, want superseded as a draft", r.State, r.OutcomeReason)
 				}
 				if len(env.Jobs()) != 0 {
 					t.Errorf("a job was launched for a draft")

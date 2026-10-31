@@ -65,8 +65,9 @@ func (r *rig) ghTo(path string, body []byte, opts ...opt) *httptest.ResponseReco
 
 func noQueueCalls(t *testing.T, r *rig) {
 	t.Helper()
-	if n := len(r.q.enqueues) + len(r.q.supersedes) + len(r.q.republishes); n != 0 || r.wakes != 0 {
-		t.Fatalf("queue touched: %+v %+v %+v wakes=%d", r.q.enqueues, r.q.supersedes, r.q.republishes, r.wakes)
+	if n := len(r.q.enqueues) + len(r.q.supersedes) + len(r.q.draftSupersedes) + len(r.q.republishes); n != 0 || r.wakes != 0 {
+		t.Fatalf("queue touched: %+v %+v %+v %+v wakes=%d", r.q.enqueues, r.q.supersedes, r.q.draftSupersedes,
+			r.q.republishes, r.wakes)
 	}
 }
 
