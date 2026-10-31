@@ -879,3 +879,42 @@ func TestDecideDismissalsKeepNotReviewedFailed(t *testing.T) {
 		t.Errorf("decision = %+v, want failed and not approved", d)
 	}
 }
+
+// A merged result carries the kept skills of an earlier run, which its stored
+// comment (the re-run skills' only) doesn't show: it is rendered again.
+func TestDecideMergedResultIsRenderedAgain(t *testing.T) {
+	kept := withFinding(skill("security", "has_blocking_issues", "db/query.go"), "blocking", "abc123def456", "plain")
+	rerun := skill("style", "no_blocking_issues", "a.go")
+	r := completed(kept, rerun)
+	r.Merged = true
+	r.Comment.Markdown = "### style\n\nNo blocking issues.\n"
+
+	d := Decide(Outcome{Result: r, Redact: func(s string) string { return strings.ReplaceAll(s, "plain", "***") }}, config.FailureStatusFailed)
+
+	if d.Kind != KindBlocking {
+		t.Errorf("kind = %q, want blocking", d.Kind)
+	}
+	for _, want := range []string{"### security", "### style", "Unchecked input"} {
+		if !strings.Contains(d.Comment, want) {
+			t.Errorf("comment lacks %q:\n%s", want, d.Comment)
+		}
+	}
+	if strings.Contains(d.Comment, "plain") {
+		t.Errorf("the merged comment was not redacted:\n%s", d.Comment)
+	}
+
+	r.Merged = false
+	if d := Decide(Outcome{Result: r}, config.FailureStatusFailed); strings.Contains(d.Comment, "### security") {
+		t.Errorf("an unmerged result's own comment is used as it is: %q", d.Comment)
+	}
+}
+
+func TestDecideMergeNote(t *testing.T) {
+	r := completed(skill("style", "no_blocking_issues", "a.go"))
+	r.MergeNote = result.NoteBaseUnreadable
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	i, j := strings.Index(d.Comment, result.NoteBaseUnreadable), strings.Index(d.Comment, "<!-- pergent:findings ")
+	if i < 0 || j < i {
+		t.Errorf("comment = %q, want the note before the findings block", d.Comment)
+	}
+}

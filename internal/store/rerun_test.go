@@ -234,3 +234,49 @@ func TestEnqueueRerunConcurrent(t *testing.T) {
 		t.Errorf("created %d runs, saw ids %v; want one run", created, ids)
 	}
 }
+
+func TestStoreMergedResult(t *testing.T) {
+	s := newStore(t)
+	id := reported(t, s, mr1, "aaa", `{"status":"completed","n":1}`)
+
+	if err := s.StoreMergedResult(ctx, id, []byte(`{"status":"completed","n":2}`)); err != nil {
+		t.Fatalf("StoreMergedResult: %v", err)
+	}
+	r := getRun(t, s, id)
+	if string(r.Result) != `{"n": 2, "status": "completed"}` || r.State != Reported {
+		t.Errorf("run = %s, %s; want the merged result, still reported", r.State, r.Result)
+	}
+
+	// Only a reported run takes a merged result; nothing else is touched.
+	if err := s.MarkPublished(ctx, id, RunDecision{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.StoreMergedResult(ctx, id, []byte(`{"n":3}`)); err == nil {
+		t.Error("a published run took a merged result")
+	}
+	if err := s.StoreMergedResult(ctx, "not-an-id", []byte(`{}`)); err == nil {
+		t.Error("a malformed id was accepted")
+	}
+	if err := s.StoreMergedResult(ctx, id, []byte(`nope`)); err == nil {
+		t.Error("invalid JSON was accepted")
+	}
+}
+
+func TestMakeFullRerun(t *testing.T) {
+	s := newStore(t)
+	old := published(t, s, mr1, "aaa", "main")
+	id, _, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerunFailed, []string{"gone"}, &old)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.MakeFullRerun(ctx, id); err != nil {
+		t.Fatalf("MakeFullRerun: %v", err)
+	}
+	if r := getRun(t, s, id); r.Trigger != TriggerRerun || r.SkillSubset != nil || r.BaseRunID != nil {
+		t.Errorf("run = %q %v %v; want rerun, all skills, no base", r.Trigger, r.SkillSubset, r.BaseRunID)
+	}
+	if err := s.MakeFullRerun(ctx, "not-an-id"); err == nil {
+		t.Error("a malformed id was accepted")
+	}
+}

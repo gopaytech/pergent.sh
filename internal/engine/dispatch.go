@@ -284,6 +284,9 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		}
 		return d.fail(ctx, err.Error())
 	}
+	if in, err = d.subset(ctx, in); err != nil {
+		return d.retry(ctx, err)
+	}
 	if err := in.Fit(inputs.ConfigMapLimit); err != nil {
 		if errors.Is(err, inputs.ErrTooLarge) {
 			return d.fail(ctx, reasonTooLarge)
@@ -366,6 +369,36 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		d.log.Warn("couldn't set the running commit status", "error", d.redact(err.Error()))
 	}
 	return nil
+}
+
+// subset reduces the inputs of a run that reviews some of the skills (a
+// re-run of the failed ones) to those skills. This happens after the inputs
+// are resolved, as a repository's own skills replace library ones inside
+// Resolve. A skill that is no longer there is dropped; with none left the run
+// is turned into a full re-run (recorded on the run) and reviews every skill.
+func (d *dispatcher) subset(ctx context.Context, in *inputs.Inputs) (*inputs.Inputs, error) {
+	names := d.run.SkillSubset
+	if len(names) == 0 {
+		return in, nil
+	}
+	only := in.Only(names)
+	if len(only.Skills) == 0 {
+		d.log.Warn("none of the skills to re-run exist any more; reviewing with all skills", "skills", strings.Join(names, ","))
+		if err := d.e.Store.MakeFullRerun(ctx, d.run.ID); err != nil {
+			return nil, fmt.Errorf("record the full re-run: %w", err)
+		}
+		return in, nil
+	}
+	if len(only.Skills) < len(names) {
+		var gone []string
+		for _, n := range names {
+			if _, ok := only.Skills[n]; !ok {
+				gone = append(gone, n)
+			}
+		}
+		d.log.Warn("re-running without skills that don't exist any more", "skills", strings.Join(gone, ","))
+	}
+	return only, nil
 }
 
 // recordChange stores the merge request's title, web address, source branch

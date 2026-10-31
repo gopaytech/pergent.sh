@@ -424,3 +424,33 @@ func TestResolveSources(t *testing.T) {
 		t.Errorf("library sources = %v", in.Sources)
 	}
 }
+
+func TestOnly(t *testing.T) {
+	in := &Inputs{
+		Skills:       map[string][]byte{"a": []byte("A"), "b": []byte("B"), "c": []byte("C")},
+		Sources:      map[string]string{"a": SourceLibrary, "b": SourceRepo, "c": SourceLibrary},
+		Overridden:   []string{"b", "c"},
+		Instructions: []byte("rules"), Previous: []byte("prev"),
+	}
+
+	got := in.Only([]string{"b", "gone", "a"})
+
+	if len(got.Skills) != 2 || string(got.Skills["a"]) != "A" || string(got.Skills["b"]) != "B" {
+		t.Errorf("skills = %v", got.Skills)
+	}
+	if len(got.Sources) != 2 || got.Sources["b"] != SourceRepo {
+		t.Errorf("sources = %v", got.Sources)
+	}
+	if len(got.Overridden) != 1 || got.Overridden[0] != "b" {
+		t.Errorf("overridden = %v", got.Overridden)
+	}
+	if string(got.Instructions) != "rules" || string(got.Previous) != "prev" {
+		t.Errorf("instructions %q, previous %q", got.Instructions, got.Previous)
+	}
+	if len(in.Skills) != 3 {
+		t.Error("Only changed the original")
+	}
+	if none := in.Only([]string{"gone"}); len(none.Skills) != 0 {
+		t.Errorf("skills = %v, want none", none.Skills)
+	}
+}

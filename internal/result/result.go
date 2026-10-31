@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/gopaytech/pergent/render"
@@ -27,6 +28,14 @@ type Result struct {
 	Skills         []Skill `json:"skills"`
 	Error          *Error  `json:"error"`
 	Comment        Comment `json:"comment"`
+
+	// Merged is set by Merge on a result that carries kept skills of an
+	// earlier run: its comment covers only the skills that were re-run, so
+	// the comment is always rendered again from the skills. MergeNote is set
+	// by NoteUnmerged on a re-run whose earlier results could not be kept,
+	// and is shown in the comment. Either marks the merge step as done.
+	Merged    bool   `json:"merged,omitempty"`
+	MergeNote string `json:"merge_note,omitempty"`
 }
 
 // Skill is the outcome of one skill. Findings stay raw: pergent.sh stores and
@@ -264,4 +273,199 @@ func Trim(data []byte) ([]byte, error) {
 		t.Skills = append(t.Skills, trimmedSkill{Name: s.Name, Findings: f})
 	}
 	return json.Marshal(t)
+}
+
+// FailedSkills names the skills a "review failed" re-run reviews again: those
+// whose verdict is "failed" (or one pergent.sh does not know, as the policy
+// treats it) and those that are "no_blocking_issues" yet list files they could
+// not review. whole is true when no skill can be singled out: the result is an
+// error or has no skills; the whole review is then re-run.
+func FailedSkills(r *Result) (names []string, whole bool) {
+	if r.Status != "completed" || len(r.Skills) == 0 {
+		return nil, true
+	}
+	for _, s := range r.Skills {
+		switch s.Verdict {
+		case "has_blocking_issues":
+		case "no_blocking_issues":
+			if len(s.Files.NotReviewed) > 0 {
+				names = append(names, s.Name)
+			}
+		default:
+			names = append(names, s.Name)
+		}
+	}
+	return names, false
+}
+
+// NoteBaseUnreadable is the note of a re-run whose earlier results of the
+// other skills could not be kept.
+const NoteBaseUnreadable = "earlier results of the other skills could not be read"
+
+// Merge combines the result of a partial re-run with the result it builds on:
+// the skills in subset come from partial, every other skill from base. The
+// base's order is kept (a subset skill takes the place of its earlier result;
+// one the base lacks goes last), a skill of subset that partial lacks is
+// dropped, and each skill is kept as it was delivered, fields that Result does
+// not declare included. Finding IDs are assigned again over all the findings
+// of the merged result, so they stay unique. The envelope and the comment are
+// partial's, and the result is marked Merged.
+//
+// It fails when partial is not a completed result, when base is not a usable
+// completed result of the same base and head commits, or when subset is empty:
+// the caller then keeps partial alone (see NoteUnmerged).
+func Merge(partial, base []byte, subset []string) ([]byte, error) {
+	if len(subset) == 0 {
+		return nil, errors.New("no skills were re-run")
+	}
+	pr, err := Parse(partial)
+	if err != nil {
+		return nil, fmt.Errorf("the re-run result: %w", err)
+	}
+	br, err := Parse(base)
+	if err != nil {
+		return nil, fmt.Errorf("the earlier result: %w", err)
+	}
+	switch {
+	case pr.Status != "completed":
+		return nil, errors.New("the re-run result is not completed")
+	case br.Status != "completed":
+		return nil, errors.New("the earlier result is not completed")
+	case pr.Base != br.Base || pr.Head != br.Head:
+		return nil, errors.New("the earlier result is for another commit")
+	}
+
+	var top, baseTop map[string]json.RawMessage
+	var partialSkills, baseSkills []json.RawMessage
+	if err := unmarshalSkills(partial, &top, &partialSkills); err != nil {
+		return nil, err
+	}
+	if err := unmarshalSkills(base, &baseTop, &baseSkills); err != nil {
+		return nil, err
+	}
+
+	fresh := map[string]json.RawMessage{}
+	var freshOrder []string
+	for i, raw := range partialSkills {
+		name := pr.Skills[i].Name
+		if _, dup := fresh[name]; !dup && slices.Contains(subset, name) {
+			fresh[name] = raw
+			freshOrder = append(freshOrder, name)
+		}
+	}
+	var skills []json.RawMessage
+	used := map[string]bool{}
+	for i, raw := range baseSkills {
+		name := br.Skills[i].Name
+		if !slices.Contains(subset, name) {
+			skills = append(skills, raw)
+			continue
+		}
+		if f, ok := fresh[name]; ok && !used[name] {
+			skills = append(skills, f)
+			used[name] = true
+		}
+	}
+	for _, name := range freshOrder {
+		if !used[name] {
+			skills = append(skills, fresh[name])
+		}
+	}
+
+	skills, err = assignIDs(skills)
+	if err != nil {
+		return nil, err
+	}
+	if top["skills"], err = json.Marshal(skills); err != nil {
+		return nil, err
+	}
+	top["merged"] = json.RawMessage("true")
+	return json.Marshal(top)
+}
+
+// unmarshalSkills decodes data into its top-level fields and the raw skills
+// among them.
+func unmarshalSkills(data []byte, top *map[string]json.RawMessage, skills *[]json.RawMessage) error {
+	if err := json.Unmarshal(data, top); err != nil {
+		return fmt.Errorf("decode result: %w", err)
+	}
+	if raw, ok := (*top)["skills"]; ok {
+		if err := json.Unmarshal(raw, skills); err != nil {
+			return fmt.Errorf("decode skills: %w", err)
+		}
+	}
+	return nil
+}
+
+// assignIDs sets each finding's "id" in skills to the short ID of its
+// fingerprint, unique among all the findings (render.AssignIDs). A finding
+// without a fingerprint keeps what it has.
+func assignIDs(skills []json.RawMessage) ([]json.RawMessage, error) {
+	type found struct {
+		skill   map[string]json.RawMessage
+		finding []map[string]json.RawMessage
+	}
+	decoded := make([]found, len(skills))
+	var fps []string
+	for i, raw := range skills {
+		if err := json.Unmarshal(raw, &decoded[i].skill); err != nil {
+			return nil, fmt.Errorf("decode a skill: %w", err)
+		}
+		fr, ok := decoded[i].skill["findings"]
+		if !ok {
+			continue
+		}
+		if err := json.Unmarshal(fr, &decoded[i].finding); err != nil {
+			return nil, fmt.Errorf("decode findings: %w", err)
+		}
+		for _, f := range decoded[i].finding {
+			if fp := fingerprintOf(f); fp != "" {
+				fps = append(fps, fp)
+			}
+		}
+	}
+	ids := render.AssignIDs(fps)
+
+	out := make([]json.RawMessage, len(skills))
+	for i, d := range decoded {
+		if len(d.finding) == 0 {
+			out[i] = skills[i]
+			continue
+		}
+		for _, f := range d.finding {
+			if fp := fingerprintOf(f); fp != "" {
+				f["id"], _ = json.Marshal(ids[fp])
+			}
+		}
+		var err error
+		if d.skill["findings"], err = json.Marshal(d.finding); err != nil {
+			return nil, err
+		}
+		if out[i], err = json.Marshal(d.skill); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func fingerprintOf(f map[string]json.RawMessage) string {
+	var fp string
+	_ = json.Unmarshal(f["fingerprint"], &fp)
+	return fp
+}
+
+// NoteUnmerged is data (a partial re-run's result) with note to show in its
+// comment, for a re-run whose earlier results could not be merged: the review
+// then covers only the skills that were re-run.
+func NoteUnmerged(data []byte, note string) ([]byte, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return nil, fmt.Errorf("decode result: %w", err)
+	}
+	n, err := json.Marshal(note)
+	if err != nil {
+		return nil, err
+	}
+	top["merge_note"] = n
+	return json.Marshal(top)
 }

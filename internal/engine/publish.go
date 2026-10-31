@@ -103,6 +103,9 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 	if ok {
 		failure = repo.FailureStatus
 	}
+	if run, err = e.mergeBase(ctx, run, log); err != nil {
+		return err
+	}
 	o := e.outcome(run, log)
 	// A repository switched off since the run was queued approves nothing
 	// more: its review is posted as with approval turned off.
@@ -149,6 +152,49 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 	}
 	log.Info("review published", "status", d.Status, "approved", approved)
 	return nil
+}
+
+// mergeBase completes the result of a re-run of some skills (a run with a base
+// run): the skills it did not review are taken from the base run's result
+// (result.Merge) and the whole is stored on the run, so the dashboard and the
+// next run's previous result show the whole review. It is done once; a run
+// whose result is already merged is returned as it is. A base result that
+// can't be read or is for another commit leaves the re-run as a review of its
+// own skills only, with a note in the comment.
+//
+// The returned run carries the stored result. An error is a failure of the
+// store: the publish is retried.
+func (e *Engine) mergeBase(ctx context.Context, run store.Run, log *slog.Logger) (store.Run, error) {
+	if run.BaseRunID == nil || len(run.SkillSubset) == 0 || run.FailureReason != "" || run.Result == nil {
+		return run, nil
+	}
+	r, err := result.Parse(run.Result)
+	if err != nil || r.Status != "completed" || r.Merged || r.MergeNote != "" {
+		// Unusable results are decided as failures by outcome; the rest is
+		// merged already or has nothing to merge.
+		return run, nil
+	}
+	base, found, err := e.Store.Run(ctx, *run.BaseRunID)
+	if err != nil {
+		return run, fmt.Errorf("load the run to merge with: %w", err)
+	}
+	var merged []byte
+	if found && base.Result != nil {
+		merged, err = result.Merge(run.Result, base.Result, run.SkillSubset)
+	} else {
+		err = errors.New("the earlier run or its result is gone")
+	}
+	if err != nil {
+		log.Warn("not merging with the earlier results of the other skills", "base_run", *run.BaseRunID, "error", e.redact(err.Error()))
+		if merged, err = result.NoteUnmerged(run.Result, result.NoteBaseUnreadable); err != nil {
+			return run, nil // can't happen: the result parsed
+		}
+	}
+	if err := e.Store.StoreMergedResult(ctx, run.ID, merged); err != nil {
+		return run, fmt.Errorf("store the merged result: %w", err)
+	}
+	run.Result = merged
+	return run, nil
 }
 
 // dismissals are the dismissals of the merge request in the renderer's form.

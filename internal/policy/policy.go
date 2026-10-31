@@ -51,6 +51,7 @@ const (
 	noteApproveUnavailable = "---\n**Not approved:** the pergent approve App isn't installed on this repository."
 	noteApproveBotNoReach  = "---\n**Not approved:** the pergent approve bot can't reach this repository."
 	noteApprovalOff        = "---\n**Not approved:** approval is turned off for this repository."
+	noteMerge              = "---\n**Note:** "
 
 	// The skipped-files note lists at most maxListedSkipped paths, each cut
 	// to maxListedPath characters with at most maxListedRules rules of
@@ -98,8 +99,9 @@ func blocksApproval(rule string) bool { return !reviewedSkipRules[rule] }
 // are all dismissed counts as clean. When any dismissal covers a finding the
 // comment is rendered again from the result (render.Comment, at most
 // MaxComment bytes when positive, passed through Redact when set) instead of
-// being the one pergent wrote; otherwise the result's comment is used as it
-// is.
+// being the one pergent wrote; so is the comment of a merged result (see
+// result.Merge), which pergent wrote for the re-run skills only. Otherwise the
+// result's comment is used as it is.
 type Outcome struct {
 	Result             *result.Result
 	FailureReason      string
@@ -208,8 +210,14 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 	}
 
 	comment, block, skills := withMarker(r.Comment.Markdown), r.Comment.FindingsBlock, r.Skills
-	if rs, applied := applyDismissals(o, r); applied {
+	rs, rerender := applyDismissals(o, r)
+	if rerender {
 		skills = withVerdicts(r.Skills, rs)
+	} else if r.Merged {
+		// The stored comment covers only the skills that were re-run.
+		rs, rerender = result.ToRender(r), true
+	}
+	if rerender {
 		redact := o.Redact
 		if redact == nil {
 			redact = func(s string) string { return s }
@@ -220,6 +228,9 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 		rs = redactSkills(rs, redact)
 		comment = withMarker(redact(render.Comment(rs, render.Options{MaxLen: o.MaxComment, ChangedFiles: redactAll(result.ChangedFiles(r), redact)})))
 		block = render.FindingsBlock(rs)
+	}
+	if r.MergeNote != "" {
+		comment = withNote(comment, block, noteMerge+r.MergeNote+".")
 	}
 	var blocking, failedSkills, reviewed int
 	for _, s := range skills {

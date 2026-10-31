@@ -756,6 +756,26 @@ func (s *Store) StoreResult(ctx context.Context, id string, token string, body [
 	return ResultStored, nil
 }
 
+// StoreMergedResult replaces the result of a reported run with merged, the
+// result combined with the kept skills of an earlier run (result.Merge), so the
+// dashboard and every later reading show the whole review. It is an error when
+// the run is not reported with a result, or merged is not valid JSON.
+func (s *Store) StoreMergedResult(ctx context.Context, runID string, merged []byte) error {
+	if !json.Valid(merged) {
+		return ErrInvalidResult
+	}
+	return s.mustUpdate(ctx, runID, `UPDATE runs SET result = $2::jsonb
+		WHERE id = $1::uuid AND state = 'reported' AND result IS NOT NULL`, runID, string(merged))
+}
+
+// MakeFullRerun turns a run that was to review some skills into a full
+// re-run (TriggerRerun, every skill, no base run), for when none of its skills
+// can be reviewed any more.
+func (s *Store) MakeFullRerun(ctx context.Context, runID string) error {
+	return s.mustUpdate(ctx, runID, `UPDATE runs SET trigger = $2, skill_subset = NULL, base_run_id = NULL
+		WHERE id = $1::uuid`, runID, TriggerRerun)
+}
+
 // ReportFailure records that a queued or running run will never produce a
 // result (the Job died, the inputs did not fit, ...) so it is reported with
 // reason. It reports whether it changed the run; a run that already has a

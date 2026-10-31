@@ -160,6 +160,32 @@ func Resolve(ctx context.Context, src Source, lib Library, repo config.Repositor
 	return in, nil
 }
 
+// Only is the inputs reduced to the skills named in names: a name that is not
+// among the skills (after the repository's own were merged in) is left out.
+// The instructions and the previous result are shared with in.
+func (in *Inputs) Only(names []string) *Inputs {
+	out := &Inputs{
+		Skills: map[string][]byte{}, Sources: map[string]string{},
+		Instructions: in.Instructions, Previous: in.Previous,
+	}
+	for _, name := range names {
+		content, ok := in.Skills[name]
+		if !ok {
+			continue
+		}
+		out.Skills[name] = content
+		if src, ok := in.Sources[name]; ok {
+			out.Sources[name] = src
+		}
+	}
+	for _, name := range in.Overridden {
+		if _, ok := out.Skills[name]; ok {
+			out.Overridden = append(out.Overridden, name)
+		}
+	}
+	return out
+}
+
 func loadRepoSkills(ctx context.Context, src Source, projectID int64, ref string) (map[string][]byte, error) {
 	entries, err := src.ListTree(ctx, projectID, repoSkillsDir, ref)
 	if err != nil {
