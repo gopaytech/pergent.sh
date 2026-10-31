@@ -38,6 +38,16 @@ const (
 	KeySkills        = "skills"
 	KeyJobTimeout    = "job_timeout"
 	KeyJobMemory     = "job_memory"
+
+	KeyRerunLimitPerMR   = "rerun_limit_per_mr"
+	KeyRerunLimitPerRepo = "rerun_limit_per_repo"
+)
+
+// The re-run caps when nothing sets them: per merge request and per
+// repository, each per UTC day.
+const (
+	DefaultRerunLimitPerMR   = 10
+	DefaultRerunLimitPerRepo = 50
 )
 
 // Effective is a repository switched on, with every setting resolved.
@@ -56,6 +66,9 @@ type Effective struct {
 	// JobMemory is the Job's memory limit; zero when neither the
 	// repository nor jobs.resources.limits sets one.
 	JobMemory resource.Quantity
+	// RerunLimitPerMR and RerunLimitPerRepo cap the re-runs asked for (by
+	// comment or button) per merge request and per repository and UTC day.
+	RerunLimitPerMR, RerunLimitPerRepo int
 	// Overridden tells, for each setting key, whether the repository sets
 	// it rather than taking the default. Every key is present.
 	Overridden map[string]bool
@@ -209,9 +222,9 @@ func (r *Resolver) defaults(platform, instance, project string, source Source) E
 // defaultsFor is defaults for a repository from source: for SourceDashboard,
 // the defaults stored in the dashboard replace the built-in and config ones.
 // A stored value that can't be used (an unknown failure status, a timeout
-// that isn't positive, a memory limit that doesn't parse, isn't positive or
-// is below jobs.resources.requests, which Kubernetes would refuse) is
-// ignored: a bad setting never stops reviews.
+// that isn't positive, a re-run cap that isn't positive, a memory limit that
+// doesn't parse, isn't positive or is below jobs.resources.requests, which
+// Kubernetes would refuse) is ignored: a bad setting never stops reviews.
 func (r *Resolver) defaultsFor(source Source, platform, instance, project string, stored store.RepoDefaults) Effective {
 	eff := Effective{
 		Platform: platform, Instance: instance, Project: project, Source: source,
@@ -220,9 +233,13 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 		FailureStatus: config.FailureStatusFailed,
 		JobTimeout:    r.Config.Jobs.Timeout,
 		JobMemory:     r.jobsMemory(r.Config.Jobs.Resources.Limits),
+
+		RerunLimitPerMR:   DefaultRerunLimitPerMR,
+		RerunLimitPerRepo: DefaultRerunLimitPerRepo,
 		Overridden: map[string]bool{
 			KeyApprove: false, KeyReviewDrafts: false, KeyFailureStatus: false,
 			KeySkills: false, KeyJobTimeout: false, KeyJobMemory: false,
+			KeyRerunLimitPerMR: false, KeyRerunLimitPerRepo: false,
 		},
 	}
 	if source != SourceDashboard {
@@ -247,8 +264,17 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 			eff.JobMemory = q
 		}
 	}
+	if usableCap(stored.RerunLimitPerMR) {
+		eff.RerunLimitPerMR = *stored.RerunLimitPerMR
+	}
+	if usableCap(stored.RerunLimitPerRepo) {
+		eff.RerunLimitPerRepo = *stored.RerunLimitPerRepo
+	}
 	return eff
 }
+
+// usableCap is whether a stored re-run cap is set and positive.
+func usableCap(n *int) bool { return n != nil && *n > 0 }
 
 // failureStatus is s as a config.FailureStatus; ok is false for an unknown
 // one.
@@ -306,6 +332,12 @@ func (r *Resolver) fromConfig(repo config.Repository) (Effective, bool) {
 	if repo.JobMemory != nil {
 		eff.JobMemory, eff.Overridden[KeyJobMemory] = repo.JobMemory.DeepCopy(), true
 	}
+	if repo.RerunLimitPerMR != nil {
+		eff.RerunLimitPerMR, eff.Overridden[KeyRerunLimitPerMR] = *repo.RerunLimitPerMR, true
+	}
+	if repo.RerunLimitPerRepo != nil {
+		eff.RerunLimitPerRepo, eff.Overridden[KeyRerunLimitPerRepo] = *repo.RerunLimitPerRepo, true
+	}
 	return eff, true
 }
 
@@ -340,6 +372,12 @@ func (r *Resolver) fromDashboard(row store.DashboardRepo, stored store.RepoDefau
 		if q, ok := r.usableMemory(*row.JobMemory); ok {
 			eff.JobMemory, eff.Overridden[KeyJobMemory] = q, true
 		}
+	}
+	if usableCap(row.RerunLimitPerMR) {
+		eff.RerunLimitPerMR, eff.Overridden[KeyRerunLimitPerMR] = *row.RerunLimitPerMR, true
+	}
+	if usableCap(row.RerunLimitPerRepo) {
+		eff.RerunLimitPerRepo, eff.Overridden[KeyRerunLimitPerRepo] = *row.RerunLimitPerRepo, true
 	}
 	return eff, true
 }

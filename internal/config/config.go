@@ -123,6 +123,12 @@ type App struct {
 	PrivateKeyEnv string `yaml:"private_key_env"`
 }
 
+// The bounds of a repository's re-run caps.
+const (
+	MinRerunLimit = 1
+	MaxRerunLimit = 1000
+)
+
 // Repository is a project that is reviewed. Listing it switches it on. It
 // names exactly one of GitLab (an instance under gitlab:) and GitHub (an
 // instance under github:); Project is a GitLab path or a GitHub owner/name.
@@ -144,6 +150,9 @@ type Repository struct {
 	JobTimeout *time.Duration
 	// JobMemory replaces the memory limit of jobs.resources.limits.
 	JobMemory *resource.Quantity
+	// RerunLimitPerMR and RerunLimitPerRepo cap the re-runs asked for per
+	// merge request and per repository and day (1 to 1000).
+	RerunLimitPerMR, RerunLimitPerRepo *int
 }
 
 // LLM is the model every review uses.
@@ -189,12 +198,16 @@ type fileRepository struct {
 	ReviewDrafts  *bool         `yaml:"review_drafts"`
 	JobTimeout    *duration     `yaml:"job_timeout"`
 	JobMemory     *quantity     `yaml:"job_memory"`
+
+	RerunLimitPerMR   *int `yaml:"rerun_limit_per_mr"`
+	RerunLimitPerRepo *int `yaml:"rerun_limit_per_repo"`
 }
 
 func (f fileRepository) repository() Repository {
 	r := Repository{
 		GitLab: f.GitLab, GitHub: f.GitHub, Project: f.Project, Skills: f.Skills,
 		FailureStatus: f.FailureStatus, Approve: f.Approve, ReviewDrafts: f.ReviewDrafts,
+		RerunLimitPerMR: f.RerunLimitPerMR, RerunLimitPerRepo: f.RerunLimitPerRepo,
 	}
 	if f.JobTimeout != nil {
 		d := time.Duration(*f.JobTimeout)
@@ -480,6 +493,12 @@ func (c *Config) Validate() error {
 				add("repositories[%d] (%s): job_memory %s is below the memory request %s of jobs.resources.requests",
 					i, repo.Project, repo.JobMemory.String(), request.String())
 			}
+		}
+		if n := repo.RerunLimitPerMR; n != nil && (*n < MinRerunLimit || *n > MaxRerunLimit) {
+			add("repositories[%d] (%s): rerun_limit_per_mr must be from %d to %d, got %d", i, repo.Project, MinRerunLimit, MaxRerunLimit, *n)
+		}
+		if n := repo.RerunLimitPerRepo; n != nil && (*n < MinRerunLimit || *n > MaxRerunLimit) {
+			add("repositories[%d] (%s): rerun_limit_per_repo must be from %d to %d, got %d", i, repo.Project, MinRerunLimit, MaxRerunLimit, *n)
 		}
 	}
 

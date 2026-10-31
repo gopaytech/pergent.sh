@@ -261,7 +261,8 @@ type Last7View struct {
 
 // RepositoryDetailView is GET /api/repositories/{instance}/{project...}.
 // Settings is keyed approve, reviewDrafts, failureStatus, skills (null:
-// every library skill), jobTimeoutSeconds and jobMemory ("" when none).
+// every library skill), jobTimeoutSeconds, jobMemory ("" when none),
+// rerunLimitPerMR and rerunLimitPerRepo.
 type RepositoryDetailView struct {
 	Repo      RepositoryView         `json:"repo"`
 	Settings  map[string]SettingView `json:"settings"`
@@ -359,6 +360,10 @@ type DefaultsView struct {
 	JobTimeoutSeconds int64  `json:"jobTimeoutSeconds"`
 	// JobMemory is the Job's memory limit, "" when none.
 	JobMemory string `json:"jobMemory"`
+	// RerunLimitPerMR and RerunLimitPerRepo cap the re-runs per merge
+	// request and per repository and UTC day.
+	RerunLimitPerMR   int `json:"rerunLimitPerMR"`
+	RerunLimitPerRepo int `json:"rerunLimitPerRepo"`
 }
 
 // LLMView is the model reviews use.
@@ -407,7 +412,8 @@ type LLMView struct {
 //     "neutral"), skills (a non-empty list of library skill names),
 //     jobTimeoutSeconds (a whole number, 60 to 7200) and jobMemory (a
 //     Kubernetes quantity such as "6Gi", from 256Mi, and no less than
-//     jobs.resources.requests.memory, to 32Gi). Any other key, or a value
+//     jobs.resources.requests.memory, to 32Gi), and rerunLimitPerMR and
+//     rerunLimitPerRepo (a whole number, 1 to 1000). Any other key, or a value
 //     out of bounds, is 400 and nothing changes. 200, RepositoryDetailView.
 //   - POST /api/repositories/{instance}/{project...}/settings/reset: every
 //     setting back to its default. 200, RepositoryDetailView.

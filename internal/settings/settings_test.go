@@ -86,7 +86,8 @@ func get(t *testing.T, r *Resolver, instance, project string) Effective {
 	return eff
 }
 
-var allKeys = []string{KeyApprove, KeyReviewDrafts, KeyFailureStatus, KeySkills, KeyJobTimeout, KeyJobMemory}
+var allKeys = []string{KeyApprove, KeyReviewDrafts, KeyFailureStatus, KeySkills, KeyJobTimeout, KeyJobMemory,
+	KeyRerunLimitPerMR, KeyRerunLimitPerRepo}
 
 // wantOverridden checks exactly the given keys are overridden.
 func wantOverridden(t *testing.T, eff Effective, keys ...string) {
@@ -120,6 +121,12 @@ func wantDefaults(t *testing.T, eff Effective, except ...string) {
 	if !skip(KeyJobMemory) && eff.JobMemory.Cmp(resource.MustParse("4Gi")) != 0 {
 		t.Errorf("JobMemory = %s, want jobs.resources.limits.memory 4Gi", eff.JobMemory.String())
 	}
+	if !skip(KeyRerunLimitPerMR) && eff.RerunLimitPerMR != 10 {
+		t.Errorf("RerunLimitPerMR = %d, want the default 10", eff.RerunLimitPerMR)
+	}
+	if !skip(KeyRerunLimitPerRepo) && eff.RerunLimitPerRepo != 50 {
+		t.Errorf("RerunLimitPerRepo = %d, want the default 50", eff.RerunLimitPerRepo)
+	}
 }
 
 func TestResolverConfigKeys(t *testing.T) {
@@ -127,10 +134,11 @@ func TestResolverConfigKeys(t *testing.T) {
 	cfg.Repositories = append(cfg.Repositories, config.Repository{
 		GitHub: "gh", Project: "Acme/Payments",
 		Approve: ptr(false), ReviewDrafts: ptr(false),
-		FailureStatus: config.FailureStatusNeutral,
-		Skills:        []string{"security"},
-		JobTimeout:    ptr(20 * time.Minute),
-		JobMemory:     ptr(resource.MustParse("6Gi")),
+		FailureStatus:   config.FailureStatusNeutral,
+		Skills:          []string{"security"},
+		JobTimeout:      ptr(20 * time.Minute),
+		JobMemory:       ptr(resource.MustParse("6Gi")),
+		RerunLimitPerMR: ptr(20), RerunLimitPerRepo: ptr(100),
 	})
 	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)} // no store: config only
 
@@ -140,7 +148,7 @@ func TestResolverConfigKeys(t *testing.T) {
 	}
 	if eff.Approve || eff.ReviewDrafts || eff.FailureStatus != config.FailureStatusNeutral ||
 		!slices.Equal(eff.Skills, []string{"security"}) || eff.JobTimeout != 20*time.Minute ||
-		eff.JobMemory.Cmp(resource.MustParse("6Gi")) != 0 {
+		eff.JobMemory.Cmp(resource.MustParse("6Gi")) != 0 || eff.RerunLimitPerMR != 20 || eff.RerunLimitPerRepo != 100 {
 		t.Errorf("config keys not reflected: %+v", eff)
 	}
 	wantOverridden(t, eff, allKeys...)
@@ -199,6 +207,7 @@ func TestResolverDefaultsAndOverrides(t *testing.T) {
 		Instance: "gh", Project: "Acme/Gadgets",
 		Approve: ptr(true), ReviewDrafts: ptr(false), FailureStatus: ptr("neutral"),
 		Skills: []string{"security"}, JobTimeoutSeconds: ptr(1200), JobMemory: ptr("6Gi"),
+		RerunLimitPerMR: ptr(20), RerunLimitPerRepo: ptr(100),
 	})
 	// A row of an instance no longer configured is not a repository.
 	upsert(t, st, store.DashboardRepo{Instance: "gone", Project: "acme/old"})
@@ -221,7 +230,7 @@ func TestResolverDefaultsAndOverrides(t *testing.T) {
 	}
 	if !full.Approve || full.ReviewDrafts || full.FailureStatus != config.FailureStatusNeutral ||
 		!slices.Equal(full.Skills, []string{"security"}) || full.JobTimeout != 20*time.Minute ||
-		full.JobMemory.Cmp(resource.MustParse("6Gi")) != 0 {
+		full.JobMemory.Cmp(resource.MustParse("6Gi")) != 0 || full.RerunLimitPerMR != 20 || full.RerunLimitPerRepo != 100 {
 		t.Errorf("overrides not applied: %+v", full)
 	}
 	wantOverridden(t, full, allKeys...)
@@ -315,17 +324,19 @@ func TestBrowserDefaultsApplyToDashboardReposOnly(t *testing.T) {
 	if err := st.PutRepoDefaults(ctx, store.RepoDefaults{
 		Approve: ptr(false), ReviewDrafts: ptr(false), FailureStatus: ptr("neutral"),
 		JobTimeoutSeconds: ptr(1200), JobMemory: ptr("2Gi"),
+		RerunLimitPerMR: ptr(30), RerunLimitPerRepo: ptr(200),
 	}); err != nil {
 		t.Fatal(err)
 	}
 	upsert(t, st, store.DashboardRepo{Instance: "main", Project: "acme/payments", CreatedBy: "alice"})
 	upsert(t, st, store.DashboardRepo{Instance: "main", Project: "acme/gadgets", CreatedBy: "alice",
-		Approve: ptr(true), JobTimeoutSeconds: ptr(600)})
+		Approve: ptr(true), JobTimeoutSeconds: ptr(600), RerunLimitPerMR: ptr(5)})
 
 	// A dashboard repository takes the defaults; none counts as overridden.
 	eff := get(t, r, "main", "acme/payments")
 	if eff.Approve || eff.ReviewDrafts || eff.FailureStatus != config.FailureStatusNeutral ||
-		eff.JobTimeout != 20*time.Minute || eff.JobMemory.Cmp(resource.MustParse("2Gi")) != 0 {
+		eff.JobTimeout != 20*time.Minute || eff.JobMemory.Cmp(resource.MustParse("2Gi")) != 0 ||
+		eff.RerunLimitPerMR != 30 || eff.RerunLimitPerRepo != 200 {
 		t.Errorf("dashboard repository = %+v", eff)
 	}
 	wantOverridden(t, eff)
@@ -335,7 +346,10 @@ func TestBrowserDefaultsApplyToDashboardReposOnly(t *testing.T) {
 	if !eff.Approve || eff.JobTimeout != 10*time.Minute || eff.ReviewDrafts {
 		t.Errorf("dashboard repository with its own settings = %+v", eff)
 	}
-	wantOverridden(t, eff, KeyApprove, KeyJobTimeout)
+	if eff.RerunLimitPerMR != 5 || eff.RerunLimitPerRepo != 200 {
+		t.Errorf("dashboard repository caps = %d, %d; want 5 (its own), 200 (the default)", eff.RerunLimitPerMR, eff.RerunLimitPerRepo)
+	}
+	wantOverridden(t, eff, KeyApprove, KeyJobTimeout, KeyRerunLimitPerMR)
 
 	// A config repository keeps the config's defaults.
 	eff = get(t, r, "main", "acme/widgets")
@@ -373,4 +387,21 @@ func TestBrowserDefaultsBadValuesFallBack(t *testing.T) {
 	}
 	upsert(t, st, store.DashboardRepo{Instance: "main", Project: "acme/payments", CreatedBy: "alice"})
 	wantDefaults(t, get(t, r, "main", "acme/payments"))
+}
+
+// A stored cap that isn't positive (the database refuses it, but a bad
+// value never stops reviews) is ignored, in a repository and in the defaults.
+func TestResolverIgnoresUnusableCaps(t *testing.T) {
+	cfg := testConfig()
+	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)}
+	eff := r.defaultsFor(SourceDashboard, config.PlatformGitLab, "main", "acme/x",
+		store.RepoDefaults{RerunLimitPerMR: ptr(0), RerunLimitPerRepo: ptr(-1)})
+	wantDefaults(t, eff)
+	eff, ok := r.fromDashboard(store.DashboardRepo{Instance: "main", Project: "acme/x", RerunLimitPerMR: ptr(0), RerunLimitPerRepo: ptr(-4)},
+		store.RepoDefaults{})
+	if !ok {
+		t.Fatal("fromDashboard: instance not found")
+	}
+	wantDefaults(t, eff)
+	wantOverridden(t, eff)
 }

@@ -890,14 +890,16 @@ func TestDefaults(t *testing.T) {
 	e := newEnv(t, nil)
 	admin := e.signInGitLab(true, "acme/widgets")
 	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")
-	if want := (DefaultsView{Approve: true, ReviewDrafts: true, FailureStatus: "failed", JobTimeoutSeconds: 600}); v != want {
+	if want := (DefaultsView{Approve: true, ReviewDrafts: true, FailureStatus: "failed", JobTimeoutSeconds: 600, RerunLimitPerMR: 10, RerunLimitPerRepo: 50}); v != want {
 		t.Errorf("defaults = %+v, want %+v", v, want)
 	}
 
 	rec := e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{
-		"approve": false, "failureStatus": "neutral", "jobTimeoutSeconds": 900, "jobMemory": "2Gi"})
+		"approve": false, "failureStatus": "neutral", "jobTimeoutSeconds": 900, "jobMemory": "2Gi",
+		"rerunLimitPerMR": 20, "rerunLimitPerRepo": 200})
 	v = decode[DefaultsView](t, rec, "PUT /api/admin/defaults", http.StatusOK)
-	if want := (DefaultsView{Approve: false, ReviewDrafts: true, FailureStatus: "neutral", JobTimeoutSeconds: 900, JobMemory: "2Gi"}); v != want {
+	if want := (DefaultsView{Approve: false, ReviewDrafts: true, FailureStatus: "neutral", JobTimeoutSeconds: 900, JobMemory: "2Gi",
+		RerunLimitPerMR: 20, RerunLimitPerRepo: 200}); v != want {
 		t.Errorf("defaults after PUT = %+v, want %+v", v, want)
 	}
 	if got := getJSON[DefaultsView](e, admin, "/api/admin/defaults"); got != v {
@@ -907,17 +909,19 @@ func TestDefaults(t *testing.T) {
 	// A dashboard repository takes them; a config repository doesn't.
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	g, ok, err := e.d.Repos.Get(ctx, "main", "acme/gadgets")
-	if err != nil || !ok || g.Approve || g.FailureStatus != config.FailureStatusNeutral || g.JobTimeout.Seconds() != 900 {
+	if err != nil || !ok || g.Approve || g.FailureStatus != config.FailureStatusNeutral || g.JobTimeout.Seconds() != 900 ||
+		g.RerunLimitPerMR != 20 || g.RerunLimitPerRepo != 200 {
 		t.Errorf("dashboard repository = %+v, %v, %v", g, ok, err)
 	}
-	if w, _, _ := e.d.Repos.Get(ctx, "main", "acme/widgets"); !w.Approve || w.FailureStatus != config.FailureStatusFailed || w.JobTimeout.Seconds() != 600 {
+	if w, _, _ := e.d.Repos.Get(ctx, "main", "acme/widgets"); !w.Approve || w.FailureStatus != config.FailureStatusFailed || w.JobTimeout.Seconds() != 600 ||
+		w.RerunLimitPerMR != 10 || w.RerunLimitPerRepo != 50 {
 		t.Errorf("config repository = %+v, want the config's defaults", w)
 	}
 
 	// The body replaces them all: what it leaves out is the built-in default.
 	v = decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"reviewDrafts": false, "jobMemory": nil}),
 		"PUT", http.StatusOK)
-	if want := (DefaultsView{Approve: true, ReviewDrafts: false, FailureStatus: "failed", JobTimeoutSeconds: 600}); v != want {
+	if want := (DefaultsView{Approve: true, ReviewDrafts: false, FailureStatus: "failed", JobTimeoutSeconds: 600, RerunLimitPerMR: 10, RerunLimitPerRepo: 50}); v != want {
 		t.Errorf("defaults after a replacing PUT = %+v, want %+v", v, want)
 	}
 
@@ -930,6 +934,9 @@ func TestDefaults(t *testing.T) {
 		{"timeout too big", `{"jobTimeoutSeconds": 7201}`, "jobTimeoutSeconds must be a whole number of seconds from 60 to 7200, or null"},
 		{"memory too small", `{"jobMemory": "100Mi"}`, `jobMemory must be a size from 256Mi to 32Gi such as "6Gi", or null`},
 		{"memory not a size", `{"jobMemory": "lots"}`, `jobMemory must be a size from 256Mi to 32Gi such as "6Gi", or null`},
+		{"cap per MR too small", `{"rerunLimitPerMR": 0}`, "rerunLimitPerMR must be a whole number from 1 to 1000, or null"},
+		{"cap per repo too big", `{"rerunLimitPerRepo": 1001}`, "rerunLimitPerRepo must be a whole number from 1 to 1000, or null"},
+		{"cap not a number", `{"rerunLimitPerRepo": "50"}`, "rerunLimitPerRepo must be a whole number from 1 to 1000, or null"},
 		{"bad status", `{"failureStatus": "sideways"}`, `failureStatus must be "failed", "neutral" or null`},
 		{"bad bool", `{"approve": "yes"}`, "approve must be true, false or null"},
 		{"skills are not a default", `{"skills": ["code-review"]}`, "the body must be a JSON object of defaults"},
@@ -950,7 +957,8 @@ func TestDefaults(t *testing.T) {
 		}
 	}
 	slices.Reverse(details)
-	if !slices.Equal(details, []string{"approve, failureStatus, jobTimeoutSeconds, jobMemory", "approve, reviewDrafts, failureStatus, jobTimeoutSeconds, jobMemory"}) {
+	if !slices.Equal(details, []string{"approve, failureStatus, jobTimeoutSeconds, jobMemory, rerunLimitPerMR, rerunLimitPerRepo",
+		"approve, reviewDrafts, failureStatus, jobTimeoutSeconds, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"}) {
 		t.Errorf("defaults_updated details = %q", details)
 	}
 

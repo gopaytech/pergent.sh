@@ -522,6 +522,8 @@ func TestLoadRepositorySettings(t *testing.T) {
     review_drafts: false
     job_timeout: 20m
     job_memory: 6Gi
+    rerun_limit_per_mr: 20
+    rerun_limit_per_repo: 100
 `, 1)
 	cfg, err := Load(writeConfig(t, body))
 	if err != nil {
@@ -540,10 +542,17 @@ func TestLoadRepositorySettings(t *testing.T) {
 	if repo.JobMemory == nil || repo.JobMemory.Cmp(resource.MustParse("6Gi")) != 0 {
 		t.Errorf("JobMemory = %v, want 6Gi", repo.JobMemory)
 	}
+	if repo.RerunLimitPerMR == nil || *repo.RerunLimitPerMR != 20 {
+		t.Errorf("RerunLimitPerMR = %v, want 20", repo.RerunLimitPerMR)
+	}
+	if repo.RerunLimitPerRepo == nil || *repo.RerunLimitPerRepo != 100 {
+		t.Errorf("RerunLimitPerRepo = %v, want 100", repo.RerunLimitPerRepo)
+	}
 
 	// Omitted, they stay unset: the resolver applies the defaults.
 	plain := loadValid(t).Repositories[0]
-	if plain.Approve != nil || plain.ReviewDrafts != nil || plain.JobTimeout != nil || plain.JobMemory != nil {
+	if plain.Approve != nil || plain.ReviewDrafts != nil || plain.JobTimeout != nil || plain.JobMemory != nil ||
+		plain.RerunLimitPerMR != nil || plain.RerunLimitPerRepo != nil {
 		t.Errorf("omitted repository settings are set: %+v", plain)
 	}
 }
@@ -563,6 +572,12 @@ func TestLoadRejectsBadRepositorySettings(t *testing.T) {
 		{"zero job_memory", "    job_memory: \"0\"\n", "job_memory"},
 		// The default request is 1Gi: a lower limit makes an invalid Job.
 		{"job_memory below the request", "    job_memory: 512Mi\n", "job_memory"},
+		{"zero rerun_limit_per_mr", "    rerun_limit_per_mr: 0\n", "rerun_limit_per_mr must be from 1 to 1000, got 0"},
+		{"negative rerun_limit_per_mr", "    rerun_limit_per_mr: -3\n", "rerun_limit_per_mr must be from 1 to 1000, got -3"},
+		{"huge rerun_limit_per_mr", "    rerun_limit_per_mr: 1001\n", "rerun_limit_per_mr must be from 1 to 1000, got 1001"},
+		{"zero rerun_limit_per_repo", "    rerun_limit_per_repo: 0\n", "rerun_limit_per_repo must be from 1 to 1000, got 0"},
+		{"huge rerun_limit_per_repo", "    rerun_limit_per_repo: 5000\n", "rerun_limit_per_repo must be from 1 to 1000, got 5000"},
+		{"rerun_limit_per_mr not a number", "    rerun_limit_per_mr: many\n", "rerun_limit_per_mr"},
 		{"approve not a bool", "    approve: sometimes\n", "approve"},
 		{"unknown repository key", "    aprove: false\n", "aprove"},
 	}

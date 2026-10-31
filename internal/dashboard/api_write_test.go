@@ -298,6 +298,16 @@ func TestSettingsValidation(t *testing.T) {
 		{`{"jobMemory":"32Gi"}`, true, func(r store.DashboardRepo) bool { return r.JobMemory != nil && *r.JobMemory == "32Gi" }},
 		{`{"jobMemory":"1Gi"}`, true, func(r store.DashboardRepo) bool { return r.JobMemory != nil && *r.JobMemory == "1Gi" }},
 		{`{"jobMemory":"1.5Gi"}`, true, func(r store.DashboardRepo) bool { return r.JobMemory != nil && *r.JobMemory == "1536Mi" }},
+		{`{"rerunLimitPerMR":0}`, false, nil},
+		{`{"rerunLimitPerMR":1001}`, false, nil},
+		{`{"rerunLimitPerMR":2.5}`, false, nil},
+		{`{"rerunLimitPerMR":"10"}`, false, nil},
+		{`{"rerunLimitPerRepo":-1}`, false, nil},
+		{`{"rerunLimitPerRepo":1001}`, false, nil},
+		{`{"rerunLimitPerMR":1}`, true, func(r store.DashboardRepo) bool { return r.RerunLimitPerMR != nil && *r.RerunLimitPerMR == 1 }},
+		{`{"rerunLimitPerMR":1000}`, true, func(r store.DashboardRepo) bool { return r.RerunLimitPerMR != nil && *r.RerunLimitPerMR == 1000 }},
+		{`{"rerunLimitPerRepo":250}`, true, func(r store.DashboardRepo) bool { return r.RerunLimitPerRepo != nil && *r.RerunLimitPerRepo == 250 }},
+		{`{"rerunLimitPerRepo":null}`, true, func(r store.DashboardRepo) bool { return r.RerunLimitPerRepo == nil }},
 		{`{"jobTimeout":600}`, false, nil},
 		{`{"approve":true,"extra":1}`, false, nil},
 		{`{"approve":true`, false, nil},
@@ -323,7 +333,7 @@ func TestSettingsValidation(t *testing.T) {
 	}
 
 	// A partial update keeps the other fields; the answer is the detail.
-	rec := e.send(c, "PUT", target, `{"approve":false,"jobTimeoutSeconds":900}`)
+	rec := e.send(c, "PUT", target, `{"approve":false,"jobTimeoutSeconds":900,"rerunLimitPerRepo":75}`)
 	wantCode(t, rec, "PUT two fields", http.StatusOK)
 	var detail RepositoryDetailView
 	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
@@ -336,13 +346,21 @@ func TestSettingsValidation(t *testing.T) {
 		detail.Settings["skills"].Overridden || detail.Settings["skills"].Value != nil {
 		t.Errorf("detail = %+v", detail)
 	}
+	// The caps: the one set is overridden, the other (last set to 1000 above) too.
+	if s := detail.Settings["rerunLimitPerRepo"]; s.Value != float64(75) || !s.Overridden {
+		t.Errorf("rerunLimitPerRepo = %+v, want 75 overridden", s)
+	}
+	if s := detail.Settings["rerunLimitPerMR"]; s.Value != float64(1000) || !s.Overridden {
+		t.Errorf("rerunLimitPerMR = %+v, want 1000 overridden", s)
+	}
 
 	// Reset clears every override.
 	rec = e.send(c, "POST", target+"/reset", "")
 	wantCode(t, rec, "reset", http.StatusOK)
 	r, found := e.storedRepo("main", "acme/gadgets")
 	if !found || r.Approve != nil || r.ReviewDrafts != nil || r.FailureStatus != nil || r.Skills != nil ||
-		r.JobTimeoutSeconds != nil || r.JobMemory != nil || r.CreatedBy != "carol" {
+		r.JobTimeoutSeconds != nil || r.JobMemory != nil || r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil ||
+		r.CreatedBy != "carol" {
 		t.Errorf("after reset row = %+v, %v", r, found)
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
@@ -352,6 +370,12 @@ func TestSettingsValidation(t *testing.T) {
 		if s.Overridden {
 			t.Errorf("after reset %s is overridden", k)
 		}
+	}
+	if s := detail.Settings["rerunLimitPerMR"]; s.Value != float64(10) {
+		t.Errorf("after reset rerunLimitPerMR = %v, want the default 10", s.Value)
+	}
+	if s := detail.Settings["rerunLimitPerRepo"]; s.Value != float64(50) {
+		t.Errorf("after reset rerunLimitPerRepo = %v, want the default 50", s.Value)
 	}
 	if n := e.reconciles.Load(); n != 0 {
 		t.Errorf("settings changes called ReconcileSoon %d times", n)
@@ -366,6 +390,21 @@ func TestSettingsMemoryFloor(t *testing.T) {
 	target := "/api/repositories/main/acme/gadgets/settings"
 	wantCode(t, e.send(c, "PUT", target, `{"jobMemory":"255Mi"}`), "255Mi", http.StatusBadRequest)
 	wantCode(t, e.send(c, "PUT", target, `{"jobMemory":"256Mi"}`), "256Mi", http.StatusOK)
+}
+
+// The caps' range error names the setting and the range.
+func TestSettingsCapMessages(t *testing.T) {
+	e := newEnv(t, nil)
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	c := e.signInGitLab(true, "acme/gadgets")
+	target := "/api/repositories/main/acme/gadgets/settings"
+	for key, body := range map[string]string{"rerunLimitPerMR": `{"rerunLimitPerMR":0}`, "rerunLimitPerRepo": `{"rerunLimitPerRepo":1001}`} {
+		rec := e.send(c, "PUT", target, body)
+		wantCode(t, rec, body, http.StatusBadRequest)
+		if want := key + " must be a whole number from 1 to 1000, or null"; errorOf(t, rec) != want {
+			t.Errorf("PUT %s: error = %q, want %q", body, errorOf(t, rec), want)
+		}
+	}
 }
 
 // Switching a repository on makes its dashboard record, asks the engine to

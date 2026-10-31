@@ -51,7 +51,7 @@ const (
 	msgAlreadyOn      = "this repository is switched on already"
 	msgWriteFailed    = "could not save the change, please try again"
 	msgBadProjectBody = `the body must be {"project": "<path>"}`
-	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, failureStatus, skills, jobTimeoutSeconds, jobMemory"
+	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, failureStatus, skills, jobTimeoutSeconds, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"
 	msgNameInstance   = `name the instance: {"instance": "<name>", "project": "<path>"}`
 	msgNeedsPlatform  = "sign in with GitLab or GitHub to add repositories"
 	msgNeedsRole      = "only maintainers and admins of this repository can change its settings"
@@ -547,6 +547,7 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 	d.updateSettings(w, r, repo, func(row *store.DashboardRepo) {
 		row.Approve, row.ReviewDrafts, row.FailureStatus = nil, nil, nil
 		row.Skills, row.JobTimeoutSeconds, row.JobMemory = nil, nil, nil
+		row.RerunLimitPerMR, row.RerunLimitPerRepo = nil, nil
 	}, "settings reset", "settings_reset", "")
 }
 
@@ -610,6 +611,8 @@ func (d *Dashboard) parseSettings(r *http.Request) (func(*store.DashboardRepo), 
 			edit, msg = timeoutSetting(raw, null)
 		case "jobMemory":
 			edit, msg = d.memorySetting(raw, null)
+		case "rerunLimitPerMR", "rerunLimitPerRepo":
+			edit, msg = rerunLimitSetting(key, raw, null)
 		default:
 			msg = msgBadSettings
 		}
@@ -712,6 +715,24 @@ func (d *Dashboard) memorySetting(raw json.RawMessage, null bool) (func(*store.D
 		v = &text
 	}
 	return func(row *store.DashboardRepo) { row.JobMemory = v }, ""
+}
+
+// rerunLimitSetting takes a whole number from config.MinRerunLimit to
+// config.MaxRerunLimit for one of the re-run caps.
+func rerunLimitSetting(key string, raw json.RawMessage, null bool) (func(*store.DashboardRepo), string) {
+	var v *int
+	if !null {
+		var n int64
+		if json.Unmarshal(raw, &n) != nil || n < config.MinRerunLimit || n > config.MaxRerunLimit {
+			return nil, fmt.Sprintf("%s must be a whole number from %d to %d, or null", key, config.MinRerunLimit, config.MaxRerunLimit)
+		}
+		limit := int(n)
+		v = &limit
+	}
+	if key == "rerunLimitPerMR" {
+		return func(row *store.DashboardRepo) { row.RerunLimitPerMR = v }, ""
+	}
+	return func(row *store.DashboardRepo) { row.RerunLimitPerRepo = v }, ""
 }
 
 func memoryMessage(floor resource.Quantity) string {

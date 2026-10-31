@@ -787,6 +787,8 @@ func settingViews(repo settings.Effective) map[string]SettingView {
 		"skills":            {repo.Skills, ov[settings.KeySkills]},
 		"jobTimeoutSeconds": {int64(repo.JobTimeout / time.Second), ov[settings.KeyJobTimeout]},
 		"jobMemory":         {quantityText(repo.JobMemory), ov[settings.KeyJobMemory]},
+		"rerunLimitPerMR":   {repo.RerunLimitPerMR, ov[settings.KeyRerunLimitPerMR]},
+		"rerunLimitPerRepo": {repo.RerunLimitPerRepo, ov[settings.KeyRerunLimitPerRepo]},
 	}
 }
 

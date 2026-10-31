@@ -795,6 +795,7 @@ func TestRepositoryDetail(t *testing.T) {
 	settings, _ := json.Marshal(v.Settings)
 	want := `{"approve":{"value":false,"overridden":true},"failureStatus":{"value":"failed","overridden":false},` +
 		`"jobMemory":{"value":"","overridden":false},"jobTimeoutSeconds":{"value":600,"overridden":false},` +
+		`"rerunLimitPerMR":{"value":10,"overridden":false},"rerunLimitPerRepo":{"value":50,"overridden":false},` +
 		`"reviewDrafts":{"value":true,"overridden":false},"skills":{"value":["code-review"],"overridden":true}}`
 	if string(settings) != want {
 		t.Errorf("settings = %s\nwant %s", settings, want)
@@ -1009,8 +1010,9 @@ func TestAdminSettings(t *testing.T) {
 	c := e.signInGitLab(true, "acme/widgets")
 	v := getJSON[AdminSettingsView](e, c, "/api/admin/settings")
 	want := AdminSettingsView{Instance: "main",
-		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, FailureStatus: "failed", JobTimeoutSeconds: 600},
-		LLM:      LLMView{Provider: "anthropic", Model: "claude-sonnet-4"}}
+		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, FailureStatus: "failed", JobTimeoutSeconds: 600,
+			RerunLimitPerMR: 10, RerunLimitPerRepo: 50},
+		LLM: LLMView{Provider: "anthropic", Model: "claude-sonnet-4"}}
 	got, _ := json.Marshal(v)
 	wantJSON, _ := json.Marshal(want)
 	if string(got) != string(wantJSON) {

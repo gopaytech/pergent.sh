@@ -57,7 +57,7 @@ const (
 	msgBadBaseURL     = "baseURL must be empty or an absolute http or https URL"
 	msgKeyRequired    = "apiKey is required: none is stored"
 	msgConfigLLM      = "the LLM is set in the config file; change it there"
-	msgBadDefaults    = "the body must be a JSON object of defaults: approve, reviewDrafts, failureStatus, jobTimeoutSeconds, jobMemory"
+	msgBadDefaults    = "the body must be a JSON object of defaults: approve, reviewDrafts, failureStatus, jobTimeoutSeconds, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"
 	instanceNameLimit = 63
 )
 
@@ -788,7 +788,8 @@ func (d *Dashboard) defaultsView(ctx context.Context) (DefaultsView, error) {
 		return DefaultsView{}, err
 	}
 	return DefaultsView{Approve: def.Approve, ReviewDrafts: def.ReviewDrafts, FailureStatus: string(def.FailureStatus),
-		JobTimeoutSeconds: int64(def.JobTimeout / time.Second), JobMemory: quantityText(def.JobMemory)}, nil
+		JobTimeoutSeconds: int64(def.JobTimeout / time.Second), JobMemory: quantityText(def.JobMemory),
+		RerunLimitPerMR: def.RerunLimitPerMR, RerunLimitPerRepo: def.RerunLimitPerRepo}, nil
 }
 
 func (d *Dashboard) getDefaults(w http.ResponseWriter, r *http.Request) {
@@ -851,6 +852,8 @@ func (d *Dashboard) parseDefaults(r *http.Request) (store.RepoDefaults, string) 
 			edit, msg = timeoutSetting(raw, null)
 		case "jobMemory":
 			edit, msg = d.memorySetting(raw, null)
+		case "rerunLimitPerMR", "rerunLimitPerRepo":
+			edit, msg = rerunLimitSetting(key, raw, null)
 		default:
 			msg = msgBadDefaults
 		}
@@ -860,7 +863,8 @@ func (d *Dashboard) parseDefaults(r *http.Request) (store.RepoDefaults, string) 
 		edit(&row)
 	}
 	return store.RepoDefaults{Approve: row.Approve, ReviewDrafts: row.ReviewDrafts, FailureStatus: row.FailureStatus,
-		JobTimeoutSeconds: row.JobTimeoutSeconds, JobMemory: row.JobMemory}, ""
+		JobTimeoutSeconds: row.JobTimeoutSeconds, JobMemory: row.JobMemory,
+		RerunLimitPerMR: row.RerunLimitPerMR, RerunLimitPerRepo: row.RerunLimitPerRepo}, ""
 }
 
 // changedDefaults names the settings that differ between two sets of
@@ -881,6 +885,12 @@ func changedDefaults(a, b store.RepoDefaults) []string {
 	}
 	if !samePtr(a.JobMemory, b.JobMemory) {
 		out = append(out, "jobMemory")
+	}
+	if !samePtr(a.RerunLimitPerMR, b.RerunLimitPerMR) {
+		out = append(out, "rerunLimitPerMR")
+	}
+	if !samePtr(a.RerunLimitPerRepo, b.RerunLimitPerRepo) {
+		out = append(out, "rerunLimitPerRepo")
 	}
 	return out
 }
