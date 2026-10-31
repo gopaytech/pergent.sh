@@ -392,7 +392,7 @@ func TestEnsureHookCreates(t *testing.T) {
 	expect(t, (*reqs)[1], "POST", "/api/v4/projects/7/hooks", "")
 	b := hookBody(t, (*reqs)[1].Body)
 	if b["url"] != "https://pergent.example.com/webhook" || b["token"] != "s3cret" ||
-		b["merge_requests_events"] != true || b["push_events"] != false || b["enable_ssl_verification"] != true {
+		b["merge_requests_events"] != true || b["note_events"] != true || b["push_events"] != false || b["enable_ssl_verification"] != true {
 		t.Fatalf("body = %v", b)
 	}
 }
@@ -415,7 +415,7 @@ func TestEnsureHookUpdatesExisting(t *testing.T) {
 	}
 	expect(t, (*reqs)[1], "PUT", "/api/v4/projects/7/hooks/9", "")
 	b := hookBody(t, (*reqs)[1].Body)
-	if b["token"] != "s3cret" || b["merge_requests_events"] != true || b["push_events"] != false || b["enable_ssl_verification"] != true {
+	if b["token"] != "s3cret" || b["merge_requests_events"] != true || b["note_events"] != true || b["push_events"] != false || b["enable_ssl_verification"] != true {
 		t.Fatalf("body = %v", b)
 	}
 }
@@ -884,5 +884,71 @@ func TestProjectPathsPageTimeoutKeepsWhatWasRead(t *testing.T) {
 	}
 	if time.Since(start) > 5*time.Second {
 		t.Errorf("took %v", time.Since(start))
+	}
+}
+
+// A hook made before commands existed has no note events; reconcile's PUT
+// switches them on (the request carries the full config).
+func TestEnsureHookNoteEvents(t *testing.T) {
+	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == "GET" {
+			_, _ = w.Write([]byte(`[{"id":9,"url":"https://pergent.example.com/webhook","merge_requests_events":true,"note_events":false}]`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":9}`))
+	})
+	if _, err := c.EnsureHook(context.Background(), 7, "https://pergent.example.com/webhook", "s3cret"); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, (*reqs)[1], "PUT", "/api/v4/projects/7/hooks/9", "")
+	if b := hookBody(t, (*reqs)[1].Body); b["note_events"] != true || b["merge_requests_events"] != true {
+		t.Fatalf("body = %v", b)
+	}
+}
+
+func TestAwardNoteEmoji(t *testing.T) {
+	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(201)
+		_, _ = w.Write([]byte(`{"id":1,"name":"eyes"}`))
+	})
+	if err := c.AwardNoteEmoji(context.Background(), 7, 3, 55, "eyes"); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, (*reqs)[0], "POST", "/api/v4/projects/7/merge_requests/3/notes/55/award_emoji", "")
+	if b := hookBody(t, (*reqs)[0].Body); len(b) != 1 || b["name"] != "eyes" {
+		t.Fatalf("body = %v", b)
+	}
+}
+
+func TestAwardNoteEmojiNoteGone(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"404 Not found"}`, 404) })
+	if err := c.AwardNoteEmoji(context.Background(), 7, 3, 55, "eyes"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestMemberAccessLevel(t *testing.T) {
+	c, reqs := serve(t, jsonReply(map[string]any{"id": 12, "username": "dev", "access_level": 30}))
+	n, err := c.MemberAccessLevel(context.Background(), 7, 12)
+	if err != nil || n != 30 {
+		t.Fatalf("level=%d err=%v", n, err)
+	}
+	expect(t, (*reqs)[0], "GET", "/api/v4/projects/7/members/all/12", "")
+}
+
+// Not a member is a level of 0, not an error.
+func TestMemberAccessLevelNotAMember(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"404 Not found"}`, 404) })
+	n, err := c.MemberAccessLevel(context.Background(), 7, 12)
+	if err != nil || n != 0 {
+		t.Fatalf("level=%d err=%v", n, err)
+	}
+}
+
+func TestMemberAccessLevelError(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"403 Forbidden"}`, 403) })
+	if _, err := c.MemberAccessLevel(context.Background(), 7, 12); err == nil {
+		t.Fatal("err = nil, want the 403")
 	}
 }

@@ -7,6 +7,7 @@ package gitlabforge
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -117,6 +118,63 @@ func (f *Forge) UpdateComment(ctx context.Context, projectID, iid, noteID int64,
 	return mapErr(f.c.UpdateNote(ctx, projectID, iid, noteID, body))
 }
 
+// Bot is the review bot.
+func (f *Forge) Bot() forge.Identity {
+	return forge.Identity{ID: f.user.ID, Username: f.user.Username}
+}
+
+// Mention is the review bot's username: people write @username.
+func (f *Forge) Mention() string { return f.user.Username }
+
+// Award emoji names of the reactions.
+var emoji = map[forge.Reaction]string{
+	forge.ReactSeen:    "eyes",
+	forge.ReactDone:    "thumbsup",
+	forge.ReactRefused: "thumbsdown",
+}
+
+// React awards the reaction's emoji to a note as the review bot. A reaction
+// pergent.sh doesn't know is an error and nothing is sent.
+func (f *Forge) React(ctx context.Context, projectID, iid, noteID int64, r forge.Reaction) error {
+	name, ok := emoji[r]
+	if !ok {
+		return fmt.Errorf("gitlabforge: unknown reaction %q", r)
+	}
+	return mapErr(f.c.AwardNoteEmoji(ctx, projectID, iid, noteID, name))
+}
+
+// Reply adds a plain note to the merge request.
+func (f *Forge) Reply(ctx context.Context, projectID, iid int64, body string) error {
+	_, err := f.CreateComment(ctx, projectID, iid, body)
+	return err
+}
+
+// developer is GitLab's Developer access level.
+const developer = 30
+
+// AccessLevel maps the user's level in the project, inherited from its
+// groups included, onto forge.Access: below Developer reads, Developer
+// writes, Maintainer and Owner maintain. A user who isn't a member, or
+// without an ID, is AccessNone. username is not used.
+func (f *Forge) AccessLevel(ctx context.Context, projectID int64, _ string, userID int64) (forge.Access, error) {
+	if userID == 0 {
+		return forge.AccessNone, nil
+	}
+	n, err := f.c.MemberAccessLevel(ctx, projectID, userID)
+	if err != nil {
+		return forge.AccessNone, mapErr(err)
+	}
+	switch {
+	case n >= maintainer:
+		return forge.AccessMaintain, nil
+	case n >= developer:
+		return forge.AccessWrite, nil
+	case n > 0:
+		return forge.AccessRead, nil
+	}
+	return forge.AccessNone, nil
+}
+
 // ChangeRef is the ref GitLab keeps merge request iid's head at.
 func (f *Forge) ChangeRef(iid int64) string {
 	return "refs/merge-requests/" + strconv.FormatInt(iid, 10) + "/head"
@@ -142,6 +200,11 @@ func (a *Approver) Approve(ctx context.Context, projectID, iid int64, sha string
 // Unapprove withdraws the approve bot's approval; none to withdraw is nil.
 func (a *Approver) Unapprove(ctx context.Context, projectID, iid int64) error {
 	return mapErr(a.c.Unapprove(ctx, projectID, iid))
+}
+
+// Bot is the approve bot.
+func (a *Approver) Bot() forge.Identity {
+	return forge.Identity{ID: a.user.ID, Username: a.user.Username}
 }
 
 // HasApproved reports whether the approve bot's user is among the merge

@@ -132,7 +132,7 @@ func TestAttentionApproverUnreachableToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	plat, _ := env.Engine.Platforms.Get(ghInstance)
-	approver := githubforge.NewTokenApprover(github.NewTokenClient(gh.srv.URL, "github_pat_example", gh.srv.Client()), ghApproveBot, GitHubRepos(env.Store, ghInstance), nil)
+	approver := githubforge.NewTokenApprover(github.NewTokenClient(gh.srv.URL, "github_pat_example", gh.srv.Client()), ghApproveBot, "approve-bot", GitHubRepos(env.Store, ghInstance), nil)
 	plat.Approver, plat.GitHub.Approve = approver, approver
 	env.Engine.Platforms.Set(ghInstance, plat)
 	serveProject(env, testProjectID, testProjectPath)

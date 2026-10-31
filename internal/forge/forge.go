@@ -60,6 +60,42 @@ type TreeEntry struct {
 	Type string `json:"type"`
 }
 
+// Identity is a bot user on a platform: its numeric ID and its username
+// (GitHub: the login, "<slug>[bot]").
+type Identity struct {
+	ID       int64
+	Username string
+}
+
+// Reaction is how the engine answers a comment of a person: the platform
+// shows it as an emoji on that comment.
+type Reaction string
+
+const (
+	// ReactSeen is eyes: the comment was picked up.
+	ReactSeen Reaction = "seen"
+	// ReactDone is thumbs up: the command was carried out.
+	ReactDone Reaction = "done"
+	// ReactRefused is thumbs down: the command was refused.
+	ReactRefused Reaction = "refused"
+)
+
+// Access is what a person may do in a repository, from the platform's own
+// roles. The levels are ordered: compare with >=.
+type Access int
+
+const (
+	// AccessNone is not a member, or not known to the platform.
+	AccessNone Access = iota
+	// AccessRead is GitLab Guest and Reporter, GitHub read and triage.
+	AccessRead
+	// AccessWrite is GitLab Developer, GitHub write.
+	AccessWrite
+	// AccessMaintain is GitLab Maintainer and Owner, GitHub maintain and
+	// admin.
+	AccessMaintain
+)
+
 // Forge is the review bot's side of one platform instance. Its GetFile and
 // ListTree make it an inputs.Source (declared here rather than embedded, as
 // inputs depends on this package for TreeEntry).
@@ -86,6 +122,22 @@ type Forge interface {
 	UpdateComment(ctx context.Context, projectID, number, commentID int64, body string) error
 	// ChangeRef is the ref a change's head can be fetched from.
 	ChangeRef(number int64) string
+
+	// Bot is the review bot (GitLab) or the review App's bot user (GitHub).
+	Bot() Identity
+	// Mention is the handle people type after @ to address the review bot:
+	// the GitLab bot's username, the GitHub App's slug.
+	Mention() string
+	// React adds the emoji for reaction to a comment as the review bot. A
+	// comment that is gone is ErrNotFound.
+	React(ctx context.Context, projectID, number, commentID int64, reaction Reaction) error
+	// Reply adds a new plain comment to the change (it carries no pergent
+	// marker, so it is never taken for the review comment).
+	Reply(ctx context.Context, projectID, number int64, body string) error
+	// AccessLevel is what the user may do in the project. username is who
+	// GitHub looks up, userID who GitLab does; a user the platform doesn't
+	// know is AccessNone.
+	AccessLevel(ctx context.Context, projectID int64, username string, userID int64) (Access, error)
 }
 
 // Approver is the approve bot's side of one platform instance.
@@ -100,6 +152,8 @@ type Approver interface {
 	// sha now. A platform whose approvals aren't tied to a commit (GitLab,
 	// which withdraws them itself on a push) ignores sha.
 	HasApproved(ctx context.Context, projectID, number int64, sha string) (bool, error)
+	// Bot is the approve bot, whose comments are never commands.
+	Bot() Identity
 }
 
 var (

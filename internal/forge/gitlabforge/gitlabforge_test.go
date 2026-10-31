@@ -18,6 +18,8 @@ const (
 	reviewToken   = "review-token-example"
 	approveToken  = "approve-token-example"
 	reviewUserID  = int64(100)
+	reviewName    = "pergent-review"
+	approveName   = "pergent-approve"
 	approveUserID = int64(200)
 )
 
@@ -102,11 +104,11 @@ func (f *fake) only() request {
 }
 
 func (f *fake) forge() *Forge {
-	return NewForge(gitlab.New(f.srv.URL, reviewToken, f.srv.Client()), gitlab.User{ID: reviewUserID})
+	return NewForge(gitlab.New(f.srv.URL, reviewToken, f.srv.Client()), gitlab.User{ID: reviewUserID, Username: reviewName})
 }
 
 func (f *fake) approver(userID int64) *Approver {
-	return NewApprover(gitlab.New(f.srv.URL, approveToken, f.srv.Client()), gitlab.User{ID: userID})
+	return NewApprover(gitlab.New(f.srv.URL, approveToken, f.srv.Client()), gitlab.User{ID: userID, Username: approveName})
 }
 
 const mr = "/projects/7/merge_requests/3"
@@ -465,5 +467,107 @@ func TestCanReach(t *testing.T) {
 				t.Fatalf("CanReach = %v, %v", ok, err)
 			}
 		})
+	}
+}
+
+func TestBotAndMention(t *testing.T) {
+	f := newFake(t)
+	fg := f.forge()
+	if got := fg.Bot(); got != (forge.Identity{ID: reviewUserID, Username: reviewName}) {
+		t.Errorf("Bot = %+v", got)
+	}
+	if got := fg.Mention(); got != reviewName {
+		t.Errorf("Mention = %q, want the bot's username", got)
+	}
+	if got := f.approver(approveUserID).Bot(); got != (forge.Identity{ID: approveUserID, Username: approveName}) {
+		t.Errorf("Approver.Bot = %+v", got)
+	}
+	if n := len(f.requests()); n != 0 {
+		t.Errorf("made %d requests, want 0", n)
+	}
+}
+
+func TestReact(t *testing.T) {
+	for r, want := range map[forge.Reaction]string{
+		forge.ReactSeen: "eyes", forge.ReactDone: "thumbsup", forge.ReactRefused: "thumbsdown",
+	} {
+		t.Run(want, func(t *testing.T) {
+			f := newFake(t)
+			f.on(http.MethodPost, mr+"/notes/42/award_emoji", http.StatusCreated, map[string]any{"id": 1})
+			if err := f.forge().React(context.Background(), 7, 3, 42, r); err != nil {
+				t.Fatal(err)
+			}
+			if got := f.only(); got.Body["name"] != want || got.Token != reviewToken {
+				t.Errorf("request = %+v, want name %q by the review bot", got, want)
+			}
+		})
+	}
+
+	f := newFake(t)
+	if err := f.forge().React(context.Background(), 7, 3, 42, forge.Reaction("party")); err == nil {
+		t.Error("React with an unknown reaction = nil")
+	}
+	if n := len(f.requests()); n != 0 {
+		t.Errorf("an unknown reaction sent %d requests", n)
+	}
+
+	gone := newFake(t)
+	if err := gone.forge().React(context.Background(), 7, 3, 42, forge.ReactSeen); !errors.Is(err, forge.ErrNotFound) {
+		t.Fatalf("React on a deleted note = %v, want forge.ErrNotFound", err)
+	}
+}
+
+// A reply is a new note with the text as given: no marker is added.
+func TestReply(t *testing.T) {
+	f := newFake(t)
+	f.on(http.MethodPost, mr+"/notes", http.StatusCreated, map[string]any{"id": 43})
+	if err := f.forge().Reply(context.Background(), 7, 3, "nothing failed"); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.only(); r.Body["body"] != "nothing failed" || r.Token != reviewToken {
+		t.Errorf("request = %+v", r)
+	}
+}
+
+func TestAccessLevel(t *testing.T) {
+	for _, tc := range []struct {
+		level int
+		want  forge.Access
+	}{
+		{10, forge.AccessRead}, {20, forge.AccessRead},
+		{30, forge.AccessWrite},
+		{40, forge.AccessMaintain}, {50, forge.AccessMaintain},
+	} {
+		f := newFake(t)
+		f.on(http.MethodGet, "/projects/7/members/all/12", http.StatusOK, map[string]any{"id": 12, "access_level": tc.level})
+		got, err := f.forge().AccessLevel(context.Background(), 7, "dev", 12)
+		if err != nil || got != tc.want {
+			t.Errorf("level %d = %v, %v; want %v", tc.level, got, err, tc.want)
+		}
+		if r := f.only(); r.Token != reviewToken || r.Path != "/projects/7/members/all/12" {
+			t.Errorf("request = %+v", r)
+		}
+	}
+
+	// Not a member: 404.
+	f := newFake(t)
+	if got, err := f.forge().AccessLevel(context.Background(), 7, "dev", 12); err != nil || got != forge.AccessNone {
+		t.Errorf("non-member = %v, %v; want AccessNone, nil", got, err)
+	}
+
+	// No user id: nothing is asked.
+	f = newFake(t)
+	if got, err := f.forge().AccessLevel(context.Background(), 7, "dev", 0); err != nil || got != forge.AccessNone {
+		t.Errorf("no id = %v, %v; want AccessNone, nil", got, err)
+	}
+	if n := len(f.requests()); n != 0 {
+		t.Errorf("no user id sent %d requests", n)
+	}
+
+	// A failure is an error, never a level.
+	f = newFake(t)
+	f.on(http.MethodGet, "/projects/7/members/all/12", http.StatusForbidden, map[string]any{"message": "403"})
+	if got, err := f.forge().AccessLevel(context.Background(), 7, "dev", 12); err == nil || got != forge.AccessNone {
+		t.Errorf("403 = %v, %v; want AccessNone and an error", got, err)
 	}
 }

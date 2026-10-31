@@ -30,8 +30,9 @@ const (
 // which is how they are found again.
 type Approver struct {
 	repos Repos
-	// bot is the approve side's bot user.
-	bot int64
+	// bot is the approve side's bot user, and login its login.
+	bot   int64
+	login string
 
 	// clientFor returns the client that approves on r.
 	clientFor func(ctx context.Context, r Repo) (*github.Client, error)
@@ -57,12 +58,12 @@ type Approver struct {
 	toldExpires time.Time
 }
 
-// NewAppApprover returns the approve App's Approver. botUserID is the App's
-// bot user (app.BotUserID), resolved once by the caller. The App's
+// NewAppApprover returns the approve App's Approver. botUserID and slug are
+// the App's bot user and slug (app.Bot), resolved once by the caller. The App's
 // installation on a repository is looked up once and remembered; it is
 // forgotten when a call through it fails with 404 or its token can't be
 // minted, and CanReach always asks GitHub afresh and remembers the answer.
-func NewAppApprover(app *github.App, botUserID int64, repos Repos) *Approver {
+func NewAppApprover(app *github.App, botUserID int64, slug string, repos Repos) *Approver {
 	var (
 		mu    sync.Mutex
 		known = map[string]int64{}
@@ -95,7 +96,7 @@ func NewAppApprover(app *github.App, botUserID int64, repos Repos) *Approver {
 		}
 		return lookup(ctx, owner, name)
 	}
-	a := newApprover(botUserID, repos)
+	a := newApprover(botUserID, slug+"[bot]", repos)
 	a.clientFor = func(ctx context.Context, r Repo) (*github.Client, error) {
 		id, err := installation(ctx, r.Owner, r.Name)
 		if err != nil {
@@ -119,11 +120,12 @@ func NewAppApprover(app *github.App, botUserID int64, repos Repos) *Approver {
 }
 
 // NewTokenApprover returns the Approver of a bot user whose token c holds.
-// botUserID is that user (c.CurrentUser), resolved once by the caller. When
+// botUserID and login are that user (c.CurrentUser), resolved once by the
+// caller. When
 // GitHub reports the token expires within 14 days, it logs a warning at most
 // once an hour; log may be nil.
-func NewTokenApprover(c *github.Client, botUserID int64, repos Repos, log *slog.Logger) *Approver {
-	a := newApprover(botUserID, repos)
+func NewTokenApprover(c *github.Client, botUserID int64, login string, repos Repos, log *slog.Logger) *Approver {
+	a := newApprover(botUserID, login, repos)
 	if log != nil {
 		a.log = log
 	}
@@ -140,10 +142,11 @@ func NewTokenApprover(c *github.Client, botUserID int64, repos Repos, log *slog.
 	return a
 }
 
-func newApprover(botUserID int64, repos Repos) *Approver {
+func newApprover(botUserID int64, login string, repos Repos) *Approver {
 	return &Approver{
 		repos:  repos,
 		bot:    botUserID,
+		login:  login,
 		failed: func(Repo, error) {},
 		done:   func(*github.Client, bool) {},
 		now:    time.Now,
@@ -309,6 +312,9 @@ func (a *Approver) Unapprove(ctx context.Context, repoID, number int64) error {
 		return errors.Join(errs...)
 	})
 }
+
+// Bot is the approve side's bot user.
+func (a *Approver) Bot() forge.Identity { return forge.Identity{ID: a.bot, Username: a.login} }
 
 // HasApproved reports whether the bot's latest review of the pull request is
 // an approval of sha. Without a known bot user it is false, and GitHub isn't

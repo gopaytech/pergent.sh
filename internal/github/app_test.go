@@ -208,6 +208,24 @@ func TestSlugUsesJWT(t *testing.T) {
 	}
 }
 
+// Bot returns the slug with the bot user's ID from the one GET /app.
+func TestBot(t *testing.T) {
+	a, rec, _ := testApp(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/app" {
+			jsonReply(map[string]any{"id": 123, "slug": "acme-pergent-review"})(w, r)
+			return
+		}
+		jsonReply(map[string]any{"id": 4242, "login": "acme-pergent-review[bot]"})(w, r)
+	})
+	slug, id, err := a.Bot(ctx)
+	if err != nil || slug != "acme-pergent-review" || id != 4242 {
+		t.Fatalf("Bot = %q, %d, %v", slug, id, err)
+	}
+	if n := len(rec.all()); n != 2 {
+		t.Fatalf("requests = %d, want 2", n)
+	}
+}
+
 // The bot user is public: looked up without credentials (a JWT is not
 // accepted outside the /app endpoints).
 func TestBotUserID(t *testing.T) {

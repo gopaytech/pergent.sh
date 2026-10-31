@@ -717,6 +717,47 @@ func (c *Client) UpdateIssueComment(ctx context.Context, owner, repo string, com
 	return err
 }
 
+// ReactToIssueComment adds a reaction (content: eyes, +1, -1, ...) to a
+// conversation comment as this client's identity. Reacting again with the
+// same content is not an error. A missing comment is ErrNotFound.
+func (c *Client) ReactToIssueComment(ctx context.Context, owner, repo string, commentID int64, content string) error {
+	p, err := repoPath(owner, repo, "/issues/comments", id(commentID), "/reactions")
+	if err != nil {
+		return err
+	}
+	_, err = c.do(ctx, http.MethodPost, p, nil, map[string]string{"content": content}, acceptJSON)
+	return err
+}
+
+// Collaborator is a user's permission on a repository.
+type Collaborator struct {
+	// Permission is GitHub's legacy level: admin, write, read or none
+	// (maintain maps to write and triage to read).
+	Permission string `json:"permission"`
+	// Role is the repository role: admin, maintain, write, triage, read, or
+	// the name of a custom role. It is empty when GitHub doesn't say.
+	Role string `json:"role_name"`
+}
+
+// CollaboratorPermission returns a user's permission on a repository, from
+// GET /repos/{owner}/{repo}/collaborators/{login}/permission. A user GitHub
+// doesn't know is ErrNotFound.
+func (c *Client) CollaboratorPermission(ctx context.Context, owner, repo, login string) (Collaborator, error) {
+	l, err := segment(login)
+	if err != nil {
+		return Collaborator{}, err
+	}
+	p, err := repoPath(owner, repo, "/collaborators/", l, "/permission")
+	if err != nil {
+		return Collaborator{}, err
+	}
+	var out Collaborator
+	if err := c.getJSON(ctx, p, nil, &out); err != nil {
+		return Collaborator{}, err
+	}
+	return out, nil
+}
+
 type checkRunOutput struct {
 	Title   string `json:"title"`
 	Summary string `json:"summary"`

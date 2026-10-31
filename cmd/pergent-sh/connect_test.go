@@ -512,7 +512,7 @@ func TestConnectServesDashboardSources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gh := githubforge.NewForge(app, ghReviewBot, testRepos("gh"))
+	gh := githubforge.NewForge(app, ghReviewBot, "pergent-review", testRepos("gh"))
 	var logs strings.Builder
 	c := newConnector(t, &config.Config{}, nil, nil)
 	c.log = slog.New(slog.NewTextHandler(&logs, nil))

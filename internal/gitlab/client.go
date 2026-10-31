@@ -495,6 +495,31 @@ func (c *Client) UpdateNote(ctx context.Context, projectID, iid, noteID int64, b
 	return err
 }
 
+// AwardNoteEmoji adds the emoji name (eyes, thumbsup, ...) to a note as this
+// user. A missing note is ErrNotFound.
+func (c *Client) AwardNoteEmoji(ctx context.Context, projectID, iid, noteID int64, name string) error {
+	_, err := c.do(ctx, http.MethodPost, mrPath(projectID, iid)+"/notes/"+strconv.FormatInt(noteID, 10)+"/award_emoji",
+		nil, map[string]string{"name": name})
+	return err
+}
+
+// MemberAccessLevel returns a user's access level in a project, inherited
+// from its groups included (GitLab's 10 Guest, 20 Reporter, 30 Developer,
+// 40 Maintainer, 50 Owner). A user who isn't a member is 0, not an error.
+func (c *Client) MemberAccessLevel(ctx context.Context, projectID, userID int64) (int, error) {
+	var m struct {
+		AccessLevel int `json:"access_level"`
+	}
+	_, err := c.getJSON(ctx, projPath(projectID)+"/members/all/"+strconv.FormatInt(userID, 10), nil, &m)
+	if errors.Is(err, ErrNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return m.AccessLevel, nil
+}
+
 // SetCommitStatus sets the "pergent" status on sha. The description is cut to
 // 255 bytes on a UTF-8 boundary.
 func (c *Client) SetCommitStatus(ctx context.Context, projectID int64, sha string, state StatusState, description string) error {
@@ -542,8 +567,10 @@ func (c *Client) Unapprove(ctx context.Context, projectID, iid int64) error {
 	return err
 }
 
-// EnsureHook makes sure the project has a merge-request webhook for url with
-// the given secret token: it edits the hook with the same URL or creates one.
+// EnsureHook makes sure the project has a webhook for url with the given
+// secret token, for merge request and note (comment) events: it edits the hook
+// with the same URL, which also switches note events on for a hook made
+// before commands existed, or creates one.
 func (c *Client) EnsureHook(ctx context.Context, projectID int64, hookURL, secret string) (int64, error) {
 	var existing int64
 	err := c.paginate(ctx, projPath(projectID)+"/hooks", nil, func(body []byte) (bool, error) {
@@ -566,6 +593,7 @@ func (c *Client) EnsureHook(ctx context.Context, projectID int64, hookURL, secre
 		"url":                     hookURL,
 		"token":                   secret,
 		"merge_requests_events":   true,
+		"note_events":             true,
 		"push_events":             false,
 		"enable_ssl_verification": true,
 	}

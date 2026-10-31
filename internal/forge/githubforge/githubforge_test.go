@@ -29,8 +29,15 @@ const (
 	installationID = int64(55)
 	reviewBotID    = int64(4001)
 	approveBotID   = int64(4002)
+	reviewSlug     = "acme-review"
+	approveSlug    = "acme-approve"
 	installToken   = "ghs_installation-token-example"
 	patToken       = "github_pat_approve-token-example"
+)
+
+var (
+	_ forge.Forge    = (*Forge)(nil)
+	_ forge.Approver = (*Approver)(nil)
 )
 
 var (
@@ -141,7 +148,7 @@ func repos() ReposFunc {
 }
 
 func (f *fakeGitHub) forge(t *testing.T) *Forge {
-	return NewForge(f.app(t), reviewBotID, repos())
+	return NewForge(f.app(t), reviewBotID, reviewSlug, repos())
 }
 
 const prPath = "/repos/acme/widgets/pulls/3"
@@ -375,8 +382,8 @@ func TestChangeRef(t *testing.T) {
 func approvers(t *testing.T, f *fakeGitHub) map[string]*Approver {
 	f.reply("GET", "/repos/acme/widgets/installation", 200, map[string]any{"id": 66})
 	return map[string]*Approver{
-		"app":   NewAppApprover(f.app(t), approveBotID, repos()),
-		"token": NewTokenApprover(github.NewTokenClient(f.srv.URL, patToken, f.srv.Client()), approveBotID, repos(), nil),
+		"app":   NewAppApprover(f.app(t), approveBotID, approveSlug, repos()),
+		"token": NewTokenApprover(github.NewTokenClient(f.srv.URL, patToken, f.srv.Client()), approveBotID, approveSlug+"[bot]", repos(), nil),
 	}
 }
 
@@ -663,7 +670,7 @@ func TestTokenApproverExpiryWarning(t *testing.T) {
 	})
 	var logs bytes.Buffer
 	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
-	a := NewTokenApprover(github.NewTokenClient(f.srv.URL, patToken, f.srv.Client()), approveBotID, repos(),
+	a := NewTokenApprover(github.NewTokenClient(f.srv.URL, patToken, f.srv.Client()), approveBotID, approveSlug+"[bot]", repos(),
 		slog.New(slog.NewTextHandler(&logs, nil)))
 	a.now = func() time.Time { return now }
 
@@ -705,7 +712,7 @@ func TestTokenApproverExpiryNotify(t *testing.T) {
 		reply(200, reviews())(w, nil)
 	})
 	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
-	a := NewTokenApprover(github.NewTokenClient(f.srv.URL, patToken, f.srv.Client()), approveBotID, repos(), nil)
+	a := NewTokenApprover(github.NewTokenClient(f.srv.URL, patToken, f.srv.Client()), approveBotID, approveSlug+"[bot]", repos(), nil)
 	a.now = func() time.Time { return now }
 	type note struct {
 		exp  time.Time
@@ -756,7 +763,7 @@ func TestTokenApproverExpiryNotifyRetriesAfterFailure(t *testing.T) {
 		w.Header().Set("GitHub-Authentication-Token-Expiration", time.Now().Add(48*time.Hour).Format("2006-01-02 15:04:05 MST"))
 		reply(200, reviews())(w, nil)
 	})
-	a := NewTokenApprover(github.NewTokenClient(f.srv.URL, patToken, f.srv.Client()), approveBotID, repos(), nil)
+	a := NewTokenApprover(github.NewTokenClient(f.srv.URL, patToken, f.srv.Client()), approveBotID, approveSlug+"[bot]", repos(), nil)
 	var calls int
 	a.OnTokenExpiry(func(time.Time, bool) error {
 		calls++
@@ -794,7 +801,7 @@ func TestTokenApproverExpiryNotifySerialised(t *testing.T) {
 		expiry = time.Now().Add(d).Format("2006-01-02 15:04:05 MST")
 		mu.Unlock()
 	}
-	a := NewTokenApprover(github.NewTokenClient(f.srv.URL, patToken, f.srv.Client()), approveBotID, repos(), nil)
+	a := NewTokenApprover(github.NewTokenClient(f.srv.URL, patToken, f.srv.Client()), approveBotID, approveSlug+"[bot]", repos(), nil)
 	var (
 		nmu      sync.Mutex
 		notes    []bool
@@ -854,7 +861,7 @@ func TestTokenApproverNoExpiryHeader(t *testing.T) {
 		}
 		reply(200, reviews())(w, r)
 	})
-	a := NewTokenApprover(github.NewTokenClient(f.srv.URL, patToken, f.srv.Client()), approveBotID, repos(), nil)
+	a := NewTokenApprover(github.NewTokenClient(f.srv.URL, patToken, f.srv.Client()), approveBotID, approveSlug+"[bot]", repos(), nil)
 	var notes []bool
 	a.OnTokenExpiry(func(exp time.Time, soon bool) error {
 		if !exp.IsZero() {
@@ -939,5 +946,129 @@ func TestForgeCanReach(t *testing.T) {
 	}
 	if _, err := fg.CanReach(ctx, "acme/broken"); err == nil {
 		t.Errorf("a failed lookup is no error")
+	}
+}
+
+func TestBotAndMention(t *testing.T) {
+	f := newFake(t)
+	fg := f.forge(t)
+	if got := fg.Bot(); got != (forge.Identity{ID: reviewBotID, Username: reviewSlug + "[bot]"}) {
+		t.Errorf("Bot = %+v", got)
+	}
+	if got := fg.Mention(); got != reviewSlug {
+		t.Errorf("Mention = %q, want the App's slug", got)
+	}
+	for name, a := range map[string]*Approver{
+		"app":   NewAppApprover(f.app(t), approveBotID, approveSlug, repos()),
+		"token": NewTokenApprover(github.NewTokenClient(f.srv.URL, patToken, f.srv.Client()), approveBotID, approveSlug+"[bot]", repos(), nil),
+	} {
+		if got := a.Bot(); got != (forge.Identity{ID: approveBotID, Username: approveSlug + "[bot]"}) {
+			t.Errorf("%s Approver.Bot = %+v", name, got)
+		}
+	}
+	if n := len(f.requests("", "")); n != 0 {
+		t.Errorf("made %d requests, want 0 (the slug is cached)", n)
+	}
+}
+
+func TestReact(t *testing.T) {
+	for r, want := range map[forge.Reaction]string{
+		forge.ReactSeen: "eyes", forge.ReactDone: "+1", forge.ReactRefused: "-1",
+	} {
+		t.Run(want, func(t *testing.T) {
+			f := newFake(t)
+			f.reply("POST", "/repos/acme/widgets/issues/comments/31/reactions", 201, map[string]any{"id": 1})
+			if err := f.forge(t).React(ctx, repoID, 3, 31, r); err != nil {
+				t.Fatal(err)
+			}
+			reqs := f.requests("POST", "/repos/acme/widgets/issues/comments/31/reactions")
+			if len(reqs) != 1 || reqs[0].Body != `{"content":"`+want+`"}` || reqs[0].Auth != "Bearer "+installToken {
+				t.Errorf("requests = %+v, want content %q by the installation", reqs, want)
+			}
+		})
+	}
+
+	f := newFake(t)
+	if err := f.forge(t).React(ctx, repoID, 3, 31, forge.Reaction("party")); err == nil {
+		t.Error("React with an unknown reaction = nil")
+	}
+	if n := len(f.requests("", "")); n != 0 {
+		t.Errorf("an unknown reaction sent %d requests", n)
+	}
+
+	if err := newFake(t).forge(t).React(ctx, repoID, 3, 31, forge.ReactSeen); !errors.Is(err, forge.ErrNotFound) {
+		t.Fatalf("React on a deleted comment = %v, want forge.ErrNotFound", err)
+	}
+	if err := f.forge(t).React(ctx, 901, 3, 31, forge.ReactSeen); !errors.Is(err, ErrNotInstalled) {
+		t.Fatalf("React where the App isn't installed = %v, want ErrNotInstalled", err)
+	}
+}
+
+// A reply is a new comment with the text as given: no marker is added.
+func TestReply(t *testing.T) {
+	f := newFake(t)
+	f.reply("POST", "/repos/acme/widgets/issues/3/comments", 201, map[string]any{"id": 32})
+	if err := f.forge(t).Reply(ctx, repoID, 3, "nothing failed"); err != nil {
+		t.Fatal(err)
+	}
+	reqs := f.requests("POST", "/repos/acme/widgets/issues/3/comments")
+	if len(reqs) != 1 || reqs[0].Body != `{"body":"nothing failed"}` {
+		t.Errorf("requests = %+v", reqs)
+	}
+}
+
+func TestAccessLevel(t *testing.T) {
+	const path = "/repos/acme/widgets/collaborators/dev/permission"
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+		want forge.Access
+	}{
+		{"read", map[string]any{"permission": "read", "role_name": "read"}, forge.AccessRead},
+		{"triage", map[string]any{"permission": "read", "role_name": "triage"}, forge.AccessRead},
+		{"write", map[string]any{"permission": "write", "role_name": "write"}, forge.AccessWrite},
+		// The legacy permission field reports maintain as write: the role
+		// is what tells.
+		{"maintain", map[string]any{"permission": "write", "role_name": "maintain"}, forge.AccessMaintain},
+		{"admin", map[string]any{"permission": "admin", "role_name": "admin"}, forge.AccessMaintain},
+		{"none", map[string]any{"permission": "none", "role_name": "none"}, forge.AccessNone},
+		{"no role", map[string]any{"permission": "write"}, forge.AccessWrite},
+		{"triage without role", map[string]any{"permission": "read"}, forge.AccessRead},
+		{"custom role", map[string]any{"permission": "write", "role_name": "release-manager"}, forge.AccessWrite},
+		{"custom role below write", map[string]any{"permission": "read", "role_name": "auditor"}, forge.AccessRead},
+		{"unknown", map[string]any{"permission": "superuser"}, forge.AccessNone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFake(t)
+			f.reply("GET", path, 200, tc.body)
+			got, err := f.forge(t).AccessLevel(ctx, repoID, "dev", 0)
+			if err != nil || got != tc.want {
+				t.Fatalf("AccessLevel = %v, %v; want %v", got, err, tc.want)
+			}
+			if n := len(f.requests("GET", path)); n != 1 {
+				t.Errorf("permission requests = %d", n)
+			}
+		})
+	}
+
+	// A user GitHub doesn't know: 404.
+	if got, err := newFake(t).forge(t).AccessLevel(ctx, repoID, "ghost", 0); err != nil || got != forge.AccessNone {
+		t.Errorf("unknown user = %v, %v; want AccessNone, nil", got, err)
+	}
+
+	// No login: nothing is asked.
+	f := newFake(t)
+	if got, err := f.forge(t).AccessLevel(ctx, repoID, "", 5); err != nil || got != forge.AccessNone {
+		t.Errorf("no login = %v, %v; want AccessNone, nil", got, err)
+	}
+	if n := len(f.requests("", "")); n != 0 {
+		t.Errorf("no login sent %d requests", n)
+	}
+
+	// A failure is an error, never a level.
+	f = newFake(t)
+	f.reply("GET", path, 403, map[string]any{"message": "Forbidden"})
+	if got, err := f.forge(t).AccessLevel(ctx, repoID, "dev", 0); err == nil || got != forge.AccessNone {
+		t.Errorf("403 = %v, %v; want AccessNone and an error", got, err)
 	}
 }

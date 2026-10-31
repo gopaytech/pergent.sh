@@ -279,10 +279,10 @@ func addGitHub(t *testing.T, env *testEnv, approveInstalled bool) *fakeGitHub {
 	}
 	repos := GitHubRepos(env.Store, ghInstance)
 	review := f.app(t, ghReviewApp)
-	approver := githubforge.NewAppApprover(f.app(t, ghApproveApp), ghApproveBot, repos)
+	approver := githubforge.NewAppApprover(f.app(t, ghApproveApp), ghApproveBot, "pergent-approve", repos)
 	env.Engine.Platforms.Set(ghInstance, Platform{
 		Kind:     config.PlatformGitHub,
-		Forge:    githubforge.NewForge(review, ghReviewBot, repos),
+		Forge:    githubforge.NewForge(review, ghReviewBot, "pergent-review", repos),
 		Approver: approver,
 		GitHub:   &GitHub{App: review, Approve: approver},
 	})
@@ -525,7 +525,7 @@ func TestReconcileGitHubTokenApprover(t *testing.T) {
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, false)
 	plat, _ := env.Engine.Platforms.Get(ghInstance)
-	approver := githubforge.NewTokenApprover(github.NewTokenClient(gh.srv.URL, "github_pat_example", gh.srv.Client()), ghApproveBot, GitHubRepos(env.Store, ghInstance), nil)
+	approver := githubforge.NewTokenApprover(github.NewTokenClient(gh.srv.URL, "github_pat_example", gh.srv.Client()), ghApproveBot, "pergent-approve[bot]", GitHubRepos(env.Store, ghInstance), nil)
 	plat.Approver, plat.GitHub.Approve = approver, approver
 	env.Engine.Platforms.Set(ghInstance, plat)
 	serveProject(env, testProjectID, testProjectPath)

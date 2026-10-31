@@ -154,22 +154,29 @@ func (a *App) Slug(ctx context.Context) (string, error) {
 // BotUserID returns the user ID of the App's bot user, {slug}[bot]. The
 // lookup is unauthenticated: a JWT is accepted only by the /app endpoints.
 func (a *App) BotUserID(ctx context.Context) (int64, error) {
+	_, id, err := a.Bot(ctx)
+	return id, err
+}
+
+// Bot returns the App's slug and the user ID of its bot user, {slug}[bot],
+// with one GET /app.
+func (a *App) Bot(ctx context.Context) (string, int64, error) {
 	slug, err := a.Slug(ctx)
 	if err != nil {
-		return 0, err
+		return "", 0, err
 	}
 	s, err := segment(slug + "[bot]")
 	if err != nil {
-		return 0, err
+		return "", 0, err
 	}
 	var u User
 	if err := a.anon.getJSON(ctx, "/users/"+s, nil, &u); err != nil {
-		return 0, err
+		return "", 0, err
 	}
 	if u.ID == 0 {
-		return 0, errors.New("github: bot user has no id")
+		return "", 0, errors.New("github: bot user has no id")
 	}
-	return u.ID, nil
+	return slug, u.ID, nil
 }
 
 // Installation returns the ID of the App's installation that covers

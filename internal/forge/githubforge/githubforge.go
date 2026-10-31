@@ -10,6 +10,7 @@ package githubforge
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -61,15 +62,18 @@ var (
 type Forge struct {
 	app *github.App
 	// bot is the review App's bot user: FindComment only finds its comments.
-	bot   int64
+	bot int64
+	// slug is the App's slug: people write @slug, and the bot's login is
+	// slug[bot].
+	slug  string
 	repos Repos
 }
 
-// NewForge returns the review App's Forge. botUserID is the App's bot user
-// (app.BotUserID), resolved once by the caller: that lookup is
-// unauthenticated and rate-limited.
-func NewForge(app *github.App, botUserID int64, repos Repos) *Forge {
-	return &Forge{app: app, bot: botUserID, repos: repos}
+// NewForge returns the review App's Forge. botUserID and slug are the App's
+// bot user and slug (app.Bot), resolved once by the caller: that lookup is
+// unauthenticated and rate-limited, and the slug is not asked per comment.
+func NewForge(app *github.App, botUserID int64, slug string, repos Repos) *Forge {
+	return &Forge{app: app, bot: botUserID, slug: slug, repos: repos}
 }
 
 // client returns the review installation's client for repoID.
@@ -241,6 +245,78 @@ func (f *Forge) UpdateComment(ctx context.Context, repoID, _, commentID int64, b
 		return err
 	}
 	return mapErr(c.UpdateIssueComment(ctx, r.Owner, r.Name, commentID, body))
+}
+
+// Bot is the review App's bot user: the login is "<slug>[bot]".
+func (f *Forge) Bot() forge.Identity {
+	return forge.Identity{ID: f.bot, Username: f.slug + "[bot]"}
+}
+
+// Mention is the review App's slug: people write @slug.
+func (f *Forge) Mention() string { return f.slug }
+
+// Reaction contents of the reactions.
+var content = map[forge.Reaction]string{
+	forge.ReactSeen:    "eyes",
+	forge.ReactDone:    "+1",
+	forge.ReactRefused: "-1",
+}
+
+// React adds the reaction to a conversation comment as the review App. A
+// reaction pergent.sh doesn't know is an error and nothing is sent.
+func (f *Forge) React(ctx context.Context, repoID, _, commentID int64, r forge.Reaction) error {
+	c, ok := content[r]
+	if !ok {
+		return fmt.Errorf("githubforge: unknown reaction %q", r)
+	}
+	cl, repo, err := f.client(ctx, repoID)
+	if err != nil {
+		return err
+	}
+	return mapErr(cl.ReactToIssueComment(ctx, repo.Owner, repo.Name, commentID, c))
+}
+
+// Reply adds a plain conversation comment to the pull request.
+func (f *Forge) Reply(ctx context.Context, repoID, number int64, body string) error {
+	_, err := f.CreateComment(ctx, repoID, number, body)
+	return err
+}
+
+// AccessLevel maps the user's repository role onto forge.Access: read and
+// triage read, write writes, maintain and admin maintain. The role comes
+// from role_name, which tells maintain and triage apart (the legacy
+// permission field reports them as write and read); a custom role, or none
+// reported, falls back to permission. A user GitHub doesn't know, or
+// without a login, is AccessNone. userID is not used.
+func (f *Forge) AccessLevel(ctx context.Context, repoID int64, username string, _ int64) (forge.Access, error) {
+	if username == "" {
+		return forge.AccessNone, nil
+	}
+	c, r, err := f.client(ctx, repoID)
+	if err != nil {
+		return forge.AccessNone, err
+	}
+	p, err := c.CollaboratorPermission(ctx, r.Owner, r.Name, username)
+	if errors.Is(err, github.ErrNotFound) {
+		return forge.AccessNone, nil
+	}
+	if err != nil {
+		return forge.AccessNone, mapErr(err)
+	}
+	if a, ok := roleAccess[p.Role]; ok {
+		return a, nil
+	}
+	return roleAccess[p.Permission], nil
+}
+
+// roleAccess maps repository roles and legacy permission levels; anything
+// else, "none" included, is AccessNone.
+var roleAccess = map[string]forge.Access{
+	"read":     forge.AccessRead,
+	"triage":   forge.AccessRead,
+	"write":    forge.AccessWrite,
+	"maintain": forge.AccessMaintain,
+	"admin":    forge.AccessMaintain,
 }
 
 // ChangeRef is the ref GitHub keeps pull request number's head at, forks

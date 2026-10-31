@@ -218,7 +218,7 @@ func (c *connector) buildGitHub(ctx context.Context, inst *config.GitHubInstance
 		[2]string{approveKind, approveSecret}, [2]string{"webhook secret", s.WebhookSecret}); err != nil {
 		return engine.Platform{}, err
 	}
-	reviewApp, reviewBot, err := connectApp(ctx, inst.APIURL, inst.ReviewApp.AppID, s.ReviewAppKey, c.hc)
+	reviewApp, reviewSlug, reviewBot, err := connectApp(ctx, inst.APIURL, inst.ReviewApp.AppID, s.ReviewAppKey, c.hc)
 	if err != nil {
 		return engine.Platform{}, fmt.Errorf("github instance %q: the review App (app_id %d) doesn't work: %w",
 			inst.Name, inst.ReviewApp.AppID, err)
@@ -227,12 +227,12 @@ func (c *connector) buildGitHub(ctx context.Context, inst *config.GitHubInstance
 
 	var approver *githubforge.Approver
 	if inst.ApproveApp != nil {
-		approveApp, approveBot, err := connectApp(ctx, inst.APIURL, inst.ApproveApp.AppID, s.ApproveAppKey, c.hc)
+		approveApp, approveSlug, approveBot, err := connectApp(ctx, inst.APIURL, inst.ApproveApp.AppID, s.ApproveAppKey, c.hc)
 		if err != nil {
 			return engine.Platform{}, fmt.Errorf("github instance %q: the approve App (app_id %d) doesn't work: %w",
 				inst.Name, inst.ApproveApp.AppID, err)
 		}
-		approver = githubforge.NewAppApprover(approveApp, approveBot, instRepos)
+		approver = githubforge.NewAppApprover(approveApp, approveBot, approveSlug, instRepos)
 	} else {
 		client := github.NewTokenClient(inst.APIURL, s.ApproveToken, c.hc)
 		user, err := client.CurrentUser(ctx)
@@ -240,28 +240,29 @@ func (c *connector) buildGitHub(ctx context.Context, inst *config.GitHubInstance
 			return engine.Platform{}, fmt.Errorf("github instance %q: the approve token%s doesn't work: %w",
 				inst.Name, inEnv(inst.ApproveTokenEnv), err)
 		}
-		approver = githubforge.NewTokenApprover(client, user.ID, instRepos, c.log.With("instance", inst.Name))
+		approver = githubforge.NewTokenApprover(client, user.ID, user.Login, instRepos, c.log.With("instance", inst.Name))
 	}
 	return engine.Platform{
 		Kind:     config.PlatformGitHub,
-		Forge:    githubforge.NewForge(reviewApp, reviewBot, instRepos),
+		Forge:    githubforge.NewForge(reviewApp, reviewBot, reviewSlug, instRepos),
 		Approver: approver,
 		GitHub:   &engine.GitHub{App: reviewApp, Approve: approver},
 	}, nil
 }
 
-// connectApp builds the GitHub App appID and looks up its bot user's ID,
-// which also proves the key belongs to the App.
-func connectApp(ctx context.Context, apiURL string, appID int64, key string, hc *http.Client) (*github.App, int64, error) {
+// connectApp builds the GitHub App appID and looks up its slug and its bot
+// user's ID, which also proves the key belongs to the App. The slug is what
+// people mention, kept here so no comment has to ask GitHub for it.
+func connectApp(ctx context.Context, apiURL string, appID int64, key string, hc *http.Client) (*github.App, string, int64, error) {
 	app, err := github.NewApp(apiURL, appID, key, hc)
 	if err != nil {
-		return nil, 0, err
+		return nil, "", 0, err
 	}
-	bot, err := app.BotUserID(ctx)
+	slug, bot, err := app.Bot(ctx)
 	if err != nil {
-		return nil, 0, err
+		return nil, "", 0, err
 	}
-	return app, bot, nil
+	return app, slug, bot, nil
 }
 
 // connectAll connects every instance at startup. The config's come first

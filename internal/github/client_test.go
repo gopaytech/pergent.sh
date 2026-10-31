@@ -906,3 +906,56 @@ func TestInstallationReposPaginates(t *testing.T) {
 		t.Fatalf("matched = %v, %v", got, err)
 	}
 }
+
+func TestReactToIssueComment(t *testing.T) {
+	c, rec := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(201)
+		_, _ = io.WriteString(w, `{"id":1,"content":"+1"}`)
+	})
+	if err := c.ReactToIssueComment(ctx, "acme", "widgets", 44, "+1"); err != nil {
+		t.Fatal(err)
+	}
+	got := rec.get(0)
+	expect(t, got, "POST", "/repos/acme/widgets/issues/comments/44/reactions", "")
+	jsonEq(t, got.Body, `{"content":"+1"}`)
+}
+
+// Reacting twice with the same content is a 200 for the existing reaction.
+func TestReactToIssueCommentExisting(t *testing.T) {
+	c, _ := serve(t, jsonReply(map[string]any{"id": 1, "content": "eyes"}))
+	if err := c.ReactToIssueComment(ctx, "acme", "widgets", 44, "eyes"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReactToIssueCommentGone(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, "{}", 404) })
+	if err := c.ReactToIssueComment(ctx, "acme", "widgets", 44, "eyes"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestCollaboratorPermission(t *testing.T) {
+	c, rec := serve(t, jsonReply(map[string]any{"permission": "write", "role_name": "maintain",
+		"user": map[string]any{"login": "dev"}}))
+	p, err := c.CollaboratorPermission(ctx, "acme", "widgets", "dev")
+	if err != nil || p.Permission != "write" || p.Role != "maintain" {
+		t.Fatalf("CollaboratorPermission = %+v, %v", p, err)
+	}
+	expect(t, rec.get(0), "GET", "/repos/acme/widgets/collaborators/dev/permission", "")
+}
+
+func TestCollaboratorPermissionEscapesLogin(t *testing.T) {
+	c, rec := serve(t, jsonReply(map[string]any{"permission": "none"}))
+	if _, err := c.CollaboratorPermission(ctx, "acme", "widgets", "a/b"); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, rec.get(0), "GET", "/repos/acme/widgets/collaborators/a%2Fb/permission", "")
+}
+
+func TestCollaboratorPermissionUnknownUser(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, "{}", 404) })
+	if _, err := c.CollaboratorPermission(ctx, "acme", "widgets", "ghost"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v", err)
+	}
+}
