@@ -13,6 +13,10 @@ const (
 	// per client IP in any limitWindow.
 	limitAttempts = 20
 	limitWindow   = 5 * time.Minute
+	// limitMaxIPs is the most client IPs the limiter holds at once. Past
+	// it, an IP it doesn't hold is refused (429) until the old ones leave
+	// the window, so the map can't grow without bound.
+	limitMaxIPs = 100000
 )
 
 // limiter counts password attempts by client IP, in memory (the dashboard
@@ -21,14 +25,15 @@ type limiter struct {
 	mu        sync.Mutex
 	hits      map[string][]time.Time // attempts in the window, oldest first
 	lastSweep time.Time
+	maxIPs    int
 }
 
-func newLimiter() *limiter { return &limiter{hits: map[string][]time.Time{}} }
+func newLimiter() *limiter { return &limiter{hits: map[string][]time.Time{}, maxIPs: limitMaxIPs} }
 
 // allow records an attempt from ip at now and reports whether it is within
 // the limit. A refused attempt is not counted. Attempts older than the
 // window are dropped as it goes: those of ip on every call, everyone's once
-// per window.
+// per window. An ip it doesn't hold is refused while it holds maxIPs.
 func (l *limiter) allow(ip string, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -42,7 +47,11 @@ func (l *limiter) allow(ip string, now time.Time) bool {
 		}
 		l.lastSweep = now
 	}
-	hits := recent(l.hits[ip], now)
+	hits, known := l.hits[ip]
+	if !known && len(l.hits) >= l.maxIPs {
+		return false
+	}
+	hits = recent(hits, now)
 	if len(hits) >= limitAttempts {
 		l.hits[ip] = hits
 		return false

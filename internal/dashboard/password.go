@@ -160,7 +160,8 @@ func loginCSRFOK(r *http.Request) bool {
 
 // passwordSignIn signs a password account in: JSON {username, password}.
 // Every failure, an unknown username included, is the same 401 after the
-// same work (an argon2id check); 5 wrong passwords in a row lock the
+// same work (an argon2id check), answered before the failure is recorded;
+// 5 wrong passwords in a row lock the
 // account for 15 minutes, and each client IP has 20 attempts per 5 minutes.
 // With no argon2id slot free within 5 s the answer is 503.
 func (a *Auth) passwordSignIn(w http.ResponseWriter, r *http.Request) {
@@ -200,14 +201,13 @@ func (a *Auth) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 	good := a.verify(hash, in.Password)
 	release()
 	if !found {
-		writeError(w, http.StatusUnauthorized, wrongCredentials)
+		a.refuse(w, nil)
 		return
 	}
 	log := a.log.With("user", acc.Username)
 	locked := acc.LockedUntil != nil && acc.LockedUntil.After(now)
 	if !good || locked {
-		a.failedSignIn(ctx, acc, refusedDetail(locked, "wrong password"), now, log)
-		writeError(w, http.StatusUnauthorized, wrongCredentials)
+		a.refuse(w, func() { a.failedSignIn(ctx, acc, refusedDetail(locked, "wrong password"), now, log) })
 		return
 	}
 	if a.afterVerify != nil {
@@ -222,8 +222,7 @@ func (a *Auth) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !recorded {
-		a.failedSignIn(ctx, acc, refusedDetail(true, ""), now, log)
-		writeError(w, http.StatusUnauthorized, wrongCredentials)
+		a.refuse(w, func() { a.failedSignIn(ctx, acc, refusedDetail(true, ""), now, log) })
 		return
 	}
 
@@ -253,6 +252,18 @@ func (a *Auth) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 	})
 	log.Info("dashboard password sign-in")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// refuse answers a refused sign-in with the one 401 and flushes it, then
+// runs record (the failure count and the audit entry, a few database
+// writes): a known username must not take longer to answer than an unknown
+// one, which has nothing to record.
+func (a *Auth) refuse(w http.ResponseWriter, record func()) {
+	writeError(w, http.StatusUnauthorized, wrongCredentials)
+	_ = http.NewResponseController(w).Flush() // best effort: a writer that can't flush answers when done
+	if record != nil {
+		record()
+	}
 }
 
 // refusedDetail is the audit detail of a refused attempt: "account locked",

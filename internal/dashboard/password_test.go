@@ -415,6 +415,82 @@ func TestLimiter(t *testing.T) {
 	}
 }
 
+// flushHook is a recorder that calls onFlush when the handler flushes.
+type flushHook struct {
+	*httptest.ResponseRecorder
+	onFlush func()
+}
+
+func (f *flushHook) Flush() {
+	f.onFlush()
+	f.ResponseRecorder.Flush()
+}
+
+// A wrong password is answered, and the answer flushed, before the failure
+// is recorded (the database writes), so a known username takes no longer to
+// answer than an unknown one. The failure is recorded all the same.
+func TestWrongPasswordAnsweredBeforeRecorded(t *testing.T) {
+	e := newEnv(t, nil)
+	acc := e.addPasswordAccount("ops", "ops-password-123", false)
+	failures := func() int {
+		a, _, _ := e.st.Account(ctx, acc.ID)
+		return a.FailedAttempts
+	}
+	c, token := e.loginCSRF()
+	data, _ := json.Marshal(map[string]string{"username": "ops", "password": "not-the-password"})
+	req := httptest.NewRequest("POST", "/auth/password", bytes.NewReader(data))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(CSRFHeader, token)
+	req.AddCookie(c)
+
+	atFlush, flushed := -1, false
+	rec := &flushHook{ResponseRecorder: httptest.NewRecorder()}
+	rec.onFlush = func() { atFlush, flushed = failures(), true }
+	e.h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized || body(rec.ResponseRecorder) != wrongCredentialsBody {
+		t.Fatalf("wrong password = %d %s", rec.Code, rec.Body)
+	}
+	if !flushed || atFlush != 0 {
+		t.Errorf("flushed = %v with %d failures recorded at that point; want flushed before any was recorded", flushed, atFlush)
+	}
+	if n := failures(); n != 1 {
+		t.Errorf("failures after the request = %d; want 1", n)
+	}
+	if got := e.audits(); len(got) != 1 || got[0] != "ops (password) sign_in_failed" {
+		t.Errorf("audit = %q; want the failure", got)
+	}
+}
+
+// Past the cap the limiter refuses IPs it doesn't know, rather than grow;
+// the IPs it holds keep their counts, and room comes back as old ones leave
+// the window.
+func TestLimiterCap(t *testing.T) {
+	l := newLimiter()
+	l.maxIPs = 3
+	t0 := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
+	for _, ip := range []string{"a", "b", "c"} {
+		if !l.allow(ip, t0) {
+			t.Fatalf("%s refused below the cap", ip)
+		}
+	}
+	if l.allow("d", t0.Add(time.Second)) {
+		t.Error("a new IP was allowed past the cap")
+	}
+	if !l.allow("a", t0.Add(time.Second)) {
+		t.Error("a known IP was refused at the cap")
+	}
+	l.mu.Lock()
+	n := len(l.hits)
+	l.mu.Unlock()
+	if n != 3 {
+		t.Errorf("limiter holds %d IPs, want 3", n)
+	}
+	// The window passes: the old IPs are dropped and "d" fits.
+	if !l.allow("d", t0.Add(limitWindow+time.Second)) {
+		t.Error("a new IP was refused after the old ones left the window")
+	}
+}
+
 // meCSRF returns the session's CSRF token.
 func (e *env) meCSRF(c *http.Cookie) string {
 	e.t.Helper()
