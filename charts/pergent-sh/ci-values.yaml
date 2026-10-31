@@ -27,6 +27,11 @@ config:
     api_key_env: OPENCODE_API_KEY
   jobs:
     namespace: pergent
+  dashboard:
+    admin_password_env: PERGENT_SH_ADMIN_PASSWORD
+
+adminPassword:
+  existingSecret: pergent-sh-admin-password
 
 skills:
   code-review.md: |

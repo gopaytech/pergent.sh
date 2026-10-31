@@ -49,6 +49,16 @@ spec:
           envFrom:
             - secretRef:
                 name: {{ .Values.existingSecret }}
+          {{- if .Values.adminPassword.existingSecret }}
+          # The first password admin's password, under the name the config's
+          # dashboard.admin_password_env gives it.
+          env:
+            - name: {{ .Values.config.dashboard.admin_password_env }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.adminPassword.existingSecret }}
+                  key: {{ .Values.adminPassword.key }}
+          {{- end }}
           ports:
             - name: http
               containerPort: 8080

@@ -56,4 +56,8 @@ find its skills, or whose Jobs land where the Role does not reach.
 {{- if not (hasSuffix ":8080" (toString .Values.config.listen)) -}}
 {{- fail "config.listen must end in :8080: the container port, Service and probes use 8080" -}}
 {{- end -}}
+{{- $dashboard := default dict .Values.config.dashboard -}}
+{{- if and .Values.adminPassword.existingSecret (not $dashboard.admin_password_env) -}}
+{{- fail "adminPassword.existingSecret needs config.dashboard.admin_password_env: the name of the env var the password is passed as" -}}
+{{- end -}}
 {{- end -}}

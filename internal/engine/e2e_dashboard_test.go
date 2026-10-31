@@ -32,10 +32,16 @@ const (
 	dashClientID     = "gl-oauth-client-id-example"
 	dashClientSecret = "gl-oauth-client-secret-example"
 
-	// alice is on an admin team; bob is on a viewer team.
+	// alice is put on an admin team; bob on a viewer team.
 	aliceID, bobID       = int64(31), int64(32)
 	aliceCode, bobCode   = "alice-code", "bob-code"
 	aliceToken, bobToken = "alice-oauth-token-example", "bob-oauth-token-example"
+
+	// The first password admin: the env var holds its password, which it
+	// changes at its first sign-in.
+	adminPasswordEnv  = "PERGENT_SH_E2E_ADMIN_PASSWORD"
+	bootstrapPassword = "bootstrap-password-example"
+	changedPassword   = "changed-password-example"
 
 	// acme/gadgets is the repository the admin switches on in the
 	// dashboard; acme/payments is in the config, and neither user can see
@@ -246,27 +252,8 @@ type dashUser struct {
 	session *http.Cookie
 	csrf    string
 	isAdmin bool
-}
-
-// team puts the GitLab user userID (username) on a new team with role
-// covering repos, making their account as their first sign-in would.
-func (e *dashE2E) team(t *testing.T, name, role string, userID int64, username string, repos ...store.TeamRepo) {
-	t.Helper()
-	env := e.env
-	a, err := env.Store.UpsertPlatformAccount(env.ctx, config.PlatformGitLab, testInstance, userID, username, env.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	tm, err := env.Store.CreateTeam(env.ctx, name, role, env.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ok, err := env.Store.UpdateTeam(env.ctx, tm.ID, func(tm *store.Team) error {
-		tm.Members, tm.Repos = []int64{a.ID}, repos
-		return nil
-	}); err != nil || !ok {
-		t.Fatalf("UpdateTeam = %v, %v", ok, err)
-	}
+	// waiting: a platform account on no team.
+	waiting bool
 }
 
 // signIn goes through GitLab sign-in with code, as the browser would: the
@@ -292,6 +279,13 @@ func (e *dashE2E) signIn(t *testing.T, code string) dashUser {
 	if status != http.StatusSeeOther || h.Get("Location") != "/" {
 		t.Fatalf("callback = %d to %q: %s", status, h.Get("Location"), body)
 	}
+	return e.startSession(t, cookies)
+}
+
+// startSession reads the session a sign-in set in cookies, checks its
+// attributes and asks who it is.
+func (e *dashE2E) startSession(t *testing.T, cookies []*http.Cookie) dashUser {
+	t.Helper()
 	var u dashUser
 	for _, c := range cookies {
 		if c.Name == dashboard.SessionCookieName && c.Value != "" {
@@ -299,19 +293,99 @@ func (e *dashE2E) signIn(t *testing.T, code string) dashUser {
 		}
 	}
 	if u.session == nil || !u.session.HttpOnly || !u.session.Secure || u.session.SameSite != http.SameSiteLaxMode {
-		t.Fatalf("callback set session cookie %+v; want HttpOnly, Secure, SameSite=Lax", u.session)
+		t.Fatalf("sign-in set session cookie %+v; want HttpOnly, Secure, SameSite=Lax", u.session)
 	}
 	var me struct {
 		Username  string `json:"username"`
 		Admin     bool   `json:"admin"`
+		Waiting   bool   `json:"waiting"`
 		CSRFToken string `json:"csrfToken"`
 	}
 	e.getJSON(t, u, "/api/me", &me)
 	if me.CSRFToken == "" {
 		t.Fatalf("/api/me has no CSRF token")
 	}
-	u.csrf, u.isAdmin = me.CSRFToken, me.Admin
+	u.csrf, u.isAdmin, u.waiting = me.CSRFToken, me.Admin, me.Waiting
 	return u
+}
+
+// tryPassword sends a password sign-in as the browser does: it fetches the
+// form's CSRF token, then posts the credentials with it. It returns the
+// status, the body and the cookies of the sign-in itself.
+func (e *dashE2E) tryPassword(t *testing.T, username, pw string) (int, []byte, []*http.Cookie) {
+	t.Helper()
+	status, body, _, cookies := e.do(t, http.MethodGet, "/auth/csrf", nil, nil, nil)
+	var form struct {
+		CSRFToken string `json:"csrfToken"`
+	}
+	if status != http.StatusOK || json.Unmarshal(body, &form) != nil || form.CSRFToken == "" {
+		t.Fatalf("GET /auth/csrf = %d: %s", status, body)
+	}
+	status, body, _, cookies = e.do(t, http.MethodPost, "/auth/password", map[string]string{"username": username, "password": pw},
+		cookies, map[string]string{dashboard.CSRFHeader: form.CSRFToken, "Content-Type": "application/json"})
+	return status, body, cookies
+}
+
+// passwordSignIn signs a password account in.
+func (e *dashE2E) passwordSignIn(t *testing.T, username, pw string) dashUser {
+	t.Helper()
+	status, body, cookies := e.tryPassword(t, username, pw)
+	if status != http.StatusNoContent {
+		t.Fatalf("password sign-in of %s = %d: %s", username, status, body)
+	}
+	return e.startSession(t, cookies)
+}
+
+// expectStatus fails the test unless a request as u answers want.
+func (e *dashE2E) expectStatus(t *testing.T, u dashUser, method, path string, want int) []byte {
+	t.Helper()
+	status, body, _, _ := e.do(t, method, path, nil, []*http.Cookie{u.session}, nil)
+	if status != want {
+		t.Fatalf("%s %s = %d: %s; want %d", method, path, status, body, want)
+	}
+	return body
+}
+
+// accountID is the ID of the platform account username in the users list.
+func (e *dashE2E) accountID(t *testing.T, admin dashUser, username string) int64 {
+	t.Helper()
+	var users []dashboard.UserView
+	e.getJSON(t, admin, "/api/users", &users)
+	for _, u := range users {
+		if u.Username == username && u.Kind == store.AccountPlatform {
+			return u.ID
+		}
+	}
+	t.Fatalf("no platform account %q in %+v", username, users)
+	return 0
+}
+
+// newTeam creates a team through the API and returns its ID.
+func (e *dashE2E) newTeam(t *testing.T, admin dashUser, name, role string) int64 {
+	t.Helper()
+	status, body := e.write(t, admin, http.MethodPost, "/api/teams", map[string]string{"name": name, "role": role})
+	var team dashboard.TeamView
+	if status != http.StatusCreated || json.Unmarshal(body, &team) != nil || team.ID == 0 {
+		t.Fatalf("creating team %s = %d: %s", name, status, body)
+	}
+	return team.ID
+}
+
+// setTeam replaces a team's members and repositories through the API.
+func (e *dashE2E) setTeam(t *testing.T, admin dashUser, id int64, name, role string, members []int64, repos []dashboard.TeamRepoView) {
+	t.Helper()
+	if members == nil {
+		members = []int64{}
+	}
+	if repos == nil {
+		repos = []dashboard.TeamRepoView{}
+	}
+	status, body := e.write(t, admin, http.MethodPut, "/api/teams/"+strconv.FormatInt(id, 10), map[string]any{
+		"name": name, "role": role, "members": members, "repos": repos,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("changing team %s = %d: %s", name, status, body)
+	}
 }
 
 // getJSON GETs path as u, wants 200 and decodes the body into v.
@@ -364,9 +438,12 @@ func gadgetsAPI(suffix string) string {
 	return "/projects/" + strconv.FormatInt(gadgetsID, 10) + suffix
 }
 
-// A user signs in with GitLab and sees only what they can see there; an
-// admin switches a repository on, which is set up and reviewed, and turns
-// its approval off, which withdraws the approval; a developer can't write.
+// The operator signs in with the first password admin, changes its password
+// and makes an admin team; users who sign in with GitLab wait until they are
+// put on a team, then see only what their team covers and the platform
+// allows. An admin switches a repository on, which is set up and reviewed,
+// and turns its approval off, which withdraws the approval; a viewer can't
+// write.
 func TestEndToEndDashboard(t *testing.T) {
 	e := newDashboardE2E(t)
 	env := e.env
@@ -382,14 +459,55 @@ func TestEndToEndDashboard(t *testing.T) {
 		}
 	}
 
-	// 1. alice signs in with GitLab; she is an admin. bob views every
-	// repository of the instance.
-	e.team(t, "admins", store.RoleAdmin, aliceID, "alice")
-	e.team(t, "developers", store.RoleViewer, bobID, "bob", store.TeamRepo{Instance: testInstance})
-	alice := e.signIn(t, aliceCode)
-	if !alice.isAdmin {
-		t.Fatalf("alice is not an admin")
+	// 1. The first start makes the password admin from the env var. Its
+	// first sign-in must change the password before anything else works.
+	t.Setenv(adminPasswordEnv, bootstrapPassword)
+	env.Engine.Config.Dashboard.AdminPasswordEnv = adminPasswordEnv
+	if err := dashboard.Bootstrap(env.ctx, env.Store, env.Engine.Config, env.Now(), env.Engine.Log); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
 	}
+	if status, body, _ := e.tryPassword(t, "admin", "not-the-password-example"); status != http.StatusUnauthorized ||
+		!strings.Contains(string(body), "wrong username or password") {
+		t.Fatalf("a wrong password = %d: %s, want 401 wrong username or password", status, body)
+	}
+	operator := e.passwordSignIn(t, "admin", bootstrapPassword)
+	if !operator.isAdmin {
+		t.Fatalf("the password admin is not an admin")
+	}
+	if body := e.expectStatus(t, operator, http.MethodGet, "/api/overview?days=7", http.StatusForbidden); !strings.Contains(string(body), "password_change_required") {
+		t.Errorf("before the change the overview says %s, want password_change_required", body)
+	}
+	if status, body := e.write(t, operator, http.MethodPost, "/auth/password/change",
+		map[string]string{"current": bootstrapPassword, "new": changedPassword}); status != http.StatusNoContent {
+		t.Fatalf("password change = %d: %s", status, body)
+	}
+	e.expectStatus(t, operator, http.MethodGet, "/api/overview?days=7", http.StatusOK)
+	if status, _, _ := e.tryPassword(t, "admin", bootstrapPassword); status != http.StatusUnauthorized {
+		t.Errorf("the first password still signs in (%d)", status)
+	}
+
+	// The operator makes an admin team with no members yet.
+	platformTeam := e.newTeam(t, operator, "platform", store.RoleAdmin)
+
+	// alice signs in with GitLab and waits: she is on no team.
+	alice := e.signIn(t, aliceCode)
+	if !alice.waiting || alice.isAdmin {
+		t.Fatalf("alice before any team: waiting=%v admin=%v, want waiting and not an admin", alice.waiting, alice.isAdmin)
+	}
+	if body := e.expectStatus(t, alice, http.MethodGet, "/api/overview?days=7", http.StatusForbidden); !strings.Contains(string(body), "an admin needs to add you to a team") {
+		t.Errorf("a waiting user gets %s", body)
+	}
+	// The operator adds her to the admin team.
+	e.setTeam(t, operator, platformTeam, "platform", store.RoleAdmin, []int64{e.accountID(t, operator, "alice")}, nil)
+	var me struct {
+		Admin   bool `json:"admin"`
+		Waiting bool `json:"waiting"`
+	}
+	e.getJSON(t, alice, "/api/me", &me)
+	if !me.Admin || me.Waiting {
+		t.Fatalf("alice after joining platform: %+v, want an admin who isn't waiting", me)
+	}
+	alice.isAdmin, alice.waiting = true, false
 
 	// 2. The overview shows only the repositories she can see.
 	var overview dashboard.OverviewView
@@ -564,12 +682,22 @@ func TestEndToEndDashboard(t *testing.T) {
 		}
 	}
 
-	// 8. bob, a developer, sees the review but can't change anything.
+	// 8. bob signs in and waits; the operator puts him on a viewer team
+	// that covers acme/gadgets, which he then sees but can't change.
 	bob := e.signIn(t, bobCode)
-	if bob.isAdmin {
-		t.Fatalf("bob is an admin")
+	if !bob.waiting || bob.isAdmin {
+		t.Fatalf("bob before any team: waiting=%v admin=%v", bob.waiting, bob.isAdmin)
 	}
+	e.expectStatus(t, bob, http.MethodGet, "/api/runs/"+runID, http.StatusForbidden)
+	developers := e.newTeam(t, operator, "developers", store.RoleViewer)
+	e.setTeam(t, operator, developers, "developers", store.RoleViewer, []int64{e.accountID(t, operator, "bob")},
+		[]dashboard.TeamRepoView{{Instance: testInstance, Project: gadgetsPath}})
 	e.getJSON(t, bob, "/api/runs/"+runID, &run)
+	if run.Project != gadgetsPath {
+		t.Errorf("bob sees run %+v, want a run of acme/gadgets", run)
+	}
+	// His team covers acme/gadgets alone: acme/widgets is not his.
+	e.expectStatus(t, bob, http.MethodGet, "/api/repositories/"+testInstance+"/"+testProjectPath, http.StatusNotFound)
 	settingsPath := "/api/repositories/" + testInstance + "/" + gadgetsPath
 	for _, w := range []struct {
 		method, path string
@@ -598,10 +726,29 @@ func TestEndToEndDashboard(t *testing.T) {
 	e.mu.Lock()
 	sent := strings.Join(e.bodies, "\n")
 	e.mu.Unlock()
+	// The audit log tells who did what, and holds no password either.
+	var audit dashboard.AuditPageView
+	e.getJSON(t, operator, "/api/audit", &audit)
+	actions := map[string]bool{}
+	for _, entry := range audit.Entries {
+		actions[entry.Action] = true
+	}
+	for _, want := range []string{"sign_in", "sign_in_failed", "password_changed", "team_created", "team_updated"} {
+		if !actions[want] {
+			t.Errorf("the audit log has no %s entry: %+v", want, audit.Entries)
+		}
+	}
+	e.mu.Lock()
+	sent = strings.Join(e.bodies, "\n")
+	e.mu.Unlock()
+	logged := env.Logs()
 	for _, secret := range []string{aliceToken, bobToken, dashClientSecret, newDeployToken, testLLMKey, resultToken,
-		testReviewToken, testApproveToken, testWebhookSecret} {
+		testReviewToken, testApproveToken, testWebhookSecret, bootstrapPassword, changedPassword} {
 		if strings.Contains(sent, secret) {
 			t.Errorf("a dashboard response holds %q", secret)
+		}
+		if strings.Contains(logged, secret) {
+			t.Errorf("the log holds %q", secret)
 		}
 	}
 }
