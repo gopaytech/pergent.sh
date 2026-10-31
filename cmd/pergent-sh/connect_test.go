@@ -258,6 +258,27 @@ func TestConnectGitHubTokenApprover(t *testing.T) {
 	}
 }
 
+// A review App without a slug can't be mentioned: the instance is refused.
+func TestConnectGitHubNoSlugRefused(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /app", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"slug":""}`))
+	})
+	empty := httptest.NewTLSServer(mux)
+	t.Cleanup(empty.Close)
+	cfg := githubConfig(t, empty.URL, false)
+	err := newConnector(t, cfg, empty.Client(), nil).connectConfigured(context.Background(), "gh")
+	if err == nil {
+		t.Fatal("Connect accepted a review App without a slug")
+	}
+	for _, want := range []string{`github instance "gh"`, "review App (app_id 1)", "slug"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+}
+
 // A credential that doesn't work stops pergent.sh at startup with an error
 // that names the instance and what failed, never the key or token.
 func TestConnectGitHubFailures(t *testing.T) {
@@ -302,6 +323,12 @@ func TestConnectGitHubFailures(t *testing.T) {
 // belongs to.
 func fakeGitLabUsers(t *testing.T, users map[string]int64) *httptest.Server {
 	t.Helper()
+	return fakeGitLabUsersNamed(t, users, "user")
+}
+
+// fakeGitLabUsersNamed is fakeGitLabUsers with every user called username.
+func fakeGitLabUsersNamed(t *testing.T, users map[string]int64, username string) *httptest.Server {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id, ok := users[r.Header.Get("PRIVATE-TOKEN")]
 		if r.URL.Path != "/api/v4/user" || !ok {
@@ -309,7 +336,7 @@ func fakeGitLabUsers(t *testing.T, users map[string]int64) *httptest.Server {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": id, "username": "user"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": id, "username": username})
 	}))
 	t.Cleanup(srv.Close)
 	return srv
@@ -336,6 +363,25 @@ func TestConnectGitLab(t *testing.T) {
 	}
 	if secret, _ := c.gitlabHooks.Get("corp"); secret != "hook-secret-example" || len(c.githubHooks.Keys()) != 0 {
 		t.Errorf("secret = %q", secret)
+	}
+}
+
+// Commands are addressed with @<review bot username>: a review bot without
+// one can't be mentioned, so the instance is refused.
+func TestConnectGitLabNoUsernameRefused(t *testing.T) {
+	srv := fakeGitLabUsersNamed(t, map[string]int64{"glpat-review-example": 11, "glpat-approve-example": 12}, "")
+	c := newConnector(t, gitlabConfig(t, srv.URL), nil, nil)
+	err := c.connectConfigured(context.Background(), "corp")
+	if err == nil {
+		t.Fatal("Connect accepted a review bot without a username")
+	}
+	if _, ok := c.platforms.Get("corp"); ok {
+		t.Error("a refused instance was connected")
+	}
+	for _, want := range []string{`"corp"`, "GL_REVIEW", "username"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
 	}
 }
 

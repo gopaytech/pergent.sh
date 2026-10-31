@@ -539,7 +539,7 @@ func TestAccessLevel(t *testing.T) {
 		{40, forge.AccessMaintain}, {50, forge.AccessMaintain},
 	} {
 		f := newFake(t)
-		f.on(http.MethodGet, "/projects/7/members/all/12", http.StatusOK, map[string]any{"id": 12, "access_level": tc.level})
+		f.on(http.MethodGet, "/projects/7/members/all/12", http.StatusOK, map[string]any{"id": 12, "access_level": tc.level, "state": "active"})
 		got, err := f.forge().AccessLevel(context.Background(), 7, "dev", 12)
 		if err != nil || got != tc.want {
 			t.Errorf("level %d = %v, %v; want %v", tc.level, got, err, tc.want)
@@ -549,8 +549,15 @@ func TestAccessLevel(t *testing.T) {
 		}
 	}
 
-	// Not a member: 404.
+	// A blocked maintainer is nobody.
 	f := newFake(t)
+	f.on(http.MethodGet, "/projects/7/members/all/12", http.StatusOK, map[string]any{"id": 12, "access_level": 40, "state": "blocked"})
+	if got, err := f.forge().AccessLevel(context.Background(), 7, "dev", 12); err != nil || got != forge.AccessNone {
+		t.Errorf("blocked = %v, %v; want AccessNone, nil", got, err)
+	}
+
+	// Not a member: 404.
+	f = newFake(t)
 	if got, err := f.forge().AccessLevel(context.Background(), 7, "dev", 12); err != nil || got != forge.AccessNone {
 		t.Errorf("non-member = %v, %v; want AccessNone, nil", got, err)
 	}

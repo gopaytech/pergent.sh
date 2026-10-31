@@ -1017,6 +1017,17 @@ func TestReply(t *testing.T) {
 	}
 }
 
+// customRole is a permission reply for a role pergent.sh doesn't know, with
+// the user's permission flags and, optionally, the legacy permission.
+func customRole(flags map[string]any, legacy ...string) map[string]any {
+	p := "write"
+	if len(legacy) > 0 {
+		p = legacy[0]
+	}
+	return map[string]any{"permission": p, "role_name": "release-manager",
+		"user": map[string]any{"login": "dev", "permissions": flags}}
+}
+
 func TestAccessLevel(t *testing.T) {
 	const path = "/repos/acme/widgets/collaborators/dev/permission"
 	for _, tc := range []struct {
@@ -1037,6 +1048,13 @@ func TestAccessLevel(t *testing.T) {
 		{"custom role", map[string]any{"permission": "write", "role_name": "release-manager"}, forge.AccessWrite},
 		{"custom role below write", map[string]any{"permission": "read", "role_name": "auditor"}, forge.AccessRead},
 		{"unknown", map[string]any{"permission": "superuser"}, forge.AccessNone},
+		// A custom role is read off what the user can do.
+		{"custom role with admin", customRole(map[string]any{"admin": true, "maintain": true, "push": true}), forge.AccessMaintain},
+		{"custom role with maintain", customRole(map[string]any{"maintain": true, "push": true}), forge.AccessMaintain},
+		{"custom role with push", customRole(map[string]any{"push": true, "triage": true}), forge.AccessWrite},
+		{"custom role with neither", customRole(map[string]any{"triage": true, "pull": true}), forge.AccessRead},
+		// What the role can do wins over the legacy field.
+		{"custom role, legacy admin, no flags", customRole(map[string]any{"push": true}, "admin"), forge.AccessWrite},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFake(t)

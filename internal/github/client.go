@@ -737,6 +737,14 @@ type Collaborator struct {
 	// Role is the repository role: admin, maintain, write, triage, read, or
 	// the name of a custom role. It is empty when GitHub doesn't say.
 	Role string `json:"role_name"`
+	// Flags is what the user can do (user.permissions); nil when GitHub
+	// doesn't say. It is what tells a custom role's reach.
+	Flags *CollaboratorFlags `json:"-"`
+}
+
+// CollaboratorFlags are the permission flags GitHub reports for a user.
+type CollaboratorFlags struct {
+	Admin, Maintain, Push bool
 }
 
 // CollaboratorPermission returns a user's permission on a repository, from
@@ -751,11 +759,23 @@ func (c *Client) CollaboratorPermission(ctx context.Context, owner, repo, login 
 	if err != nil {
 		return Collaborator{}, err
 	}
-	var out Collaborator
+	var out struct {
+		Collaborator
+		User struct {
+			Permissions *struct {
+				Admin    bool `json:"admin"`
+				Maintain bool `json:"maintain"`
+				Push     bool `json:"push"`
+			} `json:"permissions"`
+		} `json:"user"`
+	}
 	if err := c.getJSON(ctx, p, nil, &out); err != nil {
 		return Collaborator{}, err
 	}
-	return out, nil
+	if f := out.User.Permissions; f != nil {
+		out.Flags = &CollaboratorFlags{Admin: f.Admin, Maintain: f.Maintain, Push: f.Push}
+	}
+	return out.Collaborator, nil
 }
 
 type checkRunOutput struct {

@@ -285,9 +285,10 @@ func (f *Forge) Reply(ctx context.Context, repoID, number int64, body string) er
 // AccessLevel maps the user's repository role onto forge.Access: read and
 // triage read, write writes, maintain and admin maintain. The role comes
 // from role_name, which tells maintain and triage apart (the legacy
-// permission field reports them as write and read); a custom role, or none
-// reported, falls back to permission. A user GitHub doesn't know, or
-// without a login, is AccessNone. userID is not used.
+// permission field reports them as write and read). A custom role is read
+// off the user's permission flags (admin or maintain, push, else read); with
+// no role, or no flags, the legacy permission decides. A user GitHub doesn't
+// know, or without a login, is AccessNone. userID is not used.
 func (f *Forge) AccessLevel(ctx context.Context, repoID int64, username string, _ int64) (forge.Access, error) {
 	if username == "" {
 		return forge.AccessNone, nil
@@ -306,12 +307,22 @@ func (f *Forge) AccessLevel(ctx context.Context, repoID int64, username string, 
 	if a, ok := roleAccess[p.Role]; ok {
 		return a, nil
 	}
+	if fl := p.Flags; p.Role != "" && fl != nil {
+		switch {
+		case fl.Admin || fl.Maintain:
+			return forge.AccessMaintain, nil
+		case fl.Push:
+			return forge.AccessWrite, nil
+		}
+		return forge.AccessRead, nil
+	}
 	return roleAccess[p.Permission], nil
 }
 
 // roleAccess maps repository roles and legacy permission levels; anything
-// else, "none" included, is AccessNone.
+// else is AccessNone.
 var roleAccess = map[string]forge.Access{
+	"none":     forge.AccessNone,
 	"read":     forge.AccessRead,
 	"triage":   forge.AccessRead,
 	"write":    forge.AccessWrite,

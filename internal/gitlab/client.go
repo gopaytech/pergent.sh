@@ -496,19 +496,31 @@ func (c *Client) UpdateNote(ctx context.Context, projectID, iid, noteID int64, b
 }
 
 // AwardNoteEmoji adds the emoji name (eyes, thumbsup, ...) to a note as this
-// user. A missing note is ErrNotFound.
+// user. A missing note is ErrNotFound. An emoji the user already gave is
+// success: GitLab answers 404 "has already been taken", which is not a
+// deleted note.
 func (c *Client) AwardNoteEmoji(ctx context.Context, projectID, iid, noteID int64, name string) error {
 	_, err := c.do(ctx, http.MethodPost, mrPath(projectID, iid)+"/notes/"+strconv.FormatInt(noteID, 10)+"/award_emoji",
 		nil, map[string]string{"name": name})
+	var ae *APIError
+	if errors.As(err, &ae) && ae.Status == http.StatusNotFound && strings.Contains(ae.Body, "already been taken") {
+		return nil
+	}
 	return err
 }
 
 // MemberAccessLevel returns a user's access level in a project, inherited
 // from its groups included (GitLab's 10 Guest, 20 Reporter, 30 Developer,
-// 40 Maintainer, 50 Owner). A user who isn't a member is 0, not an error.
+// 40 Maintainer, 50 Owner). Only an active membership counts: a user who
+// isn't a member, isn't active (blocked, deactivated), is awaiting admission
+// (membership_state) or whose membership has expired is 0, not an error. A
+// membership state or expiry that can't be read is 0 too.
 func (c *Client) MemberAccessLevel(ctx context.Context, projectID, userID int64) (int, error) {
 	var m struct {
-		AccessLevel int `json:"access_level"`
+		AccessLevel     int    `json:"access_level"`
+		State           string `json:"state"`
+		MembershipState string `json:"membership_state"`
+		ExpiresAt       string `json:"expires_at"`
 	}
 	_, err := c.getJSON(ctx, projPath(projectID)+"/members/all/"+strconv.FormatInt(userID, 10), nil, &m)
 	if errors.Is(err, ErrNotFound) {
@@ -516,6 +528,22 @@ func (c *Client) MemberAccessLevel(ctx context.Context, projectID, userID int64)
 	}
 	if err != nil {
 		return 0, err
+	}
+	if m.State != "active" || (m.MembershipState != "" && m.MembershipState != "active") {
+		return 0, nil
+	}
+	if m.ExpiresAt != "" {
+		// A date (the membership ends when that day starts, UTC) or, to be
+		// safe, a timestamp.
+		exp, err := time.Parse("2006-01-02", m.ExpiresAt)
+		if err != nil {
+			if exp, err = time.Parse(time.RFC3339, m.ExpiresAt); err != nil {
+				return 0, nil
+			}
+		}
+		if !exp.After(time.Now()) {
+			return 0, nil
+		}
 	}
 	return m.AccessLevel, nil
 }

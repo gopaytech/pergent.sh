@@ -59,8 +59,8 @@ type Approver struct {
 }
 
 // NewAppApprover returns the approve App's Approver. botUserID and slug are
-// the App's bot user and slug (app.Bot), resolved once by the caller. The App's
-// installation on a repository is looked up once and remembered; it is
+// the App's bot user and slug (app.Bot), resolved once by the caller. The
+// App's installation on a repository is looked up once and remembered; it is
 // forgotten when a call through it fails with 404 or its token can't be
 // minted, and CanReach always asks GitHub afresh and remembers the answer.
 func NewAppApprover(app *github.App, botUserID int64, slug string, repos Repos) *Approver {
@@ -121,9 +121,8 @@ func NewAppApprover(app *github.App, botUserID int64, slug string, repos Repos) 
 
 // NewTokenApprover returns the Approver of a bot user whose token c holds.
 // botUserID and login are that user (c.CurrentUser), resolved once by the
-// caller. When
-// GitHub reports the token expires within 14 days, it logs a warning at most
-// once an hour; log may be nil.
+// caller. When GitHub reports the token expires within 14 days, it logs a
+// warning at most once an hour; log may be nil.
 func NewTokenApprover(c *github.Client, botUserID int64, login string, repos Repos, log *slog.Logger) *Approver {
 	a := newApprover(botUserID, login, repos)
 	if log != nil {

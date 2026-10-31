@@ -929,7 +929,7 @@ func TestAwardNoteEmojiNoteGone(t *testing.T) {
 }
 
 func TestMemberAccessLevel(t *testing.T) {
-	c, reqs := serve(t, jsonReply(map[string]any{"id": 12, "username": "dev", "access_level": 30}))
+	c, reqs := serve(t, jsonReply(map[string]any{"id": 12, "username": "dev", "access_level": 30, "state": "active"}))
 	n, err := c.MemberAccessLevel(context.Background(), 7, 12)
 	if err != nil || n != 30 {
 		t.Fatalf("level=%d err=%v", n, err)
@@ -937,7 +937,43 @@ func TestMemberAccessLevel(t *testing.T) {
 	expect(t, (*reqs)[0], "GET", "/api/v4/projects/7/members/all/12", "")
 }
 
-// Not a member is a level of 0, not an error.
+// Only an active member counts: a blocked or deactivated user, one awaiting
+// admission (user cap) or one whose membership has expired has no access,
+// whatever level GitLab still lists.
+func TestMemberAccessLevelOnlyActive(t *testing.T) {
+	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format("2006-01-02")
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	for _, tc := range []struct {
+		name string
+		m    map[string]any
+		want int
+	}{
+		{"active", map[string]any{"state": "active"}, 40},
+		{"active membership", map[string]any{"state": "active", "membership_state": "active"}, 40},
+		{"expires later", map[string]any{"state": "active", "expires_at": tomorrow}, 40},
+		{"no expiry (null)", map[string]any{"state": "active", "expires_at": nil}, 40},
+		{"no state", map[string]any{}, 0},
+		{"blocked", map[string]any{"state": "blocked"}, 0},
+		{"deactivated", map[string]any{"state": "deactivated"}, 0},
+		{"awaiting", map[string]any{"state": "active", "membership_state": "awaiting"}, 0},
+		{"expired", map[string]any{"state": "active", "expires_at": yesterday}, 0},
+		{"expires today", map[string]any{"state": "active", "expires_at": time.Now().UTC().Format("2006-01-02")}, 0},
+		{"unreadable expiry", map[string]any{"state": "active", "expires_at": "someday"}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := map[string]any{"id": 12, "access_level": 40}
+			for k, v := range tc.m {
+				m[k] = v
+			}
+			c, _ := serve(t, jsonReply(m))
+			n, err := c.MemberAccessLevel(context.Background(), 7, 12)
+			if err != nil || n != tc.want {
+				t.Fatalf("level=%d err=%v, want %d", n, err, tc.want)
+			}
+		})
+	}
+}
+
 func TestMemberAccessLevelNotAMember(t *testing.T) {
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"404 Not found"}`, 404) })
 	n, err := c.MemberAccessLevel(context.Background(), 7, 12)
@@ -950,5 +986,16 @@ func TestMemberAccessLevelError(t *testing.T) {
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"403 Forbidden"}`, 403) })
 	if _, err := c.MemberAccessLevel(context.Background(), 7, 12); err == nil {
 		t.Fatal("err = nil, want the 403")
+	}
+}
+
+// GitLab answers 404 "has already been taken" when the emoji is already on the
+// note: the reaction is there, so a retry is a success.
+func TestAwardNoteEmojiAlreadyAwarded(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"404 Award Emoji Name has already been taken"}`, 404)
+	})
+	if err := c.AwardNoteEmoji(context.Background(), 7, 3, 55, "eyes"); err != nil {
+		t.Fatalf("err = %v, want nil", err)
 	}
 }

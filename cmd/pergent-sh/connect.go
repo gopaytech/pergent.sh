@@ -190,6 +190,11 @@ func (c *connector) buildGitLab(ctx context.Context, inst *config.Instance, s in
 	if err != nil {
 		return engine.Platform{}, fmt.Errorf("gitlab instance %q: the approve token%s doesn't work: %w", inst.Name, inEnv(inst.ApproveTokenEnv), err)
 	}
+	if reviewUser.Username == "" {
+		// People address the review bot as @username.
+		return engine.Platform{}, fmt.Errorf("gitlab instance %q: the review token%s belongs to a user without a username, so the bot can't be mentioned in commands",
+			inst.Name, inEnv(inst.ReviewTokenEnv))
+	}
 	if reviewUser.ID == approveUser.ID {
 		// One user would approve the reviews it posts itself: the
 		// approval has to come from a second identity.
