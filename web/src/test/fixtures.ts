@@ -358,13 +358,13 @@ export const teamAdmins: TeamView = {
 
 export const auditPage1: AuditPageView = {
   entries: [
-    { id: 30, at: "2026-10-30T14:02:00Z", actor: "admin", action: "team_created", instance: "", project: "", detail: "Payments (maintainer)" },
-    { id: 29, at: "2026-10-30T13:00:00Z", actor: "admin", action: "repository_on", instance: "main", project: "acme/payments", detail: "" },
+    { id: 30, at: "2026-10-30T14:02:00Z", actor: "admin (password)", action: "team_created", instance: "", project: "", detail: "Payments (maintainer)" },
+    { id: 29, at: "2026-10-30T13:00:00Z", actor: "admin (password)", action: "repository_on", instance: "main", project: "acme/payments", detail: "" },
   ],
   next: 29,
 };
 
 export const auditPage2: AuditPageView = {
-  entries: [{ id: 28, at: "2026-10-29T09:30:00Z", actor: "dev-admin", action: "account_deleted", instance: "", project: "", detail: "old-user" }],
+  entries: [{ id: 28, at: "2026-10-29T09:30:00Z", actor: "dev-admin (gitlab main)", action: "account_deleted", instance: "", project: "", detail: "old-user" }],
   next: 0,
 };

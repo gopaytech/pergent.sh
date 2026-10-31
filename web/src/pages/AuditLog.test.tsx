@@ -16,7 +16,7 @@ describe("AuditLog", () => {
     const rows = (await screen.findAllByRole("row")).slice(1);
     expect(rows).toHaveLength(2);
     expect(rows[0]).toHaveTextContent("2026-10-30 14:02 UTC");
-    expect(rows[0]).toHaveTextContent("admin");
+    expect(rows[0]).toHaveTextContent("admin (password)");
     expect(rows[0]).toHaveTextContent("Team created");
     expect(rows[0]).toHaveTextContent("Payments (maintainer)");
     expect(rows[1]).toHaveTextContent("Repository on");
