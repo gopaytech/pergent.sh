@@ -7,11 +7,13 @@ When someone opens or pushes to a merge request (or pull request) in a repositor
 1. GitLab sends a merge request webhook, or GitHub a `pull_request` webhook, to pergent.sh.
 2. pergent.sh starts a Kubernetes Job. The Job checks out the change, runs `pergent agent` over it and posts the result back.
 3. pergent.sh posts one comment on the merge request, updated in place on every push, and sets a status named `pergent`: a commit status on GitLab, a Check Run on GitHub.
-4. If the review found no blocking issue, actually reviewed something and skipped no changed file except under the rules that leave it reviewed (outside a skill's scope, excluded by a skill, no content changes), a separate approver approves it: a second GitLab user on GitLab, a second GitHub App (or a bot user) on GitHub. A draft is reviewed the same way but is approved only once it is marked ready.
+4. If the review found no blocking issue (one that people dismissed doesn't count), actually reviewed something and skipped no changed file except under the rules that leave it reviewed (outside a skill's scope, excluded by a skill, no content changes), a separate approver approves it: a second GitLab user on GitLab, a second GitHub App (or a bot user) on GitHub. A draft is reviewed the same way but is approved only once it is marked ready.
+
+People can also act on a review where they already are, in a comment on the merge request (`@<bot> review`, `@<bot> review failed`, `@<bot> dismiss <id> <reason>`) or with the buttons on the dashboard's review page: run the review again, run only the skills that failed, and set aside a finding that isn't a real problem. See [Commands](#commands).
 
 Everything that can comment, set statuses or approve stays inside pergent.sh. A Job only ever holds a read-only clone token, the LLM key and a one-time token to hand in its result.
 
-This release covers GitLab (gitlab.com or any self-managed instance) and GitHub.com; see [GitHub](#github) for the GitHub setup. An optional web [dashboard](#dashboard) shows every review, lets admins manage teams, switch repositories on and change their settings, and lets the operator add GitLab and GitHub instances, their secrets and the LLM without editing the config file. An instance added in the dashboard never blocks startup: when pergent.sh can't reach it, it starts anyway and the dashboard shows what to fix. There are no merge request commands; see [Limits](#limits).
+This release covers GitLab (gitlab.com or any self-managed instance) and GitHub.com; see [GitHub](#github) for the GitHub setup. An optional web [dashboard](#dashboard) shows every review, lets admins manage teams, switch repositories on and change their settings, and lets the operator add GitLab and GitHub instances, their secrets and the LLM without editing the config file. An instance added in the dashboard never blocks startup: when pergent.sh can't reach it, it starts anyway and the dashboard shows what to fix. Comment [commands](#commands) and the dashboard's buttons re-run a review or dismiss a finding; they never change settings, answer questions or run code (see [Limits](#limits)).
 
 In this README a "merge request" is also a GitHub pull request, and the "review bot" and "approve bot" are the GitHub review App and approver, unless a section says otherwise.
 
@@ -21,7 +23,7 @@ In this README a "merge request" is also a GitHub pull request, and the "review 
 - PostgreSQL 13 or newer, reachable from the pergent.sh pod. pergent.sh creates and migrates its own tables at startup.
 - Nodes that can pull `ghcr.io/gopaytech/pergent.sh` (the service) and `ghcr.io/gopaytech/pergent` (the Jobs).
 - On each GitLab instance you use, two users:
-  - A **review bot** with the **Maintainer** role on every reviewed project, and an access token with the `api` scope. It creates the project webhook and the read-only deploy token, posts the comment and sets the commit status.
+  - A **review bot** with the **Maintainer** role on every reviewed project, and an access token with the `api` scope. It creates the project webhook and the read-only deploy token, posts the comment and sets the commit status, and, for [commands](#commands), reacts to and answers comments and looks up the role of whoever wrote one.
   - An **approve bot** that is an eligible approver of every reviewed project, with an access token with the `api` scope. It must be a different user from the review bot: pergent.sh doesn't start when both tokens belong to the same user. It only approves, and removes its approval when the merge request gets a new commit or a new target branch. If the project requires specific approvers or forbids approval by certain users, make sure this bot qualifies.
 
     > **Warning:** if a project needs only one approval and the approve bot is an eligible approver, the bot's approval alone unlocks the merge: a merge request can then be merged on a model's review without any human approving it. Give every reviewed project an approval rule that requires a human approval (for example, one approval from a group the approve bot is not in), so the bot's approval is never enough on its own.
@@ -113,7 +115,7 @@ The chart is in `charts/pergent-sh`. Postgres is not part of it. Every value is 
 
 5. Set up in the browser. With `dashboard.url` set and no instance in the config, pergent.sh starts and waits for one. Take the generated admin password from the log ([First sign-in](#first-sign-in)), sign in as `admin` and change it, then add a GitLab or GitHub instance under **Integrations** ([Instances and secrets in the dashboard](#instances-and-secrets-in-the-dashboard)), set the LLM under **Settings**, and switch repositories on. People who sign in with GitLab or GitHub wait until an admin puts them on a [team](#teams). To set the first password from a Secret instead of the log, see [First sign-in](#first-sign-in).
 
-On startup pergent.sh creates the merge request webhook and a read-only deploy token on every GitLab project that is switched on. You do not create either by hand. On GitHub there is nothing per repository to create: the review App's webhook covers every repository it is installed on.
+On startup pergent.sh creates the project webhook and a read-only deploy token on every GitLab project that is switched on. You do not create either by hand. The webhook sends merge request events and note (comment) events; the note events are what [commands](#commands) are read from. A hook created by an earlier version is updated to send them too, at the next reconcile (startup, then every hour). On GitHub there is nothing per repository to create: the review App's webhook covers every repository it is installed on, provided the App subscribes to the events listed under [Create the review App](#1-create-the-review-app).
 
 What the chart creates:
 
@@ -195,7 +197,7 @@ Approval rules and approval settings are GitLab Premium and Ultimate features. O
 
 pergent.sh reaches GitHub.com through two GitHub Apps that you create (pergent.sh is self-hosted, so there is no shared App):
 
-- the **review App** receives the `pull_request` webhook, reads the pull request and the repository, posts the comment, sets the `pergent` Check Run and mints each Job's clone token;
+- the **review App** receives the `pull_request` and `issue_comment` webhooks, reads the pull request and the repository, posts the comment, sets the `pergent` Check Run, reacts to and answers [command](#commands) comments, looks up a commenter's repository permission and mints each Job's clone token;
 - the **approve App** only approves, and dismisses its own approvals when they go stale.
 
 They are two Apps so that the identity that writes the review is never the one that approves it. Where GitHub doesn't count an App's approval, the approve App is replaced by a bot user; see [Approving as a bot user](#approving-as-a-bot-user).
@@ -209,12 +211,14 @@ In the organization's settings, **Developer settings → GitHub Apps → New Git
   - Pull requests: **Read-only**
   - Contents: **Read-only**
   - Checks: **Read and write**
-  - Issues: **Read and write** (pull request comments are issue comments)
-  - Metadata: **Read-only** (always on)
-- **Subscribe to events:** **Pull request**.
+  - Issues: **Read and write** (pull request comments are issue comments; this also covers the 👀, 👍 and 👎 reactions on a command comment)
+  - Metadata: **Read-only** (always on; this also covers reading a commenter's repository permission)
+- **Subscribe to events:** **Pull request** and **Issue comment**. The Issue comment event delivers the comments that commands are read from.
 - **Where can this GitHub App be installed:** "Only on this account", or "Any account" to install it on several organizations.
 
 Create it, note its **App ID** and generate a **private key** (a `.pem` file).
+
+**An existing review App** needs one change to run commands: under **Permissions & events → Subscribe to events**, tick **Issue comment** and save. It asks for no new permission, as it already has the ones above. Without the event the App still reviews, but no command is ever received.
 
 ### 2. Create the approve App
 
@@ -426,8 +430,8 @@ Everything a platform account may see or do comes from the teams it is on, under
   | Role | Can |
   | --- | --- |
   | `viewer` | Read the covered repositories: reviews, runs, findings, files, logs and settings. |
-  | `maintainer` | Also change the settings of the covered repositories (approve clean reviews, review drafts, failure status, skills, Job timeout and memory), and reset them to the defaults. Not switch repositories on or off, and not change teams. |
-  | `admin` | Also switch repositories on and off (**Add repository**), change the defaults on **Settings**, manage **Users** and **Teams**, and read the **Audit log**. An admin team covers every repository switched on for the instance its members signed in with that they can see on their platform. |
+  | `maintainer` | Also change the settings of the covered repositories (approve clean reviews, review drafts, failure status, skills, Job timeout and memory; not the re-run caps), and reset them to the defaults (the caps stay as they are). Press the review page's buttons: re-run, dismiss and restore ([Commands](#commands)). Not switch repositories on or off, and not change teams. |
+  | `admin` | Also change the re-run caps of the covered repositories, switch repositories on and off (**Add repository**), change the defaults on **Settings** (the caps among them), manage **Users** and **Teams**, and read the **Audit log**. An admin team covers every repository switched on for the instance its members signed in with that they can see on their platform. |
 
   Only admins manage teams: creating them, their members, roles and repositories. Platform admins can add people to admin teams and remove them.
 - **Platform admins handle their own instance.** A platform admin lists and removes the accounts of the instance it signed in with, and adds and removes team members of that instance only. Members of other instances stay on a team as they are, are never named to it, and are counted as `+N members from other instances`; adding one is refused with 409 `you can only change members of your own instance` and removing one with 403 `you can only remove accounts of your own instance`. Password admins do all of it across instances.
@@ -448,16 +452,16 @@ Everything a platform account may see or do comes from the teams it is on, under
 **Everyone with a team** sees, for the repositories they can see:
 
 - **Overview:** the number of reviews, approvals, blocking reviews and failed reviews over the last 7, 30 or 90 days, the most recent reviews, and "Needs attention".
-- **Reviews:** filtered by repository, result and time. Each merge request has a page with every run (commit, what started it, result, duration) and, for a run, the status set on the platform, whether it was approved and why not, the pergent version, model, tokens, each skill's verdict, findings, checks, files (reviewed, skipped with the rule, not reviewed) and the log.
+- **Reviews:** filtered by repository, result and time. Each merge request has a page with every run (commit, what started it, result, duration) and, for a run, the status set on the platform, whether it was approved and why not, the pergent version, model, tokens, each skill's verdict, findings (with the ones people dismissed, who dismissed them and why), checks, files (reviewed, skipped with the rule, not reviewed) and the log. Maintainers and admins of the repository also get the buttons **Re-run review** and **Re-run failed only**, and **Dismiss** and **Restore** on findings ([Commands](#commands)).
 - **Repositories:** each with its last 7 days and health; its reviews, its setup checks and its skills and instructions. Skills & instructions shows what a review of the default branch would get, read with the review bot or App and kept for 5 minutes.
 - **Skills:** the skill library, read-only.
 
 **Admins** also get:
 
 - the on/off switch of each repository and **Add repository**, which lists the repositories that both the admin (GitLab: Reporter or above as a member, a shared group's member included; GitHub: read access) and the review bot (GitLab: Maintainer) or review App (GitHub: installed) can reach, at most 500, with a search. A password admin has no platform account, so it sees what the review bot or App can reach;
-- each repository's **Settings**: approve clean reviews, the failure status, review drafts, the library skills to run, and the Job's timeout (60 to 7200 seconds) and memory limit (from 256Mi, and not below `jobs.resources.requests.memory`, to 32Gi). Each shows "overridden here" or "default", and "Reset to defaults" clears every override;
+- each repository's **Settings**: approve clean reviews, the failure status, review drafts, the library skills to run, the Job's timeout (60 to 7200 seconds) and memory limit (from 256Mi, and not below `jobs.resources.requests.memory`, to 32Gi), and the re-run caps per merge request and per repository per day (1 to 1000; only an admin of the repository changes these two). Each shows "overridden here" or "default", and "Reset to defaults" clears every override (a maintainer's reset leaves the caps);
 - **Users**, **Teams** and the **Audit log**;
-- **Integrations** (their own instance: connection, approver, each repository's setup and whether the approver reaches it, an approve token about to expire), read-only for platform admins, and **Settings**: the defaults a repository switched on in the dashboard gets (approve clean reviews, review drafts, failure status, Job timeout and memory; the config's repositories keep the config's own), and the LLM, which only password admins change.
+- **Integrations** (their own instance: connection, approver, each repository's setup and whether the approver reaches it, an approve token about to expire), read-only for platform admins, and **Settings**: the defaults a repository switched on in the dashboard gets (approve clean reviews, review drafts, failure status, Job timeout and memory, and the re-run caps per merge request and per repository; the config's repositories keep the config's own), and the LLM, which only password admins change.
 
 Every write is checked on the server: it needs a session, the CSRF token, a role that allows it and a repository the user can see. A viewer calling the API directly gets 403 and nothing changes.
 
@@ -474,7 +478,7 @@ Password admins add GitLab and GitHub instances, with their secrets, under **Adm
 - **An instance that can't connect** (at startup, or right after it was saved) doesn't stop pergent.sh, so the dashboard where it is fixed stays up. pergent.sh logs the error, and an instance-wide "Needs attention" item (kind `instance_unreachable`) shows it to the operator and to that instance's admins; the item goes when the instance connects. Its webhooks are still accepted and the events queued, and reviews of its repositories wait queued (the log says `queued reviews wait: pergent.sh isn't connected to their instance; an operator fixes it on Admin → Integrations`) until it is saved again in **Integrations**. An instance in the config file that can't connect still stops startup.
 - **The config file wins.** Instances in the config are listed as "config" and are read-only (409 `this instance is managed by the config file; change it there`), and so are the secrets they name by environment variable. An instance in the dashboard whose name is also in the config stops startup, naming both. Repositories in the config name instances in the config only; repositories of an instance added in the dashboard are switched on in the dashboard.
 - **The LLM** (provider, model, base URL and API key) is set in the dashboard by password admins, unless the config has an `llm:` block, which wins and makes it read-only (409 `the LLM is set in the config file; change it there`). The key is needed only when none is stored. With no LLM set, reviews wait queued, and the log says `no LLM is set: an operator sets it on Admin → Settings`.
-- **Defaults.** The defaults on **Admin → Settings** (approve clean reviews, review drafts, failure status, Job timeout and Job memory) apply to repositories switched on in the dashboard only; repositories in the config keep the config's own. The Job image, concurrency, `max_running` and resources stay in the config and the chart.
+- **Defaults.** The defaults on **Admin → Settings** (approve clean reviews, review drafts, failure status, Job timeout, Job memory and the re-run caps, 10 per merge request and 50 per repository a day until set) apply to repositories switched on in the dashboard only; repositories in the config keep the config's own. The Job image, concurrency, `max_running` and resources stay in the config and the chart.
 - **`PERGENT_SH_SECRET_KEY`.** Secrets are stored encrypted with it. Changing it isn't supported and there is no rotation. A stored secret that can't be opened with the key shows as "not set" (startup logs which instance and fields, `secrets of an instance couldn't be opened with PERGENT_SH_SECRET_KEY; they count as not set`), and has to be entered again.
 
 ### Repositories in the config and in the dashboard
@@ -485,7 +489,7 @@ Password admins add GitLab and GitHub instances, with their secrets, under **Adm
 
 ### Audit log
 
-Admins read the audit log under **Admin → Audit log**: who did what and when, for every change made in the dashboard. Each entry names its actor as `alice (gitlab main)` (username, platform and instance), `root (password)` for a password admin or `cli` for a reset from the command line. It records sign-ins (GitLab, GitHub and password), failed password sign-ins and lockouts, password changes and resets, accounts, teams (the members added and removed by username, and the role before and after), instances and which of their fields changed, the LLM and the defaults (which fields), and repositories switched on and off with their settings changed or reset. It is kept for 90 days and never holds a secret value: an entry for a secret names the field, not its content. A platform admin doesn't see the entries about repositories it can't see, about other instances, or the password admins' own sign-ins and passwords.
+Admins read the audit log under **Admin → Audit log**: who did what and when, for every change made in the dashboard. Each entry names its actor as `alice (gitlab main)` (username, platform and instance), `root (password)` for a password admin or `cli` for a reset from the command line. It records sign-ins (GitLab, GitHub and password), failed password sign-ins and lockouts, password changes and resets, accounts, teams (the members added and removed by username, and the role before and after), instances and which of their fields changed, the LLM and the defaults (which fields), repositories switched on and off with their settings changed or reset, and the review actions: `review_rerun`, `review_rerun_failed`, `finding_dismissed` and `finding_restored`, from a comment or a button, each with the merge request, the head commit and, for a finding, its fingerprint and the reason given. It is kept for 90 days and never holds a secret value: an entry for a secret names the field, not its content. A platform admin doesn't see the entries about repositories it can't see, about other instances, or the password admins' own sign-ins and passwords.
 
 ### Logs and "Needs attention"
 
@@ -538,7 +542,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `repositories[].failure_status` | `failed` | Status used when a review could not be done: `failed` or `neutral`. GitLab has no neutral state, so `neutral` is set as `skipped`; a project can count skipped pipelines as successful through a GitLab setting. On GitHub it is the Check Run conclusion `failure` or `neutral`, and GitHub counts a `neutral` conclusion as passing for a required status check: with `neutral`, a failed review does not block the merge. `failed` is never counted as successful. Blocking findings are always `failed`. |
 | `repositories[].job_timeout` | `jobs.timeout` | The review time budget of this repository's Jobs, such as `20m`. Must be positive. |
 | `repositories[].job_memory` | `jobs.resources.limits.memory` | The memory limit of this repository's Jobs, such as `6Gi`. Only the memory limit changes; it must not be below `jobs.resources.requests.memory`. |
-| `repositories[].rerun_limit_per_mr` | 10 | How many times a merge request or pull request can be re-run (by comment or button) per UTC day, 1 to 1000. Pushes and opened requests always run. |
+| `repositories[].rerun_limit_per_mr` | 10 | How many times a merge request or pull request can be re-run by [comment or button](#commands) per UTC day, 1 to 1000. Pushes and opened requests always run and never count. |
 | `repositories[].rerun_limit_per_repo` | 50 | The same cap for the whole repository, 1 to 1000. |
 | `llm.provider` | required with an `llm:` block | opencode provider ID, such as `anthropic`. The whole `llm:` block is optional when `dashboard.url` is set (a password admin sets the LLM in the dashboard); a block that is present wins and makes the LLM read-only there, and any field set makes it present: it must then be complete (`provider`, `model` and the key variable). Without `dashboard.url` it is required. |
 | `llm.model` | required with an `llm:` block | Model name, such as `claude-sonnet-4`. |
@@ -559,13 +563,106 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 
 Repository skills and instructions are read from the target branch at the merge request's `diff_refs.start_sha` (on GitHub, the pull request's `base.sha`), not from the merge request's own branch, so a merge request cannot change the rules it is reviewed by. Together with the previous review they must fit in 900 KiB; the previous review is dropped first, and if the skills and instructions alone are too large the run fails with a comment and no Job starts.
 
+## Commands
+
+A comment on a merge request (or pull request) can ask the review bot to run the review again or to set a finding aside, and the dashboard's review page has the same actions as buttons. That is all they do: no command changes a setting, answers a question or fixes code.
+
+| Command | What it does |
+| --- | --- |
+| `@<bot> review` | Runs the whole review again on the change's current head and target branch, as a push would. |
+| `@<bot> review failed` | Runs again only the skills that failed, and keeps the other skills' results. |
+| `@<bot> dismiss <id> <reason>` | Sets a finding aside as not a real problem. `<id>` is the code in backticks after the finding's title in the review comment. |
+| `@<bot> help` | Replies with the list of commands. |
+
+`<bot>` is what people type after `@` to address the review bot: its username on GitLab, the review App's slug on GitHub (`@pergent-review review` for an App called that). A comment that doesn't mention it is ignored, so people can write "review" in ordinary conversation. Restoring a dismissed finding has no command: it is a button on the dashboard.
+
+### Writing a command
+
+- The mention starts its line (up to 3 spaces of indentation; capitals don't matter) and the command follows it: `@pergent-review review`. A colon or comma after the mention is fine. A line that holds only the mention is passed over; the command is read from the next line that starts with the mention.
+- Text that isn't the author's own is never read: lines in a fenced code block (` ``` ` or `~~~`), in an HTML comment, indented by 4 spaces or a tab, or quoted (starting with `>`). A mention inside a sentence is no command.
+- Only the first command of a comment runs.
+- `review`, `review failed` and `help` must be the whole rest of the line (a closing `.` or `!` is fine). `dismiss` takes a finding ID of 6 to 12 hexadecimal digits, then the reason on the same line. Anything else after the mention, such as `review please` or `dismiss` with a malformed ID, is answered like `help`.
+- A reason is required to dismiss a blocking finding and optional for a suggestion. From a comment, a reason is cut to 500 characters.
+- Only a newly created comment on a merge request counts. Edits, deletions, GitLab comments on a line or in a thread, and system notes never run a command.
+- A comment never runs a command when it was written by the review bot or the approve bot, by any account whose name ends in `[bot]`, or through a GitHub App, or when it contains pergent's hidden marker (`<!-- pergent`), which every review comment carries. So neither pergent.sh's comment nor a model's text quoted in a finding can run a command.
+
+### Who may do what
+
+The role is read from the platform when the command is processed, for a comment, and from the repository role on the dashboard ([Teams](#teams)), for a button.
+
+| Action | In a comment | Button |
+| --- | --- | --- |
+| Re-run (`review`, `review failed`) | GitLab Developer or above; GitHub `write`, `maintain` or `admin` | Maintainer or admin of the repository |
+| Dismiss a suggestion | The same as re-run | The same as re-run |
+| Dismiss a blocking finding | GitLab Maintainer or above; GitHub `maintain` or `admin`; **never the change's author** | Maintainer or admin of the repository; never the change's author. A password admin has no platform identity and may |
+| Restore | No command | The same as re-run, the change's author included, since restoring only makes the review stricter |
+
+- GitLab: the commenter's membership of the project, inherited from its groups, read by the review bot (`GET /projects/:id/members/all/:user_id`). Only an active, unexpired membership counts: a blocked or deactivated user, one awaiting approval, or one whose membership has expired has no role.
+- GitHub: the commenter's repository permission, read by the review App (`GET /repos/{owner}/{repo}/collaborators/{username}/permission`). `write` is enough to re-run; `maintain` and `admin` can also dismiss blocking findings; `read` and `triage` can do neither. A custom role counts by its permissions.
+- The author is the one the platform reports for the change, compared by user ID, never by username. When either ID is unknown the commenter is taken for the author, so the dismissal is refused.
+- The pergent.sh team roles apply to buttons only; a comment is judged by the platform alone.
+
+### Re-running a review
+
+- `review` queues a run for the change's head and target branch as the platform reports them now (the same rules as a push; the newer run replaces the one that was published). `review failed` also queues one but reviews only the skills that failed: a skill whose verdict is `failed`, or that is clean yet left files unreviewed, after dismissals. It keeps the other skills' results and publishes one merged review. With nothing failed it replies `nothing failed` and does nothing.
+- `review failed` re-runs the whole review, and replies `the whole review failed, so all of it is re-run`, when there is no result per skill to build on: the earlier review was an error result, there is none for the current head and target branch, or it can't be read. It also reviews everything when the Job finds the earlier review can't be kept: it is of other commits, or the library or repository skills changed since. A re-run that could not be merged with the earlier results shows a note in the comment and is **never approved**.
+- A head that is already queued, running or waiting to be published is not queued twice: the command still gets 👍. A re-run of a draft is refused when the repository doesn't review drafts, and a closed or merged change is ignored.
+- The new review is decided like any other (see [How approval works](#how-approval-works)). If it isn't approved, the bot's approval of that head is withdrawn.
+- While a re-run of a commit is queued or running that commit has no decided review, so dismiss and restore have nothing to act on until it is published.
+
+### Dismissing a finding
+
+- A dismissal belongs to one merge request. It is stored by the finding's **fingerprint**, so it survives pushes and line moves: when a later review reports the same finding, it stays dismissed.
+- It covers the severity it was made at, and below. A dismissed blocking finding stays dismissed if it comes back as a suggestion; a dismissed suggestion that comes back as blocking shows again, and needs a dismissal by someone allowed to dismiss blocking findings. Dismissing a suggestion a second time as blocking raises it.
+- `dismiss` and **Dismiss** start no run. pergent.sh decides the latest review again and publishes it: the comment is written again with a collapsed **Dismissed** section (each finding's title and ID, who dismissed it and the reason; the heading reads `No blocking issues (N dismissed)` when only dismissed findings were blocking), the status is set again, and a review whose blocking findings are all dismissed is approved under the usual rules (approval on, not a draft, nothing failed). The dismissals are applied to the newest review of the change only; one whose head has moved on applies to the next review.
+- **Restore** (a button on a dismissed finding) removes the dismissal and decides the review again. If that makes it not approved, the bot's approval is withdrawn; the withdrawal is retried until it succeeds, and for a merged change the record is just dropped.
+- A blocking dismissal of a merged or closed change is refused by the button (`this change is merged`, `this change is closed`). A comment on a change that isn't open gets 👎 and no reply, whatever the command.
+- A dismissal that already exists at the same or a higher severity is left as it is: the reply is `finding <id> is already dismissed`.
+- Dismissals are deleted when the repository is switched off ([Switching a repository off](#switching-a-repository-off)).
+
+### Reactions and replies
+
+The bot reacts to the comment so everybody sees what became of it (GitLab award emoji `eyes`, `thumbsup`, `thumbsdown`; GitHub reactions `eyes`, `+1`, `-1`):
+
+- 👀 when the command is picked up;
+- 👍 when it is done, or there was nothing to do;
+- 👎 when it is refused, and one short reply says why.
+
+A reply never says more than the commenter could see on the platform, and never repeats what they wrote except a finding ID reduced to hexadecimal digits. A reaction that can't be made never stops the command. A command that meets a platform or database error is tried again up to 3 times (after 15, 30 and 60 seconds), then given up on with 👎 and no reply.
+
+| Case | Reaction | Reply |
+| --- | --- | --- |
+| Done | 👍 | none |
+| `help`, or a command the bot doesn't know | 👍 | ``Commands: `@<bot> review` · `@<bot> review failed` · `@<bot> dismiss <id> <reason>` `` |
+| `review failed` with no failed skill | 👍 | `nothing failed` |
+| `review failed` without a result per skill | 👍 | `the whole review failed, so all of it is re-run` |
+| `dismiss` of a dismissed finding | 👍 | `finding <id> is already dismissed` |
+| No permission (also a blocking dismissal without Maintainer) | 👎 | `you don't have permission to do that here` |
+| The change's author dismisses a blocking finding | 👎 | `the author of a change can't dismiss its blocking findings` |
+| Blocking dismissal without a reason | 👎 | ``dismissing a blocking finding needs a reason: `@<bot> dismiss <id> <reason>` `` |
+| The ID isn't in the latest review | 👎 | `no finding <id> in the latest review` |
+| A draft, in a repository that doesn't review drafts | 👎 | `drafts aren't reviewed in this repository` |
+| A re-run cap is reached | 👎 | `re-run limit reached for this MR; it resets at 00:00 UTC` (`PR` on GitHub) |
+| The same command again within 30 seconds, the repository switched off, or the change closed, merged or gone | 👎 | none |
+
+### Limits on commands
+
+- **Once per head.** A re-run of a commit already queued, running or waiting to be published isn't queued twice.
+- **30 seconds.** A command that was carried out is not accepted again for the same merge request, command and finding ID within 30 seconds (a refused one doesn't start the window).
+- **Re-run caps.** Re-runs started by a comment or a button count; pushes and newly opened merge requests always run and never count. The defaults are 10 per merge request and 50 per repository, per UTC day, and the reply names the reset time (00:00 UTC). A re-run that was superseded still counts. The caps are set by admins only: in the dashboard under **Admin → Settings** (for repositories switched on in the dashboard), per repository in its **Settings**, and in the config as `repositories[].rerun_limit_per_mr` and `repositories[].rerun_limit_per_repo` (1 to 1000). Buttons are held to the caps too (HTTP 429 with the same text). Two buttons pressed at the same moment can overshoot a cap by a few.
+- **Never blocking reviews.** The engine answers at most 10 commands per pass and for at most 30 seconds, so commands can't hold up reviews.
+
+### Setup
+
+Commands need the platform to send comment events: GitLab note events (pergent.sh adds them to the hook it manages, see [Install with Helm](#install-with-helm)), and for GitHub the **Issue comment** event on the review App ([Create the review App](#1-create-the-review-app)). Without them no command is received. Repositories that aren't switched on ignore commands, as they ignore pushes. Each command and button is recorded in the [audit log](#audit-log) as `review_rerun`, `review_rerun_failed`, `finding_dismissed` or `finding_restored`; the actor of a comment is `username (platform instance)`.
+
 ## How approval works
 
 pergent.sh decides from what `pergent agent` reports. The result is checked again before anything is published: it must parse and be for the same base and head commits as the run, or it is posted as a failure.
 
 | What happened | Comment | Commit status | Approved |
 | --- | --- | --- | --- |
-| Any skill has blocking issues | The review | `failed` ("Blocking issues found") | No |
+| Any skill has blocking issues that nobody dismissed (see [Commands](#commands)) | The review | `failed` ("Blocking issues found") | No |
 | Any skill failed, has an unknown verdict, or is "clean" yet lists files it did not review | The review | `failure_status` ("Review failed for N of M skills") | No |
 | The Job died or sent nothing usable, the result is an error, has no skills, or has an unknown status | An error comment with the reason | `failure_status` | No |
 | Every skill is clean, but no file was reviewed because every changed file was skipped | The review plus a note listing the skipped files and the rules that skipped them | `success` ("Nothing to review: every changed file is skipped") | **No**, a human needs to look |
@@ -591,7 +688,9 @@ Before approving, pergent.sh asks GitLab (or GitHub) for the merge request. It a
 
 When a merge request gets a new head or a new target branch after the approve bot approved it, the approve bot removes its approval (on GitHub it dismisses its approving reviews), whether or not the platform resets approvals itself. This happens as soon as the webhook arrives. A webhook can be lost (GitLab doesn't resend a failed delivery; pergent.sh was restarting, the hook was disabled), so pergent.sh also checks every approval it holds against the platform at startup and every 5 minutes: an approval of a commit that is no longer the head, or of a merge request that was retargeted or closed, is removed then; the approval of a merged one is forgotten without writing anything. An approval can therefore outlive a missed webhook by up to 5 minutes. For an open merge request, the current head also gets a review if the repository is still configured.
 
-A failed, partial or missing review is never `success` and is never approved.
+A skill whose blocking findings are all dismissed counts as clean, and the comment is written again with its **Dismissed** section; a review whose other conditions hold is then approved like a clean one. A failed, partial or missing review is never `success` and is never approved, and neither is a re-run of some skills that could not be merged with the earlier results of the others.
+
+Deciding a review again on the same head (a restored finding, a re-run, a draft that turns up) as not approved takes the approve bot's approval of that head off, as a new head does. The withdrawal is recorded first and tried again until it works.
 
 ### Turning approval off
 
@@ -601,7 +700,7 @@ Turning it off also withdraws every approval the approve bot already holds in th
 
 ### Pushes, edits and failures
 
-- Only pushes, opening or reopening, and changing the target branch start a run. Editing the title, labels, description or assignees does not. Closing or merging supersedes the MR's runs. On GitHub these are the `pull_request` actions `opened`, `reopened`, `synchronize`, `edited` (only when `changes.base` is present: a retarget) and `closed`; every other action and event (including `ping`) is answered 200 and ignored.
+- Only pushes, opening or reopening, changing the target branch, and a re-run asked for by a [comment or button](#commands) start a run. Editing the title, labels, description or assignees does not. Closing or merging supersedes the MR's runs. On GitHub these are the `pull_request` actions `opened`, `reopened`, `synchronize`, `edited` (only when `changes.base` is present: a retarget) and `closed`; every other action and event (including `ping`) is answered 200 and ignored; the `issue_comment` event is read for [commands](#commands) alone.
 - A repository with `review_drafts: false` doesn't review drafts. The webhook of a draft that would start a run (an open, reopen, push or retarget; GitLab `draft` or `work_in_progress`, GitHub `pull_request.draft`) is answered 200 and logged as `draft_skipped`, and nothing is queued; the merge request's runs still queued, running or not yet posted (of an older head or target) are superseded, and the dashboard shows them as "Not reviewed: the change is a draft and drafts are not reviewed here." If a run was queued before the merge request became a draft, or the setting changed, the dispatcher finds the draft and supersedes the run, with the same note in the dashboard, without starting a Job or posting a status or comment; a newer head of such a draft isn't queued either. Closing or merging still supersedes the runs, and an approval or review already made stays. Marking the draft ready starts its review: the head's review is decided again if there is one to decide (see the next item), otherwise the head is queued like a push.
 - With `review_drafts` on (the default), marking a draft ready starts no run when the head already has a review (GitLab: an `update` whose `changes.draft` goes to false; GitHub: `ready_for_review`). When the head's review is already posted, or is being posted, pergent.sh decides it again: the comment loses its draft note, and a clean review is approved. When the review is still running, it is published as for any other merge request that isn't a draft. When the head has no review at all, it is queued like a push. GitLab versions that report `work_in_progress` instead of `draft` are handled the same way. Marking a merge request as a draft again doesn't withdraw an approval it already has.
 - A run is one head reviewed against one target branch. Changing the target branch reviews the same head again against the new branch, supersedes the review against the old one and withdraws the bot's approval.
@@ -640,7 +739,7 @@ The checkout first tries to fetch the base and head commits by SHA. When the ser
 
 ## Switching a repository off
 
-A repository is on when it is listed in the config or switched on in the [dashboard](#dashboard). To switch a config repository off, remove it from `repositories` and redeploy; a dashboard repository is switched off with its switch. On the next reconcile (at startup and then every hour) pergent.sh deletes its webhook and revokes its deploy token. Runs still queued for it are dropped when they come up for dispatch; a review that was already running is still posted, but never approved, as with approval turned off.
+A repository is on when it is listed in the config or switched on in the [dashboard](#dashboard). To switch a config repository off, remove it from `repositories` and redeploy; a dashboard repository is switched off with its switch. On the next reconcile (at startup and then every hour) pergent.sh deletes its webhook and revokes its deploy token. Runs still queued for it are dropped when they come up for dispatch; a review that was already running is still posted, but never approved, as with approval turned off. Its dismissals and the comment commands waiting for it are deleted with its record, and commands written there afterwards are ignored.
 
 A GitHub repository has nothing to delete: removing it from the config deletes only pergent.sh's own record of it. Installing an App on a repository never switches it on; only the config list or the dashboard does.
 
@@ -652,13 +751,13 @@ Deploy tokens are created per project with the name `pergent-sh`, valid for 30 d
 
 | Route | Used by |
 | --- | --- |
-| `POST /webhooks/gitlab/{instance}` | GitLab merge request webhooks. The `X-Gitlab-Token` header is compared in constant time with the instance's secret; a mismatch gets 401 and is otherwise ignored. An authenticated webhook whose payload can't be used (not JSON, no project id or merge request iid, a malformed head SHA) gets 200 and a warning in the log, because GitLab counts failed deliveries toward disabling the hook. |
-| `POST /webhooks/github/{instance}` | The GitHub review App's `pull_request` webhook. `X-Hub-Signature-256` (HMAC-SHA256 of the body with the instance's webhook secret) is compared in constant time; a missing or wrong signature gets 401 and is otherwise ignored. A repository that isn't in the config gets 200 and is ignored. |
+| `POST /webhooks/gitlab/{instance}` | GitLab merge request (`Merge Request Hook`) and note (`Note Hook`) webhooks; any other event is answered 200 and ignored. The `X-Gitlab-Token` header is compared in constant time with the instance's secret; a mismatch gets 401 and is otherwise ignored. An authenticated webhook whose payload can't be used (not JSON, no project id or merge request iid, a malformed head SHA) gets 200 and a warning in the log, because GitLab counts failed deliveries toward disabling the hook. |
+| `POST /webhooks/github/{instance}` | The GitHub review App's `pull_request` and `issue_comment` webhooks (the second carries [commands](#commands)); any other event is answered 200 and ignored. `X-Hub-Signature-256` (HMAC-SHA256 of the body with the instance's webhook secret) is compared in constant time; a missing or wrong signature gets 401 and is otherwise ignored. A repository that isn't in the config gets 200 and is ignored. |
 | `POST /runs/{id}/result` | A review Job delivering its result, with its one-time bearer token. |
 | `GET /healthz` | Health check. It answers as soon as the server starts: pergent.sh serves right away and runs the startup reconcile in the background. |
 | `GET /auth/{gitlab or github}/{instance}/login`, `GET .../callback`, `POST /auth/logout` | [Dashboard](#dashboard) sign-in with GitLab or GitHub, and sign-out. Only with `dashboard.url` set. |
 | `GET /auth/csrf`, `POST /auth/password`, `POST /auth/password/change` | Password sign-in. `GET /auth/csrf` hands out the sign-in form's CSRF token (a cookie and `{"csrfToken": ...}`); `POST /auth/password` takes `{"username", "password"}` with that token in `X-CSRF-Token` and answers 204 and the session cookie; `POST /auth/password/change` takes `{"current", "new"}` for a signed-in password account. See [Password sign-in limits](#password-sign-in-limits). Only with `dashboard.url` set. |
-| `/api/...` | The dashboard's JSON API. Every route but `GET /api/instances` needs a session; writes need the `X-CSRF-Token` header. Only with `dashboard.url` set. |
+| `/api/...` | The dashboard's JSON API. Every route but `GET /api/instances` needs a session; writes need the `X-CSRF-Token` header. Only with `dashboard.url` set. The review page's buttons use `POST /api/reviews/{instance}/{project}/{number}/rerun` (`{"failed": true or false}`; 202 with `queued`, `already queued`, `nothing failed` or `whole review`; 429 at a re-run cap), `.../dismiss` (`{"fingerprint", "reason"}`; 200 with `dismissed` or `already dismissed`; a reason of up to 1000 characters) and `.../restore` (`{"fingerprint"}`; 200 with `restored` or `not dismissed`), for maintainers and admins of the repository, config repositories included. |
 | `GET /` and every other path | The dashboard's pages. Only with `dashboard.url` set; without it they are 404. |
 
 Logs are JSON on stdout. Secrets are never logged.
@@ -667,7 +766,7 @@ Logs are JSON on stdout. Secrets are never logged.
 
 This release is deliberately small:
 
-- No merge request commands (such as asking for a re-review in a comment), and no re-run or dismiss buttons in the dashboard.
+- Commands are `review`, `review failed`, `dismiss` and `help`, and the dashboard has the matching buttons plus Restore. No chat, no questions, no asking the bot to explain or fix code, no commands that change settings, no replies on a single finding's line comment, and no dismissing a finding for every merge request of a repository: a dismissal belongs to one merge request. Restoring is a button only.
 - Dashboard sign-in is a password (operators) or GitLab or GitHub. No OIDC, SAML or LDAP, no two-factor authentication, and no API tokens for scripts.
 - Teams are kept in pergent.sh: they are not synced from GitLab groups or GitHub teams.
 - A GitLab and a GitHub account of one person are two accounts, with no linking.
