@@ -171,7 +171,7 @@ func TestGetChange(t *testing.T) {
 	}
 }
 
-// The title, web address, source branch and author are what the
+// The title, web address, source branch and author (name and ID) are what the
 // dashboard shows of a merge request.
 func TestGetChangeDetails(t *testing.T) {
 	f := newFake(t)
@@ -184,7 +184,7 @@ func TestGetChangeDetails(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := forge.Change{Number: 3, State: forge.StateOpen, HeadSHA: "h", TargetBranch: "main",
-		SourceBranch: "feature/login", Title: "Add login", Author: "alice",
+		SourceBranch: "feature/login", Title: "Add login", Author: "alice", AuthorID: 5,
 		WebURL: "https://gitlab.example.com/acme/widgets/-/merge_requests/3"}
 	if got != want {
 		t.Errorf("GetChange = %+v\nwant %+v", got, want)

@@ -25,9 +25,12 @@ const (
 // read. An empty BaseSHA or StartSHA means the platform hasn't computed the
 // change's diff for HeadSHA yet.
 //
-// Title, WebURL (its page on the platform), SourceBranch and Author (the
-// username of whoever opened it) are only shown in the dashboard; the
-// engine decides nothing on them.
+// Author (the username of whoever opened it) and AuthorID (their numeric
+// user ID, 0 when the platform didn't say) tell who the change's author is:
+// the engine compares AuthorID with a commenter's, never usernames, to keep
+// the author from dismissing blocking findings of their own change. Title,
+// WebURL (its page on the platform) and SourceBranch are only shown in the
+// dashboard; the engine decides nothing on them.
 type Change struct {
 	Number       int64
 	State        ChangeState
@@ -40,6 +43,7 @@ type Change struct {
 	WebURL       string
 	SourceBranch string
 	Author       string
+	AuthorID     int64
 }
 
 // StatusState is the state of pergent's status on a commit.

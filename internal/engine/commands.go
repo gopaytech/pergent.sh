@@ -34,12 +34,23 @@ const (
 
 // Bounds of the command step. They are variables so tests can shorten them.
 var (
-	// commandsBudget is the longest one pass spends on commands, so a slow
-	// platform delays the next pass of reviews by this much at most.
+	// commandsBudget bounds the platform calls of one pass (the claims,
+	// reads, reactions and replies of all its commands). The pass can run
+	// over it by the store writes of the command in hand, each at most
+	// commandSettleTimeout, so a slow platform delays the next pass of
+	// reviews by about this much.
 	commandsBudget = 30 * time.Second
-	// commandTimeout is the longest one command's platform calls take; a
-	// command is far inside the store's 5-minute claim.
+	// commandTimeout is the longest one command's work (its reads and
+	// writes on the platform and in the store) takes; a command is far
+	// inside the store's 5-minute claim.
 	commandTimeout = 20 * time.Second
+	// reactTimeout is the longest one reaction or reply takes. They have
+	// their own time, so a hung one neither uses up the command's work
+	// time nor keeps it from being finished.
+	reactTimeout = 5 * time.Second
+	// commandSettleTimeout bounds each store write that records what a
+	// command did; every one gets a fresh context of this length.
+	commandSettleTimeout = settleTimeout
 )
 
 // What the bot replies when it refuses a command or has nothing to do. The
@@ -54,11 +65,11 @@ const (
 )
 
 func replyHelp(mention string) string {
-	return fmt.Sprintf("Commands: @%[1]s review · @%[1]s review failed · @%[1]s dismiss <id> <reason>", mention)
+	return fmt.Sprintf("Commands: `@%[1]s review` · `@%[1]s review failed` · `@%[1]s dismiss <id> <reason>`", mention)
 }
 
 func replyNeedsReason(mention string) string {
-	return fmt.Sprintf("dismissing a blocking finding needs a reason: @%s dismiss <id> <reason>", mention)
+	return fmt.Sprintf("dismissing a blocking finding needs a reason: `@%s dismiss <id> <reason>`", mention)
 }
 
 func replyUnknownID(id string) string {
@@ -154,36 +165,39 @@ func (e *Engine) CommandsOnce(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// settle is a fresh context for one store write that records what a command
+// did. It outlives a cancelled or expired context, so the outcome of a
+// claimed command is recorded during shutdown and after a slow platform call.
+func settle(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), commandSettleTimeout)
+}
+
 // answerCommand handles one claimed command and records the outcome. parent
 // is the engine's context (cancelled on shutdown), bctx the pass's budget.
+// The command's work, each reaction and reply, and each store write have
+// contexts of their own, so none can starve the others.
 func (e *Engine) answerCommand(parent, bctx context.Context, cmd store.Command) {
 	log := e.log().With("command", cmd.ID, "kind", cmd.Kind, "instance", cmd.MR.Instance,
 		"project", cmd.ProjectPath, "mr", cmd.MR.IID, "comment", cmd.CommentID, "attempt", cmd.Attempts+1)
 	cctx, cancel := context.WithTimeout(bctx, commandTimeout)
-	defer cancel()
-
-	v, err := e.handleCommand(cctx, cmd, log)
-	if err != nil && parent.Err() != nil {
-		// Shutting down: the error is ours. The claim lapses and the
-		// command is offered again.
-		return
-	}
-	sctx, scancel := settleCtx(parent)
-	defer scancel()
+	v, err := e.handleCommand(cctx, bctx, cmd, log)
+	cancel()
 	if err != nil {
-		e.retryCommand(sctx, cmd, err, log)
+		e.retryCommand(parent, bctx, cmd, err, log)
 		return
 	}
 	if v.reply != "" {
-		if err := e.reply(cctx, cmd, v.reply); err != nil {
+		if err := e.reply(bctx, cmd, v.reply); err != nil {
 			if v.replyRequired {
-				e.retryCommand(sctx, cmd, fmt.Errorf("reply: %w", err), log)
+				e.retryCommand(parent, bctx, cmd, fmt.Errorf("reply: %w", err), log)
 				return
 			}
 			log.Warn("couldn't post the reply to a command", "error", e.redact(err.Error()))
 		}
 	}
-	e.react(cctx, cmd, v.react, log)
+	e.react(bctx, cmd, v.react, log)
+	sctx, scancel := settle(parent)
+	defer scancel()
 	if err := e.Store.FinishCommand(sctx, cmd.ID, v.outcome, e.now()); err != nil {
 		log.Error("couldn't record that a command was answered", "error", e.redact(err.Error()))
 		return
@@ -192,30 +206,39 @@ func (e *Engine) answerCommand(parent, bctx context.Context, cmd store.Command) 
 }
 
 // retryCommand gives a command back to be tried again later, or, after
-// maxCommandRetries, finishes it with a 👎 and no reply.
-func (e *Engine) retryCommand(ctx context.Context, cmd store.Command, cause error, log *slog.Logger) {
+// maxCommandRetries, finishes it with a 👎 and no reply. While the engine
+// shuts down it does neither: the claim lapses and the command is offered
+// again.
+func (e *Engine) retryCommand(parent, bctx context.Context, cmd store.Command, cause error, log *slog.Logger) {
+	if parent.Err() != nil {
+		return
+	}
 	text := e.redact(cause.Error())
 	if cmd.Attempts >= maxCommandRetries {
 		log.Error("giving up on a command", "error", text)
-		e.react(ctx, cmd, forge.ReactRefused, log)
+		e.react(bctx, cmd, forge.ReactRefused, log)
 		why := text
 		if r := []rune(why); len(r) > maxGiveUpText {
 			why = string(r[:maxGiveUpText])
 		}
-		if err := e.Store.FinishCommand(ctx, cmd.ID, "gave up: "+why, e.now()); err != nil {
+		sctx, cancel := settle(parent)
+		defer cancel()
+		if err := e.Store.FinishCommand(sctx, cmd.ID, "gave up: "+why, e.now()); err != nil {
 			log.Error("couldn't record that a command was given up on", "error", e.redact(err.Error()))
 		}
 		return
 	}
 	delay := commandRetryBackoff << cmd.Attempts
 	log.Warn("a command will be tried again", "error", text, "in", delay)
-	if err := e.Store.ReleaseCommand(ctx, cmd.ID, e.now().Add(delay)); err != nil {
+	sctx, cancel := settle(parent)
+	defer cancel()
+	if err := e.Store.ReleaseCommand(sctx, cmd.ID, e.now().Add(delay)); err != nil {
 		log.Error("couldn't give a command back", "error", e.redact(err.Error()))
 	}
 }
 
-// react puts the reaction on the command's comment. A reaction that can't be
-// made never stops the command.
+// react puts the reaction on the command's comment, within reactTimeout (and
+// ctx). A reaction that can't be made never stops the command.
 func (e *Engine) react(ctx context.Context, cmd store.Command, r forge.Reaction, log *slog.Logger) {
 	if r == "" {
 		return
@@ -224,17 +247,22 @@ func (e *Engine) react(ctx context.Context, cmd store.Command, r forge.Reaction,
 	if !ok || plat.Forge == nil {
 		return
 	}
-	if err := plat.Forge.React(ctx, cmd.MR.ProjectID, cmd.MR.IID, cmd.CommentID, r); err != nil {
+	rctx, cancel := context.WithTimeout(ctx, reactTimeout)
+	defer cancel()
+	if err := plat.Forge.React(rctx, cmd.MR.ProjectID, cmd.MR.IID, cmd.CommentID, r); err != nil {
 		log.Debug("couldn't react to a command", "reaction", r, "error", e.redact(err.Error()))
 	}
 }
 
+// reply posts body on the command's change, within reactTimeout (and ctx).
 func (e *Engine) reply(ctx context.Context, cmd store.Command, body string) error {
 	plat, ok := e.Platforms.Get(cmd.MR.Instance)
 	if !ok || plat.Forge == nil {
 		return errors.New("not connected to the instance")
 	}
-	return plat.Forge.Reply(ctx, cmd.MR.ProjectID, cmd.MR.IID, body)
+	rctx, cancel := context.WithTimeout(ctx, reactTimeout)
+	defer cancel()
+	return plat.Forge.Reply(rctx, cmd.MR.ProjectID, cmd.MR.IID, body)
 }
 
 // commandRun is one command being handled, with what its steps need.
@@ -247,15 +275,16 @@ type commandRun struct {
 	log    *slog.Logger
 }
 
-// handleCommand carries out or refuses one command. An error is a platform or
-// store failure: the command is tried again.
-func (e *Engine) handleCommand(ctx context.Context, cmd store.Command, log *slog.Logger) (verdict, error) {
+// handleCommand carries out or refuses one command within ctx; the first
+// reaction is made within bctx, the pass's budget, so it takes none of ctx's.
+// An error is a platform or store failure: the command is tried again.
+func (e *Engine) handleCommand(ctx, bctx context.Context, cmd store.Command, log *slog.Logger) (verdict, error) {
 	plat, ok := e.Platforms.Get(cmd.MR.Instance)
 	if !ok || plat.Forge == nil {
 		return verdict{}, errors.New("not connected to the instance")
 	}
 	if cmd.Attempts == 0 {
-		e.react(ctx, cmd, forge.ReactSeen, log)
+		e.react(bctx, cmd, forge.ReactSeen, log)
 	}
 	repo, on, err := e.settings().Get(ctx, cmd.MR.Instance, cmd.ProjectPath)
 	if err != nil {
@@ -309,14 +338,14 @@ func (c *commandRun) actor() string {
 	return c.cmd.Author + " (" + c.cmd.Platform + " " + c.cmd.MR.Instance + ")"
 }
 
-// audit records what the command did. A failure is logged and never undoes
+// audit records what the command did to the change at head. A failure is logged and never undoes
 // the command.
-func (c *commandRun) audit(ctx context.Context, action, detail string) {
-	head := fmt.Sprintf("mr=%d head=%s", c.cmd.MR.IID, c.change.HeadSHA)
+func (c *commandRun) audit(ctx context.Context, action, head, detail string) {
+	head = fmt.Sprintf("mr=%d head=%s", c.cmd.MR.IID, head)
 	if detail != "" {
 		head += " " + detail
 	}
-	actx, cancel := settleCtx(ctx)
+	actx, cancel := settle(ctx)
 	defer cancel()
 	if err := c.e.Store.Audit(actx, store.AuditEntry{
 		At: c.e.now(), Actor: c.actor(), Action: action,
@@ -381,7 +410,7 @@ func (c *commandRun) rerun(ctx context.Context, failedOnly bool) (verdict, error
 		return done(""), nil
 	}
 	c.e.Wake()
-	c.audit(ctx, action, detail)
+	c.audit(ctx, action, c.change.HeadSHA, detail)
 	if whole {
 		return done(replyWholeFailed), nil
 	}
@@ -447,7 +476,7 @@ func (c *commandRun) dismiss(ctx context.Context) (verdict, error) {
 	if access < forge.AccessWrite {
 		return refused("no permission", replyNoPermission), nil
 	}
-	f, found, err := c.findFinding(ctx)
+	f, reviewed, found, err := c.findFinding(ctx)
 	if err != nil {
 		return verdict{}, err
 	}
@@ -461,24 +490,34 @@ func (c *commandRun) dismiss(ctx context.Context) (verdict, error) {
 		switch {
 		case access < forge.AccessMaintain:
 			return refused("no permission", replyNoPermission), nil
-		case strings.EqualFold(c.cmd.Author, c.change.Author):
+		case c.isAuthor():
 			return refused("author of the change", replyAuthor), nil
 		case reason == "":
 			return refused("reason needed", replyNeedsReason(c.plat.Forge.Mention())), nil
 		}
 	}
 
-	created, err := c.e.Store.Dismiss(ctx, store.Dismissal{
+	sctx, cancel := settle(ctx)
+	defer cancel()
+	created, err := c.e.Store.Dismiss(sctx, store.Dismissal{
 		MR: c.cmd.MR, Fingerprint: f.Fingerprint, Severity: f.Severity,
 		Reason: reason, Actor: c.actor(), CreatedAt: c.e.now(),
 	})
 	if err != nil {
 		return verdict{}, fmt.Errorf("store the dismissal: %w", err)
 	}
-	if !created {
+	if created {
+		// Audited as soon as it is stored: re-deciding the review below may
+		// fail and be retried, which then finds the dismissal made.
+		detail := "fingerprint=" + f.Fingerprint + " severity=" + f.Severity
+		if reason != "" {
+			detail += fmt.Sprintf(" reason=%q", c.e.redact(reason))
+		}
+		c.audit(ctx, "finding_dismissed", reviewed.HeadSHA, detail)
+	} else {
 		// Dismissed already, at this severity or a higher one: unless it is
 		// this very command's own, stored by an attempt that then failed to
-		// re-publish.
+		// re-decide the review.
 		mine, err := c.ownDismissal(ctx, f.Fingerprint, reason)
 		if err != nil {
 			return verdict{}, err
@@ -488,16 +527,27 @@ func (c *commandRun) dismiss(ctx context.Context) (verdict, error) {
 		}
 	}
 	// The review is decided again with the dismissal applied: no run starts.
-	if _, err := c.e.Store.Republish(ctx, c.cmd.MR, c.change.HeadSHA, c.change.TargetBranch); err != nil {
+	rctx, rcancel := settle(ctx)
+	defer rcancel()
+	redecided, err := c.e.Store.Republish(rctx, c.cmd.MR, c.change.HeadSHA, c.change.TargetBranch)
+	if err != nil {
 		return verdict{}, fmt.Errorf("re-decide the review: %w", err)
 	}
-	c.e.Wake()
-	detail := "fingerprint=" + f.Fingerprint + " severity=" + f.Severity
-	if reason != "" {
-		detail += fmt.Sprintf(" reason=%q", reason)
+	if !redecided {
+		// The change moved on, or its newest run isn't a published review
+		// of this head: the dismissal applies to the next review of the
+		// finding, and there is nothing to publish now.
+		c.log.Info("a dismissal has no review of the current head to re-decide", "reviewed_head", reviewed.HeadSHA, "head", c.change.HeadSHA)
 	}
-	c.audit(ctx, "finding_dismissed", detail)
+	c.e.Wake()
 	return done(""), nil
+}
+
+// isAuthor tells whether the commenter is the author of the change, by user
+// ID. When either ID is unknown they can't be told apart, and the commenter
+// is taken for the author.
+func (c *commandRun) isAuthor() bool {
+	return c.cmd.AuthorID == 0 || c.change.AuthorID == 0 || c.cmd.AuthorID == c.change.AuthorID
 }
 
 // ownDismissal tells whether the stored dismissal of fingerprint is the one
@@ -518,48 +568,61 @@ func (c *commandRun) ownDismissal(ctx context.Context, fingerprint, reason strin
 
 // findFinding resolves the command's finding ID against the newest review of
 // the change: its finding with that ID or, when none has it, the one finding
-// whose fingerprint starts with it.
-func (c *commandRun) findFinding(ctx context.Context) (result.Finding, bool, error) {
-	run, found, err := c.e.Store.LatestDecidedRun(ctx, c.cmd.MR)
+// whose fingerprint starts with it. The finding is as severe as the most
+// severe report of its fingerprint (two skills may report it differently).
+// reviewed is the run whose result it was found in.
+func (c *commandRun) findFinding(ctx context.Context) (f result.Finding, reviewed store.Run, found bool, err error) {
+	run, ok, err := c.e.Store.LatestDecidedRun(ctx, c.cmd.MR)
 	if err != nil {
-		return result.Finding{}, false, fmt.Errorf("load the latest review: %w", err)
+		return f, run, false, fmt.Errorf("load the latest review: %w", err)
 	}
-	if !found || run.Result == nil {
-		return result.Finding{}, false, nil
+	if !ok || run.Result == nil {
+		return f, run, false, nil
 	}
-	r, err := result.Parse(run.Result)
-	if err != nil {
-		return result.Finding{}, false, nil
+	r, perr := result.Parse(run.Result)
+	if perr != nil {
+		return f, run, false, nil
 	}
-	id := strings.ToLower(c.cmd.Arg)
-	var byPrefix []result.Finding
+	var all []result.Finding
 	for _, s := range r.Skills {
 		for _, raw := range s.Findings {
-			var f result.Finding
-			if json.Unmarshal(raw, &f) != nil || f.Fingerprint == "" {
+			var x result.Finding
+			if json.Unmarshal(raw, &x) == nil && x.Fingerprint != "" {
+				all = append(all, x)
+			}
+		}
+	}
+
+	id := strings.ToLower(c.cmd.Arg)
+	var fingerprint string
+	for _, x := range all {
+		if strings.EqualFold(x.ID, id) {
+			fingerprint = x.Fingerprint
+			break
+		}
+	}
+	if fingerprint == "" {
+		// By fingerprint prefix, when that names one finding.
+		for _, x := range all {
+			if !strings.HasPrefix(strings.ToLower(x.Fingerprint), id) {
 				continue
 			}
-			if strings.EqualFold(f.ID, id) {
-				return f, true, nil
+			if fingerprint != "" && x.Fingerprint != fingerprint {
+				return f, run, false, nil
 			}
-			if strings.HasPrefix(strings.ToLower(f.Fingerprint), id) {
-				byPrefix = append(byPrefix, f)
-			}
+			fingerprint = x.Fingerprint
 		}
 	}
-	// One fingerprint, however many skills report it, is one finding, as
-	// severe as its most severe report.
-	if len(byPrefix) == 0 {
-		return result.Finding{}, false, nil
+	if fingerprint == "" {
+		return f, run, false, nil
 	}
-	pick := byPrefix[0]
-	for _, f := range byPrefix {
-		if f.Fingerprint != pick.Fingerprint {
-			return result.Finding{}, false, nil
+	for _, x := range all {
+		if x.Fingerprint != fingerprint {
+			continue
 		}
-		if f.Severity != "suggestion" {
-			pick = f
+		if !found || (f.Severity == "suggestion" && x.Severity != "suggestion") {
+			f, found = x, true
 		}
 	}
-	return pick, true, nil
+	return f, run, found, nil
 }

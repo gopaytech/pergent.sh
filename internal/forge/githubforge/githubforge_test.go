@@ -179,7 +179,7 @@ func TestGetChangeOpen(t *testing.T) {
 	}
 	want := forge.Change{Number: 3, State: forge.StateOpen, Draft: true, HeadSHA: sha('a'),
 		TargetBranch: "main", BaseSHA: sha('b'), StartSHA: sha('5'),
-		SourceBranch: "feature", Title: "Add login", Author: "alice",
+		SourceBranch: "feature", Title: "Add login", Author: "alice", AuthorID: 5,
 		WebURL: "https://github.example.com/acme/widgets/pull/3"}
 	if got != want {
 		t.Fatalf("GetChange = %+v\nwant %+v", got, want)

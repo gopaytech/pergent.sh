@@ -135,6 +135,7 @@ func (f *Forge) GetChange(ctx context.Context, repoID, number int64) (forge.Chan
 		WebURL:       pr.HTMLURL,
 		SourceBranch: pr.Head.Ref,
 		Author:       pr.User.Login,
+		AuthorID:     pr.User.ID,
 	}
 	if ch.Number == 0 {
 		ch.Number = number

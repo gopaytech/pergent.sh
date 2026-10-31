@@ -223,9 +223,10 @@ var (
 )
 
 // Run runs the loops until ctx is done: dispatch, publish, cleanup and
-// comment commands every 2 s or on Wake, watch every 15 s, sweep the approvals every 5 minutes and
-// reconcile every hour (when it also prunes the review logs older than
-// 30 days), and reconcile the repositories ReconcileSoon names (at most
+// comment commands every 2 s or on Wake, watch every 15 s, sweep the
+// approvals every 5 minutes and reconcile every hour (when it also prunes
+// the review logs older than 30 days), and reconcile the repositories
+// ReconcileSoon names (at most
 // once every 10 s: requests within that gap of the last such reconcile make
 // one more when it ends, of all their repositories). They all run in
 // this one goroutine, one after another, so no two of them ever overlap (a

@@ -57,6 +57,7 @@ func (f *Forge) GetChange(ctx context.Context, projectID, iid int64) (forge.Chan
 		WebURL:       mr.WebURL,
 		SourceBranch: mr.SourceBranch,
 		Author:       mr.Author.Username,
+		AuthorID:     mr.Author.ID,
 	}
 	if mr.State == "opened" {
 		ch.State = forge.StateOpen
