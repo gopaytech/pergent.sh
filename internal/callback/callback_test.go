@@ -296,3 +296,54 @@ func TestMergeMarkersInDeliveredResultFailRun(t *testing.T) {
 		})
 	}
 }
+
+// completedJSON is a completed result of the named skills (a name may repeat).
+func completedJSON(names ...string) string {
+	var skills []string
+	for _, n := range names {
+		skills = append(skills, `{"name":"`+n+`","verdict":"no_blocking_issues","findings":[]}`)
+	}
+	return `{"schema_version":1,"status":"completed","base":"` + base + `","head":"` + head + `",` +
+		`"skills":[` + strings.Join(skills, ",") + `],"comment":{"markdown":"hi"}}`
+}
+
+// A completed result has to cover the skills the Job was started with, no
+// more, no fewer, each once: a repeated name can't stand in for a missing one.
+func TestResultOfOtherSkillsThanDispatchedFailsRun(t *testing.T) {
+	sources := map[string]string{"security": "library", "style": "repo"}
+	for name, tc := range map[string]struct {
+		run    store.Run
+		body   string
+		wantOK bool
+	}{
+		"all skills":         {store.Run{SkillSources: sources}, completedJSON("style", "security"), true},
+		"a skill missing":    {store.Run{SkillSources: sources}, completedJSON("security"), false},
+		"a duplicate":        {store.Run{SkillSources: sources}, completedJSON("security", "security"), false},
+		"a duplicate hiding": {store.Run{SkillSources: sources}, completedJSON("security", "security", "style"), false},
+		"an extra skill":     {store.Run{SkillSources: sources}, completedJSON("security", "style", "other"), false},
+		"the subset":         {store.Run{SkillSources: sources, SkillSubset: []string{"style"}}, completedJSON("style"), true},
+		"more than subset":   {store.Run{SkillSources: sources, SkillSubset: []string{"style"}}, completedJSON("style", "security"), false},
+		"subset duplicated":  {store.Run{SkillSources: sources, SkillSubset: []string{"style", "security"}}, completedJSON("style", "style"), false},
+		// Nothing recorded (an older run, or recording failed): not checked.
+		"nothing recorded": {store.Run{}, completedJSON("anything"), true},
+		// An error result has no skills to check.
+		"error result": {store.Run{SkillSources: sources}, resultJSON(base, head), true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFake()
+			tc.run.ID, tc.run.BaseSHA, tc.run.HeadSHA = runID, base, head
+			f.run = tc.run
+			e := newEnv(f)
+			rec := e.post(runID, "Bearer good", tc.body)
+			if tc.wantOK {
+				if rec.Code != 200 || len(f.replaced) != 0 {
+					t.Errorf("status = %d replaced = %v; want it accepted", rec.Code, f.replaced)
+				}
+				return
+			}
+			if rec.Code != 400 || len(f.replaced) != 1 || !strings.Contains(f.replaced[0], "skill") {
+				t.Errorf("status = %d replaced = %v; want the run failed", rec.Code, f.replaced)
+			}
+		})
+	}
+}

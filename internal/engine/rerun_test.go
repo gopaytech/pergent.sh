@@ -144,6 +144,12 @@ func TestSubsetThatCannotBeKeptIsAFullRerun(t *testing.T) {
 		"a skill was renamed since": {func(t *testing.T) []byte {
 			return resultFor(t, head, namedSkill(t, "security", "no_blocking_issues", "", ""), namedSkill(t, "styleguide", "failed", "", ""))
 		}},
+		"a skill twice, another missing": {func(t *testing.T) []byte {
+			return resultFor(t, head, namedSkill(t, "security", "no_blocking_issues", "", ""), namedSkill(t, "security", "no_blocking_issues", "", ""))
+		}},
+		"every skill and one of them again": {func(t *testing.T) []byte {
+			return resultFor(t, head, append(both(t), namedSkill(t, "style", "failed", "", ""))...)
+		}},
 		"a skill was removed since": {func(t *testing.T) []byte {
 			return resultFor(t, head, append(both(t), namedSkill(t, "old", "no_blocking_issues", "", ""))...)
 		}},

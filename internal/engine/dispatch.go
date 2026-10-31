@@ -464,13 +464,21 @@ func (d *dispatcher) keptRun(ctx context.Context, in *inputs.Inputs, mr forge.Ch
 		return store.Run{}, "the earlier result is not a completed review", nil
 	case r.Base != mr.BaseSHA || r.Head != run.HeadSHA:
 		return store.Run{}, "the earlier result is of other commits", nil
-	case len(r.Skills) != len(in.Skills):
-		return store.Run{}, "the skills changed since the earlier result", nil
 	}
+	// The same skills by name, each once: the earlier skills are kept by
+	// name, so a repeated name would stand in for one that is missing.
+	seen := map[string]bool{}
 	for _, s := range r.Skills {
+		if seen[s.Name] {
+			return store.Run{}, "the earlier result has a skill more than once", nil
+		}
+		seen[s.Name] = true
 		if _, ok := in.Skills[s.Name]; !ok {
 			return store.Run{}, "the skills changed since the earlier result", nil
 		}
+	}
+	if len(seen) != len(in.Skills) {
+		return store.Run{}, "the skills changed since the earlier result", nil
 	}
 	return base, "", nil
 }

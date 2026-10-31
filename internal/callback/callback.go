@@ -136,7 +136,49 @@ func (h *Handler) check(ctx context.Context, id string, body []byte) (string, er
 	if res.Base != run.BaseSHA || res.Head != run.HeadSHA {
 		return "the result is for a different commit than the one this run reviews", nil
 	}
-	return "", nil
+	return checkSkills(res, run), nil
+}
+
+// checkSkills returns why the skills of a completed result are not those the
+// Job was started with, or "". A skill is reported once; a name repeated
+// can't stand in for another that is missing. The dispatched skills are the
+// run's subset or, for a whole review, the skills recorded at dispatch; a run
+// with neither recorded (older, or recording failed) is not compared.
+func checkSkills(res *result.Result, run store.Run) string {
+	if res.Status != "completed" {
+		return ""
+	}
+	got := map[string]bool{}
+	for _, s := range res.Skills {
+		if got[s.Name] {
+			return "the result reports a skill more than once"
+		}
+		got[s.Name] = true
+	}
+	want := map[string]bool{}
+	if len(run.SkillSubset) > 0 {
+		for _, n := range run.SkillSubset {
+			want[n] = true
+		}
+	} else if run.SkillSources != nil {
+		for n := range run.SkillSources {
+			want[n] = true
+		}
+	} else {
+		return ""
+	}
+	for n := range want {
+		if !got[n] {
+			return fmt.Sprintf("the result lacks the skills the Job was started with (%q)", n)
+		}
+	}
+	for n := range got {
+		// (The names are the Job's, kept out of the failure text.)
+		if !want[n] {
+			return "the result has skills the Job was not started with"
+		}
+	}
+	return ""
 }
 
 func (h *Handler) invalid(w http.ResponseWriter, ctx context.Context, id string, now time.Time, reason string) {
