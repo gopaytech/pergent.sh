@@ -80,7 +80,24 @@ type Run struct {
 	// publisher's decision (see RunDecision); Outcome is "" until then.
 	Outcome, OutcomeReason, DecisionStatus string
 	Approved                               bool
+	// Trigger is how the run came to be: TriggerPush, TriggerRerun or
+	// TriggerRerunFailed. SkillSubset names the skills it reviews (nil: all
+	// of them) and BaseRunID is the run whose results a partial re-run keeps
+	// (nil: none).
+	Trigger     string
+	SkillSubset []string
+	BaseRunID   *string
 }
+
+// How a run came to be (Run.Trigger).
+const (
+	// TriggerPush is a push, an opened merge request or a retarget.
+	TriggerPush = "push"
+	// TriggerRerun is a re-run of the whole review on request.
+	TriggerRerun = "rerun"
+	// TriggerRerunFailed is a re-run of the failed skills on request.
+	TriggerRerunFailed = "rerun_failed"
+)
 
 // A run's outcome, as the publisher records it (RunDecision.Outcome) and as
 // the dashboard shows it. Running, superseded and unknown (published before
@@ -139,7 +156,7 @@ const runColumns = `id::text, instance, project_id, mr_iid, project_path, head_s
 	state, job_name, token_expires_at, result, failure_reason, publish_error, attempts,
 	created_at, dispatched_at, reported_at, not_before, cleaned_up,
 	title, web_url, source_branch, author, model, skill_sources,
-	outcome, outcome_reason, decision_status, approved`
+	outcome, outcome_reason, decision_status, approved, trigger, skill_subset, base_run_id::text`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var (
@@ -152,7 +169,7 @@ func scanRun(row pgx.Row) (Run, error) {
 		&r.TargetBranch, &state, &r.JobName, &tokenExp, &r.Result, &r.FailureReason, &r.PublishError, &r.Attempts,
 		&r.CreatedAt, &dispatched, &rep, &notBefore, &r.CleanedUp,
 		&r.Title, &r.WebURL, &r.SourceBranch, &r.Author, &r.Model, &sources,
-		&r.Outcome, &r.OutcomeReason, &r.DecisionStatus, &r.Approved)
+		&r.Outcome, &r.OutcomeReason, &r.DecisionStatus, &r.Approved, &r.Trigger, &r.SkillSubset, &r.BaseRunID)
 	if err != nil {
 		return Run{}, err
 	}
@@ -273,6 +290,90 @@ func (s *Store) EnqueueRun(ctx context.Context, mr MRKey, projectPath, headSHA, 
 		return "", false, err
 	}
 	return id, true, nil
+}
+
+// EnqueueRerun queues a run of headSHA against targetBranch that was asked for
+// (trigger is TriggerRerun or TriggerRerunFailed), even when the merge
+// request's newest run is already for that head and target: that run, be it
+// published or failed to publish, is superseded and, being finished and
+// posted, marked cleaned up, as EnqueueRun does for an older run of the head.
+// The live runs of any other head or target are superseded too. skills
+// limits the run to those skills (nil or empty: all of them) and baseRunID is
+// the run whose results the new one keeps.
+//
+// A run of this head and target that is queued or running is not replaced or
+// duplicated: created is false and id is that run's, nothing is changed.
+func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA, targetBranch, trigger string, skills []string, baseRunID *string) (id string, created bool, err error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+
+	if err := lockMR(ctx, tx, mr); err != nil {
+		return "", false, err
+	}
+	err = tx.QueryRow(ctx, `SELECT id::text FROM runs
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
+		  AND state IN ('queued', 'running')`,
+		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch).Scan(&id)
+	if err == nil {
+		if err := tx.Commit(ctx); err != nil {
+			return "", false, err
+		}
+		return id, false, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", false, err
+	}
+
+	if _, err := tx.Exec(ctx, `UPDATE runs SET state = 'superseded'
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND (head_sha <> $4 OR target_branch <> $5)
+		  AND state IN ('queued', 'running', 'reported')`,
+		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch); err != nil {
+		return "", false, err
+	}
+	// What is left of this head and target is reported, published or
+	// publish_failed: the queued and running ones returned above.
+	if _, err := tx.Exec(ctx, `UPDATE runs SET state = 'superseded',
+			cleaned_up = cleaned_up OR state IN ('published', 'publish_failed')
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
+		  AND state <> 'superseded'`,
+		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch); err != nil {
+		return "", false, err
+	}
+	if len(skills) == 0 {
+		skills = nil
+	}
+	err = tx.QueryRow(ctx, `INSERT INTO runs (instance, project_id, mr_iid, project_path, head_sha, target_branch,
+			trigger, skill_subset, base_run_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::uuid) RETURNING id::text`,
+		mr.Instance, mr.ProjectID, mr.IID, projectPath, headSHA, targetBranch,
+		trigger, skills, baseRunID).Scan(&id)
+	if err != nil {
+		return "", false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", false, err
+	}
+	return id, true, nil
+}
+
+// CountReruns returns how many runs asked for (TriggerRerun and
+// TriggerRerunFailed) were created at or after since: those of the merge
+// request mr, or, with mr nil, of every merge request of the project
+// projectID on instance. A run since superseded still counts.
+func (s *Store) CountReruns(ctx context.Context, mr *MRKey, instance string, projectID int64, since time.Time) (int, error) {
+	var iid *int64
+	if mr != nil {
+		instance, projectID, iid = mr.Instance, mr.ProjectID, &mr.IID
+	}
+	var n int
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM runs
+		WHERE instance = $1 AND project_id = $2 AND ($3::bigint IS NULL OR mr_iid = $3)
+		  AND trigger <> 'push' AND created_at >= $4`,
+		instance, projectID, iid, since).Scan(&n)
+	return n, err
 }
 
 // SupersededDraft is the outcome reason of a run superseded because its merge

@@ -243,15 +243,20 @@ type RepoDefaults struct {
 	FailureStatus         *string
 	JobTimeoutSeconds     *int
 	JobMemory             *string
-	UpdatedAt             time.Time
+	// RerunLimitPerMR and RerunLimitPerRepo cap the re-runs asked for per
+	// merge request and per repository and day.
+	RerunLimitPerMR, RerunLimitPerRepo *int
+	UpdatedAt                          time.Time
 }
 
 // RepoDefaults returns the defaults; the zero value when none were put.
 func (s *Store) RepoDefaults(ctx context.Context) (RepoDefaults, error) {
 	var d RepoDefaults
-	err := s.pool.QueryRow(ctx, `SELECT approve, review_drafts, failure_status, job_timeout_seconds, job_memory, updated_at
+	err := s.pool.QueryRow(ctx, `SELECT approve, review_drafts, failure_status, job_timeout_seconds, job_memory,
+			rerun_limit_per_mr, rerun_limit_per_repo, updated_at
 		FROM repo_defaults WHERE id = 1`).
-		Scan(&d.Approve, &d.ReviewDrafts, &d.FailureStatus, &d.JobTimeoutSeconds, &d.JobMemory, &d.UpdatedAt)
+		Scan(&d.Approve, &d.ReviewDrafts, &d.FailureStatus, &d.JobTimeoutSeconds, &d.JobMemory,
+			&d.RerunLimitPerMR, &d.RerunLimitPerRepo, &d.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RepoDefaults{}, nil
 	}
@@ -261,11 +266,13 @@ func (s *Store) RepoDefaults(ctx context.Context) (RepoDefaults, error) {
 // PutRepoDefaults replaces the defaults with d, nil fields included. Its
 // UpdatedAt is ignored: the database's now is stored.
 func (s *Store) PutRepoDefaults(ctx context.Context, d RepoDefaults) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO repo_defaults (id, approve, review_drafts, failure_status, job_timeout_seconds, job_memory, updated_at)
-		VALUES (1, $1, $2, $3, $4, $5, now())
+	_, err := s.pool.Exec(ctx, `INSERT INTO repo_defaults (id, approve, review_drafts, failure_status, job_timeout_seconds, job_memory,
+			rerun_limit_per_mr, rerun_limit_per_repo, updated_at)
+		VALUES (1, $1, $2, $3, $4, $5, $6, $7, now())
 		ON CONFLICT (id) DO UPDATE SET approve = EXCLUDED.approve, review_drafts = EXCLUDED.review_drafts,
 			failure_status = EXCLUDED.failure_status, job_timeout_seconds = EXCLUDED.job_timeout_seconds,
-			job_memory = EXCLUDED.job_memory, updated_at = EXCLUDED.updated_at`,
-		d.Approve, d.ReviewDrafts, d.FailureStatus, d.JobTimeoutSeconds, d.JobMemory)
+			job_memory = EXCLUDED.job_memory, rerun_limit_per_mr = EXCLUDED.rerun_limit_per_mr,
+			rerun_limit_per_repo = EXCLUDED.rerun_limit_per_repo, updated_at = EXCLUDED.updated_at`,
+		d.Approve, d.ReviewDrafts, d.FailureStatus, d.JobTimeoutSeconds, d.JobMemory, d.RerunLimitPerMR, d.RerunLimitPerRepo)
 	return err
 }

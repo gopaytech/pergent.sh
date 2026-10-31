@@ -22,18 +22,21 @@ type DashboardRepo struct {
 	Skills            []string
 	JobTimeoutSeconds *int
 	// JobMemory is a Kubernetes quantity such as "6Gi".
-	JobMemory            *string
-	CreatedBy            string
-	CreatedAt, UpdatedAt time.Time
+	JobMemory *string
+	// RerunLimitPerMR and RerunLimitPerRepo cap the re-runs asked for per
+	// merge request and per repository and day.
+	RerunLimitPerMR, RerunLimitPerRepo *int
+	CreatedBy                          string
+	CreatedAt, UpdatedAt               time.Time
 }
 
 const dashboardRepoColumns = `instance, project, approve, review_drafts, failure_status, skills,
-	job_timeout_seconds, job_memory, created_by, created_at, updated_at`
+	job_timeout_seconds, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by, created_at, updated_at`
 
 func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 	var r DashboardRepo
 	err := row.Scan(&r.Instance, &r.Project, &r.Approve, &r.ReviewDrafts, &r.FailureStatus, &r.Skills,
-		&r.JobTimeoutSeconds, &r.JobMemory, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt)
+		&r.JobTimeoutSeconds, &r.JobMemory, &r.RerunLimitPerMR, &r.RerunLimitPerRepo, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt)
 	if len(r.Skills) == 0 {
 		r.Skills = nil
 	}
@@ -83,15 +86,16 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 		skills = nil
 	}
 	_, err := s.pool.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
-			failure_status, skills, job_timeout_seconds, job_memory, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			failure_status, skills, job_timeout_seconds, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (instance, lower(project)) DO UPDATE SET
 			project = EXCLUDED.project, approve = EXCLUDED.approve, review_drafts = EXCLUDED.review_drafts,
 			failure_status = EXCLUDED.failure_status, skills = EXCLUDED.skills,
 			job_timeout_seconds = EXCLUDED.job_timeout_seconds, job_memory = EXCLUDED.job_memory,
+			rerun_limit_per_mr = EXCLUDED.rerun_limit_per_mr, rerun_limit_per_repo = EXCLUDED.rerun_limit_per_repo,
 			updated_at = now()`,
 		r.Instance, r.Project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills,
-		r.JobTimeoutSeconds, r.JobMemory, r.CreatedBy)
+		r.JobTimeoutSeconds, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy)
 	return err
 }
 
@@ -103,11 +107,11 @@ func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (creat
 		skills = nil
 	}
 	tag, err := s.pool.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
-			failure_status, skills, job_timeout_seconds, job_memory, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			failure_status, skills, job_timeout_seconds, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (instance, lower(project)) DO NOTHING`,
 		r.Instance, r.Project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills,
-		r.JobTimeoutSeconds, r.JobMemory, r.CreatedBy)
+		r.JobTimeoutSeconds, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy)
 	if err != nil {
 		return false, err
 	}
@@ -117,7 +121,7 @@ func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (creat
 // UpdateDashboardRepo changes the settings of the dashboard repository
 // project on instance (matched ignoring case): apply gets the stored row,
 // locked until the change is stored, and its settings (approve through
-// job_memory) are written back; the rest of the row stays. found is false,
+// the re-run caps) are written back; the rest of the row stays. found is false,
 // and nothing is created, when there is no such row.
 func (s *Store) UpdateDashboardRepo(ctx context.Context, instance, project string, apply func(*DashboardRepo)) (found bool, err error) {
 	tx, err := s.pool.Begin(ctx)
@@ -139,9 +143,11 @@ func (s *Store) UpdateDashboardRepo(ctx context.Context, instance, project strin
 		skills = nil
 	}
 	if _, err := tx.Exec(ctx, `UPDATE dashboard_repos SET approve = $3, review_drafts = $4, failure_status = $5,
-			skills = $6, job_timeout_seconds = $7, job_memory = $8, updated_at = now()
+			skills = $6, job_timeout_seconds = $7, job_memory = $8, rerun_limit_per_mr = $9, rerun_limit_per_repo = $10,
+			updated_at = now()
 		WHERE instance = $1 AND lower(project) = lower($2)`,
-		instance, project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, r.JobTimeoutSeconds, r.JobMemory); err != nil {
+		instance, project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, r.JobTimeoutSeconds, r.JobMemory,
+		r.RerunLimitPerMR, r.RerunLimitPerRepo); err != nil {
 		return false, err
 	}
 	return true, tx.Commit(ctx)

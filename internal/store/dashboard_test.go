@@ -456,3 +456,75 @@ func TestUpdateDashboardRepo(t *testing.T) {
 		t.Errorf("row = %+v", r)
 	}
 }
+
+func TestCapsColumnsRoundTrip(t *testing.T) {
+	s := newStore(t)
+
+	// Unset is NULL, "use the default", for a repository and the defaults.
+	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "acme/widgets"}); err != nil {
+		t.Fatal(err)
+	}
+	r, _, err := s.DashboardRepo(ctx, "main", "acme/widgets")
+	if err != nil || r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil {
+		t.Fatalf("unset caps = %+v, %v", r, err)
+	}
+
+	// Upsert, Insert and Update all carry the caps.
+	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "acme/widgets",
+		RerunLimitPerMR: ptrTo(3), RerunLimitPerRepo: ptrTo(20)}); err != nil {
+		t.Fatal(err)
+	}
+	r, _, _ = s.DashboardRepo(ctx, "main", "acme/widgets")
+	if r.RerunLimitPerMR == nil || *r.RerunLimitPerMR != 3 || r.RerunLimitPerRepo == nil || *r.RerunLimitPerRepo != 20 {
+		t.Fatalf("after upsert = %+v", r)
+	}
+	if created, err := s.InsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "acme/gadgets",
+		RerunLimitPerMR: ptrTo(1)}); err != nil || !created {
+		t.Fatalf("insert = %v, %v", created, err)
+	}
+	r, _, _ = s.DashboardRepo(ctx, "main", "acme/gadgets")
+	if r.RerunLimitPerMR == nil || *r.RerunLimitPerMR != 1 || r.RerunLimitPerRepo != nil {
+		t.Fatalf("after insert = %+v", r)
+	}
+	found, err := s.UpdateDashboardRepo(ctx, "main", "acme/widgets", func(r *DashboardRepo) {
+		r.RerunLimitPerMR = nil
+		r.RerunLimitPerRepo = ptrTo(7)
+	})
+	if err != nil || !found {
+		t.Fatalf("update = %v, %v", found, err)
+	}
+	r, _, _ = s.DashboardRepo(ctx, "main", "acme/widgets")
+	if r.RerunLimitPerMR != nil || r.RerunLimitPerRepo == nil || *r.RerunLimitPerRepo != 7 {
+		t.Fatalf("after update = %+v", r)
+	}
+	rows, err := s.DashboardRepos(ctx)
+	if err != nil || len(rows) != 2 || rows[1].RerunLimitPerRepo == nil || *rows[1].RerunLimitPerRepo != 7 {
+		t.Fatalf("DashboardRepos = %+v, %v", rows, err)
+	}
+
+	// Zero and negative caps are refused.
+	for _, bad := range []int{0, -1} {
+		if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "acme/bad", RerunLimitPerMR: ptrTo(bad)}); err == nil {
+			t.Errorf("repository per-MR cap %d accepted", bad)
+		}
+		if err := s.PutRepoDefaults(ctx, RepoDefaults{RerunLimitPerRepo: ptrTo(bad)}); err == nil {
+			t.Errorf("default per-repository cap %d accepted", bad)
+		}
+	}
+
+	// The defaults carry them too, and a put replaces them.
+	if err := s.PutRepoDefaults(ctx, RepoDefaults{RerunLimitPerMR: ptrTo(5), RerunLimitPerRepo: ptrTo(40)}); err != nil {
+		t.Fatal(err)
+	}
+	d, err := s.RepoDefaults(ctx)
+	if err != nil || d.RerunLimitPerMR == nil || *d.RerunLimitPerMR != 5 || d.RerunLimitPerRepo == nil || *d.RerunLimitPerRepo != 40 {
+		t.Fatalf("defaults = %+v, %v", d, err)
+	}
+	if err := s.PutRepoDefaults(ctx, RepoDefaults{}); err != nil {
+		t.Fatal(err)
+	}
+	d, _ = s.RepoDefaults(ctx)
+	if d.RerunLimitPerMR != nil || d.RerunLimitPerRepo != nil {
+		t.Errorf("defaults after clearing = %+v", d)
+	}
+}
