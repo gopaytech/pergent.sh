@@ -843,10 +843,26 @@ func TestTeamMembershipActive(t *testing.T) {
 		t.Fatalf("not a member: %v, %v", got, err)
 	}
 
-	// Anything else is an error: the caller can't tell, so it can't say no.
-	c, _ = serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"Forbidden"}`, 403) })
-	if _, err := c.TeamMembershipActive(ctx, "acme", "platform", "alice"); err == nil {
-		t.Fatal("403 gave no error")
+	// A 403 (the App can't read the org's teams) is ErrForbidden, which
+	// the caller may take as no; anything else is an error it can't.
+	c, _ = serve(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"Resource not accessible by integration"}`, 403)
+	})
+	if _, err := c.TeamMembershipActive(ctx, "acme", "platform", "alice"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("403: err = %v, want ErrForbidden", err)
+	}
+	for _, h := range []http.HandlerFunc{
+		func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"boom"}`, 500) },
+		func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"slow down"}`, 429) },
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			http.Error(w, `{"message":"API rate limit exceeded"}`, 403)
+		},
+	} {
+		c, _ = serve(t, h)
+		if _, err := c.TeamMembershipActive(ctx, "acme", "platform", "alice"); err == nil || errors.Is(err, ErrForbidden) {
+			t.Fatalf("err = %v, want an error that isn't ErrForbidden", err)
+		}
 	}
 	if _, err := c.TeamMembershipActive(ctx, "acme", "..", "alice"); err == nil {
 		t.Fatal("a .. segment was sent")

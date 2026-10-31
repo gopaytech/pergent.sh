@@ -438,6 +438,9 @@ type fakeGitHub struct {
 	repos map[string]map[string]any // owner/name → GET /repos body
 	teams map[string]string         // org/slug/login → membership state
 	login string                    // user 7's login (default alice)
+	// teamStatus, when not 0, is the status of every team membership
+	// answer.
+	teamStatus int
 }
 
 func (f *fakeGitHub) setLogin(login string) { f.set(func(*oauthServer) { f.login = login }) }
@@ -509,6 +512,10 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		reply(w, 404, map[string]any{"message": "Not Found"})
 	case strings.HasPrefix(p, "/api/v3/orgs/") && strings.Contains(p, "/memberships/"):
+		if f.teamStatus != 0 {
+			reply(w, f.teamStatus, map[string]any{"message": "Resource not accessible by integration"})
+			return
+		}
 		parts := strings.Split(strings.TrimPrefix(p, "/api/v3/orgs/"), "/") // org teams slug memberships login
 		if state, ok := f.teams[parts[0]+"/"+parts[2]+"/"+parts[4]]; ok {
 			reply(w, 200, map[string]any{"state": state, "role": "member"})

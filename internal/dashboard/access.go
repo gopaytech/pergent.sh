@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -19,6 +20,10 @@ const (
 	// tokenLeeway renews a token this long before it expires.
 	tokenLeeway = time.Minute
 )
+
+// errAdminUnreadable is an admin team the platform won't tell about (an
+// isAdmin answer): its members are no admins, and the check goes on.
+var errAdminUnreadable = errors.New("the platform refused to show the admin team's members")
 
 // errRecentFailure is a check skipped because the last one failed less than
 // retryAfterFailure ago.
@@ -279,12 +284,23 @@ func (a *Auth) checkAccess(ctx context.Context, se store.Session, tok oauthToken
 	if err != nil {
 		return accessResult{}, err
 	}
-	isAdmin := false
+	isAdmin, unreadable, asked := false, "", 0
+	var admins []config.DashboardAdmin
 	for _, admin := range a.cfg.Dashboard.Admins {
-		if admin.Instance != se.Instance {
+		if admin.Instance == se.Instance {
+			admins = append(admins, admin)
+		}
+	}
+	for _, admin := range admins {
+		asked++
+		ok, err := p.isAdmin(ctx, tok.AccessToken, userID, username, admin)
+		if errors.Is(err, errAdminUnreadable) {
+			// The platform won't say: not an admin through this team.
+			a.log.Warn("dashboard: the admin team can't be read, so nobody is an admin through it",
+				"instance", se.Instance, "team", admin.Team, "error", err.Error())
+			unreadable = admin.Team
 			continue
 		}
-		ok, err := p.isAdmin(ctx, tok.AccessToken, userID, username, admin)
 		if err != nil {
 			return accessResult{}, fmt.Errorf("admin check: %w", err)
 		}
@@ -296,7 +312,32 @@ func (a *Auth) checkAccess(ctx context.Context, se store.Session, tok oauthToken
 	if err := a.store.SetSessionAccess(ctx, se.IDHash, username, isAdmin, visible, a.now()); err != nil {
 		return accessResult{}, err
 	}
+	switch {
+	case unreadable != "":
+		a.setAttention(ctx, se.Instance, attentionAdminTeam, "pergent.sh can't read the admin team "+unreadable+
+			", so nobody is an admin through it. Give the GitHub App Organization permissions → Members: Read-only, "+
+			"have the organization approve it, and install the App in that organization.")
+	case asked == len(admins):
+		// Every admin team of the instance answered.
+		a.clearAttention(ctx, se.Instance, attentionAdminTeam)
+	}
 	return accessResult{username: username, isAdmin: isAdmin, projects: visible}, nil
+}
+
+// setAttention records an instance-wide setup problem for the dashboard,
+// best effort: a store error is logged and never fails the access check.
+func (a *Auth) setAttention(ctx context.Context, instance, kind, message string) {
+	if err := a.store.SetAttention(ctx, instance, "", kind, message); err != nil {
+		a.log.Info("dashboard: couldn't record a setup problem", "instance", instance, "kind", kind, "error", err.Error())
+	}
+}
+
+// clearAttention removes an instance-wide setup problem that is gone, best
+// effort like setAttention.
+func (a *Auth) clearAttention(ctx context.Context, instance, kind string) {
+	if err := a.store.ClearAttention(ctx, instance, "", kind); err != nil {
+		a.log.Info("dashboard: couldn't clear a setup problem", "instance", instance, "kind", kind, "error", err.Error())
+	}
 }
 
 // checkProjects returns the projects the token's user can see, each with

@@ -292,7 +292,9 @@ func (c *Client) once(ctx context.Context, method, rawURL string, payload []byte
 	if len(stored) > storedBody {
 		stored = truncateUTF8(stored, storedBody)
 	}
-	return nil, c.retryFor(res), &APIError{Status: res.StatusCode, Body: stored}
+	r := c.retryFor(res)
+	return nil, r, &APIError{Status: res.StatusCode, Body: stored,
+		RateLimited: res.StatusCode == http.StatusForbidden && r.ok}
 }
 
 // retryFor decides whether a non-2xx reply is retried: 429 and 5xx always, a
@@ -509,8 +511,9 @@ func (c *Client) RepoAccess(ctx context.Context, owner, repo string) (RepoAccess
 
 // TeamMembershipActive reports whether username is an active member of the
 // team org/slug (GET /orgs/{org}/teams/{slug}/memberships/{username}). A
-// pending invitation is false, so is not a member (404); any other failure
-// is an error.
+// pending invitation is false, so is not a member (404). A token that may
+// not read the org's teams (an App without Organization → Members: Read,
+// or not installed in org) is ErrForbidden; any other failure is an error.
 func (c *Client) TeamMembershipActive(ctx context.Context, org, slug, username string) (bool, error) {
 	var parts [3]string
 	for i, s := range []string{org, slug, username} {

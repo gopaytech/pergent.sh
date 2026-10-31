@@ -345,7 +345,7 @@ GitHub sign-in uses the review App's own user authorization, so there is no seco
 
 - Under **Identifying and authorizing users**, set the **Callback URL** to `<dashboard.url>/auth/github/<instance name>/callback`, for example `https://pergent-dashboard.example.com/auth/github/gh/callback`. Keep **Expire user authorization tokens** on (pergent.sh renews them) and leave **Request user authorization (OAuth) during installation** off.
 - Generate a **client secret**, and note the **Client ID** on the same page.
-- Check that the App has **Organization permissions → Members: Read-only** (see [Create the review App](#1-create-the-review-app)). An App created before it was on that list needs it added, and each organization then has to approve the new permission. Without it nobody is found in the admin team.
+- Check that the App has **Organization permissions → Members: Read-only** (see [Create the review App](#1-create-the-review-app)). An App created before it was on that list needs it added, and each organization then has to approve the new permission. Without it, or when the App isn't installed in the team's organization, GitHub refuses to show the team (403): users still sign in and see their repositories, but nobody is an admin through that team. pergent.sh logs a warning naming the instance and team and records a "Needs attention" item for the instance, which goes away at the first access check that can read the team. Other errors of that check (5xx, rate limits, the network) still fail the sign-in.
 
 Put the Client ID and the client secret in the Secret and name them in the GitHub instance's `oauth_client_id_env` and `oauth_client_secret_env`. A user signed in through the App only reaches repositories the App is installed on.
 
@@ -387,7 +387,8 @@ Every write is checked on the server: it needs an admin, a repository the admin 
   - one approval is enough to merge, so pergent's approval alone can unlock it;
   - the GitHub approve App isn't installed on the repository, or the approve bot user can't reach it;
   - reviews running out of memory (two or more in the last 7 days);
-  - the GitHub approve bot's token expires within 14 days. This one concerns the whole instance and is shown to its admins only.
+  - the GitHub approve bot's token expires within 14 days. This one concerns the whole instance and is shown to its admins only;
+  - the review App can't read a GitHub admin team (see [Sign in with GitHub](#sign-in-with-github)), recorded by the access check of a user who signs in. It concerns the whole instance too and is shown to its admins only, so with a single admin team nobody sees it until it is fixed: the warning in the log is the way to find it.
 
 ### Limits of the access check
 

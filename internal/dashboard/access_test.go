@@ -198,6 +198,60 @@ func TestAdminByGroupAndTeam(t *testing.T) {
 	})
 }
 
+// An App that may not read the admin team (403) makes nobody an admin on
+// that instance, but signs users in; the problem is a warning and an
+// instance-wide "Needs attention" item, gone once the team can be read.
+func TestGitHubAdminTeamForbidden(t *testing.T) {
+	e := newEnv(t, nil)
+	e.gh.setRepo("acme/widgets", githubRepo(true, true))
+	e.gh.setTeam("acme/platform", "active")
+	e.gh.set(func(*oauthServer) { e.gh.teamStatus = http.StatusForbidden })
+	c := e.signIn("github", "gh")
+	if _, se := e.session(c); se.IsAdmin || !se.CanSee("acme/widgets") {
+		t.Fatalf("session with an unreadable admin team = %+v; want acme/widgets, no admin", se)
+	}
+	logs := e.logs.String()
+	if !containsAll(logs, []string{"level=WARN", "admin team", "instance=gh", "team=acme/platform"}) {
+		t.Fatalf("no warning names the instance and team:\n%s", logs)
+	}
+	for _, tok := range e.gh.tokens() {
+		if strings.Contains(logs, tok) {
+			t.Fatal("the warning holds the user's token")
+		}
+	}
+	items, err := e.st.Attention(ctx)
+	if err != nil || len(items) != 1 || items[0].Instance != "gh" || items[0].Project != "" ||
+		items[0].Kind != attentionAdminTeam || !strings.Contains(items[0].Message, "acme/platform") {
+		t.Fatalf("attention = %+v, %v; want gh's instance-wide %s item", items, err, attentionAdminTeam)
+	}
+
+	e.gh.set(func(*oauthServer) { e.gh.teamStatus = 0 })
+	e.clock.advance(AccessTTL + time.Second)
+	if _, se := e.session(c); !se.IsAdmin {
+		t.Fatal("not admin once the team can be read")
+	}
+	if items, err := e.st.Attention(ctx); err != nil || len(items) != 0 {
+		t.Fatalf("attention after a good check = %+v, %v; want none", items, err)
+	}
+}
+
+// Any other failure of the admin check (here 500s until the call's time is
+// up) fails the check: no sign-in, nothing stored.
+func TestGitHubAdminTeamErrorFailsClosed(t *testing.T) {
+	e := newEnv(t, nil)
+	e.d.Auth.providers["gh"].(*githubProvider).timeout = 1500 * time.Millisecond
+	e.gh.setRepo("acme/widgets", githubRepo(true, true))
+	e.gh.set(func(*oauthServer) { e.gh.teamStatus = http.StatusInternalServerError })
+	loc, sc := e.startLogin("github", "gh")
+	rec := e.callback("github", "gh", goodCode, loc.Query().Get("state"), sc)
+	if rec.Code == http.StatusSeeOther || cookie(rec, SessionCookieName) != nil {
+		t.Fatalf("callback = %d with a session; want a failed sign-in", rec.Code)
+	}
+	if items, err := e.st.Attention(ctx); err != nil || len(items) != 0 {
+		t.Fatalf("attention = %+v, %v; want none", items, err)
+	}
+}
+
 // Review Focus 1: a user whose access drops from Developer to Guest stops
 // seeing the repository within 5 minutes.
 func TestAccessRefreshDropsRepository(t *testing.T) {

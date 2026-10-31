@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -124,7 +125,12 @@ func (p *githubProvider) isAdmin(ctx context.Context, accessToken string, _ int6
 	}
 	ctx, cancel := callContext(ctx, p.timeout)
 	defer cancel()
-	return p.client(accessToken).TeamMembershipActive(ctx, org, slug, username)
+	member, err := p.client(accessToken).TeamMembershipActive(ctx, org, slug, username)
+	if errors.Is(err, github.ErrForbidden) {
+		// The App lacks Members: Read in org, or isn't installed there.
+		return false, fmt.Errorf("%w: %w", errAdminUnreadable, err)
+	}
+	return member, err
 }
 
 func (p *githubProvider) memberRepos(ctx context.Context, accessToken, search string, limit int) ([]string, bool, error) {

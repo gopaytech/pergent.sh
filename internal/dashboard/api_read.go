@@ -43,6 +43,9 @@ const (
 	inputsTTL = 5 * time.Minute
 
 	attentionTokenExpiry = "token_expiry"
+	// attentionAdminTeam is an instance-wide item: a GitHub admin team the
+	// App may not read.
+	attentionAdminTeam = "admin_team_unreadable"
 
 	msgLoadFailed   = "could not load the data, please try again"
 	msgNotFound     = "not found"

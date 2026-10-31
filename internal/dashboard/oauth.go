@@ -35,7 +35,8 @@ type provider interface {
 	// merge requests, and the project's platform ID (above 0 when ok).
 	// Not found or forbidden is false; a failure to tell is an error.
 	canSee(ctx context.Context, accessToken, project string) (id int64, ok bool, err error)
-	// isAdmin reports whether the user is in admin's group or team.
+	// isAdmin reports whether the user is in admin's group or team. A
+	// team the platform refuses to show is errAdminUnreadable.
 	isAdmin(ctx context.Context, accessToken string, userID int64, username string, admin config.DashboardAdmin) (bool, error)
 	// memberRepos lists, up to limit, the repositories the user is a
 	// member of and can read (GitLab: Reporter or above; GitHub: pull)

@@ -68,6 +68,10 @@ type TreeEntry = forge.TreeEntry
 // ErrNotFound is matched (errors.Is) by the *APIError of any 404 response.
 var ErrNotFound = errors.New("github: not found")
 
+// ErrForbidden is matched (errors.Is) by the *APIError of a 403 response
+// that isn't a rate limit: the credential lacks a permission.
+var ErrForbidden = errors.New("github: forbidden")
+
 const maxErrorBody = 200
 
 // APIError is a non-2xx GitHub response. Body is masked (no token) and cut
@@ -75,6 +79,8 @@ const maxErrorBody = 200
 type APIError struct {
 	Status int
 	Body   string
+	// RateLimited is true for a 403 that is a rate limit, not a refusal.
+	RateLimited bool
 }
 
 func (e *APIError) Error() string {
@@ -88,9 +94,16 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("github: status %d: %s", e.Status, body)
 }
 
-// Is lets errors.Is(err, ErrNotFound) match any 404 response.
+// Is lets errors.Is(err, ErrNotFound) match any 404 response, and
+// errors.Is(err, ErrForbidden) a 403 that isn't a rate limit.
 func (e *APIError) Is(target error) bool {
-	return target == ErrNotFound && e.Status == 404
+	switch target {
+	case ErrNotFound:
+		return e.Status == 404
+	case ErrForbidden:
+		return e.Status == 403 && !e.RateLimited
+	}
+	return false
 }
 
 // truncateUTF8 cuts s to at most max bytes without splitting a rune.
