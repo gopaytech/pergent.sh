@@ -206,7 +206,7 @@ func (a *Auth) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 	log := a.log.With("user", acc.Username)
 	locked := acc.LockedUntil != nil && acc.LockedUntil.After(now)
 	if !good || locked {
-		a.failedSignIn(ctx, acc, locked, refusedDetail(locked, "wrong password"), now, log)
+		a.failedSignIn(ctx, acc, refusedDetail(locked, "wrong password"), now, log)
 		writeError(w, http.StatusUnauthorized, wrongCredentials)
 		return
 	}
@@ -222,7 +222,7 @@ func (a *Auth) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !recorded {
-		a.failedSignIn(ctx, acc, true, refusedDetail(true, ""), now, log)
+		a.failedSignIn(ctx, acc, refusedDetail(true, ""), now, log)
 		writeError(w, http.StatusUnauthorized, wrongCredentials)
 		return
 	}
@@ -267,16 +267,16 @@ func refusedDetail(locked bool, wrong string) string {
 // failedSignIn records a refused attempt at acc's password (a sign-in, or
 // the current password at a change), with detail in the audit entry. Every
 // refused attempt counts as a failure, whatever the password: one during a
-// lock (wasLocked) adds to the count but leaves the lock where it is
-// (store.RecordFailedSignIn). The attempt that sets the lock also records
-// "locked".
-func (a *Auth) failedSignIn(ctx context.Context, acc store.Account, wasLocked bool, detail string, now time.Time, log *slog.Logger) {
-	locked, err := a.store.RecordFailedSignIn(ctx, acc.ID, now, maxFailures, lockFor)
+// lock adds to the count but leaves the lock where it is
+// (store.RecordFailedSignIn). The attempt that sets the lock, and only
+// that one, also records "locked".
+func (a *Auth) failedSignIn(ctx context.Context, acc store.Account, detail string, now time.Time, log *slog.Logger) {
+	setLock, err := a.store.RecordFailedSignIn(ctx, acc.ID, now, maxFailures, lockFor)
 	if err != nil {
 		log.Error("dashboard password sign-in: recording a failure failed", "error", err.Error())
 	}
 	a.audit(ctx, acc, "sign_in_failed", detail, now)
-	if locked && !wasLocked {
+	if setLock {
 		log.Warn("dashboard password account locked after 5 wrong passwords", "for", lockFor.String())
 		a.audit(ctx, acc, "locked", fmt.Sprintf("%d wrong passwords, locked for %s", maxFailures, lockFor), now)
 	}
@@ -333,14 +333,16 @@ func (a *Auth) changePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	good := a.verify(acc.PasswordHash, in.Current)
 	same := subtle.ConstantTimeCompare([]byte(in.New), []byte(in.Current)) == 1
+	// While locked the new password isn't hashed: a right current password
+	// costs no more than a wrong one.
+	locked := acc.LockedUntil != nil && acc.LockedUntil.After(now)
 	var hash string
-	if good && !same {
-		hash, err = password.Hash(in.New)
+	if good && !same && !locked {
+		hash, err = a.hash(in.New)
 	}
 	release()
-	locked := acc.LockedUntil != nil && acc.LockedUntil.After(now)
 	if !good || locked {
-		a.failedSignIn(ctx, acc, locked, refusedDetail(locked, "wrong current password at a password change"), now, log)
+		a.failedSignIn(ctx, acc, refusedDetail(locked, "wrong current password at a password change"), now, log)
 		writeError(w, http.StatusUnauthorized, "wrong password")
 		return
 	}
@@ -360,7 +362,7 @@ func (a *Auth) changePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !changed {
-		a.failedSignIn(ctx, acc, true, refusedDetail(true, ""), now, log)
+		a.failedSignIn(ctx, acc, refusedDetail(true, ""), now, log)
 		writeError(w, http.StatusUnauthorized, "wrong password")
 		return
 	}

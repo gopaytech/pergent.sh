@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -113,9 +114,9 @@ func TestRecordFailedSignInLocks(t *testing.T) {
 	if got.FailedAttempts != 5 || got.LockedUntil == nil || !got.LockedUntil.Equal(now.Add(15*time.Minute)) {
 		t.Fatalf("after 5 failures = %+v", got)
 	}
-	// A failure during the lock does not push it out.
-	if locked, err := s.RecordFailedSignIn(ctx, a.ID, now.Add(time.Minute), 5, 15*time.Minute); err != nil || !locked {
-		t.Fatalf("failure while locked: %v, %v", locked, err)
+	// A failure during the lock does not push it out, and didn't set it.
+	if setLock, err := s.RecordFailedSignIn(ctx, a.ID, now.Add(time.Minute), 5, 15*time.Minute); err != nil || setLock {
+		t.Fatalf("failure while locked: set the lock %v, %v", setLock, err)
 	}
 	if got, _, _ = s.Account(ctx, a.ID); !got.LockedUntil.Equal(now.Add(15 * time.Minute)) {
 		t.Fatalf("lock moved to %v", got.LockedUntil)
@@ -143,6 +144,45 @@ func TestRecordFailedSignInRestartsAfterLock(t *testing.T) {
 	}
 	if got, _, _ := s.Account(ctx, a.ID); got.FailedAttempts != 1 || got.LockedUntil != nil {
 		t.Fatalf("account = %+v; want 1 failure and no lock", got)
+	}
+}
+
+// Of failures that land at once past the limit, exactly one reports that
+// it set the lock, so the lock is recorded once.
+func TestRecordFailedSignInSetsLockOnce(t *testing.T) {
+	s := newStore(t)
+	a := mustPassword(t, s, "admin")
+	for i := 0; i < 4; i++ {
+		if _, err := s.RecordFailedSignIn(ctx, a.ID, t0, 5, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var (
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		sets int
+	)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			setLock, err := s.RecordFailedSignIn(ctx, a.ID, t0, 5, time.Hour)
+			if err != nil {
+				t.Error(err)
+			}
+			if setLock {
+				mu.Lock()
+				sets++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if sets != 1 {
+		t.Errorf("%d concurrent failures said they set the lock, want 1", sets)
+	}
+	if got, _, _ := s.Account(ctx, a.ID); got.FailedAttempts != 12 || got.LockedUntil == nil {
+		t.Errorf("account = %+v; want 12 failures and a lock", got)
 	}
 }
 

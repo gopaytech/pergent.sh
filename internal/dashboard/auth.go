@@ -113,8 +113,10 @@ type Auth struct {
 	// slotWait is how long a request waits for one.
 	slots    chan struct{}
 	slotWait time.Duration
-	// verify checks a password against its hash: password.Verify.
+	// verify checks a password against its hash: password.Verify; hash
+	// makes a new password's hash: password.Hash.
 	verify func(encoded, pw string) bool
+	hash   func(pw string) (string, error)
 	// afterVerify, when set (tests), runs after a sign-in's password was
 	// found right and before the sign-in is recorded.
 	afterVerify func()
@@ -140,7 +142,7 @@ func newAuth(o Options, repos *settings.Resolver) (*Auth, error) {
 	a := &Auth{
 		cfg: o.Config, store: o.Store, repos: repos, box: box, stateKey: mac.Sum(nil),
 		providers: map[string]provider{}, now: o.Now, log: o.Log, limit: newLimiter(),
-		slots: make(chan struct{}, hashSlots), slotWait: hashSlotWait, verify: password.Verify,
+		slots: make(chan struct{}, hashSlots), slotWait: hashSlotWait, verify: password.Verify, hash: password.Hash,
 		flights: map[string]*flight{}, failedAt: map[string]time.Time{},
 	}
 	base := o.Config.Dashboard.URL

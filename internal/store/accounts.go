@@ -203,10 +203,11 @@ func (s *Store) SetPassword(ctx context.Context, id int64, hash string, mustChan
 }
 
 // RecordFailedSignIn counts a wrong password at time now and, at max
-// failures in a row, locks the account for lock; locked says whether it is
-// locked now. Failures from before a lock that has ended start over, and a
-// failure while locked leaves the lock where it is.
-func (s *Store) RecordFailedSignIn(ctx context.Context, id int64, now time.Time, max int, lock time.Duration) (locked bool, err error) {
+// failures in a row, locks the account for lock; setLock says whether this
+// call set the lock, so of failures that land at once only one does.
+// Failures from before a lock that has ended start over, and a failure
+// while locked leaves the lock where it is.
+func (s *Store) RecordFailedSignIn(ctx context.Context, id int64, now time.Time, max int, lock time.Duration) (setLock bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -228,7 +229,7 @@ func (s *Store) RecordFailedSignIn(ctx context.Context, id int64, now time.Time,
 	attempts++
 	if attempts >= max && until == nil {
 		t := now.Add(lock)
-		until = &t
+		until, setLock = &t, true
 	}
 	if _, err := tx.Exec(ctx, `UPDATE accounts SET failed_attempts = $2, locked_until = $3 WHERE id = $1`, id, attempts, until); err != nil {
 		return false, err
@@ -236,7 +237,7 @@ func (s *Store) RecordFailedSignIn(ctx context.Context, id int64, now time.Time,
 	if err := tx.Commit(ctx); err != nil {
 		return false, err
 	}
-	return until != nil, nil
+	return setLock, nil
 }
 
 // RecordSignIn records a good sign-in at time at and clears the account's

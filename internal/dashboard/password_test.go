@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -633,6 +634,67 @@ func TestHashSlotsFull(t *testing.T) {
 	e.signInPassword("ops", "ops-password-123")
 	if verifies != 1 {
 		t.Errorf("Verify ran %d times, want 1", verifies)
+	}
+}
+
+// While the account is locked, a change with the right current password
+// is refused without hashing the new one: it costs no more than a wrong
+// one.
+func TestChangePasswordLockedHashesNothing(t *testing.T) {
+	e := newEnv(t, nil)
+	acc := e.addPasswordAccount("ops", "ops-password-123", false)
+	c := e.signInPassword("ops", "ops-password-123")
+	hashes := 0
+	e.d.Auth.hash = func(pw string) (string, error) { hashes++; return password.Hash(pw) }
+	for range 5 {
+		if _, err := e.st.RecordFailedSignIn(ctx, acc.ID, e.clock.now(), 5, 15*time.Minute); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if rec := e.changePassword(c, "ops-password-123", "new-password-456"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("the right current password while locked = %d %s, want 401", rec.Code, rec.Body)
+	}
+	if hashes != 0 {
+		t.Errorf("the new password was hashed %d times while locked", hashes)
+	}
+	e.clock.advance(15 * time.Minute)
+	if rec := e.changePassword(c, "ops-password-123", "new-password-456"); rec.Code != http.StatusNoContent {
+		t.Fatalf("the change after the lock = %d %s, want 204", rec.Code, rec.Body)
+	}
+	if hashes != 1 {
+		t.Errorf("the new password was hashed %d times, want 1", hashes)
+	}
+}
+
+// Wrong passwords that land at once past the limit record the lock once.
+func TestConcurrentFailuresAuditLockOnce(t *testing.T) {
+	e := newEnv(t, nil)
+	e.addPasswordAccount("ops", "ops-password-123", false)
+	for i := range 4 {
+		if rec := e.passwordSignIn("ops", "wrong-password-"+string(rune('a'+i)), ""); rec.Code != 401 {
+			t.Fatalf("wrong password %d = %d", i+1, rec.Code)
+		}
+	}
+	var wg sync.WaitGroup
+	for i := range 6 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			e.passwordSignIn("ops", "wrong-password-x"+string(rune('a'+i)), "")
+		}()
+	}
+	wg.Wait()
+	locks := 0
+	for _, a := range e.audits() {
+		if a == "ops locked" {
+			locks++
+		}
+	}
+	if locks != 1 {
+		t.Errorf("the lock was audited %d times, want 1: %q", locks, e.audits())
+	}
+	if n := strings.Count(e.logs.String(), "account locked after"); n != 1 {
+		t.Errorf("the lock was logged %d times, want 1", n)
 	}
 }
 
