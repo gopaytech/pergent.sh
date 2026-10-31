@@ -83,7 +83,7 @@ jobEgress:
 #     url: https://pergent-dashboard.example.com
 #     admin_password_env: PERGENT_SH_ADMIN_PASSWORD   # with adminPassword.existingSecret
 
-# -- Rendered verbatim to /etc/pergent-sh/config.yaml. See the repository README for every field and the examples above (config.gitlab, config.github, config.llm, config.dashboard). No instance and no LLM are set by default: without config.dashboard.url, pergent.sh needs at least one instance and an LLM here. listen and skills_dir are fixed by the chart: leave them as they are.
+# -- Rendered verbatim to /etc/pergent-sh/config.yaml. See the repository README for every field and for examples of config.gitlab, config.github, config.llm and config.dashboard ("Config reference", "Instances and the LLM in the config file"). No instance and no LLM are set by default: without config.dashboard.url, pergent.sh needs at least one instance and an LLM here. listen and skills_dir are fixed by the chart: leave them as they are.
 config:
   listen: ":8080"
   skills_dir: /etc/pergent-sh/skills

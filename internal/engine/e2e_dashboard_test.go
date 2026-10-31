@@ -722,10 +722,6 @@ func TestEndToEndDashboard(t *testing.T) {
 	default:
 	}
 
-	// Nothing the dashboard sent holds a token or secret.
-	e.mu.Lock()
-	sent := strings.Join(e.bodies, "\n")
-	e.mu.Unlock()
 	// The audit log tells who did what, and holds no password either.
 	var audit dashboard.AuditPageView
 	e.getJSON(t, operator, "/api/audit", &audit)
@@ -738,8 +734,9 @@ func TestEndToEndDashboard(t *testing.T) {
 			t.Errorf("the audit log has no %s entry: %+v", want, audit.Entries)
 		}
 	}
+	// Nothing the dashboard sent holds a token or secret.
 	e.mu.Lock()
-	sent = strings.Join(e.bodies, "\n")
+	sent := strings.Join(e.bodies, "\n")
 	e.mu.Unlock()
 	logged := env.Logs()
 	for _, secret := range []string{aliceToken, bobToken, dashClientSecret, newDeployToken, testLLMKey, resultToken,
