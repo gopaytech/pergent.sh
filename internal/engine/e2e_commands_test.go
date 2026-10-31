@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/dashboard"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
@@ -247,7 +248,8 @@ func TestEndToEndCommands(t *testing.T) {
 
 	// A word that is not a command is told what the bot understands, and
 	// restoring is not one of them: it is a dashboard button.
-	c = e.say(t, dev, userDeveloper, "@pergent-review restore "+id)
+	// (From someone who has not been answered a moment ago.)
+	c = e.say(t, "rep", userReporter, "@pergent-review restore "+id)
 	e.answer(t)
 	e.wantReactions(t, c, eyes, up)
 	if got := e.replies(); len(got) != 3 || !strings.HasPrefix(got[2], "Commands: `@pergent-review review`") {
@@ -318,6 +320,9 @@ func TestEndToEndCommands(t *testing.T) {
 
 	// 7. "review failed" re-runs style alone: a Job with only that skill,
 	// whose result is merged with security's into one review.
+	// dev and mo were answered at the start: a person's next command is not
+	// answered until two minutes after their last one.
+	env.SetNow(env.Now().Add(commandThrottleWindow + time.Second))
 	known := []string{runA, runB}
 	c = e.say(t, dev, userDeveloper, "@pergent-review review failed")
 	e.answer(t)
@@ -370,9 +375,10 @@ func TestEndToEndCommands(t *testing.T) {
 		t.Errorf("a command at the cap started a Job (%d, was %d)", n, jobs)
 	}
 
-	// 9. The same command again within 30 seconds is dropped: 👎, no reply.
+	// 9. The same command again within 30 seconds, by someone else, is
+	// dropped: 👎, no reply.
 	replies := len(e.replies())
-	c = e.say(t, dev, userDeveloper, "@pergent-review review failed")
+	c = e.say(t, "eve", userStranger, "@pergent-review review failed")
 	e.answer(t)
 	e.wantReactions(t, c, eyes, down)
 	if n := len(e.replies()); n != replies {

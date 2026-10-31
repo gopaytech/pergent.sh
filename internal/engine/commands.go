@@ -27,6 +27,13 @@ const (
 	// commandRepeatWindow is how long after a command was answered the same
 	// command (same kind, same finding ID) on the same change is dropped.
 	commandRepeatWindow = 30 * time.Second
+	// commandThrottleWindow is how long after a command of someone on a
+	// change was answered their next command on it is left unanswered
+	// (throttled): every answer costs platform calls and a comment of the
+	// bot, which a refusal or help would otherwise let anyone with a
+	// comment box make at will. A real command written within the window
+	// after an answered one is throttled too; its author writes it again.
+	commandThrottleWindow = 2 * time.Minute
 	// maxGiveUpText bounds the error text kept as a given-up command's outcome.
 	maxGiveUpText = 200
 )
@@ -274,6 +281,15 @@ func (e *Engine) handleCommand(ctx, bctx context.Context, cmd store.Command, log
 	plat, ok := e.Platforms.Get(cmd.MR.Instance)
 	if !ok || plat.Forge == nil {
 		return verdict{}, errors.New("not connected to the instance")
+	}
+	// Before any platform call (the first reaction is one): a command that
+	// is throttled costs the platform nothing and gets no answer at all.
+	answered, err := e.Store.RecentAnswered(ctx, cmd.MR, cmd.AuthorID, e.now().Add(-commandThrottleWindow))
+	if err != nil {
+		return verdict{}, fmt.Errorf("check the commenter's recent commands: %w", err)
+	}
+	if answered {
+		return verdict{outcome: store.CommandThrottled}, nil
 	}
 	if cmd.Attempts == 0 {
 		e.react(bctx, cmd, forge.ReactSeen, log)

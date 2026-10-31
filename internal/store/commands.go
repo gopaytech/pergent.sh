@@ -30,6 +30,11 @@ type Command struct {
 // a refused or dropped one was with any other text.
 const CommandDone = "done"
 
+// CommandThrottled is the outcome of a command left unanswered because its
+// author had a command on the change answered a moment before. It does not
+// count as an answer for RecentAnswered, so throttling never extends itself.
+const CommandThrottled = "throttled"
+
 // commandLease is how long a claim holds a command: one claimed longer ago
 // and not finished is taken to be lost (the engine stopped) and is offered
 // again.
@@ -137,5 +142,19 @@ func (s *Store) RecentCommand(ctx context.Context, mr MRKey, kind, arg string, s
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND kind = $4 AND arg = $5
 		  AND created_at >= $6 AND outcome = $7)`,
 		mr.Instance, mr.ProjectID, mr.IID, kind, arg, since, CommandDone).Scan(&found)
+	return found, err
+}
+
+// RecentAnswered reports whether a command of authorID on mr was finished at
+// or after since with any outcome but CommandThrottled: the engine answered
+// it (a reply, a refusal, a carried-out command, a drop). A command still
+// being answered has no finish time, so the one being checked never finds
+// itself. Like RecentCommand, it assumes one processor answers commands.
+func (s *Store) RecentAnswered(ctx context.Context, mr MRKey, authorID int64, since time.Time) (bool, error) {
+	var found bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM commands
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND author_id = $4
+		  AND finished_at >= $5 AND outcome <> $6)`,
+		mr.Instance, mr.ProjectID, mr.IID, authorID, since, CommandThrottled).Scan(&found)
 	return found, err
 }

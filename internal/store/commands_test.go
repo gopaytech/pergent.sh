@@ -194,6 +194,75 @@ func TestRecentCommand(t *testing.T) {
 	}
 }
 
+// RecentAnswered tells whether the author had a command on the change
+// answered since a time, whatever the command and its outcome except
+// throttled.
+func TestRecentAnswered(t *testing.T) {
+	s := newStore(t)
+	finish := func(mr MRKey, author int64, comment int64, outcome string, at time.Time) {
+		t.Helper()
+		c := command("help", "", comment)
+		c.MR, c.AuthorID = mr, author
+		if ok, err := s.InsertCommand(ctx, c); err != nil || !ok {
+			t.Fatalf("InsertCommand = %v, %v", ok, err)
+		}
+		got, err := s.ClaimCommands(ctx, 100, t0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, g := range got {
+			if g.CommentID == comment && g.MR == mr {
+				if err := s.FinishCommand(ctx, g.ID, outcome, at); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+	answered := func(mr MRKey, author int64, since time.Time) bool {
+		t.Helper()
+		ok, err := s.RecentAnswered(ctx, mr, author, since)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+
+	if answered(mr1, 11, t0) {
+		t.Fatal("no command at all counted")
+	}
+	// Claimed and not finished: not answered.
+	c := command("help", "", 1)
+	if _, err := s.InsertCommand(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ClaimCommands(ctx, 100, t0); err != nil {
+		t.Fatal(err)
+	}
+	if answered(mr1, 11, t0.Add(-time.Hour)) {
+		t.Error("an unanswered command counted")
+	}
+
+	finish(mr1, 12, 2, "refused: no permission", t0.Add(time.Minute))
+	if !answered(mr1, 12, t0) {
+		t.Error("a refused command was not found")
+	}
+	if !answered(mr1, 12, t0.Add(time.Minute)) {
+		t.Error("the boundary is inclusive")
+	}
+	if answered(mr1, 12, t0.Add(time.Minute+time.Second)) {
+		t.Error("an older answer was found")
+	}
+	if answered(mr1, 13, t0) || answered(mr2, 12, t0) {
+		t.Error("another author or change matched")
+	}
+
+	// A throttled command is not an answer: throttling never extends itself.
+	finish(mr1, 14, 3, CommandThrottled, t0.Add(time.Minute))
+	if answered(mr1, 14, t0) {
+		t.Error("a throttled command counted")
+	}
+}
+
 func TestFinishCommand(t *testing.T) {
 	s := newStore(t)
 	if _, err := s.InsertCommand(ctx, command("review", "", 1)); err != nil {

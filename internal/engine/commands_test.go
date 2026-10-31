@@ -404,6 +404,8 @@ func TestDismissAlreadyDismissed(t *testing.T) {
 	f.say(1, "mo", "dismiss", "abc123", "constant", at)
 	f.run()
 
+	// mo's next command is answered once the throttle window has passed.
+	f.SetNow(f.Now().Add(commandThrottleWindow + time.Second))
 	c := f.say(1, "mo", "dismiss", "abc123def4", "again", at.Add(time.Minute))
 	f.run()
 
@@ -540,7 +542,8 @@ func TestUnknownIDAndHelp(t *testing.T) {
 	askHelp := f.say(1, "eve", "help", "", "", at)
 	unknown := f.say(1, "dev", "unknown", "", "", at)
 	// Not a member: the permission is refused before the review is looked at.
-	stranger := f.say(1, "eve", "dismiss", "ffffff", "reason", at)
+	// (Another one than eve: a second command of hers would be throttled.)
+	stranger := f.sayAs(1, "zed", userStranger+1, "dismiss", "ffffff", "reason", at)
 	f.run()
 
 	f.wantReactions(1, unknownID, eyes, down)
@@ -596,9 +599,10 @@ func TestDuplicateWithin30s(t *testing.T) {
 	f.review(skillOf(t, "security", "no_blocking_issues"))
 	at := time.Now()
 	first := f.say(1, "dev", "review", "", "", at)
+	// (Four people: a second command of one of them would be throttled.)
 	again := f.say(1, "mo", "review", "", "", at.Add(10*time.Second))
-	other := f.say(1, "mo", "review_failed", "", "", at.Add(11*time.Second))
-	later := f.say(1, "mo", "review", "", "", at.Add(40*time.Second))
+	other := f.say(1, "maya", "review_failed", "", "", at.Add(11*time.Second))
+	later := f.sayAs(1, "nia", userNamesake, "review", "", "", at.Add(40*time.Second))
 
 	f.run()
 
@@ -609,6 +613,62 @@ func TestDuplicateWithin30s(t *testing.T) {
 	// The dropped one is not answered with a reply, and the other command
 	// finds its head queued already.
 	f.wantReplies(1)
+}
+
+// Every answer costs platform calls and a comment of the bot, so a person's
+// next command on a change is left alone for two minutes after one of theirs
+// was answered: no reaction, no reply, no platform call.
+func TestCommandsAreThrottledPerAuthorAndChange(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillOf(t, "security", "no_blocking_issues"))
+	at := time.Now()
+
+	first := f.say(1, "eve", "help", "", "", at)
+	f.run()
+	f.wantReactions(1, first, eyes, up)
+	f.wantReplies(1, help)
+
+	// The same person again, a help or a refusal alike: nothing at all.
+	reads := len(f.GitLab.Requests(http.MethodGet, mrPath(1)))
+	again := f.say(1, "eve", "help", "", "", at.Add(time.Second))
+	refusal := f.say(1, "eve", "dismiss", "ffffff", "reason", at.Add(2*time.Second))
+	f.run()
+	f.wantReactions(1, again)
+	f.wantReactions(1, refusal)
+	f.wantReplies(1, help)
+	if n := len(f.GitLab.Requests(http.MethodGet, mrPath(1))); n != reads {
+		t.Errorf("a throttled command made %d platform reads", n-reads)
+	}
+
+	// A real command inside the window is throttled too, and left undone.
+	real := f.sayAs(1, "eve", userStranger, "review", "", "", at.Add(3*time.Second))
+	f.run()
+	f.wantReactions(1, real)
+	if n := len(f.queued()); n != 0 {
+		t.Errorf("%d runs queued by a throttled command", n)
+	}
+
+	// Throttled commands do not extend the window: it is counted from the
+	// last answer.
+	f.SetNow(f.Now().Add(commandThrottleWindow - time.Second))
+	soon := f.say(1, "eve", "help", "", "", at.Add(4*time.Second))
+	f.run()
+	f.wantReactions(1, soon)
+	f.SetNow(f.Now().Add(2 * time.Second))
+	// (Written long after the first: the same command inside 30 seconds of
+	// an answered one is dropped, which is another rule.)
+	later := f.say(1, "eve", "help", "", "", at.Add(3*time.Minute))
+	f.run()
+	f.wantReactions(1, later, eyes, up)
+	f.wantReplies(1, help, help)
+
+	// Another person, and another change, are not throttled.
+	other := f.say(1, "rep", "help", "", "", at.Add(5*time.Minute))
+	f.serveMR(2, false)
+	elsewhere := f.say(2, "eve", "help", "", "", at.Add(5*time.Minute))
+	f.run()
+	f.wantReactions(1, other, eyes, up)
+	f.wantReactions(2, elsewhere, eyes, up)
 }
 
 func TestCommandOnSwitchedOffRepo(t *testing.T) {
@@ -685,7 +745,7 @@ func TestRerunCapsAcrossCommandsAndButtons(t *testing.T) {
 			t.Fatalf("%d runs queued under the cap, want 1", n)
 		}
 		// That run is queued no more: the next command finds the cap used up.
-		c2 := f2.say(1, "dev", "review_failed", "", "", time.Now().Add(time.Minute))
+		c2 := f2.say(1, "mo", "review_failed", "", "", time.Now().Add(time.Minute))
 		f2.run()
 		f2.wantReactions(1, c2, eyes, down)
 		f2.wantReplies(1, atCap)
@@ -722,7 +782,7 @@ func TestRerunCapsAcrossCommandsAndButtons(t *testing.T) {
 		f.wantReactions(1, before, eyes, down)
 
 		f.SetNow(midnight)
-		after := f.say(1, "dev", "review_failed", "", "", time.Now().Add(time.Minute))
+		after := f.say(1, "mo", "review_failed", "", "", time.Now().Add(time.Minute))
 		f.run()
 		f.wantReactions(1, after, eyes, up)
 		if n := len(f.queued()); n != 1 {
@@ -744,7 +804,7 @@ func TestRerunCapsAcrossCommandsAndButtons(t *testing.T) {
 		f.run()
 		f.wantReactions(1, one, eyes, up)
 		// That one was the second re-run of the day; the pushes were not.
-		two := f.say(1, "dev", "review_failed", "", "", time.Now().Add(time.Minute))
+		two := f.say(1, "mo", "review_failed", "", "", time.Now().Add(time.Minute))
 		f.run()
 		f.wantReactions(1, two, eyes, down)
 		f.wantReplies(1, atCap)
@@ -885,7 +945,7 @@ func TestTwoDismissalsInOnePass(t *testing.T) {
 	f.review(a, b)
 	at := time.Now()
 	one := f.say(1, "mo", "dismiss", "aaaaaa", "constant", at)
-	two := f.say(1, "mo", "dismiss", "bbbbbb", "constant", at)
+	two := f.sayAs(1, "nia", userNamesake, "dismiss", "bbbbbb", "constant", at)
 
 	f.run()
 
