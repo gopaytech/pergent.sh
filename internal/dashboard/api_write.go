@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -536,6 +537,12 @@ func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
+	// The caps are the admins' to change, even for a repository whose
+	// maintainer may change the rest.
+	if slices.ContainsFunc(keys, isRerunLimitKey) && session(r).Role(repo.Instance, repo.Project) < RoleAdmin {
+		writeError(w, http.StatusForbidden, msgNeedsRole)
+		return
+	}
 	d.updateSettings(w, r, repo, edit, "settings changed", "settings_updated", strings.Join(keys, ", "))
 }
 
@@ -544,10 +551,14 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// A maintainer's reset leaves the caps, which only an admin changes.
+	admin := session(r).Role(repo.Instance, repo.Project) >= RoleAdmin
 	d.updateSettings(w, r, repo, func(row *store.DashboardRepo) {
 		row.Approve, row.ReviewDrafts, row.FailureStatus = nil, nil, nil
 		row.Skills, row.JobTimeoutSeconds, row.JobMemory = nil, nil, nil
-		row.RerunLimitPerMR, row.RerunLimitPerRepo = nil, nil
+		if admin {
+			row.RerunLimitPerMR, row.RerunLimitPerRepo = nil, nil
+		}
 	}, "settings reset", "settings_reset", "")
 }
 
@@ -729,11 +740,17 @@ func rerunLimitSetting(key string, raw json.RawMessage, null bool) (func(*store.
 		limit := int(n)
 		v = &limit
 	}
-	if key == "rerunLimitPerMR" {
+	switch key {
+	case "rerunLimitPerMR":
 		return func(row *store.DashboardRepo) { row.RerunLimitPerMR = v }, ""
+	case "rerunLimitPerRepo":
+		return func(row *store.DashboardRepo) { row.RerunLimitPerRepo = v }, ""
 	}
-	return func(row *store.DashboardRepo) { row.RerunLimitPerRepo = v }, ""
+	return nil, key + " is not a re-run cap" // unreachable: the callers switch on the two keys
 }
+
+// isRerunLimitKey is whether key is one of the re-run caps.
+func isRerunLimitKey(key string) bool { return key == "rerunLimitPerMR" || key == "rerunLimitPerRepo" }
 
 func memoryMessage(floor resource.Quantity) string {
 	return fmt.Sprintf(`jobMemory must be a size from %s to %s such as "6Gi", or null`, floor.String(), maxJobMemory.String())

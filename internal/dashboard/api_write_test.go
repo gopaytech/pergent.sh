@@ -392,6 +392,51 @@ func TestSettingsMemoryFloor(t *testing.T) {
 	wantCode(t, e.send(c, "PUT", target, `{"jobMemory":"256Mi"}`), "256Mi", http.StatusOK)
 }
 
+// Only admins change the re-run caps: a maintainer's PUT naming one (even to
+// null) is 403 and changes nothing, their other settings still work, and
+// their reset leaves the caps as stored. An admin sets and resets them.
+func TestCapsNeedAdmin(t *testing.T) {
+	e := newEnv(t, nil)
+	e.dashboardRepo("main", "acme/gadgets", func(r *store.DashboardRepo) {
+		mr, repo := 7, 70
+		r.RerunLimitPerMR, r.RerunLimitPerRepo = &mr, &repo
+	})
+	target := "/api/repositories/main/acme/gadgets/settings"
+	e.gl.setProject("acme/gadgets", gitlabProject("private", 20, 0))
+	e.aliceOn("main", store.RoleMaintainer)
+	maintainer := e.signIn("gitlab", "main")
+
+	for _, body := range []string{`{"rerunLimitPerMR":99}`, `{"rerunLimitPerRepo":null}`, `{"approve":false,"rerunLimitPerMR":5}`} {
+		before, _ := e.storedRepo("main", "acme/gadgets")
+		rec := e.send(maintainer, "PUT", target, body)
+		wantCode(t, rec, "maintainer PUT "+body, http.StatusForbidden)
+		if errorOf(t, rec) != msgNeedsRole {
+			t.Errorf("maintainer PUT %s: error = %q", body, errorOf(t, rec))
+		}
+		if after, _ := e.storedRepo("main", "acme/gadgets"); !after.UpdatedAt.Equal(before.UpdatedAt) {
+			t.Errorf("maintainer PUT %s changed the row", body)
+		}
+	}
+
+	wantCode(t, e.send(maintainer, "PUT", target, `{"approve":false}`), "maintainer PUT approve", http.StatusOK)
+	wantCode(t, e.send(maintainer, "POST", target+"/reset", ""), "maintainer reset", http.StatusOK)
+	r, _ := e.storedRepo("main", "acme/gadgets")
+	if r.Approve != nil || r.RerunLimitPerMR == nil || *r.RerunLimitPerMR != 7 || r.RerunLimitPerRepo == nil || *r.RerunLimitPerRepo != 70 {
+		t.Errorf("after a maintainer's reset row = %+v; want approve cleared, caps 7 and 70 kept", r)
+	}
+
+	admin := e.signInGitLab(true, "acme/gadgets")
+	wantCode(t, e.send(admin, "PUT", target, `{"rerunLimitPerMR":15,"rerunLimitPerRepo":null}`), "admin PUT caps", http.StatusOK)
+	r, _ = e.storedRepo("main", "acme/gadgets")
+	if r.RerunLimitPerMR == nil || *r.RerunLimitPerMR != 15 || r.RerunLimitPerRepo != nil {
+		t.Errorf("after an admin's PUT row = %+v", r)
+	}
+	wantCode(t, e.send(admin, "POST", target+"/reset", ""), "admin reset", http.StatusOK)
+	if r, _ = e.storedRepo("main", "acme/gadgets"); r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil {
+		t.Errorf("after an admin's reset row = %+v; want the caps cleared", r)
+	}
+}
+
 // The caps' range error names the setting and the range.
 func TestSettingsCapMessages(t *testing.T) {
 	e := newEnv(t, nil)

@@ -413,7 +413,9 @@ type LLMView struct {
 //     jobTimeoutSeconds (a whole number, 60 to 7200) and jobMemory (a
 //     Kubernetes quantity such as "6Gi", from 256Mi, and no less than
 //     jobs.resources.requests.memory, to 32Gi), and rerunLimitPerMR and
-//     rerunLimitPerRepo (a whole number, 1 to 1000). Any other key, or a value
+//     rerunLimitPerRepo (a whole number, 1 to 1000; only an admin of
+//     the repository changes these, else 403, and a maintainer's reset
+//     leaves them). Any other key, or a value
 //     out of bounds, is 400 and nothing changes. 200, RepositoryDetailView.
 //   - POST /api/repositories/{instance}/{project...}/settings/reset: every
 //     setting back to its default. 200, RepositoryDetailView.
