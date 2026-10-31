@@ -124,4 +124,10 @@ describe("Users", () => {
     expect(within(rowOf("admin")).queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
     expect(within(rowOf("dev-user")).getByRole("button", { name: "Remove" })).toBeInTheDocument();
   });
+
+  it("tells a platform admin the list is its own instance's", async () => {
+    fakeApi({ "GET /api/me": { body: platformAdmin }, "GET /api/users": { body: [userWaiting, userDev] } });
+    renderApp("/users");
+    expect(await screen.findByText(/Everyone who has signed in to main\./)).toBeInTheDocument();
+  });
 });

@@ -259,7 +259,9 @@ export type TeamMemberView = { id: number; username: string; platform: Platform;
 export type TeamRepoView = { instance: string; project: string };
 
 // TeamView is one team. repos are those the session can see; hiddenRepos
-// counts the rest, which a save keeps.
+// counts the rest, which a save keeps. members are those the session can see
+// (a platform admin its own instance's); hiddenMembers counts the rest,
+// which a save keeps too.
 export type TeamView = {
   id: number;
   name: string;
@@ -267,6 +269,7 @@ export type TeamView = {
   members: TeamMemberView[];
   repos: TeamRepoView[];
   hiddenRepos: number;
+  hiddenMembers: number;
 };
 
 // TeamUpdate is the body of PUT /api/teams/{id}: it replaces everything.

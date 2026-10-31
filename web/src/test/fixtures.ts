@@ -343,6 +343,7 @@ export const teamPayments: TeamView = {
   members: [{ id: 5, username: "dev-user", platform: "gitlab", instance: "main" }],
   repos: [{ instance: "main", project: "acme/payments" }],
   hiddenRepos: 0,
+  hiddenMembers: 0,
 };
 
 export const teamAdmins: TeamView = {
@@ -352,6 +353,7 @@ export const teamAdmins: TeamView = {
   members: [],
   repos: [],
   hiddenRepos: 0,
+  hiddenMembers: 0,
 };
 
 export const auditPage1: AuditPageView = {

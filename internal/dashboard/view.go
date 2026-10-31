@@ -446,11 +446,15 @@ type AvailableRepo struct {
 // team_deleted (detail: the name). Errors are {"error": "message"}.
 //
 //   - GET /api/users: []UserView, the waiting accounts first, then
-//     everyone by username.
+//     everyone by username. A platform admin is listed the platform
+//     accounts of its own instance only (no password accounts, none of
+//     another instance's).
 //   - DELETE /api/users/{id}: removes the account with its sessions and team
 //     memberships (its next request is 401; a platform account is made
 //     again, on no team, at its next sign-in). A password account needs a
-//     password admin (403); the last one can't be removed (409). 204.
+//     password admin (403); the last one can't be removed (409). A platform
+//     admin removes accounts of its own instance only (403 {"error": "you
+//     can only remove accounts of your own instance"}). 204.
 //   - POST /api/admin/accounts {"username"} (password admins only): a new
 //     password admin with a generated password, which must be changed at
 //     its first sign-in. The username is 1 to 64 letters, digits, ".", "_"
@@ -464,8 +468,12 @@ type AvailableRepo struct {
 //     platform accounts (400 otherwise). An admin team has "repos": [] (400
 //     otherwise). A repository is one switched on, or {"instance": X,
 //     "project": ""} for every repository of instance X (400 otherwise).
-//     For a platform admin the team's repositories it can't see are kept
-//     as they are, and it can name repositories of its own instance only
+//     A platform admin changes the members of its own instance only: those
+//     of other instances stay on the team whatever it names, and naming one
+//     that isn't on the team already is 409 {"error": "you can only change
+//     members of your own instance"}. For a platform admin the team's
+//     repositories it can't see are kept as they are, and it can name
+//     repositories of its own instance only
 //     (400); changing the role of a team that covers repositories it
 //     can't see is 409 {"error": "this team covers repositories you can't
 //     see; a password admin can change its role or remove it"}, since the
@@ -484,8 +492,9 @@ type AvailableRepo struct {
 //
 // A platform admin sees only what it can see: a team's repositories of
 // other instances, and those its platform hides from it, are counted in
-// hiddenRepos and never named; audit entries about a repository it can't
-// see are left out.
+// hiddenRepos and never named, and a team's members of other instances are
+// counted in hiddenMembers; audit entries about a repository it can't see
+// are left out.
 
 // UserView is one account.
 type UserView struct {
@@ -529,6 +538,9 @@ type TeamView struct {
 	Repos []TeamRepoView `json:"repos"`
 	// HiddenRepos counts the team's repositories the session can't see.
 	HiddenRepos int `json:"hiddenRepos"`
+	// HiddenMembers counts the team's members of other instances, which a
+	// platform admin never sees named; 0 for an operator.
+	HiddenMembers int `json:"hiddenMembers"`
 }
 
 // TeamMemberView is a team's member: a platform account.

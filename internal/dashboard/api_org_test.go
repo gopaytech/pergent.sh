@@ -449,6 +449,135 @@ func TestPlatformAdminCannotChangeRoleOfHiddenCoverage(t *testing.T) {
 	}
 }
 
+// A platform admin sees and lists only the accounts of its own instance:
+// no password accounts, none of another instance. Its waiting badge
+// (GET /api/me waitingUsers) counts the same waiting accounts the list
+// marks. An operator sees every account.
+func TestUsersListForPlatformAdmin(t *testing.T) {
+	e := newEnv(t, nil)
+	e.addPasswordAccount("root", operatorPassword, false)
+	c := e.signInGitLab(true, "acme/widgets")
+	e.platformAccount("main", 20, "bob")
+	e.platformAccount("gh", 21, "zed")
+	carol := e.platformAccount("main", 22, "carol")
+	e.team("devs", store.RoleViewer, []int64{carol})
+
+	users := decode[[]UserView](t, e.get(c, "/api/users"), "GET /api/users", http.StatusOK)
+	var names []string
+	waiting := 0
+	for _, u := range users {
+		names = append(names, u.Username)
+		if u.Waiting {
+			waiting++
+		}
+		if u.Kind != store.AccountPlatform || u.Instance != "main" {
+			t.Errorf("a platform admin is shown %+v", u)
+		}
+	}
+	if !slices.Equal(names, []string{"bob", "alice", "carol"}) {
+		t.Errorf("users = %v; want bob (waiting), alice, carol", names)
+	}
+	if code, me := e.me(c); code != http.StatusOK || me.WaitingUsers != waiting || waiting != 1 {
+		t.Errorf("waitingUsers = %d (%d); the list marks %d waiting", me.WaitingUsers, code, waiting)
+	}
+
+	op := e.signInPassword("root", operatorPassword)
+	all := decode[[]UserView](t, e.get(op, "/api/users"), "operator GET /api/users", http.StatusOK)
+	if len(all) != 5 {
+		t.Errorf("an operator sees %d accounts; want 5", len(all))
+	}
+}
+
+// A platform admin removes accounts of its own instance only: another
+// instance's is 403 and stays. An operator can.
+func TestPlatformAdminCannotDeleteOtherInstanceAccount(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.signInGitLab(true, "acme/widgets")
+	zed := e.platformAccount("gh", 21, "zed")
+	bob := e.platformAccount("main", 20, "bob")
+
+	rec := e.send(c, "DELETE", "/api/users/"+strconv.FormatInt(zed, 10), "")
+	if rec.Code != http.StatusForbidden || body(rec) != `{"error":"you can only remove accounts of your own instance"}` {
+		t.Errorf("DELETE zed = %d %s; want 403", rec.Code, rec.Body)
+	}
+	if _, found, _ := e.st.Account(ctx, zed); !found {
+		t.Error("zed was removed")
+	}
+	wantCode(t, e.send(c, "DELETE", "/api/users/"+strconv.FormatInt(bob, 10), ""), "DELETE bob", http.StatusNoContent)
+
+	op := e.signInOperator()
+	wantCode(t, e.send(op, "DELETE", "/api/users/"+strconv.FormatInt(zed, 10), ""), "operator DELETE zed", http.StatusNoContent)
+}
+
+// A platform admin sees a team's members of its own instance, counts the
+// others in hiddenMembers, adds and removes only its own, and the others
+// stay as they are; naming one that isn't on the team already is 409. An
+// operator sees and changes them all.
+func TestPlatformAdminTeamMembersOfOtherInstances(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.signInGitLab(true, "acme/widgets")
+	bob := e.platformAccount("main", 20, "bob")
+	carol := e.platformAccount("main", 22, "carol")
+	zed := e.platformAccount("gh", 21, "zed")
+	yan := e.platformAccount("gh", 23, "yan")
+	id := e.team("devs", store.RoleViewer, []int64{bob, zed}, store.TeamRepo{Instance: "main", Project: "acme/widgets"})
+	target := "/api/teams/" + strconv.FormatInt(id, 10)
+	put := func(members ...int64) *httptest.ResponseRecorder {
+		b, _ := json.Marshal(map[string]any{"name": "devs", "role": "viewer", "members": members,
+			"repos": []TeamRepoView{{Instance: "main", Project: "acme/widgets"}}})
+		return e.send(c, "PUT", target, string(b))
+	}
+
+	teams := decode[[]TeamView](t, e.get(c, "/api/teams"), "GET teams", http.StatusOK)
+	var devs TeamView
+	for _, tm := range teams {
+		if tm.ID == id {
+			devs = tm
+		}
+	}
+	if len(devs.Members) != 1 || devs.Members[0].ID != bob || devs.HiddenMembers != 1 {
+		t.Errorf("a platform admin sees %+v; want bob and hiddenMembers 1", devs)
+	}
+	if strings.Contains(e.get(c, "/api/teams").Body.String(), "zed") {
+		t.Error("GET /api/teams names another instance's member")
+	}
+
+	// The editor sends what it was shown: zed stays.
+	got := decode[TeamView](t, put(bob, carol), "PUT own members", http.StatusOK)
+	if len(got.Members) != 2 || got.HiddenMembers != 1 {
+		t.Errorf("PUT answer = %+v", got)
+	}
+	if tm := e.storedTeam(id); !slices.Equal(tm.Members, []int64{bob, carol, zed}) {
+		t.Errorf("stored members = %v; want bob, carol and zed", tm.Members)
+	}
+	// Removing its own members leaves the others.
+	wantCode(t, put(carol), "PUT removing bob", http.StatusOK)
+	if tm := e.storedTeam(id); !slices.Equal(tm.Members, []int64{carol, zed}) {
+		t.Errorf("stored members = %v; want carol and zed", tm.Members)
+	}
+	// Naming zed, who is on the team already, changes nothing.
+	wantCode(t, put(carol, zed), "PUT naming zed", http.StatusOK)
+
+	// Adding another instance's account is refused.
+	rec := put(carol, yan)
+	if rec.Code != http.StatusConflict || body(rec) != `{"error":"you can only change members of your own instance"}` {
+		t.Errorf("PUT adding yan = %d %s; want 409", rec.Code, rec.Body)
+	}
+	if tm := e.storedTeam(id); !slices.Equal(tm.Members, []int64{carol, zed}) {
+		t.Errorf("the refused change changed the members: %v", tm.Members)
+	}
+
+	op := e.signInOperator()
+	b := fmt.Sprintf(`{"name":"devs","role":"viewer","members":[%d],"repos":[{"instance":"main","project":"acme/widgets"}]}`, yan)
+	got = decode[TeamView](t, e.send(op, "PUT", target, b), "operator PUT", http.StatusOK)
+	if len(got.Members) != 1 || got.HiddenMembers != 0 || got.Members[0].ID != yan {
+		t.Errorf("operator PUT answer = %+v", got)
+	}
+	if tm := e.storedTeam(id); !slices.Equal(tm.Members, []int64{yan}) {
+		t.Errorf("stored members = %v; want yan only", tm.Members)
+	}
+}
+
 // Every write here needs the session's CSRF token: 403 with code "csrf".
 func TestOrgWritesNeedCSRF(t *testing.T) {
 	e := newEnv(t, nil)

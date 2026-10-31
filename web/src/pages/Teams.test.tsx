@@ -113,6 +113,22 @@ describe("Teams", () => {
     expect(teamCard("Admins")).not.toHaveTextContent("you can't see");
   });
 
+  it("says how many members of other instances a team has, and keeps them", async () => {
+    fakeApi({
+      "GET /api/me": { body: platformAdmin },
+      "GET /api/teams": { body: [{ ...teamPayments, hiddenMembers: 2 }, { ...teamAdmins, members: [], hiddenMembers: 1 }] },
+      ...base,
+    });
+    renderApp("/teams");
+    const card = await screen.findByRole("region", { name: "Payments" });
+    expect(card).toHaveTextContent("dev-user, +2 members from other instances");
+    expect(teamCard("Admins")).toHaveTextContent("Members: +1 member from other instances");
+    await userEvent.click(within(card).getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("form", { name: "Edit Payments" })).toHaveTextContent(
+      "+2 members from other instances stay as they are when you save.",
+    );
+  });
+
   it("doesn't promise to keep hidden repositories once the role is admin", async () => {
     fakeApi({
       "GET /api/me": { body: platformAdmin },

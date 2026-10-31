@@ -38,6 +38,8 @@ const (
 	msgOtherInstance  = "you can add repositories of your own instance only"
 	msgBadBefore      = "before must be the ID of an audit entry"
 	msgHiddenCoverage = "this team covers repositories you can't see; a password admin can change its role or remove it"
+	msgOtherAccount   = "you can only remove accounts of your own instance"
+	msgOtherMembers   = "you can only change members of your own instance"
 )
 
 var usernamePattern = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,64}$`)
@@ -75,8 +77,14 @@ func pathID(r *http.Request) (int64, bool) {
 
 // --- users ---
 
+// seesAccount reports whether the session can see an account: an operator
+// every one; a platform admin the platform accounts of its own instance.
+func seesAccount(se Session, a store.Account) bool {
+	return se.Operator || (a.Kind == store.AccountPlatform && a.Instance == se.Instance)
+}
+
 func (d *Dashboard) users(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, se := r.Context(), session(r)
 	accounts, err := d.Store.Accounts(ctx)
 	if err != nil {
 		d.failed(w, r, "listing accounts", err)
@@ -95,6 +103,9 @@ func (d *Dashboard) users(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]UserView, 0, len(accounts))
 	for _, a := range accounts {
+		if !seesAccount(se, a) {
+			continue
+		}
 		refs := of[a.ID]
 		if refs == nil {
 			refs = []TeamRef{}
@@ -125,6 +136,10 @@ func (d *Dashboard) deleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if acc.Kind == store.AccountPassword && !se.Operator {
 		writeError(w, http.StatusForbidden, msgPasswordOnly)
+		return
+	}
+	if !seesAccount(se, acc) {
+		writeError(w, http.StatusForbidden, msgOtherAccount)
 		return
 	}
 	deleted, err := d.Store.DeleteAccount(ctx, id)
@@ -206,6 +221,10 @@ func teamView(se Session, t store.Team, accounts map[int64]store.Account) TeamVi
 	v := TeamView{ID: t.ID, Name: t.Name, Role: t.Role, Members: []TeamMemberView{}, Repos: []TeamRepoView{}}
 	for _, id := range t.Members {
 		a := accounts[id]
+		if !seesAccount(se, a) {
+			v.HiddenMembers++
+			continue
+		}
 		v.Members = append(v.Members, TeamMemberView{ID: id, Username: a.Username, Platform: a.Platform, Instance: a.Instance})
 	}
 	for _, tr := range t.Repos {
@@ -297,6 +316,10 @@ func (d *Dashboard) createTeam(w http.ResponseWriter, r *http.Request) {
 // none) or removing it. Only a session that sees everything can.
 var errHiddenCoverage = errors.New(msgHiddenCoverage)
 
+// errOtherMembers refuses adding a member of another instance: a platform
+// admin only changes the members of its own.
+var errOtherMembers = errors.New(msgOtherMembers)
+
 // coversHidden reports whether t covers a repository the session can't see.
 func coversHidden(se Session, t store.Team) bool {
 	return slices.ContainsFunc(t.Repos, func(tr store.TeamRepo) bool { return !seesTeamRepo(se, tr) })
@@ -358,6 +381,10 @@ func (d *Dashboard) updateTeam(w http.ResponseWriter, r *http.Request) {
 		if t.Role != in.Role && coversHidden(se, *t) {
 			return errHiddenCoverage
 		}
+		members, err := teamMembers(se, *t, in.Members, accounts)
+		if err != nil {
+			return err
+		}
 		saved := repos
 		if in.Role == store.RoleAdmin {
 			saved = nil // an admin team has no repository list
@@ -369,7 +396,7 @@ func (d *Dashboard) updateTeam(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		t.Name, t.Role, t.Members, t.Repos = name, in.Role, in.Members, saved
+		t.Name, t.Role, t.Members, t.Repos = name, in.Role, members, saved
 		after = *t
 		return nil
 	})
@@ -379,6 +406,9 @@ func (d *Dashboard) updateTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, errHiddenCoverage):
 		writeError(w, http.StatusConflict, msgHiddenCoverage)
+		return
+	case errors.Is(err, errOtherMembers):
+		writeError(w, http.StatusConflict, msgOtherMembers)
 		return
 	case err != nil:
 		d.Log.Error("dashboard: changing a team failed", "team", id, "error", err.Error())
@@ -401,6 +431,34 @@ func (d *Dashboard) updateTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, teamView(se, t, accounts))
+}
+
+// teamMembers is the member list to store for a team change that names
+// submitted. An operator's is the one submitted. A platform admin changes
+// only the members of its own instance: those of other instances stay on
+// the team whatever it names (it is never shown them), and naming one that
+// isn't on the team already is errOtherMembers.
+func teamMembers(se Session, t store.Team, submitted []int64, accounts map[int64]store.Account) ([]int64, error) {
+	if se.Operator {
+		return submitted, nil
+	}
+	own := func(id int64) bool { return accounts[id].Instance == se.Instance }
+	var out []int64
+	for _, id := range t.Members {
+		if !own(id) {
+			out = append(out, id)
+		}
+	}
+	kept := slices.Clone(out)
+	for _, id := range submitted {
+		switch {
+		case own(id):
+			out = append(out, id)
+		case !slices.Contains(kept, id):
+			return nil, errOtherMembers
+		}
+	}
+	return out, nil
 }
 
 // teamRepos checks the repositories of a team change and returns those to

@@ -21,7 +21,11 @@ export default function Users() {
       <div className="top">
         <div>
           <h1>Users</h1>
-          <div className="sub">Everyone who has signed in. Add them to a team to give them access.</div>
+          <div className="sub">
+            {me.operator
+              ? "Everyone who has signed in. Add them to a team to give them access."
+              : `Everyone who has signed in to ${me.instance}. Add them to a team to give them access.`}
+          </div>
         </div>
         {me.operator && !adding && (
           <button type="button" className="btn primary" onClick={() => setAdding(true)}>

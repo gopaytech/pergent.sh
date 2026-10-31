@@ -22,6 +22,9 @@ const adminText = "Admins see every repository they can see on their platform.";
 // hiddenText is how a team's repositories the admin can't see are counted.
 const hiddenText = (n: number) => `+${n} repositories you can't see`;
 
+// hiddenMembersText is how a team's members of other instances are counted.
+const hiddenMembersText = (n: number) => `+${n} ${n === 1 ? "member" : "members"} from other instances`;
+
 // repoLabel names what a team covers: a whole instance or one repository.
 const repoLabel = (r: TeamRepoView) => (r.project === "" ? `All repositories of ${r.instance}` : r.project);
 
@@ -132,7 +135,13 @@ function TeamCard({ team }: { team: TeamView }) {
       {remove.isError && <ErrorBox error={remove.error} />}
       <div className="facts">
         <div>
-          Members: {team.members.length === 0 ? "none" : team.members.map((m) => m.username).join(", ")}
+          Members:{" "}
+          {team.members.length === 0 && team.hiddenMembers === 0
+            ? "none"
+            : [
+                ...team.members.map((m) => m.username),
+                ...(team.hiddenMembers > 0 ? [hiddenMembersText(team.hiddenMembers)] : []),
+              ].join(", ")}
         </div>
         <div>
           Repositories:{" "}
@@ -258,6 +267,9 @@ function EditorForm({
       <fieldset>
         <legend>Members</legend>
         {accounts.length === 0 && <div className="meta">Nobody has signed in with GitLab or GitHub yet.</div>}
+        {team.hiddenMembers > 0 && (
+          <div className="meta">{hiddenMembersText(team.hiddenMembers)} stay as they are when you save.</div>
+        )}
         {accounts.map((u) => (
           <label className="check" key={u.id}>
             <input
