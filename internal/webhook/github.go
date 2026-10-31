@@ -29,7 +29,8 @@ const (
 // queues work and answers fast; the engine does the rest.
 type GitHubHandler struct {
 	Config *config.Config
-	// Instances tells which GitHub instances exist.
+	// Instances tells which GitHub instances exist; nil means the
+	// config's alone.
 	Instances *instances.Registry
 	// Secrets maps an instance name to the review App's webhook secret; an
 	// instance without one is not connected, and its webhooks are refused.
@@ -66,6 +67,14 @@ type pullRequestEvent struct {
 	} `json:"changes"`
 }
 
+// registry is Instances, or the config's instances alone when it is nil.
+func (h *GitHubHandler) registry() *instances.Registry {
+	if h.Instances != nil {
+		return h.Instances
+	}
+	return instances.New(h.Config, nil, nil)
+}
+
 // secret is the webhook secret of instance name, "" when it has none.
 func (h *GitHubHandler) secret(name string) string {
 	s, _ := h.Secrets.Get(name)
@@ -81,7 +90,7 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue(instancePath)
 	log := h.logger().With("instance", name)
 
-	if platform, _ := h.Instances.Platform(name); platform != config.PlatformGitHub {
+	if platform, _ := h.registry().Platform(name); platform != config.PlatformGitHub {
 		log.Info("webhook rejected", "outcome", "unknown_instance")
 		http.Error(w, "unknown instance", http.StatusNotFound)
 		return
@@ -122,7 +131,7 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	pr := ev.PullRequest
 	log = log.With("repository", ev.Repository.FullName, "number", pr.Number, "action", ev.Action)
-	repo, ok, err := lookup(r.Context(), repositories(h.Repos, h.Config, h.Instances), config.PlatformGitHub, name, ev.Repository.FullName)
+	repo, ok, err := lookup(r.Context(), repositories(h.Repos, h.Config, h.registry()), config.PlatformGitHub, name, ev.Repository.FullName)
 	if err != nil {
 		log.Error("webhook failed", "outcome", "lookup_error", "err", err)
 		http.Error(w, "storage error", http.StatusInternalServerError)

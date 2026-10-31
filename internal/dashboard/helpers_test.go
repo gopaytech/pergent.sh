@@ -631,11 +631,11 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 
 // signInProviders sets up sign-in for the OAuth clients the config's
 // instances name in the environment, as the binary does when it connects
-// them.
+// them. Instances added in the dashboard are left to the test.
 func signInProviders(t *testing.T, d *Dashboard) {
 	t.Helper()
 	for _, inst := range d.registry.All() {
-		if !inst.HasOAuth() {
+		if inst.Source != instances.SourceConfig || !inst.HasOAuth() {
 			continue
 		}
 		var s instances.Secrets

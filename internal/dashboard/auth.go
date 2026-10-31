@@ -181,11 +181,11 @@ func newAuth(o Options, repos *settings.Resolver) (*Auth, error) {
 }
 
 // SetProvider sets up sign-in through inst with its OAuth client: the
-// client ID in inst and the secret in s. An instance without a client ID has
-// no sign-in, and loses the one it had. The instance's callback URL is
-// dashboard.url + /auth/{platform}/{name}/callback.
+// client ID in inst and the secret in s. An instance without a client ID or
+// without a client secret has no sign-in, and loses the one it had. The
+// instance's callback URL is dashboard.url + /auth/{platform}/{name}/callback.
 func (a *Auth) SetProvider(inst instances.Instance, s instances.Secrets) {
-	if inst.OAuthClientID == "" {
+	if inst.OAuthClientID == "" || s.OAuthClientSecret == "" {
 		a.providers.Delete(inst.Name)
 		return
 	}
@@ -209,6 +209,13 @@ func (a *Auth) SetProvider(inst instances.Instance, s instances.Secrets) {
 // already signed in through it stop working at their next platform check.
 func (a *Auth) RemoveProvider(name string) {
 	a.providers.Delete(name)
+}
+
+// canSignIn reports whether people can sign in through the instance called
+// name on platform right now: it has a provider.
+func (a *Auth) canSignIn(platform, name string) bool {
+	p, ok := a.providers.Get(name)
+	return ok && p.platform() == platform
 }
 
 // provider returns the sign-in of the request's {platform} and {instance};

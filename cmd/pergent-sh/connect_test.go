@@ -641,3 +641,22 @@ func TestStartupConnectsConfigThenDashboard(t *testing.T) {
 		t.Errorf("lab's webhook secret = %q", secret)
 	}
 }
+
+// An error message that embeds a secret value, as a platform's error can,
+// is cleaned of every secret of the instance, and only of those.
+func TestRedactSecrets(t *testing.T) {
+	s := instances.Secrets{ReviewToken: "glpat-REVIEW-1234", ApproveToken: "glpat-APPROVE-5678", WebhookSecret: "hook-secret-9"}
+	msg := `Get "https://gitlab.example.com/api/v4/user?private_token=glpat-REVIEW-1234": 401 (approve glpat-APPROVE-5678, hook-secret-9, again glpat-REVIEW-1234)`
+	got := redactSecrets(msg, s)
+	for _, secret := range []string{s.ReviewToken, s.ApproveToken, s.WebhookSecret} {
+		if strings.Contains(got, secret) {
+			t.Errorf("redacted message still holds %q: %s", secret, got)
+		}
+	}
+	if want := `Get "https://gitlab.example.com/api/v4/user?private_token=[REDACTED]": 401 (approve [REDACTED], [REDACTED], again [REDACTED])`; got != want {
+		t.Errorf("redactSecrets = %q\nwant %q", got, want)
+	}
+	if got := redactSecrets(msg, instances.Secrets{}); got != msg {
+		t.Errorf("with no secrets the message changed: %q", got)
+	}
+}

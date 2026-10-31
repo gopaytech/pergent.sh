@@ -31,6 +31,9 @@ const (
 	maxDispatchAttempts = 5
 	// dispatchBackoff is the first retry delay; it doubles each attempt.
 	dispatchBackoff = 10 * time.Second
+	// unconnectedDelay is how long a run of an instance pergent.sh isn't
+	// connected to waits before it is looked at again.
+	unconnectedDelay = 30 * time.Second
 	// diffRefsDelay is how long to wait for GitLab to compute diff refs.
 	diffRefsDelay = 10 * time.Second
 	// diffRefsPatience is how long after a run is queued GitLab may take to
@@ -108,11 +111,21 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	if err != nil {
 		return d.retry(ctx, fmt.Errorf("load repository settings: %w", err))
 	}
-	if !havePlat || plat.Forge == nil || !haveRepo {
+	inst, registered := e.registry().Get(run.MR.Instance)
+	if !haveRepo || !registered || inst.Removing {
 		// The repository was switched off (or its instance removed) after
 		// the run was queued: nothing is reviewed or posted there any more.
 		d.log.Warn("dropping run: its repository is no longer configured")
 		return d.supersede(ctx)
+	}
+	if !havePlat || plat.Forge == nil {
+		// The instance exists but pergent.sh isn't connected to it (it was
+		// unreachable at startup, and an operator fixes that in the
+		// dashboard): the run waits, as a review of a platform that is down
+		// does, and goes on once the instance is connected.
+		e.warnEvery("unconnected/"+run.MR.Instance, "queued reviews wait: pergent.sh isn't connected to their instance; "+
+			"an operator fixes it on Admin → Integrations", "instance", run.MR.Instance)
+		return d.postpone(ctx, e.now().Add(unconnectedDelay))
 	}
 	if plat.isGitHub() {
 		// The review App reads the pull request through its installation

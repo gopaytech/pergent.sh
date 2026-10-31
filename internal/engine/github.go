@@ -32,5 +32,5 @@ func GitHubRepos(st *store.Store, instance string) githubforge.Repos {
 
 // settings resolves repositories from the config and the dashboard.
 func (e *Engine) settings() *settings.Resolver {
-	return &settings.Resolver{Config: e.Config, Store: e.Store, Instances: e.Instances}
+	return &settings.Resolver{Config: e.Config, Store: e.Store, Instances: e.registry()}
 }

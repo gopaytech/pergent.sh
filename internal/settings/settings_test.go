@@ -289,3 +289,17 @@ func TestLibrarySkills(t *testing.T) {
 		}
 	}
 }
+
+// A resolver built without a registry knows the config's instances, as the
+// dashboard does: it never panics on a nil one.
+func TestResolverWithoutRegistry(t *testing.T) {
+	cfg := testConfig()
+	r := &Resolver{Config: cfg}
+	got, err := r.List(ctx)
+	if err != nil || len(got) != 1 || got[0].Project != "acme/widgets" || got[0].Platform != config.PlatformGitLab {
+		t.Fatalf("List = %+v, %v; want acme/widgets on gitlab", got, err)
+	}
+	if eff, ok, err := r.Get(ctx, "main", "ACME/Widgets"); err != nil || !ok || eff.Instance != "main" {
+		t.Errorf("Get = %+v, %v, %v", eff, ok, err)
+	}
+}

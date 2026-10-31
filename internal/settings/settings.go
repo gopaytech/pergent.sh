@@ -87,11 +87,20 @@ func (e Effective) LibrarySkills(library map[string][]byte) (skills, missing []s
 
 // Resolver resolves repositories from Config and, when Store is not nil, the
 // dashboard's repositories in Store. Instances tells the platform of the
-// instance a repository is on, whichever source the instance is from.
+// instance a repository is on, whichever source the instance is from; nil
+// means the config's instances alone.
 type Resolver struct {
 	Config    *config.Config
 	Store     *store.Store
 	Instances *instances.Registry
+}
+
+// registry is Instances, or the config's instances alone when it is nil.
+func (r *Resolver) registry() *instances.Registry {
+	if r.Instances != nil {
+		return r.Instances
+	}
+	return instances.New(r.Config, nil, nil)
 }
 
 // List returns every repository switched on: the config's first, in config
@@ -197,7 +206,7 @@ func (r *Resolver) jobsMemory(list corev1.ResourceList) resource.Quantity {
 // failure_status to failed, so failure_status counts as overridden only when
 // it is neutral.
 func (r *Resolver) fromConfig(repo config.Repository) (Effective, bool) {
-	platform, ok := r.Instances.Platform(repo.Instance())
+	platform, ok := r.registry().Platform(repo.Instance())
 	if !ok {
 		return Effective{}, false
 	}
@@ -229,7 +238,7 @@ func (r *Resolver) fromConfig(repo config.Repository) (Effective, bool) {
 // Kubernetes would refuse; an unknown failure status) is ignored and the
 // default applies: a bad setting never stops reviews.
 func (r *Resolver) fromDashboard(row store.DashboardRepo) (Effective, bool) {
-	platform, ok := r.Instances.Platform(row.Instance)
+	platform, ok := r.registry().Platform(row.Instance)
 	if !ok {
 		return Effective{}, false
 	}

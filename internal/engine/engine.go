@@ -64,7 +64,7 @@ type Engine struct {
 	Store  *store.Store
 	Config *config.Config
 	// Instances tells which instances exist (the config's and the
-	// dashboard's) and their platform.
+	// dashboard's) and their platform; nil means the config's alone.
 	Instances *instances.Registry
 	Platforms *syncmap.Map[Platform]
 	// WebhookSecrets maps an instance name to the secret its project hooks
@@ -79,6 +79,8 @@ type Engine struct {
 	Now func() time.Time
 	// Log may be nil.
 	Log *slog.Logger
+
+	registryOnce sync.Once
 
 	wakeOnce sync.Once
 	wake     chan struct{}
@@ -95,10 +97,24 @@ type Engine struct {
 	uncheckedMu sync.Mutex
 	unchecked   map[repoKey]bool
 
+	// warned holds when each repeated warning was last logged (warnEvery).
+	warnMu sync.Mutex
+	warned map[string]time.Time
+
 	// logTried holds the runs whose Job log was taken or tried (see
 	// captureLog), with when, so each is tried once.
 	logMu    sync.Mutex
 	logTried map[string]time.Time
+}
+
+// registry is Instances, set to the config's instances alone when it was nil.
+func (e *Engine) registry() *instances.Registry {
+	e.registryOnce.Do(func() {
+		if e.Instances == nil {
+			e.Instances = instances.New(e.Config, nil, nil)
+		}
+	})
+	return e.Instances
 }
 
 // Wake asks the loops for an early pass. It never blocks; wake-ups that
@@ -169,6 +185,26 @@ func (e *Engine) log() *slog.Logger {
 	}
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
+
+// warnEvery logs msg at Warn unless a warning under key was logged within
+// the last minute, so a condition that lasts is not logged every pass.
+func (e *Engine) warnEvery(key, msg string, args ...any) {
+	e.warnMu.Lock()
+	now := e.now()
+	if last, ok := e.warned[key]; ok && now.Sub(last) < warnGap && !now.Before(last) {
+		e.warnMu.Unlock()
+		return
+	}
+	if e.warned == nil {
+		e.warned = map[string]time.Time{}
+	}
+	e.warned[key] = now
+	e.warnMu.Unlock()
+	e.log().Warn(msg, args...)
+}
+
+// warnGap is the least time between two warnings under one key (warnEvery).
+const warnGap = time.Minute
 
 // Loop intervals of Run. They are variables so tests can shorten them.
 var (

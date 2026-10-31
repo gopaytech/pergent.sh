@@ -270,7 +270,7 @@ func (e *Engine) reconcileRepo(ctx context.Context, repo settings.Effective, now
 // within 30 days. A GitHub repository has no webhook or stored token of its
 // own: only its row is deleted.
 func (e *Engine) removeProject(ctx context.Context, p store.Project) error {
-	platform, configured := e.Instances.Platform(p.Instance)
+	platform, configured := e.registry().Platform(p.Instance)
 	if platform == config.PlatformGitHub || (!configured && p.InstallationID != 0) {
 		if err := e.Store.DeleteProject(ctx, p.Instance, p.ProjectID); err != nil {
 			return fmt.Errorf("delete project row: %w", err)
@@ -317,7 +317,7 @@ func (e *Engine) removeProject(ctx context.Context, p store.Project) error {
 // gitLab is the review bot's GitLab client of a configured GitLab instance,
 // or nil. Reconcile's webhooks and deploy tokens are GitLab's alone.
 func (e *Engine) gitLab(instance string) *gitlab.Client {
-	if platform, _ := e.Instances.Platform(instance); platform != config.PlatformGitLab {
+	if platform, _ := e.registry().Platform(instance); platform != config.PlatformGitLab {
 		return nil
 	}
 	plat, _ := e.Platforms.Get(instance)
@@ -336,7 +336,7 @@ func (e *Engine) gitLab(instance string) *gitlab.Client {
 func (e *Engine) reconcileGitHubRepo(ctx context.Context, repo settings.Effective) (int64, error) {
 	instance := repo.Instance
 	plat, ok := e.Platforms.Get(instance)
-	if platform, _ := e.Instances.Platform(instance); platform != config.PlatformGitHub || !ok || !plat.isGitHub() ||
+	if platform, _ := e.registry().Platform(instance); platform != config.PlatformGitHub || !ok || !plat.isGitHub() ||
 		plat.GitHub == nil || plat.GitHub.App == nil || plat.GitHub.Approve == nil {
 		return 0, fmt.Errorf("no bots for instance %q", instance)
 	}

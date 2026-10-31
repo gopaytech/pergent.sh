@@ -199,7 +199,7 @@ func (e *Engine) approveInputs(ctx context.Context, plat Platform, run store.Run
 			return o, fmt.Errorf("load project: %w", err)
 		}
 		o.ApproveUnavailable = found && !p.ApproveAvailable
-		if inst, ok := e.Instances.Get(run.MR.Instance); ok && inst.GitHub != nil {
+		if inst, ok := e.registry().Get(run.MR.Instance); ok && inst.GitHub != nil {
 			o.ApproveBot = inst.GitHub.ApproveApp == nil
 		}
 	}

@@ -55,7 +55,8 @@ func repositories(repos Repositories, cfg *config.Config, reg *instances.Registr
 // Handler serves POST /webhooks/gitlab/{instance}.
 type Handler struct {
 	Config *config.Config
-	// Instances tells which GitLab instances exist.
+	// Instances tells which GitLab instances exist; nil means the
+	// config's alone.
 	Instances *instances.Registry
 	// Secrets maps an instance name to its webhook secret; an instance
 	// without one is not connected, and its webhooks are refused.
@@ -125,7 +126,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log := h.logger().With("instance", r.PathValue(instancePath))
 
 	name := r.PathValue(instancePath)
-	if platform, _ := h.Instances.Platform(name); platform != config.PlatformGitLab {
+	if platform, _ := h.registry().Platform(name); platform != config.PlatformGitLab {
 		log.Info("webhook rejected", "outcome", "unknown_instance")
 		http.Error(w, "unknown instance", http.StatusNotFound)
 		return
@@ -169,7 +170,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	attrs := ev.ObjectAttributes
 	log = log.With("project", ev.Project.PathWithNamespace, "iid", attrs.IID, "action", attrs.Action)
-	repo, ok, err := lookup(r.Context(), repositories(h.Repos, h.Config, h.Instances), config.PlatformGitLab, name, ev.Project.PathWithNamespace)
+	repo, ok, err := lookup(r.Context(), repositories(h.Repos, h.Config, h.registry()), config.PlatformGitLab, name, ev.Project.PathWithNamespace)
 	if err != nil {
 		log.Error("webhook failed", "outcome", "lookup_error", "err", err)
 		http.Error(w, "storage error", http.StatusInternalServerError)
@@ -307,14 +308,22 @@ func lookup(ctx context.Context, repos Repositories, platform, instance, path st
 	return eff, true, nil
 }
 
-// tokenMatches compares in constant time. Both sides are hashed first so the
-// length of the secret does not leak. An unset secret never matches.
+// registry is Instances, or the config's instances alone when it is nil.
+func (h *Handler) registry() *instances.Registry {
+	if h.Instances != nil {
+		return h.Instances
+	}
+	return instances.New(h.Config, nil, nil)
+}
+
 // secret is the webhook secret of instance name, "" when it has none.
 func (h *Handler) secret(name string) string {
 	s, _ := h.Secrets.Get(name)
 	return s
 }
 
+// tokenMatches compares in constant time. Both sides are hashed first so the
+// length of the secret does not leak. An unset secret never matches.
 func tokenMatches(secret, got string) bool {
 	if secret == "" {
 		return false

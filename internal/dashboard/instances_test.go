@@ -35,6 +35,8 @@ func instancesDashboard(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	// As the binary does when it connects the instances.
+	signInProviders(t, d)
 	return d.Handler()
 }
 
@@ -102,6 +104,14 @@ func TestInstancesListsDashboardInstances(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("A", "main-id")
+	t.Setenv("B", "main-secret")
+	signInProviders(t, d)
+	for _, inst := range reg.All() {
+		if inst.Source == instances.SourceDashboard {
+			d.Auth.SetProvider(inst, instances.Secrets{OAuthClientSecret: "secret"})
+		}
+	}
 	rec := httptest.NewRecorder()
 	d.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/instances", nil))
 	var got struct {
@@ -116,5 +126,57 @@ func TestInstancesListsDashboardInstances(t *testing.T) {
 	}
 	if !slices.Equal(got.Instances, want) {
 		t.Errorf("instances = %+v, want %+v", got.Instances, want)
+	}
+}
+
+// Sign-in is offered only through an instance that has a provider now: one
+// whose OAuth client secret is empty gets none (a button that leads nowhere
+// is not shown), and an empty secret takes away the provider it had.
+func TestSignInNeedsClientSecret(t *testing.T) {
+	cfg := &config.Config{Dashboard: config.Dashboard{URL: dashboardURL}}
+	reg := instances.New(cfg, nil, nil)
+	lab := instances.Instance{Name: "lab", Platform: "gitlab", Source: instances.SourceDashboard,
+		GitLab: &config.Instance{Name: "lab", URL: "https://gitlab.example.com"}, OAuthClientID: "id"}
+	reg.Put(lab)
+	d, err := New(Options{Config: cfg, Instances: reg, SecretKey: testKey(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := func() []InstanceView {
+		rec := httptest.NewRecorder()
+		d.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/instances", nil))
+		var got struct {
+			Instances []InstanceView `json:"instances"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got.Instances
+	}
+	login := func() int {
+		rec := httptest.NewRecorder()
+		d.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/auth/gitlab/lab/login", nil))
+		return rec.Code
+	}
+
+	d.Auth.SetProvider(lab, instances.Secrets{})
+	if got := listed(); len(got) != 0 {
+		t.Errorf("an instance with a client ID and no client secret is listed: %+v", got)
+	}
+	if code := login(); code != http.StatusNotFound {
+		t.Errorf("login without a provider = %d, want 404", code)
+	}
+
+	d.Auth.SetProvider(lab, instances.Secrets{OAuthClientSecret: "secret"})
+	if got := listed(); len(got) != 1 || got[0].Instance != "lab" {
+		t.Errorf("instances with a provider = %+v, want lab", got)
+	}
+	if code := login(); code != http.StatusFound {
+		t.Errorf("login with a provider = %d, want 302", code)
+	}
+
+	d.Auth.SetProvider(lab, instances.Secrets{})
+	if got := listed(); len(got) != 0 {
+		t.Errorf("the provider stayed after the secret was cleared: %+v", got)
 	}
 }

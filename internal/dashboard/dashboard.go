@@ -257,10 +257,11 @@ type instancesView struct {
 	Instances []InstanceView `json:"instances"`
 }
 
-// instances lists the instances with sign-in, GitLab first, each platform's
-// in the registry's order (the config's, then the dashboard's): the sign-in
-// page shows a button for each, and the password form. It needs no session
-// and says nothing but their names.
+// instances lists the instances people can sign in through now (those with a
+// provider), GitLab first, each platform's in the registry's order (the
+// config's, then the dashboard's): the sign-in page shows a button for each,
+// and the password form. It needs no session and says nothing but their
+// names.
 func (d *Dashboard) instances(w http.ResponseWriter, _ *http.Request) {
 	view := instancesView{Password: true, Instances: []InstanceView{}}
 	all := d.registry.All()
@@ -268,7 +269,7 @@ func (d *Dashboard) instances(w http.ResponseWriter, _ *http.Request) {
 		{config.PlatformGitLab, "GitLab"}, {config.PlatformGitHub, "GitHub"},
 	} {
 		for _, inst := range all {
-			if inst.Platform == platform.id && inst.HasOAuth() && !inst.Removing {
+			if inst.Platform == platform.id && !inst.Removing && d.Auth.canSignIn(inst.Platform, inst.Name) {
 				view.Instances = append(view.Instances,
 					InstanceView{Platform: inst.Platform, Instance: inst.Name, Label: platform.label + " (" + inst.Name + ")"})
 			}

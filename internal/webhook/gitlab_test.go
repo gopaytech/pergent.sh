@@ -538,3 +538,29 @@ func TestDraftReadyStoreErrorIs500(t *testing.T) {
 		t.Fatal("woke on error")
 	}
 }
+
+// A handler built without a registry knows the config's instances.
+func TestHandlersWithoutRegistry(t *testing.T) {
+	r := newRig(t)
+	cfg := &config.Config{GitLab: []config.Instance{{Name: "main"}}, GitHub: []config.GitHubInstance{{Name: "gh"}}}
+	gl := &Handler{Config: cfg, Secrets: syncmap.New[string](nil), Queue: r.q}
+	gh := &GitHubHandler{Config: cfg, Secrets: syncmap.New[string](nil), Queue: r.q}
+	for _, tt := range []struct {
+		name, instance string
+		h              http.Handler
+		want           int
+	}{
+		{"gitlab known", "main", gl, 401},
+		{"gitlab unknown", "other", gl, 404},
+		{"github known", "gh", gh, 401},
+		{"github unknown", "other", gh, 404},
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/webhooks/x/"+tt.instance, strings.NewReader("{}"))
+		req.SetPathValue("instance", tt.instance)
+		rec := httptest.NewRecorder()
+		tt.h.ServeHTTP(rec, req)
+		if rec.Code != tt.want {
+			t.Errorf("%s: status %d, want %d", tt.name, rec.Code, tt.want)
+		}
+	}
+}

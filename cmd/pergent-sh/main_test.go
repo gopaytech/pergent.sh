@@ -16,6 +16,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/dashboard"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/server"
 )
 
@@ -198,6 +199,21 @@ func TestNewDashboardRoutes(t *testing.T) {
 	d, err := newDashboard(dashboard.Options{Config: cfg, SecretKey: testSecretKey, Log: log})
 	if err != nil || d == nil {
 		t.Fatalf("newDashboard = %v, %v", d, err)
+	}
+	// Sign-in is offered through an instance once it is connected.
+	reg := instances.New(cfg, nil, nil)
+	for _, inst := range reg.All() {
+		var s instances.Secrets
+		var err error
+		if inst.GitLab != nil {
+			_, s.OAuthClientSecret, err = inst.GitLab.OAuthClient()
+		} else {
+			_, s.OAuthClientSecret, err = inst.GitHub.OAuthClient()
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Auth.SetProvider(inst, s)
 	}
 	h := server.Routes(server.Deps{Config: cfg, Dashboard: dashboardHandler(d), Log: log})
 	code, body := get(t, h, "/api/instances")
