@@ -828,7 +828,9 @@ func (d *Dashboard) resolveInputs(ctx context.Context, repo settings.Effective, 
 	if branch == "" {
 		return InputsView{}, errors.New("the repository has no default branch")
 	}
-	in, err := inputs.Resolve(ctx, src, d.library, config.Repository{Skills: repo.Skills}, p.ProjectID, branch, nil)
+	// A skill removed from the library since is left out, as in a review.
+	skills, _ := repo.LibrarySkills(d.library)
+	in, err := inputs.Resolve(ctx, src, d.library, config.Repository{Skills: skills}, p.ProjectID, branch, nil)
 	if err != nil {
 		return InputsView{}, err
 	}

@@ -60,6 +60,30 @@ type Effective struct {
 	Overridden map[string]bool
 }
 
+// LibrarySkills is the library skills a review of the repository runs, from
+// library: Skills, less those library doesn't have, which are missing. The
+// config's skills were checked against the library at startup; a dashboard
+// repository's may name a skill removed from the library since it was set.
+// When none is left, skills is nil: every library skill. A stale setting
+// never fails a review, nor the dashboard's view of one.
+func (e Effective) LibrarySkills(library map[string][]byte) (skills, missing []string) {
+	if e.Source != SourceDashboard || len(e.Skills) == 0 {
+		return e.Skills, nil
+	}
+	kept := make([]string, 0, len(e.Skills))
+	for _, name := range e.Skills {
+		if _, ok := library[name]; ok {
+			kept = append(kept, name)
+		} else {
+			missing = append(missing, name)
+		}
+	}
+	if len(kept) == 0 {
+		return nil, missing
+	}
+	return kept, missing
+}
+
 // Resolver resolves repositories from Config and, when Store is not nil, the
 // dashboard's repositories in Store.
 type Resolver struct {

@@ -267,3 +267,22 @@ func TestDefaults(t *testing.T) {
 		}
 	}
 }
+
+func TestLibrarySkills(t *testing.T) {
+	lib := map[string][]byte{"security": nil, "style": nil}
+	for _, tt := range []struct {
+		name           string
+		repo           Effective
+		skills, missed []string
+	}{
+		{"config skills as set", Effective{Source: SourceConfig, Skills: []string{"gone"}}, []string{"gone"}, nil},
+		{"all skills", Effective{Source: SourceDashboard}, nil, nil},
+		{"some left", Effective{Source: SourceDashboard, Skills: []string{"style", "gone"}}, []string{"style"}, []string{"gone"}},
+		{"none left", Effective{Source: SourceDashboard, Skills: []string{"gone"}}, nil, []string{"gone"}},
+	} {
+		skills, missed := tt.repo.LibrarySkills(lib)
+		if !slices.Equal(skills, tt.skills) || !slices.Equal(missed, tt.missed) || (tt.skills == nil) != (skills == nil) {
+			t.Errorf("%s: LibrarySkills = %v, %v; want %v, %v", tt.name, skills, missed, tt.skills, tt.missed)
+		}
+	}
+}

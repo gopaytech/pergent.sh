@@ -858,6 +858,36 @@ func TestRepositoryInputs(t *testing.T) {
 	}
 }
 
+// A dashboard repository's skill that was removed from the library since
+// is left out, as a review leaves it out; with none left a review runs every
+// library skill, and so does the view.
+func TestRepositoryInputsSkillRemovedFromLibrary(t *testing.T) {
+	e := newEnv(t, nil)
+	for _, p := range []store.Project{{Instance: "main", ProjectID: testID("acme/tools"), Path: "acme/tools"},
+		{Instance: "main", ProjectID: testID("acme/old"), Path: "acme/old"}} {
+		if err := e.st.UpsertProject(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, r := range []store.DashboardRepo{{Instance: "main", Project: "acme/tools", Skills: []string{"code-review", "gone"}},
+		{Instance: "main", Project: "acme/old", Skills: []string{"gone"}}} {
+		if err := e.st.UpsertDashboardRepo(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := e.signInGitLab(false, "acme/tools", "acme/old")
+	for project, want := range map[string]string{"acme/tools": "code-review", "acme/old": "code-review,style"} {
+		v := getJSON[InputsView](e, c, "/api/repositories/main/"+project+"/inputs")
+		var got []string
+		for _, s := range v.Skills {
+			got = append(got, s.Name)
+		}
+		if strings.Join(got, ",") != want {
+			t.Errorf("%s: skills = %v, want %s", project, got, want)
+		}
+	}
+}
+
 func TestRepositoryInputsHidden(t *testing.T) {
 	e := newEnv(t, nil)
 	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: testID("acme/payments"), Path: "acme/payments"}); err != nil {
