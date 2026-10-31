@@ -1046,3 +1046,116 @@ details.skill-doc[open] summary::before {
   font-size: 12px;
   color: var(--muted);
 }
+
+/* --- users, teams, audit log, integrations, settings --- */
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.table td .pill {
+  margin-left: 8px;
+}
+
+.secret-box {
+  border-color: var(--warn-line);
+  background: var(--warn-soft);
+  color: var(--warn-text);
+}
+
+.secret-box p {
+  margin: 4px 0 10px;
+}
+
+.secret-value {
+  display: block;
+  padding: 10px 12px;
+  margin: 4px 0 10px;
+  background: #fff;
+  border: 1px solid var(--warn-line);
+  border-radius: 8px;
+  font-family: var(--mono);
+  font-size: 14px;
+  word-break: break-all;
+  user-select: all;
+}
+
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.inline-form label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.inline-form input[type="text"],
+.inline-form input[type="password"] {
+  width: 260px;
+  max-width: 100%;
+}
+
+.card.pad.stack,
+.card.pad.inline-form {
+  padding: 14px 16px;
+}
+
+.card.pad.stack h2 {
+  padding: 0 0 10px;
+  border-bottom: 0;
+}
+
+.row.wrap {
+  flex-wrap: wrap;
+}
+
+.row .name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.editor {
+  border-top: 1px solid var(--line);
+  background: var(--soft);
+}
+
+fieldset {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  background: #fff;
+}
+
+legend {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 4px;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.check input {
+  width: auto;
+}
+
+.stack .meta {
+  margin-bottom: 2px;
+}
+
+.stack .actions-row .btn {
+  margin-top: 12px;
+}

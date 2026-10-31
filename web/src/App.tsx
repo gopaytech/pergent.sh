@@ -5,6 +5,7 @@ import { Route, Routes, useNavigate } from "react-router";
 import { onGateChange, onUnauthorized } from "./api";
 import Layout, { AdminOnly } from "./layout/Layout";
 import AdminSettings from "./pages/AdminSettings";
+import AuditLog from "./pages/AuditLog";
 import Integrations from "./pages/Integrations";
 import Overview from "./pages/Overview";
 import Repositories from "./pages/Repositories";
@@ -13,6 +14,8 @@ import ReviewDetail from "./pages/ReviewDetail";
 import Reviews from "./pages/Reviews";
 import SignIn from "./pages/SignIn";
 import Skills from "./pages/Skills";
+import Teams from "./pages/Teams";
+import Users from "./pages/Users";
 import { NotFound } from "./ui";
 
 // App routes the pages. A 401 from any call drops what was loaded and
@@ -58,18 +61,30 @@ export default function App() {
             </AdminOnly>
           }
         />
-        {/* Task 10's pages; until they exist an admin gets a plain notice. */}
-        {["users", "teams", "audit"].map((path) => (
-          <Route
-            key={path}
-            path={path}
-            element={
-              <AdminOnly>
-                <div className="empty">This page isn't built yet.</div>
-              </AdminOnly>
-            }
-          />
-        ))}
+        <Route
+          path="users"
+          element={
+            <AdminOnly>
+              <Users />
+            </AdminOnly>
+          }
+        />
+        <Route
+          path="teams"
+          element={
+            <AdminOnly>
+              <Teams />
+            </AdminOnly>
+          }
+        />
+        <Route
+          path="audit"
+          element={
+            <AdminOnly>
+              <AuditLog />
+            </AdminOnly>
+          }
+        />
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>

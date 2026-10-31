@@ -188,17 +188,103 @@ export type IntegrationView = {
   repos: { project: string; installed: boolean; approverReachable: boolean }[];
 };
 
-export type AdminSettingsView = {
-  instance: string;
-  defaults: {
-    approve: boolean;
-    reviewDrafts: boolean;
-    failureStatus: string;
-    jobTimeoutSeconds: number;
-    jobMemory: string;
-  };
-  llm: { provider: string; model: string };
+// SecretView says whether a secret is set and when it last changed; the
+// value is never sent. updatedAt is null for a secret from the config's
+// environment.
+export type SecretView = { set: boolean; updatedAt: string | null };
+
+// DefaultsView is the settings a repository switched on in the browser gets
+// when it sets none (jobMemory "" is none).
+export type DefaultsView = {
+  approve: boolean;
+  reviewDrafts: boolean;
+  failureStatus: string;
+  jobTimeoutSeconds: number;
+  jobMemory: string;
 };
+
+// LLMAdminView is GET /api/admin/llm: where the model comes from, the model
+// and whether a key is set. editable is true for an operator when the
+// config has no llm: block.
+export type LLMAdminView = {
+  source: "config" | "dashboard";
+  provider: string;
+  model: string;
+  baseURL: string;
+  key: SecretView;
+  editable: boolean;
+};
+
+// InstanceAdminView is one instance in GET /api/admin/instances (operators).
+// secrets has the fields the instance takes: review_token, approve_token,
+// webhook_secret, oauth_client_secret (GitLab); review_app_key,
+// approve_app_key or approve_token, webhook_secret, oauth_client_secret
+// (GitHub).
+export type InstanceAdminView = {
+  name: string;
+  platform: Platform;
+  source: "config" | "dashboard";
+  removing: boolean;
+  url: string;
+  apiURL: string;
+  reviewAppID: number;
+  approveAppID: number;
+  approver: "app" | "token";
+  oauthClientID: string;
+  secrets: Record<string, SecretView>;
+};
+
+export type TeamRef = { id: number; name: string };
+
+// UserView is one account in GET /api/users.
+export type UserView = {
+  id: number;
+  kind: "password" | "platform";
+  username: string;
+  platform: Platform | "";
+  instance: string;
+  lastSignInAt: string | null;
+  waiting: boolean;
+  teams: TeamRef[];
+};
+
+// NewAccountView is a password admin just made, with its generated password:
+// the only time it is shown.
+export type NewAccountView = { username: string; password: string };
+
+export type TeamMemberView = { id: number; username: string; platform: Platform; instance: string };
+
+// TeamRepoView is a repository a team covers; project "" covers every
+// repository of the instance.
+export type TeamRepoView = { instance: string; project: string };
+
+// TeamView is one team. repos are those the session can see; hiddenRepos
+// counts the rest, which a save keeps.
+export type TeamView = {
+  id: number;
+  name: string;
+  role: Role;
+  members: TeamMemberView[];
+  repos: TeamRepoView[];
+  hiddenRepos: number;
+};
+
+// TeamUpdate is the body of PUT /api/teams/{id}: it replaces everything.
+export type TeamUpdate = { name: string; role: Role; members: number[]; repos: TeamRepoView[] };
+
+export type AuditView = {
+  id: number;
+  at: string;
+  actor: string;
+  action: string;
+  instance: string;
+  project: string;
+  detail: string;
+};
+
+// AuditPageView is a page of the audit log; next is the before of the page
+// after, 0 at the end. A short page with a next is not the last.
+export type AuditPageView = { entries: AuditView[]; next: number };
 
 export type AvailableView = {
   items: { instance: string; project: string; platform: Platform }[];

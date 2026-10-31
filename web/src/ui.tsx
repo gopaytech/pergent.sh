@@ -2,7 +2,7 @@
 // React as a child, so it is shown as text: no HTML is ever built from it.
 import type { ReactNode } from "react";
 
-import { ApiError, safeHref, type Outcome } from "./api";
+import { ApiError, safeHref, type Outcome, type SecretView } from "./api";
 
 // CenteredCard is the page the signed-out and gated screens (sign-in,
 // password change, waiting) show: one card on the dark background.
@@ -73,6 +73,13 @@ export function ago(t: string, now = Date.now()): string {
   if (h < 24) return `${h} h ago`;
   const d = Math.round(h / 24);
   return d === 1 ? "1 day ago" : `${d} days ago`;
+}
+
+// secretText says whether a secret is set and, for one stored in the
+// dashboard, when it changed. The value is never known to the page.
+export function secretText(s: SecretView): string {
+  if (!s.set) return "not set";
+  return s.updatedAt ? `set · changed ${ago(s.updatedAt)}` : "set";
 }
 
 // duration is seconds as "3m 41s".

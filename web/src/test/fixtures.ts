@@ -1,6 +1,9 @@
 import type {
-  AdminSettingsView,
+  AuditPageView,
+  DefaultsView,
+  InstanceAdminView,
   IntegrationView,
+  LLMAdminView,
   Me,
   OverviewView,
   RepositoryDetailView,
@@ -9,6 +12,8 @@ import type {
   ReviewSummary,
   Role,
   RunDetailView,
+  TeamView,
+  UserView,
 } from "../api";
 
 // A platform admin: on an admin team of its instance.
@@ -229,8 +234,135 @@ export const integrations: IntegrationView = {
   ],
 };
 
-export const adminSettings: AdminSettingsView = {
+export const defaults: DefaultsView = {
+  approve: true,
+  reviewDrafts: true,
+  failureStatus: "neutral",
+  jobTimeoutSeconds: 600,
+  jobMemory: "",
+};
+
+export const llm: LLMAdminView = {
+  source: "dashboard",
+  provider: "anthropic",
+  model: "claude-sonnet",
+  baseURL: "",
+  key: { set: true, updatedAt: minutesAgo(3 * 24 * 60) },
+  editable: true,
+};
+
+export const instanceGitLab: InstanceAdminView = {
+  name: "main",
+  platform: "gitlab",
+  source: "config",
+  removing: false,
+  url: "https://gitlab.example.com",
+  apiURL: "",
+  reviewAppID: 0,
+  approveAppID: 0,
+  approver: "token",
+  oauthClientID: "app-id-1",
+  secrets: {
+    review_token: { set: true, updatedAt: null },
+    approve_token: { set: true, updatedAt: null },
+    webhook_secret: { set: true, updatedAt: null },
+    oauth_client_secret: { set: false, updatedAt: null },
+  },
+};
+
+export const instanceGitHub: InstanceAdminView = {
+  name: "hub",
+  platform: "github",
+  source: "dashboard",
+  removing: false,
+  url: "",
+  apiURL: "https://api.github.example.com",
+  reviewAppID: 11,
+  approveAppID: 12,
+  approver: "app",
+  oauthClientID: "",
+  secrets: {
+    review_app_key: { set: true, updatedAt: minutesAgo(120) },
+    approve_app_key: { set: false, updatedAt: null },
+    webhook_secret: { set: true, updatedAt: minutesAgo(120) },
+    oauth_client_secret: { set: false, updatedAt: null },
+  },
+};
+
+export const instanceDashboardGitLab: InstanceAdminView = {
+  ...instanceGitLab,
+  name: "extra",
+  source: "dashboard",
+  url: "https://gitlab2.example.com",
+  oauthClientID: "",
+  secrets: {
+    review_token: { set: true, updatedAt: minutesAgo(120) },
+    approve_token: { set: true, updatedAt: minutesAgo(120) },
+    webhook_secret: { set: true, updatedAt: minutesAgo(120) },
+    oauth_client_secret: { set: false, updatedAt: null },
+  },
+};
+
+export const userWaiting: UserView = {
+  id: 7,
+  kind: "platform",
+  username: "newcomer",
+  platform: "gitlab",
   instance: "main",
-  defaults: { approve: true, reviewDrafts: true, failureStatus: "neutral", jobTimeoutSeconds: 600, jobMemory: "" },
-  llm: { provider: "anthropic", model: "claude-sonnet" },
+  lastSignInAt: minutesAgo(5),
+  waiting: true,
+  teams: [],
+};
+
+export const userDev: UserView = {
+  id: 5,
+  kind: "platform",
+  username: "dev-user",
+  platform: "gitlab",
+  instance: "main",
+  lastSignInAt: minutesAgo(180),
+  waiting: false,
+  teams: [{ id: 2, name: "Payments" }],
+};
+
+export const userOperator: UserView = {
+  id: 1,
+  kind: "password",
+  username: "admin",
+  platform: "",
+  instance: "",
+  lastSignInAt: null,
+  waiting: false,
+  teams: [],
+};
+
+export const teamPayments: TeamView = {
+  id: 2,
+  name: "Payments",
+  role: "maintainer",
+  members: [{ id: 5, username: "dev-user", platform: "gitlab", instance: "main" }],
+  repos: [{ instance: "main", project: "acme/payments" }],
+  hiddenRepos: 0,
+};
+
+export const teamAdmins: TeamView = {
+  id: 3,
+  name: "Admins",
+  role: "admin",
+  members: [],
+  repos: [],
+  hiddenRepos: 0,
+};
+
+export const auditPage1: AuditPageView = {
+  entries: [
+    { id: 30, at: "2026-10-30T14:02:00Z", actor: "admin", action: "team_created", instance: "", project: "", detail: "Payments (maintainer)" },
+    { id: 29, at: "2026-10-30T13:00:00Z", actor: "admin", action: "repository_on", instance: "main", project: "acme/payments", detail: "" },
+  ],
+  next: 29,
+};
+
+export const auditPage2: AuditPageView = {
+  entries: [{ id: 28, at: "2026-10-29T09:30:00Z", actor: "dev-admin", action: "account_deleted", instance: "", project: "", detail: "old-user" }],
+  next: 0,
 };

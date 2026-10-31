@@ -1,8 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 
-import { api, paths, type AvailableView, type RepositoryDetailView, type RepositoryView } from "../api";
+import {
+  api,
+  paths,
+  type AvailableView,
+  type InstanceAdminView,
+  type RepositoryDetailView,
+  type RepositoryView,
+} from "../api";
 import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
 import { ErrorBox, Loading, Pill, Switch, platformName } from "../ui";
@@ -27,7 +34,7 @@ export default function Repositories() {
           </button>
         )}
       </div>
-      {adding && <Picker />}
+      {adding && (me.operator ? <OperatorPicker /> : <Picker />)}
       {repos.isPending && <Loading />}
       {repos.isError && <ErrorBox error={repos.error} />}
       {repos.isSuccess &&
@@ -100,21 +107,59 @@ function Row({ repo, admin }: { repo: RepositoryView; admin: boolean }) {
   );
 }
 
+// OperatorPicker is the picker for an operator, who has no platform account
+// and no instance of their own: it asks for the instance first.
+function OperatorPicker() {
+  const [instance, setInstance] = useState("");
+  return <Picker instance={instance} choice={<InstanceChoice instance={instance} onChange={setInstance} />} />;
+}
+
+function InstanceChoice({ instance, onChange }: { instance: string; onChange: (name: string) => void }) {
+  const instances = useQuery({
+    queryKey: ["admin-instances"],
+    queryFn: () => api.get<InstanceAdminView[]>("/api/admin/instances"),
+  });
+  if (instances.isPending) return <Loading />;
+  if (instances.isError) return <ErrorBox error={instances.error} />;
+  // One being removed has nothing to switch on.
+  const choices = instances.data.filter((i) => !i.removing);
+  if (choices.length === 0) return <div className="row empty-row">No instance yet. Add one under Integrations.</div>;
+  return (
+    <div className="pad search">
+      <label htmlFor="picker-instance">Instance</label>
+      <select id="picker-instance" value={instance} onChange={(e) => onChange(e.target.value)}>
+        <option value="">Choose an instance</option>
+        {choices.map((i) => (
+          <option key={i.name} value={i.name}>
+            {i.name}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 // Picker lists the repositories the admin and pergent can both reach, to
-// switch one on.
-function Picker() {
+// switch one on. An admin has its own instance (instance is undefined); an
+// operator names one, and "" is not yet chosen.
+function Picker({ instance, choice }: { instance?: string; choice?: ReactNode }) {
   const write = useWrite();
   const navigate = useNavigate();
   const client = useQueryClient();
   const [text, setText] = useState("");
   const [search, setSearch] = useState("");
+  const chosen = instance !== "";
+  const base =
+    instance === undefined ? "/api/repositories/available" : `/api/admin/instances/${encodeURIComponent(instance)}/repositories`;
   const available = useQuery({
-    queryKey: ["available", search],
-    queryFn: () => api.get<AvailableView>(`/api/repositories/available?search=${encodeURIComponent(search)}`),
+    queryKey: ["available", instance ?? "", search],
+    queryFn: () => api.get<AvailableView>(`${base}?search=${encodeURIComponent(search)}`),
     staleTime: 0,
+    enabled: chosen,
   });
   const on = useMutation({
-    mutationFn: (project: string) => write<RepositoryDetailView>("POST", "/api/repositories", { project }),
+    mutationFn: (project: string) =>
+      write<RepositoryDetailView>("POST", "/api/repositories", instance === undefined ? { project } : { project, instance }),
     onSuccess: (detail) => {
       client.invalidateQueries({ queryKey: ["repositories"] });
       client.invalidateQueries({ queryKey: ["available"] });
@@ -128,30 +173,33 @@ function Picker() {
   return (
     <section className="card picker" aria-label="Add repository">
       <h2>Add repository</h2>
-      <form className="pad search" onSubmit={submit}>
-        <input
-          type="search"
-          aria-label="Search"
-          placeholder="Search by path"
-          maxLength={100}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-        />
-        <button type="submit" className="btn">
-          Search
-        </button>
-      </form>
+      {choice}
+      {chosen && (
+        <form className="pad search" onSubmit={submit}>
+          <input
+            type="search"
+            aria-label="Search"
+            placeholder="Search by path"
+            maxLength={100}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+          />
+          <button type="submit" className="btn">
+            Search
+          </button>
+        </form>
+      )}
       {on.isError && <ErrorBox error={on.error} />}
-      {available.isPending && <Loading />}
+      {chosen && available.isPending && <Loading />}
       {available.isError && <ErrorBox error={available.error} />}
-      {available.isSuccess && (
+      {chosen && available.isSuccess && (
         <>
           {available.data.truncated && (
             <div className="pad meta">Showing the first 500 repositories. Search to find others.</div>
           )}
           {available.data.items.length === 0 && <div className="row empty-row">No repository to switch on.</div>}
           {available.data.items.map((r) => (
-            <div className="row" key={r.project}>
+            <div className="row" key={`${r.instance}/${r.project}`}>
               <div className="grow mr">{r.project}</div>
               <button
                 type="button"

@@ -3,7 +3,16 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi } from "../test/fakeApi";
-import { platformAdmin, viewer, repoDetail, repoPayments, repoWidgets } from "../test/fixtures";
+import {
+  instanceDashboardGitLab,
+  instanceGitLab,
+  operator,
+  platformAdmin,
+  repoDetail,
+  repoPayments,
+  repoWidgets,
+  viewer,
+} from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -52,6 +61,43 @@ describe("Repositories", () => {
     const [post] = fake.find("POST", "/api/repositories");
     expect(post.headers.get("X-CSRF-Token")).toBe("csrf-123");
     expect(post.body).toEqual({ project: "acme/payments" });
+    expect(await screen.findByTestId("location")).toHaveTextContent("/repos/main/acme/payments");
+  });
+
+  it("asks an operator for the instance first, then lists that instance's repositories", async () => {
+    const fake = fakeApi({
+      "GET /api/me": { body: operator },
+      "GET /api/repositories": { body: [repoWidgets] },
+      "GET /api/admin/instances": { body: [instanceGitLab, { ...instanceDashboardGitLab, removing: true }] },
+      "GET /api/admin/instances/main/repositories?search=": {
+        body: { items: [{ instance: "main", project: "acme/payments", platform: "gitlab" }], truncated: false },
+      },
+      "GET /api/admin/instances/main/repositories?search=pay": {
+        body: { items: [{ instance: "main", project: "acme/payments", platform: "gitlab" }], truncated: false },
+      },
+      "POST /api/repositories": { status: 201, body: repoDetail(repoPayments) },
+    });
+    renderApp("/repos");
+    await userEvent.click(await screen.findByRole("button", { name: "+ Add repository" }));
+    const picker = await screen.findByRole("region", { name: "Add repository" });
+    const choose = await within(picker).findByLabelText("Instance");
+    // Nothing is listed, and the platform admin's route isn't asked, before one is chosen.
+    expect(within(picker).queryByRole("searchbox")).not.toBeInTheDocument();
+    expect(fake.find("GET", "/api/repositories/available?search=")).toHaveLength(0);
+    // An instance being removed isn't offered.
+    expect(within(choose).queryByRole("option", { name: /extra/ })).not.toBeInTheDocument();
+    await userEvent.selectOptions(choose, "main");
+    expect(await within(picker).findByText("acme/payments")).toBeInTheDocument();
+    expect(fake.find("GET", "/api/repositories/available?search=")).toHaveLength(0);
+
+    await userEvent.type(within(picker).getByRole("searchbox", { name: "Search" }), "pay");
+    await userEvent.click(within(picker).getByRole("button", { name: "Search" }));
+    await vi.waitFor(() => expect(fake.find("GET", "/api/admin/instances/main/repositories?search=pay")).toHaveLength(1));
+
+    await userEvent.click(within(picker).getByRole("button", { name: "Switch on acme/payments" }));
+    const [post] = fake.find("POST", "/api/repositories");
+    expect(post.headers.get("X-CSRF-Token")).toBe("csrf-123");
+    expect(post.body).toEqual({ project: "acme/payments", instance: "main" });
     expect(await screen.findByTestId("location")).toHaveTextContent("/repos/main/acme/payments");
   });
 
