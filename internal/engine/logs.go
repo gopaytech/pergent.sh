@@ -23,6 +23,9 @@ const (
 	logWindow = 3 * time.Hour
 	// logTimeout bounds taking one log, so the watcher never waits long.
 	logTimeout = 30 * time.Second
+	// supersededLogTimeout bounds taking the log of a superseded run before
+	// its Job is deleted, in the loop that also dispatches and publishes.
+	supersededLogTimeout = 10 * time.Second
 
 	redacted = "[REDACTED]"
 )
@@ -33,10 +36,15 @@ const (
 // model and result tokens) and the engine's model key; with the Secret
 // unreadable nothing says what to hide, so nothing is stored.
 func (e *Engine) captureLog(ctx context.Context, run store.Run, log *slog.Logger) {
+	e.captureLogWithin(ctx, run, log, logTimeout)
+}
+
+// captureLogWithin is captureLog bounded by timeout.
+func (e *Engine) captureLogWithin(ctx context.Context, run store.Run, log *slog.Logger, timeout time.Duration) {
 	if !e.firstLogTry(run.ID) {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, logTimeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	secrets, err := e.Launcher.JobSecrets(ctx, run.JobName)

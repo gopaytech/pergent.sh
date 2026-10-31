@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"slices"
@@ -696,6 +697,41 @@ func TestCleanupDeletesJobAndCancelsStatus(t *testing.T) {
 	cleanup(t, env)
 	if n := len(env.GitLab.Requests("", "")); n != 0 {
 		t.Errorf("second cleanup made %d GitLab requests, want 0", n)
+	}
+}
+
+// A superseded run's log is kept, redacted, before its Job is deleted; a
+// log that can't be read doesn't stop the cleanup.
+func TestCleanupKeepsSupersededRunLog(t *testing.T) {
+	for _, readable := range []bool{true, false} {
+		env := newTestEnv(t)
+		const clone = "glpat-clone-token-superseded"
+		if readable {
+			serveLog(env, "cloning with "+clone+"\nreviewing\n")
+		} else {
+			env.Engine.Launcher.LogStream = func(context.Context, string, string, int64) (io.ReadCloser, error) {
+				return nil, errors.New("container pergent is not available")
+			}
+		}
+		old := sha('a')
+		id := env.Dispatched(1, old)
+		putJob(t, env, id, env.Now().Add(-time.Minute), nil, nil)
+		putJobSecret(t, env, id, kube.Secrets{GitToken: clone, LLMKey: "llm-key-1", ResultToken: "result-token-1"})
+		env.Enqueue(1, sha('c')) // supersedes the running run
+		env.GitLab.Reply(http.MethodPost, statusPath(old), http.StatusCreated, `{}`)
+
+		cleanup(t, env)
+
+		text, found := storedLog(t, env, id)
+		if readable && (!found || text != "cloning with [REDACTED]\nreviewing\n") {
+			t.Errorf("stored log = %q, %v; want it redacted", text, found)
+		}
+		if !readable && found {
+			t.Errorf("a log was stored though the read failed")
+		}
+		if env.Job(id) != nil || !env.Run(id).CleanedUp {
+			t.Errorf("readable %v: Job left (%v) or run not cleaned up", readable, env.Job(id) != nil)
+		}
 	}
 }
 

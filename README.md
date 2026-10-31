@@ -382,7 +382,7 @@ Every write is checked on the server: it needs an admin, a repository the admin 
 
 ### Logs and "Needs attention"
 
-- **Logs.** When a review Job ends, pergent.sh keeps the last 200 KB of the pergent container's log, with the Job's clone token, LLM key and result token replaced by `[REDACTED]`. Logs are deleted after 30 days. A Job that is gone before its log is read (Jobs are removed an hour after they finish) has no log.
+- **Logs.** When a review Job ends, or before the Job of a superseded run is deleted, pergent.sh keeps the last 200 KB of the pergent container's log, with the Job's clone token, LLM key and result token replaced by `[REDACTED]`. Logs are deleted after 30 days. A Job that is gone before its log is read (Jobs are removed an hour after they finish) has no log.
 - **Needs attention** lists setup problems that pergent.sh detects, kept up to date by the hourly reconcile and the Job watcher (not computed when the page loads):
   - one approval is enough to merge, so pergent's approval alone can unlock it;
   - the GitHub approve App isn't installed on the repository, or the approve bot user can't reach it;

@@ -363,7 +363,8 @@ func (e *Engine) giveUpStatus(ctx context.Context, run store.Run, log *slog.Logg
 	}
 }
 
-// CleanupOnce deletes the Jobs of superseded runs, sets their commit status
+// CleanupOnce deletes the Jobs of superseded runs (keeping each one's log
+// first, best effort, within 10 s), sets their commit status
 // to canceled when they had been dispatched, and removes the approve bot's
 // approvals of a head or target branch that is no longer the MR's newest
 // run's, and every approval it holds in a repository whose "approve clean
@@ -483,6 +484,8 @@ func (e *Engine) withdraw(ctx context.Context, a store.Approval, done, failed st
 
 func (e *Engine) cleanUp(ctx context.Context, run store.Run, log *slog.Logger) error {
 	if run.JobName != "" {
+		// Its log goes with the Job: keep it first, best effort and once.
+		e.captureLogWithin(ctx, run, log.With("job", run.JobName), supersededLogTimeout)
 		if err := e.Launcher.Delete(ctx, run.JobName); err != nil {
 			return err
 		}
