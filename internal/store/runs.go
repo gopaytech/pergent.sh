@@ -980,6 +980,23 @@ func (s *Store) PreviousResult(ctx context.Context, mr MRKey, beforeRunID string
 	return res, true, nil
 }
 
+// LatestDecidedRun returns the merge request's newest run whose review is
+// out: published, or reported again after Republish asked for the decision
+// to be made anew (it has been decided before). It is the review the
+// merge request's comment shows, and what a comment command refers to. A
+// run still waiting for its first publish is not one, nor is a superseded
+// run. found is false when there is none.
+func (s *Store) LatestDecidedRun(ctx context.Context, mr MRKey) (run Run, found bool, err error) {
+	runs, err := s.queryRuns(ctx, `SELECT `+runColumns+` FROM runs
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3
+		  AND (state = 'published' OR (state = 'reported' AND outcome <> ''))
+		ORDER BY created_at DESC, id DESC LIMIT 1`, mr.Instance, mr.ProjectID, mr.IID)
+	if err != nil || len(runs) == 0 {
+		return Run{}, false, err
+	}
+	return runs[0], true, nil
+}
+
 // NoteID returns the id of the merge request's pergent comment, or 0.
 func (s *Store) NoteID(ctx context.Context, mr MRKey) (int64, error) {
 	var id int64

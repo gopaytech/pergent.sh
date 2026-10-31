@@ -222,8 +222,8 @@ var (
 	reconcileSoonGap = 10 * time.Second
 )
 
-// Run runs the loops until ctx is done: dispatch, publish and cleanup every
-// 2 s or on Wake, watch every 15 s, sweep the approvals every 5 minutes and
+// Run runs the loops until ctx is done: dispatch, publish, cleanup and
+// comment commands every 2 s or on Wake, watch every 15 s, sweep the approvals every 5 minutes and
 // reconcile every hour (when it also prunes the review logs older than
 // 30 days), and reconcile the repositories ReconcileSoon names (at most
 // once every 10 s: requests within that gap of the last such reconcile make
@@ -331,7 +331,8 @@ func (e *Engine) sweepApprovals(ctx context.Context) {
 	}
 }
 
-// pass dispatches, publishes and cleans up once, logging failures.
+// pass dispatches, publishes, cleans up and answers comment commands once,
+// logging failures.
 func (e *Engine) pass(ctx context.Context) {
 	for _, step := range []struct {
 		name string
@@ -340,6 +341,9 @@ func (e *Engine) pass(ctx context.Context) {
 		{"dispatch", e.DispatchOnce},
 		{"publish", e.PublishOnce},
 		{"cleanup", e.CleanupOnce},
+		// Last, and bounded (commandsBudget), so a slow platform call of a
+		// command never holds up a review.
+		{"commands", e.CommandsOnce},
 	} {
 		if ctx.Err() != nil {
 			return

@@ -322,3 +322,46 @@ func TestRerunEditsNeedARunBeingDispatched(t *testing.T) {
 		t.Errorf("old run changed: %q", r.Trigger)
 	}
 }
+
+// The review a command refers to is the newest published one, or one
+// published before and waiting to be decided again; a first review still
+// waiting to be published, and superseded ones, are not it.
+func TestLatestDecidedRun(t *testing.T) {
+	s := newStore(t)
+	if _, found, err := s.LatestDecidedRun(ctx, mr1); err != nil || found {
+		t.Fatalf("LatestDecidedRun with no run = %v, %v", found, err)
+	}
+
+	first := published(t, s, mr1, "aaa", "main")
+	got, found, err := s.LatestDecidedRun(ctx, mr1)
+	if err != nil || !found || got.ID != first {
+		t.Fatalf("LatestDecidedRun = %s, %v, %v; want %s", got.ID, found, err, first)
+	}
+	if _, found, _ := s.LatestDecidedRun(ctx, mr2); found {
+		t.Error("another merge request's run was returned")
+	}
+
+	// Decided again (a dismissal): reported, but published before.
+	if ok, err := s.Republish(ctx, mr1, "aaa", "main"); err != nil || !ok {
+		t.Fatalf("Republish = %v, %v", ok, err)
+	}
+	// Published with no outcome in this test, so nothing was decided yet.
+	if _, found, _ := s.LatestDecidedRun(ctx, mr1); found {
+		t.Error("a reported run that was never decided counted as decided")
+	}
+	if err := s.MarkPublished(ctx, first, RunDecision{Outcome: OutcomeNoBlocking}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.Republish(ctx, mr1, "aaa", "main"); err != nil || !ok {
+		t.Fatalf("Republish = %v, %v", ok, err)
+	}
+	if got, found, _ := s.LatestDecidedRun(ctx, mr1); !found || got.ID != first || got.State != Reported {
+		t.Errorf("a run to be decided again = %s %s %v; want %s reported", got.ID, got.State, found, first)
+	}
+
+	// A push supersedes it; the new run is not decided until published.
+	enqueue(t, s, mr1, "bbb")
+	if got, found, _ := s.LatestDecidedRun(ctx, mr1); found {
+		t.Errorf("LatestDecidedRun = %s after a push; want none", got.ID)
+	}
+}

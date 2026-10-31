@@ -1,0 +1,957 @@
+package engine
+
+import (
+	"fmt"
+	"net/http"
+	"slices"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/gopaytech/pergent.sh/internal/gitlab"
+	"github.com/gopaytech/pergent.sh/internal/result"
+	"github.com/gopaytech/pergent.sh/internal/store"
+)
+
+// The people of the command tests, with their GitLab user IDs and the
+// access levels they have in the project.
+const (
+	userMaintainer = int64(50) // mo
+	userDeveloper  = int64(51) // dev
+	userReporter   = int64(52) // rep
+	userAuthor     = int64(53) // maya: a maintainer, and the author of the change
+	userStranger   = int64(99) // not a member
+
+	botMention = "pergent-review"
+)
+
+var commandUsers = map[string]int64{
+	"mo": userMaintainer, "dev": userDeveloper, "rep": userReporter, "maya": userAuthor, "eve": userStranger,
+}
+
+// commandFixture is an environment whose GitLab serves what the command step
+// calls: the merge requests (authored by maya), the commenters' memberships,
+// reactions and replies.
+type commandFixture struct {
+	*testEnv
+	head string
+	// comments counts the comment IDs handed out.
+	comments int64
+}
+
+func newCommandFixture(t *testing.T) *commandFixture {
+	t.Helper()
+	f := &commandFixture{testEnv: newTestEnv(t), head: sha('a')}
+	servePublish(f.testEnv, 1, f.head)
+	f.serveMR(1, false)
+	f.GitLab.Reply(http.MethodGet, membersPath(userMaintainer), http.StatusOK, member(40))
+	f.GitLab.Reply(http.MethodGet, membersPath(userDeveloper), http.StatusOK, member(30))
+	f.GitLab.Reply(http.MethodGet, membersPath(userReporter), http.StatusOK, member(20))
+	f.GitLab.Reply(http.MethodGet, membersPath(userAuthor), http.StatusOK, member(40))
+	// userStranger: 404, not a member.
+	f.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusCreated, map[string]any{"id": createdNote})
+	f.GitLab.Reply(http.MethodPost, notesPath(2), http.StatusCreated, map[string]any{"id": createdNote})
+	return f
+}
+
+func membersPath(userID int64) string {
+	return "/projects/" + strconv.FormatInt(testProjectID, 10) + "/members/all/" + strconv.FormatInt(userID, 10)
+}
+
+func member(level int) map[string]any {
+	return map[string]any{"access_level": level, "state": "active"}
+}
+
+func emojiPath(iid, comment int64) string {
+	return notesPath(iid) + "/" + strconv.FormatInt(comment, 10) + "/award_emoji"
+}
+
+// serveMR serves merge request iid at the fixture's head, authored by maya.
+func (f *commandFixture) serveMR(iid int64, draft bool) {
+	mr := openMR(iid, f.head)
+	mr.Draft = draft
+	mr.Author = gitlab.User{ID: userAuthor, Username: "maya"}
+	f.GitLab.SetMR(mr)
+	f.GitLab.Reply(http.MethodPost, emojiPath(iid, 0), http.StatusCreated, `{}`)
+}
+
+// review publishes a review of the fixture's head on merge request 1, so
+// there is something to refer to.
+func (f *commandFixture) review(skills ...result.Skill) string {
+	f.t.Helper()
+	id := f.Report(1, f.head, resultFor(f.t, f.head, skills...))
+	if err := f.Store.MarkPublished(f.ctx, id, store.RunDecision{Outcome: store.OutcomeNoBlocking}); err != nil {
+		f.t.Fatal(err)
+	}
+	return id
+}
+
+// say stores a command by user (a key of commandUsers) in a new comment on
+// merge request iid, written at `at`, and returns its comment ID.
+func (f *commandFixture) say(iid int64, user, kind, arg, reason string, at time.Time) int64 {
+	f.t.Helper()
+	f.comments++
+	id := 1000 + f.comments
+	f.GitLab.Reply(http.MethodPost, emojiPath(iid, id), http.StatusCreated, `{}`)
+	_, err := f.Store.InsertCommand(f.ctx, store.Command{
+		MR:          store.MRKey{Instance: testInstance, ProjectID: testProjectID, IID: iid},
+		ProjectPath: testProjectPath, Platform: "gitlab", Kind: kind, Arg: arg, Reason: reason,
+		CommentID: id, Author: user, AuthorID: commandUsers[user], CreatedAt: at,
+	})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return id
+}
+
+// run answers the stored commands once.
+func (f *commandFixture) run() {
+	f.t.Helper()
+	if err := f.Engine.CommandsOnce(f.ctx); err != nil {
+		f.t.Fatalf("CommandsOnce: %v", err)
+	}
+}
+
+// reactions are the emoji put on comment id, in order.
+func (f *commandFixture) reactions(iid, id int64) []string {
+	var out []string
+	for _, r := range f.GitLab.Requests(http.MethodPost, emojiPath(iid, id)) {
+		out = append(out, fmt.Sprint(r.JSON(f.t)["name"]))
+	}
+	return out
+}
+
+func (f *commandFixture) wantReactions(iid, id int64, want ...string) {
+	f.t.Helper()
+	if got := f.reactions(iid, id); !slices.Equal(got, want) {
+		f.t.Errorf("reactions on comment %d = %v, want %v\n%s", id, got, want, f.Logs())
+	}
+}
+
+// replies are the plain comments the bot posted on merge request iid.
+func (f *commandFixture) replies(iid int64) []string {
+	var out []string
+	for _, r := range f.GitLab.Requests(http.MethodPost, notesPath(iid)) {
+		out = append(out, fmt.Sprint(r.JSON(f.t)["body"]))
+	}
+	return out
+}
+
+func (f *commandFixture) wantReplies(iid int64, want ...string) {
+	f.t.Helper()
+	if got := f.replies(iid); !slices.Equal(got, want) {
+		f.t.Errorf("replies on !%d = %q, want %q", iid, got, want)
+	}
+}
+
+// queued claims the runs waiting to be dispatched, which the test then owns.
+func (f *commandFixture) queued() []store.Run {
+	f.t.Helper()
+	runs, err := f.Store.ClaimQueued(f.ctx, 100, f.Now().Add(24*time.Hour))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return runs
+}
+
+func (f *commandFixture) audit() []store.AuditEntry {
+	f.t.Helper()
+	es, err := f.Store.AuditLog(f.ctx, 0, 100)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return es
+}
+
+func (f *commandFixture) dismissals(iid int64) []store.Dismissal {
+	f.t.Helper()
+	ds, err := f.Store.Dismissals(f.ctx, store.MRKey{Instance: testInstance, ProjectID: testProjectID, IID: iid})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return ds
+}
+
+// The default: both reactions of a carried-out command, no reply.
+const (
+	eyes = "eyes"
+	up   = "thumbsup"
+	down = "thumbsdown"
+)
+
+var help = "Commands: @" + botMention + " review · @" + botMention + " review failed · @" + botMention + " dismiss <id> <reason>"
+
+func TestRerunCommand(t *testing.T) {
+	f := newCommandFixture(t)
+	old := f.review(reviewed("no_blocking_issues", "a.go"))
+	at := time.Now()
+
+	id := f.say(1, "dev", "review", "", "", at)
+	f.run()
+
+	f.wantReactions(1, id, eyes, up)
+	f.wantReplies(1)
+	runs := f.queued()
+	if len(runs) != 1 {
+		t.Fatalf("queued %d runs, want 1", len(runs))
+	}
+	r := runs[0]
+	if r.HeadSHA != f.head || r.TargetBranch != "main" || r.Trigger != store.TriggerRerun || r.SkillSubset != nil || r.BaseRunID != nil {
+		t.Errorf("run = head %s target %s %q %v %v, want a full re-run of the head", r.HeadSHA, r.TargetBranch, r.Trigger, r.SkillSubset, r.BaseRunID)
+	}
+	if got := f.Run(old).State; got != store.Superseded {
+		t.Errorf("the earlier review is %s, want superseded", got)
+	}
+}
+
+func TestRerunCommandNeedsWriteAccess(t *testing.T) {
+	for _, user := range []string{"rep", "eve"} {
+		t.Run(user, func(t *testing.T) {
+			f := newCommandFixture(t)
+			f.review(reviewed("no_blocking_issues", "a.go"))
+
+			id := f.say(1, user, "review", "", "", time.Now())
+			f.run()
+
+			f.wantReactions(1, id, eyes, down)
+			f.wantReplies(1, "you don't have permission to do that here")
+			if n := len(f.queued()); n != 0 {
+				t.Errorf("%d runs queued, want none", n)
+			}
+		})
+	}
+}
+
+// A head already queued is not queued twice, and the request is still
+// acknowledged as done.
+func TestRerunCommandForQueuedHeadIsAcknowledged(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(reviewed("no_blocking_issues", "a.go"))
+	at := time.Now()
+	first := f.say(1, "dev", "review", "", "", at)
+	second := f.say(1, "mo", "review", "", "", at.Add(time.Minute))
+
+	f.run()
+
+	f.wantReactions(1, first, eyes, up)
+	f.wantReactions(1, second, eyes, up)
+	if n := len(f.queued()); n != 1 {
+		t.Errorf("%d runs queued, want 1", n)
+	}
+	if n := countAction(f.audit(), "review_rerun"); n != 1 {
+		t.Errorf("%d re-runs audited, want 1 (the second started nothing)", n)
+	}
+}
+
+func skillOf(t *testing.T, name, verdict string) result.Skill {
+	return namedSkill(t, name, verdict, "", "")
+}
+
+func TestRerunFailedCommand(t *testing.T) {
+	t.Run("only the failed skills", func(t *testing.T) {
+		f := newCommandFixture(t)
+		base := f.review(skillOf(t, "security", "no_blocking_issues"), skillOf(t, "style", "failed"))
+
+		id := f.say(1, "dev", "review_failed", "", "", time.Now())
+		f.run()
+
+		f.wantReactions(1, id, eyes, up)
+		f.wantReplies(1)
+		runs := f.queued()
+		if len(runs) != 1 {
+			t.Fatalf("queued %d runs, want 1", len(runs))
+		}
+		r := runs[0]
+		if r.Trigger != store.TriggerRerunFailed || !slices.Equal(r.SkillSubset, []string{"style"}) || r.BaseRunID == nil || *r.BaseRunID != base {
+			t.Errorf("run = %q %v %v, want rerun_failed of style on %s", r.Trigger, r.SkillSubset, r.BaseRunID, base)
+		}
+	})
+
+	t.Run("a dismissed blocking finding does not count as failed", func(t *testing.T) {
+		f := newCommandFixture(t)
+		blocking := namedSkill(t, "security", "has_blocking_issues", "blocking", "aaaaaaaaaaaa")
+		f.review(blocking, skillOf(t, "style", "no_blocking_issues"))
+		if _, err := f.Store.Dismiss(f.ctx, store.Dismissal{
+			MR: f.MRKey(1), Fingerprint: "aaaaaaaaaaaa", Severity: "blocking", Reason: "x", Actor: "mo",
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		id := f.say(1, "dev", "review_failed", "", "", time.Now())
+		f.run()
+
+		f.wantReactions(1, id, eyes, up)
+		f.wantReplies(1, "nothing failed")
+		if n := len(f.queued()); n != 0 {
+			t.Errorf("%d runs queued, want none", n)
+		}
+	})
+
+	t.Run("nothing failed", func(t *testing.T) {
+		f := newCommandFixture(t)
+		f.review(skillOf(t, "security", "no_blocking_issues"), skillOf(t, "style", "no_blocking_issues"))
+
+		id := f.say(1, "dev", "review_failed", "", "", time.Now())
+		f.run()
+
+		f.wantReactions(1, id, eyes, up)
+		f.wantReplies(1, "nothing failed")
+		if n := len(f.queued()); n != 0 {
+			t.Errorf("%d runs queued, want none", n)
+		}
+		if n := countAction(f.audit(), "review_rerun_failed"); n != 0 {
+			t.Errorf("%d re-runs audited, want none", n)
+		}
+	})
+
+	errorResult := []byte(`{"schema_version":1,"status":"error","base":"` + sha('b') + `","head":"` + sha('a') +
+		`","error":{"code":"internal","message":"x"},"comment":{"markdown":"x"}}`)
+	for name, seed := range map[string]func(f *commandFixture){
+		"the whole review failed": func(f *commandFixture) { f.Publish(1, f.head, errorResult) },
+		"no review of the current head": func(f *commandFixture) {
+			f.Publish(1, sha('c'), resultFor(f.t, sha('c'), skillOf(f.t, "security", "no_blocking_issues")))
+		},
+		"no review at all": func(f *commandFixture) {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newCommandFixture(t)
+			seed(f)
+
+			id := f.say(1, "dev", "review_failed", "", "", time.Now())
+			f.run()
+
+			f.wantReactions(1, id, eyes, up)
+			f.wantReplies(1, "the whole review failed, so all of it is re-run")
+			runs := f.queued()
+			if len(runs) != 1 || runs[0].Trigger != store.TriggerRerun || runs[0].SkillSubset != nil || runs[0].BaseRunID != nil {
+				t.Fatalf("queued %+v, want one full re-run", runs)
+			}
+		})
+	}
+}
+
+func TestDismissCommand(t *testing.T) {
+	f := newCommandFixture(t)
+	id := f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
+
+	c := f.say(1, "mo", "dismiss", "abc123", "false positive, the id is an integer", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, up)
+	f.wantReplies(1)
+	ds := f.dismissals(1)
+	if len(ds) != 1 || ds[0].Fingerprint != sqlFingerprint || ds[0].Severity != "blocking" ||
+		ds[0].Reason != "false positive, the id is an integer" || ds[0].Actor != "mo (gitlab main)" || ds[0].ActorID != nil {
+		t.Fatalf("dismissals = %+v", ds)
+	}
+	if got := f.Run(id).State; got != store.Reported {
+		t.Fatalf("run is %s, want reported to be decided again", got)
+	}
+	if n := len(f.queued()); n != 0 {
+		t.Errorf("%d runs queued; a dismissal starts none", n)
+	}
+
+	publish(t, f.testEnv)
+
+	body := createdComment(t, f.testEnv, 1)
+	for _, want := range []string{"Dismissed (1)", "dismissed by mo (gitlab main): false positive, the id is an integer", "✅ **No blocking issues** (1 dismissed)"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("comment lacks %q:\n%s", want, body)
+		}
+	}
+	wantStatus(t, f.testEnv, f.head, gitlab.StatusSuccess, "No blocking issues")
+	if n := len(f.GitLab.Requests(http.MethodPost, approvePath(1))); n != 1 {
+		t.Errorf("approve called %d times, want 1", n)
+	}
+}
+
+// The ID may also be the start of the finding's fingerprint, when it is
+// unambiguous.
+func TestDismissByFingerprintPrefix(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
+
+	c := f.say(1, "mo", "dismiss", "abc123def4", "constant", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, up)
+	if ds := f.dismissals(1); len(ds) != 1 || ds[0].Fingerprint != sqlFingerprint {
+		t.Errorf("dismissals = %+v", ds)
+	}
+}
+
+func TestDismissAlreadyDismissed(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
+	at := time.Now()
+	f.say(1, "mo", "dismiss", "abc123", "constant", at)
+	f.run()
+
+	c := f.say(1, "mo", "dismiss", "abc123def4", "again", at.Add(time.Minute))
+	f.run()
+
+	f.wantReactions(1, c, eyes, up)
+	f.wantReplies(1, "finding abc123def4 is already dismissed")
+	if ds := f.dismissals(1); len(ds) != 1 || ds[0].Reason != "constant" {
+		t.Errorf("dismissals = %+v, want the first one kept", ds)
+	}
+	if n := countAction(f.audit(), "finding_dismissed"); n != 1 {
+		t.Errorf("%d dismissals audited, want 1", n)
+	}
+}
+
+// A dismissal this very command stored on an earlier attempt, which then
+// failed to re-decide the review, is carried on, not answered as a repeat.
+func TestDismissRetryAfterPartialAttempt(t *testing.T) {
+	f := newCommandFixture(t)
+	id := f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
+	at := time.Now()
+	if _, err := f.Store.Dismiss(f.ctx, store.Dismissal{
+		MR: f.MRKey(1), Fingerprint: sqlFingerprint, Severity: "blocking", Reason: "constant",
+		Actor: "mo (gitlab main)", CreatedAt: at.Add(time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	c := f.say(1, "mo", "dismiss", "abc123", "constant", at)
+	f.run()
+
+	f.wantReactions(1, c, eyes, up)
+	f.wantReplies(1)
+	if got := f.Run(id).State; got != store.Reported {
+		t.Errorf("run is %s, want reported to be decided again", got)
+	}
+	if n := countAction(f.audit(), "finding_dismissed"); n != 1 {
+		t.Errorf("%d dismissals audited, want 1", n)
+	}
+}
+
+func TestAuthorCannotDismissBlocking(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
+
+	c := f.say(1, "maya", "dismiss", "abc123", "I know better", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, down)
+	f.wantReplies(1, "the author of a change can't dismiss its blocking findings")
+	if ds := f.dismissals(1); len(ds) != 0 {
+		t.Errorf("dismissals = %+v, want none", ds)
+	}
+	if got := f.Run(f.latestRun()).State; got != store.Published {
+		t.Errorf("run is %s; nothing was decided again", got)
+	}
+}
+
+// The author may dismiss a suggestion of their own change.
+func TestAuthorDismissesSuggestion(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillWithFinding(t, "no_blocking_issues", "suggestion"))
+
+	c := f.say(1, "maya", "dismiss", "abc123", "", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, up)
+	if ds := f.dismissals(1); len(ds) != 1 || ds[0].Severity != "suggestion" {
+		t.Errorf("dismissals = %+v", ds)
+	}
+}
+
+func TestDismissNeedsReason(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
+
+	c := f.say(1, "mo", "dismiss", "abc123", "   ", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, down)
+	f.wantReplies(1, "dismissing a blocking finding needs a reason: @pergent-review dismiss <id> <reason>")
+	if ds := f.dismissals(1); len(ds) != 0 {
+		t.Errorf("dismissals = %+v, want none", ds)
+	}
+}
+
+func TestDeveloperDismissesSuggestionOnly(t *testing.T) {
+	t.Run("blocking", func(t *testing.T) {
+		f := newCommandFixture(t)
+		f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
+
+		c := f.say(1, "dev", "dismiss", "abc123", "constant", time.Now())
+		f.run()
+
+		f.wantReactions(1, c, eyes, down)
+		f.wantReplies(1, "you don't have permission to do that here")
+		if ds := f.dismissals(1); len(ds) != 0 {
+			t.Errorf("dismissals = %+v, want none", ds)
+		}
+	})
+	t.Run("suggestion, no reason", func(t *testing.T) {
+		f := newCommandFixture(t)
+		id := f.review(skillWithFinding(t, "no_blocking_issues", "suggestion"))
+
+		c := f.say(1, "dev", "dismiss", "abc123", "", time.Now())
+		f.run()
+
+		f.wantReactions(1, c, eyes, up)
+		f.wantReplies(1)
+		if ds := f.dismissals(1); len(ds) != 1 || ds[0].Severity != "suggestion" || ds[0].Actor != "dev (gitlab main)" {
+			t.Errorf("dismissals = %+v", ds)
+		}
+		if got := f.Run(id).State; got != store.Reported {
+			t.Errorf("run is %s, want reported to be decided again", got)
+		}
+	})
+	t.Run("not a member", func(t *testing.T) {
+		f := newCommandFixture(t)
+		f.review(skillWithFinding(t, "no_blocking_issues", "suggestion"))
+
+		c := f.say(1, "eve", "dismiss", "abc123", "", time.Now())
+		f.run()
+
+		f.wantReactions(1, c, eyes, down)
+		f.wantReplies(1, "you don't have permission to do that here")
+	})
+}
+
+func TestUnknownIDAndHelp(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
+	at := time.Now()
+
+	unknownID := f.say(1, "mo", "dismiss", "ffffff", "reason", at)
+	askHelp := f.say(1, "eve", "help", "", "", at)
+	unknown := f.say(1, "dev", "unknown", "", "", at)
+	// Not a member: the permission is refused before the review is looked at.
+	stranger := f.say(1, "eve", "dismiss", "ffffff", "reason", at)
+	f.run()
+
+	f.wantReactions(1, unknownID, eyes, down)
+	f.wantReactions(1, askHelp, eyes, up)
+	f.wantReactions(1, unknown, eyes, up)
+	f.wantReactions(1, stranger, eyes, down)
+	f.wantReplies(1, "no finding ffffff in the latest review", help, help, "you don't have permission to do that here")
+}
+
+// An ambiguous fingerprint prefix is no finding.
+func TestDismissAmbiguousPrefix(t *testing.T) {
+	f := newCommandFixture(t)
+	a := namedSkill(t, "security", "has_blocking_issues", "blocking", "abc123000001")
+	b := namedSkill(t, "style", "has_blocking_issues", "blocking", "abc123000002")
+	f.review(a, b)
+
+	c := f.say(1, "mo", "dismiss", "abc12300000", "reason", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, down)
+	f.wantReplies(1, "no finding abc12300000 in the latest review")
+}
+
+func TestReplyIDKeepsNothingButHex(t *testing.T) {
+	if got := replyUnknownID("AB12<>\n@zz"); got != "no finding ab12 in the latest review" {
+		t.Errorf("reply = %q", got)
+	}
+}
+
+func TestDraftRerun(t *testing.T) {
+	for _, cmd := range []string{"review", "review_failed"} {
+		t.Run(cmd, func(t *testing.T) {
+			f := newCommandFixture(t)
+			no := false
+			f.Engine.Config.Repositories[0].ReviewDrafts = &no
+			f.serveMR(1, true)
+			f.review(skillOf(t, "security", "failed"))
+
+			c := f.say(1, "dev", cmd, "", "", time.Now())
+			f.run()
+
+			f.wantReactions(1, c, eyes, down)
+			f.wantReplies(1, "drafts aren't reviewed in this repository")
+			if n := len(f.queued()); n != 0 {
+				t.Errorf("%d runs queued, want none", n)
+			}
+		})
+	}
+}
+
+func TestDuplicateWithin30s(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillOf(t, "security", "no_blocking_issues"))
+	at := time.Now()
+	first := f.say(1, "dev", "review", "", "", at)
+	again := f.say(1, "mo", "review", "", "", at.Add(10*time.Second))
+	other := f.say(1, "mo", "review_failed", "", "", at.Add(11*time.Second))
+	later := f.say(1, "mo", "review", "", "", at.Add(40*time.Second))
+
+	f.run()
+
+	f.wantReactions(1, first, eyes, up)
+	f.wantReactions(1, again, eyes, down)
+	f.wantReactions(1, other, eyes, up)
+	f.wantReactions(1, later, eyes, up)
+	// The dropped one is not answered with a reply, and the other command
+	// finds its head queued already.
+	f.wantReplies(1)
+}
+
+func TestCommandOnSwitchedOffRepo(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillOf(t, "security", "no_blocking_issues"))
+	c := f.say(1, "dev", "review", "", "", time.Now())
+	f.Engine.Config.Repositories = nil
+
+	f.run()
+
+	f.wantReactions(1, c, eyes, down)
+	f.wantReplies(1)
+	if n := len(f.queued()); n != 0 {
+		t.Errorf("%d runs queued, want none", n)
+	}
+}
+
+func TestCommandOnClosedChange(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillOf(t, "security", "no_blocking_issues"))
+	mr := openMR(1, f.head)
+	mr.State = "merged"
+	f.GitLab.SetMR(mr)
+
+	c := f.say(1, "dev", "review", "", "", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, down)
+	f.wantReplies(1)
+}
+
+func ptr[T any](v T) *T { return &v }
+
+// The caps count the re-runs of commands and of buttons alike, per change and
+// per repository, over the UTC day.
+func TestRerunCapsAcrossCommandsAndButtons(t *testing.T) {
+	// A button's re-run, as the dashboard queues it.
+	button := func(f *commandFixture, iid int64) {
+		t.Helper()
+		id, created, err := f.Store.EnqueueRerun(f.ctx, store.MRKey{Instance: testInstance, ProjectID: testProjectID, IID: iid},
+			testProjectPath, f.head, "main", store.TriggerRerun, nil, nil)
+		if err != nil || !created {
+			t.Fatalf("EnqueueRerun = %v, %v", created, err)
+		}
+		if err := f.Store.Supersede(f.ctx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	atCap := "re-run limit reached for this MR; it resets at 00:00 UTC"
+
+	t.Run("per change", func(t *testing.T) {
+		f := newCommandFixture(t)
+		f.Engine.Config.Repositories[0].RerunLimitPerMR = ptr(2)
+		button(f, 1)
+		button(f, 1)
+
+		c := f.say(1, "dev", "review", "", "", time.Now())
+		f.run()
+
+		f.wantReactions(1, c, eyes, down)
+		f.wantReplies(1, atCap)
+		if n := len(f.queued()); n != 0 {
+			t.Errorf("%d runs queued at the cap, want none", n)
+		}
+
+		// One short of the cap is allowed, and counts.
+		f2 := newCommandFixture(t)
+		f2.Engine.Config.Repositories[0].RerunLimitPerMR = ptr(2)
+		button(f2, 1)
+		c1 := f2.say(1, "dev", "review", "", "", time.Now())
+		f2.run()
+		f2.wantReactions(1, c1, eyes, up)
+		if n := len(f2.queued()); n != 1 {
+			t.Fatalf("%d runs queued under the cap, want 1", n)
+		}
+		// That run is queued no more: the next command finds the cap used up.
+		c2 := f2.say(1, "dev", "review_failed", "", "", time.Now().Add(time.Minute))
+		f2.run()
+		f2.wantReactions(1, c2, eyes, down)
+		f2.wantReplies(1, atCap)
+	})
+
+	t.Run("per repository", func(t *testing.T) {
+		f := newCommandFixture(t)
+		f.serveMR(2, false)
+		f.Engine.Config.Repositories[0].RerunLimitPerMR = ptr(5)
+		f.Engine.Config.Repositories[0].RerunLimitPerRepo = ptr(2)
+		button(f, 1)
+		button(f, 1)
+
+		c := f.say(2, "dev", "review", "", "", time.Now())
+		f.run()
+
+		f.wantReactions(2, c, eyes, down)
+		f.wantReplies(2, atCap)
+		if n := len(f.queued()); n != 0 {
+			t.Errorf("%d runs queued at the repository's cap, want none", n)
+		}
+	})
+
+	t.Run("resets at 00:00 UTC", func(t *testing.T) {
+		f := newCommandFixture(t)
+		f.Engine.Config.Repositories[0].RerunLimitPerMR = ptr(1)
+		button(f, 1)
+		now := time.Now().UTC()
+		midnight := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, time.UTC)
+
+		f.SetNow(midnight.Add(-time.Second))
+		before := f.say(1, "dev", "review", "", "", time.Now())
+		f.run()
+		f.wantReactions(1, before, eyes, down)
+
+		f.SetNow(midnight)
+		after := f.say(1, "dev", "review_failed", "", "", time.Now().Add(time.Minute))
+		f.run()
+		f.wantReactions(1, after, eyes, up)
+		if n := len(f.queued()); n != 1 {
+			t.Errorf("%d runs queued after the reset, want 1", n)
+		}
+	})
+
+	t.Run("a push is never capped", func(t *testing.T) {
+		f := newCommandFixture(t)
+		f.Engine.Config.Repositories[0].RerunLimitPerMR = ptr(1)
+		button(f, 1)
+		if _, created, err := f.Store.EnqueueRun(f.ctx, f.MRKey(1), testProjectPath, sha('d'), "main"); err != nil || !created {
+			t.Fatalf("EnqueueRun = %v, %v", created, err)
+		}
+	})
+}
+
+func TestCommandPlatformChurnIsRetriedThenGivenUp(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillOf(t, "security", "no_blocking_issues"))
+	f.GitLab.Reply(http.MethodGet, mrPath(1), http.StatusBadRequest, `{"message":"boom"}`)
+	c := f.say(1, "dev", "review", "", "", time.Now())
+
+	f.run()
+	// Not due again yet.
+	f.run()
+	if n := len(f.GitLab.Requests(http.MethodGet, mrPath(1))); n != 1 {
+		t.Fatalf("the merge request was read %d times in the first pass and the one after, want 1", n)
+	}
+
+	// Three retries, each later than the backoff; the platform comes back for
+	// none of them.
+	for i := 0; i < maxCommandRetries; i++ {
+		f.SetNow(f.Now().Add(10 * time.Minute))
+		f.run()
+	}
+	if n := len(f.GitLab.Requests(http.MethodGet, mrPath(1))); n != 1+maxCommandRetries {
+		t.Errorf("the merge request was read %d times, want %d", n, 1+maxCommandRetries)
+	}
+	f.wantReactions(1, c, eyes, down)
+	f.wantReplies(1)
+
+	// Given up on: not tried again.
+	f.SetNow(f.Now().Add(time.Hour))
+	f.run()
+	if n := len(f.GitLab.Requests(http.MethodGet, mrPath(1))); n != 1+maxCommandRetries {
+		t.Errorf("a command given up on was tried again (%d reads)", n)
+	}
+}
+
+func TestCommandRetrySucceedsWhenPlatformRecovers(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillOf(t, "security", "no_blocking_issues"))
+	f.GitLab.Reply(http.MethodGet, mrPath(1), http.StatusBadRequest, `{"message":"boom"}`)
+	c := f.say(1, "dev", "review", "", "", time.Now())
+	f.run()
+	f.wantReactions(1, c, eyes)
+
+	f.serveMR(1, false)
+	f.SetNow(f.Now().Add(time.Minute))
+	f.run()
+
+	// 👀 once, however many passes.
+	f.wantReactions(1, c, eyes, up)
+	if n := len(f.queued()); n != 1 {
+		t.Errorf("%d runs queued, want 1", n)
+	}
+}
+
+// A refusal whose reply can't be posted is tried again, so the commenter is
+// never left without an answer.
+func TestRefusalWithoutReplyIsRetried(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillOf(t, "security", "no_blocking_issues"))
+	f.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusBadRequest, `{"message":"boom"}`)
+	c := f.say(1, "rep", "review", "", "", time.Now())
+	f.run()
+	f.wantReactions(1, c, eyes)
+
+	f.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusCreated, map[string]any{"id": createdNote})
+	f.SetNow(f.Now().Add(time.Minute))
+	f.run()
+
+	f.wantReactions(1, c, eyes, down)
+}
+
+func TestCommandsAudited(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(namedSkill(t, "security", "has_blocking_issues", "blocking", sqlFingerprint), skillOf(t, "style", "failed"))
+	at := time.Now()
+	f.say(1, "mo", "dismiss", "abc123", "false positive", at)
+	f.run()
+	publish(t, f.testEnv)
+	f.say(1, "dev", "review_failed", "", "", at.Add(time.Minute))
+	f.run()
+
+	entries := f.audit()
+	find := func(action string) store.AuditEntry {
+		t.Helper()
+		for _, e := range entries {
+			if e.Action == action {
+				return e
+			}
+		}
+		t.Fatalf("no %s in the audit log: %+v", action, entries)
+		return store.AuditEntry{}
+	}
+	d := find("finding_dismissed")
+	if d.Actor != "mo (gitlab main)" || d.ActorID != nil || d.Instance != testInstance || d.Project != testProjectPath {
+		t.Errorf("dismissal audited as %+v", d)
+	}
+	for _, want := range []string{"mr=1", "head=" + f.head, "fingerprint=" + sqlFingerprint, `reason="false positive"`} {
+		if !strings.Contains(d.Detail, want) {
+			t.Errorf("detail %q lacks %q", d.Detail, want)
+		}
+	}
+	rf := find("review_rerun_failed")
+	if rf.Actor != "dev (gitlab main)" || !strings.Contains(rf.Detail, "head="+f.head) || !strings.Contains(rf.Detail, "skills=style") {
+		t.Errorf("re-run audited as %+v", rf)
+	}
+}
+
+func TestCommandsAuditFullRerun(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillOf(t, "security", "no_blocking_issues"))
+	f.say(1, "dev", "review", "", "", time.Now())
+	f.run()
+
+	var found bool
+	for _, e := range f.audit() {
+		if e.Action == "review_rerun" {
+			found = true
+			if e.Actor != "dev (gitlab main)" || !strings.Contains(e.Detail, "head="+f.head) {
+				t.Errorf("re-run audited as %+v", e)
+			}
+		}
+	}
+	if !found {
+		t.Error("the re-run was not audited")
+	}
+}
+
+// Two dismissals in one pass: the first re-decides the run, which is then
+// waiting to be published; the second still finds the review.
+func TestTwoDismissalsInOnePass(t *testing.T) {
+	f := newCommandFixture(t)
+	a := namedSkill(t, "security", "has_blocking_issues", "blocking", "aaaaaaaaaaaa")
+	b := namedSkill(t, "style", "has_blocking_issues", "blocking", "bbbbbbbbbbbb")
+	f.review(a, b)
+	at := time.Now()
+	one := f.say(1, "mo", "dismiss", "aaaaaa", "constant", at)
+	two := f.say(1, "mo", "dismiss", "bbbbbb", "constant", at)
+
+	f.run()
+
+	f.wantReactions(1, one, eyes, up)
+	f.wantReactions(1, two, eyes, up)
+	if ds := f.dismissals(1); len(ds) != 2 {
+		t.Errorf("dismissals = %+v, want 2", ds)
+	}
+}
+
+// A slow platform call holds a pass up for the command budget at most, and
+// never keeps a queued review from starting.
+func TestCommandsDoNotBlockDispatch(t *testing.T) {
+	defer func(b, c time.Duration) { commandsBudget, commandTimeout = b, c }(commandsBudget, commandTimeout)
+	commandsBudget, commandTimeout = 400*time.Millisecond, 400*time.Millisecond
+
+	f := newCommandFixture(t)
+	f.GitLab.Reply(http.MethodGet, treePath(), http.StatusOK, []gitlab.TreeEntry{})
+	// Every reaction and read of the command hangs until the caller gives up.
+	var hung atomic.Int32
+	slow := func(w http.ResponseWriter, r *http.Request) {
+		hung.Add(1)
+		select {
+		case <-r.Context().Done():
+		case <-time.After(10 * time.Second):
+		}
+	}
+	id := f.say(1, "dev", "review", "", "", time.Now())
+	f.GitLab.Handle(http.MethodPost, emojiPath(1, id), slow)
+	f.GitLab.Handle(http.MethodGet, membersPath(userDeveloper), slow)
+	queued := f.Enqueue(2, f.head)
+	f.GitLab.SetMR(openMR(2, f.head))
+	f.GitLab.Reply(http.MethodPost, statusPath(f.head), http.StatusCreated, `{}`)
+
+	start := time.Now()
+	f.Engine.pass(f.ctx)
+	took := time.Since(start)
+
+	if took > 5*time.Second {
+		t.Errorf("a pass took %s with a hung platform, want about the %s budget", took, commandsBudget)
+	}
+	if hung.Load() == 0 {
+		t.Error("the command never reached the slow platform")
+	}
+	if j := f.Job(queued); j == nil {
+		t.Errorf("the queued review was not dispatched in the pass\n%s", f.Logs())
+	}
+	// The command is not lost: it is given back, to be tried again.
+	f.GitLab.Reply(http.MethodGet, membersPath(userDeveloper), http.StatusOK, member(30))
+	f.GitLab.Reply(http.MethodPost, emojiPath(1, id), http.StatusCreated, `{}`)
+	f.SetNow(f.Now().Add(time.Minute))
+	f.run()
+	if got := f.reactions(1, id); len(got) == 0 || got[len(got)-1] != up {
+		t.Errorf("reactions after the platform recovered = %v, want to end with %s", got, up)
+	}
+}
+
+func TestCommandsWaitForUnconnectedInstance(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillOf(t, "security", "no_blocking_issues"))
+	f.say(1, "dev", "review", "", "", time.Now())
+	f.Engine.Platforms.Delete(testInstance)
+
+	f.run()
+	if n := len(f.GitLab.Requests("", "")); n != 0 {
+		t.Errorf("%d platform calls for an instance that isn't connected", n)
+	}
+}
+
+func TestChangeTerm(t *testing.T) {
+	for platform, want := range map[string]string{"gitlab": "MR", "github": "PR"} {
+		if got := replyCap(changeTerm(platform)); got != "re-run limit reached for this "+want+"; it resets at 00:00 UTC" {
+			t.Errorf("%s: %q", platform, got)
+		}
+	}
+}
+
+// latestRun is the ID of the newest decided run of merge request 1.
+func (f *commandFixture) latestRun() string {
+	f.t.Helper()
+	r, found, err := f.Store.LatestDecidedRun(f.ctx, f.MRKey(1))
+	if err != nil || !found {
+		f.t.Fatalf("LatestDecidedRun = %v, %v", found, err)
+	}
+	return r.ID
+}
+
+func countAction(es []store.AuditEntry, action string) int {
+	n := 0
+	for _, e := range es {
+		if e.Action == action {
+			n++
+		}
+	}
+	return n
+}

@@ -1,0 +1,565 @@
+package engine
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+	"time"
+
+	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/forge"
+	"github.com/gopaytech/pergent.sh/internal/result"
+	"github.com/gopaytech/pergent.sh/internal/settings"
+	"github.com/gopaytech/pergent.sh/internal/store"
+)
+
+const (
+	// commandsPerPass is how many commands one pass answers at most.
+	commandsPerPass = 10
+	// maxCommandRetries is how many times a command that met a platform or
+	// store error is given back to be tried again, on later passes, before
+	// it is given up on.
+	maxCommandRetries = 3
+	// commandRetryBackoff is the first retry delay; it doubles each time.
+	commandRetryBackoff = 15 * time.Second
+	// commandRepeatWindow is how long after a command was answered the same
+	// command (same kind, same finding ID) on the same change is dropped.
+	commandRepeatWindow = 30 * time.Second
+	// maxGiveUpText bounds the error text kept as a given-up command's outcome.
+	maxGiveUpText = 200
+)
+
+// Bounds of the command step. They are variables so tests can shorten them.
+var (
+	// commandsBudget is the longest one pass spends on commands, so a slow
+	// platform delays the next pass of reviews by this much at most.
+	commandsBudget = 30 * time.Second
+	// commandTimeout is the longest one command's platform calls take; a
+	// command is far inside the store's 5-minute claim.
+	commandTimeout = 20 * time.Second
+)
+
+// What the bot replies when it refuses a command or has nothing to do. The
+// replies never echo what a commenter wrote, but a finding ID, which is
+// reduced to hex digits first (replyID).
+const (
+	replyNoPermission  = "you don't have permission to do that here"
+	replyAuthor        = "the author of a change can't dismiss its blocking findings"
+	replyDraft         = "drafts aren't reviewed in this repository"
+	replyNothingFailed = "nothing failed"
+	replyWholeFailed   = "the whole review failed, so all of it is re-run"
+)
+
+func replyHelp(mention string) string {
+	return fmt.Sprintf("Commands: @%[1]s review · @%[1]s review failed · @%[1]s dismiss <id> <reason>", mention)
+}
+
+func replyNeedsReason(mention string) string {
+	return fmt.Sprintf("dismissing a blocking finding needs a reason: @%s dismiss <id> <reason>", mention)
+}
+
+func replyUnknownID(id string) string {
+	return fmt.Sprintf("no finding %s in the latest review", replyID(id))
+}
+
+func replyCap(term string) string {
+	return fmt.Sprintf("re-run limit reached for this %s; it resets at 00:00 UTC", term)
+}
+
+func replyAlreadyDismissed(id string) string {
+	return fmt.Sprintf("finding %s is already dismissed", replyID(id))
+}
+
+// replyID keeps the hex digits of a finding ID, so no other text a commenter
+// wrote can reach a reply.
+func replyID(id string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(id) {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// changeTerm is what the platform calls a change.
+func changeTerm(platform string) string {
+	if platform == config.PlatformGitHub {
+		return "PR"
+	}
+	return "MR"
+}
+
+// verdict is how the engine answered a command: what it records as the
+// command's outcome, the reaction on the comment and the reply, if any.
+type verdict struct {
+	// outcome is store.CommandDone for a command that was carried out (or
+	// had nothing to do), else why it was refused or dropped.
+	outcome string
+	react   forge.Reaction
+	reply   string
+	// replyRequired is set for a refusal, whose reply is its point: failing
+	// to post it is an error and the command is tried again. The reply of a
+	// command that was carried out is only courtesy.
+	replyRequired bool
+}
+
+// done is a command carried out, or one with nothing to do, with an optional
+// reply.
+func done(reply string) verdict {
+	return verdict{outcome: store.CommandDone, react: forge.ReactDone, reply: reply}
+}
+
+// refused is a command that was refused, and why, with the reply that says so.
+func refused(why, reply string) verdict {
+	return verdict{outcome: "refused: " + why, react: forge.ReactRefused, reply: reply, replyRequired: true}
+}
+
+// dropped is a command that is not answered at all: only a 👎.
+func dropped(why string) verdict {
+	return verdict{outcome: "dropped: " + why, react: forge.ReactRefused}
+}
+
+// CommandsOnce answers the commands people wrote in comments (webhooks
+// stored them): up to commandsPerPass of them, and for at most
+// commandsBudget, so the loop's reviews are never held up long. Each is
+// reacted to, carried out or refused, replied to if need be, and finished.
+// One that meets a platform or store error is given back and tried again on a
+// later pass, up to maxCommandRetries times, then given up on. Commands of an
+// instance pergent.sh isn't connected to wait. The returned error joins
+// store failures only.
+func (e *Engine) CommandsOnce(ctx context.Context) error {
+	bctx, cancel := context.WithTimeout(ctx, commandsBudget)
+	defer cancel()
+	skip := e.unconnected()
+	var errs []error
+	for i := 0; i < commandsPerPass && bctx.Err() == nil; i++ {
+		// One at a time, so a command the budget leaves no time for is
+		// never claimed and left to wait out its lease.
+		cmds, err := e.Store.ClaimCommands(bctx, 1, e.now(), skip...)
+		if err != nil {
+			if bctx.Err() == nil {
+				errs = append(errs, fmt.Errorf("commands: claim: %w", err))
+			}
+			break
+		}
+		if len(cmds) == 0 {
+			break
+		}
+		e.answerCommand(ctx, bctx, cmds[0])
+	}
+	return errors.Join(errs...)
+}
+
+// answerCommand handles one claimed command and records the outcome. parent
+// is the engine's context (cancelled on shutdown), bctx the pass's budget.
+func (e *Engine) answerCommand(parent, bctx context.Context, cmd store.Command) {
+	log := e.log().With("command", cmd.ID, "kind", cmd.Kind, "instance", cmd.MR.Instance,
+		"project", cmd.ProjectPath, "mr", cmd.MR.IID, "comment", cmd.CommentID, "attempt", cmd.Attempts+1)
+	cctx, cancel := context.WithTimeout(bctx, commandTimeout)
+	defer cancel()
+
+	v, err := e.handleCommand(cctx, cmd, log)
+	if err != nil && parent.Err() != nil {
+		// Shutting down: the error is ours. The claim lapses and the
+		// command is offered again.
+		return
+	}
+	sctx, scancel := settleCtx(parent)
+	defer scancel()
+	if err != nil {
+		e.retryCommand(sctx, cmd, err, log)
+		return
+	}
+	if v.reply != "" {
+		if err := e.reply(cctx, cmd, v.reply); err != nil {
+			if v.replyRequired {
+				e.retryCommand(sctx, cmd, fmt.Errorf("reply: %w", err), log)
+				return
+			}
+			log.Warn("couldn't post the reply to a command", "error", e.redact(err.Error()))
+		}
+	}
+	e.react(cctx, cmd, v.react, log)
+	if err := e.Store.FinishCommand(sctx, cmd.ID, v.outcome, e.now()); err != nil {
+		log.Error("couldn't record that a command was answered", "error", e.redact(err.Error()))
+		return
+	}
+	log.Info("command answered", "outcome", v.outcome)
+}
+
+// retryCommand gives a command back to be tried again later, or, after
+// maxCommandRetries, finishes it with a 👎 and no reply.
+func (e *Engine) retryCommand(ctx context.Context, cmd store.Command, cause error, log *slog.Logger) {
+	text := e.redact(cause.Error())
+	if cmd.Attempts >= maxCommandRetries {
+		log.Error("giving up on a command", "error", text)
+		e.react(ctx, cmd, forge.ReactRefused, log)
+		why := text
+		if r := []rune(why); len(r) > maxGiveUpText {
+			why = string(r[:maxGiveUpText])
+		}
+		if err := e.Store.FinishCommand(ctx, cmd.ID, "gave up: "+why, e.now()); err != nil {
+			log.Error("couldn't record that a command was given up on", "error", e.redact(err.Error()))
+		}
+		return
+	}
+	delay := commandRetryBackoff << cmd.Attempts
+	log.Warn("a command will be tried again", "error", text, "in", delay)
+	if err := e.Store.ReleaseCommand(ctx, cmd.ID, e.now().Add(delay)); err != nil {
+		log.Error("couldn't give a command back", "error", e.redact(err.Error()))
+	}
+}
+
+// react puts the reaction on the command's comment. A reaction that can't be
+// made never stops the command.
+func (e *Engine) react(ctx context.Context, cmd store.Command, r forge.Reaction, log *slog.Logger) {
+	if r == "" {
+		return
+	}
+	plat, ok := e.Platforms.Get(cmd.MR.Instance)
+	if !ok || plat.Forge == nil {
+		return
+	}
+	if err := plat.Forge.React(ctx, cmd.MR.ProjectID, cmd.MR.IID, cmd.CommentID, r); err != nil {
+		log.Debug("couldn't react to a command", "reaction", r, "error", e.redact(err.Error()))
+	}
+}
+
+func (e *Engine) reply(ctx context.Context, cmd store.Command, body string) error {
+	plat, ok := e.Platforms.Get(cmd.MR.Instance)
+	if !ok || plat.Forge == nil {
+		return errors.New("not connected to the instance")
+	}
+	return plat.Forge.Reply(ctx, cmd.MR.ProjectID, cmd.MR.IID, body)
+}
+
+// commandRun is one command being handled, with what its steps need.
+type commandRun struct {
+	e      *Engine
+	cmd    store.Command
+	plat   Platform
+	repo   settings.Effective
+	change forge.Change
+	log    *slog.Logger
+}
+
+// handleCommand carries out or refuses one command. An error is a platform or
+// store failure: the command is tried again.
+func (e *Engine) handleCommand(ctx context.Context, cmd store.Command, log *slog.Logger) (verdict, error) {
+	plat, ok := e.Platforms.Get(cmd.MR.Instance)
+	if !ok || plat.Forge == nil {
+		return verdict{}, errors.New("not connected to the instance")
+	}
+	if cmd.Attempts == 0 {
+		e.react(ctx, cmd, forge.ReactSeen, log)
+	}
+	repo, on, err := e.settings().Get(ctx, cmd.MR.Instance, cmd.ProjectPath)
+	if err != nil {
+		return verdict{}, fmt.Errorf("load repository settings: %w", err)
+	}
+	if inst, registered := e.registry().Get(cmd.MR.Instance); !on || !registered || inst.Removing {
+		return dropped("the repository is not switched on"), nil
+	}
+	recent, err := e.Store.RecentCommand(ctx, cmd.MR, cmd.Kind, cmd.Arg, cmd.CreatedAt.Add(-commandRepeatWindow))
+	if err != nil {
+		return verdict{}, fmt.Errorf("check for a repeated command: %w", err)
+	}
+	if recent {
+		return dropped("the same command was answered within 30 seconds"), nil
+	}
+	change, err := plat.Forge.GetChange(ctx, cmd.MR.ProjectID, cmd.MR.IID)
+	if errors.Is(err, forge.ErrNotFound) {
+		return dropped("the change is gone"), nil
+	}
+	if err != nil {
+		return verdict{}, fmt.Errorf("get the change: %w", err)
+	}
+	if change.State != forge.StateOpen {
+		return dropped("the change is not open"), nil
+	}
+	c := &commandRun{e: e, cmd: cmd, plat: plat, repo: repo, change: change, log: log}
+
+	switch cmd.Kind {
+	case "review":
+		return c.rerun(ctx, false)
+	case "review_failed":
+		return c.rerun(ctx, true)
+	case "dismiss":
+		return c.dismiss(ctx)
+	}
+	// help, and a command the bot doesn't know.
+	return done(replyHelp(plat.Forge.Mention())), nil
+}
+
+// access is the commander's access on the platform now.
+func (c *commandRun) access(ctx context.Context) (forge.Access, error) {
+	a, err := c.plat.Forge.AccessLevel(ctx, c.cmd.MR.ProjectID, c.cmd.Author, c.cmd.AuthorID)
+	if err != nil {
+		return forge.AccessNone, fmt.Errorf("get the commenter's access: %w", err)
+	}
+	return a, nil
+}
+
+// actor is who the audit log names for a comment command.
+func (c *commandRun) actor() string {
+	return c.cmd.Author + " (" + c.cmd.Platform + " " + c.cmd.MR.Instance + ")"
+}
+
+// audit records what the command did. A failure is logged and never undoes
+// the command.
+func (c *commandRun) audit(ctx context.Context, action, detail string) {
+	head := fmt.Sprintf("mr=%d head=%s", c.cmd.MR.IID, c.change.HeadSHA)
+	if detail != "" {
+		head += " " + detail
+	}
+	actx, cancel := settleCtx(ctx)
+	defer cancel()
+	if err := c.e.Store.Audit(actx, store.AuditEntry{
+		At: c.e.now(), Actor: c.actor(), Action: action,
+		Instance: c.cmd.MR.Instance, Project: c.cmd.ProjectPath, Detail: head,
+	}); err != nil {
+		c.log.Error("recording an audit entry failed", "action", action, "error", c.e.redact(err.Error()))
+	}
+}
+
+// rerun is "review" and, with failedOnly, "review failed".
+func (c *commandRun) rerun(ctx context.Context, failedOnly bool) (verdict, error) {
+	access, err := c.access(ctx)
+	if err != nil {
+		return verdict{}, err
+	}
+	if access < forge.AccessWrite {
+		return refused("no permission", replyNoPermission), nil
+	}
+	if c.change.Draft && !c.repo.ReviewDrafts {
+		return refused("draft", replyDraft), nil
+	}
+	if c.change.HeadSHA == "" {
+		return verdict{}, errors.New("the platform reports no head commit")
+	}
+
+	trigger, action := store.TriggerRerun, "review_rerun"
+	var (
+		skills []string
+		base   *string
+		whole  bool
+		detail = "skills=all"
+	)
+	if failedOnly {
+		action = "review_rerun_failed"
+		if skills, base, whole, err = c.failedSkills(ctx); err != nil {
+			return verdict{}, err
+		}
+		switch {
+		case whole:
+		case len(skills) == 0:
+			return done(replyNothingFailed), nil
+		default:
+			trigger, detail = store.TriggerRerunFailed, "skills="+strings.Join(skills, ",")
+		}
+	}
+
+	capped, err := c.capReached(ctx)
+	if err != nil {
+		return verdict{}, err
+	}
+	if capped {
+		return refused("re-run limit reached", replyCap(changeTerm(c.cmd.Platform))), nil
+	}
+	_, created, err := c.e.Store.EnqueueRerun(ctx, c.cmd.MR, c.cmd.ProjectPath, c.change.HeadSHA, c.change.TargetBranch,
+		trigger, skills, base)
+	if err != nil {
+		return verdict{}, fmt.Errorf("queue the re-run: %w", err)
+	}
+	if !created {
+		// A head already queued or running is reviewed once: the request
+		// is acknowledged as done.
+		return done(""), nil
+	}
+	c.e.Wake()
+	c.audit(ctx, action, detail)
+	if whole {
+		return done(replyWholeFailed), nil
+	}
+	return done(""), nil
+}
+
+// failedSkills names the skills of the newest review of the current head that
+// a "review failed" re-runs, and that review's run, which the re-run keeps the
+// other skills' results of. whole is set when no skill can be singled out (no
+// review of this head and target, an error result, or one whose results were
+// not all kept), and the whole review is re-run.
+func (c *commandRun) failedSkills(ctx context.Context) (skills []string, base *string, whole bool, err error) {
+	run, found, err := c.e.Store.LatestDecidedRun(ctx, c.cmd.MR)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("load the latest review: %w", err)
+	}
+	if !found || run.HeadSHA != c.change.HeadSHA || run.TargetBranch != c.change.TargetBranch || run.Result == nil {
+		return nil, nil, true, nil
+	}
+	r, perr := result.Parse(run.Result)
+	if perr != nil || r.MergeNote != "" {
+		// An unreadable result, or a partial one whose other skills were not
+		// kept: nothing to build on.
+		return nil, nil, true, nil
+	}
+	ds, err := c.e.dismissals(ctx, c.cmd.MR)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	skills, whole = result.FailedSkills(r, ds)
+	if whole {
+		return nil, nil, true, nil
+	}
+	id := run.ID
+	return skills, &id, false, nil
+}
+
+// capReached tells whether the re-run caps of the change or of the repository
+// are used up for today (UTC). Command and button re-runs count alike.
+func (c *commandRun) capReached(ctx context.Context) (bool, error) {
+	now := c.e.now().UTC()
+	since := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	n, err := c.e.Store.CountReruns(ctx, &c.cmd.MR, "", 0, since)
+	if err != nil {
+		return false, fmt.Errorf("count the re-runs of the change: %w", err)
+	}
+	if n >= c.repo.RerunLimitPerMR {
+		return true, nil
+	}
+	n, err = c.e.Store.CountReruns(ctx, nil, c.cmd.MR.Instance, c.cmd.MR.ProjectID, since)
+	if err != nil {
+		return false, fmt.Errorf("count the re-runs of the repository: %w", err)
+	}
+	return n >= c.repo.RerunLimitPerRepo, nil
+}
+
+// dismiss is "dismiss <id> [reason]".
+func (c *commandRun) dismiss(ctx context.Context) (verdict, error) {
+	access, err := c.access(ctx)
+	if err != nil {
+		return verdict{}, err
+	}
+	if access < forge.AccessWrite {
+		return refused("no permission", replyNoPermission), nil
+	}
+	f, found, err := c.findFinding(ctx)
+	if err != nil {
+		return verdict{}, err
+	}
+	if !found {
+		return refused("unknown finding", replyUnknownID(c.cmd.Arg)), nil
+	}
+	reason := strings.TrimSpace(c.cmd.Reason)
+	if f.Severity != "suggestion" {
+		// Anything but a suggestion is dismissed as a blocking finding.
+		f.Severity = "blocking"
+		switch {
+		case access < forge.AccessMaintain:
+			return refused("no permission", replyNoPermission), nil
+		case strings.EqualFold(c.cmd.Author, c.change.Author):
+			return refused("author of the change", replyAuthor), nil
+		case reason == "":
+			return refused("reason needed", replyNeedsReason(c.plat.Forge.Mention())), nil
+		}
+	}
+
+	created, err := c.e.Store.Dismiss(ctx, store.Dismissal{
+		MR: c.cmd.MR, Fingerprint: f.Fingerprint, Severity: f.Severity,
+		Reason: reason, Actor: c.actor(), CreatedAt: c.e.now(),
+	})
+	if err != nil {
+		return verdict{}, fmt.Errorf("store the dismissal: %w", err)
+	}
+	if !created {
+		// Dismissed already, at this severity or a higher one: unless it is
+		// this very command's own, stored by an attempt that then failed to
+		// re-publish.
+		mine, err := c.ownDismissal(ctx, f.Fingerprint, reason)
+		if err != nil {
+			return verdict{}, err
+		}
+		if !mine {
+			return done(replyAlreadyDismissed(c.cmd.Arg)), nil
+		}
+	}
+	// The review is decided again with the dismissal applied: no run starts.
+	if _, err := c.e.Store.Republish(ctx, c.cmd.MR, c.change.HeadSHA, c.change.TargetBranch); err != nil {
+		return verdict{}, fmt.Errorf("re-decide the review: %w", err)
+	}
+	c.e.Wake()
+	detail := "fingerprint=" + f.Fingerprint + " severity=" + f.Severity
+	if reason != "" {
+		detail += fmt.Sprintf(" reason=%q", reason)
+	}
+	c.audit(ctx, "finding_dismissed", detail)
+	return done(""), nil
+}
+
+// ownDismissal tells whether the stored dismissal of fingerprint is the one
+// this command's actor made with this reason.
+func (c *commandRun) ownDismissal(ctx context.Context, fingerprint, reason string) (bool, error) {
+	ds, err := c.e.Store.Dismissals(ctx, c.cmd.MR)
+	if err != nil {
+		return false, fmt.Errorf("load dismissals: %w", err)
+	}
+	for _, d := range ds {
+		if d.Fingerprint == fingerprint {
+			// Made after the comment was written, so not by an earlier one.
+			return d.Actor == c.actor() && d.Reason == reason && !d.CreatedAt.Before(c.cmd.CreatedAt), nil
+		}
+	}
+	return false, nil
+}
+
+// findFinding resolves the command's finding ID against the newest review of
+// the change: its finding with that ID or, when none has it, the one finding
+// whose fingerprint starts with it.
+func (c *commandRun) findFinding(ctx context.Context) (result.Finding, bool, error) {
+	run, found, err := c.e.Store.LatestDecidedRun(ctx, c.cmd.MR)
+	if err != nil {
+		return result.Finding{}, false, fmt.Errorf("load the latest review: %w", err)
+	}
+	if !found || run.Result == nil {
+		return result.Finding{}, false, nil
+	}
+	r, err := result.Parse(run.Result)
+	if err != nil {
+		return result.Finding{}, false, nil
+	}
+	id := strings.ToLower(c.cmd.Arg)
+	var byPrefix []result.Finding
+	for _, s := range r.Skills {
+		for _, raw := range s.Findings {
+			var f result.Finding
+			if json.Unmarshal(raw, &f) != nil || f.Fingerprint == "" {
+				continue
+			}
+			if strings.EqualFold(f.ID, id) {
+				return f, true, nil
+			}
+			if strings.HasPrefix(strings.ToLower(f.Fingerprint), id) {
+				byPrefix = append(byPrefix, f)
+			}
+		}
+	}
+	// One fingerprint, however many skills report it, is one finding, as
+	// severe as its most severe report.
+	if len(byPrefix) == 0 {
+		return result.Finding{}, false, nil
+	}
+	pick := byPrefix[0]
+	for _, f := range byPrefix {
+		if f.Fingerprint != pick.Fingerprint {
+			return result.Finding{}, false, nil
+		}
+		if f.Severity != "suggestion" {
+			pick = f
+		}
+	}
+	return pick, true, nil
+}
