@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -134,12 +135,27 @@ func Rerun(ctx context.Context, st *store.Store, req RerunRequest) (RerunResult,
 	return res, nil
 }
 
+// MaxReasonRunes is the longest reason of a dismissal, in characters. A
+// comment's reason is cut to it, the dashboard refuses a longer one.
+const MaxReasonRunes = 500
+
+// reasonImage matches what could pull an image into the review comment: a
+// markdown image (inline or by reference) or an HTML img tag.
+var reasonImage = regexp.MustCompile(`!\[[^\]]*\]\([^)]*\)|!\[[^\]]*\]\[[^\]]*\]|(?i:<img\b[^>]*>?)`)
+
+// CleanReason is a dismissal's reason as it is stored and shown: without
+// images (the review comment would load them for everyone who reads it, a
+// way to track readers) and trimmed.
+func CleanReason(reason string) string {
+	return strings.TrimSpace(reasonImage.ReplaceAllString(reason, ""))
+}
+
 // RenderDismissals is stored dismissals in the form the comment renderer and
 // the result's policy take.
 func RenderDismissals(stored []store.Dismissal) []render.Dismissal {
 	out := make([]render.Dismissal, len(stored))
 	for i, d := range stored {
-		out[i] = render.Dismissal{Fingerprint: d.Fingerprint, Severity: d.Severity, By: d.Actor, Reason: d.Reason}
+		out[i] = render.Dismissal{Fingerprint: d.Fingerprint, Severity: d.Severity, By: d.Actor, Reason: CleanReason(d.Reason)}
 	}
 	return out
 }

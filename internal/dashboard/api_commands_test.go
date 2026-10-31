@@ -375,6 +375,36 @@ func TestDismissButtonBlockingNeedsMaintainer(t *testing.T) {
 	}
 }
 
+// A reason is cut to nothing but text: images are stripped before it is
+// stored, and it can be 500 characters at most.
+func TestDismissButtonReason(t *testing.T) {
+	e := newEnv(t, nil)
+	e.buttonBlockingReview()
+	c := e.signInRole(store.RoleMaintainer)
+
+	long := strings.Repeat("é", 501)
+	rec := e.send(c, "POST", buttonURL("dismiss"), `{"fingerprint":"`+blockingFP+`","reason":"`+long+`"}`)
+	wantCode(t, rec, "a reason of 501 characters", http.StatusBadRequest)
+	if got := errorOf(t, rec); got != "the reason is too long" {
+		t.Errorf("error = %q", got)
+	}
+	if len(e.dismissalsOf()) != 0 {
+		t.Fatal("a too long reason was stored")
+	}
+
+	// Only an image: nothing is left, and a blocking finding needs a reason.
+	rec = e.send(c, "POST", buttonURL("dismiss"), `{"fingerprint":"`+blockingFP+`","reason":"![x](https://evil.example/p.png)"}`)
+	wantCode(t, rec, "an image as the reason", http.StatusBadRequest)
+
+	// 500 characters, with an image after them that is stripped.
+	ok := strings.Repeat("é", 500)
+	wantCode(t, e.send(c, "POST", buttonURL("dismiss"),
+		`{"fingerprint":"`+blockingFP+`","reason":"`+ok+` ![x](https://evil.example/p.png)"}`), "500 characters", http.StatusOK)
+	if ds := e.dismissalsOf(); len(ds) != 1 || ds[0].Reason != ok {
+		t.Fatalf("dismissals = %+v; want the reason without its image", ds)
+	}
+}
+
 func TestDismissButtonSuggestion(t *testing.T) {
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()

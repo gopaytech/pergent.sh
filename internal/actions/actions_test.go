@@ -50,3 +50,28 @@ func TestRenderDismissals(t *testing.T) {
 		t.Errorf("RenderDismissals = %+v", got)
 	}
 }
+
+func TestCleanReason(t *testing.T) {
+	for in, want := range map[string]string{
+		"the input is a constant": "the input is a constant",
+		"  padded  ":              "padded",
+		"fine ![x](https://evil.example/p.png?a=b) ok": "fine  ok",
+		"![](https://evil.example/p.png)":              "",
+		"a ![one](u) b ![two][ref] c":                  "a  b  c",
+		"see [a link](https://example.com)":            "see [a link](https://example.com)",
+		"x <img src=\"https://evil.example/p.png\"> y": "x  y",
+		"wow!": "wow!",
+	} {
+		if got := CleanReason(in); got != want {
+			t.Errorf("CleanReason(%q) = %q; want %q", in, got, want)
+		}
+	}
+}
+
+// A reason stored before images were stripped is rendered without them.
+func TestRenderDismissalsStripsImages(t *testing.T) {
+	got := RenderDismissals([]store.Dismissal{{Fingerprint: "f", Severity: "blocking", Actor: "a", Reason: "ok ![p](https://evil.example/p.png)"}})
+	if len(got) != 1 || got[0].Reason != "ok" {
+		t.Errorf("RenderDismissals = %+v", got)
+	}
+}

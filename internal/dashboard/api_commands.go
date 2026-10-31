@@ -30,9 +30,6 @@ const (
 	msgAuthorUnknown   = "could not tell who opened this change, so its blocking findings can't be dismissed now; please try again"
 	msgPlatformFailed  = "could not read this change from its platform, please try again"
 	msgRedecideFailed  = "the change was saved, but the review could not be decided again yet; the next review will use it"
-
-	// maxReason is the longest reason, in characters.
-	maxReason = 1000
 )
 
 // commandRoutes adds the review's buttons to mux, behind Auth.Require (which
@@ -252,7 +249,8 @@ func (d *Dashboard) rerun(w http.ResponseWriter, r *http.Request, b reviewButton
 // dismiss sets a finding of the latest review aside.
 func (d *Dashboard) dismiss(w http.ResponseWriter, r *http.Request, b reviewButton, fingerprint, reason string) {
 	ctx, se := r.Context(), session(r)
-	if utf8.RuneCountInString(reason) > maxReason {
+	reason = actions.CleanReason(reason)
+	if utf8.RuneCountInString(reason) > actions.MaxReasonRunes {
 		writeError(w, http.StatusBadRequest, msgReasonTooLong)
 		return
 	}

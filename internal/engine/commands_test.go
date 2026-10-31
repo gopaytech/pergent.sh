@@ -402,6 +402,28 @@ func TestDismissByFingerprintPrefix(t *testing.T) {
 	}
 }
 
+// Images are stripped from a reason before it is stored, so the review
+// comment can't pull one in; a reason of nothing else is no reason.
+func TestDismissReasonHasNoImages(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
+	at := time.Now()
+
+	onlyImage := f.say(1, "mo", "dismiss", "abc123", "![x](https://evil.example/p.png)", at)
+	f.run()
+	f.wantReactions(1, onlyImage, eyes, down)
+	if ds := f.dismissals(1); len(ds) != 0 {
+		t.Fatalf("dismissals = %+v; want none (no reason)", ds)
+	}
+
+	f.SetNow(f.Now().Add(commandThrottleWindow + time.Second))
+	f.say(1, "mo", "dismiss", "abc123", "a constant ![x](https://evil.example/p.png)", at.Add(time.Minute))
+	f.run()
+	if ds := f.dismissals(1); len(ds) != 1 || ds[0].Reason != "a constant" {
+		t.Errorf("dismissals = %+v; want the reason without its image", ds)
+	}
+}
+
 func TestDismissAlreadyDismissed(t *testing.T) {
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))

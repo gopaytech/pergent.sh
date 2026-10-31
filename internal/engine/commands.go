@@ -442,7 +442,7 @@ func (c *commandRun) dismiss(ctx context.Context) (verdict, error) {
 	if !found {
 		return refused("unknown finding", replyUnknownID(c.cmd.Arg)), nil
 	}
-	reason := strings.TrimSpace(c.cmd.Reason)
+	reason := actions.CleanReason(c.cmd.Reason)
 	if f.Severity != "suggestion" {
 		// Anything but a suggestion is dismissed as a blocking finding.
 		f.Severity = "blocking"
