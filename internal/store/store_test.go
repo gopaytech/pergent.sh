@@ -187,12 +187,26 @@ func TestSupersedeDraft(t *testing.T) {
 	s := newStore(t)
 	a := enqueue(t, s, mr1, "aaa")
 	other := enqueue(t, s, mr2, "ooo")
-	n, err := s.SupersedeDraftMR(ctx, mr1)
+	n, err := s.SupersedeDraftMR(ctx, mr1, "ccc", "main")
 	if err != nil || n != 1 {
 		t.Fatalf("SupersedeDraftMR = %d, %v", n, err)
 	}
 	if r := getRun(t, s, a); r.State != Superseded || r.OutcomeReason != SupersededDraft {
 		t.Errorf("run = %s %q; want superseded, %q", r.State, r.OutcomeReason, SupersededDraft)
+	}
+	// A run of the draft event's own head and target (one queued when the
+	// change was marked ready, before a late draft event arrived) is left
+	// to the dispatcher, which reads the change's live draft state.
+	current := enqueue(t, s, mr1, "ccc")
+	if n, err := s.SupersedeDraftMR(ctx, mr1, "ccc", "main"); err != nil || n != 0 {
+		t.Fatalf("SupersedeDraftMR(its own head) = %d, %v; want 0", n, err)
+	}
+	if r := getRun(t, s, current); r.State != Queued {
+		t.Errorf("run of the event's head = %s; want queued", r.State)
+	}
+	// The same head onto another target is an older run.
+	if n, err := s.SupersedeDraftMR(ctx, mr1, "ccc", "develop"); err != nil || n != 1 {
+		t.Fatalf("SupersedeDraftMR(other target) = %d, %v", n, err)
 	}
 	if err := s.SupersedeDraft(ctx, other); err != nil {
 		t.Fatal(err)

@@ -162,12 +162,18 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	head := pr.Head.SHA
+	if !validSHA(head) {
+		unusable(w, log, "bad_head_sha")
+		return
+	}
+
 	// A draft is not reviewed while the repository doesn't review drafts. It
 	// is reviewed when it is marked ready, which is handled below. Its runs
 	// of an older head or target are superseded, as a new push's run would
 	// have done, so none is shown or posted as the current review.
 	if pr.Draft && !repo.ReviewDrafts {
-		n, err := h.Queue.SupersedeDraftMR(r.Context(), mr)
+		n, err := h.Queue.SupersedeDraftMR(r.Context(), mr, head, pr.Base.Ref)
 		if err != nil {
 			log.Error("webhook failed", "outcome", "supersede_error", "err", err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
@@ -175,12 +181,6 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Info("webhook handled", "outcome", "draft_skipped", "runs", n)
 		w.WriteHeader(http.StatusOK)
-		return
-	}
-
-	head := pr.Head.SHA
-	if !validSHA(head) {
-		unusable(w, log, "bad_head_sha")
 		return
 	}
 	if republish {

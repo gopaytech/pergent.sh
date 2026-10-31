@@ -58,12 +58,13 @@ func githubDraft(t *testing.T, fixtureName string) []byte {
     "state": "open",`)
 }
 
-// wantDraftSkipped checks that the draft's older runs were superseded as a
-// draft's and nothing else was queued.
+// wantDraftSkipped checks that the draft's runs of another head or target
+// than the event's were superseded as a draft's and nothing else was queued.
 func wantDraftSkipped(t *testing.T, r *rig, mr store.MRKey) {
 	t.Helper()
-	if len(r.q.draftSupersedes) != 1 || r.q.draftSupersedes[0] != mr {
-		t.Fatalf("draft supersedes = %+v, want %+v", r.q.draftSupersedes, mr)
+	if len(r.q.draftSupersedes) != 1 || r.q.draftSupersedes[0].mr != mr ||
+		!validSHA(r.q.draftSupersedes[0].head) || r.q.draftSupersedes[0].target == "" {
+		t.Fatalf("draft supersedes = %+v, want %+v with the event's head and target", r.q.draftSupersedes, mr)
 	}
 	r.q.draftSupersedes = nil
 	noQueueCalls(t, r)

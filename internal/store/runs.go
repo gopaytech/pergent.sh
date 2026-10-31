@@ -286,18 +286,23 @@ const SupersededDraft = "draft_not_reviewed"
 // returns how many it changed. It takes the same per-MR lock as EnqueueRun, so
 // a close racing an enqueue cannot leave a queued run alive.
 func (s *Store) SupersedeMR(ctx context.Context, mr MRKey) (int, error) {
-	return s.supersedeMR(ctx, mr, "")
+	return s.supersedeMR(ctx, mr, "", "", "")
 }
 
 // SupersedeDraftMR is SupersedeMR for a merge request that is a draft the
-// repository doesn't review: the runs get the reason SupersededDraft.
-func (s *Store) SupersedeDraftMR(ctx context.Context, mr MRKey) (int, error) {
-	return s.supersedeMR(ctx, mr, SupersededDraft)
+// repository doesn't review, at headSHA onto targetBranch: its live runs of
+// another head or target are superseded with the reason SupersededDraft. A
+// run of that head and target is left alone: the draft event may be late or
+// redelivered after the change was marked ready and the run queued, and the
+// dispatcher reads the change's live draft state before reviewing it.
+func (s *Store) SupersedeDraftMR(ctx context.Context, mr MRKey, headSHA, targetBranch string) (int, error) {
+	return s.supersedeMR(ctx, mr, SupersededDraft, headSHA, targetBranch)
 }
 
 // supersedeMR supersedes the live runs of mr, setting their outcome reason to
-// reason unless it is "".
-func (s *Store) supersedeMR(ctx context.Context, mr MRKey, reason string) (int, error) {
+// reason unless it is "". With headSHA set, a run of headSHA onto
+// targetBranch is kept.
+func (s *Store) supersedeMR(ctx context.Context, mr MRKey, reason, headSHA, targetBranch string) (int, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return 0, err
@@ -308,8 +313,9 @@ func (s *Store) supersedeMR(ctx context.Context, mr MRKey, reason string) (int, 
 		return 0, err
 	}
 	tag, err := tx.Exec(ctx, `UPDATE runs SET state = 'superseded', outcome_reason = COALESCE(NULLIF($4, ''), outcome_reason)
-		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND state IN ('queued', 'running', 'reported')`,
-		mr.Instance, mr.ProjectID, mr.IID, reason)
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND state IN ('queued', 'running', 'reported')
+		  AND ($5 = '' OR head_sha <> $5 OR target_branch <> $6)`,
+		mr.Instance, mr.ProjectID, mr.IID, reason, headSHA, targetBranch)
 	if err != nil {
 		return 0, err
 	}

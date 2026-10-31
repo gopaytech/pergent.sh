@@ -36,7 +36,7 @@ type fakeQueue struct {
 	enqueues   []enqueueCall
 	supersedes []store.MRKey
 	// draftSupersedes are the SupersedeDraftMR calls.
-	draftSupersedes []store.MRKey
+	draftSupersedes []republishCall
 	republishes     []republishCall
 	created         bool
 	// republished is what Republish answers.
@@ -71,8 +71,8 @@ func (q *fakeQueue) SupersedeMR(_ context.Context, mr store.MRKey) (int, error) 
 	return 1, nil
 }
 
-func (q *fakeQueue) SupersedeDraftMR(_ context.Context, mr store.MRKey) (int, error) {
-	q.draftSupersedes = append(q.draftSupersedes, mr)
+func (q *fakeQueue) SupersedeDraftMR(_ context.Context, mr store.MRKey, headSHA, targetBranch string) (int, error) {
+	q.draftSupersedes = append(q.draftSupersedes, republishCall{mr, headSHA, targetBranch})
 	if q.err != nil {
 		return 0, q.err
 	}
