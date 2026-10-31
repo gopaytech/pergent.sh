@@ -67,17 +67,9 @@ type Dashboard struct {
 	// AdminPasswordEnv names the env var holding the password of the first
 	// admin account, created when the dashboard starts with no accounts.
 	AdminPasswordEnv string `yaml:"admin_password_env"`
-	// Admins are the groups (GitLab) and teams (GitHub) whose members are
-	// admins on that instance.
-	Admins []DashboardAdmin `yaml:"admins"`
-}
-
-// DashboardAdmin names who is an admin on one instance: the members of
-// Group on a GitLab instance, or of Team ("org/slug") on a GitHub one.
-type DashboardAdmin struct {
-	Instance string `yaml:"instance"`
-	Group    string `yaml:"group"`
-	Team     string `yaml:"team"`
+	// Admins is kept only to refuse it: admins are teams in the dashboard
+	// now, not platform groups named here.
+	Admins yaml.Node `yaml:"admins"`
 }
 
 // DashboardEnabled reports whether the dashboard is on: dashboard.url is set.
@@ -579,15 +571,12 @@ func (c *Config) checkDashboard() []error {
 	add := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
 
 	// Both OAuth env names or neither, on every instance.
-	signIn := map[string]bool{}
 	oauth := func(prefix, name, idEnv, secretEnv string) {
 		switch {
 		case idEnv != "" && secretEnv == "":
 			add("%s (%s): oauth_client_secret_env is required with oauth_client_id_env", prefix, name)
 		case idEnv == "" && secretEnv != "":
 			add("%s (%s): oauth_client_id_env is required with oauth_client_secret_env", prefix, name)
-		case idEnv != "":
-			signIn[name] = true
 		}
 	}
 	for i, inst := range c.GitLab {
@@ -601,10 +590,10 @@ func (c *Config) checkDashboard() []error {
 	if d.AdminPasswordEnv != "" && !envNameRE.MatchString(d.AdminPasswordEnv) {
 		add("dashboard.admin_password_env %q must be an environment variable name (%s)", d.AdminPasswordEnv, envNameRE)
 	}
+	if !d.Admins.IsZero() {
+		add(`dashboard.admins was removed: admins are now teams in the dashboard (see the README, "Teams")`)
+	}
 	if d.URL == "" {
-		if len(d.Admins) > 0 {
-			add("dashboard.admins needs dashboard.url: the dashboard is off without it")
-		}
 		return errs
 	}
 	if err := checkURL("dashboard.url", d.URL, true); err != nil {
@@ -623,33 +612,6 @@ func (c *Config) checkDashboard() []error {
 		// port matches none of its hosts.
 		if u.Port() != "" {
 			add("dashboard.url %q must have no port: the dashboard Ingress serves its host on the https port", d.URL)
-		}
-	}
-	for i, a := range d.Admins {
-		prefix := fmt.Sprintf("dashboard.admins[%d]", i)
-		platform, ok := c.Platform(a.Instance)
-		if !ok {
-			add("%s: unknown instance %q", prefix, a.Instance)
-			continue
-		}
-		if !signIn[a.Instance] {
-			add("%s: instance %q has no sign-in (oauth_client_id_env and oauth_client_secret_env)", prefix, a.Instance)
-		}
-		switch platform {
-		case PlatformGitLab:
-			if a.Group == "" {
-				add("%s (%s): group is required for a gitlab instance", prefix, a.Instance)
-			}
-			if a.Team != "" {
-				add("%s (%s): team is for github instances; use group", prefix, a.Instance)
-			}
-		case PlatformGitHub:
-			if !isOwnerName(a.Team) {
-				add("%s (%s): team %q must be org/slug", prefix, a.Instance, a.Team)
-			}
-			if a.Group != "" {
-				add("%s (%s): group is for gitlab instances; use team", prefix, a.Instance)
-			}
 		}
 	}
 	return errs

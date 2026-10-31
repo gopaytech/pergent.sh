@@ -35,9 +35,9 @@ const (
 	IdleTimeout = 8 * time.Hour
 	// MaxSessionAge ends a session this long after sign-in, used or not.
 	MaxSessionAge = 7 * 24 * time.Hour
-	// AccessTTL is how long a check of the user's repositories and admin
-	// flag is used before it is made again. A failed check keeps the last
-	// one for one more AccessTTL, then the session sees nothing.
+	// AccessTTL is how long a check of the user's repositories with the
+	// platform is used before it is made again. A failed check keeps the
+	// last one for one more AccessTTL, then the session sees nothing.
 	AccessTTL = 5 * time.Minute
 
 	stateCookieName = "__Host-pergent_oauth_state"
@@ -61,31 +61,58 @@ type Session struct {
 	Platform, Instance string
 	UserID             int64
 	Username           string
-	// IsAdmin is true for a member of the instance's admin group or team,
-	// and for every password account.
-	IsAdmin bool
+	// Operator is set for a password account: it sees and may do
+	// everything, with no platform to check against.
+	Operator bool
+	// Admin is set for an operator and for a member of an admin team.
+	Admin bool
+	// Waiting is set for a platform account on no team: it sees nothing
+	// until an admin puts it on one.
+	Waiting bool
 	// MustChangePassword is set on a password account that must change its
 	// password before anything else.
 	MustChangePassword bool
-	// Visible holds the repositories on Instance the user can see: their
-	// platform IDs by lower-cased path. Use CanSee for a repository's own
-	// pages and CanSeeRun for its runs.
-	Visible map[string]int64
+	// All is set when the session sees every repository (an operator).
+	All bool
+	// Visible holds, for a platform account, the repositories it sees: those
+	// its teams cover that the platform also lets it see, each with its
+	// platform ID. Use CanSee for a repository's own pages and CanSeeRun for
+	// its runs.
+	Visible map[RepoKey]int64
+	// Roles holds the role the teams give on each repository they cover;
+	// use Role, which also needs the repository visible.
+	Roles map[RepoKey]Role
 	// CSRFToken is the token writes must send in X-CSRF-Token.
 	CSRFToken string
 
 	idHash []byte // the stored session's key
 }
 
-// CanSee reports whether the user can see project (on the session's
-// instance), ignoring case.
-func (s Session) CanSee(project string) bool { return s.Visible[lower(project)] > 0 }
+// CanSee reports whether the user can see project on instance, ignoring
+// case.
+func (s Session) CanSee(instance, project string) bool {
+	return s.All || s.Visible[repoKey(instance, project)] > 0
+}
 
-// CanSeeRun reports whether the user can see a run of project under that
-// path: the path must be visible and hold the project with that ID, not a
-// project that had the path before (deleted, renamed or transferred).
-func (s Session) CanSeeRun(project string, id int64) bool {
-	return id > 0 && s.Visible[lower(project)] == id
+// CanSeeRun reports whether the user can see a run of project on instance
+// under that path: the path must be visible and hold the project with that
+// ID, not a project that had the path before (deleted, renamed or
+// transferred).
+func (s Session) CanSeeRun(instance, project string, id int64) bool {
+	return s.All || (id > 0 && s.Visible[repoKey(instance, project)] == id)
+}
+
+// Role is the user's role on project on instance: RoleAdmin everywhere for
+// an operator, RoleNone where the user can't see it, else the highest of
+// the teams covering it.
+func (s Session) Role(instance, project string) Role {
+	if s.Operator {
+		return RoleAdmin
+	}
+	if !s.CanSee(instance, project) {
+		return RoleNone
+	}
+	return s.Roles[repoKey(instance, project)]
 }
 
 type sessionKey struct{}
@@ -267,7 +294,7 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
 
 // callback finishes sign-in: it checks the state, trades the code for a
 // token, makes a new session (ending the one the browser came with), checks
-// the user's access and sends the browser to /.
+// the user's access to what their teams cover and sends the browser to /.
 func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 	p, platform, instance, ok := a.provider(r)
 	if !ok {
@@ -339,7 +366,11 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 		writeText(w, http.StatusInternalServerError, "Sign-in failed. Please try again.")
 		return
 	}
-	if _, err := a.checkAccess(ctx, se, tok); err != nil {
+	cov, err := a.coverage(ctx, account.ID, instance)
+	if err == nil {
+		_, err = a.checkAccess(ctx, se, tok, cov)
+	}
+	if err != nil {
 		log.Warn("dashboard sign-in: access check failed", "error", err.Error())
 		if err := a.store.DeleteSession(ctx, hash); err != nil {
 			log.Error("dashboard sign-in: removing the unchecked session failed", "error", err.Error())
@@ -383,12 +414,18 @@ func (a *Auth) logout(w http.ResponseWriter, r *http.Request) {
 // Require serves next only for a signed-in session that is neither idle
 // for 8 hours nor older than 7 days (401 otherwise), checks X-CSRF-Token on
 // every request other than GET, HEAD and OPTIONS (403), and puts the
-// Session in the context, with its access checked within the last 5
-// minutes or, failing that, as described at AccessTTL. A session whose
-// account is gone ends (401); a password account that must change its
-// password gets 403 "password_change_required" for everything but
-// GET /api/me, POST /auth/logout and POST /auth/password/change. A password
-// session has no platform check: it is an admin.
+// Session in the context. A session whose account is gone ends (401); a
+// password account that must change its password gets 403
+// "password_change_required" for everything but GET /api/me, POST
+// /auth/logout and POST /auth/password/change.
+//
+// A password session is an operator: it sees everything, with no platform
+// check. A platform session's teams are read on every request, so a team
+// change applies at once. On no team it is waiting: 403 "waiting" for
+// everything but GET /api/me, and no call to the platform. Otherwise it sees
+// the repositories its teams cover that the platform lets it see, checked
+// within the last 5 minutes (AccessTTL) for the repositories covered now: a
+// check made for other ones is made again before the request is served.
 func (a *Auth) Require(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -455,23 +492,50 @@ func (a *Auth) Require(next http.Handler) http.Handler {
 			CSRFToken: se.CSRF, idHash: se.IDHash,
 		}
 		if account.Kind == store.AccountPassword {
-			// No platform and no token to check with. Until teams decide
-			// what each account sees, a password account is an admin.
-			s.Username, s.IsAdmin, s.Visible = account.Username, true, map[string]int64{}
-		} else {
-			acc, err := a.access(ctx, se, now)
-			if err != nil {
-				a.log.Error("dashboard: loading session access failed", "error", err.Error())
-				writeError(w, http.StatusInternalServerError, "could not load the session")
+			// No platform and no token to check with: the operator.
+			s.Username, s.Operator, s.Admin, s.All = account.Username, true, true, true
+			next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, sessionKey{}, s)))
+			return
+		}
+		s.Platform, s.Instance, s.UserID, s.Username = se.Platform, se.Instance, se.UserID, se.Username
+		teams, err := a.store.AccountTeams(ctx, account.ID)
+		if err != nil {
+			a.log.Error("dashboard: loading an account's teams failed", "error", err.Error())
+			writeError(w, http.StatusInternalServerError, "could not load the session")
+			return
+		}
+		if len(teams) == 0 {
+			if !allowedWhileWaiting(r) {
+				writeJSON(w, http.StatusForbidden, map[string]string{
+					"error": "an admin needs to add you to a team", "code": "waiting"})
 				return
 			}
-			visible := make(map[string]int64, len(acc.projects))
-			for _, p := range acc.projects {
-				visible[lower(p.Path)] = p.ID
-			}
-			s.Platform, s.Instance, s.UserID, s.Username = se.Platform, se.Instance, se.UserID, acc.username
-			s.IsAdmin, s.Visible = acc.isAdmin, visible
+			s.Waiting = true
+			next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, sessionKey{}, s)))
+			return
 		}
+		repos, err := a.repos.List(ctx)
+		if err != nil {
+			a.log.Error("dashboard: listing repositories failed", "error", err.Error())
+			writeError(w, http.StatusInternalServerError, "could not load the session")
+			return
+		}
+		cov := cover(teams, repos, se.Instance)
+		acc, err := a.access(ctx, se, now, cov)
+		if err != nil {
+			a.log.Error("dashboard: loading session access failed", "error", err.Error())
+			writeError(w, http.StatusInternalServerError, "could not load the session")
+			return
+		}
+		// The platform's answer, but only where the teams cover now: a
+		// check made before a team change never shows more.
+		s.Visible = map[RepoKey]int64{}
+		for _, p := range acc.projects {
+			if k := repoKey(p.Instance, p.Path); cov.roles[k] > RoleNone {
+				s.Visible[k] = p.ID
+			}
+		}
+		s.Username, s.Admin, s.Roles = acc.username, cov.admin, cov.roles
 		next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, sessionKey{}, s)))
 	})
 }
@@ -495,6 +559,12 @@ func allowedBeforeChange(r *http.Request) bool {
 		return true
 	}
 	return false
+}
+
+// allowedWhileWaiting reports whether r is one a platform account on no
+// team may make: who am I. Signing out isn't behind Require.
+func allowedWhileWaiting(r *http.Request) bool {
+	return r.Method+" "+r.URL.Path == "GET /api/me"
 }
 
 func safeMethod(m string) bool {

@@ -136,25 +136,25 @@ func withSecrets(t *testing.T) func(*config.Config) {
 }
 
 // signInGitLab signs alice in on main, able to see the given projects (as
-// a Reporter) and an admin when admin is true.
+// a Reporter), on an admin team when admin is true and otherwise on a
+// viewer team covering every repository of main.
 func (e *env) signInGitLab(admin bool, visible ...string) *http.Cookie {
 	e.t.Helper()
 	for _, p := range visible {
 		e.gl.setProject(p, gitlabProject("private", 20, 0))
 	}
-	e.gl.setMember("acme/platform", admin)
+	e.aliceOn("main", map[bool]string{true: store.RoleAdmin, false: store.RoleViewer}[admin])
 	return e.signIn("gitlab", "main")
 }
 
-// signInGitHub signs alice in on gh, able to see the given repositories.
+// signInGitHub signs alice in on gh, able to see the given repositories, on
+// a team as signInGitLab.
 func (e *env) signInGitHub(admin bool, visible ...string) *http.Cookie {
 	e.t.Helper()
 	for _, p := range visible {
 		e.gh.setRepo(p, githubRepo(true, true))
 	}
-	if admin {
-		e.gh.setTeam("acme/platform", "active")
-	}
+	e.aliceOn("gh", map[bool]string{true: store.RoleAdmin, false: store.RoleViewer}[admin])
 	return e.signIn("github", "gh")
 }
 
@@ -1010,8 +1010,7 @@ func TestAdminSettings(t *testing.T) {
 	v := getJSON[AdminSettingsView](e, c, "/api/admin/settings")
 	want := AdminSettingsView{Instance: "main",
 		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, FailureStatus: "failed", JobTimeoutSeconds: 600},
-		LLM:      LLMView{Provider: "anthropic", Model: "claude-sonnet-4"},
-		Admins:   []AdminView{{Instance: "main", Group: "acme/platform"}}}
+		LLM:      LLMView{Provider: "anthropic", Model: "claude-sonnet-4"}}
 	got, _ := json.Marshal(v)
 	wantJSON, _ := json.Marshal(want)
 	if string(got) != string(wantJSON) {
@@ -1186,7 +1185,7 @@ func TestReusedPathHidesEarlierProject(t *testing.T) {
 		result: cleanResult(head('2')), outcome: OutcomeApproved, approved: true, title: "New project's change"})
 	c := e.signInGitLab(false, "acme/widgets") // the project at the path now: testID("acme/widgets")
 
-	if _, se := e.session(c); se.Visible["acme/widgets"] != testID("acme/widgets") {
+	if _, se := e.session(c); se.Visible[RepoKey{"main", "acme/widgets"}] != testID("acme/widgets") {
 		t.Fatalf("visible = %v", se.Visible)
 	}
 	list := getJSON[ReviewListView](e, c, "/api/reviews")

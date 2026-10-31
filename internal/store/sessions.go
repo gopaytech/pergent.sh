@@ -21,20 +21,20 @@ type Session struct {
 	Platform, Instance string
 	UserID             int64
 	Username           string
-	IsAdmin            bool
-	// AccessScope is what the last access check allowed the session.
+	// AccessScope is what the last access check allowed the session: the
+	// repositories its teams covered then (see SetSessionAccess).
 	AccessScope string
 	TokenSealed []byte
 	CSRF        string
-	// AccessCheckedAt is when the user's repositories and admin flag were
-	// last checked with the platform; nil until the first check.
+	// AccessCheckedAt is when the user's repositories were last checked
+	// with the platform; nil until the first check.
 	AccessCheckedAt       *time.Time
 	LastSeenAt, CreatedAt time.Time
 }
 
 // CreateSession stores a new session with its LastSeenAt and CreatedAt. Its
-// account must exist. IsAdmin, AccessScope and AccessCheckedAt are not
-// stored: SetSessionAccess sets them.
+// account must exist. AccessScope and AccessCheckedAt are not stored:
+// SetSessionAccess sets them.
 func (s *Store) CreateSession(ctx context.Context, se Session) error {
 	_, err := s.pool.Exec(ctx, `INSERT INTO sessions (id_hash, account_id, platform, instance, user_id, username,
 			token_sealed, csrf, last_seen_at, created_at)
@@ -49,10 +49,10 @@ func (s *Store) CreateSession(ctx context.Context, se Session) error {
 func (s *Store) Session(ctx context.Context, idHash []byte) (Session, bool, error) {
 	var se Session
 	err := s.pool.QueryRow(ctx, `SELECT id_hash, account_id, COALESCE(platform, ''), COALESCE(instance, ''),
-			COALESCE(user_id, 0), username, is_admin, access_scope,
+			COALESCE(user_id, 0), username, access_scope,
 			token_sealed, csrf, access_checked_at, last_seen_at, created_at
 		FROM sessions WHERE id_hash = $1`, idHash).Scan(
-		&se.IDHash, &se.AccountID, &se.Platform, &se.Instance, &se.UserID, &se.Username, &se.IsAdmin, &se.AccessScope,
+		&se.IDHash, &se.AccountID, &se.Platform, &se.Instance, &se.UserID, &se.Username, &se.AccessScope,
 		&se.TokenSealed, &se.CSRF, &se.AccessCheckedAt, &se.LastSeenAt, &se.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Session{}, false, nil
@@ -96,10 +96,10 @@ type VisibleProject struct {
 // SetSessionAccess records a successful access check: the user's current
 // username, the repositories the user can see on the session's instance
 // (replacing the earlier list; duplicates that differ only in case are one,
-// the first kept), the admin flag, the access scope and the time of the
+// the first kept), the access scope (what was checked) and the time of the
 // check. Every project needs an ID above 0. A session that is gone is left
 // gone, and one with no instance (a password session) keeps no list.
-func (s *Store) SetSessionAccess(ctx context.Context, idHash []byte, username string, isAdmin bool, scope string, projects []VisibleProject, checkedAt time.Time) error {
+func (s *Store) SetSessionAccess(ctx context.Context, idHash []byte, username string, scope string, projects []VisibleProject, checkedAt time.Time) error {
 	for _, p := range projects {
 		if p.ID <= 0 {
 			return fmt.Errorf("store: project %s has no ID", p.Path)
@@ -112,8 +112,8 @@ func (s *Store) SetSessionAccess(ctx context.Context, idHash []byte, username st
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 
 	var instance *string
-	err = tx.QueryRow(ctx, `UPDATE sessions SET username = $2, is_admin = $3, access_scope = $5, access_checked_at = $4
-		WHERE id_hash = $1 RETURNING instance`, idHash, username, isAdmin, checkedAt, scope).Scan(&instance)
+	err = tx.QueryRow(ctx, `UPDATE sessions SET username = $2, access_scope = $3, access_checked_at = $4
+		WHERE id_hash = $1 RETURNING instance`, idHash, username, scope, checkedAt).Scan(&instance)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
@@ -157,15 +157,15 @@ func (s *Store) AddSessionProject(ctx context.Context, idHash []byte, project Vi
 	return err
 }
 
-// ClearSessionAccess takes every repository, the admin flag and the access
-// scope away from a session, keeping the time of its last successful check.
+// ClearSessionAccess takes every repository and the access scope away from
+// a session, keeping the time of its last successful check.
 func (s *Store) ClearSessionAccess(ctx context.Context, idHash []byte) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
-	if _, err := tx.Exec(ctx, `UPDATE sessions SET is_admin = false, access_scope = '' WHERE id_hash = $1`, idHash); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE sessions SET access_scope = '' WHERE id_hash = $1`, idHash); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM user_access WHERE session_hash = $1`, idHash); err != nil {

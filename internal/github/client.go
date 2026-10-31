@@ -509,33 +509,6 @@ func (c *Client) RepoAccess(ctx context.Context, owner, repo string) (RepoAccess
 	return RepoAccess{ID: r.ID, FullName: r.FullName, Private: r.Private, Pull: r.Permissions.Pull}, nil
 }
 
-// TeamMembershipActive reports whether username is an active member of the
-// team org/slug (GET /orgs/{org}/teams/{slug}/memberships/{username}). A
-// pending invitation is false, so is not a member (404). A token that may
-// not read the org's teams (an App without Organization → Members: Read,
-// or not installed in org) is ErrForbidden; any other failure is an error.
-func (c *Client) TeamMembershipActive(ctx context.Context, org, slug, username string) (bool, error) {
-	var parts [3]string
-	for i, s := range []string{org, slug, username} {
-		e, err := segment(s)
-		if err != nil {
-			return false, err
-		}
-		parts[i] = e
-	}
-	var m struct {
-		State string `json:"state"`
-	}
-	err := c.getJSON(ctx, "/orgs/"+parts[0]+"/teams/"+parts[1]+"/memberships/"+parts[2], nil, &m)
-	if errors.Is(err, ErrNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return m.State == "active", nil
-}
-
 // RulesetApprovals is the highest required_approving_review_count of the
 // pull_request rules the repository's active rulesets apply to branch
 // (readable with the metadata permission); found is false when none does.

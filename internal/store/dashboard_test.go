@@ -115,8 +115,8 @@ func TestDashboardMigrationTables(t *testing.T) {
 	for _, stmt := range []string{
 		`INSERT INTO run_logs (run_id, text) VALUES ('` + id + `', 'log')`,
 		`INSERT INTO repo_attention (instance, project, kind, message) VALUES ('main', 'acme/widgets', 'no_hook', 'x')`,
-		fmt.Sprintf(`INSERT INTO sessions (id_hash, account_id, platform, instance, user_id, username, is_admin, token_sealed, csrf)
-			VALUES ('\x01', %d, 'gitlab', 'main', 1, 'alice', false, '\x02', 'csrf')`, account.ID),
+		fmt.Sprintf(`INSERT INTO sessions (id_hash, account_id, platform, instance, user_id, username, token_sealed, csrf)
+			VALUES ('\x01', %d, 'gitlab', 'main', 1, 'alice', '\x02', 'csrf')`, account.ID),
 		`INSERT INTO user_access (session_hash, instance, project, project_id) VALUES ('\x01', 'main', 'acme/widgets', 7)`,
 	} {
 		if _, err := s.pool.Exec(ctx, stmt); err != nil {

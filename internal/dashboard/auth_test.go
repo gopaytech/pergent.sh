@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -43,7 +42,7 @@ func s256(verifier string) string {
 func TestGitLabLoginCreatesSession(t *testing.T) {
 	e := newEnv(t, nil)
 	e.gl.setProject("acme/widgets", gitlabProject("private", 30, 0))
-	e.gl.setMember("acme/platform", true)
+	e.aliceOn("main", store.RoleAdmin)
 
 	loc, sc := e.startLogin("gitlab", "main")
 	if got := loc.Scheme + "://" + loc.Host + loc.Path; got != e.gl.srv.URL+"/oauth/authorize" {
@@ -98,7 +97,7 @@ func TestGitLabLoginCreatesSession(t *testing.T) {
 	if _, found, _ := e.st.Session(ctx, []byte(c.Value)); found {
 		t.Fatal("session stored under the raw ID")
 	}
-	if se.Platform != "gitlab" || se.Instance != "main" || se.UserID != 9 || se.Username != "alice" || !se.IsAdmin ||
+	if se.Platform != "gitlab" || se.Instance != "main" || se.UserID != 9 || se.Username != "alice" || se.AccessScope == "" ||
 		se.AccessCheckedAt == nil || !se.AccessCheckedAt.Equal(e.clock.now()) {
 		t.Errorf("stored session = %+v", se)
 	}
@@ -112,7 +111,7 @@ func TestGitLabLoginCreatesSession(t *testing.T) {
 	}
 
 	code, me := e.me(c)
-	if code != 200 || me.Platform != "gitlab" || me.Instance != "main" || me.Username != "alice" || !me.IsAdmin || me.CSRFToken != se.CSRF || len(me.CSRFToken) < 40 {
+	if code != 200 || me.Platform != "gitlab" || me.Instance != "main" || me.Username != "alice" || !me.Admin || me.Kind != "platform" || me.CSRFToken != se.CSRF || len(me.CSRFToken) < 40 {
 		t.Fatalf("/api/me = %d %+v", code, me)
 	}
 	for _, r := range e.responses {
@@ -125,7 +124,7 @@ func TestGitLabLoginCreatesSession(t *testing.T) {
 func TestGitHubLoginCreatesSession(t *testing.T) {
 	e := newEnv(t, nil)
 	e.gh.setRepo("acme/widgets", githubRepo(true, true))
-	e.gh.setTeam("acme/platform", "active")
+	e.aliceOn("gh", store.RoleAdmin)
 
 	loc, sc := e.startLogin("github", "gh")
 	if got := loc.Scheme + "://" + loc.Host + loc.Path; got != e.gh.srv.URL+"/login/oauth/authorize" {
@@ -146,11 +145,11 @@ func TestGitHubLoginCreatesSession(t *testing.T) {
 	c := cookie(rec, SessionCookieName)
 	checkCookie(t, c, "__Host-pergent_session")
 	code, me := e.me(c)
-	if code != 200 || me.Platform != "github" || me.Instance != "gh" || me.Username != "alice" || !me.IsAdmin {
+	if code != 200 || me.Platform != "github" || me.Instance != "gh" || me.Username != "alice" || !me.Admin {
 		t.Fatalf("/api/me = %d %+v", code, me)
 	}
 	_, se := e.session(c)
-	if se.UserID != 7 || !se.CanSee("acme/widgets") || !se.CanSee("Acme/Widgets") || len(se.Visible) != 1 {
+	if se.UserID != 7 || !se.CanSee("gh", "acme/widgets") || !se.CanSee("gh", "Acme/Widgets") || len(se.Visible) != 1 {
 		t.Fatalf("session = %+v", se)
 	}
 }
@@ -270,7 +269,9 @@ func TestFailedSignInMakesNoSession(t *testing.T) {
 		t.Fatalf("bad code: callback = %d", rec.Code)
 	}
 
-	// The token and /user work, but the access check is refused.
+	// The token and /user work, but the access check of what alice's team
+	// covers is refused.
+	e.aliceOn("main", store.RoleViewer)
 	e.gl.set(func(o *oauthServer) { o.failAccess = true })
 	loc, sc = e.startLogin("gitlab", "main")
 	rec = e.callback("gitlab", "main", goodCode, loc.Query().Get("state"), sc)
@@ -412,6 +413,7 @@ func wantCSRFCode(t *testing.T, rec *httptest.ResponseRecorder) {
 func TestCSRFRequiredOnWrites(t *testing.T) {
 	e := newEnv(t, nil)
 	e.gl.setProject("acme/widgets", gitlabProject("private", 30, 0))
+	e.aliceOn("main", store.RoleViewer)
 	c := e.signIn("gitlab", "main")
 	_, me := e.me(c)
 
@@ -499,9 +501,9 @@ func TestUnauthenticatedAPI(t *testing.T) {
 func TestNoTokenInAnyResponse(t *testing.T) {
 	e := newEnv(t, nil)
 	e.gl.setProject("acme/widgets", gitlabProject("private", 30, 0))
-	e.gl.setMember("acme/platform", true)
+	e.aliceOn("main", store.RoleAdmin)
 	e.gh.setRepo("acme/widgets", githubRepo(true, true))
-	e.gh.setTeam("acme/platform", "active")
+	e.aliceOn("gh", store.RoleAdmin)
 	e.gh.set(func(o *oauthServer) { o.expiresIn = 600 })
 
 	for _, p := range []struct{ platform, instance string }{{"gitlab", "main"}, {"github", "gh"}} {
@@ -574,24 +576,6 @@ func TestPruneSessions(t *testing.T) {
 	}
 	if _, found := e.storedSession(fresh); !found {
 		t.Error("the fresh session was pruned")
-	}
-}
-
-func TestNewWarnsWithoutAdmins(t *testing.T) {
-	t.Setenv("PERGENT_TEST_GL_ID", glClientID)
-	t.Setenv("PERGENT_TEST_GL_SECRET", glClientSecret)
-	cfg := &config.Config{
-		GitLab: []config.Instance{{Name: "main", URL: "https://gitlab.example.com",
-			OAuthClientIDEnv: "PERGENT_TEST_GL_ID", OAuthClientSecretEnv: "PERGENT_TEST_GL_SECRET"}},
-		Dashboard: config.Dashboard{URL: dashboardURL},
-	}
-	var logs bytes.Buffer
-	if _, err := New(Options{Config: cfg, SecretKey: testKey(t), Log: slog.New(slog.NewJSONHandler(&logs, nil))}); err != nil {
-		t.Fatal(err)
-	}
-	var line struct{ Level, Msg string }
-	if err := json.Unmarshal(logs.Bytes(), &line); err != nil || line.Level != "WARN" || line.Msg != "dashboard has no admins configured" {
-		t.Fatalf("log = %s", logs.String())
 	}
 }
 

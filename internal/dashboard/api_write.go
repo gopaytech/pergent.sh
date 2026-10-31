@@ -52,6 +52,8 @@ const (
 	msgWriteFailed    = "could not save the change, please try again"
 	msgBadProjectBody = `the body must be {"project": "<path>"}`
 	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, failureStatus, skills, jobTimeoutSeconds, jobMemory"
+	msgNeedsPlatform  = "sign in with GitLab or GitHub to add repositories"
+	msgNeedsRole      = "only maintainers and admins of this repository can change its settings"
 )
 
 var (
@@ -60,18 +62,33 @@ var (
 )
 
 // writeRoutes adds the write API to mux: every route behind Auth.Require
-// (which checks X-CSRF-Token) and for admins only (403 otherwise).
+// (which checks X-CSRF-Token); switching on and off and the picker for
+// admins only, a repository's settings for its maintainers and admins (403
+// otherwise).
 func (d *Dashboard) writeRoutes(mux *http.ServeMux) {
-	admin := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, d.Auth.Require(adminOnly(h))) }
-	admin("GET /api/repositories/available", d.available)
-	admin("POST /api/repositories", d.switchOn)
+	admin := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, d.Auth.Require(requireAdmin(h))) }
+	admin("GET /api/repositories/available", needsPlatform(d.available))
+	admin("POST /api/repositories", needsPlatform(d.switchOn))
 	admin("DELETE /api/repositories/{instance}/{rest...}", d.switchOff)
-	admin("PUT /api/repositories/{instance}/{rest...}", d.putSettings)
-	admin("POST /api/repositories/{instance}/{rest...}", d.resetSettings)
+	mux.Handle("PUT /api/repositories/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.putSettings)))
+	mux.Handle("POST /api/repositories/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.resetSettings)))
 	// The instance alone is 404, not a redirect to the {rest...} routes.
 	none := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { notFound(w) })
 	for _, method := range []string{"DELETE", "PUT", "POST"} {
 		mux.Handle(method+" /api/repositories/{instance}", d.Auth.Require(none))
+	}
+}
+
+// needsPlatform serves h to platform sessions: the picker and switching on
+// ask the platform with the user's token, which a password session hasn't
+// got (400).
+func needsPlatform(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if se, _ := SessionFrom(r.Context()); se.Kind != store.AccountPlatform {
+			writeError(w, http.StatusBadRequest, msgNeedsPlatform)
+			return
+		}
+		h(w, r)
 	}
 }
 
@@ -351,7 +368,8 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 	}
 	d.Log.Info("dashboard: repository switched on", "instance", se.Instance, "project", name, "by", se.Username)
 	d.reconcileSoon(se.Instance, name)
-	// The admin checked they can see it just now: they see it at once.
+	// The admin checked they can see it just now: stored, it is shown even
+	// if the check their next request makes for it fails.
 	if err := d.Store.AddSessionProject(ctx, se.idHash, avail); err != nil {
 		d.Log.Warn("dashboard: adding a switched-on repository to the session failed", "error", err.Error())
 	}
@@ -368,6 +386,9 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 		d.failed(w, r, "loading a repository", err)
 		return
 	}
+	// This request's session predates the repository; its admin team
+	// covers it as admin from the next one on.
+	view.Role = RoleAdmin.String()
 	writeJSON(w, http.StatusCreated, view)
 }
 
@@ -396,11 +417,13 @@ func decodeStrict(r *http.Request, v any) error {
 
 // target returns the repository the request's {instance}/{rest...} names
 // once suffix is cut from rest: switched on, seen by the session (404
-// otherwise, as for one that doesn't exist) and not managed by config (409).
-func (d *Dashboard) target(w http.ResponseWriter, r *http.Request, suffix string) (settings.Effective, bool) {
+// otherwise, as for one that doesn't exist), on which the session's role is
+// need or above (403) and not managed by config (409).
+func (d *Dashboard) target(w http.ResponseWriter, r *http.Request, suffix string, need Role) (settings.Effective, bool) {
 	ctx, se := r.Context(), session(r)
+	instance := r.PathValue("instance")
 	project, ok := strings.CutSuffix(r.PathValue("rest"), suffix)
-	if r.PathValue("instance") != se.Instance || !ok || project == "" {
+	if !ok || project == "" {
 		notFound(w)
 		return settings.Effective{}, false
 	}
@@ -410,8 +433,12 @@ func (d *Dashboard) target(w http.ResponseWriter, r *http.Request, suffix string
 		return settings.Effective{}, false
 	}
 	for _, repo := range repos {
-		if !strings.EqualFold(repo.Project, project) {
+		if repo.Instance != instance || !strings.EqualFold(repo.Project, project) {
 			continue
+		}
+		if se.Role(repo.Instance, repo.Project) < need {
+			writeError(w, http.StatusForbidden, msgNeedsRole)
+			return settings.Effective{}, false
 		}
 		if repo.Source == settings.SourceConfig {
 			writeError(w, http.StatusConflict, msgConfigManaged)
@@ -427,7 +454,7 @@ func (d *Dashboard) target(w http.ResponseWriter, r *http.Request, suffix string
 
 func (d *Dashboard) switchOff(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
-	repo, ok := d.target(w, r, "")
+	repo, ok := d.target(w, r, "", RoleAdmin)
 	if !ok {
 		return
 	}
@@ -453,7 +480,7 @@ func (d *Dashboard) switchOff(w http.ResponseWriter, r *http.Request) {
 // --- PUT .../settings and POST .../settings/reset ---
 
 func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {
-	repo, ok := d.target(w, r, "/settings")
+	repo, ok := d.target(w, r, "/settings", RoleMaintainer)
 	if !ok {
 		return
 	}
@@ -466,7 +493,7 @@ func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
-	repo, ok := d.target(w, r, "/settings/reset")
+	repo, ok := d.target(w, r, "/settings/reset", RoleMaintainer)
 	if !ok {
 		return
 	}

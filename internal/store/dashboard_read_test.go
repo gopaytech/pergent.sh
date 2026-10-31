@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -86,7 +87,7 @@ func TestReviewDigests(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := ReviewFilter{Instance: mr1.Instance, Projects: vis(7, "acme/widgets"), Limit: 10}
+	f := ReviewFilter{Visible: seen(mr1.Instance, 7, "acme/widgets"), Limit: 10}
 	got, err := s.ReviewDigests(ctx, f)
 	if err != nil {
 		t.Fatal(err)
@@ -128,18 +129,27 @@ func TestReviewDigests(t *testing.T) {
 	}
 
 	// Since leaves out what was last updated before it.
-	f = ReviewFilter{Instance: mr1.Instance, Projects: vis(7, "acme/widgets"), Limit: 10, Since: base.Add(3 * time.Hour)}
+	f = ReviewFilter{Visible: seen(mr1.Instance, 7, "acme/widgets"), Limit: 10, Since: base.Add(3 * time.Hour)}
 	if got, err := s.ReviewDigests(ctx, f); err != nil || len(got) != 1 || got[0].ID != newer {
 		t.Fatalf("since = %+v, %v", got, err)
 	}
 	// No projects, no runs; a malformed cursor is an error.
-	if got, err := s.ReviewDigests(ctx, ReviewFilter{Instance: mr1.Instance, Limit: 10}); err != nil || len(got) != 0 {
+	if got, err := s.ReviewDigests(ctx, ReviewFilter{Limit: 10}); err != nil || len(got) != 0 {
 		t.Fatalf("no projects = %+v, %v", got, err)
 	}
 	f.After = &ReviewCursor{At: base, ID: "x'; --"}
 	if _, err := s.ReviewDigests(ctx, f); err == nil {
 		t.Fatal("malformed cursor = nil error")
 	}
+}
+
+// seen is a Visibility of paths on instance, each with project ID id.
+func seen(instance string, id int64, paths ...string) Visibility {
+	v := Visibility{}
+	for _, p := range paths {
+		v.Projects = append(v.Projects, VisibleProject{Instance: instance, Path: p, ID: id})
+	}
+	return v
 }
 
 // A run's outcome follows its state until a decision is recorded; a
@@ -166,7 +176,7 @@ func TestDigestOutcomes(t *testing.T) {
 			t.Fatal(err)
 		}
 		setRun(t, s, id, tc.set)
-		got, err := s.MRRunDigests(ctx, mr, vis(7, "acme/widgets"))
+		got, err := s.MRRunDigests(ctx, mr, seen("main", 7, "acme/widgets"))
 		if err != nil || len(got) != 1 || got[0].Outcome != tc.want {
 			t.Errorf("%s: digests = %+v, %v; want %s", tc.set, got, err, tc.want)
 		}
@@ -200,18 +210,19 @@ func TestRunStats(t *testing.T) {
 	superseded, _, _ := s.EnqueueRun(ctx, MRKey{Instance: "main", ProjectID: 7, IID: 51}, "acme/widgets", "h", "main")
 	setRun(t, s, superseded, `created_at = $2, state = 'superseded'`, base)
 
-	got, err := s.RunStats(ctx, "main", vis(7, "acme/widgets", "acme/tools"), base)
+	got, err := s.RunStats(ctx, seen("main", 7, "acme/widgets", "acme/tools"), base)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]RunCounts{
-		"acme/widgets": {Reviews: 4, Approved: 1, Blocking: 1, Failed: 1},
-		"acme/tools":   {Reviews: 1},
+	widgets, tools := PathKey{"main", "acme/widgets"}, PathKey{"main", "acme/tools"}
+	want := map[PathKey]RunCounts{
+		widgets: {Reviews: 4, Approved: 1, Blocking: 1, Failed: 1},
+		tools:   {Reviews: 1},
 	}
-	if len(got) != len(want) || got["acme/widgets"] != want["acme/widgets"] || got["acme/tools"] != want["acme/tools"] {
+	if len(got) != len(want) || got[widgets] != want[widgets] || got[tools] != want[tools] {
 		t.Errorf("RunStats = %+v, want %+v", got, want)
 	}
-	if got, err := s.RunStats(ctx, "main", nil, base); err != nil || len(got) != 0 {
+	if got, err := s.RunStats(ctx, Visibility{}, base); err != nil || len(got) != 0 {
 		t.Errorf("RunStats without projects = %+v, %v", got, err)
 	}
 }
@@ -226,18 +237,18 @@ func TestMRRunDigestsVisibility(t *testing.T) {
 		t.Fatal(err)
 	}
 	setRun(t, s, b, `title = 'Secret title', web_url = 'https://gitlab.example.com/secret-group/widgets/-/merge_requests/3'`)
-	got, err := s.MRRunDigests(ctx, mr1, vis(7, "acme/widgets"))
+	got, err := s.MRRunDigests(ctx, mr1, seen(mr1.Instance, 7, "acme/widgets"))
 	if err != nil || len(got) != 1 || got[0].ID != a {
 		t.Fatalf("MRRunDigests = %+v, %v; want the acme/widgets run only", got, err)
 	}
 	if got[0].Title != "" || got[0].WebURL != "" {
 		t.Errorf("visible run borrows the hidden run's title or link: %q %q", got[0].Title, got[0].WebURL)
 	}
-	if got, err := s.MRRunDigests(ctx, mr1, nil); err != nil || len(got) != 0 {
+	if got, err := s.MRRunDigests(ctx, mr1, Visibility{}); err != nil || len(got) != 0 {
 		t.Fatalf("MRRunDigests without projects = %+v, %v", got, err)
 	}
 	// The MR's newest run is hidden, so the review isn't listed.
-	if got, err := s.ReviewDigests(ctx, ReviewFilter{Instance: mr1.Instance, Projects: vis(7, "acme/widgets"), Limit: 5}); err != nil || len(got) != 0 {
+	if got, err := s.ReviewDigests(ctx, ReviewFilter{Visible: seen(mr1.Instance, 7, "acme/widgets"), Limit: 5}); err != nil || len(got) != 0 {
 		t.Fatalf("ReviewDigests = %+v, %v; want none", got, err)
 	}
 }
@@ -253,14 +264,14 @@ func TestReadsNeedVisibleProjectID(t *testing.T) {
 	decided(t, s, oldRun, OutcomeBlocking, false, base)
 	newRun := enqueue(t, s, newMR, "b1")
 	decided(t, s, newRun, OutcomeApproved, true, base.Add(time.Hour))
-	visible := vis(70, "acme/widgets")
+	visible := seen("main", 70, "acme/widgets")
 
-	got, err := s.ReviewDigests(ctx, ReviewFilter{Instance: "main", Projects: visible, Limit: 10})
+	got, err := s.ReviewDigests(ctx, ReviewFilter{Visible: visible, Limit: 10})
 	if err != nil || len(got) != 1 || got[0].ID != newRun {
 		t.Errorf("ReviewDigests = %+v, %v; want only the new project's run", got, err)
 	}
-	stats, err := s.RunStats(ctx, "main", visible, base)
-	if want := (RunCounts{Reviews: 1, Approved: 1}); err != nil || stats["acme/widgets"] != want {
+	stats, err := s.RunStats(ctx, visible, base)
+	if want := (RunCounts{Reviews: 1, Approved: 1}); err != nil || stats[PathKey{"main", "acme/widgets"}] != want {
 		t.Errorf("RunStats = %+v, %v; want %+v", stats, err, want)
 	}
 	if got, err := s.MRRunDigests(ctx, oldMR, visible); err != nil || len(got) != 0 {
@@ -268,6 +279,63 @@ func TestReadsNeedVisibleProjectID(t *testing.T) {
 	}
 	if got, err := s.MRRunDigests(ctx, newMR, visible); err != nil || len(got) != 1 || got[0].ID != newRun {
 		t.Errorf("MRRunDigests of the new project = %+v, %v", got, err)
+	}
+}
+
+// A run is read only when its instance, path and project ID are those of
+// one visible project together: the same path and ID on another instance,
+// or the ID of a project visible on another instance, show nothing.
+func TestReadsMatchInstancePathAndID(t *testing.T) {
+	s := newStore(t)
+	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	mainRun := enqueue(t, s, MRKey{Instance: "main", ProjectID: 7, IID: 1}, "a1")
+	decided(t, s, mainRun, OutcomeApproved, true, base)
+	ghMR := MRKey{Instance: "gh", ProjectID: 7, IID: 1}
+	ghRun, _, err := s.EnqueueRun(ctx, ghMR, "acme/widgets", "b1", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decided(t, s, ghRun, OutcomeBlocking, false, base.Add(time.Hour))
+	// main's acme/widgets (7), and gh's acme/tools with ID 7 too.
+	v := Visibility{Projects: []VisibleProject{{"main", "acme/widgets", 7}, {"gh", "acme/tools", 7}}}
+
+	got, err := s.ReviewDigests(ctx, ReviewFilter{Visible: v, Limit: 10})
+	if err != nil || len(got) != 1 || got[0].ID != mainRun {
+		t.Errorf("ReviewDigests = %+v, %v; want main's run only", got, err)
+	}
+	stats, err := s.RunStats(ctx, v, base)
+	if err != nil || len(stats) != 1 || stats[PathKey{"main", "acme/widgets"}].Reviews != 1 {
+		t.Errorf("RunStats = %+v, %v; want main's acme/widgets only", stats, err)
+	}
+	if got, err := s.MRRunDigests(ctx, ghMR, v); err != nil || len(got) != 0 {
+		t.Errorf("MRRunDigests of gh's run = %+v, %v; want none", got, err)
+	}
+}
+
+// All reads every run, of every instance and project.
+func TestVisibilityAll(t *testing.T) {
+	s := newStore(t)
+	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	mainRun := enqueue(t, s, MRKey{Instance: "main", ProjectID: 7, IID: 1}, "a1")
+	decided(t, s, mainRun, OutcomeApproved, true, base)
+	ghMR := MRKey{Instance: "gh", ProjectID: 9, IID: 2}
+	ghRun, _, err := s.EnqueueRun(ctx, ghMR, "acme/tools", "b1", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decided(t, s, ghRun, OutcomeBlocking, false, base.Add(time.Hour))
+	all := Visibility{All: true}
+
+	got, err := s.ReviewDigests(ctx, ReviewFilter{Visible: all, Limit: 10})
+	if err != nil || len(got) != 2 || got[0].ID != ghRun || got[1].ID != mainRun {
+		t.Errorf("ReviewDigests = %+v, %v; want both runs, newest first", got, err)
+	}
+	stats, err := s.RunStats(ctx, all, base)
+	if err != nil || len(stats) != 2 || stats[PathKey{"gh", "acme/tools"}].Blocking != 1 || stats[PathKey{"main", "acme/widgets"}].Approved != 1 {
+		t.Errorf("RunStats = %+v, %v", stats, err)
+	}
+	if got, err := s.MRRunDigests(ctx, ghMR, all); err != nil || len(got) != 1 || got[0].ID != ghRun {
+		t.Errorf("MRRunDigests = %+v, %v", got, err)
 	}
 }
 
@@ -301,15 +369,19 @@ func TestDashboardQueriesUseIndexes(t *testing.T) {
 	if _, err := s.pool.Exec(ctx, `ANALYZE runs`); err != nil {
 		t.Fatal(err)
 	}
+	repo := func(n int64) VisibleProject { return VisibleProject{"main", fmt.Sprintf("acme/repo-%d", n), n} }
+	one, oneArgs := visibleCond(Visibility{Projects: []VisibleProject{repo(7)}}, 6)
+	two, twoArgs := visibleCond(Visibility{Projects: []VisibleProject{repo(7), repo(8)}}, 6)
+	oneStats, oneStatsArgs := visibleCond(Visibility{Projects: []VisibleProject{repo(7)}}, 2)
 	for _, q := range []struct {
 		name, sql, index string
 		args             []any
 	}{
-		{"reviews", reviewDigestsSQL, "runs_project_updated_idx",
-			[]any{"main", []string{"acme/repo-7"}, since.Add(-7 * 24 * time.Hour), nil, zeroUUID, "", 51, []int64{7}}},
-		{"reviews after a cursor", reviewDigestsSQL, "runs_project_updated_idx",
-			[]any{"main", []string{"acme/repo-7", "acme/repo-8"}, since.Add(-90 * 24 * time.Hour), since.Add(-time.Hour), zeroUUID, "approved", 51, []int64{7, 8}}},
-		{"stats", runStatsSQL, "runs_project_created_idx", []any{"main", []string{"acme/repo-7"}, since.Add(-7 * 24 * time.Hour), []int64{7}}},
+		{"reviews", reviewDigestsSQL(one), "runs_project_updated_idx",
+			append([]any{since.Add(-7 * 24 * time.Hour), nil, zeroUUID, "", 51}, oneArgs...)},
+		{"reviews after a cursor", reviewDigestsSQL(two), "runs_project_updated_idx",
+			append([]any{since.Add(-90 * 24 * time.Hour), since.Add(-time.Hour), zeroUUID, "approved", 51}, twoArgs...)},
+		{"stats", runStatsSQL(oneStats), "runs_project_created_idx", append([]any{since.Add(-7 * 24 * time.Hour)}, oneStatsArgs...)},
 	} {
 		plan := explain(t, s, q.sql, q.args...)
 		if !strings.Contains(plan, q.index) {

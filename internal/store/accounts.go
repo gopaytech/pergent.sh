@@ -96,6 +96,15 @@ func (s *Store) CountPasswordAccounts(ctx context.Context) (int, error) {
 	return n, err
 }
 
+// CountWaitingAccounts returns how many platform accounts are on no team:
+// they wait for an admin to place them.
+func (s *Store) CountWaitingAccounts(ctx context.Context) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM accounts a WHERE kind = 'platform'
+		AND NOT EXISTS (SELECT 1 FROM team_members m WHERE m.account_id = a.id)`).Scan(&n)
+	return n, err
+}
+
 // UpsertPlatformAccount returns the account of user userID on instance,
 // making it when there is none, and records the user's current username and
 // the sign-in time at.

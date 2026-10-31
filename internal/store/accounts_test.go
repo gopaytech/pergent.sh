@@ -261,6 +261,29 @@ func TestAccountsWaitingFirst(t *testing.T) {
 	}
 }
 
+// Waiting accounts are the platform accounts on no team; a password account
+// never waits.
+func TestCountWaitingAccounts(t *testing.T) {
+	s := newStore(t)
+	mustPassword(t, s, "admin")
+	member := mustPlatform(t, s, "main", 1, "alice")
+	mustPlatform(t, s, "main", 2, "zed")
+	mustPlatform(t, s, "main", 3, "yan")
+	if n, err := s.CountWaitingAccounts(ctx); err != nil || n != 3 {
+		t.Fatalf("CountWaitingAccounts = %d, %v; want 3", n, err)
+	}
+	team, err := s.CreateTeam(ctx, "devs", RoleViewer, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.UpdateTeam(ctx, team.ID, func(tm *Team) error { tm.Members = []int64{member.ID}; return nil }); err != nil || !ok {
+		t.Fatalf("UpdateTeam = %v, %v", ok, err)
+	}
+	if n, err := s.CountWaitingAccounts(ctx); err != nil || n != 2 {
+		t.Fatalf("CountWaitingAccounts with alice on a team = %d, %v; want 2", n, err)
+	}
+}
+
 func TestDeleteAccountCascades(t *testing.T) {
 	s := newStore(t)
 	mustPassword(t, s, "admin")

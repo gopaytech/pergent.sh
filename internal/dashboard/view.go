@@ -10,10 +10,15 @@ import (
 // camelCase. The frontend mirrors these types. Times are RFC 3339 strings.
 //
 // Every endpoint needs a signed-in session (401 otherwise) and answers only
-// about the repositories of the session's instance its user can see. A
-// repository, review or run the user can't see is answered exactly like one
-// that doesn't exist: left out of lists, 404 for its own URL. Errors are
-// {"error": "message"}. Nothing here ever holds a token, key or secret.
+// about the repositories its user can see: for an operator (a password
+// admin) every one, on every instance; for a platform account those its
+// teams cover, on the instance it signed in with, that the platform also
+// lets it see. A platform account on no team gets 403 {"error": "an admin
+// needs to add you to a team", "code": "waiting"} for everything but GET
+// /api/me. A repository, review or run the user can't see is answered
+// exactly like one that doesn't exist: left out of lists, 404 for its own
+// URL. Errors are {"error": "message"}. Nothing here ever holds a token,
+// key or secret.
 //
 // Outcomes ("outcome") are one of:
 //   - "running": queued, being reviewed, or reviewed and not posted yet;
@@ -59,7 +64,8 @@ type InstanceView struct {
 // OverviewView is GET /api/overview?days=7 (days 1 to 90, default 7):
 // numbers over the runs started in the last days, the 10 most recently
 // updated reviews of the last 90 days and the setup problems of the
-// repositories the user can see (instance-wide ones only for admins).
+// repositories the user can see (instance-wide ones only for the admins of
+// that instance, and for operators).
 type OverviewView struct {
 	Stats     StatsView       `json:"stats"`
 	Recent    []ReviewSummary `json:"recent"`
@@ -93,10 +99,10 @@ type ReviewSummary struct {
 	WebURL string `json:"webURL"`
 }
 
-// ReviewListView is GET /api/reviews?project=&outcome=&days=&cursor=: 50
-// reviews at most, the most recently updated first. project (a path) and
-// outcome filter; days (1 to 365, default 90) leaves out reviews last
-// updated longer ago. nextCursor, when not "", is passed as cursor for the
+// ReviewListView is GET /api/reviews?project=&instance=&outcome=&days=&cursor=:
+// 50 reviews at most, the most recently updated first. project (a path, on
+// instance when that is given, else on any) and outcome filter; days (1 to
+// 365, default 90) leaves out reviews last updated longer ago. nextCursor, when not "", is passed as cursor for the
 // next page.
 type ReviewListView struct {
 	Items      []ReviewSummary `json:"items"`
@@ -259,6 +265,9 @@ type RepositoryDetailView struct {
 	Repo      RepositoryView         `json:"repo"`
 	Settings  map[string]SettingView `json:"settings"`
 	Attention []AttentionView        `json:"attention"`
+	// Role is the session's role on the repository: "admin", "maintainer"
+	// or "viewer".
+	Role string `json:"role"`
 }
 
 // SettingView is a setting's effective value and whether the repository
@@ -330,13 +339,11 @@ type IntegrationRepo struct {
 }
 
 // AdminSettingsView is GET /api/admin/settings (admins only): the defaults
-// a repository gets and the admin groups or teams of the session's
-// instance. Never a key.
+// a repository of the session's instance gets, and the model. Never a key.
 type AdminSettingsView struct {
 	Instance string       `json:"instance"`
 	Defaults DefaultsView `json:"defaults"`
 	LLM      LLMView      `json:"llm"`
-	Admins   []AdminView  `json:"admins"`
 }
 
 // DefaultsView is the settings a repository gets when it sets none.
@@ -355,21 +362,18 @@ type LLMView struct {
 	Model    string `json:"model"`
 }
 
-// AdminView is one admin group (GitLab) or team "org/slug" (GitHub).
-type AdminView struct {
-	Instance string `json:"instance"`
-	Group    string `json:"group,omitempty"`
-	Team     string `json:"team,omitempty"`
-}
-
-// --- The write API (admins of the session's instance only) ---
+// --- The write API ---
 //
 // Every write needs the X-CSRF-Token header (403 with "code": "csrf"
-// without it, so the client knows to fetch the token again) and an admin
-// session (403 otherwise, and nothing changes). A repository the admin
-// can't see is answered exactly like one that doesn't exist (404), whatever
-// the write. A repository listed in the config is read-only here (409).
-// Errors are {"error": "message"}.
+// without it, so the client knows to fetch the token again) and the right
+// role (403 otherwise, and nothing changes): an admin to switch
+// repositories on and off and for the picker, a maintainer or admin of the
+// repository for its settings. A repository the user can't see is answered
+// exactly like one that doesn't exist (404), whatever the write. A
+// repository listed in the config is read-only here (409). Errors are
+// {"error": "message"}. The picker and switching on need a platform token:
+// an operator gets 400 {"error": "sign in with GitLab or GitHub to add
+// repositories"}.
 //
 //   - GET /api/repositories/available?search=: AvailableView, the
 //     repositories that can be switched on; search (at most 100
@@ -399,8 +403,8 @@ type AdminView struct {
 //   - POST /api/repositories/{instance}/{project...}/settings/reset: every
 //     setting back to its default. 200, RepositoryDetailView.
 //
-// The admin sees a repository they switch on at once; other users see it
-// within 5 minutes, when their access is checked again.
+// Users whose teams cover a repository switched on see it at their next
+// request, once the platform says they may.
 
 // AvailableView is GET /api/repositories/available: the repositories of the
 // session's instance that the admin is a member of with read access

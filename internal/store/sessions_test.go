@@ -41,7 +41,7 @@ func TestSessionsCRUD(t *testing.T) {
 		t.Fatalf("Session = %v, %v", found, err)
 	}
 	if !bytes.Equal(got.IDHash, in.IDHash) || got.Platform != "gitlab" || got.Instance != "main" || got.UserID != 9 ||
-		got.Username != "alice" || got.IsAdmin || got.AccessScope != "" || got.AccountID != in.AccountID || !bytes.Equal(got.TokenSealed, []byte("sealed")) || got.CSRF != "csrf-token" ||
+		got.Username != "alice" || got.AccessScope != "" || got.AccountID != in.AccountID || !bytes.Equal(got.TokenSealed, []byte("sealed")) || got.CSRF != "csrf-token" ||
 		got.AccessCheckedAt != nil || !got.LastSeenAt.Equal(t0) || !got.CreatedAt.Equal(t0) {
 		t.Fatalf("session = %+v", got)
 	}
@@ -53,12 +53,12 @@ func TestSessionsCRUD(t *testing.T) {
 		t.Fatal(err)
 	}
 	checked := t0.Add(2 * time.Minute)
-	if err := s.SetSessionAccess(ctx, in.IDHash, "alice-renamed", true, "read", vis(7, "acme/widgets", "Acme/Widgets", "acme/payments"), checked); err != nil {
+	if err := s.SetSessionAccess(ctx, in.IDHash, "alice-renamed", "read", vis(7, "acme/widgets", "Acme/Widgets", "acme/payments"), checked); err != nil {
 		t.Fatal(err)
 	}
 	got, _, _ = s.Session(ctx, in.IDHash)
 	if !got.LastSeenAt.Equal(t0.Add(time.Minute)) || !bytes.Equal(got.TokenSealed, []byte("resealed")) ||
-		!got.IsAdmin || got.AccessScope != "read" || got.AccessCheckedAt == nil || !got.AccessCheckedAt.Equal(checked) || got.Username != "alice-renamed" {
+		got.AccessScope != "read" || got.AccessCheckedAt == nil || !got.AccessCheckedAt.Equal(checked) || got.Username != "alice-renamed" {
 		t.Fatalf("updated session = %+v", got)
 	}
 	projects, err := s.SessionProjects(ctx, in.IDHash)
@@ -67,7 +67,7 @@ func TestSessionsCRUD(t *testing.T) {
 	}
 
 	// A new check replaces the list.
-	if err := s.SetSessionAccess(ctx, in.IDHash, "alice", false, "read", vis(8, "acme/payments"), checked.Add(time.Minute)); err != nil {
+	if err := s.SetSessionAccess(ctx, in.IDHash, "alice", "read", vis(8, "acme/payments"), checked.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	if projects, _ := s.SessionProjects(ctx, in.IDHash); !slices.Equal(projects, []VisibleProject{{"main", "acme/payments", 8}}) {
@@ -75,19 +75,19 @@ func TestSessionsCRUD(t *testing.T) {
 	}
 
 	// Clearing denies everything but keeps the time of the last good check.
-	if err := s.SetSessionAccess(ctx, in.IDHash, "alice", true, "read", vis(8, "acme/payments"), checked); err != nil {
+	if err := s.SetSessionAccess(ctx, in.IDHash, "alice", "read", vis(8, "acme/payments"), checked); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.ClearSessionAccess(ctx, in.IDHash); err != nil {
 		t.Fatal(err)
 	}
 	got, _, _ = s.Session(ctx, in.IDHash)
-	if projects, _ := s.SessionProjects(ctx, in.IDHash); len(projects) != 0 || got.IsAdmin || got.AccessScope != "" || !got.AccessCheckedAt.Equal(checked) {
+	if projects, _ := s.SessionProjects(ctx, in.IDHash); len(projects) != 0 || got.AccessScope != "" || !got.AccessCheckedAt.Equal(checked) {
 		t.Fatalf("after ClearSessionAccess: projects %v, session %+v", projects, got)
 	}
 
 	// Deleting removes the session and its projects.
-	if err := s.SetSessionAccess(ctx, in.IDHash, "alice", false, "read", vis(7, "acme/widgets"), checked); err != nil {
+	if err := s.SetSessionAccess(ctx, in.IDHash, "alice", "read", vis(7, "acme/widgets"), checked); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DeleteSession(ctx, in.IDHash); err != nil {
@@ -100,7 +100,7 @@ func TestSessionsCRUD(t *testing.T) {
 		t.Fatalf("projects left after DeleteSession: %v", projects)
 	}
 	// Access set on a session that's gone is not stored.
-	if err := s.SetSessionAccess(ctx, in.IDHash, "alice", true, "read", vis(7, "acme/widgets"), checked); err != nil {
+	if err := s.SetSessionAccess(ctx, in.IDHash, "alice", "read", vis(7, "acme/widgets"), checked); err != nil {
 		t.Fatalf("SetSessionAccess on a deleted session: %v", err)
 	}
 	if _, found, _ := s.Session(ctx, in.IDHash); found {
@@ -137,7 +137,7 @@ func TestAddSessionProject(t *testing.T) {
 	if err := s.CreateSession(ctx, in); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetSessionAccess(ctx, in.IDHash, "alice", true, "read", vis(7, "acme/widgets"), t0); err != nil {
+	if err := s.SetSessionAccess(ctx, in.IDHash, "alice", "read", vis(7, "acme/widgets"), t0); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range []VisibleProject{{"main", "acme/gadgets", 11}, {"main", "ACME/Gadgets", 12}, {"main", "acme/widgets", 13}} {
@@ -157,7 +157,7 @@ func TestAddSessionProject(t *testing.T) {
 	if err := s.AddSessionProject(ctx, in.IDHash, VisibleProject{Path: "acme/tools"}); err == nil {
 		t.Error("AddSessionProject without an ID = nil error")
 	}
-	if err := s.SetSessionAccess(ctx, in.IDHash, "alice", true, "read", []VisibleProject{{Path: "acme/tools"}}, t0); err == nil {
+	if err := s.SetSessionAccess(ctx, in.IDHash, "alice", "read", []VisibleProject{{Path: "acme/tools"}}, t0); err == nil {
 		t.Error("SetSessionAccess without an ID = nil error")
 	}
 }
@@ -211,6 +211,37 @@ func TestMigrationDropsAccessWithoutIDs(t *testing.T) {
 	}
 }
 
+// Admins come from the teams on every request: sessions keep no admin flag,
+// and no admin group is left to be unreadable.
+func TestMigrationDropsSessionAdmin(t *testing.T) {
+	s := newStoreAt(t, 10)
+	column := func() int {
+		var n int
+		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns
+			WHERE table_schema = current_schema() AND table_name = 'sessions' AND column_name = 'is_admin'`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if column() != 1 {
+		t.Fatal("no sessions.is_admin before migration 11")
+	}
+	for _, kind := range []string{"admin_team_unreadable", "token_expiry"} {
+		if err := s.SetAttention(ctx, "gh", "", kind, "x"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if column() != 0 {
+		t.Error("sessions.is_admin is still there")
+	}
+	if items, err := s.Attention(ctx); err != nil || len(items) != 1 || items[0].Kind != "token_expiry" {
+		t.Errorf("attention after migration 11 = %+v, %v; want only token_expiry", items, err)
+	}
+}
+
 // A password session has no platform, instance, user or OAuth token.
 func TestPasswordSession(t *testing.T) {
 	s := newStore(t)
@@ -228,7 +259,7 @@ func TestPasswordSession(t *testing.T) {
 		t.Fatalf("session = %+v", got)
 	}
 	// Access can be set and cleared; a session with no instance keeps no list.
-	if err := s.SetSessionAccess(ctx, in.IDHash, "admin", true, "", nil, t0); err != nil {
+	if err := s.SetSessionAccess(ctx, in.IDHash, "admin", "", nil, t0); err != nil {
 		t.Fatalf("SetSessionAccess: %v", err)
 	}
 	if err := s.AddSessionProject(ctx, in.IDHash, VisibleProject{Path: "acme/widgets", ID: 3}); err != nil {

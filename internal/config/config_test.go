@@ -577,8 +577,8 @@ func TestLoadRejectsBadRepositorySettings(t *testing.T) {
 	}
 }
 
-// dashboardYAML adds a dashboard with admins on both platforms to
-// github.yaml, and OAuth env names to main and gh.
+// dashboardYAML adds a dashboard to github.yaml, and OAuth env names to
+// main and gh.
 func dashboardYAML(t *testing.T) string {
 	t.Helper()
 	base, err := os.ReadFile("testdata/github.yaml")
@@ -592,11 +592,6 @@ func dashboardYAML(t *testing.T) string {
 	body += `
 dashboard:
   url: https://pergent.example.com
-  admins:
-    - instance: main
-      group: acme/platform
-    - instance: gh
-      team: acme/platform
 `
 	return body
 }
@@ -608,10 +603,6 @@ func TestLoadDashboard(t *testing.T) {
 	}
 	if !cfg.DashboardEnabled() || cfg.Dashboard.URL != "https://pergent.example.com" {
 		t.Errorf("Dashboard = %+v", cfg.Dashboard)
-	}
-	want := []DashboardAdmin{{Instance: "main", Group: "acme/platform"}, {Instance: "gh", Team: "acme/platform"}}
-	if len(cfg.Dashboard.Admins) != 2 || cfg.Dashboard.Admins[0] != want[0] || cfg.Dashboard.Admins[1] != want[1] {
-		t.Errorf("Admins = %+v, want %+v", cfg.Dashboard.Admins, want)
 	}
 	if inst, _ := cfg.Instance("main"); inst.OAuthClientIDEnv != "GITLAB_OAUTH_ID" || inst.OAuthClientSecretEnv != "GITLAB_OAUTH_SECRET" {
 		t.Errorf("gitlab OAuth envs = %+v", inst)
@@ -650,19 +641,9 @@ func TestValidateRejectsDashboard(t *testing.T) {
 		{"url with a fragment", func(c *Config) { c.Dashboard.URL = "https://pergent.example.com#x" }, "must have no path"},
 		{"url with a port", func(c *Config) { c.Dashboard.URL = "https://pergent.example.com:8443" }, "must have no port"},
 		{"url with the https port", func(c *Config) { c.Dashboard.URL = "https://pergent.example.com:443" }, "must have no port"},
-		{"admins without url", func(c *Config) { c.Dashboard.URL = "" }, "dashboard.admins needs dashboard.url"},
-		{"admin of unknown instance", func(c *Config) { c.Dashboard.Admins[0].Instance = "nope" }, "unknown instance"},
-		{"gitlab admin without group", func(c *Config) { c.Dashboard.Admins[0].Group = "" }, "group is required"},
-		{"gitlab admin with team", func(c *Config) { c.Dashboard.Admins[0].Team = "acme/platform" }, "team is for github"},
-		{"github admin without team", func(c *Config) { c.Dashboard.Admins[1].Team = "" }, "org/slug"},
-		{"github admin team without slug", func(c *Config) { c.Dashboard.Admins[1].Team = "acme" }, "org/slug"},
-		{"github admin with group", func(c *Config) { c.Dashboard.Admins[1].Group = "acme" }, "group is for gitlab"},
 		{"gitlab oauth id without secret", func(c *Config) { c.GitLab[0].OAuthClientSecretEnv = "" }, "oauth_client_secret_env"},
 		{"gitlab oauth secret without id", func(c *Config) { c.GitLab[0].OAuthClientIDEnv = "" }, "oauth_client_id_env"},
 		{"github oauth id without secret", func(c *Config) { c.GitHub[0].OAuthClientSecretEnv = "" }, "oauth_client_secret_env"},
-		{"admin of an instance without sign-in", func(c *Config) {
-			c.GitHub[0].OAuthClientIDEnv, c.GitHub[0].OAuthClientSecretEnv = "", ""
-		}, "has no sign-in"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -679,6 +660,29 @@ func TestValidateRejectsDashboard(t *testing.T) {
 				t.Fatalf("Validate() = %q, want it to contain %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// dashboard.admins is gone: admins are teams in the dashboard. A config that
+// still has it is refused, whatever it holds and with the dashboard on or
+// off, pointing at teams.
+func TestDashboardAdminsRefused(t *testing.T) {
+	const want = `dashboard.admins was removed: admins are now teams in the dashboard (see the README, "Teams")`
+	for name, body := range map[string]string{
+		"a group":       dashboardYAML(t) + "  admins:\n    - instance: main\n      group: acme/platform\n",
+		"an empty list": dashboardYAML(t) + "  admins: []\n",
+		"no value":      dashboardYAML(t) + "  admins:\n",
+		"dashboard off": minimalYAML + "dashboard:\n  admins:\n    - instance: main\n      group: acme/platform\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(writeConfig(t, body))
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("Load() = %v, want an error containing %q", err, want)
+			}
+		})
+	}
+	if _, err := Load(writeConfig(t, dashboardYAML(t))); err != nil {
+		t.Fatalf("Load without admins: %v", err)
 	}
 }
 

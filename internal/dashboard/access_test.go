@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -127,144 +128,49 @@ func TestVisibilityRules(t *testing.T) {
 	}
 }
 
-func TestAdminByGroupAndTeam(t *testing.T) {
-	t.Run("gitlab group member", func(t *testing.T) {
+// An admin is a member of an admin team, by account: admin rights on one
+// instance's account give nothing to the same person's account on another,
+// and leaving the team ends them at the next request.
+func TestAdminByTeam(t *testing.T) {
+	t.Run("gitlab admin team member", func(t *testing.T) {
 		e := newEnv(t, nil)
-		e.gl.setMember("acme/platform", true)
-		if _, me := e.me(e.signIn("gitlab", "main")); !me.IsAdmin {
-			t.Fatal("a member of acme/platform is not admin")
+		e.aliceOn("main", store.RoleAdmin)
+		if _, me := e.me(e.signIn("gitlab", "main")); !me.Admin || me.Operator || me.Waiting {
+			t.Fatalf("an admin team's member = %+v; want an admin, no operator", me)
 		}
 	})
-	t.Run("gitlab not a member", func(t *testing.T) {
+	t.Run("github admin team member", func(t *testing.T) {
 		e := newEnv(t, nil)
-		e.gl.setMember("acme/other", true)
-		if _, me := e.me(e.signIn("gitlab", "main")); me.IsAdmin {
-			t.Fatal("a non-member is admin")
+		e.aliceOn("gh", store.RoleAdmin)
+		if _, me := e.me(e.signIn("github", "gh")); !me.Admin {
+			t.Fatal("an admin team's member is not admin")
 		}
 	})
-	t.Run("github active team member", func(t *testing.T) {
+	t.Run("maintainer team member", func(t *testing.T) {
 		e := newEnv(t, nil)
-		e.gh.setTeam("acme/platform", "active")
-		if _, me := e.me(e.signIn("github", "gh")); !me.IsAdmin {
-			t.Fatal("an active member of acme/platform is not admin")
+		e.aliceOn("main", store.RoleMaintainer)
+		if _, me := e.me(e.signIn("gitlab", "main")); me.Admin || me.Waiting {
+			t.Fatalf("a maintainer team's member = %+v; want no admin, not waiting", me)
 		}
 	})
-	t.Run("github pending invitation", func(t *testing.T) {
+	t.Run("admin rights are per account", func(t *testing.T) {
 		e := newEnv(t, nil)
-		e.gh.setTeam("acme/platform", "pending")
-		if _, me := e.me(e.signIn("github", "gh")); me.IsAdmin {
-			t.Fatal("a pending invitation made an admin")
-		}
-	})
-	t.Run("admin rights are per instance", func(t *testing.T) {
-		// acme/platform is the admin group of another GitLab instance; on
-		// main the admins are acme/admins. A member of acme/platform on
-		// main is no admin there: the same group path on another
-		// instance is another group.
-		e := newEnv(t, func(c *config.Config) {
-			c.GitLab = append(c.GitLab, config.Instance{Name: "other", URL: "https://gitlab.example.com"})
-			c.Dashboard.Admins = []config.DashboardAdmin{
-				{Instance: "other", Group: "acme/platform"},
-				{Instance: "main", Group: "acme/admins"},
-			}
-		})
-		e.gl.setMember("acme/platform", true)
-		if _, me := e.me(e.signIn("gitlab", "main")); me.IsAdmin {
-			t.Fatal("admin on main through another instance's group")
-		}
-		e.gl.setMember("acme/admins", true)
-		e.clock.advance(AccessTTL + time.Second)
-		if _, me := e.me(e.signIn("gitlab", "main")); !me.IsAdmin {
-			t.Fatal("a member of main's own admin group is not admin")
-		}
-	})
-	t.Run("gitlab member through a parent or shared group only", func(t *testing.T) {
-		e := newEnv(t, nil)
-		e.gl.set(func(*oauthServer) { e.gl.inherited["acme/platform"] = true })
-		if _, me := e.me(e.signIn("gitlab", "main")); me.IsAdmin {
-			t.Fatal("a member of a parent or shared group only is admin")
-		}
-	})
-	t.Run("gitlab minimal access", func(t *testing.T) {
-		e := newEnv(t, nil)
-		e.gl.setMember("acme/platform", true)
-		e.gl.set(func(*oauthServer) { e.gl.member = map[string]any{"access_level": 5} })
-		if _, me := e.me(e.signIn("gitlab", "main")); me.IsAdmin {
-			t.Fatal("a member with Minimal Access is admin")
-		}
-	})
-	t.Run("gitlab member awaiting approval", func(t *testing.T) {
-		e := newEnv(t, nil)
-		e.gl.setMember("acme/platform", true)
-		e.gl.set(func(*oauthServer) { e.gl.member = map[string]any{"membership_state": "awaiting"} })
-		if _, me := e.me(e.signIn("gitlab", "main")); me.IsAdmin {
-			t.Fatal("a member awaiting approval is admin")
+		e.aliceOn("gh", store.RoleAdmin)
+		e.aliceOn("main", store.RoleViewer)
+		if _, me := e.me(e.signIn("gitlab", "main")); me.Admin {
+			t.Fatal("admin on main through the gh account's team")
 		}
 	})
 	t.Run("membership lost", func(t *testing.T) {
 		e := newEnv(t, nil)
-		e.gl.setMember("acme/platform", true)
+		team := e.aliceOn("main", store.RoleAdmin)
+		e.aliceOn("main", store.RoleViewer)
 		c := e.signIn("gitlab", "main")
-		e.gl.setMember("acme/platform", false)
-		e.clock.advance(5*time.Minute + time.Second)
-		if _, me := e.me(c); me.IsAdmin {
-			t.Fatal("still admin 5 minutes after leaving the group")
+		e.editTeam(team, func(tm *store.Team) { tm.Members = nil })
+		if _, me := e.me(c); me.Admin {
+			t.Fatal("still admin after leaving the admin team")
 		}
 	})
-}
-
-// An App that may not read the admin team (403) makes nobody an admin on
-// that instance, but signs users in; the problem is a warning and an
-// instance-wide "Needs attention" item, gone once the team can be read.
-func TestGitHubAdminTeamForbidden(t *testing.T) {
-	e := newEnv(t, nil)
-	e.gh.setRepo("acme/widgets", githubRepo(true, true))
-	e.gh.setTeam("acme/platform", "active")
-	e.gh.set(func(*oauthServer) { e.gh.teamStatus = http.StatusForbidden })
-	c := e.signIn("github", "gh")
-	if _, se := e.session(c); se.IsAdmin || !se.CanSee("acme/widgets") {
-		t.Fatalf("session with an unreadable admin team = %+v; want acme/widgets, no admin", se)
-	}
-	logs := e.logs.String()
-	if !containsAll(logs, []string{"level=WARN", "admin team", "instance=gh", "team=acme/platform"}) {
-		t.Fatalf("no warning names the instance and team:\n%s", logs)
-	}
-	for _, tok := range e.gh.tokens() {
-		if strings.Contains(logs, tok) {
-			t.Fatal("the warning holds the user's token")
-		}
-	}
-	items, err := e.st.Attention(ctx)
-	if err != nil || len(items) != 1 || items[0].Instance != "gh" || items[0].Project != "" ||
-		items[0].Kind != attentionAdminTeam || !strings.Contains(items[0].Message, "acme/platform") {
-		t.Fatalf("attention = %+v, %v; want gh's instance-wide %s item", items, err, attentionAdminTeam)
-	}
-
-	e.gh.set(func(*oauthServer) { e.gh.teamStatus = 0 })
-	e.clock.advance(AccessTTL + time.Second)
-	if _, se := e.session(c); !se.IsAdmin {
-		t.Fatal("not admin once the team can be read")
-	}
-	if items, err := e.st.Attention(ctx); err != nil || len(items) != 0 {
-		t.Fatalf("attention after a good check = %+v, %v; want none", items, err)
-	}
-}
-
-// Any other failure of the admin check (here 500s until the call's time is
-// up) fails the check: no sign-in, nothing stored.
-func TestGitHubAdminTeamErrorFailsClosed(t *testing.T) {
-	e := newEnv(t, nil)
-	e.d.Auth.providers["gh"].(*githubProvider).timeout = 1500 * time.Millisecond
-	e.gh.setRepo("acme/widgets", githubRepo(true, true))
-	e.gh.set(func(*oauthServer) { e.gh.teamStatus = http.StatusInternalServerError })
-	loc, sc := e.startLogin("github", "gh")
-	rec := e.callback("github", "gh", goodCode, loc.Query().Get("state"), sc)
-	if rec.Code == http.StatusSeeOther || cookie(rec, SessionCookieName) != nil {
-		t.Fatalf("callback = %d with a session; want a failed sign-in", rec.Code)
-	}
-	if items, err := e.st.Attention(ctx); err != nil || len(items) != 0 {
-		t.Fatalf("attention = %+v, %v; want none", items, err)
-	}
 }
 
 // Review Focus 1: a user whose access drops from Developer to Guest stops
@@ -273,21 +179,22 @@ func TestAccessRefreshDropsRepository(t *testing.T) {
 	e := newEnv(t, nil)
 	e.gl.setProject("acme/widgets", gitlabProject("private", 30, 0))
 	e.gl.setProject("acme/payments", gitlabProject("private", 20, 0))
+	e.aliceOn("main", store.RoleViewer)
 	c := e.signIn("gitlab", "main")
 
 	_, se := e.session(c)
-	if !se.CanSee("acme/widgets") || !se.CanSee("acme/payments") || se.CanSee("acme/other") {
+	if !se.CanSee("main", "acme/widgets") || !se.CanSee("main", "acme/payments") || se.CanSee("main", "acme/other") {
 		t.Fatalf("visible after sign-in = %v", se.Visible)
 	}
 
 	e.gl.setProject("acme/widgets", gitlabProject("private", 10, 0)) // now Guest
 	e.clock.advance(4 * time.Minute)
-	if _, se := e.session(c); !se.CanSee("acme/widgets") {
+	if _, se := e.session(c); !se.CanSee("main", "acme/widgets") {
 		t.Fatal("dropped before the 5-minute refresh: the cache is not used")
 	}
 	e.clock.advance(time.Minute + time.Second)
 	_, se = e.session(c)
-	if se.CanSee("acme/widgets") || !se.CanSee("acme/payments") {
+	if se.CanSee("main", "acme/widgets") || !se.CanSee("main", "acme/payments") {
 		t.Fatalf("visible 5 min after the drop = %v", se.Visible)
 	}
 	projects, err := e.st.SessionProjects(ctx, hashOf(t, c))
@@ -303,35 +210,36 @@ func TestAccessRefreshDropsRepository(t *testing.T) {
 }
 
 // A failed refresh keeps the last list for one more period, then denies
-// everything, and access comes back once a check succeeds.
+// every repository, and access comes back once a check succeeds. Being an
+// admin comes from the teams, not the platform: it stays.
 func TestRefreshFailureFailsClosedAfterOnePeriod(t *testing.T) {
 	e := newEnv(t, nil)
 	e.gl.setProject("acme/widgets", gitlabProject("private", 30, 0))
-	e.gl.setMember("acme/platform", true)
+	e.aliceOn("main", store.RoleAdmin)
 	c := e.signIn("gitlab", "main")
 
 	e.gl.set(func(o *oauthServer) { o.failAPI = true })
 	e.clock.advance(6 * time.Minute)
-	if _, se := e.session(c); !se.CanSee("acme/widgets") || !se.IsAdmin {
+	if _, se := e.session(c); !se.CanSee("main", "acme/widgets") || !se.Admin {
 		t.Fatalf("within one more period: %+v", se)
 	}
 	e.clock.advance(4*time.Minute + time.Second) // 10 min + 1 s after the last good check
 	code, se := e.session(c)
-	if code != 200 || len(se.Visible) != 0 || se.IsAdmin {
+	if code != 200 || len(se.Visible) != 0 || se.Role("main", "acme/widgets") != RoleNone {
 		t.Fatalf("after two periods without a check: %d %+v", code, se)
 	}
-	if _, me := e.me(c); me.IsAdmin || me.Username != "alice" {
-		t.Fatalf("/api/me after failing closed = %+v; want alice, no admin", me)
+	if _, me := e.me(c); me.Username != "alice" {
+		t.Fatalf("/api/me after failing closed = %+v; want alice", me)
 	}
 	stored, _ := e.storedSession(c)
 	projects, _ := e.st.SessionProjects(ctx, hashOf(t, c))
-	if stored.IsAdmin || len(projects) != 0 {
-		t.Fatalf("stored access not cleared: admin %v, projects %v", stored.IsAdmin, projects)
+	if stored.AccessScope != "" || len(projects) != 0 {
+		t.Fatalf("stored access not cleared: scope %q, projects %v", stored.AccessScope, projects)
 	}
 
 	e.gl.set(func(o *oauthServer) { o.failAPI = false })
 	e.clock.advance(time.Minute + time.Second)
-	if _, se := e.session(c); !se.CanSee("acme/widgets") || !se.IsAdmin {
+	if _, se := e.session(c); !se.CanSee("main", "acme/widgets") || !se.Admin {
 		t.Fatalf("after the platform is back: %+v", se)
 	}
 }
@@ -342,12 +250,13 @@ func TestExpiredTokenRefreshFailsClosed(t *testing.T) {
 	e := newEnv(t, nil)
 	e.gh.set(func(o *oauthServer) { o.expiresIn = 120 })
 	e.gh.setRepo("acme/widgets", githubRepo(true, true))
+	e.aliceOn("gh", store.RoleViewer)
 	c := e.signIn("github", "gh")
 	first := e.gh.tokens()
 
 	// Refreshed: the new token is used, the old one stops working.
 	e.clock.advance(5*time.Minute + time.Second)
-	if _, se := e.session(c); !se.CanSee("acme/widgets") {
+	if _, se := e.session(c); !se.CanSee("gh", "acme/widgets") {
 		t.Fatalf("after a token refresh: %+v", se)
 	}
 	if now := e.gh.tokens(); len(now) != len(first)+2 {
@@ -364,11 +273,11 @@ func TestExpiredTokenRefreshFailsClosed(t *testing.T) {
 	// nothing.
 	e.gh.set(func(o *oauthServer) { o.failRefresh = true })
 	e.clock.advance(6 * time.Minute)
-	if _, se := e.session(c); !se.CanSee("acme/widgets") {
+	if _, se := e.session(c); !se.CanSee("gh", "acme/widgets") {
 		t.Fatalf("within one more period: %+v", se)
 	}
 	e.clock.advance(4*time.Minute + time.Second)
-	if _, se := e.session(c); len(se.Visible) != 0 || se.IsAdmin {
+	if _, se := e.session(c); len(se.Visible) != 0 {
 		t.Fatalf("after a refused refresh and two periods: %+v", se)
 	}
 }
@@ -377,6 +286,7 @@ func TestExpiredTokenRefreshFailsClosed(t *testing.T) {
 func TestConcurrentRefreshChecksOnce(t *testing.T) {
 	e := newEnv(t, nil)
 	e.gl.setProject("acme/widgets", gitlabProject("private", 30, 0))
+	e.aliceOn("main", store.RoleViewer)
 	c := e.signIn("gitlab", "main")
 	calls := e.gl.calls()
 	checks := e.gl.projectChecks()
@@ -387,7 +297,7 @@ func TestConcurrentRefreshChecksOnce(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if code, se := e.session(c); code != 200 || !se.CanSee("acme/widgets") {
+			if code, se := e.session(c); code != 200 || !se.CanSee("main", "acme/widgets") {
 				t.Errorf("concurrent request: %d %+v", code, se)
 			}
 		}()
@@ -406,25 +316,23 @@ func TestConcurrentRefreshChecksOnce(t *testing.T) {
 	}
 }
 
-// A renamed GitHub login is never used again for the team check: each
-// access check reads /user afresh. Someone else may take the old login.
+// Teams hold accounts, which are platform user IDs, never logins: a
+// renamed GitHub user keeps their teams, and the username shown follows the
+// rename, read afresh from /user at each access check.
 func TestRenamedUserChecksCurrentLogin(t *testing.T) {
 	e := newEnv(t, nil)
 	e.gh.setRepo("acme/widgets", githubRepo(true, true))
-	e.gh.setTeam("acme/platform", "active")
+	e.aliceOn("gh", store.RoleAdmin)
 	c := e.signIn("github", "gh")
-	if _, me := e.me(c); !me.IsAdmin || me.Username != "alice" {
+	if _, me := e.me(c); !me.Admin || me.Username != "alice" {
 		t.Fatalf("before the rename: %+v", me)
 	}
 
-	// alice renames herself bob; someone else takes "alice" and is in
-	// the admin team, bob isn't.
 	e.gh.setLogin("bob")
-	e.gh.setTeamFor("acme/platform", "bob", "")
 	e.clock.advance(AccessTTL + time.Second)
 	_, me := e.me(c)
-	if me.IsAdmin {
-		t.Fatal("admin through the old login")
+	if !me.Admin {
+		t.Fatal("the rename lost the admin team")
 	}
 	if me.Username != "bob" {
 		t.Errorf("username = %q, want bob", me.Username)
@@ -434,10 +342,10 @@ func TestRenamedUserChecksCurrentLogin(t *testing.T) {
 	}
 }
 
-// GitLab checks admin by user ID, but the username shown follows a rename
-// too.
+// The username shown follows a GitLab rename too.
 func TestRenamedGitLabUserUpdated(t *testing.T) {
 	e := newEnv(t, nil)
+	e.aliceOn("main", store.RoleViewer)
 	c := e.signIn("gitlab", "main")
 	e.gl.setUsername("alice-renamed")
 	e.clock.advance(AccessTTL + time.Second)
@@ -468,10 +376,6 @@ func TestPlatformCallsTimeOut(t *testing.T) {
 			"refresh":  func() error { _, err := p.refresh(ctx, "refresh"); return err },
 			"user":     func() error { _, _, err := p.user(ctx, "token"); return err },
 			"canSee":   func() error { _, _, err := p.canSee(ctx, "token", "acme/widgets"); return err },
-			"isAdmin": func() error {
-				_, err := p.isAdmin(ctx, "token", 9, "alice", config.DashboardAdmin{Group: "acme/platform", Team: "acme/platform"})
-				return err
-			},
 		}
 		for name, call := range calls {
 			start := time.Now()
@@ -501,5 +405,384 @@ func TestPlatformCallsTimeOut(t *testing.T) {
 	}
 	if got := d.Auth.providers["gh"].(*githubProvider).timeout; got != 10*time.Second {
 		t.Errorf("github call timeout = %s", got)
+	}
+}
+
+// wantWaiting checks rec is the 403 of a platform account on no team.
+func wantWaiting(t *testing.T, rec *httptest.ResponseRecorder, what string) {
+	t.Helper()
+	if rec.Code != http.StatusForbidden || strings.TrimSpace(rec.Body.String()) != `{"code":"waiting","error":"an admin needs to add you to a team"}` {
+		t.Errorf("%s = %d %s; want 403 waiting", what, rec.Code, rec.Body)
+	}
+}
+
+// A user signing in for the first time is on no team: /api/me says they
+// wait, everything else is 403 "waiting", and none of it asks the platform
+// about a repository.
+func TestWaitingUser(t *testing.T) {
+	e := newEnv(t, nil)
+	e.gl.setProject("acme/widgets", gitlabProject("private", 30, 0))
+	c := e.signIn("gitlab", "main")
+	code, me := e.me(c)
+	if code != 200 || !me.Waiting || me.Admin || me.Operator || me.Kind != "platform" || me.Username != "alice" ||
+		me.Instance != "main" || me.CSRFToken == "" || me.WaitingUsers != 0 {
+		t.Fatalf("/api/me = %d %+v; want alice waiting", code, me)
+	}
+	for _, target := range readEndpoints("00000000-0000-0000-0000-000000000000") {
+		if target != "/api/me" {
+			wantWaiting(t, e.get(c, target), "GET "+target)
+		}
+	}
+	wantWaiting(t, e.get(c, "/test/session"), "GET /test/session")
+	wantWaiting(t, e.get(c, "/api/repositories/available"), "GET /api/repositories/available")
+	wantWaiting(t, e.send(c, "POST", "/api/repositories", `{"project":"acme/widgets"}`), "POST /api/repositories")
+	wantWaiting(t, e.send(c, "PUT", "/api/repositories/main/acme/widgets/settings", `{"approve":false}`), "PUT settings")
+
+	// Past the access check's 5 minutes: still nothing asked.
+	api := e.gl.api()
+	e.clock.advance(AccessTTL + time.Second)
+	if _, me := e.me(c); !me.Waiting {
+		t.Errorf("/api/me later = %+v", me)
+	}
+	wantWaiting(t, e.get(c, "/api/overview"), "GET /api/overview later")
+	if n := e.gl.projectChecks(); n != 0 {
+		t.Errorf("%d project lookups for a waiting user", n)
+	}
+	if n := e.gl.api() - api; n != 0 {
+		t.Errorf("%d platform calls for a waiting user's requests", n)
+	}
+	if n := e.cat["main"].callCount(); n != 0 {
+		t.Errorf("the review bot's repositories were listed %d times", n)
+	}
+	// Signing out works.
+	if rec := e.do("POST", "/auth/logout", []*http.Cookie{c}, map[string]string{CSRFHeader: me.CSRFToken}); rec.Code != http.StatusNoContent {
+		t.Errorf("logout = %d %s", rec.Code, rec.Body)
+	}
+}
+
+// coversPayments checks what alice's session shows of acme/payments on
+// main, which her team covers but GitLab hides from her: nothing, as for a
+// repository that doesn't exist.
+func coversPayments(t *testing.T, e *env, c *http.Cookie, run string) {
+	t.Helper()
+	for _, target := range []string{
+		"/api/repositories/main/acme/payments", "/api/repositories/main/acme/payments/inputs",
+		"/api/reviews/main/acme/payments/5", "/api/runs/" + run, "/api/runs/" + run + "/log",
+	} {
+		e.wantStatus(c, target, http.StatusNotFound)
+	}
+	for _, target := range []string{"/api/repositories", "/api/reviews", "/api/reviews?project=acme/payments",
+		"/api/overview", "/api/overview?days=90"} {
+		rec := e.wantStatus(c, target, http.StatusOK)
+		if body := strings.ToLower(rec.Body.String()); strings.Contains(body, "payments") || strings.Contains(body, run) {
+			t.Errorf("GET %s shows acme/payments: %s", target, rec.Body)
+		}
+	}
+	wantCode(t, e.send(c, "PUT", "/api/repositories/main/acme/payments/settings", `{"approve":false}`), "PUT payments settings", http.StatusNotFound)
+	if repos := getJSON[[]RepositoryView](e, c, "/api/repositories"); len(repos) != 1 || repos[0].Project != "acme/widgets" {
+		t.Errorf("repositories = %+v; want acme/widgets only", repos)
+	}
+	if _, se := e.session(c); se.CanSee("main", "acme/payments") || se.Role("main", "acme/payments") != RoleNone {
+		t.Errorf("session sees acme/payments: %+v", se)
+	}
+}
+
+// The platform is the ceiling: a team covering a repository the platform
+// hides from its member shows them nothing of it, whether it was covered at
+// sign-in or added to the team later.
+func TestTeamCoverageNeverExceedsPlatform(t *testing.T) {
+	e := newEnv(t, nil)
+	overviewFixture(e) // acme/payments' run of MR 5 is 'Payments secret change'
+	payments := e.addRun(runFix{project: "acme/payments", number: 5, head: head('p'), result: blockingResult(head('p')),
+		outcome: OutcomeBlocking, title: "Payments secret change"})
+	if err := e.st.PutRunLog(ctx, payments, "payments log"); err != nil {
+		t.Fatal(err)
+	}
+	e.gl.setProject("acme/widgets", gitlabProject("private", 20, 0))
+	e.gl.setProject("acme/payments", gitlabProject("private", 10, 0)) // Guest: no code, no merge requests
+	alice := e.alice("main")
+	team := e.team("devs", store.RoleViewer, []int64{alice},
+		store.TeamRepo{Instance: "main", Project: "acme/widgets"}, store.TeamRepo{Instance: "main", Project: "acme/payments"})
+	c := e.signIn("gitlab", "main")
+	coversPayments(t, e, c, payments)
+
+	// Covered later: the team change brings a check of payments, which
+	// GitLab still refuses.
+	e.editTeam(team, func(tm *store.Team) { tm.Repos = tm.Repos[1:] }) // acme/widgets only
+	other := e.team("payments", store.RoleMaintainer, []int64{alice})
+	if _, se := e.session(c); se.CanSee("main", "acme/payments") || !se.CanSee("main", "acme/widgets") {
+		t.Fatalf("session = %+v", se)
+	}
+	checks := e.gl.projectChecks()
+	e.editTeam(other, func(tm *store.Team) { tm.Repos = []store.TeamRepo{{Instance: "main", Project: "acme/payments"}} })
+	coversPayments(t, e, c, payments)
+	if e.gl.projectChecks() == checks {
+		t.Error("adding acme/payments to a team made no platform check")
+	}
+}
+
+// Team changes apply at the user's next request, without waiting for the
+// 5-minute access check: a member removed sees nothing of the team's
+// repositories, and a repository added is checked with the platform and
+// shown at once.
+func TestTeamChangeAppliesNextRequest(t *testing.T) {
+	e := newEnv(t, nil)
+	e.gl.setProject("acme/widgets", gitlabProject("private", 20, 0))
+	e.gl.setProject("acme/payments", gitlabProject("private", 20, 0))
+	alice := e.alice("main")
+	widgets := e.team("widgets", store.RoleViewer, []int64{alice}, store.TeamRepo{Instance: "main", Project: "acme/widgets"})
+	// A second team, covering only gh: alice is on a team, not waiting.
+	other := e.team("github", store.RoleViewer, []int64{alice}, store.TeamRepo{Instance: "gh"})
+	c := e.signIn("gitlab", "main")
+	if repos := getJSON[[]RepositoryView](e, c, "/api/repositories"); len(repos) != 1 || repos[0].Project != "acme/widgets" {
+		t.Fatalf("repositories = %+v", repos)
+	}
+
+	e.editTeam(widgets, func(tm *store.Team) { tm.Members = nil })
+	if repos := getJSON[[]RepositoryView](e, c, "/api/repositories"); len(repos) != 0 {
+		t.Fatalf("repositories after leaving the team = %+v; want none", repos)
+	}
+	e.wantStatus(c, "/api/repositories/main/acme/widgets", http.StatusNotFound)
+
+	checks := e.gl.projectChecks()
+	e.editTeam(other, func(tm *store.Team) {
+		tm.Repos = append(tm.Repos, store.TeamRepo{Instance: "main", Project: "acme/payments"})
+	})
+	repos := getJSON[[]RepositoryView](e, c, "/api/repositories")
+	if len(repos) != 1 || repos[0].Project != "acme/payments" {
+		t.Fatalf("repositories after adding acme/payments = %+v", repos)
+	}
+	if e.gl.projectChecks() == checks {
+		t.Error("the added repository was shown without asking GitLab")
+	}
+	if se, _ := e.storedSession(c); !se.AccessCheckedAt.Equal(e.clock.now()) {
+		t.Errorf("access checked at %v; want now", se.AccessCheckedAt)
+	}
+	// A role change needs no new check: the same repositories are covered.
+	checks = e.gl.projectChecks()
+	e.editTeam(other, func(tm *store.Team) { tm.Role = store.RoleMaintainer })
+	if v := getJSON[RepositoryDetailView](e, c, "/api/repositories/main/acme/payments"); v.Role != "maintainer" {
+		t.Errorf("role after the change = %q", v.Role)
+	}
+	if n := e.gl.projectChecks() - checks; n != 0 {
+		t.Errorf("a role change made %d platform checks", n)
+	}
+}
+
+// A maintainer changes the settings of the repositories their teams cover,
+// and can't switch them off; a viewer changes nothing.
+func TestMaintainerCanEditSettings(t *testing.T) {
+	e := newEnv(t, nil)
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	e.gl.setProject("acme/gadgets", gitlabProject("private", 30, 0))
+	team := e.team("gadgets", store.RoleMaintainer, []int64{e.alice("main")}, store.TeamRepo{Instance: "main", Project: "acme/gadgets"})
+	c := e.signIn("gitlab", "main")
+	if v := getJSON[RepositoryDetailView](e, c, "/api/repositories/main/acme/gadgets"); v.Role != "maintainer" {
+		t.Errorf("role = %q, want maintainer", v.Role)
+	}
+
+	rec := e.send(c, "PUT", "/api/repositories/main/acme/gadgets/settings", `{"approve":false}`)
+	wantCode(t, rec, "maintainer PUT settings", http.StatusOK)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.Approve == nil || *r.Approve {
+		t.Errorf("approve = %v, want false", r.Approve)
+	}
+	wantCode(t, e.send(c, "POST", "/api/repositories/main/acme/gadgets/settings/reset", ""), "maintainer reset", http.StatusOK)
+	wantCode(t, e.send(c, "DELETE", "/api/repositories/main/acme/gadgets", ""), "maintainer switch off", http.StatusForbidden)
+	wantCode(t, e.get(c, "/api/repositories/available"), "maintainer picker", http.StatusForbidden)
+	if _, found := e.storedRepo("main", "acme/gadgets"); !found {
+		t.Fatal("the maintainer switched acme/gadgets off")
+	}
+
+	e.editTeam(team, func(tm *store.Team) { tm.Role = store.RoleViewer })
+	rec = e.send(c, "PUT", "/api/repositories/main/acme/gadgets/settings", `{"approve":false}`)
+	wantCode(t, rec, "viewer PUT settings", http.StatusForbidden)
+	if !strings.Contains(rec.Body.String(), msgNeedsRole) {
+		t.Errorf("viewer PUT body = %s", rec.Body)
+	}
+	wantCode(t, e.send(c, "POST", "/api/repositories/main/acme/gadgets/settings/reset", ""), "viewer reset", http.StatusForbidden)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.Approve != nil {
+		t.Errorf("the viewer changed approve to %v", *r.Approve)
+	}
+	if n := e.reconciles.Load(); n != 0 {
+		t.Errorf("ReconcileSoon called %d times", n)
+	}
+}
+
+// An admin team's member is an admin, not an operator, and sees every
+// repository switched on for their instance that the platform shows them,
+// as admin; never one it hides.
+func TestAdminTeamIsAdmin(t *testing.T) {
+	e := newEnv(t, nil)
+	e.dashboardRepo("main", "acme/hidden", nil)
+	e.gl.setProject("acme/widgets", gitlabProject("private", 20, 0))
+	e.gl.setProject("acme/payments", gitlabProject("internal", 30, 0))
+	e.aliceOn("main", store.RoleAdmin)
+	c := e.signIn("gitlab", "main")
+	if _, me := e.me(c); !me.Admin || me.Operator || me.Waiting {
+		t.Fatalf("/api/me = %+v; want admin, not operator", me)
+	}
+	repos := getJSON[[]RepositoryView](e, c, "/api/repositories")
+	var got []string
+	for _, r := range repos {
+		got = append(got, r.Instance+"/"+r.Project)
+	}
+	if !slices.Equal(got, []string{"main/acme/widgets", "main/acme/payments"}) {
+		t.Errorf("repositories = %v; want main's two the platform shows", got)
+	}
+	if v := getJSON[RepositoryDetailView](e, c, "/api/repositories/main/acme/payments"); v.Role != "admin" {
+		t.Errorf("role = %q, want admin", v.Role)
+	}
+	e.wantStatus(c, "/api/repositories/main/acme/hidden", http.StatusNotFound)
+	e.wantStatus(c, "/api/repositories/gh/acme/widgets", http.StatusNotFound)
+	wantCode(t, e.send(c, "DELETE", "/api/repositories/main/acme/hidden", ""), "DELETE the hidden one", http.StatusNotFound)
+	e.wantStatus(c, "/api/integrations", http.StatusOK)
+}
+
+// A password session is the operator: it reads the repositories, reviews,
+// runs and setup problems of every instance, and never asks a platform.
+func TestOperatorSeesEverything(t *testing.T) {
+	e := newEnv(t, nil)
+	overviewFixture(e)
+	ghRun := e.addRun(runFix{instance: "gh", project: "acme/widgets", projectID: 900, number: 8, head: head('8'),
+		result: cleanResult(head('8')), outcome: OutcomeApproved, approved: true})
+	if err := e.st.PutRunLog(ctx, ghRun, "gh log"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.UpsertGitHubProject(ctx, store.Project{Instance: "gh", ProjectID: 900, Path: "acme/widgets", InstallationID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: 8, Path: "acme/payments", HookID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	e.addPasswordAccount("ops", "ops-password-123", false)
+	c := e.signInPassword("ops", "ops-password-123")
+	if _, me := e.me(c); !me.Operator || !me.Admin || me.Waiting || me.Kind != "password" {
+		t.Fatalf("/api/me = %+v", me)
+	}
+
+	repos := getJSON[[]RepositoryView](e, c, "/api/repositories")
+	var got []string
+	for _, r := range repos {
+		got = append(got, r.Instance+"/"+r.Project)
+	}
+	if !slices.Equal(got, []string{"main/acme/widgets", "main/acme/payments", "gh/acme/widgets"}) {
+		t.Errorf("repositories = %v; want every one of both instances", got)
+	}
+	list := getJSON[ReviewListView](e, c, "/api/reviews")
+	var reviews []string
+	for _, r := range list.Items {
+		reviews = append(reviews, fmt.Sprintf("%s/%s/%d", r.Instance, r.Project, r.Number))
+	}
+	for _, want := range []string{"gh/acme/widgets/7", "gh/acme/widgets/8", "main/acme/payments/5", "main/acme/widgets/1"} {
+		if !slices.Contains(reviews, want) {
+			t.Errorf("reviews = %v; want %s among them", reviews, want)
+		}
+	}
+	if l := getJSON[ReviewListView](e, c, "/api/reviews?project=acme/widgets&instance=gh"); len(l.Items) != 2 {
+		t.Errorf("gh's acme/widgets reviews = %+v; want 7 and 8", l.Items)
+	}
+	if v := getJSON[RepositoryDetailView](e, c, "/api/repositories/gh/acme/widgets"); v.Role != "admin" || v.Repo.Last7.Reviews != 2 {
+		t.Errorf("gh/acme/widgets = %+v", v)
+	}
+	if v := getJSON[ReviewDetailView](e, c, "/api/reviews/main/acme/payments/5"); len(v.Runs) != 1 {
+		t.Errorf("payments review = %+v", v)
+	}
+	if v := getJSON[LogView](e, c, "/api/runs/"+ghRun+"/log"); v.Text != "gh log" {
+		t.Errorf("gh run log = %+v", v)
+	}
+	ov := getJSON[OverviewView](e, c, "/api/overview")
+	var kinds []string
+	for _, a := range ov.Attention {
+		kinds = append(kinds, a.Instance+"/"+a.Project+"/"+a.Kind)
+	}
+	for _, want := range []string{"main//token_expiry", "main/acme/payments/out_of_memory", "gh/acme/widgets/approver_unreachable"} {
+		if !slices.Contains(kinds, want) {
+			t.Errorf("attention = %v; want %s", kinds, want)
+		}
+	}
+	if ov.Stats.Reviews < 7 {
+		t.Errorf("stats = %+v; want both instances' runs", ov.Stats)
+	}
+	if n := e.gl.api() + e.gh.api() + e.gl.calls() + e.gh.calls(); n != 0 {
+		t.Errorf("%d platform calls for an operator", n)
+	}
+}
+
+// The picker and switching on ask the platform with the user's token,
+// which a password admin hasn't got.
+func TestOperatorCannotUsePicker(t *testing.T) {
+	e := newEnv(t, nil)
+	e.cat["main"].set("acme/gadgets")
+	e.addPasswordAccount("ops", "ops-password-123", false)
+	c := e.signInPassword("ops", "ops-password-123")
+	const want = `{"error":"sign in with GitLab or GitHub to add repositories"}`
+	if rec := e.get(c, "/api/repositories/available"); rec.Code != http.StatusBadRequest || strings.TrimSpace(rec.Body.String()) != want {
+		t.Errorf("GET available = %d %s; want 400 %s", rec.Code, rec.Body, want)
+	}
+	if rec := e.send(c, "POST", "/api/repositories", `{"project":"acme/gadgets"}`); rec.Code != http.StatusBadRequest || strings.TrimSpace(rec.Body.String()) != want {
+		t.Errorf("POST /api/repositories = %d %s; want 400 %s", rec.Code, rec.Body, want)
+	}
+	if n := e.cat["main"].callCount(); n != 0 {
+		t.Errorf("the review bot's repositories were listed %d times", n)
+	}
+	if _, found := e.storedRepo("main", "acme/gadgets"); found {
+		t.Error("acme/gadgets was switched on")
+	}
+}
+
+// Admins see how many platform accounts wait for a team; nobody else does.
+func TestMeWaitingUsers(t *testing.T) {
+	e := newEnv(t, nil)
+	e.addPasswordAccount("ops", "ops-password-123", false)
+	op := e.signInPassword("ops", "ops-password-123")
+	waiting := e.signIn("gitlab", "main") // alice on main, on no team
+	bob, err := e.st.UpsertPlatformAccount(ctx, config.PlatformGitHub, "gh", 70, "bob", e.clock.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, me := e.me(op); me.WaitingUsers != 2 {
+		t.Errorf("operator's waitingUsers = %d, want 2", me.WaitingUsers)
+	}
+	if _, me := e.me(waiting); me.WaitingUsers != 0 {
+		t.Errorf("a waiting user's waitingUsers = %d, want 0", me.WaitingUsers)
+	}
+	viewers := e.team("viewers", store.RoleViewer, []int64{bob.ID}, store.TeamRepo{Instance: "gh"})
+	if _, me := e.me(op); me.WaitingUsers != 1 {
+		t.Errorf("waitingUsers with bob on a team = %d, want 1", me.WaitingUsers)
+	}
+	e.editTeam(viewers, func(tm *store.Team) { tm.Members = append(tm.Members, e.accountOf(waiting)) })
+	if _, me := e.me(waiting); me.Waiting || me.Admin || me.WaitingUsers != 0 {
+		t.Errorf("a viewer's /api/me = %+v; want no count", me)
+	}
+	e.team("admins", store.RoleAdmin, []int64{e.accountOf(waiting)})
+	carol, err := e.st.UpsertPlatformAccount(ctx, config.PlatformGitLab, "main", 30, "carol", e.clock.now())
+	if err != nil || carol.ID == 0 {
+		t.Fatal(err)
+	}
+	if _, me := e.me(waiting); !me.Admin || me.WaitingUsers != 1 {
+		t.Errorf("a platform admin's /api/me = %+v; want admin and carol waiting", me)
+	}
+}
+
+// A repository taken off a team is gone at the next request even when the
+// platform can't be asked: the last check's list is used only where the
+// teams still cover.
+func TestTeamRemovalAppliesWhenPlatformDown(t *testing.T) {
+	e := newEnv(t, nil)
+	e.gl.setProject("acme/widgets", gitlabProject("private", 20, 0))
+	e.gl.setProject("acme/payments", gitlabProject("private", 20, 0))
+	team := e.team("devs", store.RoleViewer, []int64{e.alice("main")}, store.TeamRepo{Instance: "main"})
+	c := e.signIn("gitlab", "main")
+	if _, se := e.session(c); !se.CanSee("main", "acme/payments") {
+		t.Fatalf("session = %+v", se)
+	}
+	e.gl.set(func(o *oauthServer) { o.failAPI = true })
+	e.editTeam(team, func(tm *store.Team) { tm.Repos = []store.TeamRepo{{Instance: "main", Project: "acme/widgets"}} })
+	_, se := e.session(c)
+	if se.CanSee("main", "acme/payments") || !se.CanSee("main", "acme/widgets") {
+		t.Errorf("with GitLab down after the change: visible %v; want acme/widgets only", se.Visible)
+	}
+	if repos := getJSON[[]RepositoryView](e, c, "/api/repositories"); len(repos) != 1 || repos[0].Project != "acme/widgets" {
+		t.Errorf("repositories = %+v", repos)
 	}
 }

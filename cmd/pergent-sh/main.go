@@ -260,7 +260,7 @@ func checkDashboardEnv(cfg *config.Config) error {
 // nil, nil when it isn't. Its Skills & instructions view and "add
 // repository" picker use each instance's review bot or review App (the
 // platform's Forge); switching a repository on or off asks the engine for
-// a reconcile of that repository (reconcileSoon). It warns when no admins are configured.
+// a reconcile of that repository (reconcileSoon).
 func newDashboard(cfg *config.Config, st *store.Store, secretKey string, lib inputs.Library,
 	platforms map[string]engine.Platform, reconcileSoon func(instance, project string), log *slog.Logger) (*dashboard.Dashboard, error) {
 	if !cfg.DashboardEnabled() {

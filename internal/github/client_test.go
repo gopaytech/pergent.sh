@@ -825,50 +825,6 @@ func TestRepoAccess(t *testing.T) {
 	}
 }
 
-func TestTeamMembershipActive(t *testing.T) {
-	for _, tt := range []struct {
-		state string
-		want  bool
-	}{{"active", true}, {"pending", false}} {
-		c, rec := serve(t, jsonReply(map[string]any{"state": tt.state, "role": "member"}))
-		got, err := c.TeamMembershipActive(ctx, "acme", "platform", "alice")
-		if err != nil || got != tt.want {
-			t.Fatalf("state %s: TeamMembershipActive = %v, %v", tt.state, got, err)
-		}
-		expect(t, rec.get(0), "GET", "/orgs/acme/teams/platform/memberships/alice", "")
-	}
-
-	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"Not Found"}`, 404) })
-	if got, err := c.TeamMembershipActive(ctx, "acme", "platform", "alice"); err != nil || got {
-		t.Fatalf("not a member: %v, %v", got, err)
-	}
-
-	// A 403 (the App can't read the org's teams) is ErrForbidden, which
-	// the caller may take as no; anything else is an error it can't.
-	c, _ = serve(t, func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, `{"message":"Resource not accessible by integration"}`, 403)
-	})
-	if _, err := c.TeamMembershipActive(ctx, "acme", "platform", "alice"); !errors.Is(err, ErrForbidden) {
-		t.Fatalf("403: err = %v, want ErrForbidden", err)
-	}
-	for _, h := range []http.HandlerFunc{
-		func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"boom"}`, 500) },
-		func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"slow down"}`, 429) },
-		func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("X-RateLimit-Remaining", "0")
-			http.Error(w, `{"message":"API rate limit exceeded"}`, 403)
-		},
-	} {
-		c, _ = serve(t, h)
-		if _, err := c.TeamMembershipActive(ctx, "acme", "platform", "alice"); err == nil || errors.Is(err, ErrForbidden) {
-			t.Fatalf("err = %v, want an error that isn't ErrForbidden", err)
-		}
-	}
-	if _, err := c.TeamMembershipActive(ctx, "acme", "..", "alice"); err == nil {
-		t.Fatal("a .. segment was sent")
-	}
-}
-
 func TestUserReposReadableOnly(t *testing.T) {
 	c, rec := serve(t, jsonReply([]map[string]any{
 		{"full_name": "acme/widgets", "private": true, "permissions": map[string]any{"pull": true}},

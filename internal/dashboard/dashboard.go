@@ -1,11 +1,13 @@
 // Package dashboard serves the dashboard's sign-in routes (/auth/) and JSON
 // API (/api/).
 //
-// Users sign in with GitLab or GitHub (OAuth, one platform per session) and
-// see only the repositories they can read there: every API handler runs
-// behind Auth.Require, which puts the session, with the repositories its
-// user can see and whether they are an admin, in the request's context. The
-// user's OAuth token is stored sealed and never leaves the server.
+// Operators sign in with a password and see everything. Everyone else signs
+// in with GitLab or GitHub (OAuth, one platform per session) and sees the
+// repositories their teams cover that they can read there: every API
+// handler runs behind Auth.Require, which puts the session, with the
+// repositories its user can see and their role on each, in the request's
+// context. The user's OAuth token is stored sealed and never leaves the
+// server.
 //
 // Nothing here runs on the engine loop. Calls to GitLab and GitHub are made
 // only for sign-in, access checks, the "add repository" picker and the
@@ -110,8 +112,7 @@ type Dashboard struct {
 }
 
 // New builds the dashboard. The config must have dashboard.url; every
-// instance with OAuth env names must have them set in the environment. With
-// no admins configured it logs a warning: nobody gets the Admin menu.
+// instance with OAuth env names must have them set in the environment.
 func New(o Options) (*Dashboard, error) {
 	if o.Config == nil || !o.Config.DashboardEnabled() {
 		return nil, errors.New("dashboard: dashboard.url is not set")
@@ -129,9 +130,6 @@ func New(o Options) (*Dashboard, error) {
 	auth, err := newAuth(o, repos)
 	if err != nil {
 		return nil, err
-	}
-	if len(o.Config.Dashboard.Admins) == 0 {
-		o.Log.Warn("dashboard has no admins configured")
 	}
 	if o.ReconcileSoon == nil {
 		o.ReconcileSoon = func(string, string) {}
@@ -156,7 +154,7 @@ func New(o Options) (*Dashboard, error) {
 //     (204);
 //   - GET /api/instances: the instances to sign in with, without a session;
 //   - GET /api/me: the signed-in user;
-//   - the read API and, for admins, the write API (see view.go for each
+//   - the read API and the write API, by role (see view.go for each
 //     endpoint's body).
 //
 // Every response is marked no-store.
@@ -185,22 +183,41 @@ func (d *Dashboard) Handler() http.Handler {
 // meView is the body of GET /api/me.
 type meView struct {
 	// Kind is "password" or "platform".
-	Kind      string `json:"kind"`
-	Platform  string `json:"platform"`
-	Instance  string `json:"instance"`
-	Username  string `json:"username"`
-	IsAdmin   bool   `json:"isAdmin"`
-	CSRFToken string `json:"csrfToken"`
+	Kind     string `json:"kind"`
+	Username string `json:"username"`
+	// Platform and Instance are "" for a password account.
+	Platform string `json:"platform"`
+	Instance string `json:"instance"`
+	// Admin: an operator or a member of an admin team.
+	Admin bool `json:"admin"`
+	// Operator: a password account, which sees everything.
+	Operator bool `json:"operator"`
+	// Waiting: a platform account on no team, which sees nothing.
+	Waiting bool `json:"waiting"`
 	// MustChangePassword: nothing else works until the password is changed.
 	MustChangePassword bool `json:"mustChangePassword"`
+	// WaitingUsers counts the platform accounts on no team; 0 for
+	// non-admins.
+	WaitingUsers int    `json:"waitingUsers"`
+	CSRFToken    string `json:"csrfToken"`
 }
 
 func (d *Dashboard) me(w http.ResponseWriter, r *http.Request) {
 	se, _ := SessionFrom(r.Context())
-	writeJSON(w, http.StatusOK, meView{
-		Kind: se.Kind, Platform: se.Platform, Instance: se.Instance, Username: se.Username,
-		IsAdmin: se.IsAdmin, CSRFToken: se.CSRFToken, MustChangePassword: se.MustChangePassword,
-	})
+	view := meView{
+		Kind: se.Kind, Username: se.Username, Platform: se.Platform, Instance: se.Instance,
+		Admin: se.Admin, Operator: se.Operator, Waiting: se.Waiting, MustChangePassword: se.MustChangePassword,
+		CSRFToken: se.CSRFToken,
+	}
+	if se.Admin {
+		n, err := d.Store.CountWaitingAccounts(r.Context())
+		if err != nil {
+			d.failed(w, r, "counting waiting accounts", err)
+			return
+		}
+		view.WaitingUsers = n
+	}
+	writeJSON(w, http.StatusOK, view)
 }
 
 // instances lists the instances with sign-in, in the config's order (GitLab
@@ -242,5 +259,5 @@ func writeText(w http.ResponseWriter, status int, format string, args ...any) {
 	_, _ = fmt.Fprintf(w, format+"\n", args...)
 }
 
-// lower is the key of a project path in Session.Visible.
+// lower is a project path as RepoKey holds it.
 func lower(project string) string { return strings.ToLower(project) }

@@ -30,7 +30,7 @@ const (
 	dashClientID     = "gl-oauth-client-id-example"
 	dashClientSecret = "gl-oauth-client-secret-example"
 
-	// alice is in the admin group acme/platform; bob is a developer.
+	// alice is on an admin team; bob is on a viewer team.
 	aliceID, bobID       = int64(31), int64(32)
 	aliceCode, bobCode   = "alice-code", "bob-code"
 	aliceToken, bobToken = "alice-oauth-token-example", "bob-oauth-token-example"
@@ -38,11 +38,10 @@ const (
 	// acme/gadgets is the repository the admin switches on in the
 	// dashboard; acme/payments is in the config, and neither user can see
 	// it.
-	gadgetsID     = int64(9)
-	gadgetsPath   = "acme/gadgets"
-	paymentsID    = int64(8)
-	paymentsPath  = "acme/payments"
-	adminGroupEsc = "acme%2Fplatform"
+	gadgetsID    = int64(9)
+	gadgetsPath  = "acme/gadgets"
+	paymentsID   = int64(8)
+	paymentsPath = "acme/payments"
 )
 
 // dashE2E is e2e with the dashboard on: the routes main serves (webhooks,
@@ -65,7 +64,7 @@ func newDashboardE2E(t *testing.T) *dashE2E {
 	t.Setenv("GITLAB_OAUTH_CLIENT_SECRET", dashClientSecret)
 	cfg.GitLab[0].OAuthClientIDEnv = "GITLAB_OAUTH_CLIENT_ID"
 	cfg.GitLab[0].OAuthClientSecretEnv = "GITLAB_OAUTH_CLIENT_SECRET"
-	cfg.Dashboard = config.Dashboard{URL: dashURL, Admins: []config.DashboardAdmin{{Instance: testInstance, Group: "acme/platform"}}}
+	cfg.Dashboard = config.Dashboard{URL: dashURL}
 	cfg.Repositories = append(cfg.Repositories, config.Repository{
 		GitLab: testInstance, Project: paymentsPath, FailureStatus: config.FailureStatusFailed,
 	})
@@ -153,13 +152,6 @@ func serveDashboardGitLab(t *testing.T, env *testEnv) {
 			reply(w, http.StatusUnauthorized, map[string]string{"message": "401 Unauthorized"})
 		}
 	})
-	gl.Handle(http.MethodGet, "/groups/"+adminGroupEsc+"/members/"+strconv.FormatInt(aliceID, 10), func(w http.ResponseWriter, r *http.Request) {
-		if bearer(r) != aliceToken {
-			reply(w, http.StatusUnauthorized, map[string]string{"message": "401 Unauthorized"})
-			return
-		}
-		reply(w, http.StatusOK, map[string]any{"id": aliceID, "username": "alice", "access_level": 30, "state": "active"})
-	})
 	for path, id := range dashProjectIDs {
 		pid := "/projects/" + strconv.FormatInt(id, 10)
 		gl.Handle(http.MethodGet, "/projects/"+url.PathEscape(path), func(w http.ResponseWriter, r *http.Request) {
@@ -238,6 +230,27 @@ type dashUser struct {
 	isAdmin bool
 }
 
+// team puts the GitLab user userID (username) on a new team with role
+// covering repos, making their account as their first sign-in would.
+func (e *dashE2E) team(t *testing.T, name, role string, userID int64, username string, repos ...store.TeamRepo) {
+	t.Helper()
+	env := e.env
+	a, err := env.Store.UpsertPlatformAccount(env.ctx, config.PlatformGitLab, testInstance, userID, username, env.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm, err := env.Store.CreateTeam(env.ctx, name, role, env.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := env.Store.UpdateTeam(env.ctx, tm.ID, func(tm *store.Team) error {
+		tm.Members, tm.Repos = []int64{a.ID}, repos
+		return nil
+	}); err != nil || !ok {
+		t.Fatalf("UpdateTeam = %v, %v", ok, err)
+	}
+}
+
 // signIn goes through GitLab sign-in with code, as the browser would: the
 // login route sends it to GitLab's authorize page, and GitLab sends it back
 // to the callback with the code and the state.
@@ -272,14 +285,14 @@ func (e *dashE2E) signIn(t *testing.T, code string) dashUser {
 	}
 	var me struct {
 		Username  string `json:"username"`
-		IsAdmin   bool   `json:"isAdmin"`
+		Admin     bool   `json:"admin"`
 		CSRFToken string `json:"csrfToken"`
 	}
 	e.getJSON(t, u, "/api/me", &me)
 	if me.CSRFToken == "" {
 		t.Fatalf("/api/me has no CSRF token")
 	}
-	u.csrf, u.isAdmin = me.CSRFToken, me.IsAdmin
+	u.csrf, u.isAdmin = me.CSRFToken, me.Admin
 	return u
 }
 
@@ -351,7 +364,10 @@ func TestEndToEndDashboard(t *testing.T) {
 		}
 	}
 
-	// 1. alice signs in with GitLab; she is an admin.
+	// 1. alice signs in with GitLab; she is an admin. bob views every
+	// repository of the instance.
+	e.team(t, "admins", store.RoleAdmin, aliceID, "alice")
+	e.team(t, "developers", store.RoleViewer, bobID, "bob", store.TeamRepo{Instance: testInstance})
 	alice := e.signIn(t, aliceCode)
 	if !alice.isAdmin {
 		t.Fatalf("alice is not an admin")

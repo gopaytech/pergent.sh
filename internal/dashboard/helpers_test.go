@@ -139,6 +139,7 @@ type oauthServer struct {
 	failAccess  bool // API calls other than GET /user are refused (401)
 	failRefresh bool
 	tokenCalls  int
+	apiCalls    int // API calls (anything but the token endpoint)
 	verifiers   []string
 	issued      []string
 }
@@ -189,6 +190,13 @@ func (o *oauthServer) calls() int {
 	return o.tokenCalls
 }
 
+// api counts the calls to the API, /user included.
+func (o *oauthServer) api() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.apiCalls
+}
+
 func (o *oauthServer) lastVerifier() string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -204,17 +212,13 @@ func reply(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// fakeGitLab is a GitLab instance: OAuth, /user, projects and group members.
+// fakeGitLab is a GitLab instance: OAuth, /user and projects.
 type fakeGitLab struct {
 	oauthServer
 	srv      *httptest.Server
 	projects map[string]map[string]any // path → GET /projects/:path body
-	groups   map[string]bool           // group path → user 9 is a direct member
-	// inherited holds the groups user 9 is in only through a parent group
-	// or a share: /members/all shows it, /members doesn't.
-	inherited map[string]bool
-	checks    int      // GET /projects/:path calls
-	listings  []string // GET /projects queries
+	checks   int                       // GET /projects/:path calls
+	listings []string                  // GET /projects queries
 	// listFail makes GET /projects answer 400; listFailFrom makes pages
 	// from listFailFrom on (1-based; 0: none) answer 403.
 	listFail     bool
@@ -225,8 +229,7 @@ type fakeGitLab struct {
 	slow     time.Duration
 	// tokenSlow makes POST /oauth/token wait that long first.
 	tokenSlow time.Duration
-	username  string         // user 9's username (default alice)
-	member    map[string]any // extra fields of a member answer
+	username  string // user 9's username (default alice)
 }
 
 func (f *fakeGitLab) setUsername(name string) { f.set(func(*oauthServer) { f.username = name }) }
@@ -239,8 +242,7 @@ func (f *fakeGitLab) projectChecks() int {
 
 func newFakeGitLab(t *testing.T) *fakeGitLab {
 	f := &fakeGitLab{oauthServer: oauthServer{prefix: "gl", expiresIn: 7200},
-		projects: map[string]map[string]any{}, groups: map[string]bool{}, inherited: map[string]bool{},
-		username: "alice"}
+		projects: map[string]map[string]any{}, username: "alice"}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -281,10 +283,6 @@ func withID(path string, body map[string]any) map[string]any {
 	return out
 }
 
-func (f *fakeGitLab) setMember(group string, member bool) {
-	f.set(func(*oauthServer) { f.groups[group] = member })
-}
-
 func (f *fakeGitLab) serve(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost && r.URL.Path == "/oauth/token" {
 		f.mu.Lock()
@@ -294,6 +292,7 @@ func (f *fakeGitLab) serve(w http.ResponseWriter, r *http.Request) {
 		f.token(w, r)
 		return
 	}
+	f.set(func(o *oauthServer) { o.apiCalls++ })
 	if !f.authorized(r) {
 		reply(w, 401, map[string]any{"message": "401 Unauthorized"})
 		return
@@ -343,25 +342,6 @@ func (f *fakeGitLab) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		reply(w, 404, map[string]any{"message": "404 Project Not Found"})
-	case strings.HasPrefix(p, "/api/v4/groups/") && strings.HasSuffix(p, "/members/all/9"):
-		// Direct members and the members of parent and shared groups.
-		group, _ := url.PathUnescape(strings.TrimSuffix(strings.TrimPrefix(p, "/api/v4/groups/"), "/members/all/9"))
-		if f.groups[group] || f.inherited[group] {
-			reply(w, 200, map[string]any{"id": 9, "username": f.username, "access_level": 50, "state": "active"})
-			return
-		}
-		reply(w, 404, map[string]any{"message": "404 Not found"})
-	case strings.HasPrefix(p, "/api/v4/groups/") && strings.HasSuffix(p, "/members/9"):
-		group, _ := url.PathUnescape(strings.TrimSuffix(strings.TrimPrefix(p, "/api/v4/groups/"), "/members/9"))
-		if f.groups[group] {
-			body := map[string]any{"id": 9, "username": f.username, "access_level": 10, "state": "active", "membership_state": "active"}
-			for k, v := range f.member {
-				body[k] = v
-			}
-			reply(w, 200, body)
-			return
-		}
-		reply(w, 404, map[string]any{"message": "404 Not found"})
 	default:
 		reply(w, 404, map[string]any{"message": "404 Not found"})
 	}
@@ -448,23 +428,14 @@ type fakeGitHub struct {
 	oauthServer
 	srv   *httptest.Server
 	repos map[string]map[string]any // owner/name → GET /repos body
-	teams map[string]string         // org/slug/login → membership state
 	login string                    // user 7's login (default alice)
-	// teamStatus, when not 0, is the status of every team membership
-	// answer.
-	teamStatus int
 }
 
 func (f *fakeGitHub) setLogin(login string) { f.set(func(*oauthServer) { f.login = login }) }
 
-// setTeamFor sets login's membership state of team org/slug.
-func (f *fakeGitHub) setTeamFor(team, login, state string) {
-	f.set(func(*oauthServer) { f.teams[team+"/"+login] = state })
-}
-
 func newFakeGitHub(t *testing.T) *fakeGitHub {
 	f := &fakeGitHub{oauthServer: oauthServer{prefix: "gh"},
-		repos: map[string]map[string]any{}, teams: map[string]string{}, login: "alice"}
+		repos: map[string]map[string]any{}, login: "alice"}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -476,15 +447,12 @@ func (f *fakeGitHub) setRepo(full string, body map[string]any) {
 	f.set(func(*oauthServer) { f.repos[full] = withID(full, body) })
 }
 
-func (f *fakeGitHub) setTeam(team, state string) {
-	f.setTeamFor(team, "alice", state)
-}
-
 func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost && r.URL.Path == "/login/oauth/access_token" {
 		f.token(w, r)
 		return
 	}
+	f.set(func(o *oauthServer) { o.apiCalls++ })
 	if !f.authorized(r) {
 		reply(w, 401, map[string]any{"message": "Bad credentials"})
 		return
@@ -521,17 +489,6 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 				reply(w, 200, out)
 				return
 			}
-		}
-		reply(w, 404, map[string]any{"message": "Not Found"})
-	case strings.HasPrefix(p, "/api/v3/orgs/") && strings.Contains(p, "/memberships/"):
-		if f.teamStatus != 0 {
-			reply(w, f.teamStatus, map[string]any{"message": "Resource not accessible by integration"})
-			return
-		}
-		parts := strings.Split(strings.TrimPrefix(p, "/api/v3/orgs/"), "/") // org teams slug memberships login
-		if state, ok := f.teams[parts[0]+"/"+parts[2]+"/"+parts[4]]; ok {
-			reply(w, 200, map[string]any{"state": state, "role": "member"})
-			return
 		}
 		reply(w, 404, map[string]any{"message": "Not Found"})
 	default:
@@ -588,12 +545,14 @@ type env struct {
 
 	mu        sync.Mutex
 	responses []*httptest.ResponseRecorder
+	// seen is the session the test route was last given.
+	seen Session
 }
 
 // newEnv builds the env. The repositories are acme/widgets and
-// acme/payments on main and acme/widgets on gh; the admins are the group
-// acme/platform on main and the team acme/platform on gh. mutate may change
-// the config first.
+// acme/payments on main and acme/widgets on gh. There are no teams: a user
+// who signs in waits until a test puts them on one (team, aliceOn). mutate
+// may change the config first.
 func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 	t.Helper()
 	st, db := newStoreDB(t)
@@ -612,11 +571,8 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 			{GitLab: "main", Project: "acme/payments"},
 			{GitHub: "gh", Project: "acme/widgets"},
 		},
-		Jobs: config.Jobs{Timeout: 10 * time.Minute},
-		Dashboard: config.Dashboard{URL: dashboardURL, Admins: []config.DashboardAdmin{
-			{Instance: "main", Group: "acme/platform"},
-			{Instance: "gh", Team: "acme/platform"},
-		}},
+		Jobs:      config.Jobs{Timeout: 10 * time.Minute},
+		Dashboard: config.Dashboard{URL: dashboardURL},
 	}
 	if mutate != nil {
 		mutate(cfg)
@@ -654,14 +610,17 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 	e.d = d
 	mux := http.NewServeMux()
 	mux.Handle("/", d.Handler())
-	// A route behind Require that shows the session it was given.
+	// A route behind Require that keeps the session it was given.
 	mux.Handle("/test/session", d.Auth.Require(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		se, ok := SessionFrom(r.Context())
 		if !ok {
 			http.Error(w, "no session in context", 500)
 			return
 		}
-		reply(w, 200, se)
+		e.mu.Lock()
+		e.seen = se
+		e.mu.Unlock()
+		w.WriteHeader(http.StatusOK)
 	})))
 	e.h = mux
 	return e
@@ -749,11 +708,14 @@ func (e *env) signIn(platform, instance string, extra ...*http.Cookie) *http.Coo
 
 type meBody struct {
 	Kind               string `json:"kind"`
+	Username           string `json:"username"`
 	Platform           string `json:"platform"`
 	Instance           string `json:"instance"`
-	Username           string `json:"username"`
-	IsAdmin            bool   `json:"isAdmin"`
+	Admin              bool   `json:"admin"`
+	Operator           bool   `json:"operator"`
+	Waiting            bool   `json:"waiting"`
 	MustChangePassword bool   `json:"mustChangePassword"`
+	WaitingUsers       int    `json:"waitingUsers"`
 	CSRFToken          string `json:"csrfToken"`
 }
 
@@ -769,17 +731,80 @@ func (e *env) me(c *http.Cookie) (int, meBody) {
 	return rec.Code, m
 }
 
-// session calls the Require'd test route.
+// session calls the Require'd test route and returns the session it was
+// given (none unless 200). Concurrent calls each get one of the sessions.
 func (e *env) session(c *http.Cookie) (int, Session) {
 	e.t.Helper()
 	rec := e.do("GET", "/test/session", []*http.Cookie{c}, nil)
-	var se Session
-	if rec.Code == 200 {
-		if err := json.Unmarshal(rec.Body.Bytes(), &se); err != nil {
-			e.t.Fatalf("session body %s: %v", rec.Body, err)
-		}
+	if rec.Code != 200 {
+		return rec.Code, Session{}
 	}
-	return rec.Code, se
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return rec.Code, e.seen
+}
+
+// aliceID is alice's platform user ID on each fake: 9 on GitLab, 7 on GitHub.
+var aliceID = map[string]int64{"main": 9, "gh": 7}
+
+// alice returns alice's account on instance ("main" or "gh"), made as her
+// first sign-in there makes it, so a team can name her before she signs in.
+func (e *env) alice(instance string) int64 {
+	e.t.Helper()
+	platform := map[string]string{"main": config.PlatformGitLab, "gh": config.PlatformGitHub}[instance]
+	a, err := e.st.UpsertPlatformAccount(ctx, platform, instance, aliceID[instance], "alice", e.clock.now())
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return a.ID
+}
+
+// team stores a team with members and repos and returns its ID.
+func (e *env) team(name, role string, members []int64, repos ...store.TeamRepo) int64 {
+	e.t.Helper()
+	t, err := e.st.CreateTeam(ctx, name, role, e.clock.now())
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	ok, err := e.st.UpdateTeam(ctx, t.ID, func(tm *store.Team) error {
+		tm.Members, tm.Repos = members, repos
+		return nil
+	})
+	if err != nil || !ok {
+		e.t.Fatalf("UpdateTeam(%s) = %v, %v", name, ok, err)
+	}
+	return t.ID
+}
+
+// editTeam changes team id with edit.
+func (e *env) editTeam(id int64, edit func(*store.Team)) {
+	e.t.Helper()
+	ok, err := e.st.UpdateTeam(ctx, id, func(tm *store.Team) error { edit(tm); return nil })
+	if err != nil || !ok {
+		e.t.Fatalf("UpdateTeam(%d) = %v, %v", id, ok, err)
+	}
+}
+
+// aliceOn puts alice's account on instance on a new team with role: an
+// admin team, or one covering every repository of instance. It returns the
+// team's ID.
+func (e *env) aliceOn(instance, role string) int64 {
+	e.t.Helper()
+	var repos []store.TeamRepo
+	if role != store.RoleAdmin {
+		repos = []store.TeamRepo{{Instance: instance}}
+	}
+	return e.team(role+"s of "+instance, role, []int64{e.alice(instance)}, repos...)
+}
+
+// accountOf is the account of a session cookie.
+func (e *env) accountOf(c *http.Cookie) int64 {
+	e.t.Helper()
+	se, found := e.storedSession(c)
+	if !found {
+		e.t.Fatal("no stored session for the cookie")
+	}
+	return se.AccountID
 }
 
 // hashOf is the stored hash of a session cookie.

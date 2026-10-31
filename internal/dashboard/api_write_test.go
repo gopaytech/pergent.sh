@@ -151,8 +151,8 @@ func writes(instance, project string) []struct{ method, target, body string } {
 	}
 }
 
-// Review Focus 2: a developer calling a write endpoint directly, with a
-// valid session and CSRF token, gets 403 and nothing changes.
+// Review Focus 2: a viewer calling a write endpoint directly, with a valid
+// session and CSRF token, gets 403 and nothing changes.
 func TestWritesRequireAdmin(t *testing.T) {
 	for _, platform := range []string{"gitlab", "github"} {
 		t.Run(platform, func(t *testing.T) {
@@ -168,8 +168,8 @@ func TestWritesRequireAdmin(t *testing.T) {
 				e.gh.setRepo("acme/tools", githubRepo(true, true))
 				c = e.signInGitHub(false, "acme/gadgets")
 			}
-			if _, se := e.session(c); se.IsAdmin || !se.CanSee("acme/gadgets") {
-				t.Fatalf("session = %+v; want a developer who sees acme/gadgets", se)
+			if _, se := e.session(c); se.Admin || se.Role(instance, "acme/gadgets") != RoleViewer {
+				t.Fatalf("session = %+v; want a viewer who sees acme/gadgets", se)
 			}
 
 			wantCode(t, e.get(c, "/api/repositories/available"), "GET available", http.StatusForbidden)
@@ -204,7 +204,7 @@ func TestAdminCannotWriteInvisibleRepo(t *testing.T) {
 	e.cat["main"].set("acme/hidden", "acme/gadgets")
 	// alice can't see acme/hidden on GitLab: no project answer for it.
 	c := e.signInGitLab(true, "acme/gadgets")
-	if _, se := e.session(c); !se.IsAdmin || se.CanSee("acme/hidden") {
+	if _, se := e.session(c); !se.Admin || se.CanSee("main", "acme/hidden") {
 		t.Fatalf("session = %+v; want an admin who can't see acme/hidden", se)
 	}
 	unknown := e.send(c, "DELETE", "/api/repositories/main/acme/nothing-here", "")
@@ -480,7 +480,7 @@ func TestSwitchOnSharedProject(t *testing.T) {
 
 	// The next access check keeps it.
 	e.clock.advance(AccessTTL + time.Second)
-	if _, se := e.session(c); !se.CanSee("acme/shared") || se.CanSee("acme/shared-guest") {
+	if _, se := e.session(c); !se.CanSee("main", "acme/shared") || se.CanSee("main", "acme/shared-guest") {
 		t.Errorf("visible after the next check = %v", se.Visible)
 	}
 }

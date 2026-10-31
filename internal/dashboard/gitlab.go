@@ -129,15 +129,6 @@ func (p *gitlabProvider) reporter(ctx context.Context, accessToken string, a git
 	return p.client(accessToken).HasMemberAccess(ctx, a.ID, gitlabReporter)
 }
 
-func (p *gitlabProvider) isAdmin(ctx context.Context, accessToken string, userID int64, _ string, admin config.DashboardAdmin) (bool, error) {
-	if admin.Group == "" {
-		return false, nil
-	}
-	ctx, cancel := callContext(ctx, p.timeout)
-	defer cancel()
-	return p.client(accessToken).IsGroupMember(ctx, admin.Group, userID)
-}
-
 // isStatus reports whether err is a GitLab or GitHub API error with status.
 func isStatus(err error, status int) bool {
 	var gl *gitlab.APIError

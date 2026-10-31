@@ -406,13 +406,13 @@ func TestConnectGitLabSameUserRefused(t *testing.T) {
 // dashboardConfig is a config with GitLab instance main and GitHub instance
 // gh, both set up for sign-in through the env vars named, and the dashboard
 // on unless url is "".
-func dashboardConfig(url string, admins ...config.DashboardAdmin) *config.Config {
+func dashboardConfig(url string) *config.Config {
 	return &config.Config{
 		GitLab: []config.Instance{{Name: "main", URL: "https://gitlab.example.com",
 			OAuthClientIDEnv: "GL_OAUTH_ID", OAuthClientSecretEnv: "GL_OAUTH_SECRET"}},
 		GitHub: []config.GitHubInstance{{Name: "gh", APIURL: "https://api.github.com",
 			OAuthClientIDEnv: "GH_OAUTH_ID", OAuthClientSecretEnv: "GH_OAUTH_SECRET"}},
-		Dashboard: config.Dashboard{URL: url, Admins: admins},
+		Dashboard: config.Dashboard{URL: url},
 	}
 }
 
@@ -500,7 +500,7 @@ func TestNewDashboardRoutes(t *testing.T) {
 	setOAuthEnv(t)
 	var logs strings.Builder
 	log := slog.New(slog.NewTextHandler(&logs, nil))
-	cfg := dashboardConfig("https://dashboard.example.com", config.DashboardAdmin{Instance: "main", Group: "acme/platform"})
+	cfg := dashboardConfig("https://dashboard.example.com")
 	d, err := newDashboard(cfg, nil, testSecretKey, inputs.Library{}, nil, func(string, string) {}, log)
 	if err != nil || d == nil {
 		t.Fatalf("newDashboard = %v, %v", d, err)
@@ -519,9 +519,6 @@ func TestNewDashboardRoutes(t *testing.T) {
 	if code, _ := get(t, h, "/"); code != http.StatusOK {
 		t.Errorf("GET / = %d, want the app", code)
 	}
-	if strings.Contains(logs.String(), "no admins") {
-		t.Errorf("warned about admins although one is configured:\n%s", logs.String())
-	}
 
 	off := dashboardConfig("")
 	d, err = newDashboard(off, nil, testSecretKey, inputs.Library{}, nil, func(string, string) {}, log)
@@ -533,21 +530,6 @@ func TestNewDashboardRoutes(t *testing.T) {
 		if code, _ := get(t, h, path); code != http.StatusNotFound {
 			t.Errorf("GET %s with the dashboard off = %d, want 404", path, code)
 		}
-	}
-}
-
-// No admins configured: the dashboard starts, and says nobody gets the
-// Admin menu.
-func TestNewDashboardWarnsWithoutAdmins(t *testing.T) {
-	setOAuthEnv(t)
-	var logs strings.Builder
-	log := slog.New(slog.NewTextHandler(&logs, nil))
-	d, err := newDashboard(dashboardConfig("https://dashboard.example.com"), nil, testSecretKey, inputs.Library{}, nil, func(string, string) {}, log)
-	if err != nil || d == nil {
-		t.Fatalf("newDashboard = %v, %v", d, err)
-	}
-	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "no admins") {
-		t.Errorf("no warning about admins:\n%s", logs.String())
 	}
 }
 

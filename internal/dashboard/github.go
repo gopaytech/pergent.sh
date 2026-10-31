@@ -3,7 +3,6 @@ package dashboard
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -116,21 +115,6 @@ func (p *githubProvider) canSee(ctx context.Context, accessToken, project string
 		return 0, false, errors.New("github: the repository answer has no id")
 	}
 	return a.ID, !a.Private || a.Pull, nil
-}
-
-func (p *githubProvider) isAdmin(ctx context.Context, accessToken string, _ int64, username string, admin config.DashboardAdmin) (bool, error) {
-	org, slug, ok := strings.Cut(admin.Team, "/")
-	if !ok || org == "" || slug == "" {
-		return false, nil
-	}
-	ctx, cancel := callContext(ctx, p.timeout)
-	defer cancel()
-	member, err := p.client(accessToken).TeamMembershipActive(ctx, org, slug, username)
-	if errors.Is(err, github.ErrForbidden) {
-		// The App lacks Members: Read in org, or isn't installed there.
-		return false, fmt.Errorf("%w: %w", errAdminUnreadable, err)
-	}
-	return member, err
 }
 
 func (p *githubProvider) memberRepos(ctx context.Context, accessToken, search string, limit int) ([]string, bool, error) {

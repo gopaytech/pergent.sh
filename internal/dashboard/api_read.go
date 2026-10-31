@@ -43,9 +43,6 @@ const (
 	inputsTTL = 5 * time.Minute
 
 	attentionTokenExpiry = "token_expiry"
-	// attentionAdminTeam is an instance-wide item: a GitHub admin team the
-	// App may not read.
-	attentionAdminTeam = "admin_team_unreadable"
 
 	msgLoadFailed   = "could not load the data, please try again"
 	msgNotFound     = "not found"
@@ -72,8 +69,8 @@ func (d *Dashboard) readRoutes(mux *http.ServeMux) {
 	get("/api/repositories", d.repositories)
 	get("/api/repositories/{instance}/{rest...}", d.repository)
 	get("/api/skills", d.skills)
-	get("/api/integrations", adminOnly(d.integrations))
-	get("/api/admin/settings", adminOnly(d.adminSettings))
+	get("/api/integrations", requireAdmin(d.integrations))
+	get("/api/admin/settings", requireAdmin(d.adminSettings))
 	// Anything else is 404, also the instance alone (which the mux would
 	// otherwise redirect to the {rest...} routes).
 	none := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { notFound(w) })
@@ -82,11 +79,23 @@ func (d *Dashboard) readRoutes(mux *http.ServeMux) {
 	mux.Handle("/api/", d.Auth.Require(none))
 }
 
-// adminOnly serves h to admins of the session's instance, 403 to others.
-func adminOnly(h http.HandlerFunc) http.HandlerFunc {
+// requireAdmin serves h to admins (operators and admin-team members), 403
+// to others.
+func requireAdmin(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if se, _ := SessionFrom(r.Context()); !se.IsAdmin {
+		if se, _ := SessionFrom(r.Context()); !se.Admin {
 			writeError(w, http.StatusForbidden, "only admins can see this")
+			return
+		}
+		h(w, r)
+	}
+}
+
+// requireOperator serves h to operators (password admins), 403 to others.
+func requireOperator(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if se, _ := SessionFrom(r.Context()); !se.Operator {
+			writeError(w, http.StatusForbidden, "only password admins can do this")
 			return
 		}
 		h(w, r)
@@ -106,32 +115,60 @@ func session(r *http.Request) Session {
 	return se
 }
 
-// visibleProjects is the session's visible repositories, lower-cased with
-// their IDs, sorted: the only projects any query reads.
-func visibleProjects(se Session) []store.VisibleProject {
+// visibility is what the session may read of the runs: every run for an
+// operator, else only those of its visible repositories, by instance and
+// lower-cased path, with their IDs.
+func visibility(se Session) store.Visibility {
+	if se.All {
+		return store.Visibility{All: true}
+	}
 	out := make([]store.VisibleProject, 0, len(se.Visible))
-	for p, id := range se.Visible {
+	for k, id := range se.Visible {
 		if id > 0 {
-			out = append(out, store.VisibleProject{Path: p, ID: id})
+			out = append(out, store.VisibleProject{Instance: k.Instance, Path: k.Path, ID: id})
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
-	return out
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Instance != out[j].Instance {
+			return out[i].Instance < out[j].Instance
+		}
+		return out[i].Path < out[j].Path
+	})
+	return store.Visibility{Projects: out}
 }
 
-// visibleOf is the visible projects among repos, with their IDs.
-func visibleOf(se Session, repos []settings.Effective) []store.VisibleProject {
+// visibleOf is what the session may read of the runs of repos.
+func visibleOf(se Session, repos []settings.Effective) store.Visibility {
+	if se.All {
+		return store.Visibility{All: true}
+	}
 	out := make([]store.VisibleProject, 0, len(repos))
 	for _, e := range repos {
-		if id := se.Visible[lower(e.Project)]; id > 0 {
-			out = append(out, store.VisibleProject{Path: lower(e.Project), ID: id})
+		k := repoKey(e.Instance, e.Project)
+		if id := se.Visible[k]; id > 0 {
+			out = append(out, store.VisibleProject{Instance: k.Instance, Path: k.Path, ID: id})
 		}
 	}
-	return out
+	return store.Visibility{Projects: out}
 }
 
-// activeRepos returns the repositories switched on for the session's
-// instance and platform that its user can see, in the resolver's order.
+// projectID is the platform ID of the project the session sees at project
+// on instance: its visible one, or for an operator the stored one; ok is
+// false when there is none.
+func (d *Dashboard) projectID(ctx context.Context, se Session, instance, project string) (int64, bool, error) {
+	if !se.All {
+		id := se.Visible[repoKey(instance, project)]
+		return id, id > 0, nil
+	}
+	p, found, err := d.Store.ProjectByPath(ctx, instance, project)
+	if err != nil || !found {
+		return 0, false, err
+	}
+	return p.ProjectID, true, nil
+}
+
+// activeRepos returns the repositories switched on that the session's user
+// can see, on every instance, in the resolver's order.
 func (d *Dashboard) activeRepos(ctx context.Context, se Session) ([]settings.Effective, error) {
 	all, err := d.Repos.List(ctx)
 	if err != nil {
@@ -139,22 +176,23 @@ func (d *Dashboard) activeRepos(ctx context.Context, se Session) ([]settings.Eff
 	}
 	var out []settings.Effective
 	for _, e := range all {
-		if e.Instance == se.Instance && e.Platform == se.Platform && se.CanSee(e.Project) {
+		if se.CanSee(e.Instance, e.Project) {
 			out = append(out, e)
 		}
 	}
 	return out, nil
 }
 
-func byProject(repos []settings.Effective) map[string]settings.Effective {
-	m := make(map[string]settings.Effective, len(repos))
+func byProject(repos []settings.Effective) map[RepoKey]settings.Effective {
+	m := make(map[RepoKey]settings.Effective, len(repos))
 	for _, e := range repos {
-		m[lower(e.Project)] = e
+		m[repoKey(e.Instance, e.Project)] = e
 	}
 	return m
 }
 
-func (d *Dashboard) summary(r store.RunDigest, platform string, j judged) ReviewSummary {
+func (d *Dashboard) summary(r store.RunDigest, j judged) ReviewSummary {
+	platform, _ := d.cfg.Platform(r.MR.Instance)
 	return ReviewSummary{
 		Instance: r.MR.Instance, Project: r.ProjectPath, Platform: platform, Number: r.MR.IID,
 		Title: r.Title, Outcome: j.outcome, Reason: j.reason, UpdatedAt: r.UpdatedAt.UTC(), WebURL: safeURL(r.WebURL),
@@ -184,28 +222,27 @@ func parseDays(r *http.Request, def, max int) (int, bool) {
 	return n, true
 }
 
-// attention returns the setup problems of the session's instance for the
-// repositories in active (only project's when it isn't ""), and, when
-// project is "" and the user is an admin, the instance-wide ones.
-func (d *Dashboard) attention(ctx context.Context, se Session, active map[string]settings.Effective, project string) ([]AttentionView, error) {
+// attention returns the setup problems of the repositories in active (only
+// only's when its Path isn't ""), and, when only is zero, the instance-wide
+// ones the session may see: those of its own instance for an admin, every
+// one for an operator.
+func (d *Dashboard) attention(ctx context.Context, se Session, active map[RepoKey]settings.Effective, only RepoKey) ([]AttentionView, error) {
 	items, err := d.Store.Attention(ctx)
 	if err != nil {
 		return nil, err
 	}
 	out := []AttentionView{}
 	for _, a := range items {
-		if a.Instance != se.Instance {
-			continue
-		}
+		k := repoKey(a.Instance, a.Project)
 		switch {
 		case a.Project == "":
-			if project != "" || !se.IsAdmin {
+			if only.Path != "" || !(se.Operator || (se.Admin && a.Instance == se.Instance)) {
 				continue
 			}
-		case project != "" && !strings.EqualFold(a.Project, project):
+		case only.Path != "" && k != only:
 			continue
 		default:
-			if _, ok := active[lower(a.Project)]; !ok {
+			if _, ok := active[k]; !ok {
 				continue
 			}
 		}
@@ -224,16 +261,15 @@ func (d *Dashboard) overview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "days must be a number from 1 to 90")
 		return
 	}
-	platform, _ := d.cfg.Platform(se.Instance)
 	repos, err := d.activeRepos(ctx, se)
 	if err != nil {
 		d.failed(w, r, "listing repositories", err)
 		return
 	}
 	active := byProject(repos)
-	projects := visibleProjects(se)
+	vis := visibility(se)
 
-	counts, err := d.Store.RunStats(ctx, se.Instance, projects, d.now().Add(-time.Duration(days)*day))
+	counts, err := d.Store.RunStats(ctx, vis, d.now().Add(-time.Duration(days)*day))
 	if err != nil {
 		d.failed(w, r, "counting reviews", err)
 		return
@@ -245,7 +281,7 @@ func (d *Dashboard) overview(w http.ResponseWriter, r *http.Request) {
 		stats.Blocking += c.Blocking
 		stats.Failed += c.Failed
 	}
-	recent, err := d.Store.ReviewDigests(ctx, store.ReviewFilter{Instance: se.Instance, Projects: projects,
+	recent, err := d.Store.ReviewDigests(ctx, store.ReviewFilter{Visible: vis,
 		Since: d.now().Add(-recentDays * day), Limit: recentReviews})
 	if err != nil {
 		d.failed(w, r, "listing recent reviews", err)
@@ -253,9 +289,9 @@ func (d *Dashboard) overview(w http.ResponseWriter, r *http.Request) {
 	}
 	view := OverviewView{Stats: stats, Recent: []ReviewSummary{}}
 	for _, run := range recent {
-		view.Recent = append(view.Recent, d.summary(run, platform, judge(run)))
+		view.Recent = append(view.Recent, d.summary(run, judge(run)))
 	}
-	if view.Attention, err = d.attention(ctx, se, active, ""); err != nil {
+	if view.Attention, err = d.attention(ctx, se, active, RepoKey{}); err != nil {
 		d.failed(w, r, "listing setup problems", err)
 		return
 	}
@@ -304,13 +340,15 @@ func (d *Dashboard) reviews(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// One more than a page tells whether there is a next one.
-	filter := store.ReviewFilter{Instance: se.Instance, Projects: visibleProjects(se), Outcome: outcome,
+	filter := store.ReviewFilter{Visible: visibility(se), Outcome: outcome,
 		Since: d.now().Add(-time.Duration(days) * day), Limit: reviewPageSize + 1}
 	if p := q.Get("project"); p != "" {
-		filter.Projects = nil
-		if id := se.Visible[lower(p)]; id > 0 {
-			filter.Projects = []store.VisibleProject{{Path: lower(p), ID: id}}
+		v, err := d.projectVisibility(ctx, se, q.Get("instance"), p)
+		if err != nil {
+			d.failed(w, r, "listing projects", err)
+			return
 		}
+		filter.Visible = v
 	}
 	if c := q.Get("cursor"); c != "" {
 		cur, ok := decodeCursor(c)
@@ -325,16 +363,40 @@ func (d *Dashboard) reviews(w http.ResponseWriter, r *http.Request) {
 		d.failed(w, r, "listing reviews", err)
 		return
 	}
-	platform, _ := d.cfg.Platform(se.Instance)
 	view := ReviewListView{Items: []ReviewSummary{}}
 	if len(rows) > reviewPageSize {
 		rows = rows[:reviewPageSize]
 		view.NextCursor = encodeCursor(rows[len(rows)-1])
 	}
 	for _, run := range rows {
-		view.Items = append(view.Items, d.summary(run, platform, judge(run)))
+		view.Items = append(view.Items, d.summary(run, judge(run)))
 	}
 	writeJSON(w, http.StatusOK, view)
+}
+
+// projectVisibility is what the session may read of the runs of project
+// (on instance, or on any when instance is ""): the visible one at that
+// path, or for an operator the stored one.
+func (d *Dashboard) projectVisibility(ctx context.Context, se Session, instance, project string) (store.Visibility, error) {
+	var out []store.VisibleProject
+	if !se.All {
+		for k, id := range se.Visible {
+			if k.Path == lower(project) && (instance == "" || k.Instance == instance) && id > 0 {
+				out = append(out, store.VisibleProject{Instance: k.Instance, Path: k.Path, ID: id})
+			}
+		}
+		return store.Visibility{Projects: out}, nil
+	}
+	stored, err := d.Store.Projects(ctx)
+	if err != nil {
+		return store.Visibility{}, err
+	}
+	for _, p := range stored {
+		if strings.EqualFold(p.Path, project) && (instance == "" || p.Instance == instance) {
+			out = append(out, store.VisibleProject{Instance: p.Instance, Path: p.Path, ID: p.ProjectID})
+		}
+	}
+	return store.Visibility{Projects: out}, nil
 }
 
 // --- GET /api/reviews/{instance}/{project...}/{number} ---
@@ -343,22 +405,31 @@ func (d *Dashboard) review(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	instance, rest := r.PathValue("instance"), r.PathValue("rest")
 	i := strings.LastIndex(rest, "/")
-	if instance != se.Instance || i <= 0 {
+	if i <= 0 {
 		notFound(w)
 		return
 	}
 	project := rest[:i]
 	number, err := strconv.ParseInt(rest[i+1:], 10, 64)
-	if err != nil || number <= 0 || !se.CanSee(project) {
+	if err != nil || number <= 0 || !se.CanSee(instance, project) {
 		notFound(w)
 		return
 	}
 	// The merge request of the project the user sees at that path, not of
 	// one that had the path before.
-	mr := store.MRKey{Instance: instance, ProjectID: se.Visible[lower(project)], IID: number}
+	id, ok, err := d.projectID(ctx, se, instance, project)
+	if err != nil {
+		d.failed(w, r, "loading a project", err)
+		return
+	}
+	if !ok {
+		notFound(w)
+		return
+	}
+	mr := store.MRKey{Instance: instance, ProjectID: id, IID: number}
 	// Only the runs of paths the user can see: a project moved somewhere
 	// they can't see keeps its later runs hidden.
-	runs, err := d.Store.MRRunDigests(ctx, mr, visibleProjects(se))
+	runs, err := d.Store.MRRunDigests(ctx, mr, visibility(se))
 	if err != nil {
 		d.failed(w, r, "listing a review's runs", err)
 		return
@@ -429,7 +500,7 @@ func (d *Dashboard) visibleRun(ctx context.Context, se Session, id string) (stor
 	if err != nil || !found {
 		return store.Run{}, false, err
 	}
-	if run.MR.Instance != se.Instance || !se.CanSeeRun(run.ProjectPath, run.MR.ProjectID) {
+	if !se.CanSeeRun(run.MR.Instance, run.ProjectPath, run.MR.ProjectID) {
 		return store.Run{}, false, nil
 	}
 	return run, true, nil
@@ -446,7 +517,7 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	digests, err := d.Store.MRRunDigests(ctx, run.MR, visibleProjects(se))
+	digests, err := d.Store.MRRunDigests(ctx, run.MR, visibility(se))
 	if err != nil {
 		d.failed(w, r, "listing a review's runs", err)
 		return
@@ -616,23 +687,24 @@ func (d *Dashboard) repositories(w http.ResponseWriter, r *http.Request) {
 // repositoryViews describes repos with their last 7 days and health.
 func (d *Dashboard) repositoryViews(ctx context.Context, se Session, repos []settings.Effective) ([]RepositoryView, error) {
 	active := byProject(repos)
-	counts, err := d.Store.RunStats(ctx, se.Instance, visibleOf(se, repos), d.now().Add(-defaultDays*day))
+	counts, err := d.Store.RunStats(ctx, visibleOf(se, repos), d.now().Add(-defaultDays*day))
 	if err != nil {
 		return nil, err
 	}
-	items, err := d.attention(ctx, se, active, "")
+	items, err := d.attention(ctx, se, active, RepoKey{})
 	if err != nil {
 		return nil, err
 	}
-	troubled := map[string]bool{}
+	troubled := map[RepoKey]bool{}
 	for _, a := range items {
-		troubled[lower(a.Project)] = true
+		troubled[repoKey(a.Instance, a.Project)] = true
 	}
 	out := make([]RepositoryView, 0, len(repos))
 	for _, e := range repos {
-		c := counts[lower(e.Project)]
+		k := repoKey(e.Instance, e.Project)
+		c := counts[store.PathKey(k)]
 		health := healthOK
-		if troubled[lower(e.Project)] {
+		if troubled[k] {
 			health = healthNeedsAttention
 		}
 		out = append(out, RepositoryView{Instance: e.Instance, Project: e.Project, Platform: e.Platform,
@@ -648,17 +720,15 @@ func (d *Dashboard) repositoryViews(ctx context.Context, se Session, repos []set
 func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	instance, rest := r.PathValue("instance"), r.PathValue("rest")
-	if instance != se.Instance {
-		notFound(w)
-		return
-	}
 	repos, err := d.activeRepos(ctx, se)
 	if err != nil {
 		d.failed(w, r, "listing repositories", err)
 		return
 	}
 	find := func(project string) (settings.Effective, bool) {
-		i := slices.IndexFunc(repos, func(e settings.Effective) bool { return strings.EqualFold(e.Project, project) })
+		i := slices.IndexFunc(repos, func(e settings.Effective) bool {
+			return e.Instance == instance && strings.EqualFold(e.Project, project)
+		})
 		if i < 0 {
 			return settings.Effective{}, false
 		}
@@ -670,7 +740,13 @@ func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 	}
 	if project, ok := strings.CutSuffix(rest, "/inputs"); ok {
 		if repo, ok := find(project); ok {
-			d.repositoryInputs(w, r, repo, se.Visible[lower(repo.Project)])
+			// 0 when an operator's repository isn't stored yet: not synced.
+			id, _, err := d.projectID(ctx, se, repo.Instance, repo.Project)
+			if err != nil {
+				d.failed(w, r, "loading a project", err)
+				return
+			}
+			d.repositoryInputs(w, r, repo, id)
 			return
 		}
 	}
@@ -686,18 +762,19 @@ func (d *Dashboard) repositoryDetail(w http.ResponseWriter, r *http.Request, se 
 	writeJSON(w, http.StatusOK, view)
 }
 
-// detailView describes repo, switched on, with its settings and setup
-// problems.
+// detailView describes repo, switched on, with its settings, setup problems
+// and the session's role on it.
 func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Effective) (RepositoryDetailView, error) {
 	views, err := d.repositoryViews(ctx, se, []settings.Effective{repo})
 	if err != nil {
 		return RepositoryDetailView{}, err
 	}
-	items, err := d.attention(ctx, se, byProject([]settings.Effective{repo}), repo.Project)
+	items, err := d.attention(ctx, se, byProject([]settings.Effective{repo}), repoKey(repo.Instance, repo.Project))
 	if err != nil {
 		return RepositoryDetailView{}, err
 	}
-	return RepositoryDetailView{Repo: views[0], Settings: settingViews(repo), Attention: items}, nil
+	return RepositoryDetailView{Repo: views[0], Settings: settingViews(repo), Attention: items,
+		Role: se.Role(repo.Instance, repo.Project).String()}, nil
 }
 
 // settingViews is repo's settings as RepositoryDetailView shows them.
@@ -902,6 +979,9 @@ func (d *Dashboard) integrations(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, e := range repos {
+		if e.Instance != se.Instance {
+			continue
+		}
 		p, found := byPath[lower(e.Project)]
 		installed := found && p.InstallationID != 0
 		if e.Platform == config.PlatformGitLab {
@@ -920,13 +1000,7 @@ func (d *Dashboard) adminSettings(w http.ResponseWriter, r *http.Request) {
 		Instance: se.Instance,
 		Defaults: DefaultsView{Approve: def.Approve, ReviewDrafts: def.ReviewDrafts, FailureStatus: string(def.FailureStatus),
 			JobTimeoutSeconds: int64(def.JobTimeout / time.Second), JobMemory: quantityText(def.JobMemory)},
-		LLM:    LLMView{Provider: d.cfg.LLM.Provider, Model: d.cfg.LLM.Model},
-		Admins: []AdminView{},
-	}
-	for _, a := range d.cfg.Dashboard.Admins {
-		if a.Instance == se.Instance {
-			view.Admins = append(view.Admins, AdminView{Instance: a.Instance, Group: a.Group, Team: a.Team})
-		}
+		LLM: LLMView{Provider: d.cfg.LLM.Provider, Model: d.cfg.LLM.Model},
 	}
 	writeJSON(w, http.StatusOK, view)
 }

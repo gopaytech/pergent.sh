@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -21,19 +20,15 @@ const (
 	tokenLeeway = time.Minute
 )
 
-// errAdminUnreadable is an admin team the platform won't tell about (an
-// isAdmin answer): its members are no admins, and the check goes on.
-var errAdminUnreadable = errors.New("the platform refused to show the admin team's members")
-
 // errRecentFailure is a check skipped because the last one failed less than
 // retryAfterFailure ago.
 var errRecentFailure = errors.New("the last access check failed less than a minute ago")
 
-// accessResult is what a session may see: the repositories on its instance
-// and whether its user, under their current username, is an admin there.
+// accessResult is what the platform lets a session see, of the
+// repositories checked: those on its instance, and its user's current
+// username.
 type accessResult struct {
 	username string
-	isAdmin  bool
 	projects []store.VisibleProject
 }
 
@@ -45,16 +40,17 @@ type flight struct {
 	err  error
 }
 
-// access returns what the session may see at now. A check younger than
-// AccessTTL is used as stored. An older one is made again; if that fails,
-// the stored one is used while it is younger than two AccessTTLs, and after
-// that the session sees nothing and is no admin (fail closed) until a check
-// succeeds.
-func (a *Auth) access(ctx context.Context, se store.Session, now time.Time) (accessResult, error) {
-	if fresh(se.AccessCheckedAt, now, AccessTTL) {
+// access returns what the platform lets the session see at now, of what
+// cov covers. A check younger than AccessTTL made for cov's scope is used
+// as stored. Otherwise one is made now; if that fails, the stored one is
+// used while it is younger than two AccessTTLs (the caller keeps only what
+// cov covers), and after that the session sees nothing (fail closed) until
+// a check succeeds.
+func (a *Auth) access(ctx context.Context, se store.Session, now time.Time, cov coverage) (accessResult, error) {
+	if se.AccessScope == cov.scope && fresh(se.AccessCheckedAt, now, AccessTTL) {
 		return a.stored(ctx, se)
 	}
-	res, err := a.refreshShared(ctx, se, now)
+	res, err := a.refreshShared(ctx, se, now, cov)
 	if err == nil {
 		return res, nil
 	}
@@ -68,7 +64,7 @@ func (a *Auth) access(ctx context.Context, se store.Session, now time.Time) (acc
 	if err := a.store.ClearSessionAccess(ctx, se.IDHash); err != nil {
 		return accessResult{}, err
 	}
-	// Nothing to see and no admin, but still the user who signed in.
+	// Nothing to see, but still the user who signed in.
 	return accessResult{username: se.Username}, nil
 }
 
@@ -83,12 +79,14 @@ func (a *Auth) stored(ctx context.Context, se store.Session) (accessResult, erro
 	if err != nil {
 		return accessResult{}, err
 	}
-	return accessResult{username: se.Username, isAdmin: se.IsAdmin, projects: projects}, nil
+	return accessResult{username: se.Username, projects: projects}, nil
 }
 
 // refreshShared runs one access check per session at a time: a request
-// that finds one in progress waits for its result.
-func (a *Auth) refreshShared(ctx context.Context, se store.Session, now time.Time) (accessResult, error) {
+// that finds one in progress waits for its result, which may be for another
+// coverage (a team changed meanwhile); the caller keeps only what its own
+// covers, and the next request checks again.
+func (a *Auth) refreshShared(ctx context.Context, se store.Session, now time.Time, cov coverage) (accessResult, error) {
 	key := string(se.IDHash)
 	a.mu.Lock()
 	if f, ok := a.flights[key]; ok {
@@ -108,7 +106,7 @@ func (a *Auth) refreshShared(ctx context.Context, se store.Session, now time.Tim
 	a.flights[key] = f
 	a.mu.Unlock()
 
-	f.res, f.err = a.refresh(ctx, se, now)
+	f.res, f.err = a.refresh(ctx, se, now, cov)
 
 	a.mu.Lock()
 	delete(a.flights, key)
@@ -136,9 +134,10 @@ func (a *Auth) forget(hash []byte) {
 }
 
 // refresh renews the session's token if it is about to expire and checks
-// its access again. It runs to its own deadline even if the request that
-// started it goes away, as other requests may be waiting for it.
-func (a *Auth) refresh(ctx context.Context, se store.Session, now time.Time) (accessResult, error) {
+// its access to what cov covers again. It runs to its own deadline even if
+// the request that started it goes away, as other requests may be waiting
+// for it.
+func (a *Auth) refresh(ctx context.Context, se store.Session, now time.Time, cov coverage) (accessResult, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), signInTimeout)
 	defer cancel()
 
@@ -150,14 +149,14 @@ func (a *Auth) refresh(ctx context.Context, se store.Session, now time.Time) (ac
 	if !found {
 		return accessResult{}, errors.New("the session ended")
 	}
-	if fresh(cur.AccessCheckedAt, now, AccessTTL) {
+	if cur.AccessScope == cov.scope && fresh(cur.AccessCheckedAt, now, AccessTTL) {
 		return a.stored(ctx, cur)
 	}
 	tok, err := a.liveToken(ctx, cur, now)
 	if err != nil {
 		return accessResult{}, err
 	}
-	return a.checkAccess(ctx, cur, tok)
+	return a.checkAccess(ctx, cur, tok, cov)
 }
 
 // liveToken returns the session's OAuth token, renewed first when it expires
@@ -253,12 +252,25 @@ func (a *Auth) userToken(ctx context.Context, se Session) (provider, string, err
 	}
 }
 
+// coverage is what the account's teams cover on instance now.
+func (a *Auth) coverage(ctx context.Context, accountID int64, instance string) (coverage, error) {
+	teams, err := a.store.AccountTeams(ctx, accountID)
+	if err != nil {
+		return coverage{}, err
+	}
+	repos, err := a.repos.List(ctx)
+	if err != nil {
+		return coverage{}, err
+	}
+	return cover(teams, repos, instance), nil
+}
+
 // checkAccess asks the platform, with the user's token, who the user is now
-// (a GitHub login can change hands after a rename), which repositories
-// switched on for the session's instance they can see and whether they are
-// in one of the instance's admin groups or teams, and stores the answer.
-// Any call that fails fails the whole check: nothing is stored.
-func (a *Auth) checkAccess(ctx context.Context, se store.Session, tok oauthToken) (accessResult, error) {
+// (a GitHub login can change hands after a rename) and which of the
+// repositories cov covers they can see, and stores the answer with cov's
+// scope. Only those repositories are asked about. Any call that fails fails
+// the whole check: nothing is stored.
+func (a *Auth) checkAccess(ctx context.Context, se store.Session, tok oauthToken, cov coverage) (accessResult, error) {
 	p, ok := a.providers[se.Instance]
 	if !ok || p.platform() != se.Platform {
 		return accessResult{}, fmt.Errorf("instance %q has no %s sign-in", se.Instance, se.Platform)
@@ -270,74 +282,17 @@ func (a *Auth) checkAccess(ctx context.Context, se store.Session, tok oauthToken
 	if userID != se.UserID {
 		return accessResult{}, fmt.Errorf("the token now belongs to user %d, not %d", userID, se.UserID)
 	}
-	repos, err := a.repos.List(ctx)
+	visible, err := checkProjects(ctx, p, tok.AccessToken, cov.projects)
 	if err != nil {
 		return accessResult{}, err
 	}
-	var candidates []string
-	for _, r := range repos {
-		if r.Instance == se.Instance && r.Platform == se.Platform {
-			candidates = append(candidates, r.Project)
-		}
+	for i := range visible {
+		visible[i].Instance = se.Instance
 	}
-	visible, err := checkProjects(ctx, p, tok.AccessToken, candidates)
-	if err != nil {
+	if err := a.store.SetSessionAccess(ctx, se.IDHash, username, cov.scope, visible, a.now()); err != nil {
 		return accessResult{}, err
 	}
-	isAdmin, unreadable, asked := false, "", 0
-	var admins []config.DashboardAdmin
-	for _, admin := range a.cfg.Dashboard.Admins {
-		if admin.Instance == se.Instance {
-			admins = append(admins, admin)
-		}
-	}
-	for _, admin := range admins {
-		asked++
-		ok, err := p.isAdmin(ctx, tok.AccessToken, userID, username, admin)
-		if errors.Is(err, errAdminUnreadable) {
-			// The platform won't say: not an admin through this team.
-			a.log.Warn("dashboard: the admin team can't be read, so nobody is an admin through it",
-				"instance", se.Instance, "team", admin.Team, "error", err.Error())
-			unreadable = admin.Team
-			continue
-		}
-		if err != nil {
-			return accessResult{}, fmt.Errorf("admin check: %w", err)
-		}
-		if ok {
-			isAdmin = true
-			break
-		}
-	}
-	if err := a.store.SetSessionAccess(ctx, se.IDHash, username, isAdmin, "", visible, a.now()); err != nil {
-		return accessResult{}, err
-	}
-	switch {
-	case unreadable != "":
-		a.setAttention(ctx, se.Instance, attentionAdminTeam, "pergent.sh can't read the admin team "+unreadable+
-			", so nobody is an admin through it. Give the GitHub App Organization permissions → Members: Read-only, "+
-			"have the organization approve it, and install the App in that organization.")
-	case asked == len(admins):
-		// Every admin team of the instance answered.
-		a.clearAttention(ctx, se.Instance, attentionAdminTeam)
-	}
-	return accessResult{username: username, isAdmin: isAdmin, projects: visible}, nil
-}
-
-// setAttention records an instance-wide setup problem for the dashboard,
-// best effort: a store error is logged and never fails the access check.
-func (a *Auth) setAttention(ctx context.Context, instance, kind, message string) {
-	if err := a.store.SetAttention(ctx, instance, "", kind, message); err != nil {
-		a.log.Info("dashboard: couldn't record a setup problem", "instance", instance, "kind", kind, "error", err.Error())
-	}
-}
-
-// clearAttention removes an instance-wide setup problem that is gone, best
-// effort like setAttention.
-func (a *Auth) clearAttention(ctx context.Context, instance, kind string) {
-	if err := a.store.ClearAttention(ctx, instance, "", kind); err != nil {
-		a.log.Info("dashboard: couldn't clear a setup problem", "instance", instance, "kind", kind, "error", err.Error())
-	}
+	return accessResult{username: username, projects: visible}, nil
 }
 
 // checkProjects returns the projects the token's user can see, each with
