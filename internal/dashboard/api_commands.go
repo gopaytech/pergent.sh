@@ -313,15 +313,14 @@ func (d *Dashboard) dismiss(w http.ResponseWriter, r *http.Request, b reviewButt
 }
 
 // mayDismissBlocking tells whether the session may dismiss a blocking
-// finding of the change: a password admin always may (they have no platform
-// identity, so they are never its author); a platform user may unless they
-// opened it, and when the author can't be told it fails closed. When it may
-// not, it has answered the request.
+// finding of the change. Nobody may on a merged or closed change, a password
+// admin included, and when the platform can't say what state it is in the
+// request fails closed. A password admin has no platform identity, so it is
+// never the change's author; a platform user may unless they opened it, and
+// when the author can't be told it fails closed too. When it may not, it has
+// answered the request.
 func (d *Dashboard) mayDismissBlocking(w http.ResponseWriter, r *http.Request, b reviewButton) bool {
 	se := session(r)
-	if se.Operator {
-		return true
-	}
 	change, ok := d.platformChange(w, r, b)
 	if !ok {
 		return false
@@ -330,6 +329,9 @@ func (d *Dashboard) mayDismissBlocking(w http.ResponseWriter, r *http.Request, b
 	case forge.StateMerged, forge.StateClosed:
 		writeError(w, http.StatusConflict, "this change is "+string(change.State))
 		return false
+	}
+	if se.Operator {
+		return true
 	}
 	if change.AuthorID == 0 || se.UserID == 0 || se.Instance != b.mr.Instance {
 		writeError(w, http.StatusBadGateway, msgAuthorUnknown)

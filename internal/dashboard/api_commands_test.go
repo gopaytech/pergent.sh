@@ -432,8 +432,6 @@ func TestButtonAuthorCannotDismissBlocking(t *testing.T) {
 	t.Run("a password admin is never the author", func(t *testing.T) {
 		e := newEnv(t, nil)
 		e.buttonBlockingReview()
-		// The platform can't be asked, and isn't.
-		e.src["main"].set(func(f *fakeSource) { f.changeErr = errors.New("down") })
 		c := e.signInOperator()
 		wantCode(t, e.send(c, "POST", buttonURL("dismiss"), `{"fingerprint":"`+blockingFP+`","reason":"x"}`),
 			"operator dismiss", http.StatusOK)
@@ -441,8 +439,21 @@ func TestButtonAuthorCannotDismissBlocking(t *testing.T) {
 		if len(ds) != 1 || ds[0].Actor != "root (password)" {
 			t.Errorf("dismissals = %+v", ds)
 		}
-		if n := e.src["main"].changeCalls; n != 0 {
-			t.Errorf("the platform was asked %d times", n)
+		// The change's state is read, its author is not asked about.
+		if n := e.src["main"].changeCalls; n != 1 {
+			t.Errorf("the platform was asked %d times, want 1", n)
+		}
+	})
+
+	t.Run("a password admin is refused when the change can't be read", func(t *testing.T) {
+		e := newEnv(t, nil)
+		e.buttonBlockingReview()
+		e.src["main"].set(func(f *fakeSource) { f.changeErr = errors.New("down") })
+		c := e.signInOperator()
+		wantCode(t, e.send(c, "POST", buttonURL("dismiss"), `{"fingerprint":"`+blockingFP+`","reason":"x"}`),
+			"operator dismiss", http.StatusBadGateway)
+		if len(e.dismissalsOf()) != 0 {
+			t.Error("a finding was dismissed without knowing the change's state")
 		}
 	})
 }
@@ -839,6 +850,24 @@ func TestDismissBlockingOnAMergedChange(t *testing.T) {
 	}
 	if len(e.dismissalsOf()) != 0 {
 		t.Error("a finding of a merged change was dismissed")
+	}
+}
+
+// A merged or closed change refuses every blocking dismissal, a password
+// admin's included.
+func TestOperatorDismissBlockingOnAMergedChange(t *testing.T) {
+	for _, state := range []forge.ChangeState{forge.StateMerged, forge.StateClosed} {
+		e := newEnv(t, nil)
+		e.buttonBlockingReview()
+		e.src["main"].set(func(f *fakeSource) { f.change.State = state })
+		rec := e.send(e.signInOperator(), "POST", buttonURL("dismiss"), `{"fingerprint":"`+blockingFP+`","reason":"x"}`)
+		wantCode(t, rec, "operator dismiss on a "+string(state)+" change", http.StatusConflict)
+		if got := errorOf(t, rec); got != "this change is "+string(state) {
+			t.Errorf("error = %q", got)
+		}
+		if len(e.dismissalsOf()) != 0 {
+			t.Errorf("an operator dismissed a finding of a %s change", state)
+		}
 	}
 }
 
