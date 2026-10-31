@@ -136,8 +136,13 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 		if approved, held, err = e.approve(ctx, plat, run, log); err != nil {
 			return err
 		}
-	} else if err := e.withdrawRedecided(ctx, plat, run, log); err != nil {
-		return err
+	}
+	// Not approved now: an approval of this head from before is withdrawn,
+	// also when the change turned into a draft while the approval was made.
+	if !approved && (!d.Approve || held == heldDraft) {
+		if err := e.withdrawRedecided(ctx, plat, run, log); err != nil {
+			return err
+		}
 	}
 	if err := e.Store.MarkPublished(ctx, run.ID, decisionOf(o, d, approved, held)); err != nil {
 		return fmt.Errorf("mark published: %w", err)
@@ -159,12 +164,16 @@ func (e *Engine) dismissals(ctx context.Context, mr store.MRKey) ([]render.Dismi
 	return out, nil
 }
 
-// withdrawRedecided removes the approve bot's approval of the run's head and
-// target when the review is decided as not approved: a dismissal restored, or
-// a draft, for example, after the head was approved. An approval of another
-// head or target is not this review's to withdraw (the cleanup handles it). A
-// failed removal is returned, so the publish is retried; unapprove puts the
-// record aside with its usual backoff.
+// withdrawRedecided takes the approve bot's approval of the run's head and
+// target off when the review is decided as not approved: a dismissal restored,
+// or the change a draft again, after the head was approved. An approval of
+// another head or target is not this review's to withdraw (the cleanup
+// handles it).
+//
+// The withdrawal is owed until made: it is recorded on the merge request
+// first, and a failed attempt doesn't fail the publish (the comment and the
+// status are out and right); the approval sweep tries again after the unapprove
+// backoff. Only a failure to record it is returned, so the publish is retried.
 func (e *Engine) withdrawRedecided(ctx context.Context, plat Platform, run store.Run, log *slog.Logger) error {
 	a, ok, err := e.Store.Approval(ctx, run.MR)
 	if err != nil {
@@ -173,15 +182,65 @@ func (e *Engine) withdrawRedecided(ctx context.Context, plat Platform, run store
 	if !ok || a.ApprovedSHA != run.HeadSHA || (a.ApprovedTarget != "" && a.ApprovedTarget != run.TargetBranch) {
 		return nil
 	}
-	if plat.Approver == nil {
-		log.Warn("not withdrawing the approval: no approve bot for the instance")
-		return nil
+	if err := e.Store.MarkWithdrawPending(ctx, a.MR, a.ApprovedSHA, a.ApprovedTarget); err != nil {
+		return fmt.Errorf("record the approval to withdraw: %w", err)
 	}
-	if _, err := e.unapprove(ctx, plat.Approver, a); err != nil {
-		return err
+	e.withdrawPending(ctx, plat, a, log)
+	return nil
+}
+
+// withdrawPending pays one owed withdrawal of approval a. The merge request is
+// read first: merged, closed or gone, the record is only cleared, as there is
+// nothing to withdraw; a merge in progress is left for the next pass. A
+// failure leaves the debt in place and puts it aside for the unapprove
+// backoff.
+func (e *Engine) withdrawPending(ctx context.Context, plat Platform, a store.Approval, log *slog.Logger) {
+	if plat.Forge == nil || plat.Approver == nil {
+		log.Debug("not withdrawing the approval: no bots for the instance")
+		return
+	}
+	mr, err := plat.Forge.GetChange(ctx, a.MR.ProjectID, a.MR.IID)
+	switch {
+	case errors.Is(err, forge.ErrNotFound) || (err == nil && (mr.State == forge.StateMerged || mr.State == forge.StateClosed)):
+		if err := e.clearApproval(ctx, a); err != nil {
+			log.Warn("couldn't forget the approval of a merge request that is over; will try again", "error", e.redact(err.Error()))
+			return
+		}
+		log.Info("approval forgotten: the merge request is merged, closed or gone")
+		return
+	case err != nil:
+		log.Warn("couldn't read the merge request of an approval to withdraw; will try again", e.unreadableAttrs(ctx, a, err)...)
+		return
+	case mr.State != forge.StateOpen:
+		return // "locked": a merge is in progress; look again next time
+	}
+	if retryAt, err := e.unapprove(ctx, plat.Approver, a); err != nil {
+		attrs := []any{"error", e.redact(err.Error())}
+		if !retryAt.IsZero() {
+			attrs = append(attrs, "retry_at", retryAt)
+		}
+		log.Warn("couldn't withdraw the approval; will try again", attrs...)
+		return
 	}
 	log.Info("approval withdrawn: the review is no longer approved")
-	return nil
+}
+
+// unreadableAttrs are the log attributes of a failure to read the merge
+// request of approval a; the failure is recorded as a failed unapprove, so
+// the approval waits out the backoff.
+func (e *Engine) unreadableAttrs(ctx context.Context, a store.Approval, err error) []any {
+	attrs := []any{"error", e.redact(err.Error())}
+	if ctx.Err() != nil {
+		return attrs
+	}
+	retryAt, ferr := e.Store.UnapproveFailed(ctx, a.MR, a.ApprovedSHA, a.ApprovedTarget, e.now())
+	if ferr != nil {
+		return append(attrs, "record_error", e.redact(ferr.Error()))
+	}
+	if !retryAt.IsZero() {
+		attrs = append(attrs, "retry_at", retryAt)
+	}
+	return attrs
 }
 
 // heldBack is why approve didn't approve a review it was asked to.
@@ -493,16 +552,7 @@ func (e *Engine) withdrawApprovalOff(ctx context.Context, a store.Approval) {
 		log.Info("approval forgotten: the merge request is merged or gone")
 		return
 	case err != nil:
-		attrs := []any{"error", e.redact(err.Error())}
-		if ctx.Err() == nil {
-			retryAt, ferr := e.Store.UnapproveFailed(ctx, a.MR, a.ApprovedSHA, a.ApprovedTarget, e.now())
-			if ferr != nil {
-				attrs = append(attrs, "record_error", e.redact(ferr.Error()))
-			} else if !retryAt.IsZero() {
-				attrs = append(attrs, "retry_at", retryAt)
-			}
-		}
-		log.Warn("couldn't read the merge request of an approval to withdraw; will try again", attrs...)
+		log.Warn("couldn't read the merge request of an approval to withdraw; will try again", e.unreadableAttrs(ctx, a, err)...)
 		return
 	case mr.State != forge.StateOpen && mr.State != forge.StateClosed:
 		return // "locked": a merge is in progress; look again next time

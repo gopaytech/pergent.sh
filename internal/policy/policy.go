@@ -214,7 +214,11 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 		if redact == nil {
 			redact = func(s string) string { return s }
 		}
-		comment = withMarker(redact(render.Comment(rs, render.Options{MaxLen: o.MaxComment, ChangedFiles: result.ChangedFiles(r)})))
+		// The text is redacted before it is rendered, so the encoded findings
+		// block and a cut comment can't hide a credential from the pass over
+		// the finished comment.
+		rs = redactSkills(rs, redact)
+		comment = withMarker(redact(render.Comment(rs, render.Options{MaxLen: o.MaxComment, ChangedFiles: redactAll(result.ChangedFiles(r), redact)})))
 		block = render.FindingsBlock(rs)
 	}
 	var blocking, failedSkills, reviewed int
@@ -288,6 +292,64 @@ func applyDismissals(o Outcome, r *result.Result) ([]render.Skill, bool) {
 		}
 	}
 	return nil, false
+}
+
+// redactSkills is skills with redact applied to every text in them that came
+// from the review: findings (dismissed ones included), failures, notes,
+// summaries, checks and file paths. skills is not modified.
+func redactSkills(skills []render.Skill, redact func(string) string) []render.Skill {
+	finding := func(f render.Finding) render.Finding {
+		f.File, f.Title = redact(f.File), redact(f.Title)
+		f.Explanation, f.SuggestedFix = redact(f.Explanation), redact(f.SuggestedFix)
+		return f
+	}
+	out := make([]render.Skill, len(skills))
+	for i, s := range skills {
+		s.Findings = nil
+		for _, f := range skills[i].Findings {
+			s.Findings = append(s.Findings, finding(f))
+		}
+		s.Dismissed = nil
+		for _, d := range skills[i].Dismissed {
+			s.Dismissed = append(s.Dismissed, render.DismissedFinding{Finding: finding(d.Finding), By: redact(d.By), Reason: redact(d.Reason)})
+		}
+		s.Failures = nil
+		for _, f := range skills[i].Failures {
+			s.Failures = append(s.Failures, render.Failure{Files: redactAll(f.Files, redact), Message: redact(f.Message), Lead: redact(f.Lead)})
+		}
+		s.Skipped = nil
+		for _, f := range skills[i].Skipped {
+			s.Skipped = append(s.Skipped, render.Skipped{Path: redact(f.Path), Rule: redact(f.Rule)})
+		}
+		s.Summaries = nil
+		for _, sum := range skills[i].Summaries {
+			s.Summaries = append(s.Summaries, render.Summary{Batch: sum.Batch, Text: redact(sum.Text)})
+		}
+		s.Checks = nil
+		for _, bc := range skills[i].Checks {
+			rb := bc
+			rb.Checks = nil
+			for _, c := range bc.Checks {
+				rb.Checks = append(rb.Checks, render.Check{Section: redact(c.Section), Name: redact(c.Name), Status: c.Status, Detail: redact(c.Detail)})
+			}
+			s.Checks = append(s.Checks, rb)
+		}
+		s.Reviewed = redactAll(skills[i].Reviewed, redact)
+		s.Notes = redactAll(skills[i].Notes, redact)
+		out[i] = s
+	}
+	return out
+}
+
+func redactAll(ss []string, redact func(string) string) []string {
+	if ss == nil {
+		return nil
+	}
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = redact(s)
+	}
+	return out
 }
 
 // withVerdicts is skills with the verdicts of the dismissed-applied skills rs

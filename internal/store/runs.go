@@ -980,7 +980,7 @@ func (s *Store) SetApprovedSHA(ctx context.Context, mr MRKey, sha, target string
 		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (instance, project_id, mr_iid) DO UPDATE SET
 			approved_sha = EXCLUDED.approved_sha, approved_target = EXCLUDED.approved_target,
-			unapprove_failures = 0, unapprove_not_before = NULL`,
+			unapprove_failures = 0, unapprove_not_before = NULL, withdraw_pending = false`,
 		mr.Instance, mr.ProjectID, mr.IID, sha, target)
 	return err
 }
@@ -991,10 +991,31 @@ func (s *Store) SetApprovedSHA(ctx context.Context, mr MRKey, sha, target string
 // approval, is left alone. The unapprove backoff starts over.
 func (s *Store) ClearApprovedSHA(ctx context.Context, mr MRKey, oldSHA, oldTarget string) error {
 	_, err := s.pool.Exec(ctx, `UPDATE merge_requests SET approved_sha = '', approved_target = '',
-			unapprove_failures = 0, unapprove_not_before = NULL
+			unapprove_failures = 0, unapprove_not_before = NULL, withdraw_pending = false
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND approved_sha = $4 AND approved_target = $5`,
 		mr.Instance, mr.ProjectID, mr.IID, oldSHA, oldTarget)
 	return err
+}
+
+// MarkWithdrawPending records that the approval of sha against target is to
+// be withdrawn, until it is cleared or replaced. A merge request that records
+// another approval (or none) is left alone.
+func (s *Store) MarkWithdrawPending(ctx context.Context, mr MRKey, sha, target string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE merge_requests SET withdraw_pending = true
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND approved_sha = $4 AND approved_target = $5
+			AND approved_sha <> ''`,
+		mr.Instance, mr.ProjectID, mr.IID, sha, target)
+	return err
+}
+
+// PendingWithdrawals returns the recorded approvals marked for withdrawal
+// whose unapprove backoff (after a failed removal) is over at now.
+func (s *Store) PendingWithdrawals(ctx context.Context, now time.Time) ([]Approval, error) {
+	return s.queryApprovals(ctx, `SELECT instance, project_id, mr_iid, approved_sha, approved_target
+		FROM merge_requests
+		WHERE approved_sha <> '' AND withdraw_pending
+			AND (unapprove_not_before IS NULL OR unapprove_not_before <= $1)
+		ORDER BY instance, project_id, mr_iid`, now)
 }
 
 // UnapproveFailed records a failed removal of the stale approval of oldSHA

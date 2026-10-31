@@ -26,6 +26,11 @@ import (
 // One merge request's trouble is logged and left for the next sweep; the
 // returned error is a failure to list the approvals.
 func (e *Engine) SweepApprovals(ctx context.Context) error {
+	// Withdrawals a re-decided review owes come first; the ones paid are
+	// gone from the approvals listed next.
+	if err := e.sweepPendingWithdrawals(ctx); err != nil {
+		return err
+	}
 	approvals, err := e.Store.Approvals(ctx)
 	if err != nil {
 		return fmt.Errorf("sweep approvals: list approvals: %w", err)
@@ -56,6 +61,30 @@ func (e *Engine) SweepApprovals(ctx context.Context) error {
 	}
 	if wake {
 		e.Wake()
+	}
+	return nil
+}
+
+// sweepPendingWithdrawals tries again every withdrawal owed by a review that
+// was decided as not approved, past its unapprove backoff. One merge
+// request's trouble is logged and left for the next sweep; the returned error
+// is a failure to list them.
+func (e *Engine) sweepPendingWithdrawals(ctx context.Context) error {
+	due, err := e.Store.PendingWithdrawals(ctx, e.now())
+	if err != nil {
+		return fmt.Errorf("sweep approvals: list pending withdrawals: %w", err)
+	}
+	for _, a := range due {
+		if ctx.Err() != nil {
+			break
+		}
+		plat, ok := e.Platforms.Get(a.MR.Instance)
+		if !ok {
+			continue // the instance was removed from the config
+		}
+		log := e.log().With("instance", a.MR.Instance, "project_id", a.MR.ProjectID, "mr", a.MR.IID,
+			"approved", a.ApprovedSHA, "approved_target", a.ApprovedTarget)
+		e.withdrawPending(ctx, plat, a, log)
 	}
 	return nil
 }

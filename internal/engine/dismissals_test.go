@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
 	"github.com/gopaytech/pergent.sh/internal/policy"
@@ -181,8 +183,21 @@ func TestRedecideWithoutApprovalForThisHeadWithdrawsNothing(t *testing.T) {
 	}
 }
 
-// A failed withdrawal is not hidden: the publish is retried.
-func TestRedecideWithdrawalFailureRetriesPublish(t *testing.T) {
+// pending returns the recorded approvals marked for withdrawal, backoff
+// aside.
+func pending(t *testing.T, env *testEnv) []store.Approval {
+	t.Helper()
+	got, err := env.Store.PendingWithdrawals(env.ctx, env.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// A withdrawal that fails doesn't fail the publish: the comment and status
+// are out, the approval stays recorded as owed, and the approval sweep takes
+// it off once the approve bot can.
+func TestWithdrawalFailureIsRetriedBySweep(t *testing.T) {
 	env := newTestEnv(t)
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, skillWithFinding(t, "has_blocking_issues", "blocking")))
@@ -190,15 +205,145 @@ func TestRedecideWithdrawalFailureRetriesPublish(t *testing.T) {
 	if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), head, "main"); err != nil {
 		t.Fatal(err)
 	}
-	env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusInternalServerError, `{"message":"boom"}`)
+	env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusForbidden, `{"message":"403 Forbidden"}`)
 
 	publish(t, env)
 
-	if r := env.Run(id); r.State != store.Reported || r.Attempts != 1 {
-		t.Errorf("run = %s after %d attempts (%q), want reported for a retry", r.State, r.Attempts, r.PublishError)
+	wantPublished(t, env, id)
+	wantStatus(t, env, head, gitlab.StatusFailed, "Blocking issues found")
+	createdComment(t, env, 1)
+	if n := len(env.GitLab.Requests(http.MethodPost, unapprovePath(1))); n != 1 {
+		t.Fatalf("got %d unapprovals, want 1 attempt", n)
 	}
 	if got := recordedApproval(t, env, 1); got != head {
-		t.Errorf("recorded approval = %q, want it kept until withdrawn", got)
+		t.Fatalf("recorded approval = %q, want it kept until withdrawn", got)
+	}
+	if p := pending(t, env); len(p) != 1 || p[0].ApprovedSHA != head {
+		t.Fatalf("pending withdrawals = %v, want the head's", p)
+	}
+
+	// Inside the backoff the sweep leaves it alone.
+	sweep(t, env)
+	if n := len(env.GitLab.Requests(http.MethodPost, unapprovePath(1))); n != 1 {
+		t.Errorf("got %d unapprovals inside the backoff, want still 1", n)
+	}
+
+	// Past it, a failing approve bot keeps the debt ...
+	env.SetNow(env.Now().Add(time.Minute))
+	sweep(t, env)
+	if n := len(env.GitLab.Requests(http.MethodPost, unapprovePath(1))); n != 2 {
+		t.Fatalf("got %d unapprovals after the backoff, want 2", n)
+	}
+	if p := pending(t, env); len(p) != 1 {
+		t.Fatalf("pending withdrawals = %v, want the debt kept", p)
+	}
+
+	// ... and a working one pays it.
+	env.SetNow(env.Now().Add(time.Hour))
+	env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusCreated, `{}`)
+	sweep(t, env)
+	if n := len(env.GitLab.Requests(http.MethodPost, unapprovePath(1))); n != 3 {
+		t.Errorf("got %d unapprovals, want 3", n)
+	}
+	if got := recordedApproval(t, env, 1); got != "" {
+		t.Errorf("recorded approval = %q, want it cleared", got)
+	}
+	if p := pending(t, env); len(p) != 0 {
+		t.Errorf("pending withdrawals = %v, want none", p)
+	}
+}
+
+// A merged or closed change has nothing to withdraw: the record is cleared,
+// at publish time and by the sweep.
+func TestWithdrawalOfMergedOrClosedClearsRecord(t *testing.T) {
+	for _, state := range []string{"merged", "closed"} {
+		t.Run("publish "+state, func(t *testing.T) {
+			env := newTestEnv(t)
+			head := sha('a')
+			id := env.Report(1, head, resultFor(t, head, skillWithFinding(t, "has_blocking_issues", "blocking")))
+			servePublish(env, 1, head)
+			mr := openMR(1, head)
+			mr.State = state
+			env.GitLab.SetMR(mr)
+			if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), head, "main"); err != nil {
+				t.Fatal(err)
+			}
+			env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusCreated, `{}`)
+
+			publish(t, env)
+
+			wantPublished(t, env, id)
+			if n := len(env.GitLab.Requests(http.MethodPost, unapprovePath(1))); n != 0 {
+				t.Errorf("unapprove called %d times for a %s change", n, state)
+			}
+			if got := recordedApproval(t, env, 1); got != "" {
+				t.Errorf("recorded approval = %q, want it cleared", got)
+			}
+		})
+		t.Run("sweep "+state, func(t *testing.T) {
+			env := newTestEnv(t)
+			head := sha('a')
+			env.Report(1, head, resultFor(t, head, skillWithFinding(t, "has_blocking_issues", "blocking")))
+			servePublish(env, 1, head)
+			if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), head, "main"); err != nil {
+				t.Fatal(err)
+			}
+			env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusForbidden, `{"message":"403 Forbidden"}`)
+			publish(t, env)
+			if p := pending(t, env); len(p) != 1 {
+				t.Fatalf("pending withdrawals = %v, want one", p)
+			}
+
+			mr := openMR(1, head)
+			mr.State = state
+			env.GitLab.SetMR(mr)
+			env.SetNow(env.Now().Add(time.Hour))
+			env.GitLab.Reset()
+			sweep(t, env)
+
+			if n := len(env.GitLab.Requests(http.MethodPost, unapprovePath(1))); n != 0 {
+				t.Errorf("unapprove called %d times for a %s change", n, state)
+			}
+			if got := recordedApproval(t, env, 1); got != "" {
+				t.Errorf("recorded approval = %q, want it cleared", got)
+			}
+			if p := pending(t, env); len(p) != 0 {
+				t.Errorf("pending withdrawals = %v, want none", p)
+			}
+		})
+	}
+}
+
+// The change turned into a draft between the draft check and the approval:
+// nothing is approved, and an approval of this head from before is withdrawn.
+func TestHeldDraftWithdrawsExistingApproval(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublish(env, 1, head)
+	if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), head, "main"); err != nil {
+		t.Fatal(err)
+	}
+	var reads atomic.Int32
+	env.GitLab.Handle(http.MethodGet, mrPath(1), func(w http.ResponseWriter, _ *http.Request) {
+		mr := openMR(1, head)
+		mr.Draft = reads.Add(1) > 1 // ready for the draft check, a draft by the approval
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(mr)
+	})
+	env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusCreated, `{}`)
+
+	publish(t, env)
+
+	wantPublished(t, env, id)
+	if n := len(env.GitLab.Requests(http.MethodPost, approvePath(1))); n != 0 {
+		t.Errorf("approved %d times a change that is a draft", n)
+	}
+	if n := len(env.GitLab.Requests(http.MethodPost, unapprovePath(1))); n != 1 {
+		t.Errorf("got %d unapprovals, want 1", n)
+	}
+	if got := recordedApproval(t, env, 1); got != "" {
+		t.Errorf("recorded approval = %q, want it cleared", got)
 	}
 }
 

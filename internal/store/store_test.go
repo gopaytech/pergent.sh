@@ -656,6 +656,69 @@ func TestApproval(t *testing.T) {
 	}
 }
 
+func TestPendingWithdrawals(t *testing.T) {
+	s := newStore(t)
+	now := time.Now()
+	pending := func() []Approval {
+		got, err := s.PendingWithdrawals(ctx, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if err := s.SetApprovedSHA(ctx, mr1, "A", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetApprovedSHA(ctx, mr2, "A", "main"); err != nil {
+		t.Fatal(err)
+	}
+	// Another commit or target than the recorded one marks nothing.
+	if err := s.MarkWithdrawPending(ctx, mr1, "B", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkWithdrawPending(ctx, mr1, "A", "develop"); err != nil {
+		t.Fatal(err)
+	}
+	if got := pending(); len(got) != 0 {
+		t.Fatalf("pending after marking another approval = %v", got)
+	}
+	if err := s.MarkWithdrawPending(ctx, mr1, "A", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if got := pending(); len(got) != 1 || got[0] != (Approval{MR: mr1, ApprovedSHA: "A", ApprovedTarget: "main"}) {
+		t.Fatalf("pending = %v, want mr1 only", got)
+	}
+	// A failed removal puts it aside for the backoff.
+	if _, err := s.UnapproveFailed(ctx, mr1, "A", "main", now); err != nil {
+		t.Fatal(err)
+	}
+	if got := pending(); len(got) != 0 {
+		t.Errorf("pending in the backoff = %v", got)
+	}
+	if got, _ := s.PendingWithdrawals(ctx, now.Add(time.Hour)); len(got) != 1 {
+		t.Errorf("pending after the backoff = %v", got)
+	}
+	// A new approval replaces the debt; so does clearing.
+	if err := s.SetApprovedSHA(ctx, mr1, "A", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.PendingWithdrawals(ctx, now.Add(time.Hour)); len(got) != 0 {
+		t.Errorf("pending after a new approval = %v", got)
+	}
+	if err := s.MarkWithdrawPending(ctx, mr2, "A", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClearApprovedSHA(ctx, mr2, "A", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetApprovedSHA(ctx, mr2, "A", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.PendingWithdrawals(ctx, now.Add(time.Hour)); len(got) != 0 {
+		t.Errorf("pending after clearing = %v", got)
+	}
+}
+
 func TestStaleApprovals(t *testing.T) {
 	s := newStore(t)
 	enqueue(t, s, mr1, "A")

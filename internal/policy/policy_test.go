@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -824,4 +825,57 @@ func TestDecideDismissals(t *testing.T) {
 			t.Errorf("decision = %+v, want failed", d)
 		}
 	})
+}
+
+// The text of the review is redacted before it is rendered: the findings
+// block carries it base64-encoded, where a pass over the finished comment
+// can't see a credential.
+func TestDecideDismissalsRedactBeforeRendering(t *testing.T) {
+	const fp, key = "abc123def456", "sk-secret-123"
+	redact := func(t string) string { return strings.ReplaceAll(t, key, "***") }
+	s := withFinding(skill("security", "has_blocking_issues", "db/query.go"), "blocking", fp, "plain")
+	s = withFinding(s, "suggestion", "ffffff000000", "uses "+key)
+	s.Failures = []result.Failure{{Files: []string{"a.go"}, Message: "failed with " + key}}
+	s.Notes = []string{"note " + key}
+	s.Summaries = []result.Summary{{Batch: 1, Text: "summary " + key}}
+	s.Checks = []result.BatchChecks{{Batch: 1, Checks: []result.Check{{Name: "c", Status: "pass", Detail: key}}}}
+	dismissal := render.Dismissal{Fingerprint: fp, Severity: "blocking", By: "maya " + key, Reason: "reason " + key}
+
+	for name, max := range map[string]int{"no limit": 0, "small limit": 600} {
+		t.Run(name, func(t *testing.T) {
+			d := Decide(Outcome{Result: completed(s), Dismissals: []render.Dismissal{dismissal}, MaxComment: max, Redact: redact}, config.FailureStatusFailed)
+			if strings.Contains(d.Comment, key) {
+				t.Errorf("comment leaks the key: %q", d.Comment)
+			}
+			if max > 0 && len(d.Comment) > max {
+				t.Errorf("comment is %d bytes, want at most %d", len(d.Comment), max)
+			}
+			i := strings.Index(d.Comment, "<!-- pergent:findings ")
+			if i < 0 {
+				if max == 0 {
+					t.Fatalf("no findings block in %q", d.Comment)
+				}
+				return
+			}
+			enc := strings.TrimSuffix(strings.TrimSpace(d.Comment[i+len("<!-- pergent:findings "):]), " -->")
+			raw, err := base64.StdEncoding.DecodeString(enc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(raw), key) || !strings.Contains(string(raw), "uses ***") {
+				t.Errorf("findings block = %s, want the key redacted", raw)
+			}
+		})
+	}
+}
+
+// A skill with files it could not review is a failure whatever is dismissed.
+func TestDecideDismissalsKeepNotReviewedFailed(t *testing.T) {
+	const fp = "abc123def456"
+	s := withFinding(skill("security", "has_blocking_issues", "db/query.go"), "blocking", fp, "plain")
+	s.Files.NotReviewed = []json.RawMessage{json.RawMessage(`{"path":"g.go","cause":"timeout"}`)}
+	d := Decide(Outcome{Result: completed(s), Dismissals: []render.Dismissal{{Fingerprint: fp, Severity: "blocking"}}}, config.FailureStatusFailed)
+	if d.Kind != KindFailed || d.Approve || d.Status != StatusFailed {
+		t.Errorf("decision = %+v, want failed and not approved", d)
+	}
 }
