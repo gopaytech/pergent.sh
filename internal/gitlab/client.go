@@ -548,6 +548,19 @@ func (c *Client) MemberAccessLevel(ctx context.Context, projectID, userID int64)
 	return m.AccessLevel, nil
 }
 
+// UserIsBot reports whether GitLab marks the user as a bot (its `bot`
+// attribute: project and group access token users, service accounts and the
+// like). A user GitLab doesn't know is ErrNotFound.
+func (c *Client) UserIsBot(ctx context.Context, userID int64) (bool, error) {
+	var u struct {
+		Bot bool `json:"bot"`
+	}
+	if _, err := c.getJSON(ctx, "/users/"+strconv.FormatInt(userID, 10), nil, &u); err != nil {
+		return false, err
+	}
+	return u.Bot, nil
+}
+
 // SetCommitStatus sets the "pergent" status on sha. The description is cut to
 // 255 bytes on a UTF-8 boundary.
 func (c *Client) SetCommitStatus(ctx context.Context, projectID int64, sha string, state StatusState, description string) error {

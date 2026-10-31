@@ -283,6 +283,11 @@ func (f *Forge) Reply(ctx context.Context, repoID, number int64, body string) er
 	return err
 }
 
+// IsBot is always false: GitHub's webhook says whether a comment's author is
+// a bot (its type, or an App that posted it), and such a comment is never
+// stored as a command.
+func (f *Forge) IsBot(context.Context, int64) (bool, error) { return false, nil }
+
 // AccessLevel maps the user's repository role onto forge.Access: read and
 // triage read, write writes, maintain and admin maintain. The role comes
 // from role_name, which tells maintain and triage apart (the legacy

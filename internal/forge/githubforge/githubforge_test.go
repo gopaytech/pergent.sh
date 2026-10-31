@@ -1028,6 +1028,17 @@ func customRole(flags map[string]any, legacy ...string) map[string]any {
 		"user": map[string]any{"login": "dev", "permissions": flags}}
 }
 
+// GitHub's webhook says whether a commenter is a bot; the forge never asks.
+func TestIsBotNeverAsks(t *testing.T) {
+	f := newFake(t)
+	if bot, err := f.forge(t).IsBot(context.Background(), 12); err != nil || bot {
+		t.Errorf("IsBot = %v, %v; want false, nil", bot, err)
+	}
+	if n := len(f.requests("", "")); n != 0 {
+		t.Errorf("%d requests", n)
+	}
+}
+
 func TestAccessLevel(t *testing.T) {
 	const path = "/repos/acme/widgets/collaborators/dev/permission"
 	for _, tc := range []struct {

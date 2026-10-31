@@ -142,6 +142,12 @@ type Forge interface {
 	// GitHub looks up, userID who GitLab does; a user the platform doesn't
 	// know is AccessNone.
 	AccessLevel(ctx context.Context, projectID int64, username string, userID int64) (Access, error)
+	// IsBot reports whether the platform marks the user as an automated
+	// account: GitLab's project, group and service-account bots, which a
+	// comment's username only suggests. An error means it could not be told
+	// (a command from such an author must not be acted on then). GitHub's
+	// webhook says it itself and never asks.
+	IsBot(ctx context.Context, userID int64) (bool, error)
 }
 
 // Approver is the approve bot's side of one platform instance.

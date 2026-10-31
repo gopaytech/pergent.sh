@@ -989,6 +989,33 @@ func TestMemberAccessLevelError(t *testing.T) {
 	}
 }
 
+func TestUserIsBot(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+		want bool
+	}{
+		{"a bot", map[string]any{"id": 12, "username": "project_7_bot", "bot": true}, true},
+		{"a person", map[string]any{"id": 12, "username": "dev", "bot": false}, false},
+		{"no attribute", map[string]any{"id": 12, "username": "dev"}, false},
+	} {
+		c, reqs := serve(t, jsonReply(tc.body))
+		got, err := c.UserIsBot(context.Background(), 12)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: bot=%v err=%v, want %v", tc.name, got, err, tc.want)
+		}
+		expect(t, (*reqs)[0], "GET", "/api/v4/users/12", "")
+	}
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"404 User Not Found"}`, 404) })
+	if _, err := c.UserIsBot(context.Background(), 12); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unknown user: err = %v, want ErrNotFound", err)
+	}
+	c, _ = serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"403 Forbidden"}`, 403) })
+	if _, err := c.UserIsBot(context.Background(), 12); err == nil {
+		t.Error("a 403 was taken for a person")
+	}
+}
+
 // GitLab answers 404 "has already been taken" when the emoji is already on the
 // note: the reaction is there, so a retry is a success.
 func TestAwardNoteEmojiAlreadyAwarded(t *testing.T) {

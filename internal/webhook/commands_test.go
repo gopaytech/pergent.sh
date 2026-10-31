@@ -287,6 +287,29 @@ func TestOwnAndBotCommentsIgnored(t *testing.T) {
 	}
 }
 
+// GitLab project, group and service-account bots are automation, whatever
+// they write; a person whose name merely looks alike is not.
+func TestGitLabTokenBotsIgnored(t *testing.T) {
+	for _, bot := range []string{"project_42_bot", "project_42_bot_3f9a0c", "group_7_bot", "group_7_bot_a1b2", "service_account_a1b2c3"} {
+		r := newCmdRig(t)
+		wantStatus(t, r.glPost(t, glNote("@pergent-review review", bot)), 200)
+		r.noStored(t)
+	}
+	for _, person := range []string{"project_x_bot", "myproject_42_bot", "project_42_bot_zz", "service_accountant", "group_7_botany"} {
+		r := newCmdRig(t)
+		wantStatus(t, r.glPost(t, glNote("@pergent-review review", person)), 200)
+		if len(r.cmds.stored) != 1 {
+			t.Errorf("%s: stored = %+v; want the command", person, r.cmds.stored)
+		}
+	}
+	// The rule is GitLab's: a GitHub login of that shape is not matched.
+	r := newCmdRig(t)
+	wantStatus(t, r.ghPost(t, ghComment("@pergent-app review", "project_42_bot", "User")), 200)
+	if len(r.cmds.stored) != 1 {
+		t.Errorf("GitHub login: stored = %+v; want the command", r.cmds.stored)
+	}
+}
+
 func TestLineAndThreadNotesIgnored(t *testing.T) {
 	for _, typ := range []string{"DiffNote", "DiscussionNote"} {
 		r := newCmdRig(t)

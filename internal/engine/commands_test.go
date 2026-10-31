@@ -60,6 +60,9 @@ func newCommandFixture(t *testing.T) *commandFixture {
 	f.GitLab.Reply(http.MethodGet, membersPath(userAuthor), http.StatusOK, member(40))
 	f.GitLab.Reply(http.MethodGet, membersPath(userNamesake), http.StatusOK, member(40))
 	// userStranger: 404, not a member.
+	for _, id := range []int64{userMaintainer, userDeveloper, userReporter, userAuthor, userNamesake, userStranger, userStranger + 1} {
+		f.GitLab.Reply(http.MethodGet, userPath(id), http.StatusOK, map[string]any{"id": id, "bot": false})
+	}
 	f.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusCreated, map[string]any{"id": createdNote})
 	f.GitLab.Reply(http.MethodPost, notesPath(2), http.StatusCreated, map[string]any{"id": createdNote})
 	return f
@@ -68,6 +71,8 @@ func newCommandFixture(t *testing.T) *commandFixture {
 func membersPath(userID int64) string {
 	return "/projects/" + strconv.FormatInt(testProjectID, 10) + "/members/all/" + strconv.FormatInt(userID, 10)
 }
+
+func userPath(userID int64) string { return "/users/" + strconv.FormatInt(userID, 10) }
 
 func member(level int) map[string]any {
 	return map[string]any{"access_level": level, "state": "active"}
@@ -613,6 +618,52 @@ func TestDuplicateWithin30s(t *testing.T) {
 	// The dropped one is not answered with a reply, and the other command
 	// finds its head queued already.
 	f.wantReplies(1)
+}
+
+// A comment of a GitLab project, group or service-account bot is no command
+// whatever its username looks like: GitLab says so (the user's bot flag), and
+// the bot gets a 👎 and no reply, nor does the command run.
+func TestCommandOfABotIsDropped(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillOf(t, "security", "no_blocking_issues"))
+	f.GitLab.Reply(http.MethodGet, userPath(userDeveloper), http.StatusOK, map[string]any{"id": userDeveloper, "bot": true})
+
+	c := f.say(1, "dev", "review", "", "", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, down)
+	f.wantReplies(1)
+	if n := len(f.queued()); n != 0 {
+		t.Errorf("%d runs queued by a bot", n)
+	}
+	if n := len(f.GitLab.Requests(http.MethodGet, membersPath(userDeveloper))); n != 0 {
+		t.Errorf("a bot's access was looked up %d times", n)
+	}
+}
+
+// When GitLab can't say whether the author is a bot, nothing is done and the
+// command is tried again, then given up on (never run).
+func TestCommandWhenTheAuthorCannotBeReadIsRetried(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillOf(t, "security", "no_blocking_issues"))
+	f.GitLab.Reply(http.MethodGet, userPath(userDeveloper), http.StatusInternalServerError, `{"message":"boom"}`)
+
+	c := f.say(1, "dev", "review", "", "", time.Now())
+	f.run()
+	f.wantReactions(1, c, eyes)
+	f.wantReplies(1)
+	if n := len(f.queued()); n != 0 {
+		t.Fatalf("%d runs queued while the author is unknown", n)
+	}
+
+	// Once GitLab answers, the retry runs the command.
+	f.GitLab.Reply(http.MethodGet, userPath(userDeveloper), http.StatusOK, map[string]any{"id": userDeveloper, "bot": false})
+	f.SetNow(f.Now().Add(10 * time.Minute))
+	f.run()
+	f.wantReactions(1, c, eyes, up)
+	if n := len(f.queued()); n != 1 {
+		t.Errorf("%d runs queued after the retry, want 1", n)
+	}
 }
 
 // Every answer costs platform calls and a comment of the bot, so a person's

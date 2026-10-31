@@ -193,6 +193,9 @@ func TestEndToEndCommands(t *testing.T) {
 	gl.Reply(http.MethodGet, membersPath(userAuthor), http.StatusOK, member(40))
 	gl.Reply(http.MethodGet, membersPath(userMaintainer), http.StatusOK, member(40))
 	gl.Reply(http.MethodGet, membersPath(userDeveloper), http.StatusOK, member(30))
+	for _, id := range []int64{userAuthor, userMaintainer, userDeveloper, userReporter, userStranger} {
+		gl.Reply(http.MethodGet, userPath(id), http.StatusOK, map[string]any{"id": id, "bot": false})
+	}
 	// serve routes everything a review of head needs.
 	serve := func(head string) {
 		servePublish(env, 1, head)

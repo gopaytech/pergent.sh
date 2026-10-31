@@ -301,6 +301,14 @@ func (e *Engine) handleCommand(ctx, bctx context.Context, cmd store.Command, log
 	if inst, registered := e.registry().Get(cmd.MR.Instance); !on || !registered || inst.Removing {
 		return dropped("the repository is not switched on"), nil
 	}
+	// GitLab project, group and service-account bots are no person whatever
+	// their comments say: asked of the platform, and when it can't say the
+	// command is tried again, never acted on.
+	if bot, err := plat.Forge.IsBot(ctx, cmd.AuthorID); err != nil {
+		return verdict{}, fmt.Errorf("check that the commenter is a person: %w", err)
+	} else if bot {
+		return dropped("the author is a bot"), nil
+	}
 	recent, err := e.Store.RecentCommand(ctx, cmd.MR, cmd.Kind, cmd.Arg, cmd.CreatedAt.Add(-commandRepeatWindow))
 	if err != nil {
 		return verdict{}, fmt.Errorf("check for a repeated command: %w", err)

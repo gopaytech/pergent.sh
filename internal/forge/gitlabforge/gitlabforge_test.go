@@ -529,6 +529,33 @@ func TestReply(t *testing.T) {
 	}
 }
 
+func TestIsBot(t *testing.T) {
+	for _, bot := range []bool{true, false} {
+		f := newFake(t)
+		f.on(http.MethodGet, "/users/12", http.StatusOK, map[string]any{"id": 12, "username": "project_7_bot", "bot": bot})
+		got, err := f.forge().IsBot(context.Background(), 12)
+		if err != nil || got != bot {
+			t.Errorf("bot %v = %v, %v", bot, got, err)
+		}
+		if r := f.only(); r.Token != reviewToken || r.Path != "/users/12" {
+			t.Errorf("request = %+v", r)
+		}
+	}
+	// No ID: not looked up.
+	f := newFake(t)
+	if got, err := f.forge().IsBot(context.Background(), 0); err != nil || got {
+		t.Errorf("no ID = %v, %v", got, err)
+	}
+	if n := len(f.requests()); n != 0 {
+		t.Errorf("%d requests for no ID", n)
+	}
+	// A user GitLab can't find or read is an error, never a person.
+	f = newFake(t)
+	if _, err := f.forge().IsBot(context.Background(), 12); !errors.Is(err, forge.ErrNotFound) {
+		t.Errorf("unknown user: err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestAccessLevel(t *testing.T) {
 	for _, tc := range []struct {
 		level int

@@ -2,12 +2,20 @@ package webhook
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
+
+// gitlabBotName matches the usernames GitLab gives its project and group
+// access tokens (project_<id>_bot, project_<id>_bot_<hex>, group_<id>_bot…)
+// and service accounts: automation, never a person. The engine also asks
+// GitLab whether the author is a bot (a user's bot flag) before it acts.
+var gitlabBotName = regexp.MustCompile(`^((project|group)_\d+_bot(_[0-9a-f]+)?|service_account_.*)$`)
 
 // maxReasonRunes is how much of a dismissal's reason is kept.
 const maxReasonRunes = 500
@@ -274,6 +282,9 @@ func (d commands) receive(ctx context.Context, c comment) (outcome, reason strin
 		return outcomeIgnore, "no_bot", nil
 	}
 	if c.Author == "" || c.AuthorIsBot || strings.HasSuffix(strings.ToLower(c.Author), "[bot]") {
+		return outcomeIgnore, "bot_author", nil
+	}
+	if c.Platform == config.PlatformGitLab && gitlabBotName.MatchString(c.Author) {
 		return outcomeIgnore, "bot_author", nil
 	}
 	for _, name := range ignore {

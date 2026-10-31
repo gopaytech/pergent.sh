@@ -176,6 +176,16 @@ func (f *Forge) AccessLevel(ctx context.Context, projectID int64, _ string, user
 	return forge.AccessNone, nil
 }
 
+// IsBot reads the user from GitLab and tells whether it marks it as a bot. A
+// user without an ID is not one (it has no access either).
+func (f *Forge) IsBot(ctx context.Context, userID int64) (bool, error) {
+	if userID == 0 {
+		return false, nil
+	}
+	bot, err := f.c.UserIsBot(ctx, userID)
+	return bot, mapErr(err)
+}
+
 // ChangeRef is the ref GitLab keeps merge request iid's head at.
 func (f *Forge) ChangeRef(iid int64) string {
 	return "refs/merge-requests/" + strconv.FormatInt(iid, 10) + "/head"
