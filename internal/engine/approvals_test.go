@@ -347,6 +347,28 @@ func TestApprovalOffWithdrawsApproval(t *testing.T) {
 	}
 }
 
+// A clean review published after its repository was switched off is not
+// approved: it is posted like a review with approval turned off.
+func TestPublishAfterSwitchOffIsNotApproved(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublish(env, 1, head)
+	env.Engine.Config.Repositories = nil
+
+	publish(t, env)
+
+	wantPublished(t, env, id)
+	wantNoApproval(t, env, 1)
+	wantStatus(t, env, head, gitlab.StatusSuccess, approvalOffDescription)
+	if body := createdComment(t, env, 1); !strings.Contains(body, "---\n"+approvalOffNote+"\n") {
+		t.Errorf("comment lacks the approval-off note: %q", body)
+	}
+	if r := env.Run(id); r.Outcome != store.OutcomeNoBlocking || r.Approved {
+		t.Errorf("run = outcome %q approved %v; want no_blocking, not approved", r.Outcome, r.Approved)
+	}
+}
+
 // The same on GitHub: the approve App's approval is dismissed.
 func TestApprovalOffWithdrawsApprovalGitHub(t *testing.T) {
 	env := newTestEnv(t)

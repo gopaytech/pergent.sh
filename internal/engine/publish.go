@@ -101,7 +101,9 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 		failure = repo.FailureStatus
 	}
 	o := e.outcome(run, log)
-	o.ApprovalOff = ok && !repo.Approve
+	// A repository switched off since the run was queued approves nothing
+	// more: its review is posted as with approval turned off.
+	o.ApprovalOff = !ok || !repo.Approve
 	if policy.Decide(o, failure).Approve {
 		// Only a review that would be approved depends on whether the
 		// change is a draft and the approve side can reach the repository.
