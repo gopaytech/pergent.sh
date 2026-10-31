@@ -818,20 +818,23 @@ func TestProjectAccessNotFound(t *testing.T) {
 	}
 }
 
-// Only an active member counts: a blocked user, or a membership awaiting
-// approval (over the seat limit), is not a member.
+// Only an active member with Guest or above counts: a blocked user, a
+// membership awaiting approval (over the seat limit) or Minimal Access is
+// not a member.
 func TestIsGroupMemberRequiresActive(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
 		member map[string]any
 		want   bool
 	}{
-		{"active", map[string]any{"state": "active", "membership_state": "active"}, true},
-		{"active, no membership_state (older GitLab)", map[string]any{"state": "active"}, true},
-		{"awaiting", map[string]any{"state": "active", "membership_state": "awaiting"}, false},
-		{"state awaiting", map[string]any{"state": "awaiting"}, false},
-		{"blocked user", map[string]any{"state": "blocked", "membership_state": "active"}, false},
-		{"no state", map[string]any{"id": 9}, false},
+		{"active", map[string]any{"state": "active", "membership_state": "active", "access_level": 10}, true},
+		{"active, no membership_state (older GitLab)", map[string]any{"state": "active", "access_level": 30}, true},
+		{"awaiting", map[string]any{"state": "active", "membership_state": "awaiting", "access_level": 10}, false},
+		{"state awaiting", map[string]any{"state": "awaiting", "access_level": 10}, false},
+		{"blocked user", map[string]any{"state": "blocked", "membership_state": "active", "access_level": 50}, false},
+		{"minimal access", map[string]any{"state": "active", "membership_state": "active", "access_level": 5}, false},
+		{"no access level", map[string]any{"state": "active", "membership_state": "active"}, false},
+		{"no state", map[string]any{"id": 9, "access_level": 10}, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c, _ := serve(t, jsonReply(tt.member))
@@ -849,11 +852,19 @@ func TestIsGroupMember(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("IsGroupMember = %v, %v", ok, err)
 	}
-	expect(t, (*reqs)[0], "GET", "/api/v4/groups/acme%2Fplatform/members/all/9", "")
+	expect(t, (*reqs)[0], "GET", "/api/v4/groups/acme%2Fplatform/members/9", "")
 
-	c, _ = serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"404 Not found"}`, 404) })
+	// A member of a parent group only, or of a group shared with this one,
+	// is in /members/all but not a direct member: not one.
+	c, _ = serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.EscapedPath(), "/members/all/9") {
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 9, "access_level": 50, "state": "active"})
+			return
+		}
+		http.Error(w, `{"message":"404 Not found"}`, 404)
+	})
 	if ok, err := c.IsGroupMember(context.Background(), "acme/platform", 9); err != nil || ok {
-		t.Fatalf("IsGroupMember of a non-member = %v, %v", ok, err)
+		t.Fatalf("IsGroupMember of a parent group's member = %v, %v", ok, err)
 	}
 
 	// Anything else is an error: the caller can't tell, so it can't say no.

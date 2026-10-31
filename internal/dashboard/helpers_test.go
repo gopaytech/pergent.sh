@@ -209,9 +209,12 @@ type fakeGitLab struct {
 	oauthServer
 	srv      *httptest.Server
 	projects map[string]map[string]any // path → GET /projects/:path body
-	groups   map[string]bool           // group path → user 9 is a member
-	checks   int                       // GET /projects/:path calls
-	listings []string                  // GET /projects queries
+	groups   map[string]bool           // group path → user 9 is a direct member
+	// inherited holds the groups user 9 is in only through a parent group
+	// or a share: /members/all shows it, /members doesn't.
+	inherited map[string]bool
+	checks    int      // GET /projects/:path calls
+	listings  []string // GET /projects queries
 	// listFail makes GET /projects answer 400; listFailFrom makes pages
 	// from listFailFrom on (1-based; 0: none) answer 403.
 	listFail     bool
@@ -236,7 +239,8 @@ func (f *fakeGitLab) projectChecks() int {
 
 func newFakeGitLab(t *testing.T) *fakeGitLab {
 	f := &fakeGitLab{oauthServer: oauthServer{prefix: "gl", expiresIn: 7200},
-		projects: map[string]map[string]any{}, groups: map[string]bool{}, username: "alice"}
+		projects: map[string]map[string]any{}, groups: map[string]bool{}, inherited: map[string]bool{},
+		username: "alice"}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -340,7 +344,15 @@ func (f *fakeGitLab) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		reply(w, 404, map[string]any{"message": "404 Project Not Found"})
 	case strings.HasPrefix(p, "/api/v4/groups/") && strings.HasSuffix(p, "/members/all/9"):
+		// Direct members and the members of parent and shared groups.
 		group, _ := url.PathUnescape(strings.TrimSuffix(strings.TrimPrefix(p, "/api/v4/groups/"), "/members/all/9"))
+		if f.groups[group] || f.inherited[group] {
+			reply(w, 200, map[string]any{"id": 9, "username": f.username, "access_level": 50, "state": "active"})
+			return
+		}
+		reply(w, 404, map[string]any{"message": "404 Not found"})
+	case strings.HasPrefix(p, "/api/v4/groups/") && strings.HasSuffix(p, "/members/9"):
+		group, _ := url.PathUnescape(strings.TrimSuffix(strings.TrimPrefix(p, "/api/v4/groups/"), "/members/9"))
 		if f.groups[group] {
 			body := map[string]any{"id": 9, "username": f.username, "access_level": 10, "state": "active", "membership_state": "active"}
 			for k, v := range f.member {

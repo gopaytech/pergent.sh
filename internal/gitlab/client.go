@@ -28,6 +28,8 @@ const (
 	maxDescription = 255
 	maxResponse    = 32 << 20
 	storedBody     = 4096
+	// guestAccess is GitLab's Guest access level; Minimal Access is 5.
+	guestAccess = 10
 )
 
 // Client talks to one GitLab instance as one user (one token).
@@ -380,25 +382,28 @@ func (c *Client) HasMemberAccess(ctx context.Context, id int64, minLevel int) (b
 	return false, nil
 }
 
-// IsGroupMember reports whether the user is an active member of group (a
-// path such as acme/platform), directly or through a parent group or shared
-// group. The user must be active (state) and the membership too
-// (membership_state, when GitLab reports it): a membership awaiting
-// approval is not one. Not a member (404) is false; any other failure is an
-// error.
+// IsGroupMember reports whether the user is a direct member of group (a
+// path such as acme/platform), from GET /groups/:id/members/:user_id.
+// Membership through a parent group, or through a group shared with this
+// one, doesn't count. The user must be active (state), the membership too
+// (membership_state, when GitLab reports it: one awaiting approval is not
+// one), and its role Guest or above (Minimal Access is not). Not a member
+// (404) is false; any other failure is an error.
 func (c *Client) IsGroupMember(ctx context.Context, group string, userID int64) (bool, error) {
 	var m struct {
 		State           string `json:"state"`
 		MembershipState string `json:"membership_state"`
+		AccessLevel     int    `json:"access_level"`
 	}
-	_, err := c.getJSON(ctx, "/groups/"+seg(group)+"/members/all/"+strconv.FormatInt(userID, 10), nil, &m)
+	_, err := c.getJSON(ctx, "/groups/"+seg(group)+"/members/"+strconv.FormatInt(userID, 10), nil, &m)
 	if isStatus(err, http.StatusNotFound) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	return m.State == "active" && (m.MembershipState == "" || m.MembershipState == "active"), nil
+	return m.State == "active" && (m.MembershipState == "" || m.MembershipState == "active") &&
+		m.AccessLevel >= guestAccess, nil
 }
 
 // ApprovalRules lists the project's approval rules.

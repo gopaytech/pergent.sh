@@ -178,6 +178,21 @@ func TestAdminByGroupAndTeam(t *testing.T) {
 			t.Fatal("a member of main's own admin group is not admin")
 		}
 	})
+	t.Run("gitlab member through a parent or shared group only", func(t *testing.T) {
+		e := newEnv(t, nil)
+		e.gl.set(func(*oauthServer) { e.gl.inherited["acme/platform"] = true })
+		if _, me := e.me(e.signIn("gitlab", "main")); me.IsAdmin {
+			t.Fatal("a member of a parent or shared group only is admin")
+		}
+	})
+	t.Run("gitlab minimal access", func(t *testing.T) {
+		e := newEnv(t, nil)
+		e.gl.setMember("acme/platform", true)
+		e.gl.set(func(*oauthServer) { e.gl.member = map[string]any{"access_level": 5} })
+		if _, me := e.me(e.signIn("gitlab", "main")); me.IsAdmin {
+			t.Fatal("a member with Minimal Access is admin")
+		}
+	})
 	t.Run("gitlab member awaiting approval", func(t *testing.T) {
 		e := newEnv(t, nil)
 		e.gl.setMember("acme/platform", true)

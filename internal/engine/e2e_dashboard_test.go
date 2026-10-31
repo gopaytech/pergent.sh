@@ -153,7 +153,7 @@ func serveDashboardGitLab(t *testing.T, env *testEnv) {
 			reply(w, http.StatusUnauthorized, map[string]string{"message": "401 Unauthorized"})
 		}
 	})
-	gl.Handle(http.MethodGet, "/groups/"+adminGroupEsc+"/members/all/"+strconv.FormatInt(aliceID, 10), func(w http.ResponseWriter, r *http.Request) {
+	gl.Handle(http.MethodGet, "/groups/"+adminGroupEsc+"/members/"+strconv.FormatInt(aliceID, 10), func(w http.ResponseWriter, r *http.Request) {
 		if bearer(r) != aliceToken {
 			reply(w, http.StatusUnauthorized, map[string]string{"message": "401 Unauthorized"})
 			return

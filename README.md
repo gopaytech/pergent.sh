@@ -357,7 +357,7 @@ Put the Client ID and the client secret in the Secret and name them in the GitHu
   - GitLab: the Reporter role or above, through the project, its group, or a group the project or its group is shared with, or a public project whose repository and merge requests are open to everyone. A share is checked with one more call to GitLab, made only when the project's own permissions show less than Reporter.
   - GitHub: read access to the repository, or a public repository.
 - **Checked on the server.** At sign-in pergent.sh asks GitLab or GitHub, with the user's token, about every repository switched on for that instance, and asks whether the user is in the admin group or team. It asks again when the answer is older than 5 minutes and the user makes a request, so lost access stops showing within 5 minutes. If asking fails, the last answer is used for 5 more minutes, then the user sees nothing until it works again. Every API answer is filtered by that list, which holds each repository's path and its platform ID: a run is shown only when both match, so a project created at the path of a deleted, renamed or transferred one never shows the earlier project's reviews. A repository, review or run the user can't see is answered exactly like one that doesn't exist.
-- **Admins** are the members of the `dashboard.admins` group (GitLab: active members, direct or through a parent group or a group the admin group is shared with) or team (GitHub, active members) on the instance they signed in with. Being an admin on one instance gives nothing on another.
+- **Admins** are the members of the `dashboard.admins` group or team on the instance they signed in with. GitLab: direct members of the group only, active, with the Guest role or above (Minimal Access doesn't count, nor does a membership awaiting approval). Members of a parent group, or of a group the admin group is shared with, are not admins: add admins to the group directly. GitHub: active members of the team. Being an admin on one instance gives nothing on another.
 
 **Everyone signed in** sees, for the repositories they can see:
 
@@ -422,7 +422,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `github[].oauth_client_id_env`, `github[].oauth_client_secret_env` | none | Names of the env vars with the review App's client ID and client secret, for [dashboard](#dashboard) sign-in. Both or neither. |
 | `dashboard.url` | none (dashboard off) | The dashboard's `https` address, a bare host without a port, path or trailing slash. Setting it turns the dashboard on; at least one instance must then have its `oauth_client_*_env` set. The sign-in callbacks are `<dashboard.url>/auth/<gitlab or github>/<instance name>/callback`. |
 | `dashboard.admins[].instance` | none | An instance with sign-in. Its admins are the members of `group` or `team`. Needs `dashboard.url`. |
-| `dashboard.admins[].group` | required on a GitLab instance | A GitLab group path, such as `acme/platform`. |
+| `dashboard.admins[].group` | required on a GitLab instance | A GitLab group path, such as `acme/platform`. Only its direct members (Guest or above) are admins; members of a parent group or of a shared group are not. |
 | `dashboard.admins[].team` | required on a GitHub instance | A GitHub team as `org/team-slug`, such as `acme/platform`. |
 | `repositories[].gitlab` | one of `gitlab` and `github` | Name of one of the `gitlab` instances. |
 | `repositories[].github` | one of `gitlab` and `github` | Name of one of the `github` instances. |
