@@ -113,7 +113,7 @@ function Review({ view }: { view: ReviewDetailView }) {
         </div>
         <div>
           {selected ? (
-            <RunBody id={selected.id} actions={{ header, can }} />
+            <RunBody key={selected.id} id={selected.id} actions={{ header, can }} />
           ) : (
             <div className="card empty">No runs yet.</div>
           )}
@@ -288,7 +288,8 @@ function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
   // report in the run, whichever skill made it.
   const blockingFPs = new Set(
     view.skills.flatMap((s) => [...s.findings, ...s.dismissed]).filter((f) => f.severity !== "suggestion").map((f) => f.fingerprint),
-  );  const findings: Located[] = view.skills
+  );
+  const findings: Located[] = view.skills
     .flatMap((s) => s.findings.map((f) => ({ ...f, skill: s.name })))
     .sort((a, b) => Number(b.severity === "blocking") - Number(a.severity === "blocking"));
   return (
@@ -332,8 +333,8 @@ function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
                 </div>
               )}
               {findings.length === 0 && <div className="pad meta">No findings.</div>}
-              {findings.map((f) => (
-                <Finding key={`${f.skill}/${f.id}`} f={f} blocking={f.severity !== "suggestion" || blockingFPs.has(f.fingerprint)} actions={actions} />
+              {findings.map((f, i) => (
+                <Finding key={`${f.skill}/${f.id}/${i}`} f={f} blocking={f.severity !== "suggestion" || blockingFPs.has(f.fingerprint)} actions={actions} />
               ))}
               {view.skills
                 .filter((s) => s.dismissed.length > 0)
@@ -342,8 +343,8 @@ function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
                     <h3 className="group">
                       Dismissed in {s.name} ({s.dismissed.length})
                     </h3>
-                    {s.dismissed.map((f) => (
-                      <DismissedFinding key={f.id} f={{ ...f, skill: s.name }} actions={actions} />
+                    {s.dismissed.map((f, i) => (
+                      <DismissedFinding key={`${f.id}/${i}`} f={{ ...f, skill: s.name }} actions={actions} />
                     ))}
                   </div>
                 ))}
@@ -430,7 +431,7 @@ function DismissControl({ f, blocking, actions }: { f: Located; blocking: boolea
         aria-label="Reason"
         placeholder={blocking ? "Why is this not a problem? (required)" : "Why? (optional)"}
         rows={2}
-        maxLength={1000}
+        maxLength={500}
         value={reason}
         disabled={dismiss.isPending}
         onChange={(e) => setReason(e.target.value)}

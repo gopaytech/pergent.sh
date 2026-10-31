@@ -533,4 +533,44 @@ describe("ReviewDetail buttons", () => {
     await userEvent.click(within(group).getByRole("button", { name: "Restore" }));
     expect(await screen.findByText("Finding not dismissed.")).toBeInTheDocument();
   });
+
+  it("does not carry a status note over to another run", async () => {
+    fakeApi({
+      ...base(allCan),
+      ["POST " + dismissUrl]: { body: { status: "already dismissed" } },
+      [`GET /api/runs/${older}`]: { body: { ...runDetail, run: reviewDetail.runs[1], latestDecided: true } },
+    });
+    renderAppAt();
+    const finding = (await screen.findByText("Name the magic retry window")).closest(".finding") as HTMLElement;
+    await userEvent.click(within(finding).getByRole("button", { name: "Dismiss" }));
+    await userEvent.click(within(finding).getByRole("button", { name: "Dismiss finding" }));
+    expect(await screen.findByText("Finding already dismissed.")).toBeInTheDocument();
+
+    const history = screen.getByRole("region", { name: "Review history" });
+    await userEvent.click(within(history).getByText("5c4b3a2"));
+    expect(await screen.findByText("Refund can be applied twice on retry")).toBeInTheDocument();
+    expect(screen.queryByText("Finding already dismissed.")).not.toBeInTheDocument();
+  });
+
+  it("lists findings that share an ID without a duplicate-key warning", async () => {
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    const skill = runDetail.skills[0];
+    const twin = { ...skill.findings[0] };
+    const dup = dismissedRun();
+    const run: RunDetailView = {
+      ...dup,
+      skills: [
+        { ...skill, findings: [twin, { ...twin }], dismissed: [] },
+        { ...dup.skills[1], dismissed: [dup.skills[1].dismissed[0], { ...dup.skills[1].dismissed[0] }] },
+      ],
+    };
+    fakeApi(base(allCan, run));
+    renderAppAt();
+    expect(await screen.findAllByText(twin.title)).toHaveLength(2);
+    const group = await screen.findByRole("group", { name: "Dismissed in code-review" });
+    expect(within(group).getAllByRole("button", { name: "Restore" })).toHaveLength(2);
+    const keyWarnings = warn.mock.calls.filter((c) => String(c[0]).includes("same key"));
+    warn.mockRestore();
+    expect(keyWarnings).toHaveLength(0);
+  });
 });
