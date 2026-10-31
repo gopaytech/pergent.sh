@@ -277,8 +277,8 @@ func TestPasswordSignIn(t *testing.T) {
 	if acc.LastSignInAt == nil {
 		t.Error("the sign-in was not recorded on the account")
 	}
-	if got := e.audits(); len(got) != 1 || got[0] != "ops sign_in" {
-		t.Errorf("audit = %q, want [ops sign_in]", got)
+	if got := e.audits(); len(got) != 1 || got[0] != "ops (password) sign_in" {
+		t.Errorf("audit = %q, want [ops (password) sign_in]", got)
 	}
 	// A platform user's /api/me says so.
 	if code, m := e.me(e.signIn("gitlab", "main")); code != 200 || m.Kind != "platform" || m.MustChangePassword {
@@ -332,8 +332,8 @@ func TestPasswordGuessing(t *testing.T) {
 		t.Errorf("accounts = %d, %v; want only ops", accounts, err)
 	}
 	got := e.audits()
-	want := []string{"ops sign_in_failed", "ops sign_in_failed", "ops sign_in_failed", "ops sign_in_failed",
-		"ops sign_in_failed", "ops locked", "ops sign_in_failed", "ops sign_in_failed"}
+	want := []string{"ops (password) sign_in_failed", "ops (password) sign_in_failed", "ops (password) sign_in_failed", "ops (password) sign_in_failed",
+		"ops (password) sign_in_failed", "ops (password) locked", "ops (password) sign_in_failed", "ops (password) sign_in_failed"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("audit = %q, want %q", got, want)
 	}
@@ -463,7 +463,7 @@ func TestMustChangePassword(t *testing.T) {
 	}
 	e.signInPassword("admin", "second-password-456")
 	got := e.audits()
-	if len(got) != 5 || got[2] != "admin password_changed" {
+	if len(got) != 5 || got[2] != "admin (password) password_changed" {
 		t.Errorf("audit = %q, want sign-ins, password_changed, a failure and a sign-in", got)
 	}
 	// Logging out works while a change is due.
@@ -598,7 +598,7 @@ func TestSignInRaceWithLock(t *testing.T) {
 	if got.LockedUntil == nil || !got.LockedUntil.After(e.clock.now()) || got.LastSignInAt != nil {
 		t.Errorf("account = %+v, want it still locked and no sign-in", got)
 	}
-	if a := e.audits(); len(a) != 1 || a[0] != "ops sign_in_failed" {
+	if a := e.audits(); len(a) != 1 || a[0] != "ops (password) sign_in_failed" {
 		t.Errorf("audit = %q, want one sign_in_failed", a)
 	}
 }
@@ -686,7 +686,7 @@ func TestConcurrentFailuresAuditLockOnce(t *testing.T) {
 	wg.Wait()
 	locks := 0
 	for _, a := range e.audits() {
-		if a == "ops locked" {
+		if a == "ops (password) locked" {
 			locks++
 		}
 	}
@@ -718,7 +718,7 @@ func TestChangePasswordCountsTowardsLock(t *testing.T) {
 	if got, _, _ := e.st.Account(ctx, acc.ID); !password.Verify(got.PasswordHash, "ops-password-123") {
 		t.Error("the password changed while locked")
 	}
-	if a := e.audits(); !strings.Contains(strings.Join(a, ","), "ops locked") {
+	if a := e.audits(); !strings.Contains(strings.Join(a, ","), "ops (password) locked") {
 		t.Errorf("audit = %q, want the lock", a)
 	}
 	e.clock.advance(15 * time.Minute)

@@ -409,6 +409,7 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 		Name: SessionCookieName, Value: id, Path: "/", MaxAge: int(MaxSessionAge / time.Second),
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
 	})
+	a.audit(ctx, account, "sign_in", "", now)
 	log.Info("dashboard sign-in")
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }

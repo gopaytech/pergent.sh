@@ -285,7 +285,8 @@ func (a *Auth) failedSignIn(ctx context.Context, acc store.Account, detail strin
 // audit records what acc did; a failure to is logged, not returned.
 func (a *Auth) audit(ctx context.Context, acc store.Account, action, detail string, now time.Time) {
 	id := acc.ID
-	if err := a.store.Audit(ctx, store.AuditEntry{At: now, ActorID: &id, Actor: acc.Username, Action: action, Detail: detail}); err != nil {
+	if err := a.store.Audit(ctx, store.AuditEntry{At: now, ActorID: &id, Actor: actorLabel(acc.Kind, acc.Platform, acc.Instance, acc.Username),
+		Action: action, Instance: acc.Instance, Detail: detail}); err != nil {
 		a.log.Error("dashboard: recording an audit entry failed", "action", action, "error", err.Error())
 	}
 }

@@ -269,7 +269,7 @@ func TestAddGitLabInstance(t *testing.T) {
 
 	entries := e.auditEntries()
 	if i := slices.IndexFunc(entries, func(a store.AuditEntry) bool { return a.Action == "instance_added" }); i < 0 ||
-		entries[i].Instance != "lab" || entries[i].Actor != "ops" {
+		entries[i].Instance != "lab" || entries[i].Actor != "ops (password)" {
 		t.Errorf("audit = %+v, want instance_added by ops at lab", entries)
 	}
 }

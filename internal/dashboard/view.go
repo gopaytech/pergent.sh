@@ -442,8 +442,15 @@ type AvailableRepo struct {
 // Every write needs the X-CSRF-Token header, as above, and is recorded in
 // the audit log: account_created and account_deleted (detail: the
 // username), team_created (detail: "name (role)"), team_updated (detail:
-// "name: " and the parts changed, of name, role, members and repos) and
-// team_deleted (detail: the name). Errors are {"error": "message"}.
+// "name: " and the parts changed, of name, "role before->after", "members
+// +added -removed" by username, and repos) and team_deleted (detail: the
+// name). Sign-ins are recorded too (sign_in; for a password account also
+// sign_in_failed, locked, password_changed). Errors are {"error":
+// "message"}.
+//
+// An entry's actor tells who acted: "alice (gitlab main)" for a platform
+// account (username, platform and instance), "root (password)" for a
+// password admin, "cli" for a password reset from the command line.
 //
 //   - GET /api/users: []UserView, the waiting accounts first, then
 //     everyone by username. A platform admin is listed the platform
@@ -494,7 +501,8 @@ type AvailableRepo struct {
 // other instances, and those its platform hides from it, are counted in
 // hiddenRepos and never named, and a team's members of other instances are
 // counted in hiddenMembers; audit entries about a repository it can't see
-// are left out.
+// or about another instance are left out, and so are a password admin's own
+// sign-ins and password changes.
 
 // UserView is one account.
 type UserView struct {

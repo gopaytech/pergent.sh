@@ -63,10 +63,22 @@ func (d *Dashboard) orgRoutes(mux *http.ServeMux) {
 // returned: the change is made already.
 func (d *Dashboard) audit(ctx context.Context, se Session, action, instance, project, detail string) {
 	id := se.AccountID
-	if err := d.Store.Audit(context.WithoutCancel(ctx), store.AuditEntry{At: d.now(), ActorID: &id, Actor: se.Username,
+	if err := d.Store.Audit(context.WithoutCancel(ctx), store.AuditEntry{At: d.now(), ActorID: &id,
+		Actor:  actorLabel(se.Kind, se.Platform, se.Instance, se.Username),
 		Action: action, Instance: instance, Project: project, Detail: detail}); err != nil {
 		d.Log.Error("dashboard: recording an audit entry failed", "action", action, "error", err.Error())
 	}
+}
+
+// actorLabel names who acted in the audit log, so the same username on two
+// instances, or as a password admin, is never mistaken for another:
+// "alice (gitlab main)" for a platform account, "root (password)" for a
+// password admin. (A password reset from the command line is "cli".)
+func actorLabel(kind, platform, instance, username string) string {
+	if kind == store.AccountPassword {
+		return username + " (password)"
+	}
+	return username + " (" + platform + " " + instance + ")"
 }
 
 // pathID is the request's {id}; ok is false when it isn't one.
@@ -418,7 +430,12 @@ func (d *Dashboard) updateTeam(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	if parts := teamChanges(before, after); len(parts) > 0 {
+	if parts := teamChanges(before, after, func(id int64) string {
+		if a, ok := accounts[id]; ok {
+			return a.Username
+		}
+		return "#" + strconv.FormatInt(id, 10)
+	}); len(parts) > 0 {
 		d.Log.Info("dashboard: team changed", "team", after.Name, "changed", strings.Join(parts, ", "), "by", se.Username)
 		d.audit(ctx, se, "team_updated", "", "", after.Name+": "+strings.Join(parts, ", "))
 	}
@@ -512,22 +529,35 @@ func (d *Dashboard) knownInstance(instance string) bool {
 }
 
 // teamChanges names what differs between a team before and after a change:
-// name, role, members and repos, in that order.
-func teamChanges(before, after store.Team) []string {
+// name, role (before->after), members (+ added, - removed, by username as
+// userName gives it) and repos, in that order. Nothing in it is a secret.
+func teamChanges(before, after store.Team, userName func(int64) string) []string {
 	var parts []string
 	if before.Name != after.Name {
 		parts = append(parts, "name")
 	}
 	if before.Role != after.Role {
-		parts = append(parts, "role")
+		parts = append(parts, "role "+before.Role+"->"+after.Role)
 	}
 	members := func(ids []int64) []int64 {
 		out := slices.Clone(ids)
 		slices.Sort(out)
 		return slices.Compact(out)
 	}
-	if !slices.Equal(members(before.Members), members(after.Members)) {
-		parts = append(parts, "members")
+	was, now := members(before.Members), members(after.Members)
+	if !slices.Equal(was, now) {
+		var names []string
+		for _, id := range now {
+			if !slices.Contains(was, id) {
+				names = append(names, "+"+userName(id))
+			}
+		}
+		for _, id := range was {
+			if !slices.Contains(now, id) {
+				names = append(names, "-"+userName(id))
+			}
+		}
+		parts = append(parts, "members "+strings.Join(names, " "))
 	}
 	repos := func(rs []store.TeamRepo) []RepoKey {
 		out := make([]RepoKey, 0, len(rs))
@@ -580,6 +610,27 @@ func (d *Dashboard) deleteTeam(w http.ResponseWriter, r *http.Request) {
 
 // --- the audit log ---
 
+// operatorOnlyActions are the audit actions of password accounts' own
+// sign-ins and passwords, which only a password admin is shown.
+var operatorOnlyActions = []string{"sign_in", "sign_in_failed", "locked", "password_changed", "password_reset"}
+
+// seesAudit reports whether the session may see an audit entry: an operator
+// every one; a platform admin those about a repository it can see, about its
+// own instance, and those about no instance, but not a password admin's own
+// sign-ins and passwords.
+func seesAudit(se Session, e store.AuditEntry) bool {
+	switch {
+	case se.All:
+		return true
+	case e.Project != "":
+		return se.CanSee(e.Instance, e.Project)
+	case e.Instance != "":
+		return e.Instance == se.Instance
+	default:
+		return !slices.Contains(operatorOnlyActions, e.Action)
+	}
+}
+
 // auditLog answers up to auditPageSize entries the session can see, newest
 // first, older than ?before= when given, and the before of the page after.
 // For a platform admin it reads on past the entries it can't see, at most
@@ -608,7 +659,7 @@ func (d *Dashboard) auditLog(w http.ResponseWriter, r *http.Request) {
 			if len(page.Entries) == auditPageSize {
 				break
 			}
-			if e.Project == "" || se.CanSee(e.Instance, e.Project) {
+			if seesAudit(se, e) {
 				page.Entries = append(page.Entries, AuditView{ID: e.ID, At: e.At.UTC(), Actor: e.Actor, Action: e.Action,
 					Instance: e.Instance, Project: e.Project, Detail: e.Detail})
 			}

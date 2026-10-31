@@ -148,7 +148,7 @@ func TestDeleteAccountEndsSessions(t *testing.T) {
 			deleted = append(deleted, a.Actor+" "+a.Detail)
 		}
 	}
-	if !slices.Equal(deleted, []string{"root second", "root alice"}) {
+	if !slices.Equal(deleted, []string{"root (password) second", "root (password) alice"}) {
 		t.Errorf("account_deleted entries = %v", deleted)
 	}
 }
@@ -224,7 +224,7 @@ func TestCreatePasswordAccount(t *testing.T) {
 			created = append(created, a.Actor+" "+a.Detail)
 		}
 	}
-	if len(created) != 2 || created[1] != "root ops.Second-1" {
+	if len(created) != 2 || created[1] != "root (password) ops.Second-1" {
 		t.Errorf("account_created entries = %v", created)
 	}
 }
@@ -291,8 +291,9 @@ func TestTeamCRUD(t *testing.T) {
 			log = append([]string{a.Actor + " " + a.Action + " " + a.Detail}, log...)
 		}
 	}
-	want := []string{"root team_created devs (viewer)", "root team_updated developers: name, role, members, repos",
-		"root team_deleted developers"}
+	want := []string{"root (password) team_created devs (viewer)",
+		"root (password) team_updated developers: name, role viewer->maintainer, members +bob +zed, repos",
+		"root (password) team_deleted developers"}
 	if !slices.Equal(log, want) {
 		t.Errorf("team audit = %q; want %q", log, want)
 	}
@@ -625,8 +626,9 @@ func TestAuditFiltered(t *testing.T) {
 		t.Errorf("platform admin's first page = %v, next %d; want [team_created], next %d", got, page.Next, all[4999].ID)
 	}
 	page = decode[AuditPageView](t, e.get(c, "/api/audit?before="+strconv.FormatInt(page.Next, 10)), "GET audit", http.StatusOK)
-	if got := actions(page.Entries); !slices.Equal(got, []string{"repository_on acme/widgets"}) || page.Next != 0 {
-		t.Errorf("platform admin's second page = %v, next %d; want [repository_on acme/widgets], next 0", got, page.Next)
+	// Its own sign-in is the oldest entry.
+	if got := actions(page.Entries); !slices.Equal(got, []string{"repository_on acme/widgets", "sign_in "}) || page.Next != 0 {
+		t.Errorf("platform admin's second page = %v, next %d; want [repository_on acme/widgets, sign_in], next 0", got, page.Next)
 	}
 
 	op := e.signInPassword("root", operatorPassword)
@@ -649,7 +651,7 @@ func TestAuditFiltered(t *testing.T) {
 	if all := e.auditEntries(); len(seen) != len(all) {
 		t.Errorf("the pages hold %d entries; the log has %d", len(seen), len(all))
 	}
-	if oldest := seen[len(seen)-1]; oldest.Actor != "carol" || oldest.Action != "repository_on" {
+	if oldest := seen[len(seen)-1]; oldest.Actor != "alice (gitlab main)" || oldest.Action != "sign_in" || oldest.Instance != "main" {
 		t.Errorf("oldest = %+v", oldest)
 	}
 	for _, q := range []string{"?before=x", "?before=-1", "?before=0"} {
@@ -658,6 +660,76 @@ func TestAuditFiltered(t *testing.T) {
 	empty := e.get(op, "/api/audit?before=1")
 	if empty.Code != http.StatusOK || body(empty) != `{"entries":[],"next":0}` {
 		t.Errorf("GET before the first = %d %s; want no entries, next 0", empty.Code, empty.Body)
+	}
+}
+
+// An entry about no repository is shown to a platform admin when it is about
+// no instance or its own, never when it is about another instance; and a
+// password admin's own sign-ins and passwords (no instance) are shown to
+// password admins only. An operator sees all.
+func TestAuditShownByInstanceAndKind(t *testing.T) {
+	e := newEnv(t, nil)
+	e.addPasswordAccount("root", operatorPassword, false)
+	c := e.signInGitLab(true, "acme/widgets")
+	for _, a := range []store.AuditEntry{
+		{Actor: "root (password)", Action: "instance_added", Instance: "gh", Detail: "github"},
+		{Actor: "root (password)", Action: "instance_updated", Instance: "main", Detail: "oauthClientID"},
+		{Actor: "root (password)", Action: "sign_in_failed", Detail: "wrong password"},
+		{Actor: "root (password)", Action: "locked"},
+		{Actor: "root (password)", Action: "password_changed"},
+		{Actor: "cli", Action: "password_reset", Detail: "root"},
+		{Actor: "root (password)", Action: "llm_updated", Detail: "model"},
+		{Actor: "zed (github gh)", Action: "sign_in", Instance: "gh"},
+	} {
+		e.addAudit(a)
+	}
+	op := e.signInPassword("root", operatorPassword)
+
+	var shown []string
+	for _, a := range decode[AuditPageView](t, e.get(c, "/api/audit"), "GET audit", http.StatusOK).Entries {
+		shown = append(shown, a.Action+" "+a.Instance)
+	}
+	if want := []string{"llm_updated ", "instance_updated main", "sign_in main"}; !slices.Equal(shown, want) {
+		t.Errorf("a platform admin sees %q; want %q", shown, want)
+	}
+	if n := len(decode[AuditPageView](t, e.get(op, "/api/audit"), "operator GET audit", http.StatusOK).Entries); n != len(e.auditEntries()) {
+		t.Errorf("an operator sees %d entries; the log has %d", n, len(e.auditEntries()))
+	}
+}
+
+// An OAuth sign-in is audited: who (username, platform and instance) and
+// where; the same name on two instances is told apart.
+func TestOAuthSignInAudited(t *testing.T) {
+	e := newEnv(t, nil)
+	e.aliceOn("main", store.RoleViewer)
+	e.aliceOn("gh", store.RoleViewer)
+	e.signIn("gitlab", "main")
+	e.signIn("github", "gh")
+	var got []string
+	for _, a := range e.auditEntries() {
+		if a.ActorID == nil {
+			t.Errorf("%s has no actor ID", a.Action)
+		}
+		got = append([]string{a.Actor + " " + a.Action + " " + a.Instance}, got...)
+	}
+	if want := []string{"alice (gitlab main) sign_in main", "alice (github gh) sign_in gh"}; !slices.Equal(got, want) {
+		t.Errorf("audit = %q; want %q", got, want)
+	}
+}
+
+// team_updated names the members added and removed and the role before and
+// after, by username.
+func TestTeamUpdatedDetailNamesChanges(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.signInOperator()
+	bob := e.platformAccount("main", 20, "bob")
+	zed := e.platformAccount("gh", 21, "zed")
+	id := e.team("devs", store.RoleViewer, []int64{bob})
+	target := "/api/teams/" + strconv.FormatInt(id, 10)
+	wantCode(t, e.send(c, "PUT", target, fmt.Sprintf(`{"name":"devs","role":"maintainer","members":[%d],"repos":[]}`, zed)),
+		"PUT", http.StatusOK)
+	if got := e.auditEntries()[0]; got.Action != "team_updated" || got.Detail != "devs: role viewer->maintainer, members +zed -bob" {
+		t.Errorf("audit = %+v; want the role and the members changed named", got)
 	}
 }
 
@@ -715,10 +787,10 @@ func TestWritesAudited(t *testing.T) {
 		got = append([]string{a.Actor + " " + a.Action + " " + a.Instance + "/" + a.Project + " " + a.Detail}, got...)
 	}
 	want := []string{
-		"alice repository_on main/acme/gadgets ",
-		"alice settings_updated main/acme/gadgets approve, skills",
-		"alice settings_reset main/acme/gadgets ",
-		"alice repository_off main/acme/gadgets ",
+		"alice (gitlab main) repository_on main/acme/gadgets ",
+		"alice (gitlab main) settings_updated main/acme/gadgets approve, skills",
+		"alice (gitlab main) settings_reset main/acme/gadgets ",
+		"alice (gitlab main) repository_off main/acme/gadgets ",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("audit = %q; want %q", got, want)
