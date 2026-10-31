@@ -34,6 +34,11 @@ type fakeSource struct {
 	// entered is told each time one starts waiting.
 	gate    chan struct{}
 	entered chan struct{}
+	// change is what GetChange answers (changeErr: an error instead);
+	// changeCalls counts the calls.
+	change      forge.Change
+	changeErr   error
+	changeCalls int
 }
 
 func newFakeSource() *fakeSource {
@@ -50,6 +55,20 @@ func (f *fakeSource) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.calls
+}
+
+// GetChange answers with the change a test set (its Number is the one asked
+// for), or its error. It is not counted in callCount.
+func (f *fakeSource) GetChange(_ context.Context, _, number int64) (forge.Change, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.changeCalls++
+	if f.changeErr != nil {
+		return forge.Change{}, f.changeErr
+	}
+	c := f.change
+	c.Number = number
+	return c, nil
 }
 
 func (f *fakeSource) DefaultBranch(_ context.Context, projectID int64) (string, error) {
@@ -703,7 +722,7 @@ func TestRunDetail(t *testing.T) {
 	if cr.Name != "code-review" || cr.Verdict != "has_blocking_issues" || cr.Source == nil || *cr.Source != "repo" || len(cr.Findings) != 2 {
 		t.Errorf("code-review = %+v", cr)
 	}
-	wantFinding := FindingView{ID: "a1b2c3", Severity: "blocking", Title: "Request body is used before validation",
+	wantFinding := FindingView{ID: "a1b2c3", Fingerprint: "a1b2c3d4e5f6", Severity: "blocking", Title: "Request body is used before validation",
 		File: "api/handler.go", Line: 42, Explanation: "Not validated.", SuggestedFix: "Call validate(req)."}
 	if cr.Findings[0] != wantFinding {
 		t.Errorf("finding = %+v\nwant %+v", cr.Findings[0], wantFinding)

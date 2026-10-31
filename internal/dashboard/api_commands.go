@@ -1,0 +1,420 @@
+package dashboard
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/gopaytech/pergent.sh/internal/actions"
+	"github.com/gopaytech/pergent.sh/internal/forge"
+	"github.com/gopaytech/pergent.sh/internal/settings"
+	"github.com/gopaytech/pergent.sh/internal/store"
+)
+
+const (
+	msgNeedsRoleReview = "only maintainers and admins of this repository can do this"
+	msgBadRerun        = `the body must be {"failed": true or false}`
+	msgBadDismiss      = `the body must be {"fingerprint": ..., "reason": ...}`
+	msgBadRestore      = `the body must be {"fingerprint": ...}`
+	msgNeedsReason     = "dismissing a blocking finding needs a reason"
+	msgReasonTooLong   = "the reason is too long"
+	msgNoSuchFinding   = "there is no such finding in the latest review"
+	msgChangeNotOpen   = "this change is not open"
+	msgDraftsNotOn     = "drafts aren't reviewed in this repository"
+	msgAuthorBlocking  = "the author of a change can't dismiss its blocking findings"
+	msgAuthorUnknown   = "could not tell who opened this change, so its blocking findings can't be dismissed now; please try again"
+	msgPlatformFailed  = "could not read this change from its platform, please try again"
+	msgRedecideFailed  = "the change was saved, but the review could not be decided again yet; the next review will use it"
+
+	// maxReason is the longest reason, in characters.
+	maxReason = 1000
+)
+
+// commandRoutes adds the review's buttons to mux, behind Auth.Require (which
+// checks X-CSRF-Token):
+//   - POST /api/reviews/{instance}/{project...}/{number}/rerun
+//     {"failed": bool}: 202 {"status": "queued" | "already queued" |
+//     "nothing failed" | "whole review"}, 429 at a re-run cap;
+//   - POST …/{number}/dismiss {"fingerprint", "reason"}: 200 {"status":
+//     "dismissed" | "already dismissed"};
+//   - POST …/{number}/restore {"fingerprint"}: 200 {"status": "restored" |
+//     "not dismissed"}.
+//
+// They work on every repository switched on, those set up in the config file
+// too, for its maintainers and admins.
+func (d *Dashboard) commandRoutes(mux *http.ServeMux) {
+	mux.Handle("POST /api/reviews/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.reviewAction)))
+	none := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { notFound(w) })
+	mux.Handle("POST /api/reviews/{instance}", d.Auth.Require(none))
+}
+
+// buttonsFor is the session's role on a repository and what the buttons
+// offer it. author is the username who opened the change: the platform user
+// of that name is not offered to dismiss blocking findings (the dismiss route
+// compares user IDs).
+func buttonsFor(se Session, instance, project, author string) (string, CanView) {
+	role := se.Role(instance, project)
+	if role < RoleMaintainer {
+		return role.String(), CanView{}
+	}
+	can := CanView{Rerun: true, DismissBlocking: true, DismissSuggestion: true, Restore: true}
+	if !se.Operator && se.Instance == instance && author != "" && strings.EqualFold(se.Username, author) {
+		can.DismissBlocking = false
+	}
+	return role.String(), can
+}
+
+// reviewButton is one button press: who, on which change.
+type reviewButton struct {
+	repo settings.Effective
+	mr   store.MRKey
+	// project is the change's repository path as its runs spell it.
+	project string
+}
+
+func (d *Dashboard) reviewAction(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	instance, rest := r.PathValue("instance"), r.PathValue("rest")
+	// rest is {project...}/{number}/{action}.
+	i := strings.LastIndex(rest, "/")
+	if i <= 0 {
+		notFound(w)
+		return
+	}
+	action, rest := rest[i+1:], rest[:i]
+	i = strings.LastIndex(rest, "/")
+	if i <= 0 || (action != "rerun" && action != "dismiss" && action != "restore") {
+		notFound(w)
+		return
+	}
+	number, err := strconv.ParseInt(rest[i+1:], 10, 64)
+	if err != nil || number <= 0 {
+		notFound(w)
+		return
+	}
+	repo, ok := d.targetAny(w, r, "/"+rest[i+1:]+"/"+action, RoleMaintainer)
+	if !ok {
+		return
+	}
+	// Decode the body first: a bad one is 400 whatever the change is.
+	var rerun struct {
+		Failed bool `json:"failed"`
+	}
+	var dismiss struct {
+		Fingerprint string `json:"fingerprint"`
+		Reason      string `json:"reason"`
+	}
+	var restore struct {
+		Fingerprint string `json:"fingerprint"`
+	}
+	switch action {
+	case "rerun":
+		// No body at all is a re-run of everything.
+		if err := decodeStrict(r, &rerun); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, msgBadRerun)
+			return
+		}
+	case "dismiss":
+		if err := decodeStrict(r, &dismiss); err != nil || strings.TrimSpace(dismiss.Fingerprint) == "" {
+			writeError(w, http.StatusBadRequest, msgBadDismiss)
+			return
+		}
+	case "restore":
+		if err := decodeStrict(r, &restore); err != nil || strings.TrimSpace(restore.Fingerprint) == "" {
+			writeError(w, http.StatusBadRequest, msgBadRestore)
+			return
+		}
+	}
+
+	// The change must be one pergent.sh has reviewed: the session sees its
+	// runs.
+	id, ok, err := d.projectID(ctx, session(r), instance, repo.Project)
+	if err != nil {
+		d.failed(w, r, "loading a project", err)
+		return
+	}
+	if !ok {
+		notFound(w)
+		return
+	}
+	mr := store.MRKey{Instance: instance, ProjectID: id, IID: number}
+	runs, err := d.Store.MRRunDigests(ctx, mr, visibility(session(r)))
+	if err != nil {
+		d.failed(w, r, "listing a review's runs", err)
+		return
+	}
+	if len(runs) == 0 {
+		notFound(w)
+		return
+	}
+	b := reviewButton{repo: repo, mr: mr, project: runs[len(runs)-1].ProjectPath}
+	switch action {
+	case "rerun":
+		d.rerun(w, r, b, rerun.Failed)
+	case "dismiss":
+		d.dismiss(w, r, b, strings.TrimSpace(dismiss.Fingerprint), strings.TrimSpace(dismiss.Reason))
+	case "restore":
+		d.restore(w, r, b, strings.TrimSpace(restore.Fingerprint))
+	}
+}
+
+func accepted(w http.ResponseWriter, status int, what string) {
+	writeJSON(w, status, map[string]string{"status": what})
+}
+
+// platformChange reads the change from its platform, within platformTimeout.
+// On failure it has answered the request: 404 when the platform has no such
+// change, else 502.
+func (d *Dashboard) platformChange(w http.ResponseWriter, r *http.Request, b reviewButton) (forge.Change, bool) {
+	src, ok := d.sources.Get(b.mr.Instance)
+	if !ok {
+		writeError(w, http.StatusBadGateway, msgPlatformFailed)
+		return forge.Change{}, false
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), platformTimeout)
+	defer cancel()
+	change, err := src.GetChange(ctx, b.mr.ProjectID, b.mr.IID)
+	if errors.Is(err, forge.ErrNotFound) {
+		notFound(w)
+		return forge.Change{}, false
+	}
+	if err != nil {
+		d.Log.Warn("dashboard: reading a change failed", "instance", b.mr.Instance, "project", b.project,
+			"mr", b.mr.IID, "error", d.redact(err.Error()))
+		writeError(w, http.StatusBadGateway, msgPlatformFailed)
+		return forge.Change{}, false
+	}
+	return change, true
+}
+
+// redact removes the secrets pergent.sh knows from text bound for the store
+// or a log.
+func (d *Dashboard) redact(text string) string {
+	for _, key := range d.registry.LLMKeys() {
+		text = strings.ReplaceAll(text, key, "***")
+	}
+	return text
+}
+
+// auditReview records a button press on the change at head. A failure to is
+// logged, not returned.
+func (d *Dashboard) auditReview(r *http.Request, b reviewButton, action, head, detail string) {
+	text := fmt.Sprintf("mr=%d head=%s", b.mr.IID, head)
+	if detail != "" {
+		text += " " + detail
+	}
+	d.audit(r.Context(), session(r), action, b.mr.Instance, b.project, text)
+}
+
+// rerun is the re-run buttons. Like the comment command, it re-runs against
+// the change's head on the platform now.
+func (d *Dashboard) rerun(w http.ResponseWriter, r *http.Request, b reviewButton, failedOnly bool) {
+	ctx := r.Context()
+	change, ok := d.platformChange(w, r, b)
+	if !ok {
+		return
+	}
+	switch {
+	case change.State != forge.StateOpen:
+		writeError(w, http.StatusConflict, msgChangeNotOpen)
+		return
+	case change.Draft && !b.repo.ReviewDrafts:
+		writeError(w, http.StatusConflict, msgDraftsNotOn)
+		return
+	case change.HeadSHA == "":
+		writeError(w, http.StatusBadGateway, msgPlatformFailed)
+		return
+	}
+
+	trigger, action, status, detail := store.TriggerRerun, "review_rerun", "queued", "skills=all"
+	var (
+		skills []string
+		base   *string
+	)
+	if failedOnly {
+		action = "review_rerun_failed"
+		var whole bool
+		var err error
+		if skills, base, whole, err = actions.FailedSkills(ctx, d.Store, b.mr, change.HeadSHA, change.TargetBranch); err != nil {
+			d.failed(w, r, "finding the failed skills", err)
+			return
+		}
+		switch {
+		case whole:
+			status = "whole review"
+		case len(skills) == 0:
+			accepted(w, http.StatusAccepted, "nothing failed")
+			return
+		default:
+			trigger, detail = store.TriggerRerunFailed, "skills="+strings.Join(skills, ",")
+		}
+	}
+
+	capped, err := actions.CapReached(ctx, d.Store, d.now(), b.mr, b.repo)
+	if err != nil {
+		d.failed(w, r, "counting re-runs", err)
+		return
+	}
+	if capped {
+		writeError(w, http.StatusTooManyRequests, actions.CapMessage(actions.Term(b.repo.Platform)))
+		return
+	}
+	_, created, err := d.Store.EnqueueRerun(ctx, b.mr, b.project, change.HeadSHA, change.TargetBranch, trigger, skills, base)
+	if err != nil {
+		d.failed(w, r, "queueing a re-run", err)
+		return
+	}
+	if !created {
+		// A head already queued or running is reviewed once.
+		accepted(w, http.StatusAccepted, "already queued")
+		return
+	}
+	d.wake()
+	d.auditReview(r, b, action, change.HeadSHA, detail)
+	accepted(w, http.StatusAccepted, status)
+}
+
+// dismiss sets a finding of the latest review aside.
+func (d *Dashboard) dismiss(w http.ResponseWriter, r *http.Request, b reviewButton, fingerprint, reason string) {
+	ctx, se := r.Context(), session(r)
+	if utf8.RuneCountInString(reason) > maxReason {
+		writeError(w, http.StatusBadRequest, msgReasonTooLong)
+		return
+	}
+	findings, reviewed, ok, err := actions.LatestFindings(ctx, d.Store, b.mr)
+	if err != nil {
+		d.failed(w, r, "loading the latest review", err)
+		return
+	}
+	f, found := actions.MostSevere(findings, fingerprint)
+	if !ok || !found {
+		writeError(w, http.StatusNotFound, msgNoSuchFinding)
+		return
+	}
+	// Anything but a suggestion is dismissed as a blocking finding, which
+	// needs a reason and someone other than the change's author.
+	severity := "blocking"
+	if f.Severity == "suggestion" {
+		severity = "suggestion"
+	}
+	if severity == "blocking" {
+		if reason == "" {
+			writeError(w, http.StatusBadRequest, msgNeedsReason)
+			return
+		}
+		if !d.mayDismissBlocking(w, r, b) {
+			return
+		}
+	}
+
+	accountID := se.AccountID
+	created, err := d.Store.Dismiss(context.WithoutCancel(ctx), store.Dismissal{
+		MR: b.mr, Fingerprint: fingerprint, Severity: severity, Reason: reason,
+		Actor: actorLabel(se.Kind, se.Platform, se.Instance, se.Username), ActorID: &accountID, CreatedAt: d.now(),
+	})
+	if err != nil {
+		d.Log.Error("dashboard: storing a dismissal failed", "instance", b.mr.Instance, "project", b.project, "error", err.Error())
+		writeError(w, http.StatusInternalServerError, msgWriteFailed)
+		return
+	}
+	if !created {
+		// Dismissed already, at this severity or a higher one.
+		accepted(w, http.StatusOK, "already dismissed")
+		return
+	}
+	detail := "fingerprint=" + fingerprint + " severity=" + severity
+	if reason != "" {
+		detail += fmt.Sprintf(" reason=%q", d.redact(reason))
+	}
+	d.auditReview(r, b, "finding_dismissed", reviewed.HeadSHA, detail)
+	if !d.redecide(r, b.mr, reviewed) {
+		writeError(w, http.StatusInternalServerError, msgRedecideFailed)
+		return
+	}
+	accepted(w, http.StatusOK, "dismissed")
+}
+
+// mayDismissBlocking tells whether the session may dismiss a blocking
+// finding of the change: a password admin always may (they have no platform
+// identity, so they are never its author); a platform user may unless they
+// opened it, and when the author can't be told it fails closed. When it may
+// not, it has answered the request.
+func (d *Dashboard) mayDismissBlocking(w http.ResponseWriter, r *http.Request, b reviewButton) bool {
+	se := session(r)
+	if se.Operator {
+		return true
+	}
+	change, ok := d.platformChange(w, r, b)
+	if !ok {
+		return false
+	}
+	if change.AuthorID == 0 || se.UserID == 0 || se.Instance != b.mr.Instance {
+		writeError(w, http.StatusBadGateway, msgAuthorUnknown)
+		return false
+	}
+	if actions.IsAuthor(se.UserID, change.AuthorID) {
+		writeError(w, http.StatusForbidden, msgAuthorBlocking)
+		return false
+	}
+	return true
+}
+
+// restore undoes a dismissal.
+func (d *Dashboard) restore(w http.ResponseWriter, r *http.Request, b reviewButton, fingerprint string) {
+	ctx := r.Context()
+	stored, err := d.Store.Dismissals(ctx, b.mr)
+	if err != nil {
+		d.failed(w, r, "loading dismissals", err)
+		return
+	}
+	severity := ""
+	for _, dm := range stored {
+		if dm.Fingerprint == fingerprint {
+			severity = dm.Severity
+		}
+	}
+	restored, err := d.Store.Restore(context.WithoutCancel(ctx), b.mr, fingerprint)
+	if err != nil {
+		d.Log.Error("dashboard: restoring a finding failed", "instance", b.mr.Instance, "project", b.project, "error", err.Error())
+		writeError(w, http.StatusInternalServerError, msgWriteFailed)
+		return
+	}
+	if !restored {
+		accepted(w, http.StatusOK, "not dismissed")
+		return
+	}
+	reviewed, _, err := d.Store.LatestDecidedRun(ctx, b.mr)
+	if err != nil {
+		d.failed(w, r, "loading the latest review", err)
+		return
+	}
+	d.auditReview(r, b, "finding_restored", reviewed.HeadSHA, "fingerprint="+fingerprint+" severity="+severity)
+	if !d.redecide(r, b.mr, reviewed) {
+		writeError(w, http.StatusInternalServerError, msgRedecideFailed)
+		return
+	}
+	accepted(w, http.StatusOK, "restored")
+}
+
+// redecide has the review decided again with the dismissals as they are now,
+// without a new run (the engine publishes it), and wakes the engine. A review
+// of another head than the latest run's, or no review at all, has nothing to
+// decide: the change applies to its next review. It reports whether the store
+// accepted the request.
+func (d *Dashboard) redecide(r *http.Request, mr store.MRKey, reviewed store.Run) bool {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), platformTimeout)
+	defer cancel()
+	if reviewed.ID != "" {
+		if _, err := d.Store.Republish(ctx, mr, reviewed.HeadSHA, reviewed.TargetBranch); err != nil {
+			d.Log.Error("dashboard: deciding a review again failed", "instance", mr.Instance, "mr", mr.IID, "error", err.Error())
+			return false
+		}
+	}
+	d.wake()
+	return true
+}

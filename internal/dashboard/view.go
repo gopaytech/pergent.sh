@@ -115,6 +115,24 @@ type ReviewListView struct {
 type ReviewDetailView struct {
 	Header ReviewHeader `json:"header"`
 	Runs   []RunSummary `json:"runs"`
+	// Role is the session's role on the repository: "viewer", "maintainer"
+	// or "admin" ("" for a repository switched off).
+	Role string  `json:"role"`
+	Can  CanView `json:"can"`
+}
+
+// CanView is what the session may do to the review with the buttons. The
+// platform user who opened the change is told apart by username here (the
+// answer is a hint for the page); the dismiss route checks by user ID.
+type CanView struct {
+	// Rerun starts the review again, whole or only its failed skills.
+	Rerun bool `json:"rerun"`
+	// DismissBlocking dismisses a blocking finding: not the change's author.
+	DismissBlocking bool `json:"dismissBlocking"`
+	// DismissSuggestion dismisses a suggestion.
+	DismissSuggestion bool `json:"dismissSuggestion"`
+	// Restore undoes a dismissal.
+	Restore bool `json:"restore"`
 }
 
 // ReviewHeader is the change as pergent.sh last read it.
@@ -204,14 +222,21 @@ type SkillView struct {
 	// Source is "library" for a skill of pergent.sh's library, "repo"
 	// for the repository's own (also one replacing a library skill), as
 	// recorded when the review started; null when it wasn't recorded.
-	Source   *string       `json:"source"`
-	Findings []FindingView `json:"findings"`
-	Checks   []CheckView   `json:"checks"`
+	Source *string `json:"source"`
+	// Findings are those still standing; Dismissed are those set aside by
+	// a dismissal, each with who dismissed it. Verdict counts the blocking
+	// findings left in Findings.
+	Findings  []FindingView `json:"findings"`
+	Dismissed []FindingView `json:"dismissed"`
+	Checks    []CheckView   `json:"checks"`
 }
 
 // FindingView is one finding.
 type FindingView struct {
 	ID string `json:"id"`
+	// Fingerprint identifies the finding across runs: what a dismissal and a
+	// restore name.
+	Fingerprint string `json:"fingerprint"`
 	// Severity is "blocking" or "suggestion".
 	Severity string `json:"severity"`
 	Title    string `json:"title"`
@@ -220,6 +245,17 @@ type FindingView struct {
 	Line         int64  `json:"line,omitempty"`
 	Explanation  string `json:"explanation"`
 	SuggestedFix string `json:"suggestedFix"`
+	// Dismissed is who set the finding aside, and why; null for a finding
+	// that stands.
+	Dismissed *DismissedView `json:"dismissed"`
+}
+
+// DismissedView is a dismissal of a finding.
+type DismissedView struct {
+	// By is who dismissed it, as the audit log names them.
+	By     string    `json:"by"`
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at"`
 }
 
 // CheckView is one check of a skill's checklist.

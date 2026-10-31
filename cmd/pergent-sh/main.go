@@ -219,6 +219,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	dash, err := newDashboard(dashboard.Options{
 		Config: cfg, Instances: reg, Connector: conn, Store: st, SecretKey: key, Log: log, Library: lib,
 		Sources: conn.sources, Catalogs: conn.catalogs, ReconcileSoon: eng.ReconcileSoon,
+		Wake: eng.Wake,
 	})
 	if err != nil {
 		return err

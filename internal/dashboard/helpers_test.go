@@ -537,6 +537,8 @@ type env struct {
 	// reconciles counts the dashboard's ReconcileSoon calls; reconciled
 	// lists the instance/project each named.
 	reconciles atomic.Int32
+	// wakes counts the dashboard's Wake calls.
+	wakes      atomic.Int32
 	reconciled []string
 	gl         *fakeGitLab
 	gh         *fakeGitHub
@@ -610,7 +612,7 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 	d, err := New(Options{
 		Config: cfg, Store: st, SecretKey: e.key, Now: e.clock.now, Library: e.lib, Sources: sources,
 		Instances: e.reg, Connector: e.conn,
-		Catalogs: catalogs, ReconcileSoon: func(instance, project string) {
+		Catalogs: catalogs, Wake: func() { e.wakes.Add(1) }, ReconcileSoon: func(instance, project string) {
 			e.reconciles.Add(1)
 			e.mu.Lock()
 			e.reconciled = append(e.reconciled, instance+"/"+project)

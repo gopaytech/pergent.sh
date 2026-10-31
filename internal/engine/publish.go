@@ -10,6 +10,7 @@ import (
 
 	"github.com/gopaytech/pergent/render"
 
+	"github.com/gopaytech/pergent.sh/internal/actions"
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/kube"
@@ -205,11 +206,7 @@ func (e *Engine) dismissals(ctx context.Context, mr store.MRKey) ([]render.Dismi
 	if err != nil {
 		return nil, fmt.Errorf("load dismissals: %w", err)
 	}
-	out := make([]render.Dismissal, len(stored))
-	for i, d := range stored {
-		out[i] = render.Dismissal{Fingerprint: d.Fingerprint, Severity: d.Severity, By: d.Actor, Reason: d.Reason}
-	}
-	return out, nil
+	return actions.RenderDismissals(stored), nil
 }
 
 // withdrawRedecided takes the approve bot's approval of the run's head and

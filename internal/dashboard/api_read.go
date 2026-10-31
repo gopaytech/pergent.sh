@@ -17,6 +17,9 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/resource"
 
+	"github.com/gopaytech/pergent/render"
+
+	"github.com/gopaytech/pergent.sh/internal/actions"
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/result"
@@ -453,7 +456,15 @@ func (d *Dashboard) review(w http.ResponseWriter, r *http.Request) {
 	}
 	summaries := runSummaries(runs, judge)
 	slices.Reverse(summaries)
-	writeJSON(w, http.StatusOK, ReviewDetailView{Header: header, Runs: summaries})
+	view := ReviewDetailView{Header: header, Runs: summaries}
+	// The buttons are for repositories switched on.
+	if _, on, err := d.Repos.Get(ctx, instance, newest.ProjectPath); err != nil {
+		d.failed(w, r, "loading a repository", err)
+		return
+	} else if on {
+		view.Role, view.Can = buttonsFor(se, instance, newest.ProjectPath, header.Author)
+	}
+	writeJSON(w, http.StatusOK, view)
 }
 
 // runSummaries summarises runs (oldest first), each with the trigger read
@@ -544,8 +555,15 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 	// The skills of a result the publisher could use: one that parses and
 	// is for the run's own base and head.
 	if res, err := result.Parse(run.Result); err == nil && res.Base == run.BaseSHA && res.Head == run.HeadSHA {
+		// The change's dismissals apply to every run of it: a finding
+		// dismissed stays dismissed when a later run reports it again.
+		dismissals, err := d.Store.Dismissals(ctx, run.MR)
+		if err != nil {
+			d.failed(w, r, "loading dismissals", err)
+			return
+		}
 		view.PergentVersion = res.PergentVersion
-		fillSkills(&view, res, run.Result, run.SkillSources)
+		fillSkills(&view, res, run.Result, run.SkillSources, dismissals)
 	}
 	writeJSON(w, http.StatusOK, view)
 }
@@ -567,16 +585,6 @@ type skillExtra struct {
 	} `json:"tokens"`
 }
 
-type findingJSON struct {
-	ID           string `json:"id"`
-	Severity     string `json:"severity"`
-	Title        string `json:"title"`
-	File         string `json:"file"`
-	Line         int64  `json:"line"`
-	Explanation  string `json:"explanation"`
-	SuggestedFix string `json:"suggested_fix"`
-}
-
 type notReviewedJSON struct {
 	Path  string `json:"path"`
 	Cause string `json:"cause"`
@@ -585,26 +593,34 @@ type notReviewedJSON struct {
 // fillSkills adds the skills, findings, checks, files and tokens of a
 // parsed result (raw is the same result, for the fields result.Result
 // doesn't declare), each skill with its recorded source. A part that
-// doesn't decode is left out, not guessed.
-func fillSkills(view *RunDetailView, res *result.Result, raw []byte, sources map[string]string) {
+// doesn't decode is left out, not guessed. Findings that dismissals cover
+// are moved to the skill's Dismissed, and its verdict is the one the policy
+// decides on with them set aside.
+func fillSkills(view *RunDetailView, res *result.Result, raw []byte, sources map[string]string, dismissals []store.Dismissal) {
 	var extra struct {
 		Skills []json.RawMessage `json:"skills"`
 	}
 	_ = json.Unmarshal(raw, &extra)
 
+	decided := render.ApplyDismissals(result.ToRender(res), actions.RenderDismissals(dismissals))
+	at := map[string]time.Time{}
+	for _, dm := range dismissals {
+		at[dm.Fingerprint] = dm.CreatedAt
+	}
 	reviewed, skipped, notReviewed := map[string]bool{}, map[SkippedFile]bool{}, map[string]bool{}
 	for i, s := range res.Skills {
-		sv := SkillView{Name: s.Name, Verdict: s.Verdict, Findings: []FindingView{}, Checks: []CheckView{}}
+		sv := SkillView{Name: s.Name, Verdict: decided[i].Verdict, Findings: []FindingView{}, Dismissed: []FindingView{},
+			Checks: []CheckView{}}
 		if src, ok := sources[s.Name]; ok {
 			sv.Source = &src
 		}
-		for _, rawFinding := range s.Findings {
-			var f findingJSON
-			if json.Unmarshal(rawFinding, &f) != nil {
-				f = findingJSON{Title: "(a finding pergent.sh couldn't read)"}
-			}
-			sv.Findings = append(sv.Findings, FindingView{ID: f.ID, Severity: f.Severity, Title: f.Title, File: f.File,
-				Line: f.Line, Explanation: f.Explanation, SuggestedFix: f.SuggestedFix})
+		for _, f := range decided[i].Findings {
+			sv.Findings = append(sv.Findings, findingView(f))
+		}
+		for _, df := range decided[i].Dismissed {
+			fv := findingView(df.Finding)
+			fv.Dismissed = &DismissedView{By: df.By, Reason: df.Reason, At: at[df.Finding.Fingerprint].UTC()}
+			sv.Dismissed = append(sv.Dismissed, fv)
 		}
 		if i < len(extra.Skills) {
 			var x skillExtra
@@ -642,6 +658,12 @@ func fillSkills(view *RunDetailView, res *result.Result, raw []byte, sources map
 		}
 		view.Skills = append(view.Skills, sv)
 	}
+}
+
+// findingView is f as the page shows it.
+func findingView(f render.Finding) FindingView {
+	return FindingView{ID: f.ID, Fingerprint: f.Fingerprint, Severity: string(f.Severity), Title: f.Title, File: f.File,
+		Line: int64(f.Line), Explanation: f.Explanation, SuggestedFix: f.SuggestedFix}
 }
 
 func (d *Dashboard) runLog(w http.ResponseWriter, r *http.Request) {

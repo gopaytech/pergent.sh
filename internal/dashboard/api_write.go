@@ -463,6 +463,18 @@ func decodeStrict(r *http.Request, v any) error {
 // otherwise, as for one that doesn't exist), on which the session's role is
 // need or above (403) and not managed by config (409).
 func (d *Dashboard) target(w http.ResponseWriter, r *http.Request, suffix string, need Role) (settings.Effective, bool) {
+	return d.targetRepo(w, r, suffix, need, false, msgNeedsRole)
+}
+
+// targetAny is target without the 409 for a repository managed by config: a
+// review's buttons work on every repository switched on, wherever it is set
+// up.
+func (d *Dashboard) targetAny(w http.ResponseWriter, r *http.Request, suffix string, need Role) (settings.Effective, bool) {
+	return d.targetRepo(w, r, suffix, need, true, msgNeedsRoleReview)
+}
+
+// targetRepo is target and targetAny: denied is the 403's message.
+func (d *Dashboard) targetRepo(w http.ResponseWriter, r *http.Request, suffix string, need Role, allowConfig bool, denied string) (settings.Effective, bool) {
 	ctx, se := r.Context(), session(r)
 	instance := r.PathValue("instance")
 	project, ok := strings.CutSuffix(r.PathValue("rest"), suffix)
@@ -480,10 +492,10 @@ func (d *Dashboard) target(w http.ResponseWriter, r *http.Request, suffix string
 			continue
 		}
 		if se.Role(repo.Instance, repo.Project) < need {
-			writeError(w, http.StatusForbidden, msgNeedsRole)
+			writeError(w, http.StatusForbidden, denied)
 			return settings.Effective{}, false
 		}
-		if repo.Source == settings.SourceConfig {
+		if repo.Source == settings.SourceConfig && !allowConfig {
 			writeError(w, http.StatusConflict, msgConfigManaged)
 			return settings.Effective{}, false
 		}

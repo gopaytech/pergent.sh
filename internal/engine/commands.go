@@ -2,14 +2,13 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
-	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/actions"
 	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/settings"
@@ -76,9 +75,7 @@ func replyUnknownID(id string) string {
 	return fmt.Sprintf("no finding %s in the latest review", replyID(id))
 }
 
-func replyCap(term string) string {
-	return fmt.Sprintf("re-run limit reached for this %s; it resets at 00:00 UTC", term)
-}
+func replyCap(term string) string { return actions.CapMessage(term) }
 
 func replyAlreadyDismissed(id string) string {
 	return fmt.Sprintf("finding %s is already dismissed", replyID(id))
@@ -97,12 +94,7 @@ func replyID(id string) string {
 }
 
 // changeTerm is what the platform calls a change.
-func changeTerm(platform string) string {
-	if platform == config.PlatformGitHub {
-		return "PR"
-	}
-	return "MR"
-}
+func changeTerm(platform string) string { return actions.Term(platform) }
 
 // verdict is how the engine answered a command: what it records as the
 // command's outcome, the reaction on the comment and the reply, if any.
@@ -380,7 +372,7 @@ func (c *commandRun) rerun(ctx context.Context, failedOnly bool) (verdict, error
 	)
 	if failedOnly {
 		action = "review_rerun_failed"
-		if skills, base, whole, err = c.failedSkills(ctx); err != nil {
+		if skills, base, whole, err = actions.FailedSkills(ctx, c.e.Store, c.cmd.MR, c.change.HeadSHA, c.change.TargetBranch); err != nil {
 			return verdict{}, err
 		}
 		switch {
@@ -417,54 +409,10 @@ func (c *commandRun) rerun(ctx context.Context, failedOnly bool) (verdict, error
 	return done(""), nil
 }
 
-// failedSkills names the skills of the newest review of the current head that
-// a "review failed" re-runs, and that review's run, which the re-run keeps the
-// other skills' results of. whole is set when no skill can be singled out (no
-// review of this head and target, an error result, or one whose results were
-// not all kept), and the whole review is re-run.
-func (c *commandRun) failedSkills(ctx context.Context) (skills []string, base *string, whole bool, err error) {
-	run, found, err := c.e.Store.LatestDecidedRun(ctx, c.cmd.MR)
-	if err != nil {
-		return nil, nil, false, fmt.Errorf("load the latest review: %w", err)
-	}
-	if !found || run.HeadSHA != c.change.HeadSHA || run.TargetBranch != c.change.TargetBranch || run.Result == nil {
-		return nil, nil, true, nil
-	}
-	r, perr := result.Parse(run.Result)
-	if perr != nil || r.MergeNote != "" {
-		// An unreadable result, or a partial one whose other skills were not
-		// kept: nothing to build on.
-		return nil, nil, true, nil
-	}
-	ds, err := c.e.dismissals(ctx, c.cmd.MR)
-	if err != nil {
-		return nil, nil, false, err
-	}
-	skills, whole = result.FailedSkills(r, ds)
-	if whole {
-		return nil, nil, true, nil
-	}
-	id := run.ID
-	return skills, &id, false, nil
-}
-
 // capReached tells whether the re-run caps of the change or of the repository
 // are used up for today (UTC). Command and button re-runs count alike.
 func (c *commandRun) capReached(ctx context.Context) (bool, error) {
-	now := c.e.now().UTC()
-	since := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	n, err := c.e.Store.CountReruns(ctx, &c.cmd.MR, "", 0, since)
-	if err != nil {
-		return false, fmt.Errorf("count the re-runs of the change: %w", err)
-	}
-	if n >= c.repo.RerunLimitPerMR {
-		return true, nil
-	}
-	n, err = c.e.Store.CountReruns(ctx, nil, c.cmd.MR.Instance, c.cmd.MR.ProjectID, since)
-	if err != nil {
-		return false, fmt.Errorf("count the re-runs of the repository: %w", err)
-	}
-	return n >= c.repo.RerunLimitPerRepo, nil
+	return actions.CapReached(ctx, c.e.Store, c.e.now(), c.cmd.MR, c.repo)
 }
 
 // dismiss is "dismiss <id> [reason]".
@@ -544,10 +492,9 @@ func (c *commandRun) dismiss(ctx context.Context) (verdict, error) {
 }
 
 // isAuthor tells whether the commenter is the author of the change, by user
-// ID. When either ID is unknown they can't be told apart, and the commenter
-// is taken for the author.
+// ID (see actions.IsAuthor).
 func (c *commandRun) isAuthor() bool {
-	return c.cmd.AuthorID == 0 || c.change.AuthorID == 0 || c.cmd.AuthorID == c.change.AuthorID
+	return actions.IsAuthor(c.cmd.AuthorID, c.change.AuthorID)
 }
 
 // ownDismissal tells whether the stored dismissal of fingerprint is the one
@@ -572,25 +519,9 @@ func (c *commandRun) ownDismissal(ctx context.Context, fingerprint, reason strin
 // severe report of its fingerprint (two skills may report it differently).
 // reviewed is the run whose result it was found in.
 func (c *commandRun) findFinding(ctx context.Context) (f result.Finding, reviewed store.Run, found bool, err error) {
-	run, ok, err := c.e.Store.LatestDecidedRun(ctx, c.cmd.MR)
-	if err != nil {
-		return f, run, false, fmt.Errorf("load the latest review: %w", err)
-	}
-	if !ok || run.Result == nil {
-		return f, run, false, nil
-	}
-	r, perr := result.Parse(run.Result)
-	if perr != nil {
-		return f, run, false, nil
-	}
-	var all []result.Finding
-	for _, s := range r.Skills {
-		for _, raw := range s.Findings {
-			var x result.Finding
-			if json.Unmarshal(raw, &x) == nil && x.Fingerprint != "" {
-				all = append(all, x)
-			}
-		}
+	all, run, ok, err := actions.LatestFindings(ctx, c.e.Store, c.cmd.MR)
+	if err != nil || !ok {
+		return f, run, false, err
 	}
 
 	id := strings.ToLower(c.cmd.Arg)
@@ -616,13 +547,6 @@ func (c *commandRun) findFinding(ctx context.Context) (f result.Finding, reviewe
 	if fingerprint == "" {
 		return f, run, false, nil
 	}
-	for _, x := range all {
-		if x.Fingerprint != fingerprint {
-			continue
-		}
-		if !found || (f.Severity == "suggestion" && x.Severity != "suggestion") {
-			f, found = x, true
-		}
-	}
+	f, found = actions.MostSevere(all, fingerprint)
 	return f, run, found, nil
 }

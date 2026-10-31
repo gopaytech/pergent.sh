@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/settings"
@@ -70,6 +71,11 @@ type Options struct {
 	// (engine.Engine.ReconcileSoon). It must not block. nil leaves it to
 	// the hourly reconcile.
 	ReconcileSoon func(instance, project string)
+	// Wake asks the engine to look for work now (engine.Engine.Wake): the
+	// re-run, dismiss and restore buttons call it after they queue a run or
+	// ask for a review to be decided again. It must not block. nil leaves
+	// the engine to its next pass.
+	Wake func()
 }
 
 // Connector connects instances to GitLab and GitHub while pergent.sh runs;
@@ -102,6 +108,9 @@ type RepoCatalog interface {
 type RepoSource interface {
 	inputs.Source
 	DefaultBranch(ctx context.Context, projectID int64) (string, error)
+	// GetChange reads one merge request or pull request: the buttons ask
+	// for its head, state and author.
+	GetChange(ctx context.Context, projectID, number int64) (forge.Change, error)
 }
 
 // Dashboard is the dashboard's routes and what they share.
@@ -120,6 +129,7 @@ type Dashboard struct {
 	sources       *syncmap.Map[RepoSource]
 	catalogs      *syncmap.Map[RepoCatalog]
 	reconcileSoon func(instance, project string)
+	wake          func()
 	// loadLLM reads the LLM saved in the dashboard again
 	// (instances.Registry.LoadLLM); a field so a test can make it fail.
 	loadLLM func(ctx context.Context) error
@@ -161,10 +171,13 @@ func New(o Options) (*Dashboard, error) {
 	if o.ReconcileSoon == nil {
 		o.ReconcileSoon = func(string, string) {}
 	}
+	if o.Wake == nil {
+		o.Wake = func() {}
+	}
 	return &Dashboard{Auth: auth, Repos: repos, Store: o.Store, Log: o.Log,
 		cfg: o.Config, registry: o.Instances, connector: o.Connector,
 		library: o.Library, sources: o.Sources, catalogs: o.Catalogs,
-		reconcileSoon: o.ReconcileSoon, loadLLM: o.Instances.LoadLLM, now: o.Now,
+		reconcileSoon: o.ReconcileSoon, wake: o.Wake, loadLLM: o.Instances.LoadLLM, now: o.Now,
 		availableBudget: AvailableBudget, listBudget: listBudget, listLimit: listLimit,
 		inputs:  &inputsCache{entries: map[string]inputsEntry{}, flights: map[string]*inputsFlight{}},
 		catalog: &catalogCache{entries: map[string]catalogEntry{}, flights: map[string]*catalogFlight{}}}, nil
@@ -199,6 +212,7 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.Handle("GET /api/me", d.Auth.Require(http.HandlerFunc(d.me)))
 	d.writeRoutes(mux)
 	d.orgRoutes(mux)
+	d.commandRoutes(mux)
 	d.operatorRoutes(mux)
 	d.readRoutes(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
