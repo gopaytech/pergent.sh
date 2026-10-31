@@ -157,6 +157,9 @@ export type RunDetailView = {
     notReviewed: { path: string; cause: string }[];
   };
   skills: SkillView[];
+  // latestDecided: this is the run dismiss and restore act on (the change's
+  // newest published or decided review), the only one that shows dismissals.
+  latestDecided: boolean;
 };
 
 export type LogView = { text: string };

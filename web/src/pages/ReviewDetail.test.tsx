@@ -421,14 +421,116 @@ describe("ReviewDetail buttons", () => {
     expect(container.querySelector("img")).toBeNull();
   });
 
-  it("offers no finding buttons on an older run, which the server won't decide again", async () => {
+  it("offers the finding buttons on the run the server acts on, not by its place in the history", async () => {
+    // The newest run is still running; the one before it is the latest decided.
     fakeApi({
       ...base(allCan),
-      [`GET /api/runs/${older}`]: { body: { ...runDetail, run: reviewDetail.runs[1] } },
+      [`GET /api/runs/${newest}`]: { body: { ...runDetail, skills: [], latestDecided: false } },
+      [`GET /api/runs/${older}`]: { body: { ...runDetail, run: reviewDetail.runs[1], latestDecided: true } },
     });
     renderApp(`/reviews/main/acme/payments/77?run=${older}`);
-    await screen.findByText("Refund can be applied twice on retry");
-    expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+    const finding = (await screen.findByText("Refund can be applied twice on retry")).closest(".finding") as HTMLElement;
+    expect(within(finding).getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Re-run review" })).toBeInTheDocument();
+  });
+
+  it("offers no finding buttons on a run the server won't act on", async () => {
+    // The newest run's publication failed: it shows its findings, but the
+    // server decides again another run.
+    fakeApi({
+      ...base(allCan, { ...dismissedRun(), latestDecided: false }),
+    });
+    renderAppAt();
+    await screen.findByRole("group", { name: "Dismissed in code-review" });
+    expect(screen.getByText("Refund can be applied twice on retry")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Dismiss|Restore/ })).not.toBeInTheDocument();
+    // Re-running still works from any run.
+    expect(screen.getByRole("button", { name: "Re-run review" })).toBeInTheDocument();
+  });
+
+  it("treats a finding as blocking if any report of its fingerprint in the run is", async () => {
+    // code-review reports as a suggestion what security-review reports as blocking.
+    const run: RunDetailView = {
+      ...runDetail,
+      skills: [
+        runDetail.skills[0],
+        {
+          ...runDetail.skills[1],
+          findings: [{ ...runDetail.skills[1].findings[0], fingerprint: runDetail.skills[0].findings[0].fingerprint }],
+        },
+      ],
+    };
+    // A session that may dismiss suggestions only is not offered Dismiss on either report.
+    fakeApi(base({ ...allCan, dismissBlocking: false }, run));
+    renderAppAt();
+    await screen.findByText("Name the magic retry window");
+    expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+  });
+
+  it("needs a reason for a suggestion that is reported as blocking elsewhere", async () => {
+    const run: RunDetailView = {
+      ...runDetail,
+      skills: [
+        runDetail.skills[0],
+        {
+          ...runDetail.skills[1],
+          findings: [{ ...runDetail.skills[1].findings[0], fingerprint: runDetail.skills[0].findings[0].fingerprint }],
+        },
+      ],
+    };
+    const fake = fakeApi({ ...base(allCan, run), ["POST " + dismissUrl]: { body: { status: "dismissed" } } });
+    renderAppAt();
+    const finding = (await screen.findByText("Name the magic retry window")).closest(".finding") as HTMLElement;
+    await userEvent.click(within(finding).getByRole("button", { name: "Dismiss" }));
+    await userEvent.click(within(finding).getByRole("button", { name: "Dismiss finding" }));
+    expect(within(finding).getByText("Dismissing a blocking finding needs a reason.")).toBeInTheDocument();
+    expect(fake.find("POST", dismissUrl)).toHaveLength(0);
+  });
+
+  it("offers no Dismiss or Restore for a finding with no fingerprint", async () => {
+    const run = dismissedRun();
+    run.skills[0] = { ...run.skills[0], findings: [{ ...run.skills[0].findings[0], fingerprint: "" }] };
+    run.skills[1] = { ...run.skills[1], dismissed: [{ ...run.skills[1].dismissed[0], fingerprint: "" }] };
+    fakeApi(base(allCan, run));
+    renderAppAt();
+    const group = await screen.findByRole("group", { name: "Dismissed in code-review" });
+    expect(screen.getByText("Refund can be applied twice on retry")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Dismiss|Restore/ })).not.toBeInTheDocument();
+    expect(within(group).getByText("Name the magic retry window")).toBeInTheDocument();
+  });
+
+  it("closes the form and shows the server's status after a dismissal", async () => {
+    // The answer says it was dismissed already; the review still lists the finding.
+    fakeApi({ ...base(allCan), ["POST " + dismissUrl]: { body: { status: "already dismissed" } } });
+    renderAppAt();
+    const finding = (await screen.findByText("Name the magic retry window")).closest(".finding") as HTMLElement;
+    await userEvent.click(within(finding).getByRole("button", { name: "Dismiss" }));
+    await userEvent.click(within(finding).getByRole("button", { name: "Dismiss finding" }));
+    expect(await screen.findByText("Finding already dismissed.")).toHaveAttribute("role", "status");
+    expect(within(finding).queryByRole("textbox", { name: "Reason" })).not.toBeInTheDocument();
+    expect(within(finding).getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+  });
+
+  it("shows the status after a dismissal even though the finding moves away", async () => {
+    let runs = 0;
+    fakeApi({
+      ...base(allCan),
+      ["POST " + dismissUrl]: { body: { status: "dismissed" } },
+      [`GET /api/runs/${newest}`]: () => ({ body: runs++ === 0 ? runDetail : dismissedRun() }),
+    });
+    renderAppAt();
+    const finding = (await screen.findByText("Name the magic retry window")).closest(".finding") as HTMLElement;
+    await userEvent.click(within(finding).getByRole("button", { name: "Dismiss" }));
+    await userEvent.click(within(finding).getByRole("button", { name: "Dismiss finding" }));
+    expect(await screen.findByRole("group", { name: "Dismissed in code-review" })).toBeInTheDocument();
+    expect(screen.getByText("Finding dismissed.")).toBeInTheDocument();
+  });
+
+  it("shows the status after a restore", async () => {
+    fakeApi({ ...base(allCan, dismissedRun()), ["POST " + restoreUrl]: { body: { status: "not dismissed" } } });
+    renderAppAt();
+    const group = await screen.findByRole("group", { name: "Dismissed in code-review" });
+    await userEvent.click(within(group).getByRole("button", { name: "Restore" }));
+    expect(await screen.findByText("Finding not dismissed.")).toBeInTheDocument();
   });
 });

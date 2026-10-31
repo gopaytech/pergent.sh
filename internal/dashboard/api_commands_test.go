@@ -841,3 +841,42 @@ func TestDismissBlockingOnAMergedChange(t *testing.T) {
 		t.Error("a finding of a merged change was dismissed")
 	}
 }
+
+// TestRunDetailLatestDecided: latestDecided marks the one run of a change
+// that dismiss and restore act on, whatever its place in the history.
+func TestRunDetailLatestDecided(t *testing.T) {
+	e := newEnv(t, nil)
+	// buttonReview's run is an hour old; the others come after it.
+	ago := func(minutes int) time.Time { return e.clock.now().Add(-time.Duration(minutes) * time.Minute) }
+	res := resultJSON(head('1'), buttonSkill("code-review"))
+	decided := e.buttonReview(res)
+	c := e.signInRole(store.RoleMaintainer)
+	latest := func(id string) bool { return getJSON[RunDetailView](e, c, "/api/runs/"+id).LatestDecided }
+
+	if !latest(decided) {
+		t.Error("the only decided run is not marked")
+	}
+	// A run in progress (a new head's, say) is newer, but not decided.
+	running := e.addRun(runFix{project: buttonProject, number: 7, head: head('2'), state: store.Running, at: ago(50)})
+	if latest(running) || !latest(decided) {
+		t.Errorf("with a run in progress: running %v, decided %v; want false, true", latest(running), latest(decided))
+	}
+	// A run whose publication failed is not decided either.
+	failed := e.addRun(runFix{project: buttonProject, number: 7, head: head('3'), state: store.PublishFailed, result: res,
+		at: ago(40)})
+	if latest(failed) || !latest(decided) {
+		t.Errorf("with a failed publication: failed %v, decided %v; want false, true", latest(failed), latest(decided))
+	}
+	// Reported with no outcome: not decided yet.
+	reported := e.addRun(runFix{project: buttonProject, number: 7, head: head('4'), state: store.Reported, result: res,
+		at: ago(30)})
+	if latest(reported) || !latest(decided) {
+		t.Errorf("with an undecided report: reported %v, decided %v; want false, true", latest(reported), latest(decided))
+	}
+	// A newer decided run takes over.
+	newer := e.addRun(runFix{project: buttonProject, number: 7, head: head('5'), result: res, user: "bob",
+		outcome: OutcomeBlocking, at: ago(20)})
+	if !latest(newer) || latest(decided) {
+		t.Errorf("with a newer decided run: newer %v, older %v; want true, false", latest(newer), latest(decided))
+	}
+}

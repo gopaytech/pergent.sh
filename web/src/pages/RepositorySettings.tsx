@@ -58,7 +58,9 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
         busy={busy}
         onSave={(body) => save.mutate(body)}
         onReset={() => {
-          if (window.confirm("Put every setting of this repository back to its default?")) reset.mutate();
+          // Only an admin's reset covers the re-run caps.
+          const caps = view.role === "admin" ? "" : " The re-run caps stay as they are; only an admin of this repository resets them.";
+          if (window.confirm(`Put every setting of this repository back to its default?${caps}`)) reset.mutate();
         }}
       />
       {note && (

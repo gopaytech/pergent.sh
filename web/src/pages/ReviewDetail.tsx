@@ -113,9 +113,7 @@ function Review({ view }: { view: ReviewDetailView }) {
         </div>
         <div>
           {selected ? (
-            // Dismiss and restore decide the newest review again; an older
-            // run is only read.
-            <RunBody id={selected.id} actions={selected.id === runs[0].id ? { header, can } : null} />
+            <RunBody id={selected.id} actions={{ header, can }} />
           ) : (
             <div className="card empty">No runs yet.</div>
           )}
@@ -127,14 +125,22 @@ function Review({ view }: { view: ReviewDetailView }) {
 
 // useReviewAction posts to one of the review's action routes; once it is
 // answered, the review, its runs and the lists are read again.
-function useReviewAction<B extends object>(header: ReviewHeader, action: "rerun" | "dismiss" | "restore") {
+// onDone gets the answer's status first, before the pages are read again (a
+// finding that moves unmounts the component that pressed the button).
+function useReviewAction<B extends object>(
+  header: ReviewHeader,
+  action: "rerun" | "dismiss" | "restore",
+  onDone?: (status: string) => void,
+) {
   const client = useQueryClient();
   const write = useWrite();
   return useMutation({
     mutationFn: (body: B) =>
       write<{ status: string }>("POST", paths.apiReviewAction(header.instance, header.project, header.number, action), body),
-    onSuccess: () =>
-      Promise.all(["review", "run", "reviews", "overview"].map((k) => client.invalidateQueries({ queryKey: [k] }))),
+    onSuccess: (answer) => {
+      onDone?.(answer.status);
+      return Promise.all(["review", "run", "reviews", "overview"].map((k) => client.invalidateQueries({ queryKey: [k] })));
+    },
   });
 }
 
@@ -259,18 +265,30 @@ function VerdictPill({ skill }: { skill: SkillView }) {
 type Tab = "findings" | "checks" | "files" | "logs";
 
 // Actions are what the findings' buttons need: the review they act on and
-// what the session may do. null on a run they can't act on.
+// what the session may do. They are offered on the run the server acts on
+// only (latestDecided); on any other, null.
 type Actions = { header: ReviewHeader; can: Can };
+
+// RunActions are Actions with where to report what the server answered.
+type RunActions = Actions & { done: (note: string) => void };
 
 type Located = FindingView & { skill: string };
 
-function RunBody({ id, actions }: { id: string; actions: Actions | null }) {
+function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
   const run = useRun(id);
   const [tab, setTab] = useState<Tab>("findings");
+  // What the last dismiss or restore answered, kept here: the finding it
+  // was for moves, and its own component goes.
+  const [note, setNote] = useState("");
   if (run.isPending) return <Loading />;
   if (run.isError) return <ErrorBox error={run.error} />;
   const view = run.data;
-  const findings: Located[] = view.skills
+  const actions: RunActions | null = view.latestDecided ? { ...allowed, done: setNote } : null;
+  // The server dismisses a fingerprint at the severity of its most severe
+  // report in the run, whichever skill made it.
+  const blockingFPs = new Set(
+    view.skills.flatMap((s) => [...s.findings, ...s.dismissed]).filter((f) => f.severity !== "suggestion").map((f) => f.fingerprint),
+  );  const findings: Located[] = view.skills
     .flatMap((s) => s.findings.map((f) => ({ ...f, skill: s.name })))
     .sort((a, b) => Number(b.severity === "blocking") - Number(a.severity === "blocking"));
   return (
@@ -308,9 +326,14 @@ function RunBody({ id, actions }: { id: string; actions: Actions | null }) {
         <div role="tabpanel">
           {tab === "findings" && (
             <>
+              {note && (
+                <div className="note pad" role="status">
+                  {note}
+                </div>
+              )}
               {findings.length === 0 && <div className="pad meta">No findings.</div>}
               {findings.map((f) => (
-                <Finding key={`${f.skill}/${f.id}`} f={f} actions={actions} />
+                <Finding key={`${f.skill}/${f.id}`} f={f} blocking={f.severity !== "suggestion" || blockingFPs.has(f.fingerprint)} actions={actions} />
               ))}
               {view.skills
                 .filter((s) => s.dismissed.length > 0)
@@ -356,13 +379,16 @@ function FindingBody({ f }: { f: Located }) {
 }
 
 // Finding is a finding that stands, with the Dismiss button when the session
-// may dismiss one of its severity.
-function Finding({ f, actions }: { f: Located; actions: Actions | null }) {
-  const may = actions !== null && (f.severity === "blocking" ? actions.can.dismissBlocking : actions.can.dismissSuggestion);
+// may dismiss one of its severity. blocking is the severity the server will
+// dismiss it at: that of the most severe report of its fingerprint. A finding
+// with no fingerprint can't be named, so it can't be dismissed.
+function Finding({ f, blocking, actions }: { f: Located; blocking: boolean; actions: RunActions | null }) {
+  const may =
+    actions !== null && f.fingerprint !== "" && (blocking ? actions.can.dismissBlocking : actions.can.dismissSuggestion);
   return (
     <div className="finding">
       <FindingBody f={f} />
-      {may && <DismissControl f={f} header={actions.header} />}
+      {may && <DismissControl f={f} blocking={blocking} actions={actions} />}
     </div>
   );
 }
@@ -370,15 +396,19 @@ function Finding({ f, actions }: { f: Located; actions: Actions | null }) {
 // DismissControl is the Dismiss button and the form it opens. A blocking
 // finding needs a reason. The server decides in the end (it may refuse the
 // author, a closed change), and its text is shown.
-function DismissControl({ f, header }: { f: Located; header: ReviewHeader }) {
+function DismissControl({ f, blocking, actions }: { f: Located; blocking: boolean; actions: RunActions }) {
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [problem, setProblem] = useState("");
-  const dismiss = useReviewAction<{ fingerprint: string; reason: string }>(header, "dismiss");
+  const dismiss = useReviewAction<{ fingerprint: string; reason: string }>(actions.header, "dismiss", (status) => {
+    setOpen(false);
+    setReason("");
+    actions.done(`Finding ${status}.`);
+  });
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const why = reason.trim();
-    if (f.severity === "blocking" && why === "") {
+    if (blocking && why === "") {
       setProblem("Dismissing a blocking finding needs a reason.");
       return;
     }
@@ -398,7 +428,7 @@ function DismissControl({ f, header }: { f: Located; header: ReviewHeader }) {
     <form className="dismiss-form" onSubmit={submit}>
       <textarea
         aria-label="Reason"
-        placeholder={f.severity === "blocking" ? "Why is this not a problem? (required)" : "Why? (optional)"}
+        placeholder={blocking ? "Why is this not a problem? (required)" : "Why? (optional)"}
         rows={2}
         maxLength={1000}
         value={reason}
@@ -421,7 +451,7 @@ function DismissControl({ f, header }: { f: Located; header: ReviewHeader }) {
 
 // DismissedFinding is a finding set aside: who did it and why, and Restore
 // when the session may. by and reason are text people wrote.
-function DismissedFinding({ f, actions }: { f: Located; actions: Actions | null }) {
+function DismissedFinding({ f, actions }: { f: Located; actions: RunActions | null }) {
   const d = f.dismissed;
   return (
     <div className="finding">
@@ -434,13 +464,15 @@ function DismissedFinding({ f, actions }: { f: Located; actions: Actions | null 
           <div className="prose">{d.reason ? `Reason: ${d.reason}` : "No reason was given."}</div>
         </div>
       )}
-      {actions?.can.restore && <RestoreButton fingerprint={f.fingerprint} header={actions.header} />}
+      {actions?.can.restore && f.fingerprint !== "" && <RestoreButton fingerprint={f.fingerprint} actions={actions} />}
     </div>
   );
 }
 
-function RestoreButton({ fingerprint, header }: { fingerprint: string; header: ReviewHeader }) {
-  const restore = useReviewAction<{ fingerprint: string }>(header, "restore");
+function RestoreButton({ fingerprint, actions }: { fingerprint: string; actions: RunActions }) {
+  const restore = useReviewAction<{ fingerprint: string }>(actions.header, "restore", (status) =>
+    actions.done(`Finding ${status}.`),
+  );
   return (
     <>
       <div className="finding-actions">

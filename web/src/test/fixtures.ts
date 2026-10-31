@@ -144,6 +144,7 @@ export const runDetail: RunDetailView = {
   status: "failed",
   approved: false,
   approvalReason: "Blocking issues were found.",
+  latestDecided: true,
   pergentVersion: "v0.1.0",
   model: "claude-sonnet",
   tokens: { in: 48200, out: 6100 },

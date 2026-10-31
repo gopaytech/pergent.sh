@@ -197,6 +197,25 @@ describe("RepositoryDetail", () => {
     expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({ reviewDrafts: true });
   });
 
+  it("says in the reset confirmation that a maintainer's reset leaves the re-run caps", async () => {
+    const asMaintainer = repoDetail(repoPayments, "maintainer");
+    fakeApi({ ...base, "GET /api/repositories/main/acme/payments": { body: asMaintainer } });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderApp("/repos/main/acme/payments?tab=settings");
+    await userEvent.click(await screen.findByRole("button", { name: "Reset to defaults" }));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("The re-run caps stay as they are"));
+    confirm.mockRestore();
+  });
+
+  it("doesn't say so to an admin, whose reset covers the caps", async () => {
+    fakeApi(base);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderApp("/repos/main/acme/payments?tab=settings");
+    await userEvent.click(await screen.findByRole("button", { name: "Reset to defaults" }));
+    expect(confirm).toHaveBeenCalledWith("Put every setting of this repository back to its default?");
+    confirm.mockRestore();
+  });
+
   it("disables the re-run caps of a config-managed repository", async () => {
     fakeApi(base);
     renderApp("/repos/main/acme/widgets?tab=settings");

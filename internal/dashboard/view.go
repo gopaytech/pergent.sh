@@ -187,6 +187,11 @@ type RunDetailView struct {
 	Tokens TokensView  `json:"tokens"`
 	Files  FilesView   `json:"files"`
 	Skills []SkillView `json:"skills"`
+	// LatestDecided is true for the one run of the change that dismiss and
+	// restore act on: its newest published review, or reported one with an
+	// outcome. Only that run shows dismissals; false when the change has no
+	// such run.
+	LatestDecided bool `json:"latestDecided"`
 }
 
 // TokensView sums the skills' token counts.
