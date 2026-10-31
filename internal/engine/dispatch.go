@@ -103,7 +103,7 @@ type dispatcher struct {
 func (d *dispatcher) dispatch(ctx context.Context) error {
 	e, run := d.e, d.run
 
-	plat, havePlat := e.Platforms[run.MR.Instance]
+	plat, havePlat := e.Platforms.Get(run.MR.Instance)
 	repo, haveRepo, err := e.settings().Get(ctx, run.MR.Instance, run.ProjectPath)
 	if err != nil {
 		return d.retry(ctx, fmt.Errorf("load repository settings: %w", err))

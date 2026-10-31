@@ -429,11 +429,7 @@ func (d *Dashboard) teamRepos(ctx context.Context, se Session, in []TeamRepoView
 			continue
 		}
 		if tr.Project == "" {
-			known, err := d.knownInstance(ctx, tr.Instance)
-			if err != nil {
-				return nil, "", err
-			}
-			if !known {
+			if !d.knownInstance(tr.Instance) {
 				return nil, msgRepoNotOn, nil
 			}
 		} else {
@@ -450,15 +446,9 @@ func (d *Dashboard) teamRepos(ctx context.Context, se Session, in []TeamRepoView
 
 // knownInstance reports whether instance is one of the config's or one
 // added in the browser and not being removed.
-func (d *Dashboard) knownInstance(ctx context.Context, instance string) (bool, error) {
-	if _, ok := d.cfg.Platform(instance); ok {
-		return true, nil
-	}
-	row, found, err := d.Store.InstanceRow(ctx, instance)
-	if err != nil {
-		return false, err
-	}
-	return found && !row.Removing, nil
+func (d *Dashboard) knownInstance(instance string) bool {
+	inst, ok := d.registry.Get(instance)
+	return ok && !inst.Removing
 }
 
 // teamChanges names what differs between a team before and after a change:

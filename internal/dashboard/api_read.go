@@ -192,7 +192,7 @@ func byProject(repos []settings.Effective) map[RepoKey]settings.Effective {
 }
 
 func (d *Dashboard) summary(r store.RunDigest, j judged) ReviewSummary {
-	platform, _ := d.cfg.Platform(r.MR.Instance)
+	platform, _ := d.registry.Platform(r.MR.Instance)
 	return ReviewSummary{
 		Instance: r.MR.Instance, Project: r.ProjectPath, Platform: platform, Number: r.MR.IID,
 		Title: r.Title, Outcome: j.outcome, Reason: j.reason, UpdatedAt: r.UpdatedAt.UTC(), WebURL: safeURL(r.WebURL),
@@ -438,7 +438,7 @@ func (d *Dashboard) review(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	platform, _ := d.cfg.Platform(instance)
+	platform, _ := d.registry.Platform(instance)
 
 	newest := runs[len(runs)-1]
 	header := ReviewHeader{Instance: instance, Project: newest.ProjectPath, Platform: platform, Number: number,
@@ -887,7 +887,7 @@ func (d *Dashboard) cachedInputs(ctx context.Context, repo settings.Effective, i
 // its path must be that one (one that had the path before, not yet
 // replaced by a reconcile, is not synced).
 func (d *Dashboard) resolveInputs(ctx context.Context, repo settings.Effective, id int64) (InputsView, error) {
-	src, ok := d.sources[repo.Instance]
+	src, ok := d.sources.Get(repo.Instance)
 	if !ok || src == nil {
 		return InputsView{}, errors.New("no reader for the instance")
 	}
@@ -962,7 +962,7 @@ func (d *Dashboard) integrations(w http.ResponseWriter, r *http.Request) {
 	}
 	view := IntegrationView{Instance: se.Instance, Platform: se.Platform, Connected: true,
 		Approver: approverKindToken, Repos: []IntegrationRepo{}}
-	if gi, ok := d.cfg.GitHubInstance(se.Instance); ok && gi.ApproveApp != nil {
+	if inst, ok := d.registry.Get(se.Instance); ok && inst.GitHub != nil && inst.GitHub.ApproveApp != nil {
 		view.Approver = approverKindApp
 	}
 	items, err := d.Store.Attention(ctx)

@@ -88,7 +88,7 @@ func (e *Engine) PublishOnce(ctx context.Context) error {
 
 // publish posts one run. Any error means the run was not published.
 func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) error {
-	plat, ok := e.Platforms[run.MR.Instance]
+	plat, ok := e.Platforms.Get(run.MR.Instance)
 	if !ok || plat.Forge == nil {
 		return fmt.Errorf("no bots for instance %q", run.MR.Instance)
 	}
@@ -199,8 +199,8 @@ func (e *Engine) approveInputs(ctx context.Context, plat Platform, run store.Run
 			return o, fmt.Errorf("load project: %w", err)
 		}
 		o.ApproveUnavailable = found && !p.ApproveAvailable
-		if gi, ok := e.Config.GitHubInstance(run.MR.Instance); ok {
-			o.ApproveBot = gi.ApproveTokenEnv != ""
+		if inst, ok := e.Instances.Get(run.MR.Instance); ok && inst.GitHub != nil {
+			o.ApproveBot = inst.GitHub.ApproveApp == nil
 		}
 	}
 	return o, nil
@@ -353,7 +353,7 @@ func (e *Engine) retryPublish(ctx context.Context, run store.Run, text string, l
 // running (GitHub's Check Run stays in_progress from dispatch otherwise). It
 // runs once, on the transition the store reports; nothing is approved.
 func (e *Engine) giveUpStatus(ctx context.Context, run store.Run, log *slog.Logger) {
-	plat, ok := e.Platforms[run.MR.Instance]
+	plat, ok := e.Platforms.Get(run.MR.Instance)
 	if !ok || plat.Forge == nil {
 		log.Warn("couldn't set the final status: no bots for the instance")
 		return
@@ -428,7 +428,7 @@ func (e *Engine) CleanupOnce(ctx context.Context) error {
 // it waits out the unapprove backoff.
 func (e *Engine) withdrawApprovalOff(ctx context.Context, a store.Approval) {
 	log := e.log().With("instance", a.MR.Instance, "project_id", a.MR.ProjectID, "mr", a.MR.IID, "approved", a.ApprovedSHA)
-	plat, ok := e.Platforms[a.MR.Instance]
+	plat, ok := e.Platforms.Get(a.MR.Instance)
 	if !ok || plat.Forge == nil || plat.Approver == nil {
 		log.Debug("skipping the approval: no bots for the instance")
 		return
@@ -466,7 +466,7 @@ func (e *Engine) withdrawApprovalOff(ctx context.Context, a store.Approval) {
 // from the config) is skipped quietly: it stays listed on every pass.
 func (e *Engine) withdraw(ctx context.Context, a store.Approval, done, failed string) {
 	log := e.log().With("instance", a.MR.Instance, "project_id", a.MR.ProjectID, "mr", a.MR.IID, "approved", a.ApprovedSHA)
-	plat, ok := e.Platforms[a.MR.Instance]
+	plat, ok := e.Platforms.Get(a.MR.Instance)
 	if !ok || plat.Approver == nil {
 		log.Debug("skipping the approval: no approve bot for the instance")
 		return
@@ -491,7 +491,7 @@ func (e *Engine) cleanUp(ctx context.Context, run store.Run, log *slog.Logger) e
 		}
 	}
 	if !run.DispatchedAt.IsZero() {
-		plat, ok := e.Platforms[run.MR.Instance]
+		plat, ok := e.Platforms.Get(run.MR.Instance)
 		if ok && plat.Forge != nil {
 			if err := plat.Forge.SetStatus(ctx, run.MR.ProjectID, run.HeadSHA, forge.StatusCanceled, supersededDescription); err != nil {
 				return fmt.Errorf("set canceled status: %w", err)

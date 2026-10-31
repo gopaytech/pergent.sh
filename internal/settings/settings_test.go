@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -131,7 +132,7 @@ func TestResolverConfigKeys(t *testing.T) {
 		JobTimeout:    ptr(20 * time.Minute),
 		JobMemory:     ptr(resource.MustParse("6Gi")),
 	})
-	r := &Resolver{Config: cfg} // no store: config only
+	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)} // no store: config only
 
 	eff := get(t, r, "gh", "acme/payments")
 	if eff.Platform != config.PlatformGitHub || eff.Instance != "gh" || eff.Project != "Acme/Payments" || eff.Source != SourceConfig {
@@ -173,7 +174,8 @@ func TestResolverConfigKeys(t *testing.T) {
 func TestResolverConfigWins(t *testing.T) {
 	st := newStore(t)
 	upsert(t, st, store.DashboardRepo{Instance: "main", Project: "ACME/widgets", Approve: ptr(false), CreatedBy: "alice"})
-	r := &Resolver{Config: testConfig(), Store: st}
+	cfg := testConfig()
+	r := &Resolver{Config: cfg, Store: st, Instances: instances.New(cfg, st, nil)}
 
 	list, err := r.List(ctx)
 	if err != nil {
@@ -200,7 +202,8 @@ func TestResolverDefaultsAndOverrides(t *testing.T) {
 	})
 	// A row of an instance no longer configured is not a repository.
 	upsert(t, st, store.DashboardRepo{Instance: "gone", Project: "acme/old"})
-	r := &Resolver{Config: testConfig(), Store: st}
+	cfg := testConfig()
+	r := &Resolver{Config: cfg, Store: st, Instances: instances.New(cfg, st, nil)}
 
 	eff := get(t, r, "main", "ACME/Payments")
 	if eff.Source != SourceDashboard || eff.Platform != config.PlatformGitLab || eff.Instance != "main" || eff.Project != "acme/payments" {
@@ -245,7 +248,7 @@ func TestResolverBadDashboardMemoryFallsBack(t *testing.T) {
 	st := newStore(t)
 	cfg := testConfig()
 	cfg.Jobs.Resources.Requests = corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")}
-	r := &Resolver{Config: cfg, Store: st}
+	r := &Resolver{Config: cfg, Store: st, Instances: instances.New(cfg, st, nil)}
 	for _, memory := range []string{"lots", "0", "512Mi"} {
 		upsert(t, st, store.DashboardRepo{Instance: "main", Project: "acme/payments", JobMemory: ptr(memory)})
 		eff := get(t, r, "main", "acme/payments")
@@ -256,7 +259,7 @@ func TestResolverBadDashboardMemoryFallsBack(t *testing.T) {
 
 func TestDefaults(t *testing.T) {
 	cfg := &config.Config{Jobs: config.Jobs{Timeout: 7 * time.Minute}}
-	got := (&Resolver{Config: cfg}).Defaults(config.PlatformGitLab, "main")
+	got := (&Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)}).Defaults(config.PlatformGitLab, "main")
 	if !got.Approve || !got.ReviewDrafts || got.FailureStatus != config.FailureStatusFailed ||
 		got.JobTimeout != 7*time.Minute || !got.JobMemory.IsZero() || got.Skills != nil || got.Instance != "main" {
 		t.Errorf("Defaults = %+v", got)

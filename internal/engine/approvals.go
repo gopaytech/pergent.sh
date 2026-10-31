@@ -37,7 +37,7 @@ func (e *Engine) SweepApprovals(ctx context.Context) error {
 		}
 		log := e.log().With("instance", a.MR.Instance, "project_id", a.MR.ProjectID, "mr", a.MR.IID,
 			"approved", a.ApprovedSHA, "approved_target", a.ApprovedTarget)
-		plat, ok := e.Platforms[a.MR.Instance]
+		plat, ok := e.Platforms.Get(a.MR.Instance)
 		if !ok || plat.Forge == nil || plat.Approver == nil {
 			// The instance was removed from the config; it is listed on every
 			// sweep, so don't log it above debug.

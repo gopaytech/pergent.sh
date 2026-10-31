@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -580,23 +582,57 @@ func TestPruneSessions(t *testing.T) {
 }
 
 func TestNewRejects(t *testing.T) {
-	t.Setenv("PERGENT_TEST_GL_ID", glClientID)
-	t.Setenv("PERGENT_TEST_GL_SECRET", "")
 	cfg := &config.Config{
 		GitLab: []config.Instance{{Name: "main", URL: "https://gitlab.example.com",
 			OAuthClientIDEnv: "PERGENT_TEST_GL_ID", OAuthClientSecretEnv: "PERGENT_TEST_GL_SECRET"}},
 		Dashboard: config.Dashboard{URL: dashboardURL},
 	}
-	if _, err := New(Options{Config: cfg, SecretKey: testKey(t)}); err == nil || !strings.Contains(err.Error(), "PERGENT_TEST_GL_SECRET") {
-		t.Errorf("New with an unset client secret = %v", err)
-	}
-	t.Setenv("PERGENT_TEST_GL_SECRET", glClientSecret)
 	if _, err := New(Options{Config: cfg, SecretKey: "short"}); err == nil {
 		t.Error("New with a bad secret key = nil error")
 	}
 	cfg.Dashboard.URL = ""
 	if _, err := New(Options{Config: cfg, SecretKey: testKey(t)}); err == nil {
 		t.Error("New without dashboard.url = nil error")
+	}
+}
+
+// New reads no OAuth env var: sign-in starts when an instance is connected
+// (SetProvider), and an instance without a client ID has none.
+func TestSetProviderAndRemoveProvider(t *testing.T) {
+	cfg := &config.Config{Dashboard: config.Dashboard{URL: dashboardURL}}
+	d, err := New(Options{Config: cfg, SecretKey: testKey(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gl := instances.Instance{Name: "lab", Platform: config.PlatformGitLab, Source: instances.SourceDashboard,
+		GitLab: &config.Instance{Name: "lab", URL: "https://lab.example.com/"}, OAuthClientID: "lab-id"}
+	d.Auth.SetProvider(gl, instances.Secrets{OAuthClientSecret: "lab-secret"})
+	p, ok := d.Auth.providers.Get("lab")
+	if !ok || p.platform() != config.PlatformGitLab {
+		t.Fatalf("provider = %v, %v", p, ok)
+	}
+	if u := p.authorizeURL("s", "c"); !strings.HasPrefix(u, "https://lab.example.com/oauth/authorize?") ||
+		!strings.Contains(u, "client_id=lab-id") || !strings.Contains(u, url.QueryEscape(dashboardURL+"/auth/gitlab/lab/callback")) {
+		t.Errorf("authorize URL = %s", u)
+	}
+
+	gh := instances.Instance{Name: "hub", Platform: config.PlatformGitHub, Source: instances.SourceDashboard,
+		GitHub: &config.GitHubInstance{Name: "hub", APIURL: "https://api.github.com"}, OAuthClientID: "hub-id"}
+	d.Auth.SetProvider(gh, instances.Secrets{OAuthClientSecret: "hub-secret"})
+	if p, ok := d.Auth.providers.Get("hub"); !ok || p.platform() != config.PlatformGitHub {
+		t.Errorf("github provider = %v, %v", p, ok)
+	}
+
+	// A client ID taken away ends the sign-in; so does RemoveProvider.
+	gl.OAuthClientID = ""
+	d.Auth.SetProvider(gl, instances.Secrets{})
+	if _, ok := d.Auth.providers.Get("lab"); ok {
+		t.Error("lab kept its provider without a client ID")
+	}
+	d.Auth.RemoveProvider("hub")
+	d.Auth.RemoveProvider("never-there")
+	if _, ok := d.Auth.providers.Get("hub"); ok {
+		t.Error("hub kept its provider after RemoveProvider")
 	}
 }
 

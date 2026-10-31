@@ -193,7 +193,7 @@ func (a *Auth) liveToken(ctx context.Context, cur store.Session, now time.Time) 
 	if tok.RefreshToken == "" {
 		return oauthToken{}, errors.New("the sign-in token expired and can't be renewed")
 	}
-	p, ok := a.providers[cur.Instance]
+	p, ok := a.providers.Get(cur.Instance)
 	if !ok {
 		return oauthToken{}, fmt.Errorf("instance %q has no sign-in", cur.Instance)
 	}
@@ -222,7 +222,7 @@ func (a *Auth) liveToken(ctx context.Context, cur store.Session, now time.Time) 
 // with its successor unstored would end the session. The caller waits for
 // it only while ctx lasts.
 func (a *Auth) userToken(ctx context.Context, se Session) (provider, string, error) {
-	p, ok := a.providers[se.Instance]
+	p, ok := a.providers.Get(se.Instance)
 	if !ok || p.platform() != se.Platform {
 		return nil, "", fmt.Errorf("instance %q has no %s sign-in", se.Instance, se.Platform)
 	}
@@ -275,7 +275,7 @@ func (a *Auth) coverage(ctx context.Context, accountID int64, instance string) (
 // scope. Only those repositories are asked about. Any call that fails fails
 // the whole check: nothing is stored.
 func (a *Auth) checkAccess(ctx context.Context, se store.Session, tok oauthToken, cov coverage) (accessResult, error) {
-	p, ok := a.providers[se.Instance]
+	p, ok := a.providers.Get(se.Instance)
 	if !ok || p.platform() != se.Platform {
 		return accessResult{}, fmt.Errorf("instance %q has no %s sign-in", se.Instance, se.Platform)
 	}

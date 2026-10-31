@@ -24,6 +24,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/policy"
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
 
 const (
@@ -844,7 +845,7 @@ func TestStaleApprovalFailureAndUnknownInstance(t *testing.T) {
 	}
 
 	// Without bots for the instance, the approval is left alone, quietly.
-	env.Engine.Platforms = map[string]Platform{}
+	env.Engine.Platforms = syncmap.New(map[string]Platform{})
 	env.GitLab.Reset()
 	before := len(env.Logs())
 	cleanup(t, env)
@@ -1028,9 +1029,9 @@ func TestPublishDraftFlagUnreadableRetries(t *testing.T) {
 // its status, but isn't approved.
 func TestPublishApproveUnavailable(t *testing.T) {
 	env := newTestEnv(t)
-	plat := env.Engine.Platforms[testInstance]
+	plat, _ := env.Engine.Platforms.Get(testInstance)
 	plat.Kind, plat.GitLab = config.PlatformGitHub, nil // not a GitLab instance
-	env.Engine.Platforms[testInstance] = plat
+	env.Engine.Platforms.Set(testInstance, plat)
 	env.SeedProject(func(p *store.Project) { p.InstallationID, p.ApproveAvailable = 99, false })
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))

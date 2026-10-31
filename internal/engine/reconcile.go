@@ -187,7 +187,7 @@ func (e *Engine) reconcileRepo(ctx context.Context, repo settings.Effective, now
 	if gl == nil {
 		return 0, fmt.Errorf("no bots for instance %q", instance)
 	}
-	secret := e.WebhookSecrets[instance]
+	secret, _ := e.WebhookSecrets.Get(instance)
 	if secret == "" {
 		return 0, fmt.Errorf("no webhook secret for instance %q", instance)
 	}
@@ -264,12 +264,13 @@ func (e *Engine) reconcileRepo(ctx context.Context, repo settings.Effective, now
 
 // removeProject deletes a project's webhook and deploy token from GitLab,
 // then its row. The row stays when GitLab refuses, so the next pass retries.
-// A project of a GitLab instance no longer in the config can't be reached:
+// A project of a GitLab instance that is gone (from the config and the
+// dashboard) can't be reached:
 // its row is dropped with a warning, and its deploy token expires on its own
 // within 30 days. A GitHub repository has no webhook or stored token of its
 // own: only its row is deleted.
 func (e *Engine) removeProject(ctx context.Context, p store.Project) error {
-	platform, configured := e.Config.Platform(p.Instance)
+	platform, configured := e.Instances.Platform(p.Instance)
 	if platform == config.PlatformGitHub || (!configured && p.InstallationID != 0) {
 		if err := e.Store.DeleteProject(ctx, p.Instance, p.ProjectID); err != nil {
 			return fmt.Errorf("delete project row: %w", err)
@@ -278,7 +279,7 @@ func (e *Engine) removeProject(ctx context.Context, p store.Project) error {
 			"instance", p.Instance, "project", p.Path, "project_id", p.ProjectID)
 		return nil
 	}
-	if _, ok := e.Config.Instance(p.Instance); !ok {
+	if !configured {
 		if err := e.Store.DeleteProject(ctx, p.Instance, p.ProjectID); err != nil {
 			return fmt.Errorf("delete project row: %w", err)
 		}
@@ -316,10 +317,11 @@ func (e *Engine) removeProject(ctx context.Context, p store.Project) error {
 // gitLab is the review bot's GitLab client of a configured GitLab instance,
 // or nil. Reconcile's webhooks and deploy tokens are GitLab's alone.
 func (e *Engine) gitLab(instance string) *gitlab.Client {
-	if _, ok := e.Config.Instance(instance); !ok {
+	if platform, _ := e.Instances.Platform(instance); platform != config.PlatformGitLab {
 		return nil
 	}
-	return e.Platforms[instance].GitLab
+	plat, _ := e.Platforms.Get(instance)
+	return plat.GitLab
 }
 
 // reconcileGitHubRepo stores one GitHub repository switched on and returns its
@@ -333,8 +335,8 @@ func (e *Engine) gitLab(instance string) *gitlab.Client {
 // made).
 func (e *Engine) reconcileGitHubRepo(ctx context.Context, repo settings.Effective) (int64, error) {
 	instance := repo.Instance
-	plat, ok := e.Platforms[instance]
-	if _, configured := e.Config.GitHubInstance(instance); !configured || !ok || !plat.isGitHub() ||
+	plat, ok := e.Platforms.Get(instance)
+	if platform, _ := e.Instances.Platform(instance); platform != config.PlatformGitHub || !ok || !plat.isGitHub() ||
 		plat.GitHub == nil || plat.GitHub.App == nil || plat.GitHub.Approve == nil {
 		return 0, fmt.Errorf("no bots for instance %q", instance)
 	}

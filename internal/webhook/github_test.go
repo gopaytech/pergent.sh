@@ -13,7 +13,9 @@ import (
 	"testing"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
 
 const ghSecret = "example-github-webhook-secret"
@@ -27,15 +29,17 @@ func sign(secret string, body []byte) string {
 func newGitHubRig(t *testing.T) *rig {
 	t.Helper()
 	r := &rig{q: &fakeQueue{created: true, republished: true}, logs: &bytes.Buffer{}}
+	cfg := &config.Config{
+		GitHub:       []config.GitHubInstance{{Name: "gh"}},
+		Repositories: []config.Repository{{GitHub: "gh", Project: "Acme/Widgets"}},
+	}
 	h := &GitHubHandler{
-		Config: &config.Config{
-			GitHub:       []config.GitHubInstance{{Name: "gh"}},
-			Repositories: []config.Repository{{GitHub: "gh", Project: "Acme/Widgets"}},
-		},
-		Secrets: map[string]string{"gh": ghSecret},
-		Queue:   r.q,
-		Wake:    func() { r.wakes++ },
-		Log:     slog.New(slog.NewTextHandler(r.logs, nil)),
+		Config:    cfg,
+		Instances: instances.New(cfg, nil, nil),
+		Secrets:   syncmap.New(map[string]string{"gh": ghSecret}),
+		Queue:     r.q,
+		Wake:      func() { r.wakes++ },
+		Log:       slog.New(slog.NewTextHandler(r.logs, nil)),
 	}
 	r.mux = http.NewServeMux()
 	r.mux.Handle("/webhooks/github/{instance}", h)
@@ -228,9 +232,10 @@ func withEvent2(v string) opt { return func(r *http.Request) { r.Header.Set("X-G
 
 func TestGitHubNoConfiguredSecretNeverAuthenticates(t *testing.T) {
 	r := newGitHubRig(t)
+	cfg := &config.Config{GitHub: []config.GitHubInstance{{Name: "gh"}}}
 	h := &GitHubHandler{
-		Config:  &config.Config{GitHub: []config.GitHubInstance{{Name: "gh"}}},
-		Secrets: map[string]string{}, Queue: r.q,
+		Config: cfg, Instances: instances.New(cfg, nil, nil),
+		Secrets: syncmap.New[string](nil), Queue: r.q,
 	}
 	body := []byte("{}")
 	req := httptest.NewRequest(http.MethodPost, "/webhooks/github/gh", bytes.NewReader(body))
@@ -294,12 +299,13 @@ func TestGitHubUnknownRepositoryIgnored(t *testing.T) {
 // A repository listed under a different instance is not reviewed here.
 func TestGitHubRepositoryOfAnotherInstanceIgnored(t *testing.T) {
 	r := newGitHubRig(t)
+	cfg := &config.Config{
+		GitHub:       []config.GitHubInstance{{Name: "gh"}, {Name: "gh2"}},
+		Repositories: []config.Repository{{GitHub: "gh2", Project: "acme/widgets"}},
+	}
 	h := &GitHubHandler{
-		Config: &config.Config{
-			GitHub:       []config.GitHubInstance{{Name: "gh"}, {Name: "gh2"}},
-			Repositories: []config.Repository{{GitHub: "gh2", Project: "acme/widgets"}},
-		},
-		Secrets: map[string]string{"gh": ghSecret}, Queue: r.q,
+		Config: cfg, Instances: instances.New(cfg, nil, nil),
+		Secrets: syncmap.New(map[string]string{"gh": ghSecret}), Queue: r.q,
 	}
 	r.mux = http.NewServeMux()
 	r.mux.Handle("/webhooks/github/{instance}", h)
@@ -343,12 +349,13 @@ func TestGitHubWakeOnlyWhenCreated(t *testing.T) {
 
 func TestGitHubNilWakeIsSafe(t *testing.T) {
 	q := &fakeQueue{created: true}
+	cfg := &config.Config{
+		GitHub:       []config.GitHubInstance{{Name: "gh"}},
+		Repositories: []config.Repository{{GitHub: "gh", Project: "acme/widgets"}},
+	}
 	h := &GitHubHandler{
-		Config: &config.Config{
-			GitHub:       []config.GitHubInstance{{Name: "gh"}},
-			Repositories: []config.Repository{{GitHub: "gh", Project: "acme/widgets"}},
-		},
-		Secrets: map[string]string{"gh": ghSecret}, Queue: q,
+		Config: cfg, Instances: instances.New(cfg, nil, nil),
+		Secrets: syncmap.New(map[string]string{"gh": ghSecret}), Queue: q,
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/webhooks/github/{instance}", h)

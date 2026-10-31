@@ -26,6 +26,7 @@ func newE2E(t *testing.T) *e2e {
 	env := newTestEnv(t)
 	mux := server.Routes(server.Deps{
 		Config:         env.Engine.Config,
+		Instances:      env.Engine.Instances,
 		WebhookSecrets: env.Engine.WebhookSecrets,
 		Store:          env.Store,
 		Wake:           env.Engine.Wake,

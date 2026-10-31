@@ -280,12 +280,12 @@ func addGitHub(t *testing.T, env *testEnv, approveInstalled bool) *fakeGitHub {
 	repos := GitHubRepos(env.Store, ghInstance)
 	review := f.app(t, ghReviewApp)
 	approver := githubforge.NewAppApprover(f.app(t, ghApproveApp), ghApproveBot, repos)
-	env.Engine.Platforms[ghInstance] = Platform{
+	env.Engine.Platforms.Set(ghInstance, Platform{
 		Kind:     config.PlatformGitHub,
 		Forge:    githubforge.NewForge(review, ghReviewBot, repos),
 		Approver: approver,
 		GitHub:   &GitHub{App: review, Approve: approver},
-	}
+	})
 	env.SeedGitHub(func(p *store.Project) { p.ApproveAvailable = approveInstalled })
 	return f
 }
@@ -524,10 +524,10 @@ func TestReconcileGitHub(t *testing.T) {
 func TestReconcileGitHubTokenApprover(t *testing.T) {
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, false)
-	plat := env.Engine.Platforms[ghInstance]
+	plat, _ := env.Engine.Platforms.Get(ghInstance)
 	approver := githubforge.NewTokenApprover(github.NewTokenClient(gh.srv.URL, "github_pat_example", gh.srv.Client()), ghApproveBot, GitHubRepos(env.Store, ghInstance), nil)
 	plat.Approver, plat.GitHub.Approve = approver, approver
-	env.Engine.Platforms[ghInstance] = plat
+	env.Engine.Platforms.Set(ghInstance, plat)
 	serveProject(env, testProjectID, testProjectPath)
 	gh.Handle(http.MethodGet, ghRepoAPI, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"id": ghRepoID, "full_name": ghRepoPath, "clone_url": ghCloneURL})

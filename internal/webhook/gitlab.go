@@ -14,8 +14,10 @@ import (
 	"net/http"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
 
 const (
@@ -43,18 +45,21 @@ type Repositories interface {
 }
 
 // repositories is h's Repos, or the config's repositories alone when nil.
-func repositories(repos Repositories, cfg *config.Config) Repositories {
+func repositories(repos Repositories, cfg *config.Config, reg *instances.Registry) Repositories {
 	if repos != nil {
 		return repos
 	}
-	return &settings.Resolver{Config: cfg}
+	return &settings.Resolver{Config: cfg, Instances: reg}
 }
 
 // Handler serves POST /webhooks/gitlab/{instance}.
 type Handler struct {
 	Config *config.Config
-	// Secrets maps an instance name to its webhook secret.
-	Secrets map[string]string
+	// Instances tells which GitLab instances exist.
+	Instances *instances.Registry
+	// Secrets maps an instance name to its webhook secret; an instance
+	// without one is not connected, and its webhooks are refused.
+	Secrets *syncmap.Map[string]
 	Queue   Queue
 	// Repos finds the repositories switched on; nil means the config's.
 	Repos Repositories
@@ -120,12 +125,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log := h.logger().With("instance", r.PathValue(instancePath))
 
 	name := r.PathValue(instancePath)
-	if _, ok := h.Config.Instance(name); !ok {
+	if platform, _ := h.Instances.Platform(name); platform != config.PlatformGitLab {
 		log.Info("webhook rejected", "outcome", "unknown_instance")
 		http.Error(w, "unknown instance", http.StatusNotFound)
 		return
 	}
-	if !tokenMatches(h.Secrets[name], r.Header.Get(tokenHeader)) {
+	if !tokenMatches(h.secret(name), r.Header.Get(tokenHeader)) {
 		log.Warn("webhook rejected", "outcome", "bad_token")
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -164,7 +169,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	attrs := ev.ObjectAttributes
 	log = log.With("project", ev.Project.PathWithNamespace, "iid", attrs.IID, "action", attrs.Action)
-	repo, ok, err := lookup(r.Context(), repositories(h.Repos, h.Config), config.PlatformGitLab, name, ev.Project.PathWithNamespace)
+	repo, ok, err := lookup(r.Context(), repositories(h.Repos, h.Config, h.Instances), config.PlatformGitLab, name, ev.Project.PathWithNamespace)
 	if err != nil {
 		log.Error("webhook failed", "outcome", "lookup_error", "err", err)
 		http.Error(w, "storage error", http.StatusInternalServerError)
@@ -304,6 +309,12 @@ func lookup(ctx context.Context, repos Repositories, platform, instance, path st
 
 // tokenMatches compares in constant time. Both sides are hashed first so the
 // length of the secret does not leak. An unset secret never matches.
+// secret is the webhook secret of instance name, "" when it has none.
+func (h *Handler) secret(name string) string {
+	s, _ := h.Secrets.Get(name)
+	return s
+}
+
 func tokenMatches(secret, got string) bool {
 	if secret == "" {
 		return false

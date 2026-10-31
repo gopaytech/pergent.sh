@@ -12,7 +12,9 @@ import (
 	"strings"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
 
 const (
@@ -27,8 +29,11 @@ const (
 // queues work and answers fast; the engine does the rest.
 type GitHubHandler struct {
 	Config *config.Config
-	// Secrets maps an instance name to the review App's webhook secret.
-	Secrets map[string]string
+	// Instances tells which GitHub instances exist.
+	Instances *instances.Registry
+	// Secrets maps an instance name to the review App's webhook secret; an
+	// instance without one is not connected, and its webhooks are refused.
+	Secrets *syncmap.Map[string]
 	Queue   Queue
 	// Repos finds the repositories switched on; nil means the config's.
 	Repos Repositories
@@ -61,6 +66,12 @@ type pullRequestEvent struct {
 	} `json:"changes"`
 }
 
+// secret is the webhook secret of instance name, "" when it has none.
+func (h *GitHubHandler) secret(name string) string {
+	s, _ := h.Secrets.Get(name)
+	return s
+}
+
 func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
@@ -70,7 +81,7 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue(instancePath)
 	log := h.logger().With("instance", name)
 
-	if _, ok := h.Config.GitHubInstance(name); !ok {
+	if platform, _ := h.Instances.Platform(name); platform != config.PlatformGitHub {
 		log.Info("webhook rejected", "outcome", "unknown_instance")
 		http.Error(w, "unknown instance", http.StatusNotFound)
 		return
@@ -89,7 +100,7 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cannot read body", http.StatusBadRequest)
 		return
 	}
-	if !signatureMatches(h.Secrets[name], body, r.Header.Get(githubSignatureHeader)) {
+	if !signatureMatches(h.secret(name), body, r.Header.Get(githubSignatureHeader)) {
 		log.Warn("webhook rejected", "outcome", "bad_signature")
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -111,7 +122,7 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	pr := ev.PullRequest
 	log = log.With("repository", ev.Repository.FullName, "number", pr.Number, "action", ev.Action)
-	repo, ok, err := lookup(r.Context(), repositories(h.Repos, h.Config), config.PlatformGitHub, name, ev.Repository.FullName)
+	repo, ok, err := lookup(r.Context(), repositories(h.Repos, h.Config, h.Instances), config.PlatformGitHub, name, ev.Repository.FullName)
 	if err != nil {
 		log.Error("webhook failed", "outcome", "lookup_error", "err", err)
 		http.Error(w, "storage error", http.StatusInternalServerError)

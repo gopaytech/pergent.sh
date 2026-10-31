@@ -14,6 +14,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/policy"
 	"github.com/gopaytech/pergent.sh/internal/server"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
 
 // ghWebhookSecret is the GitHub instance's webhook secret in the end-to-end
@@ -32,8 +33,9 @@ func newGitHubE2E(t *testing.T) *ghE2E {
 	gh := addGitHub(t, env, true)
 	mux := server.Routes(server.Deps{
 		Config:               env.Engine.Config,
+		Instances:            env.Engine.Instances,
 		WebhookSecrets:       env.Engine.WebhookSecrets,
-		GitHubWebhookSecrets: map[string]string{ghInstance: ghWebhookSecret},
+		GitHubWebhookSecrets: syncmap.New(map[string]string{ghInstance: ghWebhookSecret}),
 		Store:                env.Store,
 		Wake:                 env.Engine.Wake,
 		Now:                  env.Now,

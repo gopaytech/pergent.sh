@@ -16,9 +16,11 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/github"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
 
 // Platform is one configured instance as the engine reaches it. Kind is
@@ -55,14 +57,19 @@ type ApproveReach interface {
 // isGitHub reports whether the platform is a GitHub instance.
 func (p Platform) isGitHub() bool { return p.Kind == config.PlatformGitHub }
 
-// Engine holds what the loops share. Platforms is keyed by instance name.
+// Engine holds what the loops share. Platforms is keyed by instance name; it
+// and WebhookSecrets change while the engine runs, as instances are
+// connected and disconnected.
 type Engine struct {
-	Store     *store.Store
-	Config    *config.Config
-	Platforms map[string]Platform
+	Store  *store.Store
+	Config *config.Config
+	// Instances tells which instances exist (the config's and the
+	// dashboard's) and their platform.
+	Instances *instances.Registry
+	Platforms *syncmap.Map[Platform]
 	// WebhookSecrets maps an instance name to the secret its project hooks
 	// are created with.
-	WebhookSecrets map[string]string
+	WebhookSecrets *syncmap.Map[string]
 	Launcher       *kube.Launcher
 	Library        inputs.Library
 	Box            *secretbox.Box

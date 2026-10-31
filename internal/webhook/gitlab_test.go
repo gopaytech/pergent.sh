@@ -13,7 +13,9 @@ import (
 	"testing"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
 
 const (
@@ -89,15 +91,17 @@ type rig struct {
 func newRig(t *testing.T) *rig {
 	t.Helper()
 	r := &rig{q: &fakeQueue{created: true, republished: true}, logs: &bytes.Buffer{}}
+	cfg := &config.Config{
+		GitLab:       []config.Instance{{Name: "main", URL: "https://gitlab.example.com"}},
+		Repositories: []config.Repository{{GitLab: "main", Project: "Acme/Widgets"}},
+	}
 	h := &Handler{
-		Config: &config.Config{
-			GitLab:       []config.Instance{{Name: "main", URL: "https://gitlab.example.com"}},
-			Repositories: []config.Repository{{GitLab: "main", Project: "Acme/Widgets"}},
-		},
-		Secrets: map[string]string{"main": testSecret},
-		Queue:   r.q,
-		Wake:    func() { r.wakes++ },
-		Log:     slog.New(slog.NewTextHandler(r.logs, nil)),
+		Config:    cfg,
+		Instances: instances.New(cfg, nil, nil),
+		Secrets:   syncmap.New(map[string]string{"main": testSecret}),
+		Queue:     r.q,
+		Wake:      func() { r.wakes++ },
+		Log:       slog.New(slog.NewTextHandler(r.logs, nil)),
 	}
 	r.mux = http.NewServeMux()
 	r.mux.Handle("/webhooks/gitlab/{instance}", h)
@@ -245,7 +249,8 @@ func TestBadTokenIs401(t *testing.T) {
 
 func TestNoConfiguredSecretNeverAuthenticates(t *testing.T) {
 	r := newRig(t)
-	h := &Handler{Config: &config.Config{GitLab: []config.Instance{{Name: "main"}}}, Secrets: map[string]string{}, Queue: r.q}
+	cfg := &config.Config{GitLab: []config.Instance{{Name: "main"}}}
+	h := &Handler{Config: cfg, Instances: instances.New(cfg, nil, nil), Secrets: syncmap.New[string](nil), Queue: r.q}
 	req := httptest.NewRequest(http.MethodPost, "/webhooks/gitlab/main", strings.NewReader("{}"))
 	req.SetPathValue("instance", "main")
 	rec := httptest.NewRecorder()
@@ -323,10 +328,12 @@ func TestWakeOnlyWhenCreated(t *testing.T) {
 
 func TestNilWakeIsSafe(t *testing.T) {
 	r := newRig(t)
-	h := &Handler{Config: &config.Config{
+	cfg := &config.Config{
 		GitLab:       []config.Instance{{Name: "main"}},
 		Repositories: []config.Repository{{GitLab: "main", Project: "acme/widgets"}},
-	}, Secrets: map[string]string{"main": testSecret}, Queue: r.q}
+	}
+	h := &Handler{Config: cfg, Instances: instances.New(cfg, nil, nil),
+		Secrets: syncmap.New(map[string]string{"main": testSecret}), Queue: r.q}
 	mux := http.NewServeMux()
 	mux.Handle("/webhooks/gitlab/{instance}", h)
 	req := httptest.NewRequest(http.MethodPost, "/webhooks/gitlab/main", bytes.NewReader(fixture(t, "mr_open.json")))

@@ -26,8 +26,10 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
 
 // platformTimeout bounds each call to GitLab or GitHub.
@@ -37,6 +39,12 @@ const platformTimeout = 10 * time.Second
 type Options struct {
 	Config *config.Config
 	Store  *store.Store
+	// Instances tells which instances exist, the config's and the
+	// dashboard's. Nil means the config's alone.
+	Instances *instances.Registry
+	// Connector connects and disconnects instances as they are added and
+	// removed in the dashboard. Nil leaves the instances as they are.
+	Connector Connector
 	// SecretKey is PERGENT_SH_SECRET_KEY: it seals the users' OAuth tokens
 	// and signs the OAuth state cookie.
 	SecretKey string
@@ -52,16 +60,26 @@ type Options struct {
 	// Sources read repositories' files and default branches, by instance
 	// name: the review bot's Forge on GitLab, the review App's on GitHub.
 	// An instance without one has no Skills & instructions view (502).
-	Sources map[string]RepoSource
+	Sources *syncmap.Map[RepoSource]
 	// Catalogs list, by instance name, the repositories the review bot
 	// (GitLab) or the review App (GitHub) can set up, for the "add
 	// repository" picker. An instance without one can't add any (502).
-	Catalogs map[string]RepoCatalog
+	Catalogs *syncmap.Map[RepoCatalog]
 	// ReconcileSoon asks the engine for an early reconcile of the
 	// repository project on instance after it is switched on or off
 	// (engine.Engine.ReconcileSoon). It must not block. nil leaves it to
 	// the hourly reconcile.
 	ReconcileSoon func(instance, project string)
+}
+
+// Connector connects instances to GitLab and GitHub while pergent.sh runs;
+// the binary implements it. Check tries an instance's credentials and has no
+// effect; Connect checks them, then puts the instance in use (reviews,
+// webhooks and sign-in); Disconnect takes it out of use.
+type Connector interface {
+	Check(ctx context.Context, inst instances.Instance, s instances.Secrets) error
+	Connect(ctx context.Context, inst instances.Instance, s instances.Secrets) error
+	Disconnect(name string)
 }
 
 // RepoCatalog is what the review side of an instance can set up: on GitLab
@@ -96,9 +114,11 @@ type Dashboard struct {
 	Log   *slog.Logger
 
 	cfg           *config.Config
+	registry      *instances.Registry
+	connector     Connector
 	library       inputs.Library
-	sources       map[string]RepoSource
-	catalogs      map[string]RepoCatalog
+	sources       *syncmap.Map[RepoSource]
+	catalogs      *syncmap.Map[RepoCatalog]
 	reconcileSoon func(instance, project string)
 	// availableBudget bounds the whole picker request; listBudget bounds
 	// each side's listing in it; listLimit is the most repositories read
@@ -111,8 +131,9 @@ type Dashboard struct {
 	catalog         *catalogCache
 }
 
-// New builds the dashboard. The config must have dashboard.url; every
-// instance with OAuth env names must have them set in the environment.
+// New builds the dashboard. The config must have dashboard.url. Sign-in
+// through an instance starts when the instance is connected
+// (Auth.SetProvider).
 func New(o Options) (*Dashboard, error) {
 	if o.Config == nil || !o.Config.DashboardEnabled() {
 		return nil, errors.New("dashboard: dashboard.url is not set")
@@ -126,7 +147,10 @@ func New(o Options) (*Dashboard, error) {
 	if o.HTTPClient == nil {
 		o.HTTPClient = &http.Client{Timeout: platformTimeout}
 	}
-	repos := &settings.Resolver{Config: o.Config, Store: o.Store}
+	if o.Instances == nil {
+		o.Instances = instances.New(o.Config, nil, nil)
+	}
+	repos := &settings.Resolver{Config: o.Config, Store: o.Store, Instances: o.Instances}
 	auth, err := newAuth(o, repos)
 	if err != nil {
 		return nil, err
@@ -135,7 +159,8 @@ func New(o Options) (*Dashboard, error) {
 		o.ReconcileSoon = func(string, string) {}
 	}
 	return &Dashboard{Auth: auth, Repos: repos, Store: o.Store, Log: o.Log,
-		cfg: o.Config, library: o.Library, sources: o.Sources, catalogs: o.Catalogs,
+		cfg: o.Config, registry: o.Instances, connector: o.Connector,
+		library: o.Library, sources: o.Sources, catalogs: o.Catalogs,
 		reconcileSoon: o.ReconcileSoon, now: o.Now,
 		availableBudget: AvailableBudget, listBudget: listBudget, listLimit: listLimit,
 		inputs:  &inputsCache{entries: map[string]inputsEntry{}, flights: map[string]*inputsFlight{}},
@@ -223,22 +248,33 @@ func (d *Dashboard) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, view)
 }
 
-// instances lists the instances with sign-in, in the config's order (GitLab
-// first): the sign-in page shows a button for each. It needs no session
+// instancesView is the body of GET /api/instances.
+type instancesView struct {
+	// Password: the password form is shown. It is always true: a dashboard
+	// that answers has password accounts.
+	Password bool `json:"password"`
+	// Instances are those with sign-in, the config's first.
+	Instances []InstanceView `json:"instances"`
+}
+
+// instances lists the instances with sign-in, GitLab first, each platform's
+// in the registry's order (the config's, then the dashboard's): the sign-in
+// page shows a button for each, and the password form. It needs no session
 // and says nothing but their names.
 func (d *Dashboard) instances(w http.ResponseWriter, _ *http.Request) {
-	out := []InstanceView{}
-	for _, inst := range d.cfg.GitLab {
-		if inst.HasOAuth() {
-			out = append(out, InstanceView{Platform: config.PlatformGitLab, Instance: inst.Name, Label: "GitLab (" + inst.Name + ")"})
+	view := instancesView{Password: true, Instances: []InstanceView{}}
+	all := d.registry.All()
+	for _, platform := range []struct{ id, label string }{
+		{config.PlatformGitLab, "GitLab"}, {config.PlatformGitHub, "GitHub"},
+	} {
+		for _, inst := range all {
+			if inst.Platform == platform.id && inst.HasOAuth() && !inst.Removing {
+				view.Instances = append(view.Instances,
+					InstanceView{Platform: inst.Platform, Instance: inst.Name, Label: platform.label + " (" + inst.Name + ")"})
+			}
 		}
 	}
-	for _, inst := range d.cfg.GitHub {
-		if inst.HasOAuth() {
-			out = append(out, InstanceView{Platform: config.PlatformGitHub, Instance: inst.Name, Label: "GitHub (" + inst.Name + ")"})
-		}
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, view)
 }
 
 // writeJSON writes v as the JSON body.

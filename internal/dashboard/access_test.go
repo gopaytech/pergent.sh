@@ -404,10 +404,13 @@ func TestPlatformCallsTimeOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := d.Auth.providers["main"].(*gitlabProvider).timeout; got != 10*time.Second {
+	signInProviders(t, d)
+	gl, _ := d.Auth.providers.Get("main")
+	if got := gl.(*gitlabProvider).timeout; got != 10*time.Second {
 		t.Errorf("gitlab call timeout = %s", got)
 	}
-	if got := d.Auth.providers["gh"].(*githubProvider).timeout; got != 10*time.Second {
+	gh, _ := d.Auth.providers.Get("gh")
+	if got := gh.(*githubProvider).timeout; got != 10*time.Second {
 		t.Errorf("github call timeout = %s", got)
 	}
 }

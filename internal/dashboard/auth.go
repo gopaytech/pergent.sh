@@ -16,10 +16,12 @@ import (
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/password"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
 
 const (
@@ -130,7 +132,9 @@ type Auth struct {
 	repos     *settings.Resolver
 	box       *secretbox.Box
 	stateKey  []byte
-	providers map[string]provider // by instance name
+	providers *syncmap.Map[provider] // by instance name; SetProvider and RemoveProvider change it
+	hc        *http.Client           // makes the providers' calls
+	base      string                 // dashboard.url, the OAuth callbacks' host
 	now       func() time.Time
 	log       *slog.Logger
 
@@ -168,47 +172,50 @@ func newAuth(o Options, repos *settings.Resolver) (*Auth, error) {
 
 	a := &Auth{
 		cfg: o.Config, store: o.Store, repos: repos, box: box, stateKey: mac.Sum(nil),
-		providers: map[string]provider{}, now: o.Now, log: o.Log, limit: newLimiter(),
+		providers: syncmap.New[provider](nil), hc: o.HTTPClient, base: o.Config.Dashboard.URL,
+		now: o.Now, log: o.Log, limit: newLimiter(),
 		slots: make(chan struct{}, hashSlots), slotWait: hashSlotWait, verify: password.Verify, hash: password.Hash,
 		flights: map[string]*flight{}, failedAt: map[string]time.Time{},
 	}
-	base := o.Config.Dashboard.URL
-	for _, inst := range o.Config.GitLab {
-		if !inst.HasOAuth() {
-			continue
-		}
-		id, secret, err := inst.OAuthClient()
-		if err != nil {
-			return nil, err
-		}
-		a.providers[inst.Name] = &gitlabProvider{
-			baseURL: strings.TrimRight(inst.URL, "/"), clientID: id, clientSecret: secret,
-			redirectURI: base + "/auth/gitlab/" + inst.Name + "/callback", hc: o.HTTPClient, now: o.Now,
-			timeout: platformTimeout,
-		}
-	}
-	for _, inst := range o.Config.GitHub {
-		if !inst.HasOAuth() {
-			continue
-		}
-		id, secret, err := inst.OAuthClient()
-		if err != nil {
-			return nil, err
-		}
-		a.providers[inst.Name] = &githubProvider{
-			webURL: githubWebURL(inst.APIURL), apiURL: inst.APIURL, clientID: id, clientSecret: secret,
-			redirectURI: base + "/auth/github/" + inst.Name + "/callback", hc: o.HTTPClient, now: o.Now,
-			timeout: platformTimeout,
-		}
-	}
 	return a, nil
+}
+
+// SetProvider sets up sign-in through inst with its OAuth client: the
+// client ID in inst and the secret in s. An instance without a client ID has
+// no sign-in, and loses the one it had. The instance's callback URL is
+// dashboard.url + /auth/{platform}/{name}/callback.
+func (a *Auth) SetProvider(inst instances.Instance, s instances.Secrets) {
+	if inst.OAuthClientID == "" {
+		a.providers.Delete(inst.Name)
+		return
+	}
+	switch {
+	case inst.GitLab != nil:
+		a.providers.Set(inst.Name, &gitlabProvider{
+			baseURL: strings.TrimRight(inst.GitLab.URL, "/"), clientID: inst.OAuthClientID, clientSecret: s.OAuthClientSecret,
+			redirectURI: a.base + "/auth/gitlab/" + inst.Name + "/callback", hc: a.hc, now: a.now,
+			timeout: platformTimeout,
+		})
+	case inst.GitHub != nil:
+		a.providers.Set(inst.Name, &githubProvider{
+			webURL: githubWebURL(inst.GitHub.APIURL), apiURL: inst.GitHub.APIURL, clientID: inst.OAuthClientID, clientSecret: s.OAuthClientSecret,
+			redirectURI: a.base + "/auth/github/" + inst.Name + "/callback", hc: a.hc, now: a.now,
+			timeout: platformTimeout,
+		})
+	}
+}
+
+// RemoveProvider ends sign-in through the instance called name. Sessions
+// already signed in through it stop working at their next platform check.
+func (a *Auth) RemoveProvider(name string) {
+	a.providers.Delete(name)
 }
 
 // provider returns the sign-in of the request's {platform} and {instance};
 // ok is false for an instance without sign-in or on another platform.
 func (a *Auth) provider(r *http.Request) (provider, string, string, bool) {
 	platform, instance := r.PathValue("platform"), r.PathValue("instance")
-	p, ok := a.providers[instance]
+	p, ok := a.providers.Get(instance)
 	if !ok || p.platform() != platform {
 		return nil, "", "", false
 	}

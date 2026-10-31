@@ -12,8 +12,10 @@ import (
 	"testing"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
 
 // newStore opens a migrated store in a fresh schema, dropped when the test
@@ -61,11 +63,11 @@ func dashboardRig(t *testing.T, repos Repositories) *rig {
 	cfg := dashboardConfig()
 	r.mux = http.NewServeMux()
 	r.mux.Handle("/webhooks/gitlab/{instance}", &Handler{
-		Config: cfg, Secrets: map[string]string{"main": testSecret}, Queue: r.q, Repos: repos,
+		Config: cfg, Instances: instances.New(cfg, nil, nil), Secrets: syncmap.New(map[string]string{"main": testSecret}), Queue: r.q, Repos: repos,
 		Wake: func() { r.wakes++ }, Log: log,
 	})
 	r.mux.Handle("/webhooks/github/{instance}", &GitHubHandler{
-		Config: cfg, Secrets: map[string]string{"gh": ghSecret}, Queue: r.q, Repos: repos,
+		Config: cfg, Instances: instances.New(cfg, nil, nil), Secrets: syncmap.New(map[string]string{"gh": ghSecret}), Queue: r.q, Repos: repos,
 		Wake: func() { r.wakes++ }, Log: log,
 	})
 	return r
@@ -81,7 +83,8 @@ func TestWebhookAcceptsDashboardRepo(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	repos := &settings.Resolver{Config: dashboardConfig(), Store: st}
+	cfg := dashboardConfig()
+	repos := &settings.Resolver{Config: cfg, Store: st, Instances: instances.New(cfg, st, nil)}
 
 	t.Run("gitlab", func(t *testing.T) {
 		r := dashboardRig(t, repos)

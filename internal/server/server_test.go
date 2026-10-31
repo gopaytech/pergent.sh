@@ -8,18 +8,22 @@ import (
 	"testing"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/instances"
+	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
 
 // Both webhook routes are registered; an unsigned request reaches the handler
 // (401) before it touches the store, which is nil here.
 func TestWebhookRoutesRegistered(t *testing.T) {
+	cfg := &config.Config{
+		GitLab: []config.Instance{{Name: "main"}},
+		GitHub: []config.GitHubInstance{{Name: "gh"}},
+	}
 	mux := Routes(Deps{
-		Config: &config.Config{
-			GitLab: []config.Instance{{Name: "main"}},
-			GitHub: []config.GitHubInstance{{Name: "gh"}},
-		},
-		WebhookSecrets:       map[string]string{"main": "gitlab-secret"},
-		GitHubWebhookSecrets: map[string]string{"gh": "github-secret"},
+		Config:               cfg,
+		Instances:            instances.New(cfg, nil, nil),
+		WebhookSecrets:       syncmap.New(map[string]string{"main": "gitlab-secret"}),
+		GitHubWebhookSecrets: syncmap.New(map[string]string{"gh": "github-secret"}),
 	})
 	for path, want := range map[string]int{
 		"/webhooks/gitlab/main":  http.StatusUnauthorized,
@@ -37,12 +41,14 @@ func TestWebhookRoutesRegistered(t *testing.T) {
 }
 
 func dashboardDeps(url string, dash http.Handler) Deps {
+	cfg := &config.Config{
+		GitLab:    []config.Instance{{Name: "main"}},
+		Dashboard: config.Dashboard{URL: url},
+	}
 	return Deps{
-		Config: &config.Config{
-			GitLab:    []config.Instance{{Name: "main"}},
-			Dashboard: config.Dashboard{URL: url},
-		},
-		WebhookSecrets: map[string]string{"main": "gitlab-secret"},
+		Config:         cfg,
+		Instances:      instances.New(cfg, nil, nil),
+		WebhookSecrets: syncmap.New(map[string]string{"main": "gitlab-secret"}),
 		Dashboard:      dash,
 	}
 }

@@ -28,7 +28,9 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
 
 const (
@@ -586,13 +588,13 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 		src: map[string]*fakeSource{"main": newFakeSource(), "gh": newFakeSource()},
 		cat: map[string]*fakeCatalog{"main": {}, "gh": {}},
 	}
-	sources := map[string]RepoSource{}
+	sources := syncmap.New[RepoSource](nil)
 	for name, s := range e.src {
-		sources[name] = s
+		sources.Set(name, s)
 	}
-	catalogs := map[string]RepoCatalog{}
+	catalogs := syncmap.New[RepoCatalog](nil)
 	for name, c := range e.cat {
-		catalogs[name] = c
+		catalogs.Set(name, c)
 	}
 	d, err := New(Options{
 		Config: cfg, Store: st, SecretKey: e.key, Now: e.clock.now, Library: e.lib, Sources: sources,
@@ -608,6 +610,7 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 		t.Fatalf("New: %v", err)
 	}
 	e.d = d
+	signInProviders(t, d)
 	mux := http.NewServeMux()
 	mux.Handle("/", d.Handler())
 	// A route behind Require that keeps the session it was given.
@@ -624,6 +627,29 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 	})))
 	e.h = mux
 	return e
+}
+
+// signInProviders sets up sign-in for the OAuth clients the config's
+// instances name in the environment, as the binary does when it connects
+// them.
+func signInProviders(t *testing.T, d *Dashboard) {
+	t.Helper()
+	for _, inst := range d.registry.All() {
+		if !inst.HasOAuth() {
+			continue
+		}
+		var s instances.Secrets
+		var err error
+		if inst.GitLab != nil {
+			_, s.OAuthClientSecret, err = inst.GitLab.OAuthClient()
+		} else {
+			_, s.OAuthClientSecret, err = inst.GitHub.OAuthClient()
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Auth.SetProvider(inst, s)
+	}
 }
 
 func testKey(t *testing.T) string {

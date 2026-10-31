@@ -9,7 +9,9 @@ import (
 	"testing"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
 
 // draftRig serves both webhooks for acme/widgets, with review_drafts set to
@@ -28,11 +30,11 @@ func draftRig(t *testing.T, reviewDrafts bool) *rig {
 	}
 	r.mux = http.NewServeMux()
 	r.mux.Handle("/webhooks/gitlab/{instance}", &Handler{
-		Config: cfg, Secrets: map[string]string{"main": testSecret}, Queue: r.q,
+		Config: cfg, Instances: instances.New(cfg, nil, nil), Secrets: syncmap.New(map[string]string{"main": testSecret}), Queue: r.q,
 		Wake: func() { r.wakes++ }, Log: log,
 	})
 	r.mux.Handle("/webhooks/github/{instance}", &GitHubHandler{
-		Config: cfg, Secrets: map[string]string{"gh": ghSecret}, Queue: r.q,
+		Config: cfg, Instances: instances.New(cfg, nil, nil), Secrets: syncmap.New(map[string]string{"gh": ghSecret}), Queue: r.q,
 		Wake: func() { r.wakes++ }, Log: log,
 	})
 	return r

@@ -31,9 +31,11 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/forge/gitlabforge"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
 
 // Values every engine test shares. None of them is a real secret.
@@ -306,15 +308,16 @@ func newTestEnv(t *testing.T) *testEnv {
 		now: time.Now().UTC().Truncate(time.Second),
 	}
 	env.Engine = &Engine{
-		Store:  st,
-		Config: cfg,
-		Platforms: map[string]Platform{testInstance: {
+		Store:     st,
+		Config:    cfg,
+		Instances: instances.New(cfg, st, box),
+		Platforms: syncmap.New(map[string]Platform{testInstance: {
 			Kind:     config.PlatformGitLab,
 			Forge:    gitlabforge.NewForge(gl.Client(testReviewToken), gitlab.User{ID: 100, Username: "pergent-review"}),
 			Approver: gitlabforge.NewApprover(gl.Client(testApproveToken), gitlab.User{ID: testApproveUserID, Username: "pergent-approve"}),
 			GitLab:   gl.Client(testReviewToken),
-		}},
-		WebhookSecrets: map[string]string{testInstance: testWebhookSecret},
+		}}),
+		WebhookSecrets: syncmap.New(map[string]string{testInstance: testWebhookSecret}),
 		Launcher:       launcher,
 		Library:        inputs.Library{"security": []byte("---\nname: security\n---\nLook for security problems.\n")},
 		Box:            box,

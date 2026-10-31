@@ -63,7 +63,7 @@ func (e *Engine) dropAttention(ctx context.Context, instance, project string) {
 // approverUnreachableNote words the approver_unreachable item for instance:
 // the App when the instance approves with one, the bot when it uses a token.
 func (e *Engine) approverUnreachableNote(instance string) string {
-	if gi, ok := e.Config.GitHubInstance(instance); ok && gi.ApproveApp == nil {
+	if inst, ok := e.Instances.Get(instance); ok && inst.GitHub != nil && inst.GitHub.ApproveApp == nil {
 		return approveBotNote
 	}
 	return approveAppNote

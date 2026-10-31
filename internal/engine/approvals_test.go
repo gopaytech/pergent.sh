@@ -8,6 +8,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
 
 func sweep(t *testing.T, env *testEnv) {
@@ -216,7 +217,7 @@ func TestSweepErrorsAreSkipped(t *testing.T) {
 func TestSweepUnknownInstanceQuiet(t *testing.T) {
 	env := newTestEnv(t)
 	approved(t, env, 1, sha('a'))
-	env.Engine.Platforms = map[string]Platform{}
+	env.Engine.Platforms = syncmap.New(map[string]Platform{})
 
 	sweep(t, env)
 

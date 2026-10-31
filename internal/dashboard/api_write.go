@@ -254,7 +254,7 @@ type catalogFlight struct {
 // the request that started it going away (others may wait for it).
 // Failures aren't kept.
 func (d *Dashboard) catalogRepos(ctx context.Context, instance, search string) ([]string, bool, error) {
-	cat, ok := d.catalogs[instance]
+	cat, ok := d.catalogs.Get(instance)
 	if !ok || cat == nil {
 		return nil, false, errors.New("no repository list for the instance")
 	}
@@ -303,7 +303,7 @@ func (d *Dashboard) catalogRepos(ctx context.Context, instance, search string) (
 // token) and the review bot or App must reach it. It returns the path as
 // the platform spells it, with the project's ID.
 func (d *Dashboard) projectAvailable(ctx context.Context, se Session, project string) (store.VisibleProject, bool, error) {
-	cat, ok := d.catalogs[se.Instance]
+	cat, ok := d.catalogs.Get(se.Instance)
 	if !ok || cat == nil {
 		return store.VisibleProject{}, false, errors.New("no repository list for the instance")
 	}

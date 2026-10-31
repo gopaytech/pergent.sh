@@ -22,12 +22,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -40,14 +38,13 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/dashboard"
 	"github.com/gopaytech/pergent.sh/internal/engine"
 	"github.com/gopaytech/pergent.sh/internal/forge/githubforge"
-	"github.com/gopaytech/pergent.sh/internal/forge/gitlabforge"
-	"github.com/gopaytech/pergent.sh/internal/github"
-	"github.com/gopaytech/pergent.sh/internal/gitlab"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
 	"github.com/gopaytech/pergent.sh/internal/server"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
 
 const (
@@ -124,8 +121,10 @@ func parseArgs(args []string, stderr io.Writer) (cmd command, err error) {
 }
 
 // serve starts pergent.sh and runs it until ctx is done. Anything wrong with
-// the config, the secrets, the database, a GitLab token or a GitHub App or
-// token stops it before it serves; secrets are never part of the error.
+// the config, the secrets, the database, or a GitLab token or GitHub App or
+// token of an instance in the config stops it before it serves; secrets are
+// never part of the error. An instance added in the dashboard that can't be
+// connected is logged and shown in "Needs attention" instead.
 func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -173,22 +172,17 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		}
 	}
 
-	platforms, hookSecrets, err := connectGitLab(ctx, cfg)
-	if err != nil {
-		return err
+	reg := instances.New(cfg, st, box)
+	conn := &connector{
+		reg: reg, store: st, log: log,
+		platforms:   syncmap.New[engine.Platform](nil),
+		gitlabHooks: syncmap.New[string](nil),
+		githubHooks: syncmap.New[string](nil),
+		githubRepos: func(instance string) githubforge.Repos { return engine.GitHubRepos(st, instance) },
 	}
-	githubRepos := func(instance string) githubforge.Repos { return engine.GitHubRepos(st, instance) }
-	githubPlatforms, githubSecrets, err := connectGitHub(ctx, cfg, githubRepos, nil, log)
-	if err != nil {
-		return err
-	}
-	// Instance names are unique across gitlab: and github: (config.Validate).
-	maps.Copy(platforms, githubPlatforms)
-	// A token approver tells the dashboard when its token is about to expire.
-	for _, inst := range cfg.GitHub {
-		if a, ok := githubPlatforms[inst.Name].Approver.(*githubforge.Approver); ok && inst.ApproveTokenEnv != "" {
-			a.OnTokenExpiry(engine.TokenExpiryRecorder(st, inst.Name, log.With("instance", inst.Name)))
-		}
+	if cfg.DashboardEnabled() {
+		conn.sources = syncmap.New[dashboard.RepoSource](nil)
+		conn.catalogs = syncmap.New[dashboard.RepoCatalog](nil)
 	}
 	restCfg, err := kubeConfig()
 	if err != nil {
@@ -202,20 +196,32 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	eng := &engine.Engine{
 		Store:          st,
 		Config:         cfg,
-		Platforms:      platforms,
-		WebhookSecrets: hookSecrets,
+		Instances:      reg,
+		Platforms:      conn.platforms,
+		WebhookSecrets: conn.gitlabHooks,
 		Launcher:       &kube.Launcher{Client: clientset, Namespace: cfg.Jobs.Namespace},
 		Library:        lib,
 		Box:            box,
 		LLMKey:         llmKey,
 		Log:            log,
 	}
-	dash, err := newDashboard(cfg, st, key, lib, platforms, eng.ReconcileSoon, log)
+	dash, err := newDashboard(dashboard.Options{
+		Config: cfg, Instances: reg, Connector: conn, Store: st, SecretKey: key, Log: log, Library: lib,
+		Sources: conn.sources, Catalogs: conn.catalogs, ReconcileSoon: eng.ReconcileSoon,
+	})
 	if err != nil {
 		return err
 	}
+	if dash != nil {
+		conn.auth = dash.Auth
+	}
+	// Connecting reaches GitLab and GitHub: a config instance that doesn't
+	// work stops startup; one added in the dashboard is recorded instead.
+	if err := conn.connectAll(ctx); err != nil {
+		return err
+	}
 	handler := server.Routes(server.Deps{
-		Config: cfg, WebhookSecrets: hookSecrets, GitHubWebhookSecrets: githubSecrets,
+		Config: cfg, Instances: reg, WebhookSecrets: conn.gitlabHooks, GitHubWebhookSecrets: conn.githubHooks,
 		Store: st, Wake: eng.Wake, Dashboard: dashboardHandler(dash), Log: log,
 	})
 	ln, err := net.Listen("tcp", cfg.Listen)
@@ -267,22 +273,14 @@ func checkDashboardEnv(cfg *config.Config) error {
 // newDashboard builds the dashboard when dashboard.url is set, and returns
 // nil, nil when it isn't. Its Skills & instructions view and "add
 // repository" picker use each instance's review bot or review App (the
-// platform's Forge); switching a repository on or off asks the engine for
-// a reconcile of that repository (reconcileSoon).
-func newDashboard(cfg *config.Config, st *store.Store, secretKey string, lib inputs.Library,
-	platforms map[string]engine.Platform, reconcileSoon func(instance, project string), log *slog.Logger) (*dashboard.Dashboard, error) {
-	if !cfg.DashboardEnabled() {
+// platform's Forge), which the connector gives it as instances connect;
+// switching a repository on or off asks the engine for a reconcile of that
+// repository (o.ReconcileSoon).
+func newDashboard(o dashboard.Options) (*dashboard.Dashboard, error) {
+	if !o.Config.DashboardEnabled() {
 		return nil, nil
 	}
-	sources, catalogs := dashboardSources(platforms, log)
-	d, err := dashboard.New(dashboard.Options{
-		Config: cfg, Store: st, SecretKey: secretKey, Log: log, Library: lib,
-		Sources: sources, Catalogs: catalogs, ReconcileSoon: reconcileSoon,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return d, nil
+	return dashboard.New(o)
 }
 
 // dashboardHandler is d's routes, or nil (no dashboard) when d is nil.
@@ -291,33 +289,6 @@ func dashboardHandler(d *dashboard.Dashboard) http.Handler {
 		return nil
 	}
 	return d.Handler()
-}
-
-// dashboardSources returns, by instance, the platforms' Forges that read
-// repositories (Skills & instructions) and list the repositories the review
-// bot or App can set up (the "add repository" picker). gitlabforge.Forge
-// and githubforge.Forge are both.
-func dashboardSources(platforms map[string]engine.Platform, log *slog.Logger) (map[string]dashboard.RepoSource, map[string]dashboard.RepoCatalog) {
-	sources := make(map[string]dashboard.RepoSource, len(platforms))
-	catalogs := make(map[string]dashboard.RepoCatalog, len(platforms))
-	for name, p := range platforms {
-		var missing []string
-		if s, ok := p.Forge.(dashboard.RepoSource); ok {
-			sources[name] = s
-		} else {
-			missing = append(missing, "Skills & instructions")
-		}
-		if c, ok := p.Forge.(dashboard.RepoCatalog); ok {
-			catalogs[name] = c
-		} else {
-			missing = append(missing, "the add-repository picker")
-		}
-		if len(missing) > 0 {
-			log.Warn("dashboard: the instance's review side can't serve "+strings.Join(missing, " or ")+"; they answer 502 there",
-				"instance", name, "platform", p.Kind)
-		}
-	}
-	return sources, catalogs
 }
 
 // pruneSessions returns a pass that deletes the dashboard sessions that can
@@ -431,109 +402,6 @@ func checkSkills(cfg *config.Config, lib inputs.Library) error {
 		}
 	}
 	return errors.Join(errs...)
-}
-
-// connectGitLab builds the review and approve clients of every instance and
-// checks each token by asking who it belongs to; the two must be different
-// users. It returns the platforms and the webhook secrets by instance.
-func connectGitLab(ctx context.Context, cfg *config.Config) (map[string]engine.Platform, map[string]string, error) {
-	platforms := make(map[string]engine.Platform, len(cfg.GitLab))
-	secrets := make(map[string]string, len(cfg.GitLab))
-	for _, inst := range cfg.GitLab {
-		reviewToken, approveToken, hookSecret, err := inst.Secrets()
-		if err != nil {
-			return nil, nil, err
-		}
-		review := gitlab.New(inst.URL, reviewToken, nil)
-		approve := gitlab.New(inst.URL, approveToken, nil)
-		reviewUser, err := review.CurrentUser(ctx)
-		if err != nil {
-			return nil, nil, fmt.Errorf("gitlab instance %q: the review token (%s) doesn't work: %w", inst.Name, inst.ReviewTokenEnv, err)
-		}
-		approveUser, err := approve.CurrentUser(ctx)
-		if err != nil {
-			return nil, nil, fmt.Errorf("gitlab instance %q: the approve token (%s) doesn't work: %w", inst.Name, inst.ApproveTokenEnv, err)
-		}
-		if reviewUser.ID == approveUser.ID {
-			// One user would approve the reviews it posts itself: the
-			// approval has to come from a second identity.
-			return nil, nil, fmt.Errorf("gitlab instance %q: the review token (%s) and the approve token (%s) belong to the same user; the approve bot must be a separate user",
-				inst.Name, inst.ReviewTokenEnv, inst.ApproveTokenEnv)
-		}
-		platforms[inst.Name] = engine.Platform{
-			Kind:     config.PlatformGitLab,
-			Forge:    gitlabforge.NewForge(review, reviewUser),
-			Approver: gitlabforge.NewApprover(approve, approveUser),
-			GitLab:   review,
-		}
-		secrets[inst.Name] = hookSecret
-	}
-	return platforms, secrets, nil
-}
-
-// connectGitHub builds every GitHub instance's review App and approve side
-// (the approve App, or a bot user's token) and looks up their bot users once:
-// the review App's comments and the approve side's reviews are found by
-// them. A key, App or token that doesn't work is an error naming the
-// instance and what failed, never the secret. repos resolves an instance's
-// repository IDs; hc is the HTTP client (nil: the default). It returns the
-// platforms and the review App webhook secrets by instance.
-func connectGitHub(ctx context.Context, cfg *config.Config, repos func(instance string) githubforge.Repos, hc *http.Client, log *slog.Logger) (map[string]engine.Platform, map[string]string, error) {
-	platforms := make(map[string]engine.Platform, len(cfg.GitHub))
-	secrets := make(map[string]string, len(cfg.GitHub))
-	for _, inst := range cfg.GitHub {
-		reviewKey, approveSecret, hookSecret, err := inst.Secrets()
-		if err != nil {
-			return nil, nil, err
-		}
-		reviewApp, reviewBot, err := connectApp(ctx, inst.APIURL, inst.ReviewApp.AppID, reviewKey, hc)
-		if err != nil {
-			return nil, nil, fmt.Errorf("github instance %q: the review App (app_id %d) doesn't work: %w",
-				inst.Name, inst.ReviewApp.AppID, err)
-		}
-		instRepos := repos(inst.Name)
-
-		var approver *githubforge.Approver
-		if inst.ApproveApp != nil {
-			approveApp, approveBot, err := connectApp(ctx, inst.APIURL, inst.ApproveApp.AppID, approveSecret, hc)
-			if err != nil {
-				return nil, nil, fmt.Errorf("github instance %q: the approve App (app_id %d) doesn't work: %w",
-					inst.Name, inst.ApproveApp.AppID, err)
-			}
-			approver = githubforge.NewAppApprover(approveApp, approveBot, instRepos)
-		} else {
-			client := github.NewTokenClient(inst.APIURL, approveSecret, hc)
-			user, err := client.CurrentUser(ctx)
-			if err != nil {
-				return nil, nil, fmt.Errorf("github instance %q: the approve token (%s) doesn't work: %w",
-					inst.Name, inst.ApproveTokenEnv, err)
-			}
-			approver = githubforge.NewTokenApprover(client, user.ID, instRepos, log.With("instance", inst.Name))
-		}
-
-		platforms[inst.Name] = engine.Platform{
-			Kind:     config.PlatformGitHub,
-			Forge:    githubforge.NewForge(reviewApp, reviewBot, instRepos),
-			Approver: approver,
-			GitHub:   &engine.GitHub{App: reviewApp, Approve: approver},
-		}
-		secrets[inst.Name] = hookSecret
-	}
-	return platforms, secrets, nil
-}
-
-// connectApp builds the GitHub App appID and looks up its bot user's ID,
-// which also proves the key belongs to the App.
-func connectApp(ctx context.Context, apiURL string, appID int64, key string, hc *http.Client) (*github.App, int64, error) {
-	app, err := github.NewApp(apiURL, appID, key, hc)
-	if err != nil {
-		return nil, 0, err
-	}
-	bot, err := app.BotUserID(ctx)
-	if err != nil {
-		return nil, 0, err
-	}
-	return app, bot, nil
 }
 
 // kubeConfig is the in-cluster config or, outside a cluster, the kubeconfig

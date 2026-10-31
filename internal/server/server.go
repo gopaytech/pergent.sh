@@ -10,8 +10,10 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/callback"
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/syncmap"
 	"github.com/gopaytech/pergent.sh/internal/web"
 	"github.com/gopaytech/pergent.sh/internal/webhook"
 )
@@ -19,11 +21,14 @@ import (
 // Deps is what the routes need.
 type Deps struct {
 	Config *config.Config
-	// WebhookSecrets maps an instance name to its webhook secret.
-	WebhookSecrets map[string]string
+	// Instances tells which instances exist, the config's and the
+	// dashboard's.
+	Instances *instances.Registry
+	// WebhookSecrets maps a GitLab instance name to its webhook secret.
+	WebhookSecrets *syncmap.Map[string]
 	// GitHubWebhookSecrets maps a GitHub instance name to its review App's
 	// webhook secret.
-	GitHubWebhookSecrets map[string]string
+	GitHubWebhookSecrets *syncmap.Map[string]
 	Store                *store.Store
 	// Wake nudges the engine's loops. May be nil.
 	Wake func()
@@ -45,12 +50,12 @@ type Deps struct {
 func Routes(d Deps) *http.ServeMux {
 	mux := http.NewServeMux()
 	// Webhooks accept repositories switched on in the config or the dashboard.
-	repos := &settings.Resolver{Config: d.Config, Store: d.Store}
+	repos := &settings.Resolver{Config: d.Config, Store: d.Store, Instances: d.Instances}
 	mux.Handle("POST /webhooks/gitlab/{instance}", &webhook.Handler{
-		Config: d.Config, Secrets: d.WebhookSecrets, Queue: d.Store, Repos: repos, Wake: d.Wake, Log: d.Log,
+		Config: d.Config, Instances: d.Instances, Secrets: d.WebhookSecrets, Queue: d.Store, Repos: repos, Wake: d.Wake, Log: d.Log,
 	})
 	mux.Handle("POST /webhooks/github/{instance}", &webhook.GitHubHandler{
-		Config: d.Config, Secrets: d.GitHubWebhookSecrets, Queue: d.Store, Repos: repos, Wake: d.Wake, Log: d.Log,
+		Config: d.Config, Instances: d.Instances, Secrets: d.GitHubWebhookSecrets, Queue: d.Store, Repos: repos, Wake: d.Wake, Log: d.Log,
 	})
 	mux.Handle("POST /runs/{id}/result", &callback.Handler{
 		Results: d.Store, Now: d.Now, Wake: d.Wake, Log: d.Log,

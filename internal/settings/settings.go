@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -85,16 +86,18 @@ func (e Effective) LibrarySkills(library map[string][]byte) (skills, missing []s
 }
 
 // Resolver resolves repositories from Config and, when Store is not nil, the
-// dashboard's repositories in Store.
+// dashboard's repositories in Store. Instances tells the platform of the
+// instance a repository is on, whichever source the instance is from.
 type Resolver struct {
-	Config *config.Config
-	Store  *store.Store
+	Config    *config.Config
+	Store     *store.Store
+	Instances *instances.Registry
 }
 
 // List returns every repository switched on: the config's first, in config
 // order, then the dashboard's that the config doesn't list, ordered by
-// instance and project. A dashboard row of an instance the config doesn't
-// have is left out.
+// instance and project. A dashboard row of an instance that isn't
+// registered is left out.
 func (r *Resolver) List(ctx context.Context) ([]Effective, error) {
 	out := make([]Effective, 0, len(r.Config.Repositories))
 	for _, repo := range r.Config.Repositories {
@@ -190,11 +193,11 @@ func (r *Resolver) jobsMemory(list corev1.ResourceList) resource.Quantity {
 }
 
 // fromConfig resolves a config repository; ok is false when its instance
-// isn't configured (config.Validate rules that out). The config defaults
+// isn't registered (config.Validate rules that out). The config defaults
 // failure_status to failed, so failure_status counts as overridden only when
 // it is neutral.
 func (r *Resolver) fromConfig(repo config.Repository) (Effective, bool) {
-	platform, ok := r.Config.Platform(repo.Instance())
+	platform, ok := r.Instances.Platform(repo.Instance())
 	if !ok {
 		return Effective{}, false
 	}
@@ -221,12 +224,12 @@ func (r *Resolver) fromConfig(repo config.Repository) (Effective, bool) {
 }
 
 // fromDashboard resolves a dashboard row; ok is false when its instance
-// isn't configured. A stored value that can't be used (a memory limit that
+// isn't registered. A stored value that can't be used (a memory limit that
 // doesn't parse, isn't positive or is below jobs.resources.requests, which
 // Kubernetes would refuse; an unknown failure status) is ignored and the
 // default applies: a bad setting never stops reviews.
 func (r *Resolver) fromDashboard(row store.DashboardRepo) (Effective, bool) {
-	platform, ok := r.Config.Platform(row.Instance)
+	platform, ok := r.Instances.Platform(row.Instance)
 	if !ok {
 		return Effective{}, false
 	}

@@ -19,9 +19,11 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/dashboard"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/server"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
 
 // Values of the dashboard end-to-end test. None of them is a real secret.
@@ -75,22 +77,31 @@ func newDashboardE2E(t *testing.T) *dashE2E {
 
 	// What main passes: the review bot's Forge reads repositories and
 	// lists what it can set up; the engine reconciles soon on request.
-	sources := map[string]dashboard.RepoSource{}
-	catalogs := map[string]dashboard.RepoCatalog{}
-	for name, p := range env.Engine.Platforms {
-		sources[name] = p.Forge.(dashboard.RepoSource)
-		catalogs[name] = p.Forge.(dashboard.RepoCatalog)
+	sources := syncmap.New[dashboard.RepoSource](nil)
+	catalogs := syncmap.New[dashboard.RepoCatalog](nil)
+	for _, name := range env.Engine.Platforms.Keys() {
+		p, _ := env.Engine.Platforms.Get(name)
+		sources.Set(name, p.Forge.(dashboard.RepoSource))
+		catalogs.Set(name, p.Forge.(dashboard.RepoCatalog))
 	}
 	d, err := dashboard.New(dashboard.Options{
-		Config: cfg, Store: env.Store, SecretKey: testBoxKey, HTTPClient: env.GitLab.srv.Client(),
+		Config: cfg, Instances: env.Engine.Instances, Store: env.Store, SecretKey: testBoxKey, HTTPClient: env.GitLab.srv.Client(),
 		Now: env.Now, Log: env.Engine.Log, Library: env.Engine.Library,
 		Sources: sources, Catalogs: catalogs, ReconcileSoon: env.Engine.ReconcileSoon,
 	})
 	if err != nil {
 		t.Fatalf("dashboard.New: %v", err)
 	}
+	// As the binary does when it connects the instance.
+	for _, inst := range env.Engine.Instances.All() {
+		_, secret, err := inst.GitLab.OAuthClient()
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Auth.SetProvider(inst, instances.Secrets{OAuthClientSecret: secret})
+	}
 	mux := server.Routes(server.Deps{
-		Config: cfg, WebhookSecrets: env.Engine.WebhookSecrets, Store: env.Store,
+		Config: cfg, Instances: env.Engine.Instances, WebhookSecrets: env.Engine.WebhookSecrets, Store: env.Store,
 		Wake: env.Engine.Wake, Now: env.Now, Dashboard: d.Handler(), Log: env.Engine.Log,
 	})
 	srv := httptest.NewServer(mux)
