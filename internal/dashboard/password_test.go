@@ -18,7 +18,7 @@ import (
 
 const (
 	wrongCredentialsBody = `{"error":"wrong username or password"}`
-	tooManyAttempts      = `{"error":"too many sign-in attempts, try again later"}`
+	tooManyAttemptsBody  = `{"error":"too many sign-in attempts, try again later"}`
 )
 
 // doJSON serves one request with body as its JSON body (nil: none) and
@@ -346,8 +346,8 @@ func TestPasswordGuessing(t *testing.T) {
 			t.Fatalf("attempt %d = %d %s, want 401", attempts, rec.Code, rec.Body)
 		}
 	}
-	if rec := try("ops", "ops-password-123", ""); rec.Code != http.StatusTooManyRequests || body(rec) != tooManyAttempts {
-		t.Errorf("attempt 21 = %d %s, want 429 %s", rec.Code, rec.Body, tooManyAttempts)
+	if rec := try("ops", "ops-password-123", ""); rec.Code != http.StatusTooManyRequests || body(rec) != tooManyAttemptsBody {
+		t.Errorf("attempt 21 = %d %s, want 429 %s", rec.Code, rec.Body, tooManyAttemptsBody)
 	}
 	// The limit is per IP: the last X-Forwarded-For entry is the client.
 	if rec := try("nobody", "whatever-password", "192.0.2.1, 198.51.100.7"); rec.Code != 401 {
@@ -559,5 +559,108 @@ func TestResetPassword(t *testing.T) {
 		if _, err := ResetPassword(ctx, e.st, name, e.clock.now()); !errors.Is(err, ErrNotPasswordAccount) {
 			t.Errorf("ResetPassword(%s) = %v, want ErrNotPasswordAccount", name, err)
 		}
+	}
+}
+
+func TestBootstrapShortEnvPassword(t *testing.T) {
+	e := newEnv(t, nil)
+	e.cfg.Dashboard.AdminPasswordEnv = "PERGENT_TEST_ADMIN_PASSWORD"
+	t.Setenv("PERGENT_TEST_ADMIN_PASSWORD", "elevenchars")
+	err := Bootstrap(ctx, e.st, e.cfg, e.clock.now(), slog.New(slog.DiscardHandler))
+	if err == nil || !strings.Contains(err.Error(), "PERGENT_TEST_ADMIN_PASSWORD") || !strings.Contains(err.Error(), "12") ||
+		strings.Contains(err.Error(), "elevenchars") {
+		t.Errorf("Bootstrap = %v, want an error naming the variable and the minimum, not the value", err)
+	}
+	if n, _ := e.st.CountPasswordAccounts(ctx); n != 0 {
+		t.Errorf("password accounts = %d, want none", n)
+	}
+}
+
+// A lock set by failures that land between reading the account and
+// recording the sign-in still refuses the right password, and stays.
+func TestSignInRaceWithLock(t *testing.T) {
+	e := newEnv(t, nil)
+	acc := e.addPasswordAccount("ops", "ops-password-123", false)
+	e.d.Auth.afterVerify = func() {
+		e.d.Auth.afterVerify = nil
+		for range 5 {
+			if _, err := e.st.RecordFailedSignIn(ctx, acc.ID, e.clock.now(), 5, 15*time.Minute); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	rec := e.passwordSignIn("ops", "ops-password-123", "")
+	if rec.Code != http.StatusUnauthorized || body(rec) != wrongCredentialsBody || cookie(rec, SessionCookieName) != nil {
+		t.Fatalf("the right password, locked meanwhile = %d %s, want 401 and no session", rec.Code, rec.Body)
+	}
+	got, _, _ := e.st.Account(ctx, acc.ID)
+	if got.LockedUntil == nil || !got.LockedUntil.After(e.clock.now()) || got.LastSignInAt != nil {
+		t.Errorf("account = %+v, want it still locked and no sign-in", got)
+	}
+	if a := e.audits(); len(a) != 1 || a[0] != "ops sign_in_failed" {
+		t.Errorf("audit = %q, want one sign_in_failed", a)
+	}
+}
+
+// With every argon2id slot taken, a sign-in answers 503 without checking
+// the password, and works again once a slot is free.
+func TestHashSlotsFull(t *testing.T) {
+	e := newEnv(t, nil)
+	e.addPasswordAccount("ops", "ops-password-123", false)
+	c := e.signInPassword("ops", "ops-password-123")
+	verifies := 0
+	e.d.Auth.verify = func(hash, pw string) bool { verifies++; return password.Verify(hash, pw) }
+	e.d.Auth.slotWait = 20 * time.Millisecond
+	for range cap(e.d.Auth.slots) {
+		e.d.Auth.slots <- struct{}{}
+	}
+	if rec := e.passwordSignIn("ops", "ops-password-123", ""); rec.Code != http.StatusServiceUnavailable || body(rec) != tooManyAttemptsBody {
+		t.Errorf("sign-in with the slots taken = %d %s, want 503 %s", rec.Code, rec.Body, tooManyAttemptsBody)
+	}
+	if rec := e.passwordSignIn("nobody", "whatever-password", ""); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("an unknown username with the slots taken = %d, want 503", rec.Code)
+	}
+	if rec := e.changePassword(c, "ops-password-123", "new-password-456"); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("a change with the slots taken = %d, want 503", rec.Code)
+	}
+	if verifies != 0 {
+		t.Errorf("Verify ran %d times with no slot free", verifies)
+	}
+	if a := e.audits(); len(a) != 1 {
+		t.Errorf("audit = %q, want only the first sign-in", a)
+	}
+	<-e.d.Auth.slots
+	e.signInPassword("ops", "ops-password-123")
+	if verifies != 1 {
+		t.Errorf("Verify ran %d times, want 1", verifies)
+	}
+}
+
+// A wrong current password at a change counts towards the lock; while
+// locked, even the right one is refused.
+func TestChangePasswordCountsTowardsLock(t *testing.T) {
+	e := newEnv(t, nil)
+	acc := e.addPasswordAccount("ops", "ops-password-123", false)
+	c := e.signInPassword("ops", "ops-password-123")
+	for i := range 5 {
+		if rec := e.changePassword(c, "not-the-password", "new-password-456"); rec.Code != 401 || body(rec) != `{"error":"wrong password"}` {
+			t.Fatalf("wrong current password %d = %d %s", i+1, rec.Code, rec.Body)
+		}
+	}
+	if got, _, _ := e.st.Account(ctx, acc.ID); got.LockedUntil == nil {
+		t.Fatalf("after 5 wrong current passwords = %+v, want locked", got)
+	}
+	if rec := e.changePassword(c, "ops-password-123", "new-password-456"); rec.Code != 401 || body(rec) != `{"error":"wrong password"}` {
+		t.Errorf("the right current password while locked = %d %s, want 401", rec.Code, rec.Body)
+	}
+	if got, _, _ := e.st.Account(ctx, acc.ID); !password.Verify(got.PasswordHash, "ops-password-123") {
+		t.Error("the password changed while locked")
+	}
+	if a := e.audits(); !strings.Contains(strings.Join(a, ","), "ops locked") {
+		t.Errorf("audit = %q, want the lock", a)
+	}
+	e.clock.advance(15 * time.Minute)
+	if rec := e.changePassword(c, "ops-password-123", "new-password-456"); rec.Code != http.StatusNoContent {
+		t.Errorf("the change after the lock = %d %s, want 204", rec.Code, rec.Body)
 	}
 }

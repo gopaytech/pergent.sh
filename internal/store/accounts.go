@@ -252,3 +252,68 @@ func (s *Store) DeleteAccountSessions(ctx context.Context, id int64, keep []byte
 	_, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE account_id = $1 AND ($2::bytea IS NULL OR id_hash <> $2)`, id, keep)
 	return err
 }
+
+// RecordSignInUnlessLocked is RecordSignIn for a password sign-in: in the
+// same statement it checks that the password account isn't locked at at,
+// so a lock set by a concurrent failure since the account was read is never
+// cleared by it. ok is false, and nothing is changed, when it is locked (or
+// isn't a password account).
+func (s *Store) RecordSignInUnlessLocked(ctx context.Context, id int64, at time.Time) (ok bool, err error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE accounts SET last_sign_in_at = $2, failed_attempts = 0, locked_until = NULL
+		WHERE id = $1 AND kind = 'password' AND (locked_until IS NULL OR locked_until <= $2)`, id, at)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// ChangePasswordUnlessLocked replaces a password account's hash, clears a
+// change asked for, its failed attempts and its lock, all only when it
+// isn't locked at now; ok is false, and nothing is changed, when it is
+// locked (or isn't a password account). hash must not be empty.
+func (s *Store) ChangePasswordUnlessLocked(ctx context.Context, id int64, hash string, now time.Time) (ok bool, err error) {
+	if hash == "" {
+		return false, errors.New("store: a password account needs a password hash")
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE accounts SET password_hash = $2, must_change_password = false,
+			failed_attempts = 0, locked_until = NULL
+		WHERE id = $1 AND kind = 'password' AND (locked_until IS NULL OR locked_until <= $3)`, id, hash, now)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// ResetPassword, in one transaction, replaces a password account's hash
+// with one that must be changed at the next sign-in (clearing its failed
+// attempts and lock), ends all its sessions and records audit; on an error
+// none of it is done. An ID that isn't a password account is an error.
+func (s *Store) ResetPassword(ctx context.Context, id int64, hash string, audit AuditEntry) error {
+	if hash == "" {
+		return errors.New("store: a password account needs a password hash")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+
+	tag, err := tx.Exec(ctx, `UPDATE accounts SET password_hash = $2, must_change_password = true,
+			failed_attempts = 0, locked_until = NULL
+		WHERE id = $1 AND kind = 'password'`, id, hash)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("store: no password account %d", id)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE account_id = $1`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_log (at, actor_id, actor, action, instance, project, detail)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`, audit.At, audit.ActorID, audit.Actor, audit.Action, audit.Instance,
+		audit.Project, audit.Detail); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/password"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -108,6 +109,15 @@ type Auth struct {
 
 	// limit counts password attempts by client IP.
 	limit *limiter
+	// slots holds a token per argon2id hash or check running (hashSlots);
+	// slotWait is how long a request waits for one.
+	slots    chan struct{}
+	slotWait time.Duration
+	// verify checks a password against its hash: password.Verify.
+	verify func(encoded, pw string) bool
+	// afterVerify, when set (tests), runs after a sign-in's password was
+	// found right and before the sign-in is recorded.
+	afterVerify func()
 
 	mu       sync.Mutex
 	flights  map[string]*flight   // access checks in progress, by session hash
@@ -130,6 +140,7 @@ func newAuth(o Options, repos *settings.Resolver) (*Auth, error) {
 	a := &Auth{
 		cfg: o.Config, store: o.Store, repos: repos, box: box, stateKey: mac.Sum(nil),
 		providers: map[string]provider{}, now: o.Now, log: o.Log, limit: newLimiter(),
+		slots: make(chan struct{}, hashSlots), slotWait: hashSlotWait, verify: password.Verify,
 		flights: map[string]*flight{}, failedAt: map[string]time.Time{},
 	}
 	base := o.Config.Dashboard.URL
@@ -416,6 +427,9 @@ func (a *Auth) Require(next http.Handler) http.Handler {
 			return
 		}
 		if !found {
+			// Defensive: sessions are deleted with their account (ON
+			// DELETE CASCADE), so the session lookup above already
+			// answers 401 in practice.
 			if err := a.store.DeleteSession(ctx, hash); err != nil {
 				a.log.Error("dashboard: deleting the session of a removed account failed", "error", err.Error())
 			}

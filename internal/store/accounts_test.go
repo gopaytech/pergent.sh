@@ -278,3 +278,105 @@ func TestDeleteAccountSessions(t *testing.T) {
 		t.Error("another account's session was deleted")
 	}
 }
+
+// A good password sign-in is recorded only while the account isn't locked.
+func TestRecordSignInUnlessLocked(t *testing.T) {
+	s := newStore(t)
+	a := mustPassword(t, s, "admin")
+	for i := 0; i < 5; i++ {
+		s.RecordFailedSignIn(ctx, a.ID, t0, 5, 15*time.Minute) //nolint:errcheck // checked below
+	}
+	if ok, err := s.RecordSignInUnlessLocked(ctx, a.ID, t0.Add(time.Minute)); err != nil || ok {
+		t.Fatalf("sign-in while locked = %v, %v; want false", ok, err)
+	}
+	got, _, _ := s.Account(ctx, a.ID)
+	if got.LockedUntil == nil || got.FailedAttempts != 5 || got.LastSignInAt != nil {
+		t.Fatalf("after a refused sign-in = %+v; want the lock kept", got)
+	}
+	if ok, err := s.RecordSignInUnlessLocked(ctx, a.ID, t0.Add(15*time.Minute)); err != nil || !ok {
+		t.Fatalf("sign-in when the lock ended = %v, %v; want true", ok, err)
+	}
+	got, _, _ = s.Account(ctx, a.ID)
+	if got.LockedUntil != nil || got.FailedAttempts != 0 || got.LastSignInAt == nil {
+		t.Fatalf("after a sign-in = %+v", got)
+	}
+	p := mustPlatform(t, s, "main", 5, "carol")
+	if ok, err := s.RecordSignInUnlessLocked(ctx, p.ID, t0); err != nil || ok {
+		t.Errorf("a platform account's password sign-in = %v, %v; want false", ok, err)
+	}
+}
+
+// A password change is made only while the account isn't locked, and clears
+// the change asked for.
+func TestChangePasswordUnlessLocked(t *testing.T) {
+	s := newStore(t)
+	a, err := s.CreatePasswordAccount(ctx, "admin", "old-hash", true, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		s.RecordFailedSignIn(ctx, a.ID, t0, 5, 15*time.Minute) //nolint:errcheck // checked below
+	}
+	if ok, err := s.ChangePasswordUnlessLocked(ctx, a.ID, "new-hash", t0.Add(time.Minute)); err != nil || ok {
+		t.Fatalf("change while locked = %v, %v; want false", ok, err)
+	}
+	if got, _, _ := s.Account(ctx, a.ID); got.PasswordHash != "old-hash" || got.LockedUntil == nil {
+		t.Fatalf("after a refused change = %+v", got)
+	}
+	if ok, err := s.ChangePasswordUnlessLocked(ctx, a.ID, "new-hash", t0.Add(15*time.Minute)); err != nil || !ok {
+		t.Fatalf("change when the lock ended = %v, %v; want true", ok, err)
+	}
+	got, _, _ := s.Account(ctx, a.ID)
+	if got.PasswordHash != "new-hash" || got.MustChangePassword || got.LockedUntil != nil || got.FailedAttempts != 0 {
+		t.Fatalf("after a change = %+v", got)
+	}
+	if ok, err := s.ChangePasswordUnlessLocked(ctx, a.ID, "", t0.Add(time.Hour)); err == nil || ok {
+		t.Errorf("an empty hash = %v, %v; want an error", ok, err)
+	}
+}
+
+// ResetPassword sets the password, ends the sessions and records the audit
+// entry together, or does none of it.
+func TestResetPasswordTogether(t *testing.T) {
+	s := newStore(t)
+	a := mustPassword(t, s, "admin")
+	if err := s.CreateSession(ctx, Session{IDHash: []byte("h1"), AccountID: a.ID, Username: "admin", CSRF: "c",
+		LastSeenAt: t0, CreatedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		s.RecordFailedSignIn(ctx, a.ID, t0, 5, time.Hour) //nolint:errcheck // checked below
+	}
+	// An audit entry that can't be stored (a NUL byte) undoes the rest.
+	bad := AuditEntry{At: t0, Actor: "cli", Action: "password_reset", Detail: "bad\x00"}
+	if err := s.ResetPassword(ctx, a.ID, "reset-hash", bad); err == nil {
+		t.Fatal("ResetPassword with a bad audit entry = nil error")
+	}
+	if got, _, _ := s.Account(ctx, a.ID); got.PasswordHash != "hash-admin" {
+		t.Fatalf("after a failed reset the hash = %q, want the old one", got.PasswordHash)
+	}
+	if _, found, _ := s.Session(ctx, []byte("h1")); !found {
+		t.Fatal("a failed reset ended the session")
+	}
+
+	if err := s.ResetPassword(ctx, a.ID, "reset-hash", AuditEntry{At: t0, Actor: "cli", Action: "password_reset", Detail: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ := s.Account(ctx, a.ID)
+	if got.PasswordHash != "reset-hash" || !got.MustChangePassword || got.LockedUntil != nil || got.FailedAttempts != 0 {
+		t.Fatalf("after a reset = %+v", got)
+	}
+	if _, found, _ := s.Session(ctx, []byte("h1")); found {
+		t.Error("the reset kept the session")
+	}
+	if log, _ := s.AuditLog(ctx, 0, 10); len(log) != 1 || log[0].Action != "password_reset" {
+		t.Errorf("audit = %+v", log)
+	}
+	p := mustPlatform(t, s, "main", 5, "carol")
+	if err := s.ResetPassword(ctx, p.ID, "x", AuditEntry{At: t0, Actor: "cli", Action: "password_reset"}); err == nil {
+		t.Error("ResetPassword on a platform account = nil error")
+	}
+	if log, _ := s.AuditLog(ctx, 0, 10); len(log) != 1 {
+		t.Errorf("a refused reset was audited: %+v", log)
+	}
+}

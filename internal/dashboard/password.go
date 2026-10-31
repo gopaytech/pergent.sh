@@ -31,6 +31,12 @@ const (
 	firstAdmin = "admin"
 
 	wrongCredentials = "wrong username or password"
+	tooManyAttempts  = "too many sign-in attempts, try again later"
+
+	// hashSlots argon2id hashes or checks (19 MiB each) run at once; a
+	// request waits at most hashSlotWait for one, then gets 503.
+	hashSlots    = 4
+	hashSlotWait = 5 * time.Second
 )
 
 // ErrNotPasswordAccount is ResetPassword's answer for a username that is
@@ -51,7 +57,8 @@ var dummyHash = func() string {
 // password is os.Getenv(cfg.Dashboard.AdminPasswordEnv) when that is set and
 // not empty, else password.Generate(), logged once at Warn as "initial admin
 // password" with attribute password=<value>. MustChangePassword is true
-// either way.
+// either way. A password from the environment shorter than
+// password.MinLength is an error naming the variable.
 func Bootstrap(ctx context.Context, st *store.Store, cfg *config.Config, now time.Time, log *slog.Logger) error {
 	n, err := st.CountPasswordAccounts(ctx)
 	if err != nil {
@@ -63,6 +70,10 @@ func Bootstrap(ctx context.Context, st *store.Store, cfg *config.Config, now tim
 	pw, generated := "", false
 	if name := cfg.Dashboard.AdminPasswordEnv; name != "" {
 		pw = os.Getenv(name)
+		if pw != "" && utf8.RuneCountInString(pw) < password.MinLength {
+			return fmt.Errorf("dashboard.admin_password_env: the password in %s must have at least %d characters",
+				name, password.MinLength)
+		}
 	}
 	if pw == "" {
 		pw, generated = password.Generate(), true
@@ -88,6 +99,8 @@ func Bootstrap(ctx context.Context, st *store.Store, cfg *config.Config, now tim
 // ResetPassword sets a new generated password for a password account,
 // forces a change, clears the lock and deletes its sessions; returns the new
 // password. ErrNotPasswordAccount when username is not a password account.
+// The change, the sessions' end and the audit entry are one transaction: on
+// an error none of them happened.
 func ResetPassword(ctx context.Context, st *store.Store, username string, now time.Time) (string, error) {
 	acc, found, err := st.PasswordAccount(ctx, username)
 	if err != nil {
@@ -101,16 +114,27 @@ func ResetPassword(ctx context.Context, st *store.Store, username string, now ti
 	if err != nil {
 		return "", err
 	}
-	if err := st.SetPassword(ctx, acc.ID, hash, true); err != nil {
-		return "", err
-	}
-	if err := st.DeleteAccountSessions(ctx, acc.ID, nil); err != nil {
-		return "", err
-	}
-	if err := st.Audit(ctx, store.AuditEntry{At: now, Actor: "cli", Action: "password_reset", Detail: acc.Username}); err != nil {
+	if err := st.ResetPassword(ctx, acc.ID, hash,
+		store.AuditEntry{At: now, Actor: "cli", Action: "password_reset", Detail: acc.Username}); err != nil {
 		return "", err
 	}
 	return pw, nil
+}
+
+// hashSlot takes one of the hashSlots argon2id slots, waiting until one is
+// free, ctx ends or slotWait passes; ok is false when none came, and
+// release gives the slot back otherwise. It bounds the memory the
+// unauthenticated sign-in can make the process use.
+func (a *Auth) hashSlot(ctx context.Context) (release func(), ok bool) {
+	timer := time.NewTimer(a.slotWait)
+	defer timer.Stop()
+	select {
+	case a.slots <- struct{}{}:
+		return func() { <-a.slots }, true
+	case <-timer.C:
+	case <-ctx.Done():
+	}
+	return nil, false
 }
 
 // loginCSRF hands out the sign-in form's CSRF token: in a cookie and in the
@@ -138,6 +162,7 @@ func loginCSRFOK(r *http.Request) bool {
 // Every failure, an unknown username included, is the same 401 after the
 // same work (an argon2id check); 5 wrong passwords in a row lock the
 // account for 15 minutes, and each client IP has 20 attempts per 5 minutes.
+// With no argon2id slot free within 5 s the answer is 503.
 func (a *Auth) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 	if !loginCSRFOK(r) {
 		writeCSRFError(w)
@@ -153,7 +178,7 @@ func (a *Auth) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 	}
 	now := a.now()
 	if !a.limit.allow(clientIP(r), now) {
-		writeError(w, http.StatusTooManyRequests, "too many sign-in attempts, try again later")
+		writeError(w, http.StatusTooManyRequests, tooManyAttempts)
 		return
 	}
 	ctx := context.WithoutCancel(r.Context())
@@ -163,15 +188,41 @@ func (a *Auth) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "sign-in failed, please try again")
 		return
 	}
+	release, ok := a.hashSlot(r.Context())
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, tooManyAttempts)
+		return
+	}
+	hash := dummyHash
+	if found {
+		hash = acc.PasswordHash
+	}
+	good := a.verify(hash, in.Password)
+	release()
 	if !found {
-		password.Verify(dummyHash, in.Password)
 		writeError(w, http.StatusUnauthorized, wrongCredentials)
 		return
 	}
 	log := a.log.With("user", acc.Username)
 	locked := acc.LockedUntil != nil && acc.LockedUntil.After(now)
-	if !password.Verify(acc.PasswordHash, in.Password) || locked {
-		a.failedSignIn(ctx, acc, locked, now, log)
+	if !good || locked {
+		a.failedSignIn(ctx, acc, locked, refusedDetail(locked, "wrong password"), now, log)
+		writeError(w, http.StatusUnauthorized, wrongCredentials)
+		return
+	}
+	if a.afterVerify != nil {
+		a.afterVerify()
+	}
+	// The lock is checked again in the same statement that records the
+	// sign-in: failures since the account was read may have set one.
+	recorded, err := a.store.RecordSignInUnlessLocked(ctx, acc.ID, now)
+	if err != nil {
+		log.Error("dashboard password sign-in: recording it failed", "error", err.Error())
+		writeError(w, http.StatusInternalServerError, "sign-in failed, please try again")
+		return
+	}
+	if !recorded {
+		a.failedSignIn(ctx, acc, true, refusedDetail(true, ""), now, log)
 		writeError(w, http.StatusUnauthorized, wrongCredentials)
 		return
 	}
@@ -184,11 +235,6 @@ func (a *Auth) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.forget(hash)
-	}
-	if err := a.store.RecordSignIn(ctx, acc.ID, now); err != nil {
-		log.Error("dashboard password sign-in: recording it failed", "error", err.Error())
-		writeError(w, http.StatusInternalServerError, "sign-in failed, please try again")
-		return
 	}
 	id := randomString(sessionIDBytes)
 	if err := a.store.CreateSession(ctx, store.Session{
@@ -209,14 +255,22 @@ func (a *Auth) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// failedSignIn records a refused sign-in of acc: a wrong password counts
-// towards the lock (wasLocked: the account was locked already, so the
-// right password was refused too and nothing more is counted).
-func (a *Auth) failedSignIn(ctx context.Context, acc store.Account, wasLocked bool, now time.Time, log *slog.Logger) {
-	detail := "wrong password"
-	if wasLocked {
-		detail = "account locked"
+// refusedDetail is the audit detail of a refused attempt: "account locked",
+// or wrong when it wasn't locked.
+func refusedDetail(locked bool, wrong string) string {
+	if locked {
+		return "account locked"
 	}
+	return wrong
+}
+
+// failedSignIn records a refused attempt at acc's password (a sign-in, or
+// the current password at a change), with detail in the audit entry. Every
+// refused attempt counts as a failure, whatever the password: one during a
+// lock (wasLocked) adds to the count but leaves the lock where it is
+// (store.RecordFailedSignIn). The attempt that sets the lock also records
+// "locked".
+func (a *Auth) failedSignIn(ctx context.Context, acc store.Account, wasLocked bool, detail string, now time.Time, log *slog.Logger) {
 	locked, err := a.store.RecordFailedSignIn(ctx, acc.ID, now, maxFailures, lockFor)
 	if err != nil {
 		log.Error("dashboard password sign-in: recording a failure failed", "error", err.Error())
@@ -237,8 +291,11 @@ func (a *Auth) audit(ctx context.Context, acc store.Account, action, detail stri
 }
 
 // changePassword changes the signed-in password account's password: JSON
-// {current, new}. It runs behind Require, which checks the CSRF token. The
-// account's other sessions end, and a change asked for at sign-in is done.
+// {current, new}. It runs behind Require, which checks the CSRF token. A
+// wrong current password counts towards the account's lock like a wrong
+// sign-in, and while the account is locked every change is refused (401).
+// The account's other sessions end, and a change asked for at sign-in is
+// done.
 func (a *Auth) changePassword(w http.ResponseWriter, r *http.Request) {
 	se, _ := SessionFrom(r.Context())
 	if se.Kind != store.AccountPassword {
@@ -255,7 +312,7 @@ func (a *Auth) changePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	now := a.now()
 	if !a.limit.allow(clientIP(r), now) {
-		writeError(w, http.StatusTooManyRequests, "too many sign-in attempts, try again later")
+		writeError(w, http.StatusTooManyRequests, tooManyAttempts)
 		return
 	}
 	if utf8.RuneCountInString(in.New) < password.MinLength {
@@ -268,23 +325,43 @@ func (a *Auth) changePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not change the password")
 		return
 	}
-	if !password.Verify(acc.PasswordHash, in.Current) {
+	log := a.log.With("user", acc.Username)
+	release, ok := a.hashSlot(r.Context())
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, tooManyAttempts)
+		return
+	}
+	good := a.verify(acc.PasswordHash, in.Current)
+	same := subtle.ConstantTimeCompare([]byte(in.New), []byte(in.Current)) == 1
+	var hash string
+	if good && !same {
+		hash, err = password.Hash(in.New)
+	}
+	release()
+	locked := acc.LockedUntil != nil && acc.LockedUntil.After(now)
+	if !good || locked {
+		a.failedSignIn(ctx, acc, locked, refusedDetail(locked, "wrong current password at a password change"), now, log)
 		writeError(w, http.StatusUnauthorized, "wrong password")
 		return
 	}
-	if subtle.ConstantTimeCompare([]byte(in.New), []byte(in.Current)) == 1 {
+	if same {
 		writeError(w, http.StatusBadRequest, "the new password must differ from the current one")
 		return
 	}
-	hash, err := password.Hash(in.New)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not change the password")
 		return
 	}
-	log := a.log.With("user", acc.Username)
-	if err := a.store.SetPassword(ctx, acc.ID, hash, false); err != nil {
+	// As at sign-in, the lock is checked again in the write itself.
+	changed, err := a.store.ChangePasswordUnlessLocked(ctx, acc.ID, hash, now)
+	if err != nil {
 		log.Error("dashboard: storing a new password failed", "error", err.Error())
 		writeError(w, http.StatusInternalServerError, "could not change the password")
+		return
+	}
+	if !changed {
+		a.failedSignIn(ctx, acc, true, refusedDetail(true, ""), now, log)
+		writeError(w, http.StatusUnauthorized, "wrong password")
 		return
 	}
 	if err := a.store.DeleteAccountSessions(ctx, acc.ID, se.idHash); err != nil {
