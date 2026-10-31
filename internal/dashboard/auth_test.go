@@ -14,6 +14,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
+	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
 // checkCookie asserts the attributes every pergent cookie has.
@@ -626,5 +627,45 @@ func TestGitHubWebURL(t *testing.T) {
 		if got := githubWebURL(api); got != want {
 			t.Errorf("githubWebURL(%q) = %q, want %q", api, got, want)
 		}
+	}
+}
+
+// A platform sign-in makes the user's account the first time and reuses it
+// after, with the username the platform reports now; the session belongs to
+// that account.
+func TestPlatformSignInCreatesAccount(t *testing.T) {
+	e := newEnv(t, nil)
+	e.gl.setProject("acme/widgets", gitlabProject("private", 30, 0))
+
+	first := e.signIn("gitlab", "main")
+	accounts, err := e.st.Accounts(ctx)
+	if err != nil || len(accounts) != 1 {
+		t.Fatalf("accounts after the first sign-in = %+v, %v", accounts, err)
+	}
+	a := accounts[0]
+	if a.Kind != store.AccountPlatform || a.Platform != "gitlab" || a.Instance != "main" || a.PlatformUserID != 9 ||
+		a.Username != "alice" || a.LastSignInAt == nil || !a.LastSignInAt.Equal(e.clock.now()) {
+		t.Fatalf("account = %+v", a)
+	}
+	if se, found := e.storedSession(first); !found || se.AccountID != a.ID {
+		t.Fatalf("session = %+v, %v; want account %d", se, found, a.ID)
+	}
+
+	e.gl.setUsername("alice-renamed")
+	e.clock.advance(time.Hour)
+	second := e.signIn("gitlab", "main")
+	accounts, _ = e.st.Accounts(ctx)
+	if len(accounts) != 1 || accounts[0].ID != a.ID || accounts[0].Username != "alice-renamed" ||
+		!accounts[0].LastSignInAt.Equal(e.clock.now()) {
+		t.Fatalf("accounts after the second sign-in = %+v; want the same account, renamed", accounts)
+	}
+	if se, found := e.storedSession(second); !found || se.AccountID != a.ID {
+		t.Fatalf("second session = %+v, %v", se, found)
+	}
+
+	// The same user on a GitHub instance is another account.
+	e.signIn("github", "gh")
+	if accounts, _ = e.st.Accounts(ctx); len(accounts) != 2 {
+		t.Fatalf("accounts after a GitHub sign-in = %d; want 2", len(accounts))
 	}
 }

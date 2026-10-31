@@ -291,7 +291,7 @@ func TestAccessRefreshDropsRepository(t *testing.T) {
 		t.Fatalf("visible 5 min after the drop = %v", se.Visible)
 	}
 	projects, err := e.st.SessionProjects(ctx, hashOf(t, c))
-	if err != nil || !slices.Equal(projects, []store.VisibleProject{{Path: "acme/payments", ID: testID("acme/payments")}}) {
+	if err != nil || !slices.Equal(projects, []store.VisibleProject{{Instance: "main", Path: "acme/payments", ID: testID("acme/payments")}}) {
 		t.Fatalf("stored user_access = %v, %v", projects, err)
 	}
 

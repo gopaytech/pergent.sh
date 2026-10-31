@@ -309,7 +309,7 @@ func (a *Auth) checkAccess(ctx context.Context, se store.Session, tok oauthToken
 			break
 		}
 	}
-	if err := a.store.SetSessionAccess(ctx, se.IDHash, username, isAdmin, visible, a.now()); err != nil {
+	if err := a.store.SetSessionAccess(ctx, se.IDHash, username, isAdmin, "", visible, a.now()); err != nil {
 		return accessResult{}, err
 	}
 	switch {

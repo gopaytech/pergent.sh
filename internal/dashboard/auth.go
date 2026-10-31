@@ -299,8 +299,14 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 	id := randomString(sessionIDBytes)
 	hash := hashID(id)
 	now := a.now()
+	account, err := a.store.UpsertPlatformAccount(ctx, platform, instance, userID, username, now)
+	if err != nil {
+		log.Error("dashboard sign-in: storing the account failed", "error", err.Error())
+		writeText(w, http.StatusInternalServerError, "Sign-in failed. Please try again.")
+		return
+	}
 	se := store.Session{
-		IDHash: hash, Platform: platform, Instance: instance, UserID: userID, Username: username,
+		IDHash: hash, AccountID: account.ID, Platform: platform, Instance: instance, UserID: userID, Username: username,
 		TokenSealed: sealed, CSRF: randomString(32), LastSeenAt: now, CreatedAt: now,
 	}
 	if err := a.store.CreateSession(ctx, se); err != nil {
