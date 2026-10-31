@@ -14,8 +14,10 @@ import (
 // SweepApprovals checks every approval the approve bot holds against GitLab,
 // so an approval never outlives the commit it was for when a webhook was
 // lost (GitLab doesn't retry failed deliveries: pergent.sh down during a
-// rollout, a disabled hook). For each recorded approval it reads the merge
-// request with the review bot:
+// rollout, a disabled hook). It first pays the withdrawals that re-deciding a
+// review as not approved still owes (a dismissal restored, a change turned
+// into a draft), those past their unapprove backoff. Then, for each recorded
+// approval, it reads the merge request with the review bot:
 //   - merged, or gone (404): the record is cleared, nothing is written;
 //   - closed: the approval is withdrawn (it could be reopened), then cleared;
 //   - open at another head, or retargeted: the approval is withdrawn and

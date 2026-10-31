@@ -459,7 +459,9 @@ type LLMView struct {
 //     leaves them). Any other key, or a value
 //     out of bounds, is 400 and nothing changes. 200, RepositoryDetailView.
 //   - POST /api/repositories/{instance}/{project...}/settings/reset: every
-//     setting back to its default. 200, RepositoryDetailView.
+//     setting back to its default, except that a maintainer's reset leaves
+//     the two re-run caps as they are (only an admin of the repository
+//     resets those). 200, RepositoryDetailView.
 //
 // Users whose teams cover a repository switched on see it at their next
 // request, once the platform says they may.
