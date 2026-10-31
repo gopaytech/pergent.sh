@@ -207,12 +207,26 @@ func (e *Engine) answerCommand(parent, bctx context.Context, cmd store.Command) 
 // retryCommand gives a command back to be tried again later, or, after
 // maxCommandRetries, finishes it with a 👎 and no reply. While the engine
 // shuts down it does neither: the claim lapses and the command is offered
-// again.
+// again. When the pass's budget has run out, the failure is put down to it,
+// not to the command: it is put off without an attempt counted.
 func (e *Engine) retryCommand(parent, bctx context.Context, cmd store.Command, cause error, log *slog.Logger) {
 	if parent.Err() != nil {
 		return
 	}
 	text := e.redact(cause.Error())
+	if bctx.Err() != nil {
+		// The pass ran out of its time, which a slow command ahead of this
+		// one may have used up: this one was not given a fair try, so it
+		// is not counted against it. It waits a backoff so the commands
+		// behind it get their turn.
+		log.Info("a command is put off: the pass ran out of time", "error", text)
+		sctx, cancel := settle(parent)
+		defer cancel()
+		if err := e.Store.DeferCommand(sctx, cmd.ID, e.now().Add(commandRetryBackoff)); err != nil {
+			log.Error("couldn't put a command off", "error", e.redact(err.Error()))
+		}
+		return
+	}
 	if cmd.Attempts >= maxCommandRetries {
 		log.Error("giving up on a command", "error", text)
 		e.react(bctx, cmd, forge.ReactRefused, log)

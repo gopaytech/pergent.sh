@@ -120,6 +120,16 @@ func (s *Store) ReleaseCommand(ctx context.Context, id int64, notBefore time.Tim
 	return err
 }
 
+// DeferCommand gives a claimed command back without counting an attempt: it
+// was not tried (or not for long enough to tell), so its turn comes again at
+// notBefore with attempts as they were. A command already finished is left
+// as it is.
+func (s *Store) DeferCommand(ctx context.Context, id int64, notBefore time.Time) error {
+	_, err := s.pool.Exec(ctx, `UPDATE commands SET claimed_at = NULL, not_before = $2
+		WHERE id = $1 AND finished_at IS NULL`, id, notBefore)
+	return err
+}
+
 // PruneCommands deletes the commands finished before the given time and
 // returns how many it deleted.
 func (s *Store) PruneCommands(ctx context.Context, before time.Time) (int, error) {

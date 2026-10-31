@@ -289,6 +289,40 @@ func TestFinishCommand(t *testing.T) {
 	}
 }
 
+// DeferCommand puts a claimed command back for later with its attempts as
+// they were.
+func TestDeferCommand(t *testing.T) {
+	s := newStore(t)
+	if _, err := s.InsertCommand(ctx, command("review", "", 1)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ClaimCommands(ctx, 1, t0)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("ClaimCommands = %+v, %v", got, err)
+	}
+	later := t0.Add(time.Minute)
+	if err := s.DeferCommand(ctx, got[0].ID, later); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := s.ClaimCommands(ctx, 1, t0.Add(30*time.Second)); err != nil || len(again) != 0 {
+		t.Fatalf("claimed before not_before: %+v, %v", again, err)
+	}
+	again, err := s.ClaimCommands(ctx, 1, later)
+	if err != nil || len(again) != 1 || again[0].Attempts != 0 {
+		t.Fatalf("claim at not_before = %+v, %v; want the command, still at 0 attempts", again, err)
+	}
+	// A finished command is left alone.
+	if err := s.FinishCommand(ctx, again[0].ID, CommandDone, later); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeferCommand(ctx, again[0].ID, later.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if third, _ := s.ClaimCommands(ctx, 1, later.Add(2*time.Hour)); len(third) != 0 {
+		t.Errorf("a finished command was offered again: %+v", third)
+	}
+}
+
 func TestReleaseCommand(t *testing.T) {
 	s := newStore(t)
 	if _, err := s.InsertCommand(ctx, command("review", "", 1)); err != nil {

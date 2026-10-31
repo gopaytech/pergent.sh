@@ -1054,6 +1054,43 @@ func TestCommandsDoNotBlockDispatch(t *testing.T) {
 	}
 }
 
+// A command cut short because the pass ran out of its budget was not given a
+// fair try: it is put off, with no attempt counted. One that took longer than
+// its own time is counted.
+func TestCommandCutShortByThePassIsNotCounted(t *testing.T) {
+	defer func(b, c time.Duration) { commandsBudget, commandTimeout = b, c }(commandsBudget, commandTimeout)
+	hang := func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(10 * time.Second):
+		}
+	}
+	for name, tc := range map[string]struct {
+		budget, timeout time.Duration
+		wantAttempts    int
+	}{
+		"the pass's budget ran out":      {400 * time.Millisecond, 10 * time.Second, 0},
+		"the command's own time ran out": {10 * time.Second, 400 * time.Millisecond, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			commandsBudget, commandTimeout = tc.budget, tc.timeout
+			f := newCommandFixture(t)
+			f.review(skillOf(t, "security", "no_blocking_issues"))
+			f.say(1, "dev", "review", "", "", time.Now())
+			f.GitLab.Handle(http.MethodGet, membersPath(userDeveloper), hang)
+
+			f.run()
+
+			// Offered again once its wait is over, with the attempts it had.
+			f.SetNow(f.Now().Add(time.Minute))
+			again, err := f.Store.ClaimCommands(f.ctx, 10, f.Now())
+			if err != nil || len(again) != 1 || again[0].Attempts != tc.wantAttempts {
+				t.Fatalf("commands afterwards = %+v, %v; want one with %d attempts\n%s", again, err, tc.wantAttempts, f.Logs())
+			}
+		})
+	}
+}
+
 func TestCommandsWaitForUnconnectedInstance(t *testing.T) {
 	f := newCommandFixture(t)
 	f.review(skillOf(t, "security", "no_blocking_issues"))
