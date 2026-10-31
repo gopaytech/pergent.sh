@@ -363,56 +363,29 @@ func (c *commandRun) rerun(ctx context.Context, failedOnly bool) (verdict, error
 		return verdict{}, errors.New("the platform reports no head commit")
 	}
 
-	trigger, action := store.TriggerRerun, "review_rerun"
-	var (
-		skills []string
-		base   *string
-		whole  bool
-		detail = "skills=all"
-	)
-	if failedOnly {
-		action = "review_rerun_failed"
-		if skills, base, whole, err = actions.FailedSkills(ctx, c.e.Store, c.cmd.MR, c.change.HeadSHA, c.change.TargetBranch); err != nil {
-			return verdict{}, err
-		}
-		switch {
-		case whole:
-		case len(skills) == 0:
-			return done(replyNothingFailed), nil
-		default:
-			trigger, detail = store.TriggerRerunFailed, "skills="+strings.Join(skills, ",")
-		}
-	}
-
-	capped, err := c.capReached(ctx)
+	res, err := actions.Rerun(ctx, c.e.Store, actions.RerunRequest{
+		MR: c.cmd.MR, ProjectPath: c.cmd.ProjectPath, Head: c.change.HeadSHA, TargetBranch: c.change.TargetBranch,
+		FailedOnly: failedOnly, Repo: c.repo, Now: c.e.now(),
+	})
 	if err != nil {
 		return verdict{}, err
 	}
-	if capped {
+	switch res.Status {
+	case actions.RerunNothingFailed:
+		return done(replyNothingFailed), nil
+	case actions.RerunCapped:
 		return refused("re-run limit reached", replyCap(changeTerm(c.cmd.Platform))), nil
-	}
-	_, created, err := c.e.Store.EnqueueRerun(ctx, c.cmd.MR, c.cmd.ProjectPath, c.change.HeadSHA, c.change.TargetBranch,
-		trigger, skills, base)
-	if err != nil {
-		return verdict{}, fmt.Errorf("queue the re-run: %w", err)
-	}
-	if !created {
+	case actions.RerunAlreadyQueued:
 		// A head already queued or running is reviewed once: the request
 		// is acknowledged as done.
 		return done(""), nil
 	}
 	c.e.Wake()
-	c.audit(ctx, action, c.change.HeadSHA, detail)
-	if whole {
+	c.audit(ctx, res.Action, c.change.HeadSHA, res.Detail)
+	if res.Whole {
 		return done(replyWholeFailed), nil
 	}
 	return done(""), nil
-}
-
-// capReached tells whether the re-run caps of the change or of the repository
-// are used up for today (UTC). Command and button re-runs count alike.
-func (c *commandRun) capReached(ctx context.Context) (bool, error) {
-	return actions.CapReached(ctx, c.e.Store, c.e.now(), c.cmd.MR, c.repo)
 }
 
 // dismiss is "dismiss <id> [reason]".

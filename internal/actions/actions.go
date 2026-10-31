@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gopaytech/pergent/render"
@@ -50,6 +51,87 @@ func CapReached(ctx context.Context, st *store.Store, now time.Time, mr store.MR
 		return false, fmt.Errorf("count the re-runs of the repository: %w", err)
 	}
 	return n >= repo.RerunLimitPerRepo, nil
+}
+
+// RerunStatus is how a request to re-run a review ended.
+type RerunStatus int
+
+const (
+	// RerunQueued: a run was queued.
+	RerunQueued RerunStatus = iota
+	// RerunAlreadyQueued: the head is queued or running already; nothing
+	// was changed.
+	RerunAlreadyQueued
+	// RerunNothingFailed: "failed only" found no skill to run again.
+	RerunNothingFailed
+	// RerunCapped: a re-run cap is reached; nothing was queued.
+	RerunCapped
+)
+
+// RerunRequest asks for the review of the change mr at Head and TargetBranch
+// to be run again. ProjectPath is the repository's path as the platform
+// spells it. Repo holds the caps and Now is the clock they count by.
+type RerunRequest struct {
+	MR                 store.MRKey
+	ProjectPath        string
+	Head, TargetBranch string
+	FailedOnly         bool
+	Repo               settings.Effective
+	Now                time.Time
+}
+
+// RerunResult is what Rerun did. Action and Detail are what the audit log
+// records when Status is RerunQueued. Whole is set when "failed only" had no
+// skill to single out and the whole review was queued.
+type RerunResult struct {
+	Status         RerunStatus
+	Whole          bool
+	Action, Detail string
+}
+
+// Rerun is the one sequence a comment command and a button follow: for "failed
+// only", the skills to run again (nothing failed ends it; no way to single
+// them out re-runs the whole review), then the caps, then queueing the run.
+// The caller checks permissions, drafts and the change's state first, and
+// wakes the engine and audits when the result is RerunQueued.
+func Rerun(ctx context.Context, st *store.Store, req RerunRequest) (RerunResult, error) {
+	res := RerunResult{Action: "review_rerun", Detail: "skills=all"}
+	trigger := store.TriggerRerun
+	var (
+		skills []string
+		base   *string
+	)
+	if req.FailedOnly {
+		res.Action = "review_rerun_failed"
+		var err error
+		if skills, base, res.Whole, err = FailedSkills(ctx, st, req.MR, req.Head, req.TargetBranch); err != nil {
+			return RerunResult{}, err
+		}
+		switch {
+		case res.Whole:
+		case len(skills) == 0:
+			return RerunResult{Status: RerunNothingFailed}, nil
+		default:
+			trigger, res.Detail = store.TriggerRerunFailed, "skills="+strings.Join(skills, ",")
+		}
+	}
+
+	capped, err := CapReached(ctx, st, req.Now, req.MR, req.Repo)
+	if err != nil {
+		return RerunResult{}, err
+	}
+	if capped {
+		return RerunResult{Status: RerunCapped}, nil
+	}
+	_, created, err := st.EnqueueRerun(ctx, req.MR, req.ProjectPath, req.Head, req.TargetBranch, trigger, skills, base)
+	if err != nil {
+		return RerunResult{}, fmt.Errorf("queue the re-run: %w", err)
+	}
+	if !created {
+		return RerunResult{Status: RerunAlreadyQueued}, nil
+	}
+	res.Status = RerunQueued
+	return res, nil
 }
 
 // RenderDismissals is stored dismissals in the form the comment renderer and

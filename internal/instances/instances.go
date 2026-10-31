@@ -458,6 +458,15 @@ func (r *Registry) LLMKeys() []string {
 	return slices.Sorted(slices.Values(r.llmSeen))
 }
 
+// Redact is text with every LLM key LLMKeys holds replaced by "***": the one
+// way anything bound for a log, the store or a page is cleaned of them.
+func (r *Registry) Redact(text string) string {
+	for _, key := range r.LLMKeys() {
+		text = strings.ReplaceAll(text, key, "***")
+	}
+	return text
+}
+
 func (r *Registry) noteKey(key string) {
 	if key == "" {
 		return

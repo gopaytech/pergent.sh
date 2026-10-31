@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/gopaytech/pergent/render"
@@ -682,9 +681,4 @@ func (e *Engine) unapprove(ctx context.Context, ap forge.Approver, a store.Appro
 
 // redact removes the secrets the engine knows from text bound for the store
 // or a log. The GitLab clients already mask their own tokens.
-func (e *Engine) redact(text string) string {
-	for _, key := range e.registry().LLMKeys() {
-		text = strings.ReplaceAll(text, key, "***")
-	}
-	return text
-}
+func (e *Engine) redact(text string) string { return e.registry().Redact(text) }

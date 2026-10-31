@@ -185,20 +185,11 @@ func (d *Dashboard) platformChange(w http.ResponseWriter, r *http.Request, b rev
 	}
 	if err != nil {
 		d.Log.Warn("dashboard: reading a change failed", "instance", b.mr.Instance, "project", b.project,
-			"mr", b.mr.IID, "error", d.redact(err.Error()))
+			"mr", b.mr.IID, "error", d.registry.Redact(err.Error()))
 		writeError(w, http.StatusBadGateway, msgPlatformFailed)
 		return forge.Change{}, false
 	}
 	return change, true
-}
-
-// redact removes the secrets pergent.sh knows from text bound for the store
-// or a log.
-func (d *Dashboard) redact(text string) string {
-	for _, key := range d.registry.LLMKeys() {
-		text = strings.ReplaceAll(text, key, "***")
-	}
-	return text
 }
 
 // auditReview records a button press on the change at head. A failure to is
@@ -231,52 +222,31 @@ func (d *Dashboard) rerun(w http.ResponseWriter, r *http.Request, b reviewButton
 		return
 	}
 
-	trigger, action, status, detail := store.TriggerRerun, "review_rerun", "queued", "skills=all"
-	var (
-		skills []string
-		base   *string
-	)
-	if failedOnly {
-		action = "review_rerun_failed"
-		var whole bool
-		var err error
-		if skills, base, whole, err = actions.FailedSkills(ctx, d.Store, b.mr, change.HeadSHA, change.TargetBranch); err != nil {
-			d.failed(w, r, "finding the failed skills", err)
-			return
-		}
-		switch {
-		case whole:
-			status = "whole review"
-		case len(skills) == 0:
-			accepted(w, http.StatusAccepted, "nothing failed")
-			return
-		default:
-			trigger, detail = store.TriggerRerunFailed, "skills="+strings.Join(skills, ",")
-		}
-	}
-
-	capped, err := actions.CapReached(ctx, d.Store, d.now(), b.mr, b.repo)
-	if err != nil {
-		d.failed(w, r, "counting re-runs", err)
-		return
-	}
-	if capped {
-		writeError(w, http.StatusTooManyRequests, actions.CapMessage(actions.Term(b.repo.Platform)))
-		return
-	}
-	_, created, err := d.Store.EnqueueRerun(ctx, b.mr, b.project, change.HeadSHA, change.TargetBranch, trigger, skills, base)
+	res, err := actions.Rerun(ctx, d.Store, actions.RerunRequest{
+		MR: b.mr, ProjectPath: b.project, Head: change.HeadSHA, TargetBranch: change.TargetBranch,
+		FailedOnly: failedOnly, Repo: b.repo, Now: d.now(),
+	})
 	if err != nil {
 		d.failed(w, r, "queueing a re-run", err)
 		return
 	}
-	if !created {
+	switch res.Status {
+	case actions.RerunNothingFailed:
+		accepted(w, http.StatusAccepted, "nothing failed")
+	case actions.RerunCapped:
+		writeError(w, http.StatusTooManyRequests, actions.CapMessage(actions.Term(b.repo.Platform)))
+	case actions.RerunAlreadyQueued:
 		// A head already queued or running is reviewed once.
 		accepted(w, http.StatusAccepted, "already queued")
-		return
+	default:
+		d.wake()
+		d.auditReview(r, b, res.Action, change.HeadSHA, res.Detail)
+		if res.Whole {
+			accepted(w, http.StatusAccepted, "whole review")
+			return
+		}
+		accepted(w, http.StatusAccepted, "queued")
 	}
-	d.wake()
-	d.auditReview(r, b, action, change.HeadSHA, detail)
-	accepted(w, http.StatusAccepted, status)
 }
 
 // dismiss sets a finding of the latest review aside.
@@ -322,21 +292,24 @@ func (d *Dashboard) dismiss(w http.ResponseWriter, r *http.Request, b reviewButt
 		writeError(w, http.StatusInternalServerError, msgWriteFailed)
 		return
 	}
-	if !created {
-		// Dismissed already, at this severity or a higher one.
-		accepted(w, http.StatusOK, "already dismissed")
-		return
+	status := "already dismissed"
+	if created {
+		status = "dismissed"
+		detail := "fingerprint=" + fingerprint + " severity=" + severity
+		if reason != "" {
+			detail += fmt.Sprintf(" reason=%q", d.registry.Redact(reason))
+		}
+		d.auditReview(r, b, "finding_dismissed", reviewed.HeadSHA, detail)
 	}
-	detail := "fingerprint=" + fingerprint + " severity=" + severity
-	if reason != "" {
-		detail += fmt.Sprintf(" reason=%q", d.redact(reason))
-	}
-	d.auditReview(r, b, "finding_dismissed", reviewed.HeadSHA, detail)
+	// Decided again whether or not the dismissal was new: an earlier press
+	// may have stored it and failed to decide the review, and pressing the
+	// button again is how that is put right. (Republish does nothing to a
+	// review that is not the change's newest published one.)
 	if !d.redecide(r, b.mr, reviewed) {
 		writeError(w, http.StatusInternalServerError, msgRedecideFailed)
 		return
 	}
-	accepted(w, http.StatusOK, "dismissed")
+	accepted(w, http.StatusOK, status)
 }
 
 // mayDismissBlocking tells whether the session may dismiss a blocking
@@ -351,6 +324,11 @@ func (d *Dashboard) mayDismissBlocking(w http.ResponseWriter, r *http.Request, b
 	}
 	change, ok := d.platformChange(w, r, b)
 	if !ok {
+		return false
+	}
+	switch change.State {
+	case forge.StateMerged, forge.StateClosed:
+		writeError(w, http.StatusConflict, "this change is "+string(change.State))
 		return false
 	}
 	if change.AuthorID == 0 || se.UserID == 0 || se.Instance != b.mr.Instance {
@@ -378,27 +356,30 @@ func (d *Dashboard) restore(w http.ResponseWriter, r *http.Request, b reviewButt
 			severity = dm.Severity
 		}
 	}
-	restored, err := d.Store.Restore(context.WithoutCancel(ctx), b.mr, fingerprint)
-	if err != nil {
-		d.Log.Error("dashboard: restoring a finding failed", "instance", b.mr.Instance, "project", b.project, "error", err.Error())
-		writeError(w, http.StatusInternalServerError, msgWriteFailed)
-		return
-	}
-	if !restored {
-		accepted(w, http.StatusOK, "not dismissed")
-		return
-	}
 	reviewed, _, err := d.Store.LatestDecidedRun(ctx, b.mr)
 	if err != nil {
 		d.failed(w, r, "loading the latest review", err)
 		return
 	}
-	d.auditReview(r, b, "finding_restored", reviewed.HeadSHA, "fingerprint="+fingerprint+" severity="+severity)
+	// Everything from here on is carried through even if the request ends.
+	wctx := context.WithoutCancel(ctx)
+	restored, err := d.Store.Restore(wctx, b.mr, fingerprint)
+	if err != nil {
+		d.Log.Error("dashboard: restoring a finding failed", "instance", b.mr.Instance, "project", b.project, "error", err.Error())
+		writeError(w, http.StatusInternalServerError, msgWriteFailed)
+		return
+	}
+	status := "not dismissed"
+	if restored {
+		status = "restored"
+		d.auditReview(r, b, "finding_restored", reviewed.HeadSHA, "fingerprint="+fingerprint+" severity="+severity)
+	}
+	// Decided again whether or not anything was restored, as dismiss does.
 	if !d.redecide(r, b.mr, reviewed) {
 		writeError(w, http.StatusInternalServerError, msgRedecideFailed)
 		return
 	}
-	accepted(w, http.StatusOK, "restored")
+	accepted(w, http.StatusOK, status)
 }
 
 // redecide has the review decided again with the dismissals as they are now,

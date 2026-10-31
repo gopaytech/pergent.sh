@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/forge"
@@ -493,14 +495,15 @@ func TestRestoreButton(t *testing.T) {
 		t.Errorf("audit = %+v", a)
 	}
 
-	// Restoring what is not dismissed does nothing and says so.
+	// Restoring what is not dismissed changes nothing and says so (the review
+	// is decided again all the same, see TestRestoreRetryRedecides).
 	rec = e2.send(c, "POST", buttonURL("restore"), `{"fingerprint":"`+blockingFP+`"}`)
 	wantCode(t, rec, "restore again", http.StatusOK)
 	if got := statusOf(t, rec); got != "not dismissed" {
 		t.Errorf("status = %q; want not dismissed", got)
 	}
-	if len(e2.auditOf("finding_restored")) != 1 || e2.wakes.Load() != 1 {
-		t.Error("restoring nothing was recorded or woke the engine")
+	if len(e2.auditOf("finding_restored")) != 1 {
+		t.Error("restoring nothing was audited")
 	}
 }
 
@@ -679,5 +682,162 @@ func TestButtonsCSRF(t *testing.T) {
 	}
 	if n := len(e.runRows()); n != 1 || len(e.dismissalsOf()) != 0 || e.wakes.Load() != 0 {
 		t.Errorf("runs %d, dismissals %d, wakes %d; want nothing done", n, len(e.dismissalsOf()), e.wakes.Load())
+	}
+}
+
+// failRepublish makes every republishing of a run (published -> reported) fail
+// while the returned switch is armed; disarm it with e.exec.
+func (e *env) failRepublish() {
+	e.t.Helper()
+	e.exec(`CREATE TABLE fail_republish (armed boolean)`)
+	e.exec(`INSERT INTO fail_republish VALUES (true)`)
+	e.exec(`CREATE FUNCTION fail_republish_fn() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF (SELECT armed FROM fail_republish) THEN RAISE EXCEPTION 'republish refused'; END IF;
+			RETURN NEW;
+		END $$`)
+	e.exec(`CREATE TRIGGER fail_republish_trg BEFORE UPDATE ON runs FOR EACH ROW
+		WHEN (OLD.state = 'published' AND NEW.state = 'reported') EXECUTE FUNCTION fail_republish_fn()`)
+}
+
+func (e *env) stateOf(id string) string {
+	e.t.Helper()
+	var s string
+	if err := e.db.QueryRow(ctx, `SELECT state FROM runs WHERE id = $1::uuid`, id).Scan(&s); err != nil {
+		e.t.Fatal(err)
+	}
+	return s
+}
+
+// A dismissal whose review could not be decided again is decided again when
+// the button is pressed once more, the dismissal being there already.
+func TestDismissRetryRedecides(t *testing.T) {
+	e := newEnv(t, nil)
+	runID := e.buttonBlockingReview()
+	c := e.signInRole(store.RoleMaintainer)
+	e.failRepublish()
+
+	body := `{"fingerprint":"` + blockingFP + `","reason":"constant"}`
+	wantCode(t, e.send(c, "POST", buttonURL("dismiss"), body), "dismiss while the store refuses", http.StatusInternalServerError)
+	if len(e.dismissalsOf()) != 1 || e.stateOf(runID) != "published" || e.wakes.Load() != 0 {
+		t.Fatalf("dismissals %d, state %s, wakes %d; want the dismissal stored and the review not decided again",
+			len(e.dismissalsOf()), e.stateOf(runID), e.wakes.Load())
+	}
+
+	e.exec(`UPDATE fail_republish SET armed = false`)
+	rec := e.send(c, "POST", buttonURL("dismiss"), body)
+	wantCode(t, rec, "dismiss again", http.StatusOK)
+	if got := statusOf(t, rec); got != "already dismissed" {
+		t.Errorf("status = %q; want already dismissed", got)
+	}
+	if got := e.stateOf(runID); got != "reported" {
+		t.Errorf("run state = %q; want reported (decided again)", got)
+	}
+	if e.wakes.Load() != 1 || len(e.auditOf("finding_dismissed")) != 1 {
+		t.Errorf("wakes %d, audit %d; want 1 and 1", e.wakes.Load(), len(e.auditOf("finding_dismissed")))
+	}
+}
+
+func TestRestoreRetryRedecides(t *testing.T) {
+	e := newEnv(t, nil)
+	runID := e.buttonBlockingReview()
+	mr := store.MRKey{Instance: "main", ProjectID: testID(buttonProject), IID: 7}
+	if _, err := e.st.Dismiss(ctx, store.Dismissal{MR: mr, Fingerprint: blockingFP, Severity: "blocking", Reason: "x", Actor: "bob"}); err != nil {
+		t.Fatal(err)
+	}
+	e.exec(`UPDATE runs SET approved = true WHERE id = $1::uuid`, runID)
+	c := e.signInRole(store.RoleMaintainer)
+	e.failRepublish()
+
+	body := `{"fingerprint":"` + blockingFP + `"}`
+	wantCode(t, e.send(c, "POST", buttonURL("restore"), body), "restore while the store refuses", http.StatusInternalServerError)
+	if len(e.dismissalsOf()) != 0 || e.stateOf(runID) != "published" {
+		t.Fatalf("dismissals %d, state %s; want the dismissal gone and the review not decided again",
+			len(e.dismissalsOf()), e.stateOf(runID))
+	}
+
+	e.exec(`UPDATE fail_republish SET armed = false`)
+	rec := e.send(c, "POST", buttonURL("restore"), body)
+	wantCode(t, rec, "restore again", http.StatusOK)
+	if got := statusOf(t, rec); got != "not dismissed" {
+		t.Errorf("status = %q; want not dismissed", got)
+	}
+	if got := e.stateOf(runID); got != "reported" {
+		t.Errorf("run state = %q; want reported (decided again, so the approval is withdrawn)", got)
+	}
+	if e.wakes.Load() != 1 || len(e.auditOf("finding_restored")) != 1 {
+		t.Errorf("wakes %d, audit %d; want 1 and 1", e.wakes.Load(), len(e.auditOf("finding_restored")))
+	}
+}
+
+// A request that ends while the restore is being made (the browser went away)
+// still leaves it audited and the review decided again.
+func TestRestoreSurvivesAnInterruptedRequest(t *testing.T) {
+	e := newEnv(t, nil)
+	runID := e.buttonBlockingReview()
+	mr := store.MRKey{Instance: "main", ProjectID: testID(buttonProject), IID: 7}
+	if _, err := e.st.Dismiss(ctx, store.Dismissal{MR: mr, Fingerprint: blockingFP, Severity: "blocking", Reason: "x", Actor: "bob"}); err != nil {
+		t.Fatal(err)
+	}
+	c := e.signInRole(store.RoleMaintainer)
+	_, me := e.me(c)
+	e.exec(`CREATE FUNCTION slow_restore() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN PERFORM pg_sleep(1.5); RETURN OLD; END $$`)
+	e.exec(`CREATE TRIGGER slow_restore_trg BEFORE DELETE ON dismissals FOR EACH ROW EXECUTE FUNCTION slow_restore()`)
+
+	rctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest("POST", buttonURL("restore"), strings.NewReader(`{"fingerprint":"`+blockingFP+`"}`)).WithContext(rctx)
+	req.AddCookie(c)
+	req.Header.Set(CSRFHeader, me.CSRFToken)
+	e.h.ServeHTTP(httptest.NewRecorder(), req)
+
+	if len(e.dismissalsOf()) != 0 {
+		t.Fatal("the dismissal is still there")
+	}
+	if got := e.stateOf(runID); got != "reported" {
+		t.Errorf("run state = %q; want reported (decided again)", got)
+	}
+	if n := len(e.auditOf("finding_restored")); n != 1 {
+		t.Errorf("%d audit entries; want 1", n)
+	}
+	if e.wakes.Load() != 1 {
+		t.Errorf("Wake called %d times; want 1", e.wakes.Load())
+	}
+}
+
+// Dismissals are decided again for the newest review only, so an older run
+// shows what was published for it.
+func TestOlderRunsShowWhatWasPublished(t *testing.T) {
+	e := newEnv(t, nil)
+	older := e.buttonBlockingReview()
+	newer := e.addRun(runFix{project: buttonProject, number: 7, head: head('2'), user: "bob", outcome: OutcomeBlocking,
+		at:     e.clock.now().Add(-30 * time.Minute),
+		result: resultJSON(head('2'), buttonSkill("code-review"), skillJSON("style", "no_blocking_issues"))})
+	c := e.signInRole(store.RoleMaintainer)
+	wantCode(t, e.send(c, "POST", buttonURL("dismiss"), `{"fingerprint":"`+blockingFP+`","reason":"constant"}`), "dismiss", 200)
+
+	latest := getJSON[RunDetailView](e, c, "/api/runs/"+newer)
+	if sk := latest.Skills[0]; sk.Verdict != "no_blocking_issues" || len(sk.Dismissed) != 1 || len(sk.Findings) != 1 {
+		t.Errorf("newest run skill = %+v; want the dismissal applied", sk)
+	}
+	old := getJSON[RunDetailView](e, c, "/api/runs/"+older)
+	if sk := old.Skills[0]; sk.Verdict != "has_blocking_issues" || len(sk.Dismissed) != 0 || len(sk.Findings) != 2 {
+		t.Errorf("older run skill = %+v; want what was published", sk)
+	}
+}
+
+func TestDismissBlockingOnAMergedChange(t *testing.T) {
+	e := newEnv(t, nil)
+	e.buttonBlockingReview()
+	e.src["main"].set(func(f *fakeSource) { f.change.State = forge.StateMerged })
+	c := e.signInRole(store.RoleMaintainer)
+	rec := e.send(c, "POST", buttonURL("dismiss"), `{"fingerprint":"`+blockingFP+`","reason":"x"}`)
+	wantCode(t, rec, "dismiss on a merged change", http.StatusConflict)
+	if got := errorOf(t, rec); got != "this change is merged" {
+		t.Errorf("error = %q", got)
+	}
+	if len(e.dismissalsOf()) != 0 {
+		t.Error("a finding of a merged change was dismissed")
 	}
 }

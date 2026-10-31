@@ -555,9 +555,14 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 	// The skills of a result the publisher could use: one that parses and
 	// is for the run's own base and head.
 	if res, err := result.Parse(run.Result); err == nil && res.Base == run.BaseSHA && res.Head == run.HeadSHA {
-		// The change's dismissals apply to every run of it: a finding
-		// dismissed stays dismissed when a later run reports it again.
-		dismissals, err := d.Store.Dismissals(ctx, run.MR)
+		// The change's dismissals are applied to its newest review only,
+		// the one a dismissal or restore decides again; an older run shows
+		// what was published for it.
+		var dismissals []store.Dismissal
+		latest, found, err := d.Store.LatestDecidedRun(ctx, run.MR)
+		if err == nil && found && latest.ID == run.ID {
+			dismissals, err = d.Store.Dismissals(ctx, run.MR)
+		}
 		if err != nil {
 			d.failed(w, r, "loading dismissals", err)
 			return
