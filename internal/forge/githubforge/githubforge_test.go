@@ -1065,7 +1065,13 @@ func TestAccessLevel(t *testing.T) {
 		{"custom role with push", customRole(map[string]any{"push": true, "triage": true}), forge.AccessWrite},
 		{"custom role with neither", customRole(map[string]any{"triage": true, "pull": true}), forge.AccessRead},
 		// What the role can do wins over the legacy field.
-		{"custom role, legacy admin, no flags", customRole(map[string]any{"push": true}, "admin"), forge.AccessWrite},
+		{"custom role, legacy admin, push flag only", customRole(map[string]any{"push": true}, "admin"), forge.AccessWrite},
+		// GitHub sent no flags at all: the legacy permission decides.
+		{"custom role without flags, legacy admin", map[string]any{"permission": "admin", "role_name": "release-manager"}, forge.AccessMaintain},
+		{"custom role without flags, legacy write", map[string]any{"permission": "write", "role_name": "release-manager"}, forge.AccessWrite},
+		{"custom role without flags, legacy read", map[string]any{"permission": "read", "role_name": "release-manager"}, forge.AccessRead},
+		// Flags that are all false are flags: nothing more than read.
+		{"custom role with every flag false", customRole(map[string]any{}, "admin"), forge.AccessRead},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFake(t)

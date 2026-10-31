@@ -167,7 +167,12 @@ func TestCountReruns(t *testing.T) {
 	rerun(mr2, "ooo", TriggerRerun)
 	rerun(other, "zzz", TriggerRerun)
 
-	before := time.Now().Add(-time.Hour)
+	// The runs were stamped with the database's clock: put them at t0, and
+	// count against t0 alone, so this process's clock doesn't matter.
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET created_at = $1`, t0); err != nil {
+		t.Fatal(err)
+	}
+	before := t0.Add(-time.Hour)
 	for _, c := range []struct {
 		name string
 		mr   *MRKey
@@ -187,16 +192,16 @@ func TestCountReruns(t *testing.T) {
 		t.Errorf("another instance: CountReruns = %d, %v; want 0", got, err)
 	}
 
-	// since is respected: nothing was created after now.
-	if got, err := s.CountReruns(ctx, nil, mr1.Instance, mr1.ProjectID, time.Now().Add(time.Hour)); err != nil || got != 0 {
+	// since is respected: nothing was created after t0.
+	if got, err := s.CountReruns(ctx, nil, mr1.Instance, mr1.ProjectID, t0.Add(time.Hour)); err != nil || got != 0 {
 		t.Errorf("since in the future: CountReruns = %d, %v; want 0", got, err)
 	}
 	// And a run created long ago is not counted.
 	if _, err := s.pool.Exec(ctx, `UPDATE runs SET created_at = $1 WHERE trigger = 'rerun' AND mr_iid = $2`,
-		time.Now().Add(-48*time.Hour), mr2.IID); err != nil {
+		t0.Add(-48*time.Hour), mr2.IID); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := s.CountReruns(ctx, nil, mr1.Instance, mr1.ProjectID, time.Now().Add(-24*time.Hour)); err != nil || got != 2 {
+	if got, err := s.CountReruns(ctx, nil, mr1.Instance, mr1.ProjectID, t0.Add(-24*time.Hour)); err != nil || got != 2 {
 		t.Errorf("repository since yesterday: CountReruns = %d, %v; want 2", got, err)
 	}
 }
