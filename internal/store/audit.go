@@ -29,7 +29,7 @@ func (s *Store) Audit(ctx context.Context, e AuditEntry) error {
 // with ID beforeID (0 starts at the newest).
 func (s *Store) AuditLog(ctx context.Context, beforeID int64, limit int) ([]AuditEntry, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id, at, actor_id, actor, action, instance, project, detail FROM audit_log
-		WHERE $1 = 0 OR id < $1 ORDER BY id DESC LIMIT $2`, beforeID, limit)
+		WHERE $1::bigint = 0 OR id < $1::bigint ORDER BY id DESC LIMIT $2`, beforeID, limit)
 	if err != nil {
 		return nil, err
 	}

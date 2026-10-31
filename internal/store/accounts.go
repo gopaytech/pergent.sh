@@ -61,8 +61,12 @@ func isUniqueViolation(err error) bool {
 }
 
 // CreatePasswordAccount stores a password account; hash is the argon2id
-// hash of its password. A username taken ignoring case is ErrExists.
+// hash of its password and must not be empty. A username taken ignoring case
+// is ErrExists.
 func (s *Store) CreatePasswordAccount(ctx context.Context, username, hash string, mustChange bool, at time.Time) (Account, error) {
+	if hash == "" {
+		return Account{}, errors.New("store: a password account needs a password hash")
+	}
 	a, err := scanAccount(s.pool.QueryRow(ctx, `INSERT INTO accounts (kind, username, password_hash, must_change_password, created_at)
 		VALUES ('password', $1, $2, $3, $4) RETURNING `+accountColumns, username, hash, mustChange, at))
 	if isUniqueViolation(err) {

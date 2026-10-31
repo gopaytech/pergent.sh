@@ -54,6 +54,17 @@ func TestPasswordAccountCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestPasswordAccountNeedsHash(t *testing.T) {
+	s := newStore(t)
+	_, err := s.CreatePasswordAccount(ctx, "admin", "", false, t0)
+	if err == nil || errors.Is(err, ErrExists) {
+		t.Fatalf("CreatePasswordAccount with an empty hash = %v; want an error other than ErrExists", err)
+	}
+	if n, _ := s.CountPasswordAccounts(ctx); n != 0 {
+		t.Fatalf("accounts = %d; want 0", n)
+	}
+}
+
 func TestDeleteLastPasswordAccount(t *testing.T) {
 	s := newStore(t)
 	first := mustPassword(t, s, "admin")

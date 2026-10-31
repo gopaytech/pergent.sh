@@ -35,6 +35,17 @@ func TestAuditLogPaging(t *testing.T) {
 	}
 }
 
+func TestAuditLogBigintCursor(t *testing.T) {
+	s := newStore(t)
+	if err := s.Audit(ctx, AuditEntry{At: t0, Actor: "admin", Action: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.AuditLog(ctx, 3_000_000_000, 10)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("AuditLog(3e9, 10) = %+v, %v; want the entry below the cursor", got, err)
+	}
+}
+
 func TestAuditEntriesOutliveAccounts(t *testing.T) {
 	s := newStore(t)
 	mustPassword(t, s, "admin")
