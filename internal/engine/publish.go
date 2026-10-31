@@ -536,8 +536,8 @@ func (e *Engine) unapprove(ctx context.Context, ap forge.Approver, a store.Appro
 // redact removes the secrets the engine knows from text bound for the store
 // or a log. The GitLab clients already mask their own tokens.
 func (e *Engine) redact(text string) string {
-	if e.LLMKey != "" {
-		text = strings.ReplaceAll(text, e.LLMKey, "***")
+	for _, key := range e.registry().LLMKeys() {
+		text = strings.ReplaceAll(text, key, "***")
 	}
 	return text
 }

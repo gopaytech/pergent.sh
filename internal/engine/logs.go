@@ -52,7 +52,7 @@ func (e *Engine) captureLogWithin(ctx context.Context, run store.Run, log *slog.
 		log.Info("not keeping the review job's log: its secrets can't be read", "error", e.redact(err.Error()))
 		return
 	}
-	hide := []string{secrets.GitToken, secrets.LLMKey, secrets.ResultToken, e.LLMKey}
+	hide := append([]string{secrets.GitToken, secrets.LLMKey, secrets.ResultToken}, e.registry().LLMKeys()...)
 	// More than is kept is read and hidden in first, so a secret across the
 	// point where the kept tail starts is hidden whole, not left in part.
 	read := logKeepBytes + logMargin(hide)

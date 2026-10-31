@@ -153,8 +153,9 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("PERGENT_SH_SECRET_KEY: %w", err)
 	}
-	llmKey, err := readLLMKey(cfg)
-	if err != nil {
+	// The config's llm: block must have its key; an LLM set in the dashboard
+	// is read from the database below.
+	if _, err := readLLMKey(cfg); err != nil {
 		return err
 	}
 
@@ -173,6 +174,9 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	}
 
 	reg := instances.New(cfg, st, box)
+	if err := reg.LoadLLM(ctx); err != nil {
+		return err
+	}
 	conn := &connector{
 		reg: reg, store: st, log: log,
 		platforms:   syncmap.New[engine.Platform](nil),
@@ -202,8 +206,10 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		Launcher:       &kube.Launcher{Client: clientset, Namespace: cfg.Jobs.Namespace},
 		Library:        lib,
 		Box:            box,
-		LLMKey:         llmKey,
 		Log:            log,
+		// An instance removed in the dashboard is taken out of use once the
+		// engine has finished removing it.
+		OnInstanceRemoved: conn.Disconnect,
 	}
 	dash, err := newDashboard(dashboard.Options{
 		Config: cfg, Instances: reg, Connector: conn, Store: st, SecretKey: key, Log: log, Library: lib,

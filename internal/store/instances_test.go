@@ -322,3 +322,54 @@ func TestRepoDefaultsRoundTrip(t *testing.T) {
 		t.Fatal("PutRepoDefaults accepted an unknown failure status")
 	}
 }
+
+// SupersedeInstance supersedes every live run (queued, running, reported) of
+// the instance, one merge request at a time, and leaves other instances'
+// runs alone.
+func TestSupersedeInstance(t *testing.T) {
+	s := newStore(t)
+	enqueue := func(instance string, project, iid int64, head string) string {
+		id, _, err := s.EnqueueRun(ctx, MRKey{Instance: instance, ProjectID: project, IID: iid}, "acme/x", head, "main")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	head := func(c byte) string { return string(bytes.Repeat([]byte{c}, 40)) }
+	running := enqueue("lab", 1, 2, head('b'))
+	reported := enqueue("lab", 2, 1, head('c'))
+	if _, err := s.ClaimQueued(ctx, 10, t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.ReportFailure(ctx, reported, "no clone token", t0); err != nil || !ok {
+		t.Fatalf("ReportFailure = %v, %v", ok, err)
+	}
+	queued := enqueue("lab", 1, 1, head('a'))
+	other := enqueue("main", 1, 1, head('d'))
+
+	n, err := s.SupersedeInstance(ctx, "lab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := func(id string) RunState {
+		r, ok, err := s.Run(ctx, id)
+		if err != nil || !ok {
+			t.Fatalf("Run(%s) = %v, %v", id, ok, err)
+		}
+		return r.State
+	}
+	if n != 3 {
+		t.Errorf("SupersedeInstance = %d, want 3", n)
+	}
+	for name, id := range map[string]string{"queued": queued, "running": running, "reported": reported} {
+		if got := state(id); got != Superseded {
+			t.Errorf("%s run = %s, want superseded", name, got)
+		}
+	}
+	if got := state(other); got != Queued {
+		t.Errorf("a run of another instance = %s, want queued", got)
+	}
+	if again, err := s.SupersedeInstance(ctx, "lab"); err != nil || again != 0 {
+		t.Errorf("SupersedeInstance again = %d, %v; want 0", again, err)
+	}
+}

@@ -31,9 +31,9 @@ const (
 	maxDispatchAttempts = 5
 	// dispatchBackoff is the first retry delay; it doubles each attempt.
 	dispatchBackoff = 10 * time.Second
-	// unconnectedDelay is how long a run of an instance pergent.sh isn't
-	// connected to waits before it is looked at again.
-	unconnectedDelay = 30 * time.Second
+	// waitDelay is how long a run that has to wait, for its instance to be
+	// connected or for an LLM to be set, waits before it is looked at again.
+	waitDelay = 30 * time.Second
 	// diffRefsDelay is how long to wait for GitLab to compute diff refs.
 	diffRefsDelay = 10 * time.Second
 	// diffRefsPatience is how long after a run is queued GitLab may take to
@@ -45,6 +45,9 @@ const (
 	// outcome; they run even when the dispatch context is cancelled, so a
 	// claimed run is never left behind half-handled.
 	settleTimeout = 10 * time.Second
+
+	// msgNoLLM is logged while no LLM is set and runs wait for one.
+	msgNoLLM = "no LLM is set: an operator sets it on Admin → Settings"
 
 	reasonTooLarge     = "the skills and instructions for this repository are larger than 900 KiB"
 	reasonNoCloneToken = "pergent.sh has no clone token for this project yet"
@@ -69,6 +72,12 @@ const (
 // an attempt. One run's trouble never stops the others. The returned error
 // joins store failures only.
 func (e *Engine) DispatchOnce(ctx context.Context) error {
+	if _, _, _, ok := e.registry().LLM(); !ok {
+		// Nothing can be reviewed: runs stay queued, not claimed, until an
+		// operator sets the LLM.
+		e.warnEvery("no-llm", msgNoLLM)
+		return nil
+	}
 	running, err := e.Store.CountRunning(ctx)
 	if err != nil {
 		return fmt.Errorf("dispatch: count running runs: %w", err)
@@ -125,7 +134,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		// does, and goes on once the instance is connected.
 		e.warnEvery("unconnected/"+run.MR.Instance, "queued reviews wait: pergent.sh isn't connected to their instance; "+
 			"an operator fixes it on Admin → Integrations", "instance", run.MR.Instance)
-		return d.postpone(ctx, e.now().Add(unconnectedDelay))
+		return d.postpone(ctx, e.now().Add(waitDelay))
 	}
 	if plat.isGitHub() {
 		// The review App reads the pull request through its installation
@@ -210,7 +219,13 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			return d.retry(ctx, fmt.Errorf("open the clone token: %w", err))
 		}
 	}
-	d.secrets = append(d.secrets, string(gitToken), e.LLMKey)
+	llm, llmKey, _, ok := e.registry().LLM()
+	if !ok {
+		// Set to nothing since the pass began: the run waits.
+		d.log.Warn(msgNoLLM)
+		return d.postpone(ctx, e.now().Add(waitDelay))
+	}
+	d.secrets = append(d.secrets, string(gitToken), llmKey)
 
 	var previous []byte
 	prev, havePrev, err := e.Store.PreviousResult(ctx, run.MR, run.ID)
@@ -278,11 +293,11 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		GitUsername:    gitUser,
 		ResultURL:      strings.TrimRight(e.Config.CallbackURL, "/") + "/runs/" + run.ID + "/result",
 		MaxCommentSize: commentLimit,
-		LLM:            e.Config.LLM,
+		LLM:            llm,
 		Resources:      jobResources(e.Config.Jobs.Resources, repo.JobMemory),
 		Inputs:         in,
 	}
-	secrets := kube.Secrets{GitToken: string(gitToken), LLMKey: e.LLMKey, ResultToken: token}
+	secrets := kube.Secrets{GitToken: string(gitToken), LLMKey: llmKey, ResultToken: token}
 	if err := e.Launcher.Launch(ctx, params, secrets); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			// A Job left over from an earlier attempt of this run that never
@@ -307,7 +322,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	d.log.Info("review job started", "job", name)
 	// For the dashboard, best effort: the model and where each skill came
 	// from.
-	if err := e.Store.SetRunInputs(ctx, run.ID, e.Config.LLM.Model, in.Sources); err != nil {
+	if err := e.Store.SetRunInputs(ctx, run.ID, llm.Model, in.Sources); err != nil {
 		d.log.Info("couldn't record the review's model and skills for the dashboard", "error", d.redact(err.Error()))
 	}
 

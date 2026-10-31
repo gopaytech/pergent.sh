@@ -73,8 +73,10 @@ type Engine struct {
 	Launcher       *kube.Launcher
 	Library        inputs.Library
 	Box            *secretbox.Box
-	// LLMKey is the model provider's API key, handed to each Job's Secret.
-	LLMKey string
+	// OnInstanceRemoved is called, after the engine deleted an instance of
+	// the dashboard that was being removed, to take it out of use (the
+	// connector's Disconnect). May be nil.
+	OnInstanceRemoved func(name string)
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 	// Log may be nil.

@@ -122,11 +122,15 @@ func (r *Resolver) List(ctx context.Context) ([]Effective, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list dashboard repositories: %w", err)
 	}
+	stored, err := r.Store.RepoDefaults(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read the defaults: %w", err)
+	}
 	for _, row := range rows {
 		if r.InConfig(row.Instance, row.Project) {
 			continue
 		}
-		if eff, ok := r.fromDashboard(row); ok {
+		if eff, ok := r.fromDashboard(row, stored); ok {
 			out = append(out, eff)
 		}
 	}
@@ -151,7 +155,11 @@ func (r *Resolver) Get(ctx context.Context, instance, project string) (Effective
 	if !found {
 		return Effective{}, false, nil
 	}
-	eff, ok := r.fromDashboard(row)
+	stored, err := r.Store.RepoDefaults(ctx)
+	if err != nil {
+		return Effective{}, false, fmt.Errorf("read the defaults: %w", err)
+	}
+	eff, ok := r.fromDashboard(row, stored)
 	return eff, ok, nil
 }
 
@@ -171,16 +179,41 @@ func (r *Resolver) configRepository(instance, project string) (config.Repository
 	return config.Repository{}, false
 }
 
-// Defaults is what a repository of platform on instance gets when it sets
-// nothing: every setting at its default, none overridden, no project.
+// Defaults is what a repository of the config on platform and instance gets
+// when it sets nothing: every setting at its default, none overridden, no
+// project.
 func (r *Resolver) Defaults(platform, instance string) Effective {
 	return r.defaults(platform, instance, "", "")
 }
 
+// BrowserDefaults is what a repository switched on in the dashboard on
+// platform and instance gets when it sets nothing: the built-in and config
+// defaults, under those an operator set in the dashboard.
+func (r *Resolver) BrowserDefaults(ctx context.Context, platform, instance string) (Effective, error) {
+	var stored store.RepoDefaults
+	if r.Store != nil {
+		var err error
+		if stored, err = r.Store.RepoDefaults(ctx); err != nil {
+			return Effective{}, fmt.Errorf("read the defaults: %w", err)
+		}
+	}
+	return r.defaultsFor(SourceDashboard, platform, instance, "", stored), nil
+}
+
 // defaults is a repository of platform on instance with every setting at
-// its default and none overridden.
+// the config's default and none overridden.
 func (r *Resolver) defaults(platform, instance, project string, source Source) Effective {
-	return Effective{
+	return r.defaultsFor(source, platform, instance, project, store.RepoDefaults{})
+}
+
+// defaultsFor is defaults for a repository from source: for SourceDashboard,
+// the defaults stored in the dashboard replace the built-in and config ones.
+// A stored value that can't be used (an unknown failure status, a timeout
+// that isn't positive, a memory limit that doesn't parse, isn't positive or
+// is below jobs.resources.requests, which Kubernetes would refuse) is
+// ignored: a bad setting never stops reviews.
+func (r *Resolver) defaultsFor(source Source, platform, instance, project string, stored store.RepoDefaults) Effective {
+	eff := Effective{
 		Platform: platform, Instance: instance, Project: project, Source: source,
 		Approve:       true,
 		ReviewDrafts:  true,
@@ -192,6 +225,50 @@ func (r *Resolver) defaults(platform, instance, project string, source Source) E
 			KeySkills: false, KeyJobTimeout: false, KeyJobMemory: false,
 		},
 	}
+	if source != SourceDashboard {
+		return eff
+	}
+	if stored.Approve != nil {
+		eff.Approve = *stored.Approve
+	}
+	if stored.ReviewDrafts != nil {
+		eff.ReviewDrafts = *stored.ReviewDrafts
+	}
+	if stored.FailureStatus != nil {
+		if fs, ok := failureStatus(*stored.FailureStatus); ok {
+			eff.FailureStatus = fs
+		}
+	}
+	if stored.JobTimeoutSeconds != nil && *stored.JobTimeoutSeconds > 0 {
+		eff.JobTimeout = time.Duration(*stored.JobTimeoutSeconds) * time.Second
+	}
+	if stored.JobMemory != nil {
+		if q, ok := r.usableMemory(*stored.JobMemory); ok {
+			eff.JobMemory = q
+		}
+	}
+	return eff
+}
+
+// failureStatus is s as a config.FailureStatus; ok is false for an unknown
+// one.
+func failureStatus(s string) (config.FailureStatus, bool) {
+	switch fs := config.FailureStatus(s); fs {
+	case config.FailureStatusFailed, config.FailureStatusNeutral:
+		return fs, true
+	}
+	return "", false
+}
+
+// usableMemory parses a stored memory limit; ok is false when it doesn't
+// parse, isn't positive or is below jobs.resources.requests.
+func (r *Resolver) usableMemory(s string) (resource.Quantity, bool) {
+	request := r.jobsMemory(r.Config.Jobs.Resources.Requests)
+	q, err := resource.ParseQuantity(s)
+	if err != nil || q.Sign() <= 0 || q.Cmp(request) < 0 {
+		return resource.Quantity{}, false
+	}
+	return q, true
 }
 
 // jobsMemory is the memory entry of list (jobs.resources), copied; zero
@@ -232,17 +309,16 @@ func (r *Resolver) fromConfig(repo config.Repository) (Effective, bool) {
 	return eff, true
 }
 
-// fromDashboard resolves a dashboard row; ok is false when its instance
-// isn't registered. A stored value that can't be used (a memory limit that
-// doesn't parse, isn't positive or is below jobs.resources.requests, which
-// Kubernetes would refuse; an unknown failure status) is ignored and the
-// default applies: a bad setting never stops reviews.
-func (r *Resolver) fromDashboard(row store.DashboardRepo) (Effective, bool) {
+// fromDashboard resolves a dashboard row on top of the defaults stored in
+// the dashboard; ok is false when its instance isn't registered. A stored
+// value that can't be used (see defaultsFor) is ignored and the default
+// applies: a bad setting never stops reviews.
+func (r *Resolver) fromDashboard(row store.DashboardRepo, stored store.RepoDefaults) (Effective, bool) {
 	platform, ok := r.registry().Platform(row.Instance)
 	if !ok {
 		return Effective{}, false
 	}
-	eff := r.defaults(platform, row.Instance, row.Project, SourceDashboard)
+	eff := r.defaultsFor(SourceDashboard, platform, row.Instance, row.Project, stored)
 	if row.Approve != nil {
 		eff.Approve, eff.Overridden[KeyApprove] = *row.Approve, true
 	}
@@ -250,8 +326,7 @@ func (r *Resolver) fromDashboard(row store.DashboardRepo) (Effective, bool) {
 		eff.ReviewDrafts, eff.Overridden[KeyReviewDrafts] = *row.ReviewDrafts, true
 	}
 	if row.FailureStatus != nil {
-		switch fs := config.FailureStatus(*row.FailureStatus); fs {
-		case config.FailureStatusFailed, config.FailureStatusNeutral:
+		if fs, ok := failureStatus(*row.FailureStatus); ok {
 			eff.FailureStatus, eff.Overridden[KeyFailureStatus] = fs, true
 		}
 	}
@@ -262,8 +337,7 @@ func (r *Resolver) fromDashboard(row store.DashboardRepo) (Effective, bool) {
 		eff.JobTimeout, eff.Overridden[KeyJobTimeout] = time.Duration(*row.JobTimeoutSeconds)*time.Second, true
 	}
 	if row.JobMemory != nil {
-		request := r.jobsMemory(r.Config.Jobs.Resources.Requests)
-		if q, err := resource.ParseQuantity(*row.JobMemory); err == nil && q.Sign() > 0 && q.Cmp(request) >= 0 {
+		if q, ok := r.usableMemory(*row.JobMemory); ok {
 			eff.JobMemory, eff.Overridden[KeyJobMemory] = q, true
 		}
 	}

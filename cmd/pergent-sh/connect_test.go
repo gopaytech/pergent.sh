@@ -481,6 +481,7 @@ func TestConnectSetsSignIn(t *testing.T) {
 	c.auth = d.Auth
 	lab := dashboardGitLab("lab", srv.URL)
 	lab.OAuthClientID = "lab-client"
+	c.reg.Put(lab) // the dashboard registers an instance before it connects it
 	s := instances.Secrets{ReviewToken: "glpat-review-example", ApproveToken: "glpat-approve-example", WebhookSecret: "w", OAuthClientSecret: "lab-oauth-secret"}
 	if err := c.Connect(context.Background(), lab, s); err != nil {
 		t.Fatal(err)

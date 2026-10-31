@@ -130,6 +130,7 @@ type Auth struct {
 	cfg       *config.Config
 	store     *store.Store
 	repos     *settings.Resolver
+	reg       *instances.Registry // which instances exist, and which are being removed
 	box       *secretbox.Box
 	stateKey  []byte
 	providers *syncmap.Map[provider] // by instance name; SetProvider and RemoveProvider change it
@@ -171,7 +172,7 @@ func newAuth(o Options, repos *settings.Resolver) (*Auth, error) {
 	mac.Write([]byte("pergent-sh dashboard oauth state v1"))
 
 	a := &Auth{
-		cfg: o.Config, store: o.Store, repos: repos, box: box, stateKey: mac.Sum(nil),
+		cfg: o.Config, store: o.Store, repos: repos, reg: o.Instances, box: box, stateKey: mac.Sum(nil),
 		providers: syncmap.New[provider](nil), hc: o.HTTPClient, base: o.Config.Dashboard.URL,
 		now: o.Now, log: o.Log, limit: newLimiter(),
 		slots: make(chan struct{}, hashSlots), slotWait: hashSlotWait, verify: password.Verify, hash: password.Hash,
@@ -209,6 +210,13 @@ func (a *Auth) SetProvider(inst instances.Instance, s instances.Secrets) {
 // already signed in through it stop working at their next platform check.
 func (a *Auth) RemoveProvider(name string) {
 	a.providers.Delete(name)
+}
+
+// removing reports whether nobody may sign in through the instance called
+// name any more: it is being removed, or is not there.
+func (a *Auth) removing(name string) bool {
+	inst, ok := a.reg.Get(name)
+	return !ok || inst.Removing
 }
 
 // canSignIn reports whether people can sign in through the instance called
@@ -293,7 +301,7 @@ func (a *Auth) readState(r *http.Request, platform, instance string) (oauthState
 // the route chooses where: no "next" parameter, no Host header.
 func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
 	p, platform, instance, ok := a.provider(r)
-	if !ok {
+	if !ok || a.removing(instance) {
 		http.NotFound(w, r)
 		return
 	}
@@ -311,7 +319,7 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
 // the user's access to what their teams cover and sends the browser to /.
 func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 	p, platform, instance, ok := a.provider(r)
-	if !ok {
+	if !ok || a.removing(instance) {
 		http.NotFound(w, r)
 		return
 	}
@@ -365,6 +373,11 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 	id := randomString(sessionIDBytes)
 	hash := hashID(id)
 	now := a.now()
+	if a.removing(instance) {
+		// Removed since the sign-in began: no account may be made for it.
+		http.NotFound(w, r)
+		return
+	}
 	account, err := a.store.UpsertPlatformAccount(ctx, platform, instance, userID, username, now)
 	if err != nil {
 		log.Error("dashboard sign-in: storing the account failed", "error", err.Error())

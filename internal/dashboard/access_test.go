@@ -715,8 +715,9 @@ func TestOperatorSeesEverything(t *testing.T) {
 	}
 }
 
-// The picker and switching on ask the platform with the user's token,
-// which a password admin hasn't got.
+// The picker asks the platform with the user's token, which a password admin
+// hasn't got; an operator picks with GET /api/admin/instances/{name}/repositories
+// and switches on by naming the instance.
 func TestOperatorCannotUsePicker(t *testing.T) {
 	e := newEnv(t, nil)
 	e.cat["main"].set("acme/gadgets")
@@ -726,8 +727,9 @@ func TestOperatorCannotUsePicker(t *testing.T) {
 	if rec := e.get(c, "/api/repositories/available"); rec.Code != http.StatusBadRequest || strings.TrimSpace(rec.Body.String()) != want {
 		t.Errorf("GET available = %d %s; want 400 %s", rec.Code, rec.Body, want)
 	}
-	if rec := e.send(c, "POST", "/api/repositories", `{"project":"acme/gadgets"}`); rec.Code != http.StatusBadRequest || strings.TrimSpace(rec.Body.String()) != want {
-		t.Errorf("POST /api/repositories = %d %s; want 400 %s", rec.Code, rec.Body, want)
+	if rec := e.send(c, "POST", "/api/repositories", `{"project":"acme/gadgets"}`); rec.Code != http.StatusBadRequest ||
+		!strings.Contains(rec.Body.String(), "name the instance") {
+		t.Errorf("POST /api/repositories without an instance = %d %s; want 400 asking for it", rec.Code, rec.Body)
 	}
 	if n := e.cat["main"].callCount(); n != 0 {
 		t.Errorf("the review bot's repositories were listed %d times", n)

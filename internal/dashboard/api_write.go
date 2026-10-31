@@ -52,6 +52,7 @@ const (
 	msgWriteFailed    = "could not save the change, please try again"
 	msgBadProjectBody = `the body must be {"project": "<path>"}`
 	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, failureStatus, skills, jobTimeoutSeconds, jobMemory"
+	msgNameInstance   = `name the instance: {"instance": "<name>", "project": "<path>"}`
 	msgNeedsPlatform  = "sign in with GitLab or GitHub to add repositories"
 	msgNeedsRole      = "only maintainers and admins of this repository can change its settings"
 )
@@ -68,7 +69,7 @@ var (
 func (d *Dashboard) writeRoutes(mux *http.ServeMux) {
 	admin := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, d.Auth.Require(requireAdmin(h))) }
 	admin("GET /api/repositories/available", needsPlatform(d.available))
-	admin("POST /api/repositories", needsPlatform(d.switchOn))
+	admin("POST /api/repositories", d.switchOn)
 	admin("DELETE /api/repositories/{instance}/{rest...}", d.switchOff)
 	mux.Handle("PUT /api/repositories/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.putSettings)))
 	mux.Handle("POST /api/repositories/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.resetSettings)))
@@ -79,9 +80,8 @@ func (d *Dashboard) writeRoutes(mux *http.ServeMux) {
 	}
 }
 
-// needsPlatform serves h to platform sessions: the picker and switching on
-// ask the platform with the user's token, which a password session hasn't
-// got (400).
+// needsPlatform serves h to platform sessions: the picker asks the platform
+// with the user's token, which a password session hasn't got (400).
 func needsPlatform(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if se, _ := SessionFrom(r.Context()); se.Kind != store.AccountPlatform {
@@ -328,9 +328,26 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	var body struct {
 		Project string `json:"project"`
+		// Instance is named by an operator, who has none of their own.
+		Instance string `json:"instance"`
 	}
 	if err := decodeStrict(r, &body); err != nil || strings.TrimSpace(body.Project) == "" || len(body.Project) > 1024 {
 		writeError(w, http.StatusBadRequest, msgBadProjectBody)
+		return
+	}
+	instance := se.Instance
+	if se.Operator {
+		instance = body.Instance
+		if instance == "" {
+			writeError(w, http.StatusBadRequest, msgNameInstance)
+			return
+		}
+		if !d.knownInstance(instance) {
+			notFound(w)
+			return
+		}
+	} else if body.Instance != "" && body.Instance != instance {
+		writeError(w, http.StatusBadRequest, msgOtherInstance)
 		return
 	}
 
@@ -338,10 +355,10 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 	// reach the repository now. This comes before anything about whether
 	// it is on, so a repository the admin can't reach is 404 the same way,
 	// after the same calls, on or off.
-	avail, ok, err := d.projectAvailable(ctx, se, body.Project)
+	avail, ok, err := d.switchOnAvailable(ctx, se, instance, body.Project)
 	if err != nil {
 		d.Log.Warn("dashboard: checking a repository to switch on failed",
-			"instance", se.Instance, "user", se.Username, "error", err.Error())
+			"instance", instance, "user", se.Username, "error", err.Error())
 		writeError(w, http.StatusBadGateway, msgListFailed)
 		return
 	}
@@ -350,14 +367,14 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := avail.Path
-	if d.Repos.InConfig(se.Instance, name) {
+	if d.Repos.InConfig(instance, name) {
 		writeError(w, http.StatusConflict, msgConfigManaged)
 		return
 	}
 	created, err := d.Store.InsertDashboardRepo(ctx, store.DashboardRepo{
-		Instance: se.Instance, Project: name, CreatedBy: se.Username})
+		Instance: instance, Project: name, CreatedBy: se.Username})
 	if err != nil {
-		d.Log.Error("dashboard: switching a repository on failed", "instance", se.Instance, "project", name,
+		d.Log.Error("dashboard: switching a repository on failed", "instance", instance, "project", name,
 			"error", err.Error())
 		writeError(w, http.StatusInternalServerError, msgWriteFailed)
 		return
@@ -366,15 +383,17 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, msgAlreadyOn)
 		return
 	}
-	d.Log.Info("dashboard: repository switched on", "instance", se.Instance, "project", name, "by", se.Username)
-	d.audit(ctx, se, "repository_on", se.Instance, name, "")
-	d.reconcileSoon(se.Instance, name)
-	// The admin checked they can see it just now: stored, it is shown even
-	// if the check their next request makes for it fails.
-	if err := d.Store.AddSessionProject(ctx, se.idHash, avail); err != nil {
-		d.Log.Warn("dashboard: adding a switched-on repository to the session failed", "error", err.Error())
+	d.Log.Info("dashboard: repository switched on", "instance", instance, "project", name, "by", se.Username)
+	d.audit(ctx, se, "repository_on", instance, name, "")
+	d.reconcileSoon(instance, name)
+	if !se.Operator {
+		// The admin checked they can see it just now: stored, it is shown
+		// even if the check their next request makes for it fails.
+		if err := d.Store.AddSessionProject(ctx, se.idHash, avail); err != nil {
+			d.Log.Warn("dashboard: adding a switched-on repository to the session failed", "error", err.Error())
+		}
 	}
-	repo, ok, err := d.Repos.Get(ctx, se.Instance, name)
+	repo, ok, err := d.Repos.Get(ctx, instance, name)
 	if err == nil && !ok {
 		err = errors.New("the repository switched on isn't there")
 	}
@@ -391,6 +410,27 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 	// covers it as admin from the next one on.
 	view.Role = RoleAdmin.String()
 	writeJSON(w, http.StatusCreated, view)
+}
+
+// switchOnAvailable checks project on instance can be switched on by the
+// session: a platform session's user must be a member with read access
+// (projectAvailable); an operator sees everything and has no platform
+// account, so only the review bot or App has to reach it, and the project
+// keeps the spelling it was given.
+func (d *Dashboard) switchOnAvailable(ctx context.Context, se Session, instance, project string) (store.VisibleProject, bool, error) {
+	if !se.Operator {
+		return d.projectAvailable(ctx, se, project)
+	}
+	project = strings.TrimSpace(project)
+	cat, ok := d.catalogs.Get(instance)
+	if !ok || cat == nil {
+		return store.VisibleProject{}, false, errors.New("no repository list for the instance")
+	}
+	reached, err := cat.CanReach(ctx, project)
+	if err != nil || !reached {
+		return store.VisibleProject{}, false, err
+	}
+	return store.VisibleProject{Instance: instance, Path: project}, true, nil
 }
 
 // decodeStrict reads one JSON value of at most maxWriteBody bytes into v;
@@ -474,7 +514,12 @@ func (d *Dashboard) switchOff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view.Repo.On = false
-	view.Settings = settingViews(d.Repos.Defaults(repo.Platform, repo.Instance))
+	def, err := d.Repos.BrowserDefaults(ctx, repo.Platform, repo.Instance)
+	if err != nil {
+		d.failed(w, r, "reading the defaults", err)
+		return
+	}
+	view.Settings = settingViews(def)
 	view.Attention = []AttentionView{}
 	writeJSON(w, http.StatusOK, view)
 }

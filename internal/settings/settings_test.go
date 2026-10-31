@@ -303,3 +303,74 @@ func TestResolverWithoutRegistry(t *testing.T) {
 		t.Errorf("Get = %+v, %v, %v", eff, ok, err)
 	}
 }
+
+// The defaults set in the dashboard apply to the repositories switched on in
+// the dashboard, under what a repository sets itself, and to no repository of
+// the config.
+func TestBrowserDefaultsApplyToDashboardReposOnly(t *testing.T) {
+	st := newStore(t)
+	cfg := testConfig()
+	cfg.Jobs.Resources.Requests = corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")}
+	r := &Resolver{Config: cfg, Store: st, Instances: instances.New(cfg, st, nil)}
+	if err := st.PutRepoDefaults(ctx, store.RepoDefaults{
+		Approve: ptr(false), ReviewDrafts: ptr(false), FailureStatus: ptr("neutral"),
+		JobTimeoutSeconds: ptr(1200), JobMemory: ptr("2Gi"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	upsert(t, st, store.DashboardRepo{Instance: "main", Project: "acme/payments", CreatedBy: "alice"})
+	upsert(t, st, store.DashboardRepo{Instance: "main", Project: "acme/gadgets", CreatedBy: "alice",
+		Approve: ptr(true), JobTimeoutSeconds: ptr(600)})
+
+	// A dashboard repository takes the defaults; none counts as overridden.
+	eff := get(t, r, "main", "acme/payments")
+	if eff.Approve || eff.ReviewDrafts || eff.FailureStatus != config.FailureStatusNeutral ||
+		eff.JobTimeout != 20*time.Minute || eff.JobMemory.Cmp(resource.MustParse("2Gi")) != 0 {
+		t.Errorf("dashboard repository = %+v", eff)
+	}
+	wantOverridden(t, eff)
+
+	// What it sets itself wins.
+	eff = get(t, r, "main", "acme/gadgets")
+	if !eff.Approve || eff.JobTimeout != 10*time.Minute || eff.ReviewDrafts {
+		t.Errorf("dashboard repository with its own settings = %+v", eff)
+	}
+	wantOverridden(t, eff, KeyApprove, KeyJobTimeout)
+
+	// A config repository keeps the config's defaults.
+	eff = get(t, r, "main", "acme/widgets")
+	wantDefaults(t, eff)
+	wantOverridden(t, eff)
+
+	// List agrees, and so does the view of the defaults.
+	all, err := r.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range all {
+		if e.Source == SourceConfig && !e.Approve {
+			t.Errorf("List: config repository %s has the browser defaults", e.Project)
+		}
+	}
+	def, err := r.BrowserDefaults(ctx, config.PlatformGitLab, "main")
+	if err != nil || def.Approve || def.JobTimeout != 20*time.Minute || def.Source != SourceDashboard {
+		t.Errorf("BrowserDefaults = %+v, %v", def, err)
+	}
+	if got := r.Defaults(config.PlatformGitLab, "main"); !got.Approve || got.JobTimeout != 10*time.Minute {
+		t.Errorf("Defaults (the config's) = %+v", got)
+	}
+}
+
+// A stored default that can't be used (a memory limit below the Job's
+// request) is ignored: the built-in one applies.
+func TestBrowserDefaultsBadValuesFallBack(t *testing.T) {
+	st := newStore(t)
+	cfg := testConfig()
+	cfg.Jobs.Resources.Requests = corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")}
+	r := &Resolver{Config: cfg, Store: st, Instances: instances.New(cfg, st, nil)}
+	if err := st.PutRepoDefaults(ctx, store.RepoDefaults{JobMemory: ptr("512Mi")}); err != nil {
+		t.Fatal(err)
+	}
+	upsert(t, st, store.DashboardRepo{Instance: "main", Project: "acme/payments", CreatedBy: "alice"})
+	wantDefaults(t, get(t, r, "main", "acme/payments"))
+}

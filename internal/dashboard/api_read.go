@@ -944,6 +944,17 @@ var datePattern = regexp.MustCompile(`\d{4}-\d{2}-\d{2}`)
 
 func (d *Dashboard) integrations(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
+	instance, platform := se.Instance, se.Platform
+	if se.Operator {
+		// An operator belongs to no instance: it names the one it wants.
+		instance = r.URL.Query().Get("instance")
+		inst, ok := d.registry.Get(instance)
+		if !ok {
+			notFound(w)
+			return
+		}
+		platform = inst.Platform
+	}
 	repos, err := d.activeRepos(ctx, se)
 	if err != nil {
 		d.failed(w, r, "listing repositories", err)
@@ -956,13 +967,13 @@ func (d *Dashboard) integrations(w http.ResponseWriter, r *http.Request) {
 	}
 	byPath := map[string]store.Project{}
 	for _, p := range stored {
-		if p.Instance == se.Instance {
+		if p.Instance == instance {
 			byPath[lower(p.Path)] = p
 		}
 	}
-	view := IntegrationView{Instance: se.Instance, Platform: se.Platform, Connected: true,
+	view := IntegrationView{Instance: instance, Platform: platform, Connected: d.connected(instance),
 		Approver: approverKindToken, Repos: []IntegrationRepo{}}
-	if inst, ok := d.registry.Get(se.Instance); ok && inst.GitHub != nil && inst.GitHub.ApproveApp != nil {
+	if inst, ok := d.registry.Get(instance); ok && inst.GitHub != nil && inst.GitHub.ApproveApp != nil {
 		view.Approver = approverKindApp
 	}
 	items, err := d.Store.Attention(ctx)
@@ -971,7 +982,7 @@ func (d *Dashboard) integrations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, a := range items {
-		if a.Instance != se.Instance || a.Project != "" || a.Kind != attentionTokenExpiry {
+		if a.Instance != instance || a.Project != "" || a.Kind != attentionTokenExpiry {
 			continue
 		}
 		if t, err := time.Parse(time.DateOnly, datePattern.FindString(a.Message)); err == nil {
@@ -979,7 +990,7 @@ func (d *Dashboard) integrations(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, e := range repos {
-		if e.Instance != se.Instance {
+		if e.Instance != instance {
 			continue
 		}
 		p, found := byPath[lower(e.Project)]
@@ -993,14 +1004,25 @@ func (d *Dashboard) integrations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, view)
 }
 
+// connected reports whether pergent.sh is connected to the instance: its
+// review side serves the dashboard. Without that wiring (no Sources) every
+// instance counts as connected.
+func (d *Dashboard) connected(instance string) bool {
+	if d.sources == nil {
+		return true
+	}
+	_, ok := d.sources.Get(instance)
+	return ok
+}
+
 func (d *Dashboard) adminSettings(w http.ResponseWriter, r *http.Request) {
 	se := session(r)
-	def := d.Repos.Defaults(se.Platform, se.Instance)
-	view := AdminSettingsView{
-		Instance: se.Instance,
-		Defaults: DefaultsView{Approve: def.Approve, ReviewDrafts: def.ReviewDrafts, FailureStatus: string(def.FailureStatus),
-			JobTimeoutSeconds: int64(def.JobTimeout / time.Second), JobMemory: quantityText(def.JobMemory)},
-		LLM: LLMView{Provider: d.cfg.LLM.Provider, Model: d.cfg.LLM.Model},
+	def, err := d.defaultsView(r.Context())
+	if err != nil {
+		d.failed(w, r, "reading the defaults", err)
+		return
 	}
-	writeJSON(w, http.StatusOK, view)
+	llm := d.registry.LLMStatus().LLM
+	writeJSON(w, http.StatusOK, AdminSettingsView{Instance: se.Instance, Defaults: def,
+		LLM: LLMView{Provider: llm.Provider, Model: llm.Model}})
 }

@@ -269,7 +269,9 @@ func (c *connector) connectAll(ctx context.Context) error {
 		return err
 	}
 	for _, inst := range c.reg.All() {
-		if inst.Source == instances.SourceDashboard {
+		// One being removed is not connected again: the engine finishes
+		// removing it.
+		if inst.Source == instances.SourceDashboard && !inst.Removing {
 			c.connectFromDashboard(ctx, inst)
 		}
 	}

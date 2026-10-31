@@ -125,7 +125,8 @@ func TestRunLogRedacted(t *testing.T) {
 	env := newTestEnv(t)
 	now := env.Now()
 	const clone, result, llm = "glpat-clone-token-123", "result-token-abc", "sk-engine-llm-key"
-	env.Engine.LLMKey = llm
+	// The engine's key is another now than the one in the Job's Secret.
+	t.Setenv("OPENCODE_API_KEY", llm)
 	serveLog(env, "cloning with "+clone+"\nAuthorization: Bearer "+result+"\nkey="+testLLMKey+" and "+llm+"\nclean line\n")
 
 	id := env.Report(1, sha('1'), []byte(`{"status":"completed"}`))

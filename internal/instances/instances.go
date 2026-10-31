@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
@@ -106,6 +107,21 @@ type Registry struct {
 
 	mu   sync.RWMutex
 	dash map[string]Instance
+
+	// llm is the LLM set in the dashboard (the store's row, its key opened);
+	// llmSeen is every key held since start, for redaction.
+	llmMu   sync.RWMutex
+	llm     llmRow
+	llmSeen []string
+}
+
+// llmRow is the store's LLM row with its key opened. key is "" when the row
+// has none or it can't be opened.
+type llmRow struct {
+	llm       config.LLM
+	key       string
+	updatedAt time.Time
+	found     bool
 }
 
 // New returns a Registry over cfg and, for the dashboard's instances and
@@ -131,7 +147,7 @@ func (r *Registry) Load(ctx context.Context) error {
 		if _, ok := r.config(row.Name); ok {
 			return fmt.Errorf("instance %q is in both the config file and the dashboard", row.Name)
 		}
-		dash[row.Name] = fromRow(row)
+		dash[row.Name] = FromRow(row)
 	}
 	r.mu.Lock()
 	r.dash = dash
@@ -221,8 +237,8 @@ func envValue(name string) string {
 	return os.Getenv(name)
 }
 
-// fromRow is the instance a store row describes.
-func fromRow(row store.InstanceRow) Instance {
+// FromRow is the instance of the dashboard a store row describes.
+func FromRow(row store.InstanceRow) Instance {
 	inst := Instance{Name: row.Name, Platform: row.Platform, Source: SourceDashboard,
 		Removing: row.Removing, OAuthClientID: row.OAuthClientID}
 	if row.Platform == config.PlatformGitHub {
@@ -314,4 +330,101 @@ func (r *Registry) configSecrets(inst Instance) (Secrets, error) {
 		}
 	}
 	return s, nil
+}
+
+// LLMState is the LLM as the dashboard shows it. Source is SourceConfig when
+// the config file has an llm: block (then the dashboard can't change it) and
+// SourceDashboard otherwise, even when nothing is set yet. KeySet is false
+// when the key is missing, the env var empty or the stored key can't be
+// opened. UpdatedAt is when the dashboard last saved it; zero for the
+// config's.
+type LLMState struct {
+	Source    Source
+	LLM       config.LLM
+	KeySet    bool
+	UpdatedAt time.Time
+}
+
+// LLM returns the LLM reviews use: the config's llm: block when it has one,
+// with its key from the env var it names, otherwise the one set in the
+// dashboard. ok is false when there is none, or its key is missing or can't
+// be opened.
+func (r *Registry) LLM() (llm config.LLM, key string, source Source, ok bool) {
+	st := r.LLMStatus()
+	if !st.KeySet {
+		return st.LLM, "", st.Source, false
+	}
+	return st.LLM, r.llmKey(st.Source), st.Source, true
+}
+
+// LLMStatus describes the LLM without its key (see LLMState).
+func (r *Registry) LLMStatus() LLMState {
+	if r.cfg.HasLLM() {
+		key := envValue(r.cfg.LLM.APIKeyEnv)
+		r.noteKey(key)
+		return LLMState{Source: SourceConfig, LLM: r.cfg.LLM, KeySet: key != ""}
+	}
+	r.llmMu.RLock()
+	defer r.llmMu.RUnlock()
+	return LLMState{Source: SourceDashboard, LLM: r.llm.llm, KeySet: r.llm.key != "", UpdatedAt: r.llm.updatedAt}
+}
+
+// llmKey is the key of the LLM from source.
+func (r *Registry) llmKey(source Source) string {
+	if source == SourceConfig {
+		return envValue(r.cfg.LLM.APIKeyEnv)
+	}
+	r.llmMu.RLock()
+	defer r.llmMu.RUnlock()
+	return r.llm.key
+}
+
+// LoadLLM reads the LLM row from the store again: at startup, and after the
+// dashboard saved it. A key that can't be opened, because
+// PERGENT_SH_SECRET_KEY changed, counts as not set.
+func (r *Registry) LoadLLM(ctx context.Context) error {
+	if r.st == nil {
+		return nil
+	}
+	row, found, err := r.st.LLM(ctx)
+	if err != nil {
+		return fmt.Errorf("read the LLM: %w", err)
+	}
+	next := llmRow{found: found}
+	if found {
+		next.llm = config.LLM{Provider: row.Provider, Model: row.Model, BaseURL: row.BaseURL}
+		next.updatedAt = row.UpdatedAt
+		if len(row.APIKeySealed) > 0 && r.box != nil {
+			if plain, err := r.box.Open(row.APIKeySealed); err == nil {
+				next.key = string(plain)
+			}
+		}
+	}
+	r.noteKey(next.key)
+	r.llmMu.Lock()
+	r.llm = next
+	r.llmMu.Unlock()
+	return nil
+}
+
+// LLMKeys returns every LLM key held since start, the one in use and those
+// it replaced, for redacting them from anything bound for a log or a page.
+func (r *Registry) LLMKeys() []string {
+	if r.cfg.HasLLM() {
+		r.noteKey(envValue(r.cfg.LLM.APIKeyEnv))
+	}
+	r.llmMu.RLock()
+	defer r.llmMu.RUnlock()
+	return slices.Sorted(slices.Values(r.llmSeen))
+}
+
+func (r *Registry) noteKey(key string) {
+	if key == "" {
+		return
+	}
+	r.llmMu.Lock()
+	defer r.llmMu.Unlock()
+	if !slices.Contains(r.llmSeen, key) {
+		r.llmSeen = append(r.llmSeen, key)
+	}
 }

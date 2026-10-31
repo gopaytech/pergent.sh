@@ -41,11 +41,15 @@ func HookURL(publicURL, instance string) string {
 // reconcileGitHubRepo). For each stored GitLab project no longer switched on
 // it deletes the webhook and the deploy token, then the row; a GitHub
 // repository has nothing to delete but its row. One repository's failure is
-// logged and the rest continue; the returned error joins them all. When the
+// logged and the rest continue; the returned error joins them all. At the
+// end, an instance being removed in the dashboard whose projects are all gone
+// is deleted (finishRemovals). When the
 // dashboard's repositories can't be read, nothing is removed. Tokens and keys
 // are never logged.
 func (e *Engine) Reconcile(ctx context.Context) error {
-	return e.reconcile(ctx, nil)
+	err := e.reconcile(ctx, nil)
+	e.finishRemovals(ctx)
+	return err
 }
 
 // RepoKey names a repository: its instance and its path (any case).
@@ -60,7 +64,9 @@ func (e *Engine) ReconcileRepos(ctx context.Context, keys []RepoKey) error {
 	for _, k := range keys {
 		only[keyOf(k.Instance, k.Project)] = true
 	}
-	return e.reconcile(ctx, only)
+	err := e.reconcile(ctx, only)
+	e.finishRemovals(ctx)
+	return err
 }
 
 // reconcile is Reconcile over every repository (only nil) or those in only.
@@ -290,6 +296,19 @@ func (e *Engine) removeProject(ctx context.Context, p store.Project) error {
 	}
 	gl := e.gitLab(p.Instance)
 	if gl == nil {
+		if inst, _ := e.registry().Get(p.Instance); inst.Removing {
+			// An instance being removed that pergent.sh isn't connected to
+			// (it never was, or pergent.sh restarted meanwhile): its
+			// webhooks can't be reached, and the removal must not wait for
+			// them for ever.
+			if err := e.Store.DeleteProject(ctx, p.Instance, p.ProjectID); err != nil {
+				return fmt.Errorf("delete project row: %w", err)
+			}
+			e.log().Warn("forgot a project of an instance being removed that isn't connected; its webhook stays and its deploy token expires on its own",
+				"instance", p.Instance, "project", p.Path, "project_id", p.ProjectID,
+				"hook_id", p.HookID, "deploy_token_id", p.DeployTokenID, "deploy_token_expires_at", p.DeployTokenExpiresAt)
+			return nil
+		}
 		return fmt.Errorf("no bots for instance %q", p.Instance)
 	}
 	var errs []error

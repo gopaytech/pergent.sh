@@ -297,6 +297,8 @@ func newTestEnv(t *testing.T) *testEnv {
 	}
 	gl := newFakeGitLab(t)
 	cs, launcher := newFakeKube()
+	// The config's llm: block names this variable.
+	t.Setenv("OPENCODE_API_KEY", testLLMKey)
 	cfg := testConfig(gl.URL())
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("test config is invalid: %v", err)
@@ -321,7 +323,6 @@ func newTestEnv(t *testing.T) *testEnv {
 		Launcher:       launcher,
 		Library:        inputs.Library{"security": []byte("---\nname: security\n---\nLook for security problems.\n")},
 		Box:            box,
-		LLMKey:         testLLMKey,
 		Now:            env.Now,
 		Log:            slog.New(slog.NewTextHandler(&env.logs, nil)),
 	}

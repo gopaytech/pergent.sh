@@ -287,3 +287,109 @@ func TestSecretsUnopenable(t *testing.T) {
 		t.Errorf("unopened = %v, want %v", unopened, want)
 	}
 }
+
+// The config's llm: block wins and its key is read from the env var it names;
+// without the block the LLM is the store's row, its key opened with the box.
+func TestLLMFromConfigOrStore(t *testing.T) {
+	st := newStore(t)
+	box := newBox(t, 1)
+	cfg := testConfig()
+
+	r := New(cfg, st, box)
+	if _, _, _, ok := r.LLM(); ok {
+		t.Fatal("LLM() is ok with neither a config block nor a stored row")
+	}
+	if got := r.LLMStatus(); got.Source != SourceDashboard || got.KeySet || got.LLM.Provider != "" {
+		t.Errorf("LLMStatus with nothing set = %+v", got)
+	}
+
+	// A row without a key is not enough.
+	if err := st.PutLLM(ctx, "anthropic", "claude-sonnet-4", "", nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.LoadLLM(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, ok := r.LLM(); ok {
+		t.Error("LLM() is ok for a row without a key")
+	}
+	if got := r.LLMStatus(); got.LLM.Model != "claude-sonnet-4" || got.KeySet {
+		t.Errorf("LLMStatus for a row without a key = %+v", got)
+	}
+
+	at := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
+	if err := st.PutLLM(ctx, "anthropic", "claude-sonnet-4", "https://llm.example.com/v1", box.Seal([]byte("key-one")), at); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.LoadLLM(ctx); err != nil {
+		t.Fatal(err)
+	}
+	llm, key, src, ok := r.LLM()
+	if !ok || src != SourceDashboard || key != "key-one" ||
+		llm != (config.LLM{Provider: "anthropic", Model: "claude-sonnet-4", BaseURL: "https://llm.example.com/v1"}) {
+		t.Fatalf("LLM() = %+v, %q, %s, %v", llm, key, src, ok)
+	}
+	if got := r.LLMStatus(); !got.KeySet || !got.UpdatedAt.Equal(at) || got.Source != SourceDashboard {
+		t.Errorf("LLMStatus = %+v", got)
+	}
+
+	// A change is picked up by LoadLLM; every key seen is remembered.
+	if err := st.PutLLM(ctx, "openai", "gpt", "", box.Seal([]byte("key-two")), at); err != nil {
+		t.Fatal(err)
+	}
+	if _, key, _, _ := r.LLM(); key != "key-one" {
+		t.Errorf("key before LoadLLM = %q, want the loaded one", key)
+	}
+	if err := r.LoadLLM(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if llm, key, _, _ := r.LLM(); key != "key-two" || llm.Provider != "openai" {
+		t.Errorf("after LoadLLM = %+v, %q", llm, key)
+	}
+	if got := r.LLMKeys(); !slices.Equal(got, []string{"key-one", "key-two"}) {
+		t.Errorf("LLMKeys = %v, want both keys", got)
+	}
+
+	// The config's block wins over the row, and its key is the env var's.
+	cfg.LLM = config.LLM{Provider: "anthropic", Model: "from-config", APIKeyEnv: "T_LLM_KEY"}
+	t.Setenv("T_LLM_KEY", "key-env")
+	llm, key, src, ok = r.LLM()
+	if !ok || src != SourceConfig || key != "key-env" || llm.Model != "from-config" {
+		t.Fatalf("LLM() with a config block = %+v, %q, %s, %v", llm, key, src, ok)
+	}
+	if got := r.LLMStatus(); got.Source != SourceConfig || !got.KeySet || !got.UpdatedAt.IsZero() {
+		t.Errorf("LLMStatus with a config block = %+v", got)
+	}
+	if got := r.LLMKeys(); !slices.Equal(got, []string{"key-env", "key-one", "key-two"}) {
+		t.Errorf("LLMKeys = %v", got)
+	}
+	t.Setenv("T_LLM_KEY", "")
+	if _, _, _, ok := r.LLM(); ok {
+		t.Error("LLM() is ok with the config's key variable empty")
+	}
+	if got := r.LLMStatus(); got.KeySet {
+		t.Errorf("LLMStatus says the key is set with the variable empty: %+v", got)
+	}
+}
+
+// A stored key that can't be opened (another secret key) counts as not set.
+func TestLLMKeyUnopenable(t *testing.T) {
+	st := newStore(t)
+	other := newBox(t, 2)
+	if err := st.PutLLM(ctx, "anthropic", "m", "", other.Seal([]byte("key")), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	r := New(testConfig(), st, newBox(t, 1))
+	if err := r.LoadLLM(ctx); err != nil {
+		t.Fatalf("LoadLLM = %v, want the unopenable key reported as not set", err)
+	}
+	if _, _, _, ok := r.LLM(); ok {
+		t.Error("LLM() is ok with a key sealed with another secret key")
+	}
+	if got := r.LLMStatus(); got.KeySet || got.LLM.Model != "m" {
+		t.Errorf("LLMStatus = %+v", got)
+	}
+	if len(r.LLMKeys()) != 0 {
+		t.Errorf("LLMKeys = %v, want none", r.LLMKeys())
+	}
+}

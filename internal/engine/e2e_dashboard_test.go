@@ -54,12 +54,15 @@ type dashE2E struct {
 	*e2e
 	// client never follows redirects: the test reads them.
 	client *http.Client
+	dash   *dashboard.Dashboard
 
 	mu     sync.Mutex
 	bodies []string // every response body the dashboard sent
 }
 
-func newDashboardE2E(t *testing.T) *dashE2E {
+// newDashboardE2E builds the dashboard e2e; edit, when given, changes the
+// dashboard's options before it is built.
+func newDashboardE2E(t *testing.T, edit ...func(o *dashboard.Options)) *dashE2E {
 	env := newTestEnv(t)
 	cfg := env.Engine.Config
 	t.Setenv("GITLAB_OAUTH_CLIENT_ID", dashClientID)
@@ -84,11 +87,15 @@ func newDashboardE2E(t *testing.T) *dashE2E {
 		sources.Set(name, p.Forge.(dashboard.RepoSource))
 		catalogs.Set(name, p.Forge.(dashboard.RepoCatalog))
 	}
-	d, err := dashboard.New(dashboard.Options{
+	opts := dashboard.Options{
 		Config: cfg, Instances: env.Engine.Instances, Store: env.Store, SecretKey: testBoxKey, HTTPClient: env.GitLab.srv.Client(),
 		Now: env.Now, Log: env.Engine.Log, Library: env.Engine.Library,
 		Sources: sources, Catalogs: catalogs, ReconcileSoon: env.Engine.ReconcileSoon,
-	})
+	}
+	for _, f := range edit {
+		f(&opts)
+	}
+	d, err := dashboard.New(opts)
 	if err != nil {
 		t.Fatalf("dashboard.New: %v", err)
 	}
@@ -107,7 +114,7 @@ func newDashboardE2E(t *testing.T) *dashE2E {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return &dashE2E{
-		e2e: &e2e{env: env, srv: srv},
+		e2e: &e2e{env: env, srv: srv}, dash: d,
 		client: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		}},

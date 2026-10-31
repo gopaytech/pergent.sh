@@ -315,7 +315,8 @@ type AttentionView struct {
 }
 
 // IntegrationView is GET /api/integrations (admins only, 403 otherwise):
-// the session's instance.
+// the session's instance; an operator, who has none, names it with
+// ?instance=.
 type IntegrationView struct {
 	Instance string `json:"instance"`
 	Platform string `json:"platform"`
@@ -340,7 +341,7 @@ type IntegrationRepo struct {
 }
 
 // AdminSettingsView is GET /api/admin/settings (admins only): the defaults
-// a repository of the session's instance gets, and the model. Never a key.
+// a repository switched on in the dashboard gets, and the model. Never a key.
 type AdminSettingsView struct {
 	Instance string       `json:"instance"`
 	Defaults DefaultsView `json:"defaults"`
@@ -374,9 +375,9 @@ type LLMView struct {
 // repository listed in the config is read-only here (409). Each change is
 // recorded in the audit log: repository_on, repository_off,
 // settings_updated (detail: the settings in the body) and settings_reset.
-// Errors are {"error": "message"}. The picker and switching on need a platform token:
-// an operator gets 400 {"error": "sign in with GitLab or GitHub to add
-// repositories"}.
+// Errors are {"error": "message"}. The picker needs a platform token: an
+// operator gets 400 {"error": "sign in with GitLab or GitHub to add
+// repositories"} and uses GET /api/admin/instances/{name}/repositories.
 //
 //   - GET /api/repositories/available?search=: AvailableView, the
 //     repositories that can be switched on; search (at most 100
@@ -390,7 +391,9 @@ type LLMView struct {
 //     reach it, else 404, whether it is on or not; then 409 when it is on
 //     already. 201, RepositoryDetailView, the project spelled as the
 //     platform does. pergent.sh sets it up (webhook and clone credentials)
-//     within seconds.
+//     within seconds. An operator names the instance too ({"instance":
+//     "lab", "project": ...}) and needs no membership: only the review bot
+//     or App must reach it.
 //   - DELETE /api/repositories/{instance}/{project...}: switches it off.
 //     200, RepositoryDetailView with repo.on false and the default
 //     settings. pergent.sh removes its webhook and clone credentials.
@@ -555,4 +558,88 @@ type AuditView struct {
 	Instance string    `json:"instance"`
 	Project  string    `json:"project"`
 	Detail   string    `json:"detail"`
+}
+
+// --- Instances, the LLM and the defaults (operators; the last two are
+// readable by admins) ---
+//
+// Secrets are write-only: a request carries a value, a response only whether
+// it is set and when it last changed. Every write needs the CSRF token and is
+// recorded in the audit log without a value: instance_added,
+// instance_updated (detail: the fields changed), instance_removed,
+// llm_updated (detail: the fields changed, "api_key" among them) and
+// defaults_updated.
+//
+//   - GET /api/admin/instances: [InstanceAdminView], the config's first,
+//     then those added in the dashboard.
+//   - POST /api/admin/instances {"name", "platform", "url" (GitLab) or
+//     "apiURL", "reviewAppID" and "approveAppID" (GitHub; 0 approves with a
+//     token), "oauthClientID", "secrets": {field: value}}: checks the
+//     credentials the way startup does (400 with the reason when they fail,
+//     and nothing is stored), stores them sealed and connects. A GitLab
+//     instance's webhook_secret is generated; giving one is 400. 201,
+//     InstanceAdminView; 409 when the name is taken in the config or the
+//     dashboard.
+//   - PUT /api/admin/instances/{name} {"oauthClientID", "secrets": {...}}:
+//     replaces what it names, checks the whole, connects again. An address
+//     or App ID that differs is 400; an instance of the config is 409.
+//     200, InstanceAdminView.
+//   - DELETE /api/admin/instances/{name}: 202 {"status": "removing"}. Its
+//     runs are superseded and its repositories, accounts and sessions go
+//     now; pergent.sh takes the webhooks off the platform and deletes the
+//     instance and its secrets within a minute or so. 409 for the config's.
+//   - GET /api/admin/instances/{name}/repositories?search=: AvailableView,
+//     the repositories the instance's review bot or App can set up that
+//     aren't switched on, for an operator, who has no platform account.
+//   - GET /api/admin/llm: LLMAdminView (admins). PUT /api/admin/llm
+//     {"provider", "model", "baseURL", "apiKey"} (operators; 409 when the
+//     config has an llm: block; the key is needed only when none is
+//     stored): 200, LLMAdminView.
+//   - GET /api/admin/defaults, PUT /api/admin/defaults (admins): DefaultsView
+//     for the repositories switched on in the dashboard; the PUT body has the
+//     same keys with the same bounds as a repository's settings, and
+//     replaces them all (a missing key or null is the built-in default).
+
+// SecretView says whether a secret is set and when it last changed. The
+// value is never sent. UpdatedAt is null for a secret that comes from the
+// config's environment.
+type SecretView struct {
+	Set       bool       `json:"set"`
+	UpdatedAt *time.Time `json:"updatedAt"`
+}
+
+// InstanceAdminView is one instance in GET /api/admin/instances.
+type InstanceAdminView struct {
+	Name string `json:"name"`
+	// Platform is "gitlab" or "github"; Source is "config" or "dashboard".
+	Platform string `json:"platform"`
+	Source   string `json:"source"`
+	// Removing is set while the instance is being taken out.
+	Removing bool `json:"removing"`
+	// URL is a GitLab instance's address; APIURL and the App IDs are a
+	// GitHub instance's.
+	URL          string `json:"url"`
+	APIURL       string `json:"apiURL"`
+	ReviewAppID  int64  `json:"reviewAppID"`
+	ApproveAppID int64  `json:"approveAppID"`
+	// Approver is "app" (a GitHub approve App) or "token" (a bot user).
+	Approver      string `json:"approver"`
+	OAuthClientID string `json:"oauthClientID"`
+	// Secrets lists the fields the instance takes: review_token,
+	// approve_token, webhook_secret and oauth_client_secret (GitLab);
+	// review_app_key, approve_app_key or approve_token, webhook_secret and
+	// oauth_client_secret (GitHub).
+	Secrets map[string]SecretView `json:"secrets"`
+}
+
+// LLMAdminView is GET /api/admin/llm: where the model comes from ("config"
+// or "dashboard"), the model, and whether a key is set. Editable is true for
+// an operator when the config has no llm: block.
+type LLMAdminView struct {
+	Source   string     `json:"source"`
+	Provider string     `json:"provider"`
+	Model    string     `json:"model"`
+	BaseURL  string     `json:"baseURL"`
+	Key      SecretView `json:"key"`
+	Editable bool       `json:"editable"`
 }

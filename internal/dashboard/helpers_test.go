@@ -29,6 +29,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/instances"
+	"github.com/gopaytech/pergent.sh/internal/secretbox"
 	"github.com/gopaytech/pergent.sh/internal/store"
 	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
@@ -542,6 +543,10 @@ type env struct {
 	clock      *clock
 	logs       *lockedBuffer
 	key        string // PERGENT_SH_SECRET_KEY
+	reg        *instances.Registry
+	conn       *fakeConnector
+	sources    *syncmap.Map[RepoSource]
+	catalogs   *syncmap.Map[RepoCatalog]
 	d          *Dashboard
 	h          http.Handler
 
@@ -596,8 +601,15 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 	for name, c := range e.cat {
 		catalogs.Set(name, c)
 	}
+	box, err := secretbox.New(e.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.reg, e.sources, e.catalogs = instances.New(cfg, st, box), sources, catalogs
+	e.conn = newFakeConnector(sources, catalogs)
 	d, err := New(Options{
 		Config: cfg, Store: st, SecretKey: e.key, Now: e.clock.now, Library: e.lib, Sources: sources,
+		Instances: e.reg, Connector: e.conn,
 		Catalogs: catalogs, ReconcileSoon: func(instance, project string) {
 			e.reconciles.Add(1)
 			e.mu.Lock()
@@ -610,6 +622,7 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 		t.Fatalf("New: %v", err)
 	}
 	e.d = d
+	e.conn.auth = d.Auth
 	signInProviders(t, d)
 	mux := http.NewServeMux()
 	mux.Handle("/", d.Handler())

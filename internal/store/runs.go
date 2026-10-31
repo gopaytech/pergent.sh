@@ -325,6 +325,35 @@ func (s *Store) supersedeMR(ctx context.Context, mr MRKey, reason, headSHA, targ
 	return int(tag.RowsAffected()), nil
 }
 
+// SupersedeInstance supersedes the queued, running and reported runs of every
+// merge request of the instance, for when the instance is removed, and
+// returns how many it changed. It does it one merge request at a time
+// (SupersedeMR), taking the same per-MR lock as EnqueueRun.
+func (s *Store) SupersedeInstance(ctx context.Context, instance string) (int, error) {
+	rows, err := s.pool.Query(ctx, `SELECT DISTINCT project_id, mr_iid FROM runs
+		WHERE instance = $1 AND state IN ('queued', 'running', 'reported')`, instance)
+	if err != nil {
+		return 0, err
+	}
+	mrs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (MRKey, error) {
+		mr := MRKey{Instance: instance}
+		err := row.Scan(&mr.ProjectID, &mr.IID)
+		return mr, err
+	})
+	if err != nil {
+		return 0, err
+	}
+	total := 0
+	for _, mr := range mrs {
+		n, err := s.SupersedeMR(ctx, mr)
+		if err != nil {
+			return total, err
+		}
+		total += n
+	}
+	return total, nil
+}
+
 // Supersede moves one queued or running run to superseded, for example when
 // the dispatcher finds its merge request closed or its head moved. A run in
 // any other state, or an unknown id, is left alone and is not an error.
