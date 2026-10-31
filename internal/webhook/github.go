@@ -22,6 +22,7 @@ const (
 	githubSignatureHeader = "X-Hub-Signature-256"
 	githubSignaturePrefix = "sha256="
 	githubPullRequest     = "pull_request"
+	githubIssueComment    = "issue_comment"
 )
 
 // GitHubHandler serves POST /webhooks/github/{instance}: the review App's
@@ -38,9 +39,39 @@ type GitHubHandler struct {
 	Queue   Queue
 	// Repos finds the repositories switched on; nil means the config's.
 	Repos Repositories
-	// Wake nudges the dispatcher after a new run was queued. May be nil.
+	// Commands keeps the commands found in pull request comments; Bots
+	// tells which comments are the bots' own and what mention addresses the
+	// review App. Without either, comments are ignored.
+	Commands CommandStore
+	Bots     Bots
+	// Wake nudges the dispatcher after a new run or command was queued. May
+	// be nil.
 	Wake func()
 	Log  *slog.Logger
+}
+
+// issueCommentEvent holds only the fields of an issue_comment event that are
+// read.
+type issueCommentEvent struct {
+	Action string `json:"action"`
+	Issue  struct {
+		Number int64 `json:"number"`
+		// PullRequest is present when the issue is a pull request.
+		PullRequest *json.RawMessage `json:"pull_request"`
+	} `json:"issue"`
+	Comment struct {
+		ID   int64  `json:"id"`
+		Body string `json:"body"`
+		User struct {
+			ID    int64  `json:"id"`
+			Login string `json:"login"`
+			Type  string `json:"type"`
+		} `json:"user"`
+	} `json:"comment"`
+	Repository struct {
+		ID       int64  `json:"id"`
+		FullName string `json:"full_name"`
+	} `json:"repository"`
 }
 
 // pullRequestEvent holds only the fields of a pull_request event that are read.
@@ -117,13 +148,17 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	event := r.Header.Get(githubEventHeader)
 	log = log.With("event", event)
-	if event != githubPullRequest {
+	if event != githubPullRequest && event != githubIssueComment {
 		// Includes "ping", sent when the webhook is created.
 		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "other_event")
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
+	if event == githubIssueComment {
+		h.comment(w, r, log, name, body)
+		return
+	}
 	var ev pullRequestEvent
 	if err := json.Unmarshal(body, &ev); err != nil {
 		unusable(w, log, "malformed_json")
@@ -235,6 +270,40 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Info("webhook handled", "outcome", "marked_ready", "result", "enqueued", "run", id, "created", created)
 	} else {
 		log.Info("webhook handled", "outcome", "enqueued", "run", id, "created", created)
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// comment handles an issue_comment event: a new comment by a person on a pull
+// request may carry a command, which is stored for the engine. Nothing here
+// calls GitHub.
+func (h *GitHubHandler) comment(w http.ResponseWriter, r *http.Request, log *slog.Logger, instance string, body []byte) {
+	var ev issueCommentEvent
+	if err := json.Unmarshal(body, &ev); err != nil {
+		unusable(w, log, "malformed_json")
+		return
+	}
+	c := ev.Comment
+	switch {
+	case ev.Action != "created":
+		// An edit must not run a command again, nor a deletion run one.
+		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "action")
+	case ev.Issue.PullRequest == nil || string(*ev.Issue.PullRequest) == "null":
+		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "not_a_pull_request")
+	default:
+		outcome, reason, err := commands{Bots: h.Bots, Store: h.Commands,
+			Repos: repositories(h.Repos, h.Config, h.registry()), Wake: h.Wake}.receive(r.Context(), comment{
+			Platform: config.PlatformGitHub, Instance: instance, Project: ev.Repository.FullName,
+			ProjectID: ev.Repository.ID, IID: ev.Issue.Number, CommentID: c.ID,
+			Author: c.User.Login, AuthorID: c.User.ID, AuthorIsBot: c.User.Type == "Bot", Body: c.Body,
+		})
+		log = log.With("repository", ev.Repository.FullName, "number", ev.Issue.Number)
+		if err != nil {
+			log.Error("webhook failed", "outcome", outcome, "err", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		log.Info("webhook handled", "outcome", outcome, "reason", reason)
 	}
 	w.WriteHeader(http.StatusOK)
 }

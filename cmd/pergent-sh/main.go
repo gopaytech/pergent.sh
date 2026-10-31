@@ -233,7 +233,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	}
 	handler := server.Routes(server.Deps{
 		Config: cfg, Instances: reg, WebhookSecrets: conn.gitlabHooks, GitHubWebhookSecrets: conn.githubHooks,
-		Store: st, Wake: eng.Wake, Dashboard: dashboardHandler(dash), Log: log,
+		Store: st, Bots: commandBots(conn.platforms), Wake: eng.Wake, Dashboard: dashboardHandler(dash), Log: log,
 	})
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {

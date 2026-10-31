@@ -30,6 +30,10 @@ type Deps struct {
 	// webhook secret.
 	GitHubWebhookSecrets *syncmap.Map[string]
 	Store                *store.Store
+	// Bots tells the webhooks, for a connected instance, the mention that
+	// addresses its review bot and the bots whose comments are never
+	// commands. Nil turns comment commands off.
+	Bots webhook.Bots
 	// Wake nudges the engine's loops. May be nil.
 	Wake func()
 	// Now is the clock of the result callback; nil means time.Now.
@@ -40,8 +44,9 @@ type Deps struct {
 }
 
 // Routes serves:
-//   - POST /webhooks/gitlab/{instance}: GitLab merge request webhooks;
-//   - POST /webhooks/github/{instance}: GitHub pull_request webhooks;
+//   - POST /webhooks/gitlab/{instance}: GitLab merge request and note webhooks;
+//   - POST /webhooks/github/{instance}: GitHub pull_request and issue_comment
+//     webhooks;
 //   - POST /runs/{id}/result: a review Job's result;
 //   - GET /healthz: 200 "ok";
 //   - when Dashboard is set and dashboard.url is configured: /auth/ and /api/
@@ -51,11 +56,15 @@ func Routes(d Deps) *http.ServeMux {
 	mux := http.NewServeMux()
 	// Webhooks accept repositories switched on in the config or the dashboard.
 	repos := &settings.Resolver{Config: d.Config, Store: d.Store, Instances: d.Instances}
+	var commands webhook.CommandStore
+	if d.Store != nil {
+		commands = d.Store
+	}
 	mux.Handle("POST /webhooks/gitlab/{instance}", &webhook.Handler{
-		Config: d.Config, Instances: d.Instances, Secrets: d.WebhookSecrets, Queue: d.Store, Repos: repos, Wake: d.Wake, Log: d.Log,
+		Config: d.Config, Instances: d.Instances, Secrets: d.WebhookSecrets, Queue: d.Store, Repos: repos, Commands: commands, Bots: d.Bots, Wake: d.Wake, Log: d.Log,
 	})
 	mux.Handle("POST /webhooks/github/{instance}", &webhook.GitHubHandler{
-		Config: d.Config, Instances: d.Instances, Secrets: d.GitHubWebhookSecrets, Queue: d.Store, Repos: repos, Wake: d.Wake, Log: d.Log,
+		Config: d.Config, Instances: d.Instances, Secrets: d.GitHubWebhookSecrets, Queue: d.Store, Repos: repos, Commands: commands, Bots: d.Bots, Wake: d.Wake, Log: d.Log,
 	})
 	mux.Handle("POST /runs/{id}/result", &callback.Handler{
 		Results: d.Store, Now: d.Now, Wake: d.Wake, Log: d.Log,

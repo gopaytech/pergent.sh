@@ -1,6 +1,6 @@
-// Package webhook receives GitLab webhooks. It authenticates them, turns
-// merge request events into queued review runs and replies fast; the engine
-// does the work.
+// Package webhook receives GitLab and GitHub webhooks. It authenticates them,
+// turns merge request events into queued review runs and comments into stored
+// commands, and replies fast; the engine does the work.
 package webhook
 
 import (
@@ -23,9 +23,11 @@ import (
 const (
 	maxBodyBytes  = 5 << 20
 	mrHookEvent   = "Merge Request Hook"
+	noteHookEvent = "Note Hook"
 	tokenHeader   = "X-Gitlab-Token"
 	eventHeader   = "X-Gitlab-Event"
 	mrObjectKind  = "merge_request"
+	noteKind      = "note"
 	instancePath  = "instance"
 	outcomeIgnore = "ignored"
 )
@@ -64,9 +66,42 @@ type Handler struct {
 	Queue   Queue
 	// Repos finds the repositories switched on; nil means the config's.
 	Repos Repositories
-	// Wake nudges the dispatcher after a new run was queued. May be nil.
+	// Commands keeps the commands found in merge request comments; Bots
+	// tells which comments are the bots' own and what mention addresses the
+	// review bot. Without either, comments are ignored.
+	Commands CommandStore
+	Bots     Bots
+	// Wake nudges the dispatcher after a new run or command was queued. May
+	// be nil.
 	Wake func()
 	Log  *slog.Logger
+}
+
+// noteEvent holds only the fields of a Note Hook that are read.
+type noteEvent struct {
+	ObjectKind string `json:"object_kind"`
+	User       struct {
+		ID       int64  `json:"id"`
+		Username string `json:"username"`
+	} `json:"user"`
+	Project struct {
+		ID                int64  `json:"id"`
+		PathWithNamespace string `json:"path_with_namespace"`
+	} `json:"project"`
+	ObjectAttributes struct {
+		ID           int64  `json:"id"`
+		Note         string `json:"note"`
+		NoteableType string `json:"noteable_type"`
+		// Type is null for a plain comment, DiffNote for one on a line and
+		// DiscussionNote for a reply in a thread.
+		Type *string `json:"type"`
+		// Action is create or update; GitLab before 14 doesn't send it.
+		Action string `json:"action"`
+		System bool   `json:"system"`
+	} `json:"object_attributes"`
+	MergeRequest struct {
+		IID int64 `json:"iid"`
+	} `json:"merge_request"`
 }
 
 // mergeRequestEvent holds only the fields of a Merge Request Hook that are read.
@@ -139,7 +174,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	event := r.Header.Get(eventHeader)
 	log = log.With("event", event)
-	if event != mrHookEvent {
+	if event != mrHookEvent && event != noteHookEvent {
 		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "other_event")
 		w.WriteHeader(http.StatusOK)
 		return
@@ -155,6 +190,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Warn("webhook rejected", "outcome", "read_error")
 		http.Error(w, "cannot read body", http.StatusBadRequest)
+		return
+	}
+	if event == noteHookEvent {
+		h.note(w, r, log, name, body)
 		return
 	}
 	var ev mergeRequestEvent
@@ -277,6 +316,45 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Info("webhook handled", "outcome", "marked_ready", "result", "enqueued", "run", id, "created", created)
 	} else {
 		log.Info("webhook handled", "outcome", "enqueued", "run", id, "created", created)
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// note handles a Note Hook: a new plain comment on a merge request may carry
+// a command, which is stored for the engine. Nothing here calls GitLab.
+func (h *Handler) note(w http.ResponseWriter, r *http.Request, log *slog.Logger, instance string, body []byte) {
+	var ev noteEvent
+	if err := json.Unmarshal(body, &ev); err != nil {
+		unusable(w, log, "malformed_json")
+		return
+	}
+	attrs := ev.ObjectAttributes
+	// Only a new, plain comment by a person on a merge request counts: not an
+	// edit, a comment on a line or in a thread, or a system note ("added 1
+	// commit").
+	switch {
+	case ev.ObjectKind != noteKind:
+		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "other_object_kind")
+	case attrs.NoteableType != "MergeRequest":
+		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "not_a_merge_request")
+	case attrs.Action != "" && attrs.Action != "create":
+		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "action")
+	case attrs.Type != nil && *attrs.Type != "", attrs.System:
+		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "not_a_plain_note")
+	default:
+		outcome, reason, err := commands{Bots: h.Bots, Store: h.Commands,
+			Repos: repositories(h.Repos, h.Config, h.registry()), Wake: h.Wake}.receive(r.Context(), comment{
+			Platform: config.PlatformGitLab, Instance: instance, Project: ev.Project.PathWithNamespace,
+			ProjectID: ev.Project.ID, IID: ev.MergeRequest.IID, CommentID: attrs.ID,
+			Author: ev.User.Username, AuthorID: ev.User.ID, Body: attrs.Note,
+		})
+		log = log.With("project", ev.Project.PathWithNamespace, "iid", ev.MergeRequest.IID)
+		if err != nil {
+			log.Error("webhook failed", "outcome", outcome, "err", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		log.Info("webhook handled", "outcome", outcome, "reason", reason)
 	}
 	w.WriteHeader(http.StatusOK)
 }
