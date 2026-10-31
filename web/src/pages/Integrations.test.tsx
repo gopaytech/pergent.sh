@@ -149,6 +149,27 @@ describe("Integrations for an operator", () => {
     });
   });
 
+  it("rebuilds a key whose line breaks the browser dropped with no separator", async () => {
+    const fake = fakeApi({
+      "GET /api/me": { body: operator },
+      "GET /api/admin/instances": { body: instances },
+      "PUT /api/admin/instances/hub": { body: instanceGitHub },
+    });
+    renderApp("/integrations");
+    const group = within(await card("GitHub · hub")).getByRole("group", { name: "Review App private key" });
+    await userEvent.click(within(group).getByRole("button", { name: "Replace" }));
+    const body = "Zm9v".repeat(20) + "+/==";
+    await userEvent.type(
+      within(group).getByLabelText("New Review App private key"),
+      `-----BEGIN PRIVATE KEY-----${body}-----END PRIVATE KEY-----`,
+    );
+    await userEvent.click(within(group).getByRole("button", { name: "Save" }));
+    const lines = `${body.slice(0, 64)}\n${body.slice(64)}`;
+    expect(fake.find("PUT", "/api/admin/instances/hub")[0].body).toEqual({
+      secrets: { review_app_key: `-----BEGIN PRIVATE KEY-----\n${lines}\n-----END PRIVATE KEY-----\n` },
+    });
+  });
+
   it("adds a GitLab instance without a webhook secret", async () => {
     let listed = 0;
     const fake = fakeApi({

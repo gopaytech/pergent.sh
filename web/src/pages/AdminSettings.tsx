@@ -146,7 +146,7 @@ function Defaults({ v }: { v: DefaultsView }) {
       <div className="foot">
         {problem && <span className="meta problem">{problem}</span>}
         {note && (
-          <span className="meta problem" role="status">
+          <span className="meta grow" role="status">
             {note}
           </span>
         )}

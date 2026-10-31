@@ -38,6 +38,26 @@ describe("AuditLog", () => {
     expect(screen.queryByRole("button", { name: "Older" })).not.toBeInTheDocument();
   });
 
+  it("keeps the entries and the Older button when Older fails, with one error", async () => {
+    let tries = 0;
+    const fake = fakeApi({
+      "GET /api/me": { body: operator },
+      "GET /api/audit": { body: auditPage1 },
+      "GET /api/audit?before=29": () =>
+        tries++ === 0 ? { status: 500, body: { error: "could not read the log" } } : { body: auditPage2 },
+    });
+    renderApp("/audit");
+    await userEvent.click(await screen.findByRole("button", { name: "Older" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("could not read the log");
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.getAllByRole("row")).toHaveLength(1 + 2);
+    // Retrying works.
+    await userEvent.click(screen.getByRole("button", { name: "Older" }));
+    expect(await screen.findByText("old-user")).toBeInTheDocument();
+    expect(fake.find("GET", "/api/audit?before=29")).toHaveLength(2);
+    await vi.waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  });
+
   it("has no Older button when the whole log fits one page", async () => {
     fakeApi({ "GET /api/me": { body: operator }, "GET /api/audit": { body: auditPage2 } });
     renderApp("/audit");

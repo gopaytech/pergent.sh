@@ -152,10 +152,9 @@ function TeamCard({ team }: { team: TeamView }) {
 // repoKey identifies a team's repository in the editor's selection.
 const repoKey = (r: TeamRepoView) => JSON.stringify([r.instance, r.project]);
 
+// Editor loads what the choices are made from, then shows the form.
 function Editor({ team, onClose }: { team: TeamView; onClose: () => void }) {
   const me = useMe();
-  const client = useQueryClient();
-  const write = useWrite();
   const users = useQuery({ queryKey: ["users"], queryFn: () => api.get<UserView[]>("/api/users") });
   const repos = useQuery({ queryKey: ["repositories"], queryFn: () => api.get<RepositoryView[]>("/api/repositories") });
   // An operator may cover any instance; a platform admin its own.
@@ -164,10 +163,51 @@ function Editor({ team, onClose }: { team: TeamView; onClose: () => void }) {
     queryFn: () => api.get<InstanceAdminView[]>("/api/admin/instances"),
     enabled: me.operator,
   });
+  if (users.isPending || repos.isPending || (me.operator && instances.isPending)) return <Loading />;
+  if (users.isError) return <ErrorBox error={users.error} />;
+  if (repos.isError) return <ErrorBox error={repos.error} />;
+  if (instances.isError) return <ErrorBox error={instances.error} />;
+  const instanceNames = me.operator
+    ? (instances.data ?? []).filter((i) => !i.removing).map((i) => i.name)
+    : [me.instance];
+  return (
+    <EditorForm
+      team={team}
+      accounts={users.data.filter((u) => u.kind === "platform")}
+      instanceNames={instanceNames}
+      switchedOn={repos.data.filter((r) => r.on).map((r) => ({ instance: r.instance, project: r.project }))}
+      onClose={onClose}
+    />
+  );
+}
+
+function EditorForm({
+  team,
+  accounts,
+  instanceNames,
+  switchedOn,
+  onClose,
+}: {
+  team: TeamView;
+  accounts: UserView[];
+  instanceNames: string[];
+  switchedOn: TeamRepoView[];
+  onClose: () => void;
+}) {
+  const client = useQueryClient();
+  const write = useWrite();
+  // The choices: whole instances and the repositories switched on, and what
+  // the team covers that is neither: shown as switched off and unticked,
+  // since saving it would be refused.
+  const available: TeamRepoView[] = [...instanceNames.map((instance) => ({ instance, project: "" })), ...switchedOn];
+  const gone = team.repos.filter((r) => !available.some((c) => repoKey(c) === repoKey(r)));
+  const choices = [...available, ...gone];
+  const isGone = (c: TeamRepoView) => gone.some((g) => repoKey(g) === repoKey(c));
+
   const [name, setName] = useState(team.name);
   const [role, setRole] = useState<Role>(team.role);
   const [members, setMembers] = useState(() => new Set(team.members.map((m) => m.id)));
-  const [covered, setCovered] = useState(() => new Set(team.repos.map(repoKey)));
+  const [covered, setCovered] = useState(() => new Set(team.repos.filter((r) => !isGone(r)).map(repoKey)));
   const save = useMutation({
     mutationFn: (body: TeamUpdate) => write<TeamView>("PUT", `/api/teams/${team.id}`, body),
     onSuccess: () => {
@@ -177,23 +217,6 @@ function Editor({ team, onClose }: { team: TeamView; onClose: () => void }) {
       onClose();
     },
   });
-
-  if (users.isPending || repos.isPending || (me.operator && instances.isPending)) return <Loading />;
-  if (users.isError) return <ErrorBox error={users.error} />;
-  if (repos.isError) return <ErrorBox error={repos.error} />;
-  if (instances.isError) return <ErrorBox error={instances.error} />;
-
-  const accounts = users.data.filter((u) => u.kind === "platform");
-  const instanceNames = me.operator
-    ? (instances.data ?? []).filter((i) => !i.removing).map((i) => i.name)
-    : [me.instance];
-  // The choices: whole instances, the repositories switched on, and what the
-  // team covers already that is neither (so it can be taken off).
-  const choices: TeamRepoView[] = [
-    ...instanceNames.map((instance) => ({ instance, project: "" })),
-    ...repos.data.filter((r) => r.on).map((r) => ({ instance: r.instance, project: r.project })),
-  ];
-  for (const r of team.repos) if (!choices.some((c) => repoKey(c) === repoKey(r))) choices.push(r);
 
   const toggle = <T,>(set: Set<T>, v: T, on: boolean) => {
     const next = new Set(set);
@@ -269,6 +292,7 @@ function Editor({ team, onClose }: { team: TeamView; onClose: () => void }) {
                     <span className="mr">{c.project}</span> <span className="meta">{c.instance}</span>
                   </>
                 )}
+                {isGone(c) && <span className="meta"> (switched off)</span>}
               </span>
             </label>
           ))}
@@ -277,7 +301,10 @@ function Editor({ team, onClose }: { team: TeamView; onClose: () => void }) {
       )}
       {team.hiddenRepos > 0 && (
         <div className="meta">
-          {hiddenText(team.hiddenRepos)}. They stay as they are when you save.
+          {hiddenText(team.hiddenRepos)}.{" "}
+          {role === "admin"
+            ? "A team that covers repositories you can't see can't be made an admin team: the server refuses it."
+            : "They stay as they are when you save."}
         </div>
       )}
       {save.isError && <ErrorBox error={save.error} />}

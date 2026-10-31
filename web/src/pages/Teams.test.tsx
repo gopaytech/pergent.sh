@@ -113,6 +113,43 @@ describe("Teams", () => {
     expect(teamCard("Admins")).not.toHaveTextContent("you can't see");
   });
 
+  it("doesn't promise to keep hidden repositories once the role is admin", async () => {
+    fakeApi({
+      "GET /api/me": { body: platformAdmin },
+      "GET /api/teams": { body: [{ ...teamPayments, hiddenRepos: 3 }] },
+      ...base,
+    });
+    renderApp("/teams");
+    await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
+    const editor = screen.getByRole("form", { name: "Edit Payments" });
+    expect(editor).toHaveTextContent("They stay as they are when you save.");
+    await userEvent.selectOptions(within(editor).getByLabelText("Role"), "admin");
+    expect(editor).toHaveTextContent("+3 repositories you can't see");
+    expect(editor).not.toHaveTextContent("They stay as they are");
+    expect(editor).toHaveTextContent("can't be made an admin team");
+  });
+
+  it("shows a covered repository that is no longer switched on as such, unticked", async () => {
+    const fake = fakeApi({
+      "GET /api/me": { body: platformAdmin },
+      "GET /api/teams": {
+        body: [{ ...teamPayments, repos: [{ instance: "main", project: "acme/payments" }, { instance: "main", project: "acme/gone" }] }],
+      },
+      "PUT /api/teams/2": { body: teamPayments },
+      ...base,
+    });
+    renderApp("/teams");
+    await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
+    const editor = screen.getByRole("form", { name: "Edit Payments" });
+    const gone = await within(editor).findByRole("checkbox", { name: /acme\/gone.*switched off/ });
+    expect(gone).not.toBeChecked();
+    expect(within(editor).getByRole("checkbox", { name: /acme\/payments/ })).toBeChecked();
+    await userEvent.click(within(editor).getByRole("button", { name: "Save" }));
+    expect((fake.find("PUT", "/api/teams/2")[0].body as { repos: unknown[] }).repos).toEqual([
+      { instance: "main", project: "acme/payments" },
+    ]);
+  });
+
   it("saves the name, role, members and repositories with a PUT, keeping what it doesn't show", async () => {
     const fake = fakeApi({
       "GET /api/me": { body: platformAdmin },

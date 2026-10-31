@@ -48,7 +48,8 @@ describe("AdminSettings defaults", () => {
       jobTimeoutSeconds: 900,
       jobMemory: "6Gi",
     });
-    expect(await screen.findByText("Defaults saved.")).toBeInTheDocument();
+    const saved = await screen.findByText("Defaults saved.");
+    expect(saved).not.toHaveClass("problem");
   });
 
   it("sends an empty memory limit as null, the built-in default", async () => {

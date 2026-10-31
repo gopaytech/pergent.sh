@@ -86,6 +86,11 @@ describe("Users", () => {
     const box = await screen.findByLabelText("New password admin");
     expect(box).toHaveTextContent("Zx9-generated-secret-value");
     expect(box).toHaveTextContent("Copy it now: it won't be shown again.");
+    // A labelled region, not a live region: a screen reader doesn't read the password out unasked.
+    expect(box).not.toHaveAttribute("role", "status");
+    expect(box.closest("[aria-live]")).toBeNull();
+    expect(within(box).queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "New password admin" })).toBe(box);
     const [post] = fake.find("POST", "/api/admin/accounts");
     expect(post.body).toEqual({ username: "ops2" });
     expect(post.headers.get("X-CSRF-Token")).toBe("csrf-123");

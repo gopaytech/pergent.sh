@@ -127,7 +127,7 @@ function AddAdmin({ onClose }: { onClose: () => void }) {
 
   if (create.isSuccess) {
     return (
-      <section className="card pad secret-box" aria-label="New password admin" role="status">
+      <section className="card pad secret-box" aria-label="New password admin">
         <p>Password admin {create.data.username} was created. Its password is</p>
         <code className="secret-value">{create.data.password}</code>
         <p>

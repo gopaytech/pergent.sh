@@ -25,6 +25,8 @@ export default function AuditLog() {
     // A next of 0 is the end of the log.
     getNextPageParam: (last) => last.next || undefined,
   });
+  // A failed Older leaves the query in error with the pages already read:
+  // they stay, and so does the button to try again.
   const entries = log.data?.pages.flatMap((p) => p.entries) ?? [];
   return (
     <div className="narrow">
@@ -35,8 +37,8 @@ export default function AuditLog() {
         </div>
       </div>
       {log.isPending && <Loading />}
-      {log.isError && <ErrorBox error={log.error} />}
-      {log.isSuccess &&
+      {log.isError && !log.isFetchNextPageError && <ErrorBox error={log.error} />}
+      {log.data &&
         (entries.length === 0 && !log.hasNextPage ? (
           <div className="card empty">Nothing is recorded yet.</div>
         ) : (
