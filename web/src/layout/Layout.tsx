@@ -31,11 +31,21 @@ const adminItems = (waitingUsers: number): NavItem[] => [
 // roleLabel is what the menu calls the signed-in account.
 const roleLabel = (me: Me) => (me.operator ? "operator" : me.admin ? "admin" : "member");
 
+// waitingRefetch is how often a waiting account asks whether it was added to
+// a team, in ms.
+const waitingRefetch = 30_000;
+
 function Nav({ items }: { items: NavItem[] }) {
   return (
     <>
       {items.map((item) => (
-        <NavLink key={item.to} to={item.to} end={item.end}>
+        <NavLink
+          key={item.to}
+          to={item.to}
+          end={item.end}
+          // The badge is part of the name, set apart from the label.
+          aria-label={item.badge ? `${item.label}, ${item.badge}` : undefined}
+        >
           <span className="icon" aria-hidden="true">
             {item.icon}
           </span>
@@ -55,7 +65,14 @@ function initials(name: string) {
 // the right. It loads the signed-in user first; a 401 sends the browser to
 // the sign-in page (see App).
 export default function Layout() {
-  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/me"), staleTime: 60_000 });
+  const me = useQuery({
+    queryKey: ["me"],
+    queryFn: () => api.get<Me>("/api/me"),
+    staleTime: 60_000,
+    // A waiting account asks again, so one added to a team gets in without
+    // a reload.
+    refetchInterval: (q) => (q.state.data?.waiting ? waitingRefetch : false),
+  });
   if (me.isPending) return <Loading />;
   if (me.isError) {
     return (

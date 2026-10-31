@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi } from "../test/fakeApi";
-import { waiting } from "../test/fixtures";
+import { overview, viewer, waiting } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -15,6 +15,27 @@ describe("Waiting", () => {
     expect(
       await screen.findByText("You're signed in as new-user on main. An admin needs to add you to a team."),
     ).toBeInTheDocument();
+  });
+
+  it("asks /api/me again every 30 seconds, so an account added to a team gets in without a reload", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let mes = 0;
+      const fake = fakeApi({
+        "GET /api/me": () => ({ body: mes++ === 0 ? waiting : viewer }),
+        "GET /api/overview?days=7": { body: overview },
+      });
+      renderApp("/");
+      expect(await screen.findByText(/An admin needs to add you to a team/)).toBeInTheDocument();
+      expect(fake.find("GET", "/api/me")).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(29_000);
+      expect(fake.find("GET", "/api/me")).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await screen.findByRole("navigation", { name: "Main" })).toBeInTheDocument();
+      expect(fake.find("GET", "/api/me")).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows the account's name as text, never as HTML", async () => {

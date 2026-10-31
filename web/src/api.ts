@@ -238,8 +238,25 @@ export function onUnauthorized(fn: Listener): () => void {
   };
 }
 
+// onGateChange calls fn whenever a call answers the 403 of an account that
+// is waiting for a team or must change its password: the account's state
+// changed under the page, so /api/me must be read again. It returns the
+// function that stops it.
+export function onGateChange(fn: Listener): () => void {
+  gateChanged.add(fn);
+  return () => {
+    gateChanged.delete(fn);
+  };
+}
+
+const gateChanged = new Set<Listener>();
+const gateCodes = new Set(["waiting", "password_change_required"]);
+
 // A 401 from these is a wrong password, not an ended session: the caller
-// shows it, and the browser doesn't go to sign-in.
+// shows it, and the browser doesn't go to sign-in. The exemption covers
+// /auth/password/change when the session really ended too (its 401 is the
+// same), which the page then can't tell from a wrong password; Sign out is
+// on that page and recovers from it.
 const wrongPasswordIs401 = new Set(["/auth/password", "/auth/password/change"]);
 
 async function request<T>(method: string, path: string, body?: unknown, csrf?: string): Promise<T> {
@@ -270,6 +287,9 @@ async function request<T>(method: string, path: string, body?: unknown, csrf?: s
       }
     } catch {
       // Not JSON: keep the generic message.
+    }
+    if (res.status === 403 && code !== undefined && gateCodes.has(code)) {
+      for (const fn of [...gateChanged]) fn();
     }
     throw new ApiError(res.status, message, code);
   }

@@ -2,7 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { Route, Routes, useNavigate } from "react-router";
 
-import { onUnauthorized } from "./api";
+import { onGateChange, onUnauthorized } from "./api";
 import Layout, { AdminOnly } from "./layout/Layout";
 import AdminSettings from "./pages/AdminSettings";
 import Integrations from "./pages/Integrations";
@@ -16,7 +16,9 @@ import Skills from "./pages/Skills";
 import { NotFound } from "./ui";
 
 // App routes the pages. A 401 from any call drops what was loaded and
-// sends the browser to the sign-in page.
+// sends the browser to the sign-in page; a 403 that says the account waits
+// for a team or must change its password reads /api/me again, so the layout
+// shows the page for that state.
 export default function App() {
   const navigate = useNavigate();
   const client = useQueryClient();
@@ -28,6 +30,7 @@ export default function App() {
       }),
     [client, navigate],
   );
+  useEffect(() => onGateChange(() => void client.invalidateQueries({ queryKey: ["me"] })), [client]);
   return (
     <Routes>
       <Route path="/signin" element={<SignIn />} />

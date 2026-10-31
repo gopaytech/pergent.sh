@@ -49,6 +49,53 @@ describe("SignIn", () => {
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
+  it("empties the password, not the username, after a failed sign-in", async () => {
+    fakeApi({
+      "GET /api/instances": { body: instances },
+      "GET /auth/csrf": { body: { csrfToken: "login-csrf" } },
+      "POST /auth/password": { status: 401, body: { error: "wrong username or password" } },
+    });
+    renderApp("/signin");
+    await fill("admin", "nope nope nope");
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.getByLabelText("Password")).toHaveValue("");
+    expect(screen.getByLabelText("Username")).toHaveValue("admin");
+  });
+
+  it("keeps no closure with the password once the form is gone", async () => {
+    fakeApi({
+      "GET /api/instances": { body: instances },
+      "GET /auth/csrf": { body: { csrfToken: "login-csrf" } },
+      "POST /auth/password": { status: 401, body: { error: "wrong username or password" } },
+    });
+    const { client, unmount } = renderApp("/signin");
+    await fill("admin", "nope nope nope");
+    await screen.findByRole("alert");
+    unmount();
+    await vi.waitFor(() => expect(client.getMutationCache().getAll()).toHaveLength(0));
+  });
+
+  it("says no sign-in is configured when there is no password form and no button", async () => {
+    fakeApi({ "GET /api/instances": { body: { password: false, instances: [{ platform: "javascript:", instance: "x", label: "Evil" }] } } });
+    renderApp("/signin");
+    expect(await screen.findByText("No sign-in is configured.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Username")).not.toBeInTheDocument();
+  });
+
+  it("says no sign-in is configured when the instances can't be read", async () => {
+    fakeApi({ "GET /api/instances": { status: 500, body: { error: "try again" } } });
+    renderApp("/signin");
+    expect(await screen.findByRole("alert")).toHaveTextContent("try again");
+    expect(screen.getByText("No sign-in is configured.")).toBeInTheDocument();
+  });
+
+  it("doesn't say it while a button or the password form is there", async () => {
+    fakeApi({ "GET /api/instances": { body: { password: false, instances: [instances.instances[0]] } } });
+    renderApp("/signin");
+    await screen.findByRole("link", { name: "Sign in with GitLab (main)" });
+    expect(screen.queryByText("No sign-in is configured.")).not.toBeInTheDocument();
+  });
+
   it("shows the password form above the platform buttons", async () => {
     fakeApi({ "GET /api/instances": { body: instances } });
     renderApp("/signin");

@@ -12,12 +12,12 @@ function Location() {
 }
 
 // renderApp renders the whole app at path, with a fresh query cache and no
-// retries.
+// retries; it returns the cache's client with the render result.
 export function renderApp(path: string) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } },
   });
-  return render(
+  const result = render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[path]}>
         <App />
@@ -25,4 +25,5 @@ export function renderApp(path: string) {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { ...result, client };
 }

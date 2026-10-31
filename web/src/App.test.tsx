@@ -51,8 +51,30 @@ describe("App shell", () => {
     fakeApi({ ...base, "GET /api/me": { body: { ...operator, waitingUsers: 3 } } });
     renderApp("/");
     const nav = await screen.findByRole("navigation", { name: "Main" });
-    expect(within(nav).getByRole("link", { name: /^Users/ })).toHaveTextContent("3 waiting");
+    // The link's accessible name keeps the badge apart from the label.
+    expect(within(nav).getByRole("link", { name: "Users, 3 waiting" })).toHaveTextContent("3 waiting");
     expect(within(nav).getByRole("link", { name: "Teams" })).not.toHaveTextContent("waiting");
+  });
+
+  it("shows the gate the server's 403 asks for, without a reload", async () => {
+    let mes = 0;
+    const fake = fakeApi({
+      "GET /api/me": () => ({ body: mes++ === 0 ? platformAdmin : waiting }),
+      "GET /api/overview?days=7": { status: 403, body: { error: "an admin needs to add you to a team", code: "waiting" } },
+    });
+    renderApp("/");
+    expect(await screen.findByText("You're signed in as new-user on main. An admin needs to add you to a team.")).toBeInTheDocument();
+    expect(fake.find("GET", "/api/me")).toHaveLength(2);
+  });
+
+  it("shows the password change when the server's 403 asks for it", async () => {
+    let mes = 0;
+    fakeApi({
+      "GET /api/me": () => ({ body: mes++ === 0 ? operator : mustChange }),
+      "GET /api/overview?days=7": { status: 403, body: { error: "change your password first", code: "password_change_required" } },
+    });
+    renderApp("/");
+    expect(await screen.findByRole("heading", { name: "Choose a new password" })).toBeInTheDocument();
   });
 
   it("shows no badge when nobody is waiting", async () => {

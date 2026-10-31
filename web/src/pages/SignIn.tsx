@@ -16,6 +16,7 @@ export default function SignIn() {
     queryFn: () => api.get<InstancesView>("/api/instances"),
   });
   const usable = (instances.data?.instances ?? []).filter((i) => platforms.has(i.platform));
+  const nothing = instances.isError || (instances.isSuccess && !instances.data.password && usable.length === 0);
   return (
     <CenteredCard>
       <h1>Sign in to pergent.sh</h1>
@@ -23,6 +24,7 @@ export default function SignIn() {
       {instances.isPending && <Loading />}
       {instances.isError && <ErrorBox error={instances.error} />}
       {instances.isSuccess && instances.data.password && <PasswordForm />}
+      {nothing && <p className="sub">No sign-in is configured.</p>}
       {usable.length > 0 && (
         <>
           {instances.data?.password && <div className="signin-or">or</div>}
@@ -46,11 +48,16 @@ function PasswordForm() {
   const [password, setPassword] = useState("");
   const signIn = useMutation({
     mutationFn: () => api.signIn(username, password),
+    // The closure holds the password: drop it with the form, not after 5
+    // minutes.
+    gcTime: 0,
     onSuccess: () => {
       // Nothing loaded before belongs to this session.
       client.clear();
       navigate("/", { replace: true });
     },
+    // A wrong password is typed again; the username stays.
+    onError: () => setPassword(""),
   });
   const submit = (e: FormEvent) => {
     e.preventDefault();

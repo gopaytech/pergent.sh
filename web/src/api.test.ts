@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, api, isCSRFError, onUnauthorized, paths, safeHref } from "./api";
+import { ApiError, api, isCSRFError, onGateChange, onUnauthorized, paths, safeHref } from "./api";
 import { fakeApi } from "./test/fakeApi";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -66,5 +66,29 @@ describe("api", () => {
     await api.get("/api/overview").catch(() => undefined);
     off();
     expect(seen).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("gate listeners", () => {
+  it("are told of a 403 that says the account is waiting or must change its password", async () => {
+    fakeApi({
+      "GET /api/a": { status: 403, body: { error: "an admin needs to add you to a team", code: "waiting" } },
+      "GET /api/b": { status: 403, body: { error: "change your password first", code: "password_change_required" } },
+      "GET /api/c": { status: 403, body: { error: "forbidden" } },
+      "GET /api/d": { status: 403, body: { error: "stale", code: "csrf" } },
+      "GET /api/e": { status: 401, body: { error: "not signed in", code: "waiting" } },
+    });
+    const seen = vi.fn();
+    const off = onGateChange(seen);
+    await api.get("/api/a").catch(() => undefined);
+    await api.get("/api/b").catch(() => undefined);
+    expect(seen).toHaveBeenCalledTimes(2);
+    await api.get("/api/c").catch(() => undefined);
+    await api.get("/api/d").catch(() => undefined);
+    await api.get("/api/e").catch(() => undefined);
+    expect(seen).toHaveBeenCalledTimes(2);
+    off();
+    await api.get("/api/a").catch(() => undefined);
+    expect(seen).toHaveBeenCalledTimes(2);
   });
 });

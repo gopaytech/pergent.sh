@@ -21,8 +21,20 @@ export default function ChangePassword() {
   const [problem, setProblem] = useState("");
   const change = useMutation({
     mutationFn: () => withCSRF((csrf) => api.changePassword(current, next, csrf)),
-    // /api/me no longer says the password must change: the app opens.
-    onSuccess: () => client.invalidateQueries({ queryKey: ["me"] }),
+    // The closure holds the passwords: drop it with the form, not after 5
+    // minutes.
+    gcTime: 0,
+    // On success /api/me no longer says the password must change, and the
+    // app opens. On failure it is read too: a 500 can follow a change that
+    // was made, and the form would be dead.
+    onSettled: (_data, err) => {
+      if (err) {
+        setCurrent("");
+        setNext("");
+        setAgain("");
+      }
+      return client.invalidateQueries({ queryKey: ["me"] });
+    },
   });
   const submit = (e: FormEvent) => {
     e.preventDefault();
