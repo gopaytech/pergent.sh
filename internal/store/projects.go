@@ -111,10 +111,25 @@ func (s *Store) upsertProject(ctx context.Context, p Project, approveAvailable b
 	return err
 }
 
-// DeleteProject removes a project; deleting one that is not there is not an error.
+// DeleteProject removes a project and the dismissals and commands of its
+// merge requests; deleting one that is not there is not an error.
 func (s *Store) DeleteProject(ctx context.Context, instance string, projectID int64) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM projects WHERE instance = $1 AND project_id = $2`, instance, projectID)
-	return err
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+
+	for _, q := range []string{
+		`DELETE FROM dismissals WHERE instance = $1 AND project_id = $2`,
+		`DELETE FROM commands WHERE instance = $1 AND project_id = $2`,
+		`DELETE FROM projects WHERE instance = $1 AND project_id = $2`,
+	} {
+		if _, err := tx.Exec(ctx, q, instance, projectID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 // SetCloneSeconds records the last measured checkout time of a project.

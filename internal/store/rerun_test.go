@@ -79,6 +79,44 @@ func TestEnqueueRerunDeduplicates(t *testing.T) {
 	}
 }
 
+// A review reported and not yet published is in flight: a re-run neither
+// replaces it nor queues a second one.
+func TestEnqueueRerunDeduplicatesReported(t *testing.T) {
+	s := newStore(t)
+	rep := reported(t, s, mr1, "aaa", `{"status":"completed"}`)
+	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil)
+	if err != nil || created || id != rep {
+		t.Fatalf("EnqueueRerun of a reported head = %s, %v, %v; want %s, false", id, created, err, rep)
+	}
+	if r := getRun(t, s, rep); r.State != Reported || r.CleanedUp {
+		t.Errorf("reported run changed: %s cleaned_up=%v", r.State, r.CleanedUp)
+	}
+	var n int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM runs`).Scan(&n); err != nil || n != 1 {
+		t.Errorf("runs = %d, %v; want 1", n, err)
+	}
+}
+
+// A review that failed to publish is finished: a re-run supersedes it, marked
+// cleaned up, and queues a new run.
+func TestEnqueueRerunSupersedesPublishFailed(t *testing.T) {
+	s := newStore(t)
+	old := published(t, s, mr1, "aaa", "main")
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'publish_failed' WHERE id = $1`, old); err != nil {
+		t.Fatal(err)
+	}
+	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil)
+	if err != nil || !created || id == old {
+		t.Fatalf("EnqueueRerun = %s, %v, %v; want a new run", id, created, err)
+	}
+	if r := getRun(t, s, old); r.State != Superseded || !r.CleanedUp {
+		t.Errorf("old run = %s cleaned_up=%v; want superseded and cleaned up", r.State, r.CleanedUp)
+	}
+	if getRun(t, s, id).State != Queued {
+		t.Errorf("new run = %s, want queued", getRun(t, s, id).State)
+	}
+}
+
 // A re-run of another head or target supersedes the live runs of the
 // merge request like a push does; other merge requests are left alone.
 func TestEnqueueRerunSupersedesOtherLiveRuns(t *testing.T) {

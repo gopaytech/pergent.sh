@@ -219,3 +219,165 @@ func TestFinishCommand(t *testing.T) {
 		t.Errorf("finished command claimed again: %+v", again)
 	}
 }
+
+func TestReleaseCommand(t *testing.T) {
+	s := newStore(t)
+	if _, err := s.InsertCommand(ctx, command("review", "", 1)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ClaimCommands(ctx, 1, t0)
+	if err != nil || len(got) != 1 || got[0].Attempts != 0 {
+		t.Fatalf("ClaimCommands = %+v, %v", got, err)
+	}
+	later := t0.Add(time.Minute)
+	if err := s.ReleaseCommand(ctx, got[0].ID, later); err != nil {
+		t.Fatal(err)
+	}
+	// Not offered before not_before, offered from then on with one more attempt.
+	if again, err := s.ClaimCommands(ctx, 1, t0.Add(30*time.Second)); err != nil || len(again) != 0 {
+		t.Fatalf("claimed before not_before: %+v, %v", again, err)
+	}
+	again, err := s.ClaimCommands(ctx, 1, later)
+	if err != nil || len(again) != 1 || again[0].ID != got[0].ID || again[0].Attempts != 1 {
+		t.Fatalf("claim at not_before = %+v, %v; want the command with attempts 1", again, err)
+	}
+	if err := s.ReleaseCommand(ctx, again[0].ID, later); err != nil {
+		t.Fatal(err)
+	}
+	if third, _ := s.ClaimCommands(ctx, 1, later); len(third) != 1 || third[0].Attempts != 2 {
+		t.Errorf("third claim = %+v, want attempts 2", third)
+	}
+
+	// A finished command is not released.
+	if err := s.FinishCommand(ctx, got[0].ID, CommandDone, later); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReleaseCommand(ctx, got[0].ID, later); err != nil {
+		t.Fatal(err)
+	}
+	if left, _ := s.ClaimCommands(ctx, 1, later.Add(time.Hour)); len(left) != 0 {
+		t.Errorf("finished command offered: %+v", left)
+	}
+}
+
+// A claim not renewed within five minutes is taken to be lost; a fresh one
+// holds the command.
+func TestClaimCommandsReclaimsStaleClaim(t *testing.T) {
+	s := newStore(t)
+	if _, err := s.InsertCommand(ctx, command("review", "", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.ClaimCommands(ctx, 1, t0); len(got) != 1 {
+		t.Fatalf("first claim = %+v", got)
+	}
+	if got, err := s.ClaimCommands(ctx, 1, t0.Add(4*time.Minute)); err != nil || len(got) != 0 {
+		t.Fatalf("a fresh claim was taken: %+v, %v", got, err)
+	}
+	got, err := s.ClaimCommands(ctx, 1, t0.Add(6*time.Minute))
+	if err != nil || len(got) != 1 || got[0].Attempts != 0 {
+		t.Fatalf("stale claim = %+v, %v; want it reclaimed", got, err)
+	}
+	// The new claim is fresh again.
+	if again, _ := s.ClaimCommands(ctx, 1, t0.Add(7*time.Minute)); len(again) != 0 {
+		t.Errorf("reclaimed command offered at once: %+v", again)
+	}
+}
+
+func TestClaimCommandsSkipsInstances(t *testing.T) {
+	s := newStore(t)
+	other := command("review", "", 2)
+	other.MR = MRKey{Instance: "https://other.example.com", ProjectID: 7, IID: 3}
+	for _, c := range []Command{command("review", "", 1), other} {
+		if _, err := s.InsertCommand(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.ClaimCommands(ctx, 10, t0, mr1.Instance)
+	if err != nil || len(got) != 1 || got[0].MR.Instance != "https://other.example.com" {
+		t.Fatalf("claim skipping %s = %+v, %v", mr1.Instance, got, err)
+	}
+	// The skipped one stayed unclaimed.
+	got, err = s.ClaimCommands(ctx, 10, t0)
+	if err != nil || len(got) != 1 || got[0].MR.Instance != mr1.Instance {
+		t.Fatalf("claim of the rest = %+v, %v", got, err)
+	}
+}
+
+func TestPruneCommands(t *testing.T) {
+	s := newStore(t)
+	for i := int64(1); i <= 3; i++ {
+		if _, err := s.InsertCommand(ctx, command("review", "", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, _ := s.ClaimCommands(ctx, 3, t0)
+	// 1 finished long ago, 2 finished recently, 3 never finished.
+	if err := s.FinishCommand(ctx, got[0].ID, CommandDone, t0.Add(-100*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishCommand(ctx, got[1].ID, CommandDone, t0); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.PruneCommands(ctx, t0.Add(-90*24*time.Hour))
+	if err != nil || n != 1 {
+		t.Fatalf("PruneCommands = %d, %v; want 1", n, err)
+	}
+	var left int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM commands`).Scan(&left); err != nil || left != 2 {
+		t.Errorf("commands left = %d, %v; want 2", left, err)
+	}
+	// The pruned comment is stored again if redelivered, which is fine.
+}
+
+// Deleting a project or an instance's data takes its dismissals and
+// commands with it, and only those.
+func TestDeletesRemoveDismissalsAndCommands(t *testing.T) {
+	s := newStore(t)
+	otherProject := MRKey{Instance: mr1.Instance, ProjectID: 8, IID: 3}
+	otherInstance := MRKey{Instance: "lab", ProjectID: 7, IID: 3}
+	if err := s.CreateInstance(ctx, InstanceRow{Name: mr1.Instance, Platform: "gitlab"}, map[string][]byte{"review_token": []byte("x")}, t0); err != nil {
+		t.Fatal(err)
+	}
+	seed := func() {
+		t.Helper()
+		for i, mr := range []MRKey{mr1, otherProject, otherInstance} {
+			if _, err := s.Dismiss(ctx, Dismissal{MR: mr, Fingerprint: "fp", Severity: "blocking", Reason: "r"}); err != nil {
+				t.Fatal(err)
+			}
+			c := command("review", "", int64(i+1))
+			c.MR = mr
+			if _, err := s.InsertCommand(ctx, c); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	count := func(table string) int {
+		t.Helper()
+		var n int
+		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM `+table).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	seed()
+	if err := s.DeleteProject(ctx, mr1.Instance, mr1.ProjectID); err != nil {
+		t.Fatal(err)
+	}
+	if count("dismissals") != 2 || count("commands") != 2 {
+		t.Errorf("after DeleteProject: %d dismissals, %d commands; want 2, 2", count("dismissals"), count("commands"))
+	}
+	if got, _ := s.Dismissals(ctx, mr1); len(got) != 0 {
+		t.Errorf("the project's dismissals remain: %+v", got)
+	}
+
+	if err := s.DeleteInstanceData(ctx, mr1.Instance); err != nil {
+		t.Fatal(err)
+	}
+	if count("dismissals") != 1 || count("commands") != 1 {
+		t.Errorf("after DeleteInstanceData: %d dismissals, %d commands; want 1, 1", count("dismissals"), count("commands"))
+	}
+	if got, _ := s.Dismissals(ctx, otherInstance); len(got) != 1 {
+		t.Errorf("another instance's dismissal was removed: %+v", got)
+	}
+}

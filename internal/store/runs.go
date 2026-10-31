@@ -301,8 +301,15 @@ func (s *Store) EnqueueRun(ctx context.Context, mr MRKey, projectPath, headSHA, 
 // limits the run to those skills (nil or empty: all of them) and baseRunID is
 // the run whose results the new one keeps.
 //
-// A run of this head and target that is queued or running is not replaced or
-// duplicated: created is false and id is that run's, nothing is changed.
+// A run of this head and target that is queued, running or reported (its
+// review not yet published) is not replaced or duplicated: created is false
+// and id is that run's, nothing is changed. Superseding a reported run would
+// leave its commit status for the cleanup to cancel while the new run
+// is running.
+//
+// The caller checks the re-run caps (CountReruns) before calling; with
+// more than one caller at a time, for example two button presses, a cap may
+// be overshot by a few.
 func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA, targetBranch, trigger string, skills []string, baseRunID *string) (id string, created bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -315,7 +322,7 @@ func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA
 	}
 	err = tx.QueryRow(ctx, `SELECT id::text FROM runs
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
-		  AND state IN ('queued', 'running')`,
+		  AND state IN ('queued', 'running', 'reported')`,
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch).Scan(&id)
 	if err == nil {
 		if err := tx.Commit(ctx); err != nil {
@@ -333,8 +340,8 @@ func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch); err != nil {
 		return "", false, err
 	}
-	// What is left of this head and target is reported, published or
-	// publish_failed: the queued and running ones returned above.
+	// What is left of this head and target is published or publish_failed:
+	// the queued, running and reported ones returned above.
 	if _, err := tx.Exec(ctx, `UPDATE runs SET state = 'superseded',
 			cleaned_up = cleaned_up OR state IN ('published', 'publish_failed')
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
@@ -362,7 +369,10 @@ func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA
 // CountReruns returns how many runs asked for (TriggerRerun and
 // TriggerRerunFailed) were created at or after since: those of the merge
 // request mr, or, with mr nil, of every merge request of the project
-// projectID on instance. A run since superseded still counts.
+// projectID on instance. A run since superseded still counts. The count and
+// the EnqueueRerun after it are not one step, so a cap checked with them is
+// exact for one caller at a time (one engine replica's command step) and
+// may be overshot by a few by concurrent button presses.
 func (s *Store) CountReruns(ctx context.Context, mr *MRKey, instance string, projectID int64, since time.Time) (int, error) {
 	var iid *int64
 	if mr != nil {

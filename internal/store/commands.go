@@ -20,6 +20,9 @@ type Command struct {
 	Author                           string
 	AuthorID                         int64
 	CreatedAt                        time.Time
+	// Attempts is how many times the command was given back to be tried
+	// again (ReleaseCommand).
+	Attempts int
 }
 
 // What a finished command came to (FinishCommand's outcome). Only a command
@@ -27,8 +30,13 @@ type Command struct {
 // a refused or dropped one was with any other text.
 const CommandDone = "done"
 
+// commandLease is how long a claim holds a command: one claimed longer ago
+// and not finished is taken to be lost (the engine stopped) and is offered
+// again.
+const commandLease = 5 * time.Minute
+
 const commandColumns = `id, instance, project_id, mr_iid, project_path, platform, kind, arg, reason,
-	comment_id, author, author_id, created_at`
+	comment_id, author, author_id, created_at, attempts`
 
 // InsertCommand stores c, which a webhook found in a comment, unless that
 // comment is stored already (a redelivery): stored tells which. A zero
@@ -50,17 +58,26 @@ func (s *Store) InsertCommand(ctx context.Context, c Command) (stored bool, err 
 	return tag.RowsAffected() == 1, nil
 }
 
-// ClaimCommands marks up to limit unclaimed commands claimed at now and
-// returns them, oldest first. Concurrent callers never claim the same
-// command, and a claimed command is not offered again: the claimer finishes
-// it with FinishCommand.
-func (s *Store) ClaimCommands(ctx context.Context, limit int, now time.Time) ([]Command, error) {
+// ClaimCommands marks up to limit commands claimed at now and returns them,
+// oldest first. It offers the commands not finished that are due (no
+// not_before, or one not after now) and unclaimed, or whose claim is older
+// than commandLease; the commands of the instances in skip are left alone.
+// Concurrent callers never claim the same command. The claimer finishes it
+// with FinishCommand, or gives it back with ReleaseCommand.
+func (s *Store) ClaimCommands(ctx context.Context, limit int, now time.Time, skip ...string) ([]Command, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
+	if skip == nil {
+		skip = []string{} // an empty array, not NULL: `<> ALL(NULL)` is never true
+	}
 	rows, err := s.pool.Query(ctx, `UPDATE commands SET claimed_at = $2 WHERE id IN (
-			SELECT id FROM commands WHERE claimed_at IS NULL ORDER BY id LIMIT $1 FOR UPDATE SKIP LOCKED)
-		RETURNING `+commandColumns, limit, now)
+			SELECT id FROM commands WHERE finished_at IS NULL
+			  AND (not_before IS NULL OR not_before <= $2)
+			  AND (claimed_at IS NULL OR claimed_at < $4)
+			  AND instance <> ALL($3::text[])
+			ORDER BY id LIMIT $1 FOR UPDATE SKIP LOCKED)
+		RETURNING `+commandColumns, limit, now, skip, now.Add(-commandLease))
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +86,7 @@ func (s *Store) ClaimCommands(ctx context.Context, limit int, now time.Time) ([]
 	for rows.Next() {
 		var c Command
 		if err := rows.Scan(&c.ID, &c.MR.Instance, &c.MR.ProjectID, &c.MR.IID, &c.ProjectPath, &c.Platform, &c.Kind,
-			&c.Arg, &c.Reason, &c.CommentID, &c.Author, &c.AuthorID, &c.CreatedAt); err != nil {
+			&c.Arg, &c.Reason, &c.CommentID, &c.Author, &c.AuthorID, &c.CreatedAt, &c.Attempts); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -89,10 +106,31 @@ func (s *Store) FinishCommand(ctx context.Context, id int64, outcome string, now
 	return err
 }
 
+// ReleaseCommand gives a claimed command back, for the engine to try again:
+// the claim is cleared, attempts goes up by one and the command is not
+// offered before notBefore. A command already finished is left as it is.
+func (s *Store) ReleaseCommand(ctx context.Context, id int64, notBefore time.Time) error {
+	_, err := s.pool.Exec(ctx, `UPDATE commands SET claimed_at = NULL, attempts = attempts + 1, not_before = $2
+		WHERE id = $1 AND finished_at IS NULL`, id, notBefore)
+	return err
+}
+
+// PruneCommands deletes the commands finished before the given time and
+// returns how many it deleted.
+func (s *Store) PruneCommands(ctx context.Context, before time.Time) (int, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM commands WHERE finished_at < $1`, before)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 // RecentCommand reports whether a command of the given kind and argument
 // came to CommandDone for mr, having been written at or after since. A
 // command still being answered has no outcome yet, so the one being checked
-// never finds itself: the caller passes its CreatedAt less the window.
+// never finds itself: the caller passes its CreatedAt less the window. The
+// rule assumes one processor answers commands, one after another (one engine
+// replica): two answered at once could both find nothing.
 func (s *Store) RecentCommand(ctx context.Context, mr MRKey, kind, arg string, since time.Time) (bool, error) {
 	var found bool
 	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM commands

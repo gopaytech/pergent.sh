@@ -28,8 +28,9 @@ CREATE TABLE dismissals (
     PRIMARY KEY (instance, project_id, mr_iid, fingerprint)
 );
 
--- Commands found in comments, kept until the engine has answered them. A
--- redelivered webhook finds its comment already stored.
+-- Commands found in comments, kept until the engine has answered them (and
+-- pruned some time after). A redelivered webhook finds its comment already
+-- stored.
 CREATE TABLE commands (
     id           bigserial   PRIMARY KEY,
     instance     text        NOT NULL,
@@ -47,9 +48,13 @@ CREATE TABLE commands (
     claimed_at   timestamptz,
     finished_at  timestamptz,
     outcome      text        NOT NULL DEFAULT '',
+    -- attempts counts the times the engine gave a command back to try
+    -- again later; not_before is the earliest it may be claimed again.
+    attempts     integer     NOT NULL DEFAULT 0,
+    not_before   timestamptz,
     UNIQUE (instance, project_id, mr_iid, comment_id)
 );
-CREATE INDEX commands_unclaimed_idx ON commands (id) WHERE claimed_at IS NULL;
+CREATE INDEX commands_open_idx ON commands (id) WHERE finished_at IS NULL;
 CREATE INDEX commands_recent_idx ON commands (instance, project_id, mr_iid, kind, created_at);
 
 -- Re-run caps per day; NULL is the built-in default.

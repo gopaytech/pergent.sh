@@ -60,7 +60,11 @@ const (
 	// auditRetention are deleted.
 	auditPruneEvery = time.Hour
 	auditRetention  = 90 * 24 * time.Hour
-	usage           = "usage: pergent-sh serve [--config <path>]\n       pergent-sh admin reset-password <username>"
+	// commandPruneEvery is how often the finished comment commands older
+	// than commandRetention are deleted.
+	commandPruneEvery = time.Hour
+	commandRetention  = 90 * 24 * time.Hour
+	usage             = "usage: pergent-sh serve [--config <path>]\n       pergent-sh admin reset-password <username>"
 )
 
 func main() {
@@ -244,6 +248,8 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	// (the reset-password command records there too).
 	pruneOld := pruneAudit(st.PruneAudit, time.Now, log)
 	loops = append(loops, func(ctx context.Context) { every(ctx, auditPruneEvery, pruneOld) })
+	pruneCmds := pruneCommands(st.PruneCommands, time.Now, log)
+	loops = append(loops, func(ctx context.Context) { every(ctx, commandPruneEvery, pruneCmds) })
 	if dash != nil {
 		prune := pruneSessions(dash.Auth.PruneSessions, time.Now, log)
 		loops = append(loops, func(ctx context.Context) { every(ctx, sessionPruneEvery, prune) })
@@ -309,6 +315,21 @@ func pruneSessions(prune func(context.Context, time.Time) (int, error), now func
 			log.Warn("couldn't prune dashboard sessions", "error", err.Error())
 		case n > 0:
 			log.Info("pruned dashboard sessions", "sessions", n)
+		}
+	}
+}
+
+// pruneCommands returns a pass that deletes the finished comment commands
+// older than commandRetention (prune is store.Store.PruneCommands). It only
+// touches the database; a failure is logged and tried again next time.
+func pruneCommands(prune func(context.Context, time.Time) (int, error), now func() time.Time, log *slog.Logger) func(context.Context) {
+	return func(ctx context.Context) {
+		n, err := prune(ctx, now().Add(-commandRetention))
+		switch {
+		case err != nil && ctx.Err() == nil:
+			log.Warn("couldn't prune the comment commands", "error", err.Error())
+		case n > 0:
+			log.Info("pruned the comment commands", "commands", n)
 		}
 	}
 }
