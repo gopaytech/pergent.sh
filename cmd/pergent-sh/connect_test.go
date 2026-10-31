@@ -28,8 +28,10 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
 	"github.com/gopaytech/pergent.sh/internal/server"
+	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 	"github.com/gopaytech/pergent.sh/internal/syncmap"
+	"github.com/gopaytech/pergent.sh/internal/webhook"
 )
 
 // newConnector is a connector over cfg (and st, which may be nil), with
@@ -602,6 +604,114 @@ func TestStartupDashboardInstanceFailureNotFatal(t *testing.T) {
 	if strings.Contains(out+items[0].Message, "glpat-bad-secret-example") {
 		t.Error("the secret reached the log or the item")
 	}
+}
+
+// An operator who fixes an instance in the dashboard clears its
+// instance_unreachable item: a successful Connect does, not only startup.
+func TestConnectClearsUnreachableItem(t *testing.T) {
+	_, st := testDatabaseURL(t)
+	ctx := context.Background()
+	srv := fakeGitLabUsers(t, map[string]int64{"glpat-review-example": 11, "glpat-approve-example": 12})
+	addInstance(t, st, "bad", srv.URL, map[string]string{
+		instances.FieldReviewToken: "glpat-bad-secret-example", instances.FieldApproveToken: "glpat-approve-example",
+		instances.FieldWebhookSecret: "hook-secret-example"})
+	c := newConnector(t, &config.Config{}, nil, st)
+	if err := c.connectAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if items, _ := st.Attention(ctx); len(items) != 1 {
+		t.Fatalf("attention = %+v; want the bad instance's item", items)
+	}
+
+	// The same instance, fixed in the dashboard: its token is replaced and
+	// the dashboard connects it.
+	box, err := secretbox.New(testSecretKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found, err := st.UpdateInstance(ctx, "bad", nil,
+		map[string][]byte{instances.FieldReviewToken: box.Seal([]byte("glpat-review-example"))}, time.Now()); err != nil || !found {
+		t.Fatalf("UpdateInstance = %v, %v", found, err)
+	}
+	if err := c.connectConfigured(ctx, "bad"); err != nil {
+		t.Fatal(err)
+	}
+	if items, err := st.Attention(ctx); err != nil || len(items) != 0 {
+		t.Errorf("attention after the fix = %+v, %v; want none", items, err)
+	}
+}
+
+// A registered dashboard instance that couldn't be connected still accepts
+// its webhooks, so the events are queued; its runs wait there (the
+// dispatcher doesn't claim runs of an instance it isn't connected to), until
+// the instance is fixed. Disconnect drops the secret again.
+func TestUnconnectedDashboardInstanceAcceptsWebhooks(t *testing.T) {
+	_, st := testDatabaseURL(t)
+	ctx := context.Background()
+	srv := fakeGitLabUsers(t, map[string]int64{"glpat-review-example": 11, "glpat-approve-example": 12})
+	addInstance(t, st, "bad", srv.URL, map[string]string{
+		instances.FieldReviewToken: "glpat-bad-secret-example", instances.FieldApproveToken: "glpat-approve-example",
+		instances.FieldWebhookSecret: "hook-secret-example"})
+	if err := st.UpsertDashboardRepo(ctx, store.DashboardRepo{Instance: "bad", Project: "acme/gadgets",
+		CreatedAt: time.Now(), UpdatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{}
+	c := newConnector(t, cfg, nil, st)
+	if err := c.connectAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.platforms.Get("bad"); ok {
+		t.Fatal("the bad instance is connected")
+	}
+
+	q := &recordingQueue{Store: st}
+	h := &webhook.Handler{Config: cfg, Instances: c.reg, Secrets: c.gitlabHooks, Queue: q,
+		Repos: &settings.Resolver{Config: cfg, Store: st, Instances: c.reg}}
+	post := func(secret string) int {
+		body := `{"object_kind":"merge_request","project":{"id":4,"path_with_namespace":"acme/gadgets"},` +
+			`"object_attributes":{"iid":3,"action":"open","target_branch":"main","last_commit":{"id":"` + strings.Repeat("a", 40) + `"}}}`
+		req := httptest.NewRequest("POST", "/webhooks/gitlab/bad", strings.NewReader(body))
+		req.SetPathValue("instance", "bad")
+		req.Header.Set("X-Gitlab-Token", secret)
+		req.Header.Set("X-Gitlab-Event", "Merge Request Hook")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := post("wrong"); code != http.StatusUnauthorized {
+		t.Errorf("a wrong secret = %d; want 401", code)
+	}
+	if code := post("hook-secret-example"); code != http.StatusOK {
+		t.Fatalf("the right secret = %d; want 200", code)
+	}
+	if len(q.ids) != 1 {
+		t.Fatalf("%d runs queued; want 1", len(q.ids))
+	}
+	run, found, err := st.Run(ctx, q.ids[0])
+	if err != nil || !found || run.State != store.Queued {
+		t.Errorf("run = %+v, %v, %v; want it queued", run, found, err)
+	}
+
+	c.Disconnect("bad")
+	if code := post("hook-secret-example"); code != http.StatusUnauthorized {
+		t.Errorf("after Disconnect = %d; want 401", code)
+	}
+}
+
+// recordingQueue is the store as the webhooks' queue, noting the runs it
+// queues.
+type recordingQueue struct {
+	*store.Store
+	ids []string
+}
+
+func (q *recordingQueue) EnqueueRun(ctx context.Context, mr store.MRKey, projectPath, headSHA, targetBranch string) (string, bool, error) {
+	id, created, err := q.Store.EnqueueRun(ctx, mr, projectPath, headSHA, targetBranch)
+	if err == nil && created {
+		q.ids = append(q.ids, id)
+	}
+	return id, created, err
 }
 
 // An instance of the config that can't be connected stops startup; so does a

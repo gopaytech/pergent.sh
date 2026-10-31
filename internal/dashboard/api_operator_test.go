@@ -39,12 +39,15 @@ const (
 // asks of it and, on Connect, does what the real one does for the maps the
 // dashboard and the webhooks read.
 type fakeConnector struct {
-	mu          sync.Mutex
-	auth        *Auth
-	sources     *syncmap.Map[RepoSource]
-	catalogs    *syncmap.Map[RepoCatalog]
-	hooks       *syncmap.Map[string] // the webhook secret of each instance connected
-	checkErr    func(inst instances.Instance, s instances.Secrets) error
+	mu       sync.Mutex
+	auth     *Auth
+	sources  *syncmap.Map[RepoSource]
+	catalogs *syncmap.Map[RepoCatalog]
+	hooks    *syncmap.Map[string] // the webhook secret of each instance connected
+	checkErr func(inst instances.Instance, s instances.Secrets) error
+	// connectErr fails Connect alone: a platform that went away after
+	// its check passed.
+	connectErr  func(inst instances.Instance, s instances.Secrets) error
 	checks      []connectCall
 	connects    []connectCall
 	disconnects []string
@@ -74,6 +77,11 @@ func (c *fakeConnector) Connect(_ context.Context, inst instances.Instance, s in
 	defer c.mu.Unlock()
 	if c.checkErr != nil {
 		if err := c.checkErr(inst, s); err != nil {
+			return err
+		}
+	}
+	if c.connectErr != nil {
+		if err := c.connectErr(inst, s); err != nil {
 			return err
 		}
 	}
@@ -1181,5 +1189,41 @@ func TestDefaultsRefusedToNonAdmins(t *testing.T) {
 	}
 	if d, err := e.st.RepoDefaults(ctx); err != nil || d.Approve != nil {
 		t.Errorf("defaults = %+v, %v; want untouched", d, err)
+	}
+}
+
+// An instance whose Connect fails after its check passed is still stored,
+// and the failure is recorded as the instance-wide instance_unreachable item,
+// without the secrets; saving it again records it again (the connector
+// clears it when it connects).
+func TestConnectFailureAfterCheckRecordsAttention(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.operator()
+	e.conn.connectErr = func(_ instances.Instance, s instances.Secrets) error {
+		return errors.New("connecting with " + s.ReviewToken + " failed")
+	}
+	wantCode(t, e.sendJSON(c, "POST", "/api/admin/instances", labBody(nil)), "POST lab", http.StatusCreated)
+
+	items, err := e.st.Attention(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Instance != "lab" || items[0].Project != "" || items[0].Kind != AttInstanceUnreachable ||
+		!strings.Contains(items[0].Message, "connecting with [REDACTED] failed") {
+		t.Fatalf("attention = %+v; want one instance_unreachable item for lab, redacted", items)
+	}
+	if strings.Contains(items[0].Message, labReviewToken) {
+		t.Error("the item holds the review token")
+	}
+
+	e.conn.connectErr = nil
+	if err := e.st.ClearAttention(ctx, "lab", "", AttInstanceUnreachable); err != nil {
+		t.Fatal(err)
+	}
+	e.conn.connectErr = func(instances.Instance, instances.Secrets) error { return errors.New("down again") }
+	wantCode(t, e.sendJSON(c, "PUT", "/api/admin/instances/lab", map[string]any{"secrets": map[string]string{"review_token": "new-review-token-SECRET"}}),
+		"PUT lab", http.StatusOK)
+	if items, _ := e.st.Attention(ctx); len(items) != 1 || items[0].Message != "down again" {
+		t.Errorf("attention after the update = %+v; want the new failure", items)
 	}
 }

@@ -373,16 +373,29 @@ func (d *Dashboard) seal(secrets map[string]string) map[string][]byte {
 	return out
 }
 
+// AttInstanceUnreachable is the kind of the instance-wide "Needs attention"
+// item recorded for an instance of the dashboard pergent.sh couldn't connect
+// to. The connector clears it when it connects.
+const AttInstanceUnreachable = "instance_unreachable"
+
 // connect puts inst in use after it was stored. The credentials were just
 // checked, so a failure now is a platform that went away meanwhile: it is
-// logged, the instance stays stored and saving it again connects it.
+// logged and recorded as an "Needs attention" item (without the secrets),
+// the instance stays stored and saving it again connects it.
 func (d *Dashboard) connect(ctx context.Context, inst instances.Instance, s instances.Secrets) {
 	if d.connector == nil {
 		return
 	}
-	if err := d.connector.Connect(ctx, inst, s); err != nil {
-		d.Log.Error("dashboard: couldn't connect an instance that passed its check; saving it again tries again",
-			"instance", inst.Name, "error", redactSecrets(err.Error(), s))
+	err := d.connector.Connect(ctx, inst, s)
+	if err == nil {
+		return
+	}
+	msg := redactSecrets(err.Error(), s)
+	d.Log.Error("dashboard: couldn't connect an instance that passed its check; saving it again tries again",
+		"instance", inst.Name, "error", msg)
+	if err := d.Store.SetAttention(context.WithoutCancel(ctx), inst.Name, "", AttInstanceUnreachable, msg); err != nil {
+		d.Log.Warn("dashboard: couldn't record that an instance is unreachable", "instance", inst.Name,
+			"error", redactSecrets(err.Error(), s))
 	}
 }
 
