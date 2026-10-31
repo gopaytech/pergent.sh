@@ -364,6 +364,32 @@ func TestMergeBaseUnreadable(t *testing.T) {
 	}
 }
 
+// A subset run that lost its base run (none recorded) is a partial review
+// like one whose base is unreadable: noted, never published as the whole
+// review, never approved.
+func TestMergeSubsetWithoutBaseRunIsNotAWholeReview(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main",
+		store.TriggerRerunFailed, []string{"style"}, nil)
+	if err != nil || !created {
+		t.Fatalf("EnqueueRerun = %v, %v", created, err)
+	}
+
+	reportRerun(t, env, id, head, resultFor(t, head, namedSkill(t, "style", "no_blocking_issues", "", "")))
+
+	if body := createdComment(t, env, 1); !strings.Contains(body, result.NoteBaseUnreadable) {
+		t.Errorf("comment lacks the note:\n%s", body)
+	}
+	wantNoApproval(t, env, 1)
+	if r := env.Run(id); r.Approved {
+		t.Error("a partial review was approved")
+	}
+	if r, err := result.Parse(env.Run(id).Result); err != nil || r.Merged || r.MergeNote != result.NoteBaseUnreadable {
+		t.Errorf("stored result = %+v, %v; want the re-run alone, with the note", r, err)
+	}
+}
+
 // A run that is not a re-run (no base run) is not touched.
 func TestMergeLeavesOtherRunsAlone(t *testing.T) {
 	env := newTestEnv(t)

@@ -160,13 +160,14 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 // next run's previous result show the whole review. It is done once; a run
 // whose result is already merged is returned as it is. A base result that
 // can't be read or is for another commit (dispatch checks this too, and then
-// reviews everything) leaves the re-run as a review of its own skills only,
-// with a note in the comment, and the policy never approves it.
+// reviews everything), or is missing altogether (a subset run with no base
+// run), leaves the re-run as a review of its own skills only, with a note in
+// the comment, and the policy never approves it.
 //
 // The returned run carries the stored result. An error is a failure of the
 // store: the publish is retried.
 func (e *Engine) mergeBase(ctx context.Context, run store.Run, log *slog.Logger) (store.Run, error) {
-	if run.BaseRunID == nil || len(run.SkillSubset) == 0 || run.FailureReason != "" || run.Result == nil {
+	if len(run.SkillSubset) == 0 || run.FailureReason != "" || run.Result == nil {
 		return run, nil
 	}
 	r, err := result.Parse(run.Result)
@@ -175,18 +176,24 @@ func (e *Engine) mergeBase(ctx context.Context, run store.Run, log *slog.Logger)
 		// merged already or has nothing to merge.
 		return run, nil
 	}
-	base, found, err := e.Store.Run(ctx, *run.BaseRunID)
-	if err != nil {
-		return run, fmt.Errorf("load the run to merge with: %w", err)
-	}
 	var merged []byte
-	if found && base.Result != nil {
-		merged, err = result.Merge(run.Result, base.Result, run.SkillSubset)
+	baseID := ""
+	if run.BaseRunID == nil {
+		err = errors.New("the run has no earlier run to merge with")
 	} else {
-		err = errors.New("the earlier run or its result is gone")
+		baseID = *run.BaseRunID
+		base, found, lerr := e.Store.Run(ctx, baseID)
+		if lerr != nil {
+			return run, fmt.Errorf("load the run to merge with: %w", lerr)
+		}
+		if found && base.Result != nil {
+			merged, err = result.Merge(run.Result, base.Result, run.SkillSubset)
+		} else {
+			err = errors.New("the earlier run or its result is gone")
+		}
 	}
 	if err != nil {
-		log.Warn("not merging with the earlier results of the other skills", "base_run", *run.BaseRunID, "error", e.redact(err.Error()))
+		log.Warn("not merging with the earlier results of the other skills", "base_run", baseID, "error", e.redact(err.Error()))
 		if merged, err = result.NoteUnmerged(run.Result, result.NoteBaseUnreadable); err != nil {
 			// Never publish the subset without its note: retry the publish.
 			return run, fmt.Errorf("note the unmerged result: %w", err)
