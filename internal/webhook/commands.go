@@ -33,26 +33,62 @@ type CommandStore interface {
 // that isn't connected, whose comments are ignored.
 type Bots func(instance string) (mention string, ignore []string, ok bool)
 
-// ParseCommand finds the command in a comment: the first line that has
-// @mention (any case, as a whole word) decides, and what follows the mention
-// is the command: "review", "review failed", "dismiss <id> [reason]" (id: 6
-// to 12 hex digits) or "help". Anything else after the mention is kind
-// "unknown", so the person is told what the bot understands. A line that
-// quotes another comment (starts with ">") is skipped, so replying with a
-// quote doesn't run the quoted command again. ok is false when no line
-// mentions the bot; an empty mention matches nothing.
+// reviewMarker starts the hidden marker of every review comment pergent and
+// pergent.sh post (<!-- pergent -->, <!-- pergent:findings ... -->).
+const reviewMarker = "<!-- pergent"
+
+// ParseCommand finds the command in a comment. The first line that starts
+// with @mention (any case, as a whole word, after at most 3 spaces) decides,
+// and what follows the mention is the command: "review", "review failed",
+// "dismiss <id> [reason]" (id: 6 to 12 hex digits; the reason follows the id
+// on the same line) or "help". Anything else after the mention is kind
+// "unknown", so the person is told what the bot understands. A line that is
+// only the mention is passed over, so "@bot" then "@bot review" on the next
+// line is a review.
+//
+// Text that is not the author's own is never read: lines in a fenced code
+// block (``` or ~~~), in an HTML comment, indented 4 spaces or a tab (code),
+// or quoted (">"). A mention elsewhere in a sentence is no command. ok is
+// false when no line commands the bot; an empty mention matches nothing.
 func ParseCommand(body, mention string) (kind, arg, reason string, ok bool) {
 	mention = strings.TrimSpace(mention)
 	if mention == "" {
 		return "", "", "", false
 	}
+	var (
+		fence     string // the opening fence's character repeated, "" outside a fence
+		inComment bool
+	)
 	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if fence != "" {
+			if closesFence(line, fence) {
+				fence = ""
+			}
+			continue
+		}
+		if inComment {
+			end := strings.Index(line, "-->")
+			if end < 0 {
+				continue
+			}
+			inComment = false
+			line = line[end+len("-->"):]
+		}
+		if indented(line) {
+			continue
+		}
+		if f := opensFence(line); f != "" {
+			fence = f
+			continue
+		}
+		line, inComment = withoutComments(line)
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, ">") {
+		if line == "" || strings.HasPrefix(line, ">") {
 			continue
 		}
 		rest, found := afterMention(line, mention)
-		if !found {
+		if !found || strings.Trim(rest, " \t.,:;!?") == "" {
 			continue
 		}
 		kind, arg, reason = parseWords(rest)
@@ -61,35 +97,89 @@ func ParseCommand(body, mention string) (kind, arg, reason string, ok bool) {
 	return "", "", "", false
 }
 
-// afterMention returns the text after the first @mention in line that is a
-// whole word: not part of a longer name or an address (me@host), and not
-// followed by more of a name (@name-2, @name.bot).
-func afterMention(line, mention string) (rest string, found bool) {
-	for i := 0; i < len(line); i++ {
-		if line[i] != '@' {
-			continue
-		}
-		if prev, _ := utf8.DecodeLastRuneInString(line[:i]); i > 0 && isNameRune(prev) {
-			continue
-		}
-		end := i + 1 + len(mention)
-		if end > len(line) || !strings.EqualFold(line[i+1:end], mention) {
-			continue
-		}
-		next, size := utf8.DecodeRuneInString(line[end:])
-		if end < len(line) {
-			if isNameRune(next) || next == '-' {
-				continue
+// indented reports whether line starts with 4 or more spaces, or a tab: code.
+func indented(line string) bool {
+	n := 0
+	for _, c := range line {
+		switch c {
+		case ' ':
+			n++
+			if n >= 4 {
+				return true
 			}
-			if next == '.' {
-				if after, _ := utf8.DecodeRuneInString(line[end+size:]); isNameRune(after) || after == '-' {
-					continue
-				}
-			}
+		case '\t':
+			return true
+		default:
+			return false
 		}
-		return line[end:], true
 	}
-	return "", false
+	return false
+}
+
+// opensFence returns the fence (at least 3 backticks or tildes) that line
+// opens, "" when it opens none.
+func opensFence(line string) string {
+	t := strings.TrimLeft(line, " ")
+	for _, c := range []byte{'`', '~'} {
+		n := len(t) - len(strings.TrimLeft(t, string(c)))
+		if n < 3 {
+			continue
+		}
+		// A backtick fence's info string has no backtick: "```code``` text"
+		// is inline code, not a fence.
+		if c == '`' && strings.Contains(t[n:], "`") {
+			continue
+		}
+		return strings.Repeat(string(c), n)
+	}
+	return ""
+}
+
+// closesFence reports whether line closes fence: only the same character, at
+// least as many times, and spaces.
+func closesFence(line, fence string) bool {
+	if indented(line) {
+		return false
+	}
+	t := strings.TrimSpace(line)
+	return len(t) >= len(fence) && strings.Trim(t, fence[:1]) == ""
+}
+
+// withoutComments removes the HTML comments from line. open is set when a
+// comment starts in line and goes on in the next lines.
+func withoutComments(line string) (rest string, open bool) {
+	for {
+		start := strings.Index(line, "<!--")
+		if start < 0 {
+			return line, false
+		}
+		end := strings.Index(line[start+len("<!--"):], "-->")
+		if end < 0 {
+			return line[:start], true
+		}
+		line = line[:start] + line[start+len("<!--")+end+len("-->"):]
+	}
+}
+
+// afterMention returns the text after @mention at the start of line, when it
+// is a whole word: not followed by more of a name (@name-2, @name.bot).
+func afterMention(line, mention string) (rest string, found bool) {
+	end := 1 + len(mention)
+	if line == "" || line[0] != '@' || end > len(line) || !strings.EqualFold(line[1:end], mention) {
+		return "", false
+	}
+	if end < len(line) {
+		next, size := utf8.DecodeRuneInString(line[end:])
+		if isNameRune(next) || next == '-' {
+			return "", false
+		}
+		if next == '.' {
+			if after, _ := utf8.DecodeRuneInString(line[end+size:]); isNameRune(after) || after == '-' {
+				return "", false
+			}
+		}
+	}
+	return line[end:], true
 }
 
 func isNameRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' }
@@ -172,6 +262,12 @@ type commands struct {
 func (d commands) receive(ctx context.Context, c comment) (outcome, reason string, err error) {
 	if d.Bots == nil || d.Store == nil {
 		return outcomeIgnore, "commands_off", nil
+	}
+	// Review comments carry the hidden marker and their text lists commands
+	// as examples; whoever posted one (pergent CI posts as a person on
+	// GitLab), it is not a command.
+	if strings.Contains(c.Body, reviewMarker) {
+		return outcomeIgnore, "review_comment", nil
 	}
 	mention, ignore, ok := d.Bots(c.Instance)
 	if !ok || mention == "" {

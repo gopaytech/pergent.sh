@@ -67,6 +67,9 @@ type issueCommentEvent struct {
 			Login string `json:"login"`
 			Type  string `json:"type"`
 		} `json:"user"`
+		// PerformedViaGithubApp is set when an App wrote the comment on a
+		// person's behalf.
+		PerformedViaGithubApp *json.RawMessage `json:"performed_via_github_app"`
 	} `json:"comment"`
 	Repository struct {
 		ID       int64  `json:"id"`
@@ -295,7 +298,7 @@ func (h *GitHubHandler) comment(w http.ResponseWriter, r *http.Request, log *slo
 			Repos: repositories(h.Repos, h.Config, h.registry()), Wake: h.Wake}.receive(r.Context(), comment{
 			Platform: config.PlatformGitHub, Instance: instance, Project: ev.Repository.FullName,
 			ProjectID: ev.Repository.ID, IID: ev.Issue.Number, CommentID: c.ID,
-			Author: c.User.Login, AuthorID: c.User.ID, AuthorIsBot: c.User.Type == "Bot", Body: c.Body,
+			Author: c.User.Login, AuthorID: c.User.ID, AuthorIsBot: c.User.Type == "Bot" || viaApp(c.PerformedViaGithubApp), Body: c.Body,
 		})
 		log = log.With("repository", ev.Repository.FullName, "number", ev.Issue.Number)
 		if err != nil {
@@ -306,6 +309,12 @@ func (h *GitHubHandler) comment(w http.ResponseWriter, r *http.Request, log *slo
 		log.Info("webhook handled", "outcome", outcome, "reason", reason)
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// viaApp reports whether performed_via_github_app names an App (it is null
+// for a comment written by hand).
+func viaApp(raw *json.RawMessage) bool {
+	return raw != nil && string(*raw) != "null"
 }
 
 func (h *GitHubHandler) logger() *slog.Logger {

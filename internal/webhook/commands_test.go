@@ -38,21 +38,43 @@ func TestParseCommand(t *testing.T) {
 		{name: "dismiss with a non-hex id", body: "@pergent-review dismiss xyz123", kind: "unknown", ok: true},
 		{name: "no mention", body: "please review this", ok: false},
 		{name: "empty", body: "", ok: false},
-		{name: "mention mid-line", body: "hey @pergent-review review please", kind: "unknown", ok: true},
-		{name: "mid-line command", body: "ping @pergent-review review", kind: "review", ok: true},
+		{name: "mention mid-line", body: "hey @pergent-review review please", ok: false},
+		{name: "mid-line command", body: "ping @pergent-review review", ok: false},
+		{name: "sentence containing a command", body: "I'd say: @pergent-review review", ok: false},
+		{name: "three spaces of indent", body: "   @pergent-review review", kind: "review", ok: true},
+		{name: "four spaces of indent is code", body: "    @pergent-review review", ok: false},
+		{name: "tab indent is code", body: "\t@pergent-review review", ok: false},
+		{name: "backtick fence", body: "```\n@pergent-review review\n```", ok: false},
+		{name: "tilde fence", body: "~~~\n@pergent-review review\n~~~", ok: false},
+		{name: "fence with an info string", body: "```text\n@pergent-review review\n```", ok: false},
+		{name: "long fence needs a long close", body: "````\n@pergent-review review\n```\n@pergent-review review\n````", ok: false},
+		{name: "a tilde fence is not closed by backticks", body: "~~~\n```\n@pergent-review review\n```", ok: false},
+		{name: "unclosed fence runs to the end", body: "```\n@pergent-review review", ok: false},
+		{name: "command after a closed fence", body: "```\nx\n```\n@pergent-review help", kind: "help", ok: true},
+		{name: "indented fence marker is code, not a fence", body: "    ```\n@pergent-review help", kind: "help", ok: true},
+		{name: "inline code at line start is not a fence", body: "```x``` hi\n@pergent-review review", kind: "review", ok: true},
+		{name: "html comment on one line", body: "<!-- @pergent-review review -->", ok: false},
+		{name: "html comment over lines", body: "<!--\n@pergent-review review\n-->", ok: false},
+		{name: "command after an html comment", body: "<!-- x\n@pergent-review review\n-->\n@pergent-review help", kind: "help", ok: true},
+		{name: "unclosed html comment", body: "<!--\n@pergent-review review", ok: false},
+		{name: "mention-only line falls through", body: "@pergent-review\n@pergent-review review", kind: "review", ok: true},
+		{name: "mention-only with punctuation falls through", body: "@pergent-review:\nthanks\n@pergent-review help", kind: "help", ok: true},
+		{name: "mention-only and nothing else", body: "@pergent-review", ok: false},
+		{name: "cc line is not a command", body: "cc @pergent-review", ok: false},
+		{name: "a dismiss reason is on the id's line", body: "@pergent-review dismiss abc123\nbecause it is fine", kind: "dismiss", arg: "abc123", ok: true},
 		{name: "uppercase", body: "@Pergent-Review REVIEW FAILED", kind: "review_failed", ok: true},
 		{name: "two commands, the first counts", body: "@pergent-review help\n@pergent-review review", kind: "help", ok: true},
 		{name: "second line", body: "Thanks!\n\n@pergent-review review", kind: "review", ok: true},
 		{name: "windows line ends", body: "@pergent-review review\r\nmore", kind: "review", ok: true},
 		{name: "unknown word", body: "@pergent-review frobnicate", kind: "unknown", ok: true},
-		{name: "mention alone", body: "thanks @pergent-review", kind: "unknown", ok: true},
+		{name: "mention alone", body: "thanks @pergent-review", ok: false},
 		{name: "review with more words is not review", body: "@pergent-review review this please", kind: "unknown", ok: true},
 		{name: "trailing punctuation", body: "@pergent-review review.", kind: "review", ok: true},
 		{name: "colon after mention", body: "@pergent-review: help", kind: "help", ok: true},
 		{name: "longer name is another bot", body: "@pergent-reviewer review", ok: false},
 		{name: "name with a suffix dot word", body: "@pergent-review.bot review", ok: false},
 		{name: "email is not a mention", body: "mail me@pergent-review review", ok: false},
-		{name: "the longer name first, then ours", body: "@pergent-reviewer x @pergent-review review", kind: "review", ok: true},
+		{name: "the longer name first, then ours", body: "@pergent-reviewer review\n@pergent-review help", kind: "help", ok: true},
 		{name: "quoted reply is not a command", body: "> @pergent-review review\nlooks good", ok: false},
 		{name: "other mention", body: "@someone review", ok: false},
 	}
@@ -407,5 +429,82 @@ func TestNoteHookBadTokenAndBadJSON(t *testing.T) {
 	rec = httptest.NewRecorder()
 	r.mux.ServeHTTP(rec, req)
 	wantStatus(t, rec, 401)
+	r.noStored(t)
+}
+
+// A comment by a person can hold text that is not theirs: a pasted finding, a
+// quoted review. None of it is a command.
+func TestHumanCommentsHoldingReviewTextIgnored(t *testing.T) {
+	const cmd = "@pergent-review review"
+	bodies := map[string]string{
+		"review marker":        "<!-- pergent -->\n" + cmd,
+		"review marker, later": cmd + "\n<!-- pergent:findings [] -->",
+		"marker with a suffix": "<!-- pergent:skill=x -->\n" + cmd,
+		"backtick fence":       "Here is the text:\n```\n" + cmd + "\n```",
+		"tilde fence":          "~~~\n" + cmd + "\n~~~",
+		"html comment":         "<!--\n" + cmd + "\n-->",
+		"indented code":        "Run this:\n\n    " + cmd,
+		"tab-indented code":    "\t" + cmd,
+		"mid-sentence":         "I think you could say " + cmd + " here",
+		"cc line":              "cc " + cmd,
+	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			r := newCmdRig(t)
+			wantStatus(t, r.glPost(t, glNote(body, "alice")), 200)
+			r.noStored(t)
+
+			r = newCmdRig(t)
+			wantStatus(t, r.ghPost(t, ghComment(strings.ReplaceAll(body, "@pergent-review", "@pergent-app"), "alice", "User")), 200)
+			r.noStored(t)
+		})
+	}
+}
+
+func TestMentionOnlyLineThenCommandRuns(t *testing.T) {
+	r := newCmdRig(t)
+	wantStatus(t, r.glPost(t, glNote("@pergent-review\n@pergent-review review", "alice")), 200)
+	if len(r.cmds.stored) != 1 || r.cmds.stored[0].Kind != "review" {
+		t.Fatalf("stored = %+v; want one review", r.cmds.stored)
+	}
+	r = newCmdRig(t)
+	wantStatus(t, r.ghPost(t, ghComment("@pergent-app\n@pergent-app review", "alice", "User")), 200)
+	if len(r.cmds.stored) != 1 || r.cmds.stored[0].Kind != "review" {
+		t.Fatalf("stored = %+v; want one review", r.cmds.stored)
+	}
+}
+
+func TestCommentPostedByAnAppIgnored(t *testing.T) {
+	r := newCmdRig(t)
+	p := ghComment("@pergent-app review", "alice", "User") // a person's login, posted through an App
+	p["comment"].(obj)["performed_via_github_app"] = obj{"id": 9, "slug": "some-ci"}
+	wantStatus(t, r.ghPost(t, p), 200)
+	r.noStored(t)
+
+	// null is how GitHub says a comment was written by hand.
+	p = ghComment("@pergent-app review", "alice", "User")
+	p["comment"].(obj)["performed_via_github_app"] = nil
+	wantStatus(t, r.ghPost(t, p), 200)
+	if len(r.cmds.stored) != 1 {
+		t.Fatalf("stored = %+v; want one", r.cmds.stored)
+	}
+}
+
+func TestIssueCommentWithBadSignatureStoresNothing(t *testing.T) {
+	r := newCmdRig(t)
+	body, err := json.Marshal(ghComment("@pergent-app review", "alice", "User"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sig := range []string{"", "sha256=00", sign("another-secret", body)} {
+		req := httptest.NewRequest(http.MethodPost, "/webhooks/github/gh", bytes.NewReader(body))
+		req.Header.Set("X-GitHub-Event", "issue_comment")
+		if sig != "" {
+			req.Header.Set("X-Hub-Signature-256", sig)
+		}
+		rec := httptest.NewRecorder()
+		r.mux.ServeHTTP(rec, req)
+		wantStatus(t, rec, 401)
+	}
 	r.noStored(t)
 }
