@@ -88,16 +88,44 @@ export type RunSummary = {
   durationSeconds: number | null;
 };
 
-export type ReviewDetailView = { header: ReviewHeader; runs: RunSummary[] };
+// Can is what the session may do to a review with the buttons. The server
+// computes it as a hint (it tells the change's author by username); the
+// routes check again and may still refuse.
+export type Can = {
+  rerun: boolean;
+  dismissBlocking: boolean;
+  dismissSuggestion: boolean;
+  restore: boolean;
+};
+
+// role is the session's role on the repository, "" for one switched off.
+export type ReviewDetailView = { header: ReviewHeader; runs: RunSummary[]; role: Role | ""; can: Can };
+
+// RerunStatus is the answer of the re-run routes (202).
+export type RerunStatus = "queued" | "already queued" | "nothing failed" | "whole review";
+
+// DismissStatus and RestoreStatus are the answers of the dismiss and restore
+// routes (200).
+export type DismissStatus = "dismissed" | "already dismissed";
+export type RestoreStatus = "restored" | "not dismissed";
+
+// DismissedView is who set a finding aside, and why. by and reason are user
+// text.
+export type DismissedView = { by: string; reason: string; at: string };
 
 export type FindingView = {
   id: string;
+  // fingerprint identifies the finding across runs: what dismiss and restore
+  // name.
+  fingerprint: string;
   severity: "blocking" | "suggestion";
   title: string;
   file: string;
   line?: number;
   explanation: string;
   suggestedFix: string;
+  // dismissed is null for a finding that stands.
+  dismissed: DismissedView | null;
 };
 
 export type CheckView = { batch: number; section: string; name: string; status: string; detail: string };
@@ -106,7 +134,9 @@ export type SkillView = {
   name: string;
   verdict: "no_blocking_issues" | "has_blocking_issues" | "failed";
   source: "library" | "repo" | null;
+  // findings are those still standing; dismissed are those set aside.
   findings: FindingView[];
+  dismissed: FindingView[];
   checks: CheckView[];
 };
 
@@ -150,6 +180,8 @@ export type RepoSettings = {
   skills: SettingView<string[] | null>;
   jobTimeoutSeconds: SettingView<number>;
   jobMemory: SettingView<string>;
+  rerunLimitPerMR: SettingView<number>;
+  rerunLimitPerRepo: SettingView<number>;
 };
 
 export type RepositoryDetailView = {
@@ -169,6 +201,8 @@ export type SettingsUpdate = Partial<{
   skills: string[] | null;
   jobTimeoutSeconds: number | null;
   jobMemory: string | null;
+  rerunLimitPerMR: number | null;
+  rerunLimitPerRepo: number | null;
 }>;
 
 export type InputsView = {
@@ -201,6 +235,10 @@ export type DefaultsView = {
   failureStatus: string;
   jobTimeoutSeconds: number;
   jobMemory: string;
+  // The most re-runs (buttons and comments) per merge request, and per
+  // repository, in a UTC day: 1 to 1000.
+  rerunLimitPerMR: number;
+  rerunLimitPerRepo: number;
 };
 
 // LLMAdminView is GET /api/admin/llm: where the model comes from, the model
@@ -429,6 +467,9 @@ export const paths = {
 
   apiReview: (instance: string, project: string, number: number) =>
     `/api/reviews/${seg(instance)}/${proj(project)}/${seg(String(number))}`,
+  // action is "rerun", "dismiss" or "restore".
+  apiReviewAction: (instance: string, project: string, number: number, action: "rerun" | "dismiss" | "restore") =>
+    `/api/reviews/${seg(instance)}/${proj(project)}/${seg(String(number))}/${action}`,
   apiRun: (id: string) => `/api/runs/${seg(id)}`,
   apiRunLog: (id: string) => `/api/runs/${seg(id)}/log`,
   apiRepo: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}`,

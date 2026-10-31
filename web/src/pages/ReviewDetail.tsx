@@ -1,18 +1,23 @@
-import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState, type FormEvent } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 
 import {
   api,
   isStatus,
   paths,
+  type Can,
   type CheckView,
+  type FindingView,
   type LogView,
+  type RerunStatus,
   type ReviewDetailView,
+  type ReviewHeader,
   type RunDetailView,
   type RunSummary,
   type SkillView,
 } from "../api";
+import { useWrite } from "../layout/write";
 import {
   ErrorBox,
   ExternalLink,
@@ -62,7 +67,7 @@ export default function ReviewDetail() {
 }
 
 function Review({ view }: { view: ReviewDetailView }) {
-  const { header, runs } = view;
+  const { header, runs, can } = view;
   const [params] = useSearchParams();
   const selected = runs.find((r) => r.id === params.get("run")) ?? runs[0];
   const platform = platformName(header.platform);
@@ -92,6 +97,7 @@ function Review({ view }: { view: ReviewDetailView }) {
             <ExternalLink href={header.webURL}>open in {platform} ↗</ExternalLink>
           </div>
         </div>
+        {can.rerun && <RerunButtons header={header} />}
       </div>
       <div className="layout">
         <div>
@@ -105,9 +111,62 @@ function Review({ view }: { view: ReviewDetailView }) {
           </section>
           {selected && <ThisRun id={selected.id} platform={platform} />}
         </div>
-        <div>{selected ? <RunBody id={selected.id} /> : <div className="card empty">No runs yet.</div>}</div>
+        <div>
+          {selected ? (
+            // Dismiss and restore decide the newest review again; an older
+            // run is only read.
+            <RunBody id={selected.id} actions={selected.id === runs[0].id ? { header, can } : null} />
+          ) : (
+            <div className="card empty">No runs yet.</div>
+          )}
+        </div>
       </div>
     </>
+  );
+}
+
+// useReviewAction posts to one of the review's action routes; once it is
+// answered, the review, its runs and the lists are read again.
+function useReviewAction<B extends object>(header: ReviewHeader, action: "rerun" | "dismiss" | "restore") {
+  const client = useQueryClient();
+  const write = useWrite();
+  return useMutation({
+    mutationFn: (body: B) =>
+      write<{ status: string }>("POST", paths.apiReviewAction(header.instance, header.project, header.number, action), body),
+    onSuccess: () =>
+      Promise.all(["review", "run", "reviews", "overview"].map((k) => client.invalidateQueries({ queryKey: [k] }))),
+  });
+}
+
+const rerunNote: Record<RerunStatus, string> = {
+  queued: "Re-run queued.",
+  "already queued": "A re-run of this change is already queued.",
+  "nothing failed": "Nothing failed, so nothing was re-run.",
+  "whole review": "The whole review failed, so all of it is re-run.",
+};
+
+// RerunButtons start the review again, whole or only its failed skills.
+// What the server answers (a cap, a closed change) is shown as text.
+function RerunButtons({ header }: { header: ReviewHeader }) {
+  const rerun = useReviewAction<{ failed: boolean }>(header, "rerun");
+  const note = rerun.isSuccess ? (rerunNote[rerun.data.status as RerunStatus] ?? "") : "";
+  return (
+    <div className="review-actions">
+      <div className="actions-row">
+        <button type="button" className="btn primary" disabled={rerun.isPending} onClick={() => rerun.mutate({ failed: false })}>
+          Re-run review
+        </button>
+        <button type="button" className="btn" disabled={rerun.isPending} onClick={() => rerun.mutate({ failed: true })}>
+          Re-run failed only
+        </button>
+      </div>
+      {note && (
+        <div className="meta" role="status">
+          {note}
+        </div>
+      )}
+      {rerun.isError && <ErrorBox error={rerun.error} />}
+    </div>
   );
 }
 
@@ -199,13 +258,19 @@ function VerdictPill({ skill }: { skill: SkillView }) {
 
 type Tab = "findings" | "checks" | "files" | "logs";
 
-function RunBody({ id }: { id: string }) {
+// Actions are what the findings' buttons need: the review they act on and
+// what the session may do. null on a run they can't act on.
+type Actions = { header: ReviewHeader; can: Can };
+
+type Located = FindingView & { skill: string };
+
+function RunBody({ id, actions }: { id: string; actions: Actions | null }) {
   const run = useRun(id);
   const [tab, setTab] = useState<Tab>("findings");
   if (run.isPending) return <Loading />;
   if (run.isError) return <ErrorBox error={run.error} />;
   const view = run.data;
-  const findings = view.skills
+  const findings: Located[] = view.skills
     .flatMap((s) => s.findings.map((f) => ({ ...f, skill: s.name })))
     .sort((a, b) => Number(b.severity === "blocking") - Number(a.severity === "blocking"));
   return (
@@ -221,7 +286,8 @@ function RunBody({ id }: { id: string }) {
             <div className="grow">
               <b>{s.name}</b>
               <div className="meta">
-                {plural(s.findings.filter((x) => x.severity === "suggestion").length, "suggestion")} · {sourceText(s.source)}
+                {plural(s.findings.filter((x) => x.severity === "suggestion").length, "suggestion")}
+                {s.dismissed.length > 0 && ` · ${s.dismissed.length} dismissed`} · {sourceText(s.source)}
               </div>
             </div>
           </div>
@@ -240,33 +306,149 @@ function RunBody({ id }: { id: string }) {
           ]}
         />
         <div role="tabpanel">
-          {tab === "findings" &&
-            (findings.length === 0 ? (
-              <div className="pad meta">No findings.</div>
-            ) : (
-              findings.map((f) => (
-                <div className="finding" key={`${f.skill}/${f.id}`}>
-                  <Pill tone={f.severity === "blocking" ? "bad" : "grey"}>{f.severity}</Pill> <span className="t">{f.title}</span>{" "}
-                  <span className="mono meta">{f.id}</span>
-                  <div className="loc">
-                    {f.file}
-                    {f.line ? `:${f.line}` : ""} · {f.skill}
+          {tab === "findings" && (
+            <>
+              {findings.length === 0 && <div className="pad meta">No findings.</div>}
+              {findings.map((f) => (
+                <Finding key={`${f.skill}/${f.id}`} f={f} actions={actions} />
+              ))}
+              {view.skills
+                .filter((s) => s.dismissed.length > 0)
+                .map((s) => (
+                  <div role="group" aria-label={`Dismissed in ${s.name}`} key={s.name}>
+                    <h3 className="group">
+                      Dismissed in {s.name} ({s.dismissed.length})
+                    </h3>
+                    {s.dismissed.map((f) => (
+                      <DismissedFinding key={f.id} f={{ ...f, skill: s.name }} actions={actions} />
+                    ))}
                   </div>
-                  {f.explanation && <p className="prose">{f.explanation}</p>}
-                  {f.suggestedFix && (
-                    <>
-                      <div className="fix-label">Suggested fix</div>
-                      <pre className="fix">{f.suggestedFix}</pre>
-                    </>
-                  )}
-                </div>
-              ))
-            ))}
+                ))}
+            </>
+          )}
           {tab === "checks" && <Checks skills={view.skills} />}
           {tab === "files" && <Files files={view.files} />}
           {tab === "logs" && <Log id={id} />}
         </div>
       </div>
+    </>
+  );
+}
+
+function FindingBody({ f }: { f: Located }) {
+  return (
+    <>
+      <Pill tone={f.severity === "blocking" ? "bad" : "grey"}>{f.severity}</Pill> <span className="t">{f.title}</span>{" "}
+      <span className="mono meta">{f.id}</span>
+      <div className="loc">
+        {f.file}
+        {f.line ? `:${f.line}` : ""} · {f.skill}
+      </div>
+      {f.explanation && <p className="prose">{f.explanation}</p>}
+      {f.suggestedFix && (
+        <>
+          <div className="fix-label">Suggested fix</div>
+          <pre className="fix">{f.suggestedFix}</pre>
+        </>
+      )}
+    </>
+  );
+}
+
+// Finding is a finding that stands, with the Dismiss button when the session
+// may dismiss one of its severity.
+function Finding({ f, actions }: { f: Located; actions: Actions | null }) {
+  const may = actions !== null && (f.severity === "blocking" ? actions.can.dismissBlocking : actions.can.dismissSuggestion);
+  return (
+    <div className="finding">
+      <FindingBody f={f} />
+      {may && <DismissControl f={f} header={actions.header} />}
+    </div>
+  );
+}
+
+// DismissControl is the Dismiss button and the form it opens. A blocking
+// finding needs a reason. The server decides in the end (it may refuse the
+// author, a closed change), and its text is shown.
+function DismissControl({ f, header }: { f: Located; header: ReviewHeader }) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [problem, setProblem] = useState("");
+  const dismiss = useReviewAction<{ fingerprint: string; reason: string }>(header, "dismiss");
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const why = reason.trim();
+    if (f.severity === "blocking" && why === "") {
+      setProblem("Dismissing a blocking finding needs a reason.");
+      return;
+    }
+    setProblem("");
+    dismiss.mutate({ fingerprint: f.fingerprint, reason: why });
+  };
+  if (!open) {
+    return (
+      <div className="finding-actions">
+        <button type="button" className="btn small" onClick={() => setOpen(true)}>
+          Dismiss
+        </button>
+      </div>
+    );
+  }
+  return (
+    <form className="dismiss-form" onSubmit={submit}>
+      <textarea
+        aria-label="Reason"
+        placeholder={f.severity === "blocking" ? "Why is this not a problem? (required)" : "Why? (optional)"}
+        rows={2}
+        maxLength={1000}
+        value={reason}
+        disabled={dismiss.isPending}
+        onChange={(e) => setReason(e.target.value)}
+      />
+      <div className="actions-row">
+        <button type="submit" className="btn small primary" disabled={dismiss.isPending}>
+          Dismiss finding
+        </button>
+        <button type="button" className="btn small" disabled={dismiss.isPending} onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+        {problem && <span className="meta problem">{problem}</span>}
+      </div>
+      {dismiss.isError && <ErrorBox error={dismiss.error} />}
+    </form>
+  );
+}
+
+// DismissedFinding is a finding set aside: who did it and why, and Restore
+// when the session may. by and reason are text people wrote.
+function DismissedFinding({ f, actions }: { f: Located; actions: Actions | null }) {
+  const d = f.dismissed;
+  return (
+    <div className="finding">
+      <FindingBody f={f} />
+      {d && (
+        <div className="dismissal">
+          <div className="meta">
+            Dismissed by {d.by} · {ago(d.at)}
+          </div>
+          <div className="prose">{d.reason ? `Reason: ${d.reason}` : "No reason was given."}</div>
+        </div>
+      )}
+      {actions?.can.restore && <RestoreButton fingerprint={f.fingerprint} header={actions.header} />}
+    </div>
+  );
+}
+
+function RestoreButton({ fingerprint, header }: { fingerprint: string; header: ReviewHeader }) {
+  const restore = useReviewAction<{ fingerprint: string }>(header, "restore");
+  return (
+    <>
+      <div className="finding-actions">
+        <button type="button" className="btn small" disabled={restore.isPending} onClick={() => restore.mutate({ fingerprint })}>
+          Restore
+        </button>
+      </div>
+      {restore.isError && <ErrorBox error={restore.error} />}
     </>
   );
 }

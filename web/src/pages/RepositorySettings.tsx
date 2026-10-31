@@ -53,6 +53,8 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
         library={library.data.map((s) => s.name)}
         attention={view.attention.map((a) => a.message)}
         locked={locked}
+        // Only an admin of the repository changes its re-run caps.
+        canSetCaps={view.role === "admin"}
         busy={busy}
         onSave={(body) => save.mutate(body)}
         onReset={() => {
@@ -77,7 +79,22 @@ type Draft = {
   skills: string[];
   jobTimeoutSeconds: string;
   jobMemory: string;
+  rerunLimitPerMR: string;
+  rerunLimitPerRepo: string;
 };
+
+const capProblem = "The re-run caps are whole numbers from 1 to 1000.";
+
+// capBody is the value to send for a re-run cap field that changed: a whole
+// number from 1 to 1000, or null (empty: the default); undefined when the
+// text is neither.
+function capBody(text: string): number | null | undefined {
+  const t = text.trim();
+  if (t === "") return null;
+  if (!/^\d+$/.test(t)) return undefined;
+  const n = Number(t);
+  return n >= 1 && n <= 1000 ? n : undefined;
+}
 
 function sameSet(a: string[], b: string[]) {
   return a.length === b.length && a.every((x) => b.includes(x));
@@ -88,6 +105,7 @@ function Form({
   library,
   attention,
   locked,
+  canSetCaps,
   busy,
   onSave,
   onReset,
@@ -96,6 +114,7 @@ function Form({
   library: string[];
   attention: string[];
   locked: boolean;
+  canSetCaps: boolean;
   busy: boolean;
   onSave: (body: SettingsUpdate) => void;
   onReset: () => void;
@@ -109,6 +128,8 @@ function Form({
     skills: skillsNow,
     jobTimeoutSeconds: String(settings.jobTimeoutSeconds.value),
     jobMemory: settings.jobMemory.value,
+    rerunLimitPerMR: String(settings.rerunLimitPerMR.value),
+    rerunLimitPerRepo: String(settings.rerunLimitPerRepo.value),
   };
   const [d, setD] = useState<Draft>(initial);
   const [problem, setProblem] = useState("");
@@ -142,6 +163,19 @@ function Form({
     }
     if (d.jobMemory.trim() !== initial.jobMemory) {
       body.jobMemory = d.jobMemory.trim() === "" ? null : d.jobMemory.trim();
+    }
+    // The caps are an admin's: a maintainer's save never carries them (the
+    // server would refuse the whole save).
+    if (canSetCaps) {
+      for (const key of ["rerunLimitPerMR", "rerunLimitPerRepo"] as const) {
+        if (d[key].trim() === initial[key]) continue;
+        const v = capBody(d[key]);
+        if (v === undefined) {
+          setProblem(capProblem);
+          return;
+        }
+        body[key] = v;
+      }
     }
     if (Object.keys(body).length === 0) {
       setProblem("Nothing changed.");
@@ -249,6 +283,43 @@ function Form({
             onChange={(e) => set("jobMemory", e.target.value)}
           />
         </Setting>
+        <Setting
+          name="Re-run cap per MR/PR"
+          overridden={settings.rerunLimitPerMR.overridden}
+          help="The most re-runs (buttons and comments) of one merge request or pull request in a UTC day, 1 to 1000. Pushes always run."
+        >
+          <input
+            type="number"
+            aria-label="Re-run cap per MR/PR (per day)"
+            min={1}
+            max={1000}
+            step={1}
+            value={d.rerunLimitPerMR}
+            disabled={locked || busy}
+            readOnly={!canSetCaps}
+            onChange={(e) => set("rerunLimitPerMR", e.target.value)}
+          />
+        </Setting>
+        <Setting
+          name="Re-run cap per repository"
+          overridden={settings.rerunLimitPerRepo.overridden}
+          help="The most re-runs across the whole repository in a UTC day, 1 to 1000."
+        >
+          <input
+            type="number"
+            aria-label="Re-run cap per repository (per day)"
+            min={1}
+            max={1000}
+            step={1}
+            value={d.rerunLimitPerRepo}
+            disabled={locked || busy}
+            readOnly={!canSetCaps}
+            onChange={(e) => set("rerunLimitPerRepo", e.target.value)}
+          />
+        </Setting>
+        {!locked && !canSetCaps && (
+          <div className="pad meta">Only admins of this repository change its re-run caps.</div>
+        )}
         {!locked && (
           <div className="foot">
             {problem && <span className="meta problem">{problem}</span>}

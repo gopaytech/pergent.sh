@@ -1,5 +1,6 @@
 import type {
   AuditPageView,
+  Can,
   DefaultsView,
   InstanceAdminView,
   IntegrationView,
@@ -96,7 +97,12 @@ export const overview: OverviewView = {
   ],
 };
 
+export const noCan: Can = { rerun: false, dismissBlocking: false, dismissSuggestion: false, restore: false };
+export const allCan: Can = { rerun: true, dismissBlocking: true, dismissSuggestion: true, restore: true };
+
 export const reviewDetail: ReviewDetailView = {
+  role: "viewer",
+  can: noCan,
   header: {
     instance: "main",
     project: "acme/payments",
@@ -154,14 +160,17 @@ export const runDetail: RunDetailView = {
       findings: [
         {
           id: "a1b2c3",
+          fingerprint: "fp-refund-twice",
           severity: "blocking",
           title: "Refund can be applied twice on retry",
           file: "internal/refund/handler.go",
           line: 88,
           explanation: "The idempotency key is checked after the ledger write.\nA retry writes a second row.",
           suggestedFix: "if seen(key) {\n\treturn nil\n}",
+          dismissed: null,
         },
       ],
+      dismissed: [],
       checks: [{ batch: 1, section: "Money", name: "Idempotent writes", status: "fail", detail: "Checked after the write." }],
     },
     {
@@ -171,13 +180,16 @@ export const runDetail: RunDetailView = {
       findings: [
         {
           id: "f00d12",
+          fingerprint: "fp-magic-window",
           severity: "suggestion",
           title: "Name the magic retry window",
           file: "internal/refund/handler.go",
           explanation: "",
           suggestedFix: "",
+          dismissed: null,
         },
       ],
+      dismissed: [],
       checks: [],
     },
   ],
@@ -213,6 +225,8 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
     skills: { value: null, overridden: false },
     jobTimeoutSeconds: { value: 600, overridden: false },
     jobMemory: { value: "6Gi", overridden: true },
+    rerunLimitPerMR: { value: 10, overridden: false },
+    rerunLimitPerRepo: { value: 50, overridden: false },
   },
   attention: repo.health === "attention" ? [overview.attention[0]] : [],
 });
@@ -240,6 +254,8 @@ export const defaults: DefaultsView = {
   failureStatus: "neutral",
   jobTimeoutSeconds: 600,
   jobMemory: "",
+  rerunLimitPerMR: 10,
+  rerunLimitPerRepo: 50,
 };
 
 export const llm: LLMAdminView = {

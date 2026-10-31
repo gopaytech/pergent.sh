@@ -1,10 +1,10 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { RunDetailView } from "../api";
+import type { Can, FindingView, ReviewDetailView, RunDetailView } from "../api";
 import { fakeApi } from "../test/fakeApi";
-import { platformAdmin, reviewDetail, runDetail } from "../test/fixtures";
+import { allCan, platformAdmin, reviewDetail, runDetail } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -61,8 +61,8 @@ describe("ReviewDetail", () => {
     expect(finding).toHaveTextContent("internal/refund/handler.go:88 · security-review");
     expect(within(finding).getByText(/checked after the ledger write/)).toHaveClass("prose");
     expect(within(finding).getByText(/if seen\(key\)/).tagName).toBe("PRE");
-    // No action buttons yet: they come with the commands piece.
-    expect(screen.queryByRole("button", { name: /Re-run|Dismiss/ })).not.toBeInTheDocument();
+    // The session may do nothing to this review: no action buttons.
+    expect(screen.queryByRole("button", { name: /Re-run|Dismiss|Restore/ })).not.toBeInTheDocument();
   });
 
   it("renders model text as text, never as HTML", async () => {
@@ -176,6 +176,34 @@ describe("ReviewDetail", () => {
   });
 });
 
+const rerunUrl = "/api/reviews/main/acme/payments/77/rerun";
+const dismissUrl = "/api/reviews/main/acme/payments/77/dismiss";
+const restoreUrl = "/api/reviews/main/acme/payments/77/restore";
+
+const withCan = (can: Can): ReviewDetailView => ({ ...reviewDetail, role: "maintainer", can });
+
+// dismissedRun is runDetail with the suggestion set aside.
+function dismissedRun(dismissed: Partial<FindingView> = {}): RunDetailView {
+  const sugg = runDetail.skills[1];
+  return {
+    ...runDetail,
+    skills: [
+      runDetail.skills[0],
+      {
+        ...sugg,
+        findings: [],
+        dismissed: [
+          {
+            ...sugg.findings[0],
+            dismissed: { by: "maint-user (gitlab main)", reason: "intended: the window is a product rule", at: "2026-11-01T10:00:00Z" },
+            ...dismissed,
+          },
+        ],
+      },
+    ],
+  };
+}
+
 function renderAppAt() {
   return renderApp("/reviews/main/acme/payments/77");
 }
@@ -184,3 +212,223 @@ function renderAndWait(run: RunDetailView = runDetail) {
   fakeApi(routes(run));
   return renderAppAt();
 }
+
+describe("ReviewDetail buttons", () => {
+  const base = (can: Can, run: RunDetailView = runDetail) => ({
+    ...routes(run),
+    "GET /api/reviews/main/acme/payments/77": { body: withCan(can) },
+  });
+
+  it("shows the re-run buttons only when the session may re-run", async () => {
+    fakeApi(base({ ...allCan, rerun: false }));
+    renderAppAt();
+    await screen.findByRole("heading", { name: /Refund idempotency key/ });
+    expect(screen.queryByRole("button", { name: "Re-run review" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Re-run failed only" })).not.toBeInTheDocument();
+  });
+
+  it("re-runs the whole review and says it is queued, then reads the review and run again", async () => {
+    const fake = fakeApi({ ...base(allCan), ["POST " + rerunUrl]: { status: 202, body: { status: "queued" } } });
+    renderAppAt();
+    await userEvent.click(await screen.findByRole("button", { name: "Re-run review" }));
+    const [post] = fake.find("POST", rerunUrl);
+    expect(post.headers.get("X-CSRF-Token")).toBe("csrf-123");
+    expect(post.body).toEqual({ failed: false });
+    expect(await screen.findByText("Re-run queued.")).toHaveAttribute("role", "status");
+    await waitFor(() => expect(fake.find("GET", "/api/reviews/main/acme/payments/77")).toHaveLength(2));
+    await waitFor(() => expect(fake.find("GET", `/api/runs/${newest}`).length).toBeGreaterThanOrEqual(2));
+  });
+
+  it("re-runs only the failed skills", async () => {
+    const fake = fakeApi({ ...base(allCan), ["POST " + rerunUrl]: { status: 202, body: { status: "queued" } } });
+    renderAppAt();
+    await userEvent.click(await screen.findByRole("button", { name: "Re-run failed only" }));
+    expect(fake.find("POST", rerunUrl)[0].body).toEqual({ failed: true });
+  });
+
+  it.each([
+    ["already queued", "A re-run of this change is already queued."],
+    ["nothing failed", "Nothing failed, so nothing was re-run."],
+    ["whole review", "The whole review failed, so all of it is re-run."],
+  ])("explains the answer %s", async (status, text) => {
+    fakeApi({ ...base(allCan), ["POST " + rerunUrl]: { status: 202, body: { status } } });
+    renderAppAt();
+    await userEvent.click(await screen.findByRole("button", { name: "Re-run failed only" }));
+    expect(await screen.findByText(text)).toBeInTheDocument();
+  });
+
+  it("shows the server's text at the re-run cap", async () => {
+    const fake = fakeApi({
+      ...base(allCan),
+      ["POST " + rerunUrl]: { status: 429, body: { error: "re-run limit reached for this merge request; it resets at 00:00 UTC" } },
+    });
+    renderAppAt();
+    await userEvent.click(await screen.findByRole("button", { name: "Re-run review" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "re-run limit reached for this merge request; it resets at 00:00 UTC",
+    );
+    expect(screen.queryByText("Re-run queued.")).not.toBeInTheDocument();
+    // Nothing was queued, so nothing is read again.
+    expect(fake.find("GET", "/api/reviews/main/acme/payments/77")).toHaveLength(1);
+  });
+
+  it("shows a closed change's refusal as text", async () => {
+    fakeApi({ ...base(allCan), ["POST " + rerunUrl]: { status: 409, body: { error: "this change is not open" } } });
+    renderAppAt();
+    await userEvent.click(await screen.findByRole("button", { name: "Re-run review" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("this change is not open");
+  });
+
+  it("offers Dismiss per finding by its severity", async () => {
+    fakeApi(base({ ...allCan, dismissBlocking: false }));
+    renderAppAt();
+    const blocking = (await screen.findByText("Refund can be applied twice on retry")).closest(".finding") as HTMLElement;
+    const suggestion = screen.getByText("Name the magic retry window").closest(".finding") as HTMLElement;
+    expect(within(blocking).queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+    expect(within(suggestion).getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+  });
+
+  it("offers no Dismiss for a suggestion when the session may not", async () => {
+    fakeApi(base({ ...allCan, dismissSuggestion: false }));
+    renderAppAt();
+    const blocking = (await screen.findByText("Refund can be applied twice on retry")).closest(".finding") as HTMLElement;
+    const suggestion = screen.getByText("Name the magic retry window").closest(".finding") as HTMLElement;
+    expect(within(blocking).getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    expect(within(suggestion).queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+  });
+
+  it("won't dismiss a blocking finding without a reason", async () => {
+    const fake = fakeApi({ ...base(allCan), ["POST " + dismissUrl]: { body: { status: "dismissed" } } });
+    renderAppAt();
+    const finding = (await screen.findByText("Refund can be applied twice on retry")).closest(".finding") as HTMLElement;
+    await userEvent.click(within(finding).getByRole("button", { name: "Dismiss" }));
+    await userEvent.click(within(finding).getByRole("button", { name: "Dismiss finding" }));
+    expect(within(finding).getByText("Dismissing a blocking finding needs a reason.")).toBeInTheDocument();
+    // A reason of only spaces is none.
+    await userEvent.type(within(finding).getByRole("textbox", { name: "Reason" }), "   ");
+    await userEvent.click(within(finding).getByRole("button", { name: "Dismiss finding" }));
+    expect(fake.find("POST", dismissUrl)).toHaveLength(0);
+  });
+
+  it("dismisses a blocking finding with its reason and reads the review again", async () => {
+    const fake = fakeApi({ ...base(allCan), ["POST " + dismissUrl]: { body: { status: "dismissed" } } });
+    renderAppAt();
+    const finding = (await screen.findByText("Refund can be applied twice on retry")).closest(".finding") as HTMLElement;
+    await userEvent.click(within(finding).getByRole("button", { name: "Dismiss" }));
+    await userEvent.type(within(finding).getByRole("textbox", { name: "Reason" }), " the key is checked upstream ");
+    await userEvent.click(within(finding).getByRole("button", { name: "Dismiss finding" }));
+    const [post] = fake.find("POST", dismissUrl);
+    expect(post.headers.get("X-CSRF-Token")).toBe("csrf-123");
+    expect(post.body).toEqual({ fingerprint: "fp-refund-twice", reason: "the key is checked upstream" });
+    await waitFor(() => expect(fake.find("GET", "/api/reviews/main/acme/payments/77")).toHaveLength(2));
+    await waitFor(() => expect(fake.find("GET", `/api/runs/${newest}`).length).toBeGreaterThanOrEqual(2));
+  });
+
+  it("dismisses a suggestion without a reason", async () => {
+    const fake = fakeApi({ ...base(allCan), ["POST " + dismissUrl]: { body: { status: "dismissed" } } });
+    renderAppAt();
+    const finding = (await screen.findByText("Name the magic retry window")).closest(".finding") as HTMLElement;
+    await userEvent.click(within(finding).getByRole("button", { name: "Dismiss" }));
+    await userEvent.click(within(finding).getByRole("button", { name: "Dismiss finding" }));
+    expect(fake.find("POST", dismissUrl)[0].body).toEqual({ fingerprint: "fp-magic-window", reason: "" });
+  });
+
+  it("can cancel a dismissal", async () => {
+    const fake = fakeApi(base(allCan));
+    renderAppAt();
+    const finding = (await screen.findByText("Name the magic retry window")).closest(".finding") as HTMLElement;
+    await userEvent.click(within(finding).getByRole("button", { name: "Dismiss" }));
+    await userEvent.click(within(finding).getByRole("button", { name: "Cancel" }));
+    expect(within(finding).queryByRole("textbox", { name: "Reason" })).not.toBeInTheDocument();
+    expect(within(finding).getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    expect(fake.calls.filter((c) => c.method === "POST")).toHaveLength(0);
+  });
+
+  it("shows the server's refusal of a dismissal as text", async () => {
+    fakeApi({
+      ...base(allCan),
+      ["POST " + dismissUrl]: { status: 403, body: { error: "the author of a change can't dismiss its blocking findings" } },
+    });
+    renderAppAt();
+    const finding = (await screen.findByText("Refund can be applied twice on retry")).closest(".finding") as HTMLElement;
+    await userEvent.click(within(finding).getByRole("button", { name: "Dismiss" }));
+    await userEvent.type(within(finding).getByRole("textbox", { name: "Reason" }), "fine");
+    await userEvent.click(within(finding).getByRole("button", { name: "Dismiss finding" }));
+    expect(await within(finding).findByRole("alert")).toHaveTextContent("the author of a change can't dismiss its blocking findings");
+  });
+
+  it("shows dismissed findings in a group per skill, with who and why", async () => {
+    fakeApi(base(allCan, dismissedRun()));
+    renderAppAt();
+    expect(await screen.findByRole("tab", { name: "Findings (1)" })).toBeInTheDocument();
+    const group = screen.getByRole("group", { name: "Dismissed in code-review" });
+    expect(group).toHaveTextContent("Dismissed in code-review (1)");
+    expect(group).toHaveTextContent("Name the magic retry window");
+    expect(group).toHaveTextContent("maint-user (gitlab main)");
+    expect(group).toHaveTextContent("intended: the window is a product rule");
+    expect(within(group).getByRole("button", { name: "Restore" })).toBeInTheDocument();
+    // A dismissed finding has no Dismiss button, and a skill with none has no group.
+    expect(within(group).queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Dismissed in security-review" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Skills" })).toHaveTextContent("1 dismissed");
+  });
+
+  it("hides Restore from a session that may not restore", async () => {
+    fakeApi(base({ ...allCan, restore: false }, dismissedRun()));
+    renderAppAt();
+    const group = await screen.findByRole("group", { name: "Dismissed in code-review" });
+    expect(within(group).queryByRole("button", { name: "Restore" })).not.toBeInTheDocument();
+  });
+
+  it("shows the dismissed findings even when none is left standing", async () => {
+    const run = dismissedRun();
+    run.skills[0] = { ...run.skills[0], findings: [], verdict: "no_blocking_issues" };
+    fakeApi(base(allCan, run));
+    renderAppAt();
+    expect(await screen.findByText("No findings.")).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Dismissed in code-review" })).toBeInTheDocument();
+  });
+
+  it("restores a dismissed finding and reads the review again", async () => {
+    const fake = fakeApi({ ...base(allCan, dismissedRun()), ["POST " + restoreUrl]: { body: { status: "restored" } } });
+    renderAppAt();
+    const group = await screen.findByRole("group", { name: "Dismissed in code-review" });
+    await userEvent.click(within(group).getByRole("button", { name: "Restore" }));
+    const [post] = fake.find("POST", restoreUrl);
+    expect(post.headers.get("X-CSRF-Token")).toBe("csrf-123");
+    expect(post.body).toEqual({ fingerprint: "fp-magic-window" });
+    await waitFor(() => expect(fake.find("GET", "/api/reviews/main/acme/payments/77")).toHaveLength(2));
+    await waitFor(() => expect(fake.find("GET", `/api/runs/${newest}`).length).toBeGreaterThanOrEqual(2));
+  });
+
+  it("shows the server's refusal of a restore as text", async () => {
+    fakeApi({
+      ...base(allCan, dismissedRun()),
+      ["POST " + restoreUrl]: { status: 500, body: { error: "the change was saved, but the review could not be decided again yet" } },
+    });
+    renderAppAt();
+    const group = await screen.findByRole("group", { name: "Dismissed in code-review" });
+    await userEvent.click(within(group).getByRole("button", { name: "Restore" }));
+    expect(await within(group).findByRole("alert")).toHaveTextContent("the change was saved, but the review");
+  });
+
+  it("renders the dismissal's author and reason as text, never as HTML", async () => {
+    const evil = "<img src=x onerror=alert(1)>";
+    fakeApi(base(allCan, dismissedRun({ dismissed: { by: evil, reason: evil, at: "2026-11-01T10:00:00Z" } })));
+    const { container } = renderAppAt();
+    const group = await screen.findByRole("group", { name: "Dismissed in code-review" });
+    expect(group.textContent).toContain(evil);
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("offers no finding buttons on an older run, which the server won't decide again", async () => {
+    fakeApi({
+      ...base(allCan),
+      [`GET /api/runs/${older}`]: { body: { ...runDetail, run: reviewDetail.runs[1] } },
+    });
+    renderApp(`/reviews/main/acme/payments/77?run=${older}`);
+    await screen.findByText("Refund can be applied twice on retry");
+    expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Re-run review" })).toBeInTheDocument();
+  });
+});

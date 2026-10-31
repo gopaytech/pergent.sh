@@ -122,6 +122,89 @@ describe("RepositoryDetail", () => {
     expect(within(timeoutRow).getByText("overridden here")).toBeInTheDocument();
   });
 
+  it("shows the re-run caps, editable by an admin of the repository", async () => {
+    fakeApi(base);
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const perMR = await screen.findByRole("spinbutton", { name: "Re-run cap per MR/PR (per day)" });
+    const perRepo = screen.getByRole("spinbutton", { name: "Re-run cap per repository (per day)" });
+    expect(perMR).toHaveValue(10);
+    expect(perRepo).toHaveValue(50);
+    expect(within(perMR.closest(".set") as HTMLElement).getByText("default")).toBeInTheDocument();
+    expect(perMR).not.toHaveAttribute("readonly");
+    expect(perMR).toBeEnabled();
+    expect(perRepo).not.toHaveAttribute("readonly");
+    expect(screen.queryByText(/Only admins of this repository change its re-run caps/)).not.toBeInTheDocument();
+  });
+
+  it("saves a changed re-run cap and leaves the other alone", async () => {
+    const saved = {
+      ...payments,
+      settings: { ...payments.settings, rerunLimitPerRepo: { value: 200, overridden: true } },
+    };
+    const fake = fakeApi({ ...base, "PUT /api/repositories/main/acme/payments/settings": { body: saved } });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const perRepo = await screen.findByRole("spinbutton", { name: "Re-run cap per repository (per day)" });
+    await userEvent.clear(perRepo);
+    await userEvent.type(perRepo, "200");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    const [put] = fake.find("PUT", "/api/repositories/main/acme/payments/settings");
+    expect(put.headers.get("X-CSRF-Token")).toBe("csrf-123");
+    expect(put.body).toEqual({ rerunLimitPerRepo: 200 });
+    expect(await screen.findByText("Saved.")).toBeInTheDocument();
+    const row = screen.getByRole("spinbutton", { name: "Re-run cap per repository (per day)" }).closest(".set") as HTMLElement;
+    expect(within(row).getByText("overridden here")).toBeInTheDocument();
+    expect(screen.getByRole("spinbutton", { name: "Re-run cap per repository (per day)" })).toHaveValue(200);
+  });
+
+  it("sends an emptied re-run cap as null, the default", async () => {
+    const fake = fakeApi({ ...base, "PUT /api/repositories/main/acme/payments/settings": { body: payments } });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    await userEvent.clear(await screen.findByRole("spinbutton", { name: "Re-run cap per MR/PR (per day)" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({ rerunLimitPerMR: null });
+  });
+
+  it.each(["0", "1001", "2.5"])("refuses the re-run cap %s without asking the server", async (value) => {
+    const fake = fakeApi(base);
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const perMR = await screen.findByRole("spinbutton", { name: "Re-run cap per MR/PR (per day)" });
+    await userEvent.clear(perMR);
+    await userEvent.type(perMR, value);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByText("The re-run caps are whole numbers from 1 to 1000.")).toBeInTheDocument();
+    expect(fake.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
+  });
+
+  it("shows a maintainer the re-run caps read-only and never sends them", async () => {
+    const asMaintainer = repoDetail(repoPayments, "maintainer");
+    const fake = fakeApi({
+      ...base,
+      "GET /api/repositories/main/acme/payments": { body: asMaintainer },
+      "PUT /api/repositories/main/acme/payments/settings": { body: asMaintainer },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const perMR = await screen.findByRole("spinbutton", { name: "Re-run cap per MR/PR (per day)" });
+    const perRepo = screen.getByRole("spinbutton", { name: "Re-run cap per repository (per day)" });
+    expect(perMR).toHaveAttribute("readonly");
+    expect(perRepo).toHaveAttribute("readonly");
+    expect(perMR).toHaveValue(10);
+    expect(screen.getByText("Only admins of this repository change its re-run caps.")).toBeInTheDocument();
+    // Typing does nothing to a read-only input.
+    await userEvent.type(perMR, "5");
+    expect(perMR).toHaveValue(10);
+    await userEvent.click(screen.getByRole("switch", { name: "Review drafts" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({ reviewDrafts: true });
+  });
+
+  it("disables the re-run caps of a config-managed repository", async () => {
+    fakeApi(base);
+    renderApp("/repos/main/acme/widgets?tab=settings");
+    await screen.findAllByText("managed by config");
+    expect(screen.getByRole("spinbutton", { name: "Re-run cap per MR/PR (per day)" })).toBeDisabled();
+    expect(screen.getByRole("spinbutton", { name: "Re-run cap per repository (per day)" })).toBeDisabled();
+  });
+
   it("shows the server's error when a value is refused", async () => {
     fakeApi({
       ...base,

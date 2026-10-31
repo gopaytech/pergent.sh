@@ -39,6 +39,8 @@ function Defaults({ v }: { v: DefaultsView }) {
   const [failureStatus, setFailureStatus] = useState(v.failureStatus);
   const [timeout, setTimeoutText] = useState(String(v.jobTimeoutSeconds));
   const [memory, setMemory] = useState(v.jobMemory);
+  const [capMR, setCapMR] = useState(String(v.rerunLimitPerMR));
+  const [capRepo, setCapRepo] = useState(String(v.rerunLimitPerRepo));
   const [problem, setProblem] = useState("");
   const [note, setNote] = useState("");
   const save = useMutation({
@@ -56,6 +58,12 @@ function Defaults({ v }: { v: DefaultsView }) {
       setProblem("The timeout is a whole number of seconds, from 60 to 7200.");
       return;
     }
+    // A cap is a whole number from 1 to 1000; empty is the built-in one.
+    const caps = [capMR, capRepo].map((c) => c.trim());
+    if (caps.some((c) => c !== "" && (!/^\d+$/.test(c) || Number(c) < 1 || Number(c) > 1000))) {
+      setProblem("The re-run caps are whole numbers from 1 to 1000.");
+      return;
+    }
     setProblem("");
     // The PUT replaces every default; null is the built-in one.
     save.mutate({
@@ -64,10 +72,12 @@ function Defaults({ v }: { v: DefaultsView }) {
       failureStatus,
       jobTimeoutSeconds: Number(t),
       jobMemory: memory.trim() === "" ? null : memory.trim(),
+      rerunLimitPerMR: caps[0] === "" ? null : Number(caps[0]),
+      rerunLimitPerRepo: caps[1] === "" ? null : Number(caps[1]),
     });
   };
   return (
-    <form className="card" aria-label="Repository defaults" onSubmit={submit}>
+    <form className="card" aria-label="Repository defaults" noValidate onSubmit={submit}>
       <h2>Repository defaults</h2>
       <div className="pad meta">
         What a repository you switch on in the dashboard starts with. A repository can override each in its own settings;
@@ -139,6 +149,45 @@ function Defaults({ v }: { v: DefaultsView }) {
             value={memory}
             disabled={save.isPending}
             onChange={(e) => setMemory(e.target.value)}
+          />
+        </div>
+      </div>
+      <div className="set">
+        <div>
+          <div className="name">Re-run cap per MR/PR</div>
+          <div className="help">
+            The most re-runs (buttons and comments) of one merge request or pull request in a UTC day, 1 to 1000. Pushes
+            always run.
+          </div>
+        </div>
+        <div>
+          <input
+            type="number"
+            aria-label="Re-run cap per MR/PR (per day)"
+            min={1}
+            max={1000}
+            step={1}
+            value={capMR}
+            disabled={save.isPending}
+            onChange={(e) => setCapMR(e.target.value)}
+          />
+        </div>
+      </div>
+      <div className="set">
+        <div>
+          <div className="name">Re-run cap per repository</div>
+          <div className="help">The most re-runs across a whole repository in a UTC day, 1 to 1000.</div>
+        </div>
+        <div>
+          <input
+            type="number"
+            aria-label="Re-run cap per repository (per day)"
+            min={1}
+            max={1000}
+            step={1}
+            value={capRepo}
+            disabled={save.isPending}
+            onChange={(e) => setCapRepo(e.target.value)}
           />
         </div>
       </div>

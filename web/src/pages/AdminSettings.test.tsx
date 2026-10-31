@@ -25,6 +25,8 @@ describe("AdminSettings defaults", () => {
     expect(within(form).getByLabelText("Status when a review fails")).toHaveValue("neutral");
     expect(within(form).getByLabelText("Timeout (seconds)")).toHaveValue(600);
     expect(within(form).getByLabelText("Memory limit")).toHaveValue("");
+    expect(within(form).getByLabelText("Re-run cap per MR/PR (per day)")).toHaveValue(10);
+    expect(within(form).getByLabelText("Re-run cap per repository (per day)")).toHaveValue(50);
   });
 
   it("sends every default with a PUT, with the CSRF token", async () => {
@@ -47,9 +49,55 @@ describe("AdminSettings defaults", () => {
       failureStatus: "neutral",
       jobTimeoutSeconds: 900,
       jobMemory: "6Gi",
+      // Untouched, but the PUT replaces every default: saving without
+      // them would reset the caps.
+      rerunLimitPerMR: 10,
+      rerunLimitPerRepo: 50,
     });
     const saved = await screen.findByText("Defaults saved.");
     expect(saved).not.toHaveClass("problem");
+  });
+
+  it("saves changed re-run caps", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "PUT /api/admin/defaults": { body: { ...defaults, rerunLimitPerMR: 3, rerunLimitPerRepo: 120 } },
+    });
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    const perMR = within(form).getByLabelText("Re-run cap per MR/PR (per day)");
+    const perRepo = within(form).getByLabelText("Re-run cap per repository (per day)");
+    await userEvent.clear(perMR);
+    await userEvent.type(perMR, "3");
+    await userEvent.clear(perRepo);
+    await userEvent.type(perRepo, "120");
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ rerunLimitPerMR: 3, rerunLimitPerRepo: 120 });
+    expect(await screen.findByText("Defaults saved.")).toBeInTheDocument();
+    // The saved answer is what the form shows.
+    expect(within(form).getByLabelText("Re-run cap per MR/PR (per day)")).toHaveValue(3);
+    expect(within(form).getByLabelText("Re-run cap per repository (per day)")).toHaveValue(120);
+  });
+
+  it("sends an emptied re-run cap as null, the built-in default", async () => {
+    const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: defaults } });
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    await userEvent.clear(within(form).getByLabelText("Re-run cap per repository (per day)"));
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ rerunLimitPerMR: 10, rerunLimitPerRepo: null });
+  });
+
+  it.each(["0", "1001", "1.5"])("refuses the re-run cap %s without asking the server", async (value) => {
+    const fake = fakeApi(routes());
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    const perMR = within(form).getByLabelText("Re-run cap per MR/PR (per day)");
+    await userEvent.clear(perMR);
+    await userEvent.type(perMR, value);
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(within(form).getByText("The re-run caps are whole numbers from 1 to 1000.")).toBeInTheDocument();
+    expect(fake.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
   });
 
   it("sends an empty memory limit as null, the built-in default", async () => {

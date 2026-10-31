@@ -255,6 +255,7 @@ p.sub {
 }
 
 select,
+textarea,
 input[type="text"],
 input[type="password"],
 input[type="number"],
@@ -267,7 +268,13 @@ input[type="search"] {
   background: #fff;
 }
 
+textarea {
+  font-family: inherit;
+  resize: vertical;
+}
+
 select:disabled,
+textarea:disabled,
 input:not(.toggle):disabled {
   background: var(--soft);
   color: var(--muted);
@@ -749,6 +756,40 @@ pre.doc {
   padding: 10px 14px;
   border-top: 1px solid var(--line);
   font-size: 13px;
+}
+
+.review-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.review-actions .error {
+  margin: 0;
+}
+
+.finding-actions {
+  margin-top: 8px;
+}
+
+.dismiss-form {
+  margin-top: 8px;
+}
+
+.dismiss-form textarea {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.dismiss-form .problem {
+  align-self: center;
+}
+
+.dismissal {
+  margin-top: 6px;
+  padding-left: 10px;
+  border-left: 3px solid var(--line);
 }
 
 h3.group {
