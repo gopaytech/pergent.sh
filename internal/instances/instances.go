@@ -8,6 +8,7 @@ package instances
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"maps"
 	"os"
 	"slices"
@@ -113,6 +114,8 @@ type Registry struct {
 	llmMu   sync.RWMutex
 	llm     llmRow
 	llmSeen []string
+
+	log *slog.Logger // nil: slog.Default()
 }
 
 // llmRow is the store's LLM row with its key opened. key is "" when the row
@@ -129,6 +132,18 @@ type llmRow struct {
 // alone; box is only needed to open secrets.
 func New(cfg *config.Config, st *store.Store, box *secretbox.Box) *Registry {
 	return &Registry{cfg: cfg, st: st, box: box, dash: map[string]Instance{}}
+}
+
+// SetLog sets where the registry logs what it can't act on, such as a stored
+// secret that can't be opened. It is not safe to call while the registry is
+// in use.
+func (r *Registry) SetLog(log *slog.Logger) { r.log = log }
+
+func (r *Registry) logger() *slog.Logger {
+	if r.log == nil {
+		return slog.Default()
+	}
+	return r.log
 }
 
 // Load reads the dashboard's instances from the store, replacing those
@@ -419,6 +434,9 @@ func (r *Registry) LoadLLM(ctx context.Context) error {
 		if len(row.APIKeySealed) > 0 && r.box != nil {
 			if plain, err := r.box.Open(row.APIKeySealed); err == nil {
 				next.key = string(plain)
+			} else {
+				r.logger().Warn("the LLM api_key couldn't be opened with PERGENT_SH_SECRET_KEY; it counts as not set",
+					"field", "api_key")
 			}
 		}
 	}

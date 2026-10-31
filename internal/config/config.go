@@ -75,9 +75,10 @@ type Dashboard struct {
 // DashboardEnabled reports whether the dashboard is on: dashboard.url is set.
 func (c *Config) DashboardEnabled() bool { return c.Dashboard.URL != "" }
 
-// HasLLM reports whether the file has an llm: block with a provider. With
-// the dashboard on the LLM can be added there instead.
-func (c *Config) HasLLM() bool { return c.LLM.Provider != "" }
+// HasLLM reports whether the file has an llm: block: any of its fields set
+// (then the block must be complete). With the dashboard on the LLM can be
+// added there instead.
+func (c *Config) HasLLM() bool { return c.LLM != (LLM{}) }
 
 // Instance is one GitLab server and the env vars holding its secrets.
 type Instance struct {

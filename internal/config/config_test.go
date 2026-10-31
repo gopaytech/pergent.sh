@@ -770,6 +770,33 @@ func TestLLMOptionalWithDashboard(t *testing.T) {
 	}
 }
 
+// Any llm field counts as an llm block: with the dashboard on, a block
+// without its provider is refused rather than ignored (the dashboard's LLM
+// would otherwise replace what the file says without a word).
+func TestLLMAnyFieldIsABlock(t *testing.T) {
+	body := minimalYAML + "dashboard:\n  url: https://pergent.example.com\n"
+	for _, tc := range []struct{ llm, want string }{
+		{"llm:\n  model: claude-sonnet-4\n", "llm.provider is required"},
+		{"llm:\n  base_url: https://llm.example.com/v1\n", "llm.provider is required"},
+		{"llm:\n  api_key_env: MY_KEY\n", "llm.provider is required"},
+		{"llm:\n  provider: anthropic\n  base_url: https://llm.example.com/v1\n", "llm.model is required"},
+	} {
+		if _, err := Load(writeConfig(t, body+tc.llm)); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("Load(%q) = %v; want %s", tc.llm, err, tc.want)
+		}
+	}
+	// A complete block, with the key variable left to its default, is one.
+	cfg, err := Load(writeConfig(t, body+"llm:\n  provider: anthropic\n  model: claude-sonnet-4\n"))
+	if err != nil || !cfg.HasLLM() || cfg.LLM.APIKeyEnv == "" {
+		t.Errorf("Load of a complete block = %+v, %v", cfg, err)
+	}
+	// An empty one (llm: {}) is none.
+	cfg, err = Load(writeConfig(t, body+"llm: {}\n"))
+	if err != nil || cfg.HasLLM() {
+		t.Errorf("Load with llm: {} = %v, HasLLM %v; want no block", err, cfg != nil && cfg.HasLLM())
+	}
+}
+
 func TestLLMRequiredWithoutDashboard(t *testing.T) {
 	base, err := os.ReadFile("testdata/valid.yaml")
 	if err != nil {

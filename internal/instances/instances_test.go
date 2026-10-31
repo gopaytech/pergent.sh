@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"log/slog"
 	"os"
 	"slices"
 	"strings"
@@ -376,12 +377,18 @@ func TestLLMFromConfigOrStore(t *testing.T) {
 func TestLLMKeyUnopenable(t *testing.T) {
 	st := newStore(t)
 	other := newBox(t, 2)
-	if err := st.PutLLM(ctx, "anthropic", "m", "", other.Seal([]byte("key")), time.Now()); err != nil {
+	if err := st.PutLLM(ctx, "anthropic", "m", "", other.Seal([]byte("plain-llm-value-9")), time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	r := New(testConfig(), st, newBox(t, 1))
+	var logs strings.Builder
+	r.SetLog(slog.New(slog.NewTextHandler(&logs, nil)))
 	if err := r.LoadLLM(ctx); err != nil {
 		t.Fatalf("LoadLLM = %v, want the unopenable key reported as not set", err)
+	}
+	// The log names the field, at Warn, and never the key.
+	if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "field=api_key") || strings.Contains(out, "plain-llm-value-9") {
+		t.Errorf("log = %q; want a Warn naming the api_key field", out)
 	}
 	if _, _, _, ok := r.LLM(); ok {
 		t.Error("LLM() is ok with a key sealed with another secret key")

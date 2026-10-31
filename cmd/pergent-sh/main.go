@@ -174,6 +174,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	}
 
 	reg := instances.New(cfg, st, box)
+	reg.SetLog(log)
 	if err := reg.LoadLLM(ctx); err != nil {
 		return err
 	}
