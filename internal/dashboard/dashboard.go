@@ -148,6 +148,12 @@ func New(o Options) (*Dashboard, error) {
 //   - GET /auth/{platform}/{instance}/login: redirect to the provider;
 //   - GET /auth/{platform}/{instance}/callback: finish sign-in, redirect to /;
 //   - POST /auth/logout: end the session (X-CSRF-Token required);
+//   - GET /auth/csrf: the password sign-in form's CSRF token, in a cookie
+//     and as {"csrfToken"};
+//   - POST /auth/password: password sign-in, {username, password} with the
+//     form's token in X-CSRF-Token (204 and the session cookie);
+//   - POST /auth/password/change: {current, new}, for a password session
+//     (204);
 //   - GET /api/instances: the instances to sign in with, without a session;
 //   - GET /api/me: the signed-in user;
 //   - the read API and, for admins, the write API (see view.go for each
@@ -159,6 +165,9 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("GET /auth/{platform}/{instance}/login", d.Auth.login)
 	mux.HandleFunc("GET /auth/{platform}/{instance}/callback", d.Auth.callback)
 	mux.HandleFunc("POST /auth/logout", d.Auth.logout)
+	mux.HandleFunc("GET /auth/csrf", d.Auth.loginCSRF)
+	mux.HandleFunc("POST /auth/password", d.Auth.passwordSignIn)
+	mux.Handle("POST /auth/password/change", d.Auth.Require(http.HandlerFunc(d.Auth.changePassword)))
 	mux.HandleFunc("GET /api/instances", d.instances)
 	mux.Handle("GET /api/me", d.Auth.Require(http.HandlerFunc(d.me)))
 	d.writeRoutes(mux)
@@ -175,18 +184,22 @@ func (d *Dashboard) Handler() http.Handler {
 
 // meView is the body of GET /api/me.
 type meView struct {
+	// Kind is "password" or "platform".
+	Kind      string `json:"kind"`
 	Platform  string `json:"platform"`
 	Instance  string `json:"instance"`
 	Username  string `json:"username"`
 	IsAdmin   bool   `json:"isAdmin"`
 	CSRFToken string `json:"csrfToken"`
+	// MustChangePassword: nothing else works until the password is changed.
+	MustChangePassword bool `json:"mustChangePassword"`
 }
 
 func (d *Dashboard) me(w http.ResponseWriter, r *http.Request) {
 	se, _ := SessionFrom(r.Context())
 	writeJSON(w, http.StatusOK, meView{
-		Platform: se.Platform, Instance: se.Instance, Username: se.Username,
-		IsAdmin: se.IsAdmin, CSRFToken: se.CSRFToken,
+		Kind: se.Kind, Platform: se.Platform, Instance: se.Instance, Username: se.Username,
+		IsAdmin: se.IsAdmin, CSRFToken: se.CSRFToken, MustChangePassword: se.MustChangePassword,
 	})
 }
 

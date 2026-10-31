@@ -51,12 +51,21 @@ const (
 // Session is the signed-in user of a request, put in its context by
 // Auth.Require.
 type Session struct {
-	// Platform is config.PlatformGitLab or config.PlatformGitHub.
+	// AccountID is the account signed in; Kind is its kind,
+	// store.AccountPassword or store.AccountPlatform.
+	AccountID int64
+	Kind      string
+	// Platform is config.PlatformGitLab or config.PlatformGitHub; a
+	// password session has none, no Instance and no UserID.
 	Platform, Instance string
 	UserID             int64
 	Username           string
-	// IsAdmin is true for a member of the instance's admin group or team.
+	// IsAdmin is true for a member of the instance's admin group or team,
+	// and for every password account.
 	IsAdmin bool
+	// MustChangePassword is set on a password account that must change its
+	// password before anything else.
+	MustChangePassword bool
 	// Visible holds the repositories on Instance the user can see: their
 	// platform IDs by lower-cased path. Use CanSee for a repository's own
 	// pages and CanSeeRun for its runs.
@@ -97,6 +106,9 @@ type Auth struct {
 	now       func() time.Time
 	log       *slog.Logger
 
+	// limit counts password attempts by client IP.
+	limit *limiter
+
 	mu       sync.Mutex
 	flights  map[string]*flight   // access checks in progress, by session hash
 	failedAt map[string]time.Time // last failed access check, by session hash
@@ -117,7 +129,7 @@ func newAuth(o Options, repos *settings.Resolver) (*Auth, error) {
 
 	a := &Auth{
 		cfg: o.Config, store: o.Store, repos: repos, box: box, stateKey: mac.Sum(nil),
-		providers: map[string]provider{}, now: o.Now, log: o.Log,
+		providers: map[string]provider{}, now: o.Now, log: o.Log, limit: newLimiter(),
 		flights: map[string]*flight{}, failedAt: map[string]time.Time{},
 	}
 	base := o.Config.Dashboard.URL
@@ -359,7 +371,11 @@ func (a *Auth) logout(w http.ResponseWriter, r *http.Request) {
 // for 8 hours nor older than 7 days (401 otherwise), checks X-CSRF-Token on
 // every request other than GET, HEAD and OPTIONS (403), and puts the
 // Session in the context, with its access checked within the last 5
-// minutes or, failing that, as described at AccessTTL.
+// minutes or, failing that, as described at AccessTTL. A session whose
+// account is gone ends (401); a password account that must change its
+// password gets 403 "password_change_required" for everything but
+// GET /api/me, POST /auth/logout and POST /auth/password/change. A password
+// session has no platform check: it is an admin.
 func (a *Auth) Require(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -393,24 +409,52 @@ func (a *Auth) Require(next http.Handler) http.Handler {
 			writeCSRFError(w)
 			return
 		}
+		account, found, err := a.store.Account(ctx, se.AccountID)
+		if err != nil {
+			a.log.Error("dashboard: loading a session's account failed", "error", err.Error())
+			writeError(w, http.StatusInternalServerError, "could not load the session")
+			return
+		}
+		if !found {
+			if err := a.store.DeleteSession(ctx, hash); err != nil {
+				a.log.Error("dashboard: deleting the session of a removed account failed", "error", err.Error())
+			}
+			a.forget(hash)
+			clearCookie(w, SessionCookieName, "/")
+			writeError(w, http.StatusUnauthorized, "not signed in")
+			return
+		}
+		if account.MustChangePassword && !allowedBeforeChange(r) {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "change your password first", "code": "password_change_required"})
+			return
+		}
 		if now.Sub(se.LastSeenAt) >= touchEvery {
 			if err := a.store.TouchSession(ctx, hash, now); err != nil {
 				a.log.Warn("dashboard: recording session use failed", "error", err.Error())
 			}
 		}
-		acc, err := a.access(ctx, se, now)
-		if err != nil {
-			a.log.Error("dashboard: loading session access failed", "error", err.Error())
-			writeError(w, http.StatusInternalServerError, "could not load the session")
-			return
-		}
-		visible := make(map[string]int64, len(acc.projects))
-		for _, p := range acc.projects {
-			visible[lower(p.Path)] = p.ID
-		}
 		s := Session{
-			Platform: se.Platform, Instance: se.Instance, UserID: se.UserID, Username: acc.username,
-			IsAdmin: acc.isAdmin, Visible: visible, CSRFToken: se.CSRF, idHash: se.IDHash,
+			AccountID: account.ID, Kind: account.Kind, MustChangePassword: account.MustChangePassword,
+			CSRFToken: se.CSRF, idHash: se.IDHash,
+		}
+		if account.Kind == store.AccountPassword {
+			// No platform and no token to check with. Until teams decide
+			// what each account sees, a password account is an admin.
+			s.Username, s.IsAdmin, s.Visible = account.Username, true, map[string]int64{}
+		} else {
+			acc, err := a.access(ctx, se, now)
+			if err != nil {
+				a.log.Error("dashboard: loading session access failed", "error", err.Error())
+				writeError(w, http.StatusInternalServerError, "could not load the session")
+				return
+			}
+			visible := make(map[string]int64, len(acc.projects))
+			for _, p := range acc.projects {
+				visible[lower(p.Path)] = p.ID
+			}
+			s.Platform, s.Instance, s.UserID, s.Username = se.Platform, se.Instance, se.UserID, acc.username
+			s.IsAdmin, s.Visible = acc.isAdmin, visible
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, sessionKey{}, s)))
 	})
@@ -424,6 +468,17 @@ func (a *Auth) PruneSessions(ctx context.Context, now time.Time) (int, error) {
 		return 0, fmt.Errorf("prune dashboard sessions: %w", err)
 	}
 	return n, nil
+}
+
+// allowedBeforeChange reports whether r is one of the requests a password
+// account that must change its password may make: who am I, sign out and
+// the change itself.
+func allowedBeforeChange(r *http.Request) bool {
+	switch r.Method + " " + r.URL.Path {
+	case "GET /api/me", "POST /auth/logout", "POST /auth/password/change":
+		return true
+	}
+	return false
 }
 
 func safeMethod(m string) bool {

@@ -2,12 +2,17 @@
 // GitHub pull requests as Kubernetes Jobs.
 //
 //	pergent-sh serve [--config /etc/pergent-sh/config.yaml]
+//	pergent-sh admin reset-password <username>
 //
-// It needs DATABASE_URL and PERGENT_SH_SECRET_KEY in the environment, plus the
-// LLM key, the GitLab tokens, the GitHub App private keys (or approve token)
-// and the webhook secrets the config file names. With dashboard.url set it
-// also serves the dashboard, and needs the OAuth client ID and secret of
-// every instance the config sets up for sign-in.
+// serve needs DATABASE_URL and PERGENT_SH_SECRET_KEY in the environment, plus
+// the LLM key, the GitLab tokens, the GitHub App private keys (or approve
+// token) and the webhook secrets the config file names. With dashboard.url
+// set it also serves the dashboard, and needs the OAuth client ID and secret
+// of every instance the config sets up for sign-in.
+//
+// admin reset-password gives a dashboard password account a new random
+// password, printed on stdout, which must be changed at the next sign-in. It
+// needs only DATABASE_URL.
 package main
 
 import (
@@ -54,7 +59,7 @@ const (
 	// sessionPruneEvery is how often the dashboard's expired sessions are
 	// deleted.
 	sessionPruneEvery = time.Hour
-	usage             = "usage: pergent-sh serve [--config <path>]"
+	usage             = "usage: pergent-sh serve [--config <path>]\n       pergent-sh admin reset-password <username>"
 )
 
 func main() {
@@ -62,7 +67,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	configPath, err := parseArgs(os.Args[1:], os.Stderr)
+	cmd, err := parseArgs(os.Args[1:], os.Stderr)
 	if errors.Is(err, flag.ErrHelp) {
 		return
 	}
@@ -70,27 +75,48 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	if err := serve(ctx, configPath, log); err != nil {
+	if cmd.name == "reset-password" {
+		os.Exit(resetPassword(ctx, cmd.username, os.Stdout, os.Stderr))
+	}
+	if err := serve(ctx, cmd.configPath, log); err != nil {
 		log.Error("pergent-sh stopped", "error", err.Error())
 		os.Exit(1)
 	}
 }
 
-// parseArgs reads "serve [--config <path>]" and returns the config path.
-func parseArgs(args []string, stderr io.Writer) (string, error) {
-	if len(args) == 0 || args[0] != "serve" {
-		return "", errors.New(usage)
+// command is what the arguments ask for: name "serve", with configPath,
+// or "reset-password", with username.
+type command struct {
+	name       string
+	configPath string
+	username   string
+}
+
+// parseArgs reads "serve [--config <path>]" or "admin reset-password
+// <username>".
+func parseArgs(args []string, stderr io.Writer) (cmd command, err error) {
+	if len(args) == 0 {
+		return command{}, errors.New(usage)
 	}
-	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	path := fs.String("config", defaultConfigPath, "path to the config file")
-	if err := fs.Parse(args[1:]); err != nil {
-		return "", err
+	switch args[0] {
+	case "serve":
+		fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		path := fs.String("config", defaultConfigPath, "path to the config file")
+		if err := fs.Parse(args[1:]); err != nil {
+			return command{}, err
+		}
+		if fs.NArg() > 0 {
+			return command{}, fmt.Errorf("unexpected argument %q\n%s", fs.Arg(0), usage)
+		}
+		return command{name: "serve", configPath: *path}, nil
+	case "admin":
+		if len(args) != 3 || args[1] != "reset-password" || args[2] == "" {
+			return command{}, errors.New(usage)
+		}
+		return command{name: "reset-password", username: args[2]}, nil
 	}
-	if fs.NArg() > 0 {
-		return "", fmt.Errorf("unexpected argument %q\n%s", fs.Arg(0), usage)
-	}
-	return *path, nil
+	return command{}, errors.New(usage)
 }
 
 // serve starts pergent.sh and runs it until ctx is done. Anything wrong with
@@ -136,6 +162,11 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	defer st.Close()
 	if err := st.Migrate(ctx); err != nil {
 		return err
+	}
+	if cfg.DashboardEnabled() {
+		if err := dashboard.Bootstrap(ctx, st, cfg, time.Now(), log); err != nil {
+			return err
+		}
 	}
 
 	platforms, hookSecrets, err := connectGitLab(ctx, cfg)
@@ -500,7 +531,6 @@ func kubeConfig() (*rest.Config, error) {
 	return nil, fmt.Errorf("kubernetes config: %w", err)
 }
 
-// requireEnv reads an environment variable that must be set and not empty.
 // readLLMKey returns the key of the llm: block, or "" when the file has none
 // (the LLM is then added in the dashboard).
 func readLLMKey(cfg *config.Config) (string, error) {
@@ -514,6 +544,7 @@ func readLLMKey(cfg *config.Config) (string, error) {
 	return key, nil
 }
 
+// requireEnv reads an environment variable that must be set and not empty.
 func requireEnv(name string) (string, error) {
 	if v := os.Getenv(name); v != "" {
 		return v, nil

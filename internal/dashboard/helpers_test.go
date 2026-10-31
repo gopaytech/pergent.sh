@@ -748,11 +748,13 @@ func (e *env) signIn(platform, instance string, extra ...*http.Cookie) *http.Coo
 }
 
 type meBody struct {
-	Platform  string `json:"platform"`
-	Instance  string `json:"instance"`
-	Username  string `json:"username"`
-	IsAdmin   bool   `json:"isAdmin"`
-	CSRFToken string `json:"csrfToken"`
+	Kind               string `json:"kind"`
+	Platform           string `json:"platform"`
+	Instance           string `json:"instance"`
+	Username           string `json:"username"`
+	IsAdmin            bool   `json:"isAdmin"`
+	MustChangePassword bool   `json:"mustChangePassword"`
+	CSRFToken          string `json:"csrfToken"`
 }
 
 func (e *env) me(c *http.Cookie) (int, meBody) {
