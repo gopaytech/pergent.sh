@@ -17,6 +17,9 @@ import (
 const (
 	// auditPageSize is the most entries GET /api/audit returns at once.
 	auditPageSize = 100
+	// auditMaxChunks bounds the reading for one GET /api/audit: chunks of
+	// auditPageSize entries, read past those the session can't see.
+	auditMaxChunks = 50
 	// maxTeamName is the longest team name, in characters.
 	maxTeamName = 100
 
@@ -34,6 +37,7 @@ const (
 	msgRepoNotOn      = "every repository must be switched on, or name a whole instance with project \"\""
 	msgOtherInstance  = "you can add repositories of your own instance only"
 	msgBadBefore      = "before must be the ID of an audit entry"
+	msgHiddenCoverage = "this team covers repositories you can't see; a password admin can change its role or remove it"
 )
 
 var usernamePattern = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,64}$`)
@@ -288,10 +292,15 @@ func (d *Dashboard) createTeam(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, teamView(se, t, nil))
 }
 
-// badTeam is a team change refused with a 400 and its message.
-type badTeam struct{ msg string }
+// errHiddenCoverage refuses a change that would drop repositories a team
+// covers which the session can't see: making it an admin team, or removing
+// it. Only a session that sees everything can.
+var errHiddenCoverage = errors.New(msgHiddenCoverage)
 
-func (e badTeam) Error() string { return e.msg }
+// coversHidden reports whether t covers a repository the session can't see.
+func coversHidden(se Session, t store.Team) bool {
+	return slices.ContainsFunc(t.Repos, func(tr store.TeamRepo) bool { return !seesTeamRepo(se, tr) })
+}
 
 func (d *Dashboard) updateTeam(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
@@ -346,6 +355,9 @@ func (d *Dashboard) updateTeam(w http.ResponseWriter, r *http.Request) {
 		before.Members, before.Repos = slices.Clone(t.Members), slices.Clone(t.Repos)
 		saved := repos
 		if in.Role == store.RoleAdmin {
+			if t.Role != store.RoleAdmin && coversHidden(se, *t) {
+				return errHiddenCoverage
+			}
 			saved = nil // an admin team has no repository list
 		} else {
 			// What the session can't see stays as it is.
@@ -362,6 +374,9 @@ func (d *Dashboard) updateTeam(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, store.ErrExists):
 		writeError(w, http.StatusConflict, msgTeamNameTaken)
+		return
+	case errors.Is(err, errHiddenCoverage):
+		writeError(w, http.StatusConflict, msgHiddenCoverage)
 		return
 	case err != nil:
 		d.Log.Error("dashboard: changing a team failed", "team", id, "error", err.Error())
@@ -494,6 +509,10 @@ func (d *Dashboard) deleteTeam(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
+	if coversHidden(se, t) {
+		writeError(w, http.StatusConflict, msgHiddenCoverage)
+		return
+	}
 	deleted, err := d.Store.DeleteTeam(ctx, id)
 	if err != nil {
 		d.Log.Error("dashboard: removing a team failed", "team", id, "error", err.Error())
@@ -512,9 +531,10 @@ func (d *Dashboard) deleteTeam(w http.ResponseWriter, r *http.Request) {
 // --- the audit log ---
 
 // auditLog answers up to auditPageSize entries the session can see, newest
-// first, older than ?before= when given. For a platform admin it reads on
-// past the entries it can't see until the page is full or the log ends, so
-// a page short of auditPageSize is the last one.
+// first, older than ?before= when given, and the before of the page after.
+// For a platform admin it reads on past the entries it can't see, at most
+// auditMaxChunks chunks: when they don't fill the page, it answers what
+// they held, and next goes on after the last entry read.
 func (d *Dashboard) auditLog(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	var before int64
@@ -526,26 +546,30 @@ func (d *Dashboard) auditLog(w http.ResponseWriter, r *http.Request) {
 		}
 		before = n
 	}
-	out := []AuditView{}
-	for len(out) < auditPageSize {
+	page := AuditPageView{Entries: []AuditView{}}
+	for chunk := 0; chunk < auditMaxChunks && len(page.Entries) < auditPageSize; chunk++ {
 		entries, err := d.Store.AuditLog(ctx, before, auditPageSize)
 		if err != nil {
 			d.failed(w, r, "reading the audit log", err)
 			return
 		}
+		read := 0
 		for _, e := range entries {
-			if len(out) == auditPageSize {
+			if len(page.Entries) == auditPageSize {
 				break
 			}
 			if e.Project == "" || se.CanSee(e.Instance, e.Project) {
-				out = append(out, AuditView{ID: e.ID, At: e.At.UTC(), Actor: e.Actor, Action: e.Action,
+				page.Entries = append(page.Entries, AuditView{ID: e.ID, At: e.At.UTC(), Actor: e.Actor, Action: e.Action,
 					Instance: e.Instance, Project: e.Project, Detail: e.Detail})
 			}
+			before = e.ID
+			read++
 		}
-		if len(entries) < auditPageSize {
+		if read == len(entries) && len(entries) < auditPageSize {
+			before = 0 // the log ends here
 			break
 		}
-		before = entries[len(entries)-1].ID
 	}
-	writeJSON(w, http.StatusOK, out)
+	page.Next = before
+	writeJSON(w, http.StatusOK, page)
 }

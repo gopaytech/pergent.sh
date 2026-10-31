@@ -333,7 +333,8 @@ func TestTeamMembersMustBePlatform(t *testing.T) {
 }
 
 // A platform admin edits a team with repositories it can't see: those are
-// kept, counted and never shown; it can't add another instance's.
+// kept, counted and never shown; it can't add another instance's, nor make
+// the team an admin team or remove it (409). A password admin can.
 func TestPlatformAdminTeamEditKeepsHidden(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.signInGitLab(true, "acme/widgets") // acme/payments is hidden from alice
@@ -372,58 +373,130 @@ func TestPlatformAdminTeamEditKeepsHidden(t *testing.T) {
 	if len(got.Repos) != 0 || got.HiddenRepos != 2 {
 		t.Errorf("PUT answer = %+v; want repos [], hiddenRepos 2", got)
 	}
-	if tm := e.storedTeam(id); !slices.Equal(tm.Repos, []store.TeamRepo{{Instance: "gh"}, {Instance: "main", Project: "acme/payments"}}) {
+	hidden := []store.TeamRepo{{Instance: "gh"}, {Instance: "main", Project: "acme/payments"}}
+	if tm := e.storedTeam(id); !slices.Equal(tm.Repos, hidden) {
 		t.Errorf("stored repos = %+v", tm.Repos)
+	}
+
+	// Making the team an admin team, or removing it, would drop what it
+	// covers out of sight: 409 for a platform admin, and nothing changes.
+	const wantConflict = `{"error":"this team covers repositories you can't see; a password admin can change its role or remove it"}`
+	toAdmin := `{"name":"devs","role":"admin","members":[],"repos":[]}`
+	rec := e.send(c, "PUT", target, toAdmin)
+	if rec.Code != http.StatusConflict || body(rec) != wantConflict {
+		t.Errorf("PUT role admin = %d %s; want 409 %s", rec.Code, rec.Body, wantConflict)
+	}
+	rec = e.send(c, "DELETE", target, "")
+	if rec.Code != http.StatusConflict || body(rec) != wantConflict {
+		t.Errorf("DELETE = %d %s; want 409 %s", rec.Code, rec.Body, wantConflict)
+	}
+	if tm := e.storedTeam(id); tm.Role != store.RoleViewer || !slices.Equal(tm.Repos, hidden) {
+		t.Errorf("the refused changes changed the team: %+v", tm)
+	}
+
+	// A team it sees all of, it can make an admin team and remove.
+	mine := e.team("mine", store.RoleViewer, nil, store.TeamRepo{Instance: "main", Project: "acme/widgets"})
+	mineTarget := "/api/teams/" + strconv.FormatInt(mine, 10)
+	wantCode(t, e.send(c, "PUT", mineTarget, `{"name":"mine","role":"admin","members":[],"repos":[]}`), "PUT mine role admin", http.StatusOK)
+	wantCode(t, e.send(c, "DELETE", mineTarget, ""), "DELETE mine", http.StatusNoContent)
+
+	// A password admin sees everything: role admin clears the repositories,
+	// and the team can be removed.
+	op := e.signInOperator()
+	got = decode[TeamView](t, e.send(op, "PUT", target, toAdmin), "operator PUT role admin", http.StatusOK)
+	if got.Role != store.RoleAdmin || len(got.Repos) != 0 || got.HiddenRepos != 0 {
+		t.Errorf("operator PUT answer = %+v", got)
+	}
+	if tm := e.storedTeam(id); tm.Role != store.RoleAdmin || len(tm.Repos) != 0 {
+		t.Errorf("stored after operator PUT = %+v; want an admin team with no repos", tm)
+	}
+	e.editTeam(id, func(tm *store.Team) { tm.Role, tm.Repos = store.RoleViewer, hidden })
+	wantCode(t, e.send(op, "DELETE", target, ""), "operator DELETE", http.StatusNoContent)
+	if _, found, _ := e.st.Team(ctx, id); found {
+		t.Error("the team is still there")
+	}
+}
+
+// Every write here needs the session's CSRF token: 403 with code "csrf".
+func TestOrgWritesNeedCSRF(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.signInOperator()
+	rec := e.doJSON("POST", "/api/teams", []*http.Cookie{c}, nil, map[string]string{"name": "devs", "role": "viewer"})
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("POST /api/teams without X-CSRF-Token = %d %s; want 403", rec.Code, rec.Body)
+	}
+	wantCSRFCode(t, rec)
+	if teams, _ := e.st.Teams(ctx); len(teams) != 0 {
+		t.Errorf("a team was made: %+v", teams)
 	}
 }
 
 // A platform admin sees the audit entries of the repositories it can see
 // and those of no repository; an operator sees every one. Pages are 100,
-// newest first, and a page of a platform admin is full when there are
-// enough entries it can see.
+// newest first, with next the before of the page after (0 at the end). A
+// platform admin's request reads at most 50 chunks of 100: when that's
+// not enough to fill the page, it answers what it found and where to go on.
 func TestAuditFiltered(t *testing.T) {
 	e := newEnv(t, nil)
 	e.addPasswordAccount("root", operatorPassword, false)
 	c := e.signInGitLab(true, "acme/widgets")
 	e.addAudit(store.AuditEntry{Actor: "carol", Action: "repository_on", Instance: "main", Project: "acme/widgets"})
-	for i := 0; i < 150; i++ {
-		e.addAudit(store.AuditEntry{Actor: "carol", Action: "settings_reset", Instance: "main", Project: "acme/payments"})
-	}
+	e.exec(`INSERT INTO audit_log (at, actor, action, instance, project)
+		SELECT now(), 'carol', 'settings_reset', 'main', 'acme/payments' FROM generate_series(1, 5100)`)
 	e.addAudit(store.AuditEntry{Actor: "carol", Action: "repository_off", Instance: "gh", Project: "acme/widgets"})
 	e.addAudit(store.AuditEntry{Actor: "carol", Action: "team_created", Detail: "devs (viewer)"})
+	all := e.auditEntries()
 
-	page := decode[[]AuditView](t, e.get(c, "/api/audit"), "GET audit", http.StatusOK)
-	var got []string
-	for _, a := range page {
-		got = append(got, a.Action+" "+a.Project)
-		if a.Project == "acme/payments" || a.Instance == "gh" {
-			t.Errorf("a hidden entry is shown: %+v", a)
+	actions := func(entries []AuditView) []string {
+		var out []string
+		for _, a := range entries {
+			out = append(out, a.Action+" "+a.Project)
+			if a.Project == "acme/payments" || a.Instance == "gh" {
+				t.Errorf("a hidden entry is shown: %+v", a)
+			}
 		}
+		return out
 	}
-	// Newest first, past the 150 hidden ones.
-	if len(got) < 2 || got[0] != "team_created " || !slices.Contains(got, "repository_on acme/widgets") {
-		t.Errorf("platform admin's audit = %v", got)
+	// The newest and the hidden gh one, then 4998 hidden: 50 chunks, and
+	// the page stops with the one entry found.
+	page := decode[AuditPageView](t, e.get(c, "/api/audit"), "GET audit", http.StatusOK)
+	if got := actions(page.Entries); !slices.Equal(got, []string{"team_created "}) || page.Next != all[4999].ID {
+		t.Errorf("platform admin's first page = %v, next %d; want [team_created], next %d", got, page.Next, all[4999].ID)
+	}
+	page = decode[AuditPageView](t, e.get(c, "/api/audit?before="+strconv.FormatInt(page.Next, 10)), "GET audit", http.StatusOK)
+	if got := actions(page.Entries); !slices.Equal(got, []string{"repository_on acme/widgets"}) || page.Next != 0 {
+		t.Errorf("platform admin's second page = %v, next %d; want [repository_on acme/widgets], next 0", got, page.Next)
 	}
 
 	op := e.signInPassword("root", operatorPassword)
-	first := decode[[]AuditView](t, e.get(op, "/api/audit"), "GET audit", http.StatusOK)
-	if len(first) != 100 || first[0].Action != "sign_in" || first[0].ID <= first[99].ID {
-		t.Fatalf("operator's first page: %d entries, first %+v", len(first), first[0])
+	first := decode[AuditPageView](t, e.get(op, "/api/audit"), "GET audit", http.StatusOK)
+	if len(first.Entries) != 100 || first.Entries[0].Action != "sign_in" || first.Entries[0].ID <= first.Entries[99].ID ||
+		first.Next != first.Entries[99].ID {
+		t.Fatalf("operator's first page: %d entries, first %+v, next %d", len(first.Entries), first.Entries[0], first.Next)
 	}
-	second := decode[[]AuditView](t, e.get(op, "/api/audit?before="+strconv.FormatInt(first[99].ID, 10)), "GET older", http.StatusOK)
-	total := len(first) + len(second)
-	if all := len(e.auditEntries()); total != all {
-		t.Errorf("two pages hold %d entries; the log has %d", total, all)
+	var seen []AuditView
+	for p, pages := first, 1; ; pages++ {
+		seen = append(seen, p.Entries...)
+		if p.Next == 0 {
+			break
+		}
+		if pages > 60 {
+			t.Fatalf("still paging after %d pages", pages)
+		}
+		p = decode[AuditPageView](t, e.get(op, "/api/audit?before="+strconv.FormatInt(p.Next, 10)), "GET older", http.StatusOK)
 	}
-	if second[len(second)-1].Actor != "carol" || second[len(second)-1].Action != "repository_on" {
-		t.Errorf("oldest = %+v", second[len(second)-1])
+	if all := e.auditEntries(); len(seen) != len(all) {
+		t.Errorf("the pages hold %d entries; the log has %d", len(seen), len(all))
+	}
+	if oldest := seen[len(seen)-1]; oldest.Actor != "carol" || oldest.Action != "repository_on" {
+		t.Errorf("oldest = %+v", oldest)
 	}
 	for _, q := range []string{"?before=x", "?before=-1", "?before=0"} {
 		wantCode(t, e.get(op, "/api/audit"+q), "GET audit"+q, http.StatusBadRequest)
 	}
 	empty := e.get(op, "/api/audit?before=1")
-	if empty.Code != http.StatusOK || body(empty) != "[]" {
-		t.Errorf("GET before the first = %d %s; want []", empty.Code, empty.Body)
+	if empty.Code != http.StatusOK || body(empty) != `{"entries":[],"next":0}` {
+		t.Errorf("GET before the first = %d %s; want no entries, next 0", empty.Code, empty.Body)
 	}
 }
 

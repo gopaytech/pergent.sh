@@ -460,12 +460,20 @@ type AvailableRepo struct {
 //     "project": ""} for every repository of instance X (400 otherwise).
 //     For a platform admin the team's repositories it can't see are kept
 //     as they are, and it can name repositories of its own instance only
-//     (400). 200, TeamView; 404 for no such team.
+//     (400); making a team that covers repositories it can't see an admin
+//     team is 409 {"error": "this team covers repositories you can't see;
+//     a password admin can change its role or remove it"}, since an admin
+//     team has none. 200, TeamView; 404 for no such team.
 //   - DELETE /api/teams/{id}: removes the team (not its members' accounts).
-//     204.
-//   - GET /api/audit?before=<id>: []AuditView, 100 at most, newest first,
-//     older than the entry before (an ID, from the last entry of the page
-//     before) when given.
+//     For a platform admin a team covering repositories it can't see is
+//     409, as above. 204.
+//   - GET /api/audit?before=<id>: AuditPageView, 100 entries at most,
+//     newest first, older than the entry before when given. Its next is
+//     the before of the page after, 0 at the end of the log (the page after
+//     can still be empty when the log ends just there). A platform admin's
+//     request reads at most 50 chunks of 100 entries: when those don't fill
+//     the page, it answers what they held, so a short page with next not 0
+//     isn't the last.
 //
 // A platform admin sees only what it can see: a team's repositories of
 // other instances, and those its platform hides from it, are counted in
@@ -528,6 +536,13 @@ type TeamMemberView struct {
 type TeamRepoView struct {
 	Instance string `json:"instance"`
 	Project  string `json:"project"`
+}
+
+// AuditPageView is a page of the audit log. Next is the before of the
+// page after; 0 when the log has nothing older.
+type AuditPageView struct {
+	Entries []AuditView `json:"entries"`
+	Next    int64       `json:"next"`
 }
 
 // AuditView is one audit entry. Instance and Project are "" when it isn't
