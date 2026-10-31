@@ -30,6 +30,9 @@ var errRecentFailure = errors.New("the last access check failed less than a minu
 type accessResult struct {
 	username string
 	projects []store.VisibleProject
+	// closed is set when no check has vouched for the session for two
+	// AccessTTLs: it sees nothing and has no role, whatever its teams.
+	closed bool
 }
 
 // flight is an access check in progress; requests of the same session wait
@@ -44,8 +47,9 @@ type flight struct {
 // cov covers. A check younger than AccessTTL made for cov's scope is used
 // as stored. Otherwise one is made now; if that fails, the stored one is
 // used while it is younger than two AccessTTLs (the caller keeps only what
-// cov covers), and after that the session sees nothing (fail closed) until
-// a check succeeds.
+// cov covers), and after that, or at once for a session never checked, the
+// session sees nothing and has no role (fail closed, closed is set) until a
+// check succeeds.
 func (a *Auth) access(ctx context.Context, se store.Session, now time.Time, cov coverage) (accessResult, error) {
 	if se.AccessScope == cov.scope && fresh(se.AccessCheckedAt, now, AccessTTL) {
 		return a.stored(ctx, se)
@@ -64,8 +68,8 @@ func (a *Auth) access(ctx context.Context, se store.Session, now time.Time, cov 
 	if err := a.store.ClearSessionAccess(ctx, se.IDHash); err != nil {
 		return accessResult{}, err
 	}
-	// Nothing to see, but still the user who signed in.
-	return accessResult{username: se.Username}, nil
+	// Nothing to see and no role, but still the user who signed in.
+	return accessResult{username: se.Username, closed: true}, nil
 }
 
 // fresh reports whether a check at checked is at most ttl old at now.

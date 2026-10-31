@@ -196,8 +196,9 @@ type meView struct {
 	Waiting bool `json:"waiting"`
 	// MustChangePassword: nothing else works until the password is changed.
 	MustChangePassword bool `json:"mustChangePassword"`
-	// WaitingUsers counts the platform accounts on no team; 0 for
-	// non-admins.
+	// WaitingUsers counts the platform accounts on no team: of every
+	// instance for an operator, of their own for a platform admin; 0 for
+	// everyone else.
 	WaitingUsers int    `json:"waitingUsers"`
 	CSRFToken    string `json:"csrfToken"`
 }
@@ -210,7 +211,8 @@ func (d *Dashboard) me(w http.ResponseWriter, r *http.Request) {
 		CSRFToken: se.CSRFToken,
 	}
 	if se.Admin {
-		n, err := d.Store.CountWaitingAccounts(r.Context())
+		// An operator has no instance: "" counts every one.
+		n, err := d.Store.CountWaitingAccounts(r.Context(), se.Instance)
 		if err != nil {
 			d.failed(w, r, "counting waiting accounts", err)
 			return

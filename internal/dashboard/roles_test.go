@@ -129,6 +129,23 @@ func TestScopeStable(t *testing.T) {
 	}
 }
 
+// A team whose role pergent.sh doesn't know is as no team: it covers
+// nothing, makes no admin, and doesn't count for waiting.
+func TestUnknownRoleTeamIsAbsent(t *testing.T) {
+	odd := store.Team{Name: "odd", Role: "owner", Repos: []store.TeamRepo{{Instance: "main"}}}
+	got := cover([]store.Team{odd}, switchedOn, "main")
+	if got.admin || len(got.roles) != 0 || len(got.projects) != 0 || got.scope != cover(nil, switchedOn, "main").scope {
+		t.Errorf("coverage of an unknown-role team = %+v; want none", got)
+	}
+	viewers := store.Team{Name: "viewers", Role: store.RoleViewer}
+	if known := knownTeams([]store.Team{odd, viewers}); len(known) != 1 || known[0].Name != "viewers" {
+		t.Errorf("knownTeams = %+v; want viewers only", known)
+	}
+	if known := knownTeams([]store.Team{odd}); len(known) != 0 {
+		t.Errorf("knownTeams of an unknown-role team = %+v; want none (waiting)", known)
+	}
+}
+
 // A session's role on a repository is RoleNone where it can't see it, the
 // coverage's role where it can, and admin everywhere for an operator.
 func TestSessionRole(t *testing.T) {

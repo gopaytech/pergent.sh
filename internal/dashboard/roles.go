@@ -82,7 +82,8 @@ type coverage struct {
 //   - a team repository with no project covers every one of its instance,
 //     and one with a project that one, ignoring case;
 //   - repositories of other instances are left out;
-//   - of the teams covering a repository, the highest role wins.
+//   - of the teams covering a repository, the highest role wins;
+//   - a team with a role pergent.sh doesn't know gives nothing.
 func cover(teams []store.Team, repos []settings.Effective, instance string) coverage {
 	on := map[RepoKey]string{}
 	for _, e := range repos {
@@ -96,7 +97,7 @@ func cover(teams []store.Team, repos []settings.Effective, instance string) cove
 			c.roles[k] = r
 		}
 	}
-	for _, t := range teams {
+	for _, t := range knownTeams(teams) {
 		role := roleOf(t.Role)
 		if role == RoleAdmin {
 			c.admin = true
@@ -152,4 +153,16 @@ func sortKeys(keys []RepoKey) {
 		}
 		return keys[i].Path < keys[j].Path
 	})
+}
+
+// knownTeams is teams without those whose role isn't one pergent.sh knows:
+// such a team is as none, for waiting as for coverage.
+func knownTeams(teams []store.Team) []store.Team {
+	out := make([]store.Team, 0, len(teams))
+	for _, t := range teams {
+		if roleOf(t.Role) != RoleNone {
+			out = append(out, t)
+		}
+	}
+	return out
 }

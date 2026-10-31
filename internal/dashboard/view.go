@@ -99,11 +99,12 @@ type ReviewSummary struct {
 	WebURL string `json:"webURL"`
 }
 
-// ReviewListView is GET /api/reviews?project=&instance=&outcome=&days=&cursor=:
-// 50 reviews at most, the most recently updated first. project (a path, on
-// instance when that is given, else on any) and outcome filter; days (1 to
-// 365, default 90) leaves out reviews last updated longer ago. nextCursor, when not "", is passed as cursor for the
-// next page.
+// ReviewListView is GET
+// /api/reviews?project=&instance=&outcome=&days=&cursor=: 50 reviews at
+// most, the most recently updated first. project (a path, on instance when
+// that is given, else on any) and outcome filter; days (1 to 365, default
+// 90) leaves out reviews last updated longer ago. nextCursor, when not "",
+// is passed as cursor for the next page.
 type ReviewListView struct {
 	Items      []ReviewSummary `json:"items"`
 	NextCursor string          `json:"nextCursor"`

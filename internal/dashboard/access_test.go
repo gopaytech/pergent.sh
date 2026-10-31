@@ -209,9 +209,9 @@ func TestAccessRefreshDropsRepository(t *testing.T) {
 	}
 }
 
-// A failed refresh keeps the last list for one more period, then denies
-// every repository, and access comes back once a check succeeds. Being an
-// admin comes from the teams, not the platform: it stays.
+// A failed refresh keeps the last list for one more period, then fails
+// closed: no repository and no role, admin team or not, until a check
+// succeeds.
 func TestRefreshFailureFailsClosedAfterOnePeriod(t *testing.T) {
 	e := newEnv(t, nil)
 	e.gl.setProject("acme/widgets", gitlabProject("private", 30, 0))
@@ -225,11 +225,15 @@ func TestRefreshFailureFailsClosedAfterOnePeriod(t *testing.T) {
 	}
 	e.clock.advance(4*time.Minute + time.Second) // 10 min + 1 s after the last good check
 	code, se := e.session(c)
-	if code != 200 || len(se.Visible) != 0 || se.Role("main", "acme/widgets") != RoleNone {
+	if code != 200 || len(se.Visible) != 0 || len(se.Roles) != 0 || se.Admin || se.Waiting ||
+		se.Role("main", "acme/widgets") != RoleNone {
 		t.Fatalf("after two periods without a check: %d %+v", code, se)
 	}
-	if _, me := e.me(c); me.Username != "alice" {
-		t.Fatalf("/api/me after failing closed = %+v; want alice", me)
+	if _, me := e.me(c); me.Username != "alice" || me.Admin || me.WaitingUsers != 0 {
+		t.Fatalf("/api/me after failing closed = %+v; want alice, no admin", me)
+	}
+	for _, target := range []string{"/api/integrations", "/api/admin/settings"} {
+		e.wantStatus(c, target, http.StatusForbidden)
 	}
 	stored, _ := e.storedSession(c)
 	projects, _ := e.st.SessionProjects(ctx, hashOf(t, c))
@@ -277,7 +281,7 @@ func TestExpiredTokenRefreshFailsClosed(t *testing.T) {
 		t.Fatalf("within one more period: %+v", se)
 	}
 	e.clock.advance(4*time.Minute + time.Second)
-	if _, se := e.session(c); len(se.Visible) != 0 {
+	if _, se := e.session(c); len(se.Visible) != 0 || len(se.Roles) != 0 || se.Admin {
 		t.Fatalf("after a refused refresh and two periods: %+v", se)
 	}
 }
@@ -762,6 +766,16 @@ func TestMeWaitingUsers(t *testing.T) {
 	if _, me := e.me(waiting); !me.Admin || me.WaitingUsers != 1 {
 		t.Errorf("a platform admin's /api/me = %+v; want admin and carol waiting", me)
 	}
+	// A platform admin counts only their own instance's; an operator all.
+	if _, err := e.st.UpsertPlatformAccount(ctx, config.PlatformGitHub, "gh", 71, "dan", e.clock.now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, me := e.me(waiting); me.WaitingUsers != 1 {
+		t.Errorf("main's admin's waitingUsers with dan waiting on gh = %d, want 1 (carol)", me.WaitingUsers)
+	}
+	if _, me := e.me(op); me.WaitingUsers != 2 {
+		t.Errorf("operator's waitingUsers = %d, want 2 (carol and dan)", me.WaitingUsers)
+	}
 }
 
 // A repository taken off a team is gone at the next request even when the
@@ -784,5 +798,25 @@ func TestTeamRemovalAppliesWhenPlatformDown(t *testing.T) {
 	}
 	if repos := getJSON[[]RepositoryView](e, c, "/api/repositories"); len(repos) != 1 || repos[0].Project != "acme/widgets" {
 		t.Errorf("repositories = %+v", repos)
+	}
+}
+
+// A session whose access was never checked, and whose check fails, has no
+// role at all: an admin team gives nothing the platform hasn't vouched for.
+func TestNeverCheckedFailsClosed(t *testing.T) {
+	e := newEnv(t, nil)
+	e.gl.setProject("acme/widgets", gitlabProject("private", 30, 0))
+	e.aliceOn("main", store.RoleAdmin)
+	c := e.signIn("gitlab", "main")
+	e.exec(`UPDATE sessions SET access_checked_at = NULL`)
+	e.gl.set(func(o *oauthServer) { o.failAPI = true })
+	if code, se := e.session(c); code != 200 || se.Admin || len(se.Visible) != 0 || len(se.Roles) != 0 {
+		t.Fatalf("never checked, check failing: %d %+v; want no admin, nothing visible", code, se)
+	}
+	e.wantStatus(c, "/api/admin/settings", http.StatusForbidden)
+	e.gl.set(func(o *oauthServer) { o.failAPI = false })
+	e.clock.advance(retryAfterFailure + time.Second)
+	if _, se := e.session(c); !se.Admin || !se.CanSee("main", "acme/widgets") {
+		t.Fatalf("after a good check: %+v", se)
 	}
 }

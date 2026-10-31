@@ -426,6 +426,8 @@ func (a *Auth) logout(w http.ResponseWriter, r *http.Request) {
 // the repositories its teams cover that the platform lets it see, checked
 // within the last 5 minutes (AccessTTL) for the repositories covered now: a
 // check made for other ones is made again before the request is served.
+// When checks have failed for two AccessTTLs it sees nothing and has no
+// role, admin team or not, until one succeeds.
 func (a *Auth) Require(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -504,6 +506,7 @@ func (a *Auth) Require(next http.Handler) http.Handler {
 			writeError(w, http.StatusInternalServerError, "could not load the session")
 			return
 		}
+		teams = knownTeams(teams)
 		if len(teams) == 0 {
 			if !allowedWhileWaiting(r) {
 				writeJSON(w, http.StatusForbidden, map[string]string{
@@ -527,15 +530,21 @@ func (a *Auth) Require(next http.Handler) http.Handler {
 			writeError(w, http.StatusInternalServerError, "could not load the session")
 			return
 		}
+		s.Username, s.Visible, s.Roles = acc.username, map[RepoKey]int64{}, map[RepoKey]Role{}
+		if acc.closed {
+			// The platform hasn't vouched for the session: no role at
+			// all, admin team or not, until a check succeeds.
+			next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, sessionKey{}, s)))
+			return
+		}
 		// The platform's answer, but only where the teams cover now: a
 		// check made before a team change never shows more.
-		s.Visible = map[RepoKey]int64{}
 		for _, p := range acc.projects {
 			if k := repoKey(p.Instance, p.Path); cov.roles[k] > RoleNone {
 				s.Visible[k] = p.ID
 			}
 		}
-		s.Username, s.Admin, s.Roles = acc.username, cov.admin, cov.roles
+		s.Admin, s.Roles = cov.admin, cov.roles
 		next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, sessionKey{}, s)))
 	})
 }
