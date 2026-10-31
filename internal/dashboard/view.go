@@ -371,8 +371,10 @@ type LLMView struct {
 // repositories on and off and for the picker, a maintainer or admin of the
 // repository for its settings. A repository the user can't see is answered
 // exactly like one that doesn't exist (404), whatever the write. A
-// repository listed in the config is read-only here (409). Errors are
-// {"error": "message"}. The picker and switching on need a platform token:
+// repository listed in the config is read-only here (409). Each change is
+// recorded in the audit log: repository_on, repository_off,
+// settings_updated (detail: the settings in the body) and settings_reset.
+// Errors are {"error": "message"}. The picker and switching on need a platform token:
 // an operator gets 400 {"error": "sign in with GitLab or GitHub to add
 // repositories"}.
 //
@@ -427,4 +429,115 @@ type AvailableRepo struct {
 	Project  string `json:"project"`
 	// Platform is "gitlab" or "github".
 	Platform string `json:"platform"`
+}
+
+// --- Users, teams and the audit log (admins only, 403 otherwise) ---
+//
+// Every write needs the X-CSRF-Token header, as above, and is recorded in
+// the audit log: account_created and account_deleted (detail: the
+// username), team_created (detail: "name (role)"), team_updated (detail:
+// "name: " and the parts changed, of name, role, members and repos) and
+// team_deleted (detail: the name). Errors are {"error": "message"}.
+//
+//   - GET /api/users: []UserView, the waiting accounts first, then
+//     everyone by username.
+//   - DELETE /api/users/{id}: removes the account with its sessions and team
+//     memberships (its next request is 401; a platform account is made
+//     again, on no team, at its next sign-in). A password account needs a
+//     password admin (403); the last one can't be removed (409). 204.
+//   - POST /api/admin/accounts {"username"} (password admins only): a new
+//     password admin with a generated password, which must be changed at
+//     its first sign-in. The username is 1 to 64 letters, digits, ".", "_"
+//     or "-" (400), not taken ignoring case (409). 201, NewAccountView: the
+//     only time the password is shown.
+//   - GET /api/teams: []TeamView, by name ignoring case.
+//   - POST /api/teams {"name", "role"}: a team with no members and no
+//     repositories; a name taken ignoring case is 409. 201, TeamView.
+//   - PUT /api/teams/{id} {"name", "role", "members": [account IDs],
+//     "repos": [{"instance", "project"}]}: replaces them all. Members are
+//     platform accounts (400 otherwise). An admin team has "repos": [] (400
+//     otherwise). A repository is one switched on, or {"instance": X,
+//     "project": ""} for every repository of instance X (400 otherwise).
+//     For a platform admin the team's repositories it can't see are kept
+//     as they are, and it can name repositories of its own instance only
+//     (400). 200, TeamView; 404 for no such team.
+//   - DELETE /api/teams/{id}: removes the team (not its members' accounts).
+//     204.
+//   - GET /api/audit?before=<id>: []AuditView, 100 at most, newest first,
+//     older than the entry before (an ID, from the last entry of the page
+//     before) when given.
+//
+// A platform admin sees only what it can see: a team's repositories of
+// other instances, and those its platform hides from it, are counted in
+// hiddenRepos and never named; audit entries about a repository it can't
+// see are left out.
+
+// UserView is one account.
+type UserView struct {
+	ID int64 `json:"id"`
+	// Kind is "password" or "platform".
+	Kind     string `json:"kind"`
+	Username string `json:"username"`
+	// Platform and Instance are "" for a password account.
+	Platform string `json:"platform"`
+	Instance string `json:"instance"`
+	// LastSignInAt is null for an account that never signed in.
+	LastSignInAt *time.Time `json:"lastSignInAt"`
+	// Waiting: a platform account on no team, which sees nothing.
+	Waiting bool      `json:"waiting"`
+	Teams   []TeamRef `json:"teams"`
+}
+
+// TeamRef names a team.
+type TeamRef struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
+// NewAccountView is a password admin just made, with its generated
+// password.
+type NewAccountView struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// TeamView is one team.
+type TeamView struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	// Role is "admin", "maintainer" or "viewer".
+	Role    string           `json:"role"`
+	Members []TeamMemberView `json:"members"`
+	// Repos are the repositories it covers that the session can see, by
+	// instance and project; a project "" covers every repository of the
+	// instance. An admin team has none.
+	Repos []TeamRepoView `json:"repos"`
+	// HiddenRepos counts the team's repositories the session can't see.
+	HiddenRepos int `json:"hiddenRepos"`
+}
+
+// TeamMemberView is a team's member: a platform account.
+type TeamMemberView struct {
+	ID       int64  `json:"id"`
+	Username string `json:"username"`
+	Platform string `json:"platform"`
+	Instance string `json:"instance"`
+}
+
+// TeamRepoView is a repository a team covers.
+type TeamRepoView struct {
+	Instance string `json:"instance"`
+	Project  string `json:"project"`
+}
+
+// AuditView is one audit entry. Instance and Project are "" when it isn't
+// about a repository. Detail never holds a secret.
+type AuditView struct {
+	ID       int64     `json:"id"`
+	At       time.Time `json:"at"`
+	Actor    string    `json:"actor"`
+	Action   string    `json:"action"`
+	Instance string    `json:"instance"`
+	Project  string    `json:"project"`
+	Detail   string    `json:"detail"`
 }

@@ -613,6 +613,33 @@ func TestPruneSessions(t *testing.T) {
 	}
 }
 
+// pruneAudit deletes the audit entries older than 90 days, logs what it
+// pruned, and a failure as a warning.
+func TestPruneAudit(t *testing.T) {
+	var logs strings.Builder
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	at := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
+	var got time.Time
+	pruneAudit(func(_ context.Context, before time.Time) (int, error) {
+		got = before
+		return 2, nil
+	}, func() time.Time { return at }, log)(context.Background())
+	if want := at.Add(-90 * 24 * time.Hour); !got.Equal(want) || !strings.Contains(logs.String(), "entries=2") {
+		t.Errorf("pruned before %s, want %s; logs:\n%s", got, want, logs.String())
+	}
+	logs.Reset()
+	pruneAudit(func(context.Context, time.Time) (int, error) { return 0, errors.New("database down") },
+		time.Now, log)(context.Background())
+	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "database down") {
+		t.Errorf("a failed prune isn't a warning:\n%s", logs.String())
+	}
+	logs.Reset()
+	pruneAudit(func(context.Context, time.Time) (int, error) { return 0, nil }, time.Now, log)(context.Background())
+	if logs.Len() != 0 {
+		t.Errorf("logged with nothing pruned:\n%s", logs.String())
+	}
+}
+
 // together runs every loop and returns once all of them have returned.
 func TestTogether(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

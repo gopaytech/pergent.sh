@@ -367,6 +367,7 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.Log.Info("dashboard: repository switched on", "instance", se.Instance, "project", name, "by", se.Username)
+	d.audit(ctx, se, "repository_on", se.Instance, name, "")
 	d.reconcileSoon(se.Instance, name)
 	// The admin checked they can see it just now: stored, it is shown even
 	// if the check their next request makes for it fails.
@@ -465,6 +466,7 @@ func (d *Dashboard) switchOff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.Log.Info("dashboard: repository switched off", "instance", repo.Instance, "project", repo.Project, "by", se.Username)
+	d.audit(ctx, se, "repository_off", repo.Instance, repo.Project, "")
 	d.reconcileSoon(repo.Instance, repo.Project)
 	view, err := d.detailView(ctx, se, repo)
 	if err != nil {
@@ -484,12 +486,12 @@ func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	edit, msg := d.parseSettings(r)
+	edit, keys, msg := d.parseSettings(r)
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	d.updateSettings(w, r, repo, edit, "settings changed")
+	d.updateSettings(w, r, repo, edit, "settings changed", "settings_updated", strings.Join(keys, ", "))
 }
 
 func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
@@ -500,12 +502,14 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 	d.updateSettings(w, r, repo, func(row *store.DashboardRepo) {
 		row.Approve, row.ReviewDrafts, row.FailureStatus = nil, nil, nil
 		row.Skills, row.JobTimeoutSeconds, row.JobMemory = nil, nil, nil
-	}, "settings reset")
+	}, "settings reset", "settings_reset", "")
 }
 
-// updateSettings applies edit to repo's stored settings and answers with
-// its detail. A repository switched off meanwhile is 404 and stays off.
-func (d *Dashboard) updateSettings(w http.ResponseWriter, r *http.Request, repo settings.Effective, edit func(*store.DashboardRepo), what string) {
+// updateSettings applies edit to repo's stored settings, records action
+// with detail in the audit log and answers with its detail. A repository
+// switched off meanwhile is 404 and stays off.
+func (d *Dashboard) updateSettings(w http.ResponseWriter, r *http.Request, repo settings.Effective, edit func(*store.DashboardRepo),
+	what, action, detail string) {
 	ctx, se := r.Context(), session(r)
 	found, err := d.Store.UpdateDashboardRepo(ctx, repo.Instance, repo.Project, edit)
 	if err != nil {
@@ -519,6 +523,7 @@ func (d *Dashboard) updateSettings(w http.ResponseWriter, r *http.Request, repo 
 		return
 	}
 	d.Log.Info("dashboard: repository "+what, "instance", repo.Instance, "project", repo.Project, "by", se.Username)
+	d.audit(ctx, se, action, repo.Instance, repo.Project, detail)
 	now, ok, err := d.Repos.Get(ctx, repo.Instance, repo.Project)
 	if err == nil && !ok {
 		err = errors.New("the repository isn't switched on any more")
@@ -537,12 +542,13 @@ func (d *Dashboard) updateSettings(w http.ResponseWriter, r *http.Request, repo 
 
 // parseSettings reads a settings change: a JSON object of some of the
 // settings, each a valid value or null (back to the default). It returns
-// the edit, or the message of a 400.
-func (d *Dashboard) parseSettings(r *http.Request) (func(*store.DashboardRepo), string) {
+// the edit and the keys it changes, sorted, or the message of a 400.
+func (d *Dashboard) parseSettings(r *http.Request) (func(*store.DashboardRepo), []string, string) {
 	var fields map[string]json.RawMessage
 	if err := decodeStrict(r, &fields); err != nil || fields == nil {
-		return nil, msgBadSettings
+		return nil, nil, msgBadSettings
 	}
+	keys := make([]string, 0, len(fields))
 	var edits []func(*store.DashboardRepo)
 	for key, raw := range fields {
 		null := string(bytes.TrimSpace(raw)) == "null"
@@ -563,15 +569,17 @@ func (d *Dashboard) parseSettings(r *http.Request) (func(*store.DashboardRepo), 
 			msg = msgBadSettings
 		}
 		if msg != "" {
-			return nil, msg
+			return nil, nil, msg
 		}
 		edits = append(edits, edit)
+		keys = append(keys, key)
 	}
+	sort.Strings(keys)
 	return func(row *store.DashboardRepo) {
 		for _, edit := range edits {
 			edit(row)
 		}
-	}, ""
+	}, keys, ""
 }
 
 func boolSetting(key string, raw json.RawMessage, null bool) (func(*store.DashboardRepo), string) {

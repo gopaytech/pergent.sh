@@ -154,8 +154,8 @@ func New(o Options) (*Dashboard, error) {
 //     (204);
 //   - GET /api/instances: the instances to sign in with, without a session;
 //   - GET /api/me: the signed-in user;
-//   - the read API and the write API, by role (see view.go for each
-//     endpoint's body).
+//   - the read API, the write API and the users, teams and audit log API,
+//     by role (see view.go for each endpoint's body).
 //
 // Every response is marked no-store.
 func (d *Dashboard) Handler() http.Handler {
@@ -169,6 +169,7 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("GET /api/instances", d.instances)
 	mux.Handle("GET /api/me", d.Auth.Require(http.HandlerFunc(d.me)))
 	d.writeRoutes(mux)
+	d.orgRoutes(mux)
 	d.readRoutes(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()

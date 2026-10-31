@@ -59,7 +59,11 @@ const (
 	// sessionPruneEvery is how often the dashboard's expired sessions are
 	// deleted.
 	sessionPruneEvery = time.Hour
-	usage             = "usage: pergent-sh serve [--config <path>]\n       pergent-sh admin reset-password <username>"
+	// auditPruneEvery is how often the audit entries older than
+	// auditRetention are deleted.
+	auditPruneEvery = time.Hour
+	auditRetention  = 90 * 24 * time.Hour
+	usage           = "usage: pergent-sh serve [--config <path>]\n       pergent-sh admin reset-password <username>"
 )
 
 func main() {
@@ -223,6 +227,10 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	// Engine.Run reconciles first, in its own goroutine, so a slow GitLab
 	// at startup never keeps the routes down.
 	loops := []func(context.Context){eng.Run}
+	// The audit log is kept 90 days, whether the dashboard is on or not
+	// (the reset-password command records there too).
+	pruneOld := pruneAudit(st.PruneAudit, time.Now, log)
+	loops = append(loops, func(ctx context.Context) { every(ctx, auditPruneEvery, pruneOld) })
 	if dash != nil {
 		prune := pruneSessions(dash.Auth.PruneSessions, time.Now, log)
 		loops = append(loops, func(ctx context.Context) { every(ctx, sessionPruneEvery, prune) })
@@ -323,6 +331,21 @@ func pruneSessions(prune func(context.Context, time.Time) (int, error), now func
 			log.Warn("couldn't prune dashboard sessions", "error", err.Error())
 		case n > 0:
 			log.Info("pruned dashboard sessions", "sessions", n)
+		}
+	}
+}
+
+// pruneAudit returns a pass that deletes the audit entries older than
+// auditRetention (prune is store.Store.PruneAudit). It only touches the
+// database; a failure is logged and tried again next time.
+func pruneAudit(prune func(context.Context, time.Time) (int, error), now func() time.Time, log *slog.Logger) func(context.Context) {
+	return func(ctx context.Context) {
+		n, err := prune(ctx, now().Add(-auditRetention))
+		switch {
+		case err != nil && ctx.Err() == nil:
+			log.Warn("couldn't prune the audit log", "error", err.Error())
+		case n > 0:
+			log.Info("pruned the audit log", "entries", n)
 		}
 	}
 }
