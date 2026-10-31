@@ -14,6 +14,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/gopaytech/pergent/render"
+
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/result"
 )
@@ -90,6 +92,14 @@ func blocksApproval(rule string) bool { return !reviewedSkipRules[rule] }
 // ApproveBot says the approve side is a bot user's token (GitHub's
 // approve_token_env) rather than an App, which only changes how an
 // unavailable approve side is worded.
+//
+// Dismissals are the findings of the merge request that people set aside.
+// Applied before the verdicts are counted, a skill whose blocking findings
+// are all dismissed counts as clean. When any dismissal covers a finding the
+// comment is rendered again from the result (render.Comment, at most
+// MaxComment bytes when positive, passed through Redact when set) instead of
+// being the one pergent wrote; otherwise the result's comment is used as it
+// is.
 type Outcome struct {
 	Result             *result.Result
 	FailureReason      string
@@ -97,6 +107,10 @@ type Outcome struct {
 	ApproveUnavailable bool
 	ApproveBot         bool
 	ApprovalOff        bool
+
+	Dismissals []render.Dismissal
+	MaxComment int
+	Redact     func(string) string
 }
 
 // Kind is what a decision is, in short.
@@ -193,9 +207,18 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 		return Decision{Comment: ErrorComment("the result has no skills"), Status: failed, Description: descCouldNotReview, Kind: KindFailed}
 	}
 
-	comment := withMarker(r.Comment.Markdown)
+	comment, block, skills := withMarker(r.Comment.Markdown), r.Comment.FindingsBlock, r.Skills
+	if rs, applied := applyDismissals(o, r); applied {
+		skills = withVerdicts(r.Skills, rs)
+		redact := o.Redact
+		if redact == nil {
+			redact = func(s string) string { return s }
+		}
+		comment = withMarker(redact(render.Comment(rs, render.Options{MaxLen: o.MaxComment, ChangedFiles: result.ChangedFiles(r)})))
+		block = render.FindingsBlock(rs)
+	}
 	var blocking, failedSkills, reviewed int
-	for _, s := range r.Skills {
+	for _, s := range skills {
 		switch s.Verdict {
 		case "has_blocking_issues":
 			blocking++
@@ -218,19 +241,19 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 		return Decision{
 			Comment:     comment,
 			Status:      failed,
-			Description: fmt.Sprintf("Review failed for %d of %d skills", failedSkills, len(r.Skills)),
+			Description: fmt.Sprintf("Review failed for %d of %d skills", failedSkills, len(skills)),
 			Kind:        KindFailed,
 		}
 	case reviewed == 0:
 		return Decision{
-			Comment:     withNote(comment, r.Comment.FindingsBlock, skippedNote(noteNothingReviewed, r.Skills, false)),
+			Comment:     withNote(comment, block, skippedNote(noteNothingReviewed, skills, false)),
 			Status:      StatusSuccess,
 			Description: descNothingToReview,
 			Kind:        KindNotApproved,
 		}
-	case blockingSkip(r.Skills):
+	case blockingSkip(skills):
 		return Decision{
-			Comment:     withNote(comment, r.Comment.FindingsBlock, skippedNote(notePartlySkipped, r.Skills, true)),
+			Comment:     withNote(comment, block, skippedNote(notePartlySkipped, skills, true)),
 			Status:      StatusSuccess,
 			Description: descPartlySkipped,
 			Kind:        KindNotApproved,
@@ -238,17 +261,44 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 	}
 	switch {
 	case o.ApprovalOff:
-		return notApproved(comment, r.Comment.FindingsBlock, reasonApprovalOff, noteApprovalOff)
+		return notApproved(comment, block, reasonApprovalOff, noteApprovalOff)
 	case o.Draft:
-		d := notApproved(comment, r.Comment.FindingsBlock, reasonDraft, noteDraft)
+		d := notApproved(comment, block, reasonDraft, noteDraft)
 		d.Kind = KindDraft
 		return d
 	case o.ApproveUnavailable && o.ApproveBot:
-		return notApproved(comment, r.Comment.FindingsBlock, reasonApproveBotNoReach, noteApproveBotNoReach)
+		return notApproved(comment, block, reasonApproveBotNoReach, noteApproveBotNoReach)
 	case o.ApproveUnavailable:
-		return notApproved(comment, r.Comment.FindingsBlock, reasonApproveUnavailable, noteApproveUnavailable)
+		return notApproved(comment, block, reasonApproveUnavailable, noteApproveUnavailable)
 	}
 	return Decision{Comment: comment, Status: StatusSuccess, Description: descClean, Approve: true, Kind: KindApprove}
+}
+
+// applyDismissals applies the outcome's dismissals to the result's skills. It
+// returns the skills with the findings set aside moved to Dismissed, and
+// whether any finding was.
+func applyDismissals(o Outcome, r *result.Result) ([]render.Skill, bool) {
+	if len(o.Dismissals) == 0 {
+		return nil, false
+	}
+	rs := render.ApplyDismissals(result.ToRender(r), o.Dismissals)
+	for _, s := range rs {
+		if len(s.Dismissed) > 0 {
+			return rs, true
+		}
+	}
+	return nil, false
+}
+
+// withVerdicts is skills with the verdicts of the dismissed-applied skills rs
+// (the same skills, in the same order).
+func withVerdicts(skills []result.Skill, rs []render.Skill) []result.Skill {
+	out := make([]result.Skill, len(skills))
+	copy(out, skills)
+	for i := range out {
+		out[i].Verdict = rs[i].Verdict
+	}
+	return out
 }
 
 // notApproved is a clean review that isn't approved for reason: success, the

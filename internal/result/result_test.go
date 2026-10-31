@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/gopaytech/pergent/render"
 )
 
 func fixture(t *testing.T, name string) []byte {
@@ -128,5 +130,53 @@ func TestTrimKeepsNamesAndFindingsOnly(t *testing.T) {
 func TestTrimRejectsInvalid(t *testing.T) {
 	if _, err := Trim([]byte("nope")); err == nil {
 		t.Fatal("expected an error")
+	}
+}
+
+func TestParseRejectsUndecodableFinding(t *testing.T) {
+	data := `{"schema_version":1,"status":"completed","skills":[{"name":"a","verdict":"has_blocking_issues",
+		"findings":["not an object"],"files":{}}],"comment":{"markdown":"x"}}`
+	if _, err := Parse([]byte(data)); err == nil || !strings.Contains(err.Error(), `skill "a"`) {
+		t.Fatalf("Parse = %v, want an error naming the skill", err)
+	}
+}
+
+func TestToRender(t *testing.T) {
+	data := `{"schema_version":1,"status":"completed","skills":[
+	  {"name":"a","verdict":"failed",
+	   "findings":[
+	     {"id":"aaaaaa","fingerprint":"aaaaaa111111","file":"x.go","line":4,"severity":"blocking","title":"T","explanation":"E","suggested_fix":"F"},
+	     {"fingerprint":"bbbbbb222222","file":"y.go","severity":"suggestion","title":"S","explanation":"E2"}],
+	   "files":{"reviewed":["x.go"],"skipped":[{"path":"go.sum","rule":"lockfile"}],"not_reviewed":[{"path":"y.go","cause":"timeout"}]},
+	   "failures":[{"files":["y.go"],"message":"timed out","cause":{"kind":"timeout","message":"m"}}],
+	   "notes":["n1"],"summaries":[{"batch":1,"text":"sum"}],"batches":2,"batches_finished":1,
+	   "checks":[{"batch":1,"dropped":3,"findings":1,"checks":[{"section":"s","name":"c","status":"fail","detail":"d"}]}]}],
+	  "comment":{"markdown":"x"}}`
+	r, err := Parse([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ToRender(r)
+	want := []render.Skill{{
+		Name: "a", Verdict: "failed",
+		Findings: []render.Finding{
+			{ID: "aaaaaa", Fingerprint: "aaaaaa111111", File: "x.go", Line: 4, Severity: render.Blocking, Title: "T", Explanation: "E", SuggestedFix: "F"},
+			{ID: "bbbbbb", Fingerprint: "bbbbbb222222", File: "y.go", Severity: render.Suggestion, Title: "S", Explanation: "E2"},
+		},
+		Failures: []render.Failure{{Files: []string{"y.go"}, Message: "timed out"}},
+		Skipped:  []render.Skipped{{Path: "go.sum", Rule: "lockfile"}},
+		Reviewed: []string{"x.go"}, Notes: []string{"n1"},
+		Batches: 2, BatchesFinished: 1,
+		Summaries: []render.Summary{{Batch: 1, Text: "sum"}},
+		Checks: []render.BatchChecks{{Batch: 1, Dropped: 3, Findings: 1,
+			Checks: []render.Check{{Section: "s", Name: "c", Status: "fail", Detail: "d"}}}},
+	}}
+	gj, _ := json.Marshal(got)
+	wj, _ := json.Marshal(want)
+	if string(gj) != string(wj) {
+		t.Errorf("ToRender =\n%s\nwant\n%s", gj, wj)
+	}
+	if files := ChangedFiles(r); strings.Join(files, ",") != "go.sum,x.go,y.go" {
+		t.Errorf("ChangedFiles = %v, want go.sum, x.go, y.go", files)
 	}
 }

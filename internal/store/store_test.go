@@ -627,6 +627,35 @@ func TestNoteIDAndApproval(t *testing.T) {
 	}
 }
 
+func TestApproval(t *testing.T) {
+	s := newStore(t)
+	if _, ok, err := s.Approval(ctx, mr1); err != nil || ok {
+		t.Fatalf("no approval: ok = %v, err = %v", ok, err)
+	}
+	if err := s.SetNoteID(ctx, mr1, 555); err != nil { // a row without an approval
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.Approval(ctx, mr1); ok {
+		t.Error("a merge request row without an approval has one")
+	}
+	if err := s.SetApprovedSHA(ctx, mr1, "aaa", "main"); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.Approval(ctx, mr1)
+	if err != nil || !ok || got != (Approval{MR: mr1, ApprovedSHA: "aaa", ApprovedTarget: "main"}) {
+		t.Errorf("Approval = %+v, %v, %v", got, ok, err)
+	}
+	if _, ok, _ := s.Approval(ctx, mr2); ok {
+		t.Error("another merge request has the approval")
+	}
+	if err := s.ClearApprovedSHA(ctx, mr1, "aaa", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.Approval(ctx, mr1); ok {
+		t.Error("a cleared approval is still there")
+	}
+}
+
 func TestStaleApprovals(t *testing.T) {
 	s := newStore(t)
 	enqueue(t, s, mr1, "A")

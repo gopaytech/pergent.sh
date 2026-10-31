@@ -1063,6 +1063,18 @@ func (s *Store) ApprovalsDue(ctx context.Context, now time.Time) ([]ProjectAppro
 	return out, rows.Err()
 }
 
+// Approval returns the recorded approval of a merge request, if it has one.
+func (s *Store) Approval(ctx context.Context, mr MRKey) (Approval, bool, error) {
+	as, err := s.queryApprovals(ctx, `SELECT instance, project_id, mr_iid, approved_sha, approved_target
+		FROM merge_requests
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND approved_sha <> ''`,
+		mr.Instance, mr.ProjectID, mr.IID)
+	if err != nil || len(as) == 0 {
+		return Approval{}, false, err
+	}
+	return as[0], true, nil
+}
+
 // Approvals returns every recorded approval.
 func (s *Store) Approvals(ctx context.Context) ([]Approval, error) {
 	return s.queryApprovals(ctx, `SELECT instance, project_id, mr_iid, approved_sha, approved_target

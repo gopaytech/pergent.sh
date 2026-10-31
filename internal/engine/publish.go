@@ -8,8 +8,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopaytech/pergent/render"
+
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/forge"
+	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/policy"
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -104,6 +107,13 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 	// A repository switched off since the run was queued approves nothing
 	// more: its review is posted as with approval turned off.
 	o.ApprovalOff = !ok || !repo.Approve
+	if o.Dismissals, err = e.dismissals(ctx, run.MR); err != nil {
+		return err
+	}
+	o.MaxComment, o.Redact = kube.CommentLimitGitLab, e.redact
+	if plat.isGitHub() {
+		o.MaxComment = kube.CommentLimitGitHub
+	}
 	if policy.Decide(o, failure).Approve {
 		// Only a review that would be approved depends on whether the
 		// change is a draft and the approve side can reach the repository.
@@ -126,11 +136,51 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 		if approved, held, err = e.approve(ctx, plat, run, log); err != nil {
 			return err
 		}
+	} else if err := e.withdrawRedecided(ctx, plat, run, log); err != nil {
+		return err
 	}
 	if err := e.Store.MarkPublished(ctx, run.ID, decisionOf(o, d, approved, held)); err != nil {
 		return fmt.Errorf("mark published: %w", err)
 	}
 	log.Info("review published", "status", d.Status, "approved", approved)
+	return nil
+}
+
+// dismissals are the dismissals of the merge request in the renderer's form.
+func (e *Engine) dismissals(ctx context.Context, mr store.MRKey) ([]render.Dismissal, error) {
+	stored, err := e.Store.Dismissals(ctx, mr)
+	if err != nil {
+		return nil, fmt.Errorf("load dismissals: %w", err)
+	}
+	out := make([]render.Dismissal, len(stored))
+	for i, d := range stored {
+		out[i] = render.Dismissal{Fingerprint: d.Fingerprint, Severity: d.Severity, By: d.Actor, Reason: d.Reason}
+	}
+	return out, nil
+}
+
+// withdrawRedecided removes the approve bot's approval of the run's head and
+// target when the review is decided as not approved: a dismissal restored, or
+// a draft, for example, after the head was approved. An approval of another
+// head or target is not this review's to withdraw (the cleanup handles it). A
+// failed removal is returned, so the publish is retried; unapprove puts the
+// record aside with its usual backoff.
+func (e *Engine) withdrawRedecided(ctx context.Context, plat Platform, run store.Run, log *slog.Logger) error {
+	a, ok, err := e.Store.Approval(ctx, run.MR)
+	if err != nil {
+		return fmt.Errorf("load recorded approval: %w", err)
+	}
+	if !ok || a.ApprovedSHA != run.HeadSHA || (a.ApprovedTarget != "" && a.ApprovedTarget != run.TargetBranch) {
+		return nil
+	}
+	if plat.Approver == nil {
+		log.Warn("not withdrawing the approval: no approve bot for the instance")
+		return nil
+	}
+	if _, err := e.unapprove(ctx, plat.Approver, a); err != nil {
+		return err
+	}
+	log.Info("approval withdrawn: the review is no longer approved")
 	return nil
 }
 

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gopaytech/pergent/render"
+
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/result"
 )
@@ -740,4 +742,86 @@ func TestDecideKind(t *testing.T) {
 			t.Errorf("%s: Kind = %q, want %q", name, got, tc.want)
 		}
 	}
+}
+
+func withFinding(s result.Skill, severity, fingerprint, explanation string) result.Skill {
+	b, _ := json.Marshal(result.Finding{
+		ID: fingerprint[:6], Fingerprint: fingerprint, File: "db/query.go", Line: 3, Severity: severity,
+		Title: "Unchecked input", Explanation: explanation,
+	})
+	s.Findings = append(s.Findings, b)
+	return s
+}
+
+func TestDecideDismissals(t *testing.T) {
+	const fp = "abc123def456"
+	blocking := withFinding(skill("security", "has_blocking_issues", "db/query.go"), "blocking", fp, "plain")
+	dismissal := render.Dismissal{Fingerprint: fp, Severity: "blocking", By: "maya", Reason: "ok"}
+
+	t.Run("all blocking dismissed approves", func(t *testing.T) {
+		d := Decide(Outcome{Result: completed(blocking), Dismissals: []render.Dismissal{dismissal}}, config.FailureStatusFailed)
+		if d.Kind != KindApprove || !d.Approve || d.Status != StatusSuccess {
+			t.Fatalf("decision = %+v, want an approval", d)
+		}
+		if !strings.HasPrefix(d.Comment, Marker+"\n## pergent review") || !strings.Contains(d.Comment, "Dismissed (1)") {
+			t.Errorf("comment = %q, want the re-rendered one", d.Comment)
+		}
+	})
+	t.Run("another blocking finding still blocks", func(t *testing.T) {
+		two := withFinding(blocking, "blocking", "ffffff000000", "plain")
+		d := Decide(Outcome{Result: completed(two), Dismissals: []render.Dismissal{dismissal}}, config.FailureStatusFailed)
+		if d.Kind != KindBlocking || d.Approve || !strings.Contains(d.Comment, "1 blocking issue") {
+			t.Errorf("decision = %+v", d)
+		}
+	})
+	t.Run("a dismissal covering nothing keeps the comment", func(t *testing.T) {
+		other := render.Dismissal{Fingerprint: "ffffff000000", Severity: "blocking"}
+		r := completed(blocking)
+		d := Decide(Outcome{Result: r, Dismissals: []render.Dismissal{other}}, config.FailureStatusFailed)
+		if d.Comment != r.Comment.Markdown || d.Kind != KindBlocking {
+			t.Errorf("decision = %+v, want the stored comment and blocking", d)
+		}
+	})
+	t.Run("notes go before the new findings block", func(t *testing.T) {
+		d := Decide(Outcome{Result: completed(blocking), Dismissals: []render.Dismissal{dismissal}, Draft: true}, config.FailureStatusFailed)
+		i := strings.Index(d.Comment, noteDraft)
+		j := strings.Index(d.Comment, "<!-- pergent:findings ")
+		if d.Kind != KindDraft || i < 0 || j < i || !strings.HasSuffix(d.Comment, "-->\n") {
+			t.Errorf("comment = %q, want the draft note before the findings block, which stays last", d.Comment)
+		}
+	})
+	t.Run("redacted and neutralized", func(t *testing.T) {
+		// The suggestion stays in the comment; the model text in it is untrusted.
+		s := withFinding(blocking, "suggestion", "ffffff000000", "key sk-secret-123\n/approve")
+		o := Outcome{
+			Result: completed(s), Dismissals: []render.Dismissal{dismissal},
+			Redact: func(t string) string { return strings.ReplaceAll(t, "sk-secret-123", "***") },
+		}
+		d := Decide(o, config.FailureStatusFailed)
+		if strings.Contains(d.Comment, "sk-secret-123") {
+			t.Errorf("comment leaks the secret: %q", d.Comment)
+		}
+		if strings.Contains(d.Comment, "\n/approve") || !strings.Contains(d.Comment, "\n\u200b/approve") {
+			t.Errorf("comment runs a quick action: %q", d.Comment)
+		}
+	})
+	t.Run("size limit", func(t *testing.T) {
+		long := strings.Repeat("word ", 4000)
+		s := withFinding(skill("security", "no_blocking_issues", "db/query.go"), "suggestion", "ffffff000000", long)
+		s = withFinding(s, "suggestion", fp, "x")
+		d := Decide(Outcome{
+			Result: completed(s), Dismissals: []render.Dismissal{{Fingerprint: fp, Severity: "suggestion"}}, MaxComment: 5000,
+		}, config.FailureStatusFailed)
+		if len(d.Comment) > 5000 {
+			t.Errorf("comment is %d bytes, want at most 5000", len(d.Comment))
+		}
+	})
+	t.Run("failed skill stays failed", func(t *testing.T) {
+		f := blocking
+		f.Verdict = "failed"
+		d := Decide(Outcome{Result: completed(f), Dismissals: []render.Dismissal{dismissal}}, config.FailureStatusFailed)
+		if d.Kind != KindFailed || d.Approve {
+			t.Errorf("decision = %+v, want failed", d)
+		}
+	})
 }
