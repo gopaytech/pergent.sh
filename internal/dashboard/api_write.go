@@ -55,6 +55,7 @@ const (
 	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, failureStatus, skills, jobTimeoutSeconds, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"
 	msgNameInstance   = `name the instance: {"instance": "<name>", "project": "<path>"}`
 	msgNeedsPlatform  = "sign in with GitLab or GitHub to add repositories"
+	msgNeedsAdminCaps = "only admins of this repository can change its re-run caps"
 	msgNeedsRole      = "only maintainers and admins of this repository can change its settings"
 )
 
@@ -540,7 +541,7 @@ func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {
 	// The caps are the admins' to change, even for a repository whose
 	// maintainer may change the rest.
 	if slices.ContainsFunc(keys, isRerunLimitKey) && session(r).Role(repo.Instance, repo.Project) < RoleAdmin {
-		writeError(w, http.StatusForbidden, msgNeedsRole)
+		writeError(w, http.StatusForbidden, msgNeedsAdminCaps)
 		return
 	}
 	d.updateSettings(w, r, repo, edit, "settings changed", "settings_updated", strings.Join(keys, ", "))

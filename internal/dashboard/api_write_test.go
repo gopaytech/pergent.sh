@@ -410,7 +410,7 @@ func TestCapsNeedAdmin(t *testing.T) {
 		before, _ := e.storedRepo("main", "acme/gadgets")
 		rec := e.send(maintainer, "PUT", target, body)
 		wantCode(t, rec, "maintainer PUT "+body, http.StatusForbidden)
-		if errorOf(t, rec) != msgNeedsRole {
+		if want := "only admins of this repository can change its re-run caps"; errorOf(t, rec) != want {
 			t.Errorf("maintainer PUT %s: error = %q", body, errorOf(t, rec))
 		}
 		if after, _ := e.storedRepo("main", "acme/gadgets"); !after.UpdatedAt.Equal(before.UpdatedAt) {
