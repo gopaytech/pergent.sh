@@ -466,10 +466,11 @@ type AvailableRepo struct {
 //     "project": ""} for every repository of instance X (400 otherwise).
 //     For a platform admin the team's repositories it can't see are kept
 //     as they are, and it can name repositories of its own instance only
-//     (400); making a team that covers repositories it can't see an admin
-//     team is 409 {"error": "this team covers repositories you can't see;
-//     a password admin can change its role or remove it"}, since an admin
-//     team has none. 200, TeamView; 404 for no such team.
+//     (400); changing the role of a team that covers repositories it
+//     can't see is 409 {"error": "this team covers repositories you can't
+//     see; a password admin can change its role or remove it"}, since the
+//     hidden ones would change role out of its sight (and an admin team has
+//     none). 200, TeamView; 404 for no such team.
 //   - DELETE /api/teams/{id}: removes the team (not its members' accounts).
 //     For a platform admin a team covering repositories it can't see is
 //     409, as above. 204.

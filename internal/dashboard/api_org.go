@@ -292,9 +292,9 @@ func (d *Dashboard) createTeam(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, teamView(se, t, nil))
 }
 
-// errHiddenCoverage refuses a change that would drop repositories a team
-// covers which the session can't see: making it an admin team, or removing
-// it. Only a session that sees everything can.
+// errHiddenCoverage refuses a change that would act on repositories a team
+// covers which the session can't see: changing its role (an admin team has
+// none) or removing it. Only a session that sees everything can.
 var errHiddenCoverage = errors.New(msgHiddenCoverage)
 
 // coversHidden reports whether t covers a repository the session can't see.
@@ -353,11 +353,13 @@ func (d *Dashboard) updateTeam(w http.ResponseWriter, r *http.Request) {
 	found, err := d.Store.UpdateTeam(ctx, id, func(t *store.Team) error {
 		before = *t
 		before.Members, before.Repos = slices.Clone(t.Members), slices.Clone(t.Repos)
+		// A role change gives the repositories the session can't see a
+		// role out of its sight: only a session that sees them all may.
+		if t.Role != in.Role && coversHidden(se, *t) {
+			return errHiddenCoverage
+		}
 		saved := repos
 		if in.Role == store.RoleAdmin {
-			if t.Role != store.RoleAdmin && coversHidden(se, *t) {
-				return errHiddenCoverage
-			}
 			saved = nil // an admin team has no repository list
 		} else {
 			// What the session can't see stays as it is.

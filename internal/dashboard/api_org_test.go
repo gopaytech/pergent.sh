@@ -417,6 +417,38 @@ func TestPlatformAdminTeamEditKeepsHidden(t *testing.T) {
 	}
 }
 
+// Any role change of a team that covers a repository the platform admin
+// can't see is 409, not only one to admin: the hidden repository would
+// otherwise change role out of its sight. A password admin can; a change
+// that keeps the role is fine.
+func TestPlatformAdminCannotChangeRoleOfHiddenCoverage(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.signInGitLab(true, "acme/widgets") // acme/payments is hidden from alice
+	hidden := store.TeamRepo{Instance: "main", Project: "acme/payments"}
+	id := e.team("devs", store.RoleViewer, nil, store.TeamRepo{Instance: "main", Project: "acme/widgets"}, hidden)
+	target := "/api/teams/" + strconv.FormatInt(id, 10)
+	const wantConflict = `{"error":"this team covers repositories you can't see; a password admin can change its role or remove it"}`
+
+	for _, role := range []string{"maintainer", "admin"} {
+		rec := e.send(c, "PUT", target, `{"name":"devs","role":"`+role+`","members":[],"repos":[]}`)
+		if rec.Code != http.StatusConflict || body(rec) != wantConflict {
+			t.Errorf("PUT role %s = %d %s; want 409 %s", role, rec.Code, rec.Body, wantConflict)
+		}
+	}
+	if tm := e.storedTeam(id); tm.Role != store.RoleViewer || len(tm.Repos) != 2 {
+		t.Errorf("the refused changes changed the team: %+v", tm)
+	}
+	wantCode(t, e.send(c, "PUT", target, `{"name":"renamed","role":"viewer","members":[],"repos":[{"instance":"main","project":"acme/widgets"}]}`),
+		"PUT the same role", http.StatusOK)
+
+	op := e.signInOperator()
+	got := decode[TeamView](t, e.send(op, "PUT", target, `{"name":"renamed","role":"maintainer","members":[],"repos":[{"instance":"main","project":"acme/widgets"}]}`),
+		"operator PUT maintainer", http.StatusOK)
+	if got.Role != store.RoleMaintainer {
+		t.Errorf("operator PUT answer = %+v", got)
+	}
+}
+
 // Every write here needs the session's CSRF token: 403 with code "csrf".
 func TestOrgWritesNeedCSRF(t *testing.T) {
 	e := newEnv(t, nil)
