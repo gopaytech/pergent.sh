@@ -477,6 +477,26 @@ func TestCheckDashboardEnv(t *testing.T) {
 	})
 }
 
+// The LLM key is read only when the file has an llm: block; without one
+// (the dashboard adds the LLM) there is no env var name to read.
+func TestReadLLMKey(t *testing.T) {
+	cfg := &config.Config{}
+	if key, err := readLLMKey(cfg); err != nil || key != "" {
+		t.Errorf("readLLMKey without an llm block = %q, %v", key, err)
+	}
+
+	cfg.LLM = config.LLM{Provider: "anthropic", Model: "m", APIKeyEnv: "PERGENT_TEST_LLM_KEY"}
+	t.Setenv("PERGENT_TEST_LLM_KEY", "")
+	err := func() error { _, err := readLLMKey(cfg); return err }()
+	if err == nil || !strings.Contains(err.Error(), "PERGENT_TEST_LLM_KEY") {
+		t.Errorf("readLLMKey with the variable unset = %v", err)
+	}
+	t.Setenv("PERGENT_TEST_LLM_KEY", "k")
+	if key, err := readLLMKey(cfg); err != nil || key != "k" {
+		t.Errorf("readLLMKey = %q, %v", key, err)
+	}
+}
+
 // testSecretKey is a fixed 32-byte PERGENT_SH_SECRET_KEY, standard base64.
 const testSecretKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 

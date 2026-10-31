@@ -124,9 +124,9 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("PERGENT_SH_SECRET_KEY: %w", err)
 	}
-	llmKey, err := requireEnv(cfg.LLM.APIKeyEnv)
+	llmKey, err := readLLMKey(cfg)
 	if err != nil {
-		return fmt.Errorf("llm.api_key_env: %w", err)
+		return err
 	}
 
 	st, err := store.Open(ctx, dbURL)
@@ -501,6 +501,19 @@ func kubeConfig() (*rest.Config, error) {
 }
 
 // requireEnv reads an environment variable that must be set and not empty.
+// readLLMKey returns the key of the llm: block, or "" when the file has none
+// (the LLM is then added in the dashboard).
+func readLLMKey(cfg *config.Config) (string, error) {
+	if !cfg.HasLLM() {
+		return "", nil
+	}
+	key, err := requireEnv(cfg.LLM.APIKeyEnv)
+	if err != nil {
+		return "", fmt.Errorf("llm.api_key_env: %w", err)
+	}
+	return key, nil
+}
+
 func requireEnv(name string) (string, error) {
 	if v := os.Getenv(name); v != "" {
 		return v, nil

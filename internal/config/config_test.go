@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -662,11 +663,6 @@ func TestValidateRejectsDashboard(t *testing.T) {
 		{"admin of an instance without sign-in", func(c *Config) {
 			c.GitHub[0].OAuthClientIDEnv, c.GitHub[0].OAuthClientSecretEnv = "", ""
 		}, "has no sign-in"},
-		{"no instance has sign-in", func(c *Config) {
-			c.Dashboard.Admins = nil
-			c.GitLab[0].OAuthClientIDEnv, c.GitLab[0].OAuthClientSecretEnv = "", ""
-			c.GitHub[0].OAuthClientIDEnv, c.GitHub[0].OAuthClientSecretEnv = "", ""
-		}, "no instance has oauth_client_id_env"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -715,5 +711,98 @@ func TestOAuthClient(t *testing.T) {
 	}
 	if (Instance{Name: "main"}).HasOAuth() || !gl.HasOAuth() || (GitHubInstance{}).HasOAuth() || !gh.HasOAuth() {
 		t.Error("HasOAuth is wrong")
+	}
+}
+
+// minimalYAML is a config with no instances, repositories or llm block.
+const minimalYAML = `public_url: https://pergent.example.com
+skills_dir: /skills
+jobs:
+  namespace: pergent
+`
+
+func TestDashboardNeedsNoOAuthInstance(t *testing.T) {
+	// Password admins can sign in, so no instance has to carry OAuth.
+	body := minimalYAML + "dashboard:\n  url: https://pergent.example.com\n"
+	cfg, err := Load(writeConfig(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.DashboardEnabled() {
+		t.Error("DashboardEnabled() = false")
+	}
+
+	// Instances without OAuth are fine too.
+	base, err := os.ReadFile("testdata/valid.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(writeConfig(t, string(base)+"\ndashboard:\n  url: https://pergent.example.com\n")); err != nil {
+		t.Fatalf("Load with an instance without OAuth: %v", err)
+	}
+}
+
+func TestLLMOptionalWithDashboard(t *testing.T) {
+	body := minimalYAML + "dashboard:\n  url: https://pergent.example.com\n"
+	cfg, err := Load(writeConfig(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.HasLLM() {
+		t.Error("HasLLM() = true without an llm block")
+	}
+	if cfg.LLM.APIKeyEnv != "" {
+		t.Errorf("LLM.APIKeyEnv = %q, want no default without a provider", cfg.LLM.APIKeyEnv)
+	}
+
+	if !loadValid(t).HasLLM() {
+		t.Error("HasLLM() = false with an llm block")
+	}
+
+	// A half-written llm block is still checked with the dashboard on.
+	half := body + "llm:\n  provider: anthropic\n"
+	if _, err := Load(writeConfig(t, half)); err == nil || !strings.Contains(err.Error(), "llm.model is required") {
+		t.Fatalf("Load() = %v, want llm.model is required", err)
+	}
+}
+
+func TestLLMRequiredWithoutDashboard(t *testing.T) {
+	base, err := os.ReadFile("testdata/valid.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Replace(string(base), "llm:\n  provider: anthropic\n  model: claude-sonnet-4\n", "", 1)
+	if body == string(base) {
+		t.Fatal("llm block not found in valid.yaml")
+	}
+	if _, err := Load(writeConfig(t, body)); err == nil || !strings.Contains(err.Error(), "llm.provider is required") {
+		t.Fatalf("Load() = %v, want llm.provider is required", err)
+	}
+}
+
+func TestInstanceRequiredWithoutDashboard(t *testing.T) {
+	body := minimalYAML + "llm:\n  provider: anthropic\n  model: claude-sonnet-4\n"
+	_, err := Load(writeConfig(t, body))
+	want := "at least one gitlab or github instance is required (or turn on the dashboard to add them there)"
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("Load() = %v, want %q", err, want)
+	}
+}
+
+func TestAdminPasswordEnv(t *testing.T) {
+	body := minimalYAML + "dashboard:\n  url: https://pergent.example.com\n  admin_password_env: PERGENT_ADMIN_PASSWORD\n"
+	cfg, err := Load(writeConfig(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Dashboard.AdminPasswordEnv != "PERGENT_ADMIN_PASSWORD" {
+		t.Errorf("AdminPasswordEnv = %q", cfg.Dashboard.AdminPasswordEnv)
+	}
+
+	for _, bad := range []string{"pergent-admin", "lower_case", "1ST", "HAS SPACE", "A.B"} {
+		body := minimalYAML + "dashboard:\n  url: https://pergent.example.com\n  admin_password_env: " + strconv.Quote(bad) + "\n"
+		if _, err := Load(writeConfig(t, body)); err == nil || !strings.Contains(err.Error(), "dashboard.admin_password_env") {
+			t.Errorf("admin_password_env %q: Load() = %v, want an error naming dashboard.admin_password_env", bad, err)
+		}
 	}
 }

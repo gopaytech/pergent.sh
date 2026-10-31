@@ -64,6 +64,9 @@ type Dashboard struct {
 	// URL is the https address the dashboard is served at; the OAuth
 	// callbacks are under it.
 	URL string `yaml:"url"`
+	// AdminPasswordEnv names the env var holding the password of the first
+	// admin account, created when the dashboard starts with no accounts.
+	AdminPasswordEnv string `yaml:"admin_password_env"`
 	// Admins are the groups (GitLab) and teams (GitHub) whose members are
 	// admins on that instance.
 	Admins []DashboardAdmin `yaml:"admins"`
@@ -79,6 +82,10 @@ type DashboardAdmin struct {
 
 // DashboardEnabled reports whether the dashboard is on: dashboard.url is set.
 func (c *Config) DashboardEnabled() bool { return c.Dashboard.URL != "" }
+
+// HasLLM reports whether the file has an llm: block with a provider. With
+// the dashboard on the LLM can be added there instead.
+func (c *Config) HasLLM() bool { return c.LLM.Provider != "" }
 
 // Instance is one GitLab server and the env vars holding its secrets.
 type Instance struct {
@@ -340,7 +347,8 @@ func (c *Config) applyDefaults() {
 	if c.CallbackURL == "" {
 		c.CallbackURL = c.PublicURL
 	}
-	if c.LLM.APIKeyEnv == "" {
+	// No llm block means no LLM yet (the dashboard adds it), not a default one.
+	if c.HasLLM() && c.LLM.APIKeyEnv == "" {
 		c.LLM.APIKeyEnv = defaultAPIKeyEnv
 	}
 	if c.Jobs.Image == "" {
@@ -363,6 +371,7 @@ func (c *Config) applyDefaults() {
 
 var (
 	instanceNameRE = regexp.MustCompile(`^[a-z0-9-]+$`)
+	envNameRE      = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 	digestRE       = regexp.MustCompile(`@sha256:[0-9a-f]{64}$`)
 )
 
@@ -381,6 +390,10 @@ func (c *Config) Validate() error {
 	}
 	if c.SkillsDir == "" {
 		add("skills_dir is required")
+	}
+
+	if len(c.GitLab)+len(c.GitHub) == 0 && !c.DashboardEnabled() {
+		add("at least one gitlab or github instance is required (or turn on the dashboard to add them there)")
 	}
 
 	// Instance names are unique across gitlab: and github:, so a name alone
@@ -479,14 +492,18 @@ func (c *Config) Validate() error {
 
 	errs = append(errs, c.checkDashboard()...)
 
-	if c.LLM.Provider == "" {
-		add("llm.provider is required")
-	}
-	if c.LLM.Model == "" {
-		add("llm.model is required")
-	}
-	if c.LLM.APIKeyEnv == "" {
-		add("llm.api_key_env is required")
+	// With the dashboard on the LLM can be added there, so an absent llm
+	// block is fine; one that is present must be complete.
+	if c.HasLLM() || !c.DashboardEnabled() {
+		if c.LLM.Provider == "" {
+			add("llm.provider is required")
+		}
+		if c.LLM.Model == "" {
+			add("llm.model is required")
+		}
+		if c.LLM.APIKeyEnv == "" {
+			add("llm.api_key_env is required")
+		}
 	}
 
 	if c.Jobs.Namespace == "" {
@@ -581,6 +598,9 @@ func (c *Config) checkDashboard() []error {
 	}
 
 	d := c.Dashboard
+	if d.AdminPasswordEnv != "" && !envNameRE.MatchString(d.AdminPasswordEnv) {
+		add("dashboard.admin_password_env %q must be an environment variable name (%s)", d.AdminPasswordEnv, envNameRE)
+	}
 	if d.URL == "" {
 		if len(d.Admins) > 0 {
 			add("dashboard.admins needs dashboard.url: the dashboard is off without it")
@@ -604,9 +624,6 @@ func (c *Config) checkDashboard() []error {
 		if u.Port() != "" {
 			add("dashboard.url %q must have no port: the dashboard Ingress serves its host on the https port", d.URL)
 		}
-	}
-	if len(signIn) == 0 {
-		add("dashboard.url is set but no instance has oauth_client_id_env and oauth_client_secret_env: nobody could sign in")
 	}
 	for i, a := range d.Admins {
 		prefix := fmt.Sprintf("dashboard.admins[%d]", i)
