@@ -212,7 +212,7 @@ func TestFailedSkills(t *testing.T) {
 			skill("z", "failed", 0), skill("a", "failed", 0)}}, []string{"z", "a"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			names, whole := FailedSkills(tc.r)
+			names, whole := FailedSkills(tc.r, nil)
 			if whole != tc.wantWhole || !slices.Equal(names, tc.wantNames) {
 				t.Errorf("FailedSkills = %v, %v; want %v, %v", names, whole, tc.wantNames, tc.wantWhole)
 			}
@@ -299,16 +299,30 @@ func TestMergeAddsASkillTheBaseLacks(t *testing.T) {
 	}
 }
 
-func TestMergeDropsSubsetSkillsTheNewResultLacks(t *testing.T) {
+// A skill that was asked for and has no result is failed, not dropped: a
+// dropped skill would count as reviewed and clean.
+func TestMergeFailsSubsetSkillsTheNewResultLacks(t *testing.T) {
 	base := mergeInput(t, "h", map[string][]string{"sec": nil, "gone": nil}, "sec", "gone")
 	partial := mergeInput(t, "h", map[string][]string{"sec": nil}, "sec")
-	merged, err := Merge(partial, base, []string{"sec", "gone"})
+	merged, err := Merge(partial, base, []string{"sec", "gone", "new"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	r, _ := Parse(merged)
-	if len(r.Skills) != 1 || r.Skills[0].Name != "sec" {
-		t.Errorf("skills = %+v, want only sec", r.Skills)
+	if len(r.Skills) != 3 || r.Skills[0].Name != "sec" || r.Skills[0].Verdict != "no_blocking_issues" {
+		t.Fatalf("skills = %+v", r.Skills)
+	}
+	for _, i := range []int{1, 2} {
+		s := r.Skills[i]
+		if s.Verdict != "failed" || len(s.Failures) != 1 || s.Failures[0].Message != failedMessage {
+			t.Errorf("skill %d = %+v, want failed with the reason", i, s)
+		}
+	}
+	if r.Skills[1].Name != "gone" || r.Skills[2].Name != "new" {
+		t.Errorf("order = %s, %s", r.Skills[1].Name, r.Skills[2].Name)
+	}
+	if names, _ := FailedSkills(r, nil); !slices.Equal(names, []string{"gone", "new"}) {
+		t.Errorf("FailedSkills = %v", names)
 	}
 }
 
@@ -371,5 +385,27 @@ func TestNoteUnmerged(t *testing.T) {
 	}
 	if r.MergeNote != NoteBaseUnreadable || r.Merged || len(r.Skills) != 1 {
 		t.Errorf("result = %+v", r)
+	}
+}
+
+func TestFailedSkillsAfterDismissals(t *testing.T) {
+	const fp = "abc123def456"
+	f, _ := json.Marshal(Finding{ID: "abc123", Fingerprint: fp, File: "a.go", Severity: "blocking", Title: "t"})
+	blocking := Skill{Name: "a", Verdict: "has_blocking_issues", Findings: []json.RawMessage{f},
+		Files: Files{NotReviewed: []json.RawMessage{json.RawMessage(`{"path":"b.go"}`)}}}
+	r := &Result{Status: "completed", Skills: []Skill{blocking, {Name: "c", Verdict: "has_blocking_issues", Findings: []json.RawMessage{f}}}}
+
+	if names, _ := FailedSkills(r, nil); len(names) != 0 {
+		t.Errorf("without dismissals = %v, want none", names)
+	}
+	// The blocking finding is dismissed: the policy then decides a clean
+	// verdict with files not reviewed, which is a failure.
+	names, whole := FailedSkills(r, []render.Dismissal{{Fingerprint: fp, Severity: "blocking"}})
+	if whole || !slices.Equal(names, []string{"a"}) {
+		t.Errorf("with the dismissal = %v, %v; want [a]", names, whole)
+	}
+	// A suggestion dismissal doesn't cover a blocking finding.
+	if names, _ := FailedSkills(r, []render.Dismissal{{Fingerprint: fp, Severity: "suggestion"}}); len(names) != 0 {
+		t.Errorf("with a suggestion dismissal = %v, want none", names)
 	}
 }

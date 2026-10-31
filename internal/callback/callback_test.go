@@ -278,3 +278,21 @@ func TestTokenNeverInResponse(t *testing.T) {
 		t.Errorf("token echoed: %s", b)
 	}
 }
+
+// The merge markers are pergent.sh's own: a result a Job delivers with one is
+// unusable, so a Job can't pass a partial result off as merged.
+func TestMergeMarkersInDeliveredResultFailRun(t *testing.T) {
+	for name, extra := range map[string]string{
+		"merged":     `"merged":true,`,
+		"merge note": `"merge_note":"x",`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(newFake())
+			body := strings.Replace(resultJSON(base, head), `{"schema_version":1,`, `{"schema_version":1,`+extra, 1)
+			rec := e.post(runID, "Bearer good", body)
+			if rec.Code != 400 || len(e.f.replaced) != 1 || !strings.Contains(e.f.replaced[0], "merge") {
+				t.Errorf("status = %d replaced = %v", rec.Code, e.f.replaced)
+			}
+		})
+	}
+}

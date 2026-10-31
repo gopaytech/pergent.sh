@@ -280,3 +280,45 @@ func TestMakeFullRerun(t *testing.T) {
 		t.Error("a malformed id was accepted")
 	}
 }
+
+// Only a run being dispatched is turned into a full re-run or has its subset
+// narrowed; a reported, published or superseded run is left as it is.
+func TestRerunEditsNeedARunBeingDispatched(t *testing.T) {
+	s := newStore(t)
+	old := published(t, s, mr1, "aaa", "main")
+	id, _, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerunFailed, []string{"a", "b"}, &old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetSkillSubset(ctx, id, []string{"a"}); err != nil {
+		t.Fatalf("SetSkillSubset of a queued run: %v", err)
+	}
+	if r := getRun(t, s, id); !slices.Equal(r.SkillSubset, []string{"a"}) {
+		t.Errorf("subset = %v", r.SkillSubset)
+	}
+
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	tok := "tok-rerun"
+	if err := s.MarkDispatched(ctx, id, "job-"+id, "base", "start", hash(tok), t0.Add(time.Hour), t0); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := s.StoreResult(ctx, id, tok, []byte(`{"status":"completed"}`), t0.Add(time.Minute)); err != nil || out != ResultStored {
+		t.Fatalf("StoreResult = %v, %v", out, err)
+	}
+	for name, run := range map[string]string{"reported": id, "superseded": old} {
+		if err := s.MakeFullRerun(ctx, run); err == nil {
+			t.Errorf("%s run: MakeFullRerun succeeded", name)
+		}
+		if err := s.SetSkillSubset(ctx, run, []string{"z"}); err == nil {
+			t.Errorf("%s run: SetSkillSubset succeeded", name)
+		}
+	}
+	if r := getRun(t, s, id); r.Trigger != TriggerRerunFailed || !slices.Equal(r.SkillSubset, []string{"a"}) || r.BaseRunID == nil {
+		t.Errorf("reported run changed: %q %v %v", r.Trigger, r.SkillSubset, r.BaseRunID)
+	}
+	if r := getRun(t, s, old); r.Trigger != TriggerPush {
+		t.Errorf("old run changed: %q", r.Trigger)
+	}
+}

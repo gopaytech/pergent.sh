@@ -769,11 +769,21 @@ func (s *Store) StoreMergedResult(ctx context.Context, runID string, merged []by
 }
 
 // MakeFullRerun turns a run that was to review some skills into a full
-// re-run (TriggerRerun, every skill, no base run), for when none of its skills
-// can be reviewed any more.
+// re-run (TriggerRerun, every skill, no base run), for when its skills can't
+// be kept apart from the rest of the review. It applies to a run being
+// dispatched (queued or running) only; any other run is an error.
 func (s *Store) MakeFullRerun(ctx context.Context, runID string) error {
 	return s.mustUpdate(ctx, runID, `UPDATE runs SET trigger = $2, skill_subset = NULL, base_run_id = NULL
-		WHERE id = $1::uuid`, runID, TriggerRerun)
+		WHERE id = $1::uuid AND state IN ('queued', 'running')`, runID, TriggerRerun)
+}
+
+// SetSkillSubset records the skills a run being dispatched (queued or running)
+// really reviews, when some of those asked for are gone. The publisher merges
+// by it, treating a skill of it without a result as failed. Any other run is
+// an error.
+func (s *Store) SetSkillSubset(ctx context.Context, runID string, skills []string) error {
+	return s.mustUpdate(ctx, runID, `UPDATE runs SET skill_subset = $2
+		WHERE id = $1::uuid AND state IN ('queued', 'running') AND skill_subset IS NOT NULL`, runID, skills)
 }
 
 // ReportFailure records that a queued or running run will never produce a

@@ -76,8 +76,8 @@ func TestSubsetJobGetsOnlyThoseSkills(t *testing.T) {
 	if len(r.SkillSources) != 1 || r.SkillSources["style"] != "repo" {
 		t.Errorf("skill sources = %v, want only style from the repo", r.SkillSources)
 	}
-	if r.Trigger != store.TriggerRerunFailed || len(r.SkillSubset) != 2 || r.BaseRunID == nil {
-		t.Errorf("run = %q %v %v, want the re-run kept as asked", r.Trigger, r.SkillSubset, r.BaseRunID)
+	if r.Trigger != store.TriggerRerunFailed || len(r.SkillSubset) != 1 || r.SkillSubset[0] != "style" || r.BaseRunID == nil {
+		t.Errorf("run = %q %v %v, want the re-run with the skills that exist: style", r.Trigger, r.SkillSubset, r.BaseRunID)
 	}
 	if !strings.Contains(env.Logs(), "gone") {
 		t.Errorf("the skill that is gone was not warned about:\n%s", env.Logs())
@@ -104,6 +104,102 @@ func TestSubsetOfSkillsThatAreGoneIsAFullRerun(t *testing.T) {
 	}
 	if len(r.SkillSources) != 2 {
 		t.Errorf("skill sources = %v, want every skill", r.SkillSources)
+	}
+}
+
+// resultAt is resultFor with a chosen base commit.
+func resultAt(t *testing.T, base, head string, skills ...result.Skill) []byte {
+	t.Helper()
+	var r result.Result
+	if err := json.Unmarshal(resultFor(t, head, skills...), &r); err != nil {
+		t.Fatal(err)
+	}
+	r.Base = base
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// A re-run of some skills only makes sense when the skills it keeps are the
+// review of this very diff by the skills that are configured now. When they
+// are not, everything is reviewed again, so nothing is approved on a subset.
+func TestSubsetThatCannotBeKeptIsAFullRerun(t *testing.T) {
+	head := sha('a')
+	both := func(t *testing.T) []result.Skill {
+		return []result.Skill{namedSkill(t, "security", "no_blocking_issues", "", ""), namedSkill(t, "style", "failed", "", "")}
+	}
+	for name, tc := range map[string]struct {
+		base func(t *testing.T) []byte
+	}{
+		"base result does not parse": {func(t *testing.T) []byte { return []byte(`{"status":"completed"}`) }},
+		"base result is an error": {func(t *testing.T) []byte {
+			return []byte(`{"schema_version":1,"status":"error","base":"` + sha('b') + `","head":"` + head + `","comment":{"markdown":"x"}}`)
+		}},
+		"target moved: another base commit": {func(t *testing.T) []byte { return resultAt(t, sha('c'), head, both(t)...) }},
+		"a skill was added since": {func(t *testing.T) []byte {
+			return resultFor(t, head, namedSkill(t, "style", "failed", "", ""))
+		}},
+		"a skill was renamed since": {func(t *testing.T) []byte {
+			return resultFor(t, head, namedSkill(t, "security", "no_blocking_issues", "", ""), namedSkill(t, "styleguide", "failed", "", ""))
+		}},
+		"a skill was removed since": {func(t *testing.T) []byte {
+			return resultFor(t, head, append(both(t), namedSkill(t, "old", "no_blocking_issues", "", ""))...)
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := newTestEnv(t)
+			env.Engine.Library["style"] = []byte("---\nname: style\n---\nCheck the style.\n")
+			base := env.Publish(1, head, tc.base(t))
+			id := rerunOf(t, env, head, store.TriggerRerunFailed, []string{"style"}, base)
+			env.GitLab.SetMR(openMR(1, head))
+			env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+
+			dispatch(t, env)
+
+			r := env.Run(id)
+			if r.State != store.Running {
+				t.Fatalf("state = %s (%s)\n%s", r.State, r.FailureReason, env.Logs())
+			}
+			if r.Trigger != store.TriggerRerun || r.SkillSubset != nil || r.BaseRunID != nil {
+				t.Errorf("run = %q %v %v, want a full re-run", r.Trigger, r.SkillSubset, r.BaseRunID)
+			}
+			var all strings.Builder
+			for _, v := range env.ConfigMap(id).Data {
+				all.WriteString(v)
+			}
+			for _, want := range []string{"Look for security problems.", "Check the style."} {
+				if !strings.Contains(all.String(), want) {
+					t.Errorf("inputs lack %q: every skill is reviewed", want)
+				}
+			}
+		})
+	}
+}
+
+// The sources recorded for a re-run are the whole review's: kept skills keep
+// the earlier run's, re-run skills get the new ones.
+func TestSubsetRecordsKeptSkillSources(t *testing.T) {
+	env := newTestEnv(t)
+	env.Engine.Library["style"] = []byte("---\nname: style\n---\nCheck the style.\n")
+	head := sha('a')
+	base := env.Publish(1, head, resultFor(t, head, namedSkill(t, "security", "no_blocking_issues", "", ""), namedSkill(t, "style", "failed", "", "")))
+	if err := env.Store.SetRunInputs(env.ctx, base, "m", map[string]string{"security": "repo", "style": "library"}); err != nil {
+		t.Fatal(err)
+	}
+	id := rerunOf(t, env, head, store.TriggerRerunFailed, []string{"style"}, base)
+	env.GitLab.SetMR(openMR(1, head))
+	env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+
+	dispatch(t, env)
+
+	r := env.Run(id)
+	if r.State != store.Running {
+		t.Fatalf("state = %s (%s)\n%s", r.State, r.FailureReason, env.Logs())
+	}
+	if len(r.SkillSources) != 2 || r.SkillSources["security"] != "repo" || r.SkillSources["style"] != "library" {
+		t.Errorf("skill sources = %v, want security kept from the earlier run (repo) and style as now (library)", r.SkillSources)
 	}
 }
 
@@ -251,6 +347,12 @@ func TestMergeBaseUnreadable(t *testing.T) {
 				t.Errorf("comment should be the re-run's own:\n%s", body)
 			}
 			wantPublished(t, env, id)
+			// Only the skills that were re-run were reviewed: never approved.
+			wantStatus(t, env, head, gitlab.StatusSuccess, "No blocking issues; not approved: "+result.NoteBaseUnreadable)
+			wantNoApproval(t, env, 1)
+			if r := env.Run(id); r.Outcome != store.OutcomeNoBlocking || r.Approved {
+				t.Errorf("outcome %q approved %v, want no_blocking and not approved", r.Outcome, r.Approved)
+			}
 			r, err := result.Parse(env.Run(id).Result)
 			if err != nil {
 				t.Fatal(err)
@@ -276,5 +378,31 @@ func TestMergeLeavesOtherRunsAlone(t *testing.T) {
 	}
 	if body := createdComment(t, env, 1); !strings.Contains(body, policy.Marker) || strings.Contains(body, result.NoteBaseUnreadable) {
 		t.Errorf("comment = %q", body)
+	}
+}
+
+// A skill that was asked for but is missing from the re-run's result is
+// failed: the review is not clean and not approved.
+func TestMergedSubsetSkillMissingFromResultIsFailed(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	base := env.Publish(1, head, resultFor(t, head,
+		namedSkill(t, "security", "no_blocking_issues", "", ""), namedSkill(t, "style", "failed", "", "")))
+	id := rerunOf(t, env, head, store.TriggerRerunFailed, []string{"style"}, base)
+
+	// The Job's result has a skill, but not the one asked for.
+	reportRerun(t, env, id, head, resultFor(t, head, namedSkill(t, "other", "no_blocking_issues", "", "")))
+
+	wantStatus(t, env, head, gitlab.StatusFailed, "Review failed for 1 of 2 skills")
+	wantNoApproval(t, env, 1)
+	r, err := result.Parse(env.Run(id).Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Merged || len(r.Skills) != 2 || r.Skills[0].Name != "security" || r.Skills[1].Name != "style" || r.Skills[1].Verdict != "failed" {
+		t.Errorf("stored result = %+v, want security kept and style failed", r.Skills)
+	}
+	if body := createdComment(t, env, 1); !strings.Contains(body, "The re-run returned no result for this skill.") {
+		t.Errorf("comment does not say why style failed:\n%s", body)
 	}
 }

@@ -159,8 +159,9 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 // (result.Merge) and the whole is stored on the run, so the dashboard and the
 // next run's previous result show the whole review. It is done once; a run
 // whose result is already merged is returned as it is. A base result that
-// can't be read or is for another commit leaves the re-run as a review of its
-// own skills only, with a note in the comment.
+// can't be read or is for another commit (dispatch checks this too, and then
+// reviews everything) leaves the re-run as a review of its own skills only,
+// with a note in the comment, and the policy never approves it.
 //
 // The returned run carries the stored result. An error is a failure of the
 // store: the publish is retried.
@@ -187,7 +188,8 @@ func (e *Engine) mergeBase(ctx context.Context, run store.Run, log *slog.Logger)
 	if err != nil {
 		log.Warn("not merging with the earlier results of the other skills", "base_run", *run.BaseRunID, "error", e.redact(err.Error()))
 		if merged, err = result.NoteUnmerged(run.Result, result.NoteBaseUnreadable); err != nil {
-			return run, nil // can't happen: the result parsed
+			// Never publish the subset without its note: retry the publish.
+			return run, fmt.Errorf("note the unmerged result: %w", err)
 		}
 	}
 	if err := e.Store.StoreMergedResult(ctx, run.ID, merged); err != nil {

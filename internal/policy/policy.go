@@ -230,7 +230,7 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 		block = render.FindingsBlock(rs)
 	}
 	if r.MergeNote != "" {
-		comment = withNote(comment, block, noteMerge+r.MergeNote+".")
+		comment = withNote(comment, block, noteMerge+r.MergeNote+", so this review covers only the skills that were re-run and is not approved.")
 	}
 	var blocking, failedSkills, reviewed int
 	for _, s := range skills {
@@ -275,6 +275,15 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 		}
 	}
 	switch {
+	case r.MergeNote != "":
+		// A re-run kept alone: the skills it did not review are unknown, so
+		// the change is not approved on it. The comment carries the note.
+		return Decision{
+			Comment:     comment,
+			Status:      StatusSuccess,
+			Description: descNotApproved + r.MergeNote,
+			Kind:        KindNotApproved,
+		}
 	case o.ApprovalOff:
 		return notApproved(comment, block, reasonApprovalOff, noteApprovalOff)
 	case o.Draft:

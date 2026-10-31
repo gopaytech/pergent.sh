@@ -278,14 +278,18 @@ func Trim(data []byte) ([]byte, error) {
 // FailedSkills names the skills a "review failed" re-run reviews again: those
 // whose verdict is "failed" (or one pergent.sh does not know, as the policy
 // treats it) and those that are "no_blocking_issues" yet list files they could
-// not review. whole is true when no skill can be singled out: the result is an
-// error or has no skills; the whole review is then re-run.
-func FailedSkills(r *Result) (names []string, whole bool) {
+// not review. The verdicts are the ones the policy decides on, after
+// dismissals ds are applied: a skill whose blocking findings are all
+// dismissed is "no_blocking_issues", so it is failed when it also lists files
+// it could not review. whole is true when no skill can be singled out: the
+// result is an error or has no skills; the whole review is then re-run.
+func FailedSkills(r *Result, ds []render.Dismissal) (names []string, whole bool) {
 	if r.Status != "completed" || len(r.Skills) == 0 {
 		return nil, true
 	}
-	for _, s := range r.Skills {
-		switch s.Verdict {
+	decided := render.ApplyDismissals(ToRender(r), ds)
+	for i, s := range r.Skills {
+		switch decided[i].Verdict {
 		case "has_blocking_issues":
 		case "no_blocking_issues":
 			if len(s.Files.NotReviewed) > 0 {
@@ -305,9 +309,9 @@ const NoteBaseUnreadable = "earlier results of the other skills could not be rea
 // Merge combines the result of a partial re-run with the result it builds on:
 // the skills in subset come from partial, every other skill from base. The
 // base's order is kept (a subset skill takes the place of its earlier result;
-// one the base lacks goes last), a skill of subset that partial lacks is
-// dropped, and each skill is kept as it was delivered, fields that Result does
-// not declare included. Finding IDs are assigned again over all the findings
+// one the base lacks goes last), a skill of subset that partial lacks is a
+// failed skill (never dropped, which would pass it unreviewed), and each skill
+// is kept as it was delivered, fields that Result does not declare included. Finding IDs are assigned again over all the findings
 // of the merged result, so they stay unique. The envelope and the comment are
 // partial's, and the result is marked Merged.
 //
@@ -361,14 +365,22 @@ func Merge(partial, base []byte, subset []string) ([]byte, error) {
 			skills = append(skills, raw)
 			continue
 		}
-		if f, ok := fresh[name]; ok && !used[name] {
-			skills = append(skills, f)
-			used[name] = true
+		if used[name] {
+			continue
 		}
+		used[name] = true
+		skills = append(skills, freshOrMissing(fresh, name))
 	}
 	for _, name := range freshOrder {
 		if !used[name] {
+			used[name] = true
 			skills = append(skills, fresh[name])
+		}
+	}
+	for _, name := range subset {
+		if !used[name] {
+			used[name] = true
+			skills = append(skills, freshOrMissing(fresh, name))
 		}
 	}
 
@@ -381,6 +393,23 @@ func Merge(partial, base []byte, subset []string) ([]byte, error) {
 	}
 	top["merged"] = json.RawMessage("true")
 	return json.Marshal(top)
+}
+
+// failedMessage is why a skill that was asked for is failed in a merge.
+const failedMessage = "The re-run returned no result for this skill."
+
+// freshOrMissing is the re-run's result for name, or a failed skill when the
+// re-run has none.
+func freshOrMissing(fresh map[string]json.RawMessage, name string) json.RawMessage {
+	if raw, ok := fresh[name]; ok {
+		return raw
+	}
+	missing, _ := json.Marshal(Skill{
+		Name: name, Verdict: "failed", Findings: []json.RawMessage{},
+		Files:    Files{Reviewed: []string{}, Skipped: []Skipped{}, NotReviewed: []json.RawMessage{}},
+		Failures: []Failure{{Files: []string{}, Message: failedMessage}},
+	})
+	return missing
 }
 
 // unmarshalSkills decodes data into its top-level fields and the raw skills

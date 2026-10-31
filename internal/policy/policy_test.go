@@ -909,6 +909,8 @@ func TestDecideMergedResultIsRenderedAgain(t *testing.T) {
 	}
 }
 
+// A re-run whose earlier results could not be merged covers only the skills
+// that were re-run: it is never approved, whatever else allows it.
 func TestDecideMergeNote(t *testing.T) {
 	r := completed(skill("style", "no_blocking_issues", "a.go"))
 	r.MergeNote = result.NoteBaseUnreadable
@@ -916,5 +918,20 @@ func TestDecideMergeNote(t *testing.T) {
 	i, j := strings.Index(d.Comment, result.NoteBaseUnreadable), strings.Index(d.Comment, "<!-- pergent:findings ")
 	if i < 0 || j < i {
 		t.Errorf("comment = %q, want the note before the findings block", d.Comment)
+	}
+	if d.Approve || d.Kind != KindNotApproved || d.Status != StatusSuccess ||
+		!strings.HasPrefix(d.Description, descNotApproved) || !strings.Contains(d.Description, result.NoteBaseUnreadable) {
+		t.Errorf("decision = %+v, want not approved because of the note", d)
+	}
+
+	blocking := completed(withFinding(skill("style", "has_blocking_issues", "a.go"), "blocking", "abc123def456", "x"))
+	blocking.MergeNote = result.NoteBaseUnreadable
+	if d := Decide(Outcome{Result: blocking}, config.FailureStatusFailed); d.Kind != KindBlocking {
+		t.Errorf("blocking findings still block: %+v", d)
+	}
+	failed := completed(skill("style", "failed", "a.go"))
+	failed.MergeNote = result.NoteBaseUnreadable
+	if d := Decide(Outcome{Result: failed}, config.FailureStatusFailed); d.Kind != KindFailed {
+		t.Errorf("a failed skill still fails: %+v", d)
 	}
 }

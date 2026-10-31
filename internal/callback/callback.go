@@ -122,6 +122,10 @@ func (h *Handler) check(ctx context.Context, id string, body []byte) (string, er
 	if err != nil {
 		return err.Error(), nil
 	}
+	if res.Merged || res.MergeNote != "" {
+		// Only pergent.sh marks a result as merged, after it merged it.
+		return "the result carries merge fields, which only pergent.sh sets", nil
+	}
 	run, found, err := h.Results.Run(ctx, id)
 	if err != nil {
 		return "", err

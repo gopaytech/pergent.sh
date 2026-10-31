@@ -147,6 +147,9 @@ type dispatcher struct {
 	log *slog.Logger
 	// secrets are values that must never reach a failure reason or a log.
 	secrets []string
+	// keptSources are the sources of the skills a re-run of some skills keeps
+	// from the earlier run.
+	keptSources map[string]string
 }
 
 func (d *dispatcher) dispatch(ctx context.Context) error {
@@ -284,7 +287,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		}
 		return d.fail(ctx, err.Error())
 	}
-	if in, err = d.subset(ctx, in); err != nil {
+	if in, err = d.subset(ctx, in, mr); err != nil {
 		return d.retry(ctx, err)
 	}
 	if err := in.Fit(inputs.ConfigMapLimit); err != nil {
@@ -361,7 +364,18 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	d.log.Info("review job started", "job", name)
 	// For the dashboard, best effort: the model and where each skill came
 	// from.
-	if err := e.Store.SetRunInputs(ctx, run.ID, llm.Model, in.Sources); err != nil {
+	sources := in.Sources
+	if len(d.keptSources) > 0 {
+		// A re-run of some skills shows the whole review's sources.
+		sources = map[string]string{}
+		for name, src := range d.keptSources {
+			sources[name] = src
+		}
+		for name, src := range in.Sources {
+			sources[name] = src
+		}
+	}
+	if err := e.Store.SetRunInputs(ctx, run.ID, llm.Model, sources); err != nil {
 		d.log.Info("couldn't record the review's model and skills for the dashboard", "error", d.redact(err.Error()))
 	}
 
@@ -374,31 +388,91 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 // subset reduces the inputs of a run that reviews some of the skills (a
 // re-run of the failed ones) to those skills. This happens after the inputs
 // are resolved, as a repository's own skills replace library ones inside
-// Resolve. A skill that is no longer there is dropped; with none left the run
-// is turned into a full re-run (recorded on the run) and reviews every skill.
-func (d *dispatcher) subset(ctx context.Context, in *inputs.Inputs) (*inputs.Inputs, error) {
-	names := d.run.SkillSubset
+// Resolve.
+//
+// A review of some skills is only ever published merged with the earlier
+// results of the others, and only a subset of the same diff by the same skills
+// can be. So when the earlier run's result can't be read, is not a completed
+// review of the commits this run reviews, or was made by other skills than are
+// configured now, the run is turned into a full re-run (recorded on the run)
+// and reviews every skill. A skill asked for that is gone is left out of the
+// subset, which is recorded.
+func (d *dispatcher) subset(ctx context.Context, in *inputs.Inputs, mr forge.Change) (*inputs.Inputs, error) {
+	run := d.run
+	names := run.SkillSubset
 	if len(names) == 0 {
 		return in, nil
 	}
+	base, reason, err := d.keptRun(ctx, in, mr)
+	if err != nil {
+		return nil, err
+	}
 	only := in.Only(names)
-	if len(only.Skills) == 0 {
-		d.log.Warn("none of the skills to re-run exist any more; reviewing with all skills", "skills", strings.Join(names, ","))
-		if err := d.e.Store.MakeFullRerun(ctx, d.run.ID); err != nil {
+	if reason == "" && len(only.Skills) == 0 {
+		reason = "none of the skills to re-run exist any more"
+	}
+	if reason != "" {
+		d.log.Warn("reviewing with all skills: the skills to re-run can't be kept apart from the rest of the review", "reason", reason)
+		if err := d.e.Store.MakeFullRerun(ctx, run.ID); err != nil {
 			return nil, fmt.Errorf("record the full re-run: %w", err)
 		}
 		return in, nil
 	}
 	if len(only.Skills) < len(names) {
-		var gone []string
+		var kept, gone []string
 		for _, n := range names {
-			if _, ok := only.Skills[n]; !ok {
+			if _, ok := only.Skills[n]; ok {
+				kept = append(kept, n)
+			} else {
 				gone = append(gone, n)
 			}
 		}
 		d.log.Warn("re-running without skills that don't exist any more", "skills", strings.Join(gone, ","))
+		if err := d.e.Store.SetSkillSubset(ctx, run.ID, kept); err != nil {
+			return nil, fmt.Errorf("record the skills to re-run: %w", err)
+		}
+	}
+	d.keptSources = map[string]string{}
+	for name, src := range base.SkillSources {
+		if _, rerun := only.Skills[name]; !rerun {
+			d.keptSources[name] = src
+		}
 	}
 	return only, nil
+}
+
+// keptRun is the run whose results a re-run of some skills keeps, or the
+// reason it can't: it has to be a completed review of the base and head
+// commits this run reviews, by the skills in in. An error is the store's.
+func (d *dispatcher) keptRun(ctx context.Context, in *inputs.Inputs, mr forge.Change) (store.Run, string, error) {
+	run := d.run
+	if run.BaseRunID == nil {
+		return store.Run{}, "no earlier run to keep the other skills' results from", nil
+	}
+	base, found, err := d.e.Store.Run(ctx, *run.BaseRunID)
+	if err != nil {
+		return store.Run{}, "", fmt.Errorf("load the earlier run: %w", err)
+	}
+	if !found || base.Result == nil {
+		return store.Run{}, "the earlier run or its result is gone", nil
+	}
+	r, err := result.Parse(base.Result)
+	switch {
+	case err != nil:
+		return store.Run{}, "the earlier result can't be read", nil
+	case r.Status != "completed":
+		return store.Run{}, "the earlier result is not a completed review", nil
+	case r.Base != mr.BaseSHA || r.Head != run.HeadSHA:
+		return store.Run{}, "the earlier result is of other commits", nil
+	case len(r.Skills) != len(in.Skills):
+		return store.Run{}, "the skills changed since the earlier result", nil
+	}
+	for _, s := range r.Skills {
+		if _, ok := in.Skills[s.Name]; !ok {
+			return store.Run{}, "the skills changed since the earlier result", nil
+		}
+	}
+	return base, "", nil
 }
 
 // recordChange stores the merge request's title, web address, source branch
