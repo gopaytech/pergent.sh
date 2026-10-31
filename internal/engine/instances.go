@@ -2,9 +2,16 @@ package engine
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/gopaytech/pergent.sh/internal/instances"
 )
+
+// attInstanceRemovalStuck is the kind of the instance-wide "Needs attention"
+// item for an instance being removed that still has projects on its platform
+// after a reconcile. It goes with the instance's other rows when the removal
+// finishes (Store.DeleteInstanceData).
+const attInstanceRemovalStuck = "instance_removal_stuck"
 
 // finishRemovals completes the removal of the instances of the dashboard that
 // an operator is removing (Removing): once every project of one is gone from
@@ -36,6 +43,11 @@ func (e *Engine) finishRemovals(ctx context.Context) {
 		log := e.log().With("instance", inst.Name)
 		if n := left[inst.Name]; n > 0 {
 			log.Info("an instance being removed still has projects to take off its platform", "projects", n)
+			msg := fmt.Sprintf("pergent.sh could not take %d project(s) of the instance %q, which is being removed, off its platform; "+
+				"it tries again at the next reconcile", n, inst.Name)
+			if err := e.Store.SetAttention(ctx, inst.Name, "", attInstanceRemovalStuck, msg); err != nil {
+				log.Warn("couldn't record that an instance's removal is stuck", "error", e.redact(err.Error()))
+			}
 			continue
 		}
 		// A sign-in that raced the removal may have made an account since

@@ -387,14 +387,20 @@ func (s *Store) CountRunning(ctx context.Context) (int, error) {
 
 // ClaimQueued moves up to limit queued runs that are due at now to running and
 // returns them, oldest first. Concurrent callers never claim the same run.
-func (s *Store) ClaimQueued(ctx context.Context, limit int, now time.Time) ([]Run, error) {
+// The runs of the instances in skip are left alone, queued and unclaimed, so
+// runs that have to wait for an instance take no slot from the others.
+func (s *Store) ClaimQueued(ctx context.Context, limit int, now time.Time, skip ...string) ([]Run, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
+	if skip == nil {
+		skip = []string{} // an empty array, not NULL: `<> ALL(NULL)` is never true
+	}
 	rows, err := s.pool.Query(ctx, `UPDATE runs SET state = 'running', claimed_at = $2 WHERE id IN (
 			SELECT id FROM runs WHERE state = 'queued' AND (not_before IS NULL OR not_before <= $2)
+			  AND instance <> ALL($3::text[])
 			ORDER BY created_at, id LIMIT $1 FOR UPDATE SKIP LOCKED)
-		RETURNING `+runColumns, limit, now)
+		RETURNING `+runColumns, limit, now, skip)
 	if err != nil {
 		return nil, err
 	}
@@ -404,6 +410,27 @@ func (s *Store) ClaimQueued(ctx context.Context, limit int, now time.Time) ([]Ru
 	}
 	sortRuns(runs)
 	return runs, nil
+}
+
+// CountQueued returns how many runs are queued (due or not) on each of the
+// instances; one with none is left out.
+func (s *Store) CountQueued(ctx context.Context, instances []string) (map[string]int, error) {
+	rows, err := s.pool.Query(ctx, `SELECT instance, count(*) FROM runs
+		WHERE state = 'queued' AND instance = ANY($1::text[]) GROUP BY instance`, instances)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var name string
+		var n int
+		if err := rows.Scan(&name, &n); err != nil {
+			return nil, err
+		}
+		out[name] = n
+	}
+	return out, rows.Err()
 }
 
 func sortRuns(runs []Run) {

@@ -373,3 +373,29 @@ func TestSupersedeInstance(t *testing.T) {
 		t.Errorf("SupersedeInstance again = %d, %v; want 0", again, err)
 	}
 }
+
+// A removing instance can't be changed: the update finds it removing, and
+// leaves its row and secrets as they were.
+func TestUpdateInstanceRefusesARemovingInstance(t *testing.T) {
+	s := newStore(t)
+	if err := s.CreateInstance(ctx, InstanceRow{Name: "lab", Platform: "gitlab", OAuthClientID: "c1"},
+		map[string][]byte{"review_token": []byte("old")}, t0); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.MarkInstanceRemoving(ctx, "lab"); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	id := "c2"
+	ok, err := s.UpdateInstance(ctx, "lab", &id, map[string][]byte{"review_token": []byte("new")}, t0.Add(time.Hour))
+	if !errors.Is(err, ErrRemoving) || ok {
+		t.Fatalf("UpdateInstance of a removing instance = %v, %v; want ErrRemoving", ok, err)
+	}
+	row, _, _ := s.InstanceRow(ctx, "lab")
+	got, _ := s.InstanceSecrets(ctx, "lab")
+	if row.OAuthClientID != "c1" || !bytes.Equal(got["review_token"].Value, []byte("old")) {
+		t.Fatalf("row = %+v, secrets = %+v; want them unchanged", row, got)
+	}
+	if ok, err := s.UpdateInstance(ctx, "nope", &id, nil, t0); ok || err != nil {
+		t.Fatalf("UpdateInstance(nope) = %v, %v; want not found", ok, err)
+	}
+}

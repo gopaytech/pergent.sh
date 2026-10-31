@@ -320,8 +320,11 @@ type AttentionView struct {
 type IntegrationView struct {
 	Instance string `json:"instance"`
 	Platform string `json:"platform"`
-	// Connected is true: pergent.sh doesn't start unless its tokens or
-	// Apps for every instance work.
+	// Connected is whether pergent.sh is connected to the instance now: its
+	// review side serves the dashboard. An instance of the config always
+	// is (pergent.sh doesn't start otherwise); one added in the dashboard
+	// that couldn't be reached at startup, or whose connection failed, is
+	// not until it is saved again. Without that wiring it is true.
 	Connected bool `json:"connected"`
 	// Approver is "app" (a GitHub approve App) or "token" (a bot user).
 	Approver string `json:"approver"`

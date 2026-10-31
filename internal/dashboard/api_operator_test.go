@@ -1091,3 +1091,95 @@ func TestOperatorAPINeverReturnsSecrets(t *testing.T) {
 		}
 	}
 }
+
+// A change that is checking while the instance is removed does not undo the
+// removal: the store refuses it (409), the registry stays removing and no
+// sign-in provider comes back.
+func TestUpdateRacingARemovalKeepsItRemoved(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.operator()
+	e.addLab(c)
+	connects := len(e.conn.connectCalls())
+	// The removal lands while the check is running.
+	e.conn.checkErr = func(inst instances.Instance, _ instances.Secrets) error {
+		if ok, err := e.st.MarkInstanceRemoving(ctx, "lab"); err != nil || !ok {
+			t.Errorf("MarkInstanceRemoving = %v, %v", ok, err)
+		}
+		e.reg.SetRemoving("lab")
+		e.d.Auth.RemoveProvider("lab")
+		return nil
+	}
+	rec := e.sendJSON(c, "PUT", "/api/admin/instances/lab", map[string]any{"oauthClientID": "lab-client-2"})
+	if rec.Code != http.StatusConflict || strings.TrimSpace(rec.Body.String()) != `{"error":"this instance is being removed"}` {
+		t.Fatalf("PUT = %d %s, want 409 this instance is being removed", rec.Code, rec.Body)
+	}
+	inst, ok := e.reg.Get("lab")
+	if !ok || !inst.Removing || inst.OAuthClientID != "lab-client" {
+		t.Errorf("registry lab = %+v, %v; want removing, client ID unchanged", inst, ok)
+	}
+	if row, _, _ := e.st.InstanceRow(ctx, "lab"); !row.Removing || row.OAuthClientID != "lab-client" {
+		t.Errorf("stored lab = %+v", row)
+	}
+	if n := len(e.conn.connectCalls()); n != connects {
+		t.Errorf("connected %d more times", n-connects)
+	}
+	if code := e.do("GET", "/auth/gitlab/lab/login", nil, nil).Code; code != http.StatusNotFound {
+		t.Errorf("login through lab = %d, want 404", code)
+	}
+	signin := decode[instancesView](t, e.do("GET", "/api/instances", nil, nil), "GET /api/instances", http.StatusOK)
+	if slices.ContainsFunc(signin.Instances, func(v InstanceView) bool { return v.Instance == "lab" }) {
+		t.Errorf("sign-in is offered through lab: %+v", signin.Instances)
+	}
+}
+
+// If the LLM was saved but reading it back fails, the change is not lost: the
+// answer is 200 with what was saved, and the failure is logged at Error
+// without the key.
+func TestPutLLMSavedButNotReloaded(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.operator()
+	e.d.loadLLM = func(context.Context) error { return errors.New("database went away (" + llmKeyOne + ")") }
+	rec := e.sendJSON(c, "PUT", "/api/admin/llm", map[string]any{"provider": "anthropic", "model": "claude-sonnet-4", "baseURL": "https://llm.example.com/v1", "apiKey": llmKeyOne})
+	v := decode[LLMAdminView](t, rec, "PUT /api/admin/llm", http.StatusOK)
+	if v.Provider != "anthropic" || v.Model != "claude-sonnet-4" || v.BaseURL != "https://llm.example.com/v1" || !v.Key.Set || !v.Editable {
+		t.Errorf("view = %+v, want what was saved", v)
+	}
+	if row, found, _ := e.st.LLM(ctx); !found || row.Model != "claude-sonnet-4" {
+		t.Errorf("stored LLM = %+v, %v", row, found)
+	}
+	logs := e.logs.String()
+	if !strings.Contains(logs, "level=ERROR") || !strings.Contains(logs, "database went away") || strings.Contains(logs, llmKeyOne) {
+		t.Errorf("log = %s; want the failure at Error with the key hidden", logs)
+	}
+	if !slices.ContainsFunc(e.auditEntries(), func(a store.AuditEntry) bool { return a.Action == "llm_updated" }) {
+		t.Error("the save was not audited")
+	}
+}
+
+// Only admins change the defaults: a maintainer or viewer is 403 with a valid
+// body, and nothing changes.
+func TestDefaultsRefusedToNonAdmins(t *testing.T) {
+	e := newEnv(t, nil)
+	for name, c := range map[string]*http.Cookie{
+		"viewer":     e.signInGitHub(false, "acme/widgets"),
+		"waiting":    e.signIn("gitlab", "main"),
+		"no session": nil,
+	} {
+		var rec *httptest.ResponseRecorder
+		if c == nil {
+			rec = e.do("PUT", "/api/admin/defaults", nil, map[string]string{"Content-Type": "application/json"})
+		} else {
+			rec = e.send(c, "PUT", "/api/admin/defaults", `{"approve": false}`)
+		}
+		want := http.StatusForbidden
+		if c == nil {
+			want = http.StatusUnauthorized
+		}
+		if rec.Code != want {
+			t.Errorf("%s: PUT /api/admin/defaults = %d %s, want %d", name, rec.Code, rec.Body, want)
+		}
+	}
+	if d, err := e.st.RepoDefaults(ctx); err != nil || d.Approve != nil {
+		t.Errorf("defaults = %+v, %v; want untouched", d, err)
+	}
+}

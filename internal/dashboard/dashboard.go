@@ -120,6 +120,9 @@ type Dashboard struct {
 	sources       *syncmap.Map[RepoSource]
 	catalogs      *syncmap.Map[RepoCatalog]
 	reconcileSoon func(instance, project string)
+	// loadLLM reads the LLM saved in the dashboard again
+	// (instances.Registry.LoadLLM); a field so a test can make it fail.
+	loadLLM func(ctx context.Context) error
 	// availableBudget bounds the whole picker request; listBudget bounds
 	// each side's listing in it; listLimit is the most repositories read
 	// from each side.
@@ -161,7 +164,7 @@ func New(o Options) (*Dashboard, error) {
 	return &Dashboard{Auth: auth, Repos: repos, Store: o.Store, Log: o.Log,
 		cfg: o.Config, registry: o.Instances, connector: o.Connector,
 		library: o.Library, sources: o.Sources, catalogs: o.Catalogs,
-		reconcileSoon: o.ReconcileSoon, now: o.Now,
+		reconcileSoon: o.ReconcileSoon, loadLLM: o.Instances.LoadLLM, now: o.Now,
 		availableBudget: AvailableBudget, listBudget: listBudget, listLimit: listLimit,
 		inputs:  &inputsCache{entries: map[string]inputsEntry{}, flights: map[string]*inputsFlight{}},
 		catalog: &catalogCache{entries: map[string]catalogEntry{}, flights: map[string]*catalogFlight{}}}, nil

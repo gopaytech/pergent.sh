@@ -280,3 +280,80 @@ func TestReconcileFinishesRemoval(t *testing.T) {
 		t.Errorf("logs / hook = %v\n%s", gone, env.Logs())
 	}
 }
+
+// Runs waiting for an instance that isn't connected are older than the rest,
+// and there can be any number of them: they must take no slot, so a connected
+// instance's run is claimed in the first pass.
+func TestWaitingRunsDoNotStarveOtherInstances(t *testing.T) {
+	env := newTestEnv(t)
+	first := registerLab(t, env)
+	waiting := []string{first}
+	for iid := int64(2); iid <= 30; iid++ {
+		id, _, err := env.Store.EnqueueRun(env.ctx, store.MRKey{Instance: "lab", ProjectID: 4, IID: iid}, "acme/gadgets", sha('a'), "main")
+		if err != nil {
+			t.Fatal(err)
+		}
+		waiting = append(waiting, id)
+	}
+	head := sha('c')
+	healthy := env.Enqueue(3, head)
+	env.GitLab.SetMR(openMR(3, head))
+	env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+
+	dispatch(t, env)
+
+	if env.Job(healthy) == nil {
+		t.Fatalf("the connected instance's run was not dispatched in the first pass:\n%s", env.Logs())
+	}
+	for _, id := range waiting {
+		if r := env.Run(id); r.State != store.Queued || r.Attempts != 0 || !r.NotBefore.IsZero() {
+			t.Fatalf("a waiting run = state %s attempts %d not-before %v; want queued, never claimed or postponed", r.State, r.Attempts, r.NotBefore)
+		}
+	}
+	if n := strings.Count(env.Logs(), "isn't connected to their instance"); n != 1 {
+		t.Errorf("warnings = %d, want 1 for the instance", n)
+	}
+}
+
+// An instance being removed whose platform keeps refusing the cleanup stays,
+// with an instance-wide "Needs attention" item naming it; reconcile keeps
+// trying, and the item goes when the removal finishes.
+func TestStuckRemovalIsReported(t *testing.T) {
+	env := newTestEnv(t)
+	removingLab(t, env)
+	if err := env.Store.UpsertProject(env.ctx, store.Project{Instance: "lab", ProjectID: 4, Path: "acme/gadgets", HookID: 11}); err != nil {
+		t.Fatal(err)
+	}
+	main, _ := env.Engine.Platforms.Get(testInstance)
+	env.Engine.Platforms.Set("lab", main)
+	keys := []RepoKey{{Instance: "lab", Project: "acme/gadgets"}}
+	env.GitLab.Reply(http.MethodDelete, "/projects/4/hooks/11", http.StatusForbidden, `{"message":"403 Forbidden"}`)
+
+	for pass := 0; pass < 2; pass++ {
+		if err := env.Engine.ReconcileRepos(env.ctx, keys); err == nil {
+			t.Fatal("ReconcileRepos succeeded although the platform refused")
+		}
+		if _, ok := env.Engine.Instances.Get("lab"); !ok {
+			t.Fatal("lab was removed with its webhook still on the platform")
+		}
+		items, err := env.Store.Attention(env.ctx)
+		if err != nil || len(items) != 1 || items[0].Instance != "lab" || items[0].Project != "" || items[0].Kind != "instance_removal_stuck" ||
+			!strings.Contains(items[0].Message, `"lab"`) {
+			t.Fatalf("attention = %+v, %v; want one instance-wide instance_removal_stuck naming lab", items, err)
+		}
+		if strings.Contains(items[0].Message, "lab-review-token") {
+			t.Errorf("the item holds a secret: %s", items[0].Message)
+		}
+	}
+
+	env.GitLab.Reply(http.MethodDelete, "/projects/4/hooks/11", http.StatusNoContent, nil)
+	if err := env.Engine.ReconcileRepos(env.ctx, keys); err != nil {
+		t.Fatalf("ReconcileRepos: %v", err)
+	}
+	if _, ok := env.Engine.Instances.Get("lab"); ok {
+		t.Error("lab is still registered after the cleanup worked")
+	}
+	if items, _ := env.Store.Attention(env.ctx); len(items) != 0 {
+		t.Errorf("attention = %+v, want it cleared with the removal", items)
+	}
+}

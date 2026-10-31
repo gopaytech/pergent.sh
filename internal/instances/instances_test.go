@@ -393,3 +393,64 @@ func TestLLMKeyUnopenable(t *testing.T) {
 		t.Errorf("LLMKeys = %v, want none", r.LLMKeys())
 	}
 }
+
+// Marking an instance removing and changing its client ID are done in place,
+// so a change that races a removal can never put Removing back to false.
+func TestRegistryChangesInPlace(t *testing.T) {
+	r := New(testConfig(), nil, nil)
+	r.Put(Instance{Name: "lab", Platform: config.PlatformGitLab, Source: SourceDashboard, GitLab: &config.Instance{Name: "lab"}, OAuthClientID: "c1"})
+
+	inst, ok := r.SetOAuthClientID("lab", "c2")
+	if !ok || inst.OAuthClientID != "c2" || inst.Removing {
+		t.Fatalf("SetOAuthClientID = %+v, %v", inst, ok)
+	}
+	inst, ok = r.SetRemoving("lab")
+	if !ok || !inst.Removing || inst.OAuthClientID != "c2" {
+		t.Fatalf("SetRemoving = %+v, %v", inst, ok)
+	}
+	inst, ok = r.SetOAuthClientID("lab", "c3")
+	if !ok || !inst.Removing || inst.OAuthClientID != "c3" {
+		t.Fatalf("SetOAuthClientID after SetRemoving = %+v, %v; want still removing", inst, ok)
+	}
+	if got, _ := r.Get("lab"); !got.Removing {
+		t.Error("the registry lost Removing")
+	}
+	for _, name := range []string{"nope", "zeta"} { // unknown, and the config's
+		if _, ok := r.SetRemoving(name); ok {
+			t.Errorf("SetRemoving(%q) = true", name)
+		}
+		if _, ok := r.SetOAuthClientID(name, "x"); ok {
+			t.Errorf("SetOAuthClientID(%q) = true", name)
+		}
+	}
+}
+
+// LLM() reads the model and the key it returns together: a LoadLLM running
+// at the same time can't pair the old model with the new key.
+func TestLLMReadsModelAndKeyTogether(t *testing.T) {
+	r := New(testConfig(), nil, nil)
+	set := func(n string) {
+		r.llmMu.Lock()
+		r.llm = llmRow{llm: config.LLM{Provider: "p", Model: "model-" + n}, key: "key-" + n, found: true}
+		r.llmMu.Unlock()
+	}
+	set("a")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200000; i++ {
+			set([]string{"a", "b"}[i%2])
+		}
+	}()
+	for {
+		select {
+		case <-done:
+			return
+		default:
+		}
+		llm, key, _, ok := r.LLM()
+		if ok && strings.TrimPrefix(llm.Model, "model-") != strings.TrimPrefix(key, "key-") {
+			t.Fatalf("LLM() paired %q with %q", llm.Model, key)
+		}
+	}
+}

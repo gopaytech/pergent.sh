@@ -25,6 +25,9 @@ type InstanceRow struct {
 	CreatedAt      time.Time
 }
 
+// ErrRemoving is returned by UpdateInstance for an instance being removed.
+var ErrRemoving = errors.New("the instance is being removed")
+
 // SealedSecret is a secret sealed with PERGENT_SH_SECRET_KEY, as stored.
 type SealedSecret struct {
 	Value     []byte
@@ -102,7 +105,8 @@ func (s *Store) CreateInstance(ctx context.Context, row InstanceRow, secrets map
 
 // UpdateInstance sets the OAuth client ID (nil keeps it) and replaces the
 // sealed secrets whose field is a key of secrets; every other secret stays.
-// found is false when there is no such instance.
+// found is false when there is no such instance; an instance being removed
+// is ErrRemoving, and nothing changes.
 func (s *Store) UpdateInstance(ctx context.Context, name string, oauthClientID *string, secrets map[string][]byte, at time.Time) (bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -110,12 +114,21 @@ func (s *Store) UpdateInstance(ctx context.Context, name string, oauthClientID *
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 
-	tag, err := tx.Exec(ctx, `UPDATE instances SET oauth_client_id = COALESCE($2, oauth_client_id) WHERE name = $1`, name, oauthClientID)
+	tag, err := tx.Exec(ctx, `UPDATE instances SET oauth_client_id = COALESCE($2, oauth_client_id)
+		WHERE name = $1 AND NOT removing`, name, oauthClientID)
 	if err != nil {
 		return false, err
 	}
 	if tag.RowsAffected() == 0 {
-		return false, nil
+		var removing bool
+		err := tx.QueryRow(ctx, `SELECT removing FROM instances WHERE name = $1`, name).Scan(&removing)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		return false, ErrRemoving
 	}
 	if err := putSecrets(ctx, tx, name, secrets, at); err != nil {
 		return false, err

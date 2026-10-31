@@ -476,6 +476,11 @@ func (d *Dashboard) updateInstance(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	found, err := d.Store.UpdateInstance(ctx, name, in.OAuthClientID, d.seal(in.Secrets), d.now())
+	if errors.Is(err, store.ErrRemoving) {
+		// A removal landed while the credentials were being checked.
+		writeError(w, http.StatusConflict, msgInstanceRemoving)
+		return
+	}
 	if err != nil {
 		d.Log.Error("dashboard: updating an instance failed", "instance", name, "error", err.Error())
 		writeError(w, http.StatusInternalServerError, msgWriteFailed)
@@ -485,8 +490,21 @@ func (d *Dashboard) updateInstance(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	d.registry.Put(next)
-	d.connect(ctx, next, merged)
+	// Changed in place: a removal that lands now keeps its Removing.
+	cur, ok := d.registry.SetOAuthClientID(name, clientID)
+	if !ok {
+		notFound(w)
+		return
+	}
+	if cur.Removing {
+		writeError(w, http.StatusConflict, msgInstanceRemoving)
+		return
+	}
+	d.connect(ctx, cur, merged)
+	if after, _ := d.registry.Get(name); after.Removing {
+		// Removed while it was being connected: no sign-in comes back.
+		d.Auth.RemoveProvider(name)
+	}
 
 	changed := slices.Sorted(maps.Keys(in.Secrets))
 	if in.OAuthClientID != nil && clientID != inst.OAuthClientID {
@@ -494,7 +512,7 @@ func (d *Dashboard) updateInstance(w http.ResponseWriter, r *http.Request) {
 	}
 	d.Log.Info("dashboard: instance updated", "instance", name, "fields", changed, "by", se.Username)
 	d.audit(ctx, se, "instance_updated", name, "", strings.Join(changed, ", "))
-	d.writeInstance(w, r, next, http.StatusOK)
+	d.writeInstance(w, r, cur, http.StatusOK)
 }
 
 func urlOf(inst instances.Instance) string {
@@ -580,8 +598,7 @@ func (d *Dashboard) removeInstance(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	inst.Removing = true
-	d.registry.Put(inst)
+	d.registry.SetRemoving(name)
 	// Nobody signs in through it from here on; people already signed in
 	// lose their sessions with their accounts below.
 	d.Auth.RemoveProvider(name)
@@ -718,11 +735,7 @@ func (d *Dashboard) putLLM(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, msgWriteFailed)
 		return
 	}
-	if err := d.registry.LoadLLM(ctx); err != nil {
-		d.Log.Error("dashboard: reading the saved LLM failed", "error", err.Error())
-		writeError(w, http.StatusInternalServerError, msgWriteFailed)
-		return
-	}
+	loadErr := d.loadLLM(ctx)
 	var changed []string
 	for _, f := range []struct{ name, before, after string }{
 		{"provider", before.LLM.Provider, in.Provider}, {"model", before.LLM.Model, in.Model}, {"base_url", before.LLM.BaseURL, in.BaseURL},
@@ -736,6 +749,20 @@ func (d *Dashboard) putLLM(w http.ResponseWriter, r *http.Request) {
 	}
 	d.Log.Info("dashboard: LLM updated", "fields", changed, "by", se.Username)
 	d.audit(ctx, se, "llm_updated", "", "", strings.Join(changed, ", "))
+	if loadErr != nil {
+		// Saved, but not read back: the engine uses the earlier LLM until
+		// pergent.sh restarts or the LLM is saved again. The change is not
+		// lost, so the answer is the saved one.
+		msg := loadErr.Error()
+		if in.APIKey != nil {
+			msg = strings.ReplaceAll(msg, *in.APIKey, "[REDACTED]")
+		}
+		d.Log.Error("dashboard: the LLM was saved but reading it back failed; saving it again tries again", "error", msg)
+		at := d.now()
+		writeJSON(w, http.StatusOK, LLMAdminView{Source: string(instances.SourceDashboard), Provider: in.Provider, Model: in.Model,
+			BaseURL: in.BaseURL, Key: SecretView{Set: true, UpdatedAt: &at}, Editable: se.Operator})
+		return
+	}
 	writeJSON(w, http.StatusOK, d.llmView(se))
 }
 

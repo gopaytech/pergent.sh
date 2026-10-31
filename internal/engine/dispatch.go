@@ -47,7 +47,8 @@ const (
 	settleTimeout = 10 * time.Second
 
 	// msgNoLLM is logged while no LLM is set and runs wait for one.
-	msgNoLLM = "no LLM is set: an operator sets it on Admin → Settings"
+	unconnectedMsg = "queued reviews wait: pergent.sh isn't connected to their instance; an operator fixes it on Admin → Integrations"
+	msgNoLLM       = "no LLM is set: an operator sets it on Admin → Settings"
 
 	reasonTooLarge     = "the skills and instructions for this repository are larger than 900 KiB"
 	reasonNoCloneToken = "pergent.sh has no clone token for this project yet"
@@ -86,7 +87,11 @@ func (e *Engine) DispatchOnce(ctx context.Context) error {
 	if limit <= 0 {
 		return nil
 	}
-	runs, err := e.Store.ClaimQueued(ctx, limit, e.now())
+	skip := e.unconnected()
+	if len(skip) > 0 {
+		e.warnUnconnected(ctx, skip)
+	}
+	runs, err := e.Store.ClaimQueued(ctx, limit, e.now(), skip...)
 	if err != nil {
 		return fmt.Errorf("dispatch: claim queued runs: %w", err)
 	}
@@ -100,6 +105,38 @@ func (e *Engine) DispatchOnce(ctx context.Context) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// unconnected returns the registered instances (not being removed) that
+// pergent.sh isn't connected to, whose runs wait: they are not claimed, so
+// however many wait, they take no slot from the other instances.
+func (e *Engine) unconnected() []string {
+	var out []string
+	for _, inst := range e.registry().All() {
+		if inst.Removing {
+			continue
+		}
+		if plat, ok := e.Platforms.Get(inst.Name); !ok || plat.Forge == nil {
+			out = append(out, inst.Name)
+		}
+	}
+	return out
+}
+
+// warnUnconnected logs, at most once a minute per instance, that the queued
+// runs of the instances in names wait for a connection. Instances with none
+// queued are not mentioned.
+func (e *Engine) warnUnconnected(ctx context.Context, names []string) {
+	queued, err := e.Store.CountQueued(ctx, names)
+	if err != nil {
+		e.log().Warn("couldn't count the queued runs of unconnected instances", "error", e.redact(err.Error()))
+		return
+	}
+	for _, name := range names {
+		if queued[name] > 0 {
+			e.warnEvery("unconnected/"+name, unconnectedMsg, "instance", name, "queued_runs", queued[name])
+		}
+	}
 }
 
 // dispatcher handles one claimed run. Its methods return only store errors;
@@ -132,8 +169,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		// unreachable at startup, and an operator fixes that in the
 		// dashboard): the run waits, as a review of a platform that is down
 		// does, and goes on once the instance is connected.
-		e.warnEvery("unconnected/"+run.MR.Instance, "queued reviews wait: pergent.sh isn't connected to their instance; "+
-			"an operator fixes it on Admin → Integrations", "instance", run.MR.Instance)
+		e.warnEvery("unconnected/"+run.MR.Instance, unconnectedMsg, "instance", run.MR.Instance)
 		return d.postpone(ctx, e.now().Add(waitDelay))
 	}
 	if plat.isGitHub() {

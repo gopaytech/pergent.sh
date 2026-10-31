@@ -201,6 +201,31 @@ func (r *Registry) Put(inst Instance) {
 	r.dash[inst.Name] = inst
 }
 
+// SetRemoving marks the instance of the dashboard called name as being
+// removed, in place, and returns it; ok is false when there is none. A change
+// made at the same time (SetOAuthClientID) never clears it.
+func (r *Registry) SetRemoving(name string) (Instance, bool) {
+	return r.change(name, func(inst *Instance) { inst.Removing = true })
+}
+
+// SetOAuthClientID sets the OAuth client ID of the instance of the dashboard
+// called name, in place, and returns it; ok is false when there is none.
+func (r *Registry) SetOAuthClientID(name, clientID string) (Instance, bool) {
+	return r.change(name, func(inst *Instance) { inst.OAuthClientID = clientID })
+}
+
+func (r *Registry) change(name string, f func(*Instance)) (Instance, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	inst, ok := r.dash[name]
+	if !ok {
+		return Instance{}, false
+	}
+	f(&inst)
+	r.dash[name] = inst
+	return inst, true
+}
+
 // Remove forgets an instance of the dashboard, after it was deleted from the
 // store.
 func (r *Registry) Remove(name string) {
@@ -348,35 +373,32 @@ type LLMState struct {
 // LLM returns the LLM reviews use: the config's llm: block when it has one,
 // with its key from the env var it names, otherwise the one set in the
 // dashboard. ok is false when there is none, or its key is missing or can't
-// be opened.
+// be opened. The model and the key are read together, so a LoadLLM at the
+// same time can't pair the old model with the new key.
 func (r *Registry) LLM() (llm config.LLM, key string, source Source, ok bool) {
-	st := r.LLMStatus()
-	if !st.KeySet {
+	st, key := r.llmState()
+	if key == "" {
 		return st.LLM, "", st.Source, false
 	}
-	return st.LLM, r.llmKey(st.Source), st.Source, true
+	return st.LLM, key, st.Source, true
 }
 
 // LLMStatus describes the LLM without its key (see LLMState).
 func (r *Registry) LLMStatus() LLMState {
+	st, _ := r.llmState()
+	return st
+}
+
+// llmState is the LLM and its key, read as one.
+func (r *Registry) llmState() (LLMState, string) {
 	if r.cfg.HasLLM() {
 		key := envValue(r.cfg.LLM.APIKeyEnv)
 		r.noteKey(key)
-		return LLMState{Source: SourceConfig, LLM: r.cfg.LLM, KeySet: key != ""}
+		return LLMState{Source: SourceConfig, LLM: r.cfg.LLM, KeySet: key != ""}, key
 	}
 	r.llmMu.RLock()
 	defer r.llmMu.RUnlock()
-	return LLMState{Source: SourceDashboard, LLM: r.llm.llm, KeySet: r.llm.key != "", UpdatedAt: r.llm.updatedAt}
-}
-
-// llmKey is the key of the LLM from source.
-func (r *Registry) llmKey(source Source) string {
-	if source == SourceConfig {
-		return envValue(r.cfg.LLM.APIKeyEnv)
-	}
-	r.llmMu.RLock()
-	defer r.llmMu.RUnlock()
-	return r.llm.key
+	return LLMState{Source: SourceDashboard, LLM: r.llm.llm, KeySet: r.llm.key != "", UpdatedAt: r.llm.updatedAt}, r.llm.key
 }
 
 // LoadLLM reads the LLM row from the store again: at startup, and after the

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -1662,5 +1663,44 @@ func TestApprovalsDue(t *testing.T) {
 	}
 	if got, _ := s.ApprovalsDue(ctx, next); len(got) != 2 {
 		t.Errorf("after the backoff: %+v, want both", got)
+	}
+}
+
+// ClaimQueued leaves the runs of the instances it is told to skip queued and
+// unclaimed, however old they are, so they take no slot from the others.
+func TestClaimQueuedSkipsInstances(t *testing.T) {
+	s := newStore(t)
+	for i := int64(1); i <= 5; i++ {
+		if _, _, err := s.EnqueueRun(ctx, MRKey{Instance: "lab", ProjectID: 1, IID: i}, "acme/x", strings.Repeat("a", 40), "main"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	healthy, _, err := s.EnqueueRun(ctx, MRKey{Instance: "main", ProjectID: 1, IID: 1}, "acme/y", strings.Repeat("b", 40), "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ClaimQueued(ctx, 2, time.Now().Add(time.Hour), "lab")
+	if err != nil || len(got) != 1 || got[0].ID != healthy {
+		t.Fatalf("ClaimQueued skipping lab = %v, %v; want main's run alone", runIDs(got), err)
+	}
+	if n, err := s.CountRunning(ctx); err != nil || n != 1 {
+		t.Fatalf("running = %d, %v; want only main's", n, err)
+	}
+	if got, err := s.ClaimQueued(ctx, 10, time.Now().Add(time.Hour)); err != nil || len(got) != 5 {
+		t.Fatalf("ClaimQueued skipping nothing = %d runs, %v; want lab's 5", len(got), err)
+	}
+}
+
+// Queued runs are counted per instance, for the instances asked about.
+func TestCountQueuedByInstance(t *testing.T) {
+	s := newStore(t)
+	for i, in := range []string{"lab", "lab", "main"} {
+		if _, _, err := s.EnqueueRun(ctx, MRKey{Instance: in, ProjectID: 1, IID: int64(i + 1)}, "acme/x", strings.Repeat("a", 40), "main"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.CountQueued(ctx, []string{"lab", "other"})
+	if err != nil || got["lab"] != 2 || got["main"] != 0 || len(got) != 1 {
+		t.Fatalf("CountQueued = %v, %v; want lab 2 only", got, err)
 	}
 }
