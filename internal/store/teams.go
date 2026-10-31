@@ -22,6 +22,10 @@ func validRole(role string) bool {
 	return role == RoleAdmin || role == RoleMaintainer || role == RoleViewer
 }
 
+// ErrUnknownAccount is returned when a team change names a member that isn't
+// an account (it was removed meanwhile).
+var ErrUnknownAccount = errors.New("no such account")
+
 // TeamRepo is a repository a team covers on an instance; an empty Project
 // covers every repository of Instance.
 type TeamRepo struct{ Instance, Project string }
@@ -134,7 +138,7 @@ func (s *Store) AccountTeams(ctx context.Context, accountID int64) ([]Team, erro
 // apply left: its name, role, members and repositories replace the old ones
 // (duplicates are one). When apply fails nothing changes and its error is
 // returned. ok is false when there is no such team; a name taken ignoring
-// case is ErrExists.
+// case is ErrExists, a member that isn't an account ErrUnknownAccount.
 func (s *Store) UpdateTeam(ctx context.Context, id int64, apply func(*Team) error) (ok bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -175,6 +179,9 @@ func (s *Store) UpdateTeam(ctx context.Context, id int64, apply func(*Team) erro
 	}
 	if len(members) > 0 {
 		if _, err := tx.Exec(ctx, `INSERT INTO team_members (team_id, account_id) SELECT $1, unnest($2::bigint[])`, id, members); err != nil {
+			if isForeignKeyViolation(err) {
+				return false, ErrUnknownAccount
+			}
 			return false, err
 		}
 	}
@@ -203,11 +210,39 @@ func (s *Store) UpdateTeam(ctx context.Context, id int64, apply func(*Team) erro
 }
 
 // DeleteTeam removes a team with its members and repositories (not the
-// accounts); ok is false when there is no such team.
-func (s *Store) DeleteTeam(ctx context.Context, id int64) (bool, error) {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM teams WHERE id = $1`, id)
+// accounts); ok is false when there is no such team. When check is not nil
+// it is handed the team under the lock UpdateTeam takes, so what it decides
+// on can't change before the team goes; an error from it keeps the team and
+// is returned.
+func (s *Store) DeleteTeam(ctx context.Context, id int64, check func(Team) error) (bool, error) {
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return false, err
 	}
-	return tag.RowsAffected() > 0, nil
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+
+	var locked int64
+	err = tx.QueryRow(ctx, `SELECT id FROM teams WHERE id = $1 FOR UPDATE`, id).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if check != nil {
+		teams, err := loadTeams(ctx, tx, `WHERE t.id = $1`, id)
+		if err != nil {
+			return false, err
+		}
+		if err := check(teams[0]); err != nil {
+			return false, err
+		}
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM teams WHERE id = $1`, id); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
 }

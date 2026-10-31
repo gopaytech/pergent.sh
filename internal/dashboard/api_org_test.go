@@ -579,6 +579,30 @@ func TestPlatformAdminTeamMembersOfOtherInstances(t *testing.T) {
 	}
 }
 
+// A member removed between the check and the save is a 400 like any other
+// non-account, not a 500, and the team stays as it was. (A trigger removes
+// the account when the team row is updated, which is just before the members
+// are stored.)
+func TestTeamMemberRemovedMeanwhile(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.signInOperator()
+	bob := e.platformAccount("main", 20, "bob")
+	zed := e.platformAccount("gh", 21, "zed")
+	id := e.team("devs", store.RoleViewer, []int64{bob})
+	e.exec(fmt.Sprintf(`CREATE FUNCTION drop_zed() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN DELETE FROM accounts WHERE id = %d; RETURN NEW; END $$`, zed))
+	e.exec(`CREATE TRIGGER drop_zed BEFORE UPDATE ON teams FOR EACH ROW EXECUTE FUNCTION drop_zed()`)
+
+	rec := e.send(c, "PUT", "/api/teams/"+strconv.FormatInt(id, 10),
+		fmt.Sprintf(`{"name":"devs","role":"viewer","members":[%d,%d],"repos":[]}`, bob, zed))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(body(rec), "members must be accounts") {
+		t.Errorf("PUT = %d %s; want 400 about the members", rec.Code, rec.Body)
+	}
+	if tm := e.storedTeam(id); !slices.Equal(tm.Members, []int64{bob}) {
+		t.Errorf("members = %v; want bob only", tm.Members)
+	}
+}
+
 // Every write here needs the session's CSRF token: 403 with code "csrf".
 func TestOrgWritesNeedCSRF(t *testing.T) {
 	e := newEnv(t, nil)

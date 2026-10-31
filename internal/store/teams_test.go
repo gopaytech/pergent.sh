@@ -4,6 +4,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 )
 
 func TestCreateTeam(t *testing.T) {
@@ -108,10 +109,10 @@ func TestTeamsListAndDelete(t *testing.T) {
 	if _, found, _ := s.Team(ctx, 9999); found {
 		t.Error("Team of an unknown ID found")
 	}
-	if ok, err := s.DeleteTeam(ctx, t1.ID); err != nil || !ok {
+	if ok, err := s.DeleteTeam(ctx, t1.ID, nil); err != nil || !ok {
 		t.Fatalf("DeleteTeam = %v, %v", ok, err)
 	}
-	if ok, err := s.DeleteTeam(ctx, t1.ID); err != nil || ok {
+	if ok, err := s.DeleteTeam(ctx, t1.ID, nil); err != nil || ok {
 		t.Fatalf("DeleteTeam again = %v, %v", ok, err)
 	}
 	var n int
@@ -153,5 +154,77 @@ func TestAccountTeams(t *testing.T) {
 	}
 	if got, err := s.AccountTeams(ctx, 9999); err != nil || len(got) != 0 {
 		t.Fatalf("AccountTeams of nobody = %+v, %v", got, err)
+	}
+}
+
+// A member that isn't an account (any more) is ErrUnknownAccount, and
+// nothing of the update is kept.
+func TestUpdateTeamUnknownMember(t *testing.T) {
+	s := newStore(t)
+	a := mustPlatform(t, s, "main", 1, "alice")
+	tm, _ := s.CreateTeam(ctx, "devs", RoleViewer, t0)
+	if _, err := s.UpdateTeam(ctx, tm.ID, func(t *Team) error { t.Members = []int64{a.ID}; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := s.UpdateTeam(ctx, tm.ID, func(t *Team) error { t.Name = "renamed"; t.Members = []int64{a.ID, 99999}; return nil })
+	if !errors.Is(err, ErrUnknownAccount) || ok {
+		t.Fatalf("UpdateTeam with an unknown member = %v, %v; want ErrUnknownAccount", ok, err)
+	}
+	if got, _, _ := s.Team(ctx, tm.ID); got.Name != "devs" || !slices.Equal(got.Members, []int64{a.ID}) {
+		t.Errorf("team after the refused update = %+v", got)
+	}
+}
+
+// DeleteTeam hands the team to check under a row lock: an error from it
+// keeps the team, and a change in flight is seen by it.
+func TestDeleteTeamChecked(t *testing.T) {
+	s := newStore(t)
+	tm, _ := s.CreateTeam(ctx, "devs", RoleViewer, t0)
+
+	boom := errors.New("boom")
+	if ok, err := s.DeleteTeam(ctx, tm.ID, func(Team) error { return boom }); !errors.Is(err, boom) || ok {
+		t.Fatalf("DeleteTeam with a failing check = %v, %v", ok, err)
+	}
+	if _, found, _ := s.Team(ctx, tm.ID); !found {
+		t.Fatal("a refused DeleteTeam removed the team")
+	}
+	if ok, err := s.DeleteTeam(ctx, 9999, func(Team) error { t.Error("check called for an unknown team"); return nil }); err != nil || ok {
+		t.Fatalf("DeleteTeam of an unknown team = %v, %v", ok, err)
+	}
+
+	// An update holding the lock: the delete waits, then checks what the
+	// update left.
+	inUpdate, release := make(chan struct{}), make(chan struct{})
+	updated := make(chan error, 1)
+	go func() {
+		_, err := s.UpdateTeam(ctx, tm.ID, func(t *Team) error {
+			close(inUpdate)
+			<-release
+			t.Repos = []TeamRepo{{Instance: "main", Project: "acme/widgets"}}
+			return nil
+		})
+		updated <- err
+	}()
+	<-inUpdate
+	var saw []TeamRepo
+	deleted := make(chan error, 1)
+	go func() {
+		_, err := s.DeleteTeam(ctx, tm.ID, func(t Team) error { saw = t.Repos; return boom })
+		deleted <- err
+	}()
+	select {
+	case err := <-deleted:
+		t.Fatalf("DeleteTeam finished (%v) while an update held the team", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(release)
+	if err := <-updated; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-deleted; !errors.Is(err, boom) {
+		t.Fatalf("DeleteTeam = %v", err)
+	}
+	if !slices.Equal(saw, []TeamRepo{{Instance: "main", Project: "acme/widgets"}}) {
+		t.Errorf("check saw %+v; want the repository the update added", saw)
 	}
 }

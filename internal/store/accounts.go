@@ -60,6 +60,13 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
+// isForeignKeyViolation reports whether err is PostgreSQL's
+// foreign_key_violation.
+func isForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
+}
+
 // CreatePasswordAccount stores a password account; hash is the argon2id
 // hash of its password and must not be empty. A username taken ignoring case
 // is ErrExists.

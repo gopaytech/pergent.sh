@@ -419,6 +419,10 @@ func (d *Dashboard) updateTeam(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errHiddenCoverage):
 		writeError(w, http.StatusConflict, msgHiddenCoverage)
 		return
+	case errors.Is(err, store.ErrUnknownAccount):
+		// Removed since the members were checked.
+		writeError(w, http.StatusBadRequest, msgMembers)
+		return
 	case errors.Is(err, errOtherMembers):
 		writeError(w, http.StatusConflict, msgOtherMembers)
 		return
@@ -580,20 +584,20 @@ func (d *Dashboard) deleteTeam(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	t, found, err := d.Store.Team(ctx, id)
-	if err != nil {
-		d.failed(w, r, "loading a team", err)
-		return
-	}
-	if !found {
-		notFound(w)
-		return
-	}
-	if coversHidden(se, t) {
+	// The check runs under the team's row lock, so repositories added since
+	// it was read can't go unseen.
+	var name string
+	deleted, err := d.Store.DeleteTeam(ctx, id, func(t store.Team) error {
+		name = t.Name
+		if coversHidden(se, t) {
+			return errHiddenCoverage
+		}
+		return nil
+	})
+	if errors.Is(err, errHiddenCoverage) {
 		writeError(w, http.StatusConflict, msgHiddenCoverage)
 		return
 	}
-	deleted, err := d.Store.DeleteTeam(ctx, id)
 	if err != nil {
 		d.Log.Error("dashboard: removing a team failed", "team", id, "error", err.Error())
 		writeError(w, http.StatusInternalServerError, msgWriteFailed)
@@ -603,8 +607,8 @@ func (d *Dashboard) deleteTeam(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	d.Log.Info("dashboard: team removed", "team", t.Name, "by", se.Username)
-	d.audit(ctx, se, "team_deleted", "", "", t.Name)
+	d.Log.Info("dashboard: team removed", "team", name, "by", se.Username)
+	d.audit(ctx, se, "team_deleted", "", "", name)
 	w.WriteHeader(http.StatusNoContent)
 }
 
