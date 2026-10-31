@@ -4,6 +4,24 @@ import type { ReactNode } from "react";
 
 import { ApiError, safeHref, type Outcome } from "./api";
 
+// CenteredCard is the page the signed-out and gated screens (sign-in,
+// password change, waiting) show: one card on the dark background.
+export function CenteredCard({ children }: { children: ReactNode }) {
+  return (
+    <div className="signin">
+      <div className="card signin-card">
+        <div className="brand dark">
+          <div className="logo" aria-hidden="true">
+            🦉
+          </div>
+          pergent.sh
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export type Tone = "ok" | "bad" | "warn" | "run" | "draft" | "grey";
 
 export function Pill({ tone, children }: { tone: Tone; children: ReactNode }) {

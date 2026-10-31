@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { RunDetailView } from "../api";
 import { fakeApi } from "../test/fakeApi";
-import { admin, reviewDetail, runDetail } from "../test/fixtures";
+import { platformAdmin, reviewDetail, runDetail } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -14,7 +14,7 @@ const older = reviewDetail.runs[1].id;
 
 function routes(run: RunDetailView = runDetail) {
   return {
-    "GET /api/me": { body: admin },
+    "GET /api/me": { body: platformAdmin },
     "GET /api/reviews/main/acme/payments/77": { body: reviewDetail },
     [`GET /api/runs/${newest}`]: { body: run },
   };
@@ -143,20 +143,20 @@ describe("ReviewDetail", () => {
   });
 
   it("shows not found for a review the user can't see", async () => {
-    fakeApi({ "GET /api/me": { body: admin } });
+    fakeApi({ "GET /api/me": { body: platformAdmin } });
     renderApp("/reviews/main/acme/secret/9");
     expect(await screen.findByRole("heading", { name: "Not found" })).toBeInTheDocument();
   });
 
   it("shows not found for a path without a number", async () => {
-    const fake = fakeApi({ "GET /api/me": { body: admin } });
+    const fake = fakeApi({ "GET /api/me": { body: platformAdmin } });
     renderApp("/reviews/main/acme/payments/abc");
     expect(await screen.findByRole("heading", { name: "Not found" })).toBeInTheDocument();
     expect(fake.calls.filter((c) => c.url.startsWith("/api/reviews"))).toHaveLength(0);
   });
 
   it("shows not found for a number longer than 15 digits", async () => {
-    const fake = fakeApi({ "GET /api/me": { body: admin } });
+    const fake = fakeApi({ "GET /api/me": { body: platformAdmin } });
     renderApp("/reviews/main/acme/payments/1234567890123456");
     expect(await screen.findByRole("heading", { name: "Not found" })).toBeInTheDocument();
     expect(fake.calls.filter((c) => c.url.startsWith("/api/reviews"))).toHaveLength(0);
@@ -164,7 +164,7 @@ describe("ReviewDetail", () => {
 
   it("reads a project with nested groups and odd characters", async () => {
     const fake = fakeApi({
-      "GET /api/me": { body: admin },
+      "GET /api/me": { body: platformAdmin },
       "GET /api/reviews/main/acme/sub/we%20ird/5": {
         body: { ...reviewDetail, header: { ...reviewDetail.header, project: "acme/sub/we ird", number: 5 } },
       },

@@ -9,7 +9,7 @@ function minutes(secs: number) {
 }
 
 // AdminSettings shows the defaults a repository gets, the model reviews
-// use and who the admins are. Read-only; never a key.
+// use. Read-only; never a key.
 export default function AdminSettings() {
   const data = useQuery({ queryKey: ["admin-settings"], queryFn: () => api.get<AdminSettingsView>("/api/admin/settings") });
   return (
@@ -56,15 +56,6 @@ function Body({ v }: { v: AdminSettingsView }) {
           <Item k="Provider" v={v.llm.provider} />
           <Item k="Model" v={v.llm.model} />
         </dl>
-      </section>
-      <section className="card" aria-label="Admins">
-        <h2>Admins</h2>
-        {v.admins.length === 0 && <div className="row empty-row">No admins are configured.</div>}
-        {v.admins.map((a) => (
-          <div className="row" key={`${a.group ?? ""}/${a.team ?? ""}`}>
-            <span className="mr">{a.group ? `group ${a.group}` : `team ${a.team ?? ""}`}</span>
-          </div>
-        ))}
       </section>
     </>
   );

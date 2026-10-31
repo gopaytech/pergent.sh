@@ -34,7 +34,7 @@ export default function Overview() {
               </option>
             ))}
           </select>
-          {me.isAdmin && (
+          {me.admin && (
             <Link className="btn primary" to="/repos?add=1">
               + Add repository
             </Link>

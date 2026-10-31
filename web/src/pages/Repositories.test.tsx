@@ -3,14 +3,14 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi } from "../test/fakeApi";
-import { admin, developer, repoDetail, repoPayments, repoWidgets } from "../test/fixtures";
+import { platformAdmin, viewer, repoDetail, repoPayments, repoWidgets } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Repositories", () => {
   it("lists the repositories with platform, source, last 7 days and health", async () => {
-    fakeApi({ "GET /api/me": { body: developer }, "GET /api/repositories": { body: [repoPayments, repoWidgets] } });
+    fakeApi({ "GET /api/me": { body: viewer }, "GET /api/repositories": { body: [repoPayments, repoWidgets] } });
     renderApp("/repos");
     expect(await screen.findByRole("heading", { name: "Repositories" })).toBeInTheDocument();
     const payments = (await screen.findByRole("link", { name: "acme/payments" })).closest("tr") as HTMLElement;
@@ -29,7 +29,7 @@ describe("Repositories", () => {
 
   it("lets an admin switch a repository on, with the CSRF token", async () => {
     const fake = fakeApi({
-      "GET /api/me": { body: admin },
+      "GET /api/me": { body: platformAdmin },
       "GET /api/repositories": { body: [repoWidgets] },
       "GET /api/repositories/available?search=": {
         body: { items: [{ instance: "main", project: "acme/payments", platform: "gitlab" }], truncated: true },
@@ -57,7 +57,7 @@ describe("Repositories", () => {
 
   it("opens the picker from the overview's Add repository", async () => {
     fakeApi({
-      "GET /api/me": { body: admin },
+      "GET /api/me": { body: platformAdmin },
       "GET /api/repositories": { body: [] },
       "GET /api/repositories/available?search=": { status: 502, body: { error: "could not ask GitLab" } },
     });
@@ -69,7 +69,7 @@ describe("Repositories", () => {
   it("lets an admin switch off a dashboard repository, not a config one", async () => {
     vi.stubGlobal("confirm", vi.fn(() => true));
     const fake = fakeApi({
-      "GET /api/me": { body: admin },
+      "GET /api/me": { body: platformAdmin },
       "GET /api/repositories": { body: [repoPayments, repoWidgets] },
       "DELETE /api/repositories/main/acme/payments": { body: { ...repoDetail(repoPayments), repo: { ...repoPayments, on: false } } },
     });

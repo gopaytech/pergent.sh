@@ -2,14 +2,14 @@ import { screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi } from "../test/fakeApi";
-import { admin, integrations } from "../test/fixtures";
+import { platformAdmin, integrations } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Integrations", () => {
   it("shows the instance, the approver and each repository's installation", async () => {
-    fakeApi({ "GET /api/me": { body: admin }, "GET /api/integrations": { body: integrations } });
+    fakeApi({ "GET /api/me": { body: platformAdmin }, "GET /api/integrations": { body: integrations } });
     renderApp("/integrations");
     expect(await screen.findByRole("heading", { name: "Integrations" })).toBeInTheDocument();
     const inst = await screen.findByRole("region", { name: "GitLab · main" });

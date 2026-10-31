@@ -12,10 +12,10 @@ import {
 import { useWrite } from "../layout/write";
 import { ErrorBox, Loading, Switch } from "../ui";
 
-// SettingsTab edits a repository's settings (admins only; Layout hides the
-// tab from others). A config-managed repository's are shown disabled.
-// queryKey is the page's own: the address may spell the project
-// differently from the server.
+// SettingsTab edits a repository's settings (maintainers and admins only;
+// the page hides the tab from others). A config-managed repository's are
+// shown disabled. queryKey is the page's own: the address may spell the
+// project differently from the server.
 export default function SettingsTab({ view, queryKey }: { view: RepositoryDetailView; queryKey: unknown[] }) {
   const client = useQueryClient();
   const write = useWrite();

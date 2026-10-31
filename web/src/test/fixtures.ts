@@ -7,18 +7,42 @@ import type {
   RepositoryView,
   ReviewDetailView,
   ReviewSummary,
+  Role,
   RunDetailView,
 } from "../api";
 
-export const admin: Me = {
+// A platform admin: on an admin team of its instance.
+export const platformAdmin: Me = {
+  kind: "platform",
+  username: "platform-user",
   platform: "gitlab",
   instance: "main",
-  username: "platform-user",
-  isAdmin: true,
+  admin: true,
+  operator: false,
+  waiting: false,
+  mustChangePassword: false,
+  waitingUsers: 0,
   csrfToken: "csrf-123",
 };
 
-export const developer: Me = { ...admin, username: "dev-user", isAdmin: false, csrfToken: "csrf-dev" };
+// The operator: a password account, which sees everything.
+export const operator: Me = {
+  ...platformAdmin,
+  kind: "password",
+  username: "admin",
+  platform: "",
+  instance: "",
+  operator: true,
+};
+
+export const maintainer: Me = { ...platformAdmin, username: "maint-user", admin: false, csrfToken: "csrf-maint" };
+export const viewer: Me = { ...platformAdmin, username: "dev-user", admin: false, csrfToken: "csrf-dev" };
+
+// On no team yet: sees nothing.
+export const waiting: Me = { ...viewer, username: "new-user", waiting: true };
+
+// A password account that must change its password first.
+export const mustChange: Me = { ...operator, mustChangePassword: true };
 
 const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
 
@@ -174,8 +198,9 @@ export const repoWidgets: RepositoryView = {
   health: "ok",
 };
 
-export const repoDetail = (repo: RepositoryView): RepositoryDetailView => ({
+export const repoDetail = (repo: RepositoryView, role: Role = "admin"): RepositoryDetailView => ({
   repo,
+  role,
   settings: {
     approve: { value: true, overridden: true },
     reviewDrafts: { value: false, overridden: false },
@@ -208,5 +233,4 @@ export const adminSettings: AdminSettingsView = {
   instance: "main",
   defaults: { approve: true, reviewDrafts: true, failureStatus: "neutral", jobTimeoutSeconds: 600, jobMemory: "" },
   llm: { provider: "anthropic", model: "claude-sonnet" },
-  admins: [{ instance: "main", group: "acme/platform" }],
 };

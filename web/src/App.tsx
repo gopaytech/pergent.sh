@@ -55,6 +55,18 @@ export default function App() {
             </AdminOnly>
           }
         />
+        {/* Task 10's pages; until they exist an admin gets a plain notice. */}
+        {["users", "teams", "audit"].map((path) => (
+          <Route
+            key={path}
+            path={path}
+            element={
+              <AdminOnly>
+                <div className="empty">This page isn't built yet.</div>
+              </AdminOnly>
+            }
+          />
+        ))}
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>

@@ -1,13 +1,15 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router";
+import { NavLink, Outlet } from "react-router";
 
 import { api, type Me } from "../api";
+import ChangePassword from "../pages/ChangePassword";
+import Waiting from "../pages/Waiting";
 import { ErrorBox, Loading, NotFound, platformName } from "../ui";
 import { MeContext, useMe } from "./me";
-import { useWrite } from "./write";
+import SignOut from "./SignOut";
 
-type NavItem = { to: string; label: string; icon: string; end?: boolean };
+type NavItem = { to: string; label: string; icon: string; end?: boolean; badge?: string };
 
 const main: NavItem[] = [
   { to: "/", label: "Overview", icon: "🏠", end: true },
@@ -16,10 +18,18 @@ const main: NavItem[] = [
   { to: "/skills", label: "Skills", icon: "🧩" },
 ];
 
-const admin: NavItem[] = [
+// adminItems is the Admin section; Users says how many accounts wait for a
+// team.
+const adminItems = (waitingUsers: number): NavItem[] => [
+  { to: "/users", label: "Users", icon: "👤", badge: waitingUsers > 0 ? `${waitingUsers} waiting` : undefined },
+  { to: "/teams", label: "Teams", icon: "👥" },
   { to: "/integrations", label: "Integrations", icon: "🔌" },
   { to: "/settings", label: "Settings", icon: "⚙️" },
+  { to: "/audit", label: "Audit log", icon: "📜" },
 ];
+
+// roleLabel is what the menu calls the signed-in account.
+const roleLabel = (me: Me) => (me.operator ? "operator" : me.admin ? "admin" : "member");
 
 function Nav({ items }: { items: NavItem[] }) {
   return (
@@ -30,6 +40,7 @@ function Nav({ items }: { items: NavItem[] }) {
             {item.icon}
           </span>
           {item.label}
+          {item.badge && <span className="badge">{item.badge}</span>}
         </NavLink>
       ))}
     </>
@@ -38,30 +49,6 @@ function Nav({ items }: { items: NavItem[] }) {
 
 function initials(name: string) {
   return name.replace(/[^a-zA-Z0-9]/g, "").slice(0, 2).toUpperCase();
-}
-
-// SignOut ends the session. Only once the server says it has ended does
-// the page drop what it loaded and go to sign-in; a failure is shown and
-// the user stays signed in, and knows it.
-function SignOut() {
-  const navigate = useNavigate();
-  const client = useQueryClient();
-  const write = useWrite();
-  const out = useMutation({
-    mutationFn: () => write<void>("POST", "/auth/logout"),
-    onSuccess: () => {
-      client.clear();
-      navigate("/signin", { replace: true });
-    },
-  });
-  return (
-    <>
-      <button type="button" className="linkish" onClick={() => out.mutate()} disabled={out.isPending}>
-        Sign out
-      </button>
-      {out.isError && <ErrorBox error={out.error} />}
-    </>
-  );
 }
 
 // Layout is the dashboard's shell: the dark menu on the left, the page on
@@ -78,6 +65,11 @@ export default function Layout() {
     );
   }
   const user = me.data;
+  // The server answers an account in either state nothing but who it is
+  // (and a sign-out, and the password change), so nothing else is shown.
+  if (user.mustChangePassword || user.waiting) {
+    return <MeContext.Provider value={user}>{user.mustChangePassword ? <ChangePassword /> : <Waiting />}</MeContext.Provider>;
+  }
   return (
     <MeContext.Provider value={user}>
       <div className="shell">
@@ -89,14 +81,14 @@ export default function Layout() {
             pergent.sh
           </div>
           <div className="org" title="The instance you signed in with">
-            {platformName(user.platform)} · {user.instance}
+            {user.operator ? "All instances" : `${platformName(user.platform)} · ${user.instance}`}
           </div>
           <nav className="nav" aria-label="Main">
             <Nav items={main} />
-            {user.isAdmin && (
+            {user.admin && (
               <>
                 <div className="section-label">Admin</div>
-                <Nav items={admin} />
+                <Nav items={adminItems(user.waitingUsers)} />
               </>
             )}
           </nav>
@@ -105,7 +97,7 @@ export default function Layout() {
               {initials(user.username)}
             </div>
             <span className="grow">
-              {user.username} · {user.isAdmin ? "admin" : "developer"}
+              {user.username} · {roleLabel(user)}
             </span>
             <SignOut />
           </div>
@@ -122,5 +114,5 @@ export default function Layout() {
 // and the admin API is never called for them.
 export function AdminOnly({ children }: { children: ReactNode }) {
   const me = useMe();
-  return me.isAdmin ? <>{children}</> : <NotFound />;
+  return me.admin ? <>{children}</> : <NotFound />;
 }

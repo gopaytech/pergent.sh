@@ -32,7 +32,7 @@ export default function AttentionRows({
             <div className="grow">
               <div className="title">
                 {a.project === "" ? (
-                  `${platformName(platform)} · ${a.instance}`
+                  platform ? `${platformName(platform)} · ${a.instance}` : a.instance
                 ) : linkRepos ? (
                   <Link to={`${paths.repo(a.instance, a.project)}?tab=setup`}>{a.project}</Link>
                 ) : (

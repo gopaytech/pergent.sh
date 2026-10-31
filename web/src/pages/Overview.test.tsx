@@ -3,14 +3,14 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi } from "../test/fakeApi";
-import { admin, developer, overview } from "../test/fixtures";
+import { platformAdmin, viewer, overview } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Overview", () => {
   it("shows the numbers, recent reviews and what needs attention", async () => {
-    fakeApi({ "GET /api/me": { body: admin }, "GET /api/overview?days=7": { body: overview } });
+    fakeApi({ "GET /api/me": { body: platformAdmin }, "GET /api/overview?days=7": { body: overview } });
     renderApp("/");
     expect(await screen.findByRole("heading", { name: "Overview" })).toBeInTheDocument();
 
@@ -39,7 +39,7 @@ describe("Overview", () => {
 
   it("asks for another period", async () => {
     const fake = fakeApi({
-      "GET /api/me": { body: admin },
+      "GET /api/me": { body: platformAdmin },
       "GET /api/overview?days=7": { body: overview },
       "GET /api/overview?days=30": { body: { ...overview, stats: { ...overview.stats, reviews: 999 } } },
     });
@@ -51,7 +51,7 @@ describe("Overview", () => {
   });
 
   it("offers Add repository only to admins", async () => {
-    fakeApi({ "GET /api/me": { body: developer }, "GET /api/overview?days=7": { body: overview } });
+    fakeApi({ "GET /api/me": { body: viewer }, "GET /api/overview?days=7": { body: overview } });
     renderApp("/");
     await screen.findByText("184");
     expect(screen.queryByRole("link", { name: "+ Add repository" })).not.toBeInTheDocument();
@@ -59,7 +59,7 @@ describe("Overview", () => {
 
   it("says when nothing needs attention", async () => {
     fakeApi({
-      "GET /api/me": { body: admin },
+      "GET /api/me": { body: platformAdmin },
       "GET /api/overview?days=7": { body: { ...overview, recent: [], attention: [] } },
     });
     renderApp("/");

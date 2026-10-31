@@ -16,15 +16,29 @@ export type Outcome =
   | "superseded"
   | "unknown";
 
+// Me is the signed-in account, from GET /api/me. An operator is a password
+// account (platform and instance are ""); admin is an operator or a member
+// of an admin team; waiting is a platform account on no team.
 export type Me = {
-  platform: Platform;
-  instance: string;
+  kind: "password" | "platform";
   username: string;
-  isAdmin: boolean;
+  platform: Platform | "";
+  instance: string;
+  admin: boolean;
+  operator: boolean;
+  waiting: boolean;
+  mustChangePassword: boolean;
+  waitingUsers: number;
   csrfToken: string;
 };
 
+export type Role = "admin" | "maintainer" | "viewer";
+
 export type InstanceView = { platform: string; instance: string; label: string };
+
+// InstancesView is GET /api/instances: whether the password form is shown,
+// and the instances with sign-in.
+export type InstancesView = { password: boolean; instances: InstanceView[] };
 
 export type StatsView = { reviews: number; approved: number; blocking: number; failed: number };
 
@@ -142,6 +156,8 @@ export type RepositoryDetailView = {
   repo: RepositoryView;
   settings: RepoSettings;
   attention: AttentionView[];
+  // role is the session's role on this repository.
+  role: Role;
 };
 
 // SettingsUpdate is the body of PUT .../settings: only the keys to change;
@@ -182,7 +198,6 @@ export type AdminSettingsView = {
     jobMemory: string;
   };
   llm: { provider: string; model: string };
-  admins: { instance: string; group?: string; team?: string }[];
 };
 
 export type AvailableView = {
@@ -223,6 +238,10 @@ export function onUnauthorized(fn: Listener): () => void {
   };
 }
 
+// A 401 from these is a wrong password, not an ended session: the caller
+// shows it, and the browser doesn't go to sign-in.
+const wrongPasswordIs401 = new Set(["/auth/password", "/auth/password/change"]);
+
 async function request<T>(method: string, path: string, body?: unknown, csrf?: string): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (method !== "GET") {
@@ -236,7 +255,7 @@ async function request<T>(method: string, path: string, body?: unknown, csrf?: s
     body: body === undefined ? undefined : JSON.stringify(body),
     credentials: "same-origin",
   });
-  if (res.status === 401) {
+  if (res.status === 401 && !wrongPasswordIs401.has(path)) {
     for (const fn of [...unauthorized]) fn();
   }
   if (!res.ok) {
@@ -264,6 +283,16 @@ export const api = {
   put: <T>(path: string, body: unknown, csrf: string) => request<T>("PUT", path, body, csrf),
   del: <T>(path: string, csrf: string) => request<T>("DELETE", path, undefined, csrf),
   write: <T>(method: WriteMethod, path: string, body: unknown, csrf: string) => request<T>(method, path, body, csrf),
+  // signIn signs a password account in: the sign-in form's CSRF token
+  // first, then the password. The session is a cookie; nothing is returned.
+  signIn: async (username: string, password: string): Promise<void> => {
+    const { csrfToken } = await request<{ csrfToken: string }>("GET", "/auth/csrf");
+    await request<void>("POST", "/auth/password", { username, password }, csrfToken);
+  },
+  // changePassword changes the signed-in password account's password; its
+  // other sessions end.
+  changePassword: (current: string, next: string, csrf: string) =>
+    request<void>("POST", "/auth/password/change", { current, new: next }, csrf),
 };
 
 export type WriteMethod = "POST" | "PUT" | "DELETE";

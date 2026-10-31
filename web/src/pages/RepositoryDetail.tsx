@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useParams, useSearchParams } from "react-router";
 
 import { api, isStatus, paths, type InputsView, type RepositoryDetailView } from "../api";
-import { useMe } from "../layout/me";
 import { ErrorBox, Loading, NotFound, Tabs, platformName } from "../ui";
 import AttentionRows from "./Attention";
 import ReviewList from "./ReviewList";
@@ -10,11 +9,10 @@ import SettingsTab from "./RepositorySettings";
 
 type Tab = "reviews" | "settings" | "inputs" | "setup";
 
-// RepositoryDetail is one repository: its reviews, settings (admins),
+// RepositoryDetail is one repository: its reviews, settings (maintainers and admins),
 // resolved skills and instructions, and setup checks. The tab is in the
 // address (?tab=), so the project path, which has slashes, stays whole.
 export default function RepositoryDetail() {
-  const me = useMe();
   const params = useParams();
   const instance = params.instance ?? "";
   const project = params["*"] ?? "";
@@ -32,7 +30,7 @@ export default function RepositoryDetail() {
   const view = detail.data;
   const { repo } = view;
   const tabs: [Tab, string][] = [["reviews", "Reviews"]];
-  if (me.isAdmin) tabs.push(["settings", "Settings"]);
+  if (view.role === "admin" || view.role === "maintainer") tabs.push(["settings", "Settings"]);
   tabs.push(["inputs", "Skills & instructions"], ["setup", `Setup checks (${view.attention.length})`]);
   const asked = search.get("tab") as Tab | null;
   const tab: Tab = tabs.some(([t]) => t === asked) ? (asked as Tab) : "reviews";

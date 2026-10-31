@@ -12,16 +12,16 @@ import { ErrorBox, Loading, Pill, Switch, platformName } from "../ui";
 export default function Repositories() {
   const me = useMe();
   const [params, setParams] = useSearchParams();
-  const adding = me.isAdmin && params.get("add") === "1";
+  const adding = me.admin && params.get("add") === "1";
   const repos = useQuery({ queryKey: ["repositories"], queryFn: () => api.get<RepositoryView[]>("/api/repositories") });
   return (
     <>
       <div className="top">
         <div>
           <h1>Repositories</h1>
-          <div className="sub">The repositories pergent reviews that you can see on {platformName(me.platform)}</div>
+          <div className="sub">The repositories pergent reviews that you can see{me.platform && ` on ${platformName(me.platform)}`}</div>
         </div>
-        {me.isAdmin && (
+        {me.admin && (
           <button type="button" className="btn primary" onClick={() => setParams(adding ? {} : { add: "1" })}>
             + Add repository
           </button>
@@ -32,7 +32,7 @@ export default function Repositories() {
       {repos.isError && <ErrorBox error={repos.error} />}
       {repos.isSuccess &&
         (repos.data.length === 0 ? (
-          <div className="card empty">No repositories yet.{me.isAdmin && " Use + Add repository to switch one on."}</div>
+          <div className="card empty">No repositories yet.{me.admin && " Use + Add repository to switch one on."}</div>
         ) : (
           <div className="card scroll">
             <table className="table">
@@ -40,7 +40,7 @@ export default function Repositories() {
                 <tr>
                   <th>Repository</th>
                   <th>Platform</th>
-                  {me.isAdmin && <th>Review</th>}
+                  {me.admin && <th>Review</th>}
                   <th className="num">Reviews (7 days)</th>
                   <th className="num">Approved</th>
                   <th className="num">Failed</th>
@@ -49,7 +49,7 @@ export default function Repositories() {
               </thead>
               <tbody>
                 {repos.data.map((r) => (
-                  <Row key={`${r.instance}/${r.project}`} repo={r} admin={me.isAdmin} />
+                  <Row key={`${r.instance}/${r.project}`} repo={r} admin={me.admin} />
                 ))}
               </tbody>
             </table>

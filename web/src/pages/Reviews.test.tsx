@@ -3,13 +3,13 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi } from "../test/fakeApi";
-import { admin, repoPayments, repoWidgets, reviewApproved, reviewBlocking } from "../test/fixtures";
+import { platformAdmin, repoPayments, repoWidgets, reviewApproved, reviewBlocking } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
 
 const base = {
-  "GET /api/me": { body: admin },
+  "GET /api/me": { body: platformAdmin },
   "GET /api/repositories": { body: [repoPayments, repoWidgets] },
 };
 

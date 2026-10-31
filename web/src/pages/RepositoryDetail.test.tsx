@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi } from "../test/fakeApi";
-import { admin, developer, librarySkills, repoDetail, repoPayments, repoWidgets, reviewBlocking } from "../test/fixtures";
+import { platformAdmin, viewer, librarySkills, repoDetail, repoPayments, repoWidgets, reviewBlocking } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -12,7 +12,7 @@ const payments = repoDetail(repoPayments);
 const widgets = repoDetail(repoWidgets);
 
 const base = {
-  "GET /api/me": { body: admin },
+  "GET /api/me": { body: platformAdmin },
   "GET /api/repositories/main/acme/payments": { body: payments },
   "GET /api/repositories/main/acme/widgets": { body: widgets },
   "GET /api/skills": { body: librarySkills },
@@ -35,8 +35,21 @@ describe("RepositoryDetail", () => {
     );
   });
 
-  it("hides Settings from a developer", async () => {
-    renderAt("/repos/main/acme/payments?tab=settings", { ...base, "GET /api/me": { body: developer } });
+  it("shows Settings to a maintainer of the repository, whoever they are elsewhere", async () => {
+    renderAt("/repos/main/acme/payments", {
+      ...base,
+      "GET /api/me": { body: viewer },
+      "GET /api/repositories/main/acme/payments": { body: repoDetail(repoPayments, "maintainer") },
+    });
+    expect(await screen.findByRole("tab", { name: "Settings" })).toBeInTheDocument();
+  });
+
+  it("hides Settings from a viewer of the repository, even an admin elsewhere", async () => {
+    renderAt("/repos/main/acme/payments?tab=settings", {
+      ...base,
+      "GET /api/me": { body: platformAdmin },
+      "GET /api/repositories/main/acme/payments": { body: repoDetail(repoPayments, "viewer") },
+    });
     await screen.findByRole("heading", { name: "acme/payments" });
     expect(screen.queryByRole("tab", { name: "Settings" })).not.toBeInTheDocument();
     // ?tab=settings falls back to Reviews.
@@ -214,7 +227,7 @@ describe("RepositoryDetail", () => {
     let mes = 0;
     const fake = fakeApi({
       ...base,
-      "GET /api/me": () => ({ body: mes++ === 0 ? admin : { ...admin, csrfToken: "csrf-new" } }),
+      "GET /api/me": () => ({ body: mes++ === 0 ? platformAdmin : { ...platformAdmin, csrfToken: "csrf-new" } }),
       "PUT /api/repositories/main/acme/payments/settings": () =>
         puts++ === 0 ? { status: 403, body: { error: "missing or wrong CSRF token", code: "csrf" } } : { body: payments },
     });
