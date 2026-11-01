@@ -369,7 +369,6 @@ func testConfig(gitlabURL string) *config.Config {
 		Listen:      ":8080",
 		PublicURL:   "https://pergent.example.com",
 		CallbackURL: testCallbackURL,
-		SkillsDir:   "/skills",
 		GitLab: []config.Instance{{
 			Name: testInstance, URL: gitlabURL,
 			ReviewTokenEnv: "GITLAB_REVIEW_TOKEN", ApproveTokenEnv: "GITLAB_APPROVE_TOKEN", WebhookSecretEnv: "GITLAB_WEBHOOK_SECRET",

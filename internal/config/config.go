@@ -50,7 +50,6 @@ type Config struct {
 	Listen       string           `yaml:"listen"`
 	PublicURL    string           `yaml:"public_url"`
 	CallbackURL  string           `yaml:"callback_url"`
-	SkillsDir    string           `yaml:"skills_dir"`
 	GitLab       []Instance       `yaml:"gitlab"`
 	GitHub       []GitHubInstance `yaml:"github"`
 	Repositories []Repository     `yaml:"repositories"`
@@ -181,13 +180,16 @@ type fileConfig struct {
 	Listen       string           `yaml:"listen"`
 	PublicURL    string           `yaml:"public_url"`
 	CallbackURL  string           `yaml:"callback_url"`
-	SkillsDir    string           `yaml:"skills_dir"`
 	GitLab       []Instance       `yaml:"gitlab"`
 	GitHub       []GitHubInstance `yaml:"github"`
 	Repositories []fileRepository `yaml:"repositories"`
 	LLM          LLM              `yaml:"llm"`
 	Jobs         fileJobs         `yaml:"jobs"`
 	Dashboard    Dashboard        `yaml:"dashboard"`
+
+	// SkillsDir is kept only to refuse it: the skill library lives in the
+	// dashboard now, not in a directory.
+	SkillsDir yaml.Node `yaml:"skills_dir"`
 }
 
 type fileRepository struct {
@@ -311,7 +313,6 @@ func Load(path string) (*Config, error) {
 		Listen:       raw.Listen,
 		PublicURL:    raw.PublicURL,
 		CallbackURL:  raw.CallbackURL,
-		SkillsDir:    raw.SkillsDir,
 		GitLab:       raw.GitLab,
 		GitHub:       raw.GitHub,
 		Repositories: make([]Repository, 0, len(raw.Repositories)),
@@ -343,7 +344,11 @@ func Load(path string) (*Config, error) {
 	}
 
 	cfg.applyDefaults()
-	if err := cfg.Validate(); err != nil {
+	err = cfg.Validate()
+	if !raw.SkillsDir.IsZero() {
+		err = errors.Join(errors.New(`skills_dir was removed: skills live in the dashboard (see the README, "Skills and instructions")`), err)
+	}
+	if err != nil {
 		return nil, err
 	}
 	return cfg, nil
@@ -382,8 +387,7 @@ var (
 	instanceNameRE = regexp.MustCompile(`^[a-z0-9-]+$`)
 	envNameRE      = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 	digestRE       = regexp.MustCompile(`@sha256:[0-9a-f]{64}$`)
-	// skillNameRE is the rule for a skill's name (inputs holds the same rule;
-	// inputs imports config, so it can't be shared).
+	// skillNameRE is the rule for a skill's name (inputs holds the same rule).
 	skillNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
 
@@ -399,9 +403,6 @@ func (c *Config) Validate() error {
 		if err := checkURL("callback_url", c.CallbackURL, false); err != nil {
 			errs = append(errs, err)
 		}
-	}
-	if c.SkillsDir == "" {
-		add("skills_dir is required")
 	}
 
 	if len(c.GitLab)+len(c.GitHub) == 0 && !c.DashboardEnabled() {
@@ -482,6 +483,11 @@ func (c *Config) Validate() error {
 			add("duplicate repository %s on %s instance %q", repo.Project, platform, instance)
 		}
 		seen[key] = true
+		// skills is absent or null (the default list) or a non-empty list: an
+		// empty list would silently mean the default list too.
+		if repo.Skills != nil && len(repo.Skills) == 0 {
+			add("repositories[%d] (%s): skills must be a list of skill names, or left out for the default list", i, repo.Project)
+		}
 		for _, name := range repo.RepoSkills {
 			if !skillNameRE.MatchString(name) {
 				add("repositories[%d] (%s): repo_skills name %q must match %s", i, repo.Project, name, skillNameRE)

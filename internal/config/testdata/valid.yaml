@@ -1,5 +1,4 @@
 public_url: https://pergent.example.com
-skills_dir: /skills
 
 gitlab:
   - name: main

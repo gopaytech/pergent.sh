@@ -38,7 +38,6 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/dashboard"
 	"github.com/gopaytech/pergent.sh/internal/engine"
 	"github.com/gopaytech/pergent.sh/internal/forge/githubforge"
-	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
@@ -134,13 +133,6 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	lib, err := inputs.LoadLibrary(cfg.SkillsDir)
-	if err != nil {
-		return fmt.Errorf("skill library %s: %w", cfg.SkillsDir, err)
-	}
-	if err := checkSkills(cfg, lib); err != nil {
-		return err
-	}
 	if err := checkDashboardEnv(cfg); err != nil {
 		return err
 	}
@@ -169,6 +161,9 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	}
 	defer st.Close()
 	if err := st.Migrate(ctx); err != nil {
+		return err
+	}
+	if err := checkSkills(ctx, cfg, st, log); err != nil {
 		return err
 	}
 	if cfg.DashboardEnabled() {
@@ -418,18 +413,41 @@ func serveUntilDone(ctx context.Context, ln net.Listener, handler http.Handler, 
 	return serveErr
 }
 
-// checkSkills makes sure every skill a repository picks is in the library.
-func checkSkills(cfg *config.Config, lib inputs.Library) error {
-	var errs []error
+// attSkillMissing is the "Needs attention" kind of a repository that names a
+// skill the library lacks (the engine records the same kind).
+const attSkillMissing = "skill_missing"
+
+// skillChecker is the part of the store checkSkills reads and writes.
+type skillChecker interface {
+	ResolveLibrary(ctx context.Context, names []string) (store.ResolvedLibrary, error)
+	SetAttention(ctx context.Context, instance, project, kind, message string) error
+}
+
+// checkSkills looks for a skill a config repository names that the library
+// lacks and lists it under "Needs attention" (skill_missing, the reason the
+// engine gives when a run fails for it). It never stops startup: the library
+// is edited in the dashboard, so a skill can be added later, and a repository
+// whose skill is missing fails its own runs. A store error is logged.
+func checkSkills(ctx context.Context, cfg *config.Config, st skillChecker, log *slog.Logger) error {
 	for _, repo := range cfg.Repositories {
-		for _, name := range repo.Skills {
-			if _, ok := lib[name]; !ok {
-				errs = append(errs, fmt.Errorf("repository %s on instance %q: skill %q is not in the skill library %s",
-					repo.Project, repo.Instance(), name, cfg.SkillsDir))
-			}
+		if repo.Skills == nil {
+			continue // the default list is checked when the admin saves it
+		}
+		resolved, err := st.ResolveLibrary(ctx, repo.Skills)
+		if err != nil {
+			log.Warn("couldn't check the skills of a repository", "instance", repo.Instance(), "project", repo.Project, "error", err.Error())
+			continue
+		}
+		if len(resolved.Missing) == 0 {
+			continue
+		}
+		reason := fmt.Sprintf("skill %q is not in the skill library", resolved.Missing[0])
+		log.Warn("a repository names a skill the library lacks", "instance", repo.Instance(), "project", repo.Project, "skill", resolved.Missing[0])
+		if err := st.SetAttention(ctx, repo.Instance(), repo.Project, attSkillMissing, reason); err != nil {
+			log.Warn("couldn't record a missing skill for the dashboard", "instance", repo.Instance(), "project", repo.Project, "error", err.Error())
 		}
 	}
-	return errors.Join(errs...)
+	return nil
 }
 
 // kubeConfig is the in-cluster config or, outside a cluster, the kubeconfig

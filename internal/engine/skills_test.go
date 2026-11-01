@@ -78,6 +78,25 @@ func queue(env *testEnv) (id, head string) {
 	return id, head
 }
 
+// The library lives in the database, not in a directory or the dashboard's
+// settings: with no dashboard.url (and no skills_dir) a review still reads its
+// skills from the store.
+func TestLibraryWithoutDashboard(t *testing.T) {
+	env := newTestEnv(t)
+	if env.Engine.Config.DashboardEnabled() {
+		t.Fatal("the test config has the dashboard on")
+	}
+	env.AddSkill("style", styleSkill)
+	env.SetDefaultSkills("style")
+	id, _ := queue(env)
+
+	dispatch(t, env)
+
+	if got := jobInputs(t, env, id); !strings.Contains(got, styleText) {
+		t.Errorf("inputs = %q, want the library's style skill", got)
+	}
+}
+
 func TestNullSkillsUsesDefaults(t *testing.T) {
 	repoKinds(t, nil, func(t *testing.T, env *testEnv) {
 		env.AddSkill("style", styleSkill)

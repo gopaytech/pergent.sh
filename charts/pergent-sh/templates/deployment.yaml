@@ -24,7 +24,6 @@ spec:
         {{- end }}
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
-        checksum/skills: {{ include (print $.Template.BasePath "/skills-configmap.yaml") . | sha256sum }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -96,16 +95,10 @@ spec:
               mountPath: /etc/pergent-sh/config.yaml
               subPath: config.yaml
               readOnly: true
-            - name: skills
-              mountPath: /etc/pergent-sh/skills
-              readOnly: true
       volumes:
         - name: config
           configMap:
             name: {{ include "pergent-sh.fullname" . }}
-        - name: skills
-          configMap:
-            name: {{ include "pergent-sh.fullname" . }}-skills
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
