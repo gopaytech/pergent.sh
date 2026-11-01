@@ -106,6 +106,19 @@ func (s *Store) SkillFetch(ctx context.Context, id string) (SkillFetch, error) {
 	return f, nil
 }
 
+// SkillFetchTokenIs reports whether tokenHash is the token of the fetch,
+// which is still running and not expired at now. It spends nothing: it is the
+// cheap check before the work CompleteSkillFetch's atomic spend then guards.
+func (s *Store) SkillFetchTokenIs(ctx context.Context, id string, tokenHash []byte, now time.Time) (bool, error) {
+	if !fetchID.MatchString(id) || tokenHash == nil {
+		return false, nil
+	}
+	var ok bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM skill_fetches
+		WHERE id = $1::uuid AND status = 'running' AND token_hash = $2 AND expires_at > $3)`, id, tokenHash, now).Scan(&ok)
+	return ok, err
+}
+
 // CompleteSkillFetch records what a running fetch read: done with commit and
 // files, or failed with errText. It reports whether it did; a fetch that is
 // not running, has expired at now, or does not exist is false. tokenHash must

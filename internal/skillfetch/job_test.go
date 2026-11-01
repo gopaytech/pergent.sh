@@ -287,3 +287,36 @@ func TestCompleteJobRefusesInstanceFetch(t *testing.T) {
 		t.Errorf("CompleteJob of an unknown fetch = %v; want unauthorized", out)
 	}
 }
+
+// A result posted with a wrong token is refused before any work: the held
+// secrets are not read and the result is not checked. The right token still
+// completes the fetch afterwards.
+func TestCompleteJobWrongTokenDoesNoWork(t *testing.T) {
+	st := newStore(t)
+	l := &fakeLauncher{}
+	f := jobFetcher(st, l, "glpat-held-SECRET")
+	var reads int
+	inner := f.Secrets
+	f.Secrets = func(ctx context.Context) ([]string, error) {
+		reads++
+		return inner(ctx)
+	}
+
+	id, token := startJob(t, f, l)
+	body, _ := json.Marshal(JobResult{Commit: commitA, Files: []store.FetchedFile{{Name: "a", Path: "skills/a.md", Content: "A."}}})
+	if out, err := f.CompleteJob(ctx, id, "wrong", body); err != nil || out != JobUnauthorized {
+		t.Fatalf("CompleteJob with a wrong token = %v, %v; want unauthorized", out, err)
+	}
+	if reads != 0 {
+		t.Errorf("the held secrets were read %d times for a wrong token; want 0", reads)
+	}
+	if got, _ := st.SkillFetch(ctx, id); got.Status != store.FetchRunning {
+		t.Errorf("fetch = %+v; a wrong token changed it", got)
+	}
+	if out, err := f.CompleteJob(ctx, id, token, body); err != nil || out != JobStored {
+		t.Fatalf("CompleteJob = %v, %v; want stored", out, err)
+	}
+	if reads != 1 {
+		t.Errorf("the held secrets were read %d times; want 1", reads)
+	}
+}

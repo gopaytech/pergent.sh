@@ -118,8 +118,19 @@ func (f *Fetcher) CompleteJob(ctx context.Context, id, token string, body []byte
 	case fetch.Status != store.FetchRunning:
 		return JobConflict, nil
 	}
+	// The route is public: a wrong token costs one cheap query, not the read
+	// of the held secrets and the checks of a 4 MiB body. The spend below
+	// stays atomic.
+	hash := hashToken(token)
+	match, err := f.Store.SkillFetchTokenIs(ctx, id, hash, f.now())
+	switch {
+	case err != nil:
+		return 0, err
+	case !match:
+		return JobUnauthorized, nil
+	}
 	commit, errText, files := f.jobResult(ctx, id, fetch.Path, body)
-	ok, err := f.Store.CompleteSkillFetch(ctx, id, hashToken(token), commit, errText, files, f.now())
+	ok, err := f.Store.CompleteSkillFetch(ctx, id, hash, commit, errText, files, f.now())
 	if err != nil {
 		return 0, err
 	}
