@@ -111,6 +111,13 @@ func (f *Forge) ListTree(ctx context.Context, repoID int64, path, ref string) ([
 
 var _ forge.SourceReader = (*Forge)(nil)
 
+// unreadable reports whether err says the review App may not read what it
+// asked for: a 404, or a 403 that isn't a rate limit (an installation without
+// Contents read).
+func unreadable(err error) bool {
+	return errors.Is(err, github.ErrNotFound) || errors.Is(err, github.ErrForbidden)
+}
+
 // source returns the review App's client for "owner/name" and the two parts.
 // It asks GitHub which installation covers the repository, so the repository
 // need not be stored or switched on. An App not installed there, a
@@ -122,7 +129,7 @@ func (f *Forge) source(ctx context.Context, project string) (*github.Client, str
 		return nil, "", "", forge.ErrSourceNotFound
 	}
 	id, err := f.app.Installation(ctx, owner, name)
-	if errors.Is(err, github.ErrNotFound) {
+	if unreadable(err) {
 		return nil, "", "", forge.ErrSourceNotFound
 	}
 	if err != nil {
@@ -132,9 +139,9 @@ func (f *Forge) source(ctx context.Context, project string) (*github.Client, str
 }
 
 // ResolveRef returns the commit ref points at in owner/name, read with the
-// review App's installation on it. A repository the App can't read, or a ref
-// GitHub can't resolve (404, or 422 for a ref that is no commit), is
-// forge.ErrSourceNotFound.
+// review App's installation on it. A repository the App can't read (404, or a
+// 403 that is no rate limit), or a ref GitHub can't resolve (404, or 422 for
+// a ref that is no commit), is forge.ErrSourceNotFound.
 func (f *Forge) ResolveRef(ctx context.Context, project, ref string) (string, error) {
 	c, owner, name, err := f.source(ctx, project)
 	if err != nil {
@@ -142,7 +149,7 @@ func (f *Forge) ResolveRef(ctx context.Context, project, ref string) (string, er
 	}
 	commit, err := c.CommitSHA(ctx, owner, name, ref)
 	var ae *github.APIError
-	if errors.Is(err, github.ErrNotFound) || (errors.As(err, &ae) && ae.Status == http.StatusUnprocessableEntity) {
+	if unreadable(err) || (errors.As(err, &ae) && ae.Status == http.StatusUnprocessableEntity) {
 		return "", forge.ErrSourceNotFound
 	}
 	return commit, err
@@ -157,6 +164,9 @@ func (f *Forge) ListTreeAt(ctx context.Context, project, path, commit string) ([
 		return nil, err
 	}
 	entries, err := c.Tree(ctx, owner, name, path, commit)
+	if unreadable(err) {
+		return nil, forge.ErrSourceNotFound
+	}
 	return entries, mapErr(err)
 }
 
@@ -172,6 +182,9 @@ func (f *Forge) GetFileAt(ctx context.Context, project, path, commit string) ([]
 	b, ok, err := c.FileMax(ctx, owner, name, path, commit, forge.MaxSourceFile)
 	if errors.Is(err, github.ErrTooLarge) {
 		return nil, false, forge.ErrFileTooLarge
+	}
+	if unreadable(err) {
+		return nil, false, forge.ErrSourceNotFound
 	}
 	return b, ok, mapErr(err)
 }

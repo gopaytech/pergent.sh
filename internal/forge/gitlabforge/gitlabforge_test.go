@@ -693,3 +693,42 @@ func TestGitLabSourceReaderFileTooLarge(t *testing.T) {
 		t.Errorf("GetFileAt at the limit = %d, %v, %v", len(b), ok, err)
 	}
 }
+
+// A project the bot sees but may not read (a bot below Reporter, a restricted
+// repository feature: GitLab answers 403) is forge.ErrSourceNotFound too, so
+// the admin is never shown a raw platform error.
+func TestGitLabSourceReaderForbidden(t *testing.T) {
+	ctx := context.Background()
+	forbidden := `{"message":"403 Forbidden"}`
+
+	// The project itself is forbidden.
+	f := newFake(t)
+	f.on(http.MethodGet, "/projects/acme%2Fsecret", http.StatusForbidden, forbidden)
+	g := f.forge()
+	if _, err := g.ResolveRef(ctx, "acme/secret", "main"); !errors.Is(err, forge.ErrSourceNotFound) {
+		t.Errorf("ResolveRef = %v; want ErrSourceNotFound", err)
+	}
+	if _, err := g.ListTreeAt(ctx, "acme/secret", "skills", commitSHA); !errors.Is(err, forge.ErrSourceNotFound) {
+		t.Errorf("ListTreeAt = %v; want ErrSourceNotFound", err)
+	}
+	if _, _, err := g.GetFileAt(ctx, "acme/secret", "a.md", commitSHA); !errors.Is(err, forge.ErrSourceNotFound) {
+		t.Errorf("GetFileAt = %v; want ErrSourceNotFound", err)
+	}
+
+	// The project shows, its repository does not.
+	f = newFake(t)
+	f.on(http.MethodGet, "/projects/acme%2Fskills", http.StatusOK, map[string]any{"id": 42})
+	f.on(http.MethodGet, "/projects/42/repository/commits/main", http.StatusForbidden, forbidden)
+	f.on(http.MethodGet, "/projects/42/repository/tree", http.StatusForbidden, forbidden)
+	f.on(http.MethodGet, "/projects/42/repository/files/a.md/raw", http.StatusForbidden, forbidden)
+	g = f.forge()
+	if _, err := g.ResolveRef(ctx, "acme/skills", "main"); !errors.Is(err, forge.ErrSourceNotFound) {
+		t.Errorf("ResolveRef with a forbidden repository = %v; want ErrSourceNotFound", err)
+	}
+	if _, err := g.ListTreeAt(ctx, "acme/skills", "skills", commitSHA); !errors.Is(err, forge.ErrSourceNotFound) {
+		t.Errorf("ListTreeAt with a forbidden repository = %v; want ErrSourceNotFound", err)
+	}
+	if _, _, err := g.GetFileAt(ctx, "acme/skills", "a.md", commitSHA); !errors.Is(err, forge.ErrSourceNotFound) {
+		t.Errorf("GetFileAt with a forbidden repository = %v; want ErrSourceNotFound", err)
+	}
+}

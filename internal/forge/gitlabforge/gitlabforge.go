@@ -81,6 +81,14 @@ func (f *Forge) DefaultBranch(ctx context.Context, projectID int64) (string, err
 
 var _ forge.SourceReader = (*Forge)(nil)
 
+// unreadable reports whether err says the review bot may not read what it
+// asked for: GitLab's 404 (it hides what a user can't see) or 403 (a bot below
+// Reporter, a restricted repository feature).
+func unreadable(err error) bool {
+	var ae *gitlab.APIError
+	return errors.Is(err, gitlab.ErrNotFound) || (errors.As(err, &ae) && ae.Status == http.StatusForbidden)
+}
+
 // projectID resolves a project's full path ("group/project") with the review
 // bot. A project the bot can't see (GitLab answers 404) is
 // forge.ErrSourceNotFound.
@@ -90,7 +98,7 @@ func (f *Forge) projectID(ctx context.Context, project string) (int64, error) {
 		return 0, forge.ErrSourceNotFound
 	}
 	p, err := f.c.GetProject(ctx, project)
-	if errors.Is(err, gitlab.ErrNotFound) {
+	if unreadable(err) {
 		return 0, forge.ErrSourceNotFound
 	}
 	if err != nil {
@@ -104,14 +112,14 @@ func (f *Forge) projectID(ctx context.Context, project string) (int64, error) {
 
 // ResolveRef returns the commit ref points at in the project, read with the
 // review bot (Reporter access is enough; the project need not be switched on).
-// A project or ref the bot can't read is forge.ErrSourceNotFound.
+// A project or ref the bot can't read (404 or 403) is forge.ErrSourceNotFound.
 func (f *Forge) ResolveRef(ctx context.Context, project, ref string) (string, error) {
 	id, err := f.projectID(ctx, project)
 	if err != nil {
 		return "", err
 	}
 	commit, err := f.c.CommitSHA(ctx, id, ref)
-	if errors.Is(err, gitlab.ErrNotFound) {
+	if unreadable(err) {
 		return "", forge.ErrSourceNotFound
 	}
 	return commit, err
@@ -126,6 +134,9 @@ func (f *Forge) ListTreeAt(ctx context.Context, project, path, commit string) ([
 		return nil, err
 	}
 	entries, err := f.c.ListTree(ctx, id, path, commit)
+	if unreadable(err) {
+		return nil, forge.ErrSourceNotFound
+	}
 	return entries, mapErr(err)
 }
 
@@ -141,6 +152,9 @@ func (f *Forge) GetFileAt(ctx context.Context, project, path, commit string) ([]
 	b, ok, err := f.c.GetFileMax(ctx, id, path, commit, forge.MaxSourceFile)
 	if errors.Is(err, gitlab.ErrTooLarge) {
 		return nil, false, forge.ErrFileTooLarge
+	}
+	if unreadable(err) {
+		return nil, false, forge.ErrSourceNotFound
 	}
 	return b, ok, mapErr(err)
 }

@@ -1109,7 +1109,7 @@ func TestAccessLevel(t *testing.T) {
 	}
 }
 
-// noRepos is a Forge that has stored no repository: the source reader must
+// forgeWithoutRepos is a Forge that has stored no repository: the source reader must
 // not need one.
 func (f *fakeGitHub) forgeWithoutRepos(t *testing.T) *Forge {
 	return NewForge(f.app(t), reviewBotID, reviewSlug, ReposFunc(func(context.Context, int64) (Repo, error) {
@@ -1206,5 +1206,32 @@ func TestGitHubSourceReaderFileTooLarge(t *testing.T) {
 	}
 	if b, ok, err := g.GetFileAt(ctx, "acme/skills", "ok.md", sha('7')); err != nil || !ok || len(b) != forge.MaxSourceFile {
 		t.Errorf("GetFileAt at the limit = %d, %v, %v", len(b), ok, err)
+	}
+}
+
+// An installation without Contents read (GitHub answers 403, not a rate
+// limit) is forge.ErrSourceNotFound too, so the admin is never shown a raw
+// platform error.
+func TestGitHubSourceReaderForbidden(t *testing.T) {
+	f := newFake(t)
+	f.reply("GET", "/repos/acme/skills/installation", 200, map[string]any{"id": installationID})
+	forbidden := map[string]string{"message": "Resource not accessible by integration"}
+	f.reply("GET", "/repos/acme/skills/commits/main", 403, forbidden)
+	f.reply("GET", "/repos/acme/skills/contents/skills", 403, forbidden)
+	f.reply("GET", "/repos/acme/skills/contents/a.md", 403, forbidden)
+	f.reply("GET", "/repos/acme/secret/installation", 403, forbidden)
+	g := f.forgeWithoutRepos(t)
+
+	if _, err := g.ResolveRef(ctx, "acme/skills", "main"); !errors.Is(err, forge.ErrSourceNotFound) {
+		t.Errorf("ResolveRef = %v; want ErrSourceNotFound", err)
+	}
+	if _, err := g.ListTreeAt(ctx, "acme/skills", "skills", sha('7')); !errors.Is(err, forge.ErrSourceNotFound) {
+		t.Errorf("ListTreeAt = %v; want ErrSourceNotFound", err)
+	}
+	if _, _, err := g.GetFileAt(ctx, "acme/skills", "a.md", sha('7')); !errors.Is(err, forge.ErrSourceNotFound) {
+		t.Errorf("GetFileAt = %v; want ErrSourceNotFound", err)
+	}
+	if _, err := g.ResolveRef(ctx, "acme/secret", "main"); !errors.Is(err, forge.ErrSourceNotFound) {
+		t.Errorf("ResolveRef with a forbidden installation lookup = %v; want ErrSourceNotFound", err)
 	}
 }
