@@ -142,7 +142,7 @@ function inUseBody(err: unknown): SkillInUse | null {
 
 // hiddenText counts the repositories that use a skill and that the admin
 // can't see.
-const hiddenText = (n: number) => `+${n} ${n === 1 ? "repository" : "repositories"} you can't see`;
+const hiddenText = (n: number) => `+${n} repositories you can't see`;
 
 function InUseBox({ name, inUse }: { name: string; inUse: SkillInUse }) {
   return (

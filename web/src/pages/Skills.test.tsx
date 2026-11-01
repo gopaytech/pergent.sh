@@ -34,7 +34,7 @@ describe("Skills", () => {
     expect(screen.getByRole("link", { name: "New skill" })).toHaveAttribute("href", "/skills/new");
     expect(screen.getByRole("link", { name: "Install from git" })).toHaveAttribute("href", "/skills/install");
     const written = rowOf("code-review");
-    expect(within(written).getByRole("link", { name: "Edit" })).toHaveAttribute("href", "/skills/code-review");
+    expect(within(written).getByRole("link", { name: "Edit" })).toHaveAttribute("href", "/skills/view/code-review");
     expect(within(written).getByRole("button", { name: "Copy" })).toBeInTheDocument();
     expect(within(written).getByRole("button", { name: "Delete" })).toBeInTheDocument();
     unmount();
@@ -138,6 +138,22 @@ describe("Skills", () => {
     expect(within(box).getByText("main: acme/payments")).toBeInTheDocument();
     expect(within(box).getByText("the default skills")).toBeInTheDocument();
     expect(within(box).getByText("+2 repositories you can't see")).toBeInTheDocument();
+  });
+
+  it("a delete 409 with one hidden repository says '+1 repositories you can't see'", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    fakeApi({
+      "GET /api/me": { body: platformAdmin },
+      "GET /api/skills": { body: librarySkills },
+      "DELETE /api/admin/skills/code-review": {
+        status: 409,
+        body: { error: "the skill is in use", repositories: [], hidden: 1, inDefaults: false },
+      },
+    });
+    renderApp("/skills");
+    await screen.findByRole("link", { name: "code-review" });
+    await userEvent.click(within(rowOf("code-review")).getByRole("button", { name: "Delete" }));
+    expect(await screen.findByText("+1 repositories you can't see")).toBeInTheDocument();
   });
 
   it("a hidden source shows 'a private repository on main'", async () => {

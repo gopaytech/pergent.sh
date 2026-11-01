@@ -115,13 +115,20 @@ function SkillPage({ skill, reload }: { skill: SkillDetail; reload: () => Promis
   const me = useMe();
   const client = useQueryClient();
   const write = useWrite();
+  // base is the version and text the draft was opened from. A refetch
+  // (window focus, another admin's save) changes skill, never base: Save
+  // names the version the draft is based on, so a change made since then is
+  // refused as stale (D9), not overwritten.
+  const [base, setBase] = useState({ version: skill.version, content: skill.content });
   const [draft, setDraft] = useState(skill.content);
   const [note, setNote] = useState("");
   const editable = me.admin && skill.source === null;
   const save = useMutation({
-    mutationFn: () => write<{ version: number }>("PUT", paths.apiAdminSkill(skill.name), { content: draft, version: skill.version }),
+    mutationFn: (body: { content: string; version: number }) =>
+      write<{ version: number }>("PUT", paths.apiAdminSkill(skill.name), body),
     onMutate: () => setNote(""),
-    onSuccess: async (r) => {
+    onSuccess: async (r, body) => {
+      setBase({ version: r.version, content: body.content });
       setNote(`Saved as v${r.version}.`);
       // Wait for the new version: a second save names it.
       await client.invalidateQueries({ queryKey: ["skill", skill.name] });
@@ -130,14 +137,17 @@ function SkillPage({ skill, reload }: { skill: SkillDetail; reload: () => Promis
   });
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    save.mutate();
+    save.mutate({ content: draft, version: base.version });
   };
-  // Reload puts the stored text in place of the draft.
+  // Reload puts the stored text, and its version, in place of the draft.
   const reloadText = async () => {
     save.reset();
     setNote("");
     const fresh = await reload();
-    if (fresh.data) setDraft(fresh.data.content);
+    if (fresh.data) {
+      setBase({ version: fresh.data.version, content: fresh.data.content });
+      setDraft(fresh.data.content);
+    }
   };
   const stale = save.isError && isStatus(save.error, 409);
   return (
@@ -170,7 +180,7 @@ function SkillPage({ skill, reload }: { skill: SkillDetail; reload: () => Promis
             <button
               type="submit"
               className="btn primary"
-              disabled={save.isPending || draft === skill.content || draft.trim() === "" || sizeOf(draft) > maxSkillBytes}
+              disabled={save.isPending || draft === base.content || draft.trim() === "" || sizeOf(draft) > maxSkillBytes}
             >
               Save
             </button>

@@ -529,7 +529,9 @@ export const paths = {
   apiRepoSettings: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/settings`,
   apiRepoReset: (instance: string, project: string) =>
     `/api/repositories/${seg(instance)}/${proj(project)}/settings/reset`,
-  skill: (name: string) => `/skills/${seg(name)}`,
+  // The client path is under /skills/view/ so a skill named like a page
+  // (new, install, updates) still opens.
+  skill: (name: string) => `/skills/view/${seg(name)}`,
   apiSkill: (name: string) => `/api/skills/${seg(name)}`,
   apiSkillVersion: (name: string, version: number) => `/api/skills/${seg(name)}/versions/${seg(String(version))}`,
   apiAdminSkill: (name: string) => `/api/admin/skills/${seg(name)}`,

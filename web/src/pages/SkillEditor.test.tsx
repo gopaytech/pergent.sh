@@ -65,7 +65,7 @@ describe("SkillEditor: one skill", () => {
   it("renders skill content as text", async () => {
     const detail = { ...skillWrittenDetail, content: "<script>x</script>\n# h\n" };
     fakeApi({ "GET /api/me": { body: viewer }, "GET /api/skills/code-review": { body: detail } });
-    const { container } = renderApp("/skills/code-review");
+    const { container } = renderApp("/skills/view/code-review");
     const pre = await screen.findByText(/<script>x<\/script>/);
     expect(pre.tagName).toBe("PRE");
     expect(pre).toHaveTextContent("# h");
@@ -80,7 +80,7 @@ describe("SkillEditor: one skill", () => {
       "GET /api/skills/code-review": { body: skillWrittenDetail },
       "PUT /api/admin/skills/code-review": { body: { version: 3 } },
     });
-    renderApp("/skills/code-review");
+    renderApp("/skills/view/code-review");
     const text = await screen.findByLabelText("Skill text");
     expect(text).toHaveValue(skillWrittenDetail.content);
     await userEvent.type(text, "More.");
@@ -100,7 +100,7 @@ describe("SkillEditor: one skill", () => {
       }),
       "PUT /api/admin/skills/code-review": { status: 409, body: { error: "this skill changed since you opened it" } },
     });
-    renderApp("/skills/code-review");
+    renderApp("/skills/view/code-review");
     await userEvent.type(await screen.findByLabelText("Skill text"), "mine");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("this skill changed since you opened it");
@@ -109,9 +109,57 @@ describe("SkillEditor: one skill", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("saves against the version the draft was opened from, even after a refetch brings a newer one", async () => {
+    let reads = 0;
+    const fake = fakeApi({
+      "GET /api/me": { body: platformAdmin },
+      "GET /api/skills/code-review": () => ({
+        body: reads++ === 0 ? skillWrittenDetail : { ...skillWrittenDetail, version: 3, content: "Another admin's text.\n" },
+      }),
+      "PUT /api/admin/skills/code-review": { status: 409, body: { error: "this skill changed since you opened it" } },
+    });
+    const { client } = renderApp("/skills/view/code-review");
+    const text = await screen.findByLabelText("Skill text");
+    await userEvent.type(text, "mine");
+    // The skill is read again (window focus, or another admin's save).
+    await client.invalidateQueries({ queryKey: ["skill", "code-review"] });
+    await vi.waitFor(() => expect(fake.find("GET", "/api/skills/code-review")).toHaveLength(2));
+    expect(screen.getByLabelText("Skill text")).toHaveValue(skillWrittenDetail.content + "mine");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    const [put] = fake.find("PUT", "/api/admin/skills/code-review");
+    expect(put.body).toEqual({ content: skillWrittenDetail.content + "mine", version: 2 });
+    expect(await screen.findByRole("alert")).toHaveTextContent("this skill changed since you opened it");
+  });
+
+  it("a second save names the version the first one made", async () => {
+    let version = 2;
+    const fake = fakeApi({
+      "GET /api/me": { body: platformAdmin },
+      "GET /api/skills/code-review": () => ({ body: { ...skillWrittenDetail, version } }),
+      "PUT /api/admin/skills/code-review": () => ({ body: { version: ++version } }),
+    });
+    renderApp("/skills/view/code-review");
+    await userEvent.type(await screen.findByLabelText("Skill text"), "a");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("Saved as v3.");
+    await userEvent.type(screen.getByLabelText("Skill text"), "b");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("Saved as v4.");
+    expect(fake.find("PUT", "/api/admin/skills/code-review").map((c) => (c.body as { version: number }).version)).toEqual([2, 3]);
+  });
+
+  it("opens a skill named like a page, such as install", async () => {
+    fakeApi({
+      "GET /api/me": { body: viewer },
+      "GET /api/skills/install": { body: { ...skillWrittenDetail, name: "install", content: "Install text.\n" } },
+    });
+    renderApp("/skills/view/install");
+    expect((await screen.findByText(/Install text\./)).tagName).toBe("PRE");
+  });
+
   it("an installed skill is read-only for an admin, who can copy it", async () => {
     fakeApi({ "GET /api/me": { body: platformAdmin }, "GET /api/skills/security-review": { body: skillInstalledDetail } });
-    renderApp("/skills/security-review");
+    renderApp("/skills/view/security-review");
     const pre = await screen.findByText(/Look for security bugs\./);
     expect(pre.tagName).toBe("PRE");
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
@@ -127,7 +175,7 @@ describe("SkillEditor: one skill", () => {
       "GET /api/skills/code-review": { body: skillWrittenDetail },
       "GET /api/skills/code-review/versions/1": { body: old },
     });
-    renderApp("/skills/code-review");
+    renderApp("/skills/view/code-review");
     const history = await screen.findByRole("region", { name: "Versions" });
     expect(within(history).getAllByRole("button", { name: /^View v/ })).toHaveLength(2);
     await userEvent.click(within(history).getByRole("button", { name: "View v1" }));
@@ -137,7 +185,7 @@ describe("SkillEditor: one skill", () => {
 
   it("says so for a skill that is not in the library", async () => {
     fakeApi({ "GET /api/me": { body: viewer } });
-    renderApp("/skills/nope");
+    renderApp("/skills/view/nope");
     expect(await screen.findByRole("heading", { name: "Not found" })).toBeInTheDocument();
   });
 });

@@ -54,8 +54,7 @@ export default function App() {
             </AdminOnly>
           }
         />
-        {/* skills/install and skills/updates (admin pages) rank above :name. */}
-        <Route path="skills/:name" element={<SkillEditor />} />
+        <Route path="skills/view/:name" element={<SkillEditor />} />
         <Route
           path="integrations"
           element={
