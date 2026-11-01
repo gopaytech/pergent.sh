@@ -491,3 +491,47 @@ func TestInputsViewTurnedOnMalformedSkill(t *testing.T) {
 	e.clock.advance(6 * time.Minute)
 	e.wantStatus(c, target, http.StatusBadGateway)
 }
+
+// Clearing a list never meets the budget: a nil list chooses no skills, and
+// the store would read it as "the default list" if it were asked. A default
+// list that grew over the budget by edits can be cleared, and so can a
+// repository's own list, back to the default list.
+func TestClearingSkillsIgnoresBudget(t *testing.T) {
+	e := newEnv(t, nil)
+	e.skill("a", "x")
+	e.skill("b", "y")
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	admin := e.signInGitLab(true, "acme/gadgets")
+	overBudget := func() {
+		t.Helper()
+		if err := e.st.PutRepoDefaults(ctx, store.RepoDefaults{Skills: []string{"a", "b"}}); err != nil {
+			t.Fatal(err)
+		}
+		// Edits grew the two skills past the budget since the list was saved.
+		e.exec(`UPDATE library_skills SET content = repeat('x', 600 * 1024)`)
+	}
+
+	for _, body := range []string{`{"skills":null}`, `{"skills":[]}`} {
+		overBudget()
+		// Saving the same over-budget list is still refused.
+		wantCode(t, e.send(admin, "PUT", "/api/admin/defaults", `{"skills":["a","b"]}`), "PUT the over-budget list", http.StatusBadRequest)
+		wantCode(t, e.send(admin, "PUT", "/api/admin/defaults", body), "PUT "+body, http.StatusOK)
+		if d, _ := e.st.RepoDefaults(ctx); len(d.Skills) != 0 {
+			t.Errorf("after %s the defaults hold %v", body, d.Skills)
+		}
+	}
+
+	// A repository's null skills (the default list) is not budget-checked
+	// either: it picks nothing, and the default list was checked when it was
+	// saved. A maintainer is never locked out of going back to the defaults.
+	overBudget()
+	target := "/api/repositories/main/acme/gadgets/settings"
+	wantCode(t, e.send(admin, "PUT", target, `{"skills":["a","b"]}`), "PUT the over-budget repository list", http.StatusBadRequest)
+	e.exec(`UPDATE library_skills SET content = 'x'`)
+	wantCode(t, e.send(admin, "PUT", target, `{"skills":["a"]}`), "set", http.StatusOK)
+	overBudget()
+	wantCode(t, e.send(admin, "PUT", target, `{"skills":null}`), "PUT null", http.StatusOK)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.Skills != nil {
+		t.Errorf("repository skills = %v after null", r.Skills)
+	}
+}

@@ -146,8 +146,13 @@ func skillMissing(err error) (string, bool) {
 
 // checkSkillBudget says (as the 400's message) when the texts of the named
 // library skills alone are over what a review takes; "" when they fit. A
-// name the library lacks counts for nothing: the save names it.
+// name the library lacks counts for nothing: the save names it. An empty
+// list picks nothing and always fits: the store reads a nil list as "the
+// default list", which is not what clearing one means.
 func (d *Dashboard) checkSkillBudget(r *http.Request, names []string) (msg string, err error) {
+	if len(names) == 0 {
+		return "", nil
+	}
 	total, err := d.Store.LibrarySize(r.Context(), names)
 	if err != nil {
 		return "", err
