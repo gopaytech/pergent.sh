@@ -3,6 +3,7 @@
 //
 //	pergent-sh serve [--config /etc/pergent-sh/config.yaml]
 //	pergent-sh admin reset-password <username>
+//	pergent-sh fetch-skills --dir <clone> --path <folder> --commit-file <file> --error-file <file> --result-url <url>
 //
 // serve needs DATABASE_URL and PERGENT_SH_SECRET_KEY in the environment, plus
 // the LLM key, the GitLab tokens, the GitHub App private keys (or approve
@@ -13,6 +14,10 @@
 // admin reset-password gives a dashboard password account a new random
 // password, printed on stdout, which must be changed at the next sign-in. It
 // needs only DATABASE_URL.
+//
+// fetch-skills runs in a skill fetch Job, not in the pergent.sh pod: it
+// posts the skills of a clone of a public URL back to pergent.sh. It needs
+// only PERGENT_SH_FETCH_TOKEN.
 package main
 
 import (
@@ -34,15 +39,16 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/gopaytech/pergent.sh/internal/callback"
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/dashboard"
 	"github.com/gopaytech/pergent.sh/internal/engine"
 	"github.com/gopaytech/pergent.sh/internal/forge/githubforge"
-	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
 	"github.com/gopaytech/pergent.sh/internal/server"
+	"github.com/gopaytech/pergent.sh/internal/skillfetch"
 	"github.com/gopaytech/pergent.sh/internal/store"
 	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
@@ -64,7 +70,11 @@ const (
 	// than commandRetention are deleted.
 	commandPruneEvery = time.Hour
 	commandRetention  = 90 * 24 * time.Hour
-	usage             = "usage: pergent-sh serve [--config <path>]\n       pergent-sh admin reset-password <username>"
+	// fetchSweepEvery is how often skill fetches that never ended are failed
+	// and expired ones deleted.
+	fetchSweepEvery = time.Minute
+	usage           = "usage: pergent-sh serve [--config <path>]\n       pergent-sh admin reset-password <username>\n" +
+		"       pergent-sh fetch-skills --dir <clone> [--path <folder>] --commit-file <file> --error-file <file> --result-url <url>"
 )
 
 func main() {
@@ -80,8 +90,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	if cmd.name == "reset-password" {
+	switch cmd.name {
+	case "reset-password":
 		os.Exit(resetPassword(ctx, cmd.username, os.Stdout, os.Stderr))
+	case "fetch-skills":
+		os.Exit(runFetchSkills(ctx, cmd.fetch, os.Stderr))
 	}
 	if err := serve(ctx, cmd.configPath, log); err != nil {
 		log.Error("pergent-sh stopped", "error", err.Error())
@@ -90,15 +103,16 @@ func main() {
 }
 
 // command is what the arguments ask for: name "serve", with configPath,
-// or "reset-password", with username.
+// "reset-password", with username, or "fetch-skills", with fetch.
 type command struct {
 	name       string
 	configPath string
 	username   string
+	fetch      fetchOptions
 }
 
-// parseArgs reads "serve [--config <path>]" or "admin reset-password
-// <username>".
+// parseArgs reads "serve [--config <path>]", "admin reset-password
+// <username>" or "fetch-skills <flags>".
 func parseArgs(args []string, stderr io.Writer) (cmd command, err error) {
 	if len(args) == 0 {
 		return command{}, errors.New(usage)
@@ -120,6 +134,12 @@ func parseArgs(args []string, stderr io.Writer) (cmd command, err error) {
 			return command{}, errors.New(usage)
 		}
 		return command{name: "reset-password", username: args[2]}, nil
+	case "fetch-skills":
+		o, err := parseFetchArgs(args[1:], stderr)
+		if err != nil {
+			return command{}, err
+		}
+		return command{name: "fetch-skills", fetch: o}, nil
 	}
 	return command{}, errors.New(usage)
 }
@@ -132,13 +152,6 @@ func parseArgs(args []string, stderr io.Writer) (cmd command, err error) {
 func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		return err
-	}
-	lib, err := inputs.LoadLibrary(cfg.SkillsDir)
-	if err != nil {
-		return fmt.Errorf("skill library %s: %w", cfg.SkillsDir, err)
-	}
-	if err := checkSkills(cfg, lib); err != nil {
 		return err
 	}
 	if err := checkDashboardEnv(cfg); err != nil {
@@ -169,6 +182,9 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	}
 	defer st.Close()
 	if err := st.Migrate(ctx); err != nil {
+		return err
+	}
+	if err := checkSkills(ctx, cfg, st, log); err != nil {
 		return err
 	}
 	if cfg.DashboardEnabled() {
@@ -202,24 +218,38 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		return fmt.Errorf("kubernetes client: %w", err)
 	}
 
+	launcher := &kube.Launcher{Client: clientset, Namespace: cfg.Jobs.Namespace}
 	eng := &engine.Engine{
 		Store:          st,
 		Config:         cfg,
 		Instances:      reg,
 		Platforms:      conn.platforms,
 		WebhookSecrets: conn.gitlabHooks,
-		Launcher:       &kube.Launcher{Client: clientset, Namespace: cfg.Jobs.Namespace},
-		Library:        lib,
+		Launcher:       launcher,
 		Box:            box,
 		Log:            log,
 		// An instance removed in the dashboard is taken out of use once the
 		// engine has finished removing it.
 		OnInstanceRemoved: conn.Disconnect,
 	}
+	var (
+		fetcher      *skillfetch.Fetcher
+		fetchResults callback.FetchResults
+	)
+	if cfg.DashboardEnabled() {
+		// Skills are installed from a connected instance's repositories with
+		// its review bot or App, the reader the dashboard has for it, and
+		// from a public URL by a Job, which needs pergent.sh's own image
+		// (PERGENT_SH_IMAGE, set by the chart) to send them back.
+		fetcher = &skillfetch.Fetcher{Store: st, Readers: conn.sourceReader, Secrets: reg.HeldSecrets,
+			CallbackBase: cfg.CallbackURL, Now: time.Now, Log: log,
+			Launcher: launcher, Namespace: cfg.Jobs.Namespace, GitImage: cfg.Jobs.Image, Image: os.Getenv("PERGENT_SH_IMAGE")}
+		fetchResults = fetcher
+	}
 	dash, err := newDashboard(dashboard.Options{
-		Config: cfg, Instances: reg, Connector: conn, Store: st, SecretKey: key, Log: log, Library: lib,
+		Config: cfg, Instances: reg, Connector: conn, Store: st, SecretKey: key, Log: log,
 		Sources: conn.sources, Catalogs: conn.catalogs, ReconcileSoon: eng.ReconcileSoon,
-		Wake: eng.Wake,
+		Wake: eng.Wake, Fetcher: fetcher,
 	})
 	if err != nil {
 		return err
@@ -234,7 +264,8 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	}
 	handler := server.Routes(server.Deps{
 		Config: cfg, Instances: reg, WebhookSecrets: conn.gitlabHooks, GitHubWebhookSecrets: conn.githubHooks,
-		Store: st, Bots: commandBots(conn.platforms), Wake: eng.Wake, Dashboard: dashboardHandler(dash), Log: log,
+		Store: st, Bots: commandBots(conn.platforms), Wake: eng.Wake, Dashboard: dashboardHandler(dash),
+		SkillFetches: fetchResults, Log: log,
 	})
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
@@ -254,6 +285,8 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	if dash != nil {
 		prune := pruneSessions(dash.Auth.PruneSessions, time.Now, log)
 		loops = append(loops, func(ctx context.Context) { every(ctx, sessionPruneEvery, prune) })
+		sweep := sweepFetches(fetcher.Sweep, log)
+		loops = append(loops, func(ctx context.Context) { every(ctx, fetchSweepEvery, sweep) })
 	}
 	return serveUntilDone(ctx, ln, handler, together(loops...), log)
 }
@@ -316,6 +349,17 @@ func pruneSessions(prune func(context.Context, time.Time) (int, error), now func
 			log.Warn("couldn't prune dashboard sessions", "error", err.Error())
 		case n > 0:
 			log.Info("pruned dashboard sessions", "sessions", n)
+		}
+	}
+}
+
+// sweepFetches returns a pass that fails the skill fetches that never ended
+// and deletes the expired ones (sweep is skillfetch.Fetcher.Sweep). It only
+// touches the database; a failure is logged and tried again next time.
+func sweepFetches(sweep func(context.Context) error, log *slog.Logger) func(context.Context) {
+	return func(ctx context.Context) {
+		if err := sweep(ctx); err != nil && ctx.Err() == nil {
+			log.Warn("couldn't sweep the skill fetches", "error", err.Error())
 		}
 	}
 }
@@ -419,18 +463,41 @@ func serveUntilDone(ctx context.Context, ln net.Listener, handler http.Handler, 
 	return serveErr
 }
 
-// checkSkills makes sure every skill a repository picks is in the library.
-func checkSkills(cfg *config.Config, lib inputs.Library) error {
-	var errs []error
+// attSkillMissing is the "Needs attention" kind of a repository that names a
+// skill the library lacks (the engine records the same kind).
+const attSkillMissing = "skill_missing"
+
+// skillChecker is the part of the store checkSkills reads and writes.
+type skillChecker interface {
+	ResolveLibrary(ctx context.Context, names []string) (store.ResolvedLibrary, error)
+	SetAttention(ctx context.Context, instance, project, kind, message string) error
+}
+
+// checkSkills looks for a skill a config repository names that the library
+// lacks and lists it under "Needs attention" (skill_missing, the reason the
+// engine gives when a run fails for it). It never stops startup: the library
+// is edited in the dashboard, so a skill can be added later, and a repository
+// whose skill is missing fails its own runs. A store error is logged.
+func checkSkills(ctx context.Context, cfg *config.Config, st skillChecker, log *slog.Logger) error {
 	for _, repo := range cfg.Repositories {
-		for _, name := range repo.Skills {
-			if _, ok := lib[name]; !ok {
-				errs = append(errs, fmt.Errorf("repository %s on instance %q: skill %q is not in the skill library %s",
-					repo.Project, repo.Instance(), name, cfg.SkillsDir))
-			}
+		if repo.Skills == nil {
+			continue // the default list is checked when the admin saves it
+		}
+		resolved, err := st.ResolveLibrary(ctx, repo.Skills)
+		if err != nil {
+			log.Warn("couldn't check the skills of a repository", "instance", repo.Instance(), "project", repo.Project, "error", err.Error())
+			continue
+		}
+		if len(resolved.Missing) == 0 {
+			continue
+		}
+		reason := fmt.Sprintf("skill %q is not in the skill library", resolved.Missing[0])
+		log.Warn("a repository names a skill the library lacks", "instance", repo.Instance(), "project", repo.Project, "skill", resolved.Missing[0])
+		if err := st.SetAttention(ctx, repo.Instance(), repo.Project, attSkillMissing, reason); err != nil {
+			log.Warn("couldn't record a missing skill for the dashboard", "instance", repo.Instance(), "project", repo.Project, "error", err.Error())
 		}
 	}
-	return errors.Join(errs...)
+	return nil
 }
 
 // kubeConfig is the in-cluster config or, outside a cluster, the kubeconfig

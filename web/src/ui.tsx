@@ -2,7 +2,7 @@
 // React as a child, so it is shown as text: no HTML is ever built from it.
 import type { ReactNode } from "react";
 
-import { ApiError, safeHref, type Outcome, type SecretView } from "./api";
+import { ApiError, safeHref, type Outcome, type SecretView, type SkillSource } from "./api";
 
 // CenteredCard is the page the signed-out and gated screens (sign-in,
 // password change, waiting) show: one card on the dark background.
@@ -36,6 +36,7 @@ const outcomes: Record<Outcome, [Tone, string]> = {
   no_blocking: ["ok", "Not approved"],
   failed: ["warn", "Failed"],
   superseded: ["grey", "Superseded"],
+  skipped: ["grey", "Not reviewed"],
   unknown: ["grey", "Unknown"],
 };
 
@@ -52,6 +53,7 @@ export const outcomeOptions: [Outcome, string][] = [
   ["running", "Running"],
   ["failed", "Failed"],
   ["superseded", "Superseded"],
+  ["skipped", "Not reviewed"],
   ["unknown", "Unknown"],
 ];
 
@@ -80,6 +82,42 @@ export function ago(t: string, now = Date.now()): string {
 export function secretText(s: SecretView): string {
   if (!s.set) return "not set";
   return s.updatedAt ? `set · changed ${ago(s.updatedAt)}` : "set";
+}
+
+// bytesText is a size in bytes as "52 B" or "12.5 KiB".
+export function bytesText(n: number): string {
+  if (n < 1024) return `${n} B`;
+  return `${(n / 1024).toFixed(1).replace(/\.0$/, "")} KiB`;
+}
+
+// SkillSourceText says where a library skill came from: written in the
+// dashboard, a repository on a connected instance (a private one the viewer
+// can't see is only named by its instance), or a public URL. Every part is
+// text.
+export function SkillSourceText({ source }: { source: SkillSource | null }) {
+  if (!source) return <>written in the dashboard</>;
+  const where =
+    source.kind === "url"
+      ? source.url
+      : source.hidden
+        ? `a private repository on ${source.instance}`
+        : `${source.repo} on ${source.instance}`;
+  return (
+    <>
+      <span>{where}</span> <span className="src">{source.ref}</span>
+    </>
+  );
+}
+
+// skillOrigin says where a skill a review used came from: "library v3" (the
+// version the review used, none when it wasn't recorded), "repo (.claude/skills)"
+// for a repository folder, "repo" for a run from before the folders, and
+// "source not recorded" for null.
+export function skillOrigin(source: string | null, version: number): string {
+  if (source === null || source === "") return "source not recorded";
+  if (source === "library") return version > 0 ? `library v${version}` : "library";
+  if (source === "repo") return "repo";
+  return `repo (${source})`;
 }
 
 // duration is seconds as "3m 41s".

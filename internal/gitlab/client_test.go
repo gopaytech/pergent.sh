@@ -171,6 +171,48 @@ func TestGetFileNotFound(t *testing.T) {
 	}
 }
 
+func TestCommitSHA(t *testing.T) {
+	c, reqs := serve(t, jsonReply(map[string]any{"id": "0123456789abcdef0123456789abcdef01234567", "short_id": "0123456"}))
+	sha, err := c.CommitSHA(context.Background(), 7, "release/v1.0")
+	if err != nil || sha != "0123456789abcdef0123456789abcdef01234567" {
+		t.Fatalf("sha=%q err=%v", sha, err)
+	}
+	// The ref is one path segment: its slash is escaped.
+	expect(t, (*reqs)[0], "GET", "/api/v4/projects/7/repository/commits/release%2Fv1.0", "")
+
+	missing, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, "nope", 404) })
+	if _, err := missing.CommitSHA(context.Background(), 7, "nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	empty, _ := serve(t, jsonReply(map[string]any{"short_id": "x"}))
+	if _, err := empty.CommitSHA(context.Background(), 7, "main"); err == nil {
+		t.Fatal("a reply with no commit id must be an error")
+	}
+}
+
+func TestGetFileMaxIsBounded(t *testing.T) {
+	big := strings.Repeat("x", 4096)
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(big)) })
+	if b, ok, err := c.GetFileMax(context.Background(), 7, "a.md", "sha", 4096); err != nil || !ok || len(b) != 4096 {
+		t.Fatalf("at the limit: len=%d ok=%v err=%v", len(b), ok, err)
+	}
+	b, ok, err := c.GetFileMax(context.Background(), 7, "a.md", "sha", 4095)
+	if !errors.Is(err, ErrTooLarge) || ok || b != nil {
+		t.Fatalf("over the limit: len=%d ok=%v err=%v, want ErrTooLarge", len(b), ok, err)
+	}
+	// An oversize file is not retried.
+	var n int
+	c2, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { n++; _, _ = w.Write([]byte(big)) })
+	_, _, _ = c2.GetFileMax(context.Background(), 7, "a.md", "sha", 10)
+	if n != 1 {
+		t.Fatalf("requests = %d, want 1", n)
+	}
+	// GetFile keeps its own, larger bound.
+	if b, ok, err := c.GetFile(context.Background(), 7, "a.md", "sha"); err != nil || !ok || len(b) != 4096 {
+		t.Fatalf("GetFile: len=%d ok=%v err=%v", len(b), ok, err)
+	}
+}
+
 func TestListTreePaginates(t *testing.T) {
 	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

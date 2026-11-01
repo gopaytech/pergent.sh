@@ -34,6 +34,8 @@ type RunDigest struct {
 	// decision's ("", "", false before one).
 	OutcomeReason, DecisionStatus string
 	Approved                      bool
+	// SkipReason is why a Skipped run was skipped; "" for any other run.
+	SkipReason string
 }
 
 // ReviewCursor is where a page of ReviewDigests starts: after the review
@@ -103,12 +105,15 @@ func visibleCond(v Visibility, n int) (string, []any) {
 // outcomeSQL is run r's outcome: the recorded decision's once it is
 // published, otherwise what its state says. A published run without a
 // recorded decision (published before decisions were recorded) is
-// "unknown": nothing is guessed.
+// "unknown": nothing is guessed. A skipped run (no skills) has its own
+// outcome, "skipped": it was not reviewed, and it is neither running,
+// failed nor superseded.
 const outcomeSQL = `(CASE r.state
 	WHEN 'queued' THEN 'running'
 	WHEN 'running' THEN 'running'
 	WHEN 'reported' THEN CASE WHEN r.failure_reason <> '' THEN 'failed' ELSE 'running' END
 	WHEN 'superseded' THEN 'superseded'
+	WHEN 'skipped' THEN 'skipped'
 	WHEN 'publish_failed' THEN 'failed'
 	ELSE COALESCE(NULLIF(r.outcome, ''), 'unknown') END)`
 
@@ -124,7 +129,7 @@ const digestColumns = `r.id::text, r.instance, r.project_id, r.mr_iid, r.project
 		  AND lower(t.project_path) = lower(r.project_path)
 		ORDER BY t.created_at DESC, t.id DESC LIMIT 1), ''),
 	r.source_branch, r.author, r.created_at, r.dispatched_at, r.reported_at, r.updated_at,
-	` + outcomeSQL + `, r.outcome_reason, r.decision_status, r.approved`
+	` + outcomeSQL + `, r.outcome_reason, r.decision_status, r.approved, r.skip_reason`
 
 // reviewDigestsSQL lists the newest run of each merge request, read through
 // runs_project_updated_idx: only the runs of the visible projects (visible,
@@ -143,16 +148,16 @@ func reviewDigestsSQL(visible string) string {
 	LIMIT $5`
 }
 
-// runStatsSQL counts the runs started since $1 that aren't superseded, per
-// project, by outcome, through runs_project_created_idx; visible is from
-// visibleCond with n = 2.
+// runStatsSQL counts the runs started since $1 that were reviewed or are
+// being (not superseded, not skipped), per project, by outcome, through
+// runs_project_created_idx; visible is from visibleCond with n = 2.
 func runStatsSQL(visible string) string {
 	return `SELECT r.instance, lower(r.project_path), count(*),
 		count(*) FILTER (WHERE r.state = 'published' AND r.approved),
 		count(*) FILTER (WHERE ` + outcomeSQL + ` = 'blocking'),
 		count(*) FILTER (WHERE ` + outcomeSQL + ` = 'failed')
 	FROM runs r
-	WHERE r.created_at >= $1 AND r.state <> 'superseded'` + visible + `
+	WHERE r.created_at >= $1 AND r.state NOT IN ('superseded', 'skipped')` + visible + `
 	GROUP BY r.instance, lower(r.project_path)`
 }
 
@@ -172,7 +177,7 @@ func (s *Store) queryDigests(ctx context.Context, sql string, args ...any) ([]Ru
 		if err := rows.Scan(&d.ID, &d.MR.Instance, &d.MR.ProjectID, &d.MR.IID, &d.ProjectPath, &d.HeadSHA, &d.BaseSHA,
 			&d.TargetBranch, &state, &d.FailureReason, &d.Title, &d.WebURL, &d.SourceBranch, &d.Author,
 			&d.CreatedAt, &dispatched, &rep, &d.UpdatedAt, &d.Outcome, &d.OutcomeReason, &d.DecisionStatus,
-			&d.Approved); err != nil {
+			&d.Approved, &d.SkipReason); err != nil {
 			return nil, err
 		}
 		d.State = RunState(state)
@@ -208,7 +213,7 @@ type RunCounts struct {
 }
 
 // RunStats counts the runs v lets be read started at or after since that
-// aren't superseded, by project. Approved counts the runs the approve bot
+// weren't superseded or skipped, by project. Approved counts the runs the approve bot
 // approved, also when the approval was withdrawn later.
 func (s *Store) RunStats(ctx context.Context, v Visibility, since time.Time) (map[PathKey]RunCounts, error) {
 	out := map[PathKey]RunCounts{}

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -338,6 +339,87 @@ func (r *Registry) Secrets(ctx context.Context, name string) (s Secrets, unopene
 		}
 	}
 	return s, unopened, nil
+}
+
+// HeldSecrets returns every secret value pergent.sh holds: each set field of
+// every instance's Secrets, every LLM key (LLMKeys), PERGENT_SH_SECRET_KEY
+// and the password of DATABASE_URL. It is what a skill's
+// text is checked against, so no secret enters the library, and the check
+// must fail closed: a dashboard instance's secrets that can't be read from
+// the store, or can't be opened, are an error and the caller must refuse
+// what it was checking. A config instance's secrets are its env vars, read
+// one by one: one that is unset holds nothing.
+func (r *Registry) HeldSecrets(ctx context.Context) ([]string, error) {
+	var out []string
+	for _, inst := range r.All() {
+		if inst.Source == SourceConfig {
+			out = append(out, configSecretValues(inst, r.cfg.DashboardEnabled())...)
+			continue
+		}
+		s, unopened, err := r.Secrets(ctx, inst.Name)
+		if err != nil {
+			return nil, fmt.Errorf("held secrets: %w", err)
+		}
+		if len(unopened) > 0 {
+			return nil, fmt.Errorf("held secrets: instance %q: %d stored secrets can't be opened", inst.Name, len(unopened))
+		}
+		out = slices.AppendSeq(out, maps.Values(s.Fields()))
+	}
+	out = append(out, r.LLMKeys()...)
+	out = append(out, envValue("PERGENT_SH_SECRET_KEY"))
+	out = append(out, databasePasswords(envValue("DATABASE_URL"))...)
+	out = slices.DeleteFunc(out, func(v string) bool { return v == "" })
+	slices.Sort(out)
+	return slices.Compact(out), nil
+}
+
+// databasePasswords is the password in the database URL, as typed and as it
+// is written in the URL, or nothing when there is none. A URL that can't be
+// read adds nothing, and its parse error, which holds the URL, is dropped.
+func databasePasswords(dbURL string) []string {
+	u, err := url.Parse(dbURL)
+	if err != nil || u.User == nil {
+		return nil
+	}
+	pass, ok := u.User.Password()
+	if !ok || pass == "" {
+		return nil
+	}
+	out := []string{pass}
+	if _, escaped, found := strings.Cut(u.User.String(), ":"); found && escaped != pass {
+		out = append(out, escaped)
+	}
+	return out
+}
+
+// configSecretValues are the values of the env vars a config instance names
+// for its secrets, those that are set.
+func configSecretValues(inst Instance, dashboard bool) []string {
+	var envs []string
+	switch {
+	case inst.GitLab != nil:
+		g := inst.GitLab
+		envs = []string{g.ReviewTokenEnv, g.ApproveTokenEnv, g.WebhookSecretEnv}
+		if dashboard {
+			envs = append(envs, g.OAuthClientSecretEnv)
+		}
+	case inst.GitHub != nil:
+		g := inst.GitHub
+		envs = []string{g.ReviewApp.PrivateKeyEnv, g.ApproveTokenEnv, g.WebhookSecretEnv}
+		if g.ApproveApp != nil {
+			envs = append(envs, g.ApproveApp.PrivateKeyEnv)
+		}
+		if dashboard {
+			envs = append(envs, g.OAuthClientSecretEnv)
+		}
+	}
+	var out []string
+	for _, env := range envs {
+		if v := envValue(env); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func (r *Registry) configSecrets(inst Instance) (Secrets, error) {

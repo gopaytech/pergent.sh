@@ -95,6 +95,9 @@ var (
 	ErrNotFound = errors.New("gitlab: not found")
 	// ErrHeadMoved is returned by Approve when the MR head is no longer the given SHA.
 	ErrHeadMoved = errors.New("gitlab: merge request head moved")
+	// ErrTooLarge is returned when a reply is bigger than the limit set for
+	// the request. It is not retried.
+	ErrTooLarge = errors.New("gitlab: response too large")
 )
 
 const maxErrorBody = 200

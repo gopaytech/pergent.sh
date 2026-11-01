@@ -27,9 +27,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
-	"github.com/gopaytech/pergent.sh/internal/inputs"
+	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
+	"github.com/gopaytech/pergent.sh/internal/skillfetch"
 	"github.com/gopaytech/pergent.sh/internal/store"
 	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
@@ -230,6 +231,11 @@ type fakeGitLab struct {
 	// none) wait slow, or until the request ends.
 	slowFrom int
 	slow     time.Duration
+	// projectSlow makes GET /projects/:path wait that long (or until the
+	// request ends) first; projectStatus, when set, is the status it
+	// answers instead of the project.
+	projectSlow   time.Duration
+	projectStatus int
 	// tokenSlow makes POST /oauth/token wait that long first.
 	tokenSlow time.Duration
 	username  string // user 9's username (default alice)
@@ -314,6 +320,16 @@ func (f *fakeGitLab) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if strings.HasPrefix(p, "/api/v4/projects/") {
+		f.mu.Lock()
+		slow := f.projectSlow
+		f.mu.Unlock()
+		select {
+		case <-time.After(slow):
+		case <-r.Context().Done():
+			return
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	switch {
@@ -332,6 +348,10 @@ func (f *fakeGitLab) serve(w http.ResponseWriter, r *http.Request) {
 		f.listProjects(w, r)
 	case strings.HasPrefix(p, "/api/v4/projects/"):
 		f.checks++
+		if f.projectStatus != 0 {
+			reply(w, f.projectStatus, map[string]any{"message": "failing"})
+			return
+		}
 		path, _ := url.PathUnescape(strings.TrimPrefix(p, "/api/v4/projects/"))
 		// GitLab finds a project whatever the case of its path.
 		for key, body := range f.projects {
@@ -531,9 +551,10 @@ type env struct {
 	st  *store.Store
 	db  *pgxpool.Pool // the store's schema, for raw SQL
 	cfg *config.Config
-	lib inputs.Library
 	src map[string]*fakeSource  // by instance
 	cat map[string]*fakeCatalog // by instance
+	// readers are the instances' readers of skill sources.
+	readers map[string]*fakeReader
 	// reconciles counts the dashboard's ReconcileSoon calls; reconciled
 	// lists the instance/project each named.
 	reconciles atomic.Int32
@@ -587,13 +608,10 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 		mutate(cfg)
 	}
 	e := &env{t: t, st: st, db: db, cfg: cfg, gl: gl, gh: gh, logs: &lockedBuffer{}, key: testKey(t),
-		clock: &clock{t: time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)},
-		lib: inputs.Library{
-			"code-review": []byte("---\nname: code-review\n---\nReview the code.\n"),
-			"style":       []byte("---\nname: style\n---\nCheck the style.\n"),
-		},
-		src: map[string]*fakeSource{"main": newFakeSource(), "gh": newFakeSource()},
-		cat: map[string]*fakeCatalog{"main": {}, "gh": {}},
+		clock:   &clock{t: time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)},
+		src:     map[string]*fakeSource{"main": newFakeSource(), "gh": newFakeSource()},
+		cat:     map[string]*fakeCatalog{"main": {}, "gh": {}},
+		readers: map[string]*fakeReader{"main": {repos: map[string]*fakeRepo{}}, "gh": {repos: map[string]*fakeRepo{}}},
 	}
 	sources := syncmap.New[RepoSource](nil)
 	for name, s := range e.src {
@@ -608,17 +626,24 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 		t.Fatal(err)
 	}
 	e.reg, e.sources, e.catalogs = instances.New(cfg, st, box), sources, catalogs
+	e.reg.SetLog(slog.New(slog.NewTextHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	e.conn = newFakeConnector(sources, catalogs)
+	log := slog.New(slog.NewTextHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	fetcher := &skillfetch.Fetcher{Store: st, Secrets: e.reg.HeldSecrets, Now: e.clock.now, Log: log,
+		Readers: func(instance string) (forge.SourceReader, bool) {
+			r, ok := e.readers[instance]
+			return r, ok
+		}}
 	d, err := New(Options{
-		Config: cfg, Store: st, SecretKey: e.key, Now: e.clock.now, Library: e.lib, Sources: sources,
-		Instances: e.reg, Connector: e.conn,
+		Config: cfg, Store: st, SecretKey: e.key, Now: e.clock.now, Sources: sources,
+		Instances: e.reg, Connector: e.conn, Fetcher: fetcher,
 		Catalogs: catalogs, Wake: func() { e.wakes.Add(1) }, ReconcileSoon: func(instance, project string) {
 			e.reconciles.Add(1)
 			e.mu.Lock()
 			e.reconciled = append(e.reconciled, instance+"/"+project)
 			e.mu.Unlock()
 		},
-		Log: slog.New(slog.NewTextHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Log: log,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -642,6 +667,14 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 	})))
 	e.h = mux
 	return e
+}
+
+// skill adds a skill written in the dashboard to the library, as version 1.
+func (e *env) skill(name, content string) {
+	e.t.Helper()
+	if _, err := e.st.CreateLibrarySkill(ctx, store.NewSkill{Name: name, Content: content, Actor: "seed", At: e.clock.now()}); err != nil {
+		e.t.Fatal(err)
+	}
 }
 
 // signInProviders sets up sign-in for the OAuth clients the config's

@@ -15,22 +15,48 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/dashboard"
-	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/server"
+	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
-func TestCheckSkills(t *testing.T) {
-	cfg := &config.Config{SkillsDir: "/skills", Repositories: []config.Repository{
-		{GitLab: "main", Project: "acme/widgets", Skills: []string{"security"}},
-		{GitLab: "main", Project: "acme/gadgets"},
-	}}
-	if err := checkSkills(cfg, inputs.Library{"security": nil}); err != nil {
-		t.Errorf("checkSkills = %v, want nil", err)
+// A skill a config repository names that the library lacks never stops
+// startup: it is recorded under "Needs attention" as skill_missing, for the
+// repository's own instance, whichever platform it is on. A repository whose
+// skills are all there, or that names none, gets no item.
+func TestUnknownConfigSkillDoesNotStopStartup(t *testing.T) {
+	_, st := testDatabaseURL(t)
+	ctx := context.Background()
+	if _, err := st.CreateLibrarySkill(ctx, store.NewSkill{Name: "security", Content: "Look for security problems.", Actor: "test", At: time.Now()}); err != nil {
+		t.Fatal(err)
 	}
-	err := checkSkills(cfg, inputs.Library{"style": nil})
-	if err == nil || !strings.Contains(err.Error(), `skill "security"`) || !strings.Contains(err.Error(), "acme/widgets") {
-		t.Errorf("checkSkills = %v, want an error naming the skill and repository", err)
+	cfg := &config.Config{Repositories: []config.Repository{
+		{GitLab: "main", Project: "acme/widgets", Skills: []string{"security", "gone"}},
+		{GitHub: "gh", Project: "acme/gadgets", Skills: []string{"security", "also-gone"}},
+		{GitLab: "main", Project: "acme/fine", Skills: []string{"security"}},
+		{GitLab: "main", Project: "acme/default"},
+	}}
+	if err := checkSkills(ctx, cfg, st, slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatalf("checkSkills = %v, want nil: a missing skill never stops startup", err)
+	}
+
+	items, err := st.Attention(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]store.Attention{}
+	for _, a := range items {
+		got[a.Instance+" "+a.Project] = a
+	}
+	if len(got) != 2 {
+		t.Errorf("attention = %+v, want exactly the 2 repositories with a missing skill", items)
+	}
+	for key, skill := range map[string]string{"main acme/widgets": "gone", "gh acme/gadgets": "also-gone"} {
+		a, ok := got[key]
+		want := `skill "` + skill + `" is not in the skill library`
+		if !ok || a.Kind != "skill_missing" || a.Message != want {
+			t.Errorf("attention for %s = %+v, want skill_missing %q", key, a, want)
+		}
 	}
 }
 
@@ -80,18 +106,6 @@ func TestServeUntilDoneAnswersWhileLoopsBlock(t *testing.T) {
 	case <-loopsStopped:
 	default:
 		t.Errorf("the loops were not stopped")
-	}
-}
-
-// A GitHub repository's missing skill names its instance, whichever platform
-// it is on.
-func TestCheckSkillsGitHub(t *testing.T) {
-	cfg := &config.Config{SkillsDir: "/skills", Repositories: []config.Repository{
-		{GitHub: "gh", Project: "acme/widgets", Skills: []string{"security"}},
-	}}
-	err := checkSkills(cfg, inputs.Library{})
-	if err == nil || !strings.Contains(err.Error(), `instance "gh"`) || strings.Contains(err.Error(), "gitlab") {
-		t.Errorf("checkSkills = %v, want an error naming instance gh", err)
 	}
 }
 
@@ -346,6 +360,21 @@ func TestPruneCommands(t *testing.T) {
 	pruneCommands(func(context.Context, time.Time) (int, error) { return 0, nil }, time.Now, log)(context.Background())
 	if logs.Len() != 0 {
 		t.Errorf("logged with nothing pruned:\n%s", logs.String())
+	}
+}
+
+// sweepFetches logs a failed sweep as a warning, and nothing else.
+func TestSweepFetches(t *testing.T) {
+	var logs strings.Builder
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	sweepFetches(func(context.Context) error { return errors.New("database down") }, log)(context.Background())
+	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "database down") {
+		t.Errorf("a failed sweep isn't a warning:\n%s", logs.String())
+	}
+	logs.Reset()
+	sweepFetches(func(context.Context) error { return nil }, log)(context.Background())
+	if logs.Len() != 0 {
+		t.Errorf("logged a sweep that worked:\n%s", logs.String())
 	}
 }
 

@@ -72,6 +72,10 @@ var ErrNotFound = errors.New("github: not found")
 // that isn't a rate limit: the credential lacks a permission.
 var ErrForbidden = errors.New("github: forbidden")
 
+// ErrTooLarge is returned when a reply is bigger than the limit set for the
+// request. It is not retried.
+var ErrTooLarge = errors.New("github: response too large")
+
 const maxErrorBody = 200
 
 // APIError is a non-2xx GitHub response. Body is masked (no token) and cut

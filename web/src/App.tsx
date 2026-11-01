@@ -13,7 +13,10 @@ import RepositoryDetail from "./pages/RepositoryDetail";
 import ReviewDetail from "./pages/ReviewDetail";
 import Reviews from "./pages/Reviews";
 import SignIn from "./pages/SignIn";
+import SkillEditor, { NewSkill } from "./pages/SkillEditor";
+import SkillInstall from "./pages/SkillInstall";
 import Skills from "./pages/Skills";
+import SkillUpdates from "./pages/SkillUpdates";
 import Teams from "./pages/Teams";
 import Users from "./pages/Users";
 import { NotFound } from "./ui";
@@ -45,6 +48,31 @@ export default function App() {
         <Route path="repos" element={<Repositories />} />
         <Route path="repos/:instance/*" element={<RepositoryDetail />} />
         <Route path="skills" element={<Skills />} />
+        <Route
+          path="skills/new"
+          element={
+            <AdminOnly>
+              <NewSkill />
+            </AdminOnly>
+          }
+        />
+        <Route
+          path="skills/install"
+          element={
+            <AdminOnly>
+              <SkillInstall />
+            </AdminOnly>
+          }
+        />
+        <Route
+          path="skills/updates"
+          element={
+            <AdminOnly>
+              <SkillUpdates />
+            </AdminOnly>
+          }
+        />
+        <Route path="skills/view/:name" element={<SkillEditor />} />
         <Route
           path="integrations"
           element={

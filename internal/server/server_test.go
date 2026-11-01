@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/instances"
+	"github.com/gopaytech/pergent.sh/internal/skillfetch"
 	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
 
@@ -149,5 +151,41 @@ func TestDashboardResponsesNotCachedNorSniffed(t *testing.T) {
 	rec := status(mux, http.MethodGet, "/api/plain")
 	if ct := rec.Header().Get("Content-Type"); ct == "" {
 		t.Errorf("GET /api/plain has no Content-Type")
+	}
+}
+
+// fetchResults answers every fetch result as stored.
+type fetchResults struct{ calls int }
+
+func (f *fetchResults) CompleteJob(context.Context, string, string, []byte) (skillfetch.JobOutcome, error) {
+	f.calls++
+	return skillfetch.JobStored, nil
+}
+
+func (f *fetchResults) JobTooLarge(context.Context, string, string) error { return nil }
+
+// The fetch callback exists only when skill fetches are set, and takes a
+// bearer token.
+func TestSkillFetchRoute(t *testing.T) {
+	cfg := &config.Config{}
+	post := func(mux *http.ServeMux, auth string) int {
+		req := httptest.NewRequest(http.MethodPost, "/skill-fetches/f1/result", strings.NewReader("{}"))
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := post(Routes(Deps{Config: cfg, Instances: instances.New(cfg, nil, nil)}), "Bearer t"); code != http.StatusNotFound {
+		t.Errorf("without skill fetches = %d; want 404", code)
+	}
+	fr := &fetchResults{}
+	mux := Routes(Deps{Config: cfg, Instances: instances.New(cfg, nil, nil), SkillFetches: fr})
+	if code := post(mux, ""); code != http.StatusUnauthorized || fr.calls != 0 {
+		t.Errorf("no token = %d (%d calls); want 401", code, fr.calls)
+	}
+	if code := post(mux, "Bearer t"); code != http.StatusNoContent || fr.calls != 1 {
+		t.Errorf("with a token = %d (%d calls); want 204", code, fr.calls)
 	}
 }

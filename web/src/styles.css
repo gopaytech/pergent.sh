@@ -1200,3 +1200,125 @@ legend {
 .stack .actions-row .btn {
   margin-top: 12px;
 }
+
+/* --- skill library --- */
+
+.skill-row {
+  border-bottom: 1px solid var(--line);
+}
+
+.skill-row:last-child {
+  border-bottom: 0;
+}
+
+.skill-row .skill {
+  border-bottom: 0;
+}
+
+.skill-row .error {
+  margin: 0 16px 12px;
+}
+
+.skill-row .error ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+a.skill-name {
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+}
+
+a.skill-name:hover {
+  text-decoration: underline;
+}
+
+textarea.skill-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  min-height: 360px;
+  margin-bottom: 8px;
+}
+
+.problem {
+  color: var(--bad);
+  font-size: 12px;
+}
+
+.check.plain {
+  border-top: 0;
+  padding: 0;
+}
+
+.update-row {
+  border-bottom: 1px solid var(--line);
+}
+
+.update-row:last-of-type {
+  border-bottom: 0;
+}
+
+.update-row h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+pre.diff {
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow: auto;
+  max-height: 50vh;
+}
+
+pre.diff span {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+pre.diff .diff-add {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+pre.diff .diff-del {
+  background: var(--bad-soft);
+  color: var(--bad);
+}
+
+/* --- setup checklist --- */
+
+.checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.checklist li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.checklist li:last-child {
+  border-bottom: 0;
+}
+
+.checklist .tick {
+  width: 16px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.checklist li.done .tick {
+  color: var(--ok);
+}
+
+.checklist li.done a {
+  color: var(--muted);
+  text-decoration: line-through;
+}

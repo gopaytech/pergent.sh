@@ -14,6 +14,7 @@ export type Outcome =
   | "no_blocking"
   | "failed"
   | "superseded"
+  | "skipped"
   | "unknown";
 
 // Me is the signed-in account, from GET /api/me. An operator is a password
@@ -62,7 +63,16 @@ export type AttentionView = {
   updatedAt: string;
 };
 
-export type OverviewView = { stats: StatsView; recent: ReviewSummary[]; attention: AttentionView[] };
+// SetupView is the setup checklist of an admin: each item is true once done.
+// The overview's setup is null for everyone else and once all four are done.
+export type SetupView = { llm: boolean; instance: boolean; skill: boolean; repository: boolean };
+
+export type OverviewView = {
+  stats: StatsView;
+  recent: ReviewSummary[];
+  attention: AttentionView[];
+  setup: SetupView | null;
+};
 
 export type ReviewListView = { items: ReviewSummary[]; nextCursor: string };
 
@@ -133,7 +143,13 @@ export type CheckView = { batch: number; section: string; name: string; status: 
 export type SkillView = {
   name: string;
   verdict: "no_blocking_issues" | "has_blocking_issues" | "failed";
-  source: "library" | "repo" | null;
+  // source is "library", the repository folder the skill was read from
+  // (".claude/skills"), "repo" for a run from before the folders, or null
+  // when it wasn't recorded.
+  source: string | null;
+  // version is the library skill's version the review used; 0 for a
+  // repository skill and for a run that didn't record it.
+  version: number;
   // findings are those still standing; dismissed are those set aside.
   findings: FindingView[];
   dismissed: FindingView[];
@@ -180,7 +196,10 @@ export type RepoSettings = {
   approve: SettingView<boolean>;
   reviewDrafts: SettingView<boolean>;
   failureStatus: SettingView<string>;
+  // skills is null for the default list, otherwise the library skills.
   skills: SettingView<string[] | null>;
+  // repoSkills are the detected repository skills turned on.
+  repoSkills: SettingView<string[]>;
   jobTimeoutSeconds: SettingView<number>;
   jobMemory: SettingView<string>;
   rerunLimitPerMR: SettingView<number>;
@@ -202,19 +221,130 @@ export type SettingsUpdate = Partial<{
   reviewDrafts: boolean | null;
   failureStatus: string | null;
   skills: string[] | null;
+  repoSkills: string[] | null;
   jobTimeoutSeconds: number | null;
   jobMemory: string | null;
   rerunLimitPerMR: number | null;
   rerunLimitPerRepo: number | null;
 }>;
 
+// InputSkill is one skill of the set a review would run. source is
+// "library" or the repository folder; with a problem the review would fail on
+// the skill and source and content are empty. url is a repository skill's file
+// on the platform ("" for a library skill).
+export type InputSkill = {
+  name: string;
+  source: string;
+  folder: string;
+  version: number;
+  content: string;
+  url: string;
+  problem?: string;
+};
+
+// DetectedSkill is a skill found in a repository folder that runs only when
+// turned on. name is the file or folder name when there is a problem.
+export type DetectedSkill = { name: string; folder: string; problem?: string; on: boolean };
+
 export type InputsView = {
   branch: string;
-  skills: { name: string; source: "library" | "repo"; content: string }[];
+  skills: InputSkill[];
+  detected: DetectedSkill[];
   instructions: string;
 };
 
-export type LibrarySkill = { name: string; content: string };
+// skillBudget is what a review takes of library skill text, in bytes
+// (inputs.ConfigMapLimit): saving a list over it is refused.
+export const skillBudget = 900 * 1024;
+
+// SkillSource is where an installed skill came from (SkillSourceView).
+// hidden: the repository is private to the viewer, so repo is not sent and
+// the page says "a private repository on <instance>". A url is public.
+export type SkillSource = {
+  kind: "instance" | "url";
+  instance?: string;
+  repo?: string;
+  url?: string;
+  // path is the skill's file in the source; never sent with hidden.
+  path?: string;
+  ref: string;
+  commit: string;
+  hidden?: boolean;
+};
+
+// LibrarySkill is one skill of the library without its text (LibrarySkillView).
+// source is null for a skill written in the dashboard; updatedBy is sent to
+// admins only; size is bytes.
+export type LibrarySkill = {
+  name: string;
+  version: number;
+  size: number;
+  updatedAt: string;
+  inDefaults: boolean;
+  source: SkillSource | null;
+  updatedBy?: string;
+};
+
+// SkillVersion is one saved version; actor is sent to admins only.
+export type SkillVersion = { version: number; at: string; actor?: string; commit: string };
+
+// SkillDetail is GET /api/skills/{name}: the skill with its text and its
+// versions, newest first. The text is shown as plain text only.
+export type SkillDetail = LibrarySkill & { content: string; versions: SkillVersion[] };
+
+export type SkillVersionDetail = SkillVersion & { content: string };
+
+// SkillInUse is the body of the 409 a delete gets while repositories or the
+// default list name the skill. hidden counts the repositories the caller
+// can't see.
+export type SkillInUse = {
+  error: string;
+  repositories: { instance: string; project: string }[];
+  hidden: number;
+  inDefaults: boolean;
+};
+
+// FetchedSkill is one skill a read of a git source found (FetchedSkillView):
+// size is bytes (0 when the text was not kept), problem says why it can't be
+// installed, taken that a skill of that name is in the library already.
+export type FetchedSkill = { name: string; path: string; size: number; problem?: string; taken: boolean };
+
+// SkillUpdate is one installed skill in a check for updates. state is
+// "changed", "same", "removed at the source" or "renamed at the source";
+// problem says why it can't be updated. current and fetched are the two
+// texts, shown as text only.
+export type SkillUpdate = {
+  name: string;
+  path: string;
+  state: string;
+  problem?: string;
+  version: number;
+  current: string;
+  fetched: string;
+};
+
+// SkillFetch is GET /api/admin/skill-fetches/{id} (SkillFetchView): a read of
+// a git source. status is "running", "done" or "failed" (error says why);
+// skills are what an install read found, updates what a check for updates
+// matched with the installed skills.
+export type SkillFetch = {
+  id: string;
+  status: "running" | "done" | "failed";
+  commit: string;
+  error: string;
+  purpose: "install" | "update";
+  instance?: string;
+  repo?: string;
+  url?: string;
+  ref: string;
+  fromRef?: string;
+  path: string;
+  skills: FetchedSkill[];
+  updates: SkillUpdate[];
+};
+
+// SkillFetchResult is the answer for one name of an install or an update.
+export type SkillFetchResult = { name: string; ok: boolean; error?: string };
 
 export type IntegrationView = {
   instance: string;
@@ -242,6 +372,9 @@ export type DefaultsView = {
   // repository, in a UTC day: 1 to 1000.
   rerunLimitPerMR: number;
   rerunLimitPerRepo: number;
+  // skills is the default list: the library skills a repository reviews when
+  // its own skills setting is null. Empty means none.
+  skills: string[];
 };
 
 // LLMAdminView is GET /api/admin/llm: where the model comes from, the model
@@ -340,11 +473,15 @@ export type AvailableView = {
 export class ApiError extends Error {
   readonly status: number;
   readonly code?: string;
-  constructor(status: number, message: string, code?: string) {
+  // body is the whole JSON error body, for the answers that carry more than
+  // a message (the 409 of a skill delete).
+  readonly body?: unknown;
+  constructor(status: number, message: string, code?: string, body?: unknown) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    this.body = body;
   }
 }
 
@@ -408,8 +545,10 @@ async function request<T>(method: string, path: string, body?: unknown, csrf?: s
   if (!res.ok) {
     let message = `request failed (${res.status})`;
     let code: string | undefined;
+    let body: unknown;
     try {
       const data: unknown = await res.json();
+      body = data;
       if (data && typeof data === "object") {
         const { error, code: c } = data as { error?: unknown; code?: unknown };
         if (typeof error === "string") message = error;
@@ -421,7 +560,7 @@ async function request<T>(method: string, path: string, body?: unknown, csrf?: s
     if (res.status === 403 && code !== undefined && gateCodes.has(code)) {
       for (const fn of [...gateChanged]) fn();
     }
-    throw new ApiError(res.status, message, code);
+    throw new ApiError(res.status, message, code, body);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -480,6 +619,19 @@ export const paths = {
   apiRepoSettings: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/settings`,
   apiRepoReset: (instance: string, project: string) =>
     `/api/repositories/${seg(instance)}/${proj(project)}/settings/reset`,
+  // The client path is under /skills/view/ so a skill named like a page
+  // (new, install, updates) still opens.
+  skill: (name: string) => `/skills/view/${seg(name)}`,
+  apiSkill: (name: string) => `/api/skills/${seg(name)}`,
+  apiSkillVersion: (name: string, version: number) => `/api/skills/${seg(name)}/versions/${seg(String(version))}`,
+  apiAdminSkill: (name: string) => `/api/admin/skills/${seg(name)}`,
+  apiAdminSkillCopy: (name: string) => `/api/admin/skills/${seg(name)}/copy`,
+  // The page that checks one installed skill's source for updates.
+  skillUpdates: (name: string) => `/skills/updates${query([["skill", name]])}`,
+  apiSkillFetches: "/api/admin/skill-fetches",
+  apiSkillFetch: (id: string) => `/api/admin/skill-fetches/${seg(id)}`,
+  // action is "install" or "update".
+  apiSkillFetchAction: (id: string, action: "install" | "update") => `/api/admin/skill-fetches/${seg(id)}/${action}`,
 };
 
 // safeHref is u when it is an absolute http or https address, else

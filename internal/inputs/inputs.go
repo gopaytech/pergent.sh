@@ -7,13 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path"
-	"path/filepath"
 	"sort"
-	"strings"
 
-	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/forge"
 )
 
@@ -36,66 +31,6 @@ type Source interface {
 	ListTree(ctx context.Context, projectID int64, path, ref string) ([]forge.TreeEntry, error)
 }
 
-// Library is the set of skills mounted into pergent.sh, name → content.
-type Library map[string][]byte
-
-// LoadLibrary reads a skills directory with the layout pergent's own loader
-// accepts: top-level "*.md" files and "<name>/SKILL.md" folders. A folder
-// without a SKILL.md is an error, entries starting with "." are skipped and
-// symlinks (a ConfigMap volume makes every entry one) are followed.
-func LoadLibrary(dir string) (Library, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, fmt.Errorf("reading skills directory: %w", err)
-	}
-
-	lib := Library{}
-	origin := map[string]string{}
-	for _, entry := range entries {
-		name := entry.Name()
-		if strings.HasPrefix(name, ".") {
-			continue
-		}
-
-		isDir := entry.IsDir()
-		if entry.Type()&os.ModeSymlink != 0 {
-			if info, err := os.Stat(filepath.Join(dir, name)); err == nil {
-				isDir = info.IsDir()
-			}
-		}
-
-		var file, fallback string
-		switch {
-		case isDir:
-			file = filepath.Join(dir, name, "SKILL.md")
-			if info, err := os.Stat(file); err != nil || !info.Mode().IsRegular() {
-				return nil, fmt.Errorf("%s: a skill folder needs a SKILL.md file", filepath.Join(dir, name))
-			}
-			fallback = name
-		case filepath.Ext(name) == ".md":
-			file = filepath.Join(dir, name)
-			fallback = strings.TrimSuffix(name, ".md")
-		default:
-			continue
-		}
-
-		content, err := os.ReadFile(file)
-		if err != nil {
-			return nil, fmt.Errorf("reading skill file: %w", err)
-		}
-		skillName, err := SkillName(content, fallback)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", file, err)
-		}
-		if prev, dup := origin[skillName]; dup {
-			return nil, fmt.Errorf("duplicate skill name %q in %s and %s", skillName, prev, file)
-		}
-		origin[skillName] = file
-		lib[skillName] = content
-	}
-	return lib, nil
-}
-
 // Where a resolved skill comes from (Inputs.Sources).
 const (
 	SourceLibrary = "library"
@@ -111,45 +46,116 @@ type Inputs struct {
 	// Sources maps each skill's name to SourceLibrary or SourceRepo (the
 	// repository's own, also when it replaces a library skill).
 	Sources map[string]string
+	// Versions maps each library skill to the version read (ResolveSkills);
+	// skills of a repository folder are not in it.
+	Versions map[string]int
+	// Paths maps each repository skill to the file it was read from, in the
+	// repository; library skills are not in it.
+	Paths map[string]string
 }
 
-// Resolve gathers the inputs for one review. Library skills are picked by
-// repo.Skills (all of them when empty); repository skills and instructions are
-// read from the project at ref, so a merge request cannot change its own
-// rules. A repository skill replaces a library skill of the same name.
+// LibraryEntry is one skill of the library as ResolveSkills receives it.
+type LibraryEntry struct {
+	Content []byte
+	Version int
+}
+
+// NotFoundError says a skill turned on for a repository is in none of the
+// repository's skill folders.
+type NotFoundError struct{ Name string }
+
+func (e *NotFoundError) Error() string {
+	return fmt.Sprintf("skill %q is turned on but not found in the repository", e.Name)
+}
+
+// ProblemError says a skill file ResolveSkills had to use is malformed: one
+// of ".pergent/skills" (always used) or a turned-on one of another folder.
+// Name is the skill's name, or the file or folder name when it has none.
+type ProblemError struct{ Name, Path, Problem string }
+
+func (e *ProblemError) Error() string { return e.Path + ": " + e.Problem }
+
+// ResolveSkills gathers the inputs for one review. lib holds the library
+// skills the repository uses (its list, or the default list); repoSkills names
+// the detected skills turned on. Repository skills and instructions are read
+// from the project at ref, so a merge request cannot change its own rules.
+//
+// A name is taken from the first of RepoFolders that has it, then the library
+// (D23). ".pergent/skills" always runs and a problem there is an error. The
+// other folders are read only for the names in repoSkills: a skill that is off
+// is ignored even when malformed and replaces nothing, a turned-on one that is
+// malformed is an error and one that is in no folder is a *NotFoundError.
 // previous is stored as given.
-func Resolve(ctx context.Context, src Source, lib Library, repo config.Repository, projectID int64, ref string, previous []byte) (*Inputs, error) {
-	in := &Inputs{Skills: map[string][]byte{}, Previous: previous, Sources: map[string]string{}}
-
-	if len(repo.Skills) == 0 {
-		for name, content := range lib {
-			in.Skills[name] = content
-		}
-	} else {
-		for _, name := range repo.Skills {
-			content, ok := lib[name]
-			if !ok {
-				return nil, fmt.Errorf("skill %q is not in the skill library", name)
-			}
-			in.Skills[name] = content
-		}
+func ResolveSkills(ctx context.Context, src Source, lib map[string]LibraryEntry, repoSkills []string, projectID int64, ref string, previous []byte) (*Inputs, error) {
+	in := &Inputs{
+		Skills: map[string][]byte{}, Previous: previous,
+		Sources: map[string]string{}, Versions: map[string]int{}, Paths: map[string]string{},
 	}
-	for name := range in.Skills {
+	for name, e := range lib {
+		in.Skills[name] = e.Content
 		in.Sources[name] = SourceLibrary
+		in.Versions[name] = e.Version
 	}
 
-	repoSkills, err := loadRepoSkills(ctx, src, projectID, ref)
+	take := func(f Found, folder string) {
+		in.Skills[f.Name] = f.Content
+		in.Sources[f.Name] = folder
+		in.Paths[f.Name] = f.Path
+		delete(in.Versions, f.Name)
+	}
+
+	// found is what the repository folders supply by name so far.
+	found := map[string]bool{}
+
+	always, err := ScanFolder(ctx, src, projectID, RepoFolders[0], ref)
 	if err != nil {
 		return nil, err
 	}
-	for name, content := range repoSkills {
-		if _, ok := in.Skills[name]; ok {
-			if _, inLib := lib[name]; inLib {
-				in.Overridden = append(in.Overridden, name)
-			}
+	for _, f := range always {
+		if f.Problem != "" {
+			return nil, &ProblemError{Name: f.Name, Path: f.Path, Problem: f.Problem}
 		}
-		in.Skills[name] = content
-		in.Sources[name] = SourceRepo
+		take(f, RepoFolders[0])
+		found[f.Name] = true
+	}
+
+	on := map[string]bool{}
+	for _, name := range repoSkills {
+		on[name] = true
+	}
+	for _, folder := range RepoFolders[1:] {
+		if allFound(on, found) {
+			break
+		}
+		scanned, err := ScanFolder(ctx, src, projectID, folder, ref)
+		if err != nil {
+			return nil, err
+		}
+		var supplied []Found
+		for _, f := range scanned {
+			if !on[f.Name] || found[f.Name] {
+				continue
+			}
+			if f.Problem != "" {
+				return nil, &ProblemError{Name: f.Name, Path: f.Path, Problem: f.Problem}
+			}
+			take(f, folder)
+			supplied = append(supplied, f)
+		}
+		for _, f := range supplied {
+			found[f.Name] = true
+		}
+	}
+	for _, name := range repoSkills {
+		if !found[name] {
+			return nil, &NotFoundError{Name: name}
+		}
+	}
+
+	for name := range found {
+		if _, inLib := lib[name]; inLib {
+			in.Overridden = append(in.Overridden, name)
+		}
 	}
 	sort.Strings(in.Overridden)
 
@@ -160,6 +166,15 @@ func Resolve(ctx context.Context, src Source, lib Library, repo config.Repositor
 	return in, nil
 }
 
+func allFound(on, found map[string]bool) bool {
+	for name := range on {
+		if !found[name] {
+			return false
+		}
+	}
+	return true
+}
+
 // Only is the inputs reduced to the skills named in names: a name that is not
 // among the skills (after the repository's own were merged in) is left out.
 // The instructions and the previous result are shared with in.
@@ -167,6 +182,12 @@ func (in *Inputs) Only(names []string) *Inputs {
 	out := &Inputs{
 		Skills: map[string][]byte{}, Sources: map[string]string{},
 		Instructions: in.Instructions, Previous: in.Previous,
+	}
+	if in.Versions != nil {
+		out.Versions = map[string]int{}
+	}
+	if in.Paths != nil {
+		out.Paths = map[string]string{}
 	}
 	for _, name := range names {
 		content, ok := in.Skills[name]
@@ -177,6 +198,12 @@ func (in *Inputs) Only(names []string) *Inputs {
 		if src, ok := in.Sources[name]; ok {
 			out.Sources[name] = src
 		}
+		if v, ok := in.Versions[name]; ok {
+			out.Versions[name] = v
+		}
+		if p, ok := in.Paths[name]; ok {
+			out.Paths[name] = p
+		}
 	}
 	for _, name := range in.Overridden {
 		if _, ok := out.Skills[name]; ok {
@@ -184,56 +211,6 @@ func (in *Inputs) Only(names []string) *Inputs {
 		}
 	}
 	return out
-}
-
-func loadRepoSkills(ctx context.Context, src Source, projectID int64, ref string) (map[string][]byte, error) {
-	entries, err := src.ListTree(ctx, projectID, repoSkillsDir, ref)
-	if err != nil {
-		return nil, fmt.Errorf("listing %s: %w", repoSkillsDir, err)
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
-
-	skills := map[string][]byte{}
-	origin := map[string]string{}
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name, ".") {
-			continue
-		}
-
-		var file, fallback string
-		switch {
-		case e.Type == "tree":
-			file = path.Join(e.Path, "SKILL.md")
-			fallback = e.Name
-		case e.Type == "blob" && path.Ext(e.Name) == ".md":
-			file = e.Path
-			fallback = strings.TrimSuffix(e.Name, ".md")
-		default:
-			continue
-		}
-
-		content, found, err := src.GetFile(ctx, projectID, file, ref)
-		if err != nil {
-			return nil, fmt.Errorf("reading %s: %w", file, err)
-		}
-		if !found {
-			if e.Type == "tree" {
-				return nil, fmt.Errorf("%s: a skill folder needs a SKILL.md file", e.Path)
-			}
-			return nil, fmt.Errorf("%s: file not found", file)
-		}
-
-		name, err := SkillName(content, fallback)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", file, err)
-		}
-		if prev, dup := origin[name]; dup {
-			return nil, fmt.Errorf("duplicate skill name %q in %s and %s", name, prev, file)
-		}
-		origin[name] = file
-		skills[name] = content
-	}
-	return skills, nil
 }
 
 func loadInstructions(ctx context.Context, src Source, projectID int64, ref string) ([]byte, error) {

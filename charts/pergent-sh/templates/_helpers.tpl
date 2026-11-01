@@ -27,6 +27,14 @@ app.kubernetes.io/name: {{ include "pergent-sh.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
+{{/*
+The pergent.sh image: the Deployment's, and the one a skill fetch Job sends
+its result back with.
+*/}}
+{{- define "pergent-sh.image" -}}
+{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+{{- end -}}
+
 {{- define "pergent-sh.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
 {{- default (include "pergent-sh.fullname" .) .Values.serviceAccount.name -}}
@@ -37,7 +45,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 {{/*
 Settings the chart fixes. Failing here beats a service that starts and cannot
-find its skills, or whose Jobs land where the Role does not reach.
+reach its Jobs, or whose Jobs land where the Role does not reach.
 */}}
 {{- define "pergent-sh.validate" -}}
 {{- if not .Values.existingSecret -}}
@@ -50,8 +58,8 @@ find its skills, or whose Jobs land where the Role does not reach.
 {{- if ne (toString $jobs.namespace) .Values.jobsNamespace -}}
 {{- fail (printf "config.jobs.namespace (%q) must equal jobsNamespace (%q): the Role and NetworkPolicy are created there" (toString $jobs.namespace) .Values.jobsNamespace) -}}
 {{- end -}}
-{{- if ne (toString .Values.config.skills_dir) "/etc/pergent-sh/skills" -}}
-{{- fail "config.skills_dir must be /etc/pergent-sh/skills: that is where the chart mounts the skills" -}}
+{{- if hasKey .Values "skills" -}}
+{{- fail "skills was removed: skills live in the dashboard (see the README, \"Skills and instructions\")" -}}
 {{- end -}}
 {{- if not (hasSuffix ":8080" (toString .Values.config.listen)) -}}
 {{- fail "config.listen must end in :8080: the container port, Service and probes use 8080" -}}

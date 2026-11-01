@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -24,8 +25,9 @@ const (
 )
 
 var (
-	_ forge.Forge    = (*Forge)(nil)
-	_ forge.Approver = (*Approver)(nil)
+	_ forge.Forge        = (*Forge)(nil)
+	_ forge.Approver     = (*Approver)(nil)
+	_ forge.SourceReader = (*Forge)(nil)
 )
 
 type request struct {
@@ -603,5 +605,130 @@ func TestAccessLevel(t *testing.T) {
 	f.on(http.MethodGet, "/projects/7/members/all/12", http.StatusForbidden, map[string]any{"message": "403"})
 	if got, err := f.forge().AccessLevel(context.Background(), 7, "dev", 12); err == nil || got != forge.AccessNone {
 		t.Errorf("403 = %v, %v; want AccessNone and an error", got, err)
+	}
+}
+
+const commitSHA = "0123456789abcdef0123456789abcdef01234567"
+
+// A repository by its path, which pergent.sh has not switched on: the review
+// bot (Reporter access) reads it at the commit the ref resolves to.
+func TestGitLabSourceReader(t *testing.T) {
+	f := newFake(t)
+	f.on(http.MethodGet, "/projects/acme%2Fskills", http.StatusOK, map[string]any{"id": 42})
+	f.on(http.MethodGet, "/projects/42/repository/commits/release%2Fv1", http.StatusOK, map[string]any{"id": commitSHA})
+	f.on(http.MethodGet, "/projects/42/repository/tree", http.StatusOK, []map[string]any{
+		{"name": "a.md", "path": "skills/a.md", "type": "blob"},
+	})
+	f.on(http.MethodGet, "/projects/42/repository/files/skills%2Fa.md/raw", http.StatusOK, "# a")
+	g := f.forge()
+	ctx := context.Background()
+
+	got, err := g.ResolveRef(ctx, "acme/skills", "release/v1")
+	if err != nil || got != commitSHA {
+		t.Fatalf("ResolveRef = %q, %v", got, err)
+	}
+	entries, err := g.ListTreeAt(ctx, "acme/skills", "skills", commitSHA)
+	if err != nil || len(entries) != 1 || entries[0] != (forge.TreeEntry{Name: "a.md", Path: "skills/a.md", Type: "blob"}) {
+		t.Fatalf("ListTreeAt = %+v, %v", entries, err)
+	}
+	b, ok, err := g.GetFileAt(ctx, "acme/skills", "skills/a.md", commitSHA)
+	if err != nil || !ok || string(b) != "# a" {
+		t.Fatalf("GetFileAt = %q, %v, %v", b, ok, err)
+	}
+	for _, r := range f.requests() {
+		if r.Token != reviewToken {
+			t.Errorf("request %s %s used token %q; want the review bot's", r.Method, r.Path, r.Token)
+		}
+		if strings.Contains(r.Path, "/files/") && r.Query != "ref="+commitSHA {
+			t.Errorf("file read at %q; want the commit", r.Query)
+		}
+	}
+
+	// Same not-found semantics as the Source methods: a missing folder is an
+	// empty list and a missing file is ok == false.
+	f.on(http.MethodGet, "/projects/42/repository/tree", http.StatusNotFound, nil)
+	if e, err := g.ListTreeAt(ctx, "acme/skills", "nope", commitSHA); err != nil || len(e) != 0 {
+		t.Errorf("ListTreeAt of a missing folder = %+v, %v; want empty, nil", e, err)
+	}
+	if b, ok, err := g.GetFileAt(ctx, "acme/skills", "nope.md", commitSHA); err != nil || ok || b != nil {
+		t.Errorf("GetFileAt of a missing file = %q, %v, %v; want nil, false, nil", b, ok, err)
+	}
+}
+
+// A project the bot can't see (GitLab says 404), an empty path, or a ref that
+// doesn't exist is forge.ErrSourceNotFound, from all three methods.
+func TestGitLabSourceReaderNotFound(t *testing.T) {
+	f := newFake(t)
+	f.on(http.MethodGet, "/projects/acme%2Fskills", http.StatusOK, map[string]any{"id": 42})
+	g := f.forge()
+	ctx := context.Background()
+
+	if _, err := g.ResolveRef(ctx, "acme/skills", "no-such-ref"); !errors.Is(err, forge.ErrSourceNotFound) {
+		t.Errorf("ResolveRef of an unknown ref = %v; want ErrSourceNotFound", err)
+	}
+	for _, project := range []string{"acme/private", ""} {
+		if _, err := g.ResolveRef(ctx, project, "main"); !errors.Is(err, forge.ErrSourceNotFound) {
+			t.Errorf("ResolveRef(%q) = %v; want ErrSourceNotFound", project, err)
+		}
+		if _, err := g.ListTreeAt(ctx, project, "skills", commitSHA); !errors.Is(err, forge.ErrSourceNotFound) {
+			t.Errorf("ListTreeAt(%q) = %v; want ErrSourceNotFound", project, err)
+		}
+		if _, _, err := g.GetFileAt(ctx, project, "a.md", commitSHA); !errors.Is(err, forge.ErrSourceNotFound) {
+			t.Errorf("GetFileAt(%q) = %v; want ErrSourceNotFound", project, err)
+		}
+	}
+}
+
+// A file bigger than a review can carry is never read whole into memory.
+func TestGitLabSourceReaderFileTooLarge(t *testing.T) {
+	f := newFake(t)
+	f.on(http.MethodGet, "/projects/acme%2Fskills", http.StatusOK, map[string]any{"id": 42})
+	f.on(http.MethodGet, "/projects/42/repository/files/big.md/raw", http.StatusOK, strings.Repeat("x", forge.MaxSourceFile+1))
+	f.on(http.MethodGet, "/projects/42/repository/files/ok.md/raw", http.StatusOK, strings.Repeat("x", forge.MaxSourceFile))
+	g := f.forge()
+	if _, ok, err := g.GetFileAt(context.Background(), "acme/skills", "big.md", commitSHA); ok || !errors.Is(err, forge.ErrFileTooLarge) {
+		t.Errorf("GetFileAt of a big file = %v, %v; want ErrFileTooLarge", ok, err)
+	}
+	if b, ok, err := g.GetFileAt(context.Background(), "acme/skills", "ok.md", commitSHA); err != nil || !ok || len(b) != forge.MaxSourceFile {
+		t.Errorf("GetFileAt at the limit = %d, %v, %v", len(b), ok, err)
+	}
+}
+
+// A project the bot sees but may not read (a bot below Reporter, a restricted
+// repository feature: GitLab answers 403) is forge.ErrSourceNotFound too, so
+// the admin is never shown a raw platform error.
+func TestGitLabSourceReaderForbidden(t *testing.T) {
+	ctx := context.Background()
+	forbidden := `{"message":"403 Forbidden"}`
+
+	// The project itself is forbidden.
+	f := newFake(t)
+	f.on(http.MethodGet, "/projects/acme%2Fsecret", http.StatusForbidden, forbidden)
+	g := f.forge()
+	if _, err := g.ResolveRef(ctx, "acme/secret", "main"); !errors.Is(err, forge.ErrSourceNotFound) {
+		t.Errorf("ResolveRef = %v; want ErrSourceNotFound", err)
+	}
+	if _, err := g.ListTreeAt(ctx, "acme/secret", "skills", commitSHA); !errors.Is(err, forge.ErrSourceNotFound) {
+		t.Errorf("ListTreeAt = %v; want ErrSourceNotFound", err)
+	}
+	if _, _, err := g.GetFileAt(ctx, "acme/secret", "a.md", commitSHA); !errors.Is(err, forge.ErrSourceNotFound) {
+		t.Errorf("GetFileAt = %v; want ErrSourceNotFound", err)
+	}
+
+	// The project shows, its repository does not.
+	f = newFake(t)
+	f.on(http.MethodGet, "/projects/acme%2Fskills", http.StatusOK, map[string]any{"id": 42})
+	f.on(http.MethodGet, "/projects/42/repository/commits/main", http.StatusForbidden, forbidden)
+	f.on(http.MethodGet, "/projects/42/repository/tree", http.StatusForbidden, forbidden)
+	f.on(http.MethodGet, "/projects/42/repository/files/a.md/raw", http.StatusForbidden, forbidden)
+	g = f.forge()
+	if _, err := g.ResolveRef(ctx, "acme/skills", "main"); !errors.Is(err, forge.ErrSourceNotFound) {
+		t.Errorf("ResolveRef with a forbidden repository = %v; want ErrSourceNotFound", err)
+	}
+	if _, err := g.ListTreeAt(ctx, "acme/skills", "skills", commitSHA); !errors.Is(err, forge.ErrSourceNotFound) {
+		t.Errorf("ListTreeAt with a forbidden repository = %v; want ErrSourceNotFound", err)
+	}
+	if _, _, err := g.GetFileAt(ctx, "acme/skills", "a.md", commitSHA); !errors.Is(err, forge.ErrSourceNotFound) {
+		t.Errorf("GetFileAt with a forbidden repository = %v; want ErrSourceNotFound", err)
 	}
 }

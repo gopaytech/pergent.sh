@@ -15,7 +15,6 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/github"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
-	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
@@ -71,7 +70,6 @@ type Engine struct {
 	// are created with.
 	WebhookSecrets *syncmap.Map[string]
 	Launcher       *kube.Launcher
-	Library        inputs.Library
 	Box            *secretbox.Box
 	// OnInstanceRemoved is called, after the engine deleted an instance of
 	// the dashboard that was being removed, to take it out of use (the

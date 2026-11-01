@@ -95,7 +95,7 @@ func newDashboardE2E(t *testing.T, edit ...func(o *dashboard.Options)) *dashE2E 
 	}
 	opts := dashboard.Options{
 		Config: cfg, Instances: env.Engine.Instances, Store: env.Store, SecretKey: testBoxKey, HTTPClient: env.GitLab.srv.Client(),
-		Now: env.Now, Log: env.Engine.Log, Library: env.Engine.Library,
+		Now: env.Now, Log: env.Engine.Log,
 		Sources: sources, Catalogs: catalogs, ReconcileSoon: env.Engine.ReconcileSoon,
 	}
 	for _, f := range edit {

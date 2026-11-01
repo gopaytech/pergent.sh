@@ -109,6 +109,86 @@ func (f *Forge) ListTree(ctx context.Context, repoID int64, path, ref string) ([
 	return entries, mapErr(err)
 }
 
+var _ forge.SourceReader = (*Forge)(nil)
+
+// unreadable reports whether err says the review App may not read what it
+// asked for: a 404, or a 403 that isn't a rate limit (an installation without
+// Contents read).
+func unreadable(err error) bool {
+	return errors.Is(err, github.ErrNotFound) || errors.Is(err, github.ErrForbidden)
+}
+
+// source returns the review App's client for "owner/name" and the two parts.
+// It asks GitHub which installation covers the repository, so the repository
+// need not be stored or switched on. An App not installed there, a
+// repository that doesn't exist (GitHub says the same) or a project that is
+// not "owner/name" is forge.ErrSourceNotFound.
+func (f *Forge) source(ctx context.Context, project string) (*github.Client, string, string, error) {
+	owner, name, ok := strings.Cut(strings.Trim(project, "/"), "/")
+	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+		return nil, "", "", forge.ErrSourceNotFound
+	}
+	id, err := f.app.Installation(ctx, owner, name)
+	if unreadable(err) {
+		return nil, "", "", forge.ErrSourceNotFound
+	}
+	if err != nil {
+		return nil, "", "", err
+	}
+	return f.app.Client(id), owner, name, nil
+}
+
+// ResolveRef returns the commit ref points at in owner/name, read with the
+// review App's installation on it. A repository the App can't read (404, or a
+// 403 that is no rate limit), or a ref GitHub can't resolve (404, or 422 for
+// a ref that is no commit), is forge.ErrSourceNotFound.
+func (f *Forge) ResolveRef(ctx context.Context, project, ref string) (string, error) {
+	c, owner, name, err := f.source(ctx, project)
+	if err != nil {
+		return "", err
+	}
+	commit, err := c.CommitSHA(ctx, owner, name, ref)
+	var ae *github.APIError
+	if unreadable(err) || (errors.As(err, &ae) && ae.Status == http.StatusUnprocessableEntity) {
+		return "", forge.ErrSourceNotFound
+	}
+	return commit, err
+}
+
+// ListTreeAt lists one directory of owner/name at commit. A missing
+// directory is nil, nil; a repository the App can't read is
+// forge.ErrSourceNotFound.
+func (f *Forge) ListTreeAt(ctx context.Context, project, path, commit string) ([]forge.TreeEntry, error) {
+	c, owner, name, err := f.source(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := c.Tree(ctx, owner, name, path, commit)
+	if unreadable(err) {
+		return nil, forge.ErrSourceNotFound
+	}
+	return entries, mapErr(err)
+}
+
+// GetFileAt returns a file of owner/name at commit, at most
+// forge.MaxSourceFile bytes of it: a larger one is forge.ErrFileTooLarge. A
+// missing file, or a directory, is nil, false, nil; a repository the App
+// can't read is forge.ErrSourceNotFound.
+func (f *Forge) GetFileAt(ctx context.Context, project, path, commit string) ([]byte, bool, error) {
+	c, owner, name, err := f.source(ctx, project)
+	if err != nil {
+		return nil, false, err
+	}
+	b, ok, err := c.FileMax(ctx, owner, name, path, commit, forge.MaxSourceFile)
+	if errors.Is(err, github.ErrTooLarge) {
+		return nil, false, forge.ErrFileTooLarge
+	}
+	if unreadable(err) {
+		return nil, false, forge.ErrSourceNotFound
+	}
+	return b, ok, mapErr(err)
+}
+
 // GetChange reads pull request number. A closed pull request GitHub reports
 // as merged is forge.StateMerged. TargetBranch and StartSHA are the base ref
 // and the base commit GitHub recorded for the pull request (inputs are read

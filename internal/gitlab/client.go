@@ -118,6 +118,12 @@ type response struct {
 // do sends one request, retrying 429, 5xx and connection errors. path is
 // already escaped and relative to /api/v4. A non-2xx final reply is *APIError.
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any) (*response, error) {
+	return c.doMax(ctx, method, path, query, body, maxResponse)
+}
+
+// doMax is do with a reply limit: a reply of more than limit bytes is
+// ErrTooLarge, and no more than limit+1 bytes of it are read.
+func (c *Client) doMax(ctx context.Context, method, path string, query url.Values, body any, limit int) (*response, error) {
 	var payload []byte
 	if body != nil {
 		var err error
@@ -135,7 +141,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 
 	delay := time.Second
 	for attempt := 0; ; attempt++ {
-		resp, retryAfter, err := c.once(ctx, method, u.String(), payload)
+		resp, retryAfter, err := c.once(ctx, method, u.String(), payload, limit)
 		if err == nil {
 			return resp, nil
 		}
@@ -171,7 +177,7 @@ type connError struct{ msg string }
 
 func (e *connError) Error() string { return e.msg }
 
-func (c *Client) once(ctx context.Context, method, rawURL string, payload []byte) (*response, time.Duration, error) {
+func (c *Client) once(ctx context.Context, method, rawURL string, payload []byte, limit int) (*response, time.Duration, error) {
 	var rd io.Reader
 	if payload != nil {
 		rd = bytes.NewReader(payload)
@@ -203,12 +209,12 @@ func (c *Client) once(ctx context.Context, method, rawURL string, payload []byte
 		return nil, 0, &connError{msg: fmt.Sprintf("gitlab: %s request failed: %s", method, c.mask(reason))}
 	}
 	defer res.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(res.Body, maxResponse+1))
+	data, err := io.ReadAll(io.LimitReader(res.Body, int64(limit)+1))
 	if err != nil {
 		return nil, 0, &connError{msg: fmt.Sprintf("gitlab: reading response: %s", c.mask(err.Error()))}
 	}
-	if len(data) > maxResponse {
-		return nil, 0, errors.New("gitlab: response too large")
+	if len(data) > limit {
+		return nil, 0, ErrTooLarge
 	}
 	if res.StatusCode >= 200 && res.StatusCode < 300 {
 		return &response{status: res.StatusCode, header: res.Header, body: data}, 0, nil
@@ -413,9 +419,32 @@ func (c *Client) GetMergeRequest(ctx context.Context, projectID, iid int64) (Mer
 	return mr, err
 }
 
+// CommitSHA returns the commit a branch, tag or commit ref points at (GET
+// /projects/:id/repository/commits/:ref). A ref that doesn't exist is
+// ErrNotFound.
+func (c *Client) CommitSHA(ctx context.Context, projectID int64, ref string) (string, error) {
+	var out struct {
+		ID string `json:"id"`
+	}
+	if _, err := c.getJSON(ctx, projPath(projectID)+"/repository/commits/"+seg(ref), nil, &out); err != nil {
+		return "", err
+	}
+	if out.ID == "" {
+		return "", errors.New("gitlab: commit has no id")
+	}
+	return out.ID, nil
+}
+
 // GetFile returns a file's raw content at ref. A missing file is nil, false, nil.
 func (c *Client) GetFile(ctx context.Context, projectID int64, path, ref string) ([]byte, bool, error) {
-	resp, err := c.do(ctx, http.MethodGet, projPath(projectID)+"/repository/files/"+seg(path)+"/raw", url.Values{"ref": {ref}}, nil)
+	return c.GetFileMax(ctx, projectID, path, ref, maxResponse)
+}
+
+// GetFileMax is GetFile for a file that may not be trusted to be small: one
+// of more than max bytes is nil, false, ErrTooLarge, and no more than max+1
+// bytes of it are read.
+func (c *Client) GetFileMax(ctx context.Context, projectID int64, path, ref string, max int) ([]byte, bool, error) {
+	resp, err := c.doMax(ctx, http.MethodGet, projPath(projectID)+"/repository/files/"+seg(path)+"/raw", url.Values{"ref": {ref}}, nil, max)
 	if isStatus(err, http.StatusNotFound) {
 		return nil, false, nil
 	}

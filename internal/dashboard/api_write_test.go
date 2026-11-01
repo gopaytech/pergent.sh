@@ -262,6 +262,7 @@ func TestSettingsValidation(t *testing.T) {
 		cfg.Jobs.Resources.Requests = corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")}
 	})
 	e.dashboardRepo("main", "acme/gadgets", nil)
+	e.skill("style", "x")
 	c := e.signInGitLab(true, "acme/gadgets")
 	target := "/api/repositories/main/acme/gadgets/settings"
 

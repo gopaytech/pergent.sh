@@ -110,7 +110,7 @@ func TestPublishRecordsDecisionAgainWhenReady(t *testing.T) {
 // repository skill replacing a library one of the same name is "repo".
 func TestDispatchRecordsModelAndSkillSources(t *testing.T) {
 	env := newTestEnv(t)
-	env.Engine.Library["style"] = []byte("---\nname: style\n---\nCheck the style.\n")
+	env.AddSkill("style", "---\nname: style\n---\nCheck the style.\n")
 	head := sha('a')
 	id := env.Enqueue(3, head)
 	env.GitLab.SetMR(openMR(3, head))
@@ -132,7 +132,7 @@ func TestDispatchRecordsModelAndSkillSources(t *testing.T) {
 	if r.Model == nil || *r.Model != "claude-sonnet-4" {
 		t.Errorf("model = %v", r.Model)
 	}
-	want := map[string]string{"security": "repo", "team": "repo", "style": "library"}
+	want := map[string]string{"security": ".pergent/skills", "team": ".pergent/skills", "style": "library"}
 	if len(r.SkillSources) != len(want) {
 		t.Errorf("skill sources = %v, want %v", r.SkillSources, want)
 	}

@@ -31,6 +31,9 @@ const (
 	Published     RunState = "published"
 	PublishFailed RunState = "publish_failed"
 	Superseded    RunState = "superseded"
+	// Skipped is a run that was not reviewed because it had no skills; its
+	// SkipReason says so.
+	Skipped RunState = "skipped"
 )
 
 var (
@@ -76,6 +79,10 @@ type Run struct {
 	// recorded at dispatch; nil before.
 	Model        *string
 	SkillSources map[string]string
+	// SkillVersions (library skill name → version) was recorded at
+	// dispatch; nil before. SkipReason is why a Skipped run was skipped.
+	SkillVersions map[string]int
+	SkipReason    string
 	// Outcome, OutcomeReason, DecisionStatus and Approved are the
 	// publisher's decision (see RunDecision); Outcome is "" until then.
 	Outcome, OutcomeReason, DecisionStatus string
@@ -100,7 +107,7 @@ const (
 )
 
 // A run's outcome, as the publisher records it (RunDecision.Outcome) and as
-// the dashboard shows it. Running, superseded and unknown (published before
+// the dashboard shows it. Running, superseded, skipped and unknown (published before
 // outcomes were recorded) are never recorded: they follow from the state.
 const (
 	OutcomeRunning    = "running"
@@ -110,6 +117,7 @@ const (
 	OutcomeNoBlocking = "no_blocking"
 	OutcomeFailed     = "failed"
 	OutcomeSuperseded = "superseded"
+	OutcomeSkipped    = "skipped"
 	OutcomeUnknown    = "unknown"
 )
 
@@ -156,26 +164,33 @@ const runColumns = `id::text, instance, project_id, mr_iid, project_path, head_s
 	state, job_name, token_expires_at, result, failure_reason, publish_error, attempts,
 	created_at, dispatched_at, reported_at, not_before, cleaned_up,
 	title, web_url, source_branch, author, model, skill_sources,
-	outcome, outcome_reason, decision_status, approved, trigger, skill_subset, base_run_id::text`
+	outcome, outcome_reason, decision_status, approved, trigger, skill_subset, base_run_id::text,
+	skill_versions, skip_reason`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var (
 		r                                    Run
 		state                                string
 		tokenExp, dispatched, rep, notBefore *time.Time
-		sources                              []byte
+		sources, versions                    []byte
 	)
 	err := row.Scan(&r.ID, &r.MR.Instance, &r.MR.ProjectID, &r.MR.IID, &r.ProjectPath, &r.HeadSHA, &r.BaseSHA, &r.StartSHA,
 		&r.TargetBranch, &state, &r.JobName, &tokenExp, &r.Result, &r.FailureReason, &r.PublishError, &r.Attempts,
 		&r.CreatedAt, &dispatched, &rep, &notBefore, &r.CleanedUp,
 		&r.Title, &r.WebURL, &r.SourceBranch, &r.Author, &r.Model, &sources,
-		&r.Outcome, &r.OutcomeReason, &r.DecisionStatus, &r.Approved, &r.Trigger, &r.SkillSubset, &r.BaseRunID)
+		&r.Outcome, &r.OutcomeReason, &r.DecisionStatus, &r.Approved, &r.Trigger, &r.SkillSubset, &r.BaseRunID,
+		&versions, &r.SkipReason)
 	if err != nil {
 		return Run{}, err
 	}
 	if sources != nil {
 		if err := json.Unmarshal(sources, &r.SkillSources); err != nil {
 			return Run{}, fmt.Errorf("run %s: skill sources: %w", r.ID, err)
+		}
+	}
+	if versions != nil {
+		if err := json.Unmarshal(versions, &r.SkillVersions); err != nil {
+			return Run{}, fmt.Errorf("run %s: skill versions: %w", r.ID, err)
 		}
 	}
 	r.State = RunState(state)
@@ -608,23 +623,47 @@ func (s *Store) SetRunChange(ctx context.Context, id string, d ChangeDetails) er
 	return err
 }
 
-// SetRunInputs records the model and where each skill came from (name →
-// "library" or "repo") when a run is dispatched. An unknown run is not an
+// SetRunInputs records the model, where each skill came from (name →
+// "library" or "repo") and the library version of each library skill used
+// (name → version) when a run is dispatched. An unknown run is not an
 // error; a malformed id is.
-func (s *Store) SetRunInputs(ctx context.Context, id, model string, sources map[string]string) error {
+func (s *Store) SetRunInputs(ctx context.Context, id, model string, sources map[string]string, versions map[string]int) error {
 	if !validUUID(id) {
 		return fmt.Errorf("store: run %q not found", id)
 	}
 	if sources == nil {
 		sources = map[string]string{}
 	}
+	if versions == nil {
+		versions = map[string]int{}
+	}
 	b, err := json.Marshal(sources)
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(ctx, `UPDATE runs SET model = $2, skill_sources = $3::jsonb WHERE id = $1::uuid`,
-		id, cutText(model), string(b))
+	v, err := json.Marshal(versions)
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, `UPDATE runs SET model = $2, skill_sources = $3::jsonb, skill_versions = $4::jsonb
+		WHERE id = $1::uuid`, id, cutText(model), string(b), string(v))
 	return err
+}
+
+// SkipRun ends a queued or running run as skipped, with the reason, at now:
+// it has no skills to review with, so no Job runs and nothing is published.
+// ok is false when the run was in another state or unknown; a malformed id
+// is an error.
+func (s *Store) SkipRun(ctx context.Context, id, reason string, now time.Time) (ok bool, err error) {
+	if !validUUID(id) {
+		return false, fmt.Errorf("store: run %q not found", id)
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'skipped', skip_reason = $2, reported_at = $3
+		WHERE id = $1::uuid AND state IN ('queued', 'running')`, id, cutText(reason), now)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
 }
 
 // cutText shortens s to at most maxChangeDetail bytes, on a rune boundary.

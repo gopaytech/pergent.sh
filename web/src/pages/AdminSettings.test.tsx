@@ -1,9 +1,9 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi } from "../test/fakeApi";
-import { defaults, llm, operator, platformAdmin, viewer } from "../test/fixtures";
+import { defaults, librarySkills, llm, operator, platformAdmin, viewer } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -11,6 +11,7 @@ afterEach(() => vi.unstubAllGlobals());
 const routes = (me = platformAdmin) => ({
   "GET /api/me": { body: me },
   "GET /api/admin/defaults": { body: defaults },
+  "GET /api/skills": { body: librarySkills },
   "GET /api/admin/llm": { body: { ...llm, editable: false } },
 });
 
@@ -53,6 +54,8 @@ describe("AdminSettings defaults", () => {
       // them would reset the caps.
       rerunLimitPerMR: 10,
       rerunLimitPerRepo: 50,
+      // Untouched too: the default skills are sent as they are.
+      skills: ["code-review"],
     });
     const saved = await screen.findByText("Defaults saved.");
     expect(saved).not.toHaveClass("problem");
@@ -128,6 +131,107 @@ describe("AdminSettings defaults", () => {
     await userEvent.type(within(form).getByLabelText("Memory limit"), "1Mi");
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("jobMemory must be between 256Mi and 32Gi");
+  });
+});
+
+describe("AdminSettings default skills", () => {
+  it("shows a running total against 900 KiB, and sends the ticked skills", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "PUT /api/admin/defaults": { body: { ...defaults, skills: ["code-review", "security-review"] } },
+    });
+    renderApp("/settings");
+    const picker = await screen.findByRole("group", { name: "Default skills" });
+    expect(within(picker).getByRole("switch", { name: "Default skill code-review" })).toBeChecked();
+    expect(within(picker).getByRole("switch", { name: "Default skill security-review" })).not.toBeChecked();
+    expect(within(picker).getByText("Total 52 B of 900 KiB")).toBeInTheDocument();
+
+    await userEvent.click(within(picker).getByRole("switch", { name: "Default skill security-review" }));
+    expect(within(picker).getByText("Total 113 B of 900 KiB")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ skills: ["code-review", "security-review"] });
+    expect(await screen.findByText("Defaults saved.")).toBeInTheDocument();
+  });
+
+  it("refetches the library after a save, so default marks and warnings aren't stale", async () => {
+    let skillReads = 0;
+    const fake = fakeApi({
+      ...routes(),
+      "GET /api/skills": () => ({ body: skillReads++ === 0 ? librarySkills : librarySkills.map((s) => ({ ...s, inDefaults: true })) }),
+      "PUT /api/admin/defaults": { body: { ...defaults, skills: ["code-review", "security-review"] } },
+    });
+    renderApp("/settings");
+    const picker = await screen.findByRole("group", { name: "Default skills" });
+    await userEvent.click(within(picker).getByRole("switch", { name: "Default skill security-review" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+    expect(await screen.findByText("Defaults saved.")).toBeInTheDocument();
+    await waitFor(() => expect(fake.find("GET", "/api/skills")).toHaveLength(2));
+  });
+
+  it("shows a stored default the library no longer has, and drops it on save", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "GET /api/admin/defaults": { body: { ...defaults, skills: ["code-review", "old-skill"] } },
+      "PUT /api/admin/defaults": { body: { ...defaults, skills: ["code-review"] } },
+    });
+    renderApp("/settings");
+    const picker = await screen.findByRole("group", { name: "Default skills" });
+    const old = within(picker).getByRole("switch", { name: "Default skill old-skill" });
+    expect(old).toBeChecked();
+    expect(old.closest(".skill")).toHaveTextContent("not in the library");
+    expect(picker).toHaveTextContent("old-skill is no longer in the library");
+    // It counts for nothing in the total.
+    expect(within(picker).getByText("Total 52 B of 900 KiB")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ skills: ["code-review"] });
+  });
+
+  it("flags a total over 900 KiB and shows the server's 400 message", async () => {
+    const big = [
+      { ...librarySkills[0], size: 600 * 1024 },
+      { ...librarySkills[1], size: 400 * 1024, inDefaults: true },
+    ];
+    fakeApi({
+      ...routes(),
+      "GET /api/skills": { body: big },
+      "GET /api/admin/defaults": { body: { ...defaults, skills: ["code-review", "security-review"] } },
+      "PUT /api/admin/defaults": {
+        status: 400,
+        body: { error: "the library skills come to 1000 KiB; a review takes at most 900 KiB" },
+      },
+    });
+    renderApp("/settings");
+    const picker = await screen.findByRole("group", { name: "Default skills" });
+    const total = within(picker).getByText("Total 1000 KiB of 900 KiB");
+    expect(total).toHaveClass("problem");
+    await userEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "the library skills come to 1000 KiB; a review takes at most 900 KiB",
+    );
+  });
+
+  it("can save an empty default list, and says what that means", async () => {
+    const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: { ...defaults, skills: [] } } });
+    renderApp("/settings");
+    const picker = await screen.findByRole("group", { name: "Default skills" });
+    await userEvent.click(within(picker).getByRole("switch", { name: "Default skill code-review" }));
+    expect(within(picker).getByText(/gets no skills/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ skills: [] });
+  });
+
+  it("leaves the default list out of the save when the library can't be read", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "GET /api/skills": { status: 500, body: { error: "boom" } },
+      "PUT /api/admin/defaults": { body: defaults },
+    });
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    expect(await within(form).findByText("boom")).toBeInTheDocument();
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    // Left out, the API keeps the stored list.
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).not.toHaveProperty("skills");
   });
 });
 

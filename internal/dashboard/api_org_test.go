@@ -794,6 +794,8 @@ func TestWritesAudited(t *testing.T) {
 	id := e.accountOf(c)
 	base := "/api/repositories/main/acme/gadgets"
 
+	e.skill("style", "x")
+
 	wantCode(t, e.send(c, "POST", "/api/repositories", `{"project":"acme/gadgets"}`), "POST", http.StatusCreated)
 	wantCode(t, e.send(c, "PUT", base+"/settings", `{"skills":["style"],"approve":false}`), "PUT settings", http.StatusOK)
 	wantCode(t, e.send(c, "PUT", base+"/settings", `{"approve":"no"}`), "PUT bad settings", http.StatusBadRequest)

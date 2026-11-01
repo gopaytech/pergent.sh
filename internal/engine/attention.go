@@ -16,6 +16,8 @@ const (
 	attApproverUnreachable = "approver_unreachable"
 	attOutOfMemory         = "out_of_memory"
 	attTokenExpiry         = "token_expiry"
+	attSkillMissing        = "skill_missing"
+	attNoSkills            = "no_skills"
 )
 
 const (

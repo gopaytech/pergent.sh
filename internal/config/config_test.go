@@ -110,7 +110,7 @@ func TestValidateRejects(t *testing.T) {
 		{"bad instance name", func(c *Config) { c.GitLab[0].Name = "Main_1" }, "instance name"},
 		{"max_running zero", func(c *Config) { c.Jobs.MaxRunning = 0 }, "max_running"},
 		{"concurrency zero", func(c *Config) { c.Jobs.Concurrency = 0 }, "concurrency"},
-		{"empty skills_dir", func(c *Config) { c.SkillsDir = "" }, "skills_dir"},
+		{"empty skills list", func(c *Config) { c.Repositories[0].Skills = []string{} }, "skills"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -735,7 +735,6 @@ func TestOAuthClient(t *testing.T) {
 
 // minimalYAML is a config with no instances, repositories or llm block.
 const minimalYAML = `public_url: https://pergent.example.com
-skills_dir: /skills
 jobs:
   namespace: pergent
 `
@@ -850,5 +849,101 @@ func TestAdminPasswordEnv(t *testing.T) {
 		if _, err := Load(writeConfig(t, body)); err == nil || !strings.Contains(err.Error(), "dashboard.admin_password_env") {
 			t.Errorf("admin_password_env %q: Load() = %v, want an error naming dashboard.admin_password_env", bad, err)
 		}
+	}
+}
+
+// repo_skills names the detected repository skills to turn on; each must be a
+// valid skill name.
+func TestRepoSkillsConfig(t *testing.T) {
+	base, err := os.ReadFile("testdata/valid.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	with := func(list string) string {
+		body := strings.Replace(string(base), "    project: acme/widgets\n", "    project: acme/widgets\n    repo_skills: "+list+"\n", 1)
+		if body == string(base) {
+			t.Fatal("test replacement did not apply")
+		}
+		return body
+	}
+
+	cfg, err := Load(writeConfig(t, with("[a, team-rules]")))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Repositories[0].RepoSkills; len(got) != 2 || got[0] != "a" || got[1] != "team-rules" {
+		t.Errorf("RepoSkills = %v, want [a team-rules]", got)
+	}
+	if got := loadValid(t).Repositories[0].RepoSkills; got != nil {
+		t.Errorf("RepoSkills = %v, want nil when not set", got)
+	}
+
+	for _, bad := range []string{"[../x]", `["a b"]`, `[""]`, "[.hidden]"} {
+		_, err := Load(writeConfig(t, with(bad)))
+		if err == nil || !strings.Contains(err.Error(), "repo_skills") {
+			t.Errorf("Load with repo_skills %s = %v, want an error naming repo_skills", bad, err)
+		}
+	}
+}
+
+// skills_dir is gone: the library lives in the dashboard. A config that still
+// has it is refused, whatever it holds, pointing at the README.
+func TestSkillsDirRefused(t *testing.T) {
+	const want = `skills_dir was removed: skills live in the dashboard (see the README, "Skills and instructions")`
+	base, err := os.ReadFile("testdata/valid.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]string{"a path": "/skills", "no value": "", "an empty string": `""`} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(writeConfig(t, string(base)+"skills_dir: "+value+"\n"))
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("Load() = %v, want an error containing %q", err, want)
+			}
+		})
+	}
+	// Without it, and with no dashboard, a config loads: nothing reads a directory.
+	cfg, err := Load(writeConfig(t, string(base)))
+	if err != nil {
+		t.Fatalf("Load without skills_dir: %v", err)
+	}
+	if cfg.DashboardEnabled() {
+		t.Error("the dashboard is on in a config that does not set dashboard.url")
+	}
+}
+
+// A repository's skills is absent (the default list) or a non-empty list: an
+// empty list is refused, as it would silently mean the default list.
+func TestRepositorySkillsMustNotBeEmpty(t *testing.T) {
+	base, err := os.ReadFile("testdata/valid.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	with := func(skills string) string {
+		body := strings.Replace(string(base), "    project: acme/widgets\n", "    project: acme/widgets\n    skills:"+skills+"\n", 1)
+		if body == string(base) {
+			t.Fatal("test replacement did not apply")
+		}
+		return body
+	}
+	for _, empty := range []string{" []", " [ ]"} {
+		_, err := Load(writeConfig(t, with(empty)))
+		if err == nil || !strings.Contains(err.Error(), "skills") || !strings.Contains(err.Error(), "acme/widgets") {
+			t.Errorf("Load with skills:%s = %v, want an error naming skills and the repository", empty, err)
+		}
+	}
+	// Null and absent both mean the default list.
+	for name, body := range map[string]string{"null": with(""), "absent": string(base)} {
+		cfg, err := Load(writeConfig(t, body))
+		if err != nil {
+			t.Fatalf("Load with skills %s: %v", name, err)
+		}
+		if cfg.Repositories[0].Skills != nil {
+			t.Errorf("skills %s = %v, want nil", name, cfg.Repositories[0].Skills)
+		}
+	}
+	cfg, err := Load(writeConfig(t, with(" [security]")))
+	if err != nil || len(cfg.Repositories[0].Skills) != 1 {
+		t.Errorf("Load with one skill = %v, %v", cfg, err)
 	}
 }

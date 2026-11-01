@@ -87,7 +87,7 @@ func get(t *testing.T, r *Resolver, instance, project string) Effective {
 }
 
 var allKeys = []string{KeyApprove, KeyReviewDrafts, KeyFailureStatus, KeySkills, KeyJobTimeout, KeyJobMemory,
-	KeyRerunLimitPerMR, KeyRerunLimitPerRepo}
+	KeyRerunLimitPerMR, KeyRerunLimitPerRepo, KeyRepoSkills}
 
 // wantOverridden checks exactly the given keys are overridden.
 func wantOverridden(t *testing.T, eff Effective, keys ...string) {
@@ -113,7 +113,10 @@ func wantDefaults(t *testing.T, eff Effective, except ...string) {
 		t.Errorf("FailureStatus = %q, want the default failed", eff.FailureStatus)
 	}
 	if !skip(KeySkills) && eff.Skills != nil {
-		t.Errorf("Skills = %v, want nil (all library skills)", eff.Skills)
+		t.Errorf("Skills = %v, want nil (the default list)", eff.Skills)
+	}
+	if !skip(KeyRepoSkills) && eff.RepoSkills != nil {
+		t.Errorf("RepoSkills = %v, want nil (none turned on)", eff.RepoSkills)
 	}
 	if !skip(KeyJobTimeout) && eff.JobTimeout != 10*time.Minute {
 		t.Errorf("JobTimeout = %v, want jobs.timeout 10m", eff.JobTimeout)
@@ -136,6 +139,7 @@ func TestResolverConfigKeys(t *testing.T) {
 		Approve: ptr(false), ReviewDrafts: ptr(false),
 		FailureStatus:   config.FailureStatusNeutral,
 		Skills:          []string{"security"},
+		RepoSkills:      []string{"team"},
 		JobTimeout:      ptr(20 * time.Minute),
 		JobMemory:       ptr(resource.MustParse("6Gi")),
 		RerunLimitPerMR: ptr(20), RerunLimitPerRepo: ptr(100),
@@ -147,8 +151,8 @@ func TestResolverConfigKeys(t *testing.T) {
 		t.Errorf("identity = %s %s %s %s", eff.Platform, eff.Instance, eff.Project, eff.Source)
 	}
 	if eff.Approve || eff.ReviewDrafts || eff.FailureStatus != config.FailureStatusNeutral ||
-		!slices.Equal(eff.Skills, []string{"security"}) || eff.JobTimeout != 20*time.Minute ||
-		eff.JobMemory.Cmp(resource.MustParse("6Gi")) != 0 || eff.RerunLimitPerMR != 20 || eff.RerunLimitPerRepo != 100 {
+		!slices.Equal(eff.Skills, []string{"security"}) || !slices.Equal(eff.RepoSkills, []string{"team"}) ||
+		eff.JobTimeout != 20*time.Minute || eff.JobMemory.Cmp(resource.MustParse("6Gi")) != 0 || eff.RerunLimitPerMR != 20 || eff.RerunLimitPerRepo != 100 {
 		t.Errorf("config keys not reflected: %+v", eff)
 	}
 	wantOverridden(t, eff, allKeys...)
@@ -173,9 +177,9 @@ func TestResolverConfigKeys(t *testing.T) {
 	}
 
 	// The resolver hands out copies: changing one doesn't change config.
-	eff.Skills[0] = "changed"
-	if cfg.Repositories[1].Skills[0] != "security" {
-		t.Errorf("Effective.Skills aliases the config")
+	eff.Skills[0], eff.RepoSkills[0] = "changed", "changed"
+	if cfg.Repositories[1].Skills[0] != "security" || cfg.Repositories[1].RepoSkills[0] != "team" {
+		t.Errorf("Effective.Skills or RepoSkills aliases the config")
 	}
 }
 
@@ -202,11 +206,14 @@ func TestResolverConfigWins(t *testing.T) {
 
 func TestResolverDefaultsAndOverrides(t *testing.T) {
 	st := newStore(t)
+	if _, err := st.CreateLibrarySkill(ctx, store.NewSkill{Name: "security", Content: "x"}); err != nil {
+		t.Fatal(err)
+	}
 	upsert(t, st, store.DashboardRepo{Instance: "main", Project: "acme/payments", Approve: ptr(false), CreatedBy: "alice"})
 	upsert(t, st, store.DashboardRepo{
 		Instance: "gh", Project: "Acme/Gadgets",
 		Approve: ptr(true), ReviewDrafts: ptr(false), FailureStatus: ptr("neutral"),
-		Skills: []string{"security"}, JobTimeoutSeconds: ptr(1200), JobMemory: ptr("6Gi"),
+		Skills: []string{"security"}, RepoSkills: []string{"team"}, JobTimeoutSeconds: ptr(1200), JobMemory: ptr("6Gi"),
 		RerunLimitPerMR: ptr(20), RerunLimitPerRepo: ptr(100),
 	})
 	// A row of an instance no longer configured is not a repository.
@@ -229,8 +236,8 @@ func TestResolverDefaultsAndOverrides(t *testing.T) {
 		t.Errorf("identity = %+v", full)
 	}
 	if !full.Approve || full.ReviewDrafts || full.FailureStatus != config.FailureStatusNeutral ||
-		!slices.Equal(full.Skills, []string{"security"}) || full.JobTimeout != 20*time.Minute ||
-		full.JobMemory.Cmp(resource.MustParse("6Gi")) != 0 || full.RerunLimitPerMR != 20 || full.RerunLimitPerRepo != 100 {
+		!slices.Equal(full.Skills, []string{"security"}) || !slices.Equal(full.RepoSkills, []string{"team"}) ||
+		full.JobTimeout != 20*time.Minute || full.JobMemory.Cmp(resource.MustParse("6Gi")) != 0 || full.RerunLimitPerMR != 20 || full.RerunLimitPerRepo != 100 {
 		t.Errorf("overrides not applied: %+v", full)
 	}
 	wantOverridden(t, full, allKeys...)
@@ -276,25 +283,6 @@ func TestDefaults(t *testing.T) {
 	for k, v := range got.Overridden {
 		if v {
 			t.Errorf("%s is overridden", k)
-		}
-	}
-}
-
-func TestLibrarySkills(t *testing.T) {
-	lib := map[string][]byte{"security": nil, "style": nil}
-	for _, tt := range []struct {
-		name           string
-		repo           Effective
-		skills, missed []string
-	}{
-		{"config skills as set", Effective{Source: SourceConfig, Skills: []string{"gone"}}, []string{"gone"}, nil},
-		{"all skills", Effective{Source: SourceDashboard}, nil, nil},
-		{"some left", Effective{Source: SourceDashboard, Skills: []string{"style", "gone"}}, []string{"style"}, []string{"gone"}},
-		{"none left", Effective{Source: SourceDashboard, Skills: []string{"gone"}}, nil, []string{"gone"}},
-	} {
-		skills, missed := tt.repo.LibrarySkills(lib)
-		if !slices.Equal(skills, tt.skills) || !slices.Equal(missed, tt.missed) || (tt.skills == nil) != (skills == nil) {
-			t.Errorf("%s: LibrarySkills = %v, %v; want %v, %v", tt.name, skills, missed, tt.skills, tt.missed)
 		}
 	}
 }

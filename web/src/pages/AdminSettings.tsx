@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 
-import { api, type DefaultsView, type LLMAdminView } from "../api";
+import { api, skillBudget, type DefaultsView, type LibrarySkill, type LLMAdminView } from "../api";
 import { useWrite } from "../layout/write";
-import { ErrorBox, Loading, Switch, secretText } from "../ui";
+import { ErrorBox, Loading, Switch, bytesText, secretText } from "../ui";
 
 // AdminSettings holds what an admin sets for the whole of pergent.sh: the
 // defaults a repository switched on in the dashboard gets, and the model
@@ -41,13 +41,18 @@ function Defaults({ v }: { v: DefaultsView }) {
   const [memory, setMemory] = useState(v.jobMemory);
   const [capMR, setCapMR] = useState(String(v.rerunLimitPerMR));
   const [capRepo, setCapRepo] = useState(String(v.rerunLimitPerRepo));
+  const [skills, setSkills] = useState(v.skills);
   const [problem, setProblem] = useState("");
   const [note, setNote] = useState("");
+  const library = useQuery({ queryKey: ["skills"], queryFn: () => api.get<LibrarySkill[]>("/api/skills") });
   const save = useMutation({
     mutationFn: (body: Record<string, unknown>) => write<DefaultsView>("PUT", "/api/admin/defaults", body),
     onMutate: () => setNote(""),
     onSuccess: (saved) => {
       client.setQueryData(["admin-defaults"], saved);
+      // The library's "default" marks and the repository pages' default list
+      // come from /api/skills.
+      client.invalidateQueries({ queryKey: ["skills"] });
       setNote("Defaults saved.");
     },
   });
@@ -74,6 +79,8 @@ function Defaults({ v }: { v: DefaultsView }) {
       jobMemory: memory.trim() === "" ? null : memory.trim(),
       rerunLimitPerMR: caps[0] === "" ? null : Number(caps[0]),
       rerunLimitPerRepo: caps[1] === "" ? null : Number(caps[1]),
+      // Left out when the library couldn't be read, the stored list is kept.
+      ...(library.isSuccess ? { skills: library.data.map((s) => s.name).filter((n) => skills.includes(n)) } : {}),
     });
   };
   return (
@@ -191,6 +198,28 @@ function Defaults({ v }: { v: DefaultsView }) {
           />
         </div>
       </div>
+      <div className="set">
+        <div>
+          <div className="name">Default skills</div>
+          <div className="help">
+            The library skills a repository reviews when it doesn't choose its own. A review takes at most{" "}
+            {bytesText(skillBudget)} of library skill text.
+          </div>
+        </div>
+      </div>
+      {library.isPending && <Loading />}
+      {library.isError && <ErrorBox error={library.error} />}
+      {library.isSuccess && (
+        <SkillPicker
+          library={library.data}
+          // Stored default names the library no longer has (a delete is refused
+          // while one is in use, but the list may predate that).
+          missing={v.skills.filter((n) => !library.data.some((s) => s.name === n))}
+          selected={skills}
+          disabled={save.isPending}
+          onChange={setSkills}
+        />
+      )}
       {save.isError && <ErrorBox error={save.error} />}
       <div className="foot">
         {problem && <span className="meta problem">{problem}</span>}
@@ -204,6 +233,69 @@ function Defaults({ v }: { v: DefaultsView }) {
         </button>
       </div>
     </form>
+  );
+}
+
+// SkillPicker picks the default list among the library's skills, with the
+// running total of their text against what a review takes.
+function SkillPicker({
+  library,
+  missing,
+  selected,
+  disabled,
+  onChange,
+}: {
+  library: LibrarySkill[];
+  missing: string[];
+  selected: string[];
+  disabled: boolean;
+  onChange: (names: string[]) => void;
+}) {
+  const total = library.filter((s) => selected.includes(s.name)).reduce((sum, s) => sum + s.size, 0);
+  const over = total > skillBudget;
+  return (
+    <div role="group" aria-label="Default skills">
+      {library.length === 0 && <div className="pad meta">The library has no skills yet. Add some under Skills.</div>}
+      {library.map((s) => (
+        <div className="skill" key={s.name}>
+          <Switch
+            label={`Default skill ${s.name}`}
+            checked={selected.includes(s.name)}
+            disabled={disabled}
+            onChange={(on) => onChange(on ? [...selected, s.name] : selected.filter((n) => n !== s.name))}
+          />
+          <b className="grow">{s.name}</b>
+          <span className="src">{bytesText(s.size)}</span>
+        </div>
+      ))}
+      {missing.map((n) => (
+        <div className="skill" key={`missing/${n}`}>
+          <Switch
+            label={`Default skill ${n}`}
+            checked={selected.includes(n)}
+            disabled={disabled}
+            onChange={(on) => onChange(on ? [...selected, n] : selected.filter((x) => x !== n))}
+          />
+          <b className="grow">{n}</b>
+          <span className="problem">not in the library</span>
+        </div>
+      ))}
+      {missing.some((n) => selected.includes(n)) && (
+        <div className="pad meta">
+          {missing.filter((n) => selected.includes(n)).join(", ")} {missing.length === 1 ? "is" : "are"} no longer in the library.
+          Saving removes {missing.length === 1 ? "it" : "them"} from the default skills.
+        </div>
+      )}
+      <div className={over ? "pad problem" : "pad meta"}>
+        Total {bytesText(total)} of {bytesText(skillBudget)}
+      </div>
+      {over && <div className="pad problem">A review takes at most that much library skill text; the save will be refused.</div>}
+      {selected.length === 0 && (
+        <div className="pad meta">
+          With no default skills, a repository that doesn't choose its own gets no skills and is not reviewed.
+        </div>
+      )}
+    </div>
   );
 }
 

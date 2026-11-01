@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
-import { MemoryRouter, useLocation } from "react-router";
+import { MemoryRouter, useLocation, useNavigate } from "react-router";
 
 import App from "../App";
 
@@ -11,19 +11,28 @@ function Location() {
   return <output data-testid="location">{loc.pathname + loc.search}</output>;
 }
 
+// Go hands the router's navigate to the test, for moving between pages
+// without a link (two cached pages of the same route).
+function Go({ into }: { into: { go: (to: string) => void } }) {
+  into.go = useNavigate();
+  return null;
+}
+
 // renderApp renders the whole app at path, with a fresh query cache and no
-// retries; it returns the cache's client with the render result.
+// retries; it returns the cache's client and a go(path) that navigates, with the render result.
 export function renderApp(path: string) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } },
   });
+  const nav = { go: (to: string) => void to };
   const result = render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[path]}>
         <App />
         <Location />
+        <Go into={nav} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  return { ...result, client };
+  return { ...result, client, go: (to: string) => nav.go(to) };
 }

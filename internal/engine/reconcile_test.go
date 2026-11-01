@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/jackc/pgx/v5"
 )
 
 const (
@@ -461,6 +463,28 @@ func dashboardRepo(t *testing.T, env *testEnv, r store.DashboardRepo) {
 	t.Helper()
 	if err := env.Store.UpsertDashboardRepo(env.ctx, r); err != nil {
 		t.Fatalf("UpsertDashboardRepo: %v", err)
+	}
+}
+
+// setDashboardSkills sets the skills of a dashboard repository with raw SQL,
+// which the store refuses for a name that is not in the library: it builds
+// the row a skill deleted from the library behind a repository's back would
+// leave.
+func setDashboardSkills(t *testing.T, env *testEnv, instance, project string, skills []string) {
+	t.Helper()
+	cfg, err := pgx.ParseConfig(os.Getenv(testDBEnv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.RuntimeParams["search_path"] = env.schema
+	conn, err := pgx.ConnectConfig(env.ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(env.ctx)
+	if _, err := conn.Exec(env.ctx, `UPDATE dashboard_repos SET skills = $3 WHERE instance = $1 AND project = $2`,
+		instance, project, skills); err != nil {
+		t.Fatal(err)
 	}
 }
 

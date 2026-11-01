@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/forge"
@@ -76,6 +77,86 @@ func (f *Forge) DefaultBranch(ctx context.Context, projectID int64) (string, err
 		return "", mapErr(err)
 	}
 	return p.DefaultBranch, nil
+}
+
+var _ forge.SourceReader = (*Forge)(nil)
+
+// unreadable reports whether err says the review bot may not read what it
+// asked for: GitLab's 404 (it hides what a user can't see) or 403 (a bot below
+// Reporter, a restricted repository feature).
+func unreadable(err error) bool {
+	var ae *gitlab.APIError
+	return errors.Is(err, gitlab.ErrNotFound) || (errors.As(err, &ae) && ae.Status == http.StatusForbidden)
+}
+
+// projectID resolves a project's full path ("group/project") with the review
+// bot. A project the bot can't see (GitLab answers 404) is
+// forge.ErrSourceNotFound.
+func (f *Forge) projectID(ctx context.Context, project string) (int64, error) {
+	project = strings.Trim(project, "/")
+	if project == "" {
+		return 0, forge.ErrSourceNotFound
+	}
+	p, err := f.c.GetProject(ctx, project)
+	if unreadable(err) {
+		return 0, forge.ErrSourceNotFound
+	}
+	if err != nil {
+		return 0, err
+	}
+	if p.ID == 0 {
+		return 0, errors.New("gitlabforge: project has no id")
+	}
+	return p.ID, nil
+}
+
+// ResolveRef returns the commit ref points at in the project, read with the
+// review bot (Reporter access is enough; the project need not be switched on).
+// A project or ref the bot can't read (404 or 403) is forge.ErrSourceNotFound.
+func (f *Forge) ResolveRef(ctx context.Context, project, ref string) (string, error) {
+	id, err := f.projectID(ctx, project)
+	if err != nil {
+		return "", err
+	}
+	commit, err := f.c.CommitSHA(ctx, id, ref)
+	if unreadable(err) {
+		return "", forge.ErrSourceNotFound
+	}
+	return commit, err
+}
+
+// ListTreeAt lists one directory of the project at commit. A missing
+// directory is nil, nil; a project the bot can't read is
+// forge.ErrSourceNotFound.
+func (f *Forge) ListTreeAt(ctx context.Context, project, path, commit string) ([]forge.TreeEntry, error) {
+	id, err := f.projectID(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := f.c.ListTree(ctx, id, path, commit)
+	if unreadable(err) {
+		return nil, forge.ErrSourceNotFound
+	}
+	return entries, mapErr(err)
+}
+
+// GetFileAt returns a file of the project at commit, at most
+// forge.MaxSourceFile bytes of it: a larger one is forge.ErrFileTooLarge. A
+// missing file is nil, false, nil; a project the bot can't read is
+// forge.ErrSourceNotFound.
+func (f *Forge) GetFileAt(ctx context.Context, project, path, commit string) ([]byte, bool, error) {
+	id, err := f.projectID(ctx, project)
+	if err != nil {
+		return nil, false, err
+	}
+	b, ok, err := f.c.GetFileMax(ctx, id, path, commit, forge.MaxSourceFile)
+	if errors.Is(err, gitlab.ErrTooLarge) {
+		return nil, false, forge.ErrFileTooLarge
+	}
+	if unreadable(err) {
+		return nil, false, forge.ErrSourceNotFound
+	}
+	return b, ok, mapErr(err)
 }
 
 // SetStatus sets the "pergent" commit status on sha.

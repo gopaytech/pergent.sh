@@ -12,6 +12,8 @@ const (
 	reasonDraft      = "Not reviewed: the change is a draft and drafts are not reviewed here."
 	reasonNotPosted  = "pergent.sh couldn't post the review."
 	reasonUnknown    = "Published before pergent.sh recorded review outcomes."
+	// reasonSkippedPrefix starts the reason of a run skipped for lack of skills.
+	reasonSkippedPrefix = "Not reviewed: "
 
 	statusRunning  = "running"
 	statusCanceled = "canceled"
@@ -44,6 +46,9 @@ func judge(r store.RunDigest) judged {
 			return judged{OutcomeRunning, reasonPosting, statusRunning}
 		}
 		return judged{OutcomeRunning, reasonReviewing, statusRunning}
+	case OutcomeSkipped:
+		// Nothing ran and nothing was posted: no status either.
+		return judged{OutcomeSkipped, reasonSkippedPrefix + r.SkipReason + ".", ""}
 	case OutcomeSuperseded:
 		status := ""
 		if !r.DispatchedAt.IsZero() {

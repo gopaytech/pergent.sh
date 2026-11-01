@@ -8,7 +8,6 @@ jobEgress:
 
 config:
   listen: ":8080"
-  skills_dir: /etc/pergent-sh/skills
   public_url: https://pergent.example.com
   callback_url: http://ci-pergent-sh.pergent-sh.svc:8080
   gitlab:
@@ -20,7 +19,6 @@ config:
   repositories:
     - gitlab: main
       project: acme/widgets
-      skills: [code-review]
   llm:
     provider: anthropic
     model: claude-sonnet-4
@@ -32,11 +30,3 @@ config:
 
 adminPassword:
   existingSecret: pergent-sh-admin-password
-
-skills:
-  code-review.md: |
-    ---
-    name: code-review
-    ---
-    Review the change for correctness bugs.
-

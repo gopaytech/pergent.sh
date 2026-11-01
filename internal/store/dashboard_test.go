@@ -40,6 +40,8 @@ func TestDashboardReposCRUD(t *testing.T) {
 		t.Errorf("times = %s %s", r.CreatedAt, r.UpdatedAt)
 	}
 
+	newSkill(t, s, "security", "x") // a repository can only name library skills
+	newSkill(t, s, "style", "x")
 	// An upsert in another case updates the same row: every setting is
 	// replaced, the creator and creation time stay.
 	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{
@@ -440,6 +442,7 @@ func TestUpdateDashboardRepo(t *testing.T) {
 		JobMemory: ptrTo("6Gi"), CreatedBy: "alice"}); err != nil {
 		t.Fatal(err)
 	}
+	newSkill(t, s, "style", "x") // a repository can only name library skills
 	found, err = s.UpdateDashboardRepo(ctx, "main", "acme/WIDGETS", func(r *DashboardRepo) {
 		if r.JobMemory == nil || *r.JobMemory != "6Gi" {
 			t.Errorf("apply got %+v", r)

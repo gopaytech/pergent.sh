@@ -50,14 +50,14 @@ func TestSetRunInputs(t *testing.T) {
 	if r := getRun(t, s, id); r.Model != nil || r.SkillSources != nil {
 		t.Fatalf("new run = model %v sources %v; want none", r.Model, r.SkillSources)
 	}
-	if err := s.SetRunInputs(ctx, id, "claude-sonnet-4", map[string]string{"security": "repo", "style": "library"}); err != nil {
+	if err := s.SetRunInputs(ctx, id, "claude-sonnet-4", map[string]string{"security": "repo", "style": "library"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	r := getRun(t, s, id)
 	if r.Model == nil || *r.Model != "claude-sonnet-4" || r.SkillSources["security"] != "repo" || r.SkillSources["style"] != "library" {
 		t.Errorf("run = model %v sources %v", r.Model, r.SkillSources)
 	}
-	if err := s.SetRunInputs(ctx, "bad", "", nil); err == nil {
+	if err := s.SetRunInputs(ctx, "bad", "", nil, nil); err == nil {
 		t.Error("SetRunInputs of a malformed id = nil error")
 	}
 }
@@ -165,6 +165,7 @@ func TestDigestOutcomes(t *testing.T) {
 		{`state = 'reported'`, OutcomeRunning},
 		{`state = 'reported', failure_reason = 'boom'`, OutcomeFailed},
 		{`state = 'superseded', outcome = 'approved'`, OutcomeSuperseded},
+		{`state = 'skipped'`, OutcomeSkipped},
 		{`state = 'publish_failed'`, OutcomeFailed},
 		{`state = 'published'`, OutcomeUnknown},
 		{`state = 'published', outcome = 'draft'`, OutcomeDraft},

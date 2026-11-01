@@ -179,7 +179,7 @@ func TestEndToEndCommands(t *testing.T) {
 	gl := env.GitLab
 	// Two skills, so a re-run of the failed one leaves the other alone, and a
 	// cap of one re-run per merge request.
-	env.Engine.Library["style"] = []byte("---\nname: style\n---\nCheck the style.\n")
+	env.AddSkill("style", "---\nname: style\n---\nCheck the style.\n")
 	one := 1
 	env.Engine.Config.Repositories[0].RerunLimitPerMR = &one
 

@@ -32,6 +32,8 @@ import (
 //   - "failed": no usable review (the Job failed, a skill failed, the
 //     result was unusable, or it couldn't be posted);
 //   - "superseded": replaced by a newer push, or the change was closed;
+//   - "skipped": not reviewed because the repository has no skills (no Job,
+//     no comment, no status); never counted as a review or a failure;
 //   - "unknown": published before pergent.sh recorded outcomes.
 //
 // A published run's outcome, reason and status are what the publisher
@@ -47,6 +49,7 @@ const (
 	OutcomeNoBlocking = store.OutcomeNoBlocking
 	OutcomeFailed     = store.OutcomeFailed
 	OutcomeSuperseded = store.OutcomeSuperseded
+	OutcomeSkipped    = store.OutcomeSkipped
 	OutcomeUnknown    = store.OutcomeUnknown
 )
 
@@ -65,11 +68,25 @@ type InstanceView struct {
 // numbers over the runs started in the last days, the 10 most recently
 // updated reviews of the last 90 days and the setup problems of the
 // repositories the user can see (instance-wide ones only for the admins of
-// that instance, and for operators).
+// that instance and for operators; the library's own, with no instance,
+// for every admin). Setup is the setup checklist, for
+// admins only, and null once all four items are done (and for everyone
+// else).
 type OverviewView struct {
 	Stats     StatsView       `json:"stats"`
 	Recent    []ReviewSummary `json:"recent"`
 	Attention []AttentionView `json:"attention"`
+	Setup     *SetupView      `json:"setup"`
+}
+
+// SetupView is what an admin still has to set up, one item each: an LLM
+// with its key, a connected instance, a skill in the library (a repository's
+// own skills don't count) and a repository switched on.
+type SetupView struct {
+	LLM        bool `json:"llm"`
+	Instance   bool `json:"instance"`
+	Skill      bool `json:"skill"`
+	Repository bool `json:"repository"`
 }
 
 // StatsView counts the runs started in the period that weren't superseded,
@@ -224,10 +241,15 @@ type SkillView struct {
 	Name string `json:"name"`
 	// Verdict is "no_blocking_issues", "has_blocking_issues" or "failed".
 	Verdict string `json:"verdict"`
-	// Source is "library" for a skill of pergent.sh's library, "repo"
-	// for the repository's own (also one replacing a library skill), as
-	// recorded when the review started; null when it wasn't recorded.
+	// Source is "library" for a skill of pergent.sh's library, or the
+	// repository folder it was read from (".pergent/skills", ".agents/skills",
+	// ".claude/skills" or ".github/skills"; also one replacing a library
+	// skill), as recorded when the review started; "repo" for a run from
+	// before the folders; null when it wasn't recorded.
 	Source *string `json:"source"`
+	// Version is the library skill's version the review used; 0 for a
+	// repository skill and for a run that didn't record it.
+	Version int `json:"version"`
 	// Findings are those still standing; Dismissed are those set aside by
 	// a dismissal, each with who dismissed it. Verdict counts the blocking
 	// findings left in Findings.
@@ -301,9 +323,11 @@ type Last7View struct {
 }
 
 // RepositoryDetailView is GET /api/repositories/{instance}/{project...}.
-// Settings is keyed approve, reviewDrafts, failureStatus, skills (null:
-// every library skill), jobTimeoutSeconds, jobMemory ("" when none),
-// rerunLimitPerMR and rerunLimitPerRepo.
+// Settings is keyed approve, reviewDrafts, failureStatus, skills (null: the
+// default list of skills; otherwise the library skills reviewed), repoSkills
+// (the detected repository skills turned on, a list, empty when none),
+// jobTimeoutSeconds, jobMemory ("" when none), rerunLimitPerMR and
+// rerunLimitPerRepo.
 type RepositoryDetailView struct {
 	Repo      RepositoryView         `json:"repo"`
 	Settings  map[string]SettingView `json:"settings"`
@@ -322,28 +346,196 @@ type SettingView struct {
 
 // InputsView is GET /api/repositories/{instance}/{project...}/inputs: the
 // skills and instructions a review would get, read from the default branch
-// with the review bot or App and kept 5 minutes. 503 while pergent.sh
-// hasn't set the repository up yet, 502 when they can't be read.
+// with the review bot or App and kept 5 minutes (a change of a skill setting
+// or of the default list clears it). 503 while pergent.sh hasn't set the
+// repository up yet, 502 when they can't be read.
 type InputsView struct {
-	Branch       string       `json:"branch"`
-	Skills       []InputSkill `json:"skills"`
-	Instructions string       `json:"instructions"`
+	Branch string `json:"branch"`
+	// Skills are the skills a review would run, by name, and each skill a
+	// review would fail on, with its Problem: a library skill the repository
+	// names that is gone, or a repository skill turned on that is in no
+	// repository folder.
+	Skills []InputSkill `json:"skills"`
+	// Detected are the skills of the repository folders that run only when
+	// turned on (".agents/skills", ".claude/skills", ".github/skills"), in
+	// the order of precedence, each with whether it is on.
+	Detected     []DetectedSkillView `json:"detected"`
+	Instructions string              `json:"instructions"`
 }
 
-// InputSkill is one resolved skill.
+// InputSkill is one skill of the final set.
 type InputSkill struct {
 	Name string `json:"name"`
-	// Source is "library" or "repo" (the repository's own, including one
-	// replacing a library skill).
-	Source  string `json:"source"`
+	// Source is "library" or the repository folder the skill was read from
+	// (also when it replaces a library skill); "" with a Problem.
+	Source string `json:"source"`
+	// Folder is the repository folder, "" for a library skill.
+	Folder string `json:"folder"`
+	// Version is the library skill's version, 0 for a repository skill.
+	Version int    `json:"version"`
+	Content string `json:"content"`
+	// URL is where a repository skill is on the platform (its file at the
+	// default branch); "" for a library skill, and when the platform's web
+	// address isn't known.
+	URL string `json:"url"`
+	// Problem says why a review would fail on this skill; Content is empty.
+	Problem string `json:"problem,omitempty"`
+}
+
+// DetectedSkillView is a skill found in a repository folder that runs only
+// when turned on. Name is the file or folder name when Problem is set.
+type DetectedSkillView struct {
+	Name    string `json:"name"`
+	Folder  string `json:"folder"`
+	Problem string `json:"problem,omitempty"`
+	// On is whether the repository turned it on (repoSkills).
+	On bool `json:"on"`
+}
+
+// SkillSourceView is where an installed skill came from. Kind is "instance"
+// (read through the API of a connected instance) or "url" (a public git
+// URL). Repo is shown to operators and to users of that instance who can see
+// the repository on it (D11); others get Hidden, and the page says it is "a
+// private repository on <instance>". URL is public. Path is the skill's
+// file in the repository, sent with Repo and URL, never with Hidden (a path
+// in a private repository is private too), for a check for updates to name
+// the folder.
+type SkillSourceView struct {
+	Kind     string `json:"kind"`
+	Instance string `json:"instance,omitempty"`
+	Repo     string `json:"repo,omitempty"`
+	URL      string `json:"url,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Ref      string `json:"ref"`
+	Commit   string `json:"commit"`
+	Hidden   bool   `json:"hidden,omitempty"`
+}
+
+// LibrarySkillView is one skill of the library, without its text. GET
+// /api/skills is a list of them, by name. UpdatedBy is shown to admins only.
+type LibrarySkillView struct {
+	Name       string           `json:"name"`
+	UpdatedBy  string           `json:"updatedBy,omitempty"`
+	Version    int              `json:"version"`
+	Size       int              `json:"size"`
+	UpdatedAt  time.Time        `json:"updatedAt"`
+	InDefaults bool             `json:"inDefaults"`
+	Source     *SkillSourceView `json:"source"`
+}
+
+// SkillVersionView is one saved version of a skill; Actor is shown to admins
+// only.
+type SkillVersionView struct {
+	Version int       `json:"version"`
+	At      time.Time `json:"at"`
+	Actor   string    `json:"actor,omitempty"`
+	Commit  string    `json:"commit"`
+}
+
+// SkillDetailView is GET /api/skills/{name}: the skill with its text (shown
+// as plain text only) and its versions, newest first. 404 for a name not in
+// the library.
+type SkillDetailView struct {
+	LibrarySkillView
+	Content  string             `json:"content"`
+	Versions []SkillVersionView `json:"versions"`
+}
+
+// SkillVersionDetailView is GET /api/skills/{name}/versions/{v}: one version
+// with its text. The history outlives a deleted skill.
+type SkillVersionDetailView struct {
+	SkillVersionView
 	Content string `json:"content"`
 }
 
-// LibrarySkill is one skill of the library. GET /api/skills is a list of
-// them, by name.
-type LibrarySkill struct {
+// SkillWrittenView is the answer to a create, an edit or a copy of a library
+// skill: the version it was saved as.
+type SkillWrittenView struct {
+	Version int `json:"version"`
+}
+
+// SkillInUseView is the 409 of a delete of a skill that is in use (D8):
+// Repositories are the ones the caller can see that name it, Hidden counts
+// the others, InDefaults says the default list names it.
+type SkillInUseView struct {
+	Error        string              `json:"error"`
+	Repositories []SkillUserRepoView `json:"repositories"`
+	Hidden       int                 `json:"hidden"`
+	InDefaults   bool                `json:"inDefaults"`
+}
+
+// SkillUserRepoView names a repository that uses a skill.
+type SkillUserRepoView struct {
+	Instance string `json:"instance"`
+	Project  string `json:"project"`
+}
+
+// SkillFetchStartedView is the 202 of POST /api/admin/skill-fetches: the
+// read to ask GET /api/admin/skill-fetches/{id} about.
+type SkillFetchStartedView struct {
+	ID string `json:"id"`
+}
+
+// SkillFetchView is GET /api/admin/skill-fetches/{id}, for the admin who
+// started the read only (404 for anyone else). Status is "running", "done"
+// or "failed" (Error says why, for the admin); Commit is the commit read.
+// Purpose is "install" or "update"; the source is Instance and Repo, or URL,
+// at Ref, in the folder Path.
+//
+// Skills are the skills found, once done. Updates are set for a check for
+// updates that is done (D16): each skill installed from the source at
+// FromRef whose file is in Path, matched with what was read by its file
+// path. Its State is "changed", "same", "removed at the source" (the file is
+// gone) or "renamed at the source" (the file names another skill: install it
+// again); Problem says why it can't be updated. Current and Fetched are the
+// two texts, for a diff shown as plain text, never HTML.
+type SkillFetchView struct {
+	ID       string             `json:"id"`
+	Status   string             `json:"status"`
+	Commit   string             `json:"commit"`
+	Error    string             `json:"error"`
+	Purpose  string             `json:"purpose"`
+	Instance string             `json:"instance,omitempty"`
+	Repo     string             `json:"repo,omitempty"`
+	URL      string             `json:"url,omitempty"`
+	Ref      string             `json:"ref"`
+	FromRef  string             `json:"fromRef,omitempty"`
+	Path     string             `json:"path"`
+	Skills   []FetchedSkillView `json:"skills"`
+	Updates  []SkillUpdateView  `json:"updates"`
+}
+
+// FetchedSkillView is one skill a read found: Size is the bytes of its text
+// (0 when the text was not kept: too large, or holding a secret), Problem
+// why it can't be installed, Taken that a skill of that name is in the
+// library already ("name already in the library").
+type FetchedSkillView struct {
 	Name    string `json:"name"`
-	Content string `json:"content"`
+	Path    string `json:"path"`
+	Size    int    `json:"size"`
+	Problem string `json:"problem,omitempty"`
+	Taken   bool   `json:"taken"`
+}
+
+// SkillUpdateView is one installed skill in a check for updates; Version is
+// its library version now.
+type SkillUpdateView struct {
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	State   string `json:"state"`
+	Problem string `json:"problem,omitempty"`
+	Version int    `json:"version"`
+	Current string `json:"current"`
+	Fetched string `json:"fetched"`
+}
+
+// SkillFetchResultView is the answer for one name of POST
+// /api/admin/skill-fetches/{id}/install or .../update: OK, or the Error why
+// not. The answer is a list of them, in the order asked.
+type SkillFetchResultView struct {
+	Name  string `json:"name"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
 }
 
 // AttentionView is one setup problem. Project is "" for a problem of the
@@ -405,6 +597,9 @@ type DefaultsView struct {
 	// request and per repository and UTC day.
 	RerunLimitPerMR   int `json:"rerunLimitPerMR"`
 	RerunLimitPerRepo int `json:"rerunLimitPerRepo"`
+	// Skills is the default list: the library skills a repository reviews
+	// when its own skills setting is null. Empty means none.
+	Skills []string `json:"skills"`
 }
 
 // LLMView is the model reviews use.
@@ -450,7 +645,11 @@ type LLMView struct {
 //     settings in the body and leaves the others; a null resets one to its
 //     default. The keys are those of RepositoryDetailView.Settings:
 //     approve and reviewDrafts (true or false), failureStatus ("failed" or
-//     "neutral"), skills (a non-empty list of library skill names),
+//     "neutral"), skills (a non-empty list of library skill names, or
+//     null for the default list; a name the library lacks is 400 `skill
+//     "x" is not in the skill library`, and so is a list whose texts come to
+//     more than 900 KiB), repoSkills (the names of detected repository
+//     skills to turn on; a list, empty or null for none),
 //     jobTimeoutSeconds (a whole number, 60 to 7200) and jobMemory (a
 //     Kubernetes quantity such as "6Gi", from 256Mi, and no less than
 //     jobs.resources.requests.memory, to 32Gi), and rerunLimitPerMR and
@@ -673,7 +872,10 @@ type AuditView struct {
 //   - GET /api/admin/defaults, PUT /api/admin/defaults (admins): DefaultsView
 //     for the repositories switched on in the dashboard; the PUT body has the
 //     same keys with the same bounds as a repository's settings, and
-//     replaces them all (a missing key or null is the built-in default).
+//     replaces them all (a missing key or null is the built-in default),
+//     except skills, the default list of library skill names: a missing key
+//     keeps the stored list, null or [] clears it, and a name the library
+//     lacks or a list over 900 KiB is 400 as for a repository.
 
 // SecretView says whether a secret is set and when it last changed. The
 // value is never sent. UpdatedAt is null for a secret that comes from the

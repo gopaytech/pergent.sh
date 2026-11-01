@@ -15,7 +15,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 
-	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/github"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
@@ -46,6 +45,8 @@ const (
 	unconnectedMsg = "queued reviews wait: pergent.sh isn't connected to their instance; an operator fixes it on Admin → Integrations"
 	msgNoLLM       = "no LLM is set: an operator sets it on Admin → Settings"
 
+	// reasonNoSkills is why a run is skipped and what "Needs attention" says.
+	reasonNoSkills     = "this repository has no skills"
 	reasonTooLarge     = "the skills and instructions for this repository are larger than 900 KiB"
 	reasonNoCloneToken = "pergent.sh has no clone token for this project yet"
 	// reasonNoRepository is a GitHub repository reconcile hasn't stored.
@@ -152,6 +153,9 @@ type dispatcher struct {
 	// keptSources are the sources of the skills a re-run of some skills keeps
 	// from the earlier run.
 	keptSources map[string]string
+	// keptVersions are the library versions of those kept skills, as the
+	// earlier run recorded them.
+	keptVersions map[string]int
 }
 
 func (d *dispatcher) dispatch(ctx context.Context) error {
@@ -280,17 +284,39 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		}
 	}
 
-	in, err := inputs.Resolve(ctx, source{plat.Forge}, e.Library, config.Repository{Skills: d.skills(repo)},
+	// The skills are read now, not when the run was queued: an edit made
+	// meanwhile is what reviews. A repository that names none uses the
+	// default list; one that names a skill the library lacks fails, with no
+	// fallback to other skills.
+	resolved, err := e.Store.ResolveLibrary(ctx, repo.Skills)
+	if err != nil {
+		return d.retry(ctx, fmt.Errorf("read the skill library: %w", err))
+	}
+	if len(resolved.Missing) > 0 {
+		return d.failSkills(ctx, repo, fmt.Sprintf("skill %q is not in the skill library", resolved.Missing[0]))
+	}
+	lib := make(map[string]inputs.LibraryEntry, len(resolved.Skills))
+	for name, sk := range resolved.Skills {
+		lib[name] = inputs.LibraryEntry{Content: []byte(sk.Content), Version: sk.Version}
+	}
+	in, err := inputs.ResolveSkills(ctx, source{plat.Forge}, lib, repo.RepoSkills,
 		run.MR.ProjectID, mr.StartSHA, previous)
 	if err != nil {
 		var se *sourceError
-		if errors.As(err, &se) {
+		var nf *inputs.NotFoundError
+		switch {
+		case errors.As(err, &se):
 			return d.retry(ctx, fmt.Errorf("read review inputs: %w", err))
+		case errors.As(err, &nf):
+			return d.failSkills(ctx, repo, err.Error())
 		}
 		return d.fail(ctx, err.Error())
 	}
 	if in, err = d.subset(ctx, in, mr); err != nil {
 		return d.retry(ctx, err)
+	}
+	if len(in.Skills) == 0 {
+		return d.skipNoSkills(ctx, plat, repo)
 	}
 	if err := in.Fit(inputs.ConfigMapLimit); err != nil {
 		if errors.Is(err, inputs.ErrTooLarge) {
@@ -364,11 +390,15 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		return d.retry(ctx, fmt.Errorf("record dispatch: %w", err))
 	}
 	d.log.Info("review job started", "job", name)
-	// For the dashboard, best effort: the model and where each skill came
-	// from.
-	sources := in.Sources
+	// A Job started: the repository has skills and every one is there.
+	e.clearAttention(ctx, repo.Instance, repo.Project, attSkillMissing)
+	e.clearAttention(ctx, repo.Instance, repo.Project, attNoSkills)
+	// For the dashboard, best effort: the model, where each skill came from
+	// and the library version of each library skill.
+	sources, versions := in.Sources, in.Versions
 	if len(d.keptSources) > 0 {
-		// A re-run of some skills shows the whole review's sources.
+		// A re-run of some skills shows the whole review's sources and
+		// versions.
 		sources = map[string]string{}
 		for name, src := range d.keptSources {
 			sources[name] = src
@@ -376,8 +406,15 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		for name, src := range in.Sources {
 			sources[name] = src
 		}
+		versions = map[string]int{}
+		for name, v := range d.keptVersions {
+			versions[name] = v
+		}
+		for name, v := range in.Versions {
+			versions[name] = v
+		}
 	}
-	if err := e.Store.SetRunInputs(ctx, run.ID, llm.Model, sources); err != nil {
+	if err := e.Store.SetRunInputs(ctx, run.ID, llm.Model, sources, versions); err != nil {
 		d.log.Info("couldn't record the review's model and skills for the dashboard", "error", d.redact(err.Error()))
 	}
 
@@ -440,12 +477,22 @@ func (d *dispatcher) subset(ctx context.Context, in *inputs.Inputs, mr forge.Cha
 			d.keptSources[name] = src
 		}
 	}
+	d.keptVersions = map[string]int{}
+	for name, v := range base.SkillVersions {
+		if _, rerun := only.Skills[name]; !rerun {
+			d.keptVersions[name] = v
+		}
+	}
 	return only, nil
 }
 
 // keptRun is the run whose results a re-run of some skills keeps, or the
 // reason it can't: it has to be a completed review of the base and head
-// commits this run reviews, by the skills in in. An error is the store's.
+// commits this run reviews, by the skills in in, and the skills it keeps (all
+// but the ones this run re-runs) have to be at the library version the earlier
+// run used, so a review never mixes results made under old and new skill
+// text. An earlier run that recorded no versions can't show that. An error is
+// the store's.
 func (d *dispatcher) keptRun(ctx context.Context, in *inputs.Inputs, mr forge.Change) (store.Run, string, error) {
 	run := d.run
 	if run.BaseRunID == nil {
@@ -481,6 +528,25 @@ func (d *dispatcher) keptRun(ctx context.Context, in *inputs.Inputs, mr forge.Ch
 	}
 	if len(seen) != len(in.Skills) {
 		return store.Run{}, "the skills changed since the earlier result", nil
+	}
+	if base.SkillVersions == nil {
+		return store.Run{}, "a skill changed since the earlier result", nil
+	}
+	rerun := map[string]bool{}
+	for _, n := range run.SkillSubset {
+		rerun[n] = true
+	}
+	for name := range in.Skills {
+		if rerun[name] {
+			continue
+		}
+		// A kept skill is at the same version, or in the repository's
+		// folder both times (no version).
+		cur, curOK := in.Versions[name]
+		was, wasOK := base.SkillVersions[name]
+		if cur != was || curOK != wasOK {
+			return store.Run{}, "a skill changed since the earlier result", nil
+		}
 	}
 	return base, "", nil
 }
@@ -630,15 +696,39 @@ func (d *dispatcher) redact(text string) string {
 	return text
 }
 
-// skills is the library skills repo reviews with (settings.LibrarySkills).
-// A skill no longer in the library is dropped with a warning.
-func (d *dispatcher) skills(repo settings.Effective) []string {
-	kept, missing := repo.LibrarySkills(d.e.Library)
-	if len(missing) > 0 {
-		d.log.Warn("reviewing without the repository's skills that are no longer in the skill library",
-			"skills", strings.Join(missing, ","), "all_library_skills", len(kept) == 0)
+// failSkills reports a run that can't review because of its skills: a named
+// skill is gone. The reason is also listed under "Needs attention" until a
+// run of the repository starts a Job.
+func (d *dispatcher) failSkills(ctx context.Context, repo settings.Effective, reason string) error {
+	d.e.setAttention(ctx, repo.Instance, repo.Project, attSkillMissing, reason)
+	return d.fail(ctx, reason)
+}
+
+// skipNoSkills ends a run that has no skill to review with as skipped: no Job
+// runs and nothing is posted, no comment and no status, so a required pergent
+// status keeps the change blocked. A skipped review decided nothing, so an
+// approval of this very head is withdrawn (one of an older head is stale, and
+// the cleanup withdraws it). The withdrawal is recorded first: when that
+// fails the run stays claimed and is tried again, rather than skipped with
+// the approval left standing.
+func (d *dispatcher) skipNoSkills(ctx context.Context, plat Platform, repo settings.Effective) error {
+	sctx, cancel := settleCtx(ctx)
+	defer cancel()
+	d.log.Warn("skipping the review: " + reasonNoSkills)
+	if err := d.e.withdrawRedecided(sctx, plat, d.run, d.log); err != nil {
+		return err
 	}
-	return kept
+	ok, err := d.e.Store.SkipRun(sctx, d.run.ID, reasonNoSkills, d.e.now())
+	if err != nil {
+		return fmt.Errorf("skip run: %w", err)
+	}
+	if ok {
+		// The skills did resolve (there are none): a skill that was missing
+		// is no longer the problem.
+		d.e.clearAttention(sctx, repo.Instance, repo.Project, attSkillMissing)
+		d.e.setAttention(sctx, repo.Instance, repo.Project, attNoSkills, reasonNoSkills)
+	}
+	return nil
 }
 
 // mintToken returns a fresh result token (32 random bytes, base64url without

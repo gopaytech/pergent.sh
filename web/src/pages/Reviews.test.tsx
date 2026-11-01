@@ -46,6 +46,28 @@ describe("Reviews", () => {
     expect(screen.getByTestId("location")).toHaveTextContent("/reviews?project=acme%2Fpayments&outcome=blocking&days=7");
   });
 
+  it("shows a skipped run as Not reviewed, never as Superseded, and filters on it", async () => {
+    const skipped = {
+      ...reviewApproved,
+      number: 9,
+      outcome: "skipped" as const,
+      reason: "Not reviewed: this repository has no skills.",
+    };
+    const fake = fakeApi({
+      ...base,
+      "GET /api/reviews?days=90": { body: { items: [skipped], nextCursor: "" } },
+      "GET /api/reviews?outcome=skipped&days=90": { body: { items: [skipped], nextCursor: "" } },
+    });
+    renderApp("/reviews");
+    const list = await screen.findByRole("region", { name: "Review list" });
+    expect(within(list).getByText("Not reviewed", { selector: ".pill" })).toHaveClass("grey");
+    expect(within(list).queryByText("Superseded")).not.toBeInTheDocument();
+    expect(within(list).getByText(/this repository has no skills/)).toBeInTheDocument();
+    await userEvent.selectOptions(await screen.findByRole("combobox", { name: "Result" }), "skipped");
+    await within(list).findByText("Not reviewed", { selector: ".pill" });
+    expect(fake.find("GET", "/api/reviews?outcome=skipped&days=90")).toHaveLength(1);
+  });
+
   it("loads the next page", async () => {
     fakeApi({
       ...base,

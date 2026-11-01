@@ -4,6 +4,7 @@ import type {
   DefaultsView,
   InstanceAdminView,
   IntegrationView,
+  LibrarySkill,
   LLMAdminView,
   Me,
   OverviewView,
@@ -13,6 +14,8 @@ import type {
   ReviewSummary,
   Role,
   RunDetailView,
+  SkillDetail,
+  SkillFetch,
   TeamView,
   UserView,
 } from "../api";
@@ -95,6 +98,7 @@ export const overview: OverviewView = {
       updatedAt: minutesAgo(60),
     },
   ],
+  setup: null,
 };
 
 export const noCan: Can = { rerun: false, dismissBlocking: false, dismissSuggestion: false, restore: false };
@@ -158,6 +162,7 @@ export const runDetail: RunDetailView = {
       name: "security-review",
       verdict: "has_blocking_issues",
       source: "library",
+      version: 3,
       findings: [
         {
           id: "a1b2c3",
@@ -178,6 +183,7 @@ export const runDetail: RunDetailView = {
       name: "code-review",
       verdict: "no_blocking_issues",
       source: null,
+      version: 0,
       findings: [
         {
           id: "f00d12",
@@ -224,6 +230,7 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
     reviewDrafts: { value: false, overridden: false },
     failureStatus: { value: "failed", overridden: false },
     skills: { value: null, overridden: false },
+    repoSkills: { value: [], overridden: false },
     jobTimeoutSeconds: { value: 600, overridden: false },
     jobMemory: { value: "6Gi", overridden: true },
     rerunLimitPerMR: { value: 10, overridden: false },
@@ -232,10 +239,95 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
   attention: repo.health === "attention" ? [overview.attention[0]] : [],
 });
 
-export const librarySkills = [
-  { name: "code-review", content: "---\nname: code-review\n---\nReview the code.\n" },
-  { name: "security-review", content: "---\nname: security-review\n---\nLook for security bugs.\n" },
-];
+// A skill written in the dashboard, on the default list.
+export const skillWritten: LibrarySkill = {
+  name: "code-review",
+  version: 2,
+  size: 52,
+  updatedAt: "2026-11-01T08:00:00Z",
+  inDefaults: true,
+  source: null,
+  updatedBy: "admin",
+};
+
+// A skill installed from a repository the viewer can see.
+export const skillInstalled: LibrarySkill = {
+  name: "security-review",
+  version: 1,
+  size: 61,
+  updatedAt: "2026-10-30T08:00:00Z",
+  inDefaults: false,
+  source: { kind: "instance", instance: "main", repo: "acme/skills", path: "skills/security-review.md", ref: "v1.0", commit: "abc1234def5678" },
+  updatedBy: "admin",
+};
+
+export const librarySkills: LibrarySkill[] = [skillWritten, skillInstalled];
+
+export const skillWrittenDetail: SkillDetail = {
+  ...skillWritten,
+  content: "---\nname: code-review\n---\nReview the code.\n",
+  versions: [
+    { version: 2, at: "2026-11-01T08:00:00Z", actor: "admin", commit: "" },
+    { version: 1, at: "2026-10-31T08:00:00Z", actor: "admin", commit: "" },
+  ],
+};
+
+export const skillInstalledDetail: SkillDetail = {
+  ...skillInstalled,
+  content: "---\nname: security-review\n---\nLook for security bugs.\n",
+  versions: [{ version: 1, at: "2026-10-30T08:00:00Z", actor: "admin", commit: "abc1234def5678" }],
+};
+
+// A read of acme/skills at v1.0, done: one skill to install, one whose name
+// is taken, one that can't be installed.
+export const fetchInstallDone: SkillFetch = {
+  id: "0b2f6c1e-9f55-4c1e-8a57-3d1d5b8c7a10",
+  status: "done",
+  commit: "1234567890abcdef",
+  error: "",
+  purpose: "install",
+  instance: "main",
+  repo: "acme/skills",
+  ref: "v1.0",
+  path: "skills",
+  skills: [
+    { name: "style", path: "skills/style.md", size: 2048, taken: false },
+    { name: "code-review", path: "skills/code-review.md", size: 52, taken: true },
+    { name: "huge", path: "skills/huge.md", size: 0, problem: "larger than 128 KiB", taken: false },
+  ],
+  updates: [],
+};
+
+// A check for updates of security-review (installed from acme/skills at v1.0,
+// file skills/security-review.md) against v1.1: one changed, one same, one
+// removed at the source, one renamed at the source.
+export const fetchUpdateDone: SkillFetch = {
+  ...fetchInstallDone,
+  purpose: "update",
+  ref: "v1.1",
+  fromRef: "v1.0",
+  skills: [],
+  updates: [
+    {
+      name: "security-review",
+      path: "skills/security-review.md",
+      state: "changed",
+      version: 1,
+      current: "Look for bugs.\nCheck inputs.\n",
+      fetched: "Look for bugs.\nCheck all inputs.\nCheck secrets.\n",
+    },
+    { name: "style", path: "skills/style.md", state: "same", version: 3, current: "Be kind.\n", fetched: "Be kind.\n" },
+    { name: "old", path: "skills/old.md", state: "removed at the source", version: 1, current: "Old text.\n", fetched: "" },
+    {
+      name: "moved",
+      path: "skills/moved.md",
+      state: "renamed at the source",
+      version: 2,
+      current: "Moved text.\n",
+      fetched: "Moved text, new name.\n",
+    },
+  ],
+};
 
 export const integrations: IntegrationView = {
   instance: "main",
@@ -257,6 +349,7 @@ export const defaults: DefaultsView = {
   jobMemory: "",
   rerunLimitPerMR: 10,
   rerunLimitPerRepo: 50,
+  skills: ["code-review"],
 };
 
 export const llm: LLMAdminView = {

@@ -185,6 +185,12 @@ type response struct {
 // do sends one request to path (already escaped, relative to the API URL),
 // retrying as send does.
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any, accept string) (*response, error) {
+	return c.doMax(ctx, method, path, query, body, accept, maxResponse)
+}
+
+// doMax is do with a reply limit: a reply of more than limit bytes is
+// ErrTooLarge, and no more than limit+1 bytes of it are read.
+func (c *Client) doMax(ctx context.Context, method, path string, query url.Values, body any, accept string, limit int) (*response, error) {
 	var payload []byte
 	if body != nil {
 		var err error
@@ -199,7 +205,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	if len(query) > 0 {
 		u.RawQuery = query.Encode()
 	}
-	return c.send(ctx, method, u.String(), payload, accept)
+	return c.send(ctx, method, u.String(), payload, accept, limit)
 }
 
 // retry says whether a failed attempt may be retried and how long to wait
@@ -211,10 +217,10 @@ type retry struct {
 
 // send sends a request, retrying 429, 5xx, a rate-limited 403 and connection
 // errors up to 3 times. A non-2xx final reply is *APIError.
-func (c *Client) send(ctx context.Context, method, rawURL string, payload []byte, accept string) (*response, error) {
+func (c *Client) send(ctx context.Context, method, rawURL string, payload []byte, accept string, limit int) (*response, error) {
 	delay := time.Second
 	for attempt := 0; ; attempt++ {
-		resp, r, err := c.once(ctx, method, rawURL, payload, accept)
+		resp, r, err := c.once(ctx, method, rawURL, payload, accept, limit)
 		if err == nil {
 			return resp, nil
 		}
@@ -237,7 +243,7 @@ type connError struct{ msg string }
 
 func (e *connError) Error() string { return e.msg }
 
-func (c *Client) once(ctx context.Context, method, rawURL string, payload []byte, accept string) (*response, retry, error) {
+func (c *Client) once(ctx context.Context, method, rawURL string, payload []byte, accept string, limit int) (*response, retry, error) {
 	var tok string
 	if c.token != nil {
 		var err error
@@ -277,12 +283,12 @@ func (c *Client) once(ctx context.Context, method, rawURL string, payload []byte
 	}
 	defer res.Body.Close()
 	c.noteExpiry(res.Header)
-	data, err := io.ReadAll(io.LimitReader(res.Body, maxResponse+1))
+	data, err := io.ReadAll(io.LimitReader(res.Body, int64(limit)+1))
 	if err != nil {
 		return nil, retry{ok: true}, &connError{msg: fmt.Sprintf("github: reading response: %s", mask(tok, err.Error()))}
 	}
-	if len(data) > maxResponse {
-		return nil, retry{}, errors.New("github: response too large")
+	if len(data) > limit {
+		return nil, retry{}, ErrTooLarge
 	}
 	if res.StatusCode >= 200 && res.StatusCode < 300 {
 		return &response{header: res.Header, body: data}, retry{}, nil
@@ -391,7 +397,7 @@ func (c *Client) paginateTimed(ctx context.Context, path string, pageTimeout tim
 		if pageTimeout > 0 {
 			pctx, cancel = context.WithTimeout(ctx, pageTimeout)
 		}
-		resp, err := c.send(pctx, http.MethodGet, next, nil, acceptJSON)
+		resp, err := c.send(pctx, http.MethodGet, next, nil, acceptJSON, maxResponse)
 		cancel()
 		if err != nil {
 			return err
@@ -598,10 +604,41 @@ func (c *Client) Compare(ctx context.Context, owner, repo, base, head string) (s
 	return out.MergeBaseCommit.SHA, nil
 }
 
+// CommitSHA returns the commit a branch, tag or commit ref points at (GET
+// /repos/{owner}/{repo}/commits/{ref}). A ref GitHub can't resolve is
+// ErrNotFound (404) or a 422 *APIError.
+func (c *Client) CommitSHA(ctx context.Context, owner, repo, ref string) (string, error) {
+	r, err := segment(ref)
+	if err != nil {
+		return "", err
+	}
+	p, err := repoPath(owner, repo, "/commits/", r)
+	if err != nil {
+		return "", err
+	}
+	var out struct {
+		SHA string `json:"sha"`
+	}
+	if err := c.getJSON(ctx, p, nil, &out); err != nil {
+		return "", err
+	}
+	if out.SHA == "" {
+		return "", errors.New("github: commit has no sha")
+	}
+	return out.SHA, nil
+}
+
 // File returns a file's raw content at ref. A missing file is nil, false, nil,
 // and so is a directory: GitHub answers a directory with its JSON listing
 // whatever media type was asked for, which is not a file (as on GitLab).
 func (c *Client) File(ctx context.Context, owner, repo, path, ref string) ([]byte, bool, error) {
+	return c.FileMax(ctx, owner, repo, path, ref, maxResponse)
+}
+
+// FileMax is File for a file that may not be trusted to be small: one of more
+// than max bytes is nil, false, ErrTooLarge, and no more than max+1 bytes of
+// it are read.
+func (c *Client) FileMax(ctx context.Context, owner, repo, path, ref string, max int) ([]byte, bool, error) {
 	fp, err := filePath(path)
 	if err != nil {
 		return nil, false, err
@@ -610,7 +647,7 @@ func (c *Client) File(ctx context.Context, owner, repo, path, ref string) ([]byt
 	if err != nil {
 		return nil, false, err
 	}
-	resp, err := c.do(ctx, http.MethodGet, p, refQuery(ref), nil, acceptRaw)
+	resp, err := c.doMax(ctx, http.MethodGet, p, refQuery(ref), nil, acceptRaw, max)
 	if errors.Is(err, ErrNotFound) {
 		return nil, false, nil
 	}

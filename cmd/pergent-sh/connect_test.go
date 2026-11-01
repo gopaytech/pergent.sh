@@ -577,6 +577,16 @@ func TestConnectServesDashboardSources(t *testing.T) {
 	if len(c.sources.Keys()) != 2 || len(c.catalogs.Keys()) != 2 {
 		t.Errorf("sources %v, catalogs %v; want main and gh", c.sources.Keys(), c.catalogs.Keys())
 	}
+	// The same Forge reads the repositories skills are installed from.
+	if r, ok := c.sourceReader("main"); !ok || r != gl {
+		t.Errorf("skill source reader of main = %v, %v", r, ok)
+	}
+	if r, ok := c.sourceReader("gh"); !ok || r != gh {
+		t.Errorf("skill source reader of gh = %v, %v", r, ok)
+	}
+	if _, ok := c.sourceReader("other"); ok {
+		t.Error("an instance with no reader has a skill source reader")
+	}
 	out := logs.String()
 	if strings.Count(out, "level=WARN") != 1 || !strings.Contains(out, "instance=other") || !strings.Contains(out, "platform=gitlab") {
 		t.Errorf("warnings = %q; want one naming instance other on gitlab", out)

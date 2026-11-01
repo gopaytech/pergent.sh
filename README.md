@@ -13,7 +13,7 @@ People can also act on a review where they already are, in a comment on the merg
 
 Everything that can comment, set statuses or approve stays inside pergent.sh. A Job only ever holds a read-only clone token, the LLM key and a one-time token to hand in its result.
 
-This release covers GitLab (gitlab.com or any self-managed instance) and GitHub.com; see [GitHub](#github) for the GitHub setup. An optional web [dashboard](#dashboard) shows every review, lets admins manage teams, switch repositories on and change their settings, and lets the operator add GitLab and GitHub instances, their secrets and the LLM without editing the config file. An instance added in the dashboard never blocks startup: when pergent.sh can't reach it, it starts anyway and the dashboard shows what to fix. Comment [commands](#commands) and the dashboard's buttons re-run a review or dismiss a finding; they never change settings, answer questions or run code (see [Limits](#limits)).
+This release covers GitLab (gitlab.com or any self-managed instance) and GitHub.com; see [GitHub](#github) for the GitHub setup. An optional web [dashboard](#dashboard) shows every review, lets admins manage teams, write and install skills, switch repositories on and change their settings, and lets the operator add GitLab and GitHub instances, their secrets and the LLM without editing the config file. An instance added in the dashboard never blocks startup: when pergent.sh can't reach it, it starts anyway and the dashboard shows what to fix. Comment [commands](#commands) and the dashboard's buttons re-run a review or dismiss a finding; they never change settings, answer questions or run code (see [Limits](#limits)).
 
 In this README a "merge request" is also a GitHub pull request, and the "review bot" and "approve bot" are the GitHub review App and approver, unless a section says otherwise.
 
@@ -71,21 +71,14 @@ The chart is in `charts/pergent-sh`. Postgres is not part of it. Every value is 
 
    config:
      listen: ":8080"
-     skills_dir: /etc/pergent-sh/skills
      public_url: https://pergent.example.com
      dashboard:
        url: https://pergent-dashboard.example.com
      jobs:
        namespace: pergent
-
-   # The skill library: file name -> content.
-   skills:
-     code-review.md: |
-       ---
-       name: code-review
-       ---
-       Review the change for correctness bugs and unsafe error handling.
    ```
+
+   The skill library is not a value: skills are written and installed in the dashboard, so a review has none until an admin adds some ([Skills and instructions](#skills-and-instructions)).
 
 4. Install:
 
@@ -103,15 +96,17 @@ On startup pergent.sh creates the project webhook and a read-only deploy token o
 
 What the chart creates:
 
-- A Deployment with **one replica** and the `Recreate` strategy. Do not scale it up: at startup pergent.sh requeues runs it had claimed but not launched, which is only safe when no other pod is dispatching. The pod runs as non-root with a read-only root filesystem, drops all capabilities, and has startup, readiness and liveness probes on `/healthz` (the startup probe allows 150 s, as pergent.sh starts listening only after the database and migrations and, for each instance in the config file, its GitLab tokens or GitHub Apps check out; instances added in the dashboard never delay it). The pod restarts on a config or skills change. When `adminPassword.existingSecret` is set, the pod also gets that Secret's `adminPassword.key` as the environment variable named by `config.dashboard.admin_password_env` (see [First sign-in](#first-sign-in)).
+- A Deployment with **one replica** and the `Recreate` strategy. Do not scale it up: at startup pergent.sh requeues runs it had claimed but not launched, which is only safe when no other pod is dispatching. The pod runs as non-root with a read-only root filesystem, drops all capabilities, and has startup, readiness and liveness probes on `/healthz` (the startup probe allows 150 s, as pergent.sh starts listening only after the database and migrations and, for each instance in the config file, its GitLab tokens or GitHub Apps check out; instances added in the dashboard never delay it). The pod restarts when the config changes. When `adminPassword.existingSecret` is set, the pod also gets that Secret's `adminPassword.key` as the environment variable named by `config.dashboard.admin_password_env` (see [First sign-in](#first-sign-in)).
 - A Service on port 8080 (`service.type`, `ClusterIP` by default). No Ingress: see [Exposing pergent.sh](#exposing-pergentsh).
 - A ServiceAccount, and in `jobsNamespace` a Role and RoleBinding for it: `batch/jobs` (create, get, list, watch, patch, delete), `secrets` and `configmaps` (create, get, delete), `pods` (get, list) and `pods/log` (get, to keep each review's log). There are no wildcard rules and nothing outside `jobsNamespace`.
-- A NetworkPolicy in `jobsNamespace` for the Job pods (those labelled `app.kubernetes.io/managed-by: pergent-sh`): no ingress; egress to DNS (UDP and TCP 53), to TCP 443 and 80 in `jobEgress.cidrs`, and to TCP 8080 of the pergent.sh pods for the result callback. A NetworkPolicy only takes effect when your CNI enforces them.
-- ConfigMaps for `config.yaml` and the `skills`.
+- A NetworkPolicy in `jobsNamespace` for the Job pods, review Jobs and [skill fetch Jobs](#installing-from-git) alike (those labelled `app.kubernetes.io/managed-by: pergent-sh`): no ingress; egress to DNS (UDP and TCP 53), to TCP 443 and 80 in `jobEgress.cidrs`, and to TCP 8080 of the pergent.sh pods for the result callback. A NetworkPolicy only takes effect when your CNI enforces them.
+- A ConfigMap for `config.yaml`.
 
 **Narrow `jobEgress.cidrs`.** The default `0.0.0.0/0` lets a Job reach any address on ports 80 and 443, including in-cluster services and the cloud metadata endpoint. Set it to the addresses of GitLab (or GitHub) and the LLM provider. An empty list (`cidrs: []`) allows no external egress at all: Jobs then reach only DNS and pergent.sh's port 8080. The optional `jobEgress.except` list is added to every `ipBlock` as NetworkPolicy `except` (for example `169.254.169.254/32`); it applies to every cidr, and Kubernetes rejects an entry outside its cidr, so use it with a broad cidr such as the default `0.0.0.0/0`.
 
-`config.jobs.namespace` must equal `jobsNamespace`, `config.skills_dir` must be `/etc/pergent-sh/skills` and `config.listen` must end in `:8080`; the chart refuses to render otherwise.
+**Public skill sources need `jobEgress.cidrs` too.** A skill fetch Job clones a public `https` URL under the same NetworkPolicy, so the host of every URL admins install skills from must be inside `jobEgress.cidrs`. With a narrow list, add the address of that host (for example GitHub's, for skills on github.com), or the fetch fails with `could not fetch <url> at <ref>; the URL, branch or tag may be wrong, or outside jobEgress.cidrs`. Skills of a repository on a connected GitLab or GitHub instance are read by the pergent.sh pod through the platform's API, not by a Job, and need nothing here.
+
+`config.jobs.namespace` must equal `jobsNamespace` and `config.listen` must end in `:8080`; the chart refuses to render otherwise. The chart's `skills` value was removed with `skills_dir`: the skill library lives in the dashboard, and a values file that still sets `skills` fails to render.
 
 If `public_url` points at a hostname that the Job pods reach from outside the cluster, they need egress to it on 443 (covered by the default `jobEgress.cidrs`). To keep Jobs off the internet path, set `callback_url` to the in-cluster Service, for example `http://pergent-sh.pergent-sh.svc:8080`.
 
@@ -122,11 +117,12 @@ The chart creates a Service (`pergent-sh.pergent-sh.svc:8080` for the install ab
 | Paths | Who calls them | Where to expose |
 |---|---|---|
 | `/webhooks/` | GitLab and GitHub | `public_url`'s host. GitHub.com and your GitLab must reach it. |
-| `/runs/` | the Jobs (result callback) | `public_url`'s host, or keep it in-cluster with `callback_url`. |
+| `/runs/` | the review Jobs (result callback) | `public_url`'s host, or keep it in-cluster with `callback_url`. |
+| `/skill-fetches/` | the skill fetch Jobs (result callback, only with the dashboard on) | `public_url`'s host, or keep it in-cluster with `callback_url`, as for `/runs/`. |
 | `/`, `/api/`, `/auth/` | people, in the [dashboard](#dashboard) | `dashboard.url`'s host, over https. It can be internal-only. |
 | `/healthz` | probes | nowhere; the kubelet calls the pod directly. |
 
-Expose only `/webhooks/` and `/runs/` on the public host, so the dashboard and its sign-in stay off the internet. Whatever sits in front must set `X-Forwarded-For` (see [Password sign-in limits](#password-sign-in-limits)).
+Expose only `/webhooks/`, `/runs/` and `/skill-fetches/` on the public host, so the dashboard and its sign-in stay off the internet. Whatever sits in front must set `X-Forwarded-For` (see [Password sign-in limits](#password-sign-in-limits)).
 
 ### Instances and the LLM in the config file
 
@@ -179,6 +175,23 @@ For GitHub, put the Apps' private keys (the whole `.pem` file of each) and the r
 | each `github[].oauth_client_id_env`, `oauth_client_secret_env` | When the instance is in the config file: the review App's client ID and a client secret, for signing in to the [dashboard](#dashboard). Both or neither; checked at startup when `dashboard.url` is set. |
 
 pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is handy for local development.
+
+### Upgrading to 0.3.0
+
+0.3.0 moves the skill library from the chart into the database and the dashboard. These changes break an install of 0.2.0 until you act:
+
+1. **The chart's `skills:` value is gone**, with its ConfigMap and volume. A values file that still sets it fails to render: `skills was removed: skills live in the dashboard (see the README, "Skills and instructions")`.
+2. **`skills_dir` is gone from the config.** A config that still has it is refused at startup: `skills_dir was removed: skills live in the dashboard (see the README, "Skills and instructions")`. Nothing is imported: the new library starts empty.
+3. **A repository with no `skills` setting now uses the default skill list**, not every skill. The default list starts empty. A repository whose `skills` is `[]` in the config is refused at startup (leave the key out for the default list; a list names at least one skill).
+4. **With no skills, there is no review.** A repository that has no skill in its `.pergent/skills` folder and none turned on, and whose list (or the default list) names no library skill, is skipped: no Job, no comment, no status ([No skills, no review](#no-skills-no-review)). Until the library has skills and the default list (or the repository) names one, that is every repository without `.pergent/skills`.
+5. **Migration `0014` runs at startup.** It adds the library, the default skill list and the new run columns, and lets a run be `skipped`. Back up PostgreSQL first and keep the backup: 0.2.0 does not know the new tables.
+6. **Skill fetch Jobs** read public URLs. The chart passes `PERGENT_SH_IMAGE` for them (set it to the pergent.sh image if you do not use the chart). `/skill-fetches/` must be reachable by the Jobs like `/runs/`, and the host of a URL must be inside `jobEgress.cidrs` ([Exposing pergent.sh](#exposing-pergentsh), [Installing from git](#installing-from-git)). Without the dashboard (`dashboard.url`) there is no skill fetching.
+
+To upgrade:
+
+1. Before you upgrade, save the text of every skill in your old `skills:` value, and note which repositories listed `skills`.
+2. Remove `skills:` from your values and `skills_dir` from your config, and upgrade.
+3. Sign in as an admin. Create the skills again under **Skills → New skill**, or install them from git ([Installing from git](#installing-from-git)), tick **Add to default skills** for the ones every repository should run, and set a repository's own list under its **Settings** where it had one. The overview's setup checklist shows what is left.
 
 ## GitLab project settings
 
@@ -417,9 +430,9 @@ Everything a platform account may see or do comes from the teams it is on, under
 
   | Role | Can |
   | --- | --- |
-  | `viewer` | Read the covered repositories: reviews, runs, findings, files, logs and settings. |
-  | `maintainer` | Also change the settings of the covered repositories (approve clean reviews, review drafts, failure status, skills, Job timeout and memory; not the re-run caps), and reset them to the defaults (the caps stay as they are). Press the review page's buttons: re-run, dismiss and restore ([Commands](#commands)). Not switch repositories on or off, and not change teams. |
-  | `admin` | Also change the re-run caps of the covered repositories, switch repositories on and off (**Add repository**), change the defaults on **Settings** (the caps among them), manage **Users** and **Teams**, and read the **Audit log**. An admin team covers every repository switched on for the instance its members signed in with that they can see on their platform. |
+  | `viewer` | Read the covered repositories: reviews, runs, findings, files, logs and settings. Everyone with a team also reads the skill library. |
+  | `maintainer` | Also change the settings of the covered repositories (approve clean reviews, review drafts, failure status, the skills a repository runs and the repository skills it turns on, Job timeout and memory; not the re-run caps), and reset them to the defaults (the caps stay as they are). Press the review page's buttons: re-run, dismiss and restore ([Commands](#commands)). Not switch repositories on or off, and not change teams. |
+  | `admin` | Also change the re-run caps of the covered repositories, switch repositories on and off (**Add repository**), change the defaults on **Settings** (the caps and the default skill list among them), write, install, update, copy and delete the skills of the library, manage **Users** and **Teams**, and read the **Audit log**. An admin team covers every repository switched on for the instance its members signed in with that they can see on their platform. |
 
   Only admins manage teams: creating them, their members, roles and repositories. Platform admins can add people to admin teams and remove them.
 - **Platform admins handle their own instance.** A platform admin lists and removes the accounts of the instance it signed in with, and adds and removes team members of that instance only. Members of other instances stay on a team as they are, are never named to it, and are counted as `+N members from other instances`; adding one is refused with 409 `you can only change members of your own instance` and removing one with 403 `you can only remove accounts of your own instance`. Password admins do all of it across instances.
@@ -439,15 +452,16 @@ Everything a platform account may see or do comes from the teams it is on, under
 
 **Everyone with a team** sees, for the repositories they can see:
 
-- **Overview:** the number of reviews, approvals, blocking reviews and failed reviews over the last 7, 30 or 90 days, the most recent reviews, and "Needs attention".
-- **Reviews:** filtered by repository, result and time. Each merge request has a page with every run (commit, what started it, result, duration) and, for a run, the status set on the platform, whether it was approved and why not, the pergent version, model, tokens, each skill's verdict, findings (with the ones people dismissed, who dismissed them and why), checks, files (reviewed, skipped with the rule, not reviewed) and the log. Maintainers and admins of the repository also get the buttons **Re-run review** and **Re-run failed only**, and **Dismiss** and **Restore** on findings ([Commands](#commands)).
-- **Repositories:** each with its last 7 days and health; its reviews, its setup checks and its skills and instructions. Skills & instructions shows what a review of the default branch would get, read with the review bot or App and kept for 5 minutes.
-- **Skills:** the skill library, read-only.
+- **Overview:** the number of reviews, approvals, blocking reviews and failed reviews over the last 7, 30 or 90 days, the most recent reviews, and "Needs attention". Admins also see a setup checklist (the model and its key, a connected instance, a skill in the library, a repository switched on); each item links to its page, ticks when done, and the list goes away when all four are done.
+- **Reviews:** filtered by repository, result and time. Each merge request has a page with every run (commit, what started it, result, duration) and, for a run, the status set on the platform, whether it was approved and why not, the pergent version, model, tokens, each skill's verdict, findings (with the ones people dismissed, who dismissed them and why), checks, files (reviewed, skipped with the rule, not reviewed) and the log. Each skill shows where it came from: `library v3` (the library version the review used), or `repo (.claude/skills)` for a skill read from the repository. A run skipped because the repository has no skills shows as **Not reviewed** (result `skipped`, with its own filter), not as superseded, and is not counted as a review or a failure. Maintainers and admins of the repository also get the buttons **Re-run review** and **Re-run failed only**, and **Dismiss** and **Restore** on findings ([Commands](#commands)).
+- **Repositories:** each with its last 7 days and health; its reviews, its setup checks and its skills and instructions. Skills & instructions shows what a review of the default branch would get, read with the review bot or App and kept for 5 minutes: each skill with its library version or repository folder, a link to its file for a repository skill, and the problem a review would fail on. A repository's **Settings** choose between "Use the default skills (a, b)" and "Choose skills", with a running total against the 900 KiB a review takes, and list the skills found in `.agents/skills`, `.claude/skills` and `.github/skills` with switches, off at first (`.pergent/skills` is always on; only the `SKILL.md` text is used). **Add repository** warns when the default skill list is empty.
+- **Skills:** the skill library: each skill's name, version, where it came from (written in the dashboard, or the repository and branch or tag it was installed from), whether it is on the default list and when it changed, with its text in a plain-text box (never rendered as HTML or markdown) and its saved versions. A skill installed from a private repository is shown to everyone with a team, so installing is sharing; the repository's path is shown only to people who can see that repository, and others see `a private repository on <instance>`. Who saved each version is shown to admins only. See [Skills and instructions](#skills-and-instructions).
 
 **Admins** also get:
 
 - the on/off switch of each repository and **Add repository**, which lists the repositories that both the admin (GitLab: Reporter or above as a member, a shared group's member included; GitHub: read access) and the review bot (GitLab: Maintainer) or review App (GitHub: installed) can reach, at most 500, with a search. A password admin has no platform account, so it sees what the review bot or App can reach;
 - each repository's **Settings**: approve clean reviews, the failure status, review drafts, the library skills to run, the Job's timeout (60 to 7200 seconds) and memory limit (from 256Mi, and not below `jobs.resources.requests.memory`, to 32Gi), and the re-run caps per merge request and per repository per day (1 to 1000; only an admin of the repository changes these two). Each shows "overridden here" or "default", and "Reset to defaults" clears every override (a maintainer's reset leaves the caps);
+- on **Skills**, the buttons **New skill**, **Install from git** and **Check for updates**, and per skill Edit (a written skill only), Copy and Delete ([Skills and instructions](#skills-and-instructions));
 - **Users**, **Teams** and the **Audit log**;
 - **Integrations** (their own instance: connection, approver, each repository's setup and whether the approver reaches it, an approve token about to expire), read-only for platform admins, and **Settings**: the defaults a repository switched on in the dashboard gets (approve clean reviews, review drafts, failure status, Job timeout and memory, and the re-run caps per merge request and per repository; the config's repositories keep the config's own), and the LLM, which only password admins change.
 
@@ -466,18 +480,18 @@ Password admins add GitLab and GitHub instances, with their secrets, under **Adm
 - **An instance that can't connect** (at startup, or right after it was saved) doesn't stop pergent.sh, so the dashboard where it is fixed stays up. pergent.sh logs the error, and an instance-wide "Needs attention" item (kind `instance_unreachable`) shows it to the operator and to that instance's admins; the item goes when the instance connects. Its webhooks are still accepted and the events queued, and reviews of its repositories wait queued (the log says `queued reviews wait: pergent.sh isn't connected to their instance; an operator fixes it on Admin → Integrations`) until it is saved again in **Integrations**. An instance in the config file that can't connect still stops startup.
 - **The config file wins.** Instances in the config are listed as "config" and are read-only (409 `this instance is managed by the config file; change it there`), and so are the secrets they name by environment variable. An instance in the dashboard whose name is also in the config stops startup, naming both. Repositories in the config name instances in the config only; repositories of an instance added in the dashboard are switched on in the dashboard.
 - **The LLM** (provider, model, base URL and API key) is set in the dashboard by password admins, unless the config has an `llm:` block, which wins and makes it read-only (409 `the LLM is set in the config file; change it there`). The key is needed only when none is stored. With no LLM set, reviews wait queued, and the log says `no LLM is set: an operator sets it on Admin → Settings`.
-- **Defaults.** The defaults on **Admin → Settings** (approve clean reviews, review drafts, failure status, Job timeout, Job memory and the re-run caps, 10 per merge request and 50 per repository a day until set) apply to repositories switched on in the dashboard only; repositories in the config keep the config's own. The Job image, concurrency, `max_running` and resources stay in the config and the chart.
+- **Defaults.** The defaults on **Admin → Settings** (approve clean reviews, review drafts, failure status, Job timeout, Job memory and the re-run caps, 10 per merge request and 50 per repository a day until set, and the default skill list, picked among the library's skills with a running total against 900 KiB) apply to repositories switched on in the dashboard only; repositories in the config keep the config's own. The Job image, concurrency, `max_running` and resources stay in the config and the chart.
 - **`PERGENT_SH_SECRET_KEY`.** Secrets are stored encrypted with it. Changing it isn't supported and there is no rotation. A stored secret that can't be opened with the key shows as "not set" (startup logs which instance and fields, `secrets of an instance couldn't be opened with PERGENT_SH_SECRET_KEY; they count as not set`), and has to be entered again.
 
 ### Repositories in the config and in the dashboard
 
-- A repository listed in `repositories` is shown as **managed by config** and is read-only in the dashboard; a write to it gets 409. Every dashboard setting has a config key (`approve`, `failure_status`, `review_drafts`, `skills`, `job_timeout`, `job_memory`, `rerun_limit_per_mr`, `rerun_limit_per_repo`; see [Config reference](#config-reference)).
+- A repository listed in `repositories` is shown as **managed by config** and is read-only in the dashboard; a write to it gets 409. Every dashboard setting has a config key (`approve`, `failure_status`, `review_drafts`, `skills`, `repo_skills`, `job_timeout`, `job_memory`, `rerun_limit_per_mr`, `rerun_limit_per_repo`; see [Config reference](#config-reference)).
 - A repository switched on in the dashboard is stored in Postgres. pergent.sh sets it up (webhook and deploy token on GitLab) the same way as a config repository, in a reconcile of that repository alone it starts at once (switches made within 10 seconds of each other are handled together, at the end of those 10 seconds); switching it off removes them the same way. The hourly reconcile still covers every repository. Users whose teams cover it (an admin team covers every repository of its instance) see a newly switched-on repository from their next request, once the platform has confirmed they can see it.
 - A repository can't be in both: when it is added to the config, the next reconcile deletes its dashboard record and the config's settings apply. Removing a repository from the config switches it off; it doesn't fall back to the dashboard. To hand a repository to the dashboard, remove it from the config, redeploy, then switch it on in the dashboard.
 
 ### Audit log
 
-Admins read the audit log under **Admin → Audit log**: who did what and when, for every change made in the dashboard. Each entry names its actor as `alice (gitlab main)` (username, platform and instance), `root (password)` for a password admin or `cli` for a reset from the command line. It records sign-ins (GitLab, GitHub and password), failed password sign-ins and lockouts, password changes and resets, accounts, teams (the members added and removed by username, and the role before and after), instances and which of their fields changed, the LLM and the defaults (which fields), repositories switched on and off with their settings changed or reset, and the review actions: `review_rerun`, `review_rerun_failed`, `finding_dismissed` and `finding_restored`, from a comment or a button, each with the merge request, the head commit and, for a finding, its fingerprint and the reason given. It is kept for 90 days and never holds a secret value: an entry for a secret names the field, not its content. A platform admin doesn't see the entries about repositories it can't see, about other instances, or the password admins' own sign-ins and passwords.
+Admins read the audit log under **Admin → Audit log**: who did what and when, for every change made in the dashboard. Each entry names its actor as `alice (gitlab main)` (username, platform and instance), `root (password)` for a password admin or `cli` for a reset from the command line. It records sign-ins (GitLab, GitHub and password), failed password sign-ins and lockouts, password changes and resets, accounts, teams (the members added and removed by username, and the role before and after), instances and which of their fields changed, the LLM and the defaults (which fields; the default skill list shows as `skills`), the skill library (`skill_created`, `skill_updated`, `skill_installed`, `skill_source_updated`, `skill_copied` and `skill_deleted`, each naming the skill, with its version or the skill it was copied from, and for an install or an update the source (a private repository by its instance only), the branch or tag and the short commit; a skill's text is never in an entry), repositories switched on and off with their settings changed or reset, and the review actions: `review_rerun`, `review_rerun_failed`, `finding_dismissed` and `finding_restored`, from a comment or a button, each with the merge request, the head commit and, for a finding, its fingerprint and the reason given. It is kept for 90 days and never holds a secret value: an entry for a secret names the field, not its content. A platform admin doesn't see the entries about repositories it can't see, about other instances, or the password admins' own sign-ins and passwords.
 
 ### Logs and "Needs attention"
 
@@ -487,6 +501,7 @@ Admins read the audit log under **Admin → Audit log**: who did what and when, 
   - the GitHub approve App isn't installed on the repository, or the approve bot user can't reach it;
   - reviews running out of memory (two or more in the last 7 days);
   - the GitHub approve bot's token expires within 14 days. This one concerns the whole instance and is shown to its admins and the password admins;
+  - a run failed because a skill it needs is missing (`skill "x" is not in the skill library`, or `skill "x" is turned on but not found in the repository`), or was skipped because the repository has no skills (`this repository has no skills`). Either goes when a later run of the repository starts a Job ([Skills and instructions](#skills-and-instructions));
   - an instance added in the dashboard couldn't be connected (`instance_unreachable`; it goes when the instance connects), or its removal is stuck because the platform refuses to give up its webhooks ([Instances and secrets in the dashboard](#instances-and-secrets-in-the-dashboard)). These concern the whole instance too: they are shown to the password admins and to that instance's admins.
 
 ### Limits of the access check
@@ -497,14 +512,14 @@ A sign-in, and each later access check, must finish within 30 seconds in all: th
 
 ## Config reference
 
-The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/pergent-sh/config.yaml`). Unknown keys are an error. It holds no secrets: tokens and keys are named by environment variable. Every problem found is reported at startup, and pergent.sh does not start with an invalid config, a missing skill, a missing secret, a database it cannot reach, or, for an instance in the config file, a GitLab token that does not work or a GitHub App key or approve token that does not work (instances added in the dashboard never stop startup). The error names the instance and what failed, never the key or token. Without `dashboard.url`, at least one `gitlab` or `github` instance and an `llm:` block are required; with it, both can be added in the [dashboard](#dashboard) instead. `dashboard.admins`, the old admin groups and teams, was removed: a config that still has it is refused at startup (`dashboard.admins was removed: admins are now teams in the dashboard (see the README, "Teams")`).
+The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/pergent-sh/config.yaml`). Unknown keys are an error. It holds no secrets: tokens and keys are named by environment variable. Every problem found is reported at startup, and pergent.sh does not start with an invalid config, a missing secret, a database it cannot reach, or, for an instance in the config file, a GitLab token that does not work or a GitHub App key or approve token that does not work (instances added in the dashboard never stop startup). The error names the instance and what failed, never the key or token. Without `dashboard.url`, at least one `gitlab` or `github` instance and an `llm:` block are required; with it, both can be added in the [dashboard](#dashboard) instead. `dashboard.admins`, the old admin groups and teams, was removed: a config that still has it is refused at startup (`dashboard.admins was removed: admins are now teams in the dashboard (see the README, "Teams")`).
 
 | Field | Default | Description |
 | --- | --- | --- |
 | `listen` | `:8080` | Address of the HTTP server. |
 | `public_url` | required | HTTPS base URL where GitLab and GitHub reach pergent.sh, without a trailing slash. The GitLab webhook is created as `<public_url>/webhooks/gitlab/<instance name>`; the GitHub review App's webhook URL is `<public_url>/webhooks/github/<instance name>`. |
 | `callback_url` | `public_url` | Base URL where Jobs post their result (`<callback_url>/runs/<id>/result`). `http` or `https`, no trailing slash. Set it to the in-cluster Service to keep that traffic inside the cluster. |
-| `skills_dir` | required | Directory with the skill library: top-level `*.md` files and `<name>/SKILL.md` folders. The chart sets it to `/etc/pergent-sh/skills`. |
+| `skills_dir` | removed | The skill library lives in the dashboard now. A config that still has it is refused at startup (`skills_dir was removed: skills live in the dashboard (see the README, "Skills and instructions")`). |
 | `gitlab[].name` | required | Instance name, `[a-z0-9-]+`, unique across `gitlab` and `github`. Part of the webhook URL. |
 | `gitlab[].url` | required | Base URL of the GitLab instance. It must be `https` (the bot tokens travel in a header), without a trailing slash. A redirect to another host is never followed. |
 | `gitlab[].review_token_env` | required | Name of the env var with the review bot token. |
@@ -524,7 +539,8 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `repositories[].gitlab` | one of `gitlab` and `github` | Name of one of the `gitlab` instances. |
 | `repositories[].github` | one of `gitlab` and `github` | Name of one of the `github` instances. |
 | `repositories[].project` | required | Project path, such as `acme/widgets`; on GitHub exactly `owner/name`, matched case-insensitively. Each project appears once per instance. |
-| `repositories[].skills` | all library skills | Names of library skills to run. Empty or omitted means all of them. A name that is not in the library stops pergent.sh at startup. |
+| `repositories[].skills` | the default list | Names of library skills to run: a non-empty list, or leave it out for the default list (an empty list is refused). A name that is not in the library does not stop startup: it is listed under "Needs attention" and the repository's runs fail naming it until the skill exists. |
+| `repositories[].repo_skills` | none | Names of the skills found in the repository's `.agents/skills`, `.claude/skills` and `.github/skills` folders that run, besides the `.pergent/skills` ones, which always run. A turned-on name that is not found in the target branch fails the run (`skill "x" is turned on but not found in the repository`). The dashboard's switches on a repository's Settings are the same setting for a repository the dashboard manages. See [Skills and instructions](#skills-and-instructions). |
 | `repositories[].approve` | `true` | Approve clean reviews. With `false`, pergent.sh still reviews, comments and sets the status, but never approves, and withdraws any approval the approve bot already made in the repository. The dashboard's "Approve clean reviews" switch is the same setting for a repository the dashboard manages. See [Turning approval off](#turning-approval-off). |
 | `repositories[].review_drafts` | `true` | Review drafts. With `false`, a draft merge request (GitLab `draft`, or `work_in_progress` on older versions) or draft pull request is not reviewed: no run, comment, status or approval, until it is marked ready, which starts its review. Closing or merging is handled as before. The dashboard's "Review drafts" switch is the same setting for a repository the dashboard manages. With `true`, a draft is reviewed but approved only once it is marked ready. See [Pushes, edits and failures](#pushes-edits-and-failures). |
 | `repositories[].failure_status` | `failed` | Status used when a review could not be done: `failed` or `neutral`. GitLab has no neutral state, so `neutral` is set as `skipped`; a project can count skipped pipelines as successful through a GitLab setting. On GitHub it is the Check Run conclusion `failure` or `neutral`, and GitHub counts a `neutral` conclusion as passing for a required status check: with `neutral`, a failed review does not block the merge. `failed` is never counted as successful. Blocking findings are always `failed`. |
@@ -545,11 +561,98 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 
 ## Skills and instructions
 
-- **Library skills** are the files in `skills_dir`. A repository's `skills:` list picks from them.
-- **Repository skills** live in the reviewed repository, in `.pergent/skills/` (`*.md` files and `<name>/SKILL.md` folders). A repository skill replaces a library skill of the same name.
-- **Instructions** are the root `AGENTS.md` (or `CLAUDE.md` when there is no `AGENTS.md`) plus `.pergent/instructions.md`.
+A review runs a set of **skills**: each is a markdown text (with optional frontmatter) that tells the model what to look for. pergent.sh builds the set for every review from three sources:
 
-Repository skills and instructions are read from the target branch at the merge request's `diff_refs.start_sha` (on GitHub, the pull request's `base.sha`), not from the merge request's own branch, so a merge request cannot change the rules it is reviewed by. Together with the previous review they must fit in 900 KiB; the previous review is dropped first, and if the skills and instructions alone are too large the run fails with a comment and no Job starts.
+| Source | Where it lives | Who changes it |
+| --- | --- | --- |
+| **The skill library** | In pergent.sh's database. | Admins, in the dashboard: written there, or installed from a git repository. |
+| **Repository skills** | In the reviewed repository: `.pergent/skills/` always runs; `.agents/skills/`, `.claude/skills/` and `.github/skills/` run only when a maintainer or admin turns a skill on. | The repository's own merge requests. |
+| **Instructions** | The root `AGENTS.md` (or `CLAUDE.md` when there is no `AGENTS.md`) plus `.pergent/instructions.md`. | The repository's own merge requests. |
+
+Skills are not in the Helm values or the config file. The chart's `skills:` value and the config's `skills_dir` were removed ([Upgrading to 0.3.0](#upgrading-to-030)).
+
+### How a review picks its skills
+
+1. **Library skills.** The repository's `skills` list names them. A repository that sets none (`null`) uses the **default skill list**, which admins set under **Admin → Settings**. A repository's own list is never empty: it names at least one skill, or it is unset and uses the default list.
+2. **Repository skills.** pergent.sh reads `.pergent/skills/` from the target branch, and from `.agents/skills/`, `.claude/skills/` and `.github/skills/` only the skills the repository turned on (its `repoSkills` setting, or `repo_skills` in the config). A skill is a `*.md` file or a `<name>/SKILL.md` folder; of a folder only the `SKILL.md` text is used, and its other files are ignored.
+3. **One set.** The skills are merged by name. When a name is in several places, the first of these wins: `.pergent/skills`, `.agents/skills`, `.claude/skills`, `.github/skills`, then the library. A skill in one of the last three folders that is not turned on is ignored and replaces nothing, even when it is malformed.
+
+The library names are checked first, so a name the repository lists that is not in the library fails the run even when the repository has its own skill of that name.
+
+Repository skills and instructions are read from the target branch at the merge request's `diff_refs.start_sha` (on GitHub, the pull request's `base.sha`), not from the merge request's own branch, so a merge request cannot change the rules it is reviewed by. The library is read when the review starts, so an edit made while a run waits is what reviews, and the library and the default list are read together: a review gets the old set or the new set, never a mix. Each run records where every skill came from and the library version of each library skill it used. The run page shows `library v3` or `repo (.claude/skills)` per skill.
+
+| Case | What happens |
+| --- | --- |
+| A named library skill is not in the library | The run fails: `skill "x" is not in the skill library`. The repository is listed under "Needs attention". Nothing falls back to other skills, so a review is never approved with fewer or other skills than the repository asked for. |
+| A repository skill that was turned on is gone from the target branch | The run fails: `skill "x" is turned on but not found in the repository`. |
+| A repository skill that runs is malformed (one in `.pergent/skills`, or a turned-on one in another folder: its frontmatter doesn't parse, its name is invalid or taken twice in the folder, or it is over 128 KiB) | The run fails, and the message names the file and the problem, as `<path>: <problem>`. A skill that is turned off is ignored even when malformed. |
+| A config repository names a skill the library lacks | Startup does not stop, so the dashboard stays up to fix it. The repository's runs fail with the message above, and "Needs attention" says why, until the skill exists. |
+| The skills and instructions are over 900 KiB together | The previous review is dropped first. If the skills and instructions alone are too large, the run fails with a comment and no Job starts. |
+| The repository has no skills at all | See [No skills, no review](#no-skills-no-review). |
+
+### The skill library
+
+Everyone with a team can read the library (**Skills** in the dashboard). Any admin, password admin or member of an admin team, writes it; maintainers and viewers only read. Every change applies to the next review, with no restart.
+
+- **Write** a skill with **New skill**. The name is fixed after it is created and matches `[A-Za-z0-9][A-Za-z0-9._-]*`; a frontmatter `name`, when present, must equal it. The text is at most 128 KiB, its frontmatter must parse (`paths` and `exclude` are lists of strings, `cross_batch` is true or false; other fields are ignored), and it must not contain a secret pergent.sh holds (a token, a key, a webhook or OAuth secret, the LLM key): the save is refused with `the skill contains a secret pergent.sh holds`, naming no value. The library holds at most 200 skills.
+- **Add to default skills** is a box on New skill and on Install, off at first, so a new skill reaches no repository until an admin chooses it.
+- **Edit** works on a written skill. A save carries the version you opened: if another admin saved meanwhile, it is refused with 409 `this skill changed since you opened it`. An installed skill can't be edited (409 `an installed skill can't be edited; copy it`): **Copy** makes a new written skill under a new name, with its frontmatter `name` set to it.
+- **Versions.** Every save, install and update adds a version, kept for good. The skill's page lists them, read-only. A name that is deleted and created again continues its numbering.
+- **Delete** is refused with 409 `the skill is in use: take it off the repositories and the default list that name it first` while the default list or a repository, in the config or the dashboard, names the skill. The answer lists them; repositories you can't see are only counted. An admin of a platform instance sees the repositories it can see.
+- **Budget.** Saving the default list or a repository's skill list is refused with 400 when the text of the library skills it names is over what a review takes, `the library skills come to N KiB; a review takes at most 900 KiB`. The pickers show a running total.
+- The skill's text is shown in a plain-text box only, never as HTML or markdown.
+
+#### Removing a version by hand
+
+There is no button to delete a version, because history is meant to stay. If you must remove one (for example text that the secret check missed), do it in the database, as an operator, and rotate the secret too. A model provider may have seen the text in reviews already.
+
+1. If the text is in the skill's newest version, first save a new version in the dashboard, so the version to remove is not the newest one. The next number is the highest one kept plus one, so removing the newest row would let its number be used again. A written skill: edit it and save. An installed skill can't be edited, so fix the text at its source and press **Update**, or **Copy** it under a new name (with the clean text) and delete the original once nothing names it.
+2. Remove the old version, for example version 2 of `lint`:
+
+   ```sql
+   DELETE FROM library_skill_versions WHERE name = 'lint' AND version = 2;
+   ```
+
+3. A read of a source keeps the text it found for an hour. Drop the finished ones now:
+
+   ```sql
+   DELETE FROM skill_fetches WHERE status <> 'running';
+   ```
+
+A run that used the removed version still shows its number, and the version's page answers 404. Jobs, with their copy of the text, are removed an hour after they finish.
+
+### Installing from git
+
+**Install from git** (admins) copies skills from a git repository into the library. It reads the source, lists the skills it found (`*.md` files and `<name>/SKILL.md` folders in the branch or tag and folder you give) with their size and any problem, and installs the ones you tick. A skill whose name is already in the library can't be ticked: `name already in the library`. An installed skill records its source, branch or tag, file path and the **commit** it came from, and can't be edited.
+
+There are two kinds of source:
+
+| Source | How it is read | What it needs |
+| --- | --- | --- |
+| **A repository on a connected instance** (added under **Integrations** or in the config file) | By the pergent.sh pod, through the platform's API, with the review bot or review App it already has. No Job runs and you enter no secret. | **GitLab:** the review bot is a member of the repository with **Reporter** or above. **GitHub:** the review App is installed on that repository (it has Contents: Read-only already). A repository the bot or App can't read, or a branch that doesn't exist, is answered `the review bot or App can't read this repository or ref`, because the platform says the same for both. |
+| **A public `https` URL** | By a short skill fetch Job, with no token of any kind (see [What a Job can and cannot see](#what-a-job-can-and-cannot-see)). | The URL's host is inside `jobEgress.cidrs`. The Job posts what it read to `<callback_url>/skill-fetches/<id>/result`, so `/skill-fetches/` must be reachable on `public_url`'s host (or through `callback_url`, in-cluster); see [Exposing pergent.sh](#exposing-pergentsh). The chart sets `PERGENT_SH_IMAGE` for the Job. Only public repositories work: a URL with a user name or password is refused. |
+
+- **A read is limited.** At most 200 skills and 4 MiB of text in one read (a smaller folder fixes it), 128 KiB per skill, and the pod runs 2 reads at once. A read lasts at most 2 minutes. For a URL, the **image pull and the Job's fixed limits count against those 2 minutes**: the clone container has 512Mi of memory and the Job 1Gi of scratch space. A slow image pull, a slow clone or a huge repository therefore ends as `reading the source took too long` (a read by the pod ends as `reading the repository took longer than 2 minutes`). Choose a smaller folder, or a tag with less history. The result of a read is kept for an hour for you to choose from.
+- **The ceiling.** A password admin installs from anything the review bot or App can reach. A platform admin installs from repositories of its own instance that its user can see there, checked with the platform now, and from public URLs; otherwise it gets 403 `you can install only from repositories of your own instance that you can see`. **Installing is sharing:** everyone with a team can read an installed skill, even one from a private repository. A private repository's path is shown only to people who can see it; others see `a private repository on <instance>`.
+- **A push to the source changes nothing.** Installed skills only change when an admin presses **Update**.
+
+**Check for updates** (on **Skills**) reads a source again, at the skill's own branch or tag, or at a new one you type, to move from `v1.0` to `v1.1`. For each skill installed from that source and branch or tag it shows the difference, and **Update** saves the changed ones as new versions (and, for a new branch or tag, records it). Nothing changes before **Update**. A fetched skill is matched to an installed one by its file path at the source. A skill gone from that path shows as `removed at the source` and stays as it is. A skill whose name changed there shows as `renamed at the source`, and Update is refused for it: install it again under its new name. A text that now holds a secret pergent.sh holds, or is over 128 KiB, can't be updated.
+
+### Repository skills
+
+- **`.pergent/skills/` always runs.** A repository skill replaces a library skill of the same name.
+- **The other three folders are detected, not run.** A repository's **Settings → Skills** lists the skills found in `.agents/skills`, `.claude/skills` and `.github/skills` (read from the default branch), off at first. A maintainer or admin of the repository turns each on (`repoSkills`; in the config, `repositories[].repo_skills`), which is what lets a repository reuse skills it already keeps for other tools. A turned-on skill that later disappears from the target branch fails the run, as above.
+- Repository skills are changed through merge requests, not in the dashboard. The repository's **Skills & instructions** page shows the final set a review of the default branch would get (kept for 5 minutes), each skill's source and library version, and a link to each repository skill's file.
+
+### No skills, no review
+
+When a run ends up with no skill at all (the default list is empty and the repository names none and has none), there is **nothing to review with**, so pergent.sh does not review:
+
+- No Job starts, and no comment and no commit status or Check Run is written. The run's state is `skipped`; the dashboard shows it as **Not reviewed** with the reason `this repository has no skills`, and "Needs attention" lists the repository with the same words. It is not counted as a review or a failure.
+- A required `pergent` status therefore keeps the merge request blocked, which is the safe result. **If an earlier review of the same commit passed, its status stays** (pergent.sh sets none to replace it), but the bot's approval of that commit is withdrawn, because a skipped review decided nothing. Nothing approves it again until a review runs.
+- Adding a skill to the default list (or to the repository) and re-running the review (a push, or `@<bot> review`) fixes it. **Add repository** warns when the default list is empty.
+
+Without the dashboard (`dashboard.url` unset) the library can't be managed, but reviews still read it and the default list from the database. A fresh install has an empty library, so its repositories review with repository skills only.
 
 ## Commands
 
@@ -593,7 +696,7 @@ The role is read from the platform when the command is processed, for a comment,
 ### Re-running a review
 
 - `review` queues a run for the change's head and target branch as the platform reports them now (the same rules as a push; the newer run replaces the one that was published). `review failed` also queues one but reviews only the skills that failed: a skill whose verdict is `failed`, or that is clean yet left files unreviewed, after dismissals. It keeps the other skills' results and publishes one merged review. With nothing failed it replies `nothing failed` and does nothing.
-- `review failed` re-runs the whole review, and replies `the whole review failed, so all of it is re-run`, when there is no result per skill to build on: the earlier review was an error result, there is none for the current head and target branch, or it can't be read. It also reviews everything when the dispatcher, before it starts the Job, finds the earlier review can't be kept: it is of other commits, or the names of the skills changed since (a skill added, removed or renamed; editing a skill's text doesn't count) or it names a skill twice. A re-run that could not be merged with the earlier results shows a note in the comment and is **never approved**.
+- `review failed` re-runs the whole review, and replies `the whole review failed, so all of it is re-run`, when there is no result per skill to build on: the earlier review was an error result, there is none for the current head and target branch, or it can't be read. It also reviews everything when the dispatcher, before it starts the Job, finds the earlier review can't be kept: it is of other commits, or a skill changed since: one was added, removed or renamed, a library skill it would keep has a new version (an edit, an install or an update; the run page's `library v3`), a skill moved between the library and a repository folder, or it names a skill twice. A re-run that could not be merged with the earlier results shows a note in the comment and is **never approved**.
 - A head that is already queued, running or waiting to be published is not queued twice: the command still gets 👍. The caps are checked first, though: at a cap, a re-run of such a head gets the cap refusal and 👎. A re-run of a draft is refused when the repository doesn't review drafts, and a command on a closed or merged change gets 👎 and no reply.
 - The new review is decided like any other (see [How approval works](#how-approval-works)). If it isn't approved, the bot's approval of that head is withdrawn.
 - While a re-run of a commit is queued or running, the review it replaces is set aside. A dismiss is resolved against the newest review still published. When there is none, a comment gets the reply `no finding <id> in the latest review` and a button the answer `there is no such finding in the latest review` (404). A dismissal or restore made meanwhile is stored, and applies when the re-run is published (a restore always acts, on the finding's fingerprint).
@@ -655,6 +758,7 @@ pergent.sh decides from what `pergent agent` reports. The result is checked agai
 | Any skill has blocking issues that nobody dismissed (see [Commands](#commands)) | The review | `failed` ("Blocking issues found") | No |
 | Any skill failed, has an unknown verdict, or is "clean" yet lists files it did not review | The review | `failure_status` ("Review failed for N of M skills") | No |
 | The Job died or sent nothing usable, the result is an error, has no skills, or has an unknown status | An error comment with the reason | `failure_status` | No |
+| The repository has no skill to review with (see [No skills, no review](#no-skills-no-review)) | None | None. The run is `skipped` and shown as "Not reviewed"; an earlier status of the same commit stays | **No**; the bot's approval of that commit is withdrawn |
 | Every skill is clean, but no file was reviewed because every changed file was skipped | The review plus a note listing the skipped files and the rules that skipped them | `success` ("Nothing to review: every changed file is skipped") | **No**, a human needs to look |
 | Every skill is clean and at least one file was reviewed, but some changed file was skipped as `deleted`, `binary`, `vendored`, `lockfile`, `generated` or under a rule pergent.sh doesn't know | The review plus a note listing those files and the rules that skipped them | `success` ("No blocking issues; not approved: some changed files weren't reviewed") | **No**, a human needs to look |
 | Every skill is clean, at least one file was reviewed and no file was skipped under those rules, but approval is turned off for the repository (`approve: false`, or the dashboard's switch) | The review plus `**Not approved:** approval is turned off for this repository.` (this note replaces the draft and approve App notes below) | `success` ("No blocking issues; not approved: approval is turned off") | **No**, see [Turning approval off](#turning-approval-off) |
@@ -723,6 +827,8 @@ A Job **cannot** see: the review bot token, the approve bot token, the GitHub Ap
 
 Each Job's Secret and inputs ConfigMap are owned by the Job, so deleting the Job removes them. Finished Jobs are removed after an hour.
 
+**A skill fetch Job** reads the skills of a public `https` URL an admin gives in the dashboard, so the pergent.sh pod never fetches an address an admin typed. It runs in the Jobs namespace under the same NetworkPolicy, for at most 2 minutes (its image pull and its limits, 512Mi of memory for the clone and 1Gi of scratch space, count against them), as user 65532 with a read-only root filesystem and no service account token. Its `clone` container (the `jobs.image`) gets no token of any kind: it fetches the one branch or tag at depth 1 with hooks off and https only. Its `send` container (pergent.sh's own image, which the chart passes as `PERGENT_SH_IMAGE`) reads the skills of the folder without following any symbolic link (one where a skill would be is listed as a problem) and posts them to `<callback_url>/skill-fetches/<id>/result` with a one-time token, its only secret. pergent.sh then drops the text of any skill holding a secret it holds or over 128 KiB. A URL outside `jobEgress.cidrs` can't be reached; the fetch then fails with `could not fetch <url> at <ref>; the URL, branch or tag may be wrong, or outside jobEgress.cidrs`.
+
 ## Fork merge requests
 
 The checkout first tries to fetch the base and head commits by SHA. When the server refuses that (this is common for merge requests from forks), it fetches `refs/merge-requests/<iid>/head` (GitHub: `refs/pull/<number>/head`) instead, then deepens the target branch (starting at 50 commits and doubling, up to 3200) until the merge base is there. If the merge base is still missing at that depth, the checkout fails and the merge request gets an error comment.
@@ -744,6 +850,7 @@ Deploy tokens are created per project with the name `pergent-sh`, valid for 30 d
 | `POST /webhooks/gitlab/{instance}` | GitLab merge request (`Merge Request Hook`) and note (`Note Hook`) webhooks; any other event is answered 200 and ignored. The `X-Gitlab-Token` header is compared in constant time with the instance's secret; a mismatch gets 401 and is otherwise ignored. An authenticated webhook whose payload can't be used (not JSON, no project id or merge request iid, a malformed head SHA) gets 200 and a warning in the log, because GitLab counts failed deliveries toward disabling the hook. |
 | `POST /webhooks/github/{instance}` | The GitHub review App's `pull_request` and `issue_comment` webhooks (the second carries [commands](#commands)); any other event is answered 200 and ignored. `X-Hub-Signature-256` (HMAC-SHA256 of the body with the instance's webhook secret) is compared in constant time; a missing or wrong signature gets 401 and is otherwise ignored. A repository that isn't in the config gets 200 and is ignored. |
 | `POST /runs/{id}/result` | A review Job delivering its result, with its one-time bearer token. |
+| `POST /skill-fetches/{id}/result` | A skill fetch Job delivering the skills it read from a public URL, with its one-time bearer token (only with the dashboard on). A wrong token gets 401, a second result or one after the fetch gave up 409, a body over 4 MiB 413. |
 | `GET /healthz` | Health check. It answers as soon as the server starts: pergent.sh serves right away and runs the startup reconcile in the background. |
 | `GET /auth/{gitlab or github}/{instance}/login`, `GET .../callback`, `POST /auth/logout` | [Dashboard](#dashboard) sign-in with GitLab or GitHub, and sign-out. Only with `dashboard.url` set. |
 | `GET /auth/csrf`, `POST /auth/password`, `POST /auth/password/change` | Password sign-in. `GET /auth/csrf` hands out the sign-in form's CSRF token (a cookie and `{"csrfToken": ...}`); `POST /auth/password` takes `{"username", "password"}` with that token in `X-CSRF-Token` and answers 204 and the session cookie; `POST /auth/password/change` takes `{"current", "new"}` for a signed-in password account. See [Password sign-in limits](#password-sign-in-limits). Only with `dashboard.url` set. |
@@ -763,6 +870,7 @@ This release is deliberately small:
 - `PERGENT_SH_SECRET_KEY` can't be rotated: see [Environment variables](#environment-variables).
 - No advice on whether a human approval is still needed beyond the hourly warning for a repository that one approval can merge.
 - No repository cache: every checkout is a fresh `git init` plus a shallow fetch.
+- Skills: one library for the whole installation, with a default list and per-repository lists; no per-team or per-instance lists. Installed skills change only when an admin presses **Update**, never by themselves or from a webhook on the source. Only the `SKILL.md` text of a folder skill is used. Repository skills can't be edited in the dashboard. A skill's text has no preview and the history has no diff or restore for written skills. A URL source must be public and inside `jobEgress.cidrs`. No chat or API token to manage the library from scripts.
 - One replica, and PostgreSQL is external.
 - GitHub.com only. `github[].api_url` accepts another URL, but GitHub Enterprise Server is untested.
 - On GitHub, approving after the approve App is installed starts with the next push or ready-for-review; there is no catch-up pass over open pull requests.
