@@ -211,6 +211,7 @@ func (d *Dashboard) Handler() http.Handler {
 	d.commandRoutes(mux)
 	d.operatorRoutes(mux)
 	d.readRoutes(mux)
+	d.skillWriteRoutes(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Cache-Control", "no-store")

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -157,9 +158,319 @@ func (d *Dashboard) checkSkillBudget(r *http.Request, names []string) (msg strin
 	if err != nil {
 		return "", err
 	}
+	return budgetMessage(total), nil
+}
+
+// budgetMessage is the 400's message for total bytes of library skills, ""
+// when they fit.
+func budgetMessage(total int) string {
 	if total <= inputs.ConfigMapLimit {
-		return "", nil
+		return ""
 	}
 	return fmt.Sprintf("the library skills come to %d KiB; a review takes at most %d KiB",
-		(total+1023)/1024, inputs.ConfigMapLimit/1024), nil
+		(total+1023)/1024, inputs.ConfigMapLimit/1024)
+}
+
+// --- the library writes: POST/PUT/DELETE /api/admin/skills... ---
+//
+// Any admin writes the library (D3). Every write is checked as CheckSkill
+// says and against the secrets pergent.sh holds (D7), is audited by the
+// skill's name and version and never by its text (D10), and drops the kept
+// inputs views, which list skills and their state.
+
+const (
+	// maxSkillBody bounds a skill write's body: a skill may be MaxSkillBytes,
+	// and JSON can spell each byte in up to 6 (\u00XX). A skill over its own
+	// limit is answered with the skill checks' message, not "too large".
+	maxSkillBody = 1 << 20
+
+	msgBadSkillBody   = `the body must be {"name": ..., "content": ..., "addToDefaults": true or false}`
+	msgBadSkillEdit   = `the body must be {"content": ..., "version": the version you opened}`
+	msgBadSkillCopy   = `the body must be {"name": the new name}`
+	msgSkillNoText    = "the skill has no text"
+	msgSkillSecret    = "the skill contains a secret pergent.sh holds"
+	msgSkillExists    = "name already in the library"
+	msgSkillStale     = "this skill changed since you opened it"
+	msgSkillInstalled = "an installed skill can't be edited; copy it"
+	msgSkillInUse     = "the skill is in use: take it off the repositories and the default list that name it first"
+)
+
+func msgLibraryFull() string {
+	return fmt.Sprintf("the library holds %d skills, the most it can", inputs.MaxLibrarySkills)
+}
+
+func (d *Dashboard) skillWriteRoutes(mux *http.ServeMux) {
+	admin := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, d.Auth.Require(requireAdmin(h))) }
+	admin("POST /api/admin/skills", d.createSkill)
+	admin("PUT /api/admin/skills/{name}", d.updateSkill)
+	admin("POST /api/admin/skills/{name}/copy", d.copySkill)
+	admin("DELETE /api/admin/skills/{name}", d.deleteSkill)
+}
+
+// auditSkill records a library write: the skill's name leads the detail,
+// and the entry names no instance or project, so every admin sees it.
+func (d *Dashboard) auditSkill(r *http.Request, action, name, detail string) {
+	if detail != "" {
+		name += ": " + detail
+	}
+	d.audit(r.Context(), session(r), action, "", "", name)
+}
+
+// skillActor is who a version is recorded as written by.
+func skillActor(se Session) string {
+	return actorLabel(se.Kind, se.Platform, se.Instance, se.Username)
+}
+
+// refuseSkill answers 400 with why name and content can't be a library
+// skill, and reports whether it did: the skill checks first, then the held
+// secrets. The answer names no secret.
+func (d *Dashboard) refuseSkill(w http.ResponseWriter, r *http.Request, name, content string) bool {
+	if strings.TrimSpace(content) == "" {
+		writeError(w, http.StatusBadRequest, msgSkillNoText)
+		return true
+	}
+	if err := inputs.CheckSkill(name, []byte(content)); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return true
+	}
+	if inputs.ContainsSecret([]byte(content), d.registry.HeldSecrets(r.Context())) {
+		writeError(w, http.StatusBadRequest, msgSkillSecret)
+		return true
+	}
+	return false
+}
+
+// createFailed answers a failed create of a skill: a taken name is 409, a
+// full library 400, anything else 500.
+func (d *Dashboard) createFailed(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, store.ErrSkillExists):
+		writeError(w, http.StatusConflict, msgSkillExists)
+	case errors.Is(err, store.ErrLibraryFull):
+		writeError(w, http.StatusBadRequest, msgLibraryFull())
+	default:
+		d.Log.Error("dashboard: creating a skill failed", "error", err.Error())
+		writeError(w, http.StatusInternalServerError, msgWriteFailed)
+	}
+}
+
+func (d *Dashboard) createSkill(w http.ResponseWriter, r *http.Request) {
+	ctx, se := r.Context(), session(r)
+	var in struct {
+		Name          string `json:"name"`
+		Content       string `json:"content"`
+		AddToDefaults bool   `json:"addToDefaults"`
+	}
+	if decodeStrictLimit(r, &in, maxSkillBody) != nil {
+		writeError(w, http.StatusBadRequest, msgBadSkillBody)
+		return
+	}
+	if d.refuseSkill(w, r, in.Name, in.Content) {
+		return
+	}
+	var defaults store.RepoDefaults
+	if in.AddToDefaults {
+		// Over the budget the create is refused whole: nothing is written, and
+		// the skill goes in with the box unticked.
+		var err error
+		if defaults, err = d.Store.RepoDefaults(ctx); err != nil {
+			d.failed(w, r, "reading the defaults", err)
+			return
+		}
+		var total int // an empty list is nil to LibrarySize, which would read the default list: also empty, but say so
+		if len(defaults.Skills) > 0 {
+			if total, err = d.Store.LibrarySize(ctx, defaults.Skills); err != nil {
+				d.failed(w, r, "checking the skill budget", err)
+				return
+			}
+		}
+		if msg := budgetMessage(total + len(in.Content)); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
+	}
+	version, err := d.Store.CreateLibrarySkill(ctx, store.NewSkill{Name: in.Name, Content: in.Content,
+		Actor: skillActor(se), At: d.now()})
+	if err != nil {
+		d.createFailed(w, err)
+		return
+	}
+	d.inputs.invalidate()
+	d.Log.Info("dashboard: skill created", "skill", in.Name, "version", version, "by", se.Username)
+	d.auditSkill(r, "skill_created", in.Name, "v"+strconv.Itoa(version))
+	if in.AddToDefaults {
+		defaults.Skills = append(slices.Clone(defaults.Skills), in.Name)
+		if err := d.Store.PutRepoDefaults(ctx, defaults); err != nil {
+			// The skill is in the library already; it can be added from Settings.
+			d.Log.Error("dashboard: adding a new skill to the default skills failed", "skill", in.Name, "error", err.Error())
+			writeError(w, http.StatusInternalServerError, msgWriteFailed)
+			return
+		}
+		d.inputs.invalidate()
+		d.Log.Info("dashboard: defaults updated", "fields", []string{"skills"}, "by", se.Username)
+		d.audit(ctx, se, "defaults_updated", "", "", "skills")
+	}
+	writeJSON(w, http.StatusCreated, SkillWrittenView{Version: version})
+}
+
+func (d *Dashboard) updateSkill(w http.ResponseWriter, r *http.Request) {
+	ctx, se := r.Context(), session(r)
+	name := r.PathValue("name")
+	if !inputs.ValidName(name) {
+		notFound(w)
+		return
+	}
+	var in struct {
+		Content string `json:"content"`
+		Version int    `json:"version"`
+	}
+	if decodeStrictLimit(r, &in, maxSkillBody) != nil || in.Version < 1 {
+		writeError(w, http.StatusBadRequest, msgBadSkillEdit)
+		return
+	}
+	if d.refuseSkill(w, r, name, in.Content) {
+		return
+	}
+	version, err := d.Store.UpdateLibrarySkill(ctx, name, in.Content, skillActor(se), in.Version, d.now())
+	switch {
+	case errors.Is(err, store.ErrSkillNotFound):
+		notFound(w)
+		return
+	case errors.Is(err, store.ErrStaleVersion):
+		writeError(w, http.StatusConflict, msgSkillStale)
+		return
+	case errors.Is(err, store.ErrSkillInstalled):
+		writeError(w, http.StatusConflict, msgSkillInstalled)
+		return
+	case err != nil:
+		d.Log.Error("dashboard: saving a skill failed", "skill", name, "error", err.Error())
+		writeError(w, http.StatusInternalServerError, msgWriteFailed)
+		return
+	}
+	d.inputs.invalidate()
+	d.Log.Info("dashboard: skill updated", "skill", name, "version", version, "by", se.Username)
+	d.auditSkill(r, "skill_updated", name, fmt.Sprintf("v%d -> v%d", in.Version, version))
+	writeJSON(w, http.StatusOK, SkillWrittenView{Version: version})
+}
+
+func (d *Dashboard) copySkill(w http.ResponseWriter, r *http.Request) {
+	ctx, se := r.Context(), session(r)
+	from := r.PathValue("name")
+	if !inputs.ValidName(from) {
+		notFound(w)
+		return
+	}
+	var in struct {
+		Name string `json:"name"`
+	}
+	if decodeStrict(r, &in) != nil {
+		writeError(w, http.StatusBadRequest, msgBadSkillCopy)
+		return
+	}
+	src, _, err := d.Store.LibrarySkill(ctx, from)
+	if errors.Is(err, store.ErrSkillNotFound) {
+		notFound(w)
+		return
+	}
+	if err != nil {
+		d.failed(w, r, "reading a skill", err)
+		return
+	}
+	content := withFrontmatterName(src.Content, in.Name)
+	if d.refuseSkill(w, r, in.Name, content) {
+		return
+	}
+	version, err := d.Store.CreateLibrarySkill(ctx, store.NewSkill{Name: in.Name, Content: content,
+		Actor: skillActor(se), At: d.now()})
+	if err != nil {
+		d.createFailed(w, err)
+		return
+	}
+	d.inputs.invalidate()
+	d.Log.Info("dashboard: skill copied", "skill", in.Name, "from", from, "by", se.Username)
+	d.auditSkill(r, "skill_copied", in.Name, "from "+from)
+	writeJSON(w, http.StatusCreated, SkillWrittenView{Version: version})
+}
+
+func (d *Dashboard) deleteSkill(w http.ResponseWriter, r *http.Request) {
+	ctx, se := r.Context(), session(r)
+	name := r.PathValue("name")
+	if !inputs.ValidName(name) {
+		notFound(w)
+		return
+	}
+	err := d.Store.DeleteLibrarySkill(ctx, name, d.configReposNaming(name))
+	var inUse *store.SkillInUseError
+	switch {
+	case errors.As(err, &inUse):
+		writeJSON(w, http.StatusConflict, skillInUseView(se, inUse))
+		return
+	case errors.Is(err, store.ErrSkillNotFound):
+		notFound(w)
+		return
+	case err != nil:
+		d.Log.Error("dashboard: deleting a skill failed", "skill", name, "error", err.Error())
+		writeError(w, http.StatusInternalServerError, msgWriteFailed)
+		return
+	}
+	d.inputs.invalidate()
+	d.Log.Info("dashboard: skill deleted", "skill", name, "by", se.Username)
+	d.auditSkill(r, "skill_deleted", name, "")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// configReposNaming lists the repositories of the config file whose own
+// skills list names the skill. (The default list is the store's to say.)
+func (d *Dashboard) configReposNaming(name string) []store.RepoRef {
+	var out []store.RepoRef
+	for _, repo := range d.cfg.Repositories {
+		if !slices.Contains(repo.Skills, name) {
+			continue
+		}
+		instance := repo.GitLab
+		if repo.GitHub != "" {
+			instance = repo.GitHub
+		}
+		out = append(out, store.RepoRef{Instance: instance, Project: repo.Project})
+	}
+	return out
+}
+
+// skillInUseView is the 409's body for se: the repositories it can see,
+// by instance and project, and a count of those it can't.
+func skillInUseView(se Session, e *store.SkillInUseError) SkillInUseView {
+	v := SkillInUseView{Error: msgSkillInUse, Repositories: []SkillUserRepoView{}, InDefaults: e.InDefaults}
+	for _, repo := range e.Repos {
+		if se.CanSee(repo.Instance, repo.Project) {
+			v.Repositories = append(v.Repositories, SkillUserRepoView{Instance: repo.Instance, Project: repo.Project})
+		} else {
+			v.Hidden++
+		}
+	}
+	slices.SortFunc(v.Repositories, func(a, b SkillUserRepoView) int {
+		return strings.Compare(a.Instance+"\x00"+lower(a.Project), b.Instance+"\x00"+lower(b.Project))
+	})
+	return v
+}
+
+// withFrontmatterName is content with the `name` of its frontmatter set to
+// name, quoted so a name like 1.5 stays text. Content without a frontmatter
+// name is returned as it is: the name is optional (D4). A name line the
+// skill checks still disagree with is caught by them, after.
+func withFrontmatterName(content, name string) string {
+	if !strings.HasPrefix(content, "---\n") && !strings.HasPrefix(content, "---\r\n") {
+		return content
+	}
+	lines := strings.SplitAfter(content, "\n")
+	for i := 1; i < len(lines); i++ {
+		bare := strings.TrimRight(lines[i], "\r\n")
+		if bare == "---" {
+			break
+		}
+		if strings.HasPrefix(bare, "name:") {
+			lines[i] = `name: "` + name + `"` + lines[i][len(bare):]
+			return strings.Join(lines, "")
+		}
+	}
+	return content
 }

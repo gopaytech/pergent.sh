@@ -340,6 +340,26 @@ func (r *Registry) Secrets(ctx context.Context, name string) (s Secrets, unopene
 	return s, unopened, nil
 }
 
+// HeldSecrets returns every secret value pergent.sh holds: each set field of
+// every instance's Secrets and every LLM key (LLMKeys). It is what a skill's
+// text is checked against, so no secret enters the library. An instance
+// whose secrets can't be read counts for nothing here, and is logged by its
+// name and the reason, which hold no value.
+func (r *Registry) HeldSecrets(ctx context.Context) []string {
+	var out []string
+	for _, inst := range r.All() {
+		s, _, err := r.Secrets(ctx, inst.Name)
+		if err != nil {
+			r.logger().Warn("the secrets of an instance couldn't be read for the skill check", "instance", inst.Name, "error", err.Error())
+			continue
+		}
+		out = slices.AppendSeq(out, maps.Values(s.Fields()))
+	}
+	out = append(out, r.LLMKeys()...)
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
 func (r *Registry) configSecrets(inst Instance) (Secrets, error) {
 	var s Secrets
 	var err error

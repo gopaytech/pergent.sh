@@ -461,3 +461,82 @@ func TestLLMReadsModelAndKeyTogether(t *testing.T) {
 		}
 	}
 }
+
+// HeldSecrets lists every secret of every instance, the config's and the
+// dashboard's, GitLab and GitHub, App and token approvers, and every LLM key.
+func TestHeldSecretsCoversEveryField(t *testing.T) {
+	st := newStore(t)
+	box := newBox(t, 1)
+	t.Setenv("T_GL_REVIEW", "cfg-gl-review-token")
+	t.Setenv("T_GL_APPROVE", "cfg-gl-approve-token")
+	t.Setenv("T_GL_HOOK", "cfg-gl-hook-secret")
+	t.Setenv("T_GL_OAUTH_ID", "oauth-id")
+	t.Setenv("T_GL_OAUTH_SECRET", "cfg-gl-oauth-secret")
+	t.Setenv("T_GH_REVIEW_KEY", "cfg-gh-review-key")
+	t.Setenv("T_GH_APPROVE_KEY", "cfg-gh-approve-key")
+	t.Setenv("T_GH_HOOK", "cfg-gh-hook-secret")
+	addRow(t, st, box, store.InstanceRow{Name: "lab", Platform: config.PlatformGitLab, URL: "https://lab.example.com", OAuthClientID: "c"},
+		map[string]string{FieldReviewToken: "lab-review-token", FieldApproveToken: "lab-approve-token",
+			FieldWebhookSecret: "lab-hook-secret", FieldOAuthClientSecret: "lab-oauth-secret"})
+	addRow(t, st, box, store.InstanceRow{Name: "hub", Platform: config.PlatformGitHub, APIURL: "https://api.github.com", ReviewAppID: 1, ApproveAppID: 2},
+		map[string]string{FieldReviewAppKey: "hub-review-key", FieldApproveAppKey: "hub-approve-key", FieldWebhookSecret: "hub-hook-secret"})
+	addRow(t, st, box, store.InstanceRow{Name: "hub2", Platform: config.PlatformGitHub, APIURL: "https://ghe.example.com/api/v3", ReviewAppID: 3},
+		map[string]string{FieldReviewAppKey: "hub2-review-key", FieldApproveToken: "hub2-approve-pat", FieldWebhookSecret: "hub2-hook-secret"})
+	if err := st.PutLLM(ctx, "anthropic", "claude-sonnet-4", "", box.Seal([]byte("llm-key-one")), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := New(testConfig(), st, box)
+	if err := reg.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.LoadLLM(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// The alpha instance reads the same env vars as zeta, minus the OAuth
+	// client, so it adds no value of its own.
+	got := reg.HeldSecrets(ctx)
+	for _, want := range []string{
+		"cfg-gl-review-token", "cfg-gl-approve-token", "cfg-gl-hook-secret", "cfg-gl-oauth-secret",
+		"cfg-gh-review-key", "cfg-gh-approve-key", "cfg-gh-hook-secret",
+		"lab-review-token", "lab-approve-token", "lab-hook-secret", "lab-oauth-secret",
+		"hub-review-key", "hub-approve-key", "hub-hook-secret",
+		"hub2-review-key", "hub2-approve-pat", "hub2-hook-secret",
+		"llm-key-one",
+	} {
+		if !slices.Contains(got, want) {
+			t.Errorf("HeldSecrets lacks %q; got %v", want, got)
+		}
+	}
+	if slices.Contains(got, "") {
+		t.Error("HeldSecrets holds an empty value, which would match every skill")
+	}
+
+	// A key the LLM held earlier still counts.
+	if err := st.PutLLM(ctx, "anthropic", "claude-sonnet-4", "", box.Seal([]byte("llm-key-two")), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.LoadLLM(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := reg.HeldSecrets(ctx); !slices.Contains(got, "llm-key-one") || !slices.Contains(got, "llm-key-two") {
+		t.Errorf("HeldSecrets after the key changed = %v; want both keys", got)
+	}
+}
+
+// An instance whose secrets can't be read adds nothing and doesn't hide the
+// others'.
+func TestHeldSecretsSkipsUnreadableInstance(t *testing.T) {
+	st := newStore(t)
+	box := newBox(t, 1)
+	addRow(t, st, box, store.InstanceRow{Name: "lab", Platform: config.PlatformGitLab, URL: "https://lab.example.com"},
+		map[string]string{FieldReviewToken: "lab-review-token"})
+	reg := New(testConfig(), st, box) // the config's env vars are unset
+	reg.SetLog(slog.New(slog.DiscardHandler))
+	if err := reg.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := reg.HeldSecrets(ctx); !slices.Contains(got, "lab-review-token") {
+		t.Errorf("HeldSecrets = %v; want lab's token", got)
+	}
+}

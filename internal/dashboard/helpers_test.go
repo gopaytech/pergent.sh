@@ -602,6 +602,7 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 		t.Fatal(err)
 	}
 	e.reg, e.sources, e.catalogs = instances.New(cfg, st, box), sources, catalogs
+	e.reg.SetLog(slog.New(slog.NewTextHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	e.conn = newFakeConnector(sources, catalogs)
 	d, err := New(Options{
 		Config: cfg, Store: st, SecretKey: e.key, Now: e.clock.now, Sources: sources,

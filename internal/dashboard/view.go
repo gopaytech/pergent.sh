@@ -419,6 +419,28 @@ type SkillVersionDetailView struct {
 	Content string `json:"content"`
 }
 
+// SkillWrittenView is the answer to a create, an edit or a copy of a library
+// skill: the version it was saved as.
+type SkillWrittenView struct {
+	Version int `json:"version"`
+}
+
+// SkillInUseView is the 409 of a delete of a skill that is in use (D8):
+// Repositories are the ones the caller can see that name it, Hidden counts
+// the others, InDefaults says the default list names it.
+type SkillInUseView struct {
+	Error        string              `json:"error"`
+	Repositories []SkillUserRepoView `json:"repositories"`
+	Hidden       int                 `json:"hidden"`
+	InDefaults   bool                `json:"inDefaults"`
+}
+
+// SkillUserRepoView names a repository that uses a skill.
+type SkillUserRepoView struct {
+	Instance string `json:"instance"`
+	Project  string `json:"project"`
+}
+
 // AttentionView is one setup problem. Project is "" for a problem of the
 // whole instance (an expiring token).
 type AttentionView struct {

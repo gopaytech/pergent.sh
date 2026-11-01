@@ -438,12 +438,15 @@ func (d *Dashboard) switchOnAvailable(ctx context.Context, se Session, instance,
 
 // decodeStrict reads one JSON value of at most maxWriteBody bytes into v;
 // unknown fields and anything after the value are errors.
-func decodeStrict(r *http.Request, v any) error {
-	data, err := io.ReadAll(io.LimitReader(r.Body, maxWriteBody+1))
+func decodeStrict(r *http.Request, v any) error { return decodeStrictLimit(r, v, maxWriteBody) }
+
+// decodeStrictLimit is decodeStrict for a body of at most limit bytes.
+func decodeStrictLimit(r *http.Request, v any, limit int64) error {
+	data, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
 	if err != nil {
 		return err
 	}
-	if len(data) > maxWriteBody {
+	if int64(len(data)) > limit {
 		return errors.New("body too large")
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
