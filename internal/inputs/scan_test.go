@@ -204,3 +204,54 @@ func boolStr(b bool) string {
 	}
 	return "ok"
 }
+
+func TestDirSourceBoundsReads(t *testing.T) {
+	root := t.TempDir()
+	mk := func(name string, size int64) {
+		t.Helper()
+		f, err := os.Create(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// A sparse file: it costs no disk but reads as zeros.
+		if err := f.Truncate(size); err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".pergent/skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mk(".pergent/skills/huge.md", 4<<30) // 4 GiB
+	mk(".pergent/skills/big.md", MaxSkillBytes+1)
+	mk("AGENTS.md", ConfigMapLimit+1)
+	mk("CLAUDE.md", ConfigMapLimit)
+
+	src := DirSource{Root: root}
+	ctx := context.Background()
+
+	c, ok, err := src.GetFile(ctx, 0, ".pergent/skills/huge.md", "")
+	if !errors.Is(err, ErrFileTooLarge) || ok || c != nil {
+		t.Errorf("huge = %d bytes, %v, %v; want ErrFileTooLarge", len(c), ok, err)
+	}
+	if c, ok, err := src.GetFile(ctx, 0, "AGENTS.md", ""); !errors.Is(err, ErrFileTooLarge) || ok || c != nil {
+		t.Errorf("AGENTS.md = %d bytes, %v, %v; want ErrFileTooLarge", len(c), ok, err)
+	}
+	if c, ok, err := src.GetFile(ctx, 0, "CLAUDE.md", ""); err != nil || !ok || len(c) != ConfigMapLimit {
+		t.Errorf("file at the cap = %d bytes, %v, %v; want read", len(c), ok, err)
+	}
+
+	// A skill over the skill limit is a problem of its entry, not a failed scan.
+	found, err := ScanFolder(ctx, src, 0, ".pergent/skills", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 2 {
+		t.Fatalf("found = %+v", found)
+	}
+	for _, f := range found {
+		if !strings.Contains(f.Problem, "128 KiB") {
+			t.Errorf("%s: problem = %q", f.Path, f.Problem)
+		}
+	}
+}

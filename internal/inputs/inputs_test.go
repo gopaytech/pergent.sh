@@ -430,6 +430,7 @@ func TestOnly(t *testing.T) {
 		Skills:       map[string][]byte{"a": []byte("A"), "b": []byte("B"), "c": []byte("C")},
 		Sources:      map[string]string{"a": SourceLibrary, "b": SourceRepo, "c": SourceLibrary},
 		Overridden:   []string{"b", "c"},
+		Versions:     map[string]int{"a": 2, "c": 7},
 		Instructions: []byte("rules"), Previous: []byte("prev"),
 	}
 
@@ -443,6 +444,12 @@ func TestOnly(t *testing.T) {
 	}
 	if len(got.Overridden) != 1 || got.Overridden[0] != "b" {
 		t.Errorf("overridden = %v", got.Overridden)
+	}
+	if fmt.Sprint(got.Versions) != fmt.Sprint(map[string]int{"a": 2}) {
+		t.Errorf("versions = %v, want only a", got.Versions)
+	}
+	if len(in.Versions) != 2 {
+		t.Error("Only changed the original versions")
 	}
 	if string(got.Instructions) != "rules" || string(got.Previous) != "prev" {
 		t.Errorf("instructions %q, previous %q", got.Instructions, got.Previous)

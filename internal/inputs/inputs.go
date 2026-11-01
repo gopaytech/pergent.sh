@@ -284,6 +284,9 @@ func (in *Inputs) Only(names []string) *Inputs {
 		Skills: map[string][]byte{}, Sources: map[string]string{},
 		Instructions: in.Instructions, Previous: in.Previous,
 	}
+	if in.Versions != nil {
+		out.Versions = map[string]int{}
+	}
 	for _, name := range names {
 		content, ok := in.Skills[name]
 		if !ok {
@@ -292,6 +295,9 @@ func (in *Inputs) Only(names []string) *Inputs {
 		out.Skills[name] = content
 		if src, ok := in.Sources[name]; ok {
 			out.Sources[name] = src
+		}
+		if v, ok := in.Versions[name]; ok {
+			out.Versions[name] = v
 		}
 	}
 	for _, name := range in.Overridden {

@@ -59,6 +59,10 @@ func ScanFolder(ctx context.Context, src Source, projectID int64, dir, ref strin
 		}
 
 		content, found, err := src.GetFile(ctx, projectID, file, ref)
+		if errors.Is(err, ErrFileTooLarge) {
+			out = append(out, Found{Name: fallback, Path: file, Problem: "skill is over the limit of 128 KiB"})
+			continue
+		}
 		if err != nil {
 			return nil, fmt.Errorf("reading %s: %w", file, err)
 		}
@@ -130,6 +134,11 @@ type DirSource struct{ Root string }
 
 var _ Source = DirSource{}
 
+// ErrFileTooLarge is returned by DirSource.GetFile for a file over
+// ConfigMapLimit: nothing a review reads can be larger, and a clone is
+// untrusted, so the file is never read into memory.
+var ErrFileTooLarge = errors.New("file is too large")
+
 // GetFile returns a regular file below Root. A missing file, or one reached
 // through a symlink, is nil, false, nil.
 func (d DirSource) GetFile(_ context.Context, _ int64, p, _ string) ([]byte, bool, error) {
@@ -143,14 +152,21 @@ func (d DirSource) GetFile(_ context.Context, _ int64, p, _ string) ([]byte, boo
 	if err != nil || !ok || !info.Mode().IsRegular() {
 		return nil, false, err
 	}
+	if info.Size() > ConfigMapLimit {
+		return nil, false, ErrFileTooLarge
+	}
 	f, err := root.Open(rel)
 	if err != nil {
 		return nil, false, nil
 	}
 	defer f.Close()
-	content, err := io.ReadAll(f)
+	// The size above can be stale (a file that grows), so read through a limit.
+	content, err := io.ReadAll(io.LimitReader(f, ConfigMapLimit+1))
 	if err != nil {
 		return nil, false, err
+	}
+	if len(content) > ConfigMapLimit {
+		return nil, false, ErrFileTooLarge
 	}
 	return content, true, nil
 }
