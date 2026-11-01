@@ -85,10 +85,21 @@ func (s *Store) DashboardRepo(ctx context.Context, instance, project string) (Da
 
 // UpsertDashboardRepo stores r. An existing row of the same repository
 // (ignoring case) gets r's spelling and every setting of r, NULLs included;
-// its CreatedBy and CreatedAt stay. UpdatedAt is the database's now.
+// its CreatedBy and CreatedAt stay. UpdatedAt is the database's now. Each
+// library skill r names is locked until the row is stored, so it can't be
+// deleted meanwhile; one that is not in the library is ErrSkillNotFound and
+// nothing is written.
 func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error {
 	skills, repoSkills := nilIfEmpty(r.Skills), nilIfEmpty(r.RepoSkills)
-	_, err := s.pool.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	if err := lockNamedSkills(ctx, tx, skills); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
 			failure_status, skills, repo_skills, job_timeout_seconds, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (instance, lower(project)) DO UPDATE SET
@@ -98,8 +109,10 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 			rerun_limit_per_mr = EXCLUDED.rerun_limit_per_mr, rerun_limit_per_repo = EXCLUDED.rerun_limit_per_repo,
 			updated_at = now()`,
 		r.Instance, r.Project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, repoSkills,
-		r.JobTimeoutSeconds, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy)
-	return err
+		r.JobTimeoutSeconds, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // nilIfEmpty is s, or nil when s is empty, so an empty list is stored as NULL.
@@ -111,15 +124,30 @@ func nilIfEmpty(s []string) []string {
 }
 
 // InsertDashboardRepo stores r unless the repository (ignoring case) already
-// has a row, which is left as it is; created tells which.
+// has a row, which is left as it is; created tells which. Each library skill
+// r names is locked until the row is stored, so it can't be deleted
+// meanwhile; one that is not in the library is ErrSkillNotFound and nothing
+// is written.
 func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (created bool, err error) {
-	tag, err := s.pool.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
+	skills := nilIfEmpty(r.Skills)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	if err := lockNamedSkills(ctx, tx, skills); err != nil {
+		return false, err
+	}
+	tag, err := tx.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
 			failure_status, skills, repo_skills, job_timeout_seconds, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (instance, lower(project)) DO NOTHING`,
-		r.Instance, r.Project, r.Approve, r.ReviewDrafts, r.FailureStatus, nilIfEmpty(r.Skills), nilIfEmpty(r.RepoSkills),
+		r.Instance, r.Project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, nilIfEmpty(r.RepoSkills),
 		r.JobTimeoutSeconds, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy)
 	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return false, err
 	}
 	return tag.RowsAffected() == 1, nil

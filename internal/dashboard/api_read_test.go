@@ -894,9 +894,12 @@ func TestRepositoryInputsSkillRemovedFromLibrary(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, r := range []store.DashboardRepo{{Instance: "main", Project: "acme/tools", Skills: []string{"code-review", "gone"}},
-		{Instance: "main", Project: "acme/old", Skills: []string{"gone"}}} {
-		if err := e.st.UpsertDashboardRepo(ctx, r); err != nil {
+	// Raw SQL: the store refuses a name that is not in the library.
+	for project, skills := range map[string][]string{"acme/tools": {"code-review", "gone"}, "acme/old": {"gone"}} {
+		if err := e.st.UpsertDashboardRepo(ctx, store.DashboardRepo{Instance: "main", Project: project}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.db.Exec(ctx, `UPDATE dashboard_repos SET skills = $2 WHERE project = $1`, project, skills); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -839,8 +839,8 @@ func TestDispatchDashboardRepoDropsMissingSkills(t *testing.T) {
 			env := newTestEnv(t)
 			env.Engine.Config.Repositories = nil
 			env.Engine.Library["style"] = []byte("---\nname: style\n---\n" + style + "\n")
-			dashboardRepo(t, env, store.DashboardRepo{Instance: testInstance, Project: testProjectPath,
-				Skills: tc.skills, CreatedBy: "alice"})
+			dashboardRepo(t, env, store.DashboardRepo{Instance: testInstance, Project: testProjectPath, CreatedBy: "alice"})
+			setDashboardSkills(t, env, testInstance, testProjectPath, tc.skills)
 			head := sha('a')
 			id := env.Enqueue(3, head)
 			env.GitLab.SetMR(openMR(3, head))

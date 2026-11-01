@@ -202,6 +202,9 @@ func TestResolverConfigWins(t *testing.T) {
 
 func TestResolverDefaultsAndOverrides(t *testing.T) {
 	st := newStore(t)
+	if _, err := st.CreateLibrarySkill(ctx, store.NewSkill{Name: "security", Content: "x"}); err != nil {
+		t.Fatal(err)
+	}
 	upsert(t, st, store.DashboardRepo{Instance: "main", Project: "acme/payments", Approve: ptr(false), CreatedBy: "alice"})
 	upsert(t, st, store.DashboardRepo{
 		Instance: "gh", Project: "Acme/Gadgets",

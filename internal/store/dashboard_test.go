@@ -40,6 +40,8 @@ func TestDashboardReposCRUD(t *testing.T) {
 		t.Errorf("times = %s %s", r.CreatedAt, r.UpdatedAt)
 	}
 
+	newSkill(t, s, "security", "x") // a repository can only name library skills
+	newSkill(t, s, "style", "x")
 	// An upsert in another case updates the same row: every setting is
 	// replaced, the creator and creation time stay.
 	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{

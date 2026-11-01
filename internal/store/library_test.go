@@ -283,6 +283,65 @@ func TestDeleteRacesRepoSave(t *testing.T) {
 	}
 }
 
+func TestDeleteRacesRepoInsert(t *testing.T) {
+	s := newStore(t)
+	for i := 0; i < 20; i++ {
+		name := fmt.Sprintf("racy-%d", i)
+		newSkill(t, s, name, "x")
+		project := fmt.Sprintf("acme/repo-%d", i)
+		nils, errs := race(
+			func() error { return s.DeleteLibrarySkill(ctx, name, nil) },
+			func() error {
+				_, err := s.InsertDashboardRepo(ctx, DashboardRepo{Instance: "lab", Project: project, Skills: []string{name}})
+				return err
+			})
+		if nils != 1 {
+			t.Fatalf("round %d: delete = %v, insert = %v; want exactly one to succeed", i, errs[0], errs[1])
+		}
+		_, exists := skillExists(t, s, name)
+		_, stored, _ := s.DashboardRepo(ctx, "lab", project)
+		if exists != stored {
+			t.Fatalf("round %d: skill exists = %v but the repository stored = %v", i, exists, stored)
+		}
+	}
+}
+
+func TestDeleteRacesRepoUpsert(t *testing.T) {
+	s := newStore(t)
+	for i := 0; i < 20; i++ {
+		name := fmt.Sprintf("racy-%d", i)
+		newSkill(t, s, name, "x")
+		project := fmt.Sprintf("acme/repo-%d", i)
+		nils, errs := race(
+			func() error { return s.DeleteLibrarySkill(ctx, name, nil) },
+			func() error {
+				return s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "lab", Project: project, Skills: []string{name}})
+			})
+		if nils != 1 {
+			t.Fatalf("round %d: delete = %v, upsert = %v; want exactly one to succeed", i, errs[0], errs[1])
+		}
+		_, exists := skillExists(t, s, name)
+		_, stored, _ := s.DashboardRepo(ctx, "lab", project)
+		if exists != stored {
+			t.Fatalf("round %d: skill exists = %v but the repository stored = %v", i, exists, stored)
+		}
+	}
+}
+
+func TestInsertNamingMissingSkill(t *testing.T) {
+	s := newStore(t)
+	created, err := s.InsertDashboardRepo(ctx, DashboardRepo{Instance: "lab", Project: "acme/web", Skills: []string{"gone"}})
+	if !errors.Is(err, ErrSkillNotFound) || created {
+		t.Fatalf("InsertDashboardRepo naming a missing skill = %v, %v; want ErrSkillNotFound", created, err)
+	}
+	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "lab", Project: "acme/web", Skills: []string{"gone"}}); !errors.Is(err, ErrSkillNotFound) {
+		t.Fatalf("UpsertDashboardRepo naming a missing skill = %v; want ErrSkillNotFound", err)
+	}
+	if _, ok, _ := s.DashboardRepo(ctx, "lab", "acme/web"); ok {
+		t.Error("a refused insert stored the repository")
+	}
+}
+
 func TestDeleteRacesDefaultsSave(t *testing.T) {
 	s := newStore(t)
 	for i := 0; i < 20; i++ {

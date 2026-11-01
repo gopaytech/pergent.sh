@@ -253,6 +253,7 @@ type testEnv struct {
 	t      *testing.T
 	ctx    context.Context
 	Store  *store.Store
+	schema string // the store's schema, for raw SQL
 	GitLab *fakeGitLab
 	Kube   *fake.Clientset
 	Box    *secretbox.Box
@@ -277,7 +278,8 @@ func newTestEnv(t *testing.T) *testEnv {
 	if _, err := rand.Read(b); err != nil {
 		t.Fatal(err)
 	}
-	st, err := store.OpenInSchema(ctx, dbURL, "test_engine_"+hex.EncodeToString(b))
+	schema := "test_engine_" + hex.EncodeToString(b)
+	st, err := store.OpenInSchema(ctx, dbURL, schema)
 	if err != nil {
 		t.Fatalf("OpenInSchema: %v", err)
 	}
@@ -305,7 +307,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	}
 
 	env := &testEnv{
-		t: t, ctx: ctx, Store: st, GitLab: gl, Kube: cs, Box: box,
+		t: t, ctx: ctx, Store: st, schema: schema, GitLab: gl, Kube: cs, Box: box,
 		// Wall time, so the runs' created_at (set by the database) is "now".
 		now: time.Now().UTC().Truncate(time.Second),
 	}
