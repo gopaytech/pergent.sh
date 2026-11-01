@@ -1882,3 +1882,117 @@ func TestCountQueuedByInstance(t *testing.T) {
 		t.Fatalf("CountQueued = %v, %v; want lab 2 only", got, err)
 	}
 }
+
+// The run that gives up publishing owes the withdrawal of the approval of
+// its head and target, recorded in the same statement that makes it
+// publish_failed, so no crash can lose it. An approval of another commit or
+// target is not its debt, and neither is any earlier failed attempt.
+func TestPublishRetryGivingUpRecordsTheWithdrawalOwed(t *testing.T) {
+	later := time.Now().Add(time.Hour)
+	giveUp := func(t *testing.T, s *Store, id string) {
+		t.Helper()
+		for i := 1; i <= 10; i++ {
+			if gaveUp, err := s.PublishRetry(ctx, id, "gitlab 502", t0); err != nil || gaveUp != (i == 10) {
+				t.Fatalf("PublishRetry %d = %v, %v", i, gaveUp, err)
+			}
+			if i == 9 {
+				if got, _ := s.PendingWithdrawals(ctx, later); len(got) != 0 {
+					t.Fatalf("pending before the last attempt = %v", got)
+				}
+			}
+		}
+	}
+
+	t.Run("same head and target", func(t *testing.T) {
+		s := newStore(t)
+		id := reported(t, s, mr1, "aaa", `{"status":"completed"}`)
+		if err := s.SetApprovedSHA(ctx, mr1, "aaa", "main"); err != nil {
+			t.Fatal(err)
+		}
+		giveUp(t, s, id)
+		if got, _ := s.PendingWithdrawals(ctx, later); len(got) != 1 || got[0].ApprovedSHA != "aaa" {
+			t.Errorf("pending = %v, want the approval of aaa", got)
+		}
+	})
+	t.Run("another head or target", func(t *testing.T) {
+		for name, approval := range map[string][2]string{"head": {"zzz", "main"}, "target": {"aaa", "develop"}} {
+			s := newStore(t)
+			id := reported(t, s, mr1, "aaa", `{"status":"completed"}`)
+			if err := s.SetApprovedSHA(ctx, mr1, approval[0], approval[1]); err != nil {
+				t.Fatal(err)
+			}
+			giveUp(t, s, id)
+			if got, _ := s.PendingWithdrawals(ctx, later); len(got) != 0 {
+				t.Errorf("another %s: pending = %v, want none", name, got)
+			}
+		}
+	})
+}
+
+// A merge request whose newest run gave up publishing owes the withdrawal of
+// its approval of that head and target even when nothing recorded it (a row
+// from before, a crash), until the approval is gone. Another head, another
+// target, or a newer run that is not publish_failed leaves it alone.
+func TestPendingWithdrawalsFailClosedOnPublishFailed(t *testing.T) {
+	later := time.Now().Add(time.Hour)
+	failed := func(t *testing.T, s *Store, mr MRKey, head string) string {
+		t.Helper()
+		id := reported(t, s, mr, head, `{"status":"completed"}`)
+		for i := 0; i < 10; i++ {
+			if _, err := s.PublishRetry(ctx, id, "gitlab 502", t0); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return id
+	}
+	n := func(s *Store) int {
+		t.Helper()
+		got, err := s.PendingWithdrawals(ctx, later)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(got)
+	}
+
+	s := newStore(t)
+	failed(t, s, mr1, "aaa")
+	failed(t, s, mr2, "aaa")
+	// Approvals recorded after the give-up have no debt flag.
+	if err := s.SetApprovedSHA(ctx, mr1, "aaa", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetApprovedSHA(ctx, mr2, "zzz", "main"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.PendingWithdrawals(ctx, later)
+	if err != nil || len(got) != 1 || got[0].MR != mr1 {
+		t.Fatalf("pending = %v, %v; want mr1's only", got, err)
+	}
+	// Its backoff still applies.
+	if _, err := s.UnapproveFailed(ctx, mr1, "aaa", "main", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.PendingWithdrawals(ctx, time.Now()); len(got) != 0 {
+		t.Errorf("pending in the backoff = %v", got)
+	}
+	// Another target.
+	if err := s.SetApprovedSHA(ctx, mr1, "aaa", "develop"); err != nil {
+		t.Fatal(err)
+	}
+	if n(s) != 0 {
+		t.Error("an approval against another target is owed")
+	}
+	// A newer run that has not failed publishing.
+	if err := s.SetApprovedSHA(ctx, mr1, "aaa", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if n(s) != 1 {
+		t.Fatal("want it owed again")
+	}
+	if _, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil); err != nil || !created {
+		t.Fatalf("EnqueueRerun = %v, %v", created, err)
+	}
+	if n(s) != 0 {
+		t.Error("an approval is owed while a newer run is in flight")
+	}
+}

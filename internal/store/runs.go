@@ -877,6 +877,12 @@ func (s *Store) MarkPublished(ctx context.Context, id string, dec RunDecision) e
 // or becomes publish_failed when this was the 10th failed attempt, which it
 // reports (gaveUp), only on that one transition. The retry decides afresh, so
 // a pending Republish flag is dropped.
+//
+// On that transition, in the same statement, the merge request's recorded
+// approval of the run's head and target (an approval recorded without a
+// target is compared by head only) is marked to be withdrawn: a review that
+// failed for good must never leave the approve bot's approval standing on its
+// commit, and a crash right after the give-up can't lose the debt.
 func (s *Store) PublishRetry(ctx context.Context, id, errText string, notBefore time.Time) (gaveUp bool, err error) {
 	if len(errText) > maxPublishError {
 		errText = errText[:maxPublishError]
@@ -885,10 +891,21 @@ func (s *Store) PublishRetry(ctx context.Context, id, errText string, notBefore 
 		return false, fmt.Errorf("store: run %q not found", id)
 	}
 	var state string
-	err = s.pool.QueryRow(ctx, `UPDATE runs SET attempts = attempts + 1, publish_error = $2, not_before = $3, redecide = false,
-		state = CASE WHEN attempts + 1 >= $4 THEN 'publish_failed' ELSE state END
-		WHERE id = $1::uuid AND state = 'reported'
-		RETURNING state`, id, errText, notBefore, maxPublishAttempts).Scan(&state)
+	// The data-modifying CTE w runs whether or not the final SELECT reads it.
+	err = s.pool.QueryRow(ctx, `WITH r AS (
+			UPDATE runs SET attempts = attempts + 1, publish_error = $2, not_before = $3, redecide = false,
+				state = CASE WHEN attempts + 1 >= $4 THEN 'publish_failed' ELSE state END
+			WHERE id = $1::uuid AND state = 'reported'
+			RETURNING state, instance, project_id, mr_iid, head_sha, target_branch),
+		w AS (
+			UPDATE merge_requests m SET withdraw_pending = true
+			FROM r
+			WHERE r.state = 'publish_failed'
+			  AND m.instance = r.instance AND m.project_id = r.project_id AND m.mr_iid = r.mr_iid
+			  AND m.approved_sha <> '' AND m.approved_sha = r.head_sha
+			  AND (m.approved_target = '' OR m.approved_target = r.target_branch)
+			RETURNING 1)
+		SELECT state FROM r`, id, errText, notBefore, maxPublishAttempts).Scan(&state)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, fmt.Errorf("store: run %s not found or in the wrong state", id)
 	}
@@ -1070,14 +1087,26 @@ func (s *Store) MarkWithdrawPending(ctx context.Context, mr MRKey, sha, target s
 	return err
 }
 
-// PendingWithdrawals returns the recorded approvals marked for withdrawal
-// whose unapprove backoff (after a failed removal) is over at now.
+// PendingWithdrawals returns the recorded approvals owed a withdrawal whose
+// unapprove backoff (after a failed removal) is over at now: those marked for
+// it, and, failing closed, those of the head and target of the merge
+// request's newest non-superseded run when that run gave up publishing
+// (publish_failed), marked or not: a row from before PublishRetry marked it, or
+// a mark that was lost.
 func (s *Store) PendingWithdrawals(ctx context.Context, now time.Time) ([]Approval, error) {
-	return s.queryApprovals(ctx, `SELECT instance, project_id, mr_iid, approved_sha, approved_target
-		FROM merge_requests
-		WHERE approved_sha <> '' AND withdraw_pending
-			AND (unapprove_not_before IS NULL OR unapprove_not_before <= $1)
-		ORDER BY instance, project_id, mr_iid`, now)
+	return s.queryApprovals(ctx, `SELECT m.instance, m.project_id, m.mr_iid, m.approved_sha, m.approved_target
+		FROM merge_requests m
+		WHERE m.approved_sha <> ''
+			AND (m.withdraw_pending OR EXISTS (
+				SELECT 1 FROM (
+					SELECT r.state, r.head_sha, r.target_branch FROM runs r
+					WHERE r.instance = m.instance AND r.project_id = m.project_id AND r.mr_iid = m.mr_iid
+					  AND r.state <> 'superseded'
+					ORDER BY r.created_at DESC, r.id DESC LIMIT 1) n
+				WHERE n.state = 'publish_failed' AND n.head_sha = m.approved_sha
+				  AND (m.approved_target = '' OR m.approved_target = n.target_branch)))
+			AND (m.unapprove_not_before IS NULL OR m.unapprove_not_before <= $1)
+		ORDER BY m.instance, m.project_id, m.mr_iid`, now)
 }
 
 // UnapproveFailed records a failed removal of the stale approval of oldSHA

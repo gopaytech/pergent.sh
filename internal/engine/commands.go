@@ -426,6 +426,8 @@ func (c *commandRun) rerun(ctx context.Context, failedOnly bool) (verdict, error
 	case actions.RerunCapped:
 		return refused("re-run limit reached", replyCap(changeTerm(c.cmd.Platform))), nil
 	case actions.RerunAlreadyQueued:
+		// Stays done, unlike "already dismissed" (a no-op that replies): no
+		// reply, and the review the commenter wants is on its way.
 		// A head already queued or running is reviewed once: the request
 		// is acknowledged as done.
 		return done(""), nil

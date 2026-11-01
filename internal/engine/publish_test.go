@@ -1312,3 +1312,94 @@ func TestPublishGiveUpMergedClearsRecord(t *testing.T) {
 		t.Errorf("recorded approval = %q, want it cleared", got)
 	}
 }
+
+// The withdrawal a given-up run owes is recorded with the give-up itself, and
+// neither a final status that hangs nor the platform being slow can lose it:
+// the approval sweep takes it off once the approve bot can.
+func TestPublishGiveUpWithdrawalSurvivesAHangingFinalStatus(t *testing.T) {
+	defer func(d time.Duration) { settleTimeout = d }(settleTimeout)
+	settleTimeout = 300 * time.Millisecond
+
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublish(env, 1, head)
+	env.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusUnprocessableEntity, `{"message":"Note is too long"}`)
+	env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusForbidden, `{"message":"403 Forbidden"}`)
+	if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), head, "main"); err != nil {
+		t.Fatal(err)
+	}
+	// The final status takes longer than the settle timeout.
+	env.GitLab.Handle(http.MethodPost, statusPath(head), func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(2 * time.Second):
+		case <-r.Context().Done():
+		}
+		w.WriteHeader(http.StatusCreated)
+	})
+
+	publishUntilGivenUp(t, env, id)
+
+	if p := pending(t, env); len(p) != 1 || p[0].ApprovedSHA != head {
+		t.Fatalf("pending withdrawals = %v, want the head's", p)
+	}
+	if n := len(env.GitLab.Requests(http.MethodPost, unapprovePath(1))); n != 1 {
+		t.Errorf("got %d unapprovals at give-up, want 1 attempt (the status hang must not starve it)", n)
+	}
+
+	env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusCreated, `{}`)
+	env.SetNow(env.Now().Add(time.Hour))
+	sweep(t, env)
+	if got := recordedApproval(t, env, 1); got != "" {
+		t.Errorf("recorded approval = %q, want it withdrawn by the sweep", got)
+	}
+}
+
+// A merge request whose newest run gave up publishing never keeps the bot's
+// approval of that commit, even when the debt was not recorded (a crash
+// between the give-up and its bookkeeping, or a row from an older version);
+// an approval of another head is not touched.
+func TestSweepWithdrawsApprovalOfAPublishFailedRun(t *testing.T) {
+	for name, tc := range map[string]struct {
+		approved string
+		want     string
+	}{
+		"same head":    {sha('a'), ""},
+		"another head": {sha('z'), sha('z')},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := newTestEnv(t)
+			head := sha('a')
+			id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+			servePublish(env, 1, head)
+			env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusCreated, `{}`)
+			for i := 0; i < 10; i++ {
+				if _, err := env.Store.PublishRetry(env.ctx, id, "gitlab 502", env.Now()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.approved != head {
+				// The merge request is at the approved head, so the stale
+				// approval rule has nothing to say.
+				env.GitLab.SetMR(openMR(1, tc.approved))
+			}
+			// Recorded after the give-up: no debt is marked.
+			if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), tc.approved, "main"); err != nil {
+				t.Fatal(err)
+			}
+
+			sweep(t, env)
+
+			if got := recordedApproval(t, env, 1); got != tc.want {
+				t.Errorf("recorded approval = %q, want %q", got, tc.want)
+			}
+			wantUnapprovals := 0
+			if tc.want == "" {
+				wantUnapprovals = 1
+			}
+			if n := len(env.GitLab.Requests(http.MethodPost, unapprovePath(1))); n != wantUnapprovals {
+				t.Errorf("got %d unapprovals, want %d", n, wantUnapprovals)
+			}
+		})
+	}
+}

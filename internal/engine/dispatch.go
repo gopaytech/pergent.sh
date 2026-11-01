@@ -41,10 +41,6 @@ const (
 	diffRefsPatience = 10 * time.Minute
 	// tokenGrace keeps a result token valid a little past the Job deadline.
 	tokenGrace = 60 * time.Second
-	// settleTimeout bounds the store and cleanup calls that record a run's
-	// outcome; they run even when the dispatch context is cancelled, so a
-	// claimed run is never left behind half-handled.
-	settleTimeout = 10 * time.Second
 
 	// msgNoLLM is logged while no LLM is set and runs wait for one.
 	unconnectedMsg = "queued reviews wait: pergent.sh isn't connected to their instance; an operator fixes it on Admin → Integrations"
@@ -62,6 +58,12 @@ const (
 	reasonCouldntStart = "pergent.sh couldn't start the review: "
 	runningDescription = "pergent review running"
 )
+
+// settleTimeout bounds the store and cleanup calls that record a run's
+// outcome; they run even when the dispatch context is cancelled, so a
+// claimed run is never left behind half-handled. It is a variable so tests
+// can shorten it.
+var settleTimeout = 10 * time.Second
 
 // DispatchOnce claims as many queued runs as jobs.max_running leaves room for
 // and starts a review Job for each. A run whose merge request is closed, or

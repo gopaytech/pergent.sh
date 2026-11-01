@@ -489,16 +489,22 @@ func (e *Engine) approve(ctx context.Context, plat Platform, run store.Run, log 
 // retryPublish records a failed publish; the run is tried again after the
 // backoff, or becomes publish_failed on the 10th failure. A run superseded
 // meanwhile can't be retried, and that is fine.
+//
+// On the give-up, the store records in the same statement that the approval of
+// the run's head is to be withdrawn; giveUp then makes the best-effort calls,
+// each within a settle context of its own, so a slow platform call can't take
+// the time of the next.
 func (e *Engine) retryPublish(ctx context.Context, run store.Run, text string, log *slog.Logger) {
 	sctx, cancel := settleCtx(ctx)
-	defer cancel()
 	notBefore := e.now().Add(publishBackoff(run.Attempts))
 	gaveUp, err := e.Store.PublishRetry(sctx, run.ID, text, notBefore)
 	if err == nil && gaveUp {
+		cancel()
 		log.Error("couldn't publish the review; giving up", "attempts", run.Attempts+1, "error", text)
-		e.giveUpStatus(sctx, run, log)
+		e.giveUp(ctx, run, log)
 		return
 	}
+	defer cancel()
 	if err == nil {
 		log.Warn("couldn't publish the review; will retry", "attempt", run.Attempts+1, "retry_at", notBefore, "error", text)
 		return
@@ -510,27 +516,31 @@ func (e *Engine) retryPublish(ctx context.Context, run store.Run, text string, l
 	log.Error("couldn't record the failed publish", "error", e.redact(err.Error()), "publish_error", text)
 }
 
-// giveUpStatus makes one best-effort attempt to set a failed status on the
-// head of a run that became publish_failed, so a required check isn't left
-// running (GitHub's Check Run stays in_progress from dispatch otherwise), and
-// withdraws the approve bot's approval of that head and target: a review that
-// failed for good must not leave an approval standing on its commit (a
-// same-head re-run supersedes the run that approved it, and a dismissal
-// restored meanwhile is decided by no one else). It runs once, on the
-// transition the store reports; nothing is approved.
-func (e *Engine) giveUpStatus(ctx context.Context, run store.Run, log *slog.Logger) {
+// giveUp is what is done once, on the transition of a run to publish_failed,
+// after the store has recorded the withdrawal of the approval of its head as
+// owed (PublishRetry). Each step is best effort and has its own settle
+// context: the approval of that head and target is withdrawn (a failed
+// review must not leave an approval standing on its commit; the approval
+// sweep tries again what fails here), and one failed status is set on the
+// head so a required check isn't left running (GitHub's Check Run stays
+// in_progress from dispatch otherwise). Nothing is approved.
+func (e *Engine) giveUp(ctx context.Context, run store.Run, log *slog.Logger) {
 	plat, ok := e.Platforms.Get(run.MR.Instance)
 	if !ok || plat.Forge == nil {
 		log.Warn("couldn't set the final status: no bots for the instance")
 		return
 	}
-	if err := plat.Forge.SetStatus(ctx, run.MR.ProjectID, run.HeadSHA, forge.StatusFailed, gaveUpDescription); err != nil {
-		log.Warn("couldn't set the final status of the review that wasn't posted", "error", e.redact(err.Error()))
+	// First the withdrawal, which matters; marking it again is harmless.
+	wctx, wcancel := settleCtx(ctx)
+	if err := e.withdrawRedecided(wctx, plat, run, log); err != nil {
+		log.Error("couldn't read the approval to withdraw after giving up; the sweep will", "error", e.redact(err.Error()))
 	}
-	// Recorded as owed first and paid by the approval sweep when it fails
-	// now, as for any review decided as not approved.
-	if err := e.withdrawRedecided(ctx, plat, run, log); err != nil {
-		log.Error("couldn't record the approval to withdraw after giving up", "error", e.redact(err.Error()))
+	wcancel()
+
+	sctx, cancel := settleCtx(ctx)
+	defer cancel()
+	if err := plat.Forge.SetStatus(sctx, run.MR.ProjectID, run.HeadSHA, forge.StatusFailed, gaveUpDescription); err != nil {
+		log.Warn("couldn't set the final status of the review that wasn't posted", "error", e.redact(err.Error()))
 	}
 }
 

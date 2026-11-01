@@ -68,7 +68,9 @@ func (e *Engine) SweepApprovals(ctx context.Context) error {
 }
 
 // sweepPendingWithdrawals tries again every withdrawal owed by a review that
-// was decided as not approved, past its unapprove backoff. One merge
+// was decided as not approved or gave up publishing (also when only the
+// newest run's state says so, see Store.PendingWithdrawals), past its
+// unapprove backoff. One merge
 // request's trouble is logged and left for the next sweep; the returned error
 // is a failure to list them.
 func (e *Engine) sweepPendingWithdrawals(ctx context.Context) error {
