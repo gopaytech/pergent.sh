@@ -231,6 +231,11 @@ type fakeGitLab struct {
 	// none) wait slow, or until the request ends.
 	slowFrom int
 	slow     time.Duration
+	// projectSlow makes GET /projects/:path wait that long (or until the
+	// request ends) first; projectStatus, when set, is the status it
+	// answers instead of the project.
+	projectSlow   time.Duration
+	projectStatus int
 	// tokenSlow makes POST /oauth/token wait that long first.
 	tokenSlow time.Duration
 	username  string // user 9's username (default alice)
@@ -315,6 +320,16 @@ func (f *fakeGitLab) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if strings.HasPrefix(p, "/api/v4/projects/") {
+		f.mu.Lock()
+		slow := f.projectSlow
+		f.mu.Unlock()
+		select {
+		case <-time.After(slow):
+		case <-r.Context().Done():
+			return
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	switch {
@@ -333,6 +348,10 @@ func (f *fakeGitLab) serve(w http.ResponseWriter, r *http.Request) {
 		f.listProjects(w, r)
 	case strings.HasPrefix(p, "/api/v4/projects/"):
 		f.checks++
+		if f.projectStatus != 0 {
+			reply(w, f.projectStatus, map[string]any{"message": "failing"})
+			return
+		}
 		path, _ := url.PathUnescape(strings.TrimPrefix(p, "/api/v4/projects/"))
 		// GitLab finds a project whatever the case of its path.
 		for key, body := range f.projects {

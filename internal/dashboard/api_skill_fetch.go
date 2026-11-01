@@ -575,24 +575,109 @@ func (d *Dashboard) updateSkills(w http.ResponseWriter, r *http.Request) {
 
 // --- who sees a source repository's path (D11) ---
 
+const (
+	// sightBudget bounds the platform lookups of one request that lists
+	// skills; a repository not answered in time is shown as hidden.
+	sightBudget = 5 * time.Second
+	// sightFailTTL is how long a failure to tell is kept.
+	sightFailTTL = 30 * time.Second
+	// sightWorkers is how many repositories one request asks about at once.
+	sightWorkers = 8
+)
+
 // sightCache keeps, per session and source repository, whether the
-// session's user can see the repository on the platform, for AccessTTL.
-// Failures to tell are not kept.
+// session's user can see the repository on the platform: an answer for
+// AccessTTL, a failure to tell for sightFailTTL (as "no").
 type sightCache struct {
 	mu      sync.Mutex
 	entries map[string]sightEntry
 }
 
 type sightEntry struct {
-	ok bool
-	at time.Time
+	ok     bool
+	failed bool
+	at     time.Time
+}
+
+func (e sightEntry) ttl() time.Duration {
+	if e.failed {
+		return sightFailTTL
+	}
+	return AccessTTL
+}
+
+// sourceSight is who sees what for one request: whether the session may see
+// each source repository, by sightKey. A repository it lacks is not seen.
+type sourceSight map[string]bool
+
+func sightKey(instance, repo string) string { return instance + "\x00" + lower(repo) }
+
+func (s sourceSight) sees(instance, repo string) bool { return s[sightKey(instance, repo)] }
+
+// sightOf decides, for one request, which of the source repositories of
+// sources se may see: each distinct repository once, a few at a time, all
+// within sightBudget. A repository not answered in time is not seen (D11),
+// so a platform that hangs costs the request the budget, not a wait per
+// skill.
+func (d *Dashboard) sightOf(ctx context.Context, se Session, sources ...*store.SkillSource) sourceSight {
+	type pair struct{ instance, repo string }
+	var todo []pair
+	out := sourceSight{}
+	for _, s := range sources {
+		if s == nil || s.Kind != store.SourceKindInstance {
+			continue
+		}
+		k := sightKey(s.Instance, s.Repo)
+		if _, dup := out[k]; !dup {
+			out[k] = false
+			todo = append(todo, pair{s.Instance, s.Repo})
+		}
+	}
+	if len(todo) == 0 {
+		return out
+	}
+	ctx, cancel := context.WithTimeout(ctx, d.sightBudget)
+	defer cancel()
+	var mu sync.Mutex
+	answers := make(map[string]bool, len(todo))
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, sightWorkers)
+	for _, p := range todo {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case slots <- struct{}{}:
+				defer func() { <-slots }()
+			case <-ctx.Done():
+				return
+			}
+			ok := d.seesSourceRepo(ctx, se, p.instance, p.repo)
+			mu.Lock()
+			answers[sightKey(p.instance, p.repo)] = ok
+			mu.Unlock()
+		}()
+	}
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for k, ok := range answers {
+		out[k] = ok
+	}
+	return out
 }
 
 // seesSourceRepo reports whether se may see the path of repo, a skill
 // source on instance: an operator always; a user of that instance who sees
 // it as a repository of its teams, or whom the platform lets read it (asked
 // with the user's token, the answer kept AccessTTL per session and
-// repository). Anyone else, and a failure to tell, does not.
+// repository). Anyone else, and a failure to tell, does not; the failure is
+// kept sightFailTTL, so a platform that is down is not asked again at once.
 func (d *Dashboard) seesSourceRepo(ctx context.Context, se Session, instance, repo string) bool {
 	switch {
 	case se.Operator:
@@ -606,21 +691,24 @@ func (d *Dashboard) seesSourceRepo(ctx context.Context, se Session, instance, re
 	c.mu.Lock()
 	e, found := c.entries[key]
 	c.mu.Unlock()
-	if found && now.Sub(e.at) < AccessTTL && !now.Before(e.at) {
+	if found && now.Sub(e.at) < e.ttl() && !now.Before(e.at) {
 		return e.ok
 	}
 	ok, err := d.userCanSee(ctx, se, repo)
 	if err != nil {
 		d.Log.Warn("dashboard: checking whether a user can see a skill source failed", "instance", instance, "error", err.Error())
-		return false
+		if errors.Is(err, context.Canceled) {
+			return false // the user went away: nothing to learn about the platform
+		}
+		ok = false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for k, old := range c.entries {
-		if now.Sub(old.at) >= AccessTTL {
+		if now.Sub(old.at) >= old.ttl() {
 			delete(c.entries, k)
 		}
 	}
-	c.entries[key] = sightEntry{ok: ok, at: now}
+	c.entries[key] = sightEntry{ok: ok, failed: err != nil, at: now}
 	return ok
 }

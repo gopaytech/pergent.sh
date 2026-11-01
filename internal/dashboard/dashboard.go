@@ -145,10 +145,13 @@ type Dashboard struct {
 	availableBudget time.Duration
 	listBudget      time.Duration
 	listLimit       int
-	now             func() time.Time
-	inputs          *inputsCache
-	catalog         *catalogCache
-	sight           *sightCache
+	// sightBudget bounds, per request, the platform lookups that decide
+	// which skill source repositories the user sees (D11).
+	sightBudget time.Duration
+	now         func() time.Time
+	inputs      *inputsCache
+	catalog     *catalogCache
+	sight       *sightCache
 }
 
 // New builds the dashboard. The config must have dashboard.url. Sign-in
@@ -185,7 +188,7 @@ func New(o Options) (*Dashboard, error) {
 		cfg: o.Config, registry: o.Instances, connector: o.Connector,
 		sources: o.Sources, catalogs: o.Catalogs, fetcher: o.Fetcher,
 		reconcileSoon: o.ReconcileSoon, wake: o.Wake, loadLLM: o.Instances.LoadLLM, heldSecrets: o.Instances.HeldSecrets, now: o.Now,
-		availableBudget: AvailableBudget, listBudget: listBudget, listLimit: listLimit,
+		availableBudget: AvailableBudget, listBudget: listBudget, listLimit: listLimit, sightBudget: sightBudget,
 		inputs:  &inputsCache{entries: map[string]inputsEntry{}, flights: map[string]*inputsFlight{}},
 		catalog: &catalogCache{entries: map[string]catalogEntry{}, flights: map[string]*catalogFlight{}},
 		sight:   &sightCache{entries: map[string]sightEntry{}}}, nil

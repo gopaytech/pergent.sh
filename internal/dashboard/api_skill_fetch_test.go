@@ -525,3 +525,69 @@ func TestPrivateSourceHiddenFromOthers(t *testing.T) {
 		t.Errorf("alpha's source for an operator = %+v", s)
 	}
 }
+
+// Many skills from one private repository cost one question to the platform
+// per request, a failure to answer included; the failure is kept a short
+// while, so a platform that is down is not asked again at once.
+func TestSourceSightAsksOncePerRepository(t *testing.T) {
+	e := newEnv(t, nil)
+	for _, name := range []string{"a", "b", "c", "d", "e"} {
+		e.installedSkill(name, name+" text.")
+	}
+	viewer := e.signInGitLab(false)
+	e.gl.set(func(*oauthServer) { e.gl.projectStatus = http.StatusBadRequest })
+
+	checks := e.gl.projectChecks()
+	for _, s := range getJSON[[]LibrarySkillView](e, viewer, "/api/skills") {
+		if s.Source == nil || !s.Source.Hidden || s.Source.Repo != "" {
+			t.Errorf("%s's source = %+v; want hidden when the platform fails", s.Name, s.Source)
+		}
+	}
+	if n := e.gl.projectChecks() - checks; n != 1 {
+		t.Errorf("platform asked %d times for 5 skills of one repository; want 1", n)
+	}
+
+	checks = e.gl.projectChecks()
+	getJSON[[]LibrarySkillView](e, viewer, "/api/skills")
+	getJSON[SkillDetailView](e, viewer, "/api/skills/a")
+	if n := e.gl.projectChecks() - checks; n != 0 {
+		t.Errorf("platform asked %d more times within the kept failure; want 0", n)
+	}
+
+	// Once the failure is old and the platform answers, the path shows.
+	e.gl.set(func(*oauthServer) { e.gl.projectStatus = 0 })
+	e.gl.setProject("acme/private-skills", gitlabProject("private", 20, 0))
+	e.clock.advance(sightFailTTL)
+	if s := getJSON[SkillDetailView](e, viewer, "/api/skills/a"); s.Source == nil || s.Source.Hidden {
+		t.Errorf("a's source after the kept failure ended = %+v; want shown", s.Source)
+	}
+}
+
+// A platform that hangs makes the skill list answer within the request's
+// sight budget, with the sources it could not check hidden (D11).
+func TestSourceSightFailsClosedWhenPlatformHangs(t *testing.T) {
+	e := newEnv(t, nil)
+	e.installedSkill("alpha", "Alpha text.")
+	src := store.SkillSource{Kind: store.SourceKindInstance, Instance: "main", Repo: "acme/other-skills",
+		Ref: "main", Path: "beta.md", Commit: "c"}
+	if _, err := e.st.CreateLibrarySkill(ctx, store.NewSkill{Name: "beta", Content: "Beta.", Source: &src, At: e.clock.now()}); err != nil {
+		t.Fatal(err)
+	}
+	viewer := e.signInGitLab(false)
+	e.gl.set(func(*oauthServer) { e.gl.projectSlow = time.Minute })
+	e.d.sightBudget = 200 * time.Millisecond
+
+	start := time.Now()
+	list := getJSON[[]LibrarySkillView](e, viewer, "/api/skills")
+	if took := time.Since(start); took > 3*time.Second {
+		t.Errorf("GET /api/skills took %v with a hanging platform; want about the 200ms budget", took)
+	}
+	if len(list) != 2 {
+		t.Fatalf("skills = %+v", list)
+	}
+	for _, s := range list {
+		if s.Source == nil || !s.Source.Hidden || s.Source.Repo != "" || s.Source.Path != "" {
+			t.Errorf("%s's source = %+v; want hidden", s.Name, s.Source)
+		}
+	}
+}
