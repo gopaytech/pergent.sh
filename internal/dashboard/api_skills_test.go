@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -619,28 +620,92 @@ func TestSkillWritesNeedAdmin(t *testing.T) {
 	wantCode(t, rec, "POST without a session", http.StatusUnauthorized)
 }
 
+// The same authenticated request is refused without the CSRF token and
+// goes through with it.
 func TestSkillWritesNeedCSRF(t *testing.T) {
 	e := newEnv(t, nil)
 	e.skill("style", "Style text.")
+	e.skill("gone", "Gone text.")
 	admin := e.signInGitLab(true, "acme/widgets")
-	for _, w := range []struct{ method, target, body string }{
-		{"POST", "/api/admin/skills", `{"name":"new","content":"Text."}`},
-		{"PUT", "/api/admin/skills/style", `{"content":"Changed.","version":1}`},
-		{"POST", "/api/admin/skills/style/copy", `{"name":"copy"}`},
-		{"DELETE", "/api/admin/skills/style", ``},
+	for _, w := range []struct {
+		method, target, body string
+		ok                   int
+	}{
+		{"POST", "/api/admin/skills", `{"name":"new","content":"Text."}`, http.StatusCreated},
+		{"DELETE", "/api/admin/skills/gone", ``, http.StatusNoContent},
+		{"POST", "/api/admin/skills/style/copy", `{"name":"copy"}`, http.StatusCreated},
+		{"PUT", "/api/admin/skills/style", `{"content":"Changed.","version":1}`, http.StatusOK},
 	} {
 		req := httptest.NewRequest(w.method, w.target, strings.NewReader(w.body))
 		req.AddCookie(admin)
 		rec := httptest.NewRecorder()
 		e.h.ServeHTTP(rec, req)
 		wantCode(t, rec, w.method+" "+w.target+" without CSRF", http.StatusForbidden)
+		if n := e.libraryCount(); n != 2 {
+			t.Fatalf("library holds %d skills after %s %s without a CSRF token; want 2", n, w.method, w.target)
+		}
+		if sk, _ := e.storedSkill("style"); sk.Version != 1 || sk.Content != "Style text." {
+			t.Fatalf("style = %+v after %s %s without a CSRF token", sk, w.method, w.target)
+		}
+		wantCode(t, e.send(admin, w.method, w.target, w.body), w.method+" "+w.target+" with CSRF", w.ok)
+		// Put the library back for the next write.
+		switch w.method + " " + w.target {
+		case "POST /api/admin/skills":
+			wantCode(t, e.send(admin, "DELETE", "/api/admin/skills/new", ""), "undo", http.StatusNoContent)
+		case "DELETE /api/admin/skills/gone":
+			e.skill("gone", "Gone text.")
+		case "POST /api/admin/skills/style/copy":
+			wantCode(t, e.send(admin, "DELETE", "/api/admin/skills/copy", ""), "undo", http.StatusNoContent)
+		}
+	}
+}
+
+// The secret check fails closed: when the held secrets can't be read, no
+// create, edit or copy is saved, and the answer says nothing of why.
+func TestHeldSecretsErrorRefusesSave(t *testing.T) {
+	e := newEnv(t, nil)
+	e.skill("style", "Style text.")
+	admin := e.signInGitLab(true, "acme/widgets")
+	e.d.heldSecrets = func(context.Context) ([]string, error) {
+		return nil, errors.New("held secrets: instance \"lab\": the store is down")
+	}
+	gen := e.d.inputs.generation()
+	for _, w := range []struct {
+		what, method, target string
+		body                 any
+	}{
+		{"create", "POST", "/api/admin/skills", map[string]any{"name": "new", "content": "Text.", "addToDefaults": true}},
+		{"update", "PUT", "/api/admin/skills/style", map[string]any{"content": "Changed.", "version": 1}},
+		{"copy", "POST", "/api/admin/skills/style/copy", map[string]any{"name": "copy"}},
+	} {
+		rec := e.sendJSON(admin, w.method, w.target, w.body)
+		wantCode(t, rec, w.what, http.StatusInternalServerError)
+		if got := errorOf(t, rec); got != msgWriteFailed {
+			t.Errorf("%s: error = %q; want the generic %q", w.what, got, msgWriteFailed)
+		}
+		if strings.Contains(rec.Body.String(), "lab") || strings.Contains(rec.Body.String(), "store") {
+			t.Errorf("%s: the answer names why: %s", w.what, rec.Body)
+		}
 	}
 	if n := e.libraryCount(); n != 1 {
-		t.Errorf("library holds %d skills after writes without a CSRF token; want 1", n)
+		t.Errorf("library holds %d skills; want 1, nothing saved", n)
 	}
 	if sk, _ := e.storedSkill("style"); sk.Version != 1 || sk.Content != "Style text." {
-		t.Errorf("style = %+v after writes without a CSRF token", sk)
+		t.Errorf("style = %+v; want unchanged", sk)
 	}
+	if d := e.defaultSkills(); len(d) != 0 {
+		t.Errorf("defaults = %v; want unchanged", d)
+	}
+	for _, a := range e.auditEntries() {
+		if strings.HasPrefix(a.Action, "skill_") || a.Action == "defaults_updated" {
+			t.Errorf("a refused write was audited: %+v", a)
+		}
+	}
+	if e.d.inputs.generation() != gen {
+		t.Error("a refused write invalidated the inputs views")
+	}
+	// A delete holds no text to check and still works.
+	wantCode(t, e.send(admin, "DELETE", "/api/admin/skills/style", ""), "delete", http.StatusNoContent)
 }
 
 func TestCreateSkill(t *testing.T) {

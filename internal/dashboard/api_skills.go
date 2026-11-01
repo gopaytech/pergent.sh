@@ -233,7 +233,15 @@ func (d *Dashboard) refuseSkill(w http.ResponseWriter, r *http.Request, name, co
 		writeError(w, http.StatusBadRequest, err.Error())
 		return true
 	}
-	if inputs.ContainsSecret([]byte(content), d.registry.HeldSecrets(r.Context())) {
+	held, err := d.heldSecrets(r.Context())
+	if err != nil {
+		// Fail closed: with the secrets unknown nothing is saved. The answer
+		// names no instance or field.
+		d.Log.Error("dashboard: reading the held secrets for a skill check failed", "path", r.URL.Path, "error", err.Error())
+		writeError(w, http.StatusInternalServerError, msgWriteFailed)
+		return true
+	}
+	if inputs.ContainsSecret([]byte(content), held) {
 		writeError(w, http.StatusBadRequest, msgSkillSecret)
 		return true
 	}

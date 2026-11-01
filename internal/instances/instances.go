@@ -342,22 +342,61 @@ func (r *Registry) Secrets(ctx context.Context, name string) (s Secrets, unopene
 
 // HeldSecrets returns every secret value pergent.sh holds: each set field of
 // every instance's Secrets and every LLM key (LLMKeys). It is what a skill's
-// text is checked against, so no secret enters the library. An instance
-// whose secrets can't be read counts for nothing here, and is logged by its
-// name and the reason, which hold no value.
-func (r *Registry) HeldSecrets(ctx context.Context) []string {
+// text is checked against, so no secret enters the library, and the check
+// must fail closed: a dashboard instance's secrets that can't be read from
+// the store, or can't be opened, are an error and the caller must refuse
+// what it was checking. A config instance's secrets are its env vars, read
+// one by one: one that is unset holds nothing.
+func (r *Registry) HeldSecrets(ctx context.Context) ([]string, error) {
 	var out []string
 	for _, inst := range r.All() {
-		s, _, err := r.Secrets(ctx, inst.Name)
-		if err != nil {
-			r.logger().Warn("the secrets of an instance couldn't be read for the skill check", "instance", inst.Name, "error", err.Error())
+		if inst.Source == SourceConfig {
+			out = append(out, configSecretValues(inst, r.cfg.DashboardEnabled())...)
 			continue
+		}
+		s, unopened, err := r.Secrets(ctx, inst.Name)
+		if err != nil {
+			return nil, fmt.Errorf("held secrets: %w", err)
+		}
+		if len(unopened) > 0 {
+			return nil, fmt.Errorf("held secrets: instance %q: %d stored secrets can't be opened", inst.Name, len(unopened))
 		}
 		out = slices.AppendSeq(out, maps.Values(s.Fields()))
 	}
 	out = append(out, r.LLMKeys()...)
+	out = slices.DeleteFunc(out, func(v string) bool { return v == "" })
 	slices.Sort(out)
-	return slices.Compact(out)
+	return slices.Compact(out), nil
+}
+
+// configSecretValues are the values of the env vars a config instance names
+// for its secrets, those that are set.
+func configSecretValues(inst Instance, dashboard bool) []string {
+	var envs []string
+	switch {
+	case inst.GitLab != nil:
+		g := inst.GitLab
+		envs = []string{g.ReviewTokenEnv, g.ApproveTokenEnv, g.WebhookSecretEnv}
+		if dashboard {
+			envs = append(envs, g.OAuthClientSecretEnv)
+		}
+	case inst.GitHub != nil:
+		g := inst.GitHub
+		envs = []string{g.ReviewApp.PrivateKeyEnv, g.ApproveTokenEnv, g.WebhookSecretEnv}
+		if g.ApproveApp != nil {
+			envs = append(envs, g.ApproveApp.PrivateKeyEnv)
+		}
+		if dashboard {
+			envs = append(envs, g.OAuthClientSecretEnv)
+		}
+	}
+	var out []string
+	for _, env := range envs {
+		if v := envValue(env); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func (r *Registry) configSecrets(inst Instance) (Secrets, error) {

@@ -129,6 +129,9 @@ type Dashboard struct {
 	// loadLLM reads the LLM saved in the dashboard again
 	// (instances.Registry.LoadLLM); a field so a test can make it fail.
 	loadLLM func(ctx context.Context) error
+	// heldSecrets lists the secrets a skill may not contain
+	// (instances.Registry.HeldSecrets); a field so a test can make it fail.
+	heldSecrets func(ctx context.Context) ([]string, error)
 	// availableBudget bounds the whole picker request; listBudget bounds
 	// each side's listing in it; listLimit is the most repositories read
 	// from each side.
@@ -173,7 +176,7 @@ func New(o Options) (*Dashboard, error) {
 	return &Dashboard{Auth: auth, Repos: repos, Store: o.Store, Log: o.Log,
 		cfg: o.Config, registry: o.Instances, connector: o.Connector,
 		sources: o.Sources, catalogs: o.Catalogs,
-		reconcileSoon: o.ReconcileSoon, wake: o.Wake, loadLLM: o.Instances.LoadLLM, now: o.Now,
+		reconcileSoon: o.ReconcileSoon, wake: o.Wake, loadLLM: o.Instances.LoadLLM, heldSecrets: o.Instances.HeldSecrets, now: o.Now,
 		availableBudget: AvailableBudget, listBudget: listBudget, listLimit: listLimit,
 		inputs:  &inputsCache{entries: map[string]inputsEntry{}, flights: map[string]*inputsFlight{}},
 		catalog: &catalogCache{entries: map[string]catalogEntry{}, flights: map[string]*catalogFlight{}}}, nil

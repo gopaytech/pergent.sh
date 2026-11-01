@@ -495,7 +495,10 @@ func TestHeldSecretsCoversEveryField(t *testing.T) {
 	}
 	// The alpha instance reads the same env vars as zeta, minus the OAuth
 	// client, so it adds no value of its own.
-	got := reg.HeldSecrets(ctx)
+	got, err := reg.HeldSecrets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, want := range []string{
 		"cfg-gl-review-token", "cfg-gl-approve-token", "cfg-gl-hook-secret", "cfg-gl-oauth-secret",
 		"cfg-gh-review-key", "cfg-gh-approve-key", "cfg-gh-hook-secret",
@@ -519,24 +522,60 @@ func TestHeldSecretsCoversEveryField(t *testing.T) {
 	if err := reg.LoadLLM(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := reg.HeldSecrets(ctx); !slices.Contains(got, "llm-key-one") || !slices.Contains(got, "llm-key-two") {
-		t.Errorf("HeldSecrets after the key changed = %v; want both keys", got)
+	if got, err := reg.HeldSecrets(ctx); err != nil || !slices.Contains(got, "llm-key-one") || !slices.Contains(got, "llm-key-two") {
+		t.Errorf("HeldSecrets after the key changed = %v, %v; want both keys", got, err)
 	}
 }
 
-// An instance whose secrets can't be read adds nothing and doesn't hide the
-// others'.
-func TestHeldSecretsSkipsUnreadableInstance(t *testing.T) {
+// A config instance's env var that is unset holds nothing and hides none of
+// the others.
+func TestHeldSecretsConfigEnvOneByOne(t *testing.T) {
 	st := newStore(t)
 	box := newBox(t, 1)
+	t.Setenv("T_GL_REVIEW", "cfg-gl-review-token") // the other variables are unset
 	addRow(t, st, box, store.InstanceRow{Name: "lab", Platform: config.PlatformGitLab, URL: "https://lab.example.com"},
 		map[string]string{FieldReviewToken: "lab-review-token"})
-	reg := New(testConfig(), st, box) // the config's env vars are unset
-	reg.SetLog(slog.New(slog.DiscardHandler))
+	reg := New(testConfig(), st, box)
 	if err := reg.Load(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := reg.HeldSecrets(ctx); !slices.Contains(got, "lab-review-token") {
-		t.Errorf("HeldSecrets = %v; want lab's token", got)
+	got, err := reg.HeldSecrets(ctx)
+	if err != nil || !slices.Contains(got, "lab-review-token") || !slices.Contains(got, "cfg-gl-review-token") {
+		t.Errorf("HeldSecrets = %v, %v; want lab's token and the one env var that is set", got, err)
 	}
+}
+
+// The check fails closed: a dashboard instance's secrets that can't be read
+// or opened are an error, never a shorter list.
+func TestHeldSecretsFailClosed(t *testing.T) {
+	t.Run("a secret that can't be opened", func(t *testing.T) {
+		st := newStore(t)
+		addRow(t, st, newBox(t, 1), store.InstanceRow{Name: "lab", Platform: config.PlatformGitLab, URL: "https://lab.example.com"},
+			map[string]string{FieldReviewToken: "lab-review-token"})
+		reg := New(testConfig(), st, newBox(t, 2)) // another key
+		if err := reg.Load(ctx); err != nil {
+			t.Fatal(err)
+		}
+		got, err := reg.HeldSecrets(ctx)
+		if err == nil {
+			t.Fatalf("HeldSecrets = %v, nil; want an error", got)
+		}
+		if strings.Contains(err.Error(), "lab-review-token") {
+			t.Errorf("the error holds a secret: %v", err)
+		}
+	})
+	t.Run("the store can't be read", func(t *testing.T) {
+		st := newStore(t)
+		box := newBox(t, 1)
+		addRow(t, st, box, store.InstanceRow{Name: "lab", Platform: config.PlatformGitLab, URL: "https://lab.example.com"},
+			map[string]string{FieldReviewToken: "lab-review-token"})
+		reg := New(testConfig(), st, box)
+		if err := reg.Load(ctx); err != nil {
+			t.Fatal(err)
+		}
+		st.Close()
+		if got, err := reg.HeldSecrets(ctx); err == nil {
+			t.Errorf("HeldSecrets = %v, nil with the store closed; want an error", got)
+		}
+	})
 }
