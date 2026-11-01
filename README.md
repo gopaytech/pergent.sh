@@ -108,10 +108,12 @@ The chart is in `charts/pergent-sh`. Postgres is not part of it. Every value is 
 4. Install:
 
    ```bash
-   helm install pergent-sh charts/pergent-sh -n pergent-sh -f values.yaml
+   helm repo add pergent-sh https://gopaytech.github.io/pergent.sh/charts/releases
+   helm repo update
+   helm install pergent-sh pergent-sh/pergent-sh -n pergent-sh -f values.yaml
    ```
 
-   By default the chart runs `ghcr.io/gopaytech/pergent.sh:main`, the newest build of the `main` branch (every push to `main` publishes it, together with `sha-<short sha>`), with `image.pullPolicy: Always`. The tag moves, so a pod restart can pick up a newer build. For production pin an image: `--set image.tag=sha-<short sha>` or a release tag such as `v0.1.0` (then `--set image.pullPolicy=IfNotPresent`).
+   A released chart runs the image of its own release (chart `0.2.0` runs `ghcr.io/gopaytech/pergent.sh:v0.2.0`). To run the newest build of the `main` branch instead (every push to `main` publishes `main` and `sha-<short sha>`), install from a checkout with `helm install pergent-sh charts/pergent-sh ...` and `--set image.tag=main --set image.pullPolicy=Always`; that tag moves, so a pod restart can pick up a newer build.
 
 5. Set up in the browser. With `dashboard.url` set and no instance in the config, pergent.sh starts and waits for one. Take the generated admin password from the log ([First sign-in](#first-sign-in)), sign in as `admin` and change it, then add a GitLab or GitHub instance under **Integrations** ([Instances and secrets in the dashboard](#instances-and-secrets-in-the-dashboard)), set the LLM under **Settings**, and switch repositories on. People who sign in with GitLab or GitHub wait until an admin puts them on a [team](#teams). To set the first password from a Secret instead of the log, see [First sign-in](#first-sign-in).
 
@@ -549,7 +551,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `llm.base_url` | none | Custom API base URL for the provider. |
 | `llm.api_key_env` | `OPENCODE_API_KEY` | Name of the env var with the LLM key. |
 | `jobs.namespace` | required | Namespace the Jobs run in. |
-| `jobs.image` | `ghcr.io/gopaytech/pergent:v0.1.0` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
+| `jobs.image` | `ghcr.io/gopaytech/pergent:v0.1.1` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
 | `jobs.max_running` | `5` | Most Jobs running at once. Further runs wait in the queue. At least 1. |
 | `jobs.timeout` | `10m` | pergent's own review budget per Job (`--timeout`). The Job's deadline adds 2 minutes to deliver and a clone allowance of at least 2 minutes. |
 | `jobs.concurrency` | `4` | pergent's `--concurrency`: opencode runs in flight inside one Job. At least 1. |
@@ -781,13 +783,13 @@ This release is deliberately small:
 
 ## Publishing the chart (at release time)
 
-The chart is not published yet. To publish a version, bump `version` (and `appVersion`) in `charts/pergent-sh/Chart.yaml` and set `image.tag` in `charts/pergent-sh/values.yaml` to the release version (for example `v0.1.0`, with `image.pullPolicy: IfNotPresent`): the default `main` is a moving development build and must not ship in a released chart. Then run:
+The chart is published at `https://gopaytech.github.io/pergent.sh/charts/releases` (GitHub Pages, from `main`). To publish a version, bump `version` (and `appVersion`) in `charts/pergent-sh/Chart.yaml` and set `image.tag` in `charts/pergent-sh/values.yaml` to the release version (for example `v0.2.0`, with `image.pullPolicy: IfNotPresent`): `main` is a moving development build and must not ship in a released chart. Then run:
 
 ```bash
 make helm.create.releases   # packages the chart into charts/releases and refreshes its index.yaml
 ```
 
-and commit `charts/releases/`. The directory is served by GitHub Pages from this repository (now public); a repository admin has to enable Pages first. `make readme` regenerates the chart reference (`charts/pergent-sh/README.md`) from the comments in `charts/pergent-sh/values.yaml` with [helm-docs](https://github.com/norwoodj/helm-docs); run it after changing a value.
+and commit `charts/releases/` together with the bump, push `main`, then push the `v<version>` tag so the release workflow builds the image the chart names. The `.nojekyll` file at the repository root makes Pages serve the files as they are. `make readme` regenerates the chart reference (`charts/pergent-sh/README.md`) from the comments in `charts/pergent-sh/values.yaml` with [helm-docs](https://github.com/norwoodj/helm-docs); run it after changing a value.
 
 ## Development
 

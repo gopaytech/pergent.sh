@@ -8,7 +8,9 @@ pergent.sh runs [pergent](https://github.com/gopaytech/pergent) code reviews on 
 ## Installing
 
 ```console
-helm install pergent-sh charts/pergent-sh -n pergent-sh -f values.yaml
+helm repo add pergent-sh https://gopaytech.github.io/pergent.sh/charts/releases
+helm repo update
+helm install pergent-sh pergent-sh/pergent-sh -n pergent-sh -f values.yaml
 ```
 
 {{ template "chart.requirementsSection" . }}

@@ -2,14 +2,16 @@
 
 pergent.sh runs pergent code reviews on GitLab merge requests and GitHub pull requests as Kubernetes Jobs
 
-![Version: 0.1.0](https://img.shields.io/badge/Version-0.1.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.1.0](https://img.shields.io/badge/AppVersion-v0.1.0-informational?style=flat-square)
+![Version: 0.2.0](https://img.shields.io/badge/Version-0.2.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.2.0](https://img.shields.io/badge/AppVersion-v0.2.0-informational?style=flat-square)
 
 pergent.sh runs [pergent](https://github.com/gopaytech/pergent) code reviews on GitLab merge requests and GitHub pull requests, one Kubernetes Job per review. Postgres is not part of this chart. The [repository README](../../README.md) explains the setup: the Secret, the config, the skills and what the chart creates.
 
 ## Installing
 
 ```console
-helm install pergent-sh charts/pergent-sh -n pergent-sh -f values.yaml
+helm repo add pergent-sh https://gopaytech.github.io/pergent.sh/charts/releases
+helm repo update
+helm install pergent-sh pergent-sh/pergent-sh -n pergent-sh -f values.yaml
 ```
 
 ## Values
@@ -27,9 +29,9 @@ helm install pergent-sh charts/pergent-sh -n pergent-sh -f values.yaml
 | dashboardIngress.tls | list | `[]` | Ingress TLS, e.g. `[{secretName: pergent-dashboard-example-com-tls, hosts: [pergent-dashboard.example.com]}]`. The dashboard's cookies are Secure, so browsers must reach it over https. |
 | existingSecret | string | `""` | Name of an existing Secret in the release namespace (required). It is mounted with envFrom and always holds: DATABASE_URL (PostgreSQL connection URL); PERGENT_SH_SECRET_KEY (32 random bytes, standard base64). Instances, tokens, App keys and the LLM key can be entered in the dashboard instead. Only when they are in the config file (config.gitlab, config.github, config.llm) does the Secret also hold: OPENCODE_API_KEY (the LLM key, the env var named by config.llm.api_key_env); every env var named by config.gitlab[*].review_token_env, approve_token_env and webhook_secret_env; every env var named by config.github[*].review_app.private_key_env, approve_app.private_key_env (or approve_token_env) and webhook_secret_env; every env var named by config.gitlab[*] and config.github[*] oauth_client_id_env and oauth_client_secret_env. A private key is the App's whole PEM file, e.g. --from-file=GITHUB_REVIEW_APP_KEY=review-app.private-key.pem |
 | fullnameOverride | string | `""` | Overrides the full resource name. |
-| image.pullPolicy | string | `"Always"` | Image pull policy. |
+| image.pullPolicy | string | `"IfNotPresent"` | Image pull policy. |
 | image.repository | string | `"ghcr.io/gopaytech/pergent.sh"` | Image repository. |
-| image.tag | string | `"main"` | Image tag. "main" is the newest build of the main branch (it moves, hence pullPolicy Always). For production pin "sha-<short sha>" or a release tag such as v0.1.0 (then IfNotPresent is enough). Empty means the chart appVersion. Releasing the chart: set this to the release version (and pullPolicy to IfNotPresent); "main" must not ship in a released chart. |
+| image.tag | string | `"v0.2.0"` | Image tag. A released chart pins its own release. "main" is the newest build of the main branch (it moves, so use pullPolicy Always with it); "sha-<short sha>" pins one build. Empty means the chart appVersion. Releasing the chart: set this to the release version (and pullPolicy to IfNotPresent); "main" must not ship in a released chart. |
 | imagePullSecrets | list | `[]` | Secrets for pulling the image from a private registry. |
 | ingress.annotations | object | `{}` | Ingress annotations. |
 | ingress.className | string | `""` | Ingress class name. |
