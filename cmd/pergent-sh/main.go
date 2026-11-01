@@ -209,7 +209,6 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		Platforms:      conn.platforms,
 		WebhookSecrets: conn.gitlabHooks,
 		Launcher:       &kube.Launcher{Client: clientset, Namespace: cfg.Jobs.Namespace},
-		Library:        lib,
 		Box:            box,
 		Log:            log,
 		// An instance removed in the dashboard is taken out of use once the

@@ -852,3 +852,37 @@ func TestAdminPasswordEnv(t *testing.T) {
 		}
 	}
 }
+
+// repo_skills names the detected repository skills to turn on; each must be a
+// valid skill name.
+func TestRepoSkillsConfig(t *testing.T) {
+	base, err := os.ReadFile("testdata/valid.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	with := func(list string) string {
+		body := strings.Replace(string(base), "    project: acme/widgets\n", "    project: acme/widgets\n    repo_skills: "+list+"\n", 1)
+		if body == string(base) {
+			t.Fatal("test replacement did not apply")
+		}
+		return body
+	}
+
+	cfg, err := Load(writeConfig(t, with("[a, team-rules]")))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Repositories[0].RepoSkills; len(got) != 2 || got[0] != "a" || got[1] != "team-rules" {
+		t.Errorf("RepoSkills = %v, want [a team-rules]", got)
+	}
+	if got := loadValid(t).Repositories[0].RepoSkills; got != nil {
+		t.Errorf("RepoSkills = %v, want nil when not set", got)
+	}
+
+	for _, bad := range []string{"[../x]", `["a b"]`, `[""]`, "[.hidden]"} {
+		_, err := Load(writeConfig(t, with(bad)))
+		if err == nil || !strings.Contains(err.Error(), "repo_skills") {
+			t.Errorf("Load with repo_skills %s = %v, want an error naming repo_skills", bad, err)
+		}
+	}
+}

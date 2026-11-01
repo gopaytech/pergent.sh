@@ -137,11 +137,13 @@ const (
 // resolved (settings.Resolver): approval and draft reviews on, the Job
 // timeout of jobs.timeout and the memory limit of jobs.resources.limits.
 type Repository struct {
-	GitLab        string
-	GitHub        string
-	Project       string
-	Skills        []string
-	FailureStatus FailureStatus
+	GitLab  string
+	GitHub  string
+	Project string
+	// Skills names library skills (nil: the default list). RepoSkills names
+	// the detected repository skills to turn on (nil: none).
+	Skills, RepoSkills []string
+	FailureStatus      FailureStatus
 	// Approve is whether a clean review is approved (default true).
 	Approve *bool
 	// ReviewDrafts is whether a draft is reviewed (default true).
@@ -193,6 +195,7 @@ type fileRepository struct {
 	GitHub        string        `yaml:"github"`
 	Project       string        `yaml:"project"`
 	Skills        []string      `yaml:"skills"`
+	RepoSkills    []string      `yaml:"repo_skills"`
 	FailureStatus FailureStatus `yaml:"failure_status"`
 	Approve       *bool         `yaml:"approve"`
 	ReviewDrafts  *bool         `yaml:"review_drafts"`
@@ -205,7 +208,7 @@ type fileRepository struct {
 
 func (f fileRepository) repository() Repository {
 	r := Repository{
-		GitLab: f.GitLab, GitHub: f.GitHub, Project: f.Project, Skills: f.Skills,
+		GitLab: f.GitLab, GitHub: f.GitHub, Project: f.Project, Skills: f.Skills, RepoSkills: f.RepoSkills,
 		FailureStatus: f.FailureStatus, Approve: f.Approve, ReviewDrafts: f.ReviewDrafts,
 		RerunLimitPerMR: f.RerunLimitPerMR, RerunLimitPerRepo: f.RerunLimitPerRepo,
 	}
@@ -379,6 +382,9 @@ var (
 	instanceNameRE = regexp.MustCompile(`^[a-z0-9-]+$`)
 	envNameRE      = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 	digestRE       = regexp.MustCompile(`@sha256:[0-9a-f]{64}$`)
+	// skillNameRE is the rule for a skill's name (inputs holds the same rule;
+	// inputs imports config, so it can't be shared).
+	skillNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
 
 // Validate checks the config and returns every problem found, joined.
@@ -476,6 +482,11 @@ func (c *Config) Validate() error {
 			add("duplicate repository %s on %s instance %q", repo.Project, platform, instance)
 		}
 		seen[key] = true
+		for _, name := range repo.RepoSkills {
+			if !skillNameRE.MatchString(name) {
+				add("repositories[%d] (%s): repo_skills name %q must match %s", i, repo.Project, name, skillNameRE)
+			}
+		}
 		if repo.FailureStatus != FailureStatusFailed && repo.FailureStatus != FailureStatusNeutral {
 			add("repositories[%d] (%s): failure_status %q must be %q or %q",
 				i, repo.Project, repo.FailureStatus, FailureStatusFailed, FailureStatusNeutral)

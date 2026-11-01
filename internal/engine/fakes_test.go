@@ -30,7 +30,6 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/forge/gitlabforge"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
-	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
@@ -323,13 +322,44 @@ func newTestEnv(t *testing.T) *testEnv {
 		}}),
 		WebhookSecrets: syncmap.New(map[string]string{testInstance: testWebhookSecret}),
 		Launcher:       launcher,
-		Library:        inputs.Library{"security": []byte("---\nname: security\n---\nLook for security problems.\n")},
 		Box:            box,
 		Now:            env.Now,
 		Log:            slog.New(slog.NewTextHandler(&env.logs, nil)),
 	}
 	env.SeedProject(nil)
+	env.AddSkill("security", securitySkill)
 	return env
+}
+
+// securitySkill is the library skill every test environment starts with, on
+// the default list.
+const securitySkill = "---\nname: security\n---\nLook for security problems.\n"
+
+// AddSkill adds a skill to the library and puts it on the default list, which
+// repositories that name no skills review with.
+func (e *testEnv) AddSkill(name, content string) {
+	e.t.Helper()
+	if _, err := e.Store.CreateLibrarySkill(e.ctx, store.NewSkill{Name: name, Content: content, Actor: "test"}); err != nil {
+		e.t.Fatalf("CreateLibrarySkill(%s): %v", name, err)
+	}
+	d, err := e.Store.RepoDefaults(e.ctx)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	e.SetDefaultSkills(append(d.Skills, name)...)
+}
+
+// SetDefaultSkills replaces the default list; none empties it.
+func (e *testEnv) SetDefaultSkills(names ...string) {
+	e.t.Helper()
+	d, err := e.Store.RepoDefaults(e.ctx)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	d.Skills = names
+	if err := e.Store.PutRepoDefaults(e.ctx, d); err != nil {
+		e.t.Fatalf("PutRepoDefaults: %v", err)
+	}
 }
 
 // testConfig is a valid config with one instance "main" at gitlabURL and one

@@ -19,6 +19,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/dashboard"
+	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/server"
@@ -95,7 +96,7 @@ func newDashboardE2E(t *testing.T, edit ...func(o *dashboard.Options)) *dashE2E 
 	}
 	opts := dashboard.Options{
 		Config: cfg, Instances: env.Engine.Instances, Store: env.Store, SecretKey: testBoxKey, HTTPClient: env.GitLab.srv.Client(),
-		Now: env.Now, Log: env.Engine.Log, Library: env.Engine.Library,
+		Now: env.Now, Log: env.Engine.Log, Library: inputs.Library{"security": []byte(securitySkill)},
 		Sources: sources, Catalogs: catalogs, ReconcileSoon: env.Engine.ReconcileSoon,
 	}
 	for _, f := range edit {

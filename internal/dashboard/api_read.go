@@ -940,7 +940,7 @@ func (d *Dashboard) resolveInputs(ctx context.Context, repo settings.Effective, 
 		return InputsView{}, errors.New("the repository has no default branch")
 	}
 	// A skill removed from the library since is left out, as in a review.
-	skills, _ := repo.LibrarySkills(d.library)
+	skills, _ := librarySkills(repo, d.library)
 	in, err := inputs.Resolve(ctx, src, d.library, config.Repository{Skills: skills}, p.ProjectID, branch, nil)
 	if err != nil {
 		return InputsView{}, err
@@ -955,6 +955,28 @@ func (d *Dashboard) resolveInputs(ctx context.Context, repo settings.Effective, 
 		v.Skills = append(v.Skills, InputSkill{Name: name, Source: in.Sources[name], Content: string(in.Skills[name])})
 	}
 	return v, nil
+}
+
+// librarySkills is the library skills a view of the repository's inputs shows:
+// repo.Skills, less those library doesn't have. When none is left, skills is
+// nil: every library skill. Temporary: the view moves to the Postgres library
+// with the dashboard's skills piece.
+func librarySkills(repo settings.Effective, library inputs.Library) (skills, missing []string) {
+	if repo.Source != settings.SourceDashboard || len(repo.Skills) == 0 {
+		return repo.Skills, nil
+	}
+	kept := make([]string, 0, len(repo.Skills))
+	for _, name := range repo.Skills {
+		if _, ok := library[name]; ok {
+			kept = append(kept, name)
+		} else {
+			missing = append(missing, name)
+		}
+	}
+	if len(kept) == 0 {
+		return nil, missing
+	}
+	return kept, missing
 }
 
 // --- GET /api/skills ---

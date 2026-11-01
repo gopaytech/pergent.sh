@@ -43,7 +43,7 @@ func rerunOf(t *testing.T, env *testEnv, head, trigger string, subset []string, 
 
 func TestSubsetJobGetsOnlyThoseSkills(t *testing.T) {
 	env := newTestEnv(t)
-	env.Engine.Library["style"] = []byte("---\nname: style\n---\nCheck the style.\n")
+	env.AddSkill("style", "---\nname: style\n---\nCheck the style.\n")
 	head := sha('a')
 	base := env.Publish(1, head, resultFor(t, head, namedSkill(t, "security", "no_blocking_issues", "", ""), namedSkill(t, "style", "failed", "", "")))
 	id := rerunOf(t, env, head, store.TriggerRerunFailed, []string{"style", "gone"}, base)
@@ -73,8 +73,8 @@ func TestSubsetJobGetsOnlyThoseSkills(t *testing.T) {
 			t.Errorf("inputs hold %q", not)
 		}
 	}
-	if len(r.SkillSources) != 1 || r.SkillSources["style"] != "repo" {
-		t.Errorf("skill sources = %v, want only style from the repo", r.SkillSources)
+	if len(r.SkillSources) != 1 || r.SkillSources["style"] != ".pergent/skills" {
+		t.Errorf("skill sources = %v, want only style from the repository folder", r.SkillSources)
 	}
 	if r.Trigger != store.TriggerRerunFailed || len(r.SkillSubset) != 1 || r.SkillSubset[0] != "style" || r.BaseRunID == nil {
 		t.Errorf("run = %q %v %v, want the re-run with the skills that exist: style", r.Trigger, r.SkillSubset, r.BaseRunID)
@@ -86,7 +86,7 @@ func TestSubsetJobGetsOnlyThoseSkills(t *testing.T) {
 
 func TestSubsetOfSkillsThatAreGoneIsAFullRerun(t *testing.T) {
 	env := newTestEnv(t)
-	env.Engine.Library["style"] = []byte("---\nname: style\n---\nCheck the style.\n")
+	env.AddSkill("style", "---\nname: style\n---\nCheck the style.\n")
 	head := sha('a')
 	base := env.Publish(1, head, resultFor(t, head, namedSkill(t, "gone", "failed", "", "")))
 	id := rerunOf(t, env, head, store.TriggerRerunFailed, []string{"gone"}, base)
@@ -156,7 +156,7 @@ func TestSubsetThatCannotBeKeptIsAFullRerun(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			env := newTestEnv(t)
-			env.Engine.Library["style"] = []byte("---\nname: style\n---\nCheck the style.\n")
+			env.AddSkill("style", "---\nname: style\n---\nCheck the style.\n")
 			base := env.Publish(1, head, tc.base(t))
 			id := rerunOf(t, env, head, store.TriggerRerunFailed, []string{"style"}, base)
 			env.GitLab.SetMR(openMR(1, head))
@@ -188,7 +188,7 @@ func TestSubsetThatCannotBeKeptIsAFullRerun(t *testing.T) {
 // the earlier run's, re-run skills get the new ones.
 func TestSubsetRecordsKeptSkillSources(t *testing.T) {
 	env := newTestEnv(t)
-	env.Engine.Library["style"] = []byte("---\nname: style\n---\nCheck the style.\n")
+	env.AddSkill("style", "---\nname: style\n---\nCheck the style.\n")
 	head := sha('a')
 	base := env.Publish(1, head, resultFor(t, head, namedSkill(t, "security", "no_blocking_issues", "", ""), namedSkill(t, "style", "failed", "", "")))
 	if err := env.Store.SetRunInputs(env.ctx, base, "m", map[string]string{"security": "repo", "style": "library"}, nil); err != nil {
