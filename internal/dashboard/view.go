@@ -65,11 +65,25 @@ type InstanceView struct {
 // numbers over the runs started in the last days, the 10 most recently
 // updated reviews of the last 90 days and the setup problems of the
 // repositories the user can see (instance-wide ones only for the admins of
-// that instance, and for operators).
+// that instance and for operators; the library's own, with no instance,
+// for every admin). Setup is the setup checklist, for
+// admins only, and null once all four items are done (and for everyone
+// else).
 type OverviewView struct {
 	Stats     StatsView       `json:"stats"`
 	Recent    []ReviewSummary `json:"recent"`
 	Attention []AttentionView `json:"attention"`
+	Setup     *SetupView      `json:"setup"`
+}
+
+// SetupView is what an admin still has to set up, one item each: an LLM
+// with its key, a connected instance, a skill in the library (a repository's
+// own skills don't count) and a repository switched on.
+type SetupView struct {
+	LLM        bool `json:"llm"`
+	Instance   bool `json:"instance"`
+	Skill      bool `json:"skill"`
+	Repository bool `json:"repository"`
 }
 
 // StatsView counts the runs started in the period that weren't superseded,
@@ -227,9 +241,12 @@ type SkillView struct {
 	// Source is "library" for a skill of pergent.sh's library, or the
 	// repository folder it was read from (".pergent/skills", ".agents/skills",
 	// ".claude/skills" or ".github/skills"; also one replacing a library
-	// skill), as recorded when the review started; null when it wasn't
-	// recorded.
+	// skill), as recorded when the review started; "repo" for a run from
+	// before the folders; null when it wasn't recorded.
 	Source *string `json:"source"`
+	// Version is the library skill's version the review used; 0 for a
+	// repository skill and for a run that didn't record it.
+	Version int `json:"version"`
 	// Findings are those still standing; Dismissed are those set aside by
 	// a dismissal, each with who dismissed it. Verdict counts the blocking
 	// findings left in Findings.
@@ -354,6 +371,10 @@ type InputSkill struct {
 	// Version is the library skill's version, 0 for a repository skill.
 	Version int    `json:"version"`
 	Content string `json:"content"`
+	// URL is where a repository skill is on the platform (its file at the
+	// default branch); "" for a library skill, and when the platform's web
+	// address isn't known.
+	URL string `json:"url"`
 	// Problem says why a review would fail on this skill; Content is empty.
 	Problem string `json:"problem,omitempty"`
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/actions"
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -230,7 +231,8 @@ func parseDays(r *http.Request, def, max int) (int, bool) {
 // attention returns the setup problems of the repositories in active (only
 // only's when its Path isn't ""), and, when only is zero, the instance-wide
 // ones the session may see: those of its own instance for an admin, every
-// one for an operator.
+// one for an operator. An item with no instance is about the library as a
+// whole: every admin sees it.
 func (d *Dashboard) attention(ctx context.Context, se Session, active map[RepoKey]settings.Effective, only RepoKey) ([]AttentionView, error) {
 	items, err := d.Store.Attention(ctx)
 	if err != nil {
@@ -241,7 +243,7 @@ func (d *Dashboard) attention(ctx context.Context, se Session, active map[RepoKe
 		k := repoKey(a.Instance, a.Project)
 		switch {
 		case a.Project == "":
-			if only.Path != "" || !(se.Operator || (se.Admin && a.Instance == se.Instance)) {
+			if only.Path != "" || !(se.Operator || (se.Admin && (a.Instance == se.Instance || a.Instance == ""))) {
 				continue
 			}
 		case only.Path != "" && k != only:
@@ -300,7 +302,34 @@ func (d *Dashboard) overview(w http.ResponseWriter, r *http.Request) {
 		d.failed(w, r, "listing setup problems", err)
 		return
 	}
+	if se.Admin {
+		if view.Setup, err = d.setup(ctx); err != nil {
+			d.failed(w, r, "reading the setup checklist", err)
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, view)
+}
+
+// setup is the checklist an admin sees on the overview, nil once every item
+// is done. The skill item is the library's: a repository's own skills don't
+// count, as a fresh install builds the library first. The repository item
+// looks at every repository switched on, not only those the admin sees.
+func (d *Dashboard) setup(ctx context.Context) (*SetupView, error) {
+	library, err := d.Store.LibrarySkills(ctx)
+	if err != nil {
+		return nil, err
+	}
+	repos, err := d.Repos.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	v := SetupView{LLM: d.registry.LLMStatus().KeySet, Instance: len(d.registry.All()) > 0,
+		Skill: len(library) > 0, Repository: len(repos) > 0}
+	if v == (SetupView{true, true, true, true}) {
+		return nil, nil
+	}
+	return &v, nil
 }
 
 // --- GET /api/reviews ---
@@ -575,7 +604,7 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		view.PergentVersion = res.PergentVersion
-		fillSkills(&view, res, run.Result, run.SkillSources, dismissals)
+		fillSkills(&view, res, run.Result, run.SkillSources, run.SkillVersions, dismissals)
 	}
 	writeJSON(w, http.StatusOK, view)
 }
@@ -604,11 +633,11 @@ type notReviewedJSON struct {
 
 // fillSkills adds the skills, findings, checks, files and tokens of a
 // parsed result (raw is the same result, for the fields result.Result
-// doesn't declare), each skill with its recorded source. A part that
-// doesn't decode is left out, not guessed. Findings that dismissals cover
-// are moved to the skill's Dismissed, and its verdict is the one the policy
+// doesn't declare), each skill with its recorded source and library version.
+// A part that doesn't decode is left out, not guessed. Findings that
+// dismissals cover are moved to the skill's Dismissed, and its verdict is the one the policy
 // decides on with them set aside.
-func fillSkills(view *RunDetailView, res *result.Result, raw []byte, sources map[string]string, dismissals []store.Dismissal) {
+func fillSkills(view *RunDetailView, res *result.Result, raw []byte, sources map[string]string, versions map[string]int, dismissals []store.Dismissal) {
 	var extra struct {
 		Skills []json.RawMessage `json:"skills"`
 	}
@@ -626,6 +655,7 @@ func fillSkills(view *RunDetailView, res *result.Result, raw []byte, sources map
 		if src, ok := sources[s.Name]; ok {
 			sv.Source = &src
 		}
+		sv.Version = versions[s.Name]
 		for _, f := range decided[i].Findings {
 			sv.Findings = append(sv.Findings, findingView(f))
 		}
@@ -960,6 +990,7 @@ func (d *Dashboard) resolveInputs(ctx context.Context, repo settings.Effective, 
 	if !ok || src == nil {
 		return InputsView{}, errors.New("no reader for the instance")
 	}
+	inst, _ := d.registry.Get(repo.Instance)
 	p, found, err := d.Store.ProjectByPath(ctx, repo.Instance, repo.Project)
 	if err != nil {
 		return InputsView{}, err
@@ -1045,6 +1076,7 @@ func (d *Dashboard) resolveInputs(ctx context.Context, repo settings.Effective, 
 		sk := InputSkill{Name: name, Source: in.Sources[name], Version: in.Versions[name], Content: string(in.Skills[name])}
 		if sk.Source != inputs.SourceLibrary {
 			sk.Folder = sk.Source
+			sk.URL = repoSkillURL(inst, repo.Project, branch, in.Paths[name])
 		}
 		v.Skills = append(v.Skills, sk)
 	}
@@ -1053,6 +1085,35 @@ func (d *Dashboard) resolveInputs(ctx context.Context, repo settings.Effective, 
 			On: slices.Contains(repo.RepoSkills, f.Name)})
 	}
 	return v, nil
+}
+
+// repoSkillURL is the address of the file of a repository skill on the
+// platform's web site: GitLab <instance url>/<project>/-/blob/<branch>/<path>,
+// GitHub <web url>/<owner>/<repo>/blob/<branch>/<path>, each segment escaped.
+// It is "" when the file is unknown or the address isn't an http(s) one.
+func repoSkillURL(inst instances.Instance, project, branch, file string) string {
+	if file == "" {
+		return ""
+	}
+	var base, blob string
+	switch {
+	case inst.GitLab != nil:
+		base, blob = strings.TrimRight(inst.GitLab.URL, "/"), "/-/blob/"
+	case inst.GitHub != nil:
+		base, blob = githubWebURL(inst.GitHub.APIURL), "/blob/"
+	default:
+		return ""
+	}
+	return safeURL(base + "/" + escapePath(project) + blob + escapePath(branch) + "/" + escapePath(file))
+}
+
+// escapePath escapes each segment of p, keeping the slashes between them.
+func escapePath(p string) string {
+	segs := strings.Split(p, "/")
+	for i, s := range segs {
+		segs[i] = url.PathEscape(s)
+	}
+	return strings.Join(segs, "/")
 }
 
 // --- admin: GET /api/integrations and /api/admin/settings ---

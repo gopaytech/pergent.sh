@@ -16,6 +16,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/forge"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -239,6 +240,9 @@ type runFix struct {
 	undispatched            bool
 	sourceBranch, user      string
 	model, sources          string
+	// versions (JSON) and skipReason are what a run records of the library
+	// skills it used and of why it was skipped.
+	versions, skipReason string
 }
 
 // addRun stores f and returns the run's ID.
@@ -274,11 +278,11 @@ func (e *env) addRun(f runFix) string {
 		dispatched = &d
 	}
 	switch f.state {
-	case store.Reported, store.Published, store.PublishFailed:
+	case store.Reported, store.Published, store.PublishFailed, store.Skipped:
 		r := f.at.Add(10*time.Second + f.duration)
 		reported = &r
 	}
-	var result, model, sources *string
+	var result, model, sources, versions *string
 	if f.result != "" {
 		result = &f.result
 	}
@@ -287,6 +291,9 @@ func (e *env) addRun(f runFix) string {
 	}
 	if f.sources != "" {
 		sources = &f.sources
+	}
+	if f.versions != "" {
+		versions = &f.versions
 	}
 	if f.outcome != "" && f.status == "" {
 		f.status = "success"
@@ -305,10 +312,10 @@ func (e *env) addRun(f runFix) string {
 	e.exec(`UPDATE runs SET state = $2, result = $3::jsonb, failure_reason = $4, base_sha = $5, created_at = $6,
 			dispatched_at = $7, reported_at = $8, title = $9, web_url = $10, source_branch = $11, author = $12,
 			outcome = $13, outcome_reason = $14, decision_status = $15, approved = $16, model = $17,
-			skill_sources = $18::jsonb
+			skill_sources = $18::jsonb, skill_versions = $19::jsonb, skip_reason = $20
 		WHERE id = $1::uuid`,
 		id, string(f.state), result, f.failure, baseSHA, f.at, dispatched, reported, f.title, f.webURL,
-		f.sourceBranch, f.user, f.outcome, f.reason, f.status, f.approved, model, sources)
+		f.sourceBranch, f.user, f.outcome, f.reason, f.status, f.approved, model, sources, versions, f.skipReason)
 	return id
 }
 
@@ -1228,5 +1235,252 @@ func TestReusedPathHidesEarlierProject(t *testing.T) {
 		if strings.EqualFold(r.Project, "acme/widgets") && r.Last7.Reviews != 1 {
 			t.Errorf("acme/widgets last 7 days = %+v; want only the new project's run", r.Last7)
 		}
+	}
+}
+
+// --- skills library views ---
+
+// A fresh install has nothing set up: every item is false. Each turns true
+// on its own, and the checklist is gone once all four are done.
+func TestSetupChecklist(t *testing.T) {
+	e := newEnv(t, func(cfg *config.Config) {
+		cfg.GitLab, cfg.GitHub, cfg.Repositories = nil, nil, nil
+	})
+	root := e.signInOperator()
+	setup := func() *SetupView { return getJSON[OverviewView](e, root, "/api/overview").Setup }
+
+	if got := setup(); got == nil || *got != (SetupView{}) {
+		t.Fatalf("fresh install setup = %+v, want all four false", got)
+	}
+	if body := e.get(root, "/api/overview").Body.String(); !strings.Contains(body, `"setup":{"llm":false,"instance":false,"skill":false,"repository":false}`) {
+		t.Errorf("body = %s", body)
+	}
+
+	t.Setenv("PERGENT_TEST_LLM_KEY", llmKey)
+	e.cfg.LLM = config.LLM{Provider: "anthropic", Model: "claude-sonnet-4", APIKeyEnv: "PERGENT_TEST_LLM_KEY"}
+	if got := setup(); got == nil || *got != (SetupView{LLM: true}) {
+		t.Errorf("with an LLM = %+v", got)
+	}
+	e.cfg.GitLab = []config.Instance{{Name: "main", URL: e.gl.srv.URL}}
+	if got := setup(); got == nil || *got != (SetupView{LLM: true, Instance: true}) {
+		t.Errorf("with an instance = %+v", got)
+	}
+	// A skill of a repository doesn't count: the library must hold one.
+	e.src["main"].set(func(f *fakeSource) { f.files[".pergent/skills/mine.md"] = "Mine." })
+	if got := setup(); got == nil || got.Skill {
+		t.Errorf("a repository skill counted: %+v", got)
+	}
+	e.skill("code-review", "Review the code.")
+	if got := setup(); got == nil || *got != (SetupView{LLM: true, Instance: true, Skill: true}) {
+		t.Errorf("with a skill = %+v", got)
+	}
+	e.cfg.Repositories = []config.Repository{{GitLab: "main", Project: "acme/widgets"}}
+	if got := setup(); got != nil {
+		t.Errorf("all four done: setup = %+v, want null", got)
+	}
+	if body := e.get(root, "/api/overview").Body.String(); !strings.Contains(body, `"setup":null`) {
+		t.Errorf("body = %s; want setup null", body)
+	}
+}
+
+func TestSetupChecklistOnlyForAdmins(t *testing.T) {
+	e := newEnv(t, nil) // no LLM, no skill: not set up
+	viewer := e.signInGitLab(false, "acme/widgets")
+	if ov := getJSON[OverviewView](e, viewer, "/api/overview"); ov.Setup != nil {
+		t.Errorf("viewer setup = %+v, want null", ov.Setup)
+	}
+	e.team("admins", store.RoleAdmin, []int64{e.alice("main")})
+	admin := e.signIn("gitlab", "main", viewer)
+	ov := getJSON[OverviewView](e, admin, "/api/overview")
+	if ov.Setup == nil || ov.Setup.LLM || ov.Setup.Skill || !ov.Setup.Instance || !ov.Setup.Repository {
+		t.Errorf("admin setup = %+v", ov.Setup)
+	}
+}
+
+func TestRunDetailSkillVersionAndFolder(t *testing.T) {
+	e := newEnv(t, nil)
+	res := resultJSON(head('a'),
+		skillJSON("code-review", "no_blocking_issues"),
+		skillJSON("team-rules", "no_blocking_issues"),
+		skillJSON("old-run", "no_blocking_issues"),
+		skillJSON("unrecorded", "no_blocking_issues"))
+	id := e.addRun(runFix{project: "acme/widgets", number: 1, head: head('a'), result: res, outcome: OutcomeApproved,
+		approved: true, sources: `{"code-review":"library","team-rules":".agents/skills","old-run":"repo"}`,
+		versions: `{"code-review":3}`})
+	c := e.signInGitLab(false, "acme/widgets")
+
+	v := getJSON[RunDetailView](e, c, "/api/runs/"+id)
+	if len(v.Skills) != 4 {
+		t.Fatalf("skills = %+v", v.Skills)
+	}
+	type row struct {
+		source  string
+		version int
+	}
+	want := map[string]row{
+		"code-review": {"library", 3},
+		"team-rules":  {".agents/skills", 0}, // a repository skill has no library version
+		"old-run":     {"repo", 0},           // a run from before the folders, still shown
+		"unrecorded":  {"", 0},
+	}
+	for _, s := range v.Skills {
+		got := row{version: s.Version}
+		if s.Source != nil {
+			got.source = *s.Source
+		}
+		if got != want[s.Name] {
+			t.Errorf("%s = %+v, want %+v", s.Name, got, want[s.Name])
+		}
+	}
+	if raw := e.get(c, "/api/runs/"+id).Body.String(); !strings.Contains(raw, `"version":3`) {
+		t.Errorf("body = %s; want version 3", raw)
+	}
+}
+
+// A run skipped for lack of skills is not a failure and not counted as a
+// review; its reason says so.
+func TestSkippedRunOutcome(t *testing.T) {
+	e := newEnv(t, nil)
+	now := e.clock.now()
+	skipped := e.addRun(runFix{project: "acme/widgets", number: 1, head: head('1'), state: store.Skipped, undispatched: true,
+		skipReason: "this repository has no skills", at: now.Add(-time.Minute)})
+	e.addRun(runFix{project: "acme/widgets", number: 2, head: head('2'), outcome: OutcomeFailed,
+		failure: "the review Job ran out of memory (OOMKilled)", at: now.Add(-2 * time.Minute)})
+	c := e.signInGitLab(false, "acme/widgets")
+
+	const reason = "Not reviewed: this repository has no skills."
+	byNumber := map[int64]ReviewSummary{}
+	for _, r := range getJSON[ReviewListView](e, c, "/api/reviews").Items {
+		byNumber[r.Number] = r
+	}
+	if r := byNumber[1]; r.Outcome != OutcomeSuperseded || r.Reason != reason {
+		t.Errorf("skipped review = %s %q, want superseded %q", r.Outcome, r.Reason, reason)
+	}
+	if n := len(getJSON[ReviewListView](e, c, "/api/reviews?outcome=failed").Items); n != 1 {
+		t.Errorf("failed filter lists %d reviews, want only the real failure", n)
+	}
+	ov := getJSON[OverviewView](e, c, "/api/overview")
+	if ov.Stats.Failed != 1 || ov.Stats.Reviews != 1 {
+		t.Errorf("stats = %+v; want the skipped run left out of the count", ov.Stats)
+	}
+	if repos := getJSON[[]RepositoryView](e, c, "/api/repositories"); repos[0].Last7.Failed != 1 || repos[0].Last7.Reviews != 1 {
+		t.Errorf("last 7 days = %+v", repos[0].Last7)
+	}
+	d := getJSON[RunDetailView](e, c, "/api/runs/"+skipped)
+	if d.Run.Reason != reason || d.Approved || d.Status != "" || len(d.Skills) != 0 {
+		t.Errorf("run detail = %+v", d)
+	}
+	rv := getJSON[ReviewDetailView](e, c, "/api/reviews/main/acme/widgets/1")
+	if len(rv.Runs) != 1 || rv.Runs[0].Reason != reason {
+		t.Errorf("review runs = %+v", rv.Runs)
+	}
+}
+
+func skillFile(name string) string { return "---\nname: " + name + "\n---\nText of " + name + ".\n" }
+
+func TestRepoSkillURLGitLab(t *testing.T) {
+	e := newEnv(t, func(cfg *config.Config) { cfg.Repositories[0].RepoSkills = []string{"agent-rules"} })
+	e.skill("code-review", "Review the code.")
+	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: testID("acme/widgets"), Path: "acme/widgets"}); err != nil {
+		t.Fatal(err)
+	}
+	e.src["main"].set(func(f *fakeSource) {
+		f.branch = "release/1.x"
+		f.files[".pergent/skills/team-rules.md"] = skillFile("team-rules")
+		f.files[".agents/skills/agent-rules.md"] = skillFile("agent-rules")
+	})
+	c := e.signInGitLab(false, "acme/widgets")
+
+	v := getJSON[InputsView](e, c, "/api/repositories/main/acme/widgets/inputs")
+	urls := map[string]string{}
+	for _, s := range v.Skills {
+		urls[s.Name] = s.URL
+	}
+	base := e.gl.srv.URL + "/acme/widgets/-/blob/release/1.x/"
+	if urls["team-rules"] != base+".pergent/skills/team-rules.md" || urls["agent-rules"] != base+".agents/skills/agent-rules.md" {
+		t.Errorf("urls = %v", urls)
+	}
+	if urls["code-review"] != "" {
+		t.Errorf("library skill url = %q, want none", urls["code-review"])
+	}
+}
+
+func TestRepoSkillURLGitHub(t *testing.T) {
+	e := newEnv(t, func(cfg *config.Config) { cfg.Repositories[2].RepoSkills = []string{"claude-rules"} })
+	if err := e.st.UpsertProject(ctx, store.Project{Instance: "gh", ProjectID: testID("acme/widgets"), Path: "acme/widgets"}); err != nil {
+		t.Fatal(err)
+	}
+	e.src["gh"].set(func(f *fakeSource) {
+		f.files[".claude/skills/claude-rules.md"] = skillFile("claude-rules")
+	})
+	c := e.signInGitHub(false, "acme/widgets")
+
+	v := getJSON[InputsView](e, c, "/api/repositories/gh/acme/widgets/inputs")
+	// The fake instance's API is at <server>/api/v3, so its web address is the server.
+	want := e.gh.srv.URL + "/acme/widgets/blob/trunk/.claude/skills/claude-rules.md"
+	if len(v.Skills) != 1 || v.Skills[0].URL != want {
+		t.Errorf("skills = %+v, want url %s", v.Skills, want)
+	}
+
+	// github.com, and the web address of an enterprise server (as sign-in's).
+	for api, web := range map[string]string{
+		"":                                "https://github.com",
+		"https://api.github.com":          "https://github.com",
+		"https://api.github.com/":         "https://github.com",
+		"https://ghe.example.com/api/v3":  "https://ghe.example.com",
+		"https://ghe.example.com/api/v3/": "https://ghe.example.com",
+	} {
+		inst := instances.Instance{Platform: config.PlatformGitHub, GitHub: &config.GitHubInstance{APIURL: api}}
+		got := repoSkillURL(inst, "acme/widgets", "main", "a/b.md")
+		if want := web + "/acme/widgets/blob/main/a/b.md"; got != want {
+			t.Errorf("api %q: url = %q, want %q", api, got, want)
+		}
+	}
+}
+
+func TestRepoSkillURLEscapesPath(t *testing.T) {
+	gl := instances.Instance{Platform: config.PlatformGitLab, GitLab: &config.Instance{URL: "https://gitlab.example.com/"}}
+	got := repoSkillURL(gl, "group/sub group/proj", "feat/a#1?x%", ".agents/skills/my skill#2/SKILL.md")
+	want := "https://gitlab.example.com/group/sub%20group/proj/-/blob/feat/a%231%3Fx%25/.agents/skills/my%20skill%232/SKILL.md"
+	if got != want {
+		t.Errorf("url = %q\nwant  %q", got, want)
+	}
+	for _, in := range []instances.Instance{{}, {Platform: config.PlatformGitLab, GitLab: &config.Instance{URL: "javascript:alert(1)"}}} {
+		if got := repoSkillURL(in, "a/b", "main", "c.md"); got != "" {
+			t.Errorf("url = %q for %+v, want none", got, in)
+		}
+	}
+}
+
+// An item with no instance is about the library as a whole: every admin
+// sees it, whichever instance they signed in with; a viewer never does.
+func TestGlobalAttentionForPlatformAdmin(t *testing.T) {
+	kinds := func(e *env, c *http.Cookie) string {
+		var out []string
+		for _, a := range getJSON[OverviewView](e, c, "/api/overview").Attention {
+			out = append(out, a.Instance+"/"+a.Project+"/"+a.Kind)
+		}
+		return strings.Join(out, ",")
+	}
+	for name, tc := range map[string]struct {
+		signIn func(e *env) *http.Cookie
+		want   string
+	}{
+		"viewer":         {func(e *env) *http.Cookie { return e.signInGitLab(false, "acme/widgets") }, ""},
+		"platform admin": {func(e *env) *http.Cookie { return e.signInGitLab(true, "acme/widgets") }, "//library_problem"},
+		"operator":       {func(e *env) *http.Cookie { return e.signInOperator() }, "//library_problem,gh//token_expiry"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t, nil)
+			if err := e.st.SetAttention(ctx, "", "", "library_problem", "a library skill needs a look"); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.st.SetAttention(ctx, "gh", "", "token_expiry", "another instance's"); err != nil {
+				t.Fatal(err)
+			}
+			if got := kinds(e, tc.signIn(e)); got != tc.want {
+				t.Errorf("attention = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

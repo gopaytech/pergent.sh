@@ -49,6 +49,9 @@ type Inputs struct {
 	// Versions maps each library skill to the version read (ResolveSkills);
 	// skills of a repository folder are not in it.
 	Versions map[string]int
+	// Paths maps each repository skill to the file it was read from, in the
+	// repository; library skills are not in it.
+	Paths map[string]string
 }
 
 // LibraryEntry is one skill of the library as ResolveSkills receives it.
@@ -86,7 +89,7 @@ func (e *ProblemError) Error() string { return e.Path + ": " + e.Problem }
 func ResolveSkills(ctx context.Context, src Source, lib map[string]LibraryEntry, repoSkills []string, projectID int64, ref string, previous []byte) (*Inputs, error) {
 	in := &Inputs{
 		Skills: map[string][]byte{}, Previous: previous,
-		Sources: map[string]string{}, Versions: map[string]int{},
+		Sources: map[string]string{}, Versions: map[string]int{}, Paths: map[string]string{},
 	}
 	for name, e := range lib {
 		in.Skills[name] = e.Content
@@ -97,6 +100,7 @@ func ResolveSkills(ctx context.Context, src Source, lib map[string]LibraryEntry,
 	take := func(f Found, folder string) {
 		in.Skills[f.Name] = f.Content
 		in.Sources[f.Name] = folder
+		in.Paths[f.Name] = f.Path
 		delete(in.Versions, f.Name)
 	}
 
@@ -182,6 +186,9 @@ func (in *Inputs) Only(names []string) *Inputs {
 	if in.Versions != nil {
 		out.Versions = map[string]int{}
 	}
+	if in.Paths != nil {
+		out.Paths = map[string]string{}
+	}
 	for _, name := range names {
 		content, ok := in.Skills[name]
 		if !ok {
@@ -193,6 +200,9 @@ func (in *Inputs) Only(names []string) *Inputs {
 		}
 		if v, ok := in.Versions[name]; ok {
 			out.Versions[name] = v
+		}
+		if p, ok := in.Paths[name]; ok {
+			out.Paths[name] = p
 		}
 	}
 	for _, name := range in.Overridden {
