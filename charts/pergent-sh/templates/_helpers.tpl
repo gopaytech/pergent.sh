@@ -60,4 +60,7 @@ find its skills, or whose Jobs land where the Role does not reach.
 {{- if and .Values.adminPassword.existingSecret (not $dashboard.admin_password_env) -}}
 {{- fail "adminPassword.existingSecret needs config.dashboard.admin_password_env: the name of the env var the password is passed as" -}}
 {{- end -}}
+{{- if or (hasKey .Values "ingress") (hasKey .Values "dashboardIngress") -}}
+{{- fail "ingress and dashboardIngress were removed: the chart creates only a Service; route to it yourself (see the README, \"Exposing pergent.sh\")" -}}
+{{- end -}}
 {{- end -}}

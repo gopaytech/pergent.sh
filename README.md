@@ -31,7 +31,7 @@ In this README a "merge request" is also a GitHub pull request, and the "review 
     pergent.sh checks this at startup and every hour: for each reviewed project it reads the approval rules that apply to the default branch (`GET /projects/:id/approval_rules`; with none, the project's `approvals_before_merge`) and, when the most any of them requires is one or none, logs a warning naming the project: "one approval is enough to merge here, so pergent's approval alone can unlock it; add a rule requiring a human approval". It doesn't know whether the approve bot is in a rule's approver list, so it warns whenever the count allows it. If the rules can't be read, that is logged once at info level; the check never stops a review.
 - For GitHub, two GitHub Apps (or one App and a bot user); see [GitHub](#github).
 - An API key for an LLM provider that opencode supports. It can be entered in the [dashboard](#dashboard) or kept in the Secret.
-- A way for GitLab or GitHub to reach pergent.sh over HTTPS (an Ingress, for example).
+- A way for GitLab or GitHub to reach pergent.sh over HTTPS. The chart creates only a Service; you route to it (Gateway API, your own Ingress, a load balancer). See [Exposing pergent.sh](#exposing-pergentsh).
 - For the optional [dashboard](#dashboard): an HTTPS host for it. To let people sign in with GitLab or GitHub, also a GitLab OAuth application per GitLab instance or user authorization on the GitHub review App. The operator signs in with a password and needs neither.
 
 ## Install with Helm
@@ -69,24 +69,6 @@ The chart is in `charts/pergent-sh`. Postgres is not part of it. Every value is 
      cidrs:
        - 192.0.2.0/24
 
-   # GitLab and GitHub send webhooks here; Jobs post their result here.
-   ingress:
-     enabled: true
-     className: nginx
-     host: pergent.example.com
-     tls:
-       - secretName: pergent-example-com-tls
-         hosts: [pergent.example.com]
-
-   # The dashboard, on its own host; see "Dashboard".
-   dashboardIngress:
-     enabled: true
-     className: nginx
-     hosts: [pergent-dashboard.example.com]
-     tls:
-       - secretName: pergent-dashboard-example-com-tls
-         hosts: [pergent-dashboard.example.com]
-
    config:
      listen: ":8080"
      skills_dir: /etc/pergent-sh/skills
@@ -122,8 +104,7 @@ On startup pergent.sh creates the project webhook and a read-only deploy token o
 What the chart creates:
 
 - A Deployment with **one replica** and the `Recreate` strategy. Do not scale it up: at startup pergent.sh requeues runs it had claimed but not launched, which is only safe when no other pod is dispatching. The pod runs as non-root with a read-only root filesystem, drops all capabilities, and has startup, readiness and liveness probes on `/healthz` (the startup probe allows 150 s, as pergent.sh starts listening only after the database and migrations and, for each instance in the config file, its GitLab tokens or GitHub Apps check out; instances added in the dashboard never delay it). The pod restarts on a config or skills change. When `adminPassword.existingSecret` is set, the pod also gets that Secret's `adminPassword.key` as the environment variable named by `config.dashboard.admin_password_env` (see [First sign-in](#first-sign-in)).
-- A Service on port 8080 and, when `ingress.enabled`, an Ingress that by default exposes only `/webhooks/` and `/runs/` (`ingress.paths`). The chart refuses to render it with `/`, `/api/` or `/auth/` in `ingress.paths`: those are the dashboard's.
-- When `dashboardIngress.enabled`, a second Ingress for the [dashboard](#dashboard) on its own host(s), exposing `/`, `/api/` and `/auth/` of the same Service.
+- A Service on port 8080 (`service.type`, `ClusterIP` by default). No Ingress: see [Exposing pergent.sh](#exposing-pergentsh).
 - A ServiceAccount, and in `jobsNamespace` a Role and RoleBinding for it: `batch/jobs` (create, get, list, watch, patch, delete), `secrets` and `configmaps` (create, get, delete), `pods` (get, list) and `pods/log` (get, to keep each review's log). There are no wildcard rules and nothing outside `jobsNamespace`.
 - A NetworkPolicy in `jobsNamespace` for the Job pods (those labelled `app.kubernetes.io/managed-by: pergent-sh`): no ingress; egress to DNS (UDP and TCP 53), to TCP 443 and 80 in `jobEgress.cidrs`, and to TCP 8080 of the pergent.sh pods for the result callback. A NetworkPolicy only takes effect when your CNI enforces them.
 - ConfigMaps for `config.yaml` and the `skills`.
@@ -132,7 +113,20 @@ What the chart creates:
 
 `config.jobs.namespace` must equal `jobsNamespace`, `config.skills_dir` must be `/etc/pergent-sh/skills` and `config.listen` must end in `:8080`; the chart refuses to render otherwise.
 
-If `public_url` points at a hostname that the Job pods reach through the Ingress, they need egress to it on 443 (covered by the default `jobEgress.cidrs`). To keep Jobs off the internet path, set `callback_url` to the in-cluster Service, for example `http://pergent-sh.pergent-sh.svc:8080`.
+If `public_url` points at a hostname that the Job pods reach from outside the cluster, they need egress to it on 443 (covered by the default `jobEgress.cidrs`). To keep Jobs off the internet path, set `callback_url` to the in-cluster Service, for example `http://pergent-sh.pergent-sh.svc:8080`.
+
+### Exposing pergent.sh
+
+The chart creates a Service (`pergent-sh.pergent-sh.svc:8080` for the install above) and nothing in front of it. Route to it with whatever your cluster uses: a Gateway API `HTTPRoute`, your own Ingress, or `service.type: LoadBalancer`. Terminate TLS in front of it; pergent.sh serves plain HTTP.
+
+| Paths | Who calls them | Where to expose |
+|---|---|---|
+| `/webhooks/` | GitLab and GitHub | `public_url`'s host. GitHub.com and your GitLab must reach it. |
+| `/runs/` | the Jobs (result callback) | `public_url`'s host, or keep it in-cluster with `callback_url`. |
+| `/`, `/api/`, `/auth/` | people, in the [dashboard](#dashboard) | `dashboard.url`'s host, over https. It can be internal-only. |
+| `/healthz` | probes | nowhere; the kubelet calls the pod directly. |
+
+Expose only `/webhooks/` and `/runs/` on the public host, so the dashboard and its sign-in stay off the internet. Whatever sits in front must set `X-Forwarded-For` (see [Password sign-in limits](#password-sign-in-limits)).
 
 ### Instances and the LLM in the config file
 
@@ -336,23 +330,15 @@ With the dashboard on, every review run, its findings, its files and its log are
 ### Turning it on
 
 1. Pick the dashboard's address, for example `https://pergent-dashboard.example.com`. It must be `https` and a bare host, without a path: the dashboard, its API (`/api/`) and its sign-in routes (`/auth/`) are served at `/` of that host, and its cookies only work over https. It can be an internal-only host. Webhooks and Job results stay on `public_url`, which GitHub.com must still reach from the internet.
-2. Set it in the config and turn on the chart's dashboard Ingress, which is separate from the webhook Ingress so the two can be on different hosts:
+2. Set it in the config, and route that host's `/`, `/api/` and `/auth/` to the pergent.sh Service ([Exposing pergent.sh](#exposing-pergentsh)):
 
    ```yaml
    config:
      dashboard:
        url: https://pergent-dashboard.example.com
-
-   dashboardIngress:
-     enabled: true
-     className: nginx
-     hosts: [pergent-dashboard.example.com]
-     tls:
-       - secretName: pergent-dashboard-example-com-tls
-         hosts: [pergent-dashboard.example.com]
    ```
 
-   It exposes `/`, `/api/` and `/auth/` of the pergent.sh Service; the webhook Ingress never does. Its `/` is a prefix, so the dashboard host also routes `/webhooks/`, `/runs/` and `/healthz` to pergent.sh; webhooks and results there still need a valid signature or result token, and `/healthz` only answers `ok`. The chart refuses to render it without `config.dashboard.url`, or when none of `hosts` is that URL's host. Without `dashboard.url` pergent.sh doesn't serve those routes at all.
+   Routing all of `/` there is fine: webhooks and results on that host still need a valid signature or result token, and `/healthz` only answers `ok`. Without `dashboard.url` pergent.sh doesn't serve the dashboard's routes at all.
 3. [Sign in](#first-sign-in) as `admin`, add your instances under **Integrations** ([Instances and secrets in the dashboard](#instances-and-secrets-in-the-dashboard)), and set up sign-in with GitLab or GitHub on each instance people should use: [a GitLab OAuth application](#sign-in-with-gitlab) or [user authorization on the GitHub review App](#sign-in-with-github).
 
 With `dashboard.url` set, pergent.sh starts with no instance at all and waits for one to be added in the dashboard. For an instance in the config file, `oauth_client_id_env` and `oauth_client_secret_env` (see [Config reference](#config-reference)) turn on its sign-in; pergent.sh doesn't start when an instance names one of them and that variable is unset or empty. The error names the instance and the variable.
@@ -398,8 +384,8 @@ kubectl -n pergent-sh exec deploy/pergent-sh -- /pergent-sh admin reset-password
 
 - A wrong username or password always gets the same answer, `wrong username or password` (401), after the same work, so a guess doesn't tell whether the username exists.
 - Five wrong passwords in a row lock that username for 15 minutes. A wrong current password at a password change counts the same.
-- Each client IP may make 20 sign-in or password-change attempts in 5 minutes; further ones get 429 (`too many sign-in attempts, try again later`). The client IP is the **last** `X-Forwarded-For` entry, and the connection's own address when the header is absent. The proxy or Ingress in front of pergent.sh **must set `X-Forwarded-For`** to the address it saw: when nothing does, a client sends its own header and can change address on every attempt, so the per-IP limit can be bypassed. The per-username lock holds either way. An L7 load balancer in front of the Ingress that doesn't forward the client address makes every client share one address, and so one limit of 20 attempts in 5 minutes.
-- Anyone who knows a username can keep it locked, with 5 wrong guesses every 15 minutes. `admin` is the one everybody knows. Add a second password admin with an unguessable username and remove `admin`, or restrict `/auth/password` at the Ingress to the addresses your operators sign in from.
+- Each client IP may make 20 sign-in or password-change attempts in 5 minutes; further ones get 429 (`too many sign-in attempts, try again later`). The client IP is the **last** `X-Forwarded-For` entry, and the connection's own address when the header is absent. The proxy in front of pergent.sh **must set `X-Forwarded-For`** to the address it saw: when nothing does, a client sends its own header and can change address on every attempt, so the per-IP limit can be bypassed. The per-username lock holds either way. An L7 load balancer in front of that proxy that doesn't forward the client address makes every client share one address, and so one limit of 20 attempts in 5 minutes.
+- Anyone who knows a username can keep it locked, with 5 wrong guesses every 15 minutes. `admin` is the one everybody knows. Add a second password admin with an unguessable username and remove `admin`, or restrict `/auth/password` at your proxy to the addresses your operators sign in from.
 - Passwords are checked, argon2id, at most 4 at a time. A sign-in that gets no slot within 5 seconds is answered 503 with the same `too many sign-in attempts, try again later`.
 
 ### Sign in with GitLab

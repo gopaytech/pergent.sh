@@ -40,11 +40,3 @@ skills:
     ---
     Review the change for correctness bugs.
 
-ingress:
-  enabled: true
-  className: nginx
-  host: pergent.example.com
-  tls:
-    - secretName: pergent-example-com-tls
-      hosts:
-        - pergent.example.com

@@ -70,8 +70,8 @@ jobEgress:
 #       private_key_env: GITHUB_APPROVE_APP_KEY
 #     webhook_secret_env: GITHUB_WEBHOOK_SECRET
 
-# To turn the dashboard on, set config.dashboard.url and enable
-# dashboardIngress (below). The README's "Dashboard" section explains each
+# To turn the dashboard on, set config.dashboard.url and route its host to
+# the Service (see "Exposing pergent.sh" in the README). The README's "Dashboard" section explains each
 # step. People sign in with a GitLab or GitHub instance that has an OAuth
 # client (in the dashboard, or in the config as below). E.g.
 #   gitlab:
@@ -103,44 +103,13 @@ serviceAccount:
   # -- Annotations of the ServiceAccount.
   annotations: {}
 
+# The chart creates no Ingress. Route traffic to this Service yourself (Gateway API,
+# your own Ingress, a LoadBalancer); the README's "Exposing pergent.sh" lists the paths.
 service:
   # -- Service type.
   type: ClusterIP
   # -- Service port.
   port: 8080
-
-ingress:
-  # -- Create an Ingress.
-  enabled: false
-  # -- Ingress class name.
-  className: ""
-  # -- Ingress annotations.
-  annotations: {}
-  # -- Ingress host.
-  host: pergent.example.com
-  # -- Paths exposed. GitLab posts to /webhooks/gitlab/<instance>, GitHub to /webhooks/github/<instance>; Jobs post to /runs/<id>/result. The dashboard's paths (/, /api/, /auth/) are refused here: they go on dashboardIngress.
-  paths:
-    - /webhooks/
-    - /runs/
-  # -- Ingress TLS, e.g. `[{secretName: pergent-example-com-tls, hosts: [pergent.example.com]}]`.
-  tls: []
-
-# The dashboard's own Ingress, separate from the webhook Ingress above, so it
-# can live on another (for example internal-only) host. It serves /, /api/
-# and /auth/ from the same Service. config.dashboard.url must be this host's
-# https address.
-dashboardIngress:
-  # -- Create the dashboard Ingress. Needs config.dashboard.url.
-  enabled: false
-  # -- Ingress class name.
-  className: ""
-  # -- Ingress annotations.
-  annotations: {}
-  # -- Dashboard hosts. One of them must be the host of config.dashboard.url, where sign-in always returns.
-  hosts:
-    - pergent-dashboard.example.com
-  # -- Ingress TLS, e.g. `[{secretName: pergent-dashboard-example-com-tls, hosts: [pergent-dashboard.example.com]}]`. The dashboard's cookies are Secure, so browsers must reach it over https.
-  tls: []
 
 # -- Resources of the pergent.sh pod.
 resources:
