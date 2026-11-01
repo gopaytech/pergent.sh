@@ -28,11 +28,15 @@ const (
 	// command (same kind, same finding ID) on the same change is dropped.
 	commandRepeatWindow = 30 * time.Second
 	// commandThrottleWindow is how long after a command of someone on a
-	// change was answered their next command on it is left unanswered
-	// (throttled): every answer costs platform calls and a comment of the
-	// bot, which a refusal or help would otherwise let anyone with a
-	// comment box make at will. A real command written within the window
-	// after an answered one is throttled too; its author writes it again.
+	// change was answered without doing anything their next command on it
+	// is left unanswered (throttled): every answer costs platform calls and
+	// a comment of the bot, which a refusal or help would otherwise let
+	// anyone with a comment box make at will. That is a refusal, a help or
+	// unknown command, a command with nothing to do, a drop and a command
+	// given up on. A command that was carried out (outcome "done") does not
+	// start the window: a maintainer dismissing finding after finding is
+	// not ignored. A real command written within the window after one that
+	// did nothing is throttled too; its author writes it again.
 	commandThrottleWindow = 2 * time.Minute
 	// maxGiveUpText bounds the error text kept as a given-up command's outcome.
 	maxGiveUpText = 200
@@ -106,8 +110,9 @@ func changeTerm(platform string) string { return actions.Term(platform) }
 // verdict is how the engine answered a command: what it records as the
 // command's outcome, the reaction on the comment and the reply, if any.
 type verdict struct {
-	// outcome is store.CommandDone for a command that was carried out (or
-	// had nothing to do), else why it was refused or dropped.
+	// outcome is store.CommandDone for a command that was carried out,
+	// store.CommandNoop for one that was answered with nothing to do, else
+	// why it was refused or dropped.
 	outcome string
 	react   forge.Reaction
 	reply   string
@@ -117,10 +122,17 @@ type verdict struct {
 	replyRequired bool
 }
 
-// done is a command carried out, or one with nothing to do, with an optional
-// reply.
+// done is a command carried out, with an optional reply. A request that
+// holds already (a re-run of a head already queued) is carried out too.
 func done(reply string) verdict {
 	return verdict{outcome: store.CommandDone, react: forge.ReactDone, reply: reply}
+}
+
+// noop is a command that was answered and had nothing to do (help, nothing
+// failed, a finding dismissed already), and why. It answers with a reply, so
+// it counts for the throttle, which a carried-out command does not.
+func noop(why, reply string) verdict {
+	return verdict{outcome: store.CommandNoop(why), react: forge.ReactDone, reply: reply}
 }
 
 // refused is a command that was refused, and why, with the reply that says so.
@@ -351,7 +363,7 @@ func (e *Engine) handleCommand(ctx, bctx context.Context, cmd store.Command, log
 		return c.dismiss(ctx)
 	}
 	// help, and a command the bot doesn't know.
-	return done(replyHelp(plat.Forge.Mention())), nil
+	return noop("help", replyHelp(plat.Forge.Mention())), nil
 }
 
 // access is the commander's access on the platform now.
@@ -410,7 +422,7 @@ func (c *commandRun) rerun(ctx context.Context, failedOnly bool) (verdict, error
 	}
 	switch res.Status {
 	case actions.RerunNothingFailed:
-		return done(replyNothingFailed), nil
+		return noop("nothing failed", replyNothingFailed), nil
 	case actions.RerunCapped:
 		return refused("re-run limit reached", replyCap(changeTerm(c.cmd.Platform))), nil
 	case actions.RerunAlreadyQueued:
@@ -482,7 +494,7 @@ func (c *commandRun) dismiss(ctx context.Context) (verdict, error) {
 			return verdict{}, err
 		}
 		if !mine {
-			return done(replyAlreadyDismissed(c.cmd.Arg)), nil
+			return noop("already dismissed", replyAlreadyDismissed(c.cmd.Arg)), nil
 		}
 	}
 	// The review is decided again with the dismissal applied: no run starts.

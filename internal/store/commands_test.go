@@ -181,6 +181,19 @@ func TestRecentCommand(t *testing.T) {
 		t.Error("another MR matched")
 	}
 
+	// A command that did nothing but be answered (a help, an "already
+	// dismissed") is answered all the same.
+	noop := insert(mr1, "help", "", 3, t0)
+	if _, err := s.ClaimCommands(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishCommand(ctx, noop, CommandNoop("help"), t0.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if !recent(mr1, "help", "", t0.Add(10*time.Second)) {
+		t.Error("a command answered with nothing to do was not found")
+	}
+
 	// A command refused or dropped does not hold others off.
 	refused := insert(mr1, "review", "", 2, t0)
 	if _, err := s.ClaimCommands(ctx, 10, t0); err != nil {
@@ -195,8 +208,8 @@ func TestRecentCommand(t *testing.T) {
 }
 
 // RecentAnswered tells whether the author had a command on the change
-// answered since a time, whatever the command and its outcome except
-// throttled.
+// answered since a time, whatever the command, unless it was carried out
+// (CommandDone) or throttled.
 func TestRecentAnswered(t *testing.T) {
 	s := newStore(t)
 	finish := func(mr MRKey, author int64, comment int64, outcome string, at time.Time) {
@@ -260,6 +273,21 @@ func TestRecentAnswered(t *testing.T) {
 	finish(mr1, 14, 3, CommandThrottled, t0.Add(time.Minute))
 	if answered(mr1, 14, t0) {
 		t.Error("a throttled command counted")
+	}
+
+	// A command that was carried out is no answer to hold others off for ...
+	finish(mr1, 15, 4, CommandDone, t0.Add(time.Minute))
+	if answered(mr1, 15, t0) {
+		t.Error("a carried-out command counted")
+	}
+	// ... but one answered without doing anything is: a no-op, a drop, a
+	// command given up on.
+	for i, outcome := range []string{CommandNoop("help"), CommandNoop("nothing failed"), "dropped: the author is a bot", "gave up: 502"} {
+		author := int64(20 + i)
+		finish(mr1, author, int64(10+i), outcome, t0.Add(time.Minute))
+		if !answered(mr1, author, t0) {
+			t.Errorf("a command finished with %q was not found", outcome)
+		}
 	}
 }
 

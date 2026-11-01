@@ -744,6 +744,117 @@ func TestCommandsAreThrottledPerAuthorAndChange(t *testing.T) {
 	f.wantReactions(2, elsewhere, eyes, up)
 }
 
+// twoFindings is a skill with two blocking findings, abc123def456 and
+// 654321fedcba.
+func twoFindings(t *testing.T) result.Skill {
+	t.Helper()
+	s := skillWithFinding(t, "has_blocking_issues", "blocking")
+	b, err := json.Marshal(result.Finding{
+		ID: "654321", Fingerprint: "654321fedcba", File: "db/other.go", Line: 3, Severity: "blocking",
+		Title: "Another problem", Explanation: "Explained.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Findings = append(s.Findings, b)
+	return s
+}
+
+// The throttle holds off the commands that did nothing: a command that was
+// carried out does not start the window, so a maintainer working through a
+// review's findings is not ignored.
+func TestCarriedOutCommandsDoNotThrottle(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(twoFindings(t))
+	at := time.Now()
+
+	first := f.say(1, "mo", "dismiss", "abc123", "constant", at)
+	second := f.say(1, "mo", "dismiss", "654321", "also constant", at.Add(time.Second))
+	f.run()
+
+	f.wantReactions(1, first, eyes, up)
+	f.wantReactions(1, second, eyes, up)
+	if ds := f.dismissals(1); len(ds) != 2 {
+		t.Errorf("dismissals = %+v, want both", ds)
+	}
+}
+
+// A maintainer asks for a re-run and, when it is out, dismisses one of its
+// findings: both within two minutes, both carried out.
+func TestReviewThenDismissAreBothCarriedOut(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
+	at := time.Now()
+
+	rerun := f.say(1, "mo", "review", "", "", at)
+	f.run()
+	f.wantReactions(1, rerun, eyes, up)
+	// The re-run's review is out a moment later.
+	id := f.Report(1, f.head, resultFor(t, f.head, skillWithFinding(t, "has_blocking_issues", "blocking")))
+	if err := f.Store.MarkPublished(f.ctx, id, store.RunDecision{Outcome: store.OutcomeNoBlocking}); err != nil {
+		t.Fatal(err)
+	}
+
+	dismiss := f.say(1, "mo", "dismiss", "abc123", "constant", at.Add(time.Second))
+	f.run()
+
+	f.wantReactions(1, dismiss, eyes, up)
+	if ds := f.dismissals(1); len(ds) != 1 {
+		t.Errorf("dismissals = %+v, want 1", ds)
+	}
+}
+
+// A command answered without doing anything starts the window, whatever the
+// reason: help, a refusal, a command with nothing to do. The next command,
+// a valid one too, is left alone until the window has passed.
+func TestCommandsThatDidNothingThrottle(t *testing.T) {
+	cases := map[string]func(f *commandFixture, at time.Time) (first int64){
+		"help":    func(f *commandFixture, at time.Time) int64 { return f.say(1, "mo", "help", "", "", at) },
+		"unknown": func(f *commandFixture, at time.Time) int64 { return f.say(1, "mo", "unknown", "", "", at) },
+		"refusal": func(f *commandFixture, at time.Time) int64 {
+			return f.say(1, "mo", "dismiss", "ffffff", "constant", at)
+		},
+		"nothing failed": func(f *commandFixture, at time.Time) int64 {
+			return f.say(1, "mo", "review_failed", "", "", at)
+		},
+		"already dismissed": func(f *commandFixture, at time.Time) int64 {
+			dismiss(f.t, f.testEnv, 1, "blocking", "earlier")
+			return f.say(1, "mo", "dismiss", "abc123", "again", at)
+		},
+	}
+	for name, first := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newCommandFixture(t)
+			f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
+			at := time.Now()
+			one := first(f, at)
+			f.run()
+			if name == "refusal" {
+				f.wantReactions(1, one, eyes, down)
+			} else {
+				f.wantReactions(1, one, eyes, up)
+			}
+
+			// A valid command inside the window: left undone.
+			real := f.say(1, "mo", "review", "", "", at.Add(time.Minute))
+			f.run()
+			f.wantReactions(1, real)
+			if n := len(f.queued()); n != 0 {
+				t.Errorf("%d runs queued by a throttled command", n)
+			}
+
+			// After the window it is answered.
+			f.SetNow(f.Now().Add(commandThrottleWindow + time.Second))
+			later := f.say(1, "mo", "review", "", "", at.Add(3*time.Minute))
+			f.run()
+			f.wantReactions(1, later, eyes, up)
+			if n := len(f.queued()); n != 1 {
+				t.Errorf("%d runs queued after the window, want 1", n)
+			}
+		})
+	}
+}
+
 func TestCommandOnSwitchedOffRepo(t *testing.T) {
 	f := newCommandFixture(t)
 	f.review(skillOf(t, "security", "no_blocking_issues"))

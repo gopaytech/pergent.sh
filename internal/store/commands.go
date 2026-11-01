@@ -25,14 +25,35 @@ type Command struct {
 	Attempts int
 }
 
-// What a finished command came to (FinishCommand's outcome). Only a command
-// that came to CommandDone counts for RecentCommand; the engine records why
-// a refused or dropped one was with any other text.
+// What a finished command came to (FinishCommand's outcome). The outcomes are:
+//   - CommandDone: the command was carried out (a re-run queued, a finding
+//     dismissed, a re-run that was queued already);
+//   - CommandNoop(why), "done: why": the command was answered and had
+//     nothing to do (help, an unknown command, nothing failed, a finding
+//     dismissed already);
+//   - "refused: why": the command was refused;
+//   - "dropped: why": the command was left unanswered but for a 👎;
+//   - "gave up: why": the command met errors until it was given up on;
+//   - CommandThrottled.
+//
+// A command that came to CommandDone or CommandNoop counts for
+// RecentCommand. Of those, only the latter, and the refused, dropped and
+// given-up ones, count for RecentAnswered: a command that was carried out
+// does not hold its author's next command off.
 const CommandDone = "done"
 
+// commandNoopPrefix starts the outcome of a command that was answered with
+// nothing to do.
+const commandNoopPrefix = CommandDone + ": "
+
+// CommandNoop is the outcome of a command that was answered and had nothing
+// to do, why saying so.
+func CommandNoop(why string) string { return commandNoopPrefix + why }
+
 // CommandThrottled is the outcome of a command left unanswered because its
-// author had a command on the change answered a moment before. It does not
-// count as an answer for RecentAnswered, so throttling never extends itself.
+// author had a command on the change answered without doing anything a moment
+// before. It does not count as an answer for RecentAnswered, so throttling
+// never extends itself.
 const CommandThrottled = "throttled"
 
 // commandLease is how long a claim holds a command: one claimed longer ago
@@ -141,30 +162,34 @@ func (s *Store) PruneCommands(ctx context.Context, before time.Time) (int, error
 }
 
 // RecentCommand reports whether a command of the given kind and argument
-// came to CommandDone for mr, having been written at or after since. A
-// command still being answered has no outcome yet, so the one being checked
-// never finds itself: the caller passes its CreatedAt less the window. The
-// rule assumes one processor answers commands, one after another (one engine
-// replica): two answered at once could both find nothing.
+// was answered for mr, having been written at or after since: it came to
+// CommandDone or to a CommandNoop. A command still being answered has no
+// outcome yet, so the one being checked never finds itself: the caller passes
+// its CreatedAt less the window. The rule assumes one processor answers
+// commands, one after another (one engine replica): two answered at once
+// could both find nothing.
 func (s *Store) RecentCommand(ctx context.Context, mr MRKey, kind, arg string, since time.Time) (bool, error) {
 	var found bool
 	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM commands
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND kind = $4 AND arg = $5
-		  AND created_at >= $6 AND outcome = $7)`,
-		mr.Instance, mr.ProjectID, mr.IID, kind, arg, since, CommandDone).Scan(&found)
+		  AND created_at >= $6 AND (outcome = $7 OR outcome LIKE $8))`,
+		mr.Instance, mr.ProjectID, mr.IID, kind, arg, since, CommandDone, commandNoopPrefix+"%").Scan(&found)
 	return found, err
 }
 
 // RecentAnswered reports whether a command of authorID on mr was finished at
-// or after since with any outcome but CommandThrottled: the engine answered
-// it (a reply, a refusal, a carried-out command, a drop). A command still
-// being answered has no finish time, so the one being checked never finds
-// itself. Like RecentCommand, it assumes one processor answers commands.
+// or after since without being carried out: a reply that did nothing (help,
+// nothing to do), a refusal, a drop or a give-up. A command that came to
+// CommandDone, and a throttled one, do not count: the former did the work its
+// author asked for, the latter would make throttling extend itself. A command
+// still being answered has no finish time, so the one being checked never
+// finds itself. Like RecentCommand, it assumes one processor answers
+// commands.
 func (s *Store) RecentAnswered(ctx context.Context, mr MRKey, authorID int64, since time.Time) (bool, error) {
 	var found bool
 	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM commands
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND author_id = $4
-		  AND finished_at >= $5 AND outcome <> $6)`,
-		mr.Instance, mr.ProjectID, mr.IID, authorID, since, CommandThrottled).Scan(&found)
+		  AND finished_at >= $5 AND outcome <> $6 AND outcome <> $7)`,
+		mr.Instance, mr.ProjectID, mr.IID, authorID, since, CommandThrottled, CommandDone).Scan(&found)
 	return found, err
 }
