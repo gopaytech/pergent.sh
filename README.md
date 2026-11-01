@@ -183,7 +183,7 @@ pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is hand
 1. **The chart's `skills:` value is gone**, with its ConfigMap and volume. A values file that still sets it fails to render: `skills was removed: skills live in the dashboard (see the README, "Skills and instructions")`.
 2. **`skills_dir` is gone from the config.** A config that still has it is refused at startup: `skills_dir was removed: skills live in the dashboard (see the README, "Skills and instructions")`. Nothing is imported: the new library starts empty.
 3. **A repository with no `skills` setting now uses the default skill list**, not every skill. The default list starts empty. A repository whose `skills` is `[]` in the config is refused at startup (leave the key out for the default list; a list names at least one skill).
-4. **With no skills, there is no review.** Until the library has skills and the default list (or the repository) names one, every review is skipped: no Job, no comment, no status ([No skills, no review](#no-skills-no-review)).
+4. **With no skills, there is no review.** A repository that has no skill in its `.pergent/skills` folder and none turned on, and whose list (or the default list) names no library skill, is skipped: no Job, no comment, no status ([No skills, no review](#no-skills-no-review)). Until the library has skills and the default list (or the repository) names one, that is every repository without `.pergent/skills`.
 5. **Migration `0014` runs at startup.** It adds the library, the default skill list and the new run columns, and lets a run be `skipped`. Back up PostgreSQL first and keep the backup: 0.2.0 does not know the new tables.
 6. **Skill fetch Jobs** read public URLs. The chart passes `PERGENT_SH_IMAGE` for them (set it to the pergent.sh image if you do not use the chart). `/skill-fetches/` must be reachable by the Jobs like `/runs/`, and the host of a URL must be inside `jobEgress.cidrs` ([Exposing pergent.sh](#exposing-pergentsh), [Installing from git](#installing-from-git)). Without the dashboard (`dashboard.url`) there is no skill fetching.
 
@@ -585,6 +585,7 @@ Repository skills and instructions are read from the target branch at the merge 
 | --- | --- |
 | A named library skill is not in the library | The run fails: `skill "x" is not in the skill library`. The repository is listed under "Needs attention". Nothing falls back to other skills, so a review is never approved with fewer or other skills than the repository asked for. |
 | A repository skill that was turned on is gone from the target branch | The run fails: `skill "x" is turned on but not found in the repository`. |
+| A repository skill that runs is malformed (one in `.pergent/skills`, or a turned-on one in another folder: its frontmatter doesn't parse, its name is invalid or taken twice in the folder, or it is over 128 KiB) | The run fails, and the message names the file and the problem, as `<path>: <problem>`. A skill that is turned off is ignored even when malformed. |
 | A config repository names a skill the library lacks | Startup does not stop, so the dashboard stays up to fix it. The repository's runs fail with the message above, and "Needs attention" says why, until the skill exists. |
 | The skills and instructions are over 900 KiB together | The previous review is dropped first. If the skills and instructions alone are too large, the run fails with a comment and no Job starts. |
 | The repository has no skills at all | See [No skills, no review](#no-skills-no-review). |
@@ -605,7 +606,7 @@ Everyone with a team can read the library (**Skills** in the dashboard). Any adm
 
 There is no button to delete a version, because history is meant to stay. If you must remove one (for example text that the secret check missed), do it in the database, as an operator, and rotate the secret too. A model provider may have seen the text in reviews already.
 
-1. If the text is in the skill's newest version, first save a new version in the dashboard (edit the skill, or press **Update**), so the version to remove is not the newest one. The next number is the highest one kept plus one, so removing the newest row would let its number be used again.
+1. If the text is in the skill's newest version, first save a new version in the dashboard, so the version to remove is not the newest one. The next number is the highest one kept plus one, so removing the newest row would let its number be used again. A written skill: edit it and save. An installed skill can't be edited, so fix the text at its source and press **Update**, or **Copy** it under a new name (with the clean text) and delete the original once nothing names it.
 2. Remove the old version, for example version 2 of `lint`:
 
    ```sql
