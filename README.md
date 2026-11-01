@@ -644,14 +644,14 @@ A reply never says more than the commenter could see on the platform, and never 
 | A draft, in a repository that doesn't review drafts | 👎 | `drafts aren't reviewed in this repository` |
 | A re-run cap is reached | 👎 | `re-run limit reached for this MR; it resets at 00:00 UTC` (`PR` on GitHub) |
 | The same command again within 30 seconds, the repository switched off, a GitLab bot as the author, or the change closed, merged or gone | 👎 | none |
-| The commenter had a command on the change answered less than 2 minutes ago | none | none |
+| The commenter had a command on the change answered without doing anything (a reply of help, a refusal, a command with nothing to do, a drop) less than 2 minutes ago | none | none |
 
 ### Limits on commands
 
 - **Once per head.** A re-run of a commit already queued, running or waiting to be published isn't queued twice (the caps are checked before this, so at a cap such a request is refused with the cap reply).
-- **30 seconds.** A command that was carried out is not accepted again for the same merge request, command and finding ID within 30 seconds (a refused one doesn't start the window).
+- **30 seconds.** A command that was carried out, or answered with nothing to do, is not accepted again for the same merge request, command and finding ID within 30 seconds (a refused one doesn't start the window).
 - **Re-run caps.** Re-runs started by a comment or a button count; pushes and newly opened merge requests always run and never count. The defaults are 10 per merge request and 50 per repository, per UTC day, and the reply names the reset time (00:00 UTC). A re-run that was superseded still counts. The caps are set by admins only: in the dashboard under **Admin → Settings** (for repositories switched on in the dashboard), per repository in its **Settings**, and in the config as `repositories[].rerun_limit_per_mr` and `repositories[].rerun_limit_per_repo` (1 to 1000). Buttons are held to the caps too (HTTP 429 with the same text). Two buttons pressed at the same moment can overshoot a cap by a few.
-- **One answer per 2 minutes.** Every answer costs platform calls and a comment of the bot, so once a command of a person on a change has been answered (carried out, refused or dropped), their next command on that change within 2 minutes gets nothing at all: no reaction, no reply, no platform call, and it is not run. This holds for a real command written within the window after a `help` or a refusal, too: write it again after the 2 minutes. The check is made before anything else, and commands that were themselves left unanswered don't extend the window.
+- **One do-nothing answer per 2 minutes.** Every answer costs platform calls and a comment of the bot, so once a command of a person on a change has been answered without doing anything, their next command on that change within 2 minutes gets nothing at all: no reaction, no reply, no platform call, and it is not run. What counts is a `help` or an unknown command, a refusal (no permission, the author, a missing reason, an unknown ID, a draft, a cap), a command with nothing to do (`review failed` when nothing failed, a finding that is dismissed already) and a drop. A command that was carried out (a re-run queued, a finding dismissed) does not start the window, so dismissing several findings in a row, or a `review` followed by a `dismiss`, works. A real command written within the window after a `help` or a refusal is throttled: write it again after the 2 minutes. The check is made before anything else, and commands that were themselves left unanswered don't extend the window.
 - **Never hold up reviews.** The engine answers at most 10 commands per pass and never holds up reviews for more than about 30 seconds per pass. A command cut short because the pass ran out of that time is put off for 15 seconds without counting as a try.
 
 ### Setup
@@ -692,7 +692,7 @@ When a merge request gets a new head or a new target branch after the approve bo
 
 A skill whose blocking findings are all dismissed counts as clean, and the comment is written again with its **Dismissed** section; a review whose other conditions hold is then approved like a clean one. A failed, partial or missing review is never `success` and is never approved, and neither is a re-run of some skills that could not be merged with the earlier results of the others.
 
-Deciding a review again on the same head (a restored finding, a re-run, a draft that turns up) as not approved takes the approve bot's approval of that head off, as a new head does. The withdrawal is recorded first and tried again until it works.
+Deciding a review again on the same head (a restored finding, a re-run, a draft that turns up) as not approved takes the approve bot's approval of that head off, as a new head does. The withdrawal is recorded first and tried again until it works. A review that fails for good, because it can't be posted after the retries (see [Pushes, edits and failures](#pushes-edits-and-failures)), takes the bot's approval of that commit off the same way: a commit whose newest review failed never keeps an approval an earlier review of it gave.
 
 ### Turning approval off
 
@@ -713,7 +713,7 @@ Turning it off also withdraws every approval the approve bot already holds in th
 - A Job whose pod can't start because its image can't be pulled (or its container config is invalid) is deleted and reported after about 5 minutes.
 - A Job whose pod the cluster refuses to create (for example, one rejected by an admission policy) is only reported when the Job reaches its deadline, as `DeadlineExceeded`: `jobs.timeout` plus at least 4 minutes, and about a minute more for the report.
 - Runs that were claimed but not launched (for example because pergent.sh crashed) are requeued at startup and after 5 minutes.
-- Publishing is retried with backoff. After 10 failed attempts the run becomes `publish_failed`: pergent.sh makes one last attempt to set the head's status to `failed` with the description "pergent couldn't post its review" (GitHub: the Check Run completed with `failure` and that title), so a required check isn't left running, and posts nothing more to the merge request; it is never approved. The failure itself is only in the logs.
+- Publishing is retried with backoff. After 10 failed attempts the run becomes `publish_failed`: pergent.sh makes one last attempt to set the head's status to `failed` with the description "pergent couldn't post its review" (GitHub: the Check Run completed with `failure` and that title), so a required check isn't left running, and posts nothing more to the merge request; it is never approved, and the approve bot's approval of that head, if an earlier review of it gave one, is withdrawn (recorded first and tried again until it works). The failure itself is only in the logs.
 - The comment pergent renders is held to 990,000 bytes on GitLab and 60,000 on GitHub, which refuses a comment over 65,536 characters; the rest of the limit is room for the note pergent.sh adds (the list of skipped files is at most 20 paths and 4000 bytes).
 
 ## What a Job can and cannot see
