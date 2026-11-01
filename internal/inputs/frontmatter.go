@@ -29,11 +29,16 @@ func SkillName(content []byte, fallback string) (string, error) {
 }
 
 type frontmatter struct {
-	Name string `yaml:"name"`
+	Name       string   `yaml:"name"`
+	Paths      []string `yaml:"paths"`
+	Exclude    []string `yaml:"exclude"`
+	CrossBatch bool     `yaml:"cross_batch"`
 }
 
 // parseFrontmatter reads a leading `---\n…\n---` block. Content without one
-// (including an unclosed block) has no frontmatter. Only `name` is read.
+// (including an unclosed block) has no frontmatter. `name`, `paths`, `exclude`
+// and `cross_batch` are read and typed (a string list, a string list, a
+// boolean); other fields are ignored.
 func parseFrontmatter(content []byte) (frontmatter, error) {
 	var fm frontmatter
 	s := string(content)
@@ -46,7 +51,7 @@ func parseFrontmatter(content []byte) (frontmatter, error) {
 	for len(s) > 0 {
 		line, rest, _ := strings.Cut(s, "\n")
 		if strings.TrimRight(line, "\r") == "---" {
-			if err := yaml.Unmarshal([]byte(block.String()), &fm); err != nil {
+			if err := decodeFrontmatter([]byte(block.String()), &fm); err != nil {
 				return frontmatter{}, fmt.Errorf("parsing frontmatter: %w", err)
 			}
 			return fm, nil
@@ -56,4 +61,35 @@ func parseFrontmatter(content []byte) (frontmatter, error) {
 		s = rest
 	}
 	return frontmatter{}, nil
+}
+
+// decodeFrontmatter decodes block into fm. The typed fields are checked on the
+// loose form first so the error names the field: yaml.v3 would accept the
+// word yes for a bool and says nothing about which field was wrong.
+func decodeFrontmatter(block []byte, fm *frontmatter) error {
+	var loose map[string]any
+	if err := yaml.Unmarshal(block, &loose); err != nil {
+		return err
+	}
+	for _, key := range []string{"paths", "exclude"} {
+		v, ok := loose[key]
+		if !ok || v == nil {
+			continue
+		}
+		list, isList := v.([]any)
+		if !isList {
+			return fmt.Errorf("%s must be a list of strings", key)
+		}
+		for _, item := range list {
+			if _, isString := item.(string); !isString {
+				return fmt.Errorf("%s must be a list of strings", key)
+			}
+		}
+	}
+	if v, ok := loose["cross_batch"]; ok && v != nil {
+		if _, isBool := v.(bool); !isBool {
+			return fmt.Errorf("cross_batch must be true or false")
+		}
+	}
+	return yaml.Unmarshal(block, fm)
 }

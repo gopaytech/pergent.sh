@@ -454,3 +454,195 @@ func TestOnly(t *testing.T) {
 		t.Errorf("skills = %v, want none", none.Skills)
 	}
 }
+
+func libEntries() map[string]LibraryEntry {
+	return map[string]LibraryEntry{
+		"code-review": {Content: []byte("# library review"), Version: 3},
+		"lint":        {Content: []byte("# library lint"), Version: 5},
+	}
+}
+
+func TestPrecedenceAcrossFolders(t *testing.T) {
+	src := &fakeSource{files: map[string]string{
+		".pergent/skills/lint.md": "# pergent",
+		".agents/skills/lint.md":  "# agents",
+		".claude/skills/lint.md":  "# claude",
+		".github/skills/lint.md":  "# github",
+	}}
+	in, err := ResolveSkills(context.Background(), src, libEntries(), []string{"lint"}, 7, "sha1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.Sources["lint"] != ".pergent/skills" || string(in.Skills["lint"]) != "# pergent" {
+		t.Errorf("lint = %q from %q", in.Skills["lint"], in.Sources["lint"])
+	}
+	if !equal(in.Overridden, []string{"lint"}) {
+		t.Errorf("overridden = %v", in.Overridden)
+	}
+
+	// Without .pergent/skills the order continues: agents, claude, github, library.
+	order := []struct{ drop, want string }{
+		{".pergent/skills/lint.md", ".agents/skills"},
+		{".agents/skills/lint.md", ".claude/skills"},
+		{".claude/skills/lint.md", ".github/skills"},
+		{".github/skills/lint.md", SourceLibrary},
+	}
+	for _, step := range order {
+		delete(src.files, step.drop)
+		in, err := ResolveSkills(context.Background(), src, libEntries(), []string{"lint"}, 7, "sha1", nil)
+		if step.want == SourceLibrary {
+			// turned on, but found nowhere in the repository
+			var nf *NotFoundError
+			if !errors.As(err, &nf) {
+				t.Fatalf("err = %v, want NotFoundError", err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if in.Sources["lint"] != step.want {
+			t.Errorf("after dropping %s: source %q, want %q", step.drop, in.Sources["lint"], step.want)
+		}
+	}
+}
+
+func TestDetectedOnlyWhenOn(t *testing.T) {
+	files := map[string]string{".claude/skills/a.md": "# detected a"}
+	in, err := ResolveSkills(context.Background(), &fakeSource{files: files}, libEntries(), nil, 7, "sha1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := in.Skills["a"]; ok {
+		t.Errorf("off skill ran: %v", names(in.Skills))
+	}
+
+	in, err = ResolveSkills(context.Background(), &fakeSource{files: files}, libEntries(), []string{"a"}, 7, "sha1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.Sources["a"] != ".claude/skills" || string(in.Skills["a"]) != "# detected a" {
+		t.Errorf("a = %q from %q", in.Skills["a"], in.Sources["a"])
+	}
+	if len(in.Overridden) != 0 {
+		t.Errorf("overridden = %v", in.Overridden)
+	}
+}
+
+func TestOffMalformedDetectedSkillIgnored(t *testing.T) {
+	src := &fakeSource{files: map[string]string{
+		".agents/skills/bad.md":          "---\nname: [unclosed\n---\nx",
+		".claude/skills/toolarge.md":     strings.Repeat("a", MaxSkillBytes+1),
+		".github/skills/nofile/other.md": "# x",
+	}}
+	in, err := ResolveSkills(context.Background(), src, libEntries(), nil, 7, "sha1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := names(in.Skills); !equal(got, []string{"code-review", "lint"}) {
+		t.Errorf("skills = %v", got)
+	}
+}
+
+func TestOnMalformedDetectedSkillFails(t *testing.T) {
+	src := &fakeSource{files: map[string]string{".agents/skills/bad.md": "---\nname: [unclosed\n---\nx"}}
+	_, err := ResolveSkills(context.Background(), src, libEntries(), []string{"bad"}, 7, "sha1", nil)
+	if err == nil || !strings.Contains(err.Error(), ".agents/skills/bad.md") {
+		t.Fatalf("err = %v", err)
+	}
+	var nf *NotFoundError
+	if errors.As(err, &nf) {
+		t.Fatalf("a malformed skill is not a missing one: %v", err)
+	}
+}
+
+func TestOnDetectedSkillMissing(t *testing.T) {
+	src := &fakeSource{files: map[string]string{".claude/skills/other.md": "# other"}}
+	_, err := ResolveSkills(context.Background(), src, libEntries(), []string{"x"}, 7, "sha1", nil)
+	var nf *NotFoundError
+	if !errors.As(err, &nf) || nf.Name != "x" {
+		t.Fatalf("err = %v, want NotFoundError for x", err)
+	}
+	if want := `skill "x" is turned on but not found in the repository`; err.Error() != want {
+		t.Errorf("message = %q, want %q", err.Error(), want)
+	}
+	// A library skill of that name does not satisfy it.
+	_, err = ResolveSkills(context.Background(), &fakeSource{}, libEntries(), []string{"lint"}, 7, "sha1", nil)
+	if !errors.As(err, &nf) {
+		t.Fatalf("err = %v, want NotFoundError", err)
+	}
+}
+
+func TestPergentFolderProblemIsFatal(t *testing.T) {
+	for label, files := range map[string]map[string]string{
+		"bad yaml":         {".pergent/skills/x.md": "---\nname: [unclosed\n---\nx"},
+		"bad name":         {".pergent/skills/x.md": "---\nname: a/b\n---\nx"},
+		"too large":        {".pergent/skills/x.md": strings.Repeat("a", MaxSkillBytes+1)},
+		"folder no skill":  {".pergent/skills/foo/other.md": "# x"},
+		"paths not a list": {".pergent/skills/x.md": "---\npaths: x\n---\nx"},
+		"duplicate":        {".pergent/skills/a.md": "# a", ".pergent/skills/b/SKILL.md": "---\nname: a\n---\nb"},
+	} {
+		t.Run(label, func(t *testing.T) {
+			_, err := ResolveSkills(context.Background(), &fakeSource{files: files}, libEntries(), nil, 7, "sha1", nil)
+			if err == nil || !strings.Contains(err.Error(), ".pergent/skills/") {
+				t.Fatalf("err = %v", err)
+			}
+		})
+	}
+}
+
+func TestOffDetectedReplacesNothing(t *testing.T) {
+	src := &fakeSource{files: map[string]string{".agents/skills/lint.md": "# repo lint"}}
+	in, err := ResolveSkills(context.Background(), src, libEntries(), nil, 7, "sha1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(in.Skills["lint"]) != "# library lint" || in.Sources["lint"] != SourceLibrary || len(in.Overridden) != 0 {
+		t.Errorf("lint = %q from %q, overridden %v", in.Skills["lint"], in.Sources["lint"], in.Overridden)
+	}
+}
+
+func TestVersionsOnlyLibrary(t *testing.T) {
+	src := &fakeSource{files: map[string]string{
+		".pergent/skills/code-review.md": "# repo review",
+		".claude/skills/extra.md":        "# extra",
+	}}
+	in, err := ResolveSkills(context.Background(), src, libEntries(), []string{"extra"}, 7, "sha1", []byte("prev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(in.Versions) != fmt.Sprint(map[string]int{"lint": 5}) {
+		t.Errorf("versions = %v", in.Versions)
+	}
+	want := map[string]string{"code-review": ".pergent/skills", "lint": SourceLibrary, "extra": ".claude/skills"}
+	if fmt.Sprint(in.Sources) != fmt.Sprint(want) {
+		t.Errorf("sources = %v, want %v", in.Sources, want)
+	}
+	if string(in.Previous) != "prev" {
+		t.Errorf("previous = %q", in.Previous)
+	}
+}
+
+func TestResolveSkillsInstructionsAndRef(t *testing.T) {
+	src := &fakeSource{files: map[string]string{
+		"AGENTS.md":                "agents text",
+		".pergent/instructions.md": "team text",
+	}}
+	in, err := ResolveSkills(context.Background(), src, libEntries(), nil, 7, "sha1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(in.Instructions), "agents text") || !strings.Contains(string(in.Instructions), "team text") {
+		t.Errorf("instructions = %q", in.Instructions)
+	}
+	if len(src.refs) != 1 || !src.refs["sha1"] {
+		t.Errorf("refs = %v", src.refs)
+	}
+}
+
+func TestResolveSkillsSourceError(t *testing.T) {
+	_, err := ResolveSkills(context.Background(), &fakeSource{listErr: errors.New("boom")}, libEntries(), nil, 7, "sha1", nil)
+	if err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err = %v", err)
+	}
+}

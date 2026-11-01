@@ -111,6 +111,9 @@ type Inputs struct {
 	// Sources maps each skill's name to SourceLibrary or SourceRepo (the
 	// repository's own, also when it replaces a library skill).
 	Sources map[string]string
+	// Versions maps each library skill to the version read (ResolveSkills);
+	// skills of a repository folder are not in it.
+	Versions map[string]int
 }
 
 // Resolve gathers the inputs for one review. Library skills are picked by
@@ -158,6 +161,119 @@ func Resolve(ctx context.Context, src Source, lib Library, repo config.Repositor
 		return nil, err
 	}
 	return in, nil
+}
+
+// LibraryEntry is one skill of the library as ResolveSkills receives it.
+type LibraryEntry struct {
+	Content []byte
+	Version int
+}
+
+// NotFoundError says a skill turned on for a repository is in none of the
+// repository's skill folders.
+type NotFoundError struct{ Name string }
+
+func (e *NotFoundError) Error() string {
+	return fmt.Sprintf("skill %q is turned on but not found in the repository", e.Name)
+}
+
+// ResolveSkills gathers the inputs for one review. lib holds the library
+// skills the repository uses (its list, or the default list); repoSkills names
+// the detected skills turned on. Repository skills and instructions are read
+// from the project at ref, so a merge request cannot change its own rules.
+//
+// A name is taken from the first of RepoFolders that has it, then the library
+// (D23). ".pergent/skills" always runs and a problem there is an error. The
+// other folders are read only for the names in repoSkills: a skill that is off
+// is ignored even when malformed and replaces nothing, a turned-on one that is
+// malformed is an error and one that is in no folder is a *NotFoundError.
+// previous is stored as given.
+func ResolveSkills(ctx context.Context, src Source, lib map[string]LibraryEntry, repoSkills []string, projectID int64, ref string, previous []byte) (*Inputs, error) {
+	in := &Inputs{
+		Skills: map[string][]byte{}, Previous: previous,
+		Sources: map[string]string{}, Versions: map[string]int{},
+	}
+	for name, e := range lib {
+		in.Skills[name] = e.Content
+		in.Sources[name] = SourceLibrary
+		in.Versions[name] = e.Version
+	}
+
+	take := func(f Found, folder string) {
+		in.Skills[f.Name] = f.Content
+		in.Sources[f.Name] = folder
+		delete(in.Versions, f.Name)
+	}
+
+	// found is what the repository folders supply by name so far.
+	found := map[string]bool{}
+
+	always, err := ScanFolder(ctx, src, projectID, RepoFolders[0], ref)
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range always {
+		if f.Problem != "" {
+			return nil, fmt.Errorf("%s: %s", f.Path, f.Problem)
+		}
+		take(f, RepoFolders[0])
+		found[f.Name] = true
+	}
+
+	on := map[string]bool{}
+	for _, name := range repoSkills {
+		on[name] = true
+	}
+	for _, folder := range RepoFolders[1:] {
+		if allFound(on, found) {
+			break
+		}
+		scanned, err := ScanFolder(ctx, src, projectID, folder, ref)
+		if err != nil {
+			return nil, err
+		}
+		var supplied []Found
+		for _, f := range scanned {
+			if !on[f.Name] || found[f.Name] {
+				continue
+			}
+			if f.Problem != "" {
+				return nil, fmt.Errorf("%s: %s", f.Path, f.Problem)
+			}
+			take(f, folder)
+			supplied = append(supplied, f)
+		}
+		for _, f := range supplied {
+			found[f.Name] = true
+		}
+	}
+	for _, name := range repoSkills {
+		if !found[name] {
+			return nil, &NotFoundError{Name: name}
+		}
+	}
+
+	for name := range found {
+		if _, inLib := lib[name]; inLib {
+			in.Overridden = append(in.Overridden, name)
+		}
+	}
+	sort.Strings(in.Overridden)
+
+	in.Instructions, err = loadInstructions(ctx, src, projectID, ref)
+	if err != nil {
+		return nil, err
+	}
+	return in, nil
+}
+
+func allFound(on, found map[string]bool) bool {
+	for name := range on {
+		if !found[name] {
+			return false
+		}
+	}
+	return true
 }
 
 // Only is the inputs reduced to the skills named in names: a name that is not
