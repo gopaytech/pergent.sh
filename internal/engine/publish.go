@@ -512,8 +512,12 @@ func (e *Engine) retryPublish(ctx context.Context, run store.Run, text string, l
 
 // giveUpStatus makes one best-effort attempt to set a failed status on the
 // head of a run that became publish_failed, so a required check isn't left
-// running (GitHub's Check Run stays in_progress from dispatch otherwise). It
-// runs once, on the transition the store reports; nothing is approved.
+// running (GitHub's Check Run stays in_progress from dispatch otherwise), and
+// withdraws the approve bot's approval of that head and target: a review that
+// failed for good must not leave an approval standing on its commit (a
+// same-head re-run supersedes the run that approved it, and a dismissal
+// restored meanwhile is decided by no one else). It runs once, on the
+// transition the store reports; nothing is approved.
 func (e *Engine) giveUpStatus(ctx context.Context, run store.Run, log *slog.Logger) {
 	plat, ok := e.Platforms.Get(run.MR.Instance)
 	if !ok || plat.Forge == nil {
@@ -522,6 +526,11 @@ func (e *Engine) giveUpStatus(ctx context.Context, run store.Run, log *slog.Logg
 	}
 	if err := plat.Forge.SetStatus(ctx, run.MR.ProjectID, run.HeadSHA, forge.StatusFailed, gaveUpDescription); err != nil {
 		log.Warn("couldn't set the final status of the review that wasn't posted", "error", e.redact(err.Error()))
+	}
+	// Recorded as owed first and paid by the approval sweep when it fails
+	// now, as for any review decided as not approved.
+	if err := e.withdrawRedecided(ctx, plat, run, log); err != nil {
+		log.Error("couldn't record the approval to withdraw after giving up", "error", e.redact(err.Error()))
 	}
 }
 

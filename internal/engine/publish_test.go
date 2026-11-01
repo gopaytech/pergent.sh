@@ -1180,3 +1180,135 @@ func TestPublishFailedFinalStatusRefused(t *testing.T) {
 		t.Errorf("the refused final status isn't logged:\n%s", env.Logs())
 	}
 }
+
+// A same-head re-run supersedes the published run that approved the head.
+// When the re-run can never be posted, the approval of that commit must not
+// stand: the run that gives up withdraws it, through the owed-withdrawal path
+// the approval sweep keeps trying.
+func TestPublishGiveUpWithdrawsApprovalOfItsHead(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	// R1 approved the head with its blocking finding dismissed.
+	env.Publish(1, head, resultFor(t, head, skillWithFinding(t, "has_blocking_issues", "blocking")))
+	dismiss(t, env, 1, "blocking", "false positive")
+	if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), head, "main"); err != nil {
+		t.Fatal(err)
+	}
+	// R2, a re-run of the same head, supersedes R1 and is reported.
+	r2, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main", store.TriggerRerun, nil, nil)
+	if err != nil || !created {
+		t.Fatalf("EnqueueRerun = %v, %v", created, err)
+	}
+	if got := env.Report(1, head, resultFor(t, head, skillWithFinding(t, "has_blocking_issues", "blocking"))); got != r2 {
+		t.Fatalf("reported run %s, want the re-run %s", got, r2)
+	}
+	// The dismissal is restored while R2 is in flight: R1 is superseded, so
+	// nothing re-decides it, and R2's publish is expected to.
+	if ok, err := env.Store.Restore(env.ctx, env.MRKey(1), sqlFingerprint); err != nil || !ok {
+		t.Fatalf("Restore = %v, %v", ok, err)
+	}
+	servePublish(env, 1, head)
+	env.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusUnprocessableEntity, `{"message":"Note is too long"}`)
+	env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusForbidden, `{"message":"403 Forbidden"}`)
+
+	publishUntilGivenUp(t, env, r2)
+
+	reqs := env.GitLab.Requests(http.MethodPost, unapprovePath(1))
+	if len(reqs) != 1 || reqs[0].Token != testApproveToken {
+		t.Fatalf("got %d unapprovals, want 1 attempt by the approve bot on giving up", len(reqs))
+	}
+	if got := recordedApproval(t, env, 1); got != head {
+		t.Fatalf("recorded approval = %q, want it kept as owed until withdrawn", got)
+	}
+	if p := pending(t, env); len(p) != 1 || p[0].ApprovedSHA != head {
+		t.Fatalf("pending withdrawals = %v, want the head's", p)
+	}
+
+	// A later sweep with a working approver pays it.
+	env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusCreated, `{}`)
+	env.SetNow(env.Now().Add(time.Hour))
+	sweep(t, env)
+	if n := len(env.GitLab.Requests(http.MethodPost, unapprovePath(1))); n != 2 {
+		t.Errorf("got %d unapprovals, want 2", n)
+	}
+	if got := recordedApproval(t, env, 1); got != "" {
+		t.Errorf("recorded approval = %q, want it cleared", got)
+	}
+	if p := pending(t, env); len(p) != 0 {
+		t.Errorf("pending withdrawals = %v, want none", p)
+	}
+}
+
+// With a working approver the approval goes at the moment of giving up.
+func TestPublishGiveUpWithdrawsApprovalNow(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublish(env, 1, head)
+	env.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusUnprocessableEntity, `{"message":"Note is too long"}`)
+	env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusCreated, `{}`)
+	if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), head, "main"); err != nil {
+		t.Fatal(err)
+	}
+
+	publishUntilGivenUp(t, env, id)
+
+	if n := len(env.GitLab.Requests(http.MethodPost, unapprovePath(1))); n != 1 {
+		t.Errorf("got %d unapprovals, want 1", n)
+	}
+	if got := recordedApproval(t, env, 1); got != "" {
+		t.Errorf("recorded approval = %q, want it cleared", got)
+	}
+}
+
+// A run that gives up is not the approved head's: its approval is not its to
+// withdraw.
+func TestPublishGiveUpKeepsApprovalOfAnotherHead(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublish(env, 1, head)
+	env.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusUnprocessableEntity, `{"message":"Note is too long"}`)
+	env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusCreated, `{}`)
+	if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), sha('z'), "main"); err != nil {
+		t.Fatal(err)
+	}
+
+	publishUntilGivenUp(t, env, id)
+
+	if n := len(env.GitLab.Requests(http.MethodPost, unapprovePath(1))); n != 0 {
+		t.Errorf("unapprove called %d times, want never", n)
+	}
+	if got := recordedApproval(t, env, 1); got != sha('z') {
+		t.Errorf("recorded approval = %q, want the other head's kept", got)
+	}
+	if p := pending(t, env); len(p) != 0 {
+		t.Errorf("pending withdrawals = %v, want none", p)
+	}
+}
+
+// A merged change has nothing to withdraw: at give-up the record is only
+// cleared.
+func TestPublishGiveUpMergedClearsRecord(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublish(env, 1, head)
+	env.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusUnprocessableEntity, `{"message":"Note is too long"}`)
+	env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusCreated, `{}`)
+	mr := openMR(1, head)
+	mr.State = "merged"
+	env.GitLab.SetMR(mr)
+	if err := env.Store.SetApprovedSHA(env.ctx, env.MRKey(1), head, "main"); err != nil {
+		t.Fatal(err)
+	}
+
+	publishUntilGivenUp(t, env, id)
+
+	if n := len(env.GitLab.Requests(http.MethodPost, unapprovePath(1))); n != 0 {
+		t.Errorf("unapprove called %d times for a merged change", n)
+	}
+	if got := recordedApproval(t, env, 1); got != "" {
+		t.Errorf("recorded approval = %q, want it cleared", got)
+	}
+}
