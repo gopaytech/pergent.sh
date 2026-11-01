@@ -7,6 +7,7 @@ import {
   paths,
   type AvailableView,
   type InstanceAdminView,
+  type LibrarySkill,
   type RepositoryDetailView,
   type RepositoryView,
 } from "../api";
@@ -149,6 +150,10 @@ function Picker({ instance, choice }: { instance?: string; choice?: ReactNode })
   const [text, setText] = useState("");
   const [search, setSearch] = useState("");
   const chosen = instance !== "";
+  // A repository switched on here gets the default skills: with none set, it
+  // has no skills and isn't reviewed. A library that can't be read says nothing.
+  const library = useQuery({ queryKey: ["skills"], queryFn: () => api.get<LibrarySkill[]>("/api/skills") });
+  const noDefaults = library.isSuccess && !library.data.some((s) => s.inDefaults);
   const base =
     instance === undefined ? "/api/repositories/available" : `/api/admin/instances/${encodeURIComponent(instance)}/repositories`;
   const available = useQuery({
@@ -173,6 +178,15 @@ function Picker({ instance, choice }: { instance?: string; choice?: ReactNode })
   return (
     <section className="card picker" aria-label="Add repository">
       <h2>Add repository</h2>
+      {noDefaults && (
+        <div className="alert" role="note">
+          <span aria-hidden="true">⚠️</span>
+          <span className="prose">
+            No default skills are set. A repository you switch on gets no skills and is not reviewed, unless it has its own in
+            .pergent/skills. <Link to="/settings">Set the default skills</Link>
+          </span>
+        </div>
+      )}
       {choice}
       {chosen && (
         <form className="pad search" onSubmit={submit}>

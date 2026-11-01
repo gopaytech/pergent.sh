@@ -31,6 +31,7 @@ import {
   count,
   duration,
   platformName,
+  skillOrigin,
   type Tone,
 } from "../ui";
 
@@ -246,9 +247,6 @@ function Facts({ run, platform }: { run: RunDetailView; platform: string }) {
   );
 }
 
-const sourceText = (s: SkillView["source"]) =>
-  s === "library" ? "library skill" : s === "repo" ? "repository skill" : "source not recorded";
-
 function plural(n: number, word: string) {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
@@ -306,7 +304,7 @@ function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
               <b>{s.name}</b>
               <div className="meta">
                 {plural(s.findings.filter((x) => x.severity === "suggestion").length, "suggestion")}
-                {s.dismissed.length > 0 && ` · ${s.dismissed.length} dismissed`} · {sourceText(s.source)}
+                {s.dismissed.length > 0 && ` · ${s.dismissed.length} dismissed`} · {skillOrigin(s.source, s.version)}
               </div>
             </div>
           </div>

@@ -1353,8 +1353,14 @@ func TestSkippedRunOutcome(t *testing.T) {
 	for _, r := range getJSON[ReviewListView](e, c, "/api/reviews").Items {
 		byNumber[r.Number] = r
 	}
-	if r := byNumber[1]; r.Outcome != OutcomeSuperseded || r.Reason != reason {
-		t.Errorf("skipped review = %s %q, want superseded %q", r.Outcome, r.Reason, reason)
+	if r := byNumber[1]; r.Outcome != OutcomeSkipped || r.Reason != reason {
+		t.Errorf("skipped review = %s %q, want skipped %q", r.Outcome, r.Reason, reason)
+	}
+	if v := getJSON[ReviewListView](e, c, "/api/reviews?outcome=skipped"); len(v.Items) != 1 || v.Items[0].Number != 1 {
+		t.Errorf("skipped filter = %+v, want only the skipped review", v.Items)
+	}
+	if n := len(getJSON[ReviewListView](e, c, "/api/reviews?outcome=superseded").Items); n != 0 {
+		t.Errorf("superseded filter lists %d reviews, want none: a skipped run is not superseded", n)
 	}
 	if n := len(getJSON[ReviewListView](e, c, "/api/reviews?outcome=failed").Items); n != 1 {
 		t.Errorf("failed filter lists %d reviews, want only the real failure", n)
@@ -1367,7 +1373,7 @@ func TestSkippedRunOutcome(t *testing.T) {
 		t.Errorf("last 7 days = %+v", repos[0].Last7)
 	}
 	d := getJSON[RunDetailView](e, c, "/api/runs/"+skipped)
-	if d.Run.Reason != reason || d.Approved || d.Status != "" || len(d.Skills) != 0 {
+	if d.Run.Outcome != OutcomeSkipped || d.Run.Reason != reason || d.Approved || d.Status != "" || len(d.Skills) != 0 {
 		t.Errorf("run detail = %+v", d)
 	}
 	rv := getJSON[ReviewDetailView](e, c, "/api/reviews/main/acme/widgets/1")

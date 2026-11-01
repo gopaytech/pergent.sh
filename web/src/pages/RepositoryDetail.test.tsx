@@ -11,11 +11,15 @@ afterEach(() => vi.unstubAllGlobals());
 const payments = repoDetail(repoPayments);
 const widgets = repoDetail(repoWidgets);
 
+const noInputs = { branch: "main", skills: [], detected: [], instructions: "" };
+
 const base = {
   "GET /api/me": { body: platformAdmin },
   "GET /api/repositories/main/acme/payments": { body: payments },
   "GET /api/repositories/main/acme/widgets": { body: widgets },
   "GET /api/skills": { body: librarySkills },
+  "GET /api/repositories/main/acme/payments/inputs": { body: noInputs },
+  "GET /api/repositories/main/acme/widgets/inputs": { body: noInputs },
   "GET /api/reviews?project=acme%2Fpayments&days=90": { body: { items: [reviewBlocking], nextCursor: "" } },
 };
 
@@ -69,9 +73,10 @@ describe("RepositoryDetail", () => {
     const memory = screen.getByRole("textbox", { name: "Memory limit" });
     expect(memory).toHaveValue("6Gi");
     expect(within(memory.closest(".set") as HTMLElement).getByText("overridden here")).toBeInTheDocument();
-    // skills null: every library skill is on.
-    expect(await screen.findByRole("switch", { name: "Skill code-review" })).toBeChecked();
-    expect(screen.getByRole("switch", { name: "Skill security-review" })).toBeChecked();
+    // skills null: the default list, no switches to choose with.
+    expect(await screen.findByRole("radio", { name: "Use the default skills (code-review)" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Choose skills" })).not.toBeChecked();
+    expect(screen.queryByRole("switch", { name: "Skill code-review" })).not.toBeInTheDocument();
     expect(screen.queryByText("managed by config")).not.toBeInTheDocument();
   });
 
@@ -79,6 +84,7 @@ describe("RepositoryDetail", () => {
     const fake = fakeApi(base);
     renderApp("/repos/main/acme/widgets?tab=settings");
     expect(await screen.findAllByText("managed by config")).not.toHaveLength(0);
+    // A config repository can't choose, but its skills are shown.
     await screen.findByRole("switch", { name: "Skill code-review" });
     for (const el of [
       screen.getByRole("switch", { name: "Approve clean reviews" }),
@@ -87,6 +93,8 @@ describe("RepositoryDetail", () => {
       screen.getByRole("spinbutton", { name: "Timeout (seconds)" }),
       screen.getByRole("textbox", { name: "Memory limit" }),
       screen.getByRole("switch", { name: "Skill code-review" }),
+      screen.getByRole("radio", { name: "Choose skills" }),
+      screen.getByRole("radio", { name: /Use the default skills/ }),
     ]) {
       expect(el).toBeDisabled();
     }
@@ -102,7 +110,7 @@ describe("RepositoryDetail", () => {
         ...payments.settings,
         approve: { value: false, overridden: true },
         jobTimeoutSeconds: { value: 900, overridden: true },
-        skills: { value: ["code-review"], overridden: true },
+        skills: { value: ["code-review", "security-review"], overridden: true },
       },
     };
     const fake = fakeApi({ ...base, "PUT /api/repositories/main/acme/payments/settings": { body: saved } });
@@ -111,12 +119,13 @@ describe("RepositoryDetail", () => {
     const timeout = screen.getByRole("spinbutton", { name: "Timeout (seconds)" });
     await userEvent.clear(timeout);
     await userEvent.type(timeout, "900");
+    await userEvent.click(await screen.findByRole("radio", { name: "Choose skills" }));
     await userEvent.click(await screen.findByRole("switch", { name: "Skill security-review" }));
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
 
     const [put] = fake.find("PUT", "/api/repositories/main/acme/payments/settings");
     expect(put.headers.get("X-CSRF-Token")).toBe("csrf-123");
-    expect(put.body).toEqual({ approve: false, jobTimeoutSeconds: 900, skills: ["code-review"] });
+    expect(put.body).toEqual({ approve: false, jobTimeoutSeconds: 900, skills: ["code-review", "security-review"] });
     expect(await screen.findByText("Saved.")).toBeInTheDocument();
     const timeoutRow = screen.getByRole("spinbutton", { name: "Timeout (seconds)" }).closest(".set") as HTMLElement;
     expect(within(timeoutRow).getByText("overridden here")).toBeInTheDocument();
@@ -249,13 +258,180 @@ describe("RepositoryDetail", () => {
     expect(post.headers.get("X-CSRF-Token")).toBe("csrf-123");
   });
 
+  it("offers the default skills or a choice, with a running total", async () => {
+    const fake = fakeApi({
+      ...base,
+      "PUT /api/repositories/main/acme/payments/settings": {
+        body: {
+          ...payments,
+          settings: { ...payments.settings, skills: { value: ["security-review"], overridden: true } },
+        },
+      },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const skills = await screen.findByRole("region", { name: "Skills used for this repository" });
+    const defaultsRadio = within(skills).getByRole("radio", { name: "Use the default skills (code-review)" });
+    expect(defaultsRadio).toBeChecked();
+    expect(within(skills).getByText("Total 52 B of 900 KiB")).toBeInTheDocument();
+
+    await userEvent.click(within(skills).getByRole("radio", { name: "Choose skills" }));
+    // Choosing starts from the default list.
+    expect(within(skills).getByRole("switch", { name: "Skill code-review" })).toBeChecked();
+    expect(within(skills).getByRole("switch", { name: "Skill security-review" })).not.toBeChecked();
+    await userEvent.click(within(skills).getByRole("switch", { name: "Skill code-review" }));
+    await userEvent.click(within(skills).getByRole("switch", { name: "Skill security-review" }));
+    expect(within(skills).getByText("Total 61 B of 900 KiB")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({ skills: ["security-review"] });
+    expect(await screen.findByText("Saved.")).toBeInTheDocument();
+  });
+
+  it("puts a repository back on the default skills with null", async () => {
+    const chosen = {
+      ...payments,
+      settings: { ...payments.settings, skills: { value: ["security-review"], overridden: true } },
+    };
+    const fake = fakeApi({
+      ...base,
+      "GET /api/repositories/main/acme/payments": { body: chosen },
+      "PUT /api/repositories/main/acme/payments/settings": { body: payments },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    expect(await screen.findByRole("radio", { name: "Choose skills" })).toBeChecked();
+    await userEvent.click(screen.getByRole("radio", { name: /Use the default skills/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({ skills: null });
+  });
+
+  it("says when the default skill list is empty", async () => {
+    fakeApi({
+      ...base,
+      "GET /api/skills": { body: librarySkills.map((s) => ({ ...s, inDefaults: false })) },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    expect(await screen.findByRole("radio", { name: "Use the default skills (none)" })).toBeChecked();
+    expect(screen.getByText(/no default skills/i)).toBeInTheDocument();
+  });
+
+  it("shows the detected skills with switches, off at first, and .pergent/skills as always on", async () => {
+    const fake = fakeApi({
+      ...base,
+      "GET /api/repositories/main/acme/payments/inputs": { body: detectedInputs },
+      "PUT /api/repositories/main/acme/payments/settings": {
+        body: { ...payments, settings: { ...payments.settings, repoSkills: { value: ["agent-rules"], overridden: true } } },
+      },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const section = await screen.findByRole("region", { name: "Skills in the repository" });
+    const agent = await within(section).findByRole("switch", { name: "Repository skill agent-rules" });
+    expect(agent).not.toBeChecked();
+    expect(within(section).getByRole("switch", { name: "Repository skill lint" })).not.toBeChecked();
+    expect(agent.closest(".skill")).toHaveTextContent(".agents/skills");
+    expect(within(section).getByText(".pergent/skills").closest(".skill")).toHaveTextContent("always on");
+    expect(section).toHaveTextContent("Only the SKILL.md text of a skill is used");
+    // A skill that can't be read says why and can't be turned on.
+    const broken = within(section).getByRole("switch", { name: "Repository skill broken" });
+    expect(broken).toBeDisabled();
+    expect(broken.closest(".skill")).toHaveTextContent("frontmatter does not parse");
+
+    await userEvent.click(agent);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({ repoSkills: ["agent-rules"] });
+  });
+
+  it("keeps the skills turned on and shows one the repository no longer has", async () => {
+    const fake = fakeApi({
+      ...base,
+      "GET /api/repositories/main/acme/payments": {
+        body: { ...payments, settings: { ...payments.settings, repoSkills: { value: ["lint", "vanished"], overridden: true } } },
+      },
+      "GET /api/repositories/main/acme/payments/inputs": {
+        body: { ...detectedInputs, detected: detectedInputs.detected.map((d) => (d.name === "lint" ? { ...d, on: true } : d)) },
+      },
+      "PUT /api/repositories/main/acme/payments/settings": { body: payments },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    expect(await screen.findByRole("switch", { name: "Repository skill lint" })).toBeChecked();
+    const vanished = screen.getByRole("switch", { name: "Repository skill vanished" });
+    expect(vanished).toBeChecked();
+    expect(vanished.closest(".skill")).toHaveTextContent("not found in the repository");
+    await userEvent.click(vanished);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({ repoSkills: ["lint"] });
+  });
+
+  it("keeps the detected skills out of the save when they can't be read", async () => {
+    const fake = fakeApi({
+      ...base,
+      "GET /api/repositories/main/acme/payments/inputs": {
+        status: 502,
+        body: { error: "could not read the repository's skills and instructions from the platform, please try again" },
+      },
+      "PUT /api/repositories/main/acme/payments/settings": { body: payments },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const section = await screen.findByRole("region", { name: "Skills in the repository" });
+    expect(await within(section).findByText(/could not read the repository's skills/)).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("switch", { name: "Review drafts" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({ reviewDrafts: true });
+  });
+
+  it("shows the folder, the version and a file link for each skill a review would use", async () => {
+    fakeApi({
+      ...base,
+      "GET /api/repositories/main/acme/payments/inputs": {
+        body: {
+          branch: "main",
+          skills: [
+            { name: "code-review", source: "library", folder: "", version: 2, content: "Review.", url: "" },
+            {
+              name: "agent-rules",
+              source: ".claude/skills",
+              folder: ".claude/skills",
+              version: 0,
+              content: "Be <i>strict</i>.",
+              url: "https://gitlab.example.com/acme/payments/-/blob/main/.claude/skills/agent-rules/SKILL.md",
+            },
+            { name: "evil", source: ".pergent/skills", folder: ".pergent/skills", version: 0, content: "x", url: "javascript:alert(1)" },
+            { name: "gone", source: "", folder: "", version: 0, content: "", url: "", problem: 'skill "gone" is not in the skill library' },
+          ],
+          detected: [],
+          instructions: "",
+        },
+      },
+    });
+    renderApp("/repos/main/acme/payments?tab=inputs");
+    const skills = await screen.findByRole("region", { name: "Skills" });
+    const lib = within(skills).getByText("code-review").closest(".skill-doc") as HTMLElement;
+    expect(lib).toHaveTextContent("library v2");
+    expect(within(lib).queryByRole("link")).not.toBeInTheDocument();
+
+    const folder = within(skills).getByText("agent-rules").closest(".skill-doc") as HTMLElement;
+    expect(folder).toHaveTextContent(".claude/skills");
+    expect(within(folder).getByRole("link", { name: "View file" })).toHaveAttribute(
+      "href",
+      "https://gitlab.example.com/acme/payments/-/blob/main/.claude/skills/agent-rules/SKILL.md",
+    );
+    expect(within(folder).getByText("Be <i>strict</i>.").tagName).toBe("PRE");
+
+    // A link that isn't http(s) is never made.
+    expect(within(within(skills).getByText("evil").closest(".skill-doc") as HTMLElement).queryByRole("link")).not.toBeInTheDocument();
+
+    const gone = within(skills).getByText("gone").closest(".skill-doc") as HTMLElement;
+    expect(gone).toHaveTextContent('skill "gone" is not in the skill library');
+  });
+
   it("shows the resolved skills and instructions", async () => {
     fakeApi({
       ...base,
       "GET /api/repositories/main/acme/payments/inputs": {
         body: {
           branch: "main",
-          skills: [{ name: "code-review", source: "repo", content: "Repo's own <b>review</b>." }],
+          skills: [
+            { name: "code-review", source: "repo", folder: "", version: 0, content: "Repo's own <b>review</b>.", url: "" },
+          ],
+          detected: [],
           instructions: "Be kind.\nBe brief.",
         },
       },
@@ -354,6 +530,17 @@ describe("RepositoryDetail", () => {
     expect(fake.find("GET", "/api/me")).toHaveLength(1);
   });
 });
+
+const detectedInputs = {
+  branch: "main",
+  skills: [],
+  detected: [
+    { name: "agent-rules", folder: ".agents/skills", on: false },
+    { name: "lint", folder: ".claude/skills", on: false },
+    { name: "broken", folder: ".github/skills", problem: "frontmatter does not parse", on: false },
+  ],
+  instructions: "",
+};
 
 function renderAt(path: string, routes: Parameters<typeof fakeApi>[0]) {
   fakeApi(routes);

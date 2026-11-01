@@ -165,6 +165,7 @@ func TestDigestOutcomes(t *testing.T) {
 		{`state = 'reported'`, OutcomeRunning},
 		{`state = 'reported', failure_reason = 'boom'`, OutcomeFailed},
 		{`state = 'superseded', outcome = 'approved'`, OutcomeSuperseded},
+		{`state = 'skipped'`, OutcomeSkipped},
 		{`state = 'publish_failed'`, OutcomeFailed},
 		{`state = 'published'`, OutcomeUnknown},
 		{`state = 'published', outcome = 'draft'`, OutcomeDraft},

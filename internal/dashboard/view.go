@@ -32,6 +32,8 @@ import (
 //   - "failed": no usable review (the Job failed, a skill failed, the
 //     result was unusable, or it couldn't be posted);
 //   - "superseded": replaced by a newer push, or the change was closed;
+//   - "skipped": not reviewed because the repository has no skills (no Job,
+//     no comment, no status); never counted as a review or a failure;
 //   - "unknown": published before pergent.sh recorded outcomes.
 //
 // A published run's outcome, reason and status are what the publisher
@@ -47,6 +49,7 @@ const (
 	OutcomeNoBlocking = store.OutcomeNoBlocking
 	OutcomeFailed     = store.OutcomeFailed
 	OutcomeSuperseded = store.OutcomeSuperseded
+	OutcomeSkipped    = store.OutcomeSkipped
 	OutcomeUnknown    = store.OutcomeUnknown
 )
 

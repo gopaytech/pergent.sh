@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams, useSearchParams } from "react-router";
 
-import { api, isStatus, paths, type InputsView, type RepositoryDetailView } from "../api";
-import { ErrorBox, Loading, NotFound, Tabs, platformName } from "../ui";
+import { api, isStatus, paths, safeHref, type InputsView, type RepositoryDetailView } from "../api";
+import { ErrorBox, ExternalLink, Loading, NotFound, Tabs, platformName, skillOrigin } from "../ui";
 import AttentionRows from "./Attention";
 import ReviewList from "./ReviewList";
 import SettingsTab from "./RepositorySettings";
@@ -77,12 +77,18 @@ function Inputs({ instance, project }: { instance: string; project: string }) {
         <h2>Skills</h2>
         {v.skills.length === 0 && <div className="row empty-row">No skills.</div>}
         {v.skills.map((s) => (
-          <details className="skill-doc" key={s.name}>
+          <details className="skill-doc" key={`${s.name}/${s.folder}`}>
             <summary className="skill">
               <b className="grow">{s.name}</b>
-              <span className="src">{s.source}</span>
+              {s.problem && <span className="problem">{s.problem}</span>}
+              {s.source !== "" && <span className="src">{skillOrigin(s.source, s.version)}</span>}
             </summary>
-            <pre className="doc">{s.content}</pre>
+            {!s.problem && <pre className="doc">{s.content}</pre>}
+            {safeHref(s.url) && (
+              <div className="pad meta">
+                <ExternalLink href={s.url}>View file</ExternalLink>
+              </div>
+            )}
           </details>
         ))}
       </section>

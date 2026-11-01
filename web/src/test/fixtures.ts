@@ -98,6 +98,7 @@ export const overview: OverviewView = {
       updatedAt: minutesAgo(60),
     },
   ],
+  setup: null,
 };
 
 export const noCan: Can = { rerun: false, dismissBlocking: false, dismissSuggestion: false, restore: false };
@@ -161,6 +162,7 @@ export const runDetail: RunDetailView = {
       name: "security-review",
       verdict: "has_blocking_issues",
       source: "library",
+      version: 3,
       findings: [
         {
           id: "a1b2c3",
@@ -181,6 +183,7 @@ export const runDetail: RunDetailView = {
       name: "code-review",
       verdict: "no_blocking_issues",
       source: null,
+      version: 0,
       findings: [
         {
           id: "f00d12",
@@ -227,6 +230,7 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
     reviewDrafts: { value: false, overridden: false },
     failureStatus: { value: "failed", overridden: false },
     skills: { value: null, overridden: false },
+    repoSkills: { value: [], overridden: false },
     jobTimeoutSeconds: { value: 600, overridden: false },
     jobMemory: { value: "6Gi", overridden: true },
     rerunLimitPerMR: { value: 10, overridden: false },
@@ -345,6 +349,7 @@ export const defaults: DefaultsView = {
   jobMemory: "",
   rerunLimitPerMR: 10,
   rerunLimitPerRepo: 50,
+  skills: ["code-review"],
 };
 
 export const llm: LLMAdminView = {

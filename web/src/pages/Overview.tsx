@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router";
 
-import { api, type OverviewView } from "../api";
+import { api, type OverviewView, type SetupView } from "../api";
 import { useMe } from "../layout/me";
 import { ErrorBox, Loading } from "../ui";
 import AttentionRows from "./Attention";
@@ -53,8 +53,9 @@ function Body({ view, platform }: { view: OverviewView; platform: string }) {
   const pct = stats.reviews > 0 ? Math.round((stats.approved / stats.reviews) * 100) : 0;
   return (
     <>
+      {view.setup && <Checklist setup={view.setup} />}
       <section className="stats" aria-label="Numbers">
-        <Stat k="Reviews" v={stats.reviews} d="not counting superseded runs" />
+        <Stat k="Reviews" v={stats.reviews} d="not counting superseded or skipped runs" />
         <Stat k="Approved by pergent" v={stats.approved} d={`${pct}% of reviews`} />
         <Stat k="Blocking findings" v={stats.blocking} d="reviews with blocking issues" />
         <Stat k="Failed reviews" v={stats.failed} d={stats.failed > 0 ? "see the reviews for why" : "none failed"} bad={stats.failed > 0} />
@@ -72,6 +73,34 @@ function Body({ view, platform }: { view: OverviewView; platform: string }) {
         </section>
       </div>
     </>
+  );
+}
+
+// The setup steps of a new install, in order, each with the page that does it.
+const setupSteps: [keyof SetupView, string, string][] = [
+  ["llm", "Set the model and its key", "/settings"],
+  ["instance", "Connect a GitLab or GitHub instance", "/integrations"],
+  ["skill", "Add a skill to the library", "/skills"],
+  ["repository", "Switch on a repository", "/repos?add=1"],
+];
+
+// Checklist shows an admin what is left to set up. The overview sends the
+// setup only while something is left, so it goes away once all four are done.
+function Checklist({ setup }: { setup: SetupView }) {
+  return (
+    <section className="card" aria-label="Setup checklist">
+      <h2>Get started</h2>
+      <ul className="checklist">
+        {setupSteps.map(([key, label, to]) => (
+          <li key={key} className={setup[key] ? "done" : undefined}>
+            <span aria-label={setup[key] ? "done" : "to do"} role="img" className="tick">
+              {setup[key] ? "✓" : "○"}
+            </span>
+            <Link to={to}>{label}</Link>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

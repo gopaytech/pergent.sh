@@ -57,6 +57,35 @@ describe("Overview", () => {
     expect(screen.queryByRole("link", { name: "+ Add repository" })).not.toBeInTheDocument();
   });
 
+  it("shows the setup checklist to an admin: done items ticked, each linking its page", async () => {
+    fakeApi({
+      "GET /api/me": { body: platformAdmin },
+      "GET /api/overview?days=7": {
+        body: { ...overview, setup: { llm: true, instance: true, skill: false, repository: false } },
+      },
+    });
+    renderApp("/");
+    const list = await screen.findByRole("region", { name: "Setup checklist" });
+    const item = (name: string) => within(list).getByRole("link", { name }).closest("li") as HTMLElement;
+    expect(within(list).getByRole("link", { name: "Set the model and its key" })).toHaveAttribute("href", "/settings");
+    expect(within(list).getByRole("link", { name: "Connect a GitLab or GitHub instance" })).toHaveAttribute("href", "/integrations");
+    expect(within(list).getByRole("link", { name: "Add a skill to the library" })).toHaveAttribute("href", "/skills");
+    expect(within(list).getByRole("link", { name: "Switch on a repository" })).toHaveAttribute("href", "/repos?add=1");
+    expect(item("Set the model and its key")).toHaveClass("done");
+    expect(within(item("Set the model and its key")).getByLabelText("done")).toBeInTheDocument();
+    expect(item("Connect a GitLab or GitHub instance")).toHaveClass("done");
+    expect(item("Add a skill to the library")).not.toHaveClass("done");
+    expect(within(item("Add a skill to the library")).getByLabelText("to do")).toBeInTheDocument();
+    expect(item("Switch on a repository")).not.toHaveClass("done");
+  });
+
+  it("has no checklist once all four are done, and none for others", async () => {
+    fakeApi({ "GET /api/me": { body: platformAdmin }, "GET /api/overview?days=7": { body: { ...overview, setup: null } } });
+    renderApp("/");
+    await screen.findByText("184");
+    expect(screen.queryByRole("region", { name: "Setup checklist" })).not.toBeInTheDocument();
+  });
+
   it("says when nothing needs attention", async () => {
     fakeApi({
       "GET /api/me": { body: platformAdmin },

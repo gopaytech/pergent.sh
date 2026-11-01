@@ -6,6 +6,7 @@ import { fakeApi } from "../test/fakeApi";
 import {
   instanceDashboardGitLab,
   instanceGitLab,
+  librarySkills,
   operator,
   platformAdmin,
   repoDetail,
@@ -99,6 +100,34 @@ describe("Repositories", () => {
     expect(post.headers.get("X-CSRF-Token")).toBe("csrf-123");
     expect(post.body).toEqual({ project: "acme/payments", instance: "main" });
     expect(await screen.findByTestId("location")).toHaveTextContent("/repos/main/acme/payments");
+  });
+
+  it("warns on Add repository when the default skill list is empty", async () => {
+    fakeApi({
+      "GET /api/me": { body: platformAdmin },
+      "GET /api/repositories": { body: [repoWidgets] },
+      "GET /api/repositories/available?search=": { body: { items: [], truncated: false } },
+      "GET /api/skills": { body: librarySkills.map((s) => ({ ...s, inDefaults: false })) },
+    });
+    renderApp("/repos?add=1");
+    const picker = await screen.findByRole("region", { name: "Add repository" });
+    const warning = await within(picker).findByRole("note");
+    expect(warning).toHaveTextContent("No default skills are set");
+    expect(warning).toHaveTextContent("gets no skills and is not reviewed");
+    expect(within(warning).getByRole("link", { name: "Set the default skills" })).toHaveAttribute("href", "/settings");
+  });
+
+  it("doesn't warn on Add repository when there are default skills", async () => {
+    fakeApi({
+      "GET /api/me": { body: platformAdmin },
+      "GET /api/repositories": { body: [repoWidgets] },
+      "GET /api/repositories/available?search=": { body: { items: [], truncated: false } },
+      "GET /api/skills": { body: librarySkills },
+    });
+    renderApp("/repos?add=1");
+    const picker = await screen.findByRole("region", { name: "Add repository" });
+    await within(picker).findByText("No repository to switch on.");
+    expect(within(picker).queryByRole("note")).not.toBeInTheDocument();
   });
 
   it("opens the picker from the overview's Add repository", async () => {

@@ -1286,3 +1286,39 @@ pre.diff .diff-del {
   background: var(--bad-soft);
   color: var(--bad);
 }
+
+/* --- setup checklist --- */
+
+.checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.checklist li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.checklist li:last-child {
+  border-bottom: 0;
+}
+
+.checklist .tick {
+  width: 16px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.checklist li.done .tick {
+  color: var(--ok);
+}
+
+.checklist li.done a {
+  color: var(--muted);
+  text-decoration: line-through;
+}

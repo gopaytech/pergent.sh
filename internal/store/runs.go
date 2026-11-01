@@ -107,7 +107,7 @@ const (
 )
 
 // A run's outcome, as the publisher records it (RunDecision.Outcome) and as
-// the dashboard shows it. Running, superseded and unknown (published before
+// the dashboard shows it. Running, superseded, skipped and unknown (published before
 // outcomes were recorded) are never recorded: they follow from the state.
 const (
 	OutcomeRunning    = "running"
@@ -117,6 +117,7 @@ const (
 	OutcomeNoBlocking = "no_blocking"
 	OutcomeFailed     = "failed"
 	OutcomeSuperseded = "superseded"
+	OutcomeSkipped    = "skipped"
 	OutcomeUnknown    = "unknown"
 )
 

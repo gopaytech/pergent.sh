@@ -46,11 +46,10 @@ func judge(r store.RunDigest) judged {
 			return judged{OutcomeRunning, reasonPosting, statusRunning}
 		}
 		return judged{OutcomeRunning, reasonReviewing, statusRunning}
+	case OutcomeSkipped:
+		// Nothing ran and nothing was posted: no status either.
+		return judged{OutcomeSkipped, reasonSkippedPrefix + r.SkipReason + ".", ""}
 	case OutcomeSuperseded:
-		if r.State == store.Skipped {
-			// Nothing ran and nothing was posted: no status either.
-			return judged{OutcomeSuperseded, reasonSkippedPrefix + r.SkipReason + ".", ""}
-		}
 		status := ""
 		if !r.DispatchedAt.IsZero() {
 			status = statusCanceled

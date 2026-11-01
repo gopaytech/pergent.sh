@@ -105,14 +105,15 @@ func visibleCond(v Visibility, n int) (string, []any) {
 // outcomeSQL is run r's outcome: the recorded decision's once it is
 // published, otherwise what its state says. A published run without a
 // recorded decision (published before decisions were recorded) is
-// "unknown": nothing is guessed. A skipped run (no skills) was not
-// reviewed, as a superseded draft was: it is neither running nor failed.
+// "unknown": nothing is guessed. A skipped run (no skills) has its own
+// outcome, "skipped": it was not reviewed, and it is neither running,
+// failed nor superseded.
 const outcomeSQL = `(CASE r.state
 	WHEN 'queued' THEN 'running'
 	WHEN 'running' THEN 'running'
 	WHEN 'reported' THEN CASE WHEN r.failure_reason <> '' THEN 'failed' ELSE 'running' END
 	WHEN 'superseded' THEN 'superseded'
-	WHEN 'skipped' THEN 'superseded'
+	WHEN 'skipped' THEN 'skipped'
 	WHEN 'publish_failed' THEN 'failed'
 	ELSE COALESCE(NULLIF(r.outcome, ''), 'unknown') END)`
 

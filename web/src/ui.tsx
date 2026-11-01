@@ -36,6 +36,7 @@ const outcomes: Record<Outcome, [Tone, string]> = {
   no_blocking: ["ok", "Not approved"],
   failed: ["warn", "Failed"],
   superseded: ["grey", "Superseded"],
+  skipped: ["grey", "Not reviewed"],
   unknown: ["grey", "Unknown"],
 };
 
@@ -52,6 +53,7 @@ export const outcomeOptions: [Outcome, string][] = [
   ["running", "Running"],
   ["failed", "Failed"],
   ["superseded", "Superseded"],
+  ["skipped", "Not reviewed"],
   ["unknown", "Unknown"],
 ];
 
@@ -105,6 +107,17 @@ export function SkillSourceText({ source }: { source: SkillSource | null }) {
       <span>{where}</span> <span className="src">{source.ref}</span>
     </>
   );
+}
+
+// skillOrigin says where a skill a review used came from: "library v3" (the
+// version the review used, none when it wasn't recorded), "repo (.claude/skills)"
+// for a repository folder, "repo" for a run from before the folders, and
+// "source not recorded" for null.
+export function skillOrigin(source: string | null, version: number): string {
+  if (source === null || source === "") return "source not recorded";
+  if (source === "library") return version > 0 ? `library v${version}` : "library";
+  if (source === "repo") return "repo";
+  return `repo (${source})`;
 }
 
 // duration is seconds as "3m 41s".

@@ -4,13 +4,16 @@ import { useState, type ReactNode } from "react";
 import {
   api,
   paths,
+  skillBudget,
+  type DetectedSkill,
+  type InputsView,
   type LibrarySkill,
   type RepoSettings,
   type RepositoryDetailView,
   type SettingsUpdate,
 } from "../api";
 import { useWrite } from "../layout/write";
-import { ErrorBox, Loading, Switch } from "../ui";
+import { ErrorBox, Loading, Switch, bytesText } from "../ui";
 
 // SettingsTab edits a repository's settings (maintainers and admins only;
 // the page hides the tab from others). A config-managed repository's are
@@ -21,11 +24,19 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
   const write = useWrite();
   const { repo } = view;
   const library = useQuery({ queryKey: ["skills"], queryFn: () => api.get<LibrarySkill[]>("/api/skills") });
+  // The skills found in the repository's folders, from the default branch:
+  // the same read the Skills & instructions tab shows.
+  const inputs = useQuery({
+    queryKey: ["inputs", repo.instance, repo.project],
+    queryFn: () => api.get<InputsView>(paths.apiRepoInputs(repo.instance, repo.project)),
+  });
   const [note, setNote] = useState("");
 
   const done = (detail: RepositoryDetailView, message: string) => {
     client.setQueryData(queryKey, detail);
     client.invalidateQueries({ queryKey: ["repositories"] });
+    // The server dropped its kept read of the repository's skills.
+    client.invalidateQueries({ queryKey: ["inputs", repo.instance, repo.project] });
     setNote(message);
   };
   const save = useMutation({
@@ -50,7 +61,14 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
         // A new answer from the server starts the form again from it.
         key={JSON.stringify(view.settings)}
         settings={view.settings}
-        library={library.data.map((s) => s.name)}
+        library={library.data}
+        detected={
+          inputs.isPending
+            ? { status: "loading" }
+            : inputs.isError
+              ? { status: "error", error: inputs.error }
+              : { status: "ok", items: inputs.data.detected }
+        }
         attention={view.attention.map((a) => a.message)}
         locked={locked}
         // Only an admin of the repository changes its re-run caps.
@@ -78,7 +96,10 @@ type Draft = {
   approve: boolean;
   reviewDrafts: boolean;
   failureStatus: string;
+  // mode "default" is a null skills setting: the default list.
+  skillsMode: "default" | "choose";
   skills: string[];
+  repoSkills: string[];
   jobTimeoutSeconds: string;
   jobMemory: string;
   rerunLimitPerMR: string;
@@ -102,9 +123,14 @@ function sameSet(a: string[], b: string[]) {
   return a.length === b.length && a.every((x) => b.includes(x));
 }
 
+// DetectedState is what the read of the repository's skill folders came to:
+// still loading, an error, or the skills found.
+type DetectedState = { status: "loading" } | { status: "error"; error: unknown } | { status: "ok"; items: DetectedSkill[] };
+
 function Form({
   settings,
-  library,
+  library: librarySkills,
+  detected,
   attention,
   locked,
   canSetCaps,
@@ -113,7 +139,8 @@ function Form({
   onReset,
 }: {
   settings: RepoSettings;
-  library: string[];
+  library: LibrarySkill[];
+  detected: DetectedState;
   attention: string[];
   locked: boolean;
   canSetCaps: boolean;
@@ -121,13 +148,19 @@ function Form({
   onSave: (body: SettingsUpdate) => void;
   onReset: () => void;
 }) {
-  // skills null means every library skill.
-  const skillsNow = settings.skills.value ?? library;
+  const library = librarySkills.map((s) => s.name);
+  const sizeOf = new Map(librarySkills.map((s) => [s.name, s.size]));
+  // The default list, in the library's order.
+  const defaultSkills = librarySkills.filter((s) => s.inDefaults).map((s) => s.name);
+  // skills null is the default list.
+  const skillsNow = settings.skills.value ?? defaultSkills;
   const initial: Draft = {
     approve: settings.approve.value,
     reviewDrafts: settings.reviewDrafts.value,
     failureStatus: settings.failureStatus.value,
+    skillsMode: settings.skills.value === null ? "default" : "choose",
     skills: skillsNow,
+    repoSkills: settings.repoSkills.value,
     jobTimeoutSeconds: String(settings.jobTimeoutSeconds.value),
     jobMemory: settings.jobMemory.value,
     rerunLimitPerMR: String(settings.rerunLimitPerMR.value),
@@ -141,19 +174,38 @@ function Form({
   const gone = skillsNow.filter((s) => !library.includes(s));
   const skillNames = [...library, ...gone];
   const disabled = locked || busy;
+  // What the review would take of library text, the default list or the choice.
+  const used = d.skillsMode === "default" ? defaultSkills : d.skills;
+  const total = used.reduce((sum, name) => sum + (sizeOf.get(name) ?? 0), 0);
+
+  // The detected skills that can be turned on, then the names turned on that
+  // the folders no longer hold; each name once, in the order the folders list.
+  const found = detected.status === "ok" ? detected.items : [];
+  const foundNames = [...new Set(found.map((x) => x.name))];
+  const missing = initial.repoSkills.filter((n) => !foundNames.includes(n));
+  const repoOrder = [...foundNames, ...missing];
 
   const submit = () => {
     const body: SettingsUpdate = {};
     if (d.approve !== initial.approve) body.approve = d.approve;
     if (d.reviewDrafts !== initial.reviewDrafts) body.reviewDrafts = d.reviewDrafts;
     if (d.failureStatus !== initial.failureStatus) body.failureStatus = d.failureStatus;
-    if (!sameSet(d.skills, initial.skills)) {
+    if (d.skillsMode === "default") {
+      // Back to the default list: null resets the setting.
+      if (initial.skillsMode === "choose") body.skills = null;
+    } else if (initial.skillsMode === "default" || !sameSet(d.skills, initial.skills)) {
+      // Choosing names the list, even when it holds what the default list does.
       const kept = library.filter((s) => d.skills.includes(s));
       if (kept.length === 0) {
         setProblem("Keep at least one library skill on.");
         return;
       }
       body.skills = kept;
+    }
+    // The detected skills are only sent when they were read: without the
+    // read the page doesn't know what the switches would say.
+    if (detected.status === "ok" && !sameSet(d.repoSkills, initial.repoSkills)) {
+      body.repoSkills = repoOrder.filter((n) => d.repoSkills.includes(n));
     }
     if (d.jobTimeoutSeconds.trim() !== initial.jobTimeoutSeconds) {
       const t = d.jobTimeoutSeconds.trim();
@@ -233,24 +285,106 @@ function Form({
         <h2>
           Skills used for this repository <Badge overridden={settings.skills.overridden} /> {managed}
         </h2>
-        {skillNames.map((s) => (
-          <div className="skill" key={s}>
-            <Switch
-              label={`Skill ${s}`}
-              checked={d.skills.includes(s)}
+        <div className="skill">
+          <label className="grow">
+            <input
+              type="radio"
+              name="skills-mode"
+              checked={d.skillsMode === "default"}
               disabled={disabled}
-              onChange={(on) => set("skills", on ? [...d.skills, s] : d.skills.filter((x) => x !== s))}
-            />
-            <b className="grow">{s}</b>
-            <span className="src">{library.includes(s) ? "library" : "not in the library"}</span>
+              onChange={() => set("skillsMode", "default")}
+            />{" "}
+            Use the default skills ({defaultSkills.length > 0 ? defaultSkills.join(", ") : "none"})
+          </label>
+        </div>
+        <div className="skill">
+          <label className="grow">
+            <input
+              type="radio"
+              name="skills-mode"
+              checked={d.skillsMode === "choose"}
+              disabled={disabled}
+              onChange={() => set("skillsMode", "choose")}
+            />{" "}
+            Choose skills
+          </label>
+        </div>
+        {d.skillsMode === "default" && defaultSkills.length === 0 && (
+          <div className="pad meta">
+            There are no default skills, so this repository gets no skills from the library. Without skills of its own it is
+            not reviewed.
           </div>
-        ))}
+        )}
+        {(d.skillsMode === "choose" || locked) &&
+          skillNames.map((s) => (
+            <div className="skill" key={s}>
+              <Switch
+                label={`Skill ${s}`}
+                checked={used.includes(s)}
+                disabled={disabled || d.skillsMode === "default"}
+                onChange={(on) => set("skills", on ? [...d.skills, s] : d.skills.filter((x) => x !== s))}
+              />
+              <b className="grow">{s}</b>
+              <span className="src">{library.includes(s) ? "library" : "not in the library"}</span>
+            </div>
+          ))}
+        <div className={total > skillBudget ? "pad problem" : "pad meta"}>
+          Total {bytesText(total)} of {bytesText(skillBudget)}
+          {total > skillBudget && ": a review takes at most that much library skill text."}
+        </div>
         {gone.length > 0 && (
           <div className="pad meta">
             {gone.join(", ")} {gone.length === 1 ? "is" : "are"} no longer in the library. Saving a change to the skills
             removes {gone.length === 1 ? "it" : "them"} from this repository.
           </div>
         )}
+      </section>
+
+      <section className="card" aria-label="Skills in the repository">
+        <h2>Skills in the repository {managed}</h2>
+        <div className="skill">
+          <span className="grow">
+            <b>.pergent/skills</b>
+          </span>
+          <span className="src">always on</span>
+        </div>
+        {detected.status === "loading" && <Loading />}
+        {detected.status === "error" && <ErrorBox error={detected.error} />}
+        {detected.status === "ok" &&
+          found.map((x) => (
+            <div className="skill" key={`${x.folder}/${x.name}`}>
+              <Switch
+                label={`Repository skill ${x.name}`}
+                checked={d.repoSkills.includes(x.name)}
+                disabled={disabled || (x.problem !== undefined && x.problem !== "" && !d.repoSkills.includes(x.name))}
+                onChange={(on) => set("repoSkills", on ? [...d.repoSkills, x.name] : d.repoSkills.filter((n) => n !== x.name))}
+              />
+              <b className="grow">{x.name}</b>
+              {x.problem && <span className="problem">{x.problem}</span>}
+              <span className="src">{x.folder}</span>
+            </div>
+          ))}
+        {detected.status === "ok" &&
+          missing.map((n) => (
+            <div className="skill" key={`missing/${n}`}>
+              <Switch
+                label={`Repository skill ${n}`}
+                checked={d.repoSkills.includes(n)}
+                disabled={disabled}
+                onChange={(on) => set("repoSkills", on ? [...d.repoSkills, n] : d.repoSkills.filter((x) => x !== n))}
+              />
+              <b className="grow">{n}</b>
+              <span className="problem">not found in the repository</span>
+            </div>
+          ))}
+        {detected.status === "ok" && found.length === 0 && missing.length === 0 && (
+          <div className="pad meta">No skills in .agents/skills, .claude/skills or .github/skills.</div>
+        )}
+        <div className="pad meta">
+          Skills in .agents/skills, .claude/skills and .github/skills run only when turned on here; .pergent/skills always runs.
+          A skill in a repository folder replaces a library skill of the same name. Only the SKILL.md text of a skill is used:
+          its other files are ignored.
+        </div>
       </section>
 
       <section className="card" aria-label="Review Job">

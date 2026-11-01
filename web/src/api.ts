@@ -14,6 +14,7 @@ export type Outcome =
   | "no_blocking"
   | "failed"
   | "superseded"
+  | "skipped"
   | "unknown";
 
 // Me is the signed-in account, from GET /api/me. An operator is a password
@@ -62,7 +63,16 @@ export type AttentionView = {
   updatedAt: string;
 };
 
-export type OverviewView = { stats: StatsView; recent: ReviewSummary[]; attention: AttentionView[] };
+// SetupView is the setup checklist of an admin: each item is true once done.
+// The overview's setup is null for everyone else and once all four are done.
+export type SetupView = { llm: boolean; instance: boolean; skill: boolean; repository: boolean };
+
+export type OverviewView = {
+  stats: StatsView;
+  recent: ReviewSummary[];
+  attention: AttentionView[];
+  setup: SetupView | null;
+};
 
 export type ReviewListView = { items: ReviewSummary[]; nextCursor: string };
 
@@ -133,7 +143,13 @@ export type CheckView = { batch: number; section: string; name: string; status: 
 export type SkillView = {
   name: string;
   verdict: "no_blocking_issues" | "has_blocking_issues" | "failed";
-  source: "library" | "repo" | null;
+  // source is "library", the repository folder the skill was read from
+  // (".claude/skills"), "repo" for a run from before the folders, or null
+  // when it wasn't recorded.
+  source: string | null;
+  // version is the library skill's version the review used; 0 for a
+  // repository skill and for a run that didn't record it.
+  version: number;
   // findings are those still standing; dismissed are those set aside.
   findings: FindingView[];
   dismissed: FindingView[];
@@ -180,7 +196,10 @@ export type RepoSettings = {
   approve: SettingView<boolean>;
   reviewDrafts: SettingView<boolean>;
   failureStatus: SettingView<string>;
+  // skills is null for the default list, otherwise the library skills.
   skills: SettingView<string[] | null>;
+  // repoSkills are the detected repository skills turned on.
+  repoSkills: SettingView<string[]>;
   jobTimeoutSeconds: SettingView<number>;
   jobMemory: SettingView<string>;
   rerunLimitPerMR: SettingView<number>;
@@ -202,17 +221,41 @@ export type SettingsUpdate = Partial<{
   reviewDrafts: boolean | null;
   failureStatus: string | null;
   skills: string[] | null;
+  repoSkills: string[] | null;
   jobTimeoutSeconds: number | null;
   jobMemory: string | null;
   rerunLimitPerMR: number | null;
   rerunLimitPerRepo: number | null;
 }>;
 
+// InputSkill is one skill of the set a review would run. source is
+// "library" or the repository folder; with a problem the review would fail on
+// the skill and source and content are empty. url is a repository skill's file
+// on the platform ("" for a library skill).
+export type InputSkill = {
+  name: string;
+  source: string;
+  folder: string;
+  version: number;
+  content: string;
+  url: string;
+  problem?: string;
+};
+
+// DetectedSkill is a skill found in a repository folder that runs only when
+// turned on. name is the file or folder name when there is a problem.
+export type DetectedSkill = { name: string; folder: string; problem?: string; on: boolean };
+
 export type InputsView = {
   branch: string;
-  skills: { name: string; source: "library" | "repo"; content: string }[];
+  skills: InputSkill[];
+  detected: DetectedSkill[];
   instructions: string;
 };
+
+// skillBudget is what a review takes of library skill text, in bytes
+// (inputs.ConfigMapLimit): saving a list over it is refused.
+export const skillBudget = 900 * 1024;
 
 // SkillSource is where an installed skill came from (SkillSourceView).
 // hidden: the repository is private to the viewer, so repo is not sent and
@@ -329,6 +372,9 @@ export type DefaultsView = {
   // repository, in a UTC day: 1 to 1000.
   rerunLimitPerMR: number;
   rerunLimitPerRepo: number;
+  // skills is the default list: the library skills a repository reviews when
+  // its own skills setting is null. Empty means none.
+  skills: string[];
 };
 
 // LLMAdminView is GET /api/admin/llm: where the model comes from, the model

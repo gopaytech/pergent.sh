@@ -59,7 +59,7 @@ var errNotSynced = errors.New("the repository isn't stored yet (reconcile hasn't
 
 var outcomes = map[string]bool{
 	OutcomeRunning: true, OutcomeApproved: true, OutcomeBlocking: true, OutcomeDraft: true,
-	OutcomeNoBlocking: true, OutcomeFailed: true, OutcomeSuperseded: true, OutcomeUnknown: true,
+	OutcomeNoBlocking: true, OutcomeFailed: true, OutcomeSuperseded: true, OutcomeSkipped: true, OutcomeUnknown: true,
 }
 
 // readRoutes adds the read API to mux, every route behind Auth.Require.

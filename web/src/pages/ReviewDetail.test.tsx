@@ -21,6 +21,23 @@ function routes(run: RunDetailView = runDetail) {
 }
 
 describe("ReviewDetail", () => {
+  it("writes where each skill came from: library with its version, or the repository folder", async () => {
+    const run = structuredClone(runDetail);
+    run.skills = [
+      run.skills[0],
+      { ...run.skills[1], name: "agent-rules", source: ".claude/skills", version: 0 },
+      { ...run.skills[1], name: "older", source: "repo", version: 0 },
+      { ...run.skills[1], name: "unversioned", source: "library", version: 0 },
+    ];
+    renderAndWait(run);
+    const skills = await screen.findByRole("region", { name: "Skills" });
+    const row = (name: string) => within(skills).getByText(name).closest(".verdict") as HTMLElement;
+    expect(row("security-review")).toHaveTextContent("library v3");
+    expect(row("agent-rules")).toHaveTextContent("repo (.claude/skills)");
+    expect(row("older")).toHaveTextContent(/· repo$/);
+    expect(row("unversioned")).toHaveTextContent(/· library$/);
+  });
+
   it("shows the change, its history and the newest run", async () => {
     renderAndWait();
     expect(await screen.findByRole("heading", { name: /Refund idempotency key/ })).toBeInTheDocument();
@@ -46,7 +63,7 @@ describe("ReviewDetail", () => {
 
     const skills = screen.getByRole("region", { name: "Skills" });
     expect(within(skills).getByText("security-review").closest(".verdict")).toHaveTextContent("1 blocking");
-    expect(within(skills).getByText("security-review").closest(".verdict")).toHaveTextContent("library skill");
+    expect(within(skills).getByText("security-review").closest(".verdict")).toHaveTextContent("library v3");
     expect(within(skills).getByText("code-review").closest(".verdict")).toHaveTextContent("No blocking");
     expect(within(skills).getByText("code-review").closest(".verdict")).toHaveTextContent("source not recorded");
   });
