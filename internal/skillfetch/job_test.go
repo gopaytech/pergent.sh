@@ -221,7 +221,7 @@ func TestCompleteJobError(t *testing.T) {
 	f := jobFetcher(st, l, held)
 
 	id, token := startJob(t, f, l)
-	msg := "could not fetch " + urlSource + " at main; the URL may be outside jobEgress.cidrs"
+	msg := "could not fetch " + urlSource + " at main; the URL, branch or tag may be wrong, or outside jobEgress.cidrs"
 	body, _ := json.Marshal(JobResult{Error: msg + "\n"})
 	if out, err := f.CompleteJob(ctx, id, token, body); err != nil || out != JobStored {
 		t.Fatalf("CompleteJob = %v, %v", out, err)

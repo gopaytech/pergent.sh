@@ -565,7 +565,7 @@ type FetchJobParams struct {
 func FetchJobName(fetchID string) string // "pergent-fetch-" + the first 12 hex characters
 func BuildFetchJob(p FetchJobParams) *batchv1.Job
 //   init "clone": GitImage (jobs.image), sh -ec fetch.sh: a depth-1 fetch of FETCH_REF with no credentials and hooks off;
-//     writes /work/commit, or /work/error "could not fetch <url> at <ref>; the URL may be outside jobEgress.cidrs" and exits 0
+//     writes /work/commit, or /work/error "could not fetch <url> at <ref>; the URL, branch or tag may be wrong, or outside jobEgress.cidrs" and exits 0
 //   main "send": Image (PERGENT_SH_IMAGE), pergent-sh fetch-skills; PERGENT_SH_FETCH_TOKEN from the Job's Secret
 //   no service account token, lockedDown(), activeDeadlineSeconds = Timeout, the managed-by label
 func BuildFetchSecret(p FetchJobParams, owner *batchv1.Job, token string) *corev1.Secret

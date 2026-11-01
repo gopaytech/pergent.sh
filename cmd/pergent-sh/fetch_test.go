@@ -146,7 +146,7 @@ func TestFetchSkillsPostsFiles(t *testing.T) {
 // When the clone failed, its error is posted instead of files.
 func TestFetchSkillsPostsError(t *testing.T) {
 	dir := t.TempDir()
-	msg := "could not fetch https://example.com/skills.git at main; the URL may be outside jobEgress.cidrs"
+	msg := "could not fetch https://example.com/skills.git at main; the URL, branch or tag may be wrong, or outside jobEgress.cidrs"
 	writeFile(t, filepath.Join(dir, "error"), msg+"\n")
 	rc := &receiver{}
 	srv := rc.server(t)

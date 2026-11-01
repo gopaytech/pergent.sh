@@ -170,7 +170,7 @@ func TestFetchScriptHasNoCredentials(t *testing.T) {
 		`"$FETCH_REF"`,
 		"/work/commit",
 		"/work/error",
-		"could not fetch %s at %s; the URL may be outside jobEgress.cidrs",
+		"could not fetch %s at %s; the URL, branch or tag may be wrong, or outside jobEgress.cidrs",
 	} {
 		if !strings.Contains(fetchScript, want) {
 			t.Errorf("fetch.sh lacks %q", want)

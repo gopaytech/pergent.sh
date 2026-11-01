@@ -17,7 +17,7 @@ git config core.symlinks true
 git remote add origin "$FETCH_URL"
 git remote set-url --push origin pergent-push-disabled:
 if ! git fetch -q --no-tags --depth=1 origin "$FETCH_REF"; then
-  fail "$(printf 'could not fetch %s at %s; the URL may be outside jobEgress.cidrs' "$FETCH_URL" "$FETCH_REF")"
+  fail "$(printf 'could not fetch %s at %s; the URL, branch or tag may be wrong, or outside jobEgress.cidrs' "$FETCH_URL" "$FETCH_REF")"
 fi
 if ! git checkout -q --detach FETCH_HEAD; then
   fail "$(printf 'could not check out %s at %s' "$FETCH_URL" "$FETCH_REF")"
