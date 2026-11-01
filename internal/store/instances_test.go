@@ -3,6 +3,9 @@ package store
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 )
@@ -397,5 +400,84 @@ func TestUpdateInstanceRefusesARemovingInstance(t *testing.T) {
 	}
 	if ok, err := s.UpdateInstance(ctx, "nope", &id, nil, t0); ok || err != nil {
 		t.Fatalf("UpdateInstance(nope) = %v, %v; want not found", ok, err)
+	}
+}
+
+// AddDefaultSkills appends to the list and touches no other default; two at
+// once lose nothing; a name outside the library changes nothing.
+func TestAddDefaultSkills(t *testing.T) {
+	s := newStore(t)
+	for _, n := range []string{"a", "b", "c"} {
+		if _, err := s.CreateLibrarySkill(ctx, NewSkill{Name: n, Content: n + " text.", At: t0}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list := func() []string {
+		t.Helper()
+		d, err := s.RepoDefaults(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d.Skills
+	}
+
+	// No defaults row yet: it is created with the names and nothing else.
+	if err := s.AddDefaultSkills(ctx, []string{"a"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := list(); !slices.Equal(got, []string{"a"}) {
+		t.Fatalf("skills = %v; want [a]", got)
+	}
+	if d, _ := s.RepoDefaults(ctx); d.Approve != nil || d.JobMemory != nil || d.UpdatedAt.IsZero() {
+		t.Errorf("defaults = %+v; want only skills set", d)
+	}
+
+	// The other defaults stay; a name already on the list is not repeated.
+	no, memory, perMR := false, "2Gi", 3
+	if err := s.PutRepoDefaults(ctx, RepoDefaults{Approve: &no, JobMemory: &memory, RerunLimitPerMR: &perMR, Skills: []string{"a"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddDefaultSkills(ctx, []string{"b", "a"}); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := s.RepoDefaults(ctx)
+	if !slices.Equal(d.Skills, []string{"a", "b"}) || d.Approve == nil || *d.Approve || d.JobMemory == nil || *d.JobMemory != "2Gi" ||
+		d.RerunLimitPerMR == nil || *d.RerunLimitPerMR != 3 {
+		t.Errorf("defaults = %+v; want skills a, b and the other fields kept", d)
+	}
+
+	// A name outside the library: nothing is added, the error names it.
+	err := s.AddDefaultSkills(ctx, []string{"c", "zz"})
+	var missing *MissingSkillError
+	if !errors.Is(err, ErrSkillNotFound) || !errors.As(err, &missing) || missing.Name != "zz" {
+		t.Errorf("AddDefaultSkills of a missing skill = %v; want ErrSkillNotFound naming zz", err)
+	}
+	if got := list(); !slices.Equal(got, []string{"a", "b"}) {
+		t.Errorf("skills = %v after a refused add; want a, b", got)
+	}
+
+	// Concurrent adds each land.
+	const n = 12
+	names := make([]string, n)
+	for i := range names {
+		names[i] = fmt.Sprintf("p%02d", i)
+		if _, err := s.CreateLibrarySkill(ctx, NewSkill{Name: names[i], Content: "P.", At: t0}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wg sync.WaitGroup
+	for _, name := range names {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := s.AddDefaultSkills(ctx, []string{name}); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	got := list()
+	if len(got) != 2+n || !slices.Equal(got[:2], []string{"a", "b"}) {
+		t.Errorf("skills = %v; want a, b and all %d concurrent adds", got, n)
 	}
 }

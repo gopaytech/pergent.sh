@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -271,6 +272,40 @@ func (s *Store) RepoDefaults(ctx context.Context) (RepoDefaults, error) {
 		d.Skills = nil
 	}
 	return d, err
+}
+
+// AddDefaultSkills appends the library skills named to the default skill
+// list, those not on it yet, in one locked UPDATE: no other default is
+// read or written, so a change to approve, the caps or the rest made at the
+// same time stays. Each named skill is locked until the change is stored; one
+// that is not in the library is ErrSkillNotFound and nothing changes.
+func (s *Store) AddDefaultSkills(ctx context.Context, names []string) error {
+	var add []string // names once each, in the order given
+	for _, n := range names {
+		if !slices.Contains(add, n) {
+			add = append(add, n)
+		}
+	}
+	if len(add) == 0 {
+		return nil
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	if err := lockNamedSkills(ctx, tx, add); err != nil {
+		return err
+	}
+	// The conflict branch locks the row, so two adds run one after the other
+	// and each sees the other's names. The names keep their order.
+	if _, err := tx.Exec(ctx, `INSERT INTO repo_defaults (id, skills, updated_at) VALUES (1, $1, now())
+		ON CONFLICT (id) DO UPDATE SET updated_at = now(),
+			skills = COALESCE(repo_defaults.skills, '{}') || ARRAY(
+				SELECT n FROM unnest($1::text[]) AS t(n) WHERE n <> ALL (COALESCE(repo_defaults.skills, '{}')))`, add); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // PutRepoDefaults replaces the defaults with d, nil fields included. Its

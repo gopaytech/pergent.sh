@@ -313,8 +313,7 @@ func (d *Dashboard) createSkill(w http.ResponseWriter, r *http.Request) {
 	d.Log.Info("dashboard: skill created", "skill", in.Name, "version", version, "by", se.Username)
 	d.auditSkill(r, "skill_created", in.Name, "v"+strconv.Itoa(version))
 	if in.AddToDefaults {
-		defaults.Skills = append(slices.Clone(defaults.Skills), in.Name)
-		if err := d.Store.PutRepoDefaults(ctx, defaults); err != nil {
+		if err := d.Store.AddDefaultSkills(ctx, []string{in.Name}); err != nil {
 			// The skill is in the library already; it can be added from Settings.
 			d.Log.Error("dashboard: adding a new skill to the default skills failed", "skill", in.Name, "error", err.Error())
 			writeError(w, http.StatusInternalServerError, msgWriteFailed)

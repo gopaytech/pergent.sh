@@ -474,8 +474,7 @@ func (d *Dashboard) installSkills(w http.ResponseWriter, r *http.Request) {
 		d.inputs.invalidate()
 	}
 	if len(added) > 0 {
-		defaults.Skills = append(slices.Clone(defaults.Skills), added...)
-		if err := d.Store.PutRepoDefaults(ctx, defaults); err != nil {
+		if err := d.Store.AddDefaultSkills(ctx, added); err != nil {
 			// The skills are in the library already; they can be added from
 			// Settings.
 			d.Log.Error("dashboard: adding installed skills to the default skills failed", "skills", added, "error", err.Error())

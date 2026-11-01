@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"path"
 	"slices"
 	"sort"
@@ -590,4 +591,87 @@ func TestSourceSightFailsClosedWhenPlatformHangs(t *testing.T) {
 			t.Errorf("%s's source = %+v; want hidden", s.Name, s.Source)
 		}
 	}
+}
+
+// holdLibrary locks the skill library against writes, calls start (which
+// begins a write in another goroutine), waits for that write to be stuck
+// behind the lock, runs change meanwhile and then lets the write go on.
+func (e *env) holdLibrary(start, change func()) {
+	e.t.Helper()
+	tx, err := e.db.Begin(ctx)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // released at the end of the test's hold
+	if _, err := tx.Exec(ctx, `LOCK TABLE library_skills IN ACCESS EXCLUSIVE MODE`); err != nil {
+		e.t.Fatal(err)
+	}
+	start()
+	// The write is stuck once Postgres shows a statement waiting on a lock.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var waiting int
+		if err := e.db.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock' AND query LIKE '%library_skills%'`).Scan(&waiting); err != nil {
+			e.t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			e.t.Fatal("the library write never waited for the lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	change()
+	if err := tx.Rollback(ctx); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// Adding a new or installed skill to the default list changes that list and
+// nothing else: a change to the other defaults made while the skill is being
+// saved (approve here) stays.
+func TestAddToDefaultsKeepsOtherDefaultChanges(t *testing.T) {
+	check := func(t *testing.T, e *env, send func() *httptest.ResponseRecorder) {
+		t.Helper()
+		done := make(chan *httptest.ResponseRecorder, 1)
+		e.holdLibrary(func() { go func() { done <- send() }() }, func() {
+			yes := true
+			if err := e.st.PutRepoDefaults(ctx, store.RepoDefaults{Approve: &yes}); err != nil {
+				t.Error(err)
+			}
+		})
+		if rec := <-done; rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
+			t.Fatalf("save = %d %s", rec.Code, rec.Body)
+		}
+		d, err := e.st.RepoDefaults(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.Approve == nil || !*d.Approve {
+			t.Errorf("approve = %v after the save; want the change made meanwhile kept", d.Approve)
+		}
+		if !slices.Equal(d.Skills, []string{"raced"}) {
+			t.Errorf("default skills = %v; want [raced]", d.Skills)
+		}
+	}
+
+	t.Run("create", func(t *testing.T) {
+		e := newEnv(t, nil)
+		admin := e.signInGitLab(true, "acme/widgets")
+		check(t, e, func() *httptest.ResponseRecorder {
+			return e.sendJSON(admin, "POST", "/api/admin/skills", map[string]any{"name": "raced", "content": "Raced.", "addToDefaults": true})
+		})
+	})
+	t.Run("install", func(t *testing.T) {
+		e := newEnv(t, nil)
+		e.skillRepo("main", "acme/skills", "v1.0", commitV1, map[string]string{"raced.md": "Raced."})
+		op := e.operator()
+		id, _ := e.fetchDone(op, map[string]any{"instance": "main", "repo": "acme/skills", "ref": "v1.0"})
+		check(t, e, func() *httptest.ResponseRecorder {
+			return e.sendJSON(op, "POST", "/api/admin/skill-fetches/"+id+"/install",
+				map[string]any{"names": []string{"raced"}, "addToDefaults": true})
+		})
+	})
 }
