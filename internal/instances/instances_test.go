@@ -579,3 +579,43 @@ func TestHeldSecretsFailClosed(t *testing.T) {
 		}
 	})
 }
+
+// The secret key that seals the stored secrets and the password in the
+// database URL are held too: a skill that holds either is refused. A URL
+// without a password, or none at all, adds nothing.
+func TestHeldSecretsHoldsSecretKeyAndDatabasePassword(t *testing.T) {
+	st := newStore(t)
+	box := newBox(t, 1)
+	reg := New(testConfig(), st, box)
+	if err := reg.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PERGENT_SH_SECRET_KEY", "test-seal-key-value")
+	t.Setenv("DATABASE_URL", "postgres://dbuser:p%40ss-test@localhost:5432/pergent?sslmode=disable")
+	got, err := reg.HeldSecrets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"test-seal-key-value", "p@ss-test", "p%40ss-test"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("HeldSecrets lacks %q; got %v", want, got)
+		}
+	}
+	for _, v := range got {
+		if v == "dbuser" || strings.Contains(v, "localhost") {
+			t.Errorf("HeldSecrets holds %q; want the password only", v)
+		}
+	}
+
+	for name, url := range map[string]string{"no password": "postgres://dbuser@localhost:5432/pergent", "unset": "", "not a URL": "://%zz"} {
+		t.Setenv("DATABASE_URL", url)
+		got, err := reg.HeldSecrets(ctx)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if slices.Contains(got, "") || slices.Contains(got, "dbuser") || !slices.Contains(got, "test-seal-key-value") {
+			t.Errorf("%s: HeldSecrets = %v", name, got)
+		}
+	}
+}
