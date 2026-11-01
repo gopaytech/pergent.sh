@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -883,6 +884,18 @@ func TestLLMConfigWins(t *testing.T) {
 	}
 }
 
+// sameDefaults compares two defaults views, an empty skill list being the
+// same as none.
+func sameDefaults(a, b DefaultsView) bool {
+	if len(a.Skills) == 0 {
+		a.Skills = nil
+	}
+	if len(b.Skills) == 0 {
+		b.Skills = nil
+	}
+	return reflect.DeepEqual(a, b)
+}
+
 // The defaults are shown and changed by admins, with the bounds and the
 // messages of a repository's settings; they apply to the repositories
 // switched on in the dashboard, not to the config's.
@@ -890,7 +903,7 @@ func TestDefaults(t *testing.T) {
 	e := newEnv(t, nil)
 	admin := e.signInGitLab(true, "acme/widgets")
 	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")
-	if want := (DefaultsView{Approve: true, ReviewDrafts: true, FailureStatus: "failed", JobTimeoutSeconds: 600, RerunLimitPerMR: 10, RerunLimitPerRepo: 50}); v != want {
+	if want := (DefaultsView{Approve: true, ReviewDrafts: true, FailureStatus: "failed", JobTimeoutSeconds: 600, RerunLimitPerMR: 10, RerunLimitPerRepo: 50}); !sameDefaults(v, want) {
 		t.Errorf("defaults = %+v, want %+v", v, want)
 	}
 
@@ -899,10 +912,10 @@ func TestDefaults(t *testing.T) {
 		"rerunLimitPerMR": 20, "rerunLimitPerRepo": 200})
 	v = decode[DefaultsView](t, rec, "PUT /api/admin/defaults", http.StatusOK)
 	if want := (DefaultsView{Approve: false, ReviewDrafts: true, FailureStatus: "neutral", JobTimeoutSeconds: 900, JobMemory: "2Gi",
-		RerunLimitPerMR: 20, RerunLimitPerRepo: 200}); v != want {
+		RerunLimitPerMR: 20, RerunLimitPerRepo: 200}); !sameDefaults(v, want) {
 		t.Errorf("defaults after PUT = %+v, want %+v", v, want)
 	}
-	if got := getJSON[DefaultsView](e, admin, "/api/admin/defaults"); got != v {
+	if got := getJSON[DefaultsView](e, admin, "/api/admin/defaults"); !sameDefaults(got, v) {
 		t.Errorf("GET after PUT = %+v", got)
 	}
 
@@ -921,7 +934,7 @@ func TestDefaults(t *testing.T) {
 	// The body replaces them all: what it leaves out is the built-in default.
 	v = decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"reviewDrafts": false, "jobMemory": nil}),
 		"PUT", http.StatusOK)
-	if want := (DefaultsView{Approve: true, ReviewDrafts: false, FailureStatus: "failed", JobTimeoutSeconds: 600, RerunLimitPerMR: 10, RerunLimitPerRepo: 50}); v != want {
+	if want := (DefaultsView{Approve: true, ReviewDrafts: false, FailureStatus: "failed", JobTimeoutSeconds: 600, RerunLimitPerMR: 10, RerunLimitPerRepo: 50}); !sameDefaults(v, want) {
 		t.Errorf("defaults after a replacing PUT = %+v, want %+v", v, want)
 	}
 
@@ -939,14 +952,13 @@ func TestDefaults(t *testing.T) {
 		{"cap not a number", `{"rerunLimitPerRepo": "50"}`, "rerunLimitPerRepo must be a whole number from 1 to 1000, or null"},
 		{"bad status", `{"failureStatus": "sideways"}`, `failureStatus must be "failed", "neutral" or null`},
 		{"bad bool", `{"approve": "yes"}`, "approve must be true, false or null"},
-		{"skills are not a default", `{"skills": ["code-review"]}`, "the body must be a JSON object of defaults"},
 		{"not an object", `[1]`, "the body must be a JSON object of defaults"},
 	} {
 		if rec := e.send(admin, "PUT", "/api/admin/defaults", tc.body); rec.Code != http.StatusBadRequest || errorOf(t, rec) != tc.want && !strings.Contains(errorOf(t, rec), tc.want) {
 			t.Errorf("%s: PUT = %d %s; want 400 %q", tc.name, rec.Code, rec.Body, tc.want)
 		}
 	}
-	if got := getJSON[DefaultsView](e, admin, "/api/admin/defaults"); got != v {
+	if got := getJSON[DefaultsView](e, admin, "/api/admin/defaults"); !sameDefaults(got, v) {
 		t.Errorf("a refused PUT changed the defaults: %+v", got)
 	}
 

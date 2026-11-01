@@ -1,7 +1,6 @@
 package dashboard
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -795,11 +794,7 @@ func TestWritesAudited(t *testing.T) {
 	id := e.accountOf(c)
 	base := "/api/repositories/main/acme/gadgets"
 
-	// The store takes only library skills; the dashboard still checks the
-	// static library, which holds "style" too.
-	if _, err := e.st.CreateLibrarySkill(context.Background(), store.NewSkill{Name: "style", Content: "x"}); err != nil {
-		t.Fatal(err)
-	}
+	e.skill("style", "x")
 
 	wantCode(t, e.send(c, "POST", "/api/repositories", `{"project":"acme/gadgets"}`), "POST", http.StatusCreated)
 	wantCode(t, e.send(c, "PUT", base+"/settings", `{"skills":["style"],"approve":false}`), "PUT settings", http.StatusOK)

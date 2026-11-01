@@ -27,7 +27,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
-	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -531,7 +530,6 @@ type env struct {
 	st  *store.Store
 	db  *pgxpool.Pool // the store's schema, for raw SQL
 	cfg *config.Config
-	lib inputs.Library
 	src map[string]*fakeSource  // by instance
 	cat map[string]*fakeCatalog // by instance
 	// reconciles counts the dashboard's ReconcileSoon calls; reconciled
@@ -588,12 +586,8 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 	}
 	e := &env{t: t, st: st, db: db, cfg: cfg, gl: gl, gh: gh, logs: &lockedBuffer{}, key: testKey(t),
 		clock: &clock{t: time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)},
-		lib: inputs.Library{
-			"code-review": []byte("---\nname: code-review\n---\nReview the code.\n"),
-			"style":       []byte("---\nname: style\n---\nCheck the style.\n"),
-		},
-		src: map[string]*fakeSource{"main": newFakeSource(), "gh": newFakeSource()},
-		cat: map[string]*fakeCatalog{"main": {}, "gh": {}},
+		src:   map[string]*fakeSource{"main": newFakeSource(), "gh": newFakeSource()},
+		cat:   map[string]*fakeCatalog{"main": {}, "gh": {}},
 	}
 	sources := syncmap.New[RepoSource](nil)
 	for name, s := range e.src {
@@ -610,7 +604,7 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 	e.reg, e.sources, e.catalogs = instances.New(cfg, st, box), sources, catalogs
 	e.conn = newFakeConnector(sources, catalogs)
 	d, err := New(Options{
-		Config: cfg, Store: st, SecretKey: e.key, Now: e.clock.now, Library: e.lib, Sources: sources,
+		Config: cfg, Store: st, SecretKey: e.key, Now: e.clock.now, Sources: sources,
 		Instances: e.reg, Connector: e.conn,
 		Catalogs: catalogs, Wake: func() { e.wakes.Add(1) }, ReconcileSoon: func(instance, project string) {
 			e.reconciles.Add(1)
@@ -642,6 +636,14 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 	})))
 	e.h = mux
 	return e
+}
+
+// skill adds a skill written in the dashboard to the library, as version 1.
+func (e *env) skill(name, content string) {
+	e.t.Helper()
+	if _, err := e.st.CreateLibrarySkill(ctx, store.NewSkill{Name: name, Content: content, Actor: "seed", At: e.clock.now()}); err != nil {
+		e.t.Fatal(err)
+	}
 }
 
 // signInProviders sets up sign-in for the OAuth clients the config's

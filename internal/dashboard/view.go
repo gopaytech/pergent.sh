@@ -224,9 +224,11 @@ type SkillView struct {
 	Name string `json:"name"`
 	// Verdict is "no_blocking_issues", "has_blocking_issues" or "failed".
 	Verdict string `json:"verdict"`
-	// Source is "library" for a skill of pergent.sh's library, "repo"
-	// for the repository's own (also one replacing a library skill), as
-	// recorded when the review started; null when it wasn't recorded.
+	// Source is "library" for a skill of pergent.sh's library, or the
+	// repository folder it was read from (".pergent/skills", ".agents/skills",
+	// ".claude/skills" or ".github/skills"; also one replacing a library
+	// skill), as recorded when the review started; null when it wasn't
+	// recorded.
 	Source *string `json:"source"`
 	// Findings are those still standing; Dismissed are those set aside by
 	// a dismissal, each with who dismissed it. Verdict counts the blocking
@@ -301,9 +303,11 @@ type Last7View struct {
 }
 
 // RepositoryDetailView is GET /api/repositories/{instance}/{project...}.
-// Settings is keyed approve, reviewDrafts, failureStatus, skills (null:
-// every library skill), jobTimeoutSeconds, jobMemory ("" when none),
-// rerunLimitPerMR and rerunLimitPerRepo.
+// Settings is keyed approve, reviewDrafts, failureStatus, skills (null: the
+// default list of skills; otherwise the library skills reviewed), repoSkills
+// (the detected repository skills turned on, a list, empty when none),
+// jobTimeoutSeconds, jobMemory ("" when none), rerunLimitPerMR and
+// rerunLimitPerRepo.
 type RepositoryDetailView struct {
 	Repo      RepositoryView         `json:"repo"`
 	Settings  map[string]SettingView `json:"settings"`
@@ -322,27 +326,96 @@ type SettingView struct {
 
 // InputsView is GET /api/repositories/{instance}/{project...}/inputs: the
 // skills and instructions a review would get, read from the default branch
-// with the review bot or App and kept 5 minutes. 503 while pergent.sh
-// hasn't set the repository up yet, 502 when they can't be read.
+// with the review bot or App and kept 5 minutes (a change of a skill setting
+// or of the default list clears it). 503 while pergent.sh hasn't set the
+// repository up yet, 502 when they can't be read.
 type InputsView struct {
-	Branch       string       `json:"branch"`
-	Skills       []InputSkill `json:"skills"`
-	Instructions string       `json:"instructions"`
+	Branch string `json:"branch"`
+	// Skills are the skills a review would run, by name, and each skill a
+	// review would fail on, with its Problem: a library skill the repository
+	// names that is gone, or a repository skill turned on that is in no
+	// repository folder.
+	Skills []InputSkill `json:"skills"`
+	// Detected are the skills of the repository folders that run only when
+	// turned on (".agents/skills", ".claude/skills", ".github/skills"), in
+	// the order of precedence, each with whether it is on.
+	Detected     []DetectedSkillView `json:"detected"`
+	Instructions string              `json:"instructions"`
 }
 
-// InputSkill is one resolved skill.
+// InputSkill is one skill of the final set.
 type InputSkill struct {
 	Name string `json:"name"`
-	// Source is "library" or "repo" (the repository's own, including one
-	// replacing a library skill).
-	Source  string `json:"source"`
+	// Source is "library" or the repository folder the skill was read from
+	// (also when it replaces a library skill); "" with a Problem.
+	Source string `json:"source"`
+	// Folder is the repository folder, "" for a library skill.
+	Folder string `json:"folder"`
+	// Version is the library skill's version, 0 for a repository skill.
+	Version int    `json:"version"`
 	Content string `json:"content"`
+	// Problem says why a review would fail on this skill; Content is empty.
+	Problem string `json:"problem,omitempty"`
 }
 
-// LibrarySkill is one skill of the library. GET /api/skills is a list of
-// them, by name.
-type LibrarySkill struct {
+// DetectedSkillView is a skill found in a repository folder that runs only
+// when turned on. Name is the file or folder name when Problem is set.
+type DetectedSkillView struct {
 	Name    string `json:"name"`
+	Folder  string `json:"folder"`
+	Problem string `json:"problem,omitempty"`
+	// On is whether the repository turned it on (repoSkills).
+	On bool `json:"on"`
+}
+
+// SkillSourceView is where an installed skill came from. Kind is "instance"
+// (read through the API of a connected instance) or "url" (a public git
+// URL). Repo is shown to operators only for now: others get Hidden, and the
+// page says it is a private repository on the instance. URL is public.
+type SkillSourceView struct {
+	Kind     string `json:"kind"`
+	Instance string `json:"instance,omitempty"`
+	Repo     string `json:"repo,omitempty"`
+	URL      string `json:"url,omitempty"`
+	Ref      string `json:"ref"`
+	Commit   string `json:"commit"`
+	Hidden   bool   `json:"hidden,omitempty"`
+}
+
+// LibrarySkillView is one skill of the library, without its text. GET
+// /api/skills is a list of them, by name. UpdatedBy is shown to admins only.
+type LibrarySkillView struct {
+	Name       string           `json:"name"`
+	UpdatedBy  string           `json:"updatedBy,omitempty"`
+	Version    int              `json:"version"`
+	Size       int              `json:"size"`
+	UpdatedAt  time.Time        `json:"updatedAt"`
+	InDefaults bool             `json:"inDefaults"`
+	Source     *SkillSourceView `json:"source"`
+}
+
+// SkillVersionView is one saved version of a skill; Actor is shown to admins
+// only.
+type SkillVersionView struct {
+	Version int       `json:"version"`
+	At      time.Time `json:"at"`
+	Actor   string    `json:"actor,omitempty"`
+	Commit  string    `json:"commit"`
+}
+
+// SkillDetailView is GET /api/skills/{name}: the skill with its text (shown
+// as plain text only) and its versions, newest first. 404 for a name not in
+// the library.
+type SkillDetailView struct {
+	LibrarySkillView
+	Content  string             `json:"content"`
+	Versions []SkillVersionView `json:"versions"`
+}
+
+// SkillVersionDetailView is GET /api/skills/{name}/versions/{v}: one version
+// with its text. The history outlives a deleted skill.
+type SkillVersionDetailView struct {
+	SkillVersionView
 	Content string `json:"content"`
 }
 
@@ -405,6 +478,9 @@ type DefaultsView struct {
 	// request and per repository and UTC day.
 	RerunLimitPerMR   int `json:"rerunLimitPerMR"`
 	RerunLimitPerRepo int `json:"rerunLimitPerRepo"`
+	// Skills is the default list: the library skills a repository reviews
+	// when its own skills setting is null. Empty means none.
+	Skills []string `json:"skills"`
 }
 
 // LLMView is the model reviews use.
@@ -450,7 +526,11 @@ type LLMView struct {
 //     settings in the body and leaves the others; a null resets one to its
 //     default. The keys are those of RepositoryDetailView.Settings:
 //     approve and reviewDrafts (true or false), failureStatus ("failed" or
-//     "neutral"), skills (a non-empty list of library skill names),
+//     "neutral"), skills (a non-empty list of library skill names, or
+//     null for the default list; a name the library lacks is 400 `skill
+//     "x" is not in the skill library`, and so is a list whose texts come to
+//     more than 900 KiB), repoSkills (the names of detected repository
+//     skills to turn on; a list, empty or null for none),
 //     jobTimeoutSeconds (a whole number, 60 to 7200) and jobMemory (a
 //     Kubernetes quantity such as "6Gi", from 256Mi, and no less than
 //     jobs.resources.requests.memory, to 32Gi), and rerunLimitPerMR and
@@ -673,7 +753,10 @@ type AuditView struct {
 //   - GET /api/admin/defaults, PUT /api/admin/defaults (admins): DefaultsView
 //     for the repositories switched on in the dashboard; the PUT body has the
 //     same keys with the same bounds as a repository's settings, and
-//     replaces them all (a missing key or null is the built-in default).
+//     replaces them all (a missing key or null is the built-in default),
+//     except skills, the default list of library skill names: a missing key
+//     keeps the stored list, null or [] clears it, and a name the library
+//     lacks or a list over 900 KiB is 400 as for a repository.
 
 // SecretView says whether a secret is set and when it last changed. The
 // value is never sent. UpdatedAt is null for a secret that comes from the

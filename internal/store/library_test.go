@@ -342,6 +342,18 @@ func TestInsertNamingMissingSkill(t *testing.T) {
 	}
 }
 
+// A save that names a missing skill names it in the error, the first one
+// missing in name order, and still matches ErrSkillNotFound.
+func TestMissingSkillErrorNamesSkill(t *testing.T) {
+	s := newStore(t)
+	newSkill(t, s, "a", "x")
+	err := s.PutRepoDefaults(ctx, RepoDefaults{Skills: []string{"zed", "a", "gone"}})
+	var missing *MissingSkillError
+	if !errors.Is(err, ErrSkillNotFound) || !errors.As(err, &missing) || missing.Name != "gone" {
+		t.Fatalf("PutRepoDefaults = %v; want a MissingSkillError for \"gone\" that is ErrSkillNotFound", err)
+	}
+}
+
 func TestDeleteRacesDefaultsSave(t *testing.T) {
 	s := newStore(t)
 	for i := 0; i < 20; i++ {

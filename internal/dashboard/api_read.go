@@ -72,6 +72,8 @@ func (d *Dashboard) readRoutes(mux *http.ServeMux) {
 	get("/api/repositories", d.repositories)
 	get("/api/repositories/{instance}/{rest...}", d.repository)
 	get("/api/skills", d.skills)
+	get("/api/skills/{name}", d.skill)
+	get("/api/skills/{name}/versions/{v}", d.skillVersion)
 	get("/api/integrations", requireAdmin(d.integrations))
 	get("/api/admin/settings", requireAdmin(d.adminSettings))
 	// Anything else is 404, also the instance alone (which the mux would
@@ -817,11 +819,20 @@ func settingViews(repo settings.Effective) map[string]SettingView {
 		"reviewDrafts":      {repo.ReviewDrafts, ov[settings.KeyReviewDrafts]},
 		"failureStatus":     {string(repo.FailureStatus), ov[settings.KeyFailureStatus]},
 		"skills":            {repo.Skills, ov[settings.KeySkills]},
+		"repoSkills":        {nonNil(repo.RepoSkills), ov[settings.KeyRepoSkills]},
 		"jobTimeoutSeconds": {int64(repo.JobTimeout / time.Second), ov[settings.KeyJobTimeout]},
 		"jobMemory":         {quantityText(repo.JobMemory), ov[settings.KeyJobMemory]},
 		"rerunLimitPerMR":   {repo.RerunLimitPerMR, ov[settings.KeyRerunLimitPerMR]},
 		"rerunLimitPerRepo": {repo.RerunLimitPerRepo, ov[settings.KeyRerunLimitPerRepo]},
 	}
+}
+
+// nonNil is list, or an empty list for nil, so a view shows [] and not null.
+func nonNil(list []string) []string {
+	if list == nil {
+		return []string{}
+	}
+	return list
 }
 
 func quantityText(q resource.Quantity) string {
@@ -840,6 +851,27 @@ type inputsCache struct {
 	mu      sync.Mutex
 	entries map[string]inputsEntry
 	flights map[string]*inputsFlight
+	// gen counts the invalidations: a read that began before one is not kept.
+	gen uint64
+}
+
+// generation is the number of invalidations so far.
+func (c *inputsCache) generation() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.gen
+}
+
+// invalidate drops every kept view and lets the reads in progress finish for
+// those already waiting on them without keeping or sharing what they read:
+// a change of a skill, of the default list or of a repository's skills has
+// been made since they began. Every write of those calls it.
+func (c *inputsCache) invalidate() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.gen++
+	clear(c.entries)
+	clear(c.flights)
 }
 
 type inputsEntry struct {
@@ -890,6 +922,7 @@ func (d *Dashboard) cachedInputs(ctx context.Context, repo settings.Effective, i
 	}
 	f := &inputsFlight{done: make(chan struct{})}
 	c.flights[key] = f
+	gen := c.gen
 	c.mu.Unlock()
 
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), platformTimeout)
@@ -901,8 +934,10 @@ func (d *Dashboard) cachedInputs(ctx context.Context, repo settings.Effective, i
 	}
 
 	c.mu.Lock()
-	delete(c.flights, key)
-	if f.err == nil {
+	if c.flights[key] == f {
+		delete(c.flights, key)
+	}
+	if f.err == nil && c.gen == gen {
 		now := d.now()
 		for k, e := range c.entries {
 			if now.Sub(e.at) >= inputsTTL {
@@ -939,59 +974,69 @@ func (d *Dashboard) resolveInputs(ctx context.Context, repo settings.Effective, 
 	if branch == "" {
 		return InputsView{}, errors.New("the repository has no default branch")
 	}
-	// A skill removed from the library since is left out, as in a review.
-	skills, _ := librarySkills(repo, d.library)
-	in, err := inputs.Resolve(ctx, src, d.library, config.Repository{Skills: skills}, p.ProjectID, branch, nil)
+	// The skills a review would get: the repository's own list or the
+	// default list, then its folders, as the engine resolves them. A name
+	// that can't be had is shown with its problem, as a review would fail
+	// on it, never dropped and never replaced by other skills.
+	resolved, err := d.Store.ResolveLibrary(ctx, repo.Skills)
 	if err != nil {
 		return InputsView{}, err
 	}
-	names := make([]string, 0, len(in.Skills))
+	lib := make(map[string]inputs.LibraryEntry, len(resolved.Skills))
+	for name, sk := range resolved.Skills {
+		lib[name] = inputs.LibraryEntry{Content: []byte(sk.Content), Version: sk.Version}
+	}
+	problems := map[string]string{}
+	for _, name := range resolved.Missing {
+		problems[name] = msgSkillMissing(name)
+	}
+	on := slices.Clone(repo.RepoSkills)
+	var in *inputs.Inputs
+	for {
+		in, err = inputs.ResolveSkills(ctx, src, lib, on, p.ProjectID, branch, nil)
+		var nf *inputs.NotFoundError
+		if !errors.As(err, &nf) {
+			break
+		}
+		// ResolveSkills names one at a time: show it, ask again without it.
+		problems[nf.Name] = nf.Error()
+		on = slices.DeleteFunc(on, func(n string) bool { return n == nf.Name })
+	}
+	if err != nil {
+		return InputsView{}, err
+	}
+	detected, err := inputs.Detect(ctx, src, p.ProjectID, branch)
+	if err != nil {
+		return InputsView{}, err
+	}
+
+	v := InputsView{Branch: branch, Skills: []InputSkill{}, Detected: []DetectedSkillView{}, Instructions: string(in.Instructions)}
+	names := make([]string, 0, len(in.Skills)+len(problems))
 	for name := range in.Skills {
 		names = append(names, name)
 	}
-	sort.Strings(names)
-	v := InputsView{Branch: branch, Skills: []InputSkill{}, Instructions: string(in.Instructions)}
-	for _, name := range names {
-		v.Skills = append(v.Skills, InputSkill{Name: name, Source: in.Sources[name], Content: string(in.Skills[name])})
-	}
-	return v, nil
-}
-
-// librarySkills is the library skills a view of the repository's inputs shows:
-// repo.Skills, less those library doesn't have. When none is left, skills is
-// nil: every library skill. Temporary: the view moves to the Postgres library
-// with the dashboard's skills piece.
-func librarySkills(repo settings.Effective, library inputs.Library) (skills, missing []string) {
-	if repo.Source != settings.SourceDashboard || len(repo.Skills) == 0 {
-		return repo.Skills, nil
-	}
-	kept := make([]string, 0, len(repo.Skills))
-	for _, name := range repo.Skills {
-		if _, ok := library[name]; ok {
-			kept = append(kept, name)
-		} else {
-			missing = append(missing, name)
+	for name := range problems {
+		if _, ok := in.Skills[name]; !ok {
+			names = append(names, name)
 		}
 	}
-	if len(kept) == 0 {
-		return nil, missing
-	}
-	return kept, missing
-}
-
-// --- GET /api/skills ---
-
-func (d *Dashboard) skills(w http.ResponseWriter, _ *http.Request) {
-	names := make([]string, 0, len(d.library))
-	for name := range d.library {
-		names = append(names, name)
-	}
 	sort.Strings(names)
-	out := make([]LibrarySkill, 0, len(names))
 	for _, name := range names {
-		out = append(out, LibrarySkill{Name: name, Content: string(d.library[name])})
+		if problem, bad := problems[name]; bad {
+			v.Skills = append(v.Skills, InputSkill{Name: name, Problem: problem})
+			continue
+		}
+		sk := InputSkill{Name: name, Source: in.Sources[name], Version: in.Versions[name], Content: string(in.Skills[name])}
+		if sk.Source != inputs.SourceLibrary {
+			sk.Folder = sk.Source
+		}
+		v.Skills = append(v.Skills, sk)
 	}
-	writeJSON(w, http.StatusOK, out)
+	for _, f := range detected {
+		v.Detected = append(v.Detected, DetectedSkillView{Name: f.Name, Folder: f.Folder, Problem: f.Problem,
+			On: slices.Contains(repo.RepoSkills, f.Name)})
+	}
+	return v, nil
 }
 
 // --- admin: GET /api/integrations and /api/admin/settings ---

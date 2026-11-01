@@ -787,9 +787,14 @@ func (d *Dashboard) defaultsView(ctx context.Context) (DefaultsView, error) {
 	if err != nil {
 		return DefaultsView{}, err
 	}
+	stored, err := d.Store.RepoDefaults(ctx)
+	if err != nil {
+		return DefaultsView{}, err
+	}
 	return DefaultsView{Approve: def.Approve, ReviewDrafts: def.ReviewDrafts, FailureStatus: string(def.FailureStatus),
 		JobTimeoutSeconds: int64(def.JobTimeout / time.Second), JobMemory: quantityText(def.JobMemory),
-		RerunLimitPerMR: def.RerunLimitPerMR, RerunLimitPerRepo: def.RerunLimitPerRepo}, nil
+		RerunLimitPerMR: def.RerunLimitPerMR, RerunLimitPerRepo: def.RerunLimitPerRepo,
+		Skills: nonNil(stored.Skills)}, nil
 }
 
 func (d *Dashboard) getDefaults(w http.ResponseWriter, r *http.Request) {
@@ -803,21 +808,38 @@ func (d *Dashboard) getDefaults(w http.ResponseWriter, r *http.Request) {
 
 func (d *Dashboard) putDefaults(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
-	next, msg := d.parseDefaults(r)
-	if msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
-		return
-	}
 	before, err := d.Store.RepoDefaults(ctx)
 	if err != nil {
 		d.failed(w, r, "reading the defaults", err)
 		return
 	}
-	if err := d.Store.PutRepoDefaults(ctx, next); err != nil {
+	next, skillsGiven, msg := d.parseDefaults(r, before.Skills)
+	if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	if skillsGiven {
+		msg, err := d.checkSkillBudget(r, next.Skills)
+		if err != nil {
+			d.failed(w, r, "checking the skill budget", err)
+			return
+		}
+		if msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
+	}
+	err = d.Store.PutRepoDefaults(ctx, next)
+	if msg, ok := skillMissing(err); ok {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	if err != nil {
 		d.Log.Error("dashboard: saving the defaults failed", "error", err.Error())
 		writeError(w, http.StatusInternalServerError, msgWriteFailed)
 		return
 	}
+	d.inputs.invalidate()
 	changed := changedDefaults(before, next)
 	d.Log.Info("dashboard: defaults updated", "fields", changed, "by", se.Username)
 	d.audit(ctx, se, "defaults_updated", "", "", strings.Join(changed, ", "))
@@ -832,13 +854,15 @@ func (d *Dashboard) putDefaults(w http.ResponseWriter, r *http.Request) {
 // parseDefaults reads a replacement set of defaults: a JSON object of some
 // of the settings, each a valid value (the bounds and messages of a
 // repository's settings) or null; the ones left out are the built-in
-// default. It returns the 400's message when the body is wrong.
-func (d *Dashboard) parseDefaults(r *http.Request) (store.RepoDefaults, string) {
+// default. The exception is skills, the default list of library skills:
+// left out it stays as stored (kept), null or [] clears it. skillsGiven says
+// the body has the key. It returns the 400's message when the body is wrong.
+func (d *Dashboard) parseDefaults(r *http.Request, kept []string) (next store.RepoDefaults, skillsGiven bool, msg string) {
 	var fields map[string]json.RawMessage
 	if err := decodeStrict(r, &fields); err != nil || fields == nil {
-		return store.RepoDefaults{}, msgBadDefaults
+		return store.RepoDefaults{}, false, msgBadDefaults
 	}
-	var row store.DashboardRepo
+	row := store.DashboardRepo{Skills: slices.Clone(kept)}
 	for key, raw := range fields {
 		null := string(bytes.TrimSpace(raw)) == "null"
 		var edit func(*store.DashboardRepo)
@@ -848,6 +872,9 @@ func (d *Dashboard) parseDefaults(r *http.Request) (store.RepoDefaults, string) 
 			edit, msg = boolSetting(key, raw, null)
 		case "failureStatus":
 			edit, msg = failureStatusSetting(raw, null)
+		case "skills":
+			skillsGiven = true
+			edit, msg = defaultSkillsSetting(raw, null)
 		case "jobTimeoutSeconds":
 			edit, msg = timeoutSetting(raw, null)
 		case "jobMemory":
@@ -858,13 +885,30 @@ func (d *Dashboard) parseDefaults(r *http.Request) (store.RepoDefaults, string) 
 			msg = msgBadDefaults
 		}
 		if msg != "" {
-			return store.RepoDefaults{}, msg
+			return store.RepoDefaults{}, false, msg
 		}
 		edit(&row)
 	}
 	return store.RepoDefaults{Approve: row.Approve, ReviewDrafts: row.ReviewDrafts, FailureStatus: row.FailureStatus,
 		JobTimeoutSeconds: row.JobTimeoutSeconds, JobMemory: row.JobMemory,
-		RerunLimitPerMR: row.RerunLimitPerMR, RerunLimitPerRepo: row.RerunLimitPerRepo}, ""
+		RerunLimitPerMR: row.RerunLimitPerMR, RerunLimitPerRepo: row.RerunLimitPerRepo, Skills: row.Skills}, skillsGiven, ""
+}
+
+// defaultSkillsSetting takes null, [] (no default skills) or a list of
+// library skill names.
+func defaultSkillsSetting(raw json.RawMessage, null bool) (func(*store.DashboardRepo), string) {
+	var v []string
+	if !null {
+		var names []string
+		if json.Unmarshal(raw, &names) != nil {
+			return nil, "skills must be a list of skills from the library, or null for none"
+		}
+		var msg string
+		if v, msg = skillNames(names); msg != "" {
+			return nil, msg
+		}
+	}
+	return func(row *store.DashboardRepo) { row.Skills = v }, ""
 }
 
 // changedDefaults names the settings that differ between two sets of
@@ -891,6 +935,9 @@ func changedDefaults(a, b store.RepoDefaults) []string {
 	}
 	if !samePtr(a.RerunLimitPerRepo, b.RerunLimitPerRepo) {
 		out = append(out, "rerunLimitPerRepo")
+	}
+	if !slices.Equal(a.Skills, b.Skills) {
+		out = append(out, "skills")
 	}
 	return out
 }

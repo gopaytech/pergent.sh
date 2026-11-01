@@ -10,6 +10,10 @@ import (
 
 var validName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
+// ValidName reports whether name is a legal skill name:
+// ^[A-Za-z0-9][A-Za-z0-9._-]*$.
+func ValidName(name string) bool { return validName.MatchString(name) }
+
 // SkillName returns the skill's name: the frontmatter `name` when set, else
 // fallback. The result must match ^[A-Za-z0-9][A-Za-z0-9._-]*$ so it is safe
 // as a file name and in a ConfigMap key.

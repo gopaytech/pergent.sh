@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -556,6 +557,22 @@ func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, msgNeedsAdminCaps)
 		return
 	}
+	// The library skills the list names must fit a review (D6). The check
+	// reads the library now; a skill that goes before the save is named by
+	// the save.
+	if slices.Contains(keys, "skills") {
+		var probe store.DashboardRepo
+		edit(&probe)
+		msg, err := d.checkSkillBudget(r, probe.Skills)
+		if err != nil {
+			d.failed(w, r, "checking the skill budget", err)
+			return
+		}
+		if msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
+	}
 	d.updateSettings(w, r, repo, edit, "settings changed", "settings_updated", strings.Join(keys, ", "))
 }
 
@@ -568,7 +585,7 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 	admin := session(r).Role(repo.Instance, repo.Project) >= RoleAdmin
 	d.updateSettings(w, r, repo, func(row *store.DashboardRepo) {
 		row.Approve, row.ReviewDrafts, row.FailureStatus = nil, nil, nil
-		row.Skills, row.JobTimeoutSeconds, row.JobMemory = nil, nil, nil
+		row.Skills, row.RepoSkills, row.JobTimeoutSeconds, row.JobMemory = nil, nil, nil, nil
 		if admin {
 			row.RerunLimitPerMR, row.RerunLimitPerRepo = nil, nil
 		}
@@ -582,6 +599,10 @@ func (d *Dashboard) updateSettings(w http.ResponseWriter, r *http.Request, repo 
 	what, action, detail string) {
 	ctx, se := r.Context(), session(r)
 	found, err := d.Store.UpdateDashboardRepo(ctx, repo.Instance, repo.Project, edit)
+	if msg, ok := skillMissing(err); ok {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
 	if err != nil {
 		d.Log.Error("dashboard: saving repository settings failed", "instance", repo.Instance, "project", repo.Project,
 			"error", err.Error())
@@ -594,6 +615,7 @@ func (d *Dashboard) updateSettings(w http.ResponseWriter, r *http.Request, repo 
 	}
 	d.Log.Info("dashboard: repository "+what, "instance", repo.Instance, "project", repo.Project, "by", se.Username)
 	d.audit(ctx, se, action, repo.Instance, repo.Project, detail)
+	d.inputs.invalidate()
 	now, ok, err := d.Repos.Get(ctx, repo.Instance, repo.Project)
 	if err == nil && !ok {
 		err = errors.New("the repository isn't switched on any more")
@@ -630,7 +652,9 @@ func (d *Dashboard) parseSettings(r *http.Request) (func(*store.DashboardRepo), 
 		case "failureStatus":
 			edit, msg = failureStatusSetting(raw, null)
 		case "skills":
-			edit, msg = d.skillsSetting(raw, null)
+			edit, msg = skillsSetting(raw, null)
+		case "repoSkills":
+			edit, msg = repoSkillsSetting(raw, null)
 		case "jobTimeoutSeconds":
 			edit, msg = timeoutSetting(raw, null)
 		case "jobMemory":
@@ -682,26 +706,59 @@ func failureStatusSetting(raw json.RawMessage, null bool) (func(*store.Dashboard
 	return func(row *store.DashboardRepo) { row.FailureStatus = v }, ""
 }
 
-func (d *Dashboard) skillsSetting(raw json.RawMessage, null bool) (func(*store.DashboardRepo), string) {
-	const msg = "skills must be a non-empty list of skills from the library, or null for all of them"
+// skillsSetting takes null (the default list) or a non-empty list of
+// library skill names. A name the library lacks is refused by the save,
+// which locks the skills it names (see updateSettings).
+func skillsSetting(raw json.RawMessage, null bool) (func(*store.DashboardRepo), string) {
 	var v []string
 	if !null {
 		var names []string
 		if json.Unmarshal(raw, &names) != nil || len(names) == 0 {
-			return nil, msg
+			return nil, "skills must be a non-empty list of skills from the library, or null for the default list"
 		}
-		seen := map[string]bool{}
-		for _, n := range names {
-			if _, ok := d.library[n]; !ok {
-				return nil, msg
-			}
-			if !seen[n] {
-				seen[n] = true
-				v = append(v, n)
-			}
+		var msg string
+		if v, msg = skillNames(names); msg != "" {
+			return nil, msg
 		}
 	}
 	return func(row *store.DashboardRepo) { row.Skills = v }, ""
+}
+
+// skillNames drops repeats from names, keeping the order, and refuses a name
+// that can't be a skill's with the message for a skill the library lacks.
+func skillNames(names []string) ([]string, string) {
+	var out []string
+	seen := map[string]bool{}
+	for _, n := range names {
+		if !inputs.ValidName(n) {
+			return nil, msgSkillMissing(n)
+		}
+		if !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	return out, ""
+}
+
+// repoSkillsSetting takes the names of the detected repository skills to
+// turn on: a list, which may be empty, or null. Either of those is none.
+func repoSkillsSetting(raw json.RawMessage, null bool) (func(*store.DashboardRepo), string) {
+	const msg = "repoSkills must be a list of skill names, or null"
+	var v []string
+	if !null {
+		var names []string
+		if json.Unmarshal(raw, &names) != nil {
+			return nil, msg
+		}
+		for _, n := range names {
+			if !inputs.ValidName(n) {
+				return nil, msg
+			}
+		}
+		v, _ = skillNames(names)
+	}
+	return func(row *store.DashboardRepo) { row.RepoSkills = v }, ""
 }
 
 func timeoutSetting(raw json.RawMessage, null bool) (func(*store.DashboardRepo), string) {

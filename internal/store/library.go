@@ -37,6 +37,17 @@ var (
 	ErrLibraryFull = errors.New("store: the skill library is full")
 )
 
+// MissingSkillError names a skill a save names that is not in the library:
+// the first one missing, in name order. It matches ErrSkillNotFound.
+type MissingSkillError struct{ Name string }
+
+func (e *MissingSkillError) Error() string {
+	return fmt.Sprintf("store: skill %q is not in the library", e.Name)
+}
+
+// Is makes errors.Is(err, ErrSkillNotFound) true.
+func (e *MissingSkillError) Is(target error) bool { return target == ErrSkillNotFound }
+
 // libraryLockKey is the pg_advisory_xact_lock key that serialises skill
 // creation, so the size limit holds under concurrent creates.
 const libraryLockKey = 0x736b696c // "skil"
@@ -372,9 +383,9 @@ func (s *Store) DeleteLibrarySkill(ctx context.Context, name string, configRepos
 }
 
 // lockNamedSkills locks each named library skill FOR KEY SHARE, which holds
-// off a concurrent delete until the transaction ends, and returns
-// ErrSkillNotFound when one is not there. The rows are locked in name order,
-// so two savers never deadlock.
+// off a concurrent delete until the transaction ends, and returns a
+// *MissingSkillError (an ErrSkillNotFound) naming the first that is not
+// there. The rows are locked in name order, so two savers never deadlock.
 func lockNamedSkills(ctx context.Context, tx pgx.Tx, names []string) error {
 	if len(names) == 0 {
 		return nil
@@ -386,16 +397,23 @@ func lockNamedSkills(ctx context.Context, tx pgx.Tx, names []string) error {
 	if err != nil {
 		return err
 	}
-	found := 0
+	have := map[string]bool{}
 	for rows.Next() {
-		found++
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return err
+		}
+		have[name] = true
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if found != len(want) {
-		return ErrSkillNotFound
+	for _, name := range want {
+		if !have[name] {
+			return &MissingSkillError{Name: name}
+		}
 	}
 	return nil
 }

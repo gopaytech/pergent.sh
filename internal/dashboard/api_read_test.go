@@ -814,6 +814,7 @@ func TestRepositoryDetail(t *testing.T) {
 	settings, _ := json.Marshal(v.Settings)
 	want := `{"approve":{"value":false,"overridden":true},"failureStatus":{"value":"failed","overridden":false},` +
 		`"jobMemory":{"value":"","overridden":false},"jobTimeoutSeconds":{"value":600,"overridden":false},` +
+		`"repoSkills":{"value":[],"overridden":false},` +
 		`"rerunLimitPerMR":{"value":10,"overridden":false},"rerunLimitPerRepo":{"value":50,"overridden":false},` +
 		`"reviewDrafts":{"value":true,"overridden":false},"skills":{"value":["code-review"],"overridden":true}}`
 	if string(settings) != want {
@@ -830,6 +831,7 @@ func TestRepositoryDetail(t *testing.T) {
 
 func TestRepositoryInputs(t *testing.T) {
 	e := newEnv(t, func(cfg *config.Config) { cfg.Repositories[0].Skills = []string{"code-review"} })
+	e.skill("code-review", "---\nname: code-review\n---\nReview the code.\n")
 	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: testID("acme/widgets"), Path: "acme/widgets"}); err != nil {
 		t.Fatal(err)
 	}
@@ -850,9 +852,9 @@ func TestRepositoryInputs(t *testing.T) {
 	for _, s := range v.Skills {
 		got = append(got, s.Name+":"+s.Source+":"+strings.TrimSpace(s.Content[strings.LastIndex(s.Content, "---")+3:]))
 	}
-	// style isn't picked from the library, so the repository's own is a
-	// repository skill.
-	if want := "code-review:library:Review the code.,style:repo:Our style.,team-rules:repo:Our rules."; strings.Join(got, ",") != want {
+	// style isn't in the library, so the repository's own is a repository
+	// skill; its source is the folder.
+	if want := "code-review:library:Review the code.,style:.pergent/skills:Our style.,team-rules:.pergent/skills:Our rules."; strings.Join(got, ",") != want {
 		t.Errorf("skills = %v\nwant %s", got, want)
 	}
 	if !strings.Contains(v.Instructions, "Be kind.") || !strings.Contains(v.Instructions, "Check migrations.") {
@@ -883,35 +885,37 @@ func TestRepositoryInputs(t *testing.T) {
 	}
 }
 
-// A dashboard repository's skill that was removed from the library since
-// is left out, as a review leaves it out; with none left a review runs every
-// library skill, and so does the view.
+// A skill removed from the library since a repository named it is shown with
+// its problem, as a review fails on it: never dropped, and never replaced by
+// the other library skills.
 func TestRepositoryInputsSkillRemovedFromLibrary(t *testing.T) {
 	e := newEnv(t, nil)
-	for _, p := range []store.Project{{Instance: "main", ProjectID: testID("acme/tools"), Path: "acme/tools"},
-		{Instance: "main", ProjectID: testID("acme/old"), Path: "acme/old"}} {
-		if err := e.st.UpsertProject(ctx, p); err != nil {
+	e.skill("code-review", "Review the code.")
+	e.skill("gone", "x")
+	e.skill("other", "y")
+	for _, project := range []string{"acme/tools", "acme/old"} {
+		if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: testID(project), Path: project}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// Raw SQL: the store refuses a name that is not in the library.
-	for project, skills := range map[string][]string{"acme/tools": {"code-review", "gone"}, "acme/old": {"gone"}} {
-		if err := e.st.UpsertDashboardRepo(ctx, store.DashboardRepo{Instance: "main", Project: project}); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := e.db.Exec(ctx, `UPDATE dashboard_repos SET skills = $2 WHERE project = $1`, project, skills); err != nil {
-			t.Fatal(err)
-		}
-	}
+	e.dashboardRepo("main", "acme/tools", func(r *store.DashboardRepo) { r.Skills = []string{"code-review", "gone"} })
+	e.dashboardRepo("main", "acme/old", func(r *store.DashboardRepo) { r.Skills = []string{"gone"} })
+	// The store refuses to delete a skill in use; raw SQL stands for a
+	// removal that raced a save.
+	e.exec(`DELETE FROM library_skills WHERE name = 'gone'`)
+
 	c := e.signInGitLab(false, "acme/tools", "acme/old")
-	for project, want := range map[string]string{"acme/tools": "code-review", "acme/old": "code-review,style"} {
+	for project, want := range map[string]string{
+		"acme/tools": `code-review:Review the code.:,gone::skill "gone" is not in the skill library`,
+		"acme/old":   `gone::skill "gone" is not in the skill library`,
+	} {
 		v := getJSON[InputsView](e, c, "/api/repositories/main/"+project+"/inputs")
 		var got []string
 		for _, s := range v.Skills {
-			got = append(got, s.Name)
+			got = append(got, s.Name+":"+s.Content+":"+s.Problem)
 		}
 		if strings.Join(got, ",") != want {
-			t.Errorf("%s: skills = %v, want %s", project, got, want)
+			t.Errorf("%s: skills = %q, want %q", project, got, want)
 		}
 	}
 }
@@ -982,15 +986,6 @@ func TestRepositoryInputsReadOnce(t *testing.T) {
 	}
 }
 
-func TestSkills(t *testing.T) {
-	e := newEnv(t, nil)
-	c := e.signInGitLab(false)
-	got := getJSON[[]LibrarySkill](e, c, "/api/skills")
-	if len(got) != 2 || got[0].Name != "code-review" || got[1].Name != "style" || got[0].Content != string(e.lib["code-review"]) {
-		t.Errorf("skills = %+v", got)
-	}
-}
-
 func TestIntegrations(t *testing.T) {
 	e := newEnv(t, withSecrets(t))
 	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: 7, Path: "acme/widgets", HookID: 3,
@@ -1033,7 +1028,7 @@ func TestAdminSettings(t *testing.T) {
 	v := getJSON[AdminSettingsView](e, c, "/api/admin/settings")
 	want := AdminSettingsView{Instance: "main",
 		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, FailureStatus: "failed", JobTimeoutSeconds: 600,
-			RerunLimitPerMR: 10, RerunLimitPerRepo: 50},
+			RerunLimitPerMR: 10, RerunLimitPerRepo: 50, Skills: []string{}},
 		LLM: LLMView{Provider: "anthropic", Model: "claude-sonnet-4"}}
 	got, _ := json.Marshal(v)
 	wantJSON, _ := json.Marshal(want)

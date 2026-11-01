@@ -55,9 +55,6 @@ type Options struct {
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 	Log *slog.Logger
-	// Library is the skill library: GET /api/skills shows it, and the
-	// Skills & instructions view resolves repositories' skills from it.
-	Library inputs.Library
 	// Sources read repositories' files and default branches, by instance
 	// name: the review bot's Forge on GitLab, the review App's on GitHub.
 	// An instance without one has no Skills & instructions view (502).
@@ -125,7 +122,6 @@ type Dashboard struct {
 	cfg           *config.Config
 	registry      *instances.Registry
 	connector     Connector
-	library       inputs.Library
 	sources       *syncmap.Map[RepoSource]
 	catalogs      *syncmap.Map[RepoCatalog]
 	reconcileSoon func(instance, project string)
@@ -176,7 +172,7 @@ func New(o Options) (*Dashboard, error) {
 	}
 	return &Dashboard{Auth: auth, Repos: repos, Store: o.Store, Log: o.Log,
 		cfg: o.Config, registry: o.Instances, connector: o.Connector,
-		library: o.Library, sources: o.Sources, catalogs: o.Catalogs,
+		sources: o.Sources, catalogs: o.Catalogs,
 		reconcileSoon: o.ReconcileSoon, wake: o.Wake, loadLLM: o.Instances.LoadLLM, now: o.Now,
 		availableBudget: AvailableBudget, listBudget: listBudget, listLimit: listLimit,
 		inputs:  &inputsCache{entries: map[string]inputsEntry{}, flights: map[string]*inputsFlight{}},

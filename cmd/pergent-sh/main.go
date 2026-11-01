@@ -216,7 +216,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		OnInstanceRemoved: conn.Disconnect,
 	}
 	dash, err := newDashboard(dashboard.Options{
-		Config: cfg, Instances: reg, Connector: conn, Store: st, SecretKey: key, Log: log, Library: lib,
+		Config: cfg, Instances: reg, Connector: conn, Store: st, SecretKey: key, Log: log,
 		Sources: conn.sources, Catalogs: conn.catalogs, ReconcileSoon: eng.ReconcileSoon,
 		Wake: eng.Wake,
 	})
