@@ -150,6 +150,30 @@ type Forge interface {
 	IsBot(ctx context.Context, userID int64) (bool, error)
 }
 
+// MaxSourceFile is the most a SourceReader reads of one file: 900 KiB, the
+// same as inputs.ConfigMapLimit (a test keeps the two equal; forge can't
+// import inputs). Nothing a review reads can be larger, and a repository is
+// not trusted to keep its files small.
+const MaxSourceFile = 900 * 1024
+
+// SourceReader reads any repository the review bot (GitLab, Reporter access
+// is enough) or the review App's installation (GitHub) can see, by its path
+// ("group/project", "owner/name") and at a commit. The repository need not be
+// switched on for review: installing skills from a repository uses this.
+//
+// ListTreeAt and GetFileAt answer as Forge's ListTree and GetFile do: a
+// missing folder is an empty list and a missing file (or a directory) is
+// ok == false. A repository or ref the bot or App can't read is
+// ErrSourceNotFound, a file over MaxSourceFile is ErrFileTooLarge.
+type SourceReader interface {
+	// ResolveRef returns the commit a branch, tag or commit ref points at.
+	ResolveRef(ctx context.Context, project, ref string) (commit string, err error)
+	// ListTreeAt lists one directory at commit (non-recursive).
+	ListTreeAt(ctx context.Context, project, path, commit string) ([]TreeEntry, error)
+	// GetFileAt returns a file's raw content at commit.
+	GetFileAt(ctx context.Context, project, path, commit string) ([]byte, bool, error)
+}
+
 // Approver is the approve bot's side of one platform instance.
 type Approver interface {
 	// Approve approves the change at sha. A head that is no longer sha is
@@ -173,4 +197,11 @@ var (
 	// ErrHeadMoved is matched by Approve's error when the change's head is no
 	// longer the SHA it was asked to approve.
 	ErrHeadMoved = errors.New("forge: change head moved")
+	// ErrSourceNotFound is matched by a SourceReader's error for a
+	// repository or ref the review bot or App can't read. The platform says
+	// the same for a repository that doesn't exist and one it may not see.
+	ErrSourceNotFound = errors.New("the review bot or App can't read this repository or ref")
+	// ErrFileTooLarge is matched by GetFileAt's error for a file over
+	// MaxSourceFile.
+	ErrFileTooLarge = errors.New("forge: file is too large")
 )

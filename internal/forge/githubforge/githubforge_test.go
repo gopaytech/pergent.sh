@@ -36,8 +36,9 @@ const (
 )
 
 var (
-	_ forge.Forge    = (*Forge)(nil)
-	_ forge.Approver = (*Approver)(nil)
+	_ forge.Forge        = (*Forge)(nil)
+	_ forge.Approver     = (*Approver)(nil)
+	_ forge.SourceReader = (*Forge)(nil)
 )
 
 var (
@@ -1105,5 +1106,105 @@ func TestAccessLevel(t *testing.T) {
 	f.reply("GET", path, 403, map[string]any{"message": "Forbidden"})
 	if got, err := f.forge(t).AccessLevel(ctx, repoID, "dev", 0); err == nil || got != forge.AccessNone {
 		t.Errorf("403 = %v, %v; want AccessNone and an error", got, err)
+	}
+}
+
+// noRepos is a Forge that has stored no repository: the source reader must
+// not need one.
+func (f *fakeGitHub) forgeWithoutRepos(t *testing.T) *Forge {
+	return NewForge(f.app(t), reviewBotID, reviewSlug, ReposFunc(func(context.Context, int64) (Repo, error) {
+		return Repo{}, ErrUnknownRepo
+	}))
+}
+
+// A repository by owner/name, with no stored repository: the review App's
+// installation on it reads the files at the commit.
+func TestGitHubSourceReader(t *testing.T) {
+	f := newFake(t)
+	f.reply("GET", "/repos/acme/skills/installation", 200, map[string]any{"id": installationID})
+	f.reply("GET", "/repos/acme/skills/commits/release%2Fv1", 200, map[string]any{"sha": sha('7')})
+	f.reply("GET", "/repos/acme/skills/contents/skills", 200, []map[string]any{
+		{"name": "a.md", "path": "skills/a.md", "type": "file"},
+	})
+	f.handle("GET", "/repos/acme/skills/contents/skills/a.md", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "# a")
+	})
+	g := f.forgeWithoutRepos(t)
+
+	got, err := g.ResolveRef(ctx, "acme/skills", "release/v1")
+	if err != nil || got != sha('7') {
+		t.Fatalf("ResolveRef = %q, %v", got, err)
+	}
+	entries, err := g.ListTreeAt(ctx, "acme/skills", "skills", sha('7'))
+	if want := []forge.TreeEntry{{Name: "a.md", Path: "skills/a.md", Type: "blob"}}; err != nil || !reflect.DeepEqual(entries, want) {
+		t.Fatalf("ListTreeAt = %+v, %v", entries, err)
+	}
+	b, ok, err := g.GetFileAt(ctx, "acme/skills", "skills/a.md", sha('7'))
+	if err != nil || !ok || string(b) != "# a" {
+		t.Fatalf("GetFileAt = %q, %v, %v", b, ok, err)
+	}
+	for _, r := range f.requests("GET", "/repos/acme/skills/contents/skills/a.md") {
+		if r.Query != "ref="+sha('7') {
+			t.Errorf("file read at %q; want the commit", r.Query)
+		}
+		if r.Auth != "Bearer "+installToken {
+			t.Errorf("file read with %q; want the installation's token", r.Auth)
+		}
+	}
+
+	// Same not-found semantics as the Source methods.
+	if e, err := g.ListTreeAt(ctx, "acme/skills", "nope", sha('7')); err != nil || len(e) != 0 {
+		t.Errorf("ListTreeAt of a missing folder = %+v, %v; want empty, nil", e, err)
+	}
+	if b, ok, err := g.GetFileAt(ctx, "acme/skills", "nope.md", sha('7')); err != nil || ok || b != nil {
+		t.Errorf("GetFileAt of a missing file = %q, %v, %v; want nil, false, nil", b, ok, err)
+	}
+	// A directory is not a file.
+	if b, ok, err := g.GetFileAt(ctx, "acme/skills", "skills", sha('7')); err != nil || ok || b != nil {
+		t.Errorf("GetFileAt of a directory = %q, %v, %v; want nil, false, nil", b, ok, err)
+	}
+}
+
+// A repository the review App is not installed on (or one that doesn't
+// exist: GitHub says the same), a ref GitHub can't resolve (422), and a
+// malformed project are forge.ErrSourceNotFound, from all three methods.
+func TestGitHubSourceReaderNotInstalled(t *testing.T) {
+	f := newFake(t)
+	f.reply("GET", "/repos/acme/skills/installation", 200, map[string]any{"id": installationID})
+	f.reply("GET", "/repos/acme/skills/commits/no-such-ref", 422, map[string]string{"message": "No commit found for SHA: no-such-ref"})
+	g := f.forgeWithoutRepos(t)
+
+	for _, project := range []string{"acme/private", "acme", "", "acme/skills/extra", "/skills"} {
+		if _, err := g.ResolveRef(ctx, project, "main"); !errors.Is(err, forge.ErrSourceNotFound) {
+			t.Errorf("ResolveRef(%q) = %v; want ErrSourceNotFound", project, err)
+		}
+		if _, err := g.ListTreeAt(ctx, project, "skills", sha('7')); !errors.Is(err, forge.ErrSourceNotFound) {
+			t.Errorf("ListTreeAt(%q) = %v; want ErrSourceNotFound", project, err)
+		}
+		if _, _, err := g.GetFileAt(ctx, project, "a.md", sha('7')); !errors.Is(err, forge.ErrSourceNotFound) {
+			t.Errorf("GetFileAt(%q) = %v; want ErrSourceNotFound", project, err)
+		}
+	}
+	if _, err := g.ResolveRef(ctx, "acme/skills", "no-such-ref"); !errors.Is(err, forge.ErrSourceNotFound) {
+		t.Errorf("ResolveRef of an unknown ref = %v; want ErrSourceNotFound", err)
+	}
+}
+
+// A file bigger than a review can carry is never read whole into memory.
+func TestGitHubSourceReaderFileTooLarge(t *testing.T) {
+	f := newFake(t)
+	f.reply("GET", "/repos/acme/skills/installation", 200, map[string]any{"id": installationID})
+	f.handle("GET", "/repos/acme/skills/contents/big.md", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, strings.Repeat("x", forge.MaxSourceFile+1))
+	})
+	f.handle("GET", "/repos/acme/skills/contents/ok.md", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, strings.Repeat("x", forge.MaxSourceFile))
+	})
+	g := f.forgeWithoutRepos(t)
+	if _, ok, err := g.GetFileAt(ctx, "acme/skills", "big.md", sha('7')); ok || !errors.Is(err, forge.ErrFileTooLarge) {
+		t.Errorf("GetFileAt of a big file = %v, %v; want ErrFileTooLarge", ok, err)
+	}
+	if b, ok, err := g.GetFileAt(ctx, "acme/skills", "ok.md", sha('7')); err != nil || !ok || len(b) != forge.MaxSourceFile {
+		t.Errorf("GetFileAt at the limit = %d, %v, %v", len(b), ok, err)
 	}
 }

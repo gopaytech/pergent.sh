@@ -229,6 +229,51 @@ func TestFile(t *testing.T) {
 	}
 }
 
+func TestCommitSHA(t *testing.T) {
+	const sha = "0123456789abcdef0123456789abcdef01234567"
+	c, rec := serve(t, jsonReply(map[string]any{"sha": sha}))
+	got, err := c.CommitSHA(ctx, "acme", "widgets", "release/v1.0")
+	if err != nil || got != sha {
+		t.Fatalf("CommitSHA = %q, %v", got, err)
+	}
+	// The ref is one path segment: its slash is escaped.
+	expect(t, rec.get(0), "GET", "/repos/acme/widgets/commits/release%2Fv1.0", "")
+
+	missing, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"Not Found"}`, 404) })
+	if _, err := missing.CommitSHA(ctx, "acme", "widgets", "nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	empty, _ := serve(t, jsonReply(map[string]any{"node_id": "x"}))
+	if _, err := empty.CommitSHA(ctx, "acme", "widgets", "main"); err == nil {
+		t.Fatal("a reply with no sha must be an error")
+	}
+	if _, err := c.CommitSHA(ctx, "acme", "widgets", ".."); err == nil {
+		t.Fatal(`ref ".." must be refused`)
+	}
+}
+
+func TestFileMaxIsBounded(t *testing.T) {
+	big := strings.Repeat("x", 4096)
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, big) })
+	if b, ok, err := c.FileMax(ctx, "acme", "widgets", "a.md", "sha", 4096); err != nil || !ok || len(b) != 4096 {
+		t.Fatalf("at the limit: len=%d ok=%v err=%v", len(b), ok, err)
+	}
+	b, ok, err := c.FileMax(ctx, "acme", "widgets", "a.md", "sha", 4095)
+	if !errors.Is(err, ErrTooLarge) || ok || b != nil {
+		t.Fatalf("over the limit: len=%d ok=%v err=%v, want ErrTooLarge", len(b), ok, err)
+	}
+	// An oversize file is not retried.
+	var n int
+	c2, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { n++; _, _ = io.WriteString(w, big) })
+	_, _, _ = c2.FileMax(ctx, "acme", "widgets", "a.md", "sha", 10)
+	if n != 1 {
+		t.Fatalf("requests = %d, want 1", n)
+	}
+	if b, ok, err := c.File(ctx, "acme", "widgets", "a.md", "sha"); err != nil || !ok || len(b) != 4096 {
+		t.Fatalf("File: len=%d ok=%v err=%v", len(b), ok, err)
+	}
+}
+
 func TestFilePathSegmentsEscaped(t *testing.T) {
 	c, rec := serve(t, func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "x") })
 	if _, _, err := c.File(ctx, "acme", "widgets", ".pergent/skills/a b#?.md", "feature/x"); err != nil {
