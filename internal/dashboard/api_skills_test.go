@@ -448,3 +448,46 @@ func TestInputsCacheInvalidateDropsInFlight(t *testing.T) {
 		t.Error("a request after the change used the earlier read")
 	}
 }
+
+// A repository skill that is turned on but malformed is shown with its
+// problem, and the Detected list stays, so a maintainer can still see the
+// switch and turn it off. The engine fails the run on it; so would a review.
+func TestInputsViewTurnedOnMalformedSkill(t *testing.T) {
+	e := newEnv(t, func(cfg *config.Config) {
+		cfg.Repositories[0].Skills = []string{"a"}
+		cfg.Repositories[0].RepoSkills = []string{"claude-bad", "claude-ok"}
+	})
+	e.skill("a", "Library a.")
+	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: testID("acme/widgets"), Path: "acme/widgets"}); err != nil {
+		t.Fatal(err)
+	}
+	e.src["main"].set(func(f *fakeSource) {
+		f.files[".claude/skills/claude-bad.md"] = "---\npaths: 3\n---\nBroken."
+		f.files[".claude/skills/claude-ok.md"] = "Fine."
+	})
+	c := e.signInGitLab(false, "acme/widgets")
+	target := "/api/repositories/main/acme/widgets/inputs"
+
+	v := getJSON[InputsView](e, c, target)
+	var got []string
+	for _, s := range v.Skills {
+		got = append(got, s.Name+"|"+s.Source+"|"+s.Content+"|"+s.Problem)
+	}
+	if len(got) != 3 || got[0] != "a|library|Library a.|" || got[2] != "claude-ok|.claude/skills|Fine.|" ||
+		!strings.HasPrefix(got[1], "claude-bad|||.claude/skills/claude-bad.md: ") {
+		t.Errorf("skills = %q", got)
+	}
+	var det []string
+	for _, d := range v.Detected {
+		det = append(det, d.Name+"|"+boolText(d.On)+"|"+strconv.FormatBool(d.Problem != ""))
+	}
+	if !slices.Equal(det, []string{"claude-bad|on|true", "claude-ok|on|false"}) {
+		t.Errorf("detected = %q; want both listed and on", det)
+	}
+
+	// A broken ".pergent/skills" file runs always and is no switch: the view
+	// fails as the review does.
+	e.src["main"].set(func(f *fakeSource) { f.files[".pergent/skills/broken.md"] = "---\npaths: 3\n---\nBroken." })
+	e.clock.advance(6 * time.Minute)
+	e.wantStatus(c, target, http.StatusBadGateway)
+}

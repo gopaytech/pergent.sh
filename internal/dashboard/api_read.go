@@ -995,12 +995,28 @@ func (d *Dashboard) resolveInputs(ctx context.Context, repo settings.Effective, 
 	for {
 		in, err = inputs.ResolveSkills(ctx, src, lib, on, p.ProjectID, branch, nil)
 		var nf *inputs.NotFoundError
-		if !errors.As(err, &nf) {
+		var pe *inputs.ProblemError
+		var name string
+		switch {
+		case errors.As(err, &nf):
+			name = nf.Name
+		case errors.As(err, &pe) && slices.Contains(on, pe.Name):
+			// A turned-on skill that is malformed. A maintainer must still
+			// see its switch to turn it off. (A broken ".pergent/skills"
+			// file always runs and has no switch: it stays an error, as it
+			// fails a review.)
+			name = pe.Name
+		default:
+			name = ""
+		}
+		if name == "" {
 			break
 		}
 		// ResolveSkills names one at a time: show it, ask again without it.
-		problems[nf.Name] = nf.Error()
-		on = slices.DeleteFunc(on, func(n string) bool { return n == nf.Name })
+		if _, has := problems[name]; !has {
+			problems[name] = err.Error()
+		}
+		on = slices.DeleteFunc(on, func(n string) bool { return n == name })
 	}
 	if err != nil {
 		return InputsView{}, err

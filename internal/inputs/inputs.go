@@ -177,6 +177,13 @@ func (e *NotFoundError) Error() string {
 	return fmt.Sprintf("skill %q is turned on but not found in the repository", e.Name)
 }
 
+// ProblemError says a skill file ResolveSkills had to use is malformed: one
+// of ".pergent/skills" (always used) or a turned-on one of another folder.
+// Name is the skill's name, or the file or folder name when it has none.
+type ProblemError struct{ Name, Path, Problem string }
+
+func (e *ProblemError) Error() string { return e.Path + ": " + e.Problem }
+
 // ResolveSkills gathers the inputs for one review. lib holds the library
 // skills the repository uses (its list, or the default list); repoSkills names
 // the detected skills turned on. Repository skills and instructions are read
@@ -214,7 +221,7 @@ func ResolveSkills(ctx context.Context, src Source, lib map[string]LibraryEntry,
 	}
 	for _, f := range always {
 		if f.Problem != "" {
-			return nil, fmt.Errorf("%s: %s", f.Path, f.Problem)
+			return nil, &ProblemError{Name: f.Name, Path: f.Path, Problem: f.Problem}
 		}
 		take(f, RepoFolders[0])
 		found[f.Name] = true
@@ -238,7 +245,7 @@ func ResolveSkills(ctx context.Context, src Source, lib map[string]LibraryEntry,
 				continue
 			}
 			if f.Problem != "" {
-				return nil, fmt.Errorf("%s: %s", f.Path, f.Problem)
+				return nil, &ProblemError{Name: f.Name, Path: f.Path, Problem: f.Problem}
 			}
 			take(f, folder)
 			supplied = append(supplied, f)
