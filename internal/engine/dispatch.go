@@ -153,6 +153,9 @@ type dispatcher struct {
 	// keptSources are the sources of the skills a re-run of some skills keeps
 	// from the earlier run.
 	keptSources map[string]string
+	// keptVersions are the library versions of those kept skills, as the
+	// earlier run recorded them.
+	keptVersions map[string]int
 }
 
 func (d *dispatcher) dispatch(ctx context.Context) error {
@@ -390,11 +393,12 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	// A Job started: the repository has skills and every one is there.
 	e.clearAttention(ctx, repo.Instance, repo.Project, attSkillMissing)
 	e.clearAttention(ctx, repo.Instance, repo.Project, attNoSkills)
-	// For the dashboard, best effort: the model and where each skill came
-	// from.
-	sources := in.Sources
+	// For the dashboard, best effort: the model, where each skill came from
+	// and the library version of each library skill.
+	sources, versions := in.Sources, in.Versions
 	if len(d.keptSources) > 0 {
-		// A re-run of some skills shows the whole review's sources.
+		// A re-run of some skills shows the whole review's sources and
+		// versions.
 		sources = map[string]string{}
 		for name, src := range d.keptSources {
 			sources[name] = src
@@ -402,8 +406,15 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		for name, src := range in.Sources {
 			sources[name] = src
 		}
+		versions = map[string]int{}
+		for name, v := range d.keptVersions {
+			versions[name] = v
+		}
+		for name, v := range in.Versions {
+			versions[name] = v
+		}
 	}
-	if err := e.Store.SetRunInputs(ctx, run.ID, llm.Model, sources, nil); err != nil {
+	if err := e.Store.SetRunInputs(ctx, run.ID, llm.Model, sources, versions); err != nil {
 		d.log.Info("couldn't record the review's model and skills for the dashboard", "error", d.redact(err.Error()))
 	}
 
@@ -466,12 +477,22 @@ func (d *dispatcher) subset(ctx context.Context, in *inputs.Inputs, mr forge.Cha
 			d.keptSources[name] = src
 		}
 	}
+	d.keptVersions = map[string]int{}
+	for name, v := range base.SkillVersions {
+		if _, rerun := only.Skills[name]; !rerun {
+			d.keptVersions[name] = v
+		}
+	}
 	return only, nil
 }
 
 // keptRun is the run whose results a re-run of some skills keeps, or the
 // reason it can't: it has to be a completed review of the base and head
-// commits this run reviews, by the skills in in. An error is the store's.
+// commits this run reviews, by the skills in in, and the skills it keeps (all
+// but the ones this run re-runs) have to be at the library version the earlier
+// run used, so a review never mixes results made under old and new skill
+// text. An earlier run that recorded no versions can't show that. An error is
+// the store's.
 func (d *dispatcher) keptRun(ctx context.Context, in *inputs.Inputs, mr forge.Change) (store.Run, string, error) {
 	run := d.run
 	if run.BaseRunID == nil {
@@ -507,6 +528,25 @@ func (d *dispatcher) keptRun(ctx context.Context, in *inputs.Inputs, mr forge.Ch
 	}
 	if len(seen) != len(in.Skills) {
 		return store.Run{}, "the skills changed since the earlier result", nil
+	}
+	if base.SkillVersions == nil {
+		return store.Run{}, "a skill changed since the earlier result", nil
+	}
+	rerun := map[string]bool{}
+	for _, n := range run.SkillSubset {
+		rerun[n] = true
+	}
+	for name := range in.Skills {
+		if rerun[name] {
+			continue
+		}
+		// A kept skill is at the same version, or in the repository's
+		// folder both times (no version).
+		cur, curOK := in.Versions[name]
+		was, wasOK := base.SkillVersions[name]
+		if cur != was || curOK != wasOK {
+			return store.Run{}, "a skill changed since the earlier result", nil
+		}
 	}
 	return base, "", nil
 }
@@ -683,6 +723,9 @@ func (d *dispatcher) skipNoSkills(ctx context.Context, plat Platform, repo setti
 		return fmt.Errorf("skip run: %w", err)
 	}
 	if ok {
+		// The skills did resolve (there are none): a skill that was missing
+		// is no longer the problem.
+		d.e.clearAttention(sctx, repo.Instance, repo.Project, attSkillMissing)
 		d.e.setAttention(sctx, repo.Instance, repo.Project, attNoSkills, reasonNoSkills)
 	}
 	return nil

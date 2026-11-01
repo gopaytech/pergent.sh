@@ -279,6 +279,29 @@ func TestAttentionClearedWhenAJobStarts(t *testing.T) {
 	}
 }
 
+// A skill_missing problem is stale once the repository's skills all resolve,
+// also when they turn out to be none: the list then shows no_skills alone.
+func TestNoSkillsClearsSkillMissing(t *testing.T) {
+	env := newTestEnv(t)
+	env.SetDefaultSkills()
+	if err := env.Store.SetAttention(env.ctx, testInstance, testProjectPath, attSkillMissing, "old"); err != nil {
+		t.Fatal(err)
+	}
+	id, _ := queue(env)
+
+	dispatch(t, env)
+
+	if r := env.Run(id); r.State != store.Skipped {
+		t.Fatalf("run = %s, want skipped", r.State)
+	}
+	if attentionItem(t, env, attNoSkills) == nil {
+		t.Errorf("attention no_skills is not recorded")
+	}
+	if attentionItem(t, env, attSkillMissing) != nil {
+		t.Errorf("a stale skill_missing is still listed beside no_skills")
+	}
+}
+
 // An approval of the head a skipped run was to review is withdrawn: nothing
 // reviewed it, so nothing stands behind it.
 func TestSkippedRunWithdrawsApprovalOfSameHead(t *testing.T) {

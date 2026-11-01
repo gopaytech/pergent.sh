@@ -3,8 +3,10 @@ package engine
 import (
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
 	"github.com/gopaytech/pergent.sh/internal/policy"
@@ -41,11 +43,166 @@ func rerunOf(t *testing.T, env *testEnv, head, trigger string, subset []string, 
 	return id
 }
 
+// recordVersions records, as a dispatch does, that run id used the library
+// skills at these versions.
+func recordVersions(t *testing.T, env *testEnv, id string, versions map[string]int) {
+	t.Helper()
+	sources := map[string]string{}
+	for name := range versions {
+		sources[name] = "library"
+	}
+	if err := env.Store.SetRunInputs(env.ctx, id, "m", sources, versions); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// editSkill saves new content of a library skill as its next version.
+func editSkill(t *testing.T, env *testEnv, name string, expect int) {
+	t.Helper()
+	content := "---\nname: " + name + "\n---\nEdited text of " + name + ".\n"
+	if _, err := env.Store.UpdateLibrarySkill(env.ctx, name, content, "test", expect, time.Now()); err != nil {
+		t.Fatalf("UpdateLibrarySkill(%s): %v", name, err)
+	}
+}
+
+// twoSkills is an environment whose library has the skills a and b (the
+// default list), a published review of head by both with a failed, and the
+// base run's recorded versions.
+func twoSkills(t *testing.T, baseVersions map[string]int) (env *testEnv, head, base string) {
+	t.Helper()
+	env = newTestEnv(t)
+	env.AddSkill("a", "---\nname: a\n---\nCheck a.\n")
+	env.AddSkill("b", "---\nname: b\n---\nCheck b.\n")
+	env.SetDefaultSkills("a", "b")
+	head = sha('a')
+	base = env.Publish(1, head, resultFor(t, head, namedSkill(t, "a", "failed", "", ""), namedSkill(t, "b", "no_blocking_issues", "", "")))
+	if baseVersions != nil {
+		recordVersions(t, env, base, baseVersions)
+	}
+	return env, head, base
+}
+
+// dispatchRerun queues a re-run of the failed skill a on top of base and
+// dispatches it.
+func dispatchRerun(t *testing.T, env *testEnv, head, base string) store.Run {
+	t.Helper()
+	id := rerunOf(t, env, head, store.TriggerRerunFailed, []string{"a"}, base)
+	env.GitLab.SetMR(openMR(1, head))
+	env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+	dispatch(t, env)
+	r := env.Run(id)
+	if r.State != store.Running {
+		t.Fatalf("state = %s (%s)\n%s", r.State, r.FailureReason, env.Logs())
+	}
+	return r
+}
+
+// A run records the library version of each library skill it used; skills of
+// the repository's own folders have none.
+func TestRunRecordsSkillVersions(t *testing.T) {
+	env := newTestEnv(t)
+	env.AddSkill("a", "---\nname: a\n---\nCheck a.\n")
+	editSkill(t, env, "a", 1)
+	env.SetDefaultSkills("a")
+	id, _ := queue(env)
+	env.GitLab.Reply(http.MethodGet, treePath(), http.StatusOK, []gitlab.TreeEntry{
+		{Name: "team.md", Path: ".pergent/skills/team.md", Type: "blob"},
+	})
+	env.GitLab.Reply(http.MethodGet, filePath(".pergent/skills/team.md"), http.StatusOK, "---\nname: team\n---\nOur rules.\n")
+
+	dispatch(t, env)
+
+	r := env.Run(id)
+	if r.State != store.Running {
+		t.Fatalf("state = %s (%s)\n%s", r.State, r.FailureReason, env.Logs())
+	}
+	if want := map[string]int{"a": 2}; !reflect.DeepEqual(r.SkillVersions, want) {
+		t.Errorf("skill versions = %v, want %v", r.SkillVersions, want)
+	}
+}
+
+// The merged review's record shows what each of its results was made under:
+// a kept skill keeps the earlier run's version, a re-run skill gets the new.
+func TestRerunFailedKeepsBaseVersions(t *testing.T) {
+	env, head, base := twoSkills(t, map[string]int{"a": 1, "b": 1})
+	editSkill(t, env, "a", 1) // the failed skill may change: it is run again
+
+	r := dispatchRerun(t, env, head, base)
+
+	if r.Trigger != store.TriggerRerunFailed || len(r.SkillSubset) != 1 || r.SkillSubset[0] != "a" {
+		t.Errorf("run = %q %v, want the re-run of a", r.Trigger, r.SkillSubset)
+	}
+	if want := map[string]int{"a": 2, "b": 1}; !reflect.DeepEqual(r.SkillVersions, want) {
+		t.Errorf("skill versions = %v, want %v (b kept from the earlier run)", r.SkillVersions, want)
+	}
+}
+
+// A skill that is kept was edited since its result: the results would mix two
+// texts of the skill, so everything is reviewed again.
+func TestRerunFailedAfterEditIsFull(t *testing.T) {
+	env, head, base := twoSkills(t, map[string]int{"a": 1, "b": 1})
+	editSkill(t, env, "b", 1)
+
+	r := dispatchRerun(t, env, head, base)
+
+	if r.Trigger != store.TriggerRerun || r.SkillSubset != nil || r.BaseRunID != nil {
+		t.Errorf("run = %q %v %v, want a full re-run", r.Trigger, r.SkillSubset, r.BaseRunID)
+	}
+	if want := map[string]int{"a": 1, "b": 2}; !reflect.DeepEqual(r.SkillVersions, want) {
+		t.Errorf("skill versions = %v, want %v (every skill, as now)", r.SkillVersions, want)
+	}
+	if !strings.Contains(env.Logs(), "a skill changed since the earlier result") {
+		t.Errorf("the reason was not logged:\n%s", env.Logs())
+	}
+}
+
+// A run made before versions were recorded can't show its skills are the
+// same, so a re-run of some of its skills reviews everything.
+func TestRerunFailedBaseWithoutVersionsIsFull(t *testing.T) {
+	env, head, base := twoSkills(t, nil)
+
+	r := dispatchRerun(t, env, head, base)
+
+	if r.Trigger != store.TriggerRerun || r.SkillSubset != nil || r.BaseRunID != nil {
+		t.Errorf("run = %q %v %v, want a full re-run", r.Trigger, r.SkillSubset, r.BaseRunID)
+	}
+	if want := map[string]int{"a": 1, "b": 1}; !reflect.DeepEqual(r.SkillVersions, want) {
+		t.Errorf("skill versions = %v, want %v", r.SkillVersions, want)
+	}
+}
+
+func TestRerunFailedUnchangedStaysSubset(t *testing.T) {
+	env, head, base := twoSkills(t, map[string]int{"a": 1, "b": 1})
+
+	r := dispatchRerun(t, env, head, base)
+
+	if r.Trigger != store.TriggerRerunFailed || len(r.SkillSubset) != 1 || r.SkillSubset[0] != "a" || r.BaseRunID == nil {
+		t.Errorf("run = %q %v %v, want the re-run of a kept", r.Trigger, r.SkillSubset, r.BaseRunID)
+	}
+}
+
+// A kept skill that came from the library then and from the repository's own
+// folder now is a changed skill too.
+func TestRerunFailedKeptSkillNowFromRepoIsFull(t *testing.T) {
+	env, head, base := twoSkills(t, map[string]int{"a": 1, "b": 1})
+	env.GitLab.Reply(http.MethodGet, treePath(), http.StatusOK, []gitlab.TreeEntry{
+		{Name: "b.md", Path: ".pergent/skills/b.md", Type: "blob"},
+	})
+	env.GitLab.Reply(http.MethodGet, filePath(".pergent/skills/b.md"), http.StatusOK, "---\nname: b\n---\nOur b.\n")
+
+	r := dispatchRerun(t, env, head, base)
+
+	if r.Trigger != store.TriggerRerun || r.SkillSubset != nil {
+		t.Errorf("run = %q %v, want a full re-run", r.Trigger, r.SkillSubset)
+	}
+}
+
 func TestSubsetJobGetsOnlyThoseSkills(t *testing.T) {
 	env := newTestEnv(t)
 	env.AddSkill("style", "---\nname: style\n---\nCheck the style.\n")
 	head := sha('a')
 	base := env.Publish(1, head, resultFor(t, head, namedSkill(t, "security", "no_blocking_issues", "", ""), namedSkill(t, "style", "failed", "", "")))
+	recordVersions(t, env, base, map[string]int{"security": 1, "style": 1})
 	id := rerunOf(t, env, head, store.TriggerRerunFailed, []string{"style", "gone"}, base)
 	env.GitLab.SetMR(openMR(1, head))
 	env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
@@ -73,8 +230,12 @@ func TestSubsetJobGetsOnlyThoseSkills(t *testing.T) {
 			t.Errorf("inputs hold %q", not)
 		}
 	}
-	if len(r.SkillSources) != 1 || r.SkillSources["style"] != ".pergent/skills" {
-		t.Errorf("skill sources = %v, want only style from the repository folder", r.SkillSources)
+	// The record is the whole review's: security kept from the earlier run.
+	if len(r.SkillSources) != 2 || r.SkillSources["security"] != "library" || r.SkillSources["style"] != ".pergent/skills" {
+		t.Errorf("skill sources = %v, want security kept and style from the repository folder", r.SkillSources)
+	}
+	if want := map[string]int{"security": 1}; !reflect.DeepEqual(r.SkillVersions, want) {
+		t.Errorf("skill versions = %v, want %v (the repository's style has none)", r.SkillVersions, want)
 	}
 	if r.Trigger != store.TriggerRerunFailed || len(r.SkillSubset) != 1 || r.SkillSubset[0] != "style" || r.BaseRunID == nil {
 		t.Errorf("run = %q %v %v, want the re-run with the skills that exist: style", r.Trigger, r.SkillSubset, r.BaseRunID)
@@ -191,12 +352,18 @@ func TestSubsetRecordsKeptSkillSources(t *testing.T) {
 	env.AddSkill("style", "---\nname: style\n---\nCheck the style.\n")
 	head := sha('a')
 	base := env.Publish(1, head, resultFor(t, head, namedSkill(t, "security", "no_blocking_issues", "", ""), namedSkill(t, "style", "failed", "", "")))
-	if err := env.Store.SetRunInputs(env.ctx, base, "m", map[string]string{"security": "repo", "style": "library"}, nil); err != nil {
+	if err := env.Store.SetRunInputs(env.ctx, base, "m", map[string]string{"security": ".agents/skills", "style": "library"}, map[string]int{"style": 1}); err != nil {
 		t.Fatal(err)
 	}
 	id := rerunOf(t, env, head, store.TriggerRerunFailed, []string{"style"}, base)
 	env.GitLab.SetMR(openMR(1, head))
 	env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+	// Security is the repository's own now as it was then (no library
+	// version either time), so it is kept.
+	env.GitLab.Reply(http.MethodGet, treePath(), http.StatusOK, []gitlab.TreeEntry{
+		{Name: "security.md", Path: ".pergent/skills/security.md", Type: "blob"},
+	})
+	env.GitLab.Reply(http.MethodGet, filePath(".pergent/skills/security.md"), http.StatusOK, "---\nname: security\n---\nOur security rules.\n")
 
 	dispatch(t, env)
 
@@ -204,8 +371,8 @@ func TestSubsetRecordsKeptSkillSources(t *testing.T) {
 	if r.State != store.Running {
 		t.Fatalf("state = %s (%s)\n%s", r.State, r.FailureReason, env.Logs())
 	}
-	if len(r.SkillSources) != 2 || r.SkillSources["security"] != "repo" || r.SkillSources["style"] != "library" {
-		t.Errorf("skill sources = %v, want security kept from the earlier run (repo) and style as now (library)", r.SkillSources)
+	if len(r.SkillSources) != 2 || r.SkillSources["security"] != ".agents/skills" || r.SkillSources["style"] != "library" {
+		t.Errorf("skill sources = %v, want security kept from the earlier run (.agents/skills) and style as now (library)", r.SkillSources)
 	}
 }
 
