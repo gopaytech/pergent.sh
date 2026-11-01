@@ -50,6 +50,9 @@ function Defaults({ v }: { v: DefaultsView }) {
     onMutate: () => setNote(""),
     onSuccess: (saved) => {
       client.setQueryData(["admin-defaults"], saved);
+      // The library's "default" marks and the repository pages' default list
+      // come from /api/skills.
+      client.invalidateQueries({ queryKey: ["skills"] });
       setNote("Defaults saved.");
     },
   });
@@ -207,7 +210,15 @@ function Defaults({ v }: { v: DefaultsView }) {
       {library.isPending && <Loading />}
       {library.isError && <ErrorBox error={library.error} />}
       {library.isSuccess && (
-        <SkillPicker library={library.data} selected={skills} disabled={save.isPending} onChange={setSkills} />
+        <SkillPicker
+          library={library.data}
+          // Stored default names the library no longer has (a delete is refused
+          // while one is in use, but the list may predate that).
+          missing={v.skills.filter((n) => !library.data.some((s) => s.name === n))}
+          selected={skills}
+          disabled={save.isPending}
+          onChange={setSkills}
+        />
       )}
       {save.isError && <ErrorBox error={save.error} />}
       <div className="foot">
@@ -229,11 +240,13 @@ function Defaults({ v }: { v: DefaultsView }) {
 // running total of their text against what a review takes.
 function SkillPicker({
   library,
+  missing,
   selected,
   disabled,
   onChange,
 }: {
   library: LibrarySkill[];
+  missing: string[];
   selected: string[];
   disabled: boolean;
   onChange: (names: string[]) => void;
@@ -255,6 +268,24 @@ function SkillPicker({
           <span className="src">{bytesText(s.size)}</span>
         </div>
       ))}
+      {missing.map((n) => (
+        <div className="skill" key={`missing/${n}`}>
+          <Switch
+            label={`Default skill ${n}`}
+            checked={selected.includes(n)}
+            disabled={disabled}
+            onChange={(on) => onChange(on ? [...selected, n] : selected.filter((x) => x !== n))}
+          />
+          <b className="grow">{n}</b>
+          <span className="problem">not in the library</span>
+        </div>
+      ))}
+      {missing.some((n) => selected.includes(n)) && (
+        <div className="pad meta">
+          {missing.filter((n) => selected.includes(n)).join(", ")} {missing.length === 1 ? "is" : "are"} no longer in the library.
+          Saving removes {missing.length === 1 ? "it" : "them"} from the default skills.
+        </div>
+      )}
       <div className={over ? "pad problem" : "pad meta"}>
         Total {bytesText(total)} of {bytesText(skillBudget)}
       </div>

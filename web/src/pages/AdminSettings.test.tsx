@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -151,6 +151,39 @@ describe("AdminSettings default skills", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save defaults" }));
     expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ skills: ["code-review", "security-review"] });
     expect(await screen.findByText("Defaults saved.")).toBeInTheDocument();
+  });
+
+  it("refetches the library after a save, so default marks and warnings aren't stale", async () => {
+    let skillReads = 0;
+    const fake = fakeApi({
+      ...routes(),
+      "GET /api/skills": () => ({ body: skillReads++ === 0 ? librarySkills : librarySkills.map((s) => ({ ...s, inDefaults: true })) }),
+      "PUT /api/admin/defaults": { body: { ...defaults, skills: ["code-review", "security-review"] } },
+    });
+    renderApp("/settings");
+    const picker = await screen.findByRole("group", { name: "Default skills" });
+    await userEvent.click(within(picker).getByRole("switch", { name: "Default skill security-review" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+    expect(await screen.findByText("Defaults saved.")).toBeInTheDocument();
+    await waitFor(() => expect(fake.find("GET", "/api/skills")).toHaveLength(2));
+  });
+
+  it("shows a stored default the library no longer has, and drops it on save", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "GET /api/admin/defaults": { body: { ...defaults, skills: ["code-review", "old-skill"] } },
+      "PUT /api/admin/defaults": { body: { ...defaults, skills: ["code-review"] } },
+    });
+    renderApp("/settings");
+    const picker = await screen.findByRole("group", { name: "Default skills" });
+    const old = within(picker).getByRole("switch", { name: "Default skill old-skill" });
+    expect(old).toBeChecked();
+    expect(old.closest(".skill")).toHaveTextContent("not in the library");
+    expect(picker).toHaveTextContent("old-skill is no longer in the library");
+    // It counts for nothing in the total.
+    expect(within(picker).getByText("Total 52 B of 900 KiB")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ skills: ["code-review"] });
   });
 
   it("flags a total over 900 KiB and shows the server's 400 message", async () => {
