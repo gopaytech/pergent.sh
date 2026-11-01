@@ -42,6 +42,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
 	"github.com/gopaytech/pergent.sh/internal/server"
+	"github.com/gopaytech/pergent.sh/internal/skillfetch"
 	"github.com/gopaytech/pergent.sh/internal/store"
 	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
@@ -63,7 +64,10 @@ const (
 	// than commandRetention are deleted.
 	commandPruneEvery = time.Hour
 	commandRetention  = 90 * 24 * time.Hour
-	usage             = "usage: pergent-sh serve [--config <path>]\n       pergent-sh admin reset-password <username>"
+	// fetchSweepEvery is how often skill fetches that never ended are failed
+	// and expired ones deleted.
+	fetchSweepEvery = time.Minute
+	usage           = "usage: pergent-sh serve [--config <path>]\n       pergent-sh admin reset-password <username>"
 )
 
 func main() {
@@ -210,10 +214,17 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		// engine has finished removing it.
 		OnInstanceRemoved: conn.Disconnect,
 	}
+	var fetcher *skillfetch.Fetcher
+	if cfg.DashboardEnabled() {
+		// Skills are installed from a connected instance's repositories with
+		// its review bot or App, the reader the dashboard has for it.
+		fetcher = &skillfetch.Fetcher{Store: st, Readers: conn.sourceReader, Secrets: reg.HeldSecrets,
+			CallbackBase: cfg.CallbackURL, Now: time.Now, Log: log}
+	}
 	dash, err := newDashboard(dashboard.Options{
 		Config: cfg, Instances: reg, Connector: conn, Store: st, SecretKey: key, Log: log,
 		Sources: conn.sources, Catalogs: conn.catalogs, ReconcileSoon: eng.ReconcileSoon,
-		Wake: eng.Wake,
+		Wake: eng.Wake, Fetcher: fetcher,
 	})
 	if err != nil {
 		return err
@@ -248,6 +259,8 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	if dash != nil {
 		prune := pruneSessions(dash.Auth.PruneSessions, time.Now, log)
 		loops = append(loops, func(ctx context.Context) { every(ctx, sessionPruneEvery, prune) })
+		sweep := sweepFetches(fetcher.Sweep, log)
+		loops = append(loops, func(ctx context.Context) { every(ctx, fetchSweepEvery, sweep) })
 	}
 	return serveUntilDone(ctx, ln, handler, together(loops...), log)
 }
@@ -310,6 +323,17 @@ func pruneSessions(prune func(context.Context, time.Time) (int, error), now func
 			log.Warn("couldn't prune dashboard sessions", "error", err.Error())
 		case n > 0:
 			log.Info("pruned dashboard sessions", "sessions", n)
+		}
+	}
+}
+
+// sweepFetches returns a pass that fails the skill fetches that never ended
+// and deletes the expired ones (sweep is skillfetch.Fetcher.Sweep). It only
+// touches the database; a failure is logged and tried again next time.
+func sweepFetches(sweep func(context.Context) error, log *slog.Logger) func(context.Context) {
+	return func(ctx context.Context) {
+		if err := sweep(ctx); err != nil && ctx.Err() == nil {
+			log.Warn("couldn't sweep the skill fetches", "error", err.Error())
 		}
 	}
 }

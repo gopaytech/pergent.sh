@@ -10,8 +10,10 @@
 // server.
 //
 // Nothing here runs on the engine loop. Calls to GitLab and GitHub are made
-// only for sign-in, access checks, the "add repository" picker and the
-// Skills & instructions view, each with a 10 s timeout.
+// only for sign-in, access checks (a skill source's path included), the "add
+// repository" picker and the Skills & instructions view, each with a 10 s
+// timeout; reading a skill source to install from runs in the background
+// (skillfetch).
 package dashboard
 
 import (
@@ -29,6 +31,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/settings"
+	"github.com/gopaytech/pergent.sh/internal/skillfetch"
 	"github.com/gopaytech/pergent.sh/internal/store"
 	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
@@ -73,6 +76,9 @@ type Options struct {
 	// ask for a review to be decided again. It must not block. nil leaves
 	// the engine to its next pass.
 	Wake func()
+	// Fetcher reads the skill sources admins install from and check for
+	// updates. Nil answers those routes 503.
+	Fetcher *skillfetch.Fetcher
 }
 
 // Connector connects instances to GitLab and GitHub while pergent.sh runs;
@@ -126,6 +132,7 @@ type Dashboard struct {
 	catalogs      *syncmap.Map[RepoCatalog]
 	reconcileSoon func(instance, project string)
 	wake          func()
+	fetcher       *skillfetch.Fetcher
 	// loadLLM reads the LLM saved in the dashboard again
 	// (instances.Registry.LoadLLM); a field so a test can make it fail.
 	loadLLM func(ctx context.Context) error
@@ -141,6 +148,7 @@ type Dashboard struct {
 	now             func() time.Time
 	inputs          *inputsCache
 	catalog         *catalogCache
+	sight           *sightCache
 }
 
 // New builds the dashboard. The config must have dashboard.url. Sign-in
@@ -175,11 +183,12 @@ func New(o Options) (*Dashboard, error) {
 	}
 	return &Dashboard{Auth: auth, Repos: repos, Store: o.Store, Log: o.Log,
 		cfg: o.Config, registry: o.Instances, connector: o.Connector,
-		sources: o.Sources, catalogs: o.Catalogs,
+		sources: o.Sources, catalogs: o.Catalogs, fetcher: o.Fetcher,
 		reconcileSoon: o.ReconcileSoon, wake: o.Wake, loadLLM: o.Instances.LoadLLM, heldSecrets: o.Instances.HeldSecrets, now: o.Now,
 		availableBudget: AvailableBudget, listBudget: listBudget, listLimit: listLimit,
 		inputs:  &inputsCache{entries: map[string]inputsEntry{}, flights: map[string]*inputsFlight{}},
-		catalog: &catalogCache{entries: map[string]catalogEntry{}, flights: map[string]*catalogFlight{}}}, nil
+		catalog: &catalogCache{entries: map[string]catalogEntry{}, flights: map[string]*catalogFlight{}},
+		sight:   &sightCache{entries: map[string]sightEntry{}}}, nil
 }
 
 // Handler serves:
@@ -194,8 +203,9 @@ func New(o Options) (*Dashboard, error) {
 //     (204);
 //   - GET /api/instances: the instances to sign in with, without a session;
 //   - GET /api/me: the signed-in user;
-//   - the read API, the write API, the users, teams and audit log API and
-//     the instances, LLM and defaults API, by role (see view.go for each
+//   - the read API, the write API, the users, teams and audit log API, the
+//     instances, LLM and defaults API, and the skill library API (with
+//     installs and updates from git sources), by role (see view.go for each
 //     endpoint's body).
 //
 // Every response is marked no-store.
@@ -215,6 +225,7 @@ func (d *Dashboard) Handler() http.Handler {
 	d.operatorRoutes(mux)
 	d.readRoutes(mux)
 	d.skillWriteRoutes(mux)
+	d.skillFetchRoutes(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Cache-Control", "no-store")

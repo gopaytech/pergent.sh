@@ -10,6 +10,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/dashboard"
 	"github.com/gopaytech/pergent.sh/internal/engine"
+	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/forge/githubforge"
 	"github.com/gopaytech/pergent.sh/internal/forge/gitlabforge"
 	"github.com/gopaytech/pergent.sh/internal/github"
@@ -114,6 +115,21 @@ func (c *connector) Disconnect(name string) {
 	if c.auth != nil {
 		c.auth.RemoveProvider(name)
 	}
+}
+
+// sourceReader is the reader of instance's repositories that skills are
+// installed from: the dashboard's reader of the instance, its review bot or
+// review App. An instance not connected, or without the dashboard, has none.
+func (c *connector) sourceReader(instance string) (forge.SourceReader, bool) {
+	if c.sources == nil {
+		return nil, false
+	}
+	s, ok := c.sources.Get(instance)
+	if !ok {
+		return nil, false
+	}
+	r, ok := s.(forge.SourceReader)
+	return r, ok
 }
 
 // serveDashboard gives the dashboard the Forge of plat as the reader of the

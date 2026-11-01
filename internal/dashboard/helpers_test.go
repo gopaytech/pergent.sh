@@ -27,8 +27,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
+	"github.com/gopaytech/pergent.sh/internal/skillfetch"
 	"github.com/gopaytech/pergent.sh/internal/store"
 	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
@@ -532,6 +534,8 @@ type env struct {
 	cfg *config.Config
 	src map[string]*fakeSource  // by instance
 	cat map[string]*fakeCatalog // by instance
+	// readers are the instances' readers of skill sources.
+	readers map[string]*fakeReader
 	// reconciles counts the dashboard's ReconcileSoon calls; reconciled
 	// lists the instance/project each named.
 	reconciles atomic.Int32
@@ -585,9 +589,10 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 		mutate(cfg)
 	}
 	e := &env{t: t, st: st, db: db, cfg: cfg, gl: gl, gh: gh, logs: &lockedBuffer{}, key: testKey(t),
-		clock: &clock{t: time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)},
-		src:   map[string]*fakeSource{"main": newFakeSource(), "gh": newFakeSource()},
-		cat:   map[string]*fakeCatalog{"main": {}, "gh": {}},
+		clock:   &clock{t: time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)},
+		src:     map[string]*fakeSource{"main": newFakeSource(), "gh": newFakeSource()},
+		cat:     map[string]*fakeCatalog{"main": {}, "gh": {}},
+		readers: map[string]*fakeReader{"main": {repos: map[string]*fakeRepo{}}, "gh": {repos: map[string]*fakeRepo{}}},
 	}
 	sources := syncmap.New[RepoSource](nil)
 	for name, s := range e.src {
@@ -604,16 +609,22 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 	e.reg, e.sources, e.catalogs = instances.New(cfg, st, box), sources, catalogs
 	e.reg.SetLog(slog.New(slog.NewTextHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	e.conn = newFakeConnector(sources, catalogs)
+	log := slog.New(slog.NewTextHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	fetcher := &skillfetch.Fetcher{Store: st, Secrets: e.reg.HeldSecrets, Now: e.clock.now, Log: log,
+		Readers: func(instance string) (forge.SourceReader, bool) {
+			r, ok := e.readers[instance]
+			return r, ok
+		}}
 	d, err := New(Options{
 		Config: cfg, Store: st, SecretKey: e.key, Now: e.clock.now, Sources: sources,
-		Instances: e.reg, Connector: e.conn,
+		Instances: e.reg, Connector: e.conn, Fetcher: fetcher,
 		Catalogs: catalogs, Wake: func() { e.wakes.Add(1) }, ReconcileSoon: func(instance, project string) {
 			e.reconciles.Add(1)
 			e.mu.Lock()
 			e.reconciled = append(e.reconciled, instance+"/"+project)
 			e.mu.Unlock()
 		},
-		Log: slog.New(slog.NewTextHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Log: log,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

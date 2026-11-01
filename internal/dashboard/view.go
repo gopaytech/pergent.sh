@@ -391,8 +391,9 @@ type DetectedSkillView struct {
 
 // SkillSourceView is where an installed skill came from. Kind is "instance"
 // (read through the API of a connected instance) or "url" (a public git
-// URL). Repo is shown to operators only for now: others get Hidden, and the
-// page says it is a private repository on the instance. URL is public.
+// URL). Repo is shown to operators and to users of that instance who can see
+// the repository on it (D11); others get Hidden, and the page says it is "a
+// private repository on <instance>". URL is public.
 type SkillSourceView struct {
 	Kind     string `json:"kind"`
 	Instance string `json:"instance,omitempty"`
@@ -460,6 +461,74 @@ type SkillInUseView struct {
 type SkillUserRepoView struct {
 	Instance string `json:"instance"`
 	Project  string `json:"project"`
+}
+
+// SkillFetchStartedView is the 202 of POST /api/admin/skill-fetches: the
+// read to ask GET /api/admin/skill-fetches/{id} about.
+type SkillFetchStartedView struct {
+	ID string `json:"id"`
+}
+
+// SkillFetchView is GET /api/admin/skill-fetches/{id}, for the admin who
+// started the read only (404 for anyone else). Status is "running", "done"
+// or "failed" (Error says why, for the admin); Commit is the commit read.
+// Purpose is "install" or "update"; the source is Instance and Repo, or URL,
+// at Ref, in the folder Path.
+//
+// Skills are the skills found, once done. Updates are set for a check for
+// updates that is done (D16): each skill installed from the source at
+// FromRef whose file is in Path, matched with what was read by its file
+// path. Its State is "changed", "same", "removed at the source" (the file is
+// gone) or "renamed at the source" (the file names another skill: install it
+// again); Problem says why it can't be updated. Current and Fetched are the
+// two texts, for a diff shown as plain text, never HTML.
+type SkillFetchView struct {
+	ID       string             `json:"id"`
+	Status   string             `json:"status"`
+	Commit   string             `json:"commit"`
+	Error    string             `json:"error"`
+	Purpose  string             `json:"purpose"`
+	Instance string             `json:"instance,omitempty"`
+	Repo     string             `json:"repo,omitempty"`
+	URL      string             `json:"url,omitempty"`
+	Ref      string             `json:"ref"`
+	FromRef  string             `json:"fromRef,omitempty"`
+	Path     string             `json:"path"`
+	Skills   []FetchedSkillView `json:"skills"`
+	Updates  []SkillUpdateView  `json:"updates"`
+}
+
+// FetchedSkillView is one skill a read found: Size is the bytes of its text
+// (0 when the text was not kept: too large, or holding a secret), Problem
+// why it can't be installed, Taken that a skill of that name is in the
+// library already ("name already in the library").
+type FetchedSkillView struct {
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	Size    int    `json:"size"`
+	Problem string `json:"problem,omitempty"`
+	Taken   bool   `json:"taken"`
+}
+
+// SkillUpdateView is one installed skill in a check for updates; Version is
+// its library version now.
+type SkillUpdateView struct {
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	State   string `json:"state"`
+	Problem string `json:"problem,omitempty"`
+	Version int    `json:"version"`
+	Current string `json:"current"`
+	Fetched string `json:"fetched"`
+}
+
+// SkillFetchResultView is the answer for one name of POST
+// /api/admin/skill-fetches/{id}/install or .../update: OK, or the Error why
+// not. The answer is a list of them, in the order asked.
+type SkillFetchResultView struct {
+	Name  string `json:"name"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
 }
 
 // AttentionView is one setup problem. Project is "" for a problem of the

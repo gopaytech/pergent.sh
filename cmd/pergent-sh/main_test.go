@@ -363,6 +363,21 @@ func TestPruneCommands(t *testing.T) {
 	}
 }
 
+// sweepFetches logs a failed sweep as a warning, and nothing else.
+func TestSweepFetches(t *testing.T) {
+	var logs strings.Builder
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	sweepFetches(func(context.Context) error { return errors.New("database down") }, log)(context.Background())
+	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "database down") {
+		t.Errorf("a failed sweep isn't a warning:\n%s", logs.String())
+	}
+	logs.Reset()
+	sweepFetches(func(context.Context) error { return nil }, log)(context.Background())
+	if logs.Len() != 0 {
+		t.Errorf("logged a sweep that worked:\n%s", logs.String())
+	}
+}
+
 // together runs every loop and returns once all of them have returned.
 func TestTogether(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
