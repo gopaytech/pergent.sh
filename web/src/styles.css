@@ -1200,3 +1200,48 @@ legend {
 .stack .actions-row .btn {
   margin-top: 12px;
 }
+
+/* --- skill library --- */
+
+.skill-row {
+  border-bottom: 1px solid var(--line);
+}
+
+.skill-row:last-child {
+  border-bottom: 0;
+}
+
+.skill-row .skill {
+  border-bottom: 0;
+}
+
+.skill-row .error {
+  margin: 0 16px 12px;
+}
+
+.skill-row .error ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+a.skill-name {
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+}
+
+a.skill-name:hover {
+  text-decoration: underline;
+}
+
+textarea.skill-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  min-height: 360px;
+  margin-bottom: 8px;
+}
+
+.problem {
+  color: var(--bad);
+  font-size: 12px;
+}

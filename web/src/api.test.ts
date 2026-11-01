@@ -45,6 +45,12 @@ describe("api", () => {
     expect((err as ApiError).message).toBe("days must be a number");
   });
 
+  it("keeps the error body for answers that carry more than a message", async () => {
+    fakeApi({ "DELETE /api/x": { status: 409, body: { error: "in use", hidden: 2 } } });
+    const err = await api.del("/api/x", "tok").catch((e: unknown) => e);
+    expect((err as ApiError).body).toEqual({ error: "in use", hidden: 2 });
+  });
+
   it("tells a CSRF refusal by its code, not its message", async () => {
     fakeApi({
       "PUT /api/a": { status: 403, body: { error: "the token is stale", code: "csrf" } },

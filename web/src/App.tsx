@@ -13,6 +13,7 @@ import RepositoryDetail from "./pages/RepositoryDetail";
 import ReviewDetail from "./pages/ReviewDetail";
 import Reviews from "./pages/Reviews";
 import SignIn from "./pages/SignIn";
+import SkillEditor, { NewSkill } from "./pages/SkillEditor";
 import Skills from "./pages/Skills";
 import Teams from "./pages/Teams";
 import Users from "./pages/Users";
@@ -45,6 +46,16 @@ export default function App() {
         <Route path="repos" element={<Repositories />} />
         <Route path="repos/:instance/*" element={<RepositoryDetail />} />
         <Route path="skills" element={<Skills />} />
+        <Route
+          path="skills/new"
+          element={
+            <AdminOnly>
+              <NewSkill />
+            </AdminOnly>
+          }
+        />
+        {/* skills/install and skills/updates (admin pages) rank above :name. */}
+        <Route path="skills/:name" element={<SkillEditor />} />
         <Route
           path="integrations"
           element={

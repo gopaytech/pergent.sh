@@ -214,7 +214,50 @@ export type InputsView = {
   instructions: string;
 };
 
-export type LibrarySkill = { name: string; content: string };
+// SkillSource is where an installed skill came from (SkillSourceView).
+// hidden: the repository is private to the viewer, so repo is not sent and
+// the page says "a private repository on <instance>". A url is public.
+export type SkillSource = {
+  kind: "instance" | "url";
+  instance?: string;
+  repo?: string;
+  url?: string;
+  ref: string;
+  commit: string;
+  hidden?: boolean;
+};
+
+// LibrarySkill is one skill of the library without its text (LibrarySkillView).
+// source is null for a skill written in the dashboard; updatedBy is sent to
+// admins only; size is bytes.
+export type LibrarySkill = {
+  name: string;
+  version: number;
+  size: number;
+  updatedAt: string;
+  inDefaults: boolean;
+  source: SkillSource | null;
+  updatedBy?: string;
+};
+
+// SkillVersion is one saved version; actor is sent to admins only.
+export type SkillVersion = { version: number; at: string; actor?: string; commit: string };
+
+// SkillDetail is GET /api/skills/{name}: the skill with its text and its
+// versions, newest first. The text is shown as plain text only.
+export type SkillDetail = LibrarySkill & { content: string; versions: SkillVersion[] };
+
+export type SkillVersionDetail = SkillVersion & { content: string };
+
+// SkillInUse is the body of the 409 a delete gets while repositories or the
+// default list name the skill. hidden counts the repositories the caller
+// can't see.
+export type SkillInUse = {
+  error: string;
+  repositories: { instance: string; project: string }[];
+  hidden: number;
+  inDefaults: boolean;
+};
 
 export type IntegrationView = {
   instance: string;
@@ -340,11 +383,15 @@ export type AvailableView = {
 export class ApiError extends Error {
   readonly status: number;
   readonly code?: string;
-  constructor(status: number, message: string, code?: string) {
+  // body is the whole JSON error body, for the answers that carry more than
+  // a message (the 409 of a skill delete).
+  readonly body?: unknown;
+  constructor(status: number, message: string, code?: string, body?: unknown) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    this.body = body;
   }
 }
 
@@ -408,8 +455,10 @@ async function request<T>(method: string, path: string, body?: unknown, csrf?: s
   if (!res.ok) {
     let message = `request failed (${res.status})`;
     let code: string | undefined;
+    let body: unknown;
     try {
       const data: unknown = await res.json();
+      body = data;
       if (data && typeof data === "object") {
         const { error, code: c } = data as { error?: unknown; code?: unknown };
         if (typeof error === "string") message = error;
@@ -421,7 +470,7 @@ async function request<T>(method: string, path: string, body?: unknown, csrf?: s
     if (res.status === 403 && code !== undefined && gateCodes.has(code)) {
       for (const fn of [...gateChanged]) fn();
     }
-    throw new ApiError(res.status, message, code);
+    throw new ApiError(res.status, message, code, body);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -480,6 +529,11 @@ export const paths = {
   apiRepoSettings: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/settings`,
   apiRepoReset: (instance: string, project: string) =>
     `/api/repositories/${seg(instance)}/${proj(project)}/settings/reset`,
+  skill: (name: string) => `/skills/${seg(name)}`,
+  apiSkill: (name: string) => `/api/skills/${seg(name)}`,
+  apiSkillVersion: (name: string, version: number) => `/api/skills/${seg(name)}/versions/${seg(String(version))}`,
+  apiAdminSkill: (name: string) => `/api/admin/skills/${seg(name)}`,
+  apiAdminSkillCopy: (name: string) => `/api/admin/skills/${seg(name)}/copy`,
 };
 
 // safeHref is u when it is an absolute http or https address, else

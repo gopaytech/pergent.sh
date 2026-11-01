@@ -4,6 +4,7 @@ import type {
   DefaultsView,
   InstanceAdminView,
   IntegrationView,
+  LibrarySkill,
   LLMAdminView,
   Me,
   OverviewView,
@@ -13,6 +14,7 @@ import type {
   ReviewSummary,
   Role,
   RunDetailView,
+  SkillDetail,
   TeamView,
   UserView,
 } from "../api";
@@ -232,10 +234,44 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
   attention: repo.health === "attention" ? [overview.attention[0]] : [],
 });
 
-export const librarySkills = [
-  { name: "code-review", content: "---\nname: code-review\n---\nReview the code.\n" },
-  { name: "security-review", content: "---\nname: security-review\n---\nLook for security bugs.\n" },
-];
+// A skill written in the dashboard, on the default list.
+export const skillWritten: LibrarySkill = {
+  name: "code-review",
+  version: 2,
+  size: 52,
+  updatedAt: "2026-11-01T08:00:00Z",
+  inDefaults: true,
+  source: null,
+  updatedBy: "admin",
+};
+
+// A skill installed from a repository the viewer can see.
+export const skillInstalled: LibrarySkill = {
+  name: "security-review",
+  version: 1,
+  size: 61,
+  updatedAt: "2026-10-30T08:00:00Z",
+  inDefaults: false,
+  source: { kind: "instance", instance: "main", repo: "acme/skills", ref: "v1.0", commit: "abc1234def5678" },
+  updatedBy: "admin",
+};
+
+export const librarySkills: LibrarySkill[] = [skillWritten, skillInstalled];
+
+export const skillWrittenDetail: SkillDetail = {
+  ...skillWritten,
+  content: "---\nname: code-review\n---\nReview the code.\n",
+  versions: [
+    { version: 2, at: "2026-11-01T08:00:00Z", actor: "admin", commit: "" },
+    { version: 1, at: "2026-10-31T08:00:00Z", actor: "admin", commit: "" },
+  ],
+};
+
+export const skillInstalledDetail: SkillDetail = {
+  ...skillInstalled,
+  content: "---\nname: security-review\n---\nLook for security bugs.\n",
+  versions: [{ version: 1, at: "2026-10-30T08:00:00Z", actor: "admin", commit: "abc1234def5678" }],
+};
 
 export const integrations: IntegrationView = {
   instance: "main",
