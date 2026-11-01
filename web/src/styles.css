@@ -1245,3 +1245,44 @@ textarea.skill-text {
   color: var(--bad);
   font-size: 12px;
 }
+
+.check.plain {
+  border-top: 0;
+  padding: 0;
+}
+
+.update-row {
+  border-bottom: 1px solid var(--line);
+}
+
+.update-row:last-of-type {
+  border-bottom: 0;
+}
+
+.update-row h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+pre.diff {
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow: auto;
+  max-height: 50vh;
+}
+
+pre.diff span {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+pre.diff .diff-add {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+pre.diff .diff-del {
+  background: var(--bad-soft);
+  color: var(--bad);
+}

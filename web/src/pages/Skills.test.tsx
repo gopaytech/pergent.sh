@@ -56,7 +56,7 @@ describe("Skills", () => {
     await screen.findByRole("link", { name: "security-review" });
     const installed = rowOf("security-review");
     expect(within(installed).getByRole("button", { name: "Copy" })).toBeInTheDocument();
-    expect(within(installed).getByRole("link", { name: "Check for updates" })).toHaveAttribute("href", "/skills/updates");
+    expect(within(installed).getByRole("link", { name: "Check for updates" })).toHaveAttribute("href", "/skills/updates?skill=security-review");
     expect(within(installed).queryByRole("link", { name: "Edit" })).not.toBeInTheDocument();
     const written = rowOf("code-review");
     expect(within(written).queryByRole("link", { name: "Check for updates" })).not.toBeInTheDocument();

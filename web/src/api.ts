@@ -222,6 +222,8 @@ export type SkillSource = {
   instance?: string;
   repo?: string;
   url?: string;
+  // path is the skill's file in the source; never sent with hidden.
+  path?: string;
   ref: string;
   commit: string;
   hidden?: boolean;
@@ -258,6 +260,48 @@ export type SkillInUse = {
   hidden: number;
   inDefaults: boolean;
 };
+
+// FetchedSkill is one skill a read of a git source found (FetchedSkillView):
+// size is bytes (0 when the text was not kept), problem says why it can't be
+// installed, taken that a skill of that name is in the library already.
+export type FetchedSkill = { name: string; path: string; size: number; problem?: string; taken: boolean };
+
+// SkillUpdate is one installed skill in a check for updates. state is
+// "changed", "same", "removed at the source" or "renamed at the source";
+// problem says why it can't be updated. current and fetched are the two
+// texts, shown as text only.
+export type SkillUpdate = {
+  name: string;
+  path: string;
+  state: string;
+  problem?: string;
+  version: number;
+  current: string;
+  fetched: string;
+};
+
+// SkillFetch is GET /api/admin/skill-fetches/{id} (SkillFetchView): a read of
+// a git source. status is "running", "done" or "failed" (error says why);
+// skills are what an install read found, updates what a check for updates
+// matched with the installed skills.
+export type SkillFetch = {
+  id: string;
+  status: "running" | "done" | "failed";
+  commit: string;
+  error: string;
+  purpose: "install" | "update";
+  instance?: string;
+  repo?: string;
+  url?: string;
+  ref: string;
+  fromRef?: string;
+  path: string;
+  skills: FetchedSkill[];
+  updates: SkillUpdate[];
+};
+
+// SkillFetchResult is the answer for one name of an install or an update.
+export type SkillFetchResult = { name: string; ok: boolean; error?: string };
 
 export type IntegrationView = {
   instance: string;
@@ -536,6 +580,12 @@ export const paths = {
   apiSkillVersion: (name: string, version: number) => `/api/skills/${seg(name)}/versions/${seg(String(version))}`,
   apiAdminSkill: (name: string) => `/api/admin/skills/${seg(name)}`,
   apiAdminSkillCopy: (name: string) => `/api/admin/skills/${seg(name)}/copy`,
+  // The page that checks one installed skill's source for updates.
+  skillUpdates: (name: string) => `/skills/updates${query([["skill", name]])}`,
+  apiSkillFetches: "/api/admin/skill-fetches",
+  apiSkillFetch: (id: string) => `/api/admin/skill-fetches/${seg(id)}`,
+  // action is "install" or "update".
+  apiSkillFetchAction: (id: string, action: "install" | "update") => `/api/admin/skill-fetches/${seg(id)}/${action}`,
 };
 
 // safeHref is u when it is an absolute http or https address, else

@@ -108,7 +108,9 @@ export default function SkillEditor() {
   const skill = useQuery({ queryKey: ["skill", name], queryFn: () => api.get<SkillDetail>(paths.apiSkill(name)) });
   if (skill.isPending) return <Loading />;
   if (skill.isError) return isStatus(skill.error, 404) ? <NotFound /> : <ErrorBox error={skill.error} />;
-  return <SkillPage skill={skill.data} reload={() => skill.refetch()} />;
+  // The key gives each skill its own draft and opened version: moving to
+  // another cached skill must not keep the first one's.
+  return <SkillPage key={skill.data.name} skill={skill.data} reload={() => skill.refetch()} />;
 }
 
 function SkillPage({ skill, reload }: { skill: SkillDetail; reload: () => Promise<{ data?: SkillDetail }> }) {

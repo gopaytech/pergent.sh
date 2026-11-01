@@ -393,12 +393,16 @@ type DetectedSkillView struct {
 // (read through the API of a connected instance) or "url" (a public git
 // URL). Repo is shown to operators and to users of that instance who can see
 // the repository on it (D11); others get Hidden, and the page says it is "a
-// private repository on <instance>". URL is public.
+// private repository on <instance>". URL is public. Path is the skill's
+// file in the repository, sent with Repo and URL, never with Hidden (a path
+// in a private repository is private too), for a check for updates to name
+// the folder.
 type SkillSourceView struct {
 	Kind     string `json:"kind"`
 	Instance string `json:"instance,omitempty"`
 	Repo     string `json:"repo,omitempty"`
 	URL      string `json:"url,omitempty"`
+	Path     string `json:"path,omitempty"`
 	Ref      string `json:"ref"`
 	Commit   string `json:"commit"`
 	Hidden   bool   `json:"hidden,omitempty"`

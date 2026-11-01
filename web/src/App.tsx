@@ -14,7 +14,9 @@ import ReviewDetail from "./pages/ReviewDetail";
 import Reviews from "./pages/Reviews";
 import SignIn from "./pages/SignIn";
 import SkillEditor, { NewSkill } from "./pages/SkillEditor";
+import SkillInstall from "./pages/SkillInstall";
 import Skills from "./pages/Skills";
+import SkillUpdates from "./pages/SkillUpdates";
 import Teams from "./pages/Teams";
 import Users from "./pages/Users";
 import { NotFound } from "./ui";
@@ -51,6 +53,22 @@ export default function App() {
           element={
             <AdminOnly>
               <NewSkill />
+            </AdminOnly>
+          }
+        />
+        <Route
+          path="skills/install"
+          element={
+            <AdminOnly>
+              <SkillInstall />
+            </AdminOnly>
+          }
+        />
+        <Route
+          path="skills/updates"
+          element={
+            <AdminOnly>
+              <SkillUpdates />
             </AdminOnly>
           }
         />

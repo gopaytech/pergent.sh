@@ -15,6 +15,7 @@ import type {
   Role,
   RunDetailView,
   SkillDetail,
+  SkillFetch,
   TeamView,
   UserView,
 } from "../api";
@@ -252,7 +253,7 @@ export const skillInstalled: LibrarySkill = {
   size: 61,
   updatedAt: "2026-10-30T08:00:00Z",
   inDefaults: false,
-  source: { kind: "instance", instance: "main", repo: "acme/skills", ref: "v1.0", commit: "abc1234def5678" },
+  source: { kind: "instance", instance: "main", repo: "acme/skills", path: "skills/security-review.md", ref: "v1.0", commit: "abc1234def5678" },
   updatedBy: "admin",
 };
 
@@ -271,6 +272,57 @@ export const skillInstalledDetail: SkillDetail = {
   ...skillInstalled,
   content: "---\nname: security-review\n---\nLook for security bugs.\n",
   versions: [{ version: 1, at: "2026-10-30T08:00:00Z", actor: "admin", commit: "abc1234def5678" }],
+};
+
+// A read of acme/skills at v1.0, done: one skill to install, one whose name
+// is taken, one that can't be installed.
+export const fetchInstallDone: SkillFetch = {
+  id: "0b2f6c1e-9f55-4c1e-8a57-3d1d5b8c7a10",
+  status: "done",
+  commit: "1234567890abcdef",
+  error: "",
+  purpose: "install",
+  instance: "main",
+  repo: "acme/skills",
+  ref: "v1.0",
+  path: "skills",
+  skills: [
+    { name: "style", path: "skills/style.md", size: 2048, taken: false },
+    { name: "code-review", path: "skills/code-review.md", size: 52, taken: true },
+    { name: "huge", path: "skills/huge.md", size: 0, problem: "larger than 128 KiB", taken: false },
+  ],
+  updates: [],
+};
+
+// A check for updates of security-review (installed from acme/skills at v1.0,
+// file skills/security-review.md) against v1.1: one changed, one same, one
+// removed at the source, one renamed at the source.
+export const fetchUpdateDone: SkillFetch = {
+  ...fetchInstallDone,
+  purpose: "update",
+  ref: "v1.1",
+  fromRef: "v1.0",
+  skills: [],
+  updates: [
+    {
+      name: "security-review",
+      path: "skills/security-review.md",
+      state: "changed",
+      version: 1,
+      current: "Look for bugs.\nCheck inputs.\n",
+      fetched: "Look for bugs.\nCheck all inputs.\nCheck secrets.\n",
+    },
+    { name: "style", path: "skills/style.md", state: "same", version: 3, current: "Be kind.\n", fetched: "Be kind.\n" },
+    { name: "old", path: "skills/old.md", state: "removed at the source", version: 1, current: "Old text.\n", fetched: "" },
+    {
+      name: "moved",
+      path: "skills/moved.md",
+      state: "renamed at the source",
+      version: 2,
+      current: "Moved text.\n",
+      fetched: "Moved text, new name.\n",
+    },
+  ],
 };
 
 export const integrations: IntegrationView = {

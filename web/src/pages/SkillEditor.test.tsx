@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { act, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -129,6 +129,26 @@ describe("SkillEditor: one skill", () => {
     const [put] = fake.find("PUT", "/api/admin/skills/code-review");
     expect(put.body).toEqual({ content: skillWrittenDetail.content + "mine", version: 2 });
     expect(await screen.findByRole("alert")).toHaveTextContent("this skill changed since you opened it");
+  });
+
+  it("moving to another cached skill shows its text and version, not the first one's draft", async () => {
+    const other = { ...skillWrittenDetail, name: "style-guide", version: 7, content: "Be kind.\n" };
+    const fake = fakeApi({
+      "GET /api/me": { body: platformAdmin },
+      "GET /api/skills/code-review": { body: skillWrittenDetail },
+      "PUT /api/admin/skills/style-guide": { body: { version: 8 } },
+    });
+    const { client, go } = renderApp("/skills/view/code-review");
+    await userEvent.type(await screen.findByLabelText("Skill text"), "my draft");
+    client.setQueryData(["skill", "style-guide"], other);
+    act(() => go("/skills/view/style-guide"));
+    expect(await screen.findByRole("heading", { name: /style-guide/ })).toBeInTheDocument();
+    const text = screen.getByLabelText("Skill text");
+    expect(text).toHaveValue("Be kind.\n");
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    await userEvent.type(text, "More.");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/admin/skills/style-guide")[0].body).toEqual({ content: "Be kind.\nMore.", version: 7 });
   });
 
   it("a second save names the version the first one made", async () => {

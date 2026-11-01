@@ -58,12 +58,12 @@ func TestSkillsListFromStore(t *testing.T) {
 		t.Errorf("alpha source for an admin = %+v", alpha.Source)
 	}
 	raw := e.get(admin, "/api/skills").Body.String()
-	if strings.Contains(raw, "Alpha text.") || strings.Contains(raw, "acme/private-skills") {
+	if strings.Contains(raw, "Alpha text.") || strings.Contains(raw, "acme/private-skills") || strings.Contains(raw, "skills/alpha.md") {
 		t.Errorf("the list holds a skill's text or its repository: %s", raw)
 	}
 
 	op := getJSON[[]LibrarySkillView](e, e.operator(), "/api/skills")
-	if s := op[0].Source; s == nil || s.Repo != "acme/private-skills" || s.Hidden {
+	if s := op[0].Source; s == nil || s.Repo != "acme/private-skills" || s.Path != "skills/alpha.md" || s.Hidden {
 		t.Errorf("alpha source for an operator = %+v", op[0].Source)
 	}
 

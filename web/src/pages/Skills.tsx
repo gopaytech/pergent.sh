@@ -91,7 +91,7 @@ function SkillRow({ skill, admin }: { skill: LibrarySkill; admin: boolean }) {
                 Edit
               </Link>
             ) : (
-              <Link to="/skills/updates" className="btn small">
+              <Link to={paths.skillUpdates(skill.name)} className="btn small">
                 Check for updates
               </Link>
             )}

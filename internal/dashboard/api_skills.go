@@ -117,12 +117,12 @@ func (d *Dashboard) sourceView(ctx context.Context, se Session, s *store.SkillSo
 	case store.SourceKindInstance:
 		v.Instance = s.Instance
 		if d.seesSourceRepo(ctx, se, s.Instance, s.Repo) {
-			v.Repo = s.Repo
+			v.Repo, v.Path = s.Repo, s.Path
 		} else {
 			v.Hidden = true
 		}
 	case store.SourceKindURL:
-		v.URL = s.URL
+		v.URL, v.Path = s.URL, s.Path
 	}
 	return v
 }
