@@ -262,6 +262,11 @@ func TestSettingsValidation(t *testing.T) {
 		cfg.Jobs.Resources.Requests = corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")}
 	})
 	e.dashboardRepo("main", "acme/gadgets", nil)
+	// The store takes only library skills; the dashboard still checks the
+	// static library, which holds "style" too.
+	if _, err := e.st.CreateLibrarySkill(context.Background(), store.NewSkill{Name: "style", Content: "x"}); err != nil {
+		t.Fatal(err)
+	}
 	c := e.signInGitLab(true, "acme/gadgets")
 	target := "/api/repositories/main/acme/gadgets/settings"
 

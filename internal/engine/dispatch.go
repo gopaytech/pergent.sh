@@ -377,7 +377,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			sources[name] = src
 		}
 	}
-	if err := e.Store.SetRunInputs(ctx, run.ID, llm.Model, sources); err != nil {
+	if err := e.Store.SetRunInputs(ctx, run.ID, llm.Model, sources, nil); err != nil {
 		d.log.Info("couldn't record the review's model and skills for the dashboard", "error", d.redact(err.Error()))
 	}
 

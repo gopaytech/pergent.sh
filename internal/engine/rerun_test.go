@@ -191,7 +191,7 @@ func TestSubsetRecordsKeptSkillSources(t *testing.T) {
 	env.Engine.Library["style"] = []byte("---\nname: style\n---\nCheck the style.\n")
 	head := sha('a')
 	base := env.Publish(1, head, resultFor(t, head, namedSkill(t, "security", "no_blocking_issues", "", ""), namedSkill(t, "style", "failed", "", "")))
-	if err := env.Store.SetRunInputs(env.ctx, base, "m", map[string]string{"security": "repo", "style": "library"}); err != nil {
+	if err := env.Store.SetRunInputs(env.ctx, base, "m", map[string]string{"security": "repo", "style": "library"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	id := rerunOf(t, env, head, store.TriggerRerunFailed, []string{"style"}, base)

@@ -249,33 +249,56 @@ type RepoDefaults struct {
 	// RerunLimitPerMR and RerunLimitPerRepo cap the re-runs asked for per
 	// merge request and per repository and day.
 	RerunLimitPerMR, RerunLimitPerRepo *int
-	UpdatedAt                          time.Time
+	// Skills is the default skill list: library names, for a repository
+	// whose own skills setting is null. Nil (an empty list is stored as nil)
+	// is no skills.
+	Skills    []string
+	UpdatedAt time.Time
 }
 
 // RepoDefaults returns the defaults; the zero value when none were put.
 func (s *Store) RepoDefaults(ctx context.Context) (RepoDefaults, error) {
 	var d RepoDefaults
 	err := s.pool.QueryRow(ctx, `SELECT approve, review_drafts, failure_status, job_timeout_seconds, job_memory,
-			rerun_limit_per_mr, rerun_limit_per_repo, updated_at
+			rerun_limit_per_mr, rerun_limit_per_repo, skills, updated_at
 		FROM repo_defaults WHERE id = 1`).
 		Scan(&d.Approve, &d.ReviewDrafts, &d.FailureStatus, &d.JobTimeoutSeconds, &d.JobMemory,
-			&d.RerunLimitPerMR, &d.RerunLimitPerRepo, &d.UpdatedAt)
+			&d.RerunLimitPerMR, &d.RerunLimitPerRepo, &d.Skills, &d.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RepoDefaults{}, nil
+	}
+	if len(d.Skills) == 0 {
+		d.Skills = nil
 	}
 	return d, err
 }
 
 // PutRepoDefaults replaces the defaults with d, nil fields included. Its
-// UpdatedAt is ignored: the database's now is stored.
+// UpdatedAt is ignored: the database's now is stored. Each library skill d
+// names is locked until the change is stored, so it can't be deleted
+// meanwhile; one that is not in the library is ErrSkillNotFound.
 func (s *Store) PutRepoDefaults(ctx context.Context, d RepoDefaults) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO repo_defaults (id, approve, review_drafts, failure_status, job_timeout_seconds, job_memory,
-			rerun_limit_per_mr, rerun_limit_per_repo, updated_at)
-		VALUES (1, $1, $2, $3, $4, $5, $6, $7, now())
+	skills := d.Skills
+	if len(skills) == 0 {
+		skills = nil
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	if err := lockNamedSkills(ctx, tx, skills); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO repo_defaults (id, approve, review_drafts, failure_status, job_timeout_seconds, job_memory,
+			rerun_limit_per_mr, rerun_limit_per_repo, skills, updated_at)
+		VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, now())
 		ON CONFLICT (id) DO UPDATE SET approve = EXCLUDED.approve, review_drafts = EXCLUDED.review_drafts,
 			failure_status = EXCLUDED.failure_status, job_timeout_seconds = EXCLUDED.job_timeout_seconds,
 			job_memory = EXCLUDED.job_memory, rerun_limit_per_mr = EXCLUDED.rerun_limit_per_mr,
-			rerun_limit_per_repo = EXCLUDED.rerun_limit_per_repo, updated_at = EXCLUDED.updated_at`,
-		d.Approve, d.ReviewDrafts, d.FailureStatus, d.JobTimeoutSeconds, d.JobMemory, d.RerunLimitPerMR, d.RerunLimitPerRepo)
-	return err
+			rerun_limit_per_repo = EXCLUDED.rerun_limit_per_repo, skills = EXCLUDED.skills, updated_at = EXCLUDED.updated_at`,
+		d.Approve, d.ReviewDrafts, d.FailureStatus, d.JobTimeoutSeconds, d.JobMemory, d.RerunLimitPerMR, d.RerunLimitPerRepo, skills); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
