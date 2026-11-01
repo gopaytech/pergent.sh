@@ -3,13 +3,13 @@ entries:
   pergent-sh:
   - apiVersion: v2
     appVersion: v0.2.0
-    created: "2026-11-01T13:47:07.416991+07:00"
+    created: "2026-11-01T15:31:04.928778+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
-    digest: ba8528d5179454832cff674acec9738dc2c83677dc57d7fa90ec0eae67313b99
+    digest: cb3c3f4723d92d519704a74f2f7af34d66ebb5f95472597927f0b50e09a4dc0e
     name: pergent-sh
     type: application
     urls:
     - pergent-sh-0.2.0.tgz
     version: 0.2.0
-generated: "2026-11-01T13:47:07.416176+07:00"
+generated: "2026-11-01T15:31:04.927694+07:00"
