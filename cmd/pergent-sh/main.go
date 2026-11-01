@@ -3,6 +3,7 @@
 //
 //	pergent-sh serve [--config /etc/pergent-sh/config.yaml]
 //	pergent-sh admin reset-password <username>
+//	pergent-sh fetch-skills --dir <clone> --path <folder> --commit-file <file> --error-file <file> --result-url <url>
 //
 // serve needs DATABASE_URL and PERGENT_SH_SECRET_KEY in the environment, plus
 // the LLM key, the GitLab tokens, the GitHub App private keys (or approve
@@ -13,6 +14,10 @@
 // admin reset-password gives a dashboard password account a new random
 // password, printed on stdout, which must be changed at the next sign-in. It
 // needs only DATABASE_URL.
+//
+// fetch-skills runs in a skill fetch Job, not in the pergent.sh pod: it
+// posts the skills of a clone of a public URL back to pergent.sh. It needs
+// only PERGENT_SH_FETCH_TOKEN.
 package main
 
 import (
@@ -34,6 +39,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/gopaytech/pergent.sh/internal/callback"
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/dashboard"
 	"github.com/gopaytech/pergent.sh/internal/engine"
@@ -67,7 +73,8 @@ const (
 	// fetchSweepEvery is how often skill fetches that never ended are failed
 	// and expired ones deleted.
 	fetchSweepEvery = time.Minute
-	usage           = "usage: pergent-sh serve [--config <path>]\n       pergent-sh admin reset-password <username>"
+	usage           = "usage: pergent-sh serve [--config <path>]\n       pergent-sh admin reset-password <username>\n" +
+		"       pergent-sh fetch-skills --dir <clone> [--path <folder>] --commit-file <file> --error-file <file> --result-url <url>"
 )
 
 func main() {
@@ -83,8 +90,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	if cmd.name == "reset-password" {
+	switch cmd.name {
+	case "reset-password":
 		os.Exit(resetPassword(ctx, cmd.username, os.Stdout, os.Stderr))
+	case "fetch-skills":
+		os.Exit(runFetchSkills(ctx, cmd.fetch, os.Stderr))
 	}
 	if err := serve(ctx, cmd.configPath, log); err != nil {
 		log.Error("pergent-sh stopped", "error", err.Error())
@@ -93,15 +103,16 @@ func main() {
 }
 
 // command is what the arguments ask for: name "serve", with configPath,
-// or "reset-password", with username.
+// "reset-password", with username, or "fetch-skills", with fetch.
 type command struct {
 	name       string
 	configPath string
 	username   string
+	fetch      fetchOptions
 }
 
-// parseArgs reads "serve [--config <path>]" or "admin reset-password
-// <username>".
+// parseArgs reads "serve [--config <path>]", "admin reset-password
+// <username>" or "fetch-skills <flags>".
 func parseArgs(args []string, stderr io.Writer) (cmd command, err error) {
 	if len(args) == 0 {
 		return command{}, errors.New(usage)
@@ -123,6 +134,12 @@ func parseArgs(args []string, stderr io.Writer) (cmd command, err error) {
 			return command{}, errors.New(usage)
 		}
 		return command{name: "reset-password", username: args[2]}, nil
+	case "fetch-skills":
+		o, err := parseFetchArgs(args[1:], stderr)
+		if err != nil {
+			return command{}, err
+		}
+		return command{name: "fetch-skills", fetch: o}, nil
 	}
 	return command{}, errors.New(usage)
 }
@@ -201,25 +218,33 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		return fmt.Errorf("kubernetes client: %w", err)
 	}
 
+	launcher := &kube.Launcher{Client: clientset, Namespace: cfg.Jobs.Namespace}
 	eng := &engine.Engine{
 		Store:          st,
 		Config:         cfg,
 		Instances:      reg,
 		Platforms:      conn.platforms,
 		WebhookSecrets: conn.gitlabHooks,
-		Launcher:       &kube.Launcher{Client: clientset, Namespace: cfg.Jobs.Namespace},
+		Launcher:       launcher,
 		Box:            box,
 		Log:            log,
 		// An instance removed in the dashboard is taken out of use once the
 		// engine has finished removing it.
 		OnInstanceRemoved: conn.Disconnect,
 	}
-	var fetcher *skillfetch.Fetcher
+	var (
+		fetcher      *skillfetch.Fetcher
+		fetchResults callback.FetchResults
+	)
 	if cfg.DashboardEnabled() {
 		// Skills are installed from a connected instance's repositories with
-		// its review bot or App, the reader the dashboard has for it.
+		// its review bot or App, the reader the dashboard has for it, and
+		// from a public URL by a Job, which needs pergent.sh's own image
+		// (PERGENT_SH_IMAGE, set by the chart) to send them back.
 		fetcher = &skillfetch.Fetcher{Store: st, Readers: conn.sourceReader, Secrets: reg.HeldSecrets,
-			CallbackBase: cfg.CallbackURL, Now: time.Now, Log: log}
+			CallbackBase: cfg.CallbackURL, Now: time.Now, Log: log,
+			Launcher: launcher, Namespace: cfg.Jobs.Namespace, GitImage: cfg.Jobs.Image, Image: os.Getenv("PERGENT_SH_IMAGE")}
+		fetchResults = fetcher
 	}
 	dash, err := newDashboard(dashboard.Options{
 		Config: cfg, Instances: reg, Connector: conn, Store: st, SecretKey: key, Log: log,
@@ -239,7 +264,8 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	}
 	handler := server.Routes(server.Deps{
 		Config: cfg, Instances: reg, WebhookSecrets: conn.gitlabHooks, GitHubWebhookSecrets: conn.githubHooks,
-		Store: st, Bots: commandBots(conn.platforms), Wake: eng.Wake, Dashboard: dashboardHandler(dash), Log: log,
+		Store: st, Bots: commandBots(conn.platforms), Wake: eng.Wake, Dashboard: dashboardHandler(dash),
+		SkillFetches: fetchResults, Log: log,
 	})
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {

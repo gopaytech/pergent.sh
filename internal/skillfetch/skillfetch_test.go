@@ -520,7 +520,7 @@ func TestStartRefusals(t *testing.T) {
 	if _, err := f.Start(ctx, Request{Instance: "nope", Repo: "acme/skills", Ref: "main", Purpose: store.FetchInstall}); !errors.Is(err, ErrNotConnected) {
 		t.Errorf("Start on an instance not connected = %v; want ErrNotConnected", err)
 	}
-	// A public URL is read in a Job, which comes later: nothing is fetched.
+	// A public URL is read in a Job, which needs the pergent.sh image.
 	_, err := f.Start(ctx, Request{URL: "https://example.com/skills.git", Ref: "main", Purpose: store.FetchInstall})
 	var bad RequestError
 	if !errors.As(err, &bad) {

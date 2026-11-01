@@ -3,8 +3,8 @@
 // repository on a connected GitLab or GitHub instance is read by the pod,
 // through the platform's API, with the review bot or the review App
 // (forge.SourceReader): the admin enters no secret and no Job runs. A public
-// URL is read in a Job (later); the pod never fetches an address an admin
-// typed.
+// URL is read in a Job with no token (job.go); the pod never fetches an
+// address an admin typed.
 //
 // A read is recorded as a skill fetch (store.SkillFetch): the skills found,
 // each with its text or the problem that keeps it from being installed, and
@@ -49,8 +49,9 @@ const (
 )
 
 var (
-	msgTooMany  = fmt.Sprintf("the folder has more than %d skills; choose a smaller folder", MaxFetchFiles)
-	msgTooLarge = fmt.Sprintf("the skills come to more than %d MiB; choose a smaller folder", MaxFetchBytes>>20)
+	msgTooMany = fmt.Sprintf("the folder has more than %d skills; choose a smaller folder", MaxFetchFiles)
+	// MsgTooLarge is also what a fetch Job posts for a folder of too much text.
+	MsgTooLarge = fmt.Sprintf("the skills come to more than %d MiB; choose a smaller folder", MaxFetchBytes>>20)
 	msgTooSlow  = fmt.Sprintf("reading the repository took longer than %d minutes", int(FetchTimeout/time.Minute))
 )
 
@@ -91,7 +92,13 @@ type Fetcher struct {
 	CallbackBase string // config callback_url
 	Now          func() time.Time
 	Log          *slog.Logger
-	// Task 11 adds the Job fields.
+
+	// A public URL is read by a Job: Launcher starts it in Namespace (the
+	// Jobs namespace), with GitImage (jobs.image) for the clone and Image
+	// (PERGENT_SH_IMAGE, pergent.sh's own) to send the skills back.
+	Launcher        Launcher
+	Namespace       string
+	GitImage, Image string
 
 	once  sync.Once
 	slots chan struct{}
@@ -136,7 +143,7 @@ func ValidateURL(raw string) error {
 
 // Start records a read of r, running, and returns its ID: a repository of a
 // connected instance is read in the background, at most maxRunning at once
-// and within FetchTimeout. A request that can't be read as given is a
+// and within FetchTimeout; a public URL by a Job (startJob). A request that can't be read as given is a
 // RequestError; an instance with no reader is ErrNotConnected.
 func (f *Fetcher) Start(ctx context.Context, r Request) (string, error) {
 	r, err := Normalize(r)
@@ -144,7 +151,7 @@ func (f *Fetcher) Start(ctx context.Context, r Request) (string, error) {
 		return "", err
 	}
 	if r.URL != "" {
-		return "", RequestError("installing from a URL is not available yet")
+		return f.startJob(ctx, r)
 	}
 	var reader forge.SourceReader
 	ok := false
@@ -221,7 +228,7 @@ func (f *Fetcher) errorText(ctx context.Context, id string, err error) string {
 		f.log().Error("skill fetch: reading the held secrets failed", "fetch", id, "error", err.Error())
 		return msgSecretsCheck
 	case errors.As(err, new(sizeError)):
-		return msgTooLarge
+		return MsgTooLarge
 	}
 	f.log().Warn("skill fetch: reading the repository failed", "fetch", id, "error", err.Error())
 	return msgReadFailed
@@ -239,12 +246,9 @@ func (f *Fetcher) read(ctx context.Context, reader forge.SourceReader, r Request
 	if err != nil {
 		return "", nil, err
 	}
-	if f.Secrets == nil {
-		return "", nil, fmt.Errorf("%w: no secrets reader", errSecrets)
-	}
-	secrets, err := f.Secrets(ctx)
+	secrets, err := f.heldSecrets(ctx)
 	if err != nil {
-		return "", nil, fmt.Errorf("%w: %w", errSecrets, err)
+		return "", nil, err
 	}
 	files, err := checkFiles(found, secrets)
 	return commit, files, err

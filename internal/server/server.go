@@ -40,7 +40,10 @@ type Deps struct {
 	Now func() time.Time
 	// Dashboard serves /auth/ and /api/. Nil turns the dashboard off.
 	Dashboard http.Handler
-	Log       *slog.Logger
+	// SkillFetches records what a skill fetch Job read from a public URL
+	// (skillfetch.Fetcher). Nil: no such Job runs, and the route is absent.
+	SkillFetches callback.FetchResults
+	Log          *slog.Logger
 }
 
 // Routes serves:
@@ -48,6 +51,8 @@ type Deps struct {
 //   - POST /webhooks/github/{instance}: GitHub pull_request and issue_comment
 //     webhooks;
 //   - POST /runs/{id}/result: a review Job's result;
+//   - POST /skill-fetches/{id}/result: the skills a fetch Job read, when
+//     SkillFetches is set;
 //   - GET /healthz: 200 "ok";
 //   - when Dashboard is set and dashboard.url is configured: /auth/ and /api/
 //     (the Dashboard handler) and everything else the embedded app. Without
@@ -69,6 +74,9 @@ func Routes(d Deps) *http.ServeMux {
 	mux.Handle("POST /runs/{id}/result", &callback.Handler{
 		Results: d.Store, Now: d.Now, Wake: d.Wake, Log: d.Log,
 	})
+	if d.SkillFetches != nil {
+		mux.Handle("POST /skill-fetches/{id}/result", &callback.FetchHandler{Fetches: d.SkillFetches, Log: d.Log})
+	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = io.WriteString(w, "ok")

@@ -27,6 +27,14 @@ app.kubernetes.io/name: {{ include "pergent-sh.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
+{{/*
+The pergent.sh image: the Deployment's, and the one a skill fetch Job sends
+its result back with.
+*/}}
+{{- define "pergent-sh.image" -}}
+{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+{{- end -}}
+
 {{- define "pergent-sh.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
 {{- default (include "pergent-sh.fullname" .) .Values.serviceAccount.name -}}
