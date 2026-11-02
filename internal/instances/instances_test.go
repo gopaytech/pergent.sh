@@ -619,3 +619,67 @@ func TestHeldSecretsHoldsSecretKeyAndDatabasePassword(t *testing.T) {
 		}
 	}
 }
+
+// A row whose approve App is its review App is the review App approving:
+// no second App, no approve secret. 0 stays a token, another ID an App.
+func TestFromRowApprover(t *testing.T) {
+	tests := []struct {
+		name         string
+		row          store.InstanceRow
+		want         string
+		wantApproveA bool
+	}{
+		{"review App approves", store.InstanceRow{ReviewAppID: 7, ApproveAppID: 7}, config.ApproverReviewApp, false},
+		{"separate approve App", store.InstanceRow{ReviewAppID: 7, ApproveAppID: 8}, config.ApproverApp, true},
+		{"token", store.InstanceRow{ReviewAppID: 7}, config.ApproverToken, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.row.Name, tt.row.Platform, tt.row.APIURL = "hub", config.PlatformGitHub, "https://api.github.com"
+			gh := FromRow(tt.row).GitHub
+			if got := gh.Approver(); got != tt.want {
+				t.Errorf("Approver() = %q, want %q", got, tt.want)
+			}
+			if (gh.ApproveApp != nil) != tt.wantApproveA {
+				t.Errorf("ApproveApp = %+v", gh.ApproveApp)
+			}
+			if tt.want == config.ApproverReviewApp && !gh.ApproveWithReviewApp {
+				t.Error("ApproveWithReviewApp not set")
+			}
+		})
+	}
+}
+
+// A review App that approves holds no approve secret, in the config or the
+// dashboard, so the approver adds nothing to Secrets or HeldSecrets.
+func TestReviewAppApproverHoldsNoApproveSecret(t *testing.T) {
+	st := newStore(t)
+	box := newBox(t, 1)
+	t.Setenv("T_GH_REVIEW_KEY", "cfg-gh-review-key")
+	t.Setenv("T_GH_HOOK", "cfg-gh-hook-secret")
+	t.Setenv("T_GH_APPROVE_KEY", "")
+	cfg := testConfig()
+	cfg.GitHub[0].ApproveApp, cfg.GitHub[0].ApproveWithReviewApp = nil, true
+	addRow(t, st, box, store.InstanceRow{Name: "hub", Platform: config.PlatformGitHub, APIURL: "https://api.github.com", ReviewAppID: 5, ApproveAppID: 5},
+		map[string]string{FieldReviewAppKey: "hub-review-key", FieldWebhookSecret: "hub-hook-secret"})
+	reg := New(cfg, st, box)
+	if err := reg.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]Secrets{
+		"gh":  {ReviewAppKey: "cfg-gh-review-key", WebhookSecret: "cfg-gh-hook-secret"},
+		"hub": {ReviewAppKey: "hub-review-key", WebhookSecret: "hub-hook-secret"},
+	} {
+		got, unopened, err := reg.Secrets(ctx, name)
+		if err != nil || len(unopened) != 0 || got != want {
+			t.Errorf("Secrets(%s) = %+v, %v, %v; want %+v", name, got, unopened, err, want)
+		}
+	}
+	held, err := reg.HeldSecrets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(held, "cfg-gh-review-key") || !slices.Contains(held, "hub-review-key") || slices.Contains(held, "") {
+		t.Errorf("HeldSecrets = %v", held)
+	}
+}

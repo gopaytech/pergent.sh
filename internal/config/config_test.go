@@ -349,12 +349,20 @@ func TestValidateRejectsGitHub(t *testing.T) {
 		{"webhook_secret_env empty", func(c *Config) { c.GitHub[0].WebhookSecretEnv = "" }, "webhook_secret_env"},
 		{"approve app_id zero", func(c *Config) { c.GitHub[0].ApproveApp.AppID = 0 }, "approve_app.app_id"},
 		{"approve private_key_env empty", func(c *Config) { c.GitHub[0].ApproveApp.PrivateKeyEnv = "" }, "approve_app.private_key_env"},
-		{"both approvers", func(c *Config) { c.GitHub[0].ApproveTokenEnv = "SOME_TOKEN" }, "exactly one of approve_app and approve_token_env"},
-		{"no approver", func(c *Config) { c.GitHub[0].ApproveApp = nil }, "exactly one of approve_app and approve_token_env"},
+		{"app and token approvers", func(c *Config) { c.GitHub[0].ApproveTokenEnv = "SOME_TOKEN" }, "exactly one of approve_app, approve_token_env and approve_with_review_app"},
+		{"app and review app approvers", func(c *Config) { c.GitHub[0].ApproveWithReviewApp = true }, "exactly one of approve_app, approve_token_env and approve_with_review_app"},
+		{"token and review app approvers", func(c *Config) {
+			c.GitHub[1].ApproveWithReviewApp = true
+		}, "exactly one of approve_app, approve_token_env and approve_with_review_app"},
+		{"no approver", func(c *Config) { c.GitHub[0].ApproveApp = nil }, "exactly one of approve_app, approve_token_env and approve_with_review_app"},
 		{"approve app is the review app", func(c *Config) { c.GitHub[0].ApproveApp.AppID = c.GitHub[0].ReviewApp.AppID }, "approve_app.app_id must differ from review_app.app_id"},
+		{"approve app is the review app, hint", func(c *Config) { c.GitHub[0].ApproveApp.AppID = c.GitHub[0].ReviewApp.AppID }, "; to approve with the review App, set approve_with_review_app: true"},
 		{"approve app shares the review key env", func(c *Config) {
 			c.GitHub[0].ApproveApp.PrivateKeyEnv = c.GitHub[0].ReviewApp.PrivateKeyEnv
 		}, "approve_app.private_key_env must differ from review_app.private_key_env"},
+		{"approve app shares the review key env, hint", func(c *Config) {
+			c.GitHub[0].ApproveApp.PrivateKeyEnv = c.GitHub[0].ReviewApp.PrivateKeyEnv
+		}, "; to approve with the review App, set approve_with_review_app: true"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -411,6 +419,70 @@ func TestGitHubSecretsWithApproveApp(t *testing.T) {
 	review, approve, webhook, err := inst.Secrets()
 	if err != nil || review != "review-pem" || approve != "approve-pem" || webhook != "hook" {
 		t.Fatalf("Secrets() = %q %q %q %v", review, approve, webhook, err)
+	}
+}
+
+// One App is enough: with approve_with_review_app the review App's key is
+// also the approver's, and no second env var is read.
+func TestGitHubSecretsWithReviewAppApprover(t *testing.T) {
+	inst := GitHubInstance{
+		Name:                 "gh",
+		ReviewApp:            App{AppID: 1, PrivateKeyEnv: "PERGENT_TEST_GH_REVIEW_KEY"},
+		ApproveWithReviewApp: true,
+		WebhookSecretEnv:     "PERGENT_TEST_GH_WEBHOOK",
+	}
+	t.Setenv("PERGENT_TEST_GH_REVIEW_KEY", "review-pem")
+	t.Setenv("PERGENT_TEST_GH_WEBHOOK", "hook")
+	review, approve, webhook, err := inst.Secrets()
+	if err != nil || review != "review-pem" || approve != "review-pem" || webhook != "hook" {
+		t.Fatalf("Secrets() = %q %q %q %v", review, approve, webhook, err)
+	}
+	both := inst
+	both.ApproveTokenEnv = "PERGENT_TEST_GH_APPROVE_TOKEN"
+	if _, _, _, err := both.Secrets(); err == nil {
+		t.Error("Secrets() with a token and the review App approving = nil error, want error")
+	}
+}
+
+func TestGitHubApprover(t *testing.T) {
+	tests := []struct {
+		name string
+		inst GitHubInstance
+		want string
+	}{
+		{"approve App", GitHubInstance{ApproveApp: &App{AppID: 2}}, ApproverApp},
+		{"review App", GitHubInstance{ApproveWithReviewApp: true}, ApproverReviewApp},
+		{"token", GitHubInstance{ApproveTokenEnv: "T"}, ApproverToken},
+		{"nothing set counts as a token", GitHubInstance{}, ApproverToken},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.inst.Approver(); got != tt.want {
+				t.Errorf("Approver() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+	if ApproverApp != "app" || ApproverReviewApp != "review_app" || ApproverToken != "token" {
+		t.Errorf("approver constants changed: %q %q %q", ApproverApp, ApproverReviewApp, ApproverToken)
+	}
+}
+
+// approve_with_review_app: true in the file is the review App approving.
+func TestLoadGitHubApproveWithReviewApp(t *testing.T) {
+	base, err := os.ReadFile("testdata/github.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Replace(string(base), "    approve_app:\n      app_id: 1002\n      private_key_env: GITHUB_APPROVE_APP_KEY\n", "    approve_with_review_app: true\n", 1)
+	if body == string(base) {
+		t.Fatal("test replacement did not apply")
+	}
+	cfg, err := Load(writeConfig(t, body))
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if got := cfg.GitHub[0]; !got.ApproveWithReviewApp || got.ApproveApp != nil || got.Approver() != ApproverReviewApp {
+		t.Errorf("github[0] = %+v", got)
 	}
 }
 

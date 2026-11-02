@@ -93,26 +93,48 @@ type Instance struct {
 	OAuthClientSecretEnv string `yaml:"oauth_client_secret_env"`
 }
 
-// GitHubInstance is one pair of GitHub Apps (and the webhook that feeds the
-// review App) and the env vars holding their secrets. One instance covers
-// every organisation the Apps are installed on.
+// GitHubInstance is a GitHub App (and the webhook that feeds it), usually
+// with a second one, and the env vars holding their secrets. One instance
+// covers every organisation the Apps are installed on.
 //
 // The review App comments, writes the check run and clones; it holds the
-// webhook. Approvals come from exactly one of ApproveApp (a second App, the
-// default) or ApproveTokenEnv (a bot user's fine-grained token, the fallback
-// when App approvals do not count toward required reviews).
+// webhook. Approvals come from exactly one of ApproveWithReviewApp (the
+// review App itself, so one App is enough; it then needs Pull requests:
+// write), ApproveApp (a second App, so the identity that writes the review
+// never approves it) or ApproveTokenEnv (a bot user's fine-grained token,
+// the fallback when App approvals do not count toward required reviews).
 type GitHubInstance struct {
-	Name             string `yaml:"name"`
-	APIURL           string `yaml:"api_url"` // default https://api.github.com
-	ReviewApp        App    `yaml:"review_app"`
-	ApproveApp       *App   `yaml:"approve_app"`
-	ApproveTokenEnv  string `yaml:"approve_token_env"`
-	WebhookSecretEnv string `yaml:"webhook_secret_env"`
+	Name                 string `yaml:"name"`
+	APIURL               string `yaml:"api_url"` // default https://api.github.com
+	ReviewApp            App    `yaml:"review_app"`
+	ApproveApp           *App   `yaml:"approve_app"`
+	ApproveTokenEnv      string `yaml:"approve_token_env"`
+	ApproveWithReviewApp bool   `yaml:"approve_with_review_app"`
+	WebhookSecretEnv     string `yaml:"webhook_secret_env"`
 	// OAuthClientIDEnv and OAuthClientSecretEnv name the env vars holding
 	// the review App's client ID and secret, used to sign in to the
 	// dashboard. Both or neither are set.
 	OAuthClientIDEnv     string `yaml:"oauth_client_id_env"`
 	OAuthClientSecretEnv string `yaml:"oauth_client_secret_env"`
+}
+
+// The three ways a GitHub instance approves, as Approver reports them.
+const (
+	ApproverApp       = "app"        // a second App
+	ApproverReviewApp = "review_app" // the review App itself
+	ApproverToken     = "token"      // a bot user's token
+)
+
+// Approver tells which of the three approves for g. An instance with no
+// approver set (which Validate refuses) counts as a token.
+func (g GitHubInstance) Approver() string {
+	switch {
+	case g.ApproveWithReviewApp:
+		return ApproverReviewApp
+	case g.ApproveApp != nil:
+		return ApproverApp
+	}
+	return ApproverToken
 }
 
 // App is a GitHub App: its numeric ID and the env var holding its PEM
@@ -578,20 +600,27 @@ func checkGitHubInstance(i int, inst GitHubInstance) []error {
 	}
 	checkApp("review_app", inst.ReviewApp)
 
+	set := 0
+	for _, on := range []bool{inst.ApproveApp != nil, inst.ApproveTokenEnv != "", inst.ApproveWithReviewApp} {
+		if on {
+			set++
+		}
+	}
 	switch {
-	case inst.ApproveApp != nil && inst.ApproveTokenEnv != "":
-		add("%s: exactly one of approve_app and approve_token_env must be set, got both", prefix)
-	case inst.ApproveApp == nil && inst.ApproveTokenEnv == "":
-		add("%s: exactly one of approve_app and approve_token_env must be set, got neither", prefix)
+	case set > 1:
+		add("%s: exactly one of approve_app, approve_token_env and approve_with_review_app must be set, got %d", prefix, set)
+	case set == 0:
+		add("%s: exactly one of approve_app, approve_token_env and approve_with_review_app must be set, got none", prefix)
 	case inst.ApproveApp != nil:
 		checkApp("approve_app", *inst.ApproveApp)
-		// The same App, or the same key, would review and approve: the
-		// two identities would silently be one.
+		// The same App, or the same key, would review and approve: say
+		// so, and name the way to ask for that.
+		const useReviewApp = "; to approve with the review App, set approve_with_review_app: true"
 		if inst.ApproveApp.AppID > 0 && inst.ApproveApp.AppID == inst.ReviewApp.AppID {
-			add("%s: approve_app.app_id must differ from review_app.app_id, got %d for both", prefix, inst.ReviewApp.AppID)
+			add("%s: approve_app.app_id must differ from review_app.app_id, got %d for both%s", prefix, inst.ReviewApp.AppID, useReviewApp)
 		}
 		if inst.ApproveApp.PrivateKeyEnv != "" && inst.ApproveApp.PrivateKeyEnv == inst.ReviewApp.PrivateKeyEnv {
-			add("%s: approve_app.private_key_env must differ from review_app.private_key_env, got %q for both", prefix, inst.ReviewApp.PrivateKeyEnv)
+			add("%s: approve_app.private_key_env must differ from review_app.private_key_env, got %q for both%s", prefix, inst.ReviewApp.PrivateKeyEnv, useReviewApp)
 		}
 	}
 
@@ -841,9 +870,9 @@ func readOAuthClient(platform, name, idEnv, secretEnv string) (string, string, e
 }
 
 // Secrets reads the instance's review App private key, approver secret (the
-// approve App's private key, or the approve token) and webhook secret from
-// the environment. An unset or empty variable is an error that names it,
-// never its value.
+// approve App's private key, the approve token, or the review key again when
+// the review App approves) and webhook secret from the environment. An unset
+// or empty variable is an error that names it, never its value.
 func (g GitHubInstance) Secrets() (reviewKey, approveKeyOrToken, webhook string, err error) {
 	read := func(env string) (string, error) {
 		if env == "" {
@@ -857,12 +886,14 @@ func (g GitHubInstance) Secrets() (reviewKey, approveKeyOrToken, webhook string,
 	}
 	approveEnv := g.ApproveTokenEnv
 	switch {
-	case g.ApproveApp != nil && g.ApproveTokenEnv != "":
-		return "", "", "", fmt.Errorf("github instance %q: both approve_app and approve_token_env are set", g.Name)
+	case (g.ApproveApp != nil && g.ApproveTokenEnv != "") || (g.ApproveWithReviewApp && (g.ApproveApp != nil || g.ApproveTokenEnv != "")):
+		return "", "", "", fmt.Errorf("github instance %q: more than one of approve_app, approve_token_env and approve_with_review_app is set", g.Name)
+	case g.ApproveWithReviewApp:
+		approveEnv = g.ReviewApp.PrivateKeyEnv
 	case g.ApproveApp != nil:
 		approveEnv = g.ApproveApp.PrivateKeyEnv
 	case g.ApproveTokenEnv == "":
-		return "", "", "", fmt.Errorf("github instance %q: neither approve_app nor approve_token_env is set", g.Name)
+		return "", "", "", fmt.Errorf("github instance %q: none of approve_app, approve_token_env and approve_with_review_app is set", g.Name)
 	}
 	if reviewKey, err = read(g.ReviewApp.PrivateKeyEnv); err != nil {
 		return "", "", "", err
