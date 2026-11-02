@@ -3,6 +3,7 @@ package dashboard
 import (
 	"time"
 
+	"github.com/gopaytech/pergent.sh/internal/readiness"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -390,6 +391,52 @@ type DetectedSkillView struct {
 	Problem string `json:"problem,omitempty"`
 	// On is whether the repository turned it on (repoSkills).
 	On bool `json:"on"`
+}
+
+// ReadinessView is GET /api/repositories/{instance}/{project...}/readiness:
+// the Readiness tab, for anyone who can see the repository. Checklist is
+// built now from the latest finished scan's stored results and the skills
+// turned on now; it is null until a scan has finished. An item's state is
+// "passed", "warning", "missing" or "unknown" (couldn't check: never shown
+// or counted as passed). Paths, names and reasons in it come from the scan
+// Job: text only, never markup.
+//
+// POST .../readiness/scan (Scan now, maintainers and admins, config
+// repositories too) answers 202 {"scan"}; 409 {"error", "scan"} while one is
+// queued or running; 429 {"error", "waitSeconds"} with Retry-After within 5
+// minutes of the latest; 403 for a viewer.
+type ReadinessView struct {
+	// Latest is the latest finished scan (done or failed), Active the queued
+	// or running one; each null when there is none.
+	Latest    *ScanView            `json:"latest"`
+	Active    *ScanView            `json:"active"`
+	Checklist *readiness.Checklist `json:"checklist"`
+	// CanScan: the session is a maintainer or admin of the repository.
+	CanScan bool `json:"canScan"`
+	// ConfigRepo: the config file sets the repository up, so its skills
+	// are changed there ("Use these skills" shows the lines to paste).
+	ConfigRepo bool `json:"configRepo"`
+	// FollowsDefaults: the repository's skills are null, so it follows the
+	// default list; saving a list stops that.
+	FollowsDefaults bool `json:"followsDefaults"`
+	// ApplyBase is today's list of library skills: the repository's, or the
+	// default list. "Use these skills" saves it plus the ticked ones.
+	ApplyBase []string `json:"applyBase"`
+}
+
+// ScanView is one readiness scan. State is "queued", "running", "done" or
+// "failed". StartedBy is who asked ("alice (gitlab main)"), "switch-on" or
+// "upgrade". Branch and Commit are "" until the scan read them; Error is why
+// a failed scan couldn't scan the files. FinishedAt is null until it ends.
+type ScanView struct {
+	ID         string     `json:"id"`
+	State      string     `json:"state"`
+	StartedBy  string     `json:"startedBy"`
+	Branch     string     `json:"branch"`
+	Commit     string     `json:"commit"`
+	Error      string     `json:"error"`
+	QueuedAt   time.Time  `json:"queuedAt"`
+	FinishedAt *time.Time `json:"finishedAt"`
 }
 
 // SkillSourceView is where an installed skill came from. Kind is "instance"

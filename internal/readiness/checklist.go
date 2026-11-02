@@ -57,25 +57,29 @@ type ChecklistInput struct {
 // Item is one line of the checklist. Reason is the couldn't-check reason or
 // what was found. Why and Fix are only set when the item is not passed.
 type Item struct {
-	Key, State, Reason, Why, Fix string
-	List                         []string
-	Noise                        []NoiseFile
-	More                         int
+	Key    string      `json:"key"`
+	State  string      `json:"state"`
+	Reason string      `json:"reason"`
+	Why    string      `json:"why"`
+	Fix    string      `json:"fix"`
+	List   []string    `json:"list,omitempty"`
+	Noise  []NoiseFile `json:"noise,omitempty"`
+	More   int         `json:"more,omitempty"`
 }
 
 // Section is a group of items: "context", "process", "skills" or "size".
 type Section struct {
-	Key   string
-	Items []Item
+	Key   string `json:"key"`
+	Items []Item `json:"items"`
 }
 
 // Checklist is the Readiness tab. Suggested names library skills that fit the
 // files and are not turned on. Budget is the size of skills plus instructions
 // (see Flags.BudgetKnown).
 type Checklist struct {
-	Sections  []Section
-	Suggested []string
-	Budget    int
+	Sections  []Section `json:"sections"`
+	Suggested []string  `json:"suggested"`
+	Budget    int       `json:"budget"`
 }
 
 // analysis is what both ComputeFlags and BuildChecklist read from a scan.

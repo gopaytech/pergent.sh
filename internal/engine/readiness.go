@@ -85,8 +85,6 @@ const (
 )
 
 var (
-	errScansOff      = errors.New("readiness scans need the dashboard")
-	errNotSwitchedOn = errors.New("the repository is not switched on")
 	// gitHubToken is the shape of a GitHub installation token, which a
 	// scan Job's clone holds and the store does not.
 	gitHubToken = regexp.MustCompile(`ghs_[A-Za-z0-9]{20,}`)
@@ -96,15 +94,16 @@ var (
 // now) and wakes the scan loop. A repository with a queued or running scan
 // gets readiness.ErrScanBusy, and one scanned less than 5 minutes ago a
 // *readiness.ScanTooSoonError; both come with that scan. A repository that
-// is not switched on is an error.
+// is not switched on gets readiness.ErrNotSwitchedOn, and every repository
+// readiness.ErrScansOff when scans are off.
 func (e *Engine) RequestScan(ctx context.Context, instance, project, actor string) (store.ReadinessScan, error) {
 	if !e.Scans {
-		return store.ReadinessScan{}, errScansOff
+		return store.ReadinessScan{}, readiness.ErrScansOff
 	}
 	if _, ok, err := e.settings().Get(ctx, instance, project); err != nil {
 		return store.ReadinessScan{}, err
 	} else if !ok {
-		return store.ReadinessScan{}, errNotSwitchedOn
+		return store.ReadinessScan{}, readiness.ErrNotSwitchedOn
 	}
 	now := e.now()
 	sc, out, err := e.Store.QueueReadinessScan(ctx, instance, project, actor, now, scanGap)
@@ -350,7 +349,7 @@ func (e *Engine) startScan(ctx context.Context, sc store.ReadinessScan) {
 
 	input, err := e.scanInput(ctx, sc.Instance, sc.Project)
 	switch {
-	case errors.Is(err, errNotSwitchedOn):
+	case errors.Is(err, readiness.ErrNotSwitchedOn):
 		e.failScan(ctx, sc.ID, errNotSetUp.Error())
 		return
 	case err != nil:
@@ -410,7 +409,7 @@ func (e *Engine) scanInput(ctx context.Context, instance, project string) ([]byt
 		return nil, err
 	}
 	if !ok {
-		return nil, errNotSwitchedOn
+		return nil, readiness.ErrNotSwitchedOn
 	}
 	assigned, err := e.assignedSkills(ctx, eff.Skills)
 	if err != nil {

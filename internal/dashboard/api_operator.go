@@ -843,6 +843,9 @@ func (d *Dashboard) putDefaults(w http.ResponseWriter, r *http.Request) {
 	changed := changedDefaults(before, next)
 	d.Log.Info("dashboard: defaults updated", "fields", changed, "by", se.Username)
 	d.audit(ctx, se, "defaults_updated", "", "", strings.Join(changed, ", "))
+	if slices.Contains(changed, "skills") {
+		d.recheck("", "")
+	}
 	v, err := d.defaultsView(ctx)
 	if err != nil {
 		d.failed(w, r, "reading the defaults", err)

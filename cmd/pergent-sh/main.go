@@ -271,7 +271,9 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	dash, err := newDashboard(dashboard.Options{
 		Config: cfg, Instances: reg, Connector: conn, Store: st, SecretKey: key, Log: log,
 		Sources: conn.sources, Catalogs: conn.catalogs, ReconcileSoon: eng.ReconcileSoon,
-		Wake: eng.Wake, Fetcher: fetcher,
+		// The engine queues the readiness scans (eng.Scans is on whenever
+		// the dashboard is) and rechecks them after a skill setting is saved.
+		Wake: eng.Wake, Fetcher: fetcher, Readiness: eng,
 	})
 	if err != nil {
 		return err

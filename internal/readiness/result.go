@@ -129,6 +129,12 @@ const (
 	ScanConflict
 )
 
+// ErrScansOff refuses a scan when scans are off: they need the dashboard.
+var ErrScansOff = errors.New("readiness scans need the dashboard")
+
+// ErrNotSwitchedOn refuses a scan of a repository that is not switched on.
+var ErrNotSwitchedOn = errors.New("the repository is not switched on")
+
 // ErrScanBusy refuses a scan asked for while the repository has one queued or
 // running; the engine returns that scan with it.
 var ErrScanBusy = errors.New("a scan is already queued or running")

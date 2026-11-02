@@ -778,9 +778,10 @@ func (d *Dashboard) repositoryViews(ctx context.Context, se Session, repos []set
 	return out, nil
 }
 
-// repository serves a repository's detail, or with a trailing /inputs its
-// skills and instructions. A repository whose own path is the one asked
-// for wins over the /inputs of another.
+// repository serves a repository's detail, with a trailing /inputs its
+// skills and instructions, or with a trailing /readiness its Readiness tab.
+// A repository whose own path is the one asked for wins over the /inputs
+// or /readiness of another.
 func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	instance, rest := r.PathValue("instance"), r.PathValue("rest")
@@ -811,6 +812,12 @@ func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			d.repositoryInputs(w, r, repo, id)
+			return
+		}
+	}
+	if project, ok := strings.CutSuffix(rest, "/readiness"); ok {
+		if repo, ok := find(project); ok {
+			d.repositoryReadiness(w, r, se, repo)
 			return
 		}
 	}
