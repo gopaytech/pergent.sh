@@ -3,7 +3,6 @@ package kube
 import (
 	"context"
 	_ "embed"
-	"fmt"
 	"strings"
 	"time"
 
@@ -11,7 +10,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 )
 
 // A fetch Job reads the skills of a public git URL an admin typed, so that
@@ -159,29 +157,7 @@ func BuildFetchSecret(p FetchJobParams, owner *batchv1.Job, token string) *corev
 // the Job (and with it the Secret) is deleted and the error returned.
 func (l *Launcher) LaunchFetch(ctx context.Context, p FetchJobParams, token string) error {
 	p.Namespace = l.Namespace
-
-	job := BuildFetchJob(p)
-	job.Spec.Suspend = ptr(true)
-	created, err := l.Client.BatchV1().Jobs(l.Namespace).Create(ctx, job, metav1.CreateOptions{})
-	if err != nil {
-		return fmt.Errorf("create job %s: %w", p.Name, err)
-	}
-	if err := l.startFetch(ctx, p, created, token); err != nil {
-		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		defer cancel()
-		_ = l.Delete(cctx, p.Name)
-		return err
-	}
-	return nil
-}
-
-func (l *Launcher) startFetch(ctx context.Context, p FetchJobParams, job *batchv1.Job, token string) error {
-	if _, err := l.Client.CoreV1().Secrets(l.Namespace).Create(ctx, BuildFetchSecret(p, job, token), metav1.CreateOptions{}); err != nil {
-		return fmt.Errorf("create secret for job %s: %w", p.Name, err)
-	}
-	patch := []byte(`{"spec":{"suspend":false}}`)
-	if _, err := l.Client.BatchV1().Jobs(l.Namespace).Patch(ctx, p.Name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
-		return fmt.Errorf("unsuspend job %s: %w", p.Name, err)
-	}
-	return nil
+	return l.launchWithSecret(ctx, BuildFetchJob(p), func(owner *batchv1.Job) *corev1.Secret {
+		return BuildFetchSecret(p, owner, token)
+	})
 }
