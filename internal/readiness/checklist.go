@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
+	"unicode"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 )
@@ -506,72 +508,95 @@ func suggested(job *JobResult, effective []SkillFit) []string {
 
 // noiseFix is the lines to copy: one .gitattributes line per distinct pattern
 // (linguist-generated is what a review honours; linguist-vendored it ignores),
-// and per reviewing skill an exclude line.
+// and per reviewing skill a block to paste in its frontmatter. A path that a
+// .gitattributes line can't name as the review reads it gets the skill
+// block only.
 func noiseFix(noise []NoiseFile) string {
 	var patterns []string
 	seen := map[string]bool{}
 	perSkill := map[string][]string{}
 	for _, n := range noise {
-		p := noisePattern(n)
-		if !seen[p] {
+		if p, ok := noisePattern(n); ok && !seen[p] {
 			seen[p] = true
 			patterns = append(patterns, p)
 		}
 		for _, s := range n.Skills {
-			perSkill[s] = append(perSkill[s], yamlScalar(n.Path))
+			perSkill[s] = append(perSkill[s], globLiteral(n.Path))
 		}
 	}
 	sort.Strings(patterns)
 
 	var b strings.Builder
-	b.WriteString("Add to .gitattributes:\n")
-	for _, p := range patterns {
-		b.WriteString(p + " linguist-generated\n")
+	if len(patterns) > 0 {
+		b.WriteString("Add to .gitattributes:\n")
+		for _, p := range patterns {
+			b.WriteString(p + " linguist-generated\n")
+		}
+		if len(perSkill) > 0 {
+			b.WriteString("Or:\n")
+		}
 	}
-	if len(perSkill) > 0 {
-		names := make([]string, 0, len(perSkill))
-		for s := range perSkill {
-			names = append(names, s)
-		}
-		sort.Strings(names)
-		b.WriteString("Or, in the skill's frontmatter:\n")
-		for _, s := range names {
-			paths := perSkill[s]
-			sort.Strings(paths)
-			fmt.Fprintf(&b, "%s: exclude: [%s]\n", s, strings.Join(paths, ", "))
-		}
+	names := make([]string, 0, len(perSkill))
+	for s := range perSkill {
+		names = append(names, s)
+	}
+	sort.Strings(names)
+	for _, s := range names {
+		paths := perSkill[s]
+		sort.Strings(paths)
+		fmt.Fprintf(&b, "In skill %s's frontmatter, add to exclude:\n%s", s, excludeBlock(paths))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
 // noisePattern is the .gitattributes pattern for a file: its build output
-// directory (dist or build), else its path.
-func noisePattern(n NoiseFile) string {
+// directory (dist or build), else its path. ok is false when the pattern
+// can't be written so that the review reads it as written: the review splits
+// a line on whitespace, does no unquoting, reads glob characters, and a line
+// starting with # or ! is no pattern to it.
+func noisePattern(n NoiseFile) (string, bool) {
+	p := n.Path
+	glob := ""
 	if n.Why == WhyBuildOutput {
 		segs := strings.Split(n.Path, "/")
 		for i, s := range segs[:len(segs)-1] {
 			if s == "dist" || s == "build" {
-				return quoteIfNeeded(strings.Join(segs[:i+1], "/") + "/**")
+				p, glob = strings.Join(segs[:i+1], "/"), "/**"
+				break
 			}
 		}
 	}
-	return quoteIfNeeded(n.Path)
+	if p == "" || strings.HasPrefix(p, "#") || strings.HasPrefix(p, "!") ||
+		strings.ContainsAny(p, "\"\\[*?") ||
+		strings.ContainsFunc(p, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return "", false
+	}
+	return p + glob, true
 }
 
-// quoteIfNeeded double-quotes a path with a space, quote, backslash or other
-// character a .gitattributes pattern or a YAML list item cannot hold bare.
-func quoteIfNeeded(s string) string {
-	if s == "" || strings.ContainsAny(s, " \t\"\\\n\r") || strings.ContainsFunc(s, func(r rune) bool { return r < ' ' || r == 0x7f }) {
-		return strconv.Quote(s)
+// globLiteral is a path as a pattern that matches only that path: the glob
+// characters a review's matcher reads (\ * ? [) are escaped.
+func globLiteral(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if strings.ContainsRune(`\*?[`, r) {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
 	}
-	return s
+	return b.String()
 }
 
-// yamlScalar is a path as an item of a YAML flow list: quoted when it holds a
-// character that would end or change the item.
-func yamlScalar(s string) string {
-	if strings.ContainsAny(s, ",[]{}#:&*!|>'%@`?") || strings.HasPrefix(s, "-") {
-		return strconv.Quote(s)
+// excludeBlock is the YAML to paste into a skill's frontmatter: exclude:
+// then one "  - <path>" line per path, quoted where YAML needs it.
+func excludeBlock(paths []string) string {
+	var b strings.Builder
+	enc := yaml.NewEncoder(&b)
+	enc.SetIndent(2)
+	if err := enc.Encode(map[string][]string{"exclude": paths}); err != nil {
+		// A list of strings always encodes; this is never reached.
+		return ""
 	}
-	return quoteIfNeeded(s)
+	_ = enc.Close()
+	return b.String()
 }

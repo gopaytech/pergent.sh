@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gopaytech/pergent/scope"
+
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 )
 
@@ -249,10 +251,14 @@ func TestChecklistNoiseFix(t *testing.T) {
 	if got.State != Warning {
 		t.Fatalf("noise = %s", got.State)
 	}
-	for _, want := range []string{"dist/** linguist-generated", "web/dist/** linguist-generated", "api/x.pb.go linguist-generated", `"data/big file.json" linguist-generated`} {
+	for _, want := range []string{"dist/** linguist-generated", "web/dist/** linguist-generated", "api/x.pb.go linguist-generated"} {
 		if !strings.Contains(got.Fix, want) {
 			t.Errorf("Fix lacks %q:\n%s", want, got.Fix)
 		}
+	}
+	// A path with a space can't be a .gitattributes pattern the review reads.
+	if strings.Contains(got.Fix, "big file") {
+		t.Errorf("Fix suggests a .gitattributes line for a path with a space:\n%s", got.Fix)
 	}
 	if n := strings.Count(got.Fix, "dist/** linguist-generated"); n != 2 { // "dist/**" and "web/dist/**"
 		t.Errorf("dist/** pattern lines = %d, want 1 per distinct pattern (2 with web/dist):\n%s", n, got.Fix)
@@ -263,12 +269,13 @@ func TestChecklistNoiseFix(t *testing.T) {
 	if strings.Contains(got.Fix, "linguist-vendored") {
 		t.Errorf("Fix suggests linguist-vendored, which a review ignores:\n%s", got.Fix)
 	}
-	if !strings.Contains(got.Fix, "exclude: [dist/a.js, dist/c.js, web/dist/b.js]") {
-		t.Errorf("Fix lacks go's exclude line:\n%s", got.Fix)
+	if !strings.Contains(got.Fix, "\nIn skill go's frontmatter, add to exclude:\nexclude:\n  - dist/a.js\n  - dist/c.js\n  - web/dist/b.js\n") {
+		t.Errorf("Fix lacks go's exclude block:\n%s", got.Fix)
 	}
-	if !strings.Contains(got.Fix, "exclude: [web/dist/b.js]") {
-		t.Errorf("Fix lacks ts's exclude line:\n%s", got.Fix)
+	if !strings.HasSuffix(got.Fix, "\nIn skill ts's frontmatter, add to exclude:\nexclude:\n  - web/dist/b.js") {
+		t.Errorf("Fix lacks ts's exclude block:\n%s", got.Fix)
 	}
+	checkExcludeBlocks(t, got.Fix, in.Job.Noise)
 	if len(got.Noise) != 5 || got.More != 0 {
 		t.Errorf("Noise %d More %d", len(got.Noise), got.More)
 	}
@@ -282,6 +289,96 @@ func TestChecklistNoiseFix(t *testing.T) {
 	if got := items(BuildChecklist(in))["noise"]; got.State != Passed {
 		t.Errorf("no noise = %s", got.State)
 	}
+}
+
+// checkExcludeBlocks parses every skill's exclude block in fix as a skill's
+// frontmatter would be, and checks each entry matches its noise path, and
+// only that path, the way a review matches it (scope.Match).
+func checkExcludeBlocks(t *testing.T, fix string, noise []NoiseFile) {
+	t.Helper()
+	const head = "In skill "
+	blocks := strings.Split(fix, "\n"+head)
+	if len(blocks) < 2 {
+		t.Fatalf("no exclude block in:\n%s", fix)
+	}
+	for _, blk := range blocks[1:] {
+		name, rest, ok := strings.Cut(blk, "'s frontmatter, add to exclude:\n")
+		if !ok {
+			t.Fatalf("bad skill line in %q", blk)
+		}
+		_, exclude, err := inputs.SkillScope([]byte("---\nname: " + name + "\n" + rest + "\n---\nbody\n"))
+		if err != nil {
+			t.Fatalf("skill %s: the block is not valid frontmatter: %v\n%s", name, err, rest)
+		}
+		var want []string
+		for _, n := range noise {
+			if slices.Contains(n.Skills, name) {
+				want = append(want, n.Path)
+			}
+		}
+		if len(exclude) != len(want) {
+			t.Fatalf("skill %s: exclude = %q; want one entry per path of %q", name, exclude, want)
+		}
+		for _, p := range want {
+			if !scope.MatchAny(exclude, p) {
+				t.Errorf("skill %s: exclude %q doesn't match %q", name, exclude, p)
+			}
+		}
+		for _, e := range exclude {
+			for _, n := range noise {
+				if !slices.Contains(want, n.Path) && scope.Match(e, n.Path) {
+					t.Errorf("skill %s: exclude %q also matches %q", name, e, n.Path)
+				}
+			}
+		}
+	}
+}
+
+// Paths a .gitattributes line can't name for the review (whitespace, quotes,
+// a backslash, glob characters) get no .gitattributes line; the skill's
+// exclude still covers them, quoted and escaped so it matches only them.
+func TestChecklistNoiseFixUnsafePaths(t *testing.T) {
+	in := goodInput()
+	in.Job.Noise = []NoiseFile{
+		{Path: "data/big file.json", Why: WhyLarge, Size: 600 << 10, Skills: []string{"go"}},
+		{Path: "gen/a[1].pb.go", Why: WhyGeneratedName, Size: 10, Skills: []string{"go"}},
+		{Path: "gen/a1.pb.go", Why: WhyGeneratedName, Size: 10},
+		{Path: "gen/x*y?.pb.go", Why: WhyGeneratedName, Size: 10, Skills: []string{"go"}},
+		{Path: `gen/q"t.pb.go`, Why: WhyGeneratedName, Size: 10, Skills: []string{"go"}},
+		{Path: `gen/back\slash.pb.go`, Why: WhyGeneratedName, Size: 10, Skills: []string{"go"}},
+		{Path: "we[b]/dist/app.js", Why: WhyBuildOutput, Size: 10, Skills: []string{"go"}},
+		{Path: "true", Why: WhyLarge, Size: 600 << 10, Skills: []string{"go"}},
+		{Path: "-x: y #z.json", Why: WhyLarge, Size: 600 << 10, Skills: []string{"go"}},
+	}
+	in.Job.NoiseTotal = len(in.Job.Noise)
+	got := items(BuildChecklist(in))["noise"]
+	attrs, _, _ := strings.Cut(got.Fix, "\nIn skill ")
+	for _, line := range strings.Split(attrs, "\n") {
+		if !strings.HasSuffix(line, " linguist-generated") {
+			continue
+		}
+		if line != "gen/a1.pb.go linguist-generated" && line != "true linguist-generated" {
+			t.Errorf("unsafe .gitattributes line %q in:\n%s", line, got.Fix)
+		}
+	}
+	// What is suggested reads back, through scope, as exactly its own file.
+	a := scope.ParseAttributes([]byte(attrs))
+	for _, n := range in.Job.Noise {
+		suggested := n.Path == "gen/a1.pb.go" || n.Path == "true"
+		if hit := a.PathRule(n.Path) == scope.RuleGenerated; hit != suggested {
+			t.Errorf("%q generated by the suggested lines = %v; want %v", n.Path, hit, suggested)
+		}
+	}
+	checkExcludeBlocks(t, got.Fix, in.Job.Noise)
+
+	// Only unsafe paths: no .gitattributes header at all.
+	in.Job.Noise = in.Job.Noise[:1]
+	in.Job.NoiseTotal = 1
+	fix := items(BuildChecklist(in))["noise"].Fix
+	if strings.Contains(fix, ".gitattributes") || !strings.HasPrefix(fix, "In skill go's frontmatter, add to exclude:\n") {
+		t.Errorf("Fix for an unsafe path only:\n%s", fix)
+	}
+	checkExcludeBlocks(t, "\n"+fix, in.Job.Noise)
 }
 
 func TestChecklistSkillItems(t *testing.T) {
