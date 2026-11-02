@@ -309,8 +309,81 @@ func TestSettingsGitHub(t *testing.T) {
 	}
 }
 
+// A branch GitHub calls protected passes only when a rule or its classic
+// protection stops a direct push; a classic rule that only blocks force
+// pushes or deletion is a warning, and one the App can't read is unknown.
+func TestSettingsGitHubClassicProtection(t *testing.T) {
+	const protectionAPI = ghBranchAPI + "/protection"
+	for _, tc := range []struct {
+		name          string
+		status        int
+		protection    any
+		state, reason string
+	}{
+		{"requires pull requests", http.StatusOK, map[string]any{
+			"required_pull_request_reviews": map[string]any{"required_approving_review_count": 0},
+		}, readiness.Passed, "main is protected"},
+		{"restricts pushes", http.StatusOK, map[string]any{
+			"restrictions": map[string]any{"users": []any{}, "teams": []any{}, "apps": []any{}},
+		}, readiness.Passed, "main is protected"},
+		{"requires status checks", http.StatusOK, map[string]any{
+			"required_status_checks": map[string]any{"contexts": []string{"ci"}},
+		}, readiness.Passed, "main is protected"},
+		{"only blocks force pushes and deletion", http.StatusOK, map[string]any{
+			"allow_force_pushes": map[string]any{"enabled": false}, "allow_deletions": map[string]any{"enabled": false},
+			"required_status_checks": map[string]any{"contexts": []string{}, "checks": []any{}},
+		}, readiness.Warning, "main has protection but accepts direct pushes"},
+		{"can't be read", http.StatusForbidden, map[string]string{"message": "Resource not accessible by integration"},
+			readiness.Unknown, wantGitHubProtection},
+		{"hidden", http.StatusNotFound, map[string]string{"message": "Branch not protected"},
+			readiness.Unknown, wantGitHubProtection},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnv(t)
+			gh := addGitHub(t, env, true)
+			serveGitHubSettings(gh)
+			// Classic protection only: no rule that stops a push, no check shown.
+			gh.Reply(http.MethodGet, ghRulesAPI, http.StatusOK, []map[string]any{{"type": "deletion"}, {"type": "non_fast_forward"}})
+			gh.Reply(http.MethodGet, protectionAPI, tc.status, tc.protection)
+			target, err := scanSettings(t, env, ghInstance, ghRepoPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkItem(t, "protected", target.Pod.Protected, tc.state, tc.reason)
+		})
+	}
+
+	// Rules that can't be read may still stop pushes: open classic
+	// protection is then unknown, never a warning.
+	env := newTestEnv(t)
+	gh := addGitHub(t, env, true)
+	serveGitHubSettings(gh)
+	gh.Reply(http.MethodGet, ghRulesAPI, http.StatusForbidden, map[string]string{"message": "Resource not accessible by integration"})
+	gh.Reply(http.MethodGet, protectionAPI, http.StatusOK, map[string]any{"allow_force_pushes": map[string]any{"enabled": false}})
+	target, err := scanSettings(t, env, ghInstance, ghRepoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkItem(t, "protected", target.Pod.Protected, readiness.Unknown, wantGitHubRules)
+
+	// A rule that stops pushes needs no classic read.
+	env = newTestEnv(t)
+	gh = addGitHub(t, env, true)
+	serveGitHubSettings(gh)
+	if _, err := scanSettings(t, env, ghInstance, ghRepoPath); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(gh.Requests(http.MethodGet, protectionAPI)); n != 0 {
+		t.Errorf("the classic protection was read %d times with a pull_request rule", n)
+	}
+	if cantReadGitHubProtection != wantGitHubProtection {
+		t.Error("the protection reason changed")
+	}
+}
+
 // The couldn't-check reasons, exact.
 const (
+	wantGitHubProtection = "the review App can't read the classic branch protection (it needs the optional Administration: Read permission)"
 	wantGitLabApprovals  = "the review bot can't read the approval rules here"
 	wantGitLabProtection = "the review bot can't read branch protection here"
 	wantGitHubClassic    = "no ruleset requires reviews, and the review App can't read the classic branch protection (it needs the optional Administration: Read permission)"

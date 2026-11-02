@@ -849,6 +849,46 @@ func TestProtectionApprovals(t *testing.T) {
 	}
 }
 
+func TestBranchProtection(t *testing.T) {
+	c, rec := serve(t, jsonReply(map[string]any{
+		"required_status_checks": map[string]any{"contexts": []string{"ci"},
+			"checks": []map[string]any{{"context": "ci"}, {"context": "build"}}},
+		"required_pull_request_reviews": map[string]any{"required_approving_review_count": 0},
+		"restrictions":                  map[string]any{"users": []any{}, "teams": []any{}},
+		"lock_branch":                   map[string]any{"enabled": true},
+		"allow_force_pushes":            map[string]any{"enabled": false},
+	}))
+	p, err := c.BranchProtection(context.Background(), "acme", "widgets", "release/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, rec.get(0), http.MethodGet, "/repos/acme/widgets/branches/release/v1/protection", "")
+	if want := (Protection{PullRequestReviews: true, Restrictions: true, Locked: true, RequiredChecks: 2}); p != want {
+		t.Errorf("BranchProtection = %+v; want %+v", p, want)
+	}
+
+	// Only force pushes and deletion blocked: nothing that stops a push.
+	c, _ = serve(t, jsonReply(map[string]any{
+		"allow_force_pushes": map[string]any{"enabled": false}, "allow_deletions": map[string]any{"enabled": false},
+		"lock_branch":            map[string]any{"enabled": false},
+		"required_status_checks": map[string]any{"contexts": []string{}, "checks": []any{}},
+	}))
+	if p, err := c.BranchProtection(context.Background(), "acme", "widgets", "main"); err != nil || p != (Protection{}) {
+		t.Errorf("BranchProtection = %+v, %v; want nothing required", p, err)
+	}
+
+	c, _ = serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `{"message":"Resource not accessible by integration"}`)
+	})
+	if _, err := c.BranchProtection(context.Background(), "acme", "widgets", "main"); err == nil {
+		t.Error("a 403 was not an error")
+	}
+	if _, err := c.BranchProtection(context.Background(), "acme", "widgets", ""); err == nil {
+		t.Error("an empty branch was accepted")
+	}
+}
+
 func TestBranchAndRuleTypes(t *testing.T) {
 	// A protected branch: contexts and checks are counted once each.
 	c, rec := serve(t, jsonReply(map[string]any{

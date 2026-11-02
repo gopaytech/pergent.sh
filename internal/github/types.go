@@ -34,6 +34,14 @@ type Branch struct {
 	RequiredChecks int
 }
 
+// Protection is what a branch's classic protection rule requires that stops
+// a direct push: pull requests, a list of who may push, a lock (read-only),
+// and RequiredChecks, the required status checks by name, each once.
+type Protection struct {
+	PullRequestReviews, Restrictions, Locked bool
+	RequiredChecks                           int
+}
+
 // Ref is one side of a pull request: its branch and the commit GitHub
 // recorded for it.
 type Ref struct {

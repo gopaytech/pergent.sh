@@ -624,6 +624,57 @@ func (c *Client) Branch(ctx context.Context, owner, repo, branch string) (Branch
 	return br, nil
 }
 
+// BranchProtection reads branch's classic protection rule
+// (GET /repos/{owner}/{repo}/branches/{branch}/protection). Reading it needs
+// the Administration permission; GitHub answers 404 when the branch has no
+// such rule, or the caller can't see it.
+func (c *Client) BranchProtection(ctx context.Context, owner, repo, branch string) (Protection, error) {
+	b, err := filePath(branch)
+	if err != nil || b == "" {
+		return Protection{}, errBadSegment
+	}
+	p, err := repoPath(owner, repo, "/branches", b, "/protection")
+	if err != nil {
+		return Protection{}, err
+	}
+	var out struct {
+		RequiredStatusChecks *struct {
+			Contexts []string `json:"contexts"`
+			Checks   []struct {
+				Context string `json:"context"`
+			} `json:"checks"`
+		} `json:"required_status_checks"`
+		RequiredPullRequestReviews *struct{} `json:"required_pull_request_reviews"`
+		Restrictions               *struct{} `json:"restrictions"`
+		LockBranch                 *struct {
+			Enabled bool `json:"enabled"`
+		} `json:"lock_branch"`
+	}
+	if err := c.getJSON(ctx, p, nil, &out); err != nil {
+		return Protection{}, err
+	}
+	pr := Protection{
+		PullRequestReviews: out.RequiredPullRequestReviews != nil,
+		Restrictions:       out.Restrictions != nil,
+		Locked:             out.LockBranch != nil && out.LockBranch.Enabled,
+	}
+	if out.RequiredStatusChecks != nil {
+		names := map[string]bool{}
+		for _, name := range out.RequiredStatusChecks.Contexts {
+			names[name] = name != ""
+		}
+		for _, ch := range out.RequiredStatusChecks.Checks {
+			names[ch.Context] = ch.Context != ""
+		}
+		for _, ok := range names {
+			if ok {
+				pr.RequiredChecks++
+			}
+		}
+	}
+	return pr, nil
+}
+
 // ProtectionApprovals is the required_approving_review_count of branch's
 // classic protection rule. Reading it needs the Administration permission;
 // GitHub answers 404 when the branch has no such rule, or the caller can't

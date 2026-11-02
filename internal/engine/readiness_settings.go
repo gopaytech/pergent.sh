@@ -37,6 +37,9 @@ const (
 	needsAdminRead          = " (it needs the optional Administration: Read permission)"
 	cantReadGitHubClassic   = "no ruleset requires reviews, and the review App can't read the classic branch protection" + needsAdminRead
 	cantSeeGitHubChecksDark = cantSeeGitHubChecks + needsAdminRead
+	// cantReadGitHubProtection: GitHub calls the branch protected, no rule
+	// stops a push, and the classic protection that may can't be read.
+	cantReadGitHubProtection = "the review App can't read the classic branch protection" + needsAdminRead
 )
 
 const (
@@ -245,7 +248,13 @@ func (e *Engine) scanGitHubSettings(ctx context.Context, instance string, app *g
 		}
 	}
 
-	t.Pod.Protected = gitHubProtection(t.Branch, branch, types, rulesErr)
+	t.Pod.Protected = gitHubProtection(t.Branch, branch, types, rulesErr, func() (github.Protection, error) {
+		cp, err := c.BranchProtection(ctx, owner, name, t.Branch)
+		if err != nil {
+			log.Info("readiness scan: couldn't read the classic branch protection", "error", e.redact(err.Error()))
+		}
+		return cp, err
+	})
 	t.Pod.RequiredChecks = gitHubRequiredChecks(branch, types, rulesErr)
 
 	// The clone token is minted as dispatch does: this one repository,
@@ -259,17 +268,37 @@ func (e *Engine) scanGitHubSettings(ctx context.Context, instance string, app *g
 	return t, nil
 }
 
-// gitHubProtection: a pull_request or update rule, or classic protection,
-// protects the branch. Without either it is missing, unless the rules
-// couldn't be read.
-func gitHubProtection(name string, b github.Branch, types []string, rulesErr error) readiness.PodItem {
+// gitHubProtection: the branch is protected when something stops a direct
+// push: a pull_request or update rule, or classic protection that requires
+// pull requests, restricts who may push, locks the branch or requires status
+// checks (those the branch shows count). GitHub's protected flag alone is
+// not enough, as a classic rule may block only force pushes or deletion, so
+// classic, which reads the classic rule, is called for a branch it decides.
+// A rule that can't be read is unknown, never a warning or missing.
+func gitHubProtection(name string, b github.Branch, types []string, rulesErr error,
+	classic func() (github.Protection, error)) readiness.PodItem {
+	passed := readiness.PodItem{State: readiness.Passed, Reason: name + " is protected"}
 	switch {
-	case slices.Contains(types, "pull_request") || slices.Contains(types, "update") || b.Protected:
-		return readiness.PodItem{State: readiness.Passed, Reason: name + " is protected"}
-	case rulesErr != nil:
+	case slices.Contains(types, "pull_request") || slices.Contains(types, "update"):
+		return passed
+	case b.ProtectionShown && b.RequiredChecks > 0:
+		return passed
+	case !b.Protected && rulesErr != nil:
 		return unknownItem(cantReadGitHubRules)
+	case !b.Protected:
+		return readiness.PodItem{State: readiness.Missing, Reason: name + " is not protected"}
 	}
-	return readiness.PodItem{State: readiness.Missing, Reason: name + " is not protected"}
+	cp, err := classic()
+	switch {
+	case err == nil && (cp.PullRequestReviews || cp.Restrictions || cp.Locked || cp.RequiredChecks > 0):
+		return passed
+	case rulesErr != nil:
+		// A rule the App can't read may still stop pushes.
+		return unknownItem(cantReadGitHubRules)
+	case err != nil:
+		return unknownItem(cantReadGitHubProtection)
+	}
+	return readiness.PodItem{State: readiness.Warning, Reason: name + " has protection but accepts direct pushes"}
 }
 
 // gitHubRequiredChecks: a required_status_checks rule, or required checks in
