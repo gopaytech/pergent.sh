@@ -29,7 +29,7 @@ pergent.sh is a service that runs [pergent](https://github.com/gopaytech/pergent
 
 - **A Job per review**: each review runs as its own Kubernetes Job in your cluster, started by a merge request or pull request webhook, so reviews run in parallel up to `jobs.max_running`.
 - **One comment, one status**: pergent.sh posts a single comment, updated in place on every push, and sets a status named `pergent`: a commit status on GitLab, a Check Run on GitHub.
-- **Approval with a human guard**: a clean review that actually reviewed something and skipped no file outside the allowed rules is approved by the approver, and pergent.sh logs a warning for every project where one approval alone could merge.
+- **Approval with a human guard**: a clean review that actually reviewed something and skipped no file outside the allowed rules is approved by the approver; on GitLab, pergent.sh logs a warning for every project where one approval alone could merge.
 - **GitLab and GitHub**: GitLab (gitlab.com or self-managed) and GitHub.com; on GitHub one App is enough to review and approve.
 - **Dashboard**: every review, finding, file and log in the browser, with teams and roles for who sees what, an audit log, and instances, secrets and the LLM managed without editing the config file.
 - **Skill library**: skills written in the dashboard or installed from a git repository, plus repository skills and instructions read from the target branch.
