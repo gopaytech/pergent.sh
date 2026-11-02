@@ -240,6 +240,12 @@ func TestBuildScanJobLockedDown(t *testing.T) {
 		if sc == nil || sc.ReadOnlyRootFilesystem == nil || !*sc.ReadOnlyRootFilesystem {
 			t.Errorf("%s must have a read-only root filesystem", c.Name)
 		}
+		if got := c.Resources.Requests.Cpu().String(); got != "100m" {
+			t.Errorf("%s cpu request = %s; want 100m", c.Name, got)
+		}
+		if got := c.Resources.Requests.Memory().String(); got != "128Mi" {
+			t.Errorf("%s memory request = %s; want 128Mi", c.Name, got)
+		}
 		if got := c.Resources.Limits.Memory().String(); got != "512Mi" {
 			t.Errorf("%s memory limit = %s; want 512Mi", c.Name, got)
 		}
@@ -251,11 +257,13 @@ func TestBuildScanJobLockedDown(t *testing.T) {
 func TestScanScript(t *testing.T) {
 	for _, want := range []string{
 		"GIT_TERMINAL_PROMPT=0",
+		"GIT_ALLOW_PROTOCOL=https",
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"HOME=/work",
 		"core.hooksPath /dev/null",
 		"core.symlinks false",
+		`git remote add origin -- "$REPO_URL"`,
 		"pergent-push-disabled:",
 		"--depth=1",
 		`"$SCAN_COMMIT"`,

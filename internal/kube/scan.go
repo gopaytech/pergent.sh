@@ -82,6 +82,18 @@ func scanLabels(scanID string) map[string]string {
 
 func scanSecretName(p ScanJobParams) string { return p.Name + "-secrets" }
 
+// scanResources bound the clone of one commit and its scan: 100m CPU and
+// 128Mi requested, 512Mi at most.
+func scanResources() corev1.ResourceRequirements {
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("100m"),
+			corev1.ResourceMemory: resource.MustParse("128Mi"),
+		},
+		Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("512Mi")},
+	}
+}
+
 // BuildScanJob builds the (not yet suspended) scan Job; LaunchScan suspends
 // it.
 func BuildScanJob(p ScanJobParams) *batchv1.Job {
@@ -98,7 +110,7 @@ func BuildScanJob(p ScanJobParams) *batchv1.Job {
 			secretEnv("GIT_TOKEN", secret, keyGitToken),
 		},
 		VolumeMounts:    []corev1.VolumeMount{{Name: "work", MountPath: "/work"}},
-		Resources:       fetchResources(),
+		Resources:       scanResources(),
 		SecurityContext: fetchLockedDown(),
 	}
 	scan := corev1.Container{
@@ -118,7 +130,7 @@ func BuildScanJob(p ScanJobParams) *batchv1.Job {
 			{Name: "work", MountPath: "/work", ReadOnly: true},
 			{Name: "scan-input", MountPath: scanInputMount, ReadOnly: true},
 		},
-		Resources:       fetchResources(),
+		Resources:       scanResources(),
 		SecurityContext: fetchLockedDown(),
 	}
 	return &batchv1.Job{

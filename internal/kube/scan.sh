@@ -3,8 +3,9 @@ set -eu
 # reaches git only through the auth header (skipped with no token, which only
 # a local check uses); no credential helper, no prompt, no config but this
 # script's, no hooks, no symlinks (a link in the clone is a plain file), no
-# push.
+# push, https only (redirects too).
 export GIT_TERMINAL_PROMPT=0
+export GIT_ALLOW_PROTOCOL=https
 export GIT_CONFIG_NOSYSTEM=1
 export GIT_CONFIG_GLOBAL=/dev/null
 export HOME=/work
@@ -22,7 +23,7 @@ git init -q /work/repo
 cd /work/repo
 git config core.hooksPath /dev/null
 git config core.symlinks false
-git remote add origin "$REPO_URL"
+git remote add origin -- "$REPO_URL"
 git remote set-url --push origin pergent-push-disabled:
 if ! git fetch -q --no-tags --depth=1 -- origin "$SCAN_COMMIT"; then
   echo "fetch by SHA failed; falling back to $SCAN_BRANCH" >&2
