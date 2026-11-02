@@ -784,42 +784,6 @@ func TestApprovalsBeforeMerge(t *testing.T) {
 	expect(t, (*reqs)[0], http.MethodGet, "/api/v4/projects/7/approvals", "")
 }
 
-func TestProtectedBranch(t *testing.T) {
-	c, reqs := serve(t, jsonReply(map[string]any{
-		"name": "release/v1",
-		"push_access_levels": []map[string]any{
-			{"access_level": 40, "access_level_description": "Maintainers"},
-			{"access_level": 30, "access_level_description": "Developers + Maintainers"},
-		},
-		"merge_access_levels": []map[string]any{{"access_level": 30}},
-	}))
-	pb, found, err := c.ProtectedBranch(context.Background(), 7, "release/v1")
-	if err != nil || !found {
-		t.Fatalf("ProtectedBranch = %+v, %v, %v; want found", pb, found, err)
-	}
-	expect(t, (*reqs)[0], http.MethodGet, "/api/v4/projects/7/protected_branches/release%2Fv1", "")
-	if pb.Name != "release/v1" || len(pb.PushAccessLevels) != 2 ||
-		pb.PushAccessLevels[0].AccessLevel != 40 || pb.PushAccessLevels[1].AccessLevel != 30 {
-		t.Errorf("protected branch = %+v", pb)
-	}
-
-	// Not protected: GitLab answers 404.
-	c, _ = serve(t, func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, `{"message":"404 Not found"}`, http.StatusNotFound)
-	})
-	if pb, found, err := c.ProtectedBranch(context.Background(), 7, "main"); err != nil || found || len(pb.PushAccessLevels) != 0 {
-		t.Errorf("unprotected = %+v, %v, %v; want not found, no error", pb, found, err)
-	}
-
-	// Refused: an error, never "not protected".
-	c, _ = serve(t, func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, `{"message":"403 Forbidden"}`, http.StatusForbidden)
-	})
-	if _, found, err := c.ProtectedBranch(context.Background(), 7, "main"); err == nil || found {
-		t.Errorf("refused = %v, %v; want an error", found, err)
-	}
-}
-
 func TestProtectedBranches(t *testing.T) {
 	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("page") == "" {

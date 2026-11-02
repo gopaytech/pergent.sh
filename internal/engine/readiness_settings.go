@@ -157,17 +157,10 @@ func (e *Engine) scanGitLabSettings(ctx context.Context, gl *gitlab.Client, p st
 }
 
 // gitLabProtection returns the protected branch rules that apply to branch:
-// the rule named branch, or, when there is none (GET by name is 404), every
-// wildcard rule ("*", "main*") that matches it, as GitLab matches them. None
-// means the branch isn't protected.
+// every rule whose name matches it, its own and wildcards ("*", "main*")
+// alike, since GitLab applies the most permissive of them. None means the
+// branch isn't protected.
 func gitLabProtection(ctx context.Context, gl *gitlab.Client, projectID int64, branch string) ([]gitlab.ProtectedBranch, error) {
-	pb, found, err := gl.ProtectedBranch(ctx, projectID, branch)
-	if err != nil {
-		return nil, err
-	}
-	if found {
-		return []gitlab.ProtectedBranch{pb}, nil
-	}
 	all, err := gl.ProtectedBranches(ctx, projectID)
 	if err != nil {
 		return nil, err

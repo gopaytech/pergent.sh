@@ -21,8 +21,9 @@ const (
 	glCommitAPI    = glProjectAPI + "/repository/commits/main"
 	glRulesAPI     = glProjectAPI + "/approval_rules"
 	glApprovalsAPI = glProjectAPI + "/approvals"
-	glProtectAPI   = glProjectAPI + "/protected_branches/main"
-	// glProtectListAPI lists every protected branch rule, wildcards too.
+	// glProtectAPI is the protection rule named main; glProtectListAPI
+	// lists every rule, wildcards too.
+	glProtectAPI     = glProjectAPI + "/protected_branches/main"
 	glProtectListAPI = glProjectAPI + "/protected_branches"
 
 	ghBranchAPI  = ghRepoAPI + "/branches/main"
@@ -42,9 +43,26 @@ func serveGitLabSettings(env *testEnv) {
 	env.GitLab.Reply(http.MethodGet, glRulesAPI, http.StatusOK, []map[string]any{
 		{"rule_type": "regular", "approvals_required": 2},
 	})
-	env.GitLab.Reply(http.MethodGet, glProtectAPI, http.StatusOK, map[string]any{
-		"name": "main", "push_access_levels": []map[string]any{{"access_level": 40}},
-	})
+	serveProtection(env, map[string]any{"name": "main", "push_access_levels": []map[string]any{{"access_level": 40}}})
+}
+
+// serveProtection makes acme/widgets' protected branch rules rules, served as
+// GitLab does: all of them in the list, and the one named main (if any) by
+// name, else 404.
+func serveProtection(env *testEnv, rules ...map[string]any) {
+	env.GitLab.Reply(http.MethodGet, glProtectListAPI, http.StatusOK, append([]map[string]any{}, rules...))
+	env.GitLab.Reply(http.MethodGet, glProtectAPI, http.StatusNotFound, `{"message":"404 Not found"}`)
+	for _, r := range rules {
+		if r["name"] == "main" {
+			env.GitLab.Reply(http.MethodGet, glProtectAPI, http.StatusOK, r)
+		}
+	}
+}
+
+// refuseProtection makes every protected branch read answer status with body.
+func refuseProtection(env *testEnv, status int, body string) {
+	env.GitLab.Reply(http.MethodGet, glProtectListAPI, status, body)
+	env.GitLab.Reply(http.MethodGet, glProtectAPI, status, body)
 }
 
 // serveGitHubSettings serves acme/gadgets with main at sha('d'), protected,
@@ -105,7 +123,7 @@ func TestSettingsGitLab(t *testing.T) {
 	}
 
 	// Developers can push, pipelines needn't succeed, one approval.
-	env.GitLab.Reply(http.MethodGet, glProtectAPI, http.StatusOK, map[string]any{
+	serveProtection(env, map[string]any{
 		"name": "main", "push_access_levels": []map[string]any{{"access_level": 40}, {"access_level": 30}},
 	})
 	env.GitLab.Reply(http.MethodGet, glProjectAPI, http.StatusOK, map[string]any{
@@ -126,10 +144,7 @@ func TestSettingsGitLab(t *testing.T) {
 	checkItem(t, "required checks", p.RequiredChecks, readiness.Warning, "pipelines don't have to succeed before merging")
 
 	// Not protected; the pipeline setting not shown.
-	env.GitLab.Reply(http.MethodGet, glProtectAPI, http.StatusNotFound, `{"message":"404 Not found"}`)
-	env.GitLab.Reply(http.MethodGet, glProtectListAPI, http.StatusOK, []map[string]any{
-		{"name": "release/*", "push_access_levels": []map[string]any{{"access_level": 40}}},
-	})
+	serveProtection(env, map[string]any{"name": "release/*", "push_access_levels": []map[string]any{{"access_level": 40}}})
 	env.GitLab.Reply(http.MethodGet, glProjectAPI, http.StatusOK, map[string]any{"id": testProjectID, "default_branch": "main"})
 	target, err = scanSettings(t, env, testInstance, testProjectPath)
 	if err != nil {
@@ -139,12 +154,11 @@ func TestSettingsGitLab(t *testing.T) {
 	checkItem(t, "required checks", target.Pod.RequiredChecks, readiness.Unknown, "GitLab didn't show whether pipelines must succeed")
 }
 
-// A default branch protected only by a wildcard rule: GET by name is 404,
-// the list's rules are matched as GitLab matches them.
+// Every rule that matches the default branch counts, its own and wildcards
+// alike, as GitLab applies the most permissive of them.
 func TestSettingsGitLabWildcardProtection(t *testing.T) {
 	env := newTestEnv(t)
 	serveGitLabSettings(env)
-	env.GitLab.Reply(http.MethodGet, glProtectAPI, http.StatusNotFound, `{"message":"404 Not found"}`)
 	for _, tc := range []struct {
 		name          string
 		rules         []map[string]any
@@ -158,12 +172,21 @@ func TestSettingsGitLabWildcardProtection(t *testing.T) {
 			{"name": "*", "push_access_levels": []map[string]any{{"access_level": 30}}},
 			{"name": "main*", "push_access_levels": []map[string]any{{"access_level": 0}}},
 		}, readiness.Warning, "Developers can push to main directly"},
+		{"own rule maintainers, wildcard developers", []map[string]any{
+			{"name": "main", "push_access_levels": []map[string]any{{"access_level": 40}}},
+			{"name": "*", "push_access_levels": []map[string]any{{"access_level": 30}}},
+		}, readiness.Warning, "Developers can push to main directly"},
+		{"own rule and wildcard, maintainers", []map[string]any{
+			{"name": "main", "push_access_levels": []map[string]any{{"access_level": 40}}},
+			{"name": "m*n", "push_access_levels": []map[string]any{{"access_level": 0}}},
+		}, readiness.Passed, "main is protected"},
 		{"no rule matches", []map[string]any{
 			{"name": "release/*", "push_access_levels": []map[string]any{{"access_level": 40}}},
+			{"name": "main-old", "push_access_levels": []map[string]any{{"access_level": 30}}},
 		}, readiness.Missing, "main is not protected"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			env.GitLab.Reply(http.MethodGet, glProtectListAPI, http.StatusOK, tc.rules)
+			serveProtection(env, tc.rules...)
 			target, err := scanSettings(t, env, testInstance, testProjectPath)
 			if err != nil {
 				t.Fatal(err)
@@ -173,7 +196,7 @@ func TestSettingsGitLabWildcardProtection(t *testing.T) {
 	}
 
 	// The list refused: unknown, never missing.
-	env.GitLab.Reply(http.MethodGet, glProtectListAPI, http.StatusForbidden, `{"message":"403 Forbidden"}`)
+	refuseProtection(env, http.StatusForbidden, `{"message":"403 Forbidden"}`)
 	target, err := scanSettings(t, env, testInstance, testProjectPath)
 	if err != nil {
 		t.Fatal(err)
@@ -335,7 +358,7 @@ func TestSettingsRefusedIsUnknown(t *testing.T) {
 	t.Run("gitlab protection", func(t *testing.T) {
 		env := newTestEnv(t)
 		serveGitLabSettings(env)
-		env.GitLab.Reply(http.MethodGet, glProtectAPI, http.StatusForbidden, refused)
+		refuseProtection(env, http.StatusForbidden, refused)
 		target, err := scanSettings(t, env, testInstance, testProjectPath)
 		if err != nil {
 			t.Fatal(err)
@@ -436,7 +459,7 @@ func TestSettingsNoRawErrors(t *testing.T) {
 		env := newTestEnv(t)
 		serveGitLabSettings(env)
 		env.GitLab.Reply(http.MethodGet, glRulesAPI, http.StatusInternalServerError, body)
-		env.GitLab.Reply(http.MethodGet, glProtectAPI, http.StatusForbidden, body)
+		refuseProtection(env, http.StatusForbidden, body)
 		target, err := scanSettings(t, env, testInstance, testProjectPath)
 		if err != nil {
 			t.Fatal(err)

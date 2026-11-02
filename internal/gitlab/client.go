@@ -410,21 +410,6 @@ func (c *Client) ApprovalsBeforeMerge(ctx context.Context, projectID int64) (int
 	return a.ApprovalsBeforeMerge, err
 }
 
-// ProtectedBranch returns the protection of branch, matched by exact name
-// (GET /projects/:id/protected_branches/:name). A branch that isn't protected
-// is found false with no error.
-func (c *Client) ProtectedBranch(ctx context.Context, projectID int64, branch string) (ProtectedBranch, bool, error) {
-	var pb ProtectedBranch
-	_, err := c.getJSON(ctx, projPath(projectID)+"/protected_branches/"+seg(branch), nil, &pb)
-	if isStatus(err, http.StatusNotFound) {
-		return ProtectedBranch{}, false, nil
-	}
-	if err != nil {
-		return ProtectedBranch{}, false, err
-	}
-	return pb, true, nil
-}
-
 // ProtectedBranches lists the project's protected branch rules, wildcard
 // rules ("release/*") included.
 func (c *Client) ProtectedBranches(ctx context.Context, projectID int64) ([]ProtectedBranch, error) {
