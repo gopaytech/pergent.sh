@@ -484,3 +484,31 @@ func TestChecklistPassedHasNoAdvice(t *testing.T) {
 		}
 	}
 }
+
+func TestFlagsBudgetUnknownLibrarySize(t *testing.T) {
+	job := goodJob()
+	job.Skills = []SkillFit{{Name: "go", Folder: inputs.SourceLibrary, HasPaths: true, Files: 3}}
+
+	// "gone" is on the repository's list but was deleted from the library.
+	lib := map[string]int{"go": 1000}
+	fl := ComputeFlags(job, []string{"go", "gone"}, nil, lib)
+	if fl.BudgetKnown {
+		t.Error("BudgetKnown with a library skill whose size is not known")
+	}
+	in := goodInput()
+	in.Job = job
+	in.Library = []string{"go", "gone"}
+	in.LibrarySizes = lib
+	got := items(BuildChecklist(in))["budget"]
+	if got.State != Unknown || !strings.Contains(got.Reason, "gone") {
+		t.Errorf("budget = %s %q, want unknown naming the skill", got.State, got.Reason)
+	}
+
+	// A size of 0 is a known size; a skill the scan has not seen but the
+	// library lists keeps the size known.
+	lib = map[string]int{"go": 1000, "empty": 0, "new": 5}
+	fl = ComputeFlags(job, []string{"go", "empty", "new"}, nil, lib)
+	if !fl.BudgetKnown || fl.Budget != job.InstructionsBytes+1005 {
+		t.Errorf("budget %d known %v, want %d known", fl.Budget, fl.BudgetKnown, job.InstructionsBytes+1005)
+	}
+}

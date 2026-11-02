@@ -81,6 +81,7 @@ type analysis struct {
 	effective  []SkillFit // the skills a review would run
 	covers     bool       // an effective skill covers the repository
 	notScanned bool       // an effective skill is one the scan has not seen
+	sizeWhy    string     // why the size is not known, when BudgetKnown is false
 	flags      Flags
 }
 
@@ -91,16 +92,31 @@ func analyse(job *JobResult, library, repoSkills []string, librarySizes map[stri
 	a := analysis{usable: true, effective: Effective(job.Skills, library, repoSkills)}
 	a.flags.BudgetKnown = true
 	a.flags.Budget = job.InstructionsBytes
+	unknown := func(why string) {
+		if a.flags.BudgetKnown {
+			a.sizeWhy = why
+		}
+		a.flags.BudgetKnown = false
+	}
+	// librarySize adds a library skill's size; one the library no longer has
+	// (deleted after it was turned on) has no size we know.
+	librarySize := func(name string) {
+		size, ok := librarySizes[name]
+		if !ok {
+			unknown(fmt.Sprintf("couldn't add up the size: the size of skill %q is not known", name))
+		}
+		a.flags.Budget += size
+	}
 	for _, f := range a.effective {
 		a.covers = a.covers || f.Covers()
 		switch {
 		case f.Problem == ProblemNotScanned:
 			a.notScanned = true
-			a.flags.Budget += librarySizes[f.Name] // the library knows its size
+			librarySize(f.Name) // the library knows its size
 		case f.Problem != "":
-			a.flags.BudgetKnown = false
+			unknown(fmt.Sprintf("couldn't add up the size: skill %q: %s", f.Name, f.Problem))
 		case f.Folder == inputs.SourceLibrary:
-			a.flags.Budget += librarySizes[f.Name]
+			librarySize(f.Name)
 		default:
 			a.flags.Budget += f.Bytes
 		}
@@ -443,12 +459,7 @@ func budgetItem(it Item, ok bool) func(analysis) Item {
 			return it
 		}
 		if !a.flags.BudgetKnown {
-			for _, f := range a.effective {
-				if f.Problem != "" && f.Problem != ProblemNotScanned {
-					return it.with(Unknown, fmt.Sprintf("couldn't add up the size: skill %q: %s", f.Name, f.Problem), "", "")
-				}
-			}
-			return it.with(Unknown, "couldn't add up the size", "", "")
+			return it.with(Unknown, a.sizeWhy, "", "")
 		}
 		reason := fmt.Sprintf("%d KiB of %d KiB", kib(a.flags.Budget), inputs.ConfigMapLimit/1024)
 		if a.flags.Budget > inputs.ConfigMapLimit {
