@@ -82,7 +82,9 @@ describe("Integrations for an operator", () => {
     await userEvent.click(within(group).getByRole("button", { name: "Replace" }));
     const input = within(group).getByLabelText("New Review token");
     expect(input).toHaveAttribute("type", "password");
-    expect(input).toHaveAttribute("autocomplete", "off");
+    expect(input).toHaveAttribute("autocomplete", "new-password");
+    expect(input).toHaveAttribute("data-1p-ignore");
+    expect(input).toHaveAttribute("data-lpignore", "true");
     expect(input).toHaveValue("");
     await userEvent.type(input, "glpat-new-token");
     await userEvent.click(within(group).getByRole("button", { name: "Save" }));
@@ -186,7 +188,12 @@ describe("Integrations for an operator", () => {
     for (const label of ["Review token", "Approve token", "OAuth client secret"]) {
       const input = within(form).getByLabelText(label);
       expect(input).toHaveAttribute("type", "password");
-      expect(input).toHaveAttribute("autocomplete", "off");
+      expect(input).toHaveAttribute("autocomplete", "new-password");
+      expect(input).toHaveAttribute("data-1p-ignore");
+    }
+    // The text fields before a password field get no saved username.
+    for (const label of ["Name", "Address", "OAuth client ID"]) {
+      expect(within(form).getByLabelText(label)).toHaveAttribute("data-lpignore", "true");
     }
     await userEvent.type(within(form).getByLabelText("Name"), "extra");
     await userEvent.type(within(form).getByLabelText("Address"), "https://gitlab2.example.com");

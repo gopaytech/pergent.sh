@@ -3,7 +3,7 @@ import { useState, type FormEvent } from "react";
 
 import { api, skillBudget, type DefaultsView, type LibrarySkill, type LLMAdminView } from "../api";
 import { useWrite } from "../layout/write";
-import { ErrorBox, Loading, Switch, bytesText, secretText } from "../ui";
+import { ErrorBox, Loading, Switch, bytesText, noFill, secretFill, secretText } from "../ui";
 
 // AdminSettings holds what an admin sets for the whole of pergent.sh: the
 // defaults a repository switched on in the dashboard gets, and the model
@@ -330,12 +330,27 @@ function ModelView({ v }: { v: LLMAdminView }) {
   );
 }
 
+// providers are the opencode provider IDs offered in the list. Any other
+// ID can still be typed under "Other".
+const providers: [string, string][] = [
+  ["anthropic", "Anthropic (Claude)"],
+  ["openai", "OpenAI"],
+  ["google", "Google (Gemini)"],
+  ["deepseek", "DeepSeek"],
+  ["openrouter", "OpenRouter"],
+  ["groq", "Groq"],
+  ["mistral", "Mistral"],
+  ["xai", "xAI (Grok)"],
+];
+
 // ModelForm edits the model an operator may change. The key is write-only:
 // it is sent when replaced and never shown.
 function ModelForm({ v }: { v: LLMAdminView }) {
   const client = useQueryClient();
   const write = useWrite();
-  const [provider, setProvider] = useState(v.provider);
+  const listed = providers.some(([id]) => id === v.provider);
+  const [choice, setChoice] = useState(listed ? v.provider : v.provider ? "other" : "");
+  const [otherID, setOtherID] = useState(listed ? "" : v.provider);
   const [model, setModel] = useState(v.model);
   const [baseURL, setBaseURL] = useState(v.baseURL);
   const [key, setKey] = useState("");
@@ -358,7 +373,7 @@ function ModelForm({ v }: { v: LLMAdminView }) {
   const submit = (e: FormEvent) => {
     e.preventDefault();
     save.mutate({
-      provider: provider.trim(),
+      provider: (choice === "other" ? otherID : choice).trim(),
       model: model.trim(),
       baseURL: baseURL.trim(),
       ...(askKey && key !== "" ? { apiKey: key } : {}),
@@ -368,42 +383,61 @@ function ModelForm({ v }: { v: LLMAdminView }) {
     <form className="card pad stack" aria-label="Model" onSubmit={submit}>
       <h2>Model</h2>
       <label htmlFor="llm-provider">Provider</label>
-      <input
-        id="llm-provider"
-        type="text"
-        autoComplete="off"
-        spellCheck={false}
-        value={provider}
-        onChange={(e) => setProvider(e.target.value)}
-        required
-      />
+      <select id="llm-provider" value={choice} onChange={(e) => setChoice(e.target.value)} required>
+        <option value="" disabled>
+          Choose a provider
+        </option>
+        {providers.map(([id, name]) => (
+          <option key={id} value={id}>
+            {name}
+          </option>
+        ))}
+        <option value="other">Other (type its ID)</option>
+      </select>
+      {choice === "other" && (
+        <>
+          <label htmlFor="llm-provider-id">Provider ID</label>
+          <input
+            id="llm-provider-id"
+            type="text"
+            {...noFill}
+            spellCheck={false}
+            value={otherID}
+            onChange={(e) => setOtherID(e.target.value)}
+            required
+          />
+          <div className="meta">The provider's ID in opencode. With a Base URL, it is any OpenAI-compatible server.</div>
+        </>
+      )}
       <label htmlFor="llm-model">Model</label>
       <input
         id="llm-model"
         type="text"
-        autoComplete="off"
+        {...noFill}
         spellCheck={false}
         value={model}
         onChange={(e) => setModel(e.target.value)}
         required
       />
+      <div className="meta">The model's ID as the provider names it.</div>
       <label htmlFor="llm-base-url">Base URL</label>
       <input
         id="llm-base-url"
         type="text"
-        autoComplete="off"
+        {...noFill}
         spellCheck={false}
         placeholder="the provider's own"
         value={baseURL}
         onChange={(e) => setBaseURL(e.target.value)}
       />
+      <div className="meta">Empty uses the provider's own API. Set it for a proxy or an OpenAI-compatible server.</div>
       <div className="name">API key</div>
       <div className="meta">{secretText(v.key)}</div>
       {askKey ? (
         <input
           type="password"
           aria-label="New API key"
-          autoComplete="off"
+          {...secretFill}
           spellCheck={false}
           value={key}
           onChange={(e) => setKey(e.target.value)}

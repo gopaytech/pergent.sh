@@ -292,7 +292,11 @@ describe("AdminSettings model", () => {
     await userEvent.click(within(form).getByRole("button", { name: "Replace" }));
     const key = within(form).getByLabelText("New API key");
     expect(key).toHaveAttribute("type", "password");
-    expect(key).toHaveAttribute("autocomplete", "off");
+    // "off" doesn't stop a password manager filling the operator's own
+    // sign-in here; "new-password" and the managers' opt-outs do.
+    expect(key).toHaveAttribute("autocomplete", "new-password");
+    expect(key).toHaveAttribute("data-1p-ignore");
+    expect(key).toHaveAttribute("data-lpignore", "true");
     expect(key).toHaveValue("");
     await userEvent.type(key, "sk-new-key");
     await userEvent.click(within(form).getByRole("button", { name: "Save model" }));
@@ -315,7 +319,7 @@ describe("AdminSettings model", () => {
     renderApp("/settings");
     const form = await screen.findByRole("form", { name: "Model" });
     expect(form).toHaveTextContent("not set");
-    await userEvent.type(within(form).getByLabelText("Provider"), "anthropic");
+    await userEvent.selectOptions(within(form).getByLabelText("Provider"), "anthropic");
     await userEvent.type(within(form).getByLabelText("Model"), "claude-sonnet");
     await userEvent.type(within(form).getByLabelText("Base URL"), "https://llm.example.com");
     await userEvent.type(within(form).getByLabelText("New API key"), "sk-first");
@@ -326,6 +330,71 @@ describe("AdminSettings model", () => {
       baseURL: "https://llm.example.com",
       apiKey: "sk-first",
     });
+  });
+
+  it("picks the provider from a list", async () => {
+    const fake = fakeApi({
+      ...routes(operator),
+      "GET /api/admin/llm": { body: { ...llm, provider: "", model: "", key: { set: false, updatedAt: null } } },
+      "PUT /api/admin/llm": { body: llm },
+    });
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Model" });
+    const provider = within(form).getByLabelText("Provider");
+    const options = within(provider)
+      .getAllByRole("option")
+      .map((o) => (o as HTMLOptionElement).value);
+    expect(options).toEqual(
+      expect.arrayContaining(["anthropic", "openai", "deepseek", "google", "openrouter", "groq", "mistral", "xai", "other"]),
+    );
+    // Nothing is picked until the operator picks.
+    expect(provider).toHaveValue("");
+    expect(within(form).queryByLabelText("Provider ID")).not.toBeInTheDocument();
+    await userEvent.selectOptions(provider, "deepseek");
+    await userEvent.type(within(form).getByLabelText("Model"), "deepseek-chat");
+    await userEvent.type(within(form).getByLabelText("New API key"), "sk-ds");
+    await userEvent.click(within(form).getByRole("button", { name: "Save model" }));
+    expect(fake.find("PUT", "/api/admin/llm")[0].body).toEqual({
+      provider: "deepseek",
+      model: "deepseek-chat",
+      baseURL: "",
+      apiKey: "sk-ds",
+    });
+  });
+
+  it("takes any other provider ID, and shows a stored one that isn't listed", async () => {
+    const fake = fakeApi({
+      ...routes(operator),
+      "GET /api/admin/llm": { body: { ...llm, provider: "my-gateway", baseURL: "https://llm.example.com/v1" } },
+      "PUT /api/admin/llm": { body: llm },
+    });
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Model" });
+    expect(within(form).getByLabelText("Provider")).toHaveValue("other");
+    const id = within(form).getByLabelText("Provider ID");
+    expect(id).toHaveValue("my-gateway");
+    await userEvent.clear(id);
+    await userEvent.type(id, "together");
+    await userEvent.click(within(form).getByRole("button", { name: "Save model" }));
+    expect(fake.find("PUT", "/api/admin/llm")[0].body).toEqual({
+      provider: "together",
+      model: "claude-sonnet",
+      baseURL: "https://llm.example.com/v1",
+    });
+  });
+
+  it("leaves the non-secret fields to no password manager either", async () => {
+    fakeApi({ ...routes(operator), "GET /api/admin/llm": { body: llm } });
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Model" });
+    // A password manager fills a saved username into the text field before
+    // a password field: the Base URL once showed "admin".
+    for (const label of ["Model", "Base URL"]) {
+      const input = within(form).getByLabelText(label);
+      expect(input).toHaveAttribute("autocomplete", "off");
+      expect(input).toHaveAttribute("data-1p-ignore");
+      expect(input).toHaveAttribute("data-lpignore", "true");
+    }
   });
 
   it("shows the server's text when the model is refused", async () => {

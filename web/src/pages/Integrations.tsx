@@ -4,7 +4,7 @@ import { useState, type FormEvent } from "react";
 import { api, type IntegrationView, type InstanceAdminView, type Platform } from "../api";
 import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
-import { ErrorBox, Loading, Pill, platformName, secretText } from "../ui";
+import { ErrorBox, Loading, Pill, noFill, platformName, secretFill, secretText } from "../ui";
 
 // Integrations is the instances pergent.sh reviews on. An operator sees
 // every one and adds, changes and removes those kept in the dashboard; a
@@ -270,7 +270,7 @@ function OAuthClientRow({ inst, locked }: { inst: InstanceAdminView; locked: boo
           <input
             type="text"
             aria-label="New OAuth client ID"
-            autoComplete="off"
+            {...noFill}
             spellCheck={false}
             value={value}
             onChange={(e) => setValue(e.target.value)}
@@ -324,7 +324,7 @@ function SecretRow({ inst, field, locked }: { inst: InstanceAdminView; field: st
           <input
             type="password"
             aria-label={`New ${label}`}
-            autoComplete="off"
+            {...secretFill}
             spellCheck={false}
             value={value}
             onChange={(e) => setValue(e.target.value)}
@@ -372,7 +372,7 @@ function Field({
         id={id}
         // A secret is typed into a password input that never prefills.
         type={secret ? "password" : type}
-        autoComplete="off"
+        {...(secret ? secretFill : noFill)}
         autoCapitalize="none"
         spellCheck={false}
         value={d[name] ?? ""}
