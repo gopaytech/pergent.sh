@@ -120,14 +120,14 @@ func (e *Engine) scanGitLabSettings(ctx context.Context, gl *gitlab.Client, p st
 		t.Pod.Approvals = approvalsItem(n)
 	}
 
-	pb, protected, err := gl.ProtectedBranch(ctx, p.ProjectID, t.Branch)
+	rules, err := gitLabProtection(ctx, gl, p.ProjectID, t.Branch)
 	switch {
 	case err != nil:
 		log.Info("readiness scan: couldn't read branch protection", "error", e.redact(err.Error()))
 		t.Pod.Protected = unknownItem(cantReadGitLabProtection)
-	case !protected:
+	case len(rules) == 0:
 		t.Pod.Protected = readiness.PodItem{State: readiness.Missing, Reason: t.Branch + " is not protected"}
-	case slices.ContainsFunc(pb.PushAccessLevels, func(l gitlab.AccessLevel) bool { return l.AccessLevel == gitLabDeveloper }):
+	case slices.ContainsFunc(rules, developersPush):
 		t.Pod.Protected = readiness.PodItem{State: readiness.Warning, Reason: "Developers can push to " + t.Branch + " directly"}
 	default:
 		t.Pod.Protected = readiness.PodItem{State: readiness.Passed, Reason: t.Branch + " is protected"}
@@ -154,6 +154,36 @@ func (e *Engine) scanGitLabSettings(ctx context.Context, gl *gitlab.Client, p st
 	}
 	t.GitToken = tok
 	return t, nil
+}
+
+// gitLabProtection returns the protected branch rules that apply to branch:
+// the rule named branch, or, when there is none (GET by name is 404), every
+// wildcard rule ("*", "main*") that matches it, as GitLab matches them. None
+// means the branch isn't protected.
+func gitLabProtection(ctx context.Context, gl *gitlab.Client, projectID int64, branch string) ([]gitlab.ProtectedBranch, error) {
+	pb, found, err := gl.ProtectedBranch(ctx, projectID, branch)
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		return []gitlab.ProtectedBranch{pb}, nil
+	}
+	all, err := gl.ProtectedBranches(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	var out []gitlab.ProtectedBranch
+	for _, r := range all {
+		if wildcardMatch(r.Name, branch) {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// developersPush reports whether a protected branch rule lets Developers push.
+func developersPush(r gitlab.ProtectedBranch) bool {
+	return slices.ContainsFunc(r.PushAccessLevels, func(l gitlab.AccessLevel) bool { return l.AccessLevel == gitLabDeveloper })
 }
 
 // scanGitHubSettings is scanSettings on GitHub, read through the review App's
@@ -207,6 +237,11 @@ func (e *Engine) scanGitHubSettings(ctx context.Context, instance string, app *g
 		switch {
 		case err == nil:
 			t.Pod.Approvals = approvalsItem(n)
+		case errors.Is(err, errClassicProtection) && !branch.Protected:
+			// No ruleset requires reviews and the branch has no classic
+			// protection: none is needed, which is known.
+			t.Pod.Approvals = approvalsItem(0)
+			err = nil
 		case errors.Is(err, errClassicProtection):
 			t.Pod.Approvals = unknownItem(cantReadGitHubClassic)
 		default:
@@ -247,7 +282,9 @@ func gitHubProtection(name string, b github.Branch, types []string, rulesErr err
 // gitHubRequiredChecks: a required_status_checks rule, or required checks in
 // the classic protection the branch shows, pass. None is a warning only when
 // both are known to have none: the rules were read, and the branch has no
-// classic protection or shows that it requires no check.
+// classic protection. A protected branch that shows no required check may
+// not be showing the App its real setting, so that is unknown, never a
+// warning.
 func gitHubRequiredChecks(b github.Branch, types []string, rulesErr error) readiness.PodItem {
 	switch {
 	case slices.Contains(types, "required_status_checks"):
@@ -260,10 +297,10 @@ func gitHubRequiredChecks(b github.Branch, types []string, rulesErr error) readi
 		return readiness.PodItem{State: readiness.Passed, Reason: reason}
 	case rulesErr != nil:
 		return unknownItem(cantSeeGitHubChecks)
-	case !b.Protected || b.ProtectionShown:
+	case !b.Protected:
 		return readiness.PodItem{State: readiness.Warning, Reason: "no status checks are required"}
 	}
-	// Classic protection is on but GitHub didn't show it.
+	// Classic protection is on, and GitHub showed no check in it.
 	return unknownItem(cantSeeGitHubChecksDark)
 }
 

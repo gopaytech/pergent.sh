@@ -22,6 +22,8 @@ const (
 	glRulesAPI     = glProjectAPI + "/approval_rules"
 	glApprovalsAPI = glProjectAPI + "/approvals"
 	glProtectAPI   = glProjectAPI + "/protected_branches/main"
+	// glProtectListAPI lists every protected branch rule, wildcards too.
+	glProtectListAPI = glProjectAPI + "/protected_branches"
 
 	ghBranchAPI  = ghRepoAPI + "/branches/main"
 	ghRulesAPI   = ghRepoAPI + "/rules/branches/main"
@@ -125,6 +127,9 @@ func TestSettingsGitLab(t *testing.T) {
 
 	// Not protected; the pipeline setting not shown.
 	env.GitLab.Reply(http.MethodGet, glProtectAPI, http.StatusNotFound, `{"message":"404 Not found"}`)
+	env.GitLab.Reply(http.MethodGet, glProtectListAPI, http.StatusOK, []map[string]any{
+		{"name": "release/*", "push_access_levels": []map[string]any{{"access_level": 40}}},
+	})
 	env.GitLab.Reply(http.MethodGet, glProjectAPI, http.StatusOK, map[string]any{"id": testProjectID, "default_branch": "main"})
 	target, err = scanSettings(t, env, testInstance, testProjectPath)
 	if err != nil {
@@ -132,6 +137,48 @@ func TestSettingsGitLab(t *testing.T) {
 	}
 	checkItem(t, "protected", target.Pod.Protected, readiness.Missing, "main is not protected")
 	checkItem(t, "required checks", target.Pod.RequiredChecks, readiness.Unknown, "GitLab didn't show whether pipelines must succeed")
+}
+
+// A default branch protected only by a wildcard rule: GET by name is 404,
+// the list's rules are matched as GitLab matches them.
+func TestSettingsGitLabWildcardProtection(t *testing.T) {
+	env := newTestEnv(t)
+	serveGitLabSettings(env)
+	env.GitLab.Reply(http.MethodGet, glProtectAPI, http.StatusNotFound, `{"message":"404 Not found"}`)
+	for _, tc := range []struct {
+		name          string
+		rules         []map[string]any
+		state, reason string
+	}{
+		{"wildcard, maintainers push", []map[string]any{
+			{"name": "release/*", "push_access_levels": []map[string]any{{"access_level": 30}}},
+			{"name": "ma*", "push_access_levels": []map[string]any{{"access_level": 40}}},
+		}, readiness.Passed, "main is protected"},
+		{"every branch, developers push", []map[string]any{
+			{"name": "*", "push_access_levels": []map[string]any{{"access_level": 30}}},
+			{"name": "main*", "push_access_levels": []map[string]any{{"access_level": 0}}},
+		}, readiness.Warning, "Developers can push to main directly"},
+		{"no rule matches", []map[string]any{
+			{"name": "release/*", "push_access_levels": []map[string]any{{"access_level": 40}}},
+		}, readiness.Missing, "main is not protected"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env.GitLab.Reply(http.MethodGet, glProtectListAPI, http.StatusOK, tc.rules)
+			target, err := scanSettings(t, env, testInstance, testProjectPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkItem(t, "protected", target.Pod.Protected, tc.state, tc.reason)
+		})
+	}
+
+	// The list refused: unknown, never missing.
+	env.GitLab.Reply(http.MethodGet, glProtectListAPI, http.StatusForbidden, `{"message":"403 Forbidden"}`)
+	target, err := scanSettings(t, env, testInstance, testProjectPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkItem(t, "protected", target.Pod.Protected, readiness.Unknown, wantGitLabProtection)
 }
 
 func TestSettingsGitHub(t *testing.T) {
@@ -202,17 +249,41 @@ func TestSettingsGitHub(t *testing.T) {
 	checkItem(t, "protected", p.Protected, readiness.Passed, "main is protected")
 	checkItem(t, "required checks", p.RequiredChecks, readiness.Passed, "2 status checks are required")
 
-	// Nothing protects it.
+	// Nothing protects it: no rule, no classic protection (GitHub answers
+	// 404 for it), so no approval is needed, which is known.
 	gh.Reply(http.MethodGet, ghBranchAPI, http.StatusOK, map[string]any{
 		"name": "main", "commit": map[string]any{"sha": sha('d')}, "protected": false,
 	})
 	gh.Reply(http.MethodGet, ghRulesAPI, http.StatusOK, []map[string]any{{"type": "deletion"}})
+	gh.Reply(http.MethodGet, ghClassicAPI, http.StatusNotFound, map[string]string{"message": "Branch not protected"})
 	target, err = scanSettings(t, env, ghInstance, ghRepoPath)
 	if err != nil {
 		t.Fatalf("scanSettings: %v", err)
 	}
+	checkItem(t, "approvals", target.Pod.Approvals, readiness.Warning, "")
+	if target.Pod.Approvals.Count != 0 {
+		t.Errorf("approvals count = %d; want 0", target.Pod.Approvals.Count)
+	}
 	checkItem(t, "protected", target.Pod.Protected, readiness.Missing, "main is not protected")
 	checkItem(t, "required checks", target.Pod.RequiredChecks, readiness.Warning, "no status checks are required")
+
+	// Classic protection on, shown, but no required checks in it: the App
+	// may not be shown the real setting, so it is never a warning.
+	for _, protection := range []map[string]any{
+		{"enabled": true},
+		{"enabled": true, "required_status_checks": map[string]any{"contexts": []string{}, "checks": []any{}}},
+	} {
+		gh.Reply(http.MethodGet, ghBranchAPI, http.StatusOK, map[string]any{
+			"name": "main", "commit": map[string]any{"sha": sha('d')}, "protected": true, "protection": protection,
+		})
+		target, err = scanSettings(t, env, ghInstance, ghRepoPath)
+		if err != nil {
+			t.Fatalf("scanSettings: %v", err)
+		}
+		checkItem(t, "required checks", target.Pod.RequiredChecks, readiness.Unknown, wantGitHubChecksDark)
+		// Protected, and its classic protection can't be read: unknown.
+		checkItem(t, "approvals", target.Pod.Approvals, readiness.Unknown, wantGitHubClassic)
+	}
 }
 
 // The couldn't-check reasons, exact.
