@@ -8,7 +8,13 @@ const kinds: Record<string, [Tone, string]> = {
   approver_unreachable: ["warn", "Setup"],
   out_of_memory: ["bad", "Failing"],
   token_expiry: ["draft", "Token"],
+  no_skill_coverage: ["warn", "Skills"],
+  inputs_over_budget: ["bad", "Failing"],
+  no_project_context: ["warn", "Context"],
 };
+
+// The kinds the readiness scan raises: their rows open the Readiness tab.
+const readinessKinds = new Set(["no_skill_coverage", "inputs_over_budget", "no_project_context"]);
 
 // AttentionRows lists setup problems: a repository's, or (project "") the
 // whole instance's.
@@ -34,7 +40,7 @@ export default function AttentionRows({
                 {a.project === "" ? (
                   platform ? `${platformName(platform)} · ${a.instance}` : a.instance
                 ) : linkRepos ? (
-                  <Link to={`${paths.repo(a.instance, a.project)}?tab=setup`}>{a.project}</Link>
+                  <Link to={`${paths.repo(a.instance, a.project)}?tab=${readinessKinds.has(a.kind) ? "readiness" : "setup"}`}>{a.project}</Link>
                 ) : (
                   a.project
                 )}

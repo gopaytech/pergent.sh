@@ -44,12 +44,14 @@ type MergeRequest struct {
 	DiffRefs       DiffRefs `json:"diff_refs"`
 }
 
-// Project holds the fields pergent.sh reads.
+// Project holds the fields pergent.sh reads. OnlyAllowMergeIfPipelineSucceeds
+// ("pipelines must succeed") is nil when GitLab doesn't show it.
 type Project struct {
-	ID                int64  `json:"id"`
-	PathWithNamespace string `json:"path_with_namespace"`
-	HTTPURLToRepo     string `json:"http_url_to_repo"`
-	DefaultBranch     string `json:"default_branch"`
+	ID                               int64  `json:"id"`
+	PathWithNamespace                string `json:"path_with_namespace"`
+	HTTPURLToRepo                    string `json:"http_url_to_repo"`
+	DefaultBranch                    string `json:"default_branch"`
+	OnlyAllowMergeIfPipelineSucceeds *bool  `json:"only_allow_merge_if_pipeline_succeeds"`
 }
 
 // ApprovalRule is a project approval rule. A rule with no protected branches
@@ -61,9 +63,18 @@ type ApprovalRule struct {
 	ProtectedBranches             []ProtectedBranch `json:"protected_branches"`
 }
 
-// ProtectedBranch is a protected branch name, which may hold "*" wildcards.
+// ProtectedBranch is a protected branch: its name, which may hold "*"
+// wildcards, and who may push to it. An approval rule lists the protected
+// branches it applies to in the same shape.
 type ProtectedBranch struct {
-	Name string `json:"name"`
+	Name             string        `json:"name"`
+	PushAccessLevels []AccessLevel `json:"push_access_levels"`
+}
+
+// AccessLevel is one grant of a protected branch. Developer is 30,
+// Maintainer 40, and 0 is no one.
+type AccessLevel struct {
+	AccessLevel int `json:"access_level"`
 }
 
 // TreeEntry is one entry of a repository tree: the platform-neutral

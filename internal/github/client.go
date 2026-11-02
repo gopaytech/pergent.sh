@@ -515,36 +515,164 @@ func (c *Client) RepoAccess(ctx context.Context, owner, repo string) (RepoAccess
 	return RepoAccess{ID: r.ID, FullName: r.FullName, Private: r.Private, Pull: r.Permissions.Pull}, nil
 }
 
+// branchRule is one rule the repository's active rulesets apply to a branch.
+type branchRule struct {
+	Type       string `json:"type"`
+	Parameters struct {
+		RequiredApprovingReviewCount int `json:"required_approving_review_count"`
+	} `json:"parameters"`
+}
+
+// branchRules calls fn with each page of the rules the repository's active
+// rulesets apply to branch (GET /repos/{owner}/{repo}/rules/branches/{branch},
+// readable with the metadata permission).
+func (c *Client) branchRules(ctx context.Context, owner, repo, branch string, fn func([]branchRule)) error {
+	b, err := filePath(branch)
+	if err != nil || b == "" {
+		return errBadSegment
+	}
+	p, err := repoPath(owner, repo, "/rules/branches", b)
+	if err != nil {
+		return err
+	}
+	return c.paginate(ctx, p, func(body []byte) error {
+		var rules []branchRule
+		if err := decode(body, &rules); err != nil {
+			return err
+		}
+		fn(rules)
+		return nil
+	})
+}
+
 // RulesetApprovals is the highest required_approving_review_count of the
 // pull_request rules the repository's active rulesets apply to branch
 // (readable with the metadata permission); found is false when none does.
 func (c *Client) RulesetApprovals(ctx context.Context, owner, repo, branch string) (n int, found bool, err error) {
-	b, err := filePath(branch)
-	if err != nil || b == "" {
-		return 0, false, errBadSegment
-	}
-	p, err := repoPath(owner, repo, "/rules/branches", b)
-	if err != nil {
-		return 0, false, err
-	}
-	err = c.paginate(ctx, p, func(body []byte) error {
-		var rules []struct {
-			Type       string `json:"type"`
-			Parameters struct {
-				RequiredApprovingReviewCount int `json:"required_approving_review_count"`
-			} `json:"parameters"`
-		}
-		if err := decode(body, &rules); err != nil {
-			return err
-		}
+	err = c.branchRules(ctx, owner, repo, branch, func(rules []branchRule) {
 		for _, r := range rules {
 			if r.Type == "pull_request" {
 				n, found = max(n, r.Parameters.RequiredApprovingReviewCount), true
 			}
 		}
-		return nil
 	})
-	return n, found, err
+	if err != nil {
+		return 0, false, err
+	}
+	return n, found, nil
+}
+
+// BranchRuleTypes lists the type of every rule the repository's active
+// rulesets apply to branch, in GitHub's order ("pull_request", "update",
+// "required_status_checks", ...).
+func (c *Client) BranchRuleTypes(ctx context.Context, owner, repo, branch string) ([]string, error) {
+	var types []string
+	err := c.branchRules(ctx, owner, repo, branch, func(rules []branchRule) {
+		for _, r := range rules {
+			types = append(types, r.Type)
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	return types, nil
+}
+
+// Branch reads branch (GET /repos/{owner}/{repo}/branches/{branch}). A branch
+// that doesn't exist, as in a repository with no commits, is ErrNotFound.
+func (c *Client) Branch(ctx context.Context, owner, repo, branch string) (Branch, error) {
+	b, err := filePath(branch)
+	if err != nil || b == "" {
+		return Branch{}, errBadSegment
+	}
+	p, err := repoPath(owner, repo, "/branches", b)
+	if err != nil {
+		return Branch{}, err
+	}
+	var out struct {
+		Commit struct {
+			SHA string `json:"sha"`
+		} `json:"commit"`
+		Protected  bool `json:"protected"`
+		Protection *struct {
+			RequiredStatusChecks *struct {
+				Contexts []string `json:"contexts"`
+				Checks   []struct {
+					Context string `json:"context"`
+				} `json:"checks"`
+			} `json:"required_status_checks"`
+		} `json:"protection"`
+	}
+	if err := c.getJSON(ctx, p, nil, &out); err != nil {
+		return Branch{}, err
+	}
+	br := Branch{Commit: out.Commit.SHA, Protected: out.Protected, ProtectionShown: out.Protection != nil}
+	if out.Protection != nil && out.Protection.RequiredStatusChecks != nil {
+		names := map[string]bool{}
+		for _, name := range out.Protection.RequiredStatusChecks.Contexts {
+			names[name] = name != ""
+		}
+		for _, ch := range out.Protection.RequiredStatusChecks.Checks {
+			names[ch.Context] = ch.Context != ""
+		}
+		for _, ok := range names {
+			if ok {
+				br.RequiredChecks++
+			}
+		}
+	}
+	return br, nil
+}
+
+// BranchProtection reads branch's classic protection rule
+// (GET /repos/{owner}/{repo}/branches/{branch}/protection). Reading it needs
+// the Administration permission; GitHub answers 404 when the branch has no
+// such rule, or the caller can't see it.
+func (c *Client) BranchProtection(ctx context.Context, owner, repo, branch string) (Protection, error) {
+	b, err := filePath(branch)
+	if err != nil || b == "" {
+		return Protection{}, errBadSegment
+	}
+	p, err := repoPath(owner, repo, "/branches", b, "/protection")
+	if err != nil {
+		return Protection{}, err
+	}
+	var out struct {
+		RequiredStatusChecks *struct {
+			Contexts []string `json:"contexts"`
+			Checks   []struct {
+				Context string `json:"context"`
+			} `json:"checks"`
+		} `json:"required_status_checks"`
+		RequiredPullRequestReviews *struct{} `json:"required_pull_request_reviews"`
+		Restrictions               *struct{} `json:"restrictions"`
+		LockBranch                 *struct {
+			Enabled bool `json:"enabled"`
+		} `json:"lock_branch"`
+	}
+	if err := c.getJSON(ctx, p, nil, &out); err != nil {
+		return Protection{}, err
+	}
+	pr := Protection{
+		PullRequestReviews: out.RequiredPullRequestReviews != nil,
+		Restrictions:       out.Restrictions != nil,
+		Locked:             out.LockBranch != nil && out.LockBranch.Enabled,
+	}
+	if out.RequiredStatusChecks != nil {
+		names := map[string]bool{}
+		for _, name := range out.RequiredStatusChecks.Contexts {
+			names[name] = name != ""
+		}
+		for _, ch := range out.RequiredStatusChecks.Checks {
+			names[ch.Context] = ch.Context != ""
+		}
+		for _, ok := range names {
+			if ok {
+				pr.RequiredChecks++
+			}
+		}
+	}
+	return pr, nil
 }
 
 // ProtectionApprovals is the required_approving_review_count of branch's

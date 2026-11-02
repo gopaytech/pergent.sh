@@ -484,6 +484,7 @@ func (d *Dashboard) installSkills(w http.ResponseWriter, r *http.Request) {
 		d.inputs.invalidate()
 		d.Log.Info("dashboard: defaults updated", "fields", []string{"skills"}, "by", se.Username)
 		d.audit(ctx, se, "defaults_updated", "", "", "skills")
+		d.recheck("", "")
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -568,6 +569,7 @@ func (d *Dashboard) updateSkills(w http.ResponseWriter, r *http.Request) {
 	}
 	if updated > 0 {
 		d.inputs.invalidate()
+		d.recheckAll()
 	}
 	writeJSON(w, http.StatusOK, out)
 }

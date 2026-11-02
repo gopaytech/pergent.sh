@@ -214,6 +214,67 @@ export type RepositoryDetailView = {
   role: Role;
 };
 
+// --- readiness (GET .../readiness) ---
+//
+// Every path, reason, skill name and error below comes from a scan Job: it is
+// shown as text only, never as HTML and never in a link.
+
+// ScanView is one readiness scan. state is "queued", "running", "done" or
+// "failed". startedBy is "switch-on", "upgrade" or who asked ("alice (gitlab
+// main)"). branch and commit are "" until the scan read them; error is why
+// a failed scan couldn't scan the files; finishedAt is null until it ends.
+export type ScanView = {
+  id: string;
+  state: "queued" | "running" | "done" | "failed";
+  startedBy: string;
+  branch: string;
+  commit: string;
+  error: string;
+  queuedAt: string;
+  finishedAt: string | null;
+};
+
+// "unknown" is "Couldn't check": it is never shown as passed.
+export type ChecklistState = "passed" | "warning" | "missing" | "unknown";
+
+// NoiseFile is a file a review reads that looks generated, vendored or very
+// large; skills are the skills whose exclude would drop it.
+export type NoiseFile = { path: string; why: string; size: number; skills?: string[] };
+
+// ChecklistItem is one line of the checklist. why and fix are empty for a
+// passed item; list, noise and more are left out when empty.
+export type ChecklistItem = {
+  key: string;
+  state: ChecklistState;
+  reason: string;
+  why: string;
+  fix: string;
+  list?: string[];
+  noise?: NoiseFile[];
+  more?: number;
+};
+
+export type ChecklistSection = { key: string; items: ChecklistItem[] };
+
+// Checklist is built from the latest finished scan; suggested names library
+// skills that fit the files and are not turned on, budget the bytes of skills
+// plus instructions.
+export type Checklist = { sections: ChecklistSection[]; suggested: string[]; budget: number };
+
+// ReadinessView is the Readiness tab. latest is the latest finished scan,
+// active the queued or running one; checklist is null until a scan has
+// finished. applyBase is today's library skill list: "Use these skills" saves
+// it plus the ticked suggestions.
+export type ReadinessView = {
+  latest: ScanView | null;
+  active: ScanView | null;
+  checklist: Checklist | null;
+  canScan: boolean;
+  configRepo: boolean;
+  followsDefaults: boolean;
+  applyBase: string[];
+};
+
 // SettingsUpdate is the body of PUT .../settings: only the keys to change;
 // null resets one to its default.
 export type SettingsUpdate = Partial<{
@@ -622,6 +683,9 @@ export const paths = {
   apiRepo: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}`,
   apiRepoInputs: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/inputs`,
   apiRepoSettings: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/settings`,
+  apiRepoReadiness: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/readiness`,
+  apiRepoReadinessScan: (instance: string, project: string) =>
+    `/api/repositories/${seg(instance)}/${proj(project)}/readiness/scan`,
   apiRepoReset: (instance: string, project: string) =>
     `/api/repositories/${seg(instance)}/${proj(project)}/settings/reset`,
   // The client path is under /skills/view/ so a skill named like a page

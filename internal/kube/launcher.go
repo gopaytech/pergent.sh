@@ -63,6 +63,38 @@ func (l *Launcher) attachAndStart(ctx context.Context, p JobParams, s Secrets, j
 	return nil
 }
 
+// launchWithSecret is how a fetch or scan Job starts: the Job is created
+// suspended, then its one Secret (secret gets the created Job, to own it),
+// then the Job is unsuspended, so the pod never starts without its Secret. If
+// anything fails after the Job exists, the Job (and with it the Secret) is
+// deleted and the original error returned.
+func (l *Launcher) launchWithSecret(ctx context.Context, job *batchv1.Job, secret func(owner *batchv1.Job) *corev1.Secret) error {
+	job.Spec.Suspend = ptr(true)
+	created, err := l.Client.BatchV1().Jobs(l.Namespace).Create(ctx, job, metav1.CreateOptions{})
+	if err != nil {
+		return fmt.Errorf("create job %s: %w", job.Name, err)
+	}
+	if err := l.startWithSecret(ctx, created, secret(created)); err != nil {
+		// The caller's context may be what failed; clean up regardless.
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		_ = l.Delete(cctx, job.Name)
+		return err
+	}
+	return nil
+}
+
+func (l *Launcher) startWithSecret(ctx context.Context, job *batchv1.Job, secret *corev1.Secret) error {
+	if _, err := l.Client.CoreV1().Secrets(l.Namespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("create secret for job %s: %w", job.Name, err)
+	}
+	patch := []byte(`{"spec":{"suspend":false}}`)
+	if _, err := l.Client.BatchV1().Jobs(l.Namespace).Patch(ctx, job.Name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("unsuspend job %s: %w", job.Name, err)
+	}
+	return nil
+}
+
 // Delete removes the Job with background propagation, so its pods, Secret and
 // ConfigMap go with it. A Job that is already gone is not an error.
 func (l *Launcher) Delete(ctx context.Context, name string) error {

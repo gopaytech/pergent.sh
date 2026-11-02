@@ -97,6 +97,9 @@ func newDashboardE2E(t *testing.T, edit ...func(o *dashboard.Options)) *dashE2E 
 		Config: cfg, Instances: env.Engine.Instances, Store: env.Store, SecretKey: testBoxKey, HTTPClient: env.GitLab.srv.Client(),
 		Now: env.Now, Log: env.Engine.Log,
 		Sources: sources, Catalogs: catalogs, ReconcileSoon: env.Engine.ReconcileSoon,
+		// The readiness scans are the engine's; they run only when a test
+		// turns env.Engine.Scans on, as main does with the dashboard.
+		Readiness: env.Engine,
 	}
 	for _, f := range edit {
 		f(&opts)
@@ -115,7 +118,7 @@ func newDashboardE2E(t *testing.T, edit ...func(o *dashboard.Options)) *dashE2E 
 	}
 	mux := server.Routes(server.Deps{
 		Config: cfg, Instances: env.Engine.Instances, WebhookSecrets: env.Engine.WebhookSecrets, Store: env.Store,
-		Wake: env.Engine.Wake, Now: env.Now, Dashboard: d.Handler(), Log: env.Engine.Log,
+		Wake: env.Engine.Wake, Now: env.Now, Dashboard: d.Handler(), ReadinessScans: env.Engine, Log: env.Engine.Log,
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)

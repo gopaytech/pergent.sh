@@ -113,6 +113,7 @@ func (e *Engine) reconcile(ctx context.Context, only map[repoKey]bool) error {
 			continue
 		}
 		resolved[keyOf(repo.Instance, repo.Project)] = id
+		e.queueSwitchOnScan(ctx, repo.Instance, repo.Project)
 	}
 
 	stored, err := e.Store.Projects(ctx)
@@ -134,11 +135,20 @@ func (e *Engine) reconcile(ctx context.Context, only map[repoKey]bool) error {
 				"instance", p.Instance, "project", p.Path, "project_id", p.ProjectID)
 			continue
 		}
-		// Switched off: its setup problems go too. (A project row dropped
-		// because its path now resolves to another project belongs to a
-		// repository still wanted, whose items stay.)
+		// Switched off: its readiness scans and setup problems go too, the
+		// scans first (see readinessItems). (A project row dropped because
+		// its path now resolves to another project belongs to a repository
+		// still wanted, whose scans and items stay.)
 		if !wanted[keyOf(p.Instance, p.Path)] {
+			e.dropScans(ctx, p.Instance, p.Path)
 			e.dropAttention(ctx, p.Instance, p.Path)
+		}
+	}
+	// A repository switched off in the dashboard before reconcile ever set
+	// it up has no project row, but may have a scan queued.
+	for k := range only {
+		if !wanted[k] {
+			e.dropScans(ctx, k.instance, k.path)
 		}
 	}
 	return errors.Join(errs...)
@@ -532,9 +542,14 @@ func gitHubRequiredApprovals(ctx context.Context, c *github.Client, owner, name,
 	case found:
 		return n, nil
 	default:
-		return 0, fmt.Errorf("no ruleset requires reviews, and the branch protection can't be read: %w", err)
+		return 0, fmt.Errorf("%w: %w", errClassicProtection, err)
 	}
 }
+
+// errClassicProtection is gitHubRequiredApprovals' failure when no ruleset
+// requires reviews and the classic protection rule can't be read (it needs
+// the Administration permission).
+var errClassicProtection = errors.New("no ruleset requires reviews, and the branch protection can't be read")
 
 // forgetInstallation clears the stored installation of instance's repository
 // path (the review App was uninstalled), so dispatch reports its runs instead

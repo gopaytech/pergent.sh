@@ -168,7 +168,7 @@ func (f *Fetcher) jobResult(ctx context.Context, id, folder string, body []byte)
 		return "", f.errorText(ctx, id, err), nil
 	}
 	if res.Error != "" {
-		text := jobText(res.Error)
+		text := JobText(res.Error)
 		if text == "" || inputs.ContainsSecret([]byte(text), secrets) {
 			text = msgReadFailed
 		}
@@ -184,7 +184,7 @@ func (f *Fetcher) jobResult(ctx context.Context, id, folder string, body []byte)
 			f.log().Warn("skill fetch: a Job sent a skill outside its folder or with a bad name", "fetch", id)
 			return "", msgJobUnusable, nil
 		}
-		s := inputs.Found{Name: file.Name, Path: file.Path, Problem: jobText(file.Problem), Content: []byte(file.Content)}
+		s := inputs.Found{Name: file.Name, Path: file.Path, Problem: JobText(file.Problem), Content: []byte(file.Content)}
 		if s.Problem == "" {
 			// The Job checked it too; the name, size and text are checked
 			// again here (the size first, so a huge text is never parsed).
@@ -235,10 +235,10 @@ func validJobFile(file store.FetchedFile, folder string) bool {
 	return true
 }
 
-// jobText is s, a Job's error or problem, as one line of valid UTF-8 of at
+// JobText is s, a Job's error or problem, as one line of valid UTF-8 of at
 // most maxJobText bytes: control characters become spaces, runs of spaces
 // one.
-func jobText(s string) string {
+func JobText(s string) string {
 	s = strings.ToValidUTF8(s, "?")
 	s = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {

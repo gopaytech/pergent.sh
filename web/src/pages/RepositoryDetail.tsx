@@ -4,13 +4,14 @@ import { Link, useParams, useSearchParams } from "react-router";
 import { api, isStatus, paths, safeHref, type InputsView, type RepositoryDetailView } from "../api";
 import { ErrorBox, ExternalLink, Loading, NotFound, Tabs, platformName, skillOrigin } from "../ui";
 import AttentionRows from "./Attention";
+import Readiness from "./Readiness";
 import ReviewList from "./ReviewList";
 import SettingsTab from "./RepositorySettings";
 
-type Tab = "reviews" | "settings" | "inputs" | "setup";
+type Tab = "reviews" | "settings" | "inputs" | "readiness" | "setup";
 
 // RepositoryDetail is one repository: its reviews, settings (maintainers and admins),
-// resolved skills and instructions, and setup checks. The tab is in the
+// resolved skills and instructions, readiness scan, and setup checks. The tab is in the
 // address (?tab=), so the project path, which has slashes, stays whole.
 export default function RepositoryDetail() {
   const params = useParams();
@@ -31,7 +32,7 @@ export default function RepositoryDetail() {
   const { repo } = view;
   const tabs: [Tab, string][] = [["reviews", "Reviews"]];
   if (view.role === "admin" || view.role === "maintainer") tabs.push(["settings", "Settings"]);
-  tabs.push(["inputs", "Skills & instructions"], ["setup", `Setup checks (${view.attention.length})`]);
+  tabs.push(["inputs", "Skills & instructions"], ["readiness", "Readiness"], ["setup", `Setup checks (${view.attention.length})`]);
   const asked = search.get("tab") as Tab | null;
   const tab: Tab = tabs.some(([t]) => t === asked) ? (asked as Tab) : "reviews";
 
@@ -49,6 +50,7 @@ export default function RepositoryDetail() {
         {tab === "reviews" && <ReviewList filter={{ project: repo.project, days: 90 }} label="Reviews of this repository" />}
         {tab === "settings" && <SettingsTab view={view} queryKey={queryKey} />}
         {tab === "inputs" && <Inputs instance={repo.instance} project={repo.project} />}
+        {tab === "readiness" && <Readiness instance={repo.instance} project={repo.project} />}
         {tab === "setup" && (
           <section className="card" aria-label="Setup checks">
             <h2>Setup checks</h2>

@@ -410,6 +410,24 @@ func (c *Client) ApprovalsBeforeMerge(ctx context.Context, projectID int64) (int
 	return a.ApprovalsBeforeMerge, err
 }
 
+// ProtectedBranches lists the project's protected branch rules, wildcard
+// rules ("release/*") included.
+func (c *Client) ProtectedBranches(ctx context.Context, projectID int64) ([]ProtectedBranch, error) {
+	var all []ProtectedBranch
+	err := c.paginate(ctx, projPath(projectID)+"/protected_branches", nil, func(body []byte) (bool, error) {
+		var page []ProtectedBranch
+		if err := decode(body, &page); err != nil {
+			return false, err
+		}
+		all = append(all, page...)
+		return false, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return all, nil
+}
+
 // GetMergeRequest returns one merge request. Draft is true when GitLab reports
 // either draft or work_in_progress.
 func (c *Client) GetMergeRequest(ctx context.Context, projectID, iid int64) (MergeRequest, error) {

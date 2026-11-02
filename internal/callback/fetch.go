@@ -2,8 +2,6 @@ package callback
 
 import (
 	"context"
-	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 
@@ -26,48 +24,25 @@ type FetchHandler struct {
 }
 
 func (h *FetchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	id := r.PathValue("id")
-	token, ok := bearer(r.Header.Get("Authorization"))
-	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	ctx := r.Context()
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, skillfetch.MaxFetchBytes))
-	if err != nil {
-		var tooBig *http.MaxBytesError
-		if errors.As(err, &tooBig) {
-			// The fetch fails at once (with the right token only), rather
-			// than when the sweep gives up on it.
-			if err := h.Fetches.JobTooLarge(ctx, id, token); err != nil {
-				h.log().Error("skill fetch: recording a result that is too large failed", "fetch", id, "error", err.Error())
+	oneShot{
+		noun: "skill fetch", idKey: "fetch", limit: skillfetch.MaxFetchBytes,
+		complete: func(ctx context.Context, id, token string, body []byte) (oneShotOutcome, error) {
+			outcome, err := h.Fetches.CompleteJob(ctx, id, token, body)
+			switch {
+			case err != nil:
+				return 0, err
+			case outcome == skillfetch.JobStored:
+				return oneShotStored, nil
+			case outcome == skillfetch.JobConflict:
+				return oneShotConflict, nil
 			}
-			http.Error(w, "result too large", http.StatusRequestEntityTooLarge)
-			return
-		}
-		http.Error(w, "could not read the body", http.StatusBadRequest)
-		return
-	}
-
-	outcome, err := h.Fetches.CompleteJob(ctx, id, token, body)
-	if err != nil {
-		h.log().Error("skill fetch: recording a Job's result failed", "fetch", id, "error", err.Error())
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	switch outcome {
-	case skillfetch.JobStored:
-		w.WriteHeader(http.StatusNoContent)
-	case skillfetch.JobConflict:
-		http.Error(w, "result already received", http.StatusConflict)
-	default:
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-	}
+			return oneShotUnauthorized, nil
+		},
+		tooLarge: func(ctx context.Context, id, token string) error {
+			return h.Fetches.JobTooLarge(ctx, id, token)
+		},
+		log: h.log(),
+	}.serve(w, r)
 }
 
 func (h *FetchHandler) log() *slog.Logger {

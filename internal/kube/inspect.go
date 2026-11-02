@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -35,19 +36,41 @@ var stuckReasons = map[string]bool{
 	"CreateContainerConfigError": true,
 }
 
+// jobFacts is what Inspect read of a Job that Observation has no field for,
+// for the Jobs whose failure text is not a review's (ScanFailure).
+type jobFacts struct {
+	// failReason is the reason of the Job's Failed condition.
+	failReason string
+	// oom: a container of a pod was OOMKilled.
+	oom bool
+	// storage: a pod was evicted, or a message names ephemeral storage.
+	storage bool
+}
+
+// storageMessage reports whether a pod or Job message says the pod used more
+// ephemeral storage than its limit.
+func storageMessage(s string) bool {
+	return strings.Contains(s, "ephemeral-storage") || strings.Contains(s, "ephemeral local storage")
+}
+
 // Inspect reads the Job and its pods. A missing Job is Exists=false, not an
 // error. now is the reference for the stuck rule.
 func (l *Launcher) Inspect(ctx context.Context, name string, now time.Time) (Observation, error) {
+	obs, _, err := l.inspect(ctx, name, now)
+	return obs, err
+}
+
+func (l *Launcher) inspect(ctx context.Context, name string, now time.Time) (Observation, jobFacts, error) {
 	job, err := l.Client.BatchV1().Jobs(l.Namespace).Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		return Observation{}, nil
+		return Observation{}, jobFacts{}, nil
 	}
 	if err != nil {
-		return Observation{}, fmt.Errorf("get job %s: %w", name, err)
+		return Observation{}, jobFacts{}, fmt.Errorf("get job %s: %w", name, err)
 	}
 	pods, err := l.Client.CoreV1().Pods(l.Namespace).List(ctx, metav1.ListOptions{LabelSelector: "job-name=" + name})
 	if err != nil {
-		return Observation{}, fmt.Errorf("list pods of job %s: %w", name, err)
+		return Observation{}, jobFacts{}, fmt.Errorf("list pods of job %s: %w", name, err)
 	}
 	sort.Slice(pods.Items, func(i, j int) bool {
 		return pods.Items[i].CreationTimestamp.Before(&pods.Items[j].CreationTimestamp)
@@ -74,10 +97,18 @@ func (l *Launcher) Inspect(ctx context.Context, name string, now time.Time) (Obs
 		obs.FinishedAt = job.Status.CompletionTime.Time
 	}
 
+	var facts jobFacts
+	if failed != nil {
+		facts.failReason = failed.Reason
+		facts.storage = storageMessage(failed.Message)
+	}
 	var initExit *int32
 	var oom, exit4 bool
 	for i := range pods.Items {
 		pod := &pods.Items[i]
+		if pod.Status.Reason == "Evicted" || storageMessage(pod.Status.Message) {
+			facts.storage = true
+		}
 		for _, cs := range pod.Status.InitContainerStatuses {
 			t := cs.State.Terminated
 			if cs.Name == containerCheckout && t != nil {
@@ -90,6 +121,9 @@ func (l *Launcher) Inspect(ctx context.Context, name string, now time.Time) (Obs
 			if t != nil && t.Reason == "OOMKilled" {
 				oom = true
 			}
+			if t != nil && storageMessage(t.Message) {
+				facts.storage = true
+			}
 			if !obs.Finished && obs.Stuck == "" && now.Sub(pod.CreationTimestamp.Time) > stuckAfter {
 				obs.Stuck = stuckReason(cs)
 			}
@@ -98,6 +132,9 @@ func (l *Launcher) Inspect(ctx context.Context, name string, now time.Time) (Obs
 			t := cs.State.Terminated
 			if t != nil && t.Reason == "OOMKilled" {
 				oom = true
+			}
+			if t != nil && storageMessage(t.Message) {
+				facts.storage = true
 			}
 			if t != nil && cs.Name == containerPergent && t.ExitCode == 4 {
 				exit4 = true
@@ -126,7 +163,8 @@ func (l *Launcher) Inspect(ctx context.Context, name string, now time.Time) (Obs
 			obs.Failure = fmt.Sprintf("the review job failed (%s)", reason)
 		}
 	}
-	return obs, nil
+	facts.oom = oom
+	return obs, facts, nil
 }
 
 func stuckReason(cs corev1.ContainerStatus) string {

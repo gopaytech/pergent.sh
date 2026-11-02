@@ -79,6 +79,23 @@ type Options struct {
 	// Fetcher reads the skill sources admins install from and check for
 	// updates. Nil answers those routes 503.
 	Fetcher *skillfetch.Fetcher
+	// Readiness queues readiness scans (Scan now) and re-judges the last
+	// scans after a skill setting is saved; the engine is one. Nil answers
+	// Scan now 404, as with scans off, and saves recheck nothing.
+	Readiness Readiness
+}
+
+// Readiness is the engine's side of the Readiness tab. RequestScan returns
+// readiness.ErrScanBusy or a *readiness.ScanTooSoonError with the scan that
+// refused it, and readiness.ErrNotSwitchedOn or readiness.ErrScansOff when
+// there is nothing to scan. RecheckReadiness must not block; project ""
+// rechecks every repository that follows the default list.
+// RecheckAllReadiness rechecks every repository (a library skill's text
+// changed); it must not block either.
+type Readiness interface {
+	RequestScan(ctx context.Context, instance, project, actor string) (store.ReadinessScan, error)
+	RecheckReadiness(instance, project string)
+	RecheckAllReadiness()
 }
 
 // Connector connects instances to GitLab and GitHub while pergent.sh runs;
@@ -133,6 +150,7 @@ type Dashboard struct {
 	reconcileSoon func(instance, project string)
 	wake          func()
 	fetcher       *skillfetch.Fetcher
+	readiness     Readiness
 	// loadLLM reads the LLM saved in the dashboard again
 	// (instances.Registry.LoadLLM); a field so a test can make it fail.
 	loadLLM func(ctx context.Context) error
@@ -186,7 +204,7 @@ func New(o Options) (*Dashboard, error) {
 	}
 	return &Dashboard{Auth: auth, Repos: repos, Store: o.Store, Log: o.Log,
 		cfg: o.Config, registry: o.Instances, connector: o.Connector,
-		sources: o.Sources, catalogs: o.Catalogs, fetcher: o.Fetcher,
+		sources: o.Sources, catalogs: o.Catalogs, fetcher: o.Fetcher, readiness: o.Readiness,
 		reconcileSoon: o.ReconcileSoon, wake: o.Wake, loadLLM: o.Instances.LoadLLM, heldSecrets: o.Instances.HeldSecrets, now: o.Now,
 		availableBudget: AvailableBudget, listBudget: listBudget, listLimit: listLimit, sightBudget: sightBudget,
 		inputs:  &inputsCache{entries: map[string]inputsEntry{}, flights: map[string]*inputsFlight{}},

@@ -70,8 +70,8 @@ func parseFetchArgs(args []string, stderr io.Writer) (fetchOptions, error) {
 	case o.dir == "" || o.commitFile == "" || o.errorFile == "" || o.resultURL == "":
 		return fetchOptions{}, errors.New("fetch-skills needs --dir, --commit-file, --error-file and --result-url\n" + usage)
 	}
-	if u, err := url.Parse(o.resultURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return fetchOptions{}, errors.New("--result-url must be an http or https URL")
+	if err := checkResultURL(o.resultURL); err != nil {
+		return fetchOptions{}, err
 	}
 	if o.path != "" {
 		for _, seg := range strings.Split(o.path, "/") {
@@ -92,11 +92,7 @@ func runFetchSkills(ctx context.Context, o fetchOptions, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "environment variable PERGENT_SH_FETCH_TOKEN is not set or empty")
 		return 1
 	}
-	client := &http.Client{
-		Timeout:       postTimeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
-	if err := fetchSkills(ctx, o, token, client, stderr); err != nil {
+	if err := fetchSkills(ctx, o, token, newResultClient(), stderr); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
@@ -254,6 +250,24 @@ func scanClone(ctx context.Context, dir, folder string) ([]store.FetchedFile, st
 		files = append(files, file)
 	}
 	return files, "", nil
+}
+
+// newResultClient is the client that posts a Job's result: it never follows a
+// redirect, so the token goes only to the result URL.
+func newResultClient() *http.Client {
+	return &http.Client{
+		Timeout:       postTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+}
+
+// checkResultURL checks the --result-url of a Job's command: an http or https
+// URL.
+func checkResultURL(raw string) error {
+	if u, err := url.Parse(raw); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return errors.New("--result-url must be an http or https URL")
+	}
+	return nil
 }
 
 // postResult posts body to resultURL with the token as bearer. A failure to

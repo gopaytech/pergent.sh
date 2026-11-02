@@ -784,6 +784,69 @@ func TestApprovalsBeforeMerge(t *testing.T) {
 	expect(t, (*reqs)[0], http.MethodGet, "/api/v4/projects/7/approvals", "")
 }
 
+func TestProtectedBranches(t *testing.T) {
+	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") == "" {
+			w.Header().Set("X-Next-Page", "2")
+			jsonReply([]map[string]any{{"name": "main*", "push_access_levels": []map[string]any{{"access_level": 30}}}})(w, r)
+			return
+		}
+		jsonReply([]map[string]any{{"name": "*", "push_access_levels": []map[string]any{{"access_level": 40}}}})(w, r)
+	})
+	all, err := c.ProtectedBranches(context.Background(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, (*reqs)[0], http.MethodGet, "/api/v4/projects/7/protected_branches", "per_page=100")
+	if len(all) != 2 || all[0].Name != "main*" || all[0].PushAccessLevels[0].AccessLevel != 30 ||
+		all[1].Name != "*" || all[1].PushAccessLevels[0].AccessLevel != 40 {
+		t.Errorf("protected branches = %+v", all)
+	}
+
+	c, _ = serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"message":"403 Forbidden"}`, http.StatusForbidden)
+	})
+	if _, err := c.ProtectedBranches(context.Background(), 7); err == nil {
+		t.Error("a 403 was not an error")
+	}
+}
+
+func TestProjectPipelineFlag(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want *bool
+	}{
+		{"absent", `{"id":7}`, nil},
+		{"false", `{"id":7,"only_allow_merge_if_pipeline_succeeds":false}`, ptrBool(false)},
+		{"true", `{"id":7,"only_allow_merge_if_pipeline_succeeds":true}`, ptrBool(true)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := serve(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, tc.body) })
+			p, err := c.GetProject(context.Background(), "7")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := p.OnlyAllowMergeIfPipelineSucceeds
+			if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
+				t.Errorf("OnlyAllowMergeIfPipelineSucceeds = %s; want %s", fmtBool(got), fmtBool(tc.want))
+			}
+		})
+	}
+}
+
+func ptrBool(b bool) *bool { return &b }
+
+func fmtBool(b *bool) string {
+	if b == nil {
+		return "absent"
+	}
+	if *b {
+		return "true"
+	}
+	return "false"
+}
+
 // A user's OAuth token travels as a Bearer token, never as PRIVATE-TOKEN.
 func TestNewOAuthSendsBearer(t *testing.T) {
 	var auth, private string

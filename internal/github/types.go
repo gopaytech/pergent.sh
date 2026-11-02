@@ -23,6 +23,25 @@ type Repository struct {
 	DefaultBranch string `json:"default_branch"`
 }
 
+// Branch is what GET /repos/{owner}/{repo}/branches/{branch} shows of a
+// branch: its head commit, whether classic protection is on, and that
+// protection's required status checks. ProtectionShown is false when GitHub
+// left the protection out; RequiredChecks then says nothing.
+type Branch struct {
+	Commit                     string
+	Protected, ProtectionShown bool
+	// RequiredChecks counts the required status checks by name, each once.
+	RequiredChecks int
+}
+
+// Protection is what a branch's classic protection rule requires that stops
+// a direct push: pull requests, a list of who may push, a lock (read-only),
+// and RequiredChecks, the required status checks by name, each once.
+type Protection struct {
+	PullRequestReviews, Restrictions, Locked bool
+	RequiredChecks                           int
+}
+
 // Ref is one side of a pull request: its branch and the commit GitHub
 // recorded for it.
 type Ref struct {

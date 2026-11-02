@@ -4,6 +4,7 @@
 //	pergent-sh serve [--config /etc/pergent-sh/config.yaml]
 //	pergent-sh admin reset-password <username>
 //	pergent-sh fetch-skills --dir <clone> --path <folder> --commit-file <file> --error-file <file> --result-url <url>
+//	pergent-sh scan-repo --dir <clone> --commit-file <file> --error-file <file> --input-file <file> --result-url <url>
 //
 // serve needs DATABASE_URL and PERGENT_SH_SECRET_KEY in the environment, plus
 // the LLM key, the GitLab tokens, the GitHub App private keys (or approve
@@ -18,6 +19,10 @@
 // fetch-skills runs in a skill fetch Job, not in the pergent.sh pod: it
 // posts the skills of a clone of a public URL back to pergent.sh. It needs
 // only PERGENT_SH_FETCH_TOKEN.
+//
+// scan-repo runs in a readiness scan Job, likewise: it scans a clone of one
+// repository's default branch and posts what it found back to pergent.sh. It
+// needs only PERGENT_SH_SCAN_TOKEN; its input is the file --input-file names.
 package main
 
 import (
@@ -74,7 +79,8 @@ const (
 	// and expired ones deleted.
 	fetchSweepEvery = time.Minute
 	usage           = "usage: pergent-sh serve [--config <path>]\n       pergent-sh admin reset-password <username>\n" +
-		"       pergent-sh fetch-skills --dir <clone> [--path <folder>] --commit-file <file> --error-file <file> --result-url <url>"
+		"       pergent-sh fetch-skills --dir <clone> [--path <folder>] --commit-file <file> --error-file <file> --result-url <url>\n" +
+		"       pergent-sh scan-repo --dir <clone> --commit-file <file> --error-file <file> --input-file <file> --result-url <url>"
 )
 
 func main() {
@@ -95,6 +101,8 @@ func main() {
 		os.Exit(resetPassword(ctx, cmd.username, os.Stdout, os.Stderr))
 	case "fetch-skills":
 		os.Exit(runFetchSkills(ctx, cmd.fetch, os.Stderr))
+	case "scan-repo":
+		os.Exit(runScanRepo(ctx, cmd.scan, os.Stderr))
 	}
 	if err := serve(ctx, cmd.configPath, log); err != nil {
 		log.Error("pergent-sh stopped", "error", err.Error())
@@ -103,16 +111,18 @@ func main() {
 }
 
 // command is what the arguments ask for: name "serve", with configPath,
-// "reset-password", with username, or "fetch-skills", with fetch.
+// "reset-password", with username, "fetch-skills", with fetch, or "scan-repo",
+// with scan.
 type command struct {
 	name       string
 	configPath string
 	username   string
 	fetch      fetchOptions
+	scan       scanOptions
 }
 
 // parseArgs reads "serve [--config <path>]", "admin reset-password
-// <username>" or "fetch-skills <flags>".
+// <username>", "fetch-skills <flags>" or "scan-repo <flags>".
 func parseArgs(args []string, stderr io.Writer) (cmd command, err error) {
 	if len(args) == 0 {
 		return command{}, errors.New(usage)
@@ -140,6 +150,12 @@ func parseArgs(args []string, stderr io.Writer) (cmd command, err error) {
 			return command{}, err
 		}
 		return command{name: "fetch-skills", fetch: o}, nil
+	case "scan-repo":
+		o, err := parseScanArgs(args[1:], stderr)
+		if err != nil {
+			return command{}, err
+		}
+		return command{name: "scan-repo", scan: o}, nil
 	}
 	return command{}, errors.New(usage)
 }
@@ -235,8 +251,14 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	var (
 		fetcher      *skillfetch.Fetcher
 		fetchResults callback.FetchResults
+		scanResults  callback.ScanResults
 	)
 	if cfg.DashboardEnabled() {
+		// The readiness scans need the dashboard too (it shows and asks for
+		// them), and the same image to send their result back.
+		eng.Scans = true
+		eng.ScanImage = os.Getenv("PERGENT_SH_IMAGE")
+		scanResults = eng
 		// Skills are installed from a connected instance's repositories with
 		// its review bot or App, the reader the dashboard has for it, and
 		// from a public URL by a Job, which needs pergent.sh's own image
@@ -249,7 +271,9 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	dash, err := newDashboard(dashboard.Options{
 		Config: cfg, Instances: reg, Connector: conn, Store: st, SecretKey: key, Log: log,
 		Sources: conn.sources, Catalogs: conn.catalogs, ReconcileSoon: eng.ReconcileSoon,
-		Wake: eng.Wake, Fetcher: fetcher,
+		// The engine queues the readiness scans (eng.Scans is on whenever
+		// the dashboard is) and rechecks them after a skill setting is saved.
+		Wake: eng.Wake, Fetcher: fetcher, Readiness: eng,
 	})
 	if err != nil {
 		return err
@@ -265,7 +289,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	handler := server.Routes(server.Deps{
 		Config: cfg, Instances: reg, WebhookSecrets: conn.gitlabHooks, GitHubWebhookSecrets: conn.githubHooks,
 		Store: st, Bots: commandBots(conn.platforms), Wake: eng.Wake, Dashboard: dashboardHandler(dash),
-		SkillFetches: fetchResults, Log: log,
+		SkillFetches: fetchResults, ReadinessScans: scanResults, Log: log,
 	})
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
@@ -282,6 +306,9 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	loops = append(loops, func(ctx context.Context) { every(ctx, auditPruneEvery, pruneOld) })
 	pruneCmds := pruneCommands(st.PruneCommands, time.Now, log)
 	loops = append(loops, func(ctx context.Context) { every(ctx, commandPruneEvery, pruneCmds) })
+	if eng.Scans {
+		loops = append(loops, eng.RunScans)
+	}
 	if dash != nil {
 		prune := pruneSessions(dash.Auth.PruneSessions, time.Now, log)
 		loops = append(loops, func(ctx context.Context) { every(ctx, sessionPruneEvery, prune) })

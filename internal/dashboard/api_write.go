@@ -58,6 +58,7 @@ const (
 	msgNeedsPlatform  = "sign in with GitLab or GitHub to add repositories"
 	msgNeedsAdminCaps = "only admins of this repository can change its re-run caps"
 	msgNeedsRole      = "only maintainers and admins of this repository can change its settings"
+	msgNeedsRoleScan  = "only maintainers and admins of this repository can scan it"
 )
 
 var (
@@ -75,7 +76,7 @@ func (d *Dashboard) writeRoutes(mux *http.ServeMux) {
 	admin("POST /api/repositories", d.switchOn)
 	admin("DELETE /api/repositories/{instance}/{rest...}", d.switchOff)
 	mux.Handle("PUT /api/repositories/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.putSettings)))
-	mux.Handle("POST /api/repositories/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.resetSettings)))
+	mux.Handle("POST /api/repositories/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.repositoryPost)))
 	// The instance alone is 404, not a redirect to the {rest...} routes.
 	none := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { notFound(w) })
 	for _, method := range []string{"DELETE", "PUT", "POST"} {
@@ -542,6 +543,18 @@ func (d *Dashboard) switchOff(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, view)
 }
 
+// --- POST /api/repositories/{instance}/{project...}/... ---
+
+// repositoryPost serves the POSTs to one repository: .../readiness/scan
+// (scanNow) and .../settings/reset; any other is 404.
+func (d *Dashboard) repositoryPost(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.PathValue("rest"), "/readiness/scan") {
+		d.scanNow(w, r)
+		return
+	}
+	d.resetSettings(w, r)
+}
+
 // --- PUT .../settings and POST .../settings/reset ---
 
 func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {
@@ -597,11 +610,17 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 
 // updateSettings applies edit to repo's stored settings, records action
 // with detail in the audit log and answers with its detail. A repository
-// switched off meanwhile is 404 and stays off.
+// switched off meanwhile is 404 and stays off. A change of its skills or
+// repository skills has its last readiness scan judged again.
 func (d *Dashboard) updateSettings(w http.ResponseWriter, r *http.Request, repo settings.Effective, edit func(*store.DashboardRepo),
 	what, action, detail string) {
 	ctx, se := r.Context(), session(r)
-	found, err := d.Store.UpdateDashboardRepo(ctx, repo.Instance, repo.Project, edit)
+	var skillsChanged bool
+	found, err := d.Store.UpdateDashboardRepo(ctx, repo.Instance, repo.Project, func(row *store.DashboardRepo) {
+		skills, repoSkills := slices.Clone(row.Skills), slices.Clone(row.RepoSkills)
+		edit(row)
+		skillsChanged = !slices.Equal(skills, row.Skills) || !slices.Equal(repoSkills, row.RepoSkills)
+	})
 	if msg, ok := skillMissing(err); ok {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -619,6 +638,9 @@ func (d *Dashboard) updateSettings(w http.ResponseWriter, r *http.Request, repo 
 	d.Log.Info("dashboard: repository "+what, "instance", repo.Instance, "project", repo.Project, "by", se.Username)
 	d.audit(ctx, se, action, repo.Instance, repo.Project, detail)
 	d.inputs.invalidate()
+	if skillsChanged {
+		d.recheck(repo.Instance, repo.Project)
+	}
 	now, ok, err := d.Repos.Get(ctx, repo.Instance, repo.Project)
 	if err == nil && !ok {
 		err = errors.New("the repository isn't switched on any more")

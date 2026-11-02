@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/inputs"
 )
 
 // The kinds of setup problem recorded for the dashboard's "Needs attention"
@@ -20,6 +22,12 @@ const (
 	attTokenExpiry         = "token_expiry"
 	attSkillMissing        = "skill_missing"
 	attNoSkills            = "no_skills"
+
+	// The readiness scan's items (readinessItems): set or cleared by a done
+	// scan, and by a recheck when the skills change.
+	attNoSkillCoverage  = "no_skill_coverage"
+	attInputsOverBudget = "inputs_over_budget"
+	attNoProjectContext = "no_project_context"
 )
 
 const (
@@ -27,6 +35,9 @@ const (
 	approveAppNote     = "The pergent approve App isn't installed on this repository or lacks Pull requests: write, so nothing is approved."
 	reviewAppNote      = "The pergent review App lacks Pull requests: write on this repository, so nothing is approved."
 	approveBotNote     = "The pergent approve bot can't reach this repository, so nothing is approved."
+
+	noSkillCoverageNote  = "No skill this repository uses matches its files, so its reviews check nothing useful. The Readiness tab suggests skills that fit."
+	noProjectContextNote = "The repository has no AGENTS.md, CLAUDE.md or README, so reviews don't know what the project is. Add one."
 
 	// oomWindow is how far back out-of-memory failures are counted, and
 	// oomThreshold how many of them make a problem.
@@ -63,6 +74,13 @@ func (e *Engine) dropAttention(ctx context.Context, instance, project string) {
 		e.log().Info("couldn't clear the setup problems of a repository that was switched off",
 			"instance", instance, "project", project, "error", e.redact(err.Error()))
 	}
+}
+
+// overBudgetNote words the inputs_over_budget item for skills and
+// instructions of size bytes.
+func overBudgetNote(size int) string {
+	return fmt.Sprintf("Skills and instructions come to %d KiB, over the %d KiB a review can take, so every review fails. "+
+		"Use fewer skills or shorten the instructions.", (size+1023)/1024, inputs.ConfigMapLimit/1024)
 }
 
 // approverUnreachableNote words the approver_unreachable item for instance:

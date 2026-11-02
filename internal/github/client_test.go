@@ -849,6 +849,112 @@ func TestProtectionApprovals(t *testing.T) {
 	}
 }
 
+func TestBranchProtection(t *testing.T) {
+	c, rec := serve(t, jsonReply(map[string]any{
+		"required_status_checks": map[string]any{"contexts": []string{"ci"},
+			"checks": []map[string]any{{"context": "ci"}, {"context": "build"}}},
+		"required_pull_request_reviews": map[string]any{"required_approving_review_count": 0},
+		"restrictions":                  map[string]any{"users": []any{}, "teams": []any{}},
+		"lock_branch":                   map[string]any{"enabled": true},
+		"allow_force_pushes":            map[string]any{"enabled": false},
+	}))
+	p, err := c.BranchProtection(context.Background(), "acme", "widgets", "release/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, rec.get(0), http.MethodGet, "/repos/acme/widgets/branches/release/v1/protection", "")
+	if want := (Protection{PullRequestReviews: true, Restrictions: true, Locked: true, RequiredChecks: 2}); p != want {
+		t.Errorf("BranchProtection = %+v; want %+v", p, want)
+	}
+
+	// Only force pushes and deletion blocked: nothing that stops a push.
+	c, _ = serve(t, jsonReply(map[string]any{
+		"allow_force_pushes": map[string]any{"enabled": false}, "allow_deletions": map[string]any{"enabled": false},
+		"lock_branch":            map[string]any{"enabled": false},
+		"required_status_checks": map[string]any{"contexts": []string{}, "checks": []any{}},
+	}))
+	if p, err := c.BranchProtection(context.Background(), "acme", "widgets", "main"); err != nil || p != (Protection{}) {
+		t.Errorf("BranchProtection = %+v, %v; want nothing required", p, err)
+	}
+
+	c, _ = serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `{"message":"Resource not accessible by integration"}`)
+	})
+	if _, err := c.BranchProtection(context.Background(), "acme", "widgets", "main"); err == nil {
+		t.Error("a 403 was not an error")
+	}
+	if _, err := c.BranchProtection(context.Background(), "acme", "widgets", ""); err == nil {
+		t.Error("an empty branch was accepted")
+	}
+}
+
+func TestBranchAndRuleTypes(t *testing.T) {
+	// A protected branch: contexts and checks are counted once each.
+	c, rec := serve(t, jsonReply(map[string]any{
+		"name": "release/v1", "commit": map[string]any{"sha": "abc123"}, "protected": true,
+		"protection": map[string]any{"enabled": true, "required_status_checks": map[string]any{
+			"enforcement_level": "everyone", "contexts": []string{"ci", "lint"},
+			"checks": []map[string]any{{"context": "ci", "app_id": 1}, {"context": "build", "app_id": 2}},
+		}},
+	}))
+	b, err := c.Branch(context.Background(), "acme", "widgets", "release/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, rec.get(0), http.MethodGet, "/repos/acme/widgets/branches/release/v1", "")
+	if want := (Branch{Commit: "abc123", Protected: true, ProtectionShown: true, RequiredChecks: 3}); b != want {
+		t.Errorf("Branch = %+v; want %+v", b, want)
+	}
+
+	// No protection object (the caller isn't shown it): not shown, no checks.
+	c, _ = serve(t, jsonReply(map[string]any{"name": "main", "commit": map[string]any{"sha": "def"}, "protected": true}))
+	if b, err := c.Branch(context.Background(), "acme", "widgets", "main"); err != nil ||
+		b != (Branch{Commit: "def", Protected: true}) {
+		t.Errorf("Branch without protection = %+v, %v", b, err)
+	}
+
+	// A branch that doesn't exist is ErrNotFound.
+	c, _ = serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `{"message":"Branch not found"}`)
+	})
+	if _, err := c.Branch(context.Background(), "acme", "widgets", "main"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("missing branch: err = %v; want ErrNotFound", err)
+	}
+	if _, err := c.Branch(context.Background(), "acme", "widgets", ""); err == nil {
+		t.Error("an empty branch was accepted")
+	}
+
+	// Rule types, across pages, in order.
+	var srvURL string
+	c, rec = serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") == "" {
+			w.Header().Set("Link", `<`+srvURL+r.URL.EscapedPath()+`?per_page=100&page=2>; rel="next"`)
+			jsonReply([]map[string]any{{"type": "deletion"}, {"type": "pull_request"}})(w, r)
+			return
+		}
+		jsonReply([]map[string]any{{"type": "required_status_checks"}})(w, r)
+	})
+	srvURL = c.base
+	types, err := c.BranchRuleTypes(context.Background(), "acme", "widgets", "release/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(types, []string{"deletion", "pull_request", "required_status_checks"}) {
+		t.Errorf("BranchRuleTypes = %v", types)
+	}
+	expect(t, rec.get(0), http.MethodGet, "/repos/acme/widgets/rules/branches/release/v1", "per_page=100")
+
+	c, _ = serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `{"message":"Resource not accessible by integration"}`)
+	})
+	if _, err := c.BranchRuleTypes(context.Background(), "acme", "widgets", "main"); err == nil {
+		t.Error("a 403 was not an error")
+	}
+}
+
 func TestRepoAccess(t *testing.T) {
 	c, rec := serve(t, jsonReply(map[string]any{"id": 99, "full_name": "acme/widgets", "private": true,
 		"permissions": map[string]any{"admin": false, "push": false, "pull": true}}))
