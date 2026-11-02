@@ -560,7 +560,8 @@ type IntegrationView struct {
 	// that couldn't be reached at startup, or whose connection failed, is
 	// not until it is saved again. Without that wiring it is true.
 	Connected bool `json:"connected"`
-	// Approver is "app" (a GitHub approve App) or "token" (a bot user).
+	// Approver is "app" (a GitHub approve App), "review_app" (the review
+	// App itself) or "token" (a bot user).
 	Approver string `json:"approver"`
 	// TokenExpiry is set while the approve token expires within 14 days.
 	TokenExpiry *time.Time        `json:"tokenExpiry,omitempty"`
@@ -848,10 +849,11 @@ type AuditView struct {
 //     then those added in the dashboard.
 //   - POST /api/admin/instances {"name", "platform", "url" (GitLab) or
 //     "apiURL", "reviewAppID" and "approveAppID" (GitHub; 0 approves with a
-//     token), "oauthClientID", "secrets": {field: value}}: checks the
-//     credentials the way startup does (400 with the reason when they fail,
-//     and nothing is stored), stores them sealed and connects. A GitLab
-//     instance's webhook_secret is generated; giving one is 400. 201,
+//     token, the reviewAppID with the review App itself), "oauthClientID",
+//     "secrets": {field: value}}: checks the credentials the way startup
+//     does (400 with the reason when they fail, and nothing is stored),
+//     stores them sealed and connects. A GitLab instance's webhook_secret
+//     is generated; giving one is 400. 201,
 //     InstanceAdminView; 409 when the name is taken in the config or the
 //     dashboard.
 //   - PUT /api/admin/instances/{name} {"oauthClientID", "secrets": {...}}:
@@ -899,13 +901,15 @@ type InstanceAdminView struct {
 	APIURL       string `json:"apiURL"`
 	ReviewAppID  int64  `json:"reviewAppID"`
 	ApproveAppID int64  `json:"approveAppID"`
-	// Approver is "app" (a GitHub approve App) or "token" (a bot user).
+	// Approver is "app" (a GitHub approve App), "review_app" (the review
+	// App itself; ApproveAppID is then the review App's ID) or "token" (a
+	// bot user).
 	Approver      string `json:"approver"`
 	OAuthClientID string `json:"oauthClientID"`
 	// Secrets lists the fields the instance takes: review_token,
 	// approve_token, webhook_secret and oauth_client_secret (GitLab);
-	// review_app_key, approve_app_key or approve_token, webhook_secret and
-	// oauth_client_secret (GitHub).
+	// review_app_key, approve_app_key or approve_token (neither when the
+	// review App approves), webhook_secret and oauth_client_secret (GitHub).
 	Secrets map[string]SecretView `json:"secrets"`
 }
 

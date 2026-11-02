@@ -1151,8 +1151,8 @@ func (d *Dashboard) integrations(w http.ResponseWriter, r *http.Request) {
 	}
 	view := IntegrationView{Instance: instance, Platform: platform, Connected: d.connected(instance),
 		Approver: approverKindToken, Repos: []IntegrationRepo{}}
-	if inst, ok := d.registry.Get(instance); ok && inst.GitHub != nil && inst.GitHub.ApproveApp != nil {
-		view.Approver = approverKindApp
+	if inst, ok := d.registry.Get(instance); ok {
+		view.Approver = approverOf(inst)
 	}
 	items, err := d.Store.Attention(ctx)
 	if err != nil {

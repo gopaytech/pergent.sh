@@ -1490,3 +1490,16 @@ func TestGlobalAttentionForPlatformAdmin(t *testing.T) {
 		})
 	}
 }
+
+// An instance whose review App approves is reported as such.
+func TestIntegrationsGitHubReviewAppApprover(t *testing.T) {
+	with := withSecrets(t)
+	e := newEnv(t, func(c *config.Config) {
+		with(c)
+		c.GitHub[0].ApproveWithReviewApp = true
+	})
+	c := e.signInGitHub(true, "acme/widgets")
+	if v := getJSON[IntegrationView](e, c, "/api/integrations"); v.Approver != "review_app" {
+		t.Errorf("approver = %q, want review_app", v.Approver)
+	}
+}
