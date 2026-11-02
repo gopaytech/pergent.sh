@@ -6,6 +6,7 @@ import { fakeApi } from "../test/fakeApi";
 import {
   instanceDashboardGitLab,
   instanceGitHub,
+  instanceGitHubOneApp,
   instanceGitLab,
   integrations,
   operator,
@@ -26,7 +27,7 @@ describe("Integrations for a platform admin", () => {
     expect(await screen.findByRole("heading", { name: "Integrations" })).toBeInTheDocument();
     const inst = await screen.findByRole("region", { name: "GitLab · main" });
     expect(within(inst).getByText("Connected")).toHaveClass("pill", "ok");
-    expect(inst).toHaveTextContent("Approver: bot user token");
+    expect(inst).toHaveTextContent("Approves with a bot user's token");
     expect(inst).toHaveTextContent("Token expires 2026-11-09");
     const row = screen.getByText("acme/payments").closest("tr") as HTMLElement;
     expect(within(row).getByText("Installed")).toHaveClass("pill", "ok");
@@ -49,11 +50,22 @@ describe("Integrations for an operator", () => {
     const hub = await card("GitHub · hub");
     expect(within(hub).queryByText("config")).not.toBeInTheDocument();
     expect(hub).toHaveTextContent("https://api.github.example.com");
-    expect(hub).toHaveTextContent("Approver: approve App");
+    expect(hub).toHaveTextContent("Approves with the approve App");
+    expect(hub).toHaveTextContent("Approve App ID: 12");
     expect(within(hub).getByRole("group", { name: "Review App private key" })).toHaveTextContent("set · changed 2 h ago");
     expect(within(hub).getByRole("group", { name: "Approve App private key" })).toHaveTextContent("not set");
     expect(await card("GitLab · extra")).toBeInTheDocument();
     expect(fake.find("GET", "/api/integrations")).toHaveLength(0);
+  });
+
+  it("says the review App approves, and lists no approve secret for it", async () => {
+    fakeApi({ "GET /api/me": { body: operator }, "GET /api/admin/instances": { body: [instanceGitHubOneApp] } });
+    renderApp("/integrations");
+    const solo = await card("GitHub · solo");
+    expect(solo).toHaveTextContent("Approves with the review App");
+    expect(solo).not.toHaveTextContent("Approve App ID");
+    expect(within(solo).getByRole("group", { name: "Review App private key" })).toBeInTheDocument();
+    expect(within(solo).queryByRole("group", { name: /Approve/ })).not.toBeInTheDocument();
   });
 
   it("gives a config instance no way to change it", async () => {
@@ -215,7 +227,16 @@ describe("Integrations for an operator", () => {
     expect(screen.queryByRole("form", { name: "Add GitLab instance" })).not.toBeInTheDocument();
   });
 
-  it("adds a GitHub instance that approves with an App", async () => {
+  // fillGitHub types what every GitHub instance needs, whoever approves.
+  const fillGitHub = async (form: HTMLElement) => {
+    await userEvent.type(within(form).getByLabelText("Name"), "hub");
+    await userEvent.type(within(form).getByLabelText("API address"), "https://api.github.example.com");
+    await userEvent.type(within(form).getByLabelText("Review App ID"), "11");
+    await userEvent.type(within(form).getByLabelText("Review App private key"), "key-1");
+    await userEvent.type(within(form).getByLabelText("Webhook secret"), "hook");
+  };
+
+  const openGitHubForm = async () => {
     const fake = fakeApi({
       "GET /api/me": { body: operator },
       "GET /api/admin/instances": { body: [] },
@@ -223,14 +244,41 @@ describe("Integrations for an operator", () => {
     });
     renderApp("/integrations");
     await userEvent.click(await screen.findByRole("button", { name: "Add GitHub instance" }));
-    const form = screen.getByRole("form", { name: "Add GitHub instance" });
-    await userEvent.type(within(form).getByLabelText("Name"), "hub");
-    await userEvent.type(within(form).getByLabelText("API address"), "https://api.github.example.com");
-    await userEvent.type(within(form).getByLabelText("Review App ID"), "11");
+    return { fake, form: screen.getByRole("form", { name: "Add GitHub instance" }) };
+  };
+
+  it("approves with the review App by default: one App, no approve field", async () => {
+    const { fake, form } = await openGitHubForm();
+    const select = within(form).getByLabelText("Approve with");
+    expect(select).toHaveValue("review_app");
+    expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "The review App (one App)",
+      "A separate approve App",
+      "A bot user's token",
+    ]);
+    for (const label of ["Approve App ID", "Approve App private key", "Approve token"]) {
+      expect(within(form).queryByLabelText(label)).not.toBeInTheDocument();
+    }
+    await fillGitHub(form);
+    await userEvent.click(within(form).getByRole("button", { name: "Add" }));
+    expect(fake.find("POST", "/api/admin/instances")[0].body).toEqual({
+      name: "hub",
+      platform: "github",
+      apiURL: "https://api.github.example.com",
+      reviewAppID: 11,
+      approveAppID: 11,
+      oauthClientID: "",
+      secrets: { review_app_key: "key-1", webhook_secret: "hook" },
+    });
+  });
+
+  it("adds a GitHub instance that approves with a separate App", async () => {
+    const { fake, form } = await openGitHubForm();
+    await userEvent.selectOptions(within(form).getByLabelText("Approve with"), "A separate approve App");
+    expect(within(form).queryByLabelText("Approve token")).not.toBeInTheDocument();
+    await fillGitHub(form);
     await userEvent.type(within(form).getByLabelText("Approve App ID"), "12");
-    await userEvent.type(within(form).getByLabelText("Review App private key"), "key-1");
     await userEvent.type(within(form).getByLabelText("Approve App private key"), "key-2");
-    await userEvent.type(within(form).getByLabelText("Webhook secret"), "hook");
     await userEvent.type(within(form).getByLabelText("OAuth client ID"), "oauth-id");
     await userEvent.type(within(form).getByLabelText("OAuth client secret"), "oauth-secret");
     await userEvent.click(within(form).getByRole("button", { name: "Add" }));
@@ -250,28 +298,41 @@ describe("Integrations for an operator", () => {
     });
   });
 
-  it("asks for a bot user's token when the Approve App ID is 0", async () => {
-    const fake = fakeApi({
-      "GET /api/me": { body: operator },
-      "GET /api/admin/instances": { body: [] },
-      "POST /api/admin/instances": { status: 201, body: instanceGitHub },
-    });
-    renderApp("/integrations");
-    await userEvent.click(await screen.findByRole("button", { name: "Add GitHub instance" }));
-    const form = screen.getByRole("form", { name: "Add GitHub instance" });
-    expect(within(form).queryByLabelText("Approve token")).not.toBeInTheDocument();
-    await userEvent.type(within(form).getByLabelText("Approve App ID"), "0");
+  it("refuses a separate approve App that is the review App", async () => {
+    const { fake, form } = await openGitHubForm();
+    await userEvent.selectOptions(within(form).getByLabelText("Approve with"), "A separate approve App");
+    await fillGitHub(form);
+    await userEvent.type(within(form).getByLabelText("Approve App private key"), "key-2");
+    await userEvent.type(within(form).getByLabelText("Approve App ID"), "11");
+    await userEvent.click(within(form).getByRole("button", { name: "Add" }));
+    expect(await within(form).findByRole("alert")).toHaveTextContent("different App");
+    expect(fake.find("POST", "/api/admin/instances")).toHaveLength(0);
+  });
+
+  it("asks for a bot user's token when that is chosen", async () => {
+    const { fake, form } = await openGitHubForm();
+    await userEvent.selectOptions(within(form).getByLabelText("Approve with"), "A bot user's token");
+    expect(within(form).queryByLabelText("Approve App ID")).not.toBeInTheDocument();
     expect(within(form).queryByLabelText("Approve App private key")).not.toBeInTheDocument();
-    await userEvent.type(within(form).getByLabelText("Name"), "hub");
-    await userEvent.type(within(form).getByLabelText("API address"), "https://api.github.example.com");
-    await userEvent.type(within(form).getByLabelText("Review App ID"), "11");
-    await userEvent.type(within(form).getByLabelText("Review App private key"), "key-1");
+    await fillGitHub(form);
     await userEvent.type(within(form).getByLabelText("Approve token"), "ghp-approve");
-    await userEvent.type(within(form).getByLabelText("Webhook secret"), "hook");
     await userEvent.click(within(form).getByRole("button", { name: "Add" }));
     const body = fake.find("POST", "/api/admin/instances")[0].body as { approveAppID: number; secrets: Record<string, string> };
     expect(body.approveAppID).toBe(0);
     expect(body.secrets).toEqual({ review_app_key: "key-1", approve_token: "ghp-approve", webhook_secret: "hook" });
+  });
+
+  it("sends only the secret of the approver finally chosen", async () => {
+    const { fake, form } = await openGitHubForm();
+    const select = within(form).getByLabelText("Approve with");
+    await userEvent.selectOptions(select, "A bot user's token");
+    await userEvent.type(within(form).getByLabelText("Approve token"), "ghp-approve");
+    await userEvent.selectOptions(select, "The review App (one App)");
+    await fillGitHub(form);
+    await userEvent.click(within(form).getByRole("button", { name: "Add" }));
+    const body = fake.find("POST", "/api/admin/instances")[0].body as { approveAppID: number; secrets: Record<string, string> };
+    expect(body.approveAppID).toBe(11);
+    expect(body.secrets).toEqual({ review_app_key: "key-1", webhook_secret: "hook" });
   });
 
   it("shows the reason the platform refused an instance, and keeps the form", async () => {
