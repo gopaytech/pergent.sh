@@ -569,6 +569,7 @@ func (d *Dashboard) updateSkills(w http.ResponseWriter, r *http.Request) {
 	}
 	if updated > 0 {
 		d.inputs.invalidate()
+		d.recheckAll()
 	}
 	writeJSON(w, http.StatusOK, out)
 }

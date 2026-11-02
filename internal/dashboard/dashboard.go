@@ -90,9 +90,12 @@ type Options struct {
 // refused it, and readiness.ErrNotSwitchedOn or readiness.ErrScansOff when
 // there is nothing to scan. RecheckReadiness must not block; project ""
 // rechecks every repository that follows the default list.
+// RecheckAllReadiness rechecks every repository (a library skill's text
+// changed); it must not block either.
 type Readiness interface {
 	RequestScan(ctx context.Context, instance, project, actor string) (store.ReadinessScan, error)
 	RecheckReadiness(instance, project string)
+	RecheckAllReadiness()
 }
 
 // Connector connects instances to GitLab and GitHub while pergent.sh runs;

@@ -56,6 +56,12 @@ func (f *fakeReadiness) RecheckReadiness(instance, project string) {
 	f.rechecks = append(f.rechecks, instance+"/"+project)
 }
 
+func (f *fakeReadiness) RecheckAllReadiness() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rechecks = append(f.rechecks, "*")
+}
+
 func (f *fakeReadiness) askedFor() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -520,6 +526,46 @@ func TestRecheckOnSettingsSave(t *testing.T) {
 	e.skillAction(op, id, "install", map[string]any{"names": []string{"style"}, "addToDefaults": true})
 	if got := f.recheckedFor(); !slices.Equal(got, []string{"/"}) {
 		t.Errorf("rechecks after an install added to the defaults = %v; want [/]", got)
+	}
+}
+
+// Changing a library skill's text, by an edit or an update from its source,
+// rechecks every repository ("*"): any of them may use it. A save that
+// changes nothing, or is refused, rechecks none.
+func TestRecheckOnSkillContentChange(t *testing.T) {
+	e := newEnv(t, nil)
+	f := e.withReadiness()
+	e.skill("go", "Review Go.")
+	op := e.operator()
+
+	wantCode(t, e.sendJSON(op, "PUT", "/api/admin/skills/go", map[string]any{"content": "Review Go well.", "version": 1}),
+		"edit", http.StatusOK)
+	if got := f.recheckedFor(); !slices.Equal(got, []string{"*"}) {
+		t.Errorf("rechecks after an edit = %v; want [*]", got)
+	}
+	f.clearRechecks()
+	wantCode(t, e.sendJSON(op, "PUT", "/api/admin/skills/go", map[string]any{"content": "Stale.", "version": 1}),
+		"stale edit", http.StatusConflict)
+	if got := f.recheckedFor(); len(got) != 0 {
+		t.Errorf("rechecks after a refused edit = %v", got)
+	}
+
+	e.skillRepo("main", "acme/skills", "v1.0", commitV1, map[string]string{"skills/style.md": "Old text."})
+	e.skillRepo("main", "acme/skills", "v1.1", commitV11, map[string]string{"skills/style.md": "New text."})
+	id, _ := e.fetchDone(op, map[string]any{"instance": "main", "repo": "acme/skills", "ref": "v1.0", "path": "skills"})
+	e.skillAction(op, id, "install", map[string]any{"names": []string{"style"}})
+	f.clearRechecks()
+	same, _ := e.fetchDone(op, map[string]any{"instance": "main", "repo": "acme/skills", "ref": "v1.0", "fromRef": "v1.0",
+		"path": "skills", "purpose": "update"})
+	e.skillAction(op, same, "update", map[string]any{"names": []string{"style"}})
+	if got := f.recheckedFor(); len(got) != 0 {
+		t.Errorf("rechecks after an update that saved nothing = %v", got)
+	}
+	upd, _ := e.fetchDone(op, map[string]any{"instance": "main", "repo": "acme/skills", "ref": "v1.1", "fromRef": "v1.0",
+		"path": "skills", "purpose": "update"})
+	e.skillAction(op, upd, "update", map[string]any{"names": []string{"style"}})
+	if got := f.recheckedFor(); !slices.Equal(got, []string{"*"}) {
+		t.Errorf("rechecks after an update from the source = %v; want [*]", got)
 	}
 }
 

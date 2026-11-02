@@ -190,3 +190,12 @@ func (d *Dashboard) recheck(instance, project string) {
 		d.readiness.RecheckReadiness(instance, project)
 	}
 }
+
+// recheckAll asks the engine to re-judge the last readiness scan of every
+// repository: a library skill's text changed, so its size and paths did.
+// It never blocks.
+func (d *Dashboard) recheckAll() {
+	if d.readiness != nil {
+		d.readiness.RecheckAllReadiness()
+	}
+}

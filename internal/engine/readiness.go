@@ -14,6 +14,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/readiness"
+	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/skillfetch"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -121,7 +122,7 @@ func (e *Engine) RequestScan(ctx context.Context, instance, project, actor strin
 }
 
 // RunScans runs the scans until ctx is done: it queues the scans after the
-// upgrade, then claims and launches queued scans (on a wake-up and every
+// upgrade and asks for a recheck of the config-file repositories, then claims and launches queued scans (on a wake-up and every
 // 10 s) and checks on running ones every minute. The rechecks
 // RecheckReadiness asks for run in a goroutine of their own, so a slow pod
 // part never holds up "Use these skills". RunScans runs in its own
@@ -146,6 +147,7 @@ func (e *Engine) RunScans(ctx context.Context) {
 	defer func() { <-rechecks }()
 
 	e.upgradeScans(ctx)
+	e.recheckConfigRepos(ctx)
 	e.sweepScans(ctx)
 	e.launchScans(ctx)
 
@@ -839,29 +841,67 @@ func (e *Engine) RecheckReadiness(instance, project string) {
 	}
 }
 
+// RecheckAllReadiness asks the scan loop to re-judge every repository's last
+// done scan against its skills now, with no Job and no platform call: the
+// dashboard calls it when a library skill's text changes (an edit, or an
+// update from its source), which changes its size for every repository that
+// uses it. It never blocks; requests are merged until the loop takes them.
+func (e *Engine) RecheckAllReadiness() {
+	if !e.Scans {
+		return
+	}
+	e.recheckMu.Lock()
+	e.recheckAll = true
+	e.recheckMu.Unlock()
+	select {
+	case e.recheckCh() <- struct{}{}:
+	default:
+	}
+}
+
+// recheckConfigRepos asks for a recheck of every config-file repository: the
+// config's skills change only with a restart, so RunScans calls it once at
+// startup. A failure to list them is logged; the items then follow the next
+// scan.
+func (e *Engine) recheckConfigRepos(ctx context.Context) {
+	repos, err := e.settings().List(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			e.log().Info("readiness recheck: couldn't list the repositories", "error", e.redact(err.Error()))
+		}
+		return
+	}
+	for _, r := range repos {
+		if r.Source == settings.SourceConfig && !e.removing(r.Instance) {
+			e.RecheckReadiness(r.Instance, r.Project)
+		}
+	}
+}
+
 func (e *Engine) recheckCh() chan struct{} {
 	e.recheckOnce.Do(func() { e.recheckReq = make(chan struct{}, 1) })
 	return e.recheckReq
 }
 
-// runRechecks re-judges the repositories RecheckReadiness asked for from
+// runRechecks re-judges the repositories RecheckReadiness and
+// RecheckAllReadiness asked for from
 // their newest done scan, which a failed scan after it keeps; a repository
 // with no done scan is left as it is.
 func (e *Engine) runRechecks(ctx context.Context) {
 	e.recheckMu.Lock()
-	keys, defaults := e.rechecks, e.recheckDefaults
-	e.rechecks, e.recheckDefaults = nil, nil
+	keys, defaults, all := e.rechecks, e.recheckDefaults, e.recheckAll
+	e.rechecks, e.recheckDefaults, e.recheckAll = nil, nil, false
 	e.recheckMu.Unlock()
 	if keys == nil {
 		keys = map[repoKey]RepoKey{}
 	}
-	if len(defaults) > 0 {
+	if all || len(defaults) > 0 {
 		repos, err := e.settings().List(ctx)
 		if err != nil {
 			e.log().Info("readiness recheck: couldn't list the repositories", "error", e.redact(err.Error()))
 		}
 		for _, r := range repos {
-			if r.Skills == nil && (defaults[""] || defaults[r.Instance]) {
+			if all || (r.Skills == nil && (defaults[""] || defaults[r.Instance])) {
 				keys[keyOf(r.Instance, r.Project)] = RepoKey{Instance: r.Instance, Project: r.Project}
 			}
 		}

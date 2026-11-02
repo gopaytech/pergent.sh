@@ -121,14 +121,15 @@ type Engine struct {
 	scanWake     chan struct{}
 
 	// rechecks holds the repositories RecheckReadiness asked for that the
-	// scan loop hasn't rechecked yet, and recheckDefaults the instances
-	// whose repositories on the default list it asked for ("" is every
-	// instance).
+	// scan loop hasn't rechecked yet, recheckDefaults the instances whose
+	// repositories on the default list it asked for ("" is every instance),
+	// and recheckAll whether RecheckAllReadiness asked for every repository.
 	recheckOnce     sync.Once
 	recheckReq      chan struct{}
 	recheckMu       sync.Mutex
 	rechecks        map[repoKey]RepoKey
 	recheckDefaults map[string]bool
+	recheckAll      bool
 }
 
 // registry is Instances, set to the config's instances alone when it was nil.

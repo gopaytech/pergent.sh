@@ -364,6 +364,7 @@ func (d *Dashboard) updateSkill(w http.ResponseWriter, r *http.Request) {
 	d.inputs.invalidate()
 	d.Log.Info("dashboard: skill updated", "skill", name, "version", version, "by", se.Username)
 	d.auditSkill(r, "skill_updated", name, fmt.Sprintf("v%d -> v%d", in.Version, version))
+	d.recheckAll()
 	writeJSON(w, http.StatusOK, SkillWrittenView{Version: version})
 }
 

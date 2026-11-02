@@ -752,6 +752,68 @@ func TestRecheckDefaults(t *testing.T) {
 	}
 }
 
+// A library skill's text changed: RecheckAllReadiness re-judges every
+// repository with a done scan, its own list or the default one, against the
+// skill's size now, with no platform call.
+func TestRecheckAll(t *testing.T) {
+	env := newScanEnv(t)
+	useLibrary(env, "ruby")
+	serveScanRepo(env, 9, "acme/gadgets", sha('d'))
+	dashboardRepo(t, env, store.DashboardRepo{Instance: testInstance, Project: "acme/gadgets", Skills: []string{"ruby"}, CreatedBy: "alice"})
+	for p, commit := range map[string]string{testProjectPath: sha('c'), "acme/gadgets": sha('d')} {
+		r := cleanResult(commit)
+		r.InstructionsBytes = 850 << 10
+		scanWith(t, env, testInstance, p, r)
+		if _, ok := items(t, env, p)[attInputsOverBudget]; ok {
+			t.Fatalf("%s is over budget before the edit", p)
+		}
+	}
+	// ruby grows by 100 KiB: 850 KiB of instructions plus it is over 900.
+	if _, err := env.Store.UpdateLibrarySkill(env.ctx, "ruby", rubySkill+strings.Repeat("x", 100<<10), "alice", 1, env.Now()); err != nil {
+		t.Fatal(err)
+	}
+	env.GitLab.Reset()
+
+	done := make(chan struct{})
+	go func() { env.Engine.RecheckAllReadiness(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("RecheckAllReadiness blocked")
+	}
+	env.Engine.runRechecks(env.ctx)
+	for _, p := range []string{testProjectPath, "acme/gadgets"} {
+		if _, ok := items(t, env, p)[attInputsOverBudget]; !ok {
+			t.Errorf("%s has no inputs_over_budget after its skill grew", p)
+		}
+	}
+	if n := len(env.GitLab.Requests("", "")); n != 0 {
+		t.Errorf("a recheck made %d platform calls", n)
+	}
+}
+
+// The config file's skills change only with a restart: at startup every
+// config-file repository with a done scan is re-judged.
+func TestStartupRechecksConfigRepos(t *testing.T) {
+	env := newScanEnv(t)
+	useLibrary(env, "ruby")
+	scanWith(t, env, testInstance, testProjectPath, cleanResult(sha('c')))
+	if _, ok := items(t, env, testProjectPath)[attNoSkillCoverage]; !ok {
+		t.Fatal("no no_skill_coverage item to clear")
+	}
+	// The config now names go for the repository, as after an edit and a
+	// restart.
+	env.Engine.Config.Repositories[0].Skills = []string{"go"}
+	env.GitLab.Reset()
+	runScansUntil(t, env, func() bool {
+		_, ok := items(t, env, testProjectPath)[attNoSkillCoverage]
+		return !ok
+	})
+	if n := len(env.GitLab.Requests("", "")); n != 0 {
+		t.Errorf("the startup recheck made %d platform calls", n)
+	}
+}
+
 // Switching a repository off drops its scans and the 3 items; a result that
 // comes late is refused.
 func TestSwitchOffDropsScans(t *testing.T) {
