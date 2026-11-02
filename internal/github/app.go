@@ -179,23 +179,45 @@ func (a *App) Bot(ctx context.Context) (string, int64, error) {
 	return slug, u.ID, nil
 }
 
+// InstallationInfo is an installation of the App: its ID and the
+// permissions it was granted, as GitHub reports them.
+type InstallationInfo struct {
+	ID          int64
+	Permissions map[string]string
+}
+
+// PullRequestsWrite reports whether the installation may write pull
+// requests, which approving needs. GitHub always reports the permissions; a
+// reply that carries none can't say, and counts as allowed.
+func (i InstallationInfo) PullRequestsWrite() bool {
+	return i.Permissions == nil || i.Permissions["pull_requests"] == "write"
+}
+
 // Installation returns the ID of the App's installation that covers
 // owner/repo. An App not installed there is ErrNotFound.
 func (a *App) Installation(ctx context.Context, owner, repo string) (int64, error) {
+	info, err := a.InstallationInfo(ctx, owner, repo)
+	return info.ID, err
+}
+
+// InstallationInfo returns the App's installation that covers owner/repo,
+// with its permissions. An App not installed there is ErrNotFound.
+func (a *App) InstallationInfo(ctx context.Context, owner, repo string) (InstallationInfo, error) {
 	p, err := repoPath(owner, repo, "/installation")
 	if err != nil {
-		return 0, err
+		return InstallationInfo{}, err
 	}
 	var out struct {
-		ID int64 `json:"id"`
+		ID          int64             `json:"id"`
+		Permissions map[string]string `json:"permissions"`
 	}
 	if err := a.api.getJSON(ctx, p, nil, &out); err != nil {
-		return 0, err
+		return InstallationInfo{}, err
 	}
 	if out.ID == 0 {
-		return 0, errors.New("github: installation has no id")
+		return InstallationInfo{}, errors.New("github: installation has no id")
 	}
-	return out.ID, nil
+	return InstallationInfo{ID: out.ID, Permissions: out.Permissions}, nil
 }
 
 // Installations returns the IDs of the App's installations (GET

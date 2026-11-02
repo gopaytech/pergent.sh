@@ -63,6 +63,8 @@ type Approver struct {
 // App's installation on a repository is looked up once and remembered; it is
 // forgotten when a call through it fails with 404 or its token can't be
 // minted, and CanReach always asks GitHub afresh and remembers the answer.
+// CanReach is also false for an installation without Pull requests: write,
+// which can't approve.
 func NewAppApprover(app *github.App, botUserID int64, slug string, repos Repos) *Approver {
 	var (
 		mu    sync.Mutex
@@ -74,18 +76,18 @@ func NewAppApprover(app *github.App, botUserID int64, slug string, repos Repos) 
 		delete(known, key(owner, name))
 		mu.Unlock()
 	}
-	lookup := func(ctx context.Context, owner, name string) (int64, error) {
-		id, err := app.Installation(ctx, owner, name)
+	lookup := func(ctx context.Context, owner, name string) (github.InstallationInfo, error) {
+		info, err := app.InstallationInfo(ctx, owner, name)
 		if errors.Is(err, github.ErrNotFound) {
 			forget(owner, name)
 		}
 		if err != nil {
-			return 0, err
+			return github.InstallationInfo{}, err
 		}
 		mu.Lock()
-		known[key(owner, name)] = id
+		known[key(owner, name)] = info.ID
 		mu.Unlock()
-		return id, nil
+		return info, nil
 	}
 	installation := func(ctx context.Context, owner, name string) (int64, error) {
 		mu.Lock()
@@ -94,7 +96,8 @@ func NewAppApprover(app *github.App, botUserID int64, slug string, repos Repos) 
 		if ok {
 			return id, nil
 		}
-		return lookup(ctx, owner, name)
+		info, err := lookup(ctx, owner, name)
+		return info.ID, err
 	}
 	a := newApprover(botUserID, slug+"[bot]", repos)
 	a.clientFor = func(ctx context.Context, r Repo) (*github.Client, error) {
@@ -110,11 +113,16 @@ func NewAppApprover(app *github.App, botUserID int64, slug string, repos Repos) 
 		}
 	}
 	a.reach = func(ctx context.Context, owner, name string) (bool, error) {
-		_, err := lookup(ctx, owner, name)
+		info, err := lookup(ctx, owner, name)
 		if errors.Is(err, github.ErrNotFound) {
 			return false, nil
 		}
-		return err == nil, err
+		if err != nil {
+			return false, err
+		}
+		// Installed, but unable to approve: the permission is missing or
+		// not accepted on this installation yet.
+		return info.PullRequestsWrite(), nil
 	}
 	return a
 }

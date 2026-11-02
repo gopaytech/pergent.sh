@@ -1039,8 +1039,8 @@ func TestPublishApproveUnavailable(t *testing.T) {
 
 	publish(t, env)
 
-	wantStatus(t, env, head, gitlab.StatusSuccess, "No blocking issues; not approved: the pergent approve App isn't installed on this repository")
-	if body := createdComment(t, env, 1); !strings.Contains(body, "**Not approved:** the pergent approve App isn't installed on this repository.") {
+	wantStatus(t, env, head, gitlab.StatusSuccess, "No blocking issues; not approved: the pergent approve App isn't installed on this repository or lacks Pull requests: write")
+	if body := createdComment(t, env, 1); !strings.Contains(body, "**Not approved:** the pergent approve App isn't installed on this repository or lacks Pull requests: write.") {
 		t.Errorf("comment lacks the note: %q", body)
 	}
 	wantPublished(t, env, id)

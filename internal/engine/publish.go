@@ -363,6 +363,7 @@ func (e *Engine) approveInputs(ctx context.Context, plat Platform, run store.Run
 		o.ApproveUnavailable = found && !p.ApproveAvailable
 		if inst, ok := e.registry().Get(run.MR.Instance); ok && inst.GitHub != nil {
 			o.ApproveBot = inst.GitHub.Approver() == config.ApproverToken
+			o.ApproveReviewApp = inst.GitHub.Approver() == config.ApproverReviewApp
 		}
 	}
 	return o, nil

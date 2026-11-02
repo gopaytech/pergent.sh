@@ -12,15 +12,17 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/forge/githubforge"
 	"github.com/gopaytech/pergent.sh/internal/github"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
 const (
-	wantSingleApproval = "One approval is enough to merge here, so pergent's approval alone can unlock it. Add an approval rule that needs a human."
-	wantAppUnreachable = "The pergent approve App isn't installed on this repository, so nothing is approved."
-	wantBotUnreachable = "The pergent approve bot can't reach this repository, so nothing is approved."
+	wantSingleApproval   = "One approval is enough to merge here, so pergent's approval alone can unlock it. Add an approval rule that needs a human."
+	wantAppUnreachable   = "The pergent approve App isn't installed on this repository or lacks Pull requests: write, so nothing is approved."
+	wantReviewAppNoWrite = "The pergent review App lacks Pull requests: write on this repository, so nothing is approved."
+	wantBotUnreachable   = "The pergent approve bot can't reach this repository, so nothing is approved."
 )
 
 // attention returns the recorded setup problems as "instance|project|kind" ->
@@ -151,17 +153,28 @@ func TestAttentionApproverUnreachableToken(t *testing.T) {
 	}
 }
 
-// An instance whose review App approves says "App", not "bot".
-func TestAttentionApproverUnreachableReviewApp(t *testing.T) {
-	env := newTestEnv(t)
-	addGitHub(t, env, false)
-	cfg := env.Engine.Config
-	cfg.GitHub[0].ApproveApp, cfg.GitHub[0].ApproveWithReviewApp = nil, true
-	if err := cfg.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if got := env.Engine.approverUnreachableNote(ghInstance); got != wantAppUnreachable {
-		t.Errorf("note = %q, want %q", got, wantAppUnreachable)
+// The unreachable note names the cause by who approves: a bot user's token
+// can't reach the repository; a separate approve App isn't installed or lacks
+// Pull requests: write; the review App lacks Pull requests: write.
+func TestApproverUnreachableNote(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*config.GitHubInstance)
+		want string
+	}{
+		{"approve App", func(i *config.GitHubInstance) { i.ApproveApp = &config.App{AppID: 2, PrivateKeyEnv: "K"} }, wantAppUnreachable},
+		{"review App", func(i *config.GitHubInstance) { i.ApproveWithReviewApp = true }, wantReviewAppNoWrite},
+		{"token", func(i *config.GitHubInstance) { i.ApproveTokenEnv = "T" }, wantBotUnreachable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inst := config.GitHubInstance{Name: "gh", APIURL: "https://api.github.com",
+				ReviewApp: config.App{AppID: 1, PrivateKeyEnv: "R"}, WebhookSecretEnv: "W"}
+			tc.edit(&inst)
+			e := &Engine{Config: &config.Config{GitHub: []config.GitHubInstance{inst}}}
+			if got := e.approverUnreachableNote("gh"); got != tc.want {
+				t.Errorf("note = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

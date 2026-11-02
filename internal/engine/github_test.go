@@ -656,14 +656,14 @@ func TestPublishGitHubApproveUnavailable(t *testing.T) {
 	}
 	run := onlyCheckRun(t, gh)
 	out, _ := run["output"].(map[string]any)
-	if run["conclusion"] != "success" || out["title"] != "No blocking issues; not approved: the pergent approve App isn't installed on this repository" {
+	if run["conclusion"] != "success" || out["title"] != "No blocking issues; not approved: the pergent approve App isn't installed on this repository or lacks Pull requests: write" {
 		t.Errorf("check run = %v", run)
 	}
 	comments := gh.Requests(http.MethodPost, ghRepoAPI+"/issues/3/comments")
 	if len(comments) != 1 {
 		t.Fatalf("%d comments posted", len(comments))
 	}
-	if body, _ := comments[0].JSON(t)["body"].(string); !strings.Contains(body, "**Not approved:** the pergent approve App isn't installed on this repository.") {
+	if body, _ := comments[0].JSON(t)["body"].(string); !strings.Contains(body, "**Not approved:** the pergent approve App isn't installed on this repository or lacks Pull requests: write.") {
 		t.Errorf("comment lacks the note: %q", body)
 	}
 	for _, r := range gh.Requests("", "") {
@@ -788,6 +788,41 @@ func TestReconcileGitHubApproveAppUninstalled(t *testing.T) {
 	}
 }
 
+// An App approver whose installation lacks Pull requests: write can't
+// approve: the pass stores the repository as unreachable and records the
+// item; once the permission is accepted, the next pass undoes both.
+func TestReconcileGitHubApproveAppWithoutPullRequestsWrite(t *testing.T) {
+	env := newTestEnv(t)
+	gh := addGitHub(t, env, true)
+	reconcileGitHubSetup(env, gh)
+	level := "read"
+	gh.Handle(http.MethodGet, ghRepoAPI+"/installation", func(w http.ResponseWriter, r *http.Request) {
+		if jwtApp(r.Header.Get("Authorization")) == ghReviewApp {
+			writeJSON(w, http.StatusOK, map[string]any{"id": ghInstallation, "permissions": map[string]string{"pull_requests": "read"}})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": ghApproveInstallation, "permissions": map[string]string{"pull_requests": level}})
+	})
+	key := ghInstance + "|" + ghRepoPath + "|approver_unreachable"
+
+	reconcile(t, env)
+	if p, _ := ghProject(t, env); p.ApproveAvailable {
+		t.Fatalf("stored = %+v; want approve unavailable without the permission", p)
+	}
+	if got := attention(t, env); got[key] != wantAppUnreachable {
+		t.Fatalf("attention = %v; want approver_unreachable naming the permission", got)
+	}
+
+	level = "write"
+	reconcile(t, env)
+	if p, _ := ghProject(t, env); !p.ApproveAvailable {
+		t.Fatalf("stored = %+v; want approve available once the permission is there", p)
+	}
+	if got := attention(t, env); len(got) != 0 {
+		t.Fatalf("attention = %v; want none", got)
+	}
+}
+
 // The approve side can't be asked (GitHub refuses the lookup): the pass
 // reports it and keeps the stored answer.
 func TestReconcileGitHubApproveCheckErrorKeepsStored(t *testing.T) {
@@ -842,8 +877,8 @@ func TestPublishGitHubTokenApproverUnavailable(t *testing.T) {
 	}
 }
 
-// With approve_with_review_app the approve side is an App, not a bot user's
-// token: an unavailable approver reads like the App's note.
+// With approve_with_review_app the approve side is the review App: an
+// unavailable approver names its missing Pull requests: write.
 func TestPublishGitHubReviewAppApproverUnavailable(t *testing.T) {
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, false)
@@ -860,7 +895,7 @@ func TestPublishGitHubReviewAppApproverUnavailable(t *testing.T) {
 
 	wantPublished(t, env, id)
 	run := onlyCheckRun(t, gh)
-	if out, _ := run["output"].(map[string]any); out["title"] != "No blocking issues; not approved: the pergent approve App isn't installed on this repository" {
+	if out, _ := run["output"].(map[string]any); out["title"] != "No blocking issues; not approved: the pergent review App lacks Pull requests: write on this repository" {
 		t.Errorf("check run = %v", run)
 	}
 }

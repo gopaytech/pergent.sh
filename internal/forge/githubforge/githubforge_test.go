@@ -569,6 +569,22 @@ func TestCanReach(t *testing.T) {
 	}
 }
 
+// An App approver whose installation lacks Pull requests: write can't
+// approve, so it can't reach the repository for this purpose; with the
+// permission it can. A token approver is not affected.
+func TestAppCanReachNeedsPullRequestsWrite(t *testing.T) {
+	f := newFake(t)
+	as := approvers(t, f)
+	f.reply("GET", "/repos/acme/widgets/installation", 200, map[string]any{"id": 66, "permissions": map[string]string{"pull_requests": "read", "metadata": "read"}})
+	if ok, err := as["app"].CanReach(ctx, "acme", "widgets"); err != nil || ok {
+		t.Fatalf("CanReach(read-only installation) = %v, %v; want false, nil", ok, err)
+	}
+	f.reply("GET", "/repos/acme/widgets/installation", 200, map[string]any{"id": 66, "permissions": map[string]string{"pull_requests": "write", "metadata": "read"}})
+	if ok, err := as["app"].CanReach(ctx, "acme", "widgets"); err != nil || !ok {
+		t.Fatalf("CanReach(write installation) = %v, %v; want true, nil", ok, err)
+	}
+}
+
 // CanReach asks GitHub every time, so reconcile sees the approve App being
 // uninstalled, and drops the remembered installation with it.
 func TestAppCanReachSeesUninstall(t *testing.T) {
