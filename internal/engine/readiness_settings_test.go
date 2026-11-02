@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/readiness"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -491,20 +492,48 @@ func TestSettingsRefusedIsUnknown(t *testing.T) {
 		// Protected, no rule requires checks, the classic ones not shown.
 		checkItem(t, "required checks", target.Pod.RequiredChecks, readiness.Unknown, wantGitHubChecksDark)
 	})
-	t.Run("github approve side unreachable", func(t *testing.T) {
-		env := newTestEnv(t)
-		gh := addGitHub(t, env, false)
-		serveGitHubSettings(gh)
-		target, err := scanSettings(t, env, ghInstance, ghRepoPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		checkItem(t, "approvals", target.Pod.Approvals, readiness.Unknown, env.Engine.approverUnreachableNote(ghInstance))
-		if target.Pod.Approvals.Count != 0 {
-			t.Errorf("approvals count = %d; want 0", target.Pod.Approvals.Count)
-		}
-		checkItem(t, "protected", target.Pod.Protected, readiness.Passed, "main is protected")
-	})
+	// Whoever approves (a separate approve App, the review App itself, a
+	// bot user's token), an approve side that can't approve here (not
+	// installed, or without Pull requests: write) leaves the count unknown,
+	// with that approver's note; one that can approve has the count read.
+	for _, tc := range []struct {
+		name      string
+		edit      func(*config.GitHubInstance)
+		available bool
+		state     string
+		reason    string
+		count     int
+	}{
+		{"github approve App unreachable", func(*config.GitHubInstance) {}, false, readiness.Unknown, wantAppUnreachable, 0},
+		{"github review App approver unreachable", func(i *config.GitHubInstance) {
+			i.ApproveApp, i.ApproveWithReviewApp = nil, true
+		}, false, readiness.Unknown, wantReviewAppNoWrite, 0},
+		{"github approve bot unreachable", func(i *config.GitHubInstance) {
+			i.ApproveApp, i.ApproveTokenEnv = nil, "GITHUB_APPROVE_TOKEN"
+		}, false, readiness.Unknown, wantBotUnreachable, 0},
+		{"github review App approver reachable", func(i *config.GitHubInstance) {
+			i.ApproveApp, i.ApproveWithReviewApp = nil, true
+		}, true, readiness.Passed, "", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnv(t)
+			gh := addGitHub(t, env, tc.available)
+			tc.edit(&env.Engine.Config.GitHub[len(env.Engine.Config.GitHub)-1])
+			if err := env.Engine.Config.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			serveGitHubSettings(gh)
+			target, err := scanSettings(t, env, ghInstance, ghRepoPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkItem(t, "approvals", target.Pod.Approvals, tc.state, tc.reason)
+			if target.Pod.Approvals.Count != tc.count {
+				t.Errorf("approvals count = %d; want %d", target.Pod.Approvals.Count, tc.count)
+			}
+			checkItem(t, "protected", target.Pod.Protected, readiness.Passed, "main is protected")
+		})
+	}
 }
 
 func TestSettingsNoRawErrors(t *testing.T) {
