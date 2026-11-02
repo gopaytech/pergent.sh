@@ -462,7 +462,7 @@ func sorted(s ...string) []string {
 
 const (
 	wantNoteDraft              = "---\n**Not approved:** this is a draft. It will be approved when it's marked ready."
-	wantNoteApproveUnavailable = "---\n**Not approved:** the pergent approve App isn't installed on this repository."
+	wantNoteApproveUnavailable = "---\n**Not approved:** the pergent approve App isn't installed on this repository or lacks Pull requests: write."
 )
 
 // A draft is reviewed and gets its status, but is approved only once it is
@@ -482,7 +482,7 @@ func TestDecideDraftNotApproved(t *testing.T) {
 func TestDecideApproveUnavailableNotApproved(t *testing.T) {
 	d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), ApproveUnavailable: true}, config.FailureStatusFailed)
 	if d.Approve || d.Status != StatusSuccess ||
-		d.Description != "No blocking issues; not approved: the pergent approve App isn't installed on this repository" {
+		d.Description != "No blocking issues; not approved: the pergent approve App isn't installed on this repository or lacks Pull requests: write" {
 		t.Fatalf("got %+v", d)
 	}
 	want := Marker + "\n### review\n\nbody\n\n" + wantNoteApproveUnavailable + "\n\n" + findingsBlock
@@ -566,6 +566,24 @@ func TestDecideApproveBotUnavailableNotApproved(t *testing.T) {
 	// ApproveBot alone changes nothing.
 	if d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), ApproveBot: true}, config.FailureStatusFailed); !d.Approve {
 		t.Errorf("ApproveBot without ApproveUnavailable: %+v", d)
+	}
+}
+
+// The review App approves (approve_with_review_app) and lacks Pull requests:
+// write: the reason and note name the permission.
+func TestDecideReviewAppApproverUnavailableNotApproved(t *testing.T) {
+	d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), ApproveUnavailable: true, ApproveReviewApp: true}, config.FailureStatusFailed)
+	if d.Approve || d.Status != StatusSuccess ||
+		d.Description != "No blocking issues; not approved: the pergent review App lacks Pull requests: write on this repository" {
+		t.Fatalf("got %+v", d)
+	}
+	want := Marker + "\n### review\n\nbody\n\n---\n**Not approved:** the pergent review App lacks Pull requests: write on this repository.\n\n" + findingsBlock
+	if d.Comment != want {
+		t.Errorf("comment:\n%q\nwant:\n%q", d.Comment, want)
+	}
+	// ApproveReviewApp alone changes nothing.
+	if d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), ApproveReviewApp: true}, config.FailureStatusFailed); !d.Approve {
+		t.Errorf("ApproveReviewApp without ApproveUnavailable: %+v", d)
 	}
 }
 
@@ -677,7 +695,7 @@ func TestDecideApprovalOff(t *testing.T) {
 // neither would be approved later while it stays off.
 func TestDecideApprovalOffWinsOverDraftAndUnavailable(t *testing.T) {
 	for _, o := range []Outcome{
-		{Draft: true}, {ApproveUnavailable: true}, {ApproveUnavailable: true, ApproveBot: true},
+		{Draft: true}, {ApproveUnavailable: true}, {ApproveUnavailable: true, ApproveBot: true}, {ApproveUnavailable: true, ApproveReviewApp: true},
 		{Draft: true, ApproveUnavailable: true},
 	} {
 		o.Result, o.ApprovalOff = completed(skill("a", "no_blocking_issues", "f.go")), true

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 )
 
@@ -31,7 +32,8 @@ const (
 
 const (
 	singleApprovalNote = "One approval is enough to merge here, so pergent's approval alone can unlock it. Add an approval rule that needs a human."
-	approveAppNote     = "The pergent approve App isn't installed on this repository, so nothing is approved."
+	approveAppNote     = "The pergent approve App isn't installed on this repository or lacks Pull requests: write, so nothing is approved."
+	reviewAppNote      = "The pergent review App lacks Pull requests: write on this repository, so nothing is approved."
 	approveBotNote     = "The pergent approve bot can't reach this repository, so nothing is approved."
 
 	noSkillCoverageNote  = "No skill this repository uses matches its files, so its reviews check nothing useful. The Readiness tab suggests skills that fit."
@@ -82,10 +84,16 @@ func overBudgetNote(size int) string {
 }
 
 // approverUnreachableNote words the approver_unreachable item for instance:
-// the App when the instance approves with one, the bot when it uses a token.
+// the bot when it uses a token, the review App's missing permission when it
+// approves, else the approve App.
 func (e *Engine) approverUnreachableNote(instance string) string {
-	if inst, ok := e.registry().Get(instance); ok && inst.GitHub != nil && inst.GitHub.ApproveApp == nil {
-		return approveBotNote
+	if inst, ok := e.registry().Get(instance); ok && inst.GitHub != nil {
+		switch inst.GitHub.Approver() {
+		case config.ApproverToken:
+			return approveBotNote
+		case config.ApproverReviewApp:
+			return reviewAppNote
+		}
 	}
 	return approveAppNote
 }

@@ -42,8 +42,9 @@ const (
 
 // Instance is one GitLab or GitHub instance, whichever source it comes from.
 // Exactly one of GitLab and GitHub is set, by Platform. For an instance of
-// the dashboard the *_env fields are empty, and an empty ApproveApp means
-// the approve side is a bot user's token.
+// the dashboard the *_env fields are empty, and GitHub's approver follows
+// the row: an approve App ID of 0 is a bot user's token, the review App's own
+// ID is the review App approving (ApproveWithReviewApp), another ID an App.
 type Instance struct {
 	Name     string
 	Platform string // config.PlatformGitLab or config.PlatformGitHub
@@ -284,7 +285,10 @@ func FromRow(row store.InstanceRow) Instance {
 		Removing: row.Removing, OAuthClientID: row.OAuthClientID}
 	if row.Platform == config.PlatformGitHub {
 		gh := &config.GitHubInstance{Name: row.Name, APIURL: row.APIURL, ReviewApp: config.App{AppID: row.ReviewAppID}}
-		if row.ApproveAppID != 0 {
+		switch {
+		case row.ApproveAppID > 0 && row.ApproveAppID == row.ReviewAppID:
+			gh.ApproveWithReviewApp = true
+		case row.ApproveAppID != 0:
 			gh.ApproveApp = &config.App{AppID: row.ApproveAppID}
 		}
 		inst.GitHub = gh
@@ -431,9 +435,10 @@ func (r *Registry) configSecrets(inst Instance) (Secrets, error) {
 	case inst.GitHub != nil:
 		var approve string
 		s.ReviewAppKey, approve, s.WebhookSecret, err = inst.GitHub.Secrets()
-		if inst.GitHub.ApproveApp != nil {
+		switch inst.GitHub.Approver() {
+		case config.ApproverApp:
 			s.ApproveAppKey = approve
-		} else {
+		case config.ApproverToken:
 			s.ApproveToken = approve
 		}
 	}

@@ -19,10 +19,11 @@ const (
 	statusCanceled = "canceled"
 	statusFailed   = "failed"
 
-	approverKindApp      = "app"
-	approverKindToken    = "token"
-	healthOK             = "ok"
-	healthNeedsAttention = "attention"
+	approverKindApp       = "app"
+	approverKindReviewApp = "review_app"
+	approverKindToken     = "token"
+	healthOK              = "ok"
+	healthNeedsAttention  = "attention"
 )
 
 // judged is a run's outcome, the reason for it ("" when approved) and the

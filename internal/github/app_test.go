@@ -260,6 +260,30 @@ func TestInstallation(t *testing.T) {
 	}
 }
 
+func TestInstallationInfoPermissions(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		reply map[string]any
+		want  bool
+	}{
+		{"write", map[string]any{"id": 42, "permissions": map[string]string{"pull_requests": "write", "metadata": "read"}}, true},
+		{"read", map[string]any{"id": 42, "permissions": map[string]string{"pull_requests": "read"}}, false},
+		{"none granted", map[string]any{"id": 42, "permissions": map[string]string{"metadata": "read"}}, false},
+		{"not told", map[string]any{"id": 42}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _, _ := testApp(t, jsonReply(tc.reply))
+			info, err := a.InstallationInfo(ctx, "acme", "widgets")
+			if err != nil || info.ID != 42 {
+				t.Fatalf("InstallationInfo = %+v, %v", info, err)
+			}
+			if got := info.PullRequestsWrite(); got != tc.want {
+				t.Errorf("PullRequestsWrite() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestInstallationNotFound(t *testing.T) {
 	a, _, _ := testApp(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"Not Found"}`, 404) })
 	if _, err := a.Installation(ctx, "acme", "widgets"); !errors.Is(err, ErrNotFound) {

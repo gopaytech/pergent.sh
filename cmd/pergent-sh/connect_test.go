@@ -167,6 +167,11 @@ func fakeGitHubAPI(t *testing.T, fail map[string]int) *httptest.Server {
 				{"id": 2, "user": map[string]any{"id": ghTokenBot}, "state": "APPROVED", "commit_id": ghHead},
 				{"id": 3, "user": map[string]any{"id": ghReviewBot}, "state": "COMMENTED", "commit_id": ghHead},
 			})
+		case "GET /repos/acme/widgets/pulls/2/reviews":
+			// Only the review bot has approved this one.
+			reply(w, http.StatusOK, []map[string]any{
+				{"id": 4, "user": map[string]any{"id": ghReviewBot}, "state": "APPROVED", "commit_id": ghHead},
+			})
 		default:
 			reply(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
 		}
@@ -255,6 +260,53 @@ func TestConnectGitHubTokenApprover(t *testing.T) {
 	// that counts.
 	if ok, err := p.Approver.HasApproved(context.Background(), 900, 1, ghHead); err != nil || !ok {
 		t.Errorf("HasApproved = %v, %v; want the token user's approval", ok, err)
+	}
+}
+
+// With approve_with_review_app one App does both: no approve secret is read,
+// no second App is asked about, and the approvals found are the review bot's.
+func TestConnectGitHubReviewAppApprover(t *testing.T) {
+	srv := fakeGitHubAPI(t, map[string]int{
+		"GET /users/acme-approve%5Bbot%5D": http.StatusTeapot,
+	})
+	cfg := githubConfig(t, srv.URL, false)
+	cfg.GitHub[0].ApproveApp, cfg.GitHub[0].ApproveWithReviewApp = nil, true
+	t.Setenv("GITHUB_APPROVE_KEY", "")
+	t.Setenv("GITHUB_APPROVE_TOKEN", "")
+
+	c := newConnector(t, cfg, srv.Client(), nil)
+	if err := c.connectConfigured(context.Background(), "gh"); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	p, _ := c.platforms.Get("gh")
+	if p.Kind != config.PlatformGitHub || p.Approver == nil || p.GitHub == nil || p.GitHub.Approve == nil {
+		t.Fatalf("platform = %+v", p)
+	}
+	ctx := context.Background()
+	if ok, err := p.Approver.HasApproved(ctx, 900, 2, ghHead); err != nil || !ok {
+		t.Errorf("HasApproved(2) = %v, %v; want the review bot's approval", ok, err)
+	}
+	// The approve App bot's and the token user's approvals don't count.
+	if ok, err := p.Approver.HasApproved(ctx, 900, 1, ghHead); err != nil || ok {
+		t.Errorf("HasApproved(1) = %v, %v; want false: the review bot only commented there", ok, err)
+	}
+}
+
+// Only a token approver tells the dashboard about its token's expiry.
+func TestTracksTokenExpiry(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		inst *config.GitHubInstance
+		want bool
+	}{
+		{"token", &config.GitHubInstance{ApproveTokenEnv: "T"}, true},
+		{"approve App", &config.GitHubInstance{ApproveApp: &config.App{AppID: 2}}, false},
+		{"review App", &config.GitHubInstance{ApproveWithReviewApp: true}, false},
+		{"GitLab", nil, false},
+	} {
+		if got := tracksTokenExpiry(tc.inst); got != tc.want {
+			t.Errorf("%s: tracksTokenExpiry = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 

@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 
-import { api, type IntegrationView, type InstanceAdminView, type Platform } from "../api";
+import { api, type Approver, type IntegrationView, type InstanceAdminView, type Platform } from "../api";
 import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
-import { ErrorBox, Loading, Pill, platformName, secretText } from "../ui";
+import { ErrorBox, Loading, Pill, noFill, platformName, secretFill, secretText } from "../ui";
 
 // Integrations is the instances pergent.sh reviews on. An operator sees
 // every one and adds, changes and removes those kept in the dashboard; a
@@ -33,9 +33,20 @@ function OwnInstance() {
   );
 }
 
+// approverWords says who approves, for a card.
+function approverWords(approver: Approver): string {
+  switch (approver) {
+    case "review_app":
+      return "Approves with the review App";
+    case "app":
+      return "Approves with the approve App";
+    default:
+      return "Approves with a bot user's token";
+  }
+}
+
 function OwnBody({ v }: { v: IntegrationView }) {
   const platform = platformName(v.platform);
-  const approver = v.approver === "app" ? "approve App" : "bot user token";
   return (
     <>
       <section className="card" aria-label={`${platform} · ${v.instance}`}>
@@ -44,7 +55,7 @@ function OwnBody({ v }: { v: IntegrationView }) {
           {v.connected ? <Pill tone="ok">Connected</Pill> : <Pill tone="bad">Not connected</Pill>}
         </h2>
         <div className="facts">
-          <div>Approver: {approver}</div>
+          <div>{approverWords(v.approver)}</div>
           {v.tokenExpiry && <div className="warn-text">Token expires {v.tokenExpiry.slice(0, 10)}</div>}
         </div>
       </section>
@@ -213,7 +224,7 @@ function InstanceCard({ inst }: { inst: InstanceAdminView }) {
             {inst.approver === "app" && <div>Approve App ID: {inst.approveAppID}</div>}
           </>
         )}
-        <div>Approver: {inst.approver === "app" ? "approve App" : "bot user token"}</div>
+        <div>{approverWords(inst.approver)}</div>
         {config && <div className="meta">This instance is managed by the config file; change it there.</div>}
       </div>
       <OAuthClientRow inst={inst} locked={locked} />
@@ -270,7 +281,7 @@ function OAuthClientRow({ inst, locked }: { inst: InstanceAdminView; locked: boo
           <input
             type="text"
             aria-label="New OAuth client ID"
-            autoComplete="off"
+            {...noFill}
             spellCheck={false}
             value={value}
             onChange={(e) => setValue(e.target.value)}
@@ -324,7 +335,7 @@ function SecretRow({ inst, field, locked }: { inst: InstanceAdminView; field: st
           <input
             type="password"
             aria-label={`New ${label}`}
-            autoComplete="off"
+            {...secretFill}
             spellCheck={false}
             value={value}
             onChange={(e) => setValue(e.target.value)}
@@ -372,7 +383,7 @@ function Field({
         id={id}
         // A secret is typed into a password input that never prefills.
         type={secret ? "password" : type}
-        autoComplete="off"
+        {...(secret ? secretFill : noFill)}
         autoCapitalize="none"
         spellCheck={false}
         value={d[name] ?? ""}
@@ -400,9 +411,9 @@ function AddInstance({ platform, onClose }: { platform: Platform; onClose: () =>
     },
   });
   const github = platform === "github";
-  // A blank Approve App ID asks for the App's key; 0 means a bot user's
-  // token approves.
-  const approveWithApp = github && (d.approveAppID ?? "").trim() !== "0";
+  // Who approves decides the Approve fields: only the chosen kind's are
+  // shown and sent.
+  const approveWith: Approver = (d.approveWith as Approver | undefined) ?? "review_app";
   const v = (k: string) => (d[k] ?? "").trim();
 
   const submit = (e: FormEvent) => {
@@ -411,7 +422,8 @@ function AddInstance({ platform, onClose }: { platform: Platform; onClose: () =>
     const typed: Record<string, string> = github
       ? {
           review_app_key: d.review_app_key ?? "",
-          ...(approveWithApp ? { approve_app_key: d.approve_app_key ?? "" } : { approve_token: d.approve_token ?? "" }),
+          ...(approveWith === "app" ? { approve_app_key: d.approve_app_key ?? "" } : {}),
+          ...(approveWith === "token" ? { approve_token: d.approve_token ?? "" } : {}),
           webhook_secret: d.webhook_secret ?? "",
           oauth_client_secret: d.oauth_client_secret ?? "",
         }
@@ -426,9 +438,21 @@ function AddInstance({ platform, onClose }: { platform: Platform; onClose: () =>
     }
     if (github) {
       const reviewAppID = Number(v("reviewAppID"));
-      const approveAppID = Number(v("approveAppID"));
-      if (v("approveAppID") === "" || !Number.isInteger(reviewAppID) || !Number.isInteger(approveAppID)) {
-        setProblem("The App IDs are whole numbers. Give the Approve App ID 0 if a bot user's token approves.");
+      // The server reads the approve App ID: the review App's own is the
+      // review App approving, 0 a bot user's token.
+      let approveAppID = reviewAppID;
+      if (approveWith === "token") approveAppID = 0;
+      if (approveWith === "app") approveAppID = Number(v("approveAppID"));
+      if (v("reviewAppID") === "" || !Number.isInteger(reviewAppID) || !Number.isInteger(approveAppID)) {
+        setProblem("The App IDs are whole numbers.");
+        return;
+      }
+      if (approveWith === "app" && (v("approveAppID") === "" || approveAppID <= 0)) {
+        setProblem("The approve App ID is a whole number above 0.");
+        return;
+      }
+      if (approveWith === "app" && approveAppID === reviewAppID) {
+        setProblem("The approve App must be a different App from the review App. To use one App, approve with the review App.");
         return;
       }
       setProblem("");
@@ -463,18 +487,24 @@ function AddInstance({ platform, onClose }: { platform: Platform; onClose: () =>
         <>
           <Field d={d} set={set} name="apiURL" label="API address" required help="The https address of the GitHub API." />
           <Field d={d} set={set} name="reviewAppID" label="Review App ID" type="number" required />
-          <Field
-            d={d}
-            set={set}
-            name="approveAppID"
-            label="Approve App ID"
-            type="number"
-            help="0 if a bot user's token approves."
-          />
           <Field d={d} set={set} name="review_app_key" label="Review App private key" secret required />
-          {approveWithApp ? (
-            <Field d={d} set={set} name="approve_app_key" label="Approve App private key" secret required />
-          ) : (
+          <label htmlFor="add-approveWith">Approve with</label>
+          <select id="add-approveWith" value={approveWith} onChange={(e) => set("approveWith", e.target.value)}>
+            <option value="review_app">The review App (one App)</option>
+            <option value="app">A separate approve App</option>
+            <option value="token">A bot user's token</option>
+          </select>
+          <div className="meta">
+            One App is the simplest: it then needs the Pull requests: write permission. A separate App or a bot user keeps the
+            identity that writes the review from being the one that approves it.
+          </div>
+          {approveWith === "app" && (
+            <>
+              <Field d={d} set={set} name="approveAppID" label="Approve App ID" type="number" required />
+              <Field d={d} set={set} name="approve_app_key" label="Approve App private key" secret required />
+            </>
+          )}
+          {approveWith === "token" && (
             <Field d={d} set={set} name="approve_token" label="Approve token" secret required />
           )}
           <Field d={d} set={set} name="webhook_secret" label="Webhook secret" secret required />

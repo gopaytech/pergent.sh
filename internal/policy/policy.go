@@ -41,14 +41,16 @@ const (
 	descNotApproved     = "No blocking issues; not approved: "
 
 	reasonDraft              = "draft"
-	reasonApproveUnavailable = "the pergent approve App isn't installed on this repository"
+	reasonApproveUnavailable = "the pergent approve App isn't installed on this repository or lacks Pull requests: write"
+	reasonReviewAppNoWrite   = "the pergent review App lacks Pull requests: write on this repository"
 	reasonApproveBotNoReach  = "the pergent approve bot can't reach this repository"
 	reasonApprovalOff        = "approval is turned off"
 
 	noteNothingReviewed    = "**Not approved:** every changed file was skipped by pergent's default rules, so nothing was reviewed. A human needs to look."
 	notePartlySkipped      = "**Not approved:** some changed files were skipped by pergent's default rules, so they weren't reviewed. A human needs to look."
 	noteDraft              = "---\n**Not approved:** this is a draft. It will be approved when it's marked ready."
-	noteApproveUnavailable = "---\n**Not approved:** the pergent approve App isn't installed on this repository."
+	noteApproveUnavailable = "---\n**Not approved:** the pergent approve App isn't installed on this repository or lacks Pull requests: write."
+	noteReviewAppNoWrite   = "---\n**Not approved:** the pergent review App lacks Pull requests: write on this repository."
 	noteApproveBotNoReach  = "---\n**Not approved:** the pergent approve bot can't reach this repository."
 	noteApprovalOff        = "---\n**Not approved:** approval is turned off for this repository."
 	noteMerge              = "---\n**Note:** "
@@ -91,7 +93,8 @@ func blocksApproval(rule string) bool { return !reviewedSkipRules[rule] }
 // approve App isn't installed on it). ApprovalOff wins over the other two (no
 // approval comes while it stays off), and Draft over ApproveUnavailable.
 // ApproveBot says the approve side is a bot user's token (GitHub's
-// approve_token_env) rather than an App, which only changes how an
+// approve_token_env) rather than an App, and ApproveReviewApp that it is the
+// review App itself (approve_with_review_app); they only change how an
 // unavailable approve side is worded.
 //
 // Dismissals are the findings of the merge request that people set aside.
@@ -108,6 +111,7 @@ type Outcome struct {
 	Draft              bool
 	ApproveUnavailable bool
 	ApproveBot         bool
+	ApproveReviewApp   bool
 	ApprovalOff        bool
 
 	Dismissals []render.Dismissal
@@ -290,6 +294,8 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 		d := notApproved(comment, block, reasonDraft, noteDraft)
 		d.Kind = KindDraft
 		return d
+	case o.ApproveUnavailable && o.ApproveReviewApp:
+		return notApproved(comment, block, reasonReviewAppNoWrite, noteReviewAppNoWrite)
 	case o.ApproveUnavailable && o.ApproveBot:
 		return notApproved(comment, block, reasonApproveBotNoReach, noteApproveBotNoReach)
 	case o.ApproveUnavailable:

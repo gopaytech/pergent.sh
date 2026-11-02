@@ -407,11 +407,15 @@ export type SkillFetch = {
 // SkillFetchResult is the answer for one name of an install or an update.
 export type SkillFetchResult = { name: string; ok: boolean; error?: string };
 
+// Approver is who approves for an instance: a second App, the review App
+// itself, or a bot user's token.
+export type Approver = "app" | "review_app" | "token";
+
 export type IntegrationView = {
   instance: string;
   platform: Platform;
   connected: boolean;
-  approver: "app" | "token";
+  approver: Approver;
   tokenExpiry?: string;
   repos: { project: string; installed: boolean; approverReachable: boolean }[];
 };
@@ -463,8 +467,9 @@ export type InstanceAdminView = {
   url: string;
   apiURL: string;
   reviewAppID: number;
+  // approveAppID is the review App's own ID when the review App approves.
   approveAppID: number;
-  approver: "app" | "token";
+  approver: Approver;
   oauthClientID: string;
   secrets: Record<string, SecretView>;
 };

@@ -399,6 +399,19 @@ export const instanceGitHub: InstanceAdminView = {
   },
 };
 
+// A GitHub instance whose review App also approves: no approve secret.
+export const instanceGitHubOneApp: InstanceAdminView = {
+  ...instanceGitHub,
+  name: "solo",
+  approveAppID: 11,
+  approver: "review_app",
+  secrets: {
+    review_app_key: { set: true, updatedAt: minutesAgo(120) },
+    webhook_secret: { set: true, updatedAt: minutesAgo(120) },
+    oauth_client_secret: { set: false, updatedAt: null },
+  },
+};
+
 export const instanceDashboardGitLab: InstanceAdminView = {
   ...instanceGitLab,
   name: "extra",

@@ -331,6 +331,91 @@ func TestAddGitHubInstance(t *testing.T) {
 	}
 }
 
+// An approve App ID equal to the review App's is the review App approving:
+// "review_app", the review App's ID as approveAppID, and neither approve
+// secret taken, checked or connected.
+func TestAddGitHubInstanceReviewAppApproves(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.operator()
+	body := hubBody(func(m map[string]any) {
+		m["approveAppID"] = 11
+		m["secrets"] = map[string]string{"review_app_key": hubReviewKey, "webhook_secret": hubWebhook}
+	})
+	view := decode[InstanceAdminView](t, e.sendJSON(c, "POST", "/api/admin/instances", body), "POST", http.StatusCreated)
+	if view.Approver != "review_app" || view.ReviewAppID != 11 || view.ApproveAppID != 11 {
+		t.Errorf("view = %+v", view)
+	}
+	for _, f := range []string{"review_app_key", "webhook_secret", "oauth_client_secret"} {
+		if _, ok := view.Secrets[f]; !ok {
+			t.Errorf("secrets lacks %s: %+v", f, view.Secrets)
+		}
+	}
+	for _, f := range []string{"approve_app_key", "approve_token"} {
+		if sv, ok := view.Secrets[f]; ok {
+			t.Errorf("a review App approver lists %s: %+v", f, sv)
+		}
+	}
+	checks, connects := e.conn.checkCalls(), e.conn.connectCalls()
+	if len(checks) != 1 || len(connects) != 1 {
+		t.Fatalf("checks %d, connects %d; want one each", len(checks), len(connects))
+	}
+	want := instances.Secrets{ReviewAppKey: hubReviewKey, WebhookSecret: hubWebhook}
+	if checks[0].s != want || connects[0].s != want {
+		t.Errorf("checked %+v, connected %+v; want %+v", checks[0].s, connects[0].s, want)
+	}
+	if gh := checks[0].inst.GitHub; gh == nil || gh.Approver() != config.ApproverReviewApp || gh.ApproveApp != nil {
+		t.Errorf("checked instance = %+v", gh)
+	}
+	rows, _ := e.st.Instances(ctx)
+	if len(rows) != 1 || rows[0].ReviewAppID != 11 || rows[0].ApproveAppID != 11 {
+		t.Errorf("stored rows = %+v", rows)
+	}
+
+	// Updating: the key can change, a second approver's secret can't be
+	// added, and the approve App ID can't move off the review App's.
+	rec := e.sendJSON(c, "PUT", "/api/admin/instances/hub", map[string]any{"approveAppID": 11, "reviewAppID": 11,
+		"secrets": map[string]string{"review_app_key": "rotated-review-key"}})
+	upd := decode[InstanceAdminView](t, rec, "PUT", http.StatusOK)
+	if upd.Approver != "review_app" || !upd.Secrets["review_app_key"].Set {
+		t.Errorf("updated view = %+v", upd)
+	}
+	if cs := e.conn.connectCalls(); cs[len(cs)-1].s != (instances.Secrets{ReviewAppKey: "rotated-review-key", WebhookSecret: hubWebhook}) {
+		t.Errorf("connected after the update with %+v", cs[len(cs)-1].s)
+	}
+	for _, f := range []string{"approve_app_key", "approve_token"} {
+		rec = e.sendJSON(c, "PUT", "/api/admin/instances/hub", map[string]any{"secrets": map[string]string{f: "x"}})
+		if rec.Code != http.StatusBadRequest || !strings.Contains(errorOf(t, rec), f+" is not a secret") {
+			t.Errorf("PUT %s = %d %s; want 400", f, rec.Code, rec.Body)
+		}
+	}
+	for _, id := range []int64{0, 12} {
+		rec = e.sendJSON(c, "PUT", "/api/admin/instances/hub", map[string]any{"approveAppID": id})
+		if rec.Code != http.StatusBadRequest || !strings.Contains(errorOf(t, rec), "can't change") {
+			t.Errorf("PUT approveAppID %d = %d %s; want 400 immutable", id, rec.Code, rec.Body)
+		}
+	}
+}
+
+// An instance of the config whose review App approves lists "review_app"
+// and takes no approve secret.
+func TestConfigInstanceReviewAppApprover(t *testing.T) {
+	e := newEnv(t, func(c *config.Config) {
+		c.GitHub[0].ReviewApp = config.App{AppID: 5, PrivateKeyEnv: "PERGENT_TEST_OWN_KEY"}
+		c.GitHub[0].ApproveWithReviewApp = true
+	})
+	c := e.operator()
+	list := decode[[]InstanceAdminView](t, e.get(c, "/api/admin/instances"), "GET", http.StatusOK)
+	v := list[0]
+	if v.Name != "gh" || v.Approver != "review_app" || v.ReviewAppID != 5 || v.ApproveAppID != 5 {
+		t.Fatalf("gh = %+v", v)
+	}
+	for _, f := range []string{"approve_app_key", "approve_token"} {
+		if _, ok := v.Secrets[f]; ok {
+			t.Errorf("gh lists %s", f)
+		}
+	}
+}
+
 // A failed check is a 400 with its reason, and nothing is stored, registered
 // or connected; a secret the reason echoes is hidden.
 func TestAddInstanceCheckFails(t *testing.T) {
@@ -388,7 +473,23 @@ func TestAddInstanceValidation(t *testing.T) {
 		{"url with credentials", labBody(func(m map[string]any) { m["url"] = "https://u:p@gitlab.lab.example.com" }), 400, "https address"},
 		{"gitlab with an app", labBody(func(m map[string]any) { m["reviewAppID"] = 3 }), 400, "takes a url"},
 		{"github with a url", hubBody(func(m map[string]any) { m["url"] = "https://x.example.com" }), 400, "not url"},
-		{"github app ids", hubBody(func(m map[string]any) { m["approveAppID"] = 11 }), 400, "different from reviewAppID"},
+		{"github negative approve app", hubBody(func(m map[string]any) { m["approveAppID"] = -1 }), 400, "the reviewAppID (the review App approves)"},
+		{"review app approver with an approve App key", hubBody(func(m map[string]any) {
+			m["approveAppID"] = 11
+			m["secrets"] = map[string]string{"review_app_key": "k", "approve_app_key": "k2", "webhook_secret": "w"}
+		}), 400, "approve_app_key is not a secret"},
+		{"review app approver with an approve token", hubBody(func(m map[string]any) {
+			m["approveAppID"] = 11
+			m["secrets"] = map[string]string{"review_app_key": "k", "approve_token": "t", "webhook_secret": "w"}
+		}), 400, "approve_token is not a secret"},
+		{"review app approver without its key", hubBody(func(m map[string]any) {
+			m["approveAppID"] = 11
+			m["secrets"] = map[string]string{"webhook_secret": "w"}
+		}), 400, "review_app_key is required"},
+		{"token instance without its token", hubBody(func(m map[string]any) {
+			m["approveAppID"] = 0
+			m["secrets"] = map[string]string{"review_app_key": "k", "webhook_secret": "w"}
+		}), 400, "approve_token is required"},
 		{"github without an app", hubBody(func(m map[string]any) { m["reviewAppID"] = 0 }), 400, "reviewAppID must be positive"},
 		{"gitlab webhook secret", labBody(func(m map[string]any) {
 			m["secrets"] = map[string]string{"review_token": "r", "approve_token": "a", "webhook_secret": "mine", "oauth_client_secret": "o"}

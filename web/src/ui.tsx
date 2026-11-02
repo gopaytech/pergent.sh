@@ -84,6 +84,19 @@ export function secretText(s: SecretView): string {
   return s.updatedAt ? `set · changed ${ago(s.updatedAt)}` : "set";
 }
 
+// noFill keeps password managers out of a field. Next to a password field,
+// browsers ignore autocomplete="off" and fill the operator's own sign-in;
+// these are the opt-outs they honour. secretFill is the same for the
+// password field itself.
+export const noFill = {
+  autoComplete: "off",
+  "data-1p-ignore": "",
+  "data-lpignore": "true",
+  "data-bwignore": "",
+  "data-form-type": "other",
+} as const;
+export const secretFill = { ...noFill, autoComplete: "new-password" } as const;
+
 // bytesText is a size in bytes as "52 B" or "12.5 KiB".
 export function bytesText(n: number): string {
   if (n < 1024) return `${n} B`;
