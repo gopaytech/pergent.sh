@@ -842,6 +842,29 @@ func TestPublishGitHubTokenApproverUnavailable(t *testing.T) {
 	}
 }
 
+// With approve_with_review_app the approve side is an App, not a bot user's
+// token: an unavailable approver reads like the App's note.
+func TestPublishGitHubReviewAppApproverUnavailable(t *testing.T) {
+	env := newTestEnv(t)
+	gh := addGitHub(t, env, false)
+	inst := &env.Engine.Config.GitHub[len(env.Engine.Config.GitHub)-1]
+	inst.ApproveApp, inst.ApproveWithReviewApp = nil, true
+	if err := env.Engine.Config.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	head := sha('a')
+	id := ghReport(t, env, 3, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublishGitHub(gh, 3, head)
+
+	publish(t, env)
+
+	wantPublished(t, env, id)
+	run := onlyCheckRun(t, gh)
+	if out, _ := run["output"].(map[string]any); out["title"] != "No blocking issues; not approved: the pergent approve App isn't installed on this repository" {
+		t.Errorf("check run = %v", run)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Final review
 

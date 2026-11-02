@@ -69,7 +69,7 @@ func (c *connector) Connect(ctx context.Context, inst instances.Instance, s inst
 		return err
 	}
 	// A token approver tells the dashboard when its token is about to expire.
-	if a, ok := plat.Approver.(*githubforge.Approver); ok && inst.GitHub != nil && inst.GitHub.ApproveApp == nil && c.store != nil {
+	if a, ok := plat.Approver.(*githubforge.Approver); ok && inst.GitHub != nil && inst.GitHub.Approver() == config.ApproverToken && c.store != nil {
 		a.OnTokenExpiry(engine.TokenExpiryRecorder(c.store, inst.Name, c.log.With("instance", inst.Name)))
 	}
 	c.platforms.Set(inst.Name, plat)
@@ -225,18 +225,22 @@ func (c *connector) buildGitLab(ctx context.Context, inst *config.Instance, s in
 	}, nil
 }
 
-// buildGitHub builds the review App and the approve side (the approve App, or
-// a bot user's token) and looks up their bot users once: the review App's
-// comments and the approve side's reviews are found by them. A key, App or
+// buildGitHub builds the review App and the approve side (the review App
+// itself, a second App, or a bot user's token) and looks up their bot users
+// once: the review App's comments and the approve side's reviews are found by
+// them. A key, App or
 // token that doesn't work is an error naming the instance and what failed,
 // never the secret.
 func (c *connector) buildGitHub(ctx context.Context, inst *config.GitHubInstance, s instances.Secrets) (engine.Platform, error) {
-	approveKind, approveSecret := "approve token", s.ApproveToken
-	if inst.ApproveApp != nil {
-		approveKind, approveSecret = "approve App private key", s.ApproveAppKey
+	required := [][2]string{{"review App private key", s.ReviewAppKey}}
+	switch inst.Approver() {
+	case config.ApproverApp:
+		required = append(required, [2]string{"approve App private key", s.ApproveAppKey})
+	case config.ApproverToken:
+		required = append(required, [2]string{"approve token", s.ApproveToken})
 	}
-	if err := missing("github", inst.Name, [2]string{"review App private key", s.ReviewAppKey},
-		[2]string{approveKind, approveSecret}, [2]string{"webhook secret", s.WebhookSecret}); err != nil {
+	required = append(required, [2]string{"webhook secret", s.WebhookSecret})
+	if err := missing("github", inst.Name, required...); err != nil {
 		return engine.Platform{}, err
 	}
 	reviewApp, reviewSlug, reviewBot, err := connectApp(ctx, inst.APIURL, inst.ReviewApp.AppID, s.ReviewAppKey, c.hc)
@@ -247,14 +251,17 @@ func (c *connector) buildGitHub(ctx context.Context, inst *config.GitHubInstance
 	instRepos := c.githubRepos(inst.Name)
 
 	var approver *githubforge.Approver
-	if inst.ApproveApp != nil {
+	switch inst.Approver() {
+	case config.ApproverReviewApp:
+		approver = githubforge.NewAppApprover(reviewApp, reviewBot, reviewSlug, instRepos)
+	case config.ApproverApp:
 		approveApp, approveSlug, approveBot, err := connectApp(ctx, inst.APIURL, inst.ApproveApp.AppID, s.ApproveAppKey, c.hc)
 		if err != nil {
 			return engine.Platform{}, fmt.Errorf("github instance %q: the approve App (app_id %d) doesn't work: %w",
 				inst.Name, inst.ApproveApp.AppID, err)
 		}
 		approver = githubforge.NewAppApprover(approveApp, approveBot, approveSlug, instRepos)
-	} else {
+	default:
 		client := github.NewTokenClient(inst.APIURL, s.ApproveToken, c.hc)
 		user, err := client.CurrentUser(ctx)
 		if err != nil {

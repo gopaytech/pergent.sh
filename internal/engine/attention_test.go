@@ -151,6 +151,20 @@ func TestAttentionApproverUnreachableToken(t *testing.T) {
 	}
 }
 
+// An instance whose review App approves says "App", not "bot".
+func TestAttentionApproverUnreachableReviewApp(t *testing.T) {
+	env := newTestEnv(t)
+	addGitHub(t, env, false)
+	cfg := env.Engine.Config
+	cfg.GitHub[0].ApproveApp, cfg.GitHub[0].ApproveWithReviewApp = nil, true
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if got := env.Engine.approverUnreachableNote(ghInstance); got != wantAppUnreachable {
+		t.Errorf("note = %q, want %q", got, wantAppUnreachable)
+	}
+}
+
 func oomRun(t *testing.T, env *testEnv, iid int64) {
 	t.Helper()
 	id := env.Dispatched(iid, sha(byte('a'+iid)))

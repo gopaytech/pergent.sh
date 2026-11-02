@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/gopaytech/pergent.sh/internal/config"
 )
 
 // The kinds of setup problem recorded for the dashboard's "Needs attention"
@@ -63,9 +65,10 @@ func (e *Engine) dropAttention(ctx context.Context, instance, project string) {
 }
 
 // approverUnreachableNote words the approver_unreachable item for instance:
-// the App when the instance approves with one, the bot when it uses a token.
+// the App when the instance approves with one (a second App, or the review
+// App), the bot when it uses a token.
 func (e *Engine) approverUnreachableNote(instance string) string {
-	if inst, ok := e.registry().Get(instance); ok && inst.GitHub != nil && inst.GitHub.ApproveApp == nil {
+	if inst, ok := e.registry().Get(instance); ok && inst.GitHub != nil && inst.GitHub.Approver() == config.ApproverToken {
 		return approveBotNote
 	}
 	return approveAppNote
