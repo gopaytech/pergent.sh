@@ -1,6 +1,44 @@
-# pergent.sh
+<div align="center">
+  <img src="docs/assets/logo.png" alt="pergent" width="110">
+
+  <h1>pergent.sh</h1>
+
+  <p><strong>Run pergent code reviews on GitLab merge requests and GitHub pull requests, one Kubernetes Job per review.</strong></p>
+
+  <p>
+    <a href="go.mod"><img alt="Go" src="https://img.shields.io/github/go-mod/go-version/gopaytech/pergent.sh"></a>
+    <a href="https://github.com/gopaytech/pergent.sh/pkgs/container/pergent.sh"><img alt="Image" src="https://img.shields.io/badge/ghcr.io-pergent.sh-informational"></a>
+    <a href="charts/pergent-sh/README.md"><img alt="Helm chart" src="https://img.shields.io/badge/helm-pergent--sh-informational"></a>
+  </p>
+
+  <p>
+    <a href="#-install-with-helm">Install</a> ·
+    <a href="#-github">GitHub setup</a> ·
+    <a href="#-dashboard">Dashboard</a> ·
+    <a href="#-skills-and-instructions">Skills</a> ·
+    <a href="#-commands">Commands</a> ·
+    <a href="#-config-reference">Config reference</a>
+  </p>
+</div>
+
+---
 
 pergent.sh is a service that runs [pergent](https://github.com/gopaytech/pergent) code reviews on GitLab merge requests and GitHub pull requests. It runs inside your Kubernetes cluster and starts one Kubernetes Job per review.
+
+## ✨ Features
+
+- **A Job per review**: each review runs as its own Kubernetes Job in your cluster, started by a merge request or pull request webhook, so reviews run in parallel up to `jobs.max_running`.
+- **One comment, one status**: pergent.sh posts a single comment, updated in place on every push, and sets a status named `pergent`: a commit status on GitLab, a Check Run on GitHub.
+- **Approval with a human guard**: a clean review that actually reviewed something and skipped no file outside the allowed rules is approved by the approver, and pergent.sh logs a warning for every project where one approval alone could merge.
+- **GitLab and GitHub**: GitLab (gitlab.com or self-managed) and GitHub.com; on GitHub one App is enough to review and approve.
+- **Dashboard**: every review, finding, file and log in the browser, with teams and roles for who sees what, an audit log, and instances, secrets and the LLM managed without editing the config file.
+- **Skill library**: skills written in the dashboard or installed from a git repository, plus repository skills and instructions read from the target branch.
+- **Comment commands**: `@<bot> review`, `@<bot> review failed` and `@<bot> dismiss <id> <reason>` in a comment, with matching buttons on the dashboard's review page.
+- **Readiness scan**: advice, per repository, on what is missing for a review to do well, without changing anything and without the LLM.
+- **Job isolation**: a Job holds only a read-only clone token, the LLM key and a one-time result token, never the platform token, and runs under a NetworkPolicy.
+- **A small Helm chart**: it creates a Service and no Ingress, so you route to it with whatever your cluster uses; PostgreSQL stays outside the chart.
+
+## 🔁 How it works
 
 When someone opens or pushes to a merge request (or pull request) in a repository you listed in the config:
 
@@ -9,32 +47,32 @@ When someone opens or pushes to a merge request (or pull request) in a repositor
 3. pergent.sh posts one comment on the merge request, updated in place on every push, and sets a status named `pergent`: a commit status on GitLab, a Check Run on GitHub.
 4. If the review found no blocking issue (one that people dismissed doesn't count), actually reviewed something and skipped no changed file except under the rules that leave it reviewed (outside a skill's scope, excluded by a skill, no content changes), the approver approves it: a second GitLab user on GitLab, on GitHub the review App itself (one App is enough), a second GitHub App or a bot user. A draft is reviewed the same way but is approved only once it is marked ready.
 
-People can also act on a review where they already are, in a comment on the merge request (`@<bot> review`, `@<bot> review failed`, `@<bot> dismiss <id> <reason>`) or with the buttons on the dashboard's review page: run the review again, run only the skills that failed, and set aside a finding that isn't a real problem. See [Commands](#commands).
+People can also act on a review where they already are, in a comment on the merge request (`@<bot> review`, `@<bot> review failed`, `@<bot> dismiss <id> <reason>`) or with the buttons on the dashboard's review page: run the review again, run only the skills that failed, and set aside a finding that isn't a real problem. See [Commands](#-commands).
 
 Everything that can comment, set statuses or approve stays inside pergent.sh. A Job only ever holds a read-only clone token, the LLM key and a one-time token to hand in its result.
 
-This release covers GitLab (gitlab.com or any self-managed instance) and GitHub.com; see [GitHub](#github) for the GitHub setup. An optional web [dashboard](#dashboard) shows every review, lets admins manage teams, write and install skills, switch repositories on and change their settings, and lets the operator add GitLab and GitHub instances, their secrets and the LLM without editing the config file. An instance added in the dashboard never blocks startup: when pergent.sh can't reach it, it starts anyway and the dashboard shows what to fix. Comment [commands](#commands) and the dashboard's buttons re-run a review or dismiss a finding; they never change settings, answer questions or run code (see [Limits](#limits)).
+This release covers GitLab (gitlab.com or any self-managed instance) and GitHub.com; see [GitHub](#-github) for the GitHub setup. An optional web [dashboard](#-dashboard) shows every review, lets admins manage teams, write and install skills, switch repositories on and change their settings, and lets the operator add GitLab and GitHub instances, their secrets and the LLM without editing the config file. An instance added in the dashboard never blocks startup: when pergent.sh can't reach it, it starts anyway and the dashboard shows what to fix. Comment [commands](#-commands) and the dashboard's buttons re-run a review or dismiss a finding; they never change settings, answer questions or run code (see [Limits](#-limits)).
 
 In this README a "merge request" is also a GitHub pull request, and the "review bot" and "approve bot" are the GitHub review App and approver, unless a section says otherwise.
 
-## Requirements
+## 📋 Requirements
 
 - Kubernetes, and permission to create a Role in the namespace where the Jobs run.
 - PostgreSQL 13 or newer, reachable from the pergent.sh pod. pergent.sh creates and migrates its own tables at startup.
 - Nodes that can pull `ghcr.io/gopaytech/pergent.sh` (the service) and `ghcr.io/gopaytech/pergent` (the Jobs). Both images are built for `linux/amd64` and `linux/arm64` (pergent.sh from v0.4.0, pergent from v0.1.2), so the nodes can be either; each node pulls the one for its own platform.
 - On each GitLab instance you use, two users:
-  - A **review bot** with the **Maintainer** role on every reviewed project, and an access token with the `api` scope. It creates the project webhook and the read-only deploy token, posts the comment and sets the commit status, and, for [commands](#commands), reacts to and answers comments and looks up the role of whoever wrote one.
+  - A **review bot** with the **Maintainer** role on every reviewed project, and an access token with the `api` scope. It creates the project webhook and the read-only deploy token, posts the comment and sets the commit status, and, for [commands](#-commands), reacts to and answers comments and looks up the role of whoever wrote one.
   - An **approve bot** that is an eligible approver of every reviewed project, with an access token with the `api` scope. It must be a different user from the review bot: pergent.sh doesn't start when both tokens belong to the same user. It only approves, and removes its approval when the merge request gets a new commit or a new target branch. If the project requires specific approvers or forbids approval by certain users, make sure this bot qualifies.
 
     > **Warning:** if a project needs only one approval and the approve bot is an eligible approver, the bot's approval alone unlocks the merge: a merge request can then be merged on a model's review without any human approving it. Give every reviewed project an approval rule that requires a human approval (for example, one approval from a group the approve bot is not in), so the bot's approval is never enough on its own.
 
     pergent.sh checks this at startup and every hour: for each reviewed project it reads the approval rules that apply to the default branch (`GET /projects/:id/approval_rules`; with none, the project's `approvals_before_merge`) and, when the most any of them requires is one or none, logs a warning naming the project: "one approval is enough to merge here, so pergent's approval alone can unlock it; add a rule requiring a human approval". It doesn't know whether the approve bot is in a rule's approver list, so it warns whenever the count allows it. If the rules can't be read, that is logged once at info level; the check never stops a review.
-- For GitHub, one GitHub App, which reviews and approves (a second App, or a bot user, can approve instead); see [GitHub](#github).
-- An API key for an LLM provider that opencode supports. It can be entered in the [dashboard](#dashboard) or kept in the Secret.
+- For GitHub, one GitHub App, which reviews and approves (a second App, or a bot user, can approve instead); see [GitHub](#-github).
+- An API key for an LLM provider that opencode supports. It can be entered in the [dashboard](#-dashboard) or kept in the Secret.
 - A way for GitLab or GitHub to reach pergent.sh over HTTPS. The chart creates only a Service; you route to it (Gateway API, your own Ingress, a load balancer). See [Exposing pergent.sh](#exposing-pergentsh).
-- For the optional [dashboard](#dashboard): an HTTPS host for it. To let people sign in with GitLab or GitHub, also a GitLab OAuth application per GitLab instance or user authorization on the GitHub review App. The operator signs in with a password and needs neither.
+- For the optional [dashboard](#-dashboard): an HTTPS host for it. To let people sign in with GitLab or GitHub, also a GitLab OAuth application per GitLab instance or user authorization on the GitHub review App. The operator signs in with a password and needs neither.
 
-## Install with Helm
+## 📦 Install with Helm
 
 The chart is in `charts/pergent-sh`. Postgres is not part of it. Every value is listed in the [chart reference](charts/pergent-sh/README.md).
 
@@ -78,7 +116,7 @@ The chart is in `charts/pergent-sh`. Postgres is not part of it. Every value is 
        namespace: pergent
    ```
 
-   The skill library is not a value: skills are written and installed in the dashboard, so a review has none until an admin adds some ([Skills and instructions](#skills-and-instructions)).
+   The skill library is not a value: skills are written and installed in the dashboard, so a review has none until an admin adds some ([Skills and instructions](#-skills-and-instructions)).
 
 4. Install:
 
@@ -92,7 +130,7 @@ The chart is in `charts/pergent-sh`. Postgres is not part of it. Every value is 
 
 5. Set up in the browser. With `dashboard.url` set and no instance in the config, pergent.sh starts and waits for one. Take the generated admin password from the log ([First sign-in](#first-sign-in)), sign in as `admin` and change it, then add a GitLab or GitHub instance under **Integrations** ([Instances and secrets in the dashboard](#instances-and-secrets-in-the-dashboard)), set the LLM under **Settings**, and switch repositories on. People who sign in with GitLab or GitHub wait until an admin puts them on a [team](#teams). To set the first password from a Secret instead of the log, see [First sign-in](#first-sign-in).
 
-On startup pergent.sh creates the project webhook and a read-only deploy token on every GitLab project that is switched on. You do not create either by hand. The webhook sends merge request events and note (comment) events; the note events are what [commands](#commands) are read from. A hook created by an earlier version is updated to send them too, at the next reconcile (startup, then every hour). On GitHub there is nothing per repository to create: the review App's webhook covers every repository it is installed on, provided the App subscribes to the events listed under [Create the review App](#1-create-the-review-app).
+On startup pergent.sh creates the project webhook and a read-only deploy token on every GitLab project that is switched on. You do not create either by hand. The webhook sends merge request events and note (comment) events; the note events are what [commands](#-commands) are read from. A hook created by an earlier version is updated to send them too, at the next reconcile (startup, then every hour). On GitHub there is nothing per repository to create: the review App's webhook covers every repository it is installed on, provided the App subscribes to the events listed under [Create the review App](#1-create-the-review-app).
 
 What the chart creates:
 
@@ -120,7 +158,7 @@ The chart creates a Service (`pergent-sh.pergent-sh.svc:8080` for the install ab
 | `/runs/` | the review Jobs (result callback) | `public_url`'s host, or keep it in-cluster with `callback_url`. |
 | `/skill-fetches/` | the skill fetch Jobs (result callback, only with the dashboard on) | `public_url`'s host, or keep it in-cluster with `callback_url`, as for `/runs/`. |
 | `/readiness-scans/` | the readiness scan Jobs (result callback, only with the dashboard on) | `public_url`'s host, or keep it in-cluster with `callback_url`, as for `/runs/`. |
-| `/`, `/api/`, `/auth/` | people, in the [dashboard](#dashboard) | `dashboard.url`'s host, over https. It can be internal-only. |
+| `/`, `/api/`, `/auth/` | people, in the [dashboard](#-dashboard) | `dashboard.url`'s host, over https. It can be internal-only. |
 | `/healthz` | probes | nowhere; the kubelet calls the pod directly. |
 
 Expose only `/webhooks/`, `/runs/`, `/skill-fetches/` and `/readiness-scans/` on the public host, so the dashboard and its sign-in stay off the internet. Whatever sits in front must set `X-Forwarded-For` (see [Password sign-in limits](#password-sign-in-limits)).
@@ -158,7 +196,7 @@ config:
     api_key_env: OPENCODE_API_KEY
 ```
 
-For GitHub, put the Apps' private keys (the whole `.pem` file of each) and the review App's webhook secret in the Secret and use `github:` instead of `gitlab:`; see [GitHub](#github). Without `dashboard.url`, pergent.sh needs at least one instance and the `llm:` block in the config file, and instances can only come from there.
+For GitHub, put the Apps' private keys (the whole `.pem` file of each) and the review App's webhook secret in the Secret and use `github:` instead of `gitlab:`; see [GitHub](#-github). Without `dashboard.url`, pergent.sh needs at least one instance and the `llm:` block in the config file, and instances can only come from there.
 
 ### Environment variables
 
@@ -172,10 +210,16 @@ For GitHub, put the Apps' private keys (the whole `.pem` file of each) and the r
 | each `github[].review_app.private_key_env` | When the instance is in the config file: the review App's private key, the whole PEM file GitHub gave you (PKCS#1 `RSA PRIVATE KEY` or PKCS#8 `PRIVATE KEY`). Required, and checked at startup. Never logged. |
 | each `github[].approve_app.private_key_env` or `github[].approve_token_env` | When the instance is in the config file and doesn't set `approve_with_review_app`: the approve App's private key, or the approve bot user's fine-grained personal access token. Required, and checked at startup. With `approve_with_review_app: true` there is none: the review App's key approves. |
 | each `github[].webhook_secret_env` | When the instance is in the config file: the review App's webhook secret. Required. |
-| each `gitlab[].oauth_client_id_env`, `oauth_client_secret_env` | When the instance is in the config file: its OAuth application, for signing in to the [dashboard](#dashboard). Both or neither; checked at startup when `dashboard.url` is set. |
-| each `github[].oauth_client_id_env`, `oauth_client_secret_env` | When the instance is in the config file: the review App's client ID and a client secret, for signing in to the [dashboard](#dashboard). Both or neither; checked at startup when `dashboard.url` is set. |
+| each `gitlab[].oauth_client_id_env`, `oauth_client_secret_env` | When the instance is in the config file: its OAuth application, for signing in to the [dashboard](#-dashboard). Both or neither; checked at startup when `dashboard.url` is set. |
+| each `github[].oauth_client_id_env`, `oauth_client_secret_env` | When the instance is in the config file: the review App's client ID and a client secret, for signing in to the [dashboard](#-dashboard). Both or neither; checked at startup when `dashboard.url` is set. |
 
 pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is handy for local development.
+
+## ⬆️ Upgrading
+
+### Upgrading to 0.5.1
+
+0.5.1 changes only the default `jobs.image`, to `ghcr.io/gopaytech/pergent:v0.1.3`. That image ships ripgrep, so the model's file search (glob and grep) works in review Jobs; with v0.1.2 every search failed and reviews fell back to reading files one by one. A config that sets its own `jobs.image` keeps using the image it names: point it at v0.1.3 or newer. There is no migration.
 
 ### Upgrading to 0.5.0
 
@@ -208,20 +252,20 @@ To upgrade:
 2. Remove `skills:` from your values and `skills_dir` from your config, and upgrade.
 3. Sign in as an admin. Create the skills again under **Skills → New skill**, or install them from git ([Installing from git](#installing-from-git)), tick **Add to default skills** for the ones every repository should run, and set a repository's own list under its **Settings** where it had one. The overview's setup checklist shows what is left.
 
-## GitLab project settings
+## 🦊 GitLab project settings
 
 - **Don't treat the `pergent` commit status as a gate.** GitLab lets anyone with the Developer role set a commit status of any name on a commit of the project, including the head of their own merge request, so a `pergent` status of `success` proves nothing about who set it. Don't rely on "Pipelines must succeed" (or any other check of commit statuses) to enforce the review. The approval is the gate: it comes from the approve bot, a separate user whose token only pergent.sh holds.
-- **Require approval through approval rules.** Give the default branch an approval rule that needs a human approval as well as the bot's (for example two approvals, or one from a group the approve bot is not in); see the warning under [Requirements](#requirements). pergent.sh logs a warning every hour for a project one approval can merge.
+- **Require approval through approval rules.** Give the default branch an approval rule that needs a human approval as well as the bot's (for example two approvals, or one from a group the approve bot is not in); see the warning under [Requirements](#-requirements). pergent.sh logs a warning every hour for a project one approval can merge.
 - **Turn on "Remove all approvals when commits are added to the source branch"** (Settings > Merge requests > Approval settings). It is GitLab's counterpart of GitHub's "Dismiss stale pull request approvals": pergent.sh removes its approval on every push, but this makes GitLab do it too, as a second layer for a webhook pergent.sh missed.
 - **Turn on "Prevent editing approval rules in merge requests"** (same place). Otherwise the author of a merge request can lower its required approvals to one, and the approve bot's approval alone unlocks the merge.
 
 Approval rules and approval settings are GitLab Premium and Ultimate features. On GitLab Free, approvals are optional and don't block a merge, so pergent.sh's approval is advice only.
 
-## GitHub
+## 🐙 GitHub
 
 pergent.sh reaches GitHub.com through a GitHub App that you create (pergent.sh is self-hosted, so there is no shared App). **One App is enough and is the simplest setup:**
 
-- the **review App** receives the `pull_request` and `issue_comment` webhooks, reads the pull request and the repository, posts the comment, sets the `pergent` Check Run, reacts to and answers [command](#commands) comments, looks up a commenter's repository permission and mints each Job's clone token. It can also approve, and dismiss its own approvals when they go stale (`approve_with_review_app`, the default in the dashboard). For that it needs **Pull requests: Read and write**, and the pull request shows the same bot commenting and approving.
+- the **review App** receives the `pull_request` and `issue_comment` webhooks, reads the pull request and the repository, posts the comment, sets the `pergent` Check Run, reacts to and answers [command](#-commands) comments, looks up a commenter's repository permission and mints each Job's clone token. It can also approve, and dismiss its own approvals when they go stale (`approve_with_review_app`, the default in the dashboard). For that it needs **Pull requests: Read and write**, and the pull request shows the same bot commenting and approving.
 
 Who approves is a choice of three:
 
@@ -266,7 +310,7 @@ Note its App ID and generate a private key.
 
 ### 3. Install the App or Apps
 
-Install the App (both Apps, with a separate approve App) on the organization, on all repositories or on the ones you will review. Installing an App switches nothing on: only the repositories listed in the config or switched on in the [dashboard](#dashboard) are reviewed. One `github:` instance covers every organization the Apps are installed on; pergent.sh looks up the installation per repository.
+Install the App (both Apps, with a separate approve App) on the organization, on all repositories or on the ones you will review. Installing an App switches nothing on: only the repositories listed in the config or switched on in the [dashboard](#-dashboard) are reviewed. One `github:` instance covers every organization the Apps are installed on; pergent.sh looks up the installation per repository.
 
 ### 4. Add the instance
 
@@ -317,7 +361,7 @@ The status of a review is a Check Run named `pergent` on the reviewed head commi
 - `in_progress` ("pergent review running") when the Job starts;
 - then `completed` with the conclusion `success`, `failure`, `neutral` (a failed review with `failure_status: neutral`) or `cancelled` (the run was superseded: a newer push or a new target branch replaced it, or the pull request was closed). A review that couldn't be posted after 10 attempts ends as `failure`, titled "pergent couldn't post its review".
 
-Its title is the status description from [How approval works](#how-approval-works) and its summary points to the pull request comment; findings are only in the comment. Every change is a new Check Run with the same name, and GitHub shows the latest. To make merging wait for the review, add `pergent` as a required status check in the branch's protection rule or ruleset, and **pin it to the review App**: otherwise GitHub accepts a check named `pergent` from any source, and a workflow or another App could satisfy it. In a branch protection rule, set the check's source to the review App instead of "Any source"; in a ruleset, choose the review App as the check's integration. See [Branch protection](#branch-protection).
+Its title is the status description from [How approval works](#-how-approval-works) and its summary points to the pull request comment; findings are only in the comment. Every change is a new Check Run with the same name, and GitHub shows the latest. To make merging wait for the review, add `pergent` as a required status check in the branch's protection rule or ruleset, and **pin it to the review App**: otherwise GitHub accepts a check named `pergent` from any source, and a workflow or another App could satisfy it. In a branch protection rule, set the check's source to the review App instead of "Any source"; in a ruleset, choose the review App as the check's integration. See [Branch protection](#branch-protection).
 
 ### Branch protection
 
@@ -365,7 +409,7 @@ A GitHub App can have several private keys at once:
 
 Installation tokens minted with the old key expire within an hour.
 
-## Dashboard
+## 📊 Dashboard
 
 The dashboard is a web app built into pergent.sh. It is off until `dashboard.url` is set. It has two kinds of account:
 
@@ -388,7 +432,7 @@ With the dashboard on, every review run, its findings, its files and its log are
    Routing all of `/` there is fine: webhooks and results on that host still need a valid signature or result token, and `/healthz` only answers `ok`. Without `dashboard.url` pergent.sh doesn't serve the dashboard's routes at all.
 3. [Sign in](#first-sign-in) as `admin`, add your instances under **Integrations** ([Instances and secrets in the dashboard](#instances-and-secrets-in-the-dashboard)), and set up sign-in with GitLab or GitHub on each instance people should use: [a GitLab OAuth application](#sign-in-with-gitlab) or [user authorization on the GitHub review App](#sign-in-with-github).
 
-With `dashboard.url` set, pergent.sh starts with no instance at all and waits for one to be added in the dashboard. For an instance in the config file, `oauth_client_id_env` and `oauth_client_secret_env` (see [Config reference](#config-reference)) turn on its sign-in; pergent.sh doesn't start when an instance names one of them and that variable is unset or empty. The error names the instance and the variable.
+With `dashboard.url` set, pergent.sh starts with no instance at all and waits for one to be added in the dashboard. For an instance in the config file, `oauth_client_id_env` and `oauth_client_secret_env` (see [Config reference](#-config-reference)) turn on its sign-in; pergent.sh doesn't start when an instance names one of them and that variable is unset or empty. The error names the instance and the variable.
 
 ### First sign-in
 
@@ -425,7 +469,7 @@ A password admin who lost the password asks pergent.sh for a new one from inside
 kubectl -n pergent-sh exec deploy/pergent-sh -- /pergent-sh admin reset-password admin
 ```
 
-(`deploy/pergent-sh` is the Deployment of a release called `pergent-sh`, as in [Install with Helm](#install-with-helm). The chart names the Deployment `<release>-pergent-sh`, or just `<release>` when the release name contains `pergent-sh`; `kubectl -n pergent-sh get deploy` shows it.) The command needs only `DATABASE_URL`, which the pod's environment has. It prints `new password for admin: ...` on stdout (never in the JSON log), clears the account's lock and ends its sessions, and the account must change that password at its next sign-in. The reset is recorded in the audit log with the actor `cli`.
+(`deploy/pergent-sh` is the Deployment of a release called `pergent-sh`, as in [Install with Helm](#-install-with-helm). The chart names the Deployment `<release>-pergent-sh`, or just `<release>` when the release name contains `pergent-sh`; `kubectl -n pergent-sh get deploy` shows it.) The command needs only `DATABASE_URL`, which the pod's environment has. It prints `new password for admin: ...` on stdout (never in the JSON log), clears the account's lock and ends its sessions, and the account must change that password at its next sign-in. The reset is recorded in the audit log with the actor `cli`.
 
 ### Password sign-in limits
 
@@ -465,7 +509,7 @@ Everything a platform account may see or do comes from the teams it is on, under
   | Role | Can |
   | --- | --- |
   | `viewer` | Read the covered repositories: reviews, runs, findings, files, logs and settings. Everyone with a team also reads the skill library. |
-  | `maintainer` | Also change the settings of the covered repositories (approve clean reviews, review drafts, failure status, the skills a repository runs and the repository skills it turns on, Job timeout and memory; not the re-run caps), and reset them to the defaults (the caps stay as they are). Press the review page's buttons: re-run, dismiss and restore ([Commands](#commands)). Not switch repositories on or off, and not change teams. |
+  | `maintainer` | Also change the settings of the covered repositories (approve clean reviews, review drafts, failure status, the skills a repository runs and the repository skills it turns on, Job timeout and memory; not the re-run caps), and reset them to the defaults (the caps stay as they are). Press the review page's buttons: re-run, dismiss and restore ([Commands](#-commands)). Not switch repositories on or off, and not change teams. |
   | `admin` | Also change the re-run caps of the covered repositories, switch repositories on and off (**Add repository**), change the defaults on **Settings** (the caps and the default skill list among them), write, install, update, copy and delete the skills of the library, manage **Users** and **Teams**, and read the **Audit log**. An admin team covers every repository switched on for the instance its members signed in with that they can see on their platform. |
 
   Only admins manage teams: creating them, their members, roles and repositories. Platform admins can add people to admin teams and remove them.
@@ -487,15 +531,15 @@ Everything a platform account may see or do comes from the teams it is on, under
 **Everyone with a team** sees, for the repositories they can see:
 
 - **Overview:** the number of reviews, approvals, blocking reviews and failed reviews over the last 7, 30 or 90 days, the most recent reviews, and "Needs attention". Admins also see a setup checklist (the model and its key, a connected instance, a skill in the library, a repository switched on); each item links to its page, ticks when done, and the list goes away when all four are done.
-- **Reviews:** filtered by repository, result and time. Each merge request has a page with every run (commit, what started it, result, duration) and, for a run, the status set on the platform, whether it was approved and why not, the pergent version, model, tokens, each skill's verdict, findings (with the ones people dismissed, who dismissed them and why), checks, files (reviewed, skipped with the rule, not reviewed) and the log. Each skill shows where it came from: `library v3` (the library version the review used), or `repo (.claude/skills)` for a skill read from the repository. A run skipped because the repository has no skills shows as **Not reviewed** (result `skipped`, with its own filter), not as superseded, and is not counted as a review or a failure. Maintainers and admins of the repository also get the buttons **Re-run review** and **Re-run failed only**, and **Dismiss** and **Restore** on findings ([Commands](#commands)).
+- **Reviews:** filtered by repository, result and time. Each merge request has a page with every run (commit, what started it, result, duration) and, for a run, the status set on the platform, whether it was approved and why not, the pergent version, model, tokens, each skill's verdict, findings (with the ones people dismissed, who dismissed them and why), checks, files (reviewed, skipped with the rule, not reviewed) and the log. Each skill shows where it came from: `library v3` (the library version the review used), or `repo (.claude/skills)` for a skill read from the repository. A run skipped because the repository has no skills shows as **Not reviewed** (result `skipped`, with its own filter), not as superseded, and is not counted as a review or a failure. Maintainers and admins of the repository also get the buttons **Re-run review** and **Re-run failed only**, and **Dismiss** and **Restore** on findings ([Commands](#-commands)).
 - **Repositories:** each with its last 7 days and health; its reviews, its readiness scan, its setup checks and its skills and instructions. The [Readiness](#readiness-scan) tab is the checklist of what the repository gives a review. Skills & instructions shows what a review of the default branch would get, read with the review bot or App and kept for 5 minutes: each skill with its library version or repository folder, a link to its file for a repository skill, and the problem a review would fail on. A repository's **Settings** choose between "Use the default skills (a, b)" and "Choose skills", with a running total against the 900 KiB a review takes, and list the skills found in `.agents/skills`, `.claude/skills` and `.github/skills` with switches, off at first (`.pergent/skills` is always on; only the `SKILL.md` text is used). **Add repository** warns when the default skill list is empty.
-- **Skills:** the skill library: each skill's name, version, where it came from (written in the dashboard, or the repository and branch or tag it was installed from), whether it is on the default list and when it changed, with its text in a plain-text box (never rendered as HTML or markdown) and its saved versions. A skill installed from a private repository is shown to everyone with a team, so installing is sharing; the repository's path is shown only to people who can see that repository, and others see `a private repository on <instance>`. Who saved each version is shown to admins only. See [Skills and instructions](#skills-and-instructions).
+- **Skills:** the skill library: each skill's name, version, where it came from (written in the dashboard, or the repository and branch or tag it was installed from), whether it is on the default list and when it changed, with its text in a plain-text box (never rendered as HTML or markdown) and its saved versions. A skill installed from a private repository is shown to everyone with a team, so installing is sharing; the repository's path is shown only to people who can see that repository, and others see `a private repository on <instance>`. Who saved each version is shown to admins only. See [Skills and instructions](#-skills-and-instructions).
 
 **Admins** also get:
 
 - the on/off switch of each repository and **Add repository**, which lists the repositories that both the admin (GitLab: Reporter or above as a member, a shared group's member included; GitHub: read access) and the review bot (GitLab: Maintainer) or review App (GitHub: installed) can reach, at most 500, with a search. A password admin has no platform account, so it sees what the review bot or App can reach;
 - each repository's **Settings**: approve clean reviews, the failure status, review drafts, the library skills to run, the Job's timeout (60 to 7200 seconds) and memory limit (from 256Mi, and not below `jobs.resources.requests.memory`, to 32Gi), and the re-run caps per merge request and per repository per day (1 to 1000; only an admin of the repository changes these two). Each shows "overridden here" or "default", and "Reset to defaults" clears every override (a maintainer's reset leaves the caps);
-- on **Skills**, the buttons **New skill**, **Install from git** and **Check for updates**, and per skill Edit (a written skill only), Copy and Delete ([Skills and instructions](#skills-and-instructions));
+- on **Skills**, the buttons **New skill**, **Install from git** and **Check for updates**, and per skill Edit (a written skill only), Copy and Delete ([Skills and instructions](#-skills-and-instructions));
 - **Users**, **Teams** and the **Audit log**;
 - **Integrations** (their own instance: connection, approver, each repository's setup and whether the approver reaches it, an approve token about to expire), read-only for platform admins, and **Settings**: the defaults a repository switched on in the dashboard gets (approve clean reviews, review drafts, failure status, Job timeout and memory, and the re-run caps per merge request and per repository; the config's repositories keep the config's own), and the LLM, which only password admins change.
 
@@ -519,7 +563,7 @@ Password admins add GitLab and GitHub instances, with their secrets, under **Adm
 
 ### Repositories in the config and in the dashboard
 
-- A repository listed in `repositories` is shown as **managed by config** and is read-only in the dashboard; a write to it gets 409. Every dashboard setting has a config key (`approve`, `failure_status`, `review_drafts`, `skills`, `repo_skills`, `job_timeout`, `job_memory`, `rerun_limit_per_mr`, `rerun_limit_per_repo`; see [Config reference](#config-reference)).
+- A repository listed in `repositories` is shown as **managed by config** and is read-only in the dashboard; a write to it gets 409. Every dashboard setting has a config key (`approve`, `failure_status`, `review_drafts`, `skills`, `repo_skills`, `job_timeout`, `job_memory`, `rerun_limit_per_mr`, `rerun_limit_per_repo`; see [Config reference](#-config-reference)).
 - A repository switched on in the dashboard is stored in Postgres. pergent.sh sets it up (webhook and deploy token on GitLab) the same way as a config repository, in a reconcile of that repository alone it starts at once (switches made within 10 seconds of each other are handled together, at the end of those 10 seconds); switching it off removes them the same way. The hourly reconcile still covers every repository. Users whose teams cover it (an admin team covers every repository of its instance) see a newly switched-on repository from their next request, once the platform has confirmed they can see it.
 - A repository can't be in both: when it is added to the config, the next reconcile deletes its dashboard record and the config's settings apply. Removing a repository from the config switches it off; it doesn't fall back to the dashboard. To hand a repository to the dashboard, remove it from the config, redeploy, then switch it on in the dashboard.
 
@@ -573,7 +617,7 @@ A review does better when the repository gives it something to work with. The **
 
 The three rows that **Administration: Read** unlocks on GitHub are **Approvals needed to merge**, **Default branch protected** and **Required checks before merge**. When the hourly check has raised "one approval is enough to merge" for the repository, the approvals row shows a Warning whatever the scan read, because the hourly check is newer.
 
-**What the Job reads.** A scan Job clones the default branch at the commit the pod resolved, with depth 1, over https only, with symbolic links not followed and hooks off, and runs `pergent-sh scan-repo` over it ([What a Job can and cannot see](#what-a-job-can-and-cannot-see)). It is told each library skill's `paths` and `exclude` globs, never a skill's text, and reads the repository's own skill folders from the clone. It posts counts, matches, the presence of the context files and at most 50 noise paths. File contents never leave the Job. The pod treats everything it posts as untrusted text: one line, at most 500 bytes, and a text that holds a secret pergent.sh holds is withheld, or the result refused.
+**What the Job reads.** A scan Job clones the default branch at the commit the pod resolved, with depth 1, over https only, with symbolic links not followed and hooks off, and runs `pergent-sh scan-repo` over it ([What a Job can and cannot see](#-what-a-job-can-and-cannot-see)). It is told each library skill's `paths` and `exclude` globs, never a skill's text, and reads the repository's own skill folders from the clone. It posts counts, matches, the presence of the context files and at most 50 noise paths. File contents never leave the Job. The pod treats everything it posts as untrusted text: one line, at most 500 bytes, and a text that holds a secret pergent.sh holds is withheld, or the result refused.
 
 **Limits of a scan.** These are fixed in this version and are not chart values:
 
@@ -626,7 +670,7 @@ Admins read the audit log under **Admin → Audit log**: who did what and when, 
   - the GitHub approve App isn't installed on the repository or lacks Pull requests: write (for the review App: it lacks that permission), or the approve bot user can't reach it;
   - reviews running out of memory (two or more in the last 7 days);
   - the GitHub approve bot's token expires within 14 days. This one concerns the whole instance and is shown to its admins and the password admins;
-  - a run failed because a skill it needs is missing (`skill "x" is not in the skill library`, or `skill "x" is turned on but not found in the repository`), or was skipped because the repository has no skills (`this repository has no skills`). Either goes when a later run of the repository starts a Job ([Skills and instructions](#skills-and-instructions));
+  - a run failed because a skill it needs is missing (`skill "x" is not in the skill library`, or `skill "x" is turned on but not found in the repository`), or was skipped because the repository has no skills (`this repository has no skills`). Either goes when a later run of the repository starts a Job ([Skills and instructions](#-skills-and-instructions));
   - the [readiness scan](#readiness-scan) found that no skill the repository uses matches its files (`no_skill_coverage`: `No skill this repository uses matches its files, so its reviews check nothing useful. The Readiness tab suggests skills that fit.`). It goes when a scan finds a match, or when the skills change and the last scan shows one;
   - skills plus instructions are over 900 KiB, so every review fails (`inputs_over_budget`: `Skills and instructions come to N KiB, over the 900 KiB a review can take, so every review fails. Use fewer skills or shorten the instructions.`). It goes when the size is back under, at a scan or when the repository's skills or the default list are saved. When a size isn't known (a skill with a problem, or one removed from the library) the item is left as it is;
   - the repository has no `AGENTS.md`, `CLAUDE.md` or README (`no_project_context`: `The repository has no AGENTS.md, CLAUDE.md or README, so reviews don't know what the project is. Add one.`). It goes when a scan finds one. A failed scan changes none of these 3 items;
@@ -638,57 +682,7 @@ Each signed-in platform user costs one platform API call per repository their te
 
 A sign-in, and each later access check, must finish within 30 seconds in all: the code exchange and reading the user, then the covered repositories, 8 at a time, each call with its own 10 second timeout. The repositories take about (number of repositories ÷ 8) × the platform's response time, so a user whose teams cover more than roughly 8 × 30 s ÷ that response time repositories can't be checked in time: about 900 at 250 ms a call, 2,400 at 100 ms, and half that on GitLab where most repositories need the second call. Past that, every sign-in of such a user fails with "Could not check which repositories you can see", and sessions already signed in see nothing once their last good check is 10 minutes old. The 30 seconds can't be configured: keep the repositories a team covers below that number (use several teams for different people), or split them across instances, and run pergent.sh close to GitLab or GitHub so each call is quick.
 
-## Config reference
-
-The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/pergent-sh/config.yaml`). Unknown keys are an error. It holds no secrets: tokens and keys are named by environment variable. Every problem found is reported at startup, and pergent.sh does not start with an invalid config, a missing secret, a database it cannot reach, or, for an instance in the config file, a GitLab token that does not work or a GitHub App key or approve token that does not work (instances added in the dashboard never stop startup). The error names the instance and what failed, never the key or token. Without `dashboard.url`, at least one `gitlab` or `github` instance and an `llm:` block are required; with it, both can be added in the [dashboard](#dashboard) instead. `dashboard.admins`, the old admin groups and teams, was removed: a config that still has it is refused at startup (`dashboard.admins was removed: admins are now teams in the dashboard (see the README, "Teams")`).
-
-| Field | Default | Description |
-| --- | --- | --- |
-| `listen` | `:8080` | Address of the HTTP server. |
-| `public_url` | required | HTTPS base URL where GitLab and GitHub reach pergent.sh, without a trailing slash. The GitLab webhook is created as `<public_url>/webhooks/gitlab/<instance name>`; the GitHub review App's webhook URL is `<public_url>/webhooks/github/<instance name>`. |
-| `callback_url` | `public_url` | Base URL where Jobs post their result (`<callback_url>/runs/<id>/result`). `http` or `https`, no trailing slash. Set it to the in-cluster Service to keep that traffic inside the cluster. |
-| `skills_dir` | removed | The skill library lives in the dashboard now. A config that still has it is refused at startup (`skills_dir was removed: skills live in the dashboard (see the README, "Skills and instructions")`). |
-| `gitlab[].name` | required | Instance name, `[a-z0-9-]+`, unique across `gitlab` and `github`. Part of the webhook URL. |
-| `gitlab[].url` | required | Base URL of the GitLab instance. It must be `https` (the bot tokens travel in a header), without a trailing slash. A redirect to another host is never followed. |
-| `gitlab[].review_token_env` | required | Name of the env var with the review bot token. |
-| `gitlab[].approve_token_env` | required | Name of the env var with the approve bot token. It must belong to a different user than the review bot token. |
-| `gitlab[].webhook_secret_env` | required | Name of the env var with the webhook secret. GitLab sends it as `X-Gitlab-Token`. |
-| `github[].name` | required | Instance name, `[a-z0-9-]+`, unique across `gitlab` and `github`. Part of the webhook URL. One instance is one pair of Apps and covers every organization they are installed on. |
-| `github[].api_url` | `https://api.github.com` | GitHub's REST API. Only GitHub.com is supported: another `https` URL (GitHub Enterprise Server) is accepted but untested. |
-| `github[].review_app.app_id` | required | The review App's numeric App ID. |
-| `github[].review_app.private_key_env` | required | Name of the env var with the review App's private key. |
-| `github[].approve_with_review_app` | one of `approve_with_review_app`, `approve_app` and `approve_token_env` | `true` to let the review App approve too, so one App is enough. The review App then needs the Pull requests: Read and write permission, and the pull request shows the same bot commenting and approving. No second key or token is read. |
-| `github[].approve_app.app_id`, `.private_key_env` | one of `approve_with_review_app`, `approve_app` and `approve_token_env` | A separate approve App: its App ID and the env var with its private key, so the identity that writes the review is never the one that approves it. Both must differ from `review_app`'s (to approve with the review App, set `approve_with_review_app: true`). |
-| `github[].approve_token_env` | one of `approve_with_review_app`, `approve_app` and `approve_token_env` | Name of the env var with the approve bot user's fine-grained personal access token, instead of an App. See [Approving as a bot user](#approving-as-a-bot-user). |
-| `github[].webhook_secret_env` | required | Name of the env var with the review App's webhook secret. GitHub signs each delivery with it (`X-Hub-Signature-256`). |
-| `gitlab[].oauth_client_id_env`, `gitlab[].oauth_client_secret_env` | none | Names of the env vars with the instance's OAuth application ID and secret, for [dashboard](#dashboard) sign-in. Both or neither; with neither, nobody signs in with this instance. |
-| `github[].oauth_client_id_env`, `github[].oauth_client_secret_env` | none | Names of the env vars with the review App's client ID and client secret, for [dashboard](#dashboard) sign-in. Both or neither. |
-| `dashboard.url` | none (dashboard off) | The dashboard's `https` address, a bare host without a port, path or trailing slash. Setting it turns the dashboard on, with password sign-in and the first password admin; instances and the LLM can then be added there. To let people sign in with GitLab or GitHub, an instance needs an OAuth client (`oauth_client_*_env` in the config, or entered in the dashboard). The sign-in callbacks are `<dashboard.url>/auth/<gitlab or github>/<instance name>/callback`. |
-| `dashboard.admin_password_env` | none | Name of the env var with the first password admin's password (at least 12 characters), for the account `admin` made on the first start with the dashboard on. Empty or unset: pergent.sh generates a password and logs it once. The chart fills the variable from `adminPassword.existingSecret`. Needs `dashboard.url` to have an effect. See [First sign-in](#first-sign-in). |
-| `repositories[].gitlab` | one of `gitlab` and `github` | Name of one of the `gitlab` instances. |
-| `repositories[].github` | one of `gitlab` and `github` | Name of one of the `github` instances. |
-| `repositories[].project` | required | Project path, such as `acme/widgets`; on GitHub exactly `owner/name`, matched case-insensitively. Each project appears once per instance. |
-| `repositories[].skills` | the default list | Names of library skills to run: a non-empty list, or leave it out for the default list (an empty list is refused). A name that is not in the library does not stop startup: it is listed under "Needs attention" and the repository's runs fail naming it until the skill exists. |
-| `repositories[].repo_skills` | none | Names of the skills found in the repository's `.agents/skills`, `.claude/skills` and `.github/skills` folders that run, besides the `.pergent/skills` ones, which always run. A turned-on name that is not found in the target branch fails the run (`skill "x" is turned on but not found in the repository`). The dashboard's switches on a repository's Settings are the same setting for a repository the dashboard manages. See [Skills and instructions](#skills-and-instructions). |
-| `repositories[].approve` | `true` | Approve clean reviews. With `false`, pergent.sh still reviews, comments and sets the status, but never approves, and withdraws any approval the approve bot already made in the repository. The dashboard's "Approve clean reviews" switch is the same setting for a repository the dashboard manages. See [Turning approval off](#turning-approval-off). |
-| `repositories[].review_drafts` | `true` | Review drafts. With `false`, a draft merge request (GitLab `draft`, or `work_in_progress` on older versions) or draft pull request is not reviewed: no run, comment, status or approval, until it is marked ready, which starts its review. Closing or merging is handled as before. The dashboard's "Review drafts" switch is the same setting for a repository the dashboard manages. With `true`, a draft is reviewed but approved only once it is marked ready. See [Pushes, edits and failures](#pushes-edits-and-failures). |
-| `repositories[].failure_status` | `failed` | Status used when a review could not be done: `failed` or `neutral`. GitLab has no neutral state, so `neutral` is set as `skipped`; a project can count skipped pipelines as successful through a GitLab setting. On GitHub it is the Check Run conclusion `failure` or `neutral`, and GitHub counts a `neutral` conclusion as passing for a required status check: with `neutral`, a failed review does not block the merge. `failed` is never counted as successful. Blocking findings are always `failed`. |
-| `repositories[].job_timeout` | `jobs.timeout` | The review time budget of this repository's Jobs, such as `20m`. Must be positive. |
-| `repositories[].job_memory` | `jobs.resources.limits.memory` | The memory limit of this repository's Jobs, such as `6Gi`. Only the memory limit changes; it must not be below `jobs.resources.requests.memory`. |
-| `repositories[].rerun_limit_per_mr` | 10 | How many times a merge request or pull request can be re-run by [comment or button](#commands) per UTC day, 1 to 1000. Pushes and opened requests always run and never count. |
-| `repositories[].rerun_limit_per_repo` | 50 | The same cap for the whole repository, 1 to 1000. |
-| `llm.provider` | required with an `llm:` block | opencode provider ID, such as `anthropic`. The whole `llm:` block is optional when `dashboard.url` is set (a password admin sets the LLM in the dashboard); a block that is present wins and makes the LLM read-only there, and any field set makes it present: it must then be complete (`provider`, `model` and the key variable). Without `dashboard.url` it is required. |
-| `llm.model` | required with an `llm:` block | Model name, such as `claude-sonnet-4`. |
-| `llm.base_url` | none | Custom API base URL for the provider. |
-| `llm.api_key_env` | `OPENCODE_API_KEY` | Name of the env var with the LLM key. |
-| `jobs.namespace` | required | Namespace the Jobs run in. |
-| `jobs.image` | `ghcr.io/gopaytech/pergent:v0.1.3` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
-| `jobs.max_running` | `5` | Most Jobs running at once. Further runs wait in the queue. At least 1. |
-| `jobs.timeout` | `10m` | pergent's own review budget per Job (`--timeout`). The Job's deadline adds 2 minutes to deliver and a clone allowance of at least 2 minutes. |
-| `jobs.concurrency` | `4` | pergent's `--concurrency`: opencode runs in flight inside one Job. At least 1. |
-| `jobs.resources` | requests 500m CPU, 1Gi memory; limits 2 CPU, 4Gi memory | Kubernetes `requests` and `limits` for both containers of a Job. If you set either `requests` or `limits`, the default is not used at all. |
-
-## Skills and instructions
+## 🧩 Skills and instructions
 
 A review runs a set of **skills**: each is a markdown text (with optional frontmatter) that tells the model what to look for. pergent.sh builds the set for every review from three sources:
 
@@ -759,7 +753,7 @@ There are two kinds of source:
 | Source | How it is read | What it needs |
 | --- | --- | --- |
 | **A repository on a connected instance** (added under **Integrations** or in the config file) | By the pergent.sh pod, through the platform's API, with the review bot or review App it already has. No Job runs and you enter no secret. | **GitLab:** the review bot is a member of the repository with **Reporter** or above. **GitHub:** the review App is installed on that repository (it has Contents: Read-only already). A repository the bot or App can't read, or a branch that doesn't exist, is answered `the review bot or App can't read this repository or ref`, because the platform says the same for both. |
-| **A public `https` URL** | By a short skill fetch Job, with no token of any kind (see [What a Job can and cannot see](#what-a-job-can-and-cannot-see)). | The URL's host is inside `jobEgress.cidrs`. The Job posts what it read to `<callback_url>/skill-fetches/<id>/result`, so `/skill-fetches/` must be reachable on `public_url`'s host (or through `callback_url`, in-cluster); see [Exposing pergent.sh](#exposing-pergentsh). The chart sets `PERGENT_SH_IMAGE` for the Job. Only public repositories work: a URL with a user name or password is refused. |
+| **A public `https` URL** | By a short skill fetch Job, with no token of any kind (see [What a Job can and cannot see](#-what-a-job-can-and-cannot-see)). | The URL's host is inside `jobEgress.cidrs`. The Job posts what it read to `<callback_url>/skill-fetches/<id>/result`, so `/skill-fetches/` must be reachable on `public_url`'s host (or through `callback_url`, in-cluster); see [Exposing pergent.sh](#exposing-pergentsh). The chart sets `PERGENT_SH_IMAGE` for the Job. Only public repositories work: a URL with a user name or password is refused. |
 
 - **A read is limited.** At most 200 skills and 4 MiB of text in one read (a smaller folder fixes it), 128 KiB per skill, and the pod runs 2 reads at once. A read lasts at most 2 minutes. For a URL, the **image pull and the Job's fixed limits count against those 2 minutes**: the clone container has 512Mi of memory and the Job 1Gi of scratch space. A slow image pull, a slow clone or a huge repository therefore ends as `reading the source took too long` (a read by the pod ends as `reading the repository took longer than 2 minutes`). Choose a smaller folder, or a tag with less history. The result of a read is kept for an hour for you to choose from.
 - **The ceiling.** A password admin installs from anything the review bot or App can reach. A platform admin installs from repositories of its own instance that its user can see there, checked with the platform now, and from public URLs; otherwise it gets 403 `you can install only from repositories of your own instance that you can see`. **Installing is sharing:** everyone with a team can read an installed skill, even one from a private repository. A private repository's path is shown only to people who can see it; others see `a private repository on <instance>`.
@@ -783,7 +777,7 @@ When a run ends up with no skill at all (the default list is empty and the repos
 
 Without the dashboard (`dashboard.url` unset) the library can't be managed, but reviews still read it and the default list from the database. A fresh install has an empty library, so its repositories review with repository skills only.
 
-## Commands
+## 💬 Commands
 
 A comment on a merge request (or pull request) can ask the review bot to run the review again or to set a finding aside, and the dashboard's review page has the same actions as buttons. That is all they do: no command changes a setting, answers a question or fixes code.
 
@@ -827,7 +821,7 @@ The role is read from the platform when the command is processed, for a comment,
 - `review` queues a run for the change's head and target branch as the platform reports them now (the same rules as a push; the newer run replaces the one that was published). `review failed` also queues one but reviews only the skills that failed: a skill whose verdict is `failed`, or that is clean yet left files unreviewed, after dismissals. It keeps the other skills' results and publishes one merged review. With nothing failed it replies `nothing failed` and does nothing.
 - `review failed` re-runs the whole review, and replies `the whole review failed, so all of it is re-run`, when there is no result per skill to build on: the earlier review was an error result, there is none for the current head and target branch, or it can't be read. It also reviews everything when the dispatcher, before it starts the Job, finds the earlier review can't be kept: it is of other commits, or a skill changed since: one was added, removed or renamed, a library skill it would keep has a new version (an edit, an install or an update; the run page's `library v3`), a skill moved between the library and a repository folder, or it names a skill twice. A re-run that could not be merged with the earlier results shows a note in the comment and is **never approved**.
 - A head that is already queued, running or waiting to be published is not queued twice: the command still gets 👍. The caps are checked first, though: at a cap, a re-run of such a head gets the cap refusal and 👎. A re-run of a draft is refused when the repository doesn't review drafts, and a command on a closed or merged change gets 👎 and no reply.
-- The new review is decided like any other (see [How approval works](#how-approval-works)). If it isn't approved, the bot's approval of that head is withdrawn.
+- The new review is decided like any other (see [How approval works](#-how-approval-works)). If it isn't approved, the bot's approval of that head is withdrawn.
 - While a re-run of a commit is queued or running, the review it replaces is set aside. A dismiss is resolved against the newest review still published. When there is none, a comment gets the reply `no finding <id> in the latest review` and a button the answer `there is no such finding in the latest review` (404). A dismissal or restore made meanwhile is stored, and applies when the re-run is published (a restore always acts, on the finding's fingerprint).
 
 ### Dismissing a finding
@@ -838,7 +832,7 @@ The role is read from the platform when the command is processed, for a comment,
 - **Restore** (a button on a dismissed finding) removes the dismissal and decides the review again. If that makes it not approved, the bot's approval is withdrawn; the withdrawal is retried until it succeeds, and for a merged change the record is just dropped.
 - A blocking dismissal of a merged or closed change is refused for everyone, password admins included: the button answers 409 `this change is merged` or `this change is closed` (and 502 when the platform can't say what state it is in). A comment on a change that isn't open gets 👎 and no reply, whatever the command.
 - A dismissal that already exists at the same or a higher severity is left as it is: the reply is `finding <id> is already dismissed`.
-- Dismissals are deleted when the repository is switched off ([Switching a repository off](#switching-a-repository-off)).
+- Dismissals are deleted when the repository is switched off ([Switching a repository off](#-switching-a-repository-off)).
 
 ### Reactions and replies
 
@@ -876,15 +870,15 @@ A reply never says more than the commenter could see on the platform, and never 
 
 ### Setup
 
-Commands need the platform to send comment events: GitLab note events (pergent.sh adds them to the hook it manages, see [Install with Helm](#install-with-helm)), and for GitHub the **Issue comment** event on the review App ([Create the review App](#1-create-the-review-app)). Without them no command is received. Repositories that aren't switched on ignore commands, as they ignore pushes. Each command and button is recorded in the [audit log](#audit-log) as `review_rerun`, `review_rerun_failed`, `finding_dismissed` or `finding_restored`; the actor of a comment is `username (platform instance)`.
+Commands need the platform to send comment events: GitLab note events (pergent.sh adds them to the hook it manages, see [Install with Helm](#-install-with-helm)), and for GitHub the **Issue comment** event on the review App ([Create the review App](#1-create-the-review-app)). Without them no command is received. Repositories that aren't switched on ignore commands, as they ignore pushes. Each command and button is recorded in the [audit log](#audit-log) as `review_rerun`, `review_rerun_failed`, `finding_dismissed` or `finding_restored`; the actor of a comment is `username (platform instance)`.
 
-## How approval works
+## ✅ How approval works
 
 pergent.sh decides from what `pergent agent` reports. The result is checked again before anything is published: it must parse and be for the same base and head commits as the run, or it is posted as a failure.
 
 | What happened | Comment | Commit status | Approved |
 | --- | --- | --- | --- |
-| Any skill has blocking issues that nobody dismissed (see [Commands](#commands)) | The review | `failed` ("Blocking issues found") | No |
+| Any skill has blocking issues that nobody dismissed (see [Commands](#-commands)) | The review | `failed` ("Blocking issues found") | No |
 | Any skill failed, has an unknown verdict, or is "clean" yet lists files it did not review | The review | `failure_status` ("Review failed for N of M skills") | No |
 | The Job died or sent nothing usable, the result is an error, has no skills, or has an unknown status | An error comment with the reason | `failure_status` | No |
 | The repository has no skill to review with (see [No skills, no review](#no-skills-no-review)) | None | None. The run is `skipped` and shown as "Not reviewed"; an earlier status of the same commit stays | **No**; the bot's approval of that commit is withdrawn |
@@ -892,7 +886,7 @@ pergent.sh decides from what `pergent agent` reports. The result is checked agai
 | Every skill is clean and at least one file was reviewed, but some changed file was skipped as `deleted`, `binary`, `vendored`, `lockfile`, `generated` or under a rule pergent.sh doesn't know | The review plus a note listing those files and the rules that skipped them | `success` ("No blocking issues; not approved: some changed files weren't reviewed") | **No**, a human needs to look |
 | Every skill is clean, at least one file was reviewed and no file was skipped under those rules, but approval is turned off for the repository (`approve: false`, or the dashboard's switch) | The review plus `**Not approved:** approval is turned off for this repository.` (this note replaces the draft and approve App notes below) | `success` ("No blocking issues; not approved: approval is turned off") | **No**, see [Turning approval off](#turning-approval-off) |
 | Every skill is clean, at least one file was reviewed and no file was skipped under those rules, but the merge request is a draft | The review plus a note that it will be approved when it's marked ready | `success` ("No blocking issues; not approved: draft") | **No**, until it is marked ready |
-| As above and not a draft, but on GitHub the approve App isn't installed on the repository or lacks Pull requests: write (or the approve bot user can't reach it) | The review plus `**Not approved:** the pergent approve App isn't installed on this repository or lacks Pull requests: write.` (or `... the pergent review App lacks Pull requests: write on this repository.`, or `... the pergent approve bot can't reach this repository.`) | `success` ("No blocking issues; not approved: ...") | **No**, see [GitHub](#github) |
+| As above and not a draft, but on GitHub the approve App isn't installed on the repository or lacks Pull requests: write (or the approve bot user can't reach it) | The review plus `**Not approved:** the pergent approve App isn't installed on this repository or lacks Pull requests: write.` (or `... the pergent review App lacks Pull requests: write on this repository.`, or `... the pergent approve bot can't reach this repository.`) | `success` ("No blocking issues; not approved: ...") | **No**, see [GitHub](#-github) |
 | Every skill is clean, at least one file was reviewed, no file was skipped under those rules, approval is on, and the merge request isn't a draft | The review | `success` ("No blocking issues") | Yes, see below |
 
 Those five are pergent's default skip rules, and a merge request can trigger them on its own: for example, by putting code under a `vendor/` directory, it would keep that code from the reviewer. A file skipped because it is outside a skill's `paths`, matches a skill's `exclude`, or has no content changes does not stop the approval; a file skipped under any other rule does, including a rule a newer pergent adds that pergent.sh doesn't know yet. The note lists at most 20 paths, each cut to 120 characters, in at most 4000 bytes; a path with a backtick, a line break or another control character is shown quoted and escaped, so a file name can't change the comment's markdown.
@@ -923,7 +917,7 @@ Turning it off also withdraws every approval the approve bot already holds in th
 
 ### Pushes, edits and failures
 
-- Only pushes, opening or reopening, changing the target branch, and a re-run asked for by a [comment or button](#commands) start a run. Editing the title, labels, description or assignees does not. Closing or merging supersedes the MR's runs. On GitHub these are the `pull_request` actions `opened`, `reopened`, `synchronize`, `edited` (only when `changes.base` is present: a retarget) and `closed`; every other action and event (including `ping`) is answered 200 and ignored; the `issue_comment` event is read for [commands](#commands) alone.
+- Only pushes, opening or reopening, changing the target branch, and a re-run asked for by a [comment or button](#-commands) start a run. Editing the title, labels, description or assignees does not. Closing or merging supersedes the MR's runs. On GitHub these are the `pull_request` actions `opened`, `reopened`, `synchronize`, `edited` (only when `changes.base` is present: a retarget) and `closed`; every other action and event (including `ping`) is answered 200 and ignored; the `issue_comment` event is read for [commands](#-commands) alone.
 - A repository with `review_drafts: false` doesn't review drafts. The webhook of a draft that would start a run (an open, reopen, push or retarget; GitLab `draft` or `work_in_progress`, GitHub `pull_request.draft`) is answered 200 and logged as `draft_skipped`, and nothing is queued; the merge request's runs still queued, running or not yet posted (of an older head or target) are superseded, and the dashboard shows them as "Not reviewed: the change is a draft and drafts are not reviewed here." If a run was queued before the merge request became a draft, or the setting changed, the dispatcher finds the draft and supersedes the run, with the same note in the dashboard, without starting a Job or posting a status or comment; a newer head of such a draft isn't queued either. Closing or merging still supersedes the runs, and an approval or review already made stays. Marking the draft ready starts its review: the head's review is decided again if there is one to decide (see the next item), otherwise the head is queued like a push.
 - With `review_drafts` on (the default), marking a draft ready starts no run when the head already has a review (GitLab: an `update` whose `changes.draft` goes to false; GitHub: `ready_for_review`). When the head's review is already posted, or is being posted, pergent.sh decides it again: the comment loses its draft note, and a clean review is approved. When the review is still running, it is published as for any other merge request that isn't a draft. When the head has no review at all, it is queued like a push. GitLab versions that report `work_in_progress` instead of `draft` are handled the same way. Marking a merge request as a draft again doesn't withdraw an approval it already has.
 - A run is one head reviewed against one target branch. Changing the target branch reviews the same head again against the new branch, supersedes the review against the old one and withdraws the bot's approval.
@@ -937,7 +931,7 @@ Turning it off also withdraws every approval the approve bot already holds in th
 - Publishing is retried with backoff. After 10 failed attempts the run becomes `publish_failed`: pergent.sh makes one last attempt to set the head's status to `failed` with the description "pergent couldn't post its review" (GitHub: the Check Run completed with `failure` and that title), so a required check isn't left running, and posts nothing more to the merge request; it is never approved, and the approve bot's approval of that head, if an earlier review of it gave one, is withdrawn (recorded with the give-up itself, tried at once, and tried again by the approval sweep until it works). The failure itself is only in the logs.
 - The comment pergent renders is held to 990,000 bytes on GitLab and 60,000 on GitHub, which refuses a comment over 65,536 characters; the rest of the limit is room for the note pergent.sh adds (the list of skipped files is at most 20 paths and 4000 bytes).
 
-## What a Job can and cannot see
+## 🔒 What a Job can and cannot see
 
 A Job has two containers, started in order. Both run the pinned pergent image and have `allowPrivilegeEscalation: false` and all capabilities dropped. The pod never mounts a Kubernetes service account token.
 
@@ -960,13 +954,13 @@ Each Job's Secret and inputs ConfigMap are owned by the Job, so deleting the Job
 
 **A readiness scan Job** reads one repository's default branch for the [readiness scan](#readiness-scan). It is named `pergent-scan-<12hex>`, runs in the Jobs namespace as user 65532 with a read-only root filesystem and no service account token, and carries `app.kubernetes.io/managed-by: pergent-sh`, so the NetworkPolicy above applies to it. It has a 5 minute deadline, a 2Gi `emptyDir` for the clone, and asks for 100m CPU and 128Mi with a 512Mi memory limit. Its `clone` container (the `jobs.image`) gets only the read-only clone token, as a review's does (the GitLab deploy token, or a GitHub installation token for this one repository with `contents: read`), and fetches the one commit at depth 1 over https only, with hooks off. Its `scan` container (pergent.sh's own image, `PERGENT_SH_IMAGE`) gets only its one-time result token, as an environment variable, and its input as a read-only file: the library skills' names and `paths` and `exclude` globs, never their text. It follows no symbolic link and posts to `<callback_url>/readiness-scans/<id>/result`. The Job has **no LLM key and no token that can write**, and the clone never sees the result token.
 
-## Fork merge requests
+## 🍴 Fork merge requests
 
 The checkout first tries to fetch the base and head commits by SHA. When the server refuses that (this is common for merge requests from forks), it fetches `refs/merge-requests/<iid>/head` (GitHub: `refs/pull/<number>/head`) instead, then deepens the target branch (starting at 50 commits and doubling, up to 3200) until the merge base is there. If the merge base is still missing at that depth, the checkout fails and the merge request gets an error comment.
 
-## Switching a repository off
+## 📴 Switching a repository off
 
-A repository is on when it is listed in the config or switched on in the [dashboard](#dashboard). To switch a config repository off, remove it from `repositories` and redeploy; a dashboard repository is switched off with its switch. On the next reconcile (at startup and then every hour) pergent.sh deletes its webhook and revokes its deploy token. Runs still queued for it are dropped when they come up for dispatch; a review that was already running is still posted, but never approved, as with approval turned off. Its dismissals and the comment commands waiting for it are deleted with its record, and commands written there afterwards are ignored.
+A repository is on when it is listed in the config or switched on in the [dashboard](#-dashboard). To switch a config repository off, remove it from `repositories` and redeploy; a dashboard repository is switched off with its switch. On the next reconcile (at startup and then every hour) pergent.sh deletes its webhook and revokes its deploy token. Runs still queued for it are dropped when they come up for dispatch; a review that was already running is still posted, but never approved, as with approval turned off. Its dismissals and the comment commands waiting for it are deleted with its record, and commands written there afterwards are ignored.
 
 A GitHub repository has nothing to delete: removing it from the config deletes only pergent.sh's own record of it. Installing an App on a repository never switches it on; only the config list or the dashboard does.
 
@@ -974,24 +968,24 @@ If you remove a whole GitLab instance from the config, pergent.sh can no longer 
 
 Deploy tokens are created per project with the name `pergent-sh`, valid for 30 days, and replaced when fewer than 7 days remain, or at once when the stored token can't be decrypted because `PERGENT_SH_SECRET_KEY` changed.
 
-## HTTP routes
+## 🌐 HTTP routes
 
 | Route | Used by |
 | --- | --- |
 | `POST /webhooks/gitlab/{instance}` | GitLab merge request (`Merge Request Hook`) and note (`Note Hook`) webhooks; any other event is answered 200 and ignored. The `X-Gitlab-Token` header is compared in constant time with the instance's secret; a mismatch gets 401 and is otherwise ignored. An authenticated webhook whose payload can't be used (not JSON, no project id or merge request iid, a malformed head SHA) gets 200 and a warning in the log, because GitLab counts failed deliveries toward disabling the hook. |
-| `POST /webhooks/github/{instance}` | The GitHub review App's `pull_request` and `issue_comment` webhooks (the second carries [commands](#commands)); any other event is answered 200 and ignored. `X-Hub-Signature-256` (HMAC-SHA256 of the body with the instance's webhook secret) is compared in constant time; a missing or wrong signature gets 401 and is otherwise ignored. A repository that isn't in the config gets 200 and is ignored. |
+| `POST /webhooks/github/{instance}` | The GitHub review App's `pull_request` and `issue_comment` webhooks (the second carries [commands](#-commands)); any other event is answered 200 and ignored. `X-Hub-Signature-256` (HMAC-SHA256 of the body with the instance's webhook secret) is compared in constant time; a missing or wrong signature gets 401 and is otherwise ignored. A repository that isn't in the config gets 200 and is ignored. |
 | `POST /runs/{id}/result` | A review Job delivering its result, with its one-time bearer token. |
 | `POST /skill-fetches/{id}/result` | A skill fetch Job delivering the skills it read from a public URL, with its one-time bearer token (only with the dashboard on). A wrong token gets 401, a second result or one after the fetch gave up 409, a body over 4 MiB 413. |
 | `POST /readiness-scans/{id}/result` | A readiness scan Job delivering what it found in a repository, with its one-time bearer token (only with the dashboard on). A wrong token gets 401, a second result or one after the scan ended 409, a body over 1 MiB 413. |
 | `GET /healthz` | Health check. It answers as soon as the server starts: pergent.sh serves right away and runs the startup reconcile in the background. |
-| `GET /auth/{gitlab or github}/{instance}/login`, `GET .../callback`, `POST /auth/logout` | [Dashboard](#dashboard) sign-in with GitLab or GitHub, and sign-out. Only with `dashboard.url` set. |
+| `GET /auth/{gitlab or github}/{instance}/login`, `GET .../callback`, `POST /auth/logout` | [Dashboard](#-dashboard) sign-in with GitLab or GitHub, and sign-out. Only with `dashboard.url` set. |
 | `GET /auth/csrf`, `POST /auth/password`, `POST /auth/password/change` | Password sign-in. `GET /auth/csrf` hands out the sign-in form's CSRF token (a cookie and `{"csrfToken": ...}`); `POST /auth/password` takes `{"username", "password"}` with that token in `X-CSRF-Token` and answers 204 and the session cookie; `POST /auth/password/change` takes `{"current", "new"}` for a signed-in password account. See [Password sign-in limits](#password-sign-in-limits). Only with `dashboard.url` set. |
 | `/api/...` | The dashboard's JSON API. Every route but `GET /api/instances` needs a session; writes need the `X-CSRF-Token` header. Only with `dashboard.url` set. The review page's buttons use `POST /api/reviews/{instance}/{project}/{number}/rerun` (`{"failed": true or false}`; 202 with `queued`, `already queued`, `nothing failed` or `whole review`; 429 at a re-run cap), `.../dismiss` (`{"fingerprint", "reason"}`; 200 with `dismissed` or `already dismissed`; a reason of up to 500 characters; 400 `the reason is too long` above) and `.../restore` (`{"fingerprint"}`; 200 with `restored` or `not dismissed`), for maintainers and admins of the repository, config repositories included. The Readiness tab uses `GET /api/repositories/{instance}/{project}/readiness` (anyone who can see the repository) and `POST .../readiness/scan` (maintainers and admins; 202 with the queued scan, 409 while one is queued or running, 429 within 5 minutes of the latest scan, 404 for a repository that isn't switched on or when scans are off). |
 | `GET /` and every other path | The dashboard's pages. Only with `dashboard.url` set; without it they are 404. |
 
 Logs are JSON on stdout. Secrets are never logged.
 
-## Limits
+## 📏 Limits
 
 This release is deliberately small:
 
@@ -1008,17 +1002,57 @@ This release is deliberately small:
 - GitHub.com only. `github[].api_url` accepts another URL, but GitHub Enterprise Server is untested.
 - On GitHub, approving after the approve App is installed starts with the next push or ready-for-review; there is no catch-up pass over open pull requests.
 
-## Publishing the chart (at release time)
+## 🔧 Config reference
 
-The chart is published at `https://gopaytech.github.io/pergent.sh/charts/releases` (GitHub Pages, from `main`). To publish a version, bump `version` (and `appVersion`) in `charts/pergent-sh/Chart.yaml` and set `image.tag` in `charts/pergent-sh/values.yaml` to the release version (for example `v0.2.0`, with `image.pullPolicy: IfNotPresent`): `main` is a moving development build and must not ship in a released chart. Then run:
+The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/pergent-sh/config.yaml`). Unknown keys are an error. It holds no secrets: tokens and keys are named by environment variable. Every problem found is reported at startup, and pergent.sh does not start with an invalid config, a missing secret, a database it cannot reach, or, for an instance in the config file, a GitLab token that does not work or a GitHub App key or approve token that does not work (instances added in the dashboard never stop startup). The error names the instance and what failed, never the key or token. Without `dashboard.url`, at least one `gitlab` or `github` instance and an `llm:` block are required; with it, both can be added in the [dashboard](#-dashboard) instead. `dashboard.admins`, the old admin groups and teams, was removed: a config that still has it is refused at startup (`dashboard.admins was removed: admins are now teams in the dashboard (see the README, "Teams")`).
 
-```bash
-make helm.create.releases   # packages the chart into charts/releases and refreshes its index.yaml
-```
+| Field | Default | Description |
+| --- | --- | --- |
+| `listen` | `:8080` | Address of the HTTP server. |
+| `public_url` | required | HTTPS base URL where GitLab and GitHub reach pergent.sh, without a trailing slash. The GitLab webhook is created as `<public_url>/webhooks/gitlab/<instance name>`; the GitHub review App's webhook URL is `<public_url>/webhooks/github/<instance name>`. |
+| `callback_url` | `public_url` | Base URL where Jobs post their result (`<callback_url>/runs/<id>/result`). `http` or `https`, no trailing slash. Set it to the in-cluster Service to keep that traffic inside the cluster. |
+| `skills_dir` | removed | The skill library lives in the dashboard now. A config that still has it is refused at startup (`skills_dir was removed: skills live in the dashboard (see the README, "Skills and instructions")`). |
+| `gitlab[].name` | required | Instance name, `[a-z0-9-]+`, unique across `gitlab` and `github`. Part of the webhook URL. |
+| `gitlab[].url` | required | Base URL of the GitLab instance. It must be `https` (the bot tokens travel in a header), without a trailing slash. A redirect to another host is never followed. |
+| `gitlab[].review_token_env` | required | Name of the env var with the review bot token. |
+| `gitlab[].approve_token_env` | required | Name of the env var with the approve bot token. It must belong to a different user than the review bot token. |
+| `gitlab[].webhook_secret_env` | required | Name of the env var with the webhook secret. GitLab sends it as `X-Gitlab-Token`. |
+| `github[].name` | required | Instance name, `[a-z0-9-]+`, unique across `gitlab` and `github`. Part of the webhook URL. One instance is one pair of Apps and covers every organization they are installed on. |
+| `github[].api_url` | `https://api.github.com` | GitHub's REST API. Only GitHub.com is supported: another `https` URL (GitHub Enterprise Server) is accepted but untested. |
+| `github[].review_app.app_id` | required | The review App's numeric App ID. |
+| `github[].review_app.private_key_env` | required | Name of the env var with the review App's private key. |
+| `github[].approve_with_review_app` | one of `approve_with_review_app`, `approve_app` and `approve_token_env` | `true` to let the review App approve too, so one App is enough. The review App then needs the Pull requests: Read and write permission, and the pull request shows the same bot commenting and approving. No second key or token is read. |
+| `github[].approve_app.app_id`, `.private_key_env` | one of `approve_with_review_app`, `approve_app` and `approve_token_env` | A separate approve App: its App ID and the env var with its private key, so the identity that writes the review is never the one that approves it. Both must differ from `review_app`'s (to approve with the review App, set `approve_with_review_app: true`). |
+| `github[].approve_token_env` | one of `approve_with_review_app`, `approve_app` and `approve_token_env` | Name of the env var with the approve bot user's fine-grained personal access token, instead of an App. See [Approving as a bot user](#approving-as-a-bot-user). |
+| `github[].webhook_secret_env` | required | Name of the env var with the review App's webhook secret. GitHub signs each delivery with it (`X-Hub-Signature-256`). |
+| `gitlab[].oauth_client_id_env`, `gitlab[].oauth_client_secret_env` | none | Names of the env vars with the instance's OAuth application ID and secret, for [dashboard](#-dashboard) sign-in. Both or neither; with neither, nobody signs in with this instance. |
+| `github[].oauth_client_id_env`, `github[].oauth_client_secret_env` | none | Names of the env vars with the review App's client ID and client secret, for [dashboard](#-dashboard) sign-in. Both or neither. |
+| `dashboard.url` | none (dashboard off) | The dashboard's `https` address, a bare host without a port, path or trailing slash. Setting it turns the dashboard on, with password sign-in and the first password admin; instances and the LLM can then be added there. To let people sign in with GitLab or GitHub, an instance needs an OAuth client (`oauth_client_*_env` in the config, or entered in the dashboard). The sign-in callbacks are `<dashboard.url>/auth/<gitlab or github>/<instance name>/callback`. |
+| `dashboard.admin_password_env` | none | Name of the env var with the first password admin's password (at least 12 characters), for the account `admin` made on the first start with the dashboard on. Empty or unset: pergent.sh generates a password and logs it once. The chart fills the variable from `adminPassword.existingSecret`. Needs `dashboard.url` to have an effect. See [First sign-in](#first-sign-in). |
+| `repositories[].gitlab` | one of `gitlab` and `github` | Name of one of the `gitlab` instances. |
+| `repositories[].github` | one of `gitlab` and `github` | Name of one of the `github` instances. |
+| `repositories[].project` | required | Project path, such as `acme/widgets`; on GitHub exactly `owner/name`, matched case-insensitively. Each project appears once per instance. |
+| `repositories[].skills` | the default list | Names of library skills to run: a non-empty list, or leave it out for the default list (an empty list is refused). A name that is not in the library does not stop startup: it is listed under "Needs attention" and the repository's runs fail naming it until the skill exists. |
+| `repositories[].repo_skills` | none | Names of the skills found in the repository's `.agents/skills`, `.claude/skills` and `.github/skills` folders that run, besides the `.pergent/skills` ones, which always run. A turned-on name that is not found in the target branch fails the run (`skill "x" is turned on but not found in the repository`). The dashboard's switches on a repository's Settings are the same setting for a repository the dashboard manages. See [Skills and instructions](#-skills-and-instructions). |
+| `repositories[].approve` | `true` | Approve clean reviews. With `false`, pergent.sh still reviews, comments and sets the status, but never approves, and withdraws any approval the approve bot already made in the repository. The dashboard's "Approve clean reviews" switch is the same setting for a repository the dashboard manages. See [Turning approval off](#turning-approval-off). |
+| `repositories[].review_drafts` | `true` | Review drafts. With `false`, a draft merge request (GitLab `draft`, or `work_in_progress` on older versions) or draft pull request is not reviewed: no run, comment, status or approval, until it is marked ready, which starts its review. Closing or merging is handled as before. The dashboard's "Review drafts" switch is the same setting for a repository the dashboard manages. With `true`, a draft is reviewed but approved only once it is marked ready. See [Pushes, edits and failures](#pushes-edits-and-failures). |
+| `repositories[].failure_status` | `failed` | Status used when a review could not be done: `failed` or `neutral`. GitLab has no neutral state, so `neutral` is set as `skipped`; a project can count skipped pipelines as successful through a GitLab setting. On GitHub it is the Check Run conclusion `failure` or `neutral`, and GitHub counts a `neutral` conclusion as passing for a required status check: with `neutral`, a failed review does not block the merge. `failed` is never counted as successful. Blocking findings are always `failed`. |
+| `repositories[].job_timeout` | `jobs.timeout` | The review time budget of this repository's Jobs, such as `20m`. Must be positive. |
+| `repositories[].job_memory` | `jobs.resources.limits.memory` | The memory limit of this repository's Jobs, such as `6Gi`. Only the memory limit changes; it must not be below `jobs.resources.requests.memory`. |
+| `repositories[].rerun_limit_per_mr` | 10 | How many times a merge request or pull request can be re-run by [comment or button](#-commands) per UTC day, 1 to 1000. Pushes and opened requests always run and never count. |
+| `repositories[].rerun_limit_per_repo` | 50 | The same cap for the whole repository, 1 to 1000. |
+| `llm.provider` | required with an `llm:` block | opencode provider ID, such as `anthropic`. The whole `llm:` block is optional when `dashboard.url` is set (a password admin sets the LLM in the dashboard); a block that is present wins and makes the LLM read-only there, and any field set makes it present: it must then be complete (`provider`, `model` and the key variable). Without `dashboard.url` it is required. |
+| `llm.model` | required with an `llm:` block | Model name, such as `claude-sonnet-4`. |
+| `llm.base_url` | none | Custom API base URL for the provider. |
+| `llm.api_key_env` | `OPENCODE_API_KEY` | Name of the env var with the LLM key. |
+| `jobs.namespace` | required | Namespace the Jobs run in. |
+| `jobs.image` | `ghcr.io/gopaytech/pergent:v0.1.3` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
+| `jobs.max_running` | `5` | Most Jobs running at once. Further runs wait in the queue. At least 1. |
+| `jobs.timeout` | `10m` | pergent's own review budget per Job (`--timeout`). The Job's deadline adds 2 minutes to deliver and a clone allowance of at least 2 minutes. |
+| `jobs.concurrency` | `4` | pergent's `--concurrency`: opencode runs in flight inside one Job. At least 1. |
+| `jobs.resources` | requests 500m CPU, 1Gi memory; limits 2 CPU, 4Gi memory | Kubernetes `requests` and `limits` for both containers of a Job. If you set either `requests` or `limits`, the default is not used at all. |
 
-and commit `charts/releases/` together with the bump, push `main`, then push the `v<version>` tag so the release workflow builds the image the chart names. The `.nojekyll` file at the repository root makes Pages serve the files as they are. `make readme` regenerates the chart reference (`charts/pergent-sh/README.md`) from the comments in `charts/pergent-sh/values.yaml` with [helm-docs](https://github.com/norwoodj/helm-docs); run it after changing a value.
-
-## Development
+## 🛠️ Development
 
 ```bash
 make build   # builds bin/pergent-sh
@@ -1035,3 +1069,13 @@ go test -count=1 ./...
 ```
 
 All other tests need no external service. Release images are built by the `release` workflow when a `v*.*.*` tag is pushed and published as `ghcr.io/gopaytech/pergent.sh:<tag>` for linux/amd64 and linux/arm64. The `ci` workflow also publishes `ghcr.io/gopaytech/pergent.sh:main` and `:sha-<short sha>` (both platforms) on every push to `main`, after the test and chart jobs pass; `latest` is only set by releases.
+
+## 🚢 Publishing the chart (at release time)
+
+The chart is published at `https://gopaytech.github.io/pergent.sh/charts/releases` (GitHub Pages, from `main`). To publish a version, bump `version` (and `appVersion`) in `charts/pergent-sh/Chart.yaml` and set `image.tag` in `charts/pergent-sh/values.yaml` to the release version (for example `v0.2.0`, with `image.pullPolicy: IfNotPresent`): `main` is a moving development build and must not ship in a released chart. Then run:
+
+```bash
+make helm.create.releases   # packages the chart into charts/releases and refreshes its index.yaml
+```
+
+and commit `charts/releases/` together with the bump, push `main`, then push the `v<version>` tag so the release workflow builds the image the chart names. The `.nojekyll` file at the repository root makes Pages serve the files as they are. `make readme` regenerates the chart reference (`charts/pergent-sh/README.md`) from the comments in `charts/pergent-sh/values.yaml` with [helm-docs](https://github.com/norwoodj/helm-docs); run it after changing a value.
