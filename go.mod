@@ -3,7 +3,7 @@ module github.com/gopaytech/pergent.sh
 go 1.24.8
 
 require (
-	github.com/gopaytech/pergent v0.1.3-0.20261102025403-5a7ffaeabc04
+	github.com/gopaytech/pergent v0.1.3
 	github.com/jackc/pgx/v5 v5.7.6
 	golang.org/x/crypto v0.37.0
 	gopkg.in/yaml.v3 v3.0.1
