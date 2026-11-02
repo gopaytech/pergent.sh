@@ -6,6 +6,7 @@
   <p><strong>Run pergent code reviews on GitLab merge requests and GitHub pull requests, one Kubernetes Job per review.</strong></p>
 
   <p>
+    <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
     <a href="go.mod"><img alt="Go" src="https://img.shields.io/github/go-mod/go-version/gopaytech/pergent.sh"></a>
     <a href="https://github.com/gopaytech/pergent.sh/pkgs/container/pergent.sh"><img alt="Image" src="https://img.shields.io/badge/ghcr.io-pergent.sh-informational"></a>
     <a href="charts/pergent-sh/README.md"><img alt="Helm chart" src="https://img.shields.io/badge/helm-pergent--sh-informational"></a>
@@ -1079,3 +1080,7 @@ make helm.create.releases   # packages the chart into charts/releases and refres
 ```
 
 and commit `charts/releases/` together with the bump, push `main`, then push the `v<version>` tag so the release workflow builds the image the chart names. The `.nojekyll` file at the repository root makes Pages serve the files as they are. `make readme` regenerates the chart reference (`charts/pergent-sh/README.md`) from the comments in `charts/pergent-sh/values.yaml` with [helm-docs](https://github.com/norwoodj/helm-docs); run it after changing a value.
+
+## 📄 License
+
+MIT. See [LICENSE](LICENSE).
