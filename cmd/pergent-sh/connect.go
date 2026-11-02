@@ -69,7 +69,7 @@ func (c *connector) Connect(ctx context.Context, inst instances.Instance, s inst
 		return err
 	}
 	// A token approver tells the dashboard when its token is about to expire.
-	if a, ok := plat.Approver.(*githubforge.Approver); ok && inst.GitHub != nil && inst.GitHub.Approver() == config.ApproverToken && c.store != nil {
+	if a, ok := plat.Approver.(*githubforge.Approver); ok && tracksTokenExpiry(inst.GitHub) && c.store != nil {
 		a.OnTokenExpiry(engine.TokenExpiryRecorder(c.store, inst.Name, c.log.With("instance", inst.Name)))
 	}
 	c.platforms.Set(inst.Name, plat)
@@ -83,6 +83,12 @@ func (c *connector) Connect(ctx context.Context, inst instances.Instance, s inst
 		}
 	}
 	return nil
+}
+
+// tracksTokenExpiry reports whether the approver of inst is a bot user's
+// token, the only approver whose expiry the dashboard is told about.
+func tracksTokenExpiry(inst *config.GitHubInstance) bool {
+	return inst != nil && inst.Approver() == config.ApproverToken
 }
 
 // setHook makes the webhook secret in s the one the instance's webhooks are

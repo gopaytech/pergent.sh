@@ -1496,7 +1496,9 @@ func TestIntegrationsGitHubReviewAppApprover(t *testing.T) {
 	with := withSecrets(t)
 	e := newEnv(t, func(c *config.Config) {
 		with(c)
-		c.GitHub[0].ApproveWithReviewApp = true
+		// withSecrets gives the instance an approve token: exactly one
+		// approver may be set.
+		c.GitHub[0].ApproveTokenEnv, c.GitHub[0].ApproveWithReviewApp = "", true
 	})
 	c := e.signInGitHub(true, "acme/widgets")
 	if v := getJSON[IntegrationView](e, c, "/api/integrations"); v.Approver != "review_app" {

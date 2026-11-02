@@ -292,6 +292,24 @@ func TestConnectGitHubReviewAppApprover(t *testing.T) {
 	}
 }
 
+// Only a token approver tells the dashboard about its token's expiry.
+func TestTracksTokenExpiry(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		inst *config.GitHubInstance
+		want bool
+	}{
+		{"token", &config.GitHubInstance{ApproveTokenEnv: "T"}, true},
+		{"approve App", &config.GitHubInstance{ApproveApp: &config.App{AppID: 2}}, false},
+		{"review App", &config.GitHubInstance{ApproveWithReviewApp: true}, false},
+		{"GitLab", nil, false},
+	} {
+		if got := tracksTokenExpiry(tc.inst); got != tc.want {
+			t.Errorf("%s: tracksTokenExpiry = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 // A review App without a slug can't be mentioned: the instance is refused.
 func TestConnectGitHubNoSlugRefused(t *testing.T) {
 	mux := http.NewServeMux()
