@@ -264,7 +264,8 @@ func (s *Store) ReadinessTokenIs(ctx context.Context, id string, hash []byte) (b
 
 // FinishReadinessScan ends a running scan (done when errText is "", else
 // failed), spending the token when hash is set (nil: a pod-side end), and
-// deletes the repository's older finished scans in the same transaction. job
+// deletes the repository's older finished scans in the same transaction, but
+// for a failed end the newest done scan, which stays beside it. job
 // is the Job's result (nil: none). It reports whether it did: a scan that is
 // not running, does not exist, or whose token is not hash is false and left
 // as it is.
@@ -292,9 +293,15 @@ func (s *Store) FinishReadinessScan(ctx context.Context, id string, hash []byte,
 	if err != nil {
 		return false, err
 	}
+	// A failed scan keeps the newest done one: rechecks judge the skills
+	// against its file result. A done scan replaces them all.
+	keepDone := state == ScanFailed
 	if _, err := tx.Exec(ctx, `DELETE FROM readiness_scans
-		WHERE instance = $1 AND lower(project) = lower($2) AND state IN ('done', 'failed') AND id <> $3::uuid`,
-		instance, project, id); err != nil {
+		WHERE instance = $1 AND lower(project) = lower($2) AND state IN ('done', 'failed') AND id <> $3::uuid
+		AND NOT ($4 AND id IS NOT DISTINCT FROM (SELECT d.id FROM readiness_scans d
+			WHERE d.instance = $1 AND lower(d.project) = lower($2) AND d.state = 'done'
+			ORDER BY d.queued_at DESC, d.id LIMIT 1))`,
+		instance, project, id, keepDone); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -347,6 +354,23 @@ func (s *Store) ReadinessScans(ctx context.Context, instance, project string) (l
 		}
 	}
 	return latest, active, rows.Err()
+}
+
+// DoneReadinessScan returns a repository's newest done scan, nil when there is
+// none. It may be older than the latest finished scan ReadinessScans returns:
+// a failed scan keeps the done one before it. The project is matched ignoring
+// case.
+func (s *Store) DoneReadinessScan(ctx context.Context, instance, project string) (*ReadinessScan, error) {
+	sc, err := scanReadiness(s.pool.QueryRow(ctx, `SELECT `+readinessColumns+` FROM readiness_scans
+		WHERE instance = $1 AND lower(project) = lower($2) AND state = 'done' ORDER BY queued_at DESC, id LIMIT 1`,
+		instance, project))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &sc, nil
 }
 
 // DeleteReadinessScans removes every scan of a repository, active ones too;

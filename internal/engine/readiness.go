@@ -842,8 +842,8 @@ func (e *Engine) recheckCh() chan struct{} {
 }
 
 // runRechecks re-judges the repositories RecheckReadiness asked for from
-// their latest scan, when that one is done; a repository never scanned, or
-// whose latest scan failed, is left as it is.
+// their newest done scan, which a failed scan after it keeps; a repository
+// with no done scan is left as it is.
 func (e *Engine) runRechecks(ctx context.Context) {
 	e.recheckMu.Lock()
 	keys, defaults := e.rechecks, e.recheckDefaults
@@ -872,18 +872,18 @@ func (e *Engine) runRechecks(ctx context.Context) {
 }
 
 func (e *Engine) recheck(ctx context.Context, instance, project string) {
-	latest, _, err := e.Store.ReadinessScans(ctx, instance, project)
+	done, err := e.Store.DoneReadinessScan(ctx, instance, project)
 	if err != nil {
 		e.log().Info("readiness recheck: couldn't read the scans", "instance", instance, "project", project,
 			"error", e.redact(err.Error()))
 		return
 	}
-	if latest == nil || latest.State != store.ScanDone || latest.Job == nil {
+	if done == nil || done.Job == nil {
 		return
 	}
 	var job readiness.JobResult
-	if err := json.Unmarshal(latest.Job, &job); err != nil {
-		e.log().Warn("readiness recheck: the stored result can't be read", "scan", latest.ID, "error", err.Error())
+	if err := json.Unmarshal(done.Job, &job); err != nil {
+		e.log().Warn("readiness recheck: the stored result can't be read", "scan", done.ID, "error", err.Error())
 		return
 	}
 	e.readinessItems(ctx, instance, project, &job)

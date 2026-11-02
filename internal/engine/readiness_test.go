@@ -779,6 +779,33 @@ func TestFailedScanKeepsItems(t *testing.T) {
 	}
 }
 
+// A failed scan after a done one keeps the done scan's file result, so a
+// skills save still clears the items it raised.
+func TestRecheckAfterFailedScan(t *testing.T) {
+	env := newScanEnv(t)
+	useLibrary(env, "ruby")
+	scanWith(t, env, testInstance, testProjectPath, cleanResult(sha('c')))
+	if _, ok := items(t, env, testProjectPath)[attNoSkillCoverage]; !ok {
+		t.Fatal("no no_skill_coverage item to clear")
+	}
+	env.SetNow(env.Now().Add(scanGap))
+	failed := scanWith(t, env, testInstance, testProjectPath, readiness.JobResult{Version: readiness.ResultVersion, Error: "could not fetch the default branch"})
+	if failed.State != store.ScanFailed {
+		t.Fatalf("scan = %s; want failed", failed.State)
+	}
+
+	env.SetDefaultSkills("go")
+	env.Engine.RecheckReadiness(testInstance, testProjectPath)
+	env.Engine.runRechecks(env.ctx)
+	if _, ok := items(t, env, testProjectPath)[attNoSkillCoverage]; ok {
+		t.Error("a recheck after a failed scan kept no_skill_coverage")
+	}
+	// The tab still shows the failed scan as the latest.
+	if latest, _, err := env.Store.ReadinessScans(env.ctx, testInstance, testProjectPath); err != nil || latest == nil || latest.ID != failed.ID {
+		t.Errorf("latest = %+v, %v; want the failed scan", latest, err)
+	}
+}
+
 // Scan now queues a scan and wakes the loop; a second while it is queued is
 // busy, and one within 5 minutes of the last is too soon.
 func TestRequestScan(t *testing.T) {

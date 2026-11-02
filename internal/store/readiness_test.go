@@ -343,6 +343,97 @@ func TestFinishPrunesOlder(t *testing.T) {
 	}
 }
 
+// jsonEqual reports whether a and b hold the same JSON value (jsonb respaces it).
+func jsonEqual(a, b []byte) bool {
+	var x, y any
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
+		return false
+	}
+	xb, _ := json.Marshal(x)
+	yb, _ := json.Marshal(y)
+	return bytes.Equal(xb, yb)
+}
+
+// A failed finish keeps the newest done scan beside it, so a recheck still
+// has a file result; the next done finish deletes both. The done scan is
+// what DoneReadinessScan returns, while ReadinessScans still names the
+// failed one latest.
+func TestFinishFailedKeepsLastDone(t *testing.T) {
+	s := newStore(t)
+	if sc, err := s.DoneReadinessScan(ctx, scanInst, "acme/web"); err != nil || sc != nil {
+		t.Fatalf("DoneReadinessScan with no scan = %+v, %v; want nil", sc, err)
+	}
+	job := json.RawMessage(`{"version":1}`)
+	done := runningScan(t, s, "acme/web", t0, "a")
+	if ok, err := s.FinishReadinessScan(ctx, done.ID, hash("a"), job, "", t0.Add(time.Minute)); err != nil || !ok {
+		t.Fatalf("done finish = %v, %v", ok, err)
+	}
+	failed := runningScan(t, s, "Acme/Web", t0.Add(time.Hour), "b")
+	if ok, err := s.FinishReadinessScan(ctx, failed.ID, hash("b"), nil, "boom", t0.Add(time.Hour+time.Minute)); err != nil || !ok {
+		t.Fatalf("failed finish = %v, %v", ok, err)
+	}
+	// A second failure drops the first, never the done scan.
+	failed2 := runningScan(t, s, "acme/web", t0.Add(2*time.Hour), "c")
+	if ok, err := s.FinishReadinessScan(ctx, failed2.ID, nil, nil, "boom again", t0.Add(2*time.Hour+time.Minute)); err != nil || !ok {
+		t.Fatalf("second failed finish = %v, %v", ok, err)
+	}
+	ids := func() []string {
+		t.Helper()
+		rows, err := s.pool.Query(ctx, `SELECT id::text FROM readiness_scans WHERE lower(project) = 'acme/web' ORDER BY queued_at`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, id)
+		}
+		return out
+	}
+	if got := ids(); len(got) != 2 || got[0] != done.ID || got[1] != failed2.ID {
+		t.Fatalf("rows after done, failed, failed = %v; want [%s %s]", got, done.ID, failed2.ID)
+	}
+	latest, _, err := s.ReadinessScans(ctx, scanInst, "acme/web")
+	if err != nil || latest == nil || latest.ID != failed2.ID {
+		t.Fatalf("latest = %+v, %v; want the failed scan", latest, err)
+	}
+	last, err := s.DoneReadinessScan(ctx, scanInst, "ACME/web")
+	if err != nil || last == nil || last.ID != done.ID || !jsonEqual(last.Job, job) {
+		t.Fatalf("DoneReadinessScan = %+v, %v; want %s", last, err, done.ID)
+	}
+
+	again := runningScan(t, s, "acme/web", t0.Add(3*time.Hour), "d")
+	if ok, err := s.FinishReadinessScan(ctx, again.ID, hash("d"), job, "", t0.Add(3*time.Hour+time.Minute)); err != nil || !ok {
+		t.Fatalf("done finish = %v, %v", ok, err)
+	}
+	if got := ids(); len(got) != 1 || got[0] != again.ID {
+		t.Fatalf("rows after done, failed, done = %v; want [%s]", got, again.ID)
+	}
+	if last, err := s.DoneReadinessScan(ctx, scanInst, "acme/web"); err != nil || last == nil || last.ID != again.ID {
+		t.Fatalf("DoneReadinessScan = %+v, %v; want %s", last, err, again.ID)
+	}
+	// Another instance sees nothing.
+	if sc, err := s.DoneReadinessScan(ctx, "other", "acme/web"); err != nil || sc != nil {
+		t.Fatalf("other instance = %+v, %v", sc, err)
+	}
+
+	// With no done scan to keep, a failure still drops the older failure.
+	for i, tok := range []string{"e", "f"} {
+		sc := runningScan(t, s, "acme/api", t0.Add(time.Duration(i)*time.Hour), tok)
+		if ok, err := s.FinishReadinessScan(ctx, sc.ID, nil, nil, "boom", t0.Add(time.Duration(i)*time.Hour)); err != nil || !ok {
+			t.Fatalf("failed finish %d = %v, %v", i, ok, err)
+		}
+	}
+	var api int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM readiness_scans WHERE project = 'acme/api'`).Scan(&api); err != nil || api != 1 {
+		t.Fatalf("acme/api rows after 2 failures = %d, %v; want 1", api, err)
+	}
+}
+
 // An active scan of the repository survives another's finish: only older
 // finished scans are pruned.
 func TestFinishKeepsActive(t *testing.T) {
