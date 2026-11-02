@@ -2,8 +2,19 @@ apiVersion: v1
 entries:
   pergent-sh:
   - apiVersion: v2
+    appVersion: v0.5.1
+    created: "2026-11-02T22:42:18.316357+07:00"
+    description: pergent.sh runs pergent code reviews on GitLab merge requests and
+      GitHub pull requests as Kubernetes Jobs
+    digest: b3ff067c749e5362f0b6ce10ee4aa72544f1f3d6f8e044a1c254f4e4cf7fa473
+    name: pergent-sh
+    type: application
+    urls:
+    - pergent-sh-0.5.1.tgz
+    version: 0.5.1
+  - apiVersion: v2
     appVersion: v0.5.0
-    created: "2026-11-02T20:22:47.252567+07:00"
+    created: "2026-11-02T22:42:18.316169+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: f45eda9cb9d238fe190cf90b11e51fa9670a1bc46c12870b240dac103ba940f0
@@ -14,7 +25,7 @@ entries:
     version: 0.5.0
   - apiVersion: v2
     appVersion: v0.4.0
-    created: "2026-11-02T20:22:47.252149+07:00"
+    created: "2026-11-02T22:42:18.315847+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: 672e6e3bc2dd591a676385028afc3c02242afb9ddcd50a204bcbfec638599ff4
@@ -25,7 +36,7 @@ entries:
     version: 0.4.0
   - apiVersion: v2
     appVersion: v0.3.0
-    created: "2026-11-02T20:22:47.251634+07:00"
+    created: "2026-11-02T22:42:18.315522+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: e6c40407cab484e6cb4ad8a10094be7d5c02aee26761996baad5c8b72f2006a9
@@ -36,7 +47,7 @@ entries:
     version: 0.3.0
   - apiVersion: v2
     appVersion: v0.2.0
-    created: "2026-11-02T20:22:47.250952+07:00"
+    created: "2026-11-02T22:42:18.315182+07:00"
     description: pergent.sh runs pergent code reviews on GitLab merge requests and
       GitHub pull requests as Kubernetes Jobs
     digest: cb3c3f4723d92d519704a74f2f7af34d66ebb5f95472597927f0b50e09a4dc0e
@@ -45,4 +56,4 @@ entries:
     urls:
     - pergent-sh-0.2.0.tgz
     version: 0.2.0
-generated: "2026-11-02T20:22:47.250155+07:00"
+generated: "2026-11-02T22:42:18.3143+07:00"
