@@ -21,7 +21,7 @@ In this README a "merge request" is also a GitHub pull request, and the "review 
 
 - Kubernetes, and permission to create a Role in the namespace where the Jobs run.
 - PostgreSQL 13 or newer, reachable from the pergent.sh pod. pergent.sh creates and migrates its own tables at startup.
-- Nodes that can pull `ghcr.io/gopaytech/pergent.sh` (the service) and `ghcr.io/gopaytech/pergent` (the Jobs).
+- Nodes that can pull `ghcr.io/gopaytech/pergent.sh` (the service) and `ghcr.io/gopaytech/pergent` (the Jobs). Both images are built for `linux/amd64` and `linux/arm64` (pergent.sh from v0.4.0, pergent from v0.1.2), so the nodes can be either; each node pulls the one for its own platform.
 - On each GitLab instance you use, two users:
   - A **review bot** with the **Maintainer** role on every reviewed project, and an access token with the `api` scope. It creates the project webhook and the read-only deploy token, posts the comment and sets the commit status, and, for [commands](#commands), reacts to and answers comments and looks up the role of whoever wrote one.
   - An **approve bot** that is an eligible approver of every reviewed project, with an access token with the `api` scope. It must be a different user from the review bot: pergent.sh doesn't start when both tokens belong to the same user. It only approves, and removes its approval when the merge request gets a new commit or a new target branch. If the project requires specific approvers or forbids approval by certain users, make sure this bot qualifies.
@@ -175,6 +175,10 @@ For GitHub, put the Apps' private keys (the whole `.pem` file of each) and the r
 | each `github[].oauth_client_id_env`, `oauth_client_secret_env` | When the instance is in the config file: the review App's client ID and a client secret, for signing in to the [dashboard](#dashboard). Both or neither; checked at startup when `dashboard.url` is set. |
 
 pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is handy for local development.
+
+### Upgrading to 0.4.0
+
+0.4.0 adds `linux/arm64` images; nothing else changes and there is no migration. The default `jobs.image` is now `ghcr.io/gopaytech/pergent:v0.1.2`, which is also built for both platforms. A config that sets its own `jobs.image` keeps using the image it names: to run review Jobs on arm64 nodes, point it at pergent v0.1.2 or newer (v0.1.1 and older are amd64 only).
 
 ### Upgrading to 0.3.0
 
@@ -553,7 +557,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `llm.base_url` | none | Custom API base URL for the provider. |
 | `llm.api_key_env` | `OPENCODE_API_KEY` | Name of the env var with the LLM key. |
 | `jobs.namespace` | required | Namespace the Jobs run in. |
-| `jobs.image` | `ghcr.io/gopaytech/pergent:v0.1.1` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
+| `jobs.image` | `ghcr.io/gopaytech/pergent:v0.1.2` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
 | `jobs.max_running` | `5` | Most Jobs running at once. Further runs wait in the queue. At least 1. |
 | `jobs.timeout` | `10m` | pergent's own review budget per Job (`--timeout`). The Job's deadline adds 2 minutes to deliver and a clone allowance of at least 2 minutes. |
 | `jobs.concurrency` | `4` | pergent's `--concurrency`: opencode runs in flight inside one Job. At least 1. |
@@ -901,4 +905,4 @@ export PERGENT_SH_TEST_DATABASE_URL='postgres://postgres:pergent@localhost:55432
 go test -count=1 ./...
 ```
 
-All other tests need no external service. Release images are built by the `release` workflow when a `v*.*.*` tag is pushed and published as `ghcr.io/gopaytech/pergent.sh:<tag>` (linux/amd64). The `ci` workflow also publishes `ghcr.io/gopaytech/pergent.sh:main` and `:sha-<short sha>` on every push to `main`, after the test and chart jobs pass; `latest` is only set by releases.
+All other tests need no external service. Release images are built by the `release` workflow when a `v*.*.*` tag is pushed and published as `ghcr.io/gopaytech/pergent.sh:<tag>` for linux/amd64 and linux/arm64. The `ci` workflow also publishes `ghcr.io/gopaytech/pergent.sh:main` and `:sha-<short sha>` (both platforms) on every push to `main`, after the test and chart jobs pass; `latest` is only set by releases.

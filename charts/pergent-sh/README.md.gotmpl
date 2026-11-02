@@ -5,6 +5,8 @@
 
 pergent.sh runs [pergent](https://github.com/gopaytech/pergent) code reviews on GitLab merge requests and GitHub pull requests, one Kubernetes Job per review. Postgres is not part of this chart. The [repository README](../../README.md) explains the setup: the Secret, the config, the skill library and what the chart creates.
 
+The pergent.sh image and the default pergent image for the review Jobs are built for `linux/amd64` and `linux/arm64`.
+
 ## Installing
 
 ```console

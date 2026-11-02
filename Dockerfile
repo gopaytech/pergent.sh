@@ -1,4 +1,7 @@
-FROM node:22-bookworm-slim AS web
+# Multi-arch: linux/amd64 and linux/arm64. The web and Go stages run on the
+# build machine (the dashboard build is the same for every platform; Go
+# cross-compiles), so no stage needs emulation.
+FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS web
 
 # vite.config.ts writes the build to ../internal/web/dist.
 WORKDIR /src/web
@@ -7,14 +10,17 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.24.8-bookworm AS builder
+FROM --platform=$BUILDPLATFORM golang:1.24.8-bookworm AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=web /src/internal/web/dist ./internal/web/dist
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /pergent-sh ./cmd/pergent-sh
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -trimpath -o /pergent-sh ./cmd/pergent-sh
 
 FROM gcr.io/distroless/static-debian12:nonroot
 

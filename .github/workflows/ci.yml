@@ -123,6 +123,12 @@ jobs:
             echo "current=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Not building: main is at $tip now, not $GITHUB_SHA; its own build publishes :main."
           fi
+      # Set up QEMU so any RUN step of the arm64 image works on an amd64
+      # runner (the Dockerfile cross-compiles, so none needs it today).
+      # https://github.com/docker/setup-qemu-action
+      - name: Set up QEMU
+        if: steps.tip.outputs.current == 'true'
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
       # https://github.com/docker/setup-buildx-action
       - name: Set up Docker Buildx
         if: steps.tip.outputs.current == 'true'
@@ -159,4 +165,4 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
