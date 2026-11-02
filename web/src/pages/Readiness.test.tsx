@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -8,6 +8,24 @@ import { overview, platformAdmin, repoDetail, repoPayments, repoWidgets, reviewB
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
+
+// The clock the polling tests fake. setImmediate stays real: settle() uses it
+// to let the fetch answers and renders finish, and real time never moves the
+// fake clock.
+const fakeClock = { toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] as const };
+
+// settle lets the pending fetches and renders finish under fake timers.
+async function settle() {
+  for (let i = 0; i < 20; i++) {
+    await act(async () => {
+      await new Promise<void>((r) => setImmediate(r));
+      await vi.advanceTimersByTimeAsync(1);
+    });
+  }
+}
+
+// waitForGone waits until the checkbox of a skill is no longer listed.
+const waitForGone = (name: string) => waitFor(() => expect(screen.queryByRole("checkbox", { name })).not.toBeInTheDocument());
 
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
 
@@ -91,6 +109,28 @@ describe("Readiness", () => {
     fakeApi(base(view({ latest: scan({ startedBy: "upgrade" }) })));
     renderApp("/repos/main/acme/payments?tab=readiness");
     expect(await screen.findByText("Scanned 3 days ago, after the upgrade, at commit abcdef1")).toBeInTheDocument();
+  });
+
+  it("says so on the top line when the latest scan failed, with the error as text", async () => {
+    fakeApi(
+      base(
+        view({
+          latest: scan({ state: "failed", commit: "", error: "the clone took <b>longer</b> than 5 minutes" }),
+          checklist: {
+            sections: [{ key: "context", items: [item("readme", { state: "unknown", reason: "couldn't scan files: the clone took longer than 5 minutes" })] }],
+            suggested: [],
+            budget: 0,
+          },
+        }),
+      ),
+    );
+    const { container } = renderApp("/repos/main/acme/payments?tab=readiness");
+    expect(
+      await screen.findByText("Last scan failed 3 days ago: the clone took <b>longer</b> than 5 minutes"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^Scanned /)).not.toBeInTheDocument();
+    expect(container.querySelector("b")).toBeNull();
+    expect(screen.getByText("Couldn't check")).toBeInTheDocument();
   });
 
   it("shows each state as a pill with its reason, why and fix", async () => {
@@ -223,8 +263,11 @@ describe("Readiness", () => {
     expect(await screen.findByText("Try again in 1 minute.")).toBeInTheDocument();
   });
 
+  // Under fake timers the clock moves only when the test moves it, so the
+  // fetch counts below do not depend on how fast the machine is. Testing
+  // Library's waitFor needs real timers, so these tests flush with settle().
   it("polls every 5 seconds only while a scan is active, and stops on unmount", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.useFakeTimers({ toFake: [...fakeClock.toFake] });
     try {
       let reads = 0;
       const fake = fakeApi({
@@ -234,18 +277,23 @@ describe("Readiness", () => {
           return { body: reads < 3 ? view({ active: scan({ state: "running", finishedAt: null }) }) : view() };
         },
       });
+      const gets = () => fake.find("GET", "/api/repositories/main/acme/payments/readiness").length;
       const { unmount } = renderApp("/repos/main/acme/payments?tab=readiness");
-      expect(await screen.findByText("Scanning…")).toBeInTheDocument();
-      expect(fake.find("GET", "/api/repositories/main/acme/payments/readiness")).toHaveLength(1);
+      await settle();
+      expect(screen.getByText("Scanning…")).toBeInTheDocument();
+      expect(gets()).toBe(1);
       await vi.advanceTimersByTimeAsync(4_000);
-      expect(fake.find("GET", "/api/repositories/main/acme/payments/readiness")).toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(2_000);
-      expect(fake.find("GET", "/api/repositories/main/acme/payments/readiness")).toHaveLength(2);
+      expect(gets()).toBe(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(gets()).toBe(2);
       await vi.advanceTimersByTimeAsync(5_000);
       // The third answer has no active scan: polling stops.
-      expect(await screen.findByText(/Scanned 3 days ago/)).toBeInTheDocument();
-      await vi.advanceTimersByTimeAsync(20_000);
-      expect(fake.find("GET", "/api/repositories/main/acme/payments/readiness")).toHaveLength(3);
+      expect(gets()).toBe(3);
+      await settle();
+      expect(screen.getByText(/Scanned 3 days ago/)).toBeInTheDocument();
+      expect(screen.queryByText("Scanning…")).not.toBeInTheDocument();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(gets()).toBe(3);
       unmount();
     } finally {
       vi.useRealTimers();
@@ -253,17 +301,24 @@ describe("Readiness", () => {
   });
 
   it("stops polling when the tab is left", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.useFakeTimers({ toFake: [...fakeClock.toFake] });
     try {
       const fake = fakeApi({
         ...base(view({ active: scan({ state: "running", finishedAt: null }) })),
       });
+      const gets = () => fake.find("GET", "/api/repositories/main/acme/payments/readiness").length;
       renderApp("/repos/main/acme/payments?tab=readiness");
-      expect(await screen.findByText("Scanning…")).toBeInTheDocument();
-      await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
-      const before = fake.find("GET", "/api/repositories/main/acme/payments/readiness").length;
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(fake.find("GET", "/api/repositories/main/acme/payments/readiness")).toHaveLength(before);
+      await settle();
+      expect(screen.getByText("Scanning…")).toBeInTheDocument();
+      expect(gets()).toBe(1);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(gets()).toBe(2);
+      // userEvent waits on a real setTimeout in Testing Library's asyncWrapper and
+      // would hang on the fake clock, so the click is a plain fireEvent.
+      fireEvent.click(screen.getByRole("tab", { name: "Reviews" }));
+      await settle();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(gets()).toBe(2);
     } finally {
       vi.useRealTimers();
     }
@@ -322,6 +377,48 @@ describe("Readiness", () => {
     expect(puts).toHaveLength(1);
     expect(puts[0].body).toEqual({ skills: ["code-review", "go-style"] });
     confirm.mockRestore();
+  });
+
+  it("clears the ticked skills after a save, so the button waits for a new tick", async () => {
+    const fake = fakeApi({
+      // The answer after the save still suggests the skill (a stale read).
+      ...base(view({ checklist: { sections: [], suggested: ["go-style"], budget: 0 } })),
+      "PUT /api/repositories/main/acme/payments/settings": { body: repoDetail(repoPayments) },
+    });
+    renderApp("/repos/main/acme/payments?tab=readiness");
+    const box = await screen.findByRole("checkbox", { name: "go-style" });
+    await userEvent.click(box);
+    expect(box).toBeChecked();
+    await userEvent.click(screen.getByRole("button", { name: "Use these skills" }));
+    expect(await screen.findByText("Saved.")).toBeInTheDocument();
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")).toHaveLength(1);
+    expect(screen.getByRole("checkbox", { name: "go-style" })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Use these skills" })).toBeDisabled();
+  });
+
+  it("enables Use these skills only for ticked skills that are still suggested", async () => {
+    let suggested = ["alpha", "beta"];
+    const fake = fakeApi({
+      ...base(view()),
+      "GET /api/repositories/main/acme/payments/readiness": () => ({
+        body: view({ checklist: { sections: [], suggested, budget: 0 } }),
+      }),
+      "POST /api/repositories/main/acme/payments/readiness/scan": () => {
+        // A new scan no longer suggests alpha.
+        suggested = ["beta"];
+        return { status: 202, body: { scan: scan({ id: "s2", state: "queued", finishedAt: null }) } };
+      },
+      "PUT /api/repositories/main/acme/payments/settings": { body: repoDetail(repoPayments) },
+    });
+    renderApp("/repos/main/acme/payments?tab=readiness");
+    await userEvent.click(await screen.findByRole("checkbox", { name: "alpha" }));
+    expect(screen.getByRole("button", { name: "Use these skills" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Scan now" }));
+    await waitForGone("alpha");
+    expect(screen.getByRole("button", { name: "Use these skills" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("checkbox", { name: "beta" }));
+    await userEvent.click(screen.getByRole("button", { name: "Use these skills" }));
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({ skills: ["code-review", "beta"] });
   });
 
   it("shows the skills line to paste for a config repository, with no button", async () => {

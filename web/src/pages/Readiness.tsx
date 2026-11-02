@@ -133,7 +133,7 @@ export default function Readiness({ instance, project }: { instance: string; pro
       {v.checklist === null ? (
         <div className="card empty">{scanning ? "The first scan is running." : "Scan this repository to see what it needs."}</div>
       ) : (
-        <Checklist view={v} checklist={v.checklist} saving={apply.isPending} onApply={(skills) => apply.mutate(skills)} />
+        <Checklist view={v} checklist={v.checklist} saving={apply.isPending} onApply={(skills, saved) => apply.mutate(skills, { onSuccess: saved })} />
       )}
     </>
   );
@@ -149,7 +149,7 @@ function Checklist({
   view: ReadinessView;
   checklist: NonNullable<ReadinessView["checklist"]>;
   saving: boolean;
-  onApply: (skills: string[]) => void;
+  onApply: (skills: string[], saved: () => void) => void;
 }) {
   const suggestions = <Suggestions view={view} suggested={checklist.suggested} saving={saving} onApply={onApply} />;
   const hasSkills = checklist.sections.some((s) => s.key === "skills");
@@ -176,8 +176,14 @@ function scannedAgo(t: string, now = Date.now()): string {
   return unit(Math.floor(h / 24), "day");
 }
 
-// TopLine is "Scanned 3 days ago, by alice (gitlab main), at commit abcdef1".
+// TopLine is "Scanned 3 days ago, by alice (gitlab main), at commit abcdef1",
+// or "Last scan failed 3 days ago: <error>" for a scan that failed.
 function TopLine({ scan }: { scan: ScanView }) {
+  if (scan.state === "failed") {
+    // The error is the Job's text: shown as text.
+    const age = scannedAgo(scan.finishedAt ?? scan.queuedAt);
+    return <div className="sub prose">{scan.error ? `Last scan failed ${age} ago: ${scan.error}` : `Last scan failed ${age} ago.`}</div>;
+  }
   const who =
     scan.startedBy === "switch-on"
       ? "when the repository was switched on"
@@ -279,16 +285,18 @@ function Suggestions({
   view: ReadinessView;
   suggested: string[];
   saving: boolean;
-  onApply: (skills: string[]) => void;
+  onApply: (skills: string[], saved: () => void) => void;
 }) {
   const [ticked, setTicked] = useState<string[]>([]);
   if (suggested.length === 0) return null;
   const choose = view.configRepo || view.canScan;
-  // Keep the order of the suggestions, and a skill already on once.
-  const list = [...view.applyBase, ...suggested.filter((s) => ticked.includes(s) && !view.applyBase.includes(s))];
+  // The ticked names still suggested, in the order of the suggestions; a skill
+  // already on is not added twice.
+  const picked = suggested.filter((s) => ticked.includes(s) && !view.applyBase.includes(s));
+  const list = [...view.applyBase, ...picked];
   const save = () => {
     if (view.followsDefaults && !window.confirm("This repository will stop following the default skill list.")) return;
-    onApply(list);
+    onApply(list, () => setTicked([]));
   };
   return (
     <div className="pad stack" aria-label="Suggested skills">
@@ -315,7 +323,7 @@ function Suggestions({
       ) : (
         view.canScan && (
           <div>
-            <button type="button" className="btn primary small" disabled={ticked.length === 0 || saving} onClick={save}>
+            <button type="button" className="btn primary small" disabled={picked.length === 0 || saving} onClick={save}>
               Use these skills
             </button>
           </div>
