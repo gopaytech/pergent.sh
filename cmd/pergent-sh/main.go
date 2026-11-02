@@ -251,8 +251,14 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	var (
 		fetcher      *skillfetch.Fetcher
 		fetchResults callback.FetchResults
+		scanResults  callback.ScanResults
 	)
 	if cfg.DashboardEnabled() {
+		// The readiness scans need the dashboard too (it shows and asks for
+		// them), and the same image to send their result back.
+		eng.Scans = true
+		eng.ScanImage = os.Getenv("PERGENT_SH_IMAGE")
+		scanResults = eng
 		// Skills are installed from a connected instance's repositories with
 		// its review bot or App, the reader the dashboard has for it, and
 		// from a public URL by a Job, which needs pergent.sh's own image
@@ -281,7 +287,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	handler := server.Routes(server.Deps{
 		Config: cfg, Instances: reg, WebhookSecrets: conn.gitlabHooks, GitHubWebhookSecrets: conn.githubHooks,
 		Store: st, Bots: commandBots(conn.platforms), Wake: eng.Wake, Dashboard: dashboardHandler(dash),
-		SkillFetches: fetchResults, Log: log,
+		SkillFetches: fetchResults, ReadinessScans: scanResults, Log: log,
 	})
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
@@ -298,6 +304,9 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	loops = append(loops, func(ctx context.Context) { every(ctx, auditPruneEvery, pruneOld) })
 	pruneCmds := pruneCommands(st.PruneCommands, time.Now, log)
 	loops = append(loops, func(ctx context.Context) { every(ctx, commandPruneEvery, pruneCmds) })
+	if eng.Scans {
+		loops = append(loops, eng.RunScans)
+	}
 	if dash != nil {
 		prune := pruneSessions(dash.Auth.PruneSessions, time.Now, log)
 		loops = append(loops, func(ctx context.Context) { every(ctx, sessionPruneEvery, prune) })

@@ -43,7 +43,11 @@ type Deps struct {
 	// SkillFetches records what a skill fetch Job read from a public URL
 	// (skillfetch.Fetcher). Nil: no such Job runs, and the route is absent.
 	SkillFetches callback.FetchResults
-	Log          *slog.Logger
+	// ReadinessScans records what a readiness scan Job found in a repository
+	// (the engine). Nil, when the dashboard is off: no scan runs, and the
+	// route is absent.
+	ReadinessScans callback.ScanResults
+	Log            *slog.Logger
 }
 
 // Routes serves:
@@ -53,6 +57,8 @@ type Deps struct {
 //   - POST /runs/{id}/result: a review Job's result;
 //   - POST /skill-fetches/{id}/result: the skills a fetch Job read, when
 //     SkillFetches is set;
+//   - POST /readiness-scans/{id}/result: what a readiness scan Job found,
+//     when ReadinessScans is set;
 //   - GET /healthz: 200 "ok";
 //   - when Dashboard is set and dashboard.url is configured: /auth/ and /api/
 //     (the Dashboard handler) and everything else the embedded app. Without
@@ -76,6 +82,9 @@ func Routes(d Deps) *http.ServeMux {
 	})
 	if d.SkillFetches != nil {
 		mux.Handle("POST /skill-fetches/{id}/result", &callback.FetchHandler{Fetches: d.SkillFetches, Log: d.Log})
+	}
+	if d.ReadinessScans != nil {
+		mux.Handle("POST /readiness-scans/{id}/result", &callback.ScanHandler{Scans: d.ReadinessScans, Log: d.Log})
 	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")

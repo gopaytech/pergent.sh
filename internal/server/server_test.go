@@ -10,6 +10,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/instances"
+	"github.com/gopaytech/pergent.sh/internal/readiness"
 	"github.com/gopaytech/pergent.sh/internal/skillfetch"
 	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
@@ -187,5 +188,41 @@ func TestSkillFetchRoute(t *testing.T) {
 	}
 	if code := post(mux, "Bearer t"); code != http.StatusNoContent || fr.calls != 1 {
 		t.Errorf("with a token = %d (%d calls); want 204", code, fr.calls)
+	}
+}
+
+// scanResults answers every scan result as stored.
+type scanResults struct{ calls int }
+
+func (s *scanResults) CompleteScan(context.Context, string, string, []byte) (readiness.ScanOutcome, error) {
+	s.calls++
+	return readiness.ScanStored, nil
+}
+
+func (s *scanResults) ScanTooLarge(context.Context, string, string) error { return nil }
+
+// The scan callback exists only when ReadinessScans is set (the dashboard is
+// on), and takes a bearer token.
+func TestRoutesScanCallbackOnlyWithDashboard(t *testing.T) {
+	cfg := &config.Config{}
+	post := func(mux *http.ServeMux, auth string) int {
+		req := httptest.NewRequest(http.MethodPost, "/readiness-scans/s1/result", strings.NewReader("{}"))
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := post(Routes(Deps{Config: cfg, Instances: instances.New(cfg, nil, nil)}), "Bearer t"); code != http.StatusNotFound {
+		t.Errorf("without readiness scans = %d; want 404", code)
+	}
+	sr := &scanResults{}
+	mux := Routes(Deps{Config: cfg, Instances: instances.New(cfg, nil, nil), ReadinessScans: sr})
+	if code := post(mux, ""); code != http.StatusUnauthorized || sr.calls != 0 {
+		t.Errorf("no token = %d (%d calls); want 401", code, sr.calls)
+	}
+	if code := post(mux, "Bearer t"); code != http.StatusNoContent || sr.calls != 1 {
+		t.Errorf("with a token = %d (%d calls); want 204", code, sr.calls)
 	}
 }
