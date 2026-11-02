@@ -22,14 +22,17 @@ const (
 // PodItem is one settings check the pod read at scan time. Count is the
 // approvals needed (approvals only).
 type PodItem struct {
-	State, Reason string
-	Count         int
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
+	Count  int    `json:"count,omitempty"`
 }
 
 // PodResult is what the pod read from the platform at scan time.
 type PodResult struct {
-	Version                              int
-	Approvals, Protected, RequiredChecks PodItem
+	Version        int     `json:"version"`
+	Approvals      PodItem `json:"approvals"`
+	Protected      PodItem `json:"protected"`
+	RequiredChecks PodItem `json:"requiredChecks"`
 }
 
 // Flags are the readiness items that go to Needs attention. BudgetKnown is

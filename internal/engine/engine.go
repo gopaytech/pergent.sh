@@ -75,6 +75,12 @@ type Engine struct {
 	// the dashboard that was being removed, to take it out of use (the
 	// connector's Disconnect). May be nil.
 	OnInstanceRemoved func(name string)
+	// Scans turns the readiness scans on: the dashboard is on. Without it
+	// nothing queues, runs or rechecks a scan.
+	Scans bool
+	// ScanImage is pergent.sh's own image (PERGENT_SH_IMAGE, set by the
+	// chart), which a scan Job runs scan-repo in.
+	ScanImage string
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 	// Log may be nil.
@@ -105,6 +111,24 @@ type Engine struct {
 	// captureLog), with when, so each is tried once.
 	logMu    sync.Mutex
 	logTried map[string]time.Time
+
+	// upgradeDone is set once the after-upgrade scans are queued
+	// (upgradeScans); upgradeMu makes the Run and RunScans calls one.
+	upgradeMu   sync.Mutex
+	upgradeDone bool
+
+	scanWakeOnce sync.Once
+	scanWake     chan struct{}
+
+	// rechecks holds the repositories RecheckReadiness asked for that the
+	// scan loop hasn't rechecked yet, and recheckDefaults the instances
+	// whose repositories on the default list it asked for ("" is every
+	// instance).
+	recheckOnce     sync.Once
+	recheckReq      chan struct{}
+	recheckMu       sync.Mutex
+	rechecks        map[repoKey]RepoKey
+	recheckDefaults map[string]bool
 }
 
 // registry is Instances, set to the config's instances alone when it was nil.
@@ -231,8 +255,9 @@ var (
 // publish and a cleanup of the same merge request least of all). Errors are
 // logged and never stop the loop. Before the first pass, runs stranded
 // between claim and dispatch by an earlier stop go back to the queue (with
-// one replica, nothing is being dispatched yet), then Reconcile and
-// SweepApprovals run once.
+// one replica, nothing is being dispatched yet), the readiness scans after
+// the upgrade are queued (upgradeScans, with scans on; RunScans runs them),
+// then Reconcile and SweepApprovals run once.
 // Run is started next to the HTTP server, never before it, so a slow GitLab
 // at startup delays only the loops.
 func (e *Engine) Run(ctx context.Context) {
@@ -242,6 +267,9 @@ func (e *Engine) Run(ctx context.Context) {
 	} else if n > 0 {
 		log.Warn("requeued runs stranded before their job started", "runs", n)
 	}
+	// Before the reconcile, which queues a switch-on scan for a repository
+	// with none: the repositories never scanned go first, oldest first.
+	e.upgradeScans(ctx)
 	if err := e.Reconcile(ctx); err != nil && ctx.Err() == nil {
 		// Each failure is logged already; the hourly pass tries again.
 		log.Error("startup reconcile failed", "error", e.redact(err.Error()))

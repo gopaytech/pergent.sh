@@ -4,6 +4,10 @@
 package readiness
 
 import (
+	"errors"
+	"fmt"
+	"time"
+
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 )
 
@@ -124,6 +128,19 @@ const (
 	ScanUnauthorized
 	ScanConflict
 )
+
+// ErrScanBusy refuses a scan asked for while the repository has one queued or
+// running; the engine returns that scan with it.
+var ErrScanBusy = errors.New("a scan is already queued or running")
+
+// ScanTooSoonError refuses a scan asked for within 5 minutes of the
+// repository's latest one; the engine returns that scan with it. Wait is how
+// long until a scan is accepted.
+type ScanTooSoonError struct{ Wait time.Duration }
+
+func (e *ScanTooSoonError) Error() string {
+	return fmt.Sprintf("a scan ran less than 5 minutes ago; scan again in %s", e.Wait.Round(time.Second))
+}
 
 // Effective is the skills a review would run, in D23 order: every skill of
 // .pergent/skills, each repoSkills name from the first other folder that has
