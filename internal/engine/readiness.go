@@ -531,8 +531,9 @@ func (e *Engine) sweepScans(ctx context.Context) {
 	}
 }
 
-// CompleteScan takes the result body a scan Job posted with token, once: the
-// token is checked before the body is read. A result that is not version 1,
+// CompleteScan takes the result body a scan Job posted with token, once. The
+// callback has already read the body (at most readiness.MaxResultBytes); the
+// token is checked here before the body is parsed. A result that is not version 1,
 // or not of the scan's commit, fails the scan as unusable; a Job's error
 // fails it with that text. Every string is untrusted (skillfetch.JobText, held
 // secrets withheld), paths over readiness.MaxPathBytes are dropped and lists
