@@ -409,6 +409,37 @@ func TestScanPodPartStoredFirst(t *testing.T) {
 	}
 }
 
+// With no scan image (or no Launcher) a scan can never get to its Job, so it
+// fails at once with that reason and spends no platform call on settings.
+func TestScanNoImageMakesNoPlatformCall(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*Engine)
+	}{
+		{"no image", func(e *Engine) { e.ScanImage = "" }},
+		{"no launcher", func(e *Engine) { e.Launcher = nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newScanEnv(t)
+			tc.setup(env.Engine)
+			sc := queueScan(t, env, testInstance, testProjectPath, "alice")
+			env.GitLab.Reset()
+			env.Engine.launchScans(env.ctx)
+
+			got := scanOf(t, env, sc.ID)
+			if got.State != store.ScanFailed || got.Error != msgScanNoImage {
+				t.Fatalf("scan = %s %q; want failed with %q", got.State, got.Error, msgScanNoImage)
+			}
+			if msgScanNoImage != "readiness scans need PERGENT_SH_IMAGE (set by the chart)" {
+				t.Error("the no-image reason changed")
+			}
+			if n := len(env.GitLab.Requests("", "")); n != 0 {
+				t.Errorf("a scan that can't start made %d platform calls", n)
+			}
+		})
+	}
+}
+
 // A scan Job evicted for its disk fails the scan as too large to clone, at
 // the next sweep; the settings stay.
 func TestScanEvictedKeepsSettings(t *testing.T) {

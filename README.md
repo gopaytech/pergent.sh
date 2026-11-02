@@ -580,7 +580,7 @@ The three rows that **Administration: Read** unlocks on GitHub are **Approvals n
 | `pergent.sh has no clone token for this repository yet` | No deploy token (GitLab) or the App could not mint one (GitHub). |
 | `couldn't read the default branch` | The platform refused or failed, or the instance is not connected. |
 | `couldn't read the repository's settings; see the pergent.sh log` | The pod part failed on its own side. |
-| `readiness scans need PERGENT_SH_IMAGE (set by the chart)` | The variable is unset. |
+| `readiness scans need PERGENT_SH_IMAGE (set by the chart)` | The variable is unset. The scan stops before it reads anything, so the settings rows say they couldn't be checked too. |
 | `couldn't start the scan Job; see the pergent.sh log` | The cluster refused the Job. |
 | `the repository is too large to clone (the scan has 2 GiB of disk)` | The clone filled the disk. The settings rows still show. |
 | `the scan ran out of memory` | The Job went over 512Mi. |

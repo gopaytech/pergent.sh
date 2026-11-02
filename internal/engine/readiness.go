@@ -321,9 +321,14 @@ func (e *Engine) launchScans(ctx context.Context) {
 // are read and stored first, so they show even when the Job can't run; then
 // the Job's name, token hash and deadline, then the Job (a fast Job never
 // posts before its token is known). Any stop fails the scan with its reason.
-// A scan deleted meanwhile (switched off) is left alone.
+// A scan deleted meanwhile (switched off) is left alone. With no scan image
+// it can never get to its Job, so it fails before any platform call.
 func (e *Engine) startScan(ctx context.Context, sc store.ReadinessScan) {
 	log := e.log().With("scan", sc.ID, "instance", sc.Instance, "project", sc.Project)
+	if e.ScanImage == "" || e.Launcher == nil {
+		e.failScan(ctx, sc.ID, msgScanNoImage)
+		return
+	}
 	pctx, cancel := context.WithTimeout(ctx, scanPodBudget)
 	target, stop := e.scanSettings(pctx, sc.Instance, sc.Project)
 	cancel()
@@ -358,9 +363,6 @@ func (e *Engine) startScan(ctx context.Context, sc store.ReadinessScan) {
 		return
 	case len(input) > readiness.MaxInputBytes:
 		e.failScan(ctx, sc.ID, kube.ErrScanInputTooLarge.Error())
-		return
-	case e.ScanImage == "" || e.Launcher == nil:
-		e.failScan(ctx, sc.ID, msgScanNoImage)
 		return
 	}
 
