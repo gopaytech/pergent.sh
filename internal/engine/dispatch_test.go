@@ -497,7 +497,7 @@ func TestDispatchMissingDeployTokenFailsRun(t *testing.T) {
 			dispatch(t, env)
 
 			r := env.Run(id)
-			if r.State != store.Reported || r.FailureReason != "pergent.sh has no clone token for this project yet" {
+			if r.State != store.Reported || r.FailureReason != "pergent.sh has no clone token for this repository yet" {
 				t.Errorf("run = state %s reason %q", r.State, r.FailureReason)
 			}
 			if len(env.Jobs()) != 0 {

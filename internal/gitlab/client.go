@@ -410,6 +410,21 @@ func (c *Client) ApprovalsBeforeMerge(ctx context.Context, projectID int64) (int
 	return a.ApprovalsBeforeMerge, err
 }
 
+// ProtectedBranch returns the protection of branch, matched by exact name
+// (GET /projects/:id/protected_branches/:name). A branch that isn't protected
+// is found false with no error.
+func (c *Client) ProtectedBranch(ctx context.Context, projectID int64, branch string) (ProtectedBranch, bool, error) {
+	var pb ProtectedBranch
+	_, err := c.getJSON(ctx, projPath(projectID)+"/protected_branches/"+seg(branch), nil, &pb)
+	if isStatus(err, http.StatusNotFound) {
+		return ProtectedBranch{}, false, nil
+	}
+	if err != nil {
+		return ProtectedBranch{}, false, err
+	}
+	return pb, true, nil
+}
+
 // GetMergeRequest returns one merge request. Draft is true when GitLab reports
 // either draft or work_in_progress.
 func (c *Client) GetMergeRequest(ctx context.Context, projectID, iid int64) (MergeRequest, error) {

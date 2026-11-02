@@ -532,9 +532,14 @@ func gitHubRequiredApprovals(ctx context.Context, c *github.Client, owner, name,
 	case found:
 		return n, nil
 	default:
-		return 0, fmt.Errorf("no ruleset requires reviews, and the branch protection can't be read: %w", err)
+		return 0, fmt.Errorf("%w: %w", errClassicProtection, err)
 	}
 }
+
+// errClassicProtection is gitHubRequiredApprovals' failure when no ruleset
+// requires reviews and the classic protection rule can't be read (it needs
+// the Administration permission).
+var errClassicProtection = errors.New("no ruleset requires reviews, and the branch protection can't be read")
 
 // forgetInstallation clears the stored installation of instance's repository
 // path (the review App was uninstalled), so dispatch reports its runs instead

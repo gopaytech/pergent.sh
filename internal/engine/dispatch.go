@@ -48,7 +48,7 @@ const (
 	// reasonNoSkills is why a run is skipped and what "Needs attention" says.
 	reasonNoSkills     = "this repository has no skills"
 	reasonTooLarge     = "the skills and instructions for this repository are larger than 900 KiB"
-	reasonNoCloneToken = "pergent.sh has no clone token for this project yet"
+	reasonNoCloneToken = "pergent.sh has no clone token for this repository yet"
 	// reasonNoRepository is a GitHub repository reconcile hasn't stored.
 	reasonNoRepository = "pergent.sh hasn't looked this repository up on GitHub yet"
 	reasonNotInstalled = "the pergent review App isn't installed on this repository"
