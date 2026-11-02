@@ -99,7 +99,7 @@ What the chart creates:
 - A Deployment with **one replica** and the `Recreate` strategy. Do not scale it up: at startup pergent.sh requeues runs it had claimed but not launched, which is only safe when no other pod is dispatching. The pod runs as non-root with a read-only root filesystem, drops all capabilities, and has startup, readiness and liveness probes on `/healthz` (the startup probe allows 150 s, as pergent.sh starts listening only after the database and migrations and, for each instance in the config file, its GitLab tokens or GitHub Apps check out; instances added in the dashboard never delay it). The pod restarts when the config changes. When `adminPassword.existingSecret` is set, the pod also gets that Secret's `adminPassword.key` as the environment variable named by `config.dashboard.admin_password_env` (see [First sign-in](#first-sign-in)).
 - A Service on port 8080 (`service.type`, `ClusterIP` by default). No Ingress: see [Exposing pergent.sh](#exposing-pergentsh).
 - A ServiceAccount, and in `jobsNamespace` a Role and RoleBinding for it: `batch/jobs` (create, get, list, watch, patch, delete), `secrets` and `configmaps` (create, get, delete), `pods` (get, list) and `pods/log` (get, to keep each review's log). There are no wildcard rules and nothing outside `jobsNamespace`.
-- A NetworkPolicy in `jobsNamespace` for the Job pods, review Jobs and [skill fetch Jobs](#installing-from-git) alike (those labelled `app.kubernetes.io/managed-by: pergent-sh`): no ingress; egress to DNS (UDP and TCP 53), to TCP 443 and 80 in `jobEgress.cidrs`, and to TCP 8080 of the pergent.sh pods for the result callback. A NetworkPolicy only takes effect when your CNI enforces them.
+- A NetworkPolicy in `jobsNamespace` for the Job pods, review Jobs, [skill fetch Jobs](#installing-from-git) and [readiness scan Jobs](#readiness-scan) alike (those labelled `app.kubernetes.io/managed-by: pergent-sh`): no ingress; egress to DNS (UDP and TCP 53), to TCP 443 and 80 in `jobEgress.cidrs`, and to TCP 8080 of the pergent.sh pods for the result callback. A NetworkPolicy only takes effect when your CNI enforces them.
 - A ConfigMap for `config.yaml`.
 
 **Narrow `jobEgress.cidrs`.** The default `0.0.0.0/0` lets a Job reach any address on ports 80 and 443, including in-cluster services and the cloud metadata endpoint. Set it to the addresses of GitLab (or GitHub) and the LLM provider. An empty list (`cidrs: []`) allows no external egress at all: Jobs then reach only DNS and pergent.sh's port 8080. The optional `jobEgress.except` list is added to every `ipBlock` as NetworkPolicy `except` (for example `169.254.169.254/32`); it applies to every cidr, and Kubernetes rejects an entry outside its cidr, so use it with a broad cidr such as the default `0.0.0.0/0`.
@@ -119,10 +119,11 @@ The chart creates a Service (`pergent-sh.pergent-sh.svc:8080` for the install ab
 | `/webhooks/` | GitLab and GitHub | `public_url`'s host. GitHub.com and your GitLab must reach it. |
 | `/runs/` | the review Jobs (result callback) | `public_url`'s host, or keep it in-cluster with `callback_url`. |
 | `/skill-fetches/` | the skill fetch Jobs (result callback, only with the dashboard on) | `public_url`'s host, or keep it in-cluster with `callback_url`, as for `/runs/`. |
+| `/readiness-scans/` | the readiness scan Jobs (result callback, only with the dashboard on) | `public_url`'s host, or keep it in-cluster with `callback_url`, as for `/runs/`. |
 | `/`, `/api/`, `/auth/` | people, in the [dashboard](#dashboard) | `dashboard.url`'s host, over https. It can be internal-only. |
 | `/healthz` | probes | nowhere; the kubelet calls the pod directly. |
 
-Expose only `/webhooks/`, `/runs/` and `/skill-fetches/` on the public host, so the dashboard and its sign-in stay off the internet. Whatever sits in front must set `X-Forwarded-For` (see [Password sign-in limits](#password-sign-in-limits)).
+Expose only `/webhooks/`, `/runs/`, `/skill-fetches/` and `/readiness-scans/` on the public host, so the dashboard and its sign-in stay off the internet. Whatever sits in front must set `X-Forwarded-For` (see [Password sign-in limits](#password-sign-in-limits)).
 
 ### Instances and the LLM in the config file
 
@@ -176,6 +177,16 @@ For GitHub, put the Apps' private keys (the whole `.pem` file of each) and the r
 
 pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is handy for local development.
 
+### Upgrading to 0.5.0
+
+0.5.0 adds the [readiness scan](#readiness-scan). Nothing is removed, but these things change:
+
+1. **Migration `0015` runs at startup.** It adds the `readiness_scans` table. Back up PostgreSQL first and keep the backup: 0.4.0 does not know the new table.
+2. **`/readiness-scans/` must be reachable by the Jobs**, like `/runs/` ([Exposing pergent.sh](#exposing-pergentsh)). A scan Job that can't post its result ends as `the scan took longer than 5 minutes` or `the scan Job ended without a result`. The scan Jobs use the NetworkPolicy the chart already makes for review Jobs, so there is no new chart value; the clone needs the GitLab or GitHub address in `jobEgress.cidrs`, as a review does.
+3. **Scans need the dashboard** (`dashboard.url`) and the `PERGENT_SH_IMAGE` variable the chart sets. Without the dashboard no scan runs.
+4. **Every repository that is switched on is scanned once after the upgrade**, if it was never scanned: oldest first, 2 at a time, starting before the first reconcile. These scans are not in the audit log. Expect new "Needs attention" items for repositories that lack project context or skill coverage.
+5. **Optional:** to let the scan read classic branch protection on GitHub, give the review App **Administration: Read-only** ([Create the review App](#1-create-the-review-app)). Nothing breaks without it.
+
 ### Upgrading to 0.4.0
 
 0.4.0 adds `linux/arm64` images; nothing else changes and there is no migration. The default `jobs.image` is now `ghcr.io/gopaytech/pergent:v0.1.2`, which is also built for both platforms. A config that sets its own `jobs.image` keeps using the image it names: to run review Jobs on arm64 nodes, point it at pergent v0.1.2 or newer (v0.1.1 and older are amd64 only).
@@ -226,12 +237,15 @@ In the organization's settings, **Developer settings → GitHub Apps → New Git
   - Checks: **Read and write**
   - Issues: **Read and write** (pull request comments are issue comments; this also covers the 👀, 👍 and 👎 reactions on a command comment)
   - Metadata: **Read-only** (always on; this also covers reading a commenter's repository permission)
+  - Administration: **Read-only** (optional). It lets the [readiness scan](#readiness-scan) read classic branch protection. Without it, 2 rows of the scan say "Couldn't check" and name this permission; nothing else changes.
 - **Subscribe to events:** **Pull request** and **Issue comment**. The Issue comment event delivers the comments that commands are read from.
 - **Where can this GitHub App be installed:** "Only on this account", or "Any account" to install it on several organizations.
 
 Create it, note its **App ID** and generate a **private key** (a `.pem` file).
 
 **An existing review App** needs one change to run commands: under **Permissions & events → Subscribe to events**, tick **Issue comment** and save. It asks for no new permission, as it already has the ones above. Without the event the App still reviews, but no command is ever received.
+
+**Administration: Read** is optional too. To turn it on, open **Permissions & events → Repository permissions**, set **Administration** to **Read-only** and save; the owner of each installation then has to accept the new permission. The [readiness scan](#readiness-scan) uses it for the rows "Approvals needed to merge" and "Required checks before merge". Reviews never need it.
 
 ### 2. Create the approve App
 
@@ -458,7 +472,7 @@ Everything a platform account may see or do comes from the teams it is on, under
 
 - **Overview:** the number of reviews, approvals, blocking reviews and failed reviews over the last 7, 30 or 90 days, the most recent reviews, and "Needs attention". Admins also see a setup checklist (the model and its key, a connected instance, a skill in the library, a repository switched on); each item links to its page, ticks when done, and the list goes away when all four are done.
 - **Reviews:** filtered by repository, result and time. Each merge request has a page with every run (commit, what started it, result, duration) and, for a run, the status set on the platform, whether it was approved and why not, the pergent version, model, tokens, each skill's verdict, findings (with the ones people dismissed, who dismissed them and why), checks, files (reviewed, skipped with the rule, not reviewed) and the log. Each skill shows where it came from: `library v3` (the library version the review used), or `repo (.claude/skills)` for a skill read from the repository. A run skipped because the repository has no skills shows as **Not reviewed** (result `skipped`, with its own filter), not as superseded, and is not counted as a review or a failure. Maintainers and admins of the repository also get the buttons **Re-run review** and **Re-run failed only**, and **Dismiss** and **Restore** on findings ([Commands](#commands)).
-- **Repositories:** each with its last 7 days and health; its reviews, its setup checks and its skills and instructions. Skills & instructions shows what a review of the default branch would get, read with the review bot or App and kept for 5 minutes: each skill with its library version or repository folder, a link to its file for a repository skill, and the problem a review would fail on. A repository's **Settings** choose between "Use the default skills (a, b)" and "Choose skills", with a running total against the 900 KiB a review takes, and list the skills found in `.agents/skills`, `.claude/skills` and `.github/skills` with switches, off at first (`.pergent/skills` is always on; only the `SKILL.md` text is used). **Add repository** warns when the default skill list is empty.
+- **Repositories:** each with its last 7 days and health; its reviews, its readiness scan, its setup checks and its skills and instructions. The [Readiness](#readiness-scan) tab is the checklist of what the repository gives a review. Skills & instructions shows what a review of the default branch would get, read with the review bot or App and kept for 5 minutes: each skill with its library version or repository folder, a link to its file for a repository skill, and the problem a review would fail on. A repository's **Settings** choose between "Use the default skills (a, b)" and "Choose skills", with a running total against the 900 KiB a review takes, and list the skills found in `.agents/skills`, `.claude/skills` and `.github/skills` with switches, off at first (`.pergent/skills` is always on; only the `SKILL.md` text is used). **Add repository** warns when the default skill list is empty.
 - **Skills:** the skill library: each skill's name, version, where it came from (written in the dashboard, or the repository and branch or tag it was installed from), whether it is on the default list and when it changed, with its text in a plain-text box (never rendered as HTML or markdown) and its saved versions. A skill installed from a private repository is shown to everyone with a team, so installing is sharing; the repository's path is shown only to people who can see that repository, and others see `a private repository on <instance>`. Who saved each version is shown to admins only. See [Skills and instructions](#skills-and-instructions).
 
 **Admins** also get:
@@ -493,19 +507,113 @@ Password admins add GitLab and GitHub instances, with their secrets, under **Adm
 - A repository switched on in the dashboard is stored in Postgres. pergent.sh sets it up (webhook and deploy token on GitLab) the same way as a config repository, in a reconcile of that repository alone it starts at once (switches made within 10 seconds of each other are handled together, at the end of those 10 seconds); switching it off removes them the same way. The hourly reconcile still covers every repository. Users whose teams cover it (an admin team covers every repository of its instance) see a newly switched-on repository from their next request, once the platform has confirmed they can see it.
 - A repository can't be in both: when it is added to the config, the next reconcile deletes its dashboard record and the config's settings apply. Removing a repository from the config switches it off; it doesn't fall back to the dashboard. To hand a repository to the dashboard, remove it from the config, redeploy, then switch it on in the dashboard.
 
+### Readiness scan
+
+A review does better when the repository gives it something to work with. The **Readiness** tab of a repository (after Skills & instructions) shows what is missing and the exact fix. It only advises: it never changes a repository setting, a file or a branch, it opens no merge request, and it does not use the LLM.
+
+**Who.** Everyone who can see the repository sees the tab; the same rule as the review list ([Who sees what](#who-sees-what)). Maintainers and admins of the repository press **Scan now**, repositories in the config included. A repository in the config is read-only: instead of the **Use these skills** button the tab shows the `skills` line to paste into the config file.
+
+**When a scan runs.**
+
+- When a repository is switched on, after its first reconcile. For a repository in the config, it is a reconcile that sets it up and finds no scan of it.
+- On **Scan now**. At most 1 scan is queued or running per repository: a second request gets 409 `a scan is already queued or running` with that scan. A repository can be scanned on request once every 5 minutes, counted from when the latest scan of any kind was queued: sooner than that is 429 `this repository was scanned less than 5 minutes ago; try again in N minutes` (`1 minute` for 1), with `Retry-After` in seconds. Only a Scan now that was accepted is in the [audit log](#audit-log) (`readiness_scan_requested`).
+- Once after the upgrade, for each switched-on repository that was never scanned ([Upgrading to 0.5.0](#upgrading-to-050)).
+- Never on a schedule and never after a push. The tab says how old the scan is and who started it ("Scanned 3 days ago, by alice (gitlab main), at commit abcdef1"). A repository that is not scanned yet shows "Not scanned yet". A scan that was lost (pergent.sh restarted, the Job was evicted) is not retried: press **Scan now**.
+- Scans run only with the dashboard on. A scan reads the default branch at one commit.
+
+**The checks.** Each item is **Passed**, **Warning**, **Missing** or **Couldn't check**. Couldn't check is never shown as passed, and it never raises a "Needs attention" item. Each item that is not passed says why it matters to a review and what to do.
+
+| Check | Item | Passed when | Otherwise |
+| --- | --- | --- | --- |
+| Project context | Agent context file | `AGENTS.md` or `CLAUDE.md` at the root, not empty | Missing |
+| | README | a README at the root | Missing |
+| | Contributing guide | `CONTRIBUTING.md` at the root, in `.github/` or in `docs/` | Warning |
+| | Review instructions | `.pergent/instructions.md` | Warning |
+| Ownership and process | CODEOWNERS | a file at the root, in `.github/`, `docs/` or `.gitlab/` with at least one rule | Warning |
+| | Approvals needed to merge | 2 or more | Warning for 1 or none |
+| | Default branch protected | protected against direct pushes | Missing when not protected; on GitLab, Warning when Developers can push |
+| | Required checks before merge | GitHub: at least one required status check. GitLab: "Pipelines must succeed" is on | Warning |
+| Skill fit | Skills that match files | at least one skill turned on for the repository matches a file (a skill with no `paths` matches every repository) | Missing |
+| | Assigned skills that match nothing | none | Warning, naming them |
+| | Languages no skill covers | none above 10% of the source files | Warning, naming them |
+| | Suggested skills | not a check: library skills that are not turned on and whose `paths` match files | none |
+| Size and noise | Generated, vendored and very large files | no file a review would read that looks like noise | Warning |
+| | Skills plus instructions size | 900 KiB or less | Missing |
+
+- **Skill fit is rule-based.** The scan uses the matcher a review uses (pergent's exported `scope` package), so "matches a file" and the suggestions are what a review would pick. Languages are counted by file extension in the scan Job, which skips the files a review skips.
+- **Noise is what a review would read.** A review already skips lockfiles, `vendor/`, `node_modules/`, `third_party/`, paths set `linguist-generated` in `.gitattributes` and files with a "Code generated ... DO NOT EDIT." header. The scan lists only other files that look like noise: a generated or minified name (`*.pb.go`, `*_generated.*`, `*.min.js`), build output (`dist/`, `build/`), or a file larger than 512 KiB. The tab lists at most 50, largest first, and counts the rest. The fix shown is a `.gitattributes` line with `linguist-generated` (a review honours that; it ignores `linguist-vendored`) or an `exclude` glob in the skill's frontmatter.
+- **Size.** The scan Job adds up the repository's own skills and `.pergent/instructions.md`; pergent.sh adds the library skills turned on now. The tab shows the size as it is now.
+
+**What the settings rows read.** The Job reads the files. The approvals, branch protection and required checks rows are read by the pergent.sh pod with the review bot or App, when the scan starts, and are stored at once, so they show even when the Job fails. They need no new permission, except the optional one on GitHub. A read that is refused or fails is **Couldn't check** with the reason; the platform's own error text goes to the log only.
+
+| Platform | Row | What is read | Couldn't check says |
+| --- | --- | --- | --- |
+| GitLab (the review bot, Maintainer) | Approvals needed to merge | The approval rules that apply to the default branch, as the hourly check reads them (with none, the project's `approvals_before_merge`). | `the review bot can't read the approval rules here` |
+| | Default branch protected | Every protected branch rule that matches the default branch, by exact name and by wildcard. None is Missing (`main is not protected`). Any matching rule that lets Developers push is a Warning (`Developers can push to main directly`), because GitLab applies the most permissive. | `the review bot can't read branch protection here` |
+| | Required checks before merge | The project's "Pipelines must succeed" setting. | `GitLab didn't show whether pipelines must succeed` |
+| GitHub (the review App) | Approvals needed to merge | The default branch's rulesets (`rules/branches/{branch}`) and its classic branch protection (needs the optional **Administration: Read**). A branch with no ruleset and no classic protection is a Warning (no approval needed), not Couldn't check. | `the review App can't read this branch's rules`; or, when no ruleset requires reviews and the branch has classic protection the App can't read, the same with `(it needs the optional Administration: Read permission)`; or the note that the approve App or bot can't reach the repository |
+| | Default branch protected | A ruleset with a pull request or update rule, or classic protection (the branch's `protected` flag, which the App can read). | `the review App can't read this branch's rules` |
+| | Required checks before merge | A ruleset with required status checks, or required checks the branch shows. A branch with no ruleset and no protection is a Warning (`no status checks are required`). A protected branch that shows no required check may be hiding them, so it is not a Warning. | `the review App can't see this branch's required checks`; for a protected branch with none shown, the same with `(it needs the optional Administration: Read permission)` |
+
+The two rows that **Administration: Read** unlocks on GitHub are **Approvals needed to merge** and **Required checks before merge**. When the hourly check has raised "one approval is enough to merge" for the repository, the approvals row shows a Warning whatever the scan read, because the hourly check is newer.
+
+**What the Job reads.** A scan Job clones the default branch at the commit the pod resolved, with depth 1, over https only, with symbolic links not followed and hooks off, and runs `pergent-sh scan-repo` over it ([What a Job can and cannot see](#what-a-job-can-and-cannot-see)). It is told each library skill's `paths` and `exclude` globs, never a skill's text, and reads the repository's own skill folders from the clone. It posts counts, matches, the presence of the context files and at most 50 noise paths. File contents never leave the Job. The pod treats everything it posts as untrusted text: one line, at most 500 bytes, and a text that holds a secret pergent.sh holds is withheld, or the result refused.
+
+**Limits of a scan.** These are fixed in this version and are not chart values:
+
+| Limit | Value |
+| --- | --- |
+| Time per scan Job | 5 minutes, clone and scan together |
+| Disk | 2 GiB (`emptyDir`) |
+| CPU and memory | 100m CPU and 128Mi requested, 512Mi memory limit |
+| Scan Jobs at once | 2. They don't count toward `jobs.max_running`, so a review never waits for a scan |
+| Largest result the Job posts | 1 MiB |
+| Noise listed | 50 paths |
+| Noise size | over 512 KiB |
+
+**When a scan fails.** The settings rows still show. The file rows say `couldn't scan files: <reason>`, and the top line says `Last scan failed N ago: <reason>`. A failed scan changes no "Needs attention" item. The reasons:
+
+| Reason | Meaning |
+| --- | --- |
+| `the repository has no default branch yet` | An empty repository. |
+| `pergent.sh hasn't set this repository up yet` | The reconcile has not set it up (or the review App is no longer installed on it). |
+| `pergent.sh has no clone token for this repository yet` | No deploy token (GitLab) or the App could not mint one (GitHub). |
+| `couldn't read the default branch` | The platform refused or failed, or the instance is not connected. |
+| `couldn't read the repository's settings; see the pergent.sh log` | The pod part failed on its own side. |
+| `readiness scans need PERGENT_SH_IMAGE (set by the chart)` | The variable is unset. |
+| `couldn't start the scan Job; see the pergent.sh log` | The cluster refused the Job. |
+| `the repository is too large to clone (the scan has 2 GiB of disk)` | The clone filled the disk. The settings rows still show. |
+| `the scan ran out of memory` | The Job went over 512Mi. |
+| `the scan took longer than 5 minutes` | The Job hit its deadline, or never posted. |
+| `the scan Job ended without a result` | The Job ended, or is gone, with no result. |
+| `the scan stopped before its Job started; scan again` | pergent.sh stopped between the pod part and the Job. |
+| `the scan Job sent a result pergent.sh couldn't use`, `the scan Job sent a result over 1 MiB` | A result of another version or commit, a name that isn't plain, or too big. |
+| `the scan Job couldn't scan the files` | The Job's own error text was empty or held a secret. |
+
+Only the latest finished scan of a repository is kept, besides one that is queued or running: a failed scan replaces an earlier done one, so the file rows then say they couldn't be scanned until a scan succeeds.
+
+**"Needs attention".** A done scan raises or clears 3 items, on the overview and under the repository's **Setup checks** tab; each opens the Readiness tab ([Logs and "Needs attention"](#logs-and-needs-attention)).
+
+**Use these skills.** The suggestions come with a box per skill and a **Use these skills** button for maintainers and admins. It saves the repository's skill list plus the ticked skills through the normal repository settings save, so the same 900 KiB check, audit entry and permission rules apply. A repository that follows the default list asks first (`This repository will stop following the default skill list.`) and saves today's default list plus the ticked skills as its own. Saving skills, here or in **Settings**, and saving the default list, re-judge skill fit and the 900 KiB total from the last scan at once, with no new Job, so the "no skill covers the repository" item goes as soon as a skill matches. Editing a library skill's text or updating it from its source does not re-judge those items by itself: the tab shows the size as it is now, and the items follow at the next scan or skills save.
+
+Switching a repository off deletes its scans and drops its items.
+
 ### Audit log
 
-Admins read the audit log under **Admin → Audit log**: who did what and when, for every change made in the dashboard. Each entry names its actor as `alice (gitlab main)` (username, platform and instance), `root (password)` for a password admin or `cli` for a reset from the command line. It records sign-ins (GitLab, GitHub and password), failed password sign-ins and lockouts, password changes and resets, accounts, teams (the members added and removed by username, and the role before and after), instances and which of their fields changed, the LLM and the defaults (which fields; the default skill list shows as `skills`), the skill library (`skill_created`, `skill_updated`, `skill_installed`, `skill_source_updated`, `skill_copied` and `skill_deleted`, each naming the skill, with its version or the skill it was copied from, and for an install or an update the source (a private repository by its instance only), the branch or tag and the short commit; a skill's text is never in an entry), repositories switched on and off with their settings changed or reset, and the review actions: `review_rerun`, `review_rerun_failed`, `finding_dismissed` and `finding_restored`, from a comment or a button, each with the merge request, the head commit and, for a finding, its fingerprint and the reason given. It is kept for 90 days and never holds a secret value: an entry for a secret names the field, not its content. A platform admin doesn't see the entries about repositories it can't see, about other instances, or the password admins' own sign-ins and passwords.
+Admins read the audit log under **Admin → Audit log**: who did what and when, for every change made in the dashboard. Each entry names its actor as `alice (gitlab main)` (username, platform and instance), `root (password)` for a password admin or `cli` for a reset from the command line. It records sign-ins (GitLab, GitHub and password), failed password sign-ins and lockouts, password changes and resets, accounts, teams (the members added and removed by username, and the role before and after), instances and which of their fields changed, the LLM and the defaults (which fields; the default skill list shows as `skills`), the skill library (`skill_created`, `skill_updated`, `skill_installed`, `skill_source_updated`, `skill_copied` and `skill_deleted`, each naming the skill, with its version or the skill it was copied from, and for an install or an update the source (a private repository by its instance only), the branch or tag and the short commit; a skill's text is never in an entry), repositories switched on and off with their settings changed or reset, `readiness_scan_requested` (a **Scan now** that was accepted; the scans started by switch-on or the upgrade are not audited), and the review actions: `review_rerun`, `review_rerun_failed`, `finding_dismissed` and `finding_restored`, from a comment or a button, each with the merge request, the head commit and, for a finding, its fingerprint and the reason given. It is kept for 90 days and never holds a secret value: an entry for a secret names the field, not its content. A platform admin doesn't see the entries about repositories it can't see, about other instances, or the password admins' own sign-ins and passwords.
 
 ### Logs and "Needs attention"
 
 - **Logs.** When a review Job ends, or before the Job of a superseded run is deleted, pergent.sh keeps the last 200 KB of the pergent container's log, with the Job's clone token, LLM key and result token replaced by `[REDACTED]`. Logs are deleted after 30 days. A Job that is gone before its log is read (Jobs are removed an hour after they finish) has no log.
-- **Needs attention** lists setup problems that pergent.sh detects, kept up to date by the hourly reconcile and the Job watcher (not computed when the page loads):
+- **Needs attention** lists setup problems that pergent.sh detects, kept up to date by the hourly reconcile, the Job watcher and the readiness scan (not computed when the page loads):
   - one approval is enough to merge, so pergent's approval alone can unlock it;
   - the GitHub approve App isn't installed on the repository, or the approve bot user can't reach it;
   - reviews running out of memory (two or more in the last 7 days);
   - the GitHub approve bot's token expires within 14 days. This one concerns the whole instance and is shown to its admins and the password admins;
   - a run failed because a skill it needs is missing (`skill "x" is not in the skill library`, or `skill "x" is turned on but not found in the repository`), or was skipped because the repository has no skills (`this repository has no skills`). Either goes when a later run of the repository starts a Job ([Skills and instructions](#skills-and-instructions));
+  - the [readiness scan](#readiness-scan) found that no skill the repository uses matches its files (`no_skill_coverage`: `No skill this repository uses matches its files, so its reviews check nothing useful. The Readiness tab suggests skills that fit.`). It goes when a scan finds a match, or when the skills change and the last scan shows one;
+  - skills plus instructions are over 900 KiB, so every review fails (`inputs_over_budget`: `Skills and instructions come to N KiB, over the 900 KiB a review can take, so every review fails. Use fewer skills or shorten the instructions.`). It goes when the size is back under, at a scan or when the repository's skills or the default list are saved. When a size isn't known (a skill with a problem, or one removed from the library) the item is left as it is;
+  - the repository has no `AGENTS.md`, `CLAUDE.md` or README (`no_project_context`: `The repository has no AGENTS.md, CLAUDE.md or README, so reviews don't know what the project is. Add one.`). It goes when a scan finds one. A failed scan changes none of these 3 items;
   - an instance added in the dashboard couldn't be connected (`instance_unreachable`; it goes when the instance connects), or its removal is stuck because the platform refuses to give up its webhooks ([Instances and secrets in the dashboard](#instances-and-secrets-in-the-dashboard)). These concern the whole instance too: they are shown to the password admins and to that instance's admins.
 
 ### Limits of the access check
@@ -833,6 +941,8 @@ Each Job's Secret and inputs ConfigMap are owned by the Job, so deleting the Job
 
 **A skill fetch Job** reads the skills of a public `https` URL an admin gives in the dashboard, so the pergent.sh pod never fetches an address an admin typed. It runs in the Jobs namespace under the same NetworkPolicy, for at most 2 minutes (its image pull and its limits, 512Mi of memory for the clone and 1Gi of scratch space, count against them), as user 65532 with a read-only root filesystem and no service account token. Its `clone` container (the `jobs.image`) gets no token of any kind: it fetches the one branch or tag at depth 1 with hooks off and https only. Its `send` container (pergent.sh's own image, which the chart passes as `PERGENT_SH_IMAGE`) reads the skills of the folder without following any symbolic link (one where a skill would be is listed as a problem) and posts them to `<callback_url>/skill-fetches/<id>/result` with a one-time token, its only secret. pergent.sh then drops the text of any skill holding a secret it holds or over 128 KiB. A URL outside `jobEgress.cidrs` can't be reached; the fetch then fails with `could not fetch <url> at <ref>; the URL, branch or tag may be wrong, or outside jobEgress.cidrs`.
 
+**A readiness scan Job** reads one repository's default branch for the [readiness scan](#readiness-scan). It is named `pergent-scan-<12hex>`, runs in the Jobs namespace as user 65532 with a read-only root filesystem and no service account token, and carries `app.kubernetes.io/managed-by: pergent-sh`, so the NetworkPolicy above applies to it. It has a 5 minute deadline, a 2Gi `emptyDir` for the clone, and asks for 100m CPU and 128Mi with a 512Mi memory limit. Its `clone` container (the `jobs.image`) gets only the read-only clone token, as a review's does (the GitLab deploy token, or a GitHub installation token for this one repository with `contents: read`), and fetches the one commit at depth 1 over https only, with hooks off. Its `scan` container (pergent.sh's own image, `PERGENT_SH_IMAGE`) gets only its one-time result token, as an environment variable, and its input as a read-only file: the library skills' names and `paths` and `exclude` globs, never their text. It follows no symbolic link and posts to `<callback_url>/readiness-scans/<id>/result`. The Job has **no LLM key and no token that can write**, and the clone never sees the result token.
+
 ## Fork merge requests
 
 The checkout first tries to fetch the base and head commits by SHA. When the server refuses that (this is common for merge requests from forks), it fetches `refs/merge-requests/<iid>/head` (GitHub: `refs/pull/<number>/head`) instead, then deepens the target branch (starting at 50 commits and doubling, up to 3200) until the merge base is there. If the merge base is still missing at that depth, the checkout fails and the merge request gets an error comment.
@@ -855,10 +965,11 @@ Deploy tokens are created per project with the name `pergent-sh`, valid for 30 d
 | `POST /webhooks/github/{instance}` | The GitHub review App's `pull_request` and `issue_comment` webhooks (the second carries [commands](#commands)); any other event is answered 200 and ignored. `X-Hub-Signature-256` (HMAC-SHA256 of the body with the instance's webhook secret) is compared in constant time; a missing or wrong signature gets 401 and is otherwise ignored. A repository that isn't in the config gets 200 and is ignored. |
 | `POST /runs/{id}/result` | A review Job delivering its result, with its one-time bearer token. |
 | `POST /skill-fetches/{id}/result` | A skill fetch Job delivering the skills it read from a public URL, with its one-time bearer token (only with the dashboard on). A wrong token gets 401, a second result or one after the fetch gave up 409, a body over 4 MiB 413. |
+| `POST /readiness-scans/{id}/result` | A readiness scan Job delivering what it found in a repository, with its one-time bearer token (only with the dashboard on). A wrong token gets 401, a second result or one after the scan ended 409, a body over 1 MiB 413. |
 | `GET /healthz` | Health check. It answers as soon as the server starts: pergent.sh serves right away and runs the startup reconcile in the background. |
 | `GET /auth/{gitlab or github}/{instance}/login`, `GET .../callback`, `POST /auth/logout` | [Dashboard](#dashboard) sign-in with GitLab or GitHub, and sign-out. Only with `dashboard.url` set. |
 | `GET /auth/csrf`, `POST /auth/password`, `POST /auth/password/change` | Password sign-in. `GET /auth/csrf` hands out the sign-in form's CSRF token (a cookie and `{"csrfToken": ...}`); `POST /auth/password` takes `{"username", "password"}` with that token in `X-CSRF-Token` and answers 204 and the session cookie; `POST /auth/password/change` takes `{"current", "new"}` for a signed-in password account. See [Password sign-in limits](#password-sign-in-limits). Only with `dashboard.url` set. |
-| `/api/...` | The dashboard's JSON API. Every route but `GET /api/instances` needs a session; writes need the `X-CSRF-Token` header. Only with `dashboard.url` set. The review page's buttons use `POST /api/reviews/{instance}/{project}/{number}/rerun` (`{"failed": true or false}`; 202 with `queued`, `already queued`, `nothing failed` or `whole review`; 429 at a re-run cap), `.../dismiss` (`{"fingerprint", "reason"}`; 200 with `dismissed` or `already dismissed`; a reason of up to 500 characters; 400 `the reason is too long` above) and `.../restore` (`{"fingerprint"}`; 200 with `restored` or `not dismissed`), for maintainers and admins of the repository, config repositories included. |
+| `/api/...` | The dashboard's JSON API. Every route but `GET /api/instances` needs a session; writes need the `X-CSRF-Token` header. Only with `dashboard.url` set. The review page's buttons use `POST /api/reviews/{instance}/{project}/{number}/rerun` (`{"failed": true or false}`; 202 with `queued`, `already queued`, `nothing failed` or `whole review`; 429 at a re-run cap), `.../dismiss` (`{"fingerprint", "reason"}`; 200 with `dismissed` or `already dismissed`; a reason of up to 500 characters; 400 `the reason is too long` above) and `.../restore` (`{"fingerprint"}`; 200 with `restored` or `not dismissed`), for maintainers and admins of the repository, config repositories included. The Readiness tab uses `GET /api/repositories/{instance}/{project}/readiness` (anyone who can see the repository) and `POST .../readiness/scan` (maintainers and admins; 202 with the queued scan, 409 while one is queued or running, 429 within 5 minutes of the latest scan, 404 for a repository that isn't switched on or when scans are off). |
 | `GET /` and every other path | The dashboard's pages. Only with `dashboard.url` set; without it they are 404. |
 
 Logs are JSON on stdout. Secrets are never logged.
@@ -875,6 +986,7 @@ This release is deliberately small:
 - No advice on whether a human approval is still needed beyond the hourly warning for a repository that one approval can merge.
 - No repository cache: every checkout is a fresh `git init` plus a shallow fetch.
 - Skills: one library for the whole installation, with a default list and per-repository lists; no per-team or per-instance lists. Installed skills change only when an admin presses **Update**, never by themselves or from a webhook on the source. Only the `SKILL.md` text of a folder skill is used. Repository skills can't be edited in the dashboard. A skill's text has no preview and the history has no diff or restore for written skills. A URL source must be public and inside `jobEgress.cidrs`. No chat or API token to manage the library from scripts.
+- Readiness scan: advice only, no drafting of `AGENTS.md` or CODEOWNERS and no merge requests. It reads the default branch, on switch-on, on request and once after the upgrade, never on a schedule. The limits of a scan Job (5 minutes, 2 GiB, 512Mi, 2 at once) are fixed. On GitHub, classic branch protection rows say Couldn't check unless the review App has the optional Administration: Read permission.
 - One replica, and PostgreSQL is external.
 - GitHub.com only. `github[].api_url` accepts another URL, but GitHub Enterprise Server is untested.
 - On GitHub, approving after the approve App is installed starts with the next push or ready-for-review; there is no catch-up pass over open pull requests.
