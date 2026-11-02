@@ -430,3 +430,29 @@ func TestResolveSkillsSourceError(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestSkillScope(t *testing.T) {
+	paths, exclude, err := SkillScope([]byte("---\nname: go\npaths: [\"*.go\", \"cmd/**\"]\nexclude: [\"*_test.go\"]\n---\nbody"))
+	if err != nil || !equal(paths, []string{"*.go", "cmd/**"}) || !equal(exclude, []string{"*_test.go"}) {
+		t.Errorf("got %q, %q, %v", paths, exclude, err)
+	}
+	paths, exclude, err = SkillScope([]byte("no frontmatter"))
+	if err != nil || paths != nil || exclude != nil {
+		t.Errorf("no frontmatter: got %q, %q, %v", paths, exclude, err)
+	}
+	if _, _, err := SkillScope([]byte("---\npaths: \"*.go\"\n---\nbody")); err == nil || !strings.Contains(err.Error(), "paths") {
+		t.Errorf("paths as a string: err = %v", err)
+	}
+}
+
+func TestLoadInstructions(t *testing.T) {
+	src := &fakeSource{files: map[string]string{
+		"AGENTS.md":                "agents text",
+		".pergent/instructions.md": "team text",
+	}}
+	got, err := LoadInstructions(context.Background(), src, 7, "sha1")
+	want := "# Project instructions (AGENTS.md)\n\nagents text\n\n# Team review instructions (.pergent/instructions.md)\n\nteam text\n"
+	if err != nil || string(got) != want {
+		t.Errorf("got %q, %v", got, err)
+	}
+}

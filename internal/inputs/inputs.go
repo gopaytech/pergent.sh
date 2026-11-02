@@ -159,7 +159,7 @@ func ResolveSkills(ctx context.Context, src Source, lib map[string]LibraryEntry,
 	}
 	sort.Strings(in.Overridden)
 
-	in.Instructions, err = loadInstructions(ctx, src, projectID, ref)
+	in.Instructions, err = LoadInstructions(ctx, src, projectID, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +213,10 @@ func (in *Inputs) Only(names []string) *Inputs {
 	return out
 }
 
-func loadInstructions(ctx context.Context, src Source, projectID int64, ref string) ([]byte, error) {
+// LoadInstructions reads the instructions a review gets at ref: the root
+// AGENTS.md (or CLAUDE.md when there is none) and .pergent/instructions.md,
+// each under a heading. It is nil when the project has neither.
+func LoadInstructions(ctx context.Context, src Source, projectID int64, ref string) ([]byte, error) {
 	var out []byte
 
 	projectFile := "AGENTS.md"

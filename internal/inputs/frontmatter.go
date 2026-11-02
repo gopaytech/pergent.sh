@@ -32,6 +32,16 @@ func SkillName(content []byte, fallback string) (string, error) {
 	return name, nil
 }
 
+// SkillScope returns the `paths` and `exclude` globs of a skill's frontmatter:
+// the files a review gives the skill. Both are nil when the skill has none.
+func SkillScope(content []byte) (paths, exclude []string, err error) {
+	fm, err := parseFrontmatter(content)
+	if err != nil {
+		return nil, nil, err
+	}
+	return fm.Paths, fm.Exclude, nil
+}
+
 type frontmatter struct {
 	Name       string   `yaml:"name"`
 	Paths      []string `yaml:"paths"`
