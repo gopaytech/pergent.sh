@@ -261,10 +261,23 @@ func checkScanJob(t *testing.T, job batchv1.Job, secret *corev1.Secret, scanToke
 	if got := secretKeys(scan); len(got) != 1 || got[0] != "scan-token" {
 		t.Errorf("the scan container reads Secret keys %v, want scan-token alone", got)
 	}
+	for _, c := range []corev1.Container{clone, scan} {
+		if len(c.EnvFrom) != 0 {
+			t.Errorf("container %s has envFrom %+v, want none: it would hand it every Secret key", c.Name, c.EnvFrom)
+		}
+	}
+	secretVolumes := 0
 	for _, v := range spec.Volumes {
-		if v.Secret != nil && (len(v.Secret.Items) != 1 || v.Secret.Items[0].Key != "scan-input") {
+		if v.Secret == nil {
+			continue
+		}
+		secretVolumes++
+		if len(v.Secret.Items) != 1 || v.Secret.Items[0].Key != "scan-input" {
 			t.Errorf("Secret volume %s mounts %+v, want the scan-input key alone", v.Name, v.Secret.Items)
 		}
+	}
+	if secretVolumes != 1 {
+		t.Errorf("the scan Job has %d Secret volumes, want 1 (the scan input)", secretVolumes)
 	}
 	mounted := func(c corev1.Container, volume string) bool {
 		for _, m := range c.VolumeMounts {
