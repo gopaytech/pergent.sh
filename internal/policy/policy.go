@@ -99,12 +99,17 @@ func blocksApproval(rule string) bool { return !reviewedSkipRules[rule] }
 //
 // Dismissals are the findings of the merge request that people set aside.
 // Applied before the verdicts are counted, a skill whose blocking findings
-// are all dismissed counts as clean. When any dismissal covers a finding the
-// comment is rendered again from the result (render.Comment, at most
-// MaxComment bytes when positive, passed through Redact when set) instead of
-// being the one pergent wrote; so is the comment of a merged result (see
-// result.Merge), which pergent wrote for the re-run skills only. Otherwise the
+// are all dismissed counts as clean. The comment of a completed review is
+// rendered from the result (render.Comment, at most MaxComment bytes when
+// positive, passed through Redact when set), never the one pergent wrote: it
+// needs the dismissals, the commands and the links, and a merged result's
+// comment (see result.Merge) covers the re-run skills only. An error
 // result's comment is used as it is.
+//
+// Mention is the bot's name as a comment mentions it, without the "@"; when
+// set, each finding carries its dismiss command and the footer the re-run
+// command. FileURL links a finding's location to the reviewed commit; nil
+// leaves it plain text.
 type Outcome struct {
 	Result             *result.Result
 	FailureReason      string
@@ -117,6 +122,8 @@ type Outcome struct {
 	Dismissals []render.Dismissal
 	MaxComment int
 	Redact     func(string) string
+	Mention    string
+	FileURL    func(path string, line, endLine int) string
 }
 
 // Kind is what a decision is, in short.
@@ -213,26 +220,23 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 		return Decision{Comment: ErrorComment("the result has no skills"), Status: failed, Description: descCouldNotReview, Kind: KindFailed}
 	}
 
-	comment, block, skills := withMarker(r.Comment.Markdown), r.Comment.FindingsBlock, r.Skills
-	rs, rerender := applyDismissals(o, r)
-	if rerender {
+	skills := r.Skills
+	rs, dismissed := applyDismissals(o, r)
+	if dismissed {
 		skills = withVerdicts(r.Skills, rs)
-	} else if r.Merged {
-		// The stored comment covers only the skills that were re-run.
-		rs, rerender = result.ToRender(r), true
+	} else {
+		rs = result.ToRender(r)
 	}
-	if rerender {
-		redact := o.Redact
-		if redact == nil {
-			redact = func(s string) string { return s }
-		}
-		// The text is redacted before it is rendered, so the encoded findings
-		// block and a cut comment can't hide a credential from the pass over
-		// the finished comment.
-		rs = redactSkills(rs, redact)
-		comment = withMarker(redact(render.Comment(rs, render.Options{MaxLen: o.MaxComment, ChangedFiles: redactAll(result.ChangedFiles(r), redact)})))
-		block = render.FindingsBlock(rs)
+	redact := o.Redact
+	if redact == nil {
+		redact = func(s string) string { return s }
 	}
+	// The text is redacted before it is rendered, so the encoded findings
+	// block and a cut comment can't hide a credential from the pass over the
+	// finished comment.
+	rs = redactSkills(rs, redact)
+	comment := withMarker(redact(render.Comment(rs, renderOptions(o, r, redactAll(result.ChangedFiles(r), redact)))))
+	block := render.FindingsBlock(rs)
 	if r.MergeNote != "" {
 		comment = withNote(comment, block, noteMerge+r.MergeNote+", so this review covers only the skills that were re-run and is not approved.")
 	}
@@ -304,6 +308,21 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 	return Decision{Comment: comment, Status: StatusSuccess, Description: descClean, Approve: true, Kind: KindApprove}
 }
 
+// renderOptions is how the comment of r is rendered: the size limit, the
+// changed files, the reviewed commit and the pergent version that reviewed
+// it, the links and, with a mention, the dismiss and re-run commands.
+func renderOptions(o Outcome, r *result.Result, changed []string) render.Options {
+	opts := render.Options{MaxLen: o.MaxComment, ChangedFiles: changed, Commit: r.Head, FileURL: o.FileURL}
+	if r.PergentVersion != "" {
+		opts.Version = "v" + strings.TrimPrefix(r.PergentVersion, "v")
+	}
+	if o.Mention != "" {
+		opts.DismissCommand = "@" + o.Mention + " dismiss"
+		opts.Footer = "Run again: `@" + o.Mention + " review`"
+	}
+	return opts
+}
+
 // applyDismissals applies the outcome's dismissals to the result's skills. It
 // returns the skills with the findings set aside moved to Dismissed, and
 // whether any finding was.
@@ -322,11 +341,13 @@ func applyDismissals(o Outcome, r *result.Result) ([]render.Skill, bool) {
 
 // redactSkills is skills with redact applied to every text in them that came
 // from the review: findings (dismissed ones included), failures, notes,
-// summaries, checks and file paths. skills is not modified.
+// summaries, checks, the confidence reason and file paths. skills is not
+// modified.
 func redactSkills(skills []render.Skill, redact func(string) string) []render.Skill {
 	finding := func(f render.Finding) render.Finding {
 		f.File, f.Title = redact(f.File), redact(f.Title)
 		f.Explanation, f.SuggestedFix = redact(f.Explanation), redact(f.SuggestedFix)
+		f.Suggestion = redact(f.Suggestion)
 		return f
 	}
 	out := make([]render.Skill, len(skills))
@@ -362,6 +383,7 @@ func redactSkills(skills []render.Skill, redact func(string) string) []render.Sk
 		}
 		s.Reviewed = redactAll(skills[i].Reviewed, redact)
 		s.Notes = redactAll(skills[i].Notes, redact)
+		s.ConfidenceReason = redact(skills[i].ConfidenceReason)
 		out[i] = s
 	}
 	return out

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/gopaytech/pergent/render"
@@ -117,6 +118,7 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 	if plat.isGitHub() {
 		o.MaxComment = kube.CommentLimitGitHub
 	}
+	o.Mention, o.FileURL = plat.Forge.Mention(), fileURL(plat.isGitHub(), run.WebURL, run.HeadSHA)
 	if policy.Decide(o, failure).Approve {
 		// Only a review that would be approved depends on whether the
 		// change is a draft and the approve side can reach the repository.
@@ -388,6 +390,25 @@ func (e *Engine) outcome(run store.Run, log *slog.Logger) policy.Outcome {
 			r.Base, r.Head, run.BaseSHA, run.HeadSHA)}
 	}
 	return policy.Outcome{Result: r}
+}
+
+// fileURL links a finding's location to the file at head, on the repository
+// whose change page (the pull or merge request URL the platform reported) is
+// changeURL. It is nil, so locations stay plain text, when that page is
+// unknown or not of the platform's shape.
+func fileURL(github bool, changeURL, head string) func(path string, line, endLine int) string {
+	sep := "/-/merge_requests/"
+	if github {
+		sep = "/pull/"
+	}
+	i := strings.LastIndex(changeURL, sep)
+	if i <= 0 {
+		return nil
+	}
+	if github {
+		return render.GitHubFileURL(changeURL[:i], head)
+	}
+	return render.GitLabFileURL(changeURL[:i], head)
 }
 
 // upsertComment updates the merge request's pergent comment, or creates it,

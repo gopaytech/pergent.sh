@@ -20,11 +20,77 @@ func skill(name, verdict string, reviewed ...string) result.Skill {
 	return result.Skill{Name: name, Verdict: verdict, Files: result.Files{Reviewed: reviewed}}
 }
 
+// jobComment is the comment the fixture result carries from the Job. The
+// comment of a completed review is rendered from the result, so it must never
+// show up in a decision.
+const jobComment = "JOB-COMMENT-MUST-NOT-BE-USED"
+
 func completed(skills ...result.Skill) *result.Result {
 	return &result.Result{
 		SchemaVersion: 1, Status: "completed", Skills: skills,
-		Comment: result.Comment{Markdown: Marker + "\n### review\n\nbody\n\n" + findingsBlock, FindingsBlock: findingsBlock},
+		Comment: result.Comment{Markdown: Marker + "\n### review\n\n" + jobComment + "\n\n" + findingsBlock, FindingsBlock: findingsBlock},
 	}
+}
+
+// blockOf is the hidden findings block of r as render writes it, with its
+// newline.
+func blockOf(r *result.Result) string { return render.FindingsBlock(result.ToRender(r)) }
+
+// checkNote asserts the shape of a comment of r that carries note: the marker
+// is first and appears once, the note appears once, right before the hidden
+// findings block, and the block is the last line.
+func checkNote(t *testing.T, comment string, r *result.Result, note string) {
+	t.Helper()
+	if !strings.HasPrefix(comment, Marker+"\n") || strings.Count(comment, Marker) != 1 {
+		t.Errorf("the marker must be first, once: %q", comment)
+	}
+	if strings.Contains(comment, jobComment) {
+		t.Errorf("the Job's comment was used: %q", comment)
+	}
+	if got := strings.Count(comment, note); got != 1 {
+		t.Errorf("note appears %d times, want once:\n%s", got, comment)
+	}
+	block := strings.TrimRight(blockOf(r), "\n")
+	if block == "" || strings.Count(comment, "<!-- pergent:findings ") != 1 {
+		t.Fatalf("want exactly one findings block:\n%s", comment)
+	}
+	if !strings.Contains(comment, note+"\n\n"+block) {
+		t.Errorf("the note must sit right before the findings block:\n%s", comment)
+	}
+	if !strings.HasSuffix(strings.TrimRight(comment, "\n"), block) {
+		t.Errorf("the findings block must be the last line:\n%s", comment)
+	}
+}
+
+// noteOf is the text of a comment from the start of its "Not approved" note
+// to the findings block (or its end).
+func noteOf(t *testing.T, comment string) string {
+	t.Helper()
+	i := strings.Index(comment, "---\n**Not approved:**")
+	if i < 0 {
+		t.Fatalf("no note in %q", comment)
+	}
+	note := comment[i:]
+	if j := strings.Index(note, "<!-- pergent:findings "); j >= 0 {
+		note = note[:j]
+	}
+	return strings.TrimRight(note, "\n")
+}
+
+// decodeBlock is the JSON the last findings block of comment carries.
+func decodeBlock(t *testing.T, comment string) string {
+	t.Helper()
+	const start = "<!-- pergent:findings "
+	i := strings.LastIndex(comment, start)
+	if i < 0 {
+		t.Fatalf("no findings block in %q", comment)
+	}
+	enc := strings.TrimSuffix(strings.TrimSpace(comment[i+len(start):]), " -->")
+	raw, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
 }
 
 func TestDecide(t *testing.T) {
@@ -41,6 +107,7 @@ func TestDecide(t *testing.T) {
 		wantDesc    string
 		wantApprove bool
 		wantComment string // exact; "" skips
+		wantPrefix  string // "" skips
 	}{
 		{
 			name:       "no result with a reason",
@@ -127,7 +194,7 @@ func TestDecide(t *testing.T) {
 			outcome:    Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go"), skill("b", "no_blocking_issues"))},
 			failure:    config.FailureStatusFailed,
 			wantStatus: StatusSuccess, wantDesc: "No blocking issues", wantApprove: true,
-			wantComment: Marker + "\n### review\n\nbody\n\n" + findingsBlock,
+			wantPrefix: Marker + "\n### ✅ No blocking issues",
 		},
 		{
 			name: "vendored skip next to a reviewed file is not approved",
@@ -175,6 +242,12 @@ func TestDecide(t *testing.T) {
 			if tc.wantComment != "" && d.Comment != tc.wantComment {
 				t.Errorf("comment = %q, want %q", d.Comment, tc.wantComment)
 			}
+			if tc.wantPrefix != "" && !strings.HasPrefix(d.Comment, tc.wantPrefix) {
+				t.Errorf("comment = %q, want it to start with %q", d.Comment, tc.wantPrefix)
+			}
+			if tc.outcome.Result != nil && tc.outcome.Result.Status == "completed" && strings.Contains(d.Comment, jobComment) {
+				t.Errorf("the Job's comment was used: %q", d.Comment)
+			}
 			if d.Approve && d.Status != StatusSuccess {
 				t.Error("approved without success")
 			}
@@ -191,26 +264,40 @@ func TestDecideNothingReviewed(t *testing.T) {
 	if d.Status != StatusSuccess || d.Approve || d.Description != "Nothing to review: every changed file is skipped" {
 		t.Fatalf("got %+v", d)
 	}
-	want := Marker + "\n### review\n\nbody\n\n" +
-		"---\n**Not approved:** every changed file was skipped by pergent's default rules, so nothing was reviewed. A human needs to look.\n\n" +
-		"- `go.sum` (lockfile)\n- `vendor/x.go` (vendored)\n\n" +
-		findingsBlock
-	if d.Comment != want {
-		t.Errorf("comment:\n%q\nwant:\n%q", d.Comment, want)
+	want := "---\n**Not approved:** every changed file was skipped by pergent's default rules, so nothing was reviewed. A human needs to look.\n\n" +
+		"- `go.sum` (lockfile)\n- `vendor/x.go` (vendored)"
+	if got := noteOf(t, d.Comment); got != want {
+		t.Errorf("note:\n%q\nwant:\n%q", got, want)
 	}
+	checkNote(t, d.Comment, r, want)
 }
 
 func TestDecideNothingReviewedNoteAppendedWithoutBlock(t *testing.T) {
 	r := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Skipped: []result.Skipped{{Path: "go.sum", Rule: "lockfile"}}}})
-	r.Comment = result.Comment{Markdown: Marker + "\nbody"}
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
-	want := Marker + "\nbody\n\n---\n**Not approved:** every changed file was skipped by pergent's default rules, so nothing was reviewed. A human needs to look.\n\n- `go.sum` (lockfile)\n"
-	if d.Comment != want {
-		t.Errorf("comment:\n%q\nwant:\n%q", d.Comment, want)
+	d := Decide(withoutBlock(t, Outcome{Result: r}), config.FailureStatusFailed)
+	want := "---\n**Not approved:** every changed file was skipped by pergent's default rules, so nothing was reviewed. A human needs to look.\n\n- `go.sum` (lockfile)"
+	if !strings.HasSuffix(d.Comment, "\n\n"+want+"\n") {
+		t.Errorf("the note must be appended at the end:\n%s", d.Comment)
+	}
+	if strings.Contains(d.Comment, "<!-- pergent:findings ") {
+		t.Errorf("the block should have been dropped to fit the limit:\n%s", d.Comment)
 	}
 	if d.Approve {
 		t.Error("approved")
 	}
+}
+
+// withoutBlock is o with a size limit just under the full comment, so the
+// renderer drops the hidden findings block to fit: the first step of its
+// shrinking.
+func withoutBlock(t *testing.T, o Outcome) Outcome {
+	t.Helper()
+	full := render.Comment(result.ToRender(o.Result), render.Options{ChangedFiles: result.ChangedFiles(o.Result), Commit: o.Result.Head})
+	o.MaxComment = len(full) - 1
+	if got := render.Comment(result.ToRender(o.Result), render.Options{MaxLen: o.MaxComment, ChangedFiles: result.ChangedFiles(o.Result), Commit: o.Result.Head}); strings.Contains(got, "<!-- pergent:findings ") {
+		t.Fatalf("a limit of %d bytes should drop the findings block:\n%s", o.MaxComment, got)
+	}
+	return o
 }
 
 func TestDecideNothingReviewedCapsAtTwenty(t *testing.T) {
@@ -220,15 +307,18 @@ func TestDecideNothingReviewedCapsAtTwenty(t *testing.T) {
 	}
 	r := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Skipped: skipped}})
 	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
-	if got := strings.Count(d.Comment, "(lockfile)"); got != 20 {
+	// The note is what is capped; the comment's own Files list is render's.
+	note := noteOf(t, d.Comment)
+	if got := strings.Count(note, "(lockfile)"); got != 20 {
 		t.Errorf("listed %d, want 20", got)
 	}
-	if !strings.Contains(d.Comment, "- …and 5 more") {
-		t.Errorf("missing overflow line: %q", d.Comment)
+	if !strings.Contains(note, "- …and 5 more") {
+		t.Errorf("missing overflow line: %q", note)
 	}
-	if !strings.Contains(d.Comment, "lock/19.lock") || strings.Contains(d.Comment, "lock/20.lock") {
+	if !strings.Contains(note, "lock/19.lock") || strings.Contains(note, "lock/20.lock") {
 		t.Error("expected the first 20 sorted paths")
 	}
+	checkNote(t, d.Comment, r, note)
 }
 
 func TestDecideNothingReviewedNoSkippedAtAll(t *testing.T) {
@@ -250,15 +340,25 @@ func TestDecideAnyReviewedFileMeansApprove(t *testing.T) {
 }
 
 func TestMarkerPrepended(t *testing.T) {
+	// A completed review is rendered from the result: the marker comes first
+	// and once, whatever the Job's comment held.
 	r := completed(skill("a", "has_blocking_issues", "f.go"))
-	r.Comment.Markdown = "### no marker here"
-	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
-	if d.Comment != Marker+"\n### no marker here" {
+	for _, job := range []string{"### no marker here", "x\n" + Marker + "\ny", ""} {
+		r.Comment.Markdown = job
+		d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+		if !strings.HasPrefix(d.Comment, Marker+"\n") || strings.Count(d.Comment, Marker) != 1 {
+			t.Errorf("job comment %q: comment %q", job, d.Comment)
+		}
+	}
+
+	// An error result keeps the Job's comment: the marker is added when it
+	// lacks one and the comment is left alone when it has one.
+	e := &result.Result{Status: "error", Comment: result.Comment{Markdown: "### no marker here"}}
+	if d := Decide(Outcome{Result: e}, config.FailureStatusFailed); d.Comment != Marker+"\n### no marker here" {
 		t.Errorf("comment: %q", d.Comment)
 	}
-	// already present: left alone
-	r.Comment.Markdown = "x\n" + Marker + "\ny"
-	if d := Decide(Outcome{Result: r}, config.FailureStatusFailed); d.Comment != r.Comment.Markdown {
+	e.Comment.Markdown = "x\n" + Marker + "\ny"
+	if d := Decide(Outcome{Result: e}, config.FailureStatusFailed); d.Comment != e.Comment.Markdown {
 		t.Errorf("comment: %q", d.Comment)
 	}
 }
@@ -271,10 +371,13 @@ func TestErrorComment(t *testing.T) {
 }
 
 func TestNoteGoesBeforeRealFindingsBlockShape(t *testing.T) {
-	// pergent's findings_block ends with a newline, and so does the markdown.
-	block := "<!-- pergent:findings eyJ9 -->\n"
+	// The findings block render writes ends with a newline, and so does the
+	// comment.
 	r := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Skipped: []result.Skipped{{Path: "go.sum", Rule: "lockfile"}}}})
-	r.Comment = result.Comment{Markdown: Marker + "\n### review\n\nbody\n\n" + block, FindingsBlock: block}
+	block := blockOf(r)
+	if !strings.HasSuffix(block, "\n") {
+		t.Fatalf("block = %q", block)
+	}
 	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
 	if d.Approve {
 		t.Fatal("approved")
@@ -310,11 +413,12 @@ func TestNothingReviewedListsDistinctPathsWithJoinedRules(t *testing.T) {
 		result.Skill{Name: "b", Verdict: "no_blocking_issues", Files: result.Files{Skipped: []result.Skipped{{Path: "go.sum", Rule: "out of scope"}, {Path: "go.sum", Rule: "lockfile"}}}},
 	)
 	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
-	if strings.Count(d.Comment, "`go.sum`") != 1 || !strings.Contains(d.Comment, "- `go.sum` (lockfile, out of scope)") {
-		t.Errorf("comment: %q", d.Comment)
+	note := noteOf(t, d.Comment)
+	if strings.Count(note, "`go.sum`") != 1 || !strings.Contains(note, "- `go.sum` (lockfile, out of scope)") {
+		t.Errorf("note: %q", note)
 	}
-	if strings.Index(d.Comment, "`a.go`") > strings.Index(d.Comment, "`go.sum`") {
-		t.Errorf("not sorted: %q", d.Comment)
+	if strings.Index(note, "`a.go`") > strings.Index(note, "`go.sum`") {
+		t.Errorf("not sorted: %q", note)
 	}
 }
 
@@ -331,11 +435,12 @@ func TestNothingReviewedCapCountsPaths(t *testing.T) {
 		result.Skill{Name: "b", Verdict: "no_blocking_issues", Files: result.Files{Skipped: b}},
 	)
 	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
-	if got := strings.Count(d.Comment, "(lockfile, vendored)"); got != 20 {
+	note := noteOf(t, d.Comment)
+	if got := strings.Count(note, "(lockfile, vendored)"); got != 20 {
 		t.Errorf("listed %d, want 20", got)
 	}
-	if !strings.Contains(d.Comment, "- …and 2 more") {
-		t.Errorf("comment: %q", d.Comment)
+	if !strings.Contains(note, "- …and 2 more") {
+		t.Errorf("note: %q", note)
 	}
 }
 
@@ -374,15 +479,27 @@ func TestNeutralizeQuickActions(t *testing.T) {
 // Every comment Decide returns has its quick actions neutralised: model text
 // an MR can steer must never make the review bot run /approve, /close...
 func TestDecideNeutralizesQuickActions(t *testing.T) {
-	steered := Marker + "\n### review\n\nexplanation\n/approve\n\r/merge\n```\n/close\n    // keep\n```\n\n" + findingsBlock
+	// The hostile text sits in the fields the comment shows: a finding's
+	// explanation, fix, title and suggestion, a check's detail, a note, a
+	// summary and a failure.
+	steered := "explanation\n/approve\n\r/merge\n```\n/close\n    // keep\n```"
 	errRes := &result.Result{SchemaVersion: 1, Status: "error", Error: &result.Error{Code: "x", Message: "boom\n/approve"}}
-	clean := completed(skill("a", "no_blocking_issues", "f.go"))
-	clean.Comment.Markdown = steered
+	hostile := withFinding(skill("a", "no_blocking_issues", "f.go"), "suggestion", "ffffff000000", steered)
+	hostile.Notes = []string{"note\n/label ~x"}
+	hostile.Summaries = []result.Summary{{Batch: 1, Text: "summary\n/close"}}
+	hostile.Checks = []result.BatchChecks{{Batch: 1, Checks: []result.Check{{Name: "c", Status: "fail", Detail: "detail\n/merge"}}}}
+	fixRaw, _ := json.Marshal(result.Finding{
+		ID: "ab12cd", Fingerprint: "ab12cd34ef56", File: "f.go", Line: 2, Severity: "suggestion", Title: "t\n/approve",
+		Explanation: "e", SuggestedFix: "fix\n/merge", Suggestion: "\r/approve\nx",
+	})
+	hostile.Findings = append(hostile.Findings, fixRaw)
+	clean := completed(hostile)
 	nothing := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Skipped: []result.Skipped{{Path: "/approve", Rule: "lockfile"}}}})
-	nothing.Comment.Markdown = steered
+	failing := completed(result.Skill{Name: "a", Verdict: "failed", Failures: []result.Failure{{Files: []string{"/x"}, Message: "boom\n/approve"}}})
 	for name, o := range map[string]Outcome{
 		"clean":          {Result: clean},
 		"nothing":        {Result: nothing},
+		"failed skill":   {Result: failing},
 		"error result":   {Result: errRes},
 		"failure reason": {FailureReason: "x\n/approve"},
 	} {
@@ -400,11 +517,18 @@ func TestDecideNeutralizesQuickActions(t *testing.T) {
 		})
 	}
 	d := Decide(Outcome{Result: clean}, config.FailureStatusFailed)
-	if !strings.HasSuffix(d.Comment, "\n"+findingsBlock) {
-		t.Errorf("findings block changed: %q", d.Comment)
+	if block := blockOf(clean); !strings.HasSuffix(d.Comment, "\n"+block) {
+		t.Errorf("findings block changed: want the comment to end with %q:\n%s", block, d.Comment)
+	}
+	// The block still carries the model's text as written.
+	if raw := decodeBlock(t, d.Comment); !strings.Contains(raw, `\n/approve`) {
+		t.Errorf("the findings block lost the model's text: %s", raw)
 	}
 	if !strings.Contains(d.Comment, "\n    // keep\n") {
 		t.Errorf("indented code in a fence changed: %q", d.Comment)
+	}
+	if !strings.Contains(d.Comment, "\n\u200b/approve") {
+		t.Errorf("a column-0 slash was not defused: %q", d.Comment)
 	}
 }
 
@@ -425,13 +549,12 @@ func TestDecidePartlySkippedNotApproved(t *testing.T) {
 			if d.Approve || d.Status != StatusSuccess || d.Description != "No blocking issues; not approved: some changed files weren't reviewed" {
 				t.Fatalf("got %+v", d)
 			}
-			want := Marker + "\n### review\n\nbody\n\n" +
-				"---\n**Not approved:** some changed files were skipped by pergent's default rules, so they weren't reviewed. A human needs to look.\n\n" +
-				"- `x/skipped` (" + strings.Join(sorted(rule, "out of scope"), ", ") + ")\n\n" +
-				findingsBlock
-			if d.Comment != want {
-				t.Errorf("comment:\n%q\nwant:\n%q", d.Comment, want)
+			want := "---\n**Not approved:** some changed files were skipped by pergent's default rules, so they weren't reviewed. A human needs to look.\n\n" +
+				"- `x/skipped` (" + strings.Join(sorted(rule, "out of scope"), ", ") + ")"
+			if got := noteOf(t, d.Comment); got != want {
+				t.Errorf("note:\n%q\nwant:\n%q", got, want)
 			}
+			checkNote(t, d.Comment, r, want)
 		})
 	}
 }
@@ -442,17 +565,18 @@ func TestDecidePartlySkippedCapsAtTwenty(t *testing.T) {
 		skipped = append(skipped, result.Skipped{Path: fmt.Sprintf("vendor/%02d.go", i), Rule: "vendored"})
 	}
 	r := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Reviewed: []string{"f.go"}, Skipped: skipped}})
-	r.Comment = result.Comment{Markdown: Marker + "\nbody"}
 	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
 	if d.Approve {
 		t.Fatal("approved")
 	}
-	if got := strings.Count(d.Comment, "(vendored)"); got != 20 {
+	note := noteOf(t, d.Comment)
+	if got := strings.Count(note, "(vendored)"); got != 20 {
 		t.Errorf("listed %d, want 20", got)
 	}
-	if !strings.HasSuffix(d.Comment, "- …and 3 more\n") {
-		t.Errorf("comment: %q", d.Comment)
+	if !strings.HasSuffix(note, "- …and 3 more") {
+		t.Errorf("note: %q", note)
 	}
+	checkNote(t, d.Comment, r, note)
 }
 
 func sorted(s ...string) []string {
@@ -468,27 +592,23 @@ const (
 // A draft is reviewed and gets its status, but is approved only once it is
 // marked ready.
 func TestDecideDraftNotApproved(t *testing.T) {
-	d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), Draft: true}, config.FailureStatusFailed)
+	r := completed(skill("a", "no_blocking_issues", "f.go"))
+	d := Decide(Outcome{Result: r, Draft: true}, config.FailureStatusFailed)
 	if d.Approve || d.Status != StatusSuccess || d.Description != "No blocking issues; not approved: draft" {
 		t.Fatalf("got %+v", d)
 	}
-	want := Marker + "\n### review\n\nbody\n\n" + wantNoteDraft + "\n\n" + findingsBlock
-	if d.Comment != want {
-		t.Errorf("comment:\n%q\nwant:\n%q", d.Comment, want)
-	}
+	checkNote(t, d.Comment, r, wantNoteDraft)
 }
 
 // The approve App missing from a repository: reviewed, success, no approval.
 func TestDecideApproveUnavailableNotApproved(t *testing.T) {
-	d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), ApproveUnavailable: true}, config.FailureStatusFailed)
+	r := completed(skill("a", "no_blocking_issues", "f.go"))
+	d := Decide(Outcome{Result: r, ApproveUnavailable: true}, config.FailureStatusFailed)
 	if d.Approve || d.Status != StatusSuccess ||
 		d.Description != "No blocking issues; not approved: the pergent approve App isn't installed on this repository or lacks Pull requests: write" {
 		t.Fatalf("got %+v", d)
 	}
-	want := Marker + "\n### review\n\nbody\n\n" + wantNoteApproveUnavailable + "\n\n" + findingsBlock
-	if d.Comment != want {
-		t.Errorf("comment:\n%q\nwant:\n%q", d.Comment, want)
-	}
+	checkNote(t, d.Comment, r, wantNoteApproveUnavailable)
 }
 
 // A draft on a repository without the approve App: the draft is the reason.
@@ -544,25 +664,22 @@ func TestDecideDraftWithBlockingFindingsFails(t *testing.T) {
 // and is appended when there is no block.
 func TestDecideDraftNoteWithoutBlock(t *testing.T) {
 	r := completed(skill("a", "no_blocking_issues", "f.go"))
-	r.Comment = result.Comment{Markdown: Marker + "\nbody"}
-	d := Decide(Outcome{Result: r, Draft: true}, config.FailureStatusFailed)
-	if want := Marker + "\nbody\n\n" + wantNoteDraft + "\n"; d.Comment != want {
-		t.Errorf("comment:\n%q\nwant:\n%q", d.Comment, want)
+	d := Decide(withoutBlock(t, Outcome{Result: r, Draft: true}), config.FailureStatusFailed)
+	if !strings.HasSuffix(d.Comment, "\n\n"+wantNoteDraft+"\n") || strings.Contains(d.Comment, "<!-- pergent:findings ") {
+		t.Errorf("want the note appended at the end of a comment with no block:\n%s", d.Comment)
 	}
 }
 
 // The approve side is a bot user's token (approve_token_env), not an App:
 // the reason and note say the bot can't reach the repository.
 func TestDecideApproveBotUnavailableNotApproved(t *testing.T) {
-	d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), ApproveUnavailable: true, ApproveBot: true}, config.FailureStatusFailed)
+	r := completed(skill("a", "no_blocking_issues", "f.go"))
+	d := Decide(Outcome{Result: r, ApproveUnavailable: true, ApproveBot: true}, config.FailureStatusFailed)
 	if d.Approve || d.Status != StatusSuccess ||
 		d.Description != "No blocking issues; not approved: the pergent approve bot can't reach this repository" {
 		t.Fatalf("got %+v", d)
 	}
-	want := Marker + "\n### review\n\nbody\n\n---\n**Not approved:** the pergent approve bot can't reach this repository.\n\n" + findingsBlock
-	if d.Comment != want {
-		t.Errorf("comment:\n%q\nwant:\n%q", d.Comment, want)
-	}
+	checkNote(t, d.Comment, r, "---\n**Not approved:** the pergent approve bot can't reach this repository.")
 	// ApproveBot alone changes nothing.
 	if d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), ApproveBot: true}, config.FailureStatusFailed); !d.Approve {
 		t.Errorf("ApproveBot without ApproveUnavailable: %+v", d)
@@ -572,15 +689,13 @@ func TestDecideApproveBotUnavailableNotApproved(t *testing.T) {
 // The review App approves (approve_with_review_app) and lacks Pull requests:
 // write: the reason and note name the permission.
 func TestDecideReviewAppApproverUnavailableNotApproved(t *testing.T) {
-	d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), ApproveUnavailable: true, ApproveReviewApp: true}, config.FailureStatusFailed)
+	r := completed(skill("a", "no_blocking_issues", "f.go"))
+	d := Decide(Outcome{Result: r, ApproveUnavailable: true, ApproveReviewApp: true}, config.FailureStatusFailed)
 	if d.Approve || d.Status != StatusSuccess ||
 		d.Description != "No blocking issues; not approved: the pergent review App lacks Pull requests: write on this repository" {
 		t.Fatalf("got %+v", d)
 	}
-	want := Marker + "\n### review\n\nbody\n\n---\n**Not approved:** the pergent review App lacks Pull requests: write on this repository.\n\n" + findingsBlock
-	if d.Comment != want {
-		t.Errorf("comment:\n%q\nwant:\n%q", d.Comment, want)
-	}
+	checkNote(t, d.Comment, r, "---\n**Not approved:** the pergent review App lacks Pull requests: write on this repository.")
 	// ApproveReviewApp alone changes nothing.
 	if d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), ApproveReviewApp: true}, config.FailureStatusFailed); !d.Approve {
 		t.Errorf("ApproveReviewApp without ApproveUnavailable: %+v", d)
@@ -599,12 +714,14 @@ func TestDecideUnknownSkipRuleNotApproved(t *testing.T) {
 	if d.Approve || d.Status != StatusSuccess || d.Description != "No blocking issues; not approved: some changed files weren't reviewed" {
 		t.Fatalf("got %+v", d)
 	}
-	if !strings.Contains(d.Comment, "\n- `x/new` (too large)\n") {
-		t.Errorf("the note doesn't list the file: %q", d.Comment)
+	note := noteOf(t, d.Comment)
+	if !strings.Contains(note, "\n- `x/new` (too large)") {
+		t.Errorf("the note doesn't list the file: %q", note)
 	}
-	if strings.Contains(d.Comment, "docs/a.md") {
-		t.Errorf("the note lists an out-of-scope file: %q", d.Comment)
+	if strings.Contains(note, "docs/a.md") {
+		t.Errorf("the note lists an out-of-scope file: %q", note)
 	}
+	checkNote(t, d.Comment, r, note)
 
 	// Nothing reviewed, only an unknown rule: still not approved.
 	only := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{
@@ -629,16 +746,22 @@ func TestSkippedNoteEscapesPaths(t *testing.T) {
 	if d.Approve {
 		t.Fatal("approved")
 	}
+	note := noteOf(t, d.Comment)
 	for _, want := range []string{
-		"\n- `\"a\\x60b\\n## pwned\\rc\\x00d\"` (lockfile)\n",
-		"\n- `\"e\\u202ef\"` (`\"binary\\n# x\\x60\"`)\n",
+		"\n- `\"a\\x60b\\n## pwned\\rc\\x00d\"` (lockfile)",
+		"\n- `\"e\\u202ef\"` (`\"binary\\n# x\\x60\"`)",
 	} {
-		if !strings.Contains(d.Comment, want) {
-			t.Errorf("comment lacks %q:\n%q", want, d.Comment)
+		if !strings.Contains(note, want) {
+			t.Errorf("note lacks %q:\n%q", want, note)
 		}
 	}
-	if strings.Contains(d.Comment, "\n## pwned") || strings.Contains(d.Comment, "\x00") || strings.Contains(d.Comment, "\u202e") {
-		t.Errorf("a raw control character reached the comment: %q", d.Comment)
+	// The note is policy's: nothing raw gets into it. The Files list above it
+	// is render's, and keeps a path on its own line.
+	if strings.Contains(note, "\n## pwned") || strings.Contains(note, "\x00") || strings.Contains(note, "\u202e") {
+		t.Errorf("a raw control character reached the note: %q", note)
+	}
+	if strings.Contains(d.Comment, "\n## pwned") {
+		t.Errorf("a path started a heading: %q", d.Comment)
 	}
 }
 
@@ -649,9 +772,9 @@ func TestSkippedNoteCapsPathLengthAndSize(t *testing.T) {
 		Skipped:  []result.Skipped{{Path: long, Rule: "vendored"}},
 	}})
 	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
-	want := "\n- `" + strings.Repeat("é", maxListedPath) + "…` (vendored)\n"
-	if !strings.Contains(d.Comment, want) {
-		t.Errorf("long path not cut at %d characters: %q", maxListedPath, d.Comment)
+	want := "\n- `" + strings.Repeat("é", maxListedPath) + "…` (vendored)"
+	if got := noteOf(t, d.Comment); !strings.Contains(got, want) {
+		t.Errorf("long path not cut at %d characters: %q", maxListedPath, got)
 	}
 
 	// 20 paths and a rule each at their longest stay under the note's cap.
@@ -664,13 +787,12 @@ func TestSkippedNoteCapsPathLengthAndSize(t *testing.T) {
 		)
 	}
 	big := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Reviewed: []string{"f.go"}, Skipped: skipped}})
-	big.Comment = result.Comment{Markdown: Marker + "\nbody"}
 	d = Decide(Outcome{Result: big}, config.FailureStatusFailed)
-	note := strings.TrimPrefix(d.Comment, Marker+"\nbody\n\n")
+	note := noteOf(t, d.Comment)
 	if len(note) > maxNoteBytes {
 		t.Errorf("note is %d bytes, want at most %d", len(note), maxNoteBytes)
 	}
-	if !strings.Contains(note, "more\n") {
+	if !strings.HasSuffix(note, " more") {
 		t.Errorf("note doesn't say how many paths it left out: %q", note)
 	}
 }
@@ -680,15 +802,13 @@ const wantNoteApprovalOff = "---\n**Not approved:** approval is turned off for t
 // Approval turned off for the repository: a clean review is reviewed,
 // commented and gets its success status, but is never approved.
 func TestDecideApprovalOff(t *testing.T) {
-	d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go")), ApprovalOff: true}, config.FailureStatusFailed)
+	r := completed(skill("a", "no_blocking_issues", "f.go"))
+	d := Decide(Outcome{Result: r, ApprovalOff: true}, config.FailureStatusFailed)
 	if d.Approve || d.Status != StatusSuccess ||
 		d.Description != "No blocking issues; not approved: approval is turned off" {
 		t.Fatalf("got %+v", d)
 	}
-	want := Marker + "\n### review\n\nbody\n\n" + wantNoteApprovalOff + "\n\n" + findingsBlock
-	if d.Comment != want {
-		t.Errorf("comment:\n%q\nwant:\n%q", d.Comment, want)
-	}
+	checkNote(t, d.Comment, r, wantNoteApprovalOff)
 }
 
 // Approval off is the reason over a draft or an unreachable approve side:
@@ -782,8 +902,9 @@ func TestDecideDismissals(t *testing.T) {
 		if d.Kind != KindApprove || !d.Approve || d.Status != StatusSuccess {
 			t.Fatalf("decision = %+v, want an approval", d)
 		}
-		if !strings.HasPrefix(d.Comment, Marker+"\n## pergent review") || !strings.Contains(d.Comment, "Dismissed (1)") {
-			t.Errorf("comment = %q, want the re-rendered one", d.Comment)
+		if !strings.HasPrefix(d.Comment, Marker+"\n### ✅ No blocking issues (1 dismissed)") || !strings.Contains(d.Comment, "Dismissed (1)") ||
+			!strings.Contains(d.Comment, "dismissed by maya: ok") || strings.Contains(d.Comment, "#### Findings") {
+			t.Errorf("comment = %q, want the dismissed finding in its own section and no open finding", d.Comment)
 		}
 	})
 	t.Run("another blocking finding still blocks", func(t *testing.T) {
@@ -797,8 +918,9 @@ func TestDecideDismissals(t *testing.T) {
 		other := render.Dismissal{Fingerprint: "ffffff000000", Severity: "blocking"}
 		r := completed(blocking)
 		d := Decide(Outcome{Result: r, Dismissals: []render.Dismissal{other}}, config.FailureStatusFailed)
-		if d.Comment != r.Comment.Markdown || d.Kind != KindBlocking {
-			t.Errorf("decision = %+v, want the stored comment and blocking", d)
+		if want := Decide(Outcome{Result: r}, config.FailureStatusFailed); d != want || d.Kind != KindBlocking ||
+			strings.Contains(d.Comment, "Dismissed (") || !strings.Contains(d.Comment, "#### Findings (1)") {
+			t.Errorf("decision = %+v, want the comment without dismissals and blocking", d)
 		}
 	})
 	t.Run("notes go before the new findings block", func(t *testing.T) {
@@ -898,8 +1020,9 @@ func TestDecideDismissalsKeepNotReviewedFailed(t *testing.T) {
 	}
 }
 
-// A merged result carries the kept skills of an earlier run, which its stored
-// comment (the re-run skills' only) doesn't show: it is rendered again.
+// A merged result carries the kept skills of an earlier run, which the stored
+// comment (the re-run skills' only) doesn't show: the comment is rendered from
+// the result, so it covers every skill.
 func TestDecideMergedResultIsRenderedAgain(t *testing.T) {
 	kept := withFinding(skill("security", "has_blocking_issues", "db/query.go"), "blocking", "abc123def456", "plain")
 	rerun := skill("style", "no_blocking_issues", "a.go")
@@ -912,7 +1035,7 @@ func TestDecideMergedResultIsRenderedAgain(t *testing.T) {
 	if d.Kind != KindBlocking {
 		t.Errorf("kind = %q, want blocking", d.Kind)
 	}
-	for _, want := range []string{"### security", "### style", "Unchecked input"} {
+	for _, want := range []string{"| `security` | ❌ Has blocking issues", "| `style` | ✅ No blocking issues", "Unchecked input", "`db/query.go`", "`a.go`"} {
 		if !strings.Contains(d.Comment, want) {
 			t.Errorf("comment lacks %q:\n%s", want, d.Comment)
 		}
@@ -920,10 +1043,15 @@ func TestDecideMergedResultIsRenderedAgain(t *testing.T) {
 	if strings.Contains(d.Comment, "plain") {
 		t.Errorf("the merged comment was not redacted:\n%s", d.Comment)
 	}
+	if strings.Contains(d.Comment, "No blocking issues.\n") {
+		t.Errorf("the stored comment was used:\n%s", d.Comment)
+	}
 
+	// Merged or not, the comment is the result's own, never the stored one.
 	r.Merged = false
-	if d := Decide(Outcome{Result: r}, config.FailureStatusFailed); strings.Contains(d.Comment, "### security") {
-		t.Errorf("an unmerged result's own comment is used as it is: %q", d.Comment)
+	plain := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	if !strings.Contains(plain.Comment, "| `security` |") || !strings.Contains(plain.Comment, "| `style` |") || strings.Contains(plain.Comment, "### style") {
+		t.Errorf("an unmerged result's comment is rendered from the result too: %q", plain.Comment)
 	}
 }
 
@@ -951,5 +1079,149 @@ func TestDecideMergeNote(t *testing.T) {
 	failed.MergeNote = result.NoteBaseUnreadable
 	if d := Decide(Outcome{Result: failed}, config.FailureStatusFailed); d.Kind != KindFailed {
 		t.Errorf("a failed skill still fails: %+v", d)
+	}
+}
+
+// The comment of a completed review shows the commit, the pergent version, the
+// dismiss command of each finding and the re-run command when the outcome has
+// a mention, and links each finding's location with FileURL.
+func TestDecideRendersCommandsAndLinks(t *testing.T) {
+	const fp = "abc123def456"
+	r := completed(withFinding(skill("security", "has_blocking_issues", "db/query.go"), "blocking", fp, "plain"))
+	r.Head, r.PergentVersion = "0123456789abcdef", "0.3.0"
+	o := Outcome{
+		Result: r, Mention: "pergent-bot",
+		FileURL: func(path string, line, endLine int) string {
+			return fmt.Sprintf("https://example.com/blob/%s#L%d", path, line)
+		},
+	}
+	d := Decide(o, config.FailureStatusFailed)
+	for _, want := range []string{
+		"Reply `@pergent-bot dismiss abc123 <reason>`",
+		"Run again: `@pergent-bot review`",
+		"pergent v0.3.0",
+		"Commit `0123456`",
+		`<a href="https://example.com/blob/db/query.go#L3">`,
+	} {
+		if !strings.Contains(d.Comment, want) {
+			t.Errorf("comment lacks %q:\n%s", want, d.Comment)
+		}
+	}
+	if strings.Contains(d.Comment, "0123456789abcdef") {
+		t.Errorf("the full commit is shown, want the short one:\n%s", d.Comment)
+	}
+	// With a dismiss command the ID is part of it, not a separate label.
+	if strings.Contains(d.Comment, "· id <code>") {
+		t.Errorf("the ID is listed next to the command:\n%s", d.Comment)
+	}
+	if !strings.HasPrefix(d.Comment, Marker+"\n") || !strings.HasSuffix(d.Comment, blockOf(r)) {
+		t.Errorf("want the marker first and the findings block last:\n%s", d.Comment)
+	}
+}
+
+// Without a mention the comment has no command to give: no dismiss line and no
+// re-run footer. The version and the link still show.
+func TestDecideNoMentionNoCommands(t *testing.T) {
+	r := completed(withFinding(skill("security", "has_blocking_issues", "db/query.go"), "blocking", "abc123def456", "plain"))
+	r.Head, r.PergentVersion = "0123456789abcdef", "v0.3.0"
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	for _, bad := range []string{"dismiss", "Run again", "@"} {
+		if strings.Contains(d.Comment, bad) {
+			t.Errorf("comment has %q without a mention:\n%s", bad, d.Comment)
+		}
+	}
+	// The ID stays so a person can still quote it, and the version is shown
+	// once, with a single "v".
+	for _, want := range []string{"id <code>abc123</code>", "pergent v0.3.0"} {
+		if !strings.Contains(d.Comment, want) {
+			t.Errorf("comment lacks %q:\n%s", want, d.Comment)
+		}
+	}
+	if strings.Contains(d.Comment, "<a href") {
+		t.Errorf("a link without a FileURL:\n%s", d.Comment)
+	}
+}
+
+// The model's confidence score and a finding's suggested change reach the
+// comment and the findings block. (A blocking finding caps the score at 3, so
+// the finding here is a suggestion.)
+func TestDecideKeepsConfidenceAndSuggestion(t *testing.T) {
+	s := skill("security", "no_blocking_issues", "db/query.go")
+	s.Confidence, s.ConfidenceReason = 4, "read every changed file"
+	raw, err := json.Marshal(result.Finding{
+		ID: "abc123", Fingerprint: "abc123def456", File: "db/query.go", Line: 3, EndLine: 5, Severity: "suggestion",
+		Title: "Unchecked input", Explanation: "plain", Suggestion: "if x == nil {\n\treturn\n}",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Findings = append(s.Findings, raw)
+	r := completed(s)
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+
+	for _, want := range []string{
+		"### ✅ No blocking issues · Confidence 4/5",
+		"> read every changed file",
+		"_Suggested change, replacing lines 3–5:_",
+		"```\nif x == nil {\n\treturn\n}\n```",
+	} {
+		if !strings.Contains(d.Comment, want) {
+			t.Errorf("comment lacks %q:\n%s", want, d.Comment)
+		}
+	}
+	block := blockOf(r)
+	if !strings.HasSuffix(d.Comment, block) {
+		t.Errorf("the comment must end with the findings block %q:\n%s", block, d.Comment)
+	}
+	raws := decodeBlock(t, d.Comment)
+	for _, want := range []string{`"confidence":{"security":{"score":4,"reason":"read every changed file"}}`, `"end_line":5`, `"suggestion":"if x == nil {\n\treturn\n}"`} {
+		if !strings.Contains(raws, want) {
+			t.Errorf("findings block lacks %s: %s", want, raws)
+		}
+	}
+}
+
+// The confidence reason and a suggested change are model text: they are
+// redacted before they are rendered, in the comment and in the findings block.
+func TestDecideRedactsConfidenceReasonAndSuggestion(t *testing.T) {
+	const key = "sk-secret-123"
+	redact := func(t string) string { return strings.ReplaceAll(t, key, "***") }
+	s := skill("security", "has_blocking_issues", "db/query.go")
+	s.Confidence, s.ConfidenceReason = 3, "checked with "+key
+	raw, err := json.Marshal(result.Finding{
+		ID: "abc123", Fingerprint: "abc123def456", File: "db/query.go", Line: 3, Severity: "blocking",
+		Title: "Unchecked input", Explanation: "plain", Suggestion: "token := \"" + key + "\"",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Findings = append(s.Findings, raw)
+
+	for name, dismissals := range map[string][]render.Dismissal{
+		"rendered from the result": nil,
+		"with a dismissal":         {{Fingerprint: "ffffff000000", Severity: "blocking", By: "maya"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := Decide(Outcome{Result: completed(s), Redact: redact, Dismissals: dismissals}, config.FailureStatusFailed)
+			if strings.Contains(d.Comment, key) {
+				t.Errorf("comment leaks the key: %s", d.Comment)
+			}
+			if raw := decodeBlock(t, d.Comment); strings.Contains(raw, key) || !strings.Contains(raw, "checked with ***") || !strings.Contains(raw, `token := \"***\"`) {
+				t.Errorf("findings block = %s, want the key redacted", raw)
+			}
+			for _, want := range []string{"> checked with ***", `token := "***"`} {
+				if !strings.Contains(d.Comment, want) {
+					t.Errorf("comment lacks %q:\n%s", want, d.Comment)
+				}
+			}
+		})
+	}
+}
+
+// The Job's comment is never posted for a completed review.
+func TestDecideIgnoresJobComment(t *testing.T) {
+	d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go"))}, config.FailureStatusFailed)
+	if strings.Contains(d.Comment, jobComment) || strings.Contains(d.Comment, findingsBlock) {
+		t.Errorf("the Job's comment was used: %s", d.Comment)
 	}
 }

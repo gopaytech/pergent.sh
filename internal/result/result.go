@@ -53,6 +53,11 @@ type Skill struct {
 	Checks          []BatchChecks `json:"checks,omitempty"`
 	Batches         int           `json:"batches,omitempty"`
 	BatchesFinished int           `json:"batches_finished,omitempty"`
+
+	// Confidence is the model's own score, 1 to 5 (0 when it gave none);
+	// render applies the caps.
+	Confidence       int    `json:"confidence,omitempty"`
+	ConfidenceReason string `json:"confidence_reason,omitempty"`
 }
 
 // Finding is one finding of a skill, as the result stores it.
@@ -61,10 +66,12 @@ type Finding struct {
 	Fingerprint  string `json:"fingerprint"`
 	File         string `json:"file"`
 	Line         int    `json:"line,omitempty"`
+	EndLine      int    `json:"end_line,omitempty"`
 	Severity     string `json:"severity"`
 	Title        string `json:"title"`
 	Explanation  string `json:"explanation"`
 	SuggestedFix string `json:"suggested_fix,omitempty"`
+	Suggestion   string `json:"suggestion,omitempty"`
 }
 
 // Failure is a batch of a skill that did not finish, with the plain text of
@@ -184,6 +191,7 @@ func ToRender(r *Result) []render.Skill {
 		rs := render.Skill{
 			Name: s.Name, Verdict: s.Verdict, Reviewed: s.Files.Reviewed,
 			Notes: s.Notes, Batches: s.Batches, BatchesFinished: s.BatchesFinished,
+			Confidence: s.Confidence, ConfidenceReason: s.ConfidenceReason,
 			Findings: []render.Finding{},
 		}
 		for _, f := range findings[i] {
@@ -192,9 +200,9 @@ func ToRender(r *Result) []render.Skill {
 				id = ids[f.Fingerprint]
 			}
 			rs.Findings = append(rs.Findings, render.Finding{
-				ID: id, Fingerprint: f.Fingerprint, File: f.File, Line: f.Line,
+				ID: id, Fingerprint: f.Fingerprint, File: f.File, Line: f.Line, EndLine: f.EndLine,
 				Severity: render.Severity(f.Severity), Title: f.Title,
-				Explanation: f.Explanation, SuggestedFix: f.SuggestedFix,
+				Explanation: f.Explanation, SuggestedFix: f.SuggestedFix, Suggestion: f.Suggestion,
 			})
 		}
 		for _, f := range s.Failures {

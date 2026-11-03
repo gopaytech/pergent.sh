@@ -22,7 +22,7 @@ import (
 
 const (
 	defaultListen      = ":8080"
-	defaultImage       = "ghcr.io/gopaytech/pergent:v0.2.0"
+	defaultImage       = "ghcr.io/gopaytech/pergent:v0.3.0"
 	defaultMaxRunning  = 5
 	defaultTimeout     = 10 * time.Minute
 	defaultConcurrency = 4

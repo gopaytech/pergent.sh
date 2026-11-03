@@ -218,9 +218,29 @@ pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is hand
 
 ## ⬆️ Upgrading
 
+### Upgrading to 0.5.3
+
+0.5.3 moves to pergent v0.3.0 and its comment layout. There is no migration.
+
+1. **The review comment looks different.** It starts with the verdict and the confidence score, then lists the findings, blocking first. Checks and files are collapsed at the bottom.
+   - Each finding links to its lines at the reviewed commit.
+   - Each finding carries its own dismiss command, ``Not a real problem? Reply `@<bot> dismiss <id> <reason>` ``.
+   - The footer shows ``Run again: `@<bot> review` `` and the pergent version.
+2. **pergent.sh draws the comment itself** from the Job's result, for every completed review, instead of posting the comment the Job wrote.
+   - A config whose `jobs.image` pins an older pergent still gets the new layout.
+   - The confidence score and suggested changes show only when that image is v0.2.0 or newer.
+   - A failed batch shows its error message, but no longer the last lines of opencode's error output; those stay in the Job's log.
+3. **The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.3.0`.**
+   - Before v0.3.0, batches that started at the same moment in a new Job could crash: opencode exited before the model's first step, and the batch showed as "Review failed".
+   - A config that sets its own `jobs.image` keeps the image it names. Point it at v0.3.0 to get the fix.
+
+### Upgrading to 0.5.2
+
+0.5.2 changes only the default `jobs.image`, to `ghcr.io/gopaytech/pergent:v0.2.0`. With that image, a read outside the repository no longer ends the review without an answer. There is no migration.
+
 ### Upgrading to 0.5.1
 
-0.5.1 changes only the default `jobs.image`, to `ghcr.io/gopaytech/pergent:v0.2.0`. That image ships ripgrep, so the model's file search (glob and grep) works in review Jobs; with v0.1.2 every search failed and reviews fell back to reading files one by one. A config that sets its own `jobs.image` keeps using the image it names: point it at v0.1.3 or newer. There is no migration.
+0.5.1 changes only the default `jobs.image`, to `ghcr.io/gopaytech/pergent:v0.1.3`. That image ships ripgrep, so the model's file search (glob and grep) works in review Jobs; with v0.1.2 every search failed and reviews fell back to reading files one by one. A config that sets its own `jobs.image` keeps using the image it names: point it at v0.1.3 or newer. There is no migration.
 
 ### Upgrading to 0.5.0
 
@@ -786,7 +806,7 @@ A comment on a merge request (or pull request) can ask the review bot to run the
 | --- | --- |
 | `@<bot> review` | Runs the whole review again on the change's current head and target branch, as a push would. |
 | `@<bot> review failed` | Runs again only the skills that failed, and keeps the other skills' results. |
-| `@<bot> dismiss <id> <reason>` | Sets a finding aside as not a real problem. `<id>` is the code in backticks after the finding's title in the review comment. |
+| `@<bot> dismiss <id> <reason>` | Sets a finding aside as not a real problem. `<id>` is the finding's ID, shown as `id …` on its line in the review comment; each finding's own "Not a real problem?" line has the command ready to copy. |
 | `@<bot> help` | Replies with the list of commands. |
 
 `<bot>` is what people type after `@` to address the review bot: its username on GitLab, the review App's slug on GitHub (`@pergent-review review` for an App called that). A comment that doesn't mention it is ignored, so people can write "review" in ordinary conversation. Restoring a dismissed finding has no command: it is a button on the dashboard.
@@ -1047,7 +1067,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `llm.base_url` | none | Custom API base URL for the provider. |
 | `llm.api_key_env` | `OPENCODE_API_KEY` | Name of the env var with the LLM key. |
 | `jobs.namespace` | required | Namespace the Jobs run in. |
-| `jobs.image` | `ghcr.io/gopaytech/pergent:v0.2.0` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
+| `jobs.image` | `ghcr.io/gopaytech/pergent:v0.3.0` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
 | `jobs.max_running` | `5` | Most Jobs running at once. Further runs wait in the queue. At least 1. |
 | `jobs.timeout` | `10m` | pergent's own review budget per Job (`--timeout`). The Job's deadline adds 2 minutes to deliver and a clone allowance of at least 2 minutes. |
 | `jobs.concurrency` | `4` | pergent's `--concurrency`: opencode runs in flight inside one Job. At least 1. |
