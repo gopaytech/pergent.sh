@@ -1,6 +1,6 @@
 # Inline findings, one-click suggestions and a confidence level
 
-Status: agreed with the owner on 2026-11-03 (brainstorm, then a grilling round that settled every open question). Spans two repositories: **pergent** (the model's answer, the renderer, CI mode) and **pergent.sh** (posting inline threads and keeping them in step with later reviews).
+Status: agreed with the owner on 2026-11-03 (brainstorm, then a grilling round that settled every open question). pergent v0.2.0 shipped the confidence and suggestion fields. The comment layout (§4) was revised the same day after the first live reviews: readers could not tell the finding code was an ID, and passed checks took more room than the findings. Spans two repositories: **pergent** (the model's answer, the renderer, CI mode) and **pergent.sh** (posting inline threads and keeping them in step with later reviews).
 
 ## Why
 
@@ -13,7 +13,7 @@ Today every finding lands in one long comment. A reader has to match "`internal/
 3. **One-click suggestions.** When a fix is small, the finding carries the replacement code, shown as the platform's suggested change ("Commit suggestion" on GitHub, "Apply suggestion" on GitLab). Larger fixes stay as advice in words.
 4. **Threads follow the code.** On every later review: a finding that is gone gets "Fixed in `<short sha>`" and its thread resolved; a finding still present keeps its thread untouched (no repost, no duplicate); a new finding gets a new thread.
 5. **Dismiss from the thread.** `@<bot> dismiss <reason>` as a reply in a finding's thread dismisses that finding without an ID; the thread is then resolved.
-6. **A shorter summary comment.** The one summary comment (still edited in place) holds the confidence, each skill's verdict, confidence and finding counts, the findings that couldn't go inline, the checks and file tables (collapsed), and a one-line dismiss hint.
+6. **A comment you can act on at a glance.** The one summary comment (still edited in place) opens with one line of verdict and confidence, puts the findings first, gives each finding a ready-to-copy dismiss command, and folds everything that passed into one collapsed line (§4). The layout lives in `render`, so CI mode gets it too.
 7. **CI mode (pergent alone)** gets the confidence and the suggestions in its single comment. It gets no inline threads.
 
 ## Non-goals
@@ -41,7 +41,9 @@ Today every finding lands in one long comment. A reader has to match "`internal/
 | When a finding is fixed | **Auto-resolve** its thread with "Fixed in `<sha>`" |
 | Which findings go inline | **Both** severities, cap **20** per merge request, the rest listed in the summary, blocking first |
 | CI mode | Gets confidence and suggestions in its one comment |
-| Dismiss hint | A line at the bottom of every summary comment |
+| Dismiss hint | A ready-to-copy `@<bot> dismiss <id> <reason>` under **each** finding (pergent.sh only); the ID never appears bare |
+| Finding ID | The fingerprint's short code stays the ID (it survives pushes, so dismissals carry over); never per-review numbers |
+| Comment layout | Headline line, one-sentence reason, findings first as collapsible rows, passed checks and files collapsed, footer with the re-run command (§4) |
 | Merge-blocking thread rules | When the target branch requires threads resolved before merge, **only blocking findings go inline**; suggestions stay in the summary (§3) |
 | Reworded findings | Same skill, same file, overlapping lines (or within 5) is the same finding: old thread kept, no repost |
 | When "fixed" is said | Only when the skill ran fine and still covers the file; file left the change → "No longer in this change."; anything else → thread untouched |
@@ -52,10 +54,10 @@ Today every finding lands in one long comment. A reader has to match "`internal/
 | Read-only review App | Inline off for that instance, no "Needs attention" item; documented |
 | "Small" fix | At most **10** replaced lines, all within the finding's own lines |
 | Per-repository switch | "Inline findings", **on by default** |
-| Releases | pergent **v0.2.0**, then pergent.sh **0.6.0** with GitHub and GitLab inline threads in the same release |
+| Releases | pergent **v0.2.0** (shipped), pergent **v0.3.0** (comment layout), then pergent.sh **0.6.0** with GitHub and GitLab inline threads in the same release |
 | Dismiss-in-thread event | The upgrade note tells GitHub users to subscribe to **Pull request review comment** |
 
-The approved mockup is `docs/superpowers/specs/2026-11-03-inline-findings-mockup.html` (made-up content).
+The approved mockup is `docs/superpowers/specs/2026-11-03-inline-findings-mockup.html` (made-up content). Its summary comment (panel 1) is superseded by the layout in §4; its inline finding and resolved thread (panels 2 and 3) stand.
 
 ## How it works
 
@@ -95,16 +97,54 @@ Order for the cap of 20: blocking first, then suggestions, each in file then lin
 
 **When open threads block the merge.** GitHub's branch protection "Require conversation resolution before merging" and GitLab's "All threads must be resolved" make every open thread a merge blocker. When pergent.sh reads that setting as on for the target branch, only blocking findings go inline and suggestions stay in the summary, so a suggestion never blocks a merge. If pergent.sh can't read the setting (no permission, API error), it treats it as off and says so on the instance page. *Designer's call:* suggestion threads already open when the setting turns on are left as they are; the summary's "Not on the diff" section names the reason ("kept here: this branch requires threads resolved before merge").
 
-### 4. The summary comment (pergent.sh)
+### 4. The comment layout (pergent `render`, used by CI mode and pergent.sh)
 
-As in the mockup:
-1. `Confidence: N/5` (or "not scored") and the lowest-scoring skill's reason;
-2. a table: skill · verdict · confidence · findings (counts);
-3. "Not on the diff": findings that couldn't go inline (off the diff, over the cap, or because inline posting failed), each with its ID;
-4. the checks and file tables, collapsed;
-5. the reviewed commit and the dismiss hint: `Not a real problem? Reply @<bot> dismiss <id> <reason>, or in a finding's thread just @<bot> dismiss <reason>.`
+What a reader needs comes first: is it safe, what should I look at, what do I do about it. Everything that passed is one collapsed line.
 
-It stays the one comment edited in place, with the `<!-- pergent -->` marker and the hidden findings block.
+1. **Headline**, one line: the overall verdict and the confidence, e.g. `✅ No blocking issues · Confidence 4/5`, `❌ 1 blocking issue · Confidence 3/5 (capped)`, `⚠️ 1 skill failed · Confidence not scored`. Blocking wins over failed, failed over clean.
+2. **Meta line**, small text: the reviewed commit, the files reviewed, `N of M checks passed`, the finding counts.
+3. **Reason**: one quoted sentence, the confidence reason of the lowest-scoring skill (with the cap's reason when a cap applied). The model's free-text summary paragraph is no longer shown.
+4. **Skills table**, only when the review ran more than one skill: skill · verdict · confidence · findings. With one skill the headline already says it all.
+5. **Findings**, blocking first, then suggestions, each in file then line order. Each finding is a `<details>` row whose summary line carries the severity, the title, a link to `file:line` (or `line–end_line`) at the reviewed commit and, with more than one skill, the skill name. The first blocking finding is open; the rest are collapsed. The body holds the explanation, the suggested change or fix, and in pergent.sh the dismiss line `Not a real problem? Reply @<bot> dismiss <id> <reason>`. In pergent.sh this section lists only the findings that are not inline, titled "Not on the diff" with the reason (off the diff, over the cap, inline posting failed, kept here because the branch requires resolved threads).
+6. **Checks**: one collapsed `Checks: N of M passed` holding one table of every check (area · check · status · detail). A failed or warned check is listed above it, expanded.
+7. **Files reviewed** and **skipped**, collapsed, as today.
+8. **Footer**, small text: in pergent.sh `Run again: @<bot> review` and, when inline is on, `or reply @<bot> dismiss <reason> in a finding's thread`; the pergent version. CI mode has no commands and shows only the version.
+
+Example (made-up content, pergent.sh, one skill, everything inline except one finding):
+
+````markdown
+### ✅ No blocking issues · Confidence 4/5
+<sub>Commit `a1b2c3d` · 11 files · 5 of 5 checks passed · 3 suggestions</sub>
+
+> The earlier blocking issue is fixed and covered by a new test; what's left are suggestions.
+
+#### Not on the diff (1)
+<details><summary>💡 <b>Backoff cap is never reached</b> · <a href="…/blob/a1b2c3d/internal/retry/policy.go#L88">policy.go:88</a></summary>
+
+The cap is compared before the multiplier is applied, so …
+
+**Fix:** compare after multiplying.
+
+Not a real problem? Reply `@pergent-review dismiss b71e02 <reason>`
+</details>
+
+<details><summary>Checks: 5 of 5 passed</summary>
+
+| Area | Check | Status | Detail |
+|---|---|---|---|
+| Plan alignment | Implementation matches plan | ✅ | … |
+</details>
+
+<details><summary>Files reviewed (11)</summary> … </details>
+
+<sub>Run again: `@pergent-review review` · or reply `@pergent-review dismiss <reason>` in a finding's thread · pergent v0.3.0</sub>
+````
+
+**`render` options this needs** (*builder's call* on names): a file-link builder (path, line, end line → URL; none means plain text), the dismiss command prefix (empty means no dismiss line, as in CI mode), and the existing `Inline` and `Footer`. CI mode builds links from the platform's CI variables (`GITHUB_SERVER_URL`/`GITHUB_REPOSITORY`, `CI_PROJECT_URL`) and the head SHA. pergent.sh builds them from the instance and repository.
+
+**HTML inside `<summary>`.** Neither platform renders Markdown inside `<summary>`, so the row uses `<b>`, `<a>` and `<code>`. Model text placed there (the title) is HTML-escaped as well as neutralised.
+
+It stays the one comment edited in place, with the `<!-- pergent -->` marker and the hidden findings block. The golden files change: this is the release (pergent v0.3.0) where CI-mode output is allowed to differ from before.
 
 ### 5. Threads (pergent.sh)
 
@@ -142,8 +182,9 @@ A per-repository setting **"Inline findings"**, on by default, so a team can kee
 
 ## Order of work
 
-1. **pergent:** answer format (confidence, end line, suggestion), parsing and caps, result schema, hidden block, `render` (confidence, suggestion blocks, "only not-inline findings" option), CI mode. Release pergent (v0.2.0).
-2. **pergent.sh:** bump the pergent pin and image; summary comment with confidence and the dismiss hint (useful on its own); then inline threads on **GitHub and GitLab together**, the thread table, resolve-on-fix, dismiss-in-thread, the merge-blocking rule check, the per-repository switch, README and upgrade notes. Release pergent.sh (0.6.0).
+1. **pergent:** answer format (confidence, end line, suggestion), parsing and caps, result schema, hidden block, `render` (confidence, suggestion blocks, "only not-inline findings" option), CI mode. Released as pergent v0.2.0.
+2. **pergent:** the comment layout of §4 in `render` (headline, findings first, per-finding dismiss line, collapsed checks, file links, footer), CI-mode links, new golden files. Release pergent (v0.3.0).
+3. **pergent.sh:** bump the pergent pin and image; the summary comment in the new layout with the per-finding dismiss line (useful on its own); then inline threads on **GitHub and GitLab together**, the thread table, resolve-on-fix, dismiss-in-thread, the merge-blocking rule check, the per-repository switch, README and upgrade notes. Release pergent.sh (0.6.0).
 
 ## Settled after the builder check (proposed by the designer, confirmed by the owner)
 
@@ -156,4 +197,4 @@ A per-repository setting **"Inline findings"**, on by default, so a team can kee
 
 ## Left to the builder
 
-Prompt wording; CI mode's suggestion rendering; the GitHub/GitLab API details for positioning, resolving and reading the merge-blocking thread rule; how the 20 cap orders findings across skills beyond "blocking first"; whether the agent result schema stays version 1 (§2).
+Prompt wording; CI mode's suggestion rendering; the exact headline wording and icons, and the `render` option names (§4); the GitHub/GitLab API details for positioning, resolving and reading the merge-blocking thread rule; how the 20 cap orders findings across skills beyond "blocking first"; whether the agent result schema stays version 1 (§2).
