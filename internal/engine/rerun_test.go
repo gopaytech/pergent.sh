@@ -398,7 +398,10 @@ func TestMergedResultKeepsOtherSkills(t *testing.T) {
 	reportRerun(t, env, id, head, resultFor(t, head, namedSkill(t, "style", "no_blocking_issues", "suggestion", "cccccc000001")))
 
 	body := createdComment(t, env, 1)
-	for _, want := range []string{"### security", "finding of security", "### style", "finding of style"} {
+	wantLayout(t, body)
+	for _, want := range []string{
+		"### ❌ 1 blocking issue", "| `security` |", "| `style` |", "Findings (2)", "finding of security", "finding of style",
+	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("comment lacks %q:\n%s", want, body)
 		}
@@ -454,7 +457,10 @@ func TestMergedResultIsRenderedAgainAfterARedecide(t *testing.T) {
 		t.Fatalf("got %d comment updates, want 1", len(puts))
 	}
 	updated, _ := puts[0].JSON(t)["body"].(string)
-	for _, want := range []string{"### security", "### style", "Dismissed (1)"} {
+	wantLayout(t, updated)
+	for _, want := range []string{
+		"### ✅ No blocking issues (1 dismissed)", "| `security` |", "| `style` |", "Dismissed (1)", "finding of security",
+	} {
 		if !strings.Contains(updated, want) {
 			t.Errorf("updated comment lacks %q:\n%s", want, updated)
 		}
@@ -474,12 +480,12 @@ func TestMergedIDsStayUnique(t *testing.T) {
 	reportRerun(t, env, id, head, resultFor(t, head, namedSkill(t, "style", "no_blocking_issues", "suggestion", "abcdef222222")))
 
 	body := createdComment(t, env, 1)
-	for _, want := range []string{"`abcdef11`", "`abcdef22`"} {
+	for _, want := range []string{"dismiss abcdef11 ", "dismiss abcdef22 "} {
 		if !strings.Contains(body, want) {
 			t.Errorf("comment lacks %q:\n%s", want, body)
 		}
 	}
-	if strings.Contains(body, "`abcdef`") {
+	if strings.Contains(body, "dismiss abcdef ") {
 		t.Errorf("comment has an ambiguous ID:\n%s", body)
 	}
 	r, err := result.Parse(env.Run(id).Result)
@@ -516,7 +522,12 @@ func TestMergeBaseUnreadable(t *testing.T) {
 			if !strings.Contains(body, result.NoteBaseUnreadable) {
 				t.Errorf("comment lacks the note:\n%s", body)
 			}
-			if !strings.Contains(body, "No blocking issues.") {
+			wantLayout(t, body)
+			wantNoteBeforeBlock(t, body, "---\n**Note:** "+result.NoteBaseUnreadable+
+				", so this review covers only the skills that were re-run and is not approved.\n\n")
+			// The re-run's own review: its skill and files, nothing of the
+			// skills that could not be read.
+			if !strings.Contains(body, "### ✅ No blocking issues\n") || !strings.Contains(body, "`style.go`") || strings.Contains(body, "security") {
 				t.Errorf("comment should be the re-run's own:\n%s", body)
 			}
 			wantPublished(t, env, id)

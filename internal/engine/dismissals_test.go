@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
-	"github.com/gopaytech/pergent.sh/internal/policy"
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -59,12 +58,13 @@ func TestDismissalUnblocksApproval(t *testing.T) {
 	for _, want := range []string{
 		"Dismissed (1)", "SQL built from user input", "`abc123`",
 		"dismissed by maya (gitlab main): false positive, the id is an integer",
-		"✅ **No blocking issues** (1 dismissed)",
+		"### ✅ No blocking issues (1 dismissed)",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("comment lacks %q:\n%s", want, body)
 		}
 	}
+	wantLayout(t, body)
 	if strings.Contains(body, "❌") {
 		t.Errorf("comment still shows a blocking issue:\n%s", body)
 	}
@@ -88,14 +88,22 @@ func TestSuggestionDismissalDoesNotCoverBlocking(t *testing.T) {
 	publish(t, env)
 
 	wantStatus(t, env, head, gitlab.StatusFailed, "Blocking issues found")
-	if body := createdComment(t, env, 1); !strings.Contains(body, testMarkdown) || strings.Contains(body, "Dismissed") {
-		t.Errorf("comment = %q, want the stored one, nothing dismissed", body)
+	body := createdComment(t, env, 1)
+	wantLayout(t, body)
+	for _, want := range []string{"### ❌ 1 blocking issue", "SQL built from user input", "dismiss abc123"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("comment lacks %q, the blocking finding still stands:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "Dismissed") {
+		t.Errorf("comment = %q, want nothing dismissed", body)
 	}
 	wantNoApproval(t, env, 1)
 }
 
 // A dismissal that covers no finding of the review, or no dismissal at all,
-// leaves the comment as the result carries it, notes included.
+// leaves the comment as the review renders: findings in place, nothing
+// dismissed, the draft note before the findings block.
 func TestNoDismissalsKeepsOriginalComment(t *testing.T) {
 	for name, withUnrelated := range map[string]bool{"none": false, "unrelated": true} {
 		t.Run(name, func(t *testing.T) {
@@ -116,11 +124,18 @@ func TestNoDismissalsKeepsOriginalComment(t *testing.T) {
 
 			publish(t, env)
 
-			const block = "<!-- pergent:findings [] -->"
-			want := policy.Marker + "\n### security\n\nNo blocking issues.\n\n" +
-				"---\n**Not approved:** this is a draft. It will be approved when it's marked ready.\n\n" + block
-			if got := createdComment(t, env, 1); got != want {
-				t.Errorf("comment = %q\nwant %q", got, want)
+			// The review as rendered, the draft note right before the findings
+			// block, and nothing dismissed.
+			got := createdComment(t, env, 1)
+			wantLayout(t, got)
+			wantNoteBeforeBlock(t, got, draftNote)
+			for _, want := range []string{"### ✅ No blocking issues\n", "SQL built from user input", "1 suggestion"} {
+				if !strings.Contains(got, want) {
+					t.Errorf("comment lacks %q:\n%s", want, got)
+				}
+			}
+			if strings.Contains(got, "Dismissed") {
+				t.Errorf("comment shows a dismissal:\n%s", got)
 			}
 		})
 	}

@@ -241,21 +241,6 @@ func TestE2ERetargetReviewsAgainAndUnapproves(t *testing.T) {
 	}
 }
 
-// resultWithMarkdown is resultFor with the comment's markdown replaced.
-func resultWithMarkdown(t *testing.T, head, markdown string, skills ...result.Skill) []byte {
-	t.Helper()
-	var r result.Result
-	if err := json.Unmarshal(resultFor(t, head, skills...), &r); err != nil {
-		t.Fatal(err)
-	}
-	r.Comment.Markdown = markdown
-	b, err := json.Marshal(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return b
-}
-
 // Commit statuses are per commit, not per target branch. A head reviewed
 // against main (blocking), retargeted to develop (clean, approved) and back
 // to main must be reviewed against main again: the earlier main review is
@@ -285,7 +270,20 @@ func TestE2ERetargetBackToEarlierTargetReviewsAgain(t *testing.T) {
 			t.Fatalf("run = %+v, want %s against %s running", r, head, target)
 		}
 		token := string(env.Secret(id).Data["result-token"])
-		body := resultWithMarkdown(t, head, "review against "+target, reviewed(verdict, "a.go"))
+		// A blocking review carries a finding titled after its target, which
+		// is what tells the reviews apart in the rendered comment.
+		skill := reviewed(verdict, "a.go")
+		if verdict == "has_blocking_issues" {
+			f, err := json.Marshal(result.Finding{
+				ID: "abc123", Fingerprint: sqlFingerprint, File: "a.go", Line: 1, Severity: "blocking",
+				Title: "review against " + target, Explanation: "because",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			skill.Findings = []json.RawMessage{f}
+		}
+		body := resultFor(t, head, skill)
 		if code := e.postResult(t, id, token, body); code != http.StatusOK {
 			t.Fatalf("result: status %d", code)
 		}
@@ -366,8 +364,10 @@ func TestE2ERetargetBackToEarlierTargetReviewsAgain(t *testing.T) {
 	if st := lastStatus(); st["state"] != string(gitlab.StatusFailed) || st["description"] != "Blocking issues found" {
 		t.Errorf("status after retargeting back = %v, want failed", st)
 	}
-	if body := lastComment(); !strings.Contains(body, "review against main") {
+	if body := lastComment(); !strings.Contains(body, "### ❌ 1 blocking issue") || !strings.Contains(body, "<b>review against main</b>") {
 		t.Errorf("comment = %q, want the main review", body)
+	} else {
+		wantLayout(t, body)
 	}
 	if n := len(env.GitLab.Requests(http.MethodPost, approvePath(1))); n != 0 {
 		t.Errorf("approved %d times after retargeting back, want never", n)

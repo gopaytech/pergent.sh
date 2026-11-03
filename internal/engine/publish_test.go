@@ -114,6 +114,45 @@ func createdComment(t *testing.T, env *testEnv, iid int64) string {
 	return body
 }
 
+// wantLayout checks a posted review comment is one rendered from a result:
+// the marker first, exactly one findings block and it last, and the re-run
+// command in the footer. It is the part of a comment every review has,
+// whatever its findings.
+func wantLayout(t *testing.T, body string) {
+	t.Helper()
+	const block = "<!-- pergent:findings "
+	if !strings.HasPrefix(body, policy.Marker+"\n### ") {
+		t.Errorf("comment does not start with the marker and a headline:\n%s", body)
+	}
+	i := strings.LastIndex(body, block)
+	if i < 0 || strings.Count(body, block) != 1 {
+		t.Errorf("comment has %d findings blocks, want 1:\n%s", strings.Count(body, block), body)
+		return
+	}
+	if tail := strings.TrimRight(body[i:], "\n"); strings.Contains(tail, "\n") || !strings.HasSuffix(tail, " -->") {
+		t.Errorf("findings block is not last:\n%s", body)
+	}
+	if !strings.Contains(body, "Run again: `@pergent-review review`") {
+		t.Errorf("comment lacks the re-run command:\n%s", body)
+	}
+	if strings.Contains(body, testMarkdown) {
+		t.Errorf("comment is the Job's own markdown, want one rendered from the result:\n%s", body)
+	}
+}
+
+// draftNote is what a draft's comment says, as a block of its own.
+const draftNote = "---\n**Not approved:** this is a draft. It will be approved when it's marked ready.\n\n"
+
+// wantNoteBeforeBlock checks note is the last thing before the findings
+// block of body.
+func wantNoteBeforeBlock(t *testing.T, body, note string) {
+	t.Helper()
+	i := strings.LastIndex(body, "<!-- pergent:findings ")
+	if i < len(note) || body[i-len(note):i] != note {
+		t.Errorf("comment lacks %q right before the findings block:\n%s", note, body)
+	}
+}
+
 func wantPublished(t *testing.T, env *testEnv, id string) {
 	t.Helper()
 	if r := env.Run(id); r.State != store.Published {
@@ -163,8 +202,12 @@ func TestPublishApproves(t *testing.T) {
 
 	publish(t, env)
 
-	if body := createdComment(t, env, 1); !strings.Contains(body, testMarkdown) {
-		t.Errorf("comment = %q, want the result's markdown", body)
+	body := createdComment(t, env, 1)
+	wantLayout(t, body)
+	for _, want := range []string{"### ✅ No blocking issues\n", "`api/handler.go`"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("comment lacks %q:\n%s", want, body)
+		}
 	}
 	wantNoteID(t, env, 1, createdNote)
 	wantStatus(t, env, head, gitlab.StatusSuccess, "No blocking issues")
@@ -187,7 +230,7 @@ func TestPublishApproves(t *testing.T) {
 func TestPublishUpdatesExistingNote(t *testing.T) {
 	env := newTestEnv(t)
 	head := sha('a')
-	id := env.Report(1, head, resultFor(t, head, reviewed("has_blocking_issues", "a.go")))
+	id := env.Report(1, head, resultFor(t, head, skillWithFinding(t, "has_blocking_issues", "blocking")))
 	servePublish(env, 1, head)
 	if err := env.Store.SetNoteID(env.ctx, env.MRKey(1), 777); err != nil {
 		t.Fatal(err)
@@ -200,8 +243,12 @@ func TestPublishUpdatesExistingNote(t *testing.T) {
 	if len(puts) != 1 || puts[0].Token != testReviewToken {
 		t.Fatalf("got %d updates of note 777, want 1 by the review bot", len(puts))
 	}
-	if body, _ := puts[0].JSON(t)["body"].(string); !strings.Contains(body, policy.Marker) || !strings.Contains(body, testMarkdown) {
-		t.Errorf("updated comment = %q", body)
+	body, _ := puts[0].JSON(t)["body"].(string)
+	wantLayout(t, body)
+	for _, want := range []string{"### ❌ 1 blocking issue", "SQL built from user input", "`db/query.go`"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("updated comment lacks %q:\n%s", want, body)
+		}
 	}
 	if n := len(env.GitLab.Requests("", notesPath(1))); n != 0 {
 		t.Errorf("listed or created notes %d times, want 0", n)
@@ -942,12 +989,8 @@ func TestPublishDraftThenReady(t *testing.T) {
 
 	wantStatus(t, env, head, gitlab.StatusSuccess, "No blocking issues; not approved: draft")
 	body := createdComment(t, env, 1)
-	if !strings.Contains(body, "**Not approved:** this is a draft. It will be approved when it's marked ready.") {
-		t.Errorf("comment lacks the draft note: %q", body)
-	}
-	if !strings.HasSuffix(body, "<!-- pergent:findings [] -->") {
-		t.Errorf("findings block is not last: %q", body)
-	}
+	wantLayout(t, body)
+	wantNoteBeforeBlock(t, body, draftNote)
 	wantPublished(t, env, id)
 	if n := len(env.GitLab.Requests(http.MethodPost, approvePath(1))); n != 0 {
 		t.Fatalf("approved a draft %d times", n)
@@ -968,8 +1011,11 @@ func TestPublishDraftThenReady(t *testing.T) {
 	if len(puts) != 1 {
 		t.Fatalf("got %d note updates, want 1", len(puts))
 	}
-	if body, _ := puts[0].JSON(t)["body"].(string); strings.Contains(body, "draft") || !strings.Contains(body, testMarkdown) {
-		t.Errorf("updated comment = %q, want the review without the draft note", body)
+	ready, _ := puts[0].JSON(t)["body"].(string)
+	wantLayout(t, ready)
+	// The same review, without the draft note and nothing else changed.
+	if want := strings.Replace(body, draftNote, "", 1); ready != want {
+		t.Errorf("updated comment = %q, want the draft's comment without its note %q", ready, want)
 	}
 	if n := len(env.GitLab.Requests(http.MethodPost, notesPath(1))); n != 0 {
 		t.Errorf("created %d notes, want the existing one updated", n)
