@@ -43,7 +43,9 @@ Today every finding lands in one long comment. A reader has to match "`internal/
 | CI mode | Gets confidence and suggestions in its one comment |
 | Dismiss hint | A ready-to-copy `@<bot> dismiss <id> <reason>` under **each** finding (pergent.sh only); the ID never appears bare |
 | Finding ID | The fingerprint's short code stays the ID (it survives pushes, so dismissals carry over); never per-review numbers |
-| Comment layout | Headline line, one-sentence reason, findings first as collapsible rows, passed checks and files collapsed, footer with the re-run command (§4) |
+| Comment layout | Headline line, one-sentence reason, findings first as collapsible rows (blocking open, suggestions collapsed), one row per check, one file list, footer with the re-run command (§4) |
+| Findings across skills | One list for the whole review, blocking first, then file and line; the skill named on each row when more than one ran |
+| Model's summary paragraph | Not shown; the one-sentence confidence reason replaces it |
 | Merge-blocking thread rules | When the target branch requires threads resolved before merge, **only blocking findings go inline**; suggestions stay in the summary (§3) |
 | Reworded findings | Same skill, same file, overlapping lines (or within 5) is the same finding: old thread kept, no repost |
 | When "fixed" is said | Only when the skill ran fine and still covers the file; file left the change → "No longer in this change."; anything else → thread untouched |
@@ -54,7 +56,7 @@ Today every finding lands in one long comment. A reader has to match "`internal/
 | Read-only review App | Inline off for that instance, no "Needs attention" item; documented |
 | "Small" fix | At most **10** replaced lines, all within the finding's own lines |
 | Per-repository switch | "Inline findings", **on by default** |
-| Releases | pergent **v0.2.0** (shipped), pergent **v0.3.0** (comment layout), then pergent.sh **0.6.0** with GitHub and GitLab inline threads in the same release |
+| Releases | pergent **v0.2.0** (shipped), pergent **v0.3.0** (comment layout), pergent.sh **0.5.3** (moves to v0.3.0: new layout, per-finding dismiss command, "Run again" footer), then pergent.sh **0.6.0** with GitHub and GitLab inline threads in the same release |
 | Dismiss-in-thread event | The upgrade note tells GitHub users to subscribe to **Pull request review comment** |
 
 The approved mockup is `docs/superpowers/specs/2026-11-03-inline-findings-mockup.html` (made-up content). Its summary comment (panel 1) is superseded by the layout in §4; its inline finding and resolved thread (panels 2 and 3) stand.
@@ -105,9 +107,9 @@ What a reader needs comes first: is it safe, what should I look at, what do I do
 2. **Meta line**, small text: the reviewed commit, the files reviewed, `N of M checks passed`, the finding counts.
 3. **Reason**: one quoted sentence, the confidence reason of the lowest-scoring skill (with the cap's reason when a cap applied). The model's free-text summary paragraph is no longer shown.
 4. **Skills table**, only when the review ran more than one skill: skill · verdict · confidence · findings. With one skill the headline already says it all.
-5. **Findings**, blocking first, then suggestions, each in file then line order. Each finding is a `<details>` row whose summary line carries the severity, the title, a link to `file:line` (or `line–end_line`) at the reviewed commit and, with more than one skill, the skill name. The first blocking finding is open; the rest are collapsed. The body holds the explanation, the suggested change or fix, and in pergent.sh the dismiss line `Not a real problem? Reply @<bot> dismiss <id> <reason>`. In pergent.sh this section lists only the findings that are not inline, titled "Not on the diff" with the reason (off the diff, over the cap, inline posting failed, kept here because the branch requires resolved threads).
-6. **Checks**: one collapsed `Checks: N of M passed` holding one table of every check (area · check · status · detail). A failed or warned check is listed above it, expanded.
-7. **Files reviewed** and **skipped**, collapsed, as today.
+5. **Findings**, blocking first, then suggestions, each in file then line order. Each finding is a `<details>` row whose summary line carries the severity, the title, a link to `file:line` (or `line–end_line`) at the reviewed commit and, with more than one skill, the skill name. Every blocking finding is open; every suggestion is collapsed. The body holds the explanation, the suggested change or fix, and in pergent.sh the dismiss line `Not a real problem? Reply @<bot> dismiss <id> <reason>`. In pergent.sh this section lists only the findings that are not inline, titled "Not on the diff" with the reason (off the diff, over the cap, inline posting failed, kept here because the branch requires resolved threads).
+6. **Checks**: one collapsed `Checks: N of M passed` holding one table of every check (area · check · status · detail). A failed check is listed above it, expanded. A check that several batches of one skill answered is one row: the worst status (failed beats n/a beats passed) and the detail from the batch with that status.
+7. **Files**: one collapsed `Files (N)` list, each changed file once. A skipped file carries its reason (`go.sum — skipped: lockfile`); with more than one skill, a file only some skills reviewed names them (`reviewed by a; skipped by b (generated)`). It replaces the separate changed, reviewed and skipped lists.
 8. **Footer**, small text: in pergent.sh `Run again: @<bot> review` and, when inline is on, `or reply @<bot> dismiss <reason> in a finding's thread`; the pergent version. CI mode has no commands and shows only the version.
 
 Example (made-up content, pergent.sh, one skill, everything inline except one finding):
@@ -135,7 +137,7 @@ Not a real problem? Reply `@pergent-review dismiss b71e02 <reason>`
 | Plan alignment | Implementation matches plan | ✅ | … |
 </details>
 
-<details><summary>Files reviewed (11)</summary> … </details>
+<details><summary>Files (11)</summary> … </details>
 
 <sub>Run again: `@pergent-review review` · or reply `@pergent-review dismiss <reason>` in a finding's thread · pergent v0.3.0</sub>
 ````
@@ -184,7 +186,8 @@ A per-repository setting **"Inline findings"**, on by default, so a team can kee
 
 1. **pergent:** answer format (confidence, end line, suggestion), parsing and caps, result schema, hidden block, `render` (confidence, suggestion blocks, "only not-inline findings" option), CI mode. Released as pergent v0.2.0.
 2. **pergent:** the comment layout of §4 in `render` (headline, findings first, per-finding dismiss line, collapsed checks, file links, footer), CI-mode links, new golden files. Release pergent (v0.3.0).
-3. **pergent.sh:** bump the pergent pin and image; the summary comment in the new layout with the per-finding dismiss line (useful on its own); then inline threads on **GitHub and GitLab together**, the thread table, resolve-on-fix, dismiss-in-thread, the merge-blocking rule check, the per-repository switch, README and upgrade notes. Release pergent.sh (0.6.0).
+3. **pergent.sh 0.5.3:** bump the pergent pin and image to v0.3.0, pass the per-finding dismiss command and the "Run again" footer, update its tests for the new layout. Release pergent.sh (0.5.3).
+4. **pergent.sh 0.6.0:** inline threads on **GitHub and GitLab together**, the thread table, resolve-on-fix, dismiss-in-thread, the merge-blocking rule check, the per-repository switch, README and upgrade notes. Release pergent.sh (0.6.0).
 
 ## Settled after the builder check (proposed by the designer, confirmed by the owner)
 
