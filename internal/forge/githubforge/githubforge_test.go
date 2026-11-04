@@ -1251,3 +1251,27 @@ func TestGitHubSourceReaderForbidden(t *testing.T) {
 		t.Errorf("ResolveRef with a forbidden installation lookup = %v; want ErrSourceNotFound", err)
 	}
 }
+
+// The review App's COMMENT review carries its inline threads; with
+// approve_with_review_app it would hide the App's own approval.
+func TestHasApprovedIgnoresCommentReview(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		list []map[string]any
+		want bool
+	}{
+		{"approved, then commented", reviews(review(1, approveBotID, "APPROVED", sha('a')), review(2, approveBotID, "COMMENTED", sha('a'))), true},
+		{"only commented", reviews(review(1, approveBotID, "COMMENTED", sha('a'))), false},
+		{"dismissed, then commented", reviews(review(1, approveBotID, "APPROVED", sha('a')), review(2, approveBotID, "DISMISSED", sha('a')), review(3, approveBotID, "COMMENTED", sha('a'))), false},
+	} {
+		for name := range approvers(t, newFake(t)) {
+			f := newFake(t)
+			a := approvers(t, f)[name]
+			f.reply("GET", prPath+"/reviews", 200, tc.list)
+			got, err := a.HasApproved(ctx, repoID, 3, sha('a'))
+			if err != nil || got != tc.want {
+				t.Errorf("%s/%s: HasApproved = %v, %v; want %v", tc.name, name, got, err, tc.want)
+			}
+		}
+	}
+}

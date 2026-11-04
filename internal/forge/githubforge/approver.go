@@ -324,8 +324,10 @@ func (a *Approver) Unapprove(ctx context.Context, repoID, number int64) error {
 func (a *Approver) Bot() forge.Identity { return forge.Identity{ID: a.bot, Username: a.login} }
 
 // HasApproved reports whether the bot's latest review of the pull request is
-// an approval of sha. Without a known bot user it is false, and GitHub isn't
-// asked.
+// an approval of sha. A COMMENTED review doesn't count as a review here: with
+// approve_with_review_app the App's own inline threads are posted as one, and
+// it would hide the approval before it. Without a known bot user it is false,
+// and GitHub isn't asked.
 func (a *Approver) HasApproved(ctx context.Context, repoID, number int64, sha string) (bool, error) {
 	if a.bot == 0 {
 		return false, nil
@@ -338,7 +340,7 @@ func (a *Approver) HasApproved(ctx context.Context, repoID, number int64, sha st
 		}
 		var latest *github.Review
 		for i := range reviews {
-			if reviews[i].User.ID == a.bot {
+			if reviews[i].User.ID == a.bot && reviews[i].State != "COMMENTED" {
 				latest = &reviews[i]
 			}
 		}
