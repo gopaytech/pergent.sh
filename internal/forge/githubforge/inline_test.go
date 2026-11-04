@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -37,7 +38,7 @@ func gqlThread(id string, resolved, outdated bool, path string, line, startLine 
 func gqlThreadBy(id string, resolved, outdated bool, path string, line, startLine any, comment int64, body, author, typename string) map[string]any {
 	return map[string]any{
 		"id": id, "isResolved": resolved, "isOutdated": outdated, "path": path, "line": line, "startLine": startLine,
-		"comments": map[string]any{"nodes": []map[string]any{{"databaseId": comment, "body": body, "author": map[string]any{"__typename": typename, "login": author}}}},
+		"comments": map[string]any{"nodes": []map[string]any{{"fullDatabaseId": strconv.FormatInt(comment, 10), "databaseId": int32(comment), "body": body, "author": map[string]any{"__typename": typename, "login": author}}}},
 	}
 }
 
@@ -293,7 +294,7 @@ func TestChangeDiff(t *testing.T) {
 
 func TestCompareDiff(t *testing.T) {
 	f := newFake(t)
-	f.reply("GET", "/repos/acme/widgets/compare/"+sha('1')+"..."+sha('2'), 200, map[string]any{"files": []map[string]any{
+	f.reply("GET", "/repos/acme/widgets/compare/"+sha('1')+"..."+sha('2'), 200, map[string]any{"status": "ahead", "merge_base_commit": map[string]any{"sha": sha('1')}, "files": []map[string]any{
 		{"filename": "a.go", "previous_filename": "old.go", "status": "renamed", "patch": "@@ -1 +1 @@\n-a\n+b"},
 	}})
 	got, err := f.forge(t).CompareDiff(ctx, repoID, sha('1'), sha('2'))

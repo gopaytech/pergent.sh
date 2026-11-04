@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -69,7 +70,7 @@ const reviewThreadsQuery = `query($owner: String!, $name: String!, $number: Int!
           path
           line
           startLine
-          comments(first: 1) { nodes { databaseId body author { __typename login } } }
+          comments(first: 1) { nodes { fullDatabaseId databaseId body author { __typename login } } }
         }
       }
     }
@@ -106,9 +107,10 @@ func (c *Client) ReviewThreads(ctx context.Context, owner, repo string, number i
 							StartLine  *int   `json:"startLine"`
 							Comments   struct {
 								Nodes []struct {
-									DatabaseID int64  `json:"databaseId"`
-									Body       string `json:"body"`
-									Author     *struct {
+									FullDatabaseID json.RawMessage `json:"fullDatabaseId"`
+									DatabaseID     int64           `json:"databaseId"`
+									Body           string          `json:"body"`
+									Author         *struct {
 										Typename string `json:"__typename"`
 										Login    string `json:"login"`
 									} `json:"author"`
@@ -137,7 +139,7 @@ func (c *Client) ReviewThreads(ctx context.Context, owner, repo string, number i
 			}
 			if len(n.Comments.Nodes) > 0 {
 				first := n.Comments.Nodes[0]
-				t.CommentID, t.Body = first.DatabaseID, first.Body
+				t.CommentID, t.Body = commentID(first.FullDatabaseID, first.DatabaseID), first.Body
 				if first.Author != nil {
 					t.Author, t.AuthorType = first.Author.Login, first.Author.Typename
 				}
@@ -149,6 +151,17 @@ func (c *Client) ReviewThreads(ctx context.Context, owner, repo string, number i
 		}
 		cursor = threads.PageInfo.EndCursor
 	}
+}
+
+// commentID is a review comment's numeric ID: fullDatabaseId (a BigInt GraphQL
+// sends as a string) when it is present and valid, else databaseId, which
+// GitHub has deprecated because it is a 32-bit Int.
+func commentID(full json.RawMessage, legacy int64) int64 {
+	raw := strings.Trim(strings.TrimSpace(string(full)), `"`)
+	if id, err := strconv.ParseInt(raw, 10, 64); err == nil && id > 0 {
+		return id
+	}
+	return legacy
 }
 
 const (

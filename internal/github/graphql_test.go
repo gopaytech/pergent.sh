@@ -51,11 +51,11 @@ func TestReviewThreadsPaginates(t *testing.T) {
 	c, rec := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		if calls.Add(1) == 1 {
 			_, _ = io.WriteString(w, threadsPage("c1", `{"id":"T1","isResolved":false,"isOutdated":false,"path":"a.go","line":12,"startLine":10,
-				"comments":{"nodes":[{"databaseId":501,"body":"first\n<!-- pergent:finding f1 -->","author":{"__typename":"Bot","login":"pergent-review[bot]"}}]}}`))
+				"comments":{"nodes":[{"fullDatabaseId":"501","databaseId":501,"body":"first\n<!-- pergent:finding f1 -->","author":{"__typename":"Bot","login":"pergent-review[bot]"}}]}}`))
 			return
 		}
 		_, _ = io.WriteString(w, threadsPage("", `{"id":"T2","isResolved":true,"isOutdated":true,"path":"b.go","line":null,"startLine":null,
-			"comments":{"nodes":[{"databaseId":502,"body":"second","author":null}]}}`, `{"id":"T3","isResolved":false,"isOutdated":false,"path":"c.go","line":3,"startLine":null,"comments":{"nodes":[]}}`))
+			"comments":{"nodes":[{"fullDatabaseId":"502","databaseId":502,"body":"second","author":null}]}}`, `{"id":"T3","isResolved":false,"isOutdated":false,"path":"c.go","line":3,"startLine":null,"comments":{"nodes":[]}}`))
 	})
 	got, err := c.ReviewThreads(ctx, "acme", "widgets", 3)
 	if err != nil {
@@ -78,7 +78,7 @@ func TestReviewThreadsPaginates(t *testing.T) {
 		t.Error("the query was sent without the token")
 	}
 	r0, r1 := decodeGQL(t, all[0].Body), decodeGQL(t, all[1].Body)
-	for _, f := range []string{"reviewThreads(first: 100, after: $cursor)", "pageInfo", "hasNextPage", "endCursor", "isResolved", "isOutdated", "path", "startLine", "comments(first: 1)", "databaseId", "author { __typename login }"} {
+	for _, f := range []string{"reviewThreads(first: 100, after: $cursor)", "pageInfo", "hasNextPage", "endCursor", "isResolved", "isOutdated", "path", "startLine", "comments(first: 1)", "fullDatabaseId", "databaseId", "author { __typename login }"} {
 		if !strings.Contains(r0.Query, f) {
 			t.Errorf("query lacks %q:\n%s", f, r0.Query)
 		}
@@ -88,6 +88,35 @@ func TestReviewThreadsPaginates(t *testing.T) {
 	}
 	if r0.Variables["cursor"] != nil || r1.Variables["cursor"] != "c1" {
 		t.Errorf("cursors = %v, %v", r0.Variables["cursor"], r1.Variables["cursor"])
+	}
+}
+
+// GitHub deprecated databaseId (a 32-bit Int) for fullDatabaseId (a BigInt
+// sent as a string): the latter wins when it is valid.
+func TestReviewThreadsCommentIDs(t *testing.T) {
+	node := func(comment string) string {
+		return `{"id":"T","isResolved":false,"isOutdated":false,"path":"a.go","line":1,"startLine":null,"comments":{"nodes":[{` + comment + `,"body":"x","author":null}]}}`
+	}
+	for name, tc := range map[string]struct {
+		comment string
+		want    int64
+	}{
+		"full id above 2^32":         {`"fullDatabaseId":"4294967301","databaseId":null`, 4294967301},
+		"full id null, legacy set":   {`"fullDatabaseId":null,"databaseId":501`, 501},
+		"full id absent, legacy set": {`"databaseId":502`, 502},
+		"both set":                   {`"fullDatabaseId":"9000000001","databaseId":5`, 9000000001},
+		"full id invalid":            {`"fullDatabaseId":"abc","databaseId":503`, 503},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, threadsPage("", node(tc.comment))) })
+			got, err := c.ReviewThreads(ctx, "acme", "widgets", 3)
+			if err != nil || len(got) != 1 {
+				t.Fatalf("got=%+v err=%v", got, err)
+			}
+			if got[0].CommentID != tc.want {
+				t.Errorf("CommentID = %d, want %d", got[0].CommentID, tc.want)
+			}
+		})
 	}
 }
 
