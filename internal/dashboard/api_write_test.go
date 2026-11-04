@@ -1136,3 +1136,17 @@ func TestBoolSettingInlineFindings(t *testing.T) {
 		t.Errorf("msgBadSettings = %q", msgBadSettings)
 	}
 }
+
+// A key that is not a bool setting is refused with a message, not a nil
+// function that panics when the edit runs.
+func TestBoolSettingUnknownKey(t *testing.T) {
+	for _, raw := range []string{`true`, `null`} {
+		edit, msg := boolSetting("nope", json.RawMessage(raw), raw == "null")
+		if edit != nil {
+			t.Errorf("%s: edit is not nil", raw)
+		}
+		if msg != "nope is not a setting" {
+			t.Errorf("%s: msg = %q", raw, msg)
+		}
+	}
+}

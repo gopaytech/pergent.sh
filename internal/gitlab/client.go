@@ -493,12 +493,15 @@ func (c *Client) MergeRequestDiffs(ctx context.Context, projectID, iid int64) ([
 	if strings.HasSuffix(count, "+") {
 		return nil, fmt.Errorf("%w: the merge request changes %s files, more than GitLab lists", ErrPartialDiff, count)
 	}
-	// An empty count is GitLab not having counted yet: no files to match.
+	// An empty count is GitLab not having counted yet: only an empty list
+	// matches it.
 	n := 0
-	if count != "" {
-		if n, err = strconv.Atoi(count); err != nil {
-			return nil, errors.New("gitlab: decoding response: bad changes_count")
+	if count == "" {
+		if len(out) != 0 {
+			return nil, fmt.Errorf("%w: the merge request's changes_count isn't available yet", ErrPartialDiff)
 		}
+	} else if n, err = strconv.Atoi(count); err != nil {
+		return nil, errors.New("gitlab: decoding response: bad changes_count")
 	}
 	if n != len(out) {
 		return nil, fmt.Errorf("%w: GitLab lists %d files but the merge request changes %d", ErrPartialDiff, len(out), n)

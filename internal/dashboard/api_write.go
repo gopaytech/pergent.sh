@@ -714,7 +714,7 @@ var boolSettings = map[string]func(row *store.DashboardRepo, v *bool){
 }
 
 // boolSetting reads the setting key, one of boolSettings, as true, false or
-// null.
+// null. A key that is not one of them is refused, not applied.
 func boolSetting(key string, raw json.RawMessage, null bool) (func(*store.DashboardRepo), string) {
 	var v *bool
 	if !null {
@@ -724,7 +724,10 @@ func boolSetting(key string, raw json.RawMessage, null bool) (func(*store.Dashbo
 		}
 		v = &b
 	}
-	set := boolSettings[key]
+	set, ok := boolSettings[key]
+	if !ok {
+		return nil, key + " is not a setting"
+	}
 	return func(row *store.DashboardRepo) { set(row, v) }, ""
 }
 

@@ -1212,6 +1212,25 @@ func TestMergeRequestDiffsPartial(t *testing.T) {
 	}
 }
 
+// An empty changes_count is GitLab not having counted yet: the error says so,
+// not that the merge request changes 0 files.
+func TestMergeRequestDiffsNotCountedYet(t *testing.T) {
+	one := []map[string]any{{"old_path": "a.go", "new_path": "a.go", "diff": "@@ -1 +1 @@\n-a\n+b\n"}}
+	c, _ := diffsServer(t, one, "")
+	_, err := c.MergeRequestDiffs(context.Background(), 7, 3)
+	if !errors.Is(err, ErrPartialDiff) {
+		t.Fatalf("err = %v, want ErrPartialDiff", err)
+	}
+	if want := "the merge request's changes_count isn't available yet"; !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %q, want it to contain %q", err, want)
+	}
+	// An empty list needs no count.
+	c, _ = diffsServer(t, nil, "")
+	if got, err := c.MergeRequestDiffs(context.Background(), 7, 3); err != nil || len(got) != 0 {
+		t.Errorf("empty list: got %v, err %v", got, err)
+	}
+}
+
 // GitLab reports changes_count as a string, but a number or null must not
 // break every GetMergeRequest caller.
 func TestMergeRequestDiffsCountForms(t *testing.T) {
