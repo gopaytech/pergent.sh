@@ -16,6 +16,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/policy"
 	"github.com/gopaytech/pergent.sh/internal/result"
+	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -105,6 +106,15 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 		failure = repo.FailureStatus
 	}
 	if run, err = e.mergeBase(ctx, run, log); err != nil {
+		return err
+	}
+	// A repository switched off since the run was queued can only be
+	// switched on again in the dashboard.
+	advice := result.AdviceDashboard
+	if ok && repo.Source == settings.SourceConfig {
+		advice = result.AdviceConfig
+	}
+	if run, err = e.replaceStepAdvice(ctx, run, advice); err != nil {
 		return err
 	}
 	o := e.outcome(run, log)
@@ -205,6 +215,28 @@ func (e *Engine) mergeBase(ctx context.Context, run store.Run, log *slog.Logger)
 		return run, fmt.Errorf("store the merged result: %w", err)
 	}
 	run.Result = merged
+	return run, nil
+}
+
+// replaceStepAdvice stores the run's result with pergent's step-limit advice
+// ("raise --max-turns") replaced by advice, which names where the limit is set
+// for this repository, and returns the run carrying it. It runs after
+// mergeBase, so a result kept from an earlier run is fixed too, and again on
+// a retried publish, which finds nothing more to replace. A result that is not
+// usable, or holds no such advice, is left as it is. An error is a failure of
+// the store: the publish is retried.
+func (e *Engine) replaceStepAdvice(ctx context.Context, run store.Run, advice string) (store.Run, error) {
+	if run.FailureReason != "" || run.Result == nil {
+		return run, nil
+	}
+	out, changed := result.ReplaceStepAdvice(run.Result, advice)
+	if !changed {
+		return run, nil
+	}
+	if err := e.Store.StoreMergedResult(ctx, run.ID, out); err != nil {
+		return run, fmt.Errorf("store the result with its step-limit advice: %w", err)
+	}
+	run.Result = out
 	return run, nil
 }
 

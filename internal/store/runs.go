@@ -804,8 +804,10 @@ func (s *Store) StoreResult(ctx context.Context, id string, token string, body [
 
 // StoreMergedResult replaces the result of a reported run with merged, the
 // result combined with the kept skills of an earlier run (result.Merge), so the
-// dashboard and every later reading show the whole review. It is an error when
-// the run is not reported with a result, or merged is not valid JSON.
+// dashboard and every later reading show the whole review. It also stores a
+// result with its step-limit advice replaced (result.ReplaceStepAdvice). It is
+// an error when the run is not reported with a result, or merged is not valid
+// JSON.
 func (s *Store) StoreMergedResult(ctx context.Context, runID string, merged []byte) error {
 	if !json.Valid(merged) {
 		return ErrInvalidResult
