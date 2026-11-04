@@ -32,7 +32,7 @@ describe("Integrations for a platform admin", () => {
     const row = screen.getByText("acme/payments").closest("tr") as HTMLElement;
     expect(within(row).getByText("Installed")).toHaveClass("pill", "ok");
     expect(within(row).getByText("Can't approve")).toHaveClass("pill", "bad");
-    expect(row).toHaveTextContent("Inline findings: off: the review App has Pull requests: Read-only.");
+    expect(row).toHaveTextContent("Inline findings are off: the review App has Pull requests: Read-only.");
     const widgets = screen.getByText("acme/widgets").closest("tr") as HTMLElement;
     expect(widgets).not.toHaveTextContent("Inline findings");
     expect(screen.queryByRole("button", { name: /Add .* instance/ })).not.toBeInTheDocument();

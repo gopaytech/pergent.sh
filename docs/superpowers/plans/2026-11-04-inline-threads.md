@@ -471,7 +471,7 @@ Web copy (exact):
   - `Threads` keeps the threads whose first comment's author is the review App's bot (login `slug` or `slug[bot]`; check which one GraphQL returns) and whose body has a marker (`render.InlineFingerprint`). `Line` is GraphQL `startLine` or `line`, and `EndLine` is `line`; both are 0 when `isOutdated`.
 - Approver fix: `HasApproved` ignores reviews whose state is `COMMENTED` when finding the bot's latest review.
 - Reconcile: `reconcileGitHubRepo` sets `p.InlineAvailable` from `app.InstallationInfo(ctx, owner, name)`'s `PullRequestsWrite()`; a failed read keeps the stored value (true when new).
-- Integrations page: each repository row also shows "Inline findings: off: the review App has Pull requests: Read-only." when `inlineAvailable` is false.
+- Integrations page: each repository row also shows "Inline findings are off: the review App has Pull requests: Read-only." when `inlineAvailable` is false.
 
 - [ ] **Step 1: Write the failing tests:**
   - `internal/github`: request path, method and JSON body for every call above against `httptest`; GraphQL pagination (2 pages) and `errors` handling; `graphqlURL` for `https://api.github.com` and `https://ghe.example.com/api/v3`; `ThreadResolutionRequired` true from rules, true from classic protection, false on a 404 protection, an error on a 403.
