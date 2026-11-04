@@ -145,7 +145,7 @@ describe("AdminSettings defaults", () => {
     expect(row("Memory limit")).toHaveTextContent("From config: none");
     expect(row("Re-run cap per MR/PR")).toHaveTextContent("From config: 10");
     expect(row("Re-run cap per repository")).toHaveTextContent("From config: 50");
-    expect(within(form).queryByRole("button", { name: "Use config value" })).not.toBeInTheDocument();
+    expect(within(form).queryByRole("button", { name: /^Use config value/ })).not.toBeInTheDocument();
   });
 
   const pinnedTimeout = {
@@ -166,9 +166,9 @@ describe("AdminSettings defaults", () => {
     const row = within(form).getByText("Timeout", { selector: ".name" }).closest(".set") as HTMLElement;
     expect(within(row).getByText("Saved here; the config says 1800.")).toBeInTheDocument();
     expect(row).not.toHaveTextContent("From config");
-    expect(within(form).getAllByRole("button", { name: "Use config value" })).toHaveLength(1);
+    expect(within(form).getAllByRole("button", { name: /^Use config value/ })).toHaveLength(1);
     expect(within(form).getByLabelText("Timeout (seconds)")).toHaveValue("600");
-    await userEvent.click(within(row).getByRole("button", { name: "Use config value" }));
+    await userEvent.click(within(row).getByRole("button", { name: /^Use config value/ }));
     expect(within(form).getByLabelText("Timeout (seconds)")).toHaveValue("1800");
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
     expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ jobTimeoutSeconds: null });
@@ -184,6 +184,32 @@ describe("AdminSettings defaults", () => {
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
     expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ jobTimeoutSeconds: 600, maxTurns: null });
+  });
+
+  it("lets a config timeout outside 60-7200 be saved untouched or typed, as null", async () => {
+    const long = { ...defaults, jobTimeoutSeconds: 10800, config: { ...defaults.config, jobTimeoutSeconds: 10800 } };
+    const fake = fakeApi({ ...routes(), "GET /api/admin/defaults": { body: long }, "PUT /api/admin/defaults": { body: long } });
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    await waitFor(() => expect(fake.find("PUT", "/api/admin/defaults")).toHaveLength(1));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ jobTimeoutSeconds: null });
+    await userEvent.clear(within(form).getByLabelText("Timeout (seconds)"));
+    await userEvent.type(within(form).getByLabelText("Timeout (seconds)"), "10800");
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    await waitFor(() => expect(fake.find("PUT", "/api/admin/defaults")).toHaveLength(2));
+    expect(fake.find("PUT", "/api/admin/defaults")[1].body).toMatchObject({ jobTimeoutSeconds: null });
+  });
+
+  it("still refuses a timeout over 7200 that differs from the config", async () => {
+    const fake = fakeApi(routes());
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    await userEvent.clear(within(form).getByLabelText("Timeout (seconds)"));
+    await userEvent.type(within(form).getByLabelText("Timeout (seconds)"), "7201");
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(within(form).getByText(/from 60 to 7200/)).toBeInTheDocument();
+    expect(fake.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
   });
 
   it("sends a changed value as it is", async () => {

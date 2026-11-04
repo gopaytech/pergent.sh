@@ -34,18 +34,20 @@ export default function AdminSettings() {
 // FromConfig ends a default's help line: what the config gives while the
 // default follows it, or, once a value was saved here, that value and a
 // button to follow the config again.
-function FromConfig({ pinned, shown, onUse, disabled }: { pinned: boolean; shown: string; onUse: () => void; disabled: boolean }) {
+function FromConfig({ field, pinned, shown, onUse, disabled }: { field: string; pinned: boolean; shown: string; onUse: () => void; disabled: boolean }) {
   if (!pinned) return <span> From config: {shown}</span>;
   return (
     <>
       <span> Saved here; the config says {shown}.</span>{" "}
-      <button type="button" className="btn small" disabled={disabled} onClick={onUse}>
+      <button type="button" className="btn small" aria-label={`Use config value for ${field}`} disabled={disabled} onClick={onUse}>
         Use config value
       </button>
     </>
   );
 }
 
+// The label the status select shows for a value.
+const statusText = (v: string) => (v === "failed" ? "failed (blocks merge)" : v);
 const onOff = (on: boolean) => (on ? "on" : "off");
 // A cap of 0 would be the built-in one; the form shows it empty.
 const capText = (n: number) => (n > 0 ? String(n) : "built-in");
@@ -83,7 +85,8 @@ function Defaults({ v }: { v: DefaultsView }) {
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const t = timeout.trim();
-    if (!/^\d+$/.test(t) || Number(t) < 60 || Number(t) > 7200) {
+    // A timeout equal to the config's is sent as null, so the config owns its range.
+    if (!/^\d+$/.test(t) || (Number(t) !== cfg.jobTimeoutSeconds && (Number(t) < 60 || Number(t) > 7200))) {
       setProblem("The timeout is a whole number of seconds, from 60 to 7200.");
       return;
     }
@@ -130,7 +133,7 @@ function Defaults({ v }: { v: DefaultsView }) {
           <div className="name">Approve clean reviews</div>
           <div className="help">
             When off, pergent still reviews and comments but never approves.
-            <FromConfig pinned={pinned("approve")} shown={onOff(cfg.approve)} disabled={save.isPending} onUse={() => setApprove(cfg.approve)} />
+            <FromConfig field="Approve clean reviews" pinned={pinned("approve")} shown={onOff(cfg.approve)} disabled={save.isPending} onUse={() => setApprove(cfg.approve)} />
           </div>
         </div>
         <div>
@@ -143,6 +146,7 @@ function Defaults({ v }: { v: DefaultsView }) {
           <div className="help">
             When off, a draft isn't reviewed until it is marked ready.
             <FromConfig
+              field="Review drafts"
               pinned={pinned("reviewDrafts")}
               shown={onOff(cfg.reviewDrafts)}
               disabled={save.isPending}
@@ -160,6 +164,7 @@ function Defaults({ v }: { v: DefaultsView }) {
           <div className="help">
             Post each finding as a comment on its lines, with a one-click fix when it is small. Off keeps every finding in the review comment.
             <FromConfig
+              field="Inline findings"
               pinned={pinned("inlineFindings")}
               shown={onOff(cfg.inlineFindings)}
               disabled={save.isPending}
@@ -177,8 +182,9 @@ function Defaults({ v }: { v: DefaultsView }) {
           <div className="help">
             "neutral" won't block merging when the LLM provider is down.
             <FromConfig
+              field="Status when a review fails"
               pinned={pinned("failureStatus")}
-              shown={cfg.failureStatus}
+              shown={statusText(cfg.failureStatus)}
               disabled={save.isPending}
               onUse={() => setFailureStatus(cfg.failureStatus)}
             />
@@ -202,6 +208,7 @@ function Defaults({ v }: { v: DefaultsView }) {
           <div className="help">
             How long one review may run, in seconds (60 to 7200).
             <FromConfig
+              field="Timeout"
               pinned={pinned("jobTimeoutSeconds")}
               shown={String(cfg.jobTimeoutSeconds)}
               disabled={save.isPending}
@@ -225,7 +232,7 @@ function Defaults({ v }: { v: DefaultsView }) {
           <div className="name">Max steps</div>
           <div className="help">
             Steps each opencode run may take before pergent stops it; each step can call several tools.
-            <FromConfig pinned={pinned("maxTurns")} shown={String(cfg.maxTurns)} disabled={save.isPending} onUse={() => setSteps(String(cfg.maxTurns))} />
+            <FromConfig field="Max steps" pinned={pinned("maxTurns")} shown={String(cfg.maxTurns)} disabled={save.isPending} onUse={() => setSteps(String(cfg.maxTurns))} />
           </div>
         </div>
         <div>
@@ -243,8 +250,9 @@ function Defaults({ v }: { v: DefaultsView }) {
         <div>
           <div className="name">Memory limit</div>
           <div className="help">
-            For example 6Gi (256Mi to 32Gi). Empty means none.
+            For example 6Gi (256Mi to 32Gi). Empty follows the config.
             <FromConfig
+              field="Memory limit"
               pinned={pinned("jobMemory")}
               shown={cfg.jobMemory === "" ? "none" : cfg.jobMemory}
               disabled={save.isPending}
@@ -270,6 +278,7 @@ function Defaults({ v }: { v: DefaultsView }) {
             The most re-runs (buttons and comments) of one merge request or pull request in a UTC day, 1 to 1000. Pushes
             always run.
             <FromConfig
+              field="Re-run cap per MR/PR"
               pinned={pinned("rerunLimitPerMR")}
               shown={capText(cfg.rerunLimitPerMR)}
               disabled={save.isPending}
@@ -296,6 +305,7 @@ function Defaults({ v }: { v: DefaultsView }) {
           <div className="help">
             The most re-runs across a whole repository in a UTC day, 1 to 1000.
             <FromConfig
+              field="Re-run cap per repository"
               pinned={pinned("rerunLimitPerRepo")}
               shown={capText(cfg.rerunLimitPerRepo)}
               disabled={save.isPending}

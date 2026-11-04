@@ -223,8 +223,8 @@ pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is hand
 
 0.6.1 fixes the timeout default and how Admin → Settings follows the config.
 
-1. **The default `jobs.timeout` is 30 minutes** (it was 10). Each run may take 40 steps since 0.5.4, and 10 minutes was too short for large reviews. A config that sets `jobs.timeout` keeps its value. pergent.sh now logs a warning at startup when a timeout allows less than 30 seconds a step.
-2. **Admin → Settings saved before 0.6.1 pins every default.** That includes the old 10-minute timeout. Open Admin → Settings: a default saved there shows "Saved here; the config says …". Click **Use config value** on the ones that should follow the config, then save.
+1. **The default `jobs.timeout` is 30 minutes** (it was 10). Each run may take 40 steps since 0.5.4, and 10 minutes was too short for large reviews. A config that sets `jobs.timeout` keeps its value. pergent.sh now logs a warning at startup when a timeout in the config file allows less than 30 seconds a step (timeouts set in the dashboard are not checked; see 2).
+2. **Admin → Settings saved before 0.6.1 pins every default.** That includes the old 10-minute timeout. Open Admin → Settings: a default saved there shows "Saved here; the config says …". Click **Use config value** on the ones that should follow the config, then save. Saving once lets every default equal to the config's value follow it again; **Use config value** is needed only where the saved value differs, such as the old 600-second timeout.
 3. **Migration `0018` runs at startup.** It adds one column with a default, so 0.6.0 keeps working on a migrated database.
 
 ### Upgrading to 0.6.0
@@ -846,7 +846,7 @@ pergent.sh posts each finding of a review as a thread on its lines, next to the 
 **GitHub setup.**
 
 - The review App needs **Pull requests: Read and write**. With Read-only, inline is off for that instance and the Integrations page says so.
-- **Administration: Read** is optional. It lets pergent.sh read the classic branch protection's conversation-resolution rule. Without it, only rulesets are read and the classic rule is treated as off, so a branch whose only such rule is classic gets suggestions inline too. The Integrations page notes a repository where the App can't read it.
+- **Administration: Read** is optional. It lets pergent.sh read the classic branch protection's conversation-resolution rule. Without it, only rulesets are read and the classic rule is treated as off, so a branch whose only such rule is classic gets suggestions inline too. The Integrations page notes a repository where the App can't read it (when inline findings are available there).
 - Subscribe the App to **Pull request review comment**. Without it, replies in a finding's thread are not received.
 
 **GitLab setup.** "All threads must be resolved" is read from the project settings. No new webhook is needed: note events already arrive.

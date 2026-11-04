@@ -885,7 +885,7 @@ func TestReconcileGitHubProtectionReadable(t *testing.T) {
 	})
 
 	reconcile(t, env)
-	if p, _ := ghProject(t, env); p.ProtectionReadable {
+	if p, ok := ghProject(t, env); !ok || p.ProtectionReadable {
 		t.Fatalf("stored = %+v; want protection unreadable without Administration", p)
 	}
 
