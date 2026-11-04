@@ -79,6 +79,9 @@ type Run struct {
 	// recorded at dispatch; nil before.
 	Model        *string
 	SkillSources map[string]string
+	// MaxTurns is the step limit the run was dispatched with; nil before
+	// the limit was recorded.
+	MaxTurns *int
 	// SkillVersions (library skill name → version) was recorded at
 	// dispatch; nil before. SkipReason is why a Skipped run was skipped.
 	SkillVersions map[string]int
@@ -165,7 +168,7 @@ const runColumns = `id::text, instance, project_id, mr_iid, project_path, head_s
 	created_at, dispatched_at, reported_at, not_before, cleaned_up,
 	title, web_url, source_branch, author, model, skill_sources,
 	outcome, outcome_reason, decision_status, approved, trigger, skill_subset, base_run_id::text,
-	skill_versions, skip_reason`
+	skill_versions, skip_reason, max_turns`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var (
@@ -179,7 +182,7 @@ func scanRun(row pgx.Row) (Run, error) {
 		&r.CreatedAt, &dispatched, &rep, &notBefore, &r.CleanedUp,
 		&r.Title, &r.WebURL, &r.SourceBranch, &r.Author, &r.Model, &sources,
 		&r.Outcome, &r.OutcomeReason, &r.DecisionStatus, &r.Approved, &r.Trigger, &r.SkillSubset, &r.BaseRunID,
-		&versions, &r.SkipReason)
+		&versions, &r.SkipReason, &r.MaxTurns)
 	if err != nil {
 		return Run{}, err
 	}
@@ -623,11 +626,11 @@ func (s *Store) SetRunChange(ctx context.Context, id string, d ChangeDetails) er
 	return err
 }
 
-// SetRunInputs records the model, where each skill came from (name →
-// "library" or "repo") and the library version of each library skill used
-// (name → version) when a run is dispatched. An unknown run is not an
-// error; a malformed id is.
-func (s *Store) SetRunInputs(ctx context.Context, id, model string, sources map[string]string, versions map[string]int) error {
+// SetRunInputs records the model, the step limit (maxTurns; NULL when it is
+// not above 0), where each skill came from (name → "library" or "repo") and
+// the library version of each library skill used (name → version) when a run
+// is dispatched. An unknown run is not an error; a malformed id is.
+func (s *Store) SetRunInputs(ctx context.Context, id, model string, maxTurns int, sources map[string]string, versions map[string]int) error {
 	if !validUUID(id) {
 		return fmt.Errorf("store: run %q not found", id)
 	}
@@ -645,8 +648,12 @@ func (s *Store) SetRunInputs(ctx context.Context, id, model string, sources map[
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(ctx, `UPDATE runs SET model = $2, skill_sources = $3::jsonb, skill_versions = $4::jsonb
-		WHERE id = $1::uuid`, id, cutText(model), string(b), string(v))
+	var turns *int
+	if maxTurns > 0 {
+		turns = &maxTurns
+	}
+	_, err = s.pool.Exec(ctx, `UPDATE runs SET model = $2, max_turns = $3, skill_sources = $4::jsonb, skill_versions = $5::jsonb
+		WHERE id = $1::uuid`, id, cutText(model), turns, string(b), string(v))
 	return err
 }
 

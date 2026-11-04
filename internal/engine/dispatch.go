@@ -414,7 +414,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			versions[name] = v
 		}
 	}
-	if err := e.Store.SetRunInputs(ctx, run.ID, llm.Model, sources, versions); err != nil {
+	if err := e.Store.SetRunInputs(ctx, run.ID, llm.Model, 0, sources, versions); err != nil {
 		d.log.Info("couldn't record the review's model and skills for the dashboard", "error", d.redact(err.Error()))
 	}
 

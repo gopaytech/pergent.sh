@@ -293,20 +293,20 @@ func TestRepoDefaultsRoundTrip(t *testing.T) {
 	s := newStore(t)
 	got, err := s.RepoDefaults(ctx)
 	if err != nil || got.Approve != nil || got.ReviewDrafts != nil || got.FailureStatus != nil ||
-		got.JobTimeoutSeconds != nil || got.JobMemory != nil || !got.UpdatedAt.IsZero() {
+		got.JobTimeoutSeconds != nil || got.MaxTurns != nil || got.JobMemory != nil || !got.UpdatedAt.IsZero() {
 		t.Fatalf("RepoDefaults when unset = %+v, %v; want the zero value", got, err)
 	}
 
 	yes, no := true, false
-	status, memory, timeout := "neutral", "2Gi", 900
-	in := RepoDefaults{Approve: &yes, ReviewDrafts: &no, FailureStatus: &status, JobTimeoutSeconds: &timeout, JobMemory: &memory}
+	status, memory, timeout, turns := "neutral", "2Gi", 900, 60
+	in := RepoDefaults{Approve: &yes, ReviewDrafts: &no, FailureStatus: &status, JobTimeoutSeconds: &timeout, MaxTurns: &turns, JobMemory: &memory}
 	if err := s.PutRepoDefaults(ctx, in); err != nil {
 		t.Fatal(err)
 	}
 	got, err = s.RepoDefaults(ctx)
 	if err != nil || got.Approve == nil || !*got.Approve || got.ReviewDrafts == nil || *got.ReviewDrafts ||
 		got.FailureStatus == nil || *got.FailureStatus != "neutral" || got.JobTimeoutSeconds == nil || *got.JobTimeoutSeconds != 900 ||
-		got.JobMemory == nil || *got.JobMemory != "2Gi" || got.UpdatedAt.IsZero() {
+		got.MaxTurns == nil || *got.MaxTurns != 60 || got.JobMemory == nil || *got.JobMemory != "2Gi" || got.UpdatedAt.IsZero() {
 		t.Fatalf("RepoDefaults = %+v, %v", got, err)
 	}
 
@@ -316,7 +316,7 @@ func TestRepoDefaultsRoundTrip(t *testing.T) {
 	}
 	got, _ = s.RepoDefaults(ctx)
 	if got.Approve != nil || got.ReviewDrafts != nil || got.FailureStatus != nil || got.JobTimeoutSeconds != nil ||
-		got.JobMemory == nil || *got.JobMemory != "2Gi" {
+		got.MaxTurns != nil || got.JobMemory == nil || *got.JobMemory != "2Gi" {
 		t.Fatalf("RepoDefaults after a second put = %+v", got)
 	}
 

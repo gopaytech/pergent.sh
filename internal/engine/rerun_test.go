@@ -51,7 +51,7 @@ func recordVersions(t *testing.T, env *testEnv, id string, versions map[string]i
 	for name := range versions {
 		sources[name] = "library"
 	}
-	if err := env.Store.SetRunInputs(env.ctx, id, "m", sources, versions); err != nil {
+	if err := env.Store.SetRunInputs(env.ctx, id, "m", 0, sources, versions); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -352,7 +352,7 @@ func TestSubsetRecordsKeptSkillSources(t *testing.T) {
 	env.AddSkill("style", "---\nname: style\n---\nCheck the style.\n")
 	head := sha('a')
 	base := env.Publish(1, head, resultFor(t, head, namedSkill(t, "security", "no_blocking_issues", "", ""), namedSkill(t, "style", "failed", "", "")))
-	if err := env.Store.SetRunInputs(env.ctx, base, "m", map[string]string{"security": ".agents/skills", "style": "library"}, map[string]int{"style": 1}); err != nil {
+	if err := env.Store.SetRunInputs(env.ctx, base, "m", 0, map[string]string{"security": ".agents/skills", "style": "library"}, map[string]int{"style": 1}); err != nil {
 		t.Fatal(err)
 	}
 	id := rerunOf(t, env, head, store.TriggerRerunFailed, []string{"style"}, base)

@@ -33,7 +33,7 @@ func TestDashboardReposCRUD(t *testing.T) {
 		t.Errorf("row = %+v", r)
 	}
 	if r.Approve == nil || *r.Approve || r.ReviewDrafts != nil || r.FailureStatus != nil ||
-		r.Skills != nil || r.JobTimeoutSeconds != nil || r.JobMemory != nil {
+		r.Skills != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil {
 		t.Errorf("nullable columns = %+v", r)
 	}
 	if r.CreatedAt.IsZero() || r.UpdatedAt.Before(r.CreatedAt) {
@@ -47,7 +47,7 @@ func TestDashboardReposCRUD(t *testing.T) {
 	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{
 		Instance: "main", Project: "acme/widgets",
 		ReviewDrafts: ptrTo(false), FailureStatus: ptrTo("neutral"), Skills: []string{"security", "style"},
-		JobTimeoutSeconds: ptrTo(1200), JobMemory: ptrTo("6Gi"), CreatedBy: "bob",
+		JobTimeoutSeconds: ptrTo(1200), MaxTurns: ptrTo(60), JobMemory: ptrTo("6Gi"), CreatedBy: "bob",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestDashboardReposCRUD(t *testing.T) {
 	}
 	if u.Approve != nil || u.ReviewDrafts == nil || *u.ReviewDrafts || u.FailureStatus == nil || *u.FailureStatus != "neutral" ||
 		!slices.Equal(u.Skills, []string{"security", "style"}) || u.JobTimeoutSeconds == nil || *u.JobTimeoutSeconds != 1200 ||
-		u.JobMemory == nil || *u.JobMemory != "6Gi" {
+		u.MaxTurns == nil || *u.MaxTurns != 60 || u.JobMemory == nil || *u.JobMemory != "6Gi" {
 		t.Errorf("updated row = %+v", u)
 	}
 	if u.CreatedBy != "alice" || !u.CreatedAt.Equal(r.CreatedAt) {
@@ -78,6 +78,11 @@ func TestDashboardReposCRUD(t *testing.T) {
 	}
 	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "gh", Project: "acme/x", JobTimeoutSeconds: ptrTo(0)}); err == nil {
 		t.Errorf("job_timeout_seconds 0 was stored")
+	}
+	for _, n := range []int{4, 201} {
+		if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "gh", Project: "acme/x", MaxTurns: ptrTo(n)}); err == nil {
+			t.Errorf("max_turns %d was stored", n)
+		}
 	}
 
 	rows, err := s.DashboardRepos(ctx)
