@@ -444,7 +444,7 @@ func TestUpdateDashboardRepo(t *testing.T) {
 		t.Fatal("update created a row")
 	}
 	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "Acme/Widgets",
-		JobMemory: ptrTo("6Gi"), CreatedBy: "alice"}); err != nil {
+		JobMemory: ptrTo("6Gi"), MaxTurns: ptrTo(60), CreatedBy: "alice"}); err != nil {
 		t.Fatal(err)
 	}
 	newSkill(t, s, "style", "x") // a repository can only name library skills
@@ -462,6 +462,23 @@ func TestUpdateDashboardRepo(t *testing.T) {
 	r, _, _ := s.DashboardRepo(ctx, "main", "acme/widgets")
 	if r.Project != "Acme/Widgets" || r.CreatedBy != "alice" || !slices.Equal(r.Skills, []string{"style"}) || r.JobMemory != nil {
 		t.Errorf("row = %+v", r)
+	}
+	// max_turns stays when another setting changes, and is written when set.
+	if r.MaxTurns == nil || *r.MaxTurns != 60 {
+		t.Errorf("max_turns after an update of other settings = %v; want 60", r.MaxTurns)
+	}
+	if _, err := s.UpdateDashboardRepo(ctx, "main", "acme/widgets", func(r *DashboardRepo) { r.MaxTurns = ptrTo(120) }); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.DashboardRepo(ctx, "main", "acme/widgets"); r.MaxTurns == nil || *r.MaxTurns != 120 {
+		t.Errorf("max_turns after setting 120 = %v; want 120", r.MaxTurns)
+	}
+	// A value outside 5 to 200 is refused by the table and the row stays.
+	if _, err := s.UpdateDashboardRepo(ctx, "main", "acme/widgets", func(r *DashboardRepo) { r.MaxTurns = ptrTo(201) }); err == nil {
+		t.Error("update with max_turns 201 = nil error")
+	}
+	if r, _, _ := s.DashboardRepo(ctx, "main", "acme/widgets"); r.MaxTurns == nil || *r.MaxTurns != 120 {
+		t.Errorf("max_turns after a refused update = %v; want 120", r.MaxTurns)
 	}
 }
 

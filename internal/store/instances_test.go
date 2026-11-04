@@ -324,6 +324,11 @@ func TestRepoDefaultsRoundTrip(t *testing.T) {
 	if err := s.PutRepoDefaults(ctx, RepoDefaults{FailureStatus: &bad}); err == nil {
 		t.Fatal("PutRepoDefaults accepted an unknown failure status")
 	}
+	for _, n := range []int{4, 201} {
+		if err := s.PutRepoDefaults(ctx, RepoDefaults{MaxTurns: &n}); err == nil {
+			t.Fatalf("PutRepoDefaults accepted max_turns %d", n)
+		}
+	}
 }
 
 // SupersedeInstance supersedes every live run (queued, running, reported) of
