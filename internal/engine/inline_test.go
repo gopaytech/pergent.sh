@@ -371,11 +371,71 @@ func TestBuildFindings(t *testing.T) {
 			t.Fatalf("dismissed = %+v, want both dismissals", fs.dismissed)
 		}
 		got := fs.dismissed[fpBlocking]
-		if got.By != "maya @‍ops" || got.Reason != "​/approve\nit is fine, see @‍team [redacted]" {
+		if got.By != "maya @‍ops" || got.Reason != "​/approve it is fine, see @‍team [redacted]" {
 			t.Errorf("dismissal by %q for %q, want quick actions, mentions and secrets made safe", got.By, got.Reason)
 		}
 		if got := threads.ReplyDismissed(fs.dismissed["dddddddddddd"]); got != "Dismissed by lee: gone" {
 			t.Errorf("reply = %q", got)
+		}
+	})
+
+	// A dashboard reason can hold newlines: kept, a line of it could open a
+	// code or suggestion fence in the bot's reply.
+	t.Run("a dismissal reason is one line and opens no fence", func(t *testing.T) {
+		s := reviewed("has_blocking_issues", "db/query.go")
+		s.Findings = []json.RawMessage{finding(fpBlocking, "db/query.go", 11, 0, "blocking", "")}
+		ds := []render.Dismissal{{Fingerprint: fpBlocking, Severity: "blocking", By: "maya\n```suggestion\nx\n```", Reason: "ok\r\n\n```suggestion\nx\n```\t then   more"}}
+		fs := buildFindings(&result.Result{Skills: []result.Skill{s}}, ds, redactSecret)
+		got := fs.dismissed[fpBlocking]
+		if got.Reason != "ok ```suggestion x ``` then more" || got.By != "maya ```suggestion x ```" {
+			t.Errorf("dismissal by %q for %q, want one line each", got.By, got.Reason)
+		}
+		reply := threads.ReplyDismissed(got)
+		if strings.Contains(reply, "\n") {
+			t.Errorf("reply spans lines: %q", reply)
+		}
+	})
+
+	// The thread body is the only place a suggestion may come from, and it
+	// comes from the Suggestion field: raw HTML in the model's prose must not
+	// be able to stand in for it.
+	t.Run("raw pre and code tags in the model text are defused", func(t *testing.T) {
+		raw := `<pre lang="suggestion:-20+20">x</pre> and <CODE>y</CODE> and <precious> and <code`
+		f := mustJSON(result.Finding{
+			ID: "aaaaaa", Fingerprint: fpBlocking, File: "db/query.go", Line: 11, Severity: "blocking",
+			Title: raw, Explanation: raw, SuggestedFix: raw, Suggestion: "<pre>keep</pre>",
+		})
+		s := reviewed("has_blocking_issues", "db/query.go")
+		s.Findings = []json.RawMessage{f}
+		fs := buildFindings(&result.Result{Skills: []result.Skill{s}}, nil, redactSecret)
+		rf := fs.rendered[fs.findings[0]]
+		for name, text := range map[string]string{"title": rf.Title, "explanation": rf.Explanation, "fix": rf.SuggestedFix} {
+			if rawCodeTag.MatchString(text) {
+				t.Errorf("%s still holds a raw tag: %q", name, text)
+			}
+		}
+		if want := `&lt;pre lang="suggestion:-20+20">x</pre> and &lt;CODE>y</CODE> and <precious> and &lt;code`; rf.Explanation != want {
+			t.Errorf("explanation = %q, want %q", rf.Explanation, want)
+		}
+		if rf.Suggestion != "<pre>keep</pre>" {
+			t.Errorf("suggestion = %q, want it untouched", rf.Suggestion)
+		}
+	})
+
+	t.Run("a posted thread has no raw pre tag", func(t *testing.T) {
+		h := newHarness(t)
+		h.github = true
+		o := securityReview(t, h.head, "has_blocking_issues")
+		o.Result.Skills[0].Findings = []json.RawMessage{mustJSON(result.Finding{
+			ID: "aaaaaa", Fingerprint: fpBlocking, File: "db/query.go", Line: 11, Severity: "blocking",
+			Title: "T", Explanation: `Do <pre lang="suggestion:-20+20">x</pre>.`,
+		})}
+		h.sync(o)
+		if len(h.fi.posted) != 1 {
+			t.Fatalf("posted = %v", h.fi.posted)
+		}
+		if body := h.fi.posted[0][0].Body; strings.Contains(body, "<pre") {
+			t.Errorf("body holds a raw <pre:\n%s", body)
 		}
 	})
 
@@ -807,6 +867,22 @@ func TestInlineSkippedForAChangeThatMoved(t *testing.T) {
 			t.Errorf("view = %+v, events = %v", v, h.events)
 		}
 	})
+	// GitLab doesn't compute a head's diff right away: its diff_refs are empty.
+	for name, set := range map[string]func(*forge.Change){
+		"no base sha":  func(c *forge.Change) { c.BaseSHA = "" },
+		"no start sha": func(c *forge.Change) { c.StartSHA = "" },
+	} {
+		t.Run("the diff isn't ready: "+name, func(t *testing.T) {
+			h := newHarness(t)
+			set(&h.cf.change)
+			if v := h.sync(good(h)); !reflect.DeepEqual(v, inlineView{}) {
+				t.Errorf("view = %+v, want inline off", v)
+			}
+			if len(h.events) != 0 || len(h.fi.posted) != 0 {
+				t.Errorf("events = %v, want the diff not read and nothing posted", h.events)
+			}
+		})
+	}
 	t.Run("the diff can't be read", func(t *testing.T) {
 		h := newHarness(t)
 		h.fi.diffErr = gitlab.ErrPartialDiff

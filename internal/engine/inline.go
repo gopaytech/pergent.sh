@@ -105,6 +105,13 @@ func runInline(ctx context.Context, d inlineDeps, run store.Run, o policy.Outcom
 		d.log.Info("not posting inline threads: the change is closed or has a newer head", "state", ch.State, "change_head", ch.HeadSHA)
 		return inlineView{}
 	}
+	if ch.BaseSHA == "" || ch.StartSHA == "" {
+		// GitLab hasn't computed the diff for this head yet (GitHub: no merge
+		// base): there is nothing to anchor a thread to. The next publish
+		// tries again.
+		d.log.Info("not posting inline threads: the platform hasn't computed the diff of the change yet")
+		return inlineView{}
+	}
 	files, err := d.inline.ChangeDiff(ctx, pid, number)
 	if err != nil {
 		d.log.Warn("not posting inline threads: couldn't read the diff of the change", "error", d.redact(err.Error()))
@@ -195,7 +202,7 @@ func buildFindings(r *result.Result, ds []render.Dismissal, redact func(string) 
 				continue
 			}
 			rf := f
-			rf.Title, rf.Explanation, rf.SuggestedFix = redact(f.Title), redact(f.Explanation), redact(f.SuggestedFix)
+			rf.Title, rf.Explanation, rf.SuggestedFix = neutralizeHTML(redact(f.Title)), neutralizeHTML(redact(f.Explanation)), neutralizeHTML(redact(f.SuggestedFix))
 			rf.File = redact(f.File)
 			hasSuggestion := f.Suggestion != "" && redact(f.Suggestion) == f.Suggestion
 			if !hasSuggestion {
@@ -218,9 +225,20 @@ func buildFindings(r *result.Result, ds []render.Dismissal, redact func(string) 
 	return fs
 }
 
+// rawCodeTag matches the start of a raw HTML <pre> or <code> element.
+var rawCodeTag = regexp.MustCompile(`(?i)<(pre|code)\b`)
+
+// neutralizeHTML defuses raw <pre> and <code> tags in model text, so that
+// `<pre lang="suggestion:-20+20">` can't become a live suggestion block on
+// GitHub or GitLab. The Suggestion field is the only text that may become one.
+func neutralizeHTML(s string) string { return rawCodeTag.ReplaceAllString(s, "&lt;$1") }
+
 // safeReplyText makes who dismissed a finding, or why, safe to post in a
-// thread: quick actions defused, mentions broken and credentials redacted.
+// thread: on one line (a dashboard reason can hold newlines, which would let
+// it open a code or suggestion fence in the bot's reply), quick actions
+// defused, mentions broken and credentials redacted.
 func safeReplyText(redact func(string) string, s string) string {
+	s = strings.Join(strings.Fields(s), " ")
 	s = policy.NeutralizeQuickActions(s)
 	s = strings.ReplaceAll(s, "@", "@‍")
 	return redact(s)
