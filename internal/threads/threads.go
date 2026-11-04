@@ -158,8 +158,7 @@ type Plan struct {
 func Decide(in Input) Plan {
 	p := Plan{Inline: map[string]bool{}, Notes: map[string]string{}}
 
-	findings := append([]Finding(nil), in.Findings...)
-	sort.SliceStable(findings, func(i, j int) bool { return lessFinding(findings[i], findings[j]) })
+	findings := dedupe(in.Findings)
 	byFP := map[string]Finding{}
 	for _, f := range findings {
 		byFP[f.Fingerprint] = f
@@ -167,9 +166,11 @@ func Decide(in Input) Plan {
 	threads := append([]Thread(nil), in.Threads...)
 	sort.SliceStable(threads, func(i, j int) bool { return lessThread(threads[i], threads[j]) })
 
+	keptRule := map[string]bool{}
+
 	// Exact matches, and the findings that now have a thread.
 	hasThread := map[string]bool{}
-	var unmatched []Thread
+	var unmatched []Thread           // in priority order for reworded matching
 	matched := map[string][]Thread{} // by finding fingerprint
 	for _, t := range threads {
 		if _, ok := byFP[t.Fingerprint]; ok {
@@ -179,6 +180,10 @@ func Decide(in Input) Plan {
 			unmatched = append(unmatched, t)
 		}
 	}
+
+	// Live threads claim a reworded finding before resolved ones, so an old
+	// fixed thread never takes the finding of a thread that is still open.
+	sort.SliceStable(unmatched, func(i, j int) bool { return claimTier(unmatched[i]) < claimTier(unmatched[j]) })
 
 	var rest []Thread // unmatched threads that are not rebound
 	for _, t := range unmatched {
@@ -201,17 +206,26 @@ func Decide(in Input) Plan {
 	for fp, ts := range matched {
 		for _, t := range ts {
 			switch t.State {
-			case StateOpen:
-				p.Inline[fp] = true // kept, even when a person resolved it
-			case StateFixed, StateGone:
-				p.Reopen = append(p.Reopen, Reopen{Thread: t, Reply: ReplyBack(in.Head)})
+			case StateFixed, StateGone, StateDismissed:
+				if in.OnlyBlocking && byFP[fp].Severity != severityBlocking {
+					keptRule[fp] = true // a suggestion stays in the summary
+					continue
+				}
+				reply := ReplyBack(in.Head)
+				if t.State == StateDismissed {
+					reply = ReplyRestored
+				}
+				p.Reopen = append(p.Reopen, Reopen{Thread: t, Reply: reply})
 				p.Inline[fp] = true
 				reopened++
-			case StateDismissed:
-				p.Reopen = append(p.Reopen, Reopen{Thread: t, Reply: ReplyRestored})
+			default: // open, or a state we don't know: kept, even when a person resolved it
 				p.Inline[fp] = true
-				reopened++
 			}
+		}
+	}
+	for fp := range keptRule {
+		if !p.Inline[fp] {
+			p.Notes[fp] = NoteKeptRule
 		}
 	}
 
@@ -223,8 +237,8 @@ func Decide(in Input) Plan {
 			}
 			continue
 		}
-		if t.State != StateOpen {
-			continue
+		if t.State != StateOpen || t.Resolved {
+			continue // resolved by a person: not ours to resolve or reopen
 		}
 		d, inDiff := in.Diff[t.File]
 		switch cov, known := in.Skills[t.Skill]; {
@@ -285,6 +299,38 @@ func Decide(in Input) Plan {
 	sort.SliceStable(p.Reopen, func(i, j int) bool { return lessThread(p.Reopen[i].Thread, p.Reopen[j].Thread) })
 	sort.SliceStable(p.Rebind, func(i, j int) bool { return lessThread(p.Rebind[i].Thread, p.Rebind[j].Thread) })
 	return p
+}
+
+// dedupe drops findings that share a fingerprint, keeping the first in the
+// order blocking first, then file, line. The result is in file order.
+func dedupe(in []Finding) []Finding {
+	all := append([]Finding(nil), in...)
+	sort.SliceStable(all, func(i, j int) bool {
+		return lessPost(Post{Finding: all[i]}, Post{Finding: all[j]})
+	})
+	seen := map[string]bool{}
+	out := all[:0]
+	for _, f := range all {
+		if seen[f.Fingerprint] {
+			continue
+		}
+		seen[f.Fingerprint] = true
+		out = append(out, f)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return lessFinding(out[i], out[j]) })
+	return out
+}
+
+// claimTier orders threads for reworded matching: open threads the platform
+// shows unresolved first, then open threads a person resolved, then the rest.
+func claimTier(t Thread) int {
+	switch {
+	case t.State == StateOpen && !t.Resolved:
+		return 0
+	case t.State == StateOpen:
+		return 1
+	}
+	return 2
 }
 
 // reworded finds the finding that a thread without an exact match now stands

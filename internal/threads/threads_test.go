@@ -541,3 +541,153 @@ func TestReplies(t *testing.T) {
 		t.Errorf("ReplyBack = %q", got)
 	}
 }
+
+func TestLiveThreadClaimsRewordedFindingBeforeFixedOne(t *testing.T) {
+	in := base()
+	in.Map = func(t Thread) (int, int, bool) { return t.Line, t.EndLine, true }
+	old := thread("aaOld", "a.go", 42, StateFixed)
+	live := thread("zzLive", "a.go", 42, StateOpen)
+	in.Threads = []Thread{old, live}
+	in.Findings = []Finding{finding("fpNew", "a.go", "blocking", 42, 0)}
+	p := Decide(in)
+	want := []Rebind{{Thread: live, Fingerprint: "fpNew", Line: 42, EndLine: 42}}
+	if !reflect.DeepEqual(p.Rebind, want) {
+		t.Fatalf("rebind = %+v", p.Rebind)
+	}
+	if len(p.Resolve)+len(p.Reopen)+len(p.Post) != 0 || !p.Inline["fpNew"] {
+		t.Errorf("plan = %+v", p)
+	}
+
+	// An open thread a person resolved comes before a fixed one too.
+	live.Resolved = true
+	in.Threads = []Thread{old, live}
+	p = Decide(in)
+	if len(p.Rebind) != 1 || p.Rebind[0].Thread.Fingerprint != "zzLive" || len(p.Reopen) != 0 {
+		t.Fatalf("person-resolved: plan = %+v", p)
+	}
+
+	// Without a live thread the fixed one is rebound and reopened.
+	in.Threads = []Thread{old}
+	p = Decide(in)
+	if len(p.Rebind) != 1 || p.Rebind[0].Thread.Fingerprint != "aaOld" || len(p.Reopen) != 1 {
+		t.Fatalf("fixed only: plan = %+v", p)
+	}
+}
+
+func TestDuplicateFingerprintsKeepFirst(t *testing.T) {
+	dups := func() []Finding {
+		return []Finding{
+			finding("dup", "z.go", "suggestion", 41, 0),
+			finding("dup", "a.go", "suggestion", 50, 0),
+			finding("dup", "a.go", "suggestion", 45, 0),
+		}
+	}
+
+	in := base()
+	in.Findings = dups()
+	p := Decide(in)
+	if len(p.Post) != 1 || p.Post[0].Line != 45 || p.Post[0].Finding.File != "a.go" {
+		t.Fatalf("post = %+v", p.Post)
+	}
+	if len(p.Notes) != 0 {
+		t.Errorf("notes = %v", p.Notes)
+	}
+
+	// A blocking duplicate comes first whatever its place.
+	in.Findings = append(dups(), finding("dup", "z.go", "blocking", 59, 0))
+	if p = Decide(in); len(p.Post) != 1 || p.Post[0].Line != 59 {
+		t.Fatalf("blocking first: post = %+v", p.Post)
+	}
+
+	// 19 open threads leave one slot: one Post, no note.
+	in = base()
+	in.Skills["other"] = Coverage{Failed: true}
+	in.Diff["other.go"] = diffmap.File{Path: "other.go"}
+	in.Threads = openThreads(19)
+	in.Findings = dups()
+	p = Decide(in)
+	if len(p.Post) != 1 || len(p.Notes) != 0 || !p.Inline["dup"] {
+		t.Fatalf("19 open: plan = %+v", p)
+	}
+
+	// 20 open threads leave none: one note, and it is not inline.
+	in.Threads = openThreads(20)
+	p = Decide(in)
+	if len(p.Post) != 0 || p.Notes["dup"] != NoteOverCap || p.Inline["dup"] {
+		t.Fatalf("20 open: plan = %+v", p)
+	}
+}
+
+func TestDuplicateFingerprintsMatchOneThread(t *testing.T) {
+	in := base()
+	in.Threads = []Thread{thread("dup", "a.go", 42, StateFixed)}
+	in.Findings = []Finding{finding("dup", "a.go", "blocking", 42, 0), finding("dup", "a.go", "blocking", 50, 0)}
+	p := Decide(in)
+	if len(p.Reopen) != 1 || len(p.Post) != 0 || len(p.Notes) != 0 {
+		t.Fatalf("plan = %+v", p)
+	}
+}
+
+func TestOnlyBlockingDoesNotReopenSuggestions(t *testing.T) {
+	for _, st := range []State{StateFixed, StateGone, StateDismissed} {
+		t.Run(string(st), func(t *testing.T) {
+			in := base()
+			in.OnlyBlocking = true
+			in.Threads = []Thread{
+				thread("s", "a.go", 42, st),
+				thread("b", "a.go", 44, st),
+				thread("open", "a.go", 46, StateOpen),
+			}
+			in.Findings = []Finding{
+				finding("s", "a.go", "suggestion", 42, 0),
+				finding("b", "a.go", "blocking", 44, 0),
+				finding("open", "a.go", "suggestion", 46, 0),
+			}
+			p := Decide(in)
+			if len(p.Reopen) != 1 || p.Reopen[0].Thread.Fingerprint != "b" {
+				t.Fatalf("reopen = %+v", p.Reopen)
+			}
+			if p.Notes["s"] != NoteKeptRule || p.Inline["s"] {
+				t.Errorf("suggestion: notes = %v inline = %v", p.Notes, p.Inline)
+			}
+			if !p.Inline["open"] || p.Notes["open"] != "" || !p.Inline["b"] {
+				t.Errorf("inline = %v notes = %v", p.Inline, p.Notes)
+			}
+		})
+	}
+}
+
+func TestOnlyBlockingOffDiffSuggestionIsOffDiff(t *testing.T) {
+	in := base()
+	in.OnlyBlocking = true
+	in.Findings = []Finding{finding("s", "a.go", "suggestion", 5, 0)}
+	p := Decide(in)
+	if p.Notes["s"] != NoteOffDiff || len(p.Post) != 0 {
+		t.Fatalf("plan = %+v", p)
+	}
+}
+
+func TestPersonResolvedThreadWithGoneFindingLeftAlone(t *testing.T) {
+	for _, file := range []string{"a.go", "gone.go"} {
+		t.Run(file, func(t *testing.T) {
+			in := base()
+			th := thread("f1", file, 42, StateOpen)
+			th.Resolved = true
+			in.Threads = []Thread{th}
+			p := Decide(in)
+			if len(p.Resolve)+len(p.Reopen)+len(p.Rebind)+len(p.Post) != 0 || len(p.Inline) != 0 || len(p.Notes) != 0 {
+				t.Fatalf("plan = %+v", p)
+			}
+		})
+	}
+}
+
+func TestUnknownStateTreatedAsOpen(t *testing.T) {
+	in := base()
+	in.Threads = []Thread{thread("f1", "a.go", 42, State("weird"))}
+	in.Findings = []Finding{finding("f1", "a.go", "blocking", 42, 0)}
+	p := Decide(in)
+	if len(p.Post)+len(p.Resolve)+len(p.Reopen)+len(p.Rebind) != 0 || !p.Inline["f1"] || len(p.Notes) != 0 {
+		t.Fatalf("plan = %+v", p)
+	}
+}
