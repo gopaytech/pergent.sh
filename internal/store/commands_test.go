@@ -568,38 +568,35 @@ func TestRefusedBefore(t *testing.T) {
 			}
 		}
 	}
-	before := func(mr MRKey, author int64, outcome string, at time.Time) bool {
+	before := func(mr MRKey, author int64, outcome string) bool {
 		t.Helper()
-		ok, err := s.RefusedBefore(ctx, mr, author, outcome, at)
+		ok, err := s.RefusedBefore(ctx, mr, author, outcome)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return ok
 	}
 
-	if before(mr1, 11, why, t0.Add(time.Hour)) {
+	if before(mr1, 11, why) {
 		t.Fatal("no command at all counted")
 	}
 	finish(mr1, 11, 1, why, t0.Add(time.Minute))
-	if !before(mr1, 11, why, t0.Add(time.Hour)) {
+	if !before(mr1, 11, why) {
 		t.Error("an earlier refusal was not found")
 	}
-	if before(mr1, 11, why, t0.Add(time.Minute)) || before(mr1, 11, why, t0) {
-		t.Error("a refusal finished at or after the time counted")
-	}
-	if before(mr1, 11, "refused: no permission", t0.Add(time.Hour)) {
+	if before(mr1, 11, "refused: no permission") {
 		t.Error("another outcome matched")
 	}
-	if before(mr1, 12, why, t0.Add(time.Hour)) {
+	if before(mr1, 12, why) {
 		t.Error("another author matched")
 	}
-	if before(mr2, 11, why, t0.Add(time.Hour)) {
+	if before(mr2, 11, why) {
 		t.Error("another change matched")
 	}
 
 	// A command claimed and not finished has no outcome yet.
 	finish(mr1, 13, 2, "", time.Time{})
-	if before(mr1, 13, why, t0.Add(time.Hour)) || before(mr1, 13, "", t0.Add(time.Hour)) {
+	if before(mr1, 13, why) || before(mr1, 13, "") {
 		t.Error("an unfinished command counted")
 	}
 }

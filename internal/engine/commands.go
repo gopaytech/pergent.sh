@@ -498,7 +498,7 @@ func (c *commandRun) carryOut(ctx context.Context) (verdict, error) {
 // can't be made to post a stream of replies.
 func (c *commandRun) refuseGate(ctx context.Context) (verdict, error) {
 	v := refused(whyNotAuthorOrMaintainer, replyOnlyAuthorAndMaintainers(changeTerm(c.cmd.Platform)))
-	before, err := c.e.Store.RefusedBefore(ctx, c.cmd.MR, c.cmd.AuthorID, v.outcome, c.cmd.CreatedAt)
+	before, err := c.e.Store.RefusedBefore(ctx, c.cmd.MR, c.cmd.AuthorID, v.outcome)
 	if err != nil {
 		return verdict{}, fmt.Errorf("check for an earlier refusal: %w", err)
 	}

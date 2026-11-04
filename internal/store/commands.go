@@ -203,15 +203,13 @@ func (s *Store) RecentAnswered(ctx context.Context, mr MRKey, authorID int64, si
 }
 
 // RefusedBefore reports whether an earlier, finished command of the same
-// author on the merge request ended with outcome: it was finished before the
-// given time, which the caller sets to the checked command's own CreatedAt.
-// A command still being answered has no finish time, so it never finds
-// itself.
-func (s *Store) RefusedBefore(ctx context.Context, mr MRKey, authorID int64, outcome string, before time.Time) (bool, error) {
+// author on the merge request ended with outcome. A command is never finished
+// while it is being checked, so the one being checked never finds itself.
+func (s *Store) RefusedBefore(ctx context.Context, mr MRKey, authorID int64, outcome string) (bool, error) {
 	var found bool
 	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM commands
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND author_id = $4
-		  AND outcome = $5 AND finished_at IS NOT NULL AND finished_at < $6)`,
-		mr.Instance, mr.ProjectID, mr.IID, authorID, outcome, before).Scan(&found)
+		  AND outcome = $5 AND finished_at IS NOT NULL)`,
+		mr.Instance, mr.ProjectID, mr.IID, authorID, outcome).Scan(&found)
 	return found, err
 }
