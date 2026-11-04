@@ -74,6 +74,31 @@ const (
 	replyWholeFailed   = "the whole review failed, so all of it is re-run"
 )
 
+// Why a command was refused, as the outcome's text says it ("refused: " +
+// why). The three about who may use a command are audited.
+const (
+	// whyNotAuthorOrMaintainer is the refusal of the command gate.
+	whyNotAuthorOrMaintainer = "not the author or a maintainer"
+	whyNoPermission          = "no permission"
+	whyAuthorOfChange        = "author of the change"
+)
+
+// replyOnlyAuthorAndMaintainers is the gate's refusal reply. term is what the
+// platform calls a change (changeTerm).
+func replyOnlyAuthorAndMaintainers(term string) string {
+	return "Only the author of this " + term + " and the repository's maintainers can use pergent commands."
+}
+
+// whoMayOutcome reports whether outcome is a refusal because of who the
+// commenter is, which the audit log records.
+func whoMayOutcome(outcome string) bool {
+	switch outcome {
+	case "refused: " + whyNotAuthorOrMaintainer, "refused: " + whyNoPermission, "refused: " + whyAuthorOfChange:
+		return true
+	}
+	return false
+}
+
 func replyHelp(mention string) string {
 	return fmt.Sprintf("Commands: `@%[1]s review` · `@%[1]s review failed` · `@%[1]s dismiss <id> <reason>`", mention)
 }
@@ -139,6 +164,10 @@ type verdict struct {
 	// known; nil leaves it to the answer step, which looks a thread command's
 	// thread up, and else posts a plain comment.
 	thread *forge.ThreadRef
+	// auditHead is the head commit of the change when the command was
+	// refused because of who the commenter is (whoMayOutcome); the answer
+	// step writes the audit entry once the reply is posted.
+	auditHead string
 }
 
 // done is a command carried out, with an optional reply. A request that
@@ -226,6 +255,11 @@ func (e *Engine) answerCommand(parent, bctx context.Context, cmd store.Command) 
 		}
 	}
 	e.react(bctx, cmd, v.react, log)
+	// After the reply, so a command whose required reply failed and was
+	// tried again is audited once; before the outcome is recorded.
+	if whoMayOutcome(v.outcome) {
+		e.auditCommand(parent, cmd, log, "command_refused", v.auditHead, "command="+cmd.Kind)
+	}
 	sctx, scancel := settle(parent)
 	defer scancel()
 	if err := e.Store.FinishCommand(sctx, cmd.ID, v.outcome, e.now()); err != nil {
@@ -360,6 +394,8 @@ type commandRun struct {
 	repo   settings.Effective
 	change forge.Change
 	log    *slog.Logger
+	// access is the commenter's access on the platform, read once.
+	access forge.Access
 }
 
 // handleCommand carries out or refuses one command within ctx; the first
@@ -423,8 +459,28 @@ func (e *Engine) handleCommand(ctx, bctx context.Context, cmd store.Command, log
 		return dropped("the change is not open"), nil
 	}
 	c := &commandRun{e: e, cmd: cmd, plat: plat, repo: repo, change: change, log: log}
+	if c.access, err = c.readAccess(ctx); err != nil {
+		return verdict{}, err
+	}
 
-	switch cmd.Kind {
+	v, err := c.carryOut(ctx)
+	if err != nil {
+		return verdict{}, err
+	}
+	if whoMayOutcome(v.outcome) {
+		v.auditHead = change.HeadSHA
+	}
+	return v, nil
+}
+
+// carryOut is the gate and then the command itself.
+func (c *commandRun) carryOut(ctx context.Context) (verdict, error) {
+	// The author of the change and the repository's maintainers and owners
+	// use commands; anyone else is refused, whatever the command is.
+	if c.repo.CommandsAuthorAndMaintainersOnly && !c.isChangeAuthor() && c.access < forge.AccessMaintain {
+		return c.refuseGate(ctx)
+	}
+	switch c.cmd.Kind {
 	case "review":
 		return c.rerun(ctx, false)
 	case "review_failed":
@@ -433,11 +489,27 @@ func (e *Engine) handleCommand(ctx, bctx context.Context, cmd store.Command, log
 		return c.dismiss(ctx)
 	}
 	// help, and a command the bot doesn't know.
-	return noop("help", replyHelp(plat.Forge.Mention())), nil
+	return noop("help", replyHelp(c.plat.Forge.Mention())), nil
 }
 
-// access is the commander's access on the platform now.
-func (c *commandRun) access(ctx context.Context) (forge.Access, error) {
+// refuseGate is the refusal of a commenter who is neither the author nor a
+// maintainer: a 👎 and, for the first such refusal of this person on this
+// change, the reply that says who may. Later ones get the 👎 only, so the bot
+// can't be made to post a stream of replies.
+func (c *commandRun) refuseGate(ctx context.Context) (verdict, error) {
+	v := refused(whyNotAuthorOrMaintainer, replyOnlyAuthorAndMaintainers(changeTerm(c.cmd.Platform)))
+	before, err := c.e.Store.RefusedBefore(ctx, c.cmd.MR, c.cmd.AuthorID, v.outcome, c.cmd.CreatedAt)
+	if err != nil {
+		return verdict{}, fmt.Errorf("check for an earlier refusal: %w", err)
+	}
+	if before {
+		v.reply, v.replyRequired = "", false
+	}
+	return v, nil
+}
+
+// readAccess is the commenter's access on the platform now.
+func (c *commandRun) readAccess(ctx context.Context) (forge.Access, error) {
 	a, err := c.plat.Forge.AccessLevel(ctx, c.cmd.MR.ProjectID, c.cmd.Author, c.cmd.AuthorID)
 	if err != nil {
 		return forge.AccessNone, fmt.Errorf("get the commenter's access: %w", err)
@@ -446,35 +518,40 @@ func (c *commandRun) access(ctx context.Context) (forge.Access, error) {
 }
 
 // actor is who the audit log names for a comment command.
-func (c *commandRun) actor() string {
-	return c.cmd.Author + " (" + c.cmd.Platform + " " + c.cmd.MR.Instance + ")"
+func (c *commandRun) actor() string { return commandActor(c.cmd) }
+
+func commandActor(cmd store.Command) string {
+	return cmd.Author + " (" + cmd.Platform + " " + cmd.MR.Instance + ")"
 }
 
 // audit records what the command did to the change at head. A failure is logged and never undoes
 // the command.
 func (c *commandRun) audit(ctx context.Context, action, head, detail string) {
-	head = fmt.Sprintf("mr=%d head=%s", c.cmd.MR.IID, head)
+	c.e.auditCommand(ctx, c.cmd, c.log, action, head, detail)
+}
+
+// auditCommand writes the audit entry of a command: the change, its head and
+// the detail, with the commenter as actor. A failure is logged and never
+// undoes the command.
+func (e *Engine) auditCommand(ctx context.Context, cmd store.Command, log *slog.Logger, action, head, detail string) {
+	text := fmt.Sprintf("mr=%d head=%s", cmd.MR.IID, head)
 	if detail != "" {
-		head += " " + detail
+		text += " " + detail
 	}
 	actx, cancel := settle(ctx)
 	defer cancel()
-	if err := c.e.Store.Audit(actx, store.AuditEntry{
-		At: c.e.now(), Actor: c.actor(), Action: action,
-		Instance: c.cmd.MR.Instance, Project: c.cmd.ProjectPath, Detail: head,
+	if err := e.Store.Audit(actx, store.AuditEntry{
+		At: e.now(), Actor: commandActor(cmd), Action: action,
+		Instance: cmd.MR.Instance, Project: cmd.ProjectPath, Detail: text,
 	}); err != nil {
-		c.log.Error("recording an audit entry failed", "action", action, "error", c.e.redact(err.Error()))
+		log.Error("recording an audit entry failed", "action", action, "error", e.redact(err.Error()))
 	}
 }
 
 // rerun is "review" and, with failedOnly, "review failed".
 func (c *commandRun) rerun(ctx context.Context, failedOnly bool) (verdict, error) {
-	access, err := c.access(ctx)
-	if err != nil {
-		return verdict{}, err
-	}
-	if access < forge.AccessWrite {
-		return refused("no permission", replyNoPermission), nil
+	if !c.mayWrite() {
+		return refused(whyNoPermission, replyNoPermission), nil
 	}
 	if c.change.Draft && !c.repo.ReviewDrafts {
 		return refused("draft", replyDraft), nil
@@ -522,12 +599,8 @@ func (c *commandRun) dismiss(ctx context.Context) (verdict, error) {
 // dismissByID is "dismiss <id> [reason]" written anywhere but in one of
 // pergent's finding threads.
 func (c *commandRun) dismissByID(ctx context.Context) (verdict, error) {
-	access, err := c.access(ctx)
-	if err != nil {
-		return verdict{}, err
-	}
-	if access < forge.AccessWrite {
-		return refused("no permission", replyNoPermission), nil
+	if !c.mayWrite() {
+		return refused(whyNoPermission, replyNoPermission), nil
 	}
 	f, reviewed, found, err := c.findFinding(ctx)
 	if err != nil {
@@ -536,7 +609,7 @@ func (c *commandRun) dismissByID(ctx context.Context) (verdict, error) {
 	if !found {
 		return refused("unknown finding", replyUnknownID(c.cmd.Arg)), nil
 	}
-	return c.dismissFinding(ctx, access, f, reviewed, c.cmd.Reason, c.cmd.Arg, false)
+	return c.dismissFinding(ctx, f, reviewed, c.cmd.Reason, c.cmd.Arg, false)
 }
 
 // dismissInThread is a dismissal written as a reply in a thread. The thread
@@ -573,14 +646,10 @@ func (c *commandRun) dismissInThread(ctx context.Context) (verdict, error) {
 		return with(refused("unknown finding", replyThreadFindingGone)), nil
 	}
 	reason := threadReason(c.cmd.Arg, f.ID, c.cmd.Reason)
-	access, err := c.access(ctx)
-	if err != nil {
-		return verdict{}, err
+	if !c.mayWrite() {
+		return with(refused(whyNoPermission, replyNoPermission)), nil
 	}
-	if access < forge.AccessWrite {
-		return with(refused("no permission", replyNoPermission)), nil
-	}
-	v, err := c.dismissFinding(ctx, access, f, reviewed, reason, f.ID, true)
+	v, err := c.dismissFinding(ctx, f, reviewed, reason, f.ID, true)
 	if err != nil {
 		return verdict{}, err
 	}
@@ -619,16 +688,16 @@ func threadReason(arg, id, reason string) string {
 // finding's severity, then the dismissal and the review decided again. id
 // names the finding in a reply; inThread says the command was written in the
 // finding's thread, which a reply asking for a reason has to match.
-func (c *commandRun) dismissFinding(ctx context.Context, access forge.Access, f result.Finding, reviewed store.Run, rawReason, id string, inThread bool) (verdict, error) {
+func (c *commandRun) dismissFinding(ctx context.Context, f result.Finding, reviewed store.Run, rawReason, id string, inThread bool) (verdict, error) {
 	reason := actions.CleanReason(rawReason)
 	if f.Severity != "suggestion" {
 		// Anything but a suggestion is dismissed as a blocking finding.
 		f.Severity = "blocking"
 		switch {
-		case access < forge.AccessMaintain:
-			return refused("no permission", replyNoPermission), nil
+		case c.access < forge.AccessMaintain:
+			return refused(whyNoPermission, replyNoPermission), nil
 		case c.isAuthor():
-			return refused("author of the change", replyAuthor), nil
+			return refused(whyAuthorOfChange, replyAuthor), nil
 		case reason == "":
 			return refused("reason needed", replyNeedsReason(c.plat.Forge.Mention(), inThread)), nil
 		}
@@ -678,6 +747,19 @@ func (c *commandRun) dismissFinding(ctx context.Context, access forge.Access, f 
 	}
 	c.e.Wake()
 	return done(""), nil
+}
+
+// isChangeAuthor tells whether the commenter opened the change: both user IDs
+// are known and equal. Unlike isAuthor, an unknown ID is nobody: this one
+// lets people in, so it must never take a stranger for the author.
+func (c *commandRun) isChangeAuthor() bool {
+	return c.cmd.AuthorID != 0 && c.change.AuthorID != 0 && c.cmd.AuthorID == c.change.AuthorID
+}
+
+// mayWrite tells whether the commenter may re-run reviews and dismiss
+// suggestions: write access, or being the author of the change.
+func (c *commandRun) mayWrite() bool {
+	return c.access >= forge.AccessWrite || c.isChangeAuthor()
 }
 
 // isAuthor tells whether the commenter is the author of the change, by user
