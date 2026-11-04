@@ -1027,7 +1027,7 @@ func TestMaxTurnsSetting(t *testing.T) {
 }
 
 // A defaults body with maxTurns stores it and null clears it; the audit
-// names it when it changes; the view lists it.
+// names it when it changes.
 func TestParseDefaultsMaxTurns(t *testing.T) {
 	d := &Dashboard{}
 	parse := func(body string) (store.RepoDefaults, string) {

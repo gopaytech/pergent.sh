@@ -205,9 +205,10 @@ func (r *Resolver) defaults(platform, instance, project string, source Source) E
 // defaultsFor is defaults for a repository from source: for SourceDashboard,
 // the defaults stored in the dashboard replace the built-in and config ones.
 // A stored value that can't be used (an unknown failure status, a timeout
-// that isn't positive, a step limit outside 5 to 200, a re-run cap that isn't positive, a memory limit that
-// doesn't parse, isn't positive or is below jobs.resources.requests, which
-// Kubernetes would refuse) is ignored: a bad setting never stops reviews.
+// that isn't positive, a step limit outside 5 to 200, a re-run cap that
+// isn't positive, a memory limit that doesn't parse, isn't positive or is
+// below jobs.resources.requests, which Kubernetes would refuse) is ignored:
+// a bad setting never stops reviews.
 func (r *Resolver) defaultsFor(source Source, platform, instance, project string, stored store.RepoDefaults) Effective {
 	eff := Effective{
 		Platform: platform, Instance: instance, Project: project, Source: source,
