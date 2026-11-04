@@ -401,6 +401,11 @@ func TestWithdrawalOfClosedChangeStillUnapproves(t *testing.T) {
 // nothing is approved, and an approval of this head from before is withdrawn.
 func TestHeldDraftWithdrawsExistingApproval(t *testing.T) {
 	env := newTestEnv(t)
+	// With inline findings on, the publish reads the change once before the
+	// draft check (to post threads); this test is about the two reads of the
+	// draft check and the approval.
+	off := false
+	env.Engine.Config.Repositories[0].InlineFindings = &off
 	head := sha('a')
 	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
 	servePublish(env, 1, head)
