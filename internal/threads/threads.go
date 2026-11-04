@@ -187,7 +187,9 @@ func Decide(in Input) Plan {
 
 	var rest []Thread // unmatched threads that are not rebound
 	for _, t := range unmatched {
-		if _, dismissed := in.Dismissed[t.Fingerprint]; dismissed {
+		if _, dismissed := in.Dismissed[t.Fingerprint]; dismissed || t.State == StateDismissed {
+			// A dismissed thread is no reworded candidate: reopening it would
+			// say a dismissal was withdrawn that never was.
 			rest = append(rest, t)
 			continue
 		}
@@ -269,12 +271,12 @@ func Decide(in Input) Plan {
 	// The cap counts every pergent-owned thread open at once, matched or not.
 	open := reopened
 	for _, t := range in.Threads {
-		if t.State == StateOpen && !t.Resolved {
+		if countsOpen(t) {
 			open++
 		}
 	}
 	for _, r := range p.Resolve {
-		if r.Thread.State == StateOpen && !r.Thread.Resolved {
+		if countsOpen(r.Thread) {
 			open--
 		}
 	}
@@ -292,9 +294,6 @@ func Decide(in Input) Plan {
 		}
 	}
 
-	for _, r := range p.Rebind {
-		p.Inline[r.Fingerprint] = true
-	}
 	sort.SliceStable(p.Resolve, func(i, j int) bool { return lessThread(p.Resolve[i].Thread, p.Resolve[j].Thread) })
 	sort.SliceStable(p.Reopen, func(i, j int) bool { return lessThread(p.Reopen[i].Thread, p.Reopen[j].Thread) })
 	sort.SliceStable(p.Rebind, func(i, j int) bool { return lessThread(p.Rebind[i].Thread, p.Rebind[j].Thread) })
@@ -321,16 +320,31 @@ func dedupe(in []Finding) []Finding {
 	return out
 }
 
+// countsOpen reports whether a thread is open for the cap: the platform shows
+// it unresolved and pergent.sh has not resolved it. A state we don't know
+// counts as open.
+func countsOpen(t Thread) bool {
+	if t.Resolved {
+		return false
+	}
+	switch t.State {
+	case StateFixed, StateGone, StateDismissed:
+		return false
+	}
+	return true
+}
+
 // claimTier orders threads for reworded matching: open threads the platform
-// shows unresolved first, then open threads a person resolved, then the rest.
+// shows unresolved first, then open threads a person resolved, then fixed and
+// gone ones. A state we don't know counts as open.
 func claimTier(t Thread) int {
 	switch {
-	case t.State == StateOpen && !t.Resolved:
-		return 0
-	case t.State == StateOpen:
+	case t.State == StateFixed || t.State == StateGone:
+		return 2
+	case t.Resolved:
 		return 1
 	}
-	return 2
+	return 0
 }
 
 // reworded finds the finding that a thread without an exact match now stands

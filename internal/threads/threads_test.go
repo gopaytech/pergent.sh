@@ -616,6 +616,7 @@ func TestDuplicateFingerprintsKeepFirst(t *testing.T) {
 	if len(p.Post) != 0 || p.Notes["dup"] != NoteOverCap || p.Inline["dup"] {
 		t.Fatalf("20 open: plan = %+v", p)
 	}
+	checkDisjoint(t, p)
 }
 
 func TestDuplicateFingerprintsMatchOneThread(t *testing.T) {
@@ -650,6 +651,7 @@ func TestOnlyBlockingDoesNotReopenSuggestions(t *testing.T) {
 			if p.Notes["s"] != NoteKeptRule || p.Inline["s"] {
 				t.Errorf("suggestion: notes = %v inline = %v", p.Notes, p.Inline)
 			}
+			checkDisjoint(t, p)
 			if !p.Inline["open"] || p.Notes["open"] != "" || !p.Inline["b"] {
 				t.Errorf("inline = %v notes = %v", p.Inline, p.Notes)
 			}
@@ -690,4 +692,66 @@ func TestUnknownStateTreatedAsOpen(t *testing.T) {
 	if len(p.Post)+len(p.Resolve)+len(p.Reopen)+len(p.Rebind) != 0 || !p.Inline["f1"] || len(p.Notes) != 0 {
 		t.Fatalf("plan = %+v", p)
 	}
+}
+
+// checkDisjoint fails when a fingerprint is both on the diff and in the summary.
+func checkDisjoint(t *testing.T, p Plan) {
+	t.Helper()
+	for fp := range p.Notes {
+		if p.Inline[fp] {
+			t.Errorf("%s is in both Inline and Notes", fp)
+		}
+	}
+}
+
+func TestOnlyBlockingRewordedSuggestionNotInlineAndNotes(t *testing.T) {
+	for _, st := range []State{StateFixed, StateGone} {
+		t.Run(string(st), func(t *testing.T) {
+			in := base()
+			in.OnlyBlocking = true
+			in.Map = func(t Thread) (int, int, bool) { return t.Line, t.EndLine, true }
+			in.Threads = []Thread{thread("old", "a.go", 42, st)}
+			in.Findings = []Finding{finding("fpNew", "a.go", "suggestion", 42, 0)}
+			p := Decide(in)
+			if len(p.Rebind) != 1 || len(p.Reopen) != 0 || len(p.Post) != 0 {
+				t.Fatalf("plan = %+v", p)
+			}
+			if p.Notes["fpNew"] != NoteKeptRule || p.Inline["fpNew"] {
+				t.Errorf("notes = %v inline = %v", p.Notes, p.Inline)
+			}
+			checkDisjoint(t, p)
+		})
+	}
+}
+
+func TestUnknownStateCountsInCap(t *testing.T) {
+	in := base()
+	in.Threads = []Thread{thread("weird", "z.go", 41, State("weird"))}
+	in.Findings = []Finding{finding("weird", "z.go", "blocking", 41, 0)}
+	for i := 0; i < 20; i++ {
+		in.Findings = append(in.Findings, finding(fmt.Sprintf("n%02d", i), "a.go", "blocking", 40+i, 0))
+	}
+	p := Decide(in)
+	if len(p.Post) != 19 || len(p.Inline) != 20 {
+		t.Fatalf("posts = %d, inline = %d", len(p.Post), len(p.Inline))
+	}
+	checkDisjoint(t, p)
+
+	// A person-resolved one does not count.
+	in.Threads[0].Resolved = true
+	if p = Decide(in); len(p.Post) != 20 {
+		t.Fatalf("resolved: posts = %d", len(p.Post))
+	}
+}
+
+func TestDismissedStateThreadNeverRewordedCandidate(t *testing.T) {
+	in := base()
+	in.Map = func(t Thread) (int, int, bool) { return t.Line, t.EndLine, true }
+	in.Threads = []Thread{thread("old", "a.go", 42, StateDismissed)}
+	in.Findings = []Finding{finding("fpNew", "a.go", "blocking", 42, 0)}
+	p := Decide(in)
+	if len(p.Rebind) != 0 || len(p.Reopen) != 0 || len(p.Post) != 1 || p.Post[0].Finding.Fingerprint != "fpNew" {
+		t.Fatalf("plan = %+v", p)
+	}
+	checkDisjoint(t, p)
 }
