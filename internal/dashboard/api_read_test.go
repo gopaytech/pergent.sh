@@ -17,6 +17,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/instances"
+	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -240,6 +241,7 @@ type runFix struct {
 	undispatched            bool
 	sourceBranch, user      string
 	model, sources          string
+	maxTurns                *int
 	// versions (JSON) and skipReason are what a run records of the library
 	// skills it used and of why it was skipped.
 	versions, skipReason string
@@ -312,10 +314,10 @@ func (e *env) addRun(f runFix) string {
 	e.exec(`UPDATE runs SET state = $2, result = $3::jsonb, failure_reason = $4, base_sha = $5, created_at = $6,
 			dispatched_at = $7, reported_at = $8, title = $9, web_url = $10, source_branch = $11, author = $12,
 			outcome = $13, outcome_reason = $14, decision_status = $15, approved = $16, model = $17,
-			skill_sources = $18::jsonb, skill_versions = $19::jsonb, skip_reason = $20
+			skill_sources = $18::jsonb, skill_versions = $19::jsonb, skip_reason = $20, max_turns = $21
 		WHERE id = $1::uuid`,
 		id, string(f.state), result, f.failure, baseSHA, f.at, dispatched, reported, f.title, f.webURL,
-		f.sourceBranch, f.user, f.outcome, f.reason, f.status, f.approved, model, sources, versions, f.skipReason)
+		f.sourceBranch, f.user, f.outcome, f.reason, f.status, f.approved, model, sources, versions, f.skipReason, f.maxTurns)
 	return id
 }
 
@@ -696,7 +698,7 @@ func TestRunDetail(t *testing.T) {
 	// code-review is a library skill, but this repository replaced it
 	// with its own when the review ran.
 	id := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: string(b), duration: time.Minute,
-		outcome: OutcomeBlocking, model: "claude-sonnet-4", sources: `{"code-review":"repo","team-rules":"repo"}`})
+		outcome: OutcomeBlocking, model: "claude-sonnet-4", maxTurns: ptr(40), sources: `{"code-review":"repo","team-rules":"repo"}`})
 	failed := e.addRun(runFix{project: "acme/widgets", number: 4, head: head('b'), outcome: OutcomeFailed,
 		failure: "the review Job ran out of memory (OOMKilled)"})
 	// A run that recorded no model or skill sources.
@@ -755,8 +757,15 @@ func TestRunDetail(t *testing.T) {
 		t.Errorf("run without recorded inputs = %+v", o)
 	}
 	raw := e.get(c, "/api/runs/"+older).Body.String()
-	if !strings.Contains(raw, `"model":null`) || !strings.Contains(raw, `"source":null`) {
-		t.Errorf("body = %s; want null model and source", raw)
+	if !strings.Contains(raw, `"model":null`) || !strings.Contains(raw, `"source":null`) || !strings.Contains(raw, `"maxTurns":null`) {
+		t.Errorf("body = %s; want null model, maxTurns and source", raw)
+	}
+	// The step limit is the one the run was dispatched with.
+	if v.MaxTurns == nil || *v.MaxTurns != 40 || f.MaxTurns != nil || o.MaxTurns != nil {
+		t.Errorf("maxTurns = %v, %v, %v; want 40, null, null", v.MaxTurns, f.MaxTurns, o.MaxTurns)
+	}
+	if body := e.get(c, "/api/runs/"+id).Body.String(); !strings.Contains(body, `"maxTurns":40`) {
+		t.Errorf("body = %s; want maxTurns 40", body)
 	}
 
 	for _, target := range []string{"/api/runs/not-a-uuid", "/api/runs/00000000-0000-0000-0000-000000000000"} {
@@ -821,7 +830,7 @@ func TestRepositoryDetail(t *testing.T) {
 	settings, _ := json.Marshal(v.Settings)
 	want := `{"approve":{"value":false,"overridden":true},"failureStatus":{"value":"failed","overridden":false},` +
 		`"jobMemory":{"value":"","overridden":false},"jobTimeoutSeconds":{"value":600,"overridden":false},` +
-		`"repoSkills":{"value":[],"overridden":false},` +
+		`"maxTurns":{"value":40,"overridden":false},"repoSkills":{"value":[],"overridden":false},` +
 		`"rerunLimitPerMR":{"value":10,"overridden":false},"rerunLimitPerRepo":{"value":50,"overridden":false},` +
 		`"reviewDrafts":{"value":true,"overridden":false},"skills":{"value":["code-review"],"overridden":true}}`
 	if string(settings) != want {
@@ -1034,7 +1043,7 @@ func TestAdminSettings(t *testing.T) {
 	c := e.signInGitLab(true, "acme/widgets")
 	v := getJSON[AdminSettingsView](e, c, "/api/admin/settings")
 	want := AdminSettingsView{Instance: "main",
-		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, FailureStatus: "failed", JobTimeoutSeconds: 600,
+		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40,
 			RerunLimitPerMR: 10, RerunLimitPerRepo: 50, Skills: []string{}},
 		LLM: LLMView{Provider: "anthropic", Model: "claude-sonnet-4"}}
 	got, _ := json.Marshal(v)
@@ -1503,5 +1512,17 @@ func TestIntegrationsGitHubReviewAppApprover(t *testing.T) {
 	c := e.signInGitHub(true, "acme/widgets")
 	if v := getJSON[IntegrationView](e, c, "/api/integrations"); v.Approver != "review_app" {
 		t.Errorf("approver = %q, want review_app", v.Approver)
+	}
+}
+
+// The step limit is a setting of the repository like the others.
+func TestSettingViewsMaxTurns(t *testing.T) {
+	repo := settings.Effective{MaxTurns: 120, Overridden: map[string]bool{settings.KeyMaxTurns: true}}
+	if got := settingViews(repo)["maxTurns"]; got != (SettingView{120, true}) {
+		t.Errorf("maxTurns = %+v, want 120 overridden", got)
+	}
+	repo = settings.Effective{MaxTurns: 40}
+	if got := settingViews(repo)["maxTurns"]; got != (SettingView{40, false}) {
+		t.Errorf("maxTurns = %+v, want 40 not overridden", got)
 	}
 }

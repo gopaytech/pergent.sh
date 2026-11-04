@@ -246,6 +246,7 @@ func TestConfigManagedIs409(t *testing.T) {
 	}
 	rec := e.send(c, "POST", "/api/repositories", `{"project":"ACME/Gadgets"}`)
 	wantCode(t, rec, "POST of a repository already on", http.StatusConflict)
+	wantCode(t, e.send(c, "PUT", "/api/repositories/main/acme/widgets/settings", `{"maxTurns":120}`), "PUT maxTurns", http.StatusConflict)
 
 	if _, found := e.storedRepo("main", "acme/widgets"); found {
 		t.Errorf("a dashboard row was made for the config repository")
@@ -291,6 +292,14 @@ func TestSettingsValidation(t *testing.T) {
 		{`{"jobTimeoutSeconds":"600"}`, false, nil},
 		{`{"jobTimeoutSeconds":60}`, true, func(r store.DashboardRepo) bool { return r.JobTimeoutSeconds != nil && *r.JobTimeoutSeconds == 60 }},
 		{`{"jobTimeoutSeconds":7200}`, true, func(r store.DashboardRepo) bool { return r.JobTimeoutSeconds != nil && *r.JobTimeoutSeconds == 7200 }},
+		{`{"maxTurns":4}`, false, nil},
+		{`{"maxTurns":201}`, false, nil},
+		{`{"maxTurns":40.5}`, false, nil},
+		{`{"maxTurns":"40"}`, false, nil},
+		{`{"maxTurns":5}`, true, func(r store.DashboardRepo) bool { return r.MaxTurns != nil && *r.MaxTurns == 5 }},
+		{`{"maxTurns":120}`, true, func(r store.DashboardRepo) bool { return r.MaxTurns != nil && *r.MaxTurns == 120 }},
+		{`{"maxTurns":200}`, true, func(r store.DashboardRepo) bool { return r.MaxTurns != nil && *r.MaxTurns == 200 }},
+		{`{"maxTurns":null}`, true, func(r store.DashboardRepo) bool { return r.MaxTurns == nil }},
 		{`{"jobMemory":"lots"}`, false, nil},
 		{`{"jobMemory":"512Mi"}`, false, nil}, // below the 1Gi request
 		{`{"jobMemory":"33Gi"}`, false, nil},
@@ -334,7 +343,7 @@ func TestSettingsValidation(t *testing.T) {
 	}
 
 	// A partial update keeps the other fields; the answer is the detail.
-	rec := e.send(c, "PUT", target, `{"approve":false,"jobTimeoutSeconds":900,"rerunLimitPerRepo":75}`)
+	rec := e.send(c, "PUT", target, `{"approve":false,"jobTimeoutSeconds":900,"maxTurns":120,"rerunLimitPerRepo":75}`)
 	wantCode(t, rec, "PUT two fields", http.StatusOK)
 	var detail RepositoryDetailView
 	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
@@ -343,6 +352,7 @@ func TestSettingsValidation(t *testing.T) {
 	if detail.Repo.Project != "acme/gadgets" || detail.Repo.Source != "dashboard" ||
 		detail.Settings["approve"].Value != false || !detail.Settings["approve"].Overridden ||
 		detail.Settings["jobTimeoutSeconds"].Value != float64(900) ||
+		detail.Settings["maxTurns"].Value != float64(120) || !detail.Settings["maxTurns"].Overridden ||
 		detail.Settings["jobMemory"].Value != "1536Mi" || !detail.Settings["jobMemory"].Overridden ||
 		detail.Settings["skills"].Overridden || detail.Settings["skills"].Value != nil {
 		t.Errorf("detail = %+v", detail)
@@ -360,7 +370,7 @@ func TestSettingsValidation(t *testing.T) {
 	wantCode(t, rec, "reset", http.StatusOK)
 	r, found := e.storedRepo("main", "acme/gadgets")
 	if !found || r.Approve != nil || r.ReviewDrafts != nil || r.FailureStatus != nil || r.Skills != nil ||
-		r.JobTimeoutSeconds != nil || r.JobMemory != nil || r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil ||
+		r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil ||
 		r.CreatedBy != "carol" {
 		t.Errorf("after reset row = %+v, %v", r, found)
 	}
@@ -371,6 +381,9 @@ func TestSettingsValidation(t *testing.T) {
 		if s.Overridden {
 			t.Errorf("after reset %s is overridden", k)
 		}
+	}
+	if s := detail.Settings["maxTurns"]; s.Value != float64(40) {
+		t.Errorf("after reset maxTurns = %v, want the default 40", s.Value)
 	}
 	if s := detail.Settings["rerunLimitPerMR"]; s.Value != float64(10) {
 		t.Errorf("after reset rerunLimitPerMR = %v, want the default 10", s.Value)
@@ -419,9 +432,16 @@ func TestCapsNeedAdmin(t *testing.T) {
 		}
 	}
 
-	wantCode(t, e.send(maintainer, "PUT", target, `{"approve":false}`), "maintainer PUT approve", http.StatusOK)
+	// The step limit is a maintainer's setting, and their reset clears it.
+	wantCode(t, e.send(maintainer, "PUT", target, `{"approve":false,"maxTurns":80}`), "maintainer PUT approve and maxTurns", http.StatusOK)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.MaxTurns == nil || *r.MaxTurns != 80 {
+		t.Errorf("after a maintainer's PUT maxTurns = %v, want 80", r.MaxTurns)
+	}
 	wantCode(t, e.send(maintainer, "POST", target+"/reset", ""), "maintainer reset", http.StatusOK)
 	r, _ := e.storedRepo("main", "acme/gadgets")
+	if r.MaxTurns != nil {
+		t.Errorf("after a maintainer's reset maxTurns = %d, want cleared", *r.MaxTurns)
+	}
 	if r.Approve != nil || r.RerunLimitPerMR == nil || *r.RerunLimitPerMR != 7 || r.RerunLimitPerRepo == nil || *r.RerunLimitPerRepo != 70 {
 		t.Errorf("after a maintainer's reset row = %+v; want approve cleared, caps 7 and 70 kept", r)
 	}
@@ -965,5 +985,76 @@ func TestAvailableWholeBudget(t *testing.T) {
 	got = getJSON[availableBody](e, c, "/api/repositories/available?search=repo-00")
 	if len(got.Items) != 10 || got.Truncated {
 		t.Errorf("after the renewal, available has %d items, truncated %v", len(got.Items), got.Truncated)
+	}
+}
+
+// The step limit takes a whole number from 5 to 200 or null, and nothing
+// else; this needs no database.
+func TestMaxTurnsSetting(t *testing.T) {
+	const bad = "maxTurns must be a whole number from 5 to 200, or null"
+	for _, tc := range []struct {
+		body string
+		want *int
+		msg  string
+	}{
+		{"5", ptr(5), ""},
+		{"40", ptr(40), ""},
+		{"200", ptr(200), ""},
+		{"null", nil, ""},
+		{"4", nil, bad},
+		{"201", nil, bad},
+		{"0", nil, bad},
+		{"-40", nil, bad},
+		{"40.5", nil, bad},
+		{`"40"`, nil, bad},
+		{"true", nil, bad},
+		{"[40]", nil, bad},
+	} {
+		edit, msg := maxTurnsSetting(json.RawMessage(tc.body), tc.body == "null")
+		if msg != tc.msg {
+			t.Errorf("%s: message = %q, want %q", tc.body, msg, tc.msg)
+			continue
+		}
+		if msg != "" {
+			continue
+		}
+		row := store.DashboardRepo{MaxTurns: ptr(99)}
+		edit(&row)
+		if !samePtr(row.MaxTurns, tc.want) {
+			t.Errorf("%s: MaxTurns = %v, want %v", tc.body, row.MaxTurns, tc.want)
+		}
+	}
+}
+
+// A defaults body with maxTurns stores it and null clears it; the audit
+// names it when it changes; the view lists it.
+func TestParseDefaultsMaxTurns(t *testing.T) {
+	d := &Dashboard{}
+	parse := func(body string) (store.RepoDefaults, string) {
+		next, _, msg := d.parseDefaults(httptest.NewRequest("PUT", "/api/admin/defaults", strings.NewReader(body)), nil)
+		return next, msg
+	}
+	if next, msg := parse(`{"maxTurns":80}`); msg != "" || next.MaxTurns == nil || *next.MaxTurns != 80 {
+		t.Errorf("maxTurns 80: %+v, %q", next, msg)
+	}
+	if next, msg := parse(`{"maxTurns":null}`); msg != "" || next.MaxTurns != nil {
+		t.Errorf("maxTurns null: %+v, %q", next, msg)
+	}
+	if next, msg := parse(`{"approve":false}`); msg != "" || next.MaxTurns != nil {
+		t.Errorf("maxTurns left out: %+v, %q", next, msg)
+	}
+	if _, msg := parse(`{"maxTurns":201}`); msg != "maxTurns must be a whole number from 5 to 200, or null" {
+		t.Errorf("maxTurns 201: %q", msg)
+	}
+	if _, msg := parse(`{"maxTurn":80}`); !strings.Contains(msg, "maxTurns") {
+		t.Errorf("a wrong key: %q; want the message to list maxTurns", msg)
+	}
+
+	a, b := store.RepoDefaults{}, store.RepoDefaults{MaxTurns: ptr(80)}
+	if got := changedDefaults(a, b); !slices.Equal(got, []string{"maxTurns"}) {
+		t.Errorf("changedDefaults = %q, want maxTurns", got)
+	}
+	if got := changedDefaults(b, b); len(got) != 0 {
+		t.Errorf("changedDefaults of equal defaults = %q", got)
 	}
 }
