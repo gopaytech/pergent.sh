@@ -47,6 +47,11 @@ func (f *Forge) CompareDiff(ctx context.Context, projectID int64, from, to strin
 // note's new line and EndLine the end of its line range, or Line when it has
 // none. A discussion is resolved when its first note is.
 func (f *Forge) Threads(ctx context.Context, projectID, iid int64) ([]forge.Thread, error) {
+	if f.user.ID == 0 {
+		// Every author would pass for the bot, or none: not telling is better
+		// than a wrong list.
+		return nil, errors.New("gitlabforge: the review bot's user ID is not known, so its threads can't be told from others")
+	}
 	all, err := f.c.Discussions(ctx, projectID, iid)
 	if err != nil {
 		return nil, mapErr(err)
@@ -57,7 +62,7 @@ func (f *Forge) Threads(ctx context.Context, projectID, iid int64) ([]forge.Thre
 			continue
 		}
 		n := d.Notes[0]
-		if f.user.ID == 0 || n.Author.ID != f.user.ID || n.Position == nil {
+		if n.Author.ID != f.user.ID || n.Position == nil {
 			continue
 		}
 		if _, ok := render.InlineFingerprint(n.Body); !ok {
@@ -83,7 +88,10 @@ func (f *Forge) Threads(ctx context.Context, projectID, iid int64) ([]forge.Thre
 // Line alone (a multi-line finding's range lives in its suggestion, not in
 // the position): new_line, plus old_line for an unchanged line. Without all
 // three of ch's diff refs GitLab would anchor the discussion to nothing, so
-// the call fails and nothing is posted. A thread GitLab refuses (a line
+// the call fails and nothing is posted. A thread without a finding marker is
+// not posted either (nothing could find it again). Each discussion is created
+// with one request, never retried: a retry after a lost reply would start a
+// second thread. A thread GitLab refuses (a line
 // outside the diff) fails alone, in errs; once ctx is done the threads not
 // yet tried have its error.
 func (f *Forge) PostThreads(ctx context.Context, projectID int64, ch forge.Change, threads []forge.NewThread) ([]forge.ThreadRef, []error, error) {
@@ -98,6 +106,10 @@ func (f *Forge) PostThreads(ctx context.Context, projectID int64, ch forge.Chang
 				errs[j] = err
 			}
 			break
+		}
+		if _, ok := render.InlineFingerprint(t.Body); !ok {
+			errs[i] = errors.New("gitlabforge: the thread has no finding marker, so it would not be found again")
+			continue
 		}
 		if t.Path == "" || t.Line <= 0 {
 			errs[i] = errors.New("gitlabforge: the thread has no file or line to anchor on")

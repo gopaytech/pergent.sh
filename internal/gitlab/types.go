@@ -42,6 +42,9 @@ type MergeRequest struct {
 	WebURL         string   `json:"web_url"`
 	Author         User     `json:"author"`
 	DiffRefs       DiffRefs `json:"diff_refs"`
+	// ChangesCount is how many files the merge request changes: a string,
+	// "" while GitLab hasn't counted and "1000+" when it stops counting.
+	ChangesCount string `json:"changes_count"`
 }
 
 // Project holds the fields pergent.sh reads. OnlyAllowMergeIfPipelineSucceeds
@@ -58,12 +61,15 @@ type Project struct {
 
 // Diff is one file of a merge request's or a comparison's diff. Diff holds
 // the hunks, from the first "@@" on; GitLab leaves it empty for a binary
-// file or one too large to show.
+// file or one too large to show (Collapsed: left out but fetchable; TooLarge:
+// left out for good).
 type Diff struct {
 	OldPath     string `json:"old_path"`
 	NewPath     string `json:"new_path"`
 	DeletedFile bool   `json:"deleted_file"`
 	Diff        string `json:"diff"`
+	Collapsed   bool   `json:"collapsed"`
+	TooLarge    bool   `json:"too_large"`
 }
 
 // Position is where a diff discussion is anchored. NewLine alone is an added
@@ -157,6 +163,9 @@ var (
 	ErrNotFound = errors.New("gitlab: not found")
 	// ErrHeadMoved is returned by Approve when the MR head is no longer the given SHA.
 	ErrHeadMoved = errors.New("gitlab: merge request head moved")
+	// ErrPartialDiff is returned when a diff may not list every changed
+	// file: using it as the whole diff would drop files silently.
+	ErrPartialDiff = errors.New("gitlab: the diff may be incomplete")
 	// ErrTooLarge is returned when a reply is bigger than the limit set for
 	// the request. It is not retried.
 	ErrTooLarge = errors.New("gitlab: response too large")

@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -1133,9 +1134,27 @@ func TestAwardNoteEmojiAlreadyAwarded(t *testing.T) {
 	}
 }
 
+// diffsServer answers /diffs with files and the merge request itself with
+// changes_count.
+func diffsServer(t *testing.T, files []map[string]any, changesCount string) (*Client, *[]recorded) {
+	t.Helper()
+	return serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if !strings.HasSuffix(r.URL.Path, "/diffs") {
+			_ = json.NewEncoder(w).Encode(map[string]any{"iid": 3, "changes_count": changesCount})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(files)
+	})
+}
+
 func TestMergeRequestDiffs(t *testing.T) {
 	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if !strings.HasSuffix(r.URL.Path, "/diffs") {
+			_ = json.NewEncoder(w).Encode(map[string]any{"iid": 3, "changes_count": "3"})
+			return
+		}
 		if r.URL.Query().Get("page") == "2" {
 			_ = json.NewEncoder(w).Encode([]map[string]any{{"old_path": "gone.go", "new_path": "gone.go", "deleted_file": true, "diff": "@@ -1 +0,0 @@\n-x\n"}})
 			return
@@ -1163,11 +1182,71 @@ func TestMergeRequestDiffs(t *testing.T) {
 			t.Errorf("diff %d = %+v, want %+v", i, got[i], want[i])
 		}
 	}
-	if len(*reqs) != 2 {
+	if len(*reqs) != 3 {
 		t.Fatalf("requests = %d", len(*reqs))
 	}
 	expect(t, (*reqs)[0], "GET", "/api/v4/projects/7/merge_requests/3/diffs", "per_page=100")
 	expect(t, (*reqs)[1], "GET", "/api/v4/projects/7/merge_requests/3/diffs", "page=2&per_page=100")
+	// The list is checked against the merge request's changes_count.
+	expect(t, (*reqs)[2], "GET", "/api/v4/projects/7/merge_requests/3", "")
+}
+
+// GitLab stops listing files past its limits: the count says how many there are.
+func TestMergeRequestDiffsPartial(t *testing.T) {
+	one := []map[string]any{{"old_path": "a.go", "new_path": "a.go", "diff": "@@ -1 +1 @@\n-a\n+b\n"}}
+	for name, tc := range map[string]struct{ count string }{
+		"more files than listed":  {"2"},
+		"fewer files than listed": {"0"},
+		"stopped counting":        {"1000+"},
+		"not counted yet":         {""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, _ := diffsServer(t, one, tc.count)
+			if _, err := c.MergeRequestDiffs(context.Background(), 7, 3); !errors.Is(err, ErrPartialDiff) {
+				t.Fatalf("err = %v, want ErrPartialDiff", err)
+			}
+		})
+	}
+}
+
+// A collapsed or too large file stays, with an empty patch.
+func TestMergeRequestDiffsKeepsCollapsedFiles(t *testing.T) {
+	c, _ := diffsServer(t, []map[string]any{
+		{"old_path": "big.go", "new_path": "big.go", "diff": "", "collapsed": true},
+		{"old_path": "huge.go", "new_path": "huge.go", "diff": "", "too_large": true},
+	}, "2")
+	got, err := c.MergeRequestDiffs(context.Background(), 7, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || !got[0].Collapsed || got[0].Diff != "" || !got[1].TooLarge {
+		t.Fatalf("diffs = %+v", got)
+	}
+}
+
+// A merge request with no files: GitLab may not have counted yet.
+func TestMergeRequestDiffsEmpty(t *testing.T) {
+	for _, count := range []string{"", "0"} {
+		c, _ := diffsServer(t, []map[string]any{}, count)
+		got, err := c.MergeRequestDiffs(context.Background(), 7, 3)
+		if err != nil || len(got) != 0 {
+			t.Fatalf("count %q: got=%v err=%v", count, got, err)
+		}
+	}
+}
+
+func TestMergeRequestDiffsOverflow(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/diffs") {
+			http.Error(w, `{"message":"404 Not Found"}`, 404)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"overflow": true, "changes": []map[string]any{{"old_path": "a.go", "new_path": "a.go"}}})
+	})
+	if _, err := c.MergeRequestDiffs(context.Background(), 7, 3); !errors.Is(err, ErrPartialDiff) {
+		t.Fatalf("err = %v, want ErrPartialDiff", err)
+	}
 }
 
 // A GitLab older than 15.7 has no /diffs: the deprecated /changes answers.
@@ -1228,6 +1307,21 @@ func TestCompare(t *testing.T) {
 		t.Fatalf("diffs = %+v", got)
 	}
 	expect(t, (*reqs)[0], "GET", "/api/v4/projects/7/repository/compare", "from=aaa&straight=true&to=bbb")
+}
+
+func TestComparePartial(t *testing.T) {
+	for name, reply := range map[string]map[string]any{
+		"timeout":   {"compare_timeout": true, "diffs": []map[string]any{{"old_path": "a.go", "new_path": "a.go"}}},
+		"collapsed": {"diffs": []map[string]any{{"old_path": "a.go", "new_path": "a.go", "collapsed": true}}},
+		"too large": {"diffs": []map[string]any{{"old_path": "a.go", "new_path": "a.go"}, {"old_path": "b.go", "new_path": "b.go", "too_large": true}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, _ := serve(t, jsonReply(reply))
+			if _, err := c.Compare(context.Background(), 7, "aaa", "bbb"); !errors.Is(err, ErrPartialDiff) {
+				t.Fatalf("err = %v, want ErrPartialDiff", err)
+			}
+		})
+	}
 }
 
 func TestDiscussions(t *testing.T) {
@@ -1322,6 +1416,39 @@ func TestCreateDiffDiscussionRefused(t *testing.T) {
 	_, _, err := c.CreateDiffDiscussion(context.Background(), 7, 3, "hi", Position{NewPath: "a.go", NewLine: 1})
 	if !isStatus(err, 400) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// A retried POST that GitLab had applied would start a second thread.
+func TestCreateDiffDiscussionIsNotRetried(t *testing.T) {
+	for _, status := range []int{502, 503, 429} {
+		c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, "busy", status) })
+		_, _, err := c.CreateDiffDiscussion(context.Background(), 7, 3, "hi", Position{NewPath: "a.go", NewLine: 1})
+		if !isStatus(err, status) {
+			t.Fatalf("status %d: err = %v", status, err)
+		}
+		if len(*reqs) != 1 {
+			t.Fatalf("status %d: requests = %d, want 1", status, len(*reqs))
+		}
+	}
+}
+
+func TestCreateDiffDiscussionConnectionErrorIsNotRetried(t *testing.T) {
+	var n atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n.Add(1)
+		hj, _ := w.(http.Hijacker)
+		conn, _, _ := hj.Hijack()
+		conn.Close()
+	}))
+	defer srv.Close()
+	c := New(srv.URL, testToken, srv.Client())
+	c.sleep = func(ctx context.Context, d time.Duration) error { return nil }
+	if _, _, err := c.CreateDiffDiscussion(context.Background(), 7, 3, "hi", Position{NewPath: "a.go", NewLine: 1}); err == nil {
+		t.Fatal("want an error")
+	}
+	if n.Load() != 1 {
+		t.Fatalf("requests = %d, want 1", n.Load())
 	}
 }
 

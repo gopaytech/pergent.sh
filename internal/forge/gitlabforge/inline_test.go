@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gopaytech/pergent/render"
@@ -29,6 +30,7 @@ func TestChangeDiff(t *testing.T) {
 		{"old_path": "gone.go", "new_path": "gone.go", "deleted_file": true, "diff": "@@ -1 +0,0 @@\n-x\n"},
 		{"old_path": "img.png", "new_path": "img.png", "diff": ""},
 	})
+	f.on(http.MethodGet, mr, http.StatusOK, map[string]any{"iid": 3, "changes_count": "3"})
 	got, err := f.forge().ChangeDiff(context.Background(), 7, 3)
 	if err != nil {
 		t.Fatal(err)
@@ -40,6 +42,27 @@ func TestChangeDiff(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ChangeDiff = %+v, want %+v", got, want)
+	}
+}
+
+// A diff GitLab cut short is an error, never the whole diff.
+func TestChangeDiffPartial(t *testing.T) {
+	f := newFake(t)
+	f.on(http.MethodGet, mr+"/diffs", http.StatusOK, []map[string]any{{"old_path": "a.go", "new_path": "a.go", "diff": "@@ -1 +1 @@\n-a\n+b\n"}})
+	f.on(http.MethodGet, mr, http.StatusOK, map[string]any{"iid": 3, "changes_count": "1000+"})
+	got, err := f.forge().ChangeDiff(context.Background(), 7, 3)
+	if !errors.Is(err, gitlab.ErrPartialDiff) || got != nil {
+		t.Errorf("got=%+v err=%v, want gitlab.ErrPartialDiff", got, err)
+	}
+}
+
+func TestCompareDiffPartial(t *testing.T) {
+	f := newFake(t)
+	f.on(http.MethodGet, "/projects/7/repository/compare", http.StatusOK, map[string]any{
+		"compare_timeout": true, "diffs": []map[string]any{{"old_path": "a.go", "new_path": "a.go"}}})
+	got, err := f.forge().CompareDiff(context.Background(), 7, "aaa", "bbb")
+	if !errors.Is(err, gitlab.ErrPartialDiff) || got != nil {
+		t.Errorf("got=%+v err=%v, want gitlab.ErrPartialDiff", got, err)
 	}
 }
 
@@ -115,6 +138,17 @@ func TestThreadsOnlyBotWithMarker(t *testing.T) {
 	}
 }
 
+// Without the bot's user ID every author would be unknown: an error, not an empty list.
+func TestThreadsNeedsBotID(t *testing.T) {
+	f := newFake(t)
+	f.on(http.MethodGet, mr+"/discussions", http.StatusOK, []map[string]any{})
+	fg := NewForge(gitlab.New(f.srv.URL, reviewToken, f.srv.Client()), gitlab.User{})
+	got, err := fg.Threads(context.Background(), 7, 3)
+	if err == nil || got != nil {
+		t.Errorf("got=%+v err=%v, want an error", got, err)
+	}
+}
+
 // diffRefs is a change whose diff GitLab has computed.
 var diffRefs = forge.Change{Number: 3, HeadSHA: "head", BaseSHA: "base", StartSHA: "start"}
 
@@ -122,8 +156,8 @@ func TestPostThreadsPositions(t *testing.T) {
 	f := newFake(t)
 	f.on(http.MethodPost, mr+"/discussions", http.StatusCreated, map[string]any{"id": "disc1", "notes": []map[string]any{{"id": 77}}})
 	refs, errs, err := f.forge().PostThreads(context.Background(), 7, diffRefs, []forge.NewThread{
-		{Path: "a.go", OldPath: "", Line: 12, EndLine: 14, Body: "added"},
-		{Path: "new.go", OldPath: "old.go", Line: 20, OldLine: 18, Body: "unchanged"},
+		{Path: "a.go", OldPath: "", Line: 12, EndLine: 14, Body: marked("added", "fp1")},
+		{Path: "new.go", OldPath: "old.go", Line: 20, OldLine: 18, Body: marked("unchanged", "fp2")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +193,7 @@ func TestPostThreadsPositions(t *testing.T) {
 			t.Errorf("request %d position = %v, want %v", i, got, want)
 		}
 	}
-	if reqs[0].Body["body"] != "added" || reqs[1].Body["body"] != "unchanged" {
+	if reqs[0].Body["body"] != marked("added", "fp1") || reqs[1].Body["body"] != marked("unchanged", "fp2") {
 		t.Errorf("bodies = %v, %v", reqs[0].Body["body"], reqs[1].Body["body"])
 	}
 }
@@ -172,7 +206,7 @@ func TestPostThreadsNeedsDiffRefs(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFake(t)
-			refs, errs, err := f.forge().PostThreads(context.Background(), 7, ch, []forge.NewThread{{Path: "a.go", Line: 1, Body: "x"}})
+			refs, errs, err := f.forge().PostThreads(context.Background(), 7, ch, []forge.NewThread{{Path: "a.go", Line: 1, Body: marked("x", "fp1")}})
 			if err == nil {
 				t.Fatal("want an error")
 			}
@@ -216,7 +250,7 @@ func TestPostThreadsOneFailsAlone(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": "disc" + string(rune('0'+n)), "notes": []map[string]any{{"id": 70 + n}}})
 	})
 	refs, errs, err := f.PostThreads(context.Background(), 7, diffRefs, []forge.NewThread{
-		{Path: "a.go", Line: 1, Body: "one"}, {Path: "a.go", Line: 999, Body: "two"}, {Path: "a.go", Line: 3, Body: "three"},
+		{Path: "a.go", Line: 1, Body: marked("one", "fp1")}, {Path: "a.go", Line: 999, Body: marked("two", "fp2")}, {Path: "a.go", Line: 3, Body: marked("three", "fp3")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -264,7 +298,7 @@ func TestPostThreadsStopsOnCancel(t *testing.T) {
 	hc := &http.Client{Transport: &cancelAfterFirst{next: srv.Client().Transport, cancel: cancel}}
 	f := NewForge(gitlab.New(srv.URL, reviewToken, hc), gitlab.User{ID: reviewUserID, Username: reviewName})
 	refs, errs, err := f.PostThreads(ctx, 7, diffRefs, []forge.NewThread{
-		{Path: "a.go", Line: 1, Body: "one"}, {Path: "a.go", Line: 2, Body: "two"}, {Path: "a.go", Line: 3, Body: "three"},
+		{Path: "a.go", Line: 1, Body: marked("one", "fp1")}, {Path: "a.go", Line: 2, Body: marked("two", "fp2")}, {Path: "a.go", Line: 3, Body: marked("three", "fp3")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -283,7 +317,7 @@ func TestPostThreadsStopsOnCancel(t *testing.T) {
 func TestPostThreadsUnanchored(t *testing.T) {
 	f := newFake(t)
 	_, errs, err := f.forge().PostThreads(context.Background(), 7, diffRefs, []forge.NewThread{
-		{Path: "", Line: 1, Body: "x"}, {Path: "a.go", Line: 0, Body: "y"},
+		{Path: "", Line: 1, Body: marked("x", "fp1")}, {Path: "a.go", Line: 0, Body: marked("y", "fp2")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -293,6 +327,47 @@ func TestPostThreadsUnanchored(t *testing.T) {
 	}
 	if reqs := f.requests(); len(reqs) != 0 {
 		t.Errorf("requests = %+v", reqs)
+	}
+}
+
+// A thread without a finding marker could not be found again: not posted.
+func TestPostThreadsNeedsMarker(t *testing.T) {
+	f := newFake(t)
+	f.on(http.MethodPost, mr+"/discussions", http.StatusCreated, map[string]any{"id": "disc1", "notes": []map[string]any{{"id": 77}}})
+	refs, errs, err := f.forge().PostThreads(context.Background(), 7, diffRefs, []forge.NewThread{
+		{Path: "a.go", Line: 1, Body: "no marker"},
+		{Path: "a.go", Line: 2, Body: marked("marked", "fp1")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs[0] == nil || refs[0] != (forge.ThreadRef{}) {
+		t.Errorf("unmarked: ref=%+v err=%v", refs[0], errs[0])
+	}
+	if errs[1] != nil || refs[1].ID != "disc1" {
+		t.Errorf("marked: ref=%+v err=%v", refs[1], errs[1])
+	}
+	if n := len(f.requests()); n != 1 {
+		t.Errorf("requests = %d, want 1", n)
+	}
+}
+
+// A discussion is created with one request: a retry could start a second thread.
+func TestPostThreadsDoesNotRetry(t *testing.T) {
+	var n atomic.Int32
+	f := postServer(t, func(k int, w http.ResponseWriter) {
+		n.Add(1)
+		w.WriteHeader(http.StatusBadGateway)
+	})
+	refs, errs, err := f.PostThreads(context.Background(), 7, diffRefs, []forge.NewThread{{Path: "a.go", Line: 1, Body: marked("one", "fp1")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs[0] == nil || refs[0] != (forge.ThreadRef{}) {
+		t.Errorf("ref=%+v err=%v", refs[0], errs[0])
+	}
+	if n.Load() != 1 {
+		t.Errorf("requests = %d, want 1", n.Load())
 	}
 }
 

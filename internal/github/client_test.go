@@ -1156,6 +1156,58 @@ func TestCompareFiles(t *testing.T) {
 	expect(t, rec.get(0), "GET", "/repos/acme/widgets/compare/aaa...bbb", "per_page=100")
 }
 
+func nFiles(n int) []map[string]any {
+	files := make([]map[string]any, n)
+	for i := range files {
+		files[i] = map[string]any{"filename": "f" + strconv.Itoa(i) + ".go", "status": "modified"}
+	}
+	return files
+}
+
+// GitHub lists at most 3000 files of a pull request: that many may be cut short.
+func TestPullFilesAtTheCapIsPartial(t *testing.T) {
+	c, _ := serve(t, jsonReply(nFiles(3000)))
+	if _, err := c.PullFiles(ctx, "acme", "widgets", 3); !errors.Is(err, ErrPartialDiff) {
+		t.Fatalf("err = %v, want ErrPartialDiff", err)
+	}
+	c, _ = serve(t, jsonReply(nFiles(2999)))
+	got, err := c.PullFiles(ctx, "acme", "widgets", 3)
+	if err != nil || len(got) != 2999 {
+		t.Fatalf("len=%d err=%v", len(got), err)
+	}
+}
+
+// The compare API lists at most 300 files.
+func TestCompareFilesAtTheCapIsPartial(t *testing.T) {
+	c, _ := serve(t, jsonReply(map[string]any{"files": nFiles(300)}))
+	if _, err := c.CompareFiles(ctx, "acme", "widgets", "aaa", "bbb"); !errors.Is(err, ErrPartialDiff) {
+		t.Fatalf("err = %v, want ErrPartialDiff", err)
+	}
+	c, _ = serve(t, jsonReply(map[string]any{"files": nFiles(299)}))
+	got, err := c.CompareFiles(ctx, "acme", "widgets", "aaa", "bbb")
+	if err != nil || len(got) != 299 {
+		t.Fatalf("len=%d err=%v", len(got), err)
+	}
+}
+
+// Later pages of a comparison list commits, not files: only page 1 is read.
+func TestCompareFilesReadsOnlyTheFirstPage(t *testing.T) {
+	var srvURL string
+	c, rec := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Link", `<`+srvURL+`/repositories/99/compare/aaa...bbb?per_page=100&page=2>; rel="next"`)
+		_, _ = io.WriteString(w, `{"files":[{"filename":"a.go","status":"modified"}],"commits":[]}`)
+	})
+	srvURL = c.base
+	got, err := c.CompareFiles(ctx, "acme", "widgets", "aaa", "bbb")
+	if err != nil || len(got) != 1 || got[0].Path != "a.go" {
+		t.Fatalf("got=%+v err=%v", got, err)
+	}
+	if n := len(rec.all()); n != 1 {
+		t.Fatalf("requests = %d, want 1", n)
+	}
+}
+
 func TestCreateReviewComments(t *testing.T) {
 	c, rec := serve(t, jsonReply(map[string]any{"id": 77}))
 	id, err := c.CreateReviewComments(ctx, "acme", "widgets", 3, "abc1234def", "Findings.", []ReviewComment{

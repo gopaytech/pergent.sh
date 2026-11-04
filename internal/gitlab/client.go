@@ -124,6 +124,17 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 // doMax is do with a reply limit: a reply of more than limit bytes is
 // ErrTooLarge, and no more than limit+1 bytes of it are read.
 func (c *Client) doMax(ctx context.Context, method, path string, query url.Values, body any, limit int) (*response, error) {
+	return c.doTry(ctx, method, path, query, body, limit, true)
+}
+
+// doOnce is do for a request that must not be sent twice (a POST that
+// creates something): a 429, a 5xx or a connection error is returned, not
+// retried, since the first attempt may have been applied.
+func (c *Client) doOnce(ctx context.Context, method, path string, query url.Values, body any) (*response, error) {
+	return c.doTry(ctx, method, path, query, body, maxResponse, false)
+}
+
+func (c *Client) doTry(ctx context.Context, method, path string, query url.Values, body any, limit int, retry bool) (*response, error) {
 	var payload []byte
 	if body != nil {
 		var err error
@@ -145,7 +156,7 @@ func (c *Client) doMax(ctx context.Context, method, path string, query url.Value
 		if err == nil {
 			return resp, nil
 		}
-		if ctx.Err() != nil || attempt >= maxRetries || !retryable(err) {
+		if !retry || ctx.Err() != nil || attempt >= maxRetries || !retryable(err) {
 			return nil, err
 		}
 		wait := delay
@@ -438,9 +449,16 @@ func (c *Client) GetMergeRequest(ctx context.Context, projectID, iid int64) (Mer
 }
 
 // MergeRequestDiffs returns the merge request's files at its head (GET
-// .../merge_requests/:iid/diffs, GitLab 15.7 and later). An older GitLab
-// answers 404 there, and the deprecated .../changes, which is not paginated,
-// is read instead. A merge request that doesn't exist is ErrNotFound.
+// .../merge_requests/:iid/diffs, GitLab 15.7 and later). A file GitLab
+// collapsed or found too large stays in the list with an empty Diff.
+//
+// GitLab stops listing files past its diff limits without saying so, so the
+// list is checked against the merge request's changes_count: a count that
+// ends in "+" (GitLab stopped counting) or differs from the number of files
+// is ErrPartialDiff. An older GitLab answers 404 for /diffs, and the
+// deprecated .../changes, which is not paginated, is read instead; its
+// overflow flag is ErrPartialDiff. A merge request that doesn't exist is
+// ErrNotFound.
 func (c *Client) MergeRequestDiffs(ctx context.Context, projectID, iid int64) ([]Diff, error) {
 	var out []Diff
 	err := c.paginate(ctx, mrPath(projectID, iid)+"/diffs", nil, func(body []byte) (bool, error) {
@@ -451,27 +469,62 @@ func (c *Client) MergeRequestDiffs(ctx context.Context, projectID, iid int64) ([
 		out = append(out, page...)
 		return false, nil
 	})
-	if !isStatus(err, http.StatusNotFound) {
+	if isStatus(err, http.StatusNotFound) {
+		var ch struct {
+			Changes  []Diff `json:"changes"`
+			Overflow bool   `json:"overflow"`
+		}
+		if _, err := c.getJSON(ctx, mrPath(projectID, iid)+"/changes", nil, &ch); err != nil {
+			return nil, err
+		}
+		if ch.Overflow {
+			return nil, fmt.Errorf("%w: GitLab cut the merge request's changes short (overflow)", ErrPartialDiff)
+		}
+		return ch.Changes, nil
+	}
+	if err != nil {
 		return out, err
 	}
-	var ch struct {
-		Changes []Diff `json:"changes"`
-	}
-	if _, err := c.getJSON(ctx, mrPath(projectID, iid)+"/changes", nil, &ch); err != nil {
+	mr, err := c.GetMergeRequest(ctx, projectID, iid)
+	if err != nil {
 		return nil, err
 	}
-	return ch.Changes, nil
+	if strings.HasSuffix(mr.ChangesCount, "+") {
+		return nil, fmt.Errorf("%w: the merge request changes %s files, more than GitLab lists", ErrPartialDiff, mr.ChangesCount)
+	}
+	// An empty count is GitLab not having counted yet: no files to match.
+	n := 0
+	if mr.ChangesCount != "" {
+		if n, err = strconv.Atoi(mr.ChangesCount); err != nil {
+			return nil, errors.New("gitlab: decoding response: bad changes_count")
+		}
+	}
+	if n != len(out) {
+		return nil, fmt.Errorf("%w: GitLab lists %d files but the merge request changes %d", ErrPartialDiff, len(out), n)
+	}
+	return out, nil
 }
 
 // Compare returns the files that differ between two commits, straight from
-// one to the other (GET .../repository/compare?straight=true).
+// one to the other (GET .../repository/compare?straight=true). A comparison
+// that timed out or hit a size limit (compare_timeout, a collapsed or too
+// large file) may not show every change: ErrPartialDiff.
 func (c *Client) Compare(ctx context.Context, projectID int64, from, to string) ([]Diff, error) {
 	var out struct {
-		Diffs []Diff `json:"diffs"`
+		Diffs          []Diff `json:"diffs"`
+		CompareTimeout bool   `json:"compare_timeout"`
 	}
 	q := url.Values{"from": {from}, "to": {to}, "straight": {"true"}}
 	if _, err := c.getJSON(ctx, projPath(projectID)+"/repository/compare", q, &out); err != nil {
 		return nil, err
+	}
+	if out.CompareTimeout {
+		return nil, fmt.Errorf("%w: the comparison timed out", ErrPartialDiff)
+	}
+	for _, d := range out.Diffs {
+		if d.Collapsed || d.TooLarge {
+			return nil, fmt.Errorf("%w: the comparison leaves out the diff of a file", ErrPartialDiff)
+		}
 	}
 	return out.Diffs, nil
 }
@@ -509,7 +562,9 @@ func (c *Client) CreateDiffDiscussion(ctx context.Context, projectID, iid int64,
 	if pos.OldLine > 0 {
 		position["old_line"] = pos.OldLine
 	}
-	resp, err := c.do(ctx, http.MethodPost, mrPath(projectID, iid)+"/discussions", nil,
+	// Sent once: a retried POST that GitLab had already applied would start a
+	// second thread.
+	resp, err := c.doOnce(ctx, http.MethodPost, mrPath(projectID, iid)+"/discussions", nil,
 		map[string]any{"body": body, "position": position})
 	if err != nil {
 		return "", 0, err

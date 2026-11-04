@@ -1123,9 +1123,22 @@ func (fs fileDiffs) appendTo(out []forge.FileDiff) []forge.FileDiff {
 	return out
 }
 
+const (
+	// maxPullFiles is GitHub's cap on the pull request files API: a pull
+	// request with that many files may have more that the API doesn't list.
+	maxPullFiles = 3000
+	// maxCompareFiles is the compare API's cap on the files it lists.
+	maxCompareFiles = 300
+)
+
+// ErrPartialDiff is returned when the platform's diff may not list every
+// changed file: treating it as the whole diff would drop files silently.
+var ErrPartialDiff = errors.New("github: the diff may be incomplete")
+
 // PullFiles lists the files of a pull request's diff at its head
 // (GET /repos/{owner}/{repo}/pulls/{number}/files). Patch is empty for a
-// binary file or one GitHub left out as too large.
+// binary file or one GitHub left out as too large. A pull request with 3000
+// files or more, GitHub's cap, may be cut short: that is ErrPartialDiff.
 func (c *Client) PullFiles(ctx context.Context, owner, repo string, number int64) ([]forge.FileDiff, error) {
 	p, err := repoPath(owner, repo, "/pulls", id(number), "/files")
 	if err != nil {
@@ -1143,11 +1156,16 @@ func (c *Client) PullFiles(ctx context.Context, owner, repo string, number int64
 	if err != nil {
 		return nil, err
 	}
+	if len(out) >= maxPullFiles {
+		return nil, fmt.Errorf("%w: the pull request has %d or more files, the most GitHub lists", ErrPartialDiff, maxPullFiles)
+	}
 	return out, nil
 }
 
 // CompareFiles lists the files that differ between two commits
-// (GET /repos/{owner}/{repo}/compare/{from}...{to}).
+// (GET /repos/{owner}/{repo}/compare/{from}...{to}). The files are all on the
+// first page (later pages list commits), and GitHub lists at most 300 of
+// them: a comparison with that many is ErrPartialDiff.
 func (c *Client) CompareFiles(ctx context.Context, owner, repo, from, to string) ([]forge.FileDiff, error) {
 	f, err := segment(from)
 	if err != nil {
@@ -1161,21 +1179,16 @@ func (c *Client) CompareFiles(ctx context.Context, owner, repo, from, to string)
 	if err != nil {
 		return nil, err
 	}
-	var out []forge.FileDiff
-	err = c.paginate(ctx, p, func(body []byte) error {
-		var page struct {
-			Files fileDiffs `json:"files"`
-		}
-		if err := decode(body, &page); err != nil {
-			return err
-		}
-		out = page.Files.appendTo(out)
-		return nil
-	})
-	if err != nil {
+	var page struct {
+		Files fileDiffs `json:"files"`
+	}
+	if err := c.getJSON(ctx, p, url.Values{"per_page": {perPage}}, &page); err != nil {
 		return nil, err
 	}
-	return out, nil
+	if len(page.Files) >= maxCompareFiles {
+		return nil, fmt.Errorf("%w: the comparison lists %d or more files, the most GitHub returns", ErrPartialDiff, maxCompareFiles)
+	}
+	return page.Files.appendTo(nil), nil
 }
 
 // reviewCommentJSON is one entry of a review's "comments". GitHub's line is
