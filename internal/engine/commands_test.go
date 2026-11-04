@@ -593,6 +593,22 @@ func TestUnknownIDAndHelp(t *testing.T) {
 	f.wantReplies(1, "no finding ffffff in the latest review", help, help, "you don't have permission to do that here")
 }
 
+// With the gate off, help reads no access: a platform that can't say who is a
+// member doesn't keep it from being answered.
+func TestHelpNeedsNoAccessWithTheGateOff(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillOf(t, "security", "no_blocking_issues"))
+	f.GitLab.Handle(http.MethodGet, membersPath(userDeveloper), func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	c := f.say(1, "dev", "help", "", "", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, up)
+	f.wantReplies(1, help)
+}
+
 // An ambiguous fingerprint prefix is no finding.
 func TestDismissAmbiguousPrefix(t *testing.T) {
 	f := newCommandFixture(t)

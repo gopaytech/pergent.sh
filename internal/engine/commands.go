@@ -459,8 +459,12 @@ func (e *Engine) handleCommand(ctx, bctx context.Context, cmd store.Command, log
 		return dropped("the change is not open"), nil
 	}
 	c := &commandRun{e: e, cmd: cmd, plat: plat, repo: repo, change: change, log: log}
-	if c.access, err = c.readAccess(ctx); err != nil {
-		return verdict{}, err
+	// help, and a command the bot doesn't know, need no access unless the
+	// gate is on, so a platform that can't say doesn't hold up their answer.
+	if repo.CommandsAuthorAndMaintainersOnly || cmd.Kind == "review" || cmd.Kind == "review_failed" || cmd.Kind == "dismiss" {
+		if c.access, err = c.readAccess(ctx); err != nil {
+			return verdict{}, err
+		}
 	}
 
 	v, err := c.carryOut(ctx)
