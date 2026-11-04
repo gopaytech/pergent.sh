@@ -151,6 +151,7 @@ export const runDetail: RunDetailView = {
   latestDecided: true,
   pergentVersion: "v0.1.0",
   model: "claude-sonnet",
+  maxTurns: 40,
   tokens: { in: 48200, out: 6100 },
   files: {
     reviewed: ["internal/refund/handler.go", "internal/refund/key.go"],
@@ -232,6 +233,7 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
     skills: { value: null, overridden: false },
     repoSkills: { value: [], overridden: false },
     jobTimeoutSeconds: { value: 600, overridden: false },
+    maxTurns: { value: 40, overridden: false },
     jobMemory: { value: "6Gi", overridden: true },
     rerunLimitPerMR: { value: 10, overridden: false },
     rerunLimitPerRepo: { value: 50, overridden: false },
@@ -346,6 +348,7 @@ export const defaults: DefaultsView = {
   reviewDrafts: true,
   failureStatus: "neutral",
   jobTimeoutSeconds: 600,
+  maxTurns: 40,
   jobMemory: "",
   rerunLimitPerMR: 10,
   rerunLimitPerRepo: 50,

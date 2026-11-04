@@ -355,6 +355,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		Timeout:        repo.JobTimeout,
 		CloneAllowance: allowance,
 		Concurrency:    e.Config.Jobs.Concurrency,
+		MaxTurns:       repo.MaxTurns,
 		RepoURL:        project.HTTPURLToRepo,
 		ChangeRef:      plat.Forge.ChangeRef(run.MR.IID),
 		TargetBranch:   mr.TargetBranch,
@@ -414,8 +415,8 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			versions[name] = v
 		}
 	}
-	if err := e.Store.SetRunInputs(ctx, run.ID, llm.Model, sources, versions); err != nil {
-		d.log.Info("couldn't record the review's model and skills for the dashboard", "error", d.redact(err.Error()))
+	if err := e.Store.SetRunInputs(ctx, run.ID, llm.Model, repo.MaxTurns, sources, versions); err != nil {
+		d.log.Info("couldn't record the review's model, step limit and skills for the dashboard", "error", d.redact(err.Error()))
 	}
 
 	if err := plat.Forge.SetStatus(ctx, run.MR.ProjectID, run.HeadSHA, forge.StatusRunning, runningDescription); err != nil {

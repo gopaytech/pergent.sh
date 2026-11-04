@@ -201,10 +201,13 @@ type RunDetailView struct {
 	PergentVersion string `json:"pergentVersion"`
 	// Model is the model the review ran with, as recorded when it started;
 	// null for a run that didn't record it.
-	Model  *string     `json:"model"`
-	Tokens TokensView  `json:"tokens"`
-	Files  FilesView   `json:"files"`
-	Skills []SkillView `json:"skills"`
+	Model *string `json:"model"`
+	// MaxTurns is the step limit each opencode run of the review had, as
+	// recorded when it started; null for a run that didn't record it.
+	MaxTurns *int        `json:"maxTurns"`
+	Tokens   TokensView  `json:"tokens"`
+	Files    FilesView   `json:"files"`
+	Skills   []SkillView `json:"skills"`
 	// LatestDecided is true for the one run of the change that dismiss and
 	// restore act on: its newest published review, or reported one with an
 	// outcome. Only that run shows dismissals; false when the change has no
@@ -327,7 +330,7 @@ type Last7View struct {
 // Settings is keyed approve, reviewDrafts, failureStatus, skills (null: the
 // default list of skills; otherwise the library skills reviewed), repoSkills
 // (the detected repository skills turned on, a list, empty when none),
-// jobTimeoutSeconds, jobMemory ("" when none), rerunLimitPerMR and
+// jobTimeoutSeconds, maxTurns, jobMemory ("" when none), rerunLimitPerMR and
 // rerunLimitPerRepo.
 type RepositoryDetailView struct {
 	Repo      RepositoryView         `json:"repo"`
@@ -639,6 +642,8 @@ type DefaultsView struct {
 	ReviewDrafts      bool   `json:"reviewDrafts"`
 	FailureStatus     string `json:"failureStatus"`
 	JobTimeoutSeconds int64  `json:"jobTimeoutSeconds"`
+	// MaxTurns is the step limit of each opencode run.
+	MaxTurns int `json:"maxTurns"`
 	// JobMemory is the Job's memory limit, "" when none.
 	JobMemory string `json:"jobMemory"`
 	// RerunLimitPerMR and RerunLimitPerRepo cap the re-runs per merge
@@ -698,9 +703,10 @@ type LLMView struct {
 //     "x" is not in the skill library`, and so is a list whose texts come to
 //     more than 900 KiB), repoSkills (the names of detected repository
 //     skills to turn on; a list, empty or null for none),
-//     jobTimeoutSeconds (a whole number, 60 to 7200) and jobMemory (a
-//     Kubernetes quantity such as "6Gi", from 256Mi, and no less than
-//     jobs.resources.requests.memory, to 32Gi), and rerunLimitPerMR and
+//     jobTimeoutSeconds (a whole number, 60 to 7200), maxTurns (a whole
+//     number, 5 to 200) and jobMemory (a Kubernetes quantity such as
+//     "6Gi", from 256Mi, and no less than jobs.resources.requests.memory,
+//     to 32Gi), and rerunLimitPerMR and
 //     rerunLimitPerRepo (a whole number, 1 to 1000; only an admin of
 //     the repository changes these, else 403, and a maintainer's reset
 //     leaves them). Any other key, or a value

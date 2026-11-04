@@ -664,6 +664,81 @@ func TestLoadRejectsBadRepositorySettings(t *testing.T) {
 	}
 }
 
+// maxTurnsYAML sets jobs.max_turns and the first repository's max_turns in
+// valid.yaml; an empty value leaves the key out.
+func maxTurnsYAML(t *testing.T, jobs, repo string) string {
+	t.Helper()
+	base, err := os.ReadFile("testdata/valid.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(base)
+	if jobs != "" {
+		body = strings.Replace(body, "  namespace: pergent\n", "  namespace: pergent\n  max_turns: "+jobs+"\n", 1)
+	}
+	if repo != "" {
+		body = strings.Replace(body, "    project: acme/widgets\n", "    project: acme/widgets\n    max_turns: "+repo+"\n", 1)
+	}
+	return body
+}
+
+func TestMaxTurnsDefault(t *testing.T) {
+	cfg := loadValid(t)
+	if cfg.Jobs.MaxTurns != 40 || DefaultMaxTurns != 40 {
+		t.Errorf("Jobs.MaxTurns = %d, DefaultMaxTurns = %d, want 40", cfg.Jobs.MaxTurns, DefaultMaxTurns)
+	}
+	for _, repo := range cfg.Repositories {
+		if repo.MaxTurns != nil {
+			t.Errorf("repository %s: MaxTurns = %d, want unset", repo.Project, *repo.MaxTurns)
+		}
+	}
+}
+
+func TestMaxTurnsSet(t *testing.T) {
+	cfg, err := Load(writeConfig(t, maxTurnsYAML(t, "60", "120")))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Jobs.MaxTurns != 60 {
+		t.Errorf("Jobs.MaxTurns = %d, want 60", cfg.Jobs.MaxTurns)
+	}
+	if got := cfg.Repositories[0].MaxTurns; got == nil || *got != 120 {
+		t.Errorf("Repositories[0].MaxTurns = %v, want 120", got)
+	}
+}
+
+func TestMaxTurnsOutOfRange(t *testing.T) {
+	tests := []struct {
+		name, jobs, repo, wantErr string
+	}{
+		{"jobs below", "4", "", "jobs.max_turns must be from 5 to 200, got 4"},
+		{"jobs above", "201", "", "jobs.max_turns must be from 5 to 200, got 201"},
+		{"jobs zero", "0", "", "jobs.max_turns must be from 5 to 200, got 0"},
+		{"repository below", "", "4", "repositories[0] (acme/widgets): max_turns must be from 5 to 200, got 4"},
+		{"repository zero", "", "0", "repositories[0] (acme/widgets): max_turns must be from 5 to 200, got 0"},
+		{"repository above", "", "201", "repositories[0] (acme/widgets): max_turns must be from 5 to 200, got 201"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Load(writeConfig(t, maxTurnsYAML(t, tt.jobs, tt.repo)))
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Load() = %v, want error containing %q", err, tt.wantErr)
+			}
+		})
+	}
+
+	for _, n := range []int{MinMaxTurns, MaxMaxTurns} {
+		cfg, err := Load(writeConfig(t, maxTurnsYAML(t, strconv.Itoa(n), strconv.Itoa(n))))
+		if err != nil {
+			t.Errorf("max_turns %d: %v", n, err)
+			continue
+		}
+		if cfg.Jobs.MaxTurns != n || cfg.Repositories[0].MaxTurns == nil || *cfg.Repositories[0].MaxTurns != n {
+			t.Errorf("max_turns %d: Jobs.MaxTurns = %d, repository = %v", n, cfg.Jobs.MaxTurns, cfg.Repositories[0].MaxTurns)
+		}
+	}
+}
+
 // dashboardYAML adds a dashboard to github.yaml, and OAuth env names to
 // main and gh.
 func dashboardYAML(t *testing.T) string {

@@ -601,7 +601,7 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 			{GitLab: "main", Project: "acme/payments"},
 			{GitHub: "gh", Project: "acme/widgets"},
 		},
-		Jobs:      config.Jobs{Timeout: 10 * time.Minute},
+		Jobs:      config.Jobs{Timeout: 10 * time.Minute, MaxTurns: config.DefaultMaxTurns},
 		Dashboard: config.Dashboard{URL: dashboardURL},
 	}
 	if mutate != nil {

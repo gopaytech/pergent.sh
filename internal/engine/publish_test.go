@@ -620,6 +620,116 @@ func TestPublishRepositoryGoneUsesFailed(t *testing.T) {
 	wantPublished(t, env, id)
 }
 
+// stepLimited is a failed skill that ended on pergent's step limit, with the
+// phrase pergent adds in its failure and in a note.
+func stepLimited(name string) result.Skill {
+	s := result.Skill{Name: name, Verdict: "failed", Files: result.Files{Reviewed: []string{name + ".go"}}}
+	s.Failures = []result.Failure{{Files: []string{name + ".go"}, Message: "Reached the 40-step limit " + result.StepLimitAdvice}}
+	s.Notes = []string{"Verification failed: Reached the 40-step limit " + result.StepLimitAdvice + "."}
+	return s
+}
+
+// wantAdvice checks text holds advice in place of pergent's phrase.
+func wantAdvice(t *testing.T, what, text, advice string) {
+	t.Helper()
+	if !strings.Contains(text, advice) || strings.Contains(text, result.StepLimitAdvice) {
+		t.Errorf("%s does not hold %q in place of pergent's phrase:\n%s", what, advice, text)
+	}
+}
+
+// The step-limit advice in a published result names where the limit is set
+// for the repository: its settings in the dashboard, or pergent.sh's config.
+// A repository switched off since the run was queued can only be switched on
+// again in the dashboard.
+func TestPublishReplacesStepLimitAdvice(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		setup  func(t *testing.T, env *testEnv)
+		advice string
+	}{
+		{"config repository", func(*testing.T, *testEnv) {}, result.AdviceConfig},
+		{"dashboard repository", func(t *testing.T, env *testEnv) {
+			env.Engine.Config.Repositories = nil
+			dashboardRepo(t, env, store.DashboardRepo{Instance: testInstance, Project: testProjectPath, CreatedBy: "alice"})
+		}, result.AdviceDashboard},
+		{"repository switched off", func(_ *testing.T, env *testEnv) {
+			env.Engine.Config.Repositories = nil
+		}, result.AdviceDashboard},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnv(t)
+			head := sha('a')
+			id := env.Report(1, head, resultFor(t, head, stepLimited("security")))
+			servePublish(env, 1, head)
+			tc.setup(t, env)
+
+			publish(t, env)
+
+			wantPublished(t, env, id)
+			wantAdvice(t, "the comment", createdComment(t, env, 1), tc.advice)
+			wantAdvice(t, "the stored result", string(env.Run(id).Result), tc.advice)
+			if _, err := result.Parse(env.Run(id).Result); err != nil {
+				t.Errorf("stored result does not parse: %v", err)
+			}
+		})
+	}
+}
+
+// A re-run of some skills is published with the advice replaced in the skills
+// kept from before too: their results may predate the upgrade.
+func TestPublishReplacesStepLimitAdviceInKeptSkills(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	base := env.Publish(1, head, resultFor(t, head, stepLimited("security"), stepLimited("style")))
+	id := rerunOf(t, env, head, store.TriggerRerunFailed, []string{"style"}, base)
+
+	reportRerun(t, env, id, head, resultFor(t, head, stepLimited("style")))
+
+	body := createdComment(t, env, 1)
+	wantAdvice(t, "the comment", body, result.AdviceConfig)
+	stored := env.Run(id).Result
+	wantAdvice(t, "the stored result", string(stored), result.AdviceConfig)
+	r, err := result.Parse(stored)
+	if err != nil || !r.Merged || len(r.Skills) != 2 {
+		t.Fatalf("stored result = %+v, %v; want security and style, merged", r, err)
+	}
+	for _, s := range r.Skills {
+		if len(s.Notes) != 1 || !strings.Contains(s.Notes[0], result.AdviceConfig) {
+			t.Errorf("notes of %s = %q, want the config advice", s.Name, s.Notes)
+		}
+	}
+	// The earlier run's own result is not rewritten.
+	if got := env.Run(base).Result; !strings.Contains(string(got), result.StepLimitAdvice) {
+		t.Errorf("the base run's result was changed: %s", got)
+	}
+}
+
+// A result without the phrase is stored and published as it came.
+func TestPublishLeavesResultWithoutStepLimitAdvice(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	res := resultFor(t, head, reviewed("no_blocking_issues", "api/handler.go"))
+	id := env.Report(1, head, res)
+	servePublish(env, 1, head)
+
+	publish(t, env)
+
+	wantPublished(t, env, id)
+	if got := env.Run(id).Result; !json.Valid(got) || canonicalJSON(t, got) != canonicalJSON(t, res) {
+		t.Errorf("stored result = %s, want %s", got, res)
+	}
+}
+
+func canonicalJSON(t *testing.T, data []byte) string {
+	t.Helper()
+	var v any
+	if err := json.Unmarshal(data, &v); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
 func TestPublishRetriesOnGitLabError(t *testing.T) {
 	env := newTestEnv(t)
 	head := sha('a')

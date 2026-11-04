@@ -576,7 +576,7 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 	}
 	view := RunDetailView{
 		Run: runSummary(digests[idx], prev, j), Instance: run.MR.Instance, Project: run.ProjectPath, Number: run.MR.IID,
-		Status: j.status, Approved: run.Approved, ApprovalReason: j.reason, Model: run.Model,
+		Status: j.status, Approved: run.Approved, ApprovalReason: j.reason, Model: run.Model, MaxTurns: run.MaxTurns,
 		Files:  FilesView{Reviewed: []string{}, Skipped: []SkippedFile{}, NotReviewed: []NotReviewedFile{}},
 		Skills: []SkillView{},
 	}
@@ -858,6 +858,7 @@ func settingViews(repo settings.Effective) map[string]SettingView {
 		"skills":            {repo.Skills, ov[settings.KeySkills]},
 		"repoSkills":        {nonNil(repo.RepoSkills), ov[settings.KeyRepoSkills]},
 		"jobTimeoutSeconds": {int64(repo.JobTimeout / time.Second), ov[settings.KeyJobTimeout]},
+		"maxTurns":          {repo.MaxTurns, ov[settings.KeyMaxTurns]},
 		"jobMemory":         {quantityText(repo.JobMemory), ov[settings.KeyJobMemory]},
 		"rerunLimitPerMR":   {repo.RerunLimitPerMR, ov[settings.KeyRerunLimitPerMR]},
 		"rerunLimitPerRepo": {repo.RerunLimitPerRepo, ov[settings.KeyRerunLimitPerRepo]},

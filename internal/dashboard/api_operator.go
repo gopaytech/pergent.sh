@@ -57,7 +57,7 @@ const (
 	msgBadBaseURL     = "baseURL must be empty or an absolute http or https URL"
 	msgKeyRequired    = "apiKey is required: none is stored"
 	msgConfigLLM      = "the LLM is set in the config file; change it there"
-	msgBadDefaults    = "the body must be a JSON object of defaults: approve, reviewDrafts, failureStatus, jobTimeoutSeconds, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"
+	msgBadDefaults    = "the body must be a JSON object of defaults: approve, reviewDrafts, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"
 	instanceNameLimit = 63
 )
 
@@ -819,7 +819,7 @@ func (d *Dashboard) defaultsView(ctx context.Context) (DefaultsView, error) {
 		return DefaultsView{}, err
 	}
 	return DefaultsView{Approve: def.Approve, ReviewDrafts: def.ReviewDrafts, FailureStatus: string(def.FailureStatus),
-		JobTimeoutSeconds: int64(def.JobTimeout / time.Second), JobMemory: quantityText(def.JobMemory),
+		JobTimeoutSeconds: int64(def.JobTimeout / time.Second), MaxTurns: def.MaxTurns, JobMemory: quantityText(def.JobMemory),
 		RerunLimitPerMR: def.RerunLimitPerMR, RerunLimitPerRepo: def.RerunLimitPerRepo,
 		Skills: nonNil(stored.Skills)}, nil
 }
@@ -907,6 +907,8 @@ func (d *Dashboard) parseDefaults(r *http.Request, kept []string) (next store.Re
 			edit, msg = defaultSkillsSetting(raw, null)
 		case "jobTimeoutSeconds":
 			edit, msg = timeoutSetting(raw, null)
+		case "maxTurns":
+			edit, msg = maxTurnsSetting(raw, null)
 		case "jobMemory":
 			edit, msg = d.memorySetting(raw, null)
 		case "rerunLimitPerMR", "rerunLimitPerRepo":
@@ -920,7 +922,7 @@ func (d *Dashboard) parseDefaults(r *http.Request, kept []string) (next store.Re
 		edit(&row)
 	}
 	return store.RepoDefaults{Approve: row.Approve, ReviewDrafts: row.ReviewDrafts, FailureStatus: row.FailureStatus,
-		JobTimeoutSeconds: row.JobTimeoutSeconds, JobMemory: row.JobMemory,
+		JobTimeoutSeconds: row.JobTimeoutSeconds, MaxTurns: row.MaxTurns, JobMemory: row.JobMemory,
 		RerunLimitPerMR: row.RerunLimitPerMR, RerunLimitPerRepo: row.RerunLimitPerRepo, Skills: row.Skills}, skillsGiven, ""
 }
 
@@ -956,6 +958,9 @@ func changedDefaults(a, b store.RepoDefaults) []string {
 	}
 	if !samePtr(a.JobTimeoutSeconds, b.JobTimeoutSeconds) {
 		out = append(out, "jobTimeoutSeconds")
+	}
+	if !samePtr(a.MaxTurns, b.MaxTurns) {
+		out = append(out, "maxTurns")
 	}
 	if !samePtr(a.JobMemory, b.JobMemory) {
 		out = append(out, "jobMemory")

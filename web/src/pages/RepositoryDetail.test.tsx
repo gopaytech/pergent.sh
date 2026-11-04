@@ -91,6 +91,7 @@ describe("RepositoryDetail", () => {
       screen.getByRole("switch", { name: "Review drafts" }),
       screen.getByRole("combobox", { name: "Status when a review fails" }),
       screen.getByRole("spinbutton", { name: "Timeout (seconds)" }),
+      screen.getByRole("textbox", { name: "Max steps" }),
       screen.getByRole("textbox", { name: "Memory limit" }),
       screen.getByRole("switch", { name: "Skill code-review" }),
       screen.getByRole("radio", { name: "Choose skills" }),
@@ -129,6 +130,51 @@ describe("RepositoryDetail", () => {
     expect(await screen.findByText("Saved.")).toBeInTheDocument();
     const timeoutRow = screen.getByRole("spinbutton", { name: "Timeout (seconds)" }).closest(".set") as HTMLElement;
     expect(within(timeoutRow).getByText("overridden here")).toBeInTheDocument();
+  });
+
+  it("shows Max steps with its help text and whether it is overridden", async () => {
+    fakeApi(base);
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const steps = await screen.findByRole("textbox", { name: "Max steps" });
+    expect(steps).toHaveValue("40");
+    const row = steps.closest(".set") as HTMLElement;
+    expect(within(row).getByText("default")).toHaveClass("badge", "cfg");
+    expect(
+      within(row).getByText("Steps each opencode run may take before pergent stops it; each step can call several tools."),
+    ).toBeInTheDocument();
+  });
+
+  it("saves a changed Max steps and shows it overridden", async () => {
+    const saved = { ...payments, settings: { ...payments.settings, maxTurns: { value: 120, overridden: true } } };
+    const fake = fakeApi({ ...base, "PUT /api/repositories/main/acme/payments/settings": { body: saved } });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const steps = await screen.findByRole("textbox", { name: "Max steps" });
+    await userEvent.clear(steps);
+    await userEvent.type(steps, "120");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({ maxTurns: 120 });
+    expect(await screen.findByText("Saved.")).toBeInTheDocument();
+    const row = screen.getByRole("textbox", { name: "Max steps" }).closest(".set") as HTMLElement;
+    expect(within(row).getByText("overridden here")).toBeInTheDocument();
+  });
+
+  it("sends an emptied Max steps as null, the default", async () => {
+    const fake = fakeApi({ ...base, "PUT /api/repositories/main/acme/payments/settings": { body: payments } });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    await userEvent.clear(await screen.findByRole("textbox", { name: "Max steps" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({ maxTurns: null });
+  });
+
+  it.each(["4", "201", "abc", "40.5"])("refuses Max steps %s without asking the server", async (text) => {
+    const fake = fakeApi(base);
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const steps = await screen.findByRole("textbox", { name: "Max steps" });
+    await userEvent.clear(steps);
+    await userEvent.type(steps, text);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Max steps is a whole number from 5 to 200.")).toBeInTheDocument();
+    expect(fake.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
   });
 
   it("shows the re-run caps, editable by an admin of the repository", async () => {

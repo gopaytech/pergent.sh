@@ -379,7 +379,7 @@ func testConfig(gitlabURL string) *config.Config {
 		LLM: config.LLM{Provider: "anthropic", Model: "claude-sonnet-4", APIKeyEnv: "OPENCODE_API_KEY"},
 		Jobs: config.Jobs{
 			Namespace: testNamespace, Image: testImage, MaxRunning: 5,
-			Timeout: 10 * time.Minute, Concurrency: 4,
+			Timeout: 10 * time.Minute, MaxTurns: config.DefaultMaxTurns, Concurrency: 4,
 		},
 	}
 }

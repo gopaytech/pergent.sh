@@ -57,7 +57,8 @@ func testConfig() *config.Config {
 		GitHub:       []config.GitHubInstance{{Name: "gh"}},
 		Repositories: []config.Repository{{GitLab: "main", Project: "acme/widgets", FailureStatus: config.FailureStatusFailed}},
 		Jobs: config.Jobs{
-			Timeout: 10 * time.Minute,
+			Timeout:  10 * time.Minute,
+			MaxTurns: 40,
 			Resources: corev1.ResourceRequirements{
 				Limits: corev1.ResourceList{
 					corev1.ResourceCPU:    resource.MustParse("2"),
@@ -86,7 +87,7 @@ func get(t *testing.T, r *Resolver, instance, project string) Effective {
 	return eff
 }
 
-var allKeys = []string{KeyApprove, KeyReviewDrafts, KeyFailureStatus, KeySkills, KeyJobTimeout, KeyJobMemory,
+var allKeys = []string{KeyApprove, KeyReviewDrafts, KeyFailureStatus, KeySkills, KeyJobTimeout, KeyMaxTurns, KeyJobMemory,
 	KeyRerunLimitPerMR, KeyRerunLimitPerRepo, KeyRepoSkills}
 
 // wantOverridden checks exactly the given keys are overridden.
@@ -121,6 +122,9 @@ func wantDefaults(t *testing.T, eff Effective, except ...string) {
 	if !skip(KeyJobTimeout) && eff.JobTimeout != 10*time.Minute {
 		t.Errorf("JobTimeout = %v, want jobs.timeout 10m", eff.JobTimeout)
 	}
+	if !skip(KeyMaxTurns) && eff.MaxTurns != 40 {
+		t.Errorf("MaxTurns = %d, want jobs.max_turns 40", eff.MaxTurns)
+	}
 	if !skip(KeyJobMemory) && eff.JobMemory.Cmp(resource.MustParse("4Gi")) != 0 {
 		t.Errorf("JobMemory = %s, want jobs.resources.limits.memory 4Gi", eff.JobMemory.String())
 	}
@@ -141,6 +145,7 @@ func TestResolverConfigKeys(t *testing.T) {
 		Skills:          []string{"security"},
 		RepoSkills:      []string{"team"},
 		JobTimeout:      ptr(20 * time.Minute),
+		MaxTurns:        ptr(120),
 		JobMemory:       ptr(resource.MustParse("6Gi")),
 		RerunLimitPerMR: ptr(20), RerunLimitPerRepo: ptr(100),
 	})
@@ -152,7 +157,7 @@ func TestResolverConfigKeys(t *testing.T) {
 	}
 	if eff.Approve || eff.ReviewDrafts || eff.FailureStatus != config.FailureStatusNeutral ||
 		!slices.Equal(eff.Skills, []string{"security"}) || !slices.Equal(eff.RepoSkills, []string{"team"}) ||
-		eff.JobTimeout != 20*time.Minute || eff.JobMemory.Cmp(resource.MustParse("6Gi")) != 0 || eff.RerunLimitPerMR != 20 || eff.RerunLimitPerRepo != 100 {
+		eff.JobTimeout != 20*time.Minute || eff.MaxTurns != 120 || eff.JobMemory.Cmp(resource.MustParse("6Gi")) != 0 || eff.RerunLimitPerMR != 20 || eff.RerunLimitPerRepo != 100 {
 		t.Errorf("config keys not reflected: %+v", eff)
 	}
 	wantOverridden(t, eff, allKeys...)
@@ -213,7 +218,7 @@ func TestResolverDefaultsAndOverrides(t *testing.T) {
 	upsert(t, st, store.DashboardRepo{
 		Instance: "gh", Project: "Acme/Gadgets",
 		Approve: ptr(true), ReviewDrafts: ptr(false), FailureStatus: ptr("neutral"),
-		Skills: []string{"security"}, RepoSkills: []string{"team"}, JobTimeoutSeconds: ptr(1200), JobMemory: ptr("6Gi"),
+		Skills: []string{"security"}, RepoSkills: []string{"team"}, JobTimeoutSeconds: ptr(1200), MaxTurns: ptr(120), JobMemory: ptr("6Gi"),
 		RerunLimitPerMR: ptr(20), RerunLimitPerRepo: ptr(100),
 	})
 	// A row of an instance no longer configured is not a repository.
@@ -237,7 +242,7 @@ func TestResolverDefaultsAndOverrides(t *testing.T) {
 	}
 	if !full.Approve || full.ReviewDrafts || full.FailureStatus != config.FailureStatusNeutral ||
 		!slices.Equal(full.Skills, []string{"security"}) || !slices.Equal(full.RepoSkills, []string{"team"}) ||
-		full.JobTimeout != 20*time.Minute || full.JobMemory.Cmp(resource.MustParse("6Gi")) != 0 || full.RerunLimitPerMR != 20 || full.RerunLimitPerRepo != 100 {
+		full.JobTimeout != 20*time.Minute || full.MaxTurns != 120 || full.JobMemory.Cmp(resource.MustParse("6Gi")) != 0 || full.RerunLimitPerMR != 20 || full.RerunLimitPerRepo != 100 {
 		t.Errorf("overrides not applied: %+v", full)
 	}
 	wantOverridden(t, full, allKeys...)
@@ -392,4 +397,90 @@ func TestResolverIgnoresUnusableCaps(t *testing.T) {
 	}
 	wantDefaults(t, eff)
 	wantOverridden(t, eff)
+}
+
+// max_turns: the config's jobs.max_turns unless the repository sets it, and
+// for a dashboard repository the stored default in between.
+func TestResolverMaxTurns(t *testing.T) {
+	cfg := testConfig()
+	cfg.Repositories = append(cfg.Repositories, config.Repository{GitHub: "gh", Project: "acme/set", MaxTurns: ptr(120)})
+	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)}
+
+	// A config repository: jobs.max_turns, or its own.
+	plain := get(t, r, "main", "acme/widgets")
+	if plain.MaxTurns != 40 || plain.Overridden[KeyMaxTurns] {
+		t.Errorf("config repository without max_turns = %d, overridden %v; want 40, false", plain.MaxTurns, plain.Overridden[KeyMaxTurns])
+	}
+	set := get(t, r, "gh", "acme/set")
+	if set.MaxTurns != 120 || !set.Overridden[KeyMaxTurns] {
+		t.Errorf("config repository with max_turns 120 = %d, overridden %v; want 120, true", set.MaxTurns, set.Overridden[KeyMaxTurns])
+	}
+
+	// A dashboard repository: the row, over the stored default, over jobs.max_turns.
+	row := store.DashboardRepo{Instance: "main", Project: "acme/x"}
+	eff, ok := r.fromDashboard(row, store.RepoDefaults{})
+	if !ok || eff.MaxTurns != 40 || eff.Overridden[KeyMaxTurns] {
+		t.Errorf("no row value, no default = %d, overridden %v; want 40, false", eff.MaxTurns, eff.Overridden[KeyMaxTurns])
+	}
+	eff, _ = r.fromDashboard(row, store.RepoDefaults{MaxTurns: ptr(80)})
+	if eff.MaxTurns != 80 || eff.Overridden[KeyMaxTurns] {
+		t.Errorf("stored default 80 = %d, overridden %v; want 80, false", eff.MaxTurns, eff.Overridden[KeyMaxTurns])
+	}
+	row.MaxTurns = ptr(120)
+	eff, _ = r.fromDashboard(row, store.RepoDefaults{MaxTurns: ptr(80)})
+	if eff.MaxTurns != 120 || !eff.Overridden[KeyMaxTurns] {
+		t.Errorf("row 120 over default 80 = %d, overridden %v; want 120, true", eff.MaxTurns, eff.Overridden[KeyMaxTurns])
+	}
+	for _, n := range []int{5, 200} {
+		row.MaxTurns = ptr(n)
+		if eff, _ = r.fromDashboard(row, store.RepoDefaults{}); eff.MaxTurns != n || !eff.Overridden[KeyMaxTurns] {
+			t.Errorf("row %d = %d, overridden %v; want it used", n, eff.MaxTurns, eff.Overridden[KeyMaxTurns])
+		}
+	}
+	if def := r.defaultsFor(SourceDashboard, config.PlatformGitLab, "main", "", store.RepoDefaults{MaxTurns: ptr(200)}); def.MaxTurns != 200 {
+		t.Errorf("stored default 200 = %d; want 200", def.MaxTurns)
+	}
+}
+
+// A stored step limit outside 5 to 200 (the database refuses it, but a
+// value written by hand is possible) is ignored, in a repository and in the
+// defaults: a bad setting never stops reviews.
+func TestResolverIgnoresUnusableMaxTurns(t *testing.T) {
+	cfg := testConfig()
+	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)}
+	for _, n := range []int{4, 201, 0, -1} {
+		eff := r.defaultsFor(SourceDashboard, config.PlatformGitLab, "main", "acme/x", store.RepoDefaults{MaxTurns: ptr(n)})
+		wantDefaults(t, eff)
+		eff, ok := r.fromDashboard(store.DashboardRepo{Instance: "main", Project: "acme/x", MaxTurns: ptr(n)}, store.RepoDefaults{})
+		if !ok {
+			t.Fatal("fromDashboard: instance not found")
+		}
+		wantDefaults(t, eff)
+		wantOverridden(t, eff)
+
+		// A bad row value falls back to a usable stored default, not past it.
+		eff, _ = r.fromDashboard(store.DashboardRepo{Instance: "main", Project: "acme/x", MaxTurns: ptr(n)}, store.RepoDefaults{MaxTurns: ptr(80)})
+		if eff.MaxTurns != 80 || eff.Overridden[KeyMaxTurns] {
+			t.Errorf("bad row %d over default 80 = %d, overridden %v; want 80, false", n, eff.MaxTurns, eff.Overridden[KeyMaxTurns])
+		}
+	}
+}
+
+// A config repository ignores the step limit stored as the dashboard's default.
+func TestResolverConfigIgnoresStoredMaxTurns(t *testing.T) {
+	st := newStore(t)
+	cfg := testConfig()
+	r := &Resolver{Config: cfg, Store: st, Instances: instances.New(cfg, st, nil)}
+	if err := st.PutRepoDefaults(ctx, store.RepoDefaults{MaxTurns: ptr(80)}); err != nil {
+		t.Fatal(err)
+	}
+	upsert(t, st, store.DashboardRepo{Instance: "main", Project: "acme/payments", CreatedBy: "alice"})
+
+	eff := get(t, r, "main", "acme/widgets")
+	if eff.MaxTurns != 40 || eff.Overridden[KeyMaxTurns] {
+		t.Errorf("config repository = %d, overridden %v; want jobs.max_turns 40, false", eff.MaxTurns, eff.Overridden[KeyMaxTurns])
+	}
+	if eff := get(t, r, "main", "acme/payments"); eff.MaxTurns != 80 || eff.Overridden[KeyMaxTurns] {
+		t.Errorf("dashboard repository = %d, overridden %v; want the stored 80, false", eff.MaxTurns, eff.Overridden[KeyMaxTurns])
+	}
 }

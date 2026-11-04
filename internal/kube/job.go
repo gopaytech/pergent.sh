@@ -54,7 +54,7 @@ const (
 type JobParams struct {
 	Name, Namespace, RunID, Image string
 	Timeout, CloneAllowance       time.Duration
-	Concurrency                   int
+	Concurrency, MaxTurns         int
 	RepoURL                       string // never carries credentials
 	ChangeRef                     string // the platform ref the change head can be fetched from
 	TargetBranch, BaseSHA         string
@@ -152,6 +152,7 @@ func BuildJob(p JobParams) *batchv1.Job {
 		"--scrub-instructions",
 		"--timeout="+p.Timeout.String(),
 		"--concurrency="+strconv.Itoa(p.Concurrency),
+		"--max-turns="+strconv.Itoa(p.MaxTurns),
 		"--max-comment-size="+strconv.Itoa(commentLimit(p.MaxCommentSize)),
 		"--result-url="+p.ResultURL,
 	)

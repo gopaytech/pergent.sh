@@ -101,11 +101,13 @@ type Draft = {
   skills: string[];
   repoSkills: string[];
   jobTimeoutSeconds: string;
+  maxTurns: string;
   jobMemory: string;
   rerunLimitPerMR: string;
   rerunLimitPerRepo: string;
 };
 
+const stepsProblem = "Max steps is a whole number from 5 to 200.";
 const capProblem = "The re-run caps are whole numbers from 1 to 1000.";
 
 // capBody is the value to send for a re-run cap field that changed: a whole
@@ -162,6 +164,7 @@ function Form({
     skills: skillsNow,
     repoSkills: settings.repoSkills.value,
     jobTimeoutSeconds: String(settings.jobTimeoutSeconds.value),
+    maxTurns: String(settings.maxTurns.value),
     jobMemory: settings.jobMemory.value,
     rerunLimitPerMR: String(settings.rerunLimitPerMR.value),
     rerunLimitPerRepo: String(settings.rerunLimitPerRepo.value),
@@ -214,6 +217,14 @@ function Form({
         return;
       }
       body.jobTimeoutSeconds = t === "" ? null : Number(t);
+    }
+    if (d.maxTurns.trim() !== initial.maxTurns) {
+      const t = d.maxTurns.trim();
+      if (t !== "" && (!/^\d+$/.test(t) || Number(t) < 5 || Number(t) > 200)) {
+        setProblem(stepsProblem);
+        return;
+      }
+      body.maxTurns = t === "" ? null : Number(t);
     }
     if (d.jobMemory.trim() !== initial.jobMemory) {
       body.jobMemory = d.jobMemory.trim() === "" ? null : d.jobMemory.trim();
@@ -403,6 +414,20 @@ function Form({
             value={d.jobTimeoutSeconds}
             disabled={disabled}
             onChange={(e) => set("jobTimeoutSeconds", e.target.value)}
+          />
+        </Setting>
+        <Setting
+          name="Max steps"
+          overridden={settings.maxTurns.overridden}
+          help="Steps each opencode run may take before pergent stops it; each step can call several tools."
+        >
+          <input
+            type="text"
+            inputMode="numeric"
+            aria-label="Max steps"
+            value={d.maxTurns}
+            disabled={disabled}
+            onChange={(e) => set("maxTurns", e.target.value)}
           />
         </Setting>
         <Setting

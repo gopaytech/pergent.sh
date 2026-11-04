@@ -38,6 +38,7 @@ const (
 	KeySkills        = "skills"
 	KeyRepoSkills    = "repo_skills"
 	KeyJobTimeout    = "job_timeout"
+	KeyMaxTurns      = "max_turns"
 	KeyJobMemory     = "job_memory"
 
 	KeyRerunLimitPerMR   = "rerun_limit_per_mr"
@@ -66,6 +67,9 @@ type Effective struct {
 	// RepoSkills are the detected repository skills turned on; nil is none.
 	RepoSkills []string
 	JobTimeout time.Duration
+	// MaxTurns is the step limit of each opencode run, from
+	// config.MinMaxTurns to config.MaxMaxTurns.
+	MaxTurns int
 	// JobMemory is the Job's memory limit; zero when neither the
 	// repository nor jobs.resources.limits sets one.
 	JobMemory resource.Quantity
@@ -201,9 +205,10 @@ func (r *Resolver) defaults(platform, instance, project string, source Source) E
 // defaultsFor is defaults for a repository from source: for SourceDashboard,
 // the defaults stored in the dashboard replace the built-in and config ones.
 // A stored value that can't be used (an unknown failure status, a timeout
-// that isn't positive, a re-run cap that isn't positive, a memory limit that
-// doesn't parse, isn't positive or is below jobs.resources.requests, which
-// Kubernetes would refuse) is ignored: a bad setting never stops reviews.
+// that isn't positive, a step limit outside 5 to 200, a re-run cap that
+// isn't positive, a memory limit that doesn't parse, isn't positive or is
+// below jobs.resources.requests, which Kubernetes would refuse) is ignored:
+// a bad setting never stops reviews.
 func (r *Resolver) defaultsFor(source Source, platform, instance, project string, stored store.RepoDefaults) Effective {
 	eff := Effective{
 		Platform: platform, Instance: instance, Project: project, Source: source,
@@ -211,13 +216,14 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 		ReviewDrafts:  true,
 		FailureStatus: config.FailureStatusFailed,
 		JobTimeout:    r.Config.Jobs.Timeout,
+		MaxTurns:      r.Config.Jobs.MaxTurns,
 		JobMemory:     r.jobsMemory(r.Config.Jobs.Resources.Limits),
 
 		RerunLimitPerMR:   DefaultRerunLimitPerMR,
 		RerunLimitPerRepo: DefaultRerunLimitPerRepo,
 		Overridden: map[string]bool{
 			KeyApprove: false, KeyReviewDrafts: false, KeyFailureStatus: false,
-			KeySkills: false, KeyRepoSkills: false, KeyJobTimeout: false, KeyJobMemory: false,
+			KeySkills: false, KeyRepoSkills: false, KeyJobTimeout: false, KeyMaxTurns: false, KeyJobMemory: false,
 			KeyRerunLimitPerMR: false, KeyRerunLimitPerRepo: false,
 		},
 	}
@@ -238,6 +244,9 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 	if stored.JobTimeoutSeconds != nil && *stored.JobTimeoutSeconds > 0 {
 		eff.JobTimeout = time.Duration(*stored.JobTimeoutSeconds) * time.Second
 	}
+	if usableMaxTurns(stored.MaxTurns) {
+		eff.MaxTurns = *stored.MaxTurns
+	}
 	if stored.JobMemory != nil {
 		if q, ok := r.usableMemory(*stored.JobMemory); ok {
 			eff.JobMemory = q
@@ -250,6 +259,12 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 		eff.RerunLimitPerRepo = *stored.RerunLimitPerRepo
 	}
 	return eff
+}
+
+// usableMaxTurns is whether a stored step limit is set and from
+// config.MinMaxTurns to config.MaxMaxTurns.
+func usableMaxTurns(n *int) bool {
+	return n != nil && *n >= config.MinMaxTurns && *n <= config.MaxMaxTurns
 }
 
 // usableCap is whether a stored re-run cap is set and positive.
@@ -311,6 +326,9 @@ func (r *Resolver) fromConfig(repo config.Repository) (Effective, bool) {
 	if repo.JobTimeout != nil {
 		eff.JobTimeout, eff.Overridden[KeyJobTimeout] = *repo.JobTimeout, true
 	}
+	if repo.MaxTurns != nil {
+		eff.MaxTurns, eff.Overridden[KeyMaxTurns] = *repo.MaxTurns, true
+	}
 	if repo.JobMemory != nil {
 		eff.JobMemory, eff.Overridden[KeyJobMemory] = repo.JobMemory.DeepCopy(), true
 	}
@@ -352,6 +370,9 @@ func (r *Resolver) fromDashboard(row store.DashboardRepo, stored store.RepoDefau
 	}
 	if row.JobTimeoutSeconds != nil && *row.JobTimeoutSeconds > 0 {
 		eff.JobTimeout, eff.Overridden[KeyJobTimeout] = time.Duration(*row.JobTimeoutSeconds)*time.Second, true
+	}
+	if usableMaxTurns(row.MaxTurns) {
+		eff.MaxTurns, eff.Overridden[KeyMaxTurns] = *row.MaxTurns, true
 	}
 	if row.JobMemory != nil {
 		if q, ok := r.usableMemory(*row.JobMemory); ok {

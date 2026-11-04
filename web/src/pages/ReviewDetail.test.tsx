@@ -57,7 +57,7 @@ describe("ReviewDetail", () => {
     expect(await within(run).findByText("v0.1.0")).toBeInTheDocument();
     expect(run).toHaveTextContent("Status on GitLab: failed");
     expect(run).toHaveTextContent("Approved: no — Blocking issues were found.");
-    expect(run).toHaveTextContent("model claude-sonnet");
+    expect(run).toHaveTextContent("model claude-sonnet · max steps 40");
     expect(run).toHaveTextContent("Tokens: 48.2k in · 6.1k out");
     expect(run).toHaveTextContent("Files: 2 reviewed · 1 skipped · 1 not reviewed");
 
@@ -66,6 +66,13 @@ describe("ReviewDetail", () => {
     expect(within(skills).getByText("security-review").closest(".verdict")).toHaveTextContent("library v3");
     expect(within(skills).getByText("code-review").closest(".verdict")).toHaveTextContent("No blocking");
     expect(within(skills).getByText("code-review").closest(".verdict")).toHaveTextContent("source not recorded");
+  });
+
+  it("says the step limit was not recorded for an older run", async () => {
+    renderAndWait({ ...runDetail, maxTurns: null });
+    const run = await screen.findByRole("region", { name: "This run" });
+    expect(await within(run).findByText("v0.1.0")).toBeInTheDocument();
+    expect(run).toHaveTextContent("model claude-sonnet · max steps not recorded");
   });
 
   it("lists the findings with their fix", async () => {

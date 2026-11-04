@@ -53,7 +53,7 @@ const (
 	msgAlreadyOn      = "this repository is switched on already"
 	msgWriteFailed    = "could not save the change, please try again"
 	msgBadProjectBody = `the body must be {"project": "<path>"}`
-	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, failureStatus, skills, jobTimeoutSeconds, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"
+	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"
 	msgNameInstance   = `name the instance: {"instance": "<name>", "project": "<path>"}`
 	msgNeedsPlatform  = "sign in with GitLab or GitHub to add repositories"
 	msgNeedsAdminCaps = "only admins of this repository can change its re-run caps"
@@ -601,7 +601,7 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 	admin := session(r).Role(repo.Instance, repo.Project) >= RoleAdmin
 	d.updateSettings(w, r, repo, func(row *store.DashboardRepo) {
 		row.Approve, row.ReviewDrafts, row.FailureStatus = nil, nil, nil
-		row.Skills, row.RepoSkills, row.JobTimeoutSeconds, row.JobMemory = nil, nil, nil, nil
+		row.Skills, row.RepoSkills, row.JobTimeoutSeconds, row.MaxTurns, row.JobMemory = nil, nil, nil, nil, nil
 		if admin {
 			row.RerunLimitPerMR, row.RerunLimitPerRepo = nil, nil
 		}
@@ -682,6 +682,8 @@ func (d *Dashboard) parseSettings(r *http.Request) (func(*store.DashboardRepo), 
 			edit, msg = repoSkillsSetting(raw, null)
 		case "jobTimeoutSeconds":
 			edit, msg = timeoutSetting(raw, null)
+		case "maxTurns":
+			edit, msg = maxTurnsSetting(raw, null)
 		case "jobMemory":
 			edit, msg = d.memorySetting(raw, null)
 		case "rerunLimitPerMR", "rerunLimitPerRepo":
@@ -797,6 +799,21 @@ func timeoutSetting(raw json.RawMessage, null bool) (func(*store.DashboardRepo),
 		v = &secs
 	}
 	return func(row *store.DashboardRepo) { row.JobTimeoutSeconds = v }, ""
+}
+
+// maxTurnsSetting takes a whole number from config.MinMaxTurns to
+// config.MaxMaxTurns for the step limit of each opencode run.
+func maxTurnsSetting(raw json.RawMessage, null bool) (func(*store.DashboardRepo), string) {
+	var v *int
+	if !null {
+		var n int64
+		if json.Unmarshal(raw, &n) != nil || n < config.MinMaxTurns || n > config.MaxMaxTurns {
+			return nil, "maxTurns must be a whole number from 5 to 200, or null"
+		}
+		steps := int(n)
+		v = &steps
+	}
+	return func(row *store.DashboardRepo) { row.MaxTurns = v }, ""
 }
 
 // memorySetting takes a Kubernetes quantity from 256Mi (or the Job's memory

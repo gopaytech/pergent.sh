@@ -997,6 +997,36 @@ func sameDefaults(a, b DefaultsView) bool {
 	return reflect.DeepEqual(a, b)
 }
 
+// The default step limit is stored with the other defaults, and null clears
+// it back to the built-in one.
+func TestDefaultsMaxTurns(t *testing.T) {
+	e := newEnv(t, nil)
+	admin := e.signInGitLab(true, "acme/widgets")
+
+	v := decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"maxTurns": 80}), "PUT", http.StatusOK)
+	if v.MaxTurns != 80 {
+		t.Errorf("maxTurns after PUT 80 = %d", v.MaxTurns)
+	}
+	if stored, err := e.st.RepoDefaults(ctx); err != nil || stored.MaxTurns == nil || *stored.MaxTurns != 80 {
+		t.Errorf("stored defaults = %+v, %v; want maxTurns 80", stored, err)
+	}
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	if g, _, err := e.d.Repos.Get(ctx, "main", "acme/gadgets"); err != nil || g.MaxTurns != 80 {
+		t.Errorf("dashboard repository = %+v, %v; want 80", g, err)
+	}
+
+	v = decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"maxTurns": nil}), "PUT null", http.StatusOK)
+	if v.MaxTurns != 40 {
+		t.Errorf("maxTurns after PUT null = %d, want the built-in 40", v.MaxTurns)
+	}
+	if stored, err := e.st.RepoDefaults(ctx); err != nil || stored.MaxTurns != nil {
+		t.Errorf("stored defaults = %+v, %v; want maxTurns cleared", stored, err)
+	}
+	if g, _, err := e.d.Repos.Get(ctx, "main", "acme/gadgets"); err != nil || g.MaxTurns != 40 {
+		t.Errorf("dashboard repository = %+v, %v; want 40", g, err)
+	}
+}
+
 // The defaults are shown and changed by admins, with the bounds and the
 // messages of a repository's settings; they apply to the repositories
 // switched on in the dashboard, not to the config's.
@@ -1004,15 +1034,15 @@ func TestDefaults(t *testing.T) {
 	e := newEnv(t, nil)
 	admin := e.signInGitLab(true, "acme/widgets")
 	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")
-	if want := (DefaultsView{Approve: true, ReviewDrafts: true, FailureStatus: "failed", JobTimeoutSeconds: 600, RerunLimitPerMR: 10, RerunLimitPerRepo: 50}); !sameDefaults(v, want) {
+	if want := (DefaultsView{Approve: true, ReviewDrafts: true, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40, RerunLimitPerMR: 10, RerunLimitPerRepo: 50}); !sameDefaults(v, want) {
 		t.Errorf("defaults = %+v, want %+v", v, want)
 	}
 
 	rec := e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{
-		"approve": false, "failureStatus": "neutral", "jobTimeoutSeconds": 900, "jobMemory": "2Gi",
+		"approve": false, "failureStatus": "neutral", "jobTimeoutSeconds": 900, "maxTurns": 80, "jobMemory": "2Gi",
 		"rerunLimitPerMR": 20, "rerunLimitPerRepo": 200})
 	v = decode[DefaultsView](t, rec, "PUT /api/admin/defaults", http.StatusOK)
-	if want := (DefaultsView{Approve: false, ReviewDrafts: true, FailureStatus: "neutral", JobTimeoutSeconds: 900, JobMemory: "2Gi",
+	if want := (DefaultsView{Approve: false, ReviewDrafts: true, FailureStatus: "neutral", JobTimeoutSeconds: 900, MaxTurns: 80, JobMemory: "2Gi",
 		RerunLimitPerMR: 20, RerunLimitPerRepo: 200}); !sameDefaults(v, want) {
 		t.Errorf("defaults after PUT = %+v, want %+v", v, want)
 	}
@@ -1023,11 +1053,11 @@ func TestDefaults(t *testing.T) {
 	// A dashboard repository takes them; a config repository doesn't.
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	g, ok, err := e.d.Repos.Get(ctx, "main", "acme/gadgets")
-	if err != nil || !ok || g.Approve || g.FailureStatus != config.FailureStatusNeutral || g.JobTimeout.Seconds() != 900 ||
+	if err != nil || !ok || g.Approve || g.FailureStatus != config.FailureStatusNeutral || g.JobTimeout.Seconds() != 900 || g.MaxTurns != 80 ||
 		g.RerunLimitPerMR != 20 || g.RerunLimitPerRepo != 200 {
 		t.Errorf("dashboard repository = %+v, %v, %v", g, ok, err)
 	}
-	if w, _, _ := e.d.Repos.Get(ctx, "main", "acme/widgets"); !w.Approve || w.FailureStatus != config.FailureStatusFailed || w.JobTimeout.Seconds() != 600 ||
+	if w, _, _ := e.d.Repos.Get(ctx, "main", "acme/widgets"); !w.Approve || w.FailureStatus != config.FailureStatusFailed || w.JobTimeout.Seconds() != 600 || w.MaxTurns != 40 ||
 		w.RerunLimitPerMR != 10 || w.RerunLimitPerRepo != 50 {
 		t.Errorf("config repository = %+v, want the config's defaults", w)
 	}
@@ -1035,7 +1065,7 @@ func TestDefaults(t *testing.T) {
 	// The body replaces them all: what it leaves out is the built-in default.
 	v = decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"reviewDrafts": false, "jobMemory": nil}),
 		"PUT", http.StatusOK)
-	if want := (DefaultsView{Approve: true, ReviewDrafts: false, FailureStatus: "failed", JobTimeoutSeconds: 600, RerunLimitPerMR: 10, RerunLimitPerRepo: 50}); !sameDefaults(v, want) {
+	if want := (DefaultsView{Approve: true, ReviewDrafts: false, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40, RerunLimitPerMR: 10, RerunLimitPerRepo: 50}); !sameDefaults(v, want) {
 		t.Errorf("defaults after a replacing PUT = %+v, want %+v", v, want)
 	}
 
@@ -1046,6 +1076,10 @@ func TestDefaults(t *testing.T) {
 	}{
 		{"timeout too small", `{"jobTimeoutSeconds": 30}`, "jobTimeoutSeconds must be a whole number of seconds from 60 to 7200, or null"},
 		{"timeout too big", `{"jobTimeoutSeconds": 7201}`, "jobTimeoutSeconds must be a whole number of seconds from 60 to 7200, or null"},
+		{"max steps too small", `{"maxTurns": 4}`, "maxTurns must be a whole number from 5 to 200, or null"},
+		{"max steps too big", `{"maxTurns": 201}`, "maxTurns must be a whole number from 5 to 200, or null"},
+		{"max steps not whole", `{"maxTurns": 40.5}`, "maxTurns must be a whole number from 5 to 200, or null"},
+		{"max steps not a number", `{"maxTurns": "40"}`, "maxTurns must be a whole number from 5 to 200, or null"},
 		{"memory too small", `{"jobMemory": "100Mi"}`, `jobMemory must be a size from 256Mi to 32Gi such as "6Gi", or null`},
 		{"memory not a size", `{"jobMemory": "lots"}`, `jobMemory must be a size from 256Mi to 32Gi such as "6Gi", or null`},
 		{"cap per MR too small", `{"rerunLimitPerMR": 0}`, "rerunLimitPerMR must be a whole number from 1 to 1000, or null"},
@@ -1070,8 +1104,8 @@ func TestDefaults(t *testing.T) {
 		}
 	}
 	slices.Reverse(details)
-	if !slices.Equal(details, []string{"approve, failureStatus, jobTimeoutSeconds, jobMemory, rerunLimitPerMR, rerunLimitPerRepo",
-		"approve, reviewDrafts, failureStatus, jobTimeoutSeconds, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"}) {
+	if !slices.Equal(details, []string{"approve, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo",
+		"approve, reviewDrafts, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"}) {
 		t.Errorf("defaults_updated details = %q", details)
 	}
 

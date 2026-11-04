@@ -25,6 +25,10 @@ describe("AdminSettings defaults", () => {
     expect(within(form).getByRole("switch", { name: "Review drafts" })).toBeChecked();
     expect(within(form).getByLabelText("Status when a review fails")).toHaveValue("neutral");
     expect(within(form).getByLabelText("Timeout (seconds)")).toHaveValue(600);
+    expect(within(form).getByLabelText("Max steps")).toHaveValue("40");
+    expect(
+      within(form).getByText("Steps each opencode run may take before pergent stops it; each step can call several tools."),
+    ).toBeInTheDocument();
     expect(within(form).getByLabelText("Memory limit")).toHaveValue("");
     expect(within(form).getByLabelText("Re-run cap per MR/PR (per day)")).toHaveValue(10);
     expect(within(form).getByLabelText("Re-run cap per repository (per day)")).toHaveValue(50);
@@ -49,6 +53,8 @@ describe("AdminSettings defaults", () => {
       reviewDrafts: true,
       failureStatus: "neutral",
       jobTimeoutSeconds: 900,
+      // Untouched, but the PUT replaces every default.
+      maxTurns: 40,
       jobMemory: "6Gi",
       // Untouched, but the PUT replaces every default: saving without
       // them would reset the caps.
@@ -118,6 +124,27 @@ describe("AdminSettings defaults", () => {
     await userEvent.clear(within(form).getByLabelText("Timeout (seconds)"));
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
     expect(within(form).getByText(/whole number of seconds/)).toBeInTheDocument();
+    expect(fake.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
+  });
+
+  it("sends a changed Max steps with the other defaults", async () => {
+    const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: { ...defaults, maxTurns: 90 } } });
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    await userEvent.clear(within(form).getByLabelText("Max steps"));
+    await userEvent.type(within(form).getByLabelText("Max steps"), "90");
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ maxTurns: 90, jobTimeoutSeconds: 600 });
+  });
+
+  it.each(["4", "201", ""])("refuses Max steps %j without asking the server", async (text) => {
+    const fake = fakeApi(routes());
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    await userEvent.clear(within(form).getByLabelText("Max steps"));
+    if (text !== "") await userEvent.type(within(form).getByLabelText("Max steps"), text);
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(within(form).getByText("Max steps is a whole number from 5 to 200.")).toBeInTheDocument();
     expect(fake.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
   });
 
