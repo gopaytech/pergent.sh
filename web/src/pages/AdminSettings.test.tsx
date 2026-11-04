@@ -23,7 +23,7 @@ describe("AdminSettings defaults", () => {
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     expect(within(form).getByRole("switch", { name: "Approve clean reviews" })).toBeChecked();
     expect(within(form).getByRole("switch", { name: "Review drafts" })).toBeChecked();
-    expect(within(form).getByLabelText("Status when a review fails")).toHaveValue("neutral");
+    expect(within(form).getByLabelText("Status when a review fails")).toHaveValue("failed");
     expect(within(form).getByLabelText("Timeout (seconds)")).toHaveValue("600");
     expect(within(form).getByLabelText("Max steps")).toHaveValue("40");
     expect(
@@ -163,7 +163,7 @@ describe("AdminSettings defaults", () => {
     expect(row("Review drafts")).toHaveTextContent("From config: on");
     expect(row("Inline findings")).toHaveTextContent("From config: on");
     expect(row("Only the author and maintainers use commands")).toHaveTextContent("From config: on");
-    expect(row("Status when a review fails")).toHaveTextContent("From config: neutral");
+    expect(row("Status when a review fails")).toHaveTextContent("From config: failed (blocks merge)");
     expect(row("Timeout")).toHaveTextContent("From config: 600");
     expect(row("Max steps")).toHaveTextContent("From config: 40");
     expect(row("Memory limit")).toHaveTextContent("From config: none");
