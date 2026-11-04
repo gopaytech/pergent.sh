@@ -1564,7 +1564,7 @@ func TestSettingViewsMaxTurns(t *testing.T) {
 	}
 }
 
-// Inline findings is a setting of the repository like the others.
+// The commands setting is a setting of the repository like the others.
 func TestSettingViewsCommandsAuthorAndMaintainersOnly(t *testing.T) {
 	repo := settings.Effective{CommandsAuthorAndMaintainersOnly: false, Overridden: map[string]bool{settings.KeyCommandsAuthorAndMaintainersOnly: true}}
 	if got := settingViews(repo)["commandsAuthorAndMaintainersOnly"]; got != (SettingView{false, true}) {
@@ -1576,6 +1576,7 @@ func TestSettingViewsCommandsAuthorAndMaintainersOnly(t *testing.T) {
 	}
 }
 
+// Inline findings is a setting of the repository like the others.
 func TestSettingViewsInlineFindings(t *testing.T) {
 	repo := settings.Effective{InlineFindings: false, Overridden: map[string]bool{settings.KeyInlineFindings: true}}
 	if got := settingViews(repo)["inlineFindings"]; got != (SettingView{false, true}) {
