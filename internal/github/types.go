@@ -79,6 +79,29 @@ type Review struct {
 	CommitID string `json:"commit_id"`
 }
 
+// ReviewComment is one inline comment of a review: a comment on Line of the
+// new file, or on Line through EndLine when EndLine > Line.
+type ReviewComment struct {
+	Path          string
+	Line, EndLine int
+	Body          string
+}
+
+// ReviewThread is a pull request review thread with its first comment, as
+// GraphQL shows it. Line and StartLine are 0 when GitHub gives none (an
+// outdated thread); StartLine is also 0 for a single-line thread. Author is
+// the first comment's author login ("" when the account is gone); GraphQL
+// may leave "[bot]" off an App's login.
+type ReviewThread struct {
+	ID              string
+	Resolved        bool
+	Outdated        bool
+	Path            string
+	Line, StartLine int
+	CommentID       int64
+	Body, Author    string
+}
+
 // TreeEntry is the platform-neutral forge.TreeEntry. Tree maps GitHub's
 // types onto GitLab's: file → blob, dir → tree, submodule → commit; a
 // symlink stays "symlink", which callers looking for blobs and trees skip.

@@ -1110,3 +1110,161 @@ func TestCollaboratorPermissionUnknownUser(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestPullFiles(t *testing.T) {
+	var srvURL string
+	c, rec := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("page") == "" {
+			w.Header().Set("Link", `<`+srvURL+`/repositories/99/pulls/3/files?per_page=100&page=2>; rel="next"`)
+			_, _ = io.WriteString(w, `[{"filename":"a.go","status":"modified","patch":"@@ -1 +1 @@\n-a\n+b"},{"filename":"gone.go","status":"removed","patch":"@@ -1 +0,0 @@\n-x"}]`)
+			return
+		}
+		_, _ = io.WriteString(w, `[{"filename":"new.go","previous_filename":"old.go","status":"renamed"},{"filename":"img.png","status":"added"}]`)
+	})
+	srvURL = c.base
+	got, err := c.PullFiles(ctx, "acme", "widgets", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []forge.FileDiff{
+		{Path: "a.go", Patch: "@@ -1 +1 @@\n-a\n+b"},
+		{Path: "gone.go", Deleted: true, Patch: "@@ -1 +0,0 @@\n-x"},
+		{Path: "new.go", OldPath: "old.go"},
+		{Path: "img.png"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("PullFiles = %+v", got)
+	}
+	expect(t, rec.get(0), "GET", "/repos/acme/widgets/pulls/3/files", "per_page=100")
+	expect(t, rec.get(1), "GET", "/repositories/99/pulls/3/files", "per_page=100&page=2")
+}
+
+func TestCompareFiles(t *testing.T) {
+	c, rec := serve(t, jsonReply(map[string]any{"files": []map[string]any{
+		{"filename": "a.go", "status": "modified", "patch": "@@ -1 +1 @@\n-a\n+b"},
+		{"filename": "b.go", "status": "removed"},
+	}}))
+	got, err := c.CompareFiles(ctx, "acme", "widgets", "aaa", "bbb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []forge.FileDiff{{Path: "a.go", Patch: "@@ -1 +1 @@\n-a\n+b"}, {Path: "b.go", Deleted: true}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("CompareFiles = %+v", got)
+	}
+	expect(t, rec.get(0), "GET", "/repos/acme/widgets/compare/aaa...bbb", "per_page=100")
+}
+
+func TestCreateReviewComments(t *testing.T) {
+	c, rec := serve(t, jsonReply(map[string]any{"id": 77}))
+	id, err := c.CreateReviewComments(ctx, "acme", "widgets", 3, "abc1234def", "Findings.", []ReviewComment{
+		{Path: "a.go", Line: 10, Body: "one"},
+		{Path: "b.go", Line: 4, EndLine: 9, Body: "two"},
+		{Path: "c.go", Line: 5, EndLine: 5, Body: "same line"},
+	})
+	if err != nil || id != 77 {
+		t.Fatalf("CreateReviewComments = %d, %v", id, err)
+	}
+	got := rec.get(0)
+	expect(t, got, "POST", "/repos/acme/widgets/pulls/3/reviews", "")
+	jsonEq(t, got.Body, `{"commit_id":"abc1234def","event":"COMMENT","body":"Findings.","comments":[
+		{"path":"a.go","body":"one","line":10,"side":"RIGHT"},
+		{"path":"b.go","body":"two","line":9,"side":"RIGHT","start_line":4,"start_side":"RIGHT"},
+		{"path":"c.go","body":"same line","line":5,"side":"RIGHT"}]}`)
+}
+
+func TestCreateReviewCommentsError(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"Unprocessable"}`, 422) })
+	_, err := c.CreateReviewComments(ctx, "acme", "widgets", 3, "abc", "b", []ReviewComment{{Path: "a.go", Line: 1, Body: "x"}})
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.Status != 422 {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestReplyReviewComment(t *testing.T) {
+	c, rec := serve(t, jsonReply(map[string]any{"id": 5}))
+	if err := c.ReplyReviewComment(ctx, "acme", "widgets", 3, 123, "thanks"); err != nil {
+		t.Fatal(err)
+	}
+	got := rec.get(0)
+	expect(t, got, "POST", "/repos/acme/widgets/pulls/3/comments/123/replies", "")
+	jsonEq(t, got.Body, `{"body":"thanks"}`)
+}
+
+func TestReactToReviewComment(t *testing.T) {
+	c, rec := serve(t, jsonReply(map[string]any{"id": 5}))
+	if err := c.ReactToReviewComment(ctx, "acme", "widgets", 123, "+1"); err != nil {
+		t.Fatal(err)
+	}
+	got := rec.get(0)
+	expect(t, got, "POST", "/repos/acme/widgets/pulls/comments/123/reactions", "")
+	jsonEq(t, got.Body, `{"content":"+1"}`)
+}
+
+func TestThreadResolutionRequired(t *testing.T) {
+	rules := func(required bool) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/protection") {
+				t.Errorf("classic protection read after the rules answered: %s", r.URL.Path)
+			}
+			jsonReply([]map[string]any{
+				{"type": "deletion"},
+				{"type": "pull_request", "parameters": map[string]any{"required_review_thread_resolution": required}},
+			})(w, r)
+		}
+	}
+	c, rec := serve(t, rules(true))
+	got, err := c.ThreadResolutionRequired(ctx, "acme", "widgets", "release/v1")
+	if err != nil || !got {
+		t.Fatalf("from rules = %v, %v", got, err)
+	}
+	expect(t, rec.get(0), "GET", "/repos/acme/widgets/rules/branches/release/v1", "per_page=100")
+	if n := len(rec.all()); n != 1 {
+		t.Errorf("requests = %d, want 1", n)
+	}
+
+	// Rules say no; the classic protection says yes.
+	classic := func(h http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if strings.Contains(r.URL.Path, "/rules/") {
+				jsonReply([]map[string]any{{"type": "pull_request", "parameters": map[string]any{"required_review_thread_resolution": false}}})(w, r)
+				return
+			}
+			h(w, r)
+		}
+	}
+	c, rec = serve(t, classic(jsonReply(map[string]any{"required_conversation_resolution": map[string]any{"enabled": true}})))
+	got, err = c.ThreadResolutionRequired(ctx, "acme", "widgets", "main")
+	if err != nil || !got {
+		t.Fatalf("from classic protection = %v, %v", got, err)
+	}
+	expect(t, rec.get(1), "GET", "/repos/acme/widgets/branches/main/protection", "")
+
+	c, _ = serve(t, classic(jsonReply(map[string]any{"required_conversation_resolution": map[string]any{"enabled": false}})))
+	if got, err := c.ThreadResolutionRequired(ctx, "acme", "widgets", "main"); err != nil || got {
+		t.Errorf("disabled = %v, %v", got, err)
+	}
+	c, _ = serve(t, classic(jsonReply(map[string]any{"required_status_checks": nil})))
+	if got, err := c.ThreadResolutionRequired(ctx, "acme", "widgets", "main"); err != nil || got {
+		t.Errorf("absent = %v, %v", got, err)
+	}
+
+	// No protection (404) is not protected.
+	c, _ = serve(t, classic(func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"Branch not protected"}`, 404) }))
+	if got, err := c.ThreadResolutionRequired(ctx, "acme", "widgets", "main"); err != nil || got {
+		t.Errorf("404 = %v, %v", got, err)
+	}
+
+	// Anything else is an error.
+	c, _ = serve(t, classic(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"Resource not accessible by integration"}`, 403)
+	}))
+	if _, err := c.ThreadResolutionRequired(ctx, "acme", "widgets", "main"); !errors.Is(err, ErrForbidden) {
+		t.Errorf("403 err = %v, want ErrForbidden", err)
+	}
+	if _, err := c.ThreadResolutionRequired(ctx, "acme", "widgets", ""); err == nil {
+		t.Error("an empty branch was accepted")
+	}
+}
