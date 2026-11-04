@@ -30,6 +30,7 @@ func testParams() JobParams {
 		Timeout:        10 * time.Minute,
 		CloneAllowance: 2 * time.Minute,
 		Concurrency:    4,
+		MaxTurns:       40,
 		RepoURL:        "https://gitlab.example.com/acme/widgets.git",
 		ChangeRef:      "refs/merge-requests/42/head",
 		TargetBranch:   "main",
@@ -194,7 +195,7 @@ func TestBuildJobShape(t *testing.T) {
 	wantArgs := []string{
 		"agent", "--repo-path=/work/repo", "--base=" + testBase, "--head=" + testHead,
 		"--skills-dir=/in/skills", "--instructions=/in/instructions.md", "--previous=/in/previous.json",
-		"--scrub-instructions", "--timeout=10m0s", "--concurrency=4", "--max-comment-size=990000",
+		"--scrub-instructions", "--timeout=10m0s", "--concurrency=4", "--max-turns=40", "--max-comment-size=990000",
 		"--result-url=" + p.ResultURL,
 	}
 	if strings.Join(main.Args, "\n") != strings.Join(wantArgs, "\n") {

@@ -749,23 +749,24 @@ func TestDispatchDraftIsReviewedWhenDraftsAreOn(t *testing.T) {
 	}
 }
 
-// The Job's timeout and memory limit come from the repository's effective
-// settings; only the memory limit of the resources changes.
-func TestDispatchUsesEffectiveTimeoutAndMemory(t *testing.T) {
+// The Job's timeout, step limit and memory limit come from the repository's
+// effective settings; only the memory limit of the resources changes.
+func TestDispatchUsesEffectiveTimeoutTurnsAndMemory(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		setup func(env *testEnv)
 	}{
 		{"config", func(env *testEnv) {
-			timeout, memory := 20*time.Minute, resource.MustParse("6Gi")
+			timeout, memory, turns := 20*time.Minute, resource.MustParse("6Gi"), 120
 			env.Engine.Config.Repositories[0].JobTimeout = &timeout
+			env.Engine.Config.Repositories[0].MaxTurns = &turns
 			env.Engine.Config.Repositories[0].JobMemory = &memory
 		}},
 		{"dashboard", func(env *testEnv) {
 			env.Engine.Config.Repositories = nil
-			seconds, memory := 1200, "6Gi"
+			seconds, memory, turns := 1200, "6Gi", 120
 			if err := env.Store.UpsertDashboardRepo(env.ctx, store.DashboardRepo{
-				Instance: testInstance, Project: testProjectPath, JobTimeoutSeconds: &seconds, JobMemory: &memory,
+				Instance: testInstance, Project: testProjectPath, JobTimeoutSeconds: &seconds, MaxTurns: &turns, JobMemory: &memory,
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -791,6 +792,12 @@ func TestDispatchUsesEffectiveTimeoutAndMemory(t *testing.T) {
 			}
 			if args := job.Spec.Template.Spec.Containers[0].Args; !hasArg(args, "--timeout=20m0s") {
 				t.Errorf("job args %v lack --timeout=20m0s", args)
+			}
+			if !hasArg(job.Spec.Template.Spec.Containers[0].Args, "--max-turns=120") {
+				t.Errorf("job args %v lack --max-turns=120", job.Spec.Template.Spec.Containers[0].Args)
+			}
+			if got := env.Run(id).MaxTurns; got == nil || *got != 120 {
+				t.Errorf("recorded max turns = %v, want 120", got)
 			}
 			if got, want := *job.Spec.ActiveDeadlineSeconds, int64(kube.Deadline(20*time.Minute, kube.CloneAllowance(0))/time.Second); got != want {
 				t.Errorf("activeDeadlineSeconds = %d, want %d", got, want)
