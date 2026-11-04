@@ -69,7 +69,7 @@ describe("RepositoryDetail", () => {
     const drafts = screen.getByRole("switch", { name: "Review drafts" }).closest(".set") as HTMLElement;
     expect(within(drafts).getByText("default")).toHaveClass("badge", "cfg");
     expect(screen.getByRole("combobox", { name: "Status when a review fails" })).toHaveValue("failed");
-    expect(screen.getByRole("spinbutton", { name: "Timeout (seconds)" })).toHaveValue(600);
+    expect(screen.getByRole("textbox", { name: "Timeout (seconds)" })).toHaveValue("600");
     const memory = screen.getByRole("textbox", { name: "Memory limit" });
     expect(memory).toHaveValue("6Gi");
     expect(within(memory.closest(".set") as HTMLElement).getByText("overridden here")).toBeInTheDocument();
@@ -90,7 +90,7 @@ describe("RepositoryDetail", () => {
       screen.getByRole("switch", { name: "Approve clean reviews" }),
       screen.getByRole("switch", { name: "Review drafts" }),
       screen.getByRole("combobox", { name: "Status when a review fails" }),
-      screen.getByRole("spinbutton", { name: "Timeout (seconds)" }),
+      screen.getByRole("textbox", { name: "Timeout (seconds)" }),
       screen.getByRole("textbox", { name: "Max steps" }),
       screen.getByRole("textbox", { name: "Memory limit" }),
       screen.getByRole("switch", { name: "Skill code-review" }),
@@ -117,7 +117,7 @@ describe("RepositoryDetail", () => {
     const fake = fakeApi({ ...base, "PUT /api/repositories/main/acme/payments/settings": { body: saved } });
     renderApp("/repos/main/acme/payments?tab=settings");
     await userEvent.click(await screen.findByRole("switch", { name: "Approve clean reviews" }));
-    const timeout = screen.getByRole("spinbutton", { name: "Timeout (seconds)" });
+    const timeout = screen.getByRole("textbox", { name: "Timeout (seconds)" });
     await userEvent.clear(timeout);
     await userEvent.type(timeout, "900");
     await userEvent.click(await screen.findByRole("radio", { name: "Choose skills" }));
@@ -128,7 +128,7 @@ describe("RepositoryDetail", () => {
     expect(put.headers.get("X-CSRF-Token")).toBe("csrf-123");
     expect(put.body).toEqual({ approve: false, jobTimeoutSeconds: 900, skills: ["code-review", "security-review"] });
     expect(await screen.findByText("Saved.")).toBeInTheDocument();
-    const timeoutRow = screen.getByRole("spinbutton", { name: "Timeout (seconds)" }).closest(".set") as HTMLElement;
+    const timeoutRow = screen.getByRole("textbox", { name: "Timeout (seconds)" }).closest(".set") as HTMLElement;
     expect(within(timeoutRow).getByText("overridden here")).toBeInTheDocument();
   });
 
@@ -175,6 +175,27 @@ describe("RepositoryDetail", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("Max steps is a whole number from 5 to 200.")).toBeInTheDocument();
     expect(fake.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
+  });
+
+  const timeoutProblem = "The timeout is a whole number of seconds, from 60 to 7200.";
+
+  it.each(["abc", "59", "7201", "90.5"])("refuses Timeout %s without asking the server", async (text) => {
+    const fake = fakeApi(base);
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const timeout = await screen.findByRole("textbox", { name: "Timeout (seconds)" });
+    await userEvent.clear(timeout);
+    await userEvent.type(timeout, text);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText(timeoutProblem)).toBeInTheDocument();
+    expect(fake.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
+  });
+
+  it("sends an emptied Timeout as null, the default", async () => {
+    const fake = fakeApi({ ...base, "PUT /api/repositories/main/acme/payments/settings": { body: payments } });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    await userEvent.clear(await screen.findByRole("textbox", { name: "Timeout (seconds)" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({ jobTimeoutSeconds: null });
   });
 
   it("shows the re-run caps, editable by an admin of the repository", async () => {

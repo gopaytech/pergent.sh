@@ -61,7 +61,7 @@ function Defaults({ v }: { v: DefaultsView }) {
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const t = timeout.trim();
-    if (!/^\d+$/.test(t)) {
+    if (!/^\d+$/.test(t) || Number(t) < 60 || Number(t) > 7200) {
       setProblem("The timeout is a whole number of seconds, from 60 to 7200.");
       return;
     }
@@ -150,11 +150,9 @@ function Defaults({ v }: { v: DefaultsView }) {
         </div>
         <div>
           <input
-            type="number"
+            type="text"
+            inputMode="numeric"
             aria-label="Timeout (seconds)"
-            min={60}
-            max={7200}
-            step={1}
             value={timeout}
             disabled={save.isPending}
             onChange={(e) => setTimeoutText(e.target.value)}

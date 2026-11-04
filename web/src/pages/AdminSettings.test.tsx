@@ -24,7 +24,7 @@ describe("AdminSettings defaults", () => {
     expect(within(form).getByRole("switch", { name: "Approve clean reviews" })).toBeChecked();
     expect(within(form).getByRole("switch", { name: "Review drafts" })).toBeChecked();
     expect(within(form).getByLabelText("Status when a review fails")).toHaveValue("neutral");
-    expect(within(form).getByLabelText("Timeout (seconds)")).toHaveValue(600);
+    expect(within(form).getByLabelText("Timeout (seconds)")).toHaveValue("600");
     expect(within(form).getByLabelText("Max steps")).toHaveValue("40");
     expect(
       within(form).getByText("Steps each opencode run may take before pergent stops it; each step can call several tools."),
@@ -141,6 +141,17 @@ describe("AdminSettings defaults", () => {
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
     expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ jobMemory: null });
+  });
+
+  it.each(["abc", "59", "7201"])("refuses a timeout of %s without asking the server", async (text) => {
+    const fake = fakeApi(routes());
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    await userEvent.clear(within(form).getByLabelText("Timeout (seconds)"));
+    await userEvent.type(within(form).getByLabelText("Timeout (seconds)"), text);
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(within(form).getByText("The timeout is a whole number of seconds, from 60 to 7200.")).toBeInTheDocument();
+    expect(fake.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
   });
 
   it("refuses a timeout that isn't a whole number without asking the server", async () => {
