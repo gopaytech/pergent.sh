@@ -2267,6 +2267,10 @@ func TestRefusalAuditedOnceAcrossRetry(t *testing.T) {
 	f.run()
 
 	f.wantReactions(1, c, eyes, down)
+	// The reply was posted twice: the failed attempt and the retry, which
+	// didn't take its own earlier attempt for a refusal "before" and so
+	// didn't leave the reply out.
+	f.wantReplies(1, gateReply, gateReply)
 	if rs := f.refusals(); len(rs) != 1 {
 		t.Errorf("%d command_refused entries after the retry, want exactly 1", len(rs))
 	}
@@ -2275,26 +2279,40 @@ func TestRefusalAuditedOnceAcrossRetry(t *testing.T) {
 // With the switch off, the author is still allowed whatever their access,
 // and a Reporter who is not the author is refused as before, and audited.
 func TestAuthorAllowedWhenSwitchOff(t *testing.T) {
-	t.Run("the author", func(t *testing.T) {
+	t.Run("the author re-runs", func(t *testing.T) {
+		f := newCommandFixture(t)
+		f.gate(false)
+		f.authorID = userReporter
+		f.serveMR(1, false)
+		f.review(skillOf(t, "security", "no_blocking_issues"))
+
+		r := f.say(1, "rep", "review", "", "", time.Now())
+		f.run()
+
+		f.wantReactions(1, r, eyes, up)
+		if n := len(f.queued()); n != 1 {
+			t.Errorf("%d runs queued, want the author's re-run", n)
+		}
+		f.wantReplies(1)
+		if rs := f.refusals(); len(rs) != 0 {
+			t.Errorf("the author was audited as refused: %+v", rs)
+		}
+	})
+	// (A separate fixture: a dismissal moves the review to "reported", and a
+	// re-run of a head with a reported run is answered as already queued.)
+	t.Run("the author dismisses a suggestion", func(t *testing.T) {
 		f := newCommandFixture(t)
 		f.gate(false)
 		f.authorID = userReporter
 		f.serveMR(1, false)
 		f.review(skillWithFinding(t, "no_blocking_issues", "suggestion"))
-		at := time.Now()
 
-		d := f.say(1, "rep", "dismiss", "abc123", "", at)
+		d := f.say(1, "rep", "dismiss", "abc123", "", time.Now())
 		f.run()
+
 		f.wantReactions(1, d, eyes, up)
 		if ds := f.dismissals(1); len(ds) != 1 || ds[0].Severity != "suggestion" || ds[0].Actor != "rep (gitlab main)" {
 			t.Fatalf("dismissals = %+v, want the suggestion dismissed by the author", ds)
-		}
-
-		r := f.say(1, "rep", "review", "", "", at.Add(time.Second))
-		f.run()
-		f.wantReactions(1, r, eyes, up)
-		if n := len(f.queued()); n != 1 {
-			t.Errorf("%d runs queued, want the author's re-run", n)
 		}
 		f.wantReplies(1)
 		if rs := f.refusals(); len(rs) != 0 {
@@ -2400,4 +2418,33 @@ func TestThreadCommandGate(t *testing.T) {
 		t.Fatalf("%d command_refused entries, want 1", len(rs))
 	}
 	f.wantRefusal(rs[0], "dev (gitlab main)", 1, "dismiss")
+}
+
+// The author with only read access dismisses a suggestion in its finding's
+// thread, whether the gate is on or off.
+func TestThreadDismissByAuthorWithReadAccess(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		t.Run(fmt.Sprintf("gate %v", on), func(t *testing.T) {
+			f := newCommandFixture(t)
+			f.gate(on)
+			f.authorID = userReporter
+			f.serveMR(1, false)
+			f.review(skillWithFinding(t, "no_blocking_issues", "suggestion"))
+			f.findingThread(sqlFingerprint)
+
+			c := f.sayInThread(1, "rep", threadDiscussion, "dismiss", "", "", time.Now())
+			f.run()
+
+			f.wantReactions(1, c, eyes, up)
+			f.wantReplies(1)
+			f.wantThreadReplies(threadDiscussion)
+			ds := f.dismissals(1)
+			if len(ds) != 1 || ds[0].Fingerprint != sqlFingerprint || ds[0].Severity != "suggestion" || ds[0].Actor != "rep (gitlab main)" {
+				t.Fatalf("dismissals = %+v, want the suggestion dismissed by the author", ds)
+			}
+			if rs := f.refusals(); len(rs) != 0 {
+				t.Errorf("the author was audited as refused: %+v", rs)
+			}
+		})
+	}
 }
