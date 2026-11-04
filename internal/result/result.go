@@ -536,9 +536,10 @@ func NoteUnmerged(data []byte, note string) ([]byte, error) {
 // declare included. Finding IDs are assigned again over all the findings. The
 // envelope and the comment are partial's, and the result is marked Merged.
 //
-// It fails when partial is not a completed result or when base is not a usable
-// completed result of from: the caller then runs a full review, as a partial
-// result alone would pass the files it left out.
+// It fails when partial is not a completed result, when base is not a usable
+// completed result of from, or when a skill carries a file the base did not
+// review (or a skill the base lacks): the caller then runs a full review, as a
+// partial result alone would pass the files it left out.
 func MergeIncremental(partial, base []byte, from string) ([]byte, error) {
 	pr, err := Parse(partial)
 	if err != nil {
@@ -576,6 +577,10 @@ func MergeIncremental(partial, base []byte, from string) ([]byte, error) {
 	for i, raw := range partialSkills {
 		j, ok := earlier[pr.Skills[i].Name]
 		if !ok {
+			// Nothing of this skill was reviewed before, so it cannot carry.
+			if len(pr.Skills[i].Files.Carried) > 0 {
+				return nil, fmt.Errorf("skill %q carries files the earlier result has no review of", pr.Skills[i].Name)
+			}
 			skills[i] = raw
 			continue
 		}
@@ -610,14 +615,26 @@ func mergeIncrementalSkill(raw json.RawMessage, fresh Skill, rawEarlier json.Raw
 		return nil, fmt.Errorf("decode a skill: %w", err)
 	}
 
+	// Only a file the last review really reviewed can be carried.
 	carried := map[string]bool{}
 	for _, p := range fresh.Files.Carried {
+		if !slices.Contains(earlier.Files.Reviewed, p) {
+			return nil, fmt.Errorf("skill %q carries %q, which the earlier result did not review", fresh.Name, p)
+		}
 		carried[p] = true
+	}
+	// A finding the new run reports again (same fingerprint) is the new one.
+	seen := map[string]bool{}
+	for _, f := range fresh.Findings {
+		var d Finding
+		if json.Unmarshal(f, &d) == nil {
+			seen[d.Fingerprint] = true
+		}
 	}
 	findings := append([]json.RawMessage{}, fresh.Findings...)
 	for _, f := range earlier.Findings {
 		var d Finding
-		if json.Unmarshal(f, &d) == nil && carried[d.File] {
+		if json.Unmarshal(f, &d) == nil && carried[d.File] && !seen[d.Fingerprint] {
 			findings = append(findings, f)
 		}
 	}
@@ -656,7 +673,13 @@ func mergeIncrementalSkill(raw json.RawMessage, fresh Skill, rawEarlier json.Raw
 	}
 
 	if fresh.Batches > 0 {
-		checks := mergeChecks(earlier.Checks, fresh.Checks)
+		// A skill with no carried files reviewed all of its files, so the
+		// last review's checks say nothing about them.
+		base := earlier.Checks
+		if len(carried) == 0 {
+			base = nil
+		}
+		checks := mergeChecks(base, fresh.Checks)
 		delete(m, "checks")
 		if len(checks) > 0 {
 			if m["checks"], err = json.Marshal(checks); err != nil {
@@ -758,14 +781,10 @@ func IncrementalNote(i *Incremental) string {
 
 // SupportsCarried reports whether the pergent that made the result reports
 // files.carried and takes --carried: version 0.5.0 or later, with or without
-// a leading "v" and a suffix such as "-rc1". A version that does not read as
-// major.minor.patch is false.
+// a leading "v". A version that is not exactly three numbers, major.minor.patch
+// (a pre-release such as 0.5.0-rc1 included), is false.
 func (r *Result) SupportsCarried() bool {
-	v := strings.TrimPrefix(r.PergentVersion, "v")
-	if i := strings.IndexAny(v, "-+"); i >= 0 {
-		v = v[:i]
-	}
-	parts := strings.Split(v, ".")
+	parts := strings.Split(strings.TrimPrefix(r.PergentVersion, "v"), ".")
 	if len(parts) != 3 {
 		return false
 	}

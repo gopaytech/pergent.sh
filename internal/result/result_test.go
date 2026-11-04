@@ -686,6 +686,25 @@ func TestMergeIncrementalRefuses(t *testing.T) {
 	if _, err := MergeIncremental(errorResult, good, fromSHA); err == nil {
 		t.Error("an error result was merged")
 	}
+
+	// Only a file the last review reviewed can be carried.
+	carrying := func(skillName string, carried ...string) []byte {
+		return incResult(t, "h", Skill{Name: skillName, Verdict: "no_blocking_issues", Files: Files{Reviewed: []string{}, Carried: carried}})
+	}
+	for name, p := range map[string][]byte{
+		"carries a file the base did not review":     carrying("sec", "never.go"),
+		"carries a file with a skill the base lacks": carrying("new", "k.go"),
+	} {
+		if _, err := MergeIncremental(p, good, fromSHA); err == nil {
+			t.Errorf("%s: merged", name)
+		}
+	}
+	// The base listed the file as skipped, which is not reviewed.
+	skipped := incResult(t, fromSHA, Skill{Name: "sec", Verdict: "no_blocking_issues",
+		Files: Files{Reviewed: []string{}, Skipped: []Skipped{{Path: "k.go", Rule: "lockfile"}}}})
+	if _, err := MergeIncremental(carrying("sec", "k.go"), skipped, fromSHA); err == nil {
+		t.Error("carries a skipped file: merged")
+	}
 	if _, err := MergeIncremental([]byte(`nope`), good, fromSHA); err == nil {
 		t.Error("a malformed partial was merged")
 	}
@@ -708,11 +727,72 @@ func TestIncrementalNote(t *testing.T) {
 
 func TestSupportsCarried(t *testing.T) {
 	for version, want := range map[string]bool{
-		"0.5.0": true, "v0.5.0": true, "0.10.0": true, "1.0.0": true, "0.5.0-rc1": true, "v1.2.3-beta.1": true,
-		"0.4.9": false, "dev": false, "": false, "0.5": false, "0.5.x": false, "1.2.3.4": false, "0.-5.0": false,
+		"0.5.0": true, "v0.5.0": true, "0.10.0": true, "1.0.0": true,
+		"0.5.0-rc1": false, "v1.2.3-beta.1": false, "0.5.0+build": false, "0.4.9": false, "dev": false, "": false, "0.5": false, "0.5.x": false, "1.2.3.4": false, "0.-5.0": false,
 	} {
 		if got := (&Result{PergentVersion: version}).SupportsCarried(); got != want {
 			t.Errorf("SupportsCarried(%q) = %v, want %v", version, got, want)
 		}
+	}
+}
+
+// A model that reads a carried file can report its finding again. The merge
+// keeps one of them, or the result would grow with every push.
+func TestMergeIncrementalSkipsRepeatedFinding(t *testing.T) {
+	base := incResult(t, fromSHA, Skill{Name: "sec", Verdict: "no_blocking_issues", Files: Files{Reviewed: []string{"k.go"}},
+		Findings: []json.RawMessage{
+			incFinding("k.go", "aaaaaa000001", "suggestion"),
+			incFinding("k.go", "bbbbbb000001", "suggestion"),
+		}})
+	partial := incResult(t, "h", Skill{Name: "sec", Verdict: "no_blocking_issues", Batches: 1,
+		Files:    Files{Reviewed: []string{"n.go"}, Carried: []string{"k.go"}},
+		Findings: []json.RawMessage{incFinding("k.go", "aaaaaa000001", "suggestion")}})
+
+	fs := skillFindings(t, mergeIncremental(t, partial, base).Skills[0])
+	if len(fs) != 2 || fs[0].Fingerprint != "aaaaaa000001" || fs[1].Fingerprint != "bbbbbb000001" {
+		t.Errorf("findings = %+v, want the repeated one once, then the other carried one", fs)
+	}
+}
+
+// A skill with no carried files reviewed all of its files, so the last
+// review's checks are not kept.
+func TestMergeIncrementalNoCarriedTakesNewChecksOnly(t *testing.T) {
+	base := incResult(t, fromSHA, Skill{Name: "sec", Verdict: "no_blocking_issues", Files: Files{Reviewed: []string{"k.go"}},
+		Checks: []BatchChecks{{Batch: 1, Checks: []Check{{Section: "A", Name: "x", Status: "pass"}}}}})
+	partial := incResult(t, "h", Skill{Name: "sec", Verdict: "no_blocking_issues", Batches: 1, Files: Files{Reviewed: []string{"k.go"}},
+		Checks: []BatchChecks{{Batch: 1, Checks: []Check{{Section: "B", Name: "y", Status: "pass"}}}}})
+
+	got := mergeIncremental(t, partial, base).Skills[0].Checks
+	if len(got) != 1 || len(got[0].Checks) != 1 || got[0].Checks[0].Name != "y" {
+		t.Errorf("checks = %+v, want the new run's only", got)
+	}
+}
+
+// A verdict that is neither clean one stays what the new run said, even with
+// a blocking finding carried over.
+func TestMergeIncrementalUnknownVerdictStays(t *testing.T) {
+	base := incResult(t, fromSHA, Skill{Name: "sec", Verdict: "has_blocking_issues", Files: Files{Reviewed: []string{"k.go"}},
+		Findings: []json.RawMessage{incFinding("k.go", "aaaaaa000001", "blocking")}})
+	partial := incResult(t, "h", Skill{Name: "sec", Verdict: "mystery", Batches: 1, Files: Files{Reviewed: []string{"n.go"}, Carried: []string{"k.go"}}})
+
+	if v := mergeIncremental(t, partial, base).Skills[0].Verdict; v != "mystery" {
+		t.Errorf("verdict = %q, want mystery", v)
+	}
+}
+
+// Fields of a skill that Result does not declare survive when the skill is in
+// both results.
+func TestMergeIncrementalKeepsUndeclaredFields(t *testing.T) {
+	skill := Skill{Name: "sec", Verdict: "no_blocking_issues", Files: Files{Reviewed: []string{"k.go"}}}
+	base := incResult(t, fromSHA, skill)
+	partial := incResult(t, "h", Skill{Name: "sec", Verdict: "no_blocking_issues", Batches: 1, Files: Files{Reviewed: []string{"n.go"}, Carried: []string{"k.go"}}})
+	partial = []byte(strings.Replace(string(partial), `"name":"sec"`, `"name":"sec","tokens":{"input":7}`, 1))
+
+	out, err := MergeIncremental(partial, base, fromSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `"tokens":{"input":7}`) {
+		t.Errorf("merged skill lost its tokens: %s", out)
 	}
 }
