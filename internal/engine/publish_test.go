@@ -1785,6 +1785,35 @@ func TestIncrementalBaseGoneRestartsFull(t *testing.T) {
 	})
 }
 
+// A push can supersede the run after the publisher listed it. The full review
+// that replaces the incremental run is then not queued: it would supersede the
+// push's run.
+func TestIncrementalRestartSkippedForASupersededRun(t *testing.T) {
+	env := newTestEnv(t)
+	headA, headB, headC := sha('a'), sha('c'), sha('d')
+	// The base did not review a.go, so the merge fails.
+	base := env.Publish(1, headA, resultFor(t, headA, reviewed("no_blocking_issues", "b.go")))
+	id := reportIncremental(t, env, headB, base, resultFor(t, headB, partialReview([]string{"b.go"}, []string{"a.go"})))
+	listed := env.Run(id)
+	newer := env.Enqueue(1, headC)
+
+	_, restarted, err := env.Engine.mergeBase(env.ctx, listed, env.Engine.log())
+
+	if err != nil || !restarted {
+		t.Fatalf("mergeBase = restarted %v, %v; want restarted, so nothing is published", restarted, err)
+	}
+	if r := env.Run(newer); r.State != store.Queued {
+		t.Errorf("the newer push's run is %s, want queued", r.State)
+	}
+	queued, err := env.Store.ClaimQueued(env.ctx, 100, env.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queued) != 1 || queued[0].ID != newer {
+		t.Errorf("queued %+v, want only the newer push's run %s", queued, newer)
+	}
+}
+
 // A partial with every file carried over reviews nothing again: the last
 // review's verdict, status and approval stand.
 func TestIncrementalNothingToReview(t *testing.T) {
@@ -1852,13 +1881,13 @@ func TestIncrementalNothingToReview(t *testing.T) {
 func TestIncrementalKeepsThreads(t *testing.T) {
 	e := newInlineEnv(t)
 	headB := sha('c')
-	e.review(t, sha('a'), with("has_blocking_issues", finding(fpBlocking, "db/query.go", 11, 0, "blocking", "")))
+	e.review(t, sha('a'), with("no_blocking_issues", finding(fpSuggestion, "db/query.go", 11, 0, "suggestion", "")))
 	last, found, err := e.env.Store.LastReview(e.env.ctx, e.env.MRKey(1), "none")
 	if err != nil || !found {
 		t.Fatalf("LastReview = %v, %v", found, err)
 	}
-	if rows := e.rows(t); len(rows) != 1 || rows[fpBlocking].State != "open" {
-		t.Fatalf("rows = %+v, want the thread of the blocking finding", rows)
+	if rows := e.rows(t); len(rows) != 1 || rows[fpSuggestion].State != "open" {
+		t.Fatalf("rows = %+v, want the thread of the suggestion", rows)
 	}
 
 	// The next push changed another file; db/query.go and its finding are
@@ -1878,10 +1907,10 @@ func TestIncrementalKeepsThreads(t *testing.T) {
 	if n := len(e.disc.Posted()); n != 1 {
 		t.Errorf("%d discussions started, want only the first review's", n)
 	}
-	if r := e.rows(t)[fpBlocking]; r.State != "open" {
+	if r := e.rows(t)[fpSuggestion]; r.State != "open" {
 		t.Errorf("state = %q, want open", r.State)
 	}
-	wantStatus(t, e.env, headB, gitlab.StatusFailed, "Blocking issues found")
+	wantStatus(t, e.env, headB, gitlab.StatusSuccess, "No blocking issues")
 }
 
 // A partial with status error is published as an error, as any error result
@@ -1893,7 +1922,8 @@ func TestIncrementalErrorResultPublishedAsIs(t *testing.T) {
 	broken, err := json.Marshal(result.Result{
 		SchemaVersion: result.SchemaVersion, Status: "error", PergentVersion: "0.5.0",
 		Base: sha('b'), Head: headB, Skills: []result.Skill{},
-		Error: &result.Error{Code: "internal", Message: "the model was unreachable"},
+		Error:   &result.Error{Code: "internal", Message: "the model was unreachable"},
+		Comment: result.Comment{Markdown: "the model was unreachable"},
 	})
 	if err != nil {
 		t.Fatal(err)

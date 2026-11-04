@@ -289,6 +289,17 @@ func (e *Engine) mergeIncremental(ctx context.Context, run store.Run, log *slog.
 	}
 
 	log.Warn("not publishing the incremental review; reviewing everything instead", "base_run", baseID, "error", e.redact(err.Error()))
+	// The run comes from a listing that may be old: a push since has
+	// superseded it, and EnqueueRerun for this head would supersede the
+	// push's run.
+	cur, found, err := e.Store.Run(ctx, run.ID)
+	if err != nil {
+		return run, false, fmt.Errorf("reload the run: %w", err)
+	}
+	if !found || cur.State != store.Reported {
+		log.Info("not queuing a full review: the run is no longer waiting to be published", "state", cur.State)
+		return run, true, nil
+	}
 	id, created, err := e.Store.EnqueueRerun(ctx, run.MR, run.ProjectPath, run.HeadSHA, run.TargetBranch, store.TriggerRerun, nil, nil, true)
 	if err != nil {
 		return run, false, fmt.Errorf("queue a full review: %w", err)
