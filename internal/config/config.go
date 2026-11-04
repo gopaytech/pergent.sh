@@ -150,13 +150,21 @@ const (
 	MaxRerunLimit = 1000
 )
 
+// The bounds of the step limit (pergent's --max-turns), and its default.
+const (
+	MinMaxTurns     = 5
+	MaxMaxTurns     = 200
+	DefaultMaxTurns = 40
+)
+
 // Repository is a project that is reviewed. Listing it switches it on. It
 // names exactly one of GitLab (an instance under gitlab:) and GitHub (an
 // instance under github:); Project is a GitLab path or a GitHub owner/name.
 //
 // The per-repository settings left nil take their defaults where they are
 // resolved (settings.Resolver): approval and draft reviews on, the Job
-// timeout of jobs.timeout and the memory limit of jobs.resources.limits.
+// timeout of jobs.timeout, the step limit of jobs.max_turns and the memory
+// limit of jobs.resources.limits.
 type Repository struct {
 	GitLab  string
 	GitHub  string
@@ -173,6 +181,8 @@ type Repository struct {
 	JobTimeout *time.Duration
 	// JobMemory replaces the memory limit of jobs.resources.limits.
 	JobMemory *resource.Quantity
+	// MaxTurns replaces jobs.max_turns for this repository (5 to 200).
+	MaxTurns *int
 	// RerunLimitPerMR and RerunLimitPerRepo cap the re-runs asked for per
 	// merge request and per repository and day (1 to 1000).
 	RerunLimitPerMR, RerunLimitPerRepo *int
@@ -194,6 +204,9 @@ type Jobs struct {
 	Timeout     time.Duration
 	Concurrency int
 	Resources   corev1.ResourceRequirements
+	// MaxTurns is pergent's step limit per opencode run (--max-turns), from
+	// 5 to 200.
+	MaxTurns int
 }
 
 // fileConfig mirrors Config for decoding: Jobs needs string durations and
@@ -225,6 +238,7 @@ type fileRepository struct {
 	ReviewDrafts  *bool         `yaml:"review_drafts"`
 	JobTimeout    *duration     `yaml:"job_timeout"`
 	JobMemory     *quantity     `yaml:"job_memory"`
+	MaxTurns      *int          `yaml:"max_turns"`
 
 	RerunLimitPerMR   *int `yaml:"rerun_limit_per_mr"`
 	RerunLimitPerRepo *int `yaml:"rerun_limit_per_repo"`
@@ -235,6 +249,7 @@ func (f fileRepository) repository() Repository {
 		GitLab: f.GitLab, GitHub: f.GitHub, Project: f.Project, Skills: f.Skills, RepoSkills: f.RepoSkills,
 		FailureStatus: f.FailureStatus, Approve: f.Approve, ReviewDrafts: f.ReviewDrafts,
 		RerunLimitPerMR: f.RerunLimitPerMR, RerunLimitPerRepo: f.RerunLimitPerRepo,
+		MaxTurns: f.MaxTurns,
 	}
 	if f.JobTimeout != nil {
 		d := time.Duration(*f.JobTimeout)
@@ -252,6 +267,7 @@ type fileJobs struct {
 	Image       string        `yaml:"image"`
 	MaxRunning  *int          `yaml:"max_running"`
 	Timeout     *duration     `yaml:"timeout"`
+	MaxTurns    *int          `yaml:"max_turns"`
 	Concurrency *int          `yaml:"concurrency"`
 	Resources   fileResources `yaml:"resources"`
 }
@@ -345,6 +361,7 @@ func Load(path string) (*Config, error) {
 			Image:       raw.Jobs.Image,
 			MaxRunning:  defaultMaxRunning,
 			Timeout:     defaultTimeout,
+			MaxTurns:    DefaultMaxTurns,
 			Concurrency: defaultConcurrency,
 			Resources: corev1.ResourceRequirements{
 				Requests: toResourceList(raw.Jobs.Resources.Requests),
@@ -363,6 +380,9 @@ func Load(path string) (*Config, error) {
 	}
 	if raw.Jobs.Timeout != nil {
 		cfg.Jobs.Timeout = time.Duration(*raw.Jobs.Timeout)
+	}
+	if raw.Jobs.MaxTurns != nil {
+		cfg.Jobs.MaxTurns = *raw.Jobs.MaxTurns
 	}
 
 	cfg.applyDefaults()
@@ -533,6 +553,9 @@ func (c *Config) Validate() error {
 					i, repo.Project, repo.JobMemory.String(), request.String())
 			}
 		}
+		if n := repo.MaxTurns; n != nil && (*n < MinMaxTurns || *n > MaxMaxTurns) {
+			add("repositories[%d] (%s): max_turns must be from %d to %d, got %d", i, repo.Project, MinMaxTurns, MaxMaxTurns, *n)
+		}
 		if n := repo.RerunLimitPerMR; n != nil && (*n < MinRerunLimit || *n > MaxRerunLimit) {
 			add("repositories[%d] (%s): rerun_limit_per_mr must be from %d to %d, got %d", i, repo.Project, MinRerunLimit, MaxRerunLimit, *n)
 		}
@@ -571,6 +594,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Jobs.Timeout <= 0 {
 		add("jobs.timeout must be positive, got %s", c.Jobs.Timeout)
+	}
+	if c.Jobs.MaxTurns < MinMaxTurns || c.Jobs.MaxTurns > MaxMaxTurns {
+		add("jobs.max_turns must be from %d to %d, got %d", MinMaxTurns, MaxMaxTurns, c.Jobs.MaxTurns)
 	}
 
 	return errors.Join(errs...)
