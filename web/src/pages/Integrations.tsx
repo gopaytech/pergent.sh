@@ -80,6 +80,12 @@ function OwnBody({ v }: { v: IntegrationView }) {
                     {!r.inlineAvailable && (
                       <div className="warn-text">Inline findings are off: the review App has Pull requests: Read-only.</div>
                     )}
+                    {v.platform === "github" && r.inlineAvailable && !r.protectionReadable && (
+                      <div className="warn-text">
+                        Can't read classic branch protection (the review App lacks Administration: Read); a "require
+                        conversation resolution" rule there is treated as off.
+                      </div>
+                    )}
                   </td>
                   <td>{r.installed ? <Pill tone="ok">Installed</Pill> : <Pill tone="bad">Not installed</Pill>}</td>
                   <td>{r.approverReachable ? <Pill tone="ok">Can approve</Pill> : <Pill tone="bad">Can't approve</Pill>}</td>

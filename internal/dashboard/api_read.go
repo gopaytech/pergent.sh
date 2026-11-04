@@ -1186,7 +1186,8 @@ func (d *Dashboard) integrations(w http.ResponseWriter, r *http.Request) {
 			installed = found && p.HookID != 0 && p.DeployTokenID != 0
 		}
 		view.Repos = append(view.Repos, IntegrationRepo{Project: e.Project, Installed: installed,
-			ApproverReachable: found && p.ApproveAvailable, InlineAvailable: !installed || p.InlineAvailable})
+			ApproverReachable: found && p.ApproveAvailable, InlineAvailable: !installed || p.InlineAvailable,
+			ProtectionReadable: !installed || p.ProtectionReadable})
 	}
 	writeJSON(w, http.StatusOK, view)
 }

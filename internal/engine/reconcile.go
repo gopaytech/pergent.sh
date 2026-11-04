@@ -406,6 +406,9 @@ func (e *Engine) reconcileGitHubRepo(ctx context.Context, repo settings.Effectiv
 	// may post inline threads; a read that failed already ended the pass
 	// above, so the stored answer is only ever replaced by a fresh one.
 	p.InlineAvailable = info.PullRequestsWrite()
+	// And whether it may read classic branch protection (Administration:
+	// Read); without it a "require conversation resolution" rule reads as off.
+	p.ProtectionReadable = info.AdministrationRead()
 	if err := e.Store.UpsertGitHubProject(ctx, p); err != nil {
 		return 0, fmt.Errorf("store project: %w", err)
 	}

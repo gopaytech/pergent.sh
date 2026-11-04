@@ -838,7 +838,7 @@ pergent.sh posts each finding of a review as a thread on its lines, next to the 
 **GitHub setup.**
 
 - The review App needs **Pull requests: Read and write**. With Read-only, inline is off for that instance and the Integrations page says so.
-- **Administration: Read** is optional. It lets pergent.sh read the classic branch protection's conversation-resolution rule. Without it, only rulesets are read and the classic rule is treated as off, so a branch whose only such rule is classic gets suggestions inline too.
+- **Administration: Read** is optional. It lets pergent.sh read the classic branch protection's conversation-resolution rule. Without it, only rulesets are read and the classic rule is treated as off, so a branch whose only such rule is classic gets suggestions inline too. The Integrations page notes a repository where the App can't read it.
 - Subscribe the App to **Pull request review comment**. Without it, replies in a finding's thread are not received.
 
 **GitLab setup.** "All threads must be resolved" is read from the project settings. No new webhook is needed: note events already arrive.

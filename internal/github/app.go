@@ -193,6 +193,18 @@ func (i InstallationInfo) PullRequestsWrite() bool {
 	return i.Permissions == nil || i.Permissions["pull_requests"] == "write"
 }
 
+// AdministrationRead reports whether the installation may read a
+// repository's classic branch protection, which needs Administration: Read
+// (or write). As with PullRequestsWrite, a reply that carries no permissions
+// can't say and counts as allowed.
+func (i InstallationInfo) AdministrationRead() bool {
+	if i.Permissions == nil {
+		return true
+	}
+	level := i.Permissions["administration"]
+	return level == "read" || level == "write"
+}
+
 // Installation returns the ID of the App's installation that covers
 // owner/repo. An App not installed there is ErrNotFound.
 func (a *App) Installation(ctx context.Context, owner, repo string) (int64, error) {

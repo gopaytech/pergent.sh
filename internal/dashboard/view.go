@@ -631,6 +631,10 @@ type IntegrationRepo struct {
 	// read pull requests, so it can't post inline threads. It says nothing
 	// (true) for a repository without the review App.
 	InlineAvailable bool `json:"inlineAvailable"`
+	// ProtectionReadable is false when the review App is installed but lacks
+	// Administration: Read, so it can't read classic branch protection. It
+	// says nothing (true) for a repository without the review App.
+	ProtectionReadable bool `json:"protectionReadable"`
 }
 
 // AdminSettingsView is GET /api/admin/settings (admins only): the defaults
