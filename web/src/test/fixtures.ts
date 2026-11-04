@@ -355,6 +355,19 @@ export const defaults: DefaultsView = {
   rerunLimitPerMR: 10,
   rerunLimitPerRepo: 50,
   skills: ["code-review"],
+  // The config gives what is in effect, and nothing is saved here.
+  config: {
+    approve: true,
+    reviewDrafts: true,
+    inlineFindings: true,
+    failureStatus: "neutral",
+    jobTimeoutSeconds: 600,
+    maxTurns: 40,
+    jobMemory: "",
+    rerunLimitPerMR: 10,
+    rerunLimitPerRepo: 50,
+  },
+  pinned: {},
 };
 
 export const llm: LLMAdminView = {

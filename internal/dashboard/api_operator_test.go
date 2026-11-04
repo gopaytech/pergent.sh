@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/instances"
@@ -994,7 +995,46 @@ func sameDefaults(a, b DefaultsView) bool {
 	if len(b.Skills) == 0 {
 		b.Skills = nil
 	}
+	// What the config gives and what is pinned have their own tests.
+	a.Config, a.Pinned, b.Config, b.Pinned = DefaultValues{}, nil, DefaultValues{}, nil
 	return reflect.DeepEqual(a, b)
+}
+
+// The view says what the config gives and which defaults were saved here, so
+// the form can show the first and keep the rest following it.
+func TestDefaultsViewConfigAndPinned(t *testing.T) {
+	e := newEnv(t, func(c *config.Config) { c.Jobs.Timeout = 30 * time.Minute })
+	admin := e.signInGitLab(true, "acme/widgets")
+
+	// Nothing saved: the effective values are the config's, nothing is pinned.
+	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")
+	if v.JobTimeoutSeconds != 1800 || v.Config.JobTimeoutSeconds != 1800 || v.Pinned["jobTimeoutSeconds"] {
+		t.Errorf("nothing saved: view = %+v", v)
+	}
+
+	// Saved: the value saved wins, the config's value is still shown.
+	if err := e.st.PutRepoDefaults(ctx, store.RepoDefaults{JobTimeoutSeconds: ptr(600)}); err != nil {
+		t.Fatal(err)
+	}
+	e.d.inputs.invalidate()
+	v = getJSON[DefaultsView](e, admin, "/api/admin/defaults")
+	if v.JobTimeoutSeconds != 600 || v.Config.JobTimeoutSeconds != 1800 || !v.Pinned["jobTimeoutSeconds"] || v.Pinned["maxTurns"] {
+		t.Errorf("saved: view = %+v; want 600 pinned, config 1800, maxTurns not pinned", v)
+	}
+	if v.Config.MaxTurns != 40 || v.Config.FailureStatus != "failed" || !v.Config.Approve || v.Config.RerunLimitPerMR != 10 || v.Config.JobMemory != "" {
+		t.Errorf("config values = %+v", v.Config)
+	}
+	for _, k := range []string{"approve", "reviewDrafts", "inlineFindings", "failureStatus", "jobTimeoutSeconds", "maxTurns", "jobMemory", "rerunLimitPerMR", "rerunLimitPerRepo"} {
+		if _, ok := v.Pinned[k]; !ok {
+			t.Errorf("pinned has no %q: %v", k, v.Pinned)
+		}
+	}
+
+	// A PUT that sends null puts the field back on the config.
+	v = decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"jobTimeoutSeconds": nil}), "PUT", http.StatusOK)
+	if v.JobTimeoutSeconds != 1800 || v.Pinned["jobTimeoutSeconds"] {
+		t.Errorf("after null: view = %+v", v)
+	}
 }
 
 // The default step limit is stored with the other defaults, and null clears
@@ -1415,5 +1455,29 @@ func TestDefaultsInlineFindings(t *testing.T) {
 	}
 	if stored, _ := e.st.RepoDefaults(ctx); stored.InlineFindings != nil {
 		t.Errorf("stored = %v, want NULL", stored.InlineFindings)
+	}
+}
+
+// A default is pinned when the dashboard stored a value for it, and only then.
+func TestPinnedDefaults(t *testing.T) {
+	none := pinnedDefaults(store.RepoDefaults{})
+	if len(none) != 9 {
+		t.Errorf("pinned = %v; want the nine keys", none)
+	}
+	for k, v := range none {
+		if v {
+			t.Errorf("%s pinned with nothing stored", k)
+		}
+	}
+	got := pinnedDefaults(store.RepoDefaults{Approve: ptr(false), JobTimeoutSeconds: ptr(600), JobMemory: ptr("2Gi"), RerunLimitPerRepo: ptr(5)})
+	for _, k := range []string{"approve", "jobTimeoutSeconds", "jobMemory", "rerunLimitPerRepo"} {
+		if !got[k] {
+			t.Errorf("%s not pinned: %v", k, got)
+		}
+	}
+	for _, k := range []string{"reviewDrafts", "inlineFindings", "failureStatus", "maxTurns", "rerunLimitPerMR"} {
+		if got[k] {
+			t.Errorf("%s pinned: %v", k, got)
+		}
 	}
 }

@@ -50,17 +50,15 @@ describe("AdminSettings defaults", () => {
     expect(put.headers.get("X-CSRF-Token")).toBe("csrf-123");
     expect(put.body).toEqual({
       approve: false,
-      reviewDrafts: true,
-      inlineFindings: true,
-      failureStatus: "neutral",
+      // Untouched, so equal to the config: null keeps them following it.
+      reviewDrafts: null,
+      inlineFindings: null,
+      failureStatus: null,
       jobTimeoutSeconds: 900,
-      // Untouched, but the PUT replaces every default.
-      maxTurns: 40,
+      maxTurns: null,
       jobMemory: "6Gi",
-      // Untouched, but the PUT replaces every default: saving without
-      // them would reset the caps.
-      rerunLimitPerMR: 10,
-      rerunLimitPerRepo: 50,
+      rerunLimitPerMR: null,
+      rerunLimitPerRepo: null,
       // Untouched too: the default skills are sent as they are.
       skills: ["code-review"],
     });
@@ -88,7 +86,7 @@ describe("AdminSettings defaults", () => {
     expect(toggle).toBeChecked();
     await userEvent.click(toggle);
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
-    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ reviewDrafts: true, inlineFindings: false });
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ reviewDrafts: null, inlineFindings: false });
     expect(await screen.findByText("Defaults saved.")).toBeInTheDocument();
     expect(within(form).getByRole("switch", { name: "Inline findings" })).not.toBeChecked();
   });
@@ -114,13 +112,97 @@ describe("AdminSettings defaults", () => {
     expect(within(form).getByLabelText("Re-run cap per repository (per day)")).toHaveValue(120);
   });
 
+  it("saving untouched defaults sends null for values equal to the config", async () => {
+    const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: defaults } });
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toEqual({
+      approve: null,
+      reviewDrafts: null,
+      inlineFindings: null,
+      failureStatus: null,
+      jobTimeoutSeconds: null,
+      maxTurns: null,
+      jobMemory: null,
+      rerunLimitPerMR: null,
+      rerunLimitPerRepo: null,
+      skills: ["code-review"],
+    });
+  });
+
+  it("says under each default what the config gives", async () => {
+    fakeApi(routes());
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    const row = (name: string) => within(form).getByText(name, { selector: ".name" }).closest(".set") as HTMLElement;
+    expect(row("Approve clean reviews")).toHaveTextContent("From config: on");
+    expect(row("Review drafts")).toHaveTextContent("From config: on");
+    expect(row("Inline findings")).toHaveTextContent("From config: on");
+    expect(row("Status when a review fails")).toHaveTextContent("From config: neutral");
+    expect(row("Timeout")).toHaveTextContent("From config: 600");
+    expect(row("Max steps")).toHaveTextContent("From config: 40");
+    expect(row("Memory limit")).toHaveTextContent("From config: none");
+    expect(row("Re-run cap per MR/PR")).toHaveTextContent("From config: 10");
+    expect(row("Re-run cap per repository")).toHaveTextContent("From config: 50");
+    expect(within(form).queryByRole("button", { name: "Use config value" })).not.toBeInTheDocument();
+  });
+
+  const pinnedTimeout = {
+    ...defaults,
+    jobTimeoutSeconds: 600,
+    config: { ...defaults.config, jobTimeoutSeconds: 1800 },
+    pinned: { jobTimeoutSeconds: true },
+  };
+
+  it("shows a pinned default against the config's value, and Use config value sends null for it", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "GET /api/admin/defaults": { body: pinnedTimeout },
+      "PUT /api/admin/defaults": { body: defaults },
+    });
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    const row = within(form).getByText("Timeout", { selector: ".name" }).closest(".set") as HTMLElement;
+    expect(within(row).getByText("Saved here; the config says 1800.")).toBeInTheDocument();
+    expect(row).not.toHaveTextContent("From config");
+    expect(within(form).getAllByRole("button", { name: "Use config value" })).toHaveLength(1);
+    expect(within(form).getByLabelText("Timeout (seconds)")).toHaveValue("600");
+    await userEvent.click(within(row).getByRole("button", { name: "Use config value" }));
+    expect(within(form).getByLabelText("Timeout (seconds)")).toHaveValue("1800");
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ jobTimeoutSeconds: null });
+  });
+
+  it("keeps a pinned value that differs from the config when saving", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "GET /api/admin/defaults": { body: pinnedTimeout },
+      "PUT /api/admin/defaults": { body: pinnedTimeout },
+    });
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ jobTimeoutSeconds: 600, maxTurns: null });
+  });
+
+  it("sends a changed value as it is", async () => {
+    const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: { ...defaults, jobTimeoutSeconds: 900 } } });
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    await userEvent.clear(within(form).getByLabelText("Timeout (seconds)"));
+    await userEvent.type(within(form).getByLabelText("Timeout (seconds)"), "900");
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ jobTimeoutSeconds: 900, maxTurns: null });
+  });
+
   it("sends an emptied re-run cap as null, the built-in default", async () => {
     const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: defaults } });
     renderApp("/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.clear(within(form).getByLabelText("Re-run cap per repository (per day)"));
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
-    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ rerunLimitPerMR: 10, rerunLimitPerRepo: null });
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ rerunLimitPerMR: null, rerunLimitPerRepo: null });
   });
 
   it.each(["0", "1001", "1.5"])("refuses the re-run cap %s without asking the server", async (value) => {
@@ -171,7 +253,7 @@ describe("AdminSettings defaults", () => {
     await userEvent.clear(within(form).getByLabelText("Max steps"));
     await userEvent.type(within(form).getByLabelText("Max steps"), "90");
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
-    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ maxTurns: 90, jobTimeoutSeconds: 600 });
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ maxTurns: 90, jobTimeoutSeconds: null });
   });
 
   it.each(["4", "201", ""])("refuses Max steps %j without asking the server", async (text) => {

@@ -1064,7 +1064,11 @@ func TestAdminSettings(t *testing.T) {
 	v := getJSON[AdminSettingsView](e, c, "/api/admin/settings")
 	want := AdminSettingsView{Instance: "main",
 		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, InlineFindings: true, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40,
-			RerunLimitPerMR: 10, RerunLimitPerRepo: 50, Skills: []string{}},
+			RerunLimitPerMR: 10, RerunLimitPerRepo: 50, Skills: []string{},
+			Config: DefaultValues{Approve: true, ReviewDrafts: true, InlineFindings: true, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40,
+				RerunLimitPerMR: 10, RerunLimitPerRepo: 50},
+			Pinned: map[string]bool{"approve": false, "reviewDrafts": false, "inlineFindings": false, "failureStatus": false, "jobTimeoutSeconds": false,
+				"maxTurns": false, "jobMemory": false, "rerunLimitPerMR": false, "rerunLimitPerRepo": false}},
 		LLM: LLMView{Provider: "anthropic", Model: "claude-sonnet-4"}}
 	got, _ := json.Marshal(v)
 	wantJSON, _ := json.Marshal(want)
