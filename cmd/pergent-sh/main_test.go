@@ -412,3 +412,21 @@ func TestPickerBudgetBelowWriteTimeout(t *testing.T) {
 		t.Errorf("dashboard.AvailableBudget %v is not well below the write timeout %v", dashboard.AvailableBudget, writeTimeout)
 	}
 }
+
+// warnTimeouts logs each short timeout once, at warn, and nothing when all fit.
+func TestWarnTimeouts(t *testing.T) {
+	var logs strings.Builder
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	cfg := &config.Config{Jobs: config.Jobs{Timeout: 10 * time.Minute, MaxTurns: 40}}
+	warnTimeouts(cfg, log)
+	out := logs.String()
+	if strings.Count(out, "level=WARN") != 1 || !strings.Contains(out, "jobs.timeout 10m0s is short for jobs.max_turns 40") {
+		t.Errorf("logs:\n%s", out)
+	}
+	logs.Reset()
+	cfg.Jobs.Timeout = 30 * time.Minute
+	warnTimeouts(cfg, log)
+	if logs.Len() != 0 {
+		t.Errorf("logged for a timeout that fits:\n%s", logs.String())
+	}
+}

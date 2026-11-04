@@ -24,7 +24,7 @@ const (
 	defaultListen      = ":8080"
 	defaultImage       = "ghcr.io/gopaytech/pergent:v0.4.0"
 	defaultMaxRunning  = 5
-	defaultTimeout     = 10 * time.Minute
+	defaultTimeout     = 30 * time.Minute
 	defaultConcurrency = 4
 	defaultAPIKeyEnv   = "OPENCODE_API_KEY"
 )
@@ -936,4 +936,38 @@ func (g GitHubInstance) Secrets() (reviewKey, approveKeyOrToken, webhook string,
 		return "", "", "", err
 	}
 	return reviewKey, approveKeyOrToken, webhook, nil
+}
+
+// SecondsPerStep is how long pergent.sh allows each step of an opencode
+// run when it checks that a Job timeout fits the step limit.
+const SecondsPerStep = 30
+
+// TimeoutWarnings returns one message per timeout in c shorter than its
+// step limit times SecondsPerStep: jobs.timeout against jobs.max_turns,
+// and each repository's effective job_timeout against its effective
+// max_turns. A repository that overrides neither is covered by the jobs
+// message. Empty when every timeout fits.
+func TimeoutWarnings(c *Config) []string {
+	var out []string
+	if need := time.Duration(c.Jobs.MaxTurns) * SecondsPerStep * time.Second; c.Jobs.Timeout < need {
+		out = append(out, fmt.Sprintf("jobs.timeout %s is short for jobs.max_turns %d: allow about %s (30s a step)",
+			c.Jobs.Timeout, c.Jobs.MaxTurns, need))
+	}
+	for i, repo := range c.Repositories {
+		if repo.JobTimeout == nil && repo.MaxTurns == nil {
+			continue
+		}
+		timeout, turns := c.Jobs.Timeout, c.Jobs.MaxTurns
+		if repo.JobTimeout != nil {
+			timeout = *repo.JobTimeout
+		}
+		if repo.MaxTurns != nil {
+			turns = *repo.MaxTurns
+		}
+		if need := time.Duration(turns) * SecondsPerStep * time.Second; timeout < need {
+			out = append(out, fmt.Sprintf("repositories[%d] (%s): job_timeout %s is short for max_turns %d: allow about %s (30s a step)",
+				i, repo.Project, timeout, turns, need))
+		}
+	}
+	return out
 }

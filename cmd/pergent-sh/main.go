@@ -160,6 +160,14 @@ func parseArgs(args []string, stderr io.Writer) (cmd command, err error) {
 	return command{}, errors.New(usage)
 }
 
+// warnTimeouts logs, once each, the timeouts in cfg that are short for their
+// step limit. They are not errors: the review may still finish in time.
+func warnTimeouts(cfg *config.Config, log *slog.Logger) {
+	for _, w := range config.TimeoutWarnings(cfg) {
+		log.Warn("job timeout may be too short", "config", w)
+	}
+}
+
 // serve starts pergent.sh and runs it until ctx is done. Anything wrong with
 // the config, the secrets, the database, or a GitLab token or GitHub App or
 // token of an instance in the config stops it before it serves; secrets are
@@ -173,6 +181,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	if err := checkDashboardEnv(cfg); err != nil {
 		return err
 	}
+	warnTimeouts(cfg, log)
 
 	dbURL, err := requireEnv("DATABASE_URL")
 	if err != nil {
