@@ -1011,7 +1011,7 @@ func TestIntegrations(t *testing.T) {
 	c := e.signInGitLab(true, "acme/widgets")
 	v := getJSON[IntegrationView](e, c, "/api/integrations")
 	want := IntegrationView{Instance: "main", Platform: "gitlab", Connected: true, Approver: "token",
-		Repos: []IntegrationRepo{{Project: "acme/widgets", Installed: true, ApproverReachable: true}}}
+		Repos: []IntegrationRepo{{Project: "acme/widgets", Installed: true, ApproverReachable: true, InlineAvailable: true}}}
 	if v.Instance != want.Instance || v.Platform != want.Platform || !v.Connected || v.Approver != want.Approver ||
 		v.TokenExpiry != nil || len(v.Repos) != 1 || v.Repos[0] != want.Repos[0] {
 		t.Errorf("integrations = %+v\nwant %+v", v, want)
@@ -1033,8 +1033,28 @@ func TestIntegrationsGitHub(t *testing.T) {
 		!v.TokenExpiry.Equal(time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)) {
 		t.Errorf("integrations = %+v", v)
 	}
-	if len(v.Repos) != 1 || v.Repos[0] != (IntegrationRepo{Project: "acme/widgets", Installed: true, ApproverReachable: false}) {
+	// The review App has Pull requests: Read-only there.
+	if len(v.Repos) != 1 || v.Repos[0] != (IntegrationRepo{Project: "acme/widgets", Installed: true, ApproverReachable: false, InlineAvailable: false}) {
 		t.Errorf("repos = %+v", v.Repos)
+	}
+
+	// Once the permission is read and write, inline is available.
+	if err := e.st.UpsertGitHubProject(ctx, store.Project{Instance: "gh", ProjectID: 900, Path: "acme/widgets",
+		InstallationID: 55, InlineAvailable: true}); err != nil {
+		t.Fatal(err)
+	}
+	v = getJSON[IntegrationView](e, c, "/api/integrations")
+	if len(v.Repos) != 1 || !v.Repos[0].InlineAvailable {
+		t.Errorf("repos after the permission = %+v; want inline available", v.Repos)
+	}
+
+	// Without the review App there is nothing to say about inline.
+	if err := e.st.UpsertGitHubProject(ctx, store.Project{Instance: "gh", ProjectID: 900, Path: "acme/widgets"}); err != nil {
+		t.Fatal(err)
+	}
+	v = getJSON[IntegrationView](e, c, "/api/integrations")
+	if len(v.Repos) != 1 || v.Repos[0].Installed || !v.Repos[0].InlineAvailable {
+		t.Errorf("repos without an installation = %+v; want not installed, inline not reported off", v.Repos)
 	}
 }
 

@@ -339,8 +339,8 @@ export const integrations: IntegrationView = {
   approver: "token",
   tokenExpiry: "2026-11-09T00:00:00Z",
   repos: [
-    { project: "acme/payments", installed: true, approverReachable: false },
-    { project: "acme/widgets", installed: true, approverReachable: true },
+    { project: "acme/payments", installed: true, approverReachable: false, inlineAvailable: false },
+    { project: "acme/widgets", installed: true, approverReachable: true, inlineAvailable: true },
   ],
 };
 

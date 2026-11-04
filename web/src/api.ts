@@ -423,7 +423,7 @@ export type IntegrationView = {
   connected: boolean;
   approver: Approver;
   tokenExpiry?: string;
-  repos: { project: string; installed: boolean; approverReachable: boolean }[];
+  repos: { project: string; installed: boolean; approverReachable: boolean; inlineAvailable: boolean }[];
 };
 
 // SecretView says whether a secret is set and when it last changed; the
