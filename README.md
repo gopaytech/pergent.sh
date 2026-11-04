@@ -219,6 +219,14 @@ pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is hand
 
 ## ⬆️ Upgrading
 
+### Upgrading to 0.6.1
+
+0.6.1 fixes the timeout default and how Admin → Settings follows the config.
+
+1. **The default `jobs.timeout` is 30 minutes** (it was 10). Each run may take 40 steps since 0.5.4, and 10 minutes was too short for large reviews. A config that sets `jobs.timeout` keeps its value. pergent.sh now logs a warning at startup when a timeout allows less than 30 seconds a step.
+2. **Admin → Settings saved before 0.6.1 pins every default.** That includes the old 10-minute timeout. Open Admin → Settings: a default saved there shows "Saved here; the config says …". Click **Use config value** on the ones that should follow the config, then save.
+3. **Migration `0018` runs at startup.** It adds one column with a default, so 0.6.0 keeps working on a migrated database.
+
 ### Upgrading to 0.6.0
 
 0.6.0 posts each finding as a thread on its lines. See [Inline findings](#-inline-findings).
@@ -582,7 +590,7 @@ Everything a platform account may see or do comes from the teams it is on, under
 - each repository's **Settings**: approve clean reviews, the failure status, review drafts, the library skills to run, the Job's timeout (60 to 7200 seconds) and memory limit (from 256Mi, and not below `jobs.resources.requests.memory`, to 32Gi), Max steps (5 to 200: the steps each opencode run may take before pergent stops it), and the re-run caps per merge request and per repository per day (1 to 1000; only an admin of the repository changes these two). Each shows "overridden here" or "default", and "Reset to defaults" clears every override (a maintainer's reset leaves the caps);
 - on **Skills**, the buttons **New skill**, **Install from git** and **Check for updates**, and per skill Edit (a written skill only), Copy and Delete ([Skills and instructions](#-skills-and-instructions));
 - **Users**, **Teams** and the **Audit log**;
-- **Integrations** (their own instance: connection, approver, each repository's setup and whether the approver reaches it, an approve token about to expire), read-only for platform admins, and **Settings**: the defaults a repository switched on in the dashboard gets (approve clean reviews, review drafts, failure status, Job timeout and memory, Max steps, and the re-run caps per merge request and per repository; the config's repositories keep the config's own; each shows what the config gives and keeps following it until changed), and the LLM, which only password admins change.
+- **Integrations** (their own instance: connection, approver, each repository's setup and whether the approver reaches it, an approve token about to expire), read-only for platform admins, and **Settings**: the defaults a repository switched on in the dashboard gets (approve clean reviews, review drafts, failure status, Job timeout and memory, Max steps, and the re-run caps per merge request and per repository; the config's repositories keep the config's own; each shows what the config gives and follows it unless saved; **Use config value** drops a saved one), and the LLM, which only password admins change.
 
 Every write is checked on the server: it needs a session, the CSRF token, a role that allows it and a repository the user can see. A viewer calling the API directly gets 403 and nothing changes.
 
