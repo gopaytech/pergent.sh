@@ -541,3 +541,62 @@ func TestCommandThreadFields(t *testing.T) {
 		t.Errorf("GitHub reply = %+v", got[2])
 	}
 }
+
+// RefusedBefore tells whether an earlier, finished command of the author on
+// the change ended with the outcome.
+func TestRefusedBefore(t *testing.T) {
+	s := newStore(t)
+	const why = "refused: not the author or a maintainer"
+	finish := func(mr MRKey, author, comment int64, outcome string, at time.Time) {
+		t.Helper()
+		c := command("review", "", comment)
+		c.MR, c.AuthorID = mr, author
+		if ok, err := s.InsertCommand(ctx, c); err != nil || !ok {
+			t.Fatalf("InsertCommand = %v, %v", ok, err)
+		}
+		got, err := s.ClaimCommands(ctx, 100, t0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, g := range got {
+			if g.CommentID == comment && g.MR == mr {
+				if outcome != "" {
+					if err := s.FinishCommand(ctx, g.ID, outcome, at); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+		}
+	}
+	before := func(mr MRKey, author int64, outcome string) bool {
+		t.Helper()
+		ok, err := s.RefusedBefore(ctx, mr, author, outcome)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+
+	if before(mr1, 11, why) {
+		t.Fatal("no command at all counted")
+	}
+	finish(mr1, 11, 1, why, t0.Add(time.Minute))
+	if !before(mr1, 11, why) {
+		t.Error("an earlier refusal was not found")
+	}
+	if before(mr1, 11, "refused: no permission") {
+		t.Error("another outcome matched")
+	}
+	if before(mr1, 12, why) {
+		t.Error("another author matched")
+	}
+	if before(mr2, 11, why) {
+		t.Error("another change matched")
+	}
+
+	// A command claimed and not finished has no outcome yet.
+	finish(mr1, 13, 2, "", time.Time{})
+	if before(mr1, 13, why) || before(mr1, 13, "") {
+		t.Error("an unfinished command counted")
+	}
+}

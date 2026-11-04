@@ -35,6 +35,10 @@ func newCommandsE2E(t *testing.T) *cmdE2E {
 	e := newDashboardE2E(t, func(o *dashboard.Options) { o.Wake = func() { eng.Wake() } })
 	env := e.env
 	eng = env.Engine
+	// The end-to-end tests have people with write access, who are not the
+	// author, use commands; TestEndToEndCommandGate turns the switch on.
+	off := false
+	env.Engine.Config.Repositories[0].CommandsAuthorAndMaintainersOnly = &off
 	// What main passes as Bots: the review bot's mention, and the bots whose
 	// comments are never commands.
 	bots := func(instance string) (string, []string, bool) {
@@ -561,5 +565,69 @@ func TestEndToEndDismissFromTheThread(t *testing.T) {
 	}
 	if n := len(threadReplies()); n != 1 {
 		t.Errorf("%d replies in the thread, want only the refusal (the publisher's reply comes with the re-publish)", n)
+	}
+}
+
+// With the switch on, a developer who is not the author is refused from the
+// Note Hook to the platform and the audit log, and the author, who has only
+// read access, is let in.
+func TestEndToEndCommandGate(t *testing.T) {
+	e := newCommandsE2E(t)
+	env := e.env
+	gl := env.GitLab
+	on := true
+	env.Engine.Config.Repositories[0].CommandsAuthorAndMaintainersOnly = &on
+	head := sha('a')
+
+	// The change is by the reporter; dev has write access.
+	gl.Reply(http.MethodGet, membersPath(userDeveloper), http.StatusOK, member(30))
+	gl.Reply(http.MethodGet, membersPath(userReporter), http.StatusOK, member(20))
+	for _, id := range []int64{userDeveloper, userReporter} {
+		gl.Reply(http.MethodGet, userPath(id), http.StatusOK, map[string]any{"id": id, "bot": false})
+	}
+	servePublish(env, 1, head)
+	mr := openMR(1, head)
+	mr.Author = gitlab.User{ID: userReporter, Username: "rep"}
+	gl.SetMR(mr)
+	run := env.Report(1, head, resultFor(t, head, skillWithFinding(t, "no_blocking_issues", "suggestion")))
+	if err := env.Store.MarkPublished(env.ctx, run, store.RunDecision{Outcome: store.OutcomeNoBlocking}); err != nil {
+		t.Fatal(err)
+	}
+
+	c := e.say(t, "dev", userDeveloper, "@pergent-review review")
+	e.answer(t)
+	e.wantReactions(t, c, eyes, down)
+	e.wantReplies(t, "Only the author of this MR and the repository's maintainers can use pergent commands.")
+	queued := func() int {
+		t.Helper()
+		runs, err := env.Store.ClaimQueued(env.ctx, 100, env.Now().Add(24*time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(runs)
+	}
+	if n := queued(); n != 0 {
+		t.Errorf("a refused command queued %d runs", n)
+	}
+	entries, err := env.Store.AuditLog(env.ctx, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refusals []store.AuditEntry
+	for _, a := range entries {
+		if a.Action == "command_refused" {
+			refusals = append(refusals, a)
+		}
+	}
+	if len(refusals) != 1 || refusals[0].Actor != "dev (gitlab main)" || refusals[0].Detail != "mr=1 head="+head+" command=review" {
+		t.Fatalf("command_refused entries = %+v, want dev's refusal", refusals)
+	}
+
+	// The author, with read access only, may.
+	c = e.say(t, "rep", userReporter, "@pergent-review review")
+	e.answer(t)
+	e.wantReactions(t, c, eyes, up)
+	if n := queued(); n != 1 {
+		t.Errorf("the author's re-run queued %d runs, want 1", n)
 	}
 }

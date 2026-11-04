@@ -852,17 +852,18 @@ func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Ef
 func settingViews(repo settings.Effective) map[string]SettingView {
 	ov := repo.Overridden
 	return map[string]SettingView{
-		"approve":           {repo.Approve, ov[settings.KeyApprove]},
-		"reviewDrafts":      {repo.ReviewDrafts, ov[settings.KeyReviewDrafts]},
-		"inlineFindings":    {repo.InlineFindings, ov[settings.KeyInlineFindings]},
-		"failureStatus":     {string(repo.FailureStatus), ov[settings.KeyFailureStatus]},
-		"skills":            {repo.Skills, ov[settings.KeySkills]},
-		"repoSkills":        {nonNil(repo.RepoSkills), ov[settings.KeyRepoSkills]},
-		"jobTimeoutSeconds": {int64(repo.JobTimeout / time.Second), ov[settings.KeyJobTimeout]},
-		"maxTurns":          {repo.MaxTurns, ov[settings.KeyMaxTurns]},
-		"jobMemory":         {quantityText(repo.JobMemory), ov[settings.KeyJobMemory]},
-		"rerunLimitPerMR":   {repo.RerunLimitPerMR, ov[settings.KeyRerunLimitPerMR]},
-		"rerunLimitPerRepo": {repo.RerunLimitPerRepo, ov[settings.KeyRerunLimitPerRepo]},
+		"approve":                          {repo.Approve, ov[settings.KeyApprove]},
+		"reviewDrafts":                     {repo.ReviewDrafts, ov[settings.KeyReviewDrafts]},
+		"inlineFindings":                   {repo.InlineFindings, ov[settings.KeyInlineFindings]},
+		"commandsAuthorAndMaintainersOnly": {repo.CommandsAuthorAndMaintainersOnly, ov[settings.KeyCommandsAuthorAndMaintainersOnly]},
+		"failureStatus":                    {string(repo.FailureStatus), ov[settings.KeyFailureStatus]},
+		"skills":                           {repo.Skills, ov[settings.KeySkills]},
+		"repoSkills":                       {nonNil(repo.RepoSkills), ov[settings.KeyRepoSkills]},
+		"jobTimeoutSeconds":                {int64(repo.JobTimeout / time.Second), ov[settings.KeyJobTimeout]},
+		"maxTurns":                         {repo.MaxTurns, ov[settings.KeyMaxTurns]},
+		"jobMemory":                        {quantityText(repo.JobMemory), ov[settings.KeyJobMemory]},
+		"rerunLimitPerMR":                  {repo.RerunLimitPerMR, ov[settings.KeyRerunLimitPerMR]},
+		"rerunLimitPerRepo":                {repo.RerunLimitPerRepo, ov[settings.KeyRerunLimitPerRepo]},
 	}
 }
 

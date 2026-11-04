@@ -96,6 +96,7 @@ type Draft = {
   approve: boolean;
   reviewDrafts: boolean;
   inlineFindings: boolean;
+  commandsAuthorAndMaintainersOnly: boolean;
   failureStatus: string;
   // mode "default" is a null skills setting: the default list.
   skillsMode: "default" | "choose";
@@ -161,6 +162,7 @@ function Form({
     approve: settings.approve.value,
     reviewDrafts: settings.reviewDrafts.value,
     inlineFindings: settings.inlineFindings.value,
+    commandsAuthorAndMaintainersOnly: settings.commandsAuthorAndMaintainersOnly.value,
     failureStatus: settings.failureStatus.value,
     skillsMode: settings.skills.value === null ? "default" : "choose",
     skills: skillsNow,
@@ -195,6 +197,9 @@ function Form({
     if (d.approve !== initial.approve) body.approve = d.approve;
     if (d.reviewDrafts !== initial.reviewDrafts) body.reviewDrafts = d.reviewDrafts;
     if (d.inlineFindings !== initial.inlineFindings) body.inlineFindings = d.inlineFindings;
+    if (d.commandsAuthorAndMaintainersOnly !== initial.commandsAuthorAndMaintainersOnly) {
+      body.commandsAuthorAndMaintainersOnly = d.commandsAuthorAndMaintainersOnly;
+    }
     if (d.failureStatus !== initial.failureStatus) body.failureStatus = d.failureStatus;
     if (d.skillsMode === "default") {
       // Back to the default list: null resets the setting.
@@ -303,6 +308,18 @@ function Form({
             checked={d.inlineFindings}
             disabled={disabled}
             onChange={(v) => set("inlineFindings", v)}
+          />
+        </Setting>
+        <Setting
+          name="Only the author and maintainers use commands"
+          overridden={settings.commandsAuthorAndMaintainersOnly.overridden}
+          help="When on, only the author of a change and the repository's maintainers and owners can use pergent commands on it. When off, anyone with write access can."
+        >
+          <Switch
+            label="Only the author and maintainers use commands"
+            checked={d.commandsAuthorAndMaintainersOnly}
+            disabled={disabled}
+            onChange={(v) => set("commandsAuthorAndMaintainersOnly", v)}
           />
         </Setting>
       </section>

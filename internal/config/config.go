@@ -180,6 +180,10 @@ type Repository struct {
 	// InlineFindings is whether findings are posted as threads on their
 	// lines (default true).
 	InlineFindings *bool
+	// CommandsAuthorAndMaintainersOnly is whether only a change's author and
+	// the repository's maintainers and owners can use pergent commands on it
+	// (default true).
+	CommandsAuthorAndMaintainersOnly *bool
 	// JobTimeout replaces jobs.timeout for this repository.
 	JobTimeout *time.Duration
 	// JobMemory replaces the memory limit of jobs.resources.limits.
@@ -246,6 +250,8 @@ type fileRepository struct {
 
 	RerunLimitPerMR   *int `yaml:"rerun_limit_per_mr"`
 	RerunLimitPerRepo *int `yaml:"rerun_limit_per_repo"`
+
+	CommandsAuthorAndMaintainersOnly *bool `yaml:"commands_author_and_maintainers_only"`
 }
 
 func (f fileRepository) repository() Repository {
@@ -255,6 +261,8 @@ func (f fileRepository) repository() Repository {
 		InlineFindings:  f.InlineFindings,
 		RerunLimitPerMR: f.RerunLimitPerMR, RerunLimitPerRepo: f.RerunLimitPerRepo,
 		MaxTurns: f.MaxTurns,
+
+		CommandsAuthorAndMaintainersOnly: f.CommandsAuthorAndMaintainersOnly,
 	}
 	if f.JobTimeout != nil {
 		d := time.Duration(*f.JobTimeout)

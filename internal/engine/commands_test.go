@@ -54,6 +54,10 @@ type commandFixture struct {
 func newCommandFixture(t *testing.T) *commandFixture {
 	t.Helper()
 	f := &commandFixture{testEnv: newTestEnv(t), head: sha('a'), authorID: userAuthor}
+	// Most command tests have people with write access, who are not the
+	// author, use commands: the switch is off here, and the tests of the
+	// gate turn it on (gate).
+	f.gate(false)
 	servePublish(f.testEnv, 1, f.head)
 	f.serveMR(1, false)
 	f.GitLab.Reply(http.MethodGet, membersPath(userMaintainer), http.StatusOK, member(40))
@@ -68,6 +72,12 @@ func newCommandFixture(t *testing.T) *commandFixture {
 	f.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusCreated, map[string]any{"id": createdNote})
 	f.GitLab.Reply(http.MethodPost, notesPath(2), http.StatusCreated, map[string]any{"id": createdNote})
 	return f
+}
+
+// gate sets the repository's "only the author and maintainers use commands"
+// switch.
+func (f *commandFixture) gate(on bool) {
+	f.Engine.Config.Repositories[0].CommandsAuthorAndMaintainersOnly = &on
 }
 
 func membersPath(userID int64) string {
@@ -581,6 +591,22 @@ func TestUnknownIDAndHelp(t *testing.T) {
 	f.wantReactions(1, unknown, eyes, up)
 	f.wantReactions(1, stranger, eyes, down)
 	f.wantReplies(1, "no finding ffffff in the latest review", help, help, "you don't have permission to do that here")
+}
+
+// With the gate off, help reads no access: a platform that can't say who is a
+// member doesn't keep it from being answered.
+func TestHelpNeedsNoAccessWithTheGateOff(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillOf(t, "security", "no_blocking_issues"))
+	f.GitLab.Handle(http.MethodGet, membersPath(userDeveloper), func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	c := f.say(1, "dev", "help", "", "", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, up)
+	f.wantReplies(1, help)
 }
 
 // An ambiguous fingerprint prefix is no finding.
@@ -2005,4 +2031,436 @@ func TestHelpInSomeOtherThreadIsAPlainComment(t *testing.T) {
 
 	f.wantReactions(1, c, eyes, up)
 	f.wantReplies(1, help)
+}
+
+// ---------------------------------------------------------------------------
+// The command gate: only the author of a change and the repository's
+// maintainers use commands.
+
+// gateReply is the refusal of the gate on a GitLab merge request.
+const gateReply = "Only the author of this MR and the repository's maintainers can use pergent commands."
+
+func TestReplyOnlyAuthorAndMaintainers(t *testing.T) {
+	for platform, want := range map[string]string{
+		"gitlab": "Only the author of this MR and the repository's maintainers can use pergent commands.",
+		"github": "Only the author of this PR and the repository's maintainers can use pergent commands.",
+	} {
+		if got := replyOnlyAuthorAndMaintainers(changeTerm(platform)); got != want {
+			t.Errorf("%s: reply = %q, want %q", platform, got, want)
+		}
+	}
+}
+
+// Refusals about who may are audited; no other outcome is.
+func TestWhoMayOutcome(t *testing.T) {
+	for outcome, want := range map[string]bool{
+		refused(whyNotAuthorOrMaintainer, "x").outcome: true,
+		refused(whyNoPermission, "x").outcome:          true,
+		refused(whyAuthorOfChange, "x").outcome:        true,
+		"refused: not the author or a maintainer":      true,
+		"refused: no permission":                       true,
+		"refused: author of the change":                true,
+		refused("draft", "x").outcome:                  false,
+		refused("unknown finding", "x").outcome:        false,
+		refused("reason needed", "x").outcome:          false,
+		refused("re-run limit reached", "x").outcome:   false,
+		refused("not a finding thread", "x").outcome:   false,
+		store.CommandDone:                              false,
+		store.CommandNoop("help"):                      false,
+		store.CommandThrottled:                         false,
+		dropped("the author is a bot").outcome:         false,
+		"gave up: boom":                                false,
+	} {
+		if got := whoMayOutcome(outcome); got != want {
+			t.Errorf("whoMayOutcome(%q) = %v, want %v", outcome, got, want)
+		}
+	}
+}
+
+// The author is told by known IDs only: an unknown ID, on either side, is
+// nobody.
+func TestIsChangeAuthor(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		commenter, made int64
+		want            bool
+	}{
+		{"same account", 53, 53, true},
+		{"another account", 51, 53, false},
+		{"change author unknown", 51, 0, false},
+		{"commenter unknown", 0, 53, false},
+		{"both unknown", 0, 0, false},
+	} {
+		c := &commandRun{cmd: store.Command{AuthorID: tc.commenter}, change: forge.Change{AuthorID: tc.made}}
+		if got := c.isChangeAuthor(); got != tc.want {
+			t.Errorf("%s: isChangeAuthor = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// refusals are the command_refused entries of the audit log, newest first.
+func (f *commandFixture) refusals() []store.AuditEntry {
+	f.t.Helper()
+	var out []store.AuditEntry
+	for _, e := range f.audit() {
+		if e.Action == "command_refused" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// wantRefusal checks one audit entry of a refusal: who, which change and
+// head, and which command.
+func (f *commandFixture) wantRefusal(e store.AuditEntry, actor string, iid int64, command string) {
+	f.t.Helper()
+	if e.Actor != actor || e.Instance != testInstance || e.Project != testProjectPath {
+		f.t.Errorf("refusal audited as %+v, want actor %q on %s/%s", e, actor, testInstance, testProjectPath)
+	}
+	want := fmt.Sprintf("mr=%d head=%s command=%s", iid, f.head, command)
+	if e.Detail != want {
+		f.t.Errorf("refusal detail = %q, want %q", e.Detail, want)
+	}
+}
+
+func TestCommandGateRefusesDeveloper(t *testing.T) {
+	f := newCommandFixture(t)
+	f.gate(true)
+	f.review(skillOf(t, "security", "no_blocking_issues"))
+
+	c := f.say(1, "dev", "review", "", "", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, down)
+	f.wantReplies(1, gateReply)
+	if n := len(f.queued()); n != 0 {
+		t.Errorf("%d runs queued by a refused command, want none", n)
+	}
+	rs := f.refusals()
+	if len(rs) != 1 {
+		t.Fatalf("%d command_refused entries, want 1: %+v", len(rs), f.audit())
+	}
+	f.wantRefusal(rs[0], "dev (gitlab main)", 1, "review")
+	if n := countAction(f.audit(), "review_rerun"); n != 0 {
+		t.Errorf("%d re-runs audited, want none", n)
+	}
+}
+
+// The author may always use commands, whatever their access: a Reporter here.
+func TestCommandGateAllowsAuthorWithReadAccess(t *testing.T) {
+	f := newCommandFixture(t)
+	f.gate(true)
+	f.authorID = userReporter
+	f.serveMR(1, false)
+	f.review(skillOf(t, "security", "no_blocking_issues"))
+
+	c := f.say(1, "rep", "review", "", "", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, up)
+	f.wantReplies(1)
+	if n := len(f.queued()); n != 1 {
+		t.Errorf("%d runs queued, want the re-run", n)
+	}
+	if rs := f.refusals(); len(rs) != 0 {
+		t.Errorf("the author was audited as refused: %+v", rs)
+	}
+}
+
+func TestCommandGateAllowsMaintainer(t *testing.T) {
+	f := newCommandFixture(t)
+	f.gate(true)
+	f.review(skillOf(t, "security", "no_blocking_issues"))
+
+	c := f.say(1, "mo", "review", "", "", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, up)
+	f.wantReplies(1)
+	if n := len(f.queued()); n != 1 {
+		t.Errorf("%d runs queued, want the re-run", n)
+	}
+	if rs := f.refusals(); len(rs) != 0 {
+		t.Errorf("a maintainer was audited as refused: %+v", rs)
+	}
+}
+
+// When the platform doesn't report who opened the change, nobody is the
+// author: a Developer is refused.
+func TestCommandGateUnknownAuthorIsNotAuthor(t *testing.T) {
+	f := newCommandFixture(t)
+	f.gate(true)
+	f.authorID = 0
+	f.serveMR(1, false)
+	f.review(skillOf(t, "security", "no_blocking_issues"))
+
+	c := f.say(1, "dev", "review", "", "", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, down)
+	f.wantReplies(1, gateReply)
+	if n := len(f.queued()); n != 0 {
+		t.Errorf("%d runs queued, want none", n)
+	}
+	if rs := f.refusals(); len(rs) != 1 {
+		t.Errorf("%d command_refused entries, want 1", len(rs))
+	}
+}
+
+// help and commands the bot doesn't know are refused too.
+func TestCommandGateRefusesHelp(t *testing.T) {
+	for _, kind := range []string{"help", "unknown"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newCommandFixture(t)
+			f.gate(true)
+
+			c := f.say(1, "dev", kind, "", "", time.Now())
+			f.run()
+
+			f.wantReactions(1, c, eyes, down)
+			f.wantReplies(1, gateReply)
+			rs := f.refusals()
+			if len(rs) != 1 {
+				t.Fatalf("%d command_refused entries, want 1", len(rs))
+			}
+			f.wantRefusal(rs[0], "dev (gitlab main)", 1, kind)
+		})
+	}
+}
+
+// A person is told once per change; every refusal is still audited.
+func TestRefusalRepliedOncePerPersonPerChange(t *testing.T) {
+	f := newCommandFixture(t)
+	f.gate(true)
+	f.review(skillOf(t, "security", "no_blocking_issues"))
+	at := time.Now()
+
+	first := f.say(1, "dev", "review", "", "", at)
+	f.run()
+	f.wantReactions(1, first, eyes, down)
+	f.wantReplies(1, gateReply)
+
+	// Once the throttle window has passed, the same person's next command
+	// on the change is refused with a 👎 only.
+	f.SetNow(f.Now().Add(commandThrottleWindow + time.Second))
+	second := f.say(1, "dev", "help", "", "", at.Add(3*time.Minute))
+	f.run()
+	f.wantReactions(1, second, eyes, down)
+	f.wantReplies(1, gateReply)
+	if rs := f.refusals(); len(rs) != 2 {
+		t.Errorf("%d command_refused entries, want both refusals audited", len(rs))
+	}
+
+	// Their first refusal on another change is answered with the reply.
+	f.serveMR(2, false)
+	elsewhere := f.say(2, "dev", "review", "", "", at.Add(4*time.Minute))
+	f.run()
+	f.wantReactions(2, elsewhere, eyes, down)
+	f.wantReplies(2, gateReply)
+	f.wantReplies(1, gateReply)
+	if rs := f.refusals(); len(rs) != 3 {
+		t.Errorf("%d command_refused entries, want 3", len(rs))
+	}
+}
+
+// A refusal whose reply failed is tried again; it is audited when it has been
+// answered, once.
+func TestRefusalAuditedOnceAcrossRetry(t *testing.T) {
+	f := newCommandFixture(t)
+	f.gate(true)
+	f.review(skillOf(t, "security", "no_blocking_issues"))
+	f.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusBadRequest, `{"message":"boom"}`)
+
+	c := f.say(1, "dev", "review", "", "", time.Now())
+	f.run()
+	f.wantReactions(1, c, eyes)
+	if rs := f.refusals(); len(rs) != 0 {
+		t.Fatalf("%d command_refused entries while the reply failed, want none", len(rs))
+	}
+
+	f.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusCreated, map[string]any{"id": createdNote})
+	f.SetNow(f.Now().Add(time.Minute))
+	f.run()
+
+	f.wantReactions(1, c, eyes, down)
+	// The reply was posted twice: the failed attempt and the retry, which
+	// didn't take its own earlier attempt for a refusal "before" and so
+	// didn't leave the reply out.
+	f.wantReplies(1, gateReply, gateReply)
+	if rs := f.refusals(); len(rs) != 1 {
+		t.Errorf("%d command_refused entries after the retry, want exactly 1", len(rs))
+	}
+}
+
+// With the switch off, the author is still allowed whatever their access,
+// and a Reporter who is not the author is refused as before, and audited.
+func TestAuthorAllowedWhenSwitchOff(t *testing.T) {
+	t.Run("the author re-runs", func(t *testing.T) {
+		f := newCommandFixture(t)
+		f.gate(false)
+		f.authorID = userReporter
+		f.serveMR(1, false)
+		f.review(skillOf(t, "security", "no_blocking_issues"))
+
+		r := f.say(1, "rep", "review", "", "", time.Now())
+		f.run()
+
+		f.wantReactions(1, r, eyes, up)
+		if n := len(f.queued()); n != 1 {
+			t.Errorf("%d runs queued, want the author's re-run", n)
+		}
+		f.wantReplies(1)
+		if rs := f.refusals(); len(rs) != 0 {
+			t.Errorf("the author was audited as refused: %+v", rs)
+		}
+	})
+	// (A separate fixture: a dismissal moves the review to "reported", and a
+	// re-run of a head with a reported run is answered as already queued.)
+	t.Run("the author dismisses a suggestion", func(t *testing.T) {
+		f := newCommandFixture(t)
+		f.gate(false)
+		f.authorID = userReporter
+		f.serveMR(1, false)
+		f.review(skillWithFinding(t, "no_blocking_issues", "suggestion"))
+
+		d := f.say(1, "rep", "dismiss", "abc123", "", time.Now())
+		f.run()
+
+		f.wantReactions(1, d, eyes, up)
+		if ds := f.dismissals(1); len(ds) != 1 || ds[0].Severity != "suggestion" || ds[0].Actor != "rep (gitlab main)" {
+			t.Fatalf("dismissals = %+v, want the suggestion dismissed by the author", ds)
+		}
+		f.wantReplies(1)
+		if rs := f.refusals(); len(rs) != 0 {
+			t.Errorf("the author was audited as refused: %+v", rs)
+		}
+	})
+	t.Run("a reporter who is not the author", func(t *testing.T) {
+		f := newCommandFixture(t)
+		f.gate(false)
+		f.review(skillOf(t, "security", "no_blocking_issues"))
+
+		c := f.say(1, "rep", "review", "", "", time.Now())
+		f.run()
+
+		f.wantReactions(1, c, eyes, down)
+		f.wantReplies(1, replyNoPermission)
+		if n := len(f.queued()); n != 0 {
+			t.Errorf("%d runs queued, want none", n)
+		}
+		rs := f.refusals()
+		if len(rs) != 1 {
+			t.Fatalf("%d command_refused entries, want 1", len(rs))
+		}
+		f.wantRefusal(rs[0], "rep (gitlab main)", 1, "review")
+	})
+}
+
+// The author, a maintainer, still can't dismiss a blocking finding of their
+// own change, and the refusal is audited.
+func TestAuthorBlockingDismissStillRefusedAndAudited(t *testing.T) {
+	f := newCommandFixture(t)
+	f.gate(true)
+	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
+
+	c := f.say(1, "maya", "dismiss", "abc123", "I know better", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, down)
+	f.wantReplies(1, replyAuthor)
+	if ds := f.dismissals(1); len(ds) != 0 {
+		t.Errorf("dismissals = %+v, want none", ds)
+	}
+	rs := f.refusals()
+	if len(rs) != 1 {
+		t.Fatalf("%d command_refused entries, want 1", len(rs))
+	}
+	f.wantRefusal(rs[0], "maya (gitlab main)", 1, "dismiss")
+}
+
+// A blocking dismissal by someone without maintainer access is refused as
+// "no permission" and audited, with the switch off.
+func TestBlockingDismissWithoutMaintainAccessAudited(t *testing.T) {
+	f := newCommandFixture(t)
+	f.gate(false)
+	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
+
+	c := f.say(1, "dev", "dismiss", "abc123", "constant", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, down)
+	f.wantReplies(1, replyNoPermission)
+	rs := f.refusals()
+	if len(rs) != 1 {
+		t.Fatalf("%d command_refused entries, want 1", len(rs))
+	}
+	f.wantRefusal(rs[0], "dev (gitlab main)", 1, "dismiss")
+}
+
+// Ordinary mistakes are not audited.
+func TestOrdinaryRefusalsAreNotAudited(t *testing.T) {
+	f := newCommandFixture(t)
+	f.gate(true)
+	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
+
+	unknown := f.say(1, "mo", "dismiss", "ffffff", "reason", time.Now())
+	f.run()
+
+	f.wantReactions(1, unknown, eyes, down)
+	if rs := f.refusals(); len(rs) != 0 {
+		t.Errorf("an unknown finding ID was audited: %+v", rs)
+	}
+}
+
+// A dismissal written in a finding's thread is gated too, and the refusal is
+// answered in the thread.
+func TestThreadCommandGate(t *testing.T) {
+	f := newCommandFixture(t)
+	f.gate(true)
+	f.review(skillWithFinding(t, "no_blocking_issues", "suggestion"))
+	f.findingThread(sqlFingerprint)
+
+	c := f.sayInThread(1, "dev", threadDiscussion, "dismiss", "", "not a problem", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, down)
+	f.wantReplies(1)
+	f.wantThreadReplies(threadDiscussion, gateReply)
+	if ds := f.dismissals(1); len(ds) != 0 {
+		t.Errorf("dismissals = %+v, want none", ds)
+	}
+	rs := f.refusals()
+	if len(rs) != 1 {
+		t.Fatalf("%d command_refused entries, want 1", len(rs))
+	}
+	f.wantRefusal(rs[0], "dev (gitlab main)", 1, "dismiss")
+}
+
+// The author with only read access dismisses a suggestion in its finding's
+// thread, whether the gate is on or off.
+func TestThreadDismissByAuthorWithReadAccess(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		t.Run(fmt.Sprintf("gate %v", on), func(t *testing.T) {
+			f := newCommandFixture(t)
+			f.gate(on)
+			f.authorID = userReporter
+			f.serveMR(1, false)
+			f.review(skillWithFinding(t, "no_blocking_issues", "suggestion"))
+			f.findingThread(sqlFingerprint)
+
+			c := f.sayInThread(1, "rep", threadDiscussion, "dismiss", "", "", time.Now())
+			f.run()
+
+			f.wantReactions(1, c, eyes, up)
+			f.wantReplies(1)
+			f.wantThreadReplies(threadDiscussion)
+			ds := f.dismissals(1)
+			if len(ds) != 1 || ds[0].Fingerprint != sqlFingerprint || ds[0].Severity != "suggestion" || ds[0].Actor != "rep (gitlab main)" {
+				t.Fatalf("dismissals = %+v, want the suggestion dismissed by the author", ds)
+			}
+			if rs := f.refusals(); len(rs) != 0 {
+				t.Errorf("the author was audited as refused: %+v", rs)
+			}
+		})
+	}
 }

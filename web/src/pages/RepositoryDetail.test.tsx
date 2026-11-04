@@ -271,6 +271,28 @@ describe("RepositoryDetail", () => {
     expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({ inlineFindings: false });
   });
 
+  it("shows the commands switch after Inline findings and sends only that key when it is switched off", async () => {
+    const fake = fakeApi({
+      ...base,
+      "PUT /api/repositories/main/acme/payments/settings": { body: payments },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const toggle = await screen.findByRole("switch", { name: "Only the author and maintainers use commands" });
+    expect(toggle).toBeChecked();
+    expect(
+      screen.getByText(
+        "When on, only the author of a change and the repository's maintainers and owners can use pergent commands on it. When off, anyone with write access can.",
+      ),
+    ).toBeInTheDocument();
+    const switches = screen.getAllByRole("switch").map((el) => el.getAttribute("aria-label") ?? el.textContent);
+    expect(switches.indexOf("Only the author and maintainers use commands")).toBe(switches.indexOf("Inline findings") + 1);
+    await userEvent.click(toggle);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({
+      commandsAuthorAndMaintainersOnly: false,
+    });
+  });
+
   it("shows a maintainer the re-run caps read-only and never sends them", async () => {
     const asMaintainer = repoDetail(repoPayments, "maintainer");
     const fake = fakeApi({
