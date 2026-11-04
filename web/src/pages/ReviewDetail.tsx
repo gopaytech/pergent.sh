@@ -234,7 +234,8 @@ function Facts({ run, platform }: { run: RunDetailView; platform: string }) {
       <div>{run.approved ? "Approved: yes" : `Approved: no — ${run.approvalReason || "not approved"}`}</div>
       <div>
         pergent <span className="mono">{run.pergentVersion || "not recorded"}</span> · model{" "}
-        <span className="mono">{run.model ?? "not recorded"}</span>
+        <span className="mono">{run.model ?? "not recorded"}</span> · max steps{" "}
+        <span className="mono">{run.maxTurns ?? "not recorded"}</span>
       </div>
       <div>
         Tokens: {count(run.tokens.in)} in · {count(run.tokens.out)} out

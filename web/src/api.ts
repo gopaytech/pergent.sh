@@ -166,6 +166,8 @@ export type RunDetailView = {
   approvalReason: string;
   pergentVersion: string;
   model: string | null;
+  // The step limit the run had; null for a run from before it was recorded.
+  maxTurns: number | null;
   tokens: { in: number; out: number };
   files: {
     reviewed: string[];
@@ -201,6 +203,7 @@ export type RepoSettings = {
   // repoSkills are the detected repository skills turned on.
   repoSkills: SettingView<string[]>;
   jobTimeoutSeconds: SettingView<number>;
+  maxTurns: SettingView<number>;
   jobMemory: SettingView<string>;
   rerunLimitPerMR: SettingView<number>;
   rerunLimitPerRepo: SettingView<number>;
@@ -284,6 +287,7 @@ export type SettingsUpdate = Partial<{
   skills: string[] | null;
   repoSkills: string[] | null;
   jobTimeoutSeconds: number | null;
+  maxTurns: number | null;
   jobMemory: string | null;
   rerunLimitPerMR: number | null;
   rerunLimitPerRepo: number | null;
@@ -432,6 +436,7 @@ export type DefaultsView = {
   reviewDrafts: boolean;
   failureStatus: string;
   jobTimeoutSeconds: number;
+  maxTurns: number;
   jobMemory: string;
   // The most re-runs (buttons and comments) per merge request, and per
   // repository, in a UTC day: 1 to 1000.

@@ -38,6 +38,7 @@ function Defaults({ v }: { v: DefaultsView }) {
   const [reviewDrafts, setReviewDrafts] = useState(v.reviewDrafts);
   const [failureStatus, setFailureStatus] = useState(v.failureStatus);
   const [timeout, setTimeoutText] = useState(String(v.jobTimeoutSeconds));
+  const [steps, setSteps] = useState(String(v.maxTurns));
   const [memory, setMemory] = useState(v.jobMemory);
   const [capMR, setCapMR] = useState(String(v.rerunLimitPerMR));
   const [capRepo, setCapRepo] = useState(String(v.rerunLimitPerRepo));
@@ -63,6 +64,11 @@ function Defaults({ v }: { v: DefaultsView }) {
       setProblem("The timeout is a whole number of seconds, from 60 to 7200.");
       return;
     }
+    const s = steps.trim();
+    if (!/^\d+$/.test(s) || Number(s) < 5 || Number(s) > 200) {
+      setProblem("Max steps is a whole number from 5 to 200.");
+      return;
+    }
     // A cap is a whole number from 1 to 1000; empty is the built-in one.
     const caps = [capMR, capRepo].map((c) => c.trim());
     if (caps.some((c) => c !== "" && (!/^\d+$/.test(c) || Number(c) < 1 || Number(c) > 1000))) {
@@ -76,6 +82,7 @@ function Defaults({ v }: { v: DefaultsView }) {
       reviewDrafts,
       failureStatus,
       jobTimeoutSeconds: Number(t),
+      maxTurns: Number(s),
       jobMemory: memory.trim() === "" ? null : memory.trim(),
       rerunLimitPerMR: caps[0] === "" ? null : Number(caps[0]),
       rerunLimitPerRepo: caps[1] === "" ? null : Number(caps[1]),
@@ -140,6 +147,22 @@ function Defaults({ v }: { v: DefaultsView }) {
             value={timeout}
             disabled={save.isPending}
             onChange={(e) => setTimeoutText(e.target.value)}
+          />
+        </div>
+      </div>
+      <div className="set">
+        <div>
+          <div className="name">Max steps</div>
+          <div className="help">Steps each opencode run may take before pergent stops it; each step can call several tools.</div>
+        </div>
+        <div>
+          <input
+            type="text"
+            inputMode="numeric"
+            aria-label="Max steps"
+            value={steps}
+            disabled={save.isPending}
+            onChange={(e) => setSteps(e.target.value)}
           />
         </div>
       </div>
