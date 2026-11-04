@@ -219,6 +219,14 @@ pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is hand
 
 ## ⬆️ Upgrading
 
+### Upgrading to 0.6.1
+
+0.6.1 fixes the timeout default and how Admin → Settings follows the config.
+
+1. **The default `jobs.timeout` is 30 minutes** (it was 10). Each run may take 40 steps since 0.5.4, and 10 minutes was too short for large reviews. A config that sets `jobs.timeout` keeps its value. pergent.sh now logs a warning at startup when a timeout in the config file allows less than 30 seconds a step (timeouts set in the dashboard are not checked; see 2).
+2. **Admin → Settings saved before 0.6.1 pins every default.** That includes the old 10-minute timeout. Open Admin → Settings: a default saved there shows "Saved here; the config says …". Click **Use config value** on the ones that should follow the config, then save. Saving once lets every default equal to the config's value follow it again; **Use config value** is needed only where the saved value differs, such as the old 600-second timeout.
+3. **Migration `0018` runs at startup.** It adds one column with a default, so 0.6.0 keeps working on a migrated database.
+
 ### Upgrading to 0.6.0
 
 0.6.0 posts each finding as a thread on its lines. See [Inline findings](#-inline-findings).
@@ -582,7 +590,7 @@ Everything a platform account may see or do comes from the teams it is on, under
 - each repository's **Settings**: approve clean reviews, the failure status, review drafts, the library skills to run, the Job's timeout (60 to 7200 seconds) and memory limit (from 256Mi, and not below `jobs.resources.requests.memory`, to 32Gi), Max steps (5 to 200: the steps each opencode run may take before pergent stops it), and the re-run caps per merge request and per repository per day (1 to 1000; only an admin of the repository changes these two). Each shows "overridden here" or "default", and "Reset to defaults" clears every override (a maintainer's reset leaves the caps);
 - on **Skills**, the buttons **New skill**, **Install from git** and **Check for updates**, and per skill Edit (a written skill only), Copy and Delete ([Skills and instructions](#-skills-and-instructions));
 - **Users**, **Teams** and the **Audit log**;
-- **Integrations** (their own instance: connection, approver, each repository's setup and whether the approver reaches it, an approve token about to expire), read-only for platform admins, and **Settings**: the defaults a repository switched on in the dashboard gets (approve clean reviews, review drafts, failure status, Job timeout and memory, Max steps, and the re-run caps per merge request and per repository; the config's repositories keep the config's own), and the LLM, which only password admins change.
+- **Integrations** (their own instance: connection, approver, each repository's setup and whether the approver reaches it, an approve token about to expire), read-only for platform admins, and **Settings**: the defaults a repository switched on in the dashboard gets (approve clean reviews, review drafts, failure status, Job timeout and memory, Max steps, and the re-run caps per merge request and per repository; the config's repositories keep the config's own; each shows what the config gives and follows it unless saved; **Use config value** drops a saved one), and the LLM, which only password admins change.
 
 Every write is checked on the server: it needs a session, the CSRF token, a role that allows it and a repository the user can see. A viewer calling the API directly gets 403 and nothing changes.
 
@@ -599,7 +607,7 @@ Password admins add GitLab and GitHub instances, with their secrets, under **Adm
 - **An instance that can't connect** (at startup, or right after it was saved) doesn't stop pergent.sh, so the dashboard where it is fixed stays up. pergent.sh logs the error, and an instance-wide "Needs attention" item (kind `instance_unreachable`) shows it to the operator and to that instance's admins; the item goes when the instance connects. Its webhooks are still accepted and the events queued, and reviews of its repositories wait queued (the log says `queued reviews wait: pergent.sh isn't connected to their instance; an operator fixes it on Admin → Integrations`) until it is saved again in **Integrations**. An instance in the config file that can't connect still stops startup.
 - **The config file wins.** Instances in the config are listed as "config" and are read-only (409 `this instance is managed by the config file; change it there`), and so are the secrets they name by environment variable. An instance in the dashboard whose name is also in the config stops startup, naming both. Repositories in the config name instances in the config only; repositories of an instance added in the dashboard are switched on in the dashboard.
 - **The LLM** (provider, model, base URL and API key) is set in the dashboard by password admins. The provider is picked from a list (Anthropic, OpenAI, Google, DeepSeek, OpenRouter, Groq, Mistral, xAI) or typed as any other opencode provider ID under **Other**; with a base URL, that can be any OpenAI-compatible server. The LLM is set there unless the config has an `llm:` block, which wins and makes it read-only (409 `the LLM is set in the config file; change it there`). The key is needed only when none is stored. With no LLM set, reviews wait queued, and the log says `no LLM is set: an operator sets it on Admin → Settings`.
-- **Defaults.** The defaults on **Admin → Settings** (approve clean reviews, review drafts, failure status, Job timeout, Job memory, Max steps (40 until set) and the re-run caps, 10 per merge request and 50 per repository a day until set, and the default skill list, picked among the library's skills with a running total against 900 KiB) apply to repositories switched on in the dashboard only; repositories in the config keep the config's own. The Job image, concurrency, `max_running` and resources stay in the config and the chart.
+- **Defaults.** The defaults on **Admin → Settings** (approve clean reviews, review drafts, failure status, Job timeout, Job memory, Max steps (40 until set) and the re-run caps, 10 per merge request and 50 per repository a day until set, and the default skill list, picked among the library's skills with a running total against 900 KiB) apply to repositories switched on in the dashboard only; repositories in the config keep the config's own. Under each default the form says what the config gives (`jobs.timeout`, `jobs.max_turns`, `jobs.resources.limits.memory` and the built-in values). A default you leave at the config's value keeps following it, so a later change in the config reaches the dashboard's repositories; one you change is saved here, shows "Saved here; the config says …" and stays until you press **Use config value** and save. The Job image, concurrency, `max_running` and resources stay in the config and the chart.
 - **`PERGENT_SH_SECRET_KEY`.** Secrets are stored encrypted with it. Changing it isn't supported and there is no rotation. A stored secret that can't be opened with the key shows as "not set" (startup logs which instance and fields, `secrets of an instance couldn't be opened with PERGENT_SH_SECRET_KEY; they count as not set`), and has to be entered again.
 
 ### Repositories in the config and in the dashboard
@@ -838,7 +846,7 @@ pergent.sh posts each finding of a review as a thread on its lines, next to the 
 **GitHub setup.**
 
 - The review App needs **Pull requests: Read and write**. With Read-only, inline is off for that instance and the Integrations page says so.
-- **Administration: Read** is optional. It lets pergent.sh read the classic branch protection's conversation-resolution rule. Without it, only rulesets are read and the classic rule is treated as off, so a branch whose only such rule is classic gets suggestions inline too.
+- **Administration: Read** is optional. It lets pergent.sh read the classic branch protection's conversation-resolution rule. Without it, only rulesets are read and the classic rule is treated as off, so a branch whose only such rule is classic gets suggestions inline too. The Integrations page notes a repository where the App can't read it (when inline findings are available there).
 - Subscribe the App to **Pull request review comment**. Without it, replies in a finding's thread are not received.
 
 **GitLab setup.** "All threads must be resolved" is read from the project settings. No new webhook is needed: note events already arrive.
@@ -1118,7 +1126,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `jobs.namespace` | required | Namespace the Jobs run in. |
 | `jobs.image` | `ghcr.io/gopaytech/pergent:v0.4.0` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
 | `jobs.max_running` | `5` | Most Jobs running at once. Further runs wait in the queue. At least 1. |
-| `jobs.timeout` | `10m` | pergent's own review budget per Job (`--timeout`). The Job's deadline adds 2 minutes to deliver and a clone allowance of at least 2 minutes. |
+| `jobs.timeout` | `30m` | pergent's own review budget per Job (`--timeout`). The Job's deadline adds 2 minutes to deliver and a clone allowance of at least 2 minutes. At startup pergent.sh warns about a timeout shorter than its step limit times 30 seconds. |
 | `jobs.max_turns` | `40` | pergent's step limit per opencode run (`--max-turns`) for every repository, 5 to 200. |
 | `jobs.concurrency` | `4` | pergent's `--concurrency`: opencode runs in flight inside one Job. At least 1. |
 | `jobs.resources` | requests 500m CPU, 1Gi memory; limits 2 CPU, 4Gi memory | Kubernetes `requests` and `limits` for both containers of a Job. If you set either `requests` or `limits`, the default is not used at all. |

@@ -1011,7 +1011,7 @@ func TestIntegrations(t *testing.T) {
 	c := e.signInGitLab(true, "acme/widgets")
 	v := getJSON[IntegrationView](e, c, "/api/integrations")
 	want := IntegrationView{Instance: "main", Platform: "gitlab", Connected: true, Approver: "token",
-		Repos: []IntegrationRepo{{Project: "acme/widgets", Installed: true, ApproverReachable: true, InlineAvailable: true}}}
+		Repos: []IntegrationRepo{{Project: "acme/widgets", Installed: true, ApproverReachable: true, InlineAvailable: true, ProtectionReadable: true}}}
 	if v.Instance != want.Instance || v.Platform != want.Platform || !v.Connected || v.Approver != want.Approver ||
 		v.TokenExpiry != nil || len(v.Repos) != 1 || v.Repos[0] != want.Repos[0] {
 		t.Errorf("integrations = %+v\nwant %+v", v, want)
@@ -1034,7 +1034,7 @@ func TestIntegrationsGitHub(t *testing.T) {
 		t.Errorf("integrations = %+v", v)
 	}
 	// The review App has Pull requests: Read-only there.
-	if len(v.Repos) != 1 || v.Repos[0] != (IntegrationRepo{Project: "acme/widgets", Installed: true, ApproverReachable: false, InlineAvailable: false}) {
+	if len(v.Repos) != 1 || v.Repos[0] != (IntegrationRepo{Project: "acme/widgets", Installed: true, ApproverReachable: false, InlineAvailable: false, ProtectionReadable: false}) {
 		t.Errorf("repos = %+v", v.Repos)
 	}
 
@@ -1048,13 +1048,23 @@ func TestIntegrationsGitHub(t *testing.T) {
 		t.Errorf("repos after the permission = %+v; want inline available", v.Repos)
 	}
 
+	// Administration: Read turns protectionReadable on.
+	if err := e.st.UpsertGitHubProject(ctx, store.Project{Instance: "gh", ProjectID: 900, Path: "acme/widgets",
+		InstallationID: 55, InlineAvailable: true, ProtectionReadable: true}); err != nil {
+		t.Fatal(err)
+	}
+	v = getJSON[IntegrationView](e, c, "/api/integrations")
+	if len(v.Repos) != 1 || !v.Repos[0].ProtectionReadable {
+		t.Errorf("repos after Administration: Read = %+v; want protection readable", v.Repos)
+	}
+
 	// Without the review App there is nothing to say about inline.
 	if err := e.st.UpsertGitHubProject(ctx, store.Project{Instance: "gh", ProjectID: 900, Path: "acme/widgets"}); err != nil {
 		t.Fatal(err)
 	}
 	v = getJSON[IntegrationView](e, c, "/api/integrations")
-	if len(v.Repos) != 1 || v.Repos[0].Installed || !v.Repos[0].InlineAvailable {
-		t.Errorf("repos without an installation = %+v; want not installed, inline not reported off", v.Repos)
+	if len(v.Repos) != 1 || v.Repos[0].Installed || !v.Repos[0].InlineAvailable || !v.Repos[0].ProtectionReadable {
+		t.Errorf("repos without an installation = %+v; want not installed, nothing reported off", v.Repos)
 	}
 }
 
@@ -1064,7 +1074,11 @@ func TestAdminSettings(t *testing.T) {
 	v := getJSON[AdminSettingsView](e, c, "/api/admin/settings")
 	want := AdminSettingsView{Instance: "main",
 		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, InlineFindings: true, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40,
-			RerunLimitPerMR: 10, RerunLimitPerRepo: 50, Skills: []string{}},
+			RerunLimitPerMR: 10, RerunLimitPerRepo: 50, Skills: []string{},
+			Config: DefaultValues{Approve: true, ReviewDrafts: true, InlineFindings: true, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40,
+				RerunLimitPerMR: 10, RerunLimitPerRepo: 50},
+			Pinned: map[string]bool{"approve": false, "reviewDrafts": false, "inlineFindings": false, "failureStatus": false, "jobTimeoutSeconds": false,
+				"maxTurns": false, "jobMemory": false, "rerunLimitPerMR": false, "rerunLimitPerRepo": false}},
 		LLM: LLMView{Provider: "anthropic", Model: "claude-sonnet-4"}}
 	got, _ := json.Marshal(v)
 	wantJSON, _ := json.Marshal(want)

@@ -631,6 +631,10 @@ type IntegrationRepo struct {
 	// read pull requests, so it can't post inline threads. It says nothing
 	// (true) for a repository without the review App.
 	InlineAvailable bool `json:"inlineAvailable"`
+	// ProtectionReadable is false when the review App is installed but lacks
+	// Administration: Read, so it can't read classic branch protection. It
+	// says nothing (true) for a repository without the review App.
+	ProtectionReadable bool `json:"protectionReadable"`
 }
 
 // AdminSettingsView is GET /api/admin/settings (admins only): the defaults
@@ -659,6 +663,29 @@ type DefaultsView struct {
 	// Skills is the default list: the library skills a repository reviews
 	// when its own skills setting is null. Empty means none.
 	Skills []string `json:"skills"`
+	// Config holds the values the config gives (jobs.* and the built-in
+	// defaults), before anything saved here. Skills has no config value.
+	Config DefaultValues `json:"config"`
+	// Pinned says which defaults were saved here and so no longer follow the
+	// config, by JSON key (approve, reviewDrafts, inlineFindings,
+	// failureStatus, jobTimeoutSeconds, maxTurns, jobMemory,
+	// rerunLimitPerMR, rerunLimitPerRepo). Every key is present.
+	Pinned map[string]bool `json:"pinned"`
+}
+
+// DefaultValues is DefaultsView's settings without the skill list, with the
+// same JSON keys.
+type DefaultValues struct {
+	Approve           bool   `json:"approve"`
+	ReviewDrafts      bool   `json:"reviewDrafts"`
+	InlineFindings    bool   `json:"inlineFindings"`
+	FailureStatus     string `json:"failureStatus"`
+	JobTimeoutSeconds int64  `json:"jobTimeoutSeconds"`
+	MaxTurns          int    `json:"maxTurns"`
+	// JobMemory is the Job's memory limit, "" when none.
+	JobMemory         string `json:"jobMemory"`
+	RerunLimitPerMR   int    `json:"rerunLimitPerMR"`
+	RerunLimitPerRepo int    `json:"rerunLimitPerRepo"`
 }
 
 // LLMView is the model reviews use.

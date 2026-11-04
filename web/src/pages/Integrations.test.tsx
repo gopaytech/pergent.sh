@@ -9,6 +9,7 @@ import {
   instanceGitHubOneApp,
   instanceGitLab,
   integrations,
+  integrationsGitHub,
   operator,
   platformAdmin,
 } from "../test/fixtures";
@@ -37,6 +38,31 @@ describe("Integrations for a platform admin", () => {
     expect(widgets).not.toHaveTextContent("Inline findings");
     expect(screen.queryByRole("button", { name: /Add .* instance/ })).not.toBeInTheDocument();
     expect(fake.find("GET", "/api/admin/instances")).toHaveLength(0);
+  });
+});
+
+describe("Integrations on GitHub", () => {
+  const note =
+    "Can't read classic branch protection (the review App lacks Administration: Read); a \"require conversation resolution\" rule there is treated as off.";
+
+  it("says when classic branch protection can't be read, only where inline findings are on", async () => {
+    fakeApi({ "GET /api/me": { body: platformAdmin }, "GET /api/integrations": { body: integrationsGitHub } });
+    renderApp("/integrations");
+    const orders = (await screen.findByText("acme/orders")).closest("tr") as HTMLElement;
+    expect(orders).toHaveTextContent(note);
+    expect(orders).not.toHaveTextContent("Inline findings");
+    const payments = screen.getByText("acme/payments").closest("tr") as HTMLElement;
+    expect(payments).toHaveTextContent("Inline findings are off");
+    expect(payments).not.toHaveTextContent("classic branch protection");
+    const widgets = screen.getByText("acme/widgets").closest("tr") as HTMLElement;
+    expect(widgets).not.toHaveTextContent("classic branch protection");
+  });
+
+  it("does not raise it as a Needs attention item", async () => {
+    fakeApi({ "GET /api/me": { body: platformAdmin }, "GET /api/integrations": { body: integrationsGitHub } });
+    renderApp("/integrations");
+    await screen.findByText("acme/orders");
+    expect(screen.queryByText(/Needs attention/)).not.toBeInTheDocument();
   });
 });
 

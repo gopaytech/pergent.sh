@@ -45,8 +45,8 @@ func TestLoadValid(t *testing.T) {
 	if cfg.Jobs.MaxRunning != 5 {
 		t.Errorf("Jobs.MaxRunning = %d, want 5", cfg.Jobs.MaxRunning)
 	}
-	if cfg.Jobs.Timeout != 10*time.Minute {
-		t.Errorf("Jobs.Timeout = %v, want 10m", cfg.Jobs.Timeout)
+	if cfg.Jobs.Timeout != 30*time.Minute {
+		t.Errorf("Jobs.Timeout = %v, want 30m", cfg.Jobs.Timeout)
 	}
 	if cfg.Jobs.Concurrency != 4 {
 		t.Errorf("Jobs.Concurrency = %d, want 4", cfg.Jobs.Concurrency)
@@ -1096,5 +1096,52 @@ func TestRepositorySkillsMustNotBeEmpty(t *testing.T) {
 	cfg, err := Load(writeConfig(t, with(" [security]")))
 	if err != nil || len(cfg.Repositories[0].Skills) != 1 {
 		t.Errorf("Load with one skill = %v, %v", cfg, err)
+	}
+}
+
+func TestDefaultTimeoutIs30Minutes(t *testing.T) {
+	cfg := loadValid(t)
+	if cfg.Jobs.Timeout != 30*time.Minute {
+		t.Errorf("Jobs.Timeout = %v, want 30m", cfg.Jobs.Timeout)
+	}
+}
+
+func TestTimeoutWarnings(t *testing.T) {
+	dur := func(d time.Duration) *time.Duration { return &d }
+	num := func(n int) *int { return &n }
+	tests := []struct {
+		name string
+		edit func(c *Config)
+		want []string
+	}{
+		{"defaults", func(c *Config) {}, nil},
+		{
+			"short jobs timeout",
+			func(c *Config) { c.Jobs.Timeout = 10 * time.Minute },
+			[]string{"jobs.timeout 10m0s is short for jobs.max_turns 40: allow about 20m0s (30s a step)"},
+		},
+		{
+			"repository timeout and steps",
+			func(c *Config) {
+				c.Repositories[0].JobTimeout = dur(5 * time.Minute)
+				c.Repositories[0].MaxTurns = num(20)
+			},
+			[]string{"repositories[0] (acme/widgets): job_timeout 5m0s is short for max_turns 20: allow about 10m0s (30s a step)"},
+		},
+		{
+			"repository steps only",
+			func(c *Config) { c.Repositories[0].MaxTurns = num(100) },
+			[]string{"repositories[0] (acme/widgets): job_timeout 30m0s is short for max_turns 100: allow about 50m0s (30s a step)"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := loadValid(t)
+			tt.edit(cfg)
+			got := TimeoutWarnings(cfg)
+			if strings.Join(got, "\n") != strings.Join(tt.want, "\n") {
+				t.Errorf("TimeoutWarnings = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

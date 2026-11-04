@@ -284,6 +284,26 @@ func TestInstallationInfoPermissions(t *testing.T) {
 	}
 }
 
+func TestAdministrationRead(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		perm map[string]string
+		want bool
+	}{
+		{"write", map[string]string{"administration": "write"}, true},
+		{"read", map[string]string{"administration": "read", "pull_requests": "write"}, true},
+		{"not granted", map[string]string{"pull_requests": "write", "metadata": "read"}, false},
+		{"empty", map[string]string{}, false},
+		{"not told", nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := (InstallationInfo{ID: 1, Permissions: tc.perm}).AdministrationRead(); got != tc.want {
+				t.Errorf("AdministrationRead() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestInstallationNotFound(t *testing.T) {
 	a, _, _ := testApp(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"Not Found"}`, 404) })
 	if _, err := a.Installation(ctx, "acme", "widgets"); !errors.Is(err, ErrNotFound) {

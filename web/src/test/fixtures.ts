@@ -339,8 +339,22 @@ export const integrations: IntegrationView = {
   approver: "token",
   tokenExpiry: "2026-11-09T00:00:00Z",
   repos: [
-    { project: "acme/payments", installed: true, approverReachable: false, inlineAvailable: false },
-    { project: "acme/widgets", installed: true, approverReachable: true, inlineAvailable: true },
+    { project: "acme/payments", installed: true, approverReachable: false, inlineAvailable: false, protectionReadable: true },
+    { project: "acme/widgets", installed: true, approverReachable: true, inlineAvailable: true, protectionReadable: true },
+  ],
+};
+
+export const integrationsGitHub: IntegrationView = {
+  instance: "hub",
+  platform: "github",
+  connected: true,
+  approver: "app",
+  repos: [
+    // Inline on, protection unreadable: the only row with the protection note.
+    { project: "acme/orders", installed: true, approverReachable: true, inlineAvailable: true, protectionReadable: false },
+    // Inline off already says enough: no protection note.
+    { project: "acme/payments", installed: true, approverReachable: true, inlineAvailable: false, protectionReadable: false },
+    { project: "acme/widgets", installed: true, approverReachable: true, inlineAvailable: true, protectionReadable: true },
   ],
 };
 
@@ -355,6 +369,19 @@ export const defaults: DefaultsView = {
   rerunLimitPerMR: 10,
   rerunLimitPerRepo: 50,
   skills: ["code-review"],
+  // The config gives what is in effect, and nothing is saved here.
+  config: {
+    approve: true,
+    reviewDrafts: true,
+    inlineFindings: true,
+    failureStatus: "neutral",
+    jobTimeoutSeconds: 600,
+    maxTurns: 40,
+    jobMemory: "",
+    rerunLimitPerMR: 10,
+    rerunLimitPerRepo: 50,
+  },
+  pinned: {},
 };
 
 export const llm: LLMAdminView = {

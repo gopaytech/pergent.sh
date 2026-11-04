@@ -423,7 +423,7 @@ export type IntegrationView = {
   connected: boolean;
   approver: Approver;
   tokenExpiry?: string;
-  repos: { project: string; installed: boolean; approverReachable: boolean; inlineAvailable: boolean }[];
+  repos: { project: string; installed: boolean; approverReachable: boolean; inlineAvailable: boolean; protectionReadable: boolean }[];
 };
 
 // SecretView says whether a secret is set and when it last changed; the
@@ -433,7 +433,7 @@ export type SecretView = { set: boolean; updatedAt: string | null };
 
 // DefaultsView is the settings a repository switched on in the browser gets
 // when it sets none (jobMemory "" is none).
-export type DefaultsView = {
+export type DefaultValues = {
   approve: boolean;
   reviewDrafts: boolean;
   inlineFindings: boolean;
@@ -445,9 +445,18 @@ export type DefaultsView = {
   // repository, in a UTC day: 1 to 1000.
   rerunLimitPerMR: number;
   rerunLimitPerRepo: number;
+};
+
+export type DefaultsView = DefaultValues & {
   // skills is the default list: the library skills a repository reviews when
   // its own skills setting is null. Empty means none.
   skills: string[];
+  // config is what the config file gives (jobs.* and the built-in defaults),
+  // before anything saved here.
+  config: DefaultValues;
+  // pinned says, by key, which defaults were saved here and so no longer
+  // follow the config.
+  pinned: Record<string, boolean>;
 };
 
 // LLMAdminView is GET /api/admin/llm: where the model comes from, the model

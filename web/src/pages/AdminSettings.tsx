@@ -31,6 +31,28 @@ export default function AdminSettings() {
 
 // --- the defaults ---
 
+// FromConfig ends a default's help line: what the config gives while the
+// default follows it, or, once a value was saved here, that value and a
+// button to follow the config again.
+function FromConfig({ field, pinned, shown, onUse, disabled }: { field: string; pinned: boolean; shown: string; onUse: () => void; disabled: boolean }) {
+  if (!pinned) return <span> From config: {shown}</span>;
+  return (
+    <>
+      <span> Saved here; the config says {shown}.</span>{" "}
+      <button type="button" className="btn small" aria-label={`Use config value for ${field}`} disabled={disabled} onClick={onUse}>
+        Use config value
+      </button>
+    </>
+  );
+}
+
+// The label the status select shows for a value.
+const statusText = (v: string) => (v === "failed" ? "failed (blocks merge)" : v);
+const onOff = (on: boolean) => (on ? "on" : "off");
+// A cap of 0 would be the built-in one; the form shows it empty.
+const capText = (n: number) => (n > 0 ? String(n) : "built-in");
+const capValue = (n: number) => (n > 0 ? String(n) : "");
+
 function Defaults({ v }: { v: DefaultsView }) {
   const client = useQueryClient();
   const write = useWrite();
@@ -44,6 +66,8 @@ function Defaults({ v }: { v: DefaultsView }) {
   const [capMR, setCapMR] = useState(String(v.rerunLimitPerMR));
   const [capRepo, setCapRepo] = useState(String(v.rerunLimitPerRepo));
   const [skills, setSkills] = useState(v.skills);
+  const cfg = v.config;
+  const pinned = (key: string) => v.pinned[key] === true;
   const [problem, setProblem] = useState("");
   const [note, setNote] = useState("");
   const library = useQuery({ queryKey: ["skills"], queryFn: () => api.get<LibrarySkill[]>("/api/skills") });
@@ -61,7 +85,8 @@ function Defaults({ v }: { v: DefaultsView }) {
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const t = timeout.trim();
-    if (!/^\d+$/.test(t)) {
+    // A timeout equal to the config's is sent as null, so the config owns its range.
+    if (!/^\d+$/.test(t) || (Number(t) !== cfg.jobTimeoutSeconds && (Number(t) < 60 || Number(t) > 7200))) {
       setProblem("The timeout is a whole number of seconds, from 60 to 7200.");
       return;
     }
@@ -77,17 +102,21 @@ function Defaults({ v }: { v: DefaultsView }) {
       return;
     }
     setProblem("");
-    // The PUT replaces every default; null is the built-in one.
+    // The PUT replaces every default. A value equal to the config's is sent
+    // as null, so the default keeps following the config; so is an empty
+    // cap or memory.
+    const orNull = <T,>(value: T, fromConfig: T) => (value === fromConfig ? null : value);
+    const cap = (text: string, fromConfig: number) => (text === "" ? null : orNull(Number(text), fromConfig));
     save.mutate({
-      approve,
-      reviewDrafts,
-      inlineFindings,
-      failureStatus,
-      jobTimeoutSeconds: Number(t),
-      maxTurns: Number(s),
-      jobMemory: memory.trim() === "" ? null : memory.trim(),
-      rerunLimitPerMR: caps[0] === "" ? null : Number(caps[0]),
-      rerunLimitPerRepo: caps[1] === "" ? null : Number(caps[1]),
+      approve: orNull(approve, cfg.approve),
+      reviewDrafts: orNull(reviewDrafts, cfg.reviewDrafts),
+      inlineFindings: orNull(inlineFindings, cfg.inlineFindings),
+      failureStatus: orNull(failureStatus, cfg.failureStatus),
+      jobTimeoutSeconds: orNull(Number(t), cfg.jobTimeoutSeconds),
+      maxTurns: orNull(Number(s), cfg.maxTurns),
+      jobMemory: memory.trim() === "" ? null : orNull(memory.trim(), cfg.jobMemory),
+      rerunLimitPerMR: cap(caps[0], cfg.rerunLimitPerMR),
+      rerunLimitPerRepo: cap(caps[1], cfg.rerunLimitPerRepo),
       // Left out when the library couldn't be read, the stored list is kept.
       ...(library.isSuccess ? { skills: library.data.map((s) => s.name).filter((n) => skills.includes(n)) } : {}),
     });
@@ -102,7 +131,10 @@ function Defaults({ v }: { v: DefaultsView }) {
       <div className="set">
         <div>
           <div className="name">Approve clean reviews</div>
-          <div className="help">When off, pergent still reviews and comments but never approves.</div>
+          <div className="help">
+            When off, pergent still reviews and comments but never approves.
+            <FromConfig field="Approve clean reviews" pinned={pinned("approve")} shown={onOff(cfg.approve)} disabled={save.isPending} onUse={() => setApprove(cfg.approve)} />
+          </div>
         </div>
         <div>
           <Switch label="Approve clean reviews" checked={approve} disabled={save.isPending} onChange={setApprove} />
@@ -111,7 +143,16 @@ function Defaults({ v }: { v: DefaultsView }) {
       <div className="set">
         <div>
           <div className="name">Review drafts</div>
-          <div className="help">When off, a draft isn't reviewed until it is marked ready.</div>
+          <div className="help">
+            When off, a draft isn't reviewed until it is marked ready.
+            <FromConfig
+              field="Review drafts"
+              pinned={pinned("reviewDrafts")}
+              shown={onOff(cfg.reviewDrafts)}
+              disabled={save.isPending}
+              onUse={() => setReviewDrafts(cfg.reviewDrafts)}
+            />
+          </div>
         </div>
         <div>
           <Switch label="Review drafts" checked={reviewDrafts} disabled={save.isPending} onChange={setReviewDrafts} />
@@ -120,7 +161,16 @@ function Defaults({ v }: { v: DefaultsView }) {
       <div className="set">
         <div>
           <div className="name">Inline findings</div>
-          <div className="help">Post each finding as a comment on its lines, with a one-click fix when it is small. Off keeps every finding in the review comment.</div>
+          <div className="help">
+            Post each finding as a comment on its lines, with a one-click fix when it is small. Off keeps every finding in the review comment.
+            <FromConfig
+              field="Inline findings"
+              pinned={pinned("inlineFindings")}
+              shown={onOff(cfg.inlineFindings)}
+              disabled={save.isPending}
+              onUse={() => setInlineFindings(cfg.inlineFindings)}
+            />
+          </div>
         </div>
         <div>
           <Switch label="Inline findings" checked={inlineFindings} disabled={save.isPending} onChange={setInlineFindings} />
@@ -129,7 +179,16 @@ function Defaults({ v }: { v: DefaultsView }) {
       <div className="set">
         <div>
           <div className="name">Status when a review fails</div>
-          <div className="help">"neutral" won't block merging when the LLM provider is down.</div>
+          <div className="help">
+            "neutral" won't block merging when the LLM provider is down.
+            <FromConfig
+              field="Status when a review fails"
+              pinned={pinned("failureStatus")}
+              shown={statusText(cfg.failureStatus)}
+              disabled={save.isPending}
+              onUse={() => setFailureStatus(cfg.failureStatus)}
+            />
+          </div>
         </div>
         <div>
           <select
@@ -146,15 +205,22 @@ function Defaults({ v }: { v: DefaultsView }) {
       <div className="set">
         <div>
           <div className="name">Timeout</div>
-          <div className="help">How long one review may run, in seconds (60 to 7200).</div>
+          <div className="help">
+            How long one review may run, in seconds (60 to 7200).
+            <FromConfig
+              field="Timeout"
+              pinned={pinned("jobTimeoutSeconds")}
+              shown={String(cfg.jobTimeoutSeconds)}
+              disabled={save.isPending}
+              onUse={() => setTimeoutText(String(cfg.jobTimeoutSeconds))}
+            />
+          </div>
         </div>
         <div>
           <input
-            type="number"
+            type="text"
+            inputMode="numeric"
             aria-label="Timeout (seconds)"
-            min={60}
-            max={7200}
-            step={1}
             value={timeout}
             disabled={save.isPending}
             onChange={(e) => setTimeoutText(e.target.value)}
@@ -164,7 +230,10 @@ function Defaults({ v }: { v: DefaultsView }) {
       <div className="set">
         <div>
           <div className="name">Max steps</div>
-          <div className="help">Steps each opencode run may take before pergent stops it; each step can call several tools.</div>
+          <div className="help">
+            Steps each opencode run may take before pergent stops it; each step can call several tools.
+            <FromConfig field="Max steps" pinned={pinned("maxTurns")} shown={String(cfg.maxTurns)} disabled={save.isPending} onUse={() => setSteps(String(cfg.maxTurns))} />
+          </div>
         </div>
         <div>
           <input
@@ -180,7 +249,16 @@ function Defaults({ v }: { v: DefaultsView }) {
       <div className="set">
         <div>
           <div className="name">Memory limit</div>
-          <div className="help">For example 6Gi (256Mi to 32Gi). Empty means none.</div>
+          <div className="help">
+            For example 6Gi (256Mi to 32Gi). Empty follows the config.
+            <FromConfig
+              field="Memory limit"
+              pinned={pinned("jobMemory")}
+              shown={cfg.jobMemory === "" ? "none" : cfg.jobMemory}
+              disabled={save.isPending}
+              onUse={() => setMemory(cfg.jobMemory)}
+            />
+          </div>
         </div>
         <div>
           <input
@@ -199,6 +277,13 @@ function Defaults({ v }: { v: DefaultsView }) {
           <div className="help">
             The most re-runs (buttons and comments) of one merge request or pull request in a UTC day, 1 to 1000. Pushes
             always run.
+            <FromConfig
+              field="Re-run cap per MR/PR"
+              pinned={pinned("rerunLimitPerMR")}
+              shown={capText(cfg.rerunLimitPerMR)}
+              disabled={save.isPending}
+              onUse={() => setCapMR(capValue(cfg.rerunLimitPerMR))}
+            />
           </div>
         </div>
         <div>
@@ -217,7 +302,16 @@ function Defaults({ v }: { v: DefaultsView }) {
       <div className="set">
         <div>
           <div className="name">Re-run cap per repository</div>
-          <div className="help">The most re-runs across a whole repository in a UTC day, 1 to 1000.</div>
+          <div className="help">
+            The most re-runs across a whole repository in a UTC day, 1 to 1000.
+            <FromConfig
+              field="Re-run cap per repository"
+              pinned={pinned("rerunLimitPerRepo")}
+              shown={capText(cfg.rerunLimitPerRepo)}
+              disabled={save.isPending}
+              onUse={() => setCapRepo(capValue(cfg.rerunLimitPerRepo))}
+            />
+          </div>
         </div>
         <div>
           <input

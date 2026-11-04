@@ -215,7 +215,7 @@ function Form({
     }
     if (d.jobTimeoutSeconds.trim() !== initial.jobTimeoutSeconds) {
       const t = d.jobTimeoutSeconds.trim();
-      if (t !== "" && !/^\d+$/.test(t)) {
+      if (t !== "" && (!/^\d+$/.test(t) || Number(t) < 60 || Number(t) > 7200)) {
         setProblem("The timeout is a whole number of seconds, from 60 to 7200.");
         return;
       }
@@ -421,11 +421,9 @@ function Form({
           help="How long one review may run, in seconds (60 to 7200)."
         >
           <input
-            type="number"
+            type="text"
+            inputMode="numeric"
             aria-label="Timeout (seconds)"
-            min={60}
-            max={7200}
-            step={1}
             value={d.jobTimeoutSeconds}
             disabled={disabled}
             onChange={(e) => set("jobTimeoutSeconds", e.target.value)}

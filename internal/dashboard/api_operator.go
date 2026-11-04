@@ -20,6 +20,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/instances"
+	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -818,10 +819,28 @@ func (d *Dashboard) defaultsView(ctx context.Context) (DefaultsView, error) {
 	if err != nil {
 		return DefaultsView{}, err
 	}
+	cfg := defaultValues(d.Repos.Defaults("", ""))
 	return DefaultsView{Approve: def.Approve, ReviewDrafts: def.ReviewDrafts, InlineFindings: def.InlineFindings, FailureStatus: string(def.FailureStatus),
 		JobTimeoutSeconds: int64(def.JobTimeout / time.Second), MaxTurns: def.MaxTurns, JobMemory: quantityText(def.JobMemory),
 		RerunLimitPerMR: def.RerunLimitPerMR, RerunLimitPerRepo: def.RerunLimitPerRepo,
-		Skills: nonNil(stored.Skills)}, nil
+		Skills: nonNil(stored.Skills), Config: cfg, Pinned: pinnedDefaults(stored)}, nil
+}
+
+// defaultValues is the settings of eff as the defaults API shows them.
+func defaultValues(eff settings.Effective) DefaultValues {
+	return DefaultValues{Approve: eff.Approve, ReviewDrafts: eff.ReviewDrafts, InlineFindings: eff.InlineFindings, FailureStatus: string(eff.FailureStatus),
+		JobTimeoutSeconds: int64(eff.JobTimeout / time.Second), MaxTurns: eff.MaxTurns, JobMemory: quantityText(eff.JobMemory),
+		RerunLimitPerMR: eff.RerunLimitPerMR, RerunLimitPerRepo: eff.RerunLimitPerRepo}
+}
+
+// pinnedDefaults says which defaults were saved in the dashboard, by the
+// API's key: those no longer following the config.
+func pinnedDefaults(s store.RepoDefaults) map[string]bool {
+	return map[string]bool{
+		"approve": s.Approve != nil, "reviewDrafts": s.ReviewDrafts != nil, "inlineFindings": s.InlineFindings != nil,
+		"failureStatus": s.FailureStatus != nil, "jobTimeoutSeconds": s.JobTimeoutSeconds != nil, "maxTurns": s.MaxTurns != nil,
+		"jobMemory": s.JobMemory != nil, "rerunLimitPerMR": s.RerunLimitPerMR != nil, "rerunLimitPerRepo": s.RerunLimitPerRepo != nil,
+	}
 }
 
 func (d *Dashboard) getDefaults(w http.ResponseWriter, r *http.Request) {
