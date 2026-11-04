@@ -533,6 +533,20 @@ func (c *Client) Compare(ctx context.Context, projectID int64, from, to string) 
 	return out.Diffs, nil
 }
 
+// MergeBase returns the ID of the best common ancestor of two commits
+// (GET .../repository/merge_base). Commits with no common ancestor are
+// ErrNotFound.
+func (c *Client) MergeBase(ctx context.Context, projectID int64, a, b string) (string, error) {
+	var out struct {
+		ID string `json:"id"`
+	}
+	q := url.Values{"refs[]": {a, b}}
+	if _, err := c.getJSON(ctx, projPath(projectID)+"/repository/merge_base", q, &out); err != nil {
+		return "", err
+	}
+	return out.ID, nil
+}
+
 // Discussions lists the merge request's discussions, every note of each.
 func (c *Client) Discussions(ctx context.Context, projectID, iid int64) ([]Discussion, error) {
 	var out []Discussion

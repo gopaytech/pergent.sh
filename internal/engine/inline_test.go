@@ -139,8 +139,11 @@ type fakeInline struct {
 	diff    []forge.FileDiff
 	diffErr error
 	// compare answers CompareDiff; nil is an empty comparison.
-	compare    func(from, to string) ([]forge.FileDiff, error)
-	compares   []string
+	compare  func(from, to string) ([]forge.FileDiff, error)
+	compares []string
+	// changed and changedErr answer ChangedSince.
+	changed    []string
+	changedErr error
 	threads    []forge.Thread
 	threadsErr error
 
@@ -174,6 +177,10 @@ func (f *fakeInline) CompareDiff(_ context.Context, _ int64, from, to string) ([
 		return nil, nil
 	}
 	return f.compare(from, to)
+}
+
+func (f *fakeInline) ChangedSince(context.Context, int64, string, string) ([]string, error) {
+	return f.changed, f.changedErr
 }
 
 func (f *fakeInline) Threads(context.Context, int64, int64) ([]forge.Thread, error) {

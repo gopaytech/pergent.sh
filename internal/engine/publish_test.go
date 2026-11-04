@@ -858,6 +858,40 @@ func TestCleanupDeletesJobAndCancelsStatus(t *testing.T) {
 	}
 }
 
+// A full review of a head replaces its incremental run. The commit status is
+// the new run's now, so the cleanup leaves it alone, and still deletes the Job
+// and marks the run cleaned up.
+func TestCleanUpKeepsStatusOfANewerRunOfTheHead(t *testing.T) {
+	env := newTestEnv(t)
+	base := env.Publish(1, sha('c'), resultFor(t, sha('c'), reviewed("no_blocking_issues", "a.go")))
+	head := sha('a')
+	id := env.Dispatched(1, head)
+	createJob(t, env, kube.JobName(id))
+	if err := env.Store.SetIncremental(env.ctx, id, &base); err != nil {
+		t.Fatal(err)
+	}
+	full, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main", store.TriggerRerun, nil, nil)
+	if err != nil || !created {
+		t.Fatalf("EnqueueRerun = %v, %v; want a new run", created, err)
+	}
+	if env.Run(id).State != store.Superseded || env.Run(full).State != store.Queued {
+		t.Fatalf("incremental run is %s, full review %s; want superseded and queued", env.Run(id).State, env.Run(full).State)
+	}
+	env.GitLab.Reset()
+
+	cleanup(t, env)
+
+	if env.Job(id) != nil {
+		t.Errorf("the replaced run's Job still exists")
+	}
+	if n := len(env.GitLab.Requests("", "")); n != 0 {
+		t.Errorf("cleanup made %d GitLab requests, want no status set", n)
+	}
+	if !env.Run(id).CleanedUp {
+		t.Errorf("run not marked cleaned up")
+	}
+}
+
 // A superseded run's log is kept, redacted, before its Job is deleted; a
 // log that can't be read doesn't stop the cleanup.
 func TestCleanupKeepsSupersededRunLog(t *testing.T) {

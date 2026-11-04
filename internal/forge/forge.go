@@ -182,6 +182,22 @@ type FileDiff struct {
 	Patch         string
 }
 
+// Paths returns the path of each file and, for a renamed one, its old path:
+// every path the files touch, each once, in order.
+func Paths(files []FileDiff) []string {
+	var out []string
+	seen := make(map[string]bool, len(files))
+	for _, f := range files {
+		for _, p := range []string{f.Path, f.OldPath} {
+			if p != "" && !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
 // ThreadRef names a thread: GitHub's review thread node ID and its first
 // comment's ID, GitLab's discussion ID and its first note's ID.
 type ThreadRef struct {
@@ -216,6 +232,10 @@ type Inline interface {
 	ChangeDiff(ctx context.Context, projectID, number int64) ([]FileDiff, error)
 	// CompareDiff returns the diff from one commit to another.
 	CompareDiff(ctx context.Context, projectID int64, from, to string) ([]FileDiff, error)
+	// ChangedSince returns the paths changed from one commit to another,
+	// both sides of a rename. It is an error when from is not an ancestor of
+	// to, or when the list may be partial.
+	ChangedSince(ctx context.Context, projectID int64, from, to string) ([]string, error)
 	// Threads lists the review bot's own threads on the change.
 	Threads(ctx context.Context, projectID, number int64) ([]Thread, error)
 	// PostThreads posts threads at ch's head. It returns one ref per thread,

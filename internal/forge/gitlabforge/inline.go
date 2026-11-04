@@ -3,7 +3,9 @@ package gitlabforge
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/gopaytech/pergent/render"
 
@@ -39,6 +41,24 @@ func (f *Forge) CompareDiff(ctx context.Context, projectID int64, from, to strin
 		return nil, mapErr(err)
 	}
 	return fileDiffs(diffs), nil
+}
+
+// ChangedSince returns the paths changed from one commit to another. It is an
+// error when from is not an ancestor of to (their merge base is not from) or
+// when GitLab may not list every file (gitlab.ErrPartialDiff).
+func (f *Forge) ChangedSince(ctx context.Context, projectID int64, from, to string) ([]string, error) {
+	base, err := f.c.MergeBase(ctx, projectID, from, to)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	if !strings.EqualFold(base, from) {
+		return nil, fmt.Errorf("gitlabforge: %s is not an ancestor of %s (their merge base is %s)", from, to, base)
+	}
+	files, err := f.CompareDiff(ctx, projectID, from, to)
+	if err != nil {
+		return nil, err
+	}
+	return forge.Paths(files), nil
 }
 
 // Threads lists the review bot's own threads on the merge request: diff

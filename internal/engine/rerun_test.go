@@ -51,7 +51,7 @@ func recordVersions(t *testing.T, env *testEnv, id string, versions map[string]i
 	for name := range versions {
 		sources[name] = "library"
 	}
-	if err := env.Store.SetRunInputs(env.ctx, id, "m", 0, sources, versions); err != nil {
+	if err := env.Store.SetRunInputs(env.ctx, id, "m", 0, sources, versions, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -352,7 +352,7 @@ func TestSubsetRecordsKeptSkillSources(t *testing.T) {
 	env.AddSkill("style", "---\nname: style\n---\nCheck the style.\n")
 	head := sha('a')
 	base := env.Publish(1, head, resultFor(t, head, namedSkill(t, "security", "no_blocking_issues", "", ""), namedSkill(t, "style", "failed", "", "")))
-	if err := env.Store.SetRunInputs(env.ctx, base, "m", 0, map[string]string{"security": ".agents/skills", "style": "library"}, map[string]int{"style": 1}); err != nil {
+	if err := env.Store.SetRunInputs(env.ctx, base, "m", 0, map[string]string{"security": ".agents/skills", "style": "library"}, map[string]int{"style": 1}, nil); err != nil {
 		t.Fatal(err)
 	}
 	id := rerunOf(t, env, head, store.TriggerRerunFailed, []string{"style"}, base)
@@ -418,8 +418,8 @@ func TestMergedResultKeepsOtherSkills(t *testing.T) {
 		r.Skills[1].Name != "style" || r.Skills[1].Verdict != "no_blocking_issues" {
 		t.Errorf("stored result = %+v, want the kept security and the re-run style", r)
 	}
-	if next, _, err := env.Store.PreviousResult(env.ctx, env.MRKey(1), "none"); err != nil || !strings.Contains(string(next), "aaaaaa000001") {
-		t.Errorf("the next run's previous result lacks the kept skill: %s, %v", next, err)
+	if next, _, err := env.Store.LastReview(env.ctx, env.MRKey(1), "none"); err != nil || !strings.Contains(string(next.Result), "aaaaaa000001") {
+		t.Errorf("the next run's previous result lacks the kept skill: %s, %v", next.Result, err)
 	}
 }
 

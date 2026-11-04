@@ -494,14 +494,14 @@ func TestRunSkillVersionsRoundTrip(t *testing.T) {
 	if r := getRun(t, s, id); r.SkillVersions != nil {
 		t.Fatalf("new run skill versions = %v; want none", r.SkillVersions)
 	}
-	if err := s.SetRunInputs(ctx, id, "m", 0, map[string]string{"a": "library", "b": "repo"}, map[string]int{"a": 3}); err != nil {
+	if err := s.SetRunInputs(ctx, id, "m", 0, map[string]string{"a": "library", "b": "repo"}, map[string]int{"a": 3}, nil); err != nil {
 		t.Fatal(err)
 	}
 	r := getRun(t, s, id)
 	if len(r.SkillVersions) != 1 || r.SkillVersions["a"] != 3 || r.SkillSources["b"] != "repo" {
 		t.Errorf("run = versions %v sources %v", r.SkillVersions, r.SkillSources)
 	}
-	if err := s.SetRunInputs(ctx, id, "m", 0, nil, nil); err != nil {
+	if err := s.SetRunInputs(ctx, id, "m", 0, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if r := getRun(t, s, id); r.SkillVersions == nil || len(r.SkillVersions) != 0 {

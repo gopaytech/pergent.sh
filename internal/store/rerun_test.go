@@ -79,6 +79,160 @@ func TestEnqueueRerunDeduplicates(t *testing.T) {
 	}
 }
 
+// A full review replaces a push's incremental run that is queued, running or
+// reported, but not one that reviews everything; a re-run of the failed skills
+// never replaces a live run.
+func TestEnqueueRerunReplacesIncrementalRun(t *testing.T) {
+	// live brings a push run of mr1 at "aaa" to the state.
+	live := func(t *testing.T, s *Store, state RunState, incremental bool) string {
+		t.Helper()
+		base := published(t, s, mr1, "base", "main")
+		var id string
+		switch state {
+		case Queued:
+			id = enqueue(t, s, mr1, "aaa")
+		case Running:
+			id = dispatched(t, s, mr1, "aaa", "tok")
+		default:
+			id = reported(t, s, mr1, "aaa", `{"status":"completed"}`)
+		}
+		if incremental {
+			if state == Reported {
+				// SetIncremental only edits a run being dispatched.
+				if _, err := s.pool.Exec(ctx, `UPDATE runs SET incremental = true WHERE id = $1`, id); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := s.SetIncremental(ctx, id, &base); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return id
+	}
+
+	for _, tc := range []struct {
+		name        string
+		state       RunState
+		incremental bool
+		trigger     string
+		replaced    bool
+	}{
+		{"queued push run", Queued, false, TriggerRerun, true},
+		{"queued incremental run", Queued, true, TriggerRerun, true},
+		{"running incremental run", Running, true, TriggerRerun, true},
+		{"reported incremental run", Reported, true, TriggerRerun, true},
+		{"running full run", Running, false, TriggerRerun, false},
+		{"reported full run", Reported, false, TriggerRerun, false},
+		{"queued run, failed skills only", Queued, false, TriggerRerunFailed, false},
+		{"running incremental run, failed skills only", Running, true, TriggerRerunFailed, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStore(t)
+			old := live(t, s, tc.state, tc.incremental)
+			id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", tc.trigger, nil, nil)
+			if err != nil || created != tc.replaced {
+				t.Fatalf("EnqueueRerun = %s, %v, %v; want created %v", id, created, err, tc.replaced)
+			}
+			if tc.replaced {
+				if id == old || getRun(t, s, old).State != Superseded || getRun(t, s, id).State != Queued {
+					t.Errorf("old run %s, new run %s (%s); want the old superseded and a queued one", getRun(t, s, old).State, id, getRun(t, s, id).State)
+				}
+				return
+			}
+			if id != old || getRun(t, s, old).State != tc.state {
+				t.Errorf("id = %s (%s), want the live run %s still %s", id, getRun(t, s, old).State, old, tc.state)
+			}
+		})
+	}
+}
+
+// SetIncremental marks a run being dispatched as incremental on a base run, or
+// clears that; any other run is an error.
+func TestSetIncremental(t *testing.T) {
+	s := newStore(t)
+	base := published(t, s, mr1, "aaa", "main")
+	id := enqueue(t, s, mr1, "bbb")
+
+	if err := s.SetIncremental(ctx, id, &base); err != nil {
+		t.Fatalf("SetIncremental of a queued run: %v", err)
+	}
+	if r := getRun(t, s, id); !r.Incremental || r.BaseRunID == nil || *r.BaseRunID != base {
+		t.Errorf("run = incremental %v base %v; want true, %s", r.Incremental, r.BaseRunID, base)
+	}
+
+	if err := s.SetIncremental(ctx, id, nil); err != nil {
+		t.Fatalf("clearing: %v", err)
+	}
+	if r := getRun(t, s, id); r.Incremental || r.BaseRunID != nil {
+		t.Errorf("cleared run = incremental %v base %v; want false, nil", r.Incremental, r.BaseRunID)
+	}
+
+	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+		t.Fatal(err)
+	}
+	tok := "tok-incremental"
+	if err := s.MarkDispatched(ctx, id, "job-"+id, "base", "start", hash(tok), t0.Add(time.Hour), t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetIncremental(ctx, id, &base); err != nil {
+		t.Errorf("SetIncremental of a running run: %v", err)
+	}
+	if out, err := s.StoreResult(ctx, id, tok, []byte(`{"status":"completed"}`), t0.Add(time.Minute)); err != nil || out != ResultStored {
+		t.Fatalf("StoreResult = %v, %v", out, err)
+	}
+	if err := s.SetIncremental(ctx, id, nil); err == nil {
+		t.Error("SetIncremental of a reported run succeeded")
+	}
+	if r := getRun(t, s, id); !r.Incremental {
+		t.Error("the reported run changed")
+	}
+	if err := s.SetIncremental(ctx, "bad", nil); err == nil {
+		t.Error("a malformed id was accepted")
+	}
+}
+
+// NewerRunOfHead is true for a run of the same merge request, head and target
+// created after the run and not superseded.
+func TestNewerRunOfHead(t *testing.T) {
+	s := newStore(t)
+	old := dispatched(t, s, mr1, "aaa", "tok")
+	if newer, err := s.NewerRunOfHead(ctx, getRun(t, s, old)); err != nil || newer {
+		t.Fatalf("alone = %v, %v; want false", newer, err)
+	}
+	// Superseded by a push of another head: nothing newer is of this head.
+	other := enqueue(t, s, mr1, "bbb")
+	if newer, err := s.NewerRunOfHead(ctx, getRun(t, s, old)); err != nil || newer {
+		t.Errorf("newer run of another head = %v, %v; want false", newer, err)
+	}
+	if newer, err := s.NewerRunOfHead(ctx, getRun(t, s, other)); err != nil || newer {
+		t.Errorf("the newest run = %v, %v; want false", newer, err)
+	}
+
+	// A full review of the same head, replacing the first.
+	s2 := newStore(t)
+	base := published(t, s2, mr1, "base", "main")
+	first := dispatched(t, s2, mr1, "aaa", "tok")
+	if err := s2.SetIncremental(ctx, first, &base); err != nil {
+		t.Fatal(err)
+	}
+	full, created, err := s2.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil)
+	if err != nil || !created {
+		t.Fatalf("EnqueueRerun = %v, %v", created, err)
+	}
+	if newer, err := s2.NewerRunOfHead(ctx, getRun(t, s2, first)); err != nil || !newer {
+		t.Errorf("the replaced run = %v, %v; want true", newer, err)
+	}
+	if newer, err := s2.NewerRunOfHead(ctx, getRun(t, s2, full)); err != nil || newer {
+		t.Errorf("the full review = %v, %v; want false", newer, err)
+	}
+	// Once the full review is itself superseded it no longer counts.
+	if _, err := s2.pool.Exec(ctx, `UPDATE runs SET state = 'superseded' WHERE id = $1`, full); err != nil {
+		t.Fatal(err)
+	}
+	if newer, err := s2.NewerRunOfHead(ctx, getRun(t, s2, first)); err != nil || newer {
+		t.Errorf("after the full review was superseded = %v, %v; want false", newer, err)
+	}
+}
+
 // A review reported and not yet published is in flight: a re-run neither
 // replaces it nor queues a second one.
 func TestEnqueueRerunDeduplicatesReported(t *testing.T) {

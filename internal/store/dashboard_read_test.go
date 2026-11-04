@@ -50,7 +50,7 @@ func TestSetRunInputs(t *testing.T) {
 	if r := getRun(t, s, id); r.Model != nil || r.SkillSources != nil || r.MaxTurns != nil {
 		t.Fatalf("new run = model %v sources %v max turns %v; want none", r.Model, r.SkillSources, r.MaxTurns)
 	}
-	if err := s.SetRunInputs(ctx, id, "claude-sonnet-4", 0, map[string]string{"security": "repo", "style": "library"}, nil); err != nil {
+	if err := s.SetRunInputs(ctx, id, "claude-sonnet-4", 0, map[string]string{"security": "repo", "style": "library"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	r := getRun(t, s, id)
@@ -60,13 +60,13 @@ func TestSetRunInputs(t *testing.T) {
 	if r.MaxTurns != nil {
 		t.Errorf("run given 0 steps has max_turns %d; want NULL", *r.MaxTurns)
 	}
-	if err := s.SetRunInputs(ctx, id, "claude-sonnet-4", 40, nil, nil); err != nil {
+	if err := s.SetRunInputs(ctx, id, "claude-sonnet-4", 40, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if r := getRun(t, s, id); r.MaxTurns == nil || *r.MaxTurns != 40 {
 		t.Errorf("run given 40 steps = %v; want 40", r.MaxTurns)
 	}
-	if err := s.SetRunInputs(ctx, "bad", "", 0, nil, nil); err == nil {
+	if err := s.SetRunInputs(ctx, "bad", "", 0, nil, nil, nil); err == nil {
 		t.Error("SetRunInputs of a malformed id = nil error")
 	}
 }

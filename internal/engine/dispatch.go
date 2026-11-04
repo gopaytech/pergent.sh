@@ -273,12 +273,12 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	d.secrets = append(d.secrets, string(gitToken), llmKey)
 
 	var previous []byte
-	prev, havePrev, err := e.Store.PreviousResult(ctx, run.MR, run.ID)
+	last, havePrev, err := e.Store.LastReview(ctx, run.MR, run.ID)
 	if err != nil {
 		return d.retry(ctx, fmt.Errorf("load previous result: %w", err))
 	}
 	if havePrev {
-		if previous, err = result.Trim(prev); err != nil {
+		if previous, err = result.Trim(last.Result); err != nil {
 			d.log.Warn("reviewing without the previous result: it can't be read", "error", err)
 			previous = nil
 		}
@@ -415,7 +415,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			versions[name] = v
 		}
 	}
-	if err := e.Store.SetRunInputs(ctx, run.ID, llm.Model, repo.MaxTurns, sources, versions); err != nil {
+	if err := e.Store.SetRunInputs(ctx, run.ID, llm.Model, repo.MaxTurns, sources, versions, nil); err != nil {
 		d.log.Info("couldn't record the review's model, step limit and skills for the dashboard", "error", d.redact(err.Error()))
 	}
 

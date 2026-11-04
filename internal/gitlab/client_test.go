@@ -1386,6 +1386,26 @@ func TestCompare(t *testing.T) {
 	expect(t, (*reqs)[0], "GET", "/api/v4/projects/7/repository/compare", "from=aaa&straight=true&to=bbb")
 }
 
+func TestMergeBase(t *testing.T) {
+	c, reqs := serve(t, jsonReply(map[string]any{"id": "ccc", "short_id": "ccc"}))
+	got, err := c.MergeBase(context.Background(), 7, "aaa", "bbb")
+	if err != nil || got != "ccc" {
+		t.Fatalf("MergeBase = %q, %v; want ccc", got, err)
+	}
+	// refs[] is sent once per commit.
+	expect(t, (*reqs)[0], "GET", "/api/v4/projects/7/repository/merge_base", "refs%5B%5D=aaa&refs%5B%5D=bbb")
+}
+
+func TestMergeBaseNotFound(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"404 Merge Base not found"}`))
+	})
+	if _, err := c.MergeBase(context.Background(), 7, "aaa", "bbb"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestComparePartial(t *testing.T) {
 	for name, reply := range map[string]map[string]any{
 		"timeout":   {"compare_timeout": true, "diffs": []map[string]any{{"old_path": "a.go", "new_path": "a.go"}}},

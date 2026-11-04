@@ -15,6 +15,7 @@ import (
 	"github.com/gopaytech/pergent/render"
 
 	"github.com/gopaytech/pergent.sh/internal/forge"
+	"github.com/gopaytech/pergent.sh/internal/github"
 )
 
 var _ forge.Inline = (*Forge)(nil)
@@ -303,6 +304,35 @@ func TestCompareDiff(t *testing.T) {
 	}
 	if want := []forge.FileDiff{{Path: "a.go", OldPath: "old.go", Patch: "@@ -1 +1 @@\n-a\n+b"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("CompareDiff = %+v", got)
+	}
+}
+
+func TestChangedSince(t *testing.T) {
+	f := newFake(t)
+	f.reply("GET", "/repos/acme/widgets/compare/"+sha('1')+"..."+sha('2'), 200, map[string]any{"status": "ahead", "merge_base_commit": map[string]any{"sha": sha('1')}, "files": []map[string]any{
+		{"filename": "a.go", "previous_filename": "old.go", "status": "renamed", "patch": "@@ -1 +1 @@\n-a\n+b"},
+		{"filename": "b.go", "status": "modified", "patch": "@@ -1 +1 @@\n-a\n+b"},
+		{"filename": "gone.go", "status": "removed", "patch": "@@ -1 +0,0 @@\n-x"},
+		{"filename": "c.go", "previous_filename": "b.go", "status": "renamed"},
+	}})
+	got, err := f.forge(t).ChangedSince(ctx, repoID, sha('1'), sha('2'))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"a.go", "old.go", "b.go", "gone.go", "c.go"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ChangedSince = %v, want %v", got, want)
+	}
+}
+
+// A first commit that is not an ancestor of the second is an error.
+func TestChangedSinceNotAncestor(t *testing.T) {
+	f := newFake(t)
+	f.reply("GET", "/repos/acme/widgets/compare/"+sha('1')+"..."+sha('2'), 200, map[string]any{"status": "diverged", "merge_base_commit": map[string]any{"sha": sha('3')}, "files": []map[string]any{
+		{"filename": "a.go", "status": "modified"},
+	}})
+	got, err := f.forge(t).ChangedSince(ctx, repoID, sha('1'), sha('2'))
+	if !errors.Is(err, github.ErrNotAncestor) || got != nil {
+		t.Fatalf("got=%v err=%v, want github.ErrNotAncestor", got, err)
 	}
 }
 
