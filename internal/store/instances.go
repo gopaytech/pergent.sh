@@ -172,8 +172,8 @@ func (s *Store) MarkInstanceRemoving(ctx context.Context, name string) (bool, er
 
 // DeleteInstanceData deletes the instance's platform accounts (and with
 // them their sessions and team memberships), its team repositories, its
-// dashboard repositories, its attention rows, and the dismissals and
-// commands of its merge requests. The instance row and its
+// dashboard repositories, its attention rows, and the dismissals, commands
+// and inline threads of its merge requests. The instance row and its
 // secrets stay: it is still Removing. Accounts and rows of other instances
 // are untouched.
 func (s *Store) DeleteInstanceData(ctx context.Context, name string) error {
@@ -190,6 +190,7 @@ func (s *Store) DeleteInstanceData(ctx context.Context, name string) error {
 		`DELETE FROM repo_attention WHERE instance = $1`,
 		`DELETE FROM dismissals WHERE instance = $1`,
 		`DELETE FROM commands WHERE instance = $1`,
+		`DELETE FROM inline_threads WHERE instance = $1`,
 	} {
 		if _, err := tx.Exec(ctx, q, name); err != nil {
 			return err

@@ -356,9 +356,11 @@ func (e *Engine) gitLab(instance string) *gitlab.Client {
 // reconcileGitHubRepo stores one GitHub repository switched on and returns its
 // ID: the review App's installation on it (an App not installed there
 // leaves any stored row without one, so its runs are reported as such), the
-// repository ID and clone URL read through that installation, and whether
-// the approve side reaches it. An approve side that doesn't is a warning, not
-// an error: reviews still run and are published without approval. When the
+// repository ID and clone URL read through that installation, whether the
+// review App may post inline threads there (its Pull requests permission is
+// Read and write) and whether the approve side reaches it. An approve side
+// that doesn't is a warning, not an error: reviews still run and are
+// published without approval. When the
 // approve side can't be asked, the stored answer is kept (a new repository
 // is assumed reachable: a failed approval is retried, never recorded as
 // made).
@@ -372,7 +374,8 @@ func (e *Engine) reconcileGitHubRepo(ctx context.Context, repo settings.Effectiv
 	owner, name, _ := strings.Cut(repo.Project, "/")
 	app := plat.GitHub.App
 
-	installation, err := app.Installation(ctx, owner, name)
+	info, err := app.InstallationInfo(ctx, owner, name)
+	installation := info.ID
 	if errors.Is(err, github.ErrNotFound) {
 		if ferr := e.forgetInstallation(ctx, instance, repo.Project); ferr != nil {
 			return 0, ferr
@@ -399,6 +402,10 @@ func (e *Engine) reconcileGitHubRepo(ctx context.Context, repo settings.Effectiv
 	}
 	p.Instance, p.ProjectID, p.Path, p.HTTPURLToRepo = instance, gr.ID, repo.Project, gr.CloneURL
 	p.InstallationID, p.ApproveAvailable = installation, reach
+	// The same read that found the installation says whether the review App
+	// may post inline threads; a read that failed already ended the pass
+	// above, so the stored answer is only ever replaced by a fresh one.
+	p.InlineAvailable = info.PullRequestsWrite()
 	if err := e.Store.UpsertGitHubProject(ctx, p); err != nil {
 		return 0, fmt.Errorf("store project: %w", err)
 	}

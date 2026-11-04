@@ -201,10 +201,24 @@ func TestDeleteInstanceDataCascades(t *testing.T) {
 		}
 	}
 
+	for _, inst := range []string{"lab", "main"} {
+		th := InlineThread{MR: MRKey{Instance: inst, ProjectID: 7, IID: 3}, Fingerprint: "f1", Skill: "security", File: "a.go",
+			Line: 1, EndLine: 1, Commit: "abc", ThreadID: "T-" + inst, CommentID: 1, State: "open"}
+		if err := s.PutInlineThread(ctx, th); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	if err := s.DeleteInstanceData(ctx, "lab"); err != nil {
 		t.Fatal(err)
 	}
 
+	if got, _ := s.InlineThreads(ctx, MRKey{Instance: "lab", ProjectID: 7, IID: 3}); len(got) != 0 {
+		t.Fatalf("lab's inline threads are still there: %+v", got)
+	}
+	if got, _ := s.InlineThreads(ctx, MRKey{Instance: "main", ProjectID: 7, IID: 3}); len(got) != 1 {
+		t.Fatalf("main's inline threads = %+v; want its one", got)
+	}
 	if _, found, _ := s.Account(ctx, labUser.ID); found {
 		t.Fatal("lab's account is still there")
 	}
