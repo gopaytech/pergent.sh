@@ -95,6 +95,8 @@ type noteEvent struct {
 		// Type is null for a plain comment, DiffNote for one on a line and
 		// DiscussionNote for a reply in a thread.
 		Type *string `json:"type"`
+		// DiscussionID names the thread a note belongs to.
+		DiscussionID string `json:"discussion_id"`
 		// Action is create or update; GitLab before 14 doesn't send it.
 		Action string `json:"action"`
 		System bool   `json:"system"`
@@ -329,9 +331,18 @@ func (h *Handler) note(w http.ResponseWriter, r *http.Request, log *slog.Logger,
 		return
 	}
 	attrs := ev.ObjectAttributes
-	// Only a new, plain comment by a person on a merge request counts: not an
-	// edit, a comment on a line or in a thread, or a system note ("added 1
-	// commit").
+	// A new comment by a person on a merge request counts: a plain one, or a
+	// reply in a thread (a note on a line, or in a discussion, that says which
+	// discussion it is in). Not an edit, or a system note ("added 1 commit").
+	typ := ""
+	if attrs.Type != nil {
+		typ = *attrs.Type
+	}
+	inThread := (typ == "DiffNote" || typ == "DiscussionNote") && attrs.DiscussionID != ""
+	discussion := ""
+	if inThread {
+		discussion = attrs.DiscussionID
+	}
 	switch {
 	case ev.ObjectKind != noteKind:
 		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "other_object_kind")
@@ -339,7 +350,7 @@ func (h *Handler) note(w http.ResponseWriter, r *http.Request, log *slog.Logger,
 		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "not_a_merge_request")
 	case attrs.Action != "" && attrs.Action != "create":
 		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "action")
-	case attrs.Type != nil && *attrs.Type != "", attrs.System:
+	case attrs.System, typ != "" && !inThread:
 		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "not_a_plain_note")
 	default:
 		outcome, reason, err := commands{Bots: h.Bots, Store: h.Commands,
@@ -347,6 +358,7 @@ func (h *Handler) note(w http.ResponseWriter, r *http.Request, log *slog.Logger,
 			Platform: config.PlatformGitLab, Instance: instance, Project: ev.Project.PathWithNamespace,
 			ProjectID: ev.Project.ID, IID: ev.MergeRequest.IID, CommentID: attrs.ID,
 			Author: ev.User.Username, AuthorID: ev.User.ID, Body: attrs.Note,
+			Discussion: discussion,
 		})
 		log = log.With("project", ev.Project.PathWithNamespace, "iid", ev.MergeRequest.IID)
 		if err != nil {

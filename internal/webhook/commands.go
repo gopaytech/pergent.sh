@@ -59,6 +59,22 @@ const reviewMarker = "<!-- pergent"
 // or quoted (">"). A mention elsewhere in a sentence is no command. ok is
 // false when no line commands the bot; an empty mention matches nothing.
 func ParseCommand(body, mention string) (kind, arg, reason string, ok bool) {
+	return findCommand(body, mention, parseWords)
+}
+
+// ParseThreadCommand is ParseCommand for a comment written as a reply in a
+// thread, where the finding is already known: "dismiss" takes an optional
+// finding ID. When the first word after it is a valid finding ID it is arg;
+// otherwise arg is "" and the whole rest of the line is the reason (the engine
+// then decides whether that first word was meant as an ID). Other commands
+// are read as ParseCommand does.
+func ParseThreadCommand(body, mention string) (kind, arg, reason string, ok bool) {
+	return findCommand(body, mention, parseThreadWords)
+}
+
+// findCommand finds the command line (see ParseCommand) and reads what follows
+// the mention with parse.
+func findCommand(body, mention string, parse func(rest string) (kind, arg, reason string)) (kind, arg, reason string, ok bool) {
 	mention = strings.TrimSpace(mention)
 	if mention == "" {
 		return "", "", "", false
@@ -99,7 +115,7 @@ func ParseCommand(body, mention string) (kind, arg, reason string, ok bool) {
 		if !found || strings.Trim(rest, " \t.,:;!?") == "" {
 			continue
 		}
-		kind, arg, reason = parseWords(rest)
+		kind, arg, reason = parse(rest)
 		return kind, arg, reason, true
 	}
 	return "", "", "", false
@@ -226,6 +242,25 @@ func parseWords(rest string) (kind, arg, reason string) {
 	return kindUnknown, "", ""
 }
 
+// parseThreadWords reads the command in the text after the mention in a
+// thread: parseWords, except that "dismiss" needs no ID.
+func parseThreadWords(rest string) (kind, arg, reason string) {
+	text := strings.TrimSpace(strings.TrimLeft(rest, " \t:,"))
+	fields := strings.Fields(text)
+	if len(fields) == 0 || !strings.EqualFold(strings.TrimRight(fields[0], ".,:;!?"), "dismiss") {
+		return parseWords(rest)
+	}
+	reason = strings.TrimSpace(text[len(fields[0]):])
+	if len(fields) > 1 && validFindingID(fields[1]) {
+		arg = strings.ToLower(fields[1])
+		reason = strings.TrimSpace(reason[len(fields[1]):])
+	}
+	if r := []rune(reason); len(r) > maxReasonRunes {
+		reason = string(r[:maxReasonRunes])
+	}
+	return kindDismiss, arg, reason
+}
+
 // validFindingID reports whether s is a finding ID: 6 to 12 hex digits.
 func validFindingID(s string) bool {
 	if len(s) < 6 || len(s) > 12 {
@@ -254,6 +289,11 @@ type comment struct {
 	// AuthorIsBot is set when the platform itself says the author is a bot.
 	AuthorIsBot bool
 	Body        string
+	// Discussion (GitLab: the discussion's ID) and ReplyTo (GitHub: the ID of
+	// the thread's first comment) are set when the comment is a reply in a
+	// thread; its commands are read with ParseThreadCommand.
+	Discussion string
+	ReplyTo    int64
 }
 
 // commands records the commands people write in comments.
@@ -292,7 +332,11 @@ func (d commands) receive(ctx context.Context, c comment) (outcome, reason strin
 			return outcomeIgnore, "bot_author", nil
 		}
 	}
-	kind, arg, why, ok := ParseCommand(c.Body, mention)
+	parse := ParseCommand
+	if c.Discussion != "" || c.ReplyTo != 0 {
+		parse = ParseThreadCommand
+	}
+	kind, arg, why, ok := parse(c.Body, mention)
 	if !ok {
 		return outcomeIgnore, "no_command", nil
 	}
@@ -310,6 +354,7 @@ func (d commands) receive(ctx context.Context, c comment) (outcome, reason strin
 		MR:          store.MRKey{Instance: c.Instance, ProjectID: c.ProjectID, IID: c.IID},
 		ProjectPath: repo.Project, Platform: c.Platform, Kind: kind, Arg: arg, Reason: why,
 		CommentID: c.CommentID, Author: c.Author, AuthorID: c.AuthorID,
+		Discussion: c.Discussion, ReplyTo: c.ReplyTo,
 	})
 	if err != nil {
 		return "command_error", "", err

@@ -82,6 +82,12 @@ func replyNeedsReason(mention string) string {
 	return fmt.Sprintf("dismissing a blocking finding needs a reason: `@%s dismiss <id> <reason>`", mention)
 }
 
+// replyNotFindingThread answers a dismissal written in a thread that is none
+// of pergent's finding threads.
+func replyNotFindingThread(mention string) string {
+	return fmt.Sprintf("This thread isn't one of pergent's findings. To dismiss a finding, reply in its thread, or comment `@%s dismiss <id> <reason>`.", mention)
+}
+
 func replyUnknownID(id string) string {
 	return fmt.Sprintf("no finding %s in the latest review", replyID(id))
 }
@@ -120,6 +126,10 @@ type verdict struct {
 	// to post it is an error and the command is tried again. The reply of a
 	// command that was carried out is only courtesy.
 	replyRequired bool
+	// thread is the finding thread the reply goes in, when the thread is
+	// known; nil leaves it to the answer step, which looks a thread command's
+	// thread up, and else posts a plain comment.
+	thread *forge.ThreadRef
 }
 
 // done is a command carried out, with an optional reply. A request that
@@ -198,7 +208,7 @@ func (e *Engine) answerCommand(parent, bctx context.Context, cmd store.Command) 
 		return
 	}
 	if v.reply != "" {
-		if err := e.reply(bctx, cmd, v.reply); err != nil {
+		if err := e.reply(bctx, cmd, v.thread, v.reply); err != nil {
 			if v.replyRequired {
 				e.retryCommand(parent, bctx, cmd, fmt.Errorf("reply: %w", err), log)
 				return
@@ -274,20 +284,63 @@ func (e *Engine) react(ctx context.Context, cmd store.Command, r forge.Reaction,
 	}
 	rctx, cancel := context.WithTimeout(ctx, reactTimeout)
 	defer cancel()
-	if err := plat.Forge.React(rctx, cmd.MR.ProjectID, cmd.MR.IID, cmd.CommentID, r); err != nil {
+	if err := reactOn(rctx, plat.Forge, cmd, r); err != nil {
 		log.Debug("couldn't react to a command", "reaction", r, "error", e.redact(err.Error()))
 	}
 }
 
-// reply posts body on the command's change, within reactTimeout (and ctx).
-func (e *Engine) reply(ctx context.Context, cmd store.Command, body string) error {
+// reactOn puts the reaction on the command's comment. A comment written in a
+// thread is a review comment (GitHub reacts to those through another
+// endpoint than to a pull request comment), so it is reacted to as a thread's.
+func reactOn(ctx context.Context, f forge.Forge, cmd store.Command, r forge.Reaction) error {
+	if cmd.InThread() {
+		if inl, ok := f.(forge.Inline); ok {
+			return inl.ReactThread(ctx, cmd.MR.ProjectID, cmd.MR.IID, cmd.CommentID, r)
+		}
+	}
+	return f.React(ctx, cmd.MR.ProjectID, cmd.MR.IID, cmd.CommentID, r)
+}
+
+// reply posts body on the command's change, within reactTimeout (and ctx): in
+// thread when the command was written in a thread of pergent's and the
+// thread is known, else as a plain comment.
+func (e *Engine) reply(ctx context.Context, cmd store.Command, thread *forge.ThreadRef, body string) error {
 	plat, ok := e.Platforms.Get(cmd.MR.Instance)
 	if !ok || plat.Forge == nil {
 		return errors.New("not connected to the instance")
 	}
+	if thread == nil && cmd.InThread() {
+		thread = e.knownThread(ctx, cmd)
+	}
 	rctx, cancel := context.WithTimeout(ctx, reactTimeout)
 	defer cancel()
-	return plat.Forge.Reply(rctx, cmd.MR.ProjectID, cmd.MR.IID, body)
+	return replyOn(rctx, plat.Forge, cmd, thread, body)
+}
+
+// replyOn posts body in thread when there is one and the platform has
+// threads, else as a plain comment on the change.
+func replyOn(ctx context.Context, f forge.Forge, cmd store.Command, thread *forge.ThreadRef, body string) error {
+	if thread != nil {
+		if inl, ok := f.(forge.Inline); ok {
+			return inl.ReplyThread(ctx, cmd.MR.ProjectID, cmd.MR.IID, *thread, body)
+		}
+	}
+	return f.Reply(ctx, cmd.MR.ProjectID, cmd.MR.IID, body)
+}
+
+// knownThread is the finding thread a command was written in, nil when it
+// was written in some other thread or the store can't say (the reply is then
+// a plain comment).
+func (e *Engine) knownThread(ctx context.Context, cmd store.Command) *forge.ThreadRef {
+	t, found, err := e.Store.InlineThreadFor(ctx, cmd.MR, cmd.Discussion, cmd.ReplyTo)
+	if err != nil {
+		e.log().Warn("couldn't look up the thread of a command", "command", cmd.ID, "error", e.redact(err.Error()))
+		return nil
+	}
+	if !found {
+		return nil
+	}
+	return &forge.ThreadRef{ID: t.ThreadID, CommentID: t.CommentID}
 }
 
 // commandRun is one command being handled, with what its steps need.
@@ -335,9 +388,16 @@ func (e *Engine) handleCommand(ctx, bctx context.Context, cmd store.Command, log
 	} else if bot {
 		return dropped("the author is a bot"), nil
 	}
-	recent, err := e.Store.RecentCommand(ctx, cmd.MR, cmd.Kind, cmd.Arg, cmd.CreatedAt.Add(-commandRepeatWindow))
-	if err != nil {
-		return verdict{}, fmt.Errorf("check for a repeated command: %w", err)
+	// A dismissal in a thread names no ID (its thread says which finding), so
+	// the repeat check, which goes by kind and ID, would take a dismissal in
+	// one thread for a repeat of one in another. Dismissing a finding twice is
+	// answered as already dismissed anyway.
+	recent := false
+	if !cmd.InThread() || cmd.Arg != "" || cmd.Kind != "dismiss" {
+		recent, err = e.Store.RecentCommand(ctx, cmd.MR, cmd.Kind, cmd.Arg, cmd.CreatedAt.Add(-commandRepeatWindow))
+		if err != nil {
+			return verdict{}, fmt.Errorf("check for a repeated command: %w", err)
+		}
 	}
 	if recent {
 		return dropped("the same command was answered within 30 seconds"), nil
@@ -440,8 +500,12 @@ func (c *commandRun) rerun(ctx context.Context, failedOnly bool) (verdict, error
 	return done(""), nil
 }
 
-// dismiss is "dismiss <id> [reason]".
+// dismiss is "dismiss <id> [reason]", or, written in a finding's thread,
+// "dismiss [reason]".
 func (c *commandRun) dismiss(ctx context.Context) (verdict, error) {
+	if c.cmd.InThread() {
+		return c.dismissInThread(ctx)
+	}
 	access, err := c.access(ctx)
 	if err != nil {
 		return verdict{}, err
@@ -456,7 +520,71 @@ func (c *commandRun) dismiss(ctx context.Context) (verdict, error) {
 	if !found {
 		return refused("unknown finding", replyUnknownID(c.cmd.Arg)), nil
 	}
-	reason := actions.CleanReason(c.cmd.Reason)
+	return c.dismissFinding(ctx, access, f, reviewed, c.cmd.Reason, c.cmd.Arg)
+}
+
+// dismissInThread is a dismissal written as a reply in a thread. The thread
+// says which finding is meant: the latest review's finding with the thread's
+// fingerprint. A first word that looks like an ID but isn't the finding's is
+// the start of the reason.
+func (c *commandRun) dismissInThread(ctx context.Context) (verdict, error) {
+	t, found, err := c.e.Store.InlineThreadFor(ctx, c.cmd.MR, c.cmd.Discussion, c.cmd.ReplyTo)
+	if err != nil {
+		return verdict{}, fmt.Errorf("find the thread: %w", err)
+	}
+	if !found {
+		return refused("not a finding thread", replyNotFindingThread(c.plat.Forge.Mention())), nil
+	}
+	ref := &forge.ThreadRef{ID: t.ThreadID, CommentID: t.CommentID}
+	with := func(v verdict) verdict {
+		v.thread = ref
+		return v
+	}
+	all, reviewed, ok, err := actions.LatestFindings(ctx, c.e.Store, c.cmd.MR)
+	if err != nil {
+		return verdict{}, err
+	}
+	var f result.Finding
+	if ok {
+		f, ok = actions.MostSevere(all, t.Fingerprint)
+	}
+	if !ok {
+		return with(refused("unknown finding", replyUnknownID(""))), nil
+	}
+	reason := threadReason(c.cmd.Arg, f.ID, c.cmd.Reason)
+	access, err := c.access(ctx)
+	if err != nil {
+		return verdict{}, err
+	}
+	if access < forge.AccessWrite {
+		return with(refused("no permission", replyNoPermission)), nil
+	}
+	v, err := c.dismissFinding(ctx, access, f, reviewed, reason, f.ID)
+	if err != nil {
+		return verdict{}, err
+	}
+	return with(v), nil
+}
+
+// threadReason is the reason of a dismissal written in a thread. arg is the
+// word the commander wrote where an ID goes ("" when there was none): when it
+// isn't the finding's ID (id) it was part of the reason. The result is kept
+// within the longest reason.
+func threadReason(arg, id, reason string) string {
+	if arg != "" && !strings.EqualFold(arg, id) {
+		reason = strings.TrimSpace(arg + " " + reason)
+	}
+	if r := []rune(reason); len(r) > actions.MaxReasonRunes {
+		reason = string(r[:actions.MaxReasonRunes])
+	}
+	return reason
+}
+
+// dismissFinding sets f aside, for a commander with access: the rules by the
+// finding's severity, then the dismissal and the review decided again. id
+// names the finding in a reply.
+func (c *commandRun) dismissFinding(ctx context.Context, access forge.Access, f result.Finding, reviewed store.Run, rawReason, id string) (verdict, error) {
+	reason := actions.CleanReason(rawReason)
 	if f.Severity != "suggestion" {
 		// Anything but a suggestion is dismissed as a blocking finding.
 		f.Severity = "blocking"
@@ -496,7 +624,7 @@ func (c *commandRun) dismiss(ctx context.Context) (verdict, error) {
 			return verdict{}, err
 		}
 		if !mine {
-			return noop("already dismissed", replyAlreadyDismissed(c.cmd.Arg)), nil
+			return noop("already dismissed", replyAlreadyDismissed(id)), nil
 		}
 	}
 	// The review is decided again with the dismissal applied: no run starts.

@@ -52,8 +52,8 @@ type Deps struct {
 
 // Routes serves:
 //   - POST /webhooks/gitlab/{instance}: GitLab merge request and note webhooks;
-//   - POST /webhooks/github/{instance}: GitHub pull_request and issue_comment
-//     webhooks;
+//   - POST /webhooks/github/{instance}: GitHub pull_request, issue_comment and
+//     pull_request_review_comment webhooks;
 //   - POST /runs/{id}/result: a review Job's result;
 //   - POST /skill-fetches/{id}/result: the skills a fetch Job read, when
 //     SkillFetches is set;

@@ -80,6 +80,32 @@ func (e *cmdE2E) say(t *testing.T, username string, userID int64, body string) i
 	return id
 }
 
+// sayInThread is say for a reply in discussion: the Note Hook GitLab sends for
+// a note of the given type (DiffNote or DiscussionNote) in that discussion.
+func (e *cmdE2E) sayInThread(t *testing.T, username string, userID int64, typ, discussion, body string) int64 {
+	t.Helper()
+	e.next++
+	id := e.next
+	e.env.GitLab.Reply(http.MethodPost, emojiPath(1, id), http.StatusCreated, `{}`)
+	hook, _ := json.Marshal(map[string]any{
+		"object_kind": "note",
+		"user":        map[string]any{"id": userID, "username": username},
+		"project":     map[string]any{"id": testProjectID, "path_with_namespace": testProjectPath},
+		"object_attributes": map[string]any{
+			"id": id, "note": body, "noteable_type": "MergeRequest", "type": typ, "discussion_id": discussion,
+			"action": "create", "system": false,
+		},
+		"merge_request": map[string]any{"iid": 1},
+	})
+	status, resp, _, _ := e.do(t, http.MethodPost, "/webhooks/gitlab/"+testInstance, json.RawMessage(hook), nil, map[string]string{
+		"X-Gitlab-Token": testWebhookSecret, "X-Gitlab-Event": "Note Hook",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("note webhook = %d: %s", status, resp)
+	}
+	return id
+}
+
 // answer runs the engine's command step once.
 func (e *cmdE2E) answer(t *testing.T) {
 	t.Helper()
@@ -475,4 +501,65 @@ func (e *cmdE2E) adminAlice(t *testing.T) dashUser {
 		t.Fatalf("alice is not an admin after joining the team")
 	}
 	return alice
+}
+
+// A reply in a finding's thread dismisses the finding, from the Note Hook to
+// the platform: the thread says which finding, a reason is needed for a
+// blocking one, and a refusal is answered in the thread.
+func TestEndToEndDismissFromTheThread(t *testing.T) {
+	e := newCommandsE2E(t)
+	env := e.env
+	gl := env.GitLab
+	head := sha('a')
+	const discussion = "disc1"
+
+	gl.Reply(http.MethodGet, membersPath(userMaintainer), http.StatusOK, member(40))
+	gl.Reply(http.MethodGet, userPath(userMaintainer), http.StatusOK, map[string]any{"id": userMaintainer, "bot": false})
+	servePublish(env, 1, head)
+	mr := openMR(1, head)
+	mr.Author = gitlab.User{ID: userAuthor, Username: "maya"}
+	gl.SetMR(mr)
+	run := env.Report(1, head, resultFor(t, head, skillWithFinding(t, "has_blocking_issues", "blocking")))
+	if err := env.Store.MarkPublished(env.ctx, run, store.RunDecision{Outcome: store.OutcomeNoBlocking}); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.Store.PutInlineThread(env.ctx, store.InlineThread{
+		MR: env.MRKey(1), Fingerprint: sqlFingerprint, Skill: "security", File: "db/query.go", Line: 12, EndLine: 12,
+		Commit: head, ThreadID: discussion, CommentID: 1500, State: "open",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gl.Reply(http.MethodPost, discussionNotesPath(1, discussion), http.StatusCreated, `{}`)
+	threadReplies := func() []string {
+		var out []string
+		for _, r := range gl.Requests(http.MethodPost, discussionNotesPath(1, discussion)) {
+			out = append(out, r.JSON(t)["body"].(string))
+		}
+		return out
+	}
+
+	// No reason for a blocking finding: refused in the thread.
+	c := e.sayInThread(t, "mo", userMaintainer, "DiffNote", discussion, "@pergent-review dismiss")
+	e.answer(t)
+	e.wantReactions(t, c, eyes, down)
+	if got := threadReplies(); !slices.Equal(got, []string{replyNeedsReason("pergent-review")}) {
+		t.Fatalf("replies in the thread = %q, want the reason to be asked for", got)
+	}
+	e.wantReplies(t)
+	if ds := mustDismissals(t, env); len(ds) != 0 {
+		t.Fatalf("dismissals = %+v, want none", ds)
+	}
+
+	// With a reason, once the throttle window has passed: dismissed.
+	env.SetNow(env.Now().Add(commandThrottleWindow + time.Second))
+	c = e.sayInThread(t, "mo", userMaintainer, "DiscussionNote", discussion, "@pergent-review dismiss the input is a constant")
+	e.answer(t)
+	e.wantReactions(t, c, eyes, up)
+	if ds := mustDismissals(t, env); len(ds) != 1 || ds[0].Fingerprint != sqlFingerprint || ds[0].Reason != "the input is a constant" ||
+		ds[0].Actor != "mo (gitlab main)" {
+		t.Fatalf("dismissals = %+v, want the finding dismissed by mo", ds)
+	}
+	if n := len(threadReplies()); n != 1 {
+		t.Errorf("%d replies in the thread, want only the refusal (the publisher's reply comes with the re-publish)", n)
+	}
 }

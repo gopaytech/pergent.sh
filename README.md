@@ -315,7 +315,7 @@ In the organization's settings, **Developer settings → GitHub Apps → New Git
   - Issues: **Read and write** (pull request comments are issue comments; this also covers the 👀, 👍 and 👎 reactions on a command comment)
   - Metadata: **Read-only** (always on; this also covers reading a commenter's repository permission)
   - Administration: **Read-only** (optional). It lets the [readiness scan](#readiness-scan) read classic branch protection. Without it, on a branch that has classic protection, 3 rows of the scan can say "Couldn't check" and name this permission; nothing else changes.
-- **Subscribe to events:** **Pull request** and **Issue comment**. The Issue comment event delivers the comments that commands are read from.
+- **Subscribe to events:** **Pull request**, **Issue comment** and **Pull request review comment**. The Issue comment event delivers the comments that commands are read from, and the Pull request review comment event the replies in a finding's thread.
 - **Where can this GitHub App be installed:** "Only on this account", or "Any account" to install it on several organizations.
 
 Create it, note its **App ID** and generate a **private key** (a `.pem` file).
@@ -818,6 +818,8 @@ A comment on a merge request (or pull request) can ask the review bot to run the
 | `@<bot> dismiss <id> <reason>` | Sets a finding aside as not a real problem. `<id>` is the finding's ID, shown as `id …` on its line in the review comment; each finding's own "Not a real problem?" line has the command ready to copy. |
 | `@<bot> help` | Replies with the list of commands. |
 
+In a finding's own thread the finding is already known, so `@<bot> dismiss <reason>` works as a reply there, with no ID (an ID in front of the reason is allowed). In any other thread it is answered with a pointer to the right command.
+
 `<bot>` is what people type after `@` to address the review bot: its username on GitLab, the review App's slug on GitHub (`@pergent-review review` for an App called that). A comment that doesn't mention it is ignored, so people can write "review" in ordinary conversation. Restoring a dismissed finding has no command: it is a button on the dashboard.
 
 ### Writing a command
@@ -827,7 +829,7 @@ A comment on a merge request (or pull request) can ask the review bot to run the
 - Only the first command of a comment runs.
 - `review`, `review failed` and `help` must be the whole rest of the line (a closing `.` or `!` is fine). `dismiss` takes a finding ID of 6 to 12 hexadecimal digits, then the reason on the same line. Anything else after the mention, such as `review please` or `dismiss` with a malformed ID, is answered like `help`.
 - A reason is required to dismiss a blocking finding and optional for a suggestion. A reason is 500 characters at most: a comment's is cut there, and the dashboard refuses a longer one (400 `the reason is too long`). Markdown images (`![...](...)`, also by reference, and `<img>` tags) are removed from a reason before it is stored, so a review comment can't be made to load one.
-- Only a newly created comment on a merge request counts. Edits, deletions, GitLab comments on a line or in a thread, and system notes never run a command.
+- Only a newly created comment on a merge request counts. Edits, deletions and system notes never run a command. A reply in a thread counts as a command written in that thread (on GitHub only a reply, not the comment that starts the thread).
 - A comment never runs a command when it was written by the review bot or the approve bot, by any account whose name ends in `[bot]`, or through a GitHub App, by a GitLab project, group or service-account bot (a username like `project_<id>_bot`, `group_<id>_bot_<token>` or `service_account_…`; the engine also asks GitLab, `GET /users/:id`, and drops the command with 👎 when the user's `bot` flag is set, or tries it again when GitLab can't say), or when it contains pergent's hidden marker (`<!-- pergent`), which every review comment carries. So neither pergent.sh's comment nor a model's text quoted in a finding can run a command.
 
 ### Who may do what
