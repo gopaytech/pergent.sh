@@ -1688,7 +1688,7 @@ func TestRepublishNewestWhileReportedOfAnotherHead(t *testing.T) {
 func TestRepublishNewestSameHeadRerun(t *testing.T) {
 	s := newStore(t)
 	published(t, s, mr1, "A", "main")
-	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "A", "main", TriggerRerun, nil, nil)
+	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "A", "main", TriggerRerun, nil, nil, false)
 	if err != nil || !created {
 		t.Fatalf("EnqueueRerun = %v, %v", created, err)
 	}
@@ -2002,7 +2002,7 @@ func TestPendingWithdrawalsFailClosedOnPublishFailed(t *testing.T) {
 	if n(s) != 1 {
 		t.Fatal("want it owed again")
 	}
-	if _, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil); err != nil || !created {
+	if _, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil, false); err != nil || !created {
 		t.Fatalf("EnqueueRerun = %v, %v", created, err)
 	}
 	if n(s) != 0 {

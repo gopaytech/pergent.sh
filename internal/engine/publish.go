@@ -720,19 +720,23 @@ func (e *Engine) cleanUp(ctx context.Context, run store.Run, log *slog.Logger) e
 			return err
 		}
 	}
-	// A newer run of the same head (a full review replacing an incremental
-	// one) owns the commit status: cancelling it would overwrite that run's.
-	newer, err := e.Store.NewerRunOfHead(ctx, run)
-	if err != nil {
-		return fmt.Errorf("look for a newer run of the head: %w", err)
-	}
-	if !run.DispatchedAt.IsZero() && !newer {
+	if !run.DispatchedAt.IsZero() {
+		// A newer run of the same head (a full review replacing an
+		// incremental one) owns the commit status: cancelling this one would
+		// overwrite that run's.
+		newer, err := e.Store.NewerRunOfHead(ctx, run)
+		if err != nil {
+			return fmt.Errorf("look for a newer run of the head: %w", err)
+		}
 		plat, ok := e.Platforms.Get(run.MR.Instance)
-		if ok && plat.Forge != nil {
+		switch {
+		case newer:
+			log.Debug("not setting the canceled status: a newer run of the head owns it")
+		case ok && plat.Forge != nil:
 			if err := plat.Forge.SetStatus(ctx, run.MR.ProjectID, run.HeadSHA, forge.StatusCanceled, supersededDescription); err != nil {
 				return fmt.Errorf("set canceled status: %w", err)
 			}
-		} else {
+		default:
 			// The instance was removed from the config: nothing can be
 			// posted there any more, so don't keep trying.
 			log.Warn("not setting the canceled status: no bots for the instance")

@@ -922,7 +922,7 @@ func TestRerunCapsAcrossCommandsAndButtons(t *testing.T) {
 	button := func(f *commandFixture, iid int64) {
 		t.Helper()
 		id, created, err := f.Store.EnqueueRerun(f.ctx, store.MRKey{Instance: testInstance, ProjectID: testProjectID, IID: iid},
-			testProjectPath, f.head, "main", store.TriggerRerun, nil, nil)
+			testProjectPath, f.head, "main", store.TriggerRerun, nil, nil, false)
 		if err != nil || !created {
 			t.Fatalf("EnqueueRerun = %v, %v", created, err)
 		}

@@ -14,7 +14,7 @@ func TestEnqueueRerunSameHead(t *testing.T) {
 	old := published(t, s, mr1, "aaa", "main")
 	base := old
 
-	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerunFailed, []string{"security", "style"}, &base)
+	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerunFailed, []string{"security", "style"}, &base, false)
 	if err != nil || !created || id == old {
 		t.Fatalf("EnqueueRerun = %s, %v, %v; want a new run", id, created, err)
 	}
@@ -44,7 +44,7 @@ func TestEnqueueRunDefaults(t *testing.T) {
 func TestEnqueueRerunEmptySubsetIsAllSkills(t *testing.T) {
 	s := newStore(t)
 	published(t, s, mr1, "aaa", "main")
-	id, _, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, []string{}, nil)
+	id, _, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, []string{}, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,11 +54,15 @@ func TestEnqueueRerunEmptySubsetIsAllSkills(t *testing.T) {
 }
 
 // A head and target already queued or running is not queued twice, and
-// nothing changes.
+// nothing changes. The run is a re-run, which even a full review (replace)
+// doesn't supersede: only a push's run can be replaced.
 func TestEnqueueRerunDeduplicates(t *testing.T) {
 	s := newStore(t)
-	queued := enqueue(t, s, mr1, "aaa")
-	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil)
+	queued, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil, false)
+	if err != nil || !created {
+		t.Fatalf("setup EnqueueRerun = %s, %v, %v", queued, created, err)
+	}
+	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil, true)
 	if err != nil || created || id != queued {
 		t.Fatalf("EnqueueRerun of a queued head = %s, %v, %v; want %s, false", id, created, err, queued)
 	}
@@ -66,11 +70,11 @@ func TestEnqueueRerunDeduplicates(t *testing.T) {
 	if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
 		t.Fatal(err)
 	}
-	id, created, err = s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil)
+	id, created, err = s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil, true)
 	if err != nil || created || id != queued {
 		t.Fatalf("EnqueueRerun of a running head = %s, %v, %v; want %s, false", id, created, err, queued)
 	}
-	if r := getRun(t, s, queued); r.State != Running || r.Trigger != TriggerPush {
+	if r := getRun(t, s, queued); r.State != Running || r.Trigger != TriggerRerun {
 		t.Errorf("run changed: %s %s", r.State, r.Trigger)
 	}
 	var n int
@@ -79,10 +83,15 @@ func TestEnqueueRerunDeduplicates(t *testing.T) {
 	}
 }
 
-// A full review replaces a push's incremental run that is queued, running or
-// reported, but not one that reviews everything; a re-run of the failed skills
-// never replaces a live run.
+// A full review (replace) supersedes a push's run that hasn't been dispatched
+// (queued, or claimed and not yet dispatched) or that is incremental, whatever
+// its state; it leaves a dispatched run that reviews everything, and a run that
+// isn't from a push, alone. Without replace (a re-run of the failed skills,
+// including its whole-review path) no live run is replaced.
 func TestEnqueueRerunReplacesIncrementalRun(t *testing.T) {
+	const (
+		claimed = RunState("claimed") // running, but not yet dispatched
+	)
 	// live brings a push run of mr1 at "aaa" to the state.
 	live := func(t *testing.T, s *Store, state RunState, incremental bool) string {
 		t.Helper()
@@ -91,6 +100,11 @@ func TestEnqueueRerunReplacesIncrementalRun(t *testing.T) {
 		switch state {
 		case Queued:
 			id = enqueue(t, s, mr1, "aaa")
+		case claimed:
+			id = enqueue(t, s, mr1, "aaa")
+			if _, err := s.ClaimQueued(ctx, 10, t0); err != nil {
+				t.Fatal(err)
+			}
 		case Running:
 			id = dispatched(t, s, mr1, "aaa", "tok")
 		default:
@@ -114,21 +128,26 @@ func TestEnqueueRerunReplacesIncrementalRun(t *testing.T) {
 		state       RunState
 		incremental bool
 		trigger     string
+		replace     bool
 		replaced    bool
 	}{
-		{"queued push run", Queued, false, TriggerRerun, true},
-		{"queued incremental run", Queued, true, TriggerRerun, true},
-		{"running incremental run", Running, true, TriggerRerun, true},
-		{"reported incremental run", Reported, true, TriggerRerun, true},
-		{"running full run", Running, false, TriggerRerun, false},
-		{"reported full run", Reported, false, TriggerRerun, false},
-		{"queued run, failed skills only", Queued, false, TriggerRerunFailed, false},
-		{"running incremental run, failed skills only", Running, true, TriggerRerunFailed, false},
+		{"queued push run", Queued, false, TriggerRerun, true, true},
+		{"claimed push run", claimed, false, TriggerRerun, true, true},
+		{"queued incremental run", Queued, true, TriggerRerun, true, true},
+		{"running incremental run", Running, true, TriggerRerun, true, true},
+		{"reported incremental run", Reported, true, TriggerRerun, true, true},
+		{"running full run", Running, false, TriggerRerun, true, false},
+		{"reported full run", Reported, false, TriggerRerun, true, false},
+		{"queued run, failed skills only", Queued, false, TriggerRerunFailed, false, false},
+		{"running incremental run, failed skills only", Running, true, TriggerRerunFailed, false, false},
+		{"queued run, failed whole review", Queued, false, TriggerRerun, false, false},
+		{"claimed run, failed whole review", claimed, false, TriggerRerun, false, false},
+		{"running incremental run, failed whole review", Running, true, TriggerRerun, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newStore(t)
 			old := live(t, s, tc.state, tc.incremental)
-			id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", tc.trigger, nil, nil)
+			id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", tc.trigger, nil, nil, tc.replace)
 			if err != nil || created != tc.replaced {
 				t.Fatalf("EnqueueRerun = %s, %v, %v; want created %v", id, created, err, tc.replaced)
 			}
@@ -138,8 +157,12 @@ func TestEnqueueRerunReplacesIncrementalRun(t *testing.T) {
 				}
 				return
 			}
-			if id != old || getRun(t, s, old).State != tc.state {
-				t.Errorf("id = %s (%s), want the live run %s still %s", id, getRun(t, s, old).State, old, tc.state)
+			want := tc.state
+			if want == claimed {
+				want = Running
+			}
+			if id != old || getRun(t, s, old).State != want {
+				t.Errorf("id = %s (%s), want the live run %s still %s", id, getRun(t, s, old).State, old, want)
 			}
 		})
 	}
@@ -214,7 +237,7 @@ func TestNewerRunOfHead(t *testing.T) {
 	if err := s2.SetIncremental(ctx, first, &base); err != nil {
 		t.Fatal(err)
 	}
-	full, created, err := s2.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil)
+	full, created, err := s2.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil, true)
 	if err != nil || !created {
 		t.Fatalf("EnqueueRerun = %v, %v", created, err)
 	}
@@ -238,7 +261,7 @@ func TestNewerRunOfHead(t *testing.T) {
 func TestEnqueueRerunDeduplicatesReported(t *testing.T) {
 	s := newStore(t)
 	rep := reported(t, s, mr1, "aaa", `{"status":"completed"}`)
-	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil)
+	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil, false)
 	if err != nil || created || id != rep {
 		t.Fatalf("EnqueueRerun of a reported head = %s, %v, %v; want %s, false", id, created, err, rep)
 	}
@@ -259,7 +282,7 @@ func TestEnqueueRerunSupersedesPublishFailed(t *testing.T) {
 	if _, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'publish_failed' WHERE id = $1`, old); err != nil {
 		t.Fatal(err)
 	}
-	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil)
+	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil, false)
 	if err != nil || !created || id == old {
 		t.Fatalf("EnqueueRerun = %s, %v, %v; want a new run", id, created, err)
 	}
@@ -282,7 +305,7 @@ func TestEnqueueRerunSupersedesOtherLiveRuns(t *testing.T) {
 		t.Fatal("setup: bbb should be superseded")
 	}
 	live = enqueue(t, s, mr1, "ccc")
-	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil)
+	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil, false)
 	if err != nil || !created {
 		t.Fatalf("EnqueueRerun = %v, %v", created, err)
 	}
@@ -304,9 +327,9 @@ func TestCountReruns(t *testing.T) {
 	// not a duplicate of a run still in flight.
 	rerun := func(mr MRKey, head string, trigger string) {
 		t.Helper()
-		id, created, err := s.EnqueueRerun(ctx, mr, "acme/widgets", head, "main", trigger, nil, nil)
+		id, created, err := s.EnqueueRerun(ctx, mr, "acme/widgets", head, "main", trigger, nil, nil, false)
 		if err != nil || !created {
-			t.Fatalf("EnqueueRerun(%v, %s) = %v, %v", mr, head, created, err)
+			t.Fatalf("EnqueueRerun(%v, %s, false) = %v, %v", mr, head, created, err)
 		}
 		if _, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'published' WHERE id = $1`, id); err != nil {
 			t.Fatal(err)
@@ -375,7 +398,7 @@ func TestEnqueueRerunConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			id, ok, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil)
+			id, ok, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil, false)
 			if err != nil {
 				t.Error(err)
 				return
@@ -424,7 +447,7 @@ func TestStoreMergedResult(t *testing.T) {
 func TestMakeFullRerun(t *testing.T) {
 	s := newStore(t)
 	old := published(t, s, mr1, "aaa", "main")
-	id, _, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerunFailed, []string{"gone"}, &old)
+	id, _, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerunFailed, []string{"gone"}, &old, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -445,7 +468,7 @@ func TestMakeFullRerun(t *testing.T) {
 func TestRerunEditsNeedARunBeingDispatched(t *testing.T) {
 	s := newStore(t)
 	old := published(t, s, mr1, "aaa", "main")
-	id, _, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerunFailed, []string{"a", "b"}, &old)
+	id, _, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerunFailed, []string{"a", "b"}, &old, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -124,7 +124,7 @@ func Rerun(ctx context.Context, st *store.Store, req RerunRequest) (RerunResult,
 	if capped {
 		return RerunResult{Status: RerunCapped}, nil
 	}
-	_, created, err := st.EnqueueRerun(ctx, req.MR, req.ProjectPath, req.Head, req.TargetBranch, trigger, skills, base)
+	_, created, err := st.EnqueueRerun(ctx, req.MR, req.ProjectPath, req.Head, req.TargetBranch, trigger, skills, base, !req.FailedOnly)
 	if err != nil {
 		return RerunResult{}, fmt.Errorf("queue the re-run: %w", err)
 	}

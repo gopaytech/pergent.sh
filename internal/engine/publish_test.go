@@ -870,7 +870,7 @@ func TestCleanUpKeepsStatusOfANewerRunOfTheHead(t *testing.T) {
 	if err := env.Store.SetIncremental(env.ctx, id, &base); err != nil {
 		t.Fatal(err)
 	}
-	full, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main", store.TriggerRerun, nil, nil)
+	full, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main", store.TriggerRerun, nil, nil, true)
 	if err != nil || !created {
 		t.Fatalf("EnqueueRerun = %v, %v; want a new run", created, err)
 	}
@@ -1385,7 +1385,7 @@ func TestPublishGiveUpWithdrawsApprovalOfItsHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	// R2, a re-run of the same head, supersedes R1 and is reported.
-	r2, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main", store.TriggerRerun, nil, nil)
+	r2, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main", store.TriggerRerun, nil, nil, false)
 	if err != nil || !created {
 		t.Fatalf("EnqueueRerun = %v, %v", created, err)
 	}

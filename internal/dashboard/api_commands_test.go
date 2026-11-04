@@ -884,7 +884,7 @@ func TestRestoreReachesASameHeadRerunBeingPublished(t *testing.T) {
 	if _, err := e.st.Dismiss(ctx, store.Dismissal{MR: mr, Fingerprint: blockingFP, Severity: "blocking", Reason: "x", Actor: "bob"}); err != nil {
 		t.Fatal(err)
 	}
-	rerun, created, err := e.st.EnqueueRerun(ctx, mr, buttonProject, head('1'), "main", store.TriggerRerun, nil, nil)
+	rerun, created, err := e.st.EnqueueRerun(ctx, mr, buttonProject, head('1'), "main", store.TriggerRerun, nil, nil, false)
 	if err != nil || !created {
 		t.Fatalf("EnqueueRerun = %v, %v", created, err)
 	}

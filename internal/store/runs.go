@@ -334,14 +334,15 @@ func (s *Store) EnqueueRun(ctx context.Context, mr MRKey, projectPath, headSHA, 
 // review not yet published) is not replaced or duplicated: created is false
 // and id is that run's, nothing is changed. Superseding a reported run would
 // leave its commit status for the cleanup to cancel while the new run
-// is running. The exception is a full re-run (TriggerRerun), which replaces a
-// push's run that is still queued or that reviews only some files
-// (Incremental): the review asked for covers more.
+// is running. The exception is replace (a full review asked for): it
+// supersedes a push's run that hasn't been dispatched (queued, or claimed and
+// not yet dispatched) or that reviews only some files (Incremental), since the
+// review asked for covers more.
 //
 // The caller checks the re-run caps (CountReruns) before calling; with
 // more than one caller at a time, for example two button presses, a cap may
 // be overshot by a few.
-func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA, targetBranch, trigger string, skills []string, baseRunID *string) (id string, created bool, err error) {
+func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA, targetBranch, trigger string, skills []string, baseRunID *string, replace bool) (id string, created bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return "", false, err
@@ -354,8 +355,8 @@ func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA
 	err = tx.QueryRow(ctx, `SELECT id::text FROM runs
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
 		  AND state IN ('queued', 'running', 'reported')
-		  AND NOT ($6 AND trigger = 'push' AND (state = 'queued' OR incremental))`,
-		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch, trigger == TriggerRerun).Scan(&id)
+		  AND NOT ($6 AND trigger = 'push' AND (dispatched_at IS NULL OR incremental))`,
+		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch, replace).Scan(&id)
 	if err == nil {
 		if err := tx.Commit(ctx); err != nil {
 			return "", false, err
@@ -372,8 +373,9 @@ func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch); err != nil {
 		return "", false, err
 	}
-	// What is left of this head and target is published or publish_failed:
-	// the queued, running and reported ones returned above.
+	// What is left of this head and target is published or publish_failed,
+	// and the live runs replace allows to go (an undispatched or incremental
+	// push run); the other queued, running and reported ones returned above.
 	if _, err := tx.Exec(ctx, `UPDATE runs SET state = 'superseded',
 			cleaned_up = cleaned_up OR state IN ('published', 'publish_failed')
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5

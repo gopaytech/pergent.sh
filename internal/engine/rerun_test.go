@@ -36,7 +36,7 @@ func namedSkill(t *testing.T, name, verdict, severity, fp string) result.Skill {
 // builds on base, as a command or a button would.
 func rerunOf(t *testing.T, env *testEnv, head, trigger string, subset []string, base string) string {
 	t.Helper()
-	id, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main", trigger, subset, &base)
+	id, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main", trigger, subset, &base, false)
 	if err != nil || !created {
 		t.Fatalf("EnqueueRerun = %v, %v", created, err)
 	}
@@ -555,7 +555,7 @@ func TestMergeSubsetWithoutBaseRunIsNotAWholeReview(t *testing.T) {
 	env := newTestEnv(t)
 	head := sha('a')
 	id, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main",
-		store.TriggerRerunFailed, []string{"style"}, nil)
+		store.TriggerRerunFailed, []string{"style"}, nil, false)
 	if err != nil || !created {
 		t.Fatalf("EnqueueRerun = %v, %v", created, err)
 	}
