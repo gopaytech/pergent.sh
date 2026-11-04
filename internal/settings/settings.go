@@ -46,6 +46,7 @@ const (
 	KeyRerunLimitPerRepo = "rerun_limit_per_repo"
 
 	KeyCommandsAuthorAndMaintainersOnly = "commands_author_and_maintainers_only"
+	KeyIncrementalReviews               = "incremental_reviews"
 )
 
 // The re-run caps when nothing sets them: per merge request and per
@@ -68,7 +69,10 @@ type Effective struct {
 	// CommandsAuthorAndMaintainersOnly is whether only a change's author and
 	// the repository's maintainers and owners can use pergent commands on it.
 	CommandsAuthorAndMaintainersOnly bool
-	FailureStatus                    config.FailureStatus
+	// IncrementalReviews is whether a push reviews only the files changed
+	// since the last review.
+	IncrementalReviews bool
+	FailureStatus      config.FailureStatus
 	// Skills are the library skills reviewed; nil means the default list.
 	Skills []string
 	// RepoSkills are the detected repository skills turned on; nil is none.
@@ -225,6 +229,7 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 		FailureStatus:  config.FailureStatusFailed,
 
 		CommandsAuthorAndMaintainersOnly: true,
+		IncrementalReviews:               true,
 		JobTimeout:                       r.Config.Jobs.Timeout,
 		MaxTurns:                         r.Config.Jobs.MaxTurns,
 		JobMemory:                        r.jobsMemory(r.Config.Jobs.Resources.Limits),
@@ -234,7 +239,7 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 		Overridden: map[string]bool{
 			KeyApprove: false, KeyReviewDrafts: false, KeyInlineFindings: false, KeyFailureStatus: false,
 			KeySkills: false, KeyRepoSkills: false, KeyJobTimeout: false, KeyMaxTurns: false, KeyJobMemory: false,
-			KeyRerunLimitPerMR: false, KeyRerunLimitPerRepo: false, KeyCommandsAuthorAndMaintainersOnly: false,
+			KeyRerunLimitPerMR: false, KeyRerunLimitPerRepo: false, KeyCommandsAuthorAndMaintainersOnly: false, KeyIncrementalReviews: false,
 		},
 	}
 	if source != SourceDashboard {
@@ -251,6 +256,9 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 	}
 	if stored.CommandsAuthorAndMaintainersOnly != nil {
 		eff.CommandsAuthorAndMaintainersOnly = *stored.CommandsAuthorAndMaintainersOnly
+	}
+	if stored.IncrementalReviews != nil {
+		eff.IncrementalReviews = *stored.IncrementalReviews
 	}
 	if stored.FailureStatus != nil {
 		if fs, ok := failureStatus(*stored.FailureStatus); ok {
@@ -336,6 +344,9 @@ func (r *Resolver) fromConfig(repo config.Repository) (Effective, bool) {
 	if repo.CommandsAuthorAndMaintainersOnly != nil {
 		eff.CommandsAuthorAndMaintainersOnly, eff.Overridden[KeyCommandsAuthorAndMaintainersOnly] = *repo.CommandsAuthorAndMaintainersOnly, true
 	}
+	if repo.IncrementalReviews != nil {
+		eff.IncrementalReviews, eff.Overridden[KeyIncrementalReviews] = *repo.IncrementalReviews, true
+	}
 	if repo.FailureStatus != "" && repo.FailureStatus != config.FailureStatusFailed {
 		eff.FailureStatus, eff.Overridden[KeyFailureStatus] = repo.FailureStatus, true
 	}
@@ -384,6 +395,9 @@ func (r *Resolver) fromDashboard(row store.DashboardRepo, stored store.RepoDefau
 	}
 	if row.CommandsAuthorAndMaintainersOnly != nil {
 		eff.CommandsAuthorAndMaintainersOnly, eff.Overridden[KeyCommandsAuthorAndMaintainersOnly] = *row.CommandsAuthorAndMaintainersOnly, true
+	}
+	if row.IncrementalReviews != nil {
+		eff.IncrementalReviews, eff.Overridden[KeyIncrementalReviews] = *row.IncrementalReviews, true
 	}
 	if row.FailureStatus != nil {
 		if fs, ok := failureStatus(*row.FailureStatus); ok {

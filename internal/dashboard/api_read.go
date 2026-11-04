@@ -856,6 +856,7 @@ func settingViews(repo settings.Effective) map[string]SettingView {
 		"reviewDrafts":                     {repo.ReviewDrafts, ov[settings.KeyReviewDrafts]},
 		"inlineFindings":                   {repo.InlineFindings, ov[settings.KeyInlineFindings]},
 		"commandsAuthorAndMaintainersOnly": {repo.CommandsAuthorAndMaintainersOnly, ov[settings.KeyCommandsAuthorAndMaintainersOnly]},
+		"incrementalReviews":               {repo.IncrementalReviews, ov[settings.KeyIncrementalReviews]},
 		"failureStatus":                    {string(repo.FailureStatus), ov[settings.KeyFailureStatus]},
 		"skills":                           {repo.Skills, ov[settings.KeySkills]},
 		"repoSkills":                       {nonNil(repo.RepoSkills), ov[settings.KeyRepoSkills]},

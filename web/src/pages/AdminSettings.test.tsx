@@ -54,6 +54,7 @@ describe("AdminSettings defaults", () => {
       reviewDrafts: null,
       inlineFindings: null,
       commandsAuthorAndMaintainersOnly: null,
+      incrementalReviews: null,
       failureStatus: null,
       jobTimeoutSeconds: 900,
       maxTurns: null,
@@ -113,6 +114,27 @@ describe("AdminSettings defaults", () => {
     expect(within(form).getByRole("switch", { name: "Only the author and maintainers use commands" })).not.toBeChecked();
   });
 
+  it("shows the incremental reviews switch after the commands switch, sends a change and nulls it when it equals the config", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "PUT /api/admin/defaults": { body: { ...defaults, incrementalReviews: false } },
+    });
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    expect(within(form).getByText(/After a push, review only the files changed since the last review./)).toBeInTheDocument();
+    const names = within(form)
+      .getAllByRole("switch")
+      .map((el) => el.getAttribute("aria-label") ?? el.textContent);
+    expect(names.indexOf("Incremental reviews")).toBe(names.indexOf("Only the author and maintainers use commands") + 1);
+    const toggle = within(form).getByRole("switch", { name: "Incremental reviews" });
+    expect(toggle).toBeChecked();
+    await userEvent.click(toggle);
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ incrementalReviews: false, commandsAuthorAndMaintainersOnly: null });
+    expect(await screen.findByText("Defaults saved.")).toBeInTheDocument();
+    expect(within(form).getByRole("switch", { name: "Incremental reviews" })).not.toBeChecked();
+  });
+
   it("saves changed re-run caps", async () => {
     const fake = fakeApi({
       ...routes(),
@@ -144,6 +166,7 @@ describe("AdminSettings defaults", () => {
       reviewDrafts: null,
       inlineFindings: null,
       commandsAuthorAndMaintainersOnly: null,
+      incrementalReviews: null,
       failureStatus: null,
       jobTimeoutSeconds: null,
       maxTurns: null,
@@ -163,6 +186,7 @@ describe("AdminSettings defaults", () => {
     expect(row("Review drafts")).toHaveTextContent("From config: on");
     expect(row("Inline findings")).toHaveTextContent("From config: on");
     expect(row("Only the author and maintainers use commands")).toHaveTextContent("From config: on");
+    expect(row("Incremental reviews")).toHaveTextContent("From config: on");
     expect(row("Status when a review fails")).toHaveTextContent("From config: failed (blocks merge)");
     expect(row("Timeout")).toHaveTextContent("From config: 600");
     expect(row("Max steps")).toHaveTextContent("From config: 40");
@@ -215,6 +239,25 @@ describe("AdminSettings defaults", () => {
     expect(within(row).getByRole("switch", { name: "Only the author and maintainers use commands" })).toBeChecked();
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
     expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ commandsAuthorAndMaintainersOnly: null });
+  });
+
+  it("shows a pinned incremental reviews switch against the config, and Use config value sends null for it", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "GET /api/admin/defaults": {
+        body: { ...defaults, incrementalReviews: false, pinned: { incrementalReviews: true } },
+      },
+      "PUT /api/admin/defaults": { body: defaults },
+    });
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    const row = within(form).getByText("Incremental reviews", { selector: ".name" }).closest(".set") as HTMLElement;
+    expect(within(row).getByText("Saved here; the config says on.")).toBeInTheDocument();
+    expect(within(row).getByRole("switch", { name: "Incremental reviews" })).not.toBeChecked();
+    await userEvent.click(within(row).getByRole("button", { name: /^Use config value/ }));
+    expect(within(row).getByRole("switch", { name: "Incremental reviews" })).toBeChecked();
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ incrementalReviews: null });
   });
 
   it("keeps a pinned value that differs from the config when saving", async () => {

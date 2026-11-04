@@ -293,6 +293,24 @@ describe("RepositoryDetail", () => {
     });
   });
 
+  it("shows the incremental reviews switch after the commands switch and sends only that key when it is switched off", async () => {
+    const fake = fakeApi({
+      ...base,
+      "PUT /api/repositories/main/acme/payments/settings": { body: payments },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const toggle = await screen.findByRole("switch", { name: "Incremental reviews" });
+    expect(toggle).toBeChecked();
+    expect(screen.getByText("After a push, review only the files changed since the last review.")).toBeInTheDocument();
+    const switches = screen.getAllByRole("switch").map((el) => el.getAttribute("aria-label") ?? el.textContent);
+    expect(switches.indexOf("Incremental reviews")).toBe(switches.indexOf("Only the author and maintainers use commands") + 1);
+    await userEvent.click(toggle);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({
+      incrementalReviews: false,
+    });
+  });
+
   it("shows a maintainer the re-run caps read-only and never sends them", async () => {
     const asMaintainer = repoDetail(repoPayments, "maintainer");
     const fake = fakeApi({

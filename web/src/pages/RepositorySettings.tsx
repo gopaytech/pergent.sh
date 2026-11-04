@@ -97,6 +97,7 @@ type Draft = {
   reviewDrafts: boolean;
   inlineFindings: boolean;
   commandsAuthorAndMaintainersOnly: boolean;
+  incrementalReviews: boolean;
   failureStatus: string;
   // mode "default" is a null skills setting: the default list.
   skillsMode: "default" | "choose";
@@ -163,6 +164,7 @@ function Form({
     reviewDrafts: settings.reviewDrafts.value,
     inlineFindings: settings.inlineFindings.value,
     commandsAuthorAndMaintainersOnly: settings.commandsAuthorAndMaintainersOnly.value,
+    incrementalReviews: settings.incrementalReviews.value,
     failureStatus: settings.failureStatus.value,
     skillsMode: settings.skills.value === null ? "default" : "choose",
     skills: skillsNow,
@@ -200,6 +202,7 @@ function Form({
     if (d.commandsAuthorAndMaintainersOnly !== initial.commandsAuthorAndMaintainersOnly) {
       body.commandsAuthorAndMaintainersOnly = d.commandsAuthorAndMaintainersOnly;
     }
+    if (d.incrementalReviews !== initial.incrementalReviews) body.incrementalReviews = d.incrementalReviews;
     if (d.failureStatus !== initial.failureStatus) body.failureStatus = d.failureStatus;
     if (d.skillsMode === "default") {
       // Back to the default list: null resets the setting.
@@ -320,6 +323,18 @@ function Form({
             checked={d.commandsAuthorAndMaintainersOnly}
             disabled={disabled}
             onChange={(v) => set("commandsAuthorAndMaintainersOnly", v)}
+          />
+        </Setting>
+        <Setting
+          name="Incremental reviews"
+          overridden={settings.incrementalReviews.overridden}
+          help="After a push, review only the files changed since the last review."
+        >
+          <Switch
+            label="Incremental reviews"
+            checked={d.incrementalReviews}
+            disabled={disabled}
+            onChange={(v) => set("incrementalReviews", v)}
           />
         </Setting>
       </section>

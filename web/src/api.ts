@@ -199,6 +199,7 @@ export type RepoSettings = {
   reviewDrafts: SettingView<boolean>;
   inlineFindings: SettingView<boolean>;
   commandsAuthorAndMaintainersOnly: SettingView<boolean>;
+  incrementalReviews: SettingView<boolean>;
   failureStatus: SettingView<string>;
   // skills is null for the default list, otherwise the library skills.
   skills: SettingView<string[] | null>;
@@ -287,6 +288,7 @@ export type SettingsUpdate = Partial<{
   reviewDrafts: boolean | null;
   inlineFindings: boolean | null;
   commandsAuthorAndMaintainersOnly: boolean | null;
+  incrementalReviews: boolean | null;
   failureStatus: string | null;
   skills: string[] | null;
   repoSkills: string[] | null;
@@ -440,6 +442,7 @@ export type DefaultValues = {
   reviewDrafts: boolean;
   inlineFindings: boolean;
   commandsAuthorAndMaintainersOnly: boolean;
+  incrementalReviews: boolean;
   failureStatus: string;
   jobTimeoutSeconds: number;
   maxTurns: number;

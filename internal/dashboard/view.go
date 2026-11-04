@@ -329,8 +329,9 @@ type Last7View struct {
 // RepositoryDetailView is GET /api/repositories/{instance}/{project...}.
 // Settings is keyed approve, reviewDrafts, inlineFindings,
 // commandsAuthorAndMaintainersOnly (whether only a change's author and the
-// repository's maintainers and owners use pergent commands), failureStatus,
-// skills (null: the default list of skills; otherwise the library skills
+// repository's maintainers and owners use pergent commands),
+// incrementalReviews (whether a push reviews only the files changed since the
+// last review), failureStatus, skills (null: the default list of skills; otherwise the library skills
 // reviewed), repoSkills
 // (the detected repository skills turned on, a list, empty when none),
 // jobTimeoutSeconds, maxTurns, jobMemory ("" when none), rerunLimitPerMR and
@@ -654,9 +655,12 @@ type DefaultsView struct {
 	InlineFindings bool `json:"inlineFindings"`
 	// CommandsAuthorAndMaintainersOnly is whether only a change's author and
 	// the repository's maintainers and owners use pergent commands.
-	CommandsAuthorAndMaintainersOnly bool   `json:"commandsAuthorAndMaintainersOnly"`
-	FailureStatus                    string `json:"failureStatus"`
-	JobTimeoutSeconds                int64  `json:"jobTimeoutSeconds"`
+	CommandsAuthorAndMaintainersOnly bool `json:"commandsAuthorAndMaintainersOnly"`
+	// IncrementalReviews is whether a push reviews only the files changed
+	// since the last review.
+	IncrementalReviews bool   `json:"incrementalReviews"`
+	FailureStatus      string `json:"failureStatus"`
+	JobTimeoutSeconds  int64  `json:"jobTimeoutSeconds"`
 	// MaxTurns is the step limit of each opencode run.
 	MaxTurns int `json:"maxTurns"`
 	// JobMemory is the Job's memory limit, "" when none.
@@ -673,7 +677,7 @@ type DefaultsView struct {
 	Config DefaultValues `json:"config"`
 	// Pinned says which defaults were saved here and so no longer follow the
 	// config, by JSON key (approve, reviewDrafts, inlineFindings,
-	// commandsAuthorAndMaintainersOnly,
+	// commandsAuthorAndMaintainersOnly, incrementalReviews,
 	// failureStatus, jobTimeoutSeconds, maxTurns, jobMemory,
 	// rerunLimitPerMR, rerunLimitPerRepo). Every key is present.
 	Pinned map[string]bool `json:"pinned"`
@@ -686,10 +690,12 @@ type DefaultValues struct {
 	ReviewDrafts   bool `json:"reviewDrafts"`
 	InlineFindings bool `json:"inlineFindings"`
 	// CommandsAuthorAndMaintainersOnly: see DefaultsView.
-	CommandsAuthorAndMaintainersOnly bool   `json:"commandsAuthorAndMaintainersOnly"`
-	FailureStatus                    string `json:"failureStatus"`
-	JobTimeoutSeconds                int64  `json:"jobTimeoutSeconds"`
-	MaxTurns                         int    `json:"maxTurns"`
+	CommandsAuthorAndMaintainersOnly bool `json:"commandsAuthorAndMaintainersOnly"`
+	// IncrementalReviews: see DefaultsView.
+	IncrementalReviews bool   `json:"incrementalReviews"`
+	FailureStatus      string `json:"failureStatus"`
+	JobTimeoutSeconds  int64  `json:"jobTimeoutSeconds"`
+	MaxTurns           int    `json:"maxTurns"`
 	// JobMemory is the Job's memory limit, "" when none.
 	JobMemory         string `json:"jobMemory"`
 	RerunLimitPerMR   int    `json:"rerunLimitPerMR"`
@@ -738,7 +744,7 @@ type LLMView struct {
 //   - PUT /api/repositories/{instance}/{project...}/settings: changes the
 //     settings in the body and leaves the others; a null resets one to its
 //     default. The keys are those of RepositoryDetailView.Settings:
-//     approve, reviewDrafts, inlineFindings and commandsAuthorAndMaintainersOnly (true or false), failureStatus ("failed" or
+//     approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly and incrementalReviews (true or false), failureStatus ("failed" or
 //     "neutral"), skills (a non-empty list of library skill names, or
 //     null for the default list; a name the library lacks is 400 `skill
 //     "x" is not in the skill library`, and so is a list whose texts come to

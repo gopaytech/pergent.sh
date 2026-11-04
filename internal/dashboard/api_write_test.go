@@ -285,6 +285,9 @@ func TestSettingsValidation(t *testing.T) {
 		}},
 		{`{"commandsAuthorAndMaintainersOnly":"no"}`, false, nil},
 		{`{"commandsAuthorAndMaintainersOnly":null}`, true, func(r store.DashboardRepo) bool { return r.CommandsAuthorAndMaintainersOnly == nil }},
+		{`{"incrementalReviews":false}`, true, func(r store.DashboardRepo) bool { return r.IncrementalReviews != nil && !*r.IncrementalReviews }},
+		{`{"incrementalReviews":"no"}`, false, nil},
+		{`{"incrementalReviews":null}`, true, func(r store.DashboardRepo) bool { return r.IncrementalReviews == nil }},
 		{`{"failureStatus":"neutral"}`, true, func(r store.DashboardRepo) bool { return r.FailureStatus != nil && *r.FailureStatus == "neutral" }},
 		{`{"failureStatus":"success"}`, false, nil},
 		{`{"failureStatus":"failed"}`, true, func(r store.DashboardRepo) bool { return r.FailureStatus != nil && *r.FailureStatus == "failed" }},
@@ -379,7 +382,7 @@ func TestSettingsValidation(t *testing.T) {
 	wantCode(t, rec, "reset", http.StatusOK)
 	r, found := e.storedRepo("main", "acme/gadgets")
 	if !found || r.Approve != nil || r.ReviewDrafts != nil || r.FailureStatus != nil || r.Skills != nil ||
-		r.InlineFindings != nil || r.CommandsAuthorAndMaintainersOnly != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil ||
+		r.InlineFindings != nil || r.CommandsAuthorAndMaintainersOnly != nil || r.IncrementalReviews != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil ||
 		r.CreatedBy != "carol" {
 		t.Errorf("after reset row = %+v, %v", r, found)
 	}
@@ -1165,6 +1168,58 @@ func TestCommandsAuthorAndMaintainersOnlySetting(t *testing.T) {
 		t.Errorf("stored after reset = %v, want NULL", r.CommandsAuthorAndMaintainersOnly)
 	}
 	if !strings.Contains(msgBadSettings, "commandsAuthorAndMaintainersOnly") {
+		t.Errorf("msgBadSettings = %q", msgBadSettings)
+	}
+}
+
+// Incremental reviews is stored on its own: true or false, null back to the
+// default (on); a reset clears it; anything else is 400 with its message.
+func TestIncrementalReviewsSetting(t *testing.T) {
+	e := newEnv(t, nil)
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	c := e.signInGitLab(true, "acme/gadgets")
+	target := "/api/repositories/main/acme/gadgets/settings"
+
+	rec := e.send(c, "PUT", target, `{"incrementalReviews":false}`)
+	wantCode(t, rec, "PUT false", http.StatusOK)
+	var detail RepositoryDetailView
+	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if s := detail.Settings["incrementalReviews"]; s.Value != false || !s.Overridden {
+		t.Errorf("incrementalReviews = %+v, want false overridden", s)
+	}
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.IncrementalReviews == nil || *r.IncrementalReviews {
+		t.Errorf("stored = %v, want false", r.IncrementalReviews)
+	}
+	if g, _, err := e.d.Repos.Get(ctx, "main", "acme/gadgets"); err != nil || g.IncrementalReviews {
+		t.Errorf("effective = %+v, %v; want incremental reviews off", g, err)
+	}
+
+	rec = e.send(c, "PUT", target, `{"incrementalReviews":"x"}`)
+	wantCode(t, rec, "PUT x", http.StatusBadRequest)
+	if got := errorOf(t, rec); got != "incrementalReviews must be true, false or null" {
+		t.Errorf("error = %q", got)
+	}
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.IncrementalReviews == nil || *r.IncrementalReviews {
+		t.Errorf("a refused PUT changed the row: %v", r.IncrementalReviews)
+	}
+
+	rec = e.send(c, "PUT", target, `{"incrementalReviews":null}`)
+	wantCode(t, rec, "PUT null", http.StatusOK)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.IncrementalReviews != nil {
+		t.Errorf("stored after null = %v, want NULL", r.IncrementalReviews)
+	}
+	if g, _, _ := e.d.Repos.Get(ctx, "main", "acme/gadgets"); !g.IncrementalReviews {
+		t.Errorf("effective after null = %+v; want the default, on", g)
+	}
+
+	e.send(c, "PUT", target, `{"incrementalReviews":false}`)
+	wantCode(t, e.send(c, "POST", target+"/reset", ""), "reset", http.StatusOK)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.IncrementalReviews != nil {
+		t.Errorf("stored after reset = %v, want NULL", r.IncrementalReviews)
+	}
+	if !strings.Contains(msgBadSettings, "incrementalReviews") {
 		t.Errorf("msgBadSettings = %q", msgBadSettings)
 	}
 }

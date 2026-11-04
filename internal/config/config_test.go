@@ -594,6 +594,7 @@ func TestLoadRepositorySettings(t *testing.T) {
     review_drafts: false
     inline_findings: false
     commands_author_and_maintainers_only: false
+    incremental_reviews: false
     job_timeout: 20m
     job_memory: 6Gi
     rerun_limit_per_mr: 20
@@ -616,6 +617,9 @@ func TestLoadRepositorySettings(t *testing.T) {
 	if repo.CommandsAuthorAndMaintainersOnly == nil || *repo.CommandsAuthorAndMaintainersOnly {
 		t.Errorf("CommandsAuthorAndMaintainersOnly = %v, want false", repo.CommandsAuthorAndMaintainersOnly)
 	}
+	if repo.IncrementalReviews == nil || *repo.IncrementalReviews {
+		t.Errorf("IncrementalReviews = %v, want false", repo.IncrementalReviews)
+	}
 	if repo.JobTimeout == nil || *repo.JobTimeout != 20*time.Minute {
 		t.Errorf("JobTimeout = %v, want 20m", repo.JobTimeout)
 	}
@@ -631,7 +635,7 @@ func TestLoadRepositorySettings(t *testing.T) {
 
 	// Omitted, they stay unset: the resolver applies the defaults.
 	plain := loadValid(t).Repositories[0]
-	if plain.Approve != nil || plain.ReviewDrafts != nil || plain.InlineFindings != nil || plain.CommandsAuthorAndMaintainersOnly != nil || plain.JobTimeout != nil || plain.JobMemory != nil ||
+	if plain.Approve != nil || plain.ReviewDrafts != nil || plain.InlineFindings != nil || plain.CommandsAuthorAndMaintainersOnly != nil || plain.IncrementalReviews != nil || plain.JobTimeout != nil || plain.JobMemory != nil ||
 		plain.RerunLimitPerMR != nil || plain.RerunLimitPerRepo != nil {
 		t.Errorf("omitted repository settings are set: %+v", plain)
 	}

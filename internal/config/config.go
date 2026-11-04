@@ -184,6 +184,9 @@ type Repository struct {
 	// the repository's maintainers and owners can use pergent commands on it
 	// (default true).
 	CommandsAuthorAndMaintainersOnly *bool
+	// IncrementalReviews is whether a push reviews only the files changed
+	// since the last review (default true).
+	IncrementalReviews *bool
 	// JobTimeout replaces jobs.timeout for this repository.
 	JobTimeout *time.Duration
 	// JobMemory replaces the memory limit of jobs.resources.limits.
@@ -252,6 +255,7 @@ type fileRepository struct {
 	RerunLimitPerRepo *int `yaml:"rerun_limit_per_repo"`
 
 	CommandsAuthorAndMaintainersOnly *bool `yaml:"commands_author_and_maintainers_only"`
+	IncrementalReviews               *bool `yaml:"incremental_reviews"`
 }
 
 func (f fileRepository) repository() Repository {
@@ -263,6 +267,7 @@ func (f fileRepository) repository() Repository {
 		MaxTurns: f.MaxTurns,
 
 		CommandsAuthorAndMaintainersOnly: f.CommandsAuthorAndMaintainersOnly,
+		IncrementalReviews:               f.IncrementalReviews,
 	}
 	if f.JobTimeout != nil {
 		d := time.Duration(*f.JobTimeout)

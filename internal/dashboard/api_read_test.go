@@ -830,7 +830,7 @@ func TestRepositoryDetail(t *testing.T) {
 	settings, _ := json.Marshal(v.Settings)
 	want := `{"approve":{"value":false,"overridden":true},"commandsAuthorAndMaintainersOnly":{"value":true,"overridden":false},` +
 		`"failureStatus":{"value":"failed","overridden":false},` +
-		`"inlineFindings":{"value":true,"overridden":false},"jobMemory":{"value":"","overridden":false},"jobTimeoutSeconds":{"value":600,"overridden":false},` +
+		`"incrementalReviews":{"value":true,"overridden":false},"inlineFindings":{"value":true,"overridden":false},"jobMemory":{"value":"","overridden":false},"jobTimeoutSeconds":{"value":600,"overridden":false},` +
 		`"maxTurns":{"value":40,"overridden":false},"repoSkills":{"value":[],"overridden":false},` +
 		`"rerunLimitPerMR":{"value":10,"overridden":false},"rerunLimitPerRepo":{"value":50,"overridden":false},` +
 		`"reviewDrafts":{"value":true,"overridden":false},"skills":{"value":["code-review"],"overridden":true}}`
@@ -1074,13 +1074,13 @@ func TestAdminSettings(t *testing.T) {
 	c := e.signInGitLab(true, "acme/widgets")
 	v := getJSON[AdminSettingsView](e, c, "/api/admin/settings")
 	want := AdminSettingsView{Instance: "main",
-		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, FailureStatus: "failed",
+		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, FailureStatus: "failed",
 			JobTimeoutSeconds: 600, MaxTurns: 40,
 			RerunLimitPerMR: 10, RerunLimitPerRepo: 50, Skills: []string{},
-			Config: DefaultValues{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, FailureStatus: "failed",
+			Config: DefaultValues{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, FailureStatus: "failed",
 				JobTimeoutSeconds: 600, MaxTurns: 40, RerunLimitPerMR: 10, RerunLimitPerRepo: 50},
 			Pinned: map[string]bool{"approve": false, "reviewDrafts": false, "inlineFindings": false, "commandsAuthorAndMaintainersOnly": false,
-				"failureStatus": false, "jobTimeoutSeconds": false,
+				"incrementalReviews": false, "failureStatus": false, "jobTimeoutSeconds": false,
 				"maxTurns": false, "jobMemory": false, "rerunLimitPerMR": false, "rerunLimitPerRepo": false}},
 		LLM: LLMView{Provider: "anthropic", Model: "claude-sonnet-4"}}
 	got, _ := json.Marshal(v)
@@ -1573,6 +1573,18 @@ func TestSettingViewsCommandsAuthorAndMaintainersOnly(t *testing.T) {
 	repo = settings.Effective{CommandsAuthorAndMaintainersOnly: true}
 	if got := settingViews(repo)["commandsAuthorAndMaintainersOnly"]; got != (SettingView{true, false}) {
 		t.Errorf("commandsAuthorAndMaintainersOnly = %+v, want true not overridden", got)
+	}
+}
+
+// Incremental reviews is a setting of the repository like the others.
+func TestSettingViewsIncrementalReviews(t *testing.T) {
+	repo := settings.Effective{IncrementalReviews: false, Overridden: map[string]bool{settings.KeyIncrementalReviews: true}}
+	if got := settingViews(repo)["incrementalReviews"]; got != (SettingView{false, true}) {
+		t.Errorf("incrementalReviews = %+v, want false overridden", got)
+	}
+	repo = settings.Effective{IncrementalReviews: true}
+	if got := settingViews(repo)["incrementalReviews"]; got != (SettingView{true, false}) {
+		t.Errorf("incrementalReviews = %+v, want true not overridden", got)
 	}
 }
 
