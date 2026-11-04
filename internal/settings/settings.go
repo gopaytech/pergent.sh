@@ -32,14 +32,15 @@ const (
 
 // Setting names, the keys of Effective.Overridden.
 const (
-	KeyApprove       = "approve"
-	KeyReviewDrafts  = "review_drafts"
-	KeyFailureStatus = "failure_status"
-	KeySkills        = "skills"
-	KeyRepoSkills    = "repo_skills"
-	KeyJobTimeout    = "job_timeout"
-	KeyMaxTurns      = "max_turns"
-	KeyJobMemory     = "job_memory"
+	KeyApprove        = "approve"
+	KeyReviewDrafts   = "review_drafts"
+	KeyInlineFindings = "inline_findings"
+	KeyFailureStatus  = "failure_status"
+	KeySkills         = "skills"
+	KeyRepoSkills     = "repo_skills"
+	KeyJobTimeout     = "job_timeout"
+	KeyMaxTurns       = "max_turns"
+	KeyJobMemory      = "job_memory"
 
 	KeyRerunLimitPerMR   = "rerun_limit_per_mr"
 	KeyRerunLimitPerRepo = "rerun_limit_per_repo"
@@ -61,6 +62,7 @@ type Effective struct {
 	Source            Source
 	Approve           bool
 	ReviewDrafts      bool
+	InlineFindings    bool // findings are posted as threads on their lines, not only in the review comment
 	FailureStatus     config.FailureStatus
 	// Skills are the library skills reviewed; nil means the default list.
 	Skills []string
@@ -212,17 +214,18 @@ func (r *Resolver) defaults(platform, instance, project string, source Source) E
 func (r *Resolver) defaultsFor(source Source, platform, instance, project string, stored store.RepoDefaults) Effective {
 	eff := Effective{
 		Platform: platform, Instance: instance, Project: project, Source: source,
-		Approve:       true,
-		ReviewDrafts:  true,
-		FailureStatus: config.FailureStatusFailed,
-		JobTimeout:    r.Config.Jobs.Timeout,
-		MaxTurns:      r.Config.Jobs.MaxTurns,
-		JobMemory:     r.jobsMemory(r.Config.Jobs.Resources.Limits),
+		Approve:        true,
+		ReviewDrafts:   true,
+		InlineFindings: true,
+		FailureStatus:  config.FailureStatusFailed,
+		JobTimeout:     r.Config.Jobs.Timeout,
+		MaxTurns:       r.Config.Jobs.MaxTurns,
+		JobMemory:      r.jobsMemory(r.Config.Jobs.Resources.Limits),
 
 		RerunLimitPerMR:   DefaultRerunLimitPerMR,
 		RerunLimitPerRepo: DefaultRerunLimitPerRepo,
 		Overridden: map[string]bool{
-			KeyApprove: false, KeyReviewDrafts: false, KeyFailureStatus: false,
+			KeyApprove: false, KeyReviewDrafts: false, KeyInlineFindings: false, KeyFailureStatus: false,
 			KeySkills: false, KeyRepoSkills: false, KeyJobTimeout: false, KeyMaxTurns: false, KeyJobMemory: false,
 			KeyRerunLimitPerMR: false, KeyRerunLimitPerRepo: false,
 		},
@@ -235,6 +238,9 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 	}
 	if stored.ReviewDrafts != nil {
 		eff.ReviewDrafts = *stored.ReviewDrafts
+	}
+	if stored.InlineFindings != nil {
+		eff.InlineFindings = *stored.InlineFindings
 	}
 	if stored.FailureStatus != nil {
 		if fs, ok := failureStatus(*stored.FailureStatus); ok {
@@ -314,6 +320,9 @@ func (r *Resolver) fromConfig(repo config.Repository) (Effective, bool) {
 	if repo.ReviewDrafts != nil {
 		eff.ReviewDrafts, eff.Overridden[KeyReviewDrafts] = *repo.ReviewDrafts, true
 	}
+	if repo.InlineFindings != nil {
+		eff.InlineFindings, eff.Overridden[KeyInlineFindings] = *repo.InlineFindings, true
+	}
 	if repo.FailureStatus != "" && repo.FailureStatus != config.FailureStatusFailed {
 		eff.FailureStatus, eff.Overridden[KeyFailureStatus] = repo.FailureStatus, true
 	}
@@ -356,6 +365,9 @@ func (r *Resolver) fromDashboard(row store.DashboardRepo, stored store.RepoDefau
 	}
 	if row.ReviewDrafts != nil {
 		eff.ReviewDrafts, eff.Overridden[KeyReviewDrafts] = *row.ReviewDrafts, true
+	}
+	if row.InlineFindings != nil {
+		eff.InlineFindings, eff.Overridden[KeyInlineFindings] = *row.InlineFindings, true
 	}
 	if row.FailureStatus != nil {
 		if fs, ok := failureStatus(*row.FailureStatus); ok {

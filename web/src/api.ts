@@ -197,6 +197,7 @@ export type SettingView<T> = { value: T; overridden: boolean };
 export type RepoSettings = {
   approve: SettingView<boolean>;
   reviewDrafts: SettingView<boolean>;
+  inlineFindings: SettingView<boolean>;
   failureStatus: SettingView<string>;
   // skills is null for the default list, otherwise the library skills.
   skills: SettingView<string[] | null>;
@@ -283,6 +284,7 @@ export type ReadinessView = {
 export type SettingsUpdate = Partial<{
   approve: boolean | null;
   reviewDrafts: boolean | null;
+  inlineFindings: boolean | null;
   failureStatus: string | null;
   skills: string[] | null;
   repoSkills: string[] | null;
@@ -434,6 +436,7 @@ export type SecretView = { set: boolean; updatedAt: string | null };
 export type DefaultsView = {
   approve: boolean;
   reviewDrafts: boolean;
+  inlineFindings: boolean;
   failureStatus: string;
   jobTimeoutSeconds: number;
   maxTurns: number;

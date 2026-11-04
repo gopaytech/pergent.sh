@@ -1034,7 +1034,7 @@ func TestDefaults(t *testing.T) {
 	e := newEnv(t, nil)
 	admin := e.signInGitLab(true, "acme/widgets")
 	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")
-	if want := (DefaultsView{Approve: true, ReviewDrafts: true, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40, RerunLimitPerMR: 10, RerunLimitPerRepo: 50}); !sameDefaults(v, want) {
+	if want := (DefaultsView{Approve: true, ReviewDrafts: true, InlineFindings: true, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40, RerunLimitPerMR: 10, RerunLimitPerRepo: 50}); !sameDefaults(v, want) {
 		t.Errorf("defaults = %+v, want %+v", v, want)
 	}
 
@@ -1042,7 +1042,7 @@ func TestDefaults(t *testing.T) {
 		"approve": false, "failureStatus": "neutral", "jobTimeoutSeconds": 900, "maxTurns": 80, "jobMemory": "2Gi",
 		"rerunLimitPerMR": 20, "rerunLimitPerRepo": 200})
 	v = decode[DefaultsView](t, rec, "PUT /api/admin/defaults", http.StatusOK)
-	if want := (DefaultsView{Approve: false, ReviewDrafts: true, FailureStatus: "neutral", JobTimeoutSeconds: 900, MaxTurns: 80, JobMemory: "2Gi",
+	if want := (DefaultsView{Approve: false, ReviewDrafts: true, InlineFindings: true, FailureStatus: "neutral", JobTimeoutSeconds: 900, MaxTurns: 80, JobMemory: "2Gi",
 		RerunLimitPerMR: 20, RerunLimitPerRepo: 200}); !sameDefaults(v, want) {
 		t.Errorf("defaults after PUT = %+v, want %+v", v, want)
 	}
@@ -1065,7 +1065,7 @@ func TestDefaults(t *testing.T) {
 	// The body replaces them all: what it leaves out is the built-in default.
 	v = decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"reviewDrafts": false, "jobMemory": nil}),
 		"PUT", http.StatusOK)
-	if want := (DefaultsView{Approve: true, ReviewDrafts: false, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40, RerunLimitPerMR: 10, RerunLimitPerRepo: 50}); !sameDefaults(v, want) {
+	if want := (DefaultsView{Approve: true, ReviewDrafts: false, InlineFindings: true, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40, RerunLimitPerMR: 10, RerunLimitPerRepo: 50}); !sameDefaults(v, want) {
 		t.Errorf("defaults after a replacing PUT = %+v, want %+v", v, want)
 	}
 
@@ -1087,6 +1087,7 @@ func TestDefaults(t *testing.T) {
 		{"cap not a number", `{"rerunLimitPerRepo": "50"}`, "rerunLimitPerRepo must be a whole number from 1 to 1000, or null"},
 		{"bad status", `{"failureStatus": "sideways"}`, `failureStatus must be "failed", "neutral" or null`},
 		{"bad bool", `{"approve": "yes"}`, "approve must be true, false or null"},
+		{"bad inline findings", `{"inlineFindings": "yes"}`, "inlineFindings must be true, false or null"},
 		{"not an object", `[1]`, "the body must be a JSON object of defaults"},
 	} {
 		if rec := e.send(admin, "PUT", "/api/admin/defaults", tc.body); rec.Code != http.StatusBadRequest || errorOf(t, rec) != tc.want && !strings.Contains(errorOf(t, rec), tc.want) {
@@ -1380,5 +1381,39 @@ func TestConnectFailureAfterCheckRecordsAttention(t *testing.T) {
 		"PUT lab", http.StatusOK)
 	if items, _ := e.st.Attention(ctx); len(items) != 1 || items[0].Message != "down again" {
 		t.Errorf("attention after the update = %+v; want the new failure", items)
+	}
+}
+
+// The default for inline findings is stored with the other defaults; left
+// out of a body it is the built-in one (on), and a dashboard repository takes it.
+func TestDefaultsInlineFindings(t *testing.T) {
+	e := newEnv(t, nil)
+	admin := e.signInGitLab(true, "acme/widgets")
+
+	v := decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"inlineFindings": false}), "PUT", http.StatusOK)
+	if v.InlineFindings {
+		t.Errorf("inlineFindings after PUT false = true")
+	}
+	if stored, err := e.st.RepoDefaults(ctx); err != nil || stored.InlineFindings == nil || *stored.InlineFindings {
+		t.Errorf("stored defaults = %+v, %v; want inlineFindings false", stored, err)
+	}
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	if g, _, err := e.d.Repos.Get(ctx, "main", "acme/gadgets"); err != nil || g.InlineFindings {
+		t.Errorf("dashboard repository = %+v, %v; want inline findings off", g, err)
+	}
+	if w, _, _ := e.d.Repos.Get(ctx, "main", "acme/widgets"); !w.InlineFindings {
+		t.Errorf("config repository = %+v, want the default, on", w)
+	}
+	if got := getJSON[DefaultsView](e, admin, "/api/admin/defaults"); got.InlineFindings {
+		t.Errorf("GET after PUT = %+v", got)
+	}
+
+	// Left out, it is back to the built-in default.
+	v = decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"approve": true}), "PUT", http.StatusOK)
+	if !v.InlineFindings {
+		t.Errorf("inlineFindings after a PUT without it = false, want true")
+	}
+	if stored, _ := e.st.RepoDefaults(ctx); stored.InlineFindings != nil {
+		t.Errorf("stored = %v, want NULL", stored.InlineFindings)
 	}
 }

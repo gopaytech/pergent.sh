@@ -51,6 +51,7 @@ describe("AdminSettings defaults", () => {
     expect(put.body).toEqual({
       approve: false,
       reviewDrafts: true,
+      inlineFindings: true,
       failureStatus: "neutral",
       jobTimeoutSeconds: 900,
       // Untouched, but the PUT replaces every default.
@@ -65,6 +66,31 @@ describe("AdminSettings defaults", () => {
     });
     const saved = await screen.findByText("Defaults saved.");
     expect(saved).not.toHaveClass("problem");
+  });
+
+  it("shows Inline findings after Review drafts and sends a change with the other defaults", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "PUT /api/admin/defaults": { body: { ...defaults, inlineFindings: false } },
+    });
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    expect(
+      within(form).getByText(
+        "Post each finding as a comment on its lines, with a one-click fix when it is small. Off keeps every finding in the review comment.",
+      ),
+    ).toBeInTheDocument();
+    const names = within(form)
+      .getAllByRole("switch")
+      .map((el) => el.getAttribute("aria-label") ?? el.textContent);
+    expect(names.indexOf("Inline findings")).toBe(names.indexOf("Review drafts") + 1);
+    const toggle = within(form).getByRole("switch", { name: "Inline findings" });
+    expect(toggle).toBeChecked();
+    await userEvent.click(toggle);
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ reviewDrafts: true, inlineFindings: false });
+    expect(await screen.findByText("Defaults saved.")).toBeInTheDocument();
+    expect(within(form).getByRole("switch", { name: "Inline findings" })).not.toBeChecked();
   });
 
   it("saves changed re-run caps", async () => {

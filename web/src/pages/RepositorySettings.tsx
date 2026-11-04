@@ -95,6 +95,7 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
 type Draft = {
   approve: boolean;
   reviewDrafts: boolean;
+  inlineFindings: boolean;
   failureStatus: string;
   // mode "default" is a null skills setting: the default list.
   skillsMode: "default" | "choose";
@@ -159,6 +160,7 @@ function Form({
   const initial: Draft = {
     approve: settings.approve.value,
     reviewDrafts: settings.reviewDrafts.value,
+    inlineFindings: settings.inlineFindings.value,
     failureStatus: settings.failureStatus.value,
     skillsMode: settings.skills.value === null ? "default" : "choose",
     skills: skillsNow,
@@ -192,6 +194,7 @@ function Form({
     const body: SettingsUpdate = {};
     if (d.approve !== initial.approve) body.approve = d.approve;
     if (d.reviewDrafts !== initial.reviewDrafts) body.reviewDrafts = d.reviewDrafts;
+    if (d.inlineFindings !== initial.inlineFindings) body.inlineFindings = d.inlineFindings;
     if (d.failureStatus !== initial.failureStatus) body.failureStatus = d.failureStatus;
     if (d.skillsMode === "default") {
       // Back to the default list: null resets the setting.
@@ -289,6 +292,18 @@ function Form({
           help="When off, a draft isn't reviewed until it is marked ready."
         >
           <Switch label="Review drafts" checked={d.reviewDrafts} disabled={disabled} onChange={(v) => set("reviewDrafts", v)} />
+        </Setting>
+        <Setting
+          name="Inline findings"
+          overridden={settings.inlineFindings.overridden}
+          help="Post each finding as a comment on its lines, with a one-click fix when it is small. Off keeps every finding in the review comment."
+        >
+          <Switch
+            label="Inline findings"
+            checked={d.inlineFindings}
+            disabled={disabled}
+            onChange={(v) => set("inlineFindings", v)}
+          />
         </Setting>
       </section>
 

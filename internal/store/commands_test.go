@@ -512,3 +512,32 @@ func TestDeletesRemoveDismissalsAndCommands(t *testing.T) {
 		t.Errorf("another instance's dismissal was removed: %+v", got)
 	}
 }
+
+// A command written as a reply in a thread keeps the discussion and the
+// comment it replies to; a plain comment has neither.
+func TestCommandThreadFields(t *testing.T) {
+	s := newStore(t)
+	plain := command("review", "", 1)
+	gitlab := command("dismiss", "abc123", 2)
+	gitlab.Discussion = "d3adbeef"
+	github := command("dismiss", "abc123", 3)
+	github.ReplyTo = 555
+	for _, c := range []Command{plain, gitlab, github} {
+		if ok, err := s.InsertCommand(ctx, c); err != nil || !ok {
+			t.Fatalf("InsertCommand(%d) = %v, %v", c.CommentID, ok, err)
+		}
+	}
+	got, err := s.ClaimCommands(ctx, 10, t0)
+	if err != nil || len(got) != 3 {
+		t.Fatalf("ClaimCommands = %+v, %v", got, err)
+	}
+	if got[0].Discussion != "" || got[0].ReplyTo != 0 || got[0].InThread() {
+		t.Errorf("plain comment = %+v", got[0])
+	}
+	if got[1].Discussion != "d3adbeef" || got[1].ReplyTo != 0 || !got[1].InThread() {
+		t.Errorf("GitLab reply = %+v", got[1])
+	}
+	if got[2].Discussion != "" || got[2].ReplyTo != 555 || !got[2].InThread() {
+		t.Errorf("GitHub reply = %+v", got[2])
+	}
+}

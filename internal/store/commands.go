@@ -23,7 +23,15 @@ type Command struct {
 	// Attempts is how many times the command was given back to be tried
 	// again (ReleaseCommand).
 	Attempts int
+	// Discussion and ReplyTo say the command was written as a reply in a
+	// thread of a finding: the GitLab discussion, or the GitHub review
+	// comment it replies to. Empty and 0 for a plain comment.
+	Discussion string
+	ReplyTo    int64
 }
+
+// InThread reports whether the command was written as a reply in a thread.
+func (c Command) InThread() bool { return c.Discussion != "" || c.ReplyTo != 0 }
 
 // What a finished command came to (FinishCommand's outcome). The outcomes are:
 //   - CommandDone: the command was carried out (a re-run queued, a finding
@@ -62,7 +70,7 @@ const CommandThrottled = "throttled"
 const commandLease = 5 * time.Minute
 
 const commandColumns = `id, instance, project_id, mr_iid, project_path, platform, kind, arg, reason,
-	comment_id, author, author_id, created_at, attempts`
+	comment_id, author, author_id, created_at, attempts, discussion_id, reply_to`
 
 // InsertCommand stores c, which a webhook found in a comment, unless that
 // comment is stored already (a redelivery): stored tells which. A zero
@@ -73,11 +81,11 @@ func (s *Store) InsertCommand(ctx context.Context, c Command) (stored bool, err 
 		at = &c.CreatedAt
 	}
 	tag, err := s.pool.Exec(ctx, `INSERT INTO commands (instance, project_id, mr_iid, project_path, platform, kind,
-			arg, reason, comment_id, author, author_id, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12, now()))
+			arg, reason, comment_id, author, author_id, created_at, discussion_id, reply_to)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12, now()), $13, $14)
 		ON CONFLICT (instance, project_id, mr_iid, comment_id) DO NOTHING`,
 		c.MR.Instance, c.MR.ProjectID, c.MR.IID, c.ProjectPath, c.Platform, c.Kind,
-		c.Arg, c.Reason, c.CommentID, c.Author, c.AuthorID, at)
+		c.Arg, c.Reason, c.CommentID, c.Author, c.AuthorID, at, c.Discussion, c.ReplyTo)
 	if err != nil {
 		return false, err
 	}
@@ -112,7 +120,7 @@ func (s *Store) ClaimCommands(ctx context.Context, limit int, now time.Time, ski
 	for rows.Next() {
 		var c Command
 		if err := rows.Scan(&c.ID, &c.MR.Instance, &c.MR.ProjectID, &c.MR.IID, &c.ProjectPath, &c.Platform, &c.Kind,
-			&c.Arg, &c.Reason, &c.CommentID, &c.Author, &c.AuthorID, &c.CreatedAt, &c.Attempts); err != nil {
+			&c.Arg, &c.Reason, &c.CommentID, &c.Author, &c.AuthorID, &c.CreatedAt, &c.Attempts, &c.Discussion, &c.ReplyTo); err != nil {
 			return nil, err
 		}
 		out = append(out, c)

@@ -830,7 +830,7 @@ func TestRepositoryDetail(t *testing.T) {
 	settings, _ := json.Marshal(v.Settings)
 	want := `{"approve":{"value":false,"overridden":true},"failureStatus":{"value":"failed","overridden":false},` +
 		`"jobMemory":{"value":"","overridden":false},"jobTimeoutSeconds":{"value":600,"overridden":false},` +
-		`"maxTurns":{"value":40,"overridden":false},"repoSkills":{"value":[],"overridden":false},` +
+		`"inlineFindings":{"value":true,"overridden":false},"maxTurns":{"value":40,"overridden":false},"repoSkills":{"value":[],"overridden":false},` +
 		`"rerunLimitPerMR":{"value":10,"overridden":false},"rerunLimitPerRepo":{"value":50,"overridden":false},` +
 		`"reviewDrafts":{"value":true,"overridden":false},"skills":{"value":["code-review"],"overridden":true}}`
 	if string(settings) != want {
@@ -1043,7 +1043,7 @@ func TestAdminSettings(t *testing.T) {
 	c := e.signInGitLab(true, "acme/widgets")
 	v := getJSON[AdminSettingsView](e, c, "/api/admin/settings")
 	want := AdminSettingsView{Instance: "main",
-		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40,
+		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, InlineFindings: true, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40,
 			RerunLimitPerMR: 10, RerunLimitPerRepo: 50, Skills: []string{}},
 		LLM: LLMView{Provider: "anthropic", Model: "claude-sonnet-4"}}
 	got, _ := json.Marshal(v)
@@ -1524,5 +1524,17 @@ func TestSettingViewsMaxTurns(t *testing.T) {
 	repo = settings.Effective{MaxTurns: 40}
 	if got := settingViews(repo)["maxTurns"]; got != (SettingView{40, false}) {
 		t.Errorf("maxTurns = %+v, want 40 not overridden", got)
+	}
+}
+
+// Inline findings is a setting of the repository like the others.
+func TestSettingViewsInlineFindings(t *testing.T) {
+	repo := settings.Effective{InlineFindings: false, Overridden: map[string]bool{settings.KeyInlineFindings: true}}
+	if got := settingViews(repo)["inlineFindings"]; got != (SettingView{false, true}) {
+		t.Errorf("inlineFindings = %+v, want false overridden", got)
+	}
+	repo = settings.Effective{InlineFindings: true}
+	if got := settingViews(repo)["inlineFindings"]; got != (SettingView{true, false}) {
+		t.Errorf("inlineFindings = %+v, want true not overridden", got)
 	}
 }

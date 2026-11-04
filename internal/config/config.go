@@ -162,7 +162,7 @@ const (
 // instance under github:); Project is a GitLab path or a GitHub owner/name.
 //
 // The per-repository settings left nil take their defaults where they are
-// resolved (settings.Resolver): approval and draft reviews on, the Job
+// resolved (settings.Resolver): approval, draft reviews and inline findings on, the Job
 // timeout of jobs.timeout, the step limit of jobs.max_turns and the memory
 // limit of jobs.resources.limits.
 type Repository struct {
@@ -177,6 +177,9 @@ type Repository struct {
 	Approve *bool
 	// ReviewDrafts is whether a draft is reviewed (default true).
 	ReviewDrafts *bool
+	// InlineFindings is whether findings are posted as threads on their
+	// lines (default true).
+	InlineFindings *bool
 	// JobTimeout replaces jobs.timeout for this repository.
 	JobTimeout *time.Duration
 	// JobMemory replaces the memory limit of jobs.resources.limits.
@@ -228,17 +231,18 @@ type fileConfig struct {
 }
 
 type fileRepository struct {
-	GitLab        string        `yaml:"gitlab"`
-	GitHub        string        `yaml:"github"`
-	Project       string        `yaml:"project"`
-	Skills        []string      `yaml:"skills"`
-	RepoSkills    []string      `yaml:"repo_skills"`
-	FailureStatus FailureStatus `yaml:"failure_status"`
-	Approve       *bool         `yaml:"approve"`
-	ReviewDrafts  *bool         `yaml:"review_drafts"`
-	JobTimeout    *duration     `yaml:"job_timeout"`
-	JobMemory     *quantity     `yaml:"job_memory"`
-	MaxTurns      *int          `yaml:"max_turns"`
+	GitLab         string        `yaml:"gitlab"`
+	GitHub         string        `yaml:"github"`
+	Project        string        `yaml:"project"`
+	Skills         []string      `yaml:"skills"`
+	RepoSkills     []string      `yaml:"repo_skills"`
+	FailureStatus  FailureStatus `yaml:"failure_status"`
+	Approve        *bool         `yaml:"approve"`
+	ReviewDrafts   *bool         `yaml:"review_drafts"`
+	InlineFindings *bool         `yaml:"inline_findings"`
+	JobTimeout     *duration     `yaml:"job_timeout"`
+	JobMemory      *quantity     `yaml:"job_memory"`
+	MaxTurns       *int          `yaml:"max_turns"`
 
 	RerunLimitPerMR   *int `yaml:"rerun_limit_per_mr"`
 	RerunLimitPerRepo *int `yaml:"rerun_limit_per_repo"`
@@ -248,6 +252,7 @@ func (f fileRepository) repository() Repository {
 	r := Repository{
 		GitLab: f.GitLab, GitHub: f.GitHub, Project: f.Project, Skills: f.Skills, RepoSkills: f.RepoSkills,
 		FailureStatus: f.FailureStatus, Approve: f.Approve, ReviewDrafts: f.ReviewDrafts,
+		InlineFindings:  f.InlineFindings,
 		RerunLimitPerMR: f.RerunLimitPerMR, RerunLimitPerRepo: f.RerunLimitPerRepo,
 		MaxTurns: f.MaxTurns,
 	}

@@ -230,6 +230,26 @@ describe("RepositoryDetail", () => {
     expect(fake.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
   });
 
+  it("shows Inline findings after Review drafts and sends only that key when it is switched off", async () => {
+    const fake = fakeApi({
+      ...base,
+      "PUT /api/repositories/main/acme/payments/settings": { body: payments },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const toggle = await screen.findByRole("switch", { name: "Inline findings" });
+    expect(toggle).toBeChecked();
+    expect(
+      screen.getByText(
+        "Post each finding as a comment on its lines, with a one-click fix when it is small. Off keeps every finding in the review comment.",
+      ),
+    ).toBeInTheDocument();
+    const switches = screen.getAllByRole("switch").map((el) => el.getAttribute("aria-label") ?? el.textContent);
+    expect(switches.indexOf("Inline findings")).toBe(switches.indexOf("Review drafts") + 1);
+    await userEvent.click(toggle);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({ inlineFindings: false });
+  });
+
   it("shows a maintainer the re-run caps read-only and never sends them", async () => {
     const asMaintainer = repoDetail(repoPayments, "maintainer");
     const fake = fakeApi({
