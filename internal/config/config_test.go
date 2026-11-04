@@ -715,6 +715,7 @@ func TestMaxTurnsOutOfRange(t *testing.T) {
 		{"jobs above", "201", "", "jobs.max_turns must be from 5 to 200, got 201"},
 		{"jobs zero", "0", "", "jobs.max_turns must be from 5 to 200, got 0"},
 		{"repository below", "", "4", "repositories[0] (acme/widgets): max_turns must be from 5 to 200, got 4"},
+		{"repository zero", "", "0", "repositories[0] (acme/widgets): max_turns must be from 5 to 200, got 0"},
 		{"repository above", "", "201", "repositories[0] (acme/widgets): max_turns must be from 5 to 200, got 201"},
 	}
 	for _, tt := range tests {
