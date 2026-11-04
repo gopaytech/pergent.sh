@@ -62,13 +62,13 @@ A value outside 5 to 200 is refused:
 
 The README's role table and the Admin → Settings description add "Max steps" next to "Job timeout and memory".
 
-The dashboard label is **Max steps** *(my call)*, with the help text "Steps each opencode run may take before pergent stops it; each step can call several tools." The config key is `max_turns`, matching pergent's `--max-turns`.
+The dashboard label is **Max steps** *(your call)*, with the help text "Steps each opencode run may take before pergent stops it; each step can call several tools." The config key is `max_turns`, matching pergent's `--max-turns`.
 
 ### What a review does
 
 - **Dispatch:** reads the repository's effective value and passes `--max-turns=N` to the review Job, next to `--timeout` and `--concurrency` (`internal/kube/job.go`).
 - **Each run records the value it ran with**, in a new nullable column on `runs`. Runs from before the upgrade have none.
-- **After a `review failed` re-run**, the merged review keeps the skills that didn't re-run from the earlier run. The review page shows the limit of the run it is showing, the new Job's. *(my call)*
+- **After a `review failed` re-run**, the merged review keeps the skills that didn't re-run from the earlier run. The review page shows the limit of the run it is showing, the new Job's. *(your call)*
 - **The review page shows it** in the line that has the pergent version and the model: `· max steps 40`. A run without a recorded value shows `not recorded`, as the model does.
 - **`review failed`:** changing the limit doesn't stop it from keeping the earlier results. A changed limit is not a changed skill.
 
@@ -84,9 +84,9 @@ pergent ends every step-limit message with the same phrase, `(raise --max-turns 
 
 - **Text around the phrase stays.** The lead-in ("The model's answer was not in the required format (…), and the repair run failed: Reached the 40-step limit …") and pergent's own "Reached the N-step limit" are kept. pergent already writes the real N, because pergent.sh passed it as `--max-turns`.
 - **Replacement for a dashboard repository:** `(raise Max steps in the repository's Settings to allow more steps)`.
-- **Replacement for a config-managed repository:** `(raise max_turns for this repository in pergent.sh's config to allow more steps)`. *(my call: name only the place that can change it)*
+- **Replacement for a config-managed repository:** `(raise max_turns for this repository in pergent.sh's config to allow more steps)`. *(your call: name only the place that can change it)*
 - **Plain text.** The text stays plain, with no markdown, because `failures[].message` is plain text and the dashboard shows it as is.
-- **When:** the rewrite happens once, when pergent.sh receives and stores the Job's result, before anything reads it. The comment, every re-render (a dismissal, a merged re-run) and the dashboard then show the same text. The advice is fixed at that moment and isn't rewritten if the repository later moves between the dashboard and the config. *(my call)*
+- **When:** the rewrite happens once, when pergent.sh receives and stores the Job's result, before anything reads it. The comment, every re-render (a dismissal, a merged re-run) and the dashboard then show the same text. The advice is fixed at that moment and isn't rewritten if the repository later moves between the dashboard and the config. *(your call)*
 - **The phrase is a contract with pergent.** A pergent.sh test pins the exact phrase. pergent's wording for it must not change without changing pergent.sh.
 
 ### Storage
@@ -103,7 +103,8 @@ The columns are nullable, so 0.5.3 running against a migrated database still wor
 - **pergent.sh 0.5.4.** The Upgrading section says:
   - the default rises from 20 to 40 steps;
   - migration `0016` runs at startup;
-  - to roll back to 0.5.3, first remove `jobs.max_turns` and `repositories[].max_turns` from the config, because 0.5.3 refuses unknown config keys and won't start with them. *(my call)*
+  - `jobs.timeout` stays 10 minutes; a repository that raises `max_turns` may also need a higher `job_timeout`, because the timeout bounds the whole review; *(your call)*
+  - to roll back to 0.5.3, first remove `jobs.max_turns` and `repositories[].max_turns` from the config, because 0.5.3 refuses unknown config keys and won't start with them. *(your call)*
 - **Chart:** the chart's config values gain nothing new; `jobs.max_turns` goes in the config file like `jobs.timeout`.
 - **community-ops:** bumps to 0.5.4.
 
