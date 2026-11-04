@@ -252,7 +252,10 @@ func parseThreadWords(rest string) (kind, arg, reason string) {
 	}
 	reason = strings.TrimSpace(text[len(fields[0]):])
 	if len(fields) > 1 && validFindingID(fields[1]) {
-		arg = strings.ToLower(fields[1])
+		// As written: when it isn't the finding's ID it is the start of the
+		// reason, and a reason keeps its case. Whatever compares it as an ID
+		// ignores the case.
+		arg = fields[1]
 		reason = strings.TrimSpace(reason[len(fields[1]):])
 	}
 	if r := []rune(reason); len(r) > maxReasonRunes {

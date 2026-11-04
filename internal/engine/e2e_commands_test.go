@@ -542,7 +542,7 @@ func TestEndToEndDismissFromTheThread(t *testing.T) {
 	c := e.sayInThread(t, "mo", userMaintainer, "DiffNote", discussion, "@pergent-review dismiss")
 	e.answer(t)
 	e.wantReactions(t, c, eyes, down)
-	if got := threadReplies(); !slices.Equal(got, []string{replyNeedsReason("pergent-review")}) {
+	if got := threadReplies(); !slices.Equal(got, []string{"dismissing a blocking finding needs a reason: `@pergent-review dismiss <reason>`"}) {
 		t.Fatalf("replies in the thread = %q, want the reason to be asked for", got)
 	}
 	e.wantReplies(t)

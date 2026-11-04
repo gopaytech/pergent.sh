@@ -541,7 +541,8 @@ func TestParseThreadCommand(t *testing.T) {
 	}{
 		{name: "id and reason", body: "@pergent-review dismiss abc123 because", kind: "dismiss", arg: "abc123", reason: "because", ok: true},
 		{name: "id alone", body: "@pergent-review dismiss abc123", kind: "dismiss", arg: "abc123", ok: true},
-		{name: "upper case id", body: "@pergent-review dismiss ABC123DEF456 fine", kind: "dismiss", arg: "abc123def456", reason: "fine", ok: true},
+		{name: "upper case id", body: "@pergent-review dismiss ABC123DEF456 fine", kind: "dismiss", arg: "ABC123DEF456", reason: "fine", ok: true},
+		{name: "a reason starting with an id-like word keeps its case", body: "@pergent-review dismiss Decade old path", kind: "dismiss", arg: "Decade", reason: "old path", ok: true},
 		{name: "reason without an id", body: "@pergent-review dismiss because it is fine", kind: "dismiss", reason: "because it is fine", ok: true},
 		{name: "reason starting with a short hex word", body: "@pergent-review dismiss abc12 is fine", kind: "dismiss", reason: "abc12 is fine", ok: true},
 		{name: "nothing after dismiss", body: "@pergent-review dismiss", kind: "dismiss", ok: true},

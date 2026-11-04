@@ -78,7 +78,12 @@ func replyHelp(mention string) string {
 	return fmt.Sprintf("Commands: `@%[1]s review` · `@%[1]s review failed` · `@%[1]s dismiss <id> <reason>`", mention)
 }
 
-func replyNeedsReason(mention string) string {
+// replyNeedsReason asks for the reason of a blocking dismissal, in the form
+// that fits where the command was written: a finding's thread names no ID.
+func replyNeedsReason(mention string, inThread bool) string {
+	if inThread {
+		return fmt.Sprintf("dismissing a blocking finding needs a reason: `@%s dismiss <reason>`", mention)
+	}
 	return fmt.Sprintf("dismissing a blocking finding needs a reason: `@%s dismiss <id> <reason>`", mention)
 }
 
@@ -87,6 +92,10 @@ func replyNeedsReason(mention string) string {
 func replyNotFindingThread(mention string) string {
 	return fmt.Sprintf("This thread isn't one of pergent's findings. To dismiss a finding, reply in its thread, or comment `@%s dismiss <id> <reason>`.", mention)
 }
+
+// replyThreadFindingGone answers a dismissal in one of pergent's finding
+// threads whose finding the latest review no longer has.
+const replyThreadFindingGone = "This thread's finding isn't in the latest review, so there is nothing to dismiss."
 
 func replyUnknownID(id string) string {
 	return fmt.Sprintf("no finding %s in the latest review", replyID(id))
@@ -388,13 +397,14 @@ func (e *Engine) handleCommand(ctx, bctx context.Context, cmd store.Command, log
 	} else if bot {
 		return dropped("the author is a bot"), nil
 	}
-	// A dismissal in a thread names no ID (its thread says which finding), so
-	// the repeat check, which goes by kind and ID, would take a dismissal in
-	// one thread for a repeat of one in another. Dismissing a finding twice is
+	// A dismissal in a thread names no ID (its thread says which finding), and
+	// what it has in Arg may be the first word of its reason, so the repeat
+	// check, which goes by kind and argument, would take a dismissal in one
+	// thread for a repeat of one in another. Dismissing a finding twice is
 	// answered as already dismissed anyway.
 	recent := false
-	if !cmd.InThread() || cmd.Arg != "" || cmd.Kind != "dismiss" {
-		recent, err = e.Store.RecentCommand(ctx, cmd.MR, cmd.Kind, cmd.Arg, cmd.CreatedAt.Add(-commandRepeatWindow))
+	if !(cmd.InThread() && cmd.Kind == "dismiss") {
+		recent, err = e.Store.RecentCommand(ctx, cmd.MR, cmd.Kind, strings.ToLower(cmd.Arg), cmd.CreatedAt.Add(-commandRepeatWindow))
 		if err != nil {
 			return verdict{}, fmt.Errorf("check for a repeated command: %w", err)
 		}
@@ -506,6 +516,12 @@ func (c *commandRun) dismiss(ctx context.Context) (verdict, error) {
 	if c.cmd.InThread() {
 		return c.dismissInThread(ctx)
 	}
+	return c.dismissByID(ctx)
+}
+
+// dismissByID is "dismiss <id> [reason]" written anywhere but in one of
+// pergent's finding threads.
+func (c *commandRun) dismissByID(ctx context.Context) (verdict, error) {
 	access, err := c.access(ctx)
 	if err != nil {
 		return verdict{}, err
@@ -520,7 +536,7 @@ func (c *commandRun) dismiss(ctx context.Context) (verdict, error) {
 	if !found {
 		return refused("unknown finding", replyUnknownID(c.cmd.Arg)), nil
 	}
-	return c.dismissFinding(ctx, access, f, reviewed, c.cmd.Reason, c.cmd.Arg)
+	return c.dismissFinding(ctx, access, f, reviewed, c.cmd.Reason, c.cmd.Arg, false)
 }
 
 // dismissInThread is a dismissal written as a reply in a thread. The thread
@@ -533,6 +549,11 @@ func (c *commandRun) dismissInThread(ctx context.Context) (verdict, error) {
 		return verdict{}, fmt.Errorf("find the thread: %w", err)
 	}
 	if !found {
+		if looksLikeFindingID(c.cmd.Arg) {
+			// "dismiss <id> <reason>" in a thread that isn't pergent's is the
+			// plain command: the ID says which finding.
+			return c.dismissByID(ctx)
+		}
 		return refused("not a finding thread", replyNotFindingThread(c.plat.Forge.Mention())), nil
 	}
 	ref := &forge.ThreadRef{ID: t.ThreadID, CommentID: t.CommentID}
@@ -549,7 +570,7 @@ func (c *commandRun) dismissInThread(ctx context.Context) (verdict, error) {
 		f, ok = actions.MostSevere(all, t.Fingerprint)
 	}
 	if !ok {
-		return with(refused("unknown finding", replyUnknownID(""))), nil
+		return with(refused("unknown finding", replyThreadFindingGone)), nil
 	}
 	reason := threadReason(c.cmd.Arg, f.ID, c.cmd.Reason)
 	access, err := c.access(ctx)
@@ -559,11 +580,25 @@ func (c *commandRun) dismissInThread(ctx context.Context) (verdict, error) {
 	if access < forge.AccessWrite {
 		return with(refused("no permission", replyNoPermission)), nil
 	}
-	v, err := c.dismissFinding(ctx, access, f, reviewed, reason, f.ID)
+	v, err := c.dismissFinding(ctx, access, f, reviewed, reason, f.ID, true)
 	if err != nil {
 		return verdict{}, err
 	}
 	return with(v), nil
+}
+
+// looksLikeFindingID reports whether s is shaped like a finding ID: 6 to 12
+// hex digits.
+func looksLikeFindingID(s string) bool {
+	if len(s) < 6 || len(s) > 12 {
+		return false
+	}
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 // threadReason is the reason of a dismissal written in a thread. arg is the
@@ -582,8 +617,9 @@ func threadReason(arg, id, reason string) string {
 
 // dismissFinding sets f aside, for a commander with access: the rules by the
 // finding's severity, then the dismissal and the review decided again. id
-// names the finding in a reply.
-func (c *commandRun) dismissFinding(ctx context.Context, access forge.Access, f result.Finding, reviewed store.Run, rawReason, id string) (verdict, error) {
+// names the finding in a reply; inThread says the command was written in the
+// finding's thread, which a reply asking for a reason has to match.
+func (c *commandRun) dismissFinding(ctx context.Context, access forge.Access, f result.Finding, reviewed store.Run, rawReason, id string, inThread bool) (verdict, error) {
 	reason := actions.CleanReason(rawReason)
 	if f.Severity != "suggestion" {
 		// Anything but a suggestion is dismissed as a blocking finding.
@@ -594,7 +630,7 @@ func (c *commandRun) dismissFinding(ctx context.Context, access forge.Access, f 
 		case c.isAuthor():
 			return refused("author of the change", replyAuthor), nil
 		case reason == "":
-			return refused("reason needed", replyNeedsReason(c.plat.Forge.Mention())), nil
+			return refused("reason needed", replyNeedsReason(c.plat.Forge.Mention(), inThread)), nil
 		}
 	}
 

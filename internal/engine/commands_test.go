@@ -1647,6 +1647,8 @@ func TestThreadReason(t *testing.T) {
 		{"not the finding's id is the start of the reason", "deadbe", "abc123", "looks fine", "deadbe looks fine"},
 		{"not the finding's id, nothing else", "deadbe", "abc123", "", "deadbe"},
 		{"nothing at all", "", "abc123", "", ""},
+		{"the first word keeps its case", "Decade", "abc123", "old path", "Decade old path"},
+		{"the first word keeps its case, nothing else", "Decade", "abc123", "", "Decade"},
 		{"kept within the longest reason", "deadbe", "abc123", long, string([]rune("deadbe " + long)[:500])},
 	}
 	for _, tt := range tests {
@@ -1655,6 +1657,20 @@ func TestThreadReason(t *testing.T) {
 				t.Errorf("threadReason(%q, %q, %q) = %q, want %q", tt.arg, tt.id, tt.reason, got, tt.want)
 			}
 		})
+	}
+}
+
+// The ask for a reason shows the form of the place it was written: a thread
+// names no ID.
+func TestReplyNeedsReasonText(t *testing.T) {
+	if got, want := replyNeedsReason("pergent-review", false), "dismissing a blocking finding needs a reason: `@pergent-review dismiss <id> <reason>`"; got != want {
+		t.Errorf("in a comment: %q, want %q", got, want)
+	}
+	if got, want := replyNeedsReason("pergent-review", true), "dismissing a blocking finding needs a reason: `@pergent-review dismiss <reason>`"; got != want {
+		t.Errorf("in a thread: %q, want %q", got, want)
+	}
+	if got, want := replyThreadFindingGone, "This thread's finding isn't in the latest review, so there is nothing to dismiss."; got != want {
+		t.Errorf("replyThreadFindingGone = %q, want %q", got, want)
 	}
 }
 
@@ -1762,7 +1778,7 @@ func TestThreadDismissBlockingNeedsAReason(t *testing.T) {
 
 	f.wantReactions(1, c, eyes, down)
 	f.wantReplies(1)
-	f.wantThreadReplies(threadDiscussion, replyNeedsReason(botMention))
+	f.wantThreadReplies(threadDiscussion, "dismissing a blocking finding needs a reason: `@pergent-review dismiss <reason>`")
 	if ds := f.dismissals(1); len(ds) != 0 {
 		t.Errorf("dismissals = %+v, want none", ds)
 	}
@@ -1827,7 +1843,7 @@ func TestThreadDismissFindingGone(t *testing.T) {
 	f.run()
 
 	f.wantReactions(1, c, eyes, down)
-	f.wantThreadReplies(threadDiscussion, replyUnknownID(""))
+	f.wantThreadReplies(threadDiscussion, "This thread's finding isn't in the latest review, so there is nothing to dismiss.")
 	if ds := f.dismissals(1); len(ds) != 0 {
 		t.Errorf("dismissals = %+v, want none", ds)
 	}
@@ -1846,6 +1862,79 @@ func TestThreadDismissArgNotIDIsReason(t *testing.T) {
 	f.wantReactions(1, c, eyes, up)
 	if ds := f.dismissals(1); len(ds) != 1 || ds[0].Reason != "deadbe looks fine" {
 		t.Fatalf("dismissals = %+v, want the reason \"deadbe looks fine\"", ds)
+	}
+}
+
+// The first word of a reason that looks like an ID keeps the case it was
+// written in.
+func TestThreadDismissReasonKeepsTheCaseOfItsFirstWord(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
+	f.findingThread(sqlFingerprint)
+
+	c := f.sayInThread(1, "mo", threadDiscussion, "dismiss", "Decade", "old path", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, up)
+	if ds := f.dismissals(1); len(ds) != 1 || ds[0].Reason != "Decade old path" {
+		t.Fatalf("dismissals = %+v, want the reason \"Decade old path\"", ds)
+	}
+}
+
+// "dismiss <id> <reason>" in a thread that isn't pergent's is the plain
+// command: the ID says which finding.
+func TestThreadDismissByIDInSomeOtherThread(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
+
+	c := f.sayInThread(1, "mo", "someone-elses", "dismiss", "abc123", "a constant", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, up)
+	if ds := f.dismissals(1); len(ds) != 1 || ds[0].Fingerprint != sqlFingerprint || ds[0].Reason != "a constant" {
+		t.Fatalf("dismissals = %+v, want the finding dismissed with its reason", ds)
+	}
+}
+
+func TestThreadDismissByUnknownIDInSomeOtherThread(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
+
+	c := f.sayInThread(1, "mo", "someone-elses", "dismiss", "deadbe", "nope", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, down)
+	f.wantReplies(1, replyUnknownID("deadbe"))
+	if ds := f.dismissals(1); len(ds) != 0 {
+		t.Errorf("dismissals = %+v, want none", ds)
+	}
+}
+
+// Two dismissals in two threads within the 30 seconds, whose reasons start
+// with the same hex-looking word, are two commands: no repeat check applies
+// to a dismissal in a thread.
+func TestThreadDismissalsWithTheSameFirstWordAreNotRepeats(t *testing.T) {
+	f := newCommandFixture(t)
+	f.review(twoFindings(t))
+	f.findingThread(sqlFingerprint)
+	err := f.Store.PutInlineThread(f.ctx, store.InlineThread{
+		MR: f.MRKey(1), Fingerprint: "654321fedcba", Skill: "security", File: "db/other.go", Line: 3, EndLine: 3,
+		Commit: f.head, ThreadID: "disc2", CommentID: 1501, State: "open",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.GitLab.Reply(http.MethodPost, discussionNotesPath(1, "disc2"), http.StatusCreated, `{}`)
+	at := time.Now()
+
+	a := f.sayInThread(1, "mo", threadDiscussion, "dismiss", "deadbeef", "is a constant here", at)
+	b := f.sayInThread(1, "mo", "disc2", "dismiss", "deadbeef", "is a constant there", at.Add(time.Second))
+	f.run()
+
+	f.wantReactions(1, a, eyes, up)
+	f.wantReactions(1, b, eyes, up)
+	if ds := f.dismissals(1); len(ds) != 2 {
+		t.Errorf("dismissals = %+v, want two", ds)
 	}
 }
 
