@@ -105,8 +105,13 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 	if ok {
 		failure = repo.FailureStatus
 	}
-	if run, err = e.mergeBase(ctx, run, log); err != nil {
+	run, restarted, err := e.mergeBase(ctx, run, log)
+	if err != nil {
 		return err
+	}
+	if restarted {
+		// A full review replaces this run: nothing of it is posted.
+		return nil
 	}
 	// A repository switched off since the run was queued can only be
 	// switched on again in the dashboard.
@@ -170,8 +175,23 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 	return nil
 }
 
-// mergeBase completes the result of a re-run of some skills (a run with a base
-// run): the skills it did not review are taken from the base run's result
+// mergeBase completes the result of a run that reviewed only part of the
+// change, with the earlier run's: mergeIncremental for a push that reviewed
+// only what changed, mergeSubset for a re-run of some skills.
+//
+// The returned run carries the stored result. restarted is true when the run
+// was replaced by a full review and must not be published. An error is a
+// failure of the store: the publish is retried.
+func (e *Engine) mergeBase(ctx context.Context, run store.Run, log *slog.Logger) (store.Run, bool, error) {
+	if run.Incremental {
+		return e.mergeIncremental(ctx, run, log)
+	}
+	run, err := e.mergeSubset(ctx, run, log)
+	return run, false, err
+}
+
+// mergeSubset completes the result of a re-run of some skills (a run with a
+// base run): the skills it did not review are taken from the base run's result
 // (result.Merge) and the whole is stored on the run, so the dashboard and the
 // next run's previous result show the whole review. It is done once; a run
 // whose result is already merged is returned as it is. A base result that
@@ -182,7 +202,7 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 //
 // The returned run carries the stored result. An error is a failure of the
 // store: the publish is retried.
-func (e *Engine) mergeBase(ctx context.Context, run store.Run, log *slog.Logger) (store.Run, error) {
+func (e *Engine) mergeSubset(ctx context.Context, run store.Run, log *slog.Logger) (store.Run, error) {
 	if len(run.SkillSubset) == 0 || run.FailureReason != "" || run.Result == nil {
 		return run, nil
 	}
@@ -220,6 +240,66 @@ func (e *Engine) mergeBase(ctx context.Context, run store.Run, log *slog.Logger)
 	}
 	run.Result = merged
 	return run, nil
+}
+
+// mergeIncremental completes the result of an incremental run (a push that
+// reviewed only what changed since the base run): the files it carried over
+// and their findings are taken from the base run's result
+// (result.MergeIncremental) and the whole is stored on the run, so the comment,
+// the dashboard and the next run's previous result show the whole review. It
+// is done once; a result that is merged already, is not completed (an error
+// result is published as it is), or is missing (the run failed) is returned as
+// it is.
+//
+// A partial result alone would pass the files it left out, so a merge that
+// can't be made (the base run or its result is gone, is for another commit, or
+// lacks a carried file) replaces the run with a full review of the head
+// (EnqueueRerun) and nothing is posted: restarted is true. An error is a
+// failure of the store: the publish is retried.
+func (e *Engine) mergeIncremental(ctx context.Context, run store.Run, log *slog.Logger) (store.Run, bool, error) {
+	if run.FailureReason != "" || run.Result == nil {
+		return run, false, nil
+	}
+	r, err := result.Parse(run.Result)
+	if err != nil || r.Status != "completed" || r.Merged {
+		return run, false, nil
+	}
+	var merged []byte
+	baseID := ""
+	if run.BaseRunID == nil {
+		err = errors.New("the run has no earlier run to merge with")
+	} else {
+		baseID = *run.BaseRunID
+		base, found, lerr := e.Store.Run(ctx, baseID)
+		if lerr != nil {
+			return run, false, fmt.Errorf("load the run to merge with: %w", lerr)
+		}
+		if found && base.Result != nil {
+			merged, err = result.MergeIncremental(run.Result, base.Result, base.HeadSHA)
+		} else {
+			err = errors.New("the earlier run or its result is gone")
+		}
+	}
+	if err == nil {
+		if err := e.Store.StoreMergedResult(ctx, run.ID, merged); err != nil {
+			return run, false, fmt.Errorf("store the merged result: %w", err)
+		}
+		run.Result = merged
+		return run, false, nil
+	}
+
+	log.Warn("not publishing the incremental review; reviewing everything instead", "base_run", baseID, "error", e.redact(err.Error()))
+	id, created, err := e.Store.EnqueueRerun(ctx, run.MR, run.ProjectPath, run.HeadSHA, run.TargetBranch, store.TriggerRerun, nil, nil, true)
+	if err != nil {
+		return run, false, fmt.Errorf("queue a full review: %w", err)
+	}
+	if !created {
+		// Something else covers the head already; this run is not published
+		// either way.
+		log.Info("not queuing a full review: the head has a run already", "covering_run", id)
+	}
+	e.Wake()
+	return run, true, nil
 }
 
 // replaceStepAdvice stores the run's result with pergent's step-limit advice
