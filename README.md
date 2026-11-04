@@ -30,6 +30,7 @@ pergent.sh is a service that runs [pergent](https://github.com/gopaytech/pergent
 
 - **A Job per review**: each review runs as its own Kubernetes Job in your cluster, started by a merge request or pull request webhook, so reviews run in parallel up to `jobs.max_running`.
 - **One comment, one status**: pergent.sh posts a single comment, updated in place on every push, and sets a status named `pergent`: a commit status on GitLab, a Check Run on GitHub.
+- **Inline findings**: each finding is also posted as a thread on its lines, with a one-click fix when it is small, and resolved when a later push fixes it. See [Inline findings](#-inline-findings).
 - **Approval with a human guard**: a clean review that actually reviewed something and skipped no file outside the allowed rules is approved by the approver; on GitLab, pergent.sh logs a warning for every project where one approval alone could merge.
 - **GitLab and GitHub**: GitLab (gitlab.com or self-managed) and GitHub.com; on GitHub one App is enough to review and approve.
 - **Dashboard**: every review, finding, file and log in the browser, with teams and roles for who sees what, an audit log, and instances, secrets and the LLM managed without editing the config file.
@@ -45,7 +46,7 @@ When someone opens or pushes to a merge request (or pull request) in a repositor
 
 1. GitLab sends a merge request webhook, or GitHub a `pull_request` webhook, to pergent.sh.
 2. pergent.sh starts a Kubernetes Job. The Job checks out the change, runs `pergent agent` over it and posts the result back.
-3. pergent.sh posts one comment on the merge request, updated in place on every push, and sets a status named `pergent`: a commit status on GitLab, a Check Run on GitHub.
+3. pergent.sh posts one comment on the merge request, updated in place on every push, and sets a status named `pergent`: a commit status on GitLab, a Check Run on GitHub. It also posts each finding as a thread on its lines ([Inline findings](#-inline-findings)).
 4. If the review found no blocking issue (one that people dismissed doesn't count), actually reviewed something and skipped no changed file except under the rules that leave it reviewed (outside a skill's scope, excluded by a skill, no content changes), the approver approves it: a second GitLab user on GitLab, on GitHub the review App itself (one App is enough), a second GitHub App or a bot user. A draft is reviewed the same way but is approved only once it is marked ready.
 
 People can also act on a review where they already are, in a comment on the merge request (`@<bot> review`, `@<bot> review failed`, `@<bot> dismiss <id> <reason>`) or with the buttons on the dashboard's review page: run the review again, run only the skills that failed, and set aside a finding that isn't a real problem. See [Commands](#-commands).
@@ -218,6 +219,16 @@ pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is hand
 
 ## ⬆️ Upgrading
 
+### Upgrading to 0.6.0
+
+0.6.0 posts each finding as a thread on its lines. See [Inline findings](#-inline-findings).
+
+1. **Migration `0017` runs at startup.** It adds a table and nullable or defaulted columns only, so 0.5.4 keeps working on a migrated database.
+2. **Inline findings are on by default.** Turn them off per repository with **Inline findings** in its Settings, or with `inline_findings: false` in the config, to keep the single comment.
+3. **GitHub: give the review App Pull requests Read and write and subscribe it to Pull request review comment.** Without the permission, findings stay in the comment. Without the event, in-thread dismissals are not received. Each installation's owner has to accept the new permission.
+4. **The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.4.0`.** A config that sets its own `jobs.image` keeps the image it names.
+5. **To roll back to 0.5.4, first remove `inline_findings` from the config.** 0.5.4 refuses unknown config keys and won't start with it. Threads already posted stay on the platform.
+
 ### Upgrading to 0.5.4
 
 0.5.4 makes the step limit of a review configurable per repository.
@@ -295,7 +306,7 @@ Approval rules and approval settings are GitLab Premium and Ultimate features. O
 
 pergent.sh reaches GitHub.com through a GitHub App that you create (pergent.sh is self-hosted, so there is no shared App). **One App is enough and is the simplest setup:**
 
-- the **review App** receives the `pull_request` and `issue_comment` webhooks, reads the pull request and the repository, posts the comment, sets the `pergent` Check Run, reacts to and answers [command](#-commands) comments, looks up a commenter's repository permission and mints each Job's clone token. It can also approve, and dismiss its own approvals when they go stale (`approve_with_review_app`, the default in the dashboard). For that it needs **Pull requests: Read and write**, and the pull request shows the same bot commenting and approving.
+- the **review App** receives the `pull_request`, `issue_comment` and `pull_request_review_comment` webhooks, reads the pull request and the repository, posts the comment and the finding threads, sets the `pergent` Check Run, reacts to and answers [command](#-commands) comments, looks up a commenter's repository permission and mints each Job's clone token. It can also approve, and dismiss its own approvals when they go stale (`approve_with_review_app`, the default in the dashboard). For that it needs **Pull requests: Read and write**, and the pull request shows the same bot commenting and approving.
 
 Who approves is a choice of three:
 
@@ -309,12 +320,12 @@ In the organization's settings, **Developer settings → GitHub Apps → New Git
 
 - **Webhook:** active. URL `<public_url>/webhooks/github/<instance name>`, for example `https://pergent.example.com/webhooks/github/gh`. Secret: a random string (`openssl rand -hex 32`); you enter it as the instance's webhook secret in the dashboard, or, for an instance in the config file, put it in the Secret as the instance's `webhook_secret_env`.
 - **Repository permissions:**
-  - Pull requests: **Read and write** when this App approves too (the one-App setup), else **Read-only**
+  - Pull requests: **Read and write** when this App approves too (the one-App setup) or posts [inline findings](#-inline-findings), else **Read-only**. With Read-only, inline findings are off for that instance: findings stay in the comment, and the Integrations page says so.
   - Contents: **Read-only**
   - Checks: **Read and write**
   - Issues: **Read and write** (pull request comments are issue comments; this also covers the 👀, 👍 and 👎 reactions on a command comment)
   - Metadata: **Read-only** (always on; this also covers reading a commenter's repository permission)
-  - Administration: **Read-only** (optional). It lets the [readiness scan](#readiness-scan) read classic branch protection. Without it, on a branch that has classic protection, 3 rows of the scan can say "Couldn't check" and name this permission; nothing else changes.
+  - Administration: **Read-only** (optional). It lets pergent.sh read the classic branch protection's conversation-resolution rule for [inline findings](#-inline-findings); without it only rulesets are read, and the classic rule is treated as off. It also lets the [readiness scan](#readiness-scan) read classic branch protection. Without it, on a branch that has classic protection, 3 rows of the scan can say "Couldn't check" and name this permission; nothing else changes.
 - **Subscribe to events:** **Pull request**, **Issue comment** and **Pull request review comment**. The Issue comment event delivers the comments that commands are read from, and the Pull request review comment event the replies in a finding's thread.
 - **Where can this GitHub App be installed:** "Only on this account", or "Any account" to install it on several organizations.
 
@@ -391,7 +402,7 @@ The status of a review is a Check Run named `pergent` on the reviewed head commi
 - `in_progress` ("pergent review running") when the Job starts;
 - then `completed` with the conclusion `success`, `failure`, `neutral` (a failed review with `failure_status: neutral`) or `cancelled` (the run was superseded: a newer push or a new target branch replaced it, or the pull request was closed). A review that couldn't be posted after 10 attempts ends as `failure`, titled "pergent couldn't post its review".
 
-Its title is the status description from [How approval works](#-how-approval-works) and its summary points to the pull request comment; findings are only in the comment. Every change is a new Check Run with the same name, and GitHub shows the latest. To make merging wait for the review, add `pergent` as a required status check in the branch's protection rule or ruleset, and **pin it to the review App**: otherwise GitHub accepts a check named `pergent` from any source, and a workflow or another App could satisfy it. In a branch protection rule, set the check's source to the review App instead of "Any source"; in a ruleset, choose the review App as the check's integration. See [Branch protection](#branch-protection).
+Its title is the status description from [How approval works](#-how-approval-works) and its summary points to the pull request comment; the findings are in the comment and, when [inline findings](#-inline-findings) are on, in threads on the diff. Every change is a new Check Run with the same name, and GitHub shows the latest. To make merging wait for the review, add `pergent` as a required status check in the branch's protection rule or ruleset, and **pin it to the review App**: otherwise GitHub accepts a check named `pergent` from any source, and a workflow or another App could satisfy it. In a branch protection rule, set the check's source to the review App instead of "Any source"; in a ruleset, choose the review App as the check's integration. See [Branch protection](#branch-protection).
 
 ### Branch protection
 
@@ -807,6 +818,31 @@ When a run ends up with no skill at all (the default list is empty and the repos
 
 Without the dashboard (`dashboard.url` unset) the library can't be managed, but reviews still read it and the default list from the database. A fresh install has an empty library, so its repositories review with repository skills only.
 
+## 🧵 Inline findings
+
+pergent.sh posts each finding of a review as a thread on its lines, next to the single review comment.
+
+- **Each finding is posted on its lines.** At most 20 pergent threads are open on a change at once: blocking findings go first, then the rest by file and line.
+- **A small fix comes as a suggestion.** When the fix replaces 10 lines or fewer, all inside the finding's lines and within one diff hunk, people can apply it with GitHub's **Commit suggestion** or GitLab's **Apply suggestion**. A replacement with a line that starts with `/` in column 0 is never posted as a suggestion, because GitLab would run it as a quick action; the fix is shown as advice in words.
+- **A later review keeps the threads current.**
+  - A finding that is gone gets the reply ``Fixed in `<sha>`.`` and its thread is resolved. This happens only when its skill ran without failing and still reviewed the file. If the file left the change, the reply is "No longer in this change."
+  - A finding that comes back reopens its thread, with ``Back in `<sha>`.``
+  - A thread that a person resolved is left alone, and its finding is not posted again.
+- **Dismissing resolves the thread.** A dismissal from a comment, from `@<bot> dismiss <reason>` as a reply in the finding's thread, or from the dashboard replies "Dismissed by …" and resolves the thread. Restoring it on the dashboard reopens it. See [Dismissing a finding](#dismissing-a-finding).
+- **Findings that can't go inline stay in the review comment**, under **Not on the diff**, each with the reason: off the diff, over the limit of 20, posting failed, too long, or kept because the branch requires resolved threads.
+- **When the target branch requires resolved threads, only blocking findings go inline.** On GitHub that is a ruleset's "Require conversation resolution" or the classic protection's rule; on GitLab it is "All threads must be resolved". The non-blocking findings stay in the comment, so they leave no open thread to hold up a merge.
+- **Very large changes get no threads.** At 3000 changed files or more on GitHub, or when GitLab's diff passes its limits, that review posts no inline threads and every finding stays in the comment.
+
+**Turning it off.** Inline findings are on by default. The switch is **Inline findings** in a repository's Settings, the default under **Admin → Settings**, or `repositories[].inline_findings` in the config ([Config reference](#-config-reference)). With it off, every finding stays in the review comment, as before 0.6.0.
+
+**GitHub setup.**
+
+- The review App needs **Pull requests: Read and write**. With Read-only, inline is off for that instance and the Integrations page says so.
+- **Administration: Read** is optional. It lets pergent.sh read the classic branch protection's conversation-resolution rule. Without it, only rulesets are read and the classic rule is treated as off, so a branch whose only such rule is classic gets suggestions inline too.
+- Subscribe the App to **Pull request review comment**. Without it, replies in a finding's thread are not received.
+
+**GitLab setup.** "All threads must be resolved" is read from the project settings. No new webhook is needed: note events already arrive.
+
 ## 💬 Commands
 
 A comment on a merge request (or pull request) can ask the review bot to run the review again or to set a finding aside, and the dashboard's review page has the same actions as buttons. That is all they do: no command changes a setting, answers a question or fixes code.
@@ -1021,7 +1057,7 @@ Logs are JSON on stdout. Secrets are never logged.
 
 This release is deliberately small:
 
-- Commands are `review`, `review failed`, `dismiss` and `help`, and the dashboard has the matching buttons plus Restore. No chat, no questions, no asking the bot to explain or fix code, no commands that change settings, no replies on a single finding's line comment, and no dismissing a finding for every merge request of a repository: a dismissal belongs to one merge request. Restoring is a button only.
+- Commands are `review`, `review failed`, `dismiss` and `help`, and the dashboard has the matching buttons plus Restore. No chat, no questions, no asking the bot to explain or fix code, no commands that change settings, no questions in a finding's thread (only `dismiss`), and no dismissing a finding for every merge request of a repository: a dismissal belongs to one merge request. Restoring is a button only.
 - Dashboard sign-in is a password (operators) or GitLab or GitHub. No OIDC, SAML or LDAP, no two-factor authentication, and no API tokens for scripts.
 - Teams are kept in pergent.sh: they are not synced from GitLab groups or GitHub teams.
 - A GitLab and a GitHub account of one person are two accounts, with no linking.
