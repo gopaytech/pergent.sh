@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/gopaytech/pergent/render"
 )
@@ -36,6 +38,19 @@ type Result struct {
 	// and is shown in the comment. Either marks the merge step as done.
 	Merged    bool   `json:"merged,omitempty"`
 	MergeNote string `json:"merge_note,omitempty"`
+
+	// Incremental is set by MergeIncremental on the result of an incremental
+	// review.
+	Incremental *Incremental `json:"incremental,omitempty"`
+}
+
+// Incremental says what an incremental review did: the files it reviewed
+// again, the files it carried over from the review it builds on, and that
+// review's head commit (the full SHA).
+type Incremental struct {
+	Reviewed int    `json:"reviewed"`
+	Carried  int    `json:"carried"`
+	From     string `json:"from"`
 }
 
 // Skill is the outcome of one skill. Findings stay raw: pergent.sh stores and
@@ -109,8 +124,11 @@ type notReviewed struct {
 }
 
 // Files records what a skill looked at. Its verdict covers Reviewed only.
+// Carried is the files an incremental review left out because the last review
+// covers them.
 type Files struct {
 	Reviewed    []string          `json:"reviewed"`
+	Carried     []string          `json:"carried,omitempty"`
 	Skipped     []Skipped         `json:"skipped"`
 	NotReviewed []json.RawMessage `json:"not_reviewed"`
 }
@@ -505,4 +523,261 @@ func NoteUnmerged(data []byte, note string) ([]byte, error) {
 	}
 	top["merge_note"] = n
 	return json.Marshal(top)
+}
+
+// MergeIncremental combines the result of an incremental review with the last
+// review's result, base, whose head commit is from. The skills are the
+// partial's, in its order; a skill the base lacks is kept as it is. For a
+// skill the base has, the findings on its carried files come over unchanged,
+// the verdict is decided again over all the findings, and the checks are the
+// base's with the new run's replacing the ones it reported again. A skill that
+// started no run keeps the base's confidence, summaries, notes and batch
+// counts. Each skill is kept as it was delivered, fields that Result does not
+// declare included. Finding IDs are assigned again over all the findings. The
+// envelope and the comment are partial's, and the result is marked Merged.
+//
+// It fails when partial is not a completed result or when base is not a usable
+// completed result of from: the caller then runs a full review, as a partial
+// result alone would pass the files it left out.
+func MergeIncremental(partial, base []byte, from string) ([]byte, error) {
+	pr, err := Parse(partial)
+	if err != nil {
+		return nil, fmt.Errorf("the incremental result: %w", err)
+	}
+	br, err := Parse(base)
+	if err != nil {
+		return nil, fmt.Errorf("the earlier result: %w", err)
+	}
+	switch {
+	case pr.Status != "completed":
+		return nil, errors.New("the incremental result is not completed")
+	case br.Status != "completed":
+		return nil, errors.New("the earlier result is not completed")
+	case br.Head != from:
+		return nil, errors.New("the earlier result is for another commit")
+	}
+
+	var top, baseTop map[string]json.RawMessage
+	var partialSkills, baseSkills []json.RawMessage
+	if err := unmarshalSkills(partial, &top, &partialSkills); err != nil {
+		return nil, err
+	}
+	if err := unmarshalSkills(base, &baseTop, &baseSkills); err != nil {
+		return nil, err
+	}
+
+	earlier := map[string]int{}
+	for i, s := range br.Skills {
+		if _, dup := earlier[s.Name]; !dup {
+			earlier[s.Name] = i
+		}
+	}
+	skills := make([]json.RawMessage, len(partialSkills))
+	for i, raw := range partialSkills {
+		j, ok := earlier[pr.Skills[i].Name]
+		if !ok {
+			skills[i] = raw
+			continue
+		}
+		if skills[i], err = mergeIncrementalSkill(raw, pr.Skills[i], baseSkills[j], br.Skills[j]); err != nil {
+			return nil, err
+		}
+	}
+
+	skills, err = assignIDs(skills)
+	if err != nil {
+		return nil, err
+	}
+	if top["skills"], err = json.Marshal(skills); err != nil {
+		return nil, err
+	}
+	if top["incremental"], err = json.Marshal(incrementalCounts(pr.Skills, from)); err != nil {
+		return nil, err
+	}
+	top["merged"] = json.RawMessage("true")
+	return json.Marshal(top)
+}
+
+// mergeIncrementalSkill merges one skill of an incremental run, raw and
+// decoded as fresh, with the same skill of the last review, raw and decoded as
+// earlier.
+func mergeIncrementalSkill(raw json.RawMessage, fresh Skill, rawEarlier json.RawMessage, earlier Skill) (json.RawMessage, error) {
+	var m, em map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, fmt.Errorf("decode a skill: %w", err)
+	}
+	if err := json.Unmarshal(rawEarlier, &em); err != nil {
+		return nil, fmt.Errorf("decode a skill: %w", err)
+	}
+
+	carried := map[string]bool{}
+	for _, p := range fresh.Files.Carried {
+		carried[p] = true
+	}
+	findings := append([]json.RawMessage{}, fresh.Findings...)
+	for _, f := range earlier.Findings {
+		var d Finding
+		if json.Unmarshal(f, &d) == nil && carried[d.File] {
+			findings = append(findings, f)
+		}
+	}
+	var err error
+	if m["findings"], err = json.Marshal(findings); err != nil {
+		return nil, err
+	}
+
+	// A verdict other than the two clean ones (failed, or one pergent.sh
+	// does not know) stays what the new run said.
+	switch fresh.Verdict {
+	case "has_blocking_issues", "no_blocking_issues":
+		m["verdict"] = json.RawMessage(`"no_blocking_issues"`)
+		if hasBlocking(findings) {
+			m["verdict"] = json.RawMessage(`"has_blocking_issues"`)
+		}
+	}
+
+	files := map[string]json.RawMessage{}
+	if fr, ok := m["files"]; ok {
+		if err := json.Unmarshal(fr, &files); err != nil {
+			return nil, fmt.Errorf("decode files: %w", err)
+		}
+	}
+	reviewed := append([]string{}, fresh.Files.Reviewed...)
+	for _, p := range fresh.Files.Carried {
+		if !slices.Contains(reviewed, p) {
+			reviewed = append(reviewed, p)
+		}
+	}
+	if files["reviewed"], err = json.Marshal(reviewed); err != nil {
+		return nil, err
+	}
+	if m["files"], err = json.Marshal(files); err != nil {
+		return nil, err
+	}
+
+	if fresh.Batches > 0 {
+		checks := mergeChecks(earlier.Checks, fresh.Checks)
+		delete(m, "checks")
+		if len(checks) > 0 {
+			if m["checks"], err = json.Marshal(checks); err != nil {
+				return nil, err
+			}
+		}
+		return json.Marshal(m)
+	}
+	// The skill started no run, so what the model said is the last review's.
+	for _, key := range []string{"confidence", "confidence_reason", "summaries", "notes", "batches", "batches_finished", "checks"} {
+		if v, ok := em[key]; ok {
+			m[key] = v
+		} else {
+			delete(m, key)
+		}
+	}
+	return json.Marshal(m)
+}
+
+// hasBlocking reports whether any of the raw findings is blocking.
+func hasBlocking(findings []json.RawMessage) bool {
+	for _, raw := range findings {
+		var f Finding
+		if json.Unmarshal(raw, &f) == nil && f.Severity == "blocking" {
+			return true
+		}
+	}
+	return false
+}
+
+// mergeChecks is the last review's checklist without the checks the new run
+// reported again (same section and name), then the new run's batches,
+// numbered 1..n. A batch of the last review that the replacing leaves empty
+// is dropped.
+func mergeChecks(earlier, fresh []BatchChecks) []BatchChecks {
+	replaced := map[[2]string]bool{}
+	for _, b := range fresh {
+		for _, c := range b.Checks {
+			replaced[[2]string{c.Section, c.Name}] = true
+		}
+	}
+	var out []BatchChecks
+	for _, b := range earlier {
+		kept := make([]Check, 0, len(b.Checks))
+		for _, c := range b.Checks {
+			if !replaced[[2]string{c.Section, c.Name}] {
+				kept = append(kept, c)
+			}
+		}
+		if len(kept) == 0 && len(b.Checks) > 0 {
+			continue
+		}
+		b.Checks = kept
+		out = append(out, b)
+	}
+	out = append(out, fresh...)
+	for i := range out {
+		out[i].Batch = i + 1
+	}
+	return out
+}
+
+// incrementalCounts counts the distinct files the skills reviewed, and the
+// distinct files they carried over that no skill reviewed.
+func incrementalCounts(skills []Skill, from string) *Incremental {
+	reviewed := map[string]bool{}
+	for _, s := range skills {
+		for _, p := range s.Files.Reviewed {
+			reviewed[p] = true
+		}
+	}
+	carried := map[string]bool{}
+	for _, s := range skills {
+		for _, p := range s.Files.Carried {
+			if !reviewed[p] {
+				carried[p] = true
+			}
+		}
+	}
+	return &Incremental{Reviewed: len(reviewed), Carried: len(carried), From: from}
+}
+
+// IncrementalNote is the line that says an incremental review left files to
+// the last one, for the comment and the review page ("" for a full review).
+func IncrementalNote(i *Incremental) string {
+	if i == nil {
+		return ""
+	}
+	files := "files"
+	if i.Reviewed == 1 {
+		files = "file"
+	}
+	from := i.From
+	if len(from) > 7 {
+		from = from[:7]
+	}
+	return fmt.Sprintf("Re-reviewed %d %s · %d carried over from `%s`", i.Reviewed, files, i.Carried, from)
+}
+
+// SupportsCarried reports whether the pergent that made the result reports
+// files.carried and takes --carried: version 0.5.0 or later, with or without
+// a leading "v" and a suffix such as "-rc1". A version that does not read as
+// major.minor.patch is false.
+func (r *Result) SupportsCarried() bool {
+	v := strings.TrimPrefix(r.PergentVersion, "v")
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		v = v[:i]
+	}
+	parts := strings.Split(v, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	var n [3]int
+	for i, p := range parts {
+		if p == "" || strings.Trim(p, "0123456789") != "" {
+			return false
+		}
+		var err error
+		if n[i], err = strconv.Atoi(p); err != nil {
+			return false
+		}
+	}
+	return n[0] > 0 || n[1] >= 5
 }
