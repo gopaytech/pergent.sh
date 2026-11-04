@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -1223,5 +1224,69 @@ func TestDecideIgnoresJobComment(t *testing.T) {
 	d := Decide(Outcome{Result: completed(skill("a", "no_blocking_issues", "f.go"))}, config.FailureStatusFailed)
 	if strings.Contains(d.Comment, jobComment) || strings.Contains(d.Comment, findingsBlock) {
 		t.Errorf("the Job's comment was used: %s", d.Comment)
+	}
+}
+
+// With InlineOn the options carry the inline fingerprints, the notes, the
+// "Not on the diff" title and the footer that points to the finding's thread;
+// without it they are exactly what they were before inline threads.
+func TestRenderOptionsInline(t *testing.T) {
+	r := completed(skill("security", "no_blocking_issues", "a.go"))
+	r.Head, r.PergentVersion = "0123456789abcdef", "0.3.0"
+	changed := []string{"a.go"}
+	inline := map[string]bool{"abc123def456": true}
+	notes := map[string]string{"fff000fff000": "Not on the diff: its lines didn't change here, so it can't be a comment on them."}
+
+	t.Run("on with a mention", func(t *testing.T) {
+		o := Outcome{Result: r, Mention: "pergent-bot", MaxComment: 1000, InlineOn: true, Inline: inline, FindingNotes: notes}
+		got := renderOptions(o, r, changed)
+		want := render.Options{
+			MaxLen: 1000, ChangedFiles: changed, Commit: r.Head, Version: "v0.3.0",
+			DismissCommand: "@pergent-bot dismiss",
+			Footer:         "Run again: `@pergent-bot review` · or reply `@pergent-bot dismiss <reason>` in a finding's thread",
+			Inline:         inline, FindingNote: notes, FindingsTitle: "Not on the diff",
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("options =\n%+v\nwant\n%+v", got, want)
+		}
+	})
+
+	t.Run("on without a mention", func(t *testing.T) {
+		got := renderOptions(Outcome{Result: r, InlineOn: true, Inline: inline, FindingNotes: notes}, r, changed)
+		if got.Footer != "" || got.DismissCommand != "" {
+			t.Errorf("footer %q and dismiss command %q, want none without a mention", got.Footer, got.DismissCommand)
+		}
+		if got.FindingsTitle != "Not on the diff" || !reflect.DeepEqual(got.Inline, inline) || !reflect.DeepEqual(got.FindingNote, notes) {
+			t.Errorf("options = %+v, want the inline set, the notes and the title", got)
+		}
+	})
+
+	t.Run("off is as before", func(t *testing.T) {
+		// Even with the fields filled in: only InlineOn turns them on.
+		o := Outcome{Result: r, Mention: "pergent-bot", MaxComment: 1000, Inline: inline, FindingNotes: notes}
+		got := renderOptions(o, r, changed)
+		want := render.Options{
+			MaxLen: 1000, ChangedFiles: changed, Commit: r.Head, Version: "v0.3.0",
+			DismissCommand: "@pergent-bot dismiss",
+			Footer:         "Run again: `@pergent-bot review`",
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("options =\n%+v\nwant\n%+v", got, want)
+		}
+	})
+}
+
+// The inline fields change only the comment: the status, the description and
+// the approval are decided as without them.
+func TestDecideInlineChangesOnlyTheComment(t *testing.T) {
+	const fp = "abc123def456"
+	blocking := completed(withFinding(skill("security", "has_blocking_issues", "db/query.go"), "blocking", fp, "plain"))
+	clean := completed(skill("security", "no_blocking_issues", "a.go"))
+	for name, r := range map[string]*result.Result{"blocking": blocking, "clean": clean} {
+		off := Decide(Outcome{Result: r, Mention: "pergent-bot"}, config.FailureStatusFailed)
+		on := Decide(Outcome{Result: r, Mention: "pergent-bot", InlineOn: true, Inline: map[string]bool{fp: true}}, config.FailureStatusFailed)
+		if on.Status != off.Status || on.Description != off.Description || on.Approve != off.Approve || on.Kind != off.Kind {
+			t.Errorf("%s: decision with inline = %+v, without = %+v", name, on, off)
+		}
 	}
 }

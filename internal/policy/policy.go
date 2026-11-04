@@ -124,6 +124,13 @@ type Outcome struct {
 	Redact     func(string) string
 	Mention    string
 	FileURL    func(path string, line, endLine int) string
+
+	// InlineOn says findings are posted as inline threads: Inline holds the
+	// fingerprints shown on the diff, FindingNotes why each other finding is in
+	// the comment. Off, the comment lists every finding as before.
+	InlineOn     bool
+	Inline       map[string]bool
+	FindingNotes map[string]string
 }
 
 // Kind is what a decision is, in short.
@@ -310,7 +317,9 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 
 // renderOptions is how the comment of r is rendered: the size limit, the
 // changed files, the reviewed commit and the pergent version that reviewed
-// it, the links and, with a mention, the dismiss and re-run commands.
+// it, the links and, with a mention, the dismiss and re-run commands. With
+// InlineOn the findings on the diff are left out of the list, the others carry
+// their notes and the footer says to dismiss in a finding's thread.
 func renderOptions(o Outcome, r *result.Result, changed []string) render.Options {
 	opts := render.Options{MaxLen: o.MaxComment, ChangedFiles: changed, Commit: r.Head, FileURL: o.FileURL}
 	if r.PergentVersion != "" {
@@ -319,6 +328,12 @@ func renderOptions(o Outcome, r *result.Result, changed []string) render.Options
 	if o.Mention != "" {
 		opts.DismissCommand = "@" + o.Mention + " dismiss"
 		opts.Footer = "Run again: `@" + o.Mention + " review`"
+	}
+	if o.InlineOn {
+		opts.Inline, opts.FindingNote, opts.FindingsTitle = o.Inline, o.FindingNotes, "Not on the diff"
+		if o.Mention != "" {
+			opts.Footer = "Run again: `@" + o.Mention + " review` · or reply `@" + o.Mention + " dismiss <reason>` in a finding's thread"
+		}
 	}
 	return opts
 }

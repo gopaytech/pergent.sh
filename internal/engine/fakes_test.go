@@ -549,3 +549,180 @@ func decodeToken(t *testing.T, tok string) {
 		t.Errorf("result token %q is not 32 bytes of base64url without padding (%d bytes, %v)", tok, len(b), err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Fake GitLab: diffs, compare, discussions and the project, for inline threads
+
+func diffsPath(iid int64) string { return mrPath(iid) + "/diffs" }
+
+func comparePath() string {
+	return "/projects/" + strconv.FormatInt(testProjectID, 10) + "/repository/compare"
+}
+
+func projectPath() string { return "/projects/" + strconv.FormatInt(testProjectID, 10) }
+
+func discussionsPath(iid int64) string { return mrPath(iid) + "/discussions" }
+
+func discussionPath(iid int64, id string) string { return discussionsPath(iid) + "/" + id }
+
+func discussionNotesPath(iid int64, id string) string { return discussionPath(iid, id) + "/notes" }
+
+// testBotID is the review bot's GitLab user id in the test environment.
+const testBotID = int64(100)
+
+// fileDiff is one file of a fake diff.
+type fileDiff struct {
+	OldPath string `json:"old_path"`
+	NewPath string `json:"new_path"`
+	Deleted bool   `json:"deleted_file"`
+	Diff    string `json:"diff"`
+}
+
+// ServeDiff serves the diff of merge request iid with files, and the merge
+// request itself (opened at head) with the matching changes_count.
+func (f *fakeGitLab) ServeDiff(iid int64, head string, files ...fileDiff) {
+	mr := openMR(iid, head)
+	mr.ChangesCount = gitlab.ChangesCount(strconv.Itoa(len(files)))
+	f.SetMR(mr)
+	if files == nil {
+		files = []fileDiff{}
+	}
+	f.Reply(http.MethodGet, diffsPath(iid), http.StatusOK, files)
+}
+
+// ServeCompare serves the comparison of any two commits with files.
+func (f *fakeGitLab) ServeCompare(files ...fileDiff) {
+	body := map[string]any{"diffs": files}
+	if files == nil {
+		body["diffs"] = []fileDiff{}
+	}
+	f.Reply(http.MethodGet, comparePath(), http.StatusOK, body)
+}
+
+// fakeDiscussions is the discussions of one merge request on a fake GitLab: it
+// lists them, starts new ones, takes replies and resolves.
+type fakeDiscussions struct {
+	t     *testing.T
+	gl    *fakeGitLab
+	iid   int64
+	botID int64
+
+	mu   sync.Mutex
+	list []gitlab.Discussion
+	next int
+	fail int // when set, starting a discussion answers with this status
+}
+
+// ServeDiscussions serves the discussions of merge request iid, whose notes
+// are the review bot's (user botID) when they are started through the API.
+func (f *fakeGitLab) ServeDiscussions(t *testing.T, iid int64) *fakeDiscussions {
+	d := &fakeDiscussions{t: t, gl: f, iid: iid, botID: testBotID, next: 1}
+	f.Handle(http.MethodGet, discussionsPath(iid), func(w http.ResponseWriter, _ *http.Request) {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(append([]gitlab.Discussion{}, d.list...))
+	})
+	f.Handle(http.MethodPost, discussionsPath(iid), d.start)
+	return d
+}
+
+// Seed adds a discussion the review bot started earlier, on newPath at line.
+func (d *fakeDiscussions) Seed(body, newPath string, line int, resolved bool) string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.add(body, newPath, line, resolved)
+}
+
+// add stores a discussion and routes its replies and its resolution. The
+// caller holds d.mu.
+func (d *fakeDiscussions) add(body, newPath string, line int, resolved bool) string {
+	n := d.next
+	d.next++
+	id := "disc" + strconv.Itoa(n)
+	d.list = append(d.list, gitlab.Discussion{ID: id, Notes: []gitlab.DiscussionNote{{
+		ID: int64(1000 + n), Body: body, Author: gitlab.User{ID: d.botID, Username: "pergent-review"},
+		Position:   &gitlab.NotePosition{NewPath: newPath, NewLine: line},
+		Resolvable: true, Resolved: resolved,
+	}}})
+	d.gl.Reply(http.MethodPost, discussionNotesPath(d.iid, id), http.StatusCreated, `{}`)
+	d.gl.Handle(http.MethodPut, discussionPath(d.iid, id), func(w http.ResponseWriter, r *http.Request) {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		for i := range d.list {
+			if d.list[i].ID == id {
+				d.list[i].Notes[0].Resolved = r.URL.Query().Get("resolved") == "true"
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{}`)
+	})
+	return id
+}
+
+func (d *fakeDiscussions) start(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	var req struct {
+		Body     string         `json:"body"`
+		Position map[string]any `json:"position"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		d.t.Errorf("discussion request %q: %v", body, err)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.fail != 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(d.fail)
+		_, _ = io.WriteString(w, `{"message":"failed"}`)
+		return
+	}
+	line, _ := req.Position["new_line"].(float64)
+	path, _ := req.Position["new_path"].(string)
+	id := d.add(req.Body, path, int(line), false)
+	for _, x := range d.list {
+		if x.ID == id {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(x)
+			return
+		}
+	}
+}
+
+// Resolved reports whether discussion id is resolved now.
+func (d *fakeDiscussions) Resolved(id string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, x := range d.list {
+		if x.ID == id {
+			return x.Notes[0].Resolved
+		}
+	}
+	d.t.Fatalf("no discussion %s", id)
+	return false
+}
+
+// Count is how many discussions there are.
+func (d *fakeDiscussions) Count() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.list)
+}
+
+// Posted returns the bodies of the requests that started a discussion.
+func (d *fakeDiscussions) Posted() []gitlabRequest {
+	return d.gl.Requests(http.MethodPost, discussionsPath(d.iid))
+}
+
+// Replies returns the bodies posted as replies, oldest first.
+func (d *fakeDiscussions) Replies(t *testing.T) []string {
+	var out []string
+	for _, r := range d.gl.Requests(http.MethodPost, "") {
+		if strings.HasPrefix(r.Path, discussionsPath(d.iid)+"/") && strings.HasSuffix(r.Path, "/notes") {
+			b, _ := r.JSON(t)["body"].(string)
+			out = append(out, b)
+		}
+	}
+	return out
+}
