@@ -1152,6 +1152,12 @@ const (
 // changed file: treating it as the whole diff would drop files silently.
 var ErrPartialDiff = errors.New("github: the diff may be incomplete")
 
+// ErrNotAncestor is returned by CompareFiles when the first commit is not an
+// ancestor of the second (after a force-push or a rebase): GitHub then diffs
+// from the merge base, so the files and lines it lists don't answer "what
+// changed since the first commit".
+var ErrNotAncestor = errors.New("github: the first commit is not an ancestor of the second")
+
 // PullFiles lists the files of a pull request's diff at its head
 // (GET /repos/{owner}/{repo}/pulls/{number}/files). Patch is empty for a
 // binary file or one GitHub left out as too large. A pull request with 3000
@@ -1182,7 +1188,8 @@ func (c *Client) PullFiles(ctx context.Context, owner, repo string, number int64
 // CompareFiles lists the files that differ between two commits
 // (GET /repos/{owner}/{repo}/compare/{from}...{to}). The files are all on the
 // first page (later pages list commits), and GitHub lists at most 300 of
-// them: a comparison with that many is ErrPartialDiff.
+// them: a comparison with that many is ErrPartialDiff. A comparison whose
+// first commit is not an ancestor of the second is ErrNotAncestor.
 func (c *Client) CompareFiles(ctx context.Context, owner, repo, from, to string) ([]forge.FileDiff, error) {
 	f, err := segment(from)
 	if err != nil {
@@ -1197,10 +1204,20 @@ func (c *Client) CompareFiles(ctx context.Context, owner, repo, from, to string)
 		return nil, err
 	}
 	var page struct {
+		Status          string `json:"status"`
+		MergeBaseCommit struct {
+			SHA string `json:"sha"`
+		} `json:"merge_base_commit"`
 		Files fileDiffs `json:"files"`
 	}
 	if err := c.getJSON(ctx, p, url.Values{"per_page": {perPage}}, &page); err != nil {
 		return nil, err
+	}
+	// The three-dot form diffs from the merge base: only when that is `from`
+	// (status ahead or identical) do the files describe from..to.
+	if (page.Status != "ahead" && page.Status != "identical") ||
+		(page.MergeBaseCommit.SHA != "" && !strings.EqualFold(page.MergeBaseCommit.SHA, from)) {
+		return nil, fmt.Errorf("%w: the comparison is %q with merge base %q", ErrNotAncestor, page.Status, page.MergeBaseCommit.SHA)
 	}
 	if len(page.Files) >= maxCompareFiles {
 		return nil, fmt.Errorf("%w: the comparison lists %d or more files, the most GitHub returns", ErrPartialDiff, maxCompareFiles)

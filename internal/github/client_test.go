@@ -1141,7 +1141,7 @@ func TestPullFiles(t *testing.T) {
 }
 
 func TestCompareFiles(t *testing.T) {
-	c, rec := serve(t, jsonReply(map[string]any{"files": []map[string]any{
+	c, rec := serve(t, jsonReply(map[string]any{"status": "ahead", "merge_base_commit": map[string]any{"sha": "aaa"}, "files": []map[string]any{
 		{"filename": "a.go", "status": "modified", "patch": "@@ -1 +1 @@\n-a\n+b"},
 		{"filename": "b.go", "status": "removed"},
 	}}))
@@ -1154,6 +1154,37 @@ func TestCompareFiles(t *testing.T) {
 		t.Fatalf("CompareFiles = %+v", got)
 	}
 	expect(t, rec.get(0), "GET", "/repos/acme/widgets/compare/aaa...bbb", "per_page=100")
+}
+
+// The files of a three-dot comparison describe from..to only when from is an
+// ancestor of to; after a force-push they are the diff from the merge base.
+func TestCompareFilesAncestry(t *testing.T) {
+	files := []map[string]any{{"filename": "a.go", "status": "modified"}}
+	for name, tc := range map[string]struct {
+		reply   map[string]any
+		wantErr bool
+		wantLen int
+	}{
+		"ahead":     {map[string]any{"status": "ahead", "merge_base_commit": map[string]any{"sha": "aaa"}, "files": files}, false, 1},
+		"identical": {map[string]any{"status": "identical", "merge_base_commit": map[string]any{"sha": "aaa"}, "files": []map[string]any{}}, false, 0},
+		"diverged":  {map[string]any{"status": "diverged", "merge_base_commit": map[string]any{"sha": "ccc"}, "files": files}, true, 0},
+		"behind":    {map[string]any{"status": "behind", "merge_base_commit": map[string]any{"sha": "bbb"}, "files": files}, true, 0},
+		"no status": {map[string]any{"files": files}, true, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, _ := serve(t, jsonReply(tc.reply))
+			got, err := c.CompareFiles(ctx, "acme", "widgets", "aaa", "bbb")
+			if tc.wantErr {
+				if !errors.Is(err, ErrNotAncestor) || got != nil {
+					t.Fatalf("got=%+v err=%v, want ErrNotAncestor", got, err)
+				}
+				return
+			}
+			if err != nil || len(got) != tc.wantLen {
+				t.Fatalf("len=%d err=%v", len(got), err)
+			}
+		})
+	}
 }
 
 func nFiles(n int) []map[string]any {
@@ -1179,11 +1210,11 @@ func TestPullFilesAtTheCapIsPartial(t *testing.T) {
 
 // The compare API lists at most 300 files.
 func TestCompareFilesAtTheCapIsPartial(t *testing.T) {
-	c, _ := serve(t, jsonReply(map[string]any{"files": nFiles(300)}))
+	c, _ := serve(t, jsonReply(map[string]any{"status": "ahead", "files": nFiles(300)}))
 	if _, err := c.CompareFiles(ctx, "acme", "widgets", "aaa", "bbb"); !errors.Is(err, ErrPartialDiff) {
 		t.Fatalf("err = %v, want ErrPartialDiff", err)
 	}
-	c, _ = serve(t, jsonReply(map[string]any{"files": nFiles(299)}))
+	c, _ = serve(t, jsonReply(map[string]any{"status": "ahead", "files": nFiles(299)}))
 	got, err := c.CompareFiles(ctx, "acme", "widgets", "aaa", "bbb")
 	if err != nil || len(got) != 299 {
 		t.Fatalf("len=%d err=%v", len(got), err)
@@ -1196,7 +1227,7 @@ func TestCompareFilesReadsOnlyTheFirstPage(t *testing.T) {
 	c, rec := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Link", `<`+srvURL+`/repositories/99/compare/aaa...bbb?per_page=100&page=2>; rel="next"`)
-		_, _ = io.WriteString(w, `{"files":[{"filename":"a.go","status":"modified"}],"commits":[]}`)
+		_, _ = io.WriteString(w, `{"status":"ahead","files":[{"filename":"a.go","status":"modified"}],"commits":[]}`)
 	})
 	srvURL = c.base
 	got, err := c.CompareFiles(ctx, "acme", "widgets", "aaa", "bbb")
