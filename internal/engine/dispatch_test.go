@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -826,5 +827,286 @@ func TestDispatchUsesEffectiveTimeoutTurnsAndMemory(t *testing.T) {
 				t.Errorf("config memory limit changed to %s", got.String())
 			}
 		})
+	}
+}
+
+// reviewedFiles are the files the published reviews of the push tests reviewed.
+var reviewedFiles = []string{"a.go", "b.go", "c.go"}
+
+// publishedReview dispatches a push run of head on merge request 3 and
+// publishes it with a completed result of the security skill that reviewed
+// reviewedFiles, made by pergent version. Dispatching records the skill's
+// hash, as every review does. edit changes the result before it is stored.
+func publishedReview(t *testing.T, env *testEnv, head, version string, edit func(res map[string]any)) string {
+	t.Helper()
+	id := env.Enqueue(3, head)
+	env.GitLab.SetMR(openMR(3, head))
+	env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+	dispatch(t, env)
+	if env.Job(id) == nil {
+		t.Fatalf("the last review was not dispatched; run = %+v\n%s", env.Run(id), env.Logs())
+	}
+	if env.Run(id).SkillHashes["security"] == "" {
+		t.Fatalf("no hash of the security skill was recorded: %v", env.Run(id).SkillHashes)
+	}
+	res := map[string]any{
+		"schema_version": 1, "status": "completed", "pergent_version": version, "base": sha('b'), "head": head,
+		"skills": []any{map[string]any{
+			"name": "security", "verdict": "no_blocking_issues", "findings": []any{},
+			"files": map[string]any{"reviewed": reviewedFiles, "skipped": []any{}, "not_reviewed": []any{}},
+		}},
+		"comment": map[string]any{"markdown": testMarkdown, "findings_block": "<!-- pergent:findings [] -->"},
+	}
+	if edit != nil {
+		edit(res)
+	}
+	body, err := json.Marshal(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := string(env.Secret(id).Data["result-token"])
+	if out, err := env.Store.StoreResult(env.ctx, id, token, body, env.Now()); err != nil || out != store.ResultStored {
+		t.Fatalf("StoreResult = %v, %v", out, err)
+	}
+	if err := env.Store.MarkPublished(env.ctx, id, store.RunDecision{}); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func mergeBaseRoute() string { return projectPath() + "/repository/merge_base" }
+
+// serveChangedSince makes every comparison of two commits succeed: the first
+// is an ancestor of the second, and changed are the files between them.
+func serveChangedSince(env *testEnv, changed ...string) {
+	env.GitLab.Handle(http.MethodGet, mergeBaseRoute(), func(w http.ResponseWriter, r *http.Request) {
+		refs := r.URL.Query()["refs[]"]
+		if len(refs) != 2 {
+			http.Error(w, `{"message":"two refs"}`, http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"id": refs[0]})
+	})
+	var files []fileDiff
+	for _, p := range changed {
+		files = append(files, fileDiff{OldPath: p, NewPath: p, Diff: "@@ -1 +1 @@\n-a\n+b\n"})
+	}
+	env.GitLab.ServeCompare(files...)
+}
+
+// fullReviews returns the reasons the log gives for full reviews since mark.
+func fullReviews(env *testEnv, mark int) []string {
+	var out []string
+	for _, line := range strings.Split(env.Logs()[mark:], "\n") {
+		if !strings.Contains(line, "msg=\"full review\"") {
+			continue
+		}
+		_, reason, _ := strings.Cut(line, " reason=")
+		out = append(out, reason)
+	}
+	return out
+}
+
+// assertFull checks the Job of run id was not given carried files, the run is
+// not incremental and has no base run.
+func assertFull(t *testing.T, env *testEnv, id string) {
+	t.Helper()
+	job := env.Job(id)
+	if job == nil {
+		t.Fatalf("no job; run = %+v\n%s", env.Run(id), env.Logs())
+	}
+	for _, a := range job.Spec.Template.Spec.Containers[0].Args {
+		if strings.HasPrefix(a, "--carried") {
+			t.Errorf("a full review got %q", a)
+		}
+	}
+	if _, ok := env.ConfigMap(id).Data["carried.json"]; ok {
+		t.Errorf("a full review got carried.json")
+	}
+	if r := env.Run(id); r.Incremental || r.BaseRunID != nil {
+		t.Errorf("run incremental = %v, base = %v; want a full review", r.Incremental, r.BaseRunID)
+	}
+}
+
+// A push after a published review of the change reviews only what changed
+// since, or all of it, and says why when it does.
+func TestPushDispatch(t *testing.T) {
+	headA, headB := sha('1'), sha('2')
+	statusOK := func(env *testEnv, head string) {
+		env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+	}
+
+	t.Run("incremental", func(t *testing.T) {
+		env := newTestEnv(t)
+		last := publishedReview(t, env, headA, "0.5.0", nil)
+		id := env.Enqueue(3, headB)
+		env.GitLab.SetMR(openMR(3, headB))
+		statusOK(env, headB)
+		serveChangedSince(env, "b.go", "d.go")
+		mark := len(env.Logs())
+
+		dispatch(t, env)
+
+		job := env.Job(id)
+		if job == nil {
+			t.Fatalf("no job; run = %+v\n%s", env.Run(id), env.Logs())
+		}
+		if !hasArg(job.Spec.Template.Spec.Containers[0].Args, "--carried=/in/carried.json") {
+			t.Errorf("job args %v lack --carried", job.Spec.Template.Spec.Containers[0].Args)
+		}
+		if got, want := env.ConfigMap(id).Data["carried.json"], `{"security":["a.go","c.go"]}`; got != want {
+			t.Errorf("carried.json = %s, want %s", got, want)
+		}
+		if r := env.Run(id); !r.Incremental || r.BaseRunID == nil || *r.BaseRunID != last {
+			t.Errorf("run incremental = %v, base = %v; want an incremental review on %s", r.Incremental, r.BaseRunID, last)
+		}
+		if got := fullReviews(env, mark); len(got) != 0 {
+			t.Errorf("an incremental review logged a full review: %v", got)
+		}
+		// The compared commits are the last review's head and this one's.
+		reqs := env.GitLab.Requests(http.MethodGet, mergeBaseRoute())
+		if len(reqs) != 1 || !slices.Equal(reqs[0].Query["refs[]"], []string{headA, headB}) {
+			t.Errorf("merge base requests = %+v", reqs)
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		// reason is what the log says, or "" when the platform's own error is.
+		reason string
+		// version is the pergent version of the last review.
+		version string
+		// noLast leaves the change without a published review.
+		noLast bool
+		// prepare runs before the last review, change after it.
+		prepare func(env *testEnv)
+		edit    func(res map[string]any)
+		change  func(env *testEnv)
+		target  string
+		changed []string
+	}{
+		{name: "setting off", reason: "setting off", change: func(env *testEnv) {
+			off := false
+			env.Engine.Config.Repositories[0].IncrementalReviews = &off
+		}},
+		{name: "no earlier review", reason: "no earlier review", noLast: true},
+		{name: "target branch changed", reason: "target branch changed", target: "develop"},
+		{name: "the platform can't compare", change: func(env *testEnv) {
+			env.GitLab.Reply(http.MethodGet, mergeBaseRoute(), http.StatusBadRequest, `{"message":"bad"}`)
+		}},
+		{name: "older pergent", reason: "older pergent", version: "0.4.0"},
+		{name: "partial last review", reason: "the last review is partial", edit: func(res map[string]any) {
+			res["merge_note"] = "the earlier results could not be kept"
+		}},
+		{name: "nothing to carry", reason: "nothing to carry", changed: reviewedFiles},
+		{name: "skill changed since the last review", reason: "nothing to carry", change: func(env *testEnv) {
+			if _, err := env.Store.UpdateLibrarySkill(env.ctx, "security", "---\nname: security\n---\nLook again.\n", "test", 1, env.Now()); err != nil {
+				env.t.Fatal(err)
+			}
+		}},
+		{name: "inputs too large", reason: "inputs too large", prepare: func(env *testEnv) {
+			// The skill alone fits; the previous result and the carried
+			// files on top of it do not.
+			const head = "---\nname: security\n---\n"
+			big := head + strings.Repeat("x", inputs.ConfigMapLimit-len(head)-5)
+			if _, err := env.Store.UpdateLibrarySkill(env.ctx, "security", big, "test", 1, env.Now()); err != nil {
+				env.t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnv(t)
+			if tc.prepare != nil {
+				tc.prepare(env)
+			}
+			if !tc.noLast {
+				version := tc.version
+				if version == "" {
+					version = "0.5.0"
+				}
+				publishedReview(t, env, headA, version, tc.edit)
+			}
+			target := "main"
+			if tc.target != "" {
+				target = tc.target
+			}
+			id, _, err := env.Store.EnqueueRun(env.ctx, env.MRKey(3), testProjectPath, headB, target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mr := openMR(3, headB)
+			mr.TargetBranch = target
+			env.GitLab.SetMR(mr)
+			statusOK(env, headB)
+			changed := tc.changed
+			if changed == nil {
+				changed = []string{"b.go"}
+			}
+			serveChangedSince(env, changed...)
+			if tc.change != nil {
+				tc.change(env)
+			}
+			mark := len(env.Logs())
+
+			dispatch(t, env)
+
+			assertFull(t, env, id)
+			got := fullReviews(env, mark)
+			if len(got) != 1 {
+				t.Fatalf("logged %d full reviews %v, want 1\n%s", len(got), got, env.Logs()[mark:])
+			}
+			if tc.reason != "" && got[0] != fmt.Sprintf("%q", tc.reason) {
+				t.Errorf("full review reason = %s, want %q", got[0], tc.reason)
+			}
+		})
+	}
+
+	// A re-run on request is a full review whatever the last review, and is
+	// not a push, so it logs no reason.
+	t.Run("rerun", func(t *testing.T) {
+		env := newTestEnv(t)
+		publishedReview(t, env, headA, "0.5.0", nil)
+		id, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(3), testProjectPath, headB, "main", store.TriggerRerun, nil, nil, false)
+		if err != nil || !created {
+			t.Fatalf("EnqueueRerun = %v, %v", created, err)
+		}
+		env.GitLab.SetMR(openMR(3, headB))
+		statusOK(env, headB)
+		serveChangedSince(env, "b.go")
+		mark := len(env.Logs())
+
+		dispatch(t, env)
+
+		assertFull(t, env, id)
+		if got := fullReviews(env, mark); len(got) != 0 {
+			t.Errorf("a re-run logged a full review: %v", got)
+		}
+		if reqs := env.GitLab.Requests(http.MethodGet, mergeBaseRoute()); len(reqs) != 0 {
+			t.Errorf("a re-run compared commits: %+v", reqs)
+		}
+	})
+}
+
+// The last review is the newest published one, not a run that was superseded
+// after it: the comparison goes from A even though B was queued in between.
+func TestIncrementalComparesFromLastPublished(t *testing.T) {
+	env := newTestEnv(t)
+	headA, headB, headC := sha('1'), sha('2'), sha('3')
+	a := publishedReview(t, env, headA, "0.5.0", nil)
+	env.Enqueue(3, headB)
+	c := env.Enqueue(3, headC) // supersedes the run of headB
+	env.GitLab.SetMR(openMR(3, headC))
+	env.GitLab.Reply(http.MethodPost, statusPath(headC), http.StatusCreated, `{}`)
+	serveChangedSince(env, "b.go")
+
+	dispatch(t, env)
+
+	reqs := env.GitLab.Requests(http.MethodGet, mergeBaseRoute())
+	if len(reqs) != 1 || !slices.Equal(reqs[0].Query["refs[]"], []string{headA, headC}) {
+		t.Fatalf("merge base requests = %+v, want one from %s to %s", reqs, headA, headC)
+	}
+	if r := env.Run(c); !r.Incremental || r.BaseRunID == nil || *r.BaseRunID != a {
+		t.Errorf("run incremental = %v, base = %v; want an incremental review on %s", r.Incremental, r.BaseRunID, a)
 	}
 }

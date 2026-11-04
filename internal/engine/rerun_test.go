@@ -137,6 +137,44 @@ func TestRerunFailedKeepsBaseVersions(t *testing.T) {
 	}
 }
 
+// A re-run of the failed skills keeps the base run it was queued with: the
+// decision about incremental reviews is for pushes, and must not clear it.
+func TestRerunFailedKeepsBaseRunID(t *testing.T) {
+	env, head, base := twoSkills(t, map[string]int{"a": 1, "b": 1})
+
+	r := dispatchRerun(t, env, head, base)
+
+	if r.BaseRunID == nil || *r.BaseRunID != base || r.Incremental {
+		t.Errorf("base run = %v, incremental = %v; want %s kept and a full review", r.BaseRunID, r.Incremental, base)
+	}
+	if strings.Contains(env.Logs(), "full review") {
+		t.Errorf("a re-run logged a full review:\n%s", env.Logs())
+	}
+}
+
+// The merged review records the hash of every skill: a kept skill keeps the
+// earlier run's, a re-run skill gets the new one.
+func TestRerunFailedKeepsBaseHashes(t *testing.T) {
+	env, head, base := twoSkills(t, nil)
+	if err := env.Store.SetRunInputs(env.ctx, base, "m", 0,
+		map[string]string{"a": "library", "b": "library"}, map[string]int{"a": 1, "b": 1},
+		map[string]string{"a": "hash-of-old-a", "b": "hash-of-b"}); err != nil {
+		t.Fatal(err)
+	}
+
+	r := dispatchRerun(t, env, head, base)
+
+	if r.SkillHashes["b"] != "hash-of-b" {
+		t.Errorf("hash of the kept skill b = %q, want the earlier run's", r.SkillHashes["b"])
+	}
+	if h := r.SkillHashes["a"]; len(h) != 64 {
+		t.Errorf("hash of the re-run skill a = %q, want a fresh SHA-256", h)
+	}
+	if len(r.SkillHashes) != 2 {
+		t.Errorf("hashes = %v, want a and b", r.SkillHashes)
+	}
+}
+
 // A skill that is kept was edited since its result: the results would mix two
 // texts of the skill, so everything is reviewed again.
 func TestRerunFailedAfterEditIsFull(t *testing.T) {

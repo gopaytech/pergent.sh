@@ -2,6 +2,7 @@ package kube
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -360,7 +361,7 @@ func TestArgsOptionalInputs(t *testing.T) {
 	p.Inputs = &inputs.Inputs{Skills: map[string][]byte{"a": []byte("x")}}
 	main := containerByName(t, BuildJob(p).Spec.Template.Spec.Containers, "pergent")
 	for _, a := range main.Args {
-		if strings.HasPrefix(a, "--instructions") || strings.HasPrefix(a, "--previous") {
+		if strings.HasPrefix(a, "--instructions") || strings.HasPrefix(a, "--previous") || strings.HasPrefix(a, "--carried") {
 			t.Errorf("unexpected arg %q", a)
 		}
 	}
@@ -371,11 +372,42 @@ func TestArgsOptionalInputs(t *testing.T) {
 	if _, ok := cm.Data["previous.json"]; ok {
 		t.Errorf("previous.json present")
 	}
+	if _, ok := cm.Data["carried.json"]; ok {
+		t.Errorf("carried.json present")
+	}
 	vol := BuildJob(p).Spec.Template.Spec.Volumes
 	for _, v := range vol {
 		if v.ConfigMap != nil && len(v.ConfigMap.Items) != 1 {
 			t.Errorf("items = %+v", v.ConfigMap.Items)
 		}
+	}
+}
+
+// The carried files go to the Job like the previous result: an argument, a
+// ConfigMap key and an item.
+func TestCarriedInputs(t *testing.T) {
+	p := testParams()
+	p.Inputs.Carried = []byte(`{"security":["a.go"]}`)
+	main := containerByName(t, BuildJob(p).Spec.Template.Spec.Containers, "pergent")
+	if !slices.Contains(main.Args, "--carried=/in/carried.json") {
+		t.Errorf("args = %q", main.Args)
+	}
+	if got := BuildConfigMap(p, nil).Data["carried.json"]; got != `{"security":["a.go"]}` {
+		t.Errorf("carried.json = %q", got)
+	}
+	var found bool
+	for _, v := range BuildJob(p).Spec.Template.Spec.Volumes {
+		if v.ConfigMap == nil {
+			continue
+		}
+		for _, it := range v.ConfigMap.Items {
+			if it.Key == "carried.json" && it.Path == "carried.json" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no carried.json item in the inputs volume")
 	}
 }
 

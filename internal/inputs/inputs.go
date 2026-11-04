@@ -52,6 +52,9 @@ type Inputs struct {
 	// Paths maps each repository skill to the file it was read from, in the
 	// repository; library skills are not in it.
 	Paths map[string]string
+	// Carried is the JSON of the files an incremental review leaves out, per
+	// skill ({"<skill>": ["path", ...]}); nil for a full review.
+	Carried []byte
 }
 
 // LibraryEntry is one skill of the library as ResolveSkills receives it.
@@ -251,7 +254,7 @@ func LoadInstructions(ctx context.Context, src Source, projectID int64, ref stri
 
 // Size is the total number of bytes the inputs put into a ConfigMap.
 func (in *Inputs) Size() int {
-	n := len(in.Instructions) + len(in.Previous)
+	n := len(in.Instructions) + len(in.Previous) + len(in.Carried)
 	for _, c := range in.Skills {
 		n += len(c)
 	}
@@ -259,12 +262,14 @@ func (in *Inputs) Size() int {
 }
 
 // Fit makes the inputs fit limit bytes: over the limit, the previous result is
-// dropped first; if they are still over, it returns ErrTooLarge.
+// dropped first, together with the carried files (the review is then a full
+// one); if they are still over, it returns ErrTooLarge.
 func (in *Inputs) Fit(limit int) error {
 	if in.Size() <= limit {
 		return nil
 	}
 	in.Previous = nil
+	in.Carried = nil
 	if size := in.Size(); size > limit {
 		return fmt.Errorf("%w: skills and instructions are %d bytes, the limit is %d", ErrTooLarge, size, limit)
 	}

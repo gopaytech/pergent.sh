@@ -170,8 +170,9 @@ func TestSize(t *testing.T) {
 		Skills:       map[string][]byte{"a": []byte("123"), "b": []byte("45")},
 		Instructions: []byte("678"),
 		Previous:     []byte("90"),
+		Carried:      []byte("1234"),
 	}
-	if in.Size() != 10 {
+	if in.Size() != 14 {
 		t.Errorf("size = %d", in.Size())
 	}
 }
@@ -191,6 +192,23 @@ func TestFitDropsPreviousFirst(t *testing.T) {
 	in = &Inputs{Skills: map[string][]byte{"a": make([]byte, 40)}, Previous: make([]byte, 60)}
 	if err := in.Fit(100); err != nil || in.Previous == nil {
 		t.Errorf("fit within limit dropped previous: %v", err)
+	}
+}
+
+// The carried files go with the previous result, which makes the review a
+// full one.
+func TestFitDropsCarriedWithPrevious(t *testing.T) {
+	in := &Inputs{Skills: map[string][]byte{"a": make([]byte, 40)}, Previous: make([]byte, 40), Carried: make([]byte, 40)}
+	if err := in.Fit(100); err != nil {
+		t.Fatal(err)
+	}
+	if in.Previous != nil || in.Carried != nil {
+		t.Errorf("previous %d bytes, carried %d bytes kept", len(in.Previous), len(in.Carried))
+	}
+
+	in = &Inputs{Skills: map[string][]byte{"a": make([]byte, 40)}, Previous: make([]byte, 20), Carried: make([]byte, 20)}
+	if err := in.Fit(100); err != nil || in.Previous == nil || in.Carried == nil {
+		t.Errorf("fit within limit dropped inputs: %v", err)
 	}
 }
 
