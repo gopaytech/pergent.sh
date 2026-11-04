@@ -35,18 +35,19 @@ func (f *Forge) CompareDiff(ctx context.Context, repoID int64, from, to string) 
 	return files, mapErr(err)
 }
 
-// isBot reports whether login is the review App's bot. REST shows it as
-// slug[bot]; GraphQL may leave the [bot] off an App's login. GitHub logins are
-// case-insensitive.
-func (f *Forge) isBot(login string) bool {
+// isBot reports whether an author is the review App's bot: a Bot account
+// (a person can register a User named like the App's slug) whose login is the
+// slug. REST shows it as slug[bot]; GraphQL may leave the [bot] off an App's
+// login. GitHub logins are case-insensitive.
+func (f *Forge) isBot(login, typename string) bool {
 	login = strings.TrimSuffix(strings.ToLower(login), "[bot]")
-	return login != "" && login == strings.ToLower(f.slug)
+	return typename == "Bot" && login != "" && login == strings.ToLower(f.slug)
 }
 
 // ours reports whether t is a thread of the review App's with a finding
 // marker: anyone can paste a marker, so the first comment must be the App's.
 func (f *Forge) ours(t github.ReviewThread) (fingerprint string, ok bool) {
-	if !f.isBot(t.Author) {
+	if !f.isBot(t.Author, t.AuthorType) {
 		return "", false
 	}
 	return render.InlineFingerprint(t.Body)
@@ -142,12 +143,14 @@ func (f *Forge) PostThreads(ctx context.Context, repoID int64, ch forge.Change, 
 	case status(err) == http.StatusUnprocessableEntity:
 		posted = nil
 		for _, i := range post {
+			// A thread that is not attempted has its error in errs.
+			if ctx.Err() != nil {
+				errs[i] = ctx.Err()
+				continue
+			}
 			_, perr := c.CreateReviewComments(ctx, r.Owner, r.Name, ch.Number, ch.HeadSHA, body, []github.ReviewComment{comment(i)})
 			if perr != nil {
 				errs[i] = mapErr(perr)
-				if ctx.Err() != nil {
-					break
-				}
 				continue
 			}
 			posted = append(posted, i)

@@ -1,11 +1,14 @@
 package githubforge
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gopaytech/pergent/render"
@@ -26,10 +29,15 @@ func gqlThreads(nodes ...map[string]any) map[string]any {
 		}}}}}
 }
 
+// gqlThread is a thread whose first comment is by a Bot account.
 func gqlThread(id string, resolved, outdated bool, path string, line, startLine any, comment int64, body, author string) map[string]any {
+	return gqlThreadBy(id, resolved, outdated, path, line, startLine, comment, body, author, "Bot")
+}
+
+func gqlThreadBy(id string, resolved, outdated bool, path string, line, startLine any, comment int64, body, author, typename string) map[string]any {
 	return map[string]any{
 		"id": id, "isResolved": resolved, "isOutdated": outdated, "path": path, "line": line, "startLine": startLine,
-		"comments": map[string]any{"nodes": []map[string]any{{"databaseId": comment, "body": body, "author": map[string]any{"login": author}}}},
+		"comments": map[string]any{"nodes": []map[string]any{{"databaseId": comment, "body": body, "author": map[string]any{"__typename": typename, "login": author}}}},
 	}
 }
 
@@ -114,6 +122,41 @@ func TestPostThreads422FallsBackPerComment(t *testing.T) {
 	}
 }
 
+// A thread that was not attempted has its error in errs, so a cancelled
+// context never leaves a nil error beside a thread that was not posted.
+func TestPostThreadsCancelledMidFallback(t *testing.T) {
+	f := newFake(t)
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var n atomic.Int32
+	f.handle("POST", prPath+"/reviews", func(w http.ResponseWriter, r *http.Request) {
+		// 1: the whole review, 2: the first thread on its own.
+		if n.Add(1) == 2 {
+			cancel()
+		}
+		reply(http.StatusUnprocessableEntity, map[string]string{"message": "Line could not be resolved"})(w, r)
+	})
+	_, errs, err := f.forge(t).PostThreads(cctx, repoID, forge.Change{Number: 3, HeadSHA: sha('a')}, []forge.NewThread{
+		{Path: "a.go", Line: 1, Body: findingBody("a", "fp-a")},
+		{Path: "b.go", Line: 1, Body: findingBody("b", "fp-b")},
+		{Path: "c.go", Line: 1, Body: findingBody("c", "fp-c")},
+	})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(errs) != 3 || errs[0] == nil {
+		t.Fatalf("errs = %v", errs)
+	}
+	for i := 1; i < 3; i++ {
+		if !errors.Is(errs[i], context.Canceled) {
+			t.Errorf("errs[%d] = %v, want context.Canceled", i, errs[i])
+		}
+	}
+	if got := f.requests("POST", prPath+"/reviews"); len(got) != 2 {
+		t.Errorf("%d review requests, want 2 (all, then the first)", len(got))
+	}
+}
+
 func TestPostThreadsOtherErrorFailsTheCall(t *testing.T) {
 	f := newFake(t)
 	f.reply("POST", prPath+"/reviews", 403, map[string]string{"message": "Resource not accessible by integration"})
@@ -188,6 +231,10 @@ func TestThreadsOnlyBotWithMarker(t *testing.T) {
 		gqlThread("T-forged", false, false, "c.go", 5, nil, 3, findingBody("pasted", "fp-3"), "mallory"),
 		gqlThread("T-nomarker", false, false, "d.go", 5, nil, 4, "a plain review comment", reviewSlug+"[bot]"),
 		gqlThread("T-other-bot", false, false, "e.go", 5, nil, 5, findingBody("other", "fp-5"), approveSlug+"[bot]"),
+		// A person can register an account named like the App's slug.
+		gqlThreadBy("T-user", false, false, "f.go", 5, nil, 6, findingBody("impostor", "fp-6"), reviewSlug, "User"),
+		gqlThreadBy("T-user-bot", false, false, "g.go", 5, nil, 7, findingBody("impostor", "fp-7"), reviewSlug+"[bot]", "User"),
+		gqlThreadBy("T-no-type", false, false, "h.go", 5, nil, 8, findingBody("impostor", "fp-8"), reviewSlug+"[bot]", ""),
 	))
 	got, err := f.forge(t).Threads(ctx, repoID, 3)
 	if err != nil {

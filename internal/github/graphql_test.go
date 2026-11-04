@@ -51,7 +51,7 @@ func TestReviewThreadsPaginates(t *testing.T) {
 	c, rec := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		if calls.Add(1) == 1 {
 			_, _ = io.WriteString(w, threadsPage("c1", `{"id":"T1","isResolved":false,"isOutdated":false,"path":"a.go","line":12,"startLine":10,
-				"comments":{"nodes":[{"databaseId":501,"body":"first\n<!-- pergent:finding f1 -->","author":{"login":"pergent-review[bot]"}}]}}`))
+				"comments":{"nodes":[{"databaseId":501,"body":"first\n<!-- pergent:finding f1 -->","author":{"__typename":"Bot","login":"pergent-review[bot]"}}]}}`))
 			return
 		}
 		_, _ = io.WriteString(w, threadsPage("", `{"id":"T2","isResolved":true,"isOutdated":true,"path":"b.go","line":null,"startLine":null,
@@ -62,7 +62,7 @@ func TestReviewThreadsPaginates(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []ReviewThread{
-		{ID: "T1", Path: "a.go", Line: 12, StartLine: 10, CommentID: 501, Body: "first\n<!-- pergent:finding f1 -->", Author: "pergent-review[bot]"},
+		{ID: "T1", Path: "a.go", Line: 12, StartLine: 10, CommentID: 501, Body: "first\n<!-- pergent:finding f1 -->", Author: "pergent-review[bot]", AuthorType: "Bot"},
 		{ID: "T2", Resolved: true, Outdated: true, Path: "b.go", CommentID: 502, Body: "second"},
 		{ID: "T3", Path: "c.go", Line: 3},
 	}
@@ -78,7 +78,7 @@ func TestReviewThreadsPaginates(t *testing.T) {
 		t.Error("the query was sent without the token")
 	}
 	r0, r1 := decodeGQL(t, all[0].Body), decodeGQL(t, all[1].Body)
-	for _, f := range []string{"reviewThreads(first: 100, after: $cursor)", "pageInfo", "hasNextPage", "endCursor", "isResolved", "isOutdated", "path", "startLine", "comments(first: 1)", "databaseId", "author { login }"} {
+	for _, f := range []string{"reviewThreads(first: 100, after: $cursor)", "pageInfo", "hasNextPage", "endCursor", "isResolved", "isOutdated", "path", "startLine", "comments(first: 1)", "databaseId", "author { __typename login }"} {
 		if !strings.Contains(r0.Query, f) {
 			t.Errorf("query lacks %q:\n%s", f, r0.Query)
 		}

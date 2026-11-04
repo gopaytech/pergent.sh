@@ -91,7 +91,9 @@ type ReviewComment struct {
 // GraphQL shows it. Line and StartLine are 0 when GitHub gives none (an
 // outdated thread); StartLine is also 0 for a single-line thread. Author is
 // the first comment's author login ("" when the account is gone); GraphQL
-// may leave "[bot]" off an App's login.
+// may leave "[bot]" off an App's login. AuthorType is that author's GraphQL
+// type ("Bot" for an App, "User" for a person): a person can register an
+// account named like an App, so a login alone does not identify one.
 type ReviewThread struct {
 	ID              string
 	Resolved        bool
@@ -100,6 +102,7 @@ type ReviewThread struct {
 	Line, StartLine int
 	CommentID       int64
 	Body, Author    string
+	AuthorType      string
 }
 
 // TreeEntry is the platform-neutral forge.TreeEntry. Tree maps GitHub's

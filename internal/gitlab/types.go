@@ -1,8 +1,10 @@
 package gitlab
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 	"unicode/utf8"
 
@@ -42,9 +44,32 @@ type MergeRequest struct {
 	WebURL         string   `json:"web_url"`
 	Author         User     `json:"author"`
 	DiffRefs       DiffRefs `json:"diff_refs"`
-	// ChangesCount is how many files the merge request changes: a string,
-	// "" while GitLab hasn't counted and "1000+" when it stops counting.
-	ChangesCount string `json:"changes_count"`
+	// ChangesCount is how many files the merge request changes: "" while
+	// GitLab hasn't counted and "1000+" when it stops counting.
+	ChangesCount ChangesCount `json:"changes_count"`
+}
+
+// ChangesCount is a merge request's changes_count as text. GitLab sends a
+// string ("12", "1000+"), but a number (12) or null must decode too: a
+// decode failure would break every GetMergeRequest caller. A number becomes
+// its decimal text, null and any other shape become "" (not counted), which
+// MergeRequestDiffs treats as a count that doesn't match.
+type ChangesCount string
+
+func (n *ChangesCount) UnmarshalJSON(data []byte) error {
+	var v any
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	switch v := v.(type) {
+	case string:
+		*n = ChangesCount(v)
+	case float64:
+		*n = ChangesCount(strconv.FormatFloat(v, 'f', -1, 64))
+	default:
+		*n = ""
+	}
+	return nil
 }
 
 // Project holds the fields pergent.sh reads. OnlyAllowMergeIfPipelineSucceeds

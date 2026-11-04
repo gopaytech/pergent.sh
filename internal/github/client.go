@@ -193,6 +193,17 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 // doMax is do with a reply limit: a reply of more than limit bytes is
 // ErrTooLarge, and no more than limit+1 bytes of it are read.
 func (c *Client) doMax(ctx context.Context, method, path string, query url.Values, body any, accept string, limit int) (*response, error) {
+	return c.doTry(ctx, method, path, query, body, accept, limit, true)
+}
+
+// doOnce is do for a request that must not be sent twice (a POST that
+// creates something): a 429, a 5xx or a connection error is returned, not
+// retried, since the first attempt may have been applied.
+func (c *Client) doOnce(ctx context.Context, method, path string, query url.Values, body any, accept string) (*response, error) {
+	return c.doTry(ctx, method, path, query, body, accept, maxResponse, false)
+}
+
+func (c *Client) doTry(ctx context.Context, method, path string, query url.Values, body any, accept string, limit int, again bool) (*response, error) {
 	var payload []byte
 	if body != nil {
 		var err error
@@ -207,7 +218,7 @@ func (c *Client) doMax(ctx context.Context, method, path string, query url.Value
 	if len(query) > 0 {
 		u.RawQuery = query.Encode()
 	}
-	return c.send(ctx, method, u.String(), payload, accept, limit)
+	return c.try(ctx, method, u.String(), payload, accept, limit, again)
 }
 
 // retry says whether a failed attempt may be retried and how long to wait
@@ -220,13 +231,19 @@ type retry struct {
 // send sends a request, retrying 429, 5xx, a rate-limited 403 and connection
 // errors up to 3 times. A non-2xx final reply is *APIError.
 func (c *Client) send(ctx context.Context, method, rawURL string, payload []byte, accept string, limit int) (*response, error) {
+	return c.try(ctx, method, rawURL, payload, accept, limit, true)
+}
+
+// try is send with retrying optional: without it the first reply or error is
+// final.
+func (c *Client) try(ctx context.Context, method, rawURL string, payload []byte, accept string, limit int, again bool) (*response, error) {
 	delay := time.Second
 	for attempt := 0; ; attempt++ {
 		resp, r, err := c.once(ctx, method, rawURL, payload, accept, limit)
 		if err == nil {
 			return resp, nil
 		}
-		if ctx.Err() != nil || attempt >= maxRetries || !r.ok {
+		if !again || ctx.Err() != nil || attempt >= maxRetries || !r.ok {
 			return nil, err
 		}
 		wait := delay
@@ -1218,9 +1235,21 @@ func (c *Client) CreateReviewComments(ctx context.Context, owner, repo string, n
 			cs[i].Line, cs[i].StartLine, cs[i].StartSide = rc.EndLine, rc.Line, "RIGHT"
 		}
 	}
-	return c.postID(ctx, http.MethodPost, p, map[string]any{
+	// Sent once: a retried POST whose first attempt landed would duplicate
+	// every thread.
+	resp, err := c.doOnce(ctx, http.MethodPost, p, nil, map[string]any{
 		"commit_id": commitID, "event": "COMMENT", "body": body, "comments": cs,
-	})
+	}, acceptJSON)
+	if err != nil {
+		return 0, err
+	}
+	var out struct {
+		ID int64 `json:"id"`
+	}
+	if err := decode(resp.body, &out); err != nil {
+		return 0, err
+	}
+	return out.ID, nil
 }
 
 // ReplyReviewComment replies to a review comment (POST

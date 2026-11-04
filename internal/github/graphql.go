@@ -69,7 +69,7 @@ const reviewThreadsQuery = `query($owner: String!, $name: String!, $number: Int!
           path
           line
           startLine
-          comments(first: 1) { nodes { databaseId body author { login } } }
+          comments(first: 1) { nodes { databaseId body author { __typename login } } }
         }
       }
     }
@@ -109,7 +109,8 @@ func (c *Client) ReviewThreads(ctx context.Context, owner, repo string, number i
 									DatabaseID int64  `json:"databaseId"`
 									Body       string `json:"body"`
 									Author     *struct {
-										Login string `json:"login"`
+										Typename string `json:"__typename"`
+										Login    string `json:"login"`
 									} `json:"author"`
 								} `json:"nodes"`
 							} `json:"comments"`
@@ -138,7 +139,7 @@ func (c *Client) ReviewThreads(ctx context.Context, owner, repo string, number i
 				first := n.Comments.Nodes[0]
 				t.CommentID, t.Body = first.DatabaseID, first.Body
 				if first.Author != nil {
-					t.Author = first.Author.Login
+					t.Author, t.AuthorType = first.Author.Login, first.Author.Typename
 				}
 			}
 			out = append(out, t)

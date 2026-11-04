@@ -1235,6 +1235,36 @@ func TestCreateReviewCommentsError(t *testing.T) {
 	}
 }
 
+// A retried POST whose first attempt landed would duplicate every thread, so
+// the review is sent once whatever the reply.
+func TestCreateReviewCommentsSentOnce(t *testing.T) {
+	for _, status := range []int{502, 503, 429} {
+		c, rec := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, "x", status) })
+		_, err := c.CreateReviewComments(ctx, "acme", "widgets", 3, "abc", "b", []ReviewComment{{Path: "a.go", Line: 1, Body: "x"}})
+		var ae *APIError
+		if !errors.As(err, &ae) || ae.Status != status {
+			t.Fatalf("status %d: err = %v", status, err)
+		}
+		if n := len(rec.all()); n != 1 {
+			t.Fatalf("status %d: requests = %d, want 1", status, n)
+		}
+	}
+}
+
+func TestCreateReviewCommentsConnectionErrorSentOnce(t *testing.T) {
+	srv, rec := server(t, func(w http.ResponseWriter, r *http.Request) {
+		// Drop the connection without a reply.
+		conn, _, _ := w.(http.Hijacker).Hijack()
+		_ = conn.Close()
+	})
+	c := NewTokenClient(srv.URL, testToken, srv.Client())
+	c.sleep = func(context.Context, time.Duration) error { return nil }
+	_, err := c.CreateReviewComments(ctx, "acme", "widgets", 3, "abc", "b", []ReviewComment{{Path: "a.go", Line: 1, Body: "x"}})
+	if n := len(rec.all()); err == nil || n != 1 {
+		t.Fatalf("err = %v, requests = %d, want an error after 1 request", err, n)
+	}
+}
+
 func TestReplyReviewComment(t *testing.T) {
 	c, rec := serve(t, jsonReply(map[string]any{"id": 5}))
 	if err := c.ReplyReviewComment(ctx, "acme", "widgets", 3, 123, "thanks"); err != nil {

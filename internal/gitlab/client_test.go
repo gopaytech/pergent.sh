@@ -1136,7 +1136,7 @@ func TestAwardNoteEmojiAlreadyAwarded(t *testing.T) {
 
 // diffsServer answers /diffs with files and the merge request itself with
 // changes_count.
-func diffsServer(t *testing.T, files []map[string]any, changesCount string) (*Client, *[]recorded) {
+func diffsServer(t *testing.T, files []map[string]any, changesCount any) (*Client, *[]recorded) {
 	t.Helper()
 	return serve(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1194,16 +1194,74 @@ func TestMergeRequestDiffs(t *testing.T) {
 // GitLab stops listing files past its limits: the count says how many there are.
 func TestMergeRequestDiffsPartial(t *testing.T) {
 	one := []map[string]any{{"old_path": "a.go", "new_path": "a.go", "diff": "@@ -1 +1 @@\n-a\n+b\n"}}
-	for name, tc := range map[string]struct{ count string }{
+	for name, tc := range map[string]struct{ count any }{
 		"more files than listed":  {"2"},
 		"fewer files than listed": {"0"},
 		"stopped counting":        {"1000+"},
 		"not counted yet":         {""},
+		"null":                    {nil},
+		"a number, more":          {2},
+		"a number, fewer":         {0},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c, _ := diffsServer(t, one, tc.count)
 			if _, err := c.MergeRequestDiffs(context.Background(), 7, 3); !errors.Is(err, ErrPartialDiff) {
 				t.Fatalf("err = %v, want ErrPartialDiff", err)
+			}
+		})
+	}
+}
+
+// GitLab reports changes_count as a string, but a number or null must not
+// break every GetMergeRequest caller.
+func TestMergeRequestDiffsCountForms(t *testing.T) {
+	one := []map[string]any{{"old_path": "a.go", "new_path": "a.go", "diff": "@@ -1 +1 @@\n-a\n+b\n"}}
+	for name, count := range map[string]any{"string": "1", "number": 1} {
+		t.Run(name, func(t *testing.T) {
+			c, _ := diffsServer(t, one, count)
+			got, err := c.MergeRequestDiffs(context.Background(), 7, 3)
+			if err != nil || len(got) != 1 {
+				t.Fatalf("got=%+v err=%v", got, err)
+			}
+		})
+	}
+	t.Run("null with no files", func(t *testing.T) {
+		c, _ := diffsServer(t, nil, nil)
+		if got, err := c.MergeRequestDiffs(context.Background(), 7, 3); err != nil || len(got) != 0 {
+			t.Fatalf("got=%+v err=%v", got, err)
+		}
+	})
+}
+
+func TestGetMergeRequestChangesCount(t *testing.T) {
+	for name, tc := range map[string]struct {
+		json string
+		want ChangesCount
+	}{
+		"string":       {`"12"`, "12"},
+		"string plus":  {`"1000+"`, "1000+"},
+		"empty string": {`""`, ""},
+		"number":       {`12`, "12"},
+		"zero":         {`0`, "0"},
+		"null":         {`null`, ""},
+		"absent":       {``, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := `{"iid":3`
+			if tc.json != "" {
+				body += `,"changes_count":` + tc.json
+			}
+			body += `}`
+			c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, body)
+			})
+			mr, err := c.GetMergeRequest(context.Background(), 7, 3)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mr.ChangesCount != tc.want {
+				t.Fatalf("ChangesCount = %q, want %q", mr.ChangesCount, tc.want)
 			}
 		})
 	}
