@@ -233,6 +233,7 @@ func TestEndToEndCommands(t *testing.T) {
 		namedSkill(t, "security", "has_blocking_issues", "blocking", fp), namedSkill(t, "style", "no_blocking_issues", "", "")))
 	e.wantStatuses(t, headA, "running", "failed")
 	wantNoApproval(t, env, 1)
+	firstComment := e.lastComment(t)
 
 	// 2. A developer may not dismiss a blocking finding: 👎 and a reply.
 	c := e.say(t, dev, userDeveloper, "@pergent-review dismiss "+id+" not a real problem")
@@ -273,9 +274,10 @@ func TestEndToEndCommands(t *testing.T) {
 	}
 	publish(t, env)
 	body := e.lastComment(t)
+	wantLayout(t, body)
 	for _, want := range []string{
 		"Dismissed (1)", "finding of security", "`" + id + "`",
-		"dismissed by mo (gitlab main): the input is a constant", "✅ **No blocking issues** (1 dismissed)",
+		"dismissed by mo (gitlab main): the input is a constant", "### ✅ No blocking issues (1 dismissed)",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("comment after the dismissal lacks %q:\n%s", want, body)
@@ -299,8 +301,11 @@ func TestEndToEndCommands(t *testing.T) {
 	}
 	publish(t, env)
 	body = e.lastComment(t)
-	if strings.Contains(body, "Dismissed") || !strings.Contains(body, testMarkdown) {
-		t.Errorf("comment after the restore = %q, want the review as delivered", body)
+	if body != firstComment {
+		t.Errorf("comment after the restore = %q, want the first one, before the dismissal: %q", body, firstComment)
+	}
+	if strings.Contains(body, "Dismissed") || !strings.Contains(body, "### ❌ 1 blocking issue") || !strings.Contains(body, "finding of security") {
+		t.Errorf("comment after the restore does not show the blocking finding again:\n%s", body)
 	}
 	e.wantStatuses(t, headA, "running", "failed", "success", "failed")
 	if reqs := gl.Requests(http.MethodPost, unapprovePath(1)); len(reqs) != 1 || reqs[0].Token != testApproveToken {
@@ -349,7 +354,8 @@ func TestEndToEndCommands(t *testing.T) {
 	publish(t, env)
 	wantPublished(t, env, runC)
 	body = e.lastComment(t)
-	for _, want := range []string{"### security", "### style"} {
+	wantLayout(t, body)
+	for _, want := range []string{"| `security` |", "| `style` |", "`security.go`", "`style.go`"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("merged comment lacks %q:\n%s", want, body)
 		}

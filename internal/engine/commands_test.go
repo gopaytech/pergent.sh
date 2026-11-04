@@ -376,11 +376,12 @@ func TestDismissCommand(t *testing.T) {
 	publish(t, f.testEnv)
 
 	body := createdComment(t, f.testEnv, 1)
-	for _, want := range []string{"Dismissed (1)", "dismissed by mo (gitlab main): false positive, the id is an integer", "✅ **No blocking issues** (1 dismissed)"} {
+	for _, want := range []string{"Dismissed (1)", "dismissed by mo (gitlab main): false positive, the id is an integer", "### ✅ No blocking issues (1 dismissed)"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("comment lacks %q:\n%s", want, body)
 		}
 	}
+	wantLayout(t, body)
 	wantStatus(t, f.testEnv, f.head, gitlab.StatusSuccess, "No blocking issues")
 	if n := len(f.GitLab.Requests(http.MethodPost, approvePath(1))); n != 1 {
 		t.Errorf("approve called %d times, want 1", n)
