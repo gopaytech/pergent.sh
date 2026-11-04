@@ -124,6 +124,10 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 	if o.Dismissals, err = e.dismissals(ctx, run.MR); err != nil {
 		return err
 	}
+	// Findings on the diff are posted as threads before the comment is
+	// decided: the comment lists the others.
+	view := e.syncInline(ctx, plat, run, repo, ok, o, log)
+	o.InlineOn, o.Inline, o.FindingNotes = view.On, view.Inline, view.Notes
 	o.MaxComment, o.Redact = kube.CommentLimitGitLab, e.redact
 	if plat.isGitHub() {
 		o.MaxComment = kube.CommentLimitGitHub

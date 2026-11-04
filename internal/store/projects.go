@@ -28,11 +28,15 @@ type Project struct {
 	// (UpsertProject, InstallationID 0) is always stored with true: its
 	// approve bot is a user that can always approve.
 	ApproveAvailable bool
+	// InlineAvailable is whether the review App may post inline threads in
+	// the repository (it has Pull requests: Read and write). A GitLab
+	// project (UpsertProject, InstallationID 0) is always stored with true.
+	InlineAvailable bool
 }
 
 const projectColumns = `instance, project_id, path, http_url_to_repo, hook_id, deploy_token_id,
 	deploy_token_username, deploy_token_sealed, deploy_token_expires_at, clone_seconds,
-	installation_id, approve_available`
+	installation_id, approve_available, inline_available`
 
 func scanProject(row pgx.Row) (Project, error) {
 	var (
@@ -41,7 +45,7 @@ func scanProject(row pgx.Row) (Project, error) {
 	)
 	err := row.Scan(&p.Instance, &p.ProjectID, &p.Path, &p.HTTPURLToRepo, &p.HookID, &p.DeployTokenID,
 		&p.DeployTokenUsername, &p.DeployTokenSealed, &expires, &p.CloneSeconds,
-		&p.InstallationID, &p.ApproveAvailable)
+		&p.InstallationID, &p.ApproveAvailable, &p.InlineAvailable)
 	p.DeployTokenExpiresAt = deref(expires)
 	return p, err
 }
@@ -79,40 +83,43 @@ func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 
 // UpsertProject inserts or updates a GitLab project. An update keeps the
 // stored CloneSeconds, which only SetCloneSeconds changes. A project without
-// an installation (GitLab) is stored with ApproveAvailable true whatever p
-// says, so a GitLab row built without the field never reads as missing its
-// approve side. GitHub rows go through UpsertGitHubProject.
+// an installation (GitLab) is stored with ApproveAvailable and
+// InlineAvailable true whatever p says, so a GitLab row built without the
+// fields never reads as missing its approve side or unable to post inline.
+// GitHub rows go through UpsertGitHubProject.
 func (s *Store) UpsertProject(ctx context.Context, p Project) error {
-	return s.upsertProject(ctx, p, p.ApproveAvailable || p.InstallationID == 0)
+	gitlab := p.InstallationID == 0
+	return s.upsertProject(ctx, p, p.ApproveAvailable || gitlab, p.InlineAvailable || gitlab)
 }
 
 // UpsertGitHubProject inserts or updates a GitHub repository like
-// UpsertProject, storing ApproveAvailable exactly as given, also when the
-// review App isn't installed (InstallationID 0).
+// UpsertProject, storing ApproveAvailable and InlineAvailable exactly as
+// given, also when the review App isn't installed (InstallationID 0).
 func (s *Store) UpsertGitHubProject(ctx context.Context, p Project) error {
-	return s.upsertProject(ctx, p, p.ApproveAvailable)
+	return s.upsertProject(ctx, p, p.ApproveAvailable, p.InlineAvailable)
 }
 
-func (s *Store) upsertProject(ctx context.Context, p Project, approveAvailable bool) error {
+func (s *Store) upsertProject(ctx context.Context, p Project, approveAvailable, inlineAvailable bool) error {
 	var expires *time.Time
 	if !p.DeployTokenExpiresAt.IsZero() {
 		expires = &p.DeployTokenExpiresAt
 	}
 	_, err := s.pool.Exec(ctx, `INSERT INTO projects (`+projectColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		ON CONFLICT (instance, project_id) DO UPDATE SET
 			path = EXCLUDED.path, http_url_to_repo = EXCLUDED.http_url_to_repo, hook_id = EXCLUDED.hook_id,
 			deploy_token_id = EXCLUDED.deploy_token_id, deploy_token_username = EXCLUDED.deploy_token_username,
 			deploy_token_sealed = EXCLUDED.deploy_token_sealed, deploy_token_expires_at = EXCLUDED.deploy_token_expires_at,
-			installation_id = EXCLUDED.installation_id, approve_available = EXCLUDED.approve_available`,
+			installation_id = EXCLUDED.installation_id, approve_available = EXCLUDED.approve_available,
+			inline_available = EXCLUDED.inline_available`,
 		p.Instance, p.ProjectID, p.Path, p.HTTPURLToRepo, p.HookID, p.DeployTokenID,
 		p.DeployTokenUsername, p.DeployTokenSealed, expires, p.CloneSeconds,
-		p.InstallationID, approveAvailable)
+		p.InstallationID, approveAvailable, inlineAvailable)
 	return err
 }
 
-// DeleteProject removes a project and the dismissals and commands of its
-// merge requests; deleting one that is not there is not an error.
+// DeleteProject removes a project and the dismissals, commands and inline
+// threads of its merge requests; deleting one that is not there is not an error.
 func (s *Store) DeleteProject(ctx context.Context, instance string, projectID int64) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -123,6 +130,7 @@ func (s *Store) DeleteProject(ctx context.Context, instance string, projectID in
 	for _, q := range []string{
 		`DELETE FROM dismissals WHERE instance = $1 AND project_id = $2`,
 		`DELETE FROM commands WHERE instance = $1 AND project_id = $2`,
+		`DELETE FROM inline_threads WHERE instance = $1 AND project_id = $2`,
 		`DELETE FROM projects WHERE instance = $1 AND project_id = $2`,
 	} {
 		if _, err := tx.Exec(ctx, q, instance, projectID); err != nil {

@@ -327,8 +327,9 @@ type Last7View struct {
 }
 
 // RepositoryDetailView is GET /api/repositories/{instance}/{project...}.
-// Settings is keyed approve, reviewDrafts, failureStatus, skills (null: the
-// default list of skills; otherwise the library skills reviewed), repoSkills
+// Settings is keyed approve, reviewDrafts, inlineFindings, failureStatus,
+// skills (null: the default list of skills; otherwise the library skills
+// reviewed), repoSkills
 // (the detected repository skills turned on, a list, empty when none),
 // jobTimeoutSeconds, maxTurns, jobMemory ("" when none), rerunLimitPerMR and
 // rerunLimitPerRepo.
@@ -626,6 +627,10 @@ type IntegrationRepo struct {
 	Installed bool `json:"installed"`
 	// ApproverReachable: the approve bot or App can approve there.
 	ApproverReachable bool `json:"approverReachable"`
+	// InlineAvailable is false when the review App is installed but may only
+	// read pull requests, so it can't post inline threads. It says nothing
+	// (true) for a repository without the review App.
+	InlineAvailable bool `json:"inlineAvailable"`
 }
 
 // AdminSettingsView is GET /api/admin/settings (admins only): the defaults
@@ -640,6 +645,7 @@ type AdminSettingsView struct {
 type DefaultsView struct {
 	Approve           bool   `json:"approve"`
 	ReviewDrafts      bool   `json:"reviewDrafts"`
+	InlineFindings    bool   `json:"inlineFindings"`
 	FailureStatus     string `json:"failureStatus"`
 	JobTimeoutSeconds int64  `json:"jobTimeoutSeconds"`
 	// MaxTurns is the step limit of each opencode run.
@@ -697,7 +703,7 @@ type LLMView struct {
 //   - PUT /api/repositories/{instance}/{project...}/settings: changes the
 //     settings in the body and leaves the others; a null resets one to its
 //     default. The keys are those of RepositoryDetailView.Settings:
-//     approve and reviewDrafts (true or false), failureStatus ("failed" or
+//     approve, reviewDrafts and inlineFindings (true or false), failureStatus ("failed" or
 //     "neutral"), skills (a non-empty list of library skill names, or
 //     null for the default list; a name the library lacks is 400 `skill
 //     "x" is not in the skill library`, and so is a list whose texts come to

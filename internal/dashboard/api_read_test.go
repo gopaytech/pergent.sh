@@ -829,7 +829,7 @@ func TestRepositoryDetail(t *testing.T) {
 	}
 	settings, _ := json.Marshal(v.Settings)
 	want := `{"approve":{"value":false,"overridden":true},"failureStatus":{"value":"failed","overridden":false},` +
-		`"jobMemory":{"value":"","overridden":false},"jobTimeoutSeconds":{"value":600,"overridden":false},` +
+		`"inlineFindings":{"value":true,"overridden":false},"jobMemory":{"value":"","overridden":false},"jobTimeoutSeconds":{"value":600,"overridden":false},` +
 		`"maxTurns":{"value":40,"overridden":false},"repoSkills":{"value":[],"overridden":false},` +
 		`"rerunLimitPerMR":{"value":10,"overridden":false},"rerunLimitPerRepo":{"value":50,"overridden":false},` +
 		`"reviewDrafts":{"value":true,"overridden":false},"skills":{"value":["code-review"],"overridden":true}}`
@@ -1011,7 +1011,7 @@ func TestIntegrations(t *testing.T) {
 	c := e.signInGitLab(true, "acme/widgets")
 	v := getJSON[IntegrationView](e, c, "/api/integrations")
 	want := IntegrationView{Instance: "main", Platform: "gitlab", Connected: true, Approver: "token",
-		Repos: []IntegrationRepo{{Project: "acme/widgets", Installed: true, ApproverReachable: true}}}
+		Repos: []IntegrationRepo{{Project: "acme/widgets", Installed: true, ApproverReachable: true, InlineAvailable: true}}}
 	if v.Instance != want.Instance || v.Platform != want.Platform || !v.Connected || v.Approver != want.Approver ||
 		v.TokenExpiry != nil || len(v.Repos) != 1 || v.Repos[0] != want.Repos[0] {
 		t.Errorf("integrations = %+v\nwant %+v", v, want)
@@ -1033,8 +1033,28 @@ func TestIntegrationsGitHub(t *testing.T) {
 		!v.TokenExpiry.Equal(time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)) {
 		t.Errorf("integrations = %+v", v)
 	}
-	if len(v.Repos) != 1 || v.Repos[0] != (IntegrationRepo{Project: "acme/widgets", Installed: true, ApproverReachable: false}) {
+	// The review App has Pull requests: Read-only there.
+	if len(v.Repos) != 1 || v.Repos[0] != (IntegrationRepo{Project: "acme/widgets", Installed: true, ApproverReachable: false, InlineAvailable: false}) {
 		t.Errorf("repos = %+v", v.Repos)
+	}
+
+	// Once the permission is read and write, inline is available.
+	if err := e.st.UpsertGitHubProject(ctx, store.Project{Instance: "gh", ProjectID: 900, Path: "acme/widgets",
+		InstallationID: 55, InlineAvailable: true}); err != nil {
+		t.Fatal(err)
+	}
+	v = getJSON[IntegrationView](e, c, "/api/integrations")
+	if len(v.Repos) != 1 || !v.Repos[0].InlineAvailable {
+		t.Errorf("repos after the permission = %+v; want inline available", v.Repos)
+	}
+
+	// Without the review App there is nothing to say about inline.
+	if err := e.st.UpsertGitHubProject(ctx, store.Project{Instance: "gh", ProjectID: 900, Path: "acme/widgets"}); err != nil {
+		t.Fatal(err)
+	}
+	v = getJSON[IntegrationView](e, c, "/api/integrations")
+	if len(v.Repos) != 1 || v.Repos[0].Installed || !v.Repos[0].InlineAvailable {
+		t.Errorf("repos without an installation = %+v; want not installed, inline not reported off", v.Repos)
 	}
 }
 
@@ -1043,7 +1063,7 @@ func TestAdminSettings(t *testing.T) {
 	c := e.signInGitLab(true, "acme/widgets")
 	v := getJSON[AdminSettingsView](e, c, "/api/admin/settings")
 	want := AdminSettingsView{Instance: "main",
-		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40,
+		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, InlineFindings: true, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40,
 			RerunLimitPerMR: 10, RerunLimitPerRepo: 50, Skills: []string{}},
 		LLM: LLMView{Provider: "anthropic", Model: "claude-sonnet-4"}}
 	got, _ := json.Marshal(v)
@@ -1524,5 +1544,17 @@ func TestSettingViewsMaxTurns(t *testing.T) {
 	repo = settings.Effective{MaxTurns: 40}
 	if got := settingViews(repo)["maxTurns"]; got != (SettingView{40, false}) {
 		t.Errorf("maxTurns = %+v, want 40 not overridden", got)
+	}
+}
+
+// Inline findings is a setting of the repository like the others.
+func TestSettingViewsInlineFindings(t *testing.T) {
+	repo := settings.Effective{InlineFindings: false, Overridden: map[string]bool{settings.KeyInlineFindings: true}}
+	if got := settingViews(repo)["inlineFindings"]; got != (SettingView{false, true}) {
+		t.Errorf("inlineFindings = %+v, want false overridden", got)
+	}
+	repo = settings.Effective{InlineFindings: true}
+	if got := settingViews(repo)["inlineFindings"]; got != (SettingView{true, false}) {
+		t.Errorf("inlineFindings = %+v, want true not overridden", got)
 	}
 }

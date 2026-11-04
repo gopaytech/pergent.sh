@@ -531,3 +531,252 @@ func TestIssueCommentWithBadSignatureStoresNothing(t *testing.T) {
 	}
 	r.noStored(t)
 }
+
+func TestParseThreadCommand(t *testing.T) {
+	const m = "pergent-review"
+	tests := []struct {
+		name, body        string
+		kind, arg, reason string
+		ok                bool
+	}{
+		{name: "id and reason", body: "@pergent-review dismiss abc123 because", kind: "dismiss", arg: "abc123", reason: "because", ok: true},
+		{name: "id alone", body: "@pergent-review dismiss abc123", kind: "dismiss", arg: "abc123", ok: true},
+		{name: "upper case id", body: "@pergent-review dismiss ABC123DEF456 fine", kind: "dismiss", arg: "ABC123DEF456", reason: "fine", ok: true},
+		{name: "a reason starting with an id-like word keeps its case", body: "@pergent-review dismiss Decade old path", kind: "dismiss", arg: "Decade", reason: "old path", ok: true},
+		{name: "reason without an id", body: "@pergent-review dismiss because it is fine", kind: "dismiss", reason: "because it is fine", ok: true},
+		{name: "reason starting with a short hex word", body: "@pergent-review dismiss abc12 is fine", kind: "dismiss", reason: "abc12 is fine", ok: true},
+		{name: "nothing after dismiss", body: "@pergent-review dismiss", kind: "dismiss", ok: true},
+		{name: "dismiss with a full stop", body: "@pergent-review dismiss.", kind: "dismiss", ok: true},
+		{name: "dismiss, colon, reason", body: "@pergent-review: dismiss: not a bug", kind: "dismiss", reason: "not a bug", ok: true},
+		{name: "upper case command", body: "@Pergent-Review DISMISS false positive", kind: "dismiss", reason: "false positive", ok: true},
+		{name: "review in a thread is still review", body: "@pergent-review review", kind: "review", ok: true},
+		{name: "review failed", body: "@pergent-review review failed", kind: "review_failed", ok: true},
+		{name: "help", body: "@pergent-review help", kind: "help", ok: true},
+		{name: "unknown", body: "@pergent-review frobnicate", kind: "unknown", ok: true},
+		{name: "dismissed is not dismiss", body: "@pergent-review dismissed abc123", kind: "unknown", ok: true},
+		{name: "not addressed", body: "dismiss this please", ok: false},
+		{name: "in a fence", body: "```\n@pergent-review dismiss fine\n```", ok: false},
+		{name: "quoted", body: "> @pergent-review dismiss fine", ok: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kind, arg, reason, ok := ParseThreadCommand(tt.body, m)
+			if ok != tt.ok || kind != tt.kind || arg != tt.arg || reason != tt.reason {
+				t.Fatalf("ParseThreadCommand(%q) = %q %q %q %v; want %q %q %q %v",
+					tt.body, kind, arg, reason, ok, tt.kind, tt.arg, tt.reason, tt.ok)
+			}
+		})
+	}
+	if _, _, _, ok := ParseThreadCommand("@ dismiss x", ""); ok {
+		t.Error("an empty mention matched")
+	}
+	long := "@pergent-review dismiss " + strings.Repeat("é", 2000)
+	_, _, reason, ok := ParseThreadCommand(long, m)
+	if !ok || len([]rune(reason)) != maxReasonRunes {
+		t.Errorf("reason = %d runes (ok %v); want it cut to %d", len([]rune(reason)), ok, maxReasonRunes)
+	}
+	// A plain comment still needs the ID.
+	if kind, _, _, _ := ParseCommand("@pergent-review dismiss because it is fine", m); kind != kindUnknown {
+		t.Errorf("ParseCommand without an id = %q; want unknown", kind)
+	}
+}
+
+// ghReviewReply is a GitHub pull_request_review_comment event: a reply (to
+// comment 500) on a line of pull request 7.
+func ghReviewReply(body, login, userType string) obj {
+	return obj{
+		"action":       "created",
+		"pull_request": obj{"number": 7},
+		"comment": obj{"id": 901, "body": body, "in_reply_to_id": 500,
+			"user": obj{"login": login, "id": 5, "type": userType}},
+		"repository": obj{"id": 42, "full_name": "acme/widgets"},
+	}
+}
+
+func (r *cmdRig) ghReviewPost(t *testing.T, payload obj) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/github/gh", bytes.NewReader(body))
+	req.Header.Set("X-Hub-Signature-256", sign(ghSecret, body))
+	req.Header.Set("X-GitHub-Event", "pull_request_review_comment")
+	rec := httptest.NewRecorder()
+	r.mux.ServeHTTP(rec, req)
+	return rec
+}
+
+// glThreadNote is glNote written as a reply in discussion d.
+func glThreadNote(note, user, typ, d string) obj {
+	p := glNote(note, user)
+	attrs := p["object_attributes"].(obj)
+	attrs["type"] = typ
+	attrs["discussion_id"] = d
+	return p
+}
+
+func TestGitHubReviewCommentReplyStored(t *testing.T) {
+	r := newCmdRig(t)
+	wantStatus(t, r.ghReviewPost(t, ghReviewReply("@pergent-app dismiss false positive", "alice", "User")), 200)
+	want := store.Command{
+		MR:          store.MRKey{Instance: "gh", ProjectID: 42, IID: 7},
+		ProjectPath: "Acme/Widgets", Platform: config.PlatformGitHub, Kind: "dismiss", Arg: "", Reason: "false positive",
+		CommentID: 901, Author: "alice", AuthorID: 5, ReplyTo: 500,
+	}
+	if len(r.cmds.stored) != 1 || r.cmds.stored[0] != want {
+		t.Fatalf("stored = %+v; want [%+v]", r.cmds.stored, want)
+	}
+	if !r.cmds.stored[0].InThread() {
+		t.Error("the command is not in a thread")
+	}
+	if r.wakes != 1 {
+		t.Errorf("wakes = %d; want 1", r.wakes)
+	}
+}
+
+func TestGitHubReviewCommentWithAnIDStored(t *testing.T) {
+	r := newCmdRig(t)
+	wantStatus(t, r.ghReviewPost(t, ghReviewReply("@pergent-app dismiss abc123 constant", "alice", "User")), 200)
+	if len(r.cmds.stored) != 1 || r.cmds.stored[0].Arg != "abc123" || r.cmds.stored[0].Reason != "constant" || r.cmds.stored[0].ReplyTo != 500 {
+		t.Fatalf("stored = %+v", r.cmds.stored)
+	}
+}
+
+func TestGitHubTopLevelReviewCommentIgnored(t *testing.T) {
+	for _, reply := range []any{nil, 0, "absent"} {
+		r := newCmdRig(t)
+		p := ghReviewReply("@pergent-app dismiss fine", "alice", "User")
+		if reply == "absent" {
+			delete(p["comment"].(obj), "in_reply_to_id")
+		} else {
+			p["comment"].(obj)["in_reply_to_id"] = reply
+		}
+		wantStatus(t, r.ghReviewPost(t, p), 200)
+		r.noStored(t)
+		if !strings.Contains(r.logs.String(), "not_a_reply") {
+			t.Errorf("in_reply_to_id %v: logs lack not_a_reply:\n%s", reply, r.logs)
+		}
+	}
+}
+
+func TestGitHubReviewCommentOtherActionsAndAuthorsIgnored(t *testing.T) {
+	for _, action := range []string{"edited", "deleted"} {
+		r := newCmdRig(t)
+		p := ghReviewReply("@pergent-app dismiss fine", "alice", "User")
+		p["action"] = action
+		wantStatus(t, r.ghReviewPost(t, p), 200)
+		r.noStored(t)
+	}
+	for _, c := range []struct{ login, typ string }{
+		{"pergent-app[bot]", "Bot"}, {"x[bot]", "User"}, {"someone", "Bot"},
+	} {
+		r := newCmdRig(t)
+		wantStatus(t, r.ghReviewPost(t, ghReviewReply("@pergent-app dismiss fine", c.login, c.typ)), 200)
+		r.noStored(t)
+	}
+	r := newCmdRig(t)
+	p := ghReviewReply("@pergent-app dismiss fine", "alice", "User")
+	p["comment"].(obj)["performed_via_github_app"] = obj{"id": 9}
+	wantStatus(t, r.ghReviewPost(t, p), 200)
+	r.noStored(t)
+
+	// The bot's own text is no command either.
+	r = newCmdRig(t)
+	wantStatus(t, r.ghReviewPost(t, ghReviewReply("<!-- pergent -->\n@pergent-app dismiss fine", "alice", "User")), 200)
+	r.noStored(t)
+
+	// A reply that doesn't address the bot.
+	r = newCmdRig(t)
+	wantStatus(t, r.ghReviewPost(t, ghReviewReply("thanks, will fix", "alice", "User")), 200)
+	r.noStored(t)
+}
+
+func TestGitHubReviewCommentOnOtherRepositoryIgnored(t *testing.T) {
+	r := newCmdRig(t)
+	p := ghReviewReply("@pergent-app dismiss fine", "alice", "User")
+	p["repository"] = obj{"id": 43, "full_name": "acme/other"}
+	wantStatus(t, r.ghReviewPost(t, p), 200)
+	r.noStored(t)
+}
+
+func TestGitHubReviewCommentMalformedAndRedelivered(t *testing.T) {
+	r := newCmdRig(t)
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/github/gh", strings.NewReader("{"))
+	req.Header.Set("X-Hub-Signature-256", sign(ghSecret, []byte("{")))
+	req.Header.Set("X-GitHub-Event", "pull_request_review_comment")
+	rec := httptest.NewRecorder()
+	r.mux.ServeHTTP(rec, req)
+	wantStatus(t, rec, 200)
+	r.noStored(t)
+
+	p := ghReviewReply("@pergent-app dismiss fine", "alice", "User")
+	wantStatus(t, r.ghReviewPost(t, p), 200)
+	wantStatus(t, r.ghReviewPost(t, p), 200)
+	if len(r.cmds.stored) != 1 || r.wakes != 1 {
+		t.Fatalf("stored %d, wakes %d; want 1 and 1", len(r.cmds.stored), r.wakes)
+	}
+
+	r = newCmdRig(t)
+	r.cmds.err = errors.New("db down")
+	wantStatus(t, r.ghReviewPost(t, ghReviewReply("@pergent-app dismiss fine", "alice", "User")), 500)
+}
+
+func TestGitLabDiffNoteReplyStoresTheDiscussion(t *testing.T) {
+	for _, typ := range []string{"DiffNote", "DiscussionNote"} {
+		r := newCmdRig(t)
+		wantStatus(t, r.glPost(t, glThreadNote("@pergent-review dismiss abc123 not a bug", "alice", typ, "d1f2a3")), 200)
+		want := store.Command{
+			MR:          store.MRKey{Instance: "main", ProjectID: 42, IID: 7},
+			ProjectPath: "Acme/Widgets", Platform: config.PlatformGitLab, Kind: "dismiss", Arg: "abc123",
+			Reason: "not a bug", CommentID: 900, Author: "alice", AuthorID: 5, Discussion: "d1f2a3",
+		}
+		if len(r.cmds.stored) != 1 || r.cmds.stored[0] != want {
+			t.Fatalf("%s: stored = %+v; want [%+v]", typ, r.cmds.stored, want)
+		}
+		if !r.cmds.stored[0].InThread() || r.wakes != 1 {
+			t.Errorf("%s: InThread %v, wakes %d", typ, r.cmds.stored[0].InThread(), r.wakes)
+		}
+	}
+}
+
+func TestGitLabThreadDismissWithoutAnID(t *testing.T) {
+	r := newCmdRig(t)
+	wantStatus(t, r.glPost(t, glThreadNote("@pergent-review dismiss because it is fine", "alice", "DiffNote", "d1")), 200)
+	if len(r.cmds.stored) != 1 || r.cmds.stored[0].Kind != "dismiss" || r.cmds.stored[0].Arg != "" ||
+		r.cmds.stored[0].Reason != "because it is fine" || r.cmds.stored[0].Discussion != "d1" {
+		t.Fatalf("stored = %+v", r.cmds.stored)
+	}
+}
+
+func TestGitLabThreadNoteWithoutADiscussionStillIgnored(t *testing.T) {
+	for _, typ := range []string{"DiffNote", "DiscussionNote"} {
+		for _, d := range []any{"", nil} {
+			r := newCmdRig(t)
+			p := glNote("@pergent-review review", "alice")
+			p["object_attributes"].(obj)["type"] = typ
+			p["object_attributes"].(obj)["discussion_id"] = d
+			wantStatus(t, r.glPost(t, p), 200)
+			r.noStored(t)
+		}
+	}
+	// An unknown note type with a discussion is not a thread reply either, and
+	// a system note never is.
+	r := newCmdRig(t)
+	wantStatus(t, r.glPost(t, glThreadNote("@pergent-review review", "alice", "Other", "d1")), 200)
+	r.noStored(t)
+	p := glThreadNote("@pergent-review review", "alice", "DiscussionNote", "d1")
+	p["object_attributes"].(obj)["system"] = true
+	wantStatus(t, r.glPost(t, p), 200)
+	r.noStored(t)
+}
+
+func TestGitLabPlainNoteKeepsTheDismissRule(t *testing.T) {
+	// A plain comment still needs the ID to dismiss: without one it is an
+	// unknown command, answered with the help.
+	r := newCmdRig(t)
+	wantStatus(t, r.glPost(t, glNote("@pergent-review dismiss because it is fine", "alice")), 200)
+	if len(r.cmds.stored) != 1 || r.cmds.stored[0].Kind != "unknown" || r.cmds.stored[0].InThread() {
+		t.Fatalf("stored = %+v", r.cmds.stored)
+	}
+}

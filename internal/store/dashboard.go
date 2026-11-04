@@ -17,6 +17,9 @@ type DashboardRepo struct {
 	Instance, Project string
 	Approve           *bool
 	ReviewDrafts      *bool
+	// InlineFindings is whether findings are posted as threads on their
+	// lines (nil: the default, on).
+	InlineFindings *bool
 	// FailureStatus is "failed" or "neutral".
 	FailureStatus *string
 	// Skills names library skills (nil: the default list). RepoSkills names
@@ -36,12 +39,14 @@ type DashboardRepo struct {
 }
 
 const dashboardRepoColumns = `instance, project, approve, review_drafts, failure_status, skills, repo_skills,
-	job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by, created_at, updated_at`
+	job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by, created_at, updated_at,
+	inline_findings`
 
 func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 	var r DashboardRepo
 	err := row.Scan(&r.Instance, &r.Project, &r.Approve, &r.ReviewDrafts, &r.FailureStatus, &r.Skills, &r.RepoSkills,
-		&r.JobTimeoutSeconds, &r.MaxTurns, &r.JobMemory, &r.RerunLimitPerMR, &r.RerunLimitPerRepo, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt)
+		&r.JobTimeoutSeconds, &r.MaxTurns, &r.JobMemory, &r.RerunLimitPerMR, &r.RerunLimitPerRepo, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt,
+		&r.InlineFindings)
 	if len(r.Skills) == 0 {
 		r.Skills = nil
 	}
@@ -102,16 +107,17 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 		return err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
-			failure_status, skills, repo_skills, job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			failure_status, skills, repo_skills, job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by,
+			inline_findings)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		ON CONFLICT (instance, lower(project)) DO UPDATE SET
 			project = EXCLUDED.project, approve = EXCLUDED.approve, review_drafts = EXCLUDED.review_drafts,
 			failure_status = EXCLUDED.failure_status, skills = EXCLUDED.skills, repo_skills = EXCLUDED.repo_skills,
 			job_timeout_seconds = EXCLUDED.job_timeout_seconds, max_turns = EXCLUDED.max_turns, job_memory = EXCLUDED.job_memory,
 			rerun_limit_per_mr = EXCLUDED.rerun_limit_per_mr, rerun_limit_per_repo = EXCLUDED.rerun_limit_per_repo,
-			updated_at = now()`,
+			inline_findings = EXCLUDED.inline_findings, updated_at = now()`,
 		r.Instance, r.Project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, repoSkills,
-		r.JobTimeoutSeconds, r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy); err != nil {
+		r.JobTimeoutSeconds, r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy, r.InlineFindings); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -141,11 +147,12 @@ func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (creat
 		return false, err
 	}
 	tag, err := tx.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
-			failure_status, skills, repo_skills, job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			failure_status, skills, repo_skills, job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by,
+			inline_findings)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		ON CONFLICT (instance, lower(project)) DO NOTHING`,
 		r.Instance, r.Project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, nilIfEmpty(r.RepoSkills),
-		r.JobTimeoutSeconds, r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy)
+		r.JobTimeoutSeconds, r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy, r.InlineFindings)
 	if err != nil {
 		return false, err
 	}
@@ -184,10 +191,10 @@ func (s *Store) UpdateDashboardRepo(ctx context.Context, instance, project strin
 	}
 	if _, err := tx.Exec(ctx, `UPDATE dashboard_repos SET approve = $3, review_drafts = $4, failure_status = $5,
 			skills = $6, repo_skills = $7, job_timeout_seconds = $8, max_turns = $9, job_memory = $10,
-			rerun_limit_per_mr = $11, rerun_limit_per_repo = $12, updated_at = now()
+			rerun_limit_per_mr = $11, rerun_limit_per_repo = $12, inline_findings = $13, updated_at = now()
 		WHERE instance = $1 AND lower(project) = lower($2)`,
 		instance, project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, nilIfEmpty(r.RepoSkills), r.JobTimeoutSeconds,
-		r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo); err != nil {
+		r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.InlineFindings); err != nil {
 		return false, err
 	}
 	return true, tx.Commit(ctx)

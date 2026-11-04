@@ -75,7 +75,12 @@ function OwnBody({ v }: { v: IntegrationView }) {
             <tbody>
               {v.repos.map((r) => (
                 <tr key={r.project}>
-                  <td className="mr">{r.project}</td>
+                  <td className="mr">
+                    {r.project}
+                    {!r.inlineAvailable && (
+                      <div className="warn-text">Inline findings are off: the review App has Pull requests: Read-only.</div>
+                    )}
+                  </td>
                   <td>{r.installed ? <Pill tone="ok">Installed</Pill> : <Pill tone="bad">Not installed</Pill>}</td>
                   <td>{r.approverReachable ? <Pill tone="ok">Can approve</Pill> : <Pill tone="bad">Can't approve</Pill>}</td>
                 </tr>

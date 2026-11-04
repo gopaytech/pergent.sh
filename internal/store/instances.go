@@ -172,8 +172,8 @@ func (s *Store) MarkInstanceRemoving(ctx context.Context, name string) (bool, er
 
 // DeleteInstanceData deletes the instance's platform accounts (and with
 // them their sessions and team memberships), its team repositories, its
-// dashboard repositories, its attention rows, and the dismissals and
-// commands of its merge requests. The instance row and its
+// dashboard repositories, its attention rows, and the dismissals, commands
+// and inline threads of its merge requests. The instance row and its
 // secrets stay: it is still Removing. Accounts and rows of other instances
 // are untouched.
 func (s *Store) DeleteInstanceData(ctx context.Context, name string) error {
@@ -190,6 +190,7 @@ func (s *Store) DeleteInstanceData(ctx context.Context, name string) error {
 		`DELETE FROM repo_attention WHERE instance = $1`,
 		`DELETE FROM dismissals WHERE instance = $1`,
 		`DELETE FROM commands WHERE instance = $1`,
+		`DELETE FROM inline_threads WHERE instance = $1`,
 	} {
 		if _, err := tx.Exec(ctx, q, name); err != nil {
 			return err
@@ -243,11 +244,11 @@ func (s *Store) PutLLM(ctx context.Context, provider, model, baseURL string, key
 // value is "nothing set". FailureStatus is "failed" or "neutral"; JobMemory
 // is a Kubernetes quantity.
 type RepoDefaults struct {
-	Approve, ReviewDrafts *bool
-	FailureStatus         *string
-	JobTimeoutSeconds     *int
-	MaxTurns              *int
-	JobMemory             *string
+	Approve, ReviewDrafts, InlineFindings *bool
+	FailureStatus                         *string
+	JobTimeoutSeconds                     *int
+	MaxTurns                              *int
+	JobMemory                             *string
 	// RerunLimitPerMR and RerunLimitPerRepo cap the re-runs asked for per
 	// merge request and per repository and day.
 	RerunLimitPerMR, RerunLimitPerRepo *int
@@ -262,10 +263,10 @@ type RepoDefaults struct {
 func (s *Store) RepoDefaults(ctx context.Context) (RepoDefaults, error) {
 	var d RepoDefaults
 	err := s.pool.QueryRow(ctx, `SELECT approve, review_drafts, failure_status, job_timeout_seconds, max_turns, job_memory,
-			rerun_limit_per_mr, rerun_limit_per_repo, skills, updated_at
+			rerun_limit_per_mr, rerun_limit_per_repo, skills, updated_at, inline_findings
 		FROM repo_defaults WHERE id = 1`).
 		Scan(&d.Approve, &d.ReviewDrafts, &d.FailureStatus, &d.JobTimeoutSeconds, &d.MaxTurns, &d.JobMemory,
-			&d.RerunLimitPerMR, &d.RerunLimitPerRepo, &d.Skills, &d.UpdatedAt)
+			&d.RerunLimitPerMR, &d.RerunLimitPerRepo, &d.Skills, &d.UpdatedAt, &d.InlineFindings)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RepoDefaults{}, nil
 	}
@@ -327,13 +328,14 @@ func (s *Store) PutRepoDefaults(ctx context.Context, d RepoDefaults) error {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO repo_defaults (id, approve, review_drafts, failure_status, job_timeout_seconds, max_turns, job_memory,
-			rerun_limit_per_mr, rerun_limit_per_repo, skills, updated_at)
-		VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+			rerun_limit_per_mr, rerun_limit_per_repo, skills, updated_at, inline_findings)
+		VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, now(), $10)
 		ON CONFLICT (id) DO UPDATE SET approve = EXCLUDED.approve, review_drafts = EXCLUDED.review_drafts,
 			failure_status = EXCLUDED.failure_status, job_timeout_seconds = EXCLUDED.job_timeout_seconds,
 			max_turns = EXCLUDED.max_turns, job_memory = EXCLUDED.job_memory, rerun_limit_per_mr = EXCLUDED.rerun_limit_per_mr,
-			rerun_limit_per_repo = EXCLUDED.rerun_limit_per_repo, skills = EXCLUDED.skills, updated_at = EXCLUDED.updated_at`,
-		d.Approve, d.ReviewDrafts, d.FailureStatus, d.JobTimeoutSeconds, d.MaxTurns, d.JobMemory, d.RerunLimitPerMR, d.RerunLimitPerRepo, skills); err != nil {
+			rerun_limit_per_repo = EXCLUDED.rerun_limit_per_repo, skills = EXCLUDED.skills, updated_at = EXCLUDED.updated_at,
+			inline_findings = EXCLUDED.inline_findings`,
+		d.Approve, d.ReviewDrafts, d.FailureStatus, d.JobTimeoutSeconds, d.MaxTurns, d.JobMemory, d.RerunLimitPerMR, d.RerunLimitPerRepo, skills, d.InlineFindings); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

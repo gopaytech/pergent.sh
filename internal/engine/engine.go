@@ -103,6 +103,13 @@ type Engine struct {
 	uncheckedMu sync.Mutex
 	unchecked   map[repoKey]bool
 
+	// blockRules caches whether open threads block merging, per instance,
+	// project and target branch (see threadsBlockMerge); blockUnread holds the
+	// repositories whose rule couldn't be read, so that is logged once.
+	blockMu     sync.Mutex
+	blockRules  map[blockKey]blockRule
+	blockUnread map[repoKey]bool
+
 	// warned holds when each repeated warning was last logged (warnEvery).
 	warnMu sync.Mutex
 	warned map[string]time.Time

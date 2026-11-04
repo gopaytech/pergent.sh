@@ -22,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gopaytech/pergent.sh/internal/forge"
 )
 
 const (
@@ -191,6 +193,17 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 // doMax is do with a reply limit: a reply of more than limit bytes is
 // ErrTooLarge, and no more than limit+1 bytes of it are read.
 func (c *Client) doMax(ctx context.Context, method, path string, query url.Values, body any, accept string, limit int) (*response, error) {
+	return c.doTry(ctx, method, path, query, body, accept, limit, true)
+}
+
+// doOnce is do for a request that must not be sent twice (a POST that
+// creates something): a 429, a 5xx or a connection error is returned, not
+// retried, since the first attempt may have been applied.
+func (c *Client) doOnce(ctx context.Context, method, path string, query url.Values, body any, accept string) (*response, error) {
+	return c.doTry(ctx, method, path, query, body, accept, maxResponse, false)
+}
+
+func (c *Client) doTry(ctx context.Context, method, path string, query url.Values, body any, accept string, limit int, again bool) (*response, error) {
 	var payload []byte
 	if body != nil {
 		var err error
@@ -205,7 +218,7 @@ func (c *Client) doMax(ctx context.Context, method, path string, query url.Value
 	if len(query) > 0 {
 		u.RawQuery = query.Encode()
 	}
-	return c.send(ctx, method, u.String(), payload, accept, limit)
+	return c.try(ctx, method, u.String(), payload, accept, limit, again)
 }
 
 // retry says whether a failed attempt may be retried and how long to wait
@@ -218,13 +231,19 @@ type retry struct {
 // send sends a request, retrying 429, 5xx, a rate-limited 403 and connection
 // errors up to 3 times. A non-2xx final reply is *APIError.
 func (c *Client) send(ctx context.Context, method, rawURL string, payload []byte, accept string, limit int) (*response, error) {
+	return c.try(ctx, method, rawURL, payload, accept, limit, true)
+}
+
+// try is send with retrying optional: without it the first reply or error is
+// final.
+func (c *Client) try(ctx context.Context, method, rawURL string, payload []byte, accept string, limit int, again bool) (*response, error) {
 	delay := time.Second
 	for attempt := 0; ; attempt++ {
 		resp, r, err := c.once(ctx, method, rawURL, payload, accept, limit)
 		if err == nil {
 			return resp, nil
 		}
-		if ctx.Err() != nil || attempt >= maxRetries || !r.ok {
+		if !again || ctx.Err() != nil || attempt >= maxRetries || !r.ok {
 			return nil, err
 		}
 		wait := delay
@@ -519,7 +538,8 @@ func (c *Client) RepoAccess(ctx context.Context, owner, repo string) (RepoAccess
 type branchRule struct {
 	Type       string `json:"type"`
 	Parameters struct {
-		RequiredApprovingReviewCount int `json:"required_approving_review_count"`
+		RequiredApprovingReviewCount   int  `json:"required_approving_review_count"`
+		RequiredReviewThreadResolution bool `json:"required_review_thread_resolution"`
 	} `json:"parameters"`
 }
 
@@ -1103,4 +1123,216 @@ func (c *Client) InstallationRepos(ctx context.Context, o ListOptions) ([]string
 		}
 		return out, nil
 	})
+}
+
+// fileDiffs maps the files of a pull request or compare reply.
+type fileDiffs []struct {
+	Filename         string `json:"filename"`
+	PreviousFilename string `json:"previous_filename"`
+	Status           string `json:"status"`
+	Patch            string `json:"patch"`
+}
+
+func (fs fileDiffs) appendTo(out []forge.FileDiff) []forge.FileDiff {
+	for _, f := range fs {
+		out = append(out, forge.FileDiff{Path: f.Filename, OldPath: f.PreviousFilename, Deleted: f.Status == "removed", Patch: f.Patch})
+	}
+	return out
+}
+
+const (
+	// maxPullFiles is GitHub's cap on the pull request files API: a pull
+	// request with that many files may have more that the API doesn't list.
+	maxPullFiles = 3000
+	// maxCompareFiles is the compare API's cap on the files it lists.
+	maxCompareFiles = 300
+)
+
+// ErrPartialDiff is returned when the platform's diff may not list every
+// changed file: treating it as the whole diff would drop files silently.
+var ErrPartialDiff = errors.New("github: the diff may be incomplete")
+
+// ErrNotAncestor is returned by CompareFiles when the first commit is not an
+// ancestor of the second (after a force-push or a rebase): GitHub then diffs
+// from the merge base, so the files and lines it lists don't answer "what
+// changed since the first commit".
+var ErrNotAncestor = errors.New("github: the first commit is not an ancestor of the second")
+
+// PullFiles lists the files of a pull request's diff at its head
+// (GET /repos/{owner}/{repo}/pulls/{number}/files). Patch is empty for a
+// binary file or one GitHub left out as too large. A pull request with 3000
+// files or more, GitHub's cap, may be cut short: that is ErrPartialDiff.
+func (c *Client) PullFiles(ctx context.Context, owner, repo string, number int64) ([]forge.FileDiff, error) {
+	p, err := repoPath(owner, repo, "/pulls", id(number), "/files")
+	if err != nil {
+		return nil, err
+	}
+	var out []forge.FileDiff
+	err = c.paginate(ctx, p, func(body []byte) error {
+		var page fileDiffs
+		if err := decode(body, &page); err != nil {
+			return err
+		}
+		out = page.appendTo(out)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(out) >= maxPullFiles {
+		return nil, fmt.Errorf("%w: the pull request has %d or more files, the most GitHub lists", ErrPartialDiff, maxPullFiles)
+	}
+	return out, nil
+}
+
+// CompareFiles lists the files that differ between two commits
+// (GET /repos/{owner}/{repo}/compare/{from}...{to}). The files are all on the
+// first page (later pages list commits), and GitHub lists at most 300 of
+// them: a comparison with that many is ErrPartialDiff. A comparison whose
+// first commit is not an ancestor of the second is ErrNotAncestor.
+func (c *Client) CompareFiles(ctx context.Context, owner, repo, from, to string) ([]forge.FileDiff, error) {
+	f, err := segment(from)
+	if err != nil {
+		return nil, err
+	}
+	t, err := segment(to)
+	if err != nil {
+		return nil, err
+	}
+	p, err := repoPath(owner, repo, "/compare/", f, "...", t)
+	if err != nil {
+		return nil, err
+	}
+	var page struct {
+		Status          string `json:"status"`
+		MergeBaseCommit struct {
+			SHA string `json:"sha"`
+		} `json:"merge_base_commit"`
+		Files fileDiffs `json:"files"`
+	}
+	if err := c.getJSON(ctx, p, url.Values{"per_page": {perPage}}, &page); err != nil {
+		return nil, err
+	}
+	// The three-dot form diffs from the merge base: only when that is `from`
+	// (status ahead or identical) do the files describe from..to.
+	if (page.Status != "ahead" && page.Status != "identical") ||
+		(page.MergeBaseCommit.SHA != "" && !strings.EqualFold(page.MergeBaseCommit.SHA, from)) {
+		return nil, fmt.Errorf("%w: the comparison is %q with merge base %q", ErrNotAncestor, page.Status, page.MergeBaseCommit.SHA)
+	}
+	if len(page.Files) >= maxCompareFiles {
+		return nil, fmt.Errorf("%w: the comparison lists %d or more files, the most GitHub returns", ErrPartialDiff, maxCompareFiles)
+	}
+	return page.Files.appendTo(nil), nil
+}
+
+// reviewCommentJSON is one entry of a review's "comments". GitHub's line is
+// the last line of the range and start_line the first.
+type reviewCommentJSON struct {
+	Path      string `json:"path"`
+	Body      string `json:"body"`
+	Line      int    `json:"line"`
+	Side      string `json:"side"`
+	StartLine int    `json:"start_line,omitempty"`
+	StartSide string `json:"start_side,omitempty"`
+}
+
+// CreateReviewComments submits a COMMENT review on commitID that carries
+// comments as inline threads on the new side of the diff, and returns the
+// review's ID. A line GitHub can't anchor (outside the diff) is a 422
+// *APIError and nothing is posted.
+func (c *Client) CreateReviewComments(ctx context.Context, owner, repo string, number int64, commitID, body string, comments []ReviewComment) (int64, error) {
+	p, err := repoPath(owner, repo, "/pulls", id(number), "/reviews")
+	if err != nil {
+		return 0, err
+	}
+	cs := make([]reviewCommentJSON, len(comments))
+	for i, rc := range comments {
+		cs[i] = reviewCommentJSON{Path: rc.Path, Body: rc.Body, Line: rc.Line, Side: "RIGHT"}
+		if rc.EndLine > rc.Line {
+			cs[i].Line, cs[i].StartLine, cs[i].StartSide = rc.EndLine, rc.Line, "RIGHT"
+		}
+	}
+	// Sent once: a retried POST whose first attempt landed would duplicate
+	// every thread.
+	resp, err := c.doOnce(ctx, http.MethodPost, p, nil, map[string]any{
+		"commit_id": commitID, "event": "COMMENT", "body": body, "comments": cs,
+	}, acceptJSON)
+	if err != nil {
+		return 0, err
+	}
+	var out struct {
+		ID int64 `json:"id"`
+	}
+	if err := decode(resp.body, &out); err != nil {
+		return 0, err
+	}
+	return out.ID, nil
+}
+
+// ReplyReviewComment replies to a review comment (POST
+// /pulls/{number}/comments/{commentID}/replies). A missing comment is
+// ErrNotFound.
+func (c *Client) ReplyReviewComment(ctx context.Context, owner, repo string, number, commentID int64, body string) error {
+	p, err := repoPath(owner, repo, "/pulls", id(number), "/comments", id(commentID), "/replies")
+	if err != nil {
+		return err
+	}
+	_, err = c.do(ctx, http.MethodPost, p, nil, map[string]string{"body": body}, acceptJSON)
+	return err
+}
+
+// ReactToReviewComment adds a reaction (content: eyes, +1, -1, ...) to a
+// review comment as this client's identity. Reacting again with the same
+// content is not an error. A missing comment is ErrNotFound.
+func (c *Client) ReactToReviewComment(ctx context.Context, owner, repo string, commentID int64, content string) error {
+	p, err := repoPath(owner, repo, "/pulls/comments", id(commentID), "/reactions")
+	if err != nil {
+		return err
+	}
+	_, err = c.do(ctx, http.MethodPost, p, nil, map[string]string{"content": content}, acceptJSON)
+	return err
+}
+
+// ThreadResolutionRequired reports whether branch needs every review thread
+// resolved before a merge: a pull_request rule of an active ruleset with
+// required_review_thread_resolution, or classic protection with
+// required_conversation_resolution. A branch with no classic protection (404)
+// doesn't; reading it needs the Administration permission, and any other
+// failure, a 403 included, is an error.
+func (c *Client) ThreadResolutionRequired(ctx context.Context, owner, repo, branch string) (bool, error) {
+	var required bool
+	err := c.branchRules(ctx, owner, repo, branch, func(rules []branchRule) {
+		for _, r := range rules {
+			if r.Type == "pull_request" && r.Parameters.RequiredReviewThreadResolution {
+				required = true
+			}
+		}
+	})
+	if err != nil {
+		return false, err
+	}
+	if required {
+		return true, nil
+	}
+	b, err := filePath(branch)
+	if err != nil || b == "" {
+		return false, errBadSegment
+	}
+	p, err := repoPath(owner, repo, "/branches", b, "/protection")
+	if err != nil {
+		return false, err
+	}
+	var out struct {
+		RequiredConversationResolution *struct {
+			Enabled bool `json:"enabled"`
+		} `json:"required_conversation_resolution"`
+	}
+	err = c.getJSON(ctx, p, nil, &out)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return out.RequiredConversationResolution != nil && out.RequiredConversationResolution.Enabled, nil
 }

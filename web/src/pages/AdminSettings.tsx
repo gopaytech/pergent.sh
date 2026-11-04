@@ -36,6 +36,7 @@ function Defaults({ v }: { v: DefaultsView }) {
   const write = useWrite();
   const [approve, setApprove] = useState(v.approve);
   const [reviewDrafts, setReviewDrafts] = useState(v.reviewDrafts);
+  const [inlineFindings, setInlineFindings] = useState(v.inlineFindings);
   const [failureStatus, setFailureStatus] = useState(v.failureStatus);
   const [timeout, setTimeoutText] = useState(String(v.jobTimeoutSeconds));
   const [steps, setSteps] = useState(String(v.maxTurns));
@@ -80,6 +81,7 @@ function Defaults({ v }: { v: DefaultsView }) {
     save.mutate({
       approve,
       reviewDrafts,
+      inlineFindings,
       failureStatus,
       jobTimeoutSeconds: Number(t),
       maxTurns: Number(s),
@@ -113,6 +115,15 @@ function Defaults({ v }: { v: DefaultsView }) {
         </div>
         <div>
           <Switch label="Review drafts" checked={reviewDrafts} disabled={save.isPending} onChange={setReviewDrafts} />
+        </div>
+      </div>
+      <div className="set">
+        <div>
+          <div className="name">Inline findings</div>
+          <div className="help">Post each finding as a comment on its lines, with a one-click fix when it is small. Off keeps every finding in the review comment.</div>
+        </div>
+        <div>
+          <Switch label="Inline findings" checked={inlineFindings} disabled={save.isPending} onChange={setInlineFindings} />
         </div>
       </div>
       <div className="set">

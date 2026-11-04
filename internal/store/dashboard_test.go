@@ -33,7 +33,7 @@ func TestDashboardReposCRUD(t *testing.T) {
 		t.Errorf("row = %+v", r)
 	}
 	if r.Approve == nil || *r.Approve || r.ReviewDrafts != nil || r.FailureStatus != nil ||
-		r.Skills != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil {
+		r.Skills != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.InlineFindings != nil {
 		t.Errorf("nullable columns = %+v", r)
 	}
 	if r.CreatedAt.IsZero() || r.UpdatedAt.Before(r.CreatedAt) {
@@ -47,7 +47,7 @@ func TestDashboardReposCRUD(t *testing.T) {
 	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{
 		Instance: "main", Project: "acme/widgets",
 		ReviewDrafts: ptrTo(false), FailureStatus: ptrTo("neutral"), Skills: []string{"security", "style"},
-		JobTimeoutSeconds: ptrTo(1200), MaxTurns: ptrTo(60), JobMemory: ptrTo("6Gi"), CreatedBy: "bob",
+		JobTimeoutSeconds: ptrTo(1200), MaxTurns: ptrTo(60), JobMemory: ptrTo("6Gi"), InlineFindings: ptrTo(false), CreatedBy: "bob",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,8 @@ func TestDashboardReposCRUD(t *testing.T) {
 	}
 	if u.Approve != nil || u.ReviewDrafts == nil || *u.ReviewDrafts || u.FailureStatus == nil || *u.FailureStatus != "neutral" ||
 		!slices.Equal(u.Skills, []string{"security", "style"}) || u.JobTimeoutSeconds == nil || *u.JobTimeoutSeconds != 1200 ||
-		u.MaxTurns == nil || *u.MaxTurns != 60 || u.JobMemory == nil || *u.JobMemory != "6Gi" {
+		u.MaxTurns == nil || *u.MaxTurns != 60 || u.JobMemory == nil || *u.JobMemory != "6Gi" ||
+		u.InlineFindings == nil || *u.InlineFindings {
 		t.Errorf("updated row = %+v", u)
 	}
 	if u.CreatedBy != "alice" || !u.CreatedAt.Equal(r.CreatedAt) {
@@ -479,6 +480,25 @@ func TestUpdateDashboardRepo(t *testing.T) {
 	}
 	if r, _, _ := s.DashboardRepo(ctx, "main", "acme/widgets"); r.MaxTurns == nil || *r.MaxTurns != 120 {
 		t.Errorf("max_turns after a refused update = %v; want 120", r.MaxTurns)
+	}
+	// inline_findings is NULL until set, then written, kept by other updates and cleared by nil.
+	if r.InlineFindings != nil {
+		t.Errorf("inline_findings before it is set = %v; want NULL", r.InlineFindings)
+	}
+	if _, err := s.UpdateDashboardRepo(ctx, "main", "acme/widgets", func(r *DashboardRepo) { r.InlineFindings = ptrTo(false) }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateDashboardRepo(ctx, "main", "acme/widgets", func(r *DashboardRepo) { r.MaxTurns = ptrTo(80) }); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.DashboardRepo(ctx, "main", "acme/widgets"); r.InlineFindings == nil || *r.InlineFindings {
+		t.Errorf("inline_findings after setting false = %v; want false", r.InlineFindings)
+	}
+	if _, err := s.UpdateDashboardRepo(ctx, "main", "acme/widgets", func(r *DashboardRepo) { r.InlineFindings = nil }); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.DashboardRepo(ctx, "main", "acme/widgets"); r.InlineFindings != nil {
+		t.Errorf("inline_findings after clearing = %v; want NULL", r.InlineFindings)
 	}
 }
 

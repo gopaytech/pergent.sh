@@ -23,6 +23,9 @@ const (
 	githubSignaturePrefix = "sha256="
 	githubPullRequest     = "pull_request"
 	githubIssueComment    = "issue_comment"
+	// githubReviewComment is delivered for a comment on a line of the diff,
+	// the replies in a finding's thread among them.
+	githubReviewComment = "pull_request_review_comment"
 )
 
 // GitHubHandler serves POST /webhooks/github/{instance}: the review App's
@@ -69,6 +72,32 @@ type issueCommentEvent struct {
 		} `json:"user"`
 		// PerformedViaGithubApp is set when an App wrote the comment on a
 		// person's behalf.
+		PerformedViaGithubApp *json.RawMessage `json:"performed_via_github_app"`
+	} `json:"comment"`
+	Repository struct {
+		ID       int64  `json:"id"`
+		FullName string `json:"full_name"`
+	} `json:"repository"`
+}
+
+// reviewCommentEvent holds only the fields of a pull_request_review_comment
+// event that are read.
+type reviewCommentEvent struct {
+	Action      string `json:"action"`
+	PullRequest struct {
+		Number int64 `json:"number"`
+	} `json:"pull_request"`
+	Comment struct {
+		ID   int64  `json:"id"`
+		Body string `json:"body"`
+		User struct {
+			ID    int64  `json:"id"`
+			Login string `json:"login"`
+			Type  string `json:"type"`
+		} `json:"user"`
+		// InReplyToID is the ID of the thread's first comment, 0 (or absent)
+		// for a comment that starts a thread.
+		InReplyToID           int64            `json:"in_reply_to_id"`
 		PerformedViaGithubApp *json.RawMessage `json:"performed_via_github_app"`
 	} `json:"comment"`
 	Repository struct {
@@ -151,7 +180,7 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	event := r.Header.Get(githubEventHeader)
 	log = log.With("event", event)
-	if event != githubPullRequest && event != githubIssueComment {
+	if event != githubPullRequest && event != githubIssueComment && event != githubReviewComment {
 		// Includes "ping", sent when the webhook is created.
 		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "other_event")
 		w.WriteHeader(http.StatusOK)
@@ -160,6 +189,10 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if event == githubIssueComment {
 		h.comment(w, r, log, name, body)
+		return
+	}
+	if event == githubReviewComment {
+		h.reviewComment(w, r, log, name, body)
 		return
 	}
 	var ev pullRequestEvent
@@ -301,6 +334,42 @@ func (h *GitHubHandler) comment(w http.ResponseWriter, r *http.Request, log *slo
 			Author: c.User.Login, AuthorID: c.User.ID, AuthorIsBot: c.User.Type == "Bot" || viaApp(c.PerformedViaGithubApp), Body: c.Body,
 		})
 		log = log.With("repository", ev.Repository.FullName, "number", ev.Issue.Number)
+		if err != nil {
+			log.Error("webhook failed", "outcome", outcome, "err", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		log.Info("webhook handled", "outcome", outcome, "reason", reason)
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// reviewComment handles a pull_request_review_comment event: a new reply by a
+// person in a thread on a pull request may carry a command (dismissing the
+// finding the thread is about), which is stored for the engine. A comment that
+// starts a thread is not a reply to anything and is ignored. Nothing here
+// calls GitHub.
+func (h *GitHubHandler) reviewComment(w http.ResponseWriter, r *http.Request, log *slog.Logger, instance string, body []byte) {
+	var ev reviewCommentEvent
+	if err := json.Unmarshal(body, &ev); err != nil {
+		unusable(w, log, "malformed_json")
+		return
+	}
+	c := ev.Comment
+	switch {
+	case ev.Action != "created":
+		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "action")
+	case c.InReplyToID == 0:
+		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "not_a_reply")
+	default:
+		outcome, reason, err := commands{Bots: h.Bots, Store: h.Commands,
+			Repos: repositories(h.Repos, h.Config, h.registry()), Wake: h.Wake}.receive(r.Context(), comment{
+			Platform: config.PlatformGitHub, Instance: instance, Project: ev.Repository.FullName,
+			ProjectID: ev.Repository.ID, IID: ev.PullRequest.Number, CommentID: c.ID,
+			Author: c.User.Login, AuthorID: c.User.ID, AuthorIsBot: c.User.Type == "Bot" || viaApp(c.PerformedViaGithubApp), Body: c.Body,
+			ReplyTo: c.InReplyToID,
+		})
+		log = log.With("repository", ev.Repository.FullName, "number", ev.PullRequest.Number)
 		if err != nil {
 			log.Error("webhook failed", "outcome", outcome, "err", err)
 			http.Error(w, "storage error", http.StatusInternalServerError)

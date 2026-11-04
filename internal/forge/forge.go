@@ -174,6 +174,64 @@ type SourceReader interface {
 	GetFileAt(ctx context.Context, project, path, commit string) ([]byte, bool, error)
 }
 
+// FileDiff is one file of a diff as the platform returns it: Patch is the
+// file's hunks, from the first "@@" on; empty for a binary or too large file.
+type FileDiff struct {
+	Path, OldPath string
+	Deleted       bool
+	Patch         string
+}
+
+// ThreadRef names a thread: GitHub's review thread node ID and its first
+// comment's ID, GitLab's discussion ID and its first note's ID.
+type ThreadRef struct {
+	ID        string
+	CommentID int64
+}
+
+// Thread is a thread of the review bot's on a change, as the platform shows
+// it now. Line and EndLine are where it is anchored at the change's head (0
+// when the platform can't say, e.g. GitHub marks it outdated).
+type Thread struct {
+	Ref           ThreadRef
+	Body          string // its first comment
+	Path          string
+	Line, EndLine int
+	Resolved      bool
+}
+
+// NewThread is a thread to post at a change's head. OldLine is the base
+// line of Line when Line is an unchanged line (GitLab positions need it); 0
+// for an added line.
+type NewThread struct {
+	Path, OldPath string
+	Line, EndLine int
+	OldLine       int
+	Body          string
+}
+
+// Inline is the review bot's inline threads on one platform.
+type Inline interface {
+	// ChangeDiff returns the change's diff at its head.
+	ChangeDiff(ctx context.Context, projectID, number int64) ([]FileDiff, error)
+	// CompareDiff returns the diff from one commit to another.
+	CompareDiff(ctx context.Context, projectID int64, from, to string) ([]FileDiff, error)
+	// Threads lists the review bot's own threads on the change.
+	Threads(ctx context.Context, projectID, number int64) ([]Thread, error)
+	// PostThreads posts threads at ch's head. It returns one ref per thread,
+	// in order; a thread that could not be posted has a zero ref and its
+	// error in errs. err is a failure of the whole call.
+	PostThreads(ctx context.Context, projectID int64, ch Change, threads []NewThread) (refs []ThreadRef, errs []error, err error)
+	// ReplyThread adds a reply to a thread.
+	ReplyThread(ctx context.Context, projectID, number int64, t ThreadRef, body string) error
+	// ResolveThread resolves the thread, or unresolves it when resolved is false.
+	ResolveThread(ctx context.Context, projectID, number int64, t ThreadRef, resolved bool) error
+	// ReactThread adds the emoji for reaction to a reply in a thread.
+	ReactThread(ctx context.Context, projectID, number, commentID int64, reaction Reaction) error
+	// ThreadsBlockMerge reports whether open threads block merging into branch.
+	ThreadsBlockMerge(ctx context.Context, projectID int64, branch string) (bool, error)
+}
+
 // Approver is the approve bot's side of one platform instance.
 type Approver interface {
 	// Approve approves the change at sha. A head that is no longer sha is

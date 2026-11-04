@@ -1110,3 +1110,274 @@ func TestCollaboratorPermissionUnknownUser(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestPullFiles(t *testing.T) {
+	var srvURL string
+	c, rec := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("page") == "" {
+			w.Header().Set("Link", `<`+srvURL+`/repositories/99/pulls/3/files?per_page=100&page=2>; rel="next"`)
+			_, _ = io.WriteString(w, `[{"filename":"a.go","status":"modified","patch":"@@ -1 +1 @@\n-a\n+b"},{"filename":"gone.go","status":"removed","patch":"@@ -1 +0,0 @@\n-x"}]`)
+			return
+		}
+		_, _ = io.WriteString(w, `[{"filename":"new.go","previous_filename":"old.go","status":"renamed"},{"filename":"img.png","status":"added"}]`)
+	})
+	srvURL = c.base
+	got, err := c.PullFiles(ctx, "acme", "widgets", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []forge.FileDiff{
+		{Path: "a.go", Patch: "@@ -1 +1 @@\n-a\n+b"},
+		{Path: "gone.go", Deleted: true, Patch: "@@ -1 +0,0 @@\n-x"},
+		{Path: "new.go", OldPath: "old.go"},
+		{Path: "img.png"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("PullFiles = %+v", got)
+	}
+	expect(t, rec.get(0), "GET", "/repos/acme/widgets/pulls/3/files", "per_page=100")
+	expect(t, rec.get(1), "GET", "/repositories/99/pulls/3/files", "per_page=100&page=2")
+}
+
+func TestCompareFiles(t *testing.T) {
+	c, rec := serve(t, jsonReply(map[string]any{"status": "ahead", "merge_base_commit": map[string]any{"sha": "aaa"}, "files": []map[string]any{
+		{"filename": "a.go", "status": "modified", "patch": "@@ -1 +1 @@\n-a\n+b"},
+		{"filename": "b.go", "status": "removed"},
+	}}))
+	got, err := c.CompareFiles(ctx, "acme", "widgets", "aaa", "bbb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []forge.FileDiff{{Path: "a.go", Patch: "@@ -1 +1 @@\n-a\n+b"}, {Path: "b.go", Deleted: true}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("CompareFiles = %+v", got)
+	}
+	expect(t, rec.get(0), "GET", "/repos/acme/widgets/compare/aaa...bbb", "per_page=100")
+}
+
+// The files of a three-dot comparison describe from..to only when from is an
+// ancestor of to; after a force-push they are the diff from the merge base.
+func TestCompareFilesAncestry(t *testing.T) {
+	files := []map[string]any{{"filename": "a.go", "status": "modified"}}
+	for name, tc := range map[string]struct {
+		reply   map[string]any
+		wantErr bool
+		wantLen int
+	}{
+		"ahead":     {map[string]any{"status": "ahead", "merge_base_commit": map[string]any{"sha": "aaa"}, "files": files}, false, 1},
+		"identical": {map[string]any{"status": "identical", "merge_base_commit": map[string]any{"sha": "aaa"}, "files": []map[string]any{}}, false, 0},
+		"diverged":  {map[string]any{"status": "diverged", "merge_base_commit": map[string]any{"sha": "ccc"}, "files": files}, true, 0},
+		"behind":    {map[string]any{"status": "behind", "merge_base_commit": map[string]any{"sha": "bbb"}, "files": files}, true, 0},
+		"no status": {map[string]any{"files": files}, true, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, _ := serve(t, jsonReply(tc.reply))
+			got, err := c.CompareFiles(ctx, "acme", "widgets", "aaa", "bbb")
+			if tc.wantErr {
+				if !errors.Is(err, ErrNotAncestor) || got != nil {
+					t.Fatalf("got=%+v err=%v, want ErrNotAncestor", got, err)
+				}
+				return
+			}
+			if err != nil || len(got) != tc.wantLen {
+				t.Fatalf("len=%d err=%v", len(got), err)
+			}
+		})
+	}
+}
+
+func nFiles(n int) []map[string]any {
+	files := make([]map[string]any, n)
+	for i := range files {
+		files[i] = map[string]any{"filename": "f" + strconv.Itoa(i) + ".go", "status": "modified"}
+	}
+	return files
+}
+
+// GitHub lists at most 3000 files of a pull request: that many may be cut short.
+func TestPullFilesAtTheCapIsPartial(t *testing.T) {
+	c, _ := serve(t, jsonReply(nFiles(3000)))
+	if _, err := c.PullFiles(ctx, "acme", "widgets", 3); !errors.Is(err, ErrPartialDiff) {
+		t.Fatalf("err = %v, want ErrPartialDiff", err)
+	}
+	c, _ = serve(t, jsonReply(nFiles(2999)))
+	got, err := c.PullFiles(ctx, "acme", "widgets", 3)
+	if err != nil || len(got) != 2999 {
+		t.Fatalf("len=%d err=%v", len(got), err)
+	}
+}
+
+// The compare API lists at most 300 files.
+func TestCompareFilesAtTheCapIsPartial(t *testing.T) {
+	c, _ := serve(t, jsonReply(map[string]any{"status": "ahead", "files": nFiles(300)}))
+	if _, err := c.CompareFiles(ctx, "acme", "widgets", "aaa", "bbb"); !errors.Is(err, ErrPartialDiff) {
+		t.Fatalf("err = %v, want ErrPartialDiff", err)
+	}
+	c, _ = serve(t, jsonReply(map[string]any{"status": "ahead", "files": nFiles(299)}))
+	got, err := c.CompareFiles(ctx, "acme", "widgets", "aaa", "bbb")
+	if err != nil || len(got) != 299 {
+		t.Fatalf("len=%d err=%v", len(got), err)
+	}
+}
+
+// Later pages of a comparison list commits, not files: only page 1 is read.
+func TestCompareFilesReadsOnlyTheFirstPage(t *testing.T) {
+	var srvURL string
+	c, rec := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Link", `<`+srvURL+`/repositories/99/compare/aaa...bbb?per_page=100&page=2>; rel="next"`)
+		_, _ = io.WriteString(w, `{"status":"ahead","files":[{"filename":"a.go","status":"modified"}],"commits":[]}`)
+	})
+	srvURL = c.base
+	got, err := c.CompareFiles(ctx, "acme", "widgets", "aaa", "bbb")
+	if err != nil || len(got) != 1 || got[0].Path != "a.go" {
+		t.Fatalf("got=%+v err=%v", got, err)
+	}
+	if n := len(rec.all()); n != 1 {
+		t.Fatalf("requests = %d, want 1", n)
+	}
+}
+
+func TestCreateReviewComments(t *testing.T) {
+	c, rec := serve(t, jsonReply(map[string]any{"id": 77}))
+	id, err := c.CreateReviewComments(ctx, "acme", "widgets", 3, "abc1234def", "Findings.", []ReviewComment{
+		{Path: "a.go", Line: 10, Body: "one"},
+		{Path: "b.go", Line: 4, EndLine: 9, Body: "two"},
+		{Path: "c.go", Line: 5, EndLine: 5, Body: "same line"},
+	})
+	if err != nil || id != 77 {
+		t.Fatalf("CreateReviewComments = %d, %v", id, err)
+	}
+	got := rec.get(0)
+	expect(t, got, "POST", "/repos/acme/widgets/pulls/3/reviews", "")
+	jsonEq(t, got.Body, `{"commit_id":"abc1234def","event":"COMMENT","body":"Findings.","comments":[
+		{"path":"a.go","body":"one","line":10,"side":"RIGHT"},
+		{"path":"b.go","body":"two","line":9,"side":"RIGHT","start_line":4,"start_side":"RIGHT"},
+		{"path":"c.go","body":"same line","line":5,"side":"RIGHT"}]}`)
+}
+
+func TestCreateReviewCommentsError(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"Unprocessable"}`, 422) })
+	_, err := c.CreateReviewComments(ctx, "acme", "widgets", 3, "abc", "b", []ReviewComment{{Path: "a.go", Line: 1, Body: "x"}})
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.Status != 422 {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// A retried POST whose first attempt landed would duplicate every thread, so
+// the review is sent once whatever the reply.
+func TestCreateReviewCommentsSentOnce(t *testing.T) {
+	for _, status := range []int{502, 503, 429} {
+		c, rec := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, "x", status) })
+		_, err := c.CreateReviewComments(ctx, "acme", "widgets", 3, "abc", "b", []ReviewComment{{Path: "a.go", Line: 1, Body: "x"}})
+		var ae *APIError
+		if !errors.As(err, &ae) || ae.Status != status {
+			t.Fatalf("status %d: err = %v", status, err)
+		}
+		if n := len(rec.all()); n != 1 {
+			t.Fatalf("status %d: requests = %d, want 1", status, n)
+		}
+	}
+}
+
+func TestCreateReviewCommentsConnectionErrorSentOnce(t *testing.T) {
+	srv, rec := server(t, func(w http.ResponseWriter, r *http.Request) {
+		// Drop the connection without a reply.
+		conn, _, _ := w.(http.Hijacker).Hijack()
+		_ = conn.Close()
+	})
+	c := NewTokenClient(srv.URL, testToken, srv.Client())
+	c.sleep = func(context.Context, time.Duration) error { return nil }
+	_, err := c.CreateReviewComments(ctx, "acme", "widgets", 3, "abc", "b", []ReviewComment{{Path: "a.go", Line: 1, Body: "x"}})
+	if n := len(rec.all()); err == nil || n != 1 {
+		t.Fatalf("err = %v, requests = %d, want an error after 1 request", err, n)
+	}
+}
+
+func TestReplyReviewComment(t *testing.T) {
+	c, rec := serve(t, jsonReply(map[string]any{"id": 5}))
+	if err := c.ReplyReviewComment(ctx, "acme", "widgets", 3, 123, "thanks"); err != nil {
+		t.Fatal(err)
+	}
+	got := rec.get(0)
+	expect(t, got, "POST", "/repos/acme/widgets/pulls/3/comments/123/replies", "")
+	jsonEq(t, got.Body, `{"body":"thanks"}`)
+}
+
+func TestReactToReviewComment(t *testing.T) {
+	c, rec := serve(t, jsonReply(map[string]any{"id": 5}))
+	if err := c.ReactToReviewComment(ctx, "acme", "widgets", 123, "+1"); err != nil {
+		t.Fatal(err)
+	}
+	got := rec.get(0)
+	expect(t, got, "POST", "/repos/acme/widgets/pulls/comments/123/reactions", "")
+	jsonEq(t, got.Body, `{"content":"+1"}`)
+}
+
+func TestThreadResolutionRequired(t *testing.T) {
+	rules := func(required bool) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/protection") {
+				t.Errorf("classic protection read after the rules answered: %s", r.URL.Path)
+			}
+			jsonReply([]map[string]any{
+				{"type": "deletion"},
+				{"type": "pull_request", "parameters": map[string]any{"required_review_thread_resolution": required}},
+			})(w, r)
+		}
+	}
+	c, rec := serve(t, rules(true))
+	got, err := c.ThreadResolutionRequired(ctx, "acme", "widgets", "release/v1")
+	if err != nil || !got {
+		t.Fatalf("from rules = %v, %v", got, err)
+	}
+	expect(t, rec.get(0), "GET", "/repos/acme/widgets/rules/branches/release/v1", "per_page=100")
+	if n := len(rec.all()); n != 1 {
+		t.Errorf("requests = %d, want 1", n)
+	}
+
+	// Rules say no; the classic protection says yes.
+	classic := func(h http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if strings.Contains(r.URL.Path, "/rules/") {
+				jsonReply([]map[string]any{{"type": "pull_request", "parameters": map[string]any{"required_review_thread_resolution": false}}})(w, r)
+				return
+			}
+			h(w, r)
+		}
+	}
+	c, rec = serve(t, classic(jsonReply(map[string]any{"required_conversation_resolution": map[string]any{"enabled": true}})))
+	got, err = c.ThreadResolutionRequired(ctx, "acme", "widgets", "main")
+	if err != nil || !got {
+		t.Fatalf("from classic protection = %v, %v", got, err)
+	}
+	expect(t, rec.get(1), "GET", "/repos/acme/widgets/branches/main/protection", "")
+
+	c, _ = serve(t, classic(jsonReply(map[string]any{"required_conversation_resolution": map[string]any{"enabled": false}})))
+	if got, err := c.ThreadResolutionRequired(ctx, "acme", "widgets", "main"); err != nil || got {
+		t.Errorf("disabled = %v, %v", got, err)
+	}
+	c, _ = serve(t, classic(jsonReply(map[string]any{"required_status_checks": nil})))
+	if got, err := c.ThreadResolutionRequired(ctx, "acme", "widgets", "main"); err != nil || got {
+		t.Errorf("absent = %v, %v", got, err)
+	}
+
+	// No protection (404) is not protected.
+	c, _ = serve(t, classic(func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"Branch not protected"}`, 404) }))
+	if got, err := c.ThreadResolutionRequired(ctx, "acme", "widgets", "main"); err != nil || got {
+		t.Errorf("404 = %v, %v", got, err)
+	}
+
+	// Anything else is an error.
+	c, _ = serve(t, classic(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"Resource not accessible by integration"}`, 403)
+	}))
+	if _, err := c.ThreadResolutionRequired(ctx, "acme", "widgets", "main"); !errors.Is(err, ErrForbidden) {
+		t.Errorf("403 err = %v, want ErrForbidden", err)
+	}
+	if _, err := c.ThreadResolutionRequired(ctx, "acme", "widgets", ""); err == nil {
+		t.Error("an empty branch was accepted")
+	}
+}

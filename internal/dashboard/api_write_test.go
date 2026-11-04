@@ -277,6 +277,9 @@ func TestSettingsValidation(t *testing.T) {
 		{`{"approve":null}`, true, func(r store.DashboardRepo) bool { return r.Approve == nil }},
 		{`{"reviewDrafts":false}`, true, func(r store.DashboardRepo) bool { return r.ReviewDrafts != nil && !*r.ReviewDrafts }},
 		{`{"reviewDrafts":0}`, false, nil},
+		{`{"inlineFindings":false}`, true, func(r store.DashboardRepo) bool { return r.InlineFindings != nil && !*r.InlineFindings }},
+		{`{"inlineFindings":"no"}`, false, nil},
+		{`{"inlineFindings":null}`, true, func(r store.DashboardRepo) bool { return r.InlineFindings == nil }},
 		{`{"failureStatus":"neutral"}`, true, func(r store.DashboardRepo) bool { return r.FailureStatus != nil && *r.FailureStatus == "neutral" }},
 		{`{"failureStatus":"success"}`, false, nil},
 		{`{"failureStatus":"failed"}`, true, func(r store.DashboardRepo) bool { return r.FailureStatus != nil && *r.FailureStatus == "failed" }},
@@ -343,7 +346,7 @@ func TestSettingsValidation(t *testing.T) {
 	}
 
 	// A partial update keeps the other fields; the answer is the detail.
-	rec := e.send(c, "PUT", target, `{"approve":false,"jobTimeoutSeconds":900,"maxTurns":120,"rerunLimitPerRepo":75}`)
+	rec := e.send(c, "PUT", target, `{"approve":false,"inlineFindings":false,"jobTimeoutSeconds":900,"maxTurns":120,"rerunLimitPerRepo":75}`)
 	wantCode(t, rec, "PUT two fields", http.StatusOK)
 	var detail RepositoryDetailView
 	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
@@ -351,6 +354,7 @@ func TestSettingsValidation(t *testing.T) {
 	}
 	if detail.Repo.Project != "acme/gadgets" || detail.Repo.Source != "dashboard" ||
 		detail.Settings["approve"].Value != false || !detail.Settings["approve"].Overridden ||
+		detail.Settings["inlineFindings"].Value != false || !detail.Settings["inlineFindings"].Overridden ||
 		detail.Settings["jobTimeoutSeconds"].Value != float64(900) ||
 		detail.Settings["maxTurns"].Value != float64(120) || !detail.Settings["maxTurns"].Overridden ||
 		detail.Settings["jobMemory"].Value != "1536Mi" || !detail.Settings["jobMemory"].Overridden ||
@@ -370,7 +374,7 @@ func TestSettingsValidation(t *testing.T) {
 	wantCode(t, rec, "reset", http.StatusOK)
 	r, found := e.storedRepo("main", "acme/gadgets")
 	if !found || r.Approve != nil || r.ReviewDrafts != nil || r.FailureStatus != nil || r.Skills != nil ||
-		r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil ||
+		r.InlineFindings != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil ||
 		r.CreatedBy != "carol" {
 		t.Errorf("after reset row = %+v, %v", r, found)
 	}
@@ -1056,5 +1060,93 @@ func TestParseDefaultsMaxTurns(t *testing.T) {
 	}
 	if got := changedDefaults(b, b); len(got) != 0 {
 		t.Errorf("changedDefaults of equal defaults = %q", got)
+	}
+}
+
+// Inline findings is stored on its own: true or false, null back to the
+// default (on); a reset clears it; anything else is 400 with its message.
+func TestInlineFindingsSetting(t *testing.T) {
+	e := newEnv(t, nil)
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	c := e.signInGitLab(true, "acme/gadgets")
+	target := "/api/repositories/main/acme/gadgets/settings"
+
+	rec := e.send(c, "PUT", target, `{"inlineFindings":false}`)
+	wantCode(t, rec, "PUT false", http.StatusOK)
+	var detail RepositoryDetailView
+	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if s := detail.Settings["inlineFindings"]; s.Value != false || !s.Overridden {
+		t.Errorf("inlineFindings = %+v, want false overridden", s)
+	}
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.InlineFindings == nil || *r.InlineFindings {
+		t.Errorf("stored = %v, want false", r.InlineFindings)
+	}
+	if g, _, err := e.d.Repos.Get(ctx, "main", "acme/gadgets"); err != nil || g.InlineFindings {
+		t.Errorf("effective = %+v, %v; want inline findings off", g, err)
+	}
+
+	rec = e.send(c, "PUT", target, `{"inlineFindings":"no"}`)
+	wantCode(t, rec, "PUT no", http.StatusBadRequest)
+	if got := errorOf(t, rec); got != "inlineFindings must be true, false or null" {
+		t.Errorf("error = %q", got)
+	}
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.InlineFindings == nil || *r.InlineFindings {
+		t.Errorf("a refused PUT changed the row: %v", r.InlineFindings)
+	}
+
+	rec = e.send(c, "PUT", target, `{"inlineFindings":null}`)
+	wantCode(t, rec, "PUT null", http.StatusOK)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.InlineFindings != nil {
+		t.Errorf("stored after null = %v, want NULL", r.InlineFindings)
+	}
+	if g, _, _ := e.d.Repos.Get(ctx, "main", "acme/gadgets"); !g.InlineFindings {
+		t.Errorf("effective after null = %+v; want the default, on", g)
+	}
+
+	e.send(c, "PUT", target, `{"inlineFindings":false}`)
+	wantCode(t, e.send(c, "POST", target+"/reset", ""), "reset", http.StatusOK)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.InlineFindings != nil {
+		t.Errorf("stored after reset = %v, want NULL", r.InlineFindings)
+	}
+}
+
+// boolSetting takes the two switches and the one for inline findings, and
+// names the key in its message.
+func TestBoolSettingInlineFindings(t *testing.T) {
+	var row store.DashboardRepo
+	edit, msg := boolSetting("inlineFindings", json.RawMessage(`false`), false)
+	if msg != "" {
+		t.Fatalf("msg = %q", msg)
+	}
+	edit(&row)
+	if row.InlineFindings == nil || *row.InlineFindings || row.Approve != nil || row.ReviewDrafts != nil {
+		t.Errorf("row = %+v, want only inline findings false", row)
+	}
+	edit, _ = boolSetting("inlineFindings", json.RawMessage(`null`), true)
+	edit(&row)
+	if row.InlineFindings != nil {
+		t.Errorf("after null: %v", row.InlineFindings)
+	}
+	if _, msg := boolSetting("inlineFindings", json.RawMessage(`"no"`), false); msg != "inlineFindings must be true, false or null" {
+		t.Errorf("msg = %q", msg)
+	}
+	if !strings.Contains(msgBadSettings, "inlineFindings") {
+		t.Errorf("msgBadSettings = %q", msgBadSettings)
+	}
+}
+
+// A key that is not a bool setting is refused with a message, not a nil
+// function that panics when the edit runs.
+func TestBoolSettingUnknownKey(t *testing.T) {
+	for _, raw := range []string{`true`, `null`} {
+		edit, msg := boolSetting("nope", json.RawMessage(raw), raw == "null")
+		if edit != nil {
+			t.Errorf("%s: edit is not nil", raw)
+		}
+		if msg != "nope is not a setting" {
+			t.Errorf("%s: msg = %q", raw, msg)
+		}
 	}
 }

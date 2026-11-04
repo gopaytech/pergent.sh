@@ -229,6 +229,7 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
   settings: {
     approve: { value: true, overridden: true },
     reviewDrafts: { value: false, overridden: false },
+    inlineFindings: { value: true, overridden: false },
     failureStatus: { value: "failed", overridden: false },
     skills: { value: null, overridden: false },
     repoSkills: { value: [], overridden: false },
@@ -338,14 +339,15 @@ export const integrations: IntegrationView = {
   approver: "token",
   tokenExpiry: "2026-11-09T00:00:00Z",
   repos: [
-    { project: "acme/payments", installed: true, approverReachable: false },
-    { project: "acme/widgets", installed: true, approverReachable: true },
+    { project: "acme/payments", installed: true, approverReachable: false, inlineAvailable: false },
+    { project: "acme/widgets", installed: true, approverReachable: true, inlineAvailable: true },
   ],
 };
 
 export const defaults: DefaultsView = {
   approve: true,
   reviewDrafts: true,
+  inlineFindings: true,
   failureStatus: "neutral",
   jobTimeoutSeconds: 600,
   maxTurns: 40,

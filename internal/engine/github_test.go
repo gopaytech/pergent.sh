@@ -823,6 +823,51 @@ func TestReconcileGitHubApproveAppWithoutPullRequestsWrite(t *testing.T) {
 	}
 }
 
+// Whether the review App may post inline threads follows its installation's
+// Pull requests permission, on every pass: read-only turns it off, write turns
+// it back on.
+func TestReconcileGitHubInlineAvailable(t *testing.T) {
+	env := newTestEnv(t)
+	gh := addGitHub(t, env, true)
+	reconcileGitHubSetup(env, gh)
+	level := "read"
+	gh.Handle(http.MethodGet, ghRepoAPI+"/installation", func(w http.ResponseWriter, r *http.Request) {
+		if jwtApp(r.Header.Get("Authorization")) == ghReviewApp {
+			writeJSON(w, http.StatusOK, map[string]any{"id": ghInstallation, "permissions": map[string]string{"pull_requests": level}})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": ghApproveInstallation, "permissions": map[string]string{"pull_requests": "write"}})
+	})
+
+	reconcile(t, env)
+	if p, _ := ghProject(t, env); p.InlineAvailable || !p.ApproveAvailable {
+		t.Fatalf("stored = %+v; want inline unavailable with a read-only review App", p)
+	}
+
+	level = "write"
+	reconcile(t, env)
+	if p, _ := ghProject(t, env); !p.InlineAvailable {
+		t.Fatalf("stored = %+v; want inline available once the permission is there", p)
+	}
+
+	// A new repository whose installation reports no permissions is not
+	// stored as unable to post inline.
+	if err := env.Store.DeleteProject(env.ctx, ghInstance, ghRepoID); err != nil {
+		t.Fatal(err)
+	}
+	gh.Handle(http.MethodGet, ghRepoAPI+"/installation", func(w http.ResponseWriter, r *http.Request) {
+		if jwtApp(r.Header.Get("Authorization")) == ghReviewApp {
+			writeJSON(w, http.StatusOK, map[string]any{"id": ghInstallation})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": ghApproveInstallation})
+	})
+	reconcile(t, env)
+	if p, ok := ghProject(t, env); !ok || !p.InlineAvailable {
+		t.Fatalf("new project stored = %+v, %v; want inline available", p, ok)
+	}
+}
+
 // The approve side can't be asked (GitHub refuses the lookup): the pass
 // reports it and keeps the stored answer.
 func TestReconcileGitHubApproveCheckErrorKeepsStored(t *testing.T) {
