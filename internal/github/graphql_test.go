@@ -108,7 +108,9 @@ func TestReviewThreadsCommentIDs(t *testing.T) {
 		"full id invalid":            {`"fullDatabaseId":"abc","databaseId":503`, 503},
 	} {
 		t.Run(name, func(t *testing.T) {
-			c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, threadsPage("", node(tc.comment))) })
+			c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.WriteString(w, threadsPage("", node(tc.comment)))
+			})
 			got, err := c.ReviewThreads(ctx, "acme", "widgets", 3)
 			if err != nil || len(got) != 1 {
 				t.Fatalf("got=%+v err=%v", got, err)
