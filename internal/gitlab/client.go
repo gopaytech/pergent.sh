@@ -437,6 +437,113 @@ func (c *Client) GetMergeRequest(ctx context.Context, projectID, iid int64) (Mer
 	return mr, err
 }
 
+// MergeRequestDiffs returns the merge request's files at its head (GET
+// .../merge_requests/:iid/diffs, GitLab 15.7 and later). An older GitLab
+// answers 404 there, and the deprecated .../changes, which is not paginated,
+// is read instead. A merge request that doesn't exist is ErrNotFound.
+func (c *Client) MergeRequestDiffs(ctx context.Context, projectID, iid int64) ([]Diff, error) {
+	var out []Diff
+	err := c.paginate(ctx, mrPath(projectID, iid)+"/diffs", nil, func(body []byte) (bool, error) {
+		var page []Diff
+		if err := decode(body, &page); err != nil {
+			return false, err
+		}
+		out = append(out, page...)
+		return false, nil
+	})
+	if !isStatus(err, http.StatusNotFound) {
+		return out, err
+	}
+	var ch struct {
+		Changes []Diff `json:"changes"`
+	}
+	if _, err := c.getJSON(ctx, mrPath(projectID, iid)+"/changes", nil, &ch); err != nil {
+		return nil, err
+	}
+	return ch.Changes, nil
+}
+
+// Compare returns the files that differ between two commits, straight from
+// one to the other (GET .../repository/compare?straight=true).
+func (c *Client) Compare(ctx context.Context, projectID int64, from, to string) ([]Diff, error) {
+	var out struct {
+		Diffs []Diff `json:"diffs"`
+	}
+	q := url.Values{"from": {from}, "to": {to}, "straight": {"true"}}
+	if _, err := c.getJSON(ctx, projPath(projectID)+"/repository/compare", q, &out); err != nil {
+		return nil, err
+	}
+	return out.Diffs, nil
+}
+
+// Discussions lists the merge request's discussions, every note of each.
+func (c *Client) Discussions(ctx context.Context, projectID, iid int64) ([]Discussion, error) {
+	var out []Discussion
+	err := c.paginate(ctx, mrPath(projectID, iid)+"/discussions", nil, func(body []byte) (bool, error) {
+		var page []Discussion
+		if err := decode(body, &page); err != nil {
+			return false, err
+		}
+		out = append(out, page...)
+		return false, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// CreateDiffDiscussion starts a discussion with body at pos and returns its
+// ID and its first note's ID. The position goes in the JSON body as a nested
+// "position" object, as GitLab's form fields position[...] would carry it.
+func (c *Client) CreateDiffDiscussion(ctx context.Context, projectID, iid int64, body string, pos Position) (string, int64, error) {
+	position := map[string]any{
+		"position_type": "text",
+		"base_sha":      pos.BaseSHA,
+		"start_sha":     pos.StartSHA,
+		"head_sha":      pos.HeadSHA,
+		"old_path":      pos.OldPath,
+		"new_path":      pos.NewPath,
+		"new_line":      pos.NewLine,
+	}
+	if pos.OldLine > 0 {
+		position["old_line"] = pos.OldLine
+	}
+	resp, err := c.do(ctx, http.MethodPost, mrPath(projectID, iid)+"/discussions", nil,
+		map[string]any{"body": body, "position": position})
+	if err != nil {
+		return "", 0, err
+	}
+	var d Discussion
+	if err := decode(resp.body, &d); err != nil {
+		return "", 0, err
+	}
+	if d.ID == "" {
+		return "", 0, errors.New("gitlab: discussion has no id")
+	}
+	var noteID int64
+	if len(d.Notes) > 0 {
+		noteID = d.Notes[0].ID
+	}
+	return d.ID, noteID, nil
+}
+
+// ReplyDiscussion adds a note to a discussion. A missing discussion is
+// ErrNotFound.
+func (c *Client) ReplyDiscussion(ctx context.Context, projectID, iid int64, discussionID, body string) error {
+	_, err := c.do(ctx, http.MethodPost, mrPath(projectID, iid)+"/discussions/"+seg(discussionID)+"/notes", nil,
+		map[string]string{"body": body})
+	return err
+}
+
+// ResolveDiscussion resolves a discussion, or reopens it when resolved is
+// false. A missing discussion is ErrNotFound.
+func (c *Client) ResolveDiscussion(ctx context.Context, projectID, iid int64, discussionID string, resolved bool) error {
+	_, err := c.do(ctx, http.MethodPut, mrPath(projectID, iid)+"/discussions/"+seg(discussionID),
+		url.Values{"resolved": {strconv.FormatBool(resolved)}}, nil)
+	return err
+}
+
 // CommitSHA returns the commit a branch, tag or commit ref points at (GET
 // /projects/:id/repository/commits/:ref). A ref that doesn't exist is
 // ErrNotFound.

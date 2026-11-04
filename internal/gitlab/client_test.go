@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -1129,5 +1130,269 @@ func TestAwardNoteEmojiAlreadyAwarded(t *testing.T) {
 	})
 	if err := c.AwardNoteEmoji(context.Background(), 7, 3, 55, "eyes"); err != nil {
 		t.Fatalf("err = %v, want nil", err)
+	}
+}
+
+func TestMergeRequestDiffs(t *testing.T) {
+	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("page") == "2" {
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"old_path": "gone.go", "new_path": "gone.go", "deleted_file": true, "diff": "@@ -1 +0,0 @@\n-x\n"}})
+			return
+		}
+		w.Header().Set("X-Next-Page", "2")
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"old_path": "old.go", "new_path": "new.go", "diff": "@@ -1 +1 @@\n-a\n+b\n", "renamed_file": true},
+			{"old_path": "img.png", "new_path": "img.png", "diff": ""},
+		})
+	})
+	got, err := c.MergeRequestDiffs(context.Background(), 7, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Diff{
+		{OldPath: "old.go", NewPath: "new.go", Diff: "@@ -1 +1 @@\n-a\n+b\n"},
+		{OldPath: "img.png", NewPath: "img.png"},
+		{OldPath: "gone.go", NewPath: "gone.go", DeletedFile: true, Diff: "@@ -1 +0,0 @@\n-x\n"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("diffs = %+v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("diff %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	if len(*reqs) != 2 {
+		t.Fatalf("requests = %d", len(*reqs))
+	}
+	expect(t, (*reqs)[0], "GET", "/api/v4/projects/7/merge_requests/3/diffs", "per_page=100")
+	expect(t, (*reqs)[1], "GET", "/api/v4/projects/7/merge_requests/3/diffs", "page=2&per_page=100")
+}
+
+// A GitLab older than 15.7 has no /diffs: the deprecated /changes answers.
+func TestMergeRequestDiffsFallsBackToChanges(t *testing.T) {
+	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/diffs") {
+			http.Error(w, `{"message":"404 Not Found"}`, 404)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"changes": []map[string]any{
+			{"old_path": "a.go", "new_path": "a.go", "diff": "@@ -1 +1 @@\n-a\n+b\n"},
+		}})
+	})
+	got, err := c.MergeRequestDiffs(context.Background(), 7, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].NewPath != "a.go" || got[0].Diff != "@@ -1 +1 @@\n-a\n+b\n" {
+		t.Fatalf("diffs = %+v", got)
+	}
+	if len(*reqs) != 2 {
+		t.Fatalf("requests = %d", len(*reqs))
+	}
+	expect(t, (*reqs)[0], "GET", "/api/v4/projects/7/merge_requests/3/diffs", "per_page=100")
+	expect(t, (*reqs)[1], "GET", "/api/v4/projects/7/merge_requests/3/changes", "")
+}
+
+// A merge request that is gone fails both: the error still matches ErrNotFound.
+func TestMergeRequestDiffsNotFound(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, "nope", 404) })
+	if _, err := c.MergeRequestDiffs(context.Background(), 7, 3); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// Only a 404 falls back; any other error is the answer.
+func TestMergeRequestDiffsOtherErrorDoesNotFallBack(t *testing.T) {
+	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, "no", 403) })
+	if _, err := c.MergeRequestDiffs(context.Background(), 7, 3); !isStatus(err, 403) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(*reqs) != 1 {
+		t.Fatalf("requests = %d", len(*reqs))
+	}
+}
+
+func TestCompare(t *testing.T) {
+	c, reqs := serve(t, jsonReply(map[string]any{"commits": []any{}, "diffs": []map[string]any{
+		{"old_path": "a.go", "new_path": "a.go", "diff": "@@ -1 +1 @@\n-a\n+b\n"},
+		{"old_path": "b.go", "new_path": "b.go", "deleted_file": true, "diff": ""},
+	}}))
+	got, err := c.Compare(context.Background(), 7, "aaa", "bbb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].NewPath != "a.go" || !got[1].DeletedFile {
+		t.Fatalf("diffs = %+v", got)
+	}
+	expect(t, (*reqs)[0], "GET", "/api/v4/projects/7/repository/compare", "from=aaa&straight=true&to=bbb")
+}
+
+func TestDiscussions(t *testing.T) {
+	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("page") == "2" {
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"id": "d2", "notes": []map[string]any{
+				{"id": 30, "body": "plain", "author": map[string]any{"id": 9}},
+			}}})
+			return
+		}
+		w.Header().Set("X-Next-Page", "2")
+		_ = json.NewEncoder(w).Encode([]map[string]any{{"id": "d1", "individual_note": false, "notes": []map[string]any{
+			{"id": 10, "body": "finding", "author": map[string]any{"id": 5}, "resolvable": true, "resolved": true,
+				"position": map[string]any{"new_path": "a.go", "new_line": 12,
+					"line_range": map[string]any{"start": map[string]any{"new_line": 12}, "end": map[string]any{"new_line": 14}}}},
+			{"id": 11, "body": "reply", "author": map[string]any{"id": 9}},
+		}}})
+	})
+	got, err := c.Discussions(context.Background(), 7, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != "d1" || got[1].ID != "d2" || len(got[0].Notes) != 2 {
+		t.Fatalf("discussions = %+v", got)
+	}
+	n := got[0].Notes[0]
+	if n.ID != 10 || n.Body != "finding" || n.Author.ID != 5 || !n.Resolvable || !n.Resolved {
+		t.Fatalf("note = %+v", n)
+	}
+	if n.Position == nil || n.Position.NewPath != "a.go" || n.Position.NewLine != 12 || n.Position.LineRange == nil || n.Position.LineRange.End.NewLine != 14 {
+		t.Fatalf("position = %+v", n.Position)
+	}
+	if got[0].Notes[1].Position != nil || got[1].Notes[0].Position != nil {
+		t.Fatalf("a note without a position has none: %+v", got)
+	}
+	expect(t, (*reqs)[0], "GET", "/api/v4/projects/7/merge_requests/3/discussions", "per_page=100")
+	expect(t, (*reqs)[1], "GET", "/api/v4/projects/7/merge_requests/3/discussions", "page=2&per_page=100")
+}
+
+func TestCreateDiffDiscussion(t *testing.T) {
+	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(201)
+		_, _ = w.Write([]byte(`{"id":"abc123","notes":[{"id":77}]}`))
+	})
+	id, noteID, err := c.CreateDiffDiscussion(context.Background(), 7, 3, "hi", Position{
+		BaseSHA: "b", StartSHA: "s", HeadSHA: "h", OldPath: "old.go", NewPath: "new.go", NewLine: 12,
+	})
+	if err != nil || id != "abc123" || noteID != 77 {
+		t.Fatalf("id=%q note=%d err=%v", id, noteID, err)
+	}
+	expect(t, (*reqs)[0], "POST", "/api/v4/projects/7/merge_requests/3/discussions", "")
+	var got map[string]any
+	if err := json.Unmarshal([]byte((*reqs)[0].Body), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"body": "hi", "position": map[string]any{
+		"position_type": "text", "base_sha": "b", "start_sha": "s", "head_sha": "h",
+		"old_path": "old.go", "new_path": "new.go", "new_line": float64(12),
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("body = %s", (*reqs)[0].Body)
+	}
+}
+
+func TestCreateDiffDiscussionUnchangedLine(t *testing.T) {
+	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(201)
+		_, _ = w.Write([]byte(`{"id":"abc123","notes":[{"id":77}]}`))
+	})
+	_, _, err := c.CreateDiffDiscussion(context.Background(), 7, 3, "hi", Position{
+		BaseSHA: "b", StartSHA: "s", HeadSHA: "h", OldPath: "a.go", NewPath: "a.go", NewLine: 12, OldLine: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Position map[string]any `json:"position"`
+	}
+	if err := json.Unmarshal([]byte((*reqs)[0].Body), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Position["new_line"] != float64(12) || got.Position["old_line"] != float64(10) {
+		t.Fatalf("position = %v", got.Position)
+	}
+}
+
+func TestCreateDiffDiscussionRefused(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"400 Bad request - Note {:line_code=>[\"can't be blank\"]}"}`, 400)
+	})
+	_, _, err := c.CreateDiffDiscussion(context.Background(), 7, 3, "hi", Position{NewPath: "a.go", NewLine: 1})
+	if !isStatus(err, 400) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestCreateDiffDiscussionNoID(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(201)
+		_, _ = w.Write([]byte(`{"notes":[]}`))
+	})
+	if _, _, err := c.CreateDiffDiscussion(context.Background(), 7, 3, "hi", Position{NewPath: "a.go", NewLine: 1}); err == nil {
+		t.Fatal("a reply without a discussion id must be an error")
+	}
+}
+
+func TestReplyDiscussion(t *testing.T) {
+	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(201)
+		_, _ = w.Write([]byte(`{"id":88}`))
+	})
+	if err := c.ReplyDiscussion(context.Background(), 7, 3, "abc123", "thanks"); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, (*reqs)[0], "POST", "/api/v4/projects/7/merge_requests/3/discussions/abc123/notes", "")
+	if (*reqs)[0].Body != `{"body":"thanks"}` {
+		t.Fatalf("body = %s", (*reqs)[0].Body)
+	}
+}
+
+func TestReplyDiscussionNotFound(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, "nope", 404) })
+	if err := c.ReplyDiscussion(context.Background(), 7, 3, "abc123", "x"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestResolveDiscussion(t *testing.T) {
+	for _, resolved := range []bool{true, false} {
+		c, reqs := serve(t, jsonReply(map[string]any{"id": "abc123"}))
+		if err := c.ResolveDiscussion(context.Background(), 7, 3, "abc123", resolved); err != nil {
+			t.Fatal(err)
+		}
+		want := "resolved=false"
+		if resolved {
+			want = "resolved=true"
+		}
+		expect(t, (*reqs)[0], "PUT", "/api/v4/projects/7/merge_requests/3/discussions/abc123", want)
+		if (*reqs)[0].Body != "" {
+			t.Fatalf("body = %s", (*reqs)[0].Body)
+		}
+	}
+}
+
+func TestGetProjectDiscussionsMustBeResolved(t *testing.T) {
+	for name, tc := range map[string]struct {
+		reply map[string]any
+		want  *bool
+	}{
+		"true":    {map[string]any{"id": 7, "only_allow_merge_if_all_discussions_are_resolved": true}, ptrBool(true)},
+		"false":   {map[string]any{"id": 7, "only_allow_merge_if_all_discussions_are_resolved": false}, ptrBool(false)},
+		"missing": {map[string]any{"id": 7}, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, reqs := serve(t, jsonReply(tc.reply))
+			p, err := c.GetProject(context.Background(), "7")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (p.OnlyAllowMergeIfAllDiscussionsAreResolved == nil) != (tc.want == nil) ||
+				(tc.want != nil && *p.OnlyAllowMergeIfAllDiscussionsAreResolved != *tc.want) {
+				t.Fatalf("setting = %v", p.OnlyAllowMergeIfAllDiscussionsAreResolved)
+			}
+			expect(t, (*reqs)[0], "GET", "/api/v4/projects/7", "")
+		})
 	}
 }

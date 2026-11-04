@@ -45,13 +45,64 @@ type MergeRequest struct {
 }
 
 // Project holds the fields pergent.sh reads. OnlyAllowMergeIfPipelineSucceeds
-// ("pipelines must succeed") is nil when GitLab doesn't show it.
+// ("pipelines must succeed") and OnlyAllowMergeIfAllDiscussionsAreResolved
+// ("all threads must be resolved") are nil when GitLab doesn't show them.
 type Project struct {
-	ID                               int64  `json:"id"`
-	PathWithNamespace                string `json:"path_with_namespace"`
-	HTTPURLToRepo                    string `json:"http_url_to_repo"`
-	DefaultBranch                    string `json:"default_branch"`
-	OnlyAllowMergeIfPipelineSucceeds *bool  `json:"only_allow_merge_if_pipeline_succeeds"`
+	ID                                        int64  `json:"id"`
+	PathWithNamespace                         string `json:"path_with_namespace"`
+	HTTPURLToRepo                             string `json:"http_url_to_repo"`
+	DefaultBranch                             string `json:"default_branch"`
+	OnlyAllowMergeIfPipelineSucceeds          *bool  `json:"only_allow_merge_if_pipeline_succeeds"`
+	OnlyAllowMergeIfAllDiscussionsAreResolved *bool  `json:"only_allow_merge_if_all_discussions_are_resolved"`
+}
+
+// Diff is one file of a merge request's or a comparison's diff. Diff holds
+// the hunks, from the first "@@" on; GitLab leaves it empty for a binary
+// file or one too large to show.
+type Diff struct {
+	OldPath     string `json:"old_path"`
+	NewPath     string `json:"new_path"`
+	DeletedFile bool   `json:"deleted_file"`
+	Diff        string `json:"diff"`
+}
+
+// Position is where a diff discussion is anchored. NewLine alone is an added
+// line; OldLine is set too for an unchanged line (0 leaves it out). The three
+// SHAs are the merge request's diff_refs.
+type Position struct {
+	BaseSHA, StartSHA, HeadSHA string
+	OldPath, NewPath           string
+	NewLine, OldLine           int
+}
+
+// NotePosition is where a discussion note sits in the diff, as GitLab shows
+// it. LineRange is nil for a note on a single line.
+type NotePosition struct {
+	NewPath   string `json:"new_path"`
+	NewLine   int    `json:"new_line"`
+	LineRange *struct {
+		End struct {
+			NewLine int `json:"new_line"`
+		} `json:"end"`
+	} `json:"line_range"`
+}
+
+// DiscussionNote is one note of a discussion. Position is nil unless it is a
+// note on the diff.
+type DiscussionNote struct {
+	ID         int64         `json:"id"`
+	Body       string        `json:"body"`
+	Author     User          `json:"author"`
+	Position   *NotePosition `json:"position"`
+	Resolvable bool          `json:"resolvable"`
+	Resolved   bool          `json:"resolved"`
+}
+
+// Discussion is a thread of notes on a merge request; ID is GitLab's
+// discussion ID (a hash string).
+type Discussion struct {
+	ID    string           `json:"id"`
+	Notes []DiscussionNote `json:"notes"`
 }
 
 // ApprovalRule is a project approval rule. A rule with no protected branches
