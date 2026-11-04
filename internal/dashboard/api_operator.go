@@ -58,7 +58,7 @@ const (
 	msgBadBaseURL     = "baseURL must be empty or an absolute http or https URL"
 	msgKeyRequired    = "apiKey is required: none is stored"
 	msgConfigLLM      = "the LLM is set in the config file; change it there"
-	msgBadDefaults    = "the body must be a JSON object of defaults: approve, reviewDrafts, inlineFindings, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"
+	msgBadDefaults    = "the body must be a JSON object of defaults: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"
 	instanceNameLimit = 63
 )
 
@@ -820,7 +820,8 @@ func (d *Dashboard) defaultsView(ctx context.Context) (DefaultsView, error) {
 		return DefaultsView{}, err
 	}
 	cfg := defaultValues(d.Repos.Defaults("", ""))
-	return DefaultsView{Approve: def.Approve, ReviewDrafts: def.ReviewDrafts, InlineFindings: def.InlineFindings, FailureStatus: string(def.FailureStatus),
+	return DefaultsView{Approve: def.Approve, ReviewDrafts: def.ReviewDrafts, InlineFindings: def.InlineFindings, CommandsAuthorAndMaintainersOnly: def.CommandsAuthorAndMaintainersOnly,
+		FailureStatus:     string(def.FailureStatus),
 		JobTimeoutSeconds: int64(def.JobTimeout / time.Second), MaxTurns: def.MaxTurns, JobMemory: quantityText(def.JobMemory),
 		RerunLimitPerMR: def.RerunLimitPerMR, RerunLimitPerRepo: def.RerunLimitPerRepo,
 		Skills: nonNil(stored.Skills), Config: cfg, Pinned: pinnedDefaults(stored)}, nil
@@ -828,7 +829,8 @@ func (d *Dashboard) defaultsView(ctx context.Context) (DefaultsView, error) {
 
 // defaultValues is the settings of eff as the defaults API shows them.
 func defaultValues(eff settings.Effective) DefaultValues {
-	return DefaultValues{Approve: eff.Approve, ReviewDrafts: eff.ReviewDrafts, InlineFindings: eff.InlineFindings, FailureStatus: string(eff.FailureStatus),
+	return DefaultValues{Approve: eff.Approve, ReviewDrafts: eff.ReviewDrafts, InlineFindings: eff.InlineFindings, CommandsAuthorAndMaintainersOnly: eff.CommandsAuthorAndMaintainersOnly,
+		FailureStatus:     string(eff.FailureStatus),
 		JobTimeoutSeconds: int64(eff.JobTimeout / time.Second), MaxTurns: eff.MaxTurns, JobMemory: quantityText(eff.JobMemory),
 		RerunLimitPerMR: eff.RerunLimitPerMR, RerunLimitPerRepo: eff.RerunLimitPerRepo}
 }
@@ -838,7 +840,8 @@ func defaultValues(eff settings.Effective) DefaultValues {
 func pinnedDefaults(s store.RepoDefaults) map[string]bool {
 	return map[string]bool{
 		"approve": s.Approve != nil, "reviewDrafts": s.ReviewDrafts != nil, "inlineFindings": s.InlineFindings != nil,
-		"failureStatus": s.FailureStatus != nil, "jobTimeoutSeconds": s.JobTimeoutSeconds != nil, "maxTurns": s.MaxTurns != nil,
+		"commandsAuthorAndMaintainersOnly": s.CommandsAuthorAndMaintainersOnly != nil,
+		"failureStatus":                    s.FailureStatus != nil, "jobTimeoutSeconds": s.JobTimeoutSeconds != nil, "maxTurns": s.MaxTurns != nil,
 		"jobMemory": s.JobMemory != nil, "rerunLimitPerMR": s.RerunLimitPerMR != nil, "rerunLimitPerRepo": s.RerunLimitPerRepo != nil,
 	}
 }
@@ -917,7 +920,7 @@ func (d *Dashboard) parseDefaults(r *http.Request, kept []string) (next store.Re
 		var edit func(*store.DashboardRepo)
 		var msg string
 		switch key {
-		case "approve", "reviewDrafts", "inlineFindings":
+		case "approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly":
 			edit, msg = boolSetting(key, raw, null)
 		case "failureStatus":
 			edit, msg = failureStatusSetting(raw, null)
@@ -940,7 +943,7 @@ func (d *Dashboard) parseDefaults(r *http.Request, kept []string) (next store.Re
 		}
 		edit(&row)
 	}
-	return store.RepoDefaults{Approve: row.Approve, ReviewDrafts: row.ReviewDrafts, InlineFindings: row.InlineFindings, FailureStatus: row.FailureStatus,
+	return store.RepoDefaults{Approve: row.Approve, ReviewDrafts: row.ReviewDrafts, InlineFindings: row.InlineFindings, CommandsAuthorAndMaintainersOnly: row.CommandsAuthorAndMaintainersOnly, FailureStatus: row.FailureStatus,
 		JobTimeoutSeconds: row.JobTimeoutSeconds, MaxTurns: row.MaxTurns, JobMemory: row.JobMemory,
 		RerunLimitPerMR: row.RerunLimitPerMR, RerunLimitPerRepo: row.RerunLimitPerRepo, Skills: row.Skills}, skillsGiven, ""
 }
@@ -974,6 +977,9 @@ func changedDefaults(a, b store.RepoDefaults) []string {
 	}
 	if !samePtr(a.InlineFindings, b.InlineFindings) {
 		out = append(out, "inlineFindings")
+	}
+	if !samePtr(a.CommandsAuthorAndMaintainersOnly, b.CommandsAuthorAndMaintainersOnly) {
+		out = append(out, "commandsAuthorAndMaintainersOnly")
 	}
 	if !samePtr(a.FailureStatus, b.FailureStatus) {
 		out = append(out, "failureStatus")

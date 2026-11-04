@@ -828,7 +828,8 @@ func TestRepositoryDetail(t *testing.T) {
 		t.Errorf("repo = %+v", v.Repo)
 	}
 	settings, _ := json.Marshal(v.Settings)
-	want := `{"approve":{"value":false,"overridden":true},"failureStatus":{"value":"failed","overridden":false},` +
+	want := `{"approve":{"value":false,"overridden":true},"commandsAuthorAndMaintainersOnly":{"value":true,"overridden":false},` +
+		`"failureStatus":{"value":"failed","overridden":false},` +
 		`"inlineFindings":{"value":true,"overridden":false},"jobMemory":{"value":"","overridden":false},"jobTimeoutSeconds":{"value":600,"overridden":false},` +
 		`"maxTurns":{"value":40,"overridden":false},"repoSkills":{"value":[],"overridden":false},` +
 		`"rerunLimitPerMR":{"value":10,"overridden":false},"rerunLimitPerRepo":{"value":50,"overridden":false},` +
@@ -1073,11 +1074,13 @@ func TestAdminSettings(t *testing.T) {
 	c := e.signInGitLab(true, "acme/widgets")
 	v := getJSON[AdminSettingsView](e, c, "/api/admin/settings")
 	want := AdminSettingsView{Instance: "main",
-		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, InlineFindings: true, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40,
+		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, FailureStatus: "failed",
+			JobTimeoutSeconds: 600, MaxTurns: 40,
 			RerunLimitPerMR: 10, RerunLimitPerRepo: 50, Skills: []string{},
-			Config: DefaultValues{Approve: true, ReviewDrafts: true, InlineFindings: true, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40,
-				RerunLimitPerMR: 10, RerunLimitPerRepo: 50},
-			Pinned: map[string]bool{"approve": false, "reviewDrafts": false, "inlineFindings": false, "failureStatus": false, "jobTimeoutSeconds": false,
+			Config: DefaultValues{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, FailureStatus: "failed",
+				JobTimeoutSeconds: 600, MaxTurns: 40, RerunLimitPerMR: 10, RerunLimitPerRepo: 50},
+			Pinned: map[string]bool{"approve": false, "reviewDrafts": false, "inlineFindings": false, "commandsAuthorAndMaintainersOnly": false,
+				"failureStatus": false, "jobTimeoutSeconds": false,
 				"maxTurns": false, "jobMemory": false, "rerunLimitPerMR": false, "rerunLimitPerRepo": false}},
 		LLM: LLMView{Provider: "anthropic", Model: "claude-sonnet-4"}}
 	got, _ := json.Marshal(v)
@@ -1562,6 +1565,17 @@ func TestSettingViewsMaxTurns(t *testing.T) {
 }
 
 // Inline findings is a setting of the repository like the others.
+func TestSettingViewsCommandsAuthorAndMaintainersOnly(t *testing.T) {
+	repo := settings.Effective{CommandsAuthorAndMaintainersOnly: false, Overridden: map[string]bool{settings.KeyCommandsAuthorAndMaintainersOnly: true}}
+	if got := settingViews(repo)["commandsAuthorAndMaintainersOnly"]; got != (SettingView{false, true}) {
+		t.Errorf("commandsAuthorAndMaintainersOnly = %+v, want false overridden", got)
+	}
+	repo = settings.Effective{CommandsAuthorAndMaintainersOnly: true}
+	if got := settingViews(repo)["commandsAuthorAndMaintainersOnly"]; got != (SettingView{true, false}) {
+		t.Errorf("commandsAuthorAndMaintainersOnly = %+v, want true not overridden", got)
+	}
+}
+
 func TestSettingViewsInlineFindings(t *testing.T) {
 	repo := settings.Effective{InlineFindings: false, Overridden: map[string]bool{settings.KeyInlineFindings: true}}
 	if got := settingViews(repo)["inlineFindings"]; got != (SettingView{false, true}) {

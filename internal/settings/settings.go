@@ -44,6 +44,8 @@ const (
 
 	KeyRerunLimitPerMR   = "rerun_limit_per_mr"
 	KeyRerunLimitPerRepo = "rerun_limit_per_repo"
+
+	KeyCommandsAuthorAndMaintainersOnly = "commands_author_and_maintainers_only"
 )
 
 // The re-run caps when nothing sets them: per merge request and per
@@ -63,7 +65,10 @@ type Effective struct {
 	Approve           bool
 	ReviewDrafts      bool
 	InlineFindings    bool // findings are posted as threads on their lines, not only in the review comment
-	FailureStatus     config.FailureStatus
+	// CommandsAuthorAndMaintainersOnly is whether only a change's author and
+	// the repository's maintainers and owners can use pergent commands on it.
+	CommandsAuthorAndMaintainersOnly bool
+	FailureStatus                    config.FailureStatus
 	// Skills are the library skills reviewed; nil means the default list.
 	Skills []string
 	// RepoSkills are the detected repository skills turned on; nil is none.
@@ -218,16 +223,18 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 		ReviewDrafts:   true,
 		InlineFindings: true,
 		FailureStatus:  config.FailureStatusFailed,
-		JobTimeout:     r.Config.Jobs.Timeout,
-		MaxTurns:       r.Config.Jobs.MaxTurns,
-		JobMemory:      r.jobsMemory(r.Config.Jobs.Resources.Limits),
+
+		CommandsAuthorAndMaintainersOnly: true,
+		JobTimeout:                       r.Config.Jobs.Timeout,
+		MaxTurns:                         r.Config.Jobs.MaxTurns,
+		JobMemory:                        r.jobsMemory(r.Config.Jobs.Resources.Limits),
 
 		RerunLimitPerMR:   DefaultRerunLimitPerMR,
 		RerunLimitPerRepo: DefaultRerunLimitPerRepo,
 		Overridden: map[string]bool{
 			KeyApprove: false, KeyReviewDrafts: false, KeyInlineFindings: false, KeyFailureStatus: false,
 			KeySkills: false, KeyRepoSkills: false, KeyJobTimeout: false, KeyMaxTurns: false, KeyJobMemory: false,
-			KeyRerunLimitPerMR: false, KeyRerunLimitPerRepo: false,
+			KeyRerunLimitPerMR: false, KeyRerunLimitPerRepo: false, KeyCommandsAuthorAndMaintainersOnly: false,
 		},
 	}
 	if source != SourceDashboard {
@@ -241,6 +248,9 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 	}
 	if stored.InlineFindings != nil {
 		eff.InlineFindings = *stored.InlineFindings
+	}
+	if stored.CommandsAuthorAndMaintainersOnly != nil {
+		eff.CommandsAuthorAndMaintainersOnly = *stored.CommandsAuthorAndMaintainersOnly
 	}
 	if stored.FailureStatus != nil {
 		if fs, ok := failureStatus(*stored.FailureStatus); ok {
@@ -323,6 +333,9 @@ func (r *Resolver) fromConfig(repo config.Repository) (Effective, bool) {
 	if repo.InlineFindings != nil {
 		eff.InlineFindings, eff.Overridden[KeyInlineFindings] = *repo.InlineFindings, true
 	}
+	if repo.CommandsAuthorAndMaintainersOnly != nil {
+		eff.CommandsAuthorAndMaintainersOnly, eff.Overridden[KeyCommandsAuthorAndMaintainersOnly] = *repo.CommandsAuthorAndMaintainersOnly, true
+	}
 	if repo.FailureStatus != "" && repo.FailureStatus != config.FailureStatusFailed {
 		eff.FailureStatus, eff.Overridden[KeyFailureStatus] = repo.FailureStatus, true
 	}
@@ -368,6 +381,9 @@ func (r *Resolver) fromDashboard(row store.DashboardRepo, stored store.RepoDefau
 	}
 	if row.InlineFindings != nil {
 		eff.InlineFindings, eff.Overridden[KeyInlineFindings] = *row.InlineFindings, true
+	}
+	if row.CommandsAuthorAndMaintainersOnly != nil {
+		eff.CommandsAuthorAndMaintainersOnly, eff.Overridden[KeyCommandsAuthorAndMaintainersOnly] = *row.CommandsAuthorAndMaintainersOnly, true
 	}
 	if row.FailureStatus != nil {
 		if fs, ok := failureStatus(*row.FailureStatus); ok {

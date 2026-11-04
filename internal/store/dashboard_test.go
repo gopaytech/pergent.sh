@@ -33,7 +33,7 @@ func TestDashboardReposCRUD(t *testing.T) {
 		t.Errorf("row = %+v", r)
 	}
 	if r.Approve == nil || *r.Approve || r.ReviewDrafts != nil || r.FailureStatus != nil ||
-		r.Skills != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.InlineFindings != nil {
+		r.Skills != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.InlineFindings != nil || r.CommandsAuthorAndMaintainersOnly != nil {
 		t.Errorf("nullable columns = %+v", r)
 	}
 	if r.CreatedAt.IsZero() || r.UpdatedAt.Before(r.CreatedAt) {
@@ -48,6 +48,7 @@ func TestDashboardReposCRUD(t *testing.T) {
 		Instance: "main", Project: "acme/widgets",
 		ReviewDrafts: ptrTo(false), FailureStatus: ptrTo("neutral"), Skills: []string{"security", "style"},
 		JobTimeoutSeconds: ptrTo(1200), MaxTurns: ptrTo(60), JobMemory: ptrTo("6Gi"), InlineFindings: ptrTo(false), CreatedBy: "bob",
+		CommandsAuthorAndMaintainersOnly: ptrTo(false),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +59,7 @@ func TestDashboardReposCRUD(t *testing.T) {
 	if u.Approve != nil || u.ReviewDrafts == nil || *u.ReviewDrafts || u.FailureStatus == nil || *u.FailureStatus != "neutral" ||
 		!slices.Equal(u.Skills, []string{"security", "style"}) || u.JobTimeoutSeconds == nil || *u.JobTimeoutSeconds != 1200 ||
 		u.MaxTurns == nil || *u.MaxTurns != 60 || u.JobMemory == nil || *u.JobMemory != "6Gi" ||
-		u.InlineFindings == nil || *u.InlineFindings {
+		u.InlineFindings == nil || *u.InlineFindings || u.CommandsAuthorAndMaintainersOnly == nil || *u.CommandsAuthorAndMaintainersOnly {
 		t.Errorf("updated row = %+v", u)
 	}
 	if u.CreatedBy != "alice" || !u.CreatedAt.Equal(r.CreatedAt) {
@@ -499,6 +500,26 @@ func TestUpdateDashboardRepo(t *testing.T) {
 	}
 	if r, _, _ := s.DashboardRepo(ctx, "main", "acme/widgets"); r.InlineFindings != nil {
 		t.Errorf("inline_findings after clearing = %v; want NULL", r.InlineFindings)
+	}
+
+	// commands_author_and_maintainers_only behaves the same.
+	if r, _, _ := s.DashboardRepo(ctx, "main", "acme/widgets"); r.CommandsAuthorAndMaintainersOnly != nil {
+		t.Errorf("commands_author_and_maintainers_only before it is set = %v; want NULL", r.CommandsAuthorAndMaintainersOnly)
+	}
+	if _, err := s.UpdateDashboardRepo(ctx, "main", "acme/widgets", func(r *DashboardRepo) { r.CommandsAuthorAndMaintainersOnly = ptrTo(false) }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateDashboardRepo(ctx, "main", "acme/widgets", func(r *DashboardRepo) { r.MaxTurns = ptrTo(90) }); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.DashboardRepo(ctx, "main", "acme/widgets"); r.CommandsAuthorAndMaintainersOnly == nil || *r.CommandsAuthorAndMaintainersOnly {
+		t.Errorf("commands_author_and_maintainers_only after setting false = %v; want false", r.CommandsAuthorAndMaintainersOnly)
+	}
+	if _, err := s.UpdateDashboardRepo(ctx, "main", "acme/widgets", func(r *DashboardRepo) { r.CommandsAuthorAndMaintainersOnly = nil }); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.DashboardRepo(ctx, "main", "acme/widgets"); r.CommandsAuthorAndMaintainersOnly != nil {
+		t.Errorf("commands_author_and_maintainers_only after clearing = %v; want NULL", r.CommandsAuthorAndMaintainersOnly)
 	}
 }
 

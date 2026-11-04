@@ -280,6 +280,11 @@ func TestSettingsValidation(t *testing.T) {
 		{`{"inlineFindings":false}`, true, func(r store.DashboardRepo) bool { return r.InlineFindings != nil && !*r.InlineFindings }},
 		{`{"inlineFindings":"no"}`, false, nil},
 		{`{"inlineFindings":null}`, true, func(r store.DashboardRepo) bool { return r.InlineFindings == nil }},
+		{`{"commandsAuthorAndMaintainersOnly":false}`, true, func(r store.DashboardRepo) bool {
+			return r.CommandsAuthorAndMaintainersOnly != nil && !*r.CommandsAuthorAndMaintainersOnly
+		}},
+		{`{"commandsAuthorAndMaintainersOnly":"no"}`, false, nil},
+		{`{"commandsAuthorAndMaintainersOnly":null}`, true, func(r store.DashboardRepo) bool { return r.CommandsAuthorAndMaintainersOnly == nil }},
 		{`{"failureStatus":"neutral"}`, true, func(r store.DashboardRepo) bool { return r.FailureStatus != nil && *r.FailureStatus == "neutral" }},
 		{`{"failureStatus":"success"}`, false, nil},
 		{`{"failureStatus":"failed"}`, true, func(r store.DashboardRepo) bool { return r.FailureStatus != nil && *r.FailureStatus == "failed" }},
@@ -374,7 +379,7 @@ func TestSettingsValidation(t *testing.T) {
 	wantCode(t, rec, "reset", http.StatusOK)
 	r, found := e.storedRepo("main", "acme/gadgets")
 	if !found || r.Approve != nil || r.ReviewDrafts != nil || r.FailureStatus != nil || r.Skills != nil ||
-		r.InlineFindings != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil ||
+		r.InlineFindings != nil || r.CommandsAuthorAndMaintainersOnly != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil ||
 		r.CreatedBy != "carol" {
 		t.Errorf("after reset row = %+v, %v", r, found)
 	}
@@ -1109,6 +1114,58 @@ func TestInlineFindingsSetting(t *testing.T) {
 	wantCode(t, e.send(c, "POST", target+"/reset", ""), "reset", http.StatusOK)
 	if r, _ := e.storedRepo("main", "acme/gadgets"); r.InlineFindings != nil {
 		t.Errorf("stored after reset = %v, want NULL", r.InlineFindings)
+	}
+}
+
+// The switch for commands is stored on its own: true or false, null back to
+// the default (on); a reset clears it; anything else is 400 with its message.
+func TestCommandsAuthorAndMaintainersOnlySetting(t *testing.T) {
+	e := newEnv(t, nil)
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	c := e.signInGitLab(true, "acme/gadgets")
+	target := "/api/repositories/main/acme/gadgets/settings"
+
+	rec := e.send(c, "PUT", target, `{"commandsAuthorAndMaintainersOnly":false}`)
+	wantCode(t, rec, "PUT false", http.StatusOK)
+	var detail RepositoryDetailView
+	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if s := detail.Settings["commandsAuthorAndMaintainersOnly"]; s.Value != false || !s.Overridden {
+		t.Errorf("commandsAuthorAndMaintainersOnly = %+v, want false overridden", s)
+	}
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.CommandsAuthorAndMaintainersOnly == nil || *r.CommandsAuthorAndMaintainersOnly {
+		t.Errorf("stored = %v, want false", r.CommandsAuthorAndMaintainersOnly)
+	}
+	if g, _, err := e.d.Repos.Get(ctx, "main", "acme/gadgets"); err != nil || g.CommandsAuthorAndMaintainersOnly {
+		t.Errorf("effective = %+v, %v; want the switch off", g, err)
+	}
+
+	rec = e.send(c, "PUT", target, `{"commandsAuthorAndMaintainersOnly":"x"}`)
+	wantCode(t, rec, "PUT x", http.StatusBadRequest)
+	if got := errorOf(t, rec); got != "commandsAuthorAndMaintainersOnly must be true, false or null" {
+		t.Errorf("error = %q", got)
+	}
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.CommandsAuthorAndMaintainersOnly == nil || *r.CommandsAuthorAndMaintainersOnly {
+		t.Errorf("a refused PUT changed the row: %v", r.CommandsAuthorAndMaintainersOnly)
+	}
+
+	rec = e.send(c, "PUT", target, `{"commandsAuthorAndMaintainersOnly":null}`)
+	wantCode(t, rec, "PUT null", http.StatusOK)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.CommandsAuthorAndMaintainersOnly != nil {
+		t.Errorf("stored after null = %v, want NULL", r.CommandsAuthorAndMaintainersOnly)
+	}
+	if g, _, _ := e.d.Repos.Get(ctx, "main", "acme/gadgets"); !g.CommandsAuthorAndMaintainersOnly {
+		t.Errorf("effective after null = %+v; want the default, on", g)
+	}
+
+	e.send(c, "PUT", target, `{"commandsAuthorAndMaintainersOnly":false}`)
+	wantCode(t, e.send(c, "POST", target+"/reset", ""), "reset", http.StatusOK)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.CommandsAuthorAndMaintainersOnly != nil {
+		t.Errorf("stored after reset = %v, want NULL", r.CommandsAuthorAndMaintainersOnly)
+	}
+	if !strings.Contains(msgBadSettings, "commandsAuthorAndMaintainersOnly") {
+		t.Errorf("msgBadSettings = %q", msgBadSettings)
 	}
 }
 

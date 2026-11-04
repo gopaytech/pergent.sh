@@ -59,6 +59,7 @@ function Defaults({ v }: { v: DefaultsView }) {
   const [approve, setApprove] = useState(v.approve);
   const [reviewDrafts, setReviewDrafts] = useState(v.reviewDrafts);
   const [inlineFindings, setInlineFindings] = useState(v.inlineFindings);
+  const [commandsOnly, setCommandsOnly] = useState(v.commandsAuthorAndMaintainersOnly);
   const [failureStatus, setFailureStatus] = useState(v.failureStatus);
   const [timeout, setTimeoutText] = useState(String(v.jobTimeoutSeconds));
   const [steps, setSteps] = useState(String(v.maxTurns));
@@ -111,6 +112,7 @@ function Defaults({ v }: { v: DefaultsView }) {
       approve: orNull(approve, cfg.approve),
       reviewDrafts: orNull(reviewDrafts, cfg.reviewDrafts),
       inlineFindings: orNull(inlineFindings, cfg.inlineFindings),
+      commandsAuthorAndMaintainersOnly: orNull(commandsOnly, cfg.commandsAuthorAndMaintainersOnly),
       failureStatus: orNull(failureStatus, cfg.failureStatus),
       jobTimeoutSeconds: orNull(Number(t), cfg.jobTimeoutSeconds),
       maxTurns: orNull(Number(s), cfg.maxTurns),
@@ -174,6 +176,24 @@ function Defaults({ v }: { v: DefaultsView }) {
         </div>
         <div>
           <Switch label="Inline findings" checked={inlineFindings} disabled={save.isPending} onChange={setInlineFindings} />
+        </div>
+      </div>
+      <div className="set">
+        <div>
+          <div className="name">Only the author and maintainers use commands</div>
+          <div className="help">
+            When on, only the author of a change and the repository&apos;s maintainers and owners can use pergent commands on it. When off, anyone with write access can.
+            <FromConfig
+              field="Only the author and maintainers use commands"
+              pinned={pinned("commandsAuthorAndMaintainersOnly")}
+              shown={onOff(cfg.commandsAuthorAndMaintainersOnly)}
+              disabled={save.isPending}
+              onUse={() => setCommandsOnly(cfg.commandsAuthorAndMaintainersOnly)}
+            />
+          </div>
+        </div>
+        <div>
+          <Switch label="Only the author and maintainers use commands" checked={commandsOnly} disabled={save.isPending} onChange={setCommandsOnly} />
         </div>
       </div>
       <div className="set">

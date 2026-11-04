@@ -53,6 +53,7 @@ describe("AdminSettings defaults", () => {
       // Untouched, so equal to the config: null keeps them following it.
       reviewDrafts: null,
       inlineFindings: null,
+      commandsAuthorAndMaintainersOnly: null,
       failureStatus: null,
       jobTimeoutSeconds: 900,
       maxTurns: null,
@@ -91,6 +92,27 @@ describe("AdminSettings defaults", () => {
     expect(within(form).getByRole("switch", { name: "Inline findings" })).not.toBeChecked();
   });
 
+  it("shows the commands switch after Inline findings, sends a change and nulls it when it equals the config", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "PUT /api/admin/defaults": { body: { ...defaults, commandsAuthorAndMaintainersOnly: false } },
+    });
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    expect(within(form).getByText(/When on, only the author of a change and the repository's maintainers and owners can use pergent commands on it. When off, anyone with write access can./)).toBeInTheDocument();
+    const names = within(form)
+      .getAllByRole("switch")
+      .map((el) => el.getAttribute("aria-label") ?? el.textContent);
+    expect(names.indexOf("Only the author and maintainers use commands")).toBe(names.indexOf("Inline findings") + 1);
+    const toggle = within(form).getByRole("switch", { name: "Only the author and maintainers use commands" });
+    expect(toggle).toBeChecked();
+    await userEvent.click(toggle);
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ commandsAuthorAndMaintainersOnly: false });
+    expect(await screen.findByText("Defaults saved.")).toBeInTheDocument();
+    expect(within(form).getByRole("switch", { name: "Only the author and maintainers use commands" })).not.toBeChecked();
+  });
+
   it("saves changed re-run caps", async () => {
     const fake = fakeApi({
       ...routes(),
@@ -121,6 +143,7 @@ describe("AdminSettings defaults", () => {
       approve: null,
       reviewDrafts: null,
       inlineFindings: null,
+      commandsAuthorAndMaintainersOnly: null,
       failureStatus: null,
       jobTimeoutSeconds: null,
       maxTurns: null,
@@ -139,6 +162,7 @@ describe("AdminSettings defaults", () => {
     expect(row("Approve clean reviews")).toHaveTextContent("From config: on");
     expect(row("Review drafts")).toHaveTextContent("From config: on");
     expect(row("Inline findings")).toHaveTextContent("From config: on");
+    expect(row("Only the author and maintainers use commands")).toHaveTextContent("From config: on");
     expect(row("Status when a review fails")).toHaveTextContent("From config: neutral");
     expect(row("Timeout")).toHaveTextContent("From config: 600");
     expect(row("Max steps")).toHaveTextContent("From config: 40");
@@ -172,6 +196,25 @@ describe("AdminSettings defaults", () => {
     expect(within(form).getByLabelText("Timeout (seconds)")).toHaveValue("1800");
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
     expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ jobTimeoutSeconds: null });
+  });
+
+  it("shows a pinned commands switch against the config, and Use config value sends null for it", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "GET /api/admin/defaults": {
+        body: { ...defaults, commandsAuthorAndMaintainersOnly: false, pinned: { commandsAuthorAndMaintainersOnly: true } },
+      },
+      "PUT /api/admin/defaults": { body: defaults },
+    });
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    const row = within(form).getByText("Only the author and maintainers use commands", { selector: ".name" }).closest(".set") as HTMLElement;
+    expect(within(row).getByText("Saved here; the config says on.")).toBeInTheDocument();
+    expect(within(row).getByRole("switch", { name: "Only the author and maintainers use commands" })).not.toBeChecked();
+    await userEvent.click(within(row).getByRole("button", { name: /^Use config value/ }));
+    expect(within(row).getByRole("switch", { name: "Only the author and maintainers use commands" })).toBeChecked();
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ commandsAuthorAndMaintainersOnly: null });
   });
 
   it("keeps a pinned value that differs from the config when saving", async () => {

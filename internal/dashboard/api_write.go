@@ -53,7 +53,7 @@ const (
 	msgAlreadyOn      = "this repository is switched on already"
 	msgWriteFailed    = "could not save the change, please try again"
 	msgBadProjectBody = `the body must be {"project": "<path>"}`
-	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"
+	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"
 	msgNameInstance   = `name the instance: {"instance": "<name>", "project": "<path>"}`
 	msgNeedsPlatform  = "sign in with GitLab or GitHub to add repositories"
 	msgNeedsAdminCaps = "only admins of this repository can change its re-run caps"
@@ -601,6 +601,7 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 	admin := session(r).Role(repo.Instance, repo.Project) >= RoleAdmin
 	d.updateSettings(w, r, repo, func(row *store.DashboardRepo) {
 		row.Approve, row.ReviewDrafts, row.InlineFindings, row.FailureStatus = nil, nil, nil, nil
+		row.CommandsAuthorAndMaintainersOnly = nil
 		row.Skills, row.RepoSkills, row.JobTimeoutSeconds, row.MaxTurns, row.JobMemory = nil, nil, nil, nil, nil
 		if admin {
 			row.RerunLimitPerMR, row.RerunLimitPerRepo = nil, nil
@@ -672,7 +673,7 @@ func (d *Dashboard) parseSettings(r *http.Request) (func(*store.DashboardRepo), 
 		var edit func(*store.DashboardRepo)
 		var msg string
 		switch key {
-		case "approve", "reviewDrafts", "inlineFindings":
+		case "approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly":
 			edit, msg = boolSetting(key, raw, null)
 		case "failureStatus":
 			edit, msg = failureStatusSetting(raw, null)
@@ -708,9 +709,10 @@ func (d *Dashboard) parseSettings(r *http.Request) (func(*store.DashboardRepo), 
 // boolSettings are the settings that are true, false or null (the default),
 // each by its key in the API, with the way it sets the repository field.
 var boolSettings = map[string]func(row *store.DashboardRepo, v *bool){
-	"approve":        func(row *store.DashboardRepo, v *bool) { row.Approve = v },
-	"reviewDrafts":   func(row *store.DashboardRepo, v *bool) { row.ReviewDrafts = v },
-	"inlineFindings": func(row *store.DashboardRepo, v *bool) { row.InlineFindings = v },
+	"approve":                          func(row *store.DashboardRepo, v *bool) { row.Approve = v },
+	"reviewDrafts":                     func(row *store.DashboardRepo, v *bool) { row.ReviewDrafts = v },
+	"inlineFindings":                   func(row *store.DashboardRepo, v *bool) { row.InlineFindings = v },
+	"commandsAuthorAndMaintainersOnly": func(row *store.DashboardRepo, v *bool) { row.CommandsAuthorAndMaintainersOnly = v },
 }
 
 // boolSetting reads the setting key, one of boolSettings, as true, false or
