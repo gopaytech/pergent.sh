@@ -130,7 +130,7 @@ Names follow that setting: config `repositories[].incremental_reviews`, settings
 - The first push after the upgrade is a full review, because the last result is from an older pergent and has no skill hashes. Incremental reviews start from the next push.
 - An operator who pins the Jobs image to an older pergent by tag keeps full reviews, even after running 0.5.x. An image pinned by digest alone needs the setting turned off first.
 - The migration adds nullable columns and one `runs` column that is `NOT NULL DEFAULT false`, so 0.6.2 keeps working on a migrated database.
-- To roll back, first remove `incremental_reviews` from the config, because 0.6.2 refuses unknown keys. Results stored by 0.7.0 are complete, merged results.
+- To roll back, first remove `incremental_reviews` from the config, because 0.6.2 refuses unknown keys, and let running reviews finish, because 0.6.2 would publish a partial result as a whole review. Results stored by 0.7.0 are complete, merged results.
 
 ## Left to the builder
 
