@@ -293,7 +293,7 @@ func TestNoiseSkipsEmptyFiles(t *testing.T) {
 	}{
 		{"internal/web/dist/.keep", 0, ""},
 		{"dist/app.js", 1, WhyBuildOutput},
-		{"package-lock.json", 0, ""},
+		{"dist/empty.min.js", 0, ""},
 	} {
 		if got := noiseWhy(tt.rel, tt.size); got != tt.want {
 			t.Errorf("noiseWhy(%q, %d) = %q, want %q", tt.rel, tt.size, got, tt.want)

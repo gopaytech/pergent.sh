@@ -221,6 +221,10 @@ pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is hand
 
 ## ⬆️ Upgrading
 
+### Upgrading to 0.7.1
+
+Nothing to do. The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.5.3`, whose notes in the comment can't ping people or render model-written markdown. A thread told its finding was left out now says when the finding comes back, and an incremental review keeps at most 5 earlier left-out notes. The readiness scan no longer counts empty files as noise.
+
 ### Upgrading to 0.7.0
 
 0.7.0 reviews only what a push changed, and tells each review what people rejected before. See [Incremental reviews](#-incremental-reviews) and [Learn from dismissals](#-learn-from-dismissals).
@@ -1202,7 +1206,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `llm.base_url` | none | Custom API base URL for the provider. |
 | `llm.api_key_env` | `OPENCODE_API_KEY` | Name of the env var with the LLM key. |
 | `jobs.namespace` | required | Namespace the Jobs run in. |
-| `jobs.image` | `ghcr.io/gopaytech/pergent:v0.5.2` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
+| `jobs.image` | `ghcr.io/gopaytech/pergent:v0.5.3` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
 | `jobs.max_running` | `5` | Most Jobs running at once. Further runs wait in the queue. At least 1. |
 | `jobs.timeout` | `30m` | pergent's own review budget per Job (`--timeout`). The Job's deadline adds 2 minutes to deliver and a clone allowance of at least 2 minutes. At startup pergent.sh warns about a timeout shorter than its step limit times 30 seconds. |
 | `jobs.max_turns` | `40` | pergent's step limit per opencode run (`--max-turns`) for every repository, 5 to 200. |

@@ -21,7 +21,7 @@ A self-hosted server that reviews merge requests and pull requests. It takes Git
 make build    # the server
 make test     # go test ./...
 make vet
-cd web && npx vitest run && npm run typecheck
+cd web && npm ci && npx vitest run && npm run typecheck && npm run lint
 ```
 
 Tests that need a database skip without `PERGENT_SH_TEST_DATABASE_URL`, so a local `make test` can pass while CI fails. Anything touching `internal/store`, or a test that seeds rows, needs that variable or a green CI `test` job before it counts as tested.
