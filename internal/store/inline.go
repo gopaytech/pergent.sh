@@ -25,7 +25,8 @@ type InlineThread struct {
 	CommentID          int64
 	State              string
 	// LeftOutNoted: the thread was told its finding was left out of a review
-	// because of a past dismissal. PutInlineThread leaves it as it is.
+	// because of a past dismissal, and not since that it is back.
+	// PutInlineThread leaves it as it is.
 	LeftOutNoted bool
 }
 
@@ -33,7 +34,7 @@ const inlineThreadColumns = `instance, project_id, mr_iid, fingerprint, skill, f
 	thread_id, comment_id, state`
 
 // inlineThreadSelect is the columns a read returns: those a write sets, and
-// the one only NoteInlineThreadLeftOut sets.
+// the one that only NoteInlineThreadLeftOut and ClearInlineThreadLeftOut set.
 const inlineThreadSelect = inlineThreadColumns + `, left_out_noted`
 
 func scanInlineThread(row pgx.Row) (InlineThread, error) {

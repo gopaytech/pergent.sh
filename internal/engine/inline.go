@@ -598,8 +598,9 @@ func (x *inlineRun) reopen(rs []threads.Reopen, v inlineView) {
 		}
 		if err := x.d.inline.ReplyThread(x.ctx, pid, number, ref, r.Reply); err != nil {
 			x.warn("couldn't reply on a thread opened again", err)
-		}
-		if r.Thread.LeftOutNoted {
+		} else if r.Thread.LeftOutNoted {
+			// A thread whose reply failed is open and still marked, so the
+			// next publish says it from Back.
 			x.clearLeftOut(fp)
 		}
 		// Back to open. The commit moves to the head only along with the lines

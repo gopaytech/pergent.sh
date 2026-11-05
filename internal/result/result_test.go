@@ -567,24 +567,56 @@ func TestKeepLeftOutNotesIsCapped(t *testing.T) {
 		t.Errorf("notes = %q, kept = %t; want the fresh notes and the newest five: %q", got, kept, want)
 	}
 
-	// A note an earlier, longer one contains is dropped before the cap counts.
-	got, _ = keepLeftOutNotes(nil, []string{lo("A (x); B (y)"), lo("A (x)"), lo("C (z)")})
-	if want := []string{lo("A (x); B (y)"), lo("C (z)")}; !slices.Equal(got, want) {
-		t.Errorf("notes = %q, want %q", got, want)
+	// An older note never evicts a newer one, even one that covers it.
+	var many []string
+	for _, e := range []string{"a", "b", "c", "d", "e", "f", "a; g"} {
+		many = append(many, lo(e))
 	}
-	// ... whichever of the two is newer.
-	got, _ = keepLeftOutNotes(nil, []string{lo("A (x)"), lo("A (x); B (y)")})
-	if want := []string{lo("A (x); B (y)")}; !slices.Equal(got, want) {
-		t.Errorf("notes = %q, want %q", got, want)
-	}
-	// ... and one a new note contains is not kept at all.
-	got, kept = keepLeftOutNotes([]string{lo("A (x); B (y)")}, []string{lo("A (x)")})
-	if kept || !slices.Equal(got, []string{lo("A (x); B (y)")}) {
-		t.Errorf("notes = %q, kept = %t; want the new note alone", got, kept)
+	got, _ = keepLeftOutNotes(nil, many)
+	if want := many[:5]; !slices.Equal(got, want) {
+		t.Errorf("notes = %q, want the newest five: %q", got, want)
 	}
 	// Notes that are not left-out notes are not kept.
 	if got, kept = keepLeftOutNotes(nil, []string{"Verification dropped 1"}); kept || len(got) != 0 {
 		t.Errorf("notes = %q, kept = %t; want none", got, kept)
+	}
+}
+
+// A note is dropped when the notes before it already say everything it does,
+// entry by entry. Whole entries are compared: text that another entry merely
+// contains is another finding.
+func TestKeepLeftOutNotesCoverage(t *testing.T) {
+	lo := func(s string) string { return LeftOutNotePrefix + " " + s }
+	tests := []struct {
+		name          string
+		fresh, before []string
+		want          []string
+	}{
+		{"covered by a longer note kept before it",
+			nil, []string{lo("A (x); B (y)"), lo("A (x)"), lo("C (z)")}, []string{lo("A (x); B (y)"), lo("C (z)")}},
+		{"a shorter note kept before a longer one that covers it",
+			nil, []string{lo("A (x)"), lo("A (x); B (y)")}, []string{lo("A (x)"), lo("A (x); B (y)")}},
+		{"covered by a new note",
+			[]string{lo("A (x); B (y)")}, []string{lo("A (x)")}, []string{lo("A (x); B (y)")}},
+		{"a title another title contains",
+			nil, []string{lo("Missing nil check on response (r)"), lo("Missing nil check")},
+			[]string{lo("Missing nil check on response (r)"), lo("Missing nil check")}},
+		{"a title with the same ending",
+			nil, []string{lo("Not A (x)"), lo("A (x)")}, []string{lo("Not A (x)"), lo("A (x)")}},
+		{"a title that looks like the prefix",
+			nil, []string{lo(LeftOutNotePrefix + " A (x)"), lo("A (x)")}, []string{lo(LeftOutNotePrefix + " A (x)"), lo("A (x)")}},
+		{"the end of a long note does not count",
+			nil, []string{lo("A (x); and 3 more"), lo("A (x)"), lo("B (y)")}, []string{lo("A (x); and 3 more"), lo("B (y)")}},
+		{"the same note twice",
+			nil, []string{lo("A (x)"), lo("A (x)")}, []string{lo("A (x)")}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, _ := keepLeftOutNotes(tc.fresh, tc.before)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("notes = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

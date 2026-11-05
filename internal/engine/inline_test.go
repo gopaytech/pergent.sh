@@ -1362,6 +1362,31 @@ func TestInlineLeftOutFindingComesBack(t *testing.T) {
 			t.Errorf("row = %+v, want it open and not marked", got)
 		}
 	})
+
+	t.Run("a failed reply on a thread opened again is tried again", func(t *testing.T) {
+		h := newHarness(t)
+		r := h.row(fpBlocking, "t1", 11, "fixed")
+		r.LeftOutNoted = true
+		h.st = newMemThreads(&h.events, r)
+		h.fi.threads = []forge.Thread{h.platform(r, true)}
+		h.fi.replyErr = map[string]error{"t1": errors.New("boom")}
+		h.sync(reported(h))
+		got, _ := h.st.Row(fpBlocking)
+		if got.State != "open" || !got.LeftOutNoted {
+			t.Fatalf("row = %+v, want it open and still marked: the reply did not go out", got)
+		}
+		// The platform now shows the thread open.
+		h.fi.threads = []forge.Thread{h.platform(got, false)}
+		h.fi.replyErr = nil
+		h.events = nil
+		h.sync(reported(h))
+		if want := []string{backReply}; !slices.Equal(replies(h), want) {
+			t.Errorf("replies = %q, want %q", replies(h), want)
+		}
+		if got, _ := h.st.Row(fpBlocking); got.LeftOutNoted {
+			t.Error("the thread is still marked as told after the reply")
+		}
+	})
 }
 
 func TestInlineResolvesFixedFindings(t *testing.T) {
