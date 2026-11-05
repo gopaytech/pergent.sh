@@ -49,7 +49,7 @@ A finding counts once on a change, at its highest severity, even if it was repor
 
 When a change merges or closes, pergent.sh walks the change's reviews in order. A review counts if it was decided, whether or not a later run replaced it: `outcome <> ''`, as `LatestDecidedRun` does, not `state = 'published'`, so a finding that only a replaced run reported still counts, and a run sent back to `reported` by a dismissal isn't lost. *(my call)* An incremental review's merged result counts like any other, so a carried finding stays reported, and its line still holds at that head.
 
-**One finding across reviews.** A finding is followed by its fingerprint and, when that doesn't match, by the rule inline threads use (`threads.reworded`): same skill, same file, lines overlapping once mapped through the compare. So a reworded finding is the same finding. *(chosen)* A finding that stopped being reported can be reworded too, into what the findings still reported left over, so the same finding across a gap stays one row. A file renamed in between is followed the same way, where the compare says so.
+**One finding across reviews.** A finding is followed by its fingerprint and, when that doesn't match, by the rule inline threads use (`threads.reworded`): same skill, same file, lines overlapping once mapped through the compare. So a reworded finding is the same finding. *(chosen)* A finding that stopped being reported can be reworded too, into what the findings still reported left over, in the file it had or the one it had moved to when it was left out, so the same finding across a gap stays one row. A file renamed in between is followed the same way, where the compare says so.
 
 **Which reviews say anything.** A review is evidence that a finding stopped being reported only if the skill ran there, didn't fail, and reviewed that file. Otherwise the review is skipped for that finding, which counts as still reported. That covers a failed skill, a skill removed from the repository, and a `review failed` result holding only the re-run skills. *(chosen: never call it Fixed)*
 
@@ -122,6 +122,10 @@ A **Skill results** tab on the repository page, for anyone who can see the repos
 - Numbers lag behind: a long-lived change counts only when it merges.
 - A rebase or force-push loses the comparison on GitHub, which refuses non-ancestors, so those teams see more Went away and fewer Fixed. GitLab compares them anyway, and that diff includes target-branch changes, so someone else's edit can earn Fixed. Merging the target into the branch does the same on both.
 - A new left-out note marks every vanished finding of that skill in that review as Went away, so a real fix beside it is undercounted.
+- A new left-out with exactly the same title as a kept one leaves the note unchanged, so it can't be told apart from the kept one, and a nearby edit can earn Fixed.
+- A vanished finding can claim a genuinely new one on the same lines: one row where there were two, at the new finding's severity. A dismissed finding that vanished can take a new blocker, which then reads as dismissed.
+- The comparisons for a vanished finding count toward the cap of 20.
+- A rename after a finding vanished isn't followed, unless the comparison is already made for another finding. A rename in the review that left it out is.
 - An unrelated edit within 3 lines earns Fixed.
 - A change whose comparisons need more than the 30-second budget of a pass gets no fates after its 5 attempts, rather than a guess.
 - On GitLab a change counts as a bot's only when GitLab marks the account as one, so Renovate on an ordinary account counts as a person.
