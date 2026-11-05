@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -70,9 +71,9 @@ func (r *rig) ghTo(path string, body []byte, opts ...opt) *httptest.ResponseReco
 
 func noQueueCalls(t *testing.T, r *rig) {
 	t.Helper()
-	if n := len(r.q.enqueues) + len(r.q.supersedes) + len(r.q.draftSupersedes) + len(r.q.republishes); n != 0 || r.wakes != 0 {
-		t.Fatalf("queue touched: %+v %+v %+v %+v wakes=%d", r.q.enqueues, r.q.supersedes, r.q.draftSupersedes,
-			r.q.republishes, r.wakes)
+	if n := len(r.q.enqueues) + len(r.q.supersedes) + len(r.q.draftSupersedes) + len(r.q.republishes) + len(r.q.fates); n != 0 || r.wakes != 0 {
+		t.Fatalf("queue touched: %+v %+v %+v %+v %+v wakes=%d", r.q.enqueues, r.q.supersedes, r.q.draftSupersedes,
+			r.q.republishes, r.q.fates, r.wakes)
 	}
 }
 
@@ -152,6 +153,9 @@ func TestGitHubClosedRecordsFates(t *testing.T) {
 		want := store.MRKey{Instance: "gh", ProjectID: 42, IID: 7}
 		if len(r.q.fates) != 1 {
 			t.Fatalf("%s: fates = %+v, want one call", fx, r.q.fates)
+		}
+		if want := []string{"SupersedeMR", "RequestFates"}; !slices.Equal(r.q.calls, want) {
+			t.Errorf("%s: calls = %v, want %v", fx, r.q.calls, want)
 		}
 		got := r.q.fates[0]
 		if got.mr != want || got.project != "Acme/Widgets" || got.merged != merged {
@@ -336,6 +340,13 @@ func TestGitHubUnknownRepositoryIgnored(t *testing.T) {
 	noQueueCalls(t, r)
 }
 
+func TestGitHubUnknownRepositoryEndRecordsNothing(t *testing.T) {
+	r := newGitHubRig(t)
+	body := bytes.Replace(fixture(t, "github_closed.json"), []byte("acme/widgets"), []byte("acme/other"), 1)
+	wantStatus(t, r.gh(body), 200)
+	noQueueCalls(t, r)
+}
+
 // A repository listed under a different instance is not reviewed here.
 func TestGitHubRepositoryOfAnotherInstanceIgnored(t *testing.T) {
 	r := newGitHubRig(t)
@@ -369,6 +380,9 @@ func TestGitHubStoreErrorIs500(t *testing.T) {
 		wantStatus(t, r.gh(fixture(t, fx)), 500)
 		if r.wakes != 0 {
 			t.Fatal("woke on error")
+		}
+		if len(r.q.fates) != 0 {
+			t.Fatalf("%s: fates = %+v after a store error, want none", fx, r.q.fates)
 		}
 	}
 }

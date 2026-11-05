@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +55,8 @@ type fakeQueue struct {
 	// fates are the RequestFates calls; fatesErr, when set, is what it answers.
 	fates    []fatesCall
 	fatesErr error
+	// calls lists SupersedeMR and RequestFates in the order they were made.
+	calls []string
 	// publishedTarget, when set, is the target of the head's published
 	// review: Republish answers false for any other target, as the store does.
 	publishedTarget string
@@ -78,6 +81,7 @@ func (q *fakeQueue) EnqueueRun(_ context.Context, mr store.MRKey, projectPath, h
 
 func (q *fakeQueue) SupersedeMR(_ context.Context, mr store.MRKey) (int, error) {
 	q.supersedes = append(q.supersedes, mr)
+	q.calls = append(q.calls, "SupersedeMR")
 	if q.err != nil {
 		return 0, q.err
 	}
@@ -86,6 +90,7 @@ func (q *fakeQueue) SupersedeMR(_ context.Context, mr store.MRKey) (int, error) 
 
 func (q *fakeQueue) RequestFates(_ context.Context, mr store.MRKey, projectPath string, merged bool, at time.Time) error {
 	q.fates = append(q.fates, fatesCall{mr, projectPath, merged, at})
+	q.calls = append(q.calls, "RequestFates")
 	return q.fatesErr
 }
 
@@ -256,6 +261,9 @@ func TestEndedChangeRecordsFates(t *testing.T) {
 		if len(r.q.fates) != 1 {
 			t.Fatalf("%s: fates = %+v, want one call", fx, r.q.fates)
 		}
+		if want := []string{"SupersedeMR", "RequestFates"}; !slices.Equal(r.q.calls, want) {
+			t.Errorf("%s: calls = %v, want %v", fx, r.q.calls, want)
+		}
 		got := r.q.fates[0]
 		if got.mr != want || got.project != "Acme/Widgets" || got.merged != merged {
 			t.Errorf("%s: fates = %+v, want %+v project Acme/Widgets merged=%v", fx, got, want, merged)
@@ -337,6 +345,16 @@ func TestUnknownProjectIgnored(t *testing.T) {
 	}
 }
 
+// A repository that is not switched on records nothing, an end included.
+func TestUnknownProjectEndRecordsNothing(t *testing.T) {
+	for _, fx := range []string{"mr_close.json", "mr_merge.json"} {
+		r := newRig(t)
+		body := bytes.Replace(fixture(t, fx), []byte("acme/widgets"), []byte("acme/other"), 1)
+		wantStatus(t, r.hook(body), 200)
+		noQueueCalls(t, r)
+	}
+}
+
 func TestProjectMatchIsCaseInsensitive(t *testing.T) {
 	r := newRig(t)
 	body := bytes.Replace(fixture(t, "mr_open.json"), []byte("acme/widgets"), []byte("ACME/WIDGETS"), 1)
@@ -362,6 +380,9 @@ func TestStoreErrorIs500(t *testing.T) {
 		wantStatus(t, r.hook(fixture(t, fx)), 500)
 		if r.wakes != 0 {
 			t.Fatal("woke on error")
+		}
+		if len(r.q.fates) != 0 {
+			t.Fatalf("%s: fates = %+v after a store error, want none", fx, r.q.fates)
 		}
 	}
 }

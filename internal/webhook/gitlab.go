@@ -263,9 +263,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Only recorded here; the engine works the fates out later. A failure
-		// must not change the answer, or the platform would resend an event
-		// whose runs are already superseded.
-		if err := h.Queue.RequestFates(r.Context(), mr, project, attrs.Action == "merge", time.Now()); err != nil {
+		// must not change the answer, and the hourly sweep catches a change
+		// it missed. The runs are already superseded, so a platform hanging
+		// up must not cancel the record.
+		if err := h.Queue.RequestFates(context.WithoutCancel(r.Context()), mr, project, attrs.Action == "merge", time.Now()); err != nil {
 			log.Warn("recording the change's end failed", "err", err)
 		}
 		log.Info("webhook handled", "outcome", "superseded", "runs", n)
