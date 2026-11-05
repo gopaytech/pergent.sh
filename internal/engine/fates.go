@@ -269,7 +269,7 @@ func fateRetryDelay(failed int) time.Duration {
 // finding. A finding with no fingerprint is dropped, as everywhere else.
 func fatesInput(runs []store.Run, ds []store.Dismissal) fates.Input {
 	var in fates.Input
-	before := map[string]map[string]bool{} // skill to its left-out notes in its last review that did not fail
+	before := map[string][]string{} // skill to its left-out notes in its last review that did not fail
 	for _, run := range runs {
 		if run.Result == nil {
 			continue
@@ -292,11 +292,11 @@ func fatesInput(runs []store.Run, ds []store.Dismissal) fates.Input {
 			for _, p := range s.Files.Carried {
 				skill.Reviewed[p] = true
 			}
-			notes := map[string]bool{}
+			var notes []string
 			for _, n := range s.Notes {
 				if strings.HasPrefix(n, result.LeftOutNotePrefix) {
-					notes[n] = true
-					skill.LeftOut = skill.LeftOut || !before[s.Name][n]
+					notes = append(notes, n)
+					skill.LeftOut = skill.LeftOut || !result.LeftOutCoveredBy(n, before[s.Name])
 				}
 			}
 			if !skill.Failed {

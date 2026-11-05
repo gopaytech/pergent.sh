@@ -121,30 +121,6 @@ func TestFatesInputLeftOutNote(t *testing.T) {
 	}
 }
 
-// leftOutThenGone is two reviews of one change, a to b, of the security skill:
-// the first reports a finding at db/query.go:12 and carries the notes, the
-// second reports nothing and carries secondNotes. The change from a to b edits
-// line 12. It returns what the fate of the finding is.
-func leftOutThenGone(t *testing.T, firstNotes, secondNotes []string) string {
-	t.Helper()
-	first := fateSkill(t, "has_blocking_issues", fateFinding("aaaaaaaaaaaa", "blocking", 12))
-	first.Notes = firstNotes
-	second := fateSkill(t, "no_blocking_issues")
-	second.Notes = secondNotes
-	in := fatesInput([]store.Run{
-		{HeadSHA: sha('a'), Result: resultFor(t, sha('a'), first)},
-		{HeadSHA: sha('b'), Result: resultFor(t, sha('b'), second)},
-	}, nil)
-	in.Compare = func(from, to string) ([]diffmap.File, error) {
-		return []diffmap.File{diffmap.Parse("db/query.go", "", "@@ -11,3 +11,3 @@\n a\n-b\n+c\n d\n", false)}, nil
-	}
-	got, err := fates.Decide(in)
-	if err != nil || len(got) != 1 {
-		t.Fatalf("Decide = %+v, %v; want one fate", got, err)
-	}
-	return got[0].Fate
-}
-
 // fateAfter is the fate of the finding at db/query.go:12 that the security
 // skill reports in the first review, through fatesInput and fates.Decide. Each
 // argument is the security skill in one review, in order, or nil for a review
@@ -217,20 +193,46 @@ func TestFatesInputLeftOutNoteOfAFailedSkillIsStillNew(t *testing.T) {
 	}
 }
 
+// leftOutThenGone is two reviews of one change, a to b, of the security skill:
+// the first reports a finding at db/query.go:12 and carries the notes, the
+// second reports nothing and carries secondNotes. The change from a to b edits
+// line 12. It returns what the fate of the finding is.
+func leftOutThenGone(t *testing.T, firstNotes, secondNotes []string) string {
+	t.Helper()
+	first := withNotes(t, "has_blocking_issues", firstNotes...)
+	b, err := json.Marshal(fateFinding("aaaaaaaaaaaa", "blocking", 12))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Findings = append(first.Findings, b)
+	return fateAfter(t, first, withNotes(t, "no_blocking_issues", secondNotes...))
+}
+
 func TestFatesInputLeftOutNoteIsNewOnlyInTheReviewThatWroteIt(t *testing.T) {
-	note := result.LeftOutNotePrefix + " Token compared with == (in api/auth.go)"
-	more := result.LeftOutNotePrefix + " Another title (in api/user.go)"
+	entry := func(titles ...string) string {
+		return result.LeftOutNotePrefix + " " + strings.Join(titles, "; ")
+	}
+	kept := entry("Token compared with == (in api/auth.go)")
+	both := entry("Token compared with == (in api/auth.go)", "SQL built by hand (in db/query.go)")
+	fresh := entry("Another title (in api/user.go)")
 	tests := []struct {
 		name          string
 		first, second []string
 		want          string
 	}{
-		// MergeIncremental keeps the note, so the second review carries it too,
-		// though it left nothing out: the fix is a fix.
-		{"the note is kept by the next review", []string{note}, []string{note}, fates.Fixed},
-		{"the next review writes another note", []string{note}, []string{note, more}, fates.WentAway},
-		{"the next review has a note and the first none", nil, []string{note}, fates.WentAway},
+		// A merge writes the new run's notes first and the kept ones after
+		// them, and a kept note says nothing about the new review: the fix is
+		// a fix.
+		{"the note is kept by the next review", []string{kept}, []string{kept}, fates.Fixed},
+		{"the next review writes another note", []string{kept}, []string{fresh, kept}, fates.WentAway},
+		{"only the last note differs", []string{kept, both}, []string{kept, entry("Another title (in api/user.go)")}, fates.WentAway},
+		{"the next review has a note and the first none", nil, []string{kept}, fates.WentAway},
 		{"no note anywhere", nil, nil, fates.Fixed},
+		// A rewrite that says no more than what was there is not new.
+		{"a rewrite saying less than the kept note", []string{both}, []string{kept}, fates.Fixed},
+		{"a rewrite with the entries in another order", []string{both}, []string{entry("SQL built by hand (in db/query.go)", "Token compared with == (in api/auth.go)")}, fates.Fixed},
+		{"a rewrite with one more entry", []string{kept}, []string{both}, fates.WentAway},
+		{"a rewrite whose list was cut", []string{both}, []string{kept + "; and 3 more"}, fates.Fixed},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

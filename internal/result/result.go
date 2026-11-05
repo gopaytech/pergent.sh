@@ -786,6 +786,24 @@ func leftOutCovers(c, n string) bool {
 	return len(want) > 0 && !slices.ContainsFunc(want, func(e string) bool { return !slices.Contains(have, e) })
 }
 
+// LeftOutCoveredBy reports whether the notes between them say everything note
+// does: note is one of them, or each entry of note is an entry of one of them.
+// It is leftOutCovers for a review's notes taken together.
+func LeftOutCoveredBy(note string, notes []string) bool {
+	if slices.Contains(notes, note) {
+		return true
+	}
+	want := leftOutEntries(note)
+	if len(want) == 0 {
+		return false
+	}
+	var have []string
+	for _, n := range notes {
+		have = append(have, leftOutEntries(n)...)
+	}
+	return !slices.ContainsFunc(want, func(e string) bool { return !slices.Contains(have, e) })
+}
+
 // hasBlocking reports whether any of the raw findings is blocking.
 func hasBlocking(findings []json.RawMessage) bool {
 	for _, raw := range findings {
