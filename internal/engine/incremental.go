@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 
@@ -30,6 +32,13 @@ const (
 	fullPartial      = "the last review is partial"
 	fullNothing      = "nothing to carry"
 	fullTooLarge     = "inputs too large"
+)
+
+// Why a skill carries no files, as the log says it.
+const (
+	carryChanged   = "changed"
+	carryOutside   = "finding outside reviewed files"
+	carryUnchanged = "nothing unchanged"
 )
 
 // planCarried decides whether the push run reviews only what changed since
@@ -74,7 +83,7 @@ func (d *dispatcher) planCarried(ctx context.Context, plat Platform, repo settin
 	if err != nil {
 		return nil, "", err
 	}
-	carried := carriedFiles(lastResult, last.SkillHashes, skillHashes(in.Skills), changed, ds)
+	carried := carriedFiles(lastResult, last.SkillHashes, skillHashes(in.Skills), changed, ds, d.log)
 	if len(carried) == 0 {
 		return nil, fullNothing, nil
 	}
@@ -134,7 +143,12 @@ func (d *dispatcher) setIncremental(ctx context.Context, last store.Run, in *inp
 // inside the diff, and carrying the other files would lose it on the next
 // push), and when nothing is left to carry. Dismissed findings count for the
 // last rule. The paths are sorted.
-func carriedFiles(last *result.Result, lastHashes, hashes map[string]string, changed []string, ds []render.Dismissal) map[string][]string {
+//
+// Each skill that carries nothing is logged with the reason, so one that
+// falls back to a full review while the others carry can be told: "changed"
+// (a new or edited skill, or one it can't tell), "finding outside reviewed
+// files" or "nothing unchanged".
+func carriedFiles(last *result.Result, lastHashes, hashes map[string]string, changed []string, ds []render.Dismissal, log *slog.Logger) map[string][]string {
 	changedSet := map[string]bool{}
 	for _, p := range changed {
 		changedSet[p] = true
@@ -146,10 +160,14 @@ func carriedFiles(last *result.Result, lastHashes, hashes map[string]string, cha
 	// ToRender and ApplyDismissals keep the order of last.Skills.
 	open := render.ApplyDismissals(result.ToRender(last), ds)
 
+	nothing := func(skill, reason string) {
+		log.Info("nothing carried for a skill", "skill", skill, "reason", reason)
+	}
 	out := map[string][]string{}
 	for i, s := range last.Skills {
 		now, was := hashes[s.Name], lastHashes[s.Name]
 		if names[s.Name] != 1 || now == "" || now != was {
+			nothing(s.Name, carryChanged)
 			continue
 		}
 		reviewed := map[string]bool{}
@@ -165,6 +183,7 @@ func carriedFiles(last *result.Result, lastHashes, hashes map[string]string, cha
 			}
 		}
 		if !inside {
+			nothing(s.Name, carryOutside)
 			continue
 		}
 		blocked := map[string]bool{}
@@ -180,10 +199,17 @@ func carriedFiles(last *result.Result, lastHashes, hashes map[string]string, cha
 			}
 		}
 		if len(files) == 0 {
+			nothing(s.Name, carryUnchanged)
 			continue
 		}
 		slices.Sort(files)
 		out[s.Name] = files
+	}
+	// A skill the last review lacks is new: it reviews all its files.
+	for _, name := range slices.Sorted(maps.Keys(hashes)) {
+		if names[name] == 0 {
+			nothing(name, carryChanged)
+		}
 	}
 	return out
 }

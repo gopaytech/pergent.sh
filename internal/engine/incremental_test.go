@@ -7,8 +7,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/gopaytech/pergent/render"
@@ -210,11 +213,56 @@ func TestCarriedFiles(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			last := &result.Result{Skills: tc.skills(t)}
-			got := carriedFiles(last, tc.lastHashes, tc.hashes, tc.changed, tc.ds)
+			got := carriedFiles(last, tc.lastHashes, tc.hashes, tc.changed, tc.ds, discardLog)
 			if !maps.EqualFunc(got, tc.want, slices.Equal) {
 				t.Errorf("carriedFiles = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+var discardLog = slog.New(slog.NewTextHandler(io.Discard, nil))
+
+// Every skill that carries nothing is logged with its own reason, also when
+// another skill carries.
+func TestCarriedFilesLogsWhyASkillCarriesNothing(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+		if a.Key == slog.TimeKey {
+			return slog.Attr{}
+		}
+		return a
+	}}))
+	last := &result.Result{Skills: []result.Skill{
+		lastSkill("kept", []string{"a.go"}),
+		lastSkill("edited", []string{"a.go"}),
+		lastSkill("stray", []string{"a.go"}, lastFinding(t, "fp1", "elsewhere.go", "suggestion")),
+		lastSkill("touched", []string{"a.go"}),
+	}}
+	lastHashes := map[string]string{"kept": "h1", "edited": "h1", "stray": "h1", "touched": "h1"}
+	hashes := map[string]string{"kept": "h1", "edited": "h2", "stray": "h1", "touched": "h1", "added": "h3"}
+
+	got := carriedFiles(last, lastHashes, hashes, []string{"a.go"}, nil, log)
+
+	if !maps.EqualFunc(got, map[string][]string{}, slices.Equal) {
+		t.Fatalf("carriedFiles = %v, want nothing (a.go changed)", got)
+	}
+	want := []string{
+		`level=INFO msg="nothing carried for a skill" skill=kept reason="nothing unchanged"`,
+		`level=INFO msg="nothing carried for a skill" skill=edited reason=changed`,
+		`level=INFO msg="nothing carried for a skill" skill=stray reason="finding outside reviewed files"`,
+		`level=INFO msg="nothing carried for a skill" skill=touched reason="nothing unchanged"`,
+		`level=INFO msg="nothing carried for a skill" skill=added reason=changed`,
+	}
+	if have := strings.Split(strings.TrimSpace(buf.String()), "\n"); !slices.Equal(have, want) {
+		t.Errorf("log =\n%s\nwant\n%s", strings.Join(have, "\n"), strings.Join(want, "\n"))
+	}
+
+	// A skill that carries is not logged.
+	buf.Reset()
+	got = carriedFiles(last, lastHashes, hashes, []string{"other.go"}, nil, log)
+	if len(got["kept"]) != 1 || strings.Contains(buf.String(), "skill=kept") {
+		t.Errorf("carried = %v, log = %q; want kept carried and not logged", got, buf.String())
 	}
 }
 
