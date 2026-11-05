@@ -325,6 +325,9 @@ func (e *Engine) Run(ctx context.Context) {
 	}
 
 	e.pass(ctx)
+	// A rollout is when webhooks are missed, and the hourly tick is an hour
+	// off. After the first pass, which it would only delay.
+	e.sweepFates(ctx)
 	for {
 		select {
 		case <-ctx.Done():

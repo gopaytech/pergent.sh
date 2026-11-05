@@ -102,6 +102,33 @@ func TestRunSweepsApprovalsAtStart(t *testing.T) {
 	<-done
 }
 
+// Run sweeps the fates once at start: a merge missed while pergent.sh was
+// down is asked for without waiting for the hourly tick.
+func TestRunSweepsFatesAtStart(t *testing.T) {
+	env := newTestEnv(t)
+	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
+	serveChange(env, 1, sha('a'), "merged", 55)
+	env.GitLab.Reply(http.MethodGet, userPath(55), http.StatusOK, map[string]any{"bot": false})
+
+	ctx, cancel := context.WithCancel(env.ctx)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		env.Engine.Run(ctx)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for !fateJobOf(t, env, 1).Found {
+		if time.Now().After(deadline) {
+			t.Fatalf("Run didn't sweep the fates at start:\n%s", env.Logs())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	<-done
+}
+
 // runFor runs the engine for d, then stops it.
 func runFor(t *testing.T, env *testEnv, d time.Duration) {
 	t.Helper()
