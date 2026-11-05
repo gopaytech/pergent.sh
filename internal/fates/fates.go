@@ -376,8 +376,9 @@ func (w *walk) candidates() []*reported {
 // same head the lines are where they were; otherwise a comparison is made, and
 // only if some candidate could be the track's match. A track that is not live
 // (gone) is a second pass over what the live ones left; there may be many of
-// them, so it follows no rename unless the comparison is already had, and the
-// cap is not spent on it.
+// them, so it makes a comparison only when a candidate is in the file it had or
+// moved to as of the review that left it out, or the comparison is already had.
+// Those comparisons count toward MaxCompares like any other.
 func (w *walk) reword(pending []*track, gone bool) error {
 	cands := w.candidates()
 	if len(cands) == 0 {
