@@ -53,7 +53,7 @@ When a change merges or closes, pergent.sh walks the change's reviews in order. 
 
 **Which reviews say anything.** A review is evidence that a finding stopped being reported only if the skill ran there, didn't fail, and reviewed that file. Otherwise the review is skipped for that finding, which counts as still reported. That covers a failed skill, a skill removed from the repository, and a `review failed` result holding only the re-run skills. *(chosen: never call it Fixed)*
 
-If that review's skill wrote a `Left out because of past dismissals:` note, one the same skill's note in the review before did not carry (a merged review keeps earlier notes, and a kept note says nothing about the new review), a finding of the skill that vanished there is **Went away**, even if its lines changed: the note can't say which finding it means. *(chosen)*
+If that review's skill wrote a `Left out because of past dismissals:` note, one the same skill's notes in its last review that did not fail did not carry (a merged review keeps earlier notes, and a kept note says nothing about the new review), a finding of the skill that vanished there is **Went away**, even if its lines changed: the note can't say which finding it means. *(chosen)*
 
 **Fixed or Went away.** For the rest, it compares the head of the last review that reported the finding with the head of the review that didn't, using `forge.CompareDiff`, and looks at the lines that really changed, on the old side of the diff. Hunks include context, so hunk overlap isn't the test; `internal/diffmap` needs this added.
 

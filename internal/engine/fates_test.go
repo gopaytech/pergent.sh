@@ -145,6 +145,78 @@ func leftOutThenGone(t *testing.T, firstNotes, secondNotes []string) string {
 	return got[0].Fate
 }
 
+// fateAfter is the fate of the finding at db/query.go:12 that the security
+// skill reports in the first review, through fatesInput and fates.Decide. Each
+// argument is the security skill in one review, in order, or nil for a review
+// that has another skill only. Every comparison edits line 12.
+func fateAfter(t *testing.T, skills ...*result.Skill) string {
+	t.Helper()
+	var runs []store.Run
+	for i, s := range skills {
+		head := sha(byte('a' + i))
+		if s == nil {
+			other := fateSkill(t, "no_blocking_issues")
+			other.Name = "style"
+			runs = append(runs, store.Run{HeadSHA: head, Result: resultFor(t, head, other)})
+			continue
+		}
+		runs = append(runs, store.Run{HeadSHA: head, Result: resultFor(t, head, *s)})
+	}
+	in := fatesInput(runs, nil)
+	in.Compare = func(from, to string) ([]diffmap.File, error) {
+		return []diffmap.File{diffmap.Parse("db/query.go", "", "@@ -11,3 +11,3 @@\n a\n-b\n+c\n d\n", false)}, nil
+	}
+	got, err := fates.Decide(in)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Decide = %+v, %v; want one fate", got, err)
+	}
+	return got[0].Fate
+}
+
+// withNotes is a security skill with verdict and left-out notes.
+func withNotes(t *testing.T, verdict string, notes ...string) *result.Skill {
+	t.Helper()
+	s := fateSkill(t, verdict)
+	s.Notes = notes
+	return &s
+}
+
+// A note written by a review that failed says nothing the next review can
+// lean on: the failed skill was skipped for the finding, and the note that the
+// next review keeps is still the first it shows.
+func TestFatesInputLeftOutNoteOfAFailedSkillIsStillNew(t *testing.T) {
+	note := result.LeftOutNotePrefix + " Token compared with == (in api/auth.go)"
+	more := result.LeftOutNotePrefix + " Another title (in api/user.go)"
+	tests := []struct {
+		name       string
+		firstNotes []string
+		then       []*result.Skill
+		want       string
+	}{
+		{"kept after a failed review", nil,
+			[]*result.Skill{withNotes(t, "failed", note), withNotes(t, "no_blocking_issues", note)}, fates.WentAway},
+		{"rewritten in full after a failed review", nil,
+			[]*result.Skill{withNotes(t, "failed", note), withNotes(t, "no_blocking_issues", more, note)}, fates.WentAway},
+		// The note was written by the first review, a review without the skill
+		// came between, and the next one keeps the note: it is not new.
+		{"a review without the skill in between", []string{note},
+			[]*result.Skill{nil, withNotes(t, "no_blocking_issues", note)}, fates.Fixed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			first := withNotes(t, "has_blocking_issues", tt.firstNotes...)
+			b, err := json.Marshal(fateFinding("aaaaaaaaaaaa", "blocking", 12))
+			if err != nil {
+				t.Fatal(err)
+			}
+			first.Findings = append(first.Findings, b)
+			if got := fateAfter(t, append([]*result.Skill{first}, tt.then...)...); got != tt.want {
+				t.Errorf("fate = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFatesInputLeftOutNoteIsNewOnlyInTheReviewThatWroteIt(t *testing.T) {
 	note := result.LeftOutNotePrefix + " Token compared with == (in api/auth.go)"
 	more := result.LeftOutNotePrefix + " Another title (in api/user.go)"
