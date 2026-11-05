@@ -1400,8 +1400,18 @@ func TestRunDetailIncrementalNote(t *testing.T) {
 	// An incremental run whose result was never merged with the last review
 	// (a push superseded it, or the pod restarted) is a few files only.
 	unmerged := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('c'), result: cleanResult(head('c')), state: store.Superseded, incremental: true})
+	// Not yet merged is no reason to say so: a reported run waits for the
+	// publisher to merge it, and an error result has no files to speak of.
+	waiting := e.addRun(runFix{project: "acme/widgets", number: 4, head: head('d'), result: cleanResult(head('d')), state: store.Reported, incremental: true})
+	errored := e.addRun(runFix{project: "acme/widgets", number: 5, head: head('e'), state: store.Superseded, incremental: true,
+		result: `{"schema_version":1,"status":"error","base":"` + baseSHA + `","head":"` + head('e') + `","comment":{"markdown":"x"}}`})
 	c := e.signInGitLab(false, "acme/widgets")
 
+	for name, id := range map[string]string{"a reported run": waiting, "an error result": errored} {
+		if v := getJSON[RunDetailView](e, c, "/api/runs/"+id); v.IncrementalNote != "" {
+			t.Errorf("incrementalNote = %q for %s, want none", v.IncrementalNote, name)
+		}
+	}
 	if v := getJSON[RunDetailView](e, c, "/api/runs/"+incremental); v.IncrementalNote != "Re-reviewed 2 files · 28 carried over from `abc1234`" {
 		t.Errorf("incrementalNote = %q", v.IncrementalNote)
 	}

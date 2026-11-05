@@ -609,10 +609,12 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 		}
 		view.PergentVersion = res.PergentVersion
 		view.IncrementalNote = result.IncrementalNote(res.Incremental)
-		if run.Incremental && res.Incremental == nil {
+		if run.Incremental && res.Incremental == nil && res.Status == "completed" && run.State != store.Reported {
 			// A run that reviewed only some files whose result was never
 			// merged (a push superseded it, or the pod restarted): what
-			// its page lists is a few files, not the whole change.
+			// its page lists is a few files, not the whole change. A
+			// reported run is still to be merged, and an error result
+			// lists no files.
 			view.IncrementalNote = notMergedNote
 		}
 		fillSkills(&view, res, run.Result, run.SkillSources, run.SkillVersions, dismissals)
