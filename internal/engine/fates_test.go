@@ -9,11 +9,13 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/diffmap"
 	"github.com/gopaytech/pergent.sh/internal/fates"
 	"github.com/gopaytech/pergent.sh/internal/forge"
@@ -208,11 +210,16 @@ type compareForge struct {
 	forge.Inline
 	files []forge.FileDiff
 	err   error
-	calls int
+	calls []compareCall
+}
+
+type compareCall struct {
+	projectID int64
+	from, to  string
 }
 
 func (c *compareForge) CompareDiff(_ context.Context, projectID int64, from, to string) ([]forge.FileDiff, error) {
-	c.calls++
+	c.calls = append(c.calls, compareCall{projectID, from, to})
 	return c.files, c.err
 }
 
@@ -234,6 +241,9 @@ func TestFateCompareParsesFiles(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("files = %+v; want %+v", got, want)
 	}
+	if wantCalls := []compareCall{{7, sha('a'), sha('b')}}; !reflect.DeepEqual(cf.calls, wantCalls) {
+		t.Errorf("CompareDiff calls = %+v; want %+v", cf.calls, wantCalls)
+	}
 }
 
 func TestFateCompareErrors(t *testing.T) {
@@ -247,6 +257,10 @@ func TestFateCompareErrors(t *testing.T) {
 		{"not an ancestor on GitHub", fmt.Errorf("compare: %w", github.ErrNotAncestor), true},
 		{"a partial diff on GitHub", fmt.Errorf("compare: %w", github.ErrPartialDiff), true},
 		{"a partial diff on GitLab", fmt.Errorf("compare: %w", gitlab.ErrPartialDiff), true},
+		{"a reply too large on GitHub", fmt.Errorf("compare: %w", github.ErrTooLarge), true},
+		{"a reply too large on GitLab", fmt.Errorf("compare: %w", gitlab.ErrTooLarge), true},
+		// GitHub's 422 may be a head that is not there yet: try again.
+		{"a 422 on GitHub", fmt.Errorf("compare: %w", &github.APIError{Status: http.StatusUnprocessableEntity}), false},
 		{"a failure for now", temporary, false},
 		{"a deadline", context.DeadlineExceeded, false},
 	} {
@@ -267,6 +281,83 @@ func TestFateCompareNeedsInline(t *testing.T) {
 	_, err := fateCompare(context.Background(), struct{ forge.Forge }{}, 7)(sha('a'), sha('b'))
 	if !errors.Is(err, fates.ErrGone) {
 		t.Errorf("err = %v; want ErrGone", err)
+	}
+}
+
+// botForge is a forge whose IsBot answers as set and counts its calls.
+type botForge struct {
+	forge.Forge
+	bot   bool
+	err   error
+	calls int
+}
+
+func (b *botForge) IsBot(context.Context, int64) (bool, error) {
+	b.calls++
+	return b.bot, b.err
+}
+
+func TestFateAuthorIsBot(t *testing.T) {
+	boom := errors.New("403")
+	for _, tc := range []struct {
+		name      string
+		change    forge.Change
+		forge     botForge
+		want      bool
+		untold    bool // IsBot failed, and the change counts as a person's
+		wantErr   bool
+		wantCalls int
+	}{
+		{name: "the platform said so (GitHub)", change: forge.Change{AuthorIsBot: true, AuthorID: 5}, want: true},
+		{name: "GitHub person: IsBot is false", change: forge.Change{AuthorID: 5}, wantCalls: 1},
+		{name: "GitLab bot", change: forge.Change{AuthorID: 5}, forge: botForge{bot: true}, want: true, wantCalls: 1},
+		{name: "GitLab person", change: forge.Change{AuthorID: 5}, wantCalls: 1},
+		{name: "can't be told: a person's", change: forge.Change{AuthorID: 5}, forge: botForge{err: boom}, untold: true, wantCalls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := tc.forge
+			got, untold, err := fateAuthorIsBot(context.Background(), &f, tc.change)
+			if got != tc.want || (untold != nil) != tc.untold || (err != nil) != tc.wantErr || f.calls != tc.wantCalls {
+				t.Errorf("fateAuthorIsBot = %v, %v, %v with %d IsBot calls; want %v, untold %v, error %v, %d calls",
+					got, untold, err, f.calls, tc.want, tc.untold, tc.wantErr, tc.wantCalls)
+			}
+		})
+	}
+}
+
+// With the budget spent, IsBot's failure is not "a person's": merged fates
+// are final, so the job is tried again.
+func TestFateAuthorIsBotDeadline(t *testing.T) {
+	bctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	f := &botForge{err: context.DeadlineExceeded}
+	if _, _, err := fateAuthorIsBot(bctx, f, forge.Change{AuthorID: 5}); err == nil {
+		t.Error("an IsBot failure after the budget ran out was taken for a person's")
+	}
+	// The cause is flattened by some clients: it is the budget that counts.
+	f = &botForge{err: errors.New("request failed")}
+	if _, _, err := fateAuthorIsBot(bctx, f, forge.Change{AuthorID: 5}); err == nil {
+		t.Error("a flattened IsBot failure after the budget ran out was taken for a person's")
+	}
+}
+
+func TestFateTimeLeft(t *testing.T) {
+	defer func(d time.Duration) { fateMinLeft = d }(fateMinLeft)
+	fateMinLeft = time.Hour
+	short, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if fateTimeLeft(short) {
+		t.Error("a minute left counts as enough when an hour is the least")
+	}
+	long, cancel2 := context.WithTimeout(context.Background(), 2*time.Hour)
+	defer cancel2()
+	if !fateTimeLeft(long) {
+		t.Error("two hours left count as too little")
+	}
+	done, cancel3 := context.WithCancel(long)
+	cancel3()
+	if fateTimeLeft(done) {
+		t.Error("a cancelled context has time left")
 	}
 }
 
@@ -445,6 +536,12 @@ func TestWorkFatesStoresFates(t *testing.T) {
 	if j := fateJobOf(t, env, 1); !j.Finished {
 		t.Errorf("job = %+v; want it finished", j)
 	}
+	// One compare, from the first head to the second, straight.
+	if reqs := env.GitLab.Requests(http.MethodGet, comparePath()); len(reqs) != 1 {
+		t.Errorf("%d compares; want 1", len(reqs))
+	} else if q := reqs[0].Query; q.Get("from") != sha('a') || q.Get("to") != sha('c') || q.Get("straight") != "true" {
+		t.Errorf("compare query = %v; want from %s to %s, straight", q, sha('a'), sha('c'))
+	}
 	// Worked out once: another pass finds nothing to do.
 	env.GitLab.Reset()
 	workFates(t, env)
@@ -604,6 +701,15 @@ func TestWorkFatesBotAuthor(t *testing.T) {
 		{"a person", func(env *testEnv) {
 			env.GitLab.Reply(http.MethodGet, userPath(55), http.StatusOK, map[string]any{"bot": false})
 		}, false},
+		// GitHub says it in the pull request; its IsBot is always false.
+		{"a GitHub bot", func(env *testEnv) {
+			env.Engine.Platforms.Set(testInstance, Platform{Kind: config.PlatformGitHub, Forge: &fakeChangeForge{
+				change: forge.Change{Number: 1, State: forge.StateMerged, AuthorID: 5, AuthorIsBot: true}}})
+		}, true},
+		{"a GitHub person", func(env *testEnv) {
+			env.Engine.Platforms.Set(testInstance, Platform{Kind: config.PlatformGitHub, Forge: &fakeChangeForge{
+				change: forge.Change{Number: 1, State: forge.StateMerged, AuthorID: 5}}})
+		}, false},
 		// When it can't be told, the change counts as a person's.
 		{"unknown", func(env *testEnv) {
 			env.GitLab.Reply(http.MethodGet, userPath(55), http.StatusForbidden, `{"message":"403 Forbidden"}`)
@@ -629,8 +735,7 @@ func TestWorkFatesBotAuthor(t *testing.T) {
 // A pass stops claiming work once its budget is spent, and a hung platform
 // holds only the job it hangs on.
 func TestWorkFatesBudget(t *testing.T) {
-	defer func(b time.Duration) { fateBudget = b }(fateBudget)
-	fateBudget = 300 * time.Millisecond
+	shortBudget(t, 300*time.Millisecond)
 
 	env := newTestEnv(t)
 	for iid := int64(1); iid <= 2; iid++ {
@@ -683,7 +788,7 @@ func TestFatesSweepFindsAMissedMerge(t *testing.T) {
 	}
 }
 
-// A closed change is requested too; an open one is only marked as looked at.
+// An open change is only marked as looked at.
 func TestFatesSweepOpenChangeIsLeftAlone(t *testing.T) {
 	env := newTestEnv(t)
 	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
@@ -704,7 +809,8 @@ func TestFatesSweepOpenChangeIsLeftAlone(t *testing.T) {
 	}
 }
 
-// A repository not switched on is marked as looked at, with no platform call.
+// A repository not switched on (here, no project row) is marked as looked
+// at, with no platform call.
 func TestFatesSweepRepositoryNotSwitchedOn(t *testing.T) {
 	env := newTestEnv(t)
 	other := store.MRKey{Instance: testInstance, ProjectID: 9, IID: 1}
@@ -774,5 +880,194 @@ func TestPruneFatesDeletesAYearOld(t *testing.T) {
 	}
 	if j := fateJobOf(t, env, 2); !j.Found {
 		t.Error("a recent job was pruned")
+	}
+}
+
+// fakeChangeForge is a platform that needs no HTTP: GetChange answers as set,
+// IsBot is false as on GitHub. waitForBudget makes GetChange answer only once
+// the context given to it is done (a platform call that outlives the pass's
+// budget); panics makes it panic.
+type fakeChangeForge struct {
+	forge.Forge
+	change        forge.Change
+	waitForBudget bool
+	panics        bool
+}
+
+func (f *fakeChangeForge) GetChange(ctx context.Context, _, _ int64) (forge.Change, error) {
+	if f.panics {
+		panic("a bad change")
+	}
+	if f.waitForBudget {
+		<-ctx.Done()
+	}
+	return f.change, nil
+}
+
+func (f *fakeChangeForge) IsBot(context.Context, int64) (bool, error) { return false, nil }
+
+// shortBudget sets a pass budget of budget, with room for a job to start.
+func shortBudget(t *testing.T, budget time.Duration) {
+	t.Helper()
+	b, l := fateBudget, fateMinLeft
+	t.Cleanup(func() { fateBudget, fateMinLeft = b, l })
+	fateBudget, fateMinLeft = budget, 50*time.Millisecond
+}
+
+// merged fates are final: a budget spent during IsBot is not "a person's".
+func TestWorkFatesDeadlineDuringIsBot(t *testing.T) {
+	shortBudget(t, 600*time.Millisecond)
+	env := newTestEnv(t)
+	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
+	serveChange(env, 1, sha('a'), "merged", 55)
+	env.GitLab.Handle(http.MethodGet, userPath(55), func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(10 * time.Second):
+		}
+	})
+	requestFates(t, env, 1, true)
+
+	workFates(t, env)
+
+	if j := fateJobOf(t, env, 1); j.Attempts != 1 || j.Finished {
+		t.Errorf("job = %+v; want 1 attempt, unfinished\n%s", j, env.Logs())
+	}
+	if got := storedFates(t, env, 1); len(got) != 0 {
+		t.Errorf("fates = %+v; want none", got)
+	}
+}
+
+// The store write has the engine's context, not the budget's: a platform
+// call that ends after the budget doesn't lose the fates.
+func TestWorkFatesStoresAfterTheBudgetRanOut(t *testing.T) {
+	shortBudget(t, 300*time.Millisecond)
+	env := newTestEnv(t)
+	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
+	env.Engine.Platforms.Set(testInstance, Platform{Kind: config.PlatformGitHub, Forge: &fakeChangeForge{
+		change: forge.Change{Number: 1, State: forge.StateMerged, AuthorID: 5}, waitForBudget: true}})
+	requestFates(t, env, 1, true)
+
+	workFates(t, env)
+
+	if got := storedFates(t, env, 1); len(got) != 1 {
+		t.Errorf("fates = %+v; want the finding stored\n%s", got, env.Logs())
+	}
+}
+
+// A webhook that asks again during a pass is not a failure: nothing is
+// stored for the old request and the new one is worked out next.
+func TestWorkFatesRequestedAgainMeanwhile(t *testing.T) {
+	env := newTestEnv(t)
+	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
+	env.reviewOf(t, 1, sha('c'))
+	serveChange(env, 1, sha('c'), "merged", 55)
+	env.GitLab.Reply(http.MethodGet, userPath(55), http.StatusOK, map[string]any{"bot": false})
+	var once sync.Once
+	env.GitLab.Handle(http.MethodGet, comparePath(), func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() {
+			if err := env.Store.RequestFates(env.ctx, env.MRKey(1), testProjectPath, true, env.Now().Add(time.Second)); err != nil {
+				t.Error(err)
+			}
+		})
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"diffs": []fileDiff{removesLine12}})
+	})
+	requestFates(t, env, 1, true)
+
+	workFates(t, env)
+
+	if j := fateJobOf(t, env, 1); !j.Found || j.Finished || j.Attempts != 0 {
+		t.Errorf("job = %+v; want the new request pending, no failed attempt", j)
+	}
+	if got := storedFates(t, env, 1); len(got) != 0 {
+		t.Errorf("fates = %+v; want none for the old request", got)
+	}
+	if strings.Contains(env.Logs(), "will try again") {
+		t.Errorf("a request made again was counted as a failure\n%s", env.Logs())
+	}
+
+	workFates(t, env)
+	if got := storedFates(t, env, 1); len(got) != 1 || got[0].Fate != "fixed" {
+		t.Errorf("fates after the next pass = %+v; want the finding fixed\n%s", got, env.Logs())
+	}
+}
+
+// A job isn't started with little of the budget left: it would lose an
+// attempt through no fault of its own.
+func TestWorkFatesStartsNothingWithLittleTimeLeft(t *testing.T) {
+	env := newTestEnv(t)
+	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
+	requestFates(t, env, 1, true)
+	b, l := fateBudget, fateMinLeft
+	defer func() { fateBudget, fateMinLeft = b, l }()
+	fateBudget, fateMinLeft = time.Second, 2*time.Second
+
+	workFates(t, env)
+
+	if reqs := env.GitLab.Requests("", ""); len(reqs) != 0 {
+		t.Errorf("%d platform calls with less than the least time left", len(reqs))
+	}
+	if j := fateJobOf(t, env, 1); j.Attempts != 0 || j.Finished {
+		t.Errorf("job = %+v; want it untouched", j)
+	}
+}
+
+// An instance with no platform right now is no fault of the job: it waits a
+// minute without losing an attempt.
+func TestWorkFatesNoPlatformKeepsTheAttempts(t *testing.T) {
+	env := newTestEnv(t)
+	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
+	requestFates(t, env, 1, true)
+	env.Engine.Platforms.Delete(testInstance)
+
+	workFates(t, env)
+
+	j := fateJobOf(t, env, 1)
+	if !j.Found || j.Finished || j.Attempts != 0 || j.NotBefore == nil || !j.NotBefore.Equal(env.Now().Add(time.Minute)) {
+		t.Errorf("job = %+v; want unfinished, no attempt, held until %s", j, env.Now().Add(time.Minute))
+	}
+}
+
+// One bad change can't take the loop, and the reviews it runs with, down.
+func TestWorkFatesPanicIsAFailedAttempt(t *testing.T) {
+	env := newTestEnv(t)
+	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
+	env.Engine.Platforms.Set(testInstance, Platform{Kind: config.PlatformGitHub, Forge: &fakeChangeForge{panics: true}})
+	requestFates(t, env, 1, true)
+
+	workFates(t, env)
+
+	if j := fateJobOf(t, env, 1); j.Attempts != 1 || j.Finished {
+		t.Errorf("job = %+v; want 1 attempt, unfinished", j)
+	}
+	if !strings.Contains(env.Logs(), "panicked") {
+		t.Errorf("the panic was not logged\n%s", env.Logs())
+	}
+}
+
+func TestFatesSweepFindsAClosedChange(t *testing.T) {
+	env := newTestEnv(t)
+	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
+	serveChange(env, 1, sha('a'), "closed", 55)
+
+	env.Engine.sweepFates(env.ctx)
+
+	if j := fateJobOf(t, env, 1); !j.Found || j.Finished || j.Merged {
+		t.Errorf("job = %+v; want a pending close\n%s", j, env.Logs())
+	}
+}
+
+// The sweep reads the repository's current path from the project, not from the
+// old run: a renamed repository isn't taken for one that is switched off.
+func TestFatesSweepFollowsARenamedRepository(t *testing.T) {
+	env := newTestEnv(t)
+	decide(t, env, env.MRKey(1), "acme/old-name", sha('a'), resultFor(t, sha('a'), fateSkill(t, "no_blocking_issues")))
+	serveChange(env, 1, sha('a'), "merged", 55)
+
+	env.Engine.sweepFates(env.ctx)
+
+	if j := fateJobOf(t, env, 1); !j.Found || !j.Merged {
+		t.Errorf("job = %+v; want a pending merge\n%s", j, env.Logs())
 	}
 }

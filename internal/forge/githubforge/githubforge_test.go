@@ -1275,3 +1275,25 @@ func TestHasApprovedIgnoresCommentReview(t *testing.T) {
 		}
 	}
 }
+
+// GitHub says in the pull request whether a bot opened it, so a change needs
+// no further call to tell.
+func TestGetChangeAuthorIsBot(t *testing.T) {
+	for _, tc := range []struct {
+		typ  string
+		want bool
+	}{{"Bot", true}, {"User", false}, {"", false}} {
+		f := newFake(t)
+		body := pr("closed", true, false)
+		body["user"] = map[string]any{"id": 9, "login": "dependabot[bot]", "type": tc.typ}
+		f.reply("GET", prPath, 200, body)
+
+		got, err := f.forge(t).GetChange(ctx, repoID, 3)
+		if err != nil || got.AuthorIsBot != tc.want {
+			t.Errorf("type %q: AuthorIsBot = %v, %v; want %v", tc.typ, got.AuthorIsBot, err, tc.want)
+		}
+		if n := len(f.requests("GET", "")); n != 1 {
+			t.Errorf("type %q: %d GET requests; want only the pull request", tc.typ, n)
+		}
+	}
+}
