@@ -717,6 +717,55 @@ func TestRewordedOnTheSameHead(t *testing.T) {
 	}
 }
 
+func TestAVanishedFindingReportedReworded(t *testing.T) {
+	// F is reported, left out of a review with an edit beside its lines (fixed
+	// or went away), and then reported again under a new title: one row.
+	t.Run("on two heads", func(t *testing.T) {
+		f := newFake()
+		f.files[[2]string{"h1", "h2"}] = []diffmap.File{edit("a.go", 12)}
+		got := decide(t, f, nil,
+			review("h1", sk(a, fnd("f1", "a.go", 10))),
+			review("h2", sk(a)),
+			review("h2", sk(a, fnd("f2", "a.go", 10))),
+		)
+		if fate := one(t, got); fate.Fingerprint != "f2" || fate.Fate != Open {
+			t.Errorf("got %+v, want f2/open", fate)
+		}
+	})
+	t.Run("on one head", func(t *testing.T) {
+		f := newFake()
+		got := decide(t, f, nil,
+			review("h1", sk(a, fnd("f1", "a.go", 10))),
+			review("h1", sk(a)),
+			review("h1", sk(a, fnd("f2", "a.go", 10))),
+		)
+		if fate := one(t, got); fate.Fingerprint != "f2" || fate.Fate != Open {
+			t.Errorf("got %+v, want f2/open", fate)
+		}
+		if f.calls != 0 {
+			t.Errorf("compares = %d, want 0", f.calls)
+		}
+	})
+}
+
+func TestALiveTrackBeatsAVanishedOneForACandidate(t *testing.T) {
+	// x and w are reported; w alone stays reported, then neither is, and c sits
+	// on the lines of both. x came first, but w is live: w is c's.
+	w := fnd("w", "a.go", 12)
+	got := decide(t, newFake(), nil,
+		review("h1", sk(a, fnd("x", "a.go", 11), w)),
+		review("h1", sk(a, w)),
+		review("h1", sk(a, func() Finding { c := fnd("c", "a.go", 11); c.EndLine = 12; return c }())),
+	)
+	want := []Fate{
+		{Fingerprint: "c", Skill: "s", SkillHash: "h", Severity: "blocking", Fate: Open},
+		{Fingerprint: "x", Skill: "s", SkillHash: "h", Severity: "blocking", Fate: WentAway},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
 func TestRewordedWithoutALine(t *testing.T) {
 	t.Run("retitled, edit far away", func(t *testing.T) {
 		f := newFake()

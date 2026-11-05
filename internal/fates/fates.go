@@ -237,13 +237,20 @@ func (w *walk) run(tracks []*track) ([]*track, error) {
 
 	// A finding not reported may be reworded, whatever the review says about
 	// the file; only then can it be said to have stopped being reported.
-	var pending []*track
+	// A track that had already stopped being reported may be reworded too, but
+	// only into what no live track took, as a thread resolved earlier is
+	// claimed after the live ones.
+	var pending, gone []*track
 	for _, t := range mine {
-		if !w.matched[t] && t.live {
+		switch {
+		case w.matched[t]:
+		case t.live:
 			pending = append(pending, t)
+		default:
+			gone = append(gone, t)
 		}
 	}
-	if err := w.reword(pending); err != nil {
+	if err := w.reword(pending, false); err != nil {
 		return nil, err
 	}
 	for _, t := range pending {
@@ -253,6 +260,9 @@ func (w *walk) run(tracks []*track) ([]*track, error) {
 		if err := w.vanished(t); err != nil {
 			return nil, err
 		}
+	}
+	if err := w.reword(gone, true); err != nil {
+		return nil, err
 	}
 
 	for _, r := range w.reported {
@@ -355,8 +365,11 @@ func (w *walk) candidates() []*reported {
 // closest to its lines, a tie going to the earlier track and the lower line.
 // A track with no line takes a finding with no line in the same file. On the
 // same head the lines are where they were; otherwise a comparison is made, and
-// only if some candidate could be the track's match.
-func (w *walk) reword(pending []*track) error {
+// only if some candidate could be the track's match. A track that is not live
+// (gone) is a second pass over what the live ones left; there may be many of
+// them, so it follows no rename unless the comparison is already had, and the
+// cap is not spent on it.
+func (w *walk) reword(pending []*track, gone bool) error {
 	cands := w.candidates()
 	if len(cands) == 0 {
 		return nil
@@ -369,6 +382,9 @@ func (w *walk) reword(pending []*track) error {
 		}
 		lo, hi, limit, file := t.line, t.end, 0, t.file
 		if t.head != w.r.Head {
+			if gone && !w.c.had(t.head, w.r.Head) && !inFile(cands, t.file) {
+				continue
+			}
 			files, ok, err := w.c.get(t.head, w.r.Head)
 			if err != nil {
 				return err
@@ -406,6 +422,15 @@ func (w *walk) reword(pending []*track) error {
 		w.update(pending[p.t], cands[p.c])
 	}
 	return nil
+}
+
+func inFile(rs []*reported, file string) bool {
+	for _, r := range rs {
+		if r.file == file {
+			return true
+		}
+	}
+	return false
 }
 
 func hasKind(rs []*reported, withLine bool) bool {
@@ -521,6 +546,9 @@ type result struct {
 	files []diffmap.File
 	gone  bool
 }
+
+// had reports whether the diff between two heads has been asked for already.
+func (c *comparer) had(from, to string) bool { return c.cache[[2]string{from, to}] != nil }
 
 // get returns the diff between two heads. ok is false when it can't be had:
 // the platform says so for good, or the cap is spent. Any other error is
