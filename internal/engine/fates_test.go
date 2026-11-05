@@ -572,6 +572,17 @@ func fateJobOf(t *testing.T, env *testEnv, iid int64) fateJobRow {
 	return j
 }
 
+// warmFates makes the first query of a pass against a connection that is
+// open, so the tests with a short budget don't spend it connecting. The
+// budgets are also long enough that a slow database can't fail them: the hung
+// fake holds until the budget ends, whatever it is.
+func warmFates(t *testing.T, env *testEnv) {
+	t.Helper()
+	if _, err := env.Store.ClaimFateJobs(env.ctx, env.Now(), 1); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func workFates(t *testing.T, env *testEnv) {
 	t.Helper()
 	env.Engine.workFates(env.ctx)
@@ -802,7 +813,7 @@ func TestWorkFatesBotAuthor(t *testing.T) {
 // A pass stops claiming work once its budget is spent, and a hung platform
 // holds only the job it hangs on.
 func TestWorkFatesBudget(t *testing.T) {
-	shortBudget(t, 300*time.Millisecond)
+	shortBudget(t, 2*time.Second)
 
 	env := newTestEnv(t)
 	for iid := int64(1); iid <= 2; iid++ {
@@ -816,6 +827,7 @@ func TestWorkFatesBudget(t *testing.T) {
 		}
 	})
 	serveChange(env, 2, sha('a'), "merged", 55)
+	warmFates(t, env)
 
 	start := time.Now()
 	workFates(t, env)
@@ -983,7 +995,7 @@ func shortBudget(t *testing.T, budget time.Duration) {
 
 // merged fates are final: a budget spent during IsBot is not "a person's".
 func TestWorkFatesDeadlineDuringIsBot(t *testing.T) {
-	shortBudget(t, 600*time.Millisecond)
+	shortBudget(t, 2*time.Second)
 	env := newTestEnv(t)
 	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
 	serveChange(env, 1, sha('a'), "merged", 55)
@@ -994,6 +1006,7 @@ func TestWorkFatesDeadlineDuringIsBot(t *testing.T) {
 		}
 	})
 	requestFates(t, env, 1, true)
+	warmFates(t, env)
 
 	workFates(t, env)
 
@@ -1008,12 +1021,13 @@ func TestWorkFatesDeadlineDuringIsBot(t *testing.T) {
 // The store write has the engine's context, not the budget's: a platform
 // call that ends after the budget doesn't lose the fates.
 func TestWorkFatesStoresAfterTheBudgetRanOut(t *testing.T) {
-	shortBudget(t, 300*time.Millisecond)
+	shortBudget(t, 2*time.Second)
 	env := newTestEnv(t)
 	env.reviewOf(t, 1, sha('a'), fateFinding(fpFirst, "blocking", 12))
 	env.Engine.Platforms.Set(testInstance, Platform{Kind: config.PlatformGitHub, Forge: &fakeChangeForge{
 		change: forge.Change{Number: 1, State: forge.StateMerged, AuthorID: 5}, waitForBudget: true}})
 	requestFates(t, env, 1, true)
+	warmFates(t, env)
 
 	workFates(t, env)
 

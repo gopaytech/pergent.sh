@@ -766,9 +766,6 @@ func TestDeleteProjectRemovesFates(t *testing.T) {
 	s := newStore(t)
 	otherProject := MRKey{Instance: mr1.Instance, ProjectID: 8, IID: 3}
 	otherInstance := MRKey{Instance: "lab", ProjectID: 7, IID: 3}
-	if err := s.CreateInstance(ctx, InstanceRow{Name: mr1.Instance, Platform: "gitlab"}, map[string][]byte{"review_token": []byte("x")}, t0); err != nil {
-		t.Fatal(err)
-	}
 	for _, mr := range []MRKey{mr1, otherProject, otherInstance} {
 		storeFates(t, s, mr, "acme/widgets", []FindingFate{fate("a", "sec", "", "blocking", "fixed")}, true, false, t0)
 	}
