@@ -247,6 +247,9 @@ var (
 	// 20 approved pull requests would use up GitHub's rate limit.
 	sweepInterval     = 5 * time.Minute
 	reconcileInterval = time.Hour
+	// fateInterval is how often the changes that merged or closed get their
+	// findings' fates worked out (workFates).
+	fateInterval = time.Minute
 	// reconcileSoonGap is the least time between two reconciles
 	// ReconcileSoon starts; requests in between are merged into one.
 	reconcileSoonGap = 10 * time.Second
@@ -254,8 +257,11 @@ var (
 
 // Run runs the loops until ctx is done: dispatch, publish, cleanup and
 // comment commands every 2 s or on Wake, watch every 15 s, sweep the
-// approvals every 5 minutes and reconcile every hour (when it also prunes
-// the review logs older than 30 days), and reconcile the repositories
+// approvals every 5 minutes, work out the fates of the findings of changes
+// that merged or closed every minute (workFates, for at most 30 s a pass),
+// and reconcile every hour (when it also prunes the review logs older than
+// 30 days, sweeps for changes whose merge or close no webhook recorded and
+// prunes fates older than a year), and reconcile the repositories
 // ReconcileSoon names (at most
 // once every 10 s: requests within that gap of the last such reconcile make
 // one more when it ends, of all their repositories). They all run in
@@ -291,6 +297,8 @@ func (e *Engine) Run(ctx context.Context) {
 	defer watch.Stop()
 	sweep := time.NewTicker(sweepInterval)
 	defer sweep.Stop()
+	fate := time.NewTicker(fateInterval)
+	defer fate.Stop()
 	reconcile := time.NewTicker(reconcileInterval)
 	defer reconcile.Stop()
 
@@ -331,11 +339,15 @@ func (e *Engine) Run(ctx context.Context) {
 			}
 		case <-sweep.C:
 			e.sweepApprovals(ctx)
+		case <-fate.C:
+			e.workFates(ctx)
 		case <-reconcile.C:
 			if err := e.Reconcile(ctx); err != nil && ctx.Err() == nil {
 				log.Error("reconcile failed", "error", e.redact(err.Error()))
 			}
 			e.pruneRunLogs(ctx)
+			e.sweepFates(ctx)
+			e.pruneFates(ctx)
 		case <-e.reconcileCh():
 			// Within the gap of the last one, wait for its end; requests
 			// arriving meanwhile are merged into that one.
