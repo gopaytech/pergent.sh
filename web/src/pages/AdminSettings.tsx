@@ -61,6 +61,7 @@ function Defaults({ v }: { v: DefaultsView }) {
   const [inlineFindings, setInlineFindings] = useState(v.inlineFindings);
   const [commandsOnly, setCommandsOnly] = useState(v.commandsAuthorAndMaintainersOnly);
   const [incremental, setIncremental] = useState(v.incrementalReviews);
+  const [learn, setLearn] = useState(v.learnFromDismissals);
   const [failureStatus, setFailureStatus] = useState(v.failureStatus);
   const [timeout, setTimeoutText] = useState(String(v.jobTimeoutSeconds));
   const [steps, setSteps] = useState(String(v.maxTurns));
@@ -115,6 +116,7 @@ function Defaults({ v }: { v: DefaultsView }) {
       inlineFindings: orNull(inlineFindings, cfg.inlineFindings),
       commandsAuthorAndMaintainersOnly: orNull(commandsOnly, cfg.commandsAuthorAndMaintainersOnly),
       incrementalReviews: orNull(incremental, cfg.incrementalReviews),
+      learnFromDismissals: orNull(learn, cfg.learnFromDismissals),
       failureStatus: orNull(failureStatus, cfg.failureStatus),
       jobTimeoutSeconds: orNull(Number(t), cfg.jobTimeoutSeconds),
       maxTurns: orNull(Number(s), cfg.maxTurns),
@@ -214,6 +216,24 @@ function Defaults({ v }: { v: DefaultsView }) {
         </div>
         <div>
           <Switch label="Incremental reviews" checked={incremental} disabled={save.isPending} onChange={setIncremental} />
+        </div>
+      </div>
+      <div className="set">
+        <div>
+          <div className="name">Learn from dismissals</div>
+          <div className="help">
+            Later reviews are told what people with write access rejected, and why.
+            <FromConfig
+              field="Learn from dismissals"
+              pinned={pinned("learnFromDismissals")}
+              shown={onOff(cfg.learnFromDismissals)}
+              disabled={save.isPending}
+              onUse={() => setLearn(cfg.learnFromDismissals)}
+            />
+          </div>
+        </div>
+        <div>
+          <Switch label="Learn from dismissals" checked={learn} disabled={save.isPending} onChange={setLearn} />
         </div>
       </div>
       <div className="set">

@@ -1024,7 +1024,7 @@ func TestDefaultsViewConfigAndPinned(t *testing.T) {
 	if v.Config.MaxTurns != 40 || v.Config.FailureStatus != "failed" || !v.Config.Approve || v.Config.RerunLimitPerMR != 10 || v.Config.JobMemory != "" {
 		t.Errorf("config values = %+v", v.Config)
 	}
-	for _, k := range []string{"approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "failureStatus", "jobTimeoutSeconds", "maxTurns", "jobMemory", "rerunLimitPerMR", "rerunLimitPerRepo"} {
+	for _, k := range []string{"approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "failureStatus", "jobTimeoutSeconds", "maxTurns", "jobMemory", "rerunLimitPerMR", "rerunLimitPerRepo"} {
 		if _, ok := v.Pinned[k]; !ok {
 			t.Errorf("pinned has no %q: %v", k, v.Pinned)
 		}
@@ -1074,7 +1074,7 @@ func TestDefaults(t *testing.T) {
 	e := newEnv(t, nil)
 	admin := e.signInGitLab(true, "acme/widgets")
 	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")
-	if want := (DefaultsView{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40, RerunLimitPerMR: 10, RerunLimitPerRepo: 50}); !sameDefaults(v, want) {
+	if want := (DefaultsView{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, LearnFromDismissals: true, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40, RerunLimitPerMR: 10, RerunLimitPerRepo: 50}); !sameDefaults(v, want) {
 		t.Errorf("defaults = %+v, want %+v", v, want)
 	}
 
@@ -1082,7 +1082,7 @@ func TestDefaults(t *testing.T) {
 		"approve": false, "failureStatus": "neutral", "jobTimeoutSeconds": 900, "maxTurns": 80, "jobMemory": "2Gi",
 		"rerunLimitPerMR": 20, "rerunLimitPerRepo": 200})
 	v = decode[DefaultsView](t, rec, "PUT /api/admin/defaults", http.StatusOK)
-	if want := (DefaultsView{Approve: false, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, FailureStatus: "neutral", JobTimeoutSeconds: 900, MaxTurns: 80, JobMemory: "2Gi",
+	if want := (DefaultsView{Approve: false, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, LearnFromDismissals: true, FailureStatus: "neutral", JobTimeoutSeconds: 900, MaxTurns: 80, JobMemory: "2Gi",
 		RerunLimitPerMR: 20, RerunLimitPerRepo: 200}); !sameDefaults(v, want) {
 		t.Errorf("defaults after PUT = %+v, want %+v", v, want)
 	}
@@ -1105,7 +1105,7 @@ func TestDefaults(t *testing.T) {
 	// The body replaces them all: what it leaves out is the built-in default.
 	v = decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"reviewDrafts": false, "jobMemory": nil}),
 		"PUT", http.StatusOK)
-	if want := (DefaultsView{Approve: true, ReviewDrafts: false, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40, RerunLimitPerMR: 10, RerunLimitPerRepo: 50}); !sameDefaults(v, want) {
+	if want := (DefaultsView{Approve: true, ReviewDrafts: false, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, LearnFromDismissals: true, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40, RerunLimitPerMR: 10, RerunLimitPerRepo: 50}); !sameDefaults(v, want) {
 		t.Errorf("defaults after a replacing PUT = %+v, want %+v", v, want)
 	}
 
@@ -1130,6 +1130,7 @@ func TestDefaults(t *testing.T) {
 		{"bad inline findings", `{"inlineFindings": "yes"}`, "inlineFindings must be true, false or null"},
 		{"bad commands switch", `{"commandsAuthorAndMaintainersOnly": "yes"}`, "commandsAuthorAndMaintainersOnly must be true, false or null"},
 		{"bad incremental reviews", `{"incrementalReviews": "yes"}`, "incrementalReviews must be true, false or null"},
+		{"bad learn from dismissals", `{"learnFromDismissals": "yes"}`, "learnFromDismissals must be true, false or null"},
 		{"not an object", `[1]`, "the body must be a JSON object of defaults"},
 	} {
 		if rec := e.send(admin, "PUT", "/api/admin/defaults", tc.body); rec.Code != http.StatusBadRequest || errorOf(t, rec) != tc.want && !strings.Contains(errorOf(t, rec), tc.want) {
@@ -1532,11 +1533,47 @@ func TestDefaultsIncrementalReviews(t *testing.T) {
 	}
 }
 
+// The default for learn from dismissals is stored with the other defaults; it
+// is in the view's config and pinned, left out of a body it is the built-in
+// one (on), and a dashboard repository takes it.
+func TestDefaultsLearnFromDismissals(t *testing.T) {
+	e := newEnv(t, nil)
+	admin := e.signInGitLab(true, "acme/widgets")
+
+	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")
+	if !v.LearnFromDismissals || !v.Config.LearnFromDismissals || v.Pinned["learnFromDismissals"] {
+		t.Errorf("initial view = %+v; want on, config on, not pinned", v)
+	}
+
+	v = decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"learnFromDismissals": false}), "PUT", http.StatusOK)
+	if v.LearnFromDismissals || !v.Config.LearnFromDismissals || !v.Pinned["learnFromDismissals"] {
+		t.Errorf("after PUT false: view = %+v; want off, config on, pinned", v)
+	}
+	if stored, err := e.st.RepoDefaults(ctx); err != nil || stored.LearnFromDismissals == nil || *stored.LearnFromDismissals {
+		t.Errorf("stored defaults = %+v, %v; want false", stored, err)
+	}
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	if g, _, err := e.d.Repos.Get(ctx, "main", "acme/gadgets"); err != nil || g.LearnFromDismissals {
+		t.Errorf("dashboard repository = %+v, %v; want learn from dismissals off", g, err)
+	}
+	if w, _, _ := e.d.Repos.Get(ctx, "main", "acme/widgets"); !w.LearnFromDismissals {
+		t.Errorf("config repository = %+v, want the default, on", w)
+	}
+
+	v = decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"approve": true}), "PUT", http.StatusOK)
+	if !v.LearnFromDismissals || v.Pinned["learnFromDismissals"] {
+		t.Errorf("after a PUT without it: view = %+v; want on, not pinned", v)
+	}
+	if stored, _ := e.st.RepoDefaults(ctx); stored.LearnFromDismissals != nil {
+		t.Errorf("stored = %v, want NULL", stored.LearnFromDismissals)
+	}
+}
+
 // A default is pinned when the dashboard stored a value for it, and only then.
 func TestPinnedDefaults(t *testing.T) {
 	none := pinnedDefaults(store.RepoDefaults{})
-	if len(none) != 11 {
-		t.Errorf("pinned = %v; want the eleven keys", none)
+	if len(none) != 12 {
+		t.Errorf("pinned = %v; want the twelve keys", none)
 	}
 	for k, v := range none {
 		if v {
@@ -1555,7 +1592,10 @@ func TestPinnedDefaults(t *testing.T) {
 	if !pinnedDefaults(store.RepoDefaults{IncrementalReviews: ptr(false)})["incrementalReviews"] {
 		t.Errorf("incrementalReviews not pinned when stored")
 	}
-	for _, k := range []string{"reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "failureStatus", "maxTurns", "rerunLimitPerMR"} {
+	if !pinnedDefaults(store.RepoDefaults{LearnFromDismissals: ptr(false)})["learnFromDismissals"] {
+		t.Errorf("learnFromDismissals not pinned when stored")
+	}
+	for _, k := range []string{"reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "failureStatus", "maxTurns", "rerunLimitPerMR"} {
 		if got[k] {
 			t.Errorf("%s pinned: %v", k, got)
 		}

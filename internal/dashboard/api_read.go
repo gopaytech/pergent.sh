@@ -870,6 +870,7 @@ func settingViews(repo settings.Effective) map[string]SettingView {
 		"inlineFindings":                   {repo.InlineFindings, ov[settings.KeyInlineFindings]},
 		"commandsAuthorAndMaintainersOnly": {repo.CommandsAuthorAndMaintainersOnly, ov[settings.KeyCommandsAuthorAndMaintainersOnly]},
 		"incrementalReviews":               {repo.IncrementalReviews, ov[settings.KeyIncrementalReviews]},
+		"learnFromDismissals":              {repo.LearnFromDismissals, ov[settings.KeyLearnFromDismissals]},
 		"failureStatus":                    {string(repo.FailureStatus), ov[settings.KeyFailureStatus]},
 		"skills":                           {repo.Skills, ov[settings.KeySkills]},
 		"repoSkills":                       {nonNil(repo.RepoSkills), ov[settings.KeyRepoSkills]},
