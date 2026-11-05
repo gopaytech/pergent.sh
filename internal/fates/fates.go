@@ -46,7 +46,7 @@ type Skill struct {
 	Name, Hash string
 	Failed     bool            // its verdict is "failed"
 	Reviewed   map[string]bool // files it reviewed, carried ones too
-	LeftOut    bool            // it has a "Left out because of past dismissals:" note
+	LeftOut    bool            // it wrote a "Left out because of past dismissals:" note the review before did not carry
 	Findings   []Finding
 }
 

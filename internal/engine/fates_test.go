@@ -121,6 +121,73 @@ func TestFatesInputLeftOutNote(t *testing.T) {
 	}
 }
 
+// leftOutThenGone is two reviews of one change, a to b, of the security skill:
+// the first reports a finding at db/query.go:12 and carries the notes, the
+// second reports nothing and carries secondNotes. The change from a to b edits
+// line 12. It returns what the fate of the finding is.
+func leftOutThenGone(t *testing.T, firstNotes, secondNotes []string) string {
+	t.Helper()
+	first := fateSkill(t, "has_blocking_issues", fateFinding("aaaaaaaaaaaa", "blocking", 12))
+	first.Notes = firstNotes
+	second := fateSkill(t, "no_blocking_issues")
+	second.Notes = secondNotes
+	in := fatesInput([]store.Run{
+		{HeadSHA: sha('a'), Result: resultFor(t, sha('a'), first)},
+		{HeadSHA: sha('b'), Result: resultFor(t, sha('b'), second)},
+	}, nil)
+	in.Compare = func(from, to string) ([]diffmap.File, error) {
+		return []diffmap.File{diffmap.Parse("db/query.go", "", "@@ -11,3 +11,3 @@\n a\n-b\n+c\n d\n", false)}, nil
+	}
+	got, err := fates.Decide(in)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Decide = %+v, %v; want one fate", got, err)
+	}
+	return got[0].Fate
+}
+
+func TestFatesInputLeftOutNoteIsNewOnlyInTheReviewThatWroteIt(t *testing.T) {
+	note := result.LeftOutNotePrefix + " Token compared with == (in api/auth.go)"
+	more := result.LeftOutNotePrefix + " Another title (in api/user.go)"
+	tests := []struct {
+		name          string
+		first, second []string
+		want          string
+	}{
+		// MergeIncremental keeps the note, so the second review carries it too,
+		// though it left nothing out: the fix is a fix.
+		{"the note is kept by the next review", []string{note}, []string{note}, fates.Fixed},
+		{"the next review writes another note", []string{note}, []string{note, more}, fates.WentAway},
+		{"the next review has a note and the first none", nil, []string{note}, fates.WentAway},
+		{"no note anywhere", nil, nil, fates.Fixed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := leftOutThenGone(t, tt.first, tt.second); got != tt.want {
+				t.Errorf("fate = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFatesInputLeftOutNoteIsComparedPerSkill(t *testing.T) {
+	note := result.LeftOutNotePrefix + " Token compared with == (in api/auth.go)"
+	first := fateSkill(t, "has_blocking_issues")
+	first.Notes = []string{note}
+	second := fateSkill(t, "has_blocking_issues")
+	second.Notes = []string{note}
+	other := fateSkill(t, "has_blocking_issues") // the same note on another skill is new there
+	other.Name, other.Notes = "style", []string{note}
+	got := fatesInput([]store.Run{
+		{HeadSHA: sha('a'), Result: resultFor(t, sha('a'), first)},
+		{HeadSHA: sha('b'), Result: resultFor(t, sha('b'), second, other)},
+	}, nil)
+
+	skills := got.Reviews[1].Skills
+	if !got.Reviews[0].Skills[0].LeftOut || skills[0].LeftOut || !skills[1].LeftOut {
+		t.Errorf("LeftOut = %v, %v, %v; want true, false, true", got.Reviews[0].Skills[0].LeftOut, skills[0].LeftOut, skills[1].LeftOut)
+	}
+}
+
 func TestFatesInputCarriedFilesAreReviewed(t *testing.T) {
 	s := fateSkill(t, "no_blocking_issues")
 	s.Files.Carried = []string{"api/auth.go"}
