@@ -227,7 +227,7 @@ pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is hand
 1. **Pushes are incremental by default**, also on repositories already running. Turn it off per repository with **Incremental reviews** in its Settings, or with `incremental_reviews: false` in the config, or change the default under **Admin → Settings**. The accepted cost: an edit that breaks an untouched file can go unnoticed until a full review (`@<bot> review`), and a team that rebases or amends gets no speed-up yet.
 2. **The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.5.0`.** A config that pins an older pergent keeps full reviews, because only pergent v0.5.0 and later take the files to carry over.
 3. **The first push after the upgrade is a full review**, because the last result comes from an older pergent and has no skill hashes. Incremental reviews start with the next push.
-4. **The migration adds nullable columns only**, so 0.6.2 keeps working on a migrated database.
+4. **Migration `0020` runs at startup.** It adds nullable columns and one `runs` column that is `NOT NULL DEFAULT false`, so 0.6.2 keeps working on a migrated database.
 5. **To roll back to 0.6.2, first remove `incremental_reviews` from the config**, because 0.6.2 refuses unknown config keys. Results stored by 0.7.0 are complete, merged results.
 
 ### Upgrading to 0.6.2
@@ -884,7 +884,7 @@ A review is incremental when all of these hold. Otherwise it is a full review, a
 - The forge lists the files changed between the two heads.
 - That review was made by pergent v0.5.0 or later.
 
-A file is carried over, per skill, only when that skill reviewed it last time, the push didn't change it, and it has no open blocking finding. A file whose review failed, a new file, and every file of a new or edited skill are reviewed again. Blocking findings are always checked again.
+A file is carried over, per skill, only when that skill reviewed it last time, the push didn't change it, and it has no open blocking finding. A file whose review failed, a new file, and every file of a new or edited skill are reviewed again. Open blocking findings are always checked again.
 
 **What this gives up.**
 
@@ -971,7 +971,7 @@ A reply never says more than the commenter could see on the platform, and never 
 | Case | Reaction | Reply |
 | --- | --- | --- |
 | Done | 👍 | none |
-| `help`, or a command the bot doesn't know | 👍 | ``Commands: `@<bot> review` · `@<bot> review failed` · `@<bot> dismiss <id> <reason>` `` |
+| `help`, or a command the bot doesn't know | 👍 | ``Commands: `@<bot> review` (full review) · `@<bot> review failed` · `@<bot> dismiss <id> <reason>` `` |
 | `review failed` with no failed skill | 👍 | `nothing failed` |
 | `review failed` without a result per skill | 👍 | `the whole review failed, so all of it is re-run` |
 | `dismiss` of a dismissed finding | 👍 | `finding <id> is already dismissed` |
@@ -1065,7 +1065,7 @@ A Job has two containers, started in order. Both run the pinned pergent image an
 **The pergent container** runs `pergent agent` and gets:
 
 - the checkout, which is untrusted code under review, read-only to the agent;
-- the skills, the instructions and the previous review, mounted read-only at `/in`;
+- the skills, the instructions, the previous review and, for an incremental review, the files to carry over (`carried.json`), mounted read-only at `/in`;
 - `OPENCODE_API_KEY` (the LLM key) and a one-time result token. The result token is random, stored only as a hash, valid for one result and expires shortly after the Job's deadline;
 - the provider, model and, if set, base URL.
 

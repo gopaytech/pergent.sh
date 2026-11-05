@@ -42,7 +42,9 @@ describe("ReviewDetail", () => {
     const note = "Re-reviewed 2 files · 28 carried over from `abc1234`";
     const { unmount } = renderAndWait({ ...runDetail, incrementalNote: note });
     const incremental = await screen.findByRole("region", { name: "This run" });
-    expect(await within(incremental).findByText(note)).toBeInTheDocument();
+    // The note is markdown in the comment; the page shows it as plain text.
+    expect(await within(incremental).findByText("Re-reviewed 2 files · 28 carried over from abc1234")).toBeInTheDocument();
+    expect(incremental).not.toHaveTextContent("`");
     unmount();
 
     renderAndWait();
