@@ -48,4 +48,4 @@ CREATE TABLE fate_checks (
 );
 
 -- The sweep reads the runs with a decided review.
-CREATE INDEX runs_decided_idx ON runs (created_at) WHERE outcome <> '';
+CREATE INDEX IF NOT EXISTS runs_decided_idx ON runs (created_at) WHERE outcome <> '';

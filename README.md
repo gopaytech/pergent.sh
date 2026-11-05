@@ -226,7 +226,7 @@ pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is hand
 
 Nothing to change in the config or the chart. Migration `0024` runs at startup, and 0.7.1 keeps working on the migrated database, so you can roll back.
 
-- The migration builds `runs_decided_idx`, and building it blocks writes to `runs`. On a large `runs` table, expect a slower start. A very large table could outlast the chart's startup probe, which allows 150 seconds. The pod would then restart and begin the build again, so on such a table raise the probe first.
+- The migration builds `runs_decided_idx`, and building it blocks writes to `runs`. On a large `runs` table, expect a slower start. A very large table could outlast the chart's startup probe, which allows 150 seconds. The pod would then restart and begin the build again, so on such a table build the index first, without blocking writes, with `CREATE INDEX CONCURRENTLY IF NOT EXISTS runs_decided_idx ON runs (created_at) WHERE outcome <> ''`, the statement of the migration, which then has nothing to do. If that build fails it leaves an invalid index of the same name: drop it and run the statement again.
 - The new **Skill results** tab has no numbers at first. They appear as changes merge or close ([Skill results](#-skill-results)).
 
 ### Upgrading to 0.7.1
@@ -953,6 +953,9 @@ When a skill was edited inside the window, its row says so, for example `Edited 
 - On GitHub, teams that rebase or force-push see fewer Fixed. GitHub refuses to compare heads that aren't ancestors of each other, so those findings go to Went away.
 - On GitLab, and on both platforms after merging the target branch into the branch, someone else's edit can earn Fixed. The comparison then includes the target branch's changes, so Fixed can read high.
 - An unrelated edit within 3 lines of a finding counts as a fix.
+- A finding in a file that left the change, such as a reverted one, stays open at merge.
+- A change whose comparisons need more than 30 seconds gets no fates. pergent.sh tries again, and after 5 attempts gives up on that change rather than guess.
+- On GitLab a change counts as a bot's only if GitLab marks the account as a bot, so Renovate running on an ordinary account counts as a person.
 - Numbers start from this release. Changes that ended earlier are not counted, so the tab takes a few weeks to mean much. The hourly sweep looks back 7 days, so a few changes from the week before the upgrade can appear.
 - A change counts when it ends, so a long-lived change shows up late.
 

@@ -123,6 +123,8 @@ A **Skill results** tab on the repository page, for anyone who can see the repos
 - A rebase or force-push loses the comparison on GitHub, which refuses non-ancestors, so those teams see more Went away and fewer Fixed. GitLab compares them anyway, and that diff includes target-branch changes, so someone else's edit can earn Fixed. Merging the target into the branch does the same on both.
 - A new left-out note marks every vanished finding of that skill in that review as Went away, so a real fix beside it is undercounted.
 - An unrelated edit within 3 lines earns Fixed.
+- A change whose comparisons need more than the 30-second budget of a pass gets no fates after its 5 attempts, rather than a guess.
+- On GitLab a change counts as a bot's only when GitLab marks the account as one, so Renovate on an ordinary account counts as a person.
 - A file that left the change, such as a reverted one, is skipped, so its findings stay **Open at merge**.
 - Following a renamed file can spend compares on reviews that are skipped, so past the cap of 20 a real fix is **Went away**.
 - A carried finding stays reported until its file changes. A fix made in another file leaves it **Open at merge**, though a full review would have dropped it. With incremental reviews on by default this happens routinely, so Addressed reads low. Re-reviewing carried files at merge would bring back the cost incremental reviews removed. *(chosen)*
