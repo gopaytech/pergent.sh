@@ -351,16 +351,16 @@ The list has one row per fingerprint, and **Stop using** stops every dismissal o
 - [ ] **Step 2: Write the failing web tests** in `RepositoryDetail.test.tsx`:
   - A maintainer sees a row's skill, severity, file, title, reason and who, a link to `paths.review(...)`, and a **Stop using** button that posts the fingerprint and refreshes the list.
   - An empty list reads `No past dismissals are teaching reviews.`
-  - A person who isn't a maintainer sees no section.
+  - A person who isn't a maintainer sees no **Past dismissals** tab.
 
 - [ ] **Step 3: Run them to verify they fail**
 
 Run: `go test ./internal/dashboard/ -run PastDismissals` and `npm test --prefix web`
-Expected: FAIL, 404 and missing section.
+Expected: FAIL, 404 and missing tab.
 
 - [ ] **Step 4: Implement**
 
-Read route: add a `/past-dismissals` case beside `/readiness` in `api_read.go`. Write route: add a `/past-dismissals/stop` suffix case in `repositoryPost`, and use `d.targetAny(w, r, "/past-dismissals/stop", RoleMaintainer)`. Audit with `d.audit(ctx, se, "dismissal_stopped", repo.Instance, repo.Project, "fingerprint="+fingerprint)`. `reason`, `title` and `file` go through `d.registry.Redact`. The section sits on the repository page and is hidden unless the viewer can maintain the repository, using the same flag the page already uses for its settings.
+Read route: add a `/past-dismissals` case beside `/readiness` in `api_read.go`. Write route: add a `/past-dismissals/stop` suffix case in `repositoryPost`, and use `d.targetAny(w, r, "/past-dismissals/stop", RoleMaintainer)`. Audit with `d.audit(ctx, se, "dismissal_stopped", repo.Instance, repo.Project, "fingerprint="+fingerprint)`. `reason`, `title` and `file` go through `d.registry.Redact`. The list is a **Past dismissals** tab on the repository page, added under the same condition as the Settings tab in `RepositoryDetail.tsx:34` (`view.role` is `admin` or `maintainer`).
 
 README: describe the list under the dashboard's repository page, and add `dismissal_stopped` to the audit log paragraph and to the Commands paragraph that lists audit actions.
 
