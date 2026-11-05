@@ -17,8 +17,10 @@ type FindingFate struct {
 }
 
 // FateJob is a change whose fates are to be worked out. Merged is whether the
-// webhook said it was merged (false: closed). Attempts is how many times
-// working them out has failed.
+// webhook said it was merged (false: closed). RequestedAt names the request:
+// whoever works on the job hands it back to ReplaceFates, FateJobFailed or
+// DropFateJob, which leave the job alone if a newer request replaced it
+// meanwhile. Attempts is how many times working them out has failed.
 type FateJob struct {
 	MR          MRKey
 	ProjectPath string
@@ -28,26 +30,30 @@ type FateJob struct {
 }
 
 // SkillResult is the findings of one skill at one severity that were decided
-// in a window: how many were raised and what became of them.
+// in a window. Raised, Fixed, Open and WentAway count the findings of merged
+// changes; Dismissed also counts those of closed ones, so Raised can be less
+// than the columns' sum.
 type SkillResult struct {
 	Skill, Severity                          string
 	Raised, Fixed, Dismissed, Open, WentAway int
-	// EditedAt: when the row's newest skill hash first appears, if the window holds an older one.
+	// EditedAt is set when the window holds more than one hash of the skill
+	// (on each of its severities): when the newest hash first appears.
 	EditedAt *time.Time
 }
 
 // RequestFates records that the fates of a change are to be worked out, as of
 // at: merged is whether it was merged, false if it was closed. A job there
-// already starts over (a close, a reopen and a merge end with the merge), unless
-// it finished for a merged change, whose fates are final: a redelivered
-// webhook changes nothing.
+// already starts over (a close, a reopen and a merge end with the merge), with
+// a new RequestedAt. A merged change can't become a closed one, and its
+// fates are final once worked out: a redelivered or late webhook leaves a
+// merged job alone when it finished, or when it is a close.
 func (s *Store) RequestFates(ctx context.Context, mr MRKey, projectPath string, merged bool, at time.Time) error {
 	_, err := s.pool.Exec(ctx, `INSERT INTO fate_jobs (instance, project_id, mr_iid, project_path, merged, requested_at)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (instance, project_id, mr_iid) DO UPDATE SET
 			project_path = EXCLUDED.project_path, merged = EXCLUDED.merged, requested_at = EXCLUDED.requested_at,
 			attempts = 0, not_before = NULL, finished_at = NULL
-		WHERE NOT (fate_jobs.merged AND fate_jobs.finished_at IS NOT NULL)`,
+		WHERE NOT (fate_jobs.merged AND (fate_jobs.finished_at IS NOT NULL OR NOT EXCLUDED.merged))`,
 		mr.Instance, mr.ProjectID, mr.IID, projectPath, merged, at)
 	return err
 }
@@ -79,56 +85,66 @@ func (s *Store) ClaimFateJobs(ctx context.Context, now time.Time, limit int) ([]
 	return out, rows.Err()
 }
 
-// FateJobFailed records a failed attempt: the job has now failed attempts
-// times and is not offered before notBefore. At maxFateAttempts it is not
-// offered again. A job finished or gone meanwhile is left as it is.
-func (s *Store) FateJobFailed(ctx context.Context, mr MRKey, notBefore time.Time, attempts int) error {
-	_, err := s.pool.Exec(ctx, `UPDATE fate_jobs SET attempts = $4, not_before = $5
-		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND finished_at IS NULL`,
-		mr.Instance, mr.ProjectID, mr.IID, attempts, notBefore)
+// FateJobFailed records a failed attempt on the job requested at requestedAt:
+// it has now failed attempts times and is not offered before notBefore. At
+// maxFateAttempts it is not offered again. A job finished, gone or requested
+// again meanwhile is left as it is.
+func (s *Store) FateJobFailed(ctx context.Context, mr MRKey, requestedAt, notBefore time.Time, attempts int) error {
+	_, err := s.pool.Exec(ctx, `UPDATE fate_jobs SET attempts = $5, not_before = $6
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND requested_at = $4 AND finished_at IS NULL`,
+		mr.Instance, mr.ProjectID, mr.IID, requestedAt, attempts, notBefore)
 	return err
 }
 
-// DropFateJob forgets a job not finished, for a change found open again. A
-// finished job is kept, and so are the change's fates.
-func (s *Store) DropFateJob(ctx context.Context, mr MRKey) error {
+// DropFateJob forgets the job requested at requestedAt, for a change found
+// open again. A job finished or requested again meanwhile is kept, and so
+// are the change's fates.
+func (s *Store) DropFateJob(ctx context.Context, mr MRKey, requestedAt time.Time) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM fate_jobs
-		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND finished_at IS NULL`,
-		mr.Instance, mr.ProjectID, mr.IID)
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND requested_at = $4 AND finished_at IS NULL`,
+		mr.Instance, mr.ProjectID, mr.IID, requestedAt)
 	return err
 }
 
 // ReplaceFates stores rows as the fates of a change, decided at at, in place
-// of any it had, and marks its job finished (a change without a job gets a
-// finished one). merged says whether it was merged and byBot whether a bot
+// of any it had, and marks its job finished with the path and merged as they
+// are now. It acts only on the job requested at requestedAt that is not
+// finished: if the job was requested again meanwhile (a webhook during the
+// pass), was dropped or already finished, it stores nothing and stored is
+// false. merged says whether the change was merged and byBot whether a bot
 // opened it. Either all of it is stored or none.
-func (s *Store) ReplaceFates(ctx context.Context, mr MRKey, projectPath string, rows []FindingFate, merged, byBot bool, at time.Time) error {
+func (s *Store) ReplaceFates(ctx context.Context, mr MRKey, requestedAt time.Time, projectPath string, rows []FindingFate, merged, byBot bool, at time.Time) (stored bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 
+	tag, err := tx.Exec(ctx, `UPDATE fate_jobs SET project_path = $5, merged = $6, finished_at = $7
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND requested_at = $4 AND finished_at IS NULL`,
+		mr.Instance, mr.ProjectID, mr.IID, requestedAt, projectPath, merged, at)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() != 1 {
+		return false, nil
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM finding_fates WHERE instance = $1 AND project_id = $2 AND mr_iid = $3`,
 		mr.Instance, mr.ProjectID, mr.IID); err != nil {
-		return err
+		return false, err
 	}
 	for _, r := range rows {
 		if _, err := tx.Exec(ctx, `INSERT INTO finding_fates (instance, project_id, mr_iid, fingerprint, skill, skill_hash,
 				severity, fate, merged, by_bot, decided_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 			mr.Instance, mr.ProjectID, mr.IID, r.Fingerprint, r.Skill, r.SkillHash, r.Severity, r.Fate, merged, byBot, at); err != nil {
-			return err
+			return false, err
 		}
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO fate_jobs (instance, project_id, mr_iid, project_path, merged, requested_at, finished_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $6)
-		ON CONFLICT (instance, project_id, mr_iid) DO UPDATE SET
-			project_path = EXCLUDED.project_path, merged = EXCLUDED.merged, finished_at = EXCLUDED.finished_at`,
-		mr.Instance, mr.ProjectID, mr.IID, projectPath, merged, at); err != nil {
-		return err
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
 	}
-	return tx.Commit(ctx)
+	return true, nil
 }
 
 // DecidedRuns returns the runs of a merge request whose review was decided
@@ -141,25 +157,46 @@ func (s *Store) DecidedRuns(ctx context.Context, mr MRKey) ([]Run, error) {
 		ORDER BY created_at, id`, mr.Instance, mr.ProjectID, mr.IID)
 }
 
-// ChangesWithoutFates returns up to limit changes, newest review first, that
-// have a decided run created at or after since and no fate job, for the sweep
-// that catches a merge or close whose webhook was missed. Each is one job with
-// the project path of its newest run; Merged, RequestedAt and Attempts are
-// not set, as nothing says yet how the change ended.
+// FateChecked records that the sweep looked at a change that has no job at
+// at (it was still open), so ChangesWithoutFates offers the others first.
+func (s *Store) FateChecked(ctx context.Context, mr MRKey, at time.Time) error {
+	_, err := s.pool.Exec(ctx, `INSERT INTO fate_checks (instance, project_id, mr_iid, checked_at)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (instance, project_id, mr_iid) DO UPDATE SET checked_at = EXCLUDED.checked_at`,
+		mr.Instance, mr.ProjectID, mr.IID, at)
+	return err
+}
+
+// ChangesWithoutFates returns the changes the sweep is to look at: at most
+// one per repository, up to limit in all, the one least recently checked
+// (FateChecked; never checked first, then the newest review), so a repository's
+// open changes can't keep a missed merge from being found. A change qualifies
+// with a decided run created at or after since and either no fate job, or a
+// job finished as a close and a decided run created after it (it was reopened
+// and its merge or close not recorded). Each is one job with the project path
+// of its newest run; Merged, RequestedAt and Attempts are not set, as nothing
+// says yet how the change ended.
 func (s *Store) ChangesWithoutFates(ctx context.Context, since time.Time, limit int) ([]FateJob, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
 	rows, err := s.pool.Query(ctx, `SELECT instance, project_id, mr_iid, project_path FROM (
-			SELECT DISTINCT ON (r.instance, r.project_id, r.mr_iid)
-			       r.instance, r.project_id, r.mr_iid, r.project_path, r.created_at
-			FROM runs r
-			WHERE r.outcome <> '' AND r.created_at >= $1
-			  AND NOT EXISTS (SELECT 1 FROM fate_jobs j
-			                  WHERE j.instance = r.instance AND j.project_id = r.project_id AND j.mr_iid = r.mr_iid)
-			ORDER BY r.instance, r.project_id, r.mr_iid, r.created_at DESC, r.id DESC
-		) c
-		ORDER BY created_at DESC, instance, project_id, mr_iid LIMIT $2`, since, limit)
+			SELECT c.instance, c.project_id, c.mr_iid, c.project_path, c.created_at, k.checked_at,
+			       row_number() OVER (PARTITION BY c.instance, c.project_id
+			                          ORDER BY k.checked_at NULLS FIRST, c.created_at DESC, c.mr_iid) AS rn
+			FROM (
+				SELECT DISTINCT ON (r.instance, r.project_id, r.mr_iid)
+				       r.instance, r.project_id, r.mr_iid, r.project_path, r.created_at
+				FROM runs r
+				LEFT JOIN fate_jobs j ON j.instance = r.instance AND j.project_id = r.project_id AND j.mr_iid = r.mr_iid
+				WHERE r.outcome <> '' AND r.created_at >= $1
+				  AND (j.instance IS NULL OR (j.finished_at IS NOT NULL AND NOT j.merged AND r.created_at > j.finished_at))
+				ORDER BY r.instance, r.project_id, r.mr_iid, r.created_at DESC, r.id DESC
+			) c
+			LEFT JOIN fate_checks k ON k.instance = c.instance AND k.project_id = c.project_id AND k.mr_iid = c.mr_iid
+		) ranked
+		WHERE rn = 1
+		ORDER BY checked_at NULLS FIRST, created_at DESC, instance, project_id, mr_iid LIMIT $2`, since, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -184,15 +221,16 @@ const countedFates = `instance = $1 AND project_id = $2 AND decided_at >= $3
 // SkillResults returns, per skill and severity (blocking first), what became
 // of the findings of a repository decided at or after since. It counts the
 // findings of merged changes opened by people, and the dismissed ones of
-// changes they closed.
+// changes they closed, which count only as Dismissed.
 //
 // EditedAt is set on both severities of a skill whose counted findings carry
-// more than one skill hash: the first time the newest hash appears. A finding
-// with no hash isn't a version.
+// more than one skill hash: the first time the newest hash appears, the
+// newest being the one first seen last. A finding with no hash isn't a
+// version.
 func (s *Store) SkillResults(ctx context.Context, instance string, projectID int64, since time.Time) ([]SkillResult, error) {
-	rows, err := s.pool.Query(ctx, `SELECT skill, severity, count(*),
-			count(*) FILTER (WHERE fate = 'fixed'), count(*) FILTER (WHERE fate = 'dismissed'),
-			count(*) FILTER (WHERE fate = 'open'), count(*) FILTER (WHERE fate = 'went_away')
+	rows, err := s.pool.Query(ctx, `SELECT skill, severity, count(*) FILTER (WHERE merged),
+			count(*) FILTER (WHERE merged AND fate = 'fixed'), count(*) FILTER (WHERE fate = 'dismissed'),
+			count(*) FILTER (WHERE merged AND fate = 'open'), count(*) FILTER (WHERE merged AND fate = 'went_away')
 		FROM finding_fates WHERE `+countedFates+`
 		GROUP BY skill, severity ORDER BY skill, severity`, instance, projectID, since)
 	if err != nil {
@@ -212,8 +250,8 @@ func (s *Store) SkillResults(ctx context.Context, instance string, projectID int
 		return nil, err
 	}
 
-	// When each hash was first and last seen, per skill.
-	hashRows, err := s.pool.Query(ctx, `SELECT skill, skill_hash, min(decided_at), max(decided_at)
+	// When each hash was first seen, per skill.
+	hashRows, err := s.pool.Query(ctx, `SELECT skill, skill_hash, min(decided_at)
 		FROM finding_fates WHERE `+countedFates+` AND skill_hash <> ''
 		GROUP BY skill, skill_hash`, instance, projectID, since)
 	if err != nil {
@@ -221,19 +259,19 @@ func (s *Store) SkillResults(ctx context.Context, instance string, projectID int
 	}
 	defer hashRows.Close()
 	type seen struct {
-		hash        string
-		first, last time.Time
+		hash  string
+		first time.Time
 	}
 	newest := map[string]seen{}
 	versions := map[string]int{}
 	for hashRows.Next() {
 		var skill string
 		var h seen
-		if err := hashRows.Scan(&skill, &h.hash, &h.first, &h.last); err != nil {
+		if err := hashRows.Scan(&skill, &h.hash, &h.first); err != nil {
 			return nil, err
 		}
 		versions[skill]++
-		if cur, ok := newest[skill]; !ok || h.last.After(cur.last) || (h.last.Equal(cur.last) && h.hash > cur.hash) {
+		if cur, ok := newest[skill]; !ok || h.first.After(cur.first) || (h.first.Equal(cur.first) && h.hash > cur.hash) {
 			newest[skill] = h
 		}
 	}
@@ -250,15 +288,20 @@ func (s *Store) SkillResults(ctx context.Context, instance string, projectID int
 }
 
 // PruneFates deletes the fates decided before the given time, and the fate
-// jobs requested before it, and returns how many rows it deleted.
+// jobs requested and the sweep's checks made before it, and returns how many
+// rows it deleted.
 func (s *Store) PruneFates(ctx context.Context, before time.Time) (int, error) {
-	fates, err := s.pool.Exec(ctx, `DELETE FROM finding_fates WHERE decided_at < $1`, before)
-	if err != nil {
-		return 0, err
+	total := 0
+	for _, q := range []string{
+		`DELETE FROM finding_fates WHERE decided_at < $1`,
+		`DELETE FROM fate_jobs WHERE requested_at < $1`,
+		`DELETE FROM fate_checks WHERE checked_at < $1`,
+	} {
+		tag, err := s.pool.Exec(ctx, q, before)
+		if err != nil {
+			return total, err
+		}
+		total += int(tag.RowsAffected())
 	}
-	jobs, err := s.pool.Exec(ctx, `DELETE FROM fate_jobs WHERE requested_at < $1`, before)
-	if err != nil {
-		return 0, err
-	}
-	return int(fates.RowsAffected() + jobs.RowsAffected()), nil
+	return total, nil
 }

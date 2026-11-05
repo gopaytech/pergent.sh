@@ -138,6 +138,7 @@ func (s *Store) DeleteProject(ctx context.Context, instance string, projectID in
 		`DELETE FROM inline_threads WHERE instance = $1 AND project_id = $2`,
 		`DELETE FROM finding_fates WHERE instance = $1 AND project_id = $2`,
 		`DELETE FROM fate_jobs WHERE instance = $1 AND project_id = $2`,
+		`DELETE FROM fate_checks WHERE instance = $1 AND project_id = $2`,
 		`DELETE FROM projects WHERE instance = $1 AND project_id = $2`,
 	} {
 		if _, err := tx.Exec(ctx, q, instance, projectID); err != nil {

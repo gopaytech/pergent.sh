@@ -12,6 +12,23 @@ func fate(fp, skill, hash, severity, what string) FindingFate {
 	return FindingFate{Fingerprint: fp, Skill: skill, SkillHash: hash, Severity: severity, Fate: what}
 }
 
+// storeFates gives mr a job requested at at, as if its webhook came then, and
+// stores rows for it.
+func storeFates(t *testing.T, s *Store, mr MRKey, path string, rows []FindingFate, merged, byBot bool, at time.Time) {
+	t.Helper()
+	if _, err := s.pool.Exec(ctx, `INSERT INTO fate_jobs (instance, project_id, mr_iid, project_path, merged, requested_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (instance, project_id, mr_iid) DO UPDATE SET
+			requested_at = EXCLUDED.requested_at, attempts = 0, not_before = NULL, finished_at = NULL`,
+		mr.Instance, mr.ProjectID, mr.IID, path, merged, at); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := s.ReplaceFates(ctx, mr, at, path, rows, merged, byBot, at)
+	if err != nil || !stored {
+		t.Fatalf("ReplaceFates(%v) = %v, %v; want it stored", mr, stored, err)
+	}
+}
+
 // fatesOf returns the fingerprints stored as the fates of mr, in order.
 func fatesOf(t *testing.T, s *Store, mr MRKey) []string {
 	t.Helper()
@@ -52,12 +69,8 @@ func jobOf(t *testing.T, s *Store, mr MRKey) (job FateJob, finished, found bool)
 func TestReplaceFatesReplaces(t *testing.T) {
 	s := newStore(t)
 	first := []FindingFate{fate("a", "sec", "h1", "blocking", "fixed"), fate("b", "sec", "h1", "suggestion", "open")}
-	if err := s.ReplaceFates(ctx, mr1, "acme/widgets", first, false, false, t0); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.ReplaceFates(ctx, mr2, "acme/widgets", first, true, false, t0); err != nil {
-		t.Fatal(err)
-	}
+	storeFates(t, s, mr1, "acme/widgets", first, false, false, t0)
+	storeFates(t, s, mr2, "acme/widgets", first, false, false, t0)
 	if got := fatesOf(t, s, mr1); !slices.Equal(got, []string{"a", "b"}) {
 		t.Fatalf("fates = %v; want a, b", got)
 	}
@@ -67,9 +80,7 @@ func TestReplaceFatesReplaces(t *testing.T) {
 	}
 
 	// The change is merged later: its rows are replaced, the other change's are not.
-	if err := s.ReplaceFates(ctx, mr1, "acme/widgets", []FindingFate{fate("c", "sec", "h2", "blocking", "fixed")}, true, true, t0.Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
+	storeFates(t, s, mr1, "acme/widgets", []FindingFate{fate("c", "sec", "h2", "blocking", "fixed")}, true, true, t0.Add(time.Hour))
 	if got := fatesOf(t, s, mr1); !slices.Equal(got, []string{"c"}) {
 		t.Errorf("fates after the merge = %v; want c", got)
 	}
@@ -90,20 +101,82 @@ func TestReplaceFatesReplaces(t *testing.T) {
 	}
 
 	// No fates is a change with nothing to count: its rows are gone, its job finished.
-	if err := s.ReplaceFates(ctx, mr1, "acme/widgets", nil, true, false, t0.Add(2*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
+	storeFates(t, s, mr1, "acme/widgets", nil, true, false, t0.Add(2*time.Hour))
 	if got := fatesOf(t, s, mr1); len(got) != 0 {
 		t.Errorf("fates = %v; want none", got)
 	}
 
 	// A bad row stores nothing, and the rows already there stay.
-	err := s.ReplaceFates(ctx, mr2, "acme/widgets", []FindingFate{fate("x", "sec", "", "blocking", "fixed"), fate("y", "sec", "", "blocking", "bogus")}, true, false, t0)
-	if err == nil {
-		t.Error("an unknown fate was stored")
+	if err := s.RequestFates(ctx, mr2, "acme/widgets", false, t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	bad := []FindingFate{fate("x", "sec", "", "blocking", "fixed"), fate("y", "sec", "", "blocking", "bogus")}
+	if stored, err := s.ReplaceFates(ctx, mr2, t0.Add(time.Hour), "acme/widgets", bad, true, false, t0); err == nil || stored {
+		t.Errorf("ReplaceFates with an unknown fate = %v, %v; want an error", stored, err)
 	}
 	if got := fatesOf(t, s, mr2); !slices.Equal(got, []string{"a", "b"}) {
 		t.Errorf("fates after a failed replace = %v; want a, b", got)
+	}
+	if _, finished, _ := jobOf(t, s, mr2); finished {
+		t.Error("a failed replace finished the job")
+	}
+}
+
+// A pass works on the job it claimed: a webhook that asked again meanwhile,
+// a job already finished or one dropped is left to its own turn.
+func TestReplaceFatesOnlyActsOnTheClaimedJob(t *testing.T) {
+	s := newStore(t)
+	if err := s.RequestFates(ctx, mr1, "acme/widgets", false, t0); err != nil {
+		t.Fatal(err)
+	}
+	old := []FindingFate{fate("old", "sec", "", "blocking", "fixed")}
+	storeFates(t, s, mr2, "acme/widgets", old, false, false, t0)
+	// The webhook asks again (a merge) while a pass for the first request runs.
+	if err := s.RequestFates(ctx, mr1, "acme/widgets", true, t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	rows := []FindingFate{fate("a", "sec", "", "blocking", "fixed")}
+	if stored, err := s.ReplaceFates(ctx, mr1, t0, "acme/widgets", rows, false, false, t0.Add(2*time.Minute)); err != nil || stored {
+		t.Fatalf("ReplaceFates for the old request = %v, %v; want nothing stored", stored, err)
+	}
+	if got := fatesOf(t, s, mr1); len(got) != 0 {
+		t.Errorf("fates = %v; want none", got)
+	}
+	if job, finished, _ := jobOf(t, s, mr1); finished || !job.Merged {
+		t.Errorf("job = %+v finished=%v; want the newer request, still to do", job, finished)
+	}
+	// The pass for the new request stores, and a second try for it finds it finished.
+	if stored, err := s.ReplaceFates(ctx, mr1, t0.Add(time.Minute), "acme/widgets", rows, true, false, t0.Add(2*time.Minute)); err != nil || !stored {
+		t.Fatalf("ReplaceFates for the new request = %v, %v; want it stored", stored, err)
+	}
+	if stored, err := s.ReplaceFates(ctx, mr1, t0.Add(time.Minute), "acme/widgets", nil, true, false, t0.Add(3*time.Minute)); err != nil || stored {
+		t.Errorf("ReplaceFates for a finished job = %v, %v; want nothing stored", stored, err)
+	}
+	if got := fatesOf(t, s, mr1); !slices.Equal(got, []string{"a"}) {
+		t.Errorf("fates = %v; want a kept", got)
+	}
+	// A change with no job at all stores nothing.
+	if stored, err := s.ReplaceFates(ctx, mr3, t0, "acme/widgets", rows, true, false, t0); err != nil || stored {
+		t.Errorf("ReplaceFates with no job = %v, %v; want nothing stored", stored, err)
+	}
+	if got := fatesOf(t, s, mr3); len(got) != 0 {
+		t.Errorf("fates with no job = %v; want none", got)
+	}
+}
+
+// The job's path and merged are the ones of the pass that finished it.
+func TestReplaceFatesUpdatesTheJob(t *testing.T) {
+	s := newStore(t)
+	if err := s.RequestFates(ctx, mr1, "acme/old-name", false, t0); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := s.ReplaceFates(ctx, mr1, t0, "acme/new-name", nil, true, false, t0.Add(time.Minute))
+	if err != nil || !stored {
+		t.Fatalf("ReplaceFates = %v, %v", stored, err)
+	}
+	job, finished, _ := jobOf(t, s, mr1)
+	if !finished || job.ProjectPath != "acme/new-name" || !job.Merged || !job.RequestedAt.Equal(t0) {
+		t.Errorf("job = %+v finished=%v; want finished, acme/new-name, merged, still requested at t0", job, finished)
 	}
 }
 
@@ -112,9 +185,7 @@ func TestRequestFatesAfterAMergeDoesNothing(t *testing.T) {
 	if err := s.RequestFates(ctx, mr1, "acme/widgets", true, t0); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.ReplaceFates(ctx, mr1, "acme/widgets", []FindingFate{fate("a", "sec", "", "blocking", "fixed")}, true, false, t0); err != nil {
-		t.Fatal(err)
-	}
+	storeFates(t, s, mr1, "acme/widgets", []FindingFate{fate("a", "sec", "", "blocking", "fixed")}, true, false, t0)
 	// A redelivered merge, or a close that arrives after it.
 	for _, merged := range []bool{true, false} {
 		if err := s.RequestFates(ctx, mr1, "acme/other", merged, t0.Add(time.Hour)); err != nil {
@@ -130,18 +201,42 @@ func TestRequestFatesAfterAMergeDoesNothing(t *testing.T) {
 	}
 }
 
+// A change can't un-merge: a close that arrives late, while the merge is
+// still to be worked out, leaves the merged job as it is.
+func TestRequestFatesAfterAPendingMergeDoesNothing(t *testing.T) {
+	s := newStore(t)
+	if err := s.RequestFates(ctx, mr1, "acme/widgets", true, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FateJobFailed(ctx, mr1, t0, t0.Add(time.Hour), 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RequestFates(ctx, mr1, "acme/other", false, t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	job, finished, _ := jobOf(t, s, mr1)
+	if finished || !job.Merged || job.ProjectPath != "acme/widgets" || job.Attempts != 2 || !job.RequestedAt.Equal(t0) {
+		t.Errorf("job = %+v finished=%v; want the merge as it was", job, finished)
+	}
+	// A merge asked again does start it over.
+	if err := s.RequestFates(ctx, mr1, "acme/other", true, t0.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if job, _, _ := jobOf(t, s, mr1); job.Attempts != 0 || !job.RequestedAt.Equal(t0.Add(2*time.Minute)) || job.ProjectPath != "acme/other" {
+		t.Errorf("job after a merge asked again = %+v; want it started over", job)
+	}
+}
+
 func TestRequestFatesAfterACloseResets(t *testing.T) {
 	s := newStore(t)
 	if err := s.RequestFates(ctx, mr1, "acme/widgets", false, t0); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.FateJobFailed(ctx, mr1, t0.Add(time.Hour), 3); err != nil {
+	if err := s.FateJobFailed(ctx, mr1, t0, t0.Add(time.Hour), 3); err != nil {
 		t.Fatal(err)
 	}
 	// It finished, was reopened and merged: the merge starts the work again.
-	if err := s.ReplaceFates(ctx, mr1, "acme/widgets", nil, false, false, t0); err != nil {
-		t.Fatal(err)
-	}
+	storeFates(t, s, mr1, "acme/widgets", nil, false, false, t0)
 	if err := s.RequestFates(ctx, mr1, "acme/renamed", true, t0.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
@@ -154,11 +249,11 @@ func TestRequestFatesAfterACloseResets(t *testing.T) {
 		t.Errorf("ClaimFateJobs = %+v, %v; want the job at once", got, err)
 	}
 
-	// A close redelivered while the job waits changes nothing but the request.
+	// A close redelivered while the job waits asks again: it starts over.
 	if err := s.RequestFates(ctx, mr2, "acme/widgets", false, t0); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.FateJobFailed(ctx, mr2, t0.Add(time.Hour), 2); err != nil {
+	if err := s.FateJobFailed(ctx, mr2, t0, t0.Add(time.Hour), 2); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.RequestFates(ctx, mr2, "acme/widgets", false, t0.Add(time.Minute)); err != nil {
@@ -179,15 +274,13 @@ func TestClaimFateJobsSkipsStoppedAndFutureOnes(t *testing.T) {
 		}
 	}
 	// mr1 waits for later, mr2 failed for good, mr3 is finished.
-	if err := s.FateJobFailed(ctx, mr1, t0.Add(time.Hour), 1); err != nil {
+	if err := s.FateJobFailed(ctx, mr1, t0, t0.Add(time.Hour), 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.FateJobFailed(ctx, mr2, t0.Add(-time.Hour), 5); err != nil {
+	if err := s.FateJobFailed(ctx, mr2, t0.Add(-time.Minute), t0.Add(-time.Hour), 5); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.ReplaceFates(ctx, mr3, "acme/widgets", nil, true, false, t0); err != nil {
-		t.Fatal(err)
-	}
+	storeFates(t, s, mr3, "acme/widgets", nil, true, false, t0)
 
 	got, err := s.ClaimFateJobs(ctx, t0, 10)
 	if err != nil || len(got) != 2 || got[0].MR != mrs[4] || got[1].MR != mrs[3] {
@@ -210,10 +303,16 @@ func TestClaimFateJobsSkipsStoppedAndFutureOnes(t *testing.T) {
 	}
 
 	// Dropping a job takes it away; a finished one stays.
-	if err := s.DropFateJob(ctx, mrs[4]); err != nil {
+	if err := s.DropFateJob(ctx, mrs[3], t0); err != nil { // asked again since
 		t.Fatal(err)
 	}
-	if err := s.DropFateJob(ctx, mr3); err != nil {
+	if _, _, found := jobOf(t, s, mrs[3]); !found {
+		t.Error("a job requested again was dropped")
+	}
+	if err := s.DropFateJob(ctx, mrs[4], t0.Add(-4*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DropFateJob(ctx, mr3, t0); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, found := jobOf(t, s, mrs[4]); found {
@@ -221,6 +320,35 @@ func TestClaimFateJobsSkipsStoppedAndFutureOnes(t *testing.T) {
 	}
 	if _, finished, found := jobOf(t, s, mr3); !found || !finished {
 		t.Error("a finished job was dropped")
+	}
+}
+
+// A failure is recorded on the job a pass claimed, as long as it is still
+// to do: a finished job, or one requested again, is left as it is.
+func TestFateJobFailedLeavesOtherJobsAlone(t *testing.T) {
+	s := newStore(t)
+	if err := s.RequestFates(ctx, mr1, "acme/widgets", true, t0); err != nil {
+		t.Fatal(err)
+	}
+	storeFates(t, s, mr2, "acme/widgets", nil, true, false, t0)
+
+	if err := s.FateJobFailed(ctx, mr2, t0, t0.Add(time.Hour), 4); err != nil {
+		t.Fatal(err)
+	}
+	if job, finished, _ := jobOf(t, s, mr2); !finished || job.Attempts != 0 {
+		t.Errorf("finished job = %+v finished=%v; want it untouched", job, finished)
+	}
+	if err := s.FateJobFailed(ctx, mr1, t0.Add(-time.Minute), t0.Add(time.Hour), 4); err != nil {
+		t.Fatal(err)
+	}
+	if job, _, _ := jobOf(t, s, mr1); job.Attempts != 0 {
+		t.Errorf("job requested again = %+v; want it untouched", job)
+	}
+	if err := s.FateJobFailed(ctx, mr1, t0, t0.Add(time.Hour), 4); err != nil {
+		t.Fatal(err)
+	}
+	if job, _, _ := jobOf(t, s, mr1); job.Attempts != 4 {
+		t.Errorf("job = %+v; want 4 attempts", job)
 	}
 }
 
@@ -262,6 +390,19 @@ func TestDecidedRunsIncludesSupersededRuns(t *testing.T) {
 	}
 }
 
+// A run decided again (a dismissal) goes back to reported and keeps its outcome.
+func TestDecidedRunsIncludesRunsToBeDecidedAgain(t *testing.T) {
+	s := newStore(t)
+	id := decidedRun(t, s, mr1, "aaa", t0)
+	if ok, err := s.Republish(ctx, mr1, "aaa", "main"); err != nil || !ok {
+		t.Fatalf("Republish = %v, %v", ok, err)
+	}
+	got, err := s.DecidedRuns(ctx, mr1)
+	if err != nil || len(got) != 1 || got[0].ID != id || got[0].State != Reported {
+		t.Fatalf("DecidedRuns = %+v, %v; want the run, reported", got, err)
+	}
+}
+
 func TestDecidedRunsLeavesOutUndecidedOnes(t *testing.T) {
 	s := newStore(t)
 	id := decidedRun(t, s, mr1, "aaa", t0)
@@ -280,36 +421,115 @@ func TestChangesWithoutFates(t *testing.T) {
 	s := newStore(t)
 	now := time.Now()
 	since := now.Add(-24 * time.Hour)
-	decidedRun(t, s, mr1, "aaa", now.Add(-2*time.Hour)) // its path is replaced by the newest run's
+	decidedRun(t, s, mr1, "aaa", now.Add(-2*time.Hour))
 	if _, err := s.pool.Exec(ctx, `UPDATE runs SET project_path = 'acme/old' WHERE mr_iid = $1`, mr1.IID); err != nil {
 		t.Fatal(err)
 	}
-	decidedRun(t, s, mr1, "bbb", now.Add(-time.Hour))
+	decidedRun(t, s, mr1, "bbb", now.Add(-time.Hour))    // the newest run gives the path
 	decidedRun(t, s, mr2, "ccc", now.Add(-48*time.Hour)) // too old
 	decidedRun(t, s, mr3, "ddd", now.Add(-time.Hour))    // has a job
 	if err := s.RequestFates(ctx, mr3, "acme/widgets", true, now); err != nil {
 		t.Fatal(err)
 	}
-	last := MRKey{Instance: mr1.Instance, ProjectID: 7, IID: 9}
-	enqueue(t, s, last, "eee") // never decided
+	enqueue(t, s, MRKey{Instance: mr1.Instance, ProjectID: 7, IID: 9}, "eee") // never decided
 
 	got, err := s.ChangesWithoutFates(ctx, since, 10)
 	if err != nil || len(got) != 1 || got[0].MR != mr1 || got[0].ProjectPath != "acme/widgets" {
 		t.Fatalf("ChangesWithoutFates = %+v, %v; want mr1 once, with the newest run's path", got, err)
 	}
-
-	// Once it has a job it is not offered again; the limit counts.
-	other := MRKey{Instance: mr1.Instance, ProjectID: 8, IID: 1}
-	decidedRun(t, s, other, "fff", now.Add(-30*time.Minute))
-	if got, _ := s.ChangesWithoutFates(ctx, since, 1); len(got) != 1 || got[0].MR != other {
-		t.Errorf("ChangesWithoutFates limit 1 = %+v; want the newest, %v", got, other)
+	if got, err := s.ChangesWithoutFates(ctx, since, 0); err != nil || len(got) != 0 {
+		t.Errorf("ChangesWithoutFates limit 0 = %+v, %v", got, err)
 	}
+
+	// Once it has a job it is not offered.
 	if err := s.RequestFates(ctx, mr1, "acme/widgets", false, now); err != nil {
 		t.Fatal(err)
 	}
+	if got, _ := s.ChangesWithoutFates(ctx, since, 10); len(got) != 0 {
+		t.Errorf("ChangesWithoutFates after a job = %+v; want none", got)
+	}
+}
+
+// One change per repository is offered, the one least recently checked: open
+// changes that were looked at don't keep a missed merge from being found.
+func TestChangesWithoutFatesRotates(t *testing.T) {
+	s := newStore(t)
+	now := time.Now()
+	since := now.Add(-24 * time.Hour)
+	missed := mr1                                                    // merged, the webhook missed
+	open := mr2                                                      // still open, reviewed more recently
+	elsewhere := MRKey{Instance: mr1.Instance, ProjectID: 8, IID: 1} // another repository
+	decidedRun(t, s, missed, "aaa", now.Add(-3*time.Hour))
+	decidedRun(t, s, open, "bbb", now.Add(-time.Hour))
+	decidedRun(t, s, elsewhere, "ccc", now.Add(-2*time.Hour))
+
+	// Each repository gets a row, the newest review of it first.
+	got, err := s.ChangesWithoutFates(ctx, since, 10)
+	if err != nil || len(got) != 2 || got[0].MR != open || got[1].MR != elsewhere {
+		t.Fatalf("ChangesWithoutFates = %+v, %v; want the open change, then the other repository's", got, err)
+	}
+	if got, _ := s.ChangesWithoutFates(ctx, since, 1); len(got) != 1 || got[0].MR != open {
+		t.Errorf("ChangesWithoutFates limit 1 = %+v; want the open change", got)
+	}
+
+	// Once the open change was checked, the missed merge comes back.
+	if err := s.FateChecked(ctx, open, now); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.ChangesWithoutFates(ctx, since, 10)
+	if err != nil || len(got) != 2 || got[0].MR != elsewhere || got[1].MR != missed {
+		t.Fatalf("ChangesWithoutFates after a check = %+v, %v; want the other repository's, then the missed merge", got, err)
+	}
+
+	// All checked: the least recently checked of each repository, the oldest check first.
+	if err := s.FateChecked(ctx, elsewhere, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FateChecked(ctx, missed, now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
 	got, _ = s.ChangesWithoutFates(ctx, since, 10)
-	if len(got) != 1 || got[0].MR != other {
-		t.Errorf("ChangesWithoutFates after a job = %+v; want only %v", got, other)
+	if len(got) != 2 || got[0].MR != open || got[1].MR != elsewhere {
+		t.Errorf("ChangesWithoutFates all checked = %+v; want the open change (checked first), then the other repository's", got)
+	}
+
+	// Checking it again moves it behind.
+	if err := s.FateChecked(ctx, open, now.Add(3*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.ChangesWithoutFates(ctx, since, 10)
+	if len(got) != 2 || got[0].MR != elsewhere || got[1].MR != missed {
+		t.Errorf("ChangesWithoutFates after checking again = %+v; want the other repository's, then the missed merge", got)
+	}
+}
+
+// A change closed and counted, then reopened and merged without the merge
+// being recorded, is offered again once it has a review after the close.
+func TestChangesWithoutFatesAfterAClose(t *testing.T) {
+	s := newStore(t)
+	now := time.Now()
+	since := now.Add(-24 * time.Hour)
+	closedAt := now.Add(-2 * time.Hour)
+	decidedRun(t, s, mr1, "aaa", now.Add(-3*time.Hour))
+	storeFates(t, s, mr1, "acme/widgets", nil, false, false, closedAt)
+	if got, err := s.ChangesWithoutFates(ctx, since, 10); err != nil || len(got) != 0 {
+		t.Fatalf("ChangesWithoutFates with only a review before the close = %+v, %v; want none", got, err)
+	}
+
+	decidedRun(t, s, mr1, "bbb", now.Add(-time.Hour))
+	// Not offered: merged and counted, and a job still to do.
+	decidedRun(t, s, mr2, "ccc", now.Add(-3*time.Hour))
+	storeFates(t, s, mr2, "acme/widgets", nil, true, false, closedAt)
+	decidedRun(t, s, mr2, "ddd", now.Add(-time.Hour))
+	decidedRun(t, s, mr3, "eee", now.Add(-3*time.Hour))
+	if err := s.RequestFates(ctx, mr3, "acme/widgets", false, closedAt); err != nil {
+		t.Fatal(err)
+	}
+	decidedRun(t, s, mr3, "fff", now.Add(-time.Hour))
+
+	got, err := s.ChangesWithoutFates(ctx, since, 10)
+	if err != nil || len(got) != 1 || got[0].MR != mr1 {
+		t.Errorf("ChangesWithoutFates = %+v, %v; want mr1 only", got, err)
 	}
 }
 
@@ -337,19 +557,15 @@ func seedResults(t *testing.T, s *Store, at time.Time) {
 		}, false, false},
 		{mr3, []FindingFate{fate("a", "sec", "h1", "blocking", "fixed")}, true, true},
 	} {
-		if err := s.ReplaceFates(ctx, c.mr, "acme/widgets", c.rows, c.merged, c.byBot, at); err != nil {
-			t.Fatal(err)
-		}
+		storeFates(t, s, c.mr, "acme/widgets", c.rows, c.merged, c.byBot, at)
 	}
 }
 
 func TestSkillResultsCountsMergedPeople(t *testing.T) {
 	s := newStore(t)
 	other := MRKey{Instance: mr1.Instance, ProjectID: 8, IID: 1}
-	if err := s.ReplaceFates(ctx, other, "acme/other", []FindingFate{fate("a", "sec", "h1", "blocking", "fixed")}, true, false, t0); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.ReplaceFates(ctx, mr1, "acme/widgets", []FindingFate{
+	storeFates(t, s, other, "acme/other", []FindingFate{fate("a", "sec", "h1", "blocking", "fixed")}, true, false, t0)
+	storeFates(t, s, mr1, "acme/widgets", []FindingFate{
 		fate("a", "sec", "h1", "blocking", "fixed"),
 		fate("b", "sec", "h1", "blocking", "dismissed"),
 		fate("c", "sec", "h1", "blocking", "open"),
@@ -357,9 +573,7 @@ func TestSkillResultsCountsMergedPeople(t *testing.T) {
 		fate("e", "sec", "h1", "blocking", "fixed"),
 		fate("f", "sec", "h1", "suggestion", "fixed"),
 		fate("g", "style", "h9", "suggestion", "open"),
-	}, true, false, t0); err != nil {
-		t.Fatal(err)
-	}
+	}, true, false, t0)
 	got, err := s.SkillResults(ctx, mr1.Instance, mr1.ProjectID, t0.Add(-time.Hour))
 	want := []SkillResult{
 		{Skill: "sec", Severity: "blocking", Raised: 5, Fixed: 2, Dismissed: 1, Open: 1, WentAway: 1},
@@ -383,9 +597,10 @@ func TestSkillResultsDismissedOnClosedCounts(t *testing.T) {
 	s := newStore(t)
 	seedResults(t, s, t0)
 	got, err := s.SkillResults(ctx, mr1.Instance, mr1.ProjectID, t0)
-	// mr1: sec blocking a fixed, b dismissed, e fixed; mr2 adds the dismissed a.
+	// mr1: sec blocking a fixed, b dismissed, e fixed; mr2 adds the dismissed a,
+	// which is dismissed but not raised: only merged changes raise.
 	want := []SkillResult{
-		{Skill: "sec", Severity: "blocking", Raised: 4, Fixed: 2, Dismissed: 2},
+		{Skill: "sec", Severity: "blocking", Raised: 3, Fixed: 2, Dismissed: 2},
 		{Skill: "sec", Severity: "suggestion", Raised: 1, Open: 1},
 		{Skill: "style", Severity: "suggestion", Raised: 1, WentAway: 1},
 	}
@@ -394,22 +609,46 @@ func TestSkillResultsDismissedOnClosedCounts(t *testing.T) {
 	}
 }
 
+// Addressed is Fixed over Raised, so what people dismissed on changes they
+// closed must not raise anything: 10 fixed on merged changes and 10 dismissed
+// on closed ones is 10 raised, not 20.
+func TestSkillResultsRaisedIsMergedOnly(t *testing.T) {
+	s := newStore(t)
+	var fixed, dismissed []FindingFate
+	for i := 0; i < 10; i++ {
+		fp := string(rune('a' + i))
+		fixed = append(fixed, fate(fp, "sec", "h1", "blocking", "fixed"))
+		dismissed = append(dismissed, fate(fp, "sec", "h1", "blocking", "dismissed"))
+	}
+	storeFates(t, s, mr1, "acme/widgets", fixed, true, false, t0)
+	storeFates(t, s, mr2, "acme/widgets", dismissed, false, false, t0)
+	got, err := s.SkillResults(ctx, mr1.Instance, mr1.ProjectID, t0)
+	want := []SkillResult{{Skill: "sec", Severity: "blocking", Raised: 10, Fixed: 10, Dismissed: 10}}
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("SkillResults = %+v, %v; want %+v", got, err, want)
+	}
+
+	// Only dismissals of a closed change: a row with nothing raised.
+	storeFates(t, s, mr1, "acme/widgets", nil, true, false, t0)
+	got, _ = s.SkillResults(ctx, mr1.Instance, mr1.ProjectID, t0)
+	want = []SkillResult{{Skill: "sec", Severity: "blocking", Dismissed: 10}}
+	if !slices.Equal(got, want) {
+		t.Errorf("SkillResults with only closed dismissals = %+v; want %+v", got, want)
+	}
+}
+
 func TestSkillResultsLeavesOutBots(t *testing.T) {
 	s := newStore(t)
 	// Merged by a bot, and closed by a bot with a dismissed finding: none counts.
-	if err := s.ReplaceFates(ctx, mr3, "acme/widgets", []FindingFate{fate("a", "sec", "h1", "blocking", "fixed")}, true, true, t0); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.ReplaceFates(ctx, mr2, "acme/widgets", []FindingFate{fate("a", "sec", "h1", "blocking", "dismissed")}, false, true, t0); err != nil {
-		t.Fatal(err)
-	}
+	storeFates(t, s, mr3, "acme/widgets", []FindingFate{fate("a", "sec", "h1", "blocking", "fixed")}, true, true, t0)
+	storeFates(t, s, mr2, "acme/widgets", []FindingFate{fate("a", "sec", "h1", "blocking", "dismissed")}, false, true, t0)
 	got, err := s.SkillResults(ctx, mr1.Instance, mr1.ProjectID, t0)
 	if err != nil || len(got) != 0 {
 		t.Errorf("SkillResults = %+v, %v; want none", got, err)
 	}
 	seedResults(t, s, t0)
 	got, _ = s.SkillResults(ctx, mr1.Instance, mr1.ProjectID, t0)
-	if len(got) != 3 || got[0].Raised != 4 {
+	if len(got) != 3 || got[0].Raised != 3 || got[0].Dismissed != 2 {
 		t.Errorf("SkillResults with a bot's change = %+v; want it left out", got)
 	}
 }
@@ -429,9 +668,7 @@ func TestSkillResultsEditedAt(t *testing.T) {
 		{mr2, "new", t0.Add(2 * day)},
 		{mr3, "new", t0.Add(3 * day)},
 	} {
-		if err := s.ReplaceFates(ctx, c.mr, "acme/widgets", rows(c.hash), true, false, c.at); err != nil {
-			t.Fatal(err)
-		}
+		storeFates(t, s, c.mr, "acme/widgets", rows(c.hash), true, false, c.at)
 	}
 	got, err := s.SkillResults(ctx, mr1.Instance, mr1.ProjectID, t0)
 	if err != nil || len(got) != 3 {
@@ -455,9 +692,7 @@ func TestSkillResultsEditedAt(t *testing.T) {
 
 	// A finding with no recorded hash isn't another version, nor the newest one.
 	extra := MRKey{Instance: mr1.Instance, ProjectID: 7, IID: 8}
-	if err := s.ReplaceFates(ctx, extra, "acme/widgets", rows(""), true, false, t0.Add(4*day)); err != nil {
-		t.Fatal(err)
-	}
+	storeFates(t, s, extra, "acme/widgets", rows(""), true, false, t0.Add(4*day))
 	got, _ = s.SkillResults(ctx, mr1.Instance, mr1.ProjectID, t0)
 	if got[0].EditedAt == nil || !got[0].EditedAt.Equal(first) {
 		t.Errorf("EditedAt with an empty hash newest = %v; want %s", got[0].EditedAt, first)
@@ -468,18 +703,38 @@ func TestSkillResultsEditedAt(t *testing.T) {
 	}
 }
 
+// The newest hash is the one that appeared last, whatever the dates of its
+// findings: a change that took long to merge brings an old hash late.
+func TestSkillResultsEditedAtNamesTheNewestHash(t *testing.T) {
+	s := newStore(t)
+	day := 24 * time.Hour
+	one := func(hash string) []FindingFate { return []FindingFate{fate("a", "sec", hash, "blocking", "fixed")} }
+	storeFates(t, s, mr1, "acme/widgets", one("old"), true, false, t0.Add(5*day))
+	storeFates(t, s, mr2, "acme/widgets", one("old"), true, false, t0)
+	storeFates(t, s, mr3, "acme/widgets", one("new"), true, false, t0.Add(2*day))
+	got, err := s.SkillResults(ctx, mr1.Instance, mr1.ProjectID, t0)
+	if err != nil || len(got) != 1 || got[0].EditedAt == nil || !got[0].EditedAt.Equal(t0.Add(2*day)) {
+		t.Fatalf("SkillResults = %+v, %v; want EditedAt %s, when the new hash first appears", got, err, t0.Add(2*day))
+	}
+}
+
 func TestPruneFates(t *testing.T) {
 	s := newStore(t)
 	old, recent := t0, t0.Add(400*24*time.Hour)
-	if err := s.ReplaceFates(ctx, mr1, "acme/widgets", []FindingFate{fate("a", "sec", "", "blocking", "fixed"), fate("b", "sec", "", "blocking", "open")}, true, false, old); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.ReplaceFates(ctx, mr2, "acme/widgets", []FindingFate{fate("a", "sec", "", "blocking", "fixed")}, true, false, recent); err != nil {
-		t.Fatal(err)
+	storeFates(t, s, mr1, "acme/widgets", []FindingFate{fate("a", "sec", "", "blocking", "fixed"), fate("b", "sec", "", "blocking", "open")}, true, false, old)
+	storeFates(t, s, mr2, "acme/widgets", []FindingFate{fate("a", "sec", "", "blocking", "fixed")}, true, false, recent)
+	for mr, at := range map[MRKey]time.Time{mr1: old, mr2: recent} {
+		if err := s.FateChecked(ctx, mr, at); err != nil {
+			t.Fatal(err)
+		}
 	}
 	n, err := s.PruneFates(ctx, t0.Add(365*24*time.Hour))
-	if err != nil || n != 3 { // two rows and the old change's job
-		t.Fatalf("PruneFates = %d, %v; want 3", n, err)
+	if err != nil || n != 4 { // two rows, the old change's job and its check
+		t.Fatalf("PruneFates = %d, %v; want 4", n, err)
+	}
+	var checks int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM fate_checks`).Scan(&checks); err != nil || checks != 1 {
+		t.Errorf("checks left = %d, %v; want 1", checks, err)
 	}
 	if got := fatesOf(t, s, mr1); len(got) != 0 {
 		t.Errorf("old fates remain: %v", got)
@@ -503,7 +758,10 @@ func TestDeleteProjectRemovesFates(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, mr := range []MRKey{mr1, otherProject, otherInstance} {
-		if err := s.ReplaceFates(ctx, mr, "acme/widgets", []FindingFate{fate("a", "sec", "", "blocking", "fixed")}, true, false, t0); err != nil {
+		storeFates(t, s, mr, "acme/widgets", []FindingFate{fate("a", "sec", "", "blocking", "fixed")}, true, false, t0)
+	}
+	for _, mr := range []MRKey{mr1, otherProject, otherInstance} {
+		if err := s.FateChecked(ctx, mr, t0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -519,14 +777,14 @@ func TestDeleteProjectRemovesFates(t *testing.T) {
 	if err := s.DeleteProject(ctx, mr1.Instance, mr1.ProjectID); err != nil {
 		t.Fatal(err)
 	}
-	if count("finding_fates") != 2 || count("fate_jobs") != 2 {
-		t.Errorf("after DeleteProject: %d fates, %d jobs; want 2, 2", count("finding_fates"), count("fate_jobs"))
+	if count("finding_fates") != 2 || count("fate_jobs") != 2 || count("fate_checks") != 2 {
+		t.Errorf("after DeleteProject: %d fates, %d jobs, %d checks; want 2, 2, 2", count("finding_fates"), count("fate_jobs"), count("fate_checks"))
 	}
 	if err := s.DeleteInstanceData(ctx, mr1.Instance); err != nil {
 		t.Fatal(err)
 	}
-	if count("finding_fates") != 1 || count("fate_jobs") != 1 {
-		t.Errorf("after DeleteInstanceData: %d fates, %d jobs; want 1, 1", count("finding_fates"), count("fate_jobs"))
+	if count("finding_fates") != 1 || count("fate_jobs") != 1 || count("fate_checks") != 1 {
+		t.Errorf("after DeleteInstanceData: %d fates, %d jobs, %d checks; want 1, 1, 1", count("finding_fates"), count("fate_jobs"), count("fate_checks"))
 	}
 	if got := fatesOf(t, s, otherInstance); len(got) != 1 {
 		t.Errorf("another instance's fates = %v; want kept", got)

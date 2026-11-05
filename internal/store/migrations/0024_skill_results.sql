@@ -35,3 +35,17 @@ CREATE TABLE fate_jobs (
     finished_at  timestamptz,
     PRIMARY KEY (instance, project_id, mr_iid)
 );
+CREATE INDEX fate_jobs_pending_idx ON fate_jobs (requested_at) WHERE finished_at IS NULL;
+
+-- When the sweep last looked at a change that has no job (it was still open),
+-- so it looks at the others in turn.
+CREATE TABLE fate_checks (
+    instance   text        NOT NULL,
+    project_id bigint      NOT NULL,
+    mr_iid     bigint      NOT NULL,
+    checked_at timestamptz NOT NULL,
+    PRIMARY KEY (instance, project_id, mr_iid)
+);
+
+-- The sweep reads the runs with a decided review.
+CREATE INDEX runs_decided_idx ON runs (created_at) WHERE outcome <> '';

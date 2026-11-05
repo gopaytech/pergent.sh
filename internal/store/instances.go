@@ -193,6 +193,7 @@ func (s *Store) DeleteInstanceData(ctx context.Context, name string) error {
 		`DELETE FROM inline_threads WHERE instance = $1`,
 		`DELETE FROM finding_fates WHERE instance = $1`,
 		`DELETE FROM fate_jobs WHERE instance = $1`,
+		`DELETE FROM fate_checks WHERE instance = $1`,
 	} {
 		if _, err := tx.Exec(ctx, q, name); err != nil {
 			return err
