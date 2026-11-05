@@ -798,6 +798,25 @@ func TestAVanishedFindingReportedRewordedOnALaterHead(t *testing.T) {
 	}
 }
 
+func TestAVanishedFindingRenamedInTheGapIsReworded(t *testing.T) {
+	// The file was renamed (and edited near the finding) in the review that
+	// left the finding out, so it is Fixed there; it comes back reworded under
+	// the new name on a later head.
+	f := newFake()
+	moved := diffmap.Parse("b.go", "a.go", "@@ -9,3 +9,3 @@\n a\n-b\n+c\n d\n", false)
+	f.files[[2]string{"h1", "h2"}] = []diffmap.File{moved}
+	f.files[[2]string{"h1", "h3"}] = []diffmap.File{moved}
+	b := []string{"b.go"}
+	got := decide(t, f, nil,
+		review("h1", sk(a, fnd("f1", "a.go", 10))),
+		review("h2", sk(b)),
+		review("h3", sk(b, fnd("f2", "b.go", 10))),
+	)
+	if fate := one(t, got); fate.Fingerprint != "f2" || fate.Fate != Open {
+		t.Errorf("got %+v, want f2/open", fate)
+	}
+}
+
 func TestAVanishedFindingFollowsARenameInAComparisonAlreadyMade(t *testing.T) {
 	// A comparison made for a live finding is free for a vanished one: here it
 	// shows a.go renamed to b.go, where the vanished finding comes back.

@@ -86,6 +86,7 @@ type track struct {
 	fps               map[string]bool // every fingerprint it had
 	line, end         int
 	head              string // head of the last review that reported it
+	moved             string // where its file was as of the review that left it out
 	severity          string // the highest it had
 	last              string // as the last review that reported it had it
 	live              bool   // reported as of the last review that says anything
@@ -288,6 +289,7 @@ func (w *walk) update(t *track, r *reported) {
 	t.raise(r.severity)
 	t.live = true
 	t.fate = ""
+	t.moved = ""
 	w.matched[t] = true
 	w.owner[r.fp] = t
 }
@@ -308,6 +310,7 @@ func (w *walk) vanished(t *track) error {
 	}
 	// A file renamed since the finding was reported is reviewed under its new
 	// name. A deleted file is never reviewed, and its findings are gone.
+	moved := t.file
 	if !w.s.Reviewed[t.file] {
 		if t.head == w.r.Head {
 			return nil
@@ -319,13 +322,16 @@ func (w *walk) vanished(t *track) error {
 		if !ok {
 			return nil
 		}
-		if d, path, _ := find(files, t.file); !d.Deleted && !w.s.Reviewed[path] {
+		d, path, _ := find(files, t.file)
+		if !d.Deleted && !w.s.Reviewed[path] {
 			return nil
 		}
+		moved = path
 	}
 
 	t.live = false
 	t.fate = WentAway
+	t.moved = moved
 	if t.head == w.r.Head || w.s.LeftOut {
 		return nil
 	}
@@ -336,7 +342,8 @@ func (w *walk) vanished(t *track) error {
 	if !ok {
 		return nil
 	}
-	d, _, found := find(files, t.file)
+	d, path, found := find(files, t.file)
+	t.moved = path
 	switch {
 	case !found:
 	case d.Deleted:
@@ -384,7 +391,7 @@ func (w *walk) reword(pending []*track, gone bool) error {
 		}
 		lo, hi, limit, file := t.line, t.end, 0, t.file
 		if t.head != w.r.Head {
-			if gone && !w.c.had(t.head, w.r.Head) && !inFile(cands, t.file) {
+			if gone && !w.c.had(t.head, w.r.Head) && !inFile(cands, t.file) && !inFile(cands, t.moved) {
 				continue
 			}
 			files, ok, err := w.c.get(t.head, w.r.Head)
