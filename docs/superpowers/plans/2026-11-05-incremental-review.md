@@ -297,7 +297,7 @@ Dispatch, `TestPushDispatch` subtests (DB-backed). Each asserts the Job's args a
 
 ### Task 8: What people see, and the release pieces
 
-Needs pergent v0.5.0 tagged.
+Needs pergent tagged. This plan said v0.5.0; v0.5.2 is what shipped, because v0.5.0 and v0.5.1 report their version as 0.3.0.
 
 **Files:**
 - Modify: `go.mod`, `go.sum`, `internal/config/config.go` (`defaultImage`)
@@ -313,7 +313,7 @@ Needs pergent v0.5.0 tagged.
 - [ ] **Step 2: Run them to see them fail.** Run: `go test ./internal/... && (cd web && npx vitest run)`. Expected: FAIL.
 
 - [ ] **Step 3: Implement**
-  - `go get github.com/gopaytech/pergent@v0.5.0`, and `defaultImage` to `ghcr.io/gopaytech/pergent:v0.5.0`.
+  - `go get github.com/gopaytech/pergent@v0.5.2`, and `defaultImage` to `ghcr.io/gopaytech/pergent:v0.5.2`.
   - `renderOptions`: `opts.MetaNote = result.IncrementalNote(r.Incremental)`.
   - View: `IncrementalNote string` with JSON `incrementalNote`.
   - README: the setting, in config reference and Settings; a Commands line that `review` is a full review; and "Upgrading to 0.7.0" with the spec's Upgrade points. State plainly what's given up: a break in an untouched file can go unnoticed until a full review, and teams that rebase get no speed-up yet.

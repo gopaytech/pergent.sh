@@ -1,6 +1,6 @@
 # Learn from dismissals
 
-pergent.sh 0.7.0 and pergent v0.5.0. Status: design, not built. Roadmap item 2, step 1.
+pergent.sh 0.7.0 and pergent v0.5.2. Status: built. Roadmap item 2, step 1.
 
 ## Why
 
