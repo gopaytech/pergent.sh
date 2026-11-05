@@ -55,6 +55,9 @@ type fakeQueue struct {
 	// fates are the RequestFates calls; fatesErr, when set, is what it answers.
 	fates    []fatesCall
 	fatesErr error
+	// fatesLeft is the time the last RequestFates context had left, 0 if it
+	// had no deadline.
+	fatesLeft time.Duration
 	// calls lists SupersedeMR and RequestFates in the order they were made.
 	calls []string
 	// publishedTarget, when set, is the target of the head's published
@@ -88,7 +91,10 @@ func (q *fakeQueue) SupersedeMR(_ context.Context, mr store.MRKey) (int, error) 
 	return 1, nil
 }
 
-func (q *fakeQueue) RequestFates(_ context.Context, mr store.MRKey, projectPath string, merged bool, at time.Time) error {
+func (q *fakeQueue) RequestFates(ctx context.Context, mr store.MRKey, projectPath string, merged bool, at time.Time) error {
+	if d, ok := ctx.Deadline(); ok {
+		q.fatesLeft = time.Until(d)
+	}
 	q.fates = append(q.fates, fatesCall{mr, projectPath, merged, at})
 	q.calls = append(q.calls, "RequestFates")
 	return q.fatesErr
@@ -271,6 +277,14 @@ func TestEndedChangeRecordsFates(t *testing.T) {
 		if got.at.Before(before) || got.at.After(time.Now()) {
 			t.Errorf("%s: at = %v, want the time the webhook arrived", fx, got.at)
 		}
+	}
+}
+
+func TestFatesRequestHasADeadline(t *testing.T) {
+	r := newRig(t)
+	wantStatus(t, r.hook(fixture(t, "mr_merge.json")), 200)
+	if r.q.fatesLeft <= 0 || r.q.fatesLeft > fatesRequestTimeout {
+		t.Errorf("time left for RequestFates = %v, want within (0, %v]", r.q.fatesLeft, fatesRequestTimeout)
 	}
 }
 

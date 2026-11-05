@@ -167,6 +167,14 @@ func TestGitHubClosedRecordsFates(t *testing.T) {
 	}
 }
 
+func TestGitHubFatesRequestHasADeadline(t *testing.T) {
+	r := newGitHubRig(t)
+	wantStatus(t, r.gh(fixture(t, "github_merged.json")), 200)
+	if r.q.fatesLeft <= 0 || r.q.fatesLeft > fatesRequestTimeout {
+		t.Errorf("time left for RequestFates = %v, want within (0, %v]", r.q.fatesLeft, fatesRequestTimeout)
+	}
+}
+
 func TestGitHubFatesFailureStillAnswers200(t *testing.T) {
 	r := newGitHubRig(t)
 	r.q.fatesErr = errors.New("db down")

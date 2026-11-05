@@ -254,8 +254,12 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Only recorded here; the engine works the fates out later. A failure
 		// must not change the answer, and the hourly sweep catches a change
 		// it missed. The runs are already superseded, so a platform hanging
-		// up must not cancel the record.
-		if err := h.Queue.RequestFates(context.WithoutCancel(r.Context()), mr, project, pr.Merged, time.Now()); err != nil {
+		// up must not cancel the record, and a database that doesn't answer
+		// must not hold the answer.
+		fctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), fatesRequestTimeout)
+		err = h.Queue.RequestFates(fctx, mr, project, pr.Merged, time.Now())
+		cancel()
+		if err != nil {
 			log.Warn("recording the change's end failed", "err", err)
 		}
 		log.Info("webhook handled", "outcome", "superseded", "runs", n)
