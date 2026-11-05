@@ -421,7 +421,9 @@ func hasKind(rs []*reported, withLine bool) bool {
 // comparison, and how far a finding may sit from them: not at all where the
 // diff maps both ends of the lines or doesn't touch the file; Reach where it
 // can't, as when the lines were rewritten, the diff has no hunks to trust, or
-// the comparison is gone. The path is the file's path at the newer head.
+// the comparison is gone. An end that maps goes where it maps; one that
+// doesn't moves with the lines above it. The path is the file's path at the
+// newer head.
 func mapRange(files []diffmap.File, ok bool, t *track) (lo, hi, limit int, path string) {
 	if !ok {
 		return t.line, t.end, Reach, t.file
@@ -433,26 +435,41 @@ func mapRange(files []diffmap.File, ok bool, t *track) (lo, hi, limit int, path 
 	if len(d.Hunks) == 0 {
 		return t.line, t.end, Reach, path
 	}
-	if l, ok := d.MapOld(t.line); ok {
-		if h, ok := d.MapOld(t.end); ok {
-			return l, h, 0, path
+	limit = 0
+	end := func(oldLine int) int {
+		if n, ok := d.MapOld(oldLine); ok {
+			return n
 		}
+		limit = Reach
+		return oldLine + shiftAt(d, oldLine)
 	}
-	return t.line + shiftBefore(d, t.line), t.end + shiftBefore(d, t.end), Reach, path
+	lo = end(t.line)
+	hi = end(t.end)
+	return lo, hi, limit, path
 }
 
-// shiftBefore is how far the hunks above an old line move it.
-func shiftBefore(d diffmap.File, oldLine int) int {
+// shiftAt is how far the diff moves an old line that has no new line of its
+// own: the hunks above move it, and so do the lines added or removed above it
+// within its own hunk, as the nearest unchanged line above it shows.
+func shiftAt(d diffmap.File, oldLine int) int {
 	shift := 0
 	for _, h := range d.Hunks {
 		last := h.OldStart + h.OldLines - 1
 		if h.OldLines == 0 {
 			last = h.OldStart // a pure insertion: OldStart is the line before it
 		}
-		if oldLine <= last {
-			break
+		if oldLine > last {
+			shift += h.NewLines - h.OldLines
+			continue
 		}
-		shift += h.NewLines - h.OldLines
+		if h.OldLines > 0 && oldLine >= h.OldStart {
+			for _, p := range h.Lines {
+				if p.Old > 0 && p.Old < oldLine {
+					shift = p.New - p.Old
+				}
+			}
+		}
+		break
 	}
 	return shift
 }

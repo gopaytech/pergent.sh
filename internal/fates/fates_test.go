@@ -845,16 +845,18 @@ func TestRewordedWithTheCompareGone(t *testing.T) {
 func TestTheClosestCandidateWins(t *testing.T) {
 	f := newFake()
 	f.files[[2]string{"h1", "h2"}] = []diffmap.File{removed("a.go")}
-	x := fnd("x", "a.go", 10)
-	far, near := fnd("far", "a.go", 13), fnd("near", "a.go", 11)
+	x := fnd("x", "a.go", 12)
+	// far comes first by line, but near is closer.
+	far, near := fnd("far", "a.go", 9), fnd("near", "a.go", 13)
 	far.Severity, near.Severity = "suggestion", "suggestion"
 	got := decide(t, f, nil, review("h1", sk(a, x)), review("h2", sk(a, far, near)))
-	if len(got) != 2 {
-		t.Fatalf("got %d fates, want 2: %+v", len(got), got)
-	}
 	// The one that joined x keeps its severity, blocking.
-	if got[0].Fingerprint != "far" || got[0].Severity != "suggestion" || got[1].Fingerprint != "near" || got[1].Severity != "blocking" {
-		t.Errorf("got %+v, want near to be x's", got)
+	want := []Fate{
+		{Fingerprint: "far", Skill: "s", SkillHash: "h", Severity: "suggestion", Fate: Open},
+		{Fingerprint: "near", Skill: "s", SkillHash: "h", Severity: "blocking", Fate: Open},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v, want %+v", got, want)
 	}
 }
 
@@ -865,15 +867,14 @@ func TestTheNearestTrackTakesACandidate(t *testing.T) {
 		review("h1", sk(a, fnd("x", "a.go", 10), fnd("w", "a.go", 12))),
 		review("h2", sk(a, fnd("y", "a.go", 13))),
 	)
-	// y is 1 line from w and 3 from x: it is w, and x is fixed.
-	want := map[string]string{"y": Open, "x": Fixed}
-	if len(got) != 2 {
-		t.Fatalf("got %d fates, want 2: %+v", len(got), got)
+	// y is 1 line from w and 3 from x: it is w's, and x, whose lines were
+	// rewritten, is fixed. Under w's old fingerprint there is no row.
+	want := []Fate{
+		{Fingerprint: "x", Skill: "s", SkillHash: "h", Severity: "blocking", Fate: Fixed},
+		{Fingerprint: "y", Skill: "s", SkillHash: "h", Severity: "blocking", Fate: Open},
 	}
-	for _, fate := range got {
-		if fate.Fate != want[fate.Fingerprint] {
-			t.Errorf("%s = %s, want %s", fate.Fingerprint, fate.Fate, want[fate.Fingerprint])
-		}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v, want %+v", got, want)
 	}
 }
 
@@ -962,13 +963,99 @@ func TestATrackedFindingIsNotACandidate(t *testing.T) {
 		review("h1", sk(a, fnd("x", "a.go", 10), fnd("z", "a.go", 10))),
 		review("h2", sk(a, fnd("z", "a.go", 10))),
 	)
-	want := map[string]string{"x": WentAway, "z": Open}
-	if len(got) != 2 {
-		t.Fatalf("got %d fates, want 2: %+v", len(got), got)
+	want := []Fate{
+		{Fingerprint: "x", Skill: "s", SkillHash: "h", Severity: "blocking", Fate: WentAway},
+		{Fingerprint: "z", Skill: "s", SkillHash: "h", Severity: "blocking", Fate: Open},
 	}
-	for _, fate := range got {
-		if fate.Fate != want[fate.Fingerprint] {
-			t.Errorf("%s = %s, want %s", fate.Fingerprint, fate.Fate, want[fate.Fingerprint])
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+// shifted is a diff that adds five lines above old line 10 and rewrites old
+// line 11: old 10 is new 15, and old 11 has no new line.
+func shifted(path string) diffmap.File {
+	return diffmap.Parse(path, "", "@@ -9,4 +9,9 @@\n a\n+x\n+x\n+x\n+x\n+x\n b\n-c\n+C\n d\n", false)
+}
+
+func TestRewordedInsideItsOwnHunkFollowsTheShift(t *testing.T) {
+	tests := []struct {
+		name          string
+		line, end     int
+		yLine, yEnd   int
+		wantRows      int
+		wantFirstFate string
+	}{
+		{"one end maps, the other follows the shift", 10, 11, 15, 16, 1, Open},
+		{"rewritten line follows the shift", 11, 0, 16, 0, 1, Open},
+		{"not where the shifted lines are", 11, 0, 11, 0, 2, Open},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFake()
+			f.files[[2]string{"h1", "h2"}] = []diffmap.File{shifted("a.go")}
+			x := fnd("x", "a.go", tt.line)
+			x.EndLine = tt.end
+			y := fnd("y", "a.go", tt.yLine)
+			y.EndLine = tt.yEnd
+			got := decide(t, f, nil, review("h1", sk(a, x)), review("h2", sk(a, y)))
+			if len(got) != tt.wantRows {
+				t.Fatalf("got %d fates, want %d: %+v", len(got), tt.wantRows, got)
+			}
+			if tt.wantRows == 1 && (got[0].Fingerprint != "y" || got[0].Fate != Open) {
+				t.Errorf("got %+v, want y/open", got[0])
+			}
+		})
+	}
+}
+
+func TestShiftAt(t *testing.T) {
+	insertion := diffmap.Parse("a.go", "", "@@ -5,0 +6,3 @@\n+x\n+x\n+x\n", false)
+	// Old lines 9 to 11, the last removed and three lines added in its place.
+	ending := diffmap.Parse("a.go", "", "@@ -9,3 +9,5 @@\n a\n b\n-c\n+C\n+C\n+C\n", false)
+	tests := []struct {
+		name string
+		d    diffmap.File
+		line int
+		want int
+	}{
+		{"no hunks", diffmap.File{}, 10, 0},
+		{"before a hunk", ending, 8, 0},
+		{"a hunk ends exactly at the line", ending, 11, 0},
+		{"after a hunk", ending, 12, 2},
+		{"the line before a pure insertion", insertion, 5, 0},
+		{"the line after a pure insertion", insertion, 6, 3},
+		{"inside a hunk, after added lines", shifted("a.go"), 11, 5},
+		{"inside a hunk, before any context above", diffmap.Parse("a.go", "", "@@ -9,2 +9,2 @@\n-a\n+A\n b\n", false), 9, 0},
+	}
+	for _, tt := range tests {
+		if got := shiftAt(tt.d, tt.line); got != tt.want {
+			t.Errorf("%s: shiftAt(%d) = %d, want %d", tt.name, tt.line, got, tt.want)
 		}
+	}
+}
+
+func TestMapRangeEndsHaveTheirOwnShift(t *testing.T) {
+	// Old 3 is rewritten in a hunk that adds a line (shifting what follows by
+	// one), and old 21 in a later hunk.
+	d := diffmap.Parse("a.go", "", "@@ -2,3 +2,4 @@\n a\n-b\n+B\n+B\n c\n@@ -20,3 +21,3 @@\n a\n-b\n+B\n c\n", false)
+	lo, hi, limit, path := mapRange([]diffmap.File{d}, true, &track{file: "a.go", line: 3, end: 21})
+	if lo != 3 || hi != 22 || limit != Reach || path != "a.go" {
+		t.Errorf("got %d..%d limit %d %s, want 3..22 limit %d a.go", lo, hi, limit, path, Reach)
+	}
+}
+
+func TestNoCompareForACandidateOfAnotherKind(t *testing.T) {
+	// x has no line and the only candidate has one, so there is nothing to
+	// compare the files for; a left-out skill needs no compare to vanish.
+	f := newFake()
+	left := sk(a, fnd("y", "a.go", 10))
+	left.LeftOut = true
+	got := decide(t, f, nil, review("h1", sk(a, fnd("x", "a.go", 0))), review("h2", left))
+	if len(got) != 2 {
+		t.Errorf("got %d fates, want 2: %+v", len(got), got)
+	}
+	if f.calls != 0 {
+		t.Errorf("compares = %d, want 0", f.calls)
 	}
 }
