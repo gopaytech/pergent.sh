@@ -11,6 +11,7 @@ import (
 // fake is a Compare that counts its calls and answers by pair of heads.
 type fake struct {
 	calls int
+	pairs [][2]string
 	files map[[2]string][]diffmap.File
 	errs  map[[2]string]error
 }
@@ -18,6 +19,7 @@ type fake struct {
 func (f *fake) compare(from, to string) ([]diffmap.File, error) {
 	f.calls++
 	p := [2]string{from, to}
+	f.pairs = append(f.pairs, p)
 	if err := f.errs[p]; err != nil {
 		return nil, err
 	}
@@ -165,9 +167,10 @@ func TestNearbyEditIsFixed(t *testing.T) {
 func TestDeletedFileIsFixed(t *testing.T) {
 	f := newFake()
 	f.files[[2]string{"h1", "h2"}] = []diffmap.File{diffmap.Parse("a.go", "", "", true)}
+	// A deleted file is skipped by the review, so no skill has it in Reviewed.
 	got := decide(t, f, nil,
 		review("h1", sk(a, fnd("x", "a.go", 10))),
-		review("h2", sk(a)),
+		review("h2", sk(nil)),
 	)
 	if fate := one(t, got); fate.Fate != Fixed {
 		t.Errorf("fate = %s, want fixed", fate.Fate)
@@ -293,6 +296,7 @@ func TestRewordedIsTheSameFinding(t *testing.T) {
 		extra int // rows expected beyond the one
 	}{
 		{"same lines", nil, 10, 0},
+		{"file untouched, lines not overlapping", nil, 12, 1},
 		{"lines moved by an insertion above", []diffmap.File{insert("a.go", 2, 5)}, 15, 0},
 		{"lines not where the old ones went", []diffmap.File{insert("a.go", 2, 5)}, 10, 1},
 		{"unmapped, within reach", []diffmap.File{edit("a.go", 10)}, 13, 0},
@@ -310,6 +314,11 @@ func TestRewordedIsTheSameFinding(t *testing.T) {
 				t.Fatalf("got %d fates, want %d: %+v", len(got), 1+tt.extra, got)
 			}
 			if tt.extra > 0 {
+				// Sorted by fingerprint: new (open), old (nothing near it changed
+				// or it was fixed).
+				if got[0].Fingerprint != "new" || got[0].Fate != Open || got[1].Fingerprint != "old" || got[1].Fate == Open {
+					t.Errorf("got %+v, want new/open and old/not open", got)
+				}
 				return
 			}
 			if got[0].Fingerprint != "new" || got[0].Fate != Open {
@@ -583,5 +592,383 @@ func TestSortedByFingerprint(t *testing.T) {
 	}
 	if !reflect.DeepEqual(fps, []string{"a", "b", "c"}) {
 		t.Errorf("order = %v", fps)
+	}
+}
+
+// removed is a diff where old lines 10 to 12 are replaced, so none of them maps.
+func removed(path string) diffmap.File {
+	return diffmap.Parse(path, "", "@@ -9,5 +9,5 @@\n a\n-b\n-c\n-d\n+B\n+C\n+D\n e\n", false)
+}
+
+func TestMovedLineThenGone(t *testing.T) {
+	f := newFake()
+	// Only the line the finding had last (20) is near this edit.
+	f.files[[2]string{"h2", "h3"}] = []diffmap.File{edit("a.go", 20)}
+	got := decide(t, f, nil,
+		review("h1", sk(a, fnd("x", "a.go", 10))),
+		review("h2", sk(a, fnd("x", "a.go", 20))),
+		review("h3", sk(a)),
+	)
+	if fate := one(t, got); fate.Fate != Fixed {
+		t.Errorf("fate = %s, want fixed", fate.Fate)
+	}
+	if want := [][2]string{{"h2", "h3"}}; !reflect.DeepEqual(f.pairs, want) {
+		t.Errorf("compares = %v, want %v", f.pairs, want)
+	}
+
+	// And the other way round: an edit near the old line 10 is not near it.
+	f = newFake()
+	f.files[[2]string{"h2", "h3"}] = []diffmap.File{edit("a.go", 10)}
+	got = decide(t, f, nil,
+		review("h1", sk(a, fnd("x", "a.go", 10))),
+		review("h2", sk(a, fnd("x", "a.go", 20))),
+		review("h3", sk(a)),
+	)
+	if fate := one(t, got); fate.Fate != WentAway {
+		t.Errorf("fate = %s, want went_away", fate.Fate)
+	}
+}
+
+func TestReportedSkippedThenGone(t *testing.T) {
+	f := newFake()
+	// The head is the one of the last review that reported it (h2), not h1 or h3.
+	f.files[[2]string{"h2", "h4"}] = []diffmap.File{edit("a.go", 10)}
+	failed := sk(a)
+	failed.Failed = true
+	got := decide(t, f, nil,
+		review("h1", sk(a, fnd("x", "a.go", 10))),
+		review("h2", sk(a, fnd("x", "a.go", 10))),
+		review("h3", failed),
+		review("h4", sk(a)),
+	)
+	if fate := one(t, got); fate.Fate != Fixed {
+		t.Errorf("fate = %s, want fixed", fate.Fate)
+	}
+	if want := [][2]string{{"h2", "h4"}}; !reflect.DeepEqual(f.pairs, want) {
+		t.Errorf("compares = %v, want %v", f.pairs, want)
+	}
+}
+
+func TestFailedSkillOnADeletedFileIsSkipped(t *testing.T) {
+	// A failed skill says nothing, deleted file or not.
+	f := newFake()
+	f.files[[2]string{"h1", "h2"}] = []diffmap.File{diffmap.Parse("a.go", "", "", true)}
+	failed := sk(nil)
+	failed.Failed = true
+	got := decide(t, f, nil, review("h1", sk(a, fnd("x", "a.go", 10))), review("h2", failed))
+	if fate := one(t, got); fate.Fate != Open {
+		t.Errorf("fate = %s, want open", fate.Fate)
+	}
+}
+
+func TestRewordedInASkippedReviewIsTheSameFinding(t *testing.T) {
+	f := newFake()
+	failed := sk(a, fnd("y", "a.go", 10))
+	failed.Failed = true
+	got := decide(t, f, nil,
+		review("h1", sk(a, fnd("x", "a.go", 10))),
+		review("h2", failed),
+		review("h3", sk(a, fnd("y", "a.go", 10))),
+	)
+	fate := one(t, got)
+	if fate.Fingerprint != "y" || fate.Fate != Open {
+		t.Errorf("got %+v, want y/open", fate)
+	}
+
+	// Also from a file the skill didn't review.
+	got = decide(t, newFake(), nil,
+		review("h1", sk(a, fnd("x", "a.go", 10))),
+		review("h2", sk([]string{"b.go"}, fnd("y", "a.go", 10))),
+	)
+	if fate := one(t, got); fate.Fingerprint != "y" || fate.Fate != Open {
+		t.Errorf("got %+v, want y/open", fate)
+	}
+}
+
+func TestRewordedOnTheSameHead(t *testing.T) {
+	tests := []struct {
+		name string
+		line int
+		rows int
+	}{
+		{"same lines", 10, 1},
+		{"overlapping", 11, 1},
+		{"not overlapping", 13, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFake()
+			x := fnd("x", "a.go", 10)
+			x.EndLine = 11
+			got := decide(t, f, nil,
+				review("h1", sk(a, x)),
+				review("h1", sk(a, fnd("y", "a.go", tt.line))),
+			)
+			if len(got) != tt.rows {
+				t.Fatalf("got %d fates, want %d: %+v", len(got), tt.rows, got)
+			}
+			if tt.rows == 1 && (got[0].Fingerprint != "y" || got[0].Fate != Open) {
+				t.Errorf("got %+v, want y/open", got[0])
+			}
+			if f.calls != 0 {
+				t.Errorf("compares = %d, want 0", f.calls)
+			}
+		})
+	}
+}
+
+func TestRewordedWithoutALine(t *testing.T) {
+	t.Run("retitled, edit far away", func(t *testing.T) {
+		f := newFake()
+		f.files[[2]string{"h1", "h2"}] = []diffmap.File{edit("a.go", 900)}
+		got := decide(t, f, nil,
+			review("h1", sk(a, fnd("x", "a.go", 0))),
+			review("h2", sk(a, fnd("y", "a.go", 0))),
+		)
+		if fate := one(t, got); fate.Fingerprint != "y" || fate.Fate != Open {
+			t.Errorf("got %+v, want y/open", fate)
+		}
+	})
+	t.Run("renamed with an edit", func(t *testing.T) {
+		f := newFake()
+		moved := diffmap.Parse("b.go", "a.go", "@@ -9,3 +9,3 @@\n a\n-b\n+c\n d\n", false)
+		f.files[[2]string{"h1", "h2"}] = []diffmap.File{moved}
+		got := decide(t, f, nil,
+			review("h1", sk(a, fnd("x", "a.go", 0))),
+			review("h2", sk([]string{"b.go"}, fnd("y", "b.go", 0))),
+		)
+		if fate := one(t, got); fate.Fingerprint != "y" || fate.Fate != Open {
+			t.Errorf("got %+v, want y/open", fate)
+		}
+	})
+	t.Run("another file is new", func(t *testing.T) {
+		both := []string{"a.go", "b.go"}
+		got := decide(t, newFake(), nil,
+			review("h1", sk(both, fnd("x", "a.go", 0))),
+			review("h2", sk(both, fnd("y", "b.go", 0))),
+		)
+		if len(got) != 2 {
+			t.Errorf("got %d fates, want 2: %+v", len(got), got)
+		}
+	})
+	t.Run("a finding without a line is not a candidate for one with a line", func(t *testing.T) {
+		// Line 2 is rewritten, so Reach applies, and z at "line 0" is 2 away.
+		f := newFake()
+		f.files[[2]string{"h1", "h2"}] = []diffmap.File{edit("a.go", 2)}
+		got := decide(t, f, nil,
+			review("h1", sk(a, fnd("x", "a.go", 2))),
+			review("h2", sk(a, fnd("z", "a.go", 0), fnd("y", "a.go", 50))),
+		)
+		if len(got) != 3 {
+			t.Errorf("got %d fates, want 3: %+v", len(got), got)
+		}
+	})
+	t.Run("a finding with a line is not a candidate", func(t *testing.T) {
+		got := decide(t, newFake(), nil,
+			review("h1", sk(a, fnd("x", "a.go", 0))),
+			review("h2", sk(a, fnd("y", "a.go", 10))),
+		)
+		if len(got) != 2 {
+			t.Errorf("got %d fates, want 2: %+v", len(got), got)
+		}
+	})
+}
+
+func TestRewordedAfterAnEditedLineFollowsTheShift(t *testing.T) {
+	// Five lines are added at the top and old line 10 is rewritten, so it has
+	// no new line; it sat at 15 after the insertion.
+	patch := "@@ -1,2 +1,7 @@\n a\n+x\n+x\n+x\n+x\n+x\n b\n@@ -9,3 +14,3 @@\n a\n-b\n+c\n d\n"
+	f := newFake()
+	f.files[[2]string{"h1", "h2"}] = []diffmap.File{diffmap.Parse("a.go", "", patch, false)}
+	got := decide(t, f, nil,
+		review("h1", sk(a, fnd("x", "a.go", 10))),
+		review("h2", sk(a, fnd("y", "a.go", 15))),
+	)
+	if fate := one(t, got); fate.Fingerprint != "y" || fate.Fate != Open {
+		t.Errorf("got %+v, want y/open", fate)
+	}
+}
+
+func TestRewordedBothEndsMustMap(t *testing.T) {
+	// Line 9 is unchanged and maps; line 10 is rewritten and does not, so the
+	// range is not mapped and Reach applies to the old lines.
+	f := newFake()
+	f.files[[2]string{"h1", "h2"}] = []diffmap.File{edit("a.go", 10)}
+	x := fnd("x", "a.go", 9)
+	x.EndLine = 10
+	got := decide(t, f, nil,
+		review("h1", sk(a, x)),
+		review("h2", sk(a, fnd("y", "a.go", 13))),
+	)
+	if fate := one(t, got); fate.Fingerprint != "y" || fate.Fate != Open {
+		t.Errorf("got %+v, want y/open", fate)
+	}
+}
+
+func TestRewordedAcrossAPureRenameUsesReach(t *testing.T) {
+	// A file in the diff with no hunks has no mapping to trust: Reach applies.
+	f := newFake()
+	f.files[[2]string{"h1", "h2"}] = []diffmap.File{{Path: "b.go", OldPath: "a.go"}}
+	got := decide(t, f, nil,
+		review("h1", sk(a, fnd("x", "a.go", 10))),
+		review("h2", sk([]string{"b.go"}, fnd("y", "b.go", 12))),
+	)
+	if fate := one(t, got); fate.Fingerprint != "y" || fate.Fate != Open {
+		t.Errorf("got %+v, want y/open", fate)
+	}
+}
+
+func TestRewordedWithTheCompareGone(t *testing.T) {
+	tests := []struct {
+		name string
+		line int
+		rows int
+	}{
+		{"within reach", 12, 1},
+		{"past reach", 14, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFake()
+			f.errs[[2]string{"h1", "h2"}] = ErrGone
+			got := decide(t, f, nil,
+				review("h1", sk(a, fnd("x", "a.go", 10))),
+				review("h2", sk(a, fnd("y", "a.go", tt.line))),
+			)
+			if len(got) != tt.rows {
+				t.Errorf("got %d fates, want %d: %+v", len(got), tt.rows, got)
+			}
+		})
+	}
+}
+
+func TestTheClosestCandidateWins(t *testing.T) {
+	f := newFake()
+	f.files[[2]string{"h1", "h2"}] = []diffmap.File{removed("a.go")}
+	x := fnd("x", "a.go", 10)
+	far, near := fnd("far", "a.go", 13), fnd("near", "a.go", 11)
+	far.Severity, near.Severity = "suggestion", "suggestion"
+	got := decide(t, f, nil, review("h1", sk(a, x)), review("h2", sk(a, far, near)))
+	if len(got) != 2 {
+		t.Fatalf("got %d fates, want 2: %+v", len(got), got)
+	}
+	// The one that joined x keeps its severity, blocking.
+	if got[0].Fingerprint != "far" || got[0].Severity != "suggestion" || got[1].Fingerprint != "near" || got[1].Severity != "blocking" {
+		t.Errorf("got %+v, want near to be x's", got)
+	}
+}
+
+func TestTheNearestTrackTakesACandidate(t *testing.T) {
+	f := newFake()
+	f.files[[2]string{"h1", "h2"}] = []diffmap.File{removed("a.go")}
+	got := decide(t, f, nil,
+		review("h1", sk(a, fnd("x", "a.go", 10), fnd("w", "a.go", 12))),
+		review("h2", sk(a, fnd("y", "a.go", 13))),
+	)
+	// y is 1 line from w and 3 from x: it is w, and x is fixed.
+	want := map[string]string{"y": Open, "x": Fixed}
+	if len(got) != 2 {
+		t.Fatalf("got %d fates, want 2: %+v", len(got), got)
+	}
+	for _, fate := range got {
+		if fate.Fate != want[fate.Fingerprint] {
+			t.Errorf("%s = %s, want %s", fate.Fingerprint, fate.Fate, want[fate.Fingerprint])
+		}
+	}
+}
+
+func TestAnOldWordingBesideTheNewKeepsItsSeverity(t *testing.T) {
+	x := fnd("x", "a.go", 10)
+	x.Severity = "suggestion"
+	y := fnd("y", "a.go", 10)
+	y.Severity = "suggestion"
+	old := fnd("x", "a.go", 10) // blocking
+	got := decide(t, newFake(), nil,
+		review("h1", sk(a, x)),
+		review("h2", sk(a, y)),
+		review("h3", sk(a, y, old)),
+	)
+	fate := one(t, got)
+	if fate.Fingerprint != "y" || fate.Severity != "blocking" || fate.Fate != Open {
+		t.Errorf("got %+v, want y/blocking/open", fate)
+	}
+}
+
+func TestSkillHashIsFromTheLastReport(t *testing.T) {
+	with := func(hash string, fs ...Finding) Skill {
+		s := sk(a, fs...)
+		s.Hash = hash
+		return s
+	}
+	got := decide(t, newFake(), nil,
+		review("h1", with("one", fnd("x", "a.go", 10))),
+		review("h2", with("two", fnd("x", "a.go", 10))),
+		review("h3", with("three")),
+	)
+	if fate := one(t, got); fate.SkillHash != "two" {
+		t.Errorf("hash = %s, want two", fate.SkillHash)
+	}
+}
+
+func TestTheLowestLineOfAFingerprintIsItsLine(t *testing.T) {
+	f := newFake()
+	f.files[[2]string{"h1", "h2"}] = []diffmap.File{edit("a.go", 10)}
+	got := decide(t, f, nil,
+		review("h1", sk(a, fnd("x", "a.go", 40), fnd("x", "a.go", 10))),
+		review("h2", sk(a)),
+	)
+	if fate := one(t, got); fate.Fate != Fixed {
+		t.Errorf("fate = %s, want fixed", fate.Fate)
+	}
+}
+
+func TestAFindingReportedByAFailedSkillCounts(t *testing.T) {
+	failed := func(fs ...Finding) Skill {
+		s := sk(a, fs...)
+		s.Failed = true
+		return s
+	}
+	t.Run("starts a track", func(t *testing.T) {
+		got := decide(t, newFake(), nil, review("h1", failed(fnd("x", "a.go", 10))))
+		if fate := one(t, got); fate.Fate != Open {
+			t.Errorf("fate = %s, want open", fate.Fate)
+		}
+	})
+	t.Run("moves the head", func(t *testing.T) {
+		f := newFake()
+		f.files[[2]string{"h2", "h3"}] = []diffmap.File{edit("a.go", 10)}
+		got := decide(t, f, nil,
+			review("h1", sk(a, fnd("x", "a.go", 10))),
+			review("h2", failed(fnd("x", "a.go", 10))),
+			review("h3", sk(a)),
+		)
+		if fate := one(t, got); fate.Fate != Fixed {
+			t.Errorf("fate = %s, want fixed", fate.Fate)
+		}
+		if want := [][2]string{{"h2", "h3"}}; !reflect.DeepEqual(f.pairs, want) {
+			t.Errorf("compares = %v, want %v", f.pairs, want)
+		}
+	})
+	t.Run("from a file it didn't review", func(t *testing.T) {
+		got := decide(t, newFake(), nil, review("h1", sk([]string{"b.go"}, fnd("x", "a.go", 10))))
+		if fate := one(t, got); fate.Fate != Open {
+			t.Errorf("fate = %s, want open", fate.Fate)
+		}
+	})
+}
+
+func TestATrackedFindingIsNotACandidate(t *testing.T) {
+	got := decide(t, newFake(), nil,
+		review("h1", sk(a, fnd("x", "a.go", 10), fnd("z", "a.go", 10))),
+		review("h2", sk(a, fnd("z", "a.go", 10))),
+	)
+	want := map[string]string{"x": WentAway, "z": Open}
+	if len(got) != 2 {
+		t.Fatalf("got %d fates, want 2: %+v", len(got), got)
+	}
+	for _, fate := range got {
+		if fate.Fate != want[fate.Fingerprint] {
+			t.Errorf("%s = %s, want %s", fate.Fingerprint, fate.Fate, want[fate.Fingerprint])
+		}
 	}
 }

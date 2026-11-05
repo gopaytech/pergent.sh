@@ -214,7 +214,8 @@ func (w *walk) run(tracks []*track) ([]*track, error) {
 
 	// A finding reported counts as reported, even by a skill that failed or a
 	// review of other files: the skip rules are about a finding not reported.
-	// A track's newest fingerprint is looked for first.
+	// A track's newest fingerprint is looked for first; another wording of it
+	// reported beside it only raises its severity.
 	byFP := map[string]*reported{}
 	for _, r := range w.reported {
 		byFP[r.fp] = r
@@ -225,13 +226,28 @@ func (w *walk) run(tracks []*track) ([]*track, error) {
 		}
 	}
 	for _, r := range w.reported {
-		if t := w.owner[r.fp]; t != nil && !w.matched[t] {
-			w.update(t, r)
+		if t := w.owner[r.fp]; t != nil {
+			if w.matched[t] {
+				t.raise(r.severity)
+			} else {
+				w.update(t, r)
+			}
 		}
 	}
 
+	// A finding not reported may be reworded, whatever the review says about
+	// the file; only then can it be said to have stopped being reported.
+	var pending []*track
 	for _, t := range mine {
-		if w.matched[t] || !t.live {
+		if !w.matched[t] && t.live {
+			pending = append(pending, t)
+		}
+	}
+	if err := w.reword(pending); err != nil {
+		return nil, err
+	}
+	for _, t := range pending {
+		if w.matched[t] {
 			continue
 		}
 		if err := w.vanished(t); err != nil {
@@ -257,23 +273,29 @@ func (w *walk) update(t *track, r *reported) {
 	t.fps[r.fp] = true
 	t.line, t.end = r.line, r.end
 	t.head = w.r.Head
-	if t.severity != "blocking" {
-		t.severity = r.severity
-	}
+	t.raise(r.severity)
 	t.live = true
 	t.fate = ""
 	w.matched[t] = true
 	w.owner[r.fp] = t
 }
 
+// raise makes the track's severity at least sev.
+func (t *track) raise(sev string) {
+	if t.severity != "blocking" {
+		t.severity = sev
+	}
+}
+
 // vanished decides what a live track that the review does not report becomes:
-// nothing, if the review says nothing about it; the same finding reworded; or
-// a track that has stopped being reported.
+// nothing, if the review says nothing about it, or a track that has stopped
+// being reported.
 func (w *walk) vanished(t *track) error {
 	if w.s.Failed {
 		return nil
 	}
-	// A file renamed since the finding was reported is reviewed under its new name.
+	// A file renamed since the finding was reported is reviewed under its new
+	// name. A deleted file is never reviewed, and its findings are gone.
 	if !w.s.Reviewed[t.file] {
 		if t.head == w.r.Head {
 			return nil
@@ -285,21 +307,8 @@ func (w *walk) vanished(t *track) error {
 		if !ok {
 			return nil
 		}
-		if _, path, _ := find(files, t.file); !w.s.Reviewed[path] {
+		if d, path, _ := find(files, t.file); !d.Deleted && !w.s.Reviewed[path] {
 			return nil
-		}
-	}
-
-	if t.head != w.r.Head && t.line > 0 {
-		if cands := w.candidates(); len(cands) > 0 {
-			files, ok, err := w.c.get(t.head, w.r.Head)
-			if err != nil {
-				return err
-			}
-			if r := w.reworded(t, cands, files, ok); r != nil {
-				w.update(t, r)
-				return nil
-			}
 		}
 	}
 
@@ -330,49 +339,122 @@ func (w *walk) vanished(t *track) error {
 	return nil
 }
 
-// candidates are the findings of the review that no track has had, with a line.
+// candidates are the findings of the review that no track has had.
 func (w *walk) candidates() []*reported {
 	var out []*reported
 	for _, r := range w.reported {
-		if w.owner[r.fp] == nil && r.line > 0 {
+		if w.owner[r.fp] == nil {
 			out = append(out, r)
 		}
 	}
 	return out
 }
 
-// reworded finds the finding that t was reworded into: same file (following a
-// rename), the closest to its lines. Where the diff maps the old lines, the
-// ranges must overlap; where it cannot, the finding must lie within Reach of
-// the old lines. cands is in line order, so a tie goes to the first.
-func (w *walk) reworded(t *track, cands []*reported, files []diffmap.File, ok bool) *reported {
-	lo, hi, limit, file := t.line, t.end, Reach, t.file
-	if ok {
-		d, path, found := find(files, t.file)
-		file = path
-		if !found {
-			limit = 0 // the file is untouched: the lines are where they were
-		} else if l, ok1 := d.MapOld(lo); ok1 {
-			if h, ok2 := d.MapOld(hi); ok2 {
-				lo, hi, limit = l, h, 0
+// reword joins each pending track to the finding it was reworded into: same
+// file (following a rename), no track yet, a line if the track had one, and the
+// closest to its lines, a tie going to the earlier track and the lower line.
+// A track with no line takes a finding with no line in the same file. On the
+// same head the lines are where they were; otherwise a comparison is made, and
+// only if some candidate could be the track's match.
+func (w *walk) reword(pending []*track) error {
+	cands := w.candidates()
+	if len(cands) == 0 {
+		return nil
+	}
+	type pair struct{ t, c, gap int }
+	var pairs []pair
+	for i, t := range pending {
+		if !hasKind(cands, t.line > 0) {
+			continue
+		}
+		lo, hi, limit, file := t.line, t.end, 0, t.file
+		if t.head != w.r.Head {
+			files, ok, err := w.c.get(t.head, w.r.Head)
+			if err != nil {
+				return err
+			}
+			lo, hi, limit, file = mapRange(files, ok, t)
+		}
+		for j, r := range cands {
+			if r.file != file || (r.line > 0) != (t.line > 0) {
+				continue
+			}
+			g := 0
+			if t.line > 0 {
+				g = gap(lo, hi, r.line, r.end)
+			}
+			if g <= limit {
+				pairs = append(pairs, pair{i, j, g})
 			}
 		}
 	}
-	var best *reported
-	bestGap := 0
-	for _, r := range cands {
-		if r.file != file {
+	sort.SliceStable(pairs, func(a, b int) bool {
+		if pairs[a].gap != pairs[b].gap {
+			return pairs[a].gap < pairs[b].gap
+		}
+		if pairs[a].t != pairs[b].t {
+			return pairs[a].t < pairs[b].t
+		}
+		return pairs[a].c < pairs[b].c
+	})
+	taken := map[int]bool{}
+	for _, p := range pairs {
+		if w.matched[pending[p.t]] || taken[p.c] {
 			continue
 		}
-		g := gap(lo, hi, r.line, r.end)
-		if g > limit {
-			continue
-		}
-		if best == nil || g < bestGap {
-			best, bestGap = r, g
+		taken[p.c] = true
+		w.update(pending[p.t], cands[p.c])
+	}
+	return nil
+}
+
+func hasKind(rs []*reported, withLine bool) bool {
+	for _, r := range rs {
+		if (r.line > 0) == withLine {
+			return true
 		}
 	}
-	return best
+	return false
+}
+
+// mapRange says where the lines of a track are at the newer head of a
+// comparison, and how far a finding may sit from them: not at all where the
+// diff maps both ends of the lines or doesn't touch the file; Reach where it
+// can't, as when the lines were rewritten, the diff has no hunks to trust, or
+// the comparison is gone. The path is the file's path at the newer head.
+func mapRange(files []diffmap.File, ok bool, t *track) (lo, hi, limit int, path string) {
+	if !ok {
+		return t.line, t.end, Reach, t.file
+	}
+	d, path, found := find(files, t.file)
+	if !found {
+		return t.line, t.end, 0, path
+	}
+	if len(d.Hunks) == 0 {
+		return t.line, t.end, Reach, path
+	}
+	if l, ok := d.MapOld(t.line); ok {
+		if h, ok := d.MapOld(t.end); ok {
+			return l, h, 0, path
+		}
+	}
+	return t.line + shiftBefore(d, t.line), t.end + shiftBefore(d, t.end), Reach, path
+}
+
+// shiftBefore is how far the hunks above an old line move it.
+func shiftBefore(d diffmap.File, oldLine int) int {
+	shift := 0
+	for _, h := range d.Hunks {
+		last := h.OldStart + h.OldLines - 1
+		if h.OldLines == 0 {
+			last = h.OldStart // a pure insertion: OldStart is the line before it
+		}
+		if oldLine <= last {
+			break
+		}
+		shift += h.NewLines - h.OldLines
+	}
+	return shift
 }
 
 // find returns the diff of a file given its path on the old side, and its path
