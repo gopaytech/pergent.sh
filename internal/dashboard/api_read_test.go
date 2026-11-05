@@ -245,6 +245,8 @@ type runFix struct {
 	// versions (JSON) and skipReason are what a run records of the library
 	// skills it used and of why it was skipped.
 	versions, skipReason string
+	// incremental marks a run that reviewed only some files.
+	incremental bool
 }
 
 // addRun stores f and returns the run's ID.
@@ -314,10 +316,10 @@ func (e *env) addRun(f runFix) string {
 	e.exec(`UPDATE runs SET state = $2, result = $3::jsonb, failure_reason = $4, base_sha = $5, created_at = $6,
 			dispatched_at = $7, reported_at = $8, title = $9, web_url = $10, source_branch = $11, author = $12,
 			outcome = $13, outcome_reason = $14, decision_status = $15, approved = $16, model = $17,
-			skill_sources = $18::jsonb, skill_versions = $19::jsonb, skip_reason = $20, max_turns = $21
+			skill_sources = $18::jsonb, skill_versions = $19::jsonb, skip_reason = $20, max_turns = $21, incremental = $22
 		WHERE id = $1::uuid`,
 		id, string(f.state), result, f.failure, baseSHA, f.at, dispatched, reported, f.title, f.webURL,
-		f.sourceBranch, f.user, f.outcome, f.reason, f.status, f.approved, model, sources, versions, f.skipReason, f.maxTurns)
+		f.sourceBranch, f.user, f.outcome, f.reason, f.status, f.approved, model, sources, versions, f.skipReason, f.maxTurns, f.incremental)
 	return id
 }
 
@@ -1393,12 +1395,18 @@ func TestRunDetailIncrementalNote(t *testing.T) {
 	}
 	res["incremental"] = map[string]any{"reviewed": 2, "carried": 28, "from": "abc1234def5678abc1234def5678abc1234def56"}
 	b, _ := json.Marshal(res)
-	incremental := e.addRun(runFix{project: "acme/widgets", number: 1, head: head('a'), result: string(b), outcome: OutcomeApproved, approved: true})
+	incremental := e.addRun(runFix{project: "acme/widgets", number: 1, head: head('a'), result: string(b), outcome: OutcomeApproved, approved: true, incremental: true})
 	full := e.addRun(runFix{project: "acme/widgets", number: 2, head: head('b'), result: cleanResult(head('b')), outcome: OutcomeApproved, approved: true})
+	// An incremental run whose result was never merged with the last review
+	// (a push superseded it, or the pod restarted) is a few files only.
+	unmerged := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('c'), result: cleanResult(head('c')), state: store.Superseded, incremental: true})
 	c := e.signInGitLab(false, "acme/widgets")
 
 	if v := getJSON[RunDetailView](e, c, "/api/runs/"+incremental); v.IncrementalNote != "Re-reviewed 2 files · 28 carried over from `abc1234`" {
 		t.Errorf("incrementalNote = %q", v.IncrementalNote)
+	}
+	if v := getJSON[RunDetailView](e, c, "/api/runs/"+unmerged); v.IncrementalNote != "Part of an incremental review that was never merged." {
+		t.Errorf("incrementalNote = %q for an unmerged partial", v.IncrementalNote)
 	}
 	if v := getJSON[RunDetailView](e, c, "/api/runs/"+full); v.IncrementalNote != "" {
 		t.Errorf("incrementalNote = %q for a full review, want none", v.IncrementalNote)

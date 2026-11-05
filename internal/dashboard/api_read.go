@@ -548,6 +548,10 @@ func (d *Dashboard) visibleRun(ctx context.Context, se Session, id string) (stor
 	return run, true, nil
 }
 
+// notMergedNote is the incrementalNote of an incremental run whose result was
+// not merged with the last review.
+const notMergedNote = "Part of an incremental review that was never merged."
+
 func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	run, found, err := d.visibleRun(ctx, se, r.PathValue("id"))
@@ -605,6 +609,12 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 		}
 		view.PergentVersion = res.PergentVersion
 		view.IncrementalNote = result.IncrementalNote(res.Incremental)
+		if run.Incremental && res.Incremental == nil {
+			// A run that reviewed only some files whose result was never
+			// merged (a push superseded it, or the pod restarted): what
+			// its page lists is a few files, not the whole change.
+			view.IncrementalNote = notMergedNote
+		}
 		fillSkills(&view, res, run.Result, run.SkillSources, run.SkillVersions, dismissals)
 	}
 	writeJSON(w, http.StatusOK, view)
