@@ -160,7 +160,8 @@ type Rebind struct {
 
 // Plan is what Decide decides. Its slices are in a fixed order: Post blocking
 // first, then by file, then line, then fingerprint; Resolve, Reopen and Rebind
-// by the thread's file, then line, then fingerprint.
+// by the thread's file, then line, then fingerprint. Note holds the threads told
+// that their finding was left out; they stay open.
 type Plan struct {
 	Post    []Post
 	Resolve []Resolve
