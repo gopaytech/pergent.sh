@@ -185,3 +185,94 @@ func TestParseToleratesFileHeadersAndOmittedCounts(t *testing.T) {
 		t.Errorf("hunk = %+v", h)
 	}
 }
+
+// changeAt10 removes old line 10 with three lines of context on each side.
+const changeAt10 = `@@ -7,7 +7,6 @@
+ c7
+ c8
+ c9
+-old10
+ c11
+ c12
+ c13
+`
+
+func TestChangedNearOnTheLine(t *testing.T) {
+	f := Parse("a.go", "a.go", "@@ -9,3 +9,3 @@\n c9\n-old10\n+new10\n c11\n", false)
+	if !f.ChangedNear(10, 10, 0) {
+		t.Error("ChangedNear(10, 10, 0) = false, want true")
+	}
+}
+
+func TestChangedNearIgnoresContext(t *testing.T) {
+	f := Parse("a.go", "a.go", changeAt10, false)
+	tests := []struct {
+		lo, hi, reach int
+		want          bool
+	}{
+		{13, 13, 2, false},
+		{13, 13, 3, true},
+		{20, 20, 3, false},
+		{7, 7, 2, false},
+		{7, 7, 3, true},
+	}
+	for _, tt := range tests {
+		if got := f.ChangedNear(tt.lo, tt.hi, tt.reach); got != tt.want {
+			t.Errorf("ChangedNear(%d, %d, %d) = %v, want %v", tt.lo, tt.hi, tt.reach, got, tt.want)
+		}
+	}
+}
+
+func TestChangedNearAddedLine(t *testing.T) {
+	// A guard added before old line 10, nothing removed: the insertion sits
+	// at the line it comes before.
+	f := Parse("a.go", "a.go", "@@ -9,2 +9,3 @@\n c9\n+guard\n c10\n", false)
+	if !f.ChangedNear(10, 10, 0) {
+		t.Error("ChangedNear(10, 10, 0) = false, want true")
+	}
+	if f.ChangedNear(9, 9, 0) {
+		t.Error("ChangedNear(9, 9, 0) = true, want false")
+	}
+}
+
+func TestChangedNearReplacedLineLeavesNextLineAlone(t *testing.T) {
+	f := Parse("a.go", "a.go", "@@ -9,3 +9,3 @@\n c9\n-old10\n+new10\n c11\n", false)
+	if f.ChangedNear(11, 11, 0) {
+		t.Error("ChangedNear(11, 11, 0) = true, want false: line 11 is context")
+	}
+}
+
+func TestChangedNearInsertionOnly(t *testing.T) {
+	// A pure insertion: old start is the line before it.
+	f := Parse("a.go", "a.go", "@@ -5,0 +6,2 @@\n+x\n+y\n", false)
+	if !f.ChangedNear(6, 6, 0) {
+		t.Error("ChangedNear(6, 6, 0) = false, want true")
+	}
+	if f.ChangedNear(5, 5, 0) {
+		t.Error("ChangedNear(5, 5, 0) = true, want false")
+	}
+}
+
+func TestChangedNearRemovedLine(t *testing.T) {
+	f := Parse("a.go", "a.go", changeAt10, false)
+	if !f.ChangedNear(10, 10, 0) {
+		t.Error("ChangedNear(10, 10, 0) = false, want true")
+	}
+}
+
+func TestChangedNearRange(t *testing.T) {
+	f := Parse("a.go", "a.go", "@@ -13,3 +13,3 @@\n c13\n c14\n-old15\n+new15\n", false)
+	if !f.ChangedNear(10, 12, 3) {
+		t.Error("ChangedNear(10, 12, 3) = false, want true")
+	}
+	if f.ChangedNear(10, 11, 3) {
+		t.Error("ChangedNear(10, 11, 3) = true, want false")
+	}
+}
+
+func TestChangedNearNoHunks(t *testing.T) {
+	f := Parse("a.go", "a.go", "", false)
+	if f.ChangedNear(1, 100, 100) {
+		t.Error("ChangedNear on an empty patch = true, want false")
+	}
+}
