@@ -283,6 +283,24 @@ func TestNoiseOnlyWhatAReviewReads(t *testing.T) {
 	}
 }
 
+// An empty file, such as the .keep that holds a build folder in git, gives a
+// review nothing to read.
+func TestNoiseSkipsEmptyFiles(t *testing.T) {
+	for _, tt := range []struct {
+		rel  string
+		size int64
+		want string
+	}{
+		{"internal/web/dist/.keep", 0, ""},
+		{"dist/app.js", 1, WhyBuildOutput},
+		{"package-lock.json", 0, ""},
+	} {
+		if got := noiseWhy(tt.rel, tt.size); got != tt.want {
+			t.Errorf("noiseWhy(%q, %d) = %q, want %q", tt.rel, tt.size, got, tt.want)
+		}
+	}
+}
+
 func TestNoiseCapped(t *testing.T) {
 	files := map[string]string{}
 	for i := 1; i <= 59; i++ {
