@@ -726,7 +726,7 @@ describe("RepositoryDetail", () => {
 
     it("says when there is nothing yet", async () => {
       renderAt("/repos/main/acme/payments?tab=skill-results", { ...base, [`GET ${listPath}`]: { body: [] } });
-      expect(await screen.findByText("No results yet. Numbers start with changes merged after this release.")).toBeInTheDocument();
+      expect(await screen.findByText("No results for this period. Numbers start with changes merged after the release that added this tab.")).toBeInTheDocument();
       expect(screen.queryByRole("table")).not.toBeInTheDocument();
     });
 
@@ -739,6 +739,36 @@ describe("RepositoryDetail", () => {
       const security = (await screen.findByText("security")).closest("tr") as HTMLElement;
       expect(within(security).getByText("Edited 12 days ago: numbers include the old version")).toBeInTheDocument();
       expect(screen.getAllByText(/Edited/)).toHaveLength(1);
+    });
+
+    it("counts the days since an edit: today, 1 day, and a date in the future", async () => {
+      const edit = async (ms: number) => {
+        const { unmount } = renderAt("/repos/main/acme/payments?tab=skill-results", {
+          ...base,
+          [`GET ${listPath}`]: { body: [{ ...skillResults[0], editedAt: new Date(Date.now() + ms).toISOString() }] },
+        });
+        const text = (await screen.findByText(/^Edited /)).textContent;
+        unmount();
+        return text;
+      };
+      const tail = ": numbers include the old version";
+      expect(await edit(-3600 * 1000)).toBe(`Edited today${tail}`);
+      expect(await edit(-30 * 3600 * 1000)).toBe(`Edited 1 day ago${tail}`);
+      expect(await edit(5 * 24 * 3600 * 1000)).toBe(`Edited today${tail}`);
+    });
+
+    it("shows the error when the results can't be read", async () => {
+      renderAt("/repos/main/acme/payments?tab=skill-results", {
+        ...base,
+        [`GET ${listPath}`]: { status: 500, body: { error: "could not read the results" } },
+      });
+      expect(await screen.findByRole("alert")).toHaveTextContent("could not read the results");
+      expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    });
+
+    it("emphasises Addressed", async () => {
+      renderAt("/repos/main/acme/payments?tab=skill-results", { ...base, [`GET ${listPath}`]: { body: skillResults } });
+      expect((await screen.findByText("25%")).tagName).toBe("B");
     });
 
     it("shows a skill's name as text", async () => {

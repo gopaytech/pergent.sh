@@ -33,6 +33,7 @@ pergent.sh is a service that runs [pergent](https://github.com/gopaytech/pergent
 - **Inline findings**: each finding is also posted as a thread on its lines, with a one-click fix when it is small, and resolved when a later push fixes it. See [Inline findings](#-inline-findings).
 - **Incremental reviews**: a push reviews only the files it changed and carries the rest over from the last review. See [Incremental reviews](#-incremental-reviews).
 - **Learn from dismissals**: a review is told what people rejected earlier in the repository, and why, so a false positive stops coming back. See [Learn from dismissals](#-learn-from-dismissals).
+- **Skill results**: a tab for each repository shows how many of each skill's findings people fixed, dismissed or left open, so you can fix or drop the weak skills. See [Skill results](#-skill-results).
 - **Approval with a human guard**: a clean review that actually reviewed something and skipped no file outside the allowed rules is approved by the approver; on GitLab, pergent.sh logs a warning for every project where one approval alone could merge.
 - **GitLab and GitHub**: GitLab (gitlab.com or self-managed) and GitHub.com; on GitHub one App is enough to review and approve.
 - **Dashboard**: every review, finding, file and log in the browser, with teams and roles for who sees what, an audit log, and instances, secrets and the LLM managed without editing the config file.
@@ -225,7 +226,7 @@ pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is hand
 
 Nothing to change in the config or the chart. Migration `0024` runs at startup, and 0.7.1 keeps working on the migrated database, so you can roll back.
 
-- The migration builds `runs_decided_idx`, and building it blocks writes to `runs`. On a large `runs` table, expect a slower start.
+- The migration builds `runs_decided_idx`, and building it blocks writes to `runs`. On a large `runs` table, expect a slower start. A very large table could outlast the chart's startup probe, which allows 150 seconds. The pod would then restart and begin the build again, so on such a table raise the probe first.
 - The new **Skill results** tab has no numbers at first. They appear as changes merge or close ([Skill results](#-skill-results)).
 
 ### Upgrading to 0.7.1
@@ -939,9 +940,9 @@ When a change is merged or closed, pergent.sh works out what became of each find
 - **Open at merge**: it was still reported when the change ended, and nobody dismissed it.
 - **Went away**: it stopped being reported, but nothing near its lines changed, or there is no telling. A model changing its mind lands here, and so does a finding a skill left out because of [past dismissals](#-learn-from-dismissals).
 
-The tab has one row for each skill and severity, for the last 30 or 90 days. **Raised** is the number of findings. **Addressed** is Fixed divided by Raised, as a whole percent. Dismissed doesn't count as addressed. A row shows Addressed only from 10 findings. Rows with the lowest Addressed come first, so the skills that need work are on top.
+The tab has one row for each skill and severity, for the last 30 or 90 days. **Raised** is the number of findings. **Addressed** is Fixed divided by Raised, as a whole percent. Dismissed doesn't count as addressed. A row shows Addressed only from 10 raised, not 10 findings of any kind. Rows with the lowest Addressed come first, and rows without one come last. So a skill with 9 ignored findings sits at the bottom until it has 10.
 
-Only merged changes opened by people count. A change closed without a merge, and a change opened by a bot, say nothing about whether a finding helped. The one exception is Dismissed, which also counts findings dismissed on closed changes. So Raised can be less than the sum of the columns.
+Only merged changes opened by people count. A change closed without a merge, and a change opened by a bot, say nothing about whether a finding helped. The one exception is Dismissed, which also counts findings dismissed on closed changes opened by people. So Raised can be less than the sum of the columns.
 
 When a skill was edited inside the window, its row says so, for example `Edited 12 days ago: numbers include the old version`. Rows aren't split by version, because that would leave too few findings in each.
 
@@ -949,9 +950,10 @@ When a skill was edited inside the window, its row says so, for example `Edited 
 
 - Addressed reads low with [incremental reviews](#-incremental-reviews). A finding stays reported until its own file changes. If the author fixes it from another file, it ends as open at merge, though a full review would have dropped it.
 - A push after the last review isn't looked at. Findings fixed by it still count as open at merge.
-- Teams that rebase or force-push see fewer Fixed. GitHub refuses to compare heads that aren't ancestors of each other, so those findings go to Went away.
+- On GitHub, teams that rebase or force-push see fewer Fixed. GitHub refuses to compare heads that aren't ancestors of each other, so those findings go to Went away.
+- On GitLab, and on both platforms after merging the target branch into the branch, someone else's edit can earn Fixed. The comparison then includes the target branch's changes, so Fixed can read high.
 - An unrelated edit within 3 lines of a finding counts as a fix.
-- Numbers start from this release. Changes that ended earlier are not counted, so the tab takes a few weeks to mean much.
+- Numbers start from this release. Changes that ended earlier are not counted, so the tab takes a few weeks to mean much. The hourly sweep looks back 7 days, so a few changes from the week before the upgrade can appear.
 - A change counts when it ends, so a long-lived change shows up late.
 
 ## 💬 Commands

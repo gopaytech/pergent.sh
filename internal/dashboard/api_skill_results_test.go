@@ -18,7 +18,14 @@ func resultsURL(project, query string) string {
 // at at: merged, opened by a person.
 func (e *env) decidedFates(project string, number int64, merged bool, at time.Time, rows ...store.FindingFate) {
 	e.t.Helper()
-	mr := store.MRKey{Instance: "main", ProjectID: testID(project), IID: number}
+	e.decidedFatesIn("main", testID(project), project, number, merged, at, rows...)
+}
+
+// decidedFatesIn is decidedFates for the project with platform ID projectID
+// on instance, stored under the path project.
+func (e *env) decidedFatesIn(instance string, projectID int64, project string, number int64, merged bool, at time.Time, rows ...store.FindingFate) {
+	e.t.Helper()
+	mr := store.MRKey{Instance: instance, ProjectID: projectID, IID: number}
 	if err := e.st.RequestFates(ctx, mr, project, merged, at); err != nil {
 		e.t.Fatal(err)
 	}
@@ -126,6 +133,42 @@ func TestSkillResultsNoAccess(t *testing.T) {
 	}
 }
 
+// A path that was reused by another project shows the project the session
+// sees, and the same project ID on another instance is another project.
+func TestSkillResultsProjectID(t *testing.T) {
+	const oldID = 999
+	setup := func() *env {
+		e := newEnv(t, nil)
+		e.buttonBlockingReview()
+		at := e.clock.now().Add(-time.Hour)
+		// The newest run under the path is of the old project.
+		e.addRun(runFix{project: buttonProject, projectID: oldID, number: 3, head: head('2'),
+			result: resultJSON(head('2'), buttonSkill("code-review")), at: e.clock.now().Add(-time.Minute)})
+		e.decidedFatesIn("main", oldID, buttonProject, 3, true, at, fates("old-project", "h", "blocking", "fixed", 2)...)
+		e.decidedFates(buttonProject, 1, true, at, fates("this-project", "h", "blocking", "fixed", 1)...)
+		e.decidedFatesIn("gh", testID(buttonProject), buttonProject, 1, true, at, fates("other-instance", "h", "blocking", "fixed", 4)...)
+		return e
+	}
+	skills := func(rows []SkillResultView) []string {
+		var out []string
+		for _, r := range rows {
+			out = append(out, r.Skill)
+		}
+		return out
+	}
+
+	e := setup()
+	c := e.signInRole(store.RoleViewer)
+	if got := skills(getJSON[[]SkillResultView](e, c, resultsURL(buttonProject, ""))); !slices.Equal(got, []string{"this-project"}) {
+		t.Errorf("skills = %v; want the session's project alone", got)
+	}
+	// An operator has no visible IDs: the project the path is stored under.
+	e2 := setup()
+	if got := skills(getJSON[[]SkillResultView](e2, e2.signInOperator(), resultsURL(buttonProject, ""))); !slices.Equal(got, []string{"this-project"}) {
+		t.Errorf("operator skills = %v; want the stored project's", got)
+	}
+}
+
 // The rule for Addressed and the order of the rows do not need a database.
 func TestSkillResultViews(t *testing.T) {
 	edited := time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)
@@ -137,9 +180,11 @@ func TestSkillResultViews(t *testing.T) {
 		{Skill: "d", Severity: "blocking", Raised: 3, Fixed: 3, Dismissed: 1, EditedAt: &edited},
 		{Skill: "e", Severity: "blocking", Raised: 0, Dismissed: 4},
 		{Skill: "f", Severity: "blocking", Raised: 12, Fixed: 1, Open: 11},
-		{Skill: "g", Severity: "blocking", Raised: 3, Fixed: 1},
+		{Skill: "g", Severity: "blocking", Raised: 14, Fixed: 5},
 		{Skill: "h", Severity: "blocking", Raised: 200, Fixed: 1},
 		{Skill: "i", Severity: "blocking", Raised: 3, Fixed: 2},
+		{Skill: "j", Severity: "blocking", Raised: 11, Fixed: 5},
+		{Skill: "k", Severity: "blocking", Raised: 10, Fixed: 10},
 	}
 	got := skillResultViews(rows)
 	type row struct {
@@ -153,13 +198,15 @@ func TestSkillResultViews(t *testing.T) {
 	want := []row{
 		{"h", "blocking", ptr(1)},  // 0.5% rounds to 1
 		{"f", "blocking", ptr(8)},  // 8.33
+		{"g", "blocking", ptr(36)}, // 35.71 rounds up
+		{"j", "blocking", ptr(45)}, // 45.45 rounds down
 		{"b", "blocking", ptr(50)}, // equal: blocking before suggestion
 		{"b", "suggestion", ptr(50)},
+		{"k", "blocking", ptr(100)},
 		{"a", "suggestion", nil}, // under 10 raised: no percentage, nulls last, then by skill
 		{"c", "blocking", nil},
 		{"d", "blocking", nil},
 		{"e", "blocking", nil},
-		{"g", "blocking", nil},
 		{"i", "blocking", nil},
 	}
 	if len(order) != len(want) {

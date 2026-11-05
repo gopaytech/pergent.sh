@@ -49,7 +49,7 @@ export default function SkillResults({ instance, project }: { instance: string; 
         (list.data.length === 0 ? (
           <section className="card" aria-label="Skill results">
             <h2>Skill results</h2>
-            <div className="row empty-row">No results yet. Numbers start with changes merged after this release.</div>
+            <div className="row empty-row">No results for this period. Numbers start with changes merged after the release that added this tab.</div>
           </section>
         ) : (
           <section className="card scroll" aria-label="Skill results">
@@ -80,7 +80,7 @@ export default function SkillResults({ instance, project }: { instance: string; 
                     <td className="num">{r.dismissed}</td>
                     <td className="num">{r.open}</td>
                     <td className="num">{r.wentAway}</td>
-                    <td className="num">{r.addressed === null ? <span className="meta">Under 10 raised</span> : `${r.addressed}%`}</td>
+                    <td className="num">{r.addressed === null ? <span className="meta">Under 10 raised</span> : <b>{`${r.addressed}%`}</b>}</td>
                   </tr>
                 ))}
               </tbody>
