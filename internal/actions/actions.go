@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -148,6 +149,103 @@ var reasonImage = regexp.MustCompile(`!\[[^\]]*\]\([^)]*\)|!\[[^\]]*\]\[[^\]]*\]
 // way to track readers) and trimmed.
 func CleanReason(reason string) string {
 	return strings.TrimSpace(reasonImage.ReplaceAllString(reason, ""))
+}
+
+// What a review is told of past dismissals, per skill, and how much of each
+// text. A title or file name may have been written from repository content.
+const (
+	maxPastDismissals = 20
+	maxPastTitleRunes = 200
+)
+
+// PastDismissal is one entry of what people rejected, as a review is given
+// it. It names nobody: who rejected a finding is not the model's business.
+type PastDismissal struct {
+	File     string `json:"file"`
+	Title    string `json:"title"`
+	Severity string `json:"severity"`
+	Reason   string `json:"reason"`
+}
+
+// DedupeDismissals keeps one row per fingerprint, a blocking one over a
+// suggestion, then the newest. The result has blocking rows first, then the
+// newest first.
+func DedupeDismissals(rows []store.Dismissal) []store.Dismissal {
+	best := map[string]store.Dismissal{}
+	var order []string
+	for _, r := range rows {
+		cur, seen := best[r.Fingerprint]
+		if !seen {
+			order = append(order, r.Fingerprint)
+		}
+		if !seen || outranks(r, cur) {
+			best[r.Fingerprint] = r
+		}
+	}
+	out := make([]store.Dismissal, 0, len(order))
+	for _, fp := range order {
+		out = append(out, best[fp])
+	}
+	sort.SliceStable(out, func(i, j int) bool { return outranks(out[i], out[j]) })
+	return out
+}
+
+// outranks tells whether a goes before b: blocking over suggestion, then newer.
+func outranks(a, b store.Dismissal) bool {
+	if (a.Severity == "blocking") != (b.Severity == "blocking") {
+		return a.Severity == "blocking"
+	}
+	return a.CreatedAt.After(b.CreatedAt)
+}
+
+// PastDismissals is what a review of a change by changeAuthorID (0 when
+// unknown) is told, for each of skills that has any: at most 20 entries a
+// skill, blocking first. A blocking row by the change's author is left out,
+// and so is every one with a recorded dismisser when the author is unknown,
+// so nobody clears their own blocker by rejecting it on another change first.
+// A row from before dismissers were recorded (ID 0) can't be matched and
+// stays. The text goes through redact and is cut.
+func PastDismissals(rows []store.Dismissal, skills []string, changeAuthorID int64, redact func(string) string) map[string][]PastDismissal {
+	if redact == nil {
+		redact = func(s string) string { return s }
+	}
+	bySkill := map[string][]store.Dismissal{}
+	for _, name := range skills {
+		bySkill[name] = nil
+	}
+	for _, r := range rows {
+		if _, ok := bySkill[r.Skill]; !ok {
+			continue
+		}
+		if r.Severity == "blocking" && r.DismisserPlatformID != 0 && (changeAuthorID == 0 || r.DismisserPlatformID == changeAuthorID) {
+			continue
+		}
+		bySkill[r.Skill] = append(bySkill[r.Skill], r)
+	}
+	out := map[string][]PastDismissal{}
+	for name, rs := range bySkill {
+		rs = DedupeDismissals(rs)
+		if len(rs) > maxPastDismissals {
+			rs = rs[:maxPastDismissals]
+		}
+		for _, r := range rs {
+			out[name] = append(out[name], PastDismissal{
+				File:     cutRunes(redact(r.File), maxPastTitleRunes),
+				Title:    cutRunes(redact(r.Title), maxPastTitleRunes),
+				Severity: r.Severity,
+				Reason:   cutRunes(redact(CleanReason(r.Reason)), MaxReasonRunes),
+			})
+		}
+	}
+	return out
+}
+
+// cutRunes is s cut to n characters.
+func cutRunes(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
 }
 
 // RenderDismissals is stored dismissals in the form the comment renderer and

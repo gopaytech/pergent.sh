@@ -135,6 +135,7 @@ func BuildJob(p JobParams) *batchv1.Job {
 	hasInstructions := p.Inputs != nil && len(p.Inputs.Instructions) > 0
 	hasPrevious := p.Inputs != nil && len(p.Inputs.Previous) > 0
 	hasCarried := p.Inputs != nil && len(p.Inputs.Carried) > 0
+	hasDismissals := p.Inputs != nil && len(p.Inputs.Dismissals) > 0
 
 	args := []string{
 		"agent",
@@ -167,6 +168,11 @@ func BuildJob(p JobParams) *batchv1.Job {
 	}
 	if p.LLM.BaseURL != "" {
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "OPENCODE_BASE_URL", Value: p.LLM.BaseURL})
+	}
+	if hasDismissals {
+		// An environment variable, not an argument: an older image ignores a
+		// variable it doesn't know, but exits 2 on an unknown flag.
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "PERGENT_DISMISSALS", Value: "/in/dismissals.json"})
 	}
 	mainEnv = append(mainEnv,
 		secretEnv("OPENCODE_API_KEY", secret, keyLLMKey),
@@ -218,6 +224,9 @@ func BuildJob(p JobParams) *batchv1.Job {
 	if hasCarried {
 		items = append(items, corev1.KeyToPath{Key: "carried.json", Path: "carried.json"})
 	}
+	if hasDismissals {
+		items = append(items, corev1.KeyToPath{Key: "dismissals.json", Path: "dismissals.json"})
+	}
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: p.Name, Namespace: p.Namespace, Labels: labels(p.RunID)},
@@ -266,9 +275,9 @@ func ownerRef(job *batchv1.Job) []metav1.OwnerReference {
 	}}
 }
 
-// BuildConfigMap holds the skills, instructions, previous review and carried
-// files. owner may
-// be nil (tests); Launch always passes the created Job.
+// BuildConfigMap holds the skills, instructions, previous review, carried
+// files and past dismissals. owner may be nil (tests); Launch always passes
+// the created Job.
 func BuildConfigMap(p JobParams, owner *batchv1.Job) *corev1.ConfigMap {
 	data := map[string]string{}
 	if p.Inputs != nil {
@@ -283,6 +292,9 @@ func BuildConfigMap(p JobParams, owner *batchv1.Job) *corev1.ConfigMap {
 		}
 		if len(p.Inputs.Carried) > 0 {
 			data["carried.json"] = string(p.Inputs.Carried)
+		}
+		if len(p.Inputs.Dismissals) > 0 {
+			data["dismissals.json"] = string(p.Inputs.Dismissals)
 		}
 	}
 	return &corev1.ConfigMap{

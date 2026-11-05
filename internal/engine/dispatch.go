@@ -338,6 +338,9 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			d.log.Info("full review", "reason", reason)
 		}
 	}
+	// What people rejected earlier is the same for a full and an incremental
+	// review, and no skill's hash counts it.
+	in.Dismissals = d.pastDismissals(ctx, repo, in, mr.AuthorID)
 	hadCarried := len(in.Carried) > 0
 	if err := in.Fit(inputs.ConfigMapLimit); err != nil {
 		if errors.Is(err, inputs.ErrTooLarge) {

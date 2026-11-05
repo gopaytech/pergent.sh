@@ -32,6 +32,7 @@ pergent.sh is a service that runs [pergent](https://github.com/gopaytech/pergent
 - **One comment, one status**: pergent.sh posts a single comment, updated in place on every push, and sets a status named `pergent`: a commit status on GitLab, a Check Run on GitHub.
 - **Inline findings**: each finding is also posted as a thread on its lines, with a one-click fix when it is small, and resolved when a later push fixes it. See [Inline findings](#-inline-findings).
 - **Incremental reviews**: a push reviews only the files it changed and carries the rest over from the last review. See [Incremental reviews](#-incremental-reviews).
+- **Learn from dismissals**: a review is told what people rejected earlier in the repository, and why, so a false positive stops coming back. See [Learn from dismissals](#-learn-from-dismissals).
 - **Approval with a human guard**: a clean review that actually reviewed something and skipped no file outside the allowed rules is approved by the approver; on GitLab, pergent.sh logs a warning for every project where one approval alone could merge.
 - **GitLab and GitHub**: GitLab (gitlab.com or self-managed) and GitHub.com; on GitHub one App is enough to review and approve.
 - **Dashboard**: every review, finding, file and log in the browser, with teams and roles for who sees what, an audit log, and instances, secrets and the LLM managed without editing the config file.
@@ -227,8 +228,9 @@ pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is hand
 1. **Pushes are incremental by default**, also on repositories already running. Turn it off per repository with **Incremental reviews** in its Settings, or with `incremental_reviews: false` in the config, or change the default under **Admin → Settings**. The accepted cost: an edit that breaks an untouched file can go unnoticed until a full review (`@<bot> review`), and a team that rebases or amends gets no speed-up yet.
 2. **The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.5.2`.** A config that pins an older pergent keeps full reviews, because only pergent v0.5.2 and later report a version that allows it: v0.5.0 and v0.5.1 report 0.3.0. This is read from the image's tag (`v0.4.0`, also in front of a digest), so it holds even after running a newer pergent. An image pinned by digest alone to an older pergent can't be told apart, and neither can a tag that is not a plain version (`:prod`, `v0.4.0-fork`): turn **Incremental reviews** off first.
 3. **The first push after the upgrade is a full review**, because the last result comes from an older pergent and has no skill hashes. Incremental reviews start with the next push.
-4. **Migration `0020` runs at startup.** It adds nullable columns and one `runs` column that is `NOT NULL DEFAULT false`, so 0.6.2 keeps working on a migrated database.
-5. **To roll back to 0.6.2, first remove `incremental_reviews` from the config**, because 0.6.2 refuses unknown config keys, and let running reviews finish first: an incremental result is a partial one until 0.7.0 merges it, and 0.6.2 would publish it as a whole review. Results stored by 0.7.0 are complete, merged results.
+4. **Reviews learn from dismissals by default**, also on repositories already running. See [Learn from dismissals](#-learn-from-dismissals). Turn it off per repository with **Learn from dismissals** in its Settings, or with `learn_from_dismissals: false` in the config, or change the default under **Admin → Settings**. Dismissals made before the upgrade count only when they were blocking: those always came from a maintainer. Older suggestion dismissals don't, because who made them wasn't stored. The feature needs pergent v0.5.2 or later in the Job; an older image ignores what it is given.
+5. **Migrations `0020`, `0021` and `0022` run at startup.** `0020` adds nullable columns and one `runs` column that is `NOT NULL DEFAULT false`. `0021` adds nullable columns. `0022` adds columns to `dismissals` that have a default, and an index. So 0.6.2 keeps working on a migrated database.
+6. **To roll back to 0.6.2, first remove `incremental_reviews` and `learn_from_dismissals` from the config**, because 0.6.2 refuses unknown config keys, and let running reviews finish first: an incremental result is a partial one until 0.7.0 merges it, and 0.6.2 would publish it as a whole review. Results stored by 0.7.0 are complete, merged results.
 
 ### Upgrading to 0.6.2
 
@@ -893,6 +895,26 @@ A file is carried over, per skill, only when that skill reviewed it last time, t
 
 **Turning it off.** The switch is **Incremental reviews** in a repository's Settings, the default under **Admin → Settings**, or `repositories[].incremental_reviews` in the config ([Config reference](#-config-reference)). With it off, every push is a full review.
 
+## 🎓 Learn from dismissals
+
+A dismissal only ever applied to its own change, after the review had run, and the model never saw it. So a false positive that people rejected last week came back on the next change, and someone had to read it and dismiss it again. Now a review is told what people rejected in the repository, and why.
+
+**What a review is told.** For each skill it runs, a review gets a list of earlier dismissals of that skill: the file, the title, the severity and the reason. Nothing else: not who dismissed it, and not on which change. The list goes to the batch runs and to the verification run (which gets the blocking ones only). The model is told to treat it as data, to leave out a finding that is the same mistake, to raise it anyway if this code really has the problem, and never to let a rejected suggestion excuse a blocking finding.
+
+**Who teaches.** A dismissal teaches when the person had write access or better when they made it, and gave a reason. A change's author with read access only, for example a contributor from a fork, can still dismiss a suggestion on their own change, as before, but it teaches nothing. A blocking dismissal is left out of a review of a change by the person who made it, so nobody clears their own blocker by rejecting it on another change first. When the change's author is unknown, every blocking dismissal with a known dismisser is left out.
+
+**Limits.**
+
+- The same skill only. A reason given to the security skill never quiets another.
+- The last 90 days, and 20 entries a skill: blocking ones first, then the newest. One entry per finding, wherever it was dismissed.
+- Dismissals from any change of the repository count, open, merged or closed.
+- Editing a skill keeps its dismissals. Renaming it starts fresh.
+- A list too large for the Job is dropped first, before an incremental review is turned into a full one.
+
+**The model decides.** No code removes a finding because of a dismissal: a finding from another change with the same fingerprint is not set aside by pergent.sh. The model is asked to leave out the same mistake, so a repeat can still slip through, and a wrong dismissal keeps misleading reviews until it ages out. A skill that left a finding out says so, and the comment shows a note such as `Left out because of past dismissals: Token compared with == (Token compared with == in api/auth.go)`. A blocker left out this way can give a clean review and an approval, as verification dropping a finding can today; the note shows what happened.
+
+**Turning it off.** The switch is **Learn from dismissals** in a repository's Settings, the default under **Admin → Settings**, or `repositories[].learn_from_dismissals` in the config ([Config reference](#-config-reference)). With it off, reviews are not told anything. Pergent v0.5.2 or later reads the list; an older image in `jobs.image` ignores it.
+
 ## 💬 Commands
 
 A comment on a merge request (or pull request) can ask the review bot to run the review again or to set a finding aside, and the dashboard's review page has the same actions as buttons. That is all they do: no command changes a setting, answers a question or fixes code.
@@ -907,6 +929,8 @@ A comment on a merge request (or pull request) can ask the review bot to run the
 In a finding's own thread the finding is already known, so `@<bot> dismiss <reason>` works as a reply there, with no ID (an ID in front of the reason is allowed). In any other thread it is answered with a pointer to the right command.
 
 `<bot>` is what people type after `@` to address the review bot: its username on GitLab, the review App's slug on GitHub (`@pergent-review review` for an App called that). A comment that doesn't mention it is ignored, so people can write "review" in ordinary conversation. Restoring a dismissed finding has no command: it is a button on the dashboard.
+
+A reason from someone with write access or better also teaches later reviews of the repository what is not a problem. See [Learn from dismissals](#-learn-from-dismissals).
 
 ### Writing a command
 

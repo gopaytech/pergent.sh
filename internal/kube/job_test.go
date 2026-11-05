@@ -411,6 +411,66 @@ func TestCarriedInputs(t *testing.T) {
 	}
 }
 
+// The dismissals go to the Job as an environment variable, not an argument:
+// an older image ignores a variable it doesn't know and exits 2 on a flag.
+func TestBuildJobDismissals(t *testing.T) {
+	p := testParams()
+	p.Inputs.Dismissals = []byte(`{"security":[]}`)
+	main := containerByName(t, BuildJob(p).Spec.Template.Spec.Containers, "pergent")
+	var got string
+	for _, e := range main.Env {
+		if e.Name == "PERGENT_DISMISSALS" {
+			got = e.Value
+		}
+	}
+	if got != "/in/dismissals.json" {
+		t.Errorf("PERGENT_DISMISSALS = %q", got)
+	}
+	for _, a := range main.Args {
+		if strings.HasPrefix(a, "--dismissals") {
+			t.Errorf("unexpected arg %q", a)
+		}
+	}
+	if got := BuildConfigMap(p, nil).Data["dismissals.json"]; got != `{"security":[]}` {
+		t.Errorf("dismissals.json = %q", got)
+	}
+	var found bool
+	for _, v := range BuildJob(p).Spec.Template.Spec.Volumes {
+		if v.ConfigMap == nil {
+			continue
+		}
+		for _, it := range v.ConfigMap.Items {
+			if it.Key == "dismissals.json" && it.Path == "dismissals.json" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no dismissals.json item in the inputs volume")
+	}
+
+	p.Inputs.Dismissals = nil
+	main = containerByName(t, BuildJob(p).Spec.Template.Spec.Containers, "pergent")
+	for _, e := range main.Env {
+		if e.Name == "PERGENT_DISMISSALS" {
+			t.Errorf("PERGENT_DISMISSALS set without dismissals")
+		}
+	}
+	if _, ok := BuildConfigMap(p, nil).Data["dismissals.json"]; ok {
+		t.Errorf("dismissals.json present without dismissals")
+	}
+	for _, v := range BuildJob(p).Spec.Template.Spec.Volumes {
+		if v.ConfigMap == nil {
+			continue
+		}
+		for _, it := range v.ConfigMap.Items {
+			if it.Key == "dismissals.json" {
+				t.Errorf("dismissals.json item without dismissals")
+			}
+		}
+	}
+}
+
 func TestConfigMapItems(t *testing.T) {
 	p := testParams()
 	owner := &batchv1.Job{}
