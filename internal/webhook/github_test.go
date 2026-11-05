@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/instances"
@@ -140,6 +141,45 @@ func TestGitHubClosedSupersedes(t *testing.T) {
 	}
 	if len(r.q.enqueues)+len(r.q.republishes) != 0 || r.wakes != 0 {
 		t.Fatal("closed must only supersede")
+	}
+}
+
+func TestGitHubClosedRecordsFates(t *testing.T) {
+	for fx, merged := range map[string]bool{"github_closed.json": false, "github_merged.json": true} {
+		r := newGitHubRig(t)
+		before := time.Now()
+		wantStatus(t, r.gh(fixture(t, fx)), 200)
+		want := store.MRKey{Instance: "gh", ProjectID: 42, IID: 7}
+		if len(r.q.fates) != 1 {
+			t.Fatalf("%s: fates = %+v, want one call", fx, r.q.fates)
+		}
+		got := r.q.fates[0]
+		if got.mr != want || got.project != "Acme/Widgets" || got.merged != merged {
+			t.Errorf("%s: fates = %+v, want %+v project Acme/Widgets merged=%v", fx, got, want, merged)
+		}
+		if got.at.Before(before) || got.at.After(time.Now()) {
+			t.Errorf("%s: at = %v, want the time the webhook arrived", fx, got.at)
+		}
+	}
+}
+
+func TestGitHubFatesFailureStillAnswers200(t *testing.T) {
+	r := newGitHubRig(t)
+	r.q.fatesErr = errors.New("db down")
+	wantStatus(t, r.gh(fixture(t, "github_merged.json")), 200)
+	if len(r.q.supersedes) != 1 {
+		t.Fatalf("supersedes = %d, want 1", len(r.q.supersedes))
+	}
+	if !strings.Contains(r.logs.String(), "level=WARN") || !strings.Contains(r.logs.String(), "db down") {
+		t.Errorf("log = %q, want a warning with the error", r.logs.String())
+	}
+}
+
+func TestGitHubOpenedRecordsNoFates(t *testing.T) {
+	r := newGitHubRig(t)
+	wantStatus(t, r.gh(fixture(t, "github_opened.json")), 200)
+	if len(r.q.fates) != 0 {
+		t.Errorf("fates = %+v, want none", r.q.fates)
 	}
 }
 

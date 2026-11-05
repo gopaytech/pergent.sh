@@ -5,6 +5,7 @@
   "pull_request": {
     "number": 7,
     "state": "open",
+    "merged": false,
     "head": {"sha": "1111111111111111111111111111111111111111", "ref": "feature"},
     "base": {"ref": "main", "sha": "3333333333333333333333333333333333333333"}
   },

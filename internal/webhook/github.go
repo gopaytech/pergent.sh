@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/instances"
@@ -112,6 +113,7 @@ type pullRequestEvent struct {
 	PullRequest struct {
 		Number int64 `json:"number"`
 		Draft  bool  `json:"draft"`
+		Merged bool  `json:"merged"`
 		Head   struct {
 			SHA string `json:"sha"`
 		} `json:"head"`
@@ -247,6 +249,12 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			log.Error("webhook failed", "outcome", "supersede_error", "err", err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
+		}
+		// Only recorded here; the engine works the fates out later. A failure
+		// must not change the answer, or the platform would resend an event
+		// whose runs are already superseded.
+		if err := h.Queue.RequestFates(r.Context(), mr, project, pr.Merged, time.Now()); err != nil {
+			log.Warn("recording the change's end failed", "err", err)
 		}
 		log.Info("webhook handled", "outcome", "superseded", "runs", n)
 		w.WriteHeader(http.StatusOK)

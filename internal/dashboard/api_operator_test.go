@@ -292,6 +292,9 @@ func (q *hookQueue) EnqueueRun(_ context.Context, mr store.MRKey, _, _, _ string
 	return "run", true, nil
 }
 func (q *hookQueue) SupersedeMR(context.Context, store.MRKey) (int, error) { return 0, nil }
+func (q *hookQueue) RequestFates(context.Context, store.MRKey, string, bool, time.Time) error {
+	return nil
+}
 func (q *hookQueue) SupersedeDraftMR(context.Context, store.MRKey, string, string) (int, error) {
 	return 0, nil
 }

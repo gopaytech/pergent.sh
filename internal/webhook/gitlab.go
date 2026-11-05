@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/instances"
@@ -36,6 +37,7 @@ const (
 type Queue interface {
 	EnqueueRun(ctx context.Context, mr store.MRKey, projectPath, headSHA, targetBranch string) (string, bool, error)
 	SupersedeMR(ctx context.Context, mr store.MRKey) (int, error)
+	RequestFates(ctx context.Context, mr store.MRKey, projectPath string, merged bool, at time.Time) error
 	SupersedeDraftMR(ctx context.Context, mr store.MRKey, headSHA, targetBranch string) (int, error)
 	Republish(ctx context.Context, mr store.MRKey, headSHA, targetBranch string) (bool, error)
 }
@@ -259,6 +261,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			log.Error("webhook failed", "outcome", "supersede_error", "err", err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
+		}
+		// Only recorded here; the engine works the fates out later. A failure
+		// must not change the answer, or the platform would resend an event
+		// whose runs are already superseded.
+		if err := h.Queue.RequestFates(r.Context(), mr, project, attrs.Action == "merge", time.Now()); err != nil {
+			log.Warn("recording the change's end failed", "err", err)
 		}
 		log.Info("webhook handled", "outcome", "superseded", "runs", n)
 		w.WriteHeader(http.StatusOK)

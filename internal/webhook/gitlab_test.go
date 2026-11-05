@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/instances"
@@ -29,6 +30,13 @@ type enqueueCall struct {
 	projectPath, head, branch string
 }
 
+type fatesCall struct {
+	mr      store.MRKey
+	project string
+	merged  bool
+	at      time.Time
+}
+
 type republishCall struct {
 	mr           store.MRKey
 	head, target string
@@ -43,6 +51,9 @@ type fakeQueue struct {
 	created         bool
 	// republished is what Republish answers.
 	republished bool
+	// fates are the RequestFates calls; fatesErr, when set, is what it answers.
+	fates    []fatesCall
+	fatesErr error
 	// publishedTarget, when set, is the target of the head's published
 	// review: Republish answers false for any other target, as the store does.
 	publishedTarget string
@@ -71,6 +82,11 @@ func (q *fakeQueue) SupersedeMR(_ context.Context, mr store.MRKey) (int, error) 
 		return 0, q.err
 	}
 	return 1, nil
+}
+
+func (q *fakeQueue) RequestFates(_ context.Context, mr store.MRKey, projectPath string, merged bool, at time.Time) error {
+	q.fates = append(q.fates, fatesCall{mr, projectPath, merged, at})
+	return q.fatesErr
 }
 
 func (q *fakeQueue) SupersedeDraftMR(_ context.Context, mr store.MRKey, headSHA, targetBranch string) (int, error) {
@@ -228,6 +244,47 @@ func TestMergeSupersedes(t *testing.T) {
 	wantStatus(t, r.hook(fixture(t, "mr_merge.json")), 200)
 	if len(r.q.supersedes) != 1 {
 		t.Fatalf("supersedes = %d, want 1", len(r.q.supersedes))
+	}
+}
+
+func TestEndedChangeRecordsFates(t *testing.T) {
+	for fx, merged := range map[string]bool{"mr_close.json": false, "mr_merge.json": true} {
+		r := newRig(t)
+		before := time.Now()
+		wantStatus(t, r.hook(fixture(t, fx)), 200)
+		want := store.MRKey{Instance: "main", ProjectID: 42, IID: 7}
+		if len(r.q.fates) != 1 {
+			t.Fatalf("%s: fates = %+v, want one call", fx, r.q.fates)
+		}
+		got := r.q.fates[0]
+		if got.mr != want || got.project != "Acme/Widgets" || got.merged != merged {
+			t.Errorf("%s: fates = %+v, want %+v project Acme/Widgets merged=%v", fx, got, want, merged)
+		}
+		if got.at.Before(before) || got.at.After(time.Now()) {
+			t.Errorf("%s: at = %v, want the time the webhook arrived", fx, got.at)
+		}
+	}
+}
+
+func TestFatesFailureStillAnswers200(t *testing.T) {
+	r := newRig(t)
+	r.q.fatesErr = errors.New("db down")
+	wantStatus(t, r.hook(fixture(t, "mr_merge.json")), 200)
+	if len(r.q.supersedes) != 1 {
+		t.Fatalf("supersedes = %d, want 1", len(r.q.supersedes))
+	}
+	if !strings.Contains(r.logs.String(), "level=WARN") || !strings.Contains(r.logs.String(), "db down") {
+		t.Errorf("log = %q, want a warning with the error", r.logs.String())
+	}
+}
+
+func TestOpenAndPushRecordNoFates(t *testing.T) {
+	for _, fx := range []string{"mr_open.json", "mr_push.json"} {
+		r := newRig(t)
+		wantStatus(t, r.hook(fixture(t, fx)), 200)
+		if len(r.q.fates) != 0 {
+			t.Errorf("%s: fates = %+v, want none", fx, r.q.fates)
+		}
 	}
 }
 
