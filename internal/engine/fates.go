@@ -26,8 +26,12 @@ const (
 	// store's own limit; it stops offering the job then).
 	fateMaxAttempts = 5
 	// fateBackoff is the wait after a job's first failure; each further
-	// failure doubles it.
-	fateBackoff = time.Minute
+	// failure doubles it. Five attempts span 75 minutes, which outlasts a
+	// platform's hourly rate limit window.
+	fateBackoff = 5 * time.Minute
+	// fateNoPlatformWait is how long a job waits for an instance that has no
+	// platform right now.
+	fateNoPlatformWait = time.Minute
 	// fateSweepWindow is how far back the hourly sweep looks for a decided
 	// review, and fateSweepLimit how many changes it looks at (the store
 	// returns one per repository).
@@ -121,7 +125,7 @@ func (e *Engine) workFate(ctx, bctx context.Context, job store.FateJob) {
 	case errors.Is(err, errNoPlatform):
 		// Waits a minute, like a command of an instance not connected, and
 		// keeps its attempts.
-		if err := e.Store.FateJobFailed(ctx, job.MR, job.RequestedAt, e.now().Add(fateBackoff), job.Attempts); err != nil {
+		if err := e.Store.FateJobFailed(ctx, job.MR, job.RequestedAt, e.now().Add(fateNoPlatformWait), job.Attempts); err != nil {
 			e.log().Error("couldn't hold back a fate job", "error", e.redact(err.Error()))
 			return
 		}
@@ -253,7 +257,7 @@ func fateEnd(job store.FateJob, change forge.Change, err error) (merged bool, _ 
 	return merged, nil
 }
 
-// fateRetryDelay is the wait after a job has failed failed times: a minute
+// fateRetryDelay is the wait after a job has failed failed times: fateBackoff
 // after the first, doubling.
 func fateRetryDelay(failed int) time.Duration {
 	return fateBackoff << max(failed-1, 0)

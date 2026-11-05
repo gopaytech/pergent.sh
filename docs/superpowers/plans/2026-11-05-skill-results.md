@@ -218,7 +218,7 @@ Rules:
 2. `GetChange`: open means `DropFateJob`; `ErrNotFound` means a merge is taken from the job.
 3. `DecidedRuns`, `Dismissals`, `fatesInput`, `Decide`, with `Compare` wrapping `CompareDiff`, parsing each file with `diffmap.Parse`, and mapping `forge.ErrNotFound`, `ErrNotAncestor` and `ErrPartialDiff` to `fates.ErrGone`.
 4. `IsBot(change.AuthorID)`; an error means false.
-5. `ReplaceFates`. Any other error: `FateJobFailed` with a backoff of a minute, doubling; at 5 it logs a warning and stops, with no fates.
+5. `ReplaceFates`. Any other error: `FateJobFailed` with a backoff of five minutes, doubling; at 5 it logs a warning and stops, with no fates.
 
 On the hourly reconcile tick, `ChangesWithoutFates` for changes with a decided run in the last 7 days and no job: `GetChange` for at most one per repository a sweep; if it merged or closed, `RequestFates`. Also on that tick, `PruneFates` for rows older than a year.
 

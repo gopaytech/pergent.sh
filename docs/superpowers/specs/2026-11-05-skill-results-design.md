@@ -81,7 +81,7 @@ The engine's loop picks the work up, first confirming the change's state with `G
 - Still open, because it was reopened: drop the work. A later close or merge records it again.
 - Already worked out as merged: leave it. A redelivered webhook must not recompute a merged change, as a compare could fail now.
 
-A temporary failure retries with backoff. After 5 attempts it stops with a warning and that change has no fates: no guessing. *(my call)* It runs with a time budget per pass, because engine loops share one goroutine and platform rate limits. *(my call)*
+A temporary failure retries with backoff: 5 minutes after the first failure, doubling, so the 5 attempts span 75 minutes and outlast a GitHub rate limit. After 5 attempts it stops with a warning and that change has no fates: no guessing. *(my call)* It runs with a time budget per pass, because engine loops share one goroutine and platform rate limits. *(my call)*
 
 A missed webhook means a change gets no fates. The existing hourly sweep can catch those; how is left to the builder, within: no more than one platform call per repository per sweep in the normal case. *(my call)*
 

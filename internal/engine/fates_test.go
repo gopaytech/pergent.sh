@@ -204,7 +204,7 @@ func TestFatesInputCarriedFilesAreReviewed(t *testing.T) {
 
 func TestFateRetryDelay(t *testing.T) {
 	for failed, want := range map[int]time.Duration{
-		0: time.Minute, 1: time.Minute, 2: 2 * time.Minute, 3: 4 * time.Minute, 4: 8 * time.Minute, 5: 16 * time.Minute,
+		0: 5 * time.Minute, 1: 5 * time.Minute, 2: 10 * time.Minute, 3: 20 * time.Minute, 4: 40 * time.Minute, 5: 80 * time.Minute,
 	} {
 		if got := fateRetryDelay(failed); got != want {
 			t.Errorf("fateRetryDelay(%d) = %s; want %s", failed, got, want)
@@ -677,14 +677,14 @@ func TestWorkFatesTransientErrorRetriesAndStoresNothing(t *testing.T) {
 	workFates(t, env)
 
 	j := fateJobOf(t, env, 1)
-	if !j.Found || j.Finished || j.Attempts != 1 || j.NotBefore == nil || !j.NotBefore.Equal(start.Add(time.Minute)) {
-		t.Errorf("job = %+v; want unfinished, 1 attempt, held until %s", j, start.Add(time.Minute))
+	if !j.Found || j.Finished || j.Attempts != 1 || j.NotBefore == nil || !j.NotBefore.Equal(start.Add(5*time.Minute)) {
+		t.Errorf("job = %+v; want unfinished, 1 attempt, held until %s", j, start.Add(5*time.Minute))
 	}
 	if got := storedFates(t, env, 1); len(got) != 0 {
 		t.Errorf("fates = %+v; want none", got)
 	}
 
-	// Held back for a minute.
+	// Held back for five minutes.
 	env.GitLab.Reset()
 	workFates(t, env)
 	if reqs := env.GitLab.Requests("", ""); len(reqs) != 0 {
@@ -692,7 +692,7 @@ func TestWorkFatesTransientErrorRetriesAndStoresNothing(t *testing.T) {
 	}
 
 	// Then it works, and the platform recovers.
-	env.SetNow(start.Add(time.Minute))
+	env.SetNow(start.Add(5 * time.Minute))
 	env.GitLab.ServeCompare(removesLine12)
 	env.GitLab.Reply(http.MethodGet, userPath(55), http.StatusOK, map[string]any{"bot": false})
 	workFates(t, env)
@@ -710,7 +710,7 @@ func TestWorkFatesStopsAfterFiveAttempts(t *testing.T) {
 	env.GitLab.Reply(http.MethodGet, comparePath(), http.StatusForbidden, `{"message":"403 Forbidden"}`)
 	requestFates(t, env, 1, true)
 
-	wantWait := []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute}
+	wantWait := []time.Duration{5 * time.Minute, 10 * time.Minute, 20 * time.Minute, 40 * time.Minute}
 	for attempt := 1; attempt <= 5; attempt++ {
 		workFates(t, env)
 		j := fateJobOf(t, env, 1)
