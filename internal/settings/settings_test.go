@@ -116,7 +116,7 @@ func wantDefaults(t *testing.T, eff Effective, except ...string) {
 	if !skip(KeyCommandsAuthorAndMaintainersOnly) && !eff.CommandsAuthorAndMaintainersOnly {
 		t.Errorf("CommandsAuthorAndMaintainersOnly = false, want the default true")
 	}
-	if !skip(KeyIncrementalReviews) && !eff.IncrementalReviews || !eff.LearnFromDismissals {
+	if !skip(KeyIncrementalReviews) && !eff.IncrementalReviews {
 		t.Errorf("IncrementalReviews = false, want the default true")
 	}
 	if !skip(KeyLearnFromDismissals) && !eff.LearnFromDismissals {
