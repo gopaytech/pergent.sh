@@ -136,9 +136,9 @@ Old rows get `skill`, `file` and `title` by looking the fingerprint up in the st
 | JSON | `learnFromDismissals` |
 | Label | **Learn from dismissals** |
 
-**Past dismissals list.** A plain list on the repository's dashboard page, for its maintainers and admins *(chosen)*. It shows what teaches right now, by the rules above except the 20 limit and the own-change rule: skill, severity, file, title, reason, who, when, and a link to the change.
+**Past dismissals list.** A plain list on the repository's dashboard page, for its maintainers and admins *(chosen)*. It shows what teaches right now, by the rules above except the 20 limit and the own-change rule, one row per fingerprint: skill, severity, file, title, reason, who, when, and a link to the change.
 
-Each row has **Stop using**, which sets `teaches` to false and leaves everything else alone. *(chosen)* The dismissal stays on its change, no review is decided again, and nothing happens on the platform, whatever state the change is in. It writes a `dismissal_stopped` audit entry with the merge request and fingerprint. Restore can't do this job: it lives on a finding in the latest review, which goes away once the model stops raising it, and on an open change it brings the finding back and can withdraw an approval. Restore stays on the review page as it is.
+Each row has **Stop using**, which sets `teaches` to false on every dismissal of that finding in the repository, so the next one with the same fingerprint doesn't take its place, and leaves everything else alone. *(chosen)* The dismissal stays on its change, no review is decided again, and nothing happens on the platform, whatever state the change is in. It writes a `dismissal_stopped` audit entry with the merge request and fingerprint. Restore can't do this job: it lives on a finding in the latest review, which goes away once the model stops raising it, and on an open change it brings the finding back and can withdraw an approval. Restore stays on the review page as it is.
 
 **With incremental reviews.** A new dismissal doesn't make a carried file reviewable again and doesn't count as a changed input. Skill hashes don't include dismissals.
 
