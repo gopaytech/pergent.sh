@@ -782,6 +782,44 @@ func TestAVanishedFindingReportedReworded(t *testing.T) {
 	})
 }
 
+func TestAVanishedFindingReportedRewordedOnALaterHead(t *testing.T) {
+	// The main route: the finding vanished on one head, and comes back
+	// reworded in its own file on a third, which needs a comparison of its own.
+	f := newFake()
+	f.files[[2]string{"h1", "h2"}] = []diffmap.File{edit("a.go", 12)}
+	f.files[[2]string{"h1", "h3"}] = []diffmap.File{edit("a.go", 30)}
+	got := decide(t, f, nil,
+		review("h1", sk(a, fnd("f1", "a.go", 10))),
+		review("h2", sk(a)),
+		review("h3", sk(a, fnd("f2", "a.go", 10))),
+	)
+	if fate := one(t, got); fate.Fingerprint != "f2" || fate.Fate != Open {
+		t.Errorf("got %+v, want f2/open", fate)
+	}
+}
+
+func TestAVanishedFindingFollowsARenameInAComparisonAlreadyMade(t *testing.T) {
+	// A comparison made for a live finding is free for a vanished one: here it
+	// shows a.go renamed to b.go, where the vanished finding comes back.
+	// c.go is not reviewed by h2, so its finding is skipped, not gone, and
+	// still looks at h1 when h3 reports it reworded.
+	f := newFake()
+	f.files[[2]string{"h1", "h2"}] = []diffmap.File{edit("a.go", 12)}
+	f.files[[2]string{"h1", "h3"}] = []diffmap.File{{Path: "b.go", OldPath: "a.go"}}
+	got := decide(t, f, nil,
+		review("h1", sk([]string{"a.go", "c.go"}, fnd("g", "a.go", 10), fnd("l", "c.go", 5))),
+		review("h2", sk(a)),
+		review("h3", sk([]string{"b.go", "c.go"}, fnd("n1", "c.go", 5), fnd("n2", "b.go", 10))),
+	)
+	want := []Fate{
+		{Fingerprint: "n1", Skill: "s", SkillHash: "h", Severity: "blocking", Fate: Open},
+		{Fingerprint: "n2", Skill: "s", SkillHash: "h", Severity: "blocking", Fate: Open},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
 func TestALiveTrackBeatsAVanishedOneForACandidate(t *testing.T) {
 	// x and w are reported; w alone stays reported, then neither is, and c sits
 	// on the lines of both. x came first, but w is live: w is c's.
