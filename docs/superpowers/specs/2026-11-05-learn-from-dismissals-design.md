@@ -169,6 +169,7 @@ The README gets the setting, the Past dismissals list, a line in the Commands se
 - Learning starts thin: old suggestion dismissals don't count, so most repositories start with their blocking dismissals only.
 - In the batch run, "a suggestion never excuses a blocker" rests on the prompt alone. Verification can't restore a finding the batch run left out.
 - Reasons reach the LLM provider, as the code under review does.
+- An incremental review keeps the earlier `Left out because of past dismissals:` notes of a skill that carries files, so a left-out blocker on a carried file keeps its trace. A note can outlive its file being re-reviewed: it stays until a review runs the skill on all its files.
 
 ## Left to the builder
 

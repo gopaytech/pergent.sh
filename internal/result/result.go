@@ -699,6 +699,15 @@ func mergeIncrementalSkill(raw json.RawMessage, fresh Skill, rawEarlier json.Raw
 			base = nil
 		}
 		checks := mergeChecks(base, fresh.Checks)
+		if len(carried) > 0 {
+			// A blocker left out of a carried file is not reported again, so
+			// the earlier note is the only trace of it.
+			if notes, kept := keepLeftOutNotes(fresh.Notes, earlier.Notes); kept {
+				if m["notes"], err = json.Marshal(notes); err != nil {
+					return nil, err
+				}
+			}
+		}
 		delete(m, "checks")
 		if len(checks) > 0 {
 			if m["checks"], err = json.Marshal(checks); err != nil {
@@ -716,6 +725,20 @@ func mergeIncrementalSkill(raw json.RawMessage, fresh Skill, rawEarlier json.Raw
 		}
 	}
 	return json.Marshal(m)
+}
+
+// keepLeftOutNotes is the new run's notes followed by the left-out notes of
+// the last review that they lack, and whether there was any to add.
+func keepLeftOutNotes(fresh, earlier []string) ([]string, bool) {
+	out := slices.Clone(fresh)
+	kept := false
+	for _, n := range earlier {
+		if strings.HasPrefix(n, LeftOutNotePrefix) && !slices.Contains(out, n) {
+			out = append(out, n)
+			kept = true
+		}
+	}
+	return out, kept
 }
 
 // hasBlocking reports whether any of the raw findings is blocking.
