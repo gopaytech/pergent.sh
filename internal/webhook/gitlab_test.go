@@ -58,6 +58,10 @@ type fakeQueue struct {
 	// fatesLeft is the time the last RequestFates context had left, 0 if it
 	// had no deadline.
 	fatesLeft time.Duration
+	// fatesCtxErr is the error of the last RequestFates context at the call.
+	fatesCtxErr error
+	// onSupersede, when set, runs inside SupersedeMR: a platform hanging up.
+	onSupersede func()
 	// calls lists SupersedeMR and RequestFates in the order they were made.
 	calls []string
 	// publishedTarget, when set, is the target of the head's published
@@ -85,6 +89,9 @@ func (q *fakeQueue) EnqueueRun(_ context.Context, mr store.MRKey, projectPath, h
 func (q *fakeQueue) SupersedeMR(_ context.Context, mr store.MRKey) (int, error) {
 	q.supersedes = append(q.supersedes, mr)
 	q.calls = append(q.calls, "SupersedeMR")
+	if q.onSupersede != nil {
+		q.onSupersede()
+	}
 	if q.err != nil {
 		return 0, q.err
 	}
@@ -92,6 +99,7 @@ func (q *fakeQueue) SupersedeMR(_ context.Context, mr store.MRKey) (int, error) 
 }
 
 func (q *fakeQueue) RequestFates(ctx context.Context, mr store.MRKey, projectPath string, merged bool, at time.Time) error {
+	q.fatesCtxErr = ctx.Err()
 	if d, ok := ctx.Deadline(); ok {
 		q.fatesLeft = time.Until(d)
 	}
@@ -149,6 +157,12 @@ type opt func(*http.Request)
 func withToken(v string) opt { return func(r *http.Request) { r.Header.Set("X-Gitlab-Token", v) } }
 func withEvent(v string) opt { return func(r *http.Request) { r.Header.Set("X-Gitlab-Event", v) } }
 func noHeader(k string) opt  { return func(r *http.Request) { r.Header.Del(k) } }
+
+// withContext gives the request ctx, as the server gives it one that the
+// platform hanging up cancels.
+func withContext(ctx context.Context) opt {
+	return func(r *http.Request) { *r = *r.WithContext(ctx) }
+}
 
 func (r *rig) post(path string, body []byte, opts ...opt) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
@@ -277,6 +291,19 @@ func TestEndedChangeRecordsFates(t *testing.T) {
 		if got.at.Before(before) || got.at.After(time.Now()) {
 			t.Errorf("%s: at = %v, want the time the webhook arrived", fx, got.at)
 		}
+	}
+}
+
+// The platform hanging up cancels the request's context; the record of the
+// change's end is made all the same.
+func TestFatesRequestSurvivesTheRequestBeingCancelled(t *testing.T) {
+	r := newRig(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.q.onSupersede = cancel
+	wantStatus(t, r.hook(fixture(t, "mr_merge.json"), withContext(ctx)), 200)
+	if len(r.q.fates) != 1 || r.q.fatesCtxErr != nil {
+		t.Errorf("fates = %+v, context error %v; want one call with a live context", r.q.fates, r.q.fatesCtxErr)
 	}
 }
 

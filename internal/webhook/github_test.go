@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -164,6 +165,17 @@ func TestGitHubClosedRecordsFates(t *testing.T) {
 		if got.at.Before(before) || got.at.After(time.Now()) {
 			t.Errorf("%s: at = %v, want the time the webhook arrived", fx, got.at)
 		}
+	}
+}
+
+func TestGitHubFatesRequestSurvivesTheRequestBeingCancelled(t *testing.T) {
+	r := newGitHubRig(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.q.onSupersede = cancel
+	wantStatus(t, r.gh(fixture(t, "github_merged.json"), withContext(ctx)), 200)
+	if len(r.q.fates) != 1 || r.q.fatesCtxErr != nil {
+		t.Errorf("fates = %+v, context error %v; want one call with a live context", r.q.fates, r.q.fatesCtxErr)
 	}
 }
 
