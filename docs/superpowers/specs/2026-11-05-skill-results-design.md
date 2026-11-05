@@ -41,7 +41,7 @@ Each finding raised on a change ends in exactly one of these, in this order of p
 | **Fixed** | It stopped being reported, and code at or next to its lines changed. *(chosen)* |
 | **Went away** | It stopped being reported, and either nothing near its lines changed or there's no telling. This catches left-out findings and a model changing its mind. *(chosen)* |
 
-"Covers" is the rule the comment already uses (`render.ApplyDismissals`): a suggestion dismissal doesn't cover a finding that came back as blocking, judged by the severity of the last review that reported it; the row shows the highest it ever had. *(my call)*
+"Covers" is the rule the comment already uses (`render.ApplyDismissals`): a suggestion dismissal doesn't cover a finding that came back as blocking, judged by the highest severity in the last review that reported it, an older wording of it reported beside the newest included, as the comment shows each of them; the row shows the highest it ever had. *(my call)*
 
 A finding counts once on a change, at its highest severity, even if it was reported on two lines. *(my call)* A dismissal whose finding is in no review the walk reads gets no row. *(my call)*
 

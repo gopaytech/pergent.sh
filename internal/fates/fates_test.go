@@ -1035,6 +1035,38 @@ func TestAnOldWordingBesideTheNewKeepsItsSeverity(t *testing.T) {
 	}
 }
 
+func TestDismissalCoversByTheSeveritiesOfTheLastReport(t *testing.T) {
+	// The comment judges what the last review that reported the finding shows:
+	// a wording of it reported beside the newest one is a finding there too,
+	// and a suggestion dismissal doesn't cover a blocker.
+	y := fnd("y", "a.go", 10)
+	y.Severity = "suggestion"
+	old := fnd("x", "a.go", 10) // blocking
+	dismissal := []Dismissal{{Fingerprint: "y", Severity: "suggestion"}}
+
+	t.Run("an old wording beside the new one", func(t *testing.T) {
+		got := decide(t, newFake(), dismissal,
+			review("h1", sk(a, old)),
+			review("h2", sk(a, y)),
+			review("h3", sk(a, y, old)),
+		)
+		if fate := one(t, got); fate.Fate != Open || fate.Severity != "blocking" {
+			t.Errorf("got %+v, want open/blocking", fate)
+		}
+	})
+	t.Run("the old wording no longer reported", func(t *testing.T) {
+		got := decide(t, newFake(), dismissal,
+			review("h1", sk(a, old)),
+			review("h2", sk(a, y)),
+			review("h3", sk(a, y, old)),
+			review("h4", sk(a, y)),
+		)
+		if fate := one(t, got); fate.Fate != Dismissed || fate.Severity != "blocking" {
+			t.Errorf("got %+v, want dismissed/blocking", fate)
+		}
+	})
+}
+
 func TestSkillHashIsFromTheLastReport(t *testing.T) {
 	with := func(hash string, fs ...Finding) Skill {
 		s := sk(a, fs...)

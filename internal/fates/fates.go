@@ -88,7 +88,7 @@ type track struct {
 	head              string // head of the last review that reported it
 	moved             string // where its file was as of the review that left it out
 	severity          string // the highest it had
-	last              string // as the last review that reported it had it
+	last              string // the highest in the last review that reported it, old wordings beside the newest included
 	live              bool   // reported as of the last review that says anything
 	fate              string // when not live: Fixed or WentAway
 }
@@ -134,7 +134,8 @@ func Decide(in Input) ([]Fate, error) {
 
 // covered reports whether a dismissal covers the finding: the same
 // fingerprint, and a blocking dismissal or a finding that is a suggestion as of
-// the last review that reported it, as the comment judges it. Any fingerprint
+// the last review that reported it, wordings beside the newest included, as the
+// comment judges it. Any fingerprint
 // the finding had counts, so rewording it does not lose a dismissal.
 func covered(t *track, dismissed map[string][]string) bool {
 	for fp := range t.fps {
@@ -294,10 +295,16 @@ func (w *walk) update(t *track, r *reported) {
 	w.owner[r.fp] = t
 }
 
-// raise makes the track's severity at least sev.
+// raise makes the track's severity, and its severity in the last review that
+// reported it, at least sev. It is called for the finding of that review and
+// for each older wording reported beside it, which the comment shows as
+// findings of their own.
 func (t *track) raise(sev string) {
 	if t.severity != "blocking" {
 		t.severity = sev
+	}
+	if t.last != "blocking" {
+		t.last = sev
 	}
 }
 
