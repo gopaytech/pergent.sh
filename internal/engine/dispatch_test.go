@@ -996,6 +996,9 @@ func TestPushDispatch(t *testing.T) {
 			env.GitLab.Reply(http.MethodGet, mergeBaseRoute(), http.StatusBadRequest, `{"message":"bad"}`)
 		}},
 		{name: "older pergent", reason: "older pergent", version: "0.4.0"},
+		{name: "jobs image pinned to an older pergent", reason: "older pergent", change: func(env *testEnv) {
+			env.Engine.Config.Jobs.Image = "ghcr.io/gopaytech/pergent:v0.4.0"
+		}},
 		{name: "partial last review", reason: "the last review is partial", edit: func(res map[string]any) {
 			res["merge_note"] = "the earlier results could not be kept"
 		}},

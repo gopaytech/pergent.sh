@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/gopaytech/pergent/render"
 
@@ -47,6 +48,8 @@ func (d *dispatcher) planCarried(ctx context.Context, plat Platform, repo settin
 		return nil, fullTarget, nil
 	case last.HeadSHA == run.HeadSHA:
 		return nil, fullSameHead, nil
+	case imagePinnedBeforeCarried(d.e.Config.Jobs.Image):
+		return nil, fullOlderPergent, nil
 	}
 	inline, ok := plat.Forge.(forge.Inline)
 	if !ok {
@@ -76,6 +79,29 @@ func (d *dispatcher) planCarried(ctx context.Context, plat Platform, repo settin
 		return nil, fullNothing, nil
 	}
 	return carried, "", nil
+}
+
+// imagePinnedBeforeCarried reports whether the Jobs image is tagged with a
+// pergent version that doesn't take --carried, which it would stop at. An
+// operator can pin the image back after running a newer one, and the last
+// result alone then says nothing about the pergent that runs next. An image
+// with no tag (a digest) or a tag that is not a version is not known to be
+// older.
+func imagePinnedBeforeCarried(image string) bool {
+	supports, known := result.CarriedSupport(imageTag(image))
+	return known && !supports
+}
+
+// imageTag is the tag of an image reference, or "" when it has none. A digest
+// after the tag is ignored; a colon before the last slash is a registry port,
+// not a tag.
+func imageTag(image string) string {
+	image, _, _ = strings.Cut(image, "@")
+	i := strings.LastIndex(image, ":")
+	if i < 0 || strings.Contains(image[i:], "/") {
+		return ""
+	}
+	return image[i+1:]
 }
 
 // setIncremental records, once the inputs are fitted, whether the run reviews

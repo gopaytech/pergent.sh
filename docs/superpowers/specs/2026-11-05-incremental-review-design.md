@@ -42,7 +42,7 @@ A run is incremental only when all of these hold. Otherwise it is a full review,
 - Its head differs from the new head.
 - Its head is an ancestor of the new head. After a rebase or force-push it is not, so the review is full.
 - The platform can list the files changed between the two heads. An error or a truncated list means a full review.
-- The last review's `pergent_version` is v0.5.0 or later, or an unparsable version means a full review. So a Jobs image pinned to an older pergent, which would refuse `--carried`, keeps doing full reviews instead of failing. *(your call)*
+- The last review's `pergent_version` is v0.5.0 or later, or an unparsable version means a full review. The Jobs image's tag is read too: a tag that is a version below 0.5.0 means a full review, whatever the last result says. A digest with no tag, or any other tag, leaves the gate to the last result. So a Jobs image pinned to an older pergent, which would refuse `--carried`, keeps doing full reviews instead of failing. *(your call)*
 
 Only rebase, force-push and `@bot review` start a full review on purpose. Changed instructions or a changed model don't. *(chosen)* The other conditions are fallbacks. *(your call)*
 
@@ -128,7 +128,7 @@ Names follow that setting: config `repositories[].incremental_reviews`, settings
 
 - pergent.sh 0.7.0 makes pergent v0.5.0 the default Jobs image. The Upgrading section lists the points below.
 - The first push after the upgrade is a full review, because the last result is from an older pergent and has no skill hashes. Incremental reviews start from the next push.
-- An operator who pins the Jobs image to an older pergent keeps full reviews.
+- An operator who pins the Jobs image to an older pergent by tag keeps full reviews, even after running 0.5.x. An image pinned by digest alone needs the setting turned off first.
 - The migration adds nullable columns and one `runs` column that is `NOT NULL DEFAULT false`, so 0.6.2 keeps working on a migrated database.
 - To roll back, first remove `incremental_reviews` from the config, because 0.6.2 refuses unknown keys. Results stored by 0.7.0 are complete, merged results.
 

@@ -784,19 +784,28 @@ func IncrementalNote(i *Incremental) string {
 // a leading "v". A version that is not exactly three numbers, major.minor.patch
 // (a pre-release such as 0.5.0-rc1 included), is false.
 func (r *Result) SupportsCarried() bool {
-	parts := strings.Split(strings.TrimPrefix(r.PergentVersion, "v"), ".")
+	supports, _ := CarriedSupport(r.PergentVersion)
+	return supports
+}
+
+// CarriedSupport says whether pergent version takes --carried (0.5.0 or
+// later, with or without a leading "v"), and whether the version is one it
+// can tell: known is false unless it is exactly three numbers, major.minor.patch
+// (a pre-release such as 0.5.0-rc1 is not).
+func CarriedSupport(version string) (supports, known bool) {
+	parts := strings.Split(strings.TrimPrefix(version, "v"), ".")
 	if len(parts) != 3 {
-		return false
+		return false, false
 	}
 	var n [3]int
 	for i, p := range parts {
 		if p == "" || strings.Trim(p, "0123456789") != "" {
-			return false
+			return false, false
 		}
 		var err error
 		if n[i], err = strconv.Atoi(p); err != nil {
-			return false
+			return false, false
 		}
 	}
-	return n[0] > 0 || n[1] >= 5
+	return n[0] > 0 || n[1] >= 5, true
 }

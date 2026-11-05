@@ -13,6 +13,7 @@ import (
 
 	"github.com/gopaytech/pergent/render"
 
+	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/result"
@@ -260,7 +261,7 @@ func newPlanFixture(t *testing.T) *planFixture {
 		t.Fatal(err)
 	}
 	return &planFixture{
-		d:        &dispatcher{run: store.Run{HeadSHA: sha('2'), TargetBranch: "main"}},
+		d:        &dispatcher{e: &Engine{Config: &config.Config{}}, run: store.Run{HeadSHA: sha('2'), TargetBranch: "main"}},
 		plat:     Platform{Forge: forgeWithInline{Inline: &fakeInline{changed: []string{"a.go"}}}},
 		repo:     settings.Effective{IncrementalReviews: true},
 		last:     store.Run{HeadSHA: sha('1'), TargetBranch: "main", Result: body},
@@ -300,6 +301,9 @@ func TestPlanCarriedFullReviews(t *testing.T) {
 		{"no version", func(t *testing.T, f *planFixture) {
 			f.last.Result = bytes.Replace(f.last.Result, []byte(`"pergent_version":"0.5.0"`), []byte(`"pergent_version":""`), 1)
 		}, "older pergent"},
+		{"the Jobs image is pinned to an older pergent", func(t *testing.T, f *planFixture) {
+			f.d.e.Config.Jobs.Image = "ghcr.io/gopaytech/pergent:v0.4.0"
+		}, "older pergent"},
 		{"the last review is partial", func(t *testing.T, f *planFixture) {
 			f.last.Result = bytes.Replace(f.last.Result, []byte(`"head"`), []byte(`"merge_note":"x","head"`), 1)
 		}, "the last review is partial"},
@@ -312,6 +316,48 @@ func TestPlanCarriedFullReviews(t *testing.T) {
 				t.Errorf("planCarried = %v, %q; want a full review: %q", carried, reason, tc.reason)
 			}
 		})
+	}
+}
+
+// The tag of the Jobs image, when it names a pergent version.
+func TestImageTag(t *testing.T) {
+	for image, want := range map[string]string{
+		"ghcr.io/gopaytech/pergent:v0.5.0":               "v0.5.0",
+		"ghcr.io/gopaytech/pergent:0.4.0":                "0.4.0",
+		"ghcr.io/gopaytech/pergent:v0.4.0@sha256:abc123": "v0.4.0",
+		"host:5000/pergent:v0.4.0":                       "v0.4.0",
+		"ghcr.io/gopaytech/pergent@sha256:abc123":        "",
+		"host:5000/pergent":                              "",
+		"host:5000/pergent@sha256:abc123":                "",
+		"pergent":                                        "",
+		"ghcr.io/gopaytech/pergent:latest":               "latest",
+		"ghcr.io/gopaytech/pergent:main-4f2a":            "main-4f2a",
+		"":                                               "",
+	} {
+		if got := imageTag(image); got != want {
+			t.Errorf("imageTag(%q) = %q, want %q", image, got, want)
+		}
+	}
+}
+
+// Only a tag that is exactly a version below 0.5.0 gives a full review; a
+// digest, another tag or a newer version leaves the gate to the last result.
+func TestImagePinnedBeforeCarried(t *testing.T) {
+	for image, want := range map[string]bool{
+		"ghcr.io/gopaytech/pergent:v0.4.0":               true,
+		"ghcr.io/gopaytech/pergent:0.4.9":                true,
+		"ghcr.io/gopaytech/pergent:v0.4.0@sha256:abc123": true,
+		"ghcr.io/gopaytech/pergent:v0.5.0":               false,
+		"ghcr.io/gopaytech/pergent:v1.0.0":               false,
+		"ghcr.io/gopaytech/pergent:v0.5.0-rc1":           false,
+		"ghcr.io/gopaytech/pergent:latest":               false,
+		"ghcr.io/gopaytech/pergent@sha256:abc123":        false,
+		"host:5000/pergent":                              false,
+		"host:5000/pergent:v0.4.0":                       true,
+	} {
+		if got := imagePinnedBeforeCarried(image); got != want {
+			t.Errorf("imagePinnedBeforeCarried(%q) = %v, want %v", image, got, want)
+		}
 	}
 }
 

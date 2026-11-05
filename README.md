@@ -225,7 +225,7 @@ pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is hand
 0.7.0 reviews only what a push changed. See [Incremental reviews](#-incremental-reviews).
 
 1. **Pushes are incremental by default**, also on repositories already running. Turn it off per repository with **Incremental reviews** in its Settings, or with `incremental_reviews: false` in the config, or change the default under **Admin → Settings**. The accepted cost: an edit that breaks an untouched file can go unnoticed until a full review (`@<bot> review`), and a team that rebases or amends gets no speed-up yet.
-2. **The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.5.0`.** A config that pins an older pergent keeps full reviews, because only pergent v0.5.0 and later take the files to carry over.
+2. **The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.5.0`.** A config that pins an older pergent keeps full reviews, because only pergent v0.5.0 and later take the files to carry over. This is read from the image's tag (`v0.4.0`, also in front of a digest), so it holds even after running v0.5.0. An image pinned by digest alone to an older pergent can't be told apart: turn **Incremental reviews** off first.
 3. **The first push after the upgrade is a full review**, because the last result comes from an older pergent and has no skill hashes. Incremental reviews start with the next push.
 4. **Migration `0020` runs at startup.** It adds nullable columns and one `runs` column that is `NOT NULL DEFAULT false`, so 0.6.2 keeps working on a migrated database.
 5. **To roll back to 0.6.2, first remove `incremental_reviews` from the config**, because 0.6.2 refuses unknown config keys. Results stored by 0.7.0 are complete, merged results.
