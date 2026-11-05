@@ -23,8 +23,8 @@ func (d *Dashboard) repositoryPastDismissals(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	ctx := r.Context()
-	// A repository with no run has no dismissal.
-	id, found, err := d.Store.ProjectIDOfPath(ctx, repo.Instance, repo.Project)
+	// A repository the platform hasn't told us the ID of has no dismissal.
+	id, found, err := d.projectID(ctx, se, repo.Instance, repo.Project)
 	if err != nil {
 		d.failed(w, r, "reading past dismissals", err)
 		return
@@ -73,7 +73,7 @@ func (d *Dashboard) stopUsing(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, se := context.WithoutCancel(r.Context()), session(r)
 	status := "not teaching"
-	id, found, err := d.Store.ProjectIDOfPath(ctx, repo.Instance, repo.Project)
+	id, found, err := d.projectID(ctx, se, repo.Instance, repo.Project)
 	if err != nil {
 		d.failed(w, r, "stopping a past dismissal", err)
 		return

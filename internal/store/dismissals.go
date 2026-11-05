@@ -2,10 +2,7 @@ package store
 
 import (
 	"context"
-	"errors"
 	"time"
-
-	"github.com/jackc/pgx/v5"
 )
 
 // Dismissal is a finding of a merge request dismissed by a person, by
@@ -130,21 +127,6 @@ func (s *Store) StopTeaching(ctx context.Context, instance string, projectID int
 		return false, err
 	}
 	return tag.RowsAffected() > 0, nil
-}
-
-// ProjectIDOfPath returns the platform ID of the repository with path (in any
-// case) on instance, as its newest run has it.
-func (s *Store) ProjectIDOfPath(ctx context.Context, instance, path string) (id int64, found bool, err error) {
-	err = s.pool.QueryRow(ctx, `SELECT project_id FROM runs
-		WHERE instance = $1 AND lower(project_path) = lower($2)
-		ORDER BY created_at DESC LIMIT 1`, instance, path).Scan(&id)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, false, nil
-	}
-	if err != nil {
-		return 0, false, err
-	}
-	return id, true, nil
 }
 
 // BackfillDismissals fills in skill, file and title of the dismissals made

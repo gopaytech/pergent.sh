@@ -255,34 +255,6 @@ func TestStopTeachingEveryChange(t *testing.T) {
 	}
 }
 
-func TestProjectIDOfPath(t *testing.T) {
-	s := newStore(t)
-	if _, found, err := s.ProjectIDOfPath(ctx, mr1.Instance, "acme/widgets"); err != nil || found {
-		t.Fatalf("ProjectIDOfPath with no runs = %v, %v", found, err)
-	}
-	for i, r := range []struct {
-		instance, path string
-		project        int64
-		at             time.Time
-	}{
-		{mr1.Instance, "acme/old-name", 7, t0},
-		{mr1.Instance, "acme/Widgets", 9, t0.Add(time.Hour)},
-		{"https://other.example.com", "acme/widgets", 11, t0.Add(2 * time.Hour)},
-	} {
-		if _, err := s.pool.Exec(ctx, `INSERT INTO runs (instance, project_id, mr_iid, project_path, head_sha, state, created_at)
-			VALUES ($1, $2, 1, $3, $4, 'published', $5)`, r.instance, r.project, r.path, fmt.Sprintf("%040d", i), r.at); err != nil {
-			t.Fatal(err)
-		}
-	}
-	id, found, err := s.ProjectIDOfPath(ctx, mr1.Instance, "ACME/widgets")
-	if err != nil || !found || id != 9 {
-		t.Errorf("ProjectIDOfPath = %d, %v, %v; want 9 (any case, this instance)", id, found, err)
-	}
-	if _, found, _ := s.ProjectIDOfPath(ctx, mr1.Instance, "acme/missing"); found {
-		t.Error("found a repository nobody reviewed")
-	}
-}
-
 // addRunWithResult stores a published run of mr at head with result as its
 // stored result.
 func addRunWithResult(t *testing.T, s *Store, mr MRKey, head string, at time.Time, result string) {

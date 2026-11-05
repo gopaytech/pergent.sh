@@ -19,7 +19,13 @@ func stopURL(project string) string { return pastURL(project) + "/stop" }
 // acme/widgets that teaches, made at.
 func (e *env) pastDismissal(number int64, fingerprint, severity, reason, actor string, at time.Time) {
 	e.t.Helper()
-	mr := store.MRKey{Instance: "main", ProjectID: testID(buttonProject), IID: number}
+	e.pastDismissalIn(testID(buttonProject), number, fingerprint, severity, reason, actor, at)
+}
+
+// pastDismissalIn is pastDismissal in the project with platform ID projectID.
+func (e *env) pastDismissalIn(projectID, number int64, fingerprint, severity, reason, actor string, at time.Time) {
+	e.t.Helper()
+	mr := store.MRKey{Instance: "main", ProjectID: projectID, IID: number}
 	if _, err := e.st.Dismiss(ctx, store.Dismissal{MR: mr, Fingerprint: fingerprint, Severity: severity, Reason: reason,
 		Actor: actor, CreatedAt: at, Skill: "code-review", File: "api/handler.go", Title: "Title of " + fingerprint,
 		Teaches: true, DismisserPlatformID: aliceID["main"]}); err != nil {
@@ -144,8 +150,8 @@ func TestPastDismissalsConfigRepo(t *testing.T) {
 	}
 }
 
-// A repository with no run has no project ID yet: nothing teaches, and there
-// is nothing to stop.
+// A repository with nothing dismissed has nothing that teaches, and there is
+// nothing to stop.
 func TestPastDismissalsNoRuns(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.signInRole(store.RoleMaintainer)
@@ -247,5 +253,46 @@ func TestStopUsingBadRequest(t *testing.T) {
 	}
 	if len(e.auditOf("dismissal_stopped")) != 0 {
 		t.Error("a bad request was audited")
+	}
+}
+
+// The project is the one the session sees, not whichever its path has runs
+// under: a repository deleted and made again on the platform has a new ID, and
+// what was dismissed under the old one is another project's.
+func TestPastDismissalsProjectID(t *testing.T) {
+	const oldID = 999
+	setup := func() *env {
+		e := newEnv(t, nil)
+		e.buttonBlockingReview()
+		now := e.clock.now()
+		// The newest run under the path is of the old project.
+		e.addRun(runFix{project: buttonProject, projectID: oldID, number: 3, head: head('2'),
+			result: resultJSON(head('2'), buttonSkill("code-review")), at: now.Add(-time.Minute)})
+		e.pastDismissalIn(oldID, 3, "oldfp", "suggestion", "of the old project", "bob (gitlab main)", now.Add(-time.Hour))
+		e.pastDismissal(1, "newfp", "suggestion", "of this project", "bob (gitlab main)", now.Add(-time.Hour))
+		return e
+	}
+
+	e := setup()
+	c := e.signInRole(store.RoleMaintainer)
+	rows := teaching(t, e, c)
+	if len(rows) != 1 || rows[0].Fingerprint != "newfp" {
+		t.Fatalf("rows = %+v; want the session's project alone", rows)
+	}
+	rec := e.send(c, "POST", stopURL(buttonProject), `{"fingerprint":"oldfp"}`)
+	wantCode(t, rec, "stop another project's", http.StatusOK)
+	if got := statusOf(t, rec); got != "not teaching" {
+		t.Errorf("status = %q; want not teaching: that finding isn't this project's", got)
+	}
+	rec = e.send(c, "POST", stopURL(buttonProject), `{"fingerprint":"newfp"}`)
+	if got := statusOf(t, rec); got != "stopped" {
+		t.Errorf("status = %q; want stopped", got)
+	}
+
+	// An operator has no visible IDs: the project the path is stored under.
+	e2 := setup()
+	rows = teaching(t, e2, e2.signInOperator())
+	if len(rows) != 1 || rows[0].Fingerprint != "newfp" {
+		t.Errorf("operator rows = %+v; want the stored project's", rows)
 	}
 }
