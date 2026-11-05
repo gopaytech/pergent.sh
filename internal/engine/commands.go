@@ -100,7 +100,7 @@ func whoMayOutcome(outcome string) bool {
 }
 
 func replyHelp(mention string) string {
-	return fmt.Sprintf("Commands: `@%[1]s review` · `@%[1]s review failed` · `@%[1]s dismiss <id> <reason>`", mention)
+	return fmt.Sprintf("Commands: `@%[1]s review` (full review) · `@%[1]s review failed` · `@%[1]s dismiss <id> <reason>`", mention)
 }
 
 // replyNeedsReason asks for the reason of a blocking dismissal, in the form

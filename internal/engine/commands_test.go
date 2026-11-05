@@ -213,7 +213,7 @@ const (
 	down = "thumbsdown"
 )
 
-var help = "Commands: `@" + botMention + " review` · `@" + botMention + " review failed` · `@" + botMention + " dismiss <id> <reason>`"
+var help = "Commands: `@" + botMention + " review` (full review) · `@" + botMention + " review failed` · `@" + botMention + " dismiss <id> <reason>`"
 
 func TestRerunCommand(t *testing.T) {
 	f := newCommandFixture(t)

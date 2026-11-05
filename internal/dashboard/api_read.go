@@ -604,6 +604,7 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		view.PergentVersion = res.PergentVersion
+		view.IncrementalNote = result.IncrementalNote(res.Incremental)
 		fillSkills(&view, res, run.Result, run.SkillSources, run.SkillVersions, dismissals)
 	}
 	writeJSON(w, http.StatusOK, view)

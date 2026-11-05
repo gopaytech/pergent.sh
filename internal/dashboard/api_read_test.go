@@ -1383,6 +1383,31 @@ func TestRunDetailSkillVersionAndFolder(t *testing.T) {
 	}
 }
 
+// An incremental run's view says what it covered; a full run's note is empty
+// (and still present, as "").
+func TestRunDetailIncrementalNote(t *testing.T) {
+	e := newEnv(t, nil)
+	var res map[string]any
+	if err := json.Unmarshal([]byte(cleanResult(head('a'))), &res); err != nil {
+		t.Fatal(err)
+	}
+	res["incremental"] = map[string]any{"reviewed": 2, "carried": 28, "from": "abc1234def5678abc1234def5678abc1234def56"}
+	b, _ := json.Marshal(res)
+	incremental := e.addRun(runFix{project: "acme/widgets", number: 1, head: head('a'), result: string(b), outcome: OutcomeApproved, approved: true})
+	full := e.addRun(runFix{project: "acme/widgets", number: 2, head: head('b'), result: cleanResult(head('b')), outcome: OutcomeApproved, approved: true})
+	c := e.signInGitLab(false, "acme/widgets")
+
+	if v := getJSON[RunDetailView](e, c, "/api/runs/"+incremental); v.IncrementalNote != "Re-reviewed 2 files · 28 carried over from `abc1234`" {
+		t.Errorf("incrementalNote = %q", v.IncrementalNote)
+	}
+	if v := getJSON[RunDetailView](e, c, "/api/runs/"+full); v.IncrementalNote != "" {
+		t.Errorf("incrementalNote = %q for a full review, want none", v.IncrementalNote)
+	}
+	if raw := e.get(c, "/api/runs/"+full).Body.String(); !strings.Contains(raw, `"incrementalNote":""`) {
+		t.Errorf("body = %s; want an empty incrementalNote", raw)
+	}
+}
+
 // A run skipped for lack of skills is not a failure and not counted as a
 // review; its reason says so.
 func TestSkippedRunOutcome(t *testing.T) {

@@ -152,6 +152,7 @@ export const runDetail: RunDetailView = {
   pergentVersion: "v0.1.0",
   model: "claude-sonnet",
   maxTurns: 40,
+  incrementalNote: "",
   tokens: { in: 48200, out: 6100 },
   files: {
     reviewed: ["internal/refund/handler.go", "internal/refund/key.go"],

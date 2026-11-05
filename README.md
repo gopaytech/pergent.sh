@@ -31,6 +31,7 @@ pergent.sh is a service that runs [pergent](https://github.com/gopaytech/pergent
 - **A Job per review**: each review runs as its own Kubernetes Job in your cluster, started by a merge request or pull request webhook, so reviews run in parallel up to `jobs.max_running`.
 - **One comment, one status**: pergent.sh posts a single comment, updated in place on every push, and sets a status named `pergent`: a commit status on GitLab, a Check Run on GitHub.
 - **Inline findings**: each finding is also posted as a thread on its lines, with a one-click fix when it is small, and resolved when a later push fixes it. See [Inline findings](#-inline-findings).
+- **Incremental reviews**: a push reviews only the files it changed and carries the rest over from the last review. See [Incremental reviews](#-incremental-reviews).
 - **Approval with a human guard**: a clean review that actually reviewed something and skipped no file outside the allowed rules is approved by the approver; on GitLab, pergent.sh logs a warning for every project where one approval alone could merge.
 - **GitLab and GitHub**: GitLab (gitlab.com or self-managed) and GitHub.com; on GitHub one App is enough to review and approve.
 - **Dashboard**: every review, finding, file and log in the browser, with teams and roles for who sees what, an audit log, and instances, secrets and the LLM managed without editing the config file.
@@ -218,6 +219,16 @@ For GitHub, put the Apps' private keys (the whole `.pem` file of each) and the r
 pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is handy for local development.
 
 ## ⬆️ Upgrading
+
+### Upgrading to 0.7.0
+
+0.7.0 reviews only what a push changed. See [Incremental reviews](#-incremental-reviews).
+
+1. **Pushes are incremental by default**, also on repositories already running. Turn it off per repository with **Incremental reviews** in its Settings, or with `incremental_reviews: false` in the config, or change the default under **Admin → Settings**. The accepted cost: an edit that breaks an untouched file can go unnoticed until a full review (`@<bot> review`), and a team that rebases or amends gets no speed-up yet.
+2. **The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.5.0`.** A config that pins an older pergent keeps full reviews, because only pergent v0.5.0 and later take the files to carry over.
+3. **The first push after the upgrade is a full review**, because the last result comes from an older pergent and has no skill hashes. Incremental reviews start with the next push.
+4. **The migration adds nullable columns only**, so 0.6.2 keeps working on a migrated database.
+5. **To roll back to 0.6.2, first remove `incremental_reviews` from the config**, because 0.6.2 refuses unknown config keys. Results stored by 0.7.0 are complete, merged results.
 
 ### Upgrading to 0.6.2
 
@@ -590,17 +601,17 @@ Everything a platform account may see or do comes from the teams it is on, under
 **Everyone with a team** sees, for the repositories they can see:
 
 - **Overview:** the number of reviews, approvals, blocking reviews and failed reviews over the last 7, 30 or 90 days, the most recent reviews, and "Needs attention". Admins also see a setup checklist (the model and its key, a connected instance, a skill in the library, a repository switched on); each item links to its page, ticks when done, and the list goes away when all four are done.
-- **Reviews:** filtered by repository, result and time. Each merge request has a page with every run (commit, what started it, result, duration) and, for a run, the status set on the platform, whether it was approved and why not, the pergent version, model, tokens, each skill's verdict, findings (with the ones people dismissed, who dismissed them and why), checks, files (reviewed, skipped with the rule, not reviewed) and the log. Each skill shows where it came from: `library v3` (the library version the review used), or `repo (.claude/skills)` for a skill read from the repository. A run skipped because the repository has no skills shows as **Not reviewed** (result `skipped`, with its own filter), not as superseded, and is not counted as a review or a failure. Maintainers and admins of the repository also get the buttons **Re-run review** and **Re-run failed only**, and **Dismiss** and **Restore** on findings ([Commands](#-commands)).
+- **Reviews:** filtered by repository, result and time. Each merge request has a page with every run (commit, what started it, result, duration) and, for a run, the status set on the platform, whether it was approved and why not, the pergent version, model, what an incremental review covered, tokens, each skill's verdict, findings (with the ones people dismissed, who dismissed them and why), checks, files (reviewed, skipped with the rule, not reviewed) and the log. Each skill shows where it came from: `library v3` (the library version the review used), or `repo (.claude/skills)` for a skill read from the repository. A run skipped because the repository has no skills shows as **Not reviewed** (result `skipped`, with its own filter), not as superseded, and is not counted as a review or a failure. Maintainers and admins of the repository also get the buttons **Re-run review** and **Re-run failed only**, and **Dismiss** and **Restore** on findings ([Commands](#-commands)).
 - **Repositories:** each with its last 7 days and health; its reviews, its readiness scan, its setup checks and its skills and instructions. The [Readiness](#readiness-scan) tab is the checklist of what the repository gives a review. Skills & instructions shows what a review of the default branch would get, read with the review bot or App and kept for 5 minutes: each skill with its library version or repository folder, a link to its file for a repository skill, and the problem a review would fail on. A repository's **Settings** choose between "Use the default skills (a, b)" and "Choose skills", with a running total against the 900 KiB a review takes, and list the skills found in `.agents/skills`, `.claude/skills` and `.github/skills` with switches, off at first (`.pergent/skills` is always on; only the `SKILL.md` text is used). **Add repository** warns when the default skill list is empty.
 - **Skills:** the skill library: each skill's name, version, where it came from (written in the dashboard, or the repository and branch or tag it was installed from), whether it is on the default list and when it changed, with its text in a plain-text box (never rendered as HTML or markdown) and its saved versions. A skill installed from a private repository is shown to everyone with a team, so installing is sharing; the repository's path is shown only to people who can see that repository, and others see `a private repository on <instance>`. Who saved each version is shown to admins only. See [Skills and instructions](#-skills-and-instructions).
 
 **Admins** also get:
 
 - the on/off switch of each repository and **Add repository**, which lists the repositories that both the admin (GitLab: Reporter or above as a member, a shared group's member included; GitHub: read access) and the review bot (GitLab: Maintainer) or review App (GitHub: installed) can reach, at most 500, with a search. A password admin has no platform account, so it sees what the review bot or App can reach;
-- each repository's **Settings**: approve clean reviews, the failure status, review drafts, who uses commands (**Only the author and maintainers use commands**, on by default), the library skills to run, the Job's timeout (60 to 7200 seconds) and memory limit (from 256Mi, and not below `jobs.resources.requests.memory`, to 32Gi), Max steps (5 to 200: the steps each opencode run may take before pergent stops it), and the re-run caps per merge request and per repository per day (1 to 1000; only an admin of the repository changes these two). Each shows "overridden here" or "default", and "Reset to defaults" clears every override (a maintainer's reset leaves the caps);
+- each repository's **Settings**: approve clean reviews, the failure status, review drafts, who uses commands (**Only the author and maintainers use commands**, on by default), **Incremental reviews** (on by default), the library skills to run, the Job's timeout (60 to 7200 seconds) and memory limit (from 256Mi, and not below `jobs.resources.requests.memory`, to 32Gi), Max steps (5 to 200: the steps each opencode run may take before pergent stops it), and the re-run caps per merge request and per repository per day (1 to 1000; only an admin of the repository changes these two). Each shows "overridden here" or "default", and "Reset to defaults" clears every override (a maintainer's reset leaves the caps);
 - on **Skills**, the buttons **New skill**, **Install from git** and **Check for updates**, and per skill Edit (a written skill only), Copy and Delete ([Skills and instructions](#-skills-and-instructions));
 - **Users**, **Teams** and the **Audit log**;
-- **Integrations** (their own instance: connection, approver, each repository's setup and whether the approver reaches it, an approve token about to expire), read-only for platform admins, and **Settings**: the defaults a repository switched on in the dashboard gets (approve clean reviews, review drafts, failure status, **Only the author and maintainers use commands**, Job timeout and memory, Max steps, and the re-run caps per merge request and per repository; the config's repositories keep the config's own; each shows what the config gives and follows it unless saved; **Use config value** drops a saved one), and the LLM, which only password admins change.
+- **Integrations** (their own instance: connection, approver, each repository's setup and whether the approver reaches it, an approve token about to expire), read-only for platform admins, and **Settings**: the defaults a repository switched on in the dashboard gets (approve clean reviews, review drafts, failure status, **Only the author and maintainers use commands**, **Incremental reviews**, Job timeout and memory, Max steps, and the re-run caps per merge request and per repository; the config's repositories keep the config's own; each shows what the config gives and follows it unless saved; **Use config value** drops a saved one), and the LLM, which only password admins change.
 
 Every write is checked on the server: it needs a session, the CSRF token, a role that allows it and a repository the user can see. A viewer calling the API directly gets 403 and nothing changes.
 
@@ -617,12 +628,12 @@ Password admins add GitLab and GitHub instances, with their secrets, under **Adm
 - **An instance that can't connect** (at startup, or right after it was saved) doesn't stop pergent.sh, so the dashboard where it is fixed stays up. pergent.sh logs the error, and an instance-wide "Needs attention" item (kind `instance_unreachable`) shows it to the operator and to that instance's admins; the item goes when the instance connects. Its webhooks are still accepted and the events queued, and reviews of its repositories wait queued (the log says `queued reviews wait: pergent.sh isn't connected to their instance; an operator fixes it on Admin → Integrations`) until it is saved again in **Integrations**. An instance in the config file that can't connect still stops startup.
 - **The config file wins.** Instances in the config are listed as "config" and are read-only (409 `this instance is managed by the config file; change it there`), and so are the secrets they name by environment variable. An instance in the dashboard whose name is also in the config stops startup, naming both. Repositories in the config name instances in the config only; repositories of an instance added in the dashboard are switched on in the dashboard.
 - **The LLM** (provider, model, base URL and API key) is set in the dashboard by password admins. The provider is picked from a list (Anthropic, OpenAI, Google, DeepSeek, OpenRouter, Groq, Mistral, xAI) or typed as any other opencode provider ID under **Other**; with a base URL, that can be any OpenAI-compatible server. The LLM is set there unless the config has an `llm:` block, which wins and makes it read-only (409 `the LLM is set in the config file; change it there`). The key is needed only when none is stored. With no LLM set, reviews wait queued, and the log says `no LLM is set: an operator sets it on Admin → Settings`.
-- **Defaults.** The defaults on **Admin → Settings** (approve clean reviews, review drafts, failure status, **Only the author and maintainers use commands** (on until set), Job timeout, Job memory, Max steps (40 until set) and the re-run caps, 10 per merge request and 50 per repository a day until set, and the default skill list, picked among the library's skills with a running total against 900 KiB) apply to repositories switched on in the dashboard only; repositories in the config keep the config's own. Under each default the form says what the config gives (`jobs.timeout`, `jobs.max_turns`, `jobs.resources.limits.memory` and the built-in values). A default you leave at the config's value keeps following it, so a later change in the config reaches the dashboard's repositories; one you change is saved here, shows "Saved here; the config says …" and stays until you press **Use config value** and save. The Job image, concurrency, `max_running` and resources stay in the config and the chart.
+- **Defaults.** The defaults on **Admin → Settings** (approve clean reviews, review drafts, failure status, **Only the author and maintainers use commands** (on until set), **Incremental reviews** (on until set), Job timeout, Job memory, Max steps (40 until set) and the re-run caps, 10 per merge request and 50 per repository a day until set, and the default skill list, picked among the library's skills with a running total against 900 KiB) apply to repositories switched on in the dashboard only; repositories in the config keep the config's own. Under each default the form says what the config gives (`jobs.timeout`, `jobs.max_turns`, `jobs.resources.limits.memory` and the built-in values). A default you leave at the config's value keeps following it, so a later change in the config reaches the dashboard's repositories; one you change is saved here, shows "Saved here; the config says …" and stays until you press **Use config value** and save. The Job image, concurrency, `max_running` and resources stay in the config and the chart.
 - **`PERGENT_SH_SECRET_KEY`.** Secrets are stored encrypted with it. Changing it isn't supported and there is no rotation. A stored secret that can't be opened with the key shows as "not set" (startup logs which instance and fields, `secrets of an instance couldn't be opened with PERGENT_SH_SECRET_KEY; they count as not set`), and has to be entered again.
 
 ### Repositories in the config and in the dashboard
 
-- A repository listed in `repositories` is shown as **managed by config** and is read-only in the dashboard; a write to it gets 409. Every dashboard setting has a config key (`approve`, `failure_status`, `review_drafts`, `inline_findings`, `skills`, `repo_skills`, `job_timeout`, `job_memory`, `max_turns`, `rerun_limit_per_mr`, `rerun_limit_per_repo`, `commands_author_and_maintainers_only`; see [Config reference](#-config-reference)).
+- A repository listed in `repositories` is shown as **managed by config** and is read-only in the dashboard; a write to it gets 409. Every dashboard setting has a config key (`approve`, `failure_status`, `review_drafts`, `inline_findings`, `incremental_reviews`, `skills`, `repo_skills`, `job_timeout`, `job_memory`, `max_turns`, `rerun_limit_per_mr`, `rerun_limit_per_repo`, `commands_author_and_maintainers_only`; see [Config reference](#-config-reference)).
 - A repository switched on in the dashboard is stored in Postgres. pergent.sh sets it up (webhook and deploy token on GitLab) the same way as a config repository, in a reconcile of that repository alone it starts at once (switches made within 10 seconds of each other are handled together, at the end of those 10 seconds); switching it off removes them the same way. The hourly reconcile still covers every repository. Users whose teams cover it (an admin team covers every repository of its instance) see a newly switched-on repository from their next request, once the platform has confirmed they can see it.
 - A repository can't be in both: when it is added to the config, the next reconcile deletes its dashboard record and the config's settings apply. Removing a repository from the config switches it off; it doesn't fall back to the dashboard. To hand a repository to the dashboard, remove it from the config, redeploy, then switch it on in the dashboard.
 
@@ -861,14 +872,35 @@ pergent.sh posts each finding of a review as a thread on its lines, next to the 
 
 **GitLab setup.** "All threads must be resolved" is read from the project settings. No new webhook is needed: note events already arrive.
 
+## ⏩ Incremental reviews
+
+A push to a change that already has a review looks only at what the push changed. Files the last review already covered are carried over, and the comment says so, for example `Re-reviewed 2 files · 28 carried over from abc1234`. The review page shows the same line. The result is still one review of the whole change: approval and the status are decided on the combined result.
+
+A review is incremental when all of these hold. Otherwise it is a full review, and the log says why.
+
+- **Incremental reviews** is on for the repository (the default).
+- A push started it. `@<bot> review` is always a full review.
+- The change has a completed review for the same target branch, and its head is an ancestor of the new head. After a rebase or force-push it is not, so the review is full.
+- The forge lists the files changed between the two heads.
+- That review was made by pergent v0.5.0 or later.
+
+A file is carried over, per skill, only when that skill reviewed it last time, the push didn't change it, and it has no open blocking finding. A file whose review failed, a new file, and every file of a new or edited skill are reviewed again. Blocking findings are always checked again.
+
+**What this gives up.**
+
+- An edit to one file can break another file that didn't change. That goes unnoticed until a full review (`@<bot> review`). The model can read the other file, but nothing sends it there.
+- Teams that amend or rebase get no speed-up yet: those pushes are full reviews.
+
+**Turning it off.** The switch is **Incremental reviews** in a repository's Settings, the default under **Admin → Settings**, or `repositories[].incremental_reviews` in the config ([Config reference](#-config-reference)). With it off, every push is a full review.
+
 ## 💬 Commands
 
 A comment on a merge request (or pull request) can ask the review bot to run the review again or to set a finding aside, and the dashboard's review page has the same actions as buttons. That is all they do: no command changes a setting, answers a question or fixes code.
 
 | Command | What it does |
 | --- | --- |
-| `@<bot> review` | Runs the whole review again on the change's current head and target branch, as a push would. |
-| `@<bot> review failed` | Runs again only the skills that failed, and keeps the other skills' results. |
+| `@<bot> review` | Runs the whole review again on the change's current head and target branch, as a full review: every file, not only what changed since the last review. |
+| `@<bot> review failed` | Runs again only the skills that failed, over all their files, and keeps the other skills' results. |
 | `@<bot> dismiss <id> <reason>` | Sets a finding aside as not a real problem. `<id>` is the finding's ID, shown as `id …` on its line in the review comment; each finding's own "Not a real problem?" line has the command ready to copy. |
 | `@<bot> help` | Replies with the list of commands. |
 
@@ -1133,6 +1165,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `repositories[].job_timeout` | `jobs.timeout` | The review time budget of this repository's Jobs, such as `20m`. Must be positive. |
 | `repositories[].job_memory` | `jobs.resources.limits.memory` | The memory limit of this repository's Jobs, such as `6Gi`. Only the memory limit changes; it must not be below `jobs.resources.requests.memory`. |
 | `repositories[].inline_findings` | `true` | Post each finding as a comment on its lines, with a one-click fix when it is small. With `false`, every finding stays in the review comment. The dashboard's "Inline findings" switch is the same setting for a repository the dashboard manages. |
+| `repositories[].incremental_reviews` | `true` | A push reviews only the files changed since the last review and carries the rest over. With `false`, every push is a full review. See [Incremental reviews](#-incremental-reviews). The dashboard's "Incremental reviews" switch is the same setting for a repository the dashboard manages. |
 | `repositories[].max_turns` | `jobs.max_turns` | pergent's step limit per opencode run (`--max-turns`) for this repository, 5 to 200. The dashboard's "Max steps" is the same setting for a repository the dashboard manages. |
 | `repositories[].commands_author_and_maintainers_only` | `true` | Only the author of a change and the repository's maintainers and owners can use [commands](#-commands) on it. With `false`, anyone with write access can. The author can always re-run and dismiss suggestions. The dashboard's "Only the author and maintainers use commands" switch is the same setting for a repository the dashboard manages. |
 | `repositories[].rerun_limit_per_mr` | 10 | How many times a merge request or pull request can be re-run by [comment or button](#-commands) per UTC day, 1 to 1000. Pushes and opened requests always run and never count. |
@@ -1142,7 +1175,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `llm.base_url` | none | Custom API base URL for the provider. |
 | `llm.api_key_env` | `OPENCODE_API_KEY` | Name of the env var with the LLM key. |
 | `jobs.namespace` | required | Namespace the Jobs run in. |
-| `jobs.image` | `ghcr.io/gopaytech/pergent:v0.4.0` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
+| `jobs.image` | `ghcr.io/gopaytech/pergent:v0.5.0` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
 | `jobs.max_running` | `5` | Most Jobs running at once. Further runs wait in the queue. At least 1. |
 | `jobs.timeout` | `30m` | pergent's own review budget per Job (`--timeout`). The Job's deadline adds 2 minutes to deliver and a clone allowance of at least 2 minutes. At startup pergent.sh warns about a timeout shorter than its step limit times 30 seconds. |
 | `jobs.max_turns` | `40` | pergent's step limit per opencode run (`--max-turns`) for every repository, 5 to 200. |

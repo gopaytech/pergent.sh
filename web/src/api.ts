@@ -168,6 +168,9 @@ export type RunDetailView = {
   model: string | null;
   // The step limit the run had; null for a run from before it was recorded.
   maxTurns: number | null;
+  // What an incremental review covered ("Re-reviewed 2 files · 28 carried over
+  // from `abc1234`"); empty for a full review.
+  incrementalNote: string;
   tokens: { in: number; out: number };
   files: {
     reviewed: string[];

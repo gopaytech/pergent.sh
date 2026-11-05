@@ -204,10 +204,14 @@ type RunDetailView struct {
 	Model *string `json:"model"`
 	// MaxTurns is the step limit each opencode run of the review had, as
 	// recorded when it started; null for a run that didn't record it.
-	MaxTurns *int        `json:"maxTurns"`
-	Tokens   TokensView  `json:"tokens"`
-	Files    FilesView   `json:"files"`
-	Skills   []SkillView `json:"skills"`
+	MaxTurns *int `json:"maxTurns"`
+	// IncrementalNote says what an incremental review covered, for example
+	// "Re-reviewed 2 files · 28 carried over from `abc1234`"; "" for a full
+	// review.
+	IncrementalNote string      `json:"incrementalNote"`
+	Tokens          TokensView  `json:"tokens"`
+	Files           FilesView   `json:"files"`
+	Skills          []SkillView `json:"skills"`
 	// LatestDecided is true for the one run of the change that dismiss and
 	// restore act on: its newest published review, or reported one with an
 	// outcome. Only that run shows dismissals; false when the change has no

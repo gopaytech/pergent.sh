@@ -237,6 +237,7 @@ function Facts({ run, platform }: { run: RunDetailView; platform: string }) {
         <span className="mono">{run.model ?? "not recorded"}</span> · max steps{" "}
         <span className="mono">{run.maxTurns ?? "not recorded"}</span>
       </div>
+      {run.incrementalNote && <div>{run.incrementalNote}</div>}
       <div>
         Tokens: {count(run.tokens.in)} in · {count(run.tokens.out)} out
       </div>
