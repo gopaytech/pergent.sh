@@ -36,7 +36,7 @@ func namedSkill(t *testing.T, name, verdict, severity, fp string) result.Skill {
 // builds on base, as a command or a button would.
 func rerunOf(t *testing.T, env *testEnv, head, trigger string, subset []string, base string) string {
 	t.Helper()
-	id, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main", trigger, subset, &base)
+	id, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main", trigger, subset, &base, false)
 	if err != nil || !created {
 		t.Fatalf("EnqueueRerun = %v, %v", created, err)
 	}
@@ -51,7 +51,7 @@ func recordVersions(t *testing.T, env *testEnv, id string, versions map[string]i
 	for name := range versions {
 		sources[name] = "library"
 	}
-	if err := env.Store.SetRunInputs(env.ctx, id, "m", 0, sources, versions); err != nil {
+	if err := env.Store.SetRunInputs(env.ctx, id, "m", 0, sources, versions, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -134,6 +134,44 @@ func TestRerunFailedKeepsBaseVersions(t *testing.T) {
 	}
 	if want := map[string]int{"a": 2, "b": 1}; !reflect.DeepEqual(r.SkillVersions, want) {
 		t.Errorf("skill versions = %v, want %v (b kept from the earlier run)", r.SkillVersions, want)
+	}
+}
+
+// A re-run of the failed skills keeps the base run it was queued with: the
+// decision about incremental reviews is for pushes, and must not clear it.
+func TestRerunFailedKeepsBaseRunID(t *testing.T) {
+	env, head, base := twoSkills(t, map[string]int{"a": 1, "b": 1})
+
+	r := dispatchRerun(t, env, head, base)
+
+	if r.BaseRunID == nil || *r.BaseRunID != base || r.Incremental {
+		t.Errorf("base run = %v, incremental = %v; want %s kept and a full review", r.BaseRunID, r.Incremental, base)
+	}
+	if strings.Contains(env.Logs(), "full review") {
+		t.Errorf("a re-run logged a full review:\n%s", env.Logs())
+	}
+}
+
+// The merged review records the hash of every skill: a kept skill keeps the
+// earlier run's, a re-run skill gets the new one.
+func TestRerunFailedKeepsBaseHashes(t *testing.T) {
+	env, head, base := twoSkills(t, nil)
+	if err := env.Store.SetRunInputs(env.ctx, base, "m", 0,
+		map[string]string{"a": "library", "b": "library"}, map[string]int{"a": 1, "b": 1},
+		map[string]string{"a": "hash-of-old-a", "b": "hash-of-b"}); err != nil {
+		t.Fatal(err)
+	}
+
+	r := dispatchRerun(t, env, head, base)
+
+	if r.SkillHashes["b"] != "hash-of-b" {
+		t.Errorf("hash of the kept skill b = %q, want the earlier run's", r.SkillHashes["b"])
+	}
+	if h := r.SkillHashes["a"]; len(h) != 64 {
+		t.Errorf("hash of the re-run skill a = %q, want a fresh SHA-256", h)
+	}
+	if len(r.SkillHashes) != 2 {
+		t.Errorf("hashes = %v, want a and b", r.SkillHashes)
 	}
 }
 
@@ -352,7 +390,7 @@ func TestSubsetRecordsKeptSkillSources(t *testing.T) {
 	env.AddSkill("style", "---\nname: style\n---\nCheck the style.\n")
 	head := sha('a')
 	base := env.Publish(1, head, resultFor(t, head, namedSkill(t, "security", "no_blocking_issues", "", ""), namedSkill(t, "style", "failed", "", "")))
-	if err := env.Store.SetRunInputs(env.ctx, base, "m", 0, map[string]string{"security": ".agents/skills", "style": "library"}, map[string]int{"style": 1}); err != nil {
+	if err := env.Store.SetRunInputs(env.ctx, base, "m", 0, map[string]string{"security": ".agents/skills", "style": "library"}, map[string]int{"style": 1}, nil); err != nil {
 		t.Fatal(err)
 	}
 	id := rerunOf(t, env, head, store.TriggerRerunFailed, []string{"style"}, base)
@@ -418,8 +456,8 @@ func TestMergedResultKeepsOtherSkills(t *testing.T) {
 		r.Skills[1].Name != "style" || r.Skills[1].Verdict != "no_blocking_issues" {
 		t.Errorf("stored result = %+v, want the kept security and the re-run style", r)
 	}
-	if next, _, err := env.Store.PreviousResult(env.ctx, env.MRKey(1), "none"); err != nil || !strings.Contains(string(next), "aaaaaa000001") {
-		t.Errorf("the next run's previous result lacks the kept skill: %s, %v", next, err)
+	if next, _, err := env.Store.LastReview(env.ctx, env.MRKey(1), "none"); err != nil || !strings.Contains(string(next.Result), "aaaaaa000001") {
+		t.Errorf("the next run's previous result lacks the kept skill: %s, %v", next.Result, err)
 	}
 }
 
@@ -555,7 +593,7 @@ func TestMergeSubsetWithoutBaseRunIsNotAWholeReview(t *testing.T) {
 	env := newTestEnv(t)
 	head := sha('a')
 	id, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main",
-		store.TriggerRerunFailed, []string{"style"}, nil)
+		store.TriggerRerunFailed, []string{"style"}, nil, false)
 	if err != nil || !created {
 		t.Fatalf("EnqueueRerun = %v, %v", created, err)
 	}

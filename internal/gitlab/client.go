@@ -515,8 +515,8 @@ func (c *Client) MergeRequestDiffs(ctx context.Context, projectID, iid int64) ([
 // large file) may not show every change: ErrPartialDiff.
 func (c *Client) Compare(ctx context.Context, projectID int64, from, to string) ([]Diff, error) {
 	var out struct {
-		Diffs          []Diff `json:"diffs"`
-		CompareTimeout bool   `json:"compare_timeout"`
+		Diffs          *[]Diff `json:"diffs"`
+		CompareTimeout bool    `json:"compare_timeout"`
 	}
 	q := url.Values{"from": {from}, "to": {to}, "straight": {"true"}}
 	if _, err := c.getJSON(ctx, projPath(projectID)+"/repository/compare", q, &out); err != nil {
@@ -525,12 +525,30 @@ func (c *Client) Compare(ctx context.Context, projectID int64, from, to string) 
 	if out.CompareTimeout {
 		return nil, fmt.Errorf("%w: the comparison timed out", ErrPartialDiff)
 	}
-	for _, d := range out.Diffs {
+	// No list at all is not an empty one: nothing says no file changed.
+	if out.Diffs == nil {
+		return nil, fmt.Errorf("%w: the comparison has no diff list", ErrPartialDiff)
+	}
+	for _, d := range *out.Diffs {
 		if d.Collapsed || d.TooLarge {
 			return nil, fmt.Errorf("%w: the comparison leaves out the diff of a file", ErrPartialDiff)
 		}
 	}
-	return out.Diffs, nil
+	return *out.Diffs, nil
+}
+
+// MergeBase returns the ID of the best common ancestor of two commits
+// (GET .../repository/merge_base). Commits with no common ancestor are
+// ErrNotFound.
+func (c *Client) MergeBase(ctx context.Context, projectID int64, a, b string) (string, error) {
+	var out struct {
+		ID string `json:"id"`
+	}
+	q := url.Values{"refs[]": {a, b}}
+	if _, err := c.getJSON(ctx, projPath(projectID)+"/repository/merge_base", q, &out); err != nil {
+		return "", err
+	}
+	return out.ID, nil
 }
 
 // Discussions lists the merge request's discussions, every note of each.

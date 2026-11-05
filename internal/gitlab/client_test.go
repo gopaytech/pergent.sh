@@ -1386,6 +1386,26 @@ func TestCompare(t *testing.T) {
 	expect(t, (*reqs)[0], "GET", "/api/v4/projects/7/repository/compare", "from=aaa&straight=true&to=bbb")
 }
 
+func TestMergeBase(t *testing.T) {
+	c, reqs := serve(t, jsonReply(map[string]any{"id": "ccc", "short_id": "ccc"}))
+	got, err := c.MergeBase(context.Background(), 7, "aaa", "bbb")
+	if err != nil || got != "ccc" {
+		t.Fatalf("MergeBase = %q, %v; want ccc", got, err)
+	}
+	// refs[] is sent once per commit.
+	expect(t, (*reqs)[0], "GET", "/api/v4/projects/7/repository/merge_base", "refs%5B%5D=aaa&refs%5B%5D=bbb")
+}
+
+func TestMergeBaseNotFound(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"404 Merge Base not found"}`))
+	})
+	if _, err := c.MergeBase(context.Background(), 7, "aaa", "bbb"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestComparePartial(t *testing.T) {
 	for name, reply := range map[string]map[string]any{
 		"timeout":   {"compare_timeout": true, "diffs": []map[string]any{{"old_path": "a.go", "new_path": "a.go"}}},
@@ -1398,6 +1418,27 @@ func TestComparePartial(t *testing.T) {
 				t.Fatalf("err = %v, want ErrPartialDiff", err)
 			}
 		})
+	}
+}
+
+// A reply with no diffs says nothing about what changed, so it is not taken
+// for no change (ErrPartialDiff); an empty list is.
+func TestCompareWithoutAListIsPartial(t *testing.T) {
+	for name, reply := range map[string]map[string]any{
+		"no diffs key": {"commits": []any{}},
+		"null diffs":   {"commits": []any{}, "diffs": nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, _ := serve(t, jsonReply(reply))
+			got, err := c.Compare(context.Background(), 7, "aaa", "bbb")
+			if !errors.Is(err, ErrPartialDiff) || got != nil {
+				t.Fatalf("got=%+v err=%v, want ErrPartialDiff", got, err)
+			}
+		})
+	}
+	c, _ := serve(t, jsonReply(map[string]any{"commits": []any{}, "diffs": []map[string]any{}}))
+	if got, err := c.Compare(context.Background(), 7, "aaa", "bbb"); err != nil || len(got) != 0 {
+		t.Fatalf("an empty list: got=%+v err=%v, want no diffs and no error", got, err)
 	}
 }
 

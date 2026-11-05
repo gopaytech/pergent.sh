@@ -170,8 +170,10 @@ func TestSize(t *testing.T) {
 		Skills:       map[string][]byte{"a": []byte("123"), "b": []byte("45")},
 		Instructions: []byte("678"),
 		Previous:     []byte("90"),
+		Carried:      []byte("1234"),
+		Dismissals:   []byte("abc"),
 	}
-	if in.Size() != 10 {
+	if in.Size() != 17 {
 		t.Errorf("size = %d", in.Size())
 	}
 }
@@ -191,6 +193,61 @@ func TestFitDropsPreviousFirst(t *testing.T) {
 	in = &Inputs{Skills: map[string][]byte{"a": make([]byte, 40)}, Previous: make([]byte, 60)}
 	if err := in.Fit(100); err != nil || in.Previous == nil {
 		t.Errorf("fit within limit dropped previous: %v", err)
+	}
+}
+
+// The carried files go with the previous result, which makes the review a
+// full one.
+func TestFitDropsCarriedWithPrevious(t *testing.T) {
+	in := &Inputs{Skills: map[string][]byte{"a": make([]byte, 40)}, Previous: make([]byte, 40), Carried: make([]byte, 40)}
+	if err := in.Fit(100); err != nil {
+		t.Fatal(err)
+	}
+	if in.Previous != nil || in.Carried != nil {
+		t.Errorf("previous %d bytes, carried %d bytes kept", len(in.Previous), len(in.Carried))
+	}
+
+	in = &Inputs{Skills: map[string][]byte{"a": make([]byte, 40)}, Previous: make([]byte, 20), Carried: make([]byte, 20)}
+	if err := in.Fit(100); err != nil || in.Previous == nil || in.Carried == nil {
+		t.Errorf("fit within limit dropped inputs: %v", err)
+	}
+}
+
+func TestSizeCountsDismissals(t *testing.T) {
+	in := &Inputs{Skills: map[string][]byte{"a": make([]byte, 10)}, Dismissals: make([]byte, 7)}
+	if in.Size() != 17 {
+		t.Errorf("size = %d, want 17", in.Size())
+	}
+}
+
+// The dismissals go before the previous result: dropping them is enough when
+// it can be, so a long list never turns an incremental review into a full one.
+func TestFitDropsDismissalsFirst(t *testing.T) {
+	in := &Inputs{
+		Skills: map[string][]byte{"a": make([]byte, 40)}, Previous: make([]byte, 20), Carried: make([]byte, 20),
+		Dismissals: make([]byte, 40),
+	}
+	if err := in.Fit(100); err != nil {
+		t.Fatal(err)
+	}
+	if in.Dismissals != nil {
+		t.Error("dismissals kept")
+	}
+	if in.Previous == nil || in.Carried == nil {
+		t.Errorf("previous %d bytes, carried %d bytes; want both kept", len(in.Previous), len(in.Carried))
+	}
+}
+
+func TestFitDropsDismissalsThenPrevious(t *testing.T) {
+	in := &Inputs{
+		Skills: map[string][]byte{"a": make([]byte, 40)}, Previous: make([]byte, 40), Carried: make([]byte, 40),
+		Dismissals: make([]byte, 40),
+	}
+	if err := in.Fit(100); err != nil {
+		t.Fatal(err)
+	}
+	if in.Dismissals != nil || in.Previous != nil || in.Carried != nil {
+		t.Errorf("dismissals %d, previous %d, carried %d bytes kept", len(in.Dismissals), len(in.Previous), len(in.Carried))
 	}
 }
 

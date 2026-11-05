@@ -97,6 +97,12 @@ type Run struct {
 	Trigger     string
 	SkillSubset []string
 	BaseRunID   *string
+	// Incremental is true for a run that reviews only the files changed since
+	// its base run. It can't be read from BaseRunID, which is cleared when the
+	// base run is pruned. SkillHashes (skill name → hash of its content) was
+	// recorded at dispatch; nil before.
+	Incremental bool
+	SkillHashes map[string]string
 }
 
 // How a run came to be (Run.Trigger).
@@ -168,21 +174,21 @@ const runColumns = `id::text, instance, project_id, mr_iid, project_path, head_s
 	created_at, dispatched_at, reported_at, not_before, cleaned_up,
 	title, web_url, source_branch, author, model, skill_sources,
 	outcome, outcome_reason, decision_status, approved, trigger, skill_subset, base_run_id::text,
-	skill_versions, skip_reason, max_turns`
+	skill_versions, skip_reason, max_turns, incremental, skill_hashes`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var (
 		r                                    Run
 		state                                string
 		tokenExp, dispatched, rep, notBefore *time.Time
-		sources, versions                    []byte
+		sources, versions, hashes            []byte
 	)
 	err := row.Scan(&r.ID, &r.MR.Instance, &r.MR.ProjectID, &r.MR.IID, &r.ProjectPath, &r.HeadSHA, &r.BaseSHA, &r.StartSHA,
 		&r.TargetBranch, &state, &r.JobName, &tokenExp, &r.Result, &r.FailureReason, &r.PublishError, &r.Attempts,
 		&r.CreatedAt, &dispatched, &rep, &notBefore, &r.CleanedUp,
 		&r.Title, &r.WebURL, &r.SourceBranch, &r.Author, &r.Model, &sources,
 		&r.Outcome, &r.OutcomeReason, &r.DecisionStatus, &r.Approved, &r.Trigger, &r.SkillSubset, &r.BaseRunID,
-		&versions, &r.SkipReason, &r.MaxTurns)
+		&versions, &r.SkipReason, &r.MaxTurns, &r.Incremental, &hashes)
 	if err != nil {
 		return Run{}, err
 	}
@@ -194,6 +200,11 @@ func scanRun(row pgx.Row) (Run, error) {
 	if versions != nil {
 		if err := json.Unmarshal(versions, &r.SkillVersions); err != nil {
 			return Run{}, fmt.Errorf("run %s: skill versions: %w", r.ID, err)
+		}
+	}
+	if hashes != nil {
+		if err := json.Unmarshal(hashes, &r.SkillHashes); err != nil {
+			return Run{}, fmt.Errorf("run %s: skill hashes: %w", r.ID, err)
 		}
 	}
 	r.State = RunState(state)
@@ -323,12 +334,15 @@ func (s *Store) EnqueueRun(ctx context.Context, mr MRKey, projectPath, headSHA, 
 // review not yet published) is not replaced or duplicated: created is false
 // and id is that run's, nothing is changed. Superseding a reported run would
 // leave its commit status for the cleanup to cancel while the new run
-// is running.
+// is running. The exception is replace (a full review asked for): it
+// supersedes a push's run that hasn't been dispatched (queued, or claimed and
+// not yet dispatched) or that reviews only some files (Incremental), since the
+// review asked for covers more.
 //
 // The caller checks the re-run caps (CountReruns) before calling; with
 // more than one caller at a time, for example two button presses, a cap may
 // be overshot by a few.
-func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA, targetBranch, trigger string, skills []string, baseRunID *string) (id string, created bool, err error) {
+func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA, targetBranch, trigger string, skills []string, baseRunID *string, replace bool) (id string, created bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return "", false, err
@@ -338,10 +352,15 @@ func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA
 	if err := lockMR(ctx, tx, mr); err != nil {
 		return "", false, err
 	}
+	// With replace, a push run with no dispatched_at is replaceable: one that
+	// was never dispatched, which also matches a run that failed before
+	// dispatch, not only one still waiting in the queue. So is an incremental
+	// one.
 	err = tx.QueryRow(ctx, `SELECT id::text FROM runs
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
-		  AND state IN ('queued', 'running', 'reported')`,
-		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch).Scan(&id)
+		  AND state IN ('queued', 'running', 'reported')
+		  AND NOT ($6 AND trigger = 'push' AND (dispatched_at IS NULL OR incremental))`,
+		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch, replace).Scan(&id)
 	if err == nil {
 		if err := tx.Commit(ctx); err != nil {
 			return "", false, err
@@ -358,8 +377,9 @@ func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch); err != nil {
 		return "", false, err
 	}
-	// What is left of this head and target is published or publish_failed:
-	// the queued, running and reported ones returned above.
+	// What is left of this head and target is published or publish_failed,
+	// and the live runs replace allows to go (an undispatched or incremental
+	// push run); the other queued, running and reported ones returned above.
 	if _, err := tx.Exec(ctx, `UPDATE runs SET state = 'superseded',
 			cleaned_up = cleaned_up OR state IN ('published', 'publish_failed')
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
@@ -628,9 +648,10 @@ func (s *Store) SetRunChange(ctx context.Context, id string, d ChangeDetails) er
 
 // SetRunInputs records the model, the step limit (maxTurns; NULL when it is
 // not above 0), where each skill came from (name → "library" or "repo") and
-// the library version of each library skill used (name → version) when a run
-// is dispatched. An unknown run is not an error; a malformed id is.
-func (s *Store) SetRunInputs(ctx context.Context, id, model string, maxTurns int, sources map[string]string, versions map[string]int) error {
+// the library version of each library skill used (name → version) and the
+// hash of each skill's content (name → hash) when a run is dispatched. An
+// unknown run is not an error; a malformed id is.
+func (s *Store) SetRunInputs(ctx context.Context, id, model string, maxTurns int, sources map[string]string, versions map[string]int, hashes map[string]string) error {
 	if !validUUID(id) {
 		return fmt.Errorf("store: run %q not found", id)
 	}
@@ -648,12 +669,20 @@ func (s *Store) SetRunInputs(ctx context.Context, id, model string, maxTurns int
 	if err != nil {
 		return err
 	}
+	if hashes == nil {
+		hashes = map[string]string{}
+	}
+	h, err := json.Marshal(hashes)
+	if err != nil {
+		return err
+	}
 	var turns *int
 	if maxTurns > 0 {
 		turns = &maxTurns
 	}
-	_, err = s.pool.Exec(ctx, `UPDATE runs SET model = $2, max_turns = $3, skill_sources = $4::jsonb, skill_versions = $5::jsonb
-		WHERE id = $1::uuid`, id, cutText(model), turns, string(b), string(v))
+	_, err = s.pool.Exec(ctx, `UPDATE runs SET model = $2, max_turns = $3, skill_sources = $4::jsonb, skill_versions = $5::jsonb,
+			skill_hashes = $6::jsonb
+		WHERE id = $1::uuid`, id, cutText(model), turns, string(b), string(v), string(h))
 	return err
 }
 
@@ -832,6 +861,14 @@ func (s *Store) MakeFullRerun(ctx context.Context, runID string) error {
 func (s *Store) SetSkillSubset(ctx context.Context, runID string, skills []string) error {
 	return s.mustUpdate(ctx, runID, `UPDATE runs SET skill_subset = $2
 		WHERE id = $1::uuid AND state IN ('queued', 'running') AND skill_subset IS NOT NULL`, runID, skills)
+}
+
+// SetIncremental makes a run being dispatched (queued or running) review only
+// the files changed since the run baseRunID, or, with baseRunID nil, review
+// everything. Any other run is an error.
+func (s *Store) SetIncremental(ctx context.Context, runID string, baseRunID *string) error {
+	return s.mustUpdate(ctx, runID, `UPDATE runs SET base_run_id = $2::uuid, incremental = $3
+		WHERE id = $1::uuid AND state IN ('queued', 'running')`, runID, baseRunID, baseRunID != nil)
 }
 
 // ReportFailure records that a queued or running run will never produce a
@@ -1042,22 +1079,30 @@ func (s *Store) RunningRuns(ctx context.Context) ([]Run, error) {
 	return s.queryRuns(ctx, `SELECT `+runColumns+` FROM runs WHERE state = 'running' ORDER BY created_at, id`)
 }
 
-// PreviousResult returns the result of the latest published run of the merge
-// request whose status is "completed", other than beforeRunID.
-func (s *Store) PreviousResult(ctx context.Context, mr MRKey, beforeRunID string) ([]byte, bool, error) {
-	var res []byte
-	err := s.pool.QueryRow(ctx, `SELECT result FROM runs
+// LastReview returns the latest published run of the merge request whose
+// result status is "completed", other than beforeRunID. found is false when
+// there is none.
+func (s *Store) LastReview(ctx context.Context, mr MRKey, beforeRunID string) (run Run, found bool, err error) {
+	runs, err := s.queryRuns(ctx, `SELECT `+runColumns+` FROM runs
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND state = 'published'
 		  AND result->>'status' = 'completed' AND id::text <> $4
 		ORDER BY created_at DESC, id DESC LIMIT 1`,
-		mr.Instance, mr.ProjectID, mr.IID, beforeRunID).Scan(&res)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, false, nil
+		mr.Instance, mr.ProjectID, mr.IID, beforeRunID)
+	if err != nil || len(runs) == 0 {
+		return Run{}, false, err
 	}
-	if err != nil {
-		return nil, false, err
-	}
-	return res, true, nil
+	return runs[0], true, nil
+}
+
+// NewerRunOfHead reports whether the merge request has a run of run's head
+// and target that was created after run and is not superseded.
+func (s *Store) NewerRunOfHead(ctx context.Context, run Run) (bool, error) {
+	var newer bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
+		  AND state <> 'superseded' AND (created_at, id) > ($6, $7::uuid))`,
+		run.MR.Instance, run.MR.ProjectID, run.MR.IID, run.HeadSHA, run.TargetBranch, run.CreatedAt, run.ID).Scan(&newer)
+	return newer, err
 }
 
 // LatestDecidedRun returns the merge request's newest run whose review is

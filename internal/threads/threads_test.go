@@ -361,6 +361,69 @@ func TestGoneFindingFixed(t *testing.T) {
 	}
 }
 
+// A skill that left a finding out because of a past dismissal says nothing
+// about the code, so its thread isn't resolved as fixed. It is told once.
+func TestLeftOutFindingIsNotFixed(t *testing.T) {
+	leftOut := func() Input {
+		in := base()
+		c := in.Skills["go"]
+		c.LeftOut = true
+		in.Skills["go"] = c
+		in.Threads = []Thread{thread("f1", "a.go", 42, StateOpen)}
+		return in
+	}
+
+	in := leftOut()
+	p := Decide(in)
+	wantNote := []Note{{Thread: in.Threads[0], Reply: "No longer reported in `abcdef1`; see the note on past dismissals in the comment."}}
+	if len(p.Resolve) != 0 || !reflect.DeepEqual(p.Note, wantNote) {
+		t.Fatalf("resolve = %+v, note = %+v; want a note and no resolve", p.Resolve, p.Note)
+	}
+
+	// Already told: nothing.
+	in = leftOut()
+	in.Threads[0].LeftOutNoted = true
+	if p = Decide(in); len(p.Resolve)+len(p.Note) != 0 {
+		t.Errorf("told already: resolve = %+v, note = %+v; want nothing", p.Resolve, p.Note)
+	}
+
+	// Without the note on the skill the finding is fixed, as before.
+	in = leftOut()
+	in.Skills["go"] = ok("a.go", "z.go")
+	if p = Decide(in); len(p.Note) != 0 || len(p.Resolve) != 1 || p.Resolve[0].State != StateFixed {
+		t.Errorf("no left-out note: resolve = %+v, note = %+v; want fixed", p.Resolve, p.Note)
+	}
+
+	// A failed skill, or a file it didn't review, says nothing either way.
+	in = leftOut()
+	in.Skills["go"] = Coverage{Failed: true, LeftOut: true, Reviewed: map[string]bool{"a.go": true}}
+	if p = Decide(in); len(p.Resolve)+len(p.Note) != 0 {
+		t.Errorf("failed skill: resolve = %+v, note = %+v; want nothing", p.Resolve, p.Note)
+	}
+	in = leftOut()
+	in.Skills["go"] = Coverage{LeftOut: true, Reviewed: map[string]bool{"z.go": true}}
+	if p = Decide(in); len(p.Resolve)+len(p.Note) != 0 {
+		t.Errorf("file not reviewed: resolve = %+v, note = %+v; want nothing", p.Resolve, p.Note)
+	}
+
+	// A file that left the change is gone all the same.
+	in = leftOut()
+	in.Threads = []Thread{thread("f1", "gone.go", 42, StateOpen)}
+	if p = Decide(in); len(p.Note) != 0 || len(p.Resolve) != 1 || p.Resolve[0].State != StateGone {
+		t.Errorf("gone file: resolve = %+v, note = %+v; want gone", p.Resolve, p.Note)
+	}
+
+	// A thread that stays open counts toward the cap.
+	in = leftOut()
+	in.Skills["other"] = Coverage{Failed: true}
+	in.Diff["other.go"] = diffmap.File{Path: "other.go"}
+	in.Threads = append(openThreads(Cap-1), in.Threads...)
+	in.Findings = []Finding{finding("new", "z.go", "blocking", 45, 0)}
+	if p = Decide(in); len(p.Post) != 0 || p.Notes["new"] != NoteOverCap {
+		t.Errorf("post = %+v, notes = %v; want the left-out thread to count as open", p.Post, p.Notes)
+	}
+}
+
 func TestFileLeftChange(t *testing.T) {
 	in := base()
 	in.Threads = []Thread{thread("f1", "gone.go", 42, StateOpen)}

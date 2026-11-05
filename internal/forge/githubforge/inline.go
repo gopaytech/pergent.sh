@@ -35,6 +35,17 @@ func (f *Forge) CompareDiff(ctx context.Context, repoID int64, from, to string) 
 	return files, mapErr(err)
 }
 
+// ChangedSince returns the paths changed from one commit to another. It is an
+// error when from is not an ancestor of to (github.ErrNotAncestor) or when
+// GitHub may not list every file (github.ErrPartialDiff).
+func (f *Forge) ChangedSince(ctx context.Context, repoID int64, from, to string) ([]string, error) {
+	files, err := f.CompareDiff(ctx, repoID, from, to)
+	if err != nil {
+		return nil, err
+	}
+	return forge.Paths(files), nil
+}
+
 // isBot reports whether an author is the review App's bot: a Bot account
 // (a person can register a User named like the App's slug) whose login is the
 // slug. REST shows it as slug[bot]; GraphQL may leave the [bot] off an App's

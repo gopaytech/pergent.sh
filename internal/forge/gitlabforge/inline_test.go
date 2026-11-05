@@ -91,6 +91,56 @@ func TestCompareDiff(t *testing.T) {
 	}
 }
 
+const mergeBasePath = "/projects/7/repository/merge_base"
+
+// ChangedSince lists the paths changed from one commit to another, both sides
+// of a rename, each once.
+func TestChangedSince(t *testing.T) {
+	f := newFake(t)
+	f.on(http.MethodGet, mergeBasePath, http.StatusOK, map[string]any{"id": "AAA"})
+	f.on(http.MethodGet, "/projects/7/repository/compare", http.StatusOK, map[string]any{"diffs": []map[string]any{
+		{"old_path": "old.go", "new_path": "new.go", "diff": "@@ -1 +1 @@\n-a\n+b\n", "renamed_file": true},
+		{"old_path": "a.go", "new_path": "a.go", "diff": "@@ -1 +1 @@\n-a\n+b\n"},
+		{"old_path": "gone.go", "new_path": "gone.go", "deleted_file": true},
+		{"old_path": "", "new_path": "added.go", "new_file": true},
+	}})
+	got, err := f.forge().ChangedSince(context.Background(), 7, "aaa", "bbb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"new.go", "old.go", "a.go", "gone.go", "added.go"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("ChangedSince = %v, want %v", got, want)
+	}
+}
+
+// A commit that is not an ancestor of the other is an error, with no
+// comparison made.
+func TestChangedSinceNotAncestor(t *testing.T) {
+	f := newFake(t)
+	f.on(http.MethodGet, mergeBasePath, http.StatusOK, map[string]any{"id": "ccc"})
+	got, err := f.forge().ChangedSince(context.Background(), 7, "aaa", "bbb")
+	if err == nil || got != nil {
+		t.Fatalf("got=%v err=%v, want an error", got, err)
+	}
+	for _, r := range f.requests() {
+		if r.Path == "/projects/7/repository/compare" {
+			t.Errorf("compared although aaa is not an ancestor: %+v", r)
+		}
+	}
+}
+
+// A comparison that may be partial is an error, not a short list.
+func TestChangedSincePartial(t *testing.T) {
+	f := newFake(t)
+	f.on(http.MethodGet, mergeBasePath, http.StatusOK, map[string]any{"id": "aaa"})
+	f.on(http.MethodGet, "/projects/7/repository/compare", http.StatusOK, map[string]any{
+		"compare_timeout": true, "diffs": []map[string]any{{"old_path": "a.go", "new_path": "a.go"}}})
+	got, err := f.forge().ChangedSince(context.Background(), 7, "aaa", "bbb")
+	if !errors.Is(err, gitlab.ErrPartialDiff) || got != nil {
+		t.Errorf("got=%v err=%v, want gitlab.ErrPartialDiff", got, err)
+	}
+}
+
 func TestThreadsOnlyBotWithMarker(t *testing.T) {
 	pos := func(path string, line int) map[string]any { return map[string]any{"new_path": path, "new_line": line} }
 	note := func(id, author int64, body string, position map[string]any, resolved bool) map[string]any {

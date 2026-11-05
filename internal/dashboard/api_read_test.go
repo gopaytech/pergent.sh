@@ -245,6 +245,8 @@ type runFix struct {
 	// versions (JSON) and skipReason are what a run records of the library
 	// skills it used and of why it was skipped.
 	versions, skipReason string
+	// incremental marks a run that reviewed only some files.
+	incremental bool
 }
 
 // addRun stores f and returns the run's ID.
@@ -314,10 +316,10 @@ func (e *env) addRun(f runFix) string {
 	e.exec(`UPDATE runs SET state = $2, result = $3::jsonb, failure_reason = $4, base_sha = $5, created_at = $6,
 			dispatched_at = $7, reported_at = $8, title = $9, web_url = $10, source_branch = $11, author = $12,
 			outcome = $13, outcome_reason = $14, decision_status = $15, approved = $16, model = $17,
-			skill_sources = $18::jsonb, skill_versions = $19::jsonb, skip_reason = $20, max_turns = $21
+			skill_sources = $18::jsonb, skill_versions = $19::jsonb, skip_reason = $20, max_turns = $21, incremental = $22
 		WHERE id = $1::uuid`,
 		id, string(f.state), result, f.failure, baseSHA, f.at, dispatched, reported, f.title, f.webURL,
-		f.sourceBranch, f.user, f.outcome, f.reason, f.status, f.approved, model, sources, versions, f.skipReason, f.maxTurns)
+		f.sourceBranch, f.user, f.outcome, f.reason, f.status, f.approved, model, sources, versions, f.skipReason, f.maxTurns, f.incremental)
 	return id
 }
 
@@ -830,8 +832,8 @@ func TestRepositoryDetail(t *testing.T) {
 	settings, _ := json.Marshal(v.Settings)
 	want := `{"approve":{"value":false,"overridden":true},"commandsAuthorAndMaintainersOnly":{"value":true,"overridden":false},` +
 		`"failureStatus":{"value":"failed","overridden":false},` +
-		`"inlineFindings":{"value":true,"overridden":false},"jobMemory":{"value":"","overridden":false},"jobTimeoutSeconds":{"value":600,"overridden":false},` +
-		`"maxTurns":{"value":40,"overridden":false},"repoSkills":{"value":[],"overridden":false},` +
+		`"incrementalReviews":{"value":true,"overridden":false},"inlineFindings":{"value":true,"overridden":false},"jobMemory":{"value":"","overridden":false},"jobTimeoutSeconds":{"value":600,"overridden":false},` +
+		`"learnFromDismissals":{"value":true,"overridden":false},"maxTurns":{"value":40,"overridden":false},"repoSkills":{"value":[],"overridden":false},` +
 		`"rerunLimitPerMR":{"value":10,"overridden":false},"rerunLimitPerRepo":{"value":50,"overridden":false},` +
 		`"reviewDrafts":{"value":true,"overridden":false},"skills":{"value":["code-review"],"overridden":true}}`
 	if string(settings) != want {
@@ -1074,13 +1076,13 @@ func TestAdminSettings(t *testing.T) {
 	c := e.signInGitLab(true, "acme/widgets")
 	v := getJSON[AdminSettingsView](e, c, "/api/admin/settings")
 	want := AdminSettingsView{Instance: "main",
-		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, FailureStatus: "failed",
+		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, LearnFromDismissals: true, FailureStatus: "failed",
 			JobTimeoutSeconds: 600, MaxTurns: 40,
 			RerunLimitPerMR: 10, RerunLimitPerRepo: 50, Skills: []string{},
-			Config: DefaultValues{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, FailureStatus: "failed",
+			Config: DefaultValues{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, LearnFromDismissals: true, FailureStatus: "failed",
 				JobTimeoutSeconds: 600, MaxTurns: 40, RerunLimitPerMR: 10, RerunLimitPerRepo: 50},
 			Pinned: map[string]bool{"approve": false, "reviewDrafts": false, "inlineFindings": false, "commandsAuthorAndMaintainersOnly": false,
-				"failureStatus": false, "jobTimeoutSeconds": false,
+				"incrementalReviews": false, "learnFromDismissals": false, "failureStatus": false, "jobTimeoutSeconds": false,
 				"maxTurns": false, "jobMemory": false, "rerunLimitPerMR": false, "rerunLimitPerRepo": false}},
 		LLM: LLMView{Provider: "anthropic", Model: "claude-sonnet-4"}}
 	got, _ := json.Marshal(v)
@@ -1383,6 +1385,47 @@ func TestRunDetailSkillVersionAndFolder(t *testing.T) {
 	}
 }
 
+// An incremental run's view says what it covered; a full run's note is empty
+// (and still present, as "").
+func TestRunDetailIncrementalNote(t *testing.T) {
+	e := newEnv(t, nil)
+	var res map[string]any
+	if err := json.Unmarshal([]byte(cleanResult(head('a'))), &res); err != nil {
+		t.Fatal(err)
+	}
+	res["incremental"] = map[string]any{"reviewed": 2, "carried": 28, "from": "abc1234def5678abc1234def5678abc1234def56"}
+	b, _ := json.Marshal(res)
+	incremental := e.addRun(runFix{project: "acme/widgets", number: 1, head: head('a'), result: string(b), outcome: OutcomeApproved, approved: true, incremental: true})
+	full := e.addRun(runFix{project: "acme/widgets", number: 2, head: head('b'), result: cleanResult(head('b')), outcome: OutcomeApproved, approved: true})
+	// An incremental run whose result was never merged with the last review
+	// (a push superseded it, or the pod restarted) is a few files only.
+	unmerged := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('c'), result: cleanResult(head('c')), state: store.Superseded, incremental: true})
+	// Not yet merged is no reason to say so: a reported run waits for the
+	// publisher to merge it, and an error result has no files to speak of.
+	waiting := e.addRun(runFix{project: "acme/widgets", number: 4, head: head('d'), result: cleanResult(head('d')), state: store.Reported, incremental: true})
+	errored := e.addRun(runFix{project: "acme/widgets", number: 5, head: head('e'), state: store.Superseded, incremental: true,
+		result: `{"schema_version":1,"status":"error","base":"` + baseSHA + `","head":"` + head('e') + `","comment":{"markdown":"x"}}`})
+	c := e.signInGitLab(false, "acme/widgets")
+
+	for name, id := range map[string]string{"a reported run": waiting, "an error result": errored} {
+		if v := getJSON[RunDetailView](e, c, "/api/runs/"+id); v.IncrementalNote != "" {
+			t.Errorf("incrementalNote = %q for %s, want none", v.IncrementalNote, name)
+		}
+	}
+	if v := getJSON[RunDetailView](e, c, "/api/runs/"+incremental); v.IncrementalNote != "Re-reviewed 2 files · 28 carried over from `abc1234`" {
+		t.Errorf("incrementalNote = %q", v.IncrementalNote)
+	}
+	if v := getJSON[RunDetailView](e, c, "/api/runs/"+unmerged); v.IncrementalNote != "Part of an incremental review that was never merged." {
+		t.Errorf("incrementalNote = %q for an unmerged partial", v.IncrementalNote)
+	}
+	if v := getJSON[RunDetailView](e, c, "/api/runs/"+full); v.IncrementalNote != "" {
+		t.Errorf("incrementalNote = %q for a full review, want none", v.IncrementalNote)
+	}
+	if raw := e.get(c, "/api/runs/"+full).Body.String(); !strings.Contains(raw, `"incrementalNote":""`) {
+		t.Errorf("body = %s; want an empty incrementalNote", raw)
+	}
+}
+
 // A run skipped for lack of skills is not a failure and not counted as a
 // review; its reason says so.
 func TestSkippedRunOutcome(t *testing.T) {
@@ -1573,6 +1616,30 @@ func TestSettingViewsCommandsAuthorAndMaintainersOnly(t *testing.T) {
 	repo = settings.Effective{CommandsAuthorAndMaintainersOnly: true}
 	if got := settingViews(repo)["commandsAuthorAndMaintainersOnly"]; got != (SettingView{true, false}) {
 		t.Errorf("commandsAuthorAndMaintainersOnly = %+v, want true not overridden", got)
+	}
+}
+
+// Incremental reviews is a setting of the repository like the others.
+func TestSettingViewsIncrementalReviews(t *testing.T) {
+	repo := settings.Effective{IncrementalReviews: false, Overridden: map[string]bool{settings.KeyIncrementalReviews: true}}
+	if got := settingViews(repo)["incrementalReviews"]; got != (SettingView{false, true}) {
+		t.Errorf("incrementalReviews = %+v, want false overridden", got)
+	}
+	repo = settings.Effective{IncrementalReviews: true}
+	if got := settingViews(repo)["incrementalReviews"]; got != (SettingView{true, false}) {
+		t.Errorf("incrementalReviews = %+v, want true not overridden", got)
+	}
+}
+
+// Learn from dismissals is a setting of the repository like the others.
+func TestSettingViewsLearnFromDismissals(t *testing.T) {
+	repo := settings.Effective{LearnFromDismissals: false, Overridden: map[string]bool{settings.KeyLearnFromDismissals: true}}
+	if got := settingViews(repo)["learnFromDismissals"]; got != (SettingView{false, true}) {
+		t.Errorf("learnFromDismissals = %+v, want false overridden", got)
+	}
+	repo = settings.Effective{LearnFromDismissals: true}
+	if got := settingViews(repo)["learnFromDismissals"]; got != (SettingView{true, false}) {
+		t.Errorf("learnFromDismissals = %+v, want true not overridden", got)
 	}
 }
 

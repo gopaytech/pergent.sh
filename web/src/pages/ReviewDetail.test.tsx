@@ -38,6 +38,22 @@ describe("ReviewDetail", () => {
     expect(row("unversioned")).toHaveTextContent(/· library$/);
   });
 
+  it("says what an incremental review covered, and nothing for a full one", async () => {
+    const note = "Re-reviewed 2 files · 28 carried over from `abc1234`";
+    const { unmount } = renderAndWait({ ...runDetail, incrementalNote: note });
+    const incremental = await screen.findByRole("region", { name: "This run" });
+    // The note is markdown in the comment; the page shows it as plain text.
+    expect(await within(incremental).findByText("Re-reviewed 2 files · 28 carried over from abc1234")).toBeInTheDocument();
+    expect(incremental).not.toHaveTextContent("`");
+    unmount();
+
+    renderAndWait();
+    const full = await screen.findByRole("region", { name: "This run" });
+    expect(await within(full).findByText("v0.1.0")).toBeInTheDocument();
+    expect(full).not.toHaveTextContent("Re-reviewed");
+    expect(full).not.toHaveTextContent("carried over");
+  });
+
   it("shows the change, its history and the newest run", async () => {
     renderAndWait();
     expect(await screen.findByRole("heading", { name: /Refund idempotency key/ })).toBeInTheDocument();

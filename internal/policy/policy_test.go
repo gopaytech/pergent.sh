@@ -1083,6 +1083,25 @@ func TestDecideMergeNote(t *testing.T) {
 	}
 }
 
+// An incremental review's comment says how many files it looked at again and
+// where the rest came from; a full review's has no such line.
+func TestDecideIncrementalNote(t *testing.T) {
+	const from = "abc1234def5678abc1234def5678abc1234def56"
+	r := completed(skill("style", "no_blocking_issues", "a.go"))
+	r.Incremental = &result.Incremental{Reviewed: 2, Carried: 28, From: from}
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	const want = "Re-reviewed 2 files · 28 carried over from `abc1234`"
+	if !strings.Contains(d.Comment, want) {
+		t.Errorf("comment lacks %q:\n%s", want, d.Comment)
+	}
+
+	r.Incremental = nil
+	d = Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	if strings.Contains(d.Comment, "Re-reviewed") || strings.Contains(d.Comment, "carried over") {
+		t.Errorf("a full review's comment has the incremental line:\n%s", d.Comment)
+	}
+}
+
 // The comment of a completed review shows the commit, the pergent version, the
 // dismiss command of each finding and the re-run command when the outcome has
 // a mention, and links each finding's location with FileURL.

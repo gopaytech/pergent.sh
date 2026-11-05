@@ -548,6 +548,10 @@ func (d *Dashboard) visibleRun(ctx context.Context, se Session, id string) (stor
 	return run, true, nil
 }
 
+// notMergedNote is the incrementalNote of an incremental run whose result was
+// not merged with the last review.
+const notMergedNote = "Part of an incremental review that was never merged."
+
 func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	run, found, err := d.visibleRun(ctx, se, r.PathValue("id"))
@@ -604,6 +608,15 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		view.PergentVersion = res.PergentVersion
+		view.IncrementalNote = result.IncrementalNote(res.Incremental)
+		if run.Incremental && res.Incremental == nil && res.Status == "completed" && run.State != store.Reported {
+			// A run that reviewed only some files whose result was never
+			// merged (a push superseded it, or the pod restarted): what
+			// its page lists is a few files, not the whole change. A
+			// reported run is still to be merged, and an error result
+			// lists no files.
+			view.IncrementalNote = notMergedNote
+		}
 		fillSkills(&view, res, run.Result, run.SkillSources, run.SkillVersions, dismissals)
 	}
 	writeJSON(w, http.StatusOK, view)
@@ -779,9 +792,10 @@ func (d *Dashboard) repositoryViews(ctx context.Context, se Session, repos []set
 }
 
 // repository serves a repository's detail, with a trailing /inputs its
-// skills and instructions, or with a trailing /readiness its Readiness tab.
-// A repository whose own path is the one asked for wins over the /inputs
-// or /readiness of another.
+// skills and instructions, with a trailing /readiness its Readiness tab, or
+// with a trailing /past-dismissals its Past dismissals. A repository whose own
+// path is the one asked for wins over the /inputs, /readiness or
+// /past-dismissals of another.
 func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	instance, rest := r.PathValue("instance"), r.PathValue("rest")
@@ -821,6 +835,12 @@ func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if project, ok := strings.CutSuffix(rest, "/past-dismissals"); ok {
+		if repo, ok := find(project); ok {
+			d.repositoryPastDismissals(w, r, se, repo)
+			return
+		}
+	}
 	notFound(w)
 }
 
@@ -856,6 +876,8 @@ func settingViews(repo settings.Effective) map[string]SettingView {
 		"reviewDrafts":                     {repo.ReviewDrafts, ov[settings.KeyReviewDrafts]},
 		"inlineFindings":                   {repo.InlineFindings, ov[settings.KeyInlineFindings]},
 		"commandsAuthorAndMaintainersOnly": {repo.CommandsAuthorAndMaintainersOnly, ov[settings.KeyCommandsAuthorAndMaintainersOnly]},
+		"incrementalReviews":               {repo.IncrementalReviews, ov[settings.KeyIncrementalReviews]},
+		"learnFromDismissals":              {repo.LearnFromDismissals, ov[settings.KeyLearnFromDismissals]},
 		"failureStatus":                    {string(repo.FailureStatus), ov[settings.KeyFailureStatus]},
 		"skills":                           {repo.Skills, ov[settings.KeySkills]},
 		"repoSkills":                       {nonNil(repo.RepoSkills), ov[settings.KeyRepoSkills]},

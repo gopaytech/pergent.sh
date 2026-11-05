@@ -46,7 +46,7 @@ const (
 	testProjectPath = "acme/widgets"
 	testRepoURL     = "https://gitlab.example.com/acme/widgets.git"
 	testNamespace   = "pergent-jobs"
-	testImage       = "ghcr.io/gopaytech/pergent:v0.1.0"
+	testImage       = "ghcr.io/gopaytech/pergent:v0.5.2"
 	testCallbackURL = "https://pergent.example.com"
 
 	testReviewToken  = "review-bot-token-example"

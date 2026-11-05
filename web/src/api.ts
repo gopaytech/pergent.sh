@@ -168,6 +168,9 @@ export type RunDetailView = {
   model: string | null;
   // The step limit the run had; null for a run from before it was recorded.
   maxTurns: number | null;
+  // What an incremental review covered ("Re-reviewed 2 files · 28 carried over
+  // from `abc1234`"); empty for a full review.
+  incrementalNote: string;
   tokens: { in: number; out: number };
   files: {
     reviewed: string[];
@@ -199,6 +202,8 @@ export type RepoSettings = {
   reviewDrafts: SettingView<boolean>;
   inlineFindings: SettingView<boolean>;
   commandsAuthorAndMaintainersOnly: SettingView<boolean>;
+  incrementalReviews: SettingView<boolean>;
+  learnFromDismissals: SettingView<boolean>;
   failureStatus: SettingView<string>;
   // skills is null for the default list, otherwise the library skills.
   skills: SettingView<string[] | null>;
@@ -280,6 +285,21 @@ export type ReadinessView = {
   applyBase: string[];
 };
 
+// PastDismissalView is a finding whose dismissals teach the repository's reviews
+// (GET .../past-dismissals, maintainers and admins). by, at and number are of the
+// dismissal shown; number is its change. The text is what people wrote.
+export type PastDismissalView = {
+  skill: string;
+  severity: "blocking" | "suggestion";
+  file: string;
+  title: string;
+  reason: string;
+  by: string;
+  at: string;
+  number: number;
+  fingerprint: string;
+};
+
 // SettingsUpdate is the body of PUT .../settings: only the keys to change;
 // null resets one to its default.
 export type SettingsUpdate = Partial<{
@@ -287,6 +307,8 @@ export type SettingsUpdate = Partial<{
   reviewDrafts: boolean | null;
   inlineFindings: boolean | null;
   commandsAuthorAndMaintainersOnly: boolean | null;
+  incrementalReviews: boolean | null;
+  learnFromDismissals: boolean | null;
   failureStatus: string | null;
   skills: string[] | null;
   repoSkills: string[] | null;
@@ -440,6 +462,8 @@ export type DefaultValues = {
   reviewDrafts: boolean;
   inlineFindings: boolean;
   commandsAuthorAndMaintainersOnly: boolean;
+  incrementalReviews: boolean;
+  learnFromDismissals: boolean;
   failureStatus: string;
   jobTimeoutSeconds: number;
   maxTurns: number;
@@ -702,6 +726,11 @@ export const paths = {
   apiRunLog: (id: string) => `/api/runs/${seg(id)}/log`,
   apiRepo: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}`,
   apiRepoInputs: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/inputs`,
+  apiRepoPastDismissals: (instance: string, project: string) =>
+    `/api/repositories/${seg(instance)}/${proj(project)}/past-dismissals`,
+  // Stop using: POST {fingerprint}.
+  apiRepoPastDismissalStop: (instance: string, project: string) =>
+    `/api/repositories/${seg(instance)}/${proj(project)}/past-dismissals/stop`,
   apiRepoSettings: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/settings`,
   apiRepoReadiness: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/readiness`,
   apiRepoReadinessScan: (instance: string, project: string) =>

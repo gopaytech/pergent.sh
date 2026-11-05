@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -124,7 +125,7 @@ func Rerun(ctx context.Context, st *store.Store, req RerunRequest) (RerunResult,
 	if capped {
 		return RerunResult{Status: RerunCapped}, nil
 	}
-	_, created, err := st.EnqueueRerun(ctx, req.MR, req.ProjectPath, req.Head, req.TargetBranch, trigger, skills, base)
+	_, created, err := st.EnqueueRerun(ctx, req.MR, req.ProjectPath, req.Head, req.TargetBranch, trigger, skills, base, !req.FailedOnly)
 	if err != nil {
 		return RerunResult{}, fmt.Errorf("queue the re-run: %w", err)
 	}
@@ -148,6 +149,126 @@ var reasonImage = regexp.MustCompile(`!\[[^\]]*\]\([^)]*\)|!\[[^\]]*\]\[[^\]]*\]
 // way to track readers) and trimmed.
 func CleanReason(reason string) string {
 	return strings.TrimSpace(reasonImage.ReplaceAllString(reason, ""))
+}
+
+// What a review is told of past dismissals, per skill, and how much of each
+// text. A title or file name may have been written from repository content.
+const (
+	maxPastDismissals = 20
+	maxPastTitleRunes = 200
+)
+
+// PastDismissalDays is how far back a dismissal still teaches a review.
+const PastDismissalDays = 90
+
+// PastDismissal is one entry of what people rejected, as a review is given
+// it. It names nobody: who rejected a finding is not the model's business.
+type PastDismissal struct {
+	File     string `json:"file"`
+	Title    string `json:"title"`
+	Severity string `json:"severity"`
+	Reason   string `json:"reason"`
+}
+
+// DedupeDismissals keeps one row per fingerprint, a blocking one over a
+// suggestion, then the newest. The result has blocking rows first, then the
+// newest first.
+func DedupeDismissals(rows []store.Dismissal) []store.Dismissal {
+	best := map[string]store.Dismissal{}
+	var order []string
+	for _, r := range rows {
+		cur, seen := best[r.Fingerprint]
+		if !seen {
+			order = append(order, r.Fingerprint)
+		}
+		if !seen || outranks(r, cur) {
+			best[r.Fingerprint] = r
+		}
+	}
+	out := make([]store.Dismissal, 0, len(order))
+	for _, fp := range order {
+		out = append(out, best[fp])
+	}
+	sort.SliceStable(out, func(i, j int) bool { return outranks(out[i], out[j]) })
+	return out
+}
+
+// TeachingRows is the rows that teach, one per fingerprint: those whose reason
+// is empty once cleaned (an old reason that was only an image) are dropped
+// first, so one of them can't hide another row of the same finding that has a
+// reason, and then DedupeDismissals picks the row. A review is told these and
+// the Past dismissals list shows them.
+func TeachingRows(rows []store.Dismissal) []store.Dismissal {
+	kept := make([]store.Dismissal, 0, len(rows))
+	for _, r := range rows {
+		if CleanReason(r.Reason) != "" {
+			kept = append(kept, r)
+		}
+	}
+	return DedupeDismissals(kept)
+}
+
+// outranks tells whether a goes before b: blocking over suggestion, then newer.
+func outranks(a, b store.Dismissal) bool {
+	if (a.Severity == "blocking") != (b.Severity == "blocking") {
+		return a.Severity == "blocking"
+	}
+	return a.CreatedAt.After(b.CreatedAt)
+}
+
+// PastDismissals is what a review of a change by changeAuthorID (0 when
+// unknown) is told, for each of skills that has any: at most 20 entries a
+// skill, blocking first. A blocking row by the change's author is left out,
+// and so is every one with a recorded dismisser when the author is unknown,
+// so nobody clears their own blocker by rejecting it on another change first.
+// A row from before dismissers were recorded (ID 0) can't be matched and
+// stays. The text goes through redact and is cut.
+func PastDismissals(rows []store.Dismissal, skills []string, changeAuthorID int64, redact func(string) string) map[string][]PastDismissal {
+	if redact == nil {
+		redact = func(s string) string { return s }
+	}
+	bySkill := map[string][]store.Dismissal{}
+	for _, name := range skills {
+		bySkill[name] = nil
+	}
+	for _, r := range rows {
+		if _, ok := bySkill[r.Skill]; !ok {
+			continue
+		}
+		if r.Severity == "blocking" && r.DismisserPlatformID != 0 && (changeAuthorID == 0 || r.DismisserPlatformID == changeAuthorID) {
+			continue
+		}
+		bySkill[r.Skill] = append(bySkill[r.Skill], r)
+	}
+	out := map[string][]PastDismissal{}
+	for name, rs := range bySkill {
+		rs = TeachingRows(rs)
+		if len(rs) > maxPastDismissals {
+			rs = rs[:maxPastDismissals]
+		}
+		for _, r := range rs {
+			file, title, reason := TeachingText(r, redact)
+			out[name] = append(out[name], PastDismissal{File: file, Title: title, Severity: r.Severity, Reason: reason})
+		}
+	}
+	return out
+}
+
+// TeachingText is the file, title and reason of a dismissal as a review is told
+// them: redacted, the reason cleaned, and each cut (file and title to 200
+// characters, the reason to MaxReasonRunes). The Past dismissals list shows the
+// same text.
+func TeachingText(r store.Dismissal, redact func(string) string) (file, title, reason string) {
+	return cutRunes(redact(r.File), maxPastTitleRunes), cutRunes(redact(r.Title), maxPastTitleRunes),
+		cutRunes(redact(CleanReason(r.Reason)), MaxReasonRunes)
+}
+
+// cutRunes is s cut to n characters.
+func cutRunes(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
 }
 
 // RenderDismissals is stored dismissals in the form the comment renderer and
@@ -207,15 +328,22 @@ func LatestFindings(ctx context.Context, st *store.Store, mr store.MRKey) (findi
 	if perr != nil {
 		return nil, run, false, nil
 	}
-	for _, s := range r.Skills {
+	return findingsOf(r.Skills), run, true, nil
+}
+
+// findingsOf returns every finding with a fingerprint in skills, each
+// carrying the name of the skill that reported it.
+func findingsOf(skills []result.Skill) (findings []result.Finding) {
+	for _, s := range skills {
 		for _, raw := range s.Findings {
 			var x result.Finding
 			if json.Unmarshal(raw, &x) == nil && x.Fingerprint != "" {
+				x.Skill = s.Name
 				findings = append(findings, x)
 			}
 		}
 	}
-	return findings, run, true, nil
+	return findings
 }
 
 // MostSevere returns the finding with fingerprint, as severe as the most

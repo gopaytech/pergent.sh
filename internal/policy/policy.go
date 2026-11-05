@@ -317,14 +317,16 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 
 // renderOptions is how the comment of r is rendered: the size limit, the
 // changed files, the reviewed commit and the pergent version that reviewed
-// it, the links and, with a mention, the dismiss and re-run commands. With
-// InlineOn the findings on the diff are left out of the list, the others carry
-// their notes and the footer says to dismiss in a finding's thread.
+// it, what an incremental review covered, the links and, with a mention, the
+// dismiss and re-run commands. With InlineOn the findings on the diff are left
+// out of the list, the others carry their notes and the footer says to dismiss
+// in a finding's thread.
 func renderOptions(o Outcome, r *result.Result, changed []string) render.Options {
 	opts := render.Options{MaxLen: o.MaxComment, ChangedFiles: changed, Commit: r.Head, FileURL: o.FileURL}
 	if r.PergentVersion != "" {
 		opts.Version = "v" + strings.TrimPrefix(r.PergentVersion, "v")
 	}
+	opts.MetaNote = result.IncrementalNote(r.Incremental)
 	if o.Mention != "" {
 		opts.DismissCommand = "@" + o.Mention + " dismiss"
 		opts.Footer = "Run again: `@" + o.Mention + " review`"

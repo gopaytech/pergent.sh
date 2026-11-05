@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -156,6 +157,9 @@ type dispatcher struct {
 	// keptVersions are the library versions of those kept skills, as the
 	// earlier run recorded them.
 	keptVersions map[string]int
+	// keptHashes are the content hashes of those kept skills, as the earlier
+	// run recorded them.
+	keptHashes map[string]string
 }
 
 func (d *dispatcher) dispatch(ctx context.Context) error {
@@ -273,12 +277,12 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	d.secrets = append(d.secrets, string(gitToken), llmKey)
 
 	var previous []byte
-	prev, havePrev, err := e.Store.PreviousResult(ctx, run.MR, run.ID)
+	last, havePrev, err := e.Store.LastReview(ctx, run.MR, run.ID)
 	if err != nil {
 		return d.retry(ctx, fmt.Errorf("load previous result: %w", err))
 	}
 	if havePrev {
-		if previous, err = result.Trim(prev); err != nil {
+		if previous, err = result.Trim(last.Result); err != nil {
 			d.log.Warn("reviewing without the previous result: it can't be read", "error", err)
 			previous = nil
 		}
@@ -318,11 +322,44 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	if len(in.Skills) == 0 {
 		return d.skipNoSkills(ctx, plat, repo)
 	}
+	// Only a push can be incremental: a re-run on request is a full review,
+	// and a re-run of the failed skills keeps the base run it has.
+	push := run.Trigger == store.TriggerPush
+	if push {
+		carried, reason, err := d.planCarried(ctx, plat, repo, last, havePrev, in)
+		if err != nil {
+			return d.retry(ctx, err)
+		}
+		if len(carried) > 0 {
+			if in.Carried, err = json.Marshal(carried); err != nil {
+				return d.retry(ctx, fmt.Errorf("encode the carried files: %w", err))
+			}
+		} else {
+			d.log.Info("full review", "reason", reason)
+		}
+	}
+	// What people rejected earlier is the same for a full and an incremental
+	// review, and no skill's hash counts it.
+	var dismissalCounts map[string]int
+	in.Dismissals, dismissalCounts = d.pastDismissals(ctx, repo, in, mr.AuthorID)
+	hadCarried := len(in.Carried) > 0
+	hadDismissals := len(in.Dismissals) > 0
 	if err := in.Fit(inputs.ConfigMapLimit); err != nil {
 		if errors.Is(err, inputs.ErrTooLarge) {
 			return d.fail(ctx, reasonTooLarge)
 		}
 		return d.fail(ctx, err.Error())
+	}
+	switch {
+	case hadDismissals && in.Dismissals == nil:
+		d.log.Warn("reviewing without past dismissals: the inputs are too large for them", "entries", dismissalCounts)
+	case hadDismissals:
+		d.log.Info("past dismissals", "entries", dismissalCounts)
+	}
+	if push {
+		if err := d.setIncremental(ctx, last, in, hadCarried); err != nil {
+			return d.retry(ctx, err)
+		}
 	}
 
 	token, tokenHash, err := mintToken()
@@ -395,7 +432,8 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	e.clearAttention(ctx, repo.Instance, repo.Project, attSkillMissing)
 	e.clearAttention(ctx, repo.Instance, repo.Project, attNoSkills)
 	// For the dashboard, best effort: the model, where each skill came from
-	// and the library version of each library skill.
+	// and the library version of each library skill. The hash of each skill
+	// goes along: the next push carries nothing for a skill that changed.
 	sources, versions := in.Sources, in.Versions
 	if len(d.keptSources) > 0 {
 		// A re-run of some skills shows the whole review's sources and
@@ -415,7 +453,17 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			versions[name] = v
 		}
 	}
-	if err := e.Store.SetRunInputs(ctx, run.ID, llm.Model, repo.MaxTurns, sources, versions); err != nil {
+	hashes := skillHashes(in.Skills)
+	if len(d.keptHashes) > 0 {
+		hashes = map[string]string{}
+		for name, h := range d.keptHashes {
+			hashes[name] = h
+		}
+		for name, h := range skillHashes(in.Skills) {
+			hashes[name] = h
+		}
+	}
+	if err := e.Store.SetRunInputs(ctx, run.ID, llm.Model, repo.MaxTurns, sources, versions, hashes); err != nil {
 		d.log.Info("couldn't record the review's model, step limit and skills for the dashboard", "error", d.redact(err.Error()))
 	}
 
@@ -482,6 +530,12 @@ func (d *dispatcher) subset(ctx context.Context, in *inputs.Inputs, mr forge.Cha
 	for name, v := range base.SkillVersions {
 		if _, rerun := only.Skills[name]; !rerun {
 			d.keptVersions[name] = v
+		}
+	}
+	d.keptHashes = map[string]string{}
+	for name, h := range base.SkillHashes {
+		if _, rerun := only.Skills[name]; !rerun {
+			d.keptHashes[name] = h
 		}
 	}
 	return only, nil

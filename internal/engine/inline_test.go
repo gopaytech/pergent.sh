@@ -116,6 +116,17 @@ func (m *memThreads) SetInlineThreadState(_ context.Context, _ store.MRKey, fp, 
 	return nil
 }
 
+func (m *memThreads) NoteInlineThreadLeftOut(_ context.Context, _ store.MRKey, fp string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.note("store left-out %s", fp)
+	if r, ok := m.rows[fp]; ok {
+		r.LeftOutNoted = true
+		m.rows[fp] = r
+	}
+	return nil
+}
+
 func (m *memThreads) DeleteInlineThread(_ context.Context, _ store.MRKey, fp string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -139,8 +150,11 @@ type fakeInline struct {
 	diff    []forge.FileDiff
 	diffErr error
 	// compare answers CompareDiff; nil is an empty comparison.
-	compare    func(from, to string) ([]forge.FileDiff, error)
-	compares   []string
+	compare  func(from, to string) ([]forge.FileDiff, error)
+	compares []string
+	// changed and changedErr answer ChangedSince.
+	changed    []string
+	changedErr error
 	threads    []forge.Thread
 	threadsErr error
 
@@ -174,6 +188,10 @@ func (f *fakeInline) CompareDiff(_ context.Context, _ int64, from, to string) ([
 		return nil, nil
 	}
 	return f.compare(from, to)
+}
+
+func (f *fakeInline) ChangedSince(context.Context, int64, string, string) ([]string, error) {
+	return f.changed, f.changedErr
 }
 
 func (f *fakeInline) Threads(context.Context, int64, int64) ([]forge.Thread, error) {
@@ -1172,6 +1190,71 @@ func TestInlineStaleRecordIsDroppedAndPostedAgain(t *testing.T) {
 	if len(h.eventsContaining("store delete "+fpBlocking)) != 1 {
 		t.Errorf("events = %v, want the stale record deleted", h.events)
 	}
+}
+
+// A skill that left a finding out because of a past dismissal doesn't get its
+// thread resolved as fixed: the thread is told once, over any number of
+// reviews, and stays open.
+func TestInlineLeftOutFindingIsNotedOnce(t *testing.T) {
+	setup := func(t *testing.T) *harness {
+		h := newHarness(t)
+		r := h.row(fpBlocking, "t1", 11, "open")
+		h.st = newMemThreads(&h.events, r)
+		h.fi.threads = []forge.Thread{h.platform(r, false)}
+		return h
+	}
+	leftOut := func(h *harness) policy.Outcome {
+		s := reviewed("no_blocking_issues", "db/query.go")
+		s.Notes = []string{result.LeftOutNotePrefix + " Token compared with == (Token compared with == in db/query.go)"}
+		r, err := result.Parse(resultFor(t, h.head, s))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return policy.Outcome{Result: r}
+	}
+
+	t.Run("once over two reviews", func(t *testing.T) {
+		h := setup(t)
+		h.sync(leftOut(h))
+		want := []string{
+			"reply t1 No longer reported in `aaaaaaa`; see the note on past dismissals in the comment.",
+			"store left-out " + fpBlocking,
+		}
+		if !slices.Equal(h.events, want) {
+			t.Fatalf("events =\n%q\nwant\n%q", h.events, want)
+		}
+		if r, _ := h.st.Row(fpBlocking); r.State != "open" || !r.LeftOutNoted {
+			t.Errorf("row = %+v, want it open and noted", r)
+		}
+		h.events = nil
+		h.sync(leftOut(h))
+		if len(h.events) != 0 {
+			t.Errorf("second review: events = %q, want none", h.events)
+		}
+	})
+
+	t.Run("a failed reply is tried again", func(t *testing.T) {
+		h := setup(t)
+		h.fi.replyErr = map[string]error{"t1": errors.New("boom")}
+		h.sync(leftOut(h))
+		if r, _ := h.st.Row(fpBlocking); r.LeftOutNoted {
+			t.Fatal("a reply that failed was recorded as sent")
+		}
+		h.fi.replyErr = nil
+		h.events = nil
+		h.sync(leftOut(h))
+		if len(h.eventsContaining("store left-out")) != 1 {
+			t.Errorf("events = %q, want the thread told this time", h.events)
+		}
+	})
+
+	t.Run("without the note the finding is fixed", func(t *testing.T) {
+		h := setup(t)
+		h.sync(securityReview(t, h.head, "no_blocking_issues"))
+		if len(h.eventsContaining("resolve t1 true")) != 1 || len(h.eventsContaining("store left-out")) != 0 {
+			t.Errorf("events = %q, want it resolved as fixed", h.events)
+		}
+	})
 }
 
 func TestInlineResolvesFixedFindings(t *testing.T) {

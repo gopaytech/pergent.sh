@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -568,9 +569,9 @@ func TestRunsToCleanUp(t *testing.T) {
 	}
 }
 
-func TestPreviousResultSkipsErrorsAndCurrent(t *testing.T) {
+func TestLastReview(t *testing.T) {
 	s := newStore(t)
-	if _, ok, err := s.PreviousResult(ctx, mr1, ""); err != nil || ok {
+	if _, ok, err := s.LastReview(ctx, mr1, ""); err != nil || ok {
 		t.Fatalf("empty MR = %v, %v", ok, err)
 	}
 	published := func(mr MRKey, head, body string) string {
@@ -582,22 +583,34 @@ func TestPreviousResultSkipsErrorsAndCurrent(t *testing.T) {
 	}
 	published(mr1, "a", `{"status":"completed","verdict":"first"}`)
 	published(mr1, "b", `{"status":"error","error":{"code":"internal"}}`)
-	published(mr1, "c", `{"status":"completed","verdict":"second"}`)
+	second := published(mr1, "c", `{"status":"completed","verdict":"second"}`)
+	if err := s.SetRunInputs(ctx, second, "m", 0, nil, nil, map[string]string{"security": "h1"}); err != nil {
+		t.Fatal(err)
+	}
 	current := published(mr1, "d", `{"status":"completed","verdict":"current"}`)
 	reported(t, s, mr1, "e", `{"status":"completed","verdict":"unpublished"}`)
 	published(mr2, "z", `{"status":"completed","verdict":"other-mr"}`)
 
-	got, ok, err := s.PreviousResult(ctx, mr1, current)
+	got, ok, err := s.LastReview(ctx, mr1, current)
 	if err != nil || !ok {
 		t.Fatalf("= %v, %v", ok, err)
 	}
-	if !bytes.Contains(got, []byte("second")) {
-		t.Errorf("got %s, want the second run's result", got)
+	if got.ID != second || got.HeadSHA != "c" || !bytes.Contains(got.Result, []byte("second")) ||
+		!reflect.DeepEqual(got.SkillHashes, map[string]string{"security": "h1"}) {
+		t.Errorf("got %s head %s hashes %v result %s, want the second run", got.ID, got.HeadSHA, got.SkillHashes, got.Result)
 	}
 	// Without excluding the current run, the newest published completed one wins.
-	got, ok, _ = s.PreviousResult(ctx, mr1, "")
-	if !ok || !bytes.Contains(got, []byte("current")) {
-		t.Errorf("no exclusion: %s %v", got, ok)
+	got, ok, _ = s.LastReview(ctx, mr1, "")
+	if !ok || got.ID != current || !bytes.Contains(got.Result, []byte("current")) || got.SkillHashes != nil {
+		t.Errorf("no exclusion: %+v %v", got, ok)
+	}
+	// A newer run that has been superseded is passed over.
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'superseded' WHERE id = $1`, current); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, _ = s.LastReview(ctx, mr1, "")
+	if !ok || got.ID != second {
+		t.Errorf("after superseding the newest: %s %v, want the second run", got.ID, ok)
 	}
 }
 
@@ -1675,7 +1688,7 @@ func TestRepublishNewestWhileReportedOfAnotherHead(t *testing.T) {
 func TestRepublishNewestSameHeadRerun(t *testing.T) {
 	s := newStore(t)
 	published(t, s, mr1, "A", "main")
-	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "A", "main", TriggerRerun, nil, nil)
+	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "A", "main", TriggerRerun, nil, nil, false)
 	if err != nil || !created {
 		t.Fatalf("EnqueueRerun = %v, %v", created, err)
 	}
@@ -1989,7 +2002,7 @@ func TestPendingWithdrawalsFailClosedOnPublishFailed(t *testing.T) {
 	if n(s) != 1 {
 		t.Fatal("want it owed again")
 	}
-	if _, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil); err != nil || !created {
+	if _, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", "aaa", "main", TriggerRerun, nil, nil, false); err != nil || !created {
 		t.Fatalf("EnqueueRerun = %v, %v", created, err)
 	}
 	if n(s) != 0 {

@@ -858,6 +858,40 @@ func TestCleanupDeletesJobAndCancelsStatus(t *testing.T) {
 	}
 }
 
+// A full review of a head replaces its incremental run. The commit status is
+// the new run's now, so the cleanup leaves it alone, and still deletes the Job
+// and marks the run cleaned up.
+func TestCleanUpKeepsStatusOfANewerRunOfTheHead(t *testing.T) {
+	env := newTestEnv(t)
+	base := env.Publish(1, sha('c'), resultFor(t, sha('c'), reviewed("no_blocking_issues", "a.go")))
+	head := sha('a')
+	id := env.Dispatched(1, head)
+	createJob(t, env, kube.JobName(id))
+	if err := env.Store.SetIncremental(env.ctx, id, &base); err != nil {
+		t.Fatal(err)
+	}
+	full, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main", store.TriggerRerun, nil, nil, true)
+	if err != nil || !created {
+		t.Fatalf("EnqueueRerun = %v, %v; want a new run", created, err)
+	}
+	if env.Run(id).State != store.Superseded || env.Run(full).State != store.Queued {
+		t.Fatalf("incremental run is %s, full review %s; want superseded and queued", env.Run(id).State, env.Run(full).State)
+	}
+	env.GitLab.Reset()
+
+	cleanup(t, env)
+
+	if env.Job(id) != nil {
+		t.Errorf("the replaced run's Job still exists")
+	}
+	if n := len(env.GitLab.Requests("", "")); n != 0 {
+		t.Errorf("cleanup made %d GitLab requests, want no status set", n)
+	}
+	if !env.Run(id).CleanedUp {
+		t.Errorf("run not marked cleaned up")
+	}
+}
+
 // A superseded run's log is kept, redacted, before its Job is deleted; a
 // log that can't be read doesn't stop the cleanup.
 func TestCleanupKeepsSupersededRunLog(t *testing.T) {
@@ -1351,7 +1385,7 @@ func TestPublishGiveUpWithdrawsApprovalOfItsHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	// R2, a re-run of the same head, supersedes R1 and is reported.
-	r2, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main", store.TriggerRerun, nil, nil)
+	r2, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main", store.TriggerRerun, nil, nil, false)
 	if err != nil || !created {
 		t.Fatalf("EnqueueRerun = %v, %v", created, err)
 	}
@@ -1557,5 +1591,386 @@ func TestSweepWithdrawsApprovalOfAPublishFailedRun(t *testing.T) {
 				t.Errorf("got %d unapprovals, want %d", n, wantUnapprovals)
 			}
 		})
+	}
+}
+
+// reportIncremental reports result for an incremental run of head on merge
+// request 1 that builds on the run base, as a dispatch records it, and returns
+// its id.
+func reportIncremental(t *testing.T, env *testEnv, head, base string, res []byte) string {
+	t.Helper()
+	id := env.Dispatched(1, head)
+	if err := env.Store.SetIncremental(env.ctx, id, &base); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := env.Store.StoreResult(env.ctx, id, "seed-token", res, env.Now()); err != nil || out != store.ResultStored {
+		t.Fatalf("StoreResult = %v, %v", out, err)
+	}
+	return id
+}
+
+// partialReview is the skill of an incremental review that reviewed reviewedFiles
+// again and carried over carried, with findings.
+func partialReview(reviewedFiles, carried []string, findings ...json.RawMessage) result.Skill {
+	s := reviewed("no_blocking_issues", reviewedFiles...)
+	s.Files.Carried = carried
+	s.Findings = findings
+	if len(reviewedFiles) > 0 {
+		s.Batches = 1
+	}
+	return s
+}
+
+// wantRestarted checks the incremental run id of head was not published, and a
+// full re-run of the head was queued in its place.
+func wantRestarted(t *testing.T, env *testEnv, id, head string) {
+	t.Helper()
+	if n := len(env.GitLab.Requests(http.MethodPost, notesPath(1))); n != 0 {
+		t.Errorf("%d comments posted, want none", n)
+	}
+	if n := len(env.GitLab.Requests(http.MethodPost, statusPath(head))); n != 0 {
+		t.Errorf("%d commit statuses set, want none", n)
+	}
+	wantNoApproval(t, env, 1)
+	if r := env.Run(id); r.State != store.Superseded {
+		t.Errorf("run state = %s, want superseded", r.State)
+	}
+	queued, err := env.Store.ClaimQueued(env.ctx, 100, env.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queued) != 1 {
+		t.Fatalf("queued %d runs, want 1", len(queued))
+	}
+	if r := queued[0]; r.HeadSHA != head || r.Trigger != store.TriggerRerun || r.SkillSubset != nil || r.BaseRunID != nil || r.Incremental {
+		t.Errorf("run = head %s %q %v %v incremental %v, want a full re-run of the head", r.HeadSHA, r.Trigger, r.SkillSubset, r.BaseRunID, r.Incremental)
+	}
+}
+
+func TestIncrementalMergedBeforePublish(t *testing.T) {
+	const kept, fresh, gone = "aaaaaa000001", "bbbbbb000001", "cccccc000001"
+	env := newTestEnv(t)
+	headA, headB := sha('a'), sha('c')
+	last := reviewed("no_blocking_issues", "a.go", "b.go")
+	last.Findings = []json.RawMessage{
+		finding(kept, "a.go", 3, 0, "suggestion", ""),
+		finding(gone, "b.go", 4, 0, "suggestion", ""), // b.go is reviewed again, and this is not reported
+	}
+	base := env.Publish(1, headA, resultFor(t, headA, last))
+	partial := partialReview([]string{"b.go"}, []string{"a.go"}, finding(fresh, "b.go", 5, 0, "suggestion", ""))
+	id := reportIncremental(t, env, headB, base, resultFor(t, headB, partial))
+	servePublish(env, 1, headB)
+
+	publish(t, env)
+
+	body := createdComment(t, env, 1)
+	wantLayout(t, body)
+	for _, want := range []string{"Title of aaa", "Title of bbb"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("comment lacks %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "Title of ccc") {
+		t.Errorf("comment has the finding of a file reviewed again:\n%s", body)
+	}
+	wantStatus(t, env, headB, gitlab.StatusSuccess, "No blocking issues")
+	wantPublished(t, env, id)
+
+	r, err := result.Parse(env.Run(id).Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Merged || r.Incremental == nil || *r.Incremental != (result.Incremental{Reviewed: 1, Carried: 1, From: headA}) || len(r.Skills) != 1 {
+		t.Fatalf("stored result = %+v, want the merged result of an incremental review from %s", r, headA)
+	}
+	if got := r.Skills[0].Files.Reviewed; !slices.Equal(got, []string{"b.go", "a.go"}) {
+		t.Errorf("reviewed = %v, want the new files, then the carried", got)
+	}
+	// The next run's previous result is the whole review.
+	next, found, err := env.Store.LastReview(env.ctx, env.MRKey(1), "none")
+	if err != nil || !found || next.ID != id {
+		t.Fatalf("LastReview = %s, %v, %v; want %s", next.ID, found, err, id)
+	}
+	for _, fp := range []string{kept, fresh} {
+		if !strings.Contains(string(next.Result), fp) {
+			t.Errorf("the previous result lacks %s: %s", fp, next.Result)
+		}
+	}
+	if strings.Contains(string(next.Result), gone) {
+		t.Errorf("the previous result has %s, which was not carried: %s", gone, next.Result)
+	}
+}
+
+// The merge is done once: publishing the run again works on the merged result,
+// and the run is not replaced by a full review.
+func TestIncrementalMergesOnce(t *testing.T) {
+	env := newTestEnv(t)
+	headA, headB := sha('a'), sha('c')
+	base := env.Publish(1, headA, resultFor(t, headA, reviewed("no_blocking_issues", "a.go", "b.go")))
+	id := reportIncremental(t, env, headB, base, resultFor(t, headB, partialReview([]string{"b.go"}, []string{"a.go"})))
+	servePublish(env, 1, headB)
+	publish(t, env)
+	before := string(env.Run(id).Result)
+
+	if ok, err := env.Store.Republish(env.ctx, env.MRKey(1), headB, "main"); err != nil || !ok {
+		t.Fatalf("Republish = %v, %v", ok, err)
+	}
+	env.GitLab.Reset()
+	env.GitLab.Reply(http.MethodPut, notePath(1, createdNote), http.StatusOK, `{}`)
+	servePublish(env, 1, headB)
+	publish(t, env)
+
+	if after := string(env.Run(id).Result); after != before {
+		t.Errorf("the merged result changed on the second publish:\n%s\n%s", before, after)
+	}
+	wantPublished(t, env, id)
+	if queued, err := env.Store.ClaimQueued(env.ctx, 100, env.Now().Add(time.Hour)); err != nil || len(queued) != 0 {
+		t.Errorf("queued %+v, %v; want no run", queued, err)
+	}
+}
+
+// An incremental review that can't be completed with the last one is not
+// published: a full review of the head takes its place.
+func TestIncrementalBaseGoneRestartsFull(t *testing.T) {
+	headA, headB := sha('a'), sha('c')
+	for name, tc := range map[string]struct {
+		base    []byte
+		partial result.Skill
+	}{
+		"the base's result does not parse": {
+			base:    []byte(`{"status":"completed"}`),
+			partial: partialReview([]string{"b.go"}, []string{"a.go"}),
+		},
+		"the base is for another commit": {
+			base:    resultFor(t, sha('9'), reviewed("no_blocking_issues", "a.go", "b.go")),
+			partial: partialReview([]string{"b.go"}, []string{"a.go"}),
+		},
+		"the base did not review a carried file": {
+			base:    resultFor(t, headA, reviewed("no_blocking_issues", "b.go")),
+			partial: partialReview([]string{"b.go"}, []string{"a.go"}),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := newTestEnv(t)
+			base := env.Publish(1, headA, tc.base)
+			id := reportIncremental(t, env, headB, base, resultFor(t, headB, tc.partial))
+			servePublish(env, 1, headB)
+
+			publish(t, env)
+
+			wantRestarted(t, env, id, headB)
+			if !strings.Contains(env.Logs(), "reviewing everything instead") {
+				t.Errorf("the restart was not logged:\n%s", env.Logs())
+			}
+		})
+	}
+
+	// The run lost its base run: the foreign key sets base_run_id to NULL
+	// when the earlier run is pruned. The store has no way to prune one, so
+	// the run is read, and the base taken off it, as the publisher would.
+	t.Run("the run has no base run", func(t *testing.T) {
+		env := newTestEnv(t)
+		base := env.Publish(1, headA, resultFor(t, headA, reviewed("no_blocking_issues", "a.go", "b.go")))
+		id := reportIncremental(t, env, headB, base, resultFor(t, headB, partialReview([]string{"b.go"}, []string{"a.go"})))
+		servePublish(env, 1, headB)
+		run := env.Run(id)
+		run.BaseRunID = nil
+
+		_, restarted, err := env.Engine.mergeBase(env.ctx, run, env.Engine.log())
+
+		if err != nil || !restarted {
+			t.Fatalf("mergeBase = restarted %v, %v; want restarted", restarted, err)
+		}
+		wantRestarted(t, env, id, headB)
+	})
+}
+
+// A push can supersede the run after the publisher listed it. The full review
+// that replaces the incremental run is then not queued: it would supersede the
+// push's run.
+func TestIncrementalRestartSkippedForASupersededRun(t *testing.T) {
+	env := newTestEnv(t)
+	headA, headB, headC := sha('a'), sha('c'), sha('d')
+	// The base did not review a.go, so the merge fails.
+	base := env.Publish(1, headA, resultFor(t, headA, reviewed("no_blocking_issues", "b.go")))
+	id := reportIncremental(t, env, headB, base, resultFor(t, headB, partialReview([]string{"b.go"}, []string{"a.go"})))
+	listed := env.Run(id)
+	newer := env.Enqueue(1, headC)
+
+	_, restarted, err := env.Engine.mergeBase(env.ctx, listed, env.Engine.log())
+
+	if err != nil || !restarted {
+		t.Fatalf("mergeBase = restarted %v, %v; want restarted, so nothing is published", restarted, err)
+	}
+	if r := env.Run(newer); r.State != store.Queued {
+		t.Errorf("the newer push's run is %s, want queued", r.State)
+	}
+	queued, err := env.Store.ClaimQueued(env.ctx, 100, env.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queued) != 1 || queued[0].ID != newer {
+		t.Errorf("queued %+v, want only the newer push's run %s", queued, newer)
+	}
+}
+
+// A partial with every file carried over reviews nothing again: the last
+// review's verdict, status and approval stand.
+func TestIncrementalNothingToReview(t *testing.T) {
+	headA, headB := sha('a'), sha('c')
+	for name, tc := range map[string]struct {
+		verdict  string
+		findings []json.RawMessage
+		status   gitlab.StatusState
+		desc     string
+		approved bool
+	}{
+		"clean": {
+			verdict: "no_blocking_issues", status: gitlab.StatusSuccess, desc: "No blocking issues", approved: true,
+		},
+		"blocking": {
+			verdict:  "has_blocking_issues",
+			findings: []json.RawMessage{finding("aaaaaa000001", "a.go", 3, 0, "blocking", "")},
+			status:   gitlab.StatusFailed, desc: "Blocking issues found",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := newTestEnv(t)
+			last := reviewed(tc.verdict, "a.go", "b.go")
+			last.Findings = tc.findings
+			base := env.Publish(1, headA, resultFor(t, headA, last))
+			// The skill started no run: it reports no batches and, whatever
+			// it says of the verdict, the carried findings decide it.
+			partial := partialReview(nil, []string{"a.go", "b.go"})
+			id := reportIncremental(t, env, headB, base, resultFor(t, headB, partial))
+			servePublish(env, 1, headB)
+
+			publish(t, env)
+
+			wantStatus(t, env, headB, tc.status, tc.desc)
+			wantPublished(t, env, id)
+			if tc.approved {
+				if n := len(env.GitLab.Requests(http.MethodPost, approvePath(1))); n != 1 {
+					t.Errorf("approve called %d times, want 1", n)
+				}
+				if got := recordedApproval(t, env, 1); got != headB {
+					t.Errorf("recorded approval = %q, want %s", got, headB)
+				}
+			} else {
+				wantNoApproval(t, env, 1)
+			}
+			body := createdComment(t, env, 1)
+			wantLayout(t, body)
+			if len(tc.findings) > 0 && !strings.Contains(body, "Title of aaa") {
+				t.Errorf("comment lacks the carried finding:\n%s", body)
+			}
+			r, err := result.Parse(env.Run(id).Result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !r.Merged || len(r.Skills) != 1 || r.Skills[0].Verdict != tc.verdict ||
+				!slices.Equal(r.Skills[0].Files.Reviewed, []string{"a.go", "b.go"}) {
+				t.Errorf("stored result = %+v, want the last review's verdict %s over both files", r, tc.verdict)
+			}
+		})
+	}
+}
+
+// A finding carried over from the last review is still the same finding: its
+// thread gets no "Fixed" reply and stays open.
+func TestIncrementalKeepsThreads(t *testing.T) {
+	e := newInlineEnv(t)
+	headB := sha('c')
+	e.review(t, sha('a'), with("no_blocking_issues", finding(fpSuggestion, "db/query.go", 11, 0, "suggestion", "")))
+	last, found, err := e.env.Store.LastReview(e.env.ctx, e.env.MRKey(1), "none")
+	if err != nil || !found {
+		t.Fatalf("LastReview = %v, %v", found, err)
+	}
+	if rows := e.rows(t); len(rows) != 1 || rows[fpSuggestion].State != "open" {
+		t.Fatalf("rows = %+v, want the thread of the suggestion", rows)
+	}
+
+	// The next push changed another file; db/query.go and its finding are
+	// carried over.
+	servePublish(e.env, 1, headB)
+	e.env.GitLab.ServeDiff(1, headB, queryFile)
+	partial := partialReview([]string{"other.go"}, []string{"db/query.go"})
+	reportIncremental(t, e.env, headB, last.ID, resultFor(t, headB, partial))
+	publish(t, e.env)
+
+	if replies := e.disc.Replies(t); len(replies) != 0 {
+		t.Errorf("replies = %q, want none for a finding that is still there", replies)
+	}
+	if e.disc.Resolved("disc1") {
+		t.Errorf("the thread of a carried finding was resolved")
+	}
+	if n := len(e.disc.Posted()); n != 1 {
+		t.Errorf("%d discussions started, want only the first review's", n)
+	}
+	if r := e.rows(t)[fpSuggestion]; r.State != "open" {
+		t.Errorf("state = %q, want open", r.State)
+	}
+	wantStatus(t, e.env, headB, gitlab.StatusSuccess, "No blocking issues")
+}
+
+// A partial with status error is published as an error, as any error result
+// is: nothing is merged and no full review is queued.
+func TestIncrementalErrorResultPublishedAsIs(t *testing.T) {
+	env := newTestEnv(t)
+	headA, headB := sha('a'), sha('c')
+	base := env.Publish(1, headA, resultFor(t, headA, reviewed("no_blocking_issues", "a.go", "b.go")))
+	broken, err := json.Marshal(result.Result{
+		SchemaVersion: result.SchemaVersion, Status: "error", PergentVersion: "0.5.0",
+		Base: sha('b'), Head: headB, Skills: []result.Skill{},
+		Error:   &result.Error{Code: "internal", Message: "the model was unreachable"},
+		Comment: result.Comment{Markdown: "the model was unreachable"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := reportIncremental(t, env, headB, base, broken)
+	servePublish(env, 1, headB)
+
+	publish(t, env)
+
+	if body := createdComment(t, env, 1); !strings.Contains(body, "the model was unreachable") {
+		t.Errorf("comment = %q, want the error", body)
+	}
+	wantStatus(t, env, headB, gitlab.StatusFailed, "pergent couldn't review this MR")
+	wantPublished(t, env, id)
+	wantNoApproval(t, env, 1)
+	if r, err := result.Parse(env.Run(id).Result); err != nil || r.Merged {
+		t.Errorf("stored result = %+v, %v; want it as it was sent", r, err)
+	}
+	if queued, err := env.Store.ClaimQueued(env.ctx, 100, env.Now().Add(time.Hour)); err != nil || len(queued) != 0 {
+		t.Errorf("queued %+v, %v; want no run", queued, err)
+	}
+}
+
+// An incremental run that failed to produce a result is reported as failed,
+// as any run is: there is nothing to merge and nothing to restart.
+func TestIncrementalFailureReasonPublishedAsIs(t *testing.T) {
+	env := newTestEnv(t)
+	headA, headB := sha('a'), sha('c')
+	base := env.Publish(1, headA, resultFor(t, headA, reviewed("no_blocking_issues", "a.go", "b.go")))
+	id := env.Dispatched(1, headB)
+	if err := env.Store.SetIncremental(env.ctx, id, &base); err != nil {
+		t.Fatal(err)
+	}
+	reason := "the review Job ended without a result"
+	if ok, err := env.Store.ReportFailure(env.ctx, id, reason, env.Now()); err != nil || !ok {
+		t.Fatalf("ReportFailure = %v, %v", ok, err)
+	}
+	servePublish(env, 1, headB)
+
+	publish(t, env)
+
+	if body := createdComment(t, env, 1); body != policy.ErrorComment(reason) {
+		t.Errorf("comment = %q, want %q", body, policy.ErrorComment(reason))
+	}
+	wantStatus(t, env, headB, gitlab.StatusFailed, "pergent couldn't review this MR")
+	wantPublished(t, env, id)
+	if queued, err := env.Store.ClaimQueued(env.ctx, 100, env.Now().Add(time.Hour)); err != nil || len(queued) != 0 {
+		t.Errorf("queued %+v, %v; want no run", queued, err)
 	}
 }

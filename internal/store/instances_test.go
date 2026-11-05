@@ -307,14 +307,14 @@ func TestRepoDefaultsRoundTrip(t *testing.T) {
 	s := newStore(t)
 	got, err := s.RepoDefaults(ctx)
 	if err != nil || got.Approve != nil || got.ReviewDrafts != nil || got.FailureStatus != nil ||
-		got.JobTimeoutSeconds != nil || got.MaxTurns != nil || got.JobMemory != nil || got.InlineFindings != nil || got.CommandsAuthorAndMaintainersOnly != nil || !got.UpdatedAt.IsZero() {
+		got.JobTimeoutSeconds != nil || got.MaxTurns != nil || got.JobMemory != nil || got.InlineFindings != nil || got.CommandsAuthorAndMaintainersOnly != nil || got.IncrementalReviews != nil || got.LearnFromDismissals != nil || !got.UpdatedAt.IsZero() {
 		t.Fatalf("RepoDefaults when unset = %+v, %v; want the zero value", got, err)
 	}
 
 	yes, no := true, false
 	status, memory, timeout, turns := "neutral", "2Gi", 900, 60
 	in := RepoDefaults{Approve: &yes, ReviewDrafts: &no, FailureStatus: &status, JobTimeoutSeconds: &timeout, MaxTurns: &turns, JobMemory: &memory, InlineFindings: &no,
-		CommandsAuthorAndMaintainersOnly: &no}
+		CommandsAuthorAndMaintainersOnly: &no, IncrementalReviews: &no, LearnFromDismissals: &no}
 	if err := s.PutRepoDefaults(ctx, in); err != nil {
 		t.Fatal(err)
 	}
@@ -323,6 +323,7 @@ func TestRepoDefaultsRoundTrip(t *testing.T) {
 		got.FailureStatus == nil || *got.FailureStatus != "neutral" || got.JobTimeoutSeconds == nil || *got.JobTimeoutSeconds != 900 ||
 		got.MaxTurns == nil || *got.MaxTurns != 60 || got.JobMemory == nil || *got.JobMemory != "2Gi" ||
 		got.InlineFindings == nil || *got.InlineFindings || got.CommandsAuthorAndMaintainersOnly == nil || *got.CommandsAuthorAndMaintainersOnly ||
+		got.IncrementalReviews == nil || *got.IncrementalReviews || got.LearnFromDismissals == nil || *got.LearnFromDismissals ||
 		got.UpdatedAt.IsZero() {
 		t.Fatalf("RepoDefaults = %+v, %v", got, err)
 	}
@@ -333,7 +334,7 @@ func TestRepoDefaultsRoundTrip(t *testing.T) {
 	}
 	got, _ = s.RepoDefaults(ctx)
 	if got.Approve != nil || got.ReviewDrafts != nil || got.FailureStatus != nil || got.JobTimeoutSeconds != nil ||
-		got.MaxTurns != nil || got.InlineFindings != nil || got.CommandsAuthorAndMaintainersOnly != nil || got.JobMemory == nil || *got.JobMemory != "2Gi" {
+		got.MaxTurns != nil || got.InlineFindings != nil || got.CommandsAuthorAndMaintainersOnly != nil || got.IncrementalReviews != nil || got.LearnFromDismissals != nil || got.JobMemory == nil || *got.JobMemory != "2Gi" {
 		t.Fatalf("RepoDefaults after a second put = %+v", got)
 	}
 

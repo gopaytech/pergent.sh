@@ -33,7 +33,7 @@ func TestDashboardReposCRUD(t *testing.T) {
 		t.Errorf("row = %+v", r)
 	}
 	if r.Approve == nil || *r.Approve || r.ReviewDrafts != nil || r.FailureStatus != nil ||
-		r.Skills != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.InlineFindings != nil || r.CommandsAuthorAndMaintainersOnly != nil {
+		r.Skills != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.InlineFindings != nil || r.CommandsAuthorAndMaintainersOnly != nil || r.IncrementalReviews != nil || r.LearnFromDismissals != nil {
 		t.Errorf("nullable columns = %+v", r)
 	}
 	if r.CreatedAt.IsZero() || r.UpdatedAt.Before(r.CreatedAt) {
@@ -48,7 +48,7 @@ func TestDashboardReposCRUD(t *testing.T) {
 		Instance: "main", Project: "acme/widgets",
 		ReviewDrafts: ptrTo(false), FailureStatus: ptrTo("neutral"), Skills: []string{"security", "style"},
 		JobTimeoutSeconds: ptrTo(1200), MaxTurns: ptrTo(60), JobMemory: ptrTo("6Gi"), InlineFindings: ptrTo(false), CreatedBy: "bob",
-		CommandsAuthorAndMaintainersOnly: ptrTo(false),
+		CommandsAuthorAndMaintainersOnly: ptrTo(false), IncrementalReviews: ptrTo(false), LearnFromDismissals: ptrTo(false),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,8 @@ func TestDashboardReposCRUD(t *testing.T) {
 	if u.Approve != nil || u.ReviewDrafts == nil || *u.ReviewDrafts || u.FailureStatus == nil || *u.FailureStatus != "neutral" ||
 		!slices.Equal(u.Skills, []string{"security", "style"}) || u.JobTimeoutSeconds == nil || *u.JobTimeoutSeconds != 1200 ||
 		u.MaxTurns == nil || *u.MaxTurns != 60 || u.JobMemory == nil || *u.JobMemory != "6Gi" ||
-		u.InlineFindings == nil || *u.InlineFindings || u.CommandsAuthorAndMaintainersOnly == nil || *u.CommandsAuthorAndMaintainersOnly {
+		u.InlineFindings == nil || *u.InlineFindings || u.CommandsAuthorAndMaintainersOnly == nil || *u.CommandsAuthorAndMaintainersOnly ||
+		u.IncrementalReviews == nil || *u.IncrementalReviews || u.LearnFromDismissals == nil || *u.LearnFromDismissals {
 		t.Errorf("updated row = %+v", u)
 	}
 	if u.CreatedBy != "alice" || !u.CreatedAt.Equal(r.CreatedAt) {
@@ -520,6 +521,46 @@ func TestUpdateDashboardRepo(t *testing.T) {
 	}
 	if r, _, _ := s.DashboardRepo(ctx, "main", "acme/widgets"); r.CommandsAuthorAndMaintainersOnly != nil {
 		t.Errorf("commands_author_and_maintainers_only after clearing = %v; want NULL", r.CommandsAuthorAndMaintainersOnly)
+	}
+
+	// incremental_reviews behaves the same.
+	if r, _, _ := s.DashboardRepo(ctx, "main", "acme/widgets"); r.IncrementalReviews != nil {
+		t.Errorf("incremental_reviews before it is set = %v; want NULL", r.IncrementalReviews)
+	}
+	if _, err := s.UpdateDashboardRepo(ctx, "main", "acme/widgets", func(r *DashboardRepo) { r.IncrementalReviews = ptrTo(false) }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateDashboardRepo(ctx, "main", "acme/widgets", func(r *DashboardRepo) { r.MaxTurns = ptrTo(90) }); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.DashboardRepo(ctx, "main", "acme/widgets"); r.IncrementalReviews == nil || *r.IncrementalReviews {
+		t.Errorf("incremental_reviews after setting false = %v; want false", r.IncrementalReviews)
+	}
+	if _, err := s.UpdateDashboardRepo(ctx, "main", "acme/widgets", func(r *DashboardRepo) { r.IncrementalReviews = nil }); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.DashboardRepo(ctx, "main", "acme/widgets"); r.IncrementalReviews != nil {
+		t.Errorf("incremental_reviews after clearing = %v; want NULL", r.IncrementalReviews)
+	}
+
+	// learn_from_dismissals behaves the same.
+	if r, _, _ := s.DashboardRepo(ctx, "main", "acme/widgets"); r.LearnFromDismissals != nil {
+		t.Errorf("learn_from_dismissals before it is set = %v; want NULL", r.LearnFromDismissals)
+	}
+	if _, err := s.UpdateDashboardRepo(ctx, "main", "acme/widgets", func(r *DashboardRepo) { r.LearnFromDismissals = ptrTo(false) }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateDashboardRepo(ctx, "main", "acme/widgets", func(r *DashboardRepo) { r.MaxTurns = ptrTo(91) }); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.DashboardRepo(ctx, "main", "acme/widgets"); r.LearnFromDismissals == nil || *r.LearnFromDismissals {
+		t.Errorf("learn_from_dismissals after setting false = %v; want false", r.LearnFromDismissals)
+	}
+	if _, err := s.UpdateDashboardRepo(ctx, "main", "acme/widgets", func(r *DashboardRepo) { r.LearnFromDismissals = nil }); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.DashboardRepo(ctx, "main", "acme/widgets"); r.LearnFromDismissals != nil {
+		t.Errorf("learn_from_dismissals after clearing = %v; want NULL", r.LearnFromDismissals)
 	}
 }
 

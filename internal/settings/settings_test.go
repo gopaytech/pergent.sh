@@ -88,7 +88,7 @@ func get(t *testing.T, r *Resolver, instance, project string) Effective {
 }
 
 var allKeys = []string{KeyApprove, KeyReviewDrafts, KeyInlineFindings, KeyFailureStatus, KeySkills, KeyJobTimeout, KeyMaxTurns, KeyJobMemory,
-	KeyRerunLimitPerMR, KeyRerunLimitPerRepo, KeyRepoSkills, KeyCommandsAuthorAndMaintainersOnly}
+	KeyRerunLimitPerMR, KeyRerunLimitPerRepo, KeyRepoSkills, KeyCommandsAuthorAndMaintainersOnly, KeyIncrementalReviews, KeyLearnFromDismissals}
 
 // wantOverridden checks exactly the given keys are overridden.
 func wantOverridden(t *testing.T, eff Effective, keys ...string) {
@@ -115,6 +115,12 @@ func wantDefaults(t *testing.T, eff Effective, except ...string) {
 	}
 	if !skip(KeyCommandsAuthorAndMaintainersOnly) && !eff.CommandsAuthorAndMaintainersOnly {
 		t.Errorf("CommandsAuthorAndMaintainersOnly = false, want the default true")
+	}
+	if !skip(KeyIncrementalReviews) && !eff.IncrementalReviews {
+		t.Errorf("IncrementalReviews = false, want the default true")
+	}
+	if !skip(KeyLearnFromDismissals) && !eff.LearnFromDismissals {
+		t.Errorf("LearnFromDismissals = false, want the default true")
 	}
 	if !skip(KeyFailureStatus) && eff.FailureStatus != config.FailureStatusFailed {
 		t.Errorf("FailureStatus = %q, want the default failed", eff.FailureStatus)
@@ -154,7 +160,7 @@ func TestResolverConfigKeys(t *testing.T) {
 		MaxTurns:        ptr(120),
 		JobMemory:       ptr(resource.MustParse("6Gi")),
 		RerunLimitPerMR: ptr(20), RerunLimitPerRepo: ptr(100),
-		CommandsAuthorAndMaintainersOnly: ptr(false),
+		CommandsAuthorAndMaintainersOnly: ptr(false), IncrementalReviews: ptr(false), LearnFromDismissals: ptr(false),
 	})
 	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)} // no store: config only
 
@@ -162,7 +168,7 @@ func TestResolverConfigKeys(t *testing.T) {
 	if eff.Platform != config.PlatformGitHub || eff.Instance != "gh" || eff.Project != "Acme/Payments" || eff.Source != SourceConfig {
 		t.Errorf("identity = %s %s %s %s", eff.Platform, eff.Instance, eff.Project, eff.Source)
 	}
-	if eff.Approve || eff.ReviewDrafts || eff.InlineFindings || eff.CommandsAuthorAndMaintainersOnly || eff.FailureStatus != config.FailureStatusNeutral ||
+	if eff.Approve || eff.ReviewDrafts || eff.InlineFindings || eff.CommandsAuthorAndMaintainersOnly || eff.IncrementalReviews || eff.LearnFromDismissals || eff.FailureStatus != config.FailureStatusNeutral ||
 		!slices.Equal(eff.Skills, []string{"security"}) || !slices.Equal(eff.RepoSkills, []string{"team"}) ||
 		eff.JobTimeout != 20*time.Minute || eff.MaxTurns != 120 || eff.JobMemory.Cmp(resource.MustParse("6Gi")) != 0 || eff.RerunLimitPerMR != 20 || eff.RerunLimitPerRepo != 100 {
 		t.Errorf("config keys not reflected: %+v", eff)
@@ -226,7 +232,7 @@ func TestResolverDefaultsAndOverrides(t *testing.T) {
 		Instance: "gh", Project: "Acme/Gadgets",
 		Approve: ptr(true), ReviewDrafts: ptr(false), InlineFindings: ptr(false), FailureStatus: ptr("neutral"),
 		Skills: []string{"security"}, RepoSkills: []string{"team"}, JobTimeoutSeconds: ptr(1200), MaxTurns: ptr(120), JobMemory: ptr("6Gi"),
-		RerunLimitPerMR: ptr(20), RerunLimitPerRepo: ptr(100), CommandsAuthorAndMaintainersOnly: ptr(false),
+		RerunLimitPerMR: ptr(20), RerunLimitPerRepo: ptr(100), CommandsAuthorAndMaintainersOnly: ptr(false), IncrementalReviews: ptr(false), LearnFromDismissals: ptr(false),
 	})
 	// A row of an instance no longer configured is not a repository.
 	upsert(t, st, store.DashboardRepo{Instance: "gone", Project: "acme/old"})
@@ -247,7 +253,7 @@ func TestResolverDefaultsAndOverrides(t *testing.T) {
 	if full.Platform != config.PlatformGitHub || full.Project != "Acme/Gadgets" {
 		t.Errorf("identity = %+v", full)
 	}
-	if !full.Approve || full.ReviewDrafts || full.InlineFindings || full.CommandsAuthorAndMaintainersOnly || full.FailureStatus != config.FailureStatusNeutral ||
+	if !full.Approve || full.ReviewDrafts || full.InlineFindings || full.CommandsAuthorAndMaintainersOnly || full.IncrementalReviews || full.LearnFromDismissals || full.FailureStatus != config.FailureStatusNeutral ||
 		!slices.Equal(full.Skills, []string{"security"}) || !slices.Equal(full.RepoSkills, []string{"team"}) ||
 		full.JobTimeout != 20*time.Minute || full.MaxTurns != 120 || full.JobMemory.Cmp(resource.MustParse("6Gi")) != 0 || full.RerunLimitPerMR != 20 || full.RerunLimitPerRepo != 100 {
 		t.Errorf("overrides not applied: %+v", full)
@@ -288,7 +294,7 @@ func TestResolverBadDashboardMemoryFallsBack(t *testing.T) {
 func TestDefaults(t *testing.T) {
 	cfg := &config.Config{Jobs: config.Jobs{Timeout: 7 * time.Minute}}
 	got := (&Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)}).Defaults(config.PlatformGitLab, "main")
-	if !got.Approve || !got.ReviewDrafts || !got.InlineFindings || !got.CommandsAuthorAndMaintainersOnly || got.FailureStatus != config.FailureStatusFailed ||
+	if !got.Approve || !got.ReviewDrafts || !got.InlineFindings || !got.CommandsAuthorAndMaintainersOnly || !got.IncrementalReviews || !got.LearnFromDismissals || got.FailureStatus != config.FailureStatusFailed ||
 		got.JobTimeout != 7*time.Minute || !got.JobMemory.IsZero() || got.Skills != nil || got.Instance != "main" {
 		t.Errorf("Defaults = %+v", got)
 	}
@@ -324,17 +330,17 @@ func TestBrowserDefaultsApplyToDashboardReposOnly(t *testing.T) {
 	if err := st.PutRepoDefaults(ctx, store.RepoDefaults{
 		Approve: ptr(false), ReviewDrafts: ptr(false), InlineFindings: ptr(false), FailureStatus: ptr("neutral"),
 		JobTimeoutSeconds: ptr(1200), JobMemory: ptr("2Gi"),
-		RerunLimitPerMR: ptr(30), RerunLimitPerRepo: ptr(200), CommandsAuthorAndMaintainersOnly: ptr(false),
+		RerunLimitPerMR: ptr(30), RerunLimitPerRepo: ptr(200), CommandsAuthorAndMaintainersOnly: ptr(false), IncrementalReviews: ptr(false), LearnFromDismissals: ptr(false),
 	}); err != nil {
 		t.Fatal(err)
 	}
 	upsert(t, st, store.DashboardRepo{Instance: "main", Project: "acme/payments", CreatedBy: "alice"})
 	upsert(t, st, store.DashboardRepo{Instance: "main", Project: "acme/gadgets", CreatedBy: "alice",
-		Approve: ptr(true), InlineFindings: ptr(true), JobTimeoutSeconds: ptr(600), RerunLimitPerMR: ptr(5), CommandsAuthorAndMaintainersOnly: ptr(true)})
+		Approve: ptr(true), InlineFindings: ptr(true), JobTimeoutSeconds: ptr(600), RerunLimitPerMR: ptr(5), CommandsAuthorAndMaintainersOnly: ptr(true), IncrementalReviews: ptr(true), LearnFromDismissals: ptr(true)})
 
 	// A dashboard repository takes the defaults; none counts as overridden.
 	eff := get(t, r, "main", "acme/payments")
-	if eff.Approve || eff.ReviewDrafts || eff.InlineFindings || eff.CommandsAuthorAndMaintainersOnly || eff.FailureStatus != config.FailureStatusNeutral ||
+	if eff.Approve || eff.ReviewDrafts || eff.InlineFindings || eff.CommandsAuthorAndMaintainersOnly || eff.IncrementalReviews || eff.LearnFromDismissals || eff.FailureStatus != config.FailureStatusNeutral ||
 		eff.JobTimeout != 20*time.Minute || eff.JobMemory.Cmp(resource.MustParse("2Gi")) != 0 ||
 		eff.RerunLimitPerMR != 30 || eff.RerunLimitPerRepo != 200 {
 		t.Errorf("dashboard repository = %+v", eff)
@@ -343,13 +349,13 @@ func TestBrowserDefaultsApplyToDashboardReposOnly(t *testing.T) {
 
 	// What it sets itself wins.
 	eff = get(t, r, "main", "acme/gadgets")
-	if !eff.Approve || eff.JobTimeout != 10*time.Minute || eff.ReviewDrafts || !eff.InlineFindings || !eff.CommandsAuthorAndMaintainersOnly {
+	if !eff.Approve || eff.JobTimeout != 10*time.Minute || eff.ReviewDrafts || !eff.InlineFindings || !eff.CommandsAuthorAndMaintainersOnly || !eff.IncrementalReviews || !eff.LearnFromDismissals {
 		t.Errorf("dashboard repository with its own settings = %+v", eff)
 	}
 	if eff.RerunLimitPerMR != 5 || eff.RerunLimitPerRepo != 200 {
 		t.Errorf("dashboard repository caps = %d, %d; want 5 (its own), 200 (the default)", eff.RerunLimitPerMR, eff.RerunLimitPerRepo)
 	}
-	wantOverridden(t, eff, KeyApprove, KeyInlineFindings, KeyJobTimeout, KeyRerunLimitPerMR, KeyCommandsAuthorAndMaintainersOnly)
+	wantOverridden(t, eff, KeyApprove, KeyInlineFindings, KeyJobTimeout, KeyRerunLimitPerMR, KeyCommandsAuthorAndMaintainersOnly, KeyIncrementalReviews, KeyLearnFromDismissals)
 
 	// A config repository keeps the config's defaults.
 	eff = get(t, r, "main", "acme/widgets")
