@@ -467,7 +467,7 @@ func TestDismissRetryAfterPartialAttempt(t *testing.T) {
 	at := time.Now()
 	if _, err := f.Store.Dismiss(f.ctx, store.Dismissal{
 		MR: f.MRKey(1), Fingerprint: sqlFingerprint, Severity: "blocking", Reason: "constant",
-		Actor: "mo (gitlab main)", CreatedAt: at.Add(time.Second),
+		Actor: "mo (gitlab main)", CreatedAt: at.Add(time.Second), Teaches: true,
 	}); err != nil {
 		t.Fatal(err)
 	}

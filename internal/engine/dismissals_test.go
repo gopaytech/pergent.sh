@@ -39,7 +39,7 @@ func skillWithFinding(t *testing.T, verdict, severity string) result.Skill {
 func dismiss(t *testing.T, env *testEnv, iid int64, severity, reason string) {
 	t.Helper()
 	if _, err := env.Store.Dismiss(env.ctx, store.Dismissal{
-		MR: env.MRKey(iid), Fingerprint: sqlFingerprint, Severity: severity, Reason: reason, Actor: "maya (gitlab main)",
+		MR: env.MRKey(iid), Fingerprint: sqlFingerprint, Severity: severity, Reason: reason, Actor: "maya (gitlab main)", Teaches: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
