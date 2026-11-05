@@ -123,7 +123,7 @@ pergent trusts the file's size and content to its caller, as it does `--previous
 
 Old rows get `skill`, `file` and `title` by looking the fingerprint up in the stored results of that change. A row whose finding can't be found stays empty and is never selected. `teaches` is true on old blocking rows and false on old suggestion rows.
 
-**Selecting.** At dispatch, after skills are resolved and only when the setting is on. It takes the change's author ID, costs one query, needs an index on the repository, skill and time, and applies to every kind of run. A failed query logs a warning and dispatches without the file.
+**Selecting.** At dispatch, after skills are resolved and only when the setting is on. It takes the change's author ID, costs one query, reads the repository's rows by an index on the repository and time (it doesn't cover the skill, which is filtered after), and applies to every kind of run. A failed query logs a warning and dispatches without the file.
 
 **Cleaning.** `title`, `file` and `reason` go through the existing redaction. `reason` is already capped at 500 characters and cleaned of images by `actions.CleanReason`. `title` and `file` are cut to 200 characters. All three may have been written from repository content.
 
@@ -140,7 +140,7 @@ Old rows get `skill`, `file` and `title` by looking the fingerprint up in the st
 
 **Past dismissals list.** A plain list on the repository's dashboard page, for its maintainers and admins *(chosen)*. It shows what teaches right now, by the rules above except the 20 limit and the own-change rule, one row per fingerprint: skill, severity, file, title, reason, who, when, and a link to the change.
 
-Each row has **Stop using**, which sets `teaches` to false on every dismissal of that finding in the repository, so the next one with the same fingerprint doesn't take its place, and leaves everything else alone. *(chosen)* The dismissal stays on its change, no review is decided again, and nothing happens on the platform, whatever state the change is in. It writes a `dismissal_stopped` audit entry with the merge request and fingerprint. Restore can't do this job: it lives on a finding in the latest review, which goes away once the model stops raising it, and on an open change it brings the finding back and can withdraw an approval. Restore stays on the review page as it is.
+Each row has **Stop using**, which sets `teaches` to false on every dismissal of that finding in the repository, so the next one with the same fingerprint doesn't take its place, and leaves everything else alone. *(chosen)* The dismissal stays on its change, no review is decided again, and nothing happens on the platform, whatever state the change is in. It writes a `dismissal_stopped` audit entry with the fingerprint only: a stop spans changes, so it names no merge request. Restore can't do this job: it lives on a finding in the latest review, which goes away once the model stops raising it, and on an open change it brings the finding back and can withdraw an approval. Restore stays on the review page as it is.
 
 **With incremental reviews.** A new dismissal doesn't make a carried file reviewable again and doesn't count as a changed input. Skill hashes don't include dismissals.
 

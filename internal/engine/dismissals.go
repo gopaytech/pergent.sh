@@ -31,7 +31,9 @@ func (d *dispatcher) pastDismissals(ctx context.Context, repo settings.Effective
 	}
 	slices.Sort(skills)
 	// Both redactions: the engine's removes the LLM keys, the dispatcher's
-	// also this project's clone token.
+	// whatever secrets the run holds by now. That is the clone token on GitLab;
+	// on GitHub it is minted later, and the result token is minted later on
+	// both, so neither is removed here.
 	past := actions.PastDismissals(rows, skills, authorID, func(s string) string { return d.redact(d.e.redact(s)) })
 	if len(past) == 0 {
 		return nil, nil
