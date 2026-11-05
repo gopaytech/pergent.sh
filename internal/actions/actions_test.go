@@ -1,6 +1,8 @@
 package actions
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/gopaytech/pergent.sh/internal/result"
@@ -73,5 +75,33 @@ func TestRenderDismissalsStripsImages(t *testing.T) {
 	got := RenderDismissals([]store.Dismissal{{Fingerprint: "f", Severity: "blocking", Actor: "a", Reason: "ok ![p](https://evil.example/p.png)"}})
 	if len(got) != 1 || got[0].Reason != "ok" {
 		t.Errorf("RenderDismissals = %+v", got)
+	}
+}
+
+// LatestFindings fills in the skill of each finding; the stored finding has
+// none, and the skill never goes back into JSON.
+func TestLatestFindingsCarriesSkill(t *testing.T) {
+	raw := func(fp, severity string) json.RawMessage {
+		return json.RawMessage(`{"id":"` + fp[:6] + `","fingerprint":"` + fp + `","file":"a.go","severity":"` + severity + `","title":"t"}`)
+	}
+	skills := []result.Skill{
+		{Name: "style", Findings: []json.RawMessage{raw("aaaaaa111111", "suggestion")}},
+		{Name: "security", Findings: []json.RawMessage{raw("aaaaaa111111", "blocking"), raw("bbbbbb111111", "suggestion"),
+			json.RawMessage(`{"fingerprint":""}`), json.RawMessage(`7`)}},
+	}
+	got := findingsOf(skills)
+	if len(got) != 3 || got[0].Skill != "style" || got[1].Skill != "security" || got[2].Skill != "security" {
+		t.Fatalf("findingsOf = %+v; want three, each with its skill", got)
+	}
+	// The skill survives picking the most severe report of a fingerprint.
+	if f, ok := MostSevere(got, "aaaaaa111111"); !ok || f.Severity != "blocking" || f.Skill != "security" {
+		t.Errorf("MostSevere = %+v, %v; want the blocking report with its skill", f, ok)
+	}
+	b, err := json.Marshal(got[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "style") || strings.Contains(strings.ToLower(string(b)), "skill") {
+		t.Errorf("finding JSON = %s; the skill must not be stored in it", b)
 	}
 }

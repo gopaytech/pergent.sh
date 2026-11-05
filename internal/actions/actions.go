@@ -207,15 +207,22 @@ func LatestFindings(ctx context.Context, st *store.Store, mr store.MRKey) (findi
 	if perr != nil {
 		return nil, run, false, nil
 	}
-	for _, s := range r.Skills {
+	return findingsOf(r.Skills), run, true, nil
+}
+
+// findingsOf returns every finding with a fingerprint in skills, each
+// carrying the name of the skill that reported it.
+func findingsOf(skills []result.Skill) (findings []result.Finding) {
+	for _, s := range skills {
 		for _, raw := range s.Findings {
 			var x result.Finding
 			if json.Unmarshal(raw, &x) == nil && x.Fingerprint != "" {
+				x.Skill = s.Name
 				findings = append(findings, x)
 			}
 		}
 	}
-	return findings, run, true, nil
+	return findings
 }
 
 // MostSevere returns the finding with fingerprint, as severe as the most

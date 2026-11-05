@@ -87,6 +87,10 @@ type Finding struct {
 	Explanation  string `json:"explanation"`
 	SuggestedFix string `json:"suggested_fix,omitempty"`
 	Suggestion   string `json:"suggestion,omitempty"`
+
+	// Skill is the skill that reported the finding. It is not part of a
+	// stored result: whoever reads the findings of a skill fills it in.
+	Skill string `json:"-"`
 }
 
 // Failure is a batch of a skill that did not finish, with the plain text of

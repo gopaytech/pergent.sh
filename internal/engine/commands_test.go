@@ -573,6 +573,60 @@ func TestDeveloperDismissesSuggestionOnly(t *testing.T) {
 	})
 }
 
+// A dismissal made with write access or better teaches later reviews, and
+// keeps what it needs to: the finding's skill, file and title and the
+// platform ID of who dismissed it.
+func TestDismissTeachesWithWriteAccess(t *testing.T) {
+	for _, c := range []struct {
+		user     string
+		id       int64
+		severity string
+	}{
+		{"dev", userDeveloper, "suggestion"},
+		{"mo", userMaintainer, "blocking"},
+	} {
+		t.Run(c.user, func(t *testing.T) {
+			f := newCommandFixture(t)
+			verdict := map[string]string{"suggestion": "no_blocking_issues", "blocking": "has_blocking_issues"}[c.severity]
+			f.review(skillWithFinding(t, verdict, c.severity))
+
+			f.say(1, c.user, "dismiss", "abc123", "constant", time.Now())
+			f.run()
+
+			ds := f.dismissals(1)
+			if len(ds) != 1 {
+				t.Fatalf("dismissals = %+v", ds)
+			}
+			d := ds[0]
+			if !d.Teaches || d.DismisserPlatformID != c.id || d.Skill != "security" || d.File != "db/query.go" ||
+				d.Title != "SQL built from user input" {
+				t.Errorf("dismissal = %+v; want it to teach, with the finding's details and %d as the dismisser", d, c.id)
+			}
+		})
+	}
+}
+
+// The author of a change with read access only (a fork contributor, say) may
+// dismiss a suggestion of their own change, but it teaches nothing.
+func TestDismissReadOnlyAuthorDoesNotTeach(t *testing.T) {
+	f := newCommandFixture(t)
+	f.authorID = userReporter
+	f.serveMR(1, false)
+	f.review(skillWithFinding(t, "no_blocking_issues", "suggestion"))
+
+	c := f.say(1, "rep", "dismiss", "abc123", "auth is enforced upstream", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, up)
+	ds := f.dismissals(1)
+	if len(ds) != 1 || ds[0].Severity != "suggestion" || ds[0].Reason != "auth is enforced upstream" {
+		t.Fatalf("dismissals = %+v; want the suggestion dismissed", ds)
+	}
+	if d := ds[0]; d.Teaches || d.DismisserPlatformID != userReporter || d.Skill != "security" {
+		t.Errorf("dismissal = %+v; want it not to teach, with the dismisser's ID", d)
+	}
+}
+
 func TestUnknownIDAndHelp(t *testing.T) {
 	f := newCommandFixture(t)
 	f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))

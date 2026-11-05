@@ -417,6 +417,57 @@ func TestDismissButtonSuggestion(t *testing.T) {
 	}
 }
 
+// A dismissal from the dashboard teaches, and keeps who dismissed it by their
+// platform user ID: the session's, and none for an account that has no
+// platform user here.
+func TestDashboardDismissTeaches(t *testing.T) {
+	e := newEnv(t, nil)
+	e.buttonBlockingReview()
+	c := e.signInRole(store.RoleMaintainer)
+	wantCode(t, e.send(c, "POST", buttonURL("dismiss"), `{"fingerprint":"`+blockingFP+`","reason":"constant"}`), "dismiss blocking", http.StatusOK)
+	wantCode(t, e.send(c, "POST", buttonURL("dismiss"), `{"fingerprint":"`+suggestionFP+`"}`), "dismiss suggestion", http.StatusOK)
+	ds := e.dismissalsOf()
+	if len(ds) != 2 {
+		t.Fatalf("dismissals = %+v", ds)
+	}
+	for _, d := range ds {
+		if !d.Teaches || d.DismisserPlatformID != aliceID["main"] || d.Skill != "code-review" || d.File != "api/handler.go" {
+			t.Errorf("dismissal = %+v; want it to teach, from alice (%d) with the finding's details", d, aliceID["main"])
+		}
+	}
+	if byFP := map[string]string{ds[0].Fingerprint: ds[0].Title, ds[1].Fingerprint: ds[1].Title}; byFP[blockingFP] != "Request body is used before validation" {
+		t.Errorf("titles = %v", byFP)
+	}
+
+	// A password admin has no platform user.
+	e2 := newEnv(t, nil)
+	e2.buttonBlockingReview()
+	wantCode(t, e2.send(e2.signInOperator(), "POST", buttonURL("dismiss"), `{"fingerprint":"`+blockingFP+`","reason":"constant"}`),
+		"operator dismiss", http.StatusOK)
+	if ds := e2.dismissalsOf(); len(ds) != 1 || !ds[0].Teaches || ds[0].DismisserPlatformID != 0 {
+		t.Errorf("dismissals = %+v; want it to teach, with no dismisser ID", ds)
+	}
+}
+
+func TestDismisserPlatformID(t *testing.T) {
+	user := Session{Platform: "gitlab", Instance: "main", UserID: 9}
+	for _, c := range []struct {
+		name     string
+		se       Session
+		instance string
+		want     int64
+	}{
+		{"the change's instance", user, "main", 9},
+		{"another instance", user, "gh", 0},
+		{"a password account", Session{Operator: true}, "main", 0},
+		{"no user ID", Session{Instance: "main"}, "main", 0},
+	} {
+		if got := dismisserPlatformID(c.se, c.instance); got != c.want {
+			t.Errorf("%s: dismisserPlatformID = %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
 func TestButtonAuthorCannotDismissBlocking(t *testing.T) {
 	// alice (user 9) opened the change.
 	e := newEnv(t, nil)
