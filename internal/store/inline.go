@@ -112,6 +112,16 @@ func (s *Store) NoteInlineThreadLeftOut(ctx context.Context, mr MRKey, fingerpri
 	return err
 }
 
+// ClearInlineThreadLeftOut records that the thread of fingerprint was told its
+// finding is back, so a later left-out finding is worth a reply again. A
+// fingerprint with no thread is left as it is, not an error.
+func (s *Store) ClearInlineThreadLeftOut(ctx context.Context, mr MRKey, fingerprint string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE inline_threads SET left_out_noted = false, updated_at = now()
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND fingerprint = $4`,
+		mr.Instance, mr.ProjectID, mr.IID, fingerprint)
+	return err
+}
+
 // DeleteInlineThread forgets the thread of fingerprint; deleting one that is
 // not there is not an error.
 func (s *Store) DeleteInlineThread(ctx context.Context, mr MRKey, fingerprint string) error {

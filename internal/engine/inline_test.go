@@ -84,6 +84,8 @@ func (m *memThreads) PutInlineThread(_ context.Context, t store.InlineThread) er
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.note("store put %s %s", t.Fingerprint, t.State)
+	// As the store: a replaced thread keeps what it was told.
+	t.LeftOutNoted = m.rows[t.Fingerprint].LeftOutNoted
 	m.rows[t.Fingerprint] = t
 	return nil
 }
@@ -122,6 +124,17 @@ func (m *memThreads) NoteInlineThreadLeftOut(_ context.Context, _ store.MRKey, f
 	m.note("store left-out %s", fp)
 	if r, ok := m.rows[fp]; ok {
 		r.LeftOutNoted = true
+		m.rows[fp] = r
+	}
+	return nil
+}
+
+func (m *memThreads) ClearInlineThreadLeftOut(_ context.Context, _ store.MRKey, fp string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.note("store left-out cleared %s", fp)
+	if r, ok := m.rows[fp]; ok {
+		r.LeftOutNoted = false
 		m.rows[fp] = r
 	}
 	return nil
@@ -1253,6 +1266,100 @@ func TestInlineLeftOutFindingIsNotedOnce(t *testing.T) {
 		h.sync(securityReview(t, h.head, "no_blocking_issues"))
 		if len(h.eventsContaining("resolve t1 true")) != 1 || len(h.eventsContaining("store left-out")) != 0 {
 			t.Errorf("events = %q, want it resolved as fixed", h.events)
+		}
+	})
+}
+
+// A thread told its finding was left out says so when the finding is reported
+// again, and is told again if it is left out again.
+func TestInlineLeftOutFindingComesBack(t *testing.T) {
+	const (
+		leftOutReply = "reply t1 No longer reported in `aaaaaaa`; see the note on past dismissals in the comment."
+		backReply    = "reply t1 Back in `aaaaaaa`."
+	)
+	setup := func(t *testing.T) *harness {
+		h := newHarness(t)
+		r := h.row(fpBlocking, "t1", 11, "open")
+		h.st = newMemThreads(&h.events, r)
+		h.fi.threads = []forge.Thread{h.platform(r, false)}
+		return h
+	}
+	leftOut := func(h *harness) policy.Outcome {
+		s := reviewed("no_blocking_issues", "db/query.go")
+		s.Notes = []string{result.LeftOutNotePrefix + " Token compared with == (Token compared with == in db/query.go)"}
+		r, err := result.Parse(resultFor(t, h.head, s))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return policy.Outcome{Result: r}
+	}
+	reported := func(h *harness) policy.Outcome {
+		return securityReview(t, h.head, "has_blocking_issues", finding(fpBlocking, "db/query.go", 11, 0, "blocking", ""))
+	}
+	replies := func(h *harness) []string { return h.eventsContaining("reply t1") }
+
+	t.Run("told, back, then left out again", func(t *testing.T) {
+		h := setup(t)
+		h.sync(leftOut(h))
+		h.sync(reported(h))
+		if r, _ := h.st.Row(fpBlocking); r.LeftOutNoted {
+			t.Error("the thread is still marked as told after its finding came back")
+		}
+		h.sync(reported(h)) // reported twice in a row: said once
+		h.sync(leftOut(h))
+		if want := []string{leftOutReply, backReply, leftOutReply}; !slices.Equal(replies(h), want) {
+			t.Errorf("replies =\n%q\nwant\n%q", replies(h), want)
+		}
+		if r, _ := h.st.Row(fpBlocking); r.State != "open" || !r.LeftOutNoted {
+			t.Errorf("row = %+v, want it open and told again", r)
+		}
+	})
+
+	t.Run("a failed reply is tried again", func(t *testing.T) {
+		h := setup(t)
+		h.sync(leftOut(h))
+		h.fi.replyErr = map[string]error{"t1": errors.New("boom")}
+		h.sync(reported(h))
+		if r, _ := h.st.Row(fpBlocking); !r.LeftOutNoted {
+			t.Fatal("a reply that failed was recorded as sent")
+		}
+		h.fi.replyErr = nil
+		h.events = nil
+		h.sync(reported(h))
+		if want := []string{backReply}; !slices.Equal(replies(h), want) {
+			t.Errorf("replies = %q, want %q", replies(h), want)
+		}
+		if r, _ := h.st.Row(fpBlocking); r.LeftOutNoted {
+			t.Error("the thread is still marked as told after the reply")
+		}
+	})
+
+	t.Run("a thread a person resolved gets no reply and keeps its mark", func(t *testing.T) {
+		h := setup(t)
+		h.sync(leftOut(h))
+		h.fi.threads = []forge.Thread{h.platform(h.st.rows[fpBlocking], true)}
+		h.events = nil
+		h.sync(reported(h))
+		if len(h.eventsContaining("reply")) != 0 {
+			t.Errorf("events = %q, want no reply", h.events)
+		}
+		if r, _ := h.st.Row(fpBlocking); !r.LeftOutNoted {
+			t.Error("the mark was cleared without a reply")
+		}
+	})
+
+	t.Run("a resolved thread that is opened again forgets the mark", func(t *testing.T) {
+		h := newHarness(t)
+		r := h.row(fpBlocking, "t1", 11, "fixed")
+		r.LeftOutNoted = true
+		h.st = newMemThreads(&h.events, r)
+		h.fi.threads = []forge.Thread{h.platform(r, true)}
+		h.sync(reported(h))
+		if want := []string{backReply}; !slices.Equal(replies(h), want) {
+			t.Errorf("replies = %q, want %q", replies(h), want)
+		}
+		if got, _ := h.st.Row(fpBlocking); got.State != "open" || got.LeftOutNoted {
+			t.Errorf("row = %+v, want it open and not marked", got)
 		}
 	})
 }

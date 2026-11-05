@@ -348,6 +348,48 @@ func TestRewordedNeedsSameSkillAndFile(t *testing.T) {
 	}
 }
 
+// A thread told that its finding was left out says so when the finding is
+// reported again: its last message is wrong. The finding stays on the diff.
+func TestLeftOutFindingComesBack(t *testing.T) {
+	back := func(noted, resolved bool) Plan {
+		in := base()
+		in.Findings = []Finding{finding("f1", "a.go", "blocking", 42, 0)}
+		th := thread("f1", "a.go", 42, StateOpen)
+		th.LeftOutNoted, th.Resolved = noted, resolved
+		in.Threads = []Thread{th}
+		return Decide(in)
+	}
+
+	p := back(true, false)
+	want := []Note{{Thread: thread("f1", "a.go", 42, StateOpen), Reply: "Back in `abcdef1`."}}
+	want[0].Thread.LeftOutNoted = true
+	if !reflect.DeepEqual(p.Back, want) || !p.Inline["f1"] || len(p.Post)+len(p.Reopen)+len(p.Note) != 0 {
+		t.Errorf("told and matched: plan = %+v; want one Back entry, still inline", p)
+	}
+	if p = back(true, true); len(p.Back) != 0 || !p.Inline["f1"] {
+		t.Errorf("resolved by a person: plan = %+v; want no Back entry, still inline", p)
+	}
+	if p = back(false, false); len(p.Back) != 0 || !p.Inline["f1"] {
+		t.Errorf("never told: plan = %+v; want no Back entry, still inline", p)
+	}
+}
+
+func TestBackIsSorted(t *testing.T) {
+	in := base()
+	in.Findings = []Finding{finding("f1", "z.go", "blocking", 42, 0), finding("f2", "a.go", "blocking", 50, 0), finding("f3", "a.go", "blocking", 41, 0)}
+	for _, t := range []Thread{thread("f1", "z.go", 42, StateOpen), thread("f2", "a.go", 50, StateOpen), thread("f3", "a.go", 41, StateOpen)} {
+		t.LeftOutNoted = true
+		in.Threads = append(in.Threads, t)
+	}
+	var got []string
+	for _, n := range Decide(in).Back {
+		got = append(got, n.Thread.Fingerprint)
+	}
+	if want := []string{"f3", "f2", "f1"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("back = %v, want %v (file, then line)", got, want)
+	}
+}
+
 func TestGoneFindingFixed(t *testing.T) {
 	in := base()
 	in.Threads = []Thread{thread("f1", "a.go", 42, StateOpen)}

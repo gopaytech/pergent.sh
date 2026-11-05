@@ -38,6 +38,7 @@ type threadStore interface {
 	RebindInlineThread(ctx context.Context, mr store.MRKey, from, to string, line, endLine int, commit string) error
 	SetInlineThreadState(ctx context.Context, mr store.MRKey, fingerprint, state string) error
 	NoteInlineThreadLeftOut(ctx context.Context, mr store.MRKey, fingerprint string) error
+	ClearInlineThreadLeftOut(ctx context.Context, mr store.MRKey, fingerprint string) error
 	DeleteInlineThread(ctx context.Context, mr store.MRKey, fingerprint string) error
 }
 
@@ -460,6 +461,7 @@ func (x *inlineRun) apply(plan threads.Plan) inlineView {
 	x.rebind(plan.Rebind)
 	x.resolve(plan.Resolve)
 	x.note(plan.Note)
+	x.back(plan.Back)
 	x.reopen(plan.Reopen, v)
 	x.post(plan.Post, v)
 	return v
@@ -549,6 +551,35 @@ func (x *inlineRun) note(ns []threads.Note) {
 	}
 }
 
+// back tells a thread that was told its finding was left out that the finding
+// is reported again, and clears the record. A reply that fails leaves the
+// record, so the next publish tries again.
+func (x *inlineRun) back(ns []threads.Note) {
+	pid, number := x.run.MR.ProjectID, x.run.MR.IID
+	for _, n := range ns {
+		if n.Thread.Resolved {
+			continue // resolved on the platform already: not ours to touch
+		}
+		fp := x.current(n.Thread.Fingerprint)
+		ref, ok := x.set.refs[fp]
+		if !ok {
+			continue
+		}
+		if err := x.d.inline.ReplyThread(x.ctx, pid, number, ref, n.Reply); err != nil {
+			x.warn("couldn't reply on a thread whose finding is back; will try again", err)
+			continue
+		}
+		x.clearLeftOut(fp)
+	}
+}
+
+// clearLeftOut forgets that the thread of fp was told its finding was left out.
+func (x *inlineRun) clearLeftOut(fp string) {
+	if err := x.d.store.ClearInlineThreadLeftOut(x.ctx, x.run.MR, fp); err != nil {
+		x.warn("couldn't record that a thread's finding is back", err)
+	}
+}
+
 // reopen opens the threads of findings that came back. When the thread can't
 // be opened its finding goes back to the comment, with the failure noted.
 func (x *inlineRun) reopen(rs []threads.Reopen, v inlineView) {
@@ -567,6 +598,9 @@ func (x *inlineRun) reopen(rs []threads.Reopen, v inlineView) {
 		}
 		if err := x.d.inline.ReplyThread(x.ctx, pid, number, ref, r.Reply); err != nil {
 			x.warn("couldn't reply on a thread opened again", err)
+		}
+		if r.Thread.LeftOutNoted {
+			x.clearLeftOut(fp)
 		}
 		// Back to open. The commit moves to the head only along with the lines
 		// at it, so a later look at the thread follows them from the right
