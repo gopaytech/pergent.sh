@@ -54,6 +54,10 @@ func TestPastDismissalsList(t *testing.T) {
 	e.pastDismissal(4, "own", "blocking", "my own", "alice (gitlab main)", now.Add(-time.Hour))
 	e.pastDismissal(5, "stale", "suggestion", "too old", "bob (gitlab main)", now.Add(-91*24*time.Hour))
 	e.pastDismissal(6, "noreason", "suggestion", "![x](https://example.com/p.png)", "bob (gitlab main)", now.Add(-time.Hour))
+	// "twin": a newer blocking dismissal whose reason is only an image, which
+	// teaches nothing, and an older suggestion that does. The older one is the row.
+	e.pastDismissal(7, "twin", "blocking", "![x](https://example.com/p.png)", "carol (gitlab main)", now.Add(-time.Hour))
+	e.pastDismissal(8, "twin", "suggestion", "the older reason", "bob (gitlab main)", now.Add(-2*time.Hour))
 	for i := range 25 {
 		e.pastDismissal(int64(10+i), fmt.Sprintf("many%02d", i), "suggestion", "reason", "bob (gitlab main)", now.Add(-time.Duration(i+1)*time.Minute))
 	}
@@ -63,8 +67,8 @@ func TestPastDismissalsList(t *testing.T) {
 	for _, r := range rows {
 		fps = append(fps, r.Fingerprint)
 	}
-	if len(rows) != 27 {
-		t.Fatalf("%d rows %v; want 27: dup, own and the 25 more than a review is told", len(rows), fps)
+	if len(rows) != 28 {
+		t.Fatalf("%d rows %v; want 28: dup, own, twin and the 25 more than a review is told", len(rows), fps)
 	}
 	if slices.Contains(fps, "stale") || slices.Contains(fps, "noreason") {
 		t.Errorf("rows %v; want nothing older than 90 days and nothing without a reason", fps)
@@ -75,6 +79,13 @@ func TestPastDismissalsList(t *testing.T) {
 	// Blocking first, then the newest.
 	if fps[0] != "own" || fps[1] != "dup" {
 		t.Errorf("order %v; want the blocking rows first, the newest of them first", fps[:3])
+	}
+	i := slices.Index(fps, "twin")
+	if i < 0 {
+		t.Fatalf("rows %v; want twin", fps)
+	}
+	if rows[i].Severity != "suggestion" || rows[i].Reason != "the older reason" || rows[i].Number != 8 {
+		t.Errorf("twin = %+v; want the older suggestion that has a reason", rows[i])
 	}
 	dup := rows[1]
 	want := PastDismissalView{Skill: "code-review", Severity: "blocking", File: "api/handler.go", Title: "Title of dup",

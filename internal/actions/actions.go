@@ -193,6 +193,21 @@ func DedupeDismissals(rows []store.Dismissal) []store.Dismissal {
 	return out
 }
 
+// TeachingRows is the rows that teach, one per fingerprint: those whose reason
+// is empty once cleaned (an old reason that was only an image) are dropped
+// first, so one of them can't hide another row of the same finding that has a
+// reason, and then DedupeDismissals picks the row. A review is told these and
+// the Past dismissals list shows them.
+func TeachingRows(rows []store.Dismissal) []store.Dismissal {
+	kept := make([]store.Dismissal, 0, len(rows))
+	for _, r := range rows {
+		if CleanReason(r.Reason) != "" {
+			kept = append(kept, r)
+		}
+	}
+	return DedupeDismissals(kept)
+}
+
 // outranks tells whether a goes before b: blocking over suggestion, then newer.
 func outranks(a, b store.Dismissal) bool {
 	if (a.Severity == "blocking") != (b.Severity == "blocking") {
@@ -220,11 +235,6 @@ func PastDismissals(rows []store.Dismissal, skills []string, changeAuthorID int6
 		if _, ok := bySkill[r.Skill]; !ok {
 			continue
 		}
-		// An old reason that was only an image is empty once cleaned, and
-		// teaches nothing; another row of the finding may.
-		if CleanReason(r.Reason) == "" {
-			continue
-		}
 		if r.Severity == "blocking" && r.DismisserPlatformID != 0 && (changeAuthorID == 0 || r.DismisserPlatformID == changeAuthorID) {
 			continue
 		}
@@ -232,7 +242,7 @@ func PastDismissals(rows []store.Dismissal, skills []string, changeAuthorID int6
 	}
 	out := map[string][]PastDismissal{}
 	for name, rs := range bySkill {
-		rs = DedupeDismissals(rs)
+		rs = TeachingRows(rs)
 		if len(rs) > maxPastDismissals {
 			rs = rs[:maxPastDismissals]
 		}

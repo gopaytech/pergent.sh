@@ -136,6 +136,19 @@ func TestDedupeDismissalsNewestWins(t *testing.T) {
 	}
 }
 
+// A row whose reason is only an image teaches nothing, so it can't hide the
+// older row of the same finding that does.
+func TestTeachingRowsDropsEmptyReasonsBeforeDeduping(t *testing.T) {
+	older := row("security", "aaaaaa111111", "suggestion", 1, 5)
+	newer := row("security", "aaaaaa111111", "blocking", 2, 6)
+	newer.Reason = "![x](https://example.com/p.png)"
+	other := row("security", "bbbbbb111111", "suggestion", 3, 5)
+	got := TeachingRows([]store.Dismissal{newer, older, other})
+	if len(got) != 2 || got[0].Fingerprint != "bbbbbb111111" || got[1] != older {
+		t.Fatalf("TeachingRows = %+v; want the newest suggestion, then the older row of the finding", got)
+	}
+}
+
 func TestPastDismissalsPerSkill(t *testing.T) {
 	rows := []store.Dismissal{
 		row("security", "aaaaaa111111", "blocking", 1, 5),

@@ -37,15 +37,10 @@ func (d *Dashboard) repositoryPastDismissals(w http.ResponseWriter, r *http.Requ
 			d.failed(w, r, "reading past dismissals", err)
 			return
 		}
-		for _, row := range actions.DedupeDismissals(rows) {
-			// An old reason that was only an image teaches nothing.
-			reason := actions.CleanReason(row.Reason)
-			if reason == "" {
-				continue
-			}
+		for _, row := range actions.TeachingRows(rows) {
 			out = append(out, PastDismissalView{
 				Skill: row.Skill, Severity: row.Severity, File: d.registry.Redact(row.File), Title: d.registry.Redact(row.Title),
-				Reason: d.registry.Redact(reason), By: row.Actor, At: row.CreatedAt.UTC(), Number: row.MR.IID, Fingerprint: row.Fingerprint,
+				Reason: d.registry.Redact(actions.CleanReason(row.Reason)), By: row.Actor, At: row.CreatedAt.UTC(), Number: row.MR.IID, Fingerprint: row.Fingerprint,
 			})
 		}
 	}
