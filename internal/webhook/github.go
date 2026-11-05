@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/instances"
@@ -112,6 +114,7 @@ type pullRequestEvent struct {
 	PullRequest struct {
 		Number int64 `json:"number"`
 		Draft  bool  `json:"draft"`
+		Merged bool  `json:"merged"`
 		Head   struct {
 			SHA string `json:"sha"`
 		} `json:"head"`
@@ -247,6 +250,17 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			log.Error("webhook failed", "outcome", "supersede_error", "err", err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
+		}
+		// Only recorded here; the engine works the fates out later. A failure
+		// must not change the answer, and the hourly sweep catches a change
+		// it missed. The runs are already superseded, so a platform hanging
+		// up must not cancel the record, and a database that doesn't answer
+		// must not hold the answer.
+		fctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), fatesRequestTimeout)
+		err = h.Queue.RequestFates(fctx, mr, project, pr.Merged, time.Now())
+		cancel()
+		if err != nil {
+			log.Warn("recording the change's end failed", "err", err)
 		}
 		log.Info("webhook handled", "outcome", "superseded", "runs", n)
 		w.WriteHeader(http.StatusOK)

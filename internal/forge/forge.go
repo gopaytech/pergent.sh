@@ -44,6 +44,10 @@ type Change struct {
 	SourceBranch string
 	Author       string
 	AuthorID     int64
+	// AuthorIsBot is set when the platform said, in the change itself, that a
+	// bot opened it: GitHub's user type. GitLab leaves it false and is asked
+	// with IsBot.
+	AuthorIsBot bool
 }
 
 // StatusState is the state of pergent's status on a commit.

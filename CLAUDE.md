@@ -9,6 +9,7 @@ A self-hosted server that reviews merge requests and pull requests. It takes Git
 - `internal/result`: parses and merges the Job's result
 - `internal/policy`: decides the outcome and renders the comment
 - `internal/store`: Postgres; `migrations/` are applied at startup
+- `internal/fates`: works out what became of each finding when a change ends (pure; the engine feeds it reviews and compares)
 - `internal/dashboard`, `web/`: API and React UI
 - `internal/forge`, `internal/gitlab`, `internal/github`: platform clients
 - `internal/threads`: decides what happens to each inline thread

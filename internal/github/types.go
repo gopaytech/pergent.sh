@@ -12,6 +12,9 @@ import (
 type User struct {
 	ID    int64  `json:"id"`
 	Login string `json:"login"`
+	// Type is "User", "Bot" (an App's bot account, such as Dependabot) or
+	// "Organization".
+	Type string `json:"type"`
 }
 
 // Repository holds the fields pergent.sh reads.

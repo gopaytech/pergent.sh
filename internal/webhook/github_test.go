@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,8 +10,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/instances"
@@ -69,9 +72,9 @@ func (r *rig) ghTo(path string, body []byte, opts ...opt) *httptest.ResponseReco
 
 func noQueueCalls(t *testing.T, r *rig) {
 	t.Helper()
-	if n := len(r.q.enqueues) + len(r.q.supersedes) + len(r.q.draftSupersedes) + len(r.q.republishes); n != 0 || r.wakes != 0 {
-		t.Fatalf("queue touched: %+v %+v %+v %+v wakes=%d", r.q.enqueues, r.q.supersedes, r.q.draftSupersedes,
-			r.q.republishes, r.wakes)
+	if n := len(r.q.enqueues) + len(r.q.supersedes) + len(r.q.draftSupersedes) + len(r.q.republishes) + len(r.q.fates); n != 0 || r.wakes != 0 {
+		t.Fatalf("queue touched: %+v %+v %+v %+v %+v wakes=%d", r.q.enqueues, r.q.supersedes, r.q.draftSupersedes,
+			r.q.republishes, r.q.fates, r.wakes)
 	}
 }
 
@@ -140,6 +143,67 @@ func TestGitHubClosedSupersedes(t *testing.T) {
 	}
 	if len(r.q.enqueues)+len(r.q.republishes) != 0 || r.wakes != 0 {
 		t.Fatal("closed must only supersede")
+	}
+}
+
+func TestGitHubClosedRecordsFates(t *testing.T) {
+	for fx, merged := range map[string]bool{"github_closed.json": false, "github_merged.json": true} {
+		r := newGitHubRig(t)
+		before := time.Now()
+		wantStatus(t, r.gh(fixture(t, fx)), 200)
+		want := store.MRKey{Instance: "gh", ProjectID: 42, IID: 7}
+		if len(r.q.fates) != 1 {
+			t.Fatalf("%s: fates = %+v, want one call", fx, r.q.fates)
+		}
+		if want := []string{"SupersedeMR", "RequestFates"}; !slices.Equal(r.q.calls, want) {
+			t.Errorf("%s: calls = %v, want %v", fx, r.q.calls, want)
+		}
+		got := r.q.fates[0]
+		if got.mr != want || got.project != "Acme/Widgets" || got.merged != merged {
+			t.Errorf("%s: fates = %+v, want %+v project Acme/Widgets merged=%v", fx, got, want, merged)
+		}
+		if got.at.Before(before) || got.at.After(time.Now()) {
+			t.Errorf("%s: at = %v, want the time the webhook arrived", fx, got.at)
+		}
+	}
+}
+
+func TestGitHubFatesRequestSurvivesTheRequestBeingCancelled(t *testing.T) {
+	r := newGitHubRig(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.q.onSupersede = cancel
+	wantStatus(t, r.gh(fixture(t, "github_merged.json"), withContext(ctx)), 200)
+	if len(r.q.fates) != 1 || r.q.fatesCtxErr != nil {
+		t.Errorf("fates = %+v, context error %v; want one call with a live context", r.q.fates, r.q.fatesCtxErr)
+	}
+}
+
+func TestGitHubFatesRequestHasADeadline(t *testing.T) {
+	r := newGitHubRig(t)
+	wantStatus(t, r.gh(fixture(t, "github_merged.json")), 200)
+	if r.q.fatesLeft <= 0 || r.q.fatesLeft > fatesRequestTimeout {
+		t.Errorf("time left for RequestFates = %v, want within (0, %v]", r.q.fatesLeft, fatesRequestTimeout)
+	}
+}
+
+func TestGitHubFatesFailureStillAnswers200(t *testing.T) {
+	r := newGitHubRig(t)
+	r.q.fatesErr = errors.New("db down")
+	wantStatus(t, r.gh(fixture(t, "github_merged.json")), 200)
+	if len(r.q.supersedes) != 1 {
+		t.Fatalf("supersedes = %d, want 1", len(r.q.supersedes))
+	}
+	if !strings.Contains(r.logs.String(), "level=WARN") || !strings.Contains(r.logs.String(), "db down") {
+		t.Errorf("log = %q, want a warning with the error", r.logs.String())
+	}
+}
+
+func TestGitHubOpenedRecordsNoFates(t *testing.T) {
+	r := newGitHubRig(t)
+	wantStatus(t, r.gh(fixture(t, "github_opened.json")), 200)
+	if len(r.q.fates) != 0 {
+		t.Errorf("fates = %+v, want none", r.q.fates)
 	}
 }
 
@@ -296,6 +360,13 @@ func TestGitHubUnknownRepositoryIgnored(t *testing.T) {
 	noQueueCalls(t, r)
 }
 
+func TestGitHubUnknownRepositoryEndRecordsNothing(t *testing.T) {
+	r := newGitHubRig(t)
+	body := bytes.Replace(fixture(t, "github_closed.json"), []byte("acme/widgets"), []byte("acme/other"), 1)
+	wantStatus(t, r.gh(body), 200)
+	noQueueCalls(t, r)
+}
+
 // A repository listed under a different instance is not reviewed here.
 func TestGitHubRepositoryOfAnotherInstanceIgnored(t *testing.T) {
 	r := newGitHubRig(t)
@@ -329,6 +400,9 @@ func TestGitHubStoreErrorIs500(t *testing.T) {
 		wantStatus(t, r.gh(fixture(t, fx)), 500)
 		if r.wakes != 0 {
 			t.Fatal("woke on error")
+		}
+		if len(r.q.fates) != 0 {
+			t.Fatalf("%s: fates = %+v after a store error, want none", fx, r.q.fates)
 		}
 	}
 }

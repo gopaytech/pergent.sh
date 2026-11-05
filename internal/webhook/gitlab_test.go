@@ -9,8 +9,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/instances"
@@ -29,6 +31,13 @@ type enqueueCall struct {
 	projectPath, head, branch string
 }
 
+type fatesCall struct {
+	mr      store.MRKey
+	project string
+	merged  bool
+	at      time.Time
+}
+
 type republishCall struct {
 	mr           store.MRKey
 	head, target string
@@ -43,6 +52,18 @@ type fakeQueue struct {
 	created         bool
 	// republished is what Republish answers.
 	republished bool
+	// fates are the RequestFates calls; fatesErr, when set, is what it answers.
+	fates    []fatesCall
+	fatesErr error
+	// fatesLeft is the time the last RequestFates context had left, 0 if it
+	// had no deadline.
+	fatesLeft time.Duration
+	// fatesCtxErr is the error of the last RequestFates context at the call.
+	fatesCtxErr error
+	// onSupersede, when set, runs inside SupersedeMR: a platform hanging up.
+	onSupersede func()
+	// calls lists SupersedeMR and RequestFates in the order they were made.
+	calls []string
 	// publishedTarget, when set, is the target of the head's published
 	// review: Republish answers false for any other target, as the store does.
 	publishedTarget string
@@ -67,10 +88,24 @@ func (q *fakeQueue) EnqueueRun(_ context.Context, mr store.MRKey, projectPath, h
 
 func (q *fakeQueue) SupersedeMR(_ context.Context, mr store.MRKey) (int, error) {
 	q.supersedes = append(q.supersedes, mr)
+	q.calls = append(q.calls, "SupersedeMR")
+	if q.onSupersede != nil {
+		q.onSupersede()
+	}
 	if q.err != nil {
 		return 0, q.err
 	}
 	return 1, nil
+}
+
+func (q *fakeQueue) RequestFates(ctx context.Context, mr store.MRKey, projectPath string, merged bool, at time.Time) error {
+	q.fatesCtxErr = ctx.Err()
+	if d, ok := ctx.Deadline(); ok {
+		q.fatesLeft = time.Until(d)
+	}
+	q.fates = append(q.fates, fatesCall{mr, projectPath, merged, at})
+	q.calls = append(q.calls, "RequestFates")
+	return q.fatesErr
 }
 
 func (q *fakeQueue) SupersedeDraftMR(_ context.Context, mr store.MRKey, headSHA, targetBranch string) (int, error) {
@@ -122,6 +157,12 @@ type opt func(*http.Request)
 func withToken(v string) opt { return func(r *http.Request) { r.Header.Set("X-Gitlab-Token", v) } }
 func withEvent(v string) opt { return func(r *http.Request) { r.Header.Set("X-Gitlab-Event", v) } }
 func noHeader(k string) opt  { return func(r *http.Request) { r.Header.Del(k) } }
+
+// withContext gives the request ctx, as the server gives it one that the
+// platform hanging up cancels.
+func withContext(ctx context.Context) opt {
+	return func(r *http.Request) { *r = *r.WithContext(ctx) }
+}
 
 func (r *rig) post(path string, body []byte, opts ...opt) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
@@ -231,6 +272,71 @@ func TestMergeSupersedes(t *testing.T) {
 	}
 }
 
+func TestEndedChangeRecordsFates(t *testing.T) {
+	for fx, merged := range map[string]bool{"mr_close.json": false, "mr_merge.json": true} {
+		r := newRig(t)
+		before := time.Now()
+		wantStatus(t, r.hook(fixture(t, fx)), 200)
+		want := store.MRKey{Instance: "main", ProjectID: 42, IID: 7}
+		if len(r.q.fates) != 1 {
+			t.Fatalf("%s: fates = %+v, want one call", fx, r.q.fates)
+		}
+		if want := []string{"SupersedeMR", "RequestFates"}; !slices.Equal(r.q.calls, want) {
+			t.Errorf("%s: calls = %v, want %v", fx, r.q.calls, want)
+		}
+		got := r.q.fates[0]
+		if got.mr != want || got.project != "Acme/Widgets" || got.merged != merged {
+			t.Errorf("%s: fates = %+v, want %+v project Acme/Widgets merged=%v", fx, got, want, merged)
+		}
+		if got.at.Before(before) || got.at.After(time.Now()) {
+			t.Errorf("%s: at = %v, want the time the webhook arrived", fx, got.at)
+		}
+	}
+}
+
+// The platform hanging up cancels the request's context; the record of the
+// change's end is made all the same.
+func TestFatesRequestSurvivesTheRequestBeingCancelled(t *testing.T) {
+	r := newRig(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.q.onSupersede = cancel
+	wantStatus(t, r.hook(fixture(t, "mr_merge.json"), withContext(ctx)), 200)
+	if len(r.q.fates) != 1 || r.q.fatesCtxErr != nil {
+		t.Errorf("fates = %+v, context error %v; want one call with a live context", r.q.fates, r.q.fatesCtxErr)
+	}
+}
+
+func TestFatesRequestHasADeadline(t *testing.T) {
+	r := newRig(t)
+	wantStatus(t, r.hook(fixture(t, "mr_merge.json")), 200)
+	if r.q.fatesLeft <= 0 || r.q.fatesLeft > fatesRequestTimeout {
+		t.Errorf("time left for RequestFates = %v, want within (0, %v]", r.q.fatesLeft, fatesRequestTimeout)
+	}
+}
+
+func TestFatesFailureStillAnswers200(t *testing.T) {
+	r := newRig(t)
+	r.q.fatesErr = errors.New("db down")
+	wantStatus(t, r.hook(fixture(t, "mr_merge.json")), 200)
+	if len(r.q.supersedes) != 1 {
+		t.Fatalf("supersedes = %d, want 1", len(r.q.supersedes))
+	}
+	if !strings.Contains(r.logs.String(), "level=WARN") || !strings.Contains(r.logs.String(), "db down") {
+		t.Errorf("log = %q, want a warning with the error", r.logs.String())
+	}
+}
+
+func TestOpenAndPushRecordNoFates(t *testing.T) {
+	for _, fx := range []string{"mr_open.json", "mr_push.json"} {
+		r := newRig(t)
+		wantStatus(t, r.hook(fixture(t, fx)), 200)
+		if len(r.q.fates) != 0 {
+			t.Errorf("%s: fates = %+v, want none", fx, r.q.fates)
+		}
+	}
+}
+
 func TestBadTokenIs401(t *testing.T) {
 	for name, o := range map[string]opt{
 		"wrong":   withToken("nope"),
@@ -280,6 +386,16 @@ func TestUnknownProjectIgnored(t *testing.T) {
 	}
 }
 
+// A repository that is not switched on records nothing, an end included.
+func TestUnknownProjectEndRecordsNothing(t *testing.T) {
+	for _, fx := range []string{"mr_close.json", "mr_merge.json"} {
+		r := newRig(t)
+		body := bytes.Replace(fixture(t, fx), []byte("acme/widgets"), []byte("acme/other"), 1)
+		wantStatus(t, r.hook(body), 200)
+		noQueueCalls(t, r)
+	}
+}
+
 func TestProjectMatchIsCaseInsensitive(t *testing.T) {
 	r := newRig(t)
 	body := bytes.Replace(fixture(t, "mr_open.json"), []byte("acme/widgets"), []byte("ACME/WIDGETS"), 1)
@@ -305,6 +421,9 @@ func TestStoreErrorIs500(t *testing.T) {
 		wantStatus(t, r.hook(fixture(t, fx)), 500)
 		if r.wakes != 0 {
 			t.Fatal("woke on error")
+		}
+		if len(r.q.fates) != 0 {
+			t.Fatalf("%s: fates = %+v after a store error, want none", fx, r.q.fates)
 		}
 	}
 }

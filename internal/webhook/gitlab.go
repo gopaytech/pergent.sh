@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/instances"
@@ -32,10 +33,15 @@ const (
 	outcomeIgnore = "ignored"
 )
 
+// fatesRequestTimeout bounds recording the end of a change, which the answer
+// to the webhook waits for.
+const fatesRequestTimeout = 5 * time.Second
+
 // Queue is the part of the store the handler needs.
 type Queue interface {
 	EnqueueRun(ctx context.Context, mr store.MRKey, projectPath, headSHA, targetBranch string) (string, bool, error)
 	SupersedeMR(ctx context.Context, mr store.MRKey) (int, error)
+	RequestFates(ctx context.Context, mr store.MRKey, projectPath string, merged bool, at time.Time) error
 	SupersedeDraftMR(ctx context.Context, mr store.MRKey, headSHA, targetBranch string) (int, error)
 	Republish(ctx context.Context, mr store.MRKey, headSHA, targetBranch string) (bool, error)
 }
@@ -259,6 +265,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			log.Error("webhook failed", "outcome", "supersede_error", "err", err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
+		}
+		// Only recorded here; the engine works the fates out later. A failure
+		// must not change the answer, and the hourly sweep catches a change
+		// it missed. The runs are already superseded, so a platform hanging
+		// up must not cancel the record, and a database that doesn't answer
+		// must not hold the answer.
+		fctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), fatesRequestTimeout)
+		err = h.Queue.RequestFates(fctx, mr, project, attrs.Action == "merge", time.Now())
+		cancel()
+		if err != nil {
+			log.Warn("recording the change's end failed", "err", err)
 		}
 		log.Info("webhook handled", "outcome", "superseded", "runs", n)
 		w.WriteHeader(http.StatusOK)

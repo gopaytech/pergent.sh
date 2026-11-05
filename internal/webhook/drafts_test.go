@@ -123,6 +123,9 @@ func TestGitLabDraftCloseAndMergeStillHandled(t *testing.T) {
 		if len(r.q.supersedes) != 1 || len(r.q.enqueues) != 0 {
 			t.Fatalf("%s: supersedes = %+v, enqueues = %+v", fx, r.q.supersedes, r.q.enqueues)
 		}
+		if len(r.q.fates) != 1 {
+			t.Fatalf("%s: fates = %+v, want one", fx, r.q.fates)
+		}
 	}
 }
 
@@ -180,6 +183,9 @@ func TestGitHubDraftClosedStillHandled(t *testing.T) {
 	wantStatus(t, r.gh(githubDraft(t, "github_closed.json")), 200)
 	if len(r.q.supersedes) != 1 || len(r.q.enqueues) != 0 {
 		t.Fatalf("supersedes = %+v, enqueues = %+v", r.q.supersedes, r.q.enqueues)
+	}
+	if len(r.q.fates) != 1 {
+		t.Fatalf("fates = %+v, want one", r.q.fates)
 	}
 }
 

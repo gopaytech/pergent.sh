@@ -17,6 +17,7 @@ import type {
   RunDetailView,
   SkillDetail,
   SkillFetch,
+  SkillResultView,
   TeamView,
   UserView,
 } from "../api";
@@ -534,6 +535,12 @@ export const auditPage2: AuditPageView = {
   entries: [{ id: 28, at: "2026-10-29T09:30:00Z", actor: "dev-admin (gitlab main)", action: "account_deleted", instance: "", project: "", detail: "old-user" }],
   next: 0,
 };
+
+export const skillResults: SkillResultView[] = [
+  { skill: "security", severity: "blocking", raised: 12, fixed: 3, dismissed: 7, open: 2, wentAway: 0, addressed: 25, editedAt: null },
+  { skill: "code-review", severity: "blocking", raised: 20, fixed: 15, dismissed: 3, open: 1, wentAway: 1, addressed: 75, editedAt: null },
+  { skill: "style", severity: "suggestion", raised: 4, fixed: 1, dismissed: 2, open: 1, wentAway: 0, addressed: null, editedAt: null },
+];
 
 export const pastDismissals: PastDismissalView[] = [
   {

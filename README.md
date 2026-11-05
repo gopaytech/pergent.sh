@@ -33,6 +33,7 @@ pergent.sh is a service that runs [pergent](https://github.com/gopaytech/pergent
 - **Inline findings**: each finding is also posted as a thread on its lines, with a one-click fix when it is small, and resolved when a later push fixes it. See [Inline findings](#-inline-findings).
 - **Incremental reviews**: a push reviews only the files it changed and carries the rest over from the last review. See [Incremental reviews](#-incremental-reviews).
 - **Learn from dismissals**: a review is told what people rejected earlier in the repository, and why, so a false positive stops coming back. See [Learn from dismissals](#-learn-from-dismissals).
+- **Skill results**: a tab for each repository shows how many of each skill's findings people fixed, dismissed or left open, so you can fix or drop the weak skills. See [Skill results](#-skill-results).
 - **Approval with a human guard**: a clean review that actually reviewed something and skipped no file outside the allowed rules is approved by the approver; on GitLab, pergent.sh logs a warning for every project where one approval alone could merge.
 - **GitLab and GitHub**: GitLab (gitlab.com or self-managed) and GitHub.com; on GitHub one App is enough to review and approve.
 - **Dashboard**: every review, finding, file and log in the browser, with teams and roles for who sees what, an audit log, and instances, secrets and the LLM managed without editing the config file.
@@ -220,6 +221,13 @@ For GitHub, put the Apps' private keys (the whole `.pem` file of each) and the r
 pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is handy for local development.
 
 ## ⬆️ Upgrading
+
+### Upgrading to 0.8.0
+
+Nothing to change in the config or the chart. Migration `0024` runs at startup, and 0.7.1 keeps working on the migrated database, so you can roll back.
+
+- The migration builds `runs_decided_idx`, and building it blocks writes to `runs`. On a large `runs` table, expect a slower start. A very large table could outlast the chart's startup probe, which allows 150 seconds. The pod would then restart and begin the build again, so on such a table build the index first, without blocking writes, with `CREATE INDEX CONCURRENTLY IF NOT EXISTS runs_decided_idx ON runs (created_at) WHERE outcome <> ''`, the statement of the migration, which then has nothing to do. If that build fails it leaves an invalid index of the same name: drop it and run the statement again.
+- The new **Skill results** tab has no numbers at first. They appear as changes merge or close ([Skill results](#-skill-results)).
 
 ### Upgrading to 0.7.1
 
@@ -608,7 +616,7 @@ Everything a platform account may see or do comes from the teams it is on, under
 
 - **Overview:** the number of reviews, approvals, blocking reviews and failed reviews over the last 7, 30 or 90 days, the most recent reviews, and "Needs attention". Admins also see a setup checklist (the model and its key, a connected instance, a skill in the library, a repository switched on); each item links to its page, ticks when done, and the list goes away when all four are done.
 - **Reviews:** filtered by repository, result and time. Each merge request has a page with every run (commit, what started it, result, duration) and, for a run, the status set on the platform, whether it was approved and why not, the pergent version, model, what an incremental review covered, tokens, each skill's verdict, findings (with the ones people dismissed, who dismissed them and why), checks, files (reviewed, skipped with the rule, not reviewed) and the log. Each skill shows where it came from: `library v3` (the library version the review used), or `repo (.claude/skills)` for a skill read from the repository. A run skipped because the repository has no skills shows as **Not reviewed** (result `skipped`, with its own filter), not as superseded, and is not counted as a review or a failure. Maintainers and admins of the repository also get the buttons **Re-run review** and **Re-run failed only**, and **Dismiss** and **Restore** on findings ([Commands](#-commands)).
-- **Repositories:** each with its last 7 days and health; its reviews, its readiness scan, its setup checks and its skills and instructions. The [Readiness](#readiness-scan) tab is the checklist of what the repository gives a review. Skills & instructions shows what a review of the default branch would get, read with the review bot or App and kept for 5 minutes: each skill with its library version or repository folder, a link to its file for a repository skill, and the problem a review would fail on. A repository's **Settings** choose between "Use the default skills (a, b)" and "Choose skills", with a running total against the 900 KiB a review takes, and list the skills found in `.agents/skills`, `.claude/skills` and `.github/skills` with switches, off at first (`.pergent/skills` is always on; only the `SKILL.md` text is used). Maintainers and admins of a repository also get a **Past dismissals** tab: what teaches its reviews now ([Learn from dismissals](#-learn-from-dismissals)). **Add repository** warns when the default skill list is empty.
+- **Repositories:** each with its last 7 days and health; its reviews, its readiness scan, its setup checks and its skills and instructions. The [Readiness](#readiness-scan) tab is the checklist of what the repository gives a review. Skills & instructions shows what a review of the default branch would get, read with the review bot or App and kept for 5 minutes: each skill with its library version or repository folder, a link to its file for a repository skill, and the problem a review would fail on. A repository's **Settings** choose between "Use the default skills (a, b)" and "Choose skills", with a running total against the 900 KiB a review takes, and list the skills found in `.agents/skills`, `.claude/skills` and `.github/skills` with switches, off at first (`.pergent/skills` is always on; only the `SKILL.md` text is used). Anyone who can see a repository gets a **Skill results** tab: what became of each skill's findings ([Skill results](#-skill-results)). Maintainers and admins of a repository also get a **Past dismissals** tab: what teaches its reviews now ([Learn from dismissals](#-learn-from-dismissals)). **Add repository** warns when the default skill list is empty.
 - **Skills:** the skill library: each skill's name, version, where it came from (written in the dashboard, or the repository and branch or tag it was installed from), whether it is on the default list and when it changed, with its text in a plain-text box (never rendered as HTML or markdown) and its saved versions. A skill installed from a private repository is shown to everyone with a team, so installing is sharing; the repository's path is shown only to people who can see that repository, and others see `a private repository on <instance>`. Who saved each version is shown to admins only. See [Skills and instructions](#-skills-and-instructions).
 
 **Admins** also get:
@@ -920,6 +928,36 @@ A dismissal only ever applied to its own change, after the review had run, and t
 **The model decides.** No code removes a finding because of a dismissal: a finding from another change with the same fingerprint is not set aside by pergent.sh. The model is asked to leave out the same mistake, so a repeat can still slip through, and a wrong dismissal keeps misleading reviews until it ages out or someone stops it. A skill that left a finding out says so, and the comment shows a note such as `Left out because of past dismissals: Token compared with == (Token compared with == in api/auth.go)`. A blocker left out this way can give a clean review and an approval, as verification dropping a finding can today; the note shows what happened.
 
 **Turning it off.** The switch is **Learn from dismissals** in a repository's Settings, the default under **Admin → Settings**, or `repositories[].learn_from_dismissals` in the config ([Config reference](#-config-reference)). With it off, reviews are not told anything. Pergent v0.5.0 or later reads the list; an older image in `jobs.image` ignores it.
+
+## 📈 Skill results
+
+A skill that raises findings nobody acts on costs reviewers time. The **Skill results** tab of a repository shows which skills people act on and which they set aside, so you can fix or drop the weak ones. Anyone who can see the repository can open it.
+
+When a change is merged or closed, pergent.sh works out what became of each finding raised on it. Each finding ends in one of four ways:
+
+- **Fixed**: it stopped being reported, and code at or near its lines changed.
+- **Dismissed**: a person dismissed it, and the dismissal still stood at the end.
+- **Open at merge**: it was still reported when the change ended, and nobody dismissed it.
+- **Went away**: it stopped being reported, but nothing near its lines changed, or there is no telling. A model changing its mind lands here, and so does a finding a skill left out because of [past dismissals](#-learn-from-dismissals).
+
+The tab has one row for each skill and severity, for the last 30 or 90 days. **Raised** is the number of findings. **Addressed** is Fixed divided by Raised, as a whole percent. Dismissed doesn't count as addressed. A row shows Addressed only from 10 raised, not 10 findings of any kind. Rows with the lowest Addressed come first, and rows without one come last. So a skill with 9 ignored findings sits at the bottom until it has 10.
+
+Only merged changes opened by people count. A change closed without a merge, and a change opened by a bot, say nothing about whether a finding helped. The one exception is Dismissed, which also counts findings dismissed on closed changes opened by people. So Raised can be less than the sum of the columns.
+
+When a skill was edited inside the window, its row says so, for example `Edited 12 days ago: numbers include the old version`. Rows aren't split by version, because that would leave too few findings in each.
+
+**What to expect.**
+
+- Addressed reads low with [incremental reviews](#-incremental-reviews). A finding stays reported until its own file changes. If the author fixes it from another file, it ends as open at merge, though a full review would have dropped it.
+- A push after the last review isn't looked at. Findings fixed by it still count as open at merge.
+- On GitHub, teams that rebase or force-push see fewer Fixed. GitHub refuses to compare heads that aren't ancestors of each other, so those findings go to Went away.
+- On GitLab, and on both platforms after merging the target branch into the branch, someone else's edit can earn Fixed. The comparison then includes the target branch's changes, so Fixed can read high.
+- An unrelated edit within 3 lines of a finding counts as a fix.
+- A finding in a file that left the change, such as a reverted one, stays open at merge.
+- A change whose comparisons need more than 30 seconds gets no fates. pergent.sh tries again, and after 5 attempts gives up on that change rather than guess.
+- On GitLab a change counts as a bot's only if GitLab marks the account as a bot, so Renovate running on an ordinary account counts as a person.
+- Numbers start from this release. Changes that ended earlier are not counted, so the tab takes a few weeks to mean much. The hourly sweep looks back 7 days, so a few changes from the week before the upgrade can appear.
+- A change counts when it ends, so a long-lived change shows up late.
 
 ## 💬 Commands
 

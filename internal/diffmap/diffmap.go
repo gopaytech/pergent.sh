@@ -1,7 +1,8 @@
 // Package diffmap reads the hunks of one file's unified diff, as the GitHub
 // and GitLab APIs return them per file, and answers the questions inline
 // threads need: is a head line part of the change, which base line is an
-// unchanged head line, and where does an old line sit after the change. It is
+// unchanged head line, where does an old line sit after the change, and did
+// code near an old line really change (context lines don't count). It is
 // pure: no I/O, only the standard library.
 package diffmap
 
@@ -24,6 +25,10 @@ type Hunk struct {
 	// Lines holds, for each line of the hunk on the new side, its old line
 	// (0 for an added line); removed lines are not listed.
 	Lines []Pair
+	// Changed holds the old-side lines the change touches, ascending: the
+	// number of each removed line, and for lines added with nothing removed
+	// beside them, the old line they come before. Context lines are left out.
+	Changed []int
 }
 
 // Pair is a line of the new side with its line on the old side (0 if added).
@@ -39,8 +44,19 @@ func Parse(path, oldPath, patch string, deleted bool) File {
 	f := File{Path: path, OldPath: oldPath, Deleted: deleted}
 	var cur *Hunk
 	var oldNext, newNext, oldLeft, newLeft int
+	// A run is the +/- lines between two context lines. Lines added in a
+	// run with no removal are an insertion before oldNext; with a removal
+	// they replace it, and the removed lines already mark the change.
+	var runRemoved, runAdded bool
 
+	endRun := func() {
+		if cur != nil && runAdded && !runRemoved {
+			cur.Changed = append(cur.Changed, oldNext)
+		}
+		runRemoved, runAdded = false, false
+	}
 	flush := func() {
+		endRun()
 		if cur != nil {
 			f.Hunks = append(f.Hunks, *cur)
 			cur = nil
@@ -60,6 +76,9 @@ func Parse(path, oldPath, patch string, deleted bool) File {
 			}
 			cur = &h
 			oldNext, newNext = h.OldStart, h.NewStart
+			if h.OldLines == 0 {
+				oldNext++ // a pure insertion: OldStart is the line before it
+			}
 			oldLeft, newLeft = h.OldLines, h.NewLines
 			continue
 		}
@@ -72,12 +91,16 @@ func Parse(path, oldPath, patch string, deleted bool) File {
 		switch {
 		case strings.HasPrefix(line, "+"):
 			cur.Lines = append(cur.Lines, Pair{0, newNext})
+			runAdded = true
 			newNext++
 			newLeft--
 		case strings.HasPrefix(line, "-"):
+			cur.Changed = append(cur.Changed, oldNext)
+			runRemoved = true
 			oldNext++
 			oldLeft--
 		default: // context: a space, or an empty line whose space was trimmed
+			endRun()
 			cur.Lines = append(cur.Lines, Pair{oldNext, newNext})
 			oldNext++
 			newNext++
@@ -145,6 +168,20 @@ func (f File) MapOld(oldLine int) (int, bool) {
 		}
 	}
 	return oldLine + shift, true
+}
+
+// ChangedNear reports whether a line was added, removed or changed within
+// reach lines of the old-side range lo to hi. Context lines of a hunk don't
+// count; an insertion counts at the old line it comes before.
+func (f File) ChangedNear(lo, hi, reach int) bool {
+	for _, h := range f.Hunks {
+		for _, c := range h.Changed {
+			if c >= lo-reach && c <= hi+reach {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func atoi(s string) int {

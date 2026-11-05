@@ -216,6 +216,7 @@ func (f *Forge) GetChange(ctx context.Context, repoID, number int64) (forge.Chan
 		SourceBranch: pr.Head.Ref,
 		Author:       pr.User.Login,
 		AuthorID:     pr.User.ID,
+		AuthorIsBot:  pr.User.Type == "Bot",
 	}
 	if ch.Number == 0 {
 		ch.Number = number

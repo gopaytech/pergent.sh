@@ -969,3 +969,29 @@ func TestMergeIncrementalKeepsUndeclaredFields(t *testing.T) {
 		t.Errorf("merged skill lost its tokens: %s", out)
 	}
 }
+
+func TestLeftOutCoveredBy(t *testing.T) {
+	a := LeftOutNotePrefix + " A (in a.go)"
+	b := LeftOutNotePrefix + " B (in b.go)"
+	both := LeftOutNotePrefix + " A (in a.go); B (in b.go)"
+	tests := []struct {
+		name  string
+		note  string
+		notes []string
+		want  bool
+	}{
+		{"the same note", a, []string{a}, true},
+		{"fewer entries than one note", a, []string{both}, true},
+		{"entries spread over two notes", both, []string{a, b}, true},
+		{"an entry nobody had", both, []string{a}, false},
+		{"a cut list", a + "; and 2 more", []string{both}, true},
+		{"no notes", a, nil, false},
+		{"a note with no entries is covered only by itself", LeftOutNotePrefix, []string{both}, false},
+		{"a note with no entries, itself", LeftOutNotePrefix, []string{LeftOutNotePrefix}, true},
+	}
+	for _, tt := range tests {
+		if got := LeftOutCoveredBy(tt.note, tt.notes); got != tt.want {
+			t.Errorf("%s: LeftOutCoveredBy = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}

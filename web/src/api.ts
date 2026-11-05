@@ -300,6 +300,24 @@ export type PastDismissalView = {
   fingerprint: string;
 };
 
+// SkillResultView is what became of the findings of one skill at one severity
+// decided in the window (GET .../skill-results?days=30|90, anyone who can see
+// the repository). Raised, fixed, open and wentAway count merged changes;
+// dismissed also counts closed ones, so raised can be less than the columns'
+// sum. addressed is fixed over raised as a whole percent, null under 10 raised.
+// editedAt is set when the window holds more than one version of the skill.
+export type SkillResultView = {
+  skill: string;
+  severity: "blocking" | "suggestion";
+  raised: number;
+  fixed: number;
+  dismissed: number;
+  open: number;
+  wentAway: number;
+  addressed: number | null;
+  editedAt: string | null;
+};
+
 // SettingsUpdate is the body of PUT .../settings: only the keys to change;
 // null resets one to its default.
 export type SettingsUpdate = Partial<{
@@ -728,6 +746,9 @@ export const paths = {
   apiRepoInputs: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/inputs`,
   apiRepoPastDismissals: (instance: string, project: string) =>
     `/api/repositories/${seg(instance)}/${proj(project)}/past-dismissals`,
+  // days is 30 or 90.
+  apiRepoSkillResults: (instance: string, project: string, days: 30 | 90) =>
+    `/api/repositories/${seg(instance)}/${proj(project)}/skill-results${days === 30 ? "" : `?days=${days}`}`,
   // Stop using: POST {fingerprint}.
   apiRepoPastDismissalStop: (instance: string, project: string) =>
     `/api/repositories/${seg(instance)}/${proj(project)}/past-dismissals/stop`,

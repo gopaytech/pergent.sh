@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi } from "../test/fakeApi";
-import { platformAdmin, viewer, librarySkills, pastDismissals, repoDetail, repoPayments, repoWidgets, reviewBlocking } from "../test/fixtures";
+import { platformAdmin, viewer, librarySkills, pastDismissals, repoDetail, repoPayments, repoWidgets, reviewBlocking, skillResults } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -673,6 +673,113 @@ describe("RepositoryDetail", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("only admins can do this");
     expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")).toHaveLength(1);
     expect(fake.find("GET", "/api/me")).toHaveLength(1);
+  });
+
+  describe("Skill results", () => {
+    const listPath = "/api/repositories/main/acme/payments/skill-results";
+
+    it("is a tab for a viewer too, after Reviews", async () => {
+      renderAt("/repos/main/acme/payments", {
+        ...base,
+        "GET /api/me": { body: viewer },
+        "GET /api/repositories/main/acme/payments": { body: repoDetail(repoPayments, "viewer") },
+      });
+      const tabs = await screen.findByRole("tablist");
+      const names = within(tabs)
+        .getAllByRole("tab")
+        .map((t) => t.textContent);
+      expect(names.slice(0, 2)).toEqual(["Reviews", "Skill results"]);
+    });
+
+    it("lists a row for each skill and severity, in the order it came", async () => {
+      const fake = fakeApi({ ...base, [`GET ${listPath}`]: { body: skillResults } });
+      renderApp("/repos/main/acme/payments?tab=skill-results");
+      const security = (await screen.findByText("security")).closest("tr") as HTMLElement;
+      expect(within(security).getByText("blocking")).toBeInTheDocument();
+      expect(within(security).getAllByRole("cell").map((c) => c.textContent)).toEqual(["securityblocking", "12", "3", "7", "2", "0", "25%"]);
+      const rows = screen.getAllByRole("row").slice(1);
+      expect(rows.map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["securityblocking", "code-reviewblocking", "stylesuggestion"]);
+      expect(fake.find("GET", listPath)).toHaveLength(1);
+    });
+
+    it("shows no percentage under 10 raised", async () => {
+      fakeApi({ ...base, [`GET ${listPath}`]: { body: skillResults } });
+      renderApp("/repos/main/acme/payments?tab=skill-results");
+      const style = (await screen.findByText("style")).closest("tr") as HTMLElement;
+      expect(within(style).queryByText(/%/)).not.toBeInTheDocument();
+      expect(within(style).getByText("Under 10 raised")).toBeInTheDocument();
+    });
+
+    it("reads the 90 days when asked", async () => {
+      const fake = fakeApi({
+        ...base,
+        [`GET ${listPath}`]: { body: skillResults },
+        [`GET ${listPath}?days=90`]: { body: [skillResults[1]] },
+      });
+      renderApp("/repos/main/acme/payments?tab=skill-results");
+      await screen.findByText("security");
+      await userEvent.selectOptions(screen.getByRole("combobox", { name: "Period" }), "90");
+      await waitFor(() => expect(screen.queryByText("security")).not.toBeInTheDocument());
+      expect(screen.getByText("code-review")).toBeInTheDocument();
+      expect(fake.find("GET", `${listPath}?days=90`)).toHaveLength(1);
+    });
+
+    it("says when there is nothing yet", async () => {
+      renderAt("/repos/main/acme/payments?tab=skill-results", { ...base, [`GET ${listPath}`]: { body: [] } });
+      expect(await screen.findByText("No results for this period. Numbers start with changes merged after the release that added this tab.")).toBeInTheDocument();
+      expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    });
+
+    it("says a skill was edited, in days", async () => {
+      const edited = new Date(Date.now() - 12.5 * 24 * 3600 * 1000).toISOString();
+      renderAt("/repos/main/acme/payments?tab=skill-results", {
+        ...base,
+        [`GET ${listPath}`]: { body: [{ ...skillResults[0], editedAt: edited }, skillResults[1]] },
+      });
+      const security = (await screen.findByText("security")).closest("tr") as HTMLElement;
+      expect(within(security).getByText("Edited 12 days ago: numbers include the old version")).toBeInTheDocument();
+      expect(screen.getAllByText(/Edited/)).toHaveLength(1);
+    });
+
+    it("counts the days since an edit: today, 1 day, and a date in the future", async () => {
+      const edit = async (ms: number) => {
+        const { unmount } = renderAt("/repos/main/acme/payments?tab=skill-results", {
+          ...base,
+          [`GET ${listPath}`]: { body: [{ ...skillResults[0], editedAt: new Date(Date.now() + ms).toISOString() }] },
+        });
+        const text = (await screen.findByText(/^Edited /)).textContent;
+        unmount();
+        return text;
+      };
+      const tail = ": numbers include the old version";
+      expect(await edit(-3600 * 1000)).toBe(`Edited today${tail}`);
+      expect(await edit(-30 * 3600 * 1000)).toBe(`Edited 1 day ago${tail}`);
+      expect(await edit(5 * 24 * 3600 * 1000)).toBe(`Edited today${tail}`);
+    });
+
+    it("shows the error when the results can't be read", async () => {
+      renderAt("/repos/main/acme/payments?tab=skill-results", {
+        ...base,
+        [`GET ${listPath}`]: { status: 500, body: { error: "could not read the results" } },
+      });
+      expect(await screen.findByRole("alert")).toHaveTextContent("could not read the results");
+      expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    });
+
+    it("emphasises Addressed", async () => {
+      renderAt("/repos/main/acme/payments?tab=skill-results", { ...base, [`GET ${listPath}`]: { body: skillResults } });
+      expect((await screen.findByText("25%")).tagName).toBe("B");
+    });
+
+    it("shows a skill's name as text", async () => {
+      const name = "<img src=x onerror=alert(1)>";
+      renderAt("/repos/main/acme/payments?tab=skill-results", {
+        ...base,
+        [`GET ${listPath}`]: { body: [{ ...skillResults[0], skill: name }] },
+      });
+      expect(await screen.findByText(name)).toBeInTheDocument();
+      expect(document.querySelector("img")).toBeNull();
+    });
   });
 
   describe("Past dismissals", () => {
