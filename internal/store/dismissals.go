@@ -28,8 +28,10 @@ type Dismissal struct {
 
 // Dismiss stores d. A finding dismissed before at a lower severity (a
 // suggestion dismissed, now dismissed as blocking) is raised, d replacing the
-// reason, actor and details; one dismissed at the same or a higher severity is left
-// as it is. created tells whether anything was stored. A zero CreatedAt is
+// reason, actor and details. So is a dismissal that doesn't teach when d teaches
+// and has a reason, so a read-only author's dismissal can't keep a maintainer's
+// from teaching; its severity never goes down. Any other earlier dismissal is
+// left as it is. created tells whether anything was stored. A zero CreatedAt is
 // the database's now.
 func (s *Store) Dismiss(ctx context.Context, d Dismissal) (created bool, err error) {
 	var at *time.Time
@@ -40,11 +42,13 @@ func (s *Store) Dismiss(ctx context.Context, d Dismissal) (created bool, err err
 			reason, actor, actor_id, created_at, skill, file, title, teaches, dismisser_platform_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, now()), $10, $11, $12, $13, $14)
 		ON CONFLICT (instance, project_id, mr_iid, fingerprint) DO UPDATE SET
-			severity = EXCLUDED.severity, reason = EXCLUDED.reason, actor = EXCLUDED.actor,
+			severity = CASE WHEN dismissals.severity = 'blocking' THEN 'blocking' ELSE EXCLUDED.severity END,
+			reason = EXCLUDED.reason, actor = EXCLUDED.actor,
 			actor_id = EXCLUDED.actor_id, created_at = EXCLUDED.created_at,
 			skill = EXCLUDED.skill, file = EXCLUDED.file, title = EXCLUDED.title,
 			teaches = EXCLUDED.teaches, dismisser_platform_id = EXCLUDED.dismisser_platform_id
-		WHERE dismissals.severity = 'suggestion' AND EXCLUDED.severity = 'blocking'`,
+		WHERE (dismissals.severity = 'suggestion' AND EXCLUDED.severity = 'blocking')
+			OR (EXCLUDED.teaches AND NOT dismissals.teaches AND EXCLUDED.reason <> '')`,
 		d.MR.Instance, d.MR.ProjectID, d.MR.IID, d.Fingerprint, d.Severity, d.Reason, d.Actor, d.ActorID, at,
 		d.Skill, d.File, d.Title, d.Teaches, d.DismisserPlatformID)
 	if err != nil {

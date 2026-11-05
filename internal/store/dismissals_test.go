@@ -160,6 +160,61 @@ func TestDismissRaiseReplacesDetails(t *testing.T) {
 	}
 }
 
+func TestDismissTeachingReplacesNonTeaching(t *testing.T) {
+	s := newStore(t)
+	author := Dismissal{MR: mr1, Fingerprint: "fp1", Severity: "suggestion", Reason: "not now", Actor: "dev",
+		Skill: "style", File: "a.go", Title: "old", DismisserPlatformID: 7}
+	maintainer := Dismissal{MR: mr1, Fingerprint: "fp1", Severity: "suggestion", Reason: "false positive", Actor: "mo",
+		Skill: "style", File: "a.go", Title: "old", Teaches: true, DismisserPlatformID: 50}
+	if _, err := s.Dismiss(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+
+	noReason := maintainer
+	noReason.Reason = ""
+	if created, err := s.Dismiss(ctx, noReason); err != nil || created {
+		t.Fatalf("no reason: Dismiss = %v, %v; want nothing stored", created, err)
+	}
+	if created, err := s.Dismiss(ctx, maintainer); err != nil || !created {
+		t.Fatalf("teaching: Dismiss = %v, %v; want stored", created, err)
+	}
+	got, _ := s.Dismissals(ctx, mr1)
+	if len(got) != 1 || !got[0].Teaches || got[0].Reason != "false positive" || got[0].Actor != "mo" || got[0].DismisserPlatformID != 50 {
+		t.Fatalf("Dismissals = %+v; want the maintainer's", got)
+	}
+
+	// One that teaches stays as it is.
+	if created, err := s.Dismiss(ctx, author); err != nil || created {
+		t.Fatalf("not teaching: Dismiss = %v, %v; want nothing stored", created, err)
+	}
+	again := maintainer
+	again.Reason = "another reason"
+	if created, err := s.Dismiss(ctx, again); err != nil || created {
+		t.Fatalf("teaching twice: Dismiss = %v, %v; want nothing stored", created, err)
+	}
+}
+
+func TestDismissTeachingKeepsBlocking(t *testing.T) {
+	s := newStore(t)
+	blocking := Dismissal{MR: mr1, Fingerprint: "fp1", Severity: "blocking", Reason: "false positive", Actor: "mo",
+		Skill: "security", File: "a.go", Title: "t", Teaches: true, DismisserPlatformID: 50}
+	if _, err := s.Dismiss(ctx, blocking); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.StopTeaching(ctx, mr1.Instance, mr1.ProjectID, "fp1"); err != nil || !ok {
+		t.Fatalf("StopTeaching = %v, %v", ok, err)
+	}
+	suggestion := blocking
+	suggestion.Severity, suggestion.Reason = "suggestion", "still wrong"
+	if created, err := s.Dismiss(ctx, suggestion); err != nil || !created {
+		t.Fatalf("Dismiss = %v, %v; want stored", created, err)
+	}
+	got, _ := s.Dismissals(ctx, mr1)
+	if len(got) != 1 || got[0].Severity != "blocking" || !got[0].Teaches {
+		t.Fatalf("Dismissals = %+v; want it blocking and teaching", got)
+	}
+}
+
 func TestTeachingDismissals(t *testing.T) {
 	s := newStore(t)
 	at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
