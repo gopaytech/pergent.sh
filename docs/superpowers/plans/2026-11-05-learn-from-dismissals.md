@@ -15,7 +15,8 @@
 - Two repositories. Tasks 1–2 are pergent, in `../pergent-incremental`, on a new branch `feat/dismissals` from `origin/master`. Tasks 3–6 are pergent.sh, in `../pergent.sh-dismissals`, branch `feat/learn-from-dismissals`.
 - Both repositories are public. No private hostname, company name or internal system in code, docs, tests or commit messages, apart from the `gopaytech` org in import paths.
 - Commit messages end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Stage by path. `.superpowers/` is not ignored. Never push.
-- No local Postgres, and don't start Docker. DB tests compile with `go vet ./...` and first run in CI, so desk-check them.
+- No local Postgres. Never run `docker` or `orbctl`, or anything that starts a container: it wakes OrbStack and the owner's other projects. DB tests compile with `go vet ./...` and first run in CI, so desk-check them.
+- Disk is nearly full: don't delete or clean anything, and stop and report BLOCKED if it runs out.
 - Code never removes a finding because of a past dismissal. The fingerprint rule within one change stays as it is.
 - Who dismissed something never goes to the model: an entry has only `file`, `title`, `severity`, `reason`.
 - Limits: 90 days, 20 entries per skill, `title` and `file` cut to 200 characters, `reason` cut to 500.
