@@ -340,13 +340,21 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	}
 	// What people rejected earlier is the same for a full and an incremental
 	// review, and no skill's hash counts it.
-	in.Dismissals = d.pastDismissals(ctx, repo, in, mr.AuthorID)
+	var dismissalCounts map[string]int
+	in.Dismissals, dismissalCounts = d.pastDismissals(ctx, repo, in, mr.AuthorID)
 	hadCarried := len(in.Carried) > 0
+	hadDismissals := len(in.Dismissals) > 0
 	if err := in.Fit(inputs.ConfigMapLimit); err != nil {
 		if errors.Is(err, inputs.ErrTooLarge) {
 			return d.fail(ctx, reasonTooLarge)
 		}
 		return d.fail(ctx, err.Error())
+	}
+	switch {
+	case hadDismissals && in.Dismissals == nil:
+		d.log.Warn("reviewing without past dismissals: the inputs are too large for them", "entries", dismissalCounts)
+	case hadDismissals:
+		d.log.Info("past dismissals", "entries", dismissalCounts)
 	}
 	if push {
 		if err := d.setIncremental(ctx, last, in, hadCarried); err != nil {

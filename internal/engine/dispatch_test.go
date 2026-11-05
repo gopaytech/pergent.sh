@@ -1128,7 +1128,8 @@ func teach(t *testing.T, env *testEnv, iid int64, skill, fp, severity, reason st
 	}
 }
 
-// dismissalsEnv returns the value of PERGENT_DISMISSALS on the Job of run id.
+// dismissalsEnv returns the value of PERGENT_DISMISSALS on job, and whether it
+// is set.
 func dismissalsEnv(job *batchv1.Job) (string, bool) {
 	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
 		if e.Name == "PERGENT_DISMISSALS" {
@@ -1229,6 +1230,12 @@ func TestDispatchTooManyDismissalsStaysIncremental(t *testing.T) {
 	if v, ok := dismissalsEnv(job); ok {
 		t.Errorf("PERGENT_DISMISSALS = %q for a list over the limit", v)
 	}
+	if !strings.Contains(env.Logs(), "reviewing without past dismissals: the inputs are too large for them") {
+		t.Errorf("no warning that the dismissals were dropped\n%s", env.Logs())
+	}
+	if strings.Contains(env.Logs(), "msg=\"past dismissals\"") {
+		t.Errorf("the log says the dismissals were passed\n%s", env.Logs())
+	}
 	if _, ok := env.ConfigMap(id).Data["dismissals.json"]; ok {
 		t.Error("dismissals.json present over the limit")
 	}
@@ -1237,5 +1244,19 @@ func TestDispatchTooManyDismissalsStaysIncremental(t *testing.T) {
 	}
 	if r := env.Run(id); !r.Incremental {
 		t.Errorf("run incremental = %v; want an incremental review", r.Incremental)
+	}
+}
+
+// A re-run of some skills is given the entries of those skills only.
+func TestDispatchRerunPassesDismissalsOfItsSkills(t *testing.T) {
+	env, head, base := twoSkills(t, map[string]int{"a": 1, "b": 1})
+	teach(t, env, 2, "a", "aaaaaa111111", "suggestion", "Fine for a.", 99)
+	teach(t, env, 2, "b", "bbbbbb111111", "suggestion", "Fine for b.", 99)
+
+	r := dispatchRerun(t, env, head, base)
+
+	const want = `{"a":[{"file":"api/auth.go","title":"Token compared with ==","severity":"suggestion","reason":"Fine for a."}]}`
+	if got := env.ConfigMap(r.ID).Data["dismissals.json"]; got != want {
+		t.Errorf("dismissals.json = %s\nwant %s", got, want)
 	}
 }

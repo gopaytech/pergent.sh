@@ -217,6 +217,19 @@ func TestPastDismissalsOldRowsCannotMatch(t *testing.T) {
 	}
 }
 
+func TestPastDismissalsEmptyAfterCleaning(t *testing.T) {
+	image := row("security", "aaaaaa111111", "blocking", 2, 5)
+	image.Reason = "![p](https://evil.example/p.png)"
+	text := row("security", "aaaaaa111111", "blocking", 1, 6)
+	got := PastDismissals([]store.Dismissal{image, text}, []string{"security"}, 9, nil)["security"]
+	if len(got) != 1 || got[0].Reason != "why aaaaaa111111" {
+		t.Fatalf("entries = %+v; want the row with a reason to win", got)
+	}
+	if got := PastDismissals([]store.Dismissal{image}, []string{"security"}, 9, nil); len(got) != 0 {
+		t.Errorf("entries = %+v; want none for a reason that is only an image", got)
+	}
+}
+
 func TestPastDismissalsClean(t *testing.T) {
 	d := row("security", "aaaaaa111111", "blocking", 1, 5)
 	d.Title = "SECRET " + strings.Repeat("é", 300)

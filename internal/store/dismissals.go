@@ -89,7 +89,8 @@ func (s *Store) Dismissals(ctx context.Context, mr MRKey) ([]Dismissal, error) {
 	return out, rows.Err()
 }
 
-// maxTeaching is how many dismissals TeachingDismissals returns at most.
+// maxTeaching is how many dismissals TeachingDismissals returns at most, for
+// the whole repository (not per skill).
 const maxTeaching = 2000
 
 // TeachingDismissals returns the dismissals of a repository, from all its

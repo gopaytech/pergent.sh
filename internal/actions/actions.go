@@ -217,6 +217,11 @@ func PastDismissals(rows []store.Dismissal, skills []string, changeAuthorID int6
 		if _, ok := bySkill[r.Skill]; !ok {
 			continue
 		}
+		// An old reason that was only an image is empty once cleaned, and
+		// teaches nothing; another row of the finding may.
+		if CleanReason(r.Reason) == "" {
+			continue
+		}
 		if r.Severity == "blocking" && r.DismisserPlatformID != 0 && (changeAuthorID == 0 || r.DismisserPlatformID == changeAuthorID) {
 			continue
 		}
