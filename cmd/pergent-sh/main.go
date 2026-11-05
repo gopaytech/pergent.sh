@@ -209,6 +209,18 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	if err := st.Migrate(ctx); err != nil {
 		return err
 	}
+	// Dismissals made before their finding's details were stored get them
+	// from the stored results. Not a migration: a result of an odd shape
+	// must not keep the server from starting, and neither may a slow one: it
+	// is given 2 minutes, and one that does not finish is tried again at the next start.
+	backfillCtx, cancelBackfill := context.WithTimeout(ctx, 2*time.Minute)
+	n, err := st.BackfillDismissals(backfillCtx, time.Now().AddDate(0, 0, -90))
+	cancelBackfill()
+	if err != nil {
+		log.Error("filling in the details of earlier dismissals failed", "error", err.Error())
+	} else if n > 0 {
+		log.Info("filled in the details of earlier dismissals", "count", n)
+	}
 	if err := checkSkills(ctx, cfg, st, log); err != nil {
 		return err
 	}

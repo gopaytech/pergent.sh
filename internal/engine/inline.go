@@ -37,6 +37,7 @@ type threadStore interface {
 	PutInlineThread(ctx context.Context, t store.InlineThread) error
 	RebindInlineThread(ctx context.Context, mr store.MRKey, from, to string, line, endLine int, commit string) error
 	SetInlineThreadState(ctx context.Context, mr store.MRKey, fingerprint, state string) error
+	NoteInlineThreadLeftOut(ctx context.Context, mr store.MRKey, fingerprint string) error
 	DeleteInlineThread(ctx context.Context, mr store.MRKey, fingerprint string) error
 }
 
@@ -195,6 +196,11 @@ func buildFindings(r *result.Result, ds []render.Dismissal, redact func(string) 
 		// policy reads it.
 		cov.Failed = (s.Verdict != render.VerdictHasBlockingIssues && s.Verdict != render.VerdictNoBlockingIssues) ||
 			len(r.Skills[i].Files.NotReviewed) > 0
+		for _, n := range r.Skills[i].Notes {
+			if strings.HasPrefix(n, result.LeftOutNotePrefix) {
+				cov.LeftOut = true
+			}
+		}
 		fs.skills[s.Name] = cov
 
 		for _, f := range s.Findings {
@@ -292,7 +298,7 @@ func joinThreads(mr store.MRKey, head string, rows []store.InlineThread, onPlatf
 		set.plat[row.Fingerprint] = p
 		set.list = append(set.list, threads.Thread{
 			Fingerprint: row.Fingerprint, Skill: row.Skill, File: row.File, Line: row.Line, EndLine: row.EndLine,
-			Commit: row.Commit, State: threads.State(row.State), Resolved: p.Resolved,
+			Commit: row.Commit, State: threads.State(row.State), Resolved: p.Resolved, LeftOutNoted: row.LeftOutNoted,
 		})
 	}
 	used := map[string]bool{}
@@ -453,6 +459,7 @@ func (x *inlineRun) apply(plan threads.Plan) inlineView {
 	x.moved = map[string]string{}
 	x.rebind(plan.Rebind)
 	x.resolve(plan.Resolve)
+	x.note(plan.Note)
 	x.reopen(plan.Reopen, v)
 	x.post(plan.Post, v)
 	return v
@@ -514,6 +521,30 @@ func (x *inlineRun) resolve(rs []threads.Resolve) {
 		}
 		if err := x.d.store.SetInlineThreadState(x.ctx, x.run.MR, fp, string(r.State)); err != nil {
 			x.warn("couldn't record a resolved thread", err)
+		}
+	}
+}
+
+// note tells a thread, once, that its finding was left out of the review. The
+// thread stays open. A reply that fails is not recorded, so the next publish
+// tries again.
+func (x *inlineRun) note(ns []threads.Note) {
+	pid, number := x.run.MR.ProjectID, x.run.MR.IID
+	for _, n := range ns {
+		if n.Thread.Resolved {
+			continue // resolved on the platform already: not ours to touch
+		}
+		fp := x.current(n.Thread.Fingerprint)
+		ref, ok := x.set.refs[fp]
+		if !ok {
+			continue
+		}
+		if err := x.d.inline.ReplyThread(x.ctx, pid, number, ref, n.Reply); err != nil {
+			x.warn("couldn't reply on a thread whose finding was left out; will try again", err)
+			continue
+		}
+		if err := x.d.store.NoteInlineThreadLeftOut(x.ctx, x.run.MR, fp); err != nil {
+			x.warn("couldn't record a reply on a thread whose finding was left out", err)
 		}
 	}
 }

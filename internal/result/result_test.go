@@ -523,6 +523,31 @@ func TestMergeIncrementalFindings(t *testing.T) {
 	}
 }
 
+// The note that a finding was left out of a review because of a past dismissal
+// survives a merge while the file it was left out of is carried: it may be the
+// only trace of a left-out blocker. The other notes are the new run's.
+func TestMergeIncrementalKeepsLeftOutNotes(t *testing.T) {
+	leftOut := LeftOutNotePrefix + " Token compared with == (Token compared with == in api/auth.go)"
+	again := LeftOutNotePrefix + " Another (Another in x.go)"
+	base := incResult(t, fromSHA,
+		Skill{Name: "carries", Verdict: "no_blocking_issues", Files: Files{Reviewed: []string{"k.go", "n.go"}},
+			Notes: []string{leftOut, again, "Verification dropped 1 of 1 blocking findings"}},
+		Skill{Name: "reruns", Verdict: "no_blocking_issues", Files: Files{Reviewed: []string{"k.go", "n.go"}},
+			Notes: []string{leftOut}})
+	partial := incResult(t, "h",
+		Skill{Name: "carries", Verdict: "no_blocking_issues", Batches: 1,
+			Files: Files{Reviewed: []string{"n.go"}, Carried: []string{"k.go"}}, Notes: []string{"fresh note", again}},
+		Skill{Name: "reruns", Verdict: "no_blocking_issues", Batches: 1, Files: Files{Reviewed: []string{"k.go", "n.go"}}})
+
+	r := mergeIncremental(t, partial, base)
+	if want := []string{"fresh note", again, leftOut}; !slices.Equal(r.Skills[0].Notes, want) {
+		t.Errorf("notes of the skill that carries = %q, want the new run's, then the left-out note it lacked: %q", r.Skills[0].Notes, want)
+	}
+	if len(r.Skills[1].Notes) != 0 {
+		t.Errorf("notes of the skill that reviewed everything = %q, want none", r.Skills[1].Notes)
+	}
+}
+
 func TestMergeIncrementalFiles(t *testing.T) {
 	base := incResult(t, fromSHA, Skill{Name: "sec", Verdict: "no_blocking_issues",
 		Files: Files{Reviewed: []string{"kept.go", "old.go"}, Skipped: []Skipped{{Path: "old.lock", Rule: "lockfile"}},

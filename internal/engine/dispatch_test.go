@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -1111,5 +1112,151 @@ func TestIncrementalComparesFromLastPublished(t *testing.T) {
 	}
 	if r := env.Run(c); !r.Incremental || r.BaseRunID == nil || *r.BaseRunID != a {
 		t.Errorf("run incremental = %v, base = %v; want an incremental review on %s", r.Incremental, r.BaseRunID, a)
+	}
+}
+
+// teach stores a dismissal that teaches reviews, made by the platform user
+// by on merge request iid.
+func teach(t *testing.T, env *testEnv, iid int64, skill, fp, severity, reason string, by int64) {
+	t.Helper()
+	if _, err := env.Store.Dismiss(env.ctx, store.Dismissal{
+		MR: env.MRKey(iid), Fingerprint: fp, Severity: severity, Reason: reason, Actor: "maya (gitlab main)",
+		CreatedAt: env.Now().Add(-time.Hour), Skill: skill, File: "api/auth.go", Title: "Token compared with ==",
+		Teaches: true, DismisserPlatformID: by,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// dismissalsEnv returns the value of PERGENT_DISMISSALS on job, and whether it
+// is set.
+func dismissalsEnv(job *batchv1.Job) (string, bool) {
+	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
+		if e.Name == "PERGENT_DISMISSALS" {
+			return e.Value, true
+		}
+	}
+	return "", false
+}
+
+func authoredBy(mr gitlab.MergeRequest, id int64) gitlab.MergeRequest {
+	mr.Author = gitlab.User{ID: id, Username: "dev"}
+	return mr
+}
+
+// A review is told what people rejected earlier, for its skills: not by the
+// change's author, not for a skill it doesn't run, and not who rejected it.
+func TestDispatchPassesDismissals(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Enqueue(3, head)
+	env.GitLab.SetMR(authoredBy(openMR(3, head), 7))
+	env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+	teach(t, env, 1, "security", "aaaaaa111111", "blocking", "Not a secret: a public request ID.", 99)
+	teach(t, env, 2, "security", "bbbbbb111111", "blocking", "Mine, on another change.", 7)
+	teach(t, env, 2, "style", "cccccc111111", "suggestion", "Not this skill.", 99)
+
+	dispatch(t, env)
+
+	job := env.Job(id)
+	if job == nil {
+		t.Fatalf("no job; run = %+v\n%s", env.Run(id), env.Logs())
+	}
+	if v, ok := dismissalsEnv(job); !ok || v != "/in/dismissals.json" {
+		t.Errorf("PERGENT_DISMISSALS = %q, %v", v, ok)
+	}
+	for _, a := range job.Spec.Template.Spec.Containers[0].Args {
+		if strings.HasPrefix(a, "--dismissals") {
+			t.Errorf("job got the argument %q", a)
+		}
+	}
+	const want = `{"security":[{"file":"api/auth.go","title":"Token compared with ==","severity":"blocking","reason":"Not a secret: a public request ID."}]}`
+	if got := env.ConfigMap(id).Data["dismissals.json"]; got != want {
+		t.Errorf("dismissals.json = %s\nwant %s", got, want)
+	}
+}
+
+func TestDispatchSettingOffPassesNone(t *testing.T) {
+	env := newTestEnv(t)
+	off := false
+	env.Engine.Config.Repositories[0].LearnFromDismissals = &off
+	head := sha('a')
+	id := env.Enqueue(3, head)
+	env.GitLab.SetMR(authoredBy(openMR(3, head), 7))
+	env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+	teach(t, env, 1, "security", "aaaaaa111111", "blocking", "Not a secret.", 99)
+
+	dispatch(t, env)
+
+	job := env.Job(id)
+	if job == nil {
+		t.Fatalf("no job; run = %+v\n%s", env.Run(id), env.Logs())
+	}
+	if v, ok := dismissalsEnv(job); ok {
+		t.Errorf("PERGENT_DISMISSALS = %q with the setting off", v)
+	}
+	if _, ok := env.ConfigMap(id).Data["dismissals.json"]; ok {
+		t.Error("dismissals.json present with the setting off")
+	}
+}
+
+// A list that doesn't fit is dropped before the previous result is: the push
+// stays incremental.
+func TestDispatchTooManyDismissalsStaysIncremental(t *testing.T) {
+	env := newTestEnv(t)
+	// The skill leaves room for the previous result and the carried files,
+	// but not for 20 long reasons.
+	const head = "---\nname: security\n---\n"
+	big := head + strings.Repeat("x", inputs.ConfigMapLimit-len(head)-15000)
+	if _, err := env.Store.UpdateLibrarySkill(env.ctx, "security", big, "test", 1, env.Now()); err != nil {
+		t.Fatal(err)
+	}
+	headA, headB := sha('1'), sha('2')
+	publishedReview(t, env, headA, "0.5.0", nil)
+	for i := 0; i < 25; i++ {
+		teach(t, env, 1, "security", fmt.Sprintf("f%011d", i), "suggestion", strings.Repeat("日", 500), 99)
+	}
+	id := env.Enqueue(3, headB)
+	env.GitLab.SetMR(authoredBy(openMR(3, headB), 7))
+	env.GitLab.Reply(http.MethodPost, statusPath(headB), http.StatusCreated, `{}`)
+	serveChangedSince(env, "b.go")
+
+	dispatch(t, env)
+
+	job := env.Job(id)
+	if job == nil {
+		t.Fatalf("no job; run = %+v\n%s", env.Run(id), env.Logs())
+	}
+	if v, ok := dismissalsEnv(job); ok {
+		t.Errorf("PERGENT_DISMISSALS = %q for a list over the limit", v)
+	}
+	if !strings.Contains(env.Logs(), "reviewing without past dismissals: the inputs are too large for them") {
+		t.Errorf("no warning that the dismissals were dropped\n%s", env.Logs())
+	}
+	if strings.Contains(env.Logs(), "msg=\"past dismissals\"") {
+		t.Errorf("the log says the dismissals were passed\n%s", env.Logs())
+	}
+	if _, ok := env.ConfigMap(id).Data["dismissals.json"]; ok {
+		t.Error("dismissals.json present over the limit")
+	}
+	if !hasArg(job.Spec.Template.Spec.Containers[0].Args, "--carried=/in/carried.json") {
+		t.Errorf("job args %v lack --carried", job.Spec.Template.Spec.Containers[0].Args)
+	}
+	if r := env.Run(id); !r.Incremental {
+		t.Errorf("run incremental = %v; want an incremental review", r.Incremental)
+	}
+}
+
+// A re-run of some skills is given the entries of those skills only.
+func TestDispatchRerunPassesDismissalsOfItsSkills(t *testing.T) {
+	env, head, base := twoSkills(t, map[string]int{"a": 1, "b": 1})
+	teach(t, env, 2, "a", "aaaaaa111111", "suggestion", "Fine for a.", 99)
+	teach(t, env, 2, "b", "bbbbbb111111", "suggestion", "Fine for b.", 99)
+
+	r := dispatchRerun(t, env, head, base)
+
+	const want = `{"a":[{"file":"api/auth.go","title":"Token compared with ==","severity":"suggestion","reason":"Fine for a."}]}`
+	if got := env.ConfigMap(r.ID).Data["dismissals.json"]; got != want {
+		t.Errorf("dismissals.json = %s\nwant %s", got, want)
 	}
 }

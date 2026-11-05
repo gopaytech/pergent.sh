@@ -20,6 +20,11 @@ import (
 // SchemaVersion is the only result schema version this package reads.
 const SchemaVersion = 1
 
+// LeftOutNotePrefix starts the note pergent writes in a skill's notes when it
+// left a finding out because of a past dismissal. pergent.sh reads the prefix:
+// the text is pergent's, so changing it there means changing it here.
+const LeftOutNotePrefix = "Left out because of past dismissals:"
+
 // Result is one delivered review result.
 type Result struct {
 	SchemaVersion  int     `json:"schema_version"`
@@ -87,6 +92,10 @@ type Finding struct {
 	Explanation  string `json:"explanation"`
 	SuggestedFix string `json:"suggested_fix,omitempty"`
 	Suggestion   string `json:"suggestion,omitempty"`
+
+	// Skill is the skill that reported the finding. It is not part of a
+	// stored result: whoever reads the findings of a skill fills it in.
+	Skill string `json:"-"`
 }
 
 // Failure is a batch of a skill that did not finish, with the plain text of
@@ -690,6 +699,15 @@ func mergeIncrementalSkill(raw json.RawMessage, fresh Skill, rawEarlier json.Raw
 			base = nil
 		}
 		checks := mergeChecks(base, fresh.Checks)
+		if len(carried) > 0 {
+			// A blocker left out of a carried file is not reported again, so
+			// the earlier note is the only trace of it.
+			if notes, kept := keepLeftOutNotes(fresh.Notes, earlier.Notes); kept {
+				if m["notes"], err = json.Marshal(notes); err != nil {
+					return nil, err
+				}
+			}
+		}
 		delete(m, "checks")
 		if len(checks) > 0 {
 			if m["checks"], err = json.Marshal(checks); err != nil {
@@ -707,6 +725,20 @@ func mergeIncrementalSkill(raw json.RawMessage, fresh Skill, rawEarlier json.Raw
 		}
 	}
 	return json.Marshal(m)
+}
+
+// keepLeftOutNotes is the new run's notes followed by the left-out notes of
+// the last review that they lack, and whether there was any to add.
+func keepLeftOutNotes(fresh, earlier []string) ([]string, bool) {
+	out := slices.Clone(fresh)
+	kept := false
+	for _, n := range earlier {
+		if strings.HasPrefix(n, LeftOutNotePrefix) && !slices.Contains(out, n) {
+			out = append(out, n)
+			kept = true
+		}
+	}
+	return out, kept
 }
 
 // hasBlocking reports whether any of the raw findings is blocking.

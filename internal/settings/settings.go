@@ -47,6 +47,7 @@ const (
 
 	KeyCommandsAuthorAndMaintainersOnly = "commands_author_and_maintainers_only"
 	KeyIncrementalReviews               = "incremental_reviews"
+	KeyLearnFromDismissals              = "learn_from_dismissals"
 )
 
 // The re-run caps when nothing sets them: per merge request and per
@@ -72,7 +73,10 @@ type Effective struct {
 	// IncrementalReviews is whether a push reviews only the files changed
 	// since the last review.
 	IncrementalReviews bool
-	FailureStatus      config.FailureStatus
+	// LearnFromDismissals is whether later reviews are told what people with
+	// write access dismissed, and why.
+	LearnFromDismissals bool
+	FailureStatus       config.FailureStatus
 	// Skills are the library skills reviewed; nil means the default list.
 	Skills []string
 	// RepoSkills are the detected repository skills turned on; nil is none.
@@ -230,6 +234,7 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 
 		CommandsAuthorAndMaintainersOnly: true,
 		IncrementalReviews:               true,
+		LearnFromDismissals:              true,
 		JobTimeout:                       r.Config.Jobs.Timeout,
 		MaxTurns:                         r.Config.Jobs.MaxTurns,
 		JobMemory:                        r.jobsMemory(r.Config.Jobs.Resources.Limits),
@@ -239,7 +244,7 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 		Overridden: map[string]bool{
 			KeyApprove: false, KeyReviewDrafts: false, KeyInlineFindings: false, KeyFailureStatus: false,
 			KeySkills: false, KeyRepoSkills: false, KeyJobTimeout: false, KeyMaxTurns: false, KeyJobMemory: false,
-			KeyRerunLimitPerMR: false, KeyRerunLimitPerRepo: false, KeyCommandsAuthorAndMaintainersOnly: false, KeyIncrementalReviews: false,
+			KeyRerunLimitPerMR: false, KeyRerunLimitPerRepo: false, KeyCommandsAuthorAndMaintainersOnly: false, KeyIncrementalReviews: false, KeyLearnFromDismissals: false,
 		},
 	}
 	if source != SourceDashboard {
@@ -259,6 +264,9 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 	}
 	if stored.IncrementalReviews != nil {
 		eff.IncrementalReviews = *stored.IncrementalReviews
+	}
+	if stored.LearnFromDismissals != nil {
+		eff.LearnFromDismissals = *stored.LearnFromDismissals
 	}
 	if stored.FailureStatus != nil {
 		if fs, ok := failureStatus(*stored.FailureStatus); ok {
@@ -347,6 +355,9 @@ func (r *Resolver) fromConfig(repo config.Repository) (Effective, bool) {
 	if repo.IncrementalReviews != nil {
 		eff.IncrementalReviews, eff.Overridden[KeyIncrementalReviews] = *repo.IncrementalReviews, true
 	}
+	if repo.LearnFromDismissals != nil {
+		eff.LearnFromDismissals, eff.Overridden[KeyLearnFromDismissals] = *repo.LearnFromDismissals, true
+	}
 	if repo.FailureStatus != "" && repo.FailureStatus != config.FailureStatusFailed {
 		eff.FailureStatus, eff.Overridden[KeyFailureStatus] = repo.FailureStatus, true
 	}
@@ -398,6 +409,9 @@ func (r *Resolver) fromDashboard(row store.DashboardRepo, stored store.RepoDefau
 	}
 	if row.IncrementalReviews != nil {
 		eff.IncrementalReviews, eff.Overridden[KeyIncrementalReviews] = *row.IncrementalReviews, true
+	}
+	if row.LearnFromDismissals != nil {
+		eff.LearnFromDismissals, eff.Overridden[KeyLearnFromDismissals] = *row.LearnFromDismissals, true
 	}
 	if row.FailureStatus != nil {
 		if fs, ok := failureStatus(*row.FailureStatus); ok {

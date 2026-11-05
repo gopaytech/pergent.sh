@@ -712,6 +712,10 @@ func (c *commandRun) dismissFinding(ctx context.Context, f result.Finding, revie
 	created, err := c.e.Store.Dismiss(sctx, store.Dismissal{
 		MR: c.cmd.MR, Fingerprint: f.Fingerprint, Severity: f.Severity,
 		Reason: reason, Actor: c.actor(), CreatedAt: c.e.now(),
+		// Only a dismisser with write access teaches later reviews. A change's
+		// author with read access may dismiss a suggestion, but not teach.
+		Skill: f.Skill, File: f.File, Title: f.Title,
+		Teaches: c.access >= forge.AccessWrite, DismisserPlatformID: c.cmd.AuthorID,
 	})
 	if err != nil {
 		return verdict{}, fmt.Errorf("store the dismissal: %w", err)

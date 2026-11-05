@@ -187,6 +187,9 @@ type Repository struct {
 	// IncrementalReviews is whether a push reviews only the files changed
 	// since the last review (default true).
 	IncrementalReviews *bool
+	// LearnFromDismissals is whether later reviews are told what people with
+	// write access dismissed, and why (default true).
+	LearnFromDismissals *bool
 	// JobTimeout replaces jobs.timeout for this repository.
 	JobTimeout *time.Duration
 	// JobMemory replaces the memory limit of jobs.resources.limits.
@@ -256,6 +259,7 @@ type fileRepository struct {
 
 	CommandsAuthorAndMaintainersOnly *bool `yaml:"commands_author_and_maintainers_only"`
 	IncrementalReviews               *bool `yaml:"incremental_reviews"`
+	LearnFromDismissals              *bool `yaml:"learn_from_dismissals"`
 }
 
 func (f fileRepository) repository() Repository {
@@ -268,6 +272,7 @@ func (f fileRepository) repository() Repository {
 
 		CommandsAuthorAndMaintainersOnly: f.CommandsAuthorAndMaintainersOnly,
 		IncrementalReviews:               f.IncrementalReviews,
+		LearnFromDismissals:              f.LearnFromDismissals,
 	}
 	if f.JobTimeout != nil {
 		d := time.Duration(*f.JobTimeout)

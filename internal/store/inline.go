@@ -24,22 +24,29 @@ type InlineThread struct {
 	ThreadID           string
 	CommentID          int64
 	State              string
+	// LeftOutNoted: the thread was told its finding was left out of a review
+	// because of a past dismissal. PutInlineThread leaves it as it is.
+	LeftOutNoted bool
 }
 
 const inlineThreadColumns = `instance, project_id, mr_iid, fingerprint, skill, file, line, end_line, commit_sha,
 	thread_id, comment_id, state`
 
+// inlineThreadSelect is the columns a read returns: those a write sets, and
+// the one only NoteInlineThreadLeftOut sets.
+const inlineThreadSelect = inlineThreadColumns + `, left_out_noted`
+
 func scanInlineThread(row pgx.Row) (InlineThread, error) {
 	var t InlineThread
 	err := row.Scan(&t.MR.Instance, &t.MR.ProjectID, &t.MR.IID, &t.Fingerprint, &t.Skill, &t.File, &t.Line, &t.EndLine,
-		&t.Commit, &t.ThreadID, &t.CommentID, &t.State)
+		&t.Commit, &t.ThreadID, &t.CommentID, &t.State, &t.LeftOutNoted)
 	return t, err
 }
 
 // InlineThreads returns the threads of mr, ordered by file, line and
 // fingerprint.
 func (s *Store) InlineThreads(ctx context.Context, mr MRKey) ([]InlineThread, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+inlineThreadColumns+` FROM inline_threads
+	rows, err := s.pool.Query(ctx, `SELECT `+inlineThreadSelect+` FROM inline_threads
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3
 		ORDER BY file, line, fingerprint`, mr.Instance, mr.ProjectID, mr.IID)
 	if err != nil {
@@ -95,6 +102,16 @@ func (s *Store) SetInlineThreadState(ctx context.Context, mr MRKey, fingerprint,
 	return err
 }
 
+// NoteInlineThreadLeftOut records that the thread of fingerprint was told its
+// finding was left out of a review because of a past dismissal. A fingerprint
+// with no thread is left as it is, not an error.
+func (s *Store) NoteInlineThreadLeftOut(ctx context.Context, mr MRKey, fingerprint string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE inline_threads SET left_out_noted = true, updated_at = now()
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND fingerprint = $4`,
+		mr.Instance, mr.ProjectID, mr.IID, fingerprint)
+	return err
+}
+
 // DeleteInlineThread forgets the thread of fingerprint; deleting one that is
 // not there is not an error.
 func (s *Store) DeleteInlineThread(ctx context.Context, mr MRKey, fingerprint string) error {
@@ -111,11 +128,11 @@ func (s *Store) InlineThreadFor(ctx context.Context, mr MRKey, discussion string
 	var row pgx.Row
 	switch {
 	case discussion != "":
-		row = s.pool.QueryRow(ctx, `SELECT `+inlineThreadColumns+` FROM inline_threads
+		row = s.pool.QueryRow(ctx, `SELECT `+inlineThreadSelect+` FROM inline_threads
 			WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND thread_id = $4`,
 			mr.Instance, mr.ProjectID, mr.IID, discussion)
 	case replyTo != 0:
-		row = s.pool.QueryRow(ctx, `SELECT `+inlineThreadColumns+` FROM inline_threads
+		row = s.pool.QueryRow(ctx, `SELECT `+inlineThreadSelect+` FROM inline_threads
 			WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND comment_id = $4`,
 			mr.Instance, mr.ProjectID, mr.IID, replyTo)
 	default:

@@ -55,6 +55,10 @@ type Inputs struct {
 	// Carried is the JSON of the files an incremental review leaves out, per
 	// skill ({"<skill>": ["path", ...]}); nil for a full review.
 	Carried []byte
+	// Dismissals is the JSON of what people rejected in this repository, per
+	// skill ({"<skill>": [{"file", "title", "severity", "reason"}]}); nil when
+	// there is none. It is not part of any skill's hash.
+	Dismissals []byte
 }
 
 // LibraryEntry is one skill of the library as ResolveSkills receives it.
@@ -254,17 +258,22 @@ func LoadInstructions(ctx context.Context, src Source, projectID int64, ref stri
 
 // Size is the total number of bytes the inputs put into a ConfigMap.
 func (in *Inputs) Size() int {
-	n := len(in.Instructions) + len(in.Previous) + len(in.Carried)
+	n := len(in.Instructions) + len(in.Previous) + len(in.Carried) + len(in.Dismissals)
 	for _, c := range in.Skills {
 		n += len(c)
 	}
 	return n
 }
 
-// Fit makes the inputs fit limit bytes: over the limit, the previous result is
-// dropped first, together with the carried files (the review is then a full
-// one); if they are still over, it returns ErrTooLarge.
+// Fit makes the inputs fit limit bytes: over the limit, the dismissals are
+// dropped first, so a long list never turns an incremental review into a full
+// one; then the previous result, together with the carried files (the review
+// is then a full one). If they are still over, it returns ErrTooLarge.
 func (in *Inputs) Fit(limit int) error {
+	if in.Size() <= limit {
+		return nil
+	}
+	in.Dismissals = nil
 	if in.Size() <= limit {
 		return nil
 	}

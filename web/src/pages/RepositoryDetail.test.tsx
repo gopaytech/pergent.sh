@@ -1,9 +1,9 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi } from "../test/fakeApi";
-import { platformAdmin, viewer, librarySkills, repoDetail, repoPayments, repoWidgets, reviewBlocking } from "../test/fixtures";
+import { platformAdmin, viewer, librarySkills, pastDismissals, repoDetail, repoPayments, repoWidgets, reviewBlocking } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -308,6 +308,24 @@ describe("RepositoryDetail", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({
       incrementalReviews: false,
+    });
+  });
+
+  it("shows the learn from dismissals switch after the incremental reviews switch and sends only that key when it is switched off", async () => {
+    const fake = fakeApi({
+      ...base,
+      "PUT /api/repositories/main/acme/payments/settings": { body: payments },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const toggle = await screen.findByRole("switch", { name: "Learn from dismissals" });
+    expect(toggle).toBeChecked();
+    expect(screen.getByText("Later reviews are told what people with write access rejected, and why.")).toBeInTheDocument();
+    const switches = screen.getAllByRole("switch").map((el) => el.getAttribute("aria-label") ?? el.textContent);
+    expect(switches.indexOf("Learn from dismissals")).toBe(switches.indexOf("Incremental reviews") + 1);
+    await userEvent.click(toggle);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({
+      learnFromDismissals: false,
     });
   });
 
@@ -655,6 +673,86 @@ describe("RepositoryDetail", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("only admins can do this");
     expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")).toHaveLength(1);
     expect(fake.find("GET", "/api/me")).toHaveLength(1);
+  });
+
+  describe("Past dismissals", () => {
+    const listPath = "/api/repositories/main/acme/payments/past-dismissals";
+
+    it("lists what teaches and stops one finding", async () => {
+      let rows = pastDismissals;
+      const fake = fakeApi({
+        ...base,
+        [`GET ${listPath}`]: () => ({ body: rows }),
+        [`POST ${listPath}/stop`]: () => {
+          rows = rows.filter((r) => r.fingerprint !== "a1b2c3d4e5f6");
+          return { body: { status: "stopped" } };
+        },
+      });
+      renderApp("/repos/main/acme/payments?tab=past-dismissals");
+      const first = (await screen.findByText("Request body is used before validation")).closest(".row") as HTMLElement;
+      expect(within(first).getByText("blocking")).toBeInTheDocument();
+      expect(within(first).getByText(/code-review/)).toBeInTheDocument();
+      expect(within(first).getByText("api/handler.go")).toBeInTheDocument();
+      expect(within(first).getByText("Reason: The body is a constant here")).toBeInTheDocument();
+      expect(within(first).getByText(/alice \(gitlab main\)/)).toBeInTheDocument();
+      expect(within(first).getByRole("link", { name: "acme/payments !7" })).toHaveAttribute("href", "/reviews/main/acme/payments/7");
+      expect(screen.getByText("Name it better")).toBeInTheDocument();
+
+      await userEvent.click(within(first).getByRole("button", { name: "Stop using" }));
+      const posts = fake.find("POST", `${listPath}/stop`);
+      expect(posts).toHaveLength(1);
+      expect(posts[0].body).toEqual({ fingerprint: "a1b2c3d4e5f6" });
+      // The list is read again and the row is gone.
+      await waitFor(() => expect(screen.queryByText("Request body is used before validation")).not.toBeInTheDocument());
+      expect(screen.getByText("Name it better")).toBeInTheDocument();
+      expect(fake.find("GET", listPath)).toHaveLength(2);
+    });
+
+    it("says reviews aren't told when Learn from dismissals is off", async () => {
+      const off = repoDetail(repoPayments);
+      off.settings.learnFromDismissals = { value: false, overridden: true };
+      renderAt("/repos/main/acme/payments?tab=past-dismissals", {
+        ...base,
+        "GET /api/repositories/main/acme/payments": { body: off },
+        [`GET ${listPath}`]: { body: pastDismissals },
+      });
+      expect(await screen.findByText(/Learn from dismissals is off, so reviews aren't told about these\./)).toBeInTheDocument();
+      expect(screen.queryByText(/Reviews of this repository are told about them/)).not.toBeInTheDocument();
+      // Stop using is still there: it ends the lesson for when the setting is turned on again.
+      expect(screen.getAllByRole("button", { name: "Stop using" })).toHaveLength(2);
+    });
+
+    it("says reviews are told when it is on", async () => {
+      renderAt("/repos/main/acme/payments?tab=past-dismissals", { ...base, [`GET ${listPath}`]: { body: pastDismissals } });
+      expect(await screen.findByText(/Reviews of this repository are told about them\./)).toBeInTheDocument();
+      expect(screen.queryByText(/Learn from dismissals is off/)).not.toBeInTheDocument();
+    });
+
+    it("says when nothing teaches", async () => {
+      renderAt("/repos/main/acme/payments?tab=past-dismissals", { ...base, [`GET ${listPath}`]: { body: [] } });
+      expect(await screen.findByText("No past dismissals are teaching reviews.")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Stop using" })).not.toBeInTheDocument();
+    });
+
+    it("is for maintainers and admins only", async () => {
+      renderAt("/repos/main/acme/payments?tab=past-dismissals", {
+        ...base,
+        "GET /api/me": { body: viewer },
+        "GET /api/repositories/main/acme/payments": { body: repoDetail(repoPayments, "viewer") },
+      });
+      await screen.findByRole("heading", { name: "acme/payments" });
+      expect(screen.queryByRole("tab", { name: "Past dismissals" })).not.toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "Reviews" })).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("is offered to a maintainer of the repository", async () => {
+      renderAt("/repos/main/acme/payments", {
+        ...base,
+        "GET /api/me": { body: viewer },
+        "GET /api/repositories/main/acme/payments": { body: repoDetail(repoPayments, "maintainer") },
+      });
+      expect(await screen.findByRole("tab", { name: "Past dismissals" })).toBeInTheDocument();
+    });
   });
 });
 

@@ -284,6 +284,9 @@ func (d *Dashboard) dismiss(w http.ResponseWriter, r *http.Request, b reviewButt
 	created, err := d.Store.Dismiss(context.WithoutCancel(ctx), store.Dismissal{
 		MR: b.mr, Fingerprint: fingerprint, Severity: severity, Reason: reason,
 		Actor: actorLabel(se.Kind, se.Platform, se.Instance, se.Username), ActorID: &accountID, CreatedAt: d.now(),
+		// The buttons are for maintainers and admins, so a dismissal teaches.
+		Skill: f.Skill, File: f.File, Title: f.Title, Teaches: true,
+		DismisserPlatformID: dismisserPlatformID(se, b.mr.Instance),
 	})
 	if err != nil {
 		d.Log.Error("dashboard: storing a dismissal failed", "instance", b.mr.Instance, "project", b.project, "error", err.Error())
@@ -339,6 +342,16 @@ func (d *Dashboard) mayDismissBlocking(w http.ResponseWriter, r *http.Request, b
 		return false
 	}
 	return true
+}
+
+// dismisserPlatformID is the platform user ID of the session on instance, 0
+// when it has none there: a password account has no platform user, and a
+// user ID of another instance means someone else here.
+func dismisserPlatformID(se Session, instance string) int64 {
+	if se.Instance != instance {
+		return 0
+	}
+	return se.UserID
 }
 
 // restore undoes a dismissal.

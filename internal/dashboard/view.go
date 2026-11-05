@@ -335,7 +335,8 @@ type Last7View struct {
 // commandsAuthorAndMaintainersOnly (whether only a change's author and the
 // repository's maintainers and owners use pergent commands),
 // incrementalReviews (whether a push reviews only the files changed since the
-// last review), failureStatus, skills (null: the default list of skills; otherwise the library skills
+// last review), learnFromDismissals (whether later reviews are told what people
+// with write access dismissed, and why), failureStatus, skills (null: the default list of skills; otherwise the library skills
 // reviewed), repoSkills
 // (the detected repository skills turned on, a list, empty when none),
 // jobTimeoutSeconds, maxTurns, jobMemory ("" when none), rerunLimitPerMR and
@@ -448,6 +449,30 @@ type ScanView struct {
 	Error      string     `json:"error"`
 	QueuedAt   time.Time  `json:"queuedAt"`
 	FinishedAt *time.Time `json:"finishedAt"`
+}
+
+// PastDismissalView is one row of GET /api/repositories/{instance}/{project...}
+// /past-dismissals, for maintainers and admins (403 otherwise): a finding
+// whose dismissals teach the repository's reviews, one row each, a blocking
+// dismissal over a suggestion and then the newest. By, At and Number are of
+// the dismissal shown; Number is its change. The list is [] when nothing
+// teaches.
+//
+// POST .../past-dismissals/stop {"fingerprint"} (Stop using) answers 200
+// {"status": "stopped" | "not teaching"}: every dismissal of that finding in
+// the repository stops teaching, config repositories included. The
+// dismissals stay on their changes, no review is decided again and the
+// platform isn't asked. 400 for a body without a fingerprint.
+type PastDismissalView struct {
+	Skill       string    `json:"skill"`
+	Severity    string    `json:"severity"`
+	File        string    `json:"file"`
+	Title       string    `json:"title"`
+	Reason      string    `json:"reason"`
+	By          string    `json:"by"`
+	At          time.Time `json:"at"`
+	Number      int64     `json:"number"`
+	Fingerprint string    `json:"fingerprint"`
 }
 
 // SkillSourceView is where an installed skill came from. Kind is "instance"
@@ -662,9 +687,12 @@ type DefaultsView struct {
 	CommandsAuthorAndMaintainersOnly bool `json:"commandsAuthorAndMaintainersOnly"`
 	// IncrementalReviews is whether a push reviews only the files changed
 	// since the last review.
-	IncrementalReviews bool   `json:"incrementalReviews"`
-	FailureStatus      string `json:"failureStatus"`
-	JobTimeoutSeconds  int64  `json:"jobTimeoutSeconds"`
+	IncrementalReviews bool `json:"incrementalReviews"`
+	// LearnFromDismissals is whether later reviews are told what people with
+	// write access dismissed, and why.
+	LearnFromDismissals bool   `json:"learnFromDismissals"`
+	FailureStatus       string `json:"failureStatus"`
+	JobTimeoutSeconds   int64  `json:"jobTimeoutSeconds"`
 	// MaxTurns is the step limit of each opencode run.
 	MaxTurns int `json:"maxTurns"`
 	// JobMemory is the Job's memory limit, "" when none.
@@ -682,7 +710,7 @@ type DefaultsView struct {
 	// Pinned says which defaults were saved here and so no longer follow the
 	// config, by JSON key (approve, reviewDrafts, inlineFindings,
 	// commandsAuthorAndMaintainersOnly, incrementalReviews,
-	// failureStatus, jobTimeoutSeconds, maxTurns, jobMemory,
+	// learnFromDismissals, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory,
 	// rerunLimitPerMR, rerunLimitPerRepo). Every key is present.
 	Pinned map[string]bool `json:"pinned"`
 }
@@ -696,10 +724,12 @@ type DefaultValues struct {
 	// CommandsAuthorAndMaintainersOnly: see DefaultsView.
 	CommandsAuthorAndMaintainersOnly bool `json:"commandsAuthorAndMaintainersOnly"`
 	// IncrementalReviews: see DefaultsView.
-	IncrementalReviews bool   `json:"incrementalReviews"`
-	FailureStatus      string `json:"failureStatus"`
-	JobTimeoutSeconds  int64  `json:"jobTimeoutSeconds"`
-	MaxTurns           int    `json:"maxTurns"`
+	IncrementalReviews bool `json:"incrementalReviews"`
+	// LearnFromDismissals: see DefaultsView.
+	LearnFromDismissals bool   `json:"learnFromDismissals"`
+	FailureStatus       string `json:"failureStatus"`
+	JobTimeoutSeconds   int64  `json:"jobTimeoutSeconds"`
+	MaxTurns            int    `json:"maxTurns"`
 	// JobMemory is the Job's memory limit, "" when none.
 	JobMemory         string `json:"jobMemory"`
 	RerunLimitPerMR   int    `json:"rerunLimitPerMR"`
@@ -748,7 +778,7 @@ type LLMView struct {
 //   - PUT /api/repositories/{instance}/{project...}/settings: changes the
 //     settings in the body and leaves the others; a null resets one to its
 //     default. The keys are those of RepositoryDetailView.Settings:
-//     approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly and incrementalReviews (true or false), failureStatus ("failed" or
+//     approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews and learnFromDismissals (true or false), failureStatus ("failed" or
 //     "neutral"), skills (a non-empty list of library skill names, or
 //     null for the default list; a name the library lacks is 400 `skill
 //     "x" is not in the skill library`, and so is a list whose texts come to
