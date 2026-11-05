@@ -548,6 +548,46 @@ func TestMergeIncrementalKeepsLeftOutNotes(t *testing.T) {
 	}
 }
 
+// The kept notes are the last review's newest, at most maxKeptLeftOutNotes of
+// them, and the new run's notes always stay on top of that. Other notes are
+// the new run's.
+func TestKeepLeftOutNotesIsCapped(t *testing.T) {
+	lo := func(s string) string { return LeftOutNotePrefix + " " + s }
+
+	var earlier []string
+	for _, e := range []string{"n1 (a)", "n2 (b)", "n3 (c)", "n4 (d)", "n5 (e)", "n6 (f)", "n7 (g)"} { // newest first
+		earlier = append(earlier, lo(e))
+	}
+	earlier = append(earlier[:2], append([]string{"Verification dropped 1 of 1 blocking findings"}, earlier[2:]...)...)
+	fresh := []string{lo("f1 (x)"), "a plain note"}
+
+	got, kept := keepLeftOutNotes(fresh, earlier)
+	want := append(slices.Clone(fresh), lo("n1 (a)"), lo("n2 (b)"), lo("n3 (c)"), lo("n4 (d)"), lo("n5 (e)"))
+	if !kept || !slices.Equal(got, want) {
+		t.Errorf("notes = %q, kept = %t; want the fresh notes and the newest five: %q", got, kept, want)
+	}
+
+	// A note an earlier, longer one contains is dropped before the cap counts.
+	got, _ = keepLeftOutNotes(nil, []string{lo("A (x); B (y)"), lo("A (x)"), lo("C (z)")})
+	if want := []string{lo("A (x); B (y)"), lo("C (z)")}; !slices.Equal(got, want) {
+		t.Errorf("notes = %q, want %q", got, want)
+	}
+	// ... whichever of the two is newer.
+	got, _ = keepLeftOutNotes(nil, []string{lo("A (x)"), lo("A (x); B (y)")})
+	if want := []string{lo("A (x); B (y)")}; !slices.Equal(got, want) {
+		t.Errorf("notes = %q, want %q", got, want)
+	}
+	// ... and one a new note contains is not kept at all.
+	got, kept = keepLeftOutNotes([]string{lo("A (x); B (y)")}, []string{lo("A (x)")})
+	if kept || !slices.Equal(got, []string{lo("A (x); B (y)")}) {
+		t.Errorf("notes = %q, kept = %t; want the new note alone", got, kept)
+	}
+	// Notes that are not left-out notes are not kept.
+	if got, kept = keepLeftOutNotes(nil, []string{"Verification dropped 1"}); kept || len(got) != 0 {
+		t.Errorf("notes = %q, kept = %t; want none", got, kept)
+	}
+}
+
 func TestMergeIncrementalFiles(t *testing.T) {
 	base := incResult(t, fromSHA, Skill{Name: "sec", Verdict: "no_blocking_issues",
 		Files: Files{Reviewed: []string{"kept.go", "old.go"}, Skipped: []Skipped{{Path: "old.lock", Rule: "lockfile"}},

@@ -550,6 +550,8 @@ func NoteUnmerged(data []byte, note string) ([]byte, error) {
 // base's with the new run's replacing the ones it reported again. A skill that
 // started no run but carries files keeps the base's confidence, summaries,
 // notes, checks and batch counts; one with no files left takes the new run's.
+// A skill that ran and carries files keeps up to five of the base's left-out
+// notes after its new notes.
 // Each skill is kept as it was delivered, fields that Result does not
 // declare included. Finding IDs are assigned again over all the findings. The
 // envelope and the comment are partial's, and the result is marked Merged.
@@ -727,18 +729,39 @@ func mergeIncrementalSkill(raw json.RawMessage, fresh Skill, rawEarlier json.Raw
 	return json.Marshal(m)
 }
 
+// maxKeptLeftOutNotes is the most left-out notes of the last review that a
+// merge keeps. pergent writes all of a review's entries as one note, so the
+// next review's note usually contains the last one's and the list would gain a
+// line per push.
+const maxKeptLeftOutNotes = 5
+
 // keepLeftOutNotes is the new run's notes followed by the left-out notes of
-// the last review that they lack, and whether there was any to add.
+// the last review that they lack, and whether there was any to add. It keeps
+// at most maxKeptLeftOutNotes of them, the newest, and none whose text another
+// left-out note already contains. A merge writes the new run's notes first and
+// the notes it kept after them, so earlier is newest first.
 func keepLeftOutNotes(fresh, earlier []string) ([]string, bool) {
-	out := slices.Clone(fresh)
-	kept := false
+	has := func(notes []string, text string) bool {
+		return slices.ContainsFunc(notes, func(n string) bool {
+			return strings.HasPrefix(n, LeftOutNotePrefix) && strings.Contains(n, text)
+		})
+	}
+	var kept []string
 	for _, n := range earlier {
-		if strings.HasPrefix(n, LeftOutNotePrefix) && !slices.Contains(out, n) {
-			out = append(out, n)
-			kept = true
+		if !strings.HasPrefix(n, LeftOutNotePrefix) {
+			continue
+		}
+		text := strings.TrimPrefix(n, LeftOutNotePrefix)
+		if has(fresh, text) || has(kept, text) {
+			continue
+		}
+		// An older note this one contains is not worth a place.
+		kept = slices.DeleteFunc(kept, func(k string) bool { return strings.Contains(n, strings.TrimPrefix(k, LeftOutNotePrefix)) })
+		if len(kept) < maxKeptLeftOutNotes {
+			kept = append(kept, n)
 		}
 	}
-	return out, kept
+	return append(slices.Clone(fresh), kept...), len(kept) > 0
 }
 
 // hasBlocking reports whether any of the raw findings is blocking.

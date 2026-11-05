@@ -163,7 +163,7 @@ func TestPastDismissalsConfigRepo(t *testing.T) {
 
 // A repository with nothing dismissed has nothing that teaches, and there is
 // nothing to stop.
-func TestPastDismissalsNoRuns(t *testing.T) {
+func TestPastDismissalsNothingDismissed(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.signInRole(store.RoleMaintainer)
 	rec := e.get(c, pastURL(buttonProject))
