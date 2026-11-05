@@ -162,7 +162,7 @@ func (s *Store) SkillResults(ctx, instance string, projectID int64, since time.T
 func (s *Store) PruneFates(ctx, before time.Time) (int, error)
 ```
 
-`finding_fates`: `instance`, `project_id`, `mr_iid`, `fingerprint`, `skill`, `skill_hash`, `severity`, `fate` (CHECK), `merged`, `by_bot`, `decided_at`; primary key the first four; an index on `(instance, project_id, decided_at)`. `fate_jobs`: `instance`, `project_id`, `mr_iid`, `project_path`, `merged`, `requested_at`, `attempts`, `not_before`, `finished_at`; primary key the first three.
+`finding_fates`: `instance`, `project_id`, `mr_iid`, `fingerprint`, `skill`, `skill_hash`, `severity`, `fate` (CHECK), `merged`, `by_bot`, `decided_at`; primary key `instance`, `project_id`, `mr_iid`, `fingerprint`, `skill`; an index on `(instance, project_id, decided_at)`. `fate_jobs`: `instance`, `project_id`, `mr_iid`, `project_path`, `merged`, `requested_at`, `attempts`, `not_before`, `finished_at`; primary key the first three.
 
 Rules:
 - `RequestFates` inserts, or on conflict resets the job, unless the job finished for a merged change. So a redelivered `closed` does nothing to a merged change. (Review Focus 4)

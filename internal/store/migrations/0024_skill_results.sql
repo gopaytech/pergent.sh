@@ -1,5 +1,5 @@
 -- What became of each finding when its change was merged or closed, one row
--- per finding per change. A merge or close replaces the change's rows. Rows
+-- per finding of a skill per change. A merge or close replaces the change's rows. Rows
 -- go with their project or instance, and a year after decided_at.
 CREATE TABLE finding_fates (
     instance    text        NOT NULL,
@@ -16,7 +16,7 @@ CREATE TABLE finding_fates (
     -- Whether a bot opened the change; its findings are left out of the rates.
     by_bot      boolean     NOT NULL,
     decided_at  timestamptz NOT NULL,
-    PRIMARY KEY (instance, project_id, mr_iid, fingerprint)
+    PRIMARY KEY (instance, project_id, mr_iid, fingerprint, skill)
 );
 CREATE INDEX finding_fates_decided_idx ON finding_fates (instance, project_id, decided_at);
 

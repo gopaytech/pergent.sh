@@ -91,7 +91,7 @@ A missed webhook means a change gets no fates. The existing hourly sweep can cat
 
 ## What it stores
 
-A table of final fates, one row per finding per change: repository, change, fingerprint, skill, the hash of the skill's content in the last review that reported it, severity, fate, whether the change merged, whether a bot opened it, and when. Rows are removed with their project or instance, like dismissals and threads. A skill is counted by name within a repository, so a rename starts fresh. *(my call)*
+A table of final fates, one row per finding of a skill per change: repository, change, fingerprint, skill, the hash of the skill's content in the last review that reported it, severity, fate, whether the change merged, whether a bot opened it, and when. Rows are removed with their project or instance, like dismissals and threads. A skill is counted by name within a repository, so a rename starts fresh. *(my call)*
 
 No finding text is stored: the review it came from holds that. *(my call)*
 

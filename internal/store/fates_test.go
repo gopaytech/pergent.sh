@@ -122,6 +122,16 @@ func TestReplaceFatesReplaces(t *testing.T) {
 	}
 }
 
+// One fingerprint can be a finding of two skills, and both are stored.
+func TestReplaceFatesKeepsOneFingerprintOfTwoSkills(t *testing.T) {
+	s := newStore(t)
+	rows := []FindingFate{fate("x", "sec", "", "blocking", "fixed"), fate("x", "style", "", "suggestion", "open")}
+	storeFates(t, s, mr1, "acme/widgets", rows, true, false, t0)
+	if got := fatesOf(t, s, mr1); !slices.Equal(got, []string{"x", "x"}) {
+		t.Errorf("fates = %v; want x for both skills", got)
+	}
+}
+
 // A pass works on the job it claimed: a webhook that asked again meanwhile,
 // a job already finished or one dropped is left to its own turn.
 func TestReplaceFatesOnlyActsOnTheClaimedJob(t *testing.T) {
