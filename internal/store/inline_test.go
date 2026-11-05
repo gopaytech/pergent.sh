@@ -187,3 +187,29 @@ func TestDeleteProjectDeletesInlineThreads(t *testing.T) {
 		t.Errorf("another project's threads = %+v; want kept", got)
 	}
 }
+
+func TestNoteInlineThreadLeftOut(t *testing.T) {
+	s := newStore(t)
+	th := inlineThread("f1", "PRRT_one", 101)
+	if err := s.PutInlineThread(ctx, th); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.InlineThreads(ctx, mr1); len(got) != 1 || got[0].LeftOutNoted {
+		t.Fatalf("threads = %+v; want one not yet told", got)
+	}
+	if err := s.NoteInlineThreadLeftOut(ctx, mr1, "f1"); err != nil {
+		t.Fatal(err)
+	}
+	// Putting the thread again (a reopen) keeps what it was told.
+	if err := s.PutInlineThread(ctx, th); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.InlineThreads(ctx, mr1)
+	if err != nil || len(got) != 1 || !got[0].LeftOutNoted {
+		t.Fatalf("threads = %+v, %v; want it told", got, err)
+	}
+	// A fingerprint with no thread is not an error.
+	if err := s.NoteInlineThreadLeftOut(ctx, mr1, "nope"); err != nil {
+		t.Errorf("NoteInlineThreadLeftOut with no thread = %v", err)
+	}
+}

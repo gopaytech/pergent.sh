@@ -20,6 +20,11 @@ import (
 // SchemaVersion is the only result schema version this package reads.
 const SchemaVersion = 1
 
+// LeftOutNotePrefix starts the note pergent writes in a skill's notes when it
+// left a finding out because of a past dismissal. pergent.sh reads the prefix:
+// the text is pergent's, so changing it there means changing it here.
+const LeftOutNotePrefix = "Left out because of past dismissals:"
+
 // Result is one delivered review result.
 type Result struct {
 	SchemaVersion  int     `json:"schema_version"`

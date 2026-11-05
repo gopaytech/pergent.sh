@@ -51,6 +51,13 @@ const (
 // ReplyFixed is the reply on a thread whose finding is gone at head.
 func ReplyFixed(head string) string { return "Fixed in `" + ShortSHA(head) + "`." }
 
+// ReplyLeftOut is the reply on a thread whose finding the review no longer
+// reports, but whose skill says it left findings out because of past
+// dismissals: the code may not have changed, so the thread stays open.
+func ReplyLeftOut(head string) string {
+	return "No longer reported in `" + ShortSHA(head) + "`; see the note on past dismissals in the comment."
+}
+
 // ReplyBack is the reply on a thread whose finding came back at head.
 func ReplyBack(head string) string { return "Back in `" + ShortSHA(head) + "`." }
 
@@ -86,6 +93,9 @@ type Thread struct {
 	Commit                   string
 	State                    State
 	Resolved                 bool // as the platform shows it now
+	// LeftOutNoted: the thread was told, with ReplyLeftOut, that its finding
+	// was left out of a review.
+	LeftOutNoted bool
 }
 
 // Dismissal says who dismissed a finding and why.
@@ -95,6 +105,9 @@ type Dismissal struct{ By, Reason string }
 type Coverage struct {
 	Failed   bool
 	Reviewed map[string]bool // files the skill reviewed in this review
+	// LeftOut: the skill's notes say it left a finding out because of a past
+	// dismissal. It says which skill, not which finding.
+	LeftOut bool
 }
 
 // Input is everything Decide looks at.
@@ -125,6 +138,12 @@ type Resolve struct {
 	Reply  string
 }
 
+// Note is an open thread to reply on, without resolving it.
+type Note struct {
+	Thread Thread
+	Reply  string
+}
+
 // Reopen is a resolved thread to open again.
 type Reopen struct {
 	Thread Thread
@@ -145,6 +164,7 @@ type Rebind struct {
 type Plan struct {
 	Post    []Post
 	Resolve []Resolve
+	Note    []Note
 	Reopen  []Reopen
 	Rebind  []Rebind
 	// Inline holds the fingerprints shown on the diff: kept, reopened,
@@ -246,6 +266,12 @@ func Decide(in Input) Plan {
 		switch cov, known := in.Skills[t.Skill]; {
 		case !inDiff || d.Deleted:
 			p.Resolve = append(p.Resolve, Resolve{Thread: t, State: StateGone, Reply: ReplyGone})
+		case known && !cov.Failed && cov.Reviewed[t.File] && cov.LeftOut:
+			// The finding may be missing because the skill left it out, not
+			// because the code changed: the thread stays open, and is told once.
+			if !t.LeftOutNoted {
+				p.Note = append(p.Note, Note{Thread: t, Reply: ReplyLeftOut(in.Head)})
+			}
 		case known && !cov.Failed && cov.Reviewed[t.File]:
 			p.Resolve = append(p.Resolve, Resolve{Thread: t, State: StateFixed, Reply: ReplyFixed(in.Head)})
 		}
@@ -295,6 +321,7 @@ func Decide(in Input) Plan {
 	}
 
 	sort.SliceStable(p.Resolve, func(i, j int) bool { return lessThread(p.Resolve[i].Thread, p.Resolve[j].Thread) })
+	sort.SliceStable(p.Note, func(i, j int) bool { return lessThread(p.Note[i].Thread, p.Note[j].Thread) })
 	sort.SliceStable(p.Reopen, func(i, j int) bool { return lessThread(p.Reopen[i].Thread, p.Reopen[j].Thread) })
 	sort.SliceStable(p.Rebind, func(i, j int) bool { return lessThread(p.Rebind[i].Thread, p.Rebind[j].Thread) })
 	return p
