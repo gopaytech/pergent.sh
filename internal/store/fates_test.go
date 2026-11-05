@@ -460,56 +460,58 @@ func TestChangesWithoutFates(t *testing.T) {
 	}
 }
 
-// One change per repository is offered, the one least recently checked: open
-// changes that were looked at don't keep a missed merge from being found.
+// One change per repository is offered, the one least recently checked, the
+// unchecked ones oldest first: open changes that were looked at, or are newer,
+// don't keep a missed merge from being found.
 func TestChangesWithoutFatesRotates(t *testing.T) {
 	s := newStore(t)
 	now := time.Now()
 	since := now.Add(-24 * time.Hour)
-	missed := mr1                                                    // merged, the webhook missed
-	open := mr2                                                      // still open, reviewed more recently
+	missed := mr1                                                    // merged, the webhook missed; reviewed longest ago
+	open := mr2                                                      // still open, reviewed more recently (same repository as missed)
 	elsewhere := MRKey{Instance: mr1.Instance, ProjectID: 8, IID: 1} // another repository
 	decidedRun(t, s, missed, "aaa", now.Add(-3*time.Hour))
 	decidedRun(t, s, open, "bbb", now.Add(-time.Hour))
 	decidedRun(t, s, elsewhere, "ccc", now.Add(-2*time.Hour))
 
-	// Each repository gets a row, the newest review of it first.
+	// Each repository gets a row, the oldest review of the unchecked first, so
+	// a new open change doesn't hide an old missed merge.
 	got, err := s.ChangesWithoutFates(ctx, since, 10)
-	if err != nil || len(got) != 2 || got[0].MR != open || got[1].MR != elsewhere {
-		t.Fatalf("ChangesWithoutFates = %+v, %v; want the open change, then the other repository's", got, err)
+	if err != nil || len(got) != 2 || got[0].MR != missed || got[1].MR != elsewhere {
+		t.Fatalf("ChangesWithoutFates = %+v, %v; want the missed merge, then the other repository's", got, err)
 	}
-	if got, _ := s.ChangesWithoutFates(ctx, since, 1); len(got) != 1 || got[0].MR != open {
-		t.Errorf("ChangesWithoutFates limit 1 = %+v; want the open change", got)
+	if got, _ := s.ChangesWithoutFates(ctx, since, 1); len(got) != 1 || got[0].MR != missed {
+		t.Errorf("ChangesWithoutFates limit 1 = %+v; want the missed merge", got)
 	}
 
-	// Once the open change was checked, the missed merge comes back.
-	if err := s.FateChecked(ctx, open, now); err != nil {
+	// Once the first was checked (it was still open), the other change of its repository comes.
+	if err := s.FateChecked(ctx, missed, now); err != nil {
 		t.Fatal(err)
 	}
 	got, err = s.ChangesWithoutFates(ctx, since, 10)
-	if err != nil || len(got) != 2 || got[0].MR != elsewhere || got[1].MR != missed {
-		t.Fatalf("ChangesWithoutFates after a check = %+v, %v; want the other repository's, then the missed merge", got, err)
+	if err != nil || len(got) != 2 || got[0].MR != elsewhere || got[1].MR != open {
+		t.Fatalf("ChangesWithoutFates after a check = %+v, %v; want the other repository's, then the open change", got, err)
 	}
 
 	// All checked: the least recently checked of each repository, the oldest check first.
 	if err := s.FateChecked(ctx, elsewhere, now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.FateChecked(ctx, missed, now.Add(2*time.Minute)); err != nil {
+	if err := s.FateChecked(ctx, open, now.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = s.ChangesWithoutFates(ctx, since, 10)
-	if len(got) != 2 || got[0].MR != open || got[1].MR != elsewhere {
-		t.Errorf("ChangesWithoutFates all checked = %+v; want the open change (checked first), then the other repository's", got)
+	if len(got) != 2 || got[0].MR != missed || got[1].MR != elsewhere {
+		t.Errorf("ChangesWithoutFates all checked = %+v; want the change checked first, then the other repository's", got)
 	}
 
 	// Checking it again moves it behind.
-	if err := s.FateChecked(ctx, open, now.Add(3*time.Minute)); err != nil {
+	if err := s.FateChecked(ctx, missed, now.Add(3*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = s.ChangesWithoutFates(ctx, since, 10)
-	if len(got) != 2 || got[0].MR != elsewhere || got[1].MR != missed {
-		t.Errorf("ChangesWithoutFates after checking again = %+v; want the other repository's, then the missed merge", got)
+	if len(got) != 2 || got[0].MR != elsewhere || got[1].MR != open {
+		t.Errorf("ChangesWithoutFates after checking again = %+v; want the other repository's, then the open change", got)
 	}
 }
 

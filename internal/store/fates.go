@@ -169,8 +169,9 @@ func (s *Store) FateChecked(ctx context.Context, mr MRKey, at time.Time) error {
 
 // ChangesWithoutFates returns the changes the sweep is to look at: at most
 // one per repository, up to limit in all, the one least recently checked
-// (FateChecked; never checked first, then the newest review), so a repository's
-// open changes can't keep a missed merge from being found. A change qualifies
+// (FateChecked; never checked first, the one with the oldest review first, so
+// the new open changes of a repository can't keep an old missed merge from
+// being found). A change qualifies
 // with a decided run created at or after since and either no fate job, or a
 // job finished as a close and a decided run created after it (it was reopened
 // and its merge or close not recorded). Each is one job with the project path
@@ -183,7 +184,7 @@ func (s *Store) ChangesWithoutFates(ctx context.Context, since time.Time, limit 
 	rows, err := s.pool.Query(ctx, `SELECT instance, project_id, mr_iid, project_path FROM (
 			SELECT c.instance, c.project_id, c.mr_iid, c.project_path, c.created_at, k.checked_at,
 			       row_number() OVER (PARTITION BY c.instance, c.project_id
-			                          ORDER BY k.checked_at NULLS FIRST, c.created_at DESC, c.mr_iid) AS rn
+			                          ORDER BY k.checked_at NULLS FIRST, c.created_at, c.mr_iid) AS rn
 			FROM (
 				SELECT DISTINCT ON (r.instance, r.project_id, r.mr_iid)
 				       r.instance, r.project_id, r.mr_iid, r.project_path, r.created_at
@@ -196,7 +197,7 @@ func (s *Store) ChangesWithoutFates(ctx context.Context, since time.Time, limit 
 			LEFT JOIN fate_checks k ON k.instance = c.instance AND k.project_id = c.project_id AND k.mr_iid = c.mr_iid
 		) ranked
 		WHERE rn = 1
-		ORDER BY checked_at NULLS FIRST, created_at DESC, instance, project_id, mr_iid LIMIT $2`, since, limit)
+		ORDER BY checked_at NULLS FIRST, created_at, instance, project_id, mr_iid LIMIT $2`, since, limit)
 	if err != nil {
 		return nil, err
 	}
