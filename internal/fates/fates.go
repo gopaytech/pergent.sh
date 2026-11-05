@@ -86,7 +86,8 @@ type track struct {
 	fps               map[string]bool // every fingerprint it had
 	line, end         int
 	head              string // head of the last review that reported it
-	severity          string
+	severity          string // the highest it had
+	last              string // as the last review that reported it had it
 	live              bool   // reported as of the last review that says anything
 	fate              string // when not live: Fixed or WentAway
 }
@@ -131,13 +132,13 @@ func Decide(in Input) ([]Fate, error) {
 }
 
 // covered reports whether a dismissal covers the finding: the same
-// fingerprint, and a blocking dismissal or a finding that only ever was a
-// suggestion. Any fingerprint the finding had counts, so rewording it does
-// not lose a dismissal.
+// fingerprint, and a blocking dismissal or a finding that is a suggestion as of
+// the last review that reported it, as the comment judges it. Any fingerprint
+// the finding had counts, so rewording it does not lose a dismissal.
 func covered(t *track, dismissed map[string][]string) bool {
 	for fp := range t.fps {
 		for _, sev := range dismissed[fp] {
-			if sev == "blocking" || t.severity == severitySuggestion {
+			if sev == "blocking" || t.last == severitySuggestion {
 				return true
 			}
 		}
@@ -283,6 +284,7 @@ func (w *walk) update(t *track, r *reported) {
 	t.fps[r.fp] = true
 	t.line, t.end = r.line, r.end
 	t.head = w.r.Head
+	t.last = r.severity
 	t.raise(r.severity)
 	t.live = true
 	t.fate = ""

@@ -440,6 +440,40 @@ func TestSuggestionDismissalDoesNotCoverABlocker(t *testing.T) {
 	}
 }
 
+func TestDismissalCoversByTheLastSeverityTheRowShowsTheHighest(t *testing.T) {
+	// Reported as a blocker, then as a suggestion, then a suggestion is
+	// dismissed: the finding the comment shows is the suggestion, which that
+	// dismissal covers. The row is still the highest severity it had.
+	tests := []struct {
+		name     string
+		sevs     []string
+		dismissa string
+		want     string
+	}{
+		{"blocking then suggestion, suggestion dismissed", []string{"blocking", "suggestion"}, "suggestion", Dismissed},
+		{"suggestion then blocking, suggestion dismissed", []string{"suggestion", "blocking"}, "suggestion", Open},
+		{"blocking then suggestion, blocking dismissed", []string{"blocking", "suggestion"}, "blocking", Dismissed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var reviews []Review
+			for i, sev := range tt.sevs {
+				x := fnd("x", "a.go", 10)
+				x.Severity = sev
+				reviews = append(reviews, review("h"+itoa(i+1), sk(a, x)))
+			}
+			got := decide(t, newFake(), []Dismissal{{Fingerprint: "x", Severity: tt.dismissa}}, reviews...)
+			fate := one(t, got)
+			if fate.Fate != tt.want {
+				t.Errorf("fate = %s, want %s", fate.Fate, tt.want)
+			}
+			if fate.Severity != "blocking" {
+				t.Errorf("severity = %s, want blocking", fate.Severity)
+			}
+		})
+	}
+}
+
 func TestHighestSeverityCounts(t *testing.T) {
 	tests := []struct {
 		name string
