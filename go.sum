@@ -30,8 +30,8 @@ github.com/google/pprof v0.0.0-20241029153458-d1b30febd7db h1:097atOisP2aRj7vFgY
 github.com/google/pprof v0.0.0-20241029153458-d1b30febd7db/go.mod h1:vavhavw2zAxS5dIdcRluK6cSGGPlZynqzFM8NdvU144=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
-github.com/gopaytech/pergent v0.5.0 h1:ZtrJYzNEBa9dz+4f1Amw2vuAYkw1C+vtcqk3Gu/Pq10=
-github.com/gopaytech/pergent v0.5.0/go.mod h1:DK3txruJIhV2PxYnouh3hBpaK0y6t8LLy8biccVjZag=
+github.com/gopaytech/pergent v0.5.2 h1:/kiRxMSLItR1n4H5JLUHQUcaVs8wPoslT8b9fJzJB9A=
+github.com/gopaytech/pergent v0.5.2/go.mod h1:DK3txruJIhV2PxYnouh3hBpaK0y6t8LLy8biccVjZag=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=
 github.com/jackc/pgpassfile v1.0.0/go.mod h1:CEx0iS5ambNFdcRtxPj5JhEz+xB6uRky5eyVu/W2HEg=
 github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 h1:iCEnooe7UlwOQYpKFhBabPMi4aNAfoODPEFNiAnClxo=

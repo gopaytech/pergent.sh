@@ -225,7 +225,7 @@ pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is hand
 0.7.0 reviews only what a push changed. See [Incremental reviews](#-incremental-reviews).
 
 1. **Pushes are incremental by default**, also on repositories already running. Turn it off per repository with **Incremental reviews** in its Settings, or with `incremental_reviews: false` in the config, or change the default under **Admin → Settings**. The accepted cost: an edit that breaks an untouched file can go unnoticed until a full review (`@<bot> review`), and a team that rebases or amends gets no speed-up yet.
-2. **The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.5.0`.** A config that pins an older pergent keeps full reviews, because only pergent v0.5.0 and later take the files to carry over. This is read from the image's tag (`v0.4.0`, also in front of a digest), so it holds even after running v0.5.0. An image pinned by digest alone to an older pergent can't be told apart: turn **Incremental reviews** off first.
+2. **The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.5.2`.** A config that pins an older pergent keeps full reviews, because only pergent v0.5.2 and later report a version that allows it: v0.5.0 and v0.5.1 report 0.3.0. This is read from the image's tag (`v0.4.0`, also in front of a digest), so it holds even after running a newer pergent. An image pinned by digest alone to an older pergent can't be told apart: turn **Incremental reviews** off first.
 3. **The first push after the upgrade is a full review**, because the last result comes from an older pergent and has no skill hashes. Incremental reviews start with the next push.
 4. **Migration `0020` runs at startup.** It adds nullable columns and one `runs` column that is `NOT NULL DEFAULT false`, so 0.6.2 keeps working on a migrated database.
 5. **To roll back to 0.6.2, first remove `incremental_reviews` from the config**, because 0.6.2 refuses unknown config keys, and let running reviews finish first: an incremental result is a partial one until 0.7.0 merges it, and 0.6.2 would publish it as a whole review. Results stored by 0.7.0 are complete, merged results.
@@ -882,7 +882,7 @@ A review is incremental when all of these hold. Otherwise it is a full review, a
 - A push started it. `@<bot> review` is always a full review.
 - The change has a completed review for the same target branch, and its head is an ancestor of the new head. After a rebase or force-push it is not, so the review is full.
 - The forge lists the files changed between the two heads.
-- That review was made by pergent v0.5.0 or later.
+- That review was made by pergent v0.5.2 or later.
 
 A file is carried over, per skill, only when that skill reviewed it last time, the push didn't change it, and it has no open blocking finding. A file whose review failed, a new file, and every file of a new or edited skill are reviewed again. Open blocking findings are always checked again.
 
@@ -1175,7 +1175,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `llm.base_url` | none | Custom API base URL for the provider. |
 | `llm.api_key_env` | `OPENCODE_API_KEY` | Name of the env var with the LLM key. |
 | `jobs.namespace` | required | Namespace the Jobs run in. |
-| `jobs.image` | `ghcr.io/gopaytech/pergent:v0.5.0` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
+| `jobs.image` | `ghcr.io/gopaytech/pergent:v0.5.2` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
 | `jobs.max_running` | `5` | Most Jobs running at once. Further runs wait in the queue. At least 1. |
 | `jobs.timeout` | `30m` | pergent's own review budget per Job (`--timeout`). The Job's deadline adds 2 minutes to deliver and a clone allowance of at least 2 minutes. At startup pergent.sh warns about a timeout shorter than its step limit times 30 seconds. |
 | `jobs.max_turns` | `40` | pergent's step limit per opencode run (`--max-turns`) for every repository, 5 to 200. |
