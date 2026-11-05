@@ -1421,6 +1421,27 @@ func TestComparePartial(t *testing.T) {
 	}
 }
 
+// A reply with no diffs says nothing about what changed, so it is not taken
+// for no change (ErrPartialDiff); an empty list is.
+func TestCompareWithoutAListIsPartial(t *testing.T) {
+	for name, reply := range map[string]map[string]any{
+		"no diffs key": {"commits": []any{}},
+		"null diffs":   {"commits": []any{}, "diffs": nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, _ := serve(t, jsonReply(reply))
+			got, err := c.Compare(context.Background(), 7, "aaa", "bbb")
+			if !errors.Is(err, ErrPartialDiff) || got != nil {
+				t.Fatalf("got=%+v err=%v, want ErrPartialDiff", got, err)
+			}
+		})
+	}
+	c, _ := serve(t, jsonReply(map[string]any{"commits": []any{}, "diffs": []map[string]any{}}))
+	if got, err := c.Compare(context.Background(), 7, "aaa", "bbb"); err != nil || len(got) != 0 {
+		t.Fatalf("an empty list: got=%+v err=%v, want no diffs and no error", got, err)
+	}
+}
+
 func TestDiscussions(t *testing.T) {
 	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
