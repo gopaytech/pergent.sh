@@ -476,7 +476,7 @@ describe("Readiness", () => {
     const names = within(tabs)
       .getAllByRole("tab")
       .map((t) => t.textContent);
-    expect(names).toEqual(["Reviews", "Settings", "Past dismissals", "Skills & instructions", "Readiness", "Setup checks (1)"]);
+    expect(names).toEqual(["Reviews", "Skill results", "Settings", "Past dismissals", "Skills & instructions", "Readiness", "Setup checks (1)"]);
   });
 
   it("links the 3 readiness Needs attention kinds to the Readiness tab, and the others to Setup checks", async () => {

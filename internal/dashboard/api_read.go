@@ -841,6 +841,12 @@ func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if project, ok := strings.CutSuffix(rest, "/skill-results"); ok {
+		if repo, ok := find(project); ok {
+			d.repositorySkillResults(w, r, se, repo)
+			return
+		}
+	}
 	notFound(w)
 }
 

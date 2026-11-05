@@ -475,6 +475,29 @@ type PastDismissalView struct {
 	Fingerprint string    `json:"fingerprint"`
 }
 
+// SkillResultView is one row of GET /api/repositories/{instance}/{project...}
+// /skill-results?days=30|90 (any other days is 400; none is 30), for anyone who
+// can see the repository: what became of the findings of one skill at one
+// severity that were decided in the window. Raised, Fixed, Open and WentAway
+// count the findings of merged changes opened by people; Dismissed also counts
+// those of changes they closed, so Raised can be less than the columns' sum.
+// Addressed is Fixed*100/Raised, a whole percent, and null under 10 raised.
+// EditedAt is set when the window holds more than one version of the skill:
+// when the newest first appears. Rows come lowest Addressed first, nulls last,
+// then by skill, a blocking row before a suggestion. The list is [] when
+// nothing was decided.
+type SkillResultView struct {
+	Skill     string     `json:"skill"`
+	Severity  string     `json:"severity"`
+	Raised    int        `json:"raised"`
+	Fixed     int        `json:"fixed"`
+	Dismissed int        `json:"dismissed"`
+	Open      int        `json:"open"`
+	WentAway  int        `json:"wentAway"`
+	Addressed *int       `json:"addressed"`
+	EditedAt  *time.Time `json:"editedAt"`
+}
+
 // SkillSourceView is where an installed skill came from. Kind is "instance"
 // (read through the API of a connected instance) or "url" (a public git
 // URL). Repo is shown to operators and to users of that instance who can see
