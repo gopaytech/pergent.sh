@@ -1187,6 +1187,27 @@ func TestCompareFilesAncestry(t *testing.T) {
 	}
 }
 
+// A response with no file list says nothing about what changed, so it is no
+// change: an empty list is.
+func TestCompareFilesWithoutAListIsPartial(t *testing.T) {
+	for name, reply := range map[string]map[string]any{
+		"no files key": {"status": "ahead", "merge_base_commit": map[string]any{"sha": "aaa"}},
+		"null files":   {"status": "ahead", "merge_base_commit": map[string]any{"sha": "aaa"}, "files": nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, _ := serve(t, jsonReply(reply))
+			got, err := c.CompareFiles(ctx, "acme", "widgets", "aaa", "bbb")
+			if !errors.Is(err, ErrPartialDiff) || got != nil {
+				t.Fatalf("got=%+v err=%v, want ErrPartialDiff", got, err)
+			}
+		})
+	}
+	c, _ := serve(t, jsonReply(map[string]any{"status": "ahead", "merge_base_commit": map[string]any{"sha": "aaa"}, "files": []map[string]any{}}))
+	if got, err := c.CompareFiles(ctx, "acme", "widgets", "aaa", "bbb"); err != nil || len(got) != 0 {
+		t.Fatalf("an empty list: got=%+v err=%v, want no files and no error", got, err)
+	}
+}
+
 func nFiles(n int) []map[string]any {
 	files := make([]map[string]any, n)
 	for i := range files {

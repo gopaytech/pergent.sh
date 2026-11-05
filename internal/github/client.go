@@ -1208,7 +1208,7 @@ func (c *Client) CompareFiles(ctx context.Context, owner, repo, from, to string)
 		MergeBaseCommit struct {
 			SHA string `json:"sha"`
 		} `json:"merge_base_commit"`
-		Files fileDiffs `json:"files"`
+		Files *fileDiffs `json:"files"`
 	}
 	if err := c.getJSON(ctx, p, url.Values{"per_page": {perPage}}, &page); err != nil {
 		return nil, err
@@ -1219,7 +1219,11 @@ func (c *Client) CompareFiles(ctx context.Context, owner, repo, from, to string)
 		(page.MergeBaseCommit.SHA != "" && !strings.EqualFold(page.MergeBaseCommit.SHA, from)) {
 		return nil, fmt.Errorf("%w: the comparison is %q with merge base %q", ErrNotAncestor, page.Status, page.MergeBaseCommit.SHA)
 	}
-	if len(page.Files) >= maxCompareFiles {
+	// No list at all is not an empty one: nothing says no file changed.
+	if page.Files == nil {
+		return nil, fmt.Errorf("%w: the comparison has no file list", ErrPartialDiff)
+	}
+	if len(*page.Files) >= maxCompareFiles {
 		return nil, fmt.Errorf("%w: the comparison lists %d or more files, the most GitHub returns", ErrPartialDiff, maxCompareFiles)
 	}
 	return page.Files.appendTo(nil), nil
