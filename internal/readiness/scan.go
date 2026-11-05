@@ -320,6 +320,8 @@ func (w *walker) open(rel string, info fs.FileInfo) (*os.File, error) {
 
 func noiseWhy(rel string, size int64) string {
 	switch {
+	case size == 0: // nothing to read, such as a .keep in a build folder
+		return ""
 	case scope.MatchAny(generatedNames, rel):
 		return WhyGeneratedName
 	case scope.MatchAny(buildOutput, rel):

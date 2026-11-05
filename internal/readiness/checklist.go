@@ -455,11 +455,18 @@ func noiseItem(it Item, ok bool) func(*JobResult) Item {
 		if total == 0 {
 			return it.with(Passed, "no generated, vendored or very large files a review would read", "", "")
 		}
-		it = it.with(Warning, fmt.Sprintf("%d files a review reads look generated, vendored or very large", total), whyNoise, noiseFix(job.Noise))
+		it = it.with(Warning, noiseReason(total), whyNoise, noiseFix(job.Noise))
 		it.Noise = slices.Clone(job.Noise)
 		it.More = max(total-len(job.Noise), 0)
 		return it
 	}
+}
+
+func noiseReason(n int) string {
+	if n == 1 {
+		return "1 file a review reads looks generated, vendored or very large"
+	}
+	return fmt.Sprintf("%d files a review reads look generated, vendored or very large", n)
 }
 
 func budgetItem(it Item, ok bool) func(analysis) Item {

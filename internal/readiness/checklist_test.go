@@ -237,6 +237,17 @@ func TestChecklistSuggestedSkipsShadowedLibrarySkill(t *testing.T) {
 	}
 }
 
+func TestNoiseReason(t *testing.T) {
+	for n, want := range map[int]string{
+		1: "1 file a review reads looks generated, vendored or very large",
+		2: "2 files a review reads look generated, vendored or very large",
+	} {
+		if got := noiseReason(n); got != want {
+			t.Errorf("noiseReason(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
 func TestChecklistNoiseFix(t *testing.T) {
 	in := goodInput()
 	in.Job.NoiseTotal = 5
