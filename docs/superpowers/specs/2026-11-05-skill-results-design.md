@@ -1,6 +1,6 @@
 # Skill results
 
-pergent.sh, next release. Status: design, not built. Roadmap item 5.
+pergent.sh, next release. Status: built. Roadmap item 5.
 
 ## Why
 
