@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -550,6 +551,8 @@ func NoteUnmerged(data []byte, note string) ([]byte, error) {
 // base's with the new run's replacing the ones it reported again. A skill that
 // started no run but carries files keeps the base's confidence, summaries,
 // notes, checks and batch counts; one with no files left takes the new run's.
+// A skill that ran and carries files keeps up to five of the base's left-out
+// notes after its new notes.
 // Each skill is kept as it was delivered, fields that Result does not
 // declare included. Finding IDs are assigned again over all the findings. The
 // envelope and the comment are partial's, and the result is marked Merged.
@@ -727,18 +730,60 @@ func mergeIncrementalSkill(raw json.RawMessage, fresh Skill, rawEarlier json.Raw
 	return json.Marshal(m)
 }
 
+// maxKeptLeftOutNotes is the most left-out notes of the last review that a
+// merge keeps. pergent writes all of a review's entries as one note, so the
+// next review's note usually contains the last one's and the list would gain a
+// line per push.
+const maxKeptLeftOutNotes = 5
+
 // keepLeftOutNotes is the new run's notes followed by the left-out notes of
-// the last review that they lack, and whether there was any to add.
+// the last review that they lack, and whether there was any to add. It keeps
+// at most maxKeptLeftOutNotes of them, the newest, and none that a new or an
+// already kept note covers (see leftOutCovers). A merge writes the new run's
+// notes first and the notes it kept after them, so earlier is newest first: a
+// note is kept unless a newer one covers it, and an older note never evicts a
+// newer one.
 func keepLeftOutNotes(fresh, earlier []string) ([]string, bool) {
-	out := slices.Clone(fresh)
-	kept := false
+	covered := slices.Clone(fresh)
+	var kept []string
 	for _, n := range earlier {
-		if strings.HasPrefix(n, LeftOutNotePrefix) && !slices.Contains(out, n) {
-			out = append(out, n)
-			kept = true
+		if !strings.HasPrefix(n, LeftOutNotePrefix) || len(kept) >= maxKeptLeftOutNotes {
+			continue
 		}
+		if slices.ContainsFunc(covered, func(c string) bool { return leftOutCovers(c, n) }) {
+			continue
+		}
+		kept = append(kept, n)
+		covered = append(covered, n)
 	}
-	return out, kept
+	return append(slices.Clone(fresh), kept...), len(kept) > 0
+}
+
+// leftOutMore is the end of a note that lists only some of its entries.
+var leftOutMore = regexp.MustCompile(`(?:^|;| )\s*and \d+ more$`)
+
+// leftOutEntries are the entries of a left-out note: its text after the
+// prefix, without a trailing "and N more", split on "; ".
+func leftOutEntries(note string) []string {
+	text := strings.TrimSpace(strings.TrimPrefix(note, LeftOutNotePrefix))
+	text = strings.TrimSpace(leftOutMore.ReplaceAllString(text, ""))
+	if text == "" {
+		return nil
+	}
+	return strings.Split(text, "; ")
+}
+
+// leftOutCovers reports whether note c says everything note n does: every
+// entry of n is an entry of c. Whole entries are compared, not text, so a
+// title that another entry merely contains is another finding. A note with no
+// entries is covered only by itself.
+func leftOutCovers(c, n string) bool {
+	if c == n {
+		return true
+	}
+	have := leftOutEntries(c)
+	want := leftOutEntries(n)
+	return len(want) > 0 && !slices.ContainsFunc(want, func(e string) bool { return !slices.Contains(have, e) })
 }
 
 // hasBlocking reports whether any of the raw findings is blocking.

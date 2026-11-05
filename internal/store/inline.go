@@ -25,7 +25,8 @@ type InlineThread struct {
 	CommentID          int64
 	State              string
 	// LeftOutNoted: the thread was told its finding was left out of a review
-	// because of a past dismissal. PutInlineThread leaves it as it is.
+	// because of a past dismissal, and not since that it is back.
+	// PutInlineThread leaves it as it is.
 	LeftOutNoted bool
 }
 
@@ -33,7 +34,7 @@ const inlineThreadColumns = `instance, project_id, mr_iid, fingerprint, skill, f
 	thread_id, comment_id, state`
 
 // inlineThreadSelect is the columns a read returns: those a write sets, and
-// the one only NoteInlineThreadLeftOut sets.
+// the one that only NoteInlineThreadLeftOut and ClearInlineThreadLeftOut set.
 const inlineThreadSelect = inlineThreadColumns + `, left_out_noted`
 
 func scanInlineThread(row pgx.Row) (InlineThread, error) {
@@ -107,6 +108,16 @@ func (s *Store) SetInlineThreadState(ctx context.Context, mr MRKey, fingerprint,
 // with no thread is left as it is, not an error.
 func (s *Store) NoteInlineThreadLeftOut(ctx context.Context, mr MRKey, fingerprint string) error {
 	_, err := s.pool.Exec(ctx, `UPDATE inline_threads SET left_out_noted = true, updated_at = now()
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND fingerprint = $4`,
+		mr.Instance, mr.ProjectID, mr.IID, fingerprint)
+	return err
+}
+
+// ClearInlineThreadLeftOut records that the thread of fingerprint was told its
+// finding is back, so a later left-out finding is worth a reply again. A
+// fingerprint with no thread is left as it is, not an error.
+func (s *Store) ClearInlineThreadLeftOut(ctx context.Context, mr MRKey, fingerprint string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE inline_threads SET left_out_noted = false, updated_at = now()
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND fingerprint = $4`,
 		mr.Instance, mr.ProjectID, mr.IID, fingerprint)
 	return err

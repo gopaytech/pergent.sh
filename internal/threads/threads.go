@@ -94,7 +94,7 @@ type Thread struct {
 	State                    State
 	Resolved                 bool // as the platform shows it now
 	// LeftOutNoted: the thread was told, with ReplyLeftOut, that its finding
-	// was left out of a review.
+	// was left out of a review, and has not been told since that it is back.
 	LeftOutNoted bool
 }
 
@@ -161,11 +161,13 @@ type Rebind struct {
 // Plan is what Decide decides. Its slices are in a fixed order: Post blocking
 // first, then by file, then line, then fingerprint; Resolve, Reopen and Rebind
 // by the thread's file, then line, then fingerprint. Note holds the threads told
-// that their finding was left out; they stay open.
+// that their finding was left out; they stay open. Back holds the open threads
+// that were told so and whose finding is reported again.
 type Plan struct {
 	Post    []Post
 	Resolve []Resolve
 	Note    []Note
+	Back    []Note
 	Reopen  []Reopen
 	Rebind  []Rebind
 	// Inline holds the fingerprints shown on the diff: kept, reopened,
@@ -243,6 +245,10 @@ func Decide(in Input) Plan {
 				reopened++
 			default: // open, or a state we don't know: kept, even when a person resolved it
 				p.Inline[fp] = true
+				if t.LeftOutNoted && !t.Resolved {
+					// Its last message says the finding is no longer reported.
+					p.Back = append(p.Back, Note{Thread: t, Reply: ReplyBack(in.Head)})
+				}
 			}
 		}
 	}
@@ -323,6 +329,7 @@ func Decide(in Input) Plan {
 
 	sort.SliceStable(p.Resolve, func(i, j int) bool { return lessThread(p.Resolve[i].Thread, p.Resolve[j].Thread) })
 	sort.SliceStable(p.Note, func(i, j int) bool { return lessThread(p.Note[i].Thread, p.Note[j].Thread) })
+	sort.SliceStable(p.Back, func(i, j int) bool { return lessThread(p.Back[i].Thread, p.Back[j].Thread) })
 	sort.SliceStable(p.Reopen, func(i, j int) bool { return lessThread(p.Reopen[i].Thread, p.Reopen[j].Thread) })
 	sort.SliceStable(p.Rebind, func(i, j int) bool { return lessThread(p.Rebind[i].Thread, p.Rebind[j].Thread) })
 	return p

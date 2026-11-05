@@ -213,3 +213,42 @@ func TestNoteInlineThreadLeftOut(t *testing.T) {
 		t.Errorf("NoteInlineThreadLeftOut with no thread = %v", err)
 	}
 }
+
+func TestClearInlineThreadLeftOut(t *testing.T) {
+	s := newStore(t)
+	th := inlineThread("f1", "PRRT_one", 101)
+	if err := s.PutInlineThread(ctx, th); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.NoteInlineThreadLeftOut(ctx, mr1, "f1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutInlineThread(ctx, inlineThread("f2", "PRRT_two", 102)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.NoteInlineThreadLeftOut(ctx, mr1, "f2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClearInlineThreadLeftOut(ctx, mr1, "f1"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.InlineThreads(ctx, mr1)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("threads = %+v, %v", got, err)
+	}
+	for _, g := range got {
+		if want := g.Fingerprint == "f2"; g.LeftOutNoted != want {
+			t.Errorf("%s: LeftOutNoted = %t, want %t (only f1 is cleared)", g.Fingerprint, g.LeftOutNoted, want)
+		}
+	}
+	// It can be told again, and a fingerprint with no thread is not an error.
+	if err := s.NoteInlineThreadLeftOut(ctx, mr1, "f1"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.InlineThreads(ctx, mr1); !got[0].LeftOutNoted || got[0].Fingerprint != "f1" {
+		t.Errorf("threads = %+v; want f1 told again", got)
+	}
+	if err := s.ClearInlineThreadLeftOut(ctx, mr1, "nope"); err != nil {
+		t.Errorf("ClearInlineThreadLeftOut with no thread = %v", err)
+	}
+}
