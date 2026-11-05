@@ -418,12 +418,12 @@ func Merge(partial, base []byte, subset []string) ([]byte, error) {
 	if top["skills"], err = json.Marshal(skills); err != nil {
 		return nil, err
 	}
-	// What the base covered stays true of the merged result: a re-run of some
-	// skills is no full review.
-	if v, ok := baseTop["incremental"]; ok {
+	// What the base covered stays true of the merged result while a skill is
+	// kept from it: a re-run of some skills is no full review. A re-run of
+	// every skill carries nothing over.
+	delete(top, "incremental")
+	if v, ok := baseTop["incremental"]; ok && slices.ContainsFunc(br.Skills, func(s Skill) bool { return !slices.Contains(subset, s.Name) }) {
 		top["incremental"] = v
-	} else {
-		delete(top, "incremental")
 	}
 	top["merged"] = json.RawMessage("true")
 	return json.Marshal(top)
@@ -643,7 +643,7 @@ func mergeIncrementalSkill(raw json.RawMessage, fresh Skill, rawEarlier json.Raw
 	findings := append([]json.RawMessage{}, fresh.Findings...)
 	for _, f := range earlier.Findings {
 		var d Finding
-		if json.Unmarshal(f, &d) == nil && carried[d.File] && (d.Fingerprint == "" || !seen[d.Fingerprint]) {
+		if json.Unmarshal(f, &d) == nil && carried[d.File] && !seen[d.Fingerprint] {
 			findings = append(findings, f)
 		}
 	}

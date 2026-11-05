@@ -1187,8 +1187,8 @@ func TestCompareFilesAncestry(t *testing.T) {
 	}
 }
 
-// A response with no file list says nothing about what changed, so it is no
-// change: an empty list is.
+// A response with no file list says nothing about what changed, so it is not
+// taken for no change (ErrPartialDiff); an empty list is.
 func TestCompareFilesWithoutAListIsPartial(t *testing.T) {
 	for name, reply := range map[string]map[string]any{
 		"no files key": {"status": "ahead", "merge_base_commit": map[string]any{"sha": "aaa"}},

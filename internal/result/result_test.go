@@ -272,7 +272,6 @@ func TestMerge(t *testing.T) {
 	}
 }
 
-// The kept result's fields that Result doesn't declare survive the merge.
 // A "review failed" re-run over an incremental review keeps what the review
 // covered, or its comment would read like a full review.
 func TestMergeKeepsTheBasesIncremental(t *testing.T) {
@@ -294,6 +293,17 @@ func TestMergeKeepsTheBasesIncremental(t *testing.T) {
 		t.Errorf("incremental = %+v, want %+v", r.Incremental, want)
 	}
 
+	// Every skill re-run over all its files: nothing is carried over any
+	// more, so the merge says nothing of it.
+	all := mergeInput(t, "h", map[string][]string{"sec": nil, "style": nil}, "sec", "style")
+	merged, err = Merge(all, base, []string{"sec", "style"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := Parse(merged); r.Incremental != nil {
+		t.Errorf("incremental = %+v, want none when every skill was re-run", r.Incremental)
+	}
+
 	// A base that was a full review leaves the merge a full review.
 	full := mergeInput(t, "h", map[string][]string{"sec": nil, "style": nil}, "sec", "style")
 	merged, err = Merge(partial, full, []string{"style"})
@@ -305,6 +315,7 @@ func TestMergeKeepsTheBasesIncremental(t *testing.T) {
 	}
 }
 
+// The kept result's fields that Result doesn't declare survive the merge.
 func TestMergeKeepsUndeclaredFields(t *testing.T) {
 	base := mergeInput(t, "h", map[string][]string{"sec": nil, "style": nil}, "sec", "style")
 	base = []byte(strings.Replace(string(base), `"name":"sec"`, `"name":"sec","tokens":{"input":7}`, 1))
