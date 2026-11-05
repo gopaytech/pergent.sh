@@ -539,8 +539,9 @@ func NoteUnmerged(data []byte, note string) ([]byte, error) {
 // skill the base has, the findings on its carried files come over unchanged,
 // the verdict is decided again over all the findings, and the checks are the
 // base's with the new run's replacing the ones it reported again. A skill that
-// started no run keeps the base's confidence, summaries, notes and batch
-// counts. Each skill is kept as it was delivered, fields that Result does not
+// started no run but carries files keeps the base's confidence, summaries,
+// notes, checks and batch counts; one with no files left takes the new run's.
+// Each skill is kept as it was delivered, fields that Result does not
 // declare included. Finding IDs are assigned again over all the findings. The
 // envelope and the comment are partial's, and the result is marked Merged.
 //
@@ -635,14 +636,14 @@ func mergeIncrementalSkill(raw json.RawMessage, fresh Skill, rawEarlier json.Raw
 	seen := map[string]bool{}
 	for _, f := range fresh.Findings {
 		var d Finding
-		if json.Unmarshal(f, &d) == nil {
+		if json.Unmarshal(f, &d) == nil && d.Fingerprint != "" {
 			seen[d.Fingerprint] = true
 		}
 	}
 	findings := append([]json.RawMessage{}, fresh.Findings...)
 	for _, f := range earlier.Findings {
 		var d Finding
-		if json.Unmarshal(f, &d) == nil && carried[d.File] && !seen[d.Fingerprint] {
+		if json.Unmarshal(f, &d) == nil && carried[d.File] && (d.Fingerprint == "" || !seen[d.Fingerprint]) {
 			findings = append(findings, f)
 		}
 	}
@@ -680,9 +681,10 @@ func mergeIncrementalSkill(raw json.RawMessage, fresh Skill, rawEarlier json.Raw
 		return nil, err
 	}
 
-	if fresh.Batches > 0 {
-		// A skill with no carried files reviewed all of its files, so the
-		// last review's checks say nothing about them.
+	if fresh.Batches > 0 || len(carried) == 0 {
+		// A skill with no carried files reviewed all of its files (or has none
+		// left), so the last review's checks, confidence and summaries say
+		// nothing about them.
 		base := earlier.Checks
 		if len(carried) == 0 {
 			base = nil

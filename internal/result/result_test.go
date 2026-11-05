@@ -800,6 +800,39 @@ func TestMergeIncrementalNoCarriedTakesNewChecksOnly(t *testing.T) {
 	}
 }
 
+// A skill whose files all left the change started no run and carries nothing:
+// the last review says nothing about files that are gone, so none of its
+// checks, confidence or summaries are kept.
+func TestMergeIncrementalNothingLeftTakesNothingOfTheBase(t *testing.T) {
+	base := incResult(t, fromSHA, Skill{Name: "sec", Verdict: "no_blocking_issues", Files: Files{Reviewed: []string{"gone.go"}},
+		Confidence: 4, ConfidenceReason: "base reason", Notes: []string{"base note"},
+		Summaries: []Summary{{Batch: 1, Text: "base summary"}}, Batches: 1, BatchesFinished: 1,
+		Checks: []BatchChecks{{Batch: 1, Checks: []Check{{Section: "A", Name: "x", Status: "pass"}}}}})
+	partial := incResult(t, "h", Skill{Name: "sec", Verdict: "no_blocking_issues", Files: Files{Reviewed: []string{}}})
+
+	s := mergeIncremental(t, partial, base).Skills[0]
+	if len(s.Checks) != 0 || s.Confidence != 0 || s.ConfidenceReason != "" || len(s.Summaries) != 0 || len(s.Notes) != 0 || s.Batches != 0 {
+		t.Errorf("skill = %+v, want none of the last review's checks, confidence, summaries or notes", s)
+	}
+}
+
+// Findings without a fingerprint are not told apart by it: one the new run
+// reports must not hide the carried ones.
+func TestMergeIncrementalEmptyFingerprintIsNotRepeated(t *testing.T) {
+	bare := func(file string) json.RawMessage {
+		b, _ := json.Marshal(Finding{File: file, Severity: "suggestion", Title: "t"})
+		return b
+	}
+	base := incResult(t, fromSHA, Skill{Name: "sec", Verdict: "no_blocking_issues", Files: Files{Reviewed: []string{"k.go"}},
+		Findings: []json.RawMessage{bare("k.go")}})
+	partial := incResult(t, "h", Skill{Name: "sec", Verdict: "no_blocking_issues", Batches: 1,
+		Files: Files{Reviewed: []string{"n.go"}, Carried: []string{"k.go"}}, Findings: []json.RawMessage{bare("n.go")}})
+
+	if fs := skillFindings(t, mergeIncremental(t, partial, base).Skills[0]); len(fs) != 2 {
+		t.Errorf("findings = %+v, want the new one and the carried one", fs)
+	}
+}
+
 // A verdict that is neither clean one stays what the new run said, even with
 // a blocking finding carried over.
 func TestMergeIncrementalUnknownVerdictStays(t *testing.T) {
