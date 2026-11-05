@@ -16,7 +16,7 @@ The purpose is **to show a maintainer which skills to fix or drop**. *(chosen)* 
 
 ## Non-goals
 
-- Numbers before this release. Only changes that merge or close after the upgrade count, so the tab takes a few weeks to mean much. *(chosen)*
+- Numbers before this release. Only changes that merge or close after the upgrade count, so the tab takes a few weeks to mean much. *(chosen)* The sweep for missed webhooks looks back 7 days, so a few changes from the week before can appear. *(my call)*
 - Live numbers on open changes. *(chosen: decided at merge or close)*
 - Totals across repositories, on the skill library or on Overview. *(chosen: the repository page only)*
 - Charts, trends, alerts, or advice about which skill to change. The first version is a table.
@@ -108,7 +108,7 @@ A **Skill results** tab on the repository page, for anyone who can see the repos
 - Counts always show. The one highlighted figure is **Addressed = Fixed ÷ Raised**; Dismissed isn't addressed. *(chosen)* It shows only when the row has at least 10 findings. *(my call)*
 - Rows are sorted lowest Addressed first, so the noisiest skills are on top; rows without the figure come last. *(chosen)*
 - A row whose skill changed within the window says so, for example `Edited 12 days ago: numbers include the old version`, from the stored hashes. Rows aren't split by version: that would leave too few findings per row. *(chosen)*
-- Only merged changes by people count, plus Dismissed on closed ones.
+- Only merged changes by people count. Dismissed also counts closed ones, so Raised can be less than the columns' sum; Addressed uses merged findings only. *(my call)*
 - With nothing yet, the tab says so, and that numbers start from this release.
 
 ## With what's already there
