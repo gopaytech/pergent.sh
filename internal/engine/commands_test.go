@@ -915,6 +915,30 @@ func TestCommandOnClosedChange(t *testing.T) {
 
 func ptr[T any](v T) *T { return &v }
 
+// "review" is always a full review: it replaces a push run of the head that
+// reviews only some files, which a request for the same head otherwise would
+// leave to finish.
+func TestReviewCommandReplacesAnIncrementalRun(t *testing.T) {
+	f := newCommandFixture(t)
+	base := f.Publish(1, sha('c'), resultFor(t, sha('c'), reviewed("no_blocking_issues", "a.go")))
+	id := f.Dispatched(1, f.head)
+	if err := f.Store.SetIncremental(f.ctx, id, &base); err != nil {
+		t.Fatal(err)
+	}
+
+	c := f.say(1, "dev", "review", "", "", time.Now())
+	f.run()
+
+	f.wantReactions(1, c, eyes, up)
+	if got := f.Run(id).State; got != store.Superseded {
+		t.Errorf("the incremental run is %s, want superseded", got)
+	}
+	runs := f.queued()
+	if len(runs) != 1 || runs[0].Trigger != store.TriggerRerun || runs[0].Incremental || len(runs[0].SkillSubset) != 0 {
+		t.Errorf("queued = %+v, want one full re-run", runs)
+	}
+}
+
 // The caps count the re-runs of commands and of buttons alike, per change and
 // per repository, over the UTC day.
 func TestRerunCapsAcrossCommandsAndButtons(t *testing.T) {

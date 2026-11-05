@@ -352,6 +352,10 @@ func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA
 	if err := lockMR(ctx, tx, mr); err != nil {
 		return "", false, err
 	}
+	// With replace, a push run with no dispatched_at is replaceable: one that
+	// was never dispatched, which also matches a run that failed before
+	// dispatch, not only one still waiting in the queue. So is an incremental
+	// one.
 	err = tx.QueryRow(ctx, `SELECT id::text FROM runs
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
 		  AND state IN ('queued', 'running', 'reported')
