@@ -158,6 +158,9 @@ const (
 	maxPastTitleRunes = 200
 )
 
+// PastDismissalDays is how far back a dismissal still teaches a review.
+const PastDismissalDays = 90
+
 // PastDismissal is one entry of what people rejected, as a review is given
 // it. It names nobody: who rejected a finding is not the model's business.
 type PastDismissal struct {

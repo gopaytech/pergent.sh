@@ -8,6 +8,7 @@ import type {
   LLMAdminView,
   Me,
   OverviewView,
+  PastDismissalView,
   RepositoryDetailView,
   RepositoryView,
   ReviewDetailView,
@@ -533,3 +534,28 @@ export const auditPage2: AuditPageView = {
   entries: [{ id: 28, at: "2026-10-29T09:30:00Z", actor: "dev-admin (gitlab main)", action: "account_deleted", instance: "", project: "", detail: "old-user" }],
   next: 0,
 };
+
+export const pastDismissals: PastDismissalView[] = [
+  {
+    skill: "code-review",
+    severity: "blocking",
+    file: "api/handler.go",
+    title: "Request body is used before validation",
+    reason: "The body is a constant here",
+    by: "alice (gitlab main)",
+    at: "2026-10-30T09:00:00Z",
+    number: 7,
+    fingerprint: "a1b2c3d4e5f6",
+  },
+  {
+    skill: "style",
+    severity: "suggestion",
+    file: "api/names.go",
+    title: "Name it better",
+    reason: "We keep this name for the old clients",
+    by: "bob (gitlab main)",
+    at: "2026-10-29T09:00:00Z",
+    number: 9,
+    fingerprint: "b2c3d4e5f6a1",
+  },
+];

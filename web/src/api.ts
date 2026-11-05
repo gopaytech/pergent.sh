@@ -285,6 +285,21 @@ export type ReadinessView = {
   applyBase: string[];
 };
 
+// PastDismissalView is a finding whose dismissals teach the repository's reviews
+// (GET .../past-dismissals, maintainers and admins). by, at and number are of the
+// dismissal shown; number is its change. The text is what people wrote.
+export type PastDismissalView = {
+  skill: string;
+  severity: "blocking" | "suggestion";
+  file: string;
+  title: string;
+  reason: string;
+  by: string;
+  at: string;
+  number: number;
+  fingerprint: string;
+};
+
 // SettingsUpdate is the body of PUT .../settings: only the keys to change;
 // null resets one to its default.
 export type SettingsUpdate = Partial<{
@@ -711,6 +726,11 @@ export const paths = {
   apiRunLog: (id: string) => `/api/runs/${seg(id)}/log`,
   apiRepo: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}`,
   apiRepoInputs: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/inputs`,
+  apiRepoPastDismissals: (instance: string, project: string) =>
+    `/api/repositories/${seg(instance)}/${proj(project)}/past-dismissals`,
+  // Stop using: POST {fingerprint}.
+  apiRepoPastDismissalStop: (instance: string, project: string) =>
+    `/api/repositories/${seg(instance)}/${proj(project)}/past-dismissals/stop`,
   apiRepoSettings: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/settings`,
   apiRepoReadiness: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/readiness`,
   apiRepoReadinessScan: (instance: string, project: string) =>

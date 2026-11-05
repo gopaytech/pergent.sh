@@ -546,10 +546,15 @@ func (d *Dashboard) switchOff(w http.ResponseWriter, r *http.Request) {
 // --- POST /api/repositories/{instance}/{project...}/... ---
 
 // repositoryPost serves the POSTs to one repository: .../readiness/scan
-// (scanNow) and .../settings/reset; any other is 404.
+// (scanNow), .../past-dismissals/stop (stopUsing) and .../settings/reset; any
+// other is 404.
 func (d *Dashboard) repositoryPost(w http.ResponseWriter, r *http.Request) {
 	if strings.HasSuffix(r.PathValue("rest"), "/readiness/scan") {
 		d.scanNow(w, r)
+		return
+	}
+	if strings.HasSuffix(r.PathValue("rest"), "/past-dismissals/stop") {
+		d.stopUsing(w, r)
 		return
 	}
 	d.resetSettings(w, r)

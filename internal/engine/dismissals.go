@@ -11,9 +11,6 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/settings"
 )
 
-// pastDismissalDays is how far back a dismissal still teaches a review.
-const pastDismissalDays = 90
-
 // pastDismissals is the JSON of what people rejected, for the skills in, and
 // how many entries each skill has; nil when there is none. A failure only
 // logs: the review runs without it.
@@ -22,7 +19,7 @@ func (d *dispatcher) pastDismissals(ctx context.Context, repo settings.Effective
 		return nil, nil
 	}
 	run := d.run
-	since := d.e.now().Add(-pastDismissalDays * 24 * time.Hour)
+	since := d.e.now().Add(-actions.PastDismissalDays * 24 * time.Hour)
 	rows, err := d.e.Store.TeachingDismissals(ctx, run.MR.Instance, run.MR.ProjectID, since)
 	if err != nil {
 		d.log.Warn("reviewing without past dismissals: they can't be read", "error", err)

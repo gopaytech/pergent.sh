@@ -4,14 +4,15 @@ import { Link, useParams, useSearchParams } from "react-router";
 import { api, isStatus, paths, safeHref, type InputsView, type RepositoryDetailView } from "../api";
 import { ErrorBox, ExternalLink, Loading, NotFound, Tabs, platformName, skillOrigin } from "../ui";
 import AttentionRows from "./Attention";
+import PastDismissals from "./PastDismissals";
 import Readiness from "./Readiness";
 import ReviewList from "./ReviewList";
 import SettingsTab from "./RepositorySettings";
 
-type Tab = "reviews" | "settings" | "inputs" | "readiness" | "setup";
+type Tab = "reviews" | "settings" | "past-dismissals" | "inputs" | "readiness" | "setup";
 
-// RepositoryDetail is one repository: its reviews, settings (maintainers and admins),
-// resolved skills and instructions, readiness scan, and setup checks. The tab is in the
+// RepositoryDetail is one repository: its reviews, settings and past dismissals
+// (maintainers and admins), resolved skills and instructions, readiness scan, and setup checks. The tab is in the
 // address (?tab=), so the project path, which has slashes, stays whole.
 export default function RepositoryDetail() {
   const params = useParams();
@@ -31,7 +32,7 @@ export default function RepositoryDetail() {
   const view = detail.data;
   const { repo } = view;
   const tabs: [Tab, string][] = [["reviews", "Reviews"]];
-  if (view.role === "admin" || view.role === "maintainer") tabs.push(["settings", "Settings"]);
+  if (view.role === "admin" || view.role === "maintainer") tabs.push(["settings", "Settings"], ["past-dismissals", "Past dismissals"]);
   tabs.push(["inputs", "Skills & instructions"], ["readiness", "Readiness"], ["setup", `Setup checks (${view.attention.length})`]);
   const asked = search.get("tab") as Tab | null;
   const tab: Tab = tabs.some(([t]) => t === asked) ? (asked as Tab) : "reviews";
@@ -49,6 +50,7 @@ export default function RepositoryDetail() {
       <div role="tabpanel">
         {tab === "reviews" && <ReviewList filter={{ project: repo.project, days: 90 }} label="Reviews of this repository" />}
         {tab === "settings" && <SettingsTab view={view} queryKey={queryKey} />}
+        {tab === "past-dismissals" && <PastDismissals instance={repo.instance} project={repo.project} platform={repo.platform} />}
         {tab === "inputs" && <Inputs instance={repo.instance} project={repo.project} />}
         {tab === "readiness" && <Readiness instance={repo.instance} project={repo.project} />}
         {tab === "setup" && (

@@ -792,9 +792,10 @@ func (d *Dashboard) repositoryViews(ctx context.Context, se Session, repos []set
 }
 
 // repository serves a repository's detail, with a trailing /inputs its
-// skills and instructions, or with a trailing /readiness its Readiness tab.
-// A repository whose own path is the one asked for wins over the /inputs
-// or /readiness of another.
+// skills and instructions, with a trailing /readiness its Readiness tab, or
+// with a trailing /past-dismissals its Past dismissals. A repository whose own
+// path is the one asked for wins over the /inputs, /readiness or
+// /past-dismissals of another.
 func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	instance, rest := r.PathValue("instance"), r.PathValue("rest")
@@ -831,6 +832,12 @@ func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 	if project, ok := strings.CutSuffix(rest, "/readiness"); ok {
 		if repo, ok := find(project); ok {
 			d.repositoryReadiness(w, r, se, repo)
+			return
+		}
+	}
+	if project, ok := strings.CutSuffix(rest, "/past-dismissals"); ok {
+		if repo, ok := find(project); ok {
+			d.repositoryPastDismissals(w, r, se, repo)
 			return
 		}
 	}

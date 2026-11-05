@@ -451,6 +451,30 @@ type ScanView struct {
 	FinishedAt *time.Time `json:"finishedAt"`
 }
 
+// PastDismissalView is one row of GET /api/repositories/{instance}/{project...}
+// /past-dismissals, for maintainers and admins (403 otherwise): a finding
+// whose dismissals teach the repository's reviews, one row each, a blocking
+// dismissal over a suggestion and then the newest. By, At and Number are of
+// the dismissal shown; Number is its change. The list is [] when nothing
+// teaches.
+//
+// POST .../past-dismissals/stop {"fingerprint"} (Stop using) answers 200
+// {"status": "stopped" | "not teaching"}: every dismissal of that finding in
+// the repository stops teaching, config repositories included. The
+// dismissals stay on their changes, no review is decided again and the
+// platform isn't asked. 400 for a body without a fingerprint.
+type PastDismissalView struct {
+	Skill       string    `json:"skill"`
+	Severity    string    `json:"severity"`
+	File        string    `json:"file"`
+	Title       string    `json:"title"`
+	Reason      string    `json:"reason"`
+	By          string    `json:"by"`
+	At          time.Time `json:"at"`
+	Number      int64     `json:"number"`
+	Fingerprint string    `json:"fingerprint"`
+}
+
 // SkillSourceView is where an installed skill came from. Kind is "instance"
 // (read through the API of a connected instance) or "url" (a public git
 // URL). Repo is shown to operators and to users of that instance who can see
