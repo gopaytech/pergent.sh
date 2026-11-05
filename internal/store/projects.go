@@ -123,8 +123,8 @@ func (s *Store) upsertProject(ctx context.Context, p Project, approveAvailable, 
 	return err
 }
 
-// DeleteProject removes a project and the dismissals, commands and inline
-// threads of its merge requests; deleting one that is not there is not an error.
+// DeleteProject removes a project and the dismissals, commands, inline
+// threads and finding fates of its merge requests; deleting one that is not there is not an error.
 func (s *Store) DeleteProject(ctx context.Context, instance string, projectID int64) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -136,6 +136,8 @@ func (s *Store) DeleteProject(ctx context.Context, instance string, projectID in
 		`DELETE FROM dismissals WHERE instance = $1 AND project_id = $2`,
 		`DELETE FROM commands WHERE instance = $1 AND project_id = $2`,
 		`DELETE FROM inline_threads WHERE instance = $1 AND project_id = $2`,
+		`DELETE FROM finding_fates WHERE instance = $1 AND project_id = $2`,
+		`DELETE FROM fate_jobs WHERE instance = $1 AND project_id = $2`,
 		`DELETE FROM projects WHERE instance = $1 AND project_id = $2`,
 	} {
 		if _, err := tx.Exec(ctx, q, instance, projectID); err != nil {
