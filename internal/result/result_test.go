@@ -273,6 +273,38 @@ func TestMerge(t *testing.T) {
 }
 
 // The kept result's fields that Result doesn't declare survive the merge.
+// A "review failed" re-run over an incremental review keeps what the review
+// covered, or its comment would read like a full review.
+func TestMergeKeepsTheBasesIncremental(t *testing.T) {
+	base := mergeInput(t, "h", map[string][]string{"sec": nil, "style": nil}, "sec", "style")
+	var top map[string]any
+	if err := json.Unmarshal(base, &top); err != nil {
+		t.Fatal(err)
+	}
+	top["incremental"] = map[string]any{"reviewed": 2, "carried": 28, "from": fromSHA}
+	base, _ = json.Marshal(top)
+	partial := mergeInput(t, "h", map[string][]string{"style": nil}, "style")
+
+	merged, err := Merge(partial, base, []string{"style"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _ := Parse(merged)
+	if want := (&Incremental{Reviewed: 2, Carried: 28, From: fromSHA}); r.Incremental == nil || *r.Incremental != *want {
+		t.Errorf("incremental = %+v, want %+v", r.Incremental, want)
+	}
+
+	// A base that was a full review leaves the merge a full review.
+	full := mergeInput(t, "h", map[string][]string{"sec": nil, "style": nil}, "sec", "style")
+	merged, err = Merge(partial, full, []string{"style"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := Parse(merged); r.Incremental != nil {
+		t.Errorf("incremental = %+v, want none", r.Incremental)
+	}
+}
+
 func TestMergeKeepsUndeclaredFields(t *testing.T) {
 	base := mergeInput(t, "h", map[string][]string{"sec": nil, "style": nil}, "sec", "style")
 	base = []byte(strings.Replace(string(base), `"name":"sec"`, `"name":"sec","tokens":{"input":7}`, 1))

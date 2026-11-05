@@ -339,7 +339,8 @@ const NoteBaseUnreadable = "earlier results of the other skills could not be rea
 // failed skill (never dropped, which would pass it unreviewed), and each skill
 // is kept as it was delivered, fields that Result does not declare included. Finding IDs are assigned again over all the findings
 // of the merged result, so they stay unique. The envelope and the comment are
-// partial's, and the result is marked Merged.
+// partial's, except that the base's incremental counts are kept, and the
+// result is marked Merged.
 //
 // It fails when partial is not a completed result, when base is not a usable
 // completed result of the same base and head commits, or when subset is empty:
@@ -416,6 +417,13 @@ func Merge(partial, base []byte, subset []string) ([]byte, error) {
 	}
 	if top["skills"], err = json.Marshal(skills); err != nil {
 		return nil, err
+	}
+	// What the base covered stays true of the merged result: a re-run of some
+	// skills is no full review.
+	if v, ok := baseTop["incremental"]; ok {
+		top["incremental"] = v
+	} else {
+		delete(top, "incremental")
 	}
 	top["merged"] = json.RawMessage("true")
 	return json.Marshal(top)
