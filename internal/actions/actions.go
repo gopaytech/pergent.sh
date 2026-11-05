@@ -247,15 +247,20 @@ func PastDismissals(rows []store.Dismissal, skills []string, changeAuthorID int6
 			rs = rs[:maxPastDismissals]
 		}
 		for _, r := range rs {
-			out[name] = append(out[name], PastDismissal{
-				File:     cutRunes(redact(r.File), maxPastTitleRunes),
-				Title:    cutRunes(redact(r.Title), maxPastTitleRunes),
-				Severity: r.Severity,
-				Reason:   cutRunes(redact(CleanReason(r.Reason)), MaxReasonRunes),
-			})
+			file, title, reason := TeachingText(r, redact)
+			out[name] = append(out[name], PastDismissal{File: file, Title: title, Severity: r.Severity, Reason: reason})
 		}
 	}
 	return out
+}
+
+// TeachingText is the file, title and reason of a dismissal as a review is told
+// them: redacted, the reason cleaned, and each cut (file and title to 200
+// characters, the reason to MaxReasonRunes). The Past dismissals list shows the
+// same text.
+func TeachingText(r store.Dismissal, redact func(string) string) (file, title, reason string) {
+	return cutRunes(redact(r.File), maxPastTitleRunes), cutRunes(redact(r.Title), maxPastTitleRunes),
+		cutRunes(redact(CleanReason(r.Reason)), MaxReasonRunes)
 }
 
 // cutRunes is s cut to n characters.

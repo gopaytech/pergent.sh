@@ -9,7 +9,18 @@ import { ErrorBox, Loading, Pill, ago, changeRef } from "../ui";
 // dismissed with a reason in the last 90 days, one row each. Stop using ends the
 // lesson for every dismissal of that finding; the dismissals stay on their
 // changes. Everything but the skill is text people wrote.
-export default function PastDismissals({ instance, project, platform }: { instance: string; project: string; platform: string }) {
+export default function PastDismissals({
+  instance,
+  project,
+  platform,
+  learning,
+}: {
+  instance: string;
+  project: string;
+  platform: string;
+  // learning: the repository's Learn from dismissals setting.
+  learning: boolean;
+}) {
   const client = useQueryClient();
   const write = useWrite();
   const key = ["past-dismissals", instance, project];
@@ -30,8 +41,9 @@ export default function PastDismissals({ instance, project, platform }: { instan
   return (
     <>
       <p className="sub">
-        Findings people dismissed with a reason in the last 90 days. Reviews of this repository are told about them. Stop using
-        ends it for every dismissal of that finding; the dismissals stay on their changes.
+        Findings people dismissed with a reason in the last 90 days.{" "}
+        {learning ? "Reviews of this repository are told about them." : "Learn from dismissals is off, so reviews aren't told about these."}{" "}
+        Stop using ends it for every dismissal of that finding; the dismissals stay on their changes.
       </p>
       {stop.isError && <ErrorBox error={stop.error} />}
       <section className="card" aria-label="Past dismissals">

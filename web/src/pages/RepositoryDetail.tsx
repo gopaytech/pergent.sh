@@ -50,7 +50,14 @@ export default function RepositoryDetail() {
       <div role="tabpanel">
         {tab === "reviews" && <ReviewList filter={{ project: repo.project, days: 90 }} label="Reviews of this repository" />}
         {tab === "settings" && <SettingsTab view={view} queryKey={queryKey} />}
-        {tab === "past-dismissals" && <PastDismissals instance={repo.instance} project={repo.project} platform={repo.platform} />}
+        {tab === "past-dismissals" && (
+          <PastDismissals
+            instance={repo.instance}
+            project={repo.project}
+            platform={repo.platform}
+            learning={view.settings.learnFromDismissals.value}
+          />
+        )}
         {tab === "inputs" && <Inputs instance={repo.instance} project={repo.project} />}
         {tab === "readiness" && <Readiness instance={repo.instance} project={repo.project} />}
         {tab === "setup" && (

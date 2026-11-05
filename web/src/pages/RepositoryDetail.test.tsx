@@ -708,6 +708,26 @@ describe("RepositoryDetail", () => {
       expect(fake.find("GET", listPath)).toHaveLength(2);
     });
 
+    it("says reviews aren't told when Learn from dismissals is off", async () => {
+      const off = repoDetail(repoPayments);
+      off.settings.learnFromDismissals = { value: false, overridden: true };
+      renderAt("/repos/main/acme/payments?tab=past-dismissals", {
+        ...base,
+        "GET /api/repositories/main/acme/payments": { body: off },
+        [`GET ${listPath}`]: { body: pastDismissals },
+      });
+      expect(await screen.findByText(/Learn from dismissals is off, so reviews aren't told about these\./)).toBeInTheDocument();
+      expect(screen.queryByText(/Reviews of this repository are told about them/)).not.toBeInTheDocument();
+      // Stop using is still there: it ends the lesson for when the setting is turned on again.
+      expect(screen.getAllByRole("button", { name: "Stop using" })).toHaveLength(2);
+    });
+
+    it("says reviews are told when it is on", async () => {
+      renderAt("/repos/main/acme/payments?tab=past-dismissals", { ...base, [`GET ${listPath}`]: { body: pastDismissals } });
+      expect(await screen.findByText(/Reviews of this repository are told about them\./)).toBeInTheDocument();
+      expect(screen.queryByText(/Learn from dismissals is off/)).not.toBeInTheDocument();
+    });
+
     it("says when nothing teaches", async () => {
       renderAt("/repos/main/acme/payments?tab=past-dismissals", { ...base, [`GET ${listPath}`]: { body: [] } });
       expect(await screen.findByText("No past dismissals are teaching reviews.")).toBeInTheDocument();

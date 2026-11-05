@@ -307,3 +307,62 @@ func TestPastDismissalsProjectID(t *testing.T) {
 		t.Errorf("operator rows = %+v; want the stored project's", rows)
 	}
 }
+
+// The text people wrote reaches the page as a review is told it: LLM keys
+// redacted, then cut (title and file to 200 characters, reason to 500).
+func TestPastDismissalsTextIsRedactedAndCut(t *testing.T) {
+	e := newEnv(t, withSecrets(t))
+	e.buttonBlockingReview()
+	now := e.clock.now()
+	mr := store.MRKey{Instance: "main", ProjectID: testID(buttonProject), IID: 1}
+	if _, err := e.st.Dismiss(ctx, store.Dismissal{MR: mr, Fingerprint: "fp1", Severity: "suggestion",
+		Reason: "uses " + llmKey + " here", Actor: "bob (gitlab main)", CreatedAt: now.Add(-time.Hour),
+		Skill: "code-review", File: "dir/" + llmKey + ".go", Title: "leaks " + llmKey, Teaches: true}); err != nil {
+		t.Fatal(err)
+	}
+	long := strings.Repeat("é", 600)
+	if _, err := e.st.Dismiss(ctx, store.Dismissal{MR: store.MRKey{Instance: "main", ProjectID: mr.ProjectID, IID: 2},
+		Fingerprint: "fp2", Severity: "suggestion", Reason: long, Actor: "bob (gitlab main)", CreatedAt: now.Add(-2 * time.Hour),
+		Skill: "code-review", File: long, Title: long, Teaches: true}); err != nil {
+		t.Fatal(err)
+	}
+	c := e.signInRole(store.RoleMaintainer)
+	rec := e.get(c, pastURL(buttonProject))
+	wantCode(t, rec, "list", http.StatusOK)
+	if strings.Contains(rec.Body.String(), llmKey) {
+		t.Fatalf("body %s holds the LLM key", rec.Body)
+	}
+	rows := teaching(t, e, c)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %+v; want 2", rows)
+	}
+	if rows[0].Reason != "uses *** here" || rows[0].Title != "leaks ***" || rows[0].File != "dir/***.go" {
+		t.Errorf("redacted row = %+v", rows[0])
+	}
+	if n := len([]rune(rows[1].Title)); n != 200 {
+		t.Errorf("title is %d characters; want 200", n)
+	}
+	if n := len([]rune(rows[1].File)); n != 200 {
+		t.Errorf("file is %d characters; want 200", n)
+	}
+	if n := len([]rune(rows[1].Reason)); n != 500 {
+		t.Errorf("reason is %d characters; want 500", n)
+	}
+}
+
+// A fingerprint with spaces around it is the fingerprint, as for the buttons
+// on a review.
+func TestStopUsingTrimsTheFingerprint(t *testing.T) {
+	e := newEnv(t, nil)
+	e.buttonBlockingReview()
+	e.pastDismissal(1, "fp1", "suggestion", "reason", "bob (gitlab main)", e.clock.now().Add(-time.Hour))
+	c := e.signInRole(store.RoleMaintainer)
+	rec := e.send(c, "POST", stopURL(buttonProject), `{"fingerprint":"  fp1 "}`)
+	wantCode(t, rec, "stop", http.StatusOK)
+	if got := statusOf(t, rec); got != "stopped" {
+		t.Errorf("status = %q; want stopped", got)
+	}
+	if a := e.auditOf("dismissal_stopped"); len(a) != 1 || a[0].Detail != "fingerprint=fp1" {
+		t.Errorf("audit = %+v; want the trimmed fingerprint", a)
+	}
+}

@@ -38,9 +38,10 @@ func (d *Dashboard) repositoryPastDismissals(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		for _, row := range actions.TeachingRows(rows) {
+			file, title, reason := actions.TeachingText(row, d.registry.Redact)
 			out = append(out, PastDismissalView{
-				Skill: row.Skill, Severity: row.Severity, File: d.registry.Redact(row.File), Title: d.registry.Redact(row.Title),
-				Reason: d.registry.Redact(actions.CleanReason(row.Reason)), By: row.Actor, At: row.CreatedAt.UTC(), Number: row.MR.IID, Fingerprint: row.Fingerprint,
+				Skill: row.Skill, Severity: row.Severity, File: file, Title: title, Reason: reason,
+				By: row.Actor, At: row.CreatedAt.UTC(), Number: row.MR.IID, Fingerprint: row.Fingerprint,
 			})
 		}
 	}
@@ -66,6 +67,7 @@ func (d *Dashboard) stopUsing(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msgBadStop)
 		return
 	}
+	fingerprint := strings.TrimSpace(body.Fingerprint)
 	ctx, se := context.WithoutCancel(r.Context()), session(r)
 	status := "not teaching"
 	id, found, err := d.projectID(ctx, se, repo.Instance, repo.Project)
@@ -74,14 +76,14 @@ func (d *Dashboard) stopUsing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if found {
-		stopped, err := d.Store.StopTeaching(ctx, repo.Instance, id, body.Fingerprint)
+		stopped, err := d.Store.StopTeaching(ctx, repo.Instance, id, fingerprint)
 		if err != nil {
 			d.failed(w, r, "stopping a past dismissal", err)
 			return
 		}
 		if stopped {
 			status = "stopped"
-			d.audit(ctx, se, "dismissal_stopped", repo.Instance, repo.Project, "fingerprint="+body.Fingerprint)
+			d.audit(ctx, se, "dismissal_stopped", repo.Instance, repo.Project, "fingerprint="+fingerprint)
 		}
 	}
 	accepted(w, http.StatusOK, status)
