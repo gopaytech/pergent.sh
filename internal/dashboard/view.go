@@ -1058,6 +1058,8 @@ type InstanceAdminView struct {
 	APIURL       string `json:"apiURL"`
 	ReviewAppID  int64  `json:"reviewAppID"`
 	ApproveAppID int64  `json:"approveAppID"`
+	// WebhookURL is where the platform sends this instance's webhooks.
+	WebhookURL string `json:"webhookURL"`
 	// Approver is "app" (a GitHub approve App), "review_app" (the review
 	// App itself; ApproveAppID is then the review App's ID) or "token" (a
 	// bot user).

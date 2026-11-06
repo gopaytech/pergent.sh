@@ -412,6 +412,7 @@ export const instanceGitLab: InstanceAdminView = {
   removing: false,
   url: "https://gitlab.example.com",
   apiURL: "",
+  webhookURL: "https://pergent.example.com/webhooks/gitlab/main",
   reviewAppID: 0,
   approveAppID: 0,
   approver: "token",
@@ -431,6 +432,7 @@ export const instanceGitHub: InstanceAdminView = {
   removing: false,
   url: "",
   apiURL: "https://api.github.example.com",
+  webhookURL: "https://pergent.example.com/webhooks/github/hub",
   reviewAppID: 11,
   approveAppID: 12,
   approver: "app",
@@ -447,6 +449,7 @@ export const instanceGitHub: InstanceAdminView = {
 export const instanceGitHubOneApp: InstanceAdminView = {
   ...instanceGitHub,
   name: "solo",
+  webhookURL: "https://pergent.example.com/webhooks/github/solo",
   approveAppID: 11,
   approver: "review_app",
   secrets: {
@@ -459,6 +462,7 @@ export const instanceGitHubOneApp: InstanceAdminView = {
 export const instanceDashboardGitLab: InstanceAdminView = {
   ...instanceGitLab,
   name: "extra",
+  webhookURL: "https://pergent.example.com/webhooks/gitlab/extra",
   source: "dashboard",
   url: "https://gitlab2.example.com",
   oauthClientID: "",

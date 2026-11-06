@@ -686,6 +686,10 @@ pre {
   line-height: 1.8;
 }
 
+.webhook-url code {
+  overflow-wrap: anywhere;
+}
+
 .verdict {
   display: flex;
   align-items: center;
