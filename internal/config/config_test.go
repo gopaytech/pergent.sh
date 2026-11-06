@@ -39,7 +39,7 @@ func TestLoadValid(t *testing.T) {
 	if cfg.CallbackURL != cfg.PublicURL {
 		t.Errorf("CallbackURL = %q, want PublicURL %q", cfg.CallbackURL, cfg.PublicURL)
 	}
-	if cfg.Jobs.Image != "ghcr.io/gopaytech/pergent:v0.5.3" {
+	if cfg.Jobs.Image != "ghcr.io/gopaytech/pergent:v0.5.4" {
 		t.Errorf("Jobs.Image = %q", cfg.Jobs.Image)
 	}
 	if cfg.Jobs.MaxRunning != 5 {
