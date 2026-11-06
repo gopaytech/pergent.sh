@@ -329,6 +329,26 @@ describe("RepositoryDetail", () => {
     });
   });
 
+  it("shows the quiet reviews switch after the learn from dismissals switch and sends only that key when it is switched on", async () => {
+    const fake = fakeApi({
+      ...base,
+      "PUT /api/repositories/main/acme/payments/settings": { body: payments },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const toggle = await screen.findByRole("switch", { name: "Quiet reviews" });
+    expect(toggle).not.toBeChecked();
+    expect(
+      screen.getByText("Fewer nitpicks, no suggestion threads and a shorter comment. Blocking findings, failures and approval stay the same."),
+    ).toBeInTheDocument();
+    const switches = screen.getAllByRole("switch").map((el) => el.getAttribute("aria-label") ?? el.textContent);
+    expect(switches.indexOf("Quiet reviews")).toBe(switches.indexOf("Learn from dismissals") + 1);
+    await userEvent.click(toggle);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({
+      quietReviews: true,
+    });
+  });
+
   it("shows a maintainer the re-run caps read-only and never sends them", async () => {
     const asMaintainer = repoDetail(repoPayments, "maintainer");
     const fake = fakeApi({

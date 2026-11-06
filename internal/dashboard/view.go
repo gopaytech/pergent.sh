@@ -208,10 +208,13 @@ type RunDetailView struct {
 	// IncrementalNote says what an incremental review covered, for example
 	// "Re-reviewed 2 files · 28 carried over from `abc1234`"; "" for a full
 	// review.
-	IncrementalNote string      `json:"incrementalNote"`
-	Tokens          TokensView  `json:"tokens"`
-	Files           FilesView   `json:"files"`
-	Skills          []SkillView `json:"skills"`
+	IncrementalNote string `json:"incrementalNote"`
+	// Quiet is whether the review was started quiet, as recorded when it
+	// started; false for a run that didn't record it.
+	Quiet  bool        `json:"quiet"`
+	Tokens TokensView  `json:"tokens"`
+	Files  FilesView   `json:"files"`
+	Skills []SkillView `json:"skills"`
 	// LatestDecided is true for the one run of the change that dismiss and
 	// restore act on: its newest published review, or reported one with an
 	// outcome. Only that run shows dismissals; false when the change has no
@@ -336,7 +339,8 @@ type Last7View struct {
 // repository's maintainers and owners use pergent commands),
 // incrementalReviews (whether a push reviews only the files changed since the
 // last review), learnFromDismissals (whether later reviews are told what people
-// with write access dismissed, and why), failureStatus, skills (null: the default list of skills; otherwise the library skills
+// with write access dismissed, and why), quietReviews (whether a review says
+// less: fewer nitpicks, no suggestion threads, a shorter comment), failureStatus, skills (null: the default list of skills; otherwise the library skills
 // reviewed), repoSkills
 // (the detected repository skills turned on, a list, empty when none),
 // jobTimeoutSeconds, maxTurns, jobMemory ("" when none), rerunLimitPerMR and
@@ -713,9 +717,12 @@ type DefaultsView struct {
 	IncrementalReviews bool `json:"incrementalReviews"`
 	// LearnFromDismissals is whether later reviews are told what people with
 	// write access dismissed, and why.
-	LearnFromDismissals bool   `json:"learnFromDismissals"`
-	FailureStatus       string `json:"failureStatus"`
-	JobTimeoutSeconds   int64  `json:"jobTimeoutSeconds"`
+	LearnFromDismissals bool `json:"learnFromDismissals"`
+	// QuietReviews is whether a review says less: fewer nitpicks, no
+	// suggestion threads and a shorter comment.
+	QuietReviews      bool   `json:"quietReviews"`
+	FailureStatus     string `json:"failureStatus"`
+	JobTimeoutSeconds int64  `json:"jobTimeoutSeconds"`
 	// MaxTurns is the step limit of each opencode run.
 	MaxTurns int `json:"maxTurns"`
 	// JobMemory is the Job's memory limit, "" when none.
@@ -733,7 +740,7 @@ type DefaultsView struct {
 	// Pinned says which defaults were saved here and so no longer follow the
 	// config, by JSON key (approve, reviewDrafts, inlineFindings,
 	// commandsAuthorAndMaintainersOnly, incrementalReviews,
-	// learnFromDismissals, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory,
+	// learnFromDismissals, quietReviews, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory,
 	// rerunLimitPerMR, rerunLimitPerRepo). Every key is present.
 	Pinned map[string]bool `json:"pinned"`
 }
@@ -749,10 +756,12 @@ type DefaultValues struct {
 	// IncrementalReviews: see DefaultsView.
 	IncrementalReviews bool `json:"incrementalReviews"`
 	// LearnFromDismissals: see DefaultsView.
-	LearnFromDismissals bool   `json:"learnFromDismissals"`
-	FailureStatus       string `json:"failureStatus"`
-	JobTimeoutSeconds   int64  `json:"jobTimeoutSeconds"`
-	MaxTurns            int    `json:"maxTurns"`
+	LearnFromDismissals bool `json:"learnFromDismissals"`
+	// QuietReviews: see DefaultsView.
+	QuietReviews      bool   `json:"quietReviews"`
+	FailureStatus     string `json:"failureStatus"`
+	JobTimeoutSeconds int64  `json:"jobTimeoutSeconds"`
+	MaxTurns          int    `json:"maxTurns"`
 	// JobMemory is the Job's memory limit, "" when none.
 	JobMemory         string `json:"jobMemory"`
 	RerunLimitPerMR   int    `json:"rerunLimitPerMR"`
@@ -801,7 +810,7 @@ type LLMView struct {
 //   - PUT /api/repositories/{instance}/{project...}/settings: changes the
 //     settings in the body and leaves the others; a null resets one to its
 //     default. The keys are those of RepositoryDetailView.Settings:
-//     approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews and learnFromDismissals (true or false), failureStatus ("failed" or
+//     approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals and quietReviews (true or false), failureStatus ("failed" or
 //     "neutral"), skills (a non-empty list of library skill names, or
 //     null for the default list; a name the library lacks is 400 `skill
 //     "x" is not in the skill library`, and so is a list whose texts come to

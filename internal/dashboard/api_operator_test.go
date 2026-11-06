@@ -1134,6 +1134,7 @@ func TestDefaults(t *testing.T) {
 		{"bad commands switch", `{"commandsAuthorAndMaintainersOnly": "yes"}`, "commandsAuthorAndMaintainersOnly must be true, false or null"},
 		{"bad incremental reviews", `{"incrementalReviews": "yes"}`, "incrementalReviews must be true, false or null"},
 		{"bad learn from dismissals", `{"learnFromDismissals": "yes"}`, "learnFromDismissals must be true, false or null"},
+		{"bad quiet reviews", `{"quietReviews": "yes"}`, "quietReviews must be true, false or null"},
 		{"not an object", `[1]`, "the body must be a JSON object of defaults"},
 	} {
 		if rec := e.send(admin, "PUT", "/api/admin/defaults", tc.body); rec.Code != http.StatusBadRequest || errorOf(t, rec) != tc.want && !strings.Contains(errorOf(t, rec), tc.want) {
@@ -1572,11 +1573,64 @@ func TestDefaultsLearnFromDismissals(t *testing.T) {
 	}
 }
 
+// The default for quiet reviews is stored with the other defaults; it is in
+// the view's config and pinned, the save is audited under its name, left out
+// of a body it is the built-in one (off), and a dashboard repository takes it.
+func TestDefaultsQuietReviews(t *testing.T) {
+	e := newEnv(t, nil)
+	admin := e.signInGitLab(true, "acme/widgets")
+
+	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")
+	if v.QuietReviews || v.Config.QuietReviews || v.Pinned["quietReviews"] {
+		t.Errorf("initial view = %+v; want off, config off, not pinned", v)
+	}
+
+	v = decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"quietReviews": true}), "PUT", http.StatusOK)
+	if !v.QuietReviews || v.Config.QuietReviews || !v.Pinned["quietReviews"] {
+		t.Errorf("after PUT true: view = %+v; want on, config off, pinned", v)
+	}
+	if stored, err := e.st.RepoDefaults(ctx); err != nil || stored.QuietReviews == nil || !*stored.QuietReviews {
+		t.Errorf("stored defaults = %+v, %v; want true", stored, err)
+	}
+	var details []string
+	for _, a := range e.auditEntries() {
+		if a.Action == "defaults_updated" {
+			details = append(details, a.Detail)
+		}
+	}
+	if !slices.Equal(details, []string{"quietReviews"}) {
+		t.Errorf("defaults_updated details = %q; want quietReviews named", details)
+	}
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	if g, _, err := e.d.Repos.Get(ctx, "main", "acme/gadgets"); err != nil || !g.QuietReviews {
+		t.Errorf("dashboard repository = %+v, %v; want quiet reviews on", g, err)
+	}
+	if w, _, _ := e.d.Repos.Get(ctx, "main", "acme/widgets"); w.QuietReviews {
+		t.Errorf("config repository = %+v, want the default, off", w)
+	}
+
+	rec := e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"quietReviews": "x"})
+	if rec.Code != http.StatusBadRequest || errorOf(t, rec) != "quietReviews must be true, false or null" {
+		t.Errorf("PUT x = %d %s; want 400 naming the key", rec.Code, rec.Body)
+	}
+	if !strings.Contains(msgBadDefaults, "quietReviews") {
+		t.Errorf("msgBadDefaults = %q", msgBadDefaults)
+	}
+
+	v = decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"approve": true}), "PUT", http.StatusOK)
+	if v.QuietReviews || v.Pinned["quietReviews"] {
+		t.Errorf("after a PUT without it: view = %+v; want off, not pinned", v)
+	}
+	if stored, _ := e.st.RepoDefaults(ctx); stored.QuietReviews != nil {
+		t.Errorf("stored = %v, want NULL", stored.QuietReviews)
+	}
+}
+
 // A default is pinned when the dashboard stored a value for it, and only then.
 func TestPinnedDefaults(t *testing.T) {
 	none := pinnedDefaults(store.RepoDefaults{})
-	if len(none) != 12 {
-		t.Errorf("pinned = %v; want the twelve keys", none)
+	if len(none) != 13 {
+		t.Errorf("pinned = %v; want the thirteen keys", none)
 	}
 	for k, v := range none {
 		if v {
@@ -1598,7 +1652,10 @@ func TestPinnedDefaults(t *testing.T) {
 	if !pinnedDefaults(store.RepoDefaults{LearnFromDismissals: ptr(false)})["learnFromDismissals"] {
 		t.Errorf("learnFromDismissals not pinned when stored")
 	}
-	for _, k := range []string{"reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "failureStatus", "maxTurns", "rerunLimitPerMR"} {
+	if !pinnedDefaults(store.RepoDefaults{QuietReviews: ptr(true)})["quietReviews"] {
+		t.Errorf("quietReviews not pinned when stored")
+	}
+	for _, k := range []string{"reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews", "failureStatus", "maxTurns", "rerunLimitPerMR"} {
 		if got[k] {
 			t.Errorf("%s pinned: %v", k, got)
 		}

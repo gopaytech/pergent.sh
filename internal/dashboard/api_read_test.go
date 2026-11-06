@@ -247,6 +247,8 @@ type runFix struct {
 	versions, skipReason string
 	// incremental marks a run that reviewed only some files.
 	incremental bool
+	// quiet marks a run started quiet.
+	quiet bool
 }
 
 // addRun stores f and returns the run's ID.
@@ -275,6 +277,12 @@ func (e *env) addRun(f runFix) string {
 	id, _, err := e.st.EnqueueRun(ctx, mr, f.project, f.head, f.target)
 	if err != nil {
 		e.t.Fatalf("EnqueueRun: %v", err)
+	}
+	if f.quiet {
+		// Only a queued or running run takes it, so before the state is set.
+		if err := e.st.SetRunQuiet(ctx, id, true); err != nil {
+			e.t.Fatalf("SetRunQuiet: %v", err)
+		}
 	}
 	var dispatched, reported *time.Time
 	if f.state != store.Queued && !f.undispatched {
@@ -1426,6 +1434,25 @@ func TestRunDetailIncrementalNote(t *testing.T) {
 	}
 }
 
+// A run's view says whether it was started quiet: true for a run that
+// recorded it, false for one whose column is NULL (and present as false).
+func TestRunDetailQuiet(t *testing.T) {
+	e := newEnv(t, nil)
+	quiet := e.addRun(runFix{project: "acme/widgets", number: 1, head: head('a'), result: cleanResult(head('a')), outcome: OutcomeApproved, approved: true, quiet: true})
+	plain := e.addRun(runFix{project: "acme/widgets", number: 2, head: head('b'), result: cleanResult(head('b')), outcome: OutcomeApproved, approved: true})
+	c := e.signInGitLab(false, "acme/widgets")
+
+	if v := getJSON[RunDetailView](e, c, "/api/runs/"+quiet); !v.Quiet {
+		t.Errorf("quiet = false for a quiet run")
+	}
+	if v := getJSON[RunDetailView](e, c, "/api/runs/"+plain); v.Quiet {
+		t.Errorf("quiet = true for a run that never recorded it")
+	}
+	if raw := e.get(c, "/api/runs/"+plain).Body.String(); !strings.Contains(raw, `"quiet":false`) {
+		t.Errorf("body = %s; want quiet false", raw)
+	}
+}
+
 // A run skipped for lack of skills is not a failure and not counted as a
 // review; its reason says so.
 func TestSkippedRunOutcome(t *testing.T) {
@@ -1640,6 +1667,18 @@ func TestSettingViewsLearnFromDismissals(t *testing.T) {
 	repo = settings.Effective{LearnFromDismissals: true}
 	if got := settingViews(repo)["learnFromDismissals"]; got != (SettingView{true, false}) {
 		t.Errorf("learnFromDismissals = %+v, want true not overridden", got)
+	}
+}
+
+// Quiet reviews is a setting of the repository like the others, off unless
+// set.
+func TestSettingViewsQuietReviews(t *testing.T) {
+	if got := settingViews(settings.Effective{})["quietReviews"]; got != (SettingView{false, false}) {
+		t.Errorf("quietReviews = %+v, want false not overridden", got)
+	}
+	repo := settings.Effective{QuietReviews: true, Overridden: map[string]bool{settings.KeyQuietReviews: true}}
+	if got := settingViews(repo)["quietReviews"]; got != (SettingView{true, true}) {
+		t.Errorf("quietReviews = %+v, want true overridden", got)
 	}
 }
 

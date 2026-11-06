@@ -54,6 +54,20 @@ describe("ReviewDetail", () => {
     expect(full).not.toHaveTextContent("carried over");
   });
 
+  it("labels a quiet run quiet, and says nothing for a run that was not", async () => {
+    const { unmount } = renderAndWait({ ...runDetail, quiet: true });
+    const quiet = await screen.findByRole("region", { name: "This run" });
+    expect(await within(quiet).findByText("quiet")).toBeInTheDocument();
+    // The page still shows the checks and files a quiet comment leaves out.
+    expect(quiet).toHaveTextContent("Files:");
+    unmount();
+
+    renderAndWait();
+    const plain = await screen.findByRole("region", { name: "This run" });
+    expect(await within(plain).findByText("v0.1.0")).toBeInTheDocument();
+    expect(within(plain).queryByText("quiet")).not.toBeInTheDocument();
+  });
+
   it("shows the change, its history and the newest run", async () => {
     renderAndWait();
     expect(await screen.findByRole("heading", { name: /Refund idempotency key/ })).toBeInTheDocument();

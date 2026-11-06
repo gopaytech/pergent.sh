@@ -62,6 +62,7 @@ function Defaults({ v }: { v: DefaultsView }) {
   const [commandsOnly, setCommandsOnly] = useState(v.commandsAuthorAndMaintainersOnly);
   const [incremental, setIncremental] = useState(v.incrementalReviews);
   const [learn, setLearn] = useState(v.learnFromDismissals);
+  const [quiet, setQuiet] = useState(v.quietReviews);
   const [failureStatus, setFailureStatus] = useState(v.failureStatus);
   const [timeout, setTimeoutText] = useState(String(v.jobTimeoutSeconds));
   const [steps, setSteps] = useState(String(v.maxTurns));
@@ -117,6 +118,7 @@ function Defaults({ v }: { v: DefaultsView }) {
       commandsAuthorAndMaintainersOnly: orNull(commandsOnly, cfg.commandsAuthorAndMaintainersOnly),
       incrementalReviews: orNull(incremental, cfg.incrementalReviews),
       learnFromDismissals: orNull(learn, cfg.learnFromDismissals),
+      quietReviews: orNull(quiet, cfg.quietReviews),
       failureStatus: orNull(failureStatus, cfg.failureStatus),
       jobTimeoutSeconds: orNull(Number(t), cfg.jobTimeoutSeconds),
       maxTurns: orNull(Number(s), cfg.maxTurns),
@@ -234,6 +236,25 @@ function Defaults({ v }: { v: DefaultsView }) {
         </div>
         <div>
           <Switch label="Learn from dismissals" checked={learn} disabled={save.isPending} onChange={setLearn} />
+        </div>
+      </div>
+      <div className="set">
+        <div>
+          <div className="name">Quiet reviews</div>
+          <div className="help">
+            Fewer nitpicks, no suggestion threads and a shorter comment. Blocking findings, failures and approval stay the
+            same.
+            <FromConfig
+              field="Quiet reviews"
+              pinned={pinned("quietReviews")}
+              shown={onOff(cfg.quietReviews)}
+              disabled={save.isPending}
+              onUse={() => setQuiet(cfg.quietReviews)}
+            />
+          </div>
+        </div>
+        <div>
+          <Switch label="Quiet reviews" checked={quiet} disabled={save.isPending} onChange={setQuiet} />
         </div>
       </div>
       <div className="set">
