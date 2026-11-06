@@ -421,6 +421,8 @@ func TestPergentFolderProblemIsFatal(t *testing.T) {
 		"too large":        {".pergent/skills/x.md": strings.Repeat("a", MaxSkillBytes+1)},
 		"folder no skill":  {".pergent/skills/foo/other.md": "# x"},
 		"paths not a list": {".pergent/skills/x.md": "---\npaths: x\n---\nx"},
+		"paths directory":  {".pergent/skills/x.md": "---\npaths: [\"api/\"]\n---\nx"},
+		"exclude bad glob": {".pergent/skills/x.md": "---\nexclude: [\"a/[x\"]\n---\nx"},
 		"duplicate":        {".pergent/skills/a.md": "# a", ".pergent/skills/b/SKILL.md": "---\nname: a\n---\nb"},
 	} {
 		t.Run(label, func(t *testing.T) {

@@ -784,6 +784,8 @@ func TestCreateChecks(t *testing.T) {
 		{"a skill over 128 KiB", "huge", strings.Repeat("x", inputs.MaxSkillBytes+1)},
 		{"frontmatter that does not parse", "broken", "---\nname: [unclosed\n---\nText."},
 		{"paths that is not a list", "paths", "---\npaths: src\n---\nText."},
+		{"a paths directory with a trailing slash", "dirpath", "---\npaths: [\"api/\"]\n---\nText."},
+		{"an exclude pattern with bad glob syntax", "badglob", "---\nexclude: [\"api/[x\"]\n---\nText."},
 		{"cross_batch that is not a boolean", "cross", "---\ncross_batch: maybe\n---\nText."},
 		{"a frontmatter name that differs", "style", "---\nname: other\n---\nText."},
 	} {

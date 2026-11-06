@@ -27,6 +27,15 @@ func TestCheckSkill(t *testing.T) {
 		{"cross_batch is a bare word", "lint", "---\ncross_batch: yes\n---\nx", "cross_batch"},
 		{"cross_batch is a number", "lint", "---\ncross_batch: 1\n---\nx", "cross_batch"},
 		{"name mismatch", "lint", "---\nname: other\n---\nx", "does not match"},
+		{"good patterns", "lint", "---\npaths: [\"api/**\", \"*.go\"]\nexclude: [\"vendor/**\"]\n---\nx", ""},
+		{"paths with a trailing slash", "lint", "---\npaths: [\"api/\"]\n---\nx", `paths: pattern "api/" can never match`},
+		{"paths with bad glob syntax", "lint", "---\npaths: [\"api/[x\"]\n---\nx", `paths: pattern "api/[x"`},
+		{"exclude with a trailing slash", "lint", "---\nexclude: [\"docs/\"]\n---\nx", `exclude: pattern "docs/" can never match`},
+		{"exclude with bad glob syntax", "lint", "---\nexclude: [\"a/[x\"]\n---\nx", `exclude: pattern "a/[x"`},
+		{"good paths, bad exclude", "lint", "---\npaths: [\"api/**\"]\nexclude: [\"a/../b\"]\n---\nx", `exclude: pattern "a/../b"`},
+		{"bad paths, good exclude", "lint", "---\npaths: [\"./a\"]\nexclude: [\"vendor/**\"]\n---\nx", `paths: pattern "./a"`},
+		{"empty pattern", "lint", "---\npaths: [\"\"]\n---\nx", "paths: pattern is empty"},
+		{"a bad pattern in the body is not scope", "lint", "---\nname: lint\n---\npaths: [\"api/\"]", ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.label, func(t *testing.T) {
