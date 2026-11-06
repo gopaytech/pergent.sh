@@ -1047,8 +1047,12 @@ func TestInlinePostBodies(t *testing.T) {
 		if strings.Contains(body, secretValue) || strings.Contains(body, "```suggestion") {
 			t.Errorf("body keeps the secret or the suggestion:\n%s", body)
 		}
-		if !strings.Contains(body, "Leaks [redacted]") {
-			t.Errorf("title not redacted:\n%s", body)
+		// pergent's render breaks "[" and "]" with a zero-width joiner, so the
+		// placeholder is read with the joiners taken out: the title and the
+		// explanation each hold it where the secret was.
+		plain := strings.ReplaceAll(body, "\u200d", "")
+		if !strings.Contains(plain, "Leaks [redacted]") || !strings.Contains(plain, "See [redacted]") {
+			t.Errorf("title or explanation not redacted:\n%s", body)
 		}
 	})
 
