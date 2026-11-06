@@ -25,7 +25,7 @@ The purpose is **a review that says less, without missing anything that blocks**
 ## Anti-goals
 
 - A switch that changes what is blocking, a verdict or an approval.
-- A failure, a failed check or a blocking finding left out of the comment.
+- A failure, a failed check or a blocking finding left out of the comment by a quiet review. The size-limit steps can still cut a failed check table on a very large comment, as they do today, with their note; blocking findings and failures are never cut.
 - A prompt line that makes the model less careful about real problems.
 
 ## The setting
