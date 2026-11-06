@@ -291,6 +291,11 @@ func TestSettingsValidation(t *testing.T) {
 		{`{"learnFromDismissals":false}`, true, func(r store.DashboardRepo) bool { return r.LearnFromDismissals != nil && !*r.LearnFromDismissals }},
 		{`{"learnFromDismissals":"no"}`, false, nil},
 		{`{"learnFromDismissals":null}`, true, func(r store.DashboardRepo) bool { return r.LearnFromDismissals == nil }},
+		{`{"quietReviews":true}`, true, func(r store.DashboardRepo) bool { return r.QuietReviews != nil && *r.QuietReviews }},
+		// false is the override a repository needs when the admin default is on.
+		{`{"quietReviews":false}`, true, func(r store.DashboardRepo) bool { return r.QuietReviews != nil && !*r.QuietReviews }},
+		{`{"quietReviews":"no"}`, false, nil},
+		{`{"quietReviews":null}`, true, func(r store.DashboardRepo) bool { return r.QuietReviews == nil }},
 		{`{"failureStatus":"neutral"}`, true, func(r store.DashboardRepo) bool { return r.FailureStatus != nil && *r.FailureStatus == "neutral" }},
 		{`{"failureStatus":"success"}`, false, nil},
 		{`{"failureStatus":"failed"}`, true, func(r store.DashboardRepo) bool { return r.FailureStatus != nil && *r.FailureStatus == "failed" }},
@@ -385,7 +390,7 @@ func TestSettingsValidation(t *testing.T) {
 	wantCode(t, rec, "reset", http.StatusOK)
 	r, found := e.storedRepo("main", "acme/gadgets")
 	if !found || r.Approve != nil || r.ReviewDrafts != nil || r.FailureStatus != nil || r.Skills != nil ||
-		r.InlineFindings != nil || r.CommandsAuthorAndMaintainersOnly != nil || r.IncrementalReviews != nil || r.LearnFromDismissals != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil ||
+		r.InlineFindings != nil || r.CommandsAuthorAndMaintainersOnly != nil || r.IncrementalReviews != nil || r.LearnFromDismissals != nil || r.QuietReviews != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil ||
 		r.CreatedBy != "carol" {
 		t.Errorf("after reset row = %+v, %v", r, found)
 	}
@@ -1328,8 +1333,8 @@ func TestQuietReviewsSetting(t *testing.T) {
 	if r, _ := e.storedRepo("main", "acme/gadgets"); r.QuietReviews != nil {
 		t.Errorf("stored after null = %v, want NULL", r.QuietReviews)
 	}
-	if g, _, _ := e.d.Repos.Get(ctx, "main", "acme/gadgets"); g.QuietReviews {
-		t.Errorf("effective after null = %+v; want the default, off", g)
+	if g, ok, err := e.d.Repos.Get(ctx, "main", "acme/gadgets"); err != nil || !ok || g.QuietReviews {
+		t.Errorf("effective after null = %+v, %v, %v; want the default, off", g, ok, err)
 	}
 
 	e.send(c, "PUT", target, `{"quietReviews":true}`)

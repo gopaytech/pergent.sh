@@ -1027,7 +1027,7 @@ func TestDefaultsViewConfigAndPinned(t *testing.T) {
 	if v.Config.MaxTurns != 40 || v.Config.FailureStatus != "failed" || !v.Config.Approve || v.Config.RerunLimitPerMR != 10 || v.Config.JobMemory != "" {
 		t.Errorf("config values = %+v", v.Config)
 	}
-	for _, k := range []string{"approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "failureStatus", "jobTimeoutSeconds", "maxTurns", "jobMemory", "rerunLimitPerMR", "rerunLimitPerRepo"} {
+	for _, k := range []string{"approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews", "failureStatus", "jobTimeoutSeconds", "maxTurns", "jobMemory", "rerunLimitPerMR", "rerunLimitPerRepo"} {
 		if _, ok := v.Pinned[k]; !ok {
 			t.Errorf("pinned has no %q: %v", k, v.Pinned)
 		}
@@ -1605,8 +1605,8 @@ func TestDefaultsQuietReviews(t *testing.T) {
 	if g, _, err := e.d.Repos.Get(ctx, "main", "acme/gadgets"); err != nil || !g.QuietReviews {
 		t.Errorf("dashboard repository = %+v, %v; want quiet reviews on", g, err)
 	}
-	if w, _, _ := e.d.Repos.Get(ctx, "main", "acme/widgets"); w.QuietReviews {
-		t.Errorf("config repository = %+v, want the default, off", w)
+	if w, ok, err := e.d.Repos.Get(ctx, "main", "acme/widgets"); err != nil || !ok || w.QuietReviews {
+		t.Errorf("config repository = %+v, %v, %v; want the default, off", w, ok, err)
 	}
 
 	rec := e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"quietReviews": "x"})
