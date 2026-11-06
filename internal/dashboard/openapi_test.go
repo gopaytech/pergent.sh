@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,6 +30,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/readiness"
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/skillfetch"
@@ -1183,12 +1185,68 @@ func TestOpenAPIEveryViewTypeHasASchema(t *testing.T) {
 	}
 }
 
-// The enums of the spec are the code's constants.
+// stringConsts reads the string constants of the Go files matching glob (from
+// the repo root) whose name starts with prefix; with block set, only those of
+// the const declaration that holds the constant of that name. A constant that
+// is not a literal, such as an alias of another package's, is left out.
+func stringConsts(t *testing.T, glob, prefix, block string) map[string]string {
+	t.Helper()
+	names, err := filepath.Glob(filepath.Join(repoRoot(t), glob))
+	if err != nil {
+		t.Fatal(err)
+	}
+	consts := map[string]string{}
+	fset := token.NewFileSet()
+	for _, name := range names {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			if block != "" && !slices.ContainsFunc(gd.Specs, func(spec ast.Spec) bool {
+				return slices.ContainsFunc(spec.(*ast.ValueSpec).Names, func(id *ast.Ident) bool { return id.Name == block })
+			}) {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs := spec.(*ast.ValueSpec)
+				for i, id := range vs.Names {
+					if i >= len(vs.Values) || !strings.HasPrefix(id.Name, prefix) {
+						continue
+					}
+					if v, ok := stringLit(vs.Values[i]); ok {
+						consts[id.Name] = v
+					}
+				}
+			}
+		}
+	}
+	return consts
+}
+
+// The enums of the spec are the code's constants. The lists below name the
+// constants known today; the source is read as well, so one added later fails
+// here until it is in a list and in openapi.yaml.
 func TestOpenAPIEnumsMatchCode(t *testing.T) {
 	d := loadSpec(t)
 	outcomes := []string{OutcomeRunning, OutcomeApproved, OutcomeBlocking, OutcomeDraft, OutcomeNoBlocking,
 		OutcomeFailed, OutcomeSuperseded, OutcomeSkipped, OutcomeUnknown}
 	roles := []string{store.RoleAdmin, store.RoleMaintainer, store.RoleViewer}
+	kinds := []string{store.AccountPassword, store.AccountPlatform}
+	scanStates := []string{string(store.ScanQueued), string(store.ScanRunning), string(store.ScanDone), string(store.ScanFailed)}
+	fetchStatuses := []string{store.FetchRunning, store.FetchDone, store.FetchFailed}
+	fetchPurposes := []string{store.FetchInstall, store.FetchUpdate}
+	healths := []string{healthOK, healthNeedsAttention}
+	approvers := []string{approverKindApp, approverKindReviewApp, approverKindToken}
+	platforms := []string{config.PlatformGitLab, config.PlatformGitHub}
+	itemStates := []string{readiness.Passed, readiness.Warning, readiness.Missing, readiness.Unknown}
 	cases := []struct {
 		schema, prop string
 		want         []string
@@ -1198,16 +1256,41 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 		{"TeamView", "role", roles},
 		{"ReviewDetailView", "role", append(append([]string{}, roles...), "")},
 		{"RepositoryDetailView", "role", roles},
-		{"UserView", "kind", []string{store.AccountPassword, store.AccountPlatform}},
-		{"meView", "kind", []string{store.AccountPassword, store.AccountPlatform}},
-		{"ScanView", "state", []string{string(store.ScanQueued), string(store.ScanRunning), string(store.ScanDone), string(store.ScanFailed)}},
-		{"SkillFetchView", "status", []string{store.FetchRunning, store.FetchDone, store.FetchFailed}},
-		{"SkillFetchView", "purpose", []string{store.FetchInstall, store.FetchUpdate}},
-		{"RepositoryView", "health", []string{healthOK, healthNeedsAttention}},
-		{"IntegrationView", "approver", []string{approverKindApp, approverKindReviewApp, approverKindToken}},
-		{"InstanceAdminView", "approver", []string{approverKindApp, approverKindReviewApp, approverKindToken}},
-		{"InstanceView", "platform", []string{"gitlab", "github"}},
-		{"readiness.Item", "state", []string{readiness.Passed, readiness.Warning, readiness.Missing, readiness.Unknown}},
+		{"UserView", "kind", kinds},
+		{"meView", "kind", kinds},
+		{"ScanView", "state", scanStates},
+		{"SkillFetchView", "status", fetchStatuses},
+		{"SkillFetchView", "purpose", fetchPurposes},
+		{"RepositoryView", "health", healths},
+		{"IntegrationView", "approver", approvers},
+		{"InstanceAdminView", "approver", approvers},
+		{"InstanceView", "platform", platforms},
+		{"readiness.Item", "state", itemStates},
+	}
+	families := []struct {
+		glob, prefix, block string
+		known               [][]string
+	}{
+		{"internal/store/*.go", "Outcome", "", [][]string{outcomes}},
+		{"internal/store/*.go", "Role", "", [][]string{roles}},
+		{"internal/store/*.go", "Account", "", [][]string{kinds}},
+		{"internal/store/*.go", "Scan", "", [][]string{scanStates}},
+		{"internal/store/*.go", "Fetch", "", [][]string{fetchStatuses, fetchPurposes}},
+		{"internal/dashboard/*.go", "health", "", [][]string{healths}},
+		{"internal/dashboard/*.go", "approverKind", "", [][]string{approvers}},
+		{"internal/config/*.go", "Platform", "", [][]string{platforms}},
+		{"internal/readiness/*.go", "", "Passed", [][]string{itemStates}},
+	}
+	for _, f := range families {
+		consts := stringConsts(t, f.glob, f.prefix, f.block)
+		if len(consts) == 0 {
+			t.Errorf("no constant %s* in %s: the test reads the wrong place", f.prefix, f.glob)
+		}
+		for name, v := range consts {
+			if !slices.Contains(slices.Concat(f.known...), v) {
+				t.Errorf("%s (%s) is a constant no enum here lists: add it to this test and to openapi.yaml", name, f.glob)
+			}
+		}
 	}
 	for _, c := range cases {
 		prop := specMap(specMap(d.schema(c.schema)["properties"])[c.prop])
