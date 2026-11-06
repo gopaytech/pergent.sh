@@ -209,19 +209,68 @@ type rangeVar struct {
 	start, end token.Pos
 }
 
-func isMuxHandleCall(call *ast.CallExpr) (isHandle, isMux bool) {
+// muxVars returns the names one declaration binds to a mux: a *http.ServeMux
+// parameter, or a variable set from http.NewServeMux.
+func muxVars(decl ast.Decl) map[string]bool {
+	isMuxType := func(e ast.Expr) bool {
+		if star, ok := e.(*ast.StarExpr); ok {
+			e = star.X
+		}
+		sel, ok := e.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "ServeMux" {
+			return false
+		}
+		pkg, _ := sel.X.(*ast.Ident)
+		return pkg != nil && pkg.Name == "http"
+	}
+	vars := map[string]bool{}
+	ast.Inspect(decl, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.Field:
+			if isMuxType(x.Type) {
+				for _, name := range x.Names {
+					vars[name.Name] = true
+				}
+			}
+		case *ast.ValueSpec:
+			if x.Type != nil && isMuxType(x.Type) {
+				for _, name := range x.Names {
+					vars[name.Name] = true
+				}
+			}
+		case *ast.AssignStmt:
+			if len(x.Lhs) != 1 || len(x.Rhs) != 1 {
+				return true
+			}
+			id, _ := x.Lhs[0].(*ast.Ident)
+			call, _ := x.Rhs[0].(*ast.CallExpr)
+			if id == nil || call == nil {
+				return true
+			}
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "NewServeMux" {
+				if pkg, _ := sel.X.(*ast.Ident); pkg != nil && pkg.Name == "http" {
+					vars[id.Name] = true
+				}
+			}
+		}
+		return true
+	})
+	return vars
+}
+
+func isMuxHandleCall(call *ast.CallExpr, muxes map[string]bool) (isHandle, isMux bool) {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok || (sel.Sel.Name != "Handle" && sel.Sel.Name != "HandleFunc") || len(call.Args) != 2 {
 		return false, false
 	}
-	recv, _ := sel.X.(*ast.Ident)
-	name := ""
-	if recv != nil {
-		name = strings.ToLower(recv.Name)
+	// A log handler's Handle(ctx, record) is the one other shape that is
+	// none of ours. Any other receiver has to be proved a mux, or the test
+	// fails: a route on one it can't tell would be a hole in the check.
+	if ctx, ok := call.Args[0].(*ast.Ident); ok && ctx.Name == "ctx" {
+		return false, false
 	}
-	// Only a receiver that reads as a mux has to be understood; any other
-	// two-argument Handle call (a logging handler's, say) is none of ours.
-	return true, strings.Contains(name, "mux") || name == "http" || strings.Contains(name, "router")
+	recv, _ := sel.X.(*ast.Ident)
+	return true, recv != nil && (recv.Name == "http" || muxes[recv.Name])
 }
 
 func stringLit(e ast.Expr) (string, bool) {
@@ -242,6 +291,7 @@ func scanRoutesInFile(fset *token.FileSet, file *ast.File) (routes []codeRoute, 
 		return fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line)
 	}
 	for _, decl := range file.Decls {
+		muxes := muxVars(decl)
 		helpers := map[string]*routeHelper{}
 		var ranges []rangeVar
 		ast.Inspect(decl, func(n ast.Node) bool {
@@ -262,7 +312,7 @@ func scanRoutesInFile(fset *token.FileSet, file *ast.File) (routes []codeRoute, 
 					if !ok {
 						return true
 					}
-					if isHandle, _ := isMuxHandleCall(call); !isHandle {
+					if isHandle, _ := isMuxHandleCall(call, muxes); !isHandle {
 						return true
 					}
 					switch a := call.Args[0].(type) {
@@ -318,7 +368,11 @@ func scanRoutesInFile(fset *token.FileSet, file *ast.File) (routes []codeRoute, 
 			if !ok {
 				return true
 			}
-			if isHandle, isMux := isMuxHandleCall(call); isHandle {
+			if isHandle, isMux := isMuxHandleCall(call, muxes); isHandle {
+				if !isMux {
+					unresolved = append(unresolved, where(call.Pos())+": a Handle call on something this test can't prove is a *http.ServeMux")
+					return true
+				}
 				if insideHelper(call.Pos()) {
 					return true // read through the helper's callers
 				}
@@ -343,9 +397,7 @@ func scanRoutesInFile(fset *token.FileSet, file *ast.File) (routes []codeRoute, 
 						}
 					}
 				}
-				if isMux {
-					unresolved = append(unresolved, where(call.Pos())+": a route pattern this test can't read")
-				}
+				unresolved = append(unresolved, where(call.Pos())+": a route pattern this test can't read")
 				return true
 			}
 			if id, ok := call.Fun.(*ast.Ident); ok {
@@ -565,6 +617,17 @@ func TestOpenAPIWildcardSubroutesAreDocumented(t *testing.T) {
 	suffixes := map[string]string{}
 	for _, file := range files {
 		ast.Inspect(file, func(n ast.Node) bool {
+			// reviewAction takes the last path segment as action and
+			// compares it: action != "rerun".
+			if cmp, ok := n.(*ast.BinaryExpr); ok && (cmp.Op == token.EQL || cmp.Op == token.NEQ) {
+				if id, _ := cmp.X.(*ast.Ident); id != nil && id.Name == "action" {
+					if v, ok := stringLit(cmp.Y); ok {
+						pos := fset.Position(cmp.Pos())
+						suffixes["/"+v] = fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line)
+					}
+				}
+				return true
+			}
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true
@@ -590,6 +653,11 @@ func TestOpenAPIWildcardSubroutesAreDocumented(t *testing.T) {
 	}
 	if len(suffixes) < 6 {
 		t.Fatalf("found only %d wildcard suffixes in the source (%v): the test no longer reads the handlers", len(suffixes), suffixes)
+	}
+	for _, s := range []string{"/rerun", "/dismiss", "/restore"} {
+		if suffixes[s] == "" {
+			t.Errorf("the review action %q was not found in the source: the test no longer reads reviewAction", s)
+		}
 	}
 	var wild []specOp
 	for _, op := range d.operations() {
@@ -649,6 +717,30 @@ func (d *D) routes(mux *http.ServeMux) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("routes = %v, want %v", got, want)
+	}
+
+	routes, unresolved = scanSource(t, `package x
+func f(m *http.ServeMux) {
+	m.Handle("GET /h", h)
+	n := http.NewServeMux()
+	n.Handle("GET /i", h)
+	var o http.ServeMux
+	o.HandleFunc("GET /j", h)
+	http.Handle("GET /k", h)
+}`)
+	if len(unresolved) != 0 || len(routes) != 4 {
+		t.Errorf("a mux is told by its type, not its name: routes %v, unresolved %v", routes, unresolved)
+	}
+	for name, src := range map[string]string{
+		"a variable pattern on a mux of any name": `func f(m *http.ServeMux, p string) { m.Handle(p, h) }`,
+		"a receiver not proved a mux":             `func f() { logger.Handle("GET /x", h) }`,
+		"a mux held in a field":                   `func f(s *S) { s.mux.Handle("GET /x", h) }`,
+		"a mux made by a function":                `func f() { m := newMux(); m.Handle("GET /x", h) }`,
+	} {
+		routes, unresolved = scanSource(t, "package x\n"+src)
+		if len(unresolved) != 1 || len(routes) != 0 {
+			t.Errorf("%s must be reported as unresolved: routes %v, unresolved %v", name, routes, unresolved)
+		}
 	}
 
 	_, unresolved = scanSource(t, `package x

@@ -123,8 +123,7 @@ paths:
           in: header
           required: false
           description: Only `Merge Request Hook` and `Note Hook` are acted on.
-          schema:
-            type: string
+          schema: {type: string}
       requestBody:
         required: true
         description: The GitLab event payload. At most 5 MiB.
@@ -136,28 +135,23 @@ paths:
       responses:
         '200':
           description: Handled, or ignored (other event, unknown project, unusable payload). No body.
-        '400':
-          $ref: '#/components/responses/PlainTextError'
+        '400': {$ref: '#/components/responses/PlainTextError'}
         '401':
           description: The token is missing or wrong (or the instance has no secret).
           content:
             text/plain:
-              schema:
-                type: string
+              schema: {type: string}
         '404':
           description: No GitLab instance of that name.
           content:
             text/plain:
-              schema:
-                type: string
+              schema: {type: string}
         '413':
           description: The body is over 5 MiB.
           content:
             text/plain:
-              schema:
-                type: string
-        '500':
-          $ref: '#/components/responses/PlainTextError'
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
   /webhooks/github/{instance}:
     post:
       operationId: receiveGitHubWebhook
@@ -184,8 +178,7 @@ paths:
           in: header
           required: false
           description: Only `pull_request`, `issue_comment` and `pull_request_review_comment` are acted on.
-          schema:
-            type: string
+          schema: {type: string}
       requestBody:
         required: true
         description: The GitHub event payload. At most 5 MiB.
@@ -197,28 +190,23 @@ paths:
       responses:
         '200':
           description: Handled, or ignored. No body.
-        '400':
-          $ref: '#/components/responses/PlainTextError'
+        '400': {$ref: '#/components/responses/PlainTextError'}
         '401':
           description: The signature is missing or wrong (or the instance has no secret).
           content:
             text/plain:
-              schema:
-                type: string
+              schema: {type: string}
         '404':
           description: No GitHub instance of that name.
           content:
             text/plain:
-              schema:
-                type: string
+              schema: {type: string}
         '413':
           description: The body is over 5 MiB.
           content:
             text/plain:
-              schema:
-                type: string
-        '500':
-          $ref: '#/components/responses/PlainTextError'
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
   # ------------------------------------------------------------ job callbacks
   /runs/{id}/result:
     post:
@@ -263,8 +251,7 @@ paths:
         description: The result. At most 11 MiB (pergent caps its own at 10 MB).
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/result.Result'
+            schema: {$ref: '#/components/schemas/result.Result'}
       responses:
         '200':
           description: The result was recorded (or dropped, for a superseded run). No body.
@@ -272,28 +259,23 @@ paths:
           description: The body could not be read, is not JSON, or is not a usable result. The run is recorded as failed.
           content:
             text/plain:
-              schema:
-                type: string
+              schema: {type: string}
         '401':
           description: The bearer token is missing, not this run's, expired, or the run is unknown.
           content:
             text/plain:
-              schema:
-                type: string
+              schema: {type: string}
         '409':
           description: A result for this run was received already.
           content:
             text/plain:
-              schema:
-                type: string
+              schema: {type: string}
         '413':
           description: The body is over 11 MiB.
           content:
             text/plain:
-              schema:
-                type: string
-        '500':
-          $ref: '#/components/responses/PlainTextError'
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
   /skill-fetches/{id}/result:
     post:
       operationId: postSkillFetchResult
@@ -320,33 +302,27 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/skillfetch.JobResult'
+            schema: {$ref: '#/components/schemas/skillfetch.JobResult'}
       responses:
         '204':
           description: Recorded.
-        '400':
-          $ref: '#/components/responses/PlainTextError'
+        '400': {$ref: '#/components/responses/PlainTextError'}
         '401':
           description: The bearer token is missing or is not this fetch's.
           content:
             text/plain:
-              schema:
-                type: string
+              schema: {type: string}
         '409':
           description: The fetch has ended (a result came, or it gave up).
           content:
             text/plain:
-              schema:
-                type: string
+              schema: {type: string}
         '413':
           description: The body is over 4 MiB.
           content:
             text/plain:
-              schema:
-                type: string
-        '500':
-          $ref: '#/components/responses/PlainTextError'
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
   /readiness-scans/{id}/result:
     post:
       operationId: postReadinessScanResult
@@ -365,39 +341,32 @@ paths:
           in: path
           required: true
           description: The scan's id.
-          schema:
-            type: string
+          schema: {type: string}
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/readiness.JobResult'
+            schema: {$ref: '#/components/schemas/readiness.JobResult'}
       responses:
         '204':
           description: Recorded.
-        '400':
-          $ref: '#/components/responses/PlainTextError'
+        '400': {$ref: '#/components/responses/PlainTextError'}
         '401':
           description: The bearer token is missing or is not this scan's.
           content:
             text/plain:
-              schema:
-                type: string
+              schema: {type: string}
         '409':
           description: The scan has ended.
           content:
             text/plain:
-              schema:
-                type: string
+              schema: {type: string}
         '413':
           description: The body is over 1 MiB.
           content:
             text/plain:
-              schema:
-                type: string
-        '500':
-          $ref: '#/components/responses/PlainTextError'
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
   /healthz:
     get:
       operationId: getHealth
@@ -434,18 +403,15 @@ paths:
           description: Redirect to the provider's authorize URL.
           headers:
             Location:
-              schema:
-                type: string
+              schema: {type: string}
             Set-Cookie:
               description: The `__Host-pergent_oauth_state` cookie (signed, 10 minutes).
-              schema:
-                type: string
+              schema: {type: string}
         '404':
           description: That instance has no sign-in on that platform, or is being removed.
           content:
             text/plain:
-              schema:
-                type: string
+              schema: {type: string}
   /auth/{platform}/{instance}/callback:
     get:
       operationId: finishSignIn
@@ -464,17 +430,14 @@ paths:
         - $ref: '#/components/parameters/InstanceName'
         - name: state
           in: query
-          schema:
-            type: string
+          schema: {type: string}
         - name: code
           in: query
-          schema:
-            type: string
+          schema: {type: string}
         - name: error
           in: query
           description: Set by the provider when the user refused.
-          schema:
-            type: string
+          schema: {type: string}
       responses:
         '303':
           description: Signed in. Redirect to `/`.
@@ -485,30 +448,24 @@ paths:
                 const: /
             Set-Cookie:
               description: The `__Host-pergent_session` cookie (7 days at most, 8 hours idle).
-              schema:
-                type: string
-        '400':
-          $ref: '#/components/responses/PlainTextError'
+              schema: {type: string}
+        '400': {$ref: '#/components/responses/PlainTextError'}
         '403':
           description: The provider reported an error (the user refused).
           content:
             text/plain:
-              schema:
-                type: string
+              schema: {type: string}
         '404':
           description: That instance has no sign-in on that platform, or is being removed.
           content:
             text/plain:
-              schema:
-                type: string
-        '500':
-          $ref: '#/components/responses/PlainTextError'
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
         '502':
           description: The provider could not be reached, or the user's repositories could not be checked.
           content:
             text/plain:
-              schema:
-                type: string
+              schema: {type: string}
   /auth/logout:
     post:
       operationId: signOut
@@ -526,10 +483,8 @@ paths:
       responses:
         '204':
           description: Signed out. The session cookie is cleared.
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '500':
-          $ref: '#/components/responses/InternalError'
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /auth/csrf:
     get:
       operationId: getLoginCsrf
@@ -543,12 +498,10 @@ paths:
           description: The token.
           headers:
             Set-Cookie:
-              schema:
-                type: string
+              schema: {type: string}
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/CSRFTokenBody'
+              schema: {$ref: '#/components/schemas/CSRFTokenBody'}
   /auth/password:
     post:
       operationId: signInWithPassword
@@ -568,40 +521,32 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/PasswordSignInRequest'
+            schema: {$ref: '#/components/schemas/PasswordSignInRequest'}
       responses:
         '204':
           description: Signed in.
           headers:
             Set-Cookie:
               description: The `__Host-pergent_session` cookie. The login CSRF cookie is cleared.
-              schema:
-                type: string
-        '400':
-          $ref: '#/components/responses/BadRequest'
+              schema: {type: string}
+        '400': {$ref: '#/components/responses/BadRequest'}
         '401':
           description: Wrong username or password, or the account is locked.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          $ref: '#/components/responses/Forbidden'
+              schema: {$ref: '#/components/schemas/ErrorBody'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '429':
           description: Too many sign-in attempts from this client.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/ErrorBody'}
+        '500': {$ref: '#/components/responses/InternalError'}
         '503':
           description: No hashing slot was free in time.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
+              schema: {$ref: '#/components/schemas/ErrorBody'}
   /auth/password/change:
     post:
       operationId: changePassword
@@ -620,35 +565,28 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/PasswordChangeRequest'
+            schema: {$ref: '#/components/schemas/PasswordChangeRequest'}
       responses:
         '204':
           description: Changed.
-        '400':
-          $ref: '#/components/responses/BadRequest'
+        '400': {$ref: '#/components/responses/BadRequest'}
         '401':
           description: Not signed in, or the current password is wrong, or the account is locked.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          $ref: '#/components/responses/Forbidden'
+              schema: {$ref: '#/components/schemas/ErrorBody'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '429':
           description: Too many attempts from this client.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/ErrorBody'}
+        '500': {$ref: '#/components/responses/InternalError'}
         '503':
           description: No hashing slot was free in time.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
+              schema: {$ref: '#/components/schemas/ErrorBody'}
   /api/instances:
     get:
       operationId: listSignInInstances
@@ -662,8 +600,7 @@ paths:
           description: The instances with a sign-in now, GitLab first.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/instancesView'
+              schema: {$ref: '#/components/schemas/instancesView'}
   /api/me:
     get:
       operationId: getMe
@@ -681,12 +618,9 @@ paths:
           description: The user.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/meView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/meView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '500': {$ref: '#/components/responses/InternalError'}
   # ------------------------------------------------------ overview and reviews
   /api/overview:
     get:
@@ -716,16 +650,11 @@ paths:
           description: The overview.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/OverviewView'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/OverviewView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/reviews:
     get:
       operationId: listReviews
@@ -742,16 +671,13 @@ paths:
         - name: project
           in: query
           description: Keep one repository (a path, on `instance` when that is given, else on any).
-          schema:
-            type: string
+          schema: {type: string}
         - name: instance
           in: query
-          schema:
-            type: string
+          schema: {type: string}
         - name: outcome
           in: query
-          schema:
-            $ref: '#/components/schemas/Outcome'
+          schema: {$ref: '#/components/schemas/Outcome'}
         - name: days
           in: query
           description: Leave out reviews last updated longer ago.
@@ -763,23 +689,17 @@ paths:
         - name: cursor
           in: query
           description: A `nextCursor` of an earlier answer.
-          schema:
-            type: string
+          schema: {type: string}
       responses:
         '200':
           description: One page of reviews.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ReviewListView'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/ReviewListView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/reviews/{instance}/{project}/{number}:
     get:
       operationId: getReview
@@ -799,16 +719,11 @@ paths:
           description: The review.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ReviewDetailView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/ReviewDetailView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/reviews/{instance}/{project}/{number}/rerun:
     post:
       operationId: rerunReview
@@ -834,8 +749,7 @@ paths:
         required: false
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/RerunRequest'
+            schema: {$ref: '#/components/schemas/RerunRequest'}
       responses:
         '202':
           description: |
@@ -843,28 +757,19 @@ paths:
             running), `nothing failed` or `whole review`.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/StatusBody'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
+              schema: {$ref: '#/components/schemas/StatusBody'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
         '429':
           description: A re-run cap (per change or per repository and UTC day) is reached.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          $ref: '#/components/responses/InternalError'
-        '502':
-          $ref: '#/components/responses/BadGateway'
+              schema: {$ref: '#/components/schemas/ErrorBody'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '502': {$ref: '#/components/responses/BadGateway'}
   /api/reviews/{instance}/{project}/{number}/dismiss:
     post:
       operationId: dismissFinding
@@ -890,29 +795,20 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/DismissRequest'
+            schema: {$ref: '#/components/schemas/DismissRequest'}
       responses:
         '200':
           description: '`status` is `dismissed` or `already dismissed`.'
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/StatusBody'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalError'
-        '502':
-          $ref: '#/components/responses/BadGateway'
+              schema: {$ref: '#/components/schemas/StatusBody'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '502': {$ref: '#/components/responses/BadGateway'}
   /api/reviews/{instance}/{project}/{number}/restore:
     post:
       operationId: restoreFinding
@@ -932,25 +828,18 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/RestoreRequest'
+            schema: {$ref: '#/components/schemas/RestoreRequest'}
       responses:
         '200':
           description: '`status` is `restored` or `not dismissed`.'
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/StatusBody'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/StatusBody'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/runs/{id}:
     get:
       operationId: getRun
@@ -970,16 +859,11 @@ paths:
           description: The run.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/RunDetailView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/RunDetailView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/runs/{id}/log:
     get:
       operationId: getRunLog
@@ -995,20 +879,15 @@ paths:
           description: The log text.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/LogView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
+              schema: {$ref: '#/components/schemas/LogView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '404':
           description: No such run, or no log was kept.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/ErrorBody'}
+        '500': {$ref: '#/components/responses/InternalError'}
   # ------------------------------------------------------------- repositories
   /api/repositories:
     get:
@@ -1025,14 +904,10 @@ paths:
             application/json:
               schema:
                 type: array
-                items:
-                  $ref: '#/components/schemas/RepositoryView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '500':
-          $ref: '#/components/responses/InternalError'
+                items: {$ref: '#/components/schemas/RepositoryView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
     post:
       operationId: switchOnRepository
       tags: [Repositories]
@@ -1054,29 +929,20 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/SwitchOnRequest'
+            schema: {$ref: '#/components/schemas/SwitchOnRequest'}
       responses:
         '201':
           description: Switched on. The project is spelled as the platform spells it.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/RepositoryDetailView'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalError'
-        '502':
-          $ref: '#/components/responses/BadGateway'
+              schema: {$ref: '#/components/schemas/RepositoryDetailView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '502': {$ref: '#/components/responses/BadGateway'}
   /api/repositories/available:
     get:
       operationId: listAvailableRepositories
@@ -1103,22 +969,16 @@ paths:
           description: The repositories.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/AvailableView'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/AvailableView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
         '502':
           description: GitLab or GitHub could not be asked, or nothing could be read in time.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
+              schema: {$ref: '#/components/schemas/ErrorBody'}
   /api/repositories/{instance}/{project}:
     get:
       operationId: getRepository
@@ -1144,16 +1004,11 @@ paths:
           description: The repository.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/RepositoryDetailView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/RepositoryDetailView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
     delete:
       operationId: switchOffRepository
       tags: [Repositories]
@@ -1175,18 +1030,12 @@ paths:
           description: Switched off. `repo.on` is false and the settings are the defaults.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/RepositoryDetailView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/RepositoryDetailView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/repositories/{instance}/{project}/inputs:
     get:
       operationId: getRepositoryInputs
@@ -1209,24 +1058,17 @@ paths:
           description: The inputs.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/InputsView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-        '502':
-          $ref: '#/components/responses/BadGateway'
+              schema: {$ref: '#/components/schemas/InputsView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '502': {$ref: '#/components/responses/BadGateway'}
         '503':
           description: The repository is not set up yet (reconcile has not reached it).
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
+              schema: {$ref: '#/components/schemas/ErrorBody'}
   /api/repositories/{instance}/{project}/readiness:
     get:
       operationId: getRepositoryReadiness
@@ -1249,16 +1091,11 @@ paths:
           description: The scans and the checklist.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ReadinessView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/ReadinessView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/repositories/{instance}/{project}/past-dismissals:
     get:
       operationId: listPastDismissals
@@ -1282,16 +1119,11 @@ paths:
             application/json:
               schema:
                 type: array
-                items:
-                  $ref: '#/components/schemas/PastDismissalView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
+                items: {$ref: '#/components/schemas/PastDismissalView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/repositories/{instance}/{project}/skill-results:
     get:
       operationId: listSkillResults
@@ -1324,18 +1156,12 @@ paths:
             application/json:
               schema:
                 type: array
-                items:
-                  $ref: '#/components/schemas/SkillResultView'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
+                items: {$ref: '#/components/schemas/SkillResultView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/repositories/{instance}/{project}/settings:
     put:
       operationId: updateRepositorySettings
@@ -1363,27 +1189,19 @@ paths:
         description: At most 64 KiB.
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/RepositorySettingsRequest'
+            schema: {$ref: '#/components/schemas/RepositorySettingsRequest'}
       responses:
         '200':
           description: The repository with its new settings.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/RepositoryDetailView'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/RepositoryDetailView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/repositories/{instance}/{project}/settings/reset:
     post:
       operationId: resetRepositorySettings
@@ -1408,18 +1226,12 @@ paths:
           description: The repository with its default settings.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/RepositoryDetailView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/RepositoryDetailView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/repositories/{instance}/{project}/readiness/scan:
     post:
       operationId: scanRepositoryNow
@@ -1444,33 +1256,25 @@ paths:
           description: The scan is queued.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ScanStartedBody'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
+              schema: {$ref: '#/components/schemas/ScanStartedBody'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
         '409':
           description: A scan is already queued or running. `scan` is that scan.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ScanBusyBody'
+              schema: {$ref: '#/components/schemas/ScanBusyBody'}
         '429':
           description: The repository was scanned less than 5 minutes ago.
           headers:
             Retry-After:
               description: Seconds to wait.
-              schema:
-                type: integer
+              schema: {type: integer}
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ScanTooSoonBody'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/ScanTooSoonBody'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/repositories/{instance}/{project}/past-dismissals/stop:
     post:
       operationId: stopUsingPastDismissal
@@ -1493,25 +1297,18 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/StopUsingRequest'
+            schema: {$ref: '#/components/schemas/StopUsingRequest'}
       responses:
         '200':
           description: '`status` is `stopped` or `not teaching`.'
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/StatusBody'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/StatusBody'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   # ------------------------------------------------------------------- skills
   /api/skills:
     get:
@@ -1532,14 +1329,10 @@ paths:
             application/json:
               schema:
                 type: array
-                items:
-                  $ref: '#/components/schemas/LibrarySkillView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '500':
-          $ref: '#/components/responses/InternalError'
+                items: {$ref: '#/components/schemas/LibrarySkillView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/skills/{name}:
     get:
       operationId: getSkill
@@ -1556,16 +1349,11 @@ paths:
           description: The skill.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/SkillDetailView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/SkillDetailView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/skills/{name}/versions/{v}:
     get:
       operationId: getSkillVersion
@@ -1589,16 +1377,11 @@ paths:
           description: The version.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/SkillVersionDetailView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/SkillVersionDetailView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/skills:
     post:
       operationId: createSkill
@@ -1619,25 +1402,18 @@ paths:
         description: At most 1 MiB.
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/CreateSkillRequest'
+            schema: {$ref: '#/components/schemas/CreateSkillRequest'}
       responses:
         '201':
           description: Saved as version 1.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/SkillWrittenView'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/SkillWrittenView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/skills/{name}:
     put:
       operationId: updateSkill
@@ -1658,27 +1434,19 @@ paths:
         description: At most 1 MiB.
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/UpdateSkillRequest'
+            schema: {$ref: '#/components/schemas/UpdateSkillRequest'}
       responses:
         '200':
           description: Saved. `version` is the new one.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/SkillWrittenView'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/SkillWrittenView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
     delete:
       operationId: deleteSkill
       tags: [Skills]
@@ -1695,20 +1463,15 @@ paths:
       responses:
         '204':
           description: Deleted.
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
         '409':
           description: The skill is in use.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/SkillInUseView'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/SkillInUseView'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/skills/{name}/copy:
     post:
       operationId: copySkill
@@ -1725,27 +1488,19 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/CopySkillRequest'
+            schema: {$ref: '#/components/schemas/CopySkillRequest'}
       responses:
         '201':
           description: Saved as version 1 of the new name.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/SkillWrittenView'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/SkillWrittenView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/skill-fetches:
     post:
       operationId: startSkillFetch
@@ -1765,31 +1520,23 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/StartSkillFetchRequest'
+            schema: {$ref: '#/components/schemas/StartSkillFetchRequest'}
       responses:
         '202':
           description: The read was started.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/SkillFetchStartedView'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '500':
-          $ref: '#/components/responses/InternalError'
-        '502':
-          $ref: '#/components/responses/BadGateway'
+              schema: {$ref: '#/components/schemas/SkillFetchStartedView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '502': {$ref: '#/components/responses/BadGateway'}
         '503':
           description: Installing skills is not set up.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
+              schema: {$ref: '#/components/schemas/ErrorBody'}
   /api/admin/skill-fetches/{id}:
     get:
       operationId: getSkillFetch
@@ -1808,16 +1555,11 @@ paths:
           description: The read.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/SkillFetchView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/SkillFetchView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/skill-fetches/{id}/install:
     post:
       operationId: installSkills
@@ -1838,8 +1580,7 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/InstallSkillsRequest'
+            schema: {$ref: '#/components/schemas/InstallSkillsRequest'}
       responses:
         '200':
           description: One result for each name.
@@ -1847,20 +1588,13 @@ paths:
             application/json:
               schema:
                 type: array
-                items:
-                  $ref: '#/components/schemas/SkillFetchResultView'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalError'
+                items: {$ref: '#/components/schemas/SkillFetchResultView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/skill-fetches/{id}/update:
     post:
       operationId: updateSkills
@@ -1880,8 +1614,7 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/UpdateSkillsRequest'
+            schema: {$ref: '#/components/schemas/UpdateSkillsRequest'}
       responses:
         '200':
           description: One result for each name.
@@ -1889,20 +1622,13 @@ paths:
             application/json:
               schema:
                 type: array
-                items:
-                  $ref: '#/components/schemas/SkillFetchResultView'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalError'
+                items: {$ref: '#/components/schemas/SkillFetchResultView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   # ------------------------------------------------------------- organization
   /api/users:
     get:
@@ -1923,14 +1649,10 @@ paths:
             application/json:
               schema:
                 type: array
-                items:
-                  $ref: '#/components/schemas/UserView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '500':
-          $ref: '#/components/responses/InternalError'
+                items: {$ref: '#/components/schemas/UserView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/users/{id}:
     delete:
       operationId: deleteUser
@@ -1951,16 +1673,11 @@ paths:
       responses:
         '204':
           description: Removed.
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalError'
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/accounts:
     post:
       operationId: createPasswordAccount
@@ -1980,31 +1697,23 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/CreateAccountRequest'
+            schema: {$ref: '#/components/schemas/CreateAccountRequest'}
       responses:
         '201':
           description: Created. The only time the password is shown.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/NewAccountView'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/NewAccountView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
         '503':
           description: No hashing slot was free in time.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
+              schema: {$ref: '#/components/schemas/ErrorBody'}
   /api/teams:
     get:
       operationId: listTeams
@@ -2024,14 +1733,10 @@ paths:
             application/json:
               schema:
                 type: array
-                items:
-                  $ref: '#/components/schemas/TeamView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '500':
-          $ref: '#/components/responses/InternalError'
+                items: {$ref: '#/components/schemas/TeamView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
     post:
       operationId: createTeam
       tags: [Organization]
@@ -2045,25 +1750,18 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/CreateTeamRequest'
+            schema: {$ref: '#/components/schemas/CreateTeamRequest'}
       responses:
         '201':
           description: Created.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/TeamView'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/TeamView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/teams/{id}:
     put:
       operationId: updateTeam
@@ -2087,27 +1785,19 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/UpdateTeamRequest'
+            schema: {$ref: '#/components/schemas/UpdateTeamRequest'}
       responses:
         '200':
           description: The team as saved.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/TeamView'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/TeamView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
     delete:
       operationId: deleteTeam
       tags: [Organization]
@@ -2124,16 +1814,11 @@ paths:
       responses:
         '204':
           description: Removed.
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalError'
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/audit:
     get:
       operationId: listAudit
@@ -2163,16 +1848,11 @@ paths:
           description: One page.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/AuditPageView'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/AuditPageView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
   # ------------------------------------------------- instances and settings
   /api/integrations:
     get:
@@ -2189,23 +1869,17 @@ paths:
         - name: instance
           in: query
           description: For an operator, the instance to describe.
-          schema:
-            type: string
+          schema: {type: string}
       responses:
         '200':
           description: The integration.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/IntegrationView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/IntegrationView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/settings:
     get:
       operationId: getAdminSettings
@@ -2220,14 +1894,10 @@ paths:
           description: The settings.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/AdminSettingsView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/AdminSettingsView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/instances:
     get:
       operationId: listInstances
@@ -2244,14 +1914,10 @@ paths:
             application/json:
               schema:
                 type: array
-                items:
-                  $ref: '#/components/schemas/InstanceAdminView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '500':
-          $ref: '#/components/responses/InternalError'
+                items: {$ref: '#/components/schemas/InstanceAdminView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
     post:
       operationId: addInstance
       tags: [Instances and settings]
@@ -2270,25 +1936,18 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/CreateInstanceRequest'
+            schema: {$ref: '#/components/schemas/CreateInstanceRequest'}
       responses:
         '201':
           description: Added.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/InstanceAdminView'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/InstanceAdminView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/instances/{name}:
     put:
       operationId: updateInstance
@@ -2308,27 +1967,19 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/UpdateInstanceRequest'
+            schema: {$ref: '#/components/schemas/UpdateInstanceRequest'}
       responses:
         '200':
           description: Changed.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/InstanceAdminView'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/InstanceAdminView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
     delete:
       operationId: removeInstance
       tags: [Instances and settings]
@@ -2349,18 +2000,12 @@ paths:
           description: '`status` is `removing`.'
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/StatusBody'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/StatusBody'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/instances/{name}/repositories:
     get:
       operationId: listInstanceRepositories
@@ -2385,20 +2030,13 @@ paths:
           description: The repositories.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/AvailableView'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalError'
-        '502':
-          $ref: '#/components/responses/BadGateway'
+              schema: {$ref: '#/components/schemas/AvailableView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '502': {$ref: '#/components/responses/BadGateway'}
   /api/admin/llm:
     get:
       operationId: getLLM
@@ -2413,14 +2051,10 @@ paths:
           description: The model.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/LLMAdminView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/LLMAdminView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
     put:
       operationId: putLLM
       tags: [Instances and settings]
@@ -2437,25 +2071,18 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/PutLLMRequest'
+            schema: {$ref: '#/components/schemas/PutLLMRequest'}
       responses:
         '200':
           description: Saved.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/LLMAdminView'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/LLMAdminView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/defaults:
     get:
       operationId: getDefaults
@@ -2470,14 +2097,10 @@ paths:
           description: The defaults.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/DefaultsView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/DefaultsView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
     put:
       operationId: putDefaults
       tags: [Instances and settings]
@@ -2495,23 +2118,17 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/DefaultsRequest'
+            schema: {$ref: '#/components/schemas/DefaultsRequest'}
       responses:
         '200':
           description: Saved.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/DefaultsView'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '500':
-          $ref: '#/components/responses/InternalError'
+              schema: {$ref: '#/components/schemas/DefaultsView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
 components:
   securitySchemes:
     sessionCookie:
@@ -2580,15 +2197,13 @@ components:
       in: path
       required: true
       description: The instance's name, as in the config or the dashboard.
-      schema:
-        type: string
+      schema: {type: string}
     InstancePathName:
       name: name
       in: path
       required: true
       description: The instance's name.
-      schema:
-        type: string
+      schema: {type: string}
     Platform:
       name: platform
       in: path
@@ -2604,8 +2219,7 @@ components:
         The repository's path, slashes sent as they are (`acme/widgets`). It
         stands for the part of the path between the instance and the end that
         names the operation.
-      schema:
-        type: string
+      schema: {type: string}
     Number:
       name: number
       in: path
@@ -2644,15 +2258,13 @@ components:
       in: path
       required: true
       description: The skill's name.
-      schema:
-        type: string
+      schema: {type: string}
   responses:
     Unauthorized:
       description: Not signed in (`not signed in`), or the session ended (`session expired`).
       content:
         application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorBody'
+          schema: {$ref: '#/components/schemas/ErrorBody'}
     Forbidden:
       description: |
         The session may not do this. `code` tells which kind: `csrf` (a write
@@ -2661,46 +2273,39 @@ components:
         operator, or the repository role).
       content:
         application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorBody'
+          schema: {$ref: '#/components/schemas/ErrorBody'}
     NotFound:
       description: |
         No such thing, or one the session cannot see: both are answered the
         same.
       content:
         application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorBody'
+          schema: {$ref: '#/components/schemas/ErrorBody'}
     BadRequest:
       description: The request is wrong. `error` says how, in words for the user.
       content:
         application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorBody'
+          schema: {$ref: '#/components/schemas/ErrorBody'}
     Conflict:
       description: The request conflicts with the current state (taken, in use, managed by the config, stale, not open). `error` says which.
       content:
         application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorBody'
+          schema: {$ref: '#/components/schemas/ErrorBody'}
     InternalError:
       description: A failure on the server. The message says nothing of the cause.
       content:
         application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorBody'
+          schema: {$ref: '#/components/schemas/ErrorBody'}
     BadGateway:
       description: The platform (GitLab or GitHub) could not be asked, or its answer could not be used.
       content:
         application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorBody'
+          schema: {$ref: '#/components/schemas/ErrorBody'}
     PlainTextError:
       description: A short plain-text message.
       content:
         text/plain:
-          schema:
-            type: string
+          schema: {type: string}
   schemas:
     # ------------------------------------------------------------- shared shapes
     ErrorBody:
@@ -2708,8 +2313,7 @@ components:
       description: 'The body of every JSON error: `{"error": "message"}`, with a `code` for a few.'
       required: [error]
       properties:
-        error:
-          type: string
+        error: {type: string}
         code:
           type: string
           description: Present on some 403s only.
@@ -2719,14 +2323,12 @@ components:
       description: A short word for what happened. The operation lists the values.
       required: [status]
       properties:
-        status:
-          type: string
+        status: {type: string}
     CSRFTokenBody:
       type: object
       required: [csrfToken]
       properties:
-        csrfToken:
-          type: string
+        csrfToken: {type: string}
     Outcome:
       type: string
       description: |
@@ -2744,8 +2346,7 @@ components:
       type: object
       required: [username, password]
       properties:
-        username:
-          type: string
+        username: {type: string}
         password:
           type: string
           format: password
@@ -2782,8 +2383,7 @@ components:
       type: object
       required: [fingerprint]
       properties:
-        fingerprint:
-          type: string
+        fingerprint: {type: string}
         reason:
           type: string
           description: Needed for a blocking finding. Up to 500 characters.
@@ -2791,14 +2391,12 @@ components:
       type: object
       required: [fingerprint]
       properties:
-        fingerprint:
-          type: string
+        fingerprint: {type: string}
     StopUsingRequest:
       type: object
       required: [fingerprint]
       properties:
-        fingerprint:
-          type: string
+        fingerprint: {type: string}
     CreateAccountRequest:
       type: object
       required: [username]
@@ -2837,8 +2435,7 @@ components:
         repos:
           type: array
           description: An empty `project` covers every repository of the instance. Empty for an admin team.
-          items:
-            $ref: '#/components/schemas/TeamRepoView'
+          items: {$ref: '#/components/schemas/TeamRepoView'}
     CreateInstanceRequest:
       type: object
       required: [name, platform]
@@ -2923,8 +2520,7 @@ components:
       type: object
       required: [name, content]
       properties:
-        name:
-          type: string
+        name: {type: string}
         content:
           type: string
           description: The skill's markdown, with its frontmatter.
@@ -2935,8 +2531,7 @@ components:
       type: object
       required: [content, version]
       properties:
-        content:
-          type: string
+        content: {type: string}
         version:
           type: integer
           minimum: 1
@@ -2953,12 +2548,9 @@ components:
       description: A repository of an instance (`instance` and `repo`), or a public `url`, not both. A platform admin may leave `instance` out.
       required: [ref]
       properties:
-        instance:
-          type: string
-        repo:
-          type: string
-        url:
-          type: string
+        instance: {type: string}
+        repo: {type: string}
+        url: {type: string}
         ref:
           type: string
           description: A branch or tag.
@@ -2980,8 +2572,7 @@ components:
           type: array
           minItems: 1
           maxItems: 200
-          items:
-            type: string
+          items: {type: string}
         addToDefaults:
           type: boolean
           default: false
@@ -2993,8 +2584,7 @@ components:
           type: array
           minItems: 1
           maxItems: 200
-          items:
-            type: string
+          items: {type: string}
     RepositorySettingsRequest:
       type: object
       description: |
@@ -3021,13 +2611,11 @@ components:
           type: [array, 'null']
           description: A non-empty list of library skill names, or null for the default list.
           minItems: 1
-          items:
-            type: string
+          items: {type: string}
         repoSkills:
           type: [array, 'null']
           description: The names of detected repository skills to turn on. Empty or null for none.
-          items:
-            type: string
+          items: {type: string}
         jobTimeoutSeconds:
           type: [integer, 'null']
           minimum: 60
@@ -3076,8 +2664,7 @@ components:
         skills:
           type: [array, 'null']
           description: Library skill names. Null or empty clears the list.
-          items:
-            type: string
+          items: {type: string}
         jobTimeoutSeconds:
           type: [integer, 'null']
           minimum: 60
@@ -3100,24 +2687,19 @@ components:
       type: object
       required: [scan]
       properties:
-        scan:
-          $ref: '#/components/schemas/ScanView'
+        scan: {$ref: '#/components/schemas/ScanView'}
     ScanBusyBody:
       type: object
       required: [error, scan]
       properties:
-        error:
-          type: string
-        scan:
-          $ref: '#/components/schemas/ScanView'
+        error: {type: string}
+        scan: {$ref: '#/components/schemas/ScanView'}
     ScanTooSoonBody:
       type: object
       required: [error, waitSeconds]
       properties:
-        error:
-          type: string
-        waitSeconds:
-          type: integer
+        error: {type: string}
+        waitSeconds: {type: integer}
     # ---------------------------------------------- schemas named after Go types
     # The dashboard's view types are in internal/dashboard (view.go,
     # dashboard.go); `readiness.`, `result.`, `skillfetch.` and `store.` are
@@ -3128,26 +2710,20 @@ components:
       type: object
       required: [instance, defaults, llm]
       properties:
-        instance:
-          type: string
-        defaults:
-          $ref: '#/components/schemas/DefaultsView'
-        llm:
-          $ref: '#/components/schemas/LLMView'
+        instance: {type: string}
+        defaults: {$ref: '#/components/schemas/DefaultsView'}
+        llm: {$ref: '#/components/schemas/LLMView'}
     AttentionView:
       description: One setup problem.
       type: object
       required: [instance, project, kind, message, updatedAt]
       properties:
-        instance:
-          type: string
+        instance: {type: string}
         project:
           type: string
           description: '"" for a problem of the whole instance.'
-        kind:
-          type: string
-        message:
-          type: string
+        kind: {type: string}
+        message: {type: string}
         updatedAt:
           type: string
           format: date-time
@@ -3158,8 +2734,7 @@ components:
       properties:
         entries:
           type: array
-          items:
-            $ref: '#/components/schemas/AuditView'
+          items: {$ref: '#/components/schemas/AuditView'}
         next:
           type: integer
           description: The `before` of the page after; 0 when the log has nothing older.
@@ -3168,8 +2743,7 @@ components:
       type: object
       required: [id, at, actor, action, instance, project, detail]
       properties:
-        id:
-          type: integer
+        id: {type: integer}
         at:
           type: string
           format: date-time
@@ -3177,8 +2751,7 @@ components:
           type: string
           description: '"alice (gitlab main)" for a platform account, "root (password)" for a password admin,
             "cli" for a password reset from the command line.'
-        action:
-          type: string
+        action: {type: string}
         instance:
           type: string
           description: '"" when it is not about a repository.'
@@ -3193,10 +2766,8 @@ components:
       type: object
       required: [instance, project, platform]
       properties:
-        instance:
-          type: string
-        project:
-          type: string
+        instance: {type: string}
+        project: {type: string}
         platform:
           type: string
           enum: [gitlab, github]
@@ -3207,8 +2778,7 @@ components:
       properties:
         items:
           type: array
-          items:
-            $ref: '#/components/schemas/AvailableRepo'
+          items: {$ref: '#/components/schemas/AvailableRepo'}
         truncated:
           type: boolean
           description: True when there were more, or a list was too long or too slow to read whole.
@@ -3224,97 +2794,66 @@ components:
         dismissBlocking:
           type: boolean
           description: Not the change's author.
-        dismissSuggestion:
-          type: boolean
-        restore:
-          type: boolean
+        dismissSuggestion: {type: boolean}
+        restore: {type: boolean}
     CheckView:
       description: One check of a skill's checklist.
       type: object
       required: [batch, section, name, status, detail]
       properties:
-        batch:
-          type: integer
-        section:
-          type: string
-        name:
-          type: string
+        batch: {type: integer}
+        section: {type: string}
+        name: {type: string}
         status:
           type: string
           enum: [pass, fail, n/a]
-        detail:
-          type: string
+        detail: {type: string}
     DefaultValues:
       description: DefaultsView's settings without the skill list, with the same keys.
       type: object
       required: [approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo]
       properties:
-        approve:
-          type: boolean
-        reviewDrafts:
-          type: boolean
-        inlineFindings:
-          type: boolean
-        commandsAuthorAndMaintainersOnly:
-          type: boolean
-        incrementalReviews:
-          type: boolean
-        learnFromDismissals:
-          type: boolean
-        failureStatus:
-          type: string
-        jobTimeoutSeconds:
-          type: integer
-        maxTurns:
-          type: integer
-        jobMemory:
-          type: string
-        rerunLimitPerMR:
-          type: integer
-        rerunLimitPerRepo:
-          type: integer
+        approve: {type: boolean}
+        reviewDrafts: {type: boolean}
+        inlineFindings: {type: boolean}
+        commandsAuthorAndMaintainersOnly: {type: boolean}
+        incrementalReviews: {type: boolean}
+        learnFromDismissals: {type: boolean}
+        failureStatus: {type: string}
+        jobTimeoutSeconds: {type: integer}
+        maxTurns: {type: integer}
+        jobMemory: {type: string}
+        rerunLimitPerMR: {type: integer}
+        rerunLimitPerRepo: {type: integer}
     DefaultsView:
       description: The settings a repository gets when it sets none.
       type: object
       required: [approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, skills, config, pinned]
       properties:
-        approve:
-          type: boolean
-        reviewDrafts:
-          type: boolean
-        inlineFindings:
-          type: boolean
-        commandsAuthorAndMaintainersOnly:
-          type: boolean
-        incrementalReviews:
-          type: boolean
-        learnFromDismissals:
-          type: boolean
-        failureStatus:
-          type: string
-        jobTimeoutSeconds:
-          type: integer
-        maxTurns:
-          type: integer
+        approve: {type: boolean}
+        reviewDrafts: {type: boolean}
+        inlineFindings: {type: boolean}
+        commandsAuthorAndMaintainersOnly: {type: boolean}
+        incrementalReviews: {type: boolean}
+        learnFromDismissals: {type: boolean}
+        failureStatus: {type: string}
+        jobTimeoutSeconds: {type: integer}
+        maxTurns: {type: integer}
         jobMemory:
           type: string
           description: The Job's memory limit, "" when none.
-        rerunLimitPerMR:
-          type: integer
-        rerunLimitPerRepo:
-          type: integer
+        rerunLimitPerMR: {type: integer}
+        rerunLimitPerRepo: {type: integer}
         skills:
           type: array
-          items:
-            type: string
+          items: {type: string}
           description: The default list of library skills.
         config:
           $ref: '#/components/schemas/DefaultValues'
           description: The values the config gives, before anything saved here.
         pinned:
           type: object
-          additionalProperties:
-            type: boolean
+          additionalProperties: {type: boolean}
           description: Which defaults were saved here and so no longer follow the config, by JSON key. Every
             key is present.
     DetectedSkillView:
@@ -3322,12 +2861,9 @@ components:
       type: object
       required: [name, folder, 'on']
       properties:
-        name:
-          type: string
-        folder:
-          type: string
-        problem:
-          type: string
+        name: {type: string}
+        folder: {type: string}
+        problem: {type: string}
         'on':
           type: boolean
           description: Whether the repository turned it on.
@@ -3339,8 +2875,7 @@ components:
         by:
           type: string
           description: Who dismissed it, as the audit log names them.
-        reason:
-          type: string
+        reason: {type: string}
         at:
           type: string
           format: date-time
@@ -3349,10 +2884,8 @@ components:
       type: object
       required: [name, path, size, taken]
       properties:
-        name:
-          type: string
-        path:
-          type: string
+        name: {type: string}
+        path: {type: string}
         size:
           type: integer
           description: 'The bytes of its text (0 when the text was not kept: too large, or holding a secret).'
@@ -3369,40 +2902,32 @@ components:
       properties:
         reviewed:
           type: array
-          items:
-            type: string
+          items: {type: string}
         skipped:
           type: array
-          items:
-            $ref: '#/components/schemas/SkippedFile'
+          items: {$ref: '#/components/schemas/SkippedFile'}
         notReviewed:
           type: array
-          items:
-            $ref: '#/components/schemas/NotReviewedFile'
+          items: {$ref: '#/components/schemas/NotReviewedFile'}
     FindingView:
       description: One finding.
       type: object
       required: [id, fingerprint, severity, title, file, explanation, suggestedFix, dismissed]
       properties:
-        id:
-          type: string
+        id: {type: string}
         fingerprint:
           type: string
           description: 'Identifies the finding across runs: what a dismissal and a restore name.'
         severity:
           type: string
           enum: [blocking, suggestion]
-        title:
-          type: string
-        file:
-          type: string
+        title: {type: string}
+        file: {type: string}
         line:
           type: integer
           description: Left out when the finding has none.
-        explanation:
-          type: string
-        suggestedFix:
-          type: string
+        explanation: {type: string}
+        suggestedFix: {type: string}
         dismissed:
           oneOf:
           - $ref: '#/components/schemas/DismissedView'
@@ -3413,8 +2938,7 @@ components:
       type: object
       required: [name, source, folder, version, content, url]
       properties:
-        name:
-          type: string
+        name: {type: string}
         source:
           type: string
           description: '"library" or the repository folder the skill was read from; "" with a problem.'
@@ -3424,8 +2948,7 @@ components:
         version:
           type: integer
           description: The library skill's version, 0 for a repository skill.
-        content:
-          type: string
+        content: {type: string}
         url:
           type: string
           description: Where a repository skill is on the platform; "" for a library skill or when the web
@@ -3438,27 +2961,22 @@ components:
       type: object
       required: [branch, skills, detected, instructions]
       properties:
-        branch:
-          type: string
+        branch: {type: string}
         skills:
           type: array
-          items:
-            $ref: '#/components/schemas/InputSkill'
+          items: {$ref: '#/components/schemas/InputSkill'}
           description: The skills a review would run, and each skill a review would fail on, with its problem.
         detected:
           type: array
-          items:
-            $ref: '#/components/schemas/DetectedSkillView'
+          items: {$ref: '#/components/schemas/DetectedSkillView'}
           description: The skills of the repository folders that run only when turned on.
-        instructions:
-          type: string
+        instructions: {type: string}
     InstanceAdminView:
       description: One instance.
       type: object
       required: [name, platform, source, removing, url, apiURL, reviewAppID, approveAppID, webhookURL, approver, oauthClientID, secrets]
       properties:
-        name:
-          type: string
+        name: {type: string}
         platform:
           type: string
           enum: [gitlab, github]
@@ -3474,10 +2992,8 @@ components:
         apiURL:
           type: string
           description: A GitHub instance's API address.
-        reviewAppID:
-          type: integer
-        approveAppID:
-          type: integer
+        reviewAppID: {type: integer}
+        approveAppID: {type: integer}
         webhookURL:
           type: string
           description: Where the platform sends this instance's webhooks.
@@ -3485,12 +3001,10 @@ components:
           type: string
           enum: [app, review_app, token]
           description: '"app", "review_app" or "token".'
-        oauthClientID:
-          type: string
+        oauthClientID: {type: string}
         secrets:
           type: object
-          additionalProperties:
-            $ref: '#/components/schemas/SecretView'
+          additionalProperties: {$ref: '#/components/schemas/SecretView'}
           description: 'By field. The fields an instance takes: review_token, approve_token, webhook_secret
             and oauth_client_secret (GitLab); review_app_key, approve_app_key or approve_token, webhook_secret
             and oauth_client_secret (GitHub).'
@@ -3502,8 +3016,7 @@ components:
         platform:
           type: string
           enum: [gitlab, github]
-        instance:
-          type: string
+        instance: {type: string}
         label:
           type: string
           description: The button's text after "Sign in with".
@@ -3512,8 +3025,7 @@ components:
       type: object
       required: [project, installed, approverReachable, inlineAvailable, protectionReadable]
       properties:
-        project:
-          type: string
+        project: {type: string}
         installed:
           type: boolean
           description: pergent.sh's webhook and deploy token (GitLab) or the review App (GitHub) are in place.
@@ -3531,8 +3043,7 @@ components:
       type: object
       required: [instance, platform, connected, approver, repos]
       properties:
-        instance:
-          type: string
+        instance: {type: string}
         platform:
           type: string
           enum: [gitlab, github]
@@ -3549,8 +3060,7 @@ components:
           description: Set while the approve token expires within 14 days.
         repos:
           type: array
-          items:
-            $ref: '#/components/schemas/IntegrationRepo'
+          items: {$ref: '#/components/schemas/IntegrationRepo'}
     LLMAdminView:
       description: Where the model comes from ("config" or "dashboard"), the model, and whether a key is set.
       type: object
@@ -3559,14 +3069,10 @@ components:
         source:
           type: string
           enum: [config, dashboard]
-        provider:
-          type: string
-        model:
-          type: string
-        baseURL:
-          type: string
-        key:
-          $ref: '#/components/schemas/SecretView'
+        provider: {type: string}
+        model: {type: string}
+        baseURL: {type: string}
+        key: {$ref: '#/components/schemas/SecretView'}
         editable:
           type: boolean
           description: 'True for an operator when the config has no llm: block.'
@@ -3575,40 +3081,31 @@ components:
       type: object
       required: [provider, model]
       properties:
-        provider:
-          type: string
-        model:
-          type: string
+        provider: {type: string}
+        model: {type: string}
     Last7View:
       description: The repository's runs of the last 7 days.
       type: object
       required: [reviews, approved, failed]
       properties:
-        reviews:
-          type: integer
-        approved:
-          type: integer
-        failed:
-          type: integer
+        reviews: {type: integer}
+        approved: {type: integer}
+        failed: {type: integer}
     LibrarySkillView:
       description: One skill of the library, without its text.
       type: object
       required: [name, version, size, updatedAt, inDefaults, source]
       properties:
-        name:
-          type: string
+        name: {type: string}
         updatedBy:
           type: string
           description: Shown to admins only.
-        version:
-          type: integer
-        size:
-          type: integer
+        version: {type: integer}
+        size: {type: integer}
         updatedAt:
           type: string
           format: date-time
-        inDefaults:
-          type: boolean
+        inDefaults: {type: boolean}
         source:
           oneOf:
           - $ref: '#/components/schemas/SkillSourceView'
@@ -3618,42 +3115,34 @@ components:
       type: object
       required: [text]
       properties:
-        text:
-          type: string
+        text: {type: string}
     NewAccountView:
       description: A password admin just made, with its generated password. The only time the password is
         shown.
       type: object
       required: [username, password]
       properties:
-        username:
-          type: string
-        password:
-          type: string
+        username: {type: string}
+        password: {type: string}
     NotReviewedFile:
       description: A file whose batch failed, and why.
       type: object
       required: [path, cause]
       properties:
-        path:
-          type: string
-        cause:
-          type: string
+        path: {type: string}
+        cause: {type: string}
     OverviewView:
       description: Body of GET /api/overview.
       type: object
       required: [stats, recent, attention, setup]
       properties:
-        stats:
-          $ref: '#/components/schemas/StatsView'
+        stats: {$ref: '#/components/schemas/StatsView'}
         recent:
           type: array
-          items:
-            $ref: '#/components/schemas/ReviewSummary'
+          items: {$ref: '#/components/schemas/ReviewSummary'}
         attention:
           type: array
-          items:
-            $ref: '#/components/schemas/AttentionView'
+          items: {$ref: '#/components/schemas/AttentionView'}
         setup:
           oneOf:
           - $ref: '#/components/schemas/SetupView'
@@ -3666,26 +3155,19 @@ components:
       type: object
       required: [skill, severity, file, title, reason, by, at, number, fingerprint]
       properties:
-        skill:
-          type: string
+        skill: {type: string}
         severity:
           type: string
           enum: [blocking, suggestion]
-        file:
-          type: string
-        title:
-          type: string
-        reason:
-          type: string
-        by:
-          type: string
+        file: {type: string}
+        title: {type: string}
+        reason: {type: string}
+        by: {type: string}
         at:
           type: string
           format: date-time
-        number:
-          type: integer
-        fingerprint:
-          type: string
+        number: {type: integer}
+        fingerprint: {type: string}
     ReadinessView:
       description: The Readiness tab.
       type: object
@@ -3717,27 +3199,23 @@ components:
           description: 'The repository''s skills are null: it follows the default list.'
         applyBase:
           type: array
-          items:
-            type: string
+          items: {type: string}
           description: 'Today''s list of library skills: the repository''s, or the default list.'
     RepositoryDetailView:
       description: A repository with its effective settings.
       type: object
       required: [repo, settings, attention, role]
       properties:
-        repo:
-          $ref: '#/components/schemas/RepositoryView'
+        repo: {$ref: '#/components/schemas/RepositoryView'}
         settings:
           type: object
-          additionalProperties:
-            $ref: '#/components/schemas/SettingView'
+          additionalProperties: {$ref: '#/components/schemas/SettingView'}
           description: Keyed approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews,
             learnFromDismissals, failureStatus, skills, repoSkills, jobTimeoutSeconds, maxTurns, jobMemory,
             rerunLimitPerMR and rerunLimitPerRepo.
         attention:
           type: array
-          items:
-            $ref: '#/components/schemas/AttentionView'
+          items: {$ref: '#/components/schemas/AttentionView'}
         role:
           type: string
           enum: [admin, maintainer, viewer]
@@ -3747,10 +3225,8 @@ components:
       type: object
       required: [instance, project, platform, source, 'on', last7, health]
       properties:
-        instance:
-          type: string
-        project:
-          type: string
+        instance: {type: string}
+        project: {type: string}
         platform:
           type: string
           enum: [gitlab, github]
@@ -3758,10 +3234,8 @@ components:
           type: string
           enum: [config, dashboard]
           description: '"config" (read-only here) or "dashboard".'
-        'on':
-          type: boolean
-        last7:
-          $ref: '#/components/schemas/Last7View'
+        'on': {type: boolean}
+        last7: {$ref: '#/components/schemas/Last7View'}
         health:
           type: string
           enum: [ok, attention]
@@ -3771,43 +3245,33 @@ components:
       type: object
       required: [header, runs, role, can]
       properties:
-        header:
-          $ref: '#/components/schemas/ReviewHeader'
+        header: {$ref: '#/components/schemas/ReviewHeader'}
         runs:
           type: array
-          items:
-            $ref: '#/components/schemas/RunSummary'
+          items: {$ref: '#/components/schemas/RunSummary'}
         role:
           type: string
           enum: [viewer, maintainer, admin, '']
           description: The session's role on the repository ("" for a repository switched off).
-        can:
-          $ref: '#/components/schemas/CanView'
+        can: {$ref: '#/components/schemas/CanView'}
     ReviewHeader:
       description: The change as pergent.sh last read it.
       type: object
       required: [instance, project, platform, number, title, sourceBranch, targetBranch, webURL]
       properties:
-        instance:
-          type: string
-        project:
-          type: string
+        instance: {type: string}
+        project: {type: string}
         platform:
           type: string
           enum: [gitlab, github]
-        number:
-          type: integer
-        title:
-          type: string
-        sourceBranch:
-          type: string
-        targetBranch:
-          type: string
+        number: {type: integer}
+        title: {type: string}
+        sourceBranch: {type: string}
+        targetBranch: {type: string}
         author:
           type: string
           description: The username who opened it; left out when unknown.
-        webURL:
-          type: string
+        webURL: {type: string}
     ReviewListView:
       description: One page of reviews.
       type: object
@@ -3815,8 +3279,7 @@ components:
       properties:
         items:
           type: array
-          items:
-            $ref: '#/components/schemas/ReviewSummary'
+          items: {$ref: '#/components/schemas/ReviewSummary'}
         nextCursor:
           type: string
           description: 'Not "" when there is a next page: pass it as cursor.'
@@ -3825,20 +3288,16 @@ components:
       type: object
       required: [instance, project, platform, number, title, outcome, reason, updatedAt, webURL]
       properties:
-        instance:
-          type: string
-        project:
-          type: string
+        instance: {type: string}
+        project: {type: string}
         platform:
           type: string
           enum: [gitlab, github]
         number:
           type: integer
           description: The MR's IID or the PR's number.
-        title:
-          type: string
-        outcome:
-          $ref: '#/components/schemas/Outcome'
+        title: {type: string}
+        outcome: {$ref: '#/components/schemas/Outcome'}
         reason:
           type: string
           description: Why, in a sentence ("" for approved).
@@ -3853,14 +3312,10 @@ components:
       type: object
       required: [run, instance, project, number, status, approved, approvalReason, pergentVersion, model, maxTurns, incrementalNote, tokens, files, skills, latestDecided]
       properties:
-        run:
-          $ref: '#/components/schemas/RunSummary'
-        instance:
-          type: string
-        project:
-          type: string
-        number:
-          type: integer
+        run: {$ref: '#/components/schemas/RunSummary'}
+        instance: {type: string}
+        project: {type: string}
+        number: {type: integer}
         status:
           type: string
           enum: [running, success, failed, neutral, canceled, '']
@@ -3871,8 +3326,7 @@ components:
         approvalReason:
           type: string
           description: Why it is not approved; "" when it is.
-        pergentVersion:
-          type: string
+        pergentVersion: {type: string}
         model:
           type: [string, 'null']
           description: The model the review ran with; null for a run that did not record it.
@@ -3882,14 +3336,11 @@ components:
         incrementalNote:
           type: string
           description: What an incremental review covered; "" for a full review.
-        tokens:
-          $ref: '#/components/schemas/TokensView'
-        files:
-          $ref: '#/components/schemas/FilesView'
+        tokens: {$ref: '#/components/schemas/TokensView'}
+        files: {$ref: '#/components/schemas/FilesView'}
         skills:
           type: array
-          items:
-            $ref: '#/components/schemas/SkillView'
+          items: {$ref: '#/components/schemas/SkillView'}
         latestDecided:
           type: boolean
           description: True for the one run of the change that dismiss and restore act on.
@@ -3898,18 +3349,14 @@ components:
       type: object
       required: [id, head, trigger, outcome, reason, createdAt, durationSeconds]
       properties:
-        id:
-          type: string
-        head:
-          type: string
+        id: {type: string}
+        head: {type: string}
         trigger:
           type: string
           enum: [first, push, retarget, rerun]
           description: What started it, read from the history.
-        outcome:
-          $ref: '#/components/schemas/Outcome'
-        reason:
-          type: string
+        outcome: {$ref: '#/components/schemas/Outcome'}
+        reason: {type: string}
         createdAt:
           type: string
           format: date-time
@@ -3921,8 +3368,7 @@ components:
       type: object
       required: [id, state, startedBy, branch, commit, error, queuedAt, finishedAt]
       properties:
-        id:
-          type: string
+        id: {type: string}
         state:
           type: string
           enum: [queued, running, done, failed]
@@ -3950,8 +3396,7 @@ components:
       type: object
       required: [set, updatedAt]
       properties:
-        set:
-          type: boolean
+        set: {type: boolean}
         updatedAt:
           type: [string, 'null']
           format: date-time
@@ -3964,22 +3409,17 @@ components:
         value:
           description: 'Its type depends on the setting: boolean, string, integer, a list of names, or null
             (skills: the default list).'
-        overridden:
-          type: boolean
+        overridden: {type: boolean}
     SetupView:
       description: 'What an admin still has to set up, one item each: an LLM with its key, a connected instance,
         a skill in the library and a repository switched on.'
       type: object
       required: [llm, instance, skill, repository]
       properties:
-        llm:
-          type: boolean
-        instance:
-          type: boolean
-        skill:
-          type: boolean
-        repository:
-          type: boolean
+        llm: {type: boolean}
+        instance: {type: boolean}
+        skill: {type: boolean}
+        repository: {type: boolean}
     SkillDetailView:
       description: A skill with its text (shown as plain text only) and its versions, newest first.
       allOf:
@@ -3987,37 +3427,30 @@ components:
       - type: object
         required: [content, versions]
         properties:
-          content:
-            type: string
+          content: {type: string}
           versions:
             type: array
-            items:
-              $ref: '#/components/schemas/SkillVersionView'
+            items: {$ref: '#/components/schemas/SkillVersionView'}
     SkillFetchResultView:
       description: The answer for one name of an install or an update.
       type: object
       required: [name, ok]
       properties:
-        name:
-          type: string
-        ok:
-          type: boolean
-        error:
-          type: string
+        name: {type: string}
+        ok: {type: boolean}
+        error: {type: string}
     SkillFetchStartedView:
       description: The read to ask about.
       type: object
       required: [id]
       properties:
-        id:
-          type: string
+        id: {type: string}
     SkillFetchView:
       description: A read of a skill source, for the admin who started it only.
       type: object
       required: [id, status, commit, error, purpose, ref, path, skills, updates]
       properties:
-        id:
-          type: string
+        id: {type: string}
         status:
           type: string
           enum: [running, done, failed]
@@ -4031,39 +3464,29 @@ components:
         purpose:
           type: string
           enum: [install, update]
-        instance:
-          type: string
-        repo:
-          type: string
-        url:
-          type: string
-        ref:
-          type: string
-        fromRef:
-          type: string
-        path:
-          type: string
+        instance: {type: string}
+        repo: {type: string}
+        url: {type: string}
+        ref: {type: string}
+        fromRef: {type: string}
+        path: {type: string}
         skills:
           type: array
-          items:
-            $ref: '#/components/schemas/FetchedSkillView'
+          items: {$ref: '#/components/schemas/FetchedSkillView'}
           description: The skills found, once done.
         updates:
           type: array
-          items:
-            $ref: '#/components/schemas/SkillUpdateView'
+          items: {$ref: '#/components/schemas/SkillUpdateView'}
           description: 'For a done check for updates: each installed skill whose file is in the folder.'
     SkillInUseView:
       description: The 409 of a delete of a skill that is in use.
       type: object
       required: [error, repositories, hidden, inDefaults]
       properties:
-        error:
-          type: string
+        error: {type: string}
         repositories:
           type: array
-          items:
-            $ref: '#/components/schemas/SkillUserRepoView'
+          items: {$ref: '#/components/schemas/SkillUserRepoView'}
           description: The ones the caller can see that name it.
         hidden:
           type: integer
@@ -4076,21 +3499,15 @@ components:
       type: object
       required: [skill, severity, raised, fixed, dismissed, open, wentAway, addressed, editedAt]
       properties:
-        skill:
-          type: string
+        skill: {type: string}
         severity:
           type: string
           enum: [blocking, suggestion]
-        raised:
-          type: integer
-        fixed:
-          type: integer
-        dismissed:
-          type: integer
-        open:
-          type: integer
-        wentAway:
-          type: integer
+        raised: {type: integer}
+        fixed: {type: integer}
+        dismissed: {type: integer}
+        open: {type: integer}
+        wentAway: {type: integer}
         addressed:
           type: [integer, 'null']
           description: fixed * 100 / raised, a whole percent; null under 10 raised.
@@ -4108,20 +3525,16 @@ components:
           type: string
           enum: [instance, url]
           description: '"instance" (read through a connected instance) or "url" (a public git URL).'
-        instance:
-          type: string
+        instance: {type: string}
         repo:
           type: string
           description: Shown to operators and to users who can see the repository; others get hidden.
-        url:
-          type: string
+        url: {type: string}
         path:
           type: string
           description: Sent with repo and url, never with hidden.
-        ref:
-          type: string
-        commit:
-          type: string
+        ref: {type: string}
+        commit: {type: string}
         hidden:
           type: boolean
           description: The repository is private to this user.
@@ -4130,10 +3543,8 @@ components:
       type: object
       required: [name, path, state, version, current, fetched]
       properties:
-        name:
-          type: string
-        path:
-          type: string
+        name: {type: string}
+        path: {type: string}
         state:
           type: string
           enum: [changed, same, removed at the source, renamed at the source]
@@ -4155,10 +3566,8 @@ components:
       type: object
       required: [instance, project]
       properties:
-        instance:
-          type: string
-        project:
-          type: string
+        instance: {type: string}
+        project: {type: string}
     SkillVersionDetailView:
       description: One version of a skill with its text.
       allOf:
@@ -4166,30 +3575,26 @@ components:
       - type: object
         required: [content]
         properties:
-          content:
-            type: string
+          content: {type: string}
     SkillVersionView:
       description: One saved version of a skill.
       type: object
       required: [version, at, commit]
       properties:
-        version:
-          type: integer
+        version: {type: integer}
         at:
           type: string
           format: date-time
         actor:
           type: string
           description: Shown to admins only.
-        commit:
-          type: string
+        commit: {type: string}
     SkillView:
       description: One skill's outcome.
       type: object
       required: [name, verdict, source, version, findings, dismissed, checks]
       properties:
-        name:
-          type: string
+        name: {type: string}
         verdict:
           type: string
           enum: [no_blocking_issues, has_blocking_issues, failed]
@@ -4203,100 +3608,78 @@ components:
             that did not record it.
         findings:
           type: array
-          items:
-            $ref: '#/components/schemas/FindingView'
+          items: {$ref: '#/components/schemas/FindingView'}
           description: Those still standing.
         dismissed:
           type: array
-          items:
-            $ref: '#/components/schemas/FindingView'
+          items: {$ref: '#/components/schemas/FindingView'}
           description: Those set aside by a dismissal.
         checks:
           type: array
-          items:
-            $ref: '#/components/schemas/CheckView'
+          items: {$ref: '#/components/schemas/CheckView'}
     SkillWrittenView:
       description: The version a create, an edit or a copy saved.
       type: object
       required: [version]
       properties:
-        version:
-          type: integer
+        version: {type: integer}
     SkippedFile:
       description: A file no skill reviewed, and the rule that left it out.
       type: object
       required: [path, rule]
       properties:
-        path:
-          type: string
-        rule:
-          type: string
+        path: {type: string}
+        rule: {type: string}
     StatsView:
       description: The runs started in the period that were not superseded, by outcome; approved counts the
         runs the approve bot approved.
       type: object
       required: [reviews, approved, blocking, failed]
       properties:
-        reviews:
-          type: integer
-        approved:
-          type: integer
-        blocking:
-          type: integer
-        failed:
-          type: integer
+        reviews: {type: integer}
+        approved: {type: integer}
+        blocking: {type: integer}
+        failed: {type: integer}
     TeamMemberView:
       description: 'A team''s member: a platform account.'
       type: object
       required: [id, username, platform, instance]
       properties:
-        id:
-          type: integer
-        username:
-          type: string
-        platform:
-          type: string
-        instance:
-          type: string
+        id: {type: integer}
+        username: {type: string}
+        platform: {type: string}
+        instance: {type: string}
     TeamRef:
       description: Names a team.
       type: object
       required: [id, name]
       properties:
-        id:
-          type: integer
-        name:
-          type: string
+        id: {type: integer}
+        name: {type: string}
     TeamRepoView:
       description: A repository a team covers.
       type: object
       required: [instance, project]
       properties:
-        instance:
-          type: string
-        project:
-          type: string
+        instance: {type: string}
+        project: {type: string}
     TeamView:
       description: One team.
       type: object
       required: [id, name, role, members, repos, hiddenRepos, hiddenMembers]
       properties:
-        id:
-          type: integer
-        name:
-          type: string
+        id: {type: integer}
+        name: {type: string}
         role:
           type: string
           enum: [admin, maintainer, viewer]
           description: '"admin", "maintainer" or "viewer".'
         members:
           type: array
-          items:
-            $ref: '#/components/schemas/TeamMemberView'
+          items: {$ref: '#/components/schemas/TeamMemberView'}
         repos:
           type: array
-          items:
-            $ref: '#/components/schemas/TeamRepoView'
+          items: {$ref: '#/components/schemas/TeamRepoView'}
           description: The repositories it covers that the session can see; a project "" covers every repository
             of the instance. An admin team has none.
         hiddenRepos:
@@ -4309,27 +3692,21 @@ components:
       type: object
       required: [in, out]
       properties:
-        in:
-          type: integer
-        out:
-          type: integer
+        in: {type: integer}
+        out: {type: integer}
     UserView:
       description: One account.
       type: object
       required: [id, kind, username, platform, instance, lastSignInAt, waiting, teams]
       properties:
-        id:
-          type: integer
+        id: {type: integer}
         kind:
           type: string
           enum: [password, platform]
           description: '"password" or "platform".'
-        username:
-          type: string
-        platform:
-          type: string
-        instance:
-          type: string
+        username: {type: string}
+        platform: {type: string}
+        instance: {type: string}
         lastSignInAt:
           type: [string, 'null']
           format: date-time
@@ -4339,8 +3716,7 @@ components:
           description: A platform account on no team.
         teams:
           type: array
-          items:
-            $ref: '#/components/schemas/TeamRef'
+          items: {$ref: '#/components/schemas/TeamRef'}
     instancesView:
       description: Body of GET /api/instances.
       type: object
@@ -4351,8 +3727,7 @@ components:
           description: The password form is shown. Always true.
         instances:
           type: array
-          items:
-            $ref: '#/components/schemas/InstanceView'
+          items: {$ref: '#/components/schemas/InstanceView'}
           description: Those with sign-in, the config's first.
     meView:
       description: The signed-in user. Body of GET /api/me.
@@ -4363,8 +3738,7 @@ components:
           type: string
           enum: [password, platform]
           description: '"password" or "platform".'
-        username:
-          type: string
+        username: {type: string}
         platform:
           type: string
           description: '"" for a password account.'
@@ -4397,12 +3771,10 @@ components:
       properties:
         sections:
           type: array
-          items:
-            $ref: '#/components/schemas/readiness.Section'
+          items: {$ref: '#/components/schemas/readiness.Section'}
         suggested:
           type: array
-          items:
-            type: string
+          items: {type: string}
           description: Library skills that fit the files and are not turned on.
         budget:
           type: integer
@@ -4411,20 +3783,13 @@ components:
       description: The project context found at the root of the checkout.
       type: object
       properties:
-        agentFile:
-          type: string
-        readme:
-          type: string
-        contributing:
-          type: string
-        codeOwners:
-          type: string
-        agentFileEmpty:
-          type: boolean
-        instructions:
-          type: boolean
-        codeOwnerRules:
-          type: integer
+        agentFile: {type: string}
+        readme: {type: string}
+        contributing: {type: string}
+        codeOwners: {type: string}
+        agentFileEmpty: {type: boolean}
+        instructions: {type: boolean}
+        codeOwnerRules: {type: integer}
       additionalProperties: true
     readiness.Item:
       description: 'One line of the checklist. Paths, names and reasons come from the scan Job: text only,
@@ -4432,8 +3797,7 @@ components:
       type: object
       required: [key, state, reason, why, fix]
       properties:
-        key:
-          type: string
+        key: {type: string}
         state:
           type: string
           enum: [passed, warning, missing, unknown]
@@ -4450,148 +3814,107 @@ components:
           description: Only set when the item is not passed.
         list:
           type: array
-          items:
-            type: string
+          items: {type: string}
         noise:
           type: array
-          items:
-            $ref: '#/components/schemas/readiness.NoiseFile'
-        more:
-          type: integer
+          items: {$ref: '#/components/schemas/readiness.NoiseFile'}
+        more: {type: integer}
     readiness.JobResult:
       description: What the readiness scan Job posts. `error` is set when it could not scan the files; then
         nothing else but version and commit is.
       type: object
       properties:
-        version:
-          type: integer
-        commit:
-          type: string
-        error:
-          type: string
-        files:
-          type: integer
-        sourceFiles:
-          type: integer
-        noiseTotal:
-          type: integer
-        instructionsBytes:
-          type: integer
-        context:
-          $ref: '#/components/schemas/readiness.Context'
+        version: {type: integer}
+        commit: {type: string}
+        error: {type: string}
+        files: {type: integer}
+        sourceFiles: {type: integer}
+        noiseTotal: {type: integer}
+        instructionsBytes: {type: integer}
+        context: {$ref: '#/components/schemas/readiness.Context'}
         skills:
           type: array
-          items:
-            $ref: '#/components/schemas/readiness.SkillFit'
+          items: {$ref: '#/components/schemas/readiness.SkillFit'}
         languages:
           type: array
-          items:
-            $ref: '#/components/schemas/readiness.Language'
+          items: {$ref: '#/components/schemas/readiness.Language'}
         noise:
           type: array
-          items:
-            $ref: '#/components/schemas/readiness.NoiseFile'
+          items: {$ref: '#/components/schemas/readiness.NoiseFile'}
       additionalProperties: true
     readiness.Language:
       description: A language over 10% of the source files.
       type: object
       properties:
-        name:
-          type: string
-        files:
-          type: integer
-        uncovered:
-          type: boolean
+        name: {type: string}
+        files: {type: integer}
+        uncovered: {type: boolean}
       additionalProperties: true
     readiness.NoiseFile:
       description: A file a review would read that looks like noise.
       type: object
       required: [path, why, size]
       properties:
-        path:
-          type: string
-        why:
-          type: string
-        size:
-          type: integer
+        path: {type: string}
+        why: {type: string}
+        size: {type: integer}
         skills:
           type: array
-          items:
-            type: string
+          items: {type: string}
     readiness.Section:
       description: 'A group of items: "context", "process", "skills" or "size".'
       type: object
       required: [key, items]
       properties:
-        key:
-          type: string
+        key: {type: string}
         items:
           type: array
-          items:
-            $ref: '#/components/schemas/readiness.Item'
+          items: {$ref: '#/components/schemas/readiness.Item'}
     readiness.SkillFit:
       description: How one skill fits the checkout.
       type: object
       properties:
-        name:
-          type: string
-        folder:
-          type: string
-        problem:
-          type: string
-        hasPaths:
-          type: boolean
-        files:
-          type: integer
-        bytes:
-          type: integer
+        name: {type: string}
+        folder: {type: string}
+        problem: {type: string}
+        hasPaths: {type: boolean}
+        files: {type: integer}
+        bytes: {type: integer}
       additionalProperties: true
     result.BatchChecks:
       description: The checklist the model reported for one batch.
       type: object
       properties:
-        batch:
-          type: integer
-        dropped:
-          type: integer
-        findings:
-          type: integer
+        batch: {type: integer}
+        dropped: {type: integer}
+        findings: {type: integer}
         checks:
           type: array
-          items:
-            $ref: '#/components/schemas/result.Check'
+          items: {$ref: '#/components/schemas/result.Check'}
       additionalProperties: true
     result.Check:
       description: One checklist item.
       type: object
       properties:
-        section:
-          type: string
-        name:
-          type: string
-        status:
-          type: string
-        detail:
-          type: string
+        section: {type: string}
+        name: {type: string}
+        status: {type: string}
+        detail: {type: string}
       additionalProperties: true
     result.Comment:
       description: The rendered comment, ready to post. `markdown` is required.
       type: object
       properties:
-        markdown:
-          type: string
-        findings_block:
-          type: string
+        markdown: {type: string}
+        findings_block: {type: string}
       additionalProperties: true
       required: [markdown]
     result.Error:
       description: Why an error result is one.
       type: object
       properties:
-        code:
-          type: string
-        message:
-          type: string
+        code: {type: string}
+        message: {type: string}
       additionalProperties: true
     result.Failure:
       description: A batch of a skill that did not finish.
@@ -4599,10 +3922,8 @@ components:
       properties:
         files:
           type: array
-          items:
-            type: string
-        message:
-          type: string
+          items: {type: string}
+        message: {type: string}
       additionalProperties: true
     result.Files:
       description: What a skill looked at. Its verdict covers `reviewed` only.
@@ -4610,64 +3931,46 @@ components:
       properties:
         reviewed:
           type: array
-          items:
-            type: string
+          items: {type: string}
         carried:
           type: array
-          items:
-            type: string
+          items: {type: string}
         skipped:
           type: array
-          items:
-            $ref: '#/components/schemas/result.Skipped'
+          items: {$ref: '#/components/schemas/result.Skipped'}
         not_reviewed:
           type: array
           items:
             type: object
             additionalProperties: true
             properties:
-              path:
-                type: string
-              cause:
-                type: string
+              path: {type: string}
+              cause: {type: string}
           description: Entries have a `path` and a `cause`.
       additionalProperties: true
     result.Finding:
       description: One finding of a skill. pergent.sh reads these fields; the finding may carry others.
       type: object
       properties:
-        id:
-          type: string
-        fingerprint:
-          type: string
-        file:
-          type: string
-        line:
-          type: integer
-        end_line:
-          type: integer
-        severity:
-          type: string
-        title:
-          type: string
-        explanation:
-          type: string
-        suggested_fix:
-          type: string
-        suggestion:
-          type: string
+        id: {type: string}
+        fingerprint: {type: string}
+        file: {type: string}
+        line: {type: integer}
+        end_line: {type: integer}
+        severity: {type: string}
+        title: {type: string}
+        explanation: {type: string}
+        suggested_fix: {type: string}
+        suggestion: {type: string}
       additionalProperties: true
       required: [file, severity, title]
     result.Incremental:
       description: What an incremental review did.
       type: object
       properties:
-        reviewed:
-          type: integer
-        carried:
-          type: integer
-        from:
-          type: string
+        reviewed: {type: integer}
+        carried: {type: integer}
+        from: {type: string}
       additionalProperties: true
     result.Result:
       description: 'Pergent''s result schema v1, the fields pergent.sh reads. Unknown fields are accepted
@@ -4692,15 +3995,13 @@ components:
           description: The full SHA reviewed.
         skills:
           type: array
-          items:
-            $ref: '#/components/schemas/result.Skill'
+          items: {$ref: '#/components/schemas/result.Skill'}
           description: One entry per skill. A completed result has at least one.
         error:
           oneOf:
           - $ref: '#/components/schemas/result.Error'
           - type: 'null'
-        comment:
-          $ref: '#/components/schemas/result.Comment'
+        comment: {$ref: '#/components/schemas/result.Comment'}
         merged:
           type: boolean
           description: Set only by pergent.sh after it merged an incremental result. A result that carries
@@ -4719,86 +4020,65 @@ components:
       description: The outcome of one skill.
       type: object
       properties:
-        name:
-          type: string
+        name: {type: string}
         verdict:
           type: string
           description: '"no_blocking_issues", "has_blocking_issues" or "failed".'
         findings:
           type: array
-          items:
-            $ref: '#/components/schemas/result.Finding'
+          items: {$ref: '#/components/schemas/result.Finding'}
           description: Each entry is a result.Finding (kept raw by pergent.sh).
-        files:
-          $ref: '#/components/schemas/result.Files'
+        files: {$ref: '#/components/schemas/result.Files'}
         failures:
           type: array
-          items:
-            $ref: '#/components/schemas/result.Failure'
+          items: {$ref: '#/components/schemas/result.Failure'}
         notes:
           type: array
-          items:
-            type: string
+          items: {type: string}
         summaries:
           type: array
-          items:
-            $ref: '#/components/schemas/result.Summary'
+          items: {$ref: '#/components/schemas/result.Summary'}
         checks:
           type: array
-          items:
-            $ref: '#/components/schemas/result.BatchChecks'
-        batches:
-          type: integer
-        batches_finished:
-          type: integer
+          items: {$ref: '#/components/schemas/result.BatchChecks'}
+        batches: {type: integer}
+        batches_finished: {type: integer}
         confidence:
           type: integer
           description: The model's own score, 1 to 5 (0 when it gave none).
-        confidence_reason:
-          type: string
+        confidence_reason: {type: string}
       additionalProperties: true
     result.Skipped:
       description: A file left out of a review, and the rule that left it out.
       type: object
       properties:
-        path:
-          type: string
-        rule:
-          type: string
+        path: {type: string}
+        rule: {type: string}
       additionalProperties: true
     result.Summary:
       description: The model's summary of one batch.
       type: object
       properties:
-        batch:
-          type: integer
-        text:
-          type: string
+        batch: {type: integer}
+        text: {type: string}
       additionalProperties: true
     skillfetch.JobResult:
       description: 'What a fetch Job posts: the commit it read and the skills of the folder, or `error` when
         it could not read them.'
       type: object
       properties:
-        commit:
-          type: string
-        error:
-          type: string
+        commit: {type: string}
+        error: {type: string}
         files:
           type: array
-          items:
-            $ref: '#/components/schemas/store.FetchedFile'
+          items: {$ref: '#/components/schemas/store.FetchedFile'}
       additionalProperties: true
     store.FetchedFile:
       description: One skill file a fetch Job read. `content` is empty when it was not kept.
       type: object
       properties:
-        name:
-          type: string
-        path:
-          type: string
-        content:
-          type: string
-        problem:
-          type: string
+        name: {type: string}
+        path: {type: string}
+        content: {type: string}
+        problem: {type: string}
       additionalProperties: true
