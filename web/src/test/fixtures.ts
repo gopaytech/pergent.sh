@@ -449,6 +449,7 @@ export const instanceGitHub: InstanceAdminView = {
 export const instanceGitHubOneApp: InstanceAdminView = {
   ...instanceGitHub,
   name: "solo",
+  webhookURL: "https://pergent.example.com/webhooks/github/solo",
   approveAppID: 11,
   approver: "review_app",
   secrets: {
@@ -461,6 +462,7 @@ export const instanceGitHubOneApp: InstanceAdminView = {
 export const instanceDashboardGitLab: InstanceAdminView = {
   ...instanceGitLab,
   name: "extra",
+  webhookURL: "https://pergent.example.com/webhooks/gitlab/extra",
   source: "dashboard",
   url: "https://gitlab2.example.com",
   oauthClientID: "",

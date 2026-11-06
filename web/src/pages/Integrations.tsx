@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 import { api, type Approver, type IntegrationView, type InstanceAdminView, type Platform } from "../api";
 import { useMe } from "../layout/me";
@@ -263,6 +263,13 @@ function InstanceCard({ inst }: { inst: InstanceAdminView }) {
 
 function WebhookURL({ inst }: { inst: InstanceAdminView }) {
   const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) {
+      return;
+    }
+    const timer = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(timer);
+  }, [copied]);
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(inst.webhookURL);

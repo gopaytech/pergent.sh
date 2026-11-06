@@ -94,7 +94,10 @@ describe("Integrations for an operator", () => {
   });
 
   it("shows each instance's webhook URL and who sets it", async () => {
-    fakeApi({ "GET /api/me": { body: operator }, "GET /api/admin/instances": { body: instances } });
+    fakeApi({
+      "GET /api/me": { body: operator },
+      "GET /api/admin/instances": { body: [...instances, instanceGitHubOneApp] },
+    });
     renderApp("/integrations");
     const main = await card("GitLab · main");
     expect(main).toHaveTextContent("Webhook URL: https://pergent.example.com/webhooks/gitlab/main");
@@ -102,6 +105,12 @@ describe("Integrations for an operator", () => {
     const hub = await card("GitHub · hub");
     expect(hub).toHaveTextContent("Webhook URL: https://pergent.example.com/webhooks/github/hub");
     expect(hub).toHaveTextContent("Set this on the review App.");
+    expect(await card("GitLab · extra")).toHaveTextContent(
+      "Webhook URL: https://pergent.example.com/webhooks/gitlab/extra",
+    );
+    expect(await card("GitHub · solo")).toHaveTextContent(
+      "Webhook URL: https://pergent.example.com/webhooks/github/solo",
+    );
   });
 
   it("copies the webhook URL", async () => {
@@ -112,6 +121,22 @@ describe("Integrations for an operator", () => {
     await user.click(within(hub).getByRole("button", { name: "Copy webhook URL" }));
     expect(await navigator.clipboard.readText()).toBe("https://pergent.example.com/webhooks/github/hub");
     expect(within(hub).getByRole("button", { name: "Copied" })).toBeInTheDocument();
+  });
+
+  it("goes back to Copy a moment after copying", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      fakeApi({ "GET /api/me": { body: operator }, "GET /api/admin/instances": { body: instances } });
+      renderApp("/integrations");
+      const hub = await card("GitHub · hub");
+      await user.click(within(hub).getByRole("button", { name: "Copy webhook URL" }));
+      expect(within(hub).getByRole("button", { name: "Copied" })).toBeInTheDocument();
+      vi.advanceTimersByTime(2000);
+      expect(await within(hub).findByRole("button", { name: "Copy webhook URL" })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("says the review App approves, and lists no approve secret for it", async () => {

@@ -302,8 +302,7 @@ func (q *hookQueue) Republish(context.Context, store.MRKey, string, string) (boo
 	return true, nil
 }
 
-// A GitHub instance is added with its Apps' keys and the webhook secret the
-// operator entered; the approve App shows as "app".
+// An instance's webhook URL comes from public_url, its platform and its name.
 func TestInstanceViewWebhookURL(t *testing.T) {
 	e := newEnv(t, func(c *config.Config) { c.PublicURL = "https://pergent.example.com" })
 	view := e.addLab(e.operator())
@@ -312,6 +311,8 @@ func TestInstanceViewWebhookURL(t *testing.T) {
 	}
 }
 
+// A GitHub instance is added with its Apps' keys and the webhook secret the
+// operator entered; the approve App shows as "app".
 func TestAddGitHubInstance(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.operator()
