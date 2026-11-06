@@ -25,7 +25,7 @@ const (
 
 // HookURL is where the webhook of instance's projects points.
 func HookURL(publicURL, instance string) string {
-	return strings.TrimRight(publicURL, "/") + "/webhooks/gitlab/" + instance
+	return config.WebhookURL(publicURL, config.PlatformGitLab, instance)
 }
 
 // Reconcile makes the platforms match the repositories switched on, in the
