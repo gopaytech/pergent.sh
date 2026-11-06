@@ -222,6 +222,22 @@ pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is hand
 
 ## ⬆️ Upgrading
 
+### Upgrading to 0.8.1
+
+Reviews now run pergent v0.5.4 (the default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.5.4`). There is no migration, and nothing to change in the config or the chart. 0.8.0 keeps working on the same database, so you can roll back.
+
+**One action: check your library skills.** pergent v0.5.4 fails a skill whose `paths` or `exclude` has a pattern with bad glob syntax or one that can never match a file, such as `api/` (a directory is `api/**`) or `api/[x`. Every review that uses such a skill ends as `failed`, with the error `skills_invalid`. Open each library skill and fix the pattern. The skill editor and an install or fetch from git now refuse to save one, and the refusal names the pattern. A skill in the repository's own folders with a bad pattern fails the run with `<path>: <problem>`, and the readiness scan shows it as a problem. With a `jobs.image` that pins an older pergent, the pattern is still accepted by the reviewer and matches nothing.
+
+The comment and the inline threads look a little different, because pergent now makes everything the model wrote inert:
+
+- Code blocks lose their syntax highlighting. A block pergent shows has no language after its fence.
+- A code span that is glued to other text, such as a word right before the backtick, shows the backticks as they are.
+- Check cells in the tables have no code formatting.
+- A bare URL that holds `@`, `[`, `]` or `|` is no longer a link.
+- An inline thread has a blank line after its title.
+
+A review can also read the patches of the changed files. pergent writes each one to a temporary folder in the Job and tells the agent where the index is, so a run can look at another file's change. The patches come from the checkout the agent already reads, and a file the read rules deny is left out.
+
 ### Upgrading to 0.8.0
 
 Nothing to change in the config or the chart. Migration `0024` runs at startup, and 0.7.1 keeps working on the migrated database, so you can roll back.
@@ -801,7 +817,7 @@ Repository skills and instructions are read from the target branch at the merge 
 
 Everyone with a team can read the library (**Skills** in the dashboard). Any admin, password admin or member of an admin team, writes it; maintainers and viewers only read. Every change applies to the next review, with no restart.
 
-- **Write** a skill with **New skill**. The name is fixed after it is created and matches `[A-Za-z0-9][A-Za-z0-9._-]*`; a frontmatter `name`, when present, must equal it. The text is at most 128 KiB, its frontmatter must parse (`paths` and `exclude` are lists of strings, `cross_batch` is true or false; other fields are ignored), and it must not contain a secret pergent.sh holds (a token, a key, a webhook or OAuth secret, the LLM key): the save is refused with `the skill contains a secret pergent.sh holds`, naming no value. The library holds at most 200 skills.
+- **Write** a skill with **New skill**. The name is fixed after it is created and matches `[A-Za-z0-9][A-Za-z0-9._-]*`; a frontmatter `name`, when present, must equal it. The text is at most 128 KiB, its frontmatter must parse (`paths` and `exclude` are lists of strings, each pattern valid for pergent: bad glob syntax or one that can never match, such as `api/`, is refused and named; `cross_batch` is true or false; other fields are ignored), and it must not contain a secret pergent.sh holds (a token, a key, a webhook or OAuth secret, the LLM key): the save is refused with `the skill contains a secret pergent.sh holds`, naming no value. The library holds at most 200 skills.
 - **Add to default skills** is a box on New skill and on Install, off at first, so a new skill reaches no repository until an admin chooses it.
 - **Edit** works on a written skill. A save carries the version you opened: if another admin saved meanwhile, it is refused with 409 `this skill changed since you opened it`. An installed skill can't be edited (409 `an installed skill can't be edited; copy it`): **Copy** makes a new written skill under a new name, with its frontmatter `name` set to it.
 - **Versions.** Every save, install and update adds a version, kept for good. The skill's page lists them, read-only. A name that is deleted and created again continues its numbering.
@@ -1244,7 +1260,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `llm.base_url` | none | Custom API base URL for the provider. |
 | `llm.api_key_env` | `OPENCODE_API_KEY` | Name of the env var with the LLM key. |
 | `jobs.namespace` | required | Namespace the Jobs run in. |
-| `jobs.image` | `ghcr.io/gopaytech/pergent:v0.5.3` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
+| `jobs.image` | `ghcr.io/gopaytech/pergent:v0.5.4` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
 | `jobs.max_running` | `5` | Most Jobs running at once. Further runs wait in the queue. At least 1. |
 | `jobs.timeout` | `30m` | pergent's own review budget per Job (`--timeout`). The Job's deadline adds 2 minutes to deliver and a clone allowance of at least 2 minutes. At startup pergent.sh warns about a timeout shorter than its step limit times 30 seconds. |
 | `jobs.max_turns` | `40` | pergent's step limit per opencode run (`--max-turns`) for every repository, 5 to 200. |
