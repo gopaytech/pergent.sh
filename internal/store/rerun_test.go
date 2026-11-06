@@ -547,3 +547,70 @@ func TestLatestDecidedRun(t *testing.T) {
 		t.Errorf("LatestDecidedRun = %s after a push; want none", got.ID)
 	}
 }
+
+// A run that never had SetRunQuiet called (one from before the column, or one
+// that never started) has a NULL quiet_reviews. It reads as off through every
+// path that scans a run.
+func TestRunQuietNullReadsOff(t *testing.T) {
+	s := newStore(t)
+	queued := enqueue(t, s, mr1, "aaa")
+	if r, found, err := s.Run(ctx, queued); err != nil || !found || r.Quiet {
+		t.Fatalf("Run of a queued run = quiet %v, found %v, %v; want false, true, nil", r.Quiet, found, err)
+	}
+	claimed, err := s.ClaimQueued(ctx, 10, t0)
+	if err != nil || len(claimed) != 1 || claimed[0].ID != queued || claimed[0].Quiet {
+		t.Fatalf("ClaimQueued = %+v, %v; want the run, not quiet", claimed, err)
+	}
+	rep := reported(t, s, mr2, "bbb", `{"status":"completed"}`)
+	toPublish, err := s.RunsToPublish(ctx, t0.Add(time.Hour), 10)
+	if err != nil || len(toPublish) != 1 || toPublish[0].ID != rep || toPublish[0].Quiet {
+		t.Fatalf("RunsToPublish = %+v, %v; want the reported run, not quiet", toPublish, err)
+	}
+}
+
+// SetRunQuiet records whether a run being dispatched (queued or running) is
+// quiet, and reads back each way; any other run is an error.
+func TestSetRunQuiet(t *testing.T) {
+	s := newStore(t)
+	id := enqueue(t, s, mr1, "aaa")
+
+	for _, quiet := range []bool{true, false, true} {
+		if err := s.SetRunQuiet(ctx, id, quiet); err != nil {
+			t.Fatalf("SetRunQuiet(%v) of a queued run: %v", quiet, err)
+		}
+		if r := getRun(t, s, id); r.Quiet != quiet {
+			t.Errorf("queued run: Quiet = %v, want %v", r.Quiet, quiet)
+		}
+	}
+
+	claimed, err := s.ClaimQueued(ctx, 10, t0)
+	if err != nil || len(claimed) != 1 || !claimed[0].Quiet {
+		t.Fatalf("ClaimQueued = %+v, %v; want the run, quiet", claimed, err)
+	}
+	if err := s.SetRunQuiet(ctx, id, false); err != nil {
+		t.Fatalf("SetRunQuiet of a running run: %v", err)
+	}
+	if r := getRun(t, s, id); r.Quiet {
+		t.Error("running run: Quiet = true after SetRunQuiet(false)")
+	}
+	if err := s.SetRunQuiet(ctx, id, true); err != nil {
+		t.Fatal(err)
+	}
+
+	tok := "tok-quiet"
+	if err := s.MarkDispatched(ctx, id, "job-"+id, "base", "start", hash(tok), t0.Add(time.Hour), t0); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := s.StoreResult(ctx, id, tok, []byte(`{"status":"completed"}`), t0.Add(time.Minute)); err != nil || out != ResultStored {
+		t.Fatalf("StoreResult = %v, %v", out, err)
+	}
+	if err := s.SetRunQuiet(ctx, id, false); err == nil {
+		t.Error("SetRunQuiet of a reported run succeeded")
+	}
+	if r := getRun(t, s, id); !r.Quiet {
+		t.Error("the reported run changed")
+	}
+	if err := s.SetRunQuiet(ctx, "bad", true); err == nil {
+		t.Error("a malformed id was accepted")
+	}
+}

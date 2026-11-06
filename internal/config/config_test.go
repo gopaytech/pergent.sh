@@ -645,6 +645,24 @@ func TestLoadRepositorySettings(t *testing.T) {
 	}
 }
 
+func TestQuietReviewsConfigKey(t *testing.T) {
+	base, err := os.ReadFile("testdata/valid.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Replace(string(base), "    project: acme/widgets\n", "    project: acme/widgets\n    quiet_reviews: true\n", 1)
+	cfg, err := Load(writeConfig(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Repositories[0].QuietReviews; got == nil || !*got {
+		t.Errorf("QuietReviews = %v, want true", got)
+	}
+	if got := loadValid(t).Repositories[0].QuietReviews; got != nil {
+		t.Errorf("QuietReviews unset = %v, want nil", *got)
+	}
+}
+
 func TestLoadRejectsBadRepositorySettings(t *testing.T) {
 	base, err := os.ReadFile("testdata/valid.yaml")
 	if err != nil {

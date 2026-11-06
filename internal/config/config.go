@@ -190,6 +190,9 @@ type Repository struct {
 	// LearnFromDismissals is whether later reviews are told what people with
 	// write access dismissed, and why (default true).
 	LearnFromDismissals *bool
+	// QuietReviews is whether a review says less: the model is told to leave
+	// out nitpicks and the comment is shorter (default false).
+	QuietReviews *bool
 	// JobTimeout replaces jobs.timeout for this repository.
 	JobTimeout *time.Duration
 	// JobMemory replaces the memory limit of jobs.resources.limits.
@@ -260,6 +263,7 @@ type fileRepository struct {
 	CommandsAuthorAndMaintainersOnly *bool `yaml:"commands_author_and_maintainers_only"`
 	IncrementalReviews               *bool `yaml:"incremental_reviews"`
 	LearnFromDismissals              *bool `yaml:"learn_from_dismissals"`
+	QuietReviews                     *bool `yaml:"quiet_reviews"`
 }
 
 func (f fileRepository) repository() Repository {
@@ -273,6 +277,7 @@ func (f fileRepository) repository() Repository {
 		CommandsAuthorAndMaintainersOnly: f.CommandsAuthorAndMaintainersOnly,
 		IncrementalReviews:               f.IncrementalReviews,
 		LearnFromDismissals:              f.LearnFromDismissals,
+		QuietReviews:                     f.QuietReviews,
 	}
 	if f.JobTimeout != nil {
 		d := time.Duration(*f.JobTimeout)
