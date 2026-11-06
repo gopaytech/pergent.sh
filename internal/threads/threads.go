@@ -38,7 +38,9 @@ const (
 	NoteOverCap  = "Over the limit of 20 open inline threads; it moves to the diff when one is resolved."
 	NoteFailed   = "Posting it on the diff failed, so it is listed here."
 	NoteKeptRule = "Kept here: this branch requires threads resolved before merge."
-	NoteTooLong  = "Too long for an inline comment, so it is listed here."
+	// NoteKeptQuiet is why a suggestion stays in the comment of a quiet review.
+	NoteKeptQuiet = "Kept here: quiet reviews don't post suggestions on the diff."
+	NoteTooLong   = "Too long for an inline comment, so it is listed here."
 )
 
 // Replies posted on a thread when it changes state. ReplyFixed, ReplyBack and
@@ -50,6 +52,13 @@ const (
 
 // ReplyFixed is the reply on a thread whose finding is gone at head.
 func ReplyFixed(head string) string { return "Fixed in `" + ShortSHA(head) + "`." }
+
+// ReplyNoLongerReported is the reply on a thread of a quiet review whose
+// finding is gone at head. It does not claim a fix: a quiet review may stop
+// reporting a finding without the code having changed.
+func ReplyNoLongerReported(head string) string {
+	return "No longer reported in `" + ShortSHA(head) + "`."
+}
 
 // ReplyLeftOut is the reply on a thread whose finding the review no longer
 // reports, but whose skill says it left findings out because of past
@@ -122,6 +131,7 @@ type Input struct {
 	// A nil Map maps nothing.
 	Map          func(t Thread) (line, endLine int, ok bool)
 	OnlyBlocking bool // the target branch requires threads resolved before merge
+	Quiet        bool // a quiet review (read from the run): suggestions stay in the comment
 }
 
 // Post is a finding to post as a new inline thread.
@@ -189,6 +199,13 @@ func Decide(in Input) Plan {
 	threads := append([]Thread(nil), in.Threads...)
 	sort.SliceStable(threads, func(i, j int) bool { return lessThread(threads[i], threads[j]) })
 
+	// Only blocking findings go on the diff when the branch requires resolved
+	// threads or the review is quiet; a quiet review says so in its note.
+	onlyBlocking := in.OnlyBlocking || in.Quiet
+	kept := NoteKeptRule
+	if in.Quiet {
+		kept = NoteKeptQuiet
+	}
 	keptRule := map[string]bool{}
 
 	// Exact matches, and the findings that now have a thread.
@@ -232,7 +249,7 @@ func Decide(in Input) Plan {
 		for _, t := range ts {
 			switch t.State {
 			case StateFixed, StateGone, StateDismissed:
-				if in.OnlyBlocking && byFP[fp].Severity != severityBlocking {
+				if onlyBlocking && byFP[fp].Severity != severityBlocking {
 					keptRule[fp] = true // a suggestion stays in the summary
 					continue
 				}
@@ -254,7 +271,7 @@ func Decide(in Input) Plan {
 	}
 	for fp := range keptRule {
 		if !p.Inline[fp] {
-			p.Notes[fp] = NoteKeptRule
+			p.Notes[fp] = kept
 		}
 	}
 
@@ -280,7 +297,13 @@ func Decide(in Input) Plan {
 				p.Note = append(p.Note, Note{Thread: t, Reply: ReplyLeftOut(in.Head)})
 			}
 		case known && !cov.Failed && cov.Reviewed[t.File]:
-			p.Resolve = append(p.Resolve, Resolve{Thread: t, State: StateFixed, Reply: ReplyFixed(in.Head)})
+			// A quiet review does not claim a fix; the state stays StateFixed,
+			// so a blocking finding that comes back reopens the thread.
+			reply := ReplyFixed(in.Head)
+			if in.Quiet {
+				reply = ReplyNoLongerReported(in.Head)
+			}
+			p.Resolve = append(p.Resolve, Resolve{Thread: t, State: StateFixed, Reply: reply})
 		}
 	}
 
@@ -294,8 +317,8 @@ func Decide(in Input) Plan {
 		switch {
 		case note != "":
 			p.Notes[f.Fingerprint] = note
-		case in.OnlyBlocking && f.Severity != severityBlocking:
-			p.Notes[f.Fingerprint] = NoteKeptRule
+		case onlyBlocking && f.Severity != severityBlocking:
+			p.Notes[f.Fingerprint] = kept
 		default:
 			cands = append(cands, post)
 		}

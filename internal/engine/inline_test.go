@@ -281,6 +281,7 @@ type harness struct {
 	logs   lockedWriter
 	redact func(string) string
 	blocks bool
+	quiet  bool // the run was a quiet review
 }
 
 func newHarness(t *testing.T, rows ...store.InlineThread) *harness {
@@ -300,7 +301,7 @@ func (h *harness) mr() store.MRKey {
 }
 
 func (h *harness) run() store.Run {
-	return store.Run{MR: h.mr(), ProjectPath: testProjectPath, HeadSHA: h.head, TargetBranch: "main"}
+	return store.Run{MR: h.mr(), ProjectPath: testProjectPath, HeadSHA: h.head, TargetBranch: "main", Quiet: h.quiet}
 }
 
 func (h *harness) sync(o policy.Outcome) inlineView {
@@ -1167,6 +1168,61 @@ func TestInlineSyncRuleKeepsSuggestions(t *testing.T) {
 	}
 	if len(h.fi.posted) != 1 || len(h.fi.posted[0]) != 1 {
 		t.Errorf("posted = %+v", h.fi.posted)
+	}
+}
+
+func TestInlineQuietKeepsSuggestions(t *testing.T) {
+	h := newHarness(t)
+	h.quiet = true
+	v := h.sync(securityReview(t, h.head, "has_blocking_issues",
+		finding(fpBlocking, "db/query.go", 11, 0, "blocking", ""),
+		finding(fpSuggestion, "db/query.go", 12, 0, "suggestion", "x")))
+	if !reflect.DeepEqual(v.Inline, map[string]bool{fpBlocking: true}) || v.Notes[fpSuggestion] != threads.NoteKeptQuiet {
+		t.Errorf("view = %+v, want the blocking finding posted and the suggestion kept with the quiet note", v)
+	}
+	if len(h.fi.posted) != 1 || len(h.fi.posted[0]) != 1 {
+		t.Errorf("posted = %+v, want one thread", h.fi.posted)
+	}
+}
+
+// A run that is not quiet posts both, and says "Fixed in" when a finding is
+// gone: off changes nothing.
+func TestInlineOffRunKeepsSuggestionThreads(t *testing.T) {
+	h := newHarness(t)
+	h.quiet = false
+	v := h.sync(securityReview(t, h.head, "has_blocking_issues",
+		finding(fpBlocking, "db/query.go", 11, 0, "blocking", ""),
+		finding(fpSuggestion, "db/query.go", 12, 0, "suggestion", "x")))
+	if !reflect.DeepEqual(v.Inline, map[string]bool{fpBlocking: true, fpSuggestion: true}) || len(v.Notes) != 0 {
+		t.Errorf("view = %+v, want both findings on the diff", v)
+	}
+	if len(h.fi.posted) != 1 || len(h.fi.posted[0]) != 2 {
+		t.Errorf("posted = %+v, want two threads", h.fi.posted)
+	}
+
+	g := newHarness(t)
+	r := g.row(fpBlocking, "t1", 11, "open")
+	g.st = newMemThreads(&g.events, r)
+	g.fi.threads = []forge.Thread{g.platform(r, false)}
+	g.sync(securityReview(t, g.head, "no_blocking_issues"))
+	if want := []string{"reply t1 Fixed in `aaaaaaa`.", "resolve t1 true", "store state " + fpBlocking + " fixed"}; !slices.Equal(g.events, want) {
+		t.Errorf("events =\n%q\nwant\n%q", g.events, want)
+	}
+}
+
+func TestInlineQuietResolveReply(t *testing.T) {
+	h := newHarness(t)
+	h.quiet = true
+	r := h.row(fpBlocking, "t1", 11, "open")
+	h.st = newMemThreads(&h.events, r)
+	h.fi.threads = []forge.Thread{h.platform(r, false)}
+	h.sync(securityReview(t, h.head, "no_blocking_issues"))
+	want := []string{"reply t1 No longer reported in `aaaaaaa`.", "resolve t1 true", "store state " + fpBlocking + " fixed"}
+	if !slices.Equal(h.events, want) {
+		t.Errorf("events =\n%q\nwant\n%q", h.events, want)
+	}
+	if got, _ := h.st.Row(fpBlocking); got.State != "fixed" {
+		t.Errorf("state = %q, want fixed", got.State)
 	}
 }
 
