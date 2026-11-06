@@ -952,6 +952,16 @@ Teams differ in how much review they want. What bothers people is nitpicks and s
 
 **Turning it on.** It is off by default. The switch is **Quiet reviews** in a repository's Settings, the default under **Admin → Settings**, or `repositories[].quiet_reviews` in the config ([Config reference](#-config-reference)). On a repository the dashboard manages, a repository that leaves it unset takes the admin default, and with none set it is off. A repository listed in the config reads no admin default: unset there means off. A review reads the setting when it starts and keeps it, so a change takes effect with the next review. The review page labels a run started quiet with `quiet` in its details, and it still shows every check and file, though a quiet comment leaves out the Files list and the checks that passed.
 
+**The prompt line.** A quiet review adds one section to the instructions the model reads, word for word:
+
+> # Quiet review
+>
+> When you raise a suggestion of your own, raise it only if it would change how the code behaves or clearly helps the next person who reads it, and leave out style, naming, formatting and other nitpicks. This applies to nothing else: it does not change what is blocking, how you report or judge a checklist item, or how you check findings another reviewer raised.
+
+It comes last, after `AGENTS.md` and `.pergent/instructions.md`, so it wins over them for suggestions. The last sentence keeps it to the model's own suggestions: what blocks, how a checklist item is judged and how a finding another reviewer raised is checked do not change. A repository with no instructions of its own still gets an instructions file, holding only this section. The section counts toward the 900 KiB the skills and instructions may weigh, so a review whose inputs only just fit can fail as too large once the setting is on. It is not part of any skill's hash, so turning the setting on or off does not make a skill look edited, and an [incremental review](#-incremental-reviews) can still carry files over. The **Skills & instructions** tab and the readiness budget do not show it. With the setting off nothing is added, and the prompt is the same as before, byte for byte.
+
+The run stores whether it was quiet when it starts, before its Job does, and the review uses that value for its prompt, its threads and its comment. If starting the Job fails and the review is tried again after you changed the setting, the new try uses the new value.
+
 ## 📈 Skill results
 
 A skill that raises findings nobody acts on costs reviewers time. The **Skill results** tab of a repository shows which skills people act on and which they set aside, so you can fix or drop the weak ones. Anyone who can see the repository can open it.

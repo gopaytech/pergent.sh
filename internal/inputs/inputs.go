@@ -256,6 +256,25 @@ func LoadInstructions(ctx context.Context, src Source, projectID int64, ref stri
 	return out, nil
 }
 
+// The section a quiet review adds to its instructions. The line limits only
+// the model's own suggestions: its last sentence keeps the setting away from
+// what blocks, checklist items and the verification of another reviewer's
+// findings.
+const (
+	quietHeading = "\n# Quiet review\n\n"
+	quietLine    = "When you raise a suggestion of your own, raise it only if it would change how the code behaves or clearly helps the next person who reads it, and leave out style, naming, formatting and other nitpicks. This applies to nothing else: it does not change what is blocking, how you report or judge a checklist item, or how you check findings another reviewer raised."
+)
+
+// AddQuietLine appends the quiet section to the instructions, after the
+// team's own text so it wins for suggestions. It touches nothing else, so no
+// skill's hash changes. The result is a new slice: Only shares Instructions.
+func (in *Inputs) AddQuietLine() {
+	section := quietHeading + quietLine + "\n"
+	out := make([]byte, 0, len(in.Instructions)+len(section))
+	out = append(out, in.Instructions...)
+	in.Instructions = append(out, section...)
+}
+
 // Size is the total number of bytes the inputs put into a ConfigMap.
 func (in *Inputs) Size() int {
 	n := len(in.Instructions) + len(in.Previous) + len(in.Carried) + len(in.Dismissals)

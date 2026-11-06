@@ -564,3 +564,40 @@ func TestBuildJobCommentLimit(t *testing.T) {
 		}
 	}
 }
+
+// Inputs with instructions and nothing else (a quiet review of a repository
+// with no instructions of its own) still reach the Job.
+func TestBuildJobInstructionsOnly(t *testing.T) {
+	p := testParams()
+	p.Inputs = &inputs.Inputs{
+		Skills:       map[string][]byte{"a": []byte("x")},
+		Instructions: []byte("\n# Quiet review\n\nline\n"),
+	}
+	main := containerByName(t, BuildJob(p).Spec.Template.Spec.Containers, "pergent")
+	if !slices.Contains(main.Args, "--instructions=/in/instructions.md") {
+		t.Errorf("args %v lack --instructions", main.Args)
+	}
+	for _, a := range main.Args {
+		if strings.HasPrefix(a, "--previous") || strings.HasPrefix(a, "--carried") {
+			t.Errorf("unexpected arg %q", a)
+		}
+	}
+	cm := BuildConfigMap(p, nil)
+	if cm.Data["instructions.md"] != "\n# Quiet review\n\nline\n" {
+		t.Errorf("instructions.md = %q", cm.Data["instructions.md"])
+	}
+	found := false
+	for _, v := range BuildJob(p).Spec.Template.Spec.Volumes {
+		if v.ConfigMap == nil {
+			continue
+		}
+		for _, it := range v.ConfigMap.Items {
+			if it.Key == "instructions.md" && it.Path == "instructions.md" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Error("no volume item for instructions.md")
+	}
+}
