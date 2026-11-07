@@ -209,7 +209,8 @@ export type RepoSettings = {
   learnFromDismissals: SettingView<boolean>;
   quietReviews: SettingView<boolean>;
   // commentLayout is the comment's blocks as "block:state" entries in order:
-  // the built-in layout while overridden is false.
+  // the default in effect (the admin default, else the built-in layout) while
+  // overridden is false.
   commentLayout: SettingView<string[]>;
   failureStatus: SettingView<string>;
   // skills is null for the default list, otherwise the library skills.

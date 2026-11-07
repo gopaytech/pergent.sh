@@ -270,13 +270,13 @@ function Defaults({ v }: { v: DefaultsView }) {
           <div className="help">
             The blocks of the review comment, in order. A block that is not shown is left out.
             {pinned("commentLayout") ? (
-              <span> Saved here; the config has no layout, so the built-in one applies.</span>
+              <span> Saved here: repositories switched on in the dashboard start with this layout.</span>
             ) : (
-              <span> From config: the built-in layout.</span>
+              <span> Not saved here: repositories switched on in the dashboard start with the built-in layout.</span>
             )}
           </div>
         </div>
-        <div>
+        <div className="wide">
           <CommentLayoutEditor value={layout} defaults={cfg.commentLayout} disabled={save.isPending} onChange={setLayout} />
         </div>
       </div>

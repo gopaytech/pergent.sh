@@ -43,7 +43,7 @@ export default function CommentLayoutEditor({
   const [hidden, setHidden] = useState<Record<string, string>>({});
   const list = value ?? defaults ?? null;
   if (list === null) {
-    return <div className="pad meta">This repository follows the default layout.</div>;
+    return <div className="pad meta">Will follow the default layout once you save. Reload to undo.</div>;
   }
   const reset = (
     <button type="button" className="btn small" disabled={disabled || value === null} onClick={() => onChange(null)}>
@@ -69,9 +69,9 @@ export default function CommentLayoutEditor({
     <div>
       <div role="list" aria-label="Comment layout">
         {entries.map((e, i) => (
-          <div className="skill" role="listitem" key={e.block}>
+          <div className="skill layout-row" role="listitem" key={e.block}>
             {e.block === "findings" ? (
-              <span aria-hidden="true" />
+              <span className="nobox" aria-hidden="true" />
             ) : (
               <input
                 type="checkbox"
@@ -82,9 +82,6 @@ export default function CommentLayoutEditor({
               />
             )}
             <b className="grow">{label(e.block)}</b>
-            {e.block === "findings" && (
-              <span className="meta">Blocking findings always stay open; collapsed applies to suggestions.</span>
-            )}
             <select
               aria-label={`${label(e.block)} state`}
               value={e.state}
@@ -112,10 +109,13 @@ export default function CommentLayoutEditor({
             >
               ↓
             </button>
+            {e.block === "findings" && (
+              <span className="meta layout-note">Blocking findings always stay open; collapsed applies to suggestions.</span>
+            )}
           </div>
         ))}
         {left.map((b) => (
-          <div className="skill" role="listitem" key={b}>
+          <div className="skill layout-row" role="listitem" key={b}>
             <input
               type="checkbox"
               aria-label={`Show ${label(b)}`}

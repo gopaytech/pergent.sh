@@ -1007,7 +1007,8 @@ paths:
         `settings` is keyed `approve`, `reviewDrafts`, `inlineFindings`,
         `commandsAuthorAndMaintainersOnly`, `incrementalReviews`,
         `learnFromDismissals`, `quietReviews`, `commentLayout` (the
-        `block:state` list, the built-in one while `overridden` is false),
+        `block:state` list; while `overridden` is false it is the default in
+        effect: the admin default, else the built-in layout),
         `failureStatus`, `skills`
         (null: the default list), `repoSkills`, `jobTimeoutSeconds`,
         `maxTurns`, `jobMemory`
@@ -2634,9 +2635,10 @@ components:
             The comment's blocks in order, each `block:state`: the blocks are
             `summary`, `findings`, `dismissed`, `checks` and `files`, the
             states `open` and `collapsed`. A block left out is hidden.
-            `findings` is required and each block is named once. Null is the
-            built-in layout. An empty list, an unknown block or state, a
-            repeated block and a list without `findings` are 400.
+            `findings` is required and each block is named once. Null follows
+            the default (the admin default, else the built-in layout). An
+            empty list, an unknown block or state, a repeated block and a list
+            without `findings` are 400.
           minItems: 1
           items: {type: string, pattern: '^(summary|findings|dismissed|checks|files):(open|collapsed)$'}
         failureStatus:

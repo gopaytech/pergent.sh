@@ -342,7 +342,7 @@ type Last7View struct {
 // with write access dismissed, and why), quietReviews (whether a review says
 // less: fewer nitpicks, no suggestion threads, a shorter comment), commentLayout (the
 // comment's blocks as a list of "block:state" texts in order, such as
-// "findings:collapsed"; the built-in layout until the repository sets one), failureStatus, skills (null: the default list of skills; otherwise the library skills
+// "findings:collapsed"; the default in effect, the admin default else the built-in layout, until the repository sets one), failureStatus, skills (null: the default list of skills; otherwise the library skills
 // reviewed), repoSkills
 // (the detected repository skills turned on, a list, empty when none),
 // jobTimeoutSeconds, maxTurns, jobMemory ("" when none), rerunLimitPerMR and
@@ -724,8 +724,8 @@ type DefaultsView struct {
 	// suggestion threads and a shorter comment.
 	QuietReviews bool `json:"quietReviews"`
 	// CommentLayout is the shape of the review comment, as "block:state"
-	// entries in order. A repository that sets none gets the built-in layout,
-	// so this is never empty.
+	// entries in order. A repository that sets none gets this one: the layout
+	// saved here, else the built-in layout. It is never empty.
 	CommentLayout     []string `json:"commentLayout"`
 	FailureStatus     string   `json:"failureStatus"`
 	JobTimeoutSeconds int64    `json:"jobTimeoutSeconds"`
@@ -820,8 +820,8 @@ type LLMView struct {
 //     settings in the body and leaves the others; a null resets one to its
 //     default. The keys are those of RepositoryDetailView.Settings:
 //     approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals and quietReviews (true or false),
-//     commentLayout (a non-empty list of "block:state" texts, or null for the
-//     built-in layout: the blocks are summary, findings, dismissed, checks and
+//     commentLayout (a non-empty list of "block:state" texts, or null to follow
+//     the default, the admin default else the built-in layout: the blocks are summary, findings, dismissed, checks and
 //     files, the states open and collapsed, a block left out is hidden,
 //     findings is required and each block is named once; anything else is
 //     400), failureStatus ("failed" or

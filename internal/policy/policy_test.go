@@ -1323,7 +1323,7 @@ func TestDecideInlineChangesOnlyTheComment(t *testing.T) {
 // commit before Outcome had a Quiet field, and is not to be run again, except
 // when a pergent pin changes the layout on purpose: the file pins what a
 // repository without quiet reviews gets, byte for byte.
-var updateQuietOff = flag.Bool("update-quiet-off", false, "rewrite testdata/quiet-off.md (do not run after quiet reviews exist)")
+var updateQuietOff = flag.Bool("update-quiet-off", false, "rewrite testdata/quiet-off.md (only when a pergent pin changes the layout on purpose; see updateQuietOff)")
 
 // quietFixture is a completed review with everything a quiet comment leaves
 // out or keeps: a blocking and a suggestion finding, passed, n/a and failed

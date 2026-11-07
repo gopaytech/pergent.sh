@@ -1041,7 +1041,9 @@ A review comment has a fixed top and bottom, and five blocks between them. A rep
 | `checks` | The checklist results, grouped by area. |
 | `files` | The list of files the review covered. |
 
-Each block is `open` or `collapsed`. For `findings`, collapsed means the suggestions are collapsed; blocking findings stay open. For `checks`, collapsed means the passed and n/a checks are folded away, while the failed checks stay in view. A block you leave out is not written. This is the default:
+Each block is `open` or `collapsed`. For `findings`, collapsed means the suggestions are collapsed; blocking findings stay open. For `checks`, collapsed means the passed and n/a checks are folded away, while the failed checks stay in view. A block you leave out is not written.
+
+The skill sections (one per skill, with several skills), the list of batch summaries (one skill, several batches) and the failed checks sit where `checks` is. With `checks` left out they sit where `summary` is, right after a single summary; with both left out, right after `findings`. So moving `summary` to the top does not move the skill sections with it: they stay at `checks`. This is the default:
 
 ```yaml
 comment_layout:
@@ -1052,15 +1054,15 @@ comment_layout:
   - files: collapsed
 ```
 
-**Setting it.** `repositories[].comment_layout` in the config, the layout editor in a repository's Settings, or the default under **Admin → Settings** ([Config reference](#-config-reference)). The editor is a list of rows, one per block, with plain labels (Summary, Findings, Dismissed, Checks, Files). Each row has up and down buttons, an **Open** or **Collapsed** choice and a **Show** box; a block with its box cleared is left out, and its row moves to the end and keeps its last choice. **Findings** has no box, because the layout must have it, and its choice says that blocking findings always stay open, so collapsed means the suggestions. **Reset to default** sends the setting back to the default layout. Over the API the setting is `commentLayout`, a list of `block:state` texts such as `findings:collapsed`; `null` is the default layout, and the settings views show the default list while a repository sets none. Saving a list the server refuses is 400. A repository the dashboard manages and leaves unset takes the admin default, and with none set it gets the default layout. A repository listed in the config reads no admin default: unset there means the default layout. The server refuses an unknown block or state, a block listed twice, an empty list and a list without `findings`, both on save and in the config.
+**Setting it.** `repositories[].comment_layout` in the config, the layout editor in a repository's Settings, or the default under **Admin → Settings** ([Config reference](#-config-reference)). The editor is a list of rows, one per block, with plain labels (Summary, Findings, Dismissed, Checks, Files). Each row has up and down buttons, an **Open** or **Collapsed** choice and a **Show** box; a block with its box cleared is left out, and its row moves to the end. The row keeps its last choice until the form is loaded again; after a save and a reload, a block that is left out shows the default choice. **Findings** has no box, because the layout must have it, and its choice says that blocking findings always stay open, so collapsed means the suggestions. **Reset to default** sends the setting back to the default layout. Over the API the setting is `commentLayout`, a list of `block:state` texts such as `findings:collapsed`; `null` is the default layout, and the settings views show the default list while a repository sets none. Saving a list the server refuses is 400. A repository the dashboard manages and leaves unset takes the admin default, and with none set it gets the default layout. A repository listed in the config reads no admin default: unset there means the default layout. The server refuses an unknown block or state, a block listed twice, an empty list and a list without `findings`, both on save and in the config.
 
-**What no layout can change.** Some parts are in every comment:
+**What no layout can change.** These parts are fixed. They are in every comment when there is one to show:
 
 - the headline with the verdict and confidence, and the meta line under it;
-- the confidence reason, the skills table (with several skills) and any failures;
-- the notes, the footer and the hidden findings block at the bottom;
-- every blocking finding, open;
-- every failed check.
+- the confidence reason (only when the score is below 5 or capped), the skills table (with several skills) and any failures;
+- the notes, the footer and the hidden findings block at the bottom (the size limit cuts the hidden block first);
+- every blocking finding not posted as a thread on the diff, open;
+- every failed check, unless the size limit cuts the check tables (see below).
 
 A layout moves and folds the blocks, nothing more. It never changes a verdict, a status, a score, an approval or a count.
 
@@ -1071,7 +1073,7 @@ A layout moves and folds the blocks, nothing more. It never changes a verdict, a
 - Leave out `dismissed`, and the list is gone. A clean review that has dismissed blocking findings still says `(2 dismissed)` in its headline. On a review with blocking issues, or for dismissed suggestions, nothing shows.
 - Leave out `files`, and there is no list. A skipped file that stopped the approval is still named in the note.
 
-**The size limit.** It can still cut failed checks, in any layout, when the comment is too long. It says so in a note. This is the one thing that can remove a failed check, and it comes late: the hidden block, suggestions, passed checks and the file list go first.
+**The size limit.** It can still cut failed checks, in any layout, when the comment is too long. It says so in a note. This is the one thing that can remove a failed check. The hidden block, the suggestions and the passed checks go first; the file list is cut after them.
 
 **Quiet reviews win.** A [quiet review](#-quiet-reviews) writes no Files list and no passed or n/a checks, whatever the layout says. The rest of the layout still applies.
 
@@ -1081,8 +1083,9 @@ A layout moves and folds the blocks, nothing more. It never changes a verdict, a
 
 - The default comment is longer than before: passed checks are open. Collapse `checks`, or turn on quiet reviews, to shorten it.
 - A summary can disagree with the outcome. The model writes it before the findings are checked, so it may mention a problem that was dropped or dismissed. The headline and the findings are what count.
-- On an [incremental review](#-incremental-reviews) a summary can describe only the files that were re-reviewed. Files carried over keep the earlier review's summary.
+- On an [incremental review](#-incremental-reviews) a summary can describe only the files that were re-reviewed. A skill that started no run but still carries files keeps the earlier review's summary; a skill that ran replaces its summary with one about the files it re-reviewed.
 - A layout that leaves blocks out also hides any block a later release adds, until you add it.
+- Batches can word an area differently, and then one check shows under two headings.
 - Repositories can have different comments. Someone who reads across repositories meets several shapes.
 - A summary is text a model wrote about the repository. It is escaped like any other model text, but it is visible in the comment.
 
@@ -1177,7 +1180,7 @@ With **Only the author and maintainers use commands** on (the default), a commen
 
 - A dismissal belongs to one merge request. It is stored by the finding's **fingerprint**, so it survives pushes and line moves: when a later review reports the same finding, it stays dismissed.
 - It covers the severity it was made at, and below. A dismissed blocking finding stays dismissed if it comes back as a suggestion; a dismissed suggestion that comes back as blocking shows again, and needs a dismissal by someone allowed to dismiss blocking findings. Dismissing a suggestion a second time as blocking raises it.
-- `dismiss` and **Dismiss** start no run. pergent.sh decides the latest review again and publishes it: the comment is written again with a collapsed **Dismissed** section (each finding's title and ID, who dismissed it and the reason; the verdict line reads `✅ **No blocking issues** (N dismissed)` when only dismissed findings were blocking), the status is set again, and a review whose blocking findings are all dismissed is approved under the usual rules (approval on, not a draft, nothing failed). The dismissals are applied to the newest review of the change only; one whose head has moved on applies to the next review.
+- `dismiss` and **Dismiss** start no run. pergent.sh decides the latest review again and publishes it: the comment is written again with a **Dismissed** section (collapsed by default; open or left out as the repository's [layout](#-comment-layout) says; each finding's title and ID, who dismissed it and the reason; the verdict line reads `✅ **No blocking issues** (N dismissed)` when only dismissed findings were blocking), the status is set again, and a review whose blocking findings are all dismissed is approved under the usual rules (approval on, not a draft, nothing failed). The dismissals are applied to the newest review of the change only; one whose head has moved on applies to the next review.
 - **Restore** (a button on a dismissed finding) removes the dismissal and decides the review again. If that makes it not approved, the bot's approval is withdrawn; the withdrawal is retried until it succeeds, and for a merged change the record is just dropped.
 - A blocking dismissal of a merged or closed change is refused for everyone, password admins included: the button answers 409 `this change is merged` or `this change is closed` (and 502 when the platform can't say what state it is in). A comment on a change that isn't open gets 👎 and no reply, whatever the command.
 - A dismissal that already exists at the same or a higher severity is left as it is: the reply is `finding <id> is already dismissed`.
@@ -1255,7 +1258,7 @@ Before approving, pergent.sh asks GitLab (or GitHub) for the merge request. It a
 
 When a merge request gets a new head or a new target branch after the approve bot approved it, the approve bot removes its approval (on GitHub it dismisses its approving reviews), whether or not the platform resets approvals itself. This happens as soon as the webhook arrives. A webhook can be lost (GitLab doesn't resend a failed delivery; pergent.sh was restarting, the hook was disabled), so pergent.sh also checks every approval it holds against the platform at startup and every 5 minutes: an approval of a commit that is no longer the head, or of a merge request that was retargeted or closed, is removed then; the approval of a merged one is forgotten without writing anything. An approval can therefore outlive a missed webhook by up to 5 minutes. For an open merge request, the current head also gets a review if the repository is still configured.
 
-A skill whose blocking findings are all dismissed counts as clean, and the comment is written again with its **Dismissed** section; a review whose other conditions hold is then approved like a clean one. A failed, partial or missing review is never `success` and is never approved, and neither is a re-run of some skills that could not be merged with the earlier results of the others.
+A skill whose blocking findings are all dismissed counts as clean, and the comment is written again with its **Dismissed** section (if the layout shows one); a review whose other conditions hold is then approved like a clean one. A failed, partial or missing review is never `success` and is never approved, and neither is a re-run of some skills that could not be merged with the earlier results of the others.
 
 Deciding a review again on the same head (a restored finding, a re-run, a draft that turns up) as not approved takes the approve bot's approval of that head off, as a new head does. The withdrawal is recorded first and tried again until it works. A review that fails for good, because it can't be posted after the retries (see [Pushes, edits and failures](#pushes-edits-and-failures)), takes the bot's approval of that commit off the same way: the withdrawal is recorded in the same step that gives the review up, so a crash can't lose it, and the approval sweep also withdraws the approval of any commit whose newest review is in that state, whatever was recorded. A commit whose newest review failed never keeps an approval an earlier review of it gave.
 

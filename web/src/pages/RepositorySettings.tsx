@@ -219,7 +219,11 @@ function Form({
     if (d.incrementalReviews !== initial.incrementalReviews) body.incrementalReviews = d.incrementalReviews;
     if (d.learnFromDismissals !== initial.learnFromDismissals) body.learnFromDismissals = d.learnFromDismissals;
     if (d.quietReviews !== initial.quietReviews) body.quietReviews = d.quietReviews;
-    if (!sameLayout(d.commentLayout, initial.commentLayout)) body.commentLayout = d.commentLayout;
+    // A repository that follows the default and ends up with the list it
+    // already shows (a row moved and moved back) has changed nothing: sending
+    // it would pin the repository to today's default.
+    const followed = initial.commentLayout === null && d.commentLayout !== null && sameLayout(d.commentLayout, settings.commentLayout.value);
+    if (!followed && !sameLayout(d.commentLayout, initial.commentLayout)) body.commentLayout = d.commentLayout;
     if (d.failureStatus !== initial.failureStatus) body.failureStatus = d.failureStatus;
     if (d.skillsMode === "default") {
       // Back to the default list: null resets the setting.

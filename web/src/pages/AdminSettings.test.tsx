@@ -226,7 +226,7 @@ describe("AdminSettings defaults", () => {
     renderApp("/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const row = within(form).getByText("Comment layout", { selector: ".name" }).closest(".set") as HTMLElement;
-    expect(within(row).getByText(/Saved here; the config has no layout, so the built-in one applies./)).toBeInTheDocument();
+    expect(within(row).getByText(/Saved here: repositories switched on in the dashboard start with this layout./)).toBeInTheDocument();
     expect(within(row).getAllByRole("listitem").map((r) => within(r).getByRole("combobox").getAttribute("aria-label"))).toEqual([
       "Findings state",
       "Summary state",
@@ -296,7 +296,7 @@ describe("AdminSettings defaults", () => {
     expect(row("Incremental reviews")).toHaveTextContent("From config: on");
     expect(row("Learn from dismissals")).toHaveTextContent("From config: on");
     expect(row("Quiet reviews")).toHaveTextContent("From config: off");
-    expect(row("Comment layout")).toHaveTextContent("From config: the built-in layout.");
+    expect(row("Comment layout")).toHaveTextContent("Not saved here: repositories switched on in the dashboard start with the built-in layout.");
     expect(row("Status when a review fails")).toHaveTextContent("From config: failed (blocks merge)");
     expect(row("Timeout")).toHaveTextContent("From config: 600");
     expect(row("Max steps")).toHaveTextContent("From config: 40");

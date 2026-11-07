@@ -109,7 +109,7 @@ describe("CommentLayoutEditor", () => {
 
   it("says the default applies when it has a null value and no default to show", () => {
     render(<CommentLayoutEditor value={null} onChange={vi.fn()} />);
-    expect(screen.getByText(/follows the default layout/)).toBeInTheDocument();
+    expect(screen.getByText(/Will follow the default layout once you save/)).toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Comment layout" })).not.toBeInTheDocument();
   });
 

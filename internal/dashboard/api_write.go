@@ -746,8 +746,9 @@ func boolSetting(key string, raw json.RawMessage, null bool) (func(*store.Dashbo
 	return func(row *store.DashboardRepo) { set(row, v) }, ""
 }
 
-// commentLayoutSetting takes null (the built-in layout) or a list that
-// render.ParseLayout accepts: block:state texts, each block at most once,
+// commentLayoutSetting takes null (the default: for a repository the admin
+// default, else the built-in layout; for the defaults, the built-in layout)
+// or a list that render.ParseLayout accepts: block:state texts, each block at most once,
 // findings among them. Anything else, an empty list included, is refused with
 // bad, the message of the whole body, which names the key. The list is kept
 // in the order given.
