@@ -86,12 +86,15 @@ func (c *Config) DashboardEnabled() bool { return c.Dashboard.URL != "" }
 func (c *Config) HasLLM() bool { return c.LLM != (LLM{}) }
 
 // Instance is one GitLab server and the env vars holding its secrets.
+// Approvals come from exactly one of ApproveTokenEnv (a second user, the
+// default way) and ApproveWithReviewBot (the review bot's own user).
 type Instance struct {
-	Name             string `yaml:"name"`
-	URL              string `yaml:"url"`
-	ReviewTokenEnv   string `yaml:"review_token_env"`
-	ApproveTokenEnv  string `yaml:"approve_token_env"`
-	WebhookSecretEnv string `yaml:"webhook_secret_env"`
+	Name                 string `yaml:"name"`
+	URL                  string `yaml:"url"`
+	ReviewTokenEnv       string `yaml:"review_token_env"`
+	ApproveTokenEnv      string `yaml:"approve_token_env"`
+	ApproveWithReviewBot bool   `yaml:"approve_with_review_bot"`
+	WebhookSecretEnv     string `yaml:"webhook_secret_env"`
 	// OAuthClientIDEnv and OAuthClientSecretEnv name the env vars holding
 	// the OAuth application used to sign in to the dashboard. Both or
 	// neither are set; neither means no sign-in with this instance.
@@ -546,12 +549,14 @@ func (c *Config) Validate() error {
 		}
 		for _, f := range []struct{ field, val string }{
 			{"review_token_env", inst.ReviewTokenEnv},
-			{"approve_token_env", inst.ApproveTokenEnv},
 			{"webhook_secret_env", inst.WebhookSecretEnv},
 		} {
 			if f.val == "" {
 				add("gitlab[%d] (%s): %s is required", i, inst.Name, f.field)
 			}
+		}
+		if (inst.ApproveTokenEnv != "") == inst.ApproveWithReviewBot {
+			add("gitlab[%d] (%s): exactly one of approve_token_env and approve_with_review_bot must be set", i, inst.Name)
 		}
 	}
 
@@ -913,8 +918,10 @@ func (i Instance) Secrets() (review, approve, webhook string, err error) {
 	if review, err = read(i.ReviewTokenEnv); err != nil {
 		return "", "", "", err
 	}
-	if approve, err = read(i.ApproveTokenEnv); err != nil {
-		return "", "", "", err
+	if !i.ApproveWithReviewBot {
+		if approve, err = read(i.ApproveTokenEnv); err != nil {
+			return "", "", "", err
+		}
 	}
 	if webhook, err = read(i.WebhookSecretEnv); err != nil {
 		return "", "", "", err

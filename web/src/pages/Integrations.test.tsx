@@ -249,6 +249,42 @@ describe("Integrations", () => {
     expect(screen.queryByRole("form", { name: "Add GitLab instance" })).not.toBeInTheDocument();
   });
 
+  it("adds a GitLab instance whose review bot approves, with no approve token", async () => {
+    const fake = fakeApi({
+      "GET /api/me": { body: operator },
+      "GET /api/admin/instances": { body: [instanceGitLab] },
+      "POST /api/admin/instances": { status: 201, body: { ...instanceDashboardGitLab, approver: "review_bot" } },
+    });
+    renderApp("/admin/integrations");
+    await userEvent.click(await screen.findByRole("button", { name: "Add GitLab instance" }));
+    const form = screen.getByRole("form", { name: "Add GitLab instance" });
+    // A separate user is what the form starts on.
+    expect(within(form).getByLabelText("Approve with")).toHaveValue("token");
+    await userEvent.selectOptions(within(form).getByLabelText("Approve with"), "review_bot");
+    expect(within(form).queryByLabelText("Approve token")).not.toBeInTheDocument();
+    await userEvent.type(within(form).getByLabelText("Name"), "extra");
+    await userEvent.type(within(form).getByLabelText("Address"), "https://gitlab2.example.com");
+    await userEvent.type(within(form).getByLabelText("Review token"), "glpat-review");
+    await userEvent.click(within(form).getByRole("button", { name: "Add" }));
+
+    expect(fake.find("POST", "/api/admin/instances")[0].body).toEqual({
+      name: "extra",
+      platform: "gitlab",
+      url: "https://gitlab2.example.com",
+      approveWithReviewBot: true,
+      secrets: { review_token: "glpat-review" },
+    });
+  });
+
+  it("says when a GitLab review bot approves", async () => {
+    fakeApi({
+      "GET /api/me": { body: operator },
+      "GET /api/admin/instances": { body: [{ ...instanceDashboardGitLab, approver: "review_bot" }] },
+    });
+    renderApp("/admin/integrations");
+    expect(await screen.findByText("Approves with the review bot")).toBeInTheDocument();
+  });
+
   // fillGitHub types what every GitHub instance needs, whoever approves.
   const fillGitHub = async (form: HTMLElement) => {
     await userEvent.type(within(form).getByLabelText("Name"), "hub");

@@ -19,7 +19,7 @@ fullnameOverride: ""
 # PERGENT_SH_SECRET_KEY (32 random bytes, standard base64).
 # Instances, tokens, App keys and the LLM key can be entered in the dashboard instead. Only when they are in the config file (config.gitlab, config.github, config.llm) does the Secret also hold:
 # OPENCODE_API_KEY (the LLM key, the env var named by config.llm.api_key_env);
-# every env var named by config.gitlab[*].review_token_env, approve_token_env and webhook_secret_env;
+# every env var named by config.gitlab[*].review_token_env, approve_token_env (none with approve_with_review_bot) and webhook_secret_env;
 # every env var named by config.github[*].review_app.private_key_env, approve_app.private_key_env (or approve_token_env; none with approve_with_review_app) and webhook_secret_env;
 # the env var named by config.dashboard.sign_in.client_secret_env, when OIDC sign-in is set in the config file (set in the dashboard, the client secret is entered there).
 # A private key is the App's whole PEM file, e.g. --from-file=GITHUB_REVIEW_APP_KEY=review-app.private-key.pem
@@ -52,7 +52,7 @@ jobEgress:
 #     - name: main
 #       url: https://gitlab.example.com
 #       review_token_env: GITLAB_REVIEW_TOKEN
-#       approve_token_env: GITLAB_APPROVE_TOKEN
+#       approve_token_env: GITLAB_APPROVE_TOKEN   # or approve_with_review_bot: true
 #       webhook_secret_env: GITLAB_WEBHOOK_SECRET
 #   llm:
 #     provider: anthropic

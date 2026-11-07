@@ -21,6 +21,7 @@ const (
 
 	approverKindApp       = "app"
 	approverKindReviewApp = "review_app"
+	approverKindReviewBot = "review_bot"
 	approverKindToken     = "token"
 	healthOK              = "ok"
 	healthNeedsAttention  = "attention"

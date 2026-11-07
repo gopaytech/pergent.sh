@@ -622,6 +622,16 @@ func TestHeldSecretsHoldsSecretKeyAndDatabasePassword(t *testing.T) {
 
 // A row whose approve App is its review App is the review App approving:
 // no second App, no approve secret. 0 stays a token, another ID an App.
+// A GitLab row says whether its review bot approves.
+func TestFromRowReviewBotApprover(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		inst := FromRow(store.InstanceRow{Name: "lab", Platform: config.PlatformGitLab, URL: "https://gitlab.example.com", ApproveWithReviewBot: on})
+		if inst.GitLab == nil || inst.GitLab.ApproveWithReviewBot != on {
+			t.Errorf("row with %v: GitLab = %+v", on, inst.GitLab)
+		}
+	}
+}
+
 func TestFromRowApprover(t *testing.T) {
 	tests := []struct {
 		name         string

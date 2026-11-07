@@ -2732,11 +2732,15 @@ components:
           type: integer
           format: int64
           description: GitHub only. 0 approves with a bot user's token, the `reviewAppID` with the review App, another App ID with an approve App.
+        approveWithReviewBot:
+          type: boolean
+          description: GitLab only. The review bot's own user approves too, with no `approve_token`. It cannot change after the instance is added.
         secrets:
           type: object
           description: |
-            Secret values by field. GitLab: `review_token`, `approve_token`
-            (`webhook_secret` is generated: do not send it). GitHub:
+            Secret values by field. GitLab: `review_token`, and `approve_token`
+            unless `approveWithReviewBot` is set (`webhook_secret` is
+            generated: do not send it). GitHub:
             `review_app_key`, `approve_app_key` or `approve_token` by the
             approver, `webhook_secret`. Each at most 16 KiB. Write-only.
           additionalProperties:
@@ -3299,12 +3303,12 @@ components:
           description: Where the platform sends this instance's webhooks.
         approver:
           type: string
-          enum: [app, review_app, token]
-          description: '"app", "review_app" or "token".'
+          enum: [app, review_app, review_bot, token]
+          description: '"app", "review_app", "review_bot" or "token".'
         secrets:
           type: object
           additionalProperties: {$ref: '#/components/schemas/SecretView'}
-          description: 'By field. The fields an instance takes: review_token, approve_token and webhook_secret
+          description: 'By field. The fields an instance takes: review_token, approve_token (not when the review bot approves) and webhook_secret
             (GitLab); review_app_key, approve_app_key or approve_token, and webhook_secret (GitHub).'
     SignInAdminView:
       description: The sign-in settings in force. The client secret is never sent.

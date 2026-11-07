@@ -46,6 +46,7 @@ const (
 // the dashboard the *_env fields are empty, and GitHub's approver follows
 // the row: an approve App ID of 0 is a bot user's token, the review App's own
 // ID is the review App approving (ApproveWithReviewApp), another ID an App.
+// GitLab's follows the row's ApproveWithReviewBot.
 type Instance struct {
 	Name     string
 	Platform string // config.PlatformGitLab or config.PlatformGitHub
@@ -294,7 +295,7 @@ func FromRow(row store.InstanceRow) Instance {
 		}
 		inst.GitHub = gh
 	} else {
-		inst.GitLab = &config.Instance{Name: row.Name, URL: row.URL}
+		inst.GitLab = &config.Instance{Name: row.Name, URL: row.URL, ApproveWithReviewBot: row.ApproveWithReviewBot}
 	}
 	return inst
 }

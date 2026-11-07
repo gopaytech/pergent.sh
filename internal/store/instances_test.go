@@ -62,6 +62,23 @@ func TestCreateInstanceAndSecrets(t *testing.T) {
 	}
 }
 
+// A GitLab instance's review bot approving is stored and read back.
+func TestCreateInstanceApproveWithReviewBot(t *testing.T) {
+	st := newStore(t)
+	row := InstanceRow{Name: "lab", Platform: "gitlab", URL: "https://gitlab.example.com", ApproveWithReviewBot: true}
+	if err := st.CreateInstance(ctx, row, nil, time.Now()); err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+	got, found, err := st.InstanceRow(ctx, "lab")
+	if err != nil || !found || !got.ApproveWithReviewBot {
+		t.Errorf("InstanceRow = %+v, %v, %v", got, found, err)
+	}
+	rows, err := st.Instances(ctx)
+	if err != nil || len(rows) != 1 || !rows[0].ApproveWithReviewBot {
+		t.Errorf("Instances = %+v, %v", rows, err)
+	}
+}
+
 func TestCreateInstanceTakenLeavesNoSecrets(t *testing.T) {
 	s := newStore(t)
 	if err := s.CreateInstance(ctx, InstanceRow{Name: "lab", Platform: "gitlab"}, map[string][]byte{"review_token": []byte("one")}, t0); err != nil {

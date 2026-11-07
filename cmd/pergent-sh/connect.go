@@ -188,32 +188,40 @@ func missing(kind, name string, secrets ...[2]string) error {
 }
 
 // buildGitLab builds the review and approve clients and checks each token by
-// asking who it belongs to; the two must be different users.
+// asking who it belongs to; the two must be different users, unless the
+// instance approves with the review bot and has no approve token.
 func (c *connector) buildGitLab(ctx context.Context, inst *config.Instance, s instances.Secrets) (engine.Platform, error) {
-	if err := missing("gitlab", inst.Name, [2]string{"review token", s.ReviewToken},
-		[2]string{"approve token", s.ApproveToken}, [2]string{"webhook secret", s.WebhookSecret}); err != nil {
+	required := [][2]string{{"review token", s.ReviewToken}}
+	if !inst.ApproveWithReviewBot {
+		required = append(required, [2]string{"approve token", s.ApproveToken})
+	}
+	required = append(required, [2]string{"webhook secret", s.WebhookSecret})
+	if err := missing("gitlab", inst.Name, required...); err != nil {
 		return engine.Platform{}, err
 	}
 	review := gitlab.New(inst.URL, s.ReviewToken, nil)
-	approve := gitlab.New(inst.URL, s.ApproveToken, nil)
 	reviewUser, err := review.CurrentUser(ctx)
 	if err != nil {
 		return engine.Platform{}, fmt.Errorf("gitlab instance %q: the review token%s doesn't work: %w", inst.Name, inEnv(inst.ReviewTokenEnv), err)
-	}
-	approveUser, err := approve.CurrentUser(ctx)
-	if err != nil {
-		return engine.Platform{}, fmt.Errorf("gitlab instance %q: the approve token%s doesn't work: %w", inst.Name, inEnv(inst.ApproveTokenEnv), err)
 	}
 	if reviewUser.Username == "" {
 		// People address the review bot as @username.
 		return engine.Platform{}, fmt.Errorf("gitlab instance %q: the review token%s belongs to a user without a username, so the bot can't be mentioned in commands",
 			inst.Name, inEnv(inst.ReviewTokenEnv))
 	}
-	if reviewUser.ID == approveUser.ID {
-		// One user would approve the reviews it posts itself: the
-		// approval has to come from a second identity.
-		return engine.Platform{}, fmt.Errorf("gitlab instance %q: the review token%s and the approve token%s belong to the same user; the approve bot must be a separate user",
-			inst.Name, inEnv(inst.ReviewTokenEnv), inEnv(inst.ApproveTokenEnv))
+	approve, approveUser := review, reviewUser
+	if !inst.ApproveWithReviewBot {
+		approve = gitlab.New(inst.URL, s.ApproveToken, nil)
+		approveUser, err = approve.CurrentUser(ctx)
+		if err != nil {
+			return engine.Platform{}, fmt.Errorf("gitlab instance %q: the approve token%s doesn't work: %w", inst.Name, inEnv(inst.ApproveTokenEnv), err)
+		}
+		if reviewUser.ID == approveUser.ID {
+			// One user would approve the reviews it posts itself, which
+			// is what approving with the review bot says out loud.
+			return engine.Platform{}, fmt.Errorf("gitlab instance %q: the review token%s and the approve token%s belong to the same user; the approve bot must be a separate user, or the instance must approve with the review bot",
+				inst.Name, inEnv(inst.ReviewTokenEnv), inEnv(inst.ApproveTokenEnv))
+		}
 	}
 	return engine.Platform{
 		Kind:     config.PlatformGitLab,
