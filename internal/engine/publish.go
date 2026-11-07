@@ -500,7 +500,8 @@ func (e *Engine) approveInputs(ctx context.Context, plat Platform, run store.Run
 
 // outcome is what the run produced. A stored result is checked again: it has
 // to parse and be for the run's own base and head, or the run is decided as a
-// failure.
+// failure. A usable result carries the run's own Quiet, recorded at dispatch,
+// never the repository's current setting.
 func (e *Engine) outcome(run store.Run, log *slog.Logger) policy.Outcome {
 	if run.FailureReason != "" || run.Result == nil {
 		return policy.Outcome{FailureReason: run.FailureReason}
@@ -516,7 +517,7 @@ func (e *Engine) outcome(run store.Run, log *slog.Logger) policy.Outcome {
 			"it is for a different commit (base %q, head %q) than the one reviewed (base %s, head %s)",
 			r.Base, r.Head, run.BaseSHA, run.HeadSHA)}
 	}
-	return policy.Outcome{Result: r}
+	return policy.Outcome{Result: r, Quiet: run.Quiet}
 }
 
 // fileURL links a finding's location to the file at head, on the repository

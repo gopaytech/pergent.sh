@@ -3,7 +3,9 @@ package policy
 import (
 	"encoding/base64"
 	"encoding/json"
+	"flag"
 	"fmt"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -1307,5 +1309,300 @@ func TestDecideInlineChangesOnlyTheComment(t *testing.T) {
 		if on.Status != off.Status || on.Description != off.Description || on.Approve != off.Approve || on.Kind != off.Kind {
 			t.Errorf("%s: decision with inline = %+v, without = %+v", name, on, off)
 		}
+	}
+}
+
+// updateQuietOff rewrites testdata/quiet-off.md. It was run once, on the
+// commit before Outcome had a Quiet field, and is not to be run again: the file
+// pins what a repository without quiet reviews gets, byte for byte.
+var updateQuietOff = flag.Bool("update-quiet-off", false, "rewrite testdata/quiet-off.md (do not run after quiet reviews exist)")
+
+// quietFixture is a completed review with everything a quiet comment leaves
+// out or keeps: a blocking and a suggestion finding, passed, n/a and failed
+// checks, reviewed and skipped files.
+func quietFixture() *result.Result {
+	s := withFinding(skill("security", "has_blocking_issues", "db/query.go", "web/page.go"), "blocking", "abc123def456", "plain")
+	s = withFinding(s, "suggestion", "fedcba654321", "a smaller one")
+	s.Files.Skipped = []result.Skipped{{Path: "go.sum", Rule: "lockfile"}}
+	s.Checks = []result.BatchChecks{{Batch: 1, Checks: []result.Check{
+		{Section: "Input", Name: "Queries are parameterised", Status: render.CheckFail, Detail: "string concatenation"},
+		{Section: "Input", Name: "Output is escaped", Status: render.CheckPass},
+		{Section: "Input", Name: "Uploads are checked", Status: render.CheckNA},
+	}}}
+	r := completed(s)
+	r.Head, r.PergentVersion = "0123456789abcdef0123456789abcdef01234567", "0.5.5"
+	return r
+}
+
+// quietFixtureOutcome is the outcome the off golden and the quiet tests are
+// built from. It does not name Quiet.
+func quietFixtureOutcome(r *result.Result) Outcome {
+	return Outcome{
+		Result: r, Mention: "pergent-bot", MaxComment: 60000,
+		FileURL: render.GitHubFileURL("https://github.com/o/r", r.Head),
+	}
+}
+
+// A comment for a repository without quiet reviews is byte for byte what it
+// was before the setting existed. testdata/quiet-off.md is generated once, on
+// the commit before Outcome had a Quiet field, and never regenerated.
+func TestCommentOffMatchesBeforeQuiet(t *testing.T) {
+	got := Decide(quietFixtureOutcome(quietFixture()), config.FailureStatusFailed).Comment
+	const path = "testdata/quiet-off.md"
+	if *updateQuietOff {
+		if err := os.MkdirAll("testdata", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != string(want) {
+		t.Errorf("the comment with quiet off changed:\n%s\nwant (%s):\n%s", got, path, want)
+	}
+}
+
+func TestRenderOptionsQuiet(t *testing.T) {
+	r := completed(skill("security", "no_blocking_issues", "a.go"))
+	r.Head, r.PergentVersion = "0123456789abcdef", "0.3.0"
+	changed := []string{"a.go"}
+	// What the options are with quiet off: the ones TestRenderOptionsInline
+	// expects for the same outcome.
+	off := render.Options{
+		MaxLen: 1000, ChangedFiles: changed, Commit: r.Head, Version: "v0.3.0",
+		DismissCommand: "@pergent-bot dismiss",
+		Footer:         "Run again: `@pergent-bot review`",
+	}
+
+	t.Run("off", func(t *testing.T) {
+		if got := renderOptions(Outcome{Result: r, Mention: "pergent-bot", MaxComment: 1000}, r, changed); !reflect.DeepEqual(got, off) {
+			t.Errorf("options =\n%+v\nwant\n%+v", got, off)
+		}
+	})
+	t.Run("off with an incremental review", func(t *testing.T) {
+		ri := *r
+		ri.Incremental = &result.Incremental{Reviewed: 2, Carried: 28, From: "abc1234def5678"}
+		got := renderOptions(Outcome{Result: &ri, Mention: "pergent-bot", MaxComment: 1000}, &ri, changed)
+		if got.Short || got.MetaNote != result.IncrementalNote(ri.Incremental) {
+			t.Errorf("Short = %v, MetaNote = %q, want the incremental note alone", got.Short, got.MetaNote)
+		}
+	})
+	t.Run("quiet", func(t *testing.T) {
+		got := renderOptions(Outcome{Result: r, Mention: "pergent-bot", MaxComment: 1000, Quiet: true}, r, changed)
+		want := off
+		want.Short, want.MetaNote = true, "quiet"
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("options =\n%+v\nwant\n%+v", got, want)
+		}
+	})
+	t.Run("quiet with an incremental review", func(t *testing.T) {
+		ri := *r
+		ri.Incremental = &result.Incremental{Reviewed: 2, Carried: 28, From: "abc1234def5678"}
+		got := renderOptions(Outcome{Result: &ri, Quiet: true}, &ri, changed)
+		const want = "Re-reviewed 2 files · 28 carried over from `abc1234` · quiet"
+		if !got.Short || got.MetaNote != want {
+			t.Errorf("Short = %v, MetaNote = %q, want %q", got.Short, got.MetaNote, want)
+		}
+	})
+}
+
+// A quiet comment leaves out the Files list and the passed and n/a checks and
+// keeps everything else.
+func TestDecideQuietComment(t *testing.T) {
+	r := quietFixture()
+	o := quietFixtureOutcome(r)
+	o.Quiet = true
+	d := Decide(o, config.FailureStatusFailed)
+	for _, bad := range []string{"<summary>Files (", "<summary>Checks:", "omitted to fit", "Output is escaped", "go.sum"} {
+		if strings.Contains(d.Comment, bad) {
+			t.Errorf("a quiet comment has %q:\n%s", bad, d.Comment)
+		}
+	}
+	for _, want := range []string{
+		"· quiet</sub>", "1 of 2 checks passed", "**Failed checks (1)**", "Queries are parameterised",
+		"❌ <b>Unchecked input</b>", "💡 <b>Unchecked input</b>", "plain", "a smaller one",
+		"<!-- pergent:findings ",
+	} {
+		if !strings.Contains(d.Comment, want) {
+			t.Errorf("a quiet comment lacks %q:\n%s", want, d.Comment)
+		}
+	}
+	if !strings.HasPrefix(d.Comment, Marker+"\n") {
+		t.Errorf("the marker must be first: %q", d.Comment)
+	}
+	// The hidden block is the one an off comment carries: the next review's
+	// previous findings do not depend on the setting.
+	if block := strings.TrimRight(blockOf(r), "\n"); !strings.HasSuffix(strings.TrimRight(d.Comment, "\n"), block) {
+		t.Errorf("the findings block must be the last line and as before:\n%s", d.Comment)
+	}
+}
+
+// Quiet changes the comment and nothing else: the status, the description, the
+// approval and the kind are decided as with it off.
+func TestDecideQuietChangesOnlyTheComment(t *testing.T) {
+	const fp = "abc123def456"
+	blocking := completed(withFinding(skill("security", "has_blocking_issues", "db/query.go"), "blocking", fp, "plain"))
+	clean := completed(skill("security", "no_blocking_issues", "a.go"))
+	failedSkill := completed(skill("security", "failed", "a.go"))
+	nothing := completed(result.Skill{Name: "security", Verdict: "no_blocking_issues", Files: result.Files{
+		Skipped: []result.Skipped{{Path: "go.sum", Rule: "lockfile"}},
+	}})
+	partly := completed(result.Skill{Name: "security", Verdict: "no_blocking_issues", Files: result.Files{
+		Reviewed: []string{"a.go"}, Skipped: []result.Skipped{{Path: "go.sum", Rule: "lockfile"}},
+	}})
+	merged := completed(skill("security", "no_blocking_issues", "a.go"))
+	merged.MergeNote = result.NoteBaseUnreadable
+
+	cases := []struct {
+		name string
+		r    *result.Result
+		set  func(*Outcome)
+	}{
+		{"blocking", blocking, nil},
+		{"clean", clean, nil},
+		{"failed skill", failedSkill, nil},
+		{"nothing reviewed", nothing, nil},
+		{"partly skipped", partly, nil},
+		{"draft", clean, func(o *Outcome) { o.Draft = true }},
+		{"approval off", clean, func(o *Outcome) { o.ApprovalOff = true }},
+		{"approve unavailable", clean, func(o *Outcome) { o.ApproveUnavailable = true }},
+		{"merge note", merged, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			o := Outcome{Result: c.r, Mention: "pergent-bot"}
+			if c.set != nil {
+				c.set(&o)
+			}
+			off := Decide(o, config.FailureStatusFailed)
+			o.Quiet = true
+			on := Decide(o, config.FailureStatusFailed)
+			if on.Status != off.Status || on.Description != off.Description || on.Approve != off.Approve || on.Kind != off.Kind {
+				t.Errorf("decision quiet = %+v, off = %+v", on, off)
+			}
+			if !strings.Contains(on.Comment, "quiet</sub>") {
+				t.Errorf("a quiet comment says nothing about it:\n%s", on.Comment)
+			}
+		})
+	}
+}
+
+// A skip that keeps a review from being approved is still said in the comment:
+// the note is not part of the Files list.
+func TestDecideQuietKeepsTheSkippedNote(t *testing.T) {
+	r := completed(result.Skill{Name: "security", Verdict: "no_blocking_issues", Files: result.Files{
+		Reviewed: []string{"a.go"}, Skipped: []result.Skipped{{Path: "go.sum", Rule: "lockfile"}},
+	}})
+	d := Decide(Outcome{Result: r, Quiet: true}, config.FailureStatusFailed)
+	if d.Kind != KindNotApproved || strings.Contains(d.Comment, "<summary>Files (") {
+		t.Fatalf("decision = %+v, want not approved and no Files list:\n%s", d, d.Comment)
+	}
+	want := "---\n**Not approved:** some changed files were skipped by pergent's default rules, so they weren't reviewed. A human needs to look.\n\n- `go.sum` (lockfile)"
+	if got := noteOf(t, d.Comment); got != want {
+		t.Errorf("note:\n%q\nwant:\n%q", got, want)
+	}
+	checkNote(t, d.Comment, r, want)
+}
+
+// A dismissed blocking finding is decided as with quiet off, and listed under
+// Dismissed; the Files list is not there.
+func TestDecideQuietWithDismissal(t *testing.T) {
+	const fp = "abc123def456"
+	blocking := completed(withFinding(skill("security", "has_blocking_issues", "db/query.go"), "blocking", fp, "plain"))
+	o := Outcome{Result: blocking, Dismissals: []render.Dismissal{{Fingerprint: fp, Severity: "blocking", By: "maya", Reason: "ok"}}}
+	off := Decide(o, config.FailureStatusFailed)
+	o.Quiet = true
+	on := Decide(o, config.FailureStatusFailed)
+	if on.Status != off.Status || on.Description != off.Description || on.Approve != off.Approve || on.Kind != off.Kind || on.Kind != KindApprove {
+		t.Fatalf("decision quiet = %+v, off = %+v, want the same approval", on, off)
+	}
+	for _, want := range []string{"Dismissed (1)", "dismissed by maya: ok", "quiet</sub>"} {
+		if !strings.Contains(on.Comment, want) {
+			t.Errorf("comment lacks %q:\n%s", want, on.Comment)
+		}
+	}
+	if strings.Contains(on.Comment, "<summary>Files (") {
+		t.Errorf("a quiet comment has the Files list:\n%s", on.Comment)
+	}
+}
+
+// The comment of a merged result with an incremental review keeps the
+// suggestion of the carried part, and the meta line the combined note.
+func TestDecideQuietCarriedResult(t *testing.T) {
+	s := withFinding(skill("security", "no_blocking_issues", "a.go", "b.go"), "suggestion", "fedcba654321", "carried over from before")
+	r := completed(s)
+	r.Merged = true
+	r.Incremental = &result.Incremental{Reviewed: 1, Carried: 1, From: "abc1234def5678"}
+	d := Decide(Outcome{Result: r, Quiet: true}, config.FailureStatusFailed)
+	for _, want := range []string{"carried over from before", "Re-reviewed 1 file · 1 carried over from `abc1234` · quiet</sub>"} {
+		if !strings.Contains(d.Comment, want) {
+			t.Errorf("comment lacks %q:\n%s", want, d.Comment)
+		}
+	}
+	if strings.Contains(d.Comment, "<summary>Files (") {
+		t.Errorf("a quiet comment has the Files list:\n%s", d.Comment)
+	}
+}
+
+// An error result's comment is the same on and off: it has no layout to
+// shorten.
+func TestDecideQuietErrorResult(t *testing.T) {
+	r := &result.Result{SchemaVersion: 1, Status: "error", Error: &result.Error{Code: "commit_missing", Message: "boom"}}
+	off := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	on := Decide(Outcome{Result: r, Quiet: true}, config.FailureStatusFailed)
+	if on != off {
+		t.Errorf("quiet = %+v, off = %+v, want the same decision", on, off)
+	}
+	if strings.Contains(on.Comment, "quiet") {
+		t.Errorf("an error comment says quiet:\n%s", on.Comment)
+	}
+	for _, o := range []Outcome{{FailureReason: "the Job died"}, {}} {
+		off := Decide(o, config.FailureStatusFailed)
+		o.Quiet = true
+		if on := Decide(o, config.FailureStatusFailed); on != off {
+			t.Errorf("quiet = %+v, off = %+v, want the same decision", on, off)
+		}
+	}
+}
+
+// With a small limit the comment is cut by pergent's own steps, and the
+// blocking finding stays. The passed and n/a checks are not there to be cut,
+// so there is no note about them.
+func TestDecideQuietAtTheCommentLimit(t *testing.T) {
+	r := quietFixture()
+	full := Decide(Outcome{Result: r, Mention: "pergent-bot", Quiet: true}, config.FailureStatusFailed).Comment
+	off := Decide(Outcome{Result: r, Mention: "pergent-bot"}, config.FailureStatusFailed).Comment
+	// A limit the quiet comment fits and the full one does not.
+	limit := len(full) + 10
+	if len(off) <= limit {
+		t.Fatalf("the off comment (%d bytes) must be over the limit %d for this test", len(off), limit)
+	}
+	d := Decide(Outcome{Result: r, Mention: "pergent-bot", Quiet: true, MaxComment: limit}, config.FailureStatusFailed)
+	if len(d.Comment) > limit {
+		t.Errorf("comment is %d bytes, want at most %d", len(d.Comment), limit)
+	}
+	if !strings.Contains(d.Comment, "<b>Unchecked input</b>") || !strings.Contains(d.Comment, "plain") {
+		t.Errorf("the blocking finding must stay:\n%s", d.Comment)
+	}
+	if strings.Contains(d.Comment, "Passed and n/a checks omitted") || strings.Contains(d.Comment, "omitted to fit") {
+		t.Errorf("a quiet comment notes a cut that did not happen:\n%s", d.Comment)
+	}
+	if d.Comment != full {
+		t.Errorf("the quiet comment fits as it is and must not change:\n%s", d.Comment)
+	}
+
+	// Smaller still: the findings are cut by the usual steps, the blocking
+	// one stays.
+	tight := len(full) - 400
+	d = Decide(Outcome{Result: r, Mention: "pergent-bot", Quiet: true, MaxComment: tight}, config.FailureStatusFailed)
+	if len(d.Comment) > tight || !strings.Contains(d.Comment, "<b>Unchecked input</b>") || !strings.Contains(d.Comment, "plain") {
+		t.Errorf("comment (%d bytes, limit %d) must keep the blocking finding:\n%s", len(d.Comment), tight, d.Comment)
+	}
+	if strings.Contains(d.Comment, "Passed and n/a checks omitted") {
+		t.Errorf("a quiet comment notes passed checks it never wrote:\n%s", d.Comment)
 	}
 }

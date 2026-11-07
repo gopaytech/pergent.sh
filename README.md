@@ -223,6 +223,14 @@ pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is hand
 
 ## ⬆️ Upgrading
 
+### Upgrading to 0.9.0
+
+This release adds [Quiet reviews](#-quiet-reviews): a review that raises fewer nitpicks, posts no suggestion threads and writes a shorter comment, with everything that blocks unchanged. It is off until you turn it on, so a repository that doesn't is reviewed as before.
+
+- **The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.5.5`.** That release changes nothing in the comment unless the caller sets `render.Options.Short`, and only pergent.sh does, for a quiet review. A config that sets its own `jobs.image` keeps the image it names. The shorter comment does not depend on it: pergent.sh draws the comment itself from the result the Job sends.
+- **Migration `0025` runs at startup.** It adds three nullable columns (`quiet_reviews` on `dashboard_repos`, `repo_defaults` and `runs`). A null value means off, and 0.8.2 keeps working on the migrated database, so you can roll back.
+- **To roll back, first remove `quiet_reviews` from the config.** 0.8.2 refuses a config key it does not know, so it would not start with `repositories[].quiet_reviews` in it. The dashboard's setting needs no change: 0.8.2 ignores the column.
+
 ### Upgrading to 0.8.2
 
 There is no migration, and nothing to change in the config or the chart. 0.8.1 keeps working on the same database, so you can roll back. Reviews still run pergent v0.5.4.
@@ -967,6 +975,25 @@ Teams differ in how much review they want. What bothers people is nitpicks and s
 It comes last, after `AGENTS.md` and `.pergent/instructions.md`, so it wins over them for suggestions. The last sentence keeps it to the model's own suggestions: what blocks, how a checklist item is judged and how a finding another reviewer raised is checked do not change. A repository with no instructions of its own still gets an instructions file, holding only this section. The section counts toward the 900 KiB the skills and instructions may weigh, so a review whose inputs only just fit can fail as too large once the setting is on. It is not part of any skill's hash, so turning the setting on or off does not make a skill look edited, and an [incremental review](#-incremental-reviews) can still carry files over. The **Skills & instructions** tab and the readiness budget do not show it. With the setting off nothing is added, and the prompt is the same as before, byte for byte.
 
 **Threads.** A quiet review posts no new suggestion threads: every suggestion stays in the comment, under **Not on the diff**, with the note "Kept here: quiet reviews don't post suggestions on the diff." Blocking findings are posted on the diff as before, with their one-click fix when they have one; a suggestion has no one-click fix, since it is not on the diff. A suggestion thread that is already open stays open while the finding is still reported, and a resolved one is not reopened. A thread that goes away because its finding is no longer reported gets the reply ``No longer reported in `<sha>`.`` and is resolved, blocking ones too, since a quiet review does not claim a fix. A blocking finding that comes back reopens its thread with ``Back in `<sha>`.`` as usual. The other replies do not change: "No longer in this change." when the file left the change, ``Dismissed by …`` for a dismissal, and the note on past dismissals. When the branch also requires resolved threads, the quiet note is the one shown. The review's own setting decides, as stored on the run, not the repository's setting now.
+
+**The comment.** A quiet review's comment leaves out the `Files (N)` list and the checks that passed or were n/a. It keeps the headline, the meta line with its file count and `N of M checks passed`, the skills table (with several skills), the failures, every finding (suggestions too), the table of failed checks, the **Dismissed** list, any "Not approved" note (which still lists the skipped files that stopped the approval) and the hidden findings block, so the next review reads the same findings as before. The meta line ends with `quiet`, so nobody takes the shorter comment for a cut or a failed review. On an [incremental review](#-incremental-reviews) it follows the incremental note: ``Re-reviewed 2 files · 28 carried over from `abc1234` · quiet``. An error result's comment has no such layout and is the same on or off.
+
+**The size limit.** The comment is held to the same limit as any other. Nothing was cut for size, so a quiet review never says "Passed and n/a checks omitted to fit the comment size limit" for what it left out on purpose. The steps that apply to a comment over the limit still apply after the shorter layout, in the same order (the hidden findings block first, then the suggestions' texts, then the suggestions and dismissed findings, then the failed checks table); the steps for the passed checks and the Files list do nothing, since those are not written. Blocking findings and failures are never dropped.
+
+**What it costs.**
+
+- A skill whose whole job is style goes mostly quiet, unless its `## Blocking` section lists what it cares about.
+- A suggestion has no one-click fix, since it is not on the diff. The change it proposes is text in the comment.
+- The comment carries the suggestions that used to be threads, as a list in it.
+- The model may still raise a nitpick, or leave out a useful suggestion. The prompt line is a request, not a rule.
+- A reader of the comment no longer sees which files a skill skipped without opening the dashboard, unless skipping stopped the approval, which the comment still says.
+- A thread that really was fixed on a quiet review says "No longer reported", not "Fixed".
+- A style item on a skill's checklist is still reported, so a quiet review of such a skill still shows it.
+- The numbers in [Skill results](#-skill-results) before and after the switch are not comparable, since a quiet repository raises fewer suggestions. The tab does not say so.
+
+**First use.** Turn it on for one repository and read about five of its reviews before you set it as the default or turn it on for a big repository. Check three things: that no blocking finding is missing, that the suggestions you see are worth reading, and that the shorter comment is enough for you to review without opening the dashboard.
+
+**With the rest.** With **Inline findings** off there are no threads to change, and the prompt line and the shorter comment still apply. With [incremental reviews](#-incremental-reviews) a carried finding stays as it is until its file changes, so a repository that turns quiet on in the middle of a change keeps the suggestions of its earlier reviews in the comment. [Learn from dismissals](#-learn-from-dismissals) works as before. The prompt line is not part of a skill's hash, so **Edited N days ago** does not fire when the setting changes.
 
 The run stores whether it was quiet when it starts, before its Job does, and the review uses that value for its prompt, its threads and its comment. If starting the Job fails and the review is tried again after you changed the setting, the new try uses the new value.
 
