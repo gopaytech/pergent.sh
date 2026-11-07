@@ -35,6 +35,14 @@ describe("AdminSignIn", () => {
     expect(form.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("offers a page load of /admin with JWT validation, since this page starts no session", async () => {
+    fakeApi({ "GET /api/sign-in-options": options({ jwt: true }) });
+    renderApp("/admin/sign-in");
+    expect(await screen.findByLabelText("Username")).toBeInTheDocument();
+    const link = await screen.findByRole("link", { name: "Go to the admin pages" });
+    expect(link).toHaveAttribute("href", "/admin");
+  });
+
   it("posts the username and password with the CSRF token from /auth/csrf, then opens the admin area", async () => {
     let signedIn = false;
     const fake = fakeApi({

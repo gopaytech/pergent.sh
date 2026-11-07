@@ -7,8 +7,11 @@ import { CenteredCard, ErrorBox, Loading } from "../ui";
 import { Refusal, SignedInRedirect, useSignInPage } from "./SignIn";
 
 // AdminSignIn is the admins' sign-in page: the password form of the local
-// admins, and the SSO button for an SSO account an admin made an admin. A
-// signed-in admin lands on /admin and a user on /.
+// admins, and the SSO button for an SSO account an admin made an admin. With
+// JWT validation this page starts no session, so that a local admin behind the
+// proxy can reach the form: a plain link to /admin is the way on for anyone
+// else, because a page load there does start one. A signed-in admin lands on
+// /admin and a user on /.
 export default function AdminSignIn() {
   const { options, signedIn, refusal } = useSignInPage(true);
   if (signedIn.isSuccess) return <SignedInRedirect me={signedIn.data} admin />;
@@ -29,6 +32,15 @@ export default function AdminSignIn() {
               Sign in with {sso.label}
             </a>
           </div>
+        </>
+      )}
+      {options.isSuccess && options.data.jwt && (
+        <>
+          {options.data.password && <div className="signin-or">or</div>}
+          <p className="sub">
+            Your organisation signs you in, so this page doesn't. <a href="/admin">Go to the admin pages</a>. If you
+            come back here, ask your admin.
+          </p>
         </>
       )}
     </CenteredCard>

@@ -233,8 +233,9 @@ func sessionExpired(se store.Session, now time.Time) bool {
 // /api/me.
 //
 // With JWT validation (jwt.go) two things are added. A request with no session
-// starts one only if it is a GET of /api/me with a valid token in the proxy's
-// header; any other method or path gets 401, however valid the header. A
+// starts one only if it is a GET of /api/me, without ?probe=1, with a valid
+// token in the proxy's header; any other method or path gets 401, however
+// valid the header. A
 // session that jwt started needs, on every request, a valid token for its
 // account's email, and the mode and issuer it began under (otherwise it
 // ends, 401); when the signing keys cannot be fetched the answer is 503 and
@@ -243,8 +244,9 @@ func (a *Auth) Require(next http.Handler) http.Handler { return a.require(next, 
 
 // RequireAdmin is Require for a route only admins may use. Anyone else, an
 // account waiting for a team included, gets 404 with the body of an unknown
-// path: a user can't tell an admin route from a path that isn't there. It is
-// checked after the session, the CSRF token and the sign-in checks, so what
+// path: a user on a team can't tell an admin route from a path that isn't
+// there, though a waiting account gets 403 on an unknown path. It is checked
+// after the session, the CSRF token and the sign-in checks, so what
 // those say is what an unknown path says too.
 func (a *Auth) RequireAdmin(next http.Handler) http.Handler { return a.require(next, true) }
 
