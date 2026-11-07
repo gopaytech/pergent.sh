@@ -68,8 +68,21 @@ func TestIdleSessionExpires(t *testing.T) {
 		t.Error("the idle session is still stored")
 	}
 
-	// A session in use every few hours still ends after 7 days.
-	c = e.aliceSession()
+	// An SSO session in use every few hours still ends after 24 hours.
+	sso := e.aliceSession()
+	for i := 0; i < 3; i++ {
+		e.clock.advance(6 * time.Hour)
+		if code, _ := e.me(sso); code != 200 {
+			t.Fatalf("SSO /api/me at %d h = %d", (i+1)*6, code)
+		}
+	}
+	e.clock.advance(7 * time.Hour)
+	if code, _ := e.me(sso); code != http.StatusUnauthorized {
+		t.Fatalf("SSO /api/me at 25 h = %d, want 401", code)
+	}
+
+	// A local admin's session in use every few hours still ends after 7 days.
+	c = e.signInOperator()
 	for i := 0; i < 7*24/6; i++ {
 		e.clock.advance(6 * time.Hour)
 		if code, _ := e.me(c); code != 200 {
@@ -176,15 +189,17 @@ func TestUnauthenticatedAPI(t *testing.T) {
 	}
 }
 
+// A local admin's sessions: 7 days at most, 8 hours idle. (The SSO maximum of
+// 24 hours is in the store's TestPruneSessionsSSOMaximum.)
 func TestPruneSessions(t *testing.T) {
 	e := newEnv(t, nil)
-	old := e.aliceSession()
-	idle := e.aliceSession()
+	old := e.signInOperator()
+	idle := e.signInPassword("root", operatorPassword)
 	for i := 0; i < 7*24/6-1; i++ { // old stays in use, idle doesn't
 		e.clock.advance(6 * time.Hour)
 		e.me(old)
 	}
-	fresh := e.aliceSession()
+	fresh := e.signInPassword("root", operatorPassword)
 	e.clock.advance(6*time.Hour + time.Second) // old is 7 days and 1 s old
 
 	n, err := e.d.Auth.PruneSessions(ctx, e.clock.now())

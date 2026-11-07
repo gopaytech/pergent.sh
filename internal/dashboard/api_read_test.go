@@ -1167,6 +1167,12 @@ func TestNoSecretInTheReadAPI(t *testing.T) {
 					t.Errorf("GET %s = %d %s", target, rec.Code, rec.Body)
 				}
 				for _, s := range secrets {
+					// The model's address is public to everyone on the read API
+					// and shown to admins, by design, on their LLM page: no key,
+					// token or secret may be in it either way.
+					if s == "llm.example.com" && target == "/api/admin/llm" {
+						continue
+					}
 					if s != "" && strings.Contains(rec.Body.String(), s) {
 						t.Errorf("GET %s shows the secret %q: %s", target, s, rec.Body)
 					}

@@ -685,17 +685,20 @@ func TestEndToEndDashboard(t *testing.T) {
 	e.expectStatus(t, bob, http.MethodGet, "/api/repositories/"+testInstance+"/"+testProjectPath, http.StatusNotFound)
 	e.expectStatus(t, bob, http.MethodGet, "/api/repositories/"+testInstance+"/"+paymentsPath, http.StatusNotFound)
 	settingsPath := "/api/repositories/" + testInstance + "/" + gadgetsPath
+	// Settings are his team's to change by role (403 for a viewer); switching
+	// a repository on or off is an admin route, which answers "not found".
 	for _, w := range []struct {
 		method, path string
 		body         any
+		want         int
 	}{
-		{http.MethodPut, settingsPath + "/settings", map[string]any{"approve": true}},
-		{http.MethodPost, settingsPath + "/settings/reset", nil},
-		{http.MethodDelete, settingsPath, nil},
-		{http.MethodPost, "/api/repositories", map[string]string{"instance": testInstance, "project": testProjectPath}},
+		{http.MethodPut, settingsPath + "/settings", map[string]any{"approve": true}, http.StatusForbidden},
+		{http.MethodPost, settingsPath + "/settings/reset", nil, http.StatusForbidden},
+		{http.MethodDelete, settingsPath, nil, http.StatusNotFound},
+		{http.MethodPost, "/api/repositories", map[string]string{"instance": testInstance, "project": testProjectPath}, http.StatusNotFound},
 	} {
-		if status, body := e.write(t, bob, w.method, w.path, w.body); status != http.StatusForbidden {
-			t.Errorf("bob's %s %s = %d: %s; want 403", w.method, w.path, status, body)
+		if status, body := e.write(t, bob, w.method, w.path, w.body); status != w.want {
+			t.Errorf("bob's %s %s = %d: %s; want %d", w.method, w.path, status, body, w.want)
 		}
 	}
 	repo, found, err := env.Store.DashboardRepo(env.ctx, testInstance, gadgetsPath)

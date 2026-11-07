@@ -284,10 +284,13 @@ func TestReadinessHiddenRepo404(t *testing.T) {
 	f := e.withReadiness()
 	e.dashboardRepo("main", "acme/hidden", nil)
 	e.scanRow("acme/hidden", store.ScanDone, e.clock.now().Add(-time.Hour), podAllPassed, jobGoRepo, "")
-	// alice is an admin who can't see acme/hidden on GitLab.
-	c := e.userOnMain(true, "acme/gadgets")
-	if _, se := e.session(c); !se.Admin || se.CanSee("main", "acme/hidden") {
-		t.Fatalf("session = %+v; want an admin who can't see acme/hidden", se)
+	// alice is a maintainer of acme/gadgets only: no admin, whose team covers
+	// acme/hidden or not, since an admin sees every repository.
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	e.team("gadgets", []store.TeamMember{{AccountID: e.alice(), Role: store.RoleMaintainer}}, store.TeamRepo{Instance: "main", Project: "acme/gadgets"})
+	c := e.aliceSession()
+	if _, se := e.session(c); se.Admin || se.CanSee("main", "acme/hidden") || !se.CanSee("main", "acme/gadgets") {
+		t.Fatalf("session = %+v; want a user who sees acme/gadgets and not acme/hidden", se)
 	}
 	unknown := e.get(c, readinessURL("acme/nothing-here"))
 	wantCode(t, unknown, "GET readiness of an unknown repository", http.StatusNotFound)

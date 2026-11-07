@@ -798,6 +798,8 @@ func TestJWTWriteNeedsCSRF(t *testing.T) {
 	f := newFakeIssuer(t)
 	e.useJWT(f, nil)
 	c := e.jwtSession(f, "alice@example.com")
+	// On a team: a user on none is 403 waiting from every route but /api/me.
+	e.team("devs", viewerMembers(e.accountOf(c)))
 	se, _ := e.storedSession(c)
 	tok := "Bearer " + e.jwtToken(f, "alice@example.com")
 	for name, header := range map[string]map[string]string{"none": nil, "wrong": {CSRFHeader: "nope"}} {
@@ -821,6 +823,8 @@ func TestJWTEmailChangeEndsSession(t *testing.T) {
 	f := newFakeIssuer(t)
 	e.useJWT(f, nil)
 	c := e.jwtSession(f, "alice@example.com")
+	// On a team: a user on none is 403 waiting from every route but /api/me.
+	e.team("devs", viewerMembers(e.accountOf(c)))
 	rec := e.jwtDo("GET", "/test/session", "Bearer "+e.jwtToken(f, "bob@example.com"), c, nil)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("alice's cookie with bob's token = %d %s; want 401", rec.Code, rec.Body)
@@ -874,6 +878,8 @@ func TestJWTKeyOutageKeepsTheSession(t *testing.T) {
 	f := newFakeIssuer(t)
 	e.useJWT(f, nil)
 	c := e.jwtSession(f, "alice@example.com")
+	// On a team: a user on none is 403 waiting from every route but /api/me.
+	e.team("devs", viewerMembers(e.accountOf(c)))
 	e.d.Auth.forgetJWTVerifier() // nothing cached
 	f.setJWKSDown(true)
 	for _, path := range []string{"/test/session", "/api/me"} {

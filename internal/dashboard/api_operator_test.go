@@ -355,12 +355,12 @@ func TestAddGitHubInstanceReviewAppApproves(t *testing.T) {
 	if view.Approver != "review_app" || view.ReviewAppID != 11 || view.ApproveAppID != 11 {
 		t.Errorf("view = %+v", view)
 	}
-	for _, f := range []string{"review_app_key", "webhook_secret", "oauth_client_secret"} {
+	for _, f := range []string{"review_app_key", "webhook_secret"} {
 		if _, ok := view.Secrets[f]; !ok {
 			t.Errorf("secrets lacks %s: %+v", f, view.Secrets)
 		}
 	}
-	for _, f := range []string{"approve_app_key", "approve_token"} {
+	for _, f := range []string{"approve_app_key", "approve_token", "oauth_client_secret"} {
 		if sv, ok := view.Secrets[f]; ok {
 			t.Errorf("a review App approver lists %s: %+v", f, sv)
 		}
@@ -1143,7 +1143,10 @@ func TestDefaults(t *testing.T) {
 	}
 
 	// Maintainers and viewers can't change them.
-	viewer := e.userOnGH(false, "acme/widgets")
+	// (A separate account: alice is an admin in this test.)
+	bob := e.sso("viewer@example.com")
+	e.team("viewers of gh", viewerMembers(bob), store.TeamRepo{Instance: "gh", Project: "acme/widgets"})
+	viewer := e.sessionFor(bob)
 	if rec := e.send(viewer, "PUT", "/api/admin/defaults", `{}`); rec.Code != http.StatusNotFound {
 		t.Errorf("PUT as a viewer = %d, want 404", rec.Code)
 	}

@@ -181,13 +181,19 @@ func TestUserOnNoTeamIsWaiting(t *testing.T) {
 		t.Fatalf("/api/me = %d %+v; want alice waiting", code, me)
 	}
 	for _, target := range readEndpoints("00000000-0000-0000-0000-000000000000") {
-		if target != "/api/me" {
+		switch target {
+		case "/api/me":
+		case "/api/admin/settings":
+			// An admin route: not found for anyone who is not an admin, a
+			// waiting user included (the admin check comes first).
+			wantCode(t, e.get(c, target), "GET "+target, http.StatusNotFound)
+		default:
 			wantWaiting(t, e.get(c, target), "GET "+target)
 		}
 	}
 	wantWaiting(t, e.get(c, "/test/session"), "GET /test/session")
-	wantWaiting(t, e.get(c, "/api/repositories/available?instance=main"), "GET /api/repositories/available")
-	wantWaiting(t, e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"acme/widgets"}`), "POST /api/repositories")
+	wantCode(t, e.get(c, "/api/repositories/available?instance=main"), "GET /api/repositories/available", http.StatusNotFound)
+	wantCode(t, e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"acme/widgets"}`), "POST /api/repositories", http.StatusNotFound)
 	wantWaiting(t, e.send(c, "PUT", "/api/repositories/main/acme/widgets/settings", `{"approve":false}`), "PUT settings")
 
 	e.clock.advance(time.Hour)

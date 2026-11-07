@@ -243,9 +243,13 @@ func TestUpsertPlatformAccount(t *testing.T) {
 	if b.ID != a.ID || b.Username != "alice-renamed" || !b.LastSignInAt.Equal(later) || !b.CreatedAt.Equal(t0) {
 		t.Fatalf("second upsert = %+v; want the same row renamed", b)
 	}
-	all, _ := s.Accounts(ctx)
-	if len(all) != 1 {
-		t.Fatalf("Accounts = %d rows; want 1", len(all))
+	// Accounts hides platform rows by design: count the rows themselves.
+	var rows int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM accounts WHERE kind = 'platform'`).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("platform rows = %d, %v; want 1", rows, err)
+	}
+	if got, err := s.Accounts(ctx); err != nil || len(got) != 0 {
+		t.Fatalf("Accounts = %d rows, %v; want none (platform accounts are hidden)", len(got), err)
 	}
 	// The same user ID on another instance is another account.
 	c, err := s.UpsertPlatformAccount(ctx, "gitlab", "other", 42, "alice", t0)
