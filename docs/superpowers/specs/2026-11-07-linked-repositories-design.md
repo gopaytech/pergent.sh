@@ -100,7 +100,7 @@ One clone per matched link, and one model run per review, plus verification for 
 
 ## pergent
 
-- `pergent agent` takes the linked repositories through an environment variable, `PERGENT_LINKED_REPOS`, naming a JSON file of `{path, name}` entries. An older image ignores it, so `jobs.image` can lag. A flag would exit 2 on an older image.
+- `pergent agent` takes the linked repositories through an environment variable, `PERGENT_LINKED_REPOS`, naming a JSON file of `{name, path, watched, can_block, error}` entries. An older image ignores it, so `jobs.image` can lag. A flag would exit 2 on an older image.
 - Paths must be outside `--repo-path`, as other trusted inputs are, and the generated config's read rules allow them.
 - The prompt is fixed in pergent, not a skill. Skills must not carry output format, and a skill's text must not change what this run does.
 - `impact` is a reserved name only when the feature is on with a link: then a skill called `impact` is refused. An existing skill with that name on any other repository is unaffected.
