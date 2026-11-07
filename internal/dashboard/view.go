@@ -1066,13 +1066,13 @@ type InstanceAdminView struct {
 	// WebhookURL is where the platform sends this instance's webhooks.
 	WebhookURL string `json:"webhookURL"`
 	// Approver is "app" (a GitHub approve App), "review_app" (the review
-	// App itself; ApproveAppID is then the review App's ID) or "token" (a
-	// bot user).
+	// App itself; ApproveAppID is then the review App's ID), "review_bot"
+	// (a GitLab review bot itself) or "token" (a bot user).
 	Approver string `json:"approver"`
 	// Secrets lists the fields the instance takes: review_token,
-	// approve_token and webhook_secret (GitLab); review_app_key,
-	// approve_app_key or approve_token (neither when the review App
-	// approves) and webhook_secret (GitHub).
+	// approve_token (not when the review bot approves) and webhook_secret
+	// (GitLab); review_app_key, approve_app_key or approve_token (neither
+	// when the review App approves) and webhook_secret (GitHub).
 	Secrets map[string]SecretView `json:"secrets"`
 }
 

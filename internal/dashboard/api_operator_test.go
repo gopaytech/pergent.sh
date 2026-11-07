@@ -426,6 +426,48 @@ func TestConfigInstanceReviewAppApprover(t *testing.T) {
 	}
 }
 
+// A GitLab instance added to approve with its review bot takes no approve
+// token, refuses one, and stays that way once stored.
+func TestAddInstanceApproveWithReviewBot(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.operator()
+	body := labBody(func(b map[string]any) {
+		b["approveWithReviewBot"] = true
+		b["secrets"] = map[string]string{"review_token": labReviewToken, "approve_token": "glpat-other"}
+	})
+	if rec := e.sendJSON(c, "POST", "/api/admin/instances", body); rec.Code != http.StatusBadRequest || !strings.Contains(errorOf(t, rec), "approve_token is not a secret") {
+		t.Fatalf("POST with an approve token = %d %s", rec.Code, rec.Body)
+	}
+	body["secrets"] = map[string]string{"review_token": labReviewToken}
+	rec := e.sendJSON(c, "POST", "/api/admin/instances", body)
+	v := decode[InstanceAdminView](t, rec, "POST", http.StatusCreated)
+	if v.Approver != "review_bot" {
+		t.Errorf("approver = %q", v.Approver)
+	}
+	if _, ok := v.Secrets["approve_token"]; ok {
+		t.Error("lab lists approve_token")
+	}
+	row, found, err := e.st.InstanceRow(ctx, "lab")
+	if err != nil || !found || !row.ApproveWithReviewBot {
+		t.Errorf("row = %+v, %v, %v", row, found, err)
+	}
+	if rec := e.sendJSON(c, "PUT", "/api/admin/instances/lab", map[string]any{"approveWithReviewBot": false}); rec.Code != http.StatusBadRequest {
+		t.Errorf("PUT approveWithReviewBot = %d %s, want 400", rec.Code, rec.Body)
+	}
+}
+
+// Only a GitLab instance has a review bot.
+func TestAddGitHubInstanceRefusesApproveWithReviewBot(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.operator()
+	rec := e.sendJSON(c, "POST", "/api/admin/instances", map[string]any{"name": "hub", "platform": "github",
+		"apiURL": "https://api.github.example.com", "reviewAppID": 5, "approveAppID": 5, "approveWithReviewBot": true,
+		"secrets": map[string]string{"review_app_key": "k", "webhook_secret": "w"}})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(errorOf(t, rec), "approveWithReviewBot") {
+		t.Errorf("POST = %d %s, want 400", rec.Code, rec.Body)
+	}
+}
+
 // A failed check is a 400 with its reason, and nothing is stored, registered
 // or connected; a secret the reason echoes is hidden.
 func TestAddInstanceCheckFails(t *testing.T) {
@@ -1697,6 +1739,28 @@ func TestPinnedDefaults(t *testing.T) {
 	for _, k := range []string{"reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews", "commentLayout", "failureStatus", "maxTurns", "rerunLimitPerMR"} {
 		if got[k] {
 			t.Errorf("%s pinned: %v", k, got)
+		}
+	}
+}
+
+// Who approves decides the secrets a GitLab instance takes. No database here,
+// so this runs everywhere.
+func TestGitLabApproverAndSecretFields(t *testing.T) {
+	for _, tc := range []struct {
+		on       bool
+		approver string
+		fields   []string
+	}{
+		{false, approverKindToken, []string{instances.FieldReviewToken, instances.FieldApproveToken, instances.FieldWebhookSecret}},
+		{true, approverKindReviewBot, []string{instances.FieldReviewToken, instances.FieldWebhookSecret}},
+	} {
+		inst := instances.FromRow(store.InstanceRow{Name: "lab", Platform: config.PlatformGitLab, ApproveWithReviewBot: tc.on})
+		got := approverOf(inst)
+		if got != tc.approver {
+			t.Errorf("approverOf(%v) = %q, want %q", tc.on, got, tc.approver)
+		}
+		if fields := secretFields(config.PlatformGitLab, got); !slices.Equal(fields, tc.fields) {
+			t.Errorf("secretFields(%q) = %v, want %v", got, fields, tc.fields)
 		}
 	}
 }

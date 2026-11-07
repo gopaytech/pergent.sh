@@ -67,9 +67,11 @@ In this README a "merge request" is also a GitHub pull request, and the "review 
 - Kubernetes, and permission to create a Role in the namespace where the Jobs run.
 - PostgreSQL 13 or newer, reachable from the pergent.sh pod. pergent.sh creates and migrates its own tables at startup.
 - Nodes that can pull `ghcr.io/gopaytech/pergent.sh` (the service) and `ghcr.io/gopaytech/pergent` (the Jobs). Both images are built for `linux/amd64` and `linux/arm64` (pergent.sh from v0.4.0, pergent from v0.1.2), so the nodes can be either; each node pulls the one for its own platform.
-- On each GitLab instance you use, two users:
+- On each GitLab instance you use, two users, or one with `approve_with_review_bot`:
   - A **review bot** with the **Maintainer** role on every reviewed project, and an access token with the `api` scope. It creates the project webhook and the read-only deploy token, posts the comment and sets the commit status, and, for [commands](#-commands), reacts to and answers comments and looks up the role of whoever wrote one.
-  - An **approve bot** that is an eligible approver of every reviewed project, with an access token with the `api` scope. It must be a different user from the review bot: pergent.sh doesn't start when both tokens belong to the same user. It only approves, and removes its approval when the merge request gets a new commit or a new target branch. If the project requires specific approvers or forbids approval by certain users, make sure this bot qualifies.
+  - An **approve bot** that is an eligible approver of every reviewed project, with an access token with the `api` scope. It must be a different user from the review bot: pergent.sh doesn't start when both tokens belong to the same user, unless the instance approves with the review bot (below). It only approves, and removes its approval when the merge request gets a new commit or a new target branch. If the project requires specific approvers or forbids approval by certain users, make sure this bot qualifies.
+
+    **One user for both.** When a second user is hard to get, set `approve_with_review_bot: true` in place of `approve_token_env`, or choose **The review bot (one user)** when you add the instance in the dashboard, where it can't change afterwards. There is then no approve token, and the review bot must be an eligible approver too. This gives up the split: the account that writes a review is the one that approves it, with the Maintainer role, and anything else that uses the account can approve as well. pergent.sh can't tell that user's other approvals from its own, and GitLab can refuse the approval on a merge request that user wrote. Changing it in the config file leaves the old approve bot's approvals in place until they are removed by hand, or by GitLab's "Remove all approvals when commits are added to the source branch".
 
     > **Warning:** if a project needs only one approval and the approve bot is an eligible approver, the bot's approval alone unlocks the merge: a merge request can then be merged on a model's review without any human approving it. Give every reviewed project an approval rule that requires a human approval (for example, one approval from a group the approve bot is not in), so the bot's approval is never enough on its own.
 
@@ -214,7 +216,7 @@ For GitHub, put the Apps' private keys (the whole `.pem` file of each) and the r
 | the variable named by `dashboard.admin_password_env` | The password of the first local admin, `admin`, at least 12 characters. Optional: without it pergent.sh generates one and logs it once. Read only on the start that creates the account. See [First sign-in](#first-sign-in). |
 | the variable named by `dashboard.sign_in.client_secret_env` | When `dashboard.sign_in.mode` is `oidc` in the config file: the OIDC client secret. Required then, and checked at startup: with the variable unset or empty pergent.sh does not start, and the error names the variable. With the sign-in set in the dashboard the secret is entered there. See [Sign-in](#sign-in). |
 | the variable named by `llm.api_key_env` (default `OPENCODE_API_KEY`) | When the LLM is in the config file: the LLM key handed to each Job. Required then, and checked at startup. With the LLM set in the dashboard, the key is entered there. |
-| each `gitlab[].review_token_env`, `approve_token_env`, `webhook_secret_env` | When the instance is in the config file: the review bot token, the approve bot token and the webhook secret of that instance. Required, and checked at startup. |
+| each `gitlab[].review_token_env`, `approve_token_env`, `webhook_secret_env` | When the instance is in the config file: the review bot token, the approve bot token (none with `approve_with_review_bot`) and the webhook secret of that instance. Required, and checked at startup. |
 | each `github[].review_app.private_key_env` | When the instance is in the config file: the review App's private key, the whole PEM file GitHub gave you (PKCS#1 `RSA PRIVATE KEY` or PKCS#8 `PRIVATE KEY`). Required, and checked at startup. Never logged. |
 | each `github[].approve_app.private_key_env` or `github[].approve_token_env` | When the instance is in the config file and doesn't set `approve_with_review_app`: the approve App's private key, or the approve bot user's fine-grained personal access token. Required, and checked at startup. With `approve_with_review_app: true` there is none: the review App's key approves. |
 | each `github[].webhook_secret_env` | When the instance is in the config file: the review App's webhook secret. Required. |
@@ -223,6 +225,13 @@ For GitHub, put the Apps' private keys (the whole `.pem` file of each) and the r
 pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is handy for local development.
 
 ## ⬆️ Upgrading
+
+### Upgrading to the next release
+
+Nothing changes unless you turn the new setting on. Migration `0029` runs at startup and adds one column to `instances`, so back up Postgres first, as for any migration. 0.10.0 keeps working on the migrated database.
+
+- A GitLab instance can now approve with its review bot, with `approve_with_review_bot: true` in place of `approve_token_env`, or **The review bot (one user)** in the dashboard's add form. See [Requirements](#-requirements) for what this gives up. Two tokens of one user are still refused without it.
+- **To roll back, first remove `approve_with_review_bot` from the config.** 0.10.0 refuses a config key it doesn't know, so it would not start with it. An instance added in the dashboard this way stays stored, but 0.10.0 can't connect it, because it has no approve token.
 
 ### Upgrading to 0.10.0
 
@@ -251,15 +260,7 @@ The review comment and the reviews:
 - **A run from before this release has no recorded layout.** If it is published again (a dismissal does that), its comment takes the new default shape.
 - **[Comment layout](#-comment-layout)** is a new per-repository setting for the comment's shape, unset by default. A null value means the default layout.
 
-### Upgrading to 0.9.0
-
-This release adds [Quiet reviews](#-quiet-reviews): a review that raises fewer nitpicks, posts no suggestion threads and writes a shorter comment, with everything that blocks unchanged. It is off until you turn it on, so a repository that doesn't is reviewed as before.
-
-- **The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.5.5`.** That release changes nothing in the comment unless the review is quiet. A config that sets its own `jobs.image` keeps the image it names. The shorter comment does not depend on it: pergent.sh draws the comment itself from the result the Job sends.
-- **Migration `0025` runs at startup.** It adds three nullable columns (`quiet_reviews` on `dashboard_repos`, `repo_defaults` and `runs`). A null value means off, and 0.8.2 keeps working on the migrated database, so you can roll back.
-- **To roll back, first remove `quiet_reviews` from the config.** 0.8.2 refuses a config key it does not know, so it would not start with `repositories[].quiet_reviews` in it. The dashboard's setting needs no change: 0.8.2 ignores the column.
-
-### Upgrading to the next release
+### Also in 0.10.0
 
 The migration adds one table, `webhook_deliveries`. Back up Postgres first, as for any migration.
 
@@ -268,6 +269,14 @@ The migration adds one table, `webhook_deliveries`. Back up Postgres first, as f
 - On GitLab, a comment command is read back from GitLab before it is acted on, so each one costs one more API call.
 - The chart now sets `callback_url` to its own Service unless `config.callback_url` is set, so Jobs post their results inside the cluster over plain HTTP instead of through `public_url`. To keep the old path, set `config.callback_url` to your `public_url`. In a mesh that requires mTLS, check first that Jobs can reach the Service.
 - GitHub: sending the same delivery again from the App's **Recent Deliveries** is ignored once it was handled. A delivery answered 5xx can still be sent again. To review a change again, use `review` or **Re-run review**.
+
+### Upgrading to 0.9.0
+
+This release adds [Quiet reviews](#-quiet-reviews): a review that raises fewer nitpicks, posts no suggestion threads and writes a shorter comment, with everything that blocks unchanged. It is off until you turn it on, so a repository that doesn't is reviewed as before.
+
+- **The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.5.5`.** That release changes nothing in the comment unless the review is quiet. A config that sets its own `jobs.image` keeps the image it names. The shorter comment does not depend on it: pergent.sh draws the comment itself from the result the Job sends.
+- **Migration `0025` runs at startup.** It adds three nullable columns (`quiet_reviews` on `dashboard_repos`, `repo_defaults` and `runs`). A null value means off, and 0.8.2 keeps working on the migrated database, so you can roll back.
+- **To roll back, first remove `quiet_reviews` from the config.** 0.8.2 refuses a config key it does not know, so it would not start with `repositories[].quiet_reviews` in it. The dashboard's setting needs no change: 0.8.2 ignores the column.
 
 ### Upgrading to 0.8.2
 
@@ -407,7 +416,7 @@ To upgrade:
 
 ## 🦊 GitLab project settings
 
-- **Don't treat the `pergent` commit status as a gate.** GitLab lets anyone with the Developer role set a commit status of any name on a commit of the project, including the head of their own merge request, so a `pergent` status of `success` proves nothing about who set it. Don't rely on "Pipelines must succeed" (or any other check of commit statuses) to enforce the review. The approval is the gate: it comes from the approve bot, a separate user whose token only pergent.sh holds.
+- **Don't treat the `pergent` commit status as a gate.** GitLab lets anyone with the Developer role set a commit status of any name on a commit of the project, including the head of their own merge request, so a `pergent` status of `success` proves nothing about who set it. Don't rely on "Pipelines must succeed" (or any other check of commit statuses) to enforce the review. The approval is the gate: it comes from the approve bot, a separate user whose token only pergent.sh holds. With `approve_with_review_bot` it comes from the review bot, so that token must be held by pergent.sh alone for this to stay true.
 - **Require approval through approval rules.** Give the default branch an approval rule that needs a human approval as well as the bot's (for example two approvals, or one from a group the approve bot is not in); see the warning under [Requirements](#-requirements). pergent.sh logs a warning every hour for a project one approval can merge.
 - **Turn on "Remove all approvals when commits are added to the source branch"** (Settings > Merge requests > Approval settings). It is GitLab's counterpart of GitHub's "Dismiss stale pull request approvals": pergent.sh removes its approval on every push, but this makes GitLab do it too, as a second layer for a webhook pergent.sh missed.
 - **Turn on "Prevent editing approval rules in merge requests"** (same place). Otherwise the author of a merge request can lower its required approvals to one, and the approve bot's approval alone unlocks the merge.
@@ -754,7 +763,7 @@ Every write is checked on the server: it needs a session, the CSRF token, a role
 
 Admins add GitLab and GitHub instances, with their secrets, under **Admin → Integrations**, and set the LLM under **Admin → Settings**. Nobody else can.
 
-- **Adding a GitLab instance:** a name (`[a-z0-9-]`, at most 63 characters, part of the webhook URL), the instance's `https` URL without a trailing slash, the review token and the approve token. The webhook secret is generated by pergent.sh, since pergent.sh creates the hooks itself. Each instance's card shows its webhook URL, for checking against the hooks on your projects.
+- **Adding a GitLab instance:** a name (`[a-z0-9-]`, at most 63 characters, part of the webhook URL), the instance's `https` URL without a trailing slash, the review token, who approves (a separate approve bot, the default, or the review bot; this can't change afterwards) and, for a separate bot, the approve token. The webhook secret is generated by pergent.sh, since pergent.sh creates the hooks itself. Each instance's card shows its webhook URL, for checking against the hooks on your projects.
 - **Adding a GitHub instance:** a name, the API URL, the review App's ID and private key, its webhook secret (the one you set in the App), **Approve with**: the review App itself (the default, one App), a separate approve App (its ID and private key) or a bot user's token. A private key is pasted as it is in the `.pem` file; the browser's one-line field loses its line breaks, and the dashboard puts them back.
 - **Secrets are write-only.** A value is sent once and never comes back: not in a page, an API answer, a log, an audit entry or the browser's storage. The page shows only "set" or "not set" and when the secret last changed. Replacing a secret doesn't need the old value.
 - **Checked before saving.** A save runs the checks startup runs for an instance in the config (the two bot tokens belong to different users, the App key signs a request GitHub accepts, ...) and is refused with the reason when one fails; nothing is stored then. A saved instance is used at once, without a restart.
@@ -1441,7 +1450,8 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `gitlab[].name` | required | Instance name, `[a-z0-9-]+`, unique across `gitlab` and `github`. Part of the webhook URL. |
 | `gitlab[].url` | required | Base URL of the GitLab instance. It must be `https` (the bot tokens travel in a header), without a trailing slash. A redirect to another host is never followed. |
 | `gitlab[].review_token_env` | required | Name of the env var with the review bot token. |
-| `gitlab[].approve_token_env` | required | Name of the env var with the approve bot token. It must belong to a different user than the review bot token. |
+| `gitlab[].approve_token_env` | one of `approve_token_env` and `approve_with_review_bot` | Name of the env var with the approve bot token. It must belong to a different user than the review bot token. |
+| `gitlab[].approve_with_review_bot` | one of `approve_token_env` and `approve_with_review_bot` | `true` to let the review bot's own user approve too, with no approve token. See [Requirements](#-requirements) for what this gives up. |
 | `gitlab[].webhook_secret_env` | required | Name of the env var with the webhook secret. GitLab sends it as `X-Gitlab-Token`. |
 | `github[].name` | required | Instance name, `[a-z0-9-]+`, unique across `gitlab` and `github`. Part of the webhook URL. One instance is one pair of Apps and covers every organization they are installed on. |
 | `github[].api_url` | `https://api.github.com` | GitHub's REST API. Only GitHub.com is supported: another `https` URL (GitHub Enterprise Server) is accepted but untested. |

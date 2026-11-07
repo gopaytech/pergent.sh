@@ -12,18 +12,20 @@ import (
 // InstanceRow is an instance added in the browser, a row of instances;
 // instances in the config file have none. Platform is "gitlab" or "github".
 // URL is a GitLab instance's address; APIURL and the App IDs are a GitHub
-// instance's (ApproveAppID 0 approves with a token). An empty OAuthClientID
-// means nobody signs in through this instance. Removing is set while the
-// instance is being taken out.
+// instance's (ApproveAppID 0 approves with a token). ApproveWithReviewBot is
+// a GitLab instance whose review bot approves too, with no approve token. An
+// empty OAuthClientID means nobody signs in through this instance. Removing
+// is set while the instance is being taken out.
 type InstanceRow struct {
-	Name, Platform string
-	URL            string
-	APIURL         string
-	ReviewAppID    int64
-	ApproveAppID   int64
-	OAuthClientID  string
-	Removing       bool
-	CreatedAt      time.Time
+	Name, Platform       string
+	URL                  string
+	APIURL               string
+	ReviewAppID          int64
+	ApproveAppID         int64
+	ApproveWithReviewBot bool
+	OAuthClientID        string
+	Removing             bool
+	CreatedAt            time.Time
 }
 
 // ErrRemoving is returned by UpdateInstance for an instance being removed.
@@ -35,11 +37,11 @@ type SealedSecret struct {
 	UpdatedAt time.Time
 }
 
-const instanceColumns = `name, platform, url, api_url, review_app_id, approve_app_id, oauth_client_id, removing, created_at`
+const instanceColumns = `name, platform, url, api_url, review_app_id, approve_app_id, approve_with_review_bot, oauth_client_id, removing, created_at`
 
 func scanInstance(row pgx.Row) (InstanceRow, error) {
 	var r InstanceRow
-	err := row.Scan(&r.Name, &r.Platform, &r.URL, &r.APIURL, &r.ReviewAppID, &r.ApproveAppID, &r.OAuthClientID, &r.Removing, &r.CreatedAt)
+	err := row.Scan(&r.Name, &r.Platform, &r.URL, &r.APIURL, &r.ReviewAppID, &r.ApproveAppID, &r.ApproveWithReviewBot, &r.OAuthClientID, &r.Removing, &r.CreatedAt)
 	return r, err
 }
 
@@ -89,9 +91,9 @@ func (s *Store) CreateInstance(ctx context.Context, row InstanceRow, secrets map
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 
-	_, err = tx.Exec(ctx, `INSERT INTO instances (name, platform, url, api_url, review_app_id, approve_app_id, oauth_client_id, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		row.Name, row.Platform, row.URL, row.APIURL, row.ReviewAppID, row.ApproveAppID, row.OAuthClientID, at)
+	_, err = tx.Exec(ctx, `INSERT INTO instances (name, platform, url, api_url, review_app_id, approve_app_id, approve_with_review_bot, oauth_client_id, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		row.Name, row.Platform, row.URL, row.APIURL, row.ReviewAppID, row.ApproveAppID, row.ApproveWithReviewBot, row.OAuthClientID, at)
 	if isUniqueViolation(err) {
 		return ErrExists
 	}

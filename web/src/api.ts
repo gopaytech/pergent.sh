@@ -465,7 +465,7 @@ export type SkillFetchResult = { name: string; ok: boolean; error?: string };
 
 // Approver is who approves for an instance: a second App, the review App
 // itself, or a bot user's token.
-export type Approver = "app" | "review_app" | "token";
+export type Approver = "app" | "review_app" | "review_bot" | "token";
 
 // SecretView says whether a secret is set and when it last changed; the
 // value is never sent. updatedAt is null for a secret from the config's
@@ -520,8 +520,8 @@ export type LLMAdminView = {
 };
 
 // InstanceAdminView is one instance in GET /api/admin/instances (admins).
-// secrets has the fields the instance takes: review_token, approve_token,
-// webhook_secret (GitLab); review_app_key, approve_app_key or approve_token,
+// secrets has the fields the instance takes: review_token, approve_token
+// (not when the review bot approves), webhook_secret (GitLab); review_app_key, approve_app_key or approve_token,
 // webhook_secret (GitHub).
 export type InstanceAdminView = {
   name: string;

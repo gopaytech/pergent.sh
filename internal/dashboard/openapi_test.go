@@ -1289,7 +1289,7 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 	fetchStatuses := []string{store.FetchRunning, store.FetchDone, store.FetchFailed}
 	fetchPurposes := []string{store.FetchInstall, store.FetchUpdate}
 	healths := []string{healthOK, healthNeedsAttention}
-	approvers := []string{approverKindApp, approverKindReviewApp, approverKindToken}
+	approvers := []string{approverKindApp, approverKindReviewApp, approverKindReviewBot, approverKindToken}
 	platforms := []string{config.PlatformGitLab, config.PlatformGitHub}
 	itemStates := []string{readiness.Passed, readiness.Warning, readiness.Missing, readiness.Unknown}
 	cases := []struct {

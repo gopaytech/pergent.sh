@@ -232,6 +232,40 @@ func TestSecrets(t *testing.T) {
 	}
 }
 
+// With approve_with_review_bot there is no approve token to read.
+func TestSecretsWithReviewBotApprover(t *testing.T) {
+	t.Setenv("GL_REVIEW", "review")
+	t.Setenv("GL_HOOK", "hook")
+	inst := Instance{Name: "corp", ReviewTokenEnv: "GL_REVIEW", WebhookSecretEnv: "GL_HOOK", ApproveWithReviewBot: true}
+	review, approve, webhook, err := inst.Secrets()
+	if err != nil {
+		t.Fatalf("Secrets: %v", err)
+	}
+	if review != "review" || approve != "" || webhook != "hook" {
+		t.Errorf("Secrets = %q, %q, %q", review, approve, webhook)
+	}
+}
+
+// approve_with_review_bot: true in the file loads without an approve token.
+func TestLoadGitLabApproveWithReviewBot(t *testing.T) {
+	base, err := os.ReadFile("testdata/valid.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Replace(string(base), "    approve_token_env: GITLAB_APPROVE_TOKEN\n", "    approve_with_review_bot: true\n", 1)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.GitLab[0]; !got.ApproveWithReviewBot || got.ApproveTokenEnv != "" {
+		t.Errorf("gitlab[0] = %+v", got)
+	}
+}
+
 func TestSecretsMissingEnv(t *testing.T) {
 	t.Setenv("PERGENT_TEST_APPROVE", "a")
 	t.Setenv("PERGENT_TEST_WEBHOOK", "w")
@@ -343,6 +377,8 @@ func TestValidateRejectsGitHub(t *testing.T) {
 			r.Project = "Acme/Widgets"
 			c.Repositories = append(c.Repositories, r)
 		}, "duplicate repository"},
+		{"gitlab approve token and review bot", func(c *Config) { c.GitLab[0].ApproveWithReviewBot = true }, "exactly one of approve_token_env and approve_with_review_bot"},
+		{"gitlab no approver", func(c *Config) { c.GitLab[0].ApproveTokenEnv = "" }, "exactly one of approve_token_env and approve_with_review_bot"},
 		{"bad failure_status on github repository", func(c *Config) { c.Repositories[1].FailureStatus = "maybe" }, "failure_status"},
 		{"http api_url", func(c *Config) { c.GitHub[0].APIURL = "http://api.github.com" }, "github[0].api_url"},
 		{"api_url with trailing slash", func(c *Config) { c.GitHub[0].APIURL = "https://api.github.com/" }, "trailing slash"},

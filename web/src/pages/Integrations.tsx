@@ -24,6 +24,8 @@ function approverWords(approver: Approver): string {
   switch (approver) {
     case "review_app":
       return "Approves with the review App";
+    case "review_bot":
+      return "Approves with the review bot";
     case "app":
       return "Approves with the approve App";
     default:
@@ -334,7 +336,7 @@ function AddInstance({ platform, onClose }: { platform: Platform; onClose: () =>
   const github = platform === "github";
   // Who approves decides the Approve fields: only the chosen kind's are
   // shown and sent.
-  const approveWith: Approver = (d.approveWith as Approver | undefined) ?? "review_app";
+  const approveWith: Approver = (d.approveWith as Approver | undefined) ?? (github ? "review_app" : "token");
   const v = (k: string) => (d[k] ?? "").trim();
 
   const submit = (e: FormEvent) => {
@@ -349,7 +351,7 @@ function AddInstance({ platform, onClose }: { platform: Platform; onClose: () =>
         }
       : {
           review_token: d.review_token ?? "",
-          approve_token: d.approve_token ?? "",
+          ...(approveWith === "token" ? { approve_token: d.approve_token ?? "" } : {}),
         };
     const secrets: Record<string, string> = {};
     for (const [field, text] of Object.entries(typed)) {
@@ -386,7 +388,13 @@ function AddInstance({ platform, onClose }: { platform: Platform; onClose: () =>
       return;
     }
     setProblem("");
-    add.mutate({ name: v("name"), platform, url: v("url"), secrets });
+    add.mutate({
+      name: v("name"),
+      platform,
+      url: v("url"),
+      ...(approveWith === "review_bot" ? { approveWithReviewBot: true } : {}),
+      secrets,
+    });
   };
 
   const title = `Add ${platformName(platform)} instance`;
@@ -431,7 +439,18 @@ function AddInstance({ platform, onClose }: { platform: Platform; onClose: () =>
         <>
           <Field d={d} set={set} name="url" label="Address" required help="The https address of the GitLab server." />
           <Field d={d} set={set} name="review_token" label="Review token" secret required />
-          <Field d={d} set={set} name="approve_token" label="Approve token" secret required />
+          <label htmlFor="add-approveWith">Approve with</label>
+          <select id="add-approveWith" value={approveWith} onChange={(e) => set("approveWith", e.target.value)}>
+            <option value="token">A separate approve bot</option>
+            <option value="review_bot">The review bot (one user)</option>
+          </select>
+          <div className="meta">
+            A separate user keeps the account that writes the review from being the one that approves it. This can't change
+            once the instance is added.
+          </div>
+          {approveWith === "token" && (
+            <Field d={d} set={set} name="approve_token" label="Approve token" secret required />
+          )}
         </>
       )}
       {problem && (

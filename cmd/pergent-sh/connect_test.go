@@ -461,6 +461,57 @@ func TestConnectGitLabSameUserRefused(t *testing.T) {
 	}
 }
 
+// approve_with_review_bot says one user does both, out loud: no approve token
+// is read, and the review bot's token is what approves.
+func TestConnectGitLabApproveWithReviewBot(t *testing.T) {
+	var approvedWith string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token := r.Header.Get("PRIVATE-TOKEN")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/v4/user" && token == "glpat-review-example":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 11, "username": "review-bot"})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/approve"):
+			approvedWith = token
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	cfg := gitlabConfig(t, srv.URL)
+	cfg.GitLab[0].ApproveTokenEnv, cfg.GitLab[0].ApproveWithReviewBot = "", true
+	t.Setenv("GL_APPROVE", "")
+	c := newConnector(t, cfg, nil, nil)
+	if err := c.connectConfigured(context.Background(), "corp"); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	p, ok := c.platforms.Get("corp")
+	if !ok || p.Approver == nil {
+		t.Fatalf("platform = %+v", p)
+	}
+	if got, want := p.Approver.Bot(), p.Forge.Bot(); got != want || got.ID != 11 {
+		t.Errorf("approve bot = %+v, want the review bot %+v", got, want)
+	}
+	if err := p.Approver.Approve(context.Background(), 7, 3, "abc"); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	if approvedWith != "glpat-review-example" {
+		t.Errorf("approved with token %q, want the review token", approvedWith)
+	}
+}
+
+// Two tokens of one user stay refused without the setting, and the message
+// says what else can be done.
+func TestConnectGitLabSameUserNamesTheOption(t *testing.T) {
+	srv := fakeGitLabUsers(t, map[string]int64{"glpat-review-example": 11, "glpat-approve-example": 11})
+	c := newConnector(t, gitlabConfig(t, srv.URL), nil, nil)
+	err := c.connectConfigured(context.Background(), "corp")
+	if err == nil || !strings.Contains(err.Error(), "approve with the review bot") {
+		t.Errorf("Connect = %v, want it to name approving with the review bot", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Connecting at runtime
 
@@ -491,6 +542,24 @@ func TestConnectDashboardInstanceErrors(t *testing.T) {
 				t.Errorf("error %q names an empty variable", err)
 			}
 		})
+	}
+}
+
+// A dashboard instance that approves with the review bot checks with its one
+// token, and still needs that token and the webhook secret.
+func TestCheckDashboardInstanceApproveWithReviewBot(t *testing.T) {
+	srv := fakeGitLabUsers(t, map[string]int64{"glpat-review-example": 11})
+	c := newConnector(t, &config.Config{}, nil, nil)
+	lab := dashboardGitLab("lab", srv.URL)
+	lab.GitLab.ApproveWithReviewBot = true
+	if err := c.Check(context.Background(), lab, instances.Secrets{ReviewToken: "glpat-review-example", WebhookSecret: "w"}); err != nil {
+		t.Errorf("Check = %v", err)
+	}
+	if err := c.Check(context.Background(), lab, instances.Secrets{WebhookSecret: "w"}); err == nil || !strings.Contains(err.Error(), "the review token is not set") {
+		t.Errorf("Check without a review token = %v", err)
+	}
+	if err := c.Check(context.Background(), lab, instances.Secrets{ReviewToken: "glpat-review-example"}); err == nil || !strings.Contains(err.Error(), "the webhook secret is not set") {
+		t.Errorf("Check without a webhook secret = %v", err)
 	}
 }
 
