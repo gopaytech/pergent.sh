@@ -907,6 +907,7 @@ var openAPISchemas = map[string]schemaType{
 	"result.Incremental":     inputSchema(result.Incremental{}),
 	"result.Skill":           inputSchema(result.Skill{}),
 	"result.Finding":         inputSchema(result.Finding{}),
+	"result.Linked":          inputSchema(result.Linked{}),
 	"result.Failure":         inputSchema(result.Failure{}),
 	"result.Summary":         inputSchema(result.Summary{}),
 	"result.BatchChecks":     inputSchema(result.BatchChecks{}),

@@ -347,3 +347,47 @@ func TestResultOfOtherSkillsThanDispatchedFailsRun(t *testing.T) {
 		})
 	}
 }
+
+// The impact check is not one of the dispatched skills: it is expected when the
+// run recorded linked repositories, and refused when it did not, so a result
+// can't gain a skill that nothing started. A result that lacks it is not
+// refused: the publisher writes a failed one (an image that doesn't know the
+// feature ignores the links).
+func TestImpactSkillAgainstTheRecordedLinks(t *testing.T) {
+	sources := map[string]string{"security": "library"}
+	links := []store.Link{{Target: "acme/api"}}
+	for name, tc := range map[string]struct {
+		run    store.Run
+		body   string
+		wantOK bool
+	}{
+		"links and impact":          {store.Run{SkillSources: sources, LinkedRepos: links}, completedJSON("security", "impact"), true},
+		"links and no impact":       {store.Run{SkillSources: sources, LinkedRepos: links}, completedJSON("security"), true},
+		"no links and impact":       {store.Run{SkillSources: sources}, completedJSON("security", "impact"), false},
+		"no links and no impact":    {store.Run{SkillSources: sources}, completedJSON("security"), true},
+		"impact twice":              {store.Run{SkillSources: sources, LinkedRepos: links}, completedJSON("security", "impact", "impact"), false},
+		"nothing recorded, impact":  {store.Run{}, completedJSON("security", "impact"), false},
+		"nothing recorded, links":   {store.Run{LinkedRepos: links}, completedJSON("anything", "impact"), true},
+		"subset with impact":        {store.Run{SkillSources: sources, SkillSubset: []string{"security", "impact"}, LinkedRepos: links}, completedJSON("security", "impact"), true},
+		"subset lacking impact":     {store.Run{SkillSources: sources, SkillSubset: []string{"security", "impact"}, LinkedRepos: links}, completedJSON("security"), true},
+		"subset without links":      {store.Run{SkillSources: sources, SkillSubset: []string{"security"}}, completedJSON("security", "impact"), false},
+		"impact and an unknown one": {store.Run{SkillSources: sources, LinkedRepos: links}, completedJSON("security", "impact", "other"), false},
+		"links and a missing skill": {store.Run{SkillSources: sources, LinkedRepos: links}, completedJSON("impact"), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFake()
+			tc.run.ID, tc.run.BaseSHA, tc.run.HeadSHA = runID, base, head
+			f.run = tc.run
+			rec := newEnv(f).post(runID, "Bearer good", tc.body)
+			if tc.wantOK {
+				if rec.Code != 200 || len(f.replaced) != 0 {
+					t.Errorf("status = %d replaced = %v; want it accepted", rec.Code, f.replaced)
+				}
+				return
+			}
+			if rec.Code != 400 || len(f.replaced) != 1 || !strings.Contains(f.replaced[0], "skill") {
+				t.Errorf("status = %d replaced = %v; want the run failed", rec.Code, f.replaced)
+			}
+		})
+	}
+}

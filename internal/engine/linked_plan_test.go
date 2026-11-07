@@ -514,3 +514,51 @@ type noInlineForge struct {
 func (n *noInlineForge) Visibility(ctx context.Context, repo string) (forge.Visibility, error) {
 	return n.world.Visibility(ctx, repo)
 }
+
+// The entry's text is fixed, but the operator can tell why a read failed: the
+// cause goes to the log through Cause, once for each failed entry.
+func TestPlanLinksTellsTheCause(t *testing.T) {
+	boom := errors.New("GET /repos/acme/api: 502 bad gateway")
+	for _, tc := range []struct {
+		name string
+		edit func(w *planWorld)
+		want string
+	}{
+		{"visibility read", func(w *planWorld) { w.visErr["acme/api"] = boom }, "502 bad gateway"},
+		{"source read", func(w *planWorld) { w.visErr[planSource] = boom }, "502 bad gateway"},
+		{"not readable", func(w *planWorld) { w.visErr["acme/api"] = forge.ErrSourceNotFound }, forge.ErrSourceNotFound.Error()},
+		{"refused", func(w *planWorld) { w.vis[planSource] = forge.VisPublic }, "must be as open"},
+		{"target lookup", func(w *planWorld) { w.targetErr["acme/api"] = boom }, "502 bad gateway"},
+		{"another installation", func(w *planWorld) { w.targets["acme/api"] = githubforge.Target{RepoID: 11, InstallationID: 99} }, "another installation"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newPlanWorld()
+			tc.edit(w)
+			in := w.input([]store.Link{lk("acme/api", true)}, "a.go")
+			in.All = true
+			var links, causes []string
+			in.Cause = func(link string, err error) { links, causes = append(links, link), append(causes, err.Error()) }
+
+			plan := planLinks(context.Background(), in)
+
+			if len(plan.Entries) != 1 || plan.Entries[0].Error == "" {
+				t.Fatalf("entries = %+v; want one with an error", plan.Entries)
+			}
+			if len(causes) != 1 || links[0] != "acme/api" || !strings.Contains(causes[0], tc.want) {
+				t.Errorf("causes = %q for %q; want one containing %q", causes, links, tc.want)
+			}
+			if strings.Contains(plan.Entries[0].Error, "502") {
+				t.Errorf("the entry shows the cause: %q", plan.Entries[0].Error)
+			}
+		})
+	}
+
+	// A link that works has no cause.
+	w := newPlanWorld()
+	in := w.input([]store.Link{lk("acme/api", true)}, "a.go")
+	in.All = true
+	in.Cause = func(string, error) { t.Error("a cause for a working link") }
+	if plan := planLinks(context.Background(), in); plan.Entries[0].Error != "" {
+		t.Errorf("entries = %+v", plan.Entries)
+	}
+}

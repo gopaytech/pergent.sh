@@ -239,7 +239,8 @@ func writeExec(t *testing.T, dir, name, body string) {
 // /work is rewritten) and fake git, timeout, du and base64: the real ones need
 // a network, GNU options or both. A clone of a URL with "broken" in it fails
 // after leaving a partial directory, one with "slow" times out, one with
-// "huge" is over the size limit. fetchFails makes the checkout itself fail.
+// "huge" is one KiB over the size limit, one with "exact" is exactly at it.
+// fetchFails makes the checkout itself fail.
 func runCheckout(t *testing.T, clones string, fetchFails bool) scriptRun {
 	t.Helper()
 	root := t.TempDir()
@@ -259,7 +260,7 @@ clone)
   echo "clone-env allow=${GIT_ALLOW_PROTOCOL-unset} prompt=${GIT_TERMINAL_PROMPT-unset} nosystem=${GIT_CONFIG_NOSYSTEM-unset} global=${GIT_CONFIG_GLOBAL-unset} header=${GIT_CONFIG_VALUE_0:+set}" >> "$FAKE_LOG"
   mkdir -p "$last/.git"
   printf '[remote "origin"]\n\turl = %s\n' "$prev" > "$last/.git/config"
-  case "$prev" in *huge*) echo 2097153 > "$last/size.kb" ;; *) echo 10 > "$last/size.kb" ;; esac
+  case "$prev" in *huge*) echo 2097153 > "$last/size.kb" ;; *exact*) echo 2097152 > "$last/size.kb" ;; *) echo 10 > "$last/size.kb" ;; esac
   case "$prev" in *broken*) exit 128 ;; esac ;;
 esac
 exit 0
@@ -381,10 +382,22 @@ func TestCheckoutScriptTargetCloneFailureContinues(t *testing.T) {
 	}
 }
 
+// The limit is inclusive: a clone of exactly 2 GiB stays, one KiB more goes
+// (the huge case above). The fake du reports the sizes, so the script's own
+// comparison is what is tested.
 func TestCheckoutScriptSizeLimitIsInclusive(t *testing.T) {
-	// 2097152 KiB (2 GiB) is allowed; one more is not (the huge case above).
 	if LinkedCloneMaxKiB != 2*1024*1024 {
-		t.Errorf("LinkedCloneMaxKiB = %d", LinkedCloneMaxKiB)
+		t.Fatalf("LinkedCloneMaxKiB = %d; the fake du reports exactly 2097152", LinkedCloneMaxKiB)
+	}
+	r := runCheckout(t, "linked-1 https://github.com/acme/exact.git", false)
+	if r.err != nil {
+		t.Fatalf("script: %v\n%s", r.err, r.out)
+	}
+	if !r.exists("linked-1/.git/config") {
+		t.Error("a clone of exactly the limit was removed")
+	}
+	if r := runCheckout(t, "linked-1 https://github.com/acme/huge.git", false); r.exists("linked-1") {
+		t.Error("a clone one KiB over the limit stayed")
 	}
 }
 
@@ -396,7 +409,7 @@ func TestCheckoutScriptHardensTargetClones(t *testing.T) {
 	if !r.has("timeout 120 git clone") {
 		t.Errorf("a clone has no time limit: %v", r.log)
 	}
-	for _, want := range []string{"--depth=1", "--no-tags", "core.symlinks=false", "core.hooksPath=/dev/null", "-- https://github.com/acme/api.git"} {
+	for _, want := range []string{"--depth=1", "--no-tags", "--single-branch", "core.symlinks=false", "core.hooksPath=/dev/null", "-- https://github.com/acme/api.git"} {
 		if !r.has("git clone", want) {
 			t.Errorf("no clone with %q: %v", want, r.log)
 		}

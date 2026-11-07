@@ -1162,11 +1162,13 @@ A layout moves and folds the blocks, nothing more. It never changes a verdict, a
 
 ## 🔗 Linked repositories
 
-A change to an API or a shared package can break its callers in another repository, and a review that only has the checkout can't see that. A repository can **link** other repositories, so that a change touching the paths it watches can be checked against the code that uses them. pergent.sh matches the links against a change and gives the Job a clone of each matched target (see [A review with links](#a-review-with-links)). The impact check itself is run by pergent: a Job image that predates it ignores the clones, and the repository is reviewed as before.
+A change to an API or a shared package can break its callers in another repository, and a review that only has the checkout can't see that. A repository can **link** other repositories, so that a change touching the paths it watches can be checked against the code that uses them. pergent.sh matches the links against a change and gives the Job a clone of each matched target (see [A review with links](#a-review-with-links)). The impact check itself is run by pergent. A Job image that predates it ignores the clones and reports no `impact` skill: pergent.sh then writes one itself, `failed`, so the review is never approved on a check that did not happen (see [The result](#the-result-approval-and-publishing)). Only a review that matched a link is affected; with the setting off, or nothing matched, an older image reviews as before.
 
 **Off by default.** The setting is **Linked repositories**, `linked_repos_enabled` in the config ([Config reference](#-config-reference)). A repository that leaves it unset takes the admin default, which starts off; a repository listed in the config reads no admin default, so unset there means off. While the setting is off, a repository's links are kept and ignored.
 
 **Links.** A link is a target repository (`owner/name`), a list of **watched paths** and a **Can block** switch. A repository has at most 3 links. Watched paths are globs, written as a skill's `paths` are (`render/**`; a directory is `render/**`, not `render/`; a pattern without a `/` matches a file name at any depth). A link with no watched paths matches every change; with paths, it matches a change that touches one. Can block is on unless set to `false`. Links belong to one repository: there is no admin default for them, and they are written by admins only (today in the config).
+
+**Turning it on.** Set `linked_repos_enabled: true` and `linked_repos` on the repository in the config, or turn on the admin default for the setting. Both are needed: a link without the setting does nothing, and the setting without a link does nothing. The review App must be installed on the repository and on each target, in the same installation, with `contents: read` (the clone token is scoped to just those repositories). Use a `jobs.image` that runs the impact check, which means a pergent release that includes it: the default may predate it, and an older image leaves `impact` `failed` on every review that matches a link, until the link is removed.
 
 ```yaml
 repositories:
@@ -1197,6 +1199,43 @@ When the setting is on and the repository has links, each review checks them aga
 5. **The Job.** `PERGENT_LINKED_REPOS` names `/in/linked-repos.json`, a list of `{name, path, watched, can_block, error}`, and is set only when there is an entry. The Job's deadline grows by 2 minutes per clone, and a limited work volume (`jobs.work_size`) by 2 GiB per clone. The matched links are recorded on the run.
 
 With the setting off, or with nothing matched, the Job is what it was before this feature: the same containers, environment, inputs and work volume.
+
+A re-run of some skills (`@<bot> review failed`) takes no links unless the check is one of the things it re-runs. See the next section.
+
+### The result, approval and publishing
+
+**The `impact` skill.** A Job given linked repositories always reports a skill named `impact`: its findings are in the one findings list and its row is in the skills table, like any skill's. `impact` is not one of the repository's skills. A result with an `impact` skill for a run that recorded no links is refused as a skill the Job was not started with, so one cannot appear from nothing. A finding of `impact` has the changed code of this repository as its file and line; the caller in the linked repository is named in the explanation, and the structured `linked` field (`repo`, `file`, `line`) is stored but not drawn. Everything a linked repository or the model wrote is escaped like any other model text.
+
+**A clean run says so.** If the check ran and found nothing, the comment has one line, `Impact: checked <repositories>, nothing found`, written by pergent. A review that did not match a link says nothing about it.
+
+**Approval.**
+
+- `impact` reviews no file of this repository. It does not count toward the files a review covered: a change that only `impact` looked at is "nothing reviewed" and is not approved.
+- A `failed` `impact` is a failed skill: the status follows the repository's failure status (failed, or neutral) and the bot does not approve. So is a Job image that returned no `impact` for a run that had links (pergent.sh adds a `failed` one), a clone that failed, a link that broke its rules, or a run that timed out.
+- A blocking `impact` finding blocks like any blocking finding, and a maintainer of the repository can dismiss it under the same rule as any other.
+- The other skills' results stand when `impact` fails.
+
+**Publishing.** Before anything is posted, and on every publish that holds an `impact` result (a republish after a dismissal too), the visibility rule is read again on fresh visibilities, because a repository can go private while a review runs. If the repository is no longer as closed as every repository the check looked into, or any read fails, the findings, notes and summaries of `impact` are left out, the skill is `failed` with a fixed message, and the rest of the review is posted. The result stored on the run is changed the same way, so the dashboard and the next review do not carry what was left out. The fixed message names no repository.
+
+**Threads.** `impact` lists no reviewed file, so a thread of an `impact` finding resolves when the check ran and finished and no longer reports it. If the check failed or did not run, its threads are left alone. A quiet review keeps `impact` suggestions in the comment, with no thread, as it does for any skill.
+
+**A later push and re-runs.** An incremental review keeps an earlier `impact` result that is open or failed, if the new run has none (a guard behind the rule in [A review with links](#a-review-with-links)); when the setting is off or the links are gone, an open `impact` makes the push a full review so the stale check can't be kept for good. `@<bot> review` runs everything again. `@<bot> review failed` re-runs `impact` when it failed, and a re-run of other skills keeps the earlier `impact` result. pergent needs at least one skill to run, so a re-run of `impact` alone also re-runs one skill, the first by name, and merges both.
+
+**Skill results.** `impact` shows in the Skill results tab with its own rates. It has no version: the result doesn't carry one, so its version is blank and a change to the prompt doesn't start a new row. Its findings never get a "Went away" or "Fixed" fate, because `impact` lists no reviewed file for the tab to judge a vanished finding by.
+
+### Accepted costs
+
+- **Default branch only.** A caller already fixed in its own unmerged pull request still reads as broken. Dismissing the finding covers that.
+- **The model can miss a caller.** A clean check means nothing was found, not that nothing breaks.
+- **Someone can steer the run.** A pull request's author who can't read a linked private repository could get the model to quote it, and text in a target could try the same, or suppress or plant a finding. The prompt rule against pasted code is not a guarantee, and the comment is the only way out. Linking is an admin's trust decision.
+- **A target's push can change this repository's result,** because the check reads its default branch.
+- **A comment already posted stays** if a repository goes public later.
+- **A pinned dependency relies on the switch.** For a repository that pins a version of the one it links (pergent.sh pins pergent), turn **Can block** off, or its findings can block when nothing is broken yet.
+- **Watched paths need upkeep.** A path nobody listed triggers nothing.
+- **A linked repository's details reach viewers of this one.** Someone who can read this repository's comments reads file names and descriptions from the target. Between private repositories that is the admin's decision.
+- **A failed link holds back approval** until it is fixed or removed.
+- **A re-run of `impact` alone costs one skill's review.**
+- **The clone time is not learned.** The checkout time pergent.sh records for a repository (it sets the next review's deadline) ignores a run that cloned targets.
 
 ## 📈 Skill results
 

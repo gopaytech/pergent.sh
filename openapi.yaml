@@ -4322,8 +4322,19 @@ components:
         explanation: {type: string}
         suggested_fix: {type: string}
         suggestion: {type: string}
+        linked:
+          $ref: '#/components/schemas/result.Linked'
       additionalProperties: true
       required: [file, severity, title]
+    result.Linked:
+      description: The caller, in a linked repository, that a finding of the `impact` skill says the change breaks. Not drawn in the comment.
+      type: object
+      properties:
+        repo: {type: string, description: "The link's name, owner/name."}
+        file: {type: string}
+        line: {type: integer}
+      additionalProperties: true
+      required: [repo, file, line]
     result.Incremental:
       description: What an incremental review did.
       type: object

@@ -537,6 +537,10 @@ fi
 git checkout -q --detach "$HEAD_SHA"
 `
 
+// The checkout script starts with the one a review without linked
+// repositories has always run (wantCheckoutBase, byte for byte), and what
+// follows is one block that runs only when LINKED_CLONES is set. The block
+// itself is pinned by the checkout script tests in linked_test.go.
 func TestCheckoutScriptIsExact(t *testing.T) {
 	if !strings.HasPrefix(checkoutScript, wantCheckoutBase) {
 		t.Errorf("checkout.sh does not start with the expected script:\n got:\n%s\nwant:\n%s", checkoutScript, wantCheckoutBase)
@@ -545,6 +549,10 @@ func TestCheckoutScriptIsExact(t *testing.T) {
 	rest := strings.TrimPrefix(checkoutScript, wantCheckoutBase)
 	if !strings.HasPrefix(rest, "if [ -n \"${LINKED_CLONES:-}\" ]; then\n") || !strings.HasSuffix(rest, "\nfi\n") {
 		t.Errorf("the linked repositories block is not one guarded block:\n%s", rest)
+	}
+	// A target is cloned from its default branch alone.
+	if !strings.Contains(rest, "--single-branch") {
+		t.Errorf("the linked repositories block clones every branch:\n%s", rest)
 	}
 }
 

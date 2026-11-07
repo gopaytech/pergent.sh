@@ -122,6 +122,11 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 	if run, err = e.replaceStepAdvice(ctx, run, advice); err != nil {
 		return err
 	}
+	// After the merges, so a check kept from an earlier run is held to the rule
+	// too, and on every publish, so a republish checks it again.
+	if run, err = e.holdImpact(ctx, run, log); err != nil {
+		return err
+	}
 	o := e.outcome(run, log)
 	// A repository switched off since the run was queued approves nothing
 	// more: its review is posted as with approval turned off.

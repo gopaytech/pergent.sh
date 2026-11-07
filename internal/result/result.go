@@ -94,9 +94,23 @@ type Finding struct {
 	SuggestedFix string `json:"suggested_fix,omitempty"`
 	Suggestion   string `json:"suggestion,omitempty"`
 
+	// Linked is the caller, in a linked repository, that a finding of the
+	// impact skill says the change breaks. It is nil on every other finding.
+	// It is not drawn in the comment: the explanation names the caller.
+	Linked *Linked `json:"linked,omitempty"`
+
 	// Skill is the skill that reported the finding. It is not part of a
 	// stored result: whoever reads the findings of a skill fills it in.
 	Skill string `json:"-"`
+}
+
+// Linked is the place a finding of the impact skill points at in a linked
+// repository: Repo is the link's name (owner/name), File and Line the caller.
+// The text is the model's and the repository's: whoever draws it escapes it.
+type Linked struct {
+	Repo string `json:"repo"`
+	File string `json:"file"`
+	Line int    `json:"line"`
 }
 
 // Failure is a batch of a skill that did not finish, with the plain text of
@@ -607,6 +621,16 @@ func MergeIncremental(partial, base []byte, from string) ([]byte, error) {
 		}
 		if skills[i], err = mergeIncrementalSkill(raw, pr.Skills[i], baseSkills[j], br.Skills[j]); err != nil {
 			return nil, err
+		}
+	}
+
+	// The linked repositories' check is not a skill that can be carried, but
+	// an open one must not be lost by a run that did not repeat it (dispatch
+	// runs it again while it is open, so this is the guard behind that rule).
+	// It is kept as the last review left it.
+	if !pr.HoldsImpact() {
+		if j, ok := earlier[ImpactSkill]; ok && impactIsOpen(br.Skills[j]) {
+			skills = append(skills, baseSkills[j])
 		}
 	}
 

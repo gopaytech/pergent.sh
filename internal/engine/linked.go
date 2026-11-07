@@ -22,7 +22,7 @@ import (
 
 // impactSkill is the name pergent gives the linked repositories' check in the
 // result.
-const impactSkill = "impact"
+const impactSkill = result.ImpactSkill
 
 // What a link's entry says when it can't be cloned. pergent shows the text in
 // the comment, so each one is fixed and short: nothing from the platform, the
@@ -74,6 +74,11 @@ type linkInput struct {
 
 	Visibility func(ctx context.Context, repo string) (forge.Visibility, error)
 	Target     func(ctx context.Context, repo string) (githubforge.Target, error)
+
+	// Cause, when set, is told why an entry carries an error, with the link's
+	// name and the error behind it. The entry's text is fixed and shows nothing
+	// of it; this is for the operator's log, which redacts it.
+	Cause func(link string, err error)
 }
 
 // planLinks matches the links against the change and decides, for each match,
@@ -114,19 +119,27 @@ func planLinks(ctx context.Context, in linkInput) linkPlan {
 		switch {
 		case invalid:
 			entry.Error = linkErrInvalid
+			plan.because(in, l.Target, links.Validate(in.Source, in.Links))
 		default:
 			if !srcRead {
 				srcVis, srcVisErr = in.Visibility(ctx, in.Source)
 				srcRead = true
 			}
 			tgtVis, err := in.Visibility(ctx, l.Target)
+			var checkErr error
+			if err == nil && srcVisErr == nil {
+				checkErr = links.Check(srcVis, tgtVis)
+			}
 			switch {
 			case errors.Is(err, forge.ErrSourceNotFound):
 				entry.Error = linkErrNotReadable
+				plan.because(in, l.Target, err)
 			case err != nil || srcVisErr != nil:
 				entry.Error = linkErrVisibility
-			case links.Check(srcVis, tgtVis) != nil:
+				plan.because(in, l.Target, errors.Join(err, srcVisErr))
+			case checkErr != nil:
 				entry.Error = linkErrRefused
+				plan.because(in, l.Target, checkErr)
 			}
 		}
 		if entry.Error == "" {
@@ -135,14 +148,18 @@ func planLinks(ctx context.Context, in linkInput) linkPlan {
 			switch {
 			case errors.Is(err, forge.ErrSourceNotFound):
 				entry.Error = linkErrNotReadable
+				plan.because(in, l.Target, err)
 			case err != nil:
 				entry.Error = linkErrLookup
+				plan.because(in, l.Target, err)
 			case target.InstallationID != in.SourceInstallation:
 				// One token covers the checkout and the targets, and a token
 				// belongs to one installation.
 				entry.Error = linkErrInstall
+				plan.because(in, l.Target, errors.New("the repository is in another installation of the review App"))
 			case baseErr != nil:
 				entry.Error = linkErrURL
+				plan.because(in, l.Target, baseErr)
 			}
 		}
 		if entry.Error == "" {
@@ -152,6 +169,13 @@ func planLinks(ctx context.Context, in linkInput) linkPlan {
 		plan.Entries = append(plan.Entries, entry)
 	}
 	return plan
+}
+
+// because tells in.Cause why the link's entry carries an error.
+func (p linkPlan) because(in linkInput, link string, err error) {
+	if in.Cause != nil && err != nil {
+		in.Cause(link, err)
+	}
 }
 
 // cloneBase is "https://host" of the reviewed repository's clone URL: a
@@ -195,9 +219,16 @@ func impactOpen(r *result.Result, ds []render.Dismissal) bool {
 // that can't be read counts as open. Otherwise the files that count are those
 // the run reviews: since the earlier review's head for an incremental review
 // (in.Carried set), since the merge base for any other. A list that can't be
-// had matches every link.
+// had matches every link. A re-run of some skills has none unless it re-runs
+// the check, and then every link counts.
 func (d *dispatcher) linkedRepos(ctx context.Context, plat Platform, repo settings.Effective, project store.Project, mr forge.Change, last store.Run, haveLast bool, in *inputs.Inputs) linkPlan {
 	if !repo.LinkedReposEnabled || len(repo.LinkedRepos) == 0 || !plat.isGitHub() {
+		return linkPlan{}
+	}
+	if d.partial && !d.rerunImpact {
+		// A re-run of some skills, not of the linked repositories' check: the
+		// result of the earlier run is kept for that, and the Job must not
+		// report on it (the result would carry a skill nothing asked for).
 		return linkPlan{}
 	}
 	finder, ok := plat.Forge.(interface {
@@ -207,7 +238,8 @@ func (d *dispatcher) linkedRepos(ctx context.Context, plat Platform, repo settin
 	if source == "" {
 		source = d.run.ProjectPath
 	}
-	all := d.impactIsOpen(ctx, last, haveLast)
+	// A re-run of the check goes over every link, whatever changed.
+	all := d.rerunImpact || d.impactIsOpen(ctx, last, haveLast)
 	var files []string
 	if !all {
 		var err error
@@ -226,6 +258,9 @@ func (d *dispatcher) linkedRepos(ctx context.Context, plat Platform, repo settin
 		Source: source, SourceInstallation: project.InstallationID, RepoURL: project.HTTPURLToRepo,
 		Links: repo.LinkedRepos, All: all, Files: files,
 		Visibility: plat.Forge.Visibility, Target: target,
+		Cause: func(link string, err error) {
+			d.log.Warn("a linked repository can't be cloned: the cause", "link", link, "cause", d.redact(err.Error()))
+		},
 	})
 	for _, e := range plan.Entries {
 		if e.Error != "" {

@@ -114,10 +114,17 @@ type Dismissal struct{ By, Reason string }
 type Coverage struct {
 	Failed   bool
 	Reviewed map[string]bool // files the skill reviewed in this review
+	// AllFiles: the skill covers every file of the change, though it lists
+	// none (the impact check reads other repositories for callers). A thread
+	// of this skill is judged as if Reviewed held its file.
+	AllFiles bool
 	// LeftOut: the skill's notes say it left a finding out because of a past
 	// dismissal. It says which skill, not which finding.
 	LeftOut bool
 }
+
+// covers reports whether the skill's review covers file.
+func (c Coverage) covers(file string) bool { return c.AllFiles || c.Reviewed[file] }
 
 // Input is everything Decide looks at.
 type Input struct {
@@ -290,13 +297,13 @@ func Decide(in Input) Plan {
 		switch cov, known := in.Skills[t.Skill]; {
 		case !inDiff || d.Deleted:
 			p.Resolve = append(p.Resolve, Resolve{Thread: t, State: StateGone, Reply: ReplyGone})
-		case known && !cov.Failed && cov.Reviewed[t.File] && cov.LeftOut:
+		case known && !cov.Failed && cov.covers(t.File) && cov.LeftOut:
 			// The finding may be missing because the skill left it out, not
 			// because the code changed: the thread stays open, and is told once.
 			if !t.LeftOutNoted {
 				p.Note = append(p.Note, Note{Thread: t, Reply: ReplyLeftOut(in.Head)})
 			}
-		case known && !cov.Failed && cov.Reviewed[t.File]:
+		case known && !cov.Failed && cov.covers(t.File):
 			// A quiet review does not claim a fix; the state stays StateFixed,
 			// so a blocking finding that comes back reopens the thread.
 			reply := ReplyFixed(in.Head)
