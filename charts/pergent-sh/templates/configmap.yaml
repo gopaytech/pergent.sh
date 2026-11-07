@@ -8,4 +8,4 @@ metadata:
     {{- include "pergent-sh.labels" . | nindent 4 }}
 data:
   config.yaml: |
-    {{- toYaml .Values.config | nindent 4 }}
+    {{- include "pergent-sh.config" . | nindent 4 }}

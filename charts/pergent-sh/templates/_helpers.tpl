@@ -44,6 +44,18 @@ its result back with.
 {{- end -}}
 
 {{/*
+The config file. Jobs run in this cluster, so by default they post their results
+to this chart's Service and need no public route. config.callback_url wins.
+*/}}
+{{- define "pergent-sh.config" -}}
+{{- $config := deepCopy .Values.config -}}
+{{- if not $config.callback_url -}}
+{{- $_ := set $config "callback_url" (printf "http://%s.%s.svc:%d" (include "pergent-sh.fullname" .) .Release.Namespace (int .Values.service.port)) -}}
+{{- end -}}
+{{- toYaml $config -}}
+{{- end -}}
+
+{{/*
 Settings the chart fixes. Failing here beats a service that starts and cannot
 reach its Jobs, or whose Jobs land where the Role does not reach.
 */}}

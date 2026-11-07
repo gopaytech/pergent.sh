@@ -35,8 +35,8 @@ adminPassword:
 jobsNamespace: pergent
 
 # Where review Jobs may connect over TCP 443 and 80: GitLab or GitHub (Jobs
-# clone over HTTPS), the LLM provider and (unless callback_url is an
-# in-cluster address) the pergent.sh URL.
+# clone over HTTPS), the LLM provider and (only if config.callback_url is set
+# to a public address) the pergent.sh URL.
 jobEgress:
   # -- CIDRs the Jobs may reach on TCP 443 and 80. The default 0.0.0.0/0 lets a Job reach ANY address on 80/443, including in-cluster services and the cloud metadata endpoint: narrow it to GitLab or GitHub and the LLM provider. An EMPTY list allows no external egress at all: Jobs can then only use DNS and the pergent.sh callback (on 8080).
   cidrs:
@@ -81,7 +81,7 @@ jobEgress:
 #     url: https://pergent-dashboard.example.com
 #     admin_password_env: PERGENT_SH_ADMIN_PASSWORD   # with adminPassword.existingSecret
 
-# -- Rendered verbatim to /etc/pergent-sh/config.yaml. See the repository README for every field and for examples of config.gitlab, config.github, config.llm and config.dashboard ("Config reference", "Instances and the LLM in the config file"). No instance and no LLM are set by default: without config.dashboard.url, pergent.sh needs at least one instance and an LLM here. listen is fixed by the chart: leave it as it is. skills_dir was removed: the skill library lives in the dashboard.
+# -- Rendered to /etc/pergent-sh/config.yaml. callback_url defaults to this chart's Service, so Jobs post their results inside the cluster; set it to send them elsewhere. See the repository README for every field and for examples of config.gitlab, config.github, config.llm and config.dashboard ("Config reference", "Instances and the LLM in the config file"). No instance and no LLM are set by default: without config.dashboard.url, pergent.sh needs at least one instance and an LLM here. listen is fixed by the chart: leave it as it is. skills_dir was removed: the skill library lives in the dashboard.
 config:
   listen: ":8080"
   public_url: https://pergent.example.com
