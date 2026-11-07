@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: pergent.sh
-  version: 0.8.1
+  version: 0.8.2
   summary: HTTP routes of the pergent.sh server.
   description: |
     pergent.sh runs pergent code reviews as Kubernetes Jobs. It serves one port.
@@ -83,10 +83,13 @@ tags:
   - name: Job callbacks
     description: Results posted by Jobs that pergent.sh started.
   - name: Health
+    description: The probe the kubelet calls.
   - name: Sign-in
     description: Dashboard sign-in and sign-out.
   - name: Overview and reviews
+    description: The overview page, the reviews, their runs and the review page's buttons.
   - name: Repositories
+    description: The repositories of an instance, their settings and readiness.
   - name: Skills
     description: The skill library, and installing skills from git.
   - name: Organization
