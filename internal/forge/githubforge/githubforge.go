@@ -224,6 +224,38 @@ func (f *Forge) Visibility(ctx context.Context, repo string) (forge.Visibility, 
 	return v, nil
 }
 
+// Target is a repository as a review's clone token needs it.
+type Target struct{ RepoID, InstallationID int64 }
+
+// LinkTarget finds repo ("owner/name"): the installation of the review App
+// that covers it and the repository's ID, both from GitHub (the repository
+// need not be switched on or stored). A repository the App can't read is
+// forge.ErrSourceNotFound.
+func (f *Forge) LinkTarget(ctx context.Context, repo string) (Target, error) {
+	owner, name, ok := strings.Cut(strings.Trim(repo, "/"), "/")
+	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+		return Target{}, forge.ErrSourceNotFound
+	}
+	inst, err := f.app.Installation(ctx, owner, name)
+	if unreadable(err) {
+		return Target{}, forge.ErrSourceNotFound
+	}
+	if err != nil {
+		return Target{}, err
+	}
+	r, err := f.app.Client(inst).Repo(ctx, owner, name)
+	if unreadable(err) {
+		return Target{}, forge.ErrSourceNotFound
+	}
+	if err != nil {
+		return Target{}, mapErr(err)
+	}
+	if r.ID == 0 {
+		return Target{}, fmt.Errorf("githubforge: GitHub gave no ID for %s/%s", owner, name)
+	}
+	return Target{RepoID: r.ID, InstallationID: inst}, nil
+}
+
 // GetChange reads pull request number. A closed pull request GitHub reports
 // as merged is forge.StateMerged. TargetBranch and StartSHA are the base ref
 // and the base commit GitHub recorded for the pull request (inputs are read

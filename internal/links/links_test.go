@@ -72,6 +72,14 @@ func TestValidateLinks(t *testing.T) {
 		{"a sub path", []store.Link{link("acme/api/extra")}, "owner/name"},
 		{"a URL", []store.Link{link("https://github.com/acme/api")}, "owner/name"},
 		{"a space", []store.Link{link("acme/a pi")}, "owner/name"},
+		{"a dot-dot name", []store.Link{link("acme/..")}, "owner/name"},
+		{"a dot name", []store.Link{link("acme/.")}, "owner/name"},
+		{"a dot-dot owner", []store.Link{link("../x")}, "owner/name"},
+		{"a dot owner", []store.Link{link("./x")}, "owner/name"},
+		{"a .git suffix", []store.Link{link("acme/api.git")}, "owner/name"},
+		{"a .GIT suffix", []store.Link{link("acme/api.GIT")}, "owner/name"},
+		{"itself with .git", []store.Link{link("acme/widgets.git")}, "owner/name"},
+		{"a name with dots", []store.Link{link("acme/pergent.sh")}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := Validate("acme/widgets", tc.ls)
@@ -103,6 +111,9 @@ func TestMatchLinks(t *testing.T) {
 		{"a name pattern at any depth", []string{"docs/guide/README.md"}, []store.Link{docs, all}},
 		{"not watched", []string{"internal/x.go"}, []store.Link{all}},
 		{"every link, in order", []string{"render/a.go", "b.md"}, []store.Link{render, docs, all}},
+		// The caller passes a rename's old path as well as its new one
+		// (forge.Paths): moving a watched file out of its folder touches it.
+		{"a rename out of a watched path", []string{"elsewhere/comment.go", "render/comment.go"}, []store.Link{render, all}},
 		{"no files", nil, nil},
 		{"an empty file list", []string{}, nil},
 	} {

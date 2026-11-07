@@ -9,6 +9,8 @@ package kube
 
 import (
 	_ "embed"
+	"fmt"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -40,6 +42,11 @@ const (
 
 	minCloneAllowance = 2 * time.Minute
 	deliverAllowance  = 2 * time.Minute
+
+	// LinkedCloneTimeout and LinkedCloneMaxKiB bound the clone of one linked
+	// repository; checkout.sh holds the same two numbers (a test ties them).
+	LinkedCloneTimeout = 120 * time.Second
+	LinkedCloneMaxKiB  = 2 * 1024 * 1024
 )
 
 // Byte limits for the comment pergent renders (--max-comment-size). GitLab
@@ -70,7 +77,16 @@ type JobParams struct {
 	// author decides how much it takes. Zero leaves it unlimited.
 	WorkSize resource.Quantity
 	Inputs   *inputs.Inputs
+	// LinkedClones are the linked repositories the checkout container clones
+	// after the checkout. Nil is none, and the Job is then what it was before
+	// linked repositories existed.
+	LinkedClones []LinkedClone
 }
+
+// LinkedClone is one linked repository to clone: Dir is its directory name
+// under /work ("linked-1": never derived from the repository's name) and
+// CloneURL a plain https URL without credentials.
+type LinkedClone struct{ Dir, CloneURL string }
 
 // Secrets are the per-Job credentials, stored in one Secret owned by the Job.
 type Secrets struct{ GitToken, LLMKey, ResultToken string }
@@ -90,13 +106,42 @@ func Deadline(timeout, cloneAllowance time.Duration) time.Duration {
 	return timeout + deliverAllowance + cloneAllowance
 }
 
-// CloneAllowance is max(2 minutes, 2 x the last measured checkout time).
-func CloneAllowance(lastCloneSeconds int) time.Duration {
+// CloneAllowance is max(2 minutes, 2 x the last measured checkout time), plus
+// the time limit of each of targets linked repositories to clone.
+func CloneAllowance(lastCloneSeconds, targets int) time.Duration {
 	d := 2 * time.Duration(lastCloneSeconds) * time.Second
 	if d < minCloneAllowance {
-		return minCloneAllowance
+		d = minCloneAllowance
 	}
-	return d
+	return d + time.Duration(targets)*LinkedCloneTimeout
+}
+
+// workSizeFor is the work volume's limit with n linked repositories: each may
+// take LinkedCloneMaxKiB beside the checkout. An unlimited volume stays
+// unlimited, and no clone leaves the limit as it was.
+func workSizeFor(size resource.Quantity, n int) resource.Quantity {
+	if size.IsZero() || n == 0 {
+		return size
+	}
+	out := size.DeepCopy()
+	out.Add(*resource.NewQuantity(int64(n)*LinkedCloneMaxKiB*1024, resource.BinarySI))
+	return out
+}
+
+// checkLinkedClones refuses a clone that is not under linked-1..3, or whose
+// URL is not a plain https one: a credential in a URL would be written to the
+// clone's .git/config, which the model can read.
+func checkLinkedClones(cs []LinkedClone) error {
+	for _, c := range cs {
+		if len(c.Dir) != len("linked-1") || !strings.HasPrefix(c.Dir, "linked-") || c.Dir[7] < '1' || c.Dir[7] > '3' {
+			return fmt.Errorf("linked clone directory %q is not linked-1 to linked-3", c.Dir)
+		}
+		u, err := url.Parse(c.CloneURL)
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || strings.ContainsAny(c.CloneURL, " \t\r\n") {
+			return fmt.Errorf("linked clone %s: the URL is not a plain https URL", c.Dir)
+		}
+	}
+	return nil
 }
 
 func labels(runID string) map[string]string {
@@ -149,6 +194,7 @@ func BuildJob(p JobParams) *batchv1.Job {
 	hasCarried := p.Inputs != nil && len(p.Inputs.Carried) > 0
 	hasDismissals := p.Inputs != nil && len(p.Inputs.Dismissals) > 0
 	hasDescription := p.Inputs != nil && len(p.Inputs.Description) > 0
+	hasLinked := p.Inputs != nil && len(p.Inputs.Linked) > 0
 
 	args := []string{
 		"agent",
@@ -191,6 +237,10 @@ func BuildJob(p JobParams) *batchv1.Job {
 		// An environment variable for the same reason.
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "PERGENT_CHANGE_DESCRIPTION", Value: "/in/change-description.md"})
 	}
+	if hasLinked {
+		// An environment variable for the same reason.
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "PERGENT_LINKED_REPOS", Value: "/in/linked-repos.json"})
+	}
 	mainEnv = append(mainEnv,
 		secretEnv("OPENCODE_API_KEY", secret, keyLLMKey),
 		secretEnv("PERGENT_RESULT_TOKEN", secret, keyResultToken),
@@ -212,6 +262,13 @@ func BuildJob(p JobParams) *batchv1.Job {
 		VolumeMounts:    []corev1.VolumeMount{{Name: "work", MountPath: "/work"}},
 		Resources:       p.Resources,
 		SecurityContext: lockedDown(),
+	}
+	if len(p.LinkedClones) > 0 {
+		lines := make([]string, len(p.LinkedClones))
+		for i, c := range p.LinkedClones {
+			lines[i] = c.Dir + " " + c.CloneURL
+		}
+		checkout.Env = append(checkout.Env, corev1.EnvVar{Name: "LINKED_CLONES", Value: strings.Join(lines, "\n")})
 	}
 	pergent := corev1.Container{
 		Name:    containerPergent,
@@ -248,6 +305,10 @@ func BuildJob(p JobParams) *batchv1.Job {
 		items = append(items, corev1.KeyToPath{Key: "change-description.md", Path: "change-description.md"})
 	}
 
+	if hasLinked {
+		items = append(items, corev1.KeyToPath{Key: "linked-repos.json", Path: "linked-repos.json"})
+	}
+
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: p.Name, Namespace: p.Namespace, Labels: labels(p.RunID)},
 		Spec: batchv1.JobSpec{
@@ -262,7 +323,7 @@ func BuildJob(p JobParams) *batchv1.Job {
 					AutomountServiceAccountToken:  ptr(false),
 					EnableServiceLinks:            ptr(false),
 					Volumes: []corev1.Volume{
-						{Name: "work", VolumeSource: corev1.VolumeSource{EmptyDir: workVolume(p.WorkSize)}},
+						{Name: "work", VolumeSource: corev1.VolumeSource{EmptyDir: workVolume(workSizeFor(p.WorkSize, len(p.LinkedClones)))}},
 						{Name: "inputs", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
 							LocalObjectReference: corev1.LocalObjectReference{Name: inputsName(p)},
 							Items:                items,
@@ -318,6 +379,9 @@ func BuildConfigMap(p JobParams, owner *batchv1.Job) *corev1.ConfigMap {
 		}
 		if len(p.Inputs.Description) > 0 {
 			data["change-description.md"] = string(p.Inputs.Description)
+		}
+		if len(p.Inputs.Linked) > 0 {
+			data["linked-repos.json"] = string(p.Inputs.Linked)
 		}
 	}
 	return &corev1.ConfigMap{

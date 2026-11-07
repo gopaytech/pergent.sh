@@ -1349,3 +1349,32 @@ func TestGitHubVisibility(t *testing.T) {
 		}
 	}
 }
+
+// A linked repository's ID and installation come from GitHub, not from a
+// stored row (a repository nobody switched on has none).
+func TestLinkTarget(t *testing.T) {
+	f := newFake(t)
+	for _, name := range []string{"api", "noid", "hidden", "broken"} {
+		f.reply("GET", "/repos/acme/"+name+"/installation", 200, map[string]any{"id": installationID})
+	}
+	f.reply("GET", "/repos/acme/api", 200, map[string]any{"id": 4242, "private": false, "visibility": "public"})
+	f.reply("GET", "/repos/acme/noid", 200, map[string]any{"private": false, "visibility": "public"})
+	f.reply("GET", "/repos/acme/hidden", 404, map[string]string{"message": "Not Found"})
+	f.reply("GET", "/repos/acme/broken", 500, map[string]string{"message": "boom"})
+	g := f.forgeWithoutRepos(t)
+
+	got, err := g.LinkTarget(ctx, "acme/api")
+	if err != nil || got != (Target{RepoID: 4242, InstallationID: installationID}) {
+		t.Fatalf("LinkTarget(acme/api) = %+v, %v", got, err)
+	}
+	for _, repo := range []string{"acme/noid", "acme/hidden", "acme/broken", "acme/other", "acme", "acme/a/b"} {
+		if got, err := g.LinkTarget(ctx, repo); err == nil || got != (Target{}) {
+			t.Errorf("LinkTarget(%q) = %+v, %v; want an error", repo, got, err)
+		}
+	}
+	for _, repo := range []string{"acme/hidden", "acme/other", "acme"} {
+		if _, err := g.LinkTarget(ctx, repo); !errors.Is(err, forge.ErrSourceNotFound) {
+			t.Errorf("LinkTarget(%q) = %v; want ErrSourceNotFound", repo, err)
+		}
+	}
+}

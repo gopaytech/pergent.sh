@@ -474,6 +474,22 @@ func TestCloneTokenScoped(t *testing.T) {
 	}
 }
 
+// One call covers the checkout and the linked repositories, read-only.
+func TestCloneTokenSeveralRepositories(t *testing.T) {
+	var mints atomic.Int32
+	a, rec, _ := testApp(t, tokenServer(&mints, appNow.Add(time.Hour)))
+	if _, _, err := a.CloneToken(ctx, 42, 99, 7, 8); err != nil {
+		t.Fatal(err)
+	}
+	if mints.Load() != 1 {
+		t.Fatalf("mints = %d, want 1", mints.Load())
+	}
+	jsonEq(t, rec.get(0).Body, `{"repository_ids":[99,7,8],"permissions":{"contents":"read"}}`)
+	if _, _, err := a.CloneToken(ctx, 42); err == nil {
+		t.Error("a clone token for no repository was minted")
+	}
+}
+
 // GitHub answering with more than read access means the scope wasn't applied:
 // the token is not handed out.
 func TestCloneTokenRefusesWiderPermissions(t *testing.T) {

@@ -370,6 +370,23 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			return d.retry(ctx, err)
 		}
 	}
+	// Linked repositories: none (the zero plan, nothing recorded and nothing
+	// added to the Job) unless the setting is on and the change touches one.
+	// The rules are checked here again, whatever was checked on save.
+	links := d.linkedRepos(ctx, plat, repo, project, mr, last, havePrev, in)
+	if in.Linked, err = links.encode(); err != nil {
+		return d.retry(ctx, err)
+	}
+	if len(links.Entries) > 0 {
+		if in.Size() > inputs.ConfigMapLimit {
+			return d.fail(ctx, reasonTooLarge)
+		}
+		// Written before the Job starts, like the layout: a lost write would
+		// hide what the review was started with.
+		if err := e.Store.SetRunLinks(ctx, run.ID, links.Matched); err != nil {
+			return d.retry(ctx, fmt.Errorf("record the linked repositories: %w", err))
+		}
+	}
 	// The run keeps the value it was dispatched with: the prompt, the threads
 	// and the comment follow the run, never the repository's later setting.
 	// It is written before the Job starts, not with SetRunInputs (best effort,
@@ -390,7 +407,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	}
 	d.secrets = append(d.secrets, token)
 	if plat.isGitHub() {
-		if gitToken, err = d.gitHubCloneToken(ctx, plat, project); err != nil {
+		if gitToken, err = d.gitHubCloneToken(ctx, plat, project, links.RepoIDs...); err != nil {
 			if github.InstallationGone(err) {
 				// The installation is gone since reconcile stored it.
 				return d.fail(ctx, reasonNotInstalled)
@@ -400,7 +417,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	}
 
 	now := e.now()
-	allowance := kube.CloneAllowance(project.CloneSeconds)
+	allowance := kube.CloneAllowance(project.CloneSeconds, len(links.Clones))
 	expires := now.Add(kube.Deadline(repo.JobTimeout, allowance) + tokenGrace)
 	name := kube.JobName(run.ID)
 	commentLimit := kube.CommentLimitGitLab
@@ -427,6 +444,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		Resources:      jobResources(e.Config.Jobs.Resources, repo.JobMemory),
 		WorkSize:       e.Config.Jobs.WorkSize,
 		Inputs:         in,
+		LinkedClones:   links.Clones,
 	}
 	secrets := kube.Secrets{GitToken: string(gitToken), LLMKey: llmKey, ResultToken: token}
 	if err := e.Launcher.Launch(ctx, params, secrets); err != nil {
@@ -659,13 +677,14 @@ func jobResources(base corev1.ResourceRequirements, memory resource.Quantity) co
 }
 
 // gitHubCloneToken mints the token the Job clones repository project with:
-// scoped to that one repository, contents:read, never stored. It is added to
-// the run's secrets before anything can log it.
-func (d *dispatcher) gitHubCloneToken(ctx context.Context, plat Platform, project store.Project) ([]byte, error) {
+// scoped to that one repository and the linked repositories in linked (all in
+// the same installation), contents:read, never stored. It is added to the
+// run's secrets before anything can log it.
+func (d *dispatcher) gitHubCloneToken(ctx context.Context, plat Platform, project store.Project, linked ...int64) ([]byte, error) {
 	if plat.GitHub == nil || plat.GitHub.App == nil {
 		return nil, fmt.Errorf("no review App for instance %q", project.Instance)
 	}
-	tok, _, err := plat.GitHub.App.CloneToken(ctx, project.InstallationID, project.ProjectID)
+	tok, _, err := plat.GitHub.App.CloneToken(ctx, project.InstallationID, append([]int64{project.ProjectID}, linked...)...)
 	if err != nil {
 		return nil, fmt.Errorf("mint the clone token: %w", err)
 	}

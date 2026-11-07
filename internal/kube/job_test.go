@@ -87,7 +87,7 @@ func TestCloneAllowance(t *testing.T) {
 		secs int
 		want time.Duration
 	}{{0, 2 * time.Minute}, {30, 2 * time.Minute}, {60, 2 * time.Minute}, {90, 3 * time.Minute}, {300, 10 * time.Minute}} {
-		if got := CloneAllowance(c.secs); got != c.want {
+		if got := CloneAllowance(c.secs, 0); got != c.want {
 			t.Errorf("CloneAllowance(%d) = %v, want %v", c.secs, got, c.want)
 		}
 	}
@@ -515,7 +515,7 @@ func TestConfigMapItems(t *testing.T) {
 
 // wantCheckoutScript is the exact script the init container runs. The token
 // travels only through GIT_CONFIG env, never on disk, so every byte matters.
-const wantCheckoutScript = `set -eu
+const wantCheckoutBase = `set -eu
 export GIT_CONFIG_COUNT=1
 export GIT_CONFIG_KEY_0=http.extraHeader
 export GIT_CONFIG_VALUE_0="Authorization: Basic $(printf '%s:%s' "$GIT_USERNAME" "$GIT_TOKEN" | base64 -w0)"
@@ -538,8 +538,13 @@ git checkout -q --detach "$HEAD_SHA"
 `
 
 func TestCheckoutScriptIsExact(t *testing.T) {
-	if checkoutScript != wantCheckoutScript {
-		t.Errorf("checkout.sh differs from the expected script:\n got:\n%s\nwant:\n%s", checkoutScript, wantCheckoutScript)
+	if !strings.HasPrefix(checkoutScript, wantCheckoutBase) {
+		t.Errorf("checkout.sh does not start with the expected script:\n got:\n%s\nwant:\n%s", checkoutScript, wantCheckoutBase)
+	}
+	// What follows runs only for linked repositories.
+	rest := strings.TrimPrefix(checkoutScript, wantCheckoutBase)
+	if !strings.HasPrefix(rest, "if [ -n \"${LINKED_CLONES:-}\" ]; then\n") || !strings.HasSuffix(rest, "\nfi\n") {
+		t.Errorf("the linked repositories block is not one guarded block:\n%s", rest)
 	}
 }
 

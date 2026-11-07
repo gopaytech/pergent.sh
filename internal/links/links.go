@@ -22,6 +22,22 @@ const Max = 3
 // written into a clone URL: no scheme, no extra path, no space.
 var targetRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
+// validTarget reports whether t is a plain owner/name: the pattern, no "."
+// or ".." segment (they would walk out of a clone URL's path) and no ".git"
+// suffix (the clone URL adds it, and the name would get round the checks for
+// "itself" and "twice").
+func validTarget(t string) bool {
+	if !targetRE.MatchString(t) {
+		return false
+	}
+	for _, seg := range strings.Split(t, "/") {
+		if seg == "." || seg == ".." || strings.HasSuffix(strings.ToLower(seg), ".git") {
+			return false
+		}
+	}
+	return true
+}
+
 // openness ranks a visibility: the higher, the more closed.
 func openness(v forge.Visibility) (int, bool) {
 	switch v {
@@ -66,7 +82,7 @@ func Validate(source string, ls []store.Link) error {
 	}
 	seen := make(map[string]bool, len(ls))
 	for i, l := range ls {
-		if !targetRE.MatchString(l.Target) || l.Target == "." || l.Target == ".." {
+		if !validTarget(l.Target) {
 			return fmt.Errorf("link %d: target %q must be owner/name", i+1, l.Target)
 		}
 		key := strings.ToLower(l.Target)

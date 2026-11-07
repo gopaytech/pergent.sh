@@ -1,0 +1,224 @@
+{
+  "configMap": {
+    "metadata": {
+      "name": "pergent-review-7f3a9c120b4d-inputs",
+      "namespace": "reviews",
+      "creationTimestamp": null,
+      "labels": {
+        "app.kubernetes.io/managed-by": "pergent-sh",
+        "pergent.sh/run": "7f3a9c12-0b4d-4e5f-8a6b-1c2d3e4f5a6b"
+      }
+    },
+    "data": {
+      "instructions.md": "be kind\n",
+      "previous.json": "{\"skills\":{}}",
+      "skill-0.md": "# code review\n",
+      "skill-1.md": "# security\n"
+    }
+  },
+  "job": {
+    "metadata": {
+      "name": "pergent-review-7f3a9c120b4d",
+      "namespace": "reviews",
+      "creationTimestamp": null,
+      "labels": {
+        "app.kubernetes.io/managed-by": "pergent-sh",
+        "pergent.sh/run": "7f3a9c12-0b4d-4e5f-8a6b-1c2d3e4f5a6b"
+      }
+    },
+    "spec": {
+      "activeDeadlineSeconds": 840,
+      "backoffLimit": 0,
+      "template": {
+        "metadata": {
+          "creationTimestamp": null,
+          "labels": {
+            "app.kubernetes.io/managed-by": "pergent-sh",
+            "pergent.sh/run": "7f3a9c12-0b4d-4e5f-8a6b-1c2d3e4f5a6b"
+          }
+        },
+        "spec": {
+          "volumes": [
+            {
+              "name": "work",
+              "emptyDir": {
+                "sizeLimit": "20Gi"
+              }
+            },
+            {
+              "name": "inputs",
+              "configMap": {
+                "name": "pergent-review-7f3a9c120b4d-inputs",
+                "items": [
+                  {
+                    "key": "skill-0.md",
+                    "path": "skills/code-review.md"
+                  },
+                  {
+                    "key": "skill-1.md",
+                    "path": "skills/security.md"
+                  },
+                  {
+                    "key": "instructions.md",
+                    "path": "instructions.md"
+                  },
+                  {
+                    "key": "previous.json",
+                    "path": "previous.json"
+                  }
+                ]
+              }
+            }
+          ],
+          "initContainers": [
+            {
+              "name": "checkout",
+              "image": "ghcr.io/gopaytech/pergent:v0.1.0",
+              "command": [
+                "sh",
+                "-ec",
+                "<checkout.sh>"
+              ],
+              "env": [
+                {
+                  "name": "REPO_URL",
+                  "value": "https://gitlab.example.com/acme/widgets.git"
+                },
+                {
+                  "name": "MR_REF",
+                  "value": "refs/merge-requests/42/head"
+                },
+                {
+                  "name": "TARGET_BRANCH",
+                  "value": "main"
+                },
+                {
+                  "name": "BASE_SHA",
+                  "value": "4f1c2a9e8b7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b"
+                },
+                {
+                  "name": "HEAD_SHA",
+                  "value": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b"
+                },
+                {
+                  "name": "GIT_USERNAME",
+                  "value": "gitlab+deploy-token-7"
+                },
+                {
+                  "name": "GIT_TOKEN",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "name": "pergent-review-7f3a9c120b4d-secrets",
+                      "key": "git-token"
+                    }
+                  }
+                }
+              ],
+              "resources": {
+                "requests": {
+                  "memory": "1Gi"
+                }
+              },
+              "volumeMounts": [
+                {
+                  "name": "work",
+                  "mountPath": "/work"
+                }
+              ],
+              "securityContext": {
+                "capabilities": {
+                  "drop": [
+                    "ALL"
+                  ]
+                },
+                "allowPrivilegeEscalation": false
+              }
+            }
+          ],
+          "containers": [
+            {
+              "name": "pergent",
+              "image": "ghcr.io/gopaytech/pergent:v0.1.0",
+              "command": [
+                "pergent"
+              ],
+              "args": [
+                "agent",
+                "--repo-path=/work/repo",
+                "--base=4f1c2a9e8b7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b",
+                "--head=9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b",
+                "--skills-dir=/in/skills",
+                "--instructions=/in/instructions.md",
+                "--previous=/in/previous.json",
+                "--scrub-instructions",
+                "--timeout=10m0s",
+                "--concurrency=4",
+                "--max-turns=40",
+                "--max-comment-size=990000",
+                "--result-url=https://pergent.example.com/runs/7f3a9c12-0b4d-4e5f-8a6b-1c2d3e4f5a6b/result"
+              ],
+              "env": [
+                {
+                  "name": "OPENCODE_PROVIDER",
+                  "value": "anthropic"
+                },
+                {
+                  "name": "OPENCODE_MODEL",
+                  "value": "claude-sonnet-4"
+                },
+                {
+                  "name": "OPENCODE_API_KEY",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "name": "pergent-review-7f3a9c120b4d-secrets",
+                      "key": "llm-api-key"
+                    }
+                  }
+                },
+                {
+                  "name": "PERGENT_RESULT_TOKEN",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "name": "pergent-review-7f3a9c120b4d-secrets",
+                      "key": "result-token"
+                    }
+                  }
+                }
+              ],
+              "resources": {
+                "requests": {
+                  "memory": "1Gi"
+                }
+              },
+              "volumeMounts": [
+                {
+                  "name": "work",
+                  "mountPath": "/work"
+                },
+                {
+                  "name": "inputs",
+                  "readOnly": true,
+                  "mountPath": "/in"
+                }
+              ],
+              "securityContext": {
+                "capabilities": {
+                  "drop": [
+                    "ALL"
+                  ]
+                },
+                "allowPrivilegeEscalation": false
+              }
+            }
+          ],
+          "restartPolicy": "Never",
+          "terminationGracePeriodSeconds": 30,
+          "automountServiceAccountToken": false,
+          "enableServiceLinks": false
+        }
+      },
+      "ttlSecondsAfterFinished": 3600
+    },
+    "status": {}
+  }
+}

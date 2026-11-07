@@ -1162,7 +1162,7 @@ A layout moves and folds the blocks, nothing more. It never changes a verdict, a
 
 ## 🔗 Linked repositories
 
-A change to an API or a shared package can break its callers in another repository, and a review that only has the checkout can't see that. A repository can **link** other repositories, so that a change touching the paths it watches can be checked against the code that uses them. The setting and the links are in place in this version; the review does not use them yet, so turning the setting on changes nothing in a review.
+A change to an API or a shared package can break its callers in another repository, and a review that only has the checkout can't see that. A repository can **link** other repositories, so that a change touching the paths it watches can be checked against the code that uses them. pergent.sh matches the links against a change and gives the Job a clone of each matched target (see [A review with links](#a-review-with-links)). The impact check itself is run by pergent: a Job image that predates it ignores the clones, and the repository is reviewed as before.
 
 **Off by default.** The setting is **Linked repositories**, `linked_repos_enabled` in the config ([Config reference](#-config-reference)). A repository that leaves it unset takes the admin default, which starts off; a repository listed in the config reads no admin default, so unset there means off. While the setting is off, a repository's links are kept and ignored.
 
@@ -1182,8 +1182,21 @@ repositories:
 **Rules for a link.**
 
 - GitHub only. A GitLab repository in the config with `linked_repos` is refused when the config loads.
-- The target can't be the repository itself, can't be linked twice, and needs an `owner/name` with no scheme or extra path. The config refuses a bad glob and more than 3 links, naming the repository and the link.
+- The target can't be the repository itself, can't be linked twice, and needs a plain `owner/name`: no scheme, no extra path, no `.` or `..` part and no `.git` suffix (the clone address adds that). The config refuses a bad glob and more than 3 links, naming the repository and the link.
 - A repository may link one that is as open or more open: a public repository links public ones; an internal one, internal or public; a private one, anything. Visibility is read from GitHub, including `internal`, through the review App's installation, and never assumed: a repository the App can't read, or whose visibility GitHub does not say, is an error and is never taken for public.
+- The target must be in the same installation of the review App as the repository, because one clone token covers the checkout and the targets and a token belongs to one installation. A target the App can't read, or one in another installation, can't be cloned.
+
+### A review with links
+
+When the setting is on and the repository has links, each review checks them again, whatever was checked when the links were saved:
+
+1. **Match.** The links are matched against the files the review covers. A full review (and a re-run) counts the files of the whole change, a rename's old path as well as its new one, so moving a watched file out of its folder counts. An [incremental review](#-incremental-reviews) counts only the files changed since the last review. If the list of changed files can't be had, every link counts as matched. Nothing matched means nothing below happens: no request about the targets, no clone, no change to the Job.
+2. **A later push.** While the last review's `impact` result is `failed`, or has a blocking finding nobody dismissed, every link counts as matched, whatever the push touched. A last result that can't be read counts as open. This keeps a push that touches no watched path from dropping the result and letting the bot approve.
+3. **Check.** For each matched link the rules above are run again, with both visibilities read from GitHub. A link that is not valid, that is refused, whose visibility can't be read, or whose target the App can't reach or sits in another installation, is not cloned. It still goes to pergent as an entry with a short fixed `error`, so the check is `failed` and the comment says which repository was not covered. It is never a pass.
+4. **Clone.** The checkout container clones the checkout first, then each target's default branch into `/work/linked-1`, `linked-2` and `linked-3` (never a directory named after the repository), at depth 1, over https only (`GIT_ALLOW_PROTOCOL=https`), with hooks off and symbolic links written as plain files. The clone address is `https://<host of the repository>/<owner>/<name>.git` and never holds a credential: the token travels in the environment, as for the checkout, and the clone's `.git/config` holds the plain address. One clone token, minted once, covers the repository and the targets with `contents: read`. Each clone has a 120 second limit and a 2 GiB limit, checked after it ends. A clone that fails, is too slow or is too big is removed and the Job goes on; pergent reads the missing directory as a failed clone.
+5. **The Job.** `PERGENT_LINKED_REPOS` names `/in/linked-repos.json`, a list of `{name, path, watched, can_block, error}`, and is set only when there is an entry. The Job's deadline grows by 2 minutes per clone, and a limited work volume (`jobs.work_size`) by 2 GiB per clone. The matched links are recorded on the run.
+
+With the setting off, or with nothing matched, the Job is what it was before this feature: the same containers, environment, inputs and work volume.
 
 ## 📈 Skill results
 
@@ -1384,12 +1397,13 @@ Turning it off also withdraws every approval the approve bot already holds in th
 
 A Job has two containers, started in order. Both run the pinned pergent image and have `allowPrivilegeEscalation: false` and all capabilities dropped. The pod never mounts a Kubernetes service account token.
 
-**The checkout container** gets only a read-only clone token, through git's `http.extraHeader` setting passed in environment variables. On GitLab it is the project's deploy token (`read_repository`). On GitHub it is an installation token of the review App minted for this one Job, scoped to the one repository with `contents: read`, used as `x-access-token`; GitHub expires it after an hour and pergent.sh never stores it. The token is never written to disk, never in a URL and never in `.git/config`. It fetches only the base and head commits (not the whole repository history), disables hooks and gives the remote an invalid push URL.
+**The checkout container** gets only a read-only clone token, through git's `http.extraHeader` setting passed in environment variables. On GitLab it is the project's deploy token (`read_repository`). On GitHub it is an installation token of the review App minted for this one Job, scoped to the one repository with `contents: read`, used as `x-access-token`; GitHub expires it after an hour and pergent.sh never stores it. The token is never written to disk, never in a URL and never in `.git/config`. It fetches only the base and head commits (not the whole repository history), disables hooks and gives the remote an invalid push URL. For a review with [linked repositories](#a-review-with-links) it then clones each matched target at depth 1 into `/work/linked-N`, with the same token (one call covers them all), https only, hooks off and symbolic links written as plain files; a clone that fails or is too big is removed and does not stop the Job.
 
 **The pergent container** runs `pergent agent` and gets:
 
 - the checkout, which is untrusted code under review, read-only to the agent;
 - the skills, the instructions, the previous review, the change's title and description (`change-description.md`) and, for an incremental review, the files to carry over (`carried.json`), mounted read-only at `/in`;
+- with [linked repositories](#a-review-with-links), the clones in `/work/linked-N` and `linked-repos.json`. A clone's `.git` stays and can be read, so it holds no token: its remote is the plain https address;
 - `OPENCODE_API_KEY` (the LLM key) and a one-time result token. The result token is random, stored only as a hash, valid for one result and expires shortly after the Job's deadline;
 - the provider, model and, if set, base URL.
 
