@@ -20,7 +20,7 @@ Implementers have no network, so these belong to the owner's main session.
 
 | When | Who | What |
 |---|---|---|
-| **H0**, before Task 1 | Main session | Cut `feat/user-access` from the latest `origin/main` in `pergent.sh-access`, carrying the spec and this plan. List `internal/store/migrations` on `origin/main` and every open PR's migrations; the migration takes the next number free of all of them. Replace `NNNN` below. |
+| **H0**, before Task 1 | Main session | Cut `feat/user-access` from the latest `origin/main` in `pergent.sh-access`, carrying the spec and this plan. List `internal/store/migrations` on `origin/main` and every open PR's migrations; the migration takes the next number free of all of them. The number is `0028`, set at H0; re-check it at H2. |
 | **H1**, before Task 3 | Main session | `go get github.com/coreos/go-oidc/v3@latest` and `go mod tidy`, committed alone as `chore(deps): go-oidc`. |
 | **H2**, before each task | Main session | `git fetch`, and merge `origin/main` when it moved. Re-check the migration number. Tell the next implementer about anything that touched `internal/dashboard`, `internal/store` or `web/src`. Touch no other agent's branch or worktree. |
 | **H3**, after the final review | Owner | Push and open the PR on the owner's word. Postgres-backed tests first run here. Read the `test` job log for `internal/store`, `internal/dashboard` and `internal/engine` timings. |
@@ -51,7 +51,7 @@ Implementers have no network, so these belong to the owner's main session.
 ### Task 1: Schema and store
 
 **Files:**
-- Create: `internal/store/migrations/NNNN_user_access.sql`, `internal/store/signin.go`
+- Create: `internal/store/migrations/0028_user_access.sql`, `internal/store/signin.go`
 - Modify: `internal/store/accounts.go`, `internal/store/teams.go`, `internal/store/sessions.go`
 - Test: `internal/store/accounts_test.go`, `internal/store/teams_test.go`, `internal/store/signin_test.go`
 
