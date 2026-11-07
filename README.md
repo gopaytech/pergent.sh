@@ -1288,7 +1288,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `llm.base_url` | none | Custom API base URL for the provider. |
 | `llm.api_key_env` | `OPENCODE_API_KEY` | Name of the env var with the LLM key. |
 | `jobs.namespace` | required | Namespace the Jobs run in. |
-| `jobs.image` | `ghcr.io/gopaytech/pergent:v0.5.4` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
+| `jobs.image` | `ghcr.io/gopaytech/pergent:v0.5.5` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
 | `jobs.max_running` | `5` | Most Jobs running at once. Further runs wait in the queue. At least 1. |
 | `jobs.timeout` | `30m` | pergent's own review budget per Job (`--timeout`). The Job's deadline adds 2 minutes to deliver and a clone allowance of at least 2 minutes. At startup pergent.sh warns about a timeout shorter than its step limit times 30 seconds. |
 | `jobs.max_turns` | `40` | pergent's step limit per opencode run (`--max-turns`) for every repository, 5 to 200. |
