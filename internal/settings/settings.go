@@ -49,6 +49,7 @@ const (
 	KeyIncrementalReviews               = "incremental_reviews"
 	KeyLearnFromDismissals              = "learn_from_dismissals"
 	KeyQuietReviews                     = "quiet_reviews"
+	KeyCommentLayout                    = "comment_layout"
 )
 
 // The re-run caps when nothing sets them: per merge request and per
@@ -78,7 +79,10 @@ type Effective struct {
 	// write access dismissed, and why.
 	LearnFromDismissals bool
 	// QuietReviews is whether a review says less. The default is false.
-	QuietReviews  bool
+	QuietReviews bool
+	// CommentLayout is the shape of the review comment, "block:state" entries
+	// in order; nil means the default layout.
+	CommentLayout []string
 	FailureStatus config.FailureStatus
 	// Skills are the library skills reviewed; nil means the default list.
 	Skills []string
@@ -247,7 +251,7 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 		Overridden: map[string]bool{
 			KeyApprove: false, KeyReviewDrafts: false, KeyInlineFindings: false, KeyFailureStatus: false,
 			KeySkills: false, KeyRepoSkills: false, KeyJobTimeout: false, KeyMaxTurns: false, KeyJobMemory: false,
-			KeyRerunLimitPerMR: false, KeyRerunLimitPerRepo: false, KeyCommandsAuthorAndMaintainersOnly: false, KeyIncrementalReviews: false, KeyLearnFromDismissals: false, KeyQuietReviews: false,
+			KeyRerunLimitPerMR: false, KeyRerunLimitPerRepo: false, KeyCommandsAuthorAndMaintainersOnly: false, KeyIncrementalReviews: false, KeyLearnFromDismissals: false, KeyQuietReviews: false, KeyCommentLayout: false,
 		},
 	}
 	if source != SourceDashboard {
@@ -273,6 +277,9 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 	}
 	if stored.QuietReviews != nil {
 		eff.QuietReviews = *stored.QuietReviews
+	}
+	if len(stored.CommentLayout) > 0 {
+		eff.CommentLayout = slices.Clone(stored.CommentLayout)
 	}
 	if stored.FailureStatus != nil {
 		if fs, ok := failureStatus(*stored.FailureStatus); ok {
@@ -367,6 +374,9 @@ func (r *Resolver) fromConfig(repo config.Repository) (Effective, bool) {
 	if repo.QuietReviews != nil {
 		eff.QuietReviews, eff.Overridden[KeyQuietReviews] = *repo.QuietReviews, true
 	}
+	if len(repo.CommentLayout) > 0 {
+		eff.CommentLayout, eff.Overridden[KeyCommentLayout] = slices.Clone(repo.CommentLayout), true
+	}
 	if repo.FailureStatus != "" && repo.FailureStatus != config.FailureStatusFailed {
 		eff.FailureStatus, eff.Overridden[KeyFailureStatus] = repo.FailureStatus, true
 	}
@@ -424,6 +434,9 @@ func (r *Resolver) fromDashboard(row store.DashboardRepo, stored store.RepoDefau
 	}
 	if row.QuietReviews != nil {
 		eff.QuietReviews, eff.Overridden[KeyQuietReviews] = *row.QuietReviews, true
+	}
+	if len(row.CommentLayout) > 0 {
+		eff.CommentLayout, eff.Overridden[KeyCommentLayout] = slices.Clone(row.CommentLayout), true
 	}
 	if row.FailureStatus != nil {
 		if fs, ok := failureStatus(*row.FailureStatus); ok {

@@ -48,19 +48,25 @@ type DashboardRepo struct {
 	LearnFromDismissals *bool
 	// QuietReviews is whether a review says less (nil: the default, off).
 	QuietReviews *bool
+	// CommentLayout is the shape of the review comment, "block:state" entries
+	// in order (nil: the default layout).
+	CommentLayout []string
 }
 
 const dashboardRepoColumns = `instance, project, approve, review_drafts, failure_status, skills, repo_skills,
 	job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by, created_at, updated_at,
-	inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews`
+	inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout`
 
 func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 	var r DashboardRepo
 	err := row.Scan(&r.Instance, &r.Project, &r.Approve, &r.ReviewDrafts, &r.FailureStatus, &r.Skills, &r.RepoSkills,
 		&r.JobTimeoutSeconds, &r.MaxTurns, &r.JobMemory, &r.RerunLimitPerMR, &r.RerunLimitPerRepo, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt,
-		&r.InlineFindings, &r.CommandsAuthorAndMaintainersOnly, &r.IncrementalReviews, &r.LearnFromDismissals, &r.QuietReviews)
+		&r.InlineFindings, &r.CommandsAuthorAndMaintainersOnly, &r.IncrementalReviews, &r.LearnFromDismissals, &r.QuietReviews, &r.CommentLayout)
 	if len(r.Skills) == 0 {
 		r.Skills = nil
+	}
+	if len(r.CommentLayout) == 0 {
+		r.CommentLayout = nil
 	}
 	if len(r.RepoSkills) == 0 {
 		r.RepoSkills = nil
@@ -120,8 +126,8 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
 			failure_status, skills, repo_skills, job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by,
-			inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+			inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 		ON CONFLICT (instance, lower(project)) DO UPDATE SET
 			project = EXCLUDED.project, approve = EXCLUDED.approve, review_drafts = EXCLUDED.review_drafts,
 			failure_status = EXCLUDED.failure_status, skills = EXCLUDED.skills, repo_skills = EXCLUDED.repo_skills,
@@ -131,10 +137,11 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 			commands_author_and_maintainers_only = EXCLUDED.commands_author_and_maintainers_only,
 			incremental_reviews = EXCLUDED.incremental_reviews,
 			learn_from_dismissals = EXCLUDED.learn_from_dismissals,
-			quiet_reviews = EXCLUDED.quiet_reviews, updated_at = now()`,
+			quiet_reviews = EXCLUDED.quiet_reviews,
+			comment_layout = EXCLUDED.comment_layout, updated_at = now()`,
 		r.Instance, r.Project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, repoSkills,
 		r.JobTimeoutSeconds, r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy, r.InlineFindings,
-		r.CommandsAuthorAndMaintainersOnly, r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews); err != nil {
+		r.CommandsAuthorAndMaintainersOnly, r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout)); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -165,12 +172,12 @@ func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (creat
 	}
 	tag, err := tx.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
 			failure_status, skills, repo_skills, job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by,
-			inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+			inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 		ON CONFLICT (instance, lower(project)) DO NOTHING`,
 		r.Instance, r.Project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, nilIfEmpty(r.RepoSkills),
 		r.JobTimeoutSeconds, r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy, r.InlineFindings,
-		r.CommandsAuthorAndMaintainersOnly, r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews)
+		r.CommandsAuthorAndMaintainersOnly, r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout))
 	if err != nil {
 		return false, err
 	}
@@ -210,11 +217,11 @@ func (s *Store) UpdateDashboardRepo(ctx context.Context, instance, project strin
 	if _, err := tx.Exec(ctx, `UPDATE dashboard_repos SET approve = $3, review_drafts = $4, failure_status = $5,
 			skills = $6, repo_skills = $7, job_timeout_seconds = $8, max_turns = $9, job_memory = $10,
 			rerun_limit_per_mr = $11, rerun_limit_per_repo = $12, inline_findings = $13,
-			commands_author_and_maintainers_only = $14, incremental_reviews = $15, learn_from_dismissals = $16, quiet_reviews = $17, updated_at = now()
+			commands_author_and_maintainers_only = $14, incremental_reviews = $15, learn_from_dismissals = $16, quiet_reviews = $17, comment_layout = $18, updated_at = now()
 		WHERE instance = $1 AND lower(project) = lower($2)`,
 		instance, project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, nilIfEmpty(r.RepoSkills), r.JobTimeoutSeconds,
 		r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.InlineFindings, r.CommandsAuthorAndMaintainersOnly,
-		r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews); err != nil {
+		r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout)); err != nil {
 		return false, err
 	}
 	return true, tx.Commit(ctx)

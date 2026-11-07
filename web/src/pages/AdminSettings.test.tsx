@@ -57,6 +57,7 @@ describe("AdminSettings defaults", () => {
       incrementalReviews: null,
       learnFromDismissals: null,
       quietReviews: null,
+      commentLayout: null,
       failureStatus: null,
       jobTimeoutSeconds: 900,
       maxTurns: null,
@@ -181,6 +182,63 @@ describe("AdminSettings defaults", () => {
     expect(within(form).getByRole("switch", { name: "Quiet reviews" })).toBeChecked();
   });
 
+  it("shows the comment layout after the quiet reviews switch and sends a changed list with the other defaults", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "PUT /api/admin/defaults": { body: defaults },
+    });
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    const row = within(form).getByText("Comment layout", { selector: ".name" }).closest(".set") as HTMLElement;
+    expect(within(form).getByText("Quiet reviews", { selector: ".name" }).closest(".set")?.nextElementSibling).toBe(row);
+    const names = within(row).getAllByRole("listitem").map((r) => within(r).getByRole("combobox").getAttribute("aria-label"));
+    expect(names).toEqual(["Summary state", "Findings state", "Dismissed state", "Checks state", "Files state"]);
+    await userEvent.click(within(row).getByRole("button", { name: "Move Files up" }));
+    await userEvent.click(within(row).getByRole("checkbox", { name: "Show Dismissed" }));
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({
+      commentLayout: ["summary:open", "findings:collapsed", "files:collapsed", "checks:open"],
+    });
+  });
+
+  it("sends null for a layout moved back to the built-in one", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "PUT /api/admin/defaults": { body: defaults },
+    });
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    const row = within(form).getByText("Comment layout", { selector: ".name" }).closest(".set") as HTMLElement;
+    await userEvent.click(within(row).getByRole("button", { name: "Move Files up" }));
+    await userEvent.click(within(row).getByRole("button", { name: "Move Files down" }));
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ commentLayout: null });
+  });
+
+  it("shows a saved layout as saved here, and sends null for Reset to default", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "GET /api/admin/defaults": {
+        body: { ...defaults, commentLayout: ["findings:open"], pinned: { commentLayout: true } },
+      },
+      "PUT /api/admin/defaults": { body: defaults },
+    });
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    const row = within(form).getByText("Comment layout", { selector: ".name" }).closest(".set") as HTMLElement;
+    expect(within(row).getByText(/Saved here: repositories switched on in the dashboard start with this layout./)).toBeInTheDocument();
+    expect(within(row).getAllByRole("listitem").map((r) => within(r).getByRole("combobox").getAttribute("aria-label"))).toEqual([
+      "Findings state",
+      "Summary state",
+      "Dismissed state",
+      "Checks state",
+      "Files state",
+    ]);
+    await userEvent.click(within(row).getByRole("button", { name: "Reset to default" }));
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ commentLayout: null });
+  });
+
   it("saves changed re-run caps", async () => {
     const fake = fakeApi({
       ...routes(),
@@ -215,6 +273,7 @@ describe("AdminSettings defaults", () => {
       incrementalReviews: null,
       learnFromDismissals: null,
       quietReviews: null,
+      commentLayout: null,
       failureStatus: null,
       jobTimeoutSeconds: null,
       maxTurns: null,
@@ -237,6 +296,7 @@ describe("AdminSettings defaults", () => {
     expect(row("Incremental reviews")).toHaveTextContent("From config: on");
     expect(row("Learn from dismissals")).toHaveTextContent("From config: on");
     expect(row("Quiet reviews")).toHaveTextContent("From config: off");
+    expect(row("Comment layout")).toHaveTextContent("Not saved here: repositories switched on in the dashboard start with the built-in layout.");
     expect(row("Status when a review fails")).toHaveTextContent("From config: failed (blocks merge)");
     expect(row("Timeout")).toHaveTextContent("From config: 600");
     expect(row("Max steps")).toHaveTextContent("From config: 40");

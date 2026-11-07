@@ -895,6 +895,35 @@ ul.files li {
   border-bottom: 0;
 }
 
+/* The comment layout editor: a row per block. The select takes its own width
+   (the global one is 100%), the name keeps room, and a note gets its own line. */
+.layout-row {
+  flex-wrap: wrap;
+}
+
+.layout-row .grow {
+  min-width: 7em;
+}
+
+.layout-row select {
+  width: auto;
+}
+
+.layout-row .nobox {
+  width: 20px;
+}
+
+.layout-row .layout-note {
+  flex-basis: 100%;
+  padding-left: 30px;
+}
+
+/* A settings row whose control needs the full width, on a line of its own. */
+.set > .wide {
+  grid-column: 1 / -1;
+  margin: 0 -16px -14px;
+}
+
 details.skill-doc {
   border-bottom: 1px solid var(--line);
 }

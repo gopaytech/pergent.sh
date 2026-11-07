@@ -12,6 +12,7 @@ import {
   type RepositoryDetailView,
   type SettingsUpdate,
 } from "../api";
+import CommentLayoutEditor from "../CommentLayoutEditor";
 import { useWrite } from "../layout/write";
 import { ErrorBox, Loading, Switch, bytesText } from "../ui";
 
@@ -100,6 +101,8 @@ type Draft = {
   incrementalReviews: boolean;
   learnFromDismissals: boolean;
   quietReviews: boolean;
+  // null is the default layout.
+  commentLayout: string[] | null;
   failureStatus: string;
   // mode "default" is a null skills setting: the default list.
   skillsMode: "default" | "choose";
@@ -124,6 +127,12 @@ function capBody(text: string): number | null | undefined {
   if (!/^\d+$/.test(t)) return undefined;
   const n = Number(t);
   return n >= 1 && n <= 1000 ? n : undefined;
+}
+
+// sameLayout is whether two layouts are the same list in the same order, or
+// both the default (null).
+function sameLayout(a: string[] | null, b: string[] | null) {
+  return a === null || b === null ? a === b : a.length === b.length && a.every((x, i) => x === b[i]);
 }
 
 function sameSet(a: string[], b: string[]) {
@@ -169,6 +178,7 @@ function Form({
     incrementalReviews: settings.incrementalReviews.value,
     learnFromDismissals: settings.learnFromDismissals.value,
     quietReviews: settings.quietReviews.value,
+    commentLayout: settings.commentLayout.overridden ? settings.commentLayout.value : null,
     failureStatus: settings.failureStatus.value,
     skillsMode: settings.skills.value === null ? "default" : "choose",
     skills: skillsNow,
@@ -209,6 +219,11 @@ function Form({
     if (d.incrementalReviews !== initial.incrementalReviews) body.incrementalReviews = d.incrementalReviews;
     if (d.learnFromDismissals !== initial.learnFromDismissals) body.learnFromDismissals = d.learnFromDismissals;
     if (d.quietReviews !== initial.quietReviews) body.quietReviews = d.quietReviews;
+    // A repository that follows the default and ends up with the list it
+    // already shows (a row moved and moved back) has changed nothing: sending
+    // it would pin the repository to today's default.
+    const followed = initial.commentLayout === null && d.commentLayout !== null && sameLayout(d.commentLayout, settings.commentLayout.value);
+    if (!followed && !sameLayout(d.commentLayout, initial.commentLayout)) body.commentLayout = d.commentLayout;
     if (d.failureStatus !== initial.failureStatus) body.failureStatus = d.failureStatus;
     if (d.skillsMode === "default") {
       // Back to the default list: null resets the setting.
@@ -367,6 +382,23 @@ function Form({
             onChange={(v) => set("quietReviews", v)}
           />
         </Setting>
+      </section>
+
+      <section className="card" aria-label="Comment layout">
+        <h2>
+          Comment layout <Badge overridden={settings.commentLayout.overridden} /> {managed}
+        </h2>
+        <div className="pad meta">
+          The blocks of the review comment, in order. A block that is not shown is left out. Quiet reviews and the size limit
+          can still cut what a block shows.
+        </div>
+        <CommentLayoutEditor
+          value={d.commentLayout}
+          // While the repository sets none, its value is the default in effect.
+          defaults={settings.commentLayout.overridden ? undefined : settings.commentLayout.value}
+          disabled={disabled}
+          onChange={(v) => set("commentLayout", v)}
+        />
       </section>
 
       <section className="card" aria-label="Skills used for this repository">

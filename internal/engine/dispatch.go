@@ -373,6 +373,11 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	if err := e.Store.SetRunQuiet(ctx, run.ID, repo.QuietReviews); err != nil {
 		return d.retry(ctx, fmt.Errorf("record whether the review is quiet: %w", err))
 	}
+	// The layout is recorded the same way, for the same reason: a lost write
+	// would give a default comment to a repository that asked for another.
+	if err := e.Store.SetRunLayout(ctx, run.ID, repo.CommentLayout); err != nil {
+		return d.retry(ctx, fmt.Errorf("record the comment layout: %w", err))
+	}
 
 	token, tokenHash, err := mintToken()
 	if err != nil {

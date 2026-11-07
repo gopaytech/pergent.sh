@@ -21,22 +21,13 @@ Not a real problem? Reply `@pergent-bot dismiss fedcba <reason>`
 
 </details>
 
-**Failed checks (1)**
+#### Input
 
-| Area | Check | Status | Detail |
-|---|---|---|---|
-| Input | Queries are parameterised | ❌ | string concatenation |
-
-<details><summary>Checks: 1 of 2 passed, 1 n/a</summary>
-
-| Area | Check | Status | Detail |
-|---|---|---|---|
-| Input | Output is escaped | ✅ |  |
-| Input | Uploads are checked | ➖ |  |
-
-</details>
-
-> 1 failed check has no matching finding; the verdict is based on findings.
+| Check | Status | Detail |
+|---|---|---|
+| Queries are parameterised | ❌ | string concatenation |
+| Output is escaped | ✅ |  |
+| Uploads are checked | ➖ |  |
 
 <details><summary>Files (3)</summary>
 
@@ -45,6 +36,8 @@ Not a real problem? Reply `@pergent-bot dismiss fedcba <reason>`
 - `web/page.go`
 
 </details>
+
+> 1 failed check has no matching finding; the verdict is based on findings.
 
 <sub>Run again: `@pergent-bot review` · pergent v0.5.5</sub>
 

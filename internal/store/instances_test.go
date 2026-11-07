@@ -533,3 +533,35 @@ func TestRepoDefaultsQuietReviews(t *testing.T) {
 		}
 	}
 }
+
+// comment_layout in the defaults is NULL (unset) or a list whose order is
+// kept; a put replaces it, and an empty list is stored as NULL.
+func TestRepoDefaultsCommentLayout(t *testing.T) {
+	s := newStore(t)
+	read := func() []string {
+		t.Helper()
+		d, err := s.RepoDefaults(ctx)
+		if err != nil {
+			t.Fatalf("RepoDefaults: %v", err)
+		}
+		return d.CommentLayout
+	}
+	if got := read(); got != nil {
+		t.Errorf("before any put: comment_layout = %#v; want nil", got)
+	}
+	for _, in := range [][]string{
+		{"summary:open", "findings:collapsed", "files:open"},
+		{"findings:open", "summary:collapsed"},
+		nil,
+		{"findings:collapsed"},
+		{},
+	} {
+		if err := s.PutRepoDefaults(ctx, RepoDefaults{CommentLayout: in}); err != nil {
+			t.Fatal(err)
+		}
+		got := read()
+		if !slices.Equal(got, in) || (len(in) == 0) != (got == nil) {
+			t.Errorf("put %#v: comment_layout = %#v", in, got)
+		}
+	}
+}

@@ -1007,8 +1007,10 @@ func sameDefaults(a, b DefaultsView) bool {
 	if len(b.Skills) == 0 {
 		b.Skills = nil
 	}
-	// What the config gives and what is pinned have their own tests.
+	// What the config gives, what is pinned and the comment layout have their
+	// own tests.
 	a.Config, a.Pinned, b.Config, b.Pinned = DefaultValues{}, nil, DefaultValues{}, nil
+	a.CommentLayout, b.CommentLayout = nil, nil
 	return reflect.DeepEqual(a, b)
 }
 
@@ -1036,7 +1038,7 @@ func TestDefaultsViewConfigAndPinned(t *testing.T) {
 	if v.Config.MaxTurns != 40 || v.Config.FailureStatus != "failed" || !v.Config.Approve || v.Config.RerunLimitPerMR != 10 || v.Config.JobMemory != "" {
 		t.Errorf("config values = %+v", v.Config)
 	}
-	for _, k := range []string{"approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews", "failureStatus", "jobTimeoutSeconds", "maxTurns", "jobMemory", "rerunLimitPerMR", "rerunLimitPerRepo"} {
+	for _, k := range []string{"approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews", "commentLayout", "failureStatus", "jobTimeoutSeconds", "maxTurns", "jobMemory", "rerunLimitPerMR", "rerunLimitPerRepo"} {
 		if _, ok := v.Pinned[k]; !ok {
 			t.Errorf("pinned has no %q: %v", k, v.Pinned)
 		}
@@ -1635,11 +1637,91 @@ func TestDefaultsQuietReviews(t *testing.T) {
 	}
 }
 
+// The default for the comment layout is stored with the other defaults. The
+// view shows the built-in layout until one is saved, its config value is
+// always the built-in one, and it is pinned once saved. A valid list is kept in
+// order and audited under its name, the five refusals are 400 with the
+// defaults message, null clears it, a PUT without it clears it too (the PUT
+// replaces every default), and a dashboard repository takes it while a config
+// repository does not.
+func TestPutDefaultsCommentLayout(t *testing.T) {
+	e := newEnv(t, nil)
+	admin := e.signInGitLab(true, "acme/widgets")
+	builtIn := []string{"summary:open", "findings:collapsed", "dismissed:collapsed", "checks:open", "files:collapsed"}
+
+	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")
+	if !slices.Equal(v.CommentLayout, builtIn) || !slices.Equal(v.Config.CommentLayout, builtIn) || v.Pinned["commentLayout"] {
+		t.Errorf("initial view = %q, config %q, pinned %v; want the built-in layout, not pinned", v.CommentLayout, v.Config.CommentLayout, v.Pinned["commentLayout"])
+	}
+
+	want := []string{"findings:open", "checks:collapsed", "files:open"}
+	v = decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"commentLayout": want}), "PUT list", http.StatusOK)
+	if !slices.Equal(v.CommentLayout, want) || !slices.Equal(v.Config.CommentLayout, builtIn) || !v.Pinned["commentLayout"] {
+		t.Errorf("after PUT: view = %q, config %q, pinned %v; want the list, config built-in, pinned", v.CommentLayout, v.Config.CommentLayout, v.Pinned["commentLayout"])
+	}
+	if stored, err := e.st.RepoDefaults(ctx); err != nil || !slices.Equal(stored.CommentLayout, want) {
+		t.Errorf("stored defaults = %+v, %v; want the list", stored, err)
+	}
+	var details []string
+	for _, a := range e.auditEntries() {
+		if a.Action == "defaults_updated" {
+			details = append(details, a.Detail)
+		}
+	}
+	if !slices.Equal(details, []string{"commentLayout"}) {
+		t.Errorf("defaults_updated details = %q; want commentLayout named", details)
+	}
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	if g, ok, err := e.d.Repos.Get(ctx, "main", "acme/gadgets"); err != nil || !ok || !slices.Equal(g.CommentLayout, want) {
+		t.Errorf("dashboard repository = %+v, %v, %v; want the default layout", g, ok, err)
+	}
+	if w, ok, err := e.d.Repos.Get(ctx, "main", "acme/widgets"); err != nil || !ok || w.CommentLayout != nil {
+		t.Errorf("config repository = %+v, %v, %v; want no layout", w, ok, err)
+	}
+
+	for _, tc := range []struct{ name, body string }{
+		{"unknown block", `{"commentLayout":["findings:open","notes:open"]}`},
+		{"unknown state", `{"commentLayout":["findings:hidden"]}`},
+		{"repeated block", `{"commentLayout":["findings:open","findings:collapsed"]}`},
+		{"empty list", `{"commentLayout":[]}`},
+		{"no findings", `{"commentLayout":["summary:open","files:open"]}`},
+		{"not a list", `{"commentLayout":"findings:open"}`},
+	} {
+		rec := e.send(admin, "PUT", "/api/admin/defaults", tc.body)
+		if rec.Code != http.StatusBadRequest || errorOf(t, rec) != msgBadDefaults {
+			t.Errorf("%s: PUT = %d %s; want 400 %q", tc.name, rec.Code, rec.Body, msgBadDefaults)
+		}
+		if stored, _ := e.st.RepoDefaults(ctx); !slices.Equal(stored.CommentLayout, want) {
+			t.Errorf("%s: a refused PUT changed the defaults: %q", tc.name, stored.CommentLayout)
+		}
+	}
+	if !strings.Contains(msgBadDefaults, "commentLayout") {
+		t.Errorf("msgBadDefaults = %q", msgBadDefaults)
+	}
+
+	v = decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"commentLayout": nil}), "PUT null", http.StatusOK)
+	if !slices.Equal(v.CommentLayout, builtIn) || v.Pinned["commentLayout"] {
+		t.Errorf("after null: view = %q, pinned %v; want the built-in layout, not pinned", v.CommentLayout, v.Pinned["commentLayout"])
+	}
+	if stored, _ := e.st.RepoDefaults(ctx); stored.CommentLayout != nil {
+		t.Errorf("stored after null = %q, want NULL", stored.CommentLayout)
+	}
+
+	e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"commentLayout": want})
+	v = decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"approve": true}), "PUT without it", http.StatusOK)
+	if v.Pinned["commentLayout"] {
+		t.Errorf("after a PUT without it: pinned = %v; want not pinned", v.Pinned)
+	}
+	if stored, _ := e.st.RepoDefaults(ctx); stored.CommentLayout != nil {
+		t.Errorf("stored after a PUT without it = %q, want NULL", stored.CommentLayout)
+	}
+}
+
 // A default is pinned when the dashboard stored a value for it, and only then.
 func TestPinnedDefaults(t *testing.T) {
 	none := pinnedDefaults(store.RepoDefaults{})
-	if len(none) != 13 {
-		t.Errorf("pinned = %v; want the thirteen keys", none)
+	if len(none) != 14 {
+		t.Errorf("pinned = %v; want the fourteen keys", none)
 	}
 	for k, v := range none {
 		if v {
@@ -1664,7 +1746,10 @@ func TestPinnedDefaults(t *testing.T) {
 	if !pinnedDefaults(store.RepoDefaults{QuietReviews: ptr(true)})["quietReviews"] {
 		t.Errorf("quietReviews not pinned when stored")
 	}
-	for _, k := range []string{"reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews", "failureStatus", "maxTurns", "rerunLimitPerMR"} {
+	if !pinnedDefaults(store.RepoDefaults{CommentLayout: []string{"findings:open"}})["commentLayout"] {
+		t.Errorf("commentLayout not pinned when stored")
+	}
+	for _, k := range []string{"reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews", "commentLayout", "failureStatus", "maxTurns", "rerunLimitPerMR"} {
 		if got[k] {
 			t.Errorf("%s pinned: %v", k, got)
 		}

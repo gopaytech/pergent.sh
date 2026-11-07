@@ -349,6 +349,60 @@ describe("RepositoryDetail", () => {
     });
   });
 
+  it("shows the comment layout and sends only that key, as the list in its new order", async () => {
+    const fake = fakeApi({
+      ...base,
+      "PUT /api/repositories/main/acme/payments/settings": { body: payments },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const section = await screen.findByRole("region", { name: "Comment layout" });
+    expect(within(section).getAllByRole("listitem").map((r) => within(r).getByRole("combobox").getAttribute("aria-label"))).toEqual([
+      "Summary state",
+      "Findings state",
+      "Dismissed state",
+      "Checks state",
+      "Files state",
+    ]);
+    await userEvent.click(within(section).getByRole("button", { name: "Move Checks up" }));
+    await userEvent.selectOptions(within(section).getByRole("combobox", { name: "Findings state" }), "open");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({
+      commentLayout: ["summary:open", "findings:open", "checks:open", "dismissed:collapsed", "files:collapsed"],
+    });
+  });
+
+  it("does not pin a repository that follows the default when a row is moved and moved back", async () => {
+    const fake = fakeApi({
+      ...base,
+      "PUT /api/repositories/main/acme/payments/settings": { body: payments },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const section = await screen.findByRole("region", { name: "Comment layout" });
+    await userEvent.click(within(section).getByRole("button", { name: "Move Files up" }));
+    await userEvent.click(within(section).getByRole("button", { name: "Move Files down" }));
+    // Something else changed, so a save is sent; the layout is not in it.
+    await userEvent.click(screen.getByRole("switch", { name: "Quiet reviews" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({ quietReviews: true });
+  });
+
+  it("sends null for the layout once Reset to default is pressed on a repository that sets one", async () => {
+    const own = repoDetail(repoPayments);
+    own.settings.commentLayout = { value: ["findings:open", "files:open"], overridden: true };
+    const fake = fakeApi({
+      ...base,
+      "GET /api/repositories/main/acme/payments": { body: own },
+      "PUT /api/repositories/main/acme/payments/settings": { body: payments },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const section = await screen.findByRole("region", { name: "Comment layout" });
+    expect(within(section).getAllByRole("listitem")).toHaveLength(5);
+    await userEvent.click(within(section).getByRole("button", { name: "Reset to default" }));
+    expect(within(section).getByText(/Will follow the default layout once you save/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({ commentLayout: null });
+  });
+
   it("shows a maintainer the re-run caps read-only and never sends them", async () => {
     const asMaintainer = repoDetail(repoPayments, "maintainer");
     const fake = fakeApi({

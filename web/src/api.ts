@@ -208,6 +208,10 @@ export type RepoSettings = {
   incrementalReviews: SettingView<boolean>;
   learnFromDismissals: SettingView<boolean>;
   quietReviews: SettingView<boolean>;
+  // commentLayout is the comment's blocks as "block:state" entries in order:
+  // the default in effect (the admin default, else the built-in layout) while
+  // overridden is false.
+  commentLayout: SettingView<string[]>;
   failureStatus: SettingView<string>;
   // skills is null for the default list, otherwise the library skills.
   skills: SettingView<string[] | null>;
@@ -332,6 +336,7 @@ export type SettingsUpdate = Partial<{
   incrementalReviews: boolean | null;
   learnFromDismissals: boolean | null;
   quietReviews: boolean | null;
+  commentLayout: string[] | null;
   failureStatus: string | null;
   skills: string[] | null;
   repoSkills: string[] | null;
@@ -488,6 +493,9 @@ export type DefaultValues = {
   incrementalReviews: boolean;
   learnFromDismissals: boolean;
   quietReviews: boolean;
+  // The comment's blocks as "block:state" entries in order; the built-in
+  // layout until one is saved.
+  commentLayout: string[];
   failureStatus: string;
   jobTimeoutSeconds: number;
   maxTurns: number;
