@@ -12,7 +12,9 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/readiness"
 	"github.com/gopaytech/pergent.sh/internal/skillfetch"
+	"github.com/gopaytech/pergent.sh/internal/store"
 	"github.com/gopaytech/pergent.sh/internal/syncmap"
+	"github.com/gopaytech/pergent.sh/internal/webhook"
 )
 
 // Both webhook routes are registered; an unsigned request reaches the handler
@@ -224,5 +226,25 @@ func TestRoutesScanCallbackOnlyWithDashboard(t *testing.T) {
 	}
 	if code := post(mux, "Bearer t"); code != http.StatusNoContent || sr.calls != 1 {
 		t.Errorf("with a token = %d (%d calls); want 204", code, sr.calls)
+	}
+}
+
+// The webhooks check a project's ID and remember deliveries only through the
+// store; without one they must hold nil, not a nil store in an interface.
+func TestWebhooksGetTheirStores(t *testing.T) {
+	handlers := func(st *store.Store) (*webhook.Handler, *webhook.GitHubHandler) {
+		cfg := &config.Config{}
+		mux := Routes(Deps{Config: cfg, Instances: instances.New(cfg, nil, nil), Store: st})
+		gl, _ := mux.Handler(httptest.NewRequest(http.MethodPost, "/webhooks/gitlab/x", nil))
+		gh, _ := mux.Handler(httptest.NewRequest(http.MethodPost, "/webhooks/github/x", nil))
+		return gl.(*webhook.Handler), gh.(*webhook.GitHubHandler)
+	}
+	gl, gh := handlers(&store.Store{})
+	if gl.Projects == nil || gh.Projects == nil || gh.Deliveries == nil {
+		t.Errorf("with a store: GitLab Projects %v, GitHub Projects %v, Deliveries %v", gl.Projects, gh.Projects, gh.Deliveries)
+	}
+	gl, gh = handlers(nil)
+	if gl.Projects != nil || gh.Projects != nil || gh.Deliveries != nil {
+		t.Errorf("without a store: GitLab Projects %v, GitHub Projects %v, Deliveries %v", gl.Projects, gh.Projects, gh.Deliveries)
 	}
 }

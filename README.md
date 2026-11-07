@@ -231,6 +231,14 @@ This release adds [Quiet reviews](#-quiet-reviews): a review that raises fewer n
 - **Migration `0025` runs at startup.** It adds three nullable columns (`quiet_reviews` on `dashboard_repos`, `repo_defaults` and `runs`). A null value means off, and 0.8.2 keeps working on the migrated database, so you can roll back.
 - **To roll back, first remove `quiet_reviews` from the config.** 0.8.2 refuses a config key it does not know, so it would not start with `repositories[].quiet_reviews` in it. The dashboard's setting needs no change: 0.8.2 ignores the column.
 
+### Upgrading to the next release
+
+The migration adds one table, `webhook_deliveries`. Back up Postgres first, as for any migration.
+
+- Review Jobs now limit their work volume to `jobs.work_size`, 20Gi by default. A repository whose checkout is larger fails its review until you raise it.
+- On GitLab, a comment command is read back from GitLab before it is acted on, so each one costs one more API call.
+- GitHub: sending the same delivery again from the App's **Recent Deliveries** is ignored once it was handled. A delivery answered 5xx can still be sent again. To review a change again, use `review` or **Re-run review**.
+
 ### Upgrading to 0.8.2
 
 There is no migration, and nothing to change in the config or the chart. 0.8.1 keeps working on the same database, so you can roll back. Reviews still run pergent v0.5.4.
@@ -1320,6 +1328,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `jobs.timeout` | `30m` | pergent's own review budget per Job (`--timeout`). The Job's deadline adds 2 minutes to deliver and a clone allowance of at least 2 minutes. At startup pergent.sh warns about a timeout shorter than its step limit times 30 seconds. |
 | `jobs.max_turns` | `40` | pergent's step limit per opencode run (`--max-turns`) for every repository, 5 to 200. |
 | `jobs.concurrency` | `4` | pergent's `--concurrency`: opencode runs in flight inside one Job. At least 1. |
+| `jobs.work_size` | `20Gi` | The limit of a review Job's work volume, which holds the checkout. A change that needs more ends the Job with a failed review. |
 | `jobs.resources` | requests 500m CPU, 1Gi memory; limits 2 CPU, 4Gi memory | Kubernetes `requests` and `limits` for both containers of a Job. If you set either `requests` or `limits`, the default is not used at all. |
 
 ## 🛠️ Development

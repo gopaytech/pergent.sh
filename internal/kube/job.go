@@ -16,6 +16,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
@@ -65,7 +66,10 @@ type JobParams struct {
 	MaxCommentSize int
 	LLM            config.LLM
 	Resources      corev1.ResourceRequirements
-	Inputs         *inputs.Inputs
+	// WorkSize limits the work volume, which holds the checkout: a change's
+	// author decides how much it takes. Zero leaves it unlimited.
+	WorkSize resource.Quantity
+	Inputs   *inputs.Inputs
 }
 
 // Secrets are the per-Job credentials, stored in one Secret owned by the Job.
@@ -103,6 +107,14 @@ func secretsName(p JobParams) string { return p.Name + "-secrets" }
 func inputsName(p JobParams) string  { return p.Name + "-inputs" }
 
 func ptr[T any](v T) *T { return &v }
+
+// workVolume is the work volume, limited to size unless that is zero.
+func workVolume(size resource.Quantity) *corev1.EmptyDirVolumeSource {
+	if size.IsZero() {
+		return &corev1.EmptyDirVolumeSource{}
+	}
+	return &corev1.EmptyDirVolumeSource{SizeLimit: &size}
+}
 
 func skillNames(in *inputs.Inputs) []string {
 	if in == nil {
@@ -242,7 +254,7 @@ func BuildJob(p JobParams) *batchv1.Job {
 					AutomountServiceAccountToken:  ptr(false),
 					EnableServiceLinks:            ptr(false),
 					Volumes: []corev1.Volume{
-						{Name: "work", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+						{Name: "work", VolumeSource: corev1.VolumeSource{EmptyDir: workVolume(p.WorkSize)}},
 						{Name: "inputs", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
 							LocalObjectReference: corev1.LocalObjectReference{Name: inputsName(p)},
 							Items:                items,

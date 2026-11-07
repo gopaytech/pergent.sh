@@ -24,6 +24,7 @@ const (
 	defaultListen      = ":8080"
 	defaultImage       = "ghcr.io/gopaytech/pergent:v0.5.5"
 	defaultMaxRunning  = 5
+	defaultWorkSize    = "20Gi"
 	defaultTimeout     = 30 * time.Minute
 	defaultConcurrency = 4
 	defaultAPIKeyEnv   = "OPENCODE_API_KEY"
@@ -220,6 +221,8 @@ type Jobs struct {
 	Timeout     time.Duration
 	Concurrency int
 	Resources   corev1.ResourceRequirements
+	// WorkSize limits a review Job's work volume, which holds the checkout.
+	WorkSize resource.Quantity
 	// MaxTurns is pergent's step limit per opencode run (--max-turns), from
 	// 5 to 200.
 	MaxTurns int
@@ -298,6 +301,7 @@ type fileJobs struct {
 	MaxTurns    *int          `yaml:"max_turns"`
 	Concurrency *int          `yaml:"concurrency"`
 	Resources   fileResources `yaml:"resources"`
+	WorkSize    *quantity     `yaml:"work_size"`
 }
 
 type fileResources struct {
@@ -400,6 +404,9 @@ func Load(path string) (*Config, error) {
 	for _, repo := range raw.Repositories {
 		cfg.Repositories = append(cfg.Repositories, repo.repository())
 	}
+	if raw.Jobs.WorkSize != nil {
+		cfg.Jobs.WorkSize = raw.Jobs.WorkSize.Quantity
+	}
 	if raw.Jobs.MaxRunning != nil {
 		cfg.Jobs.MaxRunning = *raw.Jobs.MaxRunning
 	}
@@ -440,6 +447,9 @@ func (c *Config) applyDefaults() {
 	}
 	if len(c.Jobs.Resources.Requests) == 0 && len(c.Jobs.Resources.Limits) == 0 {
 		c.Jobs.Resources = defaultResources()
+	}
+	if c.Jobs.WorkSize.IsZero() {
+		c.Jobs.WorkSize = resource.MustParse(defaultWorkSize)
 	}
 	for i := range c.GitHub {
 		if c.GitHub[i].APIURL == "" {
@@ -613,6 +623,9 @@ func (c *Config) Validate() error {
 	}
 	if err := checkImagePinned(c.Jobs.Image); err != nil {
 		errs = append(errs, err)
+	}
+	if c.Jobs.WorkSize.Sign() < 0 {
+		add("jobs.work_size must not be negative, got %s", c.Jobs.WorkSize.String())
 	}
 	if c.Jobs.MaxRunning < 1 {
 		add("jobs.max_running must be at least 1, got %d", c.Jobs.MaxRunning)

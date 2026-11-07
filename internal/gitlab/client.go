@@ -705,6 +705,21 @@ func (c *Client) FindNote(ctx context.Context, projectID, iid int64, authorID in
 	return found, found != 0, nil
 }
 
+// Note is a comment on a merge request.
+type Note struct {
+	ID     int64  `json:"id"`
+	Body   string `json:"body"`
+	System bool   `json:"system"`
+	Author User   `json:"author"`
+}
+
+// GetNote returns one comment on a merge request.
+func (c *Client) GetNote(ctx context.Context, projectID, iid, noteID int64) (Note, error) {
+	var n Note
+	_, err := c.getJSON(ctx, mrPath(projectID, iid)+"/notes/"+strconv.FormatInt(noteID, 10), nil, &n)
+	return n, err
+}
+
 // CreateNote adds a comment to a merge request and returns its ID.
 func (c *Client) CreateNote(ctx context.Context, projectID, iid int64, body string) (int64, error) {
 	resp, err := c.do(ctx, http.MethodPost, mrPath(projectID, iid)+"/notes", nil, map[string]string{"body": body})

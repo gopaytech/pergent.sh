@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"bytes"
 	"context"
 	"regexp"
 	"strings"
@@ -170,19 +171,28 @@ func closesFence(line, fence string) bool {
 }
 
 // withoutComments removes the HTML comments from line. open is set when a
-// comment starts in line and goes on in the next lines.
+// comment starts in line and goes on in the next lines. Text that closes up
+// around a removed comment can open another one. It works in one pass: the
+// webhook runs this on any commenter's text, up to the size of a body.
 func withoutComments(line string) (rest string, open bool) {
-	for {
-		start := strings.Index(line, "<!--")
-		if start < 0 {
-			return line, false
-		}
-		end := strings.Index(line[start+len("<!--"):], "-->")
-		if end < 0 {
-			return line[:start], true
-		}
-		line = line[:start] + line[start+len("<!--")+end+len("-->"):]
+	if !strings.Contains(line, "<!--") {
+		return line, false
 	}
+	out := make([]byte, 0, len(line))
+	for i := 0; i < len(line); {
+		out = append(out, line[i])
+		i++
+		if !bytes.HasSuffix(out, []byte("<!--")) {
+			continue
+		}
+		out = out[:len(out)-len("<!--")]
+		end := strings.Index(line[i:], "-->")
+		if end < 0 {
+			return string(out), true
+		}
+		i += end + len("-->")
+	}
+	return string(out), false
 }
 
 // afterMention returns the text after @mention at the start of line, when it
@@ -278,6 +288,22 @@ func validFindingID(s string) bool {
 	return true
 }
 
+// CommandMatches reports whether body, the comment's text as the platform has
+// it, says what c says it does. The engine reads a GitLab comment back with
+// this: GitLab signs nothing, so what a webhook stored is only what its sender
+// claimed.
+func CommandMatches(c store.Command, body, mention string) bool {
+	if strings.Contains(body, reviewMarker) {
+		return false
+	}
+	parse := ParseCommand
+	if c.InThread() {
+		parse = ParseThreadCommand
+	}
+	kind, arg, reason, ok := parse(body, mention)
+	return ok && kind == c.Kind && arg == c.Arg && reason == strings.TrimSpace(c.Reason)
+}
+
 // comment is a new comment on a merge request or pull request, as a webhook
 // reports it.
 type comment struct {
@@ -301,10 +327,11 @@ type comment struct {
 
 // commands records the commands people write in comments.
 type commands struct {
-	Bots  Bots
-	Store CommandStore
-	Repos Repositories
-	Wake  func()
+	Bots     Bots
+	Store    CommandStore
+	Repos    Repositories
+	Projects ProjectStore
+	Wake     func()
 }
 
 // receive stores the command in c when there is one. It does no platform
@@ -352,6 +379,11 @@ func (d commands) receive(ctx context.Context, c comment) (outcome, reason strin
 	}
 	if !ok {
 		return outcomeIgnore, "unknown_project", nil
+	}
+	if same, err := sameProject(ctx, d.Projects, c.Instance, c.ProjectID, repo.Project); err != nil {
+		return "lookup_error", "", err
+	} else if !same {
+		return outcomeIgnore, "project_id_mismatch", nil
 	}
 	stored, err := d.Store.InsertCommand(ctx, store.Command{
 		MR:          store.MRKey{Instance: c.Instance, ProjectID: c.ProjectID, IID: c.IID},

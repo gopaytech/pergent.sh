@@ -732,3 +732,21 @@ func TestGitLabSourceReaderForbidden(t *testing.T) {
 		t.Errorf("GetFileAt with a forbidden repository = %v; want ErrSourceNotFound", err)
 	}
 }
+
+// A note is read from the merge request it is said to be on.
+func TestComment(t *testing.T) {
+	f := newFake(t)
+	f.routes["GET /projects/7/merge_requests/3/notes/9"] = reply{http.StatusOK, map[string]any{
+		"id": 9, "body": "@bot review", "system": true, "author": map[string]any{"id": 5, "username": "mo"},
+	}}
+	got, err := f.forge().Comment(context.Background(), 7, 3, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (forge.Comment{AuthorID: 5, Author: "mo", Body: "@bot review", System: true}); got != want {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	if _, err := f.forge().Comment(context.Background(), 7, 4, 9); !errors.Is(err, forge.ErrNotFound) {
+		t.Fatalf("a note on another merge request: err = %v, want forge.ErrNotFound", err)
+	}
+}

@@ -256,6 +256,25 @@ type Inline interface {
 	ThreadsBlockMerge(ctx context.Context, projectID int64, branch string) (bool, error)
 }
 
+// Comment is a comment as the platform has it.
+type Comment struct {
+	AuthorID int64
+	Author   string
+	Body     string
+	// System is set for a line the platform wrote itself.
+	System bool
+}
+
+// CommentReader reads a comment back from the platform. A platform whose
+// webhooks are only as good as a secret shared by its projects implements it,
+// so a command is taken from the platform and not from a payload. GitHub signs
+// its payloads with the App's own secret, which no repository holds.
+type CommentReader interface {
+	// Comment returns a comment on the change. A comment that is gone, or
+	// isn't on that change, is ErrNotFound.
+	Comment(ctx context.Context, projectID, number, commentID int64) (Comment, error)
+}
+
 // Approver is the approve bot's side of one platform instance.
 type Approver interface {
 	// Approve approves the change at sha. A head that is no longer sha is

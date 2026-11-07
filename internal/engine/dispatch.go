@@ -415,6 +415,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		MaxCommentSize: commentLimit,
 		LLM:            llm,
 		Resources:      jobResources(e.Config.Jobs.Resources, repo.JobMemory),
+		WorkSize:       e.Config.Jobs.WorkSize,
 		Inputs:         in,
 	}
 	secrets := kube.Secrets{GitToken: string(gitToken), LLMKey: llmKey, ResultToken: token}

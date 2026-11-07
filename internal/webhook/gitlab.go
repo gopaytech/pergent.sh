@@ -8,10 +8,10 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
-	"errors"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
@@ -52,6 +52,27 @@ type Repositories interface {
 	Get(ctx context.Context, instance, project string) (settings.Effective, bool, error)
 }
 
+// ProjectStore finds a project by its ID, as reconciling stored it.
+type ProjectStore interface {
+	Project(ctx context.Context, instance string, projectID int64) (store.Project, bool, error)
+}
+
+// sameProject reports whether a payload's project ID may go with the path that
+// picked the repository's settings. The path decides the settings and the ID
+// decides what is reviewed and approved, so a payload that pairs them wrongly
+// would review one project under another's. An ID nothing is stored for passes
+// here: dispatch fails such a run, and says why.
+func sameProject(ctx context.Context, projects ProjectStore, instance string, id int64, path string) (bool, error) {
+	if projects == nil {
+		return true, nil
+	}
+	p, found, err := projects.Project(ctx, instance, id)
+	if err != nil {
+		return false, err
+	}
+	return !found || strings.EqualFold(p.Path, path), nil
+}
+
 // repositories is h's Repos, or the config's repositories alone when nil.
 func repositories(repos Repositories, cfg *config.Config, reg *instances.Registry) Repositories {
 	if repos != nil {
@@ -72,6 +93,8 @@ type Handler struct {
 	Queue   Queue
 	// Repos finds the repositories switched on; nil means the config's.
 	Repos Repositories
+	// Projects tells which project an ID is; nil skips that check.
+	Projects ProjectStore
 	// Commands keeps the commands found in merge request comments; Bots
 	// tells which comments are the bots' own and what mention addresses the
 	// review bot. Without either, comments are ignored.
@@ -188,18 +211,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-	if err != nil {
-		var tooBig *http.MaxBytesError
-		if errors.As(err, &tooBig) {
-			log.Warn("webhook rejected", "outcome", "body_too_large")
-			http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
-			return
-		}
-		log.Warn("webhook rejected", "outcome", "read_error")
-		http.Error(w, "cannot read body", http.StatusBadRequest)
+	body, release, ok := readBody(w, r, log)
+	if !ok {
 		return
 	}
+	defer release()
 	if event == noteHookEvent {
 		h.note(w, r, log, name, body)
 		return
@@ -258,6 +274,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mr := store.MRKey{Instance: name, ProjectID: ev.Project.ID, IID: attrs.IID}
+	if same, err := sameProject(r.Context(), h.Projects, name, ev.Project.ID, project); err != nil {
+		log.Error("webhook failed", "outcome", "lookup_error", "err", err)
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	} else if !same {
+		unusable(w, log, "project_id_mismatch")
+		return
+	}
 
 	if attrs.Action == "close" || attrs.Action == "merge" {
 		n, err := h.Queue.SupersedeMR(r.Context(), mr)
@@ -370,7 +394,7 @@ func (h *Handler) note(w http.ResponseWriter, r *http.Request, log *slog.Logger,
 	case attrs.System, typ != "" && !inThread:
 		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "not_a_plain_note")
 	default:
-		outcome, reason, err := commands{Bots: h.Bots, Store: h.Commands,
+		outcome, reason, err := commands{Bots: h.Bots, Store: h.Commands, Projects: h.Projects,
 			Repos: repositories(h.Repos, h.Config, h.registry()), Wake: h.Wake}.receive(r.Context(), comment{
 			Platform: config.PlatformGitLab, Instance: instance, Project: ev.Project.PathWithNamespace,
 			ProjectID: ev.Project.ID, IID: ev.MergeRequest.IID, CommentID: attrs.ID,

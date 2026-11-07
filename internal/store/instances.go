@@ -190,6 +190,7 @@ func (s *Store) DeleteInstanceData(ctx context.Context, name string) error {
 		`DELETE FROM repo_attention WHERE instance = $1`,
 		`DELETE FROM dismissals WHERE instance = $1`,
 		`DELETE FROM commands WHERE instance = $1`,
+		`DELETE FROM webhook_deliveries WHERE instance = $1`,
 		`DELETE FROM inline_threads WHERE instance = $1`,
 		`DELETE FROM finding_fates WHERE instance = $1`,
 		`DELETE FROM fate_jobs WHERE instance = $1`,
