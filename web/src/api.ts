@@ -534,6 +534,8 @@ export type InstanceAdminView = {
   removing: boolean;
   url: string;
   apiURL: string;
+  // webhookURL is where the platform sends this instance's webhooks.
+  webhookURL: string;
   reviewAppID: number;
   // approveAppID is the review App's own ID when the review App approves.
   approveAppID: number;

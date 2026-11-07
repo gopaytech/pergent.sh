@@ -1175,3 +1175,15 @@ func TestTimeoutWarnings(t *testing.T) {
 		})
 	}
 }
+
+func TestWebhookURL(t *testing.T) {
+	tests := []struct{ publicURL, platform, instance, want string }{
+		{"https://pergent.example.com", PlatformGitLab, "main", "https://pergent.example.com/webhooks/gitlab/main"},
+		{"https://pergent.example.com/", PlatformGitHub, "hub", "https://pergent.example.com/webhooks/github/hub"},
+	}
+	for _, tt := range tests {
+		if got := WebhookURL(tt.publicURL, tt.platform, tt.instance); got != tt.want {
+			t.Errorf("WebhookURL(%q, %q, %q) = %q, want %q", tt.publicURL, tt.platform, tt.instance, got, tt.want)
+		}
+	}
+}

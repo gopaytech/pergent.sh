@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 import { api, type Approver, type IntegrationView, type InstanceAdminView, type Platform } from "../api";
 import { useMe } from "../layout/me";
@@ -235,6 +235,7 @@ function InstanceCard({ inst }: { inst: InstanceAdminView }) {
             {inst.approver === "app" && <div>Approve App ID: {inst.approveAppID}</div>}
           </>
         )}
+        <WebhookURL inst={inst} />
         <div>{approverWords(inst.approver)}</div>
         {config && <div className="meta">This instance is managed by the config file; change it there.</div>}
       </div>
@@ -257,6 +258,36 @@ function InstanceCard({ inst }: { inst: InstanceAdminView }) {
         </div>
       )}
     </section>
+  );
+}
+
+function WebhookURL({ inst }: { inst: InstanceAdminView }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) {
+      return;
+    }
+    const timer = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(inst.webhookURL);
+      setCopied(true);
+    } catch {
+      // No clipboard here: the URL is on screen to select.
+    }
+  };
+  return (
+    <div className="webhook-url">
+      Webhook URL: <code>{inst.webhookURL}</code>{" "}
+      <button type="button" className="btn small" aria-label={copied ? "Copied" : "Copy webhook URL"} onClick={copy}>
+        {copied ? "Copied" : "Copy"}
+      </button>
+      <div className="meta">
+        {inst.platform === "gitlab" ? "pergent.sh sets this on each project." : "Set this on the review App."}
+      </div>
+    </div>
   );
 }
 

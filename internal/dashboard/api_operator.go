@@ -153,7 +153,8 @@ func approverOfRow(row store.InstanceRow) string {
 // env var holds a value; a dashboard instance's when the sealed value opens.
 func (d *Dashboard) instanceView(ctx context.Context, inst instances.Instance) (InstanceAdminView, error) {
 	v := InstanceAdminView{Name: inst.Name, Platform: inst.Platform, Source: string(inst.Source), Removing: inst.Removing,
-		Approver: approverOf(inst), OAuthClientID: inst.OAuthClientID, Secrets: map[string]SecretView{}}
+		WebhookURL: config.WebhookURL(d.cfg.PublicURL, inst.Platform, inst.Name),
+		Approver:   approverOf(inst), OAuthClientID: inst.OAuthClientID, Secrets: map[string]SecretView{}}
 	switch {
 	case inst.GitLab != nil:
 		v.URL = inst.GitLab.URL

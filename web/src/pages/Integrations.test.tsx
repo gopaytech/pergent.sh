@@ -21,6 +21,12 @@ const instances = [instanceGitLab, instanceGitHub, instanceDashboardGitLab];
 
 const card = (name: string) => screen.findByRole("region", { name });
 
+// A read-only card's only button copies its webhook URL.
+const onlyCopy = (el: HTMLElement) => {
+  const buttons = within(el).getAllByRole("button");
+  return buttons.length === 1 && buttons[0].getAttribute("aria-label") === "Copy webhook URL";
+};
+
 describe("Integrations for a platform admin", () => {
   it("shows the instance, the approver and each repository's installation, read-only", async () => {
     const fake = fakeApi({ "GET /api/me": { body: platformAdmin }, "GET /api/integrations": { body: integrations } });
@@ -87,6 +93,52 @@ describe("Integrations for an operator", () => {
     expect(fake.find("GET", "/api/integrations")).toHaveLength(0);
   });
 
+  it("shows each instance's webhook URL and who sets it", async () => {
+    fakeApi({
+      "GET /api/me": { body: operator },
+      "GET /api/admin/instances": { body: [...instances, instanceGitHubOneApp] },
+    });
+    renderApp("/integrations");
+    const main = await card("GitLab · main");
+    expect(main).toHaveTextContent("Webhook URL: https://pergent.example.com/webhooks/gitlab/main");
+    expect(main).toHaveTextContent("pergent.sh sets this on each project.");
+    const hub = await card("GitHub · hub");
+    expect(hub).toHaveTextContent("Webhook URL: https://pergent.example.com/webhooks/github/hub");
+    expect(hub).toHaveTextContent("Set this on the review App.");
+    expect(await card("GitLab · extra")).toHaveTextContent(
+      "Webhook URL: https://pergent.example.com/webhooks/gitlab/extra",
+    );
+    expect(await card("GitHub · solo")).toHaveTextContent(
+      "Webhook URL: https://pergent.example.com/webhooks/github/solo",
+    );
+  });
+
+  it("copies the webhook URL", async () => {
+    const user = userEvent.setup();
+    fakeApi({ "GET /api/me": { body: operator }, "GET /api/admin/instances": { body: instances } });
+    renderApp("/integrations");
+    const hub = await card("GitHub · hub");
+    await user.click(within(hub).getByRole("button", { name: "Copy webhook URL" }));
+    expect(await navigator.clipboard.readText()).toBe("https://pergent.example.com/webhooks/github/hub");
+    expect(within(hub).getByRole("button", { name: "Copied" })).toBeInTheDocument();
+  });
+
+  it("goes back to Copy a moment after copying", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      fakeApi({ "GET /api/me": { body: operator }, "GET /api/admin/instances": { body: instances } });
+      renderApp("/integrations");
+      const hub = await card("GitHub · hub");
+      await user.click(within(hub).getByRole("button", { name: "Copy webhook URL" }));
+      expect(within(hub).getByRole("button", { name: "Copied" })).toBeInTheDocument();
+      vi.advanceTimersByTime(2000);
+      expect(await within(hub).findByRole("button", { name: "Copy webhook URL" })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("says the review App approves, and lists no approve secret for it", async () => {
     fakeApi({ "GET /api/me": { body: operator }, "GET /api/admin/instances": { body: [instanceGitHubOneApp] } });
     renderApp("/integrations");
@@ -101,7 +153,7 @@ describe("Integrations for an operator", () => {
     fakeApi({ "GET /api/me": { body: operator }, "GET /api/admin/instances": { body: instances } });
     renderApp("/integrations");
     const main = await card("GitLab · main");
-    expect(within(main).queryByRole("button")).not.toBeInTheDocument();
+    expect(onlyCopy(main)).toBe(true);
     expect(within(main).queryByRole("textbox")).not.toBeInTheDocument();
     expect(main).toHaveTextContent("managed by the config file");
     // The others have them.
@@ -402,7 +454,7 @@ describe("Integrations for an operator", () => {
       expect(confirm).toHaveBeenCalledWith(expect.stringContaining("extra"));
       expect(fake.find("DELETE", "/api/admin/instances/extra")[0].headers.get("X-CSRF-Token")).toBe("csrf-123");
       await vi.waitFor(() => expect(within(screen.getByRole("region", { name: "GitLab · extra" })).getByText("removing")).toBeInTheDocument());
-      expect(within(screen.getByRole("region", { name: "GitLab · extra" })).queryByRole("button")).not.toBeInTheDocument();
+      expect(onlyCopy(screen.getByRole("region", { name: "GitLab · extra" }))).toBe(true);
       // It is asked about again while something is being removed.
       await vi.advanceTimersByTimeAsync(10_000);
       await vi.waitFor(() => expect(screen.queryByRole("region", { name: "GitLab · extra" })).not.toBeInTheDocument());

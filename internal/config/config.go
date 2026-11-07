@@ -994,3 +994,8 @@ func TimeoutWarnings(c *Config) []string {
 	}
 	return out
 }
+
+// WebhookURL is where platform sends instance's webhooks.
+func WebhookURL(publicURL, platform, instance string) string {
+	return strings.TrimRight(publicURL, "/") + "/webhooks/" + platform + "/" + instance
+}
