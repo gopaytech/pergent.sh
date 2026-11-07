@@ -28,6 +28,12 @@ type fakeCatalog struct {
 	calls  int // ReachableRepos and CanReach calls
 	checks int // CanReach calls
 	slow   time.Duration
+
+	// info is what LinkInfo says, by lower-case path; infoErr what it fails
+	// with; infoCalls how many times it was asked, by lower-case path.
+	info      map[string]linkInfo
+	infoErr   map[string]error
+	infoCalls map[string]int
 }
 
 func (f *fakeCatalog) set(repos ...string) {
@@ -466,7 +472,7 @@ func TestSettingsValidation(t *testing.T) {
 	wantCode(t, rec, "reset", http.StatusOK)
 	r, found := e.storedRepo("main", "acme/gadgets")
 	if !found || r.Approve != nil || r.ReviewDrafts != nil || r.FailureStatus != nil || r.Skills != nil ||
-		r.InlineFindings != nil || r.CommandsAuthorAndMaintainersOnly != nil || r.IncrementalReviews != nil || r.LearnFromDismissals != nil || r.QuietReviews != nil || r.CommentLayout != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil ||
+		r.InlineFindings != nil || r.CommandsAuthorAndMaintainersOnly != nil || r.IncrementalReviews != nil || r.LearnFromDismissals != nil || r.QuietReviews != nil || r.CommentLayout != nil || r.LinkedReposEnabled != nil || r.LinkedRepos != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil ||
 		r.CreatedBy != "carol" {
 		t.Errorf("after reset row = %+v, %v", r, found)
 	}

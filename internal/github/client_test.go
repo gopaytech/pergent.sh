@@ -153,6 +153,21 @@ func TestRepo(t *testing.T) {
 	expect(t, rec.get(0), "GET", "/repos/acme/widgets", "")
 }
 
+// GitHub's visibility word is kept: private is true for internal too.
+func TestRepoVisibility(t *testing.T) {
+	for _, v := range []string{"public", "internal", "private"} {
+		c, _ := serve(t, jsonReply(map[string]any{"id": 99, "full_name": "acme/widgets", "private": v != "public", "visibility": v}))
+		r, err := c.Repo(ctx, "acme", "widgets")
+		if err != nil || r.Visibility != v || r.Private != (v != "public") {
+			t.Errorf("Repo with visibility %q = %+v, %v", v, r, err)
+		}
+	}
+	c, _ := serve(t, jsonReply(map[string]any{"id": 99, "private": true}))
+	if r, err := c.Repo(ctx, "acme", "widgets"); err != nil || r.Visibility != "" {
+		t.Errorf("Repo without visibility = %+v, %v; want it empty", r, err)
+	}
+}
+
 func TestRepoNotFound(t *testing.T) {
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"Not Found"}`, 404) })
 	_, err := c.Repo(ctx, "acme", "none")

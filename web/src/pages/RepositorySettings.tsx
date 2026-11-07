@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
 
@@ -9,12 +9,15 @@ import {
   type DetectedSkill,
   type InputsView,
   type LibrarySkill,
+  type LinkableView,
+  type Link as RepoLink,
   type RepoSettings,
   type RepoTeamsView,
   type RepositoryDetailView,
   type SettingsUpdate,
 } from "../api";
 import CommentLayoutEditor from "../CommentLayoutEditor";
+import LinkedReposEditor, { tidyLinks, type LinkableState } from "../LinkedReposEditor";
 import { useWrite } from "../layout/write";
 import { ErrorBox, Loading, Switch, bytesText } from "../ui";
 
@@ -34,12 +37,24 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
     queryFn: () => api.get<InputsView>(paths.apiRepoInputs(repo.instance, repo.project)),
   });
   const [note, setNote] = useState("");
+  // Linked repositories are an admin's, on a GitHub repository the dashboard
+  // sets up: only then is the list of repositories to link asked for.
+  const canSetLinks = view.role === "admin";
+  const [search, setSearch] = useState("");
+  const linkable = useQuery({
+    queryKey: ["linkable", repo.instance, repo.project, search],
+    queryFn: () => api.get<LinkableView>(paths.apiLinkable(repo.instance, repo.project, search)),
+    enabled: canSetLinks && repo.platform === "github" && repo.source !== "config",
+    placeholderData: keepPreviousData,
+  });
 
   const done = (detail: RepositoryDetailView, message: string) => {
     client.setQueryData(queryKey, detail);
     client.invalidateQueries({ queryKey: ["repositories"] });
     // The server dropped its kept read of the repository's skills.
     client.invalidateQueries({ queryKey: ["inputs", repo.instance, repo.project] });
+    // What can be linked depends on the links now.
+    client.invalidateQueries({ queryKey: ["linkable", repo.instance, repo.project] });
     setNote(message);
   };
   const save = useMutation({
@@ -76,11 +91,27 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
         locked={locked}
         // Only an admin of the repository changes its re-run caps.
         canSetCaps={view.role === "admin"}
+        canSetLinks={canSetLinks}
+        platform={repo.platform}
+        linkable={
+          linkable.isError
+            ? { status: "error", error: linkable.error }
+            : linkable.data !== undefined
+              ? { status: "ok", view: linkable.data }
+              : // Not asked for (the config sets the repository up): nothing to pick from.
+                linkable.fetchStatus === "idle"
+                ? { status: "ok", view: { items: [], truncated: false } }
+                : { status: "loading" }
+        }
+        onSearch={setSearch}
         busy={busy}
         onSave={(body) => save.mutate(body)}
         onReset={() => {
           // Only an admin's reset covers the re-run caps.
-          const caps = view.role === "admin" ? "" : " The re-run caps stay as they are; only an admin of this repository resets them.";
+          const caps =
+            view.role === "admin"
+              ? ""
+              : " The re-run caps stay as they are; only an admin of this repository resets them. So do the linked repositories.";
           if (window.confirm(`Put every setting of this repository back to its default?${caps}`)) reset.mutate();
         }}
       />
@@ -211,6 +242,10 @@ type Draft = {
   incrementalReviews: boolean;
   learnFromDismissals: boolean;
   quietReviews: boolean;
+  // Admins only: the impact check across linked repositories, and the links
+  // (blank lines in the watched paths are kept while typing).
+  linkedReposEnabled: boolean;
+  linkedRepos: RepoLink[];
   // null is the default layout.
   commentLayout: string[] | null;
   failureStatus: string;
@@ -260,6 +295,10 @@ function Form({
   attention,
   locked,
   canSetCaps,
+  canSetLinks,
+  platform,
+  linkable,
+  onSearch,
   busy,
   onSave,
   onReset,
@@ -270,6 +309,10 @@ function Form({
   attention: string[];
   locked: boolean;
   canSetCaps: boolean;
+  canSetLinks: boolean;
+  platform: string;
+  linkable: LinkableState;
+  onSearch: (text: string) => void;
   busy: boolean;
   onSave: (body: SettingsUpdate) => void;
   onReset: () => void;
@@ -288,6 +331,8 @@ function Form({
     incrementalReviews: settings.incrementalReviews.value,
     learnFromDismissals: settings.learnFromDismissals.value,
     quietReviews: settings.quietReviews.value,
+    linkedReposEnabled: settings.linkedReposEnabled.value,
+    linkedRepos: settings.linkedRepos.value.map((l) => ({ ...l, watched: [...l.watched] })),
     commentLayout: settings.commentLayout.overridden ? settings.commentLayout.value : null,
     failureStatus: settings.failureStatus.value,
     skillsMode: settings.skills.value === null ? "default" : "choose",
@@ -329,6 +374,16 @@ function Form({
     if (d.incrementalReviews !== initial.incrementalReviews) body.incrementalReviews = d.incrementalReviews;
     if (d.learnFromDismissals !== initial.learnFromDismissals) body.learnFromDismissals = d.learnFromDismissals;
     if (d.quietReviews !== initial.quietReviews) body.quietReviews = d.quietReviews;
+    // The linked repositories are an admin's: a maintainer's save never
+    // carries them (the server would refuse the whole save). No links is sent
+    // as null.
+    if (canSetLinks && platform === "github") {
+      if (d.linkedReposEnabled !== initial.linkedReposEnabled) body.linkedReposEnabled = d.linkedReposEnabled;
+      const links = tidyLinks(d.linkedRepos);
+      if (JSON.stringify(links) !== JSON.stringify(tidyLinks(initial.linkedRepos))) {
+        body.linkedRepos = links.length === 0 ? null : links;
+      }
+    }
     // A repository that follows the default and ends up with the list it
     // already shows (a row moved and moved back) has changed nothing: sending
     // it would pin the repository to today's default.
@@ -493,6 +548,28 @@ function Form({
           />
         </Setting>
       </section>
+
+      {canSetLinks && (
+        <section className="card" aria-label="Linked repositories">
+          <h2>
+            Linked repositories <Badge overridden={settings.linkedReposEnabled.overridden || settings.linkedRepos.overridden} /> {managed}
+          </h2>
+          {platform === "github" ? (
+            <LinkedReposEditor
+              enabled={d.linkedReposEnabled}
+              onEnabled={(v) => set("linkedReposEnabled", v)}
+              links={d.linkedRepos}
+              onLinks={(v) => set("linkedRepos", v)}
+              linkable={linkable}
+              onSearch={onSearch}
+              canAdd={!locked}
+              disabled={disabled}
+            />
+          ) : (
+            <div className="pad meta">Linked repositories work on GitHub repositories only, for now.</div>
+          )}
+        </section>
+      )}
 
       <section className="card" aria-label="Comment layout">
         <h2>

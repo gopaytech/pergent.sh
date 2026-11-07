@@ -189,6 +189,109 @@ func (f *Forge) GetFileAt(ctx context.Context, project, path, commit string) ([]
 	return b, ok, mapErr(err)
 }
 
+// Visibility reads who may read repo ("owner/name"), through the review
+// App's installation on it. It believes only what GitHub says: GitHub's
+// visibility field (public, internal or private), checked against its
+// private flag. A repository the App can't read is forge.ErrSourceNotFound,
+// and a repository whose visibility GitHub left out or contradicts is an
+// error. None of them is ever public.
+func (f *Forge) Visibility(ctx context.Context, repo string) (forge.Visibility, error) {
+	c, owner, name, err := f.source(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	r, err := c.Repo(ctx, owner, name)
+	if unreadable(err) {
+		return "", forge.ErrSourceNotFound
+	}
+	if err != nil {
+		return "", mapErr(err)
+	}
+	return visibilityOf(owner, name, r)
+}
+
+// visibilityOf is what GitHub says about who may read owner/name: the
+// visibility field, checked against the private flag.
+func visibilityOf(owner, name string, r github.Repository) (forge.Visibility, error) {
+	var v forge.Visibility
+	switch r.Visibility {
+	case "public":
+		v = forge.VisPublic
+	case "internal":
+		v = forge.VisInternal
+	case "private":
+		v = forge.VisPrivate
+	default:
+		return "", fmt.Errorf("githubforge: GitHub did not say whether %s/%s is public, internal or private (visibility %q)", owner, name, r.Visibility)
+	}
+	if (v == forge.VisPublic) == r.Private {
+		return "", fmt.Errorf("githubforge: GitHub says %s/%s is %s and private=%v", owner, name, r.Visibility, r.Private)
+	}
+	return v, nil
+}
+
+// LinkInfo is Visibility and the installation of the review App that covers
+// repo ("owner/name"), in one installation lookup and one repository read, for
+// a list of many (the dashboard's choice of a repository to link). The errors
+// are Visibility's.
+func (f *Forge) LinkInfo(ctx context.Context, repo string) (forge.Visibility, int64, error) {
+	owner, name, ok := strings.Cut(strings.Trim(repo, "/"), "/")
+	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+		return "", 0, forge.ErrSourceNotFound
+	}
+	id, err := f.app.Installation(ctx, owner, name)
+	if unreadable(err) {
+		return "", 0, forge.ErrSourceNotFound
+	}
+	if err != nil {
+		return "", 0, err
+	}
+	r, err := f.app.Client(id).Repo(ctx, owner, name)
+	if unreadable(err) {
+		return "", 0, forge.ErrSourceNotFound
+	}
+	if err != nil {
+		return "", 0, mapErr(err)
+	}
+	v, err := visibilityOf(owner, name, r)
+	if err != nil {
+		return "", 0, err
+	}
+	return v, id, nil
+}
+
+// Target is a repository as a review's clone token needs it.
+type Target struct{ RepoID, InstallationID int64 }
+
+// LinkTarget finds repo ("owner/name"): the installation of the review App
+// that covers it and the repository's ID, both from GitHub (the repository
+// need not be switched on or stored). A repository the App can't read is
+// forge.ErrSourceNotFound.
+func (f *Forge) LinkTarget(ctx context.Context, repo string) (Target, error) {
+	owner, name, ok := strings.Cut(strings.Trim(repo, "/"), "/")
+	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+		return Target{}, forge.ErrSourceNotFound
+	}
+	inst, err := f.app.Installation(ctx, owner, name)
+	if unreadable(err) {
+		return Target{}, forge.ErrSourceNotFound
+	}
+	if err != nil {
+		return Target{}, err
+	}
+	r, err := f.app.Client(inst).Repo(ctx, owner, name)
+	if unreadable(err) {
+		return Target{}, forge.ErrSourceNotFound
+	}
+	if err != nil {
+		return Target{}, mapErr(err)
+	}
+	if r.ID == 0 {
+		return Target{}, fmt.Errorf("githubforge: GitHub gave no ID for %s/%s", owner, name)
+	}
+	return Target{RepoID: r.ID, InstallationID: inst}, nil
+}
+
 // GetChange reads pull request number. A closed pull request GitHub reports
 // as merged is forge.StateMerged. TargetBranch and StartSHA are the base ref
 // and the base commit GitHub recorded for the pull request (inputs are read

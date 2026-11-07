@@ -688,3 +688,16 @@ func TestFitKeepsDescriptionWhenDismissalsAreEnough(t *testing.T) {
 		t.Errorf("dismissals %d bytes, description %d bytes; want only the dismissals dropped", len(in.Dismissals), len(in.Description))
 	}
 }
+
+// linked-repos.json goes into the same ConfigMap, so it counts toward the
+// budget; Fit never drops it (a dropped list would turn a failed check into a
+// missing one).
+func TestSizeCountsLinked(t *testing.T) {
+	in := &Inputs{Skills: map[string][]byte{"a": []byte("12345")}, Linked: []byte("123")}
+	if got := in.Size(); got != 8 {
+		t.Errorf("Size = %d; want 8", got)
+	}
+	if err := in.Fit(100); err != nil || string(in.Linked) != "123" {
+		t.Errorf("Fit = %v, linked = %q", err, in.Linked)
+	}
+}

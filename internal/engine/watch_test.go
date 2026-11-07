@@ -205,6 +205,28 @@ func TestWatchRecordsCloneSeconds(t *testing.T) {
 	wantRunning(t, env, id)
 }
 
+// The checkout container of a run with linked repositories also clones them:
+// its time is not the repository's own, and the next review that clones
+// nothing else must not get a longer deadline for it. [CI]
+func TestWatchDoesNotRecordTheCloneTimeOfALinkedRun(t *testing.T) {
+	env := newTestEnv(t)
+	id := env.Dispatched(1, sha('a'))
+	if err := env.Store.SetRunLinks(env.ctx, id, []store.Link{{Target: "acme/api", CanBlock: true}}); err != nil {
+		t.Fatal(err)
+	}
+	start := env.Now().Add(-3 * time.Minute)
+	putJob(t, env, id, start.Add(-time.Second),
+		[]corev1.ContainerStatus{terminatedStatus("checkout", 0, "Completed", start, start.Add(200*time.Second))}, nil)
+
+	watch(t, env)
+
+	p, ok, err := env.Store.Project(env.ctx, testInstance, testProjectID)
+	if err != nil || !ok || p.CloneSeconds != 0 {
+		t.Errorf("project clone seconds = %d (%v, %v); want none recorded for a run with links", p.CloneSeconds, ok, err)
+	}
+	wantRunning(t, env, id)
+}
+
 // A result that arrives while the watcher looks wins: the run is not reported
 // again and nothing fails.
 func TestWatchResultWonTheRace(t *testing.T) {

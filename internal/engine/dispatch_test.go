@@ -108,7 +108,7 @@ func TestDispatchLaunchesJob(t *testing.T) {
 	if run.BaseSHA != sha('b') || run.StartSHA != sha('5') {
 		t.Errorf("run base/start = %s/%s", run.BaseSHA, run.StartSHA)
 	}
-	wantExp := env.Now().Add(kube.Deadline(10*time.Minute, kube.CloneAllowance(0)) + time.Minute)
+	wantExp := env.Now().Add(kube.Deadline(10*time.Minute, kube.CloneAllowance(0, 0)) + time.Minute)
 	if !run.TokenExpiresAt.Equal(wantExp) {
 		t.Errorf("token expires %s, want %s", run.TokenExpiresAt, wantExp)
 	}
@@ -801,10 +801,10 @@ func TestDispatchUsesEffectiveTimeoutTurnsAndMemory(t *testing.T) {
 			if got := env.Run(id).MaxTurns; got == nil || *got != 120 {
 				t.Errorf("recorded max turns = %v, want 120", got)
 			}
-			if got, want := *job.Spec.ActiveDeadlineSeconds, int64(kube.Deadline(20*time.Minute, kube.CloneAllowance(0))/time.Second); got != want {
+			if got, want := *job.Spec.ActiveDeadlineSeconds, int64(kube.Deadline(20*time.Minute, kube.CloneAllowance(0, 0))/time.Second); got != want {
 				t.Errorf("activeDeadlineSeconds = %d, want %d", got, want)
 			}
-			wantExp := env.Now().Add(kube.Deadline(20*time.Minute, kube.CloneAllowance(0)) + time.Minute)
+			wantExp := env.Now().Add(kube.Deadline(20*time.Minute, kube.CloneAllowance(0, 0)) + time.Minute)
 			if got := env.Run(id).TokenExpiresAt; !got.Equal(wantExp) {
 				t.Errorf("token expires %s, want %s", got, wantExp)
 			}

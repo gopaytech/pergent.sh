@@ -64,6 +64,10 @@ type Inputs struct {
 	// them; nil when there is none. It is not part of any skill's hash, so
 	// editing it starts no review.
 	Description []byte
+	// Linked is the JSON of the linked repositories the change touches
+	// ([{"name", "path", "watched", "can_block", "error"}]); nil when the
+	// feature is off or nothing matched. It is not part of any skill's hash.
+	Linked []byte
 }
 
 // LibraryEntry is one skill of the library as ResolveSkills receives it.
@@ -298,7 +302,7 @@ func (in *Inputs) AddDescription(title, description string) {
 
 // Size is the total number of bytes the inputs put into a ConfigMap.
 func (in *Inputs) Size() int {
-	n := len(in.Instructions) + len(in.Previous) + len(in.Carried) + len(in.Dismissals) + len(in.Description)
+	n := len(in.Instructions) + len(in.Previous) + len(in.Carried) + len(in.Dismissals) + len(in.Description) + len(in.Linked)
 	for _, c := range in.Skills {
 		n += len(c)
 	}

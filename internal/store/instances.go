@@ -278,6 +278,10 @@ type RepoDefaults struct {
 	// CommentLayout is the shape of the review comment, "block:state" entries
 	// in order (nil: the default layout).
 	CommentLayout []string
+	// LinkedReposEnabled is whether the impact check across linked
+	// repositories is on (nil: the default, off). Links are per repository
+	// and have no default.
+	LinkedReposEnabled *bool
 }
 
 // RepoDefaults returns the defaults; the zero value when none were put.
@@ -285,11 +289,12 @@ func (s *Store) RepoDefaults(ctx context.Context) (RepoDefaults, error) {
 	var d RepoDefaults
 	err := s.pool.QueryRow(ctx, `SELECT approve, review_drafts, failure_status, job_timeout_seconds, max_turns, job_memory,
 			rerun_limit_per_mr, rerun_limit_per_repo, skills, updated_at, inline_findings,
-			commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout
+			commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
+			linked_repos_enabled
 		FROM repo_defaults WHERE id = 1`).
 		Scan(&d.Approve, &d.ReviewDrafts, &d.FailureStatus, &d.JobTimeoutSeconds, &d.MaxTurns, &d.JobMemory,
 			&d.RerunLimitPerMR, &d.RerunLimitPerRepo, &d.Skills, &d.UpdatedAt, &d.InlineFindings,
-			&d.CommandsAuthorAndMaintainersOnly, &d.IncrementalReviews, &d.LearnFromDismissals, &d.QuietReviews, &d.CommentLayout)
+			&d.CommandsAuthorAndMaintainersOnly, &d.IncrementalReviews, &d.LearnFromDismissals, &d.QuietReviews, &d.CommentLayout, &d.LinkedReposEnabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RepoDefaults{}, nil
 	}
@@ -355,8 +360,8 @@ func (s *Store) PutRepoDefaults(ctx context.Context, d RepoDefaults) error {
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO repo_defaults (id, approve, review_drafts, failure_status, job_timeout_seconds, max_turns, job_memory,
 			rerun_limit_per_mr, rerun_limit_per_repo, skills, updated_at, inline_findings,
-			commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout)
-		VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, now(), $10, $11, $12, $13, $14, $15)
+			commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout, linked_repos_enabled)
+		VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, now(), $10, $11, $12, $13, $14, $15, $16)
 		ON CONFLICT (id) DO UPDATE SET approve = EXCLUDED.approve, review_drafts = EXCLUDED.review_drafts,
 			failure_status = EXCLUDED.failure_status, job_timeout_seconds = EXCLUDED.job_timeout_seconds,
 			max_turns = EXCLUDED.max_turns, job_memory = EXCLUDED.job_memory, rerun_limit_per_mr = EXCLUDED.rerun_limit_per_mr,
@@ -366,9 +371,10 @@ func (s *Store) PutRepoDefaults(ctx context.Context, d RepoDefaults) error {
 			incremental_reviews = EXCLUDED.incremental_reviews,
 			learn_from_dismissals = EXCLUDED.learn_from_dismissals,
 			quiet_reviews = EXCLUDED.quiet_reviews,
-			comment_layout = EXCLUDED.comment_layout`,
+			comment_layout = EXCLUDED.comment_layout,
+			linked_repos_enabled = EXCLUDED.linked_repos_enabled`,
 		d.Approve, d.ReviewDrafts, d.FailureStatus, d.JobTimeoutSeconds, d.MaxTurns, d.JobMemory, d.RerunLimitPerMR, d.RerunLimitPerRepo, skills, d.InlineFindings,
-		d.CommandsAuthorAndMaintainersOnly, d.IncrementalReviews, d.LearnFromDismissals, d.QuietReviews, nilIfEmpty(d.CommentLayout)); err != nil {
+		d.CommandsAuthorAndMaintainersOnly, d.IncrementalReviews, d.LearnFromDismissals, d.QuietReviews, nilIfEmpty(d.CommentLayout), d.LinkedReposEnabled); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -11,6 +12,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+
+	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
 func loadValid(t *testing.T) *Config {
@@ -1436,5 +1439,98 @@ func TestSignInProblemsForTheDashboard(t *testing.T) {
 	bad := SignIn{Mode: SignInOIDC, Issuer: "http://x.example.com", ClientID: "has space"}
 	if p := bad.Problems(false); len(p) != 2 {
 		t.Errorf("Problems = %q, want two", p)
+	}
+}
+
+// withGitHubRepoKey loads github.yaml with extra put under its GitHub
+// repository, gh acme/widgets.
+func withGitHubRepoKey(t *testing.T, extra string) (*Config, error) {
+	t.Helper()
+	base, err := os.ReadFile("testdata/github.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Replace(string(base), "    project: acme/widgets\n    skills: [security]\n", "    project: acme/widgets\n    skills: [security]\n"+extra, 1)
+	if body == string(base) {
+		t.Fatal("github.yaml has no repository to put the key under")
+	}
+	return Load(writeConfig(t, body))
+}
+
+func TestLinkedReposConfig(t *testing.T) {
+	// The shape from the README: can_block defaults to true.
+	cfg, err := withGitHubRepoKey(t, `    linked_repos_enabled: true
+    linked_repos:
+      - target: gopaytech/pergent.sh
+        watched: ["render/**", "scope/**"]
+        can_block: false
+      - target: acme/docs
+`)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	repo := cfg.Repositories[1]
+	if repo.LinkedReposEnabled == nil || !*repo.LinkedReposEnabled {
+		t.Errorf("LinkedReposEnabled = %v, want true", repo.LinkedReposEnabled)
+	}
+	want := []store.Link{
+		{Target: "gopaytech/pergent.sh", Watched: []string{"render/**", "scope/**"}, CanBlock: false},
+		{Target: "acme/docs", CanBlock: true},
+	}
+	if !reflect.DeepEqual(repo.LinkedRepos, want) {
+		t.Errorf("LinkedRepos = %+v, want %+v", repo.LinkedRepos, want)
+	}
+
+	// Left out, the setting is nil (off by default) and there are no links.
+	plain := loadGitHub(t).Repositories[1]
+	if plain.LinkedReposEnabled != nil || plain.LinkedRepos != nil {
+		t.Errorf("unset: enabled %v, links %+v; want nil, nil", plain.LinkedReposEnabled, plain.LinkedRepos)
+	}
+
+	// An empty list written out is allowed and means no links; so is a null one.
+	for name, extra := range map[string]string{"empty": "    linked_repos: []\n", "null": "    linked_repos:\n"} {
+		cfg, err := withGitHubRepoKey(t, extra)
+		if err != nil {
+			t.Fatalf("%s: Load: %v", name, err)
+		}
+		if got := cfg.Repositories[1].LinkedRepos; len(got) != 0 {
+			t.Errorf("%s: LinkedRepos = %+v, want none", name, got)
+		}
+	}
+	// The setting alone, with no links, is allowed too, and so is a GitLab
+	// repository with an empty list.
+	if _, err := withGitHubRepoKey(t, "    linked_repos_enabled: false\n"); err != nil {
+		t.Errorf("Load with only the setting: %v", err)
+	}
+	if _, err := withRepoKey(t, "    linked_repos: []\n"); err != nil {
+		t.Errorf("Load of a GitLab repository with an empty linked_repos: %v", err)
+	}
+
+	for _, tt := range []struct {
+		name, extra, wantErr string
+		gitlab               bool
+	}{
+		{"a GitLab repository with links", "    linked_repos:\n      - target: acme/docs\n", "GitHub only", true},
+		{"four links", "    linked_repos:\n      - target: acme/a\n      - target: acme/b\n      - target: acme/c\n      - target: acme/d\n", "at most 3", false},
+		{"itself", "    linked_repos:\n      - target: Acme/Widgets\n", "itself", false},
+		{"a duplicate", "    linked_repos:\n      - target: acme/a\n      - target: acme/a\n", "twice", false},
+		{"a bad glob", "    linked_repos:\n      - target: acme/a\n        watched: [\"render/[\"]\n", "acme/a", false},
+		{"a directory glob", "    linked_repos:\n      - target: acme/a\n        watched: [\"render/\"]\n", "render/**", false},
+		{"a target that is no owner/name", "    linked_repos:\n      - target: docs\n", "owner/name", false},
+		{"no target", "    linked_repos:\n      - watched: [\"a/**\"]\n", "owner/name", false},
+		{"an unknown link key", "    linked_repos:\n      - target: acme/a\n        canblock: false\n", "canblock", false},
+		{"can_block that is no bool", "    linked_repos:\n      - target: acme/a\n        can_block: maybe\n", "can_block", false},
+		{"linked_repos that is a map", "    linked_repos:\n      target: acme/a\n", "linked_repos", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			load := withGitHubRepoKey
+			if tt.gitlab {
+				load = withRepoKey
+			}
+			_, err := load(t, tt.extra)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Load() = %v, want an error containing %q", err, tt.wantErr)
+			}
+		})
 	}
 }

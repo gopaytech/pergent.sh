@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -47,9 +49,12 @@ const (
 	msgNoLLM       = "no LLM is set: an operator sets it on Admin → Settings"
 
 	// reasonNoSkills is why a run is skipped and what "Needs attention" says.
-	reasonNoSkills     = "this repository has no skills"
-	reasonTooLarge     = "the skills and instructions for this repository are larger than 900 KiB"
-	reasonNoCloneToken = "pergent.sh has no clone token for this repository yet"
+	reasonNoSkills = "this repository has no skills"
+	// reasonImpactReserved is why a review is refused when the repository has
+	// linked repositories turned on and a skill named like their check.
+	reasonImpactReserved = "the name impact is reserved for the linked repositories' check, and a skill of this repository has it: rename the skill, or turn off linked repositories here"
+	reasonTooLarge       = "the skills and instructions for this repository are larger than 900 KiB"
+	reasonNoCloneToken   = "pergent.sh has no clone token for this repository yet"
 	// reasonNoRepository is a GitHub repository reconcile hasn't stored.
 	reasonNoRepository = "pergent.sh hasn't looked this repository up on GitHub yet"
 	reasonNotInstalled = "the pergent review App isn't installed on this repository"
@@ -160,6 +165,10 @@ type dispatcher struct {
 	// keptHashes are the content hashes of those kept skills, as the earlier
 	// run recorded them.
 	keptHashes map[string]string
+	// partial says the run re-runs some of the skills, merged with the earlier
+	// run's results for the others. rerunImpact says the linked repositories'
+	// check is one of the things it re-runs. Both are set by subset.
+	partial, rerunImpact bool
 }
 
 func (d *dispatcher) dispatch(ctx context.Context) error {
@@ -322,6 +331,13 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	if len(in.Skills) == 0 {
 		return d.skipNoSkills(ctx, plat, repo)
 	}
+	if _, clash := in.Skills[impactSkill]; clash && d.mayLink(plat, repo) {
+		// The name belongs to the linked repositories' check while they are
+		// linked: a skill of that name is never run in its place, where its
+		// result could read as the check's.
+		d.log.Warn("not reviewing: a skill is named impact, which the linked repositories' check holds")
+		return d.fail(ctx, reasonImpactReserved)
+	}
 	// Only a push can be incremental: a re-run on request is a full review,
 	// and a re-run of the failed skills keeps the base run it has.
 	push := run.Trigger == store.TriggerPush
@@ -340,8 +356,11 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	}
 	// What people rejected earlier is the same for a full and an incremental
 	// review, and no skill's hash counts it.
+	// The linked repositories' check is told its own rejected findings, when
+	// the run may have one (the plan below can still find nothing to check).
 	var dismissalCounts map[string]int
-	in.Dismissals, dismissalCounts = d.pastDismissals(ctx, repo, in, mr.AuthorID)
+	withImpact := d.mayLink(plat, repo)
+	in.Dismissals, dismissalCounts = d.pastDismissals(ctx, repo, in, mr.AuthorID, withImpact)
 	in.AddDescription(mr.Title, mr.Description)
 	hadCarried := len(in.Carried) > 0
 	hadDismissals := len(in.Dismissals) > 0
@@ -370,6 +389,57 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			return d.retry(ctx, err)
 		}
 	}
+	// Linked repositories: none (the zero plan, nothing recorded and nothing
+	// added to the Job) unless the setting is on and the change touches one.
+	// The rules are checked here again, whatever was checked on save.
+	links := d.linkedRepos(ctx, plat, repo, project, mr, last, havePrev, in)
+	if in.Linked, err = links.encode(); err != nil {
+		return d.retry(ctx, err)
+	}
+	if len(links.Entries) == 0 && dismissalCounts[impactSkill] > 0 && in.Dismissals != nil {
+		// The check does not run on this change: what people rejected in it
+		// goes nowhere, and the Job is the one it would be without links.
+		d.log.Info("the linked repositories' check does not run; its past dismissals are left out", "entries", dismissalCounts[impactSkill])
+		in.Dismissals, _ = d.pastDismissals(ctx, repo, in, mr.AuthorID, false)
+	}
+	if len(links.Entries) > 0 {
+		if in.Size() > inputs.ConfigMapLimit {
+			return d.fail(ctx, reasonTooLarge)
+		}
+		// Written before the Job starts, like the layout: a lost write would
+		// hide what the review was started with.
+		if err := e.Store.SetRunLinks(ctx, run.ID, links.Matched); err != nil {
+			return d.retry(ctx, fmt.Errorf("record the linked repositories: %w", err))
+		}
+	} else {
+		if len(run.LinkedRepos) > 0 {
+			// An earlier attempt of this run recorded links the Job will not
+			// have: the result is checked against what the Job was given.
+			if err := e.Store.SetRunLinks(ctx, run.ID, nil); err != nil {
+				return d.retry(ctx, fmt.Errorf("forget the linked repositories: %w", err))
+			}
+		}
+		if d.rerunImpact {
+			// Turned off, or the links gone, since the re-run was asked for:
+			// the check can't be repeated, and the review that has it can only
+			// be replaced by one that doesn't.
+			d.log.Warn("reviewing with all skills: the linked repositories' check can't run any more")
+			if err := e.Store.MakeFullRerun(ctx, run.ID); err != nil {
+				return d.retry(ctx, fmt.Errorf("record the full re-run: %w", err))
+			}
+			return d.postpone(ctx, e.now())
+		}
+		if len(in.Carried) > 0 && d.impactIsOpen(ctx, last, havePrev) {
+			// The earlier review's check is open and this run will not repeat
+			// it: carrying the rest over would keep the open check in the
+			// result for good (result.MergeIncremental), so review everything.
+			d.log.Info("full review", "reason", fullImpactOpen)
+			in.Carried = nil
+			if err := e.Store.SetIncremental(ctx, run.ID, nil); err != nil {
+				return d.retry(ctx, fmt.Errorf("record the review as a full one: %w", err))
+			}
+		}
+	}
 	// The run keeps the value it was dispatched with: the prompt, the threads
 	// and the comment follow the run, never the repository's later setting.
 	// It is written before the Job starts, not with SetRunInputs (best effort,
@@ -390,7 +460,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	}
 	d.secrets = append(d.secrets, token)
 	if plat.isGitHub() {
-		if gitToken, err = d.gitHubCloneToken(ctx, plat, project); err != nil {
+		if gitToken, err = d.gitHubCloneToken(ctx, plat, project, links.RepoIDs...); err != nil {
 			if github.InstallationGone(err) {
 				// The installation is gone since reconcile stored it.
 				return d.fail(ctx, reasonNotInstalled)
@@ -400,7 +470,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	}
 
 	now := e.now()
-	allowance := kube.CloneAllowance(project.CloneSeconds)
+	allowance := kube.CloneAllowance(project.CloneSeconds, len(links.Clones))
 	expires := now.Add(kube.Deadline(repo.JobTimeout, allowance) + tokenGrace)
 	name := kube.JobName(run.ID)
 	commentLimit := kube.CommentLimitGitLab
@@ -427,6 +497,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		Resources:      jobResources(e.Config.Jobs.Resources, repo.JobMemory),
 		WorkSize:       e.Config.Jobs.WorkSize,
 		Inputs:         in,
+		LinkedClones:   links.Clones,
 	}
 	secrets := kube.Secrets{GitToken: string(gitToken), LLMKey: llmKey, ResultToken: token}
 	if err := e.Launcher.Launch(ctx, params, secrets); err != nil {
@@ -510,9 +581,18 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 // subset, which is recorded.
 func (d *dispatcher) subset(ctx context.Context, in *inputs.Inputs, mr forge.Change) (*inputs.Inputs, error) {
 	run := d.run
-	names := run.SkillSubset
-	if len(names) == 0 {
+	if len(run.SkillSubset) == 0 {
 		return in, nil
+	}
+	// The linked repositories' check is part of the run, not one of its skills:
+	// it has no entry in the inputs, so it is set apart from the names that
+	// have.
+	// A skill of the repository named impact is an ordinary skill: only
+	// without one is that name the check.
+	_, own := in.Skills[impactSkill]
+	names, impact := run.SkillSubset, false
+	if !own {
+		names, impact = splitImpact(run.SkillSubset)
 	}
 	base, reason, err := d.keptRun(ctx, in, mr)
 	if err != nil {
@@ -520,7 +600,15 @@ func (d *dispatcher) subset(ctx context.Context, in *inputs.Inputs, mr forge.Cha
 	}
 	only := in.Only(names)
 	if reason == "" && len(only.Skills) == 0 {
-		reason = "none of the skills to re-run exist any more"
+		if carrier, ok := carrierSkill(in); ok && impact {
+			// pergent takes at least one skill. The check re-runs with the
+			// first of them, which is then re-run as well, and merged as a skill
+			// of the subset.
+			only, names = in.Only([]string{carrier}), []string{carrier}
+			d.log.Info("re-running the linked repositories' check with one skill: a review needs at least one", "skill", carrier)
+		} else {
+			reason = "none of the skills to re-run exist any more"
+		}
 	}
 	if reason != "" {
 		d.log.Warn("reviewing with all skills: the skills to re-run can't be kept apart from the rest of the review", "reason", reason)
@@ -529,20 +617,22 @@ func (d *dispatcher) subset(ctx context.Context, in *inputs.Inputs, mr forge.Cha
 		}
 		return in, nil
 	}
-	if len(only.Skills) < len(names) {
-		var kept, gone []string
-		for _, n := range names {
-			if _, ok := only.Skills[n]; ok {
-				kept = append(kept, n)
-			} else {
+	kept := recordedSubset(only, names, impact)
+	if !slices.Equal(slices.Sorted(slices.Values(kept)), slices.Sorted(slices.Values(run.SkillSubset))) {
+		var gone []string
+		for _, n := range run.SkillSubset {
+			if (own || n != impactSkill) && !slices.Contains(kept, n) {
 				gone = append(gone, n)
 			}
 		}
-		d.log.Warn("re-running without skills that don't exist any more", "skills", strings.Join(gone, ","))
+		if len(gone) > 0 {
+			d.log.Warn("re-running without skills that don't exist any more", "skills", strings.Join(gone, ","))
+		}
 		if err := d.e.Store.SetSkillSubset(ctx, run.ID, kept); err != nil {
 			return nil, fmt.Errorf("record the skills to re-run: %w", err)
 		}
 	}
+	d.partial, d.rerunImpact = true, impact
 	d.keptSources = map[string]string{}
 	for name, src := range base.SkillSources {
 		if _, rerun := only.Skills[name]; !rerun {
@@ -564,6 +654,45 @@ func (d *dispatcher) subset(ctx context.Context, in *inputs.Inputs, mr forge.Cha
 	return only, nil
 }
 
+// splitImpact is names without the linked repositories' check, and whether it
+// was among them.
+func splitImpact(names []string) (rest []string, impact bool) {
+	for _, n := range names {
+		if n == impactSkill {
+			impact = true
+			continue
+		}
+		rest = append(rest, n)
+	}
+	return rest, impact
+}
+
+// carrierSkill is the skill a re-run of the impact check alone runs with: the
+// first by name.
+func carrierSkill(in *inputs.Inputs) (string, bool) {
+	names := slices.Sorted(maps.Keys(in.Skills))
+	if len(names) == 0 {
+		return "", false
+	}
+	return names[0], true
+}
+
+// recordedSubset is the subset a run records: the skills that are in the
+// inputs, in the order they were asked for, and the impact check last when it
+// is part of the run.
+func recordedSubset(only *inputs.Inputs, names []string, impact bool) []string {
+	var out []string
+	for _, n := range names {
+		if _, ok := only.Skills[n]; ok {
+			out = append(out, n)
+		}
+	}
+	if impact {
+		out = append(out, impactSkill)
+	}
+	return out
+}
+
 // keptRun is the run whose results a re-run of some skills keeps, or the
 // reason it can't: it has to be a completed review of the base and head
 // commits this run reviews, by the skills in in, and the skills it keeps (all
@@ -583,7 +712,7 @@ func (d *dispatcher) keptRun(ctx context.Context, in *inputs.Inputs, mr forge.Ch
 	if !found || base.Result == nil {
 		return store.Run{}, "the earlier run or its result is gone", nil
 	}
-	r, err := result.Parse(base.Result)
+	r, err := parsedFor(base, base.Result)
 	switch {
 	case err != nil:
 		return store.Run{}, "the earlier result can't be read", nil
@@ -594,18 +723,8 @@ func (d *dispatcher) keptRun(ctx context.Context, in *inputs.Inputs, mr forge.Ch
 	}
 	// The same skills by name, each once: the earlier skills are kept by
 	// name, so a repeated name would stand in for one that is missing.
-	seen := map[string]bool{}
-	for _, s := range r.Skills {
-		if seen[s.Name] {
-			return store.Run{}, "the earlier result has a skill more than once", nil
-		}
-		seen[s.Name] = true
-		if _, ok := in.Skills[s.Name]; !ok {
-			return store.Run{}, "the skills changed since the earlier result", nil
-		}
-	}
-	if len(seen) != len(in.Skills) {
-		return store.Run{}, "the skills changed since the earlier result", nil
+	if reason := skillsChanged(r, in); reason != "" {
+		return store.Run{}, reason, nil
 	}
 	if base.SkillVersions == nil {
 		return store.Run{}, "a skill changed since the earlier result", nil
@@ -627,6 +746,31 @@ func (d *dispatcher) keptRun(ctx context.Context, in *inputs.Inputs, mr forge.Ch
 		}
 	}
 	return base, "", nil
+}
+
+// skillsChanged says why the skills of the earlier result r are not the skills
+// in in: the same names, each once. The impact check is not a skill of in, so
+// it is left out of the comparison (it may be in r, once).
+func skillsChanged(r *result.Result, in *inputs.Inputs) string {
+	seen := map[string]bool{}
+	skills := 0
+	for _, s := range r.Skills {
+		if seen[s.Name] {
+			return "the earlier result has a skill more than once"
+		}
+		seen[s.Name] = true
+		if r.IsCheck(s.Name) {
+			continue
+		}
+		skills++
+		if _, ok := in.Skills[s.Name]; !ok {
+			return "the skills changed since the earlier result"
+		}
+	}
+	if skills != len(in.Skills) {
+		return "the skills changed since the earlier result"
+	}
+	return ""
 }
 
 // recordChange stores the merge request's title, web address, source branch
@@ -659,13 +803,14 @@ func jobResources(base corev1.ResourceRequirements, memory resource.Quantity) co
 }
 
 // gitHubCloneToken mints the token the Job clones repository project with:
-// scoped to that one repository, contents:read, never stored. It is added to
-// the run's secrets before anything can log it.
-func (d *dispatcher) gitHubCloneToken(ctx context.Context, plat Platform, project store.Project) ([]byte, error) {
+// scoped to that one repository and the linked repositories in linked (all in
+// the same installation), contents:read, never stored. It is added to the
+// run's secrets before anything can log it.
+func (d *dispatcher) gitHubCloneToken(ctx context.Context, plat Platform, project store.Project, linked ...int64) ([]byte, error) {
 	if plat.GitHub == nil || plat.GitHub.App == nil {
 		return nil, fmt.Errorf("no review App for instance %q", project.Instance)
 	}
-	tok, _, err := plat.GitHub.App.CloneToken(ctx, project.InstallationID, project.ProjectID)
+	tok, _, err := plat.GitHub.App.CloneToken(ctx, project.InstallationID, append([]int64{project.ProjectID}, linked...)...)
 	if err != nil {
 		return nil, fmt.Errorf("mint the clone token: %w", err)
 	}

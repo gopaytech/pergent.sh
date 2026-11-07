@@ -93,7 +93,10 @@ func (e *Engine) watch(ctx context.Context, run store.Run, now time.Time) (bool,
 		e.captureLog(ctx, run, log)
 	}
 
-	if obs.Clone > 0 {
+	// The checkout container also clones the linked repositories of a run that
+	// has them: that time is not the repository's, and would lengthen the
+	// deadline of a later review that clones nothing else.
+	if obs.Clone > 0 && len(run.LinkedRepos) == 0 {
 		seconds := int((obs.Clone + time.Second - 1) / time.Second)
 		if err := e.Store.SetCloneSeconds(ctx, run.MR.Instance, run.MR.ProjectID, seconds); err != nil {
 			log.Warn("couldn't record the checkout time", "error", e.redact(err.Error()))

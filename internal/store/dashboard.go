@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -51,17 +53,80 @@ type DashboardRepo struct {
 	// CommentLayout is the shape of the review comment, "block:state" entries
 	// in order (nil: the default layout).
 	CommentLayout []string
+	// LinkedReposEnabled is whether the impact check across linked
+	// repositories is on (nil: the default, off). While it is off the links
+	// are kept and ignored.
+	LinkedReposEnabled *bool
+	// LinkedRepos are the repository's links, at most three, written by
+	// admins only (nil: none). They belong to the repository, not to the
+	// defaults.
+	LinkedRepos []Link
+}
+
+// Link is one linked repository: Target is the other repository's path
+// ("owner/name"), Watched the globs of this repository's files that make the
+// link count (none: every change does) and CanBlock whether a finding on the
+// link may be blocking. It is plain data; the rules for what may link to what
+// live in the links package.
+type Link struct {
+	Target   string   `json:"target"`
+	Watched  []string `json:"watched"`
+	CanBlock bool     `json:"can_block"`
+}
+
+// linksParam is the jsonb value of a list of links; an empty list is NULL.
+// An empty Watched is stored as [], never null.
+func linksParam(ls []Link) (any, error) {
+	if len(ls) == 0 {
+		return nil, nil
+	}
+	out := make([]Link, len(ls))
+	for i, l := range ls {
+		out[i] = l
+		if out[i].Watched == nil {
+			out[i].Watched = []string{}
+		}
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return nil, fmt.Errorf("store: linked repositories: %w", err)
+	}
+	return b, nil
+}
+
+// readLinks decodes a stored jsonb list of links; NULL and an empty list are
+// nil, and so is an empty Watched.
+func readLinks(b []byte) ([]Link, error) {
+	if len(b) == 0 {
+		return nil, nil
+	}
+	var ls []Link
+	if err := json.Unmarshal(b, &ls); err != nil {
+		return nil, fmt.Errorf("store: linked repositories: %w", err)
+	}
+	if len(ls) == 0 {
+		return nil, nil
+	}
+	for i := range ls {
+		if len(ls[i].Watched) == 0 {
+			ls[i].Watched = nil
+		}
+	}
+	return ls, nil
 }
 
 const dashboardRepoColumns = `instance, project, approve, review_drafts, failure_status, skills, repo_skills,
 	job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by, created_at, updated_at,
-	inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout`
+	inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
+	linked_repos_enabled, linked_repos`
 
 func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 	var r DashboardRepo
+	var links []byte
 	err := row.Scan(&r.Instance, &r.Project, &r.Approve, &r.ReviewDrafts, &r.FailureStatus, &r.Skills, &r.RepoSkills,
 		&r.JobTimeoutSeconds, &r.MaxTurns, &r.JobMemory, &r.RerunLimitPerMR, &r.RerunLimitPerRepo, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt,
-		&r.InlineFindings, &r.CommandsAuthorAndMaintainersOnly, &r.IncrementalReviews, &r.LearnFromDismissals, &r.QuietReviews, &r.CommentLayout)
+		&r.InlineFindings, &r.CommandsAuthorAndMaintainersOnly, &r.IncrementalReviews, &r.LearnFromDismissals, &r.QuietReviews, &r.CommentLayout,
+		&r.LinkedReposEnabled, &links)
 	if len(r.Skills) == 0 {
 		r.Skills = nil
 	}
@@ -71,6 +136,10 @@ func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 	if len(r.RepoSkills) == 0 {
 		r.RepoSkills = nil
 	}
+	if err != nil {
+		return r, err
+	}
+	r.LinkedRepos, err = readLinks(links)
 	return r, err
 }
 
@@ -116,6 +185,10 @@ func (s *Store) DashboardRepo(ctx context.Context, instance, project string) (Da
 // nothing is written.
 func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error {
 	skills, repoSkills := nilIfEmpty(r.Skills), nilIfEmpty(r.RepoSkills)
+	links, err := linksParam(r.LinkedRepos)
+	if err != nil {
+		return err
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -126,8 +199,9 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
 			failure_status, skills, repo_skills, job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by,
-			inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+			inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
+			linked_repos_enabled, linked_repos)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb)
 		ON CONFLICT (instance, lower(project)) DO UPDATE SET
 			project = EXCLUDED.project, approve = EXCLUDED.approve, review_drafts = EXCLUDED.review_drafts,
 			failure_status = EXCLUDED.failure_status, skills = EXCLUDED.skills, repo_skills = EXCLUDED.repo_skills,
@@ -138,10 +212,13 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 			incremental_reviews = EXCLUDED.incremental_reviews,
 			learn_from_dismissals = EXCLUDED.learn_from_dismissals,
 			quiet_reviews = EXCLUDED.quiet_reviews,
-			comment_layout = EXCLUDED.comment_layout, updated_at = now()`,
+			comment_layout = EXCLUDED.comment_layout,
+			linked_repos_enabled = EXCLUDED.linked_repos_enabled,
+			linked_repos = EXCLUDED.linked_repos, updated_at = now()`,
 		r.Instance, r.Project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, repoSkills,
 		r.JobTimeoutSeconds, r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy, r.InlineFindings,
-		r.CommandsAuthorAndMaintainersOnly, r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout)); err != nil {
+		r.CommandsAuthorAndMaintainersOnly, r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout),
+		r.LinkedReposEnabled, links); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -162,6 +239,10 @@ func nilIfEmpty(s []string) []string {
 // is written.
 func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (created bool, err error) {
 	skills := nilIfEmpty(r.Skills)
+	links, err := linksParam(r.LinkedRepos)
+	if err != nil {
+		return false, err
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -172,12 +253,14 @@ func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (creat
 	}
 	tag, err := tx.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
 			failure_status, skills, repo_skills, job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by,
-			inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+			inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
+			linked_repos_enabled, linked_repos)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb)
 		ON CONFLICT (instance, lower(project)) DO NOTHING`,
 		r.Instance, r.Project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, nilIfEmpty(r.RepoSkills),
 		r.JobTimeoutSeconds, r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy, r.InlineFindings,
-		r.CommandsAuthorAndMaintainersOnly, r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout))
+		r.CommandsAuthorAndMaintainersOnly, r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout),
+		r.LinkedReposEnabled, links)
 	if err != nil {
 		return false, err
 	}
@@ -211,17 +294,22 @@ func (s *Store) UpdateDashboardRepo(ctx context.Context, instance, project strin
 	}
 	apply(&r)
 	skills := nilIfEmpty(r.Skills)
+	links, err := linksParam(r.LinkedRepos)
+	if err != nil {
+		return false, err
+	}
 	if err := lockNamedSkills(ctx, tx, skills); err != nil {
 		return false, err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE dashboard_repos SET approve = $3, review_drafts = $4, failure_status = $5,
 			skills = $6, repo_skills = $7, job_timeout_seconds = $8, max_turns = $9, job_memory = $10,
 			rerun_limit_per_mr = $11, rerun_limit_per_repo = $12, inline_findings = $13,
-			commands_author_and_maintainers_only = $14, incremental_reviews = $15, learn_from_dismissals = $16, quiet_reviews = $17, comment_layout = $18, updated_at = now()
+			commands_author_and_maintainers_only = $14, incremental_reviews = $15, learn_from_dismissals = $16, quiet_reviews = $17, comment_layout = $18,
+			linked_repos_enabled = $19, linked_repos = $20::jsonb, updated_at = now()
 		WHERE instance = $1 AND lower(project) = lower($2)`,
 		instance, project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, nilIfEmpty(r.RepoSkills), r.JobTimeoutSeconds,
 		r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.InlineFindings, r.CommandsAuthorAndMaintainersOnly,
-		r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout)); err != nil {
+		r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout), r.LinkedReposEnabled, links); err != nil {
 		return false, err
 	}
 	return true, tx.Commit(ctx)

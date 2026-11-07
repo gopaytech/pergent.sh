@@ -852,8 +852,14 @@ func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Ef
 	if err != nil {
 		return RepositoryDetailView{}, err
 	}
-	return RepositoryDetailView{Repo: views[0], Settings: settingViews(repo), Attention: items,
-		Role: se.Role(repo.Instance, repo.Project).String()}, nil
+	role := se.Role(repo.Instance, repo.Project)
+	settingsView := settingViews(repo)
+	if role < RoleAdmin {
+		// The links name other repositories, which someone who may see this
+		// one may not be allowed to see. The setting itself is shown.
+		settingsView["linkedRepos"] = SettingView{Value: []LinkView{}}
+	}
+	return RepositoryDetailView{Repo: views[0], Settings: settingsView, Attention: items, Role: role.String()}, nil
 }
 
 // settingViews is repo's settings as RepositoryDetailView shows them.
@@ -868,6 +874,8 @@ func settingViews(repo settings.Effective) map[string]SettingView {
 		"learnFromDismissals":              {repo.LearnFromDismissals, ov[settings.KeyLearnFromDismissals]},
 		"quietReviews":                     {repo.QuietReviews, ov[settings.KeyQuietReviews]},
 		"commentLayout":                    {layoutText(repo.CommentLayout), ov[settings.KeyCommentLayout]},
+		"linkedReposEnabled":               {repo.LinkedReposEnabled, ov[settings.KeyLinkedReposEnabled]},
+		"linkedRepos":                      {linksView(repo.LinkedRepos), len(repo.LinkedRepos) > 0},
 		"failureStatus":                    {string(repo.FailureStatus), ov[settings.KeyFailureStatus]},
 		"skills":                           {repo.Skills, ov[settings.KeySkills]},
 		"repoSkills":                       {nonNil(repo.RepoSkills), ov[settings.KeyRepoSkills]},

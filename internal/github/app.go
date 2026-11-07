@@ -352,12 +352,17 @@ type cloneScopePerms struct {
 	Contents string `json:"contents"`
 }
 
-// CloneToken mints a token that can only read the contents of repository
-// repoID, for one review Job. It is never cached. A token GitHub grants with
-// anything beyond read access is refused.
-func (a *App) CloneToken(ctx context.Context, installationID, repoID int64) (string, time.Time, error) {
+// CloneToken mints a token that can only read the contents of the
+// repositories repoIDs (all in installation installationID), for one review
+// Job: the checkout and its linked repositories in one call. It is never
+// cached. No repository is an error, and so is a token GitHub grants with
+// anything beyond read access.
+func (a *App) CloneToken(ctx context.Context, installationID int64, repoIDs ...int64) (string, time.Time, error) {
+	if len(repoIDs) == 0 {
+		return "", time.Time{}, errors.New("github: clone token: no repository")
+	}
 	t, err := a.mint(ctx, installationID, cloneScope{
-		RepositoryIDs: []int64{repoID},
+		RepositoryIDs: repoIDs,
 		Permissions:   cloneScopePerms{Contents: "read"},
 	})
 	if err != nil {

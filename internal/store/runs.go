@@ -111,6 +111,11 @@ type Run struct {
 	// (SetRunLayout); nil is the default layout, for a run from before the
 	// column or one that never started.
 	CommentLayout []string
+	// LinkedRepos are the links the run was started with, recorded when it
+	// started (SetRunLinks): those the change matched, with the feature on.
+	// Nil is none, for a run from before the column or one that never
+	// started.
+	LinkedRepos []Link
 }
 
 // How a run came to be (Run.Trigger).
@@ -182,7 +187,8 @@ const runColumns = `id::text, instance, project_id, mr_iid, project_path, head_s
 	created_at, dispatched_at, reported_at, not_before, cleaned_up,
 	title, web_url, source_branch, author, model, skill_sources,
 	outcome, outcome_reason, decision_status, approved, trigger, skill_subset, base_run_id::text,
-	skill_versions, skip_reason, max_turns, incremental, skill_hashes, quiet_reviews, comment_layout`
+	skill_versions, skip_reason, max_turns, incremental, skill_hashes, quiet_reviews, comment_layout,
+	linked_repos`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var (
@@ -190,6 +196,7 @@ func scanRun(row pgx.Row) (Run, error) {
 		state                                string
 		tokenExp, dispatched, rep, notBefore *time.Time
 		sources, versions, hashes            []byte
+		links                                []byte
 		quiet                                *bool // NULL is off
 	)
 	err := row.Scan(&r.ID, &r.MR.Instance, &r.MR.ProjectID, &r.MR.IID, &r.ProjectPath, &r.HeadSHA, &r.BaseSHA, &r.StartSHA,
@@ -197,7 +204,7 @@ func scanRun(row pgx.Row) (Run, error) {
 		&r.CreatedAt, &dispatched, &rep, &notBefore, &r.CleanedUp,
 		&r.Title, &r.WebURL, &r.SourceBranch, &r.Author, &r.Model, &sources,
 		&r.Outcome, &r.OutcomeReason, &r.DecisionStatus, &r.Approved, &r.Trigger, &r.SkillSubset, &r.BaseRunID,
-		&versions, &r.SkipReason, &r.MaxTurns, &r.Incremental, &hashes, &quiet, &r.CommentLayout)
+		&versions, &r.SkipReason, &r.MaxTurns, &r.Incremental, &hashes, &quiet, &r.CommentLayout, &links)
 	if err != nil {
 		return Run{}, err
 	}
@@ -219,6 +226,9 @@ func scanRun(row pgx.Row) (Run, error) {
 	r.Quiet = quiet != nil && *quiet
 	if len(r.CommentLayout) == 0 {
 		r.CommentLayout = nil
+	}
+	if r.LinkedRepos, err = readLinks(links); err != nil {
+		return Run{}, fmt.Errorf("run %s: %w", r.ID, err)
 	}
 	r.State = RunState(state)
 	r.TokenExpiresAt = deref(tokenExp)
@@ -897,6 +907,17 @@ func (s *Store) SetRunQuiet(ctx context.Context, runID string, quiet bool) error
 func (s *Store) SetRunLayout(ctx context.Context, runID string, layout []string) error {
 	return s.mustUpdate(ctx, runID, `UPDATE runs SET comment_layout = $2
 		WHERE id = $1::uuid AND state IN ('queued', 'running')`, runID, nilIfEmpty(layout))
+}
+
+// SetRunLinks records the links a run being dispatched (queued or running)
+// uses; nil or an empty list is none. Any other run is an error.
+func (s *Store) SetRunLinks(ctx context.Context, runID string, links []Link) error {
+	v, err := linksParam(links)
+	if err != nil {
+		return err
+	}
+	return s.mustUpdate(ctx, runID, `UPDATE runs SET linked_repos = $2::jsonb
+		WHERE id = $1::uuid AND state IN ('queued', 'running')`, runID, v)
 }
 
 // ReportFailure records that a queued or running run will never produce a

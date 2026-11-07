@@ -48,6 +48,10 @@ type Skill struct {
 	Reviewed   map[string]bool // files it reviewed, carried ones too
 	LeftOut    bool            // it wrote a "Left out because of past dismissals:" note the review before did not carry
 	Findings   []Finding
+	// Whole is a skill that looked at the whole change and lists no file (the
+	// linked repositories' check): when it finished, a finding it stopped
+	// reporting counts as not reported, whatever file it was on.
+	Whole bool
 }
 
 // Review is a decided review at Head.
@@ -318,7 +322,7 @@ func (w *walk) vanished(t *track) error {
 	// A file renamed since the finding was reported is reviewed under its new
 	// name. A deleted file is never reviewed, and its findings are gone.
 	moved := t.file
-	if !w.s.Reviewed[t.file] {
+	if !w.s.Reviewed[t.file] && !w.s.Whole {
 		if t.head == w.r.Head {
 			return nil
 		}

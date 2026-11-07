@@ -270,6 +270,11 @@ func (f *Forge) IsBot(ctx context.Context, userID int64) (bool, error) {
 	return bot, mapErr(err)
 }
 
+// Visibility is not supported on GitLab: linked repositories are GitHub only.
+func (f *Forge) Visibility(context.Context, string) (forge.Visibility, error) {
+	return "", forge.ErrUnsupported
+}
+
 // Comment reads a note of merge request iid back from GitLab.
 func (f *Forge) Comment(ctx context.Context, projectID, iid, noteID int64) (forge.Comment, error) {
 	n, err := f.c.GetNote(ctx, projectID, iid, noteID)

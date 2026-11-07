@@ -31,6 +31,9 @@ type Launcher struct {
 // deleted and the original error returned.
 func (l *Launcher) Launch(ctx context.Context, p JobParams, s Secrets) error {
 	p.Namespace = l.Namespace
+	if err := checkLinkedClones(p.LinkedClones); err != nil {
+		return err
+	}
 
 	job := BuildJob(p)
 	job.Spec.Suspend = ptr(true)

@@ -11,10 +11,37 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/settings"
 )
 
-// pastDismissals is the JSON of what people rejected, for the skills in, and
-// how many entries each skill has; nil when there is none. A failure only
-// logs: the review runs without it.
-func (d *dispatcher) pastDismissals(ctx context.Context, repo settings.Effective, in *inputs.Inputs, authorID int64) ([]byte, map[string]int) {
+// dismissalSkills are the skills a review is told past dismissals for: those
+// it runs, sorted, and the linked repositories' check when the run has one.
+// The check is no skill of the library, so it is not in in.Skills.
+func dismissalSkills(in *inputs.Inputs, withImpact bool) []string {
+	skills := make([]string, 0, len(in.Skills)+1)
+	for name := range in.Skills {
+		skills = append(skills, name)
+	}
+	if withImpact && !slices.Contains(skills, impactSkill) {
+		skills = append(skills, impactSkill)
+	}
+	slices.Sort(skills)
+	return skills
+}
+
+// mayLink is whether this run may have linked repositories, judged before the
+// plan is made (the plan needs the inputs this step helps size): the setting
+// is on, there are links, the platform is GitHub and the run is not a re-run
+// of other skills. The plan can still match nothing.
+func (d *dispatcher) mayLink(plat Platform, repo settings.Effective) bool {
+	if !repo.LinkedReposEnabled || len(repo.LinkedRepos) == 0 || !plat.isGitHub() {
+		return false
+	}
+	return !d.partial || d.rerunImpact
+}
+
+// pastDismissals is the JSON of what people rejected, for the skills in (and
+// the linked repositories' check when withImpact), and how many entries each
+// skill has; nil when there is none. A failure only logs: the review runs
+// without it.
+func (d *dispatcher) pastDismissals(ctx context.Context, repo settings.Effective, in *inputs.Inputs, authorID int64, withImpact bool) ([]byte, map[string]int) {
 	if !repo.LearnFromDismissals {
 		return nil, nil
 	}
@@ -25,11 +52,7 @@ func (d *dispatcher) pastDismissals(ctx context.Context, repo settings.Effective
 		d.log.Warn("reviewing without past dismissals: they can't be read", "error", err)
 		return nil, nil
 	}
-	skills := make([]string, 0, len(in.Skills))
-	for name := range in.Skills {
-		skills = append(skills, name)
-	}
-	slices.Sort(skills)
+	skills := dismissalSkills(in, withImpact)
 	// Both redactions: the engine's removes the LLM keys, the dispatcher's
 	// whatever secrets the run holds by now. That is the clone token on GitLab;
 	// on GitHub it is minted later, and the result token is minted later on

@@ -1297,3 +1297,124 @@ func TestGetChangeAuthorIsBot(t *testing.T) {
 		}
 	}
 }
+
+// internal is told from private, which GitHub's private flag alone can't do.
+// A repository the App can't read, and one whose visibility GitHub leaves out
+// or contradicts, is an error and never public.
+func TestGitHubVisibility(t *testing.T) {
+	f := newFake(t)
+	for _, name := range []string{"open", "inside", "closed", "unsaid", "unsaid-open", "odd", "mismatch-open", "mismatch-closed", "hidden", "broken"} {
+		f.reply("GET", "/repos/acme/"+name+"/installation", 200, map[string]any{"id": installationID})
+	}
+	f.reply("GET", "/repos/acme/open", 200, map[string]any{"private": false, "visibility": "public"})
+	f.reply("GET", "/repos/acme/inside", 200, map[string]any{"private": true, "visibility": "internal"})
+	f.reply("GET", "/repos/acme/closed", 200, map[string]any{"private": true, "visibility": "private"})
+	// No visibility field, however the private flag reads.
+	f.reply("GET", "/repos/acme/unsaid", 200, map[string]any{"private": true})
+	f.reply("GET", "/repos/acme/unsaid-open", 200, map[string]any{"private": false})
+	f.reply("GET", "/repos/acme/odd", 200, map[string]any{"private": false, "visibility": "secret"})
+	f.reply("GET", "/repos/acme/mismatch-open", 200, map[string]any{"private": true, "visibility": "public"})
+	f.reply("GET", "/repos/acme/mismatch-closed", 200, map[string]any{"private": false, "visibility": "private"})
+	f.reply("GET", "/repos/acme/hidden", 404, map[string]string{"message": "Not Found"})
+	f.reply("GET", "/repos/acme/broken", 500, map[string]string{"message": "boom"})
+	// acme/other has no installation route: the App isn't installed there.
+	g := f.forgeWithoutRepos(t)
+
+	for repo, want := range map[string]forge.Visibility{
+		"acme/open":   forge.VisPublic,
+		"acme/inside": forge.VisInternal,
+		"acme/closed": forge.VisPrivate,
+	} {
+		got, err := g.Visibility(ctx, repo)
+		if err != nil || got != want {
+			t.Errorf("Visibility(%s) = %q, %v; want %q", repo, got, err, want)
+		}
+	}
+	for _, repo := range []string{"acme/unsaid", "acme/unsaid-open", "acme/odd", "acme/mismatch-open", "acme/mismatch-closed", "acme/hidden", "acme/broken", "acme/other", "acme", "", "acme/a/b"} {
+		got, err := g.Visibility(ctx, repo)
+		if err == nil || got != "" {
+			t.Errorf("Visibility(%q) = %q, %v; want an error and no visibility", repo, got, err)
+		}
+	}
+	// A repository the App can't read says so.
+	for _, repo := range []string{"acme/hidden", "acme/other", "acme"} {
+		if _, err := g.Visibility(ctx, repo); !errors.Is(err, forge.ErrSourceNotFound) {
+			t.Errorf("Visibility(%q) = %v; want ErrSourceNotFound", repo, err)
+		}
+	}
+	// It is read with the installation's token.
+	for _, r := range f.requests("GET", "/repos/acme/inside") {
+		if r.Auth != "Bearer "+installToken {
+			t.Errorf("repository read with %q; want the installation's token", r.Auth)
+		}
+	}
+}
+
+// A linked repository's ID and installation come from GitHub, not from a
+// stored row (a repository nobody switched on has none).
+func TestLinkTarget(t *testing.T) {
+	f := newFake(t)
+	for _, name := range []string{"api", "noid", "hidden", "broken"} {
+		f.reply("GET", "/repos/acme/"+name+"/installation", 200, map[string]any{"id": installationID})
+	}
+	f.reply("GET", "/repos/acme/api", 200, map[string]any{"id": 4242, "private": false, "visibility": "public"})
+	f.reply("GET", "/repos/acme/noid", 200, map[string]any{"private": false, "visibility": "public"})
+	f.reply("GET", "/repos/acme/hidden", 404, map[string]string{"message": "Not Found"})
+	f.reply("GET", "/repos/acme/broken", 500, map[string]string{"message": "boom"})
+	g := f.forgeWithoutRepos(t)
+
+	got, err := g.LinkTarget(ctx, "acme/api")
+	if err != nil || got != (Target{RepoID: 4242, InstallationID: installationID}) {
+		t.Fatalf("LinkTarget(acme/api) = %+v, %v", got, err)
+	}
+	for _, repo := range []string{"acme/noid", "acme/hidden", "acme/broken", "acme/other", "acme", "acme/a/b"} {
+		if got, err := g.LinkTarget(ctx, repo); err == nil || got != (Target{}) {
+			t.Errorf("LinkTarget(%q) = %+v, %v; want an error", repo, got, err)
+		}
+	}
+	for _, repo := range []string{"acme/hidden", "acme/other", "acme"} {
+		if _, err := g.LinkTarget(ctx, repo); !errors.Is(err, forge.ErrSourceNotFound) {
+			t.Errorf("LinkTarget(%q) = %v; want ErrSourceNotFound", repo, err)
+		}
+	}
+}
+
+// LinkInfo is Visibility and the installation in one lookup and one read, with
+// Visibility's rules: nothing that GitHub left out or contradicts is public.
+func TestLinkInfo(t *testing.T) {
+	f := newFake(t)
+	for _, name := range []string{"open", "closed", "unsaid", "mismatch", "hidden", "broken"} {
+		f.reply("GET", "/repos/acme/"+name+"/installation", 200, map[string]any{"id": installationID})
+	}
+	f.reply("GET", "/repos/acme/open", 200, map[string]any{"private": false, "visibility": "public"})
+	f.reply("GET", "/repos/acme/closed", 200, map[string]any{"private": true, "visibility": "private"})
+	f.reply("GET", "/repos/acme/unsaid", 200, map[string]any{"private": false})
+	f.reply("GET", "/repos/acme/mismatch", 200, map[string]any{"private": true, "visibility": "public"})
+	f.reply("GET", "/repos/acme/hidden", 404, map[string]string{"message": "Not Found"})
+	f.reply("GET", "/repos/acme/broken", 500, map[string]string{"message": "boom"})
+	g := f.forgeWithoutRepos(t)
+
+	for repo, want := range map[string]forge.Visibility{"acme/open": forge.VisPublic, "acme/closed": forge.VisPrivate} {
+		v, id, err := g.LinkInfo(ctx, repo)
+		if err != nil || v != want || id != installationID {
+			t.Errorf("LinkInfo(%s) = %q, %d, %v; want %q, %d", repo, v, id, err, want, installationID)
+		}
+	}
+	for _, repo := range []string{"acme/unsaid", "acme/mismatch", "acme/hidden", "acme/broken", "acme/other", "acme", "", "acme/a/b"} {
+		if v, id, err := g.LinkInfo(ctx, repo); err == nil || v != "" || id != 0 {
+			t.Errorf("LinkInfo(%q) = %q, %d, %v; want an error and nothing else", repo, v, id, err)
+		}
+	}
+	for _, repo := range []string{"acme/hidden", "acme/other", "acme"} {
+		if _, _, err := g.LinkInfo(ctx, repo); !errors.Is(err, forge.ErrSourceNotFound) {
+			t.Errorf("LinkInfo(%q) = %v; want ErrSourceNotFound", repo, err)
+		}
+	}
+	// One lookup of the installation and one read of the repository each.
+	if n := len(f.requests("GET", "/repos/acme/open/installation")); n != 1 {
+		t.Errorf("%d installation lookups for acme/open; want 1", n)
+	}
+	if n := len(f.requests("GET", "/repos/acme/open")); n != 1 {
+		t.Errorf("%d reads of acme/open; want 1", n)
+	}
+}

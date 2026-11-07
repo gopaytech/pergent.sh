@@ -1054,7 +1054,7 @@ func TestDefaultsViewConfigAndPinned(t *testing.T) {
 	if v.Config.MaxTurns != 40 || v.Config.FailureStatus != "failed" || !v.Config.Approve || v.Config.RerunLimitPerMR != 10 || v.Config.JobMemory != "" {
 		t.Errorf("config values = %+v", v.Config)
 	}
-	for _, k := range []string{"approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews", "commentLayout", "failureStatus", "jobTimeoutSeconds", "maxTurns", "jobMemory", "rerunLimitPerMR", "rerunLimitPerRepo"} {
+	for _, k := range []string{"approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews", "commentLayout", "linkedReposEnabled", "failureStatus", "jobTimeoutSeconds", "maxTurns", "jobMemory", "rerunLimitPerMR", "rerunLimitPerRepo"} {
 		if _, ok := v.Pinned[k]; !ok {
 			t.Errorf("pinned has no %q: %v", k, v.Pinned)
 		}
@@ -1707,8 +1707,8 @@ func TestPutDefaultsCommentLayout(t *testing.T) {
 // A default is pinned when the dashboard stored a value for it, and only then.
 func TestPinnedDefaults(t *testing.T) {
 	none := pinnedDefaults(store.RepoDefaults{})
-	if len(none) != 14 {
-		t.Errorf("pinned = %v; want the fourteen keys", none)
+	if len(none) != 15 {
+		t.Errorf("pinned = %v; want the fifteen keys", none)
 	}
 	for k, v := range none {
 		if v {
@@ -1733,10 +1733,13 @@ func TestPinnedDefaults(t *testing.T) {
 	if !pinnedDefaults(store.RepoDefaults{QuietReviews: ptr(true)})["quietReviews"] {
 		t.Errorf("quietReviews not pinned when stored")
 	}
+	if !pinnedDefaults(store.RepoDefaults{LinkedReposEnabled: ptr(true)})["linkedReposEnabled"] {
+		t.Errorf("linkedReposEnabled not pinned when stored")
+	}
 	if !pinnedDefaults(store.RepoDefaults{CommentLayout: []string{"findings:open"}})["commentLayout"] {
 		t.Errorf("commentLayout not pinned when stored")
 	}
-	for _, k := range []string{"reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews", "commentLayout", "failureStatus", "maxTurns", "rerunLimitPerMR"} {
+	for _, k := range []string{"reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews", "commentLayout", "linkedReposEnabled", "failureStatus", "maxTurns", "rerunLimitPerMR"} {
 		if got[k] {
 			t.Errorf("%s pinned: %v", k, got)
 		}

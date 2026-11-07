@@ -4,6 +4,7 @@ import type {
   DefaultsView,
   InstanceAdminView,
   LibrarySkill,
+  LinkableView,
   LLMAdminView,
   Me,
   OverviewView,
@@ -230,6 +231,36 @@ export const repoWidgets: RepositoryView = {
   health: "ok",
 };
 
+// A GitHub repository switched on in the dashboard: the one that links.
+export const repoGadgets: RepositoryView = {
+  instance: "hub",
+  project: "acme/gadgets",
+  platform: "github",
+  source: "dashboard",
+  on: true,
+  last7: { reviews: 5, approved: 4, failed: 0 },
+  health: "ok",
+};
+
+// What GET /api/admin/linkable says for acme/gadgets: one that is linkable,
+// one that is not read yet, and two the rules refuse, each with its reason.
+export const linkable: LinkableView = {
+  items: [
+    { repo: "acme/api", visibility: "public", checked: true, linkable: true, reason: "" },
+    { repo: "acme/lib", visibility: "internal", checked: true, linkable: true, reason: "" },
+    { repo: "acme/slow", visibility: "", checked: false, linkable: true, reason: "not checked yet; it is checked when you save" },
+    {
+      repo: "acme/other-app",
+      visibility: "public",
+      checked: true,
+      linkable: false,
+      reason: "it is in another installation of the review App, and a review's token covers one installation",
+    },
+    { repo: "acme/ghost", visibility: "", checked: true, linkable: false, reason: "the pergent review App can't read it" },
+  ],
+  truncated: false,
+};
+
 // The layout the server sends while a repository sets none.
 export const builtInLayout = ["summary:open", "findings:collapsed", "dismissed:collapsed", "checks:open", "files:collapsed"];
 
@@ -244,6 +275,8 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
     incrementalReviews: { value: true, overridden: false },
     learnFromDismissals: { value: true, overridden: false },
     quietReviews: { value: false, overridden: false },
+    linkedReposEnabled: { value: false, overridden: false },
+    linkedRepos: { value: [], overridden: false },
     commentLayout: { value: builtInLayout, overridden: false },
     failureStatus: { value: "failed", overridden: false },
     skills: { value: null, overridden: false },
@@ -425,6 +458,7 @@ export const defaults: DefaultsView = {
   incrementalReviews: true,
   learnFromDismissals: true,
   quietReviews: false,
+  linkedReposEnabled: false,
   commentLayout: builtInLayout,
   failureStatus: "failed",
   jobTimeoutSeconds: 600,
@@ -442,6 +476,7 @@ export const defaults: DefaultsView = {
     incrementalReviews: true,
     learnFromDismissals: true,
     quietReviews: false,
+    linkedReposEnabled: false,
     commentLayout: builtInLayout,
     failureStatus: "failed",
     jobTimeoutSeconds: 600,

@@ -54,7 +54,7 @@ const (
 	msgAlreadyOn      = "this repository is switched on already"
 	msgWriteFailed    = "could not save the change, please try again"
 	msgBadProjectBody = `the body must be {"project": "<path>"}`
-	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, commentLayout, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"
+	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, commentLayout, linkedReposEnabled, linkedRepos, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"
 	msgNameInstance   = `name the instance: {"instance": "<name>", "project": "<path>"}`
 	msgNeedsAdminCaps = "only admins can change its re-run caps"
 	msgNeedsRole      = "only maintainers of this repository and admins can change its settings"
@@ -72,6 +72,7 @@ var (
 // are for its maintainers and admins (403 otherwise).
 func (d *Dashboard) writeRoutes(mux *http.ServeMux) {
 	d.adminRoute(mux, "GET /api/repositories/available", d.available)
+	d.adminRoute(mux, "GET /api/admin/linkable", d.linkable)
 	d.adminRoute(mux, "POST /api/repositories", d.switchOn)
 	d.adminRoute(mux, "DELETE /api/repositories/{instance}/{rest...}", d.switchOff)
 	mux.Handle("PUT /api/repositories/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.repositoryPut)))
@@ -428,6 +429,22 @@ func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, msgNeedsAdminCaps)
 		return
 	}
+	// So are the linked repositories: a link lets a review read another
+	// repository and quote it here.
+	if slices.ContainsFunc(keys, isLinkedKey) && session(r).Role(repo.Instance, repo.Project) < RoleAdmin {
+		writeError(w, http.StatusForbidden, msgNeedsAdminLinks)
+		return
+	}
+	// The rules for links that need the platform run before the save; a link
+	// that fails them is never stored.
+	if slices.Contains(keys, "linkedRepos") {
+		var probe store.DashboardRepo
+		edit(&probe)
+		if p := d.checkLinks(r.Context(), repo, probe.LinkedRepos); p != nil {
+			writeError(w, p.status, p.msg)
+			return
+		}
+	}
 	// The library skills the list names must fit a review (D6). The check
 	// reads the library now; a skill that goes before the save is named by
 	// the save.
@@ -461,6 +478,7 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 		row.Skills, row.RepoSkills, row.JobTimeoutSeconds, row.MaxTurns, row.JobMemory = nil, nil, nil, nil, nil
 		if admin {
 			row.RerunLimitPerMR, row.RerunLimitPerRepo = nil, nil
+			row.LinkedReposEnabled, row.LinkedRepos = nil, nil
 		}
 	}, "settings reset", "settings_reset", "")
 }
@@ -529,10 +547,12 @@ func (d *Dashboard) parseSettings(r *http.Request) (func(*store.DashboardRepo), 
 		var edit func(*store.DashboardRepo)
 		var msg string
 		switch key {
-		case "approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews":
+		case "approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews", "linkedReposEnabled":
 			edit, msg = boolSetting(key, raw, null)
 		case "commentLayout":
 			edit, msg = commentLayoutSetting(raw, null, msgBadSettings)
+		case "linkedRepos":
+			edit, msg = linkedReposSetting(raw, null)
 		case "failureStatus":
 			edit, msg = failureStatusSetting(raw, null)
 		case "skills":
@@ -574,6 +594,7 @@ var boolSettings = map[string]func(row *store.DashboardRepo, v *bool){
 	"incrementalReviews":               func(row *store.DashboardRepo, v *bool) { row.IncrementalReviews = v },
 	"learnFromDismissals":              func(row *store.DashboardRepo, v *bool) { row.LearnFromDismissals = v },
 	"quietReviews":                     func(row *store.DashboardRepo, v *bool) { row.QuietReviews = v },
+	"linkedReposEnabled":               func(row *store.DashboardRepo, v *bool) { row.LinkedReposEnabled = v },
 }
 
 // boolSetting reads the setting key, one of boolSettings, as true, false or

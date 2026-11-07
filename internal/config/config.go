@@ -19,6 +19,9 @@ import (
 	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+
+	"github.com/gopaytech/pergent.sh/internal/links"
+	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
 const (
@@ -205,6 +208,13 @@ type Repository struct {
 	// CommentLayout is the shape of the review comment, "block:state" entries
 	// in order, checked by render.ParseLayout (nil: the default layout).
 	CommentLayout []string
+	// LinkedReposEnabled is whether the impact check across linked
+	// repositories is on (default false). While it is off the links are kept
+	// and ignored.
+	LinkedReposEnabled *bool
+	// LinkedRepos are the repository's links (GitHub only, at most 3), checked
+	// by links.Validate. nil and an empty list both mean no links.
+	LinkedRepos []store.Link
 	// JobTimeout replaces jobs.timeout for this repository.
 	JobTimeout *time.Duration
 	// JobMemory replaces the memory limit of jobs.resources.limits.
@@ -280,6 +290,16 @@ type fileRepository struct {
 	QuietReviews                     *bool `yaml:"quiet_reviews"`
 
 	CommentLayout LayoutEntries `yaml:"comment_layout"`
+
+	LinkedReposEnabled *bool      `yaml:"linked_repos_enabled"`
+	LinkedRepos        []fileLink `yaml:"linked_repos"`
+}
+
+// fileLink is one entry of linked_repos. can_block is true when left out.
+type fileLink struct {
+	Target   string   `yaml:"target"`
+	Watched  []string `yaml:"watched"`
+	CanBlock *bool    `yaml:"can_block"`
 }
 
 func (f fileRepository) repository() Repository {
@@ -295,6 +315,13 @@ func (f fileRepository) repository() Repository {
 		LearnFromDismissals:              f.LearnFromDismissals,
 		QuietReviews:                     f.QuietReviews,
 		CommentLayout:                    []string(f.CommentLayout),
+		LinkedReposEnabled:               f.LinkedReposEnabled,
+	}
+	if f.LinkedRepos != nil {
+		r.LinkedRepos = make([]store.Link, 0, len(f.LinkedRepos))
+		for _, l := range f.LinkedRepos {
+			r.LinkedRepos = append(r.LinkedRepos, store.Link{Target: l.Target, Watched: l.Watched, CanBlock: l.CanBlock == nil || *l.CanBlock})
+		}
 	}
 	if f.JobTimeout != nil {
 		d := time.Duration(*f.JobTimeout)
@@ -633,6 +660,16 @@ func (c *Config) Validate() error {
 		if repo.CommentLayout != nil {
 			if _, err := render.ParseLayout(repo.CommentLayout); err != nil {
 				add("repositories[%d] (%s): comment_layout: %v", i, repo.Project, err)
+			}
+		}
+		// linked_repos is GitHub only; its links must pass links.Validate.
+		// An empty list written out is allowed and means no links.
+		switch {
+		case len(repo.LinkedRepos) > 0 && platform != PlatformGitHub:
+			add("repositories[%d] (%s): linked_repos is supported on GitHub only", i, repo.Project)
+		case len(repo.LinkedRepos) > 0:
+			if err := links.Validate(repo.Project, repo.LinkedRepos); err != nil {
+				add("repositories[%d] (%s): linked_repos: %v", i, repo.Project, err)
 			}
 		}
 		if n := repo.MaxTurns; n != nil && (*n < MinMaxTurns || *n > MaxMaxTurns) {

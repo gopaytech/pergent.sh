@@ -274,7 +274,7 @@ func fatesInput(runs []store.Run, ds []store.Dismissal) fates.Input {
 		if run.Result == nil {
 			continue
 		}
-		r, err := result.Parse(run.Result)
+		r, err := parsedFor(run, run.Result)
 		if err != nil || r.Status != "completed" {
 			continue
 		}
@@ -285,6 +285,11 @@ func fatesInput(runs []store.Run, ds []store.Dismissal) fates.Input {
 				Hash:     run.SkillHashes[s.Name],
 				Failed:   s.Verdict == "failed",
 				Reviewed: map[string]bool{},
+				// The linked repositories' check lists no file: it read the
+				// change against other repositories. When it finished, what it
+				// does not report is gone; when it failed or did not run, the
+				// finding stays as it was (Failed, or no review of the skill).
+				Whole: r.IsCheck(s.Name),
 			}
 			for _, p := range s.Files.Reviewed {
 				skill.Reviewed[p] = true

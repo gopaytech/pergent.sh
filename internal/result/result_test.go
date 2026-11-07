@@ -473,7 +473,7 @@ func incResult(t *testing.T, head string, skills ...Skill) []byte {
 
 func mergeIncremental(t *testing.T, partial, base []byte) *Result {
 	t.Helper()
-	out, err := MergeIncremental(partial, base, fromSHA)
+	out, err := MergeIncremental(partial, base, fromSHA, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -772,7 +772,7 @@ func TestMergeIncrementalSkillsArePartials(t *testing.T) {
 		Skill{Name: "sec", Verdict: "no_blocking_issues", Files: Files{Reviewed: []string{}, Carried: []string{"k.go"}}})
 	partial = []byte(strings.Replace(string(partial), `"name":"fresh"`, `"name":"fresh","tokens":{"input":7}`, 1))
 
-	out, err := MergeIncremental(partial, base, fromSHA)
+	out, err := MergeIncremental(partial, base, fromSHA, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -809,7 +809,7 @@ func TestMergeIncrementalRefuses(t *testing.T) {
 	partial := incResult(t, "h", Skill{Name: "sec", Verdict: "no_blocking_issues", Files: Files{Reviewed: []string{}, Carried: []string{"k.go"}}})
 	errorResult := []byte(`{"schema_version":1,"status":"error","base":"b","head":"h","comment":{"markdown":"x"}}`)
 
-	if _, err := MergeIncremental(partial, good, fromSHA); err != nil {
+	if _, err := MergeIncremental(partial, good, fromSHA, false); err != nil {
 		t.Fatalf("a good merge failed: %v", err)
 	}
 	for name, base := range map[string][]byte{
@@ -819,11 +819,11 @@ func TestMergeIncrementalRefuses(t *testing.T) {
 		"empty":         nil,
 		"wrong version": []byte(`{"schema_version":9}`),
 	} {
-		if _, err := MergeIncremental(partial, base, fromSHA); err == nil {
+		if _, err := MergeIncremental(partial, base, fromSHA, false); err == nil {
 			t.Errorf("%s: merged", name)
 		}
 	}
-	if _, err := MergeIncremental(errorResult, good, fromSHA); err == nil {
+	if _, err := MergeIncremental(errorResult, good, fromSHA, false); err == nil {
 		t.Error("an error result was merged")
 	}
 
@@ -835,17 +835,17 @@ func TestMergeIncrementalRefuses(t *testing.T) {
 		"carries a file the base did not review":     carrying("sec", "never.go"),
 		"carries a file with a skill the base lacks": carrying("new", "k.go"),
 	} {
-		if _, err := MergeIncremental(p, good, fromSHA); err == nil {
+		if _, err := MergeIncremental(p, good, fromSHA, false); err == nil {
 			t.Errorf("%s: merged", name)
 		}
 	}
 	// The base listed the file as skipped, which is not reviewed.
 	skipped := incResult(t, fromSHA, Skill{Name: "sec", Verdict: "no_blocking_issues",
 		Files: Files{Reviewed: []string{}, Skipped: []Skipped{{Path: "k.go", Rule: "lockfile"}}}})
-	if _, err := MergeIncremental(carrying("sec", "k.go"), skipped, fromSHA); err == nil {
+	if _, err := MergeIncremental(carrying("sec", "k.go"), skipped, fromSHA, false); err == nil {
 		t.Error("carries a skipped file: merged")
 	}
-	if _, err := MergeIncremental([]byte(`nope`), good, fromSHA); err == nil {
+	if _, err := MergeIncremental([]byte(`nope`), good, fromSHA, false); err == nil {
 		t.Error("a malformed partial was merged")
 	}
 }
@@ -961,7 +961,7 @@ func TestMergeIncrementalKeepsUndeclaredFields(t *testing.T) {
 	partial := incResult(t, "h", Skill{Name: "sec", Verdict: "no_blocking_issues", Batches: 1, Files: Files{Reviewed: []string{"n.go"}, Carried: []string{"k.go"}}})
 	partial = []byte(strings.Replace(string(partial), `"name":"sec"`, `"name":"sec","tokens":{"input":7}`, 1))
 
-	out, err := MergeIncremental(partial, base, fromSHA)
+	out, err := MergeIncremental(partial, base, fromSHA, false)
 	if err != nil {
 		t.Fatal(err)
 	}

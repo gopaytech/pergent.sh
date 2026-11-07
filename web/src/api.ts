@@ -200,6 +200,26 @@ export type RepositoryView = {
 
 export type SettingView<T> = { value: T; overridden: boolean };
 
+// Link is one link of a repository to another, for the impact check across
+// repositories. watched are globs of changed files; none means every change.
+// canBlock off makes every finding of the link a suggestion.
+export type Link = { target: string; watched: string[]; canBlock: boolean };
+
+// LinkableRepo is a repository the review App reaches, and whether the
+// repository being edited may link it. checked false means the rules were not
+// applied yet (the reads ran out of time, or one failed): linkable is then
+// true and the save checks it. reason says in words why it cannot be linked.
+export type LinkableRepo = {
+  repo: string;
+  visibility: "" | "public" | "internal" | "private";
+  checked: boolean;
+  linkable: boolean;
+  reason: string;
+};
+
+// LinkableView is GET /api/admin/linkable: 200 repositories at most, by name.
+export type LinkableView = { items: LinkableRepo[]; truncated: boolean };
+
 export type RepoSettings = {
   approve: SettingView<boolean>;
   reviewDrafts: SettingView<boolean>;
@@ -208,6 +228,11 @@ export type RepoSettings = {
   incrementalReviews: SettingView<boolean>;
   learnFromDismissals: SettingView<boolean>;
   quietReviews: SettingView<boolean>;
+  // linkedReposEnabled is the impact check across linked repositories: off
+  // unless set. linkedRepos are the links, kept while it is off; only an
+  // admin gets them (an empty list for anyone else).
+  linkedReposEnabled: SettingView<boolean>;
+  linkedRepos: SettingView<Link[]>;
   // commentLayout is the comment's blocks as "block:state" entries in order:
   // the default in effect (the admin default, else the built-in layout) while
   // overridden is false.
@@ -336,6 +361,9 @@ export type SettingsUpdate = Partial<{
   incrementalReviews: boolean | null;
   learnFromDismissals: boolean | null;
   quietReviews: boolean | null;
+  // Admins only: the server refuses a maintainer's save that carries either.
+  linkedReposEnabled: boolean | null;
+  linkedRepos: Link[] | null;
   commentLayout: string[] | null;
   failureStatus: string | null;
   skills: string[] | null;
@@ -482,6 +510,9 @@ export type DefaultValues = {
   incrementalReviews: boolean;
   learnFromDismissals: boolean;
   quietReviews: boolean;
+  // Whether a repository that sets none has the impact check across its
+  // linked repositories on. Links are per repository.
+  linkedReposEnabled: boolean;
   // The comment's blocks as "block:state" entries in order; the built-in
   // layout until one is saved.
   commentLayout: string[];
@@ -809,6 +840,13 @@ export const paths = {
     `/api/repositories/${seg(instance)}/${proj(project)}/readiness/scan`,
   apiRepoReset: (instance: string, project: string) =>
     `/api/repositories/${seg(instance)}/${proj(project)}/settings/reset`,
+  // The repositories the review App reaches, for the repository to link.
+  apiLinkable: (instance: string, project: string, search: string) =>
+    `/api/admin/linkable${query([
+      ["instance", instance],
+      ["repo", project],
+      ["search", search],
+    ])}`,
   // The client path is under /skills/view/ so a skill named like a page
   // (new, install, updates) still opens.
   skill: (name: string) => `/skills/view/${seg(name)}`,

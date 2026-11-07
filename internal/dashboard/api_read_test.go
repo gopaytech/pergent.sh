@@ -853,7 +853,8 @@ func TestRepositoryDetail(t *testing.T) {
 		`"commentLayout":{"value":["summary:open","findings:collapsed","dismissed:collapsed","checks:open","files:collapsed"],"overridden":false},` +
 		`"failureStatus":{"value":"failed","overridden":false},` +
 		`"incrementalReviews":{"value":true,"overridden":false},"inlineFindings":{"value":true,"overridden":false},"jobMemory":{"value":"","overridden":false},"jobTimeoutSeconds":{"value":600,"overridden":false},` +
-		`"learnFromDismissals":{"value":true,"overridden":false},"maxTurns":{"value":40,"overridden":false},"quietReviews":{"value":false,"overridden":false},"repoSkills":{"value":[],"overridden":false},` +
+		`"learnFromDismissals":{"value":true,"overridden":false},"linkedRepos":{"value":[],"overridden":false},"linkedReposEnabled":{"value":false,"overridden":false},` +
+		`"maxTurns":{"value":40,"overridden":false},"quietReviews":{"value":false,"overridden":false},"repoSkills":{"value":[],"overridden":false},` +
 		`"rerunLimitPerMR":{"value":10,"overridden":false},"rerunLimitPerRepo":{"value":50,"overridden":false},` +
 		`"reviewDrafts":{"value":true,"overridden":false},"skills":{"value":["code-review"],"overridden":true}}`
 	if string(settings) != want {
@@ -1032,7 +1033,7 @@ func TestAdminSettings(t *testing.T) {
 			Config: DefaultValues{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, LearnFromDismissals: true, CommentLayout: layout, FailureStatus: "failed",
 				JobTimeoutSeconds: 600, MaxTurns: 40, RerunLimitPerMR: 10, RerunLimitPerRepo: 50},
 			Pinned: map[string]bool{"approve": false, "reviewDrafts": false, "inlineFindings": false, "commandsAuthorAndMaintainersOnly": false,
-				"incrementalReviews": false, "learnFromDismissals": false, "quietReviews": false, "commentLayout": false, "failureStatus": false, "jobTimeoutSeconds": false,
+				"incrementalReviews": false, "learnFromDismissals": false, "quietReviews": false, "commentLayout": false, "linkedReposEnabled": false, "failureStatus": false, "jobTimeoutSeconds": false,
 				"maxTurns": false, "jobMemory": false, "rerunLimitPerMR": false, "rerunLimitPerRepo": false}},
 		LLM: LLMView{Provider: "anthropic", Model: "claude-sonnet-4"}}
 	got, _ := json.Marshal(v)
