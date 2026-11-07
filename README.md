@@ -226,9 +226,13 @@ pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is hand
 
 ## ⬆️ Upgrading
 
-### Upgrading to the next release
+### Upgrading to 0.11.0
 
-Nothing changes unless you turn the new setting on. Migration `0029` runs at startup and adds one column to `instances`, so back up Postgres first, as for any migration. 0.10.0 keeps working on the migrated database.
+Nothing changes unless you turn a new setting on. Migrations `0029` and `0030` run at startup and add nullable or defaulted columns, dropping nothing, so back up Postgres first, as for any migration. 0.10.0 keeps working on the migrated database.
+
+- **[Linked repositories](#-linked-repositories)** is new, and off by default. With it on and a link set, a change that touches a watched path also gets an impact check, for callers it would break in the linked repository. A repository's own skill named `impact` is unaffected while the feature is off.
+- **The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.8.0`,** which has the impact check. A config that sets its own `jobs.image` to an older image gets a `failed` impact check on every matching review, and no approval, until it moves.
+- **To roll back, first remove `linked_repos` and `linked_repos_enabled` from the config.** 0.10.0 refuses a config key it doesn't know.
 
 - A GitLab instance can now approve with its review bot, with `approve_with_review_bot: true` in place of `approve_token_env`, or **The review bot (one user)** in the dashboard's add form. See [Requirements](#-requirements) for what this gives up. Two tokens of one user are still refused without it.
 - **To roll back, first remove `approve_with_review_bot` from the config.** 0.10.0 refuses a config key it doesn't know, so it would not start with it. An instance added in the dashboard this way stays stored, but 0.10.0 can't connect it, because it has no approve token.
@@ -1582,7 +1586,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `llm.base_url` | none | Custom API base URL for the provider. |
 | `llm.api_key_env` | `OPENCODE_API_KEY` | Name of the env var with the LLM key. |
 | `jobs.namespace` | required | Namespace the Jobs run in. |
-| `jobs.image` | `ghcr.io/gopaytech/pergent:v0.7.0` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
+| `jobs.image` | `ghcr.io/gopaytech/pergent:v0.8.0` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
 | `jobs.max_running` | `5` | Most Jobs running at once. Further runs wait in the queue. At least 1. |
 | `jobs.timeout` | `30m` | pergent's own review budget per Job (`--timeout`). The Job's deadline adds 2 minutes to deliver and a clone allowance of at least 2 minutes. At startup pergent.sh warns about a timeout shorter than its step limit times 30 seconds. |
 | `jobs.max_turns` | `40` | pergent's step limit per opencode run (`--max-turns`) for every repository, 5 to 200. |
