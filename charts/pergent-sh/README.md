@@ -2,7 +2,7 @@
 
 pergent.sh runs pergent code reviews on GitLab merge requests and GitHub pull requests as Kubernetes Jobs
 
-![Version: 0.8.2](https://img.shields.io/badge/Version-0.8.2-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.8.2](https://img.shields.io/badge/AppVersion-v0.8.2-informational?style=flat-square)
+![Version: 0.9.0](https://img.shields.io/badge/Version-0.9.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.9.0](https://img.shields.io/badge/AppVersion-v0.9.0-informational?style=flat-square)
 
 pergent.sh runs [pergent](https://github.com/gopaytech/pergent) code reviews on GitLab merge requests and GitHub pull requests, one Kubernetes Job per review. Postgres is not part of this chart. The [repository README](../../README.md) explains the setup: the Secret, the config, the skill library and what the chart creates.
 
@@ -28,7 +28,7 @@ helm install pergent-sh pergent-sh/pergent-sh -n pergent-sh -f values.yaml
 | fullnameOverride | string | `""` | Overrides the full resource name. |
 | image.pullPolicy | string | `"IfNotPresent"` | Image pull policy. |
 | image.repository | string | `"ghcr.io/gopaytech/pergent.sh"` | Image repository. |
-| image.tag | string | `"v0.8.2"` | Image tag. A released chart pins its own release. "main" is the newest build of the main branch (it moves, so use pullPolicy Always with it); "sha-<short sha>" pins one build. Empty means the chart appVersion. Releasing the chart: set this to the release version (and pullPolicy to IfNotPresent); "main" must not ship in a released chart. |
+| image.tag | string | `"v0.9.0"` | Image tag. A released chart pins its own release. "main" is the newest build of the main branch (it moves, so use pullPolicy Always with it); "sha-<short sha>" pins one build. Empty means the chart appVersion. Releasing the chart: set this to the release version (and pullPolicy to IfNotPresent); "main" must not ship in a released chart. |
 | imagePullSecrets | list | `[]` | Secrets for pulling the image from a private registry. |
 | jobEgress.cidrs | list | `["0.0.0.0/0"]` | CIDRs the Jobs may reach on TCP 443 and 80. The default 0.0.0.0/0 lets a Job reach ANY address on 80/443, including in-cluster services and the cloud metadata endpoint: narrow it to GitLab or GitHub and the LLM provider. An EMPTY list allows no external egress at all: Jobs can then only use DNS and the pergent.sh callback (on 8080). |
 | jobEgress.except | list | `[]` | Optional ranges carved out of EVERY cidr above (NetworkPolicy "except"), e.g. 169.254.169.254/32. Kubernetes rejects an entry that lies outside its cidr, so use this with broad cidrs such as the default 0.0.0.0/0. |
