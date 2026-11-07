@@ -9,8 +9,7 @@
 // serve needs DATABASE_URL and PERGENT_SH_SECRET_KEY in the environment, plus
 // the LLM key, the GitLab tokens, the GitHub App private keys (or approve
 // token) and the webhook secrets the config file names. With dashboard.url
-// set it also serves the dashboard, and needs the OAuth client ID and secret
-// of every instance the config sets up for sign-in.
+// set it also serves the dashboard.
 //
 // admin reset-password gives a dashboard password account a new random
 // password, printed on stdout, which must be changed at the next sign-in. It
@@ -179,9 +178,6 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	if err := checkDashboardEnv(cfg); err != nil {
-		return err
-	}
 	warnTimeouts(cfg, log)
 
 	dbURL, err := requireEnv("DATABASE_URL")
@@ -300,9 +296,6 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	if dash != nil {
-		conn.auth = dash.Auth
-	}
 	// Connecting reaches GitLab and GitHub: a config instance that doesn't
 	// work stops startup; one added in the dashboard is recorded instead.
 	if err := conn.connectAll(ctx); err != nil {
@@ -340,32 +333,6 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		loops = append(loops, func(ctx context.Context) { every(ctx, fetchSweepEvery, sweep) })
 	}
 	return serveUntilDone(ctx, ln, handler, together(loops...), log)
-}
-
-// checkDashboardEnv makes sure, when the dashboard is on, that every
-// instance set up for sign-in has its OAuth client ID and secret in the
-// environment. The error names the instance and the variable, never a
-// value. With the dashboard off nothing is read.
-func checkDashboardEnv(cfg *config.Config) error {
-	if !cfg.DashboardEnabled() {
-		return nil
-	}
-	var errs []error
-	for _, inst := range cfg.GitLab {
-		if inst.HasOAuth() {
-			if _, _, err := inst.OAuthClient(); err != nil {
-				errs = append(errs, fmt.Errorf("dashboard sign-in: %w", err))
-			}
-		}
-	}
-	for _, inst := range cfg.GitHub {
-		if inst.HasOAuth() {
-			if _, _, err := inst.OAuthClient(); err != nil {
-				errs = append(errs, fmt.Errorf("dashboard sign-in: %w", err))
-			}
-		}
-	}
-	return errors.Join(errs...)
 }
 
 // newDashboard builds the dashboard when dashboard.url is set, and returns

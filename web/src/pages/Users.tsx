@@ -2,18 +2,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 
 import { api, type NewAccountView, type UserView } from "../api";
-import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
-import { ErrorBox, Loading, Pill, ago, platformName } from "../ui";
+import { ErrorBox, Loading, Pill, ago } from "../ui";
 
 // waitingFirst puts the accounts on no team first, keeping the order of the
 // rest.
 const waitingFirst = (users: UserView[]) => [...users.filter((u) => u.waiting), ...users.filter((u) => !u.waiting)];
 
-// Users lists the accounts, the ones waiting for a team first. An operator
-// adds password admins; a platform admin never touches those.
+// Users lists the accounts, the ones waiting for a team first. An admin adds
+// local admins (password accounts).
 export default function Users() {
-  const me = useMe();
   const [adding, setAdding] = useState(false);
   const users = useQuery({ queryKey: ["users"], queryFn: () => api.get<UserView[]>("/api/users") });
   return (
@@ -21,13 +19,9 @@ export default function Users() {
       <div className="top">
         <div>
           <h1>Users</h1>
-          <div className="sub">
-            {me.operator
-              ? "Everyone who has signed in. Add them to a team to give them access."
-              : `Everyone who has signed in to ${me.instance}. Add them to a team to give them access.`}
-          </div>
+          <div className="sub">Everyone who has signed in. Add them to a team to give them access.</div>
         </div>
-        {me.operator && !adding && (
+        {!adding && (
           <button type="button" className="btn primary" onClick={() => setAdding(true)}>
             Add password admin
           </button>
@@ -53,7 +47,7 @@ export default function Users() {
               </thead>
               <tbody>
                 {waitingFirst(users.data).map((u) => (
-                  <Row key={u.id} user={u} canRemove={u.kind === "platform" || me.operator} />
+                  <Row key={u.id} user={u} />
                 ))}
               </tbody>
             </table>
@@ -63,7 +57,7 @@ export default function Users() {
   );
 }
 
-function Row({ user, canRemove }: { user: UserView; canRemove: boolean }) {
+function Row({ user }: { user: UserView }) {
   const client = useQueryClient();
   const write = useWrite();
   const remove = useMutation({
@@ -85,15 +79,13 @@ function Row({ user, canRemove }: { user: UserView; canRemove: boolean }) {
         {user.waiting && <Pill tone="warn">waiting</Pill>}
         {remove.isError && <ErrorBox error={remove.error} />}
       </td>
-      <td>{user.kind === "password" ? "Password admin" : `${platformName(user.platform)} · ${user.instance}`}</td>
+      <td>{user.kind === "password" ? "Password admin" : "SSO"}</td>
       <td>{user.teams.length === 0 ? <span className="meta">none</span> : user.teams.map((t) => t.name).join(", ")}</td>
       <td>{user.lastSignInAt ? ago(user.lastSignInAt) : "never"}</td>
       <td className="num">
-        {canRemove && (
-          <button type="button" className="btn small" disabled={remove.isPending} onClick={confirmRemove}>
-            Remove
-          </button>
-        )}
+        <button type="button" className="btn small" disabled={remove.isPending} onClick={confirmRemove}>
+          Remove
+        </button>
       </td>
     </tr>
   );

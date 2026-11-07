@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"regexp"
 	"slices"
@@ -17,41 +18,37 @@ import (
 const (
 	// auditPageSize is the most entries GET /api/audit returns at once.
 	auditPageSize = 100
-	// auditMaxChunks bounds the reading for one GET /api/audit: chunks of
-	// auditPageSize entries, read past those the session can't see.
-	auditMaxChunks = 50
 	// maxTeamName is the longest team name, in characters.
 	maxTeamName = 100
 
 	msgBadUsername    = "the username must be 1 to 64 letters, digits, \".\", \"_\" or \"-\""
 	msgUsernameTaken  = "this username is taken"
-	msgPasswordOnly   = "only password admins can remove password accounts"
 	msgBusy           = "the server is busy, please try again"
-	msgBadTeamBody    = `the body must be {"name": ..., "role": ...}`
-	msgBadTeamUpdate  = `the body must be {"name": ..., "role": ..., "members": [account IDs], "repos": [{"instance": ..., "project": ...}]}`
+	msgBadTeamBody    = `the body must be {"name": ...}`
+	msgBadTeamUpdate  = `the body must be {"name": ..., "members": [{"accountId": ..., "role": "viewer" or "maintainer"}], "repos": [{"instance": ..., "project": ...}]}`
 	msgBadTeamName    = "the team needs a name of at most 100 characters"
-	msgBadRole        = `role must be "admin", "maintainer" or "viewer"`
+	msgBadMemberRole  = `a member's role must be "viewer" or "maintainer"`
 	msgTeamNameTaken  = "a team with this name exists already"
-	msgMembers        = "members must be accounts that sign in with GitLab or GitHub"
-	msgAdminTeamRepos = "an admin team has no repository list: repos must be []"
+	msgMembers        = "members must be accounts that sign in with SSO"
 	msgRepoNotOn      = "every repository must be switched on, or name a whole instance with project \"\""
-	msgOtherInstance  = "you can add repositories of your own instance only"
 	msgBadBefore      = "before must be the ID of an audit entry"
-	msgHiddenCoverage = "this team covers repositories you can't see; a password admin can change its role or remove it"
-	msgOtherAccount   = "you can only remove accounts of your own instance"
-	msgOtherMembers   = "you can only change members of your own instance"
+	msgDeleteSelf     = "you can't remove your own account"
+	msgOwnRole        = "you can't change your own role"
+	msgBadAccountRole = `the body must be {"role": "admin" or "user"}`
+	msgLocalRole      = "a local admin is always an admin"
 )
 
 var usernamePattern = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,64}$`)
 
 // orgRoutes adds the users, teams and audit log API to mux: every route
 // behind Auth.Require (which checks X-CSRF-Token on writes), for admins
-// only, and adding a password admin for password admins only.
+// only.
 func (d *Dashboard) orgRoutes(mux *http.ServeMux) {
 	admin := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, d.Auth.Require(requireAdmin(h))) }
 	admin("GET /api/users", d.users)
 	admin("DELETE /api/users/{id}", d.deleteUser)
-	mux.Handle("POST /api/admin/accounts", d.Auth.Require(requireOperator(d.createPasswordAccount)))
+	admin("PUT /api/admin/users/{id}/role", d.setUserRole)
+	admin("POST /api/admin/accounts", d.createPasswordAccount)
 	admin("GET /api/teams", d.teams)
 	admin("POST /api/teams", d.createTeam)
 	admin("PUT /api/teams/{id}", d.updateTeam)
@@ -60,25 +57,25 @@ func (d *Dashboard) orgRoutes(mux *http.ServeMux) {
 }
 
 // audit records what the session's user did; a failure to is logged, not
-// returned: the change is made already.
+// returned.
 func (d *Dashboard) audit(ctx context.Context, se Session, action, instance, project, detail string) {
 	id := se.AccountID
 	if err := d.Store.Audit(context.WithoutCancel(ctx), store.AuditEntry{At: d.now(), ActorID: &id,
-		Actor:  actorLabel(se.Kind, se.Platform, se.Instance, se.Username),
+		Actor:  actorLabel(se.Kind, se.Username),
 		Action: action, Instance: instance, Project: project, Detail: detail}); err != nil {
 		d.Log.Error("dashboard: recording an audit entry failed", "action", action, "error", err.Error())
 	}
 }
 
-// actorLabel names who acted in the audit log, so the same username on two
-// instances, or as a password admin, is never mistaken for another:
-// "alice (gitlab main)" for a platform account, "root (password)" for a
-// password admin. (A password reset from the command line is "cli".)
-func actorLabel(kind, platform, instance, username string) string {
+// actorLabel names who acted in the audit log: "root (password)" for a local
+// admin, the full email for an SSO account. (A password reset from the command
+// line is "cli"; older entries of platform accounts read "alice (gitlab
+// main)" and stay as they are.)
+func actorLabel(kind, username string) string {
 	if kind == store.AccountPassword {
 		return username + " (password)"
 	}
-	return username + " (" + platform + " " + instance + ")"
+	return username
 }
 
 // pathID is the request's {id}; ok is false when it isn't one.
@@ -89,14 +86,8 @@ func pathID(r *http.Request) (int64, bool) {
 
 // --- users ---
 
-// seesAccount reports whether the session can see an account: an operator
-// every one; a platform admin the platform accounts of its own instance.
-func seesAccount(se Session, a store.Account) bool {
-	return se.Operator || (a.Kind == store.AccountPlatform && a.Instance == se.Instance)
-}
-
 func (d *Dashboard) users(w http.ResponseWriter, r *http.Request) {
-	ctx, se := r.Context(), session(r)
+	ctx := r.Context()
 	accounts, err := d.Store.Accounts(ctx)
 	if err != nil {
 		d.failed(w, r, "listing accounts", err)
@@ -115,16 +106,15 @@ func (d *Dashboard) users(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]UserView, 0, len(accounts))
 	for _, a := range accounts {
-		if !seesAccount(se, a) {
-			continue
-		}
 		refs := of[a.ID]
 		if refs == nil {
 			refs = []TeamRef{}
 		}
+		sso := a.Kind == store.AccountSSO
 		out = append(out, UserView{
-			ID: a.ID, Kind: a.Kind, Username: a.Username, Platform: a.Platform, Instance: a.Instance,
-			LastSignInAt: a.LastSignInAt, Waiting: a.Kind == store.AccountPlatform && len(refs) == 0, Teams: refs,
+			ID: a.ID, Kind: a.Kind, Username: a.Username, Email: a.Email, Role: a.Role,
+			Invited: sso && a.LastSignInAt == nil, LastSignInAt: a.LastSignInAt,
+			Waiting: sso && a.Role != store.RoleAdmin && a.LastSignInAt != nil && len(refs) == 0, Teams: refs,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -142,16 +132,13 @@ func (d *Dashboard) deleteUser(w http.ResponseWriter, r *http.Request) {
 		d.failed(w, r, "loading an account", err)
 		return
 	}
-	if !found {
+	// The old platform accounts are hidden: as good as not there.
+	if !found || acc.Kind == store.AccountPlatform {
 		notFound(w)
 		return
 	}
-	if acc.Kind == store.AccountPassword && !se.Operator {
-		writeError(w, http.StatusForbidden, msgPasswordOnly)
-		return
-	}
-	if !seesAccount(se, acc) {
-		writeError(w, http.StatusForbidden, msgOtherAccount)
+	if acc.ID == se.AccountID {
+		writeError(w, http.StatusConflict, msgDeleteSelf)
 		return
 	}
 	deleted, err := d.Store.DeleteAccount(ctx, id)
@@ -173,9 +160,56 @@ func (d *Dashboard) deleteUser(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// createPasswordAccount makes a password admin with a generated password,
-// which must be changed at its first sign-in. The password is in the
-// answer only: never logged or audited.
+// setUserRole makes an SSO account an admin or a user: JSON {"role"}. An admin
+// can't change their own role, so there is always an admin left to change
+// another's. A local admin is always an admin. The account's next request
+// reads the new role.
+func (d *Dashboard) setUserRole(w http.ResponseWriter, r *http.Request) {
+	ctx, se := r.Context(), session(r)
+	id, ok := pathID(r)
+	if !ok {
+		notFound(w)
+		return
+	}
+	var in struct {
+		Role string `json:"role"`
+	}
+	if err := decodeStrict(r, &in); err != nil || (in.Role != store.RoleAdmin && in.Role != store.RoleUser) {
+		writeError(w, http.StatusBadRequest, msgBadAccountRole)
+		return
+	}
+	acc, found, err := d.Store.Account(ctx, id)
+	if err != nil {
+		d.failed(w, r, "loading an account", err)
+		return
+	}
+	if !found || acc.Kind == store.AccountPlatform {
+		notFound(w)
+		return
+	}
+	switch {
+	case acc.ID == se.AccountID:
+		writeError(w, http.StatusConflict, msgOwnRole)
+		return
+	case acc.Kind != store.AccountSSO:
+		writeError(w, http.StatusConflict, msgLocalRole)
+		return
+	}
+	if err := d.Store.SetAccountRole(ctx, id, in.Role); err != nil {
+		d.Log.Error("dashboard: changing an account's role failed", "account", id, "error", err.Error())
+		writeError(w, http.StatusInternalServerError, msgWriteFailed)
+		return
+	}
+	if acc.Role != in.Role {
+		d.Log.Info("dashboard: account role changed", "user", acc.Username, "role", in.Role, "by", se.Username)
+		d.audit(ctx, se, "account_role_changed", "", "", acc.Username+": "+acc.Role+"->"+in.Role)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// createPasswordAccount makes a local admin with a generated password, which
+// must be changed at its first sign-in. The password is in the answer only:
+// never logged or audited.
 func (d *Dashboard) createPasswordAccount(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	var in struct {
@@ -215,37 +249,15 @@ func (d *Dashboard) createPasswordAccount(w http.ResponseWriter, r *http.Request
 
 // --- teams ---
 
-// seesTeamRepo reports whether the session can see a team's repository: an
-// operator every one; a platform admin a whole-instance entry of its own
-// instance and the repositories it can see.
-func seesTeamRepo(se Session, tr store.TeamRepo) bool {
-	if se.All {
-		return true
-	}
-	if tr.Project == "" {
-		return tr.Instance == se.Instance
-	}
-	return se.CanSee(tr.Instance, tr.Project)
-}
-
-// teamView is t as the session sees it; accounts are by ID.
-func teamView(se Session, t store.Team, accounts map[int64]store.Account) TeamView {
-	v := TeamView{ID: t.ID, Name: t.Name, Role: t.Role, Members: []TeamMemberView{}, Repos: []TeamRepoView{}}
+// teamView is t as an admin sees it; accounts are by ID.
+func teamView(t store.Team, accounts map[int64]store.Account) TeamView {
+	v := TeamView{ID: t.ID, Name: t.Name, Members: []TeamMemberView{}, Repos: []TeamRepoView{}}
 	for _, m := range t.Members {
-		id := m.AccountID
-		a := accounts[id]
-		if !seesAccount(se, a) {
-			v.HiddenMembers++
-			continue
-		}
-		v.Members = append(v.Members, TeamMemberView{ID: id, Username: a.Username, Platform: a.Platform, Instance: a.Instance})
+		a := accounts[m.AccountID]
+		v.Members = append(v.Members, TeamMemberView{AccountID: m.AccountID, Username: a.Username, Email: a.Email, Role: m.Role})
 	}
 	for _, tr := range t.Repos {
-		if seesTeamRepo(se, tr) {
-			v.Repos = append(v.Repos, TeamRepoView{Instance: tr.Instance, Project: tr.Project})
-		} else {
-			v.HiddenRepos++
-		}
+		v.Repos = append(v.Repos, TeamRepoView{Instance: tr.Instance, Project: tr.Project})
 	}
 	return v
 }
@@ -263,7 +275,7 @@ func (d *Dashboard) accountsByID(ctx context.Context) (map[int64]store.Account, 
 }
 
 func (d *Dashboard) teams(w http.ResponseWriter, r *http.Request) {
-	ctx, se := r.Context(), session(r)
+	ctx := r.Context()
 	teams, err := d.Store.Teams(ctx)
 	if err != nil {
 		d.failed(w, r, "listing teams", err)
@@ -276,20 +288,17 @@ func (d *Dashboard) teams(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]TeamView, 0, len(teams))
 	for _, t := range teams {
-		out = append(out, teamView(se, t, accounts))
+		out = append(out, teamView(t, accounts))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
-// teamNameAndRole checks a team's name (trimmed) and role; msg is the 400's
-// message when one is wrong.
-func teamNameAndRole(name, role string) (string, string) {
+// teamName checks a team's name (trimmed); msg is the 400's message when it
+// is wrong.
+func teamName(name string) (string, string) {
 	name = strings.TrimSpace(name)
 	if name == "" || utf8.RuneCountInString(name) > maxTeamName {
 		return "", msgBadTeamName
-	}
-	if roleOf(role) == RoleNone {
-		return "", msgBadRole
 	}
 	return name, ""
 }
@@ -298,18 +307,17 @@ func (d *Dashboard) createTeam(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	var in struct {
 		Name string `json:"name"`
-		Role string `json:"role"`
 	}
 	if err := decodeStrict(r, &in); err != nil {
 		writeError(w, http.StatusBadRequest, msgBadTeamBody)
 		return
 	}
-	name, msg := teamNameAndRole(in.Name, in.Role)
+	name, msg := teamName(in.Name)
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	t, err := d.Store.CreateTeam(ctx, name, in.Role, d.now())
+	t, err := d.Store.CreateTeam(ctx, name, d.now())
 	if errors.Is(err, store.ErrExists) {
 		writeError(w, http.StatusConflict, msgTeamNameTaken)
 		return
@@ -319,23 +327,16 @@ func (d *Dashboard) createTeam(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, msgWriteFailed)
 		return
 	}
-	d.Log.Info("dashboard: team created", "team", t.Name, "role", t.Role, "by", se.Username)
-	d.audit(ctx, se, "team_created", "", "", t.Name+" ("+t.Role+")")
-	writeJSON(w, http.StatusCreated, teamView(se, t, nil))
+	d.Log.Info("dashboard: team created", "team", t.Name, "by", se.Username)
+	d.audit(ctx, se, "team_created", "", "", t.Name)
+	writeJSON(w, http.StatusCreated, teamView(t, nil))
 }
 
-// errHiddenCoverage refuses a change that would act on repositories a team
-// covers which the session can't see: changing its role (an admin team has
-// none) or removing it. Only a session that sees everything can.
-var errHiddenCoverage = errors.New(msgHiddenCoverage)
-
-// errOtherMembers refuses adding a member of another instance: a platform
-// admin only changes the members of its own.
-var errOtherMembers = errors.New(msgOtherMembers)
-
-// coversHidden reports whether t covers a repository the session can't see.
-func coversHidden(se Session, t store.Team) bool {
-	return slices.ContainsFunc(t.Repos, func(tr store.TeamRepo) bool { return !seesTeamRepo(se, tr) })
+// memberInput is a team member in a team change: an account and its role on
+// the team.
+type memberInput struct {
+	AccountID int64  `json:"accountId"`
+	Role      string `json:"role"`
 }
 
 func (d *Dashboard) updateTeam(w http.ResponseWriter, r *http.Request) {
@@ -347,15 +348,14 @@ func (d *Dashboard) updateTeam(w http.ResponseWriter, r *http.Request) {
 	}
 	var in struct {
 		Name    string         `json:"name"`
-		Role    string         `json:"role"`
-		Members []int64        `json:"members"`
+		Members []memberInput  `json:"members"`
 		Repos   []TeamRepoView `json:"repos"`
 	}
 	if err := decodeStrict(r, &in); err != nil {
 		writeError(w, http.StatusBadRequest, msgBadTeamUpdate)
 		return
 	}
-	name, msg := teamNameAndRole(in.Name, in.Role)
+	name, msg := teamName(in.Name)
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -365,17 +365,19 @@ func (d *Dashboard) updateTeam(w http.ResponseWriter, r *http.Request) {
 		d.failed(w, r, "listing accounts", err)
 		return
 	}
-	for _, m := range in.Members {
-		if accounts[m].Kind != store.AccountPlatform {
+	members := make([]store.TeamMember, len(in.Members))
+	for i, m := range in.Members {
+		if m.Role != store.RoleViewer && m.Role != store.RoleMaintainer {
+			writeError(w, http.StatusBadRequest, msgBadMemberRole)
+			return
+		}
+		if accounts[m.AccountID].Kind != store.AccountSSO {
 			writeError(w, http.StatusBadRequest, msgMembers)
 			return
 		}
+		members[i] = store.TeamMember{AccountID: m.AccountID, Role: m.Role}
 	}
-	if in.Role == store.RoleAdmin && len(in.Repos) > 0 {
-		writeError(w, http.StatusBadRequest, msgAdminTeamRepos)
-		return
-	}
-	repos, msg, err := d.teamRepos(ctx, se, in.Repos)
+	repos, msg, err := d.teamRepos(ctx, in.Repos)
 	if err != nil {
 		d.failed(w, r, "listing repositories", err)
 		return
@@ -389,27 +391,7 @@ func (d *Dashboard) updateTeam(w http.ResponseWriter, r *http.Request) {
 	found, err := d.Store.UpdateTeam(ctx, id, func(t *store.Team) error {
 		before = *t
 		before.Members, before.Repos = slices.Clone(t.Members), slices.Clone(t.Repos)
-		// A role change gives the repositories the session can't see a
-		// role out of its sight: only a session that sees them all may.
-		if t.Role != in.Role && coversHidden(se, *t) {
-			return errHiddenCoverage
-		}
-		members, err := teamMembers(se, *t, in.Members, accounts)
-		if err != nil {
-			return err
-		}
-		saved := repos
-		if in.Role == store.RoleAdmin {
-			saved = nil // an admin team has no repository list
-		} else {
-			// What the session can't see stays as it is.
-			for _, tr := range t.Repos {
-				if !seesTeamRepo(se, tr) {
-					saved = append(saved, tr)
-				}
-			}
-		}
-		t.Name, t.Role, t.Members, t.Repos = name, in.Role, withMemberRoles(t.Members, members), saved
+		t.Name, t.Members, t.Repos = name, members, repos
 		after = *t
 		return nil
 	})
@@ -417,15 +399,9 @@ func (d *Dashboard) updateTeam(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, store.ErrExists):
 		writeError(w, http.StatusConflict, msgTeamNameTaken)
 		return
-	case errors.Is(err, errHiddenCoverage):
-		writeError(w, http.StatusConflict, msgHiddenCoverage)
-		return
 	case errors.Is(err, store.ErrUnknownAccount):
 		// Removed since the members were checked.
 		writeError(w, http.StatusBadRequest, msgMembers)
-		return
-	case errors.Is(err, errOtherMembers):
-		writeError(w, http.StatusConflict, msgOtherMembers)
 		return
 	case err != nil:
 		d.Log.Error("dashboard: changing a team failed", "team", id, "error", err.Error())
@@ -452,68 +428,13 @@ func (d *Dashboard) updateTeam(w http.ResponseWriter, r *http.Request) {
 		d.failed(w, r, "loading a team", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, teamView(se, t, accounts))
-}
-
-// memberIDs are the account IDs of members.
-func memberIDs(members []store.TeamMember) []int64 {
-	out := make([]int64, len(members))
-	for i, m := range members {
-		out[i] = m.AccountID
-	}
-	return out
-}
-
-// withMemberRoles is ids as members: one that is on prev keeps its role
-// there, any other is a viewer. This page sets no member roles yet.
-func withMemberRoles(prev []store.TeamMember, ids []int64) []store.TeamMember {
-	out := make([]store.TeamMember, len(ids))
-	for i, id := range ids {
-		out[i] = store.TeamMember{AccountID: id, Role: store.RoleViewer}
-		for _, m := range prev {
-			if m.AccountID == id {
-				out[i].Role = m.Role
-			}
-		}
-	}
-	return out
-}
-
-// teamMembers is the member list to store for a team change that names
-// submitted. An operator's is the one submitted. A platform admin changes
-// only the members of its own instance: those of other instances stay on
-// the team whatever it names (it is never shown them), and naming one that
-// isn't on the team already is errOtherMembers.
-func teamMembers(se Session, t store.Team, submitted []int64, accounts map[int64]store.Account) ([]int64, error) {
-	if se.Operator {
-		return submitted, nil
-	}
-	own := func(id int64) bool { return accounts[id].Instance == se.Instance }
-	var out []int64
-	for _, m := range t.Members {
-		if !own(m.AccountID) {
-			out = append(out, m.AccountID)
-		}
-	}
-	kept := slices.Clone(out)
-	for _, id := range submitted {
-		switch {
-		case own(id):
-			out = append(out, id)
-		case !slices.Contains(kept, id):
-			return nil, errOtherMembers
-		}
-	}
-	return out, nil
+	writeJSON(w, http.StatusOK, teamView(t, accounts))
 }
 
 // teamRepos checks the repositories of a team change and returns those to
-// store, spelled as the resolver spells them. Each must be switched on, or
-// a whole instance that exists (msg otherwise). A platform admin names
-// repositories of its own instance only; those it can't see are dropped
-// here, whether they are switched on or not, and the team's own are kept by
-// the caller.
-func (d *Dashboard) teamRepos(ctx context.Context, se Session, in []TeamRepoView) ([]store.TeamRepo, string, error) {
+// store, spelled as the resolver spells them. Each must be switched on, or a
+// whole instance that exists (msg otherwise).
+func (d *Dashboard) teamRepos(ctx context.Context, in []TeamRepoView) ([]store.TeamRepo, string, error) {
 	if len(in) == 0 {
 		return nil, "", nil
 	}
@@ -527,13 +448,7 @@ func (d *Dashboard) teamRepos(ctx context.Context, se Session, in []TeamRepoView
 	}
 	var out []store.TeamRepo
 	for _, tr := range in {
-		if !se.All && tr.Instance != se.Instance {
-			return nil, msgOtherInstance, nil
-		}
 		repo := store.TeamRepo{Instance: tr.Instance, Project: tr.Project}
-		if !seesTeamRepo(se, repo) {
-			continue
-		}
 		if tr.Project == "" {
 			if !d.knownInstance(tr.Instance) {
 				return nil, msgRepoNotOn, nil
@@ -558,34 +473,29 @@ func (d *Dashboard) knownInstance(instance string) bool {
 }
 
 // teamChanges names what differs between a team before and after a change:
-// name, role (before->after), members (+ added, - removed, by username as
-// userName gives it) and repos, in that order. Nothing in it is a secret.
+// name, members (+ added, - removed, name:role for a changed role; by username
+// as userName gives it) and repos, in that order. Nothing in it is a secret.
 func teamChanges(before, after store.Team, userName func(int64) string) []string {
 	var parts []string
 	if before.Name != after.Name {
 		parts = append(parts, "name")
 	}
-	if before.Role != after.Role {
-		parts = append(parts, "role "+before.Role+"->"+after.Role)
-	}
-	members := func(ids []int64) []int64 {
-		out := slices.Clone(ids)
-		slices.Sort(out)
-		return slices.Compact(out)
-	}
-	was, now := members(memberIDs(before.Members)), members(memberIDs(after.Members))
-	if !slices.Equal(was, now) {
-		var names []string
-		for _, id := range now {
-			if !slices.Contains(was, id) {
-				names = append(names, "+"+userName(id))
-			}
+	was, now := roleByAccount(before.Members), roleByAccount(after.Members)
+	var names []string
+	for _, id := range slices.Sorted(maps.Keys(now)) {
+		switch old, had := was[id]; {
+		case !had:
+			names = append(names, "+"+userName(id)+":"+now[id])
+		case old != now[id]:
+			names = append(names, userName(id)+":"+old+"->"+now[id])
 		}
-		for _, id := range was {
-			if !slices.Contains(now, id) {
-				names = append(names, "-"+userName(id))
-			}
+	}
+	for _, id := range slices.Sorted(maps.Keys(was)) {
+		if _, still := now[id]; !still {
+			names = append(names, "-"+userName(id))
 		}
+	}
+	if len(names) > 0 {
 		parts = append(parts, "members "+strings.Join(names, " "))
 	}
 	repos := func(rs []store.TeamRepo) []RepoKey {
@@ -602,6 +512,22 @@ func teamChanges(before, after store.Team, userName func(int64) string) []string
 	return parts
 }
 
+// roleByAccount is the role of each member by account ID; an account named
+// twice has the higher role, as the store keeps it.
+func roleByAccount(members []store.TeamMember) map[int64]string {
+	out := make(map[int64]string, len(members))
+	for _, m := range members {
+		role := m.Role
+		if role == "" {
+			role = store.RoleViewer
+		}
+		if role == store.RoleMaintainer || out[m.AccountID] == "" {
+			out[m.AccountID] = role
+		}
+	}
+	return out
+}
+
 func (d *Dashboard) deleteTeam(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	id, ok := pathID(r)
@@ -609,20 +535,11 @@ func (d *Dashboard) deleteTeam(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	// The check runs under the team's row lock, so repositories added since
-	// it was read can't go unseen.
 	var name string
 	deleted, err := d.Store.DeleteTeam(ctx, id, func(t store.Team) error {
 		name = t.Name
-		if coversHidden(se, t) {
-			return errHiddenCoverage
-		}
 		return nil
 	})
-	if errors.Is(err, errHiddenCoverage) {
-		writeError(w, http.StatusConflict, msgHiddenCoverage)
-		return
-	}
 	if err != nil {
 		d.Log.Error("dashboard: removing a team failed", "team", id, "error", err.Error())
 		writeError(w, http.StatusInternalServerError, msgWriteFailed)
@@ -639,34 +556,11 @@ func (d *Dashboard) deleteTeam(w http.ResponseWriter, r *http.Request) {
 
 // --- the audit log ---
 
-// operatorOnlyActions are the audit actions of password accounts' own
-// sign-ins and passwords, which only a password admin is shown.
-var operatorOnlyActions = []string{"sign_in", "sign_in_failed", "locked", "password_changed", "password_reset"}
-
-// seesAudit reports whether the session may see an audit entry: an operator
-// every one; a platform admin those about a repository it can see, about its
-// own instance, and those about no instance, but not a password admin's own
-// sign-ins and passwords.
-func seesAudit(se Session, e store.AuditEntry) bool {
-	switch {
-	case se.All:
-		return true
-	case e.Project != "":
-		return se.CanSee(e.Instance, e.Project)
-	case e.Instance != "":
-		return e.Instance == se.Instance
-	default:
-		return !slices.Contains(operatorOnlyActions, e.Action)
-	}
-}
-
-// auditLog answers up to auditPageSize entries the session can see, newest
-// first, older than ?before= when given, and the before of the page after.
-// For a platform admin it reads on past the entries it can't see, at most
-// auditMaxChunks chunks: when they don't fill the page, it answers what
-// they held, and next goes on after the last entry read.
+// auditLog answers up to auditPageSize entries, newest first, older than
+// ?before= when given, and the before of the page after (0 when the log ends
+// here).
 func (d *Dashboard) auditLog(w http.ResponseWriter, r *http.Request) {
-	ctx, se := r.Context(), session(r)
+	ctx := r.Context()
 	var before int64
 	if q := r.URL.Query().Get("before"); q != "" {
 		n, err := strconv.ParseInt(q, 10, 64)
@@ -676,30 +570,18 @@ func (d *Dashboard) auditLog(w http.ResponseWriter, r *http.Request) {
 		}
 		before = n
 	}
-	page := AuditPageView{Entries: []AuditView{}}
-	for chunk := 0; chunk < auditMaxChunks && len(page.Entries) < auditPageSize; chunk++ {
-		entries, err := d.Store.AuditLog(ctx, before, auditPageSize)
-		if err != nil {
-			d.failed(w, r, "reading the audit log", err)
-			return
-		}
-		read := 0
-		for _, e := range entries {
-			if len(page.Entries) == auditPageSize {
-				break
-			}
-			if seesAudit(se, e) {
-				page.Entries = append(page.Entries, AuditView{ID: e.ID, At: e.At.UTC(), Actor: e.Actor, Action: e.Action,
-					Instance: e.Instance, Project: e.Project, Detail: e.Detail})
-			}
-			before = e.ID
-			read++
-		}
-		if read == len(entries) && len(entries) < auditPageSize {
-			before = 0 // the log ends here
-			break
-		}
+	entries, err := d.Store.AuditLog(ctx, before, auditPageSize)
+	if err != nil {
+		d.failed(w, r, "reading the audit log", err)
+		return
 	}
-	page.Next = before
+	page := AuditPageView{Entries: make([]AuditView, 0, len(entries))}
+	for _, e := range entries {
+		page.Entries = append(page.Entries, AuditView{ID: e.ID, At: e.At.UTC(), Actor: e.Actor, Action: e.Action,
+			Instance: e.Instance, Project: e.Project, Detail: e.Detail})
+	}
+	if len(entries) == auditPageSize {
+		page.Next = entries[len(entries)-1].ID
+	}
 	writeJSON(w, http.StatusOK, page)
 }

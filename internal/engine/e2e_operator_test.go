@@ -29,7 +29,6 @@ type opConnector struct {
 	env      *testEnv
 	sources  *syncmap.Map[dashboard.RepoSource]
 	catalogs *syncmap.Map[dashboard.RepoCatalog]
-	auth     *dashboard.Auth
 
 	mu          sync.Mutex
 	disconnects []string
@@ -49,7 +48,6 @@ func (c *opConnector) Connect(_ context.Context, inst instances.Instance, s inst
 	c.env.Engine.WebhookSecrets.Set(inst.Name, s.WebhookSecret)
 	c.sources.Set(inst.Name, plat.Forge.(dashboard.RepoSource))
 	c.catalogs.Set(inst.Name, plat.Forge.(dashboard.RepoCatalog))
-	c.auth.SetProvider(inst, s)
 	return nil
 }
 
@@ -61,7 +59,6 @@ func (c *opConnector) Disconnect(name string) {
 	c.env.Engine.WebhookSecrets.Delete(name)
 	c.sources.Delete(name)
 	c.catalogs.Delete(name)
-	c.auth.RemoveProvider(name)
 }
 
 // newOperatorE2E is the dashboard e2e with a connector, and the engine told
@@ -72,7 +69,7 @@ func newOperatorE2E(t *testing.T) (*dashE2E, *opConnector) {
 	e := newDashboardE2E(t, func(o *dashboard.Options) {
 		conn.sources, conn.catalogs, o.Connector = o.Sources, o.Catalogs, conn
 	})
-	conn.env, conn.auth = e.env, e.dash.Auth
+	conn.env = e.env
 	e.env.Engine.OnInstanceRemoved = conn.Disconnect
 	return e, conn
 }
@@ -144,7 +141,8 @@ func TestRemoveInstanceWithQueuedRuns(t *testing.T) {
 		t.Fatalf("lab's project = %+v, %v; want set up with its webhook", p, ok)
 	}
 
-	// A queued run, a user signed in through lab, and the webhook that works.
+	// A queued run, an old platform account of lab with a session (a
+	// previous release made them), and the webhook that works.
 	runID, _, err := env.Store.EnqueueRun(env.ctx, store.MRKey{Instance: labName, ProjectID: gadgetsID, IID: 1}, labProject, sha('a'), "main")
 	if err != nil {
 		t.Fatal(err)
@@ -155,6 +153,9 @@ func TestRemoveInstanceWithQueuedRuns(t *testing.T) {
 	}
 	carol := randomSession(t, env, store.Session{AccountID: acc.ID, Platform: config.PlatformGitLab, Instance: labName,
 		UserID: 77, Username: "carol", TokenSealed: []byte("sealed")})
+	if n, err := env.Store.CountWaitingAccounts(env.ctx, labName); err != nil || n != 1 {
+		t.Fatalf("platform accounts of lab before the removal = %d, %v; want carol's", n, err)
+	}
 	hookStatus := func() int {
 		status, _, _, _ := e.do(t, http.MethodPost, "/webhooks/gitlab/"+labName, json.RawMessage(`{}`), nil,
 			map[string]string{"X-Gitlab-Token": "wrong", "X-Gitlab-Event": "Merge Request Hook"})
@@ -178,6 +179,9 @@ func TestRemoveInstanceWithQueuedRuns(t *testing.T) {
 	}
 	if accounts, _ := env.Store.Accounts(env.ctx); len(accounts) != 1 || accounts[0].Username != "ops" {
 		t.Errorf("accounts = %+v, want ops only", accounts)
+	}
+	if n, err := env.Store.CountWaitingAccounts(env.ctx, labName); err != nil || n != 0 {
+		t.Errorf("platform accounts of lab after the removal = %d, %v; want none", n, err)
 	}
 	// Superseded, so dispatch has nothing to do for it.
 	dispatch(t, env)

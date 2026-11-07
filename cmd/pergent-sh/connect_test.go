@@ -568,39 +568,6 @@ func TestConnectDashboardInstanceAtRuntime(t *testing.T) {
 	}
 }
 
-// Connect gives the dashboard a sign-in for an instance with an OAuth client,
-// and Disconnect takes it away.
-func TestConnectSetsSignIn(t *testing.T) {
-	srv := fakeGitLabUsers(t, map[string]int64{"glpat-review-example": 11, "glpat-approve-example": 12})
-	cfg := &config.Config{Dashboard: config.Dashboard{URL: "https://pergent.example.com"}}
-	c := newConnector(t, cfg, nil, nil)
-	d, err := dashboard.New(dashboard.Options{Config: cfg, Instances: c.reg, SecretKey: testSecretKey})
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.auth = d.Auth
-	lab := dashboardGitLab("lab", srv.URL)
-	lab.OAuthClientID = "lab-client"
-	c.reg.Put(lab) // the dashboard registers an instance before it connects it
-	s := instances.Secrets{ReviewToken: "glpat-review-example", ApproveToken: "glpat-approve-example", WebhookSecret: "w", OAuthClientSecret: "lab-oauth-secret"}
-	if err := c.Connect(context.Background(), lab, s); err != nil {
-		t.Fatal(err)
-	}
-	h := d.Handler()
-	login := func() int {
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/auth/gitlab/lab/login", nil))
-		return rec.Code
-	}
-	if got := login(); got != http.StatusFound {
-		t.Errorf("login after Connect = %d, want 302", got)
-	}
-	c.Disconnect("lab")
-	if got := login(); got != http.StatusNotFound {
-		t.Errorf("login after Disconnect = %d, want 404", got)
-	}
-}
-
 // The review bot's or App's Forge of every instance reads repositories for
 // Skills & instructions and lists what can be switched on; a platform
 // without such a Forge is left out, with a warning naming it.

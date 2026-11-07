@@ -109,7 +109,6 @@ const secretOrder = [
   "review_app_key",
   "approve_app_key",
   "webhook_secret",
-  "oauth_client_secret",
 ];
 const secretLabels: Record<string, string> = {
   review_token: "Review token",
@@ -117,7 +116,6 @@ const secretLabels: Record<string, string> = {
   review_app_key: "Review App private key",
   approve_app_key: "Approve App private key",
   webhook_secret: "Webhook secret",
-  oauth_client_secret: "OAuth client secret",
 };
 const isKey = (field: string) => field.endsWith("_app_key");
 
@@ -178,12 +176,12 @@ function Instances() {
 }
 
 // useChange returns the mutation that changes an instance of the dashboard:
-// body is {oauthClientID} and/or {secrets}.
+// body is {secrets}.
 function useChange(name: string, onDone: () => void) {
   const client = useQueryClient();
   const write = useWrite();
   return useMutation({
-    mutationFn: (body: { oauthClientID?: string; secrets?: Record<string, string> }) =>
+    mutationFn: (body: { secrets: Record<string, string> }) =>
       write<InstanceAdminView>("PUT", `/api/admin/instances/${encodeURIComponent(name)}`, body),
     // The closure holds a secret: drop it with the input, not after 5 minutes.
     gcTime: 0,
@@ -206,7 +204,7 @@ function InstanceCard({ inst }: { inst: InstanceAdminView }) {
   const confirmRemove = () => {
     if (
       window.confirm(
-        `Remove ${inst.name}? Its repositories are switched off, and its accounts, sessions and secrets are deleted.`,
+        `Remove ${inst.name}? Its repositories are switched off, and its secrets are deleted.`,
       )
     ) {
       remove.mutate();
@@ -239,7 +237,6 @@ function InstanceCard({ inst }: { inst: InstanceAdminView }) {
         <div>{approverWords(inst.approver)}</div>
         {config && <div className="meta">This instance is managed by the config file; change it there.</div>}
       </div>
-      <OAuthClientRow inst={inst} locked={locked} />
       {fields.map((f) => (
         <SecretRow
           key={f}
@@ -287,56 +284,6 @@ function WebhookURL({ inst }: { inst: InstanceAdminView }) {
       <div className="meta">
         {inst.platform === "gitlab" ? "pergent.sh sets this on each project." : "Set this on the review App."}
       </div>
-    </div>
-  );
-}
-
-function OAuthClientRow({ inst, locked }: { inst: InstanceAdminView; locked: boolean }) {
-  const [open, setOpen] = useState(false);
-  const [value, setValue] = useState("");
-  const change = useChange(inst.name, () => setOpen(false));
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    change.mutate({ oauthClientID: value.trim() });
-  };
-  return (
-    <div className="row wrap" role="group" aria-label="OAuth client ID">
-      <div className="grow">
-        <div className="name">OAuth client ID</div>
-        <div className="meta">{inst.oauthClientID || "not set"}</div>
-      </div>
-      {!locked && !open && (
-        <button
-          type="button"
-          className="btn small"
-          onClick={() => {
-            change.reset();
-            setValue(inst.oauthClientID);
-            setOpen(true);
-          }}
-        >
-          Change
-        </button>
-      )}
-      {open && (
-        <form className="inline-form" onSubmit={submit}>
-          <input
-            type="text"
-            aria-label="New OAuth client ID"
-            {...noFill}
-            spellCheck={false}
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-          />
-          <button type="submit" className="btn small primary" disabled={change.isPending}>
-            Save
-          </button>
-          <button type="button" className="btn small" onClick={() => setOpen(false)}>
-            Cancel
-          </button>
-        </form>
-      )}
-      {change.isError && <ErrorBox error={change.error} />}
     </div>
   );
 }
@@ -467,12 +414,10 @@ function AddInstance({ platform, onClose }: { platform: Platform; onClose: () =>
           ...(approveWith === "app" ? { approve_app_key: d.approve_app_key ?? "" } : {}),
           ...(approveWith === "token" ? { approve_token: d.approve_token ?? "" } : {}),
           webhook_secret: d.webhook_secret ?? "",
-          oauth_client_secret: d.oauth_client_secret ?? "",
         }
       : {
           review_token: d.review_token ?? "",
           approve_token: d.approve_token ?? "",
-          oauth_client_secret: d.oauth_client_secret ?? "",
         };
     const secrets: Record<string, string> = {};
     for (const [field, text] of Object.entries(typed)) {
@@ -504,13 +449,12 @@ function AddInstance({ platform, onClose }: { platform: Platform; onClose: () =>
         apiURL: v("apiURL"),
         reviewAppID,
         approveAppID,
-        oauthClientID: v("oauthClientID"),
         secrets,
       });
       return;
     }
     setProblem("");
-    add.mutate({ name: v("name"), platform, url: v("url"), oauthClientID: v("oauthClientID"), secrets });
+    add.mutate({ name: v("name"), platform, url: v("url"), secrets });
   };
 
   const title = `Add ${platformName(platform)} instance`;
@@ -558,14 +502,6 @@ function AddInstance({ platform, onClose }: { platform: Platform; onClose: () =>
           <Field d={d} set={set} name="approve_token" label="Approve token" secret required />
         </>
       )}
-      <Field
-        d={d}
-        set={set}
-        name="oauthClientID"
-        label="OAuth client ID"
-        help="Optional: lets people sign in to the dashboard with this instance. Give the client secret too."
-      />
-      <Field d={d} set={set} name="oauth_client_secret" label="OAuth client secret" secret />
       {problem && (
         <div className="error" role="alert">
           {problem}

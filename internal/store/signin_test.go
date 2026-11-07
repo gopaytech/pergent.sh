@@ -286,7 +286,12 @@ func TestMigrationKeepsPreviousRelease(t *testing.T) {
 			t.Errorf("team %s has members %+v; want none after the migration", tm.Name, tm.Members)
 		}
 	}
-	if teams[0].Name != "devs" || teams[0].Role != RoleMaintainer || len(teams[0].Repos) != 1 {
-		t.Errorf("team devs = %+v; want its name, role and repository kept", teams[0])
+	if teams[0].Name != "devs" || len(teams[0].Repos) != 1 {
+		t.Errorf("team devs = %+v; want its name and repository kept", teams[0])
+	}
+	// The old team role stays in its column, for the previous release.
+	var teamRole string
+	if err := s.pool.QueryRow(ctx, `SELECT role FROM teams WHERE name = 'devs'`).Scan(&teamRole); err != nil || teamRole != RoleMaintainer {
+		t.Errorf("teams.role = %q, %v; want the role kept", teamRole, err)
 	}
 }

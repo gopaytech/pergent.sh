@@ -16,19 +16,30 @@ import (
 
 const operatorPassword = "operator-password-1"
 
-// signInOperator stores the password account root and signs it in.
+// signInOperator stores the local admin root and signs it in.
 func (e *env) signInOperator() *http.Cookie {
 	e.t.Helper()
 	e.addPasswordAccount("root", operatorPassword, false)
 	return e.signInPassword("root", operatorPassword)
 }
 
-// platformAccount stores a platform account of instance with the given
-// platform user ID and username.
+// platformAccount stores an old platform account of instance, which nothing
+// reaches any more: the Users page must not show it.
 func (e *env) platformAccount(instance string, userID int64, username string) int64 {
 	e.t.Helper()
 	platform := map[string]string{"main": config.PlatformGitLab, "gh": config.PlatformGitHub}[instance]
 	a, err := e.st.UpsertPlatformAccount(ctx, platform, instance, userID, username, e.clock.now())
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return a.ID
+}
+
+// invited stores the SSO account of email as an admin adds it before its
+// first sign-in.
+func (e *env) invited(email string) int64 {
+	e.t.Helper()
+	a, err := e.st.AddSSOAccount(ctx, email, e.clock.now())
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -76,46 +87,55 @@ func (e *env) addAudit(entry store.AuditEntry) {
 	}
 }
 
-// Waiting accounts (platform accounts on no team) come first, marked
-// waiting, and every account lists its teams.
-func TestUsersWaitingFirst(t *testing.T) {
+// Accounts are listed by name: SSO accounts by email, with their role, whether
+// they were added and have not signed in (invited), whether they sign in and
+// wait for a team, and their teams; the old platform accounts are not there.
+func TestUsersListed(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.signInOperator()
-	bob := e.platformAccount("main", 20, "bob")
-	zed := e.platformAccount("gh", 21, "zed")
-	e.platformAccount("main", 22, "yvonne")
-	team := e.team("devs", store.RoleViewer, []int64{bob}, store.TeamRepo{Instance: "main"})
-	e.team("more", store.RoleViewer, []int64{bob})
+	alice := e.alice()
+	e.invited("bob@example.com")
+	e.sso("yvonne@example.com")
+	e.ssoAdmin("zed@example.com")
+	e.platformAccount("main", 20, "old-carol")
+	team := e.team("devs", []store.TeamMember{{AccountID: alice, Role: store.RoleMaintainer}}, store.TeamRepo{Instance: "main"})
+	e.team("more", []store.TeamMember{{AccountID: alice, Role: store.RoleViewer}})
 
 	users := decode[[]UserView](t, e.get(c, "/api/users"), "GET /api/users", http.StatusOK)
 	var names []string
 	for _, u := range users {
 		names = append(names, u.Username)
-	}
-	if !slices.Equal(names, []string{"yvonne", "zed", "bob", "root"}) {
-		t.Fatalf("users = %v; want the waiting yvonne and zed first", names)
-	}
-	for _, u := range users {
-		if u.Waiting != (u.Username == "yvonne" || u.Username == "zed") {
-			t.Errorf("%s waiting = %v", u.Username, u.Waiting)
-		}
 		if u.Teams == nil {
 			t.Errorf("%s teams is null", u.Username)
 		}
 	}
-	if u := users[1]; u.ID != zed || u.Kind != store.AccountPlatform || u.Platform != config.PlatformGitHub || u.Instance != "gh" {
-		t.Errorf("zed = %+v", u)
+	if want := []string{aliceEmail, "bob@example.com", "root", "yvonne@example.com", "zed@example.com"}; !slices.Equal(names, want) {
+		t.Fatalf("users = %v; want %v (no platform account)", names, want)
 	}
-	if u := users[2]; len(u.Teams) != 2 || u.Teams[0] != (TeamRef{ID: team, Name: "devs"}) || u.Teams[1].Name != "more" {
-		t.Errorf("bob's teams = %+v", u.Teams)
+	byName := map[string]UserView{}
+	for _, u := range users {
+		byName[u.Username] = u
 	}
-	if u := users[3]; u.Kind != store.AccountPassword || u.Platform != "" || u.LastSignInAt == nil || u.Waiting {
+	if u := byName[aliceEmail]; u.ID != alice || u.Kind != store.AccountSSO || u.Email != aliceEmail || u.Role != store.RoleUser ||
+		u.Invited || u.Waiting || u.LastSignInAt == nil || len(u.Teams) != 2 || u.Teams[0] != (TeamRef{ID: team, Name: "devs"}) || u.Teams[1].Name != "more" {
+		t.Errorf("alice = %+v", u)
+	}
+	if u := byName["bob@example.com"]; !u.Invited || u.Waiting || u.LastSignInAt != nil || u.Role != store.RoleUser {
+		t.Errorf("bob (added, never signed in) = %+v; want invited, not waiting", u)
+	}
+	if u := byName["yvonne@example.com"]; u.Invited || !u.Waiting {
+		t.Errorf("yvonne (signed in, no team) = %+v; want waiting", u)
+	}
+	if u := byName["zed@example.com"]; u.Role != store.RoleAdmin || u.Waiting {
+		t.Errorf("zed (an admin) = %+v; want admin, not waiting", u)
+	}
+	if u := byName["root"]; u.Kind != store.AccountPassword || u.Email != "" || u.Role != store.RoleAdmin || u.LastSignInAt == nil || u.Waiting || u.Invited {
 		t.Errorf("root = %+v", u)
 	}
 }
 
-// A removed account's sessions end with it: its next request is 401, and
-// its next sign-in makes it again, on no team.
+// A removed account's sessions end with it: its next request is 401, and an
+// SSO account that signs in again is made again, on no team.
 func TestDeleteAccountEndsSessions(t *testing.T) {
 	e := newEnv(t, nil)
 	op := e.signInOperator()
@@ -129,12 +149,15 @@ func TestDeleteAccountEndsSessions(t *testing.T) {
 	wantCode(t, e.send(op, "DELETE", "/api/users/"+strconv.FormatInt(id, 10), ""), "DELETE alice again", http.StatusNotFound)
 	wantCode(t, e.send(op, "DELETE", "/api/users/nope", ""), "DELETE nope", http.StatusNotFound)
 
-	again := e.signIn("gitlab", "main")
+	again := e.aliceSession() // signed in again: a new account, on no team
+	if e.accountOf(again) == id {
+		t.Error("the removed account came back")
+	}
 	if code, me := e.me(again); code != http.StatusOK || !me.Waiting {
 		t.Errorf("alice signed in again: %d %+v; want waiting", code, me)
 	}
 
-	// A password account too, by another one.
+	// A local admin too, by another one.
 	other := e.addPasswordAccount("second", operatorPassword, false)
 	second := e.signInPassword("second", operatorPassword)
 	wantCode(t, e.send(op, "DELETE", "/api/users/"+strconv.FormatInt(other.ID, 10), ""), "DELETE second", http.StatusNoContent)
@@ -148,23 +171,23 @@ func TestDeleteAccountEndsSessions(t *testing.T) {
 			deleted = append(deleted, a.Actor+" "+a.Detail)
 		}
 	}
-	if !slices.Equal(deleted, []string{"root (password) second", "root (password) alice"}) {
+	if !slices.Equal(deleted, []string{"root (password) second", "root (password) " + aliceEmail}) {
 		t.Errorf("account_deleted entries = %v", deleted)
 	}
 }
 
-// A platform admin may remove platform accounts but never a password
-// account: 403, and it stays.
-func TestPlatformAdminCannotDeletePasswordAccount(t *testing.T) {
+// Every admin has every power: an SSO admin removes a local admin, and
+// another account, at once. An account that is no admin removes nobody.
+func TestSSOAdminMayDeleteLocalAdmin(t *testing.T) {
 	e := newEnv(t, nil)
 	root := e.addPasswordAccount("root", operatorPassword, false)
 	e.addPasswordAccount("second", operatorPassword, false)
-	c := e.signInGitLab(true, "acme/widgets")
-	bob := e.platformAccount("main", 20, "bob")
+	c := e.signInGitLab(true)
+	bob := e.sso("bob@example.com")
 
-	wantCode(t, e.send(c, "DELETE", "/api/users/"+strconv.FormatInt(root.ID, 10), ""), "DELETE root", http.StatusForbidden)
-	if _, found, _ := e.st.Account(ctx, root.ID); !found {
-		t.Error("root was removed")
+	wantCode(t, e.send(c, "DELETE", "/api/users/"+strconv.FormatInt(root.ID, 10), ""), "DELETE root", http.StatusNoContent)
+	if _, found, _ := e.st.Account(ctx, root.ID); found {
+		t.Error("root is still there")
 	}
 	wantCode(t, e.send(c, "DELETE", "/api/users/"+strconv.FormatInt(bob, 10), ""), "DELETE bob", http.StatusNoContent)
 	if _, found, _ := e.st.Account(ctx, bob); found {
@@ -172,23 +195,103 @@ func TestPlatformAdminCannotDeletePasswordAccount(t *testing.T) {
 	}
 }
 
-// The last password account can't be removed: 409.
-func TestDeleteLastPasswordAccount(t *testing.T) {
+// An old platform account is not on the Users page, so deleting it is as
+// good as deleting nothing: 404, and the row stays.
+func TestPlatformAccountCannotBeDeleted(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.signInOperator()
-	rec := e.send(c, "DELETE", "/api/users/"+strconv.FormatInt(e.accountOf(c), 10), "")
-	wantCode(t, rec, "DELETE the last password account", http.StatusConflict)
-	if got := body(rec); got != `{"error":"the last password account can't be removed"}` {
-		t.Errorf("body = %s", got)
-	}
-	if code, _ := e.me(c); code != http.StatusOK {
-		t.Errorf("the operator's session = %d after the refused removal", code)
+	old := e.platformAccount("main", 20, "bob")
+	wantCode(t, e.send(c, "DELETE", "/api/users/"+strconv.FormatInt(old, 10), ""), "DELETE a platform account", http.StatusNotFound)
+	wantCode(t, e.send(c, "PUT", "/api/admin/users/"+strconv.FormatInt(old, 10)+"/role", `{"role":"admin"}`),
+		"PUT a platform account's role", http.StatusNotFound)
+	if _, found, _ := e.st.Account(ctx, old); !found {
+		t.Error("the platform account was removed")
 	}
 }
 
-// An operator adds a password admin and gets its generated password, which
-// signs in and must be changed; a platform admin can't; a bad or taken
-// username is refused.
+// An admin can't remove their own account, an SSO admin or a local one.
+func TestAdminCantDeleteSelf(t *testing.T) {
+	e := newEnv(t, nil)
+	local := e.signInOperator()
+	e.addPasswordAccount("second", operatorPassword, false)
+	sso := e.signInGitLab(true)
+	for name, c := range map[string]*http.Cookie{"local admin": local, "sso admin": sso} {
+		rec := e.send(c, "DELETE", "/api/users/"+strconv.FormatInt(e.accountOf(c), 10), "")
+		wantCode(t, rec, name+" DELETE self", http.StatusConflict)
+		if got := body(rec); got != `{"error":"you can't remove your own account"}` {
+			t.Errorf("%s body = %s", name, got)
+		}
+		if code, _ := e.me(c); code != http.StatusOK {
+			t.Errorf("the %s's session = %d after the refused removal", name, code)
+		}
+	}
+}
+
+// The last local admin can't be removed, not even by an SSO admin: 409.
+func TestLastLocalAdminCantBeRemoved(t *testing.T) {
+	e := newEnv(t, nil)
+	root := e.addPasswordAccount("root", operatorPassword, false)
+	c := e.signInGitLab(true)
+	rec := e.send(c, "DELETE", "/api/users/"+strconv.FormatInt(root.ID, 10), "")
+	wantCode(t, rec, "DELETE the last local admin", http.StatusConflict)
+	if got := body(rec); got != `{"error":"the last password account can't be removed"}` {
+		t.Errorf("body = %s", got)
+	}
+	if _, found, _ := e.st.Account(ctx, root.ID); !found {
+		t.Error("the last local admin was removed")
+	}
+	// With a second one, the first can go.
+	second := e.addPasswordAccount("second", operatorPassword, false)
+	wantCode(t, e.send(c, "DELETE", "/api/users/"+strconv.FormatInt(root.ID, 10), ""), "DELETE root with a second", http.StatusNoContent)
+	wantCode(t, e.send(c, "DELETE", "/api/users/"+strconv.FormatInt(second.ID, 10), ""), "DELETE the new last one", http.StatusConflict)
+}
+
+// An admin makes an SSO account an admin or a user, and takes it away again.
+// They can't change their own role, so one admin always stays to change the
+// others'; a local admin is always an admin.
+func TestAdminCantRemoveOwnRole(t *testing.T) {
+	e := newEnv(t, nil)
+	root := e.addPasswordAccount("root", operatorPassword, false)
+	c := e.signInGitLab(true)
+	self := strconv.FormatInt(e.accountOf(c), 10)
+	rec := e.send(c, "PUT", "/api/admin/users/"+self+"/role", `{"role":"user"}`)
+	wantCode(t, rec, "PUT own role", http.StatusConflict)
+	if got := body(rec); got != `{"error":"you can't change your own role"}` {
+		t.Errorf("body = %s", got)
+	}
+	if _, me := e.me(c); !me.Admin {
+		t.Error("the admin lost their role")
+	}
+	wantCode(t, e.send(c, "PUT", "/api/admin/users/"+strconv.FormatInt(root.ID, 10)+"/role", `{"role":"user"}`),
+		"PUT a local admin's role", http.StatusConflict)
+
+	bob := e.sso("bob@example.com")
+	bobSession := e.sessionFor(bob)
+	target := "/api/admin/users/" + strconv.FormatInt(bob, 10) + "/role"
+	e.wantStatus(bobSession, "/api/users", http.StatusForbidden)
+	wantCode(t, e.send(c, "PUT", target, `{"role":"admin"}`), "make bob an admin", http.StatusNoContent)
+	e.wantStatus(bobSession, "/api/users", http.StatusOK)
+	wantCode(t, e.send(c, "PUT", target, `{"role":"user"}`), "make bob a user again", http.StatusNoContent)
+	e.wantStatus(bobSession, "/api/users", http.StatusForbidden)
+
+	for _, b := range []string{`{"role":"owner"}`, `{"role":"viewer"}`, `{}`, `{"role":"admin","x":1}`, `nope`} {
+		wantCode(t, e.send(c, "PUT", target, b), "PUT "+b, http.StatusBadRequest)
+	}
+	wantCode(t, e.send(c, "PUT", "/api/admin/users/99999/role", `{"role":"admin"}`), "PUT an unknown account", http.StatusNotFound)
+	var changes []string
+	for _, a := range e.auditEntries() {
+		if a.Action == "account_role_changed" {
+			changes = append([]string{a.Actor + " " + a.Detail}, changes...)
+		}
+	}
+	if want := []string{aliceEmail + " bob@example.com: user->admin", aliceEmail + " bob@example.com: admin->user"}; !slices.Equal(changes, want) {
+		t.Errorf("account_role_changed entries = %q; want %q", changes, want)
+	}
+}
+
+// An admin adds a local admin and gets its generated password, which signs in
+// and must be changed; a bad or taken username is refused. An SSO admin may
+// too.
 func TestCreatePasswordAccount(t *testing.T) {
 	e := newEnv(t, nil)
 	op := e.signInOperator()
@@ -199,8 +302,8 @@ func TestCreatePasswordAccount(t *testing.T) {
 		t.Fatalf("created = %+v", got)
 	}
 	c := e.signInPassword("ops.Second-1", got.Password)
-	if code, me := e.me(c); code != http.StatusOK || !me.MustChangePassword || !me.Operator {
-		t.Errorf("the new admin: %d %+v; want an operator who must change the password", code, me)
+	if code, me := e.me(c); code != http.StatusOK || !me.MustChangePassword || !me.Admin {
+		t.Errorf("the new admin: %d %+v; want an admin who must change the password", code, me)
 	}
 	if strings.Contains(e.logs.String(), got.Password) {
 		t.Error("the generated password was logged")
@@ -213,18 +316,15 @@ func TestCreatePasswordAccount(t *testing.T) {
 	}
 	wantCode(t, e.send(op, "POST", "/api/admin/accounts", `{"username":"`+strings.Repeat("a", 64)+`"}`), "POST 64 characters", http.StatusCreated)
 
-	admin := e.signInGitLab(true, "acme/widgets")
-	wantCode(t, e.send(admin, "POST", "/api/admin/accounts", `{"username":"sneaky"}`), "POST by a platform admin", http.StatusForbidden)
-	if _, found, _ := e.st.PasswordAccount(ctx, "sneaky"); found {
-		t.Error("a platform admin made a password account")
-	}
+	admin := e.signInGitLab(true)
+	wantCode(t, e.send(admin, "POST", "/api/admin/accounts", `{"username":"by-sso-admin"}`), "POST by an SSO admin", http.StatusCreated)
 	var created []string
 	for _, a := range e.auditEntries() {
 		if a.Action == "account_created" {
 			created = append(created, a.Actor+" "+a.Detail)
 		}
 	}
-	if len(created) != 2 || created[1] != "root (password) ops.Second-1" {
+	if len(created) != 3 || created[2] != "root (password) ops.Second-1" || created[0] != aliceEmail+" by-sso-admin" {
 		t.Errorf("account_created entries = %v", created)
 	}
 }
@@ -233,46 +333,51 @@ func TestCreatePasswordAccount(t *testing.T) {
 func TestTeamCRUD(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.signInOperator()
-	bob := e.platformAccount("main", 20, "bob")
-	zed := e.platformAccount("gh", 21, "zed")
+	bob := e.sso("bob@example.com")
+	zed := e.sso("zed@example.com")
 
-	created := decode[TeamView](t, e.send(c, "POST", "/api/teams", `{"name":"devs","role":"viewer"}`), "POST team", http.StatusCreated)
-	if created.ID == 0 || created.Name != "devs" || created.Role != "viewer" || created.Members == nil || created.Repos == nil {
+	created := decode[TeamView](t, e.send(c, "POST", "/api/teams", `{"name":"devs"}`), "POST team", http.StatusCreated)
+	if created.ID == 0 || created.Name != "devs" || created.Members == nil || created.Repos == nil {
 		t.Fatalf("created = %+v", created)
 	}
-	wantCode(t, e.send(c, "POST", "/api/teams", `{"name":"DEVS","role":"admin"}`), "POST a taken name", http.StatusConflict)
-	for _, b := range []string{`{"name":"","role":"viewer"}`, `{"name":"x","role":"owner"}`, `{"name":"x"}`, `{"name":"x","role":"viewer","y":1}`} {
+	wantCode(t, e.send(c, "POST", "/api/teams", `{"name":"DEVS"}`), "POST a taken name", http.StatusConflict)
+	for _, b := range []string{`{"name":""}`, `{}`, `{"name":"x","role":"viewer"}`, `{"name":"x","y":1}`, `nope`} {
 		wantCode(t, e.send(c, "POST", "/api/teams", b), "POST "+b, http.StatusBadRequest)
 	}
 
 	target := "/api/teams/" + strconv.FormatInt(created.ID, 10)
-	put := fmt.Sprintf(`{"name":"developers","role":"maintainer","members":[%d,%d,%d],"repos":[
+	put := fmt.Sprintf(`{"name":"developers","members":[{"accountId":%d,"role":"maintainer"},{"accountId":%d,"role":"viewer"},{"accountId":%d,"role":"viewer"}],"repos":[
 		{"instance":"main","project":"ACME/widgets"},{"instance":"gh","project":""}]}`, bob, zed, bob)
 	updated := decode[TeamView](t, e.send(c, "PUT", target, put), "PUT team", http.StatusOK)
-	if updated.Name != "developers" || updated.Role != "maintainer" || len(updated.Members) != 2 || updated.HiddenRepos != 0 {
+	if updated.Name != "developers" || len(updated.Members) != 2 {
 		t.Fatalf("updated = %+v", updated)
 	}
-	if m := updated.Members[0]; m != (TeamMemberView{ID: bob, Username: "bob", Platform: config.PlatformGitLab, Instance: "main"}) {
+	// An account named twice is one member, with the higher role.
+	if m := updated.Members[0]; m != (TeamMemberView{AccountID: bob, Username: "bob@example.com", Email: "bob@example.com", Role: "maintainer"}) {
+		t.Errorf("member = %+v", m)
+	}
+	if m := updated.Members[1]; m != (TeamMemberView{AccountID: zed, Username: "zed@example.com", Email: "zed@example.com", Role: "viewer"}) {
 		t.Errorf("member = %+v", m)
 	}
 	if !slices.Equal(updated.Repos, []TeamRepoView{{Instance: "gh"}, {Instance: "main", Project: "acme/widgets"}}) {
 		t.Errorf("repos = %+v", updated.Repos)
 	}
 	stored := e.storedTeam(created.ID)
-	if !slices.Equal(memberIDsOf(stored.Members), []int64{bob, zed}) || len(stored.Repos) != 2 {
+	if !slices.Equal(stored.Members, []store.TeamMember{{AccountID: bob, Role: store.RoleMaintainer}, {AccountID: zed, Role: store.RoleViewer}}) || len(stored.Repos) != 2 {
 		t.Errorf("stored = %+v", stored)
 	}
 
 	// A repository that isn't switched on, or an unknown instance, is 400.
 	for _, repos := range []string{`[{"instance":"main","project":"acme/off"}]`, `[{"instance":"nowhere","project":""}]`,
 		`[{"instance":"nowhere","project":"acme/widgets"}]`} {
-		b := `{"name":"developers","role":"maintainer","members":[],"repos":` + repos + `}`
+		b := `{"name":"developers","members":[],"repos":` + repos + `}`
 		wantCode(t, e.send(c, "PUT", target, b), "PUT "+repos, http.StatusBadRequest)
 	}
-	wantCode(t, e.send(c, "PUT", "/api/teams/99999", `{"name":"x","role":"viewer","members":[],"repos":[]}`), "PUT unknown", http.StatusNotFound)
-	other := e.team("others", store.RoleViewer, nil)
-	wantCode(t, e.send(c, "PUT", "/api/teams/"+strconv.FormatInt(other, 10), `{"name":"Developers","role":"viewer","members":[],"repos":[]}`),
+	wantCode(t, e.send(c, "PUT", "/api/teams/99999", `{"name":"x","members":[],"repos":[]}`), "PUT unknown", http.StatusNotFound)
+	other := e.team("others", nil)
+	wantCode(t, e.send(c, "PUT", "/api/teams/"+strconv.FormatInt(other, 10), `{"name":"Developers","members":[],"repos":[]}`),
 		"PUT a taken name", http.StatusConflict)
+	wantCode(t, e.send(c, "PUT", target, `{"name":"developers","role":"admin","members":[],"repos":[]}`), "PUT a team role", http.StatusBadRequest)
 
 	teams := decode[[]TeamView](t, e.get(c, "/api/teams"), "GET teams", http.StatusOK)
 	if len(teams) != 2 || teams[0].Name != "developers" || teams[1].Name != "others" {
@@ -291,292 +396,68 @@ func TestTeamCRUD(t *testing.T) {
 			log = append([]string{a.Actor + " " + a.Action + " " + a.Detail}, log...)
 		}
 	}
-	want := []string{"root (password) team_created devs (viewer)",
-		"root (password) team_updated developers: name, role viewer->maintainer, members +bob +zed, repos",
+	want := []string{"root (password) team_created devs",
+		"root (password) team_updated developers: name, members +bob@example.com:maintainer +zed@example.com:viewer, repos",
 		"root (password) team_deleted developers"}
 	if !slices.Equal(log, want) {
 		t.Errorf("team audit = %q; want %q", log, want)
 	}
 }
 
-// An admin team has no repository list: a PUT with repositories is 400.
-func TestAdminTeamNoRepos(t *testing.T) {
+// Only SSO accounts can be members, each with a role of viewer or
+// maintainer: a local admin, an old platform account, an unknown ID, a bad or
+// missing role is 400, and the team stays as it was.
+func TestTeamMembersMustBeSSO(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.signInOperator()
-	id := e.team("devs", store.RoleViewer, nil, store.TeamRepo{Instance: "main", Project: "acme/widgets"})
+	bob := e.sso("bob@example.com")
+	old := e.platformAccount("main", 20, "old")
+	id := e.team("devs", []store.TeamMember{{AccountID: bob, Role: store.RoleViewer}})
 	target := "/api/teams/" + strconv.FormatInt(id, 10)
-	wantCode(t, e.send(c, "PUT", target, `{"name":"devs","role":"admin","members":[],"repos":[{"instance":"main","project":""}]}`),
-		"PUT an admin team with repositories", http.StatusBadRequest)
-	if tm := e.storedTeam(id); tm.Role != store.RoleViewer || len(tm.Repos) != 1 {
-		t.Errorf("the refused change changed the team: %+v", tm)
-	}
-	got := decode[TeamView](t, e.send(c, "PUT", target, `{"name":"devs","role":"admin","members":[],"repos":[]}`), "PUT admin", http.StatusOK)
-	if got.Role != "admin" || len(got.Repos) != 0 || len(e.storedTeam(id).Repos) != 0 {
-		t.Errorf("admin team = %+v", got)
-	}
-}
-
-// Only platform accounts can be members: a password account, or an unknown
-// ID, is 400.
-func TestTeamMembersMustBePlatform(t *testing.T) {
-	e := newEnv(t, nil)
-	c := e.signInOperator()
-	bob := e.platformAccount("main", 20, "bob")
-	id := e.team("devs", store.RoleViewer, []int64{bob})
-	target := "/api/teams/" + strconv.FormatInt(id, 10)
-	for _, members := range []string{strconv.FormatInt(e.accountOf(c), 10), "99999", `"bob"`} {
-		b := `{"name":"devs","role":"viewer","members":[` + members + `],"repos":[]}`
+	for _, members := range []string{
+		fmt.Sprintf(`{"accountId":%d,"role":"viewer"}`, e.accountOf(c)),
+		fmt.Sprintf(`{"accountId":%d,"role":"viewer"}`, old),
+		`{"accountId":99999,"role":"viewer"}`,
+		fmt.Sprintf(`{"accountId":%d,"role":"admin"}`, bob),
+		fmt.Sprintf(`{"accountId":%d,"role":""}`, bob),
+		fmt.Sprintf(`{"accountId":%d}`, bob),
+		fmt.Sprint(bob), `"bob"`,
+	} {
+		b := `{"name":"devs","members":[` + members + `],"repos":[]}`
 		wantCode(t, e.send(c, "PUT", target, b), "PUT members "+members, http.StatusBadRequest)
 	}
-	if tm := e.storedTeam(id); !slices.Equal(memberIDsOf(tm.Members), []int64{bob}) {
+	if tm := e.storedTeam(id); !slices.Equal(tm.Members, []store.TeamMember{{AccountID: bob, Role: store.RoleViewer}}) {
 		t.Errorf("members = %v", tm.Members)
 	}
 }
 
-// A platform admin edits a team with repositories it can't see: those are
-// kept, counted and never shown; it can't add another instance's, nor make
-// the team an admin team or remove it (409). A password admin can.
-func TestPlatformAdminTeamEditKeepsHidden(t *testing.T) {
+// A member's role on a team is theirs alone: changing it changes what that
+// person may do, and the audit says whose role changed.
+func TestTeamMemberRoleChange(t *testing.T) {
 	e := newEnv(t, nil)
-	c := e.signInGitLab(true, "acme/widgets") // acme/payments is hidden from alice
-	id := e.team("devs", store.RoleViewer, nil,
-		store.TeamRepo{Instance: "main", Project: "acme/widgets"}, store.TeamRepo{Instance: "main", Project: "acme/payments"})
+	c := e.signInOperator()
+	bob := e.sso("bob@example.com")
+	zed := e.sso("zed@example.com")
+	id := e.team("devs", []store.TeamMember{{AccountID: bob, Role: store.RoleViewer}, {AccountID: zed, Role: store.RoleViewer}},
+		store.TeamRepo{Instance: "main", Project: "acme/widgets"})
 	target := "/api/teams/" + strconv.FormatInt(id, 10)
-
-	got := decode[TeamView](t, e.send(c, "PUT", target, `{"name":"devs","role":"viewer","members":[],"repos":[]}`), "PUT", http.StatusOK)
-	if len(got.Repos) != 0 || got.HiddenRepos != 1 {
-		t.Errorf("PUT answer = %+v; want repos [], hiddenRepos 1", got)
+	put := func(members string) {
+		wantCode(t, e.send(c, "PUT", target, `{"name":"devs","members":`+members+`,"repos":[{"instance":"main","project":"acme/widgets"}]}`),
+			"PUT "+members, http.StatusOK)
 	}
-	if tm := e.storedTeam(id); !slices.Equal(tm.Repos, []store.TeamRepo{{Instance: "main", Project: "acme/payments"}}) {
-		t.Errorf("stored repos = %+v; want acme/payments only", tm.Repos)
+	bobSession, zedSession := e.sessionFor(bob), e.sessionFor(zed)
+	put(fmt.Sprintf(`[{"accountId":%d,"role":"maintainer"},{"accountId":%d,"role":"viewer"}]`, bob, zed))
+	if _, se := e.session(bobSession); se.Role("main", "acme/widgets") != RoleMaintainer {
+		t.Errorf("bob's role = %v, want maintainer", se.Role("main", "acme/widgets"))
 	}
-	teams := decode[[]TeamView](t, e.get(c, "/api/teams"), "GET teams", http.StatusOK)
-	if len(teams) != 2 || teams[1].Name != "devs" || len(teams[1].Repos) != 0 || teams[1].HiddenRepos != 1 {
-		t.Errorf("GET teams = %+v", teams)
+	if _, se := e.session(zedSession); se.Role("main", "acme/widgets") != RoleViewer {
+		t.Errorf("zed's role = %v, want viewer", se.Role("main", "acme/widgets"))
 	}
-	if strings.Contains(e.get(c, "/api/teams").Body.String(), "payments") {
-		t.Error("GET /api/teams names the hidden repository")
+	put(fmt.Sprintf(`[{"accountId":%d,"role":"maintainer"}]`, zed))
+	if got := e.auditEntries()[0]; got.Action != "team_updated" || got.Detail != "devs: members zed@example.com:viewer->maintainer -bob@example.com" {
+		t.Errorf("audit = %+v; want the role change and the removal named", got)
 	}
-
-	// Their own instance's whole-instance entry is theirs; another's is
-	// hidden, and adding one is 400.
-	got = decode[TeamView](t, e.send(c, "PUT", target, `{"name":"devs","role":"viewer","members":[],"repos":[
-		{"instance":"main","project":""},{"instance":"main","project":"acme/widgets"}]}`), "PUT whole main", http.StatusOK)
-	if !slices.Equal(got.Repos, []TeamRepoView{{Instance: "main"}, {Instance: "main", Project: "acme/widgets"}}) || got.HiddenRepos != 1 {
-		t.Errorf("PUT answer = %+v", got)
-	}
-	wantCode(t, e.send(c, "PUT", target, `{"name":"devs","role":"viewer","members":[],"repos":[{"instance":"gh","project":""}]}`),
-		"PUT another instance", http.StatusBadRequest)
-	wantCode(t, e.send(c, "PUT", target, `{"name":"devs","role":"viewer","members":[],"repos":[{"instance":"gh","project":"acme/widgets"}]}`),
-		"PUT another instance's repository", http.StatusBadRequest)
-	e.editTeam(id, func(tm *store.Team) { tm.Repos = append(tm.Repos, store.TeamRepo{Instance: "gh"}) })
-	got = decode[TeamView](t, e.send(c, "PUT", target, `{"name":"devs","role":"viewer","members":[],"repos":[]}`), "PUT", http.StatusOK)
-	if len(got.Repos) != 0 || got.HiddenRepos != 2 {
-		t.Errorf("PUT answer = %+v; want repos [], hiddenRepos 2", got)
-	}
-	hidden := []store.TeamRepo{{Instance: "gh"}, {Instance: "main", Project: "acme/payments"}}
-	if tm := e.storedTeam(id); !slices.Equal(tm.Repos, hidden) {
-		t.Errorf("stored repos = %+v", tm.Repos)
-	}
-
-	// Making the team an admin team, or removing it, would drop what it
-	// covers out of sight: 409 for a platform admin, and nothing changes.
-	const wantConflict = `{"error":"this team covers repositories you can't see; a password admin can change its role or remove it"}`
-	toAdmin := `{"name":"devs","role":"admin","members":[],"repos":[]}`
-	rec := e.send(c, "PUT", target, toAdmin)
-	if rec.Code != http.StatusConflict || body(rec) != wantConflict {
-		t.Errorf("PUT role admin = %d %s; want 409 %s", rec.Code, rec.Body, wantConflict)
-	}
-	rec = e.send(c, "DELETE", target, "")
-	if rec.Code != http.StatusConflict || body(rec) != wantConflict {
-		t.Errorf("DELETE = %d %s; want 409 %s", rec.Code, rec.Body, wantConflict)
-	}
-	if tm := e.storedTeam(id); tm.Role != store.RoleViewer || !slices.Equal(tm.Repos, hidden) {
-		t.Errorf("the refused changes changed the team: %+v", tm)
-	}
-
-	// A team it sees all of, it can make an admin team and remove.
-	mine := e.team("mine", store.RoleViewer, nil, store.TeamRepo{Instance: "main", Project: "acme/widgets"})
-	mineTarget := "/api/teams/" + strconv.FormatInt(mine, 10)
-	wantCode(t, e.send(c, "PUT", mineTarget, `{"name":"mine","role":"admin","members":[],"repos":[]}`), "PUT mine role admin", http.StatusOK)
-	wantCode(t, e.send(c, "DELETE", mineTarget, ""), "DELETE mine", http.StatusNoContent)
-
-	// A password admin sees everything: role admin clears the repositories,
-	// and the team can be removed.
-	op := e.signInOperator()
-	got = decode[TeamView](t, e.send(op, "PUT", target, toAdmin), "operator PUT role admin", http.StatusOK)
-	if got.Role != store.RoleAdmin || len(got.Repos) != 0 || got.HiddenRepos != 0 {
-		t.Errorf("operator PUT answer = %+v", got)
-	}
-	if tm := e.storedTeam(id); tm.Role != store.RoleAdmin || len(tm.Repos) != 0 {
-		t.Errorf("stored after operator PUT = %+v; want an admin team with no repos", tm)
-	}
-	e.editTeam(id, func(tm *store.Team) { tm.Role, tm.Repos = store.RoleViewer, hidden })
-	wantCode(t, e.send(op, "DELETE", target, ""), "operator DELETE", http.StatusNoContent)
-	if _, found, _ := e.st.Team(ctx, id); found {
-		t.Error("the team is still there")
-	}
-}
-
-// Any role change of a team that covers a repository the platform admin
-// can't see is 409, not only one to admin: the hidden repository would
-// otherwise change role out of its sight. A password admin can; a change
-// that keeps the role is fine.
-func TestPlatformAdminCannotChangeRoleOfHiddenCoverage(t *testing.T) {
-	e := newEnv(t, nil)
-	c := e.signInGitLab(true, "acme/widgets") // acme/payments is hidden from alice
-	hidden := store.TeamRepo{Instance: "main", Project: "acme/payments"}
-	id := e.team("devs", store.RoleViewer, nil, store.TeamRepo{Instance: "main", Project: "acme/widgets"}, hidden)
-	target := "/api/teams/" + strconv.FormatInt(id, 10)
-	const wantConflict = `{"error":"this team covers repositories you can't see; a password admin can change its role or remove it"}`
-
-	for _, role := range []string{"maintainer", "admin"} {
-		rec := e.send(c, "PUT", target, `{"name":"devs","role":"`+role+`","members":[],"repos":[]}`)
-		if rec.Code != http.StatusConflict || body(rec) != wantConflict {
-			t.Errorf("PUT role %s = %d %s; want 409 %s", role, rec.Code, rec.Body, wantConflict)
-		}
-	}
-	if tm := e.storedTeam(id); tm.Role != store.RoleViewer || len(tm.Repos) != 2 {
-		t.Errorf("the refused changes changed the team: %+v", tm)
-	}
-	wantCode(t, e.send(c, "PUT", target, `{"name":"renamed","role":"viewer","members":[],"repos":[{"instance":"main","project":"acme/widgets"}]}`),
-		"PUT the same role", http.StatusOK)
-
-	op := e.signInOperator()
-	got := decode[TeamView](t, e.send(op, "PUT", target, `{"name":"renamed","role":"maintainer","members":[],"repos":[{"instance":"main","project":"acme/widgets"}]}`),
-		"operator PUT maintainer", http.StatusOK)
-	if got.Role != store.RoleMaintainer {
-		t.Errorf("operator PUT answer = %+v", got)
-	}
-}
-
-// A platform admin sees and lists only the accounts of its own instance:
-// no password accounts, none of another instance. Its waiting badge
-// (GET /api/me waitingUsers) counts the same waiting accounts the list
-// marks. An operator sees every account.
-func TestUsersListForPlatformAdmin(t *testing.T) {
-	e := newEnv(t, nil)
-	e.addPasswordAccount("root", operatorPassword, false)
-	c := e.signInGitLab(true, "acme/widgets")
-	e.platformAccount("main", 20, "bob")
-	e.platformAccount("gh", 21, "zed")
-	carol := e.platformAccount("main", 22, "carol")
-	e.team("devs", store.RoleViewer, []int64{carol})
-
-	users := decode[[]UserView](t, e.get(c, "/api/users"), "GET /api/users", http.StatusOK)
-	var names []string
-	waiting := 0
-	for _, u := range users {
-		names = append(names, u.Username)
-		if u.Waiting {
-			waiting++
-		}
-		if u.Kind != store.AccountPlatform || u.Instance != "main" {
-			t.Errorf("a platform admin is shown %+v", u)
-		}
-	}
-	if !slices.Equal(names, []string{"bob", "alice", "carol"}) {
-		t.Errorf("users = %v; want bob (waiting), alice, carol", names)
-	}
-	if code, me := e.me(c); code != http.StatusOK || me.WaitingUsers != waiting || waiting != 1 {
-		t.Errorf("waitingUsers = %d (%d); the list marks %d waiting", me.WaitingUsers, code, waiting)
-	}
-
-	op := e.signInPassword("root", operatorPassword)
-	all := decode[[]UserView](t, e.get(op, "/api/users"), "operator GET /api/users", http.StatusOK)
-	if len(all) != 5 {
-		t.Errorf("an operator sees %d accounts; want 5", len(all))
-	}
-}
-
-// A platform admin removes accounts of its own instance only: another
-// instance's is 403 and stays. An operator can.
-func TestPlatformAdminCannotDeleteOtherInstanceAccount(t *testing.T) {
-	e := newEnv(t, nil)
-	c := e.signInGitLab(true, "acme/widgets")
-	zed := e.platformAccount("gh", 21, "zed")
-	bob := e.platformAccount("main", 20, "bob")
-
-	rec := e.send(c, "DELETE", "/api/users/"+strconv.FormatInt(zed, 10), "")
-	if rec.Code != http.StatusForbidden || body(rec) != `{"error":"you can only remove accounts of your own instance"}` {
-		t.Errorf("DELETE zed = %d %s; want 403", rec.Code, rec.Body)
-	}
-	if _, found, _ := e.st.Account(ctx, zed); !found {
-		t.Error("zed was removed")
-	}
-	wantCode(t, e.send(c, "DELETE", "/api/users/"+strconv.FormatInt(bob, 10), ""), "DELETE bob", http.StatusNoContent)
-
-	op := e.signInOperator()
-	wantCode(t, e.send(op, "DELETE", "/api/users/"+strconv.FormatInt(zed, 10), ""), "operator DELETE zed", http.StatusNoContent)
-}
-
-// A platform admin sees a team's members of its own instance, counts the
-// others in hiddenMembers, adds and removes only its own, and the others
-// stay as they are; naming one that isn't on the team already is 409. An
-// operator sees and changes them all.
-func TestPlatformAdminTeamMembersOfOtherInstances(t *testing.T) {
-	e := newEnv(t, nil)
-	c := e.signInGitLab(true, "acme/widgets")
-	bob := e.platformAccount("main", 20, "bob")
-	carol := e.platformAccount("main", 22, "carol")
-	zed := e.platformAccount("gh", 21, "zed")
-	yan := e.platformAccount("gh", 23, "yan")
-	id := e.team("devs", store.RoleViewer, []int64{bob, zed}, store.TeamRepo{Instance: "main", Project: "acme/widgets"})
-	target := "/api/teams/" + strconv.FormatInt(id, 10)
-	put := func(members ...int64) *httptest.ResponseRecorder {
-		b, _ := json.Marshal(map[string]any{"name": "devs", "role": "viewer", "members": members,
-			"repos": []TeamRepoView{{Instance: "main", Project: "acme/widgets"}}})
-		return e.send(c, "PUT", target, string(b))
-	}
-
-	teams := decode[[]TeamView](t, e.get(c, "/api/teams"), "GET teams", http.StatusOK)
-	var devs TeamView
-	for _, tm := range teams {
-		if tm.ID == id {
-			devs = tm
-		}
-	}
-	if len(devs.Members) != 1 || devs.Members[0].ID != bob || devs.HiddenMembers != 1 {
-		t.Errorf("a platform admin sees %+v; want bob and hiddenMembers 1", devs)
-	}
-	if strings.Contains(e.get(c, "/api/teams").Body.String(), "zed") {
-		t.Error("GET /api/teams names another instance's member")
-	}
-
-	// The editor sends what it was shown: zed stays.
-	got := decode[TeamView](t, put(bob, carol), "PUT own members", http.StatusOK)
-	if len(got.Members) != 2 || got.HiddenMembers != 1 {
-		t.Errorf("PUT answer = %+v", got)
-	}
-	if tm := e.storedTeam(id); !slices.Equal(memberIDsOf(tm.Members), []int64{bob, carol, zed}) {
-		t.Errorf("stored members = %v; want bob, carol and zed", tm.Members)
-	}
-	// Removing its own members leaves the others.
-	wantCode(t, put(carol), "PUT removing bob", http.StatusOK)
-	if tm := e.storedTeam(id); !slices.Equal(memberIDsOf(tm.Members), []int64{carol, zed}) {
-		t.Errorf("stored members = %v; want carol and zed", tm.Members)
-	}
-	// Naming zed, who is on the team already, changes nothing.
-	wantCode(t, put(carol, zed), "PUT naming zed", http.StatusOK)
-
-	// Adding another instance's account is refused.
-	rec := put(carol, yan)
-	if rec.Code != http.StatusConflict || body(rec) != `{"error":"you can only change members of your own instance"}` {
-		t.Errorf("PUT adding yan = %d %s; want 409", rec.Code, rec.Body)
-	}
-	if tm := e.storedTeam(id); !slices.Equal(memberIDsOf(tm.Members), []int64{carol, zed}) {
-		t.Errorf("the refused change changed the members: %v", tm.Members)
-	}
-
-	op := e.signInOperator()
-	b := fmt.Sprintf(`{"name":"devs","role":"viewer","members":[%d],"repos":[{"instance":"main","project":"acme/widgets"}]}`, yan)
-	got = decode[TeamView](t, e.send(op, "PUT", target, b), "operator PUT", http.StatusOK)
-	if len(got.Members) != 1 || got.HiddenMembers != 0 || got.Members[0].ID != yan {
-		t.Errorf("operator PUT answer = %+v", got)
-	}
-	if tm := e.storedTeam(id); !slices.Equal(memberIDsOf(tm.Members), []int64{yan}) {
-		t.Errorf("stored members = %v; want yan only", tm.Members)
-	}
+	wantWaiting(t, e.get(bobSession, "/api/repositories"), "bob after leaving the team")
 }
 
 // A member removed between the check and the save is a 400 like any other
@@ -586,15 +467,15 @@ func TestPlatformAdminTeamMembersOfOtherInstances(t *testing.T) {
 func TestTeamMemberRemovedMeanwhile(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.signInOperator()
-	bob := e.platformAccount("main", 20, "bob")
-	zed := e.platformAccount("gh", 21, "zed")
-	id := e.team("devs", store.RoleViewer, []int64{bob})
+	bob := e.sso("bob@example.com")
+	zed := e.sso("zed@example.com")
+	id := e.team("devs", []store.TeamMember{{AccountID: bob, Role: store.RoleViewer}})
 	e.exec(fmt.Sprintf(`CREATE FUNCTION drop_zed() RETURNS trigger LANGUAGE plpgsql AS $$
 		BEGIN DELETE FROM accounts WHERE id = %d; RETURN NEW; END $$`, zed))
 	e.exec(`CREATE TRIGGER drop_zed BEFORE UPDATE ON teams FOR EACH ROW EXECUTE FUNCTION drop_zed()`)
 
 	rec := e.send(c, "PUT", "/api/teams/"+strconv.FormatInt(id, 10),
-		fmt.Sprintf(`{"name":"devs","role":"viewer","members":[%d,%d],"repos":[]}`, bob, zed))
+		fmt.Sprintf(`{"name":"devs","members":[{"accountId":%d,"role":"viewer"},{"accountId":%d,"role":"viewer"}],"repos":[]}`, bob, zed))
 	if rec.Code != http.StatusBadRequest || !strings.Contains(body(rec), "members must be accounts") {
 		t.Errorf("PUT = %d %s; want 400 about the members", rec.Code, rec.Body)
 	}
@@ -607,7 +488,7 @@ func TestTeamMemberRemovedMeanwhile(t *testing.T) {
 func TestOrgWritesNeedCSRF(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.signInOperator()
-	rec := e.doJSON("POST", "/api/teams", []*http.Cookie{c}, nil, map[string]string{"name": "devs", "role": "viewer"})
+	rec := e.doJSON("POST", "/api/teams", []*http.Cookie{c}, nil, map[string]string{"name": "devs"})
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("POST /api/teams without X-CSRF-Token = %d %s; want 403", rec.Code, rec.Body)
 	}
@@ -617,49 +498,24 @@ func TestOrgWritesNeedCSRF(t *testing.T) {
 	}
 }
 
-// A platform admin sees the audit entries of the repositories it can see
-// and those of no repository; an operator sees every one. Pages are 100,
-// newest first, with next the before of the page after (0 at the end). A
-// platform admin's request reads at most 50 chunks of 100: when that's
-// not enough to fill the page, it answers what it found and where to go on.
-func TestAuditFiltered(t *testing.T) {
+// Admins see the whole audit log, whatever an entry is about: a local admin's
+// sign-ins and passwords too. Pages are 100, newest first, with next the
+// before of the page after (0 at the end).
+func TestAuditPages(t *testing.T) {
 	e := newEnv(t, nil)
 	e.addPasswordAccount("root", operatorPassword, false)
-	c := e.signInGitLab(true, "acme/widgets")
+	c := e.signInGitLab(true)
 	e.addAudit(store.AuditEntry{Actor: "carol", Action: "repository_on", Instance: "main", Project: "acme/widgets"})
 	e.exec(`INSERT INTO audit_log (at, actor, action, instance, project)
-		SELECT now(), 'carol', 'settings_reset', 'main', 'acme/payments' FROM generate_series(1, 5100)`)
+		SELECT now(), 'carol', 'settings_reset', 'main', 'acme/payments' FROM generate_series(1, 150)`)
 	e.addAudit(store.AuditEntry{Actor: "carol", Action: "repository_off", Instance: "gh", Project: "acme/widgets"})
-	e.addAudit(store.AuditEntry{Actor: "carol", Action: "team_created", Detail: "devs (viewer)"})
-	all := e.auditEntries()
+	e.addAudit(store.AuditEntry{Actor: "root (password)", Action: "sign_in_failed", Detail: "wrong password"})
+	e.addAudit(store.AuditEntry{Actor: "carol", Action: "team_created", Detail: "devs"})
 
-	actions := func(entries []AuditView) []string {
-		var out []string
-		for _, a := range entries {
-			out = append(out, a.Action+" "+a.Project)
-			if a.Project == "acme/payments" || a.Instance == "gh" {
-				t.Errorf("a hidden entry is shown: %+v", a)
-			}
-		}
-		return out
-	}
-	// The newest and the hidden gh one, then 4998 hidden: 50 chunks, and
-	// the page stops with the one entry found.
-	page := decode[AuditPageView](t, e.get(c, "/api/audit"), "GET audit", http.StatusOK)
-	if got := actions(page.Entries); !slices.Equal(got, []string{"team_created "}) || page.Next != all[4999].ID {
-		t.Errorf("platform admin's first page = %v, next %d; want [team_created], next %d", got, page.Next, all[4999].ID)
-	}
-	page = decode[AuditPageView](t, e.get(c, "/api/audit?before="+strconv.FormatInt(page.Next, 10)), "GET audit", http.StatusOK)
-	// Its own sign-in is the oldest entry.
-	if got := actions(page.Entries); !slices.Equal(got, []string{"repository_on acme/widgets", "sign_in "}) || page.Next != 0 {
-		t.Errorf("platform admin's second page = %v, next %d; want [repository_on acme/widgets, sign_in], next 0", got, page.Next)
-	}
-
-	op := e.signInPassword("root", operatorPassword)
-	first := decode[AuditPageView](t, e.get(op, "/api/audit"), "GET audit", http.StatusOK)
-	if len(first.Entries) != 100 || first.Entries[0].Action != "sign_in" || first.Entries[0].ID <= first.Entries[99].ID ||
+	first := decode[AuditPageView](t, e.get(c, "/api/audit"), "GET audit", http.StatusOK)
+	if len(first.Entries) != 100 || first.Entries[0].Action != "team_created" || first.Entries[0].ID <= first.Entries[99].ID ||
 		first.Next != first.Entries[99].ID {
-		t.Fatalf("operator's first page: %d entries, first %+v, next %d", len(first.Entries), first.Entries[0], first.Next)
+		t.Fatalf("first page: %d entries, first %+v, next %d", len(first.Entries), first.Entries[0], first.Next)
 	}
 	var seen []AuditView
 	for p, pages := first, 1; ; pages++ {
@@ -667,93 +523,49 @@ func TestAuditFiltered(t *testing.T) {
 		if p.Next == 0 {
 			break
 		}
-		if pages > 60 {
+		if pages > 10 {
 			t.Fatalf("still paging after %d pages", pages)
 		}
-		p = decode[AuditPageView](t, e.get(op, "/api/audit?before="+strconv.FormatInt(p.Next, 10)), "GET older", http.StatusOK)
+		p = decode[AuditPageView](t, e.get(c, "/api/audit?before="+strconv.FormatInt(p.Next, 10)), "GET older", http.StatusOK)
 	}
-	if all := e.auditEntries(); len(seen) != len(all) {
+	all := e.auditEntries()
+	if len(seen) != len(all) {
 		t.Errorf("the pages hold %d entries; the log has %d", len(seen), len(all))
 	}
-	if oldest := seen[len(seen)-1]; oldest.Actor != "alice (gitlab main)" || oldest.Action != "sign_in" || oldest.Instance != "main" {
-		t.Errorf("oldest = %+v", oldest)
+	for _, want := range []string{"sign_in_failed", "repository_off", "repository_on"} {
+		if !slices.ContainsFunc(seen, func(a AuditView) bool { return a.Action == want }) {
+			t.Errorf("an admin does not see %s", want)
+		}
 	}
 	for _, q := range []string{"?before=x", "?before=-1", "?before=0"} {
-		wantCode(t, e.get(op, "/api/audit"+q), "GET audit"+q, http.StatusBadRequest)
+		wantCode(t, e.get(c, "/api/audit"+q), "GET audit"+q, http.StatusBadRequest)
 	}
-	empty := e.get(op, "/api/audit?before=1")
+	empty := e.get(c, "/api/audit?before=1")
 	if empty.Code != http.StatusOK || body(empty) != `{"entries":[],"next":0}` {
 		t.Errorf("GET before the first = %d %s; want no entries, next 0", empty.Code, empty.Body)
 	}
 }
 
-// An entry about no repository is shown to a platform admin when it is about
-// no instance or its own, never when it is about another instance; and a
-// password admin's own sign-ins and passwords (no instance) are shown to
-// password admins only. An operator sees all.
-func TestAuditShownByInstanceAndKind(t *testing.T) {
-	e := newEnv(t, nil)
-	e.addPasswordAccount("root", operatorPassword, false)
-	c := e.signInGitLab(true, "acme/widgets")
-	for _, a := range []store.AuditEntry{
-		{Actor: "root (password)", Action: "instance_added", Instance: "gh", Detail: "github"},
-		{Actor: "root (password)", Action: "instance_updated", Instance: "main", Detail: "oauthClientID"},
-		{Actor: "root (password)", Action: "sign_in_failed", Detail: "wrong password"},
-		{Actor: "root (password)", Action: "locked"},
-		{Actor: "root (password)", Action: "password_changed"},
-		{Actor: "cli", Action: "password_reset", Detail: "root"},
-		{Actor: "root (password)", Action: "llm_updated", Detail: "model"},
-		{Actor: "zed (github gh)", Action: "sign_in", Instance: "gh"},
-	} {
-		e.addAudit(a)
-	}
-	op := e.signInPassword("root", operatorPassword)
-
-	var shown []string
-	for _, a := range decode[AuditPageView](t, e.get(c, "/api/audit"), "GET audit", http.StatusOK).Entries {
-		shown = append(shown, a.Action+" "+a.Instance)
-	}
-	if want := []string{"llm_updated ", "instance_updated main", "sign_in main"}; !slices.Equal(shown, want) {
-		t.Errorf("a platform admin sees %q; want %q", shown, want)
-	}
-	if n := len(decode[AuditPageView](t, e.get(op, "/api/audit"), "operator GET audit", http.StatusOK).Entries); n != len(e.auditEntries()) {
-		t.Errorf("an operator sees %d entries; the log has %d", n, len(e.auditEntries()))
-	}
-}
-
-// An OAuth sign-in is audited: who (username, platform and instance) and
-// where; the same name on two instances is told apart.
-func TestOAuthSignInAudited(t *testing.T) {
-	e := newEnv(t, nil)
-	e.aliceOn("main", store.RoleViewer)
-	e.aliceOn("gh", store.RoleViewer)
-	e.signIn("gitlab", "main")
-	e.signIn("github", "gh")
-	var got []string
-	for _, a := range e.auditEntries() {
-		if a.ActorID == nil {
-			t.Errorf("%s has no actor ID", a.Action)
-		}
-		got = append([]string{a.Actor + " " + a.Action + " " + a.Instance}, got...)
-	}
-	if want := []string{"alice (gitlab main) sign_in main", "alice (github gh) sign_in gh"}; !slices.Equal(got, want) {
-		t.Errorf("audit = %q; want %q", got, want)
-	}
-}
-
-// team_updated names the members added and removed and the role before and
-// after, by username.
+// team_updated names the members added and removed and a role changed, by
+// username (the email of an SSO account).
 func TestTeamUpdatedDetailNamesChanges(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.signInOperator()
-	bob := e.platformAccount("main", 20, "bob")
-	zed := e.platformAccount("gh", 21, "zed")
-	id := e.team("devs", store.RoleViewer, []int64{bob})
+	bob := e.sso("bob@example.com")
+	zed := e.sso("zed@example.com")
+	id := e.team("devs", []store.TeamMember{{AccountID: bob, Role: store.RoleViewer}})
 	target := "/api/teams/" + strconv.FormatInt(id, 10)
-	wantCode(t, e.send(c, "PUT", target, fmt.Sprintf(`{"name":"devs","role":"maintainer","members":[%d],"repos":[]}`, zed)),
+	wantCode(t, e.send(c, "PUT", target, fmt.Sprintf(`{"name":"devs","members":[{"accountId":%d,"role":"maintainer"}],"repos":[]}`, zed)),
 		"PUT", http.StatusOK)
-	if got := e.auditEntries()[0]; got.Action != "team_updated" || got.Detail != "devs: role viewer->maintainer, members +zed -bob" {
-		t.Errorf("audit = %+v; want the role and the members changed named", got)
+	if got := e.auditEntries()[0]; got.Action != "team_updated" || got.Detail != "devs: members +zed@example.com:maintainer -bob@example.com" {
+		t.Errorf("audit = %+v; want the members changed named", got)
+	}
+	// A change that leaves everything as it is leaves no entry.
+	n := len(e.auditEntries())
+	wantCode(t, e.send(c, "PUT", target, fmt.Sprintf(`{"name":"devs","members":[{"accountId":%d,"role":"maintainer"}],"repos":[]}`, zed)),
+		"PUT again", http.StatusOK)
+	if got := len(e.auditEntries()); got != n {
+		t.Errorf("an unchanged team left %d new audit entries", got-n)
 	}
 }
 
@@ -761,11 +573,11 @@ func TestTeamUpdatedDetailNamesChanges(t *testing.T) {
 func TestAuditNoSecrets(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.signInOperator()
-	bob := e.platformAccount("main", 20, "bob")
+	bob := e.sso("bob@example.com")
 	created := decode[NewAccountView](t, e.send(c, "POST", "/api/admin/accounts", `{"username":"second"}`), "POST account", http.StatusCreated)
-	team := decode[TeamView](t, e.send(c, "POST", "/api/teams", `{"name":"devs","role":"viewer"}`), "POST team", http.StatusCreated)
+	team := decode[TeamView](t, e.send(c, "POST", "/api/teams", `{"name":"devs"}`), "POST team", http.StatusCreated)
 	target := "/api/teams/" + strconv.FormatInt(team.ID, 10)
-	wantCode(t, e.send(c, "PUT", target, fmt.Sprintf(`{"name":"devs","role":"maintainer","members":[%d],"repos":[{"instance":"main","project":""}]}`, bob)),
+	wantCode(t, e.send(c, "PUT", target, fmt.Sprintf(`{"name":"devs","members":[{"accountId":%d,"role":"maintainer"}],"repos":[{"instance":"main","project":""}]}`, bob)),
 		"PUT team", http.StatusOK)
 	wantCode(t, e.send(c, "DELETE", target, ""), "DELETE team", http.StatusNoContent)
 	acc, _, _ := e.st.PasswordAccount(ctx, "second")
@@ -786,17 +598,18 @@ func TestAuditNoSecrets(t *testing.T) {
 }
 
 // Switching on, changing settings, resetting them and switching off each
-// leave one entry naming the actor and the repository.
+// leave one entry naming the actor and the repository. An SSO account is named
+// by its full email.
 func TestWritesAudited(t *testing.T) {
 	e := newEnv(t, nil)
 	e.cat["main"].set("acme/gadgets")
-	c := e.signInGitLab(true, "acme/gadgets")
+	c := e.signInGitLab(true)
 	id := e.accountOf(c)
 	base := "/api/repositories/main/acme/gadgets"
 
 	e.skill("style", "x")
 
-	wantCode(t, e.send(c, "POST", "/api/repositories", `{"project":"acme/gadgets"}`), "POST", http.StatusCreated)
+	wantCode(t, e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"acme/gadgets"}`), "POST", http.StatusCreated)
 	wantCode(t, e.send(c, "PUT", base+"/settings", `{"skills":["style"],"approve":false}`), "PUT settings", http.StatusOK)
 	wantCode(t, e.send(c, "PUT", base+"/settings", `{"approve":"no"}`), "PUT bad settings", http.StatusBadRequest)
 	wantCode(t, e.send(c, "POST", base+"/settings/reset", ""), "POST reset", http.StatusOK)
@@ -804,19 +617,16 @@ func TestWritesAudited(t *testing.T) {
 
 	var got []string
 	for _, a := range e.auditEntries() {
-		if a.Action == "sign_in" {
-			continue
-		}
 		if a.ActorID == nil || *a.ActorID != id {
 			t.Errorf("%s actor ID = %v; want %d", a.Action, a.ActorID, id)
 		}
 		got = append([]string{a.Actor + " " + a.Action + " " + a.Instance + "/" + a.Project + " " + a.Detail}, got...)
 	}
 	want := []string{
-		"alice (gitlab main) repository_on main/acme/gadgets ",
-		"alice (gitlab main) settings_updated main/acme/gadgets approve, skills",
-		"alice (gitlab main) settings_reset main/acme/gadgets ",
-		"alice (gitlab main) repository_off main/acme/gadgets ",
+		aliceEmail + " repository_on main/acme/gadgets ",
+		aliceEmail + " settings_updated main/acme/gadgets approve, skills",
+		aliceEmail + " settings_reset main/acme/gadgets ",
+		aliceEmail + " repository_off main/acme/gadgets ",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("audit = %q; want %q", got, want)
@@ -828,27 +638,25 @@ func TestDeveloperGets403OnOrgRoutes(t *testing.T) {
 	e := newEnv(t, nil)
 	root := e.addPasswordAccount("root", operatorPassword, false)
 	c := e.signInGitLab(false, "acme/widgets")
-	bob := e.platformAccount("main", 20, "bob")
-	team := e.team("devs", store.RoleViewer, nil)
+	bob := e.sso("bob@example.com")
+	team := e.team("devs", nil)
 	tid := strconv.FormatInt(team, 10)
 	for _, r := range []struct{ method, target, body string }{
 		{"GET", "/api/users", ""},
 		{"DELETE", "/api/users/" + strconv.FormatInt(bob, 10), ""},
 		{"DELETE", "/api/users/" + strconv.FormatInt(root.ID, 10), ""},
+		{"PUT", "/api/admin/users/" + strconv.FormatInt(bob, 10) + "/role", `{"role":"admin"}`},
 		{"POST", "/api/admin/accounts", `{"username":"sneaky"}`},
 		{"GET", "/api/teams", ""},
-		{"POST", "/api/teams", `{"name":"mine","role":"admin"}`},
-		{"PUT", "/api/teams/" + tid, `{"name":"devs","role":"admin","members":[],"repos":[]}`},
+		{"POST", "/api/teams", `{"name":"mine"}`},
+		{"PUT", "/api/teams/" + tid, `{"name":"devs","members":[],"repos":[]}`},
 		{"DELETE", "/api/teams/" + tid, ""},
 		{"GET", "/api/audit", ""},
 	} {
 		wantCode(t, e.send(c, r.method, r.target, r.body), r.method+" "+r.target, http.StatusForbidden)
 	}
-	if _, found, _ := e.st.Account(ctx, bob); !found {
-		t.Error("bob was removed")
-	}
-	if tm := e.storedTeam(team); tm.Role != store.RoleViewer {
-		t.Errorf("team = %+v", tm)
+	if got, found, _ := e.st.Account(ctx, bob); !found || got.Role != store.RoleUser {
+		t.Errorf("bob = %+v, %v", got, found)
 	}
 	if teams, _ := e.st.Teams(ctx); len(teams) != 2 {
 		t.Errorf("%d teams; want devs and alice's", len(teams))

@@ -229,6 +229,9 @@ func TestFinishRemovals(t *testing.T) {
 	if _, err := env.Store.UpsertPlatformAccount(env.ctx, config.PlatformGitLab, "lab", 9, "alice", env.Now()); err != nil {
 		t.Fatal(err)
 	}
+	if n, err := env.Store.CountWaitingAccounts(env.ctx, "lab"); err != nil || n != 1 {
+		t.Fatalf("platform accounts of lab = %d, %v; want the straggler", n, err)
+	}
 	env.Engine.finishRemovals(env.ctx)
 
 	if _, ok := env.Engine.Instances.Get("lab"); ok {
@@ -240,8 +243,8 @@ func TestFinishRemovals(t *testing.T) {
 	if secrets, err := env.Store.InstanceSecrets(env.ctx, "lab"); err != nil || len(secrets) != 0 {
 		t.Errorf("InstanceSecrets(lab) = %v, %v; want none", secrets, err)
 	}
-	if accounts, err := env.Store.Accounts(env.ctx); err != nil || len(accounts) != 0 {
-		t.Errorf("accounts = %v, %v; want the straggler gone", accounts, err)
+	if n, err := env.Store.CountWaitingAccounts(env.ctx, "lab"); err != nil || n != 0 {
+		t.Errorf("platform accounts of lab = %d, %v; want the straggler gone", n, err)
 	}
 	if len(gone) != 1 || gone[0] != "lab" {
 		t.Errorf("OnInstanceRemoved calls = %v, want [lab]", gone)

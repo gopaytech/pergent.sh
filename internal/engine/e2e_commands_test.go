@@ -463,13 +463,13 @@ func TestEndToEndCommands(t *testing.T) {
 	}
 	want := []audited{
 		{"review_rerun_failed", "dev (gitlab main)"},
-		{"finding_restored", "alice (gitlab main)"},
+		{"finding_restored", "alice@example.com"},
 		{"finding_dismissed", "mo (gitlab main)"},
 	}
 	if !slices.Equal(got, want) { // newest first
 		t.Errorf("audited actions = %v, want %v", got, want)
 	}
-	for _, secret := range []string{testReviewToken, testApproveToken, testWebhookSecret, aliceToken, testLLMKey} {
+	for _, secret := range []string{testReviewToken, testApproveToken, testWebhookSecret, testLLMKey} {
 		if strings.Contains(env.Logs(), secret) {
 			t.Errorf("the log holds %q", secret)
 		}
@@ -485,8 +485,8 @@ func mustDismissals(t *testing.T, env *testEnv) []store.Dismissal {
 	return ds
 }
 
-// adminAlice signs alice in with GitLab and has the operator put her on an
-// admin team, as the dashboard end-to-end test does.
+// adminAlice signs alice in and has the operator make her an admin, as the
+// dashboard end-to-end test does.
 func (e *cmdE2E) adminAlice(t *testing.T) dashUser {
 	t.Helper()
 	env := e.env
@@ -500,15 +500,14 @@ func (e *cmdE2E) adminAlice(t *testing.T) dashUser {
 		map[string]string{"current": bootstrapPassword, "new": changedPassword}); status != http.StatusNoContent {
 		t.Fatalf("password change = %d: %s", status, body)
 	}
-	team := e.newTeam(t, operator, "platform", store.RoleAdmin)
-	alice := e.signIn(t, aliceCode)
-	e.setTeam(t, operator, team, "platform", store.RoleAdmin, []int64{e.accountID(t, operator, "alice")}, nil)
+	alice := e.signIn(t, aliceEmail)
+	e.makeAdmin(t, operator, aliceEmail)
 	var me struct {
 		Admin bool `json:"admin"`
 	}
 	e.getJSON(t, alice, "/api/me", &me)
 	if !me.Admin {
-		t.Fatalf("alice is not an admin after joining the team")
+		t.Fatalf("alice is not an admin after being made one")
 	}
 	return alice
 }

@@ -17,12 +17,16 @@ export type Outcome =
   | "skipped"
   | "unknown";
 
-// Me is the signed-in account, from GET /api/me. An operator is a password
-// account (platform and instance are ""); admin is an operator or a member
-// of an admin team; waiting is a platform account on no team.
+// Me is the signed-in account, from GET /api/me: a local admin ("password")
+// or an SSO account. admin is the account's role. platform, instance,
+// operator (the same as admin) and waitingUsers are kept for the pages that
+// still read them. waiting is a user on no team.
 export type Me = {
-  kind: "password" | "platform";
+  kind: "password" | "sso";
   username: string;
+  email: string;
+  role: "admin" | "user";
+  signIn: "password" | "oidc" | "jwt";
   platform: Platform | "";
   instance: string;
   admin: boolean;
@@ -530,11 +534,10 @@ export type LLMAdminView = {
   editable: boolean;
 };
 
-// InstanceAdminView is one instance in GET /api/admin/instances (operators).
+// InstanceAdminView is one instance in GET /api/admin/instances (admins).
 // secrets has the fields the instance takes: review_token, approve_token,
-// webhook_secret, oauth_client_secret (GitLab); review_app_key,
-// approve_app_key or approve_token, webhook_secret, oauth_client_secret
-// (GitHub).
+// webhook_secret (GitLab); review_app_key, approve_app_key or approve_token,
+// webhook_secret (GitHub).
 export type InstanceAdminView = {
   name: string;
   platform: Platform;
@@ -548,19 +551,21 @@ export type InstanceAdminView = {
   // approveAppID is the review App's own ID when the review App approves.
   approveAppID: number;
   approver: Approver;
-  oauthClientID: string;
   secrets: Record<string, SecretView>;
 };
 
 export type TeamRef = { id: number; name: string };
 
-// UserView is one account in GET /api/users.
+// UserView is one account in GET /api/users: a local admin ("password") or
+// an SSO account. invited is an SSO account an admin added that has not
+// signed in yet.
 export type UserView = {
   id: number;
-  kind: "password" | "platform";
+  kind: "password" | "sso";
   username: string;
-  platform: Platform | "";
-  instance: string;
+  email: string;
+  role: "admin" | "user";
+  invited: boolean;
   lastSignInAt: string | null;
   waiting: boolean;
   teams: TeamRef[];
@@ -570,28 +575,28 @@ export type UserView = {
 // the only time it is shown.
 export type NewAccountView = { username: string; password: string };
 
-export type TeamMemberView = { id: number; username: string; platform: Platform; instance: string };
+// TeamMemberView is a team's member: an SSO account and its role on the team.
+export type MemberRole = "viewer" | "maintainer";
+export type TeamMemberView = { accountId: number; username: string; email: string; role: MemberRole };
 
 // TeamRepoView is a repository a team covers; project "" covers every
 // repository of the instance.
 export type TeamRepoView = { instance: string; project: string };
 
-// TeamView is one team. repos are those the session can see; hiddenRepos
-// counts the rest, which a save keeps. members are those the session can see
-// (a platform admin its own instance's); hiddenMembers counts the rest,
-// which a save keeps too.
+// TeamView is one team. A team has no role of its own: each member has one.
 export type TeamView = {
   id: number;
   name: string;
-  role: Role;
   members: TeamMemberView[];
   repos: TeamRepoView[];
-  hiddenRepos: number;
-  hiddenMembers: number;
 };
 
 // TeamUpdate is the body of PUT /api/teams/{id}: it replaces everything.
-export type TeamUpdate = { name: string; role: Role; members: number[]; repos: TeamRepoView[] };
+export type TeamUpdate = {
+  name: string;
+  members: { accountId: number; role: MemberRole }[];
+  repos: TeamRepoView[];
+};
 
 export type AuditView = {
   id: number;

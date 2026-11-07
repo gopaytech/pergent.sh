@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi } from "../test/fakeApi";
-import { operator, platformAdmin, userDev, userOperator, userWaiting } from "../test/fixtures";
+import { operator, userDev, userOperator, userWaiting } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -19,17 +19,17 @@ describe("Users", () => {
     fakeApi({ "GET /api/me": { body: operator }, "GET /api/users": { body: users } });
     renderApp("/users");
     expect(await screen.findByRole("heading", { name: "Users" })).toBeInTheDocument();
-    await screen.findByText("newcomer");
+    await screen.findByText("newcomer@example.com");
     const rows = screen.getAllByRole("row").slice(1);
     expect(rows.map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual([
-      "newcomerwaiting",
-      "dev-user",
+      "newcomer@example.comwaiting",
+      "dev-user@example.com",
       "admin",
     ]);
-    expect(within(rowOf("newcomer")).getByText("waiting")).toHaveClass("pill", "warn");
-    expect(within(rowOf("dev-user")).queryByText("waiting")).not.toBeInTheDocument();
-    expect(rowOf("dev-user")).toHaveTextContent("Payments");
-    expect(rowOf("dev-user")).toHaveTextContent("GitLab · main");
+    expect(within(rowOf("newcomer@example.com")).getByText("waiting")).toHaveClass("pill", "warn");
+    expect(within(rowOf("dev-user@example.com")).queryByText("waiting")).not.toBeInTheDocument();
+    expect(rowOf("dev-user@example.com")).toHaveTextContent("Payments");
+    expect(rowOf("dev-user@example.com")).toHaveTextContent("SSO");
     expect(rowOf("admin")).toHaveTextContent("Password admin");
     expect(rowOf("admin")).toHaveTextContent("never");
   });
@@ -44,11 +44,11 @@ describe("Users", () => {
       "DELETE /api/users/7": { status: 204 },
     });
     renderApp("/users");
-    await userEvent.click(within(await findRow("newcomer")).getByRole("button", { name: "Remove" }));
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("newcomer"));
+    await userEvent.click(within(await findRow("newcomer@example.com")).getByRole("button", { name: "Remove" }));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("newcomer@example.com"));
     const [del] = fake.find("DELETE", "/api/users/7");
     expect(del.headers.get("X-CSRF-Token")).toBe("csrf-123");
-    await vi.waitFor(() => expect(screen.queryByText("newcomer")).not.toBeInTheDocument());
+    await vi.waitFor(() => expect(screen.queryByText("newcomer@example.com")).not.toBeInTheDocument());
     expect(fake.find("GET", "/api/me").length).toBeGreaterThan(1);
   });
 
@@ -56,7 +56,7 @@ describe("Users", () => {
     vi.stubGlobal("confirm", vi.fn(() => false));
     const fake = fakeApi({ "GET /api/me": { body: operator }, "GET /api/users": { body: users } });
     renderApp("/users");
-    await userEvent.click(within(await findRow("newcomer")).getByRole("button", { name: "Remove" }));
+    await userEvent.click(within(await findRow("newcomer@example.com")).getByRole("button", { name: "Remove" }));
     expect(fake.calls.filter((c) => c.method === "DELETE")).toHaveLength(0);
   });
 
@@ -116,18 +116,13 @@ describe("Users", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("this username is taken");
   });
 
-  it("gives a platform admin no way to add or remove a password account", async () => {
-    fakeApi({ "GET /api/me": { body: platformAdmin }, "GET /api/users": { body: users } });
+  it("lets any admin add and remove accounts, local admins included", async () => {
+    fakeApi({ "GET /api/me": { body: operator }, "GET /api/users": { body: users } });
     renderApp("/users");
-    await screen.findByText("newcomer");
-    expect(screen.queryByRole("button", { name: "Add password admin" })).not.toBeInTheDocument();
-    expect(within(rowOf("admin")).queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
-    expect(within(rowOf("dev-user")).getByRole("button", { name: "Remove" })).toBeInTheDocument();
-  });
-
-  it("tells a platform admin the list is its own instance's", async () => {
-    fakeApi({ "GET /api/me": { body: platformAdmin }, "GET /api/users": { body: [userWaiting, userDev] } });
-    renderApp("/users");
-    expect(await screen.findByText(/Everyone who has signed in to main\./)).toBeInTheDocument();
+    await screen.findByText("newcomer@example.com");
+    expect(screen.getByRole("button", { name: "Add password admin" })).toBeInTheDocument();
+    expect(within(rowOf("admin")).getByRole("button", { name: "Remove" })).toBeInTheDocument();
+    expect(within(rowOf("dev-user@example.com")).getByRole("button", { name: "Remove" })).toBeInTheDocument();
+    expect(screen.getByText(/Everyone who has signed in\./)).toBeInTheDocument();
   });
 });

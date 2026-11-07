@@ -13,7 +13,7 @@ describe("Waiting", () => {
     fakeApi({ "GET /api/me": { body: waiting } });
     renderApp("/");
     expect(
-      await screen.findByText("You're signed in as new-user on main. An admin needs to add you to a team."),
+      await screen.findByText("You're signed in as new-user. An admin needs to add you to a team."),
     ).toBeInTheDocument();
   });
 

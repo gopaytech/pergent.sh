@@ -26,18 +26,27 @@ func memberIDs(ms []TeamMember) []int64 {
 
 func TestCreateTeam(t *testing.T) {
 	s := newStore(t)
-	tm, err := s.CreateTeam(ctx, "Platform", RoleMaintainer, t0)
+	tm, err := s.CreateTeam(ctx, "Platform", t0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tm.ID == 0 || tm.Name != "Platform" || tm.Role != RoleMaintainer || !tm.CreatedAt.Equal(t0) || len(tm.Members) != 0 || len(tm.Repos) != 0 {
+	if tm.ID == 0 || tm.Name != "Platform" || !tm.CreatedAt.Equal(t0) || len(tm.Members) != 0 || len(tm.Repos) != 0 {
 		t.Fatalf("team = %+v", tm)
 	}
-	if _, err := s.CreateTeam(ctx, "platform", RoleViewer, t0); !errors.Is(err, ErrExists) {
+	if _, err := s.CreateTeam(ctx, "platform", t0); !errors.Is(err, ErrExists) {
 		t.Fatalf("same name in another case = %v; want ErrExists", err)
 	}
-	if _, err := s.CreateTeam(ctx, "ops", "owner", t0); err == nil {
-		t.Error("CreateTeam with an unknown role = nil error")
+	// A team has no role of its own; the unused column (NOT NULL, dropped by a
+	// later release) is written "viewer", and an update leaves it be.
+	var role string
+	if err := s.pool.QueryRow(ctx, `SELECT role FROM teams WHERE id = $1`, tm.ID).Scan(&role); err != nil || role != RoleViewer {
+		t.Fatalf("teams.role = %q, %v; want viewer", role, err)
+	}
+	if _, err := s.UpdateTeam(ctx, tm.ID, func(t *Team) error { t.Name = "Platform 2"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT role FROM teams WHERE id = $1`, tm.ID).Scan(&role); err != nil || role != RoleViewer {
+		t.Fatalf("teams.role after an update = %q, %v; want viewer", role, err)
 	}
 }
 
@@ -45,10 +54,10 @@ func TestUpdateTeamReplaces(t *testing.T) {
 	s := newStore(t)
 	a := mustSSO(t, s, "alice@example.com")
 	b := mustSSO(t, s, "bob@example.com")
-	tm, _ := s.CreateTeam(ctx, "devs", RoleViewer, t0)
+	tm, _ := s.CreateTeam(ctx, "devs", t0)
 
 	ok, err := s.UpdateTeam(ctx, tm.ID, func(t *Team) error {
-		t.Name, t.Role = "developers", RoleMaintainer
+		t.Name = "developers"
 		t.Members = viewers(b.ID, a.ID, a.ID)
 		t.Repos = []TeamRepo{{Instance: "main"}, {Instance: "main", Project: "acme/widgets"}, {Instance: "main", Project: "ACME/Widgets"}}
 		return nil
@@ -60,7 +69,7 @@ func TestUpdateTeamReplaces(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("Team = %v, %v", found, err)
 	}
-	if got.Name != "developers" || got.Role != RoleMaintainer || !slices.Equal(memberIDs(got.Members), []int64{a.ID, b.ID}) ||
+	if got.Name != "developers" || !slices.Equal(memberIDs(got.Members), []int64{a.ID, b.ID}) ||
 		!slices.Equal(got.Repos, []TeamRepo{{Instance: "main"}, {Instance: "main", Project: "acme/widgets"}}) {
 		t.Fatalf("team = %+v (members and repos deduplicated and sorted; an empty project is the whole instance)", got)
 	}
@@ -94,21 +103,18 @@ func TestUpdateTeamReplaces(t *testing.T) {
 		t.Fatalf("UpdateTeam of an unknown team = %v, %v", ok, err)
 	}
 
-	// A taken name is ErrExists; a bad role is an error.
-	other, _ := s.CreateTeam(ctx, "ops", RoleViewer, t0)
+	// A taken name is ErrExists.
+	other, _ := s.CreateTeam(ctx, "ops", t0)
 	if _, err := s.UpdateTeam(ctx, other.ID, func(t *Team) error { t.Name = "DEVELOPERS"; return nil }); !errors.Is(err, ErrExists) {
 		t.Fatalf("rename onto a taken name = %v; want ErrExists", err)
-	}
-	if _, err := s.UpdateTeam(ctx, other.ID, func(t *Team) error { t.Role = "owner"; return nil }); err == nil {
-		t.Error("UpdateTeam with an unknown role = nil error")
 	}
 }
 
 func TestTeamsListAndDelete(t *testing.T) {
 	s := newStore(t)
 	a := mustSSO(t, s, "alice@example.com")
-	t1, _ := s.CreateTeam(ctx, "zeta", RoleViewer, t0)
-	t2, _ := s.CreateTeam(ctx, "Alpha", RoleAdmin, t0)
+	t1, _ := s.CreateTeam(ctx, "zeta", t0)
+	t2, _ := s.CreateTeam(ctx, "Alpha", t0)
 	if _, err := s.UpdateTeam(ctx, t1.ID, func(t *Team) error {
 		t.Members = viewers(a.ID)
 		t.Repos = []TeamRepo{{Instance: "main", Project: "acme/widgets"}}
@@ -145,9 +151,9 @@ func TestAccountTeams(t *testing.T) {
 	s := newStore(t)
 	a := mustSSO(t, s, "alice@example.com")
 	b := mustSSO(t, s, "bob@example.com")
-	t1, _ := s.CreateTeam(ctx, "one", RoleViewer, t0)
-	t2, _ := s.CreateTeam(ctx, "two", RoleMaintainer, t0)
-	t3, _ := s.CreateTeam(ctx, "three", RoleAdmin, t0)
+	t1, _ := s.CreateTeam(ctx, "one", t0)
+	t2, _ := s.CreateTeam(ctx, "two", t0)
+	t3, _ := s.CreateTeam(ctx, "three", t0)
 	set := func(id int64, members ...int64) {
 		t.Helper()
 		if _, err := s.UpdateTeam(ctx, id, func(t *Team) error {
@@ -179,7 +185,7 @@ func TestAccountTeams(t *testing.T) {
 func TestUpdateTeamUnknownMember(t *testing.T) {
 	s := newStore(t)
 	a := mustSSO(t, s, "alice@example.com")
-	tm, _ := s.CreateTeam(ctx, "devs", RoleViewer, t0)
+	tm, _ := s.CreateTeam(ctx, "devs", t0)
 	if _, err := s.UpdateTeam(ctx, tm.ID, func(t *Team) error { t.Members = viewers(a.ID); return nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +202,7 @@ func TestUpdateTeamUnknownMember(t *testing.T) {
 // keeps the team, and a change in flight is seen by it.
 func TestDeleteTeamChecked(t *testing.T) {
 	s := newStore(t)
-	tm, _ := s.CreateTeam(ctx, "devs", RoleViewer, t0)
+	tm, _ := s.CreateTeam(ctx, "devs", t0)
 
 	boom := errors.New("boom")
 	if ok, err := s.DeleteTeam(ctx, tm.ID, func(Team) error { return boom }); !errors.Is(err, boom) || ok {
@@ -254,7 +260,7 @@ func TestTeamMemberRoles(t *testing.T) {
 	a := mustSSO(t, s, "alice@example.com")
 	b := mustSSO(t, s, "bob@example.com")
 	c := mustSSO(t, s, "carol@example.com")
-	tm, err := s.CreateTeam(ctx, "devs", RoleViewer, t0)
+	tm, err := s.CreateTeam(ctx, "devs", t0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +335,7 @@ func TestTeamKeepsPlatformMembershipsUnlisted(t *testing.T) {
 	s := newStore(t)
 	p := mustPlatform(t, s, "main", 1, "pat")
 	a := mustSSO(t, s, "alice@example.com")
-	tm, _ := s.CreateTeam(ctx, "devs", RoleViewer, t0)
+	tm, _ := s.CreateTeam(ctx, "devs", t0)
 	addPlatformMember(t, s, tm.ID, p.ID)
 	if got, _, _ := s.Team(ctx, tm.ID); len(got.Members) != 0 {
 		t.Fatalf("members = %+v; want none (the platform member is hidden)", got.Members)

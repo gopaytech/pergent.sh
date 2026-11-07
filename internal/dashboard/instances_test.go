@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"testing"
 
@@ -13,34 +12,35 @@ import (
 )
 
 // instancesDashboard builds a dashboard without a store: GET /api/instances
-// reads only the registry's instances.
+// answers without a session or a database.
 func instancesDashboard(t *testing.T) http.Handler {
 	t.Helper()
-	t.Setenv("PERGENT_TEST_GL_ID", glClientID)
-	t.Setenv("PERGENT_TEST_GL_SECRET", glClientSecret)
-	t.Setenv("PERGENT_TEST_GH_ID", ghClientID)
-	t.Setenv("PERGENT_TEST_GH_SECRET", ghClientSecret)
+	// An old config still names OAuth clients; nothing offers a sign-in
+	// through them any more.
+	t.Setenv("PERGENT_TEST_GL_ID", "gl-client-id")
+	t.Setenv("PERGENT_TEST_GL_SECRET", "gl-client-secret-SECRET")
 	cfg := &config.Config{
 		GitLab: []config.Instance{
 			{Name: "main", URL: "https://gitlab.example.com",
 				OAuthClientIDEnv: "PERGENT_TEST_GL_ID", OAuthClientSecretEnv: "PERGENT_TEST_GL_SECRET"},
-			// No sign-in: not listed.
 			{Name: "nooauth", URL: "https://gitlab2.example.com"},
 		},
-		GitHub: []config.GitHubInstance{{Name: "gh", APIURL: "https://api.github.com",
-			OAuthClientIDEnv: "PERGENT_TEST_GH_ID", OAuthClientSecretEnv: "PERGENT_TEST_GH_SECRET"}},
+		GitHub:    []config.GitHubInstance{{Name: "gh", APIURL: "https://api.github.com"}},
 		Dashboard: config.Dashboard{URL: dashboardURL},
 	}
-	d, err := New(Options{Config: cfg, SecretKey: testKey(t)})
+	reg := instances.New(cfg, nil, nil)
+	reg.Put(instances.Instance{Name: "lab", Platform: "gitlab", Source: instances.SourceDashboard,
+		GitLab: &config.Instance{Name: "lab"}, OAuthClientID: "lab-client"})
+	d, err := New(Options{Config: cfg, Instances: reg, SecretKey: testKey(t)})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	// As the binary does when it connects the instances.
-	signInProviders(t, d)
 	return d.Handler()
 }
 
-func TestInstancesListsSignInsWithoutSession(t *testing.T) {
+// The sign-in page asks what to offer: the password form of the local
+// admins, and no instance, whatever the config or the dashboard holds.
+func TestInstancesOffersOnlyThePasswordForm(t *testing.T) {
 	h := instancesDashboard(t)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/instances", nil))
@@ -57,19 +57,11 @@ func TestInstancesListsSignInsWithoutSession(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	want := []InstanceView{
-		{Platform: "gitlab", Instance: "main", Label: "GitLab (main)"},
-		{Platform: "github", Instance: "gh", Label: "GitHub (gh)"},
-	}
-	if !slices.Equal(got.Instances, want) {
-		t.Errorf("instances = %+v, want %+v", got.Instances, want)
-	}
-	if !got.Password {
-		t.Error("password = false, want true: the dashboard is on")
+	if !got.Password || got.Instances == nil || len(got.Instances) != 0 {
+		t.Errorf("answer = %+v, want the password form and an empty list", got)
 	}
 	body := rec.Body.String()
-	for _, secret := range []string{glClientID, glClientSecret, ghClientID, ghClientSecret,
-		"gitlab.example.com", "api.github.com", "PERGENT_TEST"} {
+	for _, secret := range []string{"gl-client-id", "gl-client-secret", "lab-client", "gitlab.example.com", "api.github.com", "PERGENT_TEST"} {
 		if strings.Contains(body, secret) {
 			t.Errorf("GET /api/instances shows %q: %s", secret, body)
 		}
@@ -82,101 +74,5 @@ func TestInstancesIsGetOnly(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest("POST", "/api/instances", nil))
 	if rec.Code == http.StatusOK {
 		t.Errorf("POST /api/instances = 200, want an error")
-	}
-}
-
-// An instance added in the dashboard that has a client ID is listed after the
-// config's of its platform; one being removed, or without a client ID, is not.
-func TestInstancesListsDashboardInstances(t *testing.T) {
-	cfg := &config.Config{
-		GitLab:    []config.Instance{{Name: "main", URL: "https://gitlab.example.com", OAuthClientIDEnv: "A", OAuthClientSecretEnv: "B"}},
-		Dashboard: config.Dashboard{URL: dashboardURL},
-	}
-	reg := instances.New(cfg, nil, nil)
-	lab := func(name string, oauth string, removing bool) instances.Instance {
-		return instances.Instance{Name: name, Platform: "gitlab", Source: instances.SourceDashboard, Removing: removing,
-			GitLab: &config.Instance{Name: name}, OAuthClientID: oauth}
-	}
-	reg.Put(lab("lab", "id", false))
-	reg.Put(lab("quiet", "", false))
-	reg.Put(lab("going", "id", true))
-	d, err := New(Options{Config: cfg, Instances: reg, SecretKey: testKey(t)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("A", "main-id")
-	t.Setenv("B", "main-secret")
-	signInProviders(t, d)
-	for _, inst := range reg.All() {
-		if inst.Source == instances.SourceDashboard {
-			d.Auth.SetProvider(inst, instances.Secrets{OAuthClientSecret: "secret"})
-		}
-	}
-	rec := httptest.NewRecorder()
-	d.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/instances", nil))
-	var got struct {
-		Instances []InstanceView `json:"instances"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
-	want := []InstanceView{
-		{Platform: "gitlab", Instance: "main", Label: "GitLab (main)"},
-		{Platform: "gitlab", Instance: "lab", Label: "GitLab (lab)"},
-	}
-	if !slices.Equal(got.Instances, want) {
-		t.Errorf("instances = %+v, want %+v", got.Instances, want)
-	}
-}
-
-// Sign-in is offered only through an instance that has a provider now: one
-// whose OAuth client secret is empty gets none (a button that leads nowhere
-// is not shown), and an empty secret takes away the provider it had.
-func TestSignInNeedsClientSecret(t *testing.T) {
-	cfg := &config.Config{Dashboard: config.Dashboard{URL: dashboardURL}}
-	reg := instances.New(cfg, nil, nil)
-	lab := instances.Instance{Name: "lab", Platform: "gitlab", Source: instances.SourceDashboard,
-		GitLab: &config.Instance{Name: "lab", URL: "https://gitlab.example.com"}, OAuthClientID: "id"}
-	reg.Put(lab)
-	d, err := New(Options{Config: cfg, Instances: reg, SecretKey: testKey(t)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	listed := func() []InstanceView {
-		rec := httptest.NewRecorder()
-		d.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/instances", nil))
-		var got struct {
-			Instances []InstanceView `json:"instances"`
-		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-			t.Fatal(err)
-		}
-		return got.Instances
-	}
-	login := func() int {
-		rec := httptest.NewRecorder()
-		d.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/auth/gitlab/lab/login", nil))
-		return rec.Code
-	}
-
-	d.Auth.SetProvider(lab, instances.Secrets{})
-	if got := listed(); len(got) != 0 {
-		t.Errorf("an instance with a client ID and no client secret is listed: %+v", got)
-	}
-	if code := login(); code != http.StatusNotFound {
-		t.Errorf("login without a provider = %d, want 404", code)
-	}
-
-	d.Auth.SetProvider(lab, instances.Secrets{OAuthClientSecret: "secret"})
-	if got := listed(); len(got) != 1 || got[0].Instance != "lab" {
-		t.Errorf("instances with a provider = %+v, want lab", got)
-	}
-	if code := login(); code != http.StatusFound {
-		t.Errorf("login with a provider = %d, want 302", code)
-	}
-
-	d.Auth.SetProvider(lab, instances.Secrets{})
-	if got := listed(); len(got) != 0 {
-		t.Errorf("the provider stayed after the secret was cleared: %+v", got)
 	}
 }

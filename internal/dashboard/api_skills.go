@@ -30,14 +30,9 @@ func (d *Dashboard) skills(w http.ResponseWriter, r *http.Request) {
 		d.failed(w, r, "reading the defaults", err)
 		return
 	}
-	sources := make([]*store.SkillSource, 0, len(list))
-	for _, sk := range list {
-		sources = append(sources, sk.Source)
-	}
-	sight := d.sightOf(ctx, se, sources...)
 	out := make([]LibrarySkillView, 0, len(list))
 	for _, sk := range list {
-		out = append(out, d.skillView(se, sk, slices.Contains(def.Skills, sk.Name), sight))
+		out = append(out, skillView(se, sk, slices.Contains(def.Skills, sk.Name)))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -63,7 +58,7 @@ func (d *Dashboard) skill(w http.ResponseWriter, r *http.Request) {
 		d.failed(w, r, "reading the defaults", err)
 		return
 	}
-	view := SkillDetailView{LibrarySkillView: d.skillView(se, sk, slices.Contains(def.Skills, name), d.sightOf(ctx, se, sk.Source)),
+	view := SkillDetailView{LibrarySkillView: skillView(se, sk, slices.Contains(def.Skills, name)),
 		Content: sk.Content, Versions: make([]SkillVersionView, 0, len(versions))}
 	for _, v := range versions {
 		view.Versions = append(view.Versions, versionView(se, v))
@@ -90,11 +85,11 @@ func (d *Dashboard) skillVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, SkillVersionDetailView{SkillVersionView: versionView(session(r), v), Content: v.Content})
 }
 
-// skillView is sk as se may see it: who last wrote it only for admins, the
-// source repository's path only for those who can see it (D11).
-func (d *Dashboard) skillView(se Session, sk store.LibrarySkill, inDefaults bool, sight sourceSight) LibrarySkillView {
+// skillView is sk as se may see it: who last wrote it and the source
+// repository's path only for admins (D11).
+func skillView(se Session, sk store.LibrarySkill, inDefaults bool) LibrarySkillView {
 	v := LibrarySkillView{Name: sk.Name, Version: sk.Version, Size: sk.Size, UpdatedAt: sk.UpdatedAt.UTC(),
-		InDefaults: inDefaults, Source: sourceView(sk.Source, sight)}
+		InDefaults: inDefaults, Source: sourceView(sk.Source, se.Admin)}
 	if se.Admin {
 		v.UpdatedBy = sk.UpdatedBy
 	}
@@ -110,9 +105,9 @@ func versionView(se Session, v store.LibrarySkillVersion) SkillVersionView {
 }
 
 // sourceView hides the repository an instance skill was read from from
-// those who can't see it (sightOf): the page says it is "a private
-// repository on <instance>". A URL is public.
-func sourceView(s *store.SkillSource, sight sourceSight) *SkillSourceView {
+// everyone but admins (showRepo): the page says it is "a private repository
+// on <instance>". A URL is public.
+func sourceView(s *store.SkillSource, showRepo bool) *SkillSourceView {
 	if s == nil {
 		return nil
 	}
@@ -120,7 +115,7 @@ func sourceView(s *store.SkillSource, sight sourceSight) *SkillSourceView {
 	switch s.Kind {
 	case store.SourceKindInstance:
 		v.Instance = s.Instance
-		if sight.sees(s.Instance, s.Repo) {
+		if showRepo {
 			v.Repo, v.Path = s.Repo, s.Path
 		} else {
 			v.Hidden = true
@@ -224,7 +219,7 @@ func (d *Dashboard) auditSkill(r *http.Request, action, name, detail string) {
 
 // skillActor is who a version is recorded as written by.
 func skillActor(se Session) string {
-	return actorLabel(se.Kind, se.Platform, se.Instance, se.Username)
+	return actorLabel(se.Kind, se.Username)
 }
 
 // refuseSkill answers 400 with why name and content can't be a library

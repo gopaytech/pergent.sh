@@ -139,9 +139,9 @@ func (d specDoc) operations() []specOp {
 // --- the routes in the code ---
 
 // Access levels a route can be behind in the router: nothing, a session
-// (Auth.Require), an admin (requireAdmin) or an operator (requireOperator).
-// The handler may check more (a repository role); the spec says so in prose.
-var accessRank = map[string]int{"none": 0, "session": 1, "admin": 2, "operator": 3}
+// (Auth.Require) or an admin (requireAdmin). The handler may check more (a
+// repository role); the spec says so in prose.
+var accessRank = map[string]int{"none": 0, "session": 1, "admin": 2}
 
 type codeRoute struct {
 	Pattern string // "GET /api/me", or "/api/" for a method-less one
@@ -171,9 +171,9 @@ func maxAccess(a, b string) string {
 	return a
 }
 
-// accessOf reads how a handler expression is gated: it finds Require,
-// requireAdmin and requireOperator anywhere inside it.
-func accessOf(nodes ...ast.Node) string {
+// gateOf reads how a handler expression is gated: it finds Require and
+// requireAdmin anywhere inside it.
+func gateOf(nodes ...ast.Node) string {
 	access := "none"
 	for _, n := range nodes {
 		if n == nil {
@@ -189,8 +189,6 @@ func accessOf(nodes ...ast.Node) string {
 				switch x.Name {
 				case "requireAdmin":
 					access = maxAccess(access, "admin")
-				case "requireOperator":
-					access = maxAccess(access, "operator")
 				}
 			}
 			return true
@@ -308,7 +306,7 @@ func scanRoutesInFile(fset *token.FileSet, file *ast.File) (routes []codeRoute, 
 					len(lit.Type.Params.List[0].Names) == 0 || lit.Type.Params.List[0].Names[0].Name != "pattern" {
 					return true
 				}
-				h := &routeHelper{lit: lit, access: accessOf(lit.Body)}
+				h := &routeHelper{lit: lit, access: gateOf(lit.Body)}
 				ast.Inspect(lit.Body, func(n ast.Node) bool {
 					call, ok := n.(*ast.CallExpr)
 					if !ok {
@@ -378,7 +376,7 @@ func scanRoutesInFile(fset *token.FileSet, file *ast.File) (routes []codeRoute, 
 				if insideHelper(call.Pos()) {
 					return true // read through the helper's callers
 				}
-				access := accessOf(call.Args[1])
+				access := gateOf(call.Args[1])
 				switch a := call.Args[0].(type) {
 				case *ast.BasicLit:
 					if s, ok := stringLit(a); ok {
@@ -413,7 +411,7 @@ func scanRoutesInFile(fset *token.FileSet, file *ast.File) (routes []codeRoute, 
 					for _, a := range call.Args[1:] {
 						rest = append(rest, a)
 					}
-					access := maxAccess(h.access, accessOf(rest...))
+					access := maxAccess(h.access, gateOf(rest...))
 					add(h.prefix+lit, access, call.Pos())
 				}
 			}
@@ -697,8 +695,8 @@ func (d *D) routes(mux *http.ServeMux) {
 	get("/d", requireAdmin(d.d))
 	admin := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, d.Auth.Require(requireAdmin(h))) }
 	admin("PUT /e", d.e)
-	op := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, d.Auth.Require(requireOperator(h))) }
-	op("DELETE /f", d.f)
+	admin2 := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, d.Auth.Require(h)) }
+	admin2("DELETE /f", d.f)
 	for _, method := range []string{"PUT", "DELETE"} {
 		mux.Handle(method+" /g", d.Auth.Require(none))
 	}
@@ -714,7 +712,7 @@ func (d *D) routes(mux *http.ServeMux) {
 	}
 	want := map[string]string{
 		"POST /a/{id}": "none", "GET /b": "none", "/": "none",
-		"GET /c": "session", "GET /d": "admin", "PUT /e": "admin", "DELETE /f": "operator",
+		"GET /c": "session", "GET /d": "admin", "PUT /e": "admin", "DELETE /f": "session",
 		"PUT /g": "session", "DELETE /g": "session",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -898,6 +896,7 @@ var openAPIUntypedSchemas = map[string]string{
 	"ScanBusyBody":              "struct in Dashboard.scanNow",
 	"ScanTooSoonBody":           "struct in Dashboard.scanNow",
 	"CreateAccountRequest":      "struct in Dashboard.createPasswordAccount",
+	"SetAccountRoleRequest":     "struct in Dashboard.setUserRole",
 	"CreateTeamRequest":         "struct in Dashboard.createTeam",
 	"UpdateTeamRequest":         "struct in Dashboard.updateTeam",
 	"CreateInstanceRequest":     "struct in Dashboard.addInstance",
@@ -1239,7 +1238,10 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 	outcomes := []string{OutcomeRunning, OutcomeApproved, OutcomeBlocking, OutcomeDraft, OutcomeNoBlocking,
 		OutcomeFailed, OutcomeSuperseded, OutcomeSkipped, OutcomeUnknown}
 	roles := []string{store.RoleAdmin, store.RoleMaintainer, store.RoleViewer}
-	kinds := []string{store.AccountPassword, store.AccountPlatform}
+	teamRoles := []string{store.RoleMaintainer, store.RoleViewer}
+	accountRoles := []string{store.RoleAdmin, store.RoleUser}
+	kinds := []string{store.AccountPassword, store.AccountSSO}
+	signIns := []string{store.SignInPassword, store.SignInOIDC, store.SignInJWT}
 	scanStates := []string{string(store.ScanQueued), string(store.ScanRunning), string(store.ScanDone), string(store.ScanFailed)}
 	fetchStatuses := []string{store.FetchRunning, store.FetchDone, store.FetchFailed}
 	fetchPurposes := []string{store.FetchInstall, store.FetchUpdate}
@@ -1253,11 +1255,14 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 	}{
 		{"ReviewSummary", "outcome", outcomes},
 		{"RunSummary", "outcome", outcomes},
-		{"TeamView", "role", roles},
+		{"TeamMemberView", "role", teamRoles},
 		{"ReviewDetailView", "role", append(append([]string{}, roles...), "")},
 		{"RepositoryDetailView", "role", roles},
 		{"UserView", "kind", kinds},
+		{"UserView", "role", accountRoles},
 		{"meView", "kind", kinds},
+		{"meView", "role", accountRoles},
+		{"meView", "signIn", signIns},
 		{"ScanView", "state", scanStates},
 		{"SkillFetchView", "status", fetchStatuses},
 		{"SkillFetchView", "purpose", fetchPurposes},
@@ -1272,10 +1277,12 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 		known               [][]string
 	}{
 		{"internal/store/*.go", "Outcome", "", [][]string{outcomes}},
-		// RoleUser and AccountSSO are the store's, not served yet: the API
-		// takes them when the sign-in code switches over.
-		{"internal/store/*.go", "Role", "", [][]string{roles, {store.RoleUser}}},
-		{"internal/store/*.go", "Account", "", [][]string{kinds, {store.AccountSSO}}},
+		// An account's role is admin or user (a team member's, viewer or
+		// maintainer, is in the roles above). The platform kind is hidden: no
+		// view of the API shows it.
+		{"internal/store/*.go", "Role", "", [][]string{roles, accountRoles}},
+		{"internal/store/*.go", "Account", "", [][]string{kinds, {store.AccountPlatform}}},
+		{"internal/store/*.go", "SignIn", "", [][]string{signIns}},
 		{"internal/store/*.go", "Scan", "", [][]string{scanStates}},
 		{"internal/store/*.go", "Fetch", "", [][]string{fetchStatuses, fetchPurposes}},
 		{"internal/dashboard/*.go", "health", "", [][]string{healths}},
@@ -1434,7 +1441,7 @@ func TestOpenAPIDocumentIsValid(t *testing.T) {
 		if _, ok := op.Op["x-pergent-access"].(string); !ok {
 			t.Errorf("%s: x-pergent-access is required (none, session, admin or operator)", id)
 		} else if _, known := accessRank[specString(op.Op["x-pergent-access"])]; !known {
-			t.Errorf("%s: x-pergent-access %q is not none, session, admin or operator", id, op.Op["x-pergent-access"])
+			t.Errorf("%s: x-pergent-access %q is not none, session or admin", id, op.Op["x-pergent-access"])
 		}
 		if sec, ok := op.Op["security"]; !ok {
 			t.Errorf("%s: security is required (write [] for none)", id)

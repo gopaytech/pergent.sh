@@ -178,7 +178,7 @@ func TestDeleteInstanceDataCascades(t *testing.T) {
 	if err := s.CreateSession(ctx, Session{IDHash: bytes.Repeat([]byte{9}, 32), AccountID: admin.ID, CSRF: "csrf", LastSeenAt: t0, CreatedAt: t0}); err != nil {
 		t.Fatal(err)
 	}
-	team, err := s.CreateTeam(ctx, "devs", RoleViewer, t0)
+	team, err := s.CreateTeam(ctx, "devs", t0)
 	if err != nil {
 		t.Fatal(err)
 	}

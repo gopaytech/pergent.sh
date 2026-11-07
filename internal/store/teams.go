@@ -18,10 +18,6 @@ const (
 	RoleViewer     = "viewer"
 )
 
-func validRole(role string) bool {
-	return role == RoleAdmin || role == RoleMaintainer || role == RoleViewer
-}
-
 // TeamMember is an account on a team with its role there: RoleViewer or
 // RoleMaintainer. An empty Role is stored as RoleViewer.
 type TeamMember struct {
@@ -39,30 +35,24 @@ type TeamRepo struct{ Instance, Project string }
 
 // Team is a named group of accounts. Members are ordered by account ID and
 // each has a role on the team; platform accounts (no longer used) are never
-// listed. Repos are ordered by instance and project ignoring case.
-//
-// Role is the team's own role, the old model. It is still stored and read
-// here, for the dashboard code that has not switched to member roles yet, and
-// goes with that code. A team's access is meant to come from its members'
-// roles.
+// listed. Repos are ordered by instance and project ignoring case. A team has
+// no role of its own: what it gives comes from its members' roles. (The
+// teams.role column stays, written "viewer", until a later release drops it.)
 type Team struct {
 	ID        int64
 	Name      string
-	Role      string
 	Members   []TeamMember
 	Repos     []TeamRepo
 	CreatedAt time.Time
 }
 
 // CreateTeam stores a team with no members and no repositories. A name
-// taken ignoring case is ErrExists.
-func (s *Store) CreateTeam(ctx context.Context, name, role string, at time.Time) (Team, error) {
-	if !validRole(role) {
-		return Team{}, fmt.Errorf("store: unknown role %q", role)
-	}
-	t := Team{Name: name, Role: role}
-	err := s.pool.QueryRow(ctx, `INSERT INTO teams (name, role, created_at) VALUES ($1, $2, $3) RETURNING id, created_at`,
-		name, role, at).Scan(&t.ID, &t.CreatedAt)
+// taken ignoring case is ErrExists. The unused teams.role column, which is
+// NOT NULL, is written "viewer".
+func (s *Store) CreateTeam(ctx context.Context, name string, at time.Time) (Team, error) {
+	t := Team{Name: name}
+	err := s.pool.QueryRow(ctx, `INSERT INTO teams (name, role, created_at) VALUES ($1, 'viewer', $2) RETURNING id, created_at`,
+		name, at).Scan(&t.ID, &t.CreatedAt)
 	if isUniqueViolation(err) {
 		return Team{}, ErrExists
 	}
@@ -77,13 +67,13 @@ func (s *Store) CreateTeam(ctx context.Context, name, role string, at time.Time)
 func loadTeams(ctx context.Context, q interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }, where string, args ...any) ([]Team, error) {
-	rows, err := q.Query(ctx, `SELECT id, name, role, created_at FROM teams t `+where+` ORDER BY lower(name), id`, args...)
+	rows, err := q.Query(ctx, `SELECT id, name, created_at FROM teams t `+where+` ORDER BY lower(name), id`, args...)
 	if err != nil {
 		return nil, err
 	}
 	teams, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Team, error) {
 		var t Team
-		err := row.Scan(&t.ID, &t.Name, &t.Role, &t.CreatedAt)
+		err := row.Scan(&t.ID, &t.Name, &t.CreatedAt)
 		return t, err
 	})
 	if err != nil || len(teams) == 0 {
@@ -150,7 +140,7 @@ func (s *Store) AccountTeams(ctx context.Context, accountID int64) ([]Team, erro
 }
 
 // UpdateTeam reads the team under a lock, hands it to apply, and stores what
-// apply left: its name, role, members and repositories replace the old ones
+// apply left: its name, members and repositories replace the old ones
 // (an account named twice is one member, with the higher role). A member
 // role must be RoleViewer, RoleMaintainer or empty (viewer). When apply
 // fails nothing changes and its error is returned. ok is false when there is no such team; a name taken ignoring
@@ -180,10 +170,7 @@ func (s *Store) UpdateTeam(ctx context.Context, id int64, apply func(*Team) erro
 	if err := apply(&t); err != nil {
 		return false, err
 	}
-	if !validRole(t.Role) {
-		return false, fmt.Errorf("store: unknown role %q", t.Role)
-	}
-	if _, err := tx.Exec(ctx, `UPDATE teams SET name = $2, role = $3 WHERE id = $1`, id, t.Name, t.Role); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE teams SET name = $2 WHERE id = $1`, id, t.Name); err != nil {
 		if isUniqueViolation(err) {
 			return false, ErrExists
 		}

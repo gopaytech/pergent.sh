@@ -80,7 +80,8 @@ describe("Integrations for an operator", () => {
     expect(within(main).getByText("config")).toBeInTheDocument();
     expect(main).toHaveTextContent("https://gitlab.example.com");
     expect(within(within(main).getByRole("group", { name: "Review token" })).getByText("set")).toBeInTheDocument();
-    expect(within(main).getByRole("group", { name: "OAuth client secret" })).toHaveTextContent("not set");
+    // Signing in with GitLab or GitHub is gone: no OAuth client to show.
+    expect(within(main).queryByRole("group", { name: /OAuth/ })).not.toBeInTheDocument();
 
     const hub = await card("GitHub · hub");
     expect(within(hub).queryByText("config")).not.toBeInTheDocument();
@@ -205,21 +206,6 @@ describe("Integrations for an operator", () => {
     expect(within(group).getByLabelText("New Approve token")).toBeInTheDocument();
   });
 
-  it("changes an instance's OAuth client ID", async () => {
-    const fake = fakeApi({
-      "GET /api/me": { body: operator },
-      "GET /api/admin/instances": { body: instances },
-      "PUT /api/admin/instances/extra": { body: instanceDashboardGitLab },
-    });
-    renderApp("/integrations");
-    const extra = await card("GitLab · extra");
-    const group = within(extra).getByRole("group", { name: "OAuth client ID" });
-    await userEvent.click(within(group).getByRole("button", { name: "Change" }));
-    await userEvent.type(within(group).getByLabelText("New OAuth client ID"), "client-77");
-    await userEvent.click(within(group).getByRole("button", { name: "Save" }));
-    expect(fake.find("PUT", "/api/admin/instances/extra")[0].body).toEqual({ oauthClientID: "client-77" });
-  });
-
   it("rebuilds a GitHub App key the browser flattened to one line", async () => {
     const fake = fakeApi({
       "GET /api/me": { body: operator },
@@ -278,14 +264,15 @@ describe("Integrations for an operator", () => {
     // Every field starts empty, and no webhook secret is asked.
     for (const box of within(form).getAllByLabelText(/./, { selector: "input" })) expect(box).toHaveValue("");
     expect(within(form).queryByLabelText(/webhook/i)).not.toBeInTheDocument();
-    for (const label of ["Review token", "Approve token", "OAuth client secret"]) {
+    for (const label of ["Review token", "Approve token"]) {
       const input = within(form).getByLabelText(label);
       expect(input).toHaveAttribute("type", "password");
       expect(input).toHaveAttribute("autocomplete", "new-password");
       expect(input).toHaveAttribute("data-1p-ignore");
     }
     // The text fields before a password field get no saved username.
-    for (const label of ["Name", "Address", "OAuth client ID"]) {
+    expect(within(form).queryByLabelText(/OAuth/)).not.toBeInTheDocument();
+    for (const label of ["Name", "Address"]) {
       expect(within(form).getByLabelText(label)).toHaveAttribute("data-lpignore", "true");
     }
     await userEvent.type(within(form).getByLabelText("Name"), "extra");
@@ -300,7 +287,6 @@ describe("Integrations for an operator", () => {
       name: "extra",
       platform: "gitlab",
       url: "https://gitlab2.example.com",
-      oauthClientID: "",
       secrets: { review_token: "glpat-review", approve_token: "glpat-approve" },
     });
     expect(JSON.stringify(post.body)).not.toContain("webhook_secret");
@@ -348,7 +334,6 @@ describe("Integrations for an operator", () => {
       apiURL: "https://api.github.example.com",
       reviewAppID: 11,
       approveAppID: 11,
-      oauthClientID: "",
       secrets: { review_app_key: "key-1", webhook_secret: "hook" },
     });
   });
@@ -360,8 +345,6 @@ describe("Integrations for an operator", () => {
     await fillGitHub(form);
     await userEvent.type(within(form).getByLabelText("Approve App ID"), "12");
     await userEvent.type(within(form).getByLabelText("Approve App private key"), "key-2");
-    await userEvent.type(within(form).getByLabelText("OAuth client ID"), "oauth-id");
-    await userEvent.type(within(form).getByLabelText("OAuth client secret"), "oauth-secret");
     await userEvent.click(within(form).getByRole("button", { name: "Add" }));
     expect(fake.find("POST", "/api/admin/instances")[0].body).toEqual({
       name: "hub",
@@ -369,12 +352,10 @@ describe("Integrations for an operator", () => {
       apiURL: "https://api.github.example.com",
       reviewAppID: 11,
       approveAppID: 12,
-      oauthClientID: "oauth-id",
       secrets: {
         review_app_key: "key-1",
         approve_app_key: "key-2",
         webhook_secret: "hook",
-        oauth_client_secret: "oauth-secret",
       },
     });
   });

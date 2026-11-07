@@ -28,7 +28,7 @@ func (e *env) pastDismissalIn(projectID, number int64, fingerprint, severity, re
 	mr := store.MRKey{Instance: "main", ProjectID: projectID, IID: number}
 	if _, err := e.st.Dismiss(ctx, store.Dismissal{MR: mr, Fingerprint: fingerprint, Severity: severity, Reason: reason,
 		Actor: actor, CreatedAt: at, Skill: "code-review", File: "api/handler.go", Title: "Title of " + fingerprint,
-		Teaches: true, DismisserPlatformID: aliceID["main"]}); err != nil {
+		Teaches: true}); err != nil {
 		e.t.Fatal(err)
 	}
 }
@@ -217,7 +217,7 @@ func TestStopUsing(t *testing.T) {
 		}
 	}
 	a := e.auditOf("dismissal_stopped")
-	if len(a) != 1 || a[0].Actor != "alice (gitlab main)" || a[0].Project != buttonProject || !strings.Contains(a[0].Detail, "fingerprint=fp1") {
+	if len(a) != 1 || a[0].Actor != aliceEmail || a[0].Project != buttonProject || !strings.Contains(a[0].Detail, "fingerprint=fp1") {
 		t.Errorf("audit = %+v", a)
 	}
 	// No review decided again, no platform call.

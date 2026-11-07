@@ -1,19 +1,18 @@
 // Package dashboard serves the dashboard's sign-in routes (/auth/) and JSON
 // API (/api/).
 //
-// Operators sign in with a password and see everything. Everyone else signs
-// in with GitLab or GitHub (OAuth, one platform per session) and sees the
-// repositories their teams cover that they can read there: every API
-// handler runs behind Auth.Require, which puts the session, with the
-// repositories its user can see and their role on each, in the request's
-// context. The user's OAuth token is stored sealed and never leaves the
-// server.
+// A session's access comes from its account alone. An admin (a local admin
+// who signs in with a password, or an SSO account an admin made one) sees and
+// does everything. Any other account sees the repositories its teams cover,
+// with the highest role its teams give on each. Every API handler runs behind
+// Auth.Require, which puts the session, with the repositories its user can
+// see and their role on each, in the request's context. Nothing asks GitLab
+// or GitHub what a person may read.
 //
 // Nothing here runs on the engine loop. Calls to GitLab and GitHub are made
-// only for sign-in, access checks (a skill source's path included), the "add
-// repository" picker and the Skills & instructions view, each with a 10 s
-// timeout; reading a skill source to install from runs in the background
-// (skillfetch).
+// only by the review bot or App, for the "add repository" picker and the
+// Skills & instructions view, each with a 10 s timeout; reading a skill
+// source to install from runs in the background (skillfetch).
 package dashboard
 
 import (
@@ -49,12 +48,9 @@ type Options struct {
 	// Connector connects and disconnects instances as they are added and
 	// removed in the dashboard. Nil leaves the instances as they are.
 	Connector Connector
-	// SecretKey is PERGENT_SH_SECRET_KEY: it seals the users' OAuth tokens
-	// and signs the OAuth state cookie.
+	// SecretKey is PERGENT_SH_SECRET_KEY: it seals the secrets saved in the
+	// dashboard.
 	SecretKey string
-	// HTTPClient makes the calls to GitLab and GitHub; nil means a client
-	// with a 10 s timeout.
-	HTTPClient *http.Client
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 	Log *slog.Logger
@@ -100,8 +96,8 @@ type Readiness interface {
 
 // Connector connects instances to GitLab and GitHub while pergent.sh runs;
 // the binary implements it. Check tries an instance's credentials and has no
-// effect; Connect checks them, then puts the instance in use (reviews,
-// webhooks and sign-in); Disconnect takes it out of use.
+// effect; Connect checks them, then puts the instance in use (reviews and
+// webhooks); Disconnect takes it out of use.
 type Connector interface {
 	Check(ctx context.Context, inst instances.Instance, s instances.Secrets) error
 	Connect(ctx context.Context, inst instances.Instance, s instances.Secrets) error
@@ -163,18 +159,12 @@ type Dashboard struct {
 	availableBudget time.Duration
 	listBudget      time.Duration
 	listLimit       int
-	// sightBudget bounds, per request, the platform lookups that decide
-	// which skill source repositories the user sees (D11).
-	sightBudget time.Duration
-	now         func() time.Time
-	inputs      *inputsCache
-	catalog     *catalogCache
-	sight       *sightCache
+	now             func() time.Time
+	inputs          *inputsCache
+	catalog         *catalogCache
 }
 
-// New builds the dashboard. The config must have dashboard.url. Sign-in
-// through an instance starts when the instance is connected
-// (Auth.SetProvider).
+// New builds the dashboard. The config must have dashboard.url.
 func New(o Options) (*Dashboard, error) {
 	if o.Config == nil || !o.Config.DashboardEnabled() {
 		return nil, errors.New("dashboard: dashboard.url is not set")
@@ -184,9 +174,6 @@ func New(o Options) (*Dashboard, error) {
 	}
 	if o.Now == nil {
 		o.Now = time.Now
-	}
-	if o.HTTPClient == nil {
-		o.HTTPClient = &http.Client{Timeout: platformTimeout}
 	}
 	if o.Instances == nil {
 		o.Instances = instances.New(o.Config, nil, nil)
@@ -206,15 +193,12 @@ func New(o Options) (*Dashboard, error) {
 		cfg: o.Config, registry: o.Instances, connector: o.Connector,
 		sources: o.Sources, catalogs: o.Catalogs, fetcher: o.Fetcher, readiness: o.Readiness,
 		reconcileSoon: o.ReconcileSoon, wake: o.Wake, loadLLM: o.Instances.LoadLLM, heldSecrets: o.Instances.HeldSecrets, now: o.Now,
-		availableBudget: AvailableBudget, listBudget: listBudget, listLimit: listLimit, sightBudget: sightBudget,
+		availableBudget: AvailableBudget, listBudget: listBudget, listLimit: listLimit,
 		inputs:  &inputsCache{entries: map[string]inputsEntry{}, flights: map[string]*inputsFlight{}},
-		catalog: &catalogCache{entries: map[string]catalogEntry{}, flights: map[string]*catalogFlight{}},
-		sight:   &sightCache{entries: map[string]sightEntry{}}}, nil
+		catalog: &catalogCache{entries: map[string]catalogEntry{}, flights: map[string]*catalogFlight{}}}, nil
 }
 
 // Handler serves:
-//   - GET /auth/{platform}/{instance}/login: redirect to the provider;
-//   - GET /auth/{platform}/{instance}/callback: finish sign-in, redirect to /;
 //   - POST /auth/logout: end the session (X-CSRF-Token required);
 //   - GET /auth/csrf: the password sign-in form's CSRF token, in a cookie
 //     and as {"csrfToken"};
@@ -222,7 +206,7 @@ func New(o Options) (*Dashboard, error) {
 //     form's token in X-CSRF-Token (204 and the session cookie);
 //   - POST /auth/password/change: {current, new}, for a password session
 //     (204);
-//   - GET /api/instances: the instances to sign in with, without a session;
+//   - GET /api/instances: what the sign-in page offers, without a session;
 //   - GET /api/me: the signed-in user;
 //   - the read API, the write API, the users, teams and audit log API, the
 //     instances, LLM and defaults API, and the skill library API (with
@@ -232,8 +216,6 @@ func New(o Options) (*Dashboard, error) {
 // Every response is marked no-store.
 func (d *Dashboard) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /auth/{platform}/{instance}/login", d.Auth.login)
-	mux.HandleFunc("GET /auth/{platform}/{instance}/callback", d.Auth.callback)
 	mux.HandleFunc("POST /auth/logout", d.Auth.logout)
 	mux.HandleFunc("GET /auth/csrf", d.Auth.loginCSRF)
 	mux.HandleFunc("POST /auth/password", d.Auth.passwordSignIn)
@@ -259,74 +241,59 @@ func (d *Dashboard) Handler() http.Handler {
 
 // meView is the body of GET /api/me.
 type meView struct {
-	// Kind is "password" or "platform".
-	Kind     string `json:"kind"`
+	// Kind is "password" (a local admin) or "sso".
+	Kind string `json:"kind"`
+	// Username is the name shown: the email of an SSO account.
 	Username string `json:"username"`
-	// Platform and Instance are "" for a password account.
+	// Email is an SSO account's email; "" for a local admin.
+	Email string `json:"email"`
+	// Role is the account's role: "admin" or "user".
+	Role string `json:"role"`
+	// SignIn is how the session began: "password", "oidc" or "jwt".
+	SignIn string `json:"signIn"`
+	// Platform and Instance are "" always. The pages still read them; they
+	// go with the pages' next change.
 	Platform string `json:"platform"`
 	Instance string `json:"instance"`
-	// Admin: an operator or a member of an admin team.
+	// Admin: the account's role is admin; it sees and may do everything.
 	Admin bool `json:"admin"`
-	// Operator: a password account, which sees everything.
+	// Operator is Admin, for the pages that still ask for it.
 	Operator bool `json:"operator"`
-	// Waiting: a platform account on no team, which sees nothing.
+	// Waiting: a user on no team, which sees nothing.
 	Waiting bool `json:"waiting"`
 	// MustChangePassword: nothing else works until the password is changed.
 	MustChangePassword bool `json:"mustChangePassword"`
-	// WaitingUsers counts the platform accounts on no team: of every
-	// instance for an operator, of their own for a platform admin; 0 for
-	// everyone else.
+	// WaitingUsers is 0 always (the pages still read it).
 	WaitingUsers int    `json:"waitingUsers"`
 	CSRFToken    string `json:"csrfToken"`
 }
 
 func (d *Dashboard) me(w http.ResponseWriter, r *http.Request) {
 	se, _ := SessionFrom(r.Context())
-	view := meView{
-		Kind: se.Kind, Username: se.Username, Platform: se.Platform, Instance: se.Instance,
-		Admin: se.Admin, Operator: se.Operator, Waiting: se.Waiting, MustChangePassword: se.MustChangePassword,
-		CSRFToken: se.CSRFToken,
-	}
+	role := store.RoleUser
 	if se.Admin {
-		// An operator has no instance: "" counts every one.
-		n, err := d.Store.CountWaitingAccounts(r.Context(), se.Instance)
-		if err != nil {
-			d.failed(w, r, "counting waiting accounts", err)
-			return
-		}
-		view.WaitingUsers = n
+		role = store.RoleAdmin
 	}
-	writeJSON(w, http.StatusOK, view)
+	writeJSON(w, http.StatusOK, meView{
+		Kind: se.Kind, Username: se.Username, Email: se.Email, Role: role, SignIn: se.SignIn,
+		Admin: se.Admin, Operator: se.Admin, Waiting: se.Waiting, MustChangePassword: se.MustChangePassword,
+		CSRFToken: se.CSRFToken,
+	})
 }
 
 // instancesView is the body of GET /api/instances.
 type instancesView struct {
 	// Password: the password form is shown. It is always true: a dashboard
-	// that answers has password accounts.
+	// that answers has local admins.
 	Password bool `json:"password"`
-	// Instances are those with sign-in, the config's first.
+	// Instances are always empty: no instance offers a sign-in any more.
 	Instances []InstanceView `json:"instances"`
 }
 
-// instances lists the instances people can sign in through now (those with a
-// provider), GitLab first, each platform's in the registry's order (the
-// config's, then the dashboard's): the sign-in page shows a button for each,
-// and the password form. It needs no session and says nothing but their
-// names.
+// instances answers the sign-in page's question. It needs no session and
+// says nothing but that the password form is there.
 func (d *Dashboard) instances(w http.ResponseWriter, _ *http.Request) {
-	view := instancesView{Password: true, Instances: []InstanceView{}}
-	all := d.registry.All()
-	for _, platform := range []struct{ id, label string }{
-		{config.PlatformGitLab, "GitLab"}, {config.PlatformGitHub, "GitHub"},
-	} {
-		for _, inst := range all {
-			if inst.Platform == platform.id && !inst.Removing && d.Auth.canSignIn(inst.Platform, inst.Name) {
-				view.Instances = append(view.Instances,
-					InstanceView{Platform: inst.Platform, Instance: inst.Name, Label: platform.label + " (" + inst.Name + ")"})
-			}
-		}
-	}
-	writeJSON(w, http.StatusOK, view)
+	writeJSON(w, http.StatusOK, instancesView{Password: true, Instances: []InstanceView{}})
 }
 
 // writeJSON writes v as the JSON body.

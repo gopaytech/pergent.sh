@@ -263,7 +263,7 @@ func TestAccountsHidePlatformRows(t *testing.T) {
 	mustPlatform(t, s, "main", 2, "aaron")
 	zed := mustSSO(t, s, "zed@example.com")
 	bea := mustSSO(t, s, "Bea@example.com")
-	team, err := s.CreateTeam(ctx, "devs", RoleViewer, t0)
+	team, err := s.CreateTeam(ctx, "devs", t0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func TestCountWaitingAccounts(t *testing.T) {
 	if n, err := s.CountWaitingAccounts(ctx, ""); err != nil || n != 3 {
 		t.Fatalf("CountWaitingAccounts = %d, %v; want 3", n, err)
 	}
-	team, err := s.CreateTeam(ctx, "devs", RoleViewer, t0)
+	team, err := s.CreateTeam(ctx, "devs", t0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +331,7 @@ func TestDeleteAccountCascades(t *testing.T) {
 	if err := s.CreateSession(ctx, se); err != nil {
 		t.Fatal(err)
 	}
-	team, _ := s.CreateTeam(ctx, "devs", RoleViewer, t0)
+	team, _ := s.CreateTeam(ctx, "devs", t0)
 	if _, err := s.UpdateTeam(ctx, team.ID, func(tm *Team) error { tm.Members = viewers(a.ID); return nil }); err != nil {
 		t.Fatal(err)
 	}

@@ -15,7 +15,6 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/dashboard"
-	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/server"
 	"github.com/gopaytech/pergent.sh/internal/store"
 	"github.com/gopaytech/pergent.sh/internal/webhook"
@@ -114,63 +113,13 @@ func TestServeUntilDoneAnswersWhileLoopsBlock(t *testing.T) {
 // Dashboard wiring
 
 // dashboardConfig is a config with GitLab instance main and GitHub instance
-// gh, both set up for sign-in through the env vars named, and the dashboard
-// on unless url is "".
+// gh, and the dashboard on unless url is "".
 func dashboardConfig(url string) *config.Config {
 	return &config.Config{
-		GitLab: []config.Instance{{Name: "main", URL: "https://gitlab.example.com",
-			OAuthClientIDEnv: "GL_OAUTH_ID", OAuthClientSecretEnv: "GL_OAUTH_SECRET"}},
-		GitHub: []config.GitHubInstance{{Name: "gh", APIURL: "https://api.github.com",
-			OAuthClientIDEnv: "GH_OAUTH_ID", OAuthClientSecretEnv: "GH_OAUTH_SECRET"}},
+		GitLab:    []config.Instance{{Name: "main", URL: "https://gitlab.example.com"}},
+		GitHub:    []config.GitHubInstance{{Name: "gh", APIURL: "https://api.github.com"}},
 		Dashboard: config.Dashboard{URL: url},
 	}
-}
-
-func setOAuthEnv(t *testing.T) {
-	t.Setenv("GL_OAUTH_ID", "gl-oauth-id-example")
-	t.Setenv("GL_OAUTH_SECRET", "gl-oauth-secret-example")
-	t.Setenv("GH_OAUTH_ID", "gh-oauth-id-example")
-	t.Setenv("GH_OAUTH_SECRET", "gh-oauth-secret-example")
-}
-
-// With the dashboard on, an instance used for sign-in whose OAuth env var is
-// unset stops pergent.sh before it connects to anything, naming the
-// instance and the variable, never a value. With it off, nothing is needed.
-func TestCheckDashboardEnv(t *testing.T) {
-	setOAuthEnv(t)
-	if err := checkDashboardEnv(dashboardConfig("https://dashboard.example.com")); err != nil {
-		t.Fatalf("checkDashboardEnv with every variable set = %v", err)
-	}
-	for _, tc := range []struct{ unset, instance string }{
-		{"GL_OAUTH_ID", `gitlab instance "main"`},
-		{"GL_OAUTH_SECRET", `gitlab instance "main"`},
-		{"GH_OAUTH_ID", `github instance "gh"`},
-		{"GH_OAUTH_SECRET", `github instance "gh"`},
-	} {
-		t.Run(tc.unset, func(t *testing.T) {
-			setOAuthEnv(t)
-			t.Setenv(tc.unset, "")
-			err := checkDashboardEnv(dashboardConfig("https://dashboard.example.com"))
-			if err == nil {
-				t.Fatal("checkDashboardEnv succeeded")
-			}
-			msg := err.Error()
-			if !strings.Contains(msg, tc.instance) || !strings.Contains(msg, tc.unset) || !strings.Contains(msg, "dashboard") {
-				t.Errorf("error = %q; want it to name the dashboard, %s and %s", msg, tc.instance, tc.unset)
-			}
-			if strings.Contains(msg, "-example") {
-				t.Errorf("error %q holds a value", msg)
-			}
-		})
-	}
-	t.Run("dashboard off", func(t *testing.T) {
-		for _, name := range []string{"GL_OAUTH_ID", "GL_OAUTH_SECRET", "GH_OAUTH_ID", "GH_OAUTH_SECRET"} {
-			t.Setenv(name, "")
-		}
-		if err := checkDashboardEnv(dashboardConfig("")); err != nil {
-			t.Errorf("checkDashboardEnv with the dashboard off = %v", err)
-		}
-	})
 }
 
 // The LLM key is read only when the file has an llm: block; without one
@@ -204,10 +153,10 @@ func get(t *testing.T, h http.Handler, path string) (int, string) {
 	return rec.Code, rec.Body.String()
 }
 
-// With dashboard.url set the routes serve the sign-in instances, the API
-// and the app; without it there is no dashboard and none of them exist.
+// With dashboard.url set the routes serve the sign-in page's question, the
+// API and the app; without it there is no dashboard and none of them exist.
+// The platforms' sign-in routes exist in neither case.
 func TestNewDashboardRoutes(t *testing.T) {
-	setOAuthEnv(t)
 	var logs strings.Builder
 	log := slog.New(slog.NewTextHandler(&logs, nil))
 	cfg := dashboardConfig("https://dashboard.example.com")
@@ -215,29 +164,13 @@ func TestNewDashboardRoutes(t *testing.T) {
 	if err != nil || d == nil {
 		t.Fatalf("newDashboard = %v, %v", d, err)
 	}
-	// Sign-in is offered through an instance once it is connected.
-	reg := instances.New(cfg, nil, nil)
-	for _, inst := range reg.All() {
-		var s instances.Secrets
-		var err error
-		if inst.GitLab != nil {
-			_, s.OAuthClientSecret, err = inst.GitLab.OAuthClient()
-		} else {
-			_, s.OAuthClientSecret, err = inst.GitHub.OAuthClient()
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		d.Auth.SetProvider(inst, s)
-	}
 	h := server.Routes(server.Deps{Config: cfg, Dashboard: dashboardHandler(d), Log: log})
 	code, body := get(t, h, "/api/instances")
-	if code != http.StatusOK || !strings.Contains(body, `"password":true`) ||
-		!strings.Contains(body, `"instance":"main"`) || !strings.Contains(body, `"instance":"gh"`) {
-		t.Errorf("GET /api/instances = %d %s; want both instances", code, body)
+	if code != http.StatusOK || !strings.Contains(body, `"password":true`) || !strings.Contains(body, `"instances":[]`) {
+		t.Errorf("GET /api/instances = %d %s; want the password form and no instance", code, body)
 	}
-	if strings.Contains(body, "example") {
-		t.Errorf("GET /api/instances holds a value from the environment: %s", body)
+	if code, _ := get(t, h, "/auth/gitlab/main/login"); code != http.StatusNotFound {
+		t.Errorf("GET /auth/gitlab/main/login = %d, want 404", code)
 	}
 	if code, _ := get(t, h, "/api/me"); code != http.StatusUnauthorized {
 		t.Errorf("GET /api/me without a session = %d, want 401", code)

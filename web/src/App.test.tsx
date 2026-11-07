@@ -63,7 +63,7 @@ describe("App shell", () => {
       "GET /api/overview?days=7": { status: 403, body: { error: "an admin needs to add you to a team", code: "waiting" } },
     });
     renderApp("/");
-    expect(await screen.findByText("You're signed in as new-user on main. An admin needs to add you to a team.")).toBeInTheDocument();
+    expect(await screen.findByText("You're signed in as new-user. An admin needs to add you to a team.")).toBeInTheDocument();
     expect(fake.find("GET", "/api/me")).toHaveLength(2);
   });
 
@@ -136,7 +136,7 @@ describe("App shell", () => {
   it("shows only the waiting page to an account on no team", async () => {
     const fake = fakeApi({ "GET /api/me": { body: waiting } });
     renderApp("/repos");
-    expect(await screen.findByText("You're signed in as new-user on main. An admin needs to add you to a team.")).toBeInTheDocument();
+    expect(await screen.findByText("You're signed in as new-user. An admin needs to add you to a team.")).toBeInTheDocument();
     expect(screen.queryByRole("navigation", { name: "Main" })).not.toBeInTheDocument();
     expect(fake.calls.map((c) => c.url)).toEqual(["/api/me"]);
   });

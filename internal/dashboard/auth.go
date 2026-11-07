@@ -2,26 +2,19 @@ package dashboard
 
 import (
 	"context"
-	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
-	"sync"
 	"time"
 
-	"github.com/gopaytech/pergent.sh/internal/config"
-	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/password"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
-	"github.com/gopaytech/pergent.sh/internal/syncmap"
 )
 
 const (
@@ -37,52 +30,44 @@ const (
 	IdleTimeout = 8 * time.Hour
 	// MaxSessionAge ends a session this long after sign-in, used or not.
 	MaxSessionAge = 7 * 24 * time.Hour
-	// AccessTTL is how long a check of the user's repositories with the
-	// platform is used before it is made again. A failed check keeps the
-	// last one for one more AccessTTL, then the session sees nothing.
-	AccessTTL = 5 * time.Minute
 
-	stateCookieName = "__Host-pergent_oauth_state"
-	stateTTL        = 10 * time.Minute
-	touchEvery      = time.Minute
-	sessionIDBytes  = 32
-	// signInTimeout bounds the whole sign-in or access check; each call to
-	// the platform has its own 10 s timeout.
-	signInTimeout = 30 * time.Second
+	touchEvery     = time.Minute
+	sessionIDBytes = 32
 )
 
 // Session is the signed-in user of a request, put in its context by
 // Auth.Require.
 type Session struct {
 	// AccountID is the account signed in; Kind is its kind,
-	// store.AccountPassword or store.AccountPlatform.
+	// store.AccountPassword (a local admin) or store.AccountSSO.
 	AccountID int64
 	Kind      string
-	// Platform is config.PlatformGitLab or config.PlatformGitHub; a
-	// password session has none, no Instance and no UserID.
-	Platform, Instance string
-	UserID             int64
-	Username           string
-	// Operator is set for a password account: it sees and may do
-	// everything, with no platform to check against.
-	Operator bool
-	// Admin is set for an operator and for a member of an admin team.
+	// Username is the name shown for the account: the email of an SSO
+	// account, the username of a local admin.
+	Username string
+	// Email is an SSO account's lower-cased email; "" for a local admin.
+	Email string
+	// SignIn is how the session began: store.SignInPassword, SignInOIDC or
+	// SignInJWT.
+	SignIn string
+	// Admin is set when the account's role is admin (a local admin always
+	// is): the session sees and may do everything.
 	Admin bool
-	// Waiting is set for a platform account on no team: it sees nothing
-	// until an admin puts it on one.
+	// Waiting is set for an account that is not an admin and is on no team:
+	// it sees nothing until an admin puts it on one.
 	Waiting bool
-	// MustChangePassword is set on a password account that must change its
+	// MustChangePassword is set on a local admin that must change its
 	// password before anything else.
 	MustChangePassword bool
-	// All is set when the session sees every repository (an operator).
+	// All is set when the session sees every repository (an admin).
 	All bool
-	// Visible holds, for a platform account, the repositories it sees: those
-	// its teams cover that the platform also lets it see, each with its
-	// platform ID. Use CanSee for a repository's own pages and CanSeeRun for
-	// its runs.
+	// Visible holds, for an account that is not an admin, the repositories
+	// its teams cover, each with the platform ID of the project stored at
+	// that path (0 for one switched on that reconcile has not stored yet).
+	// Use CanSee for a repository's own pages and CanSeeRun for its runs.
 	Visible map[RepoKey]int64
-	// Roles holds the role the teams give on each repository they cover;
-	// use Role, which also needs the repository visible.
+	// Roles holds the highest role the teams give on each repository they
+	// cover; use Role.
 	Roles map[RepoKey]Role
 	// CSRFToken is the token writes must send in X-CSRF-Token.
 	CSRFToken string
@@ -93,7 +78,11 @@ type Session struct {
 // CanSee reports whether the user can see project on instance, ignoring
 // case.
 func (s Session) CanSee(instance, project string) bool {
-	return s.All || s.Visible[repoKey(instance, project)] > 0
+	if s.All {
+		return true
+	}
+	_, ok := s.Visible[repoKey(instance, project)]
+	return ok
 }
 
 // CanSeeRun reports whether the user can see a run of project on instance
@@ -105,10 +94,10 @@ func (s Session) CanSeeRun(instance, project string, id int64) bool {
 }
 
 // Role is the user's role on project on instance: RoleAdmin everywhere for
-// an operator, RoleNone where the user can't see it, else the highest of
-// the teams covering it.
+// an admin, RoleNone where the user can't see it, else the highest of the
+// teams covering it.
 func (s Session) Role(instance, project string) Role {
-	if s.Operator {
+	if s.Admin {
 		return RoleAdmin
 	}
 	if !s.CanSee(instance, project) {
@@ -127,17 +116,11 @@ func SessionFrom(ctx context.Context) (Session, bool) {
 
 // Auth runs sign-in and sessions.
 type Auth struct {
-	cfg       *config.Config
-	store     *store.Store
-	repos     *settings.Resolver
-	reg       *instances.Registry // which instances exist, and which are being removed
-	box       *secretbox.Box
-	stateKey  []byte
-	providers *syncmap.Map[provider] // by instance name; SetProvider and RemoveProvider change it
-	hc        *http.Client           // makes the providers' calls
-	base      string                 // dashboard.url, the OAuth callbacks' host
-	now       func() time.Time
-	log       *slog.Logger
+	store *store.Store
+	repos *settings.Resolver
+	box   *secretbox.Box
+	now   func() time.Time
+	log   *slog.Logger
 
 	// limit counts password attempts by client IP.
 	limit *limiter
@@ -152,14 +135,6 @@ type Auth struct {
 	// afterVerify, when set (tests), runs after a sign-in's password was
 	// found right and before the sign-in is recorded.
 	afterVerify func()
-
-	mu       sync.Mutex
-	flights  map[string]*flight   // access checks in progress, by session hash
-	failedAt map[string]time.Time // last failed access check, by session hash
-
-	// renewMu is held while a token is renewed: a refresh token may be
-	// good for one use only, so two requests must not both spend it.
-	renewMu sync.Mutex
 }
 
 func newAuth(o Options, repos *settings.Resolver) (*Auth, error) {
@@ -167,251 +142,27 @@ func newAuth(o Options, repos *settings.Resolver) (*Auth, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dashboard: PERGENT_SH_SECRET_KEY: %w", err)
 	}
-	raw, _ := base64.StdEncoding.DecodeString(o.SecretKey) // secretbox.New checked it
-	mac := hmac.New(sha256.New, raw)
-	mac.Write([]byte("pergent-sh dashboard oauth state v1"))
-
-	a := &Auth{
-		cfg: o.Config, store: o.Store, repos: repos, reg: o.Instances, box: box, stateKey: mac.Sum(nil),
-		providers: syncmap.New[provider](nil), hc: o.HTTPClient, base: o.Config.Dashboard.URL,
+	return &Auth{
+		store: o.Store, repos: repos, box: box,
 		now: o.Now, log: o.Log, limit: newLimiter(),
 		slots: make(chan struct{}, hashSlots), slotWait: hashSlotWait, verify: password.Verify, hash: password.Hash,
-		flights: map[string]*flight{}, failedAt: map[string]time.Time{},
+	}, nil
+}
+
+// randomString is n random bytes, base64url without padding.
+func randomString(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand failing means the platform is broken; never fall back.
+		panic("dashboard: reading random bytes: " + err.Error())
 	}
-	return a, nil
-}
-
-// SetProvider sets up sign-in through inst with its OAuth client: the
-// client ID in inst and the secret in s. An instance without a client ID or
-// without a client secret has no sign-in, and loses the one it had. The
-// instance's callback URL is dashboard.url + /auth/{platform}/{name}/callback.
-func (a *Auth) SetProvider(inst instances.Instance, s instances.Secrets) {
-	if inst.OAuthClientID == "" || s.OAuthClientSecret == "" {
-		a.providers.Delete(inst.Name)
-		return
-	}
-	switch {
-	case inst.GitLab != nil:
-		a.providers.Set(inst.Name, &gitlabProvider{
-			baseURL: strings.TrimRight(inst.GitLab.URL, "/"), clientID: inst.OAuthClientID, clientSecret: s.OAuthClientSecret,
-			redirectURI: a.base + "/auth/gitlab/" + inst.Name + "/callback", hc: a.hc, now: a.now,
-			timeout: platformTimeout,
-		})
-	case inst.GitHub != nil:
-		a.providers.Set(inst.Name, &githubProvider{
-			webURL: githubWebURL(inst.GitHub.APIURL), apiURL: inst.GitHub.APIURL, clientID: inst.OAuthClientID, clientSecret: s.OAuthClientSecret,
-			redirectURI: a.base + "/auth/github/" + inst.Name + "/callback", hc: a.hc, now: a.now,
-			timeout: platformTimeout,
-		})
-	}
-}
-
-// RemoveProvider ends sign-in through the instance called name. Sessions
-// already signed in through it stop working at their next platform check.
-func (a *Auth) RemoveProvider(name string) {
-	a.providers.Delete(name)
-}
-
-// removing reports whether nobody may sign in through the instance called
-// name any more: it is being removed, or is not there.
-func (a *Auth) removing(name string) bool {
-	inst, ok := a.reg.Get(name)
-	return !ok || inst.Removing
-}
-
-// canSignIn reports whether people can sign in through the instance called
-// name on platform right now: it has a provider.
-func (a *Auth) canSignIn(platform, name string) bool {
-	p, ok := a.providers.Get(name)
-	return ok && p.platform() == platform
-}
-
-// provider returns the sign-in of the request's {platform} and {instance};
-// ok is false for an instance without sign-in or on another platform.
-func (a *Auth) provider(r *http.Request) (provider, string, string, bool) {
-	platform, instance := r.PathValue("platform"), r.PathValue("instance")
-	p, ok := a.providers.Get(instance)
-	if !ok || p.platform() != platform {
-		return nil, "", "", false
-	}
-	return p, platform, instance, true
-}
-
-// --- OAuth state cookie ---
-
-// oauthState is what the state cookie carries between login and callback.
-type oauthState struct {
-	Platform string `json:"p"`
-	Instance string `json:"i"`
-	State    string `json:"s"`
-	Verifier string `json:"v"`
-	Expires  int64  `json:"e"`
-}
-
-func (a *Auth) sign(payload string) string {
-	mac := hmac.New(sha256.New, a.stateKey)
-	mac.Write([]byte(payload))
-	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-}
-
-func (a *Auth) setStateCookie(w http.ResponseWriter, st oauthState) {
-	data, _ := json.Marshal(st)
-	payload := base64.RawURLEncoding.EncodeToString(data)
-	http.SetCookie(w, &http.Cookie{
-		Name: stateCookieName, Value: payload + "." + a.sign(payload), Path: "/",
-		MaxAge: int(stateTTL / time.Second), HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
-	})
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 func clearCookie(w http.ResponseWriter, name, path string) {
 	http.SetCookie(w, &http.Cookie{
 		Name: name, Value: "", Path: path, MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
 	})
-}
-
-// readState returns the state cookie's content if its signature is good,
-// it was made for platform/instance and it hasn't expired.
-func (a *Auth) readState(r *http.Request, platform, instance string) (oauthState, bool) {
-	c, err := r.Cookie(stateCookieName)
-	if err != nil {
-		return oauthState{}, false
-	}
-	payload, sig, ok := strings.Cut(c.Value, ".")
-	if !ok || !hmac.Equal([]byte(sig), []byte(a.sign(payload))) {
-		return oauthState{}, false
-	}
-	data, err := base64.RawURLEncoding.DecodeString(payload)
-	if err != nil {
-		return oauthState{}, false
-	}
-	var st oauthState
-	if json.Unmarshal(data, &st) != nil {
-		return oauthState{}, false
-	}
-	if st.Platform != platform || st.Instance != instance || st.State == "" || st.Verifier == "" ||
-		a.now().Unix() > st.Expires {
-		return oauthState{}, false
-	}
-	return st, true
-}
-
-// --- routes ---
-
-// login sends the browser to the provider. Nothing from the request but
-// the route chooses where: no "next" parameter, no Host header.
-func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
-	p, platform, instance, ok := a.provider(r)
-	if !ok || a.removing(instance) {
-		http.NotFound(w, r)
-		return
-	}
-	st := oauthState{
-		Platform: platform, Instance: instance,
-		State: randomString(32), Verifier: randomString(32),
-		Expires: a.now().Add(stateTTL).Unix(),
-	}
-	a.setStateCookie(w, st)
-	http.Redirect(w, r, p.authorizeURL(st.State, pkceChallenge(st.Verifier)), http.StatusFound)
-}
-
-// callback finishes sign-in: it checks the state, trades the code for a
-// token, makes a new session (ending the one the browser came with), checks
-// the user's access to what their teams cover and sends the browser to /.
-func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
-	p, platform, instance, ok := a.provider(r)
-	if !ok || a.removing(instance) {
-		http.NotFound(w, r)
-		return
-	}
-	clearCookie(w, stateCookieName, "/")
-	q := r.URL.Query()
-	st, ok := a.readState(r, platform, instance)
-	if !ok || subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(st.State)) != 1 {
-		writeText(w, http.StatusBadRequest, "Sign-in expired or was started in another window. Please sign in again.")
-		return
-	}
-	if q.Get("error") != "" {
-		writeText(w, http.StatusForbidden, "Sign-in was not completed.")
-		return
-	}
-	code := q.Get("code")
-	if code == "" {
-		writeText(w, http.StatusBadRequest, "Sign-in answer without a code. Please sign in again.")
-		return
-	}
-	log := a.log.With("platform", platform, "instance", instance)
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), signInTimeout)
-	defer cancel()
-
-	tok, err := p.exchange(ctx, code, st.Verifier)
-	if err != nil {
-		log.Warn("dashboard sign-in: code exchange failed", "error", err.Error())
-		writeText(w, http.StatusBadGateway, "Sign-in failed. Please try again.")
-		return
-	}
-	userID, username, err := p.user(ctx, tok.AccessToken)
-	if err != nil {
-		log.Warn("dashboard sign-in: reading the user failed", "error", err.Error())
-		writeText(w, http.StatusBadGateway, "Sign-in failed. Please try again.")
-		return
-	}
-	log = log.With("user", username)
-
-	// Never adopt the session the browser arrived with: end it.
-	if hash, ok := sessionHash(r); ok {
-		if err := a.store.DeleteSession(ctx, hash); err != nil {
-			log.Error("dashboard sign-in: ending the previous session failed", "error", err.Error())
-			writeText(w, http.StatusInternalServerError, "Sign-in failed. Please try again.")
-			return
-		}
-	}
-	sealed, err := a.seal(tok)
-	if err != nil {
-		writeText(w, http.StatusInternalServerError, "Sign-in failed. Please try again.")
-		return
-	}
-	id := randomString(sessionIDBytes)
-	hash := hashID(id)
-	now := a.now()
-	if a.removing(instance) {
-		// Removed since the sign-in began: no account may be made for it.
-		http.NotFound(w, r)
-		return
-	}
-	account, err := a.store.UpsertPlatformAccount(ctx, platform, instance, userID, username, now)
-	if err != nil {
-		log.Error("dashboard sign-in: storing the account failed", "error", err.Error())
-		writeText(w, http.StatusInternalServerError, "Sign-in failed. Please try again.")
-		return
-	}
-	se := store.Session{
-		IDHash: hash, AccountID: account.ID, Platform: platform, Instance: instance, UserID: userID, Username: username,
-		TokenSealed: sealed, CSRF: randomString(32), LastSeenAt: now, CreatedAt: now,
-	}
-	if err := a.store.CreateSession(ctx, se); err != nil {
-		log.Error("dashboard sign-in: storing the session failed", "error", err.Error())
-		writeText(w, http.StatusInternalServerError, "Sign-in failed. Please try again.")
-		return
-	}
-	cov, err := a.coverage(ctx, account.ID, instance)
-	if err == nil {
-		_, err = a.checkAccess(ctx, se, tok, cov)
-	}
-	if err != nil {
-		log.Warn("dashboard sign-in: access check failed", "error", err.Error())
-		if err := a.store.DeleteSession(ctx, hash); err != nil {
-			log.Error("dashboard sign-in: removing the unchecked session failed", "error", err.Error())
-		}
-		writeText(w, http.StatusBadGateway, "Could not check which repositories you can see. Please try again.")
-		return
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name: SessionCookieName, Value: id, Path: "/", MaxAge: int(MaxSessionAge / time.Second),
-		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
-	})
-	a.audit(ctx, account, "sign_in", "", now)
-	log.Info("dashboard sign-in")
-	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 // logout ends the session. It is a write: it needs the CSRF token.
@@ -432,7 +183,6 @@ func (a *Auth) logout(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, "could not sign out")
 				return
 			}
-			a.forget(hash)
 		}
 	}
 	clearCookie(w, SessionCookieName, "/")
@@ -442,20 +192,17 @@ func (a *Auth) logout(w http.ResponseWriter, r *http.Request) {
 // Require serves next only for a signed-in session that is neither idle
 // for 8 hours nor older than 7 days (401 otherwise), checks X-CSRF-Token on
 // every request other than GET, HEAD and OPTIONS (403), and puts the
-// Session in the context. A session whose account is gone ends (401); a
-// password account that must change its password gets 403
+// Session in the context. A session whose account is gone ends (401), and so
+// does one whose account is of the old platform kind, which no sign-in
+// reaches any more; a local admin that must change its password gets 403
 // "password_change_required" for everything but GET /api/me, POST
 // /auth/logout and POST /auth/password/change.
 //
-// A password session is an operator: it sees everything, with no platform
-// check. A platform session's teams are read on every request, so a team
-// change applies at once. On no team it is waiting: 403 "waiting" for
-// everything but GET /api/me, and no call to the platform. Otherwise it sees
-// the repositories its teams cover that the platform lets it see, checked
-// within the last 5 minutes (AccessTTL) for the repositories covered now: a
-// check made for other ones is made again before the request is served.
-// When checks have failed for two AccessTTLs it sees nothing and has no
-// role, admin team or not, until one succeeds.
+// What the session sees is read from the account on every request, so a role
+// or team change applies at once: an admin sees everything; any other account
+// sees the repositories its teams cover, with the highest role they give
+// (load). On no team it is waiting: 403 "waiting" for everything but GET
+// /api/me.
 func (a *Auth) Require(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -480,7 +227,6 @@ func (a *Auth) Require(next http.Handler) http.Handler {
 			if err := a.store.DeleteSession(ctx, hash); err != nil {
 				a.log.Error("dashboard: deleting an expired session failed", "error", err.Error())
 			}
-			a.forget(hash)
 			clearCookie(w, SessionCookieName, "/")
 			writeError(w, http.StatusUnauthorized, "session expired")
 			return
@@ -495,14 +241,14 @@ func (a *Auth) Require(next http.Handler) http.Handler {
 			writeError(w, http.StatusInternalServerError, "could not load the session")
 			return
 		}
-		if !found {
-			// Defensive: sessions are deleted with their account (ON
-			// DELETE CASCADE), so the session lookup above already
-			// answers 401 in practice.
+		// A session of the old platform kind (a previous release's pod can
+		// still make one after the upgrade) gets nothing: end it. (A missing
+		// account is defensive: sessions are deleted with their account, ON
+		// DELETE CASCADE, so the lookup above already answers 401.)
+		if !found || account.Kind == store.AccountPlatform {
 			if err := a.store.DeleteSession(ctx, hash); err != nil {
-				a.log.Error("dashboard: deleting the session of a removed account failed", "error", err.Error())
+				a.log.Error("dashboard: deleting the session of an unusable account failed", "error", err.Error())
 			}
-			a.forget(hash)
 			clearCookie(w, SessionCookieName, "/")
 			writeError(w, http.StatusUnauthorized, "not signed in")
 			return
@@ -517,62 +263,23 @@ func (a *Auth) Require(next http.Handler) http.Handler {
 				a.log.Warn("dashboard: recording session use failed", "error", err.Error())
 			}
 		}
-		s := Session{
-			AccountID: account.ID, Kind: account.Kind, MustChangePassword: account.MustChangePassword,
-			CSRFToken: se.CSRF, idHash: se.IDHash,
-		}
-		if account.Kind == store.AccountPassword {
-			// No platform and no token to check with: the operator.
-			s.Username, s.Operator, s.Admin, s.All = account.Username, true, true, true
-			next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, sessionKey{}, s)))
-			return
-		}
-		s.Platform, s.Instance, s.UserID, s.Username = se.Platform, se.Instance, se.UserID, se.Username
-		teams, err := a.store.AccountTeams(ctx, account.ID)
-		if err != nil {
-			a.log.Error("dashboard: loading an account's teams failed", "error", err.Error())
-			writeError(w, http.StatusInternalServerError, "could not load the session")
-			return
-		}
-		teams = knownTeams(teams)
-		if len(teams) == 0 {
-			if !allowedWhileWaiting(r) {
-				writeJSON(w, http.StatusForbidden, map[string]string{
-					"error": "an admin needs to add you to a team", "code": "waiting"})
-				return
-			}
-			s.Waiting = true
-			next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, sessionKey{}, s)))
-			return
-		}
-		repos, err := a.repos.List(ctx)
-		if err != nil {
-			a.log.Error("dashboard: listing repositories failed", "error", err.Error())
-			writeError(w, http.StatusInternalServerError, "could not load the session")
-			return
-		}
-		cov := cover(teams, repos, se.Instance)
-		acc, err := a.access(ctx, se, now, cov)
+		acc, err := a.load(ctx, account)
 		if err != nil {
 			a.log.Error("dashboard: loading session access failed", "error", err.Error())
 			writeError(w, http.StatusInternalServerError, "could not load the session")
 			return
 		}
-		s.Username, s.Visible, s.Roles = acc.username, map[RepoKey]int64{}, map[RepoKey]Role{}
-		if acc.closed {
-			// The platform hasn't vouched for the session: no role at
-			// all, admin team or not, until a check succeeds.
-			next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, sessionKey{}, s)))
+		if acc.waiting && !allowedWhileWaiting(r) {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "an admin needs to add you to a team", "code": "waiting"})
 			return
 		}
-		// The platform's answer, but only where the teams cover now: a
-		// check made before a team change never shows more.
-		for _, p := range acc.projects {
-			if k := repoKey(p.Instance, p.Path); cov.roles[k] > RoleNone {
-				s.Visible[k] = p.ID
-			}
+		s := Session{
+			AccountID: account.ID, Kind: account.Kind, Username: account.Username, Email: account.Email,
+			SignIn: se.SignIn, Admin: acc.admin, All: acc.admin, Waiting: acc.waiting,
+			MustChangePassword: account.MustChangePassword, Visible: acc.visible, Roles: acc.roles,
+			CSRFToken: se.CSRF, idHash: se.IDHash,
 		}
-		s.Admin, s.Roles = cov.admin, cov.roles
 		next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, sessionKey{}, s)))
 	})
 }
@@ -587,9 +294,9 @@ func (a *Auth) PruneSessions(ctx context.Context, now time.Time) (int, error) {
 	return n, nil
 }
 
-// allowedBeforeChange reports whether r is one of the requests a password
-// account that must change its password may make: who am I, sign out and
-// the change itself.
+// allowedBeforeChange reports whether r is one of the requests a local admin
+// that must change its password may make: who am I, sign out and the change
+// itself.
 func allowedBeforeChange(r *http.Request) bool {
 	switch r.Method + " " + r.URL.Path {
 	case "GET /api/me", "POST /auth/logout", "POST /auth/password/change":
@@ -598,8 +305,8 @@ func allowedBeforeChange(r *http.Request) bool {
 	return false
 }
 
-// allowedWhileWaiting reports whether r is one a platform account on no
-// team may make: who am I. Signing out isn't behind Require.
+// allowedWhileWaiting reports whether r is one an account on no team may
+// make: who am I. Signing out isn't behind Require.
 func allowedWhileWaiting(r *http.Request) bool {
 	return r.Method+" "+r.URL.Path == "GET /api/me"
 }
@@ -642,24 +349,4 @@ func hashID(id string) []byte {
 	raw, _ := base64.RawURLEncoding.DecodeString(id)
 	h := sha256.Sum256(raw)
 	return h[:]
-}
-
-func (a *Auth) seal(tok oauthToken) ([]byte, error) {
-	data, err := json.Marshal(tok)
-	if err != nil {
-		return nil, errors.New("dashboard: encoding the token")
-	}
-	return a.box.Seal(data), nil
-}
-
-func (a *Auth) open(sealed []byte) (oauthToken, error) {
-	data, err := a.box.Open(sealed)
-	if err != nil {
-		return oauthToken{}, errors.New("dashboard: the stored token can't be opened (PERGENT_SH_SECRET_KEY changed?)")
-	}
-	var tok oauthToken
-	if json.Unmarshal(data, &tok) != nil || tok.AccessToken == "" {
-		return oauthToken{}, errors.New("dashboard: the stored token is malformed")
-	}
-	return tok, nil
 }

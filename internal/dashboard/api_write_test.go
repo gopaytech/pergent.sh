@@ -144,7 +144,7 @@ func wantCode(t *testing.T, rec *httptest.ResponseRecorder, what string, code in
 func writes(instance, project string) []struct{ method, target, body string } {
 	base := "/api/repositories/" + instance + "/" + project
 	return []struct{ method, target, body string }{
-		{"POST", "/api/repositories", `{"project":"` + project + `"}`},
+		{"POST", "/api/repositories", `{"instance":"` + instance + `","project":"` + project + `"}`},
 		{"DELETE", base, ""},
 		{"PUT", base + "/settings", `{"approve":false}`},
 		{"POST", base + "/settings/reset", ""},
@@ -154,27 +154,19 @@ func writes(instance, project string) []struct{ method, target, body string } {
 // Review Focus 2: a viewer calling a write endpoint directly, with a valid
 // session and CSRF token, gets 403 and nothing changes.
 func TestWritesRequireAdmin(t *testing.T) {
-	for _, platform := range []string{"gitlab", "github"} {
-		t.Run(platform, func(t *testing.T) {
+	for _, instance := range []string{"main", "gh"} {
+		t.Run(instance, func(t *testing.T) {
 			e := newEnv(t, nil)
-			instance := map[string]string{"gitlab": "main", "github": "gh"}[platform]
 			e.dashboardRepo(instance, "acme/gadgets", func(r *store.DashboardRepo) { r.Approve = ptr(true) })
 			e.cat[instance].set("acme/gadgets", "acme/tools")
-			var c *http.Cookie
-			if platform == "gitlab" {
-				e.gl.setProject("acme/tools", gitlabProject("private", 40, 0))
-				c = e.signInGitLab(false, "acme/gadgets")
-			} else {
-				e.gh.setRepo("acme/tools", githubRepo(true, true))
-				c = e.signInGitHub(false, "acme/gadgets")
-			}
+			c := e.userOn(instance, false, "acme/gadgets")
 			if _, se := e.session(c); se.Admin || se.Role(instance, "acme/gadgets") != RoleViewer {
 				t.Fatalf("session = %+v; want a viewer who sees acme/gadgets", se)
 			}
 
-			wantCode(t, e.get(c, "/api/repositories/available"), "GET available", http.StatusForbidden)
+			wantCode(t, e.get(c, "/api/repositories/available?instance="+instance), "GET available", http.StatusForbidden)
 			for _, w := range append(writes(instance, "acme/gadgets"),
-				struct{ method, target, body string }{"POST", "/api/repositories", `{"project":"acme/tools"}`}) {
+				struct{ method, target, body string }{"POST", "/api/repositories", `{"instance":"` + instance + `","project":"acme/tools"}`}) {
 				wantCode(t, e.send(c, w.method, w.target, w.body), w.method+" "+w.target, http.StatusForbidden)
 			}
 
@@ -195,28 +187,41 @@ func TestWritesRequireAdmin(t *testing.T) {
 	}
 }
 
-// Review Focus 3: an admin calling a write endpoint for a repository they
-// can't see gets 404, the same answer as for one that doesn't exist.
-func TestAdminCannotWriteInvisibleRepo(t *testing.T) {
+// Review Focus 3: a user calling a write endpoint for a repository their
+// teams don't cover gets 404, the same answer as for one that doesn't exist.
+func TestUserCannotWriteUncoveredRepo(t *testing.T) {
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/hidden", func(r *store.DashboardRepo) { r.Approve = ptr(true) })
+	e.dashboardRepo("main", "acme/gadgets", nil)
 	e.dashboardRepo("gh", "acme/other", nil)
-	e.cat["main"].set("acme/hidden", "acme/gadgets")
-	// alice can't see acme/hidden on GitLab: no project answer for it.
-	c := e.signInGitLab(true, "acme/gadgets")
-	if _, se := e.session(c); !se.Admin || se.CanSee("main", "acme/hidden") {
-		t.Fatalf("session = %+v; want an admin who can't see acme/hidden", se)
+	// A maintainer of acme/gadgets alone.
+	e.team("gadgets", []store.TeamMember{{AccountID: e.alice(), Role: store.RoleMaintainer}},
+		store.TeamRepo{Instance: "main", Project: "acme/gadgets"})
+	c := e.aliceSession()
+	if _, se := e.session(c); se.Admin || se.CanSee("main", "acme/hidden") || se.Role("main", "acme/gadgets") != RoleMaintainer {
+		t.Fatalf("session = %+v; want a maintainer who can't see acme/hidden", se)
 	}
-	unknown := e.send(c, "DELETE", "/api/repositories/main/acme/nothing-here", "")
+	unknown := e.send(c, "PUT", "/api/repositories/main/acme/nothing-here/settings", `{"approve":false}`)
 	if unknown.Code != http.StatusNotFound {
-		t.Fatalf("DELETE of an unknown repository = %d %s", unknown.Code, unknown.Body)
+		t.Fatalf("PUT of an unknown repository = %d %s", unknown.Code, unknown.Body)
 	}
-	for _, w := range append(writes("main", "acme/hidden"), writes("gh", "acme/other")[1:]...) {
-		rec := e.send(c, w.method, w.target, w.body)
-		wantCode(t, rec, w.method+" "+w.target, http.StatusNotFound)
+	for _, w := range [][3]string{
+		{"PUT", "/api/repositories/main/acme/hidden/settings", `{"approve":false}`},
+		{"POST", "/api/repositories/main/acme/hidden/settings/reset", ""},
+		{"PUT", "/api/repositories/gh/acme/other/settings", `{"approve":false}`},
+		{"POST", "/api/repositories/gh/acme/other/settings/reset", ""},
+	} {
+		rec := e.send(c, w[0], w[1], w[2])
+		wantCode(t, rec, w[0]+" "+w[1], http.StatusNotFound)
 		if rec.Body.String() != unknown.Body.String() {
-			t.Errorf("%s %s body = %s, want the unknown repository's %s", w.method, w.target, rec.Body, unknown.Body)
+			t.Errorf("%s %s body = %s, want the unknown repository's %s", w[0], w[1], rec.Body, unknown.Body)
 		}
+	}
+	// Switching on and off is for admins, whatever the repository.
+	for _, w := range []struct{ method, target, body string }{
+		{"DELETE", "/api/repositories/main/acme/gadgets", ""}, {"DELETE", "/api/repositories/main/acme/hidden", ""},
+	} {
+		wantCode(t, e.send(c, w.method, w.target, w.body), w.method+" "+w.target, http.StatusForbidden)
 	}
 	if r, found := e.storedRepo("main", "acme/hidden"); !found || r.Approve == nil || !*r.Approve {
 		t.Errorf("acme/hidden changed: %+v, %v", r, found)
@@ -235,7 +240,7 @@ func TestConfigManagedIs409(t *testing.T) {
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	e.cat["main"].set("acme/widgets", "acme/gadgets")
-	c := e.signInGitLab(true, "acme/widgets", "acme/gadgets")
+	c := e.signInGitLab(true)
 
 	for _, w := range writes("main", "acme/widgets") {
 		rec := e.send(c, w.method, w.target, w.body)
@@ -244,7 +249,7 @@ func TestConfigManagedIs409(t *testing.T) {
 			t.Errorf("%s %s body = %s", w.method, w.target, rec.Body)
 		}
 	}
-	rec := e.send(c, "POST", "/api/repositories", `{"project":"ACME/Gadgets"}`)
+	rec := e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"ACME/Gadgets"}`)
 	wantCode(t, rec, "POST of a repository already on", http.StatusConflict)
 	wantCode(t, e.send(c, "PUT", "/api/repositories/main/acme/widgets/settings", `{"maxTurns":120}`), "PUT maxTurns", http.StatusConflict)
 
@@ -443,15 +448,14 @@ func TestCapsNeedAdmin(t *testing.T) {
 		r.RerunLimitPerMR, r.RerunLimitPerRepo = &mr, &repo
 	})
 	target := "/api/repositories/main/acme/gadgets/settings"
-	e.gl.setProject("acme/gadgets", gitlabProject("private", 20, 0))
 	e.aliceOn("main", store.RoleMaintainer)
-	maintainer := e.signIn("gitlab", "main")
+	maintainer := e.aliceSession()
 
 	for _, body := range []string{`{"rerunLimitPerMR":99}`, `{"rerunLimitPerRepo":null}`, `{"approve":false,"rerunLimitPerMR":5}`} {
 		before, _ := e.storedRepo("main", "acme/gadgets")
 		rec := e.send(maintainer, "PUT", target, body)
 		wantCode(t, rec, "maintainer PUT "+body, http.StatusForbidden)
-		if want := "only admins of this repository can change its re-run caps"; errorOf(t, rec) != want {
+		if want := "only admins can change its re-run caps"; errorOf(t, rec) != want {
 			t.Errorf("maintainer PUT %s: error = %q", body, errorOf(t, rec))
 		}
 		if after, _ := e.storedRepo("main", "acme/gadgets"); !after.UpdatedAt.Equal(before.UpdatedAt) {
@@ -473,7 +477,7 @@ func TestCapsNeedAdmin(t *testing.T) {
 		t.Errorf("after a maintainer's reset row = %+v; want approve cleared, caps 7 and 70 kept", r)
 	}
 
-	admin := e.signInGitLab(true, "acme/gadgets")
+	admin := e.signInGitLab(true) // the same alice, made an admin
 	wantCode(t, e.send(admin, "PUT", target, `{"rerunLimitPerMR":15,"rerunLimitPerRepo":null}`), "admin PUT caps", http.StatusOK)
 	r, _ = e.storedRepo("main", "acme/gadgets")
 	if r.RerunLimitPerMR == nil || *r.RerunLimitPerMR != 15 || r.RerunLimitPerRepo != nil {
@@ -506,20 +510,22 @@ func TestSettingsCapMessages(t *testing.T) {
 func TestSwitchOnTriggersReconcile(t *testing.T) {
 	e := newEnv(t, nil)
 	e.cat["main"].set("acme/gadgets")
-	c := e.signInGitLab(true, "acme/gadgets")
+	c := e.signInGitLab(true)
 
-	rec := e.send(c, "POST", "/api/repositories", `{"project":"ACME/Gadgets"}`)
+	rec := e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"ACME/Gadgets"}`)
 	wantCode(t, rec, "POST", http.StatusCreated)
 	var detail RepositoryDetailView
 	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
 		t.Fatal(err)
 	}
-	if detail.Repo.Project != "acme/gadgets" || detail.Repo.Source != "dashboard" || !detail.Repo.On ||
-		detail.Repo.Instance != "main" || detail.Settings["approve"].Overridden {
+	// The project is spelled as the admin gave it: the bot's list is matched
+	// ignoring case, and nothing asks the platform for its spelling.
+	if detail.Repo.Project != "ACME/Gadgets" || detail.Repo.Source != "dashboard" || !detail.Repo.On ||
+		detail.Repo.Instance != "main" || detail.Settings["approve"].Overridden || detail.Role != "admin" {
 		t.Errorf("detail = %+v", detail)
 	}
-	r, found := e.storedRepo("main", "acme/gadgets")
-	if !found || r.Project != "acme/gadgets" || r.CreatedBy != "alice" || r.Approve != nil || r.Skills != nil {
+	r, found := e.storedRepo("main", "ACME/Gadgets")
+	if !found || r.Project != "ACME/Gadgets" || r.CreatedBy != aliceEmail || r.Approve != nil || r.Skills != nil {
 		t.Errorf("row = %+v, %v", r, found)
 	}
 	if n := e.reconciles.Load(); n != 1 {
@@ -532,7 +538,7 @@ func TestSwitchOnTriggersReconcile(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
 		t.Fatal(err)
 	}
-	if detail.Repo.On || detail.Repo.Project != "acme/gadgets" {
+	if detail.Repo.On || detail.Repo.Project != "ACME/Gadgets" {
 		t.Errorf("detail after DELETE = %+v", detail)
 	}
 	if _, found := e.storedRepo("main", "acme/gadgets"); found {
@@ -541,138 +547,88 @@ func TestSwitchOnTriggersReconcile(t *testing.T) {
 	if n := e.reconciles.Load(); n != 2 {
 		t.Errorf("ReconcileSoon called %d times, want 2", n)
 	}
-	// Each names the repository switched, as the platform spells it.
+	// Each names the repository switched, as the dashboard spells it.
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if want := []string{"main/acme/gadgets", "main/acme/gadgets"}; !slices.Equal(e.reconciled, want) {
+	if want := []string{"main/ACME/Gadgets", "main/ACME/Gadgets"}; !slices.Equal(e.reconciled, want) {
 		t.Errorf("ReconcileSoon got %v, want %v", e.reconciled, want)
 	}
 }
 
-// The client can't switch on a repository that isn't in the available set:
-// the server checks again, with the admin's token and the bot's list.
+// The client can't switch on a repository the review bot or App doesn't
+// reach: the server checks again, against the bot, whatever the picker listed.
 func TestSwitchOnOnlyAvailable(t *testing.T) {
 	e := newEnv(t, nil)
-	e.cat["main"].set("acme/gadgets", "acme/bot-only", "acme/guest")
-	e.gl.setProject("acme/user-only", gitlabProject("private", 30, 0))
-	e.gl.setProject("acme/guest", gitlabProject("private", 10, 0))
-	c := e.signInGitLab(true, "acme/gadgets")
+	e.cat["main"].set("acme/gadgets", "acme/bot-only")
+	c := e.signInGitLab(true)
 
-	unknown := e.send(c, "POST", "/api/repositories", `{"project":"acme/nothing-here"}`)
+	unknown := e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"acme/nothing-here"}`)
 	wantCode(t, unknown, "POST unknown", http.StatusNotFound)
-	for _, p := range []string{"acme/bot-only", "acme/user-only", "acme/guest"} {
-		rec := e.send(c, "POST", "/api/repositories", `{"project":"`+p+`"}`)
-		wantCode(t, rec, "POST "+p, http.StatusNotFound)
-		if rec.Body.String() != unknown.Body.String() {
-			t.Errorf("POST %s body = %s", p, rec.Body)
-		}
-		if _, found := e.storedRepo("main", p); found {
-			t.Errorf("%s was switched on", p)
-		}
-	}
-	for _, body := range []string{`{}`, `{"project":""}`, `{"project":1}`, `{"project":"acme/gadgets","x":1}`, `nope`} {
+	for _, body := range []string{`{"instance":"main"}`, `{"instance":"main","project":""}`, `{"instance":"main","project":1}`,
+		`{"instance":"main","project":"acme/gadgets","x":1}`, `{"project":"acme/gadgets"}`, `nope`} {
 		wantCode(t, e.send(c, "POST", "/api/repositories", body), "POST "+body, http.StatusBadRequest)
+	}
+	wantCode(t, e.send(c, "POST", "/api/repositories", `{"instance":"nope","project":"acme/gadgets"}`), "POST an unknown instance", http.StatusNotFound)
+	if _, found := e.storedRepo("main", "acme/nothing-here"); found {
+		t.Error("an unreachable repository was switched on")
 	}
 	if n := e.reconciles.Load(); n != 0 {
 		t.Errorf("ReconcileSoon called %d times", n)
 	}
 
-	// The platforms can't be asked: 502, nothing switched on.
-	e.gl.set(func(o *oauthServer) { o.failAccess = true })
-	wantCode(t, e.send(c, "POST", "/api/repositories", `{"project":"acme/gadgets"}`), "POST while GitLab fails", http.StatusBadGateway)
-	e.gl.set(func(o *oauthServer) { o.failAccess = false })
+	// The bot can't be asked: 502, nothing switched on.
 	e.cat["main"].setFail(errors.New("bot down"))
-	wantCode(t, e.send(c, "POST", "/api/repositories", `{"project":"acme/gadgets"}`), "POST while the bot fails", http.StatusBadGateway)
+	wantCode(t, e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"acme/gadgets"}`), "POST while the bot fails", http.StatusBadGateway)
+	e.cat["main"].setFail(nil)
 	if _, found := e.storedRepo("main", "acme/gadgets"); found {
 		t.Errorf("acme/gadgets was switched on")
 	}
-}
-
-// A GitLab project reached only through a share (a group the project or
-// its group is shared with, as Reporter or above) is in the picker, can be
-// switched on, and is then seen: its permissions don't show the share, so
-// the project listing is asked. A share below Reporter is not enough.
-func TestSwitchOnSharedProject(t *testing.T) {
-	e := newEnv(t, nil)
-	e.cat["main"].set("acme/shared", "acme/shared-guest")
-	shared := gitlabProject("private", 0, 0)
-	shared["shared_access"] = 30
-	e.gl.setProject("acme/shared", shared)
-	guest := gitlabProject("private", 0, 0)
-	guest["shared_access"] = 10
-	e.gl.setProject("acme/shared-guest", guest)
-	c := e.signInGitLab(true)
-
-	got := getJSON[availableBody](e, c, "/api/repositories/available")
-	if want := []string{"acme/shared"}; !slices.Equal(projectsOf(got.Items), want) {
-		t.Errorf("available = %v, want %v", projectsOf(got.Items), want)
-	}
-	wantCode(t, e.send(c, "POST", "/api/repositories", `{"project":"acme/shared-guest"}`), "POST a Guest share", http.StatusNotFound)
-	wantCode(t, e.send(c, "POST", "/api/repositories", `{"project":"acme/shared"}`), "POST a Developer share", http.StatusCreated)
-
-	// The next access check keeps it.
-	e.clock.advance(AccessTTL + time.Second)
-	if _, se := e.session(c); !se.CanSee("main", "acme/shared") || se.CanSee("main", "acme/shared-guest") {
-		t.Errorf("visible after the next check = %v", se.Visible)
-	}
-}
-
-// On GitHub the admin needs pull access and the review App an
-// installation on the repository.
-func TestSwitchOnOnlyAvailableGitHub(t *testing.T) {
-	e := newEnv(t, nil)
-	e.gh.setRepo("acme/no-pull", githubRepo(true, false))
-	e.gh.setRepo("acme/user-only", githubRepo(true, true))
-	e.gh.setRepo("Acme/Gadgets", githubRepo(true, true))
-	e.cat["gh"].set("acme/no-pull", "acme/gadgets", "acme/bot-only")
-	c := e.signInGitHub(true)
-	for _, p := range []string{"acme/no-pull", "acme/user-only", "acme/bot-only"} {
-		wantCode(t, e.send(c, "POST", "/api/repositories", `{"project":"`+p+`"}`), "POST "+p, http.StatusNotFound)
-	}
-	wantCode(t, e.send(c, "POST", "/api/repositories", `{"project":"acme/gadgets"}`), "POST acme/gadgets", http.StatusCreated)
-	if r, found := e.storedRepo("gh", "acme/gadgets"); !found || r.Project != "Acme/Gadgets" {
-		t.Errorf("row = %+v, %v; want GitHub's spelling", r, found)
+	// A repository the bot reaches is enough, on either platform.
+	wantCode(t, e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"acme/bot-only"}`), "POST a repository only the bot reaches", http.StatusCreated)
+	e.cat["gh"].set("acme/gadgets")
+	rec := e.send(c, "POST", "/api/repositories", `{"instance":"gh","project":"acme/gadgets"}`)
+	wantCode(t, rec, "POST on GitHub", http.StatusCreated)
+	if r, found := e.storedRepo("gh", "acme/gadgets"); !found || r.Project != "acme/gadgets" {
+		t.Errorf("row = %+v, %v", r, found)
 	}
 }
 
 // Switching on doesn't depend on the picker's lists: a repository beyond
-// what the lists read can be added.
+// what the list reads can be added.
 func TestSwitchOnBeyondListingCap(t *testing.T) {
 	e := newEnv(t, nil)
 	e.d.listLimit = 2
 	var all []string
 	for i := range 5 {
-		p := fmt.Sprintf("acme/repo-%d", i)
-		all = append(all, p)
-		e.gl.setProject(p, gitlabProject("private", 20, 0))
+		all = append(all, fmt.Sprintf("acme/repo-%d", i))
 	}
 	e.cat["main"].set(all...)
 	c := e.signInGitLab(true)
-	got := getJSON[availableBody](e, c, "/api/repositories/available")
+	got := getJSON[availableBody](e, c, "/api/repositories/available?instance=main")
 	if len(got.Items) != 2 || !got.Truncated {
 		t.Fatalf("available = %v truncated %v; want the first 2, truncated", projectsOf(got.Items), got.Truncated)
 	}
-	wantCode(t, e.send(c, "POST", "/api/repositories", `{"project":"acme/repo-4"}`), "POST beyond the cap", http.StatusCreated)
+	wantCode(t, e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"acme/repo-4"}`), "POST beyond the cap", http.StatusCreated)
 }
 
-// Whether a repository is on is told only to an admin who reaches it on
-// the platform: one that is on but out of the admin's reach gets the same
-// 404, after the same platform check, as one that is off.
+// Whether a repository is on is told only for one the bot reaches: one that is
+// on but out of the bot's reach gets the same 404, after the same check, as
+// one that is off.
 func TestSwitchOnChecksBeforeTellingOnOrOff(t *testing.T) {
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/hidden", nil)
-	e.cat["main"].set("acme/hidden", "acme/off")
+	e.cat["main"].set("acme/reachable")
 	c := e.signInGitLab(true)
 
 	for _, p := range []string{"acme/hidden", "acme/off"} {
-		before := e.gl.projectChecks()
-		rec := e.send(c, "POST", "/api/repositories", `{"project":"`+p+`"}`)
+		before := e.cat["main"].checkCount()
+		rec := e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"`+p+`"}`)
 		wantCode(t, rec, "POST "+p, http.StatusNotFound)
 		if rec.Body.String() != `{"error":"not found"}`+"\n" {
 			t.Errorf("POST %s body = %q", p, rec.Body)
 		}
-		if n := e.gl.projectChecks() - before; n != 1 {
-			t.Errorf("POST %s asked GitLab %d times, want 1", p, n)
+		if n := e.cat["main"].checkCount() - before; n != 1 {
+			t.Errorf("POST %s asked the bot %d times, want 1", p, n)
 		}
 	}
 }
@@ -690,75 +646,52 @@ func projectsOf(items []AvailableRepo) []string {
 	return out
 }
 
-// The picker lists what both the admin (member, Reporter or above) and the
-// review bot (Maintainer or above) or App reach, minus what is on already.
-func TestAvailableIsIntersection(t *testing.T) {
+// The picker lists what the review bot or App of the instance named reaches,
+// minus what is on already, for any admin.
+func TestAvailableListsWhatTheBotReaches(t *testing.T) {
 	t.Run("gitlab", func(t *testing.T) {
 		e := newEnv(t, nil)
 		e.dashboardRepo("main", "acme/dash", nil)
-		for p, level := range map[string]int{"acme/gadgets": 20, "acme/tools": 30, "acme/guest": 10,
-			"acme/user-only": 40, "acme/dash": 20, "Acme/Zeta": 50} {
-			e.gl.setProject(p, gitlabProject("private", level, 0))
-		}
-		e.gl.setProject("acme/public", gitlabProject("public", 0, 0))
-		e.cat["main"].set("acme/gadgets", "acme/tools", "acme/guest", "acme/public", "acme/widgets",
-			"acme/dash", "acme/bot-only", "acme/zeta")
-		c := e.signInGitLab(true, "acme/widgets")
+		e.cat["main"].set("acme/gadgets", "acme/tools", "acme/widgets", "acme/dash", "Acme/Zeta")
+		c := e.signInGitLab(true)
 
-		got := getJSON[availableBody](e, c, "/api/repositories/available")
-		if want := []string{"acme/gadgets", "acme/tools", "Acme/Zeta"}; !slices.Equal(projectsOf(got.Items), want) || got.Truncated {
-			t.Errorf("available = %v truncated %v, want %v", projectsOf(got.Items), got.Truncated, want)
+		got := getJSON[availableBody](e, c, "/api/repositories/available?instance=main")
+		if want := []string{"Acme/Zeta", "acme/gadgets", "acme/tools"}; !slices.Equal(projectsOf(got.Items), want) || got.Truncated {
+			t.Errorf("available = %v truncated %v, want %v (not what is on)", projectsOf(got.Items), got.Truncated, want)
 		}
 		for _, it := range got.Items {
 			if it.Instance != "main" || it.Platform != "gitlab" {
 				t.Errorf("item = %+v", it)
 			}
 		}
-		e.gl.mu.Lock()
-		listings := slices.Clone(e.gl.listings)
-		e.gl.mu.Unlock()
-		if len(listings) != 1 || !strings.Contains(listings[0], "min_access_level=20") || !strings.Contains(listings[0], "simple=true") {
-			t.Errorf("user listings = %v", listings)
-		}
 
-		// The bot's list is kept 5 minutes; the admin's is asked each time.
-		getJSON[availableBody](e, c, "/api/repositories/available")
+		// The bot's list is kept 5 minutes.
+		getJSON[availableBody](e, c, "/api/repositories/available?instance=main")
 		if n := e.cat["main"].callCount(); n != 1 {
 			t.Errorf("bot listed %d times within 5 minutes, want 1", n)
 		}
 		e.clock.advance(5*time.Minute + time.Second)
-		getJSON[availableBody](e, c, "/api/repositories/available")
+		getJSON[availableBody](e, c, "/api/repositories/available?instance=main")
 		if n := e.cat["main"].callCount(); n != 2 {
 			t.Errorf("bot listed %d times after 5 minutes, want 2", n)
-		}
-		e.gl.mu.Lock()
-		n := len(e.gl.listings)
-		e.gl.mu.Unlock()
-		if n != 3 {
-			t.Errorf("user listed %d times, want 3", n)
 		}
 	})
 
 	t.Run("github", func(t *testing.T) {
 		e := newEnv(t, nil)
-		e.gh.setRepo("acme/gadgets", githubRepo(true, true))
-		e.gh.setRepo("acme/user-only", githubRepo(true, true))
-		e.gh.setRepo("acme/no-pull", githubRepo(true, false))
-		e.cat["gh"].set("acme/gadgets", "acme/widgets", "acme/no-pull", "acme/bot-only")
-		c := e.signInGitHub(true, "acme/widgets")
+		e.cat["gh"].set("acme/gadgets", "acme/widgets")
+		c := e.signInGitHub(true)
 
-		got := getJSON[availableBody](e, c, "/api/repositories/available")
+		got := getJSON[availableBody](e, c, "/api/repositories/available?instance=gh")
 		if want := []string{"acme/gadgets"}; !slices.Equal(projectsOf(got.Items), want) || got.Truncated {
 			t.Errorf("available = %v truncated %v, want %v", projectsOf(got.Items), got.Truncated, want)
 		}
 		if len(got.Items) == 1 && (got.Items[0].Instance != "gh" || got.Items[0].Platform != "github") {
 			t.Errorf("item = %+v", got.Items[0])
 		}
-
-		rec := e.send(c, "POST", "/api/repositories", `{"project":"acme/gadgets"}`)
-		wantCode(t, rec, "POST on GitHub", http.StatusCreated)
-		if _, found := e.storedRepo("gh", "acme/gadgets"); !found {
-			t.Errorf("acme/gadgets on gh was not switched on")
+		// The instance is the request's: main's list is not gh's.
+		if got := getJSON[availableBody](e, c, "/api/repositories/available?instance=main"); len(got.Items) != 0 {
+			t.Errorf("main's available = %v; want none (its bot reaches nothing)", projectsOf(got.Items))
 		}
 	})
 
@@ -766,59 +699,32 @@ func TestAvailableIsIntersection(t *testing.T) {
 		e := newEnv(t, nil)
 		var all []string
 		for i := range 600 {
-			p := fmt.Sprintf("acme/repo-%03d", i)
-			all = append(all, p)
-			e.gl.setProject(p, gitlabProject("private", 20, 0))
+			all = append(all, fmt.Sprintf("acme/repo-%03d", i))
 		}
 		e.cat["main"].set(all...)
 		c := e.signInGitLab(true)
-		got := getJSON[availableBody](e, c, "/api/repositories/available")
+		got := getJSON[availableBody](e, c, "/api/repositories/available?instance=main")
 		if len(got.Items) != 500 || !got.Truncated || got.Items[0].Project != "acme/repo-000" {
 			t.Errorf("available has %d items, truncated %v", len(got.Items), got.Truncated)
 		}
 	})
 
-	t.Run("platform failure", func(t *testing.T) {
+	t.Run("the bot fails", func(t *testing.T) {
 		e := newEnv(t, nil)
 		c := e.signInGitLab(true)
-		e.gl.set(func(*oauthServer) { e.gl.listFail = true })
-		rec := e.get(c, "/api/repositories/available")
-		wantCode(t, rec, "available while GitLab fails", http.StatusBadGateway)
+		e.cat["main"].setFail(errors.New("gitlab: status 500: SECRET"))
+		rec := e.get(c, "/api/repositories/available?instance=main")
+		wantCode(t, rec, "available while the bot fails", http.StatusBadGateway)
 		if strings.Contains(rec.Body.String(), "500") || strings.Contains(rec.Body.String(), "SECRET") {
 			t.Errorf("body leaks upstream detail: %s", rec.Body)
 		}
 	})
 
-	// A page failing after others were read lists what was read,
-	// truncated, and logs the failure without the user's token.
-	t.Run("later page fails", func(t *testing.T) {
+	t.Run("an instance that is not there", func(t *testing.T) {
 		e := newEnv(t, nil)
-		var all []string
-		for i := range 150 { // two pages of 100
-			p := fmt.Sprintf("acme/repo-%03d", i)
-			all = append(all, p)
-			e.gl.setProject(p, gitlabProject("private", 20, 0))
-		}
-		e.cat["main"].set(all...)
 		c := e.signInGitLab(true)
-		e.gl.set(func(*oauthServer) { e.gl.listFailFrom = 2 })
-		got := getJSON[availableBody](e, c, "/api/repositories/available")
-		if len(got.Items) != 100 || !got.Truncated {
-			t.Errorf("available has %d items, truncated %v; want the first page, truncated", len(got.Items), got.Truncated)
-		}
-		logs := e.logs.String()
-		if !strings.Contains(logs, "listing stopped early") {
-			t.Errorf("the failed page isn't logged:\n%s", logs)
-		}
-		for _, tok := range e.gl.tokens() {
-			if strings.Contains(logs, tok) {
-				t.Errorf("the log holds a token:\n%s", logs)
-			}
-		}
-
-		// The first page failing still has nothing to show: 502.
-		e.gl.set(func(*oauthServer) { e.gl.listFailFrom = 1 })
-		wantCode(t, e.get(c, "/api/repositories/available?search=repo"), "first page fails", http.StatusBadGateway)
+		wantCode(t, e.get(c, "/api/repositories/available?instance=nope"), "unknown instance", http.StatusNotFound)
+		wantCode(t, e.get(c, "/api/repositories/available"), "no instance", http.StatusBadRequest)
 	})
 }
 
@@ -826,13 +732,13 @@ func TestAvailableIsIntersection(t *testing.T) {
 func TestWriteAnswersHoldNoSecret(t *testing.T) {
 	e := newEnv(t, withSecrets(t))
 	e.cat["main"].set("acme/gadgets")
-	c := e.signInGitLab(true, "acme/gadgets")
-	e.get(c, "/api/repositories/available")
-	e.send(c, "POST", "/api/repositories", `{"project":"acme/gadgets"}`)
+	c := e.signInGitLab(true)
+	e.get(c, "/api/repositories/available?instance=main")
+	e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"acme/gadgets"}`)
 	e.send(c, "PUT", "/api/repositories/main/acme/gadgets/settings", `{"jobMemory":"lots"}`)
 	e.send(c, "PUT", "/api/repositories/main/acme/gadgets/settings", `{"approve":false}`)
 	e.send(c, "DELETE", "/api/repositories/main/acme/gadgets", "")
-	secrets := append(e.gl.tokens(), llmKey, reviewToken, approveToken, webhookSecret, glClientSecret)
+	secrets := []string{llmKey, reviewToken, approveToken, webhookSecret}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for _, rec := range e.responses {
@@ -842,43 +748,17 @@ func TestWriteAnswersHoldNoSecret(t *testing.T) {
 			}
 		}
 	}
-	if logs := e.logs.String(); strings.Contains(logs, "gl-access") {
-		t.Errorf("logs hold a user token:\n%s", logs)
-	}
 }
 
 func ptr[T any](v T) *T { return &v }
-
-// The picker uses the admin's token: one about to expire is renewed first,
-// even while the access check is still fresh.
-func TestAvailableRenewsAnExpiringToken(t *testing.T) {
-	e := newEnv(t, nil) // GitLab tokens expire after 2 hours
-	e.cat["main"].set("acme/gadgets")
-	e.gl.setProject("acme/gadgets", gitlabProject("private", 20, 0))
-	c := e.signInGitLab(true)
-	e.clock.advance(2*time.Hour - 90*time.Second)
-	e.get(c, "/api/me") // access checked again, token not due yet
-	if n := e.gl.calls(); n != 1 {
-		t.Fatalf("token calls = %d, want 1 (sign-in only)", n)
-	}
-	e.clock.advance(time.Minute)
-
-	got := getJSON[availableBody](e, c, "/api/repositories/available")
-	if !slices.Equal(projectsOf(got.Items), []string{"acme/gadgets"}) {
-		t.Errorf("available = %v", projectsOf(got.Items))
-	}
-	if n := e.gl.calls(); n != 2 {
-		t.Errorf("token calls = %d, want 2 (the renewal)", n)
-	}
-}
 
 // A write without the CSRF token is refused before anything else, admin or
 // not.
 func TestWriteNeedsCSRF(t *testing.T) {
 	e := newEnv(t, nil)
 	e.cat["main"].set("acme/gadgets")
-	c := e.signInGitLab(true, "acme/gadgets")
-	req := httptest.NewRequest("POST", "/api/repositories", strings.NewReader(`{"project":"acme/gadgets"}`))
+	c := e.signInGitLab(true)
+	req := httptest.NewRequest("POST", "/api/repositories", strings.NewReader(`{"instance":"main","project":"acme/gadgets"}`))
 	req.AddCookie(c)
 	rec := httptest.NewRecorder()
 	e.h.ServeHTTP(rec, req)
@@ -888,131 +768,51 @@ func TestWriteNeedsCSRF(t *testing.T) {
 	}
 }
 
-// ?search= finds repositories beyond the first ones listed: GitLab
-// searches, GitHub's lists are filtered here.
+// ?search= finds repositories beyond the first ones listed: the bot's list is
+// searched.
 func TestAvailableSearch(t *testing.T) {
-	t.Run("gitlab", func(t *testing.T) {
-		e := newEnv(t, nil)
-		e.d.listLimit = 3
-		var all []string
-		for i := range 10 {
-			p := fmt.Sprintf("acme/repo-%d", i)
-			all = append(all, p)
-			e.gl.setProject(p, gitlabProject("private", 20, 0))
-		}
-		e.cat["main"].set(all...)
-		c := e.signInGitLab(true)
-		got := getJSON[availableBody](e, c, "/api/repositories/available?search=REPO-9")
-		if !slices.Equal(projectsOf(got.Items), []string{"acme/repo-9"}) || got.Truncated {
-			t.Errorf("search = %v truncated %v", projectsOf(got.Items), got.Truncated)
-		}
-		e.gl.mu.Lock()
-		last := e.gl.listings[len(e.gl.listings)-1]
-		e.gl.mu.Unlock()
-		if !strings.Contains(last, "search=REPO-9") {
-			t.Errorf("GitLab listing query = %q, want the search", last)
-		}
-		wantCode(t, e.get(c, "/api/repositories/available?search="+strings.Repeat("x", 101)), "long search", http.StatusBadRequest)
-	})
-	t.Run("github", func(t *testing.T) {
-		e := newEnv(t, nil)
-		e.gh.setRepo("acme/gadgets", githubRepo(true, true))
-		e.gh.setRepo("acme/tools", githubRepo(true, true))
-		e.cat["gh"].set("acme/gadgets", "acme/tools")
-		c := e.signInGitHub(true)
-		got := getJSON[availableBody](e, c, "/api/repositories/available?search=GAD")
-		if !slices.Equal(projectsOf(got.Items), []string{"acme/gadgets"}) {
-			t.Errorf("search = %v", projectsOf(got.Items))
-		}
-	})
+	e := newEnv(t, nil)
+	e.d.listLimit = 3
+	var all []string
+	for i := range 10 {
+		all = append(all, fmt.Sprintf("acme/repo-%d", i))
+	}
+	e.cat["main"].set(all...)
+	c := e.signInGitLab(true)
+	got := getJSON[availableBody](e, c, "/api/repositories/available?instance=main&search=REPO-9")
+	if !slices.Equal(projectsOf(got.Items), []string{"acme/repo-9"}) || got.Truncated {
+		t.Errorf("search = %v truncated %v", projectsOf(got.Items), got.Truncated)
+	}
+	wantCode(t, e.get(c, "/api/repositories/available?instance=main&search="+strings.Repeat("x", 101)), "long search", http.StatusBadRequest)
 }
 
-// Each listing has an overall budget (20 s): when it runs out, what was
+// The bot's listing has an overall budget (20 s): when it runs out, what was
 // read is listed, truncated; with nothing read it is 502.
 func TestAvailableListingBudget(t *testing.T) {
-	if listBudget != 20*time.Second || platformTimeout != 10*time.Second {
-		t.Errorf("listBudget %v, platformTimeout %v; want 20s and 10s", listBudget, platformTimeout)
+	if listBudget != 20*time.Second || platformTimeout != 10*time.Second || AvailableBudget != 45*time.Second || listBudget >= AvailableBudget {
+		t.Errorf("listBudget %v, platformTimeout %v, AvailableBudget %v; want 20s, 10s and 45s", listBudget, platformTimeout, AvailableBudget)
 	}
 	e := newEnv(t, nil)
 	var all []string
-	for i := range 150 { // two pages of 100
-		p := fmt.Sprintf("acme/repo-%03d", i)
-		all = append(all, p)
-		e.gl.setProject(p, gitlabProject("private", 20, 0))
+	for i := range 150 {
+		all = append(all, fmt.Sprintf("acme/repo-%03d", i))
 	}
 	e.cat["main"].set(all...)
 	c := e.signInGitLab(true)
 	e.d.listBudget = 300 * time.Millisecond
 
-	e.gl.set(func(*oauthServer) { e.gl.slowFrom, e.gl.slow = 2, 5*time.Second })
-	got := getJSON[availableBody](e, c, "/api/repositories/available")
-	if len(got.Items) != 100 || !got.Truncated {
-		t.Errorf("available has %d items, truncated %v; want the first page, truncated", len(got.Items), got.Truncated)
-	}
-
-	// The review side's listing runs out too: what it read is used.
-	e.gl.set(func(*oauthServer) { e.gl.slowFrom = 0 })
 	e.cat["main"].mu.Lock()
 	e.cat["main"].slow = 200 * time.Millisecond
 	e.cat["main"].mu.Unlock()
-	e.clock.advance(catalogTTL)
-	got = getJSON[availableBody](e, c, "/api/repositories/available")
+	got := getJSON[availableBody](e, c, "/api/repositories/available?instance=main")
 	if len(got.Items) == 0 || len(got.Items) >= 150 || !got.Truncated {
 		t.Errorf("available has %d items, truncated %v; want some, truncated", len(got.Items), got.Truncated)
 	}
 
 	// Nothing read in time: 502.
-	e.gl.set(func(*oauthServer) { e.gl.slowFrom = 1 })
-	wantCode(t, e.get(c, "/api/repositories/available?search=repo"), "nothing read", http.StatusBadGateway)
-}
-
-// The whole request, renewing the user's token included, has a budget
-// (45 s) below the server's write timeout: when it runs out, what was read
-// is listed, truncated, and a renewal that outlasts it is not waited for.
-func TestAvailableWholeBudget(t *testing.T) {
-	if AvailableBudget != 45*time.Second || listBudget >= AvailableBudget {
-		t.Errorf("AvailableBudget %v, listBudget %v; want 45s and less", AvailableBudget, listBudget)
-	}
-	e := newEnv(t, nil)
-	// A token about to expire: every use renews it first.
-	e.gl.set(func(*oauthServer) { e.gl.expiresIn = 60 })
-	var all []string
-	for i := range 150 { // two pages of 100
-		p := fmt.Sprintf("acme/repo-%03d", i)
-		all = append(all, p)
-		e.gl.setProject(p, gitlabProject("private", 20, 0))
-	}
-	e.cat["main"].set(all...)
-	c := e.signInGitLab(true)
-	e.d.availableBudget = 500 * time.Millisecond
-	e.d.listBudget = time.Minute
-
-	// The listing's own budget is longer: the request's cuts it short.
-	e.gl.set(func(*oauthServer) { e.gl.slowFrom, e.gl.slow = 2, 5*time.Second })
-	start := time.Now()
-	got := getJSON[availableBody](e, c, "/api/repositories/available")
-	if took := time.Since(start); took > 3*time.Second {
-		t.Errorf("available took %v, want about the 500ms budget", took)
-	}
-	if len(got.Items) != 100 || !got.Truncated {
-		t.Errorf("available has %d items, truncated %v; want the first page, truncated", len(got.Items), got.Truncated)
-	}
-
-	// A slow token renewal counts against the same budget.
-	e.gl.set(func(*oauthServer) { e.gl.slowFrom, e.gl.tokenSlow = 0, 2*time.Second })
-	start = time.Now()
-	wantCode(t, e.get(c, "/api/repositories/available?search=repo"), "slow renewal", http.StatusBadGateway)
-	if took := time.Since(start); took > 1500*time.Millisecond {
-		t.Errorf("available took %v with a slow renewal, want about the 500ms budget", took)
-	}
-	// The renewal still finishes and is stored: the next request waits for
-	// it and goes on with the renewed token.
-	e.gl.set(func(*oauthServer) { e.gl.tokenSlow = 0 })
-	e.d.availableBudget = AvailableBudget
-	got = getJSON[availableBody](e, c, "/api/repositories/available?search=repo-00")
-	if len(got.Items) != 10 || got.Truncated {
-		t.Errorf("after the renewal, available has %d items, truncated %v", len(got.Items), got.Truncated)
-	}
+	e.clock.advance(catalogTTL)
+	e.cat["main"].setFail(errors.New("down"))
+	wantCode(t, e.get(c, "/api/repositories/available?instance=main&search=repo"), "nothing read", http.StatusBadGateway)
 }
 
 // The step limit takes a whole number from 5 to 200 or null, and nothing
@@ -1356,9 +1156,8 @@ func TestQuietReviewsSetting(t *testing.T) {
 	// A maintainer changes it like the other switches.
 	m := newEnv(t, nil)
 	m.dashboardRepo("main", "acme/gadgets", nil)
-	m.gl.setProject("acme/gadgets", gitlabProject("private", 20, 0))
 	m.aliceOn("main", store.RoleMaintainer)
-	maintainer := m.signIn("gitlab", "main")
+	maintainer := m.aliceSession()
 	wantCode(t, m.send(maintainer, "PUT", target, `{"quietReviews":true}`), "maintainer PUT", http.StatusOK)
 	if r, _ := m.storedRepo("main", "acme/gadgets"); r.QuietReviews == nil || !*r.QuietReviews {
 		t.Errorf("after a maintainer's PUT stored = %v, want true", r.QuietReviews)
@@ -1465,9 +1264,8 @@ func TestPutCommentLayout(t *testing.T) {
 	// A maintainer changes it like the other settings.
 	m := newEnv(t, nil)
 	m.dashboardRepo("main", "acme/gadgets", nil)
-	m.gl.setProject("acme/gadgets", gitlabProject("private", 20, 0))
 	m.aliceOn("main", store.RoleMaintainer)
-	maintainer := m.signIn("gitlab", "main")
+	maintainer := m.aliceSession()
 	wantCode(t, m.send(maintainer, "PUT", target, `{"commentLayout":["findings:open"]}`), "maintainer PUT", http.StatusOK)
 	if r, _ := m.storedRepo("main", "acme/gadgets"); !slices.Equal(r.CommentLayout, []string{"findings:open"}) {
 		t.Errorf("after a maintainer's PUT stored = %q", r.CommentLayout)

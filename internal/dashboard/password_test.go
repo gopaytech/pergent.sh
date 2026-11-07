@@ -280,9 +280,9 @@ func TestPasswordSignIn(t *testing.T) {
 	if got := e.audits(); len(got) != 1 || got[0] != "ops (password) sign_in" {
 		t.Errorf("audit = %q, want [ops (password) sign_in]", got)
 	}
-	// A platform user's /api/me says so.
-	if code, m := e.me(e.signIn("gitlab", "main")); code != 200 || m.Kind != "platform" || m.MustChangePassword {
-		t.Errorf("platform /api/me = %d %+v", code, m)
+	// An SSO user's /api/me says so.
+	if code, m := e.me(e.aliceSession()); code != 200 || m.Kind != "sso" || m.MustChangePassword {
+		t.Errorf("SSO /api/me = %d %+v", code, m)
 	}
 
 	// Signing in again ends the session the browser came with.
@@ -577,10 +577,12 @@ func TestChangePasswordRules(t *testing.T) {
 	if rec := e.changePassword(c, "ops-password-123", "éééééééééééé"); rec.Code != http.StatusNoContent {
 		t.Errorf("12 two-byte characters = %d %s, want 204", rec.Code, rec.Body)
 	}
-	// A platform account has no password to change.
-	pc := e.signIn("gitlab", "main")
-	if rec := e.changePassword(pc, "x", "new-password-456"); rec.Code != http.StatusForbidden {
-		t.Errorf("a platform account's change = %d, want 403", rec.Code)
+	// An SSO account has no password to change.
+	e.aliceOn("main", store.RoleViewer)
+	pc := e.aliceSession()
+	rec := e.changePassword(pc, "x", "new-password-456")
+	if rec.Code != http.StatusForbidden || !strings.Contains(body(rec), "only password accounts") {
+		t.Errorf("an SSO account's change = %d %s, want 403 about password accounts", rec.Code, rec.Body)
 	}
 }
 
@@ -599,13 +601,13 @@ func TestDeletedAccountEndsSession(t *testing.T) {
 		t.Errorf("/api/me after the account was deleted = %d, want 401", code)
 	}
 
-	pc := e.signIn("gitlab", "main")
+	pc := e.aliceSession()
 	se, _ := e.storedSession(pc)
 	if _, err := e.st.DeleteAccount(ctx, se.AccountID); err != nil {
 		t.Fatal(err)
 	}
 	if code, _ := e.me(pc); code != http.StatusUnauthorized {
-		t.Errorf("a platform session after its account was deleted = %d, want 401", code)
+		t.Errorf("an SSO session after its account was deleted = %d, want 401", code)
 	}
 }
 
@@ -631,8 +633,8 @@ func TestResetPassword(t *testing.T) {
 		t.Errorf("audit = %q, want a cli password_reset", got)
 	}
 
-	e.signIn("gitlab", "main") // alice, a platform account
-	for _, name := range []string{"alice", "nobody"} {
+	e.alice() // an SSO account has no password to reset
+	for _, name := range []string{aliceEmail, "nobody"} {
 		if _, err := ResetPassword(ctx, e.st, name, e.clock.now()); !errors.Is(err, ErrNotPasswordAccount) {
 			t.Errorf("ResetPassword(%s) = %v, want ErrNotPasswordAccount", name, err)
 		}

@@ -51,20 +51,19 @@ func TestSkillsListFromStore(t *testing.T) {
 	if !beta.InDefaults || beta.UpdatedBy != "seed" || beta.Source != nil {
 		t.Errorf("beta = %+v; want in the defaults, written by seed, no source", beta)
 	}
-	// The path of a source repository is for operators only for now: a
-	// platform admin sees that it is a private repository of the instance.
-	if s := alpha.Source; s == nil || s.Kind != "instance" || s.Instance != "main" || s.Repo != "" || !s.Hidden ||
-		s.Commit != "abc123" || s.Ref != "main" {
+	// The path of a source repository is for admins: every admin sees it.
+	if s := alpha.Source; s == nil || s.Kind != "instance" || s.Instance != "main" || s.Repo != "acme/private-skills" || s.Hidden ||
+		s.Path != "skills/alpha.md" || s.Commit != "abc123" || s.Ref != "main" {
 		t.Errorf("alpha source for an admin = %+v", alpha.Source)
 	}
 	raw := e.get(admin, "/api/skills").Body.String()
-	if strings.Contains(raw, "Alpha text.") || strings.Contains(raw, "acme/private-skills") || strings.Contains(raw, "skills/alpha.md") {
-		t.Errorf("the list holds a skill's text or its repository: %s", raw)
+	if strings.Contains(raw, "Alpha text.") {
+		t.Errorf("the list holds a skill's text: %s", raw)
 	}
 
 	op := getJSON[[]LibrarySkillView](e, e.operator(), "/api/skills")
 	if s := op[0].Source; s == nil || s.Repo != "acme/private-skills" || s.Path != "skills/alpha.md" || s.Hidden {
-		t.Errorf("alpha source for an operator = %+v", op[0].Source)
+		t.Errorf("alpha source for a local admin = %+v", op[0].Source)
 	}
 
 	// A viewer reads the library but not who wrote it.
@@ -74,6 +73,12 @@ func TestSkillsListFromStore(t *testing.T) {
 	vs := getJSON[[]LibrarySkillView](e2, viewer, "/api/skills")
 	if len(vs) != 1 || vs[0].UpdatedBy != "" || vs[0].Name != "beta" {
 		t.Errorf("viewer's skills = %+v", vs)
+	}
+	e2.installedSkill("alpha", "Alpha text.")
+	for _, s := range getJSON[[]LibrarySkillView](e2, viewer, "/api/skills") {
+		if s.Name == "alpha" && (s.Source == nil || !s.Source.Hidden || s.Source.Repo != "" || s.Source.Path != "") {
+			t.Errorf("alpha's source for a viewer = %+v; want a private repository of main", s.Source)
+		}
 	}
 	if strings.Contains(e2.get(viewer, "/api/skills").Body.String(), "seed") {
 		t.Error("a viewer's list names who wrote a skill")
@@ -187,12 +192,11 @@ func TestSkillNotFoundMapped(t *testing.T) {
 func TestRepoSkillsSettingRoundTrip(t *testing.T) {
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
-	e.gl.setProject("acme/gadgets", gitlabProject("private", 20, 0))
 	target := "/api/repositories/main/acme/gadgets/settings"
 
 	// A viewer can't.
 	e.aliceOn("main", store.RoleViewer)
-	viewer := e.signIn("gitlab", "main")
+	viewer := e.aliceSession()
 	wantCode(t, e.send(viewer, "PUT", target, `{"repoSkills":["a"]}`), "viewer PUT", http.StatusForbidden)
 	if r, _ := e.storedRepo("main", "acme/gadgets"); r.RepoSkills != nil {
 		t.Errorf("a viewer's PUT stored %v", r.RepoSkills)
@@ -200,9 +204,8 @@ func TestRepoSkillsSettingRoundTrip(t *testing.T) {
 
 	e2 := newEnv(t, nil)
 	e2.dashboardRepo("main", "acme/gadgets", nil)
-	e2.gl.setProject("acme/gadgets", gitlabProject("private", 20, 0))
 	e2.aliceOn("main", store.RoleMaintainer)
-	maintainer := e2.signIn("gitlab", "main")
+	maintainer := e2.aliceSession()
 
 	rec := e2.send(maintainer, "PUT", target, `{"repoSkills":["a","b","a"]}`)
 	d := decode[RepositoryDetailView](t, rec, "maintainer PUT", http.StatusOK)
@@ -722,7 +725,7 @@ func TestCreateSkill(t *testing.T) {
 		t.Errorf("version = %d; want 1", got.Version)
 	}
 	sk, found := e.storedSkill("plain")
-	if !found || sk.Content != "Plain text." || sk.Source != nil || sk.UpdatedBy != "alice (gitlab main)" {
+	if !found || sk.Content != "Plain text." || sk.Source != nil || sk.UpdatedBy != aliceEmail {
 		t.Errorf("plain = %+v, %v; want written in the dashboard by alice", sk, found)
 	}
 	if d := e.defaultSkills(); !slices.Equal(d, []string{"existing"}) {
@@ -864,7 +867,7 @@ func TestSaveRefusesHeldSecret(t *testing.T) {
 	e.installedSkill("remote", "Remote text.")
 	admin := e.signInGitLab(true, "acme/widgets")
 
-	for _, secret := range []string{labReviewToken, labApproveToken, labOAuthSecret, hubReviewKey, hubApproveKey, hubWebhook, llmKeyOne} {
+	for _, secret := range []string{labReviewToken, labApproveToken, hubReviewKey, hubApproveKey, hubWebhook, llmKeyOne} {
 		content := "Review with this: " + secret + " and nothing else."
 		for _, w := range []struct {
 			what, method, target string
@@ -901,7 +904,7 @@ func TestSaveRefusesHeldSecret(t *testing.T) {
 	if _, found := e.storedSkill("style-copy"); found {
 		t.Error("a copy with a secret was created")
 	}
-	for _, secret := range []string{labReviewToken, labApproveToken, labOAuthSecret, hubReviewKey, hubApproveKey, hubWebhook, llmKeyOne, "hub-review-key-SECRET-444"} {
+	for _, secret := range []string{labReviewToken, labApproveToken, hubReviewKey, hubApproveKey, hubWebhook, llmKeyOne, "hub-review-key-SECRET-444"} {
 		if strings.Contains(e.logs.String(), secret) {
 			t.Errorf("the log holds %q", secret)
 		}
@@ -929,7 +932,7 @@ func TestUpdateSkill(t *testing.T) {
 		t.Errorf("version = %d; want 2", got.Version)
 	}
 	sk, _ := e.storedSkill("style")
-	if sk.Content != "Second." || sk.Version != 2 || sk.UpdatedBy != "alice (gitlab main)" {
+	if sk.Content != "Second." || sk.Version != 2 || sk.UpdatedBy != aliceEmail {
 		t.Errorf("style = %+v", sk)
 	}
 
@@ -1004,7 +1007,7 @@ func TestCopySetsFrontmatterName(t *testing.T) {
 	}
 	sk, found := e.storedSkill("base-2")
 	want := "---\nname: \"base-2\"\npaths:\n  - src/**\ncross_batch: true\n---\nBody of base.\n"
-	if !found || sk.Content != want || sk.Source != nil || sk.UpdatedBy != "alice (gitlab main)" {
+	if !found || sk.Content != want || sk.Source != nil || sk.UpdatedBy != aliceEmail {
 		t.Errorf("base-2 = %+v, %v; want %q written in the dashboard", sk, found, want)
 	}
 	if err := inputs.CheckSkill("base-2", []byte(sk.Content)); err != nil {
@@ -1074,20 +1077,22 @@ func TestDeleteSkill(t *testing.T) {
 	wantCode(t, e.send(admin, "DELETE", "/api/admin/skills/.hidden", ""), "DELETE an invalid name", http.StatusNotFound)
 }
 
-func TestDeleteInUse409HidesUnseenRepos(t *testing.T) {
+// The 409 of a skill in use names every repository that uses it, for any
+// admin sees them all.
+func TestDeleteInUse409ListsTheRepositories(t *testing.T) {
 	e := newEnv(t, func(cfg *config.Config) {
-		cfg.Repositories[0].Skills = []string{"x"} // main acme/widgets: visible
-		cfg.Repositories[1].Skills = []string{"x"} // main acme/payments: not visible
+		cfg.Repositories[0].Skills = []string{"x"} // main acme/widgets
+		cfg.Repositories[1].Skills = []string{"x"} // main acme/payments
 	})
 	e.skill("x", "Text x.")
 	e.skill("y", "Text y.")
-	e.dashboardRepo("main", "acme/gadgets", func(r *store.DashboardRepo) { r.Skills = []string{"x"} }) // visible
-	e.dashboardRepo("main", "acme/hidden", func(r *store.DashboardRepo) { r.Skills = []string{"x"} })  // not visible
-	e.dashboardRepo("gh", "acme/other", func(r *store.DashboardRepo) { r.Skills = []string{"y"} })     // names another skill
+	e.dashboardRepo("main", "acme/gadgets", func(r *store.DashboardRepo) { r.Skills = []string{"x"} })
+	e.dashboardRepo("main", "acme/other", func(r *store.DashboardRepo) { r.Skills = []string{"x"} })
+	e.dashboardRepo("gh", "acme/other", func(r *store.DashboardRepo) { r.Skills = []string{"y"} }) // names another skill
 	if err := e.st.PutRepoDefaults(ctx, store.RepoDefaults{Skills: []string{"x"}}); err != nil {
 		t.Fatal(err)
 	}
-	admin := e.signInGitLab(true, "acme/widgets", "acme/gadgets")
+	admin := e.signInGitLab(true)
 	gen := e.d.inputs.generation()
 
 	type inUse struct {
@@ -1104,24 +1109,15 @@ func TestDeleteInUse409HidesUnseenRepos(t *testing.T) {
 	for _, r := range got.Repositories {
 		seen = append(seen, r.Instance+"/"+r.Project)
 	}
-	if !slices.Equal(seen, []string{"main/acme/gadgets", "main/acme/widgets"}) || got.Hidden != 2 || !got.InDefaults || got.Error == "" {
-		t.Errorf("409 = %+v; want gadgets and widgets listed, 2 hidden, in the defaults", got)
-	}
-	raw := e.send(admin, "DELETE", "/api/admin/skills/x", "").Body.String()
-	if strings.Contains(raw, "acme/hidden") || strings.Contains(raw, "acme/payments") {
-		t.Errorf("the 409 names a repository the caller can't see: %s", raw)
+	if !slices.Equal(seen, []string{"main/acme/gadgets", "main/acme/other", "main/acme/payments", "main/acme/widgets"}) ||
+		got.Hidden != 0 || !got.InDefaults || got.Error == "" {
+		t.Errorf("409 = %+v; want the four repositories listed, none hidden, in the defaults", got)
 	}
 	if _, found := e.storedSkill("x"); !found {
 		t.Error("a skill in use was deleted")
 	}
 	if e.d.inputs.generation() != gen {
 		t.Error("a refused delete invalidated the inputs views")
-	}
-
-	// An operator sees them all.
-	op := decode[inUse](t, e.send(e.operator(), "DELETE", "/api/admin/skills/x", ""), "operator DELETE", http.StatusConflict)
-	if len(op.Repositories) != 4 || op.Hidden != 0 || !op.InDefaults {
-		t.Errorf("operator's 409 = %+v; want 4 repositories, none hidden", op)
 	}
 
 	// Only the default list names it: an empty list and a count of 0.
@@ -1170,7 +1166,7 @@ func TestSkillAuditHasNoContent(t *testing.T) {
 			t.Fatalf("%s: %d audit entries; want 1", action, len(entries))
 		}
 		a := entries[0]
-		if a.Actor != "alice (gitlab main)" || a.Instance != "" || a.Project != "" {
+		if a.Actor != "alice@example.com" || a.Instance != "" || a.Project != "" {
 			t.Errorf("%s: entry = %+v; want alice, no instance or project (a platform admin sees it)", action, a)
 		}
 		return a.Detail

@@ -169,35 +169,25 @@ func wantResults(t *testing.T, got []SkillFetchResultView, want ...SkillFetchRes
 	}
 }
 
-// A platform admin reads only repositories of its own instance that its
-// user can see on the platform (D19); an operator reads any instance.
-func TestPlatformAdminCeiling(t *testing.T) {
+// Any admin reads any repository the instance's review bot or App reaches, of
+// any instance, or a public URL: nothing asks what the admin could read on the
+// platform. A read names its instance. Someone who is no admin reads nothing.
+func TestAnyAdminReadsAnySource(t *testing.T) {
 	e := newEnv(t, nil)
 	files := map[string]string{"style.md": "Be kind."}
 	e.skillRepo("main", "acme/skills", "v1.0", commitV1, files)
 	e.skillRepo("gh", "acme/skills", "v1.0", commitV1, files)
 	admin := e.signInGitLab(true)
 	body := map[string]any{"instance": "main", "repo": "acme/skills", "ref": "v1.0"}
-	const ceiling = "you can install only from repositories of your own instance that you can see"
 
-	rec := e.sendJSON(admin, "POST", "/api/admin/skill-fetches", body)
-	wantCode(t, rec, "a repository alice can't see", http.StatusForbidden)
-	if got := errorOf(t, rec); got != ceiling {
-		t.Errorf("error = %q; want %q", got, ceiling)
-	}
-	rec = e.sendJSON(admin, "POST", "/api/admin/skill-fetches", map[string]any{"instance": "gh", "repo": "acme/skills", "ref": "v1.0"})
-	wantCode(t, rec, "another instance", http.StatusForbidden)
-	if got := errorOf(t, rec); got != ceiling {
-		t.Errorf("error = %q; want %q", got, ceiling)
-	}
-
-	e.gl.setProject("acme/skills", gitlabProject("private", 20, 0))
 	id := e.startFetch(admin, body)
 	if v := e.fetchResult(admin, id); v.Status != store.FetchDone || len(v.Skills) != 1 || v.Skills[0].Name != "style" {
 		t.Errorf("fetch = %+v", v)
 	}
-	// The instance is the admin's own when not named.
-	e.startFetch(admin, map[string]any{"repo": "acme/skills", "ref": "v1.0"})
+	e.startFetch(admin, map[string]any{"instance": "gh", "repo": "acme/skills", "ref": "v1.0"})
+	// The instance is not guessed.
+	rec := e.sendJSON(admin, "POST", "/api/admin/skill-fetches", map[string]any{"repo": "acme/skills", "ref": "v1.0"})
+	wantCode(t, rec, "no instance", http.StatusBadRequest)
 
 	op := e.operator()
 	e.startFetch(op, map[string]any{"instance": "gh", "repo": "acme/skills", "ref": "v1.0"})
@@ -221,7 +211,6 @@ func TestPlatformAdminCeiling(t *testing.T) {
 func TestFetchOnlyRequesterSees(t *testing.T) {
 	e := newEnv(t, nil)
 	e.skillRepo("main", "acme/skills", "v1.0", commitV1, map[string]string{"style.md": "Be kind."})
-	e.gl.setProject("acme/skills", gitlabProject("private", 20, 0))
 	admin := e.signInGitLab(true)
 	id, _ := e.fetchDone(admin, map[string]any{"instance": "main", "repo": "acme/skills", "ref": "v1.0"})
 
@@ -349,16 +338,16 @@ func TestInstallNameTakenSinceFetch(t *testing.T) {
 // A skill holding a held secret, or over the size limit, is shown with its
 // problem and no text, and can't be installed.
 func TestFetchMarksSecretAndOversize(t *testing.T) {
-	e := newEnv(t, nil)
+	e := newEnv(t, withSecrets(t))
 	e.skillRepo("main", "acme/skills", "v1.0", commitV1, map[string]string{
-		"leaky.md": "Sign in with " + glClientSecret + " when asked.",
+		"leaky.md": "Sign in with " + reviewToken + " when asked.",
 		"big.md":   strings.Repeat("x", 128<<10+1),
 		"fine.md":  "Fine.",
 	})
 	op := e.operator()
 	id, v := e.fetchDone(op, map[string]any{"instance": "main", "repo": "acme/skills", "ref": "v1.0"})
 	raw := e.get(op, "/api/admin/skill-fetches/"+id).Body.String()
-	if strings.Contains(raw, glClientSecret) {
+	if strings.Contains(raw, reviewToken) {
 		t.Fatalf("the read shows a held secret: %s", raw)
 	}
 	problems := map[string]string{}
@@ -469,9 +458,11 @@ func TestUpdateRemovedAndRenamed(t *testing.T) {
 	wantResults(t, got, SkillFetchResultView{Name: "alpha", OK: true})
 }
 
-// The path of a skill's private source shows only to those who can see the
-// repository (D11), checked once per session and repository for AccessTTL.
-func TestPrivateSourceHiddenFromOthers(t *testing.T) {
+// The repository an installed skill was read from shows to admins only; a
+// user on a team sees that it came from "a private repository on <instance>",
+// and a URL source is public. (Every admin may read every repository the bot
+// or App reaches, so there is no per-user check.)
+func TestPrivateSourceHiddenFromUsers(t *testing.T) {
 	e := newEnv(t, nil)
 	e.installedSkill("alpha", "Alpha text.")
 	src := store.SkillSource{Kind: store.SourceKindURL, URL: "https://example.com/skills.git", Ref: "main", Path: "beta.md", Commit: "c"}
@@ -490,105 +481,26 @@ func TestPrivateSourceHiddenFromOthers(t *testing.T) {
 	}
 
 	viewer := e.signInGitLab(false)
-	if s := sourceOf(viewer, "alpha"); !s.Hidden || s.Repo != "" || s.Instance != "main" {
-		t.Errorf("alpha's source for a user who can't see it = %+v", s)
+	if s := sourceOf(viewer, "alpha"); !s.Hidden || s.Repo != "" || s.Path != "" || s.Instance != "main" {
+		t.Errorf("alpha's source for a user = %+v", s)
 	}
 	if raw := e.get(viewer, "/api/skills/alpha").Body.String(); strings.Contains(raw, "acme/private-skills") {
 		t.Errorf("the skill's page shows the private path: %s", raw)
+	}
+	if d := getJSON[SkillDetailView](e, viewer, "/api/skills/alpha"); d.Source == nil || !d.Source.Hidden || d.Source.Repo != "" {
+		t.Errorf("alpha's page source = %+v", d.Source)
 	}
 	if s := sourceOf(viewer, "beta"); s.URL != "https://example.com/skills.git" || s.Hidden {
 		t.Errorf("beta's URL source = %+v; want shown", s)
 	}
 
-	// Access granted on the platform shows once the kept answer is old.
-	e.gl.setProject("acme/private-skills", gitlabProject("private", 20, 0))
-	checks := e.gl.projectChecks()
-	if s := sourceOf(viewer, "alpha"); !s.Hidden {
-		t.Errorf("alpha's source within the kept answer = %+v; want hidden still", s)
-	}
-	if e.gl.projectChecks() != checks {
-		t.Error("the platform was asked again within AccessTTL")
-	}
-	e.clock.advance(AccessTTL)
-	if s := sourceOf(viewer, "alpha"); s.Hidden || s.Repo != "acme/private-skills" {
-		t.Errorf("alpha's source for a user who can see it = %+v", s)
-	}
-	if d := getJSON[SkillDetailView](e, viewer, "/api/skills/alpha"); d.Source == nil || d.Source.Repo != "acme/private-skills" {
-		t.Errorf("alpha's page source = %+v", d.Source)
-	}
-
-	// A user of another instance never sees it; an operator always does.
-	hub := e.signInGitHub(true)
-	if s := sourceOf(hub, "alpha"); !s.Hidden || s.Repo != "" {
-		t.Errorf("alpha's source for a user of another instance = %+v", s)
-	}
-	if s := sourceOf(e.operator(), "alpha"); s.Hidden || s.Repo != "acme/private-skills" {
-		t.Errorf("alpha's source for an operator = %+v", s)
-	}
-}
-
-// Many skills from one private repository cost one question to the platform
-// per request, a failure to answer included; the failure is kept a short
-// while, so a platform that is down is not asked again at once.
-func TestSourceSightAsksOncePerRepository(t *testing.T) {
-	e := newEnv(t, nil)
-	for _, name := range []string{"a", "b", "c", "d", "e"} {
-		e.installedSkill(name, name+" text.")
-	}
-	viewer := e.signInGitLab(false)
-	e.gl.set(func(*oauthServer) { e.gl.projectStatus = http.StatusBadRequest })
-
-	checks := e.gl.projectChecks()
-	for _, s := range getJSON[[]LibrarySkillView](e, viewer, "/api/skills") {
-		if s.Source == nil || !s.Source.Hidden || s.Source.Repo != "" {
-			t.Errorf("%s's source = %+v; want hidden when the platform fails", s.Name, s.Source)
+	// An admin, an SSO one or a local one, sees it.
+	for name, c := range map[string]*http.Cookie{"sso admin": e.sessionFor(e.ssoAdmin("boss@example.com")), "local admin": e.operator()} {
+		if s := sourceOf(c, "alpha"); s.Hidden || s.Repo != "acme/private-skills" {
+			t.Errorf("alpha's source for a %s = %+v", name, s)
 		}
-	}
-	if n := e.gl.projectChecks() - checks; n != 1 {
-		t.Errorf("platform asked %d times for 5 skills of one repository; want 1", n)
-	}
-
-	checks = e.gl.projectChecks()
-	getJSON[[]LibrarySkillView](e, viewer, "/api/skills")
-	getJSON[SkillDetailView](e, viewer, "/api/skills/a")
-	if n := e.gl.projectChecks() - checks; n != 0 {
-		t.Errorf("platform asked %d more times within the kept failure; want 0", n)
-	}
-
-	// Once the failure is old and the platform answers, the path shows.
-	e.gl.set(func(*oauthServer) { e.gl.projectStatus = 0 })
-	e.gl.setProject("acme/private-skills", gitlabProject("private", 20, 0))
-	e.clock.advance(sightFailTTL)
-	if s := getJSON[SkillDetailView](e, viewer, "/api/skills/a"); s.Source == nil || s.Source.Hidden {
-		t.Errorf("a's source after the kept failure ended = %+v; want shown", s.Source)
-	}
-}
-
-// A platform that hangs makes the skill list answer within the request's
-// sight budget, with the sources it could not check hidden (D11).
-func TestSourceSightFailsClosedWhenPlatformHangs(t *testing.T) {
-	e := newEnv(t, nil)
-	e.installedSkill("alpha", "Alpha text.")
-	src := store.SkillSource{Kind: store.SourceKindInstance, Instance: "main", Repo: "acme/other-skills",
-		Ref: "main", Path: "beta.md", Commit: "c"}
-	if _, err := e.st.CreateLibrarySkill(ctx, store.NewSkill{Name: "beta", Content: "Beta.", Source: &src, At: e.clock.now()}); err != nil {
-		t.Fatal(err)
-	}
-	viewer := e.signInGitLab(false)
-	e.gl.set(func(*oauthServer) { e.gl.projectSlow = time.Minute })
-	e.d.sightBudget = 200 * time.Millisecond
-
-	start := time.Now()
-	list := getJSON[[]LibrarySkillView](e, viewer, "/api/skills")
-	if took := time.Since(start); took > 3*time.Second {
-		t.Errorf("GET /api/skills took %v with a hanging platform; want about the 200ms budget", took)
-	}
-	if len(list) != 2 {
-		t.Fatalf("skills = %+v", list)
-	}
-	for _, s := range list {
-		if s.Source == nil || !s.Source.Hidden || s.Source.Repo != "" || s.Source.Path != "" {
-			t.Errorf("%s's source = %+v; want hidden", s.Name, s.Source)
+		if d := getJSON[SkillDetailView](e, c, "/api/skills/alpha"); d.Source == nil || d.Source.Repo != "acme/private-skills" {
+			t.Errorf("alpha's page source for a %s = %+v", name, d.Source)
 		}
 	}
 }

@@ -10,7 +10,7 @@ export default function Waiting() {
     <CenteredCard>
       <h1>Waiting for a team</h1>
       <p className="sub">
-        You're signed in as {me.username} on {me.instance}. An admin needs to add you to a team.
+        You're signed in as {me.username}. An admin needs to add you to a team.
       </p>
       <SignOut />
     </CenteredCard>

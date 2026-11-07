@@ -4,26 +4,18 @@ import { useState, type FormEvent } from "react";
 import {
   api,
   type InstanceAdminView,
+  type MemberRole,
   type RepositoryView,
-  type Role,
   type TeamRepoView,
   type TeamUpdate,
   type TeamView,
   type UserView,
 } from "../api";
-import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
-import { ErrorBox, Loading, Pill, platformName } from "../ui";
+import { ErrorBox, Loading } from "../ui";
 
-const roles: Role[] = ["viewer", "maintainer", "admin"];
-
-const adminText = "Admins see every repository they can see on their platform.";
-
-// hiddenText is how a team's repositories the admin can't see are counted.
-const hiddenText = (n: number) => `+${n} repositories you can't see`;
-
-// hiddenMembersText is how a team's members of other instances are counted.
-const hiddenMembersText = (n: number) => `+${n} ${n === 1 ? "member" : "members"} from other instances`;
+// memberRoles are the roles a member has on a team.
+const memberRoles: MemberRole[] = ["viewer", "maintainer"];
 
 // repoLabel names what a team covers: a whole instance or one repository.
 const repoLabel = (r: TeamRepoView) => (r.project === "" ? `All repositories of ${r.instance}` : r.project);
@@ -37,7 +29,7 @@ export default function Teams() {
       <div className="top">
         <div>
           <h1>Teams</h1>
-          <div className="sub">A team gives its members a role on the repositories it covers. Their highest role counts.</div>
+          <div className="sub">A team gives each member a role on the repositories it covers. Their highest role counts.</div>
         </div>
       </div>
       <CreateTeam />
@@ -57,9 +49,8 @@ function CreateTeam() {
   const client = useQueryClient();
   const write = useWrite();
   const [name, setName] = useState("");
-  const [role, setRole] = useState<Role>("viewer");
   const create = useMutation({
-    mutationFn: () => write<TeamView>("POST", "/api/teams", { name: name.trim(), role }),
+    mutationFn: () => write<TeamView>("POST", "/api/teams", { name: name.trim() }),
     onSuccess: () => {
       setName("");
       return client.invalidateQueries({ queryKey: ["teams"] });
@@ -82,16 +73,6 @@ function CreateTeam() {
           onChange={(e) => setName(e.target.value)}
           required
         />
-      </div>
-      <div>
-        <label htmlFor="team-role">Role</label>
-        <select id="team-role" value={role} onChange={(e) => setRole(e.target.value as Role)}>
-          {roles.map((r) => (
-            <option key={r} value={r}>
-              {r}
-            </option>
-          ))}
-        </select>
       </div>
       <button type="submit" className="btn primary" disabled={create.isPending}>
         Create team
@@ -120,9 +101,7 @@ function TeamCard({ team }: { team: TeamView }) {
   return (
     <section className="card" aria-label={team.name}>
       <h2>
-        <span>
-          {team.name} <Pill tone={team.role === "admin" ? "run" : "grey"}>{team.role}</Pill>
-        </span>
+        <span>{team.name}</span>
         <span className="actions-row">
           <button type="button" className="btn small" onClick={() => setEditing(!editing)}>
             {editing ? "Close" : "Edit"}
@@ -135,22 +114,9 @@ function TeamCard({ team }: { team: TeamView }) {
       {remove.isError && <ErrorBox error={remove.error} />}
       <div className="facts">
         <div>
-          Members:{" "}
-          {team.members.length === 0 && team.hiddenMembers === 0
-            ? "none"
-            : [
-                ...team.members.map((m) => m.username),
-                ...(team.hiddenMembers > 0 ? [hiddenMembersText(team.hiddenMembers)] : []),
-              ].join(", ")}
+          Members: {team.members.length === 0 ? "none" : team.members.map((m) => `${m.username} (${m.role})`).join(", ")}
         </div>
-        <div>
-          Repositories:{" "}
-          {team.role === "admin"
-            ? adminText
-            : team.repos.length === 0 && team.hiddenRepos === 0
-              ? "none"
-              : [...team.repos.map(repoLabel), ...(team.hiddenRepos > 0 ? [hiddenText(team.hiddenRepos)] : [])].join(", ")}
-        </div>
+        <div>Repositories: {team.repos.length === 0 ? "none" : team.repos.map(repoLabel).join(", ")}</div>
       </div>
       {/* A new answer from the server starts the editor again from it. */}
       {editing && <Editor key={JSON.stringify(team)} team={team} onClose={() => setEditing(false)} />}
@@ -163,26 +129,22 @@ const repoKey = (r: TeamRepoView) => JSON.stringify([r.instance, r.project]);
 
 // Editor loads what the choices are made from, then shows the form.
 function Editor({ team, onClose }: { team: TeamView; onClose: () => void }) {
-  const me = useMe();
   const users = useQuery({ queryKey: ["users"], queryFn: () => api.get<UserView[]>("/api/users") });
   const repos = useQuery({ queryKey: ["repositories"], queryFn: () => api.get<RepositoryView[]>("/api/repositories") });
-  // An operator may cover any instance; a platform admin its own.
+  // A team may cover any instance.
   const instances = useQuery({
     queryKey: ["admin-instances"],
     queryFn: () => api.get<InstanceAdminView[]>("/api/admin/instances"),
-    enabled: me.operator,
   });
-  if (users.isPending || repos.isPending || (me.operator && instances.isPending)) return <Loading />;
+  if (users.isPending || repos.isPending || instances.isPending) return <Loading />;
   if (users.isError) return <ErrorBox error={users.error} />;
   if (repos.isError) return <ErrorBox error={repos.error} />;
   if (instances.isError) return <ErrorBox error={instances.error} />;
-  const instanceNames = me.operator
-    ? (instances.data ?? []).filter((i) => !i.removing).map((i) => i.name)
-    : [me.instance];
+  const instanceNames = instances.data.filter((i) => !i.removing).map((i) => i.name);
   return (
     <EditorForm
       team={team}
-      accounts={users.data.filter((u) => u.kind === "platform")}
+      accounts={users.data.filter((u) => u.kind === "sso")}
       instanceNames={instanceNames}
       switchedOn={repos.data.filter((r) => r.on).map((r) => ({ instance: r.instance, project: r.project }))}
       onClose={onClose}
@@ -214,8 +176,8 @@ function EditorForm({
   const isGone = (c: TeamRepoView) => gone.some((g) => repoKey(g) === repoKey(c));
 
   const [name, setName] = useState(team.name);
-  const [role, setRole] = useState<Role>(team.role);
-  const [members, setMembers] = useState(() => new Set(team.members.map((m) => m.id)));
+  // The members: account ID to the role on this team.
+  const [members, setMembers] = useState(() => new Map<number, MemberRole>(team.members.map((m) => [m.accountId, m.role])));
   const [covered, setCovered] = useState(() => new Set(team.repos.filter((r) => !isGone(r)).map(repoKey)));
   const save = useMutation({
     mutationFn: (body: TeamUpdate) => write<TeamView>("PUT", `/api/teams/${team.id}`, body),
@@ -233,14 +195,18 @@ function EditorForm({
     else next.delete(v);
     return next;
   };
+  const setMember = (id: number, role: MemberRole | null) => {
+    const next = new Map(members);
+    if (role === null) next.delete(id);
+    else next.set(id, role);
+    setMembers(next);
+  };
   const submit = (e: FormEvent) => {
     e.preventDefault();
     save.mutate({
       name: name.trim(),
-      role,
-      members: [...members].sort((a, b) => a - b),
-      // An admin team has no repository list.
-      repos: role === "admin" ? [] : choices.filter((c) => covered.has(repoKey(c))),
+      members: [...members].map(([accountId, role]) => ({ accountId, role })).sort((a, b) => a.accountId - b.accountId),
+      repos: choices.filter((c) => covered.has(repoKey(c))),
     });
   };
   return (
@@ -255,70 +221,60 @@ function EditorForm({
         onChange={(e) => setName(e.target.value)}
         required
       />
-      <label htmlFor={`team-${team.id}-role`}>Role</label>
-      <select id={`team-${team.id}-role`} value={role} onChange={(e) => setRole(e.target.value as Role)}>
-        {roles.map((r) => (
-          <option key={r} value={r}>
-            {r}
-          </option>
-        ))}
-      </select>
 
       <fieldset>
         <legend>Members</legend>
-        {accounts.length === 0 && <div className="meta">Nobody has signed in with GitLab or GitHub yet.</div>}
-        {team.hiddenMembers > 0 && (
-          <div className="meta">{hiddenMembersText(team.hiddenMembers)} stay as they are when you save.</div>
-        )}
+        {accounts.length === 0 && <div className="meta">Nobody has signed in yet.</div>}
         {accounts.map((u) => (
-          <label className="check" key={u.id}>
-            <input
-              type="checkbox"
-              checked={members.has(u.id)}
-              onChange={(e) => setMembers(toggle(members, u.id, e.target.checked))}
-            />
-            <span>
-              {u.username} <span className="meta">{platformName(u.platform)} · {u.instance}</span>
-            </span>
-          </label>
+          <div className="check" key={u.id}>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={members.has(u.id)}
+                onChange={(e) => setMember(u.id, e.target.checked ? "viewer" : null)}
+              />
+              <span>{u.username}</span>
+            </label>
+            {members.has(u.id) && (
+              <select
+                aria-label={`Role of ${u.username}`}
+                value={members.get(u.id)}
+                onChange={(e) => setMember(u.id, e.target.value as MemberRole)}
+              >
+                {memberRoles.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
         ))}
       </fieldset>
 
-      {role === "admin" ? (
-        <div className="meta">{adminText}</div>
-      ) : (
-        <fieldset>
-          <legend>Repositories</legend>
-          {choices.map((c) => (
-            <label className="check" key={repoKey(c)}>
-              <input
-                type="checkbox"
-                checked={covered.has(repoKey(c))}
-                onChange={(e) => setCovered(toggle(covered, repoKey(c), e.target.checked))}
-              />
-              <span>
-                {c.project === "" ? (
-                  repoLabel(c)
-                ) : (
-                  <>
-                    <span className="mr">{c.project}</span> <span className="meta">{c.instance}</span>
-                  </>
-                )}
-                {isGone(c) && <span className="meta"> (switched off)</span>}
-              </span>
-            </label>
-          ))}
-          {choices.length === 0 && <div className="meta">No repository is switched on yet.</div>}
-        </fieldset>
-      )}
-      {team.hiddenRepos > 0 && (
-        <div className="meta">
-          {hiddenText(team.hiddenRepos)}.{" "}
-          {role === "admin"
-            ? "A team that covers repositories you can't see can't be made an admin team: the server refuses it."
-            : "They stay as they are when you save."}
-        </div>
-      )}
+      <fieldset>
+        <legend>Repositories</legend>
+        {choices.map((c) => (
+          <label className="check" key={repoKey(c)}>
+            <input
+              type="checkbox"
+              checked={covered.has(repoKey(c))}
+              onChange={(e) => setCovered(toggle(covered, repoKey(c), e.target.checked))}
+            />
+            <span>
+              {c.project === "" ? (
+                repoLabel(c)
+              ) : (
+                <>
+                  <span className="mr">{c.project}</span> <span className="meta">{c.instance}</span>
+                </>
+              )}
+              {isGone(c) && <span className="meta"> (switched off)</span>}
+            </span>
+          </label>
+        ))}
+        {choices.length === 0 && <div className="meta">No repository is switched on yet.</div>}
+      </fieldset>
       {save.isError && <ErrorBox error={save.error} />}
       <div className="actions-row">
         <button type="submit" className="btn primary" disabled={save.isPending}>

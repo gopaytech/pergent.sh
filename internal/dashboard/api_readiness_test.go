@@ -126,15 +126,12 @@ const (
 		"skills":[{"name":"go","folder":"library","hasPaths":true,"files":3}]}`
 )
 
-// signInOn signs alice in on main with role on every repository there,
-// able to see projects.
-func (e *env) signInOn(role string, projects ...string) *http.Cookie {
+// signInOn is alice's session with role on every repository of main (the
+// projects named are the ones the test is about).
+func (e *env) signInOn(role string, _ ...string) *http.Cookie {
 	e.t.Helper()
-	for _, p := range projects {
-		e.gl.setProject(p, gitlabProject("private", 20, 0))
-	}
 	e.aliceOn("main", role)
-	return e.signIn("gitlab", "main")
+	return e.aliceSession()
 }
 
 func readinessURL(project string) string { return "/api/repositories/main/" + project + "/readiness" }
@@ -345,7 +342,7 @@ func TestScanNowRoles(t *testing.T) {
 		for _, project := range []string{"acme/gadgets", "acme/widgets"} {
 			rec := e.send(c, "POST", scanURL(project), "")
 			body := decode[struct{ Scan ScanView }](t, rec, "POST scan of "+project, http.StatusAccepted)
-			if body.Scan.ID == "" || body.Scan.State != "queued" || body.Scan.StartedBy != "alice (gitlab main)" ||
+			if body.Scan.ID == "" || body.Scan.State != "queued" || body.Scan.StartedBy != "alice@example.com" ||
 				body.Scan.FinishedAt != nil {
 				t.Errorf("scan = %+v", body.Scan)
 			}
@@ -353,7 +350,7 @@ func TestScanNowRoles(t *testing.T) {
 				t.Errorf("body = %s; want {\"scan\": {...}}", rec.Body)
 			}
 		}
-		want := []string{"main/acme/gadgets by alice (gitlab main)", "main/acme/widgets by alice (gitlab main)"}
+		want := []string{"main/acme/gadgets by alice@example.com", "main/acme/widgets by alice@example.com"}
 		if got := f.askedFor(); !slices.Equal(got, want) {
 			t.Errorf("scans asked for = %v; want %v", got, want)
 		}
@@ -444,7 +441,7 @@ func TestScanNowAudited(t *testing.T) {
 
 	wantCode(t, e.send(c, "POST", scanURL("acme/gadgets"), ""), "first scan", http.StatusAccepted)
 	got := e.auditOf("readiness_scan_requested")
-	if len(got) != 1 || got[0].Instance != "main" || got[0].Project != "acme/gadgets" || got[0].Actor != "alice (gitlab main)" {
+	if len(got) != 1 || got[0].Instance != "main" || got[0].Project != "acme/gadgets" || got[0].Actor != "alice@example.com" {
 		t.Fatalf("audit = %+v; want one entry for alice on main acme/gadgets", got)
 	}
 	wantCode(t, e.send(c, "POST", scanURL("acme/gadgets"), ""), "busy scan", http.StatusConflict)
