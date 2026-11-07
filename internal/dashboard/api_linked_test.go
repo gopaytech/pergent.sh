@@ -463,7 +463,7 @@ func TestPutLinkedRepos(t *testing.T) {
 		t.Errorf("linkedReposEnabled = %+v", s)
 	}
 	b, _ := json.Marshal(detail.Settings["linkedRepos"])
-	const want = `{"value":[{"target":"acme/api","watched":["render/**","scope/**"],"canBlock":false},{"target":"acme/lib","watched":[],"canBlock":true}],"overridden":true}`
+	const want = `{"value":[{"canBlock":false,"target":"acme/api","watched":["render/**","scope/**"]},{"canBlock":true,"target":"acme/lib","watched":[]}],"overridden":true}`
 	if string(b) != want {
 		t.Errorf("linkedRepos = %s\nwant %s", b, want)
 	}

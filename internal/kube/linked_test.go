@@ -267,7 +267,7 @@ exit 0
 `)
 	writeExec(t, bin, "timeout", `echo "timeout $*" >> "$FAKE_LOG"
 shift
-case "$*" in *slow*) exit 124 ;; esac
+case "$*" in *github.com/acme/slow.git*) exit 124 ;; esac
 exec "$@"
 `)
 	writeExec(t, bin, "du", `printf '%s\t%s\n' "$(cat "$2/size.kb")" "$2"
