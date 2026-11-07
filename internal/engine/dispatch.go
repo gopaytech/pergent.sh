@@ -342,8 +342,10 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	// review, and no skill's hash counts it.
 	var dismissalCounts map[string]int
 	in.Dismissals, dismissalCounts = d.pastDismissals(ctx, repo, in, mr.AuthorID)
+	in.AddDescription(mr.Title, mr.Description)
 	hadCarried := len(in.Carried) > 0
 	hadDismissals := len(in.Dismissals) > 0
+	hadDescription := len(in.Description) > 0
 	// The quiet line counts toward the budget, so it is added before Fit.
 	if repo.QuietReviews {
 		in.AddQuietLine()
@@ -353,6 +355,9 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			return d.fail(ctx, reasonTooLarge)
 		}
 		return d.fail(ctx, err.Error())
+	}
+	if hadDescription && in.Description == nil {
+		d.log.Warn("reviewing without the change's title and description: the inputs are too large for them")
 	}
 	switch {
 	case hadDismissals && in.Dismissals == nil:

@@ -212,6 +212,7 @@ func (f *Forge) GetChange(ctx context.Context, repoID, number int64) (forge.Chan
 		TargetBranch: pr.Base.Ref,
 		StartSHA:     pr.Base.SHA,
 		Title:        pr.Title,
+		Description:  pr.Body,
 		WebURL:       pr.HTMLURL,
 		SourceBranch: pr.Head.Ref,
 		Author:       pr.User.Login,
