@@ -107,6 +107,10 @@ type Run struct {
 	// (SetRunQuiet). False for a run from before the column, or one that
 	// never started: the column is NULL there.
 	Quiet bool
+	// CommentLayout is the layout of the comment, recorded when the run started
+	// (SetRunLayout); nil is the default layout, for a run from before the
+	// column or one that never started.
+	CommentLayout []string
 }
 
 // How a run came to be (Run.Trigger).
@@ -178,7 +182,7 @@ const runColumns = `id::text, instance, project_id, mr_iid, project_path, head_s
 	created_at, dispatched_at, reported_at, not_before, cleaned_up,
 	title, web_url, source_branch, author, model, skill_sources,
 	outcome, outcome_reason, decision_status, approved, trigger, skill_subset, base_run_id::text,
-	skill_versions, skip_reason, max_turns, incremental, skill_hashes, quiet_reviews`
+	skill_versions, skip_reason, max_turns, incremental, skill_hashes, quiet_reviews, comment_layout`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var (
@@ -193,7 +197,7 @@ func scanRun(row pgx.Row) (Run, error) {
 		&r.CreatedAt, &dispatched, &rep, &notBefore, &r.CleanedUp,
 		&r.Title, &r.WebURL, &r.SourceBranch, &r.Author, &r.Model, &sources,
 		&r.Outcome, &r.OutcomeReason, &r.DecisionStatus, &r.Approved, &r.Trigger, &r.SkillSubset, &r.BaseRunID,
-		&versions, &r.SkipReason, &r.MaxTurns, &r.Incremental, &hashes, &quiet)
+		&versions, &r.SkipReason, &r.MaxTurns, &r.Incremental, &hashes, &quiet, &r.CommentLayout)
 	if err != nil {
 		return Run{}, err
 	}
@@ -213,6 +217,9 @@ func scanRun(row pgx.Row) (Run, error) {
 		}
 	}
 	r.Quiet = quiet != nil && *quiet
+	if len(r.CommentLayout) == 0 {
+		r.CommentLayout = nil
+	}
 	r.State = RunState(state)
 	r.TokenExpiresAt = deref(tokenExp)
 	r.DispatchedAt = deref(dispatched)
@@ -882,6 +889,14 @@ func (s *Store) SetIncremental(ctx context.Context, runID string, baseRunID *str
 func (s *Store) SetRunQuiet(ctx context.Context, runID string, quiet bool) error {
 	return s.mustUpdate(ctx, runID, `UPDATE runs SET quiet_reviews = $2
 		WHERE id = $1::uuid AND state IN ('queued', 'running')`, runID, quiet)
+}
+
+// SetRunLayout records the comment layout of a run being dispatched (queued
+// or running); nil or an empty list is the default layout. Any other run is an
+// error.
+func (s *Store) SetRunLayout(ctx context.Context, runID string, layout []string) error {
+	return s.mustUpdate(ctx, runID, `UPDATE runs SET comment_layout = $2
+		WHERE id = $1::uuid AND state IN ('queued', 'running')`, runID, nilIfEmpty(layout))
 }
 
 // ReportFailure records that a queued or running run will never produce a

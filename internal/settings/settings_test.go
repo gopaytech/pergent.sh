@@ -88,7 +88,7 @@ func get(t *testing.T, r *Resolver, instance, project string) Effective {
 }
 
 var allKeys = []string{KeyApprove, KeyReviewDrafts, KeyInlineFindings, KeyFailureStatus, KeySkills, KeyJobTimeout, KeyMaxTurns, KeyJobMemory,
-	KeyRerunLimitPerMR, KeyRerunLimitPerRepo, KeyRepoSkills, KeyCommandsAuthorAndMaintainersOnly, KeyIncrementalReviews, KeyLearnFromDismissals, KeyQuietReviews}
+	KeyRerunLimitPerMR, KeyRerunLimitPerRepo, KeyRepoSkills, KeyCommandsAuthorAndMaintainersOnly, KeyIncrementalReviews, KeyLearnFromDismissals, KeyQuietReviews, KeyCommentLayout}
 
 // wantOverridden checks exactly the given keys are overridden.
 func wantOverridden(t *testing.T, eff Effective, keys ...string) {
@@ -124,6 +124,9 @@ func wantDefaults(t *testing.T, eff Effective, except ...string) {
 	}
 	if !skip(KeyQuietReviews) && eff.QuietReviews {
 		t.Errorf("QuietReviews = true, want the default false")
+	}
+	if !skip(KeyCommentLayout) && eff.CommentLayout != nil {
+		t.Errorf("CommentLayout = %q, want nil (the default layout)", eff.CommentLayout)
 	}
 	if !skip(KeyFailureStatus) && eff.FailureStatus != config.FailureStatusFailed {
 		t.Errorf("FailureStatus = %q, want the default failed", eff.FailureStatus)
@@ -164,6 +167,7 @@ func TestResolverConfigKeys(t *testing.T) {
 		JobMemory:       ptr(resource.MustParse("6Gi")),
 		RerunLimitPerMR: ptr(20), RerunLimitPerRepo: ptr(100),
 		CommandsAuthorAndMaintainersOnly: ptr(false), IncrementalReviews: ptr(false), LearnFromDismissals: ptr(false), QuietReviews: ptr(true),
+		CommentLayout: []string{"findings:open", "files:collapsed"},
 	})
 	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)} // no store: config only
 
@@ -175,6 +179,9 @@ func TestResolverConfigKeys(t *testing.T) {
 		!slices.Equal(eff.Skills, []string{"security"}) || !slices.Equal(eff.RepoSkills, []string{"team"}) ||
 		eff.JobTimeout != 20*time.Minute || eff.MaxTurns != 120 || eff.JobMemory.Cmp(resource.MustParse("6Gi")) != 0 || eff.RerunLimitPerMR != 20 || eff.RerunLimitPerRepo != 100 {
 		t.Errorf("config keys not reflected: %+v", eff)
+	}
+	if !slices.Equal(eff.CommentLayout, []string{"findings:open", "files:collapsed"}) {
+		t.Errorf("CommentLayout = %q", eff.CommentLayout)
 	}
 	wantOverridden(t, eff, allKeys...)
 
@@ -236,6 +243,7 @@ func TestResolverDefaultsAndOverrides(t *testing.T) {
 		Approve: ptr(true), ReviewDrafts: ptr(false), InlineFindings: ptr(false), FailureStatus: ptr("neutral"),
 		Skills: []string{"security"}, RepoSkills: []string{"team"}, JobTimeoutSeconds: ptr(1200), MaxTurns: ptr(120), JobMemory: ptr("6Gi"),
 		RerunLimitPerMR: ptr(20), RerunLimitPerRepo: ptr(100), CommandsAuthorAndMaintainersOnly: ptr(false), IncrementalReviews: ptr(false), LearnFromDismissals: ptr(false), QuietReviews: ptr(true),
+		CommentLayout: []string{"findings:open", "files:collapsed"},
 	})
 	// A row of an instance no longer configured is not a repository.
 	upsert(t, st, store.DashboardRepo{Instance: "gone", Project: "acme/old"})
@@ -260,6 +268,9 @@ func TestResolverDefaultsAndOverrides(t *testing.T) {
 		!slices.Equal(full.Skills, []string{"security"}) || !slices.Equal(full.RepoSkills, []string{"team"}) ||
 		full.JobTimeout != 20*time.Minute || full.MaxTurns != 120 || full.JobMemory.Cmp(resource.MustParse("6Gi")) != 0 || full.RerunLimitPerMR != 20 || full.RerunLimitPerRepo != 100 {
 		t.Errorf("overrides not applied: %+v", full)
+	}
+	if !slices.Equal(full.CommentLayout, []string{"findings:open", "files:collapsed"}) {
+		t.Errorf("CommentLayout = %q", full.CommentLayout)
 	}
 	wantOverridden(t, full, allKeys...)
 
@@ -551,5 +562,70 @@ func TestResolverQuietReviewsDashboard(t *testing.T) {
 				t.Errorf("QuietReviews = %v, overridden = %v; want %v, %v", eff.QuietReviews, eff.Overridden[KeyQuietReviews], c.want, c.overridn)
 			}
 		})
+	}
+}
+
+func TestResolveCommentLayout(t *testing.T) {
+	cfg := testConfig()
+	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)}
+	own := []string{"findings:open", "summary:collapsed"}
+	admin := []string{"summary:open", "findings:collapsed"}
+
+	cases := []struct {
+		name        string
+		row, stored []string
+		want        []string
+		overridden  bool
+	}{
+		{"neither", nil, nil, nil, false},
+		{"an empty list is not a value", []string{}, []string{}, nil, false},
+		{"the admin default", nil, admin, admin, false},
+		{"the repository beats the admin default", own, admin, own, true},
+		{"the repository alone", own, nil, own, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			row := store.DashboardRepo{Instance: "main", Project: "acme/widgets", CommentLayout: c.row}
+			eff, ok := r.fromDashboard(row, store.RepoDefaults{CommentLayout: c.stored})
+			if !ok {
+				t.Fatal("fromDashboard: not ok")
+			}
+			if !slices.Equal(eff.CommentLayout, c.want) || (c.want == nil) != (eff.CommentLayout == nil) {
+				t.Errorf("CommentLayout = %#v; want %#v", eff.CommentLayout, c.want)
+			}
+			if eff.Overridden[KeyCommentLayout] != c.overridden {
+				t.Errorf("Overridden = %v; want %v", eff.Overridden[KeyCommentLayout], c.overridden)
+			}
+		})
+	}
+
+	// The result is a copy: changing it does not change the stored row.
+	stored := []string{"findings:open"}
+	eff, _ := r.fromDashboard(store.DashboardRepo{Instance: "main", Project: "acme/widgets"}, store.RepoDefaults{CommentLayout: stored})
+	eff.CommentLayout[0] = "changed"
+	if stored[0] != "findings:open" {
+		t.Error("CommentLayout shares memory with the stored default")
+	}
+}
+
+func TestResolveCommentLayoutConfig(t *testing.T) {
+	cfg := testConfig()
+	cfg.Repositories = append(cfg.Repositories, config.Repository{GitHub: "gh", Project: "Acme/Layout", CommentLayout: []string{"findings:open"}})
+	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)} // no store: config only
+
+	unset := get(t, r, "main", "acme/widgets")
+	if unset.CommentLayout != nil || unset.Overridden[KeyCommentLayout] {
+		t.Errorf("unset: CommentLayout = %q, overridden = %v; want nil, false", unset.CommentLayout, unset.Overridden[KeyCommentLayout])
+	}
+	set := get(t, r, "gh", "acme/layout")
+	if !slices.Equal(set.CommentLayout, []string{"findings:open"}) || !set.Overridden[KeyCommentLayout] {
+		t.Errorf("set: CommentLayout = %q, overridden = %v; want [findings:open], true", set.CommentLayout, set.Overridden[KeyCommentLayout])
+	}
+
+	// A config repository reads no admin default.
+	admin := []string{"findings:collapsed"}
+	eff := r.defaultsFor(SourceConfig, config.PlatformGitLab, "main", "acme/widgets", store.RepoDefaults{CommentLayout: admin})
+	if eff.CommentLayout != nil {
+		t.Errorf("CommentLayout = %q, want nil: a config repository reads no stored default", eff.CommentLayout)
 	}
 }

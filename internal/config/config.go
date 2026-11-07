@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopaytech/pergent/render"
 	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -194,6 +195,9 @@ type Repository struct {
 	// QuietReviews is whether a review says less: the model is told to leave
 	// out nitpicks and the comment is shorter (default false).
 	QuietReviews *bool
+	// CommentLayout is the shape of the review comment, "block:state" entries
+	// in order, checked by render.ParseLayout (nil: the default layout).
+	CommentLayout []string
 	// JobTimeout replaces jobs.timeout for this repository.
 	JobTimeout *time.Duration
 	// JobMemory replaces the memory limit of jobs.resources.limits.
@@ -267,6 +271,8 @@ type fileRepository struct {
 	IncrementalReviews               *bool `yaml:"incremental_reviews"`
 	LearnFromDismissals              *bool `yaml:"learn_from_dismissals"`
 	QuietReviews                     *bool `yaml:"quiet_reviews"`
+
+	CommentLayout LayoutEntries `yaml:"comment_layout"`
 }
 
 func (f fileRepository) repository() Repository {
@@ -281,6 +287,7 @@ func (f fileRepository) repository() Repository {
 		IncrementalReviews:               f.IncrementalReviews,
 		LearnFromDismissals:              f.LearnFromDismissals,
 		QuietReviews:                     f.QuietReviews,
+		CommentLayout:                    []string(f.CommentLayout),
 	}
 	if f.JobTimeout != nil {
 		d := time.Duration(*f.JobTimeout)
@@ -322,6 +329,27 @@ func (d *duration) UnmarshalYAML(value *yaml.Node) error {
 		return fmt.Errorf("line %d: invalid duration %q: %w", value.Line, s, err)
 	}
 	*d = duration(parsed)
+	return nil
+}
+
+// LayoutEntries is the comment_layout list: each entry is a one-key map such
+// as `- findings: collapsed`, held as "findings:collapsed". A list that is
+// left out stays nil; one written out as `[]` is empty, which Validate
+// refuses.
+type LayoutEntries []string
+
+func (l *LayoutEntries) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.SequenceNode {
+		return fmt.Errorf("line %d: comment_layout must be a list of entries such as `- findings: collapsed`", value.Line)
+	}
+	out := make(LayoutEntries, 0, len(value.Content))
+	for _, n := range value.Content {
+		if n.Kind != yaml.MappingNode || len(n.Content) != 2 || n.Content[0].Kind != yaml.ScalarNode || n.Content[1].Kind != yaml.ScalarNode {
+			return fmt.Errorf("line %d: a comment_layout entry must be one block and its state, such as `- findings: collapsed`", n.Line)
+		}
+		out = append(out, n.Content[0].Value+":"+n.Content[1].Value)
+	}
+	*l = out
 	return nil
 }
 
@@ -589,6 +617,13 @@ func (c *Config) Validate() error {
 			case repo.JobMemory.Cmp(request) < 0:
 				add("repositories[%d] (%s): job_memory %s is below the memory request %s of jobs.resources.requests",
 					i, repo.Project, repo.JobMemory.String(), request.String())
+			}
+		}
+		// comment_layout is absent (the default layout) or a list that
+		// render.ParseLayout accepts; an empty list is refused, not read as absent.
+		if repo.CommentLayout != nil {
+			if _, err := render.ParseLayout(repo.CommentLayout); err != nil {
+				add("repositories[%d] (%s): comment_layout: %v", i, repo.Project, err)
 			}
 		}
 		if n := repo.MaxTurns; n != nil && (*n < MinMaxTurns || *n > MaxMaxTurns) {

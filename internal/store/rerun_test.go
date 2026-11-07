@@ -614,3 +614,79 @@ func TestSetRunQuiet(t *testing.T) {
 		t.Error("a malformed id was accepted")
 	}
 }
+
+// A run that never had SetRunLayout called has a NULL comment_layout. It
+// reads as nil (the default layout) through every path that scans a run.
+func TestRunLayoutNullReadsNil(t *testing.T) {
+	s := newStore(t)
+	queued := enqueue(t, s, mr1, "aaa")
+	if r, found, err := s.Run(ctx, queued); err != nil || !found || r.CommentLayout != nil {
+		t.Fatalf("Run of a queued run = layout %#v, found %v, %v; want nil, true, nil", r.CommentLayout, found, err)
+	}
+	claimed, err := s.ClaimQueued(ctx, 10, t0)
+	if err != nil || len(claimed) != 1 || claimed[0].ID != queued || claimed[0].CommentLayout != nil {
+		t.Fatalf("ClaimQueued = %+v, %v; want the run, no layout", claimed, err)
+	}
+	rep := reported(t, s, mr2, "bbb", `{"status":"completed"}`)
+	toPublish, err := s.RunsToPublish(ctx, t0.Add(time.Hour), 10)
+	if err != nil || len(toPublish) != 1 || toPublish[0].ID != rep || toPublish[0].CommentLayout != nil {
+		t.Fatalf("RunsToPublish = %+v, %v; want the reported run, no layout", toPublish, err)
+	}
+}
+
+// SetRunLayout records the layout of a run being dispatched (queued or
+// running), in order, and reads back through every path that scans a run; an
+// empty list clears it; any other run is an error.
+func TestSetRunLayout(t *testing.T) {
+	s := newStore(t)
+	id := enqueue(t, s, mr1, "aaa")
+	a := []string{"summary:open", "findings:collapsed", "checks:open"}
+	b := []string{"findings:open", "summary:collapsed"}
+
+	for _, layout := range [][]string{a, b, nil, a} {
+		if err := s.SetRunLayout(ctx, id, layout); err != nil {
+			t.Fatalf("SetRunLayout(%v) of a queued run: %v", layout, err)
+		}
+		got := getRun(t, s, id).CommentLayout
+		if !slices.Equal(got, layout) || (layout == nil) != (got == nil) {
+			t.Errorf("queued run: CommentLayout = %#v, want %#v", got, layout)
+		}
+	}
+
+	claimed, err := s.ClaimQueued(ctx, 10, t0)
+	if err != nil || len(claimed) != 1 || !slices.Equal(claimed[0].CommentLayout, a) {
+		t.Fatalf("ClaimQueued = %+v, %v; want the run with layout %v", claimed, err, a)
+	}
+	if err := s.SetRunLayout(ctx, id, b); err != nil {
+		t.Fatalf("SetRunLayout of a running run: %v", err)
+	}
+	if got := getRun(t, s, id).CommentLayout; !slices.Equal(got, b) {
+		t.Errorf("running run: CommentLayout = %v, want %v", got, b)
+	}
+	if err := s.SetRunLayout(ctx, id, []string{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := getRun(t, s, id).CommentLayout; got != nil {
+		t.Errorf("an empty list: CommentLayout = %#v, want nil", got)
+	}
+	if err := s.SetRunLayout(ctx, id, a); err != nil {
+		t.Fatal(err)
+	}
+
+	tok := "tok-layout"
+	if err := s.MarkDispatched(ctx, id, "job-"+id, "base", "start", hash(tok), t0.Add(time.Hour), t0); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := s.StoreResult(ctx, id, tok, []byte(`{"status":"completed"}`), t0.Add(time.Minute)); err != nil || out != ResultStored {
+		t.Fatalf("StoreResult = %v, %v", out, err)
+	}
+	if err := s.SetRunLayout(ctx, id, b); err == nil {
+		t.Error("SetRunLayout of a reported run succeeded")
+	}
+	if got := getRun(t, s, id).CommentLayout; !slices.Equal(got, a) {
+		t.Errorf("the reported run changed: CommentLayout = %v, want %v", got, a)
+	}
+	if err := s.SetRunLayout(ctx, "bad", a); err == nil {
+		t.Error("a malformed id was accepted")
+	}
+}

@@ -698,3 +698,70 @@ func TestDashboardRepoQuietReviews(t *testing.T) {
 	}
 	want("upsert true", read(), ptrTo(true))
 }
+
+// comment_layout is NULL (the default layout) or a list whose order is kept,
+// through insert, update and upsert. An empty list is stored as NULL.
+func TestDashboardRepoCommentLayout(t *testing.T) {
+	s := newStore(t)
+	read := func() []string {
+		t.Helper()
+		r, found, err := s.DashboardRepo(ctx, "main", "acme/widgets")
+		if err != nil || !found {
+			t.Fatalf("DashboardRepo = %v, %v", found, err)
+		}
+		return r.CommentLayout
+	}
+	want := func(step string, got, want []string) {
+		t.Helper()
+		if !slices.Equal(got, want) || (got == nil) != (want == nil) {
+			t.Errorf("%s: comment_layout = %#v; want %#v", step, got, want)
+		}
+	}
+	a := []string{"summary:open", "findings:collapsed", "checks:open"}
+	b := []string{"findings:open", "summary:collapsed"}
+
+	// Insert: the list and its order are stored; a second insert of the same
+	// repository is left alone.
+	if created, err := s.InsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "acme/widgets", CreatedBy: "alice", CommentLayout: a}); err != nil || !created {
+		t.Fatalf("InsertDashboardRepo = %v, %v", created, err)
+	}
+	want("insert", read(), a)
+	if created, err := s.InsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "acme/widgets", CreatedBy: "bob", CommentLayout: b}); err != nil || created {
+		t.Fatalf("second InsertDashboardRepo = %v, %v; want not created", created, err)
+	}
+	want("second insert", read(), a)
+
+	// Update: another list, then NULL, then a list again; another setting
+	// changed alone leaves it as it is.
+	for _, step := range []struct {
+		name string
+		set  []string
+	}{{"update", b}, {"update NULL", nil}, {"update empty", []string{}}, {"update again", a}} {
+		if found, err := s.UpdateDashboardRepo(ctx, "main", "acme/widgets", func(r *DashboardRepo) { r.CommentLayout = step.set }); err != nil || !found {
+			t.Fatalf("%s: UpdateDashboardRepo = %v, %v", step.name, found, err)
+		}
+		if len(step.set) == 0 {
+			want(step.name, read(), nil)
+		} else {
+			want(step.name, read(), step.set)
+		}
+	}
+	if _, err := s.UpdateDashboardRepo(ctx, "main", "acme/widgets", func(r *DashboardRepo) { r.MaxTurns = ptrTo(80) }); err != nil {
+		t.Fatal(err)
+	}
+	want("update of another setting", read(), a)
+
+	// Upsert replaces every setting, NULL included.
+	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "acme/widgets", CreatedBy: "alice", CommentLayout: b}); err != nil {
+		t.Fatal(err)
+	}
+	want("upsert", read(), b)
+	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "acme/widgets", CreatedBy: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	want("upsert NULL", read(), nil)
+	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "acme/widgets", CreatedBy: "alice", CommentLayout: a}); err != nil {
+		t.Fatal(err)
+	}
+	want("upsert again", read(), a)
+}

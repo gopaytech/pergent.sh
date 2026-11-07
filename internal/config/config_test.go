@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -664,6 +665,74 @@ func TestQuietReviewsConfigKey(t *testing.T) {
 	}
 	if got := loadValid(t).Repositories[0].QuietReviews; got != nil {
 		t.Errorf("QuietReviews unset = %v, want nil", *got)
+	}
+}
+
+// withRepoKey loads valid.yaml with extra put under its repository.
+func withRepoKey(t *testing.T, extra string) (*Config, error) {
+	t.Helper()
+	base, err := os.ReadFile("testdata/valid.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Replace(string(base), "    project: acme/widgets\n", "    project: acme/widgets\n"+extra, 1)
+	return Load(writeConfig(t, body))
+}
+
+func TestCommentLayoutYAML(t *testing.T) {
+	cfg, err := withRepoKey(t, "    comment_layout:\n      - summary: open\n      - findings: collapsed\n")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, want := cfg.Repositories[0].CommentLayout, []string{"summary:open", "findings:collapsed"}; !slices.Equal(got, want) {
+		t.Errorf("CommentLayout = %q, want %q", got, want)
+	}
+	if got := loadValid(t).Repositories[0].CommentLayout; got != nil {
+		t.Errorf("CommentLayout unset = %q, want nil", got)
+	}
+	// A null value is the same as leaving the key out.
+	cfg, err = withRepoKey(t, "    comment_layout:\n")
+	if err != nil {
+		t.Fatalf("Load with a null comment_layout: %v", err)
+	}
+	if got := cfg.Repositories[0].CommentLayout; got != nil {
+		t.Errorf("null CommentLayout = %q, want nil", got)
+	}
+
+	for name, extra := range map[string]string{
+		"two keys in one entry": "    comment_layout:\n      - summary: open\n        findings: open\n",
+		"an entry that is text": "    comment_layout:\n      - summary:open\n",
+		"an empty entry":        "    comment_layout:\n      - {}\n",
+		"a state that is a map": "    comment_layout:\n      - findings: {a: b}\n",
+		"a list that is a map":  "    comment_layout:\n      findings: open\n",
+	} {
+		if _, err := withRepoKey(t, extra); err == nil || !strings.Contains(err.Error(), "comment_layout") {
+			t.Errorf("%s: Load() = %v, want an error naming comment_layout", name, err)
+		}
+	}
+}
+
+// Each of the five refusals fails the load and names the entry.
+func TestCommentLayoutRefused(t *testing.T) {
+	tests := []struct {
+		name, extra, wantErr string
+	}{
+		{"unknown block", "    comment_layout:\n      - findings: open\n      - banner: open\n", `"banner"`},
+		{"unknown state", "    comment_layout:\n      - findings: shut\n", `"shut"`},
+		{"duplicate block", "    comment_layout:\n      - findings: open\n      - summary: open\n      - findings: collapsed\n", `listed twice`},
+		{"empty list", "    comment_layout: []\n", "layout is empty"},
+		{"no findings", "    comment_layout:\n      - summary: open\n", `"findings"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := withRepoKey(t, tt.extra)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Load() = %v, want error containing %q", err, tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), "comment_layout") || !strings.Contains(err.Error(), "acme/widgets") {
+				t.Errorf("Load() = %v, want the key and the repository named", err)
+			}
+		})
 	}
 }
 
