@@ -1179,6 +1179,8 @@ Deploy tokens are created per project with the name `pergent-sh`, valid for 30 d
 
 ## 🌐 HTTP routes
 
+[`openapi.yaml`](openapi.yaml) at the root of the repository describes every route below as an OpenAPI 3.1 document: the parameters, bodies, status codes, who may call each route and the JSON of each answer. Use it to read the API or to generate a client. It also describes the result a review Job posts to `POST /runs/{id}/result` (pergent's result schema v1), as pergent is a CLI with no HTTP API of its own. The embedded dashboard pages are not in it. pergent.sh is 0.x, so the API may change between minor versions. A test, `internal/dashboard/openapi_test.go`, fails when the file and the code disagree about the routes, who may call them, or the JSON fields of the answers. It needs no database: run it with `go test -run TestOpenAPI ./internal/dashboard/`.
+
 | Route | Used by |
 | --- | --- |
 | `POST /webhooks/gitlab/{instance}` | GitLab merge request (`Merge Request Hook`) and note (`Note Hook`) webhooks; any other event is answered 200 and ignored. The `X-Gitlab-Token` header is compared in constant time with the instance's secret; a mismatch gets 401 and is otherwise ignored. An authenticated webhook whose payload can't be used (not JSON, no project id or merge request iid, a malformed head SHA) gets 200 and a warning in the log, because GitLab counts failed deliveries toward disabling the hook. |

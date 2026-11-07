@@ -1,0 +1,4084 @@
+openapi: 3.1.0
+info:
+  title: pergent.sh
+  version: 0.8.1
+  summary: HTTP routes of the pergent.sh server.
+  description: |
+    pergent.sh runs pergent code reviews as Kubernetes Jobs. It serves one port.
+    This document describes every route it serves, except the embedded
+    dashboard pages.
+
+    **Not described:** the dashboard single-page app. `GET /` and every other
+    path that no route below matches is the app (HTML) when `dashboard.url` is
+    set, and 404 otherwise. It is not an API. Also not described: the catch-all
+    `/api/` (404 JSON for an unknown API path, 401 without a session) and the
+    404 placeholders for `/api/reviews/{instance}` and
+    `/api/repositories/{instance}`, which only keep the router from
+    redirecting.
+
+    **Who calls what**
+
+    | Group | Caller | Authentication |
+    | --- | --- | --- |
+    | `/webhooks/...` | GitLab, GitHub | `X-Gitlab-Token` header, `X-Hub-Signature-256` signature |
+    | `/runs/{id}/result`, `/skill-fetches/{id}/result`, `/readiness-scans/{id}/result` | Jobs pergent.sh started | one-time bearer token per Job |
+    | `/auth/...` | the dashboard in a browser | none, or the sign-in cookies |
+    | `/api/...` | the dashboard in a browser | session cookie, plus `X-CSRF-Token` on writes |
+    | `/healthz` | probes | none |
+
+    **Conditional routes.** `/auth/` and `/api/` exist only when `dashboard.url`
+    is set. `/skill-fetches/{id}/result` and `/readiness-scans/{id}/result`
+    exist only then too. Without them the path is 404.
+
+    **Dashboard API.** Every `/api/` and `/auth/` response is sent
+    `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. Errors are
+    `{"error": "message"}`, with a `code` for a few (see `ErrorBody`). Times
+    are RFC 3339. Field names are camelCase.
+
+    *Roles.* An **operator** is a password account: it sees and may do
+    everything. An **admin** is an operator or a member of a team with the
+    `admin` role. A repository has its own role (`viewer`, `maintainer`,
+    `admin`) from the teams that cover it, capped by what the platform lets
+    the user see. A user the platform does not vouch for has no role at all.
+    A platform account on no team is *waiting*: every `/api/` route but
+    `GET /api/me` answers 403 with `code: waiting`. A password account that
+    must change its password gets 403 with `code: password_change_required`
+    for everything but `GET /api/me`, `POST /auth/logout` and
+    `POST /auth/password/change`. A repository, review or run the user cannot
+    see is answered exactly like one that does not exist (404).
+
+    *CSRF.* Every request other than GET, HEAD and OPTIONS behind a session
+    must send the session's CSRF token in `X-CSRF-Token` (it is in the
+    `csrfToken` field of `GET /api/me`); a missing or wrong token is 403 with
+    `code: csrf`. There is no Origin or Referer check: the cookie is
+    `SameSite=Lax`, `Secure`, `HttpOnly`, with the `__Host-` prefix.
+
+    **Paths with a project.** A project path holds slashes
+    (`acme/widgets`, or `group/subgroup/project` on GitLab). Send the slashes
+    as they are, not as `%2F`. OpenAPI cannot say that a path parameter may
+    hold slashes, so `{project}` below stands for such a path. The server
+    registers one route with a `{rest...}` wildcard for each group of these
+    (the `x-pergent-pattern` of each operation), and tells the operations
+    apart by the end of the path.
+
+    **Stability.** pergent.sh is 0.x. This API may change between minor
+    versions. `internal/dashboard/openapi_test.go` fails when this file and the
+    code disagree about routes, access gates, or the JSON fields of the
+    schemas named after Go types.
+
+    **Extensions.** `x-pergent-access` is how the router gates the route:
+    `none` (the handler decides), `session`, `admin` or `operator`. A handler
+    can still ask for more (a repository role), which the description says.
+    `x-pergent-pattern` names the registered `{rest...}` pattern an operation
+    belongs to.
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: https://pergent.example.com
+    description: Your public_url (webhooks, Job callbacks) or dashboard.url (dashboard).
+tags:
+  - name: Webhooks
+    description: Events sent by GitLab and GitHub.
+  - name: Job callbacks
+    description: Results posted by Jobs that pergent.sh started.
+  - name: Health
+  - name: Sign-in
+    description: Dashboard sign-in and sign-out.
+  - name: Overview and reviews
+  - name: Repositories
+  - name: Skills
+    description: The skill library, and installing skills from git.
+  - name: Organization
+    description: Users, teams and the audit log.
+  - name: Instances and settings
+    description: Operator and admin configuration.
+security: []
+paths:
+  # ---------------------------------------------------------------- webhooks
+  /webhooks/gitlab/{instance}:
+    post:
+      operationId: receiveGitLabWebhook
+      tags: [Webhooks]
+      summary: Receive a GitLab webhook
+      description: |
+        GitLab merge request (`Merge Request Hook`) and note (`Note Hook`)
+        webhooks. Any other event is answered 200 and ignored. The
+        `X-Gitlab-Token` header is compared in constant time with the
+        instance's webhook secret; an instance with no secret refuses every
+        request.
+
+        An authenticated webhook whose payload cannot be used (not JSON, no
+        project id or merge request iid, a malformed head SHA) is answered
+        **200** with a warning in the log, because GitLab counts failed
+        deliveries toward disabling the hook. The check order is: method
+        (405 from the router), instance (404), token (401), event, body size
+        (413), body (400), payload.
+      x-pergent-access: none
+      security:
+        - gitlabWebhookToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - name: X-Gitlab-Event
+          in: header
+          required: false
+          description: Only `Merge Request Hook` and `Note Hook` are acted on.
+          schema: {type: string}
+      requestBody:
+        required: true
+        description: The GitLab event payload. At most 5 MiB.
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Handled, or ignored (other event, unknown project, unusable payload). No body.
+        '400': {$ref: '#/components/responses/PlainTextError'}
+        '401':
+          description: The token is missing or wrong (or the instance has no secret).
+          content:
+            text/plain:
+              schema: {type: string}
+        '404':
+          description: No GitLab instance of that name.
+          content:
+            text/plain:
+              schema: {type: string}
+        '413':
+          description: The body is over 5 MiB.
+          content:
+            text/plain:
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
+  /webhooks/github/{instance}:
+    post:
+      operationId: receiveGitHubWebhook
+      tags: [Webhooks]
+      summary: Receive a GitHub webhook
+      description: |
+        The GitHub review App's `pull_request`, `issue_comment` and
+        `pull_request_review_comment` webhooks (comments carry commands). Any
+        other event, `ping` included, is answered 200 and ignored.
+        `X-Hub-Signature-256` is `sha256=` and the hex HMAC-SHA256 of the raw
+        body with the instance's webhook secret, compared in constant time; a
+        missing or wrong signature, or an instance with no secret, is 401.
+        A repository that is not switched on gets 200 and is ignored. An
+        unusable payload is answered 200, as for GitLab.
+
+        The check order is: method (405 from the router), instance (404), body
+        size (413), body (400), signature (401), event, payload.
+      x-pergent-access: none
+      security:
+        - githubWebhookSignature: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - name: X-GitHub-Event
+          in: header
+          required: false
+          description: Only `pull_request`, `issue_comment` and `pull_request_review_comment` are acted on.
+          schema: {type: string}
+      requestBody:
+        required: true
+        description: The GitHub event payload. At most 5 MiB.
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Handled, or ignored. No body.
+        '400': {$ref: '#/components/responses/PlainTextError'}
+        '401':
+          description: The signature is missing or wrong (or the instance has no secret).
+          content:
+            text/plain:
+              schema: {type: string}
+        '404':
+          description: No GitHub instance of that name.
+          content:
+            text/plain:
+              schema: {type: string}
+        '413':
+          description: The body is over 5 MiB.
+          content:
+            text/plain:
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
+  # ------------------------------------------------------------ job callbacks
+  /runs/{id}/result:
+    post:
+      operationId: postRunResult
+      tags: [Job callbacks]
+      summary: Deliver a review result (pergent schema v1)
+      description: |
+        The review Job posts the result `pergent agent` produced, with the
+        run's one-time bearer token. pergent is a CLI with no HTTP API of its
+        own, so this is the only description of the call.
+
+        The body is pergent's result schema version 1, documented in the
+        pergent repository at
+        [`docs/agent-result-schema.md`](https://github.com/gopaytech/pergent/blob/master/docs/agent-result-schema.md).
+        `result.Result` lists only the fields pergent.sh reads; unknown fields
+        are accepted and ignored, because version 1 only grows. A result must
+        have `schema_version` 1, `status` `completed` or `error`, a
+        non-empty `comment.markdown`, and for `completed` at least one skill.
+        It must be for the run's own `base` and `head`, and for a completed
+        result its skills must be those the Job was started with.
+
+        The token is checked first, on the raw body, so a bad token can never
+        fail anyone's run. After a good token, a body that is not JSON or not a
+        usable result makes **the run fail** and is answered 400. Nothing sent
+        here ever makes a run pass: an unusable result is a failed run.
+
+        A 200 also answers a result for a run that was superseded (a newer
+        push replaced it); the result is dropped.
+      x-pergent-access: none
+      security:
+        - runResultToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The run's id.
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        description: The result. At most 11 MiB (pergent caps its own at 10 MB).
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/result.Result'}
+      responses:
+        '200':
+          description: The result was recorded (or dropped, for a superseded run). No body.
+        '400':
+          description: The body could not be read, is not JSON, or is not a usable result. The run is recorded as failed.
+          content:
+            text/plain:
+              schema: {type: string}
+        '401':
+          description: The bearer token is missing, not this run's, expired, or the run is unknown.
+          content:
+            text/plain:
+              schema: {type: string}
+        '409':
+          description: A result for this run was received already.
+          content:
+            text/plain:
+              schema: {type: string}
+        '413':
+          description: The body is over 11 MiB.
+          content:
+            text/plain:
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
+  /skill-fetches/{id}/result:
+    post:
+      operationId: postSkillFetchResult
+      tags: [Job callbacks]
+      summary: Deliver the skills a fetch Job read from a public URL
+      description: |
+        Posted once by a skill fetch Job with its one-time bearer token. Only
+        registered when skill fetching is set up (the dashboard is on); else
+        404. A body over 4 MiB makes the fetch fail at once (with the right
+        token only) and is answered 413. Neither the token nor the body is
+        logged.
+      x-pergent-access: none
+      security:
+        - skillFetchToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The fetch's id.
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/skillfetch.JobResult'}
+      responses:
+        '204':
+          description: Recorded.
+        '400': {$ref: '#/components/responses/PlainTextError'}
+        '401':
+          description: The bearer token is missing or is not this fetch's.
+          content:
+            text/plain:
+              schema: {type: string}
+        '409':
+          description: The fetch has ended (a result came, or it gave up).
+          content:
+            text/plain:
+              schema: {type: string}
+        '413':
+          description: The body is over 4 MiB.
+          content:
+            text/plain:
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
+  /readiness-scans/{id}/result:
+    post:
+      operationId: postReadinessScanResult
+      tags: [Job callbacks]
+      summary: Deliver what a readiness scan Job found
+      description: |
+        Posted once by a readiness scan Job with its one-time bearer token.
+        Only registered when readiness scans are set up (the dashboard is on);
+        else 404. A body over 1 MiB makes the scan fail at once (with the
+        right token only) and is answered 413.
+      x-pergent-access: none
+      security:
+        - readinessScanToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The scan's id.
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/readiness.JobResult'}
+      responses:
+        '204':
+          description: Recorded.
+        '400': {$ref: '#/components/responses/PlainTextError'}
+        '401':
+          description: The bearer token is missing or is not this scan's.
+          content:
+            text/plain:
+              schema: {type: string}
+        '409':
+          description: The scan has ended.
+          content:
+            text/plain:
+              schema: {type: string}
+        '413':
+          description: The body is over 1 MiB.
+          content:
+            text/plain:
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
+  /healthz:
+    get:
+      operationId: getHealth
+      tags: [Health]
+      summary: Health check
+      description: Answers as soon as the server starts; the startup reconcile runs in the background.
+      x-pergent-access: none
+      security: []
+      responses:
+        '200':
+          description: The text `ok`.
+          content:
+            text/plain:
+              schema:
+                type: string
+                const: ok
+  # --------------------------------------------------------------------- auth
+  /auth/{platform}/{instance}/login:
+    get:
+      operationId: startSignIn
+      tags: [Sign-in]
+      summary: Start sign-in with GitLab or GitHub
+      description: |
+        Sets the OAuth state cookie and redirects the browser to the
+        provider. Nothing from the request but the route chooses where: there
+        is no `next` parameter and the Host header is not used.
+      x-pergent-access: none
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Platform'
+        - $ref: '#/components/parameters/InstanceName'
+      responses:
+        '302':
+          description: Redirect to the provider's authorize URL.
+          headers:
+            Location:
+              schema: {type: string}
+            Set-Cookie:
+              description: The `__Host-pergent_oauth_state` cookie (signed, 10 minutes).
+              schema: {type: string}
+        '404':
+          description: That instance has no sign-in on that platform, or is being removed.
+          content:
+            text/plain:
+              schema: {type: string}
+  /auth/{platform}/{instance}/callback:
+    get:
+      operationId: finishSignIn
+      tags: [Sign-in]
+      summary: Finish sign-in (the provider's redirect)
+      description: |
+        The provider sends the browser here with `code` and `state`. The state
+        must match the signed state cookie. A new session replaces the one the
+        browser came with. On success the browser is sent to `/` with the
+        session cookie.
+      x-pergent-access: none
+      security:
+        - oauthStateCookie: []
+      parameters:
+        - $ref: '#/components/parameters/Platform'
+        - $ref: '#/components/parameters/InstanceName'
+        - name: state
+          in: query
+          schema: {type: string}
+        - name: code
+          in: query
+          schema: {type: string}
+        - name: error
+          in: query
+          description: Set by the provider when the user refused.
+          schema: {type: string}
+      responses:
+        '303':
+          description: Signed in. Redirect to `/`.
+          headers:
+            Location:
+              schema:
+                type: string
+                const: /
+            Set-Cookie:
+              description: The `__Host-pergent_session` cookie (7 days at most, 8 hours idle).
+              schema: {type: string}
+        '400': {$ref: '#/components/responses/PlainTextError'}
+        '403':
+          description: The provider reported an error (the user refused).
+          content:
+            text/plain:
+              schema: {type: string}
+        '404':
+          description: That instance has no sign-in on that platform, or is being removed.
+          content:
+            text/plain:
+              schema: {type: string}
+        '500': {$ref: '#/components/responses/PlainTextError'}
+        '502':
+          description: The provider could not be reached, or the user's repositories could not be checked.
+          content:
+            text/plain:
+              schema: {type: string}
+  /auth/logout:
+    post:
+      operationId: signOut
+      tags: [Sign-in]
+      summary: Sign out
+      description: |
+        Ends the session and clears the cookie. When a session exists, the
+        `X-CSRF-Token` header must carry its token. Without a session it still
+        answers 204.
+      x-pergent-access: none
+      security:
+        - {}
+        - sessionCookie: []
+          csrfToken: []
+      responses:
+        '204':
+          description: Signed out. The session cookie is cleared.
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /auth/csrf:
+    get:
+      operationId: getLoginCsrf
+      tags: [Sign-in]
+      summary: Get the password form's CSRF token
+      description: Sets the `__Host-pergent_login_csrf` cookie (10 minutes) and returns the same token in the body.
+      x-pergent-access: none
+      security: []
+      responses:
+        '200':
+          description: The token.
+          headers:
+            Set-Cookie:
+              schema: {type: string}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CSRFTokenBody'}
+  /auth/password:
+    post:
+      operationId: signInWithPassword
+      tags: [Sign-in]
+      summary: Sign in with a password
+      description: |
+        Needs the login CSRF cookie from `GET /auth/csrf` and the same token in
+        `X-CSRF-Token`. Every failure, an unknown username included, is the
+        same 401 after the same work. Five wrong passwords in a row lock the
+        account for 15 minutes; each client IP has 20 attempts per 5 minutes
+        (429). With no hashing slot free within 5 seconds the answer is 503.
+      x-pergent-access: none
+      security:
+        - loginCsrfCookie: []
+          csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PasswordSignInRequest'}
+      responses:
+        '204':
+          description: Signed in.
+          headers:
+            Set-Cookie:
+              description: The `__Host-pergent_session` cookie. The login CSRF cookie is cleared.
+              schema: {type: string}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401':
+          description: Wrong username or password, or the account is locked.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorBody'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '429':
+          description: Too many sign-in attempts from this client.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorBody'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503':
+          description: No hashing slot was free in time.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorBody'}
+  /auth/password/change:
+    post:
+      operationId: changePassword
+      tags: [Sign-in]
+      summary: Change the signed-in password account's password
+      description: |
+        For a password account only (403 for a platform account). A wrong
+        current password counts toward the account's lock; while the account
+        is locked every change is refused (401). The account's other sessions
+        end. Allowed while the password change is still required.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PasswordChangeRequest'}
+      responses:
+        '204':
+          description: Changed.
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401':
+          description: Not signed in, or the current password is wrong, or the account is locked.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorBody'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '429':
+          description: Too many attempts from this client.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorBody'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503':
+          description: No hashing slot was free in time.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorBody'}
+  /api/instances:
+    get:
+      operationId: listSignInInstances
+      tags: [Sign-in]
+      summary: List the instances people can sign in with
+      description: The only `/api/` route that needs no session. It says nothing but names and labels.
+      x-pergent-access: none
+      security: []
+      responses:
+        '200':
+          description: The instances with a sign-in now, GitLab first.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/instancesView'}
+  /api/me:
+    get:
+      operationId: getMe
+      tags: [Sign-in]
+      summary: The signed-in user
+      description: |
+        Works for a waiting account and for a password account that must
+        change its password. Its `csrfToken` is the token writes send in
+        `X-CSRF-Token`.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: The user.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/meView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  # ------------------------------------------------------ overview and reviews
+  /api/overview:
+    get:
+      operationId: getOverview
+      tags: [Overview and reviews]
+      summary: Numbers, recent reviews and setup problems
+      description: |
+        Numbers over the runs started in the last `days`, the 10 most recently
+        updated reviews of the last 90 days, and the setup problems of the
+        repositories the user can see. `setup` is the setup checklist for
+        admins only, and null once all four items are done (and for everyone
+        else).
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: days
+          in: query
+          description: How many days back the numbers count.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 90
+            default: 7
+      responses:
+        '200':
+          description: The overview.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OverviewView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/reviews:
+    get:
+      operationId: listReviews
+      tags: [Overview and reviews]
+      summary: List reviews
+      description: |
+        Merge requests and pull requests as their newest run left them, most
+        recently updated first, 50 at most. `nextCursor`, when not empty, is
+        passed as `cursor` for the next page.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: project
+          in: query
+          description: Keep one repository (a path, on `instance` when that is given, else on any).
+          schema: {type: string}
+        - name: instance
+          in: query
+          schema: {type: string}
+        - name: outcome
+          in: query
+          schema: {$ref: '#/components/schemas/Outcome'}
+        - name: days
+          in: query
+          description: Leave out reviews last updated longer ago.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 365
+            default: 90
+        - name: cursor
+          in: query
+          description: A `nextCursor` of an earlier answer.
+          schema: {type: string}
+      responses:
+        '200':
+          description: One page of reviews.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewListView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/reviews/{instance}/{project}/{number}:
+    get:
+      operationId: getReview
+      tags: [Overview and reviews]
+      summary: One review with every run of it
+      description: The change and every run of it, newest first.
+      x-pergent-access: session
+      x-pergent-pattern: GET /api/reviews/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+        - $ref: '#/components/parameters/Number'
+      responses:
+        '200':
+          description: The review.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewDetailView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/reviews/{instance}/{project}/{number}/rerun:
+    post:
+      operationId: rerunReview
+      tags: [Overview and reviews]
+      summary: Run the review again
+      description: |
+        Re-runs against the change's head on the platform now, the whole
+        review or only its failed skills. The body may be left out (a re-run
+        of everything). For maintainers and admins of the repository (403
+        otherwise), config repositories included. The change must be open
+        (409), and a draft only where drafts are reviewed (409). At a re-run
+        cap the answer is 429.
+      x-pergent-access: session
+      x-pergent-pattern: POST /api/reviews/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+        - $ref: '#/components/parameters/Number'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RerunRequest'}
+      responses:
+        '202':
+          description: |
+            `status` is `queued`, `already queued` (the head is queued or
+            running), `nothing failed` or `whole review`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/StatusBody'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429':
+          description: A re-run cap (per change or per repository and UTC day) is reached.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorBody'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '502': {$ref: '#/components/responses/BadGateway'}
+  /api/reviews/{instance}/{project}/{number}/dismiss:
+    post:
+      operationId: dismissFinding
+      tags: [Overview and reviews]
+      summary: Dismiss a finding of the latest review
+      description: |
+        For maintainers and admins of the repository (403 otherwise). A
+        blocking finding needs a `reason` (up to 500 characters), cannot be
+        dismissed by the change's author (403), and not on a merged or closed
+        change (409); when the platform cannot say who opened it, the answer is
+        502. A suggestion needs no reason. The review is decided again with the
+        dismissal.
+      x-pergent-access: session
+      x-pergent-pattern: POST /api/reviews/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+        - $ref: '#/components/parameters/Number'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DismissRequest'}
+      responses:
+        '200':
+          description: '`status` is `dismissed` or `already dismissed`.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/StatusBody'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '502': {$ref: '#/components/responses/BadGateway'}
+  /api/reviews/{instance}/{project}/{number}/restore:
+    post:
+      operationId: restoreFinding
+      tags: [Overview and reviews]
+      summary: Undo a dismissal
+      description: For maintainers and admins of the repository (403 otherwise). The review is decided again.
+      x-pergent-access: session
+      x-pergent-pattern: POST /api/reviews/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+        - $ref: '#/components/parameters/Number'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RestoreRequest'}
+      responses:
+        '200':
+          description: '`status` is `restored` or `not dismissed`.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/StatusBody'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/runs/{id}:
+    get:
+      operationId: getRun
+      tags: [Overview and reviews]
+      summary: One run with its skills, findings and files
+      description: |
+        A run without a usable result has no skills or files; its `reason` and
+        `approvalReason` say why. Dismissals are shown on the change's latest
+        decided run only (`latestDecided`).
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: The run.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RunDetailView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/runs/{id}/log:
+    get:
+      operationId: getRunLog
+      tags: [Overview and reviews]
+      summary: The redacted tail of a run's Job log
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: The log text.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LogView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404':
+          description: No such run, or no log was kept.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorBody'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  # ------------------------------------------------------------- repositories
+  /api/repositories:
+    get:
+      operationId: listRepositories
+      tags: [Repositories]
+      summary: List the repositories switched on that the user can see
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: The repositories.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/RepositoryView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    post:
+      operationId: switchOnRepository
+      tags: [Repositories]
+      summary: Switch a repository on
+      description: |
+        Admins only. The repository is checked on its own, not against the
+        picker's lists: a platform admin must be a member with read access
+        (GitLab: Reporter or above; GitHub: pull) and the review bot (GitLab:
+        Maintainer or above) or App (GitHub: installed) must reach it, else
+        404 whether it is on or not; then 409 when it is on already, or set up
+        by the config. An operator names the instance too and needs no
+        membership. Every setting starts at its default; pergent.sh sets up the
+        webhook and clone credentials within seconds.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SwitchOnRequest'}
+      responses:
+        '201':
+          description: Switched on. The project is spelled as the platform spells it.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RepositoryDetailView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '502': {$ref: '#/components/responses/BadGateway'}
+  /api/repositories/available:
+    get:
+      operationId: listAvailableRepositories
+      tags: [Repositories]
+      summary: Repositories that can be switched on (the picker)
+      description: |
+        Admins only, and only for a platform session: the picker asks the
+        platform with the user's token, which a password session has not got
+        (400; an operator uses `GET /api/admin/instances/{name}/repositories`).
+        500 repositories at most; `truncated` is true when there were more or a
+        list was too long (5000) or too slow (60 s) to read whole.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: search
+          in: query
+          description: Keep repositories whose path holds this (GitLab also matches names).
+          schema:
+            type: string
+            maxLength: 100
+      responses:
+        '200':
+          description: The repositories.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AvailableView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '502':
+          description: GitLab or GitHub could not be asked, or nothing could be read in time.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorBody'}
+  /api/repositories/{instance}/{project}:
+    get:
+      operationId: getRepository
+      tags: [Repositories]
+      summary: One repository with its settings
+      description: |
+        `settings` is keyed `approve`, `reviewDrafts`, `inlineFindings`,
+        `commandsAuthorAndMaintainersOnly`, `incrementalReviews`,
+        `learnFromDismissals`, `failureStatus`, `skills` (null: the default
+        list), `repoSkills`, `jobTimeoutSeconds`, `maxTurns`, `jobMemory`
+        (`""` when none), `rerunLimitPerMR` and `rerunLimitPerRepo`; each
+        value says whether the repository sets it (`overridden`) or follows
+        the default.
+      x-pergent-access: session
+      x-pergent-pattern: GET /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      responses:
+        '200':
+          description: The repository.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RepositoryDetailView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: switchOffRepository
+      tags: [Repositories]
+      summary: Switch a repository off
+      description: |
+        Admins of the repository only (403 otherwise). A repository set up in
+        the config file is 409: remove it from the config. pergent.sh removes
+        its webhook and clone credentials.
+      x-pergent-access: admin
+      x-pergent-pattern: DELETE /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      responses:
+        '200':
+          description: Switched off. `repo.on` is false and the settings are the defaults.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RepositoryDetailView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/inputs:
+    get:
+      operationId: getRepositoryInputs
+      tags: [Repositories]
+      summary: The skills and instructions a review would get
+      description: |
+        Read from the default branch with the review bot or App and kept 5
+        minutes (a change of a skill setting or of the default list clears
+        it). 503 while pergent.sh has not set the repository up yet; 502 when
+        they cannot be read.
+      x-pergent-access: session
+      x-pergent-pattern: GET /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      responses:
+        '200':
+          description: The inputs.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/InputsView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '502': {$ref: '#/components/responses/BadGateway'}
+        '503':
+          description: The repository is not set up yet (reconcile has not reached it).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorBody'}
+  /api/repositories/{instance}/{project}/readiness:
+    get:
+      operationId: getRepositoryReadiness
+      tags: [Repositories]
+      summary: The Readiness tab
+      description: |
+        For anyone who can see the repository. `checklist` is built now from
+        the latest finished scan's stored results and the skills turned on
+        now; it is null until a scan has finished. Nothing here asks the
+        platform or the cluster.
+      x-pergent-access: session
+      x-pergent-pattern: GET /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      responses:
+        '200':
+          description: The scans and the checklist.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReadinessView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/past-dismissals:
+    get:
+      operationId: listPastDismissals
+      tags: [Repositories]
+      summary: Dismissals that teach the repository's reviews
+      description: |
+        For maintainers and admins of the repository (403 for a viewer). One
+        row per finding whose dismissals teach, a blocking dismissal over a
+        suggestion and then the newest. The list is `[]` when nothing teaches.
+      x-pergent-access: session
+      x-pergent-pattern: GET /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      responses:
+        '200':
+          description: The rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/PastDismissalView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/skill-results:
+    get:
+      operationId: listSkillResults
+      tags: [Repositories]
+      summary: What became of each skill's findings
+      description: |
+        For anyone who can see the repository. Findings of one skill at one
+        severity that were decided in the window. `addressed` is
+        `fixed * 100 / raised`, a whole percent, null under 10 raised. Rows come
+        lowest `addressed` first, nulls last, then by skill, a blocking row
+        before a suggestion. `[]` when nothing was decided.
+      x-pergent-access: session
+      x-pergent-pattern: GET /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+        - name: days
+          in: query
+          description: The window. Any other value is 400.
+          schema:
+            type: integer
+            enum: [30, 90]
+            default: 30
+      responses:
+        '200':
+          description: The rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/SkillResultView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/settings:
+    put:
+      operationId: updateRepositorySettings
+      tags: [Repositories]
+      summary: Change some settings of a repository
+      description: |
+        For maintainers and admins of the repository (403 otherwise). Changes
+        the settings in the body and leaves the others; a null resets one to
+        its default. A repository set up in the config file is 409. Only an
+        admin of the repository changes the two re-run caps (403 otherwise).
+        Any other key, or a value out of bounds, is 400 and nothing changes.
+        A list of `skills` must name library skills (400 `skill "x" is not in
+        the skill library`), and the texts of the list may not come to more
+        than 900 KiB.
+      x-pergent-access: session
+      x-pergent-pattern: PUT /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      requestBody:
+        required: true
+        description: At most 64 KiB.
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RepositorySettingsRequest'}
+      responses:
+        '200':
+          description: The repository with its new settings.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RepositoryDetailView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/settings/reset:
+    post:
+      operationId: resetRepositorySettings
+      tags: [Repositories]
+      summary: Put every setting back to its default
+      description: |
+        For maintainers and admins of the repository (403 otherwise). A
+        maintainer's reset leaves the two re-run caps as they are; only an
+        admin of the repository resets those. A repository set up in the
+        config file is 409. Any POST to a repository path that is not one of
+        the three below is 404.
+      x-pergent-access: session
+      x-pergent-pattern: POST /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      responses:
+        '200':
+          description: The repository with its default settings.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RepositoryDetailView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/readiness/scan:
+    post:
+      operationId: scanRepositoryNow
+      tags: [Repositories]
+      summary: Scan the repository now
+      description: |
+        For maintainers and admins of the repository (403 otherwise), config
+        repositories included. A repository that is not switched on, or when
+        scans are off, is 404 and nothing is queued. 409 while a scan is
+        queued or running; 429 within 5 minutes of the latest scan, with a
+        `Retry-After` header.
+      x-pergent-access: session
+      x-pergent-pattern: POST /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      responses:
+        '202':
+          description: The scan is queued.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ScanStartedBody'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: A scan is already queued or running. `scan` is that scan.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ScanBusyBody'}
+        '429':
+          description: The repository was scanned less than 5 minutes ago.
+          headers:
+            Retry-After:
+              description: Seconds to wait.
+              schema: {type: integer}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ScanTooSoonBody'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/past-dismissals/stop:
+    post:
+      operationId: stopUsingPastDismissal
+      tags: [Repositories]
+      summary: Stop teaching reviews from a finding's dismissals
+      description: |
+        For maintainers and admins of the repository (403 otherwise), config
+        repositories included. Every dismissal of that finding in the
+        repository stops teaching. The dismissals stay on their changes, no
+        review is decided again and the platform is not asked.
+      x-pergent-access: session
+      x-pergent-pattern: POST /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/StopUsingRequest'}
+      responses:
+        '200':
+          description: '`status` is `stopped` or `not teaching`.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/StatusBody'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  # ------------------------------------------------------------------- skills
+  /api/skills:
+    get:
+      operationId: listSkills
+      tags: [Skills]
+      summary: List the skill library
+      description: |
+        Without the skills' text, by name. `updatedBy` is shown to admins only.
+        The `source` repository of an installed skill is hidden (`hidden`)
+        from users who cannot see that repository.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: The library.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/LibrarySkillView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/skills/{name}:
+    get:
+      operationId: getSkill
+      tags: [Skills]
+      summary: One skill with its text and versions
+      description: The text is to be shown as plain text only. Versions are newest first.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/SkillName'
+      responses:
+        '200':
+          description: The skill.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SkillDetailView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/skills/{name}/versions/{v}:
+    get:
+      operationId: getSkillVersion
+      tags: [Skills]
+      summary: One saved version of a skill, with its text
+      description: The history outlives a deleted skill.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/SkillName'
+        - name: v
+          in: path
+          required: true
+          description: The version number.
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: The version.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SkillVersionDetailView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/skills:
+    post:
+      operationId: createSkill
+      tags: [Skills]
+      summary: Add a skill to the library
+      description: |
+        Admins only; any admin writes the library. The text is checked as a
+        skill and against the secrets pergent.sh holds (400, the answer names
+        no secret). A taken name is 409; a full library is 400. With
+        `addToDefaults`, over the review's size budget the create is refused
+        whole (400).
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      requestBody:
+        required: true
+        description: At most 1 MiB.
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateSkillRequest'}
+      responses:
+        '201':
+          description: Saved as version 1.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SkillWrittenView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/skills/{name}:
+    put:
+      operationId: updateSkill
+      tags: [Skills]
+      summary: Save a new version of a skill
+      description: |
+        Admins only. `version` is the version the editor opened: if the skill
+        changed since, the answer is 409. A skill installed from git cannot be
+        edited (409): copy it.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/SkillName'
+      requestBody:
+        required: true
+        description: At most 1 MiB.
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateSkillRequest'}
+      responses:
+        '200':
+          description: Saved. `version` is the new one.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SkillWrittenView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: deleteSkill
+      tags: [Skills]
+      summary: Delete a skill
+      description: |
+        Admins only. A skill that a repository or the default list names is
+        409, with the repositories the caller can see in the body.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/SkillName'
+      responses:
+        '204':
+          description: Deleted.
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: The skill is in use.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SkillInUseView'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/skills/{name}/copy:
+    post:
+      operationId: copySkill
+      tags: [Skills]
+      summary: Copy a skill under a new name
+      description: Admins only. The copy's frontmatter `name` is set to the new name.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/SkillName'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CopySkillRequest'}
+      responses:
+        '201':
+          description: Saved as version 1 of the new name.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SkillWrittenView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/skill-fetches:
+    post:
+      operationId: startSkillFetch
+      tags: [Skills]
+      summary: Read a skill source (a repository of an instance, or a public URL)
+      description: |
+        Admins only. Starts a read of a folder of skills; poll
+        `GET /api/admin/skill-fetches/{id}`. A platform admin reads
+        repositories of its own instance that its user can see there (403
+        otherwise); an operator reads any the bot or App reaches. A URL is
+        read by a token-less Job. 503 when installing skills is not set up.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/StartSkillFetchRequest'}
+      responses:
+        '202':
+          description: The read was started.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SkillFetchStartedView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '502': {$ref: '#/components/responses/BadGateway'}
+        '503':
+          description: Installing skills is not set up.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorBody'}
+  /api/admin/skill-fetches/{id}:
+    get:
+      operationId: getSkillFetch
+      tags: [Skills]
+      summary: Read a skill fetch
+      description: |
+        Admins only, and only the admin who started the read (404 for anyone
+        else, and after the read is no longer kept).
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/FetchId'
+      responses:
+        '200':
+          description: The read.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SkillFetchView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/skill-fetches/{id}/install:
+    post:
+      operationId: installSkills
+      tags: [Skills]
+      summary: Install skills from a finished read
+      description: |
+        Admins only, for the admin who started the read. Each skill is checked
+        again (the skill checks and the held secrets, failing closed). The
+        read must be done (409 while it runs or after it failed). The answer is
+        a list with one entry per name, in the order asked.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/FetchId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/InstallSkillsRequest'}
+      responses:
+        '200':
+          description: One result for each name.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/SkillFetchResultView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/skill-fetches/{id}/update:
+    post:
+      operationId: updateSkills
+      tags: [Skills]
+      summary: Update installed skills from a finished check for updates
+      description: |
+        Admins only, for the admin who started the read. The read must be a
+        check for updates (`purpose` `update`; else 409) and done. The answer
+        is a list with one entry per name, in the order asked.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/FetchId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateSkillsRequest'}
+      responses:
+        '200':
+          description: One result for each name.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/SkillFetchResultView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  # ------------------------------------------------------------- organization
+  /api/users:
+    get:
+      operationId: listUsers
+      tags: [Organization]
+      summary: List accounts
+      description: |
+        Admins only. Waiting accounts first, then everyone by username. A
+        platform admin is listed the platform accounts of its own instance
+        only (no password accounts, none of another instance's).
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: The accounts.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/UserView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/users/{id}:
+    delete:
+      operationId: deleteUser
+      tags: [Organization]
+      summary: Remove an account
+      description: |
+        Admins only. Removes the account with its sessions and team
+        memberships (a platform account is made again, on no team, at its next
+        sign-in). A password account needs an operator (403); the last
+        password account cannot be removed (409). A platform admin removes
+        accounts of its own instance only (403).
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+      responses:
+        '204':
+          description: Removed.
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/accounts:
+    post:
+      operationId: createPasswordAccount
+      tags: [Organization]
+      summary: Add a password admin
+      description: |
+        Operators only. Makes a password admin with a generated password,
+        which must be changed at its first sign-in. The password is in the
+        answer only, once: it is never logged or audited. The username is 1 to
+        64 letters, digits, `.`, `_` or `-` (400), not taken ignoring case
+        (409).
+      x-pergent-access: operator
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateAccountRequest'}
+      responses:
+        '201':
+          description: Created. The only time the password is shown.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/NewAccountView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503':
+          description: No hashing slot was free in time.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorBody'}
+  /api/teams:
+    get:
+      operationId: listTeams
+      tags: [Organization]
+      summary: List teams
+      description: |
+        Admins only, by name ignoring case. A platform admin sees only what it
+        can see: repositories and members it cannot see are counted in
+        `hiddenRepos` and `hiddenMembers`, never named.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: The teams.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/TeamView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    post:
+      operationId: createTeam
+      tags: [Organization]
+      summary: Add a team
+      description: Admins only. A team with no members and no repositories. A name taken ignoring case is 409.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateTeamRequest'}
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TeamView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/teams/{id}:
+    put:
+      operationId: updateTeam
+      tags: [Organization]
+      summary: Replace a team's name, role, members and repositories
+      description: |
+        Admins only. Members are platform accounts (400 otherwise). An admin
+        team has `repos: []` (400 otherwise). A repository is one switched on,
+        or `{"instance": X, "project": ""}` for every repository of instance X
+        (400 otherwise). A platform admin changes the members of its own
+        instance only, keeps the team's repositories it cannot see as they
+        are, and names repositories of its own instance only; changing the
+        role of a team that covers repositories it cannot see is 409.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateTeamRequest'}
+      responses:
+        '200':
+          description: The team as saved.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TeamView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: deleteTeam
+      tags: [Organization]
+      summary: Remove a team
+      description: |
+        Admins only. Removes the team, not its members' accounts. For a
+        platform admin a team that covers repositories it cannot see is 409.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+      responses:
+        '204':
+          description: Removed.
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/audit:
+    get:
+      operationId: listAudit
+      tags: [Organization]
+      summary: Read the audit log
+      description: |
+        Admins only. 100 entries at most, newest first, older than `before`
+        when given. `next` is the `before` of the page after, 0 at the end of
+        the log. A platform admin sees only entries about a repository it can
+        see, about its own instance, or about no instance (not a password
+        admin's own sign-ins and password changes); its request reads at most
+        50 chunks of 100 entries, so a short page with `next` not 0 is not the
+        last. `detail` never holds a secret.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: before
+          in: query
+          description: The id of an audit entry; older entries are returned.
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      responses:
+        '200':
+          description: One page.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AuditPageView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  # ------------------------------------------------- instances and settings
+  /api/integrations:
+    get:
+      operationId: getIntegrations
+      tags: [Instances and settings]
+      summary: Integration health of an instance
+      description: |
+        Admins only: the session's instance. An operator has none and names
+        one with `?instance=` (404 for an unknown name).
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: instance
+          in: query
+          description: For an operator, the instance to describe.
+          schema: {type: string}
+      responses:
+        '200':
+          description: The integration.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/IntegrationView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/settings:
+    get:
+      operationId: getAdminSettings
+      tags: [Instances and settings]
+      summary: Defaults and model, for the Settings page
+      description: Admins only. The defaults a repository switched on in the dashboard gets, and the model. Never a key.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: The settings.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminSettingsView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/instances:
+    get:
+      operationId: listInstances
+      tags: [Instances and settings]
+      summary: List the configured instances
+      description: Operators only. The config's first, then those added in the dashboard. Secrets are write-only.
+      x-pergent-access: operator
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: The instances.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/InstanceAdminView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    post:
+      operationId: addInstance
+      tags: [Instances and settings]
+      summary: Add an instance
+      description: |
+        Operators only. Checks the credentials the way startup does (400 with
+        the reason when they fail, and nothing is stored), stores them sealed
+        and connects. A GitLab instance's `webhook_secret` is generated; giving
+        one is 400. A name taken in the config or the dashboard is 409. The
+        check can take up to 40 seconds.
+      x-pergent-access: operator
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateInstanceRequest'}
+      responses:
+        '201':
+          description: Added.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/InstanceAdminView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/instances/{name}:
+    put:
+      operationId: updateInstance
+      tags: [Instances and settings]
+      summary: Change an instance's OAuth client or secrets
+      description: |
+        Operators only. Replaces what it names, checks the whole, connects
+        again. An address or App ID that differs is 400. An instance of the
+        config, or one being removed, is 409.
+      x-pergent-access: operator
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstancePathName'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateInstanceRequest'}
+      responses:
+        '200':
+          description: Changed.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/InstanceAdminView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: removeInstance
+      tags: [Instances and settings]
+      summary: Remove an instance
+      description: |
+        Operators only. Its runs are superseded and its repositories, accounts
+        and sessions go now; pergent.sh takes the webhooks off the platform and
+        deletes the instance and its secrets within a minute or so. An
+        instance of the config is 409.
+      x-pergent-access: operator
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstancePathName'
+      responses:
+        '202':
+          description: '`status` is `removing`.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/StatusBody'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/instances/{name}/repositories:
+    get:
+      operationId: listInstanceRepositories
+      tags: [Instances and settings]
+      summary: Repositories an instance's bot or App can set up
+      description: |
+        Operators only: the picker for an operator, who has no platform
+        account. The repositories the instance's review bot or App can set up
+        that are not switched on; 500 at most.
+      x-pergent-access: operator
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/InstancePathName'
+        - name: search
+          in: query
+          schema:
+            type: string
+            maxLength: 100
+      responses:
+        '200':
+          description: The repositories.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AvailableView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '502': {$ref: '#/components/responses/BadGateway'}
+  /api/admin/llm:
+    get:
+      operationId: getLLM
+      tags: [Instances and settings]
+      summary: The model reviews use
+      description: Admins only. Whether a key is set and when it changed; never the key.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: The model.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LLMAdminView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    put:
+      operationId: putLLM
+      tags: [Instances and settings]
+      summary: Set the model reviews use
+      description: |
+        Operators only. 409 when the config has an `llm:` block. The key is
+        needed only when none is stored; a key sent is sealed and never
+        returned.
+      x-pergent-access: operator
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutLLMRequest'}
+      responses:
+        '200':
+          description: Saved.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LLMAdminView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/defaults:
+    get:
+      operationId: getDefaults
+      tags: [Instances and settings]
+      summary: The defaults of repositories switched on in the dashboard
+      description: Admins only.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: The defaults.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DefaultsView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    put:
+      operationId: putDefaults
+      tags: [Instances and settings]
+      summary: Replace the defaults
+      description: |
+        Admins only. Replaces them all: a missing key or null is the built-in
+        default. The exception is `skills`, the default list of library skill
+        names: a missing key keeps the stored list, null or `[]` clears it, and
+        a name the library lacks or a list over 900 KiB is 400.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DefaultsRequest'}
+      responses:
+        '200':
+          description: Saved.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DefaultsView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-pergent_session
+      description: |
+        The dashboard session, set by sign-in (`GET /auth/{platform}/{instance}/callback`
+        or `POST /auth/password`). 32 random bytes, base64url. `HttpOnly`,
+        `Secure`, `SameSite=Lax`, `Path=/`. It ends after 8 hours idle or 7 days.
+        A missing, unknown or ended session is 401 with `{"error": "not signed in"}`
+        or `"session expired"`.
+    csrfToken:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: |
+        The session's CSRF token (`csrfToken` of `GET /api/me`), required with
+        the session cookie on every request that is not GET, HEAD or OPTIONS
+        (403, `code: csrf`, otherwise). For the password sign-in form it is the
+        token of `GET /auth/csrf`, which must equal the `loginCsrfCookie`.
+    loginCsrfCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-pergent_login_csrf
+      description: Set by `GET /auth/csrf`. `HttpOnly`, `Secure`, `SameSite=Strict`, 10 minutes.
+    oauthStateCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-pergent_oauth_state
+      description: |
+        Set by `GET /auth/{platform}/{instance}/login`: a signed cookie holding
+        the OAuth state and PKCE verifier. `HttpOnly`, `Secure`, `SameSite=Lax`,
+        10 minutes. The callback's `state` query must match it.
+    gitlabWebhookToken:
+      type: apiKey
+      in: header
+      name: X-Gitlab-Token
+      description: The instance's webhook secret, compared in constant time. An instance with no secret refuses every request.
+    githubWebhookSignature:
+      type: apiKey
+      in: header
+      name: X-Hub-Signature-256
+      description: |
+        `sha256=` and the hex HMAC-SHA256 of the raw request body with the
+        instance's webhook secret, compared in constant time. An instance with
+        no secret refuses every request.
+    runResultToken:
+      type: http
+      scheme: bearer
+      description: |
+        The review Job's one-time token, made when the Job was dispatched
+        (stored as a SHA-256, valid for a limited time). It opens this run's
+        result route only.
+    skillFetchToken:
+      type: http
+      scheme: bearer
+      description: The skill fetch Job's one-time token. It opens this fetch's result route only.
+    readinessScanToken:
+      type: http
+      scheme: bearer
+      description: The readiness scan Job's one-time token. It opens this scan's result route only.
+  parameters:
+    InstanceName:
+      name: instance
+      in: path
+      required: true
+      description: The instance's name, as in the config or the dashboard.
+      schema: {type: string}
+    InstancePathName:
+      name: name
+      in: path
+      required: true
+      description: The instance's name.
+      schema: {type: string}
+    Platform:
+      name: platform
+      in: path
+      required: true
+      schema:
+        type: string
+        enum: [gitlab, github]
+    ProjectPath:
+      name: project
+      in: path
+      required: true
+      description: |
+        The repository's path, slashes sent as they are (`acme/widgets`). It
+        stands for the part of the path between the instance and the end that
+        names the operation.
+      schema: {type: string}
+    Number:
+      name: number
+      in: path
+      required: true
+      description: The merge request's IID or the pull request's number.
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+    RunId:
+      name: id
+      in: path
+      required: true
+      description: The run's id.
+      schema:
+        type: string
+        format: uuid
+    FetchId:
+      name: id
+      in: path
+      required: true
+      description: The skill fetch's id.
+      schema:
+        type: string
+        format: uuid
+    NumericId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+    SkillName:
+      name: name
+      in: path
+      required: true
+      description: The skill's name.
+      schema: {type: string}
+  responses:
+    Unauthorized:
+      description: Not signed in (`not signed in`), or the session ended (`session expired`).
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorBody'}
+    Forbidden:
+      description: |
+        The session may not do this. `code` tells which kind: `csrf` (a write
+        without the right `X-CSRF-Token`), `waiting` (an account on no team),
+        `password_change_required`; with no `code` the role is too low (admin,
+        operator, or the repository role).
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorBody'}
+    NotFound:
+      description: |
+        No such thing, or one the session cannot see: both are answered the
+        same.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorBody'}
+    BadRequest:
+      description: The request is wrong. `error` says how, in words for the user.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorBody'}
+    Conflict:
+      description: The request conflicts with the current state (taken, in use, managed by the config, stale, not open). `error` says which.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorBody'}
+    InternalError:
+      description: A failure on the server. The message says nothing of the cause.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorBody'}
+    BadGateway:
+      description: The platform (GitLab or GitHub) could not be asked, or its answer could not be used.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorBody'}
+    PlainTextError:
+      description: A short plain-text message.
+      content:
+        text/plain:
+          schema: {type: string}
+  schemas:
+    # ------------------------------------------------------------- shared shapes
+    ErrorBody:
+      type: object
+      description: 'The body of every JSON error: `{"error": "message"}`, with a `code` for a few.'
+      required: [error]
+      properties:
+        error: {type: string}
+        code:
+          type: string
+          description: Present on some 403s only.
+          enum: [csrf, waiting, password_change_required]
+    StatusBody:
+      type: object
+      description: A short word for what happened. The operation lists the values.
+      required: [status]
+      properties:
+        status: {type: string}
+    CSRFTokenBody:
+      type: object
+      required: [csrfToken]
+      properties:
+        csrfToken: {type: string}
+    Outcome:
+      type: string
+      description: |
+        `running` (queued, being reviewed, or not posted yet), `approved` (the
+        approve bot approved this run), `blocking` (a skill found blocking
+        issues), `draft` (clean, not approved because the change was a draft),
+        `no_blocking` (clean but not approved, for the reason given), `failed`
+        (no usable review), `superseded` (replaced by a newer push, or the
+        change was closed), `skipped` (the repository has no skills; never a
+        review or a failure), `unknown` (published before outcomes were
+        recorded).
+      enum: [running, approved, blocking, draft, no_blocking, failed, superseded, skipped, unknown]
+    # ----------------------------------------------------------- request bodies
+    PasswordSignInRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: {type: string}
+        password:
+          type: string
+          format: password
+    PasswordChangeRequest:
+      type: object
+      required: [current, new]
+      properties:
+        current:
+          type: string
+          format: password
+        new:
+          type: string
+          format: password
+          minLength: 12
+          description: At least 12 characters, and different from the current one.
+    SwitchOnRequest:
+      type: object
+      required: [project]
+      properties:
+        project:
+          type: string
+          maxLength: 1024
+        instance:
+          type: string
+          description: Needed from an operator, who has no instance of their own. A platform admin may leave it out, or send its own.
+    RerunRequest:
+      type: object
+      properties:
+        failed:
+          type: boolean
+          description: Re-run only the skills that failed.
+          default: false
+    DismissRequest:
+      type: object
+      required: [fingerprint]
+      properties:
+        fingerprint: {type: string}
+        reason:
+          type: string
+          description: Needed for a blocking finding. Up to 500 characters.
+    RestoreRequest:
+      type: object
+      required: [fingerprint]
+      properties:
+        fingerprint: {type: string}
+    StopUsingRequest:
+      type: object
+      required: [fingerprint]
+      properties:
+        fingerprint: {type: string}
+    CreateAccountRequest:
+      type: object
+      required: [username]
+      properties:
+        username:
+          type: string
+          pattern: '^[a-zA-Z0-9._-]{1,64}$'
+    CreateTeamRequest:
+      type: object
+      required: [name, role]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        role:
+          type: string
+          enum: [admin, maintainer, viewer]
+    UpdateTeamRequest:
+      type: object
+      required: [name, role]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        role:
+          type: string
+          enum: [admin, maintainer, viewer]
+        members:
+          type: array
+          description: Account ids of platform accounts.
+          items:
+            type: integer
+            format: int64
+        repos:
+          type: array
+          description: An empty `project` covers every repository of the instance. Empty for an admin team.
+          items: {$ref: '#/components/schemas/TeamRepoView'}
+    CreateInstanceRequest:
+      type: object
+      required: [name, platform]
+      properties:
+        name:
+          type: string
+          pattern: '^[a-z0-9-]+$'
+          maxLength: 63
+        platform:
+          type: string
+          enum: [gitlab, github]
+        url:
+          type: string
+          description: GitLab only. The https address of the server, without a trailing slash.
+        apiURL:
+          type: string
+          description: GitHub only. The https address of the API, without a trailing slash.
+        reviewAppID:
+          type: integer
+          format: int64
+          description: GitHub only. Positive.
+        approveAppID:
+          type: integer
+          format: int64
+          description: GitHub only. 0 approves with a bot user's token, the `reviewAppID` with the review App, another App ID with an approve App.
+        oauthClientID:
+          type: string
+          maxLength: 256
+          description: Without spaces. Goes with the `oauth_client_secret` secret, both or neither.
+        secrets:
+          type: object
+          description: |
+            Secret values by field. GitLab: `review_token`, `approve_token`,
+            `oauth_client_secret` (`webhook_secret` is generated: do not send
+            it). GitHub: `review_app_key`, `approve_app_key` or
+            `approve_token` by the approver, `webhook_secret`,
+            `oauth_client_secret`. Each at most 16 KiB. Write-only.
+          additionalProperties:
+            type: string
+            format: password
+    UpdateInstanceRequest:
+      type: object
+      description: |
+        At least one of `oauthClientID` and `secrets`. The address and App IDs
+        cannot change; they are accepted only with their current value.
+      properties:
+        oauthClientID:
+          type: [string, 'null']
+        secrets:
+          type: object
+          additionalProperties:
+            type: string
+            format: password
+        url:
+          type: [string, 'null']
+        apiURL:
+          type: [string, 'null']
+        reviewAppID:
+          type: [integer, 'null']
+          format: int64
+        approveAppID:
+          type: [integer, 'null']
+          format: int64
+    PutLLMRequest:
+      type: object
+      required: [provider, model]
+      properties:
+        provider:
+          type: string
+          maxLength: 256
+        model:
+          type: string
+          maxLength: 256
+        baseURL:
+          type: string
+          description: Empty, or an absolute http or https URL without credentials (at most 2048 characters).
+        apiKey:
+          type: [string, 'null']
+          format: password
+          description: Needed only when none is stored. At most 16 KiB. Never returned.
+    CreateSkillRequest:
+      type: object
+      required: [name, content]
+      properties:
+        name: {type: string}
+        content:
+          type: string
+          description: The skill's markdown, with its frontmatter.
+        addToDefaults:
+          type: boolean
+          default: false
+    UpdateSkillRequest:
+      type: object
+      required: [content, version]
+      properties:
+        content: {type: string}
+        version:
+          type: integer
+          minimum: 1
+          description: The version that was opened.
+    CopySkillRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: The new name.
+    StartSkillFetchRequest:
+      type: object
+      description: A repository of an instance (`instance` and `repo`), or a public `url`, not both. A platform admin may leave `instance` out.
+      required: [ref]
+      properties:
+        instance: {type: string}
+        repo: {type: string}
+        url: {type: string}
+        ref:
+          type: string
+          description: A branch or tag.
+        path:
+          type: string
+          description: The folder in the repository. Empty for the root.
+        purpose:
+          type: string
+          enum: [install, update]
+          default: install
+        fromRef:
+          type: string
+          description: For an update, the ref the installed skills came from (default `ref`).
+    InstallSkillsRequest:
+      type: object
+      required: [names]
+      properties:
+        names:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items: {type: string}
+        addToDefaults:
+          type: boolean
+          default: false
+    UpdateSkillsRequest:
+      type: object
+      required: [names]
+      properties:
+        names:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items: {type: string}
+    RepositorySettingsRequest:
+      type: object
+      description: |
+        Some of the settings; the others stay. A null resets one to its
+        default. At most 64 KiB. Any other key is 400.
+      additionalProperties: false
+      properties:
+        approve:
+          type: [boolean, 'null']
+        reviewDrafts:
+          type: [boolean, 'null']
+        inlineFindings:
+          type: [boolean, 'null']
+        commandsAuthorAndMaintainersOnly:
+          type: [boolean, 'null']
+        incrementalReviews:
+          type: [boolean, 'null']
+        learnFromDismissals:
+          type: [boolean, 'null']
+        failureStatus:
+          type: [string, 'null']
+          enum: [failed, neutral, null]
+        skills:
+          type: [array, 'null']
+          description: A non-empty list of library skill names, or null for the default list.
+          minItems: 1
+          items: {type: string}
+        repoSkills:
+          type: [array, 'null']
+          description: The names of detected repository skills to turn on. Empty or null for none.
+          items: {type: string}
+        jobTimeoutSeconds:
+          type: [integer, 'null']
+          minimum: 60
+          maximum: 7200
+        maxTurns:
+          type: [integer, 'null']
+          minimum: 5
+          maximum: 200
+        jobMemory:
+          type: [string, 'null']
+          description: A Kubernetes quantity such as `6Gi`, from 256Mi (or the Job's memory request, when higher) to 32Gi.
+        rerunLimitPerMR:
+          type: [integer, 'null']
+          minimum: 1
+          maximum: 1000
+          description: Admins of the repository only.
+        rerunLimitPerRepo:
+          type: [integer, 'null']
+          minimum: 1
+          maximum: 1000
+          description: Admins of the repository only.
+    DefaultsRequest:
+      type: object
+      description: |
+        The defaults for repositories switched on in the dashboard. Same keys
+        and bounds as `RepositorySettingsRequest`, except `repoSkills`, and
+        `skills` is the default list. Replaces them all: a missing key or null
+        is the built-in default (for `skills`, a missing key keeps the list).
+      additionalProperties: false
+      properties:
+        approve:
+          type: [boolean, 'null']
+        reviewDrafts:
+          type: [boolean, 'null']
+        inlineFindings:
+          type: [boolean, 'null']
+        commandsAuthorAndMaintainersOnly:
+          type: [boolean, 'null']
+        incrementalReviews:
+          type: [boolean, 'null']
+        learnFromDismissals:
+          type: [boolean, 'null']
+        failureStatus:
+          type: [string, 'null']
+          enum: [failed, neutral, null]
+        skills:
+          type: [array, 'null']
+          description: Library skill names. Null or empty clears the list.
+          items: {type: string}
+        jobTimeoutSeconds:
+          type: [integer, 'null']
+          minimum: 60
+          maximum: 7200
+        maxTurns:
+          type: [integer, 'null']
+          minimum: 5
+          maximum: 200
+        jobMemory:
+          type: [string, 'null']
+        rerunLimitPerMR:
+          type: [integer, 'null']
+          minimum: 1
+          maximum: 1000
+        rerunLimitPerRepo:
+          type: [integer, 'null']
+          minimum: 1
+          maximum: 1000
+    ScanStartedBody:
+      type: object
+      required: [scan]
+      properties:
+        scan: {$ref: '#/components/schemas/ScanView'}
+    ScanBusyBody:
+      type: object
+      required: [error, scan]
+      properties:
+        error: {type: string}
+        scan: {$ref: '#/components/schemas/ScanView'}
+    ScanTooSoonBody:
+      type: object
+      required: [error, waitSeconds]
+      properties:
+        error: {type: string}
+        waitSeconds: {type: integer}
+    # ---------------------------------------------- schemas named after Go types
+    # The dashboard's view types are in internal/dashboard (view.go,
+    # dashboard.go); `readiness.`, `result.`, `skillfetch.` and `store.` are
+    # packages under internal/. internal/dashboard/openapi_test.go compares
+    # each with its type's json tags.
+    AdminSettingsView:
+      description: The defaults a repository switched on in the dashboard gets, and the model. Never a key.
+      type: object
+      required: [instance, defaults, llm]
+      properties:
+        instance: {type: string}
+        defaults: {$ref: '#/components/schemas/DefaultsView'}
+        llm: {$ref: '#/components/schemas/LLMView'}
+    AttentionView:
+      description: One setup problem.
+      type: object
+      required: [instance, project, kind, message, updatedAt]
+      properties:
+        instance: {type: string}
+        project:
+          type: string
+          description: '"" for a problem of the whole instance.'
+        kind: {type: string}
+        message: {type: string}
+        updatedAt:
+          type: string
+          format: date-time
+    AuditPageView:
+      description: A page of the audit log.
+      type: object
+      required: [entries, next]
+      properties:
+        entries:
+          type: array
+          items: {$ref: '#/components/schemas/AuditView'}
+        next:
+          type: integer
+          description: The `before` of the page after; 0 when the log has nothing older.
+    AuditView:
+      description: One audit entry.
+      type: object
+      required: [id, at, actor, action, instance, project, detail]
+      properties:
+        id: {type: integer}
+        at:
+          type: string
+          format: date-time
+        actor:
+          type: string
+          description: '"alice (gitlab main)" for a platform account, "root (password)" for a password admin,
+            "cli" for a password reset from the command line.'
+        action: {type: string}
+        instance:
+          type: string
+          description: '"" when it is not about a repository.'
+        project:
+          type: string
+          description: '"" when it is not about a repository.'
+        detail:
+          type: string
+          description: Never holds a secret.
+    AvailableRepo:
+      description: One repository that can be switched on.
+      type: object
+      required: [instance, project, platform]
+      properties:
+        instance: {type: string}
+        project: {type: string}
+        platform:
+          type: string
+          enum: [gitlab, github]
+    AvailableView:
+      description: Repositories that can be switched on, 500 at most.
+      type: object
+      required: [items, truncated]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/AvailableRepo'}
+        truncated:
+          type: boolean
+          description: True when there were more, or a list was too long or too slow to read whole.
+    CanView:
+      description: What the session may do to the review with the buttons. A hint for the page; the routes
+        check again.
+      type: object
+      required: [rerun, dismissBlocking, dismissSuggestion, restore]
+      properties:
+        rerun:
+          type: boolean
+          description: Start the review again, whole or only its failed skills.
+        dismissBlocking:
+          type: boolean
+          description: Not the change's author.
+        dismissSuggestion: {type: boolean}
+        restore: {type: boolean}
+    CheckView:
+      description: One check of a skill's checklist.
+      type: object
+      required: [batch, section, name, status, detail]
+      properties:
+        batch: {type: integer}
+        section: {type: string}
+        name: {type: string}
+        status:
+          type: string
+          enum: [pass, fail, n/a]
+        detail: {type: string}
+    DefaultValues:
+      description: DefaultsView's settings without the skill list, with the same keys.
+      type: object
+      required: [approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo]
+      properties:
+        approve: {type: boolean}
+        reviewDrafts: {type: boolean}
+        inlineFindings: {type: boolean}
+        commandsAuthorAndMaintainersOnly: {type: boolean}
+        incrementalReviews: {type: boolean}
+        learnFromDismissals: {type: boolean}
+        failureStatus: {type: string}
+        jobTimeoutSeconds: {type: integer}
+        maxTurns: {type: integer}
+        jobMemory: {type: string}
+        rerunLimitPerMR: {type: integer}
+        rerunLimitPerRepo: {type: integer}
+    DefaultsView:
+      description: The settings a repository gets when it sets none.
+      type: object
+      required: [approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, skills, config, pinned]
+      properties:
+        approve: {type: boolean}
+        reviewDrafts: {type: boolean}
+        inlineFindings: {type: boolean}
+        commandsAuthorAndMaintainersOnly: {type: boolean}
+        incrementalReviews: {type: boolean}
+        learnFromDismissals: {type: boolean}
+        failureStatus: {type: string}
+        jobTimeoutSeconds: {type: integer}
+        maxTurns: {type: integer}
+        jobMemory:
+          type: string
+          description: The Job's memory limit, "" when none.
+        rerunLimitPerMR: {type: integer}
+        rerunLimitPerRepo: {type: integer}
+        skills:
+          type: array
+          items: {type: string}
+          description: The default list of library skills.
+        config:
+          $ref: '#/components/schemas/DefaultValues'
+          description: The values the config gives, before anything saved here.
+        pinned:
+          type: object
+          additionalProperties: {type: boolean}
+          description: Which defaults were saved here and so no longer follow the config, by JSON key. Every
+            key is present.
+    DetectedSkillView:
+      description: A skill found in a repository folder that runs only when turned on.
+      type: object
+      required: [name, folder, 'on']
+      properties:
+        name: {type: string}
+        folder: {type: string}
+        problem: {type: string}
+        'on':
+          type: boolean
+          description: Whether the repository turned it on.
+    DismissedView:
+      description: A dismissal of a finding.
+      type: object
+      required: [by, reason, at]
+      properties:
+        by:
+          type: string
+          description: Who dismissed it, as the audit log names them.
+        reason: {type: string}
+        at:
+          type: string
+          format: date-time
+    FetchedSkillView:
+      description: One skill a read found.
+      type: object
+      required: [name, path, size, taken]
+      properties:
+        name: {type: string}
+        path: {type: string}
+        size:
+          type: integer
+          description: 'The bytes of its text (0 when the text was not kept: too large, or holding a secret).'
+        problem:
+          type: string
+          description: Why it cannot be installed.
+        taken:
+          type: boolean
+          description: A skill of that name is in the library already.
+    FilesView:
+      description: The files of every skill together, each path once.
+      type: object
+      required: [reviewed, skipped, notReviewed]
+      properties:
+        reviewed:
+          type: array
+          items: {type: string}
+        skipped:
+          type: array
+          items: {$ref: '#/components/schemas/SkippedFile'}
+        notReviewed:
+          type: array
+          items: {$ref: '#/components/schemas/NotReviewedFile'}
+    FindingView:
+      description: One finding.
+      type: object
+      required: [id, fingerprint, severity, title, file, explanation, suggestedFix, dismissed]
+      properties:
+        id: {type: string}
+        fingerprint:
+          type: string
+          description: 'Identifies the finding across runs: what a dismissal and a restore name.'
+        severity:
+          type: string
+          enum: [blocking, suggestion]
+        title: {type: string}
+        file: {type: string}
+        line:
+          type: integer
+          description: Left out when the finding has none.
+        explanation: {type: string}
+        suggestedFix: {type: string}
+        dismissed:
+          oneOf:
+          - $ref: '#/components/schemas/DismissedView'
+          - type: 'null'
+          description: Who set the finding aside, and why; null for a finding that stands.
+    InputSkill:
+      description: One skill of the final set.
+      type: object
+      required: [name, source, folder, version, content, url]
+      properties:
+        name: {type: string}
+        source:
+          type: string
+          description: '"library" or the repository folder the skill was read from; "" with a problem.'
+        folder:
+          type: string
+          description: The repository folder, "" for a library skill.
+        version:
+          type: integer
+          description: The library skill's version, 0 for a repository skill.
+        content: {type: string}
+        url:
+          type: string
+          description: Where a repository skill is on the platform; "" for a library skill or when the web
+            address is not known.
+        problem:
+          type: string
+          description: Why a review would fail on this skill; content is then empty.
+    InputsView:
+      description: The skills and instructions a review would get, read from the default branch.
+      type: object
+      required: [branch, skills, detected, instructions]
+      properties:
+        branch: {type: string}
+        skills:
+          type: array
+          items: {$ref: '#/components/schemas/InputSkill'}
+          description: The skills a review would run, and each skill a review would fail on, with its problem.
+        detected:
+          type: array
+          items: {$ref: '#/components/schemas/DetectedSkillView'}
+          description: The skills of the repository folders that run only when turned on.
+        instructions: {type: string}
+    InstanceAdminView:
+      description: One instance.
+      type: object
+      required: [name, platform, source, removing, url, apiURL, reviewAppID, approveAppID, webhookURL, approver, oauthClientID, secrets]
+      properties:
+        name: {type: string}
+        platform:
+          type: string
+          enum: [gitlab, github]
+        source:
+          type: string
+          enum: [config, dashboard]
+        removing:
+          type: boolean
+          description: Set while the instance is being taken out.
+        url:
+          type: string
+          description: A GitLab instance's address.
+        apiURL:
+          type: string
+          description: A GitHub instance's API address.
+        reviewAppID: {type: integer}
+        approveAppID: {type: integer}
+        webhookURL:
+          type: string
+          description: Where the platform sends this instance's webhooks.
+        approver:
+          type: string
+          enum: [app, review_app, token]
+          description: '"app", "review_app" or "token".'
+        oauthClientID: {type: string}
+        secrets:
+          type: object
+          additionalProperties: {$ref: '#/components/schemas/SecretView'}
+          description: 'By field. The fields an instance takes: review_token, approve_token, webhook_secret
+            and oauth_client_secret (GitLab); review_app_key, approve_app_key or approve_token, webhook_secret
+            and oauth_client_secret (GitHub).'
+    InstanceView:
+      description: One instance people can sign in with. The sign-in button goes to /auth/{platform}/{instance}/login.
+      type: object
+      required: [platform, instance, label]
+      properties:
+        platform:
+          type: string
+          enum: [gitlab, github]
+        instance: {type: string}
+        label:
+          type: string
+          description: The button's text after "Sign in with".
+    IntegrationRepo:
+      description: One repository the admin can see.
+      type: object
+      required: [project, installed, approverReachable, inlineAvailable, protectionReadable]
+      properties:
+        project: {type: string}
+        installed:
+          type: boolean
+          description: pergent.sh's webhook and deploy token (GitLab) or the review App (GitHub) are in place.
+        approverReachable:
+          type: boolean
+          description: The approve bot or App can approve there.
+        inlineAvailable:
+          type: boolean
+          description: False when the review App may only read pull requests.
+        protectionReadable:
+          type: boolean
+          description: 'False when the review App lacks Administration: Read.'
+    IntegrationView:
+      description: The integration health of an instance.
+      type: object
+      required: [instance, platform, connected, approver, repos]
+      properties:
+        instance: {type: string}
+        platform:
+          type: string
+          enum: [gitlab, github]
+        connected:
+          type: boolean
+          description: Whether pergent.sh is connected to the instance now.
+        approver:
+          type: string
+          enum: [app, review_app, token]
+          description: '"app" (a GitHub approve App), "review_app" or "token" (a bot user).'
+        tokenExpiry:
+          type: [string, 'null']
+          format: date-time
+          description: Set while the approve token expires within 14 days.
+        repos:
+          type: array
+          items: {$ref: '#/components/schemas/IntegrationRepo'}
+    LLMAdminView:
+      description: Where the model comes from ("config" or "dashboard"), the model, and whether a key is set.
+      type: object
+      required: [source, provider, model, baseURL, key, editable]
+      properties:
+        source:
+          type: string
+          enum: [config, dashboard]
+        provider: {type: string}
+        model: {type: string}
+        baseURL: {type: string}
+        key: {$ref: '#/components/schemas/SecretView'}
+        editable:
+          type: boolean
+          description: 'True for an operator when the config has no llm: block.'
+    LLMView:
+      description: The model reviews use.
+      type: object
+      required: [provider, model]
+      properties:
+        provider: {type: string}
+        model: {type: string}
+    Last7View:
+      description: The repository's runs of the last 7 days.
+      type: object
+      required: [reviews, approved, failed]
+      properties:
+        reviews: {type: integer}
+        approved: {type: integer}
+        failed: {type: integer}
+    LibrarySkillView:
+      description: One skill of the library, without its text.
+      type: object
+      required: [name, version, size, updatedAt, inDefaults, source]
+      properties:
+        name: {type: string}
+        updatedBy:
+          type: string
+          description: Shown to admins only.
+        version: {type: integer}
+        size: {type: integer}
+        updatedAt:
+          type: string
+          format: date-time
+        inDefaults: {type: boolean}
+        source:
+          oneOf:
+          - $ref: '#/components/schemas/SkillSourceView'
+          - type: 'null'
+    LogView:
+      description: The redacted tail of the review Job's log.
+      type: object
+      required: [text]
+      properties:
+        text: {type: string}
+    NewAccountView:
+      description: A password admin just made, with its generated password. The only time the password is
+        shown.
+      type: object
+      required: [username, password]
+      properties:
+        username: {type: string}
+        password: {type: string}
+    NotReviewedFile:
+      description: A file whose batch failed, and why.
+      type: object
+      required: [path, cause]
+      properties:
+        path: {type: string}
+        cause: {type: string}
+    OverviewView:
+      description: Body of GET /api/overview.
+      type: object
+      required: [stats, recent, attention, setup]
+      properties:
+        stats: {$ref: '#/components/schemas/StatsView'}
+        recent:
+          type: array
+          items: {$ref: '#/components/schemas/ReviewSummary'}
+        attention:
+          type: array
+          items: {$ref: '#/components/schemas/AttentionView'}
+        setup:
+          oneOf:
+          - $ref: '#/components/schemas/SetupView'
+          - type: 'null'
+          description: The setup checklist, for admins only; null once all four items are done and for everyone
+            else.
+    PastDismissalView:
+      description: A finding whose dismissals teach the repository's reviews. By, at and number are of the
+        dismissal shown.
+      type: object
+      required: [skill, severity, file, title, reason, by, at, number, fingerprint]
+      properties:
+        skill: {type: string}
+        severity:
+          type: string
+          enum: [blocking, suggestion]
+        file: {type: string}
+        title: {type: string}
+        reason: {type: string}
+        by: {type: string}
+        at:
+          type: string
+          format: date-time
+        number: {type: integer}
+        fingerprint: {type: string}
+    ReadinessView:
+      description: The Readiness tab.
+      type: object
+      required: [latest, active, checklist, canScan, configRepo, followsDefaults, applyBase]
+      properties:
+        latest:
+          oneOf:
+          - $ref: '#/components/schemas/ScanView'
+          - type: 'null'
+          description: The latest finished scan (done or failed); null when there is none.
+        active:
+          oneOf:
+          - $ref: '#/components/schemas/ScanView'
+          - type: 'null'
+          description: The queued or running scan; null when there is none.
+        checklist:
+          oneOf:
+          - $ref: '#/components/schemas/readiness.Checklist'
+          - type: 'null'
+          description: Built now from the latest finished scan; null until a scan has finished.
+        canScan:
+          type: boolean
+          description: The session is a maintainer or admin of the repository.
+        configRepo:
+          type: boolean
+          description: The config file sets the repository up, so its skills are changed there.
+        followsDefaults:
+          type: boolean
+          description: 'The repository''s skills are null: it follows the default list.'
+        applyBase:
+          type: array
+          items: {type: string}
+          description: 'Today''s list of library skills: the repository''s, or the default list.'
+    RepositoryDetailView:
+      description: A repository with its effective settings.
+      type: object
+      required: [repo, settings, attention, role]
+      properties:
+        repo: {$ref: '#/components/schemas/RepositoryView'}
+        settings:
+          type: object
+          additionalProperties: {$ref: '#/components/schemas/SettingView'}
+          description: Keyed approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews,
+            learnFromDismissals, failureStatus, skills, repoSkills, jobTimeoutSeconds, maxTurns, jobMemory,
+            rerunLimitPerMR and rerunLimitPerRepo.
+        attention:
+          type: array
+          items: {$ref: '#/components/schemas/AttentionView'}
+        role:
+          type: string
+          enum: [admin, maintainer, viewer]
+          description: The session's role on the repository.
+    RepositoryView:
+      description: One repository switched on.
+      type: object
+      required: [instance, project, platform, source, 'on', last7, health]
+      properties:
+        instance: {type: string}
+        project: {type: string}
+        platform:
+          type: string
+          enum: [gitlab, github]
+        source:
+          type: string
+          enum: [config, dashboard]
+          description: '"config" (read-only here) or "dashboard".'
+        'on': {type: boolean}
+        last7: {$ref: '#/components/schemas/Last7View'}
+        health:
+          type: string
+          enum: [ok, attention]
+          description: '"attention" when it has setup problems, else "ok".'
+    ReviewDetailView:
+      description: The change and every run of it, newest first.
+      type: object
+      required: [header, runs, role, can]
+      properties:
+        header: {$ref: '#/components/schemas/ReviewHeader'}
+        runs:
+          type: array
+          items: {$ref: '#/components/schemas/RunSummary'}
+        role:
+          type: string
+          enum: [viewer, maintainer, admin, '']
+          description: The session's role on the repository ("" for a repository switched off).
+        can: {$ref: '#/components/schemas/CanView'}
+    ReviewHeader:
+      description: The change as pergent.sh last read it.
+      type: object
+      required: [instance, project, platform, number, title, sourceBranch, targetBranch, webURL]
+      properties:
+        instance: {type: string}
+        project: {type: string}
+        platform:
+          type: string
+          enum: [gitlab, github]
+        number: {type: integer}
+        title: {type: string}
+        sourceBranch: {type: string}
+        targetBranch: {type: string}
+        author:
+          type: string
+          description: The username who opened it; left out when unknown.
+        webURL: {type: string}
+    ReviewListView:
+      description: One page of reviews.
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/ReviewSummary'}
+        nextCursor:
+          type: string
+          description: 'Not "" when there is a next page: pass it as cursor.'
+    ReviewSummary:
+      description: One merge request or pull request, as its newest run left it.
+      type: object
+      required: [instance, project, platform, number, title, outcome, reason, updatedAt, webURL]
+      properties:
+        instance: {type: string}
+        project: {type: string}
+        platform:
+          type: string
+          enum: [gitlab, github]
+        number:
+          type: integer
+          description: The MR's IID or the PR's number.
+        title: {type: string}
+        outcome: {$ref: '#/components/schemas/Outcome'}
+        reason:
+          type: string
+          description: Why, in a sentence ("" for approved).
+        updatedAt:
+          type: string
+          format: date-time
+        webURL:
+          type: string
+          description: The change's page on the platform; "" when unknown.
+    RunDetailView:
+      description: One run. A run without a usable result has no skills or files.
+      type: object
+      required: [run, instance, project, number, status, approved, approvalReason, pergentVersion, model, maxTurns, incrementalNote, tokens, files, skills, latestDecided]
+      properties:
+        run: {$ref: '#/components/schemas/RunSummary'}
+        instance: {type: string}
+        project: {type: string}
+        number: {type: integer}
+        status:
+          type: string
+          enum: [running, success, failed, neutral, canceled, '']
+          description: The status pergent.sh set on the commit, or "" when none.
+        approved:
+          type: boolean
+          description: The approve bot approved this run.
+        approvalReason:
+          type: string
+          description: Why it is not approved; "" when it is.
+        pergentVersion: {type: string}
+        model:
+          type: [string, 'null']
+          description: The model the review ran with; null for a run that did not record it.
+        maxTurns:
+          type: [integer, 'null']
+          description: The step limit each opencode run had; null when not recorded.
+        incrementalNote:
+          type: string
+          description: What an incremental review covered; "" for a full review.
+        tokens: {$ref: '#/components/schemas/TokensView'}
+        files: {$ref: '#/components/schemas/FilesView'}
+        skills:
+          type: array
+          items: {$ref: '#/components/schemas/SkillView'}
+        latestDecided:
+          type: boolean
+          description: True for the one run of the change that dismiss and restore act on.
+    RunSummary:
+      description: One run in a review's history.
+      type: object
+      required: [id, head, trigger, outcome, reason, createdAt, durationSeconds]
+      properties:
+        id: {type: string}
+        head: {type: string}
+        trigger:
+          type: string
+          enum: [first, push, retarget, rerun]
+          description: What started it, read from the history.
+        outcome: {$ref: '#/components/schemas/Outcome'}
+        reason: {type: string}
+        createdAt:
+          type: string
+          format: date-time
+        durationSeconds:
+          type: [number, 'null']
+          description: From the Job's start to its result; null while it runs or when it never started.
+    ScanView:
+      description: One readiness scan.
+      type: object
+      required: [id, state, startedBy, branch, commit, error, queuedAt, finishedAt]
+      properties:
+        id: {type: string}
+        state:
+          type: string
+          enum: [queued, running, done, failed]
+        startedBy:
+          type: string
+          description: Who asked ("alice (gitlab main)"), "switch-on" or "upgrade".
+        branch:
+          type: string
+          description: '"" until the scan read it.'
+        commit:
+          type: string
+          description: '"" until the scan read it.'
+        error:
+          type: string
+          description: Why a failed scan could not scan the files.
+        queuedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: [string, 'null']
+          format: date-time
+          description: Null until it ends.
+    SecretView:
+      description: Whether a secret is set and when it last changed. The value is never sent.
+      type: object
+      required: [set, updatedAt]
+      properties:
+        set: {type: boolean}
+        updatedAt:
+          type: [string, 'null']
+          format: date-time
+          description: Null for a secret that comes from the config's environment.
+    SettingView:
+      description: A setting's effective value and whether the repository sets it (otherwise it is the default).
+      type: object
+      required: [value, overridden]
+      properties:
+        value:
+          description: 'Its type depends on the setting: boolean, string, integer, a list of names, or null
+            (skills: the default list).'
+        overridden: {type: boolean}
+    SetupView:
+      description: 'What an admin still has to set up, one item each: an LLM with its key, a connected instance,
+        a skill in the library and a repository switched on.'
+      type: object
+      required: [llm, instance, skill, repository]
+      properties:
+        llm: {type: boolean}
+        instance: {type: boolean}
+        skill: {type: boolean}
+        repository: {type: boolean}
+    SkillDetailView:
+      description: A skill with its text (shown as plain text only) and its versions, newest first.
+      allOf:
+      - $ref: '#/components/schemas/LibrarySkillView'
+      - type: object
+        required: [content, versions]
+        properties:
+          content: {type: string}
+          versions:
+            type: array
+            items: {$ref: '#/components/schemas/SkillVersionView'}
+    SkillFetchResultView:
+      description: The answer for one name of an install or an update.
+      type: object
+      required: [name, ok]
+      properties:
+        name: {type: string}
+        ok: {type: boolean}
+        error: {type: string}
+    SkillFetchStartedView:
+      description: The read to ask about.
+      type: object
+      required: [id]
+      properties:
+        id: {type: string}
+    SkillFetchView:
+      description: A read of a skill source, for the admin who started it only.
+      type: object
+      required: [id, status, commit, error, purpose, ref, path, skills, updates]
+      properties:
+        id: {type: string}
+        status:
+          type: string
+          enum: [running, done, failed]
+          description: '"running", "done" or "failed".'
+        commit:
+          type: string
+          description: The commit read.
+        error:
+          type: string
+          description: Why it failed, for the admin.
+        purpose:
+          type: string
+          enum: [install, update]
+        instance: {type: string}
+        repo: {type: string}
+        url: {type: string}
+        ref: {type: string}
+        fromRef: {type: string}
+        path: {type: string}
+        skills:
+          type: array
+          items: {$ref: '#/components/schemas/FetchedSkillView'}
+          description: The skills found, once done.
+        updates:
+          type: array
+          items: {$ref: '#/components/schemas/SkillUpdateView'}
+          description: 'For a done check for updates: each installed skill whose file is in the folder.'
+    SkillInUseView:
+      description: The 409 of a delete of a skill that is in use.
+      type: object
+      required: [error, repositories, hidden, inDefaults]
+      properties:
+        error: {type: string}
+        repositories:
+          type: array
+          items: {$ref: '#/components/schemas/SkillUserRepoView'}
+          description: The ones the caller can see that name it.
+        hidden:
+          type: integer
+          description: How many others name it.
+        inDefaults:
+          type: boolean
+          description: The default list names it.
+    SkillResultView:
+      description: What became of the findings of one skill at one severity decided in the window.
+      type: object
+      required: [skill, severity, raised, fixed, dismissed, open, wentAway, addressed, editedAt]
+      properties:
+        skill: {type: string}
+        severity:
+          type: string
+          enum: [blocking, suggestion]
+        raised: {type: integer}
+        fixed: {type: integer}
+        dismissed: {type: integer}
+        open: {type: integer}
+        wentAway: {type: integer}
+        addressed:
+          type: [integer, 'null']
+          description: fixed * 100 / raised, a whole percent; null under 10 raised.
+        editedAt:
+          type: [string, 'null']
+          format: date-time
+          description: 'Set when the window holds more than one version of the skill: when the newest first
+            appears.'
+    SkillSourceView:
+      description: Where an installed skill came from.
+      type: object
+      required: [kind, ref, commit]
+      properties:
+        kind:
+          type: string
+          enum: [instance, url]
+          description: '"instance" (read through a connected instance) or "url" (a public git URL).'
+        instance: {type: string}
+        repo:
+          type: string
+          description: Shown to operators and to users who can see the repository; others get hidden.
+        url: {type: string}
+        path:
+          type: string
+          description: Sent with repo and url, never with hidden.
+        ref: {type: string}
+        commit: {type: string}
+        hidden:
+          type: boolean
+          description: The repository is private to this user.
+    SkillUpdateView:
+      description: One installed skill in a check for updates.
+      type: object
+      required: [name, path, state, version, current, fetched]
+      properties:
+        name: {type: string}
+        path: {type: string}
+        state:
+          type: string
+          enum: [changed, same, removed at the source, renamed at the source]
+          description: '"changed", "same", "removed at the source" or "renamed at the source".'
+        problem:
+          type: string
+          description: Why it cannot be updated.
+        version:
+          type: integer
+          description: Its library version now.
+        current:
+          type: string
+          description: The text now, for a diff shown as plain text.
+        fetched:
+          type: string
+          description: The text read.
+    SkillUserRepoView:
+      description: A repository that uses a skill.
+      type: object
+      required: [instance, project]
+      properties:
+        instance: {type: string}
+        project: {type: string}
+    SkillVersionDetailView:
+      description: One version of a skill with its text.
+      allOf:
+      - $ref: '#/components/schemas/SkillVersionView'
+      - type: object
+        required: [content]
+        properties:
+          content: {type: string}
+    SkillVersionView:
+      description: One saved version of a skill.
+      type: object
+      required: [version, at, commit]
+      properties:
+        version: {type: integer}
+        at:
+          type: string
+          format: date-time
+        actor:
+          type: string
+          description: Shown to admins only.
+        commit: {type: string}
+    SkillView:
+      description: One skill's outcome.
+      type: object
+      required: [name, verdict, source, version, findings, dismissed, checks]
+      properties:
+        name: {type: string}
+        verdict:
+          type: string
+          enum: [no_blocking_issues, has_blocking_issues, failed]
+        source:
+          type: [string, 'null']
+          description: '"library", or the repository folder the skill was read from; "repo" for a run from
+            before the folders; null when not recorded.'
+        version:
+          type: integer
+          description: The library skill's version the review used; 0 for a repository skill and for a run
+            that did not record it.
+        findings:
+          type: array
+          items: {$ref: '#/components/schemas/FindingView'}
+          description: Those still standing.
+        dismissed:
+          type: array
+          items: {$ref: '#/components/schemas/FindingView'}
+          description: Those set aside by a dismissal.
+        checks:
+          type: array
+          items: {$ref: '#/components/schemas/CheckView'}
+    SkillWrittenView:
+      description: The version a create, an edit or a copy saved.
+      type: object
+      required: [version]
+      properties:
+        version: {type: integer}
+    SkippedFile:
+      description: A file no skill reviewed, and the rule that left it out.
+      type: object
+      required: [path, rule]
+      properties:
+        path: {type: string}
+        rule: {type: string}
+    StatsView:
+      description: The runs started in the period that were not superseded, by outcome; approved counts the
+        runs the approve bot approved.
+      type: object
+      required: [reviews, approved, blocking, failed]
+      properties:
+        reviews: {type: integer}
+        approved: {type: integer}
+        blocking: {type: integer}
+        failed: {type: integer}
+    TeamMemberView:
+      description: 'A team''s member: a platform account.'
+      type: object
+      required: [id, username, platform, instance]
+      properties:
+        id: {type: integer}
+        username: {type: string}
+        platform: {type: string}
+        instance: {type: string}
+    TeamRef:
+      description: Names a team.
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: integer}
+        name: {type: string}
+    TeamRepoView:
+      description: A repository a team covers.
+      type: object
+      required: [instance, project]
+      properties:
+        instance: {type: string}
+        project: {type: string}
+    TeamView:
+      description: One team.
+      type: object
+      required: [id, name, role, members, repos, hiddenRepos, hiddenMembers]
+      properties:
+        id: {type: integer}
+        name: {type: string}
+        role:
+          type: string
+          enum: [admin, maintainer, viewer]
+          description: '"admin", "maintainer" or "viewer".'
+        members:
+          type: array
+          items: {$ref: '#/components/schemas/TeamMemberView'}
+        repos:
+          type: array
+          items: {$ref: '#/components/schemas/TeamRepoView'}
+          description: The repositories it covers that the session can see; a project "" covers every repository
+            of the instance. An admin team has none.
+        hiddenRepos:
+          type: integer
+          description: The team's repositories the session cannot see.
+        hiddenMembers:
+          type: integer
+          description: The team's members of other instances, never named to a platform admin; 0 for an operator.
+    TokensView:
+      type: object
+      required: [in, out]
+      properties:
+        in: {type: integer}
+        out: {type: integer}
+    UserView:
+      description: One account.
+      type: object
+      required: [id, kind, username, platform, instance, lastSignInAt, waiting, teams]
+      properties:
+        id: {type: integer}
+        kind:
+          type: string
+          enum: [password, platform]
+          description: '"password" or "platform".'
+        username: {type: string}
+        platform: {type: string}
+        instance: {type: string}
+        lastSignInAt:
+          type: [string, 'null']
+          format: date-time
+          description: Null for an account that never signed in.
+        waiting:
+          type: boolean
+          description: A platform account on no team.
+        teams:
+          type: array
+          items: {$ref: '#/components/schemas/TeamRef'}
+    instancesView:
+      description: Body of GET /api/instances.
+      type: object
+      required: [password, instances]
+      properties:
+        password:
+          type: boolean
+          description: The password form is shown. Always true.
+        instances:
+          type: array
+          items: {$ref: '#/components/schemas/InstanceView'}
+          description: Those with sign-in, the config's first.
+    meView:
+      description: The signed-in user. Body of GET /api/me.
+      type: object
+      required: [kind, username, platform, instance, admin, operator, waiting, mustChangePassword, waitingUsers, csrfToken]
+      properties:
+        kind:
+          type: string
+          enum: [password, platform]
+          description: '"password" or "platform".'
+        username: {type: string}
+        platform:
+          type: string
+          description: '"" for a password account.'
+        instance:
+          type: string
+          description: '"" for a password account.'
+        admin:
+          type: boolean
+          description: An operator or a member of an admin team.
+        operator:
+          type: boolean
+          description: A password account, which sees everything.
+        waiting:
+          type: boolean
+          description: A platform account on no team, which sees nothing.
+        mustChangePassword:
+          type: boolean
+          description: Nothing else works until the password is changed.
+        waitingUsers:
+          type: integer
+          description: 'Platform accounts on no team: of every instance for an operator, of their own for
+            a platform admin; 0 for everyone else.'
+        csrfToken:
+          type: string
+          description: The token writes send in X-CSRF-Token.
+    readiness.Checklist:
+      description: The Readiness tab.
+      type: object
+      required: [sections, suggested, budget]
+      properties:
+        sections:
+          type: array
+          items: {$ref: '#/components/schemas/readiness.Section'}
+        suggested:
+          type: array
+          items: {type: string}
+          description: Library skills that fit the files and are not turned on.
+        budget:
+          type: integer
+          description: The size of skills plus instructions.
+    readiness.Context:
+      description: The project context found at the root of the checkout.
+      type: object
+      properties:
+        agentFile: {type: string}
+        readme: {type: string}
+        contributing: {type: string}
+        codeOwners: {type: string}
+        agentFileEmpty: {type: boolean}
+        instructions: {type: boolean}
+        codeOwnerRules: {type: integer}
+      additionalProperties: true
+    readiness.Item:
+      description: 'One line of the checklist. Paths, names and reasons come from the scan Job: text only,
+        never markup.'
+      type: object
+      required: [key, state, reason, why, fix]
+      properties:
+        key: {type: string}
+        state:
+          type: string
+          enum: [passed, warning, missing, unknown]
+          description: '"passed", "warning", "missing" or "unknown" (could not check; never shown or counted
+            as passed).'
+        reason:
+          type: string
+          description: The could-not-check reason, or what was found.
+        why:
+          type: string
+          description: Only set when the item is not passed.
+        fix:
+          type: string
+          description: Only set when the item is not passed.
+        list:
+          type: array
+          items: {type: string}
+        noise:
+          type: array
+          items: {$ref: '#/components/schemas/readiness.NoiseFile'}
+        more: {type: integer}
+    readiness.JobResult:
+      description: What the readiness scan Job posts. `error` is set when it could not scan the files; then
+        nothing else but version and commit is.
+      type: object
+      properties:
+        version: {type: integer}
+        commit: {type: string}
+        error: {type: string}
+        files: {type: integer}
+        sourceFiles: {type: integer}
+        noiseTotal: {type: integer}
+        instructionsBytes: {type: integer}
+        context: {$ref: '#/components/schemas/readiness.Context'}
+        skills:
+          type: array
+          items: {$ref: '#/components/schemas/readiness.SkillFit'}
+        languages:
+          type: array
+          items: {$ref: '#/components/schemas/readiness.Language'}
+        noise:
+          type: array
+          items: {$ref: '#/components/schemas/readiness.NoiseFile'}
+      additionalProperties: true
+    readiness.Language:
+      description: A language over 10% of the source files.
+      type: object
+      properties:
+        name: {type: string}
+        files: {type: integer}
+        uncovered: {type: boolean}
+      additionalProperties: true
+    readiness.NoiseFile:
+      description: A file a review would read that looks like noise.
+      type: object
+      required: [path, why, size]
+      properties:
+        path: {type: string}
+        why: {type: string}
+        size: {type: integer}
+        skills:
+          type: array
+          items: {type: string}
+    readiness.Section:
+      description: 'A group of items: "context", "process", "skills" or "size".'
+      type: object
+      required: [key, items]
+      properties:
+        key: {type: string}
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/readiness.Item'}
+    readiness.SkillFit:
+      description: How one skill fits the checkout.
+      type: object
+      properties:
+        name: {type: string}
+        folder: {type: string}
+        problem: {type: string}
+        hasPaths: {type: boolean}
+        files: {type: integer}
+        bytes: {type: integer}
+      additionalProperties: true
+    result.BatchChecks:
+      description: The checklist the model reported for one batch.
+      type: object
+      properties:
+        batch: {type: integer}
+        dropped: {type: integer}
+        findings: {type: integer}
+        checks:
+          type: array
+          items: {$ref: '#/components/schemas/result.Check'}
+      additionalProperties: true
+    result.Check:
+      description: One checklist item.
+      type: object
+      properties:
+        section: {type: string}
+        name: {type: string}
+        status: {type: string}
+        detail: {type: string}
+      additionalProperties: true
+    result.Comment:
+      description: The rendered comment, ready to post. `markdown` is required.
+      type: object
+      properties:
+        markdown: {type: string}
+        findings_block: {type: string}
+      additionalProperties: true
+      required: [markdown]
+    result.Error:
+      description: Why an error result is one.
+      type: object
+      properties:
+        code: {type: string}
+        message: {type: string}
+      additionalProperties: true
+    result.Failure:
+      description: A batch of a skill that did not finish.
+      type: object
+      properties:
+        files:
+          type: array
+          items: {type: string}
+        message: {type: string}
+      additionalProperties: true
+    result.Files:
+      description: What a skill looked at. Its verdict covers `reviewed` only.
+      type: object
+      properties:
+        reviewed:
+          type: array
+          items: {type: string}
+        carried:
+          type: array
+          items: {type: string}
+        skipped:
+          type: array
+          items: {$ref: '#/components/schemas/result.Skipped'}
+        not_reviewed:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              path: {type: string}
+              cause: {type: string}
+          description: Entries have a `path` and a `cause`.
+      additionalProperties: true
+    result.Finding:
+      description: One finding of a skill. pergent.sh reads these fields; the finding may carry others.
+      type: object
+      properties:
+        id: {type: string}
+        fingerprint: {type: string}
+        file: {type: string}
+        line: {type: integer}
+        end_line: {type: integer}
+        severity: {type: string}
+        title: {type: string}
+        explanation: {type: string}
+        suggested_fix: {type: string}
+        suggestion: {type: string}
+      additionalProperties: true
+      required: [file, severity, title]
+    result.Incremental:
+      description: What an incremental review did.
+      type: object
+      properties:
+        reviewed: {type: integer}
+        carried: {type: integer}
+        from: {type: string}
+      additionalProperties: true
+    result.Result:
+      description: 'Pergent''s result schema v1, the fields pergent.sh reads. Unknown fields are accepted
+        and ignored. Full schema: https://github.com/gopaytech/pergent/blob/master/docs/agent-result-schema.md'
+      type: object
+      properties:
+        schema_version:
+          type: integer
+          description: Always 1.
+        status:
+          type: string
+          enum: [completed, error]
+          description: '"completed", or "error" (then `error` says why).'
+        pergent_version:
+          type: string
+          description: The pergent version that made it.
+        base:
+          type: string
+          description: The full SHA the review started from.
+        head:
+          type: string
+          description: The full SHA reviewed.
+        skills:
+          type: array
+          items: {$ref: '#/components/schemas/result.Skill'}
+          description: One entry per skill. A completed result has at least one.
+        error:
+          oneOf:
+          - $ref: '#/components/schemas/result.Error'
+          - type: 'null'
+        comment: {$ref: '#/components/schemas/result.Comment'}
+        merged:
+          type: boolean
+          description: Set only by pergent.sh after it merged an incremental result. A result that carries
+            it is refused.
+        merge_note:
+          type: string
+          description: Set only by pergent.sh. A result that carries it is refused.
+        incremental:
+          oneOf:
+          - $ref: '#/components/schemas/result.Incremental'
+          - type: 'null'
+          description: Set by pergent.sh on the result of an incremental review.
+      additionalProperties: true
+      required: [schema_version, status, comment]
+    result.Skill:
+      description: The outcome of one skill.
+      type: object
+      properties:
+        name: {type: string}
+        verdict:
+          type: string
+          description: '"no_blocking_issues", "has_blocking_issues" or "failed".'
+        findings:
+          type: array
+          items: {$ref: '#/components/schemas/result.Finding'}
+          description: Each entry is a result.Finding (kept raw by pergent.sh).
+        files: {$ref: '#/components/schemas/result.Files'}
+        failures:
+          type: array
+          items: {$ref: '#/components/schemas/result.Failure'}
+        notes:
+          type: array
+          items: {type: string}
+        summaries:
+          type: array
+          items: {$ref: '#/components/schemas/result.Summary'}
+        checks:
+          type: array
+          items: {$ref: '#/components/schemas/result.BatchChecks'}
+        batches: {type: integer}
+        batches_finished: {type: integer}
+        confidence:
+          type: integer
+          description: The model's own score, 1 to 5 (0 when it gave none).
+        confidence_reason: {type: string}
+      additionalProperties: true
+    result.Skipped:
+      description: A file left out of a review, and the rule that left it out.
+      type: object
+      properties:
+        path: {type: string}
+        rule: {type: string}
+      additionalProperties: true
+    result.Summary:
+      description: The model's summary of one batch.
+      type: object
+      properties:
+        batch: {type: integer}
+        text: {type: string}
+      additionalProperties: true
+    skillfetch.JobResult:
+      description: 'What a fetch Job posts: the commit it read and the skills of the folder, or `error` when
+        it could not read them.'
+      type: object
+      properties:
+        commit: {type: string}
+        error: {type: string}
+        files:
+          type: array
+          items: {$ref: '#/components/schemas/store.FetchedFile'}
+      additionalProperties: true
+    store.FetchedFile:
+      description: One skill file a fetch Job read. `content` is empty when it was not kept.
+      type: object
+      properties:
+        name: {type: string}
+        path: {type: string}
+        content: {type: string}
+        problem: {type: string}
+      additionalProperties: true
