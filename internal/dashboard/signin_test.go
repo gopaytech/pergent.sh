@@ -66,6 +66,8 @@ type fakeIssuer struct {
 	failToken bool
 	// now is the clock the tokens are made by; nil is time.Now.
 	now func() time.Time
+	// jwksDown makes the key set answer 500 with a body that must not leak.
+	jwksDown bool
 }
 
 type issuedCode struct{ nonce, challenge, redirect string }
@@ -88,6 +90,13 @@ func newFakeIssuer(t *testing.T) *fakeIssuer {
 
 func (f *fakeIssuer) url() string { return f.srv.URL }
 
+// setJWKSDown makes the key set fail (or work again).
+func (f *fakeIssuer) setJWKSDown(down bool) {
+	f.mu.Lock()
+	f.jwksDown = down
+	f.mu.Unlock()
+}
+
 func (f *fakeIssuer) discovery(w http.ResponseWriter, _ *http.Request) {
 	tokenURL := f.srv.URL + "/token"
 	if f.httpTokenEndpoint {
@@ -100,6 +109,13 @@ func (f *fakeIssuer) discovery(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (f *fakeIssuer) jwks(w http.ResponseWriter, _ *http.Request) {
+	f.mu.Lock()
+	down := f.jwksDown
+	f.mu.Unlock()
+	if down {
+		http.Error(w, "JWKS-BODY-MUST-NOT-LEAK", http.StatusInternalServerError)
+		return
+	}
 	pub := f.key.PublicKey
 	writeJSON(w, http.StatusOK, map[string]any{"keys": []map[string]string{{
 		"kty": "RSA", "use": "sig", "alg": "RS256", "kid": "k1",

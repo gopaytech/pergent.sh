@@ -114,8 +114,17 @@ func normalizedLists(domains, emails []string) (ds, es []string) {
 
 // signInSettings reads the sign-in settings in force. A secret stored in the
 // dashboard that cannot be opened (PERGENT_SH_SECRET_KEY changed) counts as
-// not set, and is logged.
+// not set, and is logged. In JWT mode an email claim left empty is "email",
+// from the config file as from the dashboard.
 func (d *Dashboard) signInSettings(ctx context.Context) (signIn, error) {
+	s, err := d.readSignIn(ctx)
+	if err == nil && s.mode == config.SignInJWT && s.emailClaim == "" {
+		s.emailClaim = defaultEmailClaim
+	}
+	return s, err
+}
+
+func (d *Dashboard) readSignIn(ctx context.Context) (signIn, error) {
 	if c := d.cfg.Dashboard.SignIn; c.Set() {
 		ds, es := normalizedLists(c.AllowedDomains, c.AllowedEmails)
 		s := signIn{mode: c.Mode, label: c.Label, issuer: c.Issuer, clientID: c.ClientID,

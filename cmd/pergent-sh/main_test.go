@@ -192,6 +192,27 @@ func TestNewDashboardRoutes(t *testing.T) {
 	}
 }
 
+// The pages wrapper (JWT sign-in) is the dashboard's, and absent without one.
+func TestDashboardPages(t *testing.T) {
+	if dashboardPages(nil) != nil {
+		t.Error("dashboardPages(nil) is not nil")
+	}
+	d, err := newDashboard(dashboard.Options{Config: dashboardConfig("https://dashboard.example.com"), SecretKey: testSecretKey})
+	if err != nil || d == nil {
+		t.Fatalf("newDashboard = %v, %v", d, err)
+	}
+	if dashboardPages(d) == nil {
+		t.Fatal("dashboardPages(d) is nil")
+	}
+	// With no JWT sign-in set up the pages come as they are.
+	rec := httptest.NewRecorder()
+	dashboardPages(d)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("app")) })).
+		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "app" || len(rec.Result().Cookies()) != 0 {
+		t.Errorf("GET / = %d %q, cookies %v", rec.Code, rec.Body, rec.Result().Cookies())
+	}
+}
+
 // every runs f at once and then every interval until ctx is done.
 func TestEvery(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

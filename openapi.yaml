@@ -620,6 +620,13 @@ paths:
         Works for a waiting account and for a local admin that must change its
         password. Its `csrfToken` is the token writes send in
         `X-CSRF-Token`.
+
+        With JWT sign-in this is also one of the two requests that can start a
+        session (the other is a `GET` of a page): a valid token in the proxy's
+        header and no session starts one, and the answer is the new session's
+        user. A valid token for an email that is not allowed is 401 with
+        `code` `not_allowed`. When the signing keys cannot be fetched the
+        answer is 503 and no session ends.
       x-pergent-access: session
       security:
         - sessionCookie: []
@@ -631,6 +638,11 @@ paths:
               schema: {$ref: '#/components/schemas/meView'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '500': {$ref: '#/components/responses/InternalError'}
+        '503':
+          description: JWT sign-in only. The signing keys cannot be fetched and none is cached, so the token can't be checked. Nothing ends.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorBody'}
   # ------------------------------------------------------ overview and reviews
   /api/overview:
     get:
@@ -2272,7 +2284,10 @@ components:
         7 days for a local admin and 24 hours for a session that began with OIDC
         or a JWT.
         A missing, unknown or ended session is 401 with `{"error": "not signed in"}`
-        or `"session expired"`.
+        or `"session expired"`. With JWT sign-in every request of a session that
+        a JWT started also needs a valid token for the same email in the
+        proxy's header, or the session ends (401); with the signing keys down
+        the answer is 503 and it does not end.
     csrfToken:
       type: apiKey
       in: header
@@ -2433,8 +2448,8 @@ components:
         error: {type: string}
         code:
           type: string
-          description: Present on some 403s only.
-          enum: [csrf, waiting, password_change_required]
+          description: Present on some 403s, and on the 401 of `GET /api/me` for a JWT whose email is not allowed.
+          enum: [csrf, waiting, password_change_required, not_allowed]
     StatusBody:
       type: object
       description: A short word for what happened. The operation lists the values.

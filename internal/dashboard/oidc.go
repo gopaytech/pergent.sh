@@ -52,11 +52,14 @@ const (
 var asymmetricAlgs = []string{"RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "PS256", "PS384", "PS512", "EdDSA"}
 
 var (
-	errNoIDToken  = errors.New("the token endpoint answered without an ID token")
-	errNonce      = errors.New("the ID token's nonce is not the one sent")
-	errNoSubject  = errors.New("the ID token has no subject")
-	errNoEmail    = errors.New("the token has no email")
-	errUnverified = errors.New("the token's email is not verified")
+	// errKeysUnavailable: the key set could not be fetched, so nothing can be
+	// said about the token. It is not a bad token.
+	errKeysUnavailable = errors.New("the signing keys could not be fetched")
+	errNoIDToken       = errors.New("the token endpoint answered without an ID token")
+	errNonce           = errors.New("the ID token's nonce is not the one sent")
+	errNoSubject       = errors.New("the ID token has no subject")
+	errNoEmail         = errors.New("the token has no email")
+	errUnverified      = errors.New("the token's email is not verified")
 )
 
 // tokenVerifier checks a signed token's signature against a provider's keys,
@@ -73,9 +76,32 @@ func newTokenVerifier(hc *http.Client, issuer, audience, jwksURL string, now fun
 	// The key set outlives the request that made it: it gets its own context,
 	// which only carries the client.
 	keys := oidc.NewRemoteKeySet(oidc.ClientContext(context.Background(), hc), jwksURL)
-	return &tokenVerifier{v: oidc.NewVerifier(issuer, keys, &oidc.Config{
+	return &tokenVerifier{v: oidc.NewVerifier(issuer, keyFetchProbe{keys}, &oidc.Config{
 		ClientID: audience, SupportedSigningAlgs: asymmetricAlgs, Now: now,
 	})}
+}
+
+// keyFetchErrPrefix starts the error go-oidc's RemoteKeySet returns when it
+// had to fetch the key set and could not. Its other failures ("failed to verify
+// id token signature", a malformed token) do not. The tests pin this: an
+// outage must stay 503 after an upgrade of the library.
+const keyFetchErrPrefix = "fetching keys"
+
+type outageKey struct{}
+
+// keyFetchProbe wraps a key set to tell a failed key fetch from a signature
+// that does not verify. The verifier flattens the key set's error to text
+// (%v), so the probe notes the outage in a flag the call's context carries.
+type keyFetchProbe struct{ inner oidc.KeySet }
+
+func (k keyFetchProbe) VerifySignature(ctx context.Context, jwt string) ([]byte, error) {
+	payload, err := k.inner.VerifySignature(ctx, jwt)
+	if err != nil && strings.HasPrefix(err.Error(), keyFetchErrPrefix) {
+		if hit, ok := ctx.Value(outageKey{}).(*bool); ok {
+			*hit = true
+		}
+	}
+	return payload, err
 }
 
 // tokenClaims is a verified token.
@@ -89,13 +115,18 @@ type tokenClaims struct {
 }
 
 // Verify checks raw and returns its claims; any failure is an error and
-// gives nothing.
+// gives nothing. When the failure is that the key set could not be fetched,
+// the error is errKeysUnavailable (errors.Is), not a verdict on the token.
 func (t *tokenVerifier) Verify(ctx context.Context, raw string) (*tokenClaims, error) {
 	if raw == "" || len(raw) > maxIDToken {
 		return nil, errors.New("no token, or one too large")
 	}
-	tok, err := t.v.Verify(ctx, raw)
+	outage := false
+	tok, err := t.v.Verify(context.WithValue(ctx, outageKey{}, &outage), raw)
 	if err != nil {
+		if outage {
+			return nil, errKeysUnavailable
+		}
 		return nil, err
 	}
 	var claims map[string]any
@@ -384,55 +415,73 @@ func (d *Dashboard) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	d.finishSignIn(ctx, w, r, s, email, claims, store.SignInOIDC)
 }
 
-// finishSignIn is the end of every SSO sign-in once the identity is proved:
-// the allowlist decides, then the account, then the session. signIn is how
-// the session began (store.SignInOIDC). It answers the browser itself.
+// finishSignIn is the end of every browser SSO sign-in once the identity is
+// proved: the allowlist decides, then the account, then the session
+// (beginSession). how is how the session began (store.SignInOIDC). It answers
+// the browser itself.
 func (d *Dashboard) finishSignIn(ctx context.Context, w http.ResponseWriter, r *http.Request, s signIn, email string, claims map[string]any, how string) {
-	a := d.Auth
+	_, id, code := d.Auth.beginSession(ctx, r, s, email, claims, how)
+	if code != "" {
+		signInPage(w, r, code)
+		return
+	}
+	d.Auth.setSessionCookie(w, id)
+	d.Log.Info("dashboard sign-in", "how", how)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// beginSession is the part every SSO sign-in shares, OIDC or JWT: the
+// allowlist decides, then the account is made or found, the session the
+// request arrived with is ended, a new one is stored and the sign-in is
+// audited. It returns the stored session and the ID for its cookie, or the
+// code of the refusal (signInErrNotAllowed or signInErrFailed), in which case
+// no account was made and no session started (and the request's own session
+// is kept). email is normalised and proved; claims are the token's.
+func (a *Auth) beginSession(ctx context.Context, r *http.Request, s signIn, email string, claims map[string]any, how string) (store.Session, string, string) {
 	existing, found, err := a.store.SSOAccountByEmail(ctx, email)
 	if err != nil {
-		d.Log.Error("dashboard sign-in: reading the account failed", "error", err.Error())
-		signInPage(w, r, signInErrFailed)
-		return
+		a.log.Error("dashboard sign-in: reading the account failed", "error", err.Error())
+		return store.Session{}, "", signInErrFailed
 	}
 	if !s.allowed(email, claims, found && existing.Added) {
 		// No account, no session, and no audit entry: anyone with an account
 		// at the provider can reach this, and the log is not theirs to fill.
-		d.Log.Info("dashboard sign-in refused: not on the allowlist", "domain", emailDomain(email))
-		signInPage(w, r, signInErrNotAllowed)
-		return
+		a.log.Info("dashboard sign-in refused: not on the allowlist", "how", how, "domain", emailDomain(email))
+		return store.Session{}, "", signInErrNotAllowed
 	}
 	now := a.now()
 	acc, err := a.store.SignInSSOAccount(ctx, email, now)
 	if err != nil {
-		d.Log.Error("dashboard sign-in: storing the account failed", "error", err.Error())
-		signInPage(w, r, signInErrFailed)
-		return
+		a.log.Error("dashboard sign-in: storing the account failed", "error", err.Error())
+		return store.Session{}, "", signInErrFailed
 	}
 	// Never adopt the session the browser arrived with: end it.
 	if hash, ok := sessionHash(r); ok {
 		if err := a.store.DeleteSession(ctx, hash); err != nil {
-			d.Log.Error("dashboard sign-in: ending the previous session failed", "error", err.Error())
-			signInPage(w, r, signInErrFailed)
-			return
+			a.log.Error("dashboard sign-in: ending the previous session failed", "error", err.Error())
+			return store.Session{}, "", signInErrFailed
 		}
 	}
 	id := randomString(sessionIDBytes)
-	if err := a.store.CreateSession(ctx, store.Session{
+	se := store.Session{
 		IDHash: hashID(id), AccountID: acc.ID, Username: acc.Username, CSRF: randomString(32),
 		SignIn: how, Issuer: s.issuer, LastSeenAt: now, CreatedAt: now,
-	}); err != nil {
-		d.Log.Error("dashboard sign-in: storing the session failed", "error", err.Error())
-		signInPage(w, r, signInErrFailed)
-		return
+	}
+	if err := a.store.CreateSession(ctx, se); err != nil {
+		a.log.Error("dashboard sign-in: storing the session failed", "error", err.Error())
+		return store.Session{}, "", signInErrFailed
 	}
 	a.audit(ctx, acc, "sign_in", how, now)
+	return se, id, ""
+}
+
+// setSessionCookie gives the browser the session id of an SSO sign-in: 24
+// hours, the longest such a session lives.
+func (a *Auth) setSessionCookie(w http.ResponseWriter, id string) {
 	http.SetCookie(w, &http.Cookie{
 		Name: SessionCookieName, Value: id, Path: "/", MaxAge: int(SSOMaxSessionAge / time.Second),
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
 	})
-	d.Log.Info("dashboard sign-in", "how", how)
-	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 // emailDomain is the part of email after its last "@".

@@ -139,6 +139,13 @@ type Auth struct {
 	// afterVerify, when set (tests), runs after a sign-in's password was
 	// found right and before the sign-in is recorded.
 	afterVerify func()
+
+	// settings reads the sign-in settings in force and idpClient gives the
+	// client for the identity provider (the dashboard's); jwt is the verifier
+	// of the proxy's tokens. New fills the first two in.
+	settings  func(ctx context.Context) (signIn, error)
+	idpClient func() *http.Client
+	jwt       jwtVerifier
 }
 
 func newAuth(o Options, repos *settings.Resolver) (*Auth, error) {
@@ -224,24 +231,39 @@ func sessionExpired(se store.Session, now time.Time) bool {
 // sees the repositories its teams cover, with the highest role they give
 // (load). On no team it is waiting: 403 "waiting" for everything but GET
 // /api/me.
+//
+// With JWT validation (jwt.go) two things are added. A request with no session
+// starts one only if it is a GET of /api/me with a valid token in the proxy's
+// header; any other method or path gets 401, however valid the header. A
+// session that jwt started needs, on every request, a valid token for its
+// account's email, and the mode and issuer it began under (otherwise it
+// ends, 401); when the signing keys cannot be fetched the answer is 503 and
+// nothing ends. A local admin's session skips all of this.
 func (a *Auth) Require(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		hash, ok := sessionHash(r)
-		if !ok {
-			writeError(w, http.StatusUnauthorized, "not signed in")
-			return
+		hash, hasCookie := sessionHash(r)
+		var (
+			se    store.Session
+			found bool
+			err   error
+		)
+		if hasCookie {
+			se, found, err = a.store.Session(ctx, hash)
+			if err != nil {
+				a.log.Error("dashboard: loading a session failed", "error", err.Error())
+				writeError(w, http.StatusInternalServerError, "could not load the session")
+				return
+			}
 		}
-		se, found, err := a.store.Session(ctx, hash)
-		if err != nil {
-			a.log.Error("dashboard: loading a session failed", "error", err.Error())
-			writeError(w, http.StatusInternalServerError, "could not load the session")
-			return
-		}
+		// fresh: the header just started this session, so it was just checked.
+		fresh := false
 		if !found {
-			clearCookie(w, SessionCookieName, "/")
-			writeError(w, http.StatusUnauthorized, "not signed in")
-			return
+			started, ok := a.startOnAPI(w, r, hasCookie)
+			if !ok {
+				return
+			}
+			se, hash, fresh = started, started.IDHash, true
 		}
 		now := a.now()
 		if sessionExpired(se, now) {
@@ -273,6 +295,24 @@ func (a *Auth) Require(next http.Handler) http.Handler {
 			clearCookie(w, SessionCookieName, "/")
 			writeError(w, http.StatusUnauthorized, "not signed in")
 			return
+		}
+		// A session that jwt started stays only while the proxy keeps vouching
+		// for the same person. (A password session has no token: skipped.)
+		if se.SignIn == store.SignInJWT && !fresh {
+			holds, st := a.jwtSessionHolds(r, se, account.Email)
+			if st == headerUnavailable {
+				a.log.Warn("dashboard JWT sign-in: the session could not be checked; nothing ended")
+				writeError(w, http.StatusServiceUnavailable, msgSignInUnavailable)
+				return
+			}
+			if !holds {
+				if err := a.store.DeleteSession(ctx, hash); err != nil {
+					a.log.Error("dashboard: ending a JWT session failed", "error", err.Error())
+				}
+				clearCookie(w, SessionCookieName, "/")
+				writeError(w, http.StatusUnauthorized, "not signed in")
+				return
+			}
 		}
 		if account.MustChangePassword && !allowedBeforeChange(r) {
 			writeJSON(w, http.StatusForbidden, map[string]string{

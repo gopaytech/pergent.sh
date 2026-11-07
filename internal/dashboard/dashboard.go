@@ -201,14 +201,17 @@ func New(o Options) (*Dashboard, error) {
 	if o.HTTPClient == nil {
 		o.HTTPClient = &http.Client{}
 	}
-	return &Dashboard{Auth: auth, Repos: repos, Store: o.Store, Log: o.Log,
+	d := &Dashboard{Auth: auth, Repos: repos, Store: o.Store, Log: o.Log,
 		cfg: o.Config, registry: o.Instances, connector: o.Connector,
 		sources: o.Sources, catalogs: o.Catalogs, fetcher: o.Fetcher, readiness: o.Readiness,
 		reconcileSoon: o.ReconcileSoon, wake: o.Wake, loadLLM: o.Instances.LoadLLM, heldSecrets: o.Instances.HeldSecrets, now: o.Now,
 		availableBudget: AvailableBudget, listBudget: listBudget, listLimit: listLimit,
 		idp: idpClient(o.HTTPClient), oidc: &oidcCache{},
 		inputs:  &inputsCache{entries: map[string]inputsEntry{}, flights: map[string]*inputsFlight{}},
-		catalog: &catalogCache{entries: map[string]catalogEntry{}, flights: map[string]*catalogFlight{}}}, nil
+		catalog: &catalogCache{entries: map[string]catalogEntry{}, flights: map[string]*catalogFlight{}}}
+	auth.settings = d.signInSettings
+	auth.idpClient = func() *http.Client { return d.idp }
+	return d, nil
 }
 
 // Handler serves:
@@ -224,7 +227,9 @@ func New(o Options) (*Dashboard, error) {
 //   - GET /auth/oidc/callback: finish OIDC sign-in, then the allowlist; every
 //     refusal redirects to /signin?error=<code>;
 //   - GET /api/instances: what the sign-in page offers, without a session;
-//   - GET /api/me: the signed-in user;
+//   - GET /api/me: the signed-in user (with JWT sign-in it also starts a
+//     session, for a valid token and no session: see jwt.go; Pages does the
+//     same for the web app's pages);
 //   - the read API, the write API, the users, teams and audit log API, the
 //     instances, LLM and defaults API, and the skill library API (with
 //     installs and updates from git sources), by role (see view.go for each

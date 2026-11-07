@@ -248,3 +248,33 @@ func TestWebhooksGetTheirStores(t *testing.T) {
 		t.Errorf("without a store: GitLab Projects %v, GitHub Projects %v, Deliveries %v", gl.Projects, gh.Projects, gh.Deliveries)
 	}
 }
+
+// Deps.Pages wraps the web app's pages and nothing else: not /api/, /auth/ or
+// the webhooks. (With JWT sign-in a page load starts a session.)
+func TestPagesWrapTheAppOnly(t *testing.T) {
+	stub := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "dashboard") })
+	var seen []string
+	d := dashboardDeps("https://pergent.example.com", stub)
+	d.Pages = func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			seen = append(seen, r.URL.Path)
+			w.Header().Set("X-Wrapped", "yes")
+			next.ServeHTTP(w, r)
+		})
+	}
+	mux := Routes(d)
+	for _, p := range []string{"/", "/repos/acme/widgets", "/signed-out"} {
+		rec := status(mux, http.MethodGet, p)
+		if rec.Code != http.StatusOK || rec.Header().Get("X-Wrapped") != "yes" || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/html") {
+			t.Errorf("GET %s = %d, wrapped %q, type %q; want the app, wrapped", p, rec.Code, rec.Header().Get("X-Wrapped"), rec.Header().Get("Content-Type"))
+		}
+	}
+	for _, p := range []string{"/api/me", "/auth/logout", "/healthz"} {
+		if rec := status(mux, http.MethodGet, p); rec.Header().Get("X-Wrapped") != "" {
+			t.Errorf("GET %s went through Pages", p)
+		}
+	}
+	if len(seen) != 3 {
+		t.Errorf("Pages saw %v; want the three pages", seen)
+	}
+}

@@ -308,7 +308,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	}
 	handler := server.Routes(server.Deps{
 		Config: cfg, Instances: reg, WebhookSecrets: conn.gitlabHooks, GitHubWebhookSecrets: conn.githubHooks,
-		Store: st, Bots: commandBots(conn.platforms), Wake: eng.Wake, Dashboard: dashboardHandler(dash),
+		Store: st, Bots: commandBots(conn.platforms), Wake: eng.Wake, Dashboard: dashboardHandler(dash), Pages: dashboardPages(dash),
 		SkillFetches: fetchResults, ReadinessScans: scanResults, Log: log,
 	})
 	ln, err := net.Listen("tcp", cfg.Listen)
@@ -359,6 +359,15 @@ func dashboardHandler(d *dashboard.Dashboard) http.Handler {
 		return nil
 	}
 	return d.Handler()
+}
+
+// dashboardPages is d's wrapper for the web app's pages (JWT sign-in), or nil
+// when d is nil.
+func dashboardPages(d *dashboard.Dashboard) func(http.Handler) http.Handler {
+	if d == nil {
+		return nil
+	}
+	return d.Pages
 }
 
 // pruneSessions returns a pass that deletes the dashboard sessions that can
