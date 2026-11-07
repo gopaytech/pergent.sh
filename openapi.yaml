@@ -2873,7 +2873,7 @@ components:
         commentLayout:
           type: array
           items: {type: string}
-          description: The comment's blocks as `block:state` entries in order; the built-in layout until one is saved.
+          description: The comment's blocks as `block:state` entries in order; always the built-in layout, because the config has no layout.
         failureStatus: {type: string}
         jobTimeoutSeconds: {type: integer}
         maxTurns: {type: integer}
