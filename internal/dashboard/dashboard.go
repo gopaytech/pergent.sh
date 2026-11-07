@@ -129,7 +129,7 @@ type RepoSource interface {
 	inputs.Source
 	DefaultBranch(ctx context.Context, projectID int64) (string, error)
 	// GetChange reads one merge request or pull request: the buttons ask
-	// for its head, state and author.
+	// for its head and state.
 	GetChange(ctx context.Context, projectID, number int64) (forge.Change, error)
 }
 
@@ -273,6 +273,9 @@ func (d *Dashboard) Handler() http.Handler {
 // of an unknown path, so the server enforces the admin area's data and a user
 // can't tell that the route exists. A route that serves users too is
 // registered with Auth.Require, and checks in its handler what each may do.
+// A repository's .../teams is the one admin-only route that is not
+// registered here: its path pattern is shared with the repository's other pages,
+// so its handler answers a non-admin 404 itself (TestRepositoryTeamsAreForAdmins).
 func (d *Dashboard) adminRoute(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
 	d.adminRoutes = append(d.adminRoutes, pattern)
 	mux.Handle(pattern, d.Auth.RequireAdmin(h))

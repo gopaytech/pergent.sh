@@ -58,6 +58,13 @@ const (
 	// signedOutPath is the page that shows a person has signed out. It starts
 	// nothing, or signing out would sign the person straight in again.
 	signedOutPath = "/signed-out"
+	// adminSignInPath is the local admins' sign-in page. It starts nothing
+	// either: a local admin whose proxy identity is allowed would otherwise be
+	// signed in as that person before the password form could show.
+	adminSignInPath = "/admin/sign-in"
+	// probeParam on GET /api/me asks who is signed in without starting a
+	// session from the header (the admin sign-in page's quiet read).
+	probeParam = "probe"
 )
 
 // jwtVerifier is the one verifier of the tokens, kept while the issuer, the
@@ -226,8 +233,8 @@ var reservedPrefixes = []string{"/api", "/auth", "/webhooks", "/runs", "/healthz
 
 // isPagePath reports whether p is a page of the web app: the shell the
 // browser's router takes over. It is not a path another route owns, a hashed
-// asset, a file at the root (favicon.svg), or /signed-out, which starts
-// nothing (whatever the case: the router ignores it).
+// asset, a file at the root (favicon.svg), or /signed-out and /admin/sign-in,
+// which start nothing (whatever the case: the router ignores it).
 func isPagePath(p string) bool {
 	p = path.Clean("/" + p)
 	for _, prefix := range reservedPrefixes {
@@ -235,7 +242,7 @@ func isPagePath(p string) bool {
 			return false
 		}
 	}
-	if strings.EqualFold(p, signedOutPath) || strings.HasPrefix(p, "/assets/") {
+	if strings.EqualFold(p, signedOutPath) || strings.EqualFold(p, adminSignInPath) || strings.HasPrefix(p, "/assets/") {
 		return false
 	}
 	if strings.Count(p, "/") == 1 && path.Ext(p) != "" {
@@ -296,7 +303,7 @@ func (a *Auth) startFromHeader(w http.ResponseWriter, r *http.Request) (store.Se
 }
 
 // startOnAPI is Require's way for a request with no session: only GET
-// /api/me can start one. It returns the new session and true, or has
+// /api/me (without ?probe=1) can start one. It returns the new session and true, or has
 // answered the request itself and returns false. staleCookie is set when the
 // request carried a cookie for a session that is gone.
 func (a *Auth) startOnAPI(w http.ResponseWriter, r *http.Request, staleCookie bool) (store.Session, bool) {
@@ -304,7 +311,7 @@ func (a *Auth) startOnAPI(w http.ResponseWriter, r *http.Request, staleCookie bo
 		se      store.Session
 		outcome = startNothing
 	)
-	if r.Method == http.MethodGet && r.URL.Path == "/api/me" {
+	if r.Method == http.MethodGet && r.URL.Path == "/api/me" && r.URL.Query().Get(probeParam) != "1" {
 		se, outcome = a.startFromHeader(w, r)
 	}
 	switch outcome {

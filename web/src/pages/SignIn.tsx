@@ -23,7 +23,11 @@ const jwtWords = "Your organisation signs you in before this page loads. Reload 
 // read of /api/me: its 401 is the usual answer here, not a reason to go to the
 // sign-in page, which is this one). With JWT sign-in the page load itself
 // signs the person in, so a signed-in browser is sent on.
-export function useSignInPage() {
+//
+// quiet is for the admin sign-in page: with JWT sign-in the proxy's header
+// would sign the person in as themselves before a local admin could use the
+// password form, so its read asks /api/me?probe=1, which starts no session.
+export function useSignInPage(quiet = false) {
   const [params] = useSearchParams();
   const code = params.get("error") ?? "";
   const options = useQuery({
@@ -32,7 +36,7 @@ export function useSignInPage() {
   });
   const signedIn = useQuery({
     queryKey: ["signed-in"],
-    queryFn: () => api.probe<Me>("/api/me"),
+    queryFn: () => api.probe<Me>(quiet ? "/api/me?probe=1" : "/api/me"),
     retry: false,
     staleTime: 0,
   });

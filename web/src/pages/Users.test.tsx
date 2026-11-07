@@ -231,11 +231,11 @@ describe("Users", () => {
     fakeApi({
       "GET /api/me": { body: operator },
       "GET /api/users": { body: users },
-      "DELETE /api/users/1": { status: 409, body: { error: "the last password account can't be removed" } },
+      "DELETE /api/users/1": { status: 409, body: { error: "the last local admin can't be removed" } },
     });
     renderApp("/admin/users");
     await userEvent.click(within(await findRow("admin")).getByRole("button", { name: "Remove" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("the last password account can't be removed");
+    expect(await screen.findByRole("alert")).toHaveTextContent("the last local admin can't be removed");
   });
 
   it("lets an admin add a local admin and shows the generated password once", async () => {

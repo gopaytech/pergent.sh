@@ -639,10 +639,19 @@ paths:
         header and no session starts one, and the answer is the new session's
         user. A valid token for an email that is not allowed is 401 with
         `code` `not_allowed`. When the signing keys cannot be fetched the
-        answer is 503 and no session ends.
+        answer is 503 and no session ends. With `?probe=1` it never starts
+        one (the admin sign-in page asks this way, so a local admin whose
+        proxy identity is allowed can still reach the password form): with no
+        session the answer is 401 whatever the header holds.
       x-pergent-access: session
       security:
         - sessionCookie: []
+      parameters:
+        - name: probe
+          in: query
+          required: false
+          description: Set to `1` to ask without starting a session from the JWT header.
+          schema: {type: string, enum: ['1']}
       responses:
         '200':
           description: The user.

@@ -100,8 +100,7 @@ export type RunSummary = {
 };
 
 // Can is what the session may do to a review with the buttons. The server
-// computes it as a hint (it tells the change's author by username); the
-// routes check again and may still refuse.
+// computes it as a hint; the routes check again and may still refuse.
 export type Can = {
   rerun: boolean;
   dismissBlocking: boolean;

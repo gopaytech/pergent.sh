@@ -2,7 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 
-import { onGateChange, onUnauthorized } from "./api";
+import { onGateChange, onUnauthorized, type Me } from "./api";
 import Layout, { AdminOnly } from "./layout/Layout";
 import { inAdminArea, useMe } from "./layout/me";
 import AdminHome from "./pages/AdminHome";
@@ -47,8 +47,12 @@ export default function App() {
   useEffect(
     () =>
       onUnauthorized(() => {
+        // A local admin has no SSO button on /sign-in: whichever page the 401
+        // came on, they go to theirs. The last /api/me is read before the
+        // cache is cleared.
+        const local = client.getQueryData<Me>(["me"])?.kind === "password";
         client.clear();
-        navigate(inAdminArea(here.current) ? "/admin/sign-in" : "/sign-in", { replace: true });
+        navigate(local || inAdminArea(here.current) ? "/admin/sign-in" : "/sign-in", { replace: true });
       }),
     [client, navigate],
   );

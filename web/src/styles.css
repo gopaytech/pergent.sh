@@ -110,6 +110,11 @@ aside {
   margin: 14px 10px 4px;
 }
 
+.me .grow {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .me {
   margin-top: auto;
   display: flex;
@@ -1224,6 +1229,13 @@ legend {
 
 .check input {
   width: auto;
+}
+
+/* A role in a table cell keeps its own width (select is 100% wide elsewhere). */
+.table select {
+  width: auto;
+  padding: 3px 8px;
+  font-size: 12px;
 }
 
 /* A role beside a ticked member or team keeps its own width. */

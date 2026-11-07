@@ -10,7 +10,7 @@ import { useWrite } from "./write";
 // stays signed in, and knows it. Where it moves to: /signed-out for a session
 // a proxy started (JWT sign-in: the proxy still vouches for the person, so the
 // sign-in page would sign them straight in again), else the sign-in page of
-// the area the user was in.
+// the area the user was in (a local admin always to /admin/sign-in).
 export default function SignOut() {
   const navigate = useNavigate();
   const client = useQueryClient();
@@ -22,7 +22,8 @@ export default function SignOut() {
     onSuccess: () => {
       client.clear();
       if (me.signIn === "jwt") navigate("/signed-out", { replace: true });
-      else navigate(me.admin && inAdminArea(pathname) ? "/admin/sign-in" : "/sign-in", { replace: true });
+      // A local admin has no SSO button on /sign-in: they go back to theirs.
+      else navigate(me.kind === "password" || (me.admin && inAdminArea(pathname)) ? "/admin/sign-in" : "/sign-in", { replace: true });
     },
   });
   return (

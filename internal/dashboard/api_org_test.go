@@ -234,7 +234,7 @@ func TestLastLocalAdminCantBeRemoved(t *testing.T) {
 	c := e.userOnMain(true)
 	rec := e.send(c, "DELETE", "/api/users/"+strconv.FormatInt(root.ID, 10), "")
 	wantCode(t, rec, "DELETE the last local admin", http.StatusConflict)
-	if got := body(rec); got != `{"error":"the last password account can't be removed"}` {
+	if got := body(rec); got != `{"error":"the last local admin can't be removed"}` {
 		t.Errorf("body = %s", got)
 	}
 	if _, found, _ := e.st.Account(ctx, root.ID); !found {

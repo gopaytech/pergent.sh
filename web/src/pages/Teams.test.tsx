@@ -168,10 +168,10 @@ describe("Teams", () => {
     ]);
   });
 
-  it("ticks a user who exists already when their email is typed, without adding anything", async () => {
+  it("asks for an email that is an account already, so it is marked added, and ticks it", async () => {
     const fake = fakeApi({
       "GET /api/teams": { body: [teamPayments] },
-      "POST /api/admin/users": { status: 409, body: { error: "this email is added already" } },
+      "POST /api/admin/users": { body: userWaiting },
       ...base,
     });
     renderApp("/admin/teams");
@@ -180,9 +180,26 @@ describe("Teams", () => {
     expect(within(members).getByRole("checkbox", { name: /newcomer/ })).not.toBeChecked();
     await userEvent.type(within(members).getByLabelText("Add by email"), "Newcomer@Example.com");
     await userEvent.click(within(members).getByRole("button", { name: "Add email" }));
-    expect(within(members).getByRole("checkbox", { name: /newcomer/ })).toBeChecked();
+    await vi.waitFor(() => expect(within(members).getByRole("checkbox", { name: /newcomer/ })).toBeChecked());
     expect(within(members).getByLabelText("Role of newcomer@example.com")).toHaveValue("viewer");
-    expect(fake.calls.filter((c) => c.method === "POST")).toHaveLength(0);
+    expect(fake.find("POST", "/api/admin/users")[0].body).toEqual({ email: "Newcomer@Example.com" });
+    expect(within(members).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("takes a 409 (added before) as fine and ticks the account", async () => {
+    fakeApi({
+      "GET /api/teams": { body: [teamPayments] },
+      "POST /api/admin/users": { status: 409, body: { error: "this email is added already" } },
+      ...base,
+    });
+    renderApp("/admin/teams");
+    await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
+    const members = await within(screen.getByRole("form", { name: "Edit Payments" })).findByRole("group", { name: "Members" });
+    await userEvent.type(within(members).getByLabelText("Add by email"), "newcomer@example.com");
+    await userEvent.click(within(members).getByRole("button", { name: "Add email" }));
+    await vi.waitFor(() => expect(within(members).getByRole("checkbox", { name: /newcomer/ })).toBeChecked());
+    expect(within(members).queryByRole("alert")).not.toBeInTheDocument();
+    expect(within(members).getByLabelText("Add by email")).toHaveValue("");
   });
 
   it("shows the server's text when an email is refused, and adds no member", async () => {

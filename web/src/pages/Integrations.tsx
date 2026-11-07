@@ -517,6 +517,9 @@ const modeNames: Record<SignInMode, string> = { "": "Not set up", oidc: "OIDC", 
 // SignInSection is how people other than local admins sign in. Read-only when
 // the config file sets it.
 function SignInSection() {
+  // Kept here, not in the editor: a saved answer that changes the settings
+  // starts the editor again, which would lose it.
+  const [saved, setSaved] = useState(false);
   const current = useQuery({ queryKey: ["admin-sign-in"], queryFn: () => api.get<SignInAdminView>("/api/admin/sign-in") });
   return (
     <section className="card" aria-label="Sign-in">
@@ -529,16 +532,22 @@ function SignInSection() {
       {current.isSuccess &&
         (current.data.editable ? (
           // A new answer starts the form again from it.
-          <SignInEditor key={JSON.stringify(current.data)} current={current.data} />
+          <SignInEditor key={JSON.stringify(current.data)} current={current.data} setSaved={setSaved} />
         ) : (
           <SignInFacts v={current.data} />
         ))}
+      {saved && (
+        <div className="note" role="status">
+          Saved.
+        </div>
+      )}
     </section>
   );
 }
 
 // SignInFacts shows sign-in set in the config file.
 function SignInFacts({ v }: { v: SignInAdminView }) {
+  const test = useSignInTest({});
   const list = (items: string[]) => (items.length === 0 ? "none" : items.join(", "));
   return (
     <div className="facts">
@@ -566,7 +575,32 @@ function SignInFacts({ v }: { v: SignInAdminView }) {
       <div>Allowed domains: {list(v.allowedDomains)}</div>
       <div>Allowed emails: {list(v.allowedEmails)}</div>
       <div className="meta">Sign-in is managed by the config file; change it there.</div>
+      {(v.mode === "oidc" || v.mode === "jwt") && (
+        <div className="actions-row">
+          <button type="button" className="btn" disabled={test.isPending} onClick={() => test.mutate()}>
+            Test
+          </button>
+          <span className="meta">Reads {v.mode === "jwt" ? v.jwksURL : v.issuer}, the address set in the config file.</span>
+        </div>
+      )}
+      <TestResult test={test} />
     </div>
+  );
+}
+
+// useSignInTest is the test button: the body names what to test, {} the saved
+// settings. The answer is only whether it worked.
+function useSignInTest(body: { mode?: string; issuer?: string; jwksURL?: string }) {
+  const write = useWrite();
+  return useMutation({ mutationFn: () => write<{ ok: boolean }>("POST", "/api/admin/sign-in/test", body) });
+}
+
+function TestResult({ test }: { test: ReturnType<typeof useSignInTest> }) {
+  return (
+    <>
+      {test.isError && <ErrorBox error={test.error} />}
+      {test.isSuccess && <div role="status">{test.data.ok ? "It worked." : "It did not work."}</div>}
+    </>
   );
 }
 
@@ -578,7 +612,7 @@ function CallbackURL({ url }: { url: string }) {
   );
 }
 
-function SignInEditor({ current }: { current: SignInAdminView }) {
+function SignInEditor({ current, setSaved }: { current: SignInAdminView; setSaved: (saved: boolean) => void }) {
   const client = useQueryClient();
   const write = useWrite();
   const [f, setF] = useState<SignInForm>(() => formOf(current));
@@ -592,16 +626,18 @@ function SignInEditor({ current }: { current: SignInAdminView }) {
     mutationFn: (body: SignInBody) => write<SignInAdminView>("PUT", "/api/admin/sign-in", body),
     // The closure holds the secret: drop it with the input, not after 5 minutes.
     gcTime: 0,
-    onSuccess: (saved) => client.setQueryData(["admin-sign-in"], saved),
+    onMutate: () => setSaved(false),
+    onSuccess: (saved) => {
+      // The secret goes with the save, whether or not the form starts again.
+      setF((old) => ({ ...old, clientSecret: "" }));
+      client.setQueryData(["admin-sign-in"], saved);
+      setSaved(true);
+    },
   });
-  const test = useMutation({
-    mutationFn: () =>
-      write<{ ok: boolean }>("POST", "/api/admin/sign-in/test", {
-        mode: f.mode,
-        issuer: f.issuer.trim(),
-        jwksURL: jwt ? f.jwksURL.trim() : "",
-      }),
-  });
+  const test = useSignInTest({ mode: f.mode, issuer: f.issuer.trim(), jwksURL: jwt ? f.jwksURL.trim() : "" });
+  // What the test reads: the typed address, or when it is blank the saved one.
+  const typedTarget = (jwt ? f.jwksURL : f.issuer).trim();
+  const savedTarget = jwt ? current.jwksURL : current.issuer;
   const submit = (e: FormEvent) => {
     e.preventDefault();
     save.mutate(bodyOf(f));
@@ -697,18 +733,31 @@ function SignInEditor({ current }: { current: SignInAdminView }) {
       )}
       <div className="meta">Changing the mode or the issuer ends every SSO session, yours too if you signed in that way.</div>
       {save.isError && <ErrorBox error={save.error} />}
-      {test.isError && <ErrorBox error={test.error} />}
-      {test.isSuccess && <div role="status">{test.data.ok ? "It worked." : "It did not work."}</div>}
+      <TestResult test={test} />
       <div className="actions-row">
         <button type="submit" className="btn primary" disabled={save.isPending}>
           Save
         </button>
         {(oidc || jwt) && (
-          <button type="button" className="btn" disabled={test.isPending} onClick={() => test.mutate()}>
+          <button
+            type="button"
+            className="btn"
+            disabled={test.isPending || (typedTarget === "" && savedTarget === "")}
+            onClick={() => test.mutate()}
+          >
             Test
           </button>
         )}
       </div>
+      {(oidc || jwt) && (
+        <div className="meta">
+          {typedTarget !== ""
+            ? `Test reads ${typedTarget}.`
+            : savedTarget !== ""
+              ? `The address above is empty, so Test reads the saved one: ${savedTarget}.`
+              : `Enter ${jwt ? "the JWKS URL" : "the issuer"} to test it.`}
+        </div>
+      )}
     </form>
   );
 }

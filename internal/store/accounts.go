@@ -30,7 +30,7 @@ var (
 	ErrExists = errors.New("already exists")
 	// ErrLastPasswordAccount is returned when deleting the only password
 	// account, which would leave nobody able to sign in with a password.
-	ErrLastPasswordAccount = errors.New("the last password account can't be removed")
+	ErrLastPasswordAccount = errors.New("the last local admin can't be removed")
 	// ErrBadEmail is returned by NormalizeEmail, and by what calls it, for a
 	// string that isn't exactly one email address.
 	ErrBadEmail = errors.New("store: not an email address")

@@ -67,9 +67,9 @@ func (s *Store) PutSignInSettings(ctx context.Context, in SignInSettings) error 
 }
 
 // ChangeSignInSettings is PutSignInSettings that, with endSSOSessions, also
-// ends every session that began with OIDC or a JWT, in the same transaction:
-// a change of mode or issuer never leaves a session that the earlier setting
-// vouched for.
+// ends every session that began with OIDC or a JWT, in the same transaction.
+// The caller decides whether to: it read the old settings before this call, so
+// two saves that cross can skip it, and the start-up sweep ends what is left.
 func (s *Store) ChangeSignInSettings(ctx context.Context, in SignInSettings, endSSOSessions bool) error {
 	if in.Mode != "" && in.Mode != SignInModeOIDC && in.Mode != SignInModeJWT {
 		return fmt.Errorf("store: unknown sign-in mode %q", in.Mode)

@@ -410,6 +410,28 @@ func TestJWTCrossSiteSubrequestStartsNothing(t *testing.T) {
 	}
 }
 
+// A local admin whose proxy identity is allowed must reach the password form
+// through the proxy: loading /admin/sign-in and the page's quiet read of
+// /api/me?probe=1 start no session, whatever the header holds (the dashboard
+// here has no store: a start would panic). Without the probe, /api/me still
+// starts one.
+func TestJWTAdminSignInStartsNothing(t *testing.T) {
+	j := newJWTHarness(t, nil)
+	tok := "Bearer " + j.token(nil)
+	for _, target := range []string{"/admin/sign-in", "/admin/sign-in/", "/Admin/Sign-In"} {
+		rec := j.serve(j.pages, jwtRequest("GET", target, tok))
+		if rec.Code != http.StatusOK || cookie(rec, SessionCookieName) != nil {
+			t.Errorf("GET %s with a valid header = %d, cookie %v; want the page and no session", target, rec.Code, cookie(rec, SessionCookieName))
+		}
+	}
+	for _, target := range []string{"/api/me?probe=1", "/api/me?x=1&probe=1"} {
+		rec := j.serve(j.h, jwtRequest("GET", target, tok))
+		if rec.Code != http.StatusUnauthorized || cookie(rec, SessionCookieName) != nil {
+			t.Errorf("GET %s with a valid header = %d, cookie %v; want 401 and no session", target, rec.Code, cookie(rec, SessionCookieName))
+		}
+	}
+}
+
 // When the settings cannot be read, a request with no session gets what it
 // would get on an install that does not use a header: 401 on /api/me and the
 // page as it is (the dashboard here has no store: a start would panic). A
@@ -518,6 +540,8 @@ func TestIsPagePath(t *testing.T) {
 		"/api": false, "/api/me": false, "/auth/oidc/login": false, "/webhooks/gitlab/x": false, "/runs/1/result": false,
 		"/healthz": false, "/skill-fetches/1/result": false, "/readiness-scans/1/result": false, "/a/../signed-out": false,
 		"//signed-out": false, "/./signed-out": false, "/Signed-Out": false, "/SIGNED-OUT/": false,
+		"/admin/sign-in": false, "/admin/sign-in/": false, "/Admin/Sign-In": false, "/admin/../admin/sign-in": false,
+		"/admin/sign-in/x": true, "/admin/users": true,
 	} {
 		if got := isPagePath(p); got != want {
 			t.Errorf("isPagePath(%q) = %v; want %v", p, got, want)

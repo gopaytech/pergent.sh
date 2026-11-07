@@ -44,7 +44,8 @@ describe("AdminSignIn", () => {
         signedIn = true;
         return { status: 204 };
       },
-      "GET /api/me": () => (signedIn ? { body: operator } : { status: 401, body: { error: "not signed in" } }),
+      "GET /api/me?probe=1": () => (signedIn ? { body: operator } : { status: 401, body: { error: "not signed in" } }),
+      "GET /api/me": { body: operator },
     });
     renderApp("/admin/sign-in");
     await fill("admin", "correct horse battery");
@@ -106,15 +107,26 @@ describe("AdminSignIn", () => {
   });
 
   it("lands a signed-in admin on /admin and a signed-in user on /", async () => {
-    fakeApi({ "GET /api/sign-in-options": options(), "GET /api/me": { body: operator } });
+    fakeApi({ "GET /api/sign-in-options": options(), "GET /api/me?probe=1": { body: operator }, "GET /api/me": { body: operator } });
     const first = renderApp("/admin/sign-in");
     expect(await screen.findByRole("heading", { name: "Admin" })).toBeInTheDocument();
     expect(screen.getByTestId("location")).toHaveTextContent(/^\/admin$/);
     first.unmount();
 
-    fakeApi({ "GET /api/sign-in-options": options(), "GET /api/me": { body: viewer }, "GET /api/overview?days=7": { body: overview } });
+    fakeApi({ "GET /api/sign-in-options": options(), "GET /api/me?probe=1": { body: viewer }, "GET /api/me": { body: viewer }, "GET /api/overview?days=7": { body: overview } });
     renderApp("/admin/sign-in");
     expect(await screen.findByRole("heading", { name: "Overview" })).toBeInTheDocument();
     expect(screen.getByTestId("location")).toHaveTextContent(/^\/$/);
+  });
+
+  it("reads /api/me quietly (?probe=1), so a proxy's header can't sign the person in before the password form", async () => {
+    const fake = fakeApi({
+      "GET /api/sign-in-options": options(),
+      "GET /api/me?probe=1": { status: 401, body: { error: "not signed in" } },
+    });
+    renderApp("/admin/sign-in");
+    expect(await screen.findByLabelText("Username")).toBeInTheDocument();
+    expect(fake.find("GET", "/api/me?probe=1")).toHaveLength(1);
+    expect(fake.find("GET", "/api/me")).toHaveLength(0);
   });
 });

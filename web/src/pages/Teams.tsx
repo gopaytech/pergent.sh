@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 
 import {
+  ApiError,
   api,
   type AddUserBody,
   type InstanceAdminView,
@@ -180,14 +181,35 @@ function EditorForm({
   // The members: account ID to the role on this team.
   const [members, setMembers] = useState(() => new Map<number, MemberRole>(team.members.map((m) => [m.accountId, m.role])));
   const [covered, setCovered] = useState(() => new Set(team.repos.filter((r) => !isGone(r)).map(repoKey)));
-  // Adding by email: the account is made now, as invited, and joins the
-  // team when the team is saved.
+  // Adding by email: the account is made now, as invited, and joins the team
+  // when the team is saved. An account that is there already is asked for too,
+  // so it is marked added (it can sign in whatever the allowlist says); a 409
+  // says it was added before, which is fine.
   const [email, setEmail] = useState("");
   const addEmail = useMutation({
-    mutationFn: (body: AddUserBody) => write<UserView>("POST", "/api/admin/users", body),
-    onSuccess: (user) => {
-      client.invalidateQueries({ queryKey: ["users"] });
-      setMember(user.id, "viewer");
+    mutationFn: async (body: AddUserBody): Promise<UserView | null> => {
+      try {
+        return await write<UserView>("POST", "/api/admin/users", body);
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 409) return null;
+        throw err;
+      }
+    },
+    onSuccess: async (user, body) => {
+      let id = user?.id;
+      if (id === undefined) {
+        // Added before: it is on the list of accounts, read again in case it is new there.
+        const fresh = await client.fetchQuery({
+          queryKey: ["users"],
+          queryFn: () => api.get<UserView[]>("/api/users"),
+          staleTime: 0,
+        });
+        id = fresh.find((u) => u.email.toLowerCase() === body.email.toLowerCase())?.id;
+      } else {
+        client.invalidateQueries({ queryKey: ["users"] });
+      }
+      // Someone on the team already keeps their role.
+      if (id !== undefined) setMembers((old) => (old.has(id) ? old : new Map(old).set(id, "viewer")));
       setEmail("");
     },
   });
@@ -213,17 +235,9 @@ function EditorForm({
     else next.set(id, role);
     setMembers(next);
   };
-  // An email that is an account already ticks it; a new one is added.
   const tryAddEmail = () => {
     const typed = email.trim();
-    if (typed === "") return;
-    const known = accounts.find((u) => u.email.toLowerCase() === typed.toLowerCase());
-    if (known) {
-      if (!members.has(known.id)) setMember(known.id, "viewer");
-      setEmail("");
-      return;
-    }
-    addEmail.mutate({ email: typed });
+    if (typed !== "") addEmail.mutate({ email: typed });
   };
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -251,7 +265,7 @@ function EditorForm({
         {accounts.length === 0 && <div className="meta">Nobody yet. Add a person by email below.</div>}
         {accounts.map((u) => (
           <div className="check" key={u.id}>
-            <label className="check">
+            <label className="check plain">
               <input
                 type="checkbox"
                 checked={members.has(u.id)}

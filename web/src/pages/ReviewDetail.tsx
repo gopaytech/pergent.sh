@@ -400,8 +400,8 @@ function Finding({ f, blocking, actions }: { f: Located; blocking: boolean; acti
 }
 
 // DismissControl is the Dismiss button and the form it opens. A blocking
-// finding needs a reason. The server decides in the end (it may refuse the
-// author, a closed change), and its text is shown.
+// finding needs a reason. The server decides in the end (it may refuse a
+// closed change), and its text is shown.
 function DismissControl({ f, blocking, actions }: { f: Located; blocking: boolean; actions: RunActions }) {
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");

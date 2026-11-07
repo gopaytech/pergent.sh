@@ -205,7 +205,7 @@ function AddUser({ onClose }: { onClose: () => void }) {
         {teams.isSuccess &&
           teams.data.map((t) => (
             <div className="check" key={t.id}>
-              <label className="check">
+              <label className="check plain">
                 <input
                   type="checkbox"
                   checked={chosen.has(t.id)}

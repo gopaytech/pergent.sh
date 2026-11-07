@@ -135,13 +135,13 @@ describe("ChangePassword", () => {
     ]);
   });
 
-  it("lets the account sign out instead", async () => {
+  it("lets the account sign out instead, to the admin sign-in (it is a local admin)", async () => {
     fakeApi({
       ...untilLogout(mustChange),
       "GET /api/sign-in-options": { body: { password: true, jwt: false } },
     });
     renderApp("/");
     await userEvent.click(await screen.findByRole("button", { name: "Sign out" }));
-    expect(await screen.findByRole("heading", { name: "Sign in to pergent.sh" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Admin sign-in" })).toBeInTheDocument();
   });
 });

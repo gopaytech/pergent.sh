@@ -191,6 +191,14 @@ describe("signing out", () => {
     expect(screen.getByTestId("location")).toHaveTextContent(/^\/admin\/sign-in$/);
   });
 
+  it("sends a local admin to the admin sign-in from the user pages too", async () => {
+    fakeApi({ ...base, ...options, ...untilLogout(operator) });
+    renderApp("/");
+    await userEvent.click(await screen.findByRole("button", { name: "Sign out" }));
+    expect(await screen.findByRole("heading", { name: "Admin sign-in" })).toBeInTheDocument();
+    expect(screen.getByTestId("location")).toHaveTextContent(/^\/admin\/sign-in$/);
+  });
+
   it("goes to /signed-out for a JWT session, and that page asks the server nothing", async () => {
     const fake = fakeApi({ ...base, ...options, ...untilLogout({ ...ssoAdmin, signIn: "jwt" }) });
     renderApp("/");

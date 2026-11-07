@@ -628,4 +628,42 @@ describe("Integrations: Sign-in", () => {
     expect(await within(box).findByRole("alert")).toHaveTextContent("issuer must be an https URL");
     expect(within(box).getByLabelText("Label")).toHaveValue("Workspace");
   });
+  it("clears a new secret and says Saved even when nothing else on the page changes", async () => {
+    const fake = fakeApi({ ...routes(signInOIDC), "PUT /api/admin/sign-in": { body: signInOIDC } });
+    renderApp("/admin/integrations");
+    const box = await section();
+    await userEvent.type(within(box).getByLabelText("Client secret"), "GOCSPX-only-the-secret");
+    await userEvent.click(within(box).getByRole("button", { name: "Save" }));
+    expect(await within(box).findByText("Saved.")).toBeInTheDocument();
+    expect(within(box).getByLabelText("Client secret")).toHaveValue("");
+    expect((fake.find("PUT", "/api/admin/sign-in")[0].body as { clientSecret?: string }).clientSecret).toBe("GOCSPX-only-the-secret");
+    expect(document.body.textContent).not.toContain("GOCSPX-only-the-secret");
+    // Every save says it, a second one too.
+    await userEvent.click(within(box).getByRole("button", { name: "Save" }));
+    await vi.waitFor(() => expect(fake.find("PUT", "/api/admin/sign-in")).toHaveLength(2));
+    expect(await within(box).findByText("Saved.")).toBeInTheDocument();
+  });
+
+  it("says which address Test reads, and the saved one when the field is blank", async () => {
+    const fake = fakeApi({ ...routes(signInOIDC), "POST /api/admin/sign-in/test": { body: { ok: true } } });
+    renderApp("/admin/integrations");
+    const box = await section();
+    expect(box).toHaveTextContent("Test reads https://accounts.google.com.");
+    await userEvent.clear(within(box).getByLabelText("Issuer"));
+    expect(box).toHaveTextContent("is empty, so Test reads the saved one: https://accounts.google.com.");
+    await userEvent.click(within(box).getByRole("button", { name: "Test" }));
+    await within(box).findByRole("status");
+    expect(fake.find("POST", "/api/admin/sign-in/test")[0].body).toEqual({ mode: "oidc", issuer: "", jwksURL: "" });
+  });
+
+  it("has a Test button when the config file sets it, which reads the saved settings", async () => {
+    const fake = fakeApi({ ...routes(signInFromConfig), "POST /api/admin/sign-in/test": { body: { ok: false } } });
+    renderApp("/admin/integrations");
+    const box = await section();
+    expect(box).toHaveTextContent("Reads https://accounts.google.com, the address set in the config file.");
+    await userEvent.click(within(box).getByRole("button", { name: "Test" }));
+    expect(await within(box).findByRole("status")).toHaveTextContent("It did not work.");
+    expect(fake.find("POST", "/api/admin/sign-in/test")[0].body).toEqual({});
+    expect(within(box).queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+  });
 });

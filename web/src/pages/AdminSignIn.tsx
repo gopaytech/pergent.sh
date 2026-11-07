@@ -10,7 +10,7 @@ import { Refusal, SignedInRedirect, useSignInPage } from "./SignIn";
 // admins, and the SSO button for an SSO account an admin made an admin. A
 // signed-in admin lands on /admin and a user on /.
 export default function AdminSignIn() {
-  const { options, signedIn, refusal } = useSignInPage();
+  const { options, signedIn, refusal } = useSignInPage(true);
   if (signedIn.isSuccess) return <SignedInRedirect me={signedIn.data} admin />;
   const sso = options.data?.sso ?? null;
   return (

@@ -117,6 +117,17 @@ describe("App shell", () => {
     expect(await screen.findByRole("heading", { name: "Sign in to pergent.sh" })).toBeInTheDocument();
   });
 
+  it("sends a local admin's 401 on a user page to the admin sign-in, which has the password form", async () => {
+    fakeApi({
+      "GET /api/me": { body: operator },
+      "GET /api/overview?days=7": { status: 401, body: { error: "session expired" } },
+      "GET /api/sign-in-options": { body: { password: true, jwt: false } },
+    });
+    renderApp("/");
+    expect(await screen.findByRole("heading", { name: "Admin sign-in" })).toBeInTheDocument();
+    expect(screen.getByTestId("location")).toHaveTextContent(/^\/admin\/sign-in$/);
+  });
+
   it("shows a not found page for an unknown path", async () => {
     fakeApi({ "GET /api/me": { body: ssoAdmin } });
     renderApp("/no/such/page");
