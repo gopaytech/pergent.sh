@@ -74,7 +74,7 @@ func (d *Dashboard) writeRoutes(mux *http.ServeMux) {
 	d.adminRoute(mux, "GET /api/repositories/available", d.available)
 	d.adminRoute(mux, "POST /api/repositories", d.switchOn)
 	d.adminRoute(mux, "DELETE /api/repositories/{instance}/{rest...}", d.switchOff)
-	mux.Handle("PUT /api/repositories/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.putSettings)))
+	mux.Handle("PUT /api/repositories/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.repositoryPut)))
 	mux.Handle("POST /api/repositories/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.repositoryPost)))
 	// The instance alone is 404, not a redirect to the {rest...} routes.
 	none := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { notFound(w) })
@@ -400,7 +400,17 @@ func (d *Dashboard) repositoryPost(w http.ResponseWriter, r *http.Request) {
 	d.resetSettings(w, r)
 }
 
-// --- PUT .../settings and POST .../settings/reset ---
+// --- PUT .../settings, PUT .../teams and POST .../settings/reset ---
+
+// repositoryPut serves the PUTs to one repository: .../teams (putRepositoryTeams,
+// admins only) and .../settings (putSettings, which answers any other path 404).
+func (d *Dashboard) repositoryPut(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.PathValue("rest"), "/teams") {
+		d.putRepositoryTeams(w, r)
+		return
+	}
+	d.putSettings(w, r)
+}
 
 func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {
 	repo, ok := d.target(w, r, "/settings", RoleMaintainer)

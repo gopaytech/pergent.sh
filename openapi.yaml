@@ -1207,6 +1207,69 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/teams:
+    get:
+      operationId: getRepositoryTeams
+      tags: [Repositories]
+      summary: The teams of a repository
+      description: |
+        Admins only (404 for anyone else, as for an unknown repository). Every
+        team by name ignoring case, with whether it lists this repository
+        itself (`direct`) or covers every repository of its instance
+        (`wholeInstance`). It reads the same rows as the Teams page.
+      x-pergent-access: session
+      x-pergent-pattern: GET /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      responses:
+        '200':
+          description: The teams.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RepoTeamsView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    put:
+      operationId: putRepositoryTeams
+      tags: [Repositories]
+      summary: Set the teams that list a repository
+      description: |
+        Admins only (404 for anyone else). `teams` are the IDs of the teams
+        that list this repository themselves: a team in the list that does not
+        yet gets the repository, one that has it and is not in the list loses
+        it. A team's other repositories and its whole-instance cover stay. A
+        team that is not there is 400 and nothing changes. A repository set up
+        in the config file can be given to teams too. Each team changed is an
+        audit entry.
+      x-pergent-access: session
+      x-pergent-pattern: PUT /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutRepositoryTeamsRequest'}
+      responses:
+        '200':
+          description: The teams after the change.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RepoTeamsView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/repositories/{instance}/{project}/settings:
     put:
       operationId: updateRepositorySettings
@@ -1724,6 +1787,48 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/users:
+    post:
+      operationId: addUser
+      tags: [Organization]
+      summary: Add a user by email
+      description: |
+        Admins only. Gives a person access before they have signed in: makes
+        the SSO account as `invited` (an admin added it, so the allowlist
+        lets that email in whatever it says) and puts it on each team in
+        `teams` with its role (`viewer` when none). The email is lower-cased
+        with ASCII rules and must be exactly one address (400). A team that is
+        not there, a role that is not `viewer` or `maintainer` and a team
+        named twice are 400, and nothing is made. An email added already is
+        409. An account that signed in earlier without being added is marked
+        added and answered 200. If a team cannot be written after the account
+        was made, the answer is 500 and the account stays: put it on teams
+        from the Teams page.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AddUserRequest'}
+      responses:
+        '200':
+          description: The account existed and is now marked added.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UserView'}
+        '201':
+          description: Added.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UserView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/users/{id}/role:
     put:
       operationId: setUserRole
@@ -1922,33 +2027,6 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
   # ------------------------------------------------- instances and settings
-  /api/integrations:
-    get:
-      operationId: getIntegrations
-      tags: [Instances and settings]
-      summary: Integration health of an instance
-      description: |
-        Admins only: the instance named with `?instance=` (404 for an unknown
-        name or none).
-      x-pergent-access: admin
-      security:
-        - sessionCookie: []
-      parameters:
-        - name: instance
-          in: query
-          required: true
-          description: The instance to describe.
-          schema: {type: string}
-      responses:
-        '200':
-          description: The integration.
-          content:
-            application/json:
-              schema: {$ref: '#/components/schemas/IntegrationView'}
-        '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {$ref: '#/components/responses/Forbidden'}
-        '404': {$ref: '#/components/responses/NotFound'}
-        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/settings:
     get:
       operationId: getAdminSettings
@@ -2549,6 +2627,37 @@ components:
         username:
           type: string
           pattern: '^[a-zA-Z0-9._-]{1,64}$'
+    AddUserRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          description: Exactly one address; lower-cased with ASCII rules.
+        teams:
+          type: array
+          description: Teams to put the account on, each once.
+          items:
+            type: object
+            required: [teamId]
+            properties:
+              teamId:
+                type: integer
+                format: int64
+              role:
+                type: string
+                enum: [viewer, maintainer]
+                description: Defaults to `viewer`.
+    PutRepositoryTeamsRequest:
+      type: object
+      required: [teams]
+      properties:
+        teams:
+          type: array
+          description: The IDs of the teams that list the repository themselves. `[]` takes it off every team that lists it.
+          items:
+            type: integer
+            format: int64
     SetAccountRoleRequest:
       type: object
       required: [role]
@@ -3188,47 +3297,6 @@ components:
           additionalProperties: {$ref: '#/components/schemas/SecretView'}
           description: 'By field. The fields an instance takes: review_token, approve_token and webhook_secret
             (GitLab); review_app_key, approve_app_key or approve_token, and webhook_secret (GitHub).'
-    IntegrationRepo:
-      description: One repository the admin can see.
-      type: object
-      required: [project, installed, approverReachable, inlineAvailable, protectionReadable]
-      properties:
-        project: {type: string}
-        installed:
-          type: boolean
-          description: pergent.sh's webhook and deploy token (GitLab) or the review App (GitHub) are in place.
-        approverReachable:
-          type: boolean
-          description: The approve bot or App can approve there.
-        inlineAvailable:
-          type: boolean
-          description: False when the review App may only read pull requests.
-        protectionReadable:
-          type: boolean
-          description: 'False when the review App lacks Administration: Read.'
-    IntegrationView:
-      description: The integration health of an instance.
-      type: object
-      required: [instance, platform, connected, approver, repos]
-      properties:
-        instance: {type: string}
-        platform:
-          type: string
-          enum: [gitlab, github]
-        connected:
-          type: boolean
-          description: Whether pergent.sh is connected to the instance now.
-        approver:
-          type: string
-          enum: [app, review_app, token]
-          description: '"app" (a GitHub approve App), "review_app" or "token" (a bot user).'
-        tokenExpiry:
-          type: [string, 'null']
-          format: date-time
-          description: Set while the approve token expires within 14 days.
-        repos:
-          type: array
-          items: {$ref: '#/components/schemas/IntegrationRepo'}
     SignInAdminView:
       description: The sign-in settings in force. The client secret is never sent.
       type: object
@@ -3970,6 +4038,30 @@ components:
         teams:
           type: array
           items: {$ref: '#/components/schemas/TeamRef'}
+    RepoTeamView:
+      description: A team as one repository's settings show it.
+      type: object
+      required: [id, name, members, direct, wholeInstance]
+      properties:
+        id: {type: integer}
+        name: {type: string}
+        members:
+          type: integer
+          description: How many accounts are on the team.
+        direct:
+          type: boolean
+          description: The team lists this repository itself.
+        wholeInstance:
+          type: boolean
+          description: The team covers every repository of the repository's instance.
+    RepoTeamsView:
+      description: Body of GET and PUT .../teams of a repository.
+      type: object
+      required: [teams]
+      properties:
+        teams:
+          type: array
+          items: {$ref: '#/components/schemas/RepoTeamView'}
     signInOptionsView:
       description: Body of GET /api/sign-in-options.
       type: object

@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gopaytech/pergent.sh/internal/password"
+	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -36,6 +37,11 @@ const (
 	msgOwnRole        = "you can't change your own role"
 	msgBadAccountRole = `the body must be {"role": "admin" or "user"}`
 	msgLocalRole      = "a local admin is always an admin"
+	msgBadEmail       = "that is not an email address"
+	msgBadAddUser     = `the body must be {"email": ..., "teams": [{"teamId": ..., "role": "viewer" or "maintainer"}]}`
+	msgNoTeam         = "every team must be a team that exists"
+	msgUserAdded      = "this email is added already"
+	msgBadRepoTeams   = `the body must be {"teams": [<team id>, ...]}`
 )
 
 var usernamePattern = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,64}$`)
@@ -46,6 +52,7 @@ var usernamePattern = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,64}$`)
 func (d *Dashboard) orgRoutes(mux *http.ServeMux) {
 	d.adminRoute(mux, "GET /api/users", d.users)
 	d.adminRoute(mux, "DELETE /api/users/{id}", d.deleteUser)
+	d.adminRoute(mux, "POST /api/admin/users", d.addUser)
 	d.adminRoute(mux, "PUT /api/admin/users/{id}/role", d.setUserRole)
 	d.adminRoute(mux, "POST /api/admin/accounts", d.createPasswordAccount)
 	d.adminRoute(mux, "GET /api/teams", d.teams)
@@ -97,26 +104,166 @@ func (d *Dashboard) users(w http.ResponseWriter, r *http.Request) {
 		d.failed(w, r, "listing teams", err)
 		return
 	}
+	of := teamRefs(teams)
+	out := make([]UserView, 0, len(accounts))
+	for _, a := range accounts {
+		out = append(out, userView(a, of[a.ID]))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// teamRefs are the teams each account is a member of, by account ID.
+func teamRefs(teams []store.Team) map[int64][]TeamRef {
 	of := map[int64][]TeamRef{}
 	for _, t := range teams {
 		for _, m := range t.Members {
 			of[m.AccountID] = append(of[m.AccountID], TeamRef{ID: t.ID, Name: t.Name})
 		}
 	}
-	out := make([]UserView, 0, len(accounts))
-	for _, a := range accounts {
-		refs := of[a.ID]
-		if refs == nil {
-			refs = []TeamRef{}
-		}
-		sso := a.Kind == store.AccountSSO
-		out = append(out, UserView{
-			ID: a.ID, Kind: a.Kind, Username: a.Username, Email: a.Email, Role: a.Role,
-			Invited: sso && a.LastSignInAt == nil, LastSignInAt: a.LastSignInAt,
-			Waiting: sso && a.Role != store.RoleAdmin && a.LastSignInAt != nil && len(refs) == 0, Teams: refs,
-		})
+	return of
+}
+
+// userView is account a as the Users page shows it; refs are its teams.
+func userView(a store.Account, refs []TeamRef) UserView {
+	if refs == nil {
+		refs = []TeamRef{}
 	}
-	writeJSON(w, http.StatusOK, out)
+	sso := a.Kind == store.AccountSSO
+	return UserView{
+		ID: a.ID, Kind: a.Kind, Username: a.Username, Email: a.Email, Role: a.Role,
+		Invited: sso && a.LastSignInAt == nil, LastSignInAt: a.LastSignInAt,
+		Waiting: sso && a.Role != store.RoleAdmin && a.LastSignInAt != nil && len(refs) == 0, Teams: refs,
+	}
+}
+
+// teamAssignment is a team an added user is put on, with the role there
+// ("" is viewer).
+type teamAssignment struct {
+	TeamID int64  `json:"teamId"`
+	Role   string `json:"role"`
+}
+
+// addUser gives a person access by email before they have signed in: JSON
+// {"email", "teams": [{"teamId", "role"}]}. The SSO account is made as
+// invited, with Added set so the allowlist lets that email in whatever it
+// says, and put on each team with its role (viewer when none). An account that
+// signed in already without being added is marked added (200); one added
+// already is 409. A bad email is 400, and so is a team that isn't there:
+// nothing is made then.
+func (d *Dashboard) addUser(w http.ResponseWriter, r *http.Request) {
+	ctx, se := r.Context(), session(r)
+	var in struct {
+		Email string           `json:"email"`
+		Teams []teamAssignment `json:"teams"`
+	}
+	if err := decodeStrict(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, msgBadAddUser)
+		return
+	}
+	email, err := store.NormalizeEmail(in.Email)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, msgBadEmail)
+		return
+	}
+	teams, err := d.Store.Teams(ctx)
+	if err != nil {
+		d.failed(w, r, "listing teams", err)
+		return
+	}
+	names := map[int64]string{}
+	for _, t := range teams {
+		names[t.ID] = t.Name
+	}
+	roles := map[int64]string{}
+	for _, t := range in.Teams {
+		role := t.Role
+		if role == "" {
+			role = store.RoleViewer
+		}
+		if role != store.RoleViewer && role != store.RoleMaintainer {
+			writeError(w, http.StatusBadRequest, msgBadMemberRole)
+			return
+		}
+		if _, ok := names[t.TeamID]; !ok {
+			writeError(w, http.StatusBadRequest, msgNoTeam)
+			return
+		}
+		if _, twice := roles[t.TeamID]; twice {
+			writeError(w, http.StatusBadRequest, msgBadAddUser)
+			return
+		}
+		roles[t.TeamID] = role
+	}
+
+	existing, found, err := d.Store.SSOAccountByEmail(ctx, email)
+	if err != nil {
+		d.failed(w, r, "loading an account", err)
+		return
+	}
+	if found && existing.Added {
+		writeError(w, http.StatusConflict, msgUserAdded)
+		return
+	}
+	acc, err := d.Store.AddSSOAccount(ctx, email, d.now())
+	if errors.Is(err, store.ErrExists) {
+		// Another address that reads the same once lower-cased.
+		writeError(w, http.StatusConflict, msgUserAdded)
+		return
+	}
+	if err != nil {
+		d.Log.Error("dashboard: adding a user failed", "error", err.Error())
+		writeError(w, http.StatusInternalServerError, msgWriteFailed)
+		return
+	}
+	d.Log.Info("dashboard: user added", "by", se.Username)
+	d.audit(ctx, se, "user_added", "", "", acc.Username)
+	for _, t := range in.Teams {
+		if err := d.addToTeam(ctx, se, t.TeamID, acc, roles[t.TeamID]); err != nil {
+			// The account is there and can be put on teams from the Teams page.
+			d.Log.Error("dashboard: putting an added user on a team failed", "team", t.TeamID, "error", err.Error())
+			writeError(w, http.StatusInternalServerError, msgWriteFailed)
+			return
+		}
+	}
+	teams, err = d.Store.Teams(ctx)
+	if err != nil {
+		d.failed(w, r, "listing teams", err)
+		return
+	}
+	status := http.StatusCreated
+	if found {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, userView(acc, teamRefs(teams)[acc.ID]))
+}
+
+// addToTeam makes acc a member of team id with role, or sets its role there,
+// and audits a change. A team removed meanwhile is an error.
+func (d *Dashboard) addToTeam(ctx context.Context, se Session, id int64, acc store.Account, role string) error {
+	var before, after store.Team
+	found, err := d.Store.UpdateTeam(ctx, id, func(t *store.Team) error {
+		before = *t
+		before.Members, before.Repos = slices.Clone(t.Members), slices.Clone(t.Repos)
+		i := slices.IndexFunc(t.Members, func(m store.TeamMember) bool { return m.AccountID == acc.ID })
+		if i < 0 {
+			t.Members = append(t.Members, store.TeamMember{AccountID: acc.ID, Role: role})
+		} else {
+			t.Members[i].Role = role
+		}
+		after = *t
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errors.New("the team isn't there")
+	}
+	if parts := teamChanges(before, after, func(int64) string { return acc.Username }); len(parts) > 0 {
+		d.Log.Info("dashboard: team changed", "team", after.Name, "changed", strings.Join(parts, ", "), "by", se.Username)
+		d.audit(ctx, se, "team_updated", "", "", after.Name+": "+strings.Join(parts, ", "))
+	}
+	return nil
 }
 
 func (d *Dashboard) deleteUser(w http.ResponseWriter, r *http.Request) {
@@ -551,6 +698,121 @@ func (d *Dashboard) deleteTeam(w http.ResponseWriter, r *http.Request) {
 	d.Log.Info("dashboard: team removed", "team", name, "by", se.Username)
 	d.audit(ctx, se, "team_deleted", "", "", name)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- a repository's teams ---
+
+// repositoryTeams answers GET .../teams of a repository: every team, with
+// whether it lists this repository itself (Direct) or covers every repository
+// of its instance. For admins only: anyone else gets 404, as an admin route
+// does. It reads the same team_repos rows as the Teams page.
+func (d *Dashboard) repositoryTeams(w http.ResponseWriter, r *http.Request, se Session, repo settings.Effective) {
+	if !se.Admin {
+		notFound(w)
+		return
+	}
+	d.writeRepositoryTeams(w, r, repo)
+}
+
+func (d *Dashboard) writeRepositoryTeams(w http.ResponseWriter, r *http.Request, repo settings.Effective) {
+	teams, err := d.Store.Teams(r.Context())
+	if err != nil {
+		d.failed(w, r, "listing teams", err)
+		return
+	}
+	out := RepoTeamsView{Teams: make([]RepoTeamView, 0, len(teams))}
+	for _, t := range teams {
+		v := RepoTeamView{ID: t.ID, Name: t.Name, Members: len(t.Members)}
+		for _, tr := range t.Repos {
+			if tr.Instance != repo.Instance {
+				continue
+			}
+			v.WholeInstance = v.WholeInstance || tr.Project == ""
+			v.Direct = v.Direct || (tr.Project != "" && strings.EqualFold(tr.Project, repo.Project))
+		}
+		out.Teams = append(out.Teams, v)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// putRepositoryTeams is PUT .../teams of a repository: JSON {"teams": [team
+// ID, ...]}, the teams that list this repository themselves. A team in the
+// list that doesn't yet gets the repository, one that has it and isn't in the
+// list loses it; a team's other repositories and whole-instance cover stay.
+// Admins only (404 for anyone else); a team that isn't there is 400 and
+// nothing changes. 200, the same as the GET.
+func (d *Dashboard) putRepositoryTeams(w http.ResponseWriter, r *http.Request) {
+	ctx, se := r.Context(), session(r)
+	if !se.Admin {
+		notFound(w)
+		return
+	}
+	repo, ok := d.targetAny(w, r, "/teams", RoleAdmin)
+	if !ok {
+		return
+	}
+	var in struct {
+		Teams []int64 `json:"teams"`
+	}
+	if err := decodeStrict(r, &in); err != nil || in.Teams == nil {
+		writeError(w, http.StatusBadRequest, msgBadRepoTeams)
+		return
+	}
+	teams, err := d.Store.Teams(ctx)
+	if err != nil {
+		d.failed(w, r, "listing teams", err)
+		return
+	}
+	known := map[int64]bool{}
+	for _, t := range teams {
+		known[t.ID] = true
+	}
+	want := map[int64]bool{}
+	for _, id := range in.Teams {
+		if !known[id] {
+			writeError(w, http.StatusBadRequest, msgNoTeam)
+			return
+		}
+		want[id] = true
+	}
+	for _, t := range teams {
+		if err := d.setTeamRepo(ctx, se, t.ID, repo, want[t.ID]); err != nil {
+			d.Log.Error("dashboard: changing a repository's teams failed", "team", t.ID, "error", err.Error())
+			writeError(w, http.StatusInternalServerError, msgWriteFailed)
+			return
+		}
+	}
+	d.writeRepositoryTeams(w, r, repo)
+}
+
+// setTeamRepo makes team id list repo itself (on) or not (off), leaving the
+// rest of the team as it is, and audits a change. A team removed meanwhile
+// is left alone.
+func (d *Dashboard) setTeamRepo(ctx context.Context, se Session, id int64, repo settings.Effective, on bool) error {
+	var before, after store.Team
+	_, err := d.Store.UpdateTeam(ctx, id, func(t *store.Team) error {
+		before = *t
+		before.Members, before.Repos = slices.Clone(t.Members), slices.Clone(t.Repos)
+		listed := func(tr store.TeamRepo) bool {
+			return tr.Instance == repo.Instance && tr.Project != "" && strings.EqualFold(tr.Project, repo.Project)
+		}
+		switch has := slices.ContainsFunc(t.Repos, listed); {
+		case on && !has:
+			t.Repos = append(t.Repos, store.TeamRepo{Instance: repo.Instance, Project: repo.Project})
+		case !on && has:
+			t.Repos = slices.DeleteFunc(t.Repos, listed)
+		}
+		after = *t
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if !slices.EqualFunc(before.Repos, after.Repos, func(a, b store.TeamRepo) bool { return a == b }) {
+		d.Log.Info("dashboard: team changed", "team", after.Name, "changed", "repos", "by", se.Username)
+		d.audit(ctx, se, "team_updated", repo.Instance, repo.Project, after.Name+": repos")
+	}
+	return nil
 }
 
 // --- the audit log ---

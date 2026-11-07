@@ -83,7 +83,7 @@ describe("SkillInstall", () => {
     await screen.findByRole("region", { name: "Skills found" });
   });
 
-  it("an admin types the instance, whichever kind of admin they are", async () => {
+  it("an admin types the instance, whether a local admin or an SSO admin", async () => {
     for (const me of [operator, ssoAdmin]) {
       fakeApi({ "GET /api/me": { body: me } });
       const { unmount } = renderApp("/skills/install");
@@ -166,19 +166,19 @@ describe("SkillInstall", () => {
     expect(await screen.findByText("the skill contains a secret pergent.sh holds")).toBeInTheDocument();
   });
 
-  it("shows the server's refusal to start a read (the ceiling, a missing image)", async () => {
+  it("shows the server's refusal to start a read (an unknown instance, a missing image)", async () => {
     fakeApi({
       "GET /api/me": { body: ssoAdmin },
       "POST /api/admin/skill-fetches": {
-        status: 403,
+        status: 404,
         body: {
-          error: "you can install only from repositories of your own instance that you can see",
+          error: "not found",
         },
       },
     });
     renderApp("/skills/install");
     await readRepo();
-    expect(await screen.findByRole("alert")).toHaveTextContent("you can install only from repositories of your own instance");
+    expect(await screen.findByRole("alert")).toHaveTextContent("not found");
   });
 
   it("shows why a read failed and lets the admin read again", async () => {

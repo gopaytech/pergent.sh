@@ -20,7 +20,6 @@ import (
 	"github.com/gopaytech/pergent/render"
 
 	"github.com/gopaytech/pergent.sh/internal/actions"
-	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/github"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/instances"
@@ -47,8 +46,6 @@ const (
 	// instructions are kept.
 	inputsTTL = 5 * time.Minute
 
-	attentionTokenExpiry = "token_expiry"
-
 	msgLoadFailed   = "could not load the data, please try again"
 	msgNotFound     = "not found"
 	msgInputsFailed = "could not read the repository's skills and instructions from the platform, please try again"
@@ -64,7 +61,7 @@ var outcomes = map[string]bool{
 }
 
 // readRoutes adds the read API to mux, every route behind a session; the
-// Integrations and Settings pages' data are admin routes (adminRoute).
+// Settings page's data is an admin route (adminRoute).
 func (d *Dashboard) readRoutes(mux *http.ServeMux) {
 	get := func(pattern string, h http.HandlerFunc) { mux.Handle("GET "+pattern, d.Auth.Require(h)) }
 	get("/api/overview", d.overview)
@@ -77,7 +74,6 @@ func (d *Dashboard) readRoutes(mux *http.ServeMux) {
 	get("/api/skills", d.skills)
 	get("/api/skills/{name}", d.skill)
 	get("/api/skills/{name}/versions/{v}", d.skillVersion)
-	d.adminRoute(mux, "GET /api/integrations", d.integrations)
 	d.adminRoute(mux, "GET /api/admin/settings", d.adminSettings)
 	// Anything else is 404, also the instance alone (which the mux would
 	// otherwise redirect to the {rest...} routes).
@@ -771,10 +767,11 @@ func (d *Dashboard) repositoryViews(ctx context.Context, se Session, repos []set
 
 // repository serves a repository's detail, with a trailing /inputs its
 // skills and instructions, with a trailing /readiness its Readiness tab, with
-// a trailing /past-dismissals its Past dismissals, or with a trailing
-// /skill-results its Skill results. A repository whose own path is the one
-// asked for wins over the /inputs, /readiness, /past-dismissals or
-// /skill-results of another.
+// a trailing /past-dismissals its Past dismissals, with a trailing
+// /skill-results its Skill results, or with a trailing /teams (admins only)
+// the teams that cover it. A repository whose own path is the one asked for
+// wins over the /inputs, /readiness, /past-dismissals, /skill-results or
+// /teams of another.
 func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	instance, rest := r.PathValue("instance"), r.PathValue("rest")
@@ -823,6 +820,12 @@ func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 	if project, ok := strings.CutSuffix(rest, "/skill-results"); ok {
 		if repo, ok := find(project); ok {
 			d.repositorySkillResults(w, r, se, repo)
+			return
+		}
+	}
+	if project, ok := strings.CutSuffix(rest, "/teams"); ok {
+		if repo, ok := find(project); ok {
+			d.repositoryTeams(w, r, se, repo)
 			return
 		}
 	}
@@ -1161,77 +1164,7 @@ func escapePath(p string) string {
 	return strings.Join(segs, "/")
 }
 
-// --- admin: GET /api/integrations and /api/admin/settings ---
-
-var datePattern = regexp.MustCompile(`\d{4}-\d{2}-\d{2}`)
-
-func (d *Dashboard) integrations(w http.ResponseWriter, r *http.Request) {
-	ctx, se := r.Context(), session(r)
-	// An admin belongs to no instance: it names the one it wants.
-	instance := r.URL.Query().Get("instance")
-	inst, ok := d.registry.Get(instance)
-	if !ok {
-		notFound(w)
-		return
-	}
-	platform := inst.Platform
-	repos, err := d.activeRepos(ctx, se)
-	if err != nil {
-		d.failed(w, r, "listing repositories", err)
-		return
-	}
-	stored, err := d.Store.Projects(ctx)
-	if err != nil {
-		d.failed(w, r, "listing projects", err)
-		return
-	}
-	byPath := map[string]store.Project{}
-	for _, p := range stored {
-		if p.Instance == instance {
-			byPath[lower(p.Path)] = p
-		}
-	}
-	view := IntegrationView{Instance: instance, Platform: platform, Connected: d.connected(instance),
-		Approver: approverOf(inst), Repos: []IntegrationRepo{}}
-	items, err := d.Store.Attention(ctx)
-	if err != nil {
-		d.failed(w, r, "listing setup problems", err)
-		return
-	}
-	for _, a := range items {
-		if a.Instance != instance || a.Project != "" || a.Kind != attentionTokenExpiry {
-			continue
-		}
-		if t, err := time.Parse(time.DateOnly, datePattern.FindString(a.Message)); err == nil {
-			view.TokenExpiry = &t
-		}
-	}
-	for _, e := range repos {
-		if e.Instance != instance {
-			continue
-		}
-		p, found := byPath[lower(e.Project)]
-		installed := found && p.InstallationID != 0
-		if e.Platform == config.PlatformGitLab {
-			installed = found && p.HookID != 0 && p.DeployTokenID != 0
-		}
-		view.Repos = append(view.Repos, IntegrationRepo{Project: e.Project, Installed: installed,
-			ApproverReachable: found && p.ApproveAvailable, InlineAvailable: !installed || p.InlineAvailable,
-			ProtectionReadable: !installed || p.ProtectionReadable})
-	}
-	writeJSON(w, http.StatusOK, view)
-}
-
-// connected reports whether pergent.sh is connected to the instance: its
-// review side serves the dashboard. Without that wiring (no Sources) every
-// instance counts as connected.
-func (d *Dashboard) connected(instance string) bool {
-	if d.sources == nil {
-		return true
-	}
-	_, ok := d.sources.Get(instance)
-	return ok
-}
+// --- admin: GET /api/admin/settings ---
 
 func (d *Dashboard) adminSettings(w http.ResponseWriter, r *http.Request) {
 	def, err := d.defaultsView(r.Context())

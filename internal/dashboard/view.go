@@ -647,43 +647,6 @@ type AttentionView struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-// IntegrationView is GET /api/integrations?instance= (admins only, 403
-// otherwise): the instance named, 404 for one that is not there.
-type IntegrationView struct {
-	Instance string `json:"instance"`
-	Platform string `json:"platform"`
-	// Connected is whether pergent.sh is connected to the instance now: its
-	// review side serves the dashboard. An instance of the config always
-	// is (pergent.sh doesn't start otherwise); one added in the dashboard
-	// that couldn't be reached at startup, or whose connection failed, is
-	// not until it is saved again. Without that wiring it is true.
-	Connected bool `json:"connected"`
-	// Approver is "app" (a GitHub approve App), "review_app" (the review
-	// App itself) or "token" (a bot user).
-	Approver string `json:"approver"`
-	// TokenExpiry is set while the approve token expires within 14 days.
-	TokenExpiry *time.Time        `json:"tokenExpiry,omitempty"`
-	Repos       []IntegrationRepo `json:"repos"`
-}
-
-// IntegrationRepo is one repository the admin can see.
-type IntegrationRepo struct {
-	Project string `json:"project"`
-	// Installed: pergent.sh's webhook and deploy token (GitLab) or the
-	// review App (GitHub) are in place.
-	Installed bool `json:"installed"`
-	// ApproverReachable: the approve bot or App can approve there.
-	ApproverReachable bool `json:"approverReachable"`
-	// InlineAvailable is false when the review App is installed but may only
-	// read pull requests, so it can't post inline threads. It says nothing
-	// (true) for a repository without the review App.
-	InlineAvailable bool `json:"inlineAvailable"`
-	// ProtectionReadable is false when the review App is installed but lacks
-	// Administration: Read, so it can't read classic branch protection. It
-	// says nothing (true) for a repository without the review App.
-	ProtectionReadable bool `json:"protectionReadable"`
-}
-
 // AdminSettingsView is GET /api/admin/settings (admins only): the defaults
 // a repository switched on in the dashboard gets, and the model. Never a key.
 type AdminSettingsView struct {
@@ -868,6 +831,19 @@ type AvailableRepo struct {
 //     memberships (its next request is 401; an SSO account is made again, on
 //     no team, at its next sign-in if the allowlist lets it in). Your own
 //     account is 409; the last local admin can't be removed (409). 204.
+//   - POST /api/admin/users {"email", "teams": [{"teamId", "role"}]}: gives a
+//     person access before they sign in: the SSO account is made as invited
+//     (Added, so the allowlist lets the email in) and put on each team with
+//     its role ("viewer" when none). A bad email, a team that isn't there or
+//     a role that isn't viewer or maintainer is 400 and nothing is made; an
+//     email added already is 409. 201, UserView; 200 for an account that
+//     signed in already without being added.
+//   - GET /api/repositories/{instance}/{project...}/teams and PUT the same
+//     with {"teams": [team ID, ...]} (admins; 404 for anyone else):
+//     RepoTeamsView, every team with whether it lists the repository itself
+//     or covers its whole instance. The PUT sets which teams list the
+//     repository itself, as the Teams page does through PUT /api/teams/{id};
+//     a team that isn't there is 400. 200, RepoTeamsView.
 //   - PUT /api/admin/users/{id}/role {"role": "admin" or "user"}: an SSO
 //     account's role. Your own role is 409, and so is a local admin's (always
 //     an admin). 204.
@@ -948,6 +924,23 @@ type TeamMemberView struct {
 type TeamRepoView struct {
 	Instance string `json:"instance"`
 	Project  string `json:"project"`
+}
+
+// RepoTeamsView is GET .../teams of a repository: every team, by name
+// ignoring case.
+type RepoTeamsView struct {
+	Teams []RepoTeamView `json:"teams"`
+}
+
+// RepoTeamView is a team as one repository's settings show it. Direct is set
+// when the team lists the repository itself; WholeInstance when it covers
+// every repository of the repository's instance (so it covers this one too).
+type RepoTeamView struct {
+	ID            int64  `json:"id"`
+	Name          string `json:"name"`
+	Members       int    `json:"members"`
+	Direct        bool   `json:"direct"`
+	WholeInstance bool   `json:"wholeInstance"`
 }
 
 // AuditPageView is a page of the audit log. Next is the before of the

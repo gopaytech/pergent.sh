@@ -9,6 +9,10 @@ import {
   instanceGitHubOneApp,
   instanceGitLab,
   operator,
+  signInFromConfig,
+  signInJWT,
+  signInNone,
+  signInOIDC,
 } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
@@ -26,7 +30,7 @@ const onlyCopy = (el: HTMLElement) => {
 
 describe("Integrations", () => {
   it("lists every instance, marking the config's and showing which secrets are set", async () => {
-    const fake = fakeApi({ "GET /api/me": { body: operator }, "GET /api/admin/instances": { body: instances } });
+    fakeApi({ "GET /api/me": { body: operator }, "GET /api/admin/instances": { body: instances } });
     renderApp("/admin/integrations");
     const main = await card("GitLab · main");
     expect(within(main).getByText("config")).toBeInTheDocument();
@@ -43,7 +47,6 @@ describe("Integrations", () => {
     expect(within(hub).getByRole("group", { name: "Review App private key" })).toHaveTextContent("set · changed 2 h ago");
     expect(within(hub).getByRole("group", { name: "Approve App private key" })).toHaveTextContent("not set");
     expect(await card("GitLab · extra")).toBeInTheDocument();
-    expect(fake.find("GET", "/api/integrations")).toHaveLength(0);
   });
 
   it("shows each instance's webhook URL and who sets it", async () => {
@@ -402,5 +405,227 @@ describe("Integrations", () => {
     renderApp("/admin/integrations");
     await userEvent.click(within(await card("GitLab · extra")).getByRole("button", { name: "Remove" }));
     expect(fake.calls.filter((c) => c.method === "DELETE")).toHaveLength(0);
+  });
+});
+
+describe("Integrations: Sign-in", () => {
+  const routes = (signIn: unknown) => ({
+    "GET /api/me": { body: operator },
+    "GET /api/admin/instances": { body: instances },
+    "GET /api/admin/sign-in": { body: signIn },
+  });
+  // The section once its settings are in.
+  const section = async () => {
+    const box = await screen.findByRole("region", { name: "Sign-in" });
+    await vi.waitFor(() => expect(within(box).queryByText("Loading…")).not.toBeInTheDocument());
+    return box;
+  };
+
+  it("starts with the mode only when nothing is set up, and says what that means", async () => {
+    fakeApi(routes(signInNone));
+    renderApp("/admin/integrations");
+    const box = await section();
+    expect(within(box).getByLabelText("Mode")).toHaveValue("");
+    expect(within(box).getAllByRole("option").map((o) => o.textContent)).toEqual(["Not set up", "OIDC", "JWT from a proxy"]);
+    expect(box).toHaveTextContent("Only local admins can sign in");
+    expect(within(box).queryByLabelText("Issuer")).not.toBeInTheDocument();
+    expect(within(box).queryByLabelText("Allowed domains")).not.toBeInTheDocument();
+    expect(within(box).queryByRole("button", { name: "Test" })).not.toBeInTheDocument();
+  });
+
+  it("shows the OIDC fields and not the JWT ones, with the secret write-only", async () => {
+    fakeApi(routes(signInOIDC));
+    renderApp("/admin/integrations");
+    const box = await section();
+    expect(within(box).getByLabelText("Mode")).toHaveValue("oidc");
+    expect(within(box).getByLabelText("Label")).toHaveValue("Google");
+    expect(within(box).getByLabelText("Issuer")).toHaveValue("https://accounts.google.com");
+    expect(within(box).getByLabelText("Client ID")).toHaveValue("123-abc.apps.googleusercontent.com");
+    const secret = within(box).getByLabelText("Client secret");
+    expect(secret).toHaveAttribute("type", "password");
+    expect(secret).toHaveValue("");
+    expect(box).toHaveTextContent("set · changed 1 h ago");
+    expect(within(box).getByLabelText("Allowed domains")).toHaveValue("example.com");
+    expect(within(box).getByLabelText("Allowed emails")).toHaveValue("friend@example.org");
+    expect(box).toHaveTextContent("https://dash.example.com/auth/oidc/callback");
+    for (const jwtOnly of ["Header", "Audience", "JWKS URL", "Email claim"]) {
+      expect(within(box).queryByLabelText(jwtOnly)).not.toBeInTheDocument();
+    }
+  });
+
+  it("shows the JWT fields and not the OIDC ones", async () => {
+    fakeApi(routes(signInJWT));
+    renderApp("/admin/integrations");
+    const box = await section();
+    expect(within(box).getByLabelText("Header")).toHaveValue("X-Auth-Token");
+    expect(within(box).getByLabelText("Issuer")).toHaveValue("https://proxy.example.com");
+    expect(within(box).getByLabelText("Audience")).toHaveValue("pergent");
+    expect(within(box).getByLabelText("JWKS URL")).toHaveValue("https://proxy.example.com/keys");
+    expect(within(box).getByLabelText("Email claim")).toHaveValue("email");
+    for (const oidcOnly of ["Label", "Client ID", "Client secret"]) {
+      expect(within(box).queryByLabelText(oidcOnly)).not.toBeInTheDocument();
+    }
+  });
+
+  it("changes the fields when the mode changes", async () => {
+    fakeApi(routes(signInNone));
+    renderApp("/admin/integrations");
+    const box = await section();
+    await userEvent.selectOptions(within(box).getByLabelText("Mode"), "oidc");
+    expect(within(box).getByLabelText("Client secret")).toBeInTheDocument();
+    expect(within(box).getByText("not set")).toBeInTheDocument();
+    expect(within(box).queryByLabelText("Header")).not.toBeInTheDocument();
+    await userEvent.selectOptions(within(box).getByLabelText("Mode"), "jwt");
+    expect(within(box).getByLabelText("Header")).toBeInTheDocument();
+    expect(within(box).queryByLabelText("Client secret")).not.toBeInTheDocument();
+  });
+
+  it("saves OIDC with the secret left out when none is typed, and lists one per line", async () => {
+    const fake = fakeApi({ ...routes(signInOIDC), "PUT /api/admin/sign-in": { body: signInOIDC } });
+    renderApp("/admin/integrations");
+    const box = await section();
+    await userEvent.clear(within(box).getByLabelText("Allowed domains"));
+    await userEvent.type(within(box).getByLabelText("Allowed domains"), "example.com{Enter}Corp.Example{Enter}");
+    await userEvent.click(within(box).getByRole("button", { name: "Save" }));
+    const [put] = fake.find("PUT", "/api/admin/sign-in");
+    expect(put.headers.get("X-CSRF-Token")).toBe("csrf-123");
+    expect(put.body).toEqual({
+      mode: "oidc",
+      label: "Google",
+      issuer: "https://accounts.google.com",
+      clientID: "123-abc.apps.googleusercontent.com",
+      header: "",
+      audience: "",
+      jwksURL: "",
+      emailClaim: "",
+      allowedDomains: ["example.com", "Corp.Example"],
+      allowedEmails: ["friend@example.org"],
+    });
+    expect(put.body).not.toHaveProperty("clientSecret");
+  });
+
+  it("sends a typed secret once, clears the field and never shows it", async () => {
+    const fake = fakeApi({ ...routes(signInNone), "PUT /api/admin/sign-in": { body: signInOIDC } });
+    renderApp("/admin/integrations");
+    const box = await section();
+    await userEvent.selectOptions(within(box).getByLabelText("Mode"), "oidc");
+    await userEvent.type(within(box).getByLabelText("Label"), "Google");
+    await userEvent.type(within(box).getByLabelText("Issuer"), "https://accounts.google.com");
+    await userEvent.type(within(box).getByLabelText("Client ID"), "123-abc.apps.googleusercontent.com");
+    await userEvent.type(within(box).getByLabelText("Client secret"), "GOCSPX-very-secret");
+    await userEvent.click(within(box).getByRole("button", { name: "Save" }));
+    const [put] = fake.find("PUT", "/api/admin/sign-in");
+    expect((put.body as { clientSecret?: string }).clientSecret).toBe("GOCSPX-very-secret");
+    await vi.waitFor(() => expect(within(box).getByLabelText("Client secret")).toHaveValue(""));
+    expect(document.body.textContent).not.toContain("GOCSPX-very-secret");
+    expect(box).toHaveTextContent("set");
+  });
+
+  it("asks for the secret again when the issuer changes", async () => {
+    const fake = fakeApi({ ...routes(signInOIDC), "PUT /api/admin/sign-in": { body: signInOIDC } });
+    renderApp("/admin/integrations");
+    const box = await section();
+    expect(box).not.toHaveTextContent("Enter the client secret again");
+    expect(within(box).getByLabelText("Client secret")).not.toBeRequired();
+    await userEvent.clear(within(box).getByLabelText("Issuer"));
+    await userEvent.type(within(box).getByLabelText("Issuer"), "https://login.example.net");
+    expect(box).toHaveTextContent("Enter the client secret again");
+    expect(box).toHaveTextContent("never sent to a new issuer");
+    expect(within(box).getByLabelText("Client secret")).toBeRequired();
+    // Put the issuer back and the hint goes.
+    await userEvent.clear(within(box).getByLabelText("Issuer"));
+    await userEvent.type(within(box).getByLabelText("Issuer"), "https://accounts.google.com");
+    expect(box).not.toHaveTextContent("Enter the client secret again");
+    expect(fake.find("PUT", "/api/admin/sign-in")).toHaveLength(0);
+  });
+
+  it("saves JWT without the OIDC fields", async () => {
+    const fake = fakeApi({ ...routes(signInNone), "PUT /api/admin/sign-in": { body: signInJWT } });
+    renderApp("/admin/integrations");
+    const box = await section();
+    await userEvent.selectOptions(within(box).getByLabelText("Mode"), "jwt");
+    await userEvent.type(within(box).getByLabelText("Header"), "X-Auth-Token");
+    await userEvent.type(within(box).getByLabelText("Issuer"), "https://proxy.example.com");
+    await userEvent.type(within(box).getByLabelText("Audience"), "pergent");
+    await userEvent.type(within(box).getByLabelText("JWKS URL"), "https://proxy.example.com/keys");
+    await userEvent.type(within(box).getByLabelText("Allowed emails"), "a@example.org");
+    await userEvent.click(within(box).getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/admin/sign-in")[0].body).toEqual({
+      mode: "jwt",
+      label: "",
+      issuer: "https://proxy.example.com",
+      clientID: "",
+      header: "X-Auth-Token",
+      audience: "pergent",
+      jwksURL: "https://proxy.example.com/keys",
+      emailClaim: "",
+      allowedDomains: [],
+      allowedEmails: ["a@example.org"],
+    });
+  });
+
+  it("is read-only when the config file sets it, with the secret only set or not set", async () => {
+    const fake = fakeApi(routes(signInFromConfig));
+    renderApp("/admin/integrations");
+    const box = await section();
+    expect(box).toHaveTextContent("config");
+    expect(box).toHaveTextContent("managed by the config file");
+    expect(box).toHaveTextContent("OIDC");
+    expect(box).toHaveTextContent("https://accounts.google.com");
+    expect(box).toHaveTextContent("123-abc.apps.googleusercontent.com");
+    expect(box).toHaveTextContent("example.com");
+    expect(within(box).getByText("set")).toBeInTheDocument();
+    expect(within(box).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(within(box).queryByLabelText("Client secret")).not.toBeInTheDocument();
+    expect(within(box).queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    expect(fake.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
+  });
+
+  it("tests the provider and shows only whether it worked", async () => {
+    let worked = true;
+    const fake = fakeApi({
+      ...routes(signInOIDC),
+      "POST /api/admin/sign-in/test": () => ({ body: { ok: worked } }),
+    });
+    renderApp("/admin/integrations");
+    const box = await section();
+    await userEvent.click(within(box).getByRole("button", { name: "Test" }));
+    expect(await within(box).findByRole("status")).toHaveTextContent("It worked.");
+    expect(fake.find("POST", "/api/admin/sign-in/test")[0].body).toEqual({
+      mode: "oidc",
+      issuer: "https://accounts.google.com",
+      jwksURL: "",
+    });
+    worked = false;
+    await userEvent.click(within(box).getByRole("button", { name: "Test" }));
+    await vi.waitFor(() => expect(within(box).getByRole("status")).toHaveTextContent("It did not work."));
+    expect(within(box).getByRole("status").textContent).toBe("It did not work.");
+  });
+
+  it("tests the key set in JWT mode", async () => {
+    const fake = fakeApi({ ...routes(signInJWT), "POST /api/admin/sign-in/test": { body: { ok: true } } });
+    renderApp("/admin/integrations");
+    const box = await section();
+    await userEvent.click(within(box).getByRole("button", { name: "Test" }));
+    await within(box).findByRole("status");
+    expect(fake.find("POST", "/api/admin/sign-in/test")[0].body).toEqual({
+      mode: "jwt",
+      issuer: "https://proxy.example.com",
+      jwksURL: "https://proxy.example.com/keys",
+    });
+  });
+
+  it("shows the server's text when a save is refused, and keeps what was typed", async () => {
+    fakeApi({
+      ...routes(signInOIDC),
+      "PUT /api/admin/sign-in": { status: 400, body: { error: "issuer must be an https URL" } },
+    });
+    renderApp("/admin/integrations");
+    const box = await section();
+    await userEvent.clear(within(box).getByLabelText("Label"));
+    await userEvent.type(within(box).getByLabelText("Label"), "Workspace");
+    await userEvent.click(within(box).getByRole("button", { name: "Save" }));
+    expect(await within(box).findByRole("alert")).toHaveTextContent("issuer must be an https URL");
+    expect(within(box).getByLabelText("Label")).toHaveValue("Workspace");
   });
 });

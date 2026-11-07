@@ -468,15 +468,6 @@ export type SkillFetchResult = { name: string; ok: boolean; error?: string };
 // itself, or a bot user's token.
 export type Approver = "app" | "review_app" | "token";
 
-export type IntegrationView = {
-  instance: string;
-  platform: Platform;
-  connected: boolean;
-  approver: Approver;
-  tokenExpiry?: string;
-  repos: { project: string; installed: boolean; approverReachable: boolean; inlineAvailable: boolean; protectionReadable: boolean }[];
-};
-
 // SecretView says whether a secret is set and when it last changed; the
 // value is never sent. updatedAt is null for a secret from the config's
 // environment.
@@ -518,8 +509,8 @@ export type DefaultsView = DefaultValues & {
 };
 
 // LLMAdminView is GET /api/admin/llm: where the model comes from, the model
-// and whether a key is set. editable is true for an operator when the
-// config has no llm: block.
+// and whether a key is set. editable is true for an admin when the config
+// has no llm: block.
 export type LLMAdminView = {
   source: "config" | "dashboard";
   provider: string;
@@ -566,7 +557,7 @@ export type UserView = {
   teams: TeamRef[];
 };
 
-// NewAccountView is a password admin just made, with its generated password:
+// NewAccountView is a local admin just made, with its generated password:
 // the only time it is shown.
 export type NewAccountView = { username: string; password: string };
 
@@ -584,6 +575,48 @@ export type TeamView = {
   name: string;
   members: TeamMemberView[];
   repos: TeamRepoView[];
+};
+
+// AddUserBody is the body of POST /api/admin/users: an email, and the teams to
+// put the account on, each with its role (viewer when left out).
+export type AddUserBody = { email: string; teams?: { teamId: number; role?: MemberRole }[] };
+
+// RepoTeamView is a team on a repository's settings page: direct is set when
+// it lists the repository itself, wholeInstance when it covers every
+// repository of the instance.
+export type RepoTeamView = { id: number; name: string; members: number; direct: boolean; wholeInstance: boolean };
+
+// RepoTeamsView is GET and PUT .../teams of a repository (admins).
+export type RepoTeamsView = { teams: RepoTeamView[] };
+
+// SignInMode is how people other than local admins sign in: "" (not set up),
+// OIDC, or a JWT header a proxy adds.
+export type SignInMode = "" | "oidc" | "jwt";
+
+// SignInAdminView is GET /api/admin/sign-in (and the answer of its PUT). The
+// client secret is never sent, only whether one is set. source is "config"
+// when the config file sets it: then editable is false.
+export type SignInAdminView = {
+  source: "config" | "dashboard";
+  editable: boolean;
+  mode: SignInMode;
+  label: string;
+  issuer: string;
+  clientID: string;
+  clientSecret: SecretView;
+  header: string;
+  audience: string;
+  jwksURL: string;
+  emailClaim: string;
+  allowedDomains: string[];
+  allowedEmails: string[];
+  callbackURL: string;
+};
+
+// SignInBody is the body of PUT /api/admin/sign-in. A clientSecret left out
+// keeps the stored one; "" removes it.
+export type SignInBody = Omit<SignInAdminView, "source" | "editable" | "clientSecret" | "callbackURL"> & {
+  clientSecret?: string;
 };
 
 // TeamUpdate is the body of PUT /api/teams/{id}: it replaces everything.
@@ -770,6 +803,7 @@ export const paths = {
   // Stop using: POST {fingerprint}.
   apiRepoPastDismissalStop: (instance: string, project: string) =>
     `/api/repositories/${seg(instance)}/${proj(project)}/past-dismissals/stop`,
+  apiRepoTeams: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/teams`,
   apiRepoSettings: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/settings`,
   apiRepoReadiness: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/readiness`,
   apiRepoReadinessScan: (instance: string, project: string) =>

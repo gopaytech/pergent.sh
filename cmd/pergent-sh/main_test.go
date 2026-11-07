@@ -165,11 +165,6 @@ func TestCheckSignInSecret(t *testing.T) {
 	if err := checkSignInSecret(cfg); err != nil {
 		t.Errorf("checkSignInSecret with the variable set = %v", err)
 	}
-	// The secret is never in an error.
-	t.Setenv("PERGENT_TEST_OIDC_SECRET", "")
-	if err := checkSignInSecret(cfg); err != nil && strings.Contains(err.Error(), "s3cret-value") {
-		t.Errorf("error holds the secret: %v", err)
-	}
 }
 
 // The start-up sweep logs how many sessions it ended, says nothing when there

@@ -3,7 +3,6 @@ import type {
   Can,
   DefaultsView,
   InstanceAdminView,
-  IntegrationView,
   LibrarySkill,
   LLMAdminView,
   Me,
@@ -11,12 +10,14 @@ import type {
   PastDismissalView,
   RepositoryDetailView,
   RepositoryView,
+  RepoTeamsView,
   ReviewDetailView,
   ReviewSummary,
   Role,
   RunDetailView,
   SkillDetail,
   SkillFetch,
+  SignInAdminView,
   SkillResultView,
   TeamView,
   UserView,
@@ -346,30 +347,74 @@ export const fetchUpdateDone: SkillFetch = {
   ],
 };
 
-export const integrations: IntegrationView = {
-  instance: "main",
-  platform: "gitlab",
-  connected: true,
-  approver: "token",
-  tokenExpiry: "2026-11-09T00:00:00Z",
-  repos: [
-    { project: "acme/payments", installed: true, approverReachable: false, inlineAvailable: false, protectionReadable: true },
-    { project: "acme/widgets", installed: true, approverReachable: true, inlineAvailable: true, protectionReadable: true },
+// The sign-in settings: nothing set up, OIDC against Google, a JWT header, and
+// OIDC set in the config file.
+export const signInNone: SignInAdminView = {
+  source: "dashboard",
+  editable: true,
+  mode: "",
+  label: "",
+  issuer: "",
+  clientID: "",
+  clientSecret: { set: false, updatedAt: null },
+  header: "",
+  audience: "",
+  jwksURL: "",
+  emailClaim: "",
+  allowedDomains: [],
+  allowedEmails: [],
+  callbackURL: "https://dash.example.com/auth/oidc/callback",
+};
+
+export const signInOIDC: SignInAdminView = {
+  ...signInNone,
+  mode: "oidc",
+  label: "Google",
+  issuer: "https://accounts.google.com",
+  clientID: "123-abc.apps.googleusercontent.com",
+  clientSecret: { set: true, updatedAt: minutesAgo(60) },
+  allowedDomains: ["example.com"],
+  allowedEmails: ["friend@example.org"],
+};
+
+export const signInJWT: SignInAdminView = {
+  ...signInNone,
+  mode: "jwt",
+  issuer: "https://proxy.example.com",
+  header: "X-Auth-Token",
+  audience: "pergent",
+  jwksURL: "https://proxy.example.com/keys",
+  emailClaim: "email",
+  allowedDomains: ["example.com"],
+};
+
+export const signInFromConfig: SignInAdminView = {
+  ...signInOIDC,
+  source: "config",
+  editable: false,
+  clientSecret: { set: true, updatedAt: null },
+};
+
+// The teams of acme/payments: one lists it, one covers the whole instance, one
+// has nothing to do with it.
+export const repoTeams: RepoTeamsView = {
+  teams: [
+    { id: 2, name: "Payments", members: 1, direct: true, wholeInstance: false },
+    { id: 3, name: "Platform", members: 0, direct: false, wholeInstance: false },
+    { id: 4, name: "Everyone on main", members: 6, direct: false, wholeInstance: true },
   ],
 };
 
-export const integrationsGitHub: IntegrationView = {
-  instance: "hub",
-  platform: "github",
-  connected: true,
-  approver: "app",
-  repos: [
-    // Inline on, protection unreadable: the only row with the protection note.
-    { project: "acme/orders", installed: true, approverReachable: true, inlineAvailable: true, protectionReadable: false },
-    // Inline off already says enough: no protection note.
-    { project: "acme/payments", installed: true, approverReachable: true, inlineAvailable: false, protectionReadable: false },
-    { project: "acme/widgets", installed: true, approverReachable: true, inlineAvailable: true, protectionReadable: true },
-  ],
+export const userInvited: UserView = {
+  id: 9,
+  kind: "sso",
+  username: "invited@example.com",
+  email: "invited@example.com",
+  role: "user",
+  invited: true,
+  lastSignInAt: null,
+  waiting: false,
+  teams: [{ id: 2, name: "Payments" }],
 };
 
 export const defaults: DefaultsView = {

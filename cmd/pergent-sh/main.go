@@ -309,8 +309,13 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	// A change of sign-in in the config file, or a rollback, shows only now:
 	// end the OIDC and JWT sessions the settings in force no longer vouch for
 	// before anything is served.
+	// A database that hangs must not hang startup with it: the sweep gets 30
+	// seconds, and a failure stops startup.
 	if dash != nil {
-		if err := endStaleSSOSessions(ctx, dash.EndStaleSSOSessions, log); err != nil {
+		sweepCtx, cancel := context.WithTimeout(ctx, endStaleSessionsTimeout)
+		err := endStaleSSOSessions(sweepCtx, dash.EndStaleSSOSessions, log)
+		cancel()
+		if err != nil {
 			return err
 		}
 	}
@@ -604,6 +609,9 @@ func checkSignInSecret(cfg *config.Config) error {
 	}
 	return nil
 }
+
+// endStaleSessionsTimeout bounds the start-up sweep of stale SSO sessions.
+const endStaleSessionsTimeout = 30 * time.Second
 
 // endStaleSSOSessions ends the sessions the sign-in settings in force no longer
 // vouch for (end is dashboard.Dashboard.EndStaleSSOSessions) and logs how many.

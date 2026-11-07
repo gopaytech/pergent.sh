@@ -12,6 +12,7 @@ import {
   teamEmpty,
   teamPayments,
   userDev,
+  userInvited,
   userOperator,
   userWaiting,
 } from "../test/fixtures";
@@ -132,6 +133,71 @@ describe("Teams", () => {
     });
     // Saved: the editor closes.
     await vi.waitFor(() => expect(screen.queryByRole("form", { name: "Edit Payments" })).not.toBeInTheDocument());
+  });
+
+  it("adds a member by typing an email, as an invited account with the role viewer", async () => {
+    let listed = 0;
+    const fake = fakeApi({
+      "GET /api/teams": { body: [teamPayments] },
+      "PUT /api/teams/2": { body: teamPayments },
+      "POST /api/admin/users": { status: 201, body: { ...userInvited, teams: [] } },
+      ...base,
+      "GET /api/users": () => ({ body: listed++ === 0 ? [userWaiting, userDev, userOperator] : [userWaiting, userDev, userOperator, userInvited] }),
+    });
+    renderApp("/admin/teams");
+    await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
+    const editor = screen.getByRole("form", { name: "Edit Payments" });
+    const members = await within(editor).findByRole("group", { name: "Members" });
+    await userEvent.type(within(members).getByLabelText("Add by email"), " invited@example.com ");
+    await userEvent.click(within(members).getByRole("button", { name: "Add email" }));
+    const [post] = fake.find("POST", "/api/admin/users");
+    expect(post.body).toEqual({ email: "invited@example.com" });
+    expect(post.headers.get("X-CSRF-Token")).toBe("csrf-123");
+    // The new account is on the list, ticked, a viewer, and marked invited.
+    const added = await within(members).findByRole("checkbox", { name: /invited@example.com/ });
+    expect(added).toBeChecked();
+    expect(within(members).getByLabelText("Role of invited@example.com")).toHaveValue("viewer");
+    expect(members).toHaveTextContent("invited");
+    expect(within(members).getByLabelText("Add by email")).toHaveValue("");
+    // It joins the team when the team is saved.
+    await userEvent.click(within(editor).getByRole("button", { name: "Save" }));
+    const [put] = fake.find("PUT", "/api/teams/2");
+    expect((put.body as { members: unknown[] }).members).toEqual([
+      { accountId: 5, role: "maintainer" },
+      { accountId: 9, role: "viewer" },
+    ]);
+  });
+
+  it("ticks a user who exists already when their email is typed, without adding anything", async () => {
+    const fake = fakeApi({
+      "GET /api/teams": { body: [teamPayments] },
+      "POST /api/admin/users": { status: 409, body: { error: "this email is added already" } },
+      ...base,
+    });
+    renderApp("/admin/teams");
+    await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
+    const members = await within(screen.getByRole("form", { name: "Edit Payments" })).findByRole("group", { name: "Members" });
+    expect(within(members).getByRole("checkbox", { name: /newcomer/ })).not.toBeChecked();
+    await userEvent.type(within(members).getByLabelText("Add by email"), "Newcomer@Example.com");
+    await userEvent.click(within(members).getByRole("button", { name: "Add email" }));
+    expect(within(members).getByRole("checkbox", { name: /newcomer/ })).toBeChecked();
+    expect(within(members).getByLabelText("Role of newcomer@example.com")).toHaveValue("viewer");
+    expect(fake.calls.filter((c) => c.method === "POST")).toHaveLength(0);
+  });
+
+  it("shows the server's text when an email is refused, and adds no member", async () => {
+    fakeApi({
+      "GET /api/teams": { body: [teamPayments] },
+      "POST /api/admin/users": { status: 400, body: { error: "that is not an email address" } },
+      ...base,
+    });
+    renderApp("/admin/teams");
+    await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
+    const members = await within(screen.getByRole("form", { name: "Edit Payments" })).findByRole("group", { name: "Members" });
+    await userEvent.type(within(members).getByLabelText("Add by email"), "not-an-email");
+    await userEvent.click(within(members).getByRole("button", { name: "Add email" }));
+    expect(await within(members).findByRole("alert")).toHaveTextContent("that is not an email address");
+    expect(within(members).getAllByRole("checkbox")).toHaveLength(2);
   });
 
   it("offers every instance as a whole", async () => {

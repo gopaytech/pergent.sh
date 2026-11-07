@@ -54,8 +54,7 @@ func TestAdminSeesEverything(t *testing.T) {
 	if v := getJSON[RepositoryDetailView](e, c, "/api/repositories/gh/acme/widgets"); v.Role != "admin" {
 		t.Errorf("role on gh/acme/widgets = %q, want admin", v.Role)
 	}
-	for _, target := range []string{"/api/users", "/api/teams", "/api/audit", "/api/admin/settings", "/api/admin/instances",
-		"/api/integrations?instance=main"} {
+	for _, target := range []string{"/api/users", "/api/teams", "/api/audit", "/api/admin/settings", "/api/admin/instances"} {
 		e.wantStatus(c, target, http.StatusOK)
 	}
 	ov := getJSON[OverviewView](e, c, "/api/overview")
@@ -113,7 +112,7 @@ func TestUserSeesOnlyTeamRepos(t *testing.T) {
 		t.Errorf("session = %+v; want a viewer on acme/widgets, ignoring case", se)
 	}
 	// What a user may not do: an admin page's data is not found.
-	for _, target := range []string{"/api/users", "/api/teams", "/api/audit", "/api/admin/settings", "/api/integrations?instance=main"} {
+	for _, target := range []string{"/api/users", "/api/teams", "/api/audit", "/api/admin/settings"} {
 		e.wantStatus(c, target, http.StatusNotFound)
 	}
 }

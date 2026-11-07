@@ -85,7 +85,7 @@ export function secretText(s: SecretView): string {
 }
 
 // noFill keeps password managers out of a field. Next to a password field,
-// browsers ignore autocomplete="off" and fill the operator's own sign-in;
+// browsers ignore autocomplete="off" and fill the admin's own sign-in;
 // these are the opt-outs they honour. secretFill is the same for the
 // password field itself.
 export const noFill = {

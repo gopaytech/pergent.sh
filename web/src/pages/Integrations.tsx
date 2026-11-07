@@ -1,12 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 
-import { api, type Approver, type InstanceAdminView, type Platform } from "../api";
+import {
+  api,
+  type Approver,
+  type InstanceAdminView,
+  type Platform,
+  type SignInAdminView,
+  type SignInBody,
+  type SignInMode,
+} from "../api";
 import { useWrite } from "../layout/write";
 import { ErrorBox, Loading, Pill, noFill, platformName, secretFill, secretText } from "../ui";
 
-// Integrations is the instances pergent.sh reviews on, for admins: they see
-// every one and add, change and remove those kept in the dashboard.
+// Integrations is, for admins, the instances pergent.sh reviews on (they add,
+// change and remove those kept in the dashboard) and how people sign in.
 export default function Integrations() {
   return <Instances />;
 }
@@ -72,7 +80,8 @@ function Instances() {
         <div>
           <h1>Integrations</h1>
           <div className="sub">
-            The GitLab and GitHub instances pergent.sh reviews on. Secrets are write-only: once saved they are never shown.
+            The GitLab and GitHub instances pergent.sh reviews on, and how people sign in. Secrets are write-only: once saved they are
+            never shown.
           </div>
         </div>
         <div className="actions-row">
@@ -93,6 +102,7 @@ function Instances() {
         ) : (
           list.data.map((inst) => <InstanceCard key={inst.name} inst={inst} />)
         ))}
+      <SignInSection />
     </div>
   );
 }
@@ -437,6 +447,267 @@ function AddInstance({ platform, onClose }: { platform: Platform; onClose: () =>
         <button type="button" className="btn" onClick={onClose}>
           Cancel
         </button>
+      </div>
+    </form>
+  );
+}
+
+// --- sign-in ---
+
+// SignInForm is what the Sign-in section edits. The lists are one entry per
+// line; the client secret is only what has been typed, never what is stored.
+type SignInForm = {
+  mode: SignInMode;
+  label: string;
+  issuer: string;
+  clientID: string;
+  clientSecret: string;
+  header: string;
+  audience: string;
+  jwksURL: string;
+  emailClaim: string;
+  domains: string;
+  emails: string;
+};
+
+const formOf = (v: SignInAdminView): SignInForm => ({
+  mode: v.mode,
+  label: v.label,
+  issuer: v.issuer,
+  clientID: v.clientID,
+  clientSecret: "",
+  header: v.header,
+  audience: v.audience,
+  jwksURL: v.jwksURL,
+  emailClaim: v.emailClaim,
+  domains: v.allowedDomains.join("\n"),
+  emails: v.allowedEmails.join("\n"),
+});
+
+// lines is the entries of a list typed one per line (commas work too).
+const lines = (text: string) =>
+  text
+    .split(/[\n,]/)
+    .map((t) => t.trim())
+    .filter((t) => t !== "");
+
+// bodyOf is what is saved: only the fields of the chosen mode, the rest
+// cleared. A secret goes only when one was typed; left out, the stored one is
+// kept.
+function bodyOf(f: SignInForm): SignInBody {
+  const oidc = f.mode === "oidc";
+  const jwt = f.mode === "jwt";
+  return {
+    mode: f.mode,
+    label: oidc ? f.label.trim() : "",
+    issuer: oidc || jwt ? f.issuer.trim() : "",
+    clientID: oidc ? f.clientID.trim() : "",
+    header: jwt ? f.header.trim() : "",
+    audience: jwt ? f.audience.trim() : "",
+    jwksURL: jwt ? f.jwksURL.trim() : "",
+    emailClaim: jwt ? f.emailClaim.trim() : "",
+    allowedDomains: lines(f.domains),
+    allowedEmails: lines(f.emails),
+    ...(oidc && f.clientSecret !== "" ? { clientSecret: f.clientSecret } : {}),
+  };
+}
+
+const modeNames: Record<SignInMode, string> = { "": "Not set up", oidc: "OIDC", jwt: "JWT from a proxy" };
+
+// SignInSection is how people other than local admins sign in. Read-only when
+// the config file sets it.
+function SignInSection() {
+  const current = useQuery({ queryKey: ["admin-sign-in"], queryFn: () => api.get<SignInAdminView>("/api/admin/sign-in") });
+  return (
+    <section className="card" aria-label="Sign-in">
+      <h2>
+        <span>Sign-in</span>
+        <span className="actions-row">{current.isSuccess && current.data.source === "config" && <span className="badge cfg">config</span>}</span>
+      </h2>
+      {current.isPending && <Loading />}
+      {current.isError && <ErrorBox error={current.error} />}
+      {current.isSuccess &&
+        (current.data.editable ? (
+          // A new answer starts the form again from it.
+          <SignInEditor key={JSON.stringify(current.data)} current={current.data} />
+        ) : (
+          <SignInFacts v={current.data} />
+        ))}
+    </section>
+  );
+}
+
+// SignInFacts shows sign-in set in the config file.
+function SignInFacts({ v }: { v: SignInAdminView }) {
+  const list = (items: string[]) => (items.length === 0 ? "none" : items.join(", "));
+  return (
+    <div className="facts">
+      <div>Mode: {modeNames[v.mode]}</div>
+      {v.mode === "oidc" && (
+        <>
+          <div>Label: {v.label}</div>
+          <div>Issuer: {v.issuer}</div>
+          <div>Client ID: {v.clientID}</div>
+          <div>
+            Client secret: <span>{secretText(v.clientSecret)}</span>
+          </div>
+          <CallbackURL url={v.callbackURL} />
+        </>
+      )}
+      {v.mode === "jwt" && (
+        <>
+          <div>Header: {v.header}</div>
+          <div>Issuer: {v.issuer}</div>
+          <div>Audience: {v.audience}</div>
+          <div>JWKS URL: {v.jwksURL}</div>
+          <div>Email claim: {v.emailClaim}</div>
+        </>
+      )}
+      <div>Allowed domains: {list(v.allowedDomains)}</div>
+      <div>Allowed emails: {list(v.allowedEmails)}</div>
+      <div className="meta">Sign-in is managed by the config file; change it there.</div>
+    </div>
+  );
+}
+
+function CallbackURL({ url }: { url: string }) {
+  return (
+    <div>
+      Redirect URI to register with the provider: <code>{url}</code>
+    </div>
+  );
+}
+
+function SignInEditor({ current }: { current: SignInAdminView }) {
+  const client = useQueryClient();
+  const write = useWrite();
+  const [f, setF] = useState<SignInForm>(() => formOf(current));
+  const set = (k: keyof SignInForm, v: string) => setF((old) => ({ ...old, [k]: v }));
+  const oidc = f.mode === "oidc";
+  const jwt = f.mode === "jwt";
+  // A new issuer never gets the stored secret: it has to be typed again.
+  const issuerChanged = oidc && current.clientSecret.set && f.issuer.trim() !== current.issuer;
+  const needsSecret = oidc && (!current.clientSecret.set || issuerChanged);
+  const save = useMutation({
+    mutationFn: (body: SignInBody) => write<SignInAdminView>("PUT", "/api/admin/sign-in", body),
+    // The closure holds the secret: drop it with the input, not after 5 minutes.
+    gcTime: 0,
+    onSuccess: (saved) => client.setQueryData(["admin-sign-in"], saved),
+  });
+  const test = useMutation({
+    mutationFn: () =>
+      write<{ ok: boolean }>("POST", "/api/admin/sign-in/test", {
+        mode: f.mode,
+        issuer: f.issuer.trim(),
+        jwksURL: jwt ? f.jwksURL.trim() : "",
+      }),
+  });
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    save.mutate(bodyOf(f));
+  };
+  const field = (k: keyof SignInForm, label: string, help?: string) => (
+    <>
+      <label htmlFor={`signin-${k}`}>{label}</label>
+      <input
+        id={`signin-${k}`}
+        type="text"
+        {...noFill}
+        autoCapitalize="none"
+        spellCheck={false}
+        value={f[k]}
+        onChange={(e) => set(k, e.target.value)}
+      />
+      {help && <div className="meta">{help}</div>}
+    </>
+  );
+  return (
+    <form className="pad stack" onSubmit={submit}>
+      <label htmlFor="signin-mode">Mode</label>
+      <select id="signin-mode" value={f.mode} onChange={(e) => set("mode", e.target.value)}>
+        {(Object.keys(modeNames) as SignInMode[]).map((m) => (
+          <option key={m} value={m}>
+            {modeNames[m]}
+          </option>
+        ))}
+      </select>
+      {f.mode === "" && (
+        <div className="meta">Only local admins can sign in. Choose OIDC, or JWT if a proxy in front of pergent.sh signs people in.</div>
+      )}
+      {oidc && (
+        <>
+          {field("label", "Label", "The name on the sign-in button, such as Google.")}
+          {field("issuer", "Issuer", "An https address. For Google Workspace: https://accounts.google.com")}
+          {field("clientID", "Client ID")}
+          <label htmlFor="signin-secret">Client secret</label>
+          <input
+            id="signin-secret"
+            type="password"
+            {...secretFill}
+            spellCheck={false}
+            value={f.clientSecret}
+            required={needsSecret}
+            onChange={(e) => set("clientSecret", e.target.value)}
+          />
+          <div className="meta">
+            <span>{secretText(current.clientSecret)}</span>. It is never shown; leave it empty to keep it.
+          </div>
+          {issuerChanged && (
+            <div className="meta" role="note">
+              You changed the issuer. Enter the client secret again: a stored secret is never sent to a new issuer.
+            </div>
+          )}
+          <CallbackURL url={current.callbackURL} />
+        </>
+      )}
+      {jwt && (
+        <>
+          {field("header", "Header", "The request header that carries the token, such as X-Auth-Token.")}
+          {field("issuer", "Issuer", "An https address.")}
+          {field("audience", "Audience", "A token meant for another app is refused.")}
+          {field("jwksURL", "JWKS URL", "An https address.")}
+          {field("emailClaim", "Email claim", "email when empty.")}
+        </>
+      )}
+      {(oidc || jwt) && (
+        <>
+          <label htmlFor="signin-domains">Allowed domains</label>
+          <textarea
+            id="signin-domains"
+            rows={3}
+            spellCheck={false}
+            autoCapitalize="none"
+            value={f.domains}
+            onChange={(e) => set("domains", e.target.value)}
+          />
+          <label htmlFor="signin-emails">Allowed emails</label>
+          <textarea
+            id="signin-emails"
+            rows={3}
+            spellCheck={false}
+            autoCapitalize="none"
+            value={f.emails}
+            onChange={(e) => set("emails", e.target.value)}
+          />
+          <div className="meta">
+            One per line. A person on either list can sign in. With both empty only people added under Users can. Someone on no
+            team sees nothing.
+          </div>
+        </>
+      )}
+      <div className="meta">Changing the mode or the issuer ends every SSO session, yours too if you signed in that way.</div>
+      {save.isError && <ErrorBox error={save.error} />}
+      {test.isError && <ErrorBox error={test.error} />}
+      {test.isSuccess && <div role="status">{test.data.ok ? "It worked." : "It did not work."}</div>}
+      <div className="actions-row">
+        <button type="submit" className="btn primary" disabled={save.isPending}>
+          Save
+        </button>
+        {(oidc || jwt) && (
+          <button type="button" className="btn" disabled={test.isPending} onClick={() => test.mutate()}>
+            Test
+          </button>
+        )}
       </div>
     </form>
   );

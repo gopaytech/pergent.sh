@@ -283,7 +283,7 @@ func (a *Auth) startFromHeader(w http.ResponseWriter, r *http.Request) (store.Se
 	default:
 		return store.Session{}, startNothing
 	}
-	se, id, code := a.beginSession(r.Context(), r, s, email, claims, store.SignInJWT)
+	se, id, _, code := a.beginSession(r.Context(), r, s, email, claims, store.SignInJWT)
 	switch code {
 	case "":
 		a.setSessionCookie(w, id)

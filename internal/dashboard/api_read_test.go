@@ -1018,78 +1018,6 @@ func TestRepositoryInputsReadOnce(t *testing.T) {
 	}
 }
 
-func TestIntegrations(t *testing.T) {
-	e := newEnv(t, withSecrets(t))
-	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: 7, Path: "acme/widgets", HookID: 3,
-		DeployTokenID: 4, DeployTokenUsername: "deploy-user", DeployTokenSealed: []byte(deployToken)}); err != nil {
-		t.Fatal(err)
-	}
-	c := e.userOnMain(true)
-	e.wantStatus(c, "/api/integrations", http.StatusNotFound) // an admin names the instance
-	e.wantStatus(c, "/api/integrations?instance=nope", http.StatusNotFound)
-	v := getJSON[IntegrationView](e, c, "/api/integrations?instance=main")
-	// Every repository of the instance, as an admin sees them all.
-	want := IntegrationView{Instance: "main", Platform: "gitlab", Connected: true, Approver: "token",
-		Repos: []IntegrationRepo{
-			{Project: "acme/widgets", Installed: true, ApproverReachable: true, InlineAvailable: true, ProtectionReadable: true},
-			{Project: "acme/payments", Installed: false, ApproverReachable: false, InlineAvailable: true, ProtectionReadable: true},
-		}}
-	if v.Instance != want.Instance || v.Platform != want.Platform || !v.Connected || v.Approver != want.Approver ||
-		v.TokenExpiry != nil || len(v.Repos) != 2 || v.Repos[0] != want.Repos[0] || v.Repos[1] != want.Repos[1] {
-		t.Errorf("integrations = %+v\nwant %+v", v, want)
-	}
-}
-
-func TestIntegrationsGitHub(t *testing.T) {
-	e := newEnv(t, withSecrets(t))
-	if err := e.st.UpsertGitHubProject(ctx, store.Project{Instance: "gh", ProjectID: 900, Path: "acme/widgets",
-		InstallationID: 55, ApproveAvailable: false}); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.st.SetAttention(ctx, "gh", "", "token_expiry", "The approve bot's token expires on 2026-11-10."); err != nil {
-		t.Fatal(err)
-	}
-	c := e.userOnGH(true)
-	v := getJSON[IntegrationView](e, c, "/api/integrations?instance=gh")
-	if v.Instance != "gh" || v.Platform != "github" || v.Approver != "token" || v.TokenExpiry == nil ||
-		!v.TokenExpiry.Equal(time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)) {
-		t.Errorf("integrations = %+v", v)
-	}
-	// The review App has Pull requests: Read-only there.
-	if len(v.Repos) != 1 || v.Repos[0] != (IntegrationRepo{Project: "acme/widgets", Installed: true, ApproverReachable: false, InlineAvailable: false, ProtectionReadable: false}) {
-		t.Errorf("repos = %+v", v.Repos)
-	}
-
-	// Once the permission is read and write, inline is available.
-	if err := e.st.UpsertGitHubProject(ctx, store.Project{Instance: "gh", ProjectID: 900, Path: "acme/widgets",
-		InstallationID: 55, InlineAvailable: true}); err != nil {
-		t.Fatal(err)
-	}
-	v = getJSON[IntegrationView](e, c, "/api/integrations?instance=gh")
-	if len(v.Repos) != 1 || !v.Repos[0].InlineAvailable {
-		t.Errorf("repos after the permission = %+v; want inline available", v.Repos)
-	}
-
-	// Administration: Read turns protectionReadable on.
-	if err := e.st.UpsertGitHubProject(ctx, store.Project{Instance: "gh", ProjectID: 900, Path: "acme/widgets",
-		InstallationID: 55, InlineAvailable: true, ProtectionReadable: true}); err != nil {
-		t.Fatal(err)
-	}
-	v = getJSON[IntegrationView](e, c, "/api/integrations?instance=gh")
-	if len(v.Repos) != 1 || !v.Repos[0].ProtectionReadable {
-		t.Errorf("repos after Administration: Read = %+v; want protection readable", v.Repos)
-	}
-
-	// Without the review App there is nothing to say about inline.
-	if err := e.st.UpsertGitHubProject(ctx, store.Project{Instance: "gh", ProjectID: 900, Path: "acme/widgets"}); err != nil {
-		t.Fatal(err)
-	}
-	v = getJSON[IntegrationView](e, c, "/api/integrations?instance=gh")
-	if len(v.Repos) != 1 || v.Repos[0].Installed || !v.Repos[0].InlineAvailable || !v.Repos[0].ProtectionReadable {
-		t.Errorf("repos without an installation = %+v; want not installed, nothing reported off", v.Repos)
-	}
-}
-
 func TestAdminSettings(t *testing.T) {
 	e := newEnv(t, withSecrets(t))
 	c := e.userOnMain(true, "acme/widgets")
@@ -1117,7 +1045,7 @@ func TestAdminSettings(t *testing.T) {
 func TestAdminEndpointsNotFoundForDevelopers(t *testing.T) {
 	e := newEnv(t, withSecrets(t))
 	c := e.userOnMain(false, "acme/widgets")
-	for _, target := range []string{"/api/integrations?instance=main", "/api/admin/settings"} {
+	for _, target := range []string{"/api/admin/settings"} {
 		rec := e.wantStatus(c, target, http.StatusNotFound)
 		if strings.Contains(rec.Body.String(), "anthropic") || strings.Contains(rec.Body.String(), "acme/widgets") {
 			t.Errorf("404 body of %s = %s", target, rec.Body)
@@ -1139,7 +1067,7 @@ func readEndpoints(id string) []string {
 		"/api/overview", "/api/reviews", "/api/reviews?project=acme/widgets",
 		"/api/reviews/main/acme/widgets/1", "/api/runs/" + id, "/api/runs/" + id + "/log",
 		"/api/repositories", "/api/repositories/main/acme/widgets", "/api/repositories/main/acme/widgets/inputs",
-		"/api/skills", "/api/integrations", "/api/admin/settings", "/api/me",
+		"/api/skills", "/api/admin/settings", "/api/me",
 	}
 }
 
@@ -1207,9 +1135,8 @@ func TestReadAPIHidesInvisibleRepos(t *testing.T) {
 	}
 }
 
-// No response of the read API holds a token, key or secret: not the
-// integrations' nor any other.
-func TestNoSecretInIntegrations(t *testing.T) {
+// No response of the read API holds a token, key or secret.
+func TestNoSecretInTheReadAPI(t *testing.T) {
 	for _, instance := range []string{"main", "gh"} {
 		t.Run(instance, func(t *testing.T) {
 			e := newEnv(t, withSecrets(t))
@@ -1232,7 +1159,7 @@ func TestNoSecretInIntegrations(t *testing.T) {
 
 			targets := readEndpoints(id)
 			targets = append(targets, "/api/reviews/gh/acme/widgets/7", "/api/repositories/gh/acme/widgets",
-				"/api/repositories/gh/acme/widgets/inputs", "/api/integrations?instance="+instance,
+				"/api/repositories/gh/acme/widgets/inputs",
 				"/api/admin/instances", "/api/admin/llm", "/api/admin/defaults")
 			for _, target := range targets {
 				rec := e.get(c, target)
@@ -1247,10 +1174,6 @@ func TestNoSecretInIntegrations(t *testing.T) {
 				if strings.Contains(rec.Body.String(), "SECRET") {
 					t.Errorf("GET %s shows a secret: %s", target, rec.Body)
 				}
-			}
-			want := map[string]int{"main": 2, "gh": 1}[instance]
-			if v := getJSON[IntegrationView](e, c, "/api/integrations?instance="+instance); len(v.Repos) != want {
-				t.Errorf("integrations = %+v; want %d repositories", v, want)
 			}
 		})
 	}
@@ -1606,21 +1529,6 @@ func TestGlobalAttentionForAdmins(t *testing.T) {
 				t.Errorf("attention = %q, want %q", got, tc.want)
 			}
 		})
-	}
-}
-
-// An instance whose review App approves is reported as such.
-func TestIntegrationsGitHubReviewAppApprover(t *testing.T) {
-	with := withSecrets(t)
-	e := newEnv(t, func(c *config.Config) {
-		with(c)
-		// withSecrets gives the instance an approve token: exactly one
-		// approver may be set.
-		c.GitHub[0].ApproveTokenEnv, c.GitHub[0].ApproveWithReviewApp = "", true
-	})
-	c := e.userOnGH(true)
-	if v := getJSON[IntegrationView](e, c, "/api/integrations?instance=gh"); v.Approver != "review_app" {
-		t.Errorf("approver = %q, want review_app", v.Approver)
 	}
 }
 

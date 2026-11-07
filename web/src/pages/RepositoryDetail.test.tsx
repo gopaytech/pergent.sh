@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi } from "../test/fakeApi";
-import { ssoAdmin, viewer, librarySkills, pastDismissals, repoDetail, repoPayments, repoWidgets, reviewBlocking, skillResults } from "../test/fixtures";
+import { ssoAdmin, viewer, librarySkills, pastDismissals, repoDetail, repoPayments, repoTeams, repoWidgets, reviewBlocking, skillResults } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -20,6 +20,8 @@ const base = {
   "GET /api/skills": { body: librarySkills },
   "GET /api/repositories/main/acme/payments/inputs": { body: noInputs },
   "GET /api/repositories/main/acme/widgets/inputs": { body: noInputs },
+  "GET /api/repositories/main/acme/payments/teams": { body: repoTeams },
+  "GET /api/repositories/main/acme/widgets/teams": { body: repoTeams },
   "GET /api/reviews?project=acme%2Fpayments&days=90": { body: { items: [reviewBlocking], nextCursor: "" } },
 };
 

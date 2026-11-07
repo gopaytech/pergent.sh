@@ -665,3 +665,299 @@ func TestDeveloperGets404OnOrgRoutes(t *testing.T) {
 		t.Error("a viewer made a password account")
 	}
 }
+
+// An admin adds a person by email before they have signed in: the account
+// shows as invited, on the teams named with their roles (viewer when none). A
+// second add of the same email is 409, a bad email 400, and a team that isn't
+// there makes nothing. An account that signed in without being added is marked
+// added (200), and keeps its role and teams.
+func TestAddUserByEmail(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.signInOperator()
+	devs := e.team("devs", nil, store.TeamRepo{Instance: "main"})
+	ops := e.team("ops", nil)
+
+	got := decode[UserView](t, e.send(c, "POST", "/api/admin/users", `{"email":"Carol@Other.NET"}`), "POST a user", http.StatusCreated)
+	if got.Username != "carol@other.net" || got.Email != "carol@other.net" || got.Kind != store.AccountSSO || got.Role != store.RoleUser ||
+		!got.Invited || got.Waiting || got.LastSignInAt != nil || got.Teams == nil || len(got.Teams) != 0 {
+		t.Fatalf("added = %+v; want an invited user on no team (not waiting: she has not signed in)", got)
+	}
+	acc, found, err := e.st.SSOAccountByEmail(ctx, "carol@other.net")
+	if err != nil || !found || !acc.Added || acc.LastSignInAt != nil {
+		t.Fatalf("stored account = %+v, %v, %v; want added and never signed in", acc, found, err)
+	}
+	users := decode[[]UserView](t, e.get(c, "/api/users"), "GET /api/users", http.StatusOK)
+	if i := slices.IndexFunc(users, func(u UserView) bool { return u.ID == got.ID }); i < 0 || !users[i].Invited {
+		t.Errorf("the Users page lists %+v; want carol invited", users)
+	}
+
+	wantCode(t, e.send(c, "POST", "/api/admin/users", `{"email":"carol@other.net"}`), "POST the same email", http.StatusConflict)
+	wantCode(t, e.send(c, "POST", "/api/admin/users", `{"email":"CAROL@OTHER.NET"}`), "POST the same email in capitals", http.StatusConflict)
+
+	withTeams := decode[UserView](t, e.send(c, "POST", "/api/admin/users",
+		fmt.Sprintf(`{"email":"dave@other.net","teams":[{"teamId":%d},{"teamId":%d,"role":"maintainer"}]}`, devs, ops)),
+		"POST a user with teams", http.StatusCreated)
+	if !withTeams.Invited || len(withTeams.Teams) != 2 {
+		t.Fatalf("added with teams = %+v", withTeams)
+	}
+	if m := e.storedTeam(devs).Members; len(m) != 1 || m[0].AccountID != withTeams.ID || m[0].Role != store.RoleViewer {
+		t.Errorf("devs members = %+v; want dave as a viewer", m)
+	}
+	if m := e.storedTeam(ops).Members; len(m) != 1 || m[0].AccountID != withTeams.ID || m[0].Role != store.RoleMaintainer {
+		t.Errorf("ops members = %+v; want dave as a maintainer", m)
+	}
+
+	before := len(e.ssoAccounts())
+	for name, b := range map[string]string{
+		"no email":            `{}`,
+		"empty":               `{"email":""}`,
+		"no at":               `{"email":"carol"}`,
+		"two addresses":       `{"email":"a@b.net,c@d.net"}`,
+		"a display name":      `{"email":"Carol <carol@other.net>"}`,
+		"surrounding space":   `{"email":" erin@other.net "}`,
+		"an unknown field":    `{"email":"erin@other.net","role":"admin"}`,
+		"not JSON":            `nope`,
+		"a team not there":    `{"email":"erin@other.net","teams":[{"teamId":99999}]}`,
+		"a bad role":          fmt.Sprintf(`{"email":"erin@other.net","teams":[{"teamId":%d,"role":"admin"}]}`, devs),
+		"a team named twice":  fmt.Sprintf(`{"email":"erin@other.net","teams":[{"teamId":%d},{"teamId":%d}]}`, devs, devs),
+		"an empty team list":  `{"email":"erin@other.net","teams":"x"}`,
+		"the Kelvin sign too": `{"email":"erin@K.net x"}`,
+	} {
+		wantCode(t, e.send(c, "POST", "/api/admin/users", b), "POST "+name, http.StatusBadRequest)
+	}
+	if after := len(e.ssoAccounts()); after != before {
+		t.Errorf("%d SSO accounts after the refusals, want the %d before them", after, before)
+	}
+
+	// Someone who signed in on an allowed domain, with a team and a role of
+	// their own, is marked added and keeps both.
+	frank := e.sso("frank@example.com")
+	e.editTeam(devs, func(t *store.Team) {
+		t.Members = append(t.Members, store.TeamMember{AccountID: frank, Role: store.RoleMaintainer})
+	})
+	if err := e.st.SetAccountRole(ctx, frank, store.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	marked := decode[UserView](t, e.send(c, "POST", "/api/admin/users", `{"email":"frank@example.com"}`), "POST an account that signed in", http.StatusOK)
+	if marked.ID != frank || marked.Invited || marked.Role != store.RoleAdmin || len(marked.Teams) != 1 {
+		t.Errorf("marked = %+v; want the same account, signed in, still an admin, still on its team", marked)
+	}
+	if a, _, _ := e.st.SSOAccountByEmail(ctx, "frank@example.com"); !a.Added {
+		t.Error("frank was not marked added")
+	}
+	wantCode(t, e.send(c, "POST", "/api/admin/users", `{"email":"frank@example.com"}`), "POST frank again", http.StatusConflict)
+
+	// Each add is audited by email; an SSO admin may add too.
+	var added []string
+	for _, a := range e.auditEntries() {
+		if a.Action == "user_added" {
+			added = append([]string{a.Actor + " " + a.Detail}, added...)
+		}
+	}
+	if want := []string{"root (password) carol@other.net", "root (password) dave@other.net", "root (password) frank@example.com"}; !slices.Equal(added, want) {
+		t.Errorf("user_added entries = %q; want %q", added, want)
+	}
+	admin := e.userOnMain(true)
+	wantCode(t, e.send(admin, "POST", "/api/admin/users", `{"email":"gina@other.net"}`), "POST by an SSO admin", http.StatusCreated)
+}
+
+// A person an admin added before they signed in, on a domain the allowlist does
+// not list, signs in through OIDC and is kept: the account is the one the
+// admin made (Added stays set), and the teams the admin gave it are still its
+// own, so the repository shows and the waiting page does not.
+func TestAddedUserKeepsAccessOnFirstSignIn(t *testing.T) {
+	e := newEnv(t, nil)
+	f := newFakeIssuer(t)
+	e.useOIDC(f, nil)
+	c := e.signInOperator()
+	team := e.team("devs", nil, store.TeamRepo{Instance: "main", Project: "acme/widgets"})
+	added := decode[UserView](t, e.send(c, "POST", "/api/admin/users",
+		fmt.Sprintf(`{"email":"Carol@Other.NET","teams":[{"teamId":%d,"role":"maintainer"}]}`, team)), "POST a user", http.StatusCreated)
+
+	f.claims = func(cl map[string]any) { cl["email"] = "carol@other.net" }
+	rec := e.oidcSignIn(f, nil)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/" {
+		t.Fatalf("callback = %d %q %s; want 303 to /", rec.Code, rec.Header().Get("Location"), rec.Body)
+	}
+	session := cookie(rec, SessionCookieName)
+	if session == nil {
+		t.Fatal("no session cookie")
+	}
+	if got := e.accountOf(session); got != added.ID {
+		t.Errorf("the session is for account %d, want the one the admin made, %d", got, added.ID)
+	}
+	if n := len(e.ssoAccounts()); n != 1 {
+		t.Errorf("%d SSO accounts, want 1", n)
+	}
+	acc, _, _ := e.st.SSOAccountByEmail(ctx, "carol@other.net")
+	if !acc.Added || acc.LastSignInAt == nil || acc.Role != store.RoleUser {
+		t.Errorf("account = %+v; want added, signed in, a user", acc)
+	}
+	if m := e.storedTeam(team).Members; len(m) != 1 || m[0].AccountID != added.ID || m[0].Role != store.RoleMaintainer {
+		t.Errorf("team members = %+v; want carol, a maintainer", m)
+	}
+	if _, me := e.me(session); me.Waiting || me.Admin {
+		t.Errorf("me = %+v; want a user who is not waiting", me)
+	}
+	repos := getJSON[[]RepositoryView](e, session, "/api/repositories")
+	if len(repos) != 1 || repos[0].Project != "acme/widgets" || repos[0].Instance != "main" {
+		t.Errorf("repositories = %+v; want only main/acme/widgets", repos)
+	}
+	if v := getJSON[RepositoryDetailView](e, session, "/api/repositories/main/acme/widgets"); v.Role != store.RoleMaintainer {
+		t.Errorf("role = %q, want maintainer", v.Role)
+	}
+	e.wantStatus(session, "/api/users", http.StatusNotFound)
+
+	// The same person, not added and off the allowlist, is turned away.
+	f.claims = func(cl map[string]any) { cl["email"] = "mallory@other.net" }
+	if rec := e.oidcSignIn(f, nil); rec.Header().Get("Location") != "/sign-in?error=not_allowed" {
+		t.Errorf("an email nobody added = %q; want the sign-in page with not_allowed", rec.Header().Get("Location"))
+	}
+}
+
+// An admin who signs in with SSO lands in the admin area, anyone else on the
+// user pages.
+func TestOIDCSignInLandsByRole(t *testing.T) {
+	e := newEnv(t, nil)
+	f := newFakeIssuer(t)
+	e.useOIDC(f, nil)
+	e.ssoAdmin("boss@example.com")
+	for email, want := range map[string]string{"boss@example.com": "/admin", "worker@example.com": "/"} {
+		f.claims = func(cl map[string]any) { cl["email"] = email }
+		rec := e.oidcSignIn(f, nil)
+		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != want {
+			t.Errorf("%s lands on %q (%d), want %q", email, rec.Header().Get("Location"), rec.Code, want)
+		}
+	}
+}
+
+// A repository's settings and the Teams page read and write the same rows: a
+// team given the repository from one side shows on the other, and the
+// repository's own list leaves a team's other repositories and its
+// whole-instance cover alone.
+func TestRepositoryTeamsMatchTheTeamsPage(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.signInOperator()
+	payments := e.team("payments", nil, store.TeamRepo{Instance: "main", Project: "acme/payments"})
+	whole := e.team("whole main", nil, store.TeamRepo{Instance: "main"})
+	other := e.team("gh only", nil, store.TeamRepo{Instance: "gh", Project: "acme/widgets"})
+	empty := e.team("empty", nil)
+
+	got := decode[RepoTeamsView](t, e.get(c, "/api/repositories/main/acme/widgets/teams"), "GET teams", http.StatusOK)
+	want := []RepoTeamView{
+		{ID: empty, Name: "empty"},
+		{ID: other, Name: "gh only"},
+		{ID: payments, Name: "payments"},
+		{ID: whole, Name: "whole main", WholeInstance: true},
+	}
+	if !slices.Equal(got.Teams, want) {
+		t.Fatalf("teams of main/acme/widgets = %+v\nwant %+v", got.Teams, want)
+	}
+
+	// Given from the repository, seen on the Teams page.
+	body := fmt.Sprintf(`{"teams":[%d,%d]}`, payments, empty)
+	got = decode[RepoTeamsView](t, e.send(c, "PUT", "/api/repositories/main/acme/widgets/teams", body), "PUT teams", http.StatusOK)
+	for _, tm := range got.Teams {
+		if wantDirect := tm.ID == payments || tm.ID == empty; tm.Direct != wantDirect {
+			t.Errorf("team %q direct = %v, want %v", tm.Name, tm.Direct, wantDirect)
+		}
+	}
+	teams := decode[[]TeamView](t, e.get(c, "/api/teams"), "GET /api/teams", http.StatusOK)
+	covers := func(name, project string) bool {
+		for _, tm := range teams {
+			if tm.Name == name {
+				return slices.Contains(tm.Repos, TeamRepoView{Instance: "main", Project: project})
+			}
+		}
+		t.Fatalf("no team %q", name)
+		return false
+	}
+	if !covers("empty", "acme/widgets") || !covers("payments", "acme/widgets") || !covers("payments", "acme/payments") {
+		t.Errorf("Teams page after the PUT: %+v; want empty and payments on widgets, payments still on payments", teams)
+	}
+	if covers("gh only", "acme/widgets") || !covers("whole main", "") {
+		t.Errorf("Teams page after the PUT: %+v; want gh only untouched and whole main still whole", teams)
+	}
+
+	// Taken from the Teams page, gone on the repository.
+	wantCode(t, e.send(c, "PUT", fmt.Sprintf("/api/teams/%d", empty),
+		`{"name":"empty","members":[],"repos":[]}`), "PUT /api/teams/{id}", http.StatusOK)
+	got = decode[RepoTeamsView](t, e.get(c, "/api/repositories/main/acme/widgets/teams"), "GET teams", http.StatusOK)
+	for _, tm := range got.Teams {
+		if tm.ID == empty && tm.Direct {
+			t.Error("the Teams page took the repository off empty, but the repository still shows it")
+		}
+	}
+
+	// Taken from the repository: a team's other repositories stay.
+	got = decode[RepoTeamsView](t, e.send(c, "PUT", "/api/repositories/main/ACME/Widgets/teams", `{"teams":[]}`), "PUT no teams", http.StatusOK)
+	for _, tm := range got.Teams {
+		if tm.Direct {
+			t.Errorf("team %q still lists the repository after an empty list", tm.Name)
+		}
+	}
+	if r := e.storedTeam(payments).Repos; len(r) != 1 || r[0] != (store.TeamRepo{Instance: "main", Project: "acme/payments"}) {
+		t.Errorf("payments repos = %+v; want only acme/payments", r)
+	}
+	if r := e.storedTeam(whole).Repos; len(r) != 1 || r[0].Project != "" {
+		t.Errorf("whole main repos = %+v; want the whole instance", r)
+	}
+
+	// Refusals: a team that isn't there, a bad body, an unknown repository.
+	wantCode(t, e.send(c, "PUT", "/api/repositories/main/acme/widgets/teams", `{"teams":[99999]}`), "PUT an unknown team", http.StatusBadRequest)
+	for _, b := range []string{`{}`, `{"teams":null}`, `{"teams":["x"]}`, `{"teams":[],"x":1}`, `nope`} {
+		wantCode(t, e.send(c, "PUT", "/api/repositories/main/acme/widgets/teams", b), "PUT "+b, http.StatusBadRequest)
+	}
+	wantCode(t, e.send(c, "PUT", "/api/repositories/main/acme/nothing/teams", `{"teams":[]}`), "PUT an unknown repository", http.StatusNotFound)
+	e.wantStatus(c, "/api/repositories/main/acme/nothing/teams", http.StatusNotFound)
+
+	// A repository the config sets up can be given to teams too.
+	wantCode(t, e.send(c, "PUT", "/api/repositories/gh/acme/widgets/teams", fmt.Sprintf(`{"teams":[%d]}`, empty)), "PUT a config repository", http.StatusOK)
+
+	var changed []string
+	for _, a := range e.auditEntries() {
+		if a.Action == "team_updated" && a.Project != "" {
+			changed = append(changed, a.Detail)
+		}
+	}
+	if len(changed) == 0 {
+		t.Error("giving a repository to a team wrote no audit entry")
+	}
+}
+
+// Only an admin reads or writes a repository's teams: a viewer and a
+// maintainer of the repository get 404, as for any admin route, and nothing
+// changes.
+func TestRepositoryTeamsAreForAdmins(t *testing.T) {
+	e := newEnv(t, nil)
+	viewer := e.sessionFor(e.sso("viewer@example.com"))
+	maintainer := e.sessionFor(e.sso("maintainer@example.com"))
+	devs := e.team("devs", []store.TeamMember{
+		{AccountID: e.accountOf(viewer), Role: store.RoleViewer},
+		{AccountID: e.accountOf(maintainer), Role: store.RoleMaintainer},
+	}, store.TeamRepo{Instance: "main", Project: "acme/widgets"})
+	extra := e.team("extra", nil)
+
+	unknown := e.get(viewer, "/api/repositories/main/acme/nothing/teams")
+	for name, c := range map[string]*http.Cookie{"viewer": viewer, "maintainer": maintainer} {
+		get := e.get(c, "/api/repositories/main/acme/widgets/teams")
+		put := e.send(c, "PUT", "/api/repositories/main/acme/widgets/teams", fmt.Sprintf(`{"teams":[%d]}`, extra))
+		for what, rec := range map[string]*httptest.ResponseRecorder{"GET": get, "PUT": put} {
+			if rec.Code != http.StatusNotFound || rec.Body.String() != unknown.Body.String() {
+				t.Errorf("%s teams as a %s = %d %s; want 404 %s", what, name, rec.Code, rec.Body, unknown.Body)
+			}
+		}
+	}
+	if r := e.storedTeam(extra).Repos; len(r) != 0 {
+		t.Errorf("extra repos = %+v; a non-admin gave it a repository", r)
+	}
+	if r := e.storedTeam(devs).Repos; len(r) != 1 {
+		t.Errorf("devs repos = %+v; want unchanged", r)
+	}
+	// An admin's request shows the section's data.
+	admin := e.sessionFor(e.ssoAdmin("boss@example.com"))
+	got := decode[RepoTeamsView](t, e.get(admin, "/api/repositories/main/acme/widgets/teams"), "GET teams as an admin", http.StatusOK)
+	if len(got.Teams) != 2 {
+		t.Errorf("teams = %+v", got.Teams)
+	}
+}

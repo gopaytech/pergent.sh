@@ -642,7 +642,7 @@ describe("AdminSettings default skills", () => {
 });
 
 describe("AdminSettings model", () => {
-  it("is read-only for a platform admin, without a key", async () => {
+  it("is read-only when the server says it can't be changed, without a key", async () => {
     fakeApi(routes());
     renderApp("/admin/settings");
     const model = await screen.findByRole("region", { name: "Model" });
@@ -698,7 +698,7 @@ describe("AdminSettings model", () => {
     await userEvent.click(within(form).getByRole("button", { name: "Replace" }));
     const key = within(form).getByLabelText("New API key");
     expect(key).toHaveAttribute("type", "password");
-    // "off" doesn't stop a password manager filling the operator's own
+    // "off" doesn't stop a password manager filling the admin's own
     // sign-in here; "new-password" and the managers' opt-outs do.
     expect(key).toHaveAttribute("autocomplete", "new-password");
     expect(key).toHaveAttribute("data-1p-ignore");
@@ -753,7 +753,7 @@ describe("AdminSettings model", () => {
     expect(options).toEqual(
       expect.arrayContaining(["anthropic", "openai", "deepseek", "google", "openrouter", "groq", "mistral", "xai", "other"]),
     );
-    // Nothing is picked until the operator picks.
+    // Nothing is picked until the admin picks.
     expect(provider).toHaveValue("");
     expect(within(form).queryByLabelText("Provider ID")).not.toBeInTheDocument();
     await userEvent.selectOptions(provider, "deepseek");

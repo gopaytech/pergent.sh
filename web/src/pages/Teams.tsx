@@ -3,6 +3,7 @@ import { useState, type FormEvent } from "react";
 
 import {
   api,
+  type AddUserBody,
   type InstanceAdminView,
   type MemberRole,
   type RepositoryView,
@@ -179,6 +180,17 @@ function EditorForm({
   // The members: account ID to the role on this team.
   const [members, setMembers] = useState(() => new Map<number, MemberRole>(team.members.map((m) => [m.accountId, m.role])));
   const [covered, setCovered] = useState(() => new Set(team.repos.filter((r) => !isGone(r)).map(repoKey)));
+  // Adding by email: the account is made now, as invited, and joins the
+  // team when the team is saved.
+  const [email, setEmail] = useState("");
+  const addEmail = useMutation({
+    mutationFn: (body: AddUserBody) => write<UserView>("POST", "/api/admin/users", body),
+    onSuccess: (user) => {
+      client.invalidateQueries({ queryKey: ["users"] });
+      setMember(user.id, "viewer");
+      setEmail("");
+    },
+  });
   const save = useMutation({
     mutationFn: (body: TeamUpdate) => write<TeamView>("PUT", `/api/teams/${team.id}`, body),
     onSuccess: () => {
@@ -200,6 +212,18 @@ function EditorForm({
     if (role === null) next.delete(id);
     else next.set(id, role);
     setMembers(next);
+  };
+  // An email that is an account already ticks it; a new one is added.
+  const tryAddEmail = () => {
+    const typed = email.trim();
+    if (typed === "") return;
+    const known = accounts.find((u) => u.email.toLowerCase() === typed.toLowerCase());
+    if (known) {
+      if (!members.has(known.id)) setMember(known.id, "viewer");
+      setEmail("");
+      return;
+    }
+    addEmail.mutate({ email: typed });
   };
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -224,7 +248,7 @@ function EditorForm({
 
       <fieldset>
         <legend>Members</legend>
-        {accounts.length === 0 && <div className="meta">Nobody has signed in yet.</div>}
+        {accounts.length === 0 && <div className="meta">Nobody yet. Add a person by email below.</div>}
         {accounts.map((u) => (
           <div className="check" key={u.id}>
             <label className="check">
@@ -233,7 +257,10 @@ function EditorForm({
                 checked={members.has(u.id)}
                 onChange={(e) => setMember(u.id, e.target.checked ? "viewer" : null)}
               />
-              <span>{u.username}</span>
+              <span>
+                {u.username}
+                {u.invited && <span className="meta"> (invited)</span>}
+              </span>
             </label>
             {members.has(u.id) && (
               <select
@@ -250,6 +277,35 @@ function EditorForm({
             )}
           </div>
         ))}
+        <div className="add-email">
+          <label htmlFor={`team-${team.id}-email`}>Add by email</label>
+          <input
+            id={`team-${team.id}-email`}
+            type="text"
+            inputMode="email"
+            autoComplete="off"
+            autoCapitalize="none"
+            spellCheck={false}
+            maxLength={254}
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            // Enter adds the email; it must not save the whole team.
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                tryAddEmail();
+              }
+            }}
+          />
+          <button type="button" className="btn small" disabled={addEmail.isPending} onClick={tryAddEmail}>
+            Add email
+          </button>
+        </div>
+        <div className="meta">
+          A new email makes the account now, as invited, and it can sign in whatever the allowed domains say. It joins the team
+          when you save.
+        </div>
+        {addEmail.isError && <ErrorBox error={addEmail.error} />}
       </fieldset>
 
       <fieldset>

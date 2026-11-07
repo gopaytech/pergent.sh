@@ -1214,24 +1214,6 @@ func TestOperatorPicksRepositories(t *testing.T) {
 	}
 }
 
-// An operator reads the integrations of the instance it names.
-func TestIntegrationsForOperator(t *testing.T) {
-	e := newEnv(t, nil)
-	c := e.operator()
-	v := getJSON[IntegrationView](e, c, "/api/integrations?instance=gh")
-	if v.Instance != "gh" || v.Platform != "github" || !v.Connected || len(v.Repos) != 1 || v.Repos[0].Project != "acme/widgets" {
-		t.Errorf("integrations of gh = %+v", v)
-	}
-	if rec := e.get(c, "/api/integrations"); rec.Code != http.StatusNotFound {
-		t.Errorf("integrations without an instance = %d, want 404", rec.Code)
-	}
-	e.addLab(c)
-	e.sources.Delete("lab") // not connected
-	if v := getJSON[IntegrationView](e, c, "/api/integrations?instance=lab"); v.Connected {
-		t.Errorf("an instance that isn't connected shows connected: %+v", v)
-	}
-}
-
 // No response, log line or audit entry ever holds a secret entered in the
 // panel.
 func TestOperatorAPINeverReturnsSecrets(t *testing.T) {
@@ -1247,7 +1229,7 @@ func TestOperatorAPINeverReturnsSecrets(t *testing.T) {
 	e.sendJSON(c, "PUT", "/api/admin/instances/lab", map[string]any{"secrets": map[string]string{"approve_token": "bad-token-SECRET-000"}})
 	e.conn.checkErr = nil
 	for _, target := range []string{"/api/admin/instances", "/api/admin/llm", "/api/admin/defaults", "/api/admin/settings",
-		"/api/integrations?instance=lab", "/api/me", "/api/sign-in-options", "/api/audit"} {
+		"/api/me", "/api/sign-in-options", "/api/audit"} {
 		e.get(c, target)
 	}
 

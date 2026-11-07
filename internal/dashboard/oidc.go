@@ -420,46 +420,52 @@ func (d *Dashboard) oidcCallback(w http.ResponseWriter, r *http.Request) {
 // (beginSession). how is how the session began (store.SignInOIDC). It answers
 // the browser itself.
 func (d *Dashboard) finishSignIn(ctx context.Context, w http.ResponseWriter, r *http.Request, s signIn, email string, claims map[string]any, how string) {
-	_, id, code := d.Auth.beginSession(ctx, r, s, email, claims, how)
+	_, id, admin, code := d.Auth.beginSession(ctx, r, s, email, claims, how)
 	if code != "" {
 		signInPage(w, r, code)
 		return
 	}
 	d.Auth.setSessionCookie(w, id)
 	d.Log.Info("dashboard sign-in", "how", how)
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	// An admin lands in the admin area, anyone else on the user pages.
+	landing := "/"
+	if admin {
+		landing = "/admin"
+	}
+	http.Redirect(w, r, landing, http.StatusSeeOther)
 }
 
 // beginSession is the part every SSO sign-in shares, OIDC or JWT: the
 // allowlist decides, then the account is made or found, the session the
 // request arrived with is ended, a new one is stored and the sign-in is
-// audited. It returns the stored session and the ID for its cookie, or the
-// code of the refusal (signInErrNotAllowed or signInErrFailed), in which case
-// no account was made and no session started (and the request's own session
-// is kept). email is normalised and proved; claims are the token's.
-func (a *Auth) beginSession(ctx context.Context, r *http.Request, s signIn, email string, claims map[string]any, how string) (store.Session, string, string) {
+// audited. It returns the stored session, the ID for its cookie and whether
+// the account is an admin, or the code of the refusal (signInErrNotAllowed or
+// signInErrFailed), in which case no account was made and no session started
+// (and the request's own session is kept). email is normalised and proved;
+// claims are the token's.
+func (a *Auth) beginSession(ctx context.Context, r *http.Request, s signIn, email string, claims map[string]any, how string) (store.Session, string, bool, string) {
 	existing, found, err := a.store.SSOAccountByEmail(ctx, email)
 	if err != nil {
 		a.log.Error("dashboard sign-in: reading the account failed", "error", err.Error())
-		return store.Session{}, "", signInErrFailed
+		return store.Session{}, "", false, signInErrFailed
 	}
 	if !s.allowed(email, claims, found && existing.Added) {
 		// No account, no session, and no audit entry: anyone with an account
 		// at the provider can reach this, and the log is not theirs to fill.
 		a.log.Info("dashboard sign-in refused: not on the allowlist", "how", how, "domain", emailDomain(email))
-		return store.Session{}, "", signInErrNotAllowed
+		return store.Session{}, "", false, signInErrNotAllowed
 	}
 	now := a.now()
 	acc, err := a.store.SignInSSOAccount(ctx, email, now)
 	if err != nil {
 		a.log.Error("dashboard sign-in: storing the account failed", "error", err.Error())
-		return store.Session{}, "", signInErrFailed
+		return store.Session{}, "", false, signInErrFailed
 	}
 	// Never adopt the session the browser arrived with: end it.
 	if hash, ok := sessionHash(r); ok {
 		if err := a.store.DeleteSession(ctx, hash); err != nil {
 			a.log.Error("dashboard sign-in: ending the previous session failed", "error", err.Error())
-			return store.Session{}, "", signInErrFailed
+			return store.Session{}, "", false, signInErrFailed
 		}
 	}
 	id := randomString(sessionIDBytes)
@@ -469,10 +475,10 @@ func (a *Auth) beginSession(ctx context.Context, r *http.Request, s signIn, emai
 	}
 	if err := a.store.CreateSession(ctx, se); err != nil {
 		a.log.Error("dashboard sign-in: storing the session failed", "error", err.Error())
-		return store.Session{}, "", signInErrFailed
+		return store.Session{}, "", false, signInErrFailed
 	}
 	a.audit(ctx, acc, "sign_in", how, now)
-	return se, id, ""
+	return se, id, acc.Role == store.RoleAdmin, ""
 }
 
 // setSessionCookie gives the browser the session id of an SSO sign-in: 24

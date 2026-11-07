@@ -542,7 +542,7 @@ function Item({ k, v }: { k: string; v: string }) {
   );
 }
 
-// ModelView shows the model to an account that can't change it. The key is
+// ModelView shows the model when it can't be changed. The key is
 // only ever whether it is set.
 function ModelView({ v }: { v: LLMAdminView }) {
   return (
@@ -557,7 +557,7 @@ function ModelView({ v }: { v: LLMAdminView }) {
         {v.baseURL && <Item k="Base URL" v={v.baseURL} />}
         <Item k="Key" v={secretText(v.key)} />
       </dl>
-      {v.source !== "config" && <div className="foot meta">Only a password admin can change the model.</div>}
+      {v.source !== "config" && <div className="foot meta">The model can't be changed here.</div>}
     </section>
   );
 }
@@ -575,7 +575,7 @@ const providers: [string, string][] = [
   ["xai", "xAI (Grok)"],
 ];
 
-// ModelForm edits the model an operator may change. The key is write-only:
+// ModelForm edits the model an admin may change. The key is write-only:
 // it is sent when replaced and never shown.
 function ModelForm({ v }: { v: LLMAdminView }) {
   const client = useQueryClient();
