@@ -2142,3 +2142,204 @@ func TestPublishQuietMergesACarriedResult(t *testing.T) {
 		t.Errorf("stored result = %+v, %v, want the merged result of an incremental review", r, err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Comment layout: the comment follows the run's own layout, never the setting
+
+// The outcome of a stored result carries the run's layout. The failure paths
+// render no layout and do not need it.
+func TestOutcomeCarriesTheRunsLayout(t *testing.T) {
+	e := &Engine{}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	head := sha('a')
+	res := resultFor(t, head, reviewed("no_blocking_issues", "a.go"))
+	for _, layout := range [][]string{{"findings:collapsed"}, {"checks:open", "findings:open"}, nil} {
+		o := e.outcome(store.Run{BaseSHA: sha('b'), HeadSHA: head, Result: res, CommentLayout: layout}, log)
+		if o.Result == nil || o.FailureReason != "" || !slices.Equal(o.Layout, layout) {
+			t.Errorf("outcome of a run with layout %v = %+v, want its result and that layout", layout, o)
+		}
+	}
+	if o := e.outcome(store.Run{FailureReason: "the Job died", CommentLayout: []string{"findings:open"}}, log); o.Result != nil || o.FailureReason != "the Job died" {
+		t.Errorf("outcome of a failed run = %+v, want its reason", o)
+	}
+}
+
+// layoutFindingsOnly is a layout that leaves out the summary, the checks and
+// the Files list.
+var layoutFindingsOnly = []string{"findings:collapsed"}
+
+// summarised is quietPair with a summary of its batch, so the Summary block
+// has something to show.
+func summarised() result.Skill {
+	s := quietPair()
+	s.Batches = 1
+	s.Summaries = []result.Summary{{Batch: 1, Text: "Two small things in the query."}}
+	return s
+}
+
+// reportLayout is Report with the run's layout recorded as a dispatch does:
+// a nil layout leaves the column NULL, as a run from before the setting.
+func reportLayout(t *testing.T, env *testEnv, iid int64, head string, res []byte, layout []string) string {
+	t.Helper()
+	id := env.Dispatched(iid, head)
+	if layout != nil {
+		if err := env.Store.SetRunLayout(env.ctx, id, layout); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out, err := env.Store.StoreResult(env.ctx, id, "seed-token", res, env.Now()); err != nil || out != store.ResultStored {
+		t.Fatalf("StoreResult = %v, %v", out, err)
+	}
+	return id
+}
+
+// wantDefaultComment checks a comment is the default layout's: the Summary
+// first, then the findings, and a Files list.
+func wantDefaultComment(t *testing.T, body string) {
+	t.Helper()
+	sum, find := strings.Index(body, "**Summary:**"), strings.Index(body, "#### Findings")
+	if sum < 0 || find < 0 || sum > find {
+		t.Errorf("the default comment must write the Summary before the findings (summary at %d, findings at %d):\n%s", sum, find, body)
+	}
+	if !strings.Contains(body, "<summary>Files (") {
+		t.Errorf("the default comment lacks the Files list:\n%s", body)
+	}
+}
+
+// wantFindingsOnlyComment checks a comment is layoutFindingsOnly's: no
+// Summary, no Files list.
+func wantFindingsOnlyComment(t *testing.T, body string) {
+	t.Helper()
+	if strings.Contains(body, "**Summary:**") || strings.Contains(body, "<summary>Files (") {
+		t.Errorf("a findings-only comment has a Summary or a Files list:\n%s", body)
+	}
+}
+
+// publishWithLayout publishes summarised() as a run that recorded layout, in a
+// repository whose setting is now setting, and returns the comment.
+func publishWithLayout(t *testing.T, layout, setting []string) string {
+	t.Helper()
+	env := newTestEnv(t)
+	layoutOn(env, setting...)
+	head := sha('a')
+	servePublish(env, 1, head)
+	id := reportLayout(t, env, 1, head, resultFor(t, head, summarised()), layout)
+	publish(t, env)
+	wantPublished(t, env, id)
+	body := createdComment(t, env, 1)
+	wantLayout(t, body)
+	return body
+}
+
+// The run recorded a layout; the setting was changed since. The comment
+// follows the run, whether the setting is now another layout or none.
+func TestPublishLayoutFollowsTheRun(t *testing.T) {
+	t.Run("the setting was cleared", func(t *testing.T) {
+		wantFindingsOnlyComment(t, publishWithLayout(t, layoutFindingsOnly, nil))
+	})
+	t.Run("the setting is another layout", func(t *testing.T) {
+		wantFindingsOnlyComment(t, publishWithLayout(t, layoutFindingsOnly, []string{"summary:open", "findings:open", "files:open"}))
+	})
+	t.Run("a run without a layout, a setting since", func(t *testing.T) {
+		wantDefaultComment(t, publishWithLayout(t, nil, layoutFindingsOnly))
+	})
+}
+
+// A run whose list render refuses (a block of a later release) gets the
+// default comment, and the review is published as usual.
+func TestPublishBadLayoutIsTheDefault(t *testing.T) {
+	wantDefaultComment(t, publishWithLayout(t, []string{"timeline:open", "findings:open"}, nil))
+}
+
+// A layout never touches the status, the approval or the description.
+func TestPublishLayoutKeepsTheDecision(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	reportLayout(t, env, 1, head, resultFor(t, head, reviewed("no_blocking_issues", "api/handler.go")), layoutFindingsOnly)
+	servePublish(env, 1, head)
+
+	publish(t, env)
+
+	wantStatus(t, env, head, gitlab.StatusSuccess, "No blocking issues")
+	if n := len(env.GitLab.Requests(http.MethodPost, approvePath(1))); n != 1 {
+		t.Errorf("approve called %d times, want 1", n)
+	}
+}
+
+// reportIncrementalLayout is reportIncremental for a run that recorded layout.
+func reportIncrementalLayout(t *testing.T, env *testEnv, head, base string, res []byte, layout []string) string {
+	t.Helper()
+	id := env.Dispatched(1, head)
+	if err := env.Store.SetIncremental(env.ctx, id, &base); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.Store.SetRunLayout(env.ctx, id, layout); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := env.Store.StoreResult(env.ctx, id, "seed-token", res, env.Now()); err != nil || out != store.ResultStored {
+		t.Fatalf("StoreResult = %v, %v", out, err)
+	}
+	return id
+}
+
+// An incremental run with a layout over a base run with none: the merge keeps
+// the carried suggestion and the comment follows the incremental run's layout.
+func TestPublishMergedKeepsTheLayout(t *testing.T) {
+	t.Run("incremental", func(t *testing.T) {
+		const kept = "aaaaaa000001"
+		env := newTestEnv(t)
+		headA, headB := sha('a'), sha('c')
+		last := reviewed("no_blocking_issues", "a.go", "b.go")
+		last.Findings = []json.RawMessage{finding(kept, "a.go", 3, 0, "suggestion", "")}
+		base := env.Publish(1, headA, resultFor(t, headA, last))
+		if got := env.Run(base).CommentLayout; got != nil {
+			t.Fatalf("the base run has the layout %v, want none", got)
+		}
+		id := reportIncrementalLayout(t, env, headB, base, resultFor(t, headB, partialReview([]string{"b.go"}, []string{"a.go"})), layoutFindingsOnly)
+		servePublish(env, 1, headB)
+
+		publish(t, env)
+
+		body := createdComment(t, env, 1)
+		wantLayout(t, body)
+		wantFindingsOnlyComment(t, body)
+		if !strings.Contains(body, "Title of aaa") {
+			t.Errorf("comment lacks the carried suggestion:\n%s", body)
+		}
+		wantPublished(t, env, id)
+		if got := env.Run(id).CommentLayout; !slices.Equal(got, layoutFindingsOnly) {
+			t.Errorf("the run's layout after the merge = %v, want %v", got, layoutFindingsOnly)
+		}
+		if r, err := result.Parse(env.Run(id).Result); err != nil || !r.Merged || r.Incremental == nil {
+			t.Errorf("stored result = %+v, %v, want the merged result of an incremental review", r, err)
+		}
+	})
+	t.Run("review failed", func(t *testing.T) {
+		env := newTestEnv(t)
+		head := sha('a')
+		base := env.Publish(1, head, resultFor(t, head,
+			namedSkill(t, "security", "has_blocking_issues", "blocking", "aaaaaa000001"),
+			namedSkill(t, "style", "failed", "", "")))
+		id := rerunOf(t, env, head, store.TriggerRerunFailed, []string{"style"}, base)
+		if err := env.Store.SetRunLayout(env.ctx, id, layoutFindingsOnly); err != nil {
+			t.Fatal(err)
+		}
+
+		reportRerun(t, env, id, head, resultFor(t, head, namedSkill(t, "style", "no_blocking_issues", "suggestion", "cccccc000001")))
+
+		body := createdComment(t, env, 1)
+		wantLayout(t, body)
+		wantFindingsOnlyComment(t, body)
+		for _, want := range []string{"finding of security", "finding of style"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("comment lacks %q:\n%s", want, body)
+			}
+		}
+		if got := env.Run(id).CommentLayout; !slices.Equal(got, layoutFindingsOnly) {
+			t.Errorf("the run's layout after the merge = %v, want %v", got, layoutFindingsOnly)
+		}
+		if r, err := result.Parse(env.Run(id).Result); err != nil || !r.Merged || len(r.Skills) != 2 {
+			t.Errorf("stored result = %+v, %v; want security and style, merged", r, err)
+		}
+	})
+}

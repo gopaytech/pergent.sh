@@ -1320,8 +1320,9 @@ func TestDecideInlineChangesOnlyTheComment(t *testing.T) {
 }
 
 // updateQuietOff rewrites testdata/quiet-off.md. It was run once, on the
-// commit before Outcome had a Quiet field, and is not to be run again: the file
-// pins what a repository without quiet reviews gets, byte for byte.
+// commit before Outcome had a Quiet field, and is not to be run again, except
+// when a pergent pin changes the layout on purpose: the file pins what a
+// repository without quiet reviews gets, byte for byte.
 var updateQuietOff = flag.Bool("update-quiet-off", false, "rewrite testdata/quiet-off.md (do not run after quiet reviews exist)")
 
 // quietFixture is a completed review with everything a quiet comment leaves
@@ -1352,7 +1353,8 @@ func quietFixtureOutcome(r *result.Result) Outcome {
 
 // A comment for a repository without quiet reviews is byte for byte what it
 // was before the setting existed. testdata/quiet-off.md is generated once, on
-// the commit before Outcome had a Quiet field, and never regenerated.
+// the commit before Outcome had a Quiet field, and regenerated only when a
+// pergent pin changes the layout on purpose.
 func TestCommentOffMatchesBeforeQuiet(t *testing.T) {
 	got := Decide(quietFixtureOutcome(quietFixture()), config.FailureStatusFailed).Comment
 	const path = "testdata/quiet-off.md"
@@ -1613,5 +1615,144 @@ func TestDecideQuietAtTheCommentLimit(t *testing.T) {
 	}
 	if strings.Contains(d.Comment, "Passed and n/a checks omitted") {
 		t.Errorf("a quiet comment notes passed checks it never wrote:\n%s", d.Comment)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Comment layout: the run's own list, handed to render
+
+func TestRenderOptionsLayout(t *testing.T) {
+	r := completed(skill("security", "no_blocking_issues", "a.go"))
+	r.Head, r.PergentVersion = "0123456789abcdef", "0.3.0"
+	changed := []string{"a.go"}
+
+	got := renderOptions(Outcome{Result: r, Layout: []string{"checks:open", "findings:collapsed"}}, r, changed)
+	want := []render.Block{
+		{Name: render.BlockChecks, State: render.StateOpen},
+		{Name: render.BlockFindings, State: render.StateCollapsed},
+	}
+	if !reflect.DeepEqual(got.Layout, want) {
+		t.Errorf("Layout = %v, want %v", got.Layout, want)
+	}
+	for _, layout := range [][]string{nil, {}} {
+		if got := renderOptions(Outcome{Result: r, Layout: layout}, r, changed); got.Layout != nil {
+			t.Errorf("Layout of %#v = %v, want nil", layout, got.Layout)
+		}
+	}
+}
+
+// A list ParseLayout refuses (a later release's block, say) leaves Layout nil,
+// so render writes the default comment. Nothing else about the options moves.
+func TestRenderOptionsBadLayout(t *testing.T) {
+	r := completed(skill("security", "no_blocking_issues", "a.go"))
+	r.Head = "0123456789abcdef"
+	changed := []string{"a.go"}
+	base := renderOptions(Outcome{Result: r}, r, changed)
+	for _, bad := range [][]string{
+		{"findings"},
+		{"findings:shut"},
+		{"timeline:open", "findings:open"},
+		{"findings:open", "findings:collapsed"},
+		{"checks:open"},
+	} {
+		got := renderOptions(Outcome{Result: r, Layout: bad}, r, changed)
+		if got.Layout != nil {
+			t.Errorf("Layout of %v = %v, want nil", bad, got.Layout)
+		}
+		if !reflect.DeepEqual(got, base) {
+			t.Errorf("options with %v =\n%+v\nwant the default's\n%+v", bad, got, base)
+		}
+	}
+}
+
+// A bad list gives the default comment, byte for byte.
+func TestDecideBadLayoutIsTheDefaultComment(t *testing.T) {
+	r := quietFixture()
+	want := Decide(quietFixtureOutcome(r), config.FailureStatusFailed).Comment
+	o := quietFixtureOutcome(r)
+	o.Layout = []string{"findings:open", "findings:collapsed"}
+	if got := Decide(o, config.FailureStatusFailed).Comment; got != want {
+		t.Errorf("comment with a bad layout:\n%s\nwant the default:\n%s", got, want)
+	}
+}
+
+// A layout changes the comment and nothing else: the status, the description,
+// the approval and the kind are decided as with the default layout.
+func TestDecideLayoutChangesOnlyTheComment(t *testing.T) {
+	const fp = "abc123def456"
+	blocking := completed(withFinding(skill("security", "has_blocking_issues", "db/query.go"), "blocking", fp, "plain"))
+	clean := completed(skill("security", "no_blocking_issues", "a.go"))
+	failedSkill := completed(skill("security", "failed", "a.go"))
+	nothing := completed(result.Skill{Name: "security", Verdict: "no_blocking_issues", Files: result.Files{
+		Skipped: []result.Skipped{{Path: "go.sum", Rule: "lockfile"}},
+	}})
+	merged := completed(skill("security", "no_blocking_issues", "a.go"))
+	merged.MergeNote = result.NoteBaseUnreadable
+
+	cases := []struct {
+		name string
+		r    *result.Result
+		set  func(*Outcome)
+	}{
+		{"blocking", blocking, nil},
+		{"clean", clean, nil},
+		{"failed skill", failedSkill, nil},
+		{"nothing reviewed", nothing, nil},
+		{"draft", clean, func(o *Outcome) { o.Draft = true }},
+		{"approval off", clean, func(o *Outcome) { o.ApprovalOff = true }},
+		{"approve unavailable", clean, func(o *Outcome) { o.ApproveUnavailable = true }},
+		{"merge note", merged, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			o := Outcome{Result: c.r, Mention: "pergent-bot"}
+			if c.set != nil {
+				c.set(&o)
+			}
+			def := Decide(o, config.FailureStatusFailed)
+			o.Layout = []string{"findings:collapsed"}
+			got := Decide(o, config.FailureStatusFailed)
+			if got.Status != def.Status || got.Description != def.Description || got.Approve != def.Approve || got.Kind != def.Kind {
+				t.Errorf("decision with a layout = %+v, default = %+v", got, def)
+			}
+		})
+	}
+}
+
+// A layout of findings alone leaves out the Files list and the checks block;
+// the findings, the headline, the failed check and the hidden block stay.
+func TestDecideLayoutComment(t *testing.T) {
+	r := quietFixture()
+	o := quietFixtureOutcome(r)
+	o.Layout = []string{"findings:collapsed"}
+	d := Decide(o, config.FailureStatusFailed)
+	if strings.Contains(d.Comment, "<summary>Files (") {
+		t.Errorf("the comment has the Files list:\n%s", d.Comment)
+	}
+	for _, want := range []string{"❌ <b>Unchecked input</b>", "plain", "Queries are parameterised", "<!-- pergent:findings "} {
+		if !strings.Contains(d.Comment, want) {
+			t.Errorf("the comment lacks %q:\n%s", want, d.Comment)
+		}
+	}
+	// The same fixture with the default layout lists the files.
+	if def := Decide(quietFixtureOutcome(r), config.FailureStatusFailed).Comment; !strings.Contains(def, "<summary>Files (") {
+		t.Fatalf("the default comment lacks the Files list:\n%s", def)
+	}
+}
+
+// Quiet wins over a layout: the Files list and the passed checks stay out, and
+// the comment says quiet.
+func TestDecideQuietWinsOverLayout(t *testing.T) {
+	o := quietFixtureOutcome(quietFixture())
+	o.Quiet = true
+	o.Layout = []string{"findings:open", "checks:open", "files:open"}
+	d := Decide(o, config.FailureStatusFailed)
+	for _, bad := range []string{"<summary>Files (", "Output is escaped"} {
+		if strings.Contains(d.Comment, bad) {
+			t.Errorf("a quiet comment has %q:\n%s", bad, d.Comment)
+		}
+	}
+	if !strings.Contains(d.Comment, "quiet</sub>") {
+		t.Errorf("the comment does not say quiet:\n%s", d.Comment)
 	}
 }

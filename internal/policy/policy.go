@@ -116,6 +116,11 @@ func blocksApproval(rule string) bool { return !reviewedSkipRules[rule] }
 // n/a checks and says "quiet" in its meta line. It changes the comment only,
 // never the status, the description, the approval or the kind. The failure
 // paths render no layout and ignore it.
+//
+// Layout is the run's own comment layout, recorded when it was dispatched, as
+// "block:state" entries (render.ParseLayout). Nil is the default layout, and so
+// is a list render refuses. It changes the comment only, never the status, the
+// description, the approval or the kind. A quiet run's comment wins over it.
 type Outcome struct {
 	Result             *result.Result
 	FailureReason      string
@@ -127,6 +132,9 @@ type Outcome struct {
 
 	// Quiet asks for the shorter comment of a quiet review (render's Short).
 	Quiet bool
+
+	// Layout orders and folds the comment's blocks (render's Options.Layout).
+	Layout []string
 
 	Dismissals []render.Dismissal
 	MaxComment int
@@ -336,6 +344,13 @@ func renderOptions(o Outcome, r *result.Result, changed []string) render.Options
 		opts.Version = "v" + strings.TrimPrefix(r.PergentVersion, "v")
 	}
 	opts.Short, opts.MetaNote = o.Quiet, metaNote(r.Incremental, o.Quiet)
+	if len(o.Layout) > 0 {
+		// A list render refuses is a later release's block: the default
+		// comment is the fallback, and there is nothing to log per render.
+		if blocks, err := render.ParseLayout(o.Layout); err == nil {
+			opts.Layout = blocks
+		}
+	}
 	if o.Mention != "" {
 		opts.DismissCommand = "@" + o.Mention + " dismiss"
 		opts.Footer = "Run again: `@" + o.Mention + " review`"

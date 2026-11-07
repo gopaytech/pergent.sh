@@ -1443,3 +1443,87 @@ func TestDispatchQuietIsReadAtEachDispatch(t *testing.T) {
 		t.Error("the run still reads quiet")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Comment layout: the run records the repository's layout when it is dispatched
+
+// layoutOn sets the comment layout of the config repository.
+func layoutOn(env *testEnv, layout ...string) {
+	env.Engine.Config.Repositories[0].CommentLayout = layout
+}
+
+// The run holds the repository's layout before the Job starts, and a
+// repository without one leaves the column NULL.
+func TestDispatchRecordsTheLayout(t *testing.T) {
+	t.Run("a layout", func(t *testing.T) {
+		env := newTestEnv(t)
+		layoutOn(env, "checks:open", "findings:collapsed")
+		head := sha('a')
+		id := env.Enqueue(3, head)
+		env.GitLab.SetMR(openMR(3, head))
+		env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+
+		dispatch(t, env)
+
+		if env.Job(id) == nil {
+			t.Fatalf("no job; run = %+v\n%s", env.Run(id), env.Logs())
+		}
+		if got, want := env.Run(id).CommentLayout, []string{"checks:open", "findings:collapsed"}; !slices.Equal(got, want) {
+			t.Errorf("the run's layout = %v, want %v", got, want)
+		}
+	})
+	t.Run("the default", func(t *testing.T) {
+		env := newTestEnv(t)
+		head := sha('a')
+		id := env.Enqueue(3, head)
+		env.GitLab.SetMR(openMR(3, head))
+		env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+
+		dispatch(t, env)
+
+		if env.Job(id) == nil {
+			t.Fatalf("no job; run = %+v\n%s", env.Run(id), env.Logs())
+		}
+		if got := env.Run(id).CommentLayout; got != nil {
+			t.Errorf("the run's layout = %v, want NULL", got)
+		}
+	})
+	t.Run("before the Job starts, and again at each dispatch", func(t *testing.T) {
+		env := newTestEnv(t)
+		layoutOn(env, "findings:collapsed")
+		fail := true
+		env.Kube.PrependReactor("create", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+			if fail {
+				return true, nil, errors.New("apiserver unavailable")
+			}
+			return false, nil, nil
+		})
+		head := sha('a')
+		id := env.Enqueue(3, head)
+		env.GitLab.SetMR(openMR(3, head))
+		env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+
+		dispatch(t, env)
+
+		r := env.Run(id)
+		if r.State != store.Queued || r.Attempts != 1 {
+			t.Fatalf("run = state %s attempts %d, want queued 1\n%s", r.State, r.Attempts, env.Logs())
+		}
+		if !slices.Equal(r.CommentLayout, []string{"findings:collapsed"}) {
+			t.Errorf("the failed attempt recorded %v before Launch, want the layout", r.CommentLayout)
+		}
+
+		// The next attempt reads the setting again; the old value does not stay.
+		fail = false
+		layoutOn(env)
+		env.SetNow(r.NotBefore)
+		dispatch(t, env)
+
+		if env.Job(id) == nil {
+			t.Fatalf("no job; run = %+v\n%s", env.Run(id), env.Logs())
+		}
+		if got := env.Run(id).CommentLayout; got != nil {
+			t.Errorf("the run's layout = %v after the setting was cleared, want NULL", got)
+		}
+	})
+}

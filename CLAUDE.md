@@ -30,7 +30,7 @@ Tests that need a database skip without `PERGENT_SH_TEST_DATABASE_URL`, so a loc
 ## Rules
 
 - The repository is public: no private hostnames, company names or internal systems, in code, tests, docs or commit messages.
-- A run's quiet value is read at dispatch and stored on the run. The prompt, threads and comment use the run's value, never the repository's.
+- A run's quiet value and comment layout (`comment_layout`, a list of `block:state` entries, NULL for the default) are read at dispatch and stored on the run. The prompt, threads and comment use the run's value, never the repository's. A layout changes the comment only: no decision, verdict, score or status may depend on it, and a list `render.ParseLayout` refuses gives the default comment.
 - A migration must leave the previous release working on the migrated database: add columns with a default or NULL, never rename or drop in the same release.
 - A new config key breaks rollback, because older releases refuse unknown keys: say so in the README's Upgrading section.
 - pergent is pinned by `go.mod` and `defaultImage` in `internal/config`. Move them together. Its version gates behaviour, so a pinned image must really report that version.

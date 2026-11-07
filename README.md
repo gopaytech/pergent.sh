@@ -34,6 +34,7 @@ pergent.sh is a service that runs [pergent](https://github.com/gopaytech/pergent
 - **Incremental reviews**: a push reviews only the files it changed and carries the rest over from the last review. See [Incremental reviews](#-incremental-reviews).
 - **Learn from dismissals**: a review is told what people rejected earlier in the repository, and why, so a false positive stops coming back. See [Learn from dismissals](#-learn-from-dismissals).
 - **Quiet reviews**: a repository can ask for a review that says less: fewer nitpicks, no suggestion threads and a shorter comment, with everything that blocks still there. Off by default. See [Quiet reviews](#-quiet-reviews).
+- **Comment layout**: a repository can choose which blocks of the review comment it shows (summary, findings, dismissed, checks, files), in what order, and whether each starts open or collapsed. See [Comment layout](#-comment-layout).
 - **Skill results**: a tab for each repository shows how many of each skill's findings people fixed, dismissed or left open, so you can fix or drop the weak skills. See [Skill results](#-skill-results).
 - **Approval with a human guard**: a clean review that actually reviewed something and skipped no file outside the allowed rules is approved by the approver; on GitLab, pergent.sh logs a warning for every project where one approval alone could merge.
 - **GitLab and GitHub**: GitLab (gitlab.com or self-managed) and GitHub.com; on GitHub one App is enough to review and approve.
@@ -222,6 +223,16 @@ For GitHub, put the Apps' private keys (the whole `.pem` file of each) and the r
 pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is handy for local development.
 
 ## ⬆️ Upgrading
+
+### Upgrading to 0.10.0
+
+This release changes the review comment and adds [Comment layout](#-comment-layout), a per-repository setting for its shape. It is unset by default.
+
+- **The default comment changes for every repository.** The model's summary is back at the top, the checks are grouped by area and open, and the confidence reason shows only when the score is below 5. Anything that reads the comment's Markdown will need to follow. The hidden findings block does not change, so the next review reads the same findings as before.
+- **The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.6.0`.** A config that sets its own `jobs.image` keeps the image it names. The layout does not depend on it: pergent.sh draws the comment itself from the result the Job sends.
+- **Migration `0027` runs at startup.** It adds three nullable columns (`comment_layout` on `dashboard_repos`, `repo_defaults` and `runs`). A null value means the default layout, and 0.9.0 keeps working on the migrated database, so you can roll back.
+- **A run from before this release has no recorded layout.** If it is published again (a dismissal does that), its comment takes the new default shape.
+- **To roll back, first remove `comment_layout` from the config.** 0.9.0 refuses a config key it does not know, so it would not start with `repositories[].comment_layout` in it. The dashboard's setting needs no change: 0.9.0 ignores the column.
 
 ### Upgrading to 0.9.0
 
@@ -1016,6 +1027,65 @@ The steps for the passed checks and the Files list (4, 6 and 7) do nothing on a 
 
 The run stores whether it was quiet when it starts, before its Job does, and the review uses that value for its prompt, its threads and its comment. If starting the Job fails and the review is tried again after you changed the setting, the new try uses the new value.
 
+## 🧱 Comment layout
+
+A review comment has a fixed top and bottom, and five blocks between them. A repository chooses which blocks show, in what order, and whether each starts open or collapsed. The same review reads differently for different teams: one wants the findings first and nothing else, another wants the checks open.
+
+**The blocks.**
+
+| Block | What it shows |
+|---|---|
+| `summary` | What the model looked at and concluded. With several skills, one section per skill. |
+| `findings` | The findings. Blocking ones are always open. Required: every layout has it. |
+| `dismissed` | The findings people dismissed, with who and why. |
+| `checks` | The checklist results, grouped by area. |
+| `files` | The list of files the review covered. |
+
+Each block is `open` or `collapsed`. For `findings`, collapsed means the suggestions are collapsed; blocking findings stay open. For `checks`, collapsed means the passed and n/a checks are folded away, while the failed checks stay in view. A block you leave out is not written. This is the default:
+
+```yaml
+comment_layout:
+  - summary: open
+  - findings: collapsed
+  - dismissed: collapsed
+  - checks: open
+  - files: collapsed
+```
+
+**Setting it.** `repositories[].comment_layout` in the config, the layout editor in a repository's Settings, or the default under **Admin → Settings** ([Config reference](#-config-reference)). The editor is a list of rows, one per block. A repository the dashboard manages and leaves unset takes the admin default, and with none set it gets the default layout. A repository listed in the config reads no admin default: unset there means the default layout. The server refuses an unknown block or state, a block listed twice, an empty list and a list without `findings`, both on save and in the config.
+
+**What no layout can change.** Some parts are in every comment:
+
+- the headline with the verdict and confidence, and the meta line under it;
+- the confidence reason, the skills table (with several skills) and any failures;
+- the notes, the footer and the hidden findings block at the bottom;
+- every blocking finding, open;
+- every failed check.
+
+A layout moves and folds the blocks, nothing more. It never changes a verdict, a status, a score, an approval or a count.
+
+**Leaving a block out.**
+
+- Leave out `checks`, and the failed checks still show. The passed and n/a checks do not.
+- Leave out `summary`, and no summary shows anywhere.
+- Leave out `dismissed`, and the list is gone. A clean review that has dismissed blocking findings still says `(2 dismissed)` in its headline. On a review with blocking issues, or for dismissed suggestions, nothing shows.
+- Leave out `files`, and there is no list. A skipped file that stopped the approval is still named in the note.
+
+**The size limit.** It can still cut failed checks, in any layout, when the comment is too long. It says so in a note. This is the one thing that can remove a failed check, and it comes late: the hidden block, suggestions, passed checks and the file list go first.
+
+**Quiet reviews win.** A [quiet review](#-quiet-reviews) writes no Files list and no passed or n/a checks, whatever the layout says. The rest of the layout still applies.
+
+**The run keeps its layout.** A review reads the layout when it starts and stores it on the run. The comment uses that value every time it is written, including when a dismissal writes it again. Changing the setting takes effect with the next review, and a dismissal on an older review does not change its shape. If a stored layout is one this release cannot read (it came from a later release), the comment uses the default.
+
+**What it costs.**
+
+- The default comment is longer than before: passed checks are open. Collapse `checks`, or turn on quiet reviews, to shorten it.
+- A summary can disagree with the outcome. The model writes it before the findings are checked, so it may mention a problem that was dropped or dismissed. The headline and the findings are what count.
+- On an [incremental review](#-incremental-reviews) a summary can describe only the files that were re-reviewed. Files carried over keep the earlier review's summary.
+- A layout that leaves blocks out also hides any block a later release adds, until you add it.
+- Repositories can have different comments. Someone who reads across repositories meets several shapes.
+- A summary is text a model wrote about the repository. It is escaped like any other model text, but it is visible in the comment.
+
 ## 📈 Skill results
 
 A skill that raises findings nobody acts on costs reviewers time. The **Skill results** tab of a repository shows which skills people act on and which they set aside, so you can fix or drop the weak ones. Anyone who can see the repository can open it.
@@ -1325,7 +1395,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `repositories[].incremental_reviews` | `true` | A push reviews only the files changed since the last review and carries the rest over. With `false`, every push is a full review. See [Incremental reviews](#-incremental-reviews). The dashboard's "Incremental reviews" switch is the same setting for a repository the dashboard manages. |
 | `repositories[].learn_from_dismissals` | `true` | Later reviews are told what people with write access rejected, and why. With `false`, reviews are not told. The dashboard's "Learn from dismissals" switch is the same setting for a repository the dashboard manages. |
 | `repositories[].quiet_reviews` | `false` | A review says less: fewer nitpicks, no suggestion threads and a shorter comment, with blocking findings, failures, verdicts and approval unchanged. See [Quiet reviews](#-quiet-reviews). The dashboard's "Quiet reviews" switch is the same setting for a repository the dashboard manages. |
-| `repositories[].comment_layout` | the default layout | The blocks of the review comment, in order, each open or collapsed. A list of one-key entries, `block: state`, such as `- findings: collapsed`. The blocks are `summary`, `findings`, `dismissed`, `checks` and `files`; the states are `open` and `collapsed`; `findings` is required. A block left out is not in the comment. The config refuses a list with an unknown block, an unknown state, a block twice, no `findings` block, or no entries (`comment_layout: []` is an error, not the same as leaving the key out); the error names the entry. A review reads the layout when it starts and keeps it, so a change takes effect with the next review. The layout changes the comment only: no verdict, status, score or approval depends on it. The dashboard's layout editor is the same setting for a repository the dashboard manages, and a repository listed in the config reads no admin default. |
+| `repositories[].comment_layout` | the default layout | The blocks of the review comment, in order, each open or collapsed. A list of one-key entries, `block: state`, such as `- findings: collapsed`. The blocks are `summary`, `findings`, `dismissed`, `checks` and `files`; the states are `open` and `collapsed`; `findings` is required. A block left out is not in the comment. The config refuses a list with an unknown block, an unknown state, a block twice, no `findings` block, or no entries (`comment_layout: []` is an error, not the same as leaving the key out). For an unknown block, an unknown state and a block listed twice the error names the entry; the other two have no entry to name. See [Comment layout](#-comment-layout). A review reads the layout when it starts and keeps it, so a change takes effect with the next review. The layout changes the comment only: no verdict, status, score or approval depends on it. The dashboard's layout editor is the same setting for a repository the dashboard manages, and a repository listed in the config reads no admin default. |
 | `repositories[].max_turns` | `jobs.max_turns` | pergent's step limit per opencode run (`--max-turns`) for this repository, 5 to 200. The dashboard's "Max steps" is the same setting for a repository the dashboard manages. |
 | `repositories[].commands_author_and_maintainers_only` | `true` | Only the author of a change and the repository's maintainers and owners can use [commands](#-commands) on it. With `false`, anyone with write access can. The author can always re-run and dismiss suggestions. The dashboard's "Only the author and maintainers use commands" switch is the same setting for a repository the dashboard manages. |
 | `repositories[].rerun_limit_per_mr` | 10 | How many times a merge request or pull request can be re-run by [comment or button](#-commands) per UTC day, 1 to 1000. The full review pergent.sh restarts by itself after a failed merge of an incremental result counts too. Pushes and opened requests always run and never count. |

@@ -819,3 +819,56 @@ func TestDismissRepublishKeepsTheRunsShape(t *testing.T) {
 		t.Errorf("%d discussions started, want no new thread after the dismissal", n)
 	}
 }
+
+// A dismissal in the dashboard decides the review again from the run, not the
+// setting: a run that recorded a findings-only layout, whose repository has
+// since cleared it, is republished with the same shape. The Dismissed block is
+// not in that layout, so it is not written either.
+func TestDismissRepublishKeepsTheLayout(t *testing.T) {
+	e := newDashboardE2E(t)
+	env := e.env
+	t.Setenv(adminPasswordEnv, bootstrapPassword)
+	env.Engine.Config.Dashboard.AdminPasswordEnv = adminPasswordEnv
+	if err := dashboard.Bootstrap(env.ctx, env.Store, env.Engine.Config, env.Now(), env.Engine.Log); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	operator := e.passwordSignIn(t, "admin", bootstrapPassword)
+	if status, body := e.write(t, operator, http.MethodPost, "/auth/password/change",
+		map[string]string{"current": bootstrapPassword, "new": changedPassword}); status != http.StatusNoContent {
+		t.Fatalf("password change = %d: %s", status, body)
+	}
+
+	env.GitLab.Reply(http.MethodPut, notePath(1, createdNote), http.StatusOK, map[string]any{"id": createdNote})
+	env.GitLab.Reply(http.MethodGet, projectPath(), http.StatusOK, map[string]any{"id": testProjectID})
+	env.GitLab.ServeCompare()
+	disc := env.GitLab.ServeDiscussions(t, 1)
+	ie := &inlineEnv{env: env, disc: disc}
+
+	// A run that recorded the layout, published while the repository had it.
+	head := sha('a')
+	servePublish(env, 1, head)
+	env.GitLab.ServeDiff(1, head, queryFile)
+	layoutOn(env, layoutFindingsOnly...)
+	reportLayout(t, env, 1, head, resultFor(t, head, quietPair()), layoutFindingsOnly)
+	publish(t, env)
+	first := ie.comment(t)
+	wantFindingsOnlyComment(t, first)
+
+	// The setting is cleared; then the blocking finding is dismissed.
+	layoutOn(env)
+	status, body := e.write(t, operator, http.MethodPost, "/api/reviews/"+testInstance+"/"+testProjectPath+"/1/dismiss",
+		map[string]string{"fingerprint": fpBlocking, "reason": "the input is a constant"})
+	if status != http.StatusOK || !strings.Contains(string(body), "dismissed") {
+		t.Fatalf("dismiss = %d: %s", status, body)
+	}
+	publish(t, env)
+
+	second := ie.comment(t)
+	if second == first {
+		t.Fatalf("the comment was not written again after the dismissal:\n%s", second)
+	}
+	wantFindingsOnlyComment(t, second)
+	if strings.Contains(second, "Dismissed (") {
+		t.Errorf("a findings-only layout writes the Dismissed block:\n%s", second)
+	}
+}
