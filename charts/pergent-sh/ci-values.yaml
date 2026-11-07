@@ -9,7 +9,6 @@ jobEgress:
 config:
   listen: ":8080"
   public_url: https://pergent.example.com
-  callback_url: http://ci-pergent-sh.pergent-sh.svc:8080
   gitlab:
     - name: main
       url: https://gitlab.example.com
