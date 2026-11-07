@@ -153,7 +153,7 @@ What the chart creates:
 
 `config.jobs.namespace` must equal `jobsNamespace` and `config.listen` must end in `:8080`; the chart refuses to render otherwise. The chart's `skills` value was removed with `skills_dir`: the skill library lives in the dashboard, and a values file that still sets `skills` fails to render.
 
-If `public_url` points at a hostname that the Job pods reach from outside the cluster, they need egress to it on 443 (covered by the default `jobEgress.cidrs`). To keep Jobs off the internet path, set `callback_url` to the in-cluster Service, for example `http://pergent-sh.pergent-sh.svc:8080`.
+The chart sets `callback_url` to its own Service (`http://pergent-sh.pergent-sh.svc:8080` for the install above), so Jobs post their results inside the cluster, over plain HTTP. Set `config.callback_url` to send them elsewhere. If that is a hostname the Job pods reach from outside the cluster, they need egress to it on 443 (covered by the default `jobEgress.cidrs`).
 
 ### Exposing pergent.sh
 
@@ -162,13 +162,13 @@ The chart creates a Service (`pergent-sh.pergent-sh.svc:8080` for the install ab
 | Paths | Who calls them | Where to expose |
 |---|---|---|
 | `/webhooks/` | GitLab and GitHub | `public_url`'s host. GitHub.com and your GitLab must reach it. |
-| `/runs/` | the review Jobs (result callback) | `public_url`'s host, or keep it in-cluster with `callback_url`. |
-| `/skill-fetches/` | the skill fetch Jobs (result callback, only with the dashboard on) | `public_url`'s host, or keep it in-cluster with `callback_url`, as for `/runs/`. |
-| `/readiness-scans/` | the readiness scan Jobs (result callback, only with the dashboard on) | `public_url`'s host, or keep it in-cluster with `callback_url`, as for `/runs/`. |
+| `/runs/` | the review Jobs (result callback) | nowhere: the chart points `callback_url` at its Service. Only a `callback_url` you set to a public host needs it there. |
+| `/skill-fetches/` | the skill fetch Jobs (result callback, only with the dashboard on) | as for `/runs/`. |
+| `/readiness-scans/` | the readiness scan Jobs (result callback, only with the dashboard on) | as for `/runs/`. |
 | `/`, `/api/`, `/auth/` | people, in the [dashboard](#-dashboard) | `dashboard.url`'s host, over https. It can be internal-only. |
 | `/healthz` | probes | nowhere; the kubelet calls the pod directly. |
 
-Expose only `/webhooks/`, `/runs/`, `/skill-fetches/` and `/readiness-scans/` on the public host, so the dashboard and its sign-in stay off the internet. Whatever sits in front must set `X-Forwarded-For` (see [Password sign-in limits](#password-sign-in-limits)).
+Expose only `/webhooks/` on the public host, so the dashboard and its sign-in stay off the internet. With a public `callback_url`, add `/runs/`, `/skill-fetches/` and `/readiness-scans/`. Whatever sits in front must set `X-Forwarded-For` (see [Password sign-in limits](#password-sign-in-limits)).
 
 ### Instances and the LLM in the config file
 
@@ -248,6 +248,7 @@ The migration adds one table, `webhook_deliveries`. Back up Postgres first, as f
 
 - Review Jobs now limit their work volume to `jobs.work_size`, 20Gi by default. A repository whose checkout is larger fails its review until you raise it.
 - On GitLab, a comment command is read back from GitLab before it is acted on, so each one costs one more API call.
+- The chart now sets `callback_url` to its own Service unless `config.callback_url` is set, so Jobs post their results inside the cluster over plain HTTP instead of through `public_url`. To keep the old path, set `config.callback_url` to your `public_url`. In a mesh that requires mTLS, check first that Jobs can reach the Service.
 - GitHub: sending the same delivery again from the App's **Recent Deliveries** is ignored once it was handled. A delivery answered 5xx can still be sent again. To review a change again, use `review` or **Re-run review**.
 
 ### Upgrading to 0.8.2
@@ -887,7 +888,7 @@ There are two kinds of source:
 | Source | How it is read | What it needs |
 | --- | --- | --- |
 | **A repository on a connected instance** (added under **Integrations** or in the config file) | By the pergent.sh pod, through the platform's API, with the review bot or review App it already has. No Job runs and you enter no secret. | **GitLab:** the review bot is a member of the repository with **Reporter** or above. **GitHub:** the review App is installed on that repository (it has Contents: Read-only already). A repository the bot or App can't read, or a branch that doesn't exist, is answered `the review bot or App can't read this repository or ref`, because the platform says the same for both. |
-| **A public `https` URL** | By a short skill fetch Job, with no token of any kind (see [What a Job can and cannot see](#-what-a-job-can-and-cannot-see)). | The URL's host is inside `jobEgress.cidrs`. The Job posts what it read to `<callback_url>/skill-fetches/<id>/result`, so `/skill-fetches/` must be reachable on `public_url`'s host (or through `callback_url`, in-cluster); see [Exposing pergent.sh](#exposing-pergentsh). The chart sets `PERGENT_SH_IMAGE` for the Job. Only public repositories work: a URL with a user name or password is refused. |
+| **A public `https` URL** | By a short skill fetch Job, with no token of any kind (see [What a Job can and cannot see](#-what-a-job-can-and-cannot-see)). | The URL's host is inside `jobEgress.cidrs`. The Job posts what it read to `<callback_url>/skill-fetches/<id>/result`, which the chart points at its own Service; see [Exposing pergent.sh](#exposing-pergentsh). The chart sets `PERGENT_SH_IMAGE` for the Job. Only public repositories work: a URL with a user name or password is refused. |
 
 - **A read is limited.** At most 200 skills and 4 MiB of text in one read (a smaller folder fixes it), 128 KiB per skill, and the pod runs 2 reads at once. A read lasts at most 2 minutes. For a URL, the **image pull and the Job's fixed limits count against those 2 minutes**: the clone container has 512Mi of memory and the Job 1Gi of scratch space. A slow image pull, a slow clone or a huge repository therefore ends as `reading the source took too long` (a read by the pod ends as `reading the repository took longer than 2 minutes`). Choose a smaller folder, or a tag with less history. The result of a read is kept for an hour for you to choose from.
 - **The ceiling.** A password admin installs from anything the review bot or App can reach. A platform admin installs from repositories of its own instance that its user can see there, checked with the platform now, and from public URLs; otherwise it gets 403 `you can install only from repositories of your own instance that you can see`. **Installing is sharing:** everyone with a team can read an installed skill, even one from a private repository. A private repository's path is shown only to people who can see it; others see `a private repository on <instance>`.
@@ -1365,7 +1366,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | --- | --- | --- |
 | `listen` | `:8080` | Address of the HTTP server. |
 | `public_url` | required | HTTPS base URL where GitLab and GitHub reach pergent.sh, without a trailing slash. The GitLab webhook is created as `<public_url>/webhooks/gitlab/<instance name>`; the GitHub review App's webhook URL is `<public_url>/webhooks/github/<instance name>`. |
-| `callback_url` | `public_url` | Base URL where Jobs post their result (`<callback_url>/runs/<id>/result`). `http` or `https`, no trailing slash. Set it to the in-cluster Service to keep that traffic inside the cluster. |
+| `callback_url` | `public_url`; the chart's Service with the chart | Base URL where Jobs post their result (`<callback_url>/runs/<id>/result`). `http` or `https`, no trailing slash. Without the chart, set it to the in-cluster Service to keep that traffic inside the cluster. |
 | `skills_dir` | removed | The skill library lives in the dashboard now. A config that still has it is refused at startup (`skills_dir was removed: skills live in the dashboard (see the README, "Skills and instructions")`). |
 | `gitlab[].name` | required | Instance name, `[a-z0-9-]+`, unique across `gitlab` and `github`. Part of the webhook URL. |
 | `gitlab[].url` | required | Base URL of the GitLab instance. It must be `https` (the bot tokens travel in a header), without a trailing slash. A redirect to another host is never followed. |

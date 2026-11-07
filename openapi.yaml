@@ -76,7 +76,7 @@ info:
     identifier: MIT
 servers:
   - url: https://pergent.example.com
-    description: Your public_url (webhooks, Job callbacks) or dashboard.url (dashboard).
+    description: Your public_url (webhooks), callback_url (Job callbacks) or dashboard.url (dashboard).
 tags:
   - name: Webhooks
     description: Events sent by GitLab and GitHub.
