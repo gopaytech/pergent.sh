@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 
 import { api, skillBudget, type DefaultsView, type LibrarySkill, type LLMAdminView } from "../api";
+import CommentLayoutEditor from "../CommentLayoutEditor";
 import { useWrite } from "../layout/write";
 import { ErrorBox, Loading, Switch, bytesText, noFill, secretFill, secretText } from "../ui";
 
@@ -53,6 +54,9 @@ const onOff = (on: boolean) => (on ? "on" : "off");
 const capText = (n: number) => (n > 0 ? String(n) : "built-in");
 const capValue = (n: number) => (n > 0 ? String(n) : "");
 
+// pinnedLayout is the layout saved here, or null while the built-in one applies.
+const pinnedLayout = (v: DefaultsView) => (v.pinned.commentLayout === true ? v.commentLayout : null);
+
 function Defaults({ v }: { v: DefaultsView }) {
   const client = useQueryClient();
   const write = useWrite();
@@ -63,6 +67,8 @@ function Defaults({ v }: { v: DefaultsView }) {
   const [incremental, setIncremental] = useState(v.incrementalReviews);
   const [learn, setLearn] = useState(v.learnFromDismissals);
   const [quiet, setQuiet] = useState(v.quietReviews);
+  // null is the built-in layout, which is all the config gives.
+  const [layout, setLayout] = useState<string[] | null>(pinnedLayout(v));
   const [failureStatus, setFailureStatus] = useState(v.failureStatus);
   const [timeout, setTimeoutText] = useState(String(v.jobTimeoutSeconds));
   const [steps, setSteps] = useState(String(v.maxTurns));
@@ -119,6 +125,7 @@ function Defaults({ v }: { v: DefaultsView }) {
       incrementalReviews: orNull(incremental, cfg.incrementalReviews),
       learnFromDismissals: orNull(learn, cfg.learnFromDismissals),
       quietReviews: orNull(quiet, cfg.quietReviews),
+      commentLayout: layout === null || layout.join() === cfg.commentLayout.join() ? null : layout,
       failureStatus: orNull(failureStatus, cfg.failureStatus),
       jobTimeoutSeconds: orNull(Number(t), cfg.jobTimeoutSeconds),
       maxTurns: orNull(Number(s), cfg.maxTurns),
@@ -255,6 +262,22 @@ function Defaults({ v }: { v: DefaultsView }) {
         </div>
         <div>
           <Switch label="Quiet reviews" checked={quiet} disabled={save.isPending} onChange={setQuiet} />
+        </div>
+      </div>
+      <div className="set">
+        <div>
+          <div className="name">Comment layout</div>
+          <div className="help">
+            The blocks of the review comment, in order. A block that is not shown is left out.
+            {pinned("commentLayout") ? (
+              <span> Saved here; the config has no layout, so the built-in one applies.</span>
+            ) : (
+              <span> From config: the built-in layout.</span>
+            )}
+          </div>
+        </div>
+        <div>
+          <CommentLayoutEditor value={layout} defaults={cfg.commentLayout} disabled={save.isPending} onChange={setLayout} />
         </div>
       </div>
       <div className="set">

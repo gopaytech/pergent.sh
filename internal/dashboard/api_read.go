@@ -886,6 +886,7 @@ func settingViews(repo settings.Effective) map[string]SettingView {
 		"incrementalReviews":               {repo.IncrementalReviews, ov[settings.KeyIncrementalReviews]},
 		"learnFromDismissals":              {repo.LearnFromDismissals, ov[settings.KeyLearnFromDismissals]},
 		"quietReviews":                     {repo.QuietReviews, ov[settings.KeyQuietReviews]},
+		"commentLayout":                    {layoutText(repo.CommentLayout), ov[settings.KeyCommentLayout]},
 		"failureStatus":                    {string(repo.FailureStatus), ov[settings.KeyFailureStatus]},
 		"skills":                           {repo.Skills, ov[settings.KeySkills]},
 		"repoSkills":                       {nonNil(repo.RepoSkills), ov[settings.KeyRepoSkills]},
@@ -895,6 +896,21 @@ func settingViews(repo settings.Effective) map[string]SettingView {
 		"rerunLimitPerMR":                  {repo.RerunLimitPerMR, ov[settings.KeyRerunLimitPerMR]},
 		"rerunLimitPerRepo":                {repo.RerunLimitPerRepo, ov[settings.KeyRerunLimitPerRepo]},
 	}
+}
+
+// layoutText is a comment layout as the API shows it: its "block:state"
+// entries, or the built-in layout (from pergent's render.DefaultLayout) when
+// there are none. It is always a new list.
+func layoutText(layout []string) []string {
+	if len(layout) > 0 {
+		return slices.Clone(layout)
+	}
+	blocks := render.DefaultLayout()
+	out := make([]string, len(blocks))
+	for i, b := range blocks {
+		out[i] = b.String()
+	}
+	return out
 }
 
 // nonNil is list, or an empty list for nil, so a view shows [] and not null.

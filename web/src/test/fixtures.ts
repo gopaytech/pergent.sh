@@ -227,6 +227,9 @@ export const repoWidgets: RepositoryView = {
   health: "ok",
 };
 
+// The layout the server sends while a repository sets none.
+export const builtInLayout = ["summary:open", "findings:collapsed", "dismissed:collapsed", "checks:open", "files:collapsed"];
+
 export const repoDetail = (repo: RepositoryView, role: Role = "admin"): RepositoryDetailView => ({
   repo,
   role,
@@ -238,6 +241,7 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
     incrementalReviews: { value: true, overridden: false },
     learnFromDismissals: { value: true, overridden: false },
     quietReviews: { value: false, overridden: false },
+    commentLayout: { value: builtInLayout, overridden: false },
     failureStatus: { value: "failed", overridden: false },
     skills: { value: null, overridden: false },
     repoSkills: { value: [], overridden: false },
@@ -374,6 +378,7 @@ export const defaults: DefaultsView = {
   incrementalReviews: true,
   learnFromDismissals: true,
   quietReviews: false,
+  commentLayout: builtInLayout,
   failureStatus: "failed",
   jobTimeoutSeconds: 600,
   maxTurns: 40,
@@ -390,6 +395,7 @@ export const defaults: DefaultsView = {
     incrementalReviews: true,
     learnFromDismissals: true,
     quietReviews: false,
+    commentLayout: builtInLayout,
     failureStatus: "failed",
     jobTimeoutSeconds: 600,
     maxTurns: 40,

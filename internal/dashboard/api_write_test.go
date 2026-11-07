@@ -296,6 +296,13 @@ func TestSettingsValidation(t *testing.T) {
 		{`{"quietReviews":false}`, true, func(r store.DashboardRepo) bool { return r.QuietReviews != nil && !*r.QuietReviews }},
 		{`{"quietReviews":"no"}`, false, nil},
 		{`{"quietReviews":null}`, true, func(r store.DashboardRepo) bool { return r.QuietReviews == nil }},
+		{`{"commentLayout":["findings:open","files:collapsed"]}`, true, func(r store.DashboardRepo) bool {
+			return slices.Equal(r.CommentLayout, []string{"findings:open", "files:collapsed"})
+		}},
+		{`{"commentLayout":["summary:open"]}`, false, nil},
+		{`{"commentLayout":[]}`, false, nil},
+		{`{"commentLayout":"findings:open"}`, false, nil},
+		{`{"commentLayout":null}`, true, func(r store.DashboardRepo) bool { return r.CommentLayout == nil }},
 		{`{"failureStatus":"neutral"}`, true, func(r store.DashboardRepo) bool { return r.FailureStatus != nil && *r.FailureStatus == "neutral" }},
 		{`{"failureStatus":"success"}`, false, nil},
 		{`{"failureStatus":"failed"}`, true, func(r store.DashboardRepo) bool { return r.FailureStatus != nil && *r.FailureStatus == "failed" }},
@@ -390,7 +397,7 @@ func TestSettingsValidation(t *testing.T) {
 	wantCode(t, rec, "reset", http.StatusOK)
 	r, found := e.storedRepo("main", "acme/gadgets")
 	if !found || r.Approve != nil || r.ReviewDrafts != nil || r.FailureStatus != nil || r.Skills != nil ||
-		r.InlineFindings != nil || r.CommandsAuthorAndMaintainersOnly != nil || r.IncrementalReviews != nil || r.LearnFromDismissals != nil || r.QuietReviews != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil ||
+		r.InlineFindings != nil || r.CommandsAuthorAndMaintainersOnly != nil || r.IncrementalReviews != nil || r.LearnFromDismissals != nil || r.QuietReviews != nil || r.CommentLayout != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil ||
 		r.CreatedBy != "carol" {
 		t.Errorf("after reset row = %+v, %v", r, found)
 	}
@@ -1362,6 +1369,115 @@ func TestQuietReviewsSetting(t *testing.T) {
 	k.cat["main"].set("acme/widgets")
 	cfg := k.signInGitLab(true, "acme/widgets")
 	wantCode(t, k.send(cfg, "PUT", "/api/repositories/main/acme/widgets/settings", `{"quietReviews":true}`), "PUT on a config repository", http.StatusConflict)
+	if _, found := k.storedRepo("main", "acme/widgets"); found {
+		t.Errorf("a dashboard row was made for the config repository")
+	}
+}
+
+// The comment layout is stored on its own: a list of block:state entries in
+// the order given, null back to the default; a reset clears it; the five
+// refusals of render.ParseLayout (an unknown block, an unknown state, a
+// repeated block, an empty list, a list without findings) and anything that
+// is not a list of texts are 400 with msgBadSettings and leave the row as it
+// was. A maintainer may change it, the audit entry names it, and a
+// repository the config manages refuses it.
+func TestPutCommentLayout(t *testing.T) {
+	e := newEnv(t, nil)
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	c := e.signInGitLab(true, "acme/gadgets")
+	target := "/api/repositories/main/acme/gadgets/settings"
+	asText := func(v any) string {
+		b, _ := json.Marshal(v)
+		return string(b)
+	}
+
+	// Nothing set: the view carries the built-in layout, not overridden.
+	detail := getJSON[RepositoryDetailView](e, c, "/api/repositories/main/acme/gadgets")
+	wantDefault := `["summary:open","findings:collapsed","dismissed:collapsed","checks:open","files:collapsed"]`
+	if s := detail.Settings["commentLayout"]; asText(s.Value) != wantDefault || s.Overridden {
+		t.Errorf("commentLayout = %s overridden %v; want the default, not overridden", asText(s.Value), s.Overridden)
+	}
+
+	// A valid list saves and reads back in the order given. A block left out
+	// stays out.
+	want := []string{"checks:collapsed", "findings:open", "summary:open"}
+	rec := e.sendJSON(c, "PUT", target, map[string]any{"commentLayout": want})
+	wantCode(t, rec, "PUT list", http.StatusOK)
+	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if s := detail.Settings["commentLayout"]; asText(s.Value) != asText(want) || !s.Overridden {
+		t.Errorf("commentLayout = %s overridden %v; want %s overridden", asText(s.Value), s.Overridden, asText(want))
+	}
+	if r, _ := e.storedRepo("main", "acme/gadgets"); !slices.Equal(r.CommentLayout, want) {
+		t.Errorf("stored = %q, want %q", r.CommentLayout, want)
+	}
+	if g, ok, err := e.d.Repos.Get(ctx, "main", "acme/gadgets"); err != nil || !ok || !slices.Equal(g.CommentLayout, want) {
+		t.Errorf("effective = %+v, %v, %v; want the layout", g, ok, err)
+	}
+	var details []string
+	for _, a := range e.auditEntries() {
+		if a.Action == "settings_updated" {
+			details = append(details, a.Detail)
+		}
+	}
+	if !slices.Equal(details, []string{"commentLayout"}) {
+		t.Errorf("settings_updated details = %q; want commentLayout named", details)
+	}
+
+	// Each refusal is 400 with the settings message, and the row stays.
+	for _, tc := range []struct{ name, body string }{
+		{"unknown block", `{"commentLayout":["findings:open","notes:open"]}`},
+		{"unknown state", `{"commentLayout":["findings:hidden"]}`},
+		{"repeated block", `{"commentLayout":["findings:open","findings:collapsed"]}`},
+		{"empty list", `{"commentLayout":[]}`},
+		{"no findings", `{"commentLayout":["summary:open","files:open"]}`},
+		{"no state", `{"commentLayout":["findings"]}`},
+		{"not a list", `{"commentLayout":"findings:open"}`},
+		{"not texts", `{"commentLayout":[{"findings":"open"}]}`},
+	} {
+		rec := e.send(c, "PUT", target, tc.body)
+		if rec.Code != http.StatusBadRequest || errorOf(t, rec) != msgBadSettings {
+			t.Errorf("%s: PUT = %d %s; want 400 %q", tc.name, rec.Code, rec.Body, msgBadSettings)
+		}
+		if r, _ := e.storedRepo("main", "acme/gadgets"); !slices.Equal(r.CommentLayout, want) {
+			t.Errorf("%s: a refused PUT changed the row: %q", tc.name, r.CommentLayout)
+		}
+	}
+	if !strings.Contains(msgBadSettings, "commentLayout") {
+		t.Errorf("msgBadSettings = %q", msgBadSettings)
+	}
+
+	// Null resets it; so does the reset button.
+	wantCode(t, e.send(c, "PUT", target, `{"commentLayout":null}`), "PUT null", http.StatusOK)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.CommentLayout != nil {
+		t.Errorf("stored after null = %q, want NULL", r.CommentLayout)
+	}
+	if g, ok, err := e.d.Repos.Get(ctx, "main", "acme/gadgets"); err != nil || !ok || g.CommentLayout != nil {
+		t.Errorf("effective after null = %+v, %v, %v; want the default", g, ok, err)
+	}
+	e.sendJSON(c, "PUT", target, map[string]any{"commentLayout": want})
+	wantCode(t, e.send(c, "POST", target+"/reset", ""), "reset", http.StatusOK)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.CommentLayout != nil {
+		t.Errorf("stored after reset = %q, want NULL", r.CommentLayout)
+	}
+
+	// A maintainer changes it like the other settings.
+	m := newEnv(t, nil)
+	m.dashboardRepo("main", "acme/gadgets", nil)
+	m.gl.setProject("acme/gadgets", gitlabProject("private", 20, 0))
+	m.aliceOn("main", store.RoleMaintainer)
+	maintainer := m.signIn("gitlab", "main")
+	wantCode(t, m.send(maintainer, "PUT", target, `{"commentLayout":["findings:open"]}`), "maintainer PUT", http.StatusOK)
+	if r, _ := m.storedRepo("main", "acme/gadgets"); !slices.Equal(r.CommentLayout, []string{"findings:open"}) {
+		t.Errorf("after a maintainer's PUT stored = %q", r.CommentLayout)
+	}
+
+	// A repository the config lists is read-only.
+	k := newEnv(t, nil)
+	k.cat["main"].set("acme/widgets")
+	cfg := k.signInGitLab(true, "acme/widgets")
+	wantCode(t, k.send(cfg, "PUT", "/api/repositories/main/acme/widgets/settings", `{"commentLayout":["findings:open"]}`), "PUT on a config repository", http.StatusConflict)
 	if _, found := k.storedRepo("main", "acme/widgets"); found {
 		t.Errorf("a dashboard row was made for the config repository")
 	}

@@ -839,6 +839,7 @@ func TestRepositoryDetail(t *testing.T) {
 	}
 	settings, _ := json.Marshal(v.Settings)
 	want := `{"approve":{"value":false,"overridden":true},"commandsAuthorAndMaintainersOnly":{"value":true,"overridden":false},` +
+		`"commentLayout":{"value":["summary:open","findings:collapsed","dismissed:collapsed","checks:open","files:collapsed"],"overridden":false},` +
 		`"failureStatus":{"value":"failed","overridden":false},` +
 		`"incrementalReviews":{"value":true,"overridden":false},"inlineFindings":{"value":true,"overridden":false},"jobMemory":{"value":"","overridden":false},"jobTimeoutSeconds":{"value":600,"overridden":false},` +
 		`"learnFromDismissals":{"value":true,"overridden":false},"maxTurns":{"value":40,"overridden":false},"quietReviews":{"value":false,"overridden":false},"repoSkills":{"value":[],"overridden":false},` +
@@ -1083,14 +1084,17 @@ func TestAdminSettings(t *testing.T) {
 	e := newEnv(t, withSecrets(t))
 	c := e.signInGitLab(true, "acme/widgets")
 	v := getJSON[AdminSettingsView](e, c, "/api/admin/settings")
+	// The built-in layout, spelled out: the server builds it from pergent's
+	// render.DefaultLayout and a change there should show here.
+	layout := []string{"summary:open", "findings:collapsed", "dismissed:collapsed", "checks:open", "files:collapsed"}
 	want := AdminSettingsView{Instance: "main",
-		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, LearnFromDismissals: true, FailureStatus: "failed",
+		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, LearnFromDismissals: true, CommentLayout: layout, FailureStatus: "failed",
 			JobTimeoutSeconds: 600, MaxTurns: 40,
 			RerunLimitPerMR: 10, RerunLimitPerRepo: 50, Skills: []string{},
-			Config: DefaultValues{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, LearnFromDismissals: true, FailureStatus: "failed",
+			Config: DefaultValues{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, LearnFromDismissals: true, CommentLayout: layout, FailureStatus: "failed",
 				JobTimeoutSeconds: 600, MaxTurns: 40, RerunLimitPerMR: 10, RerunLimitPerRepo: 50},
 			Pinned: map[string]bool{"approve": false, "reviewDrafts": false, "inlineFindings": false, "commandsAuthorAndMaintainersOnly": false,
-				"incrementalReviews": false, "learnFromDismissals": false, "quietReviews": false, "failureStatus": false, "jobTimeoutSeconds": false,
+				"incrementalReviews": false, "learnFromDismissals": false, "quietReviews": false, "commentLayout": false, "failureStatus": false, "jobTimeoutSeconds": false,
 				"maxTurns": false, "jobMemory": false, "rerunLimitPerMR": false, "rerunLimitPerRepo": false}},
 		LLM: LLMView{Provider: "anthropic", Model: "claude-sonnet-4"}}
 	got, _ := json.Marshal(v)
@@ -1679,6 +1683,32 @@ func TestSettingViewsQuietReviews(t *testing.T) {
 	repo := settings.Effective{QuietReviews: true, Overridden: map[string]bool{settings.KeyQuietReviews: true}}
 	if got := settingViews(repo)["quietReviews"]; got != (SettingView{true, true}) {
 		t.Errorf("quietReviews = %+v, want true overridden", got)
+	}
+}
+
+// The comment layout is a list of block:state texts: the built-in layout
+// (from render.DefaultLayout) while the repository sets none, its own list,
+// in its order, once it does.
+func TestSettingViewsCommentLayout(t *testing.T) {
+	text := func(repo settings.Effective) (string, bool) {
+		v := settingViews(repo)["commentLayout"]
+		b, err := json.Marshal(v.Value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b), v.Overridden
+	}
+	if got, over := text(settings.Effective{}); got != `["summary:open","findings:collapsed","dismissed:collapsed","checks:open","files:collapsed"]` || over {
+		t.Errorf("commentLayout = %s overridden %v; want the default, not overridden", got, over)
+	}
+	repo := settings.Effective{CommentLayout: []string{"checks:open", "findings:open"}, Overridden: map[string]bool{settings.KeyCommentLayout: true}}
+	if got, over := text(repo); got != `["checks:open","findings:open"]` || !over {
+		t.Errorf("commentLayout = %s overridden %v; want the repository's list, overridden", got, over)
+	}
+	// The view hands out a copy, so a caller can't change the repository's list.
+	settingViews(repo)["commentLayout"].Value.([]string)[0] = "files:open"
+	if repo.CommentLayout[0] != "checks:open" {
+		t.Errorf("the view shares the repository's list: %q", repo.CommentLayout)
 	}
 }
 

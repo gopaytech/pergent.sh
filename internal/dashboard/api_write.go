@@ -17,6 +17,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
+	"github.com/gopaytech/pergent/render"
+
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/settings"
@@ -53,7 +55,7 @@ const (
 	msgAlreadyOn      = "this repository is switched on already"
 	msgWriteFailed    = "could not save the change, please try again"
 	msgBadProjectBody = `the body must be {"project": "<path>"}`
-	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"
+	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, commentLayout, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"
 	msgNameInstance   = `name the instance: {"instance": "<name>", "project": "<path>"}`
 	msgNeedsPlatform  = "sign in with GitLab or GitHub to add repositories"
 	msgNeedsAdminCaps = "only admins of this repository can change its re-run caps"
@@ -607,6 +609,7 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 	d.updateSettings(w, r, repo, func(row *store.DashboardRepo) {
 		row.Approve, row.ReviewDrafts, row.InlineFindings, row.FailureStatus = nil, nil, nil, nil
 		row.CommandsAuthorAndMaintainersOnly, row.IncrementalReviews, row.LearnFromDismissals, row.QuietReviews = nil, nil, nil, nil
+		row.CommentLayout = nil
 		row.Skills, row.RepoSkills, row.JobTimeoutSeconds, row.MaxTurns, row.JobMemory = nil, nil, nil, nil, nil
 		if admin {
 			row.RerunLimitPerMR, row.RerunLimitPerRepo = nil, nil
@@ -680,6 +683,8 @@ func (d *Dashboard) parseSettings(r *http.Request) (func(*store.DashboardRepo), 
 		switch key {
 		case "approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews":
 			edit, msg = boolSetting(key, raw, null)
+		case "commentLayout":
+			edit, msg = commentLayoutSetting(raw, null, msgBadSettings)
 		case "failureStatus":
 			edit, msg = failureStatusSetting(raw, null)
 		case "skills":
@@ -739,6 +744,30 @@ func boolSetting(key string, raw json.RawMessage, null bool) (func(*store.Dashbo
 		return nil, key + " is not a setting"
 	}
 	return func(row *store.DashboardRepo) { set(row, v) }, ""
+}
+
+// commentLayoutSetting takes null (the built-in layout) or a list that
+// render.ParseLayout accepts: block:state texts, each block at most once,
+// findings among them. Anything else, an empty list included, is refused with
+// bad, the message of the whole body, which names the key. The list is kept
+// in the order given.
+func commentLayoutSetting(raw json.RawMessage, null bool, bad string) (func(*store.DashboardRepo), string) {
+	var v []string
+	if !null {
+		var entries []string
+		if json.Unmarshal(raw, &entries) != nil {
+			return nil, bad
+		}
+		blocks, err := render.ParseLayout(entries)
+		if err != nil {
+			return nil, bad
+		}
+		v = make([]string, len(blocks))
+		for i, b := range blocks {
+			v[i] = b.String()
+		}
+	}
+	return func(row *store.DashboardRepo) { row.CommentLayout = v }, ""
 }
 
 func failureStatusSetting(raw json.RawMessage, null bool) (func(*store.DashboardRepo), string) {

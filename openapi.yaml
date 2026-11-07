@@ -1006,7 +1006,9 @@ paths:
       description: |
         `settings` is keyed `approve`, `reviewDrafts`, `inlineFindings`,
         `commandsAuthorAndMaintainersOnly`, `incrementalReviews`,
-        `learnFromDismissals`, `quietReviews`, `failureStatus`, `skills`
+        `learnFromDismissals`, `quietReviews`, `commentLayout` (the
+        `block:state` list, the built-in one while `overridden` is false),
+        `failureStatus`, `skills`
         (null: the default list), `repoSkills`, `jobTimeoutSeconds`,
         `maxTurns`, `jobMemory`
         (`""` when none), `rerunLimitPerMR` and `rerunLimitPerRepo`; each
@@ -2626,6 +2628,17 @@ components:
           type: [boolean, 'null']
         quietReviews:
           type: [boolean, 'null']
+        commentLayout:
+          type: [array, 'null']
+          description: |
+            The comment's blocks in order, each `block:state`: the blocks are
+            `summary`, `findings`, `dismissed`, `checks` and `files`, the
+            states `open` and `collapsed`. A block left out is hidden.
+            `findings` is required and each block is named once. Null is the
+            built-in layout. An empty list, an unknown block or state, a
+            repeated block and a list without `findings` are 400.
+          minItems: 1
+          items: {type: string, pattern: '^(summary|findings|dismissed|checks|files):(open|collapsed)$'}
         failureStatus:
           type: [string, 'null']
           enum: [failed, neutral, null]
@@ -2682,6 +2695,17 @@ components:
           type: [boolean, 'null']
         quietReviews:
           type: [boolean, 'null']
+        commentLayout:
+          type: [array, 'null']
+          description: |
+            The comment's blocks in order, each `block:state`: the blocks are
+            `summary`, `findings`, `dismissed`, `checks` and `files`, the
+            states `open` and `collapsed`. A block left out is hidden.
+            `findings` is required and each block is named once. Null is the
+            built-in layout. An empty list, an unknown block or state, a
+            repeated block and a list without `findings` are 400.
+          minItems: 1
+          items: {type: string, pattern: '^(summary|findings|dismissed|checks|files):(open|collapsed)$'}
         failureStatus:
           type: [string, 'null']
           enum: [failed, neutral, null]
@@ -2835,7 +2859,7 @@ components:
     DefaultValues:
       description: DefaultsView's settings without the skill list, with the same keys.
       type: object
-      required: [approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo]
+      required: [approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, commentLayout, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo]
       properties:
         approve: {type: boolean}
         reviewDrafts: {type: boolean}
@@ -2844,6 +2868,10 @@ components:
         incrementalReviews: {type: boolean}
         learnFromDismissals: {type: boolean}
         quietReviews: {type: boolean}
+        commentLayout:
+          type: array
+          items: {type: string}
+          description: The comment's blocks as `block:state` entries in order; the built-in layout until one is saved.
         failureStatus: {type: string}
         jobTimeoutSeconds: {type: integer}
         maxTurns: {type: integer}
@@ -2853,7 +2881,7 @@ components:
     DefaultsView:
       description: The settings a repository gets when it sets none.
       type: object
-      required: [approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, skills, config, pinned]
+      required: [approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, commentLayout, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, skills, config, pinned]
       properties:
         approve: {type: boolean}
         reviewDrafts: {type: boolean}
@@ -2862,6 +2890,10 @@ components:
         incrementalReviews: {type: boolean}
         learnFromDismissals: {type: boolean}
         quietReviews: {type: boolean}
+        commentLayout:
+          type: array
+          items: {type: string}
+          description: The comment's blocks as `block:state` entries in order; the built-in layout until one is saved.
         failureStatus: {type: string}
         jobTimeoutSeconds: {type: integer}
         maxTurns: {type: integer}
@@ -3237,7 +3269,7 @@ components:
           type: object
           additionalProperties: {$ref: '#/components/schemas/SettingView'}
           description: Keyed approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews,
-            learnFromDismissals, quietReviews, failureStatus, skills, repoSkills, jobTimeoutSeconds, maxTurns, jobMemory,
+            learnFromDismissals, quietReviews, commentLayout, failureStatus, skills, repoSkills, jobTimeoutSeconds, maxTurns, jobMemory,
             rerunLimitPerMR and rerunLimitPerRepo.
         attention:
           type: array

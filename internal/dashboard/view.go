@@ -340,7 +340,9 @@ type Last7View struct {
 // incrementalReviews (whether a push reviews only the files changed since the
 // last review), learnFromDismissals (whether later reviews are told what people
 // with write access dismissed, and why), quietReviews (whether a review says
-// less: fewer nitpicks, no suggestion threads, a shorter comment), failureStatus, skills (null: the default list of skills; otherwise the library skills
+// less: fewer nitpicks, no suggestion threads, a shorter comment), commentLayout (the
+// comment's blocks as a list of "block:state" texts in order, such as
+// "findings:collapsed"; the built-in layout until the repository sets one), failureStatus, skills (null: the default list of skills; otherwise the library skills
 // reviewed), repoSkills
 // (the detected repository skills turned on, a list, empty when none),
 // jobTimeoutSeconds, maxTurns, jobMemory ("" when none), rerunLimitPerMR and
@@ -720,9 +722,13 @@ type DefaultsView struct {
 	LearnFromDismissals bool `json:"learnFromDismissals"`
 	// QuietReviews is whether a review says less: fewer nitpicks, no
 	// suggestion threads and a shorter comment.
-	QuietReviews      bool   `json:"quietReviews"`
-	FailureStatus     string `json:"failureStatus"`
-	JobTimeoutSeconds int64  `json:"jobTimeoutSeconds"`
+	QuietReviews bool `json:"quietReviews"`
+	// CommentLayout is the shape of the review comment, as "block:state"
+	// entries in order. A repository that sets none gets the built-in layout,
+	// so this is never empty.
+	CommentLayout     []string `json:"commentLayout"`
+	FailureStatus     string   `json:"failureStatus"`
+	JobTimeoutSeconds int64    `json:"jobTimeoutSeconds"`
 	// MaxTurns is the step limit of each opencode run.
 	MaxTurns int `json:"maxTurns"`
 	// JobMemory is the Job's memory limit, "" when none.
@@ -740,7 +746,7 @@ type DefaultsView struct {
 	// Pinned says which defaults were saved here and so no longer follow the
 	// config, by JSON key (approve, reviewDrafts, inlineFindings,
 	// commandsAuthorAndMaintainersOnly, incrementalReviews,
-	// learnFromDismissals, quietReviews, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory,
+	// learnFromDismissals, quietReviews, commentLayout, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory,
 	// rerunLimitPerMR, rerunLimitPerRepo). Every key is present.
 	Pinned map[string]bool `json:"pinned"`
 }
@@ -758,10 +764,13 @@ type DefaultValues struct {
 	// LearnFromDismissals: see DefaultsView.
 	LearnFromDismissals bool `json:"learnFromDismissals"`
 	// QuietReviews: see DefaultsView.
-	QuietReviews      bool   `json:"quietReviews"`
-	FailureStatus     string `json:"failureStatus"`
-	JobTimeoutSeconds int64  `json:"jobTimeoutSeconds"`
-	MaxTurns          int    `json:"maxTurns"`
+	QuietReviews bool `json:"quietReviews"`
+	// CommentLayout: see DefaultsView. The config has no layout, so here it
+	// is always the built-in one.
+	CommentLayout     []string `json:"commentLayout"`
+	FailureStatus     string   `json:"failureStatus"`
+	JobTimeoutSeconds int64    `json:"jobTimeoutSeconds"`
+	MaxTurns          int      `json:"maxTurns"`
 	// JobMemory is the Job's memory limit, "" when none.
 	JobMemory         string `json:"jobMemory"`
 	RerunLimitPerMR   int    `json:"rerunLimitPerMR"`
@@ -810,7 +819,12 @@ type LLMView struct {
 //   - PUT /api/repositories/{instance}/{project...}/settings: changes the
 //     settings in the body and leaves the others; a null resets one to its
 //     default. The keys are those of RepositoryDetailView.Settings:
-//     approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals and quietReviews (true or false), failureStatus ("failed" or
+//     approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals and quietReviews (true or false),
+//     commentLayout (a non-empty list of "block:state" texts, or null for the
+//     built-in layout: the blocks are summary, findings, dismissed, checks and
+//     files, the states open and collapsed, a block left out is hidden,
+//     findings is required and each block is named once; anything else is
+//     400), failureStatus ("failed" or
 //     "neutral"), skills (a non-empty list of library skill names, or
 //     null for the default list; a name the library lacks is 400 `skill
 //     "x" is not in the skill library`, and so is a list whose texts come to
