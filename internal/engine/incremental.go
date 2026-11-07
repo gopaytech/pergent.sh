@@ -65,7 +65,7 @@ func (d *dispatcher) planCarried(ctx context.Context, plat Platform, repo settin
 	if !ok {
 		return nil, fullNoCompare, nil
 	}
-	lastResult, err := result.Parse(last.Result)
+	lastResult, err := parsedFor(last, last.Result)
 	switch {
 	case err != nil:
 		return nil, fullUnreadable, nil
@@ -166,7 +166,7 @@ func carriedFiles(last *result.Result, lastHashes, hashes map[string]string, cha
 	}
 	out := map[string][]string{}
 	for i, s := range last.Skills {
-		if s.Name == result.ImpactSkill {
+		if last.IsCheck(s.Name) {
 			// The linked repositories' check has no content to hash and no file
 			// to carry: dispatch decides whether it runs again.
 			continue

@@ -244,12 +244,12 @@ func TestMissingImpactIsSynthesisedFailed(t *testing.T) {
 
 	wantPublished(t, env, id)
 	s := impactOfRun(t, env, id)
-	if s.Verdict != "failed" || len(s.Failures) != 1 || s.Failures[0].Message != result.ImpactNotRunMessage {
-		t.Errorf("stored impact = %+v; want the synthesised failed skill", s)
+	if want := result.ImpactMessage(result.ImpactNotRunMessage, []string{linkedTarget}); s.Verdict != "failed" || len(s.Failures) != 1 || s.Failures[0].Message != want {
+		t.Errorf("stored impact = %+v; want the synthesised failed skill naming the link", s)
 	}
 	comment := ghLastComment(t, gh, 3)
-	if !strings.Contains(comment, "the review returned no result for the linked repositories") {
-		t.Errorf("the comment doesn't say the check did not happen:\n%s", comment)
+	if !strings.Contains(comment, "the review returned no result for the linked repositories") || !strings.Contains(comment, linkedTarget) {
+		t.Errorf("the comment doesn't say the check did not happen, for which repositories:\n%s", comment)
 	}
 	if run := onlyCheckRun(t, gh); run["conclusion"] == "success" {
 		t.Errorf("check run = %v; want it not a success", run)

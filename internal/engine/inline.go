@@ -206,7 +206,7 @@ func buildFindings(r *result.Result, ds []render.Dismissal, redact func(string) 
 		// The impact check reviews no file of this repository: when it ran and
 		// finished it covers the whole change, so a finding it no longer
 		// reports is gone. Failed or absent, it covers nothing.
-		cov.AllFiles = s.Name == result.ImpactSkill
+		cov.AllFiles = r.IsCheck(s.Name)
 		fs.skills[s.Name] = cov
 
 		for _, f := range s.Findings {

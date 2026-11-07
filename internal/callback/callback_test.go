@@ -355,6 +355,7 @@ func TestResultOfOtherSkillsThanDispatchedFailsRun(t *testing.T) {
 // feature ignores the links).
 func TestImpactSkillAgainstTheRecordedLinks(t *testing.T) {
 	sources := map[string]string{"security": "library"}
+	own := map[string]string{"security": "library", "impact": "repo"}
 	links := []store.Link{{Target: "acme/api"}}
 	for name, tc := range map[string]struct {
 		run    store.Run
@@ -373,6 +374,12 @@ func TestImpactSkillAgainstTheRecordedLinks(t *testing.T) {
 		"subset without links":      {store.Run{SkillSources: sources, SkillSubset: []string{"security"}}, completedJSON("security", "impact"), false},
 		"impact and an unknown one": {store.Run{SkillSources: sources, LinkedRepos: links}, completedJSON("security", "impact", "other"), false},
 		"links and a missing skill": {store.Run{SkillSources: sources, LinkedRepos: links}, completedJSON("impact"), false},
+		// A repository's own skill named impact is an ordinary skill.
+		"own impact, reported":          {store.Run{SkillSources: own}, completedJSON("security", "impact"), true},
+		"own impact, missing":           {store.Run{SkillSources: own}, completedJSON("security"), false},
+		"own impact, twice":             {store.Run{SkillSources: own}, completedJSON("security", "impact", "impact"), false},
+		"own impact, subset":            {store.Run{SkillSources: own, SkillSubset: []string{"impact"}}, completedJSON("impact"), true},
+		"own impact, subset, not asked": {store.Run{SkillSources: own, SkillSubset: []string{"security"}}, completedJSON("security", "impact"), false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFake()

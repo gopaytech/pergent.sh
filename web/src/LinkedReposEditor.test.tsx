@@ -59,6 +59,19 @@ describe("LinkedReposEditor", () => {
     expect(screen.queryByText(/ignored until/)).not.toBeInTheDocument();
   });
 
+  it("says an empty watch list means every change, not a path", () => {
+    render(<Host links={[lib]} />);
+    const box = screen.getByRole("textbox", { name: "Watched paths of acme/lib" });
+    expect(box).toHaveValue("");
+    expect(box).toHaveAttribute("placeholder", "Every change");
+    expect(screen.getByText(/Empty: every change counts/)).toBeInTheDocument();
+  });
+
+  it("explains the quote in plain words", () => {
+    render(<Host />);
+    expect(screen.getByText(/anyone who can read those pull requests can read the quote/)).toBeInTheDocument();
+  });
+
   it("turns on and off", async () => {
     const onEnabled = vi.fn();
     render(<Host onEnabled={onEnabled} />);

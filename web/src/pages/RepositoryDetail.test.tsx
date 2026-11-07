@@ -982,6 +982,9 @@ describe("RepositorySettings: Linked repositories", () => {
     expect(switches[0]).toHaveAccessibleName("Linked repositories");
     expect(switches[0]).not.toBeChecked();
     expect(within(box).getByText(/Off by default/)).toBeInTheDocument();
+    // The title is said once.
+    expect(within(box).getAllByRole("heading", { name: /Linked repositories/ })).toHaveLength(1);
+    expect(box.querySelectorAll(".name")).toHaveLength(0);
     const list = await within(box).findByRole("list", { name: "Repositories to link" });
     expect(within(list).getByRole("button", { name: "Add acme/api" })).toBeInTheDocument();
     expect(within(list).getByText("acme/other-app").closest("[role=listitem]")).toHaveTextContent("another installation");

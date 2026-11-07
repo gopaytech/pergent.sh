@@ -61,11 +61,10 @@ export default function LinkedReposEditor({
     <div>
       <div className="set">
         <div>
-          <div className="name">Linked repositories</div>
           <div className="help">
             Off by default. When on, a change to a watched path is also checked against the repositories below, to find callers
-            it breaks. A finding can quote the linked repository on this repository's pull requests, so only link repositories
-            whose code may be shown to everyone who can read them here.
+            it breaks. A finding can quote code from a linked repository in a comment on this repository's pull requests, and
+            anyone who can read those pull requests can read the quote. Link only repositories whose code they may see.
           </div>
         </div>
         <div>
@@ -101,7 +100,7 @@ export default function LinkedReposEditor({
                 aria-label={`Watched paths of ${l.target}`}
                 rows={Math.max(2, Math.min(6, l.watched.length + 1))}
                 spellCheck={false}
-                placeholder={"render/**\nscope/**"}
+                placeholder="Every change"
                 value={l.watched.join("\n")}
                 disabled={disabled}
                 onChange={(e) => change(i, { watched: e.target.value.split("\n") })}

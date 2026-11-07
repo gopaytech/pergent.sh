@@ -64,11 +64,11 @@ Admins only, on a repository's settings page, in a **Linked repositories** secti
 
 ## A review with links
 
-1. **Dispatch.** With the feature on, pergent.sh reads the repository's links and matches the change's files against each link's watched paths. On an incremental review, only the new commits' files count. No match means nothing below happens.
+1. **Dispatch.** With the feature on, pergent.sh reads the repository's links and matches the change's files against each link's watched paths. On an incremental review, only the new commits' files decide whether the check runs. No match means nothing below happens.
 2. **Clone.** The checkout container clones the checkout first, then each matched target's default branch, depth 1, into its own directory under `/work`. Each target clone has its own time limit and size limit, and a target clone failing doesn't stop the Job: it's recorded, and `impact` is `failed`. These clones use `scan.sh`'s hardening: `GIT_ALLOW_PROTOCOL=https`, `core.symlinks=false`, hooks off. Clone directories have neutral names, such as `linked-1`, so a repository's name can't match a denied read rule.
 3. **Scrub.** Before any run starts, pergent removes instruction files, symlinks leaving a clone, and files the read rules deny (`*.env`, `*.pem`, `*.key`, `*.tfvars`) from each clone. Grep and glob don't honour read rules, so denied files have to be gone, not just denied. A scrub failure fails `impact`, not the review.
 4. **Review.** pergent runs the normal review, unchanged. Normal runs can't read the clones: only the impact run's generated config allows that `external_directory`.
-5. **Impact run.** One more opencode run, with a fixed prompt pergent owns. Its one job: for what this change alters, search the linked repositories for callers it breaks. It gets only that prompt, the diff of changed files matching watched paths, read access to the clones, and its own earlier findings as the previous result, so a dismissal stays attached if the wording changes. It gets no skills, repository instructions, quiet line or change description. On an incremental review, only the new commits' matching files count. If that's too big for one run, the check is `failed`.
+5. **Impact run.** One more opencode run, with a fixed prompt pergent owns. Its one job: for what this change alters, search the linked repositories for callers it breaks. It gets only that prompt, the diff of changed files matching watched paths, read access to the clones, and its own earlier findings as the previous result, so a dismissal stays attached if the wording changes. It gets no skills, repository instructions, quiet line or change description. An incremental review still gives it the whole change's matching files, not only the new commits': narrowing could close an open blocker on an older file without looking at it. If that's too big for one run, the check is `failed`.
 6. **Verification.** A blocking finding goes through its own verification prompt, which reads the changed code and the caller in the clone. If verification can't confirm it, or fails, the finding becomes a suggestion.
 7. **Result.** The findings go in the result as a skill named `impact`. In the comment it shows like a skill: a row in the skills table and findings in the one findings list.
 
@@ -117,10 +117,11 @@ One clone per matched link, and one model run per review, plus verification for 
 - A re-run treats `impact` as part of the run, not as "skills changed", and `review failed` can re-run it alone.
 - The settings page lists repositories the bot or App reaches on that instance, and says why one can't be linked.
 - The dashboard's review page shows `impact` like a skill.
-- Skill results count `impact` as a skill, with the fixed prompt's hash as its version.
+- Skill results count `impact` as a skill. It shows no version.
 
 ## Accepted costs
 
+- **A bigger diff on a long pull request.** The impact run always gets the whole change's matching files, so on a long pull request it fails as too big more often than a run of the new commits would.
 - **Default branch only.** A caller already fixed in its own unmerged PR still reads as broken. Dismissing it covers that.
 - **The model can miss a caller.** A clean impact check means nothing was found, not that nothing breaks.
 - **Someone can steer the run.** A PR's author who can't read a linked private repository could get the model to quote it, and text in a target could try the same, or suppress or plant a finding. The prompt rule against pasted code is not a guarantee. The comment is the only way out, because the model has no web access. Linking is an admin's trust decision.

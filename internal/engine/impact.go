@@ -30,7 +30,9 @@ import (
 //
 // An error is a failure to store, or shutdown: the publish is retried.
 func (e *Engine) holdImpact(ctx context.Context, run store.Run, log *slog.Logger) (store.Run, error) {
-	if run.FailureReason != "" || run.Result == nil {
+	if run.FailureReason != "" || run.Result == nil || !impactIsCheck(run) {
+		// A skill named impact that the repository dispatched is its own: it
+		// is held to no rule here.
 		return run, nil
 	}
 	r, err := result.Parse(run.Result)
@@ -39,7 +41,7 @@ func (e *Engine) holdImpact(ctx context.Context, run store.Run, log *slog.Logger
 	}
 	data := run.Result
 	if len(run.LinkedRepos) > 0 && !r.HoldsImpact() {
-		out, added, err := result.AddFailedImpact(data, result.ImpactNotRunMessage)
+		out, added, err := result.AddFailedImpact(data, result.ImpactMessage(result.ImpactNotRunMessage, linkTargets(run)))
 		if err != nil {
 			return run, fmt.Errorf("add the failed impact check: %w", err)
 		}

@@ -280,7 +280,7 @@ func (e *Engine) mergeIncremental(ctx context.Context, run store.Run, log *slog.
 			return run, false, fmt.Errorf("load the run to merge with: %w", lerr)
 		}
 		if found && base.Result != nil {
-			merged, err = result.MergeIncremental(run.Result, base.Result, base.HeadSHA)
+			merged, err = result.MergeIncremental(run.Result, base.Result, base.HeadSHA, !impactIsCheck(run))
 		} else {
 			err = errors.New("the earlier run or its result is gone")
 		}
@@ -522,6 +522,7 @@ func (e *Engine) outcome(run store.Run, log *slog.Logger) policy.Outcome {
 			"it is for a different commit (base %q, head %q) than the one reviewed (base %s, head %s)",
 			r.Base, r.Head, run.BaseSHA, run.HeadSHA)}
 	}
+	r.ForRun(run.SkillSources)
 	return policy.Outcome{Result: r, Quiet: run.Quiet, Layout: run.CommentLayout}
 }
 

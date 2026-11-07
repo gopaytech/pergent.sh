@@ -3,6 +3,7 @@ package result
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // ImpactSkill is the name of the linked repositories' check in a result. It is
@@ -22,6 +23,50 @@ const (
 	// open as this one when the review was posted.
 	ImpactWithheldMessage = "Not checked: a linked repository could not be shown to be as open as this one, so what the check found is left out."
 )
+
+// ImpactWithheldComment is what stays of the comment pergent wrote when the
+// check's findings were withheld: that text may quote them, so it is replaced.
+// The comment is rendered again from the skills whenever it is posted.
+const ImpactWithheldComment = "The comment pergent wrote was dropped: part of it was left out because of the linked repositories' check."
+
+// ImpactMessage is message with the linked repositories it covers named, as
+// the Job was given them. The names are pergent.sh's own (the links an admin
+// saved, which passed the rule for owner/name), never text from a clone or the
+// model.
+func ImpactMessage(message string, targets []string) string {
+	if len(targets) == 0 {
+		return message
+	}
+	return message + " Linked repositories: " + strings.Join(targets, ", ") + "."
+}
+
+// IsImpactCheck reports whether a skill called name in the result of a run is
+// the linked repositories' check. A skill named impact is the repository's own,
+// an ordinary skill with nothing special about it, when it is among the skills
+// the run was dispatched with (sources, by name). A run that recorded none
+// (nil: an older run, or the recording failed) can't say, and impact is the
+// check there, as it always was. The name is reserved only while the check
+// runs: dispatch refuses a run that would have both.
+func IsImpactCheck(name string, sources map[string]string) bool {
+	if name != ImpactSkill {
+		return false
+	}
+	_, own := sources[name]
+	return !own
+}
+
+// ForRun marks r with what IsImpactCheck says for the run it is the result of
+// (sources: the skills the run was dispatched with), and returns it: after that
+// IsCheck is the test every reader of the result uses. A result nobody marked
+// reads as one whose impact skill is the check.
+func (r *Result) ForRun(sources map[string]string) *Result {
+	r.OwnImpact = !IsImpactCheck(ImpactSkill, sources)
+	return r
+}
+
+// IsCheck reports whether the skill called name in r is the linked
+// repositories' check (see IsImpactCheck).
+func (r *Result) IsCheck(name string) bool { return name == ImpactSkill && !r.OwnImpact }
 
 // HoldsImpact reports whether the result has a skill named impact.
 func (r *Result) HoldsImpact() bool {
@@ -90,6 +135,11 @@ func FailImpact(data []byte, message string) (out []byte, changed bool, err erro
 		return data, false, nil
 	}
 	if top["skills"], err = json.Marshal(raws); err != nil {
+		return data, false, err
+	}
+	// The comment pergent wrote may quote what was withheld, and the stored
+	// result must not keep it. Parse wants some text, so a fixed one stays.
+	if top["comment"], err = json.Marshal(Comment{Markdown: ImpactWithheldComment}); err != nil {
 		return data, false, err
 	}
 	if out, err = json.Marshal(top); err != nil {

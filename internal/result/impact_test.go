@@ -261,3 +261,55 @@ func TestHoldsImpact(t *testing.T) {
 		t.Error("a result with impact does not hold it")
 	}
 }
+
+// pergent's own comment and findings block may quote what was withheld: the
+// stored result keeps neither, only text that Parse accepts.
+func TestFailImpactDropsPergentsComment(t *testing.T) {
+	data := completedWith(t, Skill{Name: ImpactSkill, Verdict: "has_blocking_issues",
+		Findings: []json.RawMessage{impactFinding("aaaaaa000001", "blocking")}})
+	var top map[string]any
+	if err := json.Unmarshal(data, &top); err != nil {
+		t.Fatal(err)
+	}
+	top["comment"] = map[string]any{"markdown": "found a caller in acme/secret/client.go", "findings_block": "<!-- pergent:findings acme/secret -->"}
+	data, _ = json.Marshal(top)
+
+	out, changed, err := FailImpact(data, ImpactWithheldMessage)
+	if err != nil || !changed {
+		t.Fatalf("FailImpact = %v, %v", changed, err)
+	}
+	if strings.Contains(string(out), "acme/secret") {
+		t.Errorf("the stored result still carries the withheld text: %s", out)
+	}
+	r, err := Parse(out)
+	if err != nil || r.Comment.Markdown != ImpactWithheldComment || r.Comment.FindingsBlock != "" {
+		t.Errorf("comment = %+v, %v; want the fixed text and no block", r.Comment, err)
+	}
+	// Nothing changed, nothing rewritten: the comment stays.
+	clean := completedWith(t, Skill{Name: "sec", Verdict: "no_blocking_issues"})
+	if again, changed, _ := FailImpact(clean, ImpactWithheldMessage); changed || string(again) != string(clean) {
+		t.Error("a result with no impact skill was rewritten")
+	}
+}
+
+func TestIsImpactCheck(t *testing.T) {
+	for name, tc := range map[string]struct {
+		skill   string
+		sources map[string]string
+		want    bool
+	}{
+		"dispatched without it":  {"impact", map[string]string{"sec": "library"}, true},
+		"dispatched with it":     {"impact", map[string]string{"sec": "library", "impact": "repo"}, false},
+		"nothing recorded":       {"impact", nil, true},
+		"another skill":          {"sec", map[string]string{"sec": "library"}, false},
+		"another skill, nothing": {"sec", nil, false},
+	} {
+		if got := IsImpactCheck(tc.skill, tc.sources); got != tc.want {
+			t.Errorf("%s: IsImpactCheck = %v; want %v", name, got, tc.want)
+		}
+	}
+	r := &Result{Skills: []Skill{{Name: ImpactSkill}}}
+	if !r.IsCheck(ImpactSkill) || r.ForRun(map[string]string{"impact": "library"}).IsCheck(ImpactSkill) {
+		t.Error("ForRun did not mark an own skill")
+	}
+}

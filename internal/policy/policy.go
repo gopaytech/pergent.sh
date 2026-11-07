@@ -280,7 +280,7 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 		}
 		// The impact check looks at other repositories for callers of the
 		// change: it reviews no file of this one, whatever it lists.
-		if s.Name != result.ImpactSkill {
+		if !r.IsCheck(s.Name) {
 			reviewed += len(s.Files.Reviewed)
 		}
 	}

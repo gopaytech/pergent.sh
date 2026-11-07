@@ -105,3 +105,26 @@ func TestQuietKeepsImpactSuggestionsInTheComment(t *testing.T) {
 		t.Errorf("a quiet comment lacks the impact suggestion:\n%s", d.Comment)
 	}
 }
+
+// A repository's own skill named impact (the feature off) is an ordinary skill:
+// the files it reviewed count, so a change only it reviewed is reviewed and
+// approved.
+func TestOwnImpactSkillCountsAsReviewed(t *testing.T) {
+	own := result.Skill{Name: "impact", Verdict: "no_blocking_issues", Files: result.Files{Reviewed: []string{"a.go"}}}
+	r := completed(own)
+	r.OwnImpact = true
+	if d := Decide(Outcome{Result: r}, config.FailureStatusFailed); !d.Approve || d.Kind != KindApprove {
+		t.Fatalf("decision = %+v; want an approval", d)
+	}
+	// Unmarked it is the check, which reviews no file.
+	if d := Decide(Outcome{Result: completed(own)}, config.FailureStatusFailed); d.Approve || d.Description != descNothingToReview {
+		t.Fatalf("unmarked decision = %+v; want nothing reviewed", d)
+	}
+	// A failed one fails the review like any skill.
+	failed := result.Skill{Name: "impact", Verdict: "failed"}
+	rf := completed(skill("security", "no_blocking_issues", "a.go"), failed)
+	rf.OwnImpact = true
+	if d := Decide(Outcome{Result: rf}, config.FailureStatusFailed); d.Approve || d.Kind != KindFailed {
+		t.Fatalf("failed own skill decision = %+v", d)
+	}
+}

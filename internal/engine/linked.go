@@ -24,6 +24,32 @@ import (
 // result.
 const impactSkill = result.ImpactSkill
 
+// parsedFor is the stored result of run, parsed and marked with whether a skill
+// named impact in it is the linked repositories' check or the repository's own
+// (result.IsImpactCheck).
+func parsedFor(run store.Run, data []byte) (*result.Result, error) {
+	r, err := result.Parse(data)
+	if err != nil {
+		return nil, err
+	}
+	return r.ForRun(run.SkillSources), nil
+}
+
+// impactIsCheck is whether a skill named impact in the run's result is the
+// linked repositories' check, not the repository's own skill.
+func impactIsCheck(run store.Run) bool {
+	return result.IsImpactCheck(impactSkill, run.SkillSources)
+}
+
+// linkTargets are the names of the links the run was given.
+func linkTargets(run store.Run) []string {
+	out := make([]string, len(run.LinkedRepos))
+	for i, l := range run.LinkedRepos {
+		out[i] = l.Target
+	}
+	return out
+}
+
 // What a link's entry says when it can't be cloned. pergent shows the text in
 // the comment, so each one is fixed and short: nothing from the platform, the
 // link or an error reaches it.
@@ -194,7 +220,7 @@ func cloneBase(repoURL string) (string, error) {
 // blocking finding nobody dismissed.
 func impactOpen(r *result.Result, ds []render.Dismissal) bool {
 	for i, s := range render.ApplyDismissals(result.ToRender(r), ds) {
-		if r.Skills[i].Name != impactSkill {
+		if !r.IsCheck(r.Skills[i].Name) {
 			continue
 		}
 		if s.Verdict == "failed" {
@@ -276,13 +302,13 @@ func (d *dispatcher) impactIsOpen(ctx context.Context, last store.Run, haveLast 
 	if !haveLast {
 		return false
 	}
-	r, err := result.Parse(last.Result)
+	r, err := parsedFor(last, last.Result)
 	if err != nil {
 		d.log.Warn("every linked repository counts as touched: the last result can't be read", "error", err)
 		return true
 	}
 	for _, sk := range r.Skills {
-		if sk.Name == impactSkill && sk.Verdict == "failed" {
+		if r.IsCheck(sk.Name) && sk.Verdict == "failed" {
 			// No dismissal closes a failed check.
 			return true
 		}

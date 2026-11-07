@@ -48,6 +48,10 @@ type Result struct {
 	// Incremental is set by MergeIncremental on the result of an incremental
 	// review.
 	Incremental *Incremental `json:"incremental,omitempty"`
+
+	// OwnImpact is set by ForRun (never stored): a skill named impact in this
+	// result is the repository's own skill, not the linked repositories' check.
+	OwnImpact bool `json:"-"`
 }
 
 // Incremental says what an incremental review did: the files it reviewed
@@ -575,7 +579,7 @@ func NoteUnmerged(data []byte, note string) ([]byte, error) {
 // completed result of from, or when a skill carries a file the base did not
 // review (or a skill the base lacks): the caller then runs a full review, as a
 // partial result alone would pass the files it left out.
-func MergeIncremental(partial, base []byte, from string) ([]byte, error) {
+func MergeIncremental(partial, base []byte, from string, ownImpact bool) ([]byte, error) {
 	pr, err := Parse(partial)
 	if err != nil {
 		return nil, fmt.Errorf("the incremental result: %w", err)
@@ -628,7 +632,7 @@ func MergeIncremental(partial, base []byte, from string) ([]byte, error) {
 	// an open one must not be lost by a run that did not repeat it (dispatch
 	// runs it again while it is open, so this is the guard behind that rule).
 	// It is kept as the last review left it.
-	if !pr.HoldsImpact() {
+	if !pr.HoldsImpact() && !ownImpact {
 		if j, ok := earlier[ImpactSkill]; ok && impactIsOpen(br.Skills[j]) {
 			skills = append(skills, baseSkills[j])
 		}

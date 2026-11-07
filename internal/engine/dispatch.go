@@ -49,9 +49,12 @@ const (
 	msgNoLLM       = "no LLM is set: an operator sets it on Admin → Settings"
 
 	// reasonNoSkills is why a run is skipped and what "Needs attention" says.
-	reasonNoSkills     = "this repository has no skills"
-	reasonTooLarge     = "the skills and instructions for this repository are larger than 900 KiB"
-	reasonNoCloneToken = "pergent.sh has no clone token for this repository yet"
+	reasonNoSkills = "this repository has no skills"
+	// reasonImpactReserved is why a review is refused when the repository has
+	// linked repositories turned on and a skill named like their check.
+	reasonImpactReserved = "the name impact is reserved for the linked repositories' check, and a skill of this repository has it: rename the skill, or turn off linked repositories here"
+	reasonTooLarge       = "the skills and instructions for this repository are larger than 900 KiB"
+	reasonNoCloneToken   = "pergent.sh has no clone token for this repository yet"
 	// reasonNoRepository is a GitHub repository reconcile hasn't stored.
 	reasonNoRepository = "pergent.sh hasn't looked this repository up on GitHub yet"
 	reasonNotInstalled = "the pergent review App isn't installed on this repository"
@@ -328,6 +331,13 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	if len(in.Skills) == 0 {
 		return d.skipNoSkills(ctx, plat, repo)
 	}
+	if _, clash := in.Skills[impactSkill]; clash && d.mayLink(plat, repo) {
+		// The name belongs to the linked repositories' check while they are
+		// linked: a skill of that name is never run in its place, where its
+		// result could read as the check's.
+		d.log.Warn("not reviewing: a skill is named impact, which the linked repositories' check holds")
+		return d.fail(ctx, reasonImpactReserved)
+	}
 	// Only a push can be incremental: a re-run on request is a full review,
 	// and a re-run of the failed skills keeps the base run it has.
 	push := run.Trigger == store.TriggerPush
@@ -577,7 +587,13 @@ func (d *dispatcher) subset(ctx context.Context, in *inputs.Inputs, mr forge.Cha
 	// The linked repositories' check is part of the run, not one of its skills:
 	// it has no entry in the inputs, so it is set apart from the names that
 	// have.
-	names, impact := splitImpact(run.SkillSubset)
+	// A skill of the repository named impact is an ordinary skill: only
+	// without one is that name the check.
+	_, own := in.Skills[impactSkill]
+	names, impact := run.SkillSubset, false
+	if !own {
+		names, impact = splitImpact(run.SkillSubset)
+	}
 	base, reason, err := d.keptRun(ctx, in, mr)
 	if err != nil {
 		return nil, err
@@ -605,7 +621,7 @@ func (d *dispatcher) subset(ctx context.Context, in *inputs.Inputs, mr forge.Cha
 	if !slices.Equal(slices.Sorted(slices.Values(kept)), slices.Sorted(slices.Values(run.SkillSubset))) {
 		var gone []string
 		for _, n := range run.SkillSubset {
-			if n != impactSkill && !slices.Contains(kept, n) {
+			if (own || n != impactSkill) && !slices.Contains(kept, n) {
 				gone = append(gone, n)
 			}
 		}
@@ -696,7 +712,7 @@ func (d *dispatcher) keptRun(ctx context.Context, in *inputs.Inputs, mr forge.Ch
 	if !found || base.Result == nil {
 		return store.Run{}, "the earlier run or its result is gone", nil
 	}
-	r, err := result.Parse(base.Result)
+	r, err := parsedFor(base, base.Result)
 	switch {
 	case err != nil:
 		return store.Run{}, "the earlier result can't be read", nil
@@ -743,7 +759,7 @@ func skillsChanged(r *result.Result, in *inputs.Inputs) string {
 			return "the earlier result has a skill more than once"
 		}
 		seen[s.Name] = true
-		if s.Name == impactSkill {
+		if r.IsCheck(s.Name) {
 			continue
 		}
 		skills++

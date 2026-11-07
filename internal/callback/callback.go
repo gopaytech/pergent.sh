@@ -155,10 +155,15 @@ func checkSkills(res *result.Result, run store.Run) string {
 		}
 		got[s.Name] = true
 	}
-	if got[result.ImpactSkill] && len(run.LinkedRepos) == 0 {
-		return "the result has skills the Job was not started with"
+	// The linked repositories' check is not one of the skills, unless the
+	// repository dispatched a skill of that name: that one is ordinary.
+	check := result.IsImpactCheck(result.ImpactSkill, run.SkillSources)
+	if check {
+		if got[result.ImpactSkill] && len(run.LinkedRepos) == 0 {
+			return "the result has skills the Job was not started with"
+		}
+		delete(got, result.ImpactSkill)
 	}
-	delete(got, result.ImpactSkill)
 	want := map[string]bool{}
 	if len(run.SkillSubset) > 0 {
 		for _, n := range run.SkillSubset {
@@ -171,7 +176,9 @@ func checkSkills(res *result.Result, run store.Run) string {
 	} else {
 		return ""
 	}
-	delete(want, result.ImpactSkill)
+	if check {
+		delete(want, result.ImpactSkill)
+	}
 	for n := range want {
 		if !got[n] {
 			return fmt.Sprintf("the result lacks the skills the Job was started with (%q)", n)
