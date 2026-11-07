@@ -910,9 +910,6 @@ func TestValidateRejectsDashboard(t *testing.T) {
 		{"url with a fragment", func(c *Config) { c.Dashboard.URL = "https://pergent.example.com#x" }, "must have no path"},
 		{"url with a port", func(c *Config) { c.Dashboard.URL = "https://pergent.example.com:8443" }, "must have no port"},
 		{"url with the https port", func(c *Config) { c.Dashboard.URL = "https://pergent.example.com:443" }, "must have no port"},
-		{"gitlab oauth id without secret", func(c *Config) { c.GitLab[0].OAuthClientSecretEnv = "" }, "oauth_client_secret_env"},
-		{"gitlab oauth secret without id", func(c *Config) { c.GitLab[0].OAuthClientIDEnv = "" }, "oauth_client_id_env"},
-		{"github oauth id without secret", func(c *Config) { c.GitHub[0].OAuthClientSecretEnv = "" }, "oauth_client_secret_env"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1258,5 +1255,150 @@ func TestWebhookURL(t *testing.T) {
 		if got := WebhookURL(tt.publicURL, tt.platform, tt.instance); got != tt.want {
 			t.Errorf("WebhookURL(%q, %q, %q) = %q, want %q", tt.publicURL, tt.platform, tt.instance, got, tt.want)
 		}
+	}
+}
+
+// The OAuth keys of an instance are read by nothing now: a config naming
+// them loads, even half of a pair (it once was an error), and each instance
+// that names one gets a warning.
+func TestOldOAuthKeysWarn(t *testing.T) {
+	cfg, err := Load(writeConfig(t, dashboardYAML(t)))
+	if err != nil {
+		t.Fatalf("Load with the old OAuth keys: %v", err)
+	}
+	warnings := DeprecatedWarnings(cfg)
+	if len(warnings) != 2 {
+		t.Fatalf("DeprecatedWarnings = %q, want one for gitlab and one for github", warnings)
+	}
+	for i, want := range []string{"gitlab[0] (main)", "github[0] (gh)"} {
+		if !strings.Contains(warnings[i], want) || !strings.Contains(warnings[i], "oauth_client_id_env") {
+			t.Errorf("warning %d = %q, want it to name %s and the key", i, warnings[i], want)
+		}
+	}
+	// Half of a pair is not an error any more.
+	cfg.GitLab[0].OAuthClientSecretEnv = ""
+	cfg.GitHub[0].OAuthClientIDEnv = ""
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate with half a pair: %v", err)
+	}
+	if len(DeprecatedWarnings(cfg)) != 2 {
+		t.Errorf("DeprecatedWarnings with half a pair = %q, want two", DeprecatedWarnings(cfg))
+	}
+	cfg.GitLab[0].OAuthClientIDEnv, cfg.GitHub[0].OAuthClientSecretEnv = "", ""
+	if w := DeprecatedWarnings(cfg); len(w) != 0 {
+		t.Errorf("DeprecatedWarnings with none = %q, want none", w)
+	}
+}
+
+const signInYAML = `
+  sign_in:
+    mode: oidc
+    label: Google
+    issuer: https://accounts.google.com
+    client_id: abc.apps.googleusercontent.com
+    client_secret_env: GOOGLE_CLIENT_SECRET
+    allowed_domains: [example.com]
+    allowed_emails: [boss@example.org]
+`
+
+func TestLoadSignIn(t *testing.T) {
+	cfg, err := Load(writeConfig(t, dashboardYAML(t)+signInYAML))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	s := cfg.Dashboard.SignIn
+	if !s.Set() || s.Mode != SignInOIDC || s.Label != "Google" || s.Issuer != "https://accounts.google.com" ||
+		s.ClientID != "abc.apps.googleusercontent.com" || s.ClientSecretEnv != "GOOGLE_CLIENT_SECRET" ||
+		len(s.AllowedDomains) != 1 || s.AllowedDomains[0] != "example.com" || len(s.AllowedEmails) != 1 {
+		t.Errorf("SignIn = %+v", s)
+	}
+	jwt := dashboardYAML(t) + `
+  sign_in:
+    mode: jwt
+    header: X-Auth-Token
+    issuer: https://proxy.example.com
+    audience: pergent
+    jwks_url: https://proxy.example.com/keys
+    email_claim: email
+`
+	if _, err := Load(writeConfig(t, jwt)); err != nil {
+		t.Errorf("Load of a jwt sign-in: %v", err)
+	}
+	if loadGitHub(t).Dashboard.SignIn.Set() {
+		t.Error("SignIn.Set() without a sign_in block")
+	}
+}
+
+func TestValidateRejectsSignIn(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(s *SignIn)
+		wantErr string
+	}{
+		{"unknown mode", func(s *SignIn) { s.Mode = "saml" }, `mode must be "oidc"`},
+		{"http issuer", func(s *SignIn) { s.Issuer = "http://accounts.google.com" }, "issuer must be an https URL"},
+		{"issuer with credentials", func(s *SignIn) { s.Issuer = "https://u:p@accounts.google.com" }, "issuer must be an https URL"},
+		{"issuer with a query", func(s *SignIn) { s.Issuer = "https://accounts.google.com?x=1" }, "or a query"},
+		{"no issuer", func(s *SignIn) { s.Issuer = "" }, "issuer is required"},
+		{"no client id", func(s *SignIn) { s.ClientID = "" }, "client_id is required"},
+		{"no secret env", func(s *SignIn) { s.ClientSecretEnv = "" }, "client_secret_env is required"},
+		{"secret env is not a name", func(s *SignIn) { s.ClientSecretEnv = "not a name" }, "must be an environment variable name"},
+		{"http jwks", func(s *SignIn) { s.JWKSURL = "http://keys.example.com" }, "jwks_url must be an https URL"},
+		{"bad domain", func(s *SignIn) { s.AllowedDomains = []string{"example.com/x"} }, "not a domain"},
+		{"a domain with an at sign", func(s *SignIn) { s.AllowedDomains = []string{"@example.com"} }, "not a domain"},
+		{"bad email", func(s *SignIn) { s.AllowedEmails = []string{"a@b@c.com"} }, "not an email"},
+		{"label too long", func(s *SignIn) { s.Label = strings.Repeat("x", 65) }, "label"},
+		{"bad header", func(s *SignIn) { s.Header = "X Auth" }, "header must be a header name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, dashboardYAML(t)+signInYAML))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			tt.mutate(&cfg.Dashboard.SignIn)
+			err = cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Validate() = %v, want an error containing %q", err, tt.wantErr)
+			}
+		})
+	}
+	// A jwt sign-in must name its issuer, audience, keys and header.
+	for _, missing := range []string{"issuer", "audience", "jwks_url", "header"} {
+		body := dashboardYAML(t) + "\n  sign_in:\n    mode: jwt\n"
+		for k, v := range map[string]string{"header": "X-Auth", "issuer": "https://p.example.com", "audience": "pergent", "jwks_url": "https://p.example.com/k"} {
+			if k != missing {
+				body += "    " + k + ": " + v + "\n"
+			}
+		}
+		if _, err := Load(writeConfig(t, body)); err == nil || !strings.Contains(err.Error(), missing+" is required") {
+			t.Errorf("jwt without %s: Load() = %v", missing, err)
+		}
+	}
+	// Other settings without a mode are a mistake, not a silent off.
+	body := dashboardYAML(t) + "\n  sign_in:\n    issuer: https://accounts.google.com\n"
+	if _, err := Load(writeConfig(t, body)); err == nil || !strings.Contains(err.Error(), "mode is required") {
+		t.Errorf("sign_in without a mode: Load() = %v", err)
+	}
+	// Without the dashboard there is nothing to sign in to.
+	off := minimalYAML + "dashboard:\n  sign_in:\n    mode: oidc\n    issuer: https://accounts.google.com\n    client_id: x\n    client_secret_env: S\n"
+	if _, err := Load(writeConfig(t, off)); err == nil || !strings.Contains(err.Error(), "needs dashboard.url") {
+		t.Errorf("sign_in with the dashboard off: Load() = %v", err)
+	}
+}
+
+// The same rules check what an admin saves in the dashboard, where the
+// secret is stored, not named.
+func TestSignInProblemsForTheDashboard(t *testing.T) {
+	ok := SignIn{Mode: SignInOIDC, Issuer: "https://accounts.google.com", ClientID: "x"}
+	if p := ok.Problems(false); len(p) != 0 {
+		t.Errorf("Problems = %q, want none", p)
+	}
+	if p := (SignIn{}).Problems(false); len(p) != 0 {
+		t.Errorf("Problems of nothing = %q, want none", p)
+	}
+	bad := SignIn{Mode: SignInOIDC, Issuer: "http://x.example.com", ClientID: "has space"}
+	if p := bad.Problems(false); len(p) != 2 {
+		t.Errorf("Problems = %q, want two", p)
 	}
 }

@@ -120,12 +120,49 @@ func TestPruneSessions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	n, err := s.PruneSessions(ctx, now.Add(-7*24*time.Hour), now.Add(-8*time.Hour))
+	n, err := s.PruneSessions(ctx, now.Add(-7*24*time.Hour), now.Add(-24*time.Hour), now.Add(-8*time.Hour))
 	if err != nil || n != 2 {
 		t.Fatalf("PruneSessions = %d, %v; want 2", n, err)
 	}
 	if _, found, _ := s.Session(ctx, fresh.IDHash); !found {
 		t.Fatal("the fresh session was pruned")
+	}
+}
+
+// An SSO session is pruned 24 hours after it began, a password one after 7
+// days, both used just now.
+func TestPruneSessionsSSOMaximum(t *testing.T) {
+	s := newStore(t)
+	now := t0.Add(30 * 24 * time.Hour)
+	admin := mustPassword(t, s, "admin")
+	user := mustSSO(t, s, "alice@example.com")
+	mk := func(b byte, account int64, signIn string, age time.Duration) []byte {
+		t.Helper()
+		se := Session{IDHash: bytes.Repeat([]byte{b}, 32), AccountID: account, Username: "u", CSRF: "csrf",
+			SignIn: signIn, LastSeenAt: now.Add(-time.Minute), CreatedAt: now.Add(-age)}
+		if err := s.CreateSession(ctx, se); err != nil {
+			t.Fatal(err)
+		}
+		return se.IDHash
+	}
+	ssoOld := mk(1, user.ID, SignInOIDC, 25*time.Hour)
+	jwtOld := mk(2, user.ID, SignInJWT, 25*time.Hour)
+	ssoNew := mk(3, user.ID, SignInOIDC, 23*time.Hour)
+	pwOld := mk(4, admin.ID, SignInPassword, 25*time.Hour) // a local admin keeps 7 days
+	pwGone := mk(5, admin.ID, SignInPassword, 8*24*time.Hour)
+	n, err := s.PruneSessions(ctx, now.Add(-7*24*time.Hour), now.Add(-24*time.Hour), now.Add(-8*time.Hour))
+	if err != nil || n != 3 {
+		t.Fatalf("PruneSessions = %d, %v; want 3", n, err)
+	}
+	for name, h := range map[string][]byte{"oidc 25h": ssoOld, "jwt 25h": jwtOld, "password 8d": pwGone} {
+		if _, found, _ := s.Session(ctx, h); found {
+			t.Errorf("the %s session is still there", name)
+		}
+	}
+	for name, h := range map[string][]byte{"oidc 23h": ssoNew, "password 25h": pwOld} {
+		if _, found, _ := s.Session(ctx, h); !found {
+			t.Errorf("the %s session was pruned", name)
+		}
 	}
 }
 

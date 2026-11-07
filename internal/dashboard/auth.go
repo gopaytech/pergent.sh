@@ -28,8 +28,12 @@ const (
 
 	// IdleTimeout ends a session not used for this long.
 	IdleTimeout = 8 * time.Hour
-	// MaxSessionAge ends a session this long after sign-in, used or not.
+	// MaxSessionAge ends a local admin's session this long after sign-in,
+	// used or not.
 	MaxSessionAge = 7 * 24 * time.Hour
+	// SSOMaxSessionAge is the same for a session that began with OIDC or a
+	// JWT: someone disabled at the identity provider is gone within a day.
+	SSOMaxSessionAge = 24 * time.Hour
 
 	touchEvery     = time.Minute
 	sessionIDBytes = 32
@@ -189,8 +193,25 @@ func (a *Auth) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// maxAge is the longest a session lives after sign-in: 7 days for a local
+// admin's (a password sign-in), 24 hours for one that began with OIDC or a
+// JWT.
+func maxAge(signIn string) time.Duration {
+	if signIn == store.SignInPassword || signIn == "" {
+		return MaxSessionAge
+	}
+	return SSOMaxSessionAge
+}
+
+// sessionExpired reports whether a session is past its limits at now: idle
+// for more than 8 hours, or older than maxAge for how it began.
+func sessionExpired(se store.Session, now time.Time) bool {
+	return now.Sub(se.LastSeenAt) > IdleTimeout || now.Sub(se.CreatedAt) > maxAge(se.SignIn)
+}
+
 // Require serves next only for a signed-in session that is neither idle
-// for 8 hours nor older than 7 days (401 otherwise), checks X-CSRF-Token on
+// for 8 hours nor older than its maximum, 7 days for a local admin and 24
+// hours for an SSO session (401 otherwise), checks X-CSRF-Token on
 // every request other than GET, HEAD and OPTIONS (403), and puts the
 // Session in the context. A session whose account is gone ends (401), and so
 // does one whose account is of the old platform kind, which no sign-in
@@ -223,7 +244,7 @@ func (a *Auth) Require(next http.Handler) http.Handler {
 			return
 		}
 		now := a.now()
-		if now.Sub(se.LastSeenAt) > IdleTimeout || now.Sub(se.CreatedAt) > MaxSessionAge {
+		if sessionExpired(se, now) {
 			if err := a.store.DeleteSession(ctx, hash); err != nil {
 				a.log.Error("dashboard: deleting an expired session failed", "error", err.Error())
 			}
@@ -284,10 +305,11 @@ func (a *Auth) Require(next http.Handler) http.Handler {
 	})
 }
 
-// PruneSessions deletes the sessions older than 7 days, and those idle for
-// more than 8 hours, which can no longer be used. It returns how many.
+// PruneSessions deletes the sessions past their maximum age (7 days, 24
+// hours for an SSO session) and those idle for more than 8 hours, which can
+// no longer be used. It returns how many.
 func (a *Auth) PruneSessions(ctx context.Context, now time.Time) (int, error) {
-	n, err := a.store.PruneSessions(ctx, now.Add(-MaxSessionAge), now.Add(-IdleTimeout))
+	n, err := a.store.PruneSessions(ctx, now.Add(-MaxSessionAge), now.Add(-SSOMaxSessionAge), now.Add(-IdleTimeout))
 	if err != nil {
 		return 0, fmt.Errorf("prune dashboard sessions: %w", err)
 	}

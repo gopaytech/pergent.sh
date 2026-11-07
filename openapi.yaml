@@ -524,6 +524,74 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ErrorBody'}
+  /auth/oidc/login:
+    get:
+      operationId: oidcLogin
+      tags: [Sign-in]
+      summary: Start OIDC sign-in
+      description: |
+        Sends the browser to the identity provider's authorization endpoint
+        (authorization code flow with PKCE, scopes `openid email`, a state and
+        a nonce). Nothing in the request chooses where it goes. The state, the
+        nonce and the PKCE verifier travel in the sealed, short-lived
+        `__Host-pergent_oidc` cookie (`HttpOnly`, `Secure`, `SameSite=Lax`,
+        10 minutes). When OIDC is not set up, or the provider cannot be read,
+        the browser goes to `/signin?error=not_set_up` or
+        `/signin?error=unavailable`.
+      x-pergent-access: none
+      security: []
+      responses:
+        '302':
+          description: To the provider.
+          headers:
+            Location:
+              schema: {type: string}
+            Set-Cookie:
+              description: The `__Host-pergent_oidc` state cookie.
+              schema: {type: string}
+        '303':
+          description: To `/signin?error=<code>`.
+          headers:
+            Location:
+              schema: {type: string}
+  /auth/oidc/callback:
+    get:
+      operationId: oidcCallback
+      tags: [Sign-in]
+      summary: Finish OIDC sign-in
+      description: |
+        The provider sends the browser back here. In order: the `state` equals
+        the cookie's (constant-time), the code is exchanged (with the PKCE
+        verifier), and the ID token is checked: signature (asymmetric
+        algorithms only), issuer, audience, expiry and nonce. Its `email` claim
+        must be one email address and `email_verified` must be true. Then the
+        allowlist decides: the email is on the exact list, or its domain is on
+        the domain list (with Google as the issuer also the token's `hd` claim
+        must equal the domain), or an admin added the account. Only then is an
+        account made (a user with no team) and a session begun, ending the one
+        the browser came with. The session ends after 8 hours idle or 24 hours.
+
+        Every refusal answers `303` to `/signin?error=<code>`, with no account
+        and no session. The codes are `expired` (state missing or wrong),
+        `denied` (the provider reported an error), `failed` (the token or its
+        email was refused), `not_allowed` (not on the allowlist: the page says
+        to ask an admin), `not_set_up` and `unavailable`. Nothing from the
+        provider is repeated.
+      x-pergent-access: none
+      security: []
+      parameters:
+        - {name: code, in: query, schema: {type: string}}
+        - {name: state, in: query, schema: {type: string}}
+        - {name: error, in: query, schema: {type: string}}
+      responses:
+        '303':
+          description: To `/` when signed in, else to `/signin?error=<code>`.
+          headers:
+            Location:
+              schema: {type: string}
+            Set-Cookie:
+              description: The `__Host-pergent_session` cookie when signed in; the state cookie is cleared either way.
+              schema: {type: string}
   /api/instances:
     get:
       operationId: listSignInInstances
@@ -532,7 +600,9 @@ paths:
       description: |
         The only `/api/` route that needs no session. It says that the password
         form is shown and lists no instance: sign-in through GitLab or GitHub is
-        gone, and an instance is no way to sign in.
+        gone, and an instance is no way to sign in. When OIDC sign-in is set up
+        it also carries `sso`, the label of its button, which goes to
+        `GET /auth/oidc/login`.
       x-pergent-access: none
       security: []
       responses:
@@ -2057,6 +2127,92 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/sign-in:
+    get:
+      operationId: getSignIn
+      tags: [Instances and settings]
+      summary: How people sign in
+      description: |
+        Admins only. The OIDC or JWT settings in force and the allowlist. The
+        client secret is never sent, only whether one is set. `source` is
+        `config` when `dashboard.sign_in` in the config file sets them: they are
+        then read-only. `callbackURL` is the redirect URI to register at the
+        identity provider.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: The settings.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SignInAdminView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    put:
+      operationId: putSignIn
+      tags: [Instances and settings]
+      summary: Set how people sign in
+      description: |
+        Admins only; 409 when the config file sets `dashboard.sign_in`.
+        Issuer and JWKS URLs must be `https`. `clientSecret` is sealed and never
+        returned; leave it out to keep the stored one, send `""` to remove it.
+        OIDC needs one. Changing the mode or the issuer ends every OIDC and JWT
+        session (a local admin's stays), and changing the issuer needs the
+        client secret entered again: a stored secret is dropped when the issuer
+        changes, so it is never sent to a new token endpoint. Emails are
+        lower-cased (ASCII only) and domains too; lists hold at most 500 entries.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutSignInRequest'}
+      responses:
+        '200':
+          description: Saved.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SignInAdminView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/sign-in/test:
+    post:
+      operationId: testSignIn
+      tags: [Instances and settings]
+      summary: Test the identity provider
+      description: |
+        Admins only. Reads the OIDC discovery document (mode `oidc`) or the JWKS
+        (mode `jwt`) and says only whether that worked: nothing the other side
+        sent comes back, no status, error text, document or address. The body is
+        optional; what it leaves out is taken from the settings in force.
+        A 400 is for an address that is not `https`, or nothing to test.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TestSignInRequest'}
+      responses:
+        '200':
+          description: Whether it worked.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SignInTestView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/defaults:
     get:
       operationId: getDefaults
@@ -2110,9 +2266,11 @@ components:
       in: cookie
       name: __Host-pergent_session
       description: |
-        The dashboard session, set by sign-in (`GET /auth/{platform}/{instance}/callback`
-        or `POST /auth/password`). 32 random bytes, base64url. `HttpOnly`,
-        `Secure`, `SameSite=Lax`, `Path=/`. It ends after 8 hours idle or 7 days.
+        The dashboard session, set by sign-in (`GET /auth/oidc/callback` or
+        `POST /auth/password`). 32 random bytes, base64url. `HttpOnly`,
+        `Secure`, `SameSite=Lax`, `Path=/`. It ends after 8 hours idle, or after
+        7 days for a local admin and 24 hours for a session that began with OIDC
+        or a JWT.
         A missing, unknown or ended session is 401 with `{"error": "not signed in"}`
         or `"session expired"`.
     csrfToken:
@@ -3055,6 +3213,91 @@ components:
         repos:
           type: array
           items: {$ref: '#/components/schemas/IntegrationRepo'}
+    SignInAdminView:
+      description: The sign-in settings in force. The client secret is never sent.
+      type: object
+      required: [source, editable, mode, label, issuer, clientID, clientSecret, header, audience, jwksURL, emailClaim, allowedDomains, allowedEmails, callbackURL]
+      properties:
+        source:
+          type: string
+          enum: [config, dashboard]
+        editable:
+          type: boolean
+          description: False when the config file sets the sign-in.
+        mode:
+          type: string
+          enum: ['', oidc, jwt]
+          description: Empty means only local admins sign in.
+        label:
+          type: string
+          description: 'The name on the button, "Sign in with <label>"; "SSO" when empty.'
+        issuer: {type: string}
+        clientID: {type: string}
+        clientSecret:
+          $ref: '#/components/schemas/SecretView'
+          description: Whether a secret is set. `updatedAt` is always null.
+        header: {type: string}
+        audience: {type: string}
+        jwksURL: {type: string}
+        emailClaim: {type: string}
+        allowedDomains:
+          type: array
+          items: {type: string}
+        allowedEmails:
+          type: array
+          items: {type: string}
+        callbackURL:
+          type: string
+          description: dashboard.url and /auth/oidc/callback, the redirect URI to register.
+    SignInTestView:
+      description: Whether the provider's discovery document or key set could be read.
+      type: object
+      required: [ok]
+      properties:
+        ok: {type: boolean}
+    ssoView:
+      description: The sign-in page's OIDC button.
+      type: object
+      required: [label]
+      properties:
+        label: {type: string}
+    PutSignInRequest:
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: ['', oidc, jwt]
+        label: {type: string, maxLength: 64}
+        issuer:
+          type: string
+          description: An https URL.
+        clientID: {type: string}
+        clientSecret:
+          type: [string, 'null']
+          description: Absent or null keeps the stored secret, "" removes it, anything else replaces it (at most 16 KiB).
+        header: {type: string}
+        audience: {type: string}
+        jwksURL:
+          type: string
+          description: An https URL.
+        emailClaim:
+          type: string
+          description: '"email" when empty in jwt mode.'
+        allowedDomains:
+          type: array
+          items: {type: string}
+        allowedEmails:
+          type: array
+          items: {type: string}
+    TestSignInRequest:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [oidc, jwt]
+        issuer: {type: string}
+        jwksURL: {type: string}
     LLMAdminView:
       description: Where the model comes from ("config" or "dashboard"), the model, and whether a key is set.
       type: object
@@ -3726,6 +3969,11 @@ components:
           type: array
           items: {$ref: '#/components/schemas/InstanceView'}
           description: Always empty.
+        sso:
+          anyOf:
+            - {$ref: '#/components/schemas/ssoView'}
+            - {type: 'null'}
+          description: The OIDC button. Absent when OIDC sign-in is not set up.
     meView:
       description: The signed-in user. Body of GET /api/me.
       type: object

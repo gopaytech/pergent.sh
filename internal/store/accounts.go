@@ -31,6 +31,9 @@ var (
 	// ErrLastPasswordAccount is returned when deleting the only password
 	// account, which would leave nobody able to sign in with a password.
 	ErrLastPasswordAccount = errors.New("the last password account can't be removed")
+	// ErrBadEmail is returned by NormalizeEmail, and by what calls it, for a
+	// string that isn't exactly one email address.
+	ErrBadEmail = errors.New("store: not an email address")
 )
 
 // Account is a sign-in identity. The fields of the other kind are zero.
@@ -80,12 +83,11 @@ func scanAccount(row pgx.Row) (Account, error) {
 // exactly one address: no surrounding or inner spaces or control characters,
 // no display name, one "@" with something on both sides, at most 254 bytes.
 func NormalizeEmail(s string) (string, error) {
-	errBad := errors.New("store: not an email address")
 	if s == "" || len(s) > 254 || !utf8.ValidString(s) {
-		return "", errBad
+		return "", ErrBadEmail
 	}
 	if strings.Count(s, "@") != 1 || strings.HasPrefix(s, "@") || strings.HasSuffix(s, "@") {
-		return "", errBad
+		return "", ErrBadEmail
 	}
 	var out strings.Builder
 	for _, r := range s {
@@ -94,13 +96,13 @@ func NormalizeEmail(s string) (string, error) {
 			r += 'a' - 'A'
 		case unicode.IsSpace(r), unicode.IsControl(r), unicode.Is(unicode.Z, r), unicode.Is(unicode.Cf, r),
 			strings.ContainsRune(`<>,;:"\()[]`, r):
-			return "", errBad
+			return "", ErrBadEmail
 		}
 		out.WriteRune(r)
 	}
 	// One plain address, no display name.
 	if a, err := mail.ParseAddress(out.String()); err != nil || a.Name != "" || a.Address != out.String() {
-		return "", errBad
+		return "", ErrBadEmail
 	}
 	return out.String(), nil
 }
@@ -220,12 +222,25 @@ func (s *Store) AddSSOAccount(ctx context.Context, email string, at time.Time) (
 	if err != nil {
 		return Account{}, err
 	}
-	a, err := scanAccount(s.pool.QueryRow(ctx, `INSERT INTO accounts (kind, username, email, added, created_at)
+	return s.upsertSSO(ctx, `INSERT INTO accounts (kind, username, email, added, created_at)
 		VALUES ('sso', $1, $1, true, $2)
 		ON CONFLICT (email) DO UPDATE SET added = true
-		RETURNING `+accountColumns, email, at))
+		RETURNING `+accountColumns, email, at)
+}
+
+// upsertSSO runs an INSERT ... ON CONFLICT (email) of an SSO account. Two
+// statements for one address that run at the same time can both pass the
+// conflict check on email and then meet at the lower(email) index, and the
+// second gets a unique violation. Run again, the statement sees the first
+// one's row and updates it. A violation that comes back is a true fold: a
+// different address that lower() reads as the same (ErrExists).
+func (s *Store) upsertSSO(ctx context.Context, query, email string, at time.Time) (Account, error) {
+	a, err := scanAccount(s.pool.QueryRow(ctx, query, email, at))
 	if isUniqueViolation(err) {
-		return Account{}, ErrExists // a different address that folds to the same lower()
+		a, err = scanAccount(s.pool.QueryRow(ctx, query, email, at))
+		if isUniqueViolation(err) {
+			return Account{}, ErrExists
+		}
 	}
 	return a, err
 }
@@ -240,14 +255,10 @@ func (s *Store) SignInSSOAccount(ctx context.Context, email string, at time.Time
 	if err != nil {
 		return Account{}, err
 	}
-	a, err := scanAccount(s.pool.QueryRow(ctx, `INSERT INTO accounts (kind, username, email, created_at, last_sign_in_at)
+	return s.upsertSSO(ctx, `INSERT INTO accounts (kind, username, email, created_at, last_sign_in_at)
 		VALUES ('sso', $1, $1, $2, $2)
 		ON CONFLICT (email) DO UPDATE SET last_sign_in_at = EXCLUDED.last_sign_in_at
-		RETURNING `+accountColumns, email, at))
-	if isUniqueViolation(err) {
-		return Account{}, ErrExists // a different address that folds to the same lower()
-	}
-	return a, err
+		RETURNING `+accountColumns, email, at)
 }
 
 // SSOAccountByEmail returns the SSO account of email (normalised as

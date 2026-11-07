@@ -217,7 +217,7 @@ For GitHub, put the Apps' private keys (the whole `.pem` file of each) and the r
 | each `github[].review_app.private_key_env` | When the instance is in the config file: the review App's private key, the whole PEM file GitHub gave you (PKCS#1 `RSA PRIVATE KEY` or PKCS#8 `PRIVATE KEY`). Required, and checked at startup. Never logged. |
 | each `github[].approve_app.private_key_env` or `github[].approve_token_env` | When the instance is in the config file and doesn't set `approve_with_review_app`: the approve App's private key, or the approve bot user's fine-grained personal access token. Required, and checked at startup. With `approve_with_review_app: true` there is none: the review App's key approves. |
 | each `github[].webhook_secret_env` | When the instance is in the config file: the review App's webhook secret. Required. |
-| each `gitlab[].oauth_client_id_env`, `oauth_client_secret_env`, and the same on `github[]` | No longer used: signing in to the [dashboard](#-dashboard) with GitLab or GitHub is gone. An old config that names them still loads (both or neither, as before); nothing reads the variables. |
+| each `gitlab[].oauth_client_id_env`, `oauth_client_secret_env`, and the same on `github[]` | No longer used: signing in to the [dashboard](#-dashboard) with GitLab or GitHub is gone. An old config that names them still loads, even half of a pair, and pergent.sh logs a warning for each instance that does; nothing reads the variables. A later release refuses them. |
 
 pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is handy for local development.
 
@@ -548,7 +548,7 @@ Installation tokens minted with the old key expire within an hour.
 The dashboard is a web app built into pergent.sh. It is off until `dashboard.url` is set. An account is an **admin** or a **user**, and there are two kinds:
 
 - **Local admins** sign in with a username and a password, and are always admins. The first is `admin`.
-- **SSO accounts** are identified by their email and are made by an admin adding the email, or the first time the person signs in. A new one is a user: it sees nothing until an admin puts it on a [team](#teams), and then only the repositories that team covers. An admin can make an SSO account an admin.
+- **SSO accounts** sign in through your identity provider ([Sign-in](#sign-in)), are identified by their email and are made by an admin adding the email, or the first time the person signs in. A new one is a user: it sees nothing until an admin puts it on a [team](#teams), and then only the repositories that team covers. An admin can make an SSO account an admin.
 
 An admin sees every repository and manages everything: users, teams, instances and their secrets, the LLM, the defaults and the skill library. Local and SSO admins have the same powers. Nothing asks GitLab or GitHub what a person may read: the team is the only limit. With the dashboard on, every review run, its findings, its files and its log are there, and admins switch repositories on and off and change their settings.
 
@@ -566,7 +566,7 @@ An admin sees every repository and manages everything: users, teams, instances a
    Routing all of `/` there is fine: webhooks and results on that host still need a valid signature or result token, and `/healthz` only answers `ok`. Without `dashboard.url` pergent.sh doesn't serve the dashboard's routes at all.
 3. [Sign in](#first-sign-in) as `admin`, add your instances under **Integrations** ([Instances and secrets in the dashboard](#instances-and-secrets-in-the-dashboard)), and add the people who should get in.
 
-With `dashboard.url` set, pergent.sh starts with no instance at all and waits for one to be added in the dashboard. Signing in with GitLab or GitHub is gone: if a config still names `oauth_client_id_env` and `oauth_client_secret_env` on an instance, nothing reads them.
+With `dashboard.url` set, pergent.sh starts with no instance at all and waits for one to be added in the dashboard. Signing in with GitLab or GitHub is gone: if a config still names `oauth_client_id_env` and `oauth_client_secret_env` on an instance, nothing reads them and pergent.sh logs a warning for each at start. Everyone but the local admins signs in with OIDC: see [Sign-in](#sign-in).
 
 ### First sign-in
 
@@ -613,6 +613,51 @@ kubectl -n pergent-sh exec deploy/pergent-sh -- /pergent-sh admin reset-password
 - Anyone who knows a username can keep it locked, with 5 wrong guesses every 15 minutes. `admin` is the one everybody knows. Add a second local admin with an unguessable username and remove `admin`, or restrict `/auth/password` at your proxy to the addresses your operators sign in from.
 - Passwords are checked, argon2id, at most 4 at a time. A sign-in that gets no slot within 5 seconds is answered 503 with the same `too many sign-in attempts, try again later`.
 
+### Sign-in
+
+Local admins sign in with a password (above). Everyone else signs in with **OIDC**, against one identity provider, and an **email allowlist** decides who may. Nothing is open until an admin sets it up: with no sign-in set, only local admins get in, and the sign-in page says `Sign-in isn't set up yet. Ask your admin.` Set it up on **Admin → Integrations** (the API is `GET` and `PUT /api/admin/sign-in`, described in [`openapi.yaml`](openapi.yaml)) or in the config file, below. Google Workspace is the provider built and tested first; another OIDC provider that follows the standard should work, but isn't promised yet.
+
+**How it goes.** The sign-in page shows one button, `Sign in with <label>` (the label is yours, such as `Google`). It starts the authorization code flow with PKCE, scopes `openid email`, a state and a nonce, kept in a short-lived sealed cookie. When the provider sends the browser back, pergent.sh checks the ID token's signature, issuer, audience, expiry and nonce. Only asymmetric signature algorithms are accepted, so a token can't be signed with the client secret, and nothing skips the issuer or the audience check. The `email` claim must be one email address and `email_verified` must be true. Then the allowlist decides. Only after that is an account made, and a session begun, ending the one the browser had.
+
+**Google Workspace.**
+
+1. In Google Cloud Console, pick or create a project, then **APIs & Services → OAuth consent screen**. Choose the user type **Internal**, so only your Workspace's own accounts can sign in.
+2. **Credentials → Create credentials → OAuth client ID**, type **Web application**. Under **Authorized redirect URIs** add the dashboard's callback, `<dashboard.url>/auth/oidc/callback` (for example `https://pergent-dashboard.example.com/auth/oidc/callback`; **Admin → Integrations** shows it as the callback URL). Copy the client ID and the client secret.
+3. In pergent.sh, **Admin → Integrations → Sign-in**: mode **OIDC**, label `Google`, issuer `https://accounts.google.com`, the client ID and the client secret, and your domain under **Allowed domains** (for example `example.com`). Press the test button, then save.
+4. Sign out and use the new button. A person on the domain signs in and sees a waiting page until an admin puts them on a [team](#teams).
+
+With the issuer `https://accounts.google.com` a **domain** rule also needs the token's `hd` claim to equal the domain, so a personal Google account that happens to carry a company address can't pass. An **exact email** rule needs no `hd`, so you can let one outside address in.
+
+**The allowlist** is two lists, **allowed domains** and **allowed emails**. A sign-in passes if its email is on the email list, or the part after the last `@` is exactly on the domain list, or an admin added that email under **Users → Add user** (the account keeps that flag after its first sign-in). Anything else is refused: no account is made, no session begins, and the page says `Ask an admin to add you`. A domain matches exactly, so `example.com` does not let in `a@evil.example.com` or `a@example.com.evil.com`. Emails are lower-cased with ASCII rules only, so two different addresses never become one. **With both lists empty only added emails can sign in**; that is the default, so an install that uses plain Google login does not open up to every Google account. A person who passes still starts with nothing: there is no default team. The lists are read at each sign-in: tightening them stops the next sign-in and leaves running sessions alone. A refused sign-in is written to the log with the email's domain only, not to the audit log, so that nobody can fill the audit log by trying.
+
+**Sessions.** An OIDC session ends after 8 hours without use, or 24 hours after sign-in, whichever comes first, so someone disabled at the provider is gone within a day. People usually sign in about once a day without typing anything. A local admin's session keeps its limits: 8 hours idle, 7 days at most.
+
+**The client secret** is sealed with `PERGENT_SH_SECRET_KEY`, like an instance's secrets, and write-only: the API says whether one is set, never what it is. Saving without a secret keeps the stored one; clearing the field removes it. A skill that contains it is refused, like any secret pergent.sh holds.
+
+**Changing it.** Changing the **mode** or the **issuer** ends every OIDC (and JWT) session in the same step, because a session records how it began; a local admin's session stays. Changing the **issuer** also needs the client secret entered again, and a stored secret is dropped when the issuer changes: it is never sent to a new token endpoint. Issuer and key-set URLs must be `https`; a discovery document that names an `http` endpoint is refused.
+
+**The test button** reads the provider's discovery document (OIDC) or key set (JWT) and answers only whether that worked. It does not show the response, an error, or an address.
+
+**JWT mode.** The mode list also takes `jwt`, for an install behind something that has already logged the person in. Its settings (header, issuer, audience, JWKS URL, email claim) are stored and checked now, but this release does not read a JWT yet. Leave the mode on `oidc` or empty.
+
+**In the config file.** `dashboard.sign_in` sets the same values. When its `mode` is set it wins over the dashboard, which then shows the sign-in read-only (`PUT /api/admin/sign-in` answers 409), as for an instance in the config file. The client secret is named by an env var:
+
+```yaml
+config:
+  dashboard:
+    url: https://pergent-dashboard.example.com
+    sign_in:
+      mode: oidc
+      label: Google
+      issuer: https://accounts.google.com
+      client_id: 1234567890-abc.apps.googleusercontent.com
+      client_secret_env: PERGENT_SH_OIDC_CLIENT_SECRET   # a key of the Secret named by existingSecret
+      allowed_domains: [example.com]
+      allowed_emails: [contractor@example.org]
+```
+
+A local admin is not affected by any of this: it always works, whatever happens to OIDC.
+
 ### Teams
 
 Everything an account may see or do comes from its role and the teams it is on, under **Admin → Teams**. Nothing asks GitLab or GitHub.
@@ -634,8 +679,8 @@ Everything an account may see or do comes from its role and the teams it is on, 
 
 ### Who sees what
 
-- **Signing in.** A new sign-in ends the session the browser had. Local admins sign in with a password. Accounts of the old GitLab and GitHub sign-in are kept in the database, unused and hidden; nothing signs them in, and a session left from the previous release is ended at its next request.
-- **Sessions** are a cookie (`HttpOnly`, `Secure`, `SameSite=Lax`) holding a random ID. A session ends after 8 hours without use, and 7 days after sign-in whether used or not. pergent.sh deletes ended sessions every hour. Every write needs the session's CSRF token (`X-CSRF-Token`); the password form has its own, from `GET /auth/csrf`.
+- **Signing in.** A new sign-in ends the session the browser had. Local admins sign in with a password, everyone else with OIDC ([Sign-in](#sign-in)). Accounts of the old GitLab and GitHub sign-in are kept in the database, unused and hidden; nothing signs them in, and a session left from the previous release is ended at its next request.
+- **Sessions** are a cookie (`HttpOnly`, `Secure`, `SameSite=Lax`) holding a random ID. A session ends after 8 hours without use, and after a maximum age counted from sign-in whether used or not: 7 days for a local admin, 24 hours for a session that began with OIDC ([Sign-in](#sign-in)). pergent.sh deletes ended sessions every hour. Every write needs the session's CSRF token (`X-CSRF-Token`); the password form has its own, from `GET /auth/csrf`.
 - **Checked on the server.** Every API answer is filtered by the account's role and teams, read on each request. A run is shown only when its repository's path and project ID both match what pergent.sh stored for the path, so a project created at the path of a deleted, renamed or transferred one never shows the earlier project's reviews. A repository, review or run the user can't see is answered exactly like one that doesn't exist.
 
 **Everyone with a team** sees, for the repositories their teams cover:
@@ -1309,7 +1354,7 @@ Deploy tokens are created per project with the name `pergent-sh`, valid for 30 d
 | `POST /skill-fetches/{id}/result` | A skill fetch Job delivering the skills it read from a public URL, with its one-time bearer token (only with the dashboard on). A wrong token gets 401, a second result or one after the fetch gave up 409, a body over 4 MiB 413. |
 | `POST /readiness-scans/{id}/result` | A readiness scan Job delivering what it found in a repository, with its one-time bearer token (only with the dashboard on). A wrong token gets 401, a second result or one after the scan ended 409, a body over 1 MiB 413. |
 | `GET /healthz` | Health check. It answers as soon as the server starts: pergent.sh serves right away and runs the startup reconcile in the background. |
-| `GET /auth/{gitlab or github}/{instance}/login`, `GET .../callback`, `POST /auth/logout` | [Dashboard](#-dashboard) sign-in with GitLab or GitHub, and sign-out. Only with `dashboard.url` set. |
+| `GET /auth/oidc/login`, `GET /auth/oidc/callback`, `POST /auth/logout` | [Dashboard](#-dashboard) sign-in with OIDC ([Sign-in](#sign-in)), and sign-out. The callback sends every refusal to `/signin?error=<code>`. Only with `dashboard.url` set. |
 | `GET /auth/csrf`, `POST /auth/password`, `POST /auth/password/change` | Password sign-in. `GET /auth/csrf` hands out the sign-in form's CSRF token (a cookie and `{"csrfToken": ...}`); `POST /auth/password` takes `{"username", "password"}` with that token in `X-CSRF-Token` and answers 204 and the session cookie; `POST /auth/password/change` takes `{"current", "new"}` for a signed-in password account. See [Password sign-in limits](#password-sign-in-limits). Only with `dashboard.url` set. |
 | `/api/...` | The dashboard's JSON API. Every route but `GET /api/instances` needs a session; writes need the `X-CSRF-Token` header. Only with `dashboard.url` set. The review page's buttons use `POST /api/reviews/{instance}/{project}/{number}/rerun` (`{"failed": true or false}`; 202 with `queued`, `already queued`, `nothing failed` or `whole review`; 429 at a re-run cap), `.../dismiss` (`{"fingerprint", "reason"}`; 200 with `dismissed` or `already dismissed`; a reason of up to 500 characters; 400 `the reason is too long` above) and `.../restore` (`{"fingerprint"}`; 200 with `restored` or `not dismissed`), for maintainers and admins of the repository, config repositories included. The Readiness tab uses `GET /api/repositories/{instance}/{project}/readiness` (anyone who can see the repository) and `POST .../readiness/scan` (maintainers and admins; 202 with the queued scan, 409 while one is queued or running, 429 within 5 minutes of the latest scan, 404 for a repository that isn't switched on or when scans are off). |
 | `GET /` and every other path | The dashboard's pages. Only with `dashboard.url` set; without it they are 404. |
@@ -1321,7 +1366,7 @@ Logs are JSON on stdout. Secrets are never logged.
 This release is deliberately small:
 
 - Commands are `review`, `review failed`, `dismiss` and `help`, and the dashboard has the matching buttons plus Restore. No chat, no questions, no asking the bot to explain or fix code, no commands that change settings, no questions in a finding's thread (only `dismiss`), and no dismissing a finding for every merge request of a repository: a dismissal belongs to one merge request. Restoring is a button only.
-- Dashboard sign-in is a password (local admins) for now. Signing in with GitLab or GitHub is gone. No SAML or LDAP, no two-factor authentication, and no API tokens for scripts.
+- Dashboard sign-in is a password (local admins) or OIDC, against one provider; Google Workspace is the one built and tested. Signing in with GitLab or GitHub is gone. No SAML or LDAP, no groups or roles read from the provider, no two-factor authentication of our own, and no API tokens for scripts.
 - Teams are kept in pergent.sh: they are not synced from GitLab groups or GitHub teams.
 - A GitLab and a GitHub account of one person are two accounts, with no linking.
 - `PERGENT_SH_SECRET_KEY` can't be rotated: see [Environment variables](#environment-variables).
@@ -1358,6 +1403,14 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `github[].webhook_secret_env` | required | Name of the env var with the review App's webhook secret. GitHub signs each delivery with it (`X-Hub-Signature-256`). |
 | `gitlab[].oauth_client_id_env`, `gitlab[].oauth_client_secret_env`, `github[].oauth_client_id_env`, `github[].oauth_client_secret_env` | none | No longer used: sign-in with GitLab or GitHub is gone. An old config that names them still loads (both or neither); nothing reads the variables. |
 | `dashboard.url` | none (dashboard off) | The dashboard's `https` address, a bare host without a port, path or trailing slash. Setting it turns the dashboard on, with password sign-in and the first local admin; instances and the LLM can then be added there. |
+| `dashboard.sign_in` | none | How people other than the local admins sign in: OIDC, behind an email allowlist. Needs `dashboard.url`. When its `mode` is set it wins over what an admin saved on **Integrations**, which then shows it read-only. See [Sign-in](#sign-in). |
+| `dashboard.sign_in.mode` | none | `oidc`, or `jwt` (stored and validated; not read yet in this release). Empty: only local admins sign in. |
+| `dashboard.sign_in.label` | `SSO` | The name on the sign-in button, `Sign in with <label>`. At most 64 characters. |
+| `dashboard.sign_in.issuer` | none | The provider's issuer URL, `https`, with no credentials or query. Discovery reads `<issuer>/.well-known/openid-configuration`. Required for `oidc` and `jwt`. For Google, `https://accounts.google.com`. |
+| `dashboard.sign_in.client_id` | none | The OIDC client ID. Required for `oidc`. |
+| `dashboard.sign_in.client_secret_env` | none | Name of the env var with the OIDC client secret. Required for `oidc`. Put the variable in the Secret named by the chart's `existingSecret`, which the pod mounts with `envFrom`. |
+| `dashboard.sign_in.header`, `.audience`, `.jwks_url`, `.email_claim` | none | JWT validation: the header that carries the token, the audience and the `https` key-set URL (all three required for `jwt`) and the claim that holds the email (`email` when empty). |
+| `dashboard.sign_in.allowed_domains`, `.allowed_emails` | none | The allowlist: email domains and exact emails that may sign in, at most 500 each. Both empty: only emails an admin added. |
 | `dashboard.admin_password_env` | none | Name of the env var with the first local admin's password (at least 12 characters), for the account `admin` made on the first start with the dashboard on. Empty or unset: pergent.sh generates a password and logs it once. The chart fills the variable from `adminPassword.existingSecret`. Needs `dashboard.url` to have an effect. See [First sign-in](#first-sign-in). |
 | `repositories[].gitlab` | one of `gitlab` and `github` | Name of one of the `gitlab` instances. |
 | `repositories[].github` | one of `gitlab` and `github` | Name of one of the `github` instances. |

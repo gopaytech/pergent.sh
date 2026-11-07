@@ -1,34 +1,60 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
-import { useNavigate } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 
 import { api, paths, type InstancesView } from "../api";
 import { CenteredCard, ErrorBox, Loading } from "../ui";
 
 const platforms = new Set(["gitlab", "github"]);
 
-// SignIn has the password form, and one button per instance with sign-in.
-// Each button goes to the server's login route, which sends the browser on
-// to GitLab or GitHub.
+// signInErrors are the messages for the codes the server puts in
+// /signin?error=<code> when an SSO sign-in is refused. Only these codes show
+// anything: the page never prints text it got from the address.
+const signInErrors: Record<string, string> = {
+  not_allowed: "Ask an admin to add you",
+  expired: "Sign-in expired or was started in another window. Please try again.",
+  failed: "Sign-in failed. Please try again.",
+  denied: "Sign-in was not completed.",
+  not_set_up: "Sign-in isn't set up yet. Ask your admin.",
+  unavailable: "The sign-in provider can't be reached right now. Please try again.",
+};
+
+// SignIn has the password form, and the SSO button when OIDC is set up. The
+// button goes to the server's login route, which sends the browser on to the
+// identity provider and back.
 export default function SignIn() {
+  const [params] = useSearchParams();
+  const code = params.get("error") ?? "";
+  const refusal = Object.hasOwn(signInErrors, code) ? signInErrors[code] : null;
   const instances = useQuery({
     queryKey: ["instances"],
     queryFn: () => api.get<InstancesView>("/api/instances"),
   });
   const usable = (instances.data?.instances ?? []).filter((i) => platforms.has(i.platform));
-  const nothing = instances.isError || (instances.isSuccess && !instances.data.password && usable.length === 0);
+  const sso = instances.data?.sso ?? null;
+  const nothing = instances.isError || (instances.isSuccess && !instances.data.password && usable.length === 0 && !sso);
   return (
     <CenteredCard>
       <h1>Sign in to pergent.sh</h1>
       <p className="sub">See why a merge request or pull request wasn't approved, and manage the repositories pergent reviews.</p>
+      {refusal && (
+        <div className="error" role="alert">
+          {refusal}
+        </div>
+      )}
       {instances.isPending && <Loading />}
       {instances.isError && <ErrorBox error={instances.error} />}
       {instances.isSuccess && instances.data.password && <PasswordForm />}
       {nothing && <p className="sub">No sign-in is configured.</p>}
-      {usable.length > 0 && (
+      {(usable.length > 0 || sso) && (
         <>
           {instances.data?.password && <div className="signin-or">or</div>}
           <div className="signin-buttons">
+            {sso && (
+              <a className="btn primary" href="/auth/oidc/login">
+                Sign in with {sso.label}
+              </a>
+            )}
             {usable.map((i) => (
               <a key={`${i.platform}/${i.instance}`} className="btn primary" href={paths.login(i.platform, i.instance)}>
                 Sign in with {i.label}

@@ -509,12 +509,12 @@ func TestNormalizeEmail(t *testing.T) {
 		"Alice <alice@example.com>", "alice@example.com, bob@example.com", "\"a b\"@example.com",
 		"alice@example.com;bob@example.com", "alice(comment)@example.com", "ali\xffce@example.com",
 	} {
-		if got, err := NormalizeEmail(in); err == nil {
-			t.Errorf("NormalizeEmail(%q) = %q, nil; want an error", in, got)
+		if got, err := NormalizeEmail(in); !errors.Is(err, ErrBadEmail) {
+			t.Errorf("NormalizeEmail(%q) = %q, %v; want ErrBadEmail", in, got, err)
 		}
 	}
 	long := strings.Repeat("a", 250) + "@b.co"
-	if _, err := NormalizeEmail(long); err == nil {
+	if _, err := NormalizeEmail(long); !errors.Is(err, ErrBadEmail) {
 		t.Error("an email over 254 bytes was accepted")
 	}
 }
@@ -673,5 +673,42 @@ func TestPasswordAccountsAreAdmins(t *testing.T) {
 		if _, err := s.pool.Exec(ctx, q); err == nil {
 			t.Errorf("accepted: %s", q)
 		}
+	}
+}
+
+// [CI] Two first sign-ins of one address that run at the same time both
+// succeed and share one row: the loser of the race on lower(email) runs its
+// statement again.
+func TestSSOFirstSignInsRace(t *testing.T) {
+	s := newStore(t)
+	const n = 8
+	var wg sync.WaitGroup
+	ids := make([]int64, n)
+	errs := make([]error, n)
+	start := make(chan struct{})
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			var a Account
+			if i%2 == 0 {
+				a, errs[i] = s.SignInSSOAccount(ctx, "Racer@Example.com", t0)
+			} else {
+				a, errs[i] = s.AddSSOAccount(ctx, "racer@example.com", t0)
+			}
+			ids[i] = a.ID
+		}()
+	}
+	close(start)
+	wg.Wait()
+	for i := range n {
+		if errs[i] != nil || ids[i] == 0 || ids[i] != ids[0] {
+			t.Fatalf("racer %d: id %d, %v; want one shared row and no error", i, ids[i], errs[i])
+		}
+	}
+	var rows int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM accounts WHERE kind = 'sso'`).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("sso rows = %d, %v; want 1", rows, err)
 	}
 }

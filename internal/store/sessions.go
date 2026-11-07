@@ -205,11 +205,13 @@ func (s *Store) SessionProjects(ctx context.Context, idHash []byte) ([]VisiblePr
 	return pgx.CollectRows(rows, pgx.RowToStructByPos[VisibleProject])
 }
 
-// PruneSessions deletes the sessions created before createdBefore or last
-// used before idleBefore, and returns how many there were.
-func (s *Store) PruneSessions(ctx context.Context, createdBefore, idleBefore time.Time) (int, error) {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE created_at < $1 OR last_seen_at < $2`,
-		createdBefore, idleBefore)
+// PruneSessions deletes the sessions created before createdBefore (an SSO
+// session: before ssoCreatedBefore) or last used before idleBefore, and
+// returns how many there were.
+func (s *Store) PruneSessions(ctx context.Context, createdBefore, ssoCreatedBefore, idleBefore time.Time) (int, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM sessions
+		WHERE created_at < CASE WHEN sign_in = 'password' THEN $1 ELSE $2 END OR last_seen_at < $3`,
+		createdBefore, ssoCreatedBefore, idleBefore)
 	if err != nil {
 		return 0, err
 	}

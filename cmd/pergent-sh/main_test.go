@@ -365,6 +365,23 @@ func TestWarnTimeouts(t *testing.T) {
 	}
 }
 
+// The OAuth keys of an instance only warn: the log names the instance and
+// never an env var's value.
+func TestWarnTimeoutsWarnsOldOAuthKeys(t *testing.T) {
+	t.Setenv("OLD_OAUTH_SECRET", "must-not-be-logged")
+	var logs strings.Builder
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	cfg := &config.Config{
+		Jobs:   config.Jobs{Timeout: 30 * time.Minute, MaxTurns: 40},
+		GitLab: []config.Instance{{Name: "main", OAuthClientIDEnv: "OLD_OAUTH_ID", OAuthClientSecretEnv: "OLD_OAUTH_SECRET"}},
+	}
+	warnTimeouts(cfg, log)
+	out := logs.String()
+	if strings.Count(out, "level=WARN") != 1 || !strings.Contains(out, "gitlab[0] (main)") || strings.Contains(out, "must-not-be-logged") {
+		t.Errorf("logs:\n%s", out)
+	}
+}
+
 // pruneDeliveries forgets a delivery only once it is too old to be accepted.
 func TestPruneDeliveries(t *testing.T) {
 	var logs strings.Builder

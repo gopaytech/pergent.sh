@@ -42,8 +42,8 @@ export type Role = "admin" | "maintainer" | "viewer";
 export type InstanceView = { platform: string; instance: string; label: string };
 
 // InstancesView is GET /api/instances: whether the password form is shown,
-// and the instances with sign-in.
-export type InstancesView = { password: boolean; instances: InstanceView[] };
+// the instances with sign-in, and the OIDC button when it is set up.
+export type InstancesView = { password: boolean; instances: InstanceView[]; sso?: { label: string } | null };
 
 export type StatsView = { reviews: number; approved: number; blocking: number; failed: number };
 

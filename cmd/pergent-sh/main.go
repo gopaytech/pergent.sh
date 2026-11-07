@@ -161,10 +161,15 @@ func parseArgs(args []string, stderr io.Writer) (cmd command, err error) {
 }
 
 // warnTimeouts logs, once each, the timeouts in cfg that are short for their
-// step limit. They are not errors: the review may still finish in time.
+// step limit, and the config keys that are ignored now (the instances' OAuth
+// client). They are not errors: the review may still finish in time, and an
+// old config must not stop reviews.
 func warnTimeouts(cfg *config.Config, log *slog.Logger) {
 	for _, w := range config.TimeoutWarnings(cfg) {
 		log.Warn("job timeout may be too short", "config", w)
+	}
+	for _, w := range config.DeprecatedWarnings(cfg) {
+		log.Warn("config key is ignored", "config", w)
 	}
 }
 

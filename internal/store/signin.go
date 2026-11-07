@@ -59,8 +59,16 @@ func (s *Store) SignInSettings(ctx context.Context) (SignInSettings, error) {
 // PutSignInSettings stores the settings, replacing the earlier ones (UpdatedAt
 // is the time of the call when the field is zero). A nil ClientSecretSealed keeps the
 // secret already stored; an empty, non-nil one removes it. Putting settings
-// does not end any session: DeleteSSOSessions does.
+// does not end any session: ChangeSignInSettings can.
 func (s *Store) PutSignInSettings(ctx context.Context, in SignInSettings) error {
+	return s.ChangeSignInSettings(ctx, in, false)
+}
+
+// ChangeSignInSettings is PutSignInSettings that, with endSSOSessions, also
+// ends every session that began with OIDC or a JWT, in the same transaction:
+// a change of mode or issuer never leaves a session that the earlier setting
+// vouched for.
+func (s *Store) ChangeSignInSettings(ctx context.Context, in SignInSettings, endSSOSessions bool) error {
 	if in.Mode != "" && in.Mode != SignInModeOIDC && in.Mode != SignInModeJWT {
 		return fmt.Errorf("store: unknown sign-in mode %q", in.Mode)
 	}
@@ -81,7 +89,12 @@ func (s *Store) PutSignInSettings(ctx context.Context, in SignInSettings) error 
 	if len(secret) == 0 {
 		secret = nil
 	}
-	_, err := s.pool.Exec(ctx, `INSERT INTO sign_in_settings (id, mode, label, issuer, client_id, client_secret_sealed,
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	if _, err := tx.Exec(ctx, `INSERT INTO sign_in_settings (id, mode, label, issuer, client_id, client_secret_sealed,
 			header, audience, jwks_url, email_claim, allowed_domains, allowed_emails, updated_at)
 		VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $13)
 		ON CONFLICT (id) DO UPDATE SET mode = EXCLUDED.mode, label = EXCLUDED.label, issuer = EXCLUDED.issuer,
@@ -91,6 +104,13 @@ func (s *Store) PutSignInSettings(ctx context.Context, in SignInSettings) error 
 			updated_at = EXCLUDED.updated_at,
 			client_secret_sealed = CASE WHEN $12 THEN EXCLUDED.client_secret_sealed ELSE sign_in_settings.client_secret_sealed END`,
 		in.Mode, in.Label, in.Issuer, in.ClientID, secret, in.Header, in.Audience, in.JWKSURL, in.EmailClaim,
-		domains, emails, secretGiven, at)
-	return err
+		domains, emails, secretGiven, at); err != nil {
+		return err
+	}
+	if endSSOSessions {
+		if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE sign_in IN ('oidc', 'jwt')`); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }

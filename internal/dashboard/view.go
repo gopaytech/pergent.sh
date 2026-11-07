@@ -1016,6 +1016,14 @@ type AuditView struct {
 //     {"provider", "model", "baseURL", "apiKey"} (admins; 409 when the
 //     config has an llm: block; the key is needed only when none is
 //     stored): 200, LLMAdminView.
+//   - GET /api/admin/sign-in: SignInAdminView (admins). PUT /api/admin/sign-in
+//     {"mode", "label", "issuer", "clientID", "clientSecret", "header",
+//     "audience", "jwksURL", "emailClaim", "allowedDomains", "allowedEmails"}
+//     (admins; 409 when dashboard.sign_in is set in the config file; a
+//     missing clientSecret keeps the stored one, "" removes it; a new issuer
+//     or mode ends every SSO session, and a new issuer needs the secret
+//     again): 200, SignInAdminView. POST /api/admin/sign-in/test reads the
+//     provider's discovery document or key set: 200, SignInTestView.
 //   - GET /api/admin/defaults, PUT /api/admin/defaults (admins): DefaultsView
 //     for the repositories switched on in the dashboard; the PUT body has the
 //     same keys with the same bounds as a repository's settings, and
@@ -1030,6 +1038,34 @@ type AuditView struct {
 type SecretView struct {
 	Set       bool       `json:"set"`
 	UpdatedAt *time.Time `json:"updatedAt"`
+}
+
+// SignInAdminView is GET /api/admin/sign-in (and the answer of its PUT): the
+// sign-in settings in force. Source is "config" when dashboard.sign_in in the
+// config file sets them (then Editable is false and the PUT is 409), else
+// "dashboard". The client secret is never sent, only whether one is set.
+// CallbackURL is the redirect URI to register at the identity provider.
+type SignInAdminView struct {
+	Source         string     `json:"source"`
+	Editable       bool       `json:"editable"`
+	Mode           string     `json:"mode"`
+	Label          string     `json:"label"`
+	Issuer         string     `json:"issuer"`
+	ClientID       string     `json:"clientID"`
+	ClientSecret   SecretView `json:"clientSecret"`
+	Header         string     `json:"header"`
+	Audience       string     `json:"audience"`
+	JWKSURL        string     `json:"jwksURL"`
+	EmailClaim     string     `json:"emailClaim"`
+	AllowedDomains []string   `json:"allowedDomains"`
+	AllowedEmails  []string   `json:"allowedEmails"`
+	CallbackURL    string     `json:"callbackURL"`
+}
+
+// SignInTestView is the answer of POST /api/admin/sign-in/test: whether the
+// provider's discovery document or key set could be read, and nothing else.
+type SignInTestView struct {
+	OK bool `json:"ok"`
 }
 
 // InstanceAdminView is one instance in GET /api/admin/instances.

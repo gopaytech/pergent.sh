@@ -295,3 +295,49 @@ func TestMigrationKeepsPreviousRelease(t *testing.T) {
 		t.Errorf("teams.role = %q, %v; want the role kept", teamRole, err)
 	}
 }
+
+// ChangeSignInSettings with endSSOSessions saves the settings and ends the
+// OIDC and JWT sessions together; without it, no session ends.
+func TestChangeSignInSettingsEndsSSOSessions(t *testing.T) {
+	s := newStore(t)
+	admin := mustPassword(t, s, "admin")
+	user := mustSSO(t, s, "alice@example.com")
+	mk := func(b byte, account int64, signIn string) []byte {
+		t.Helper()
+		se := Session{IDHash: bytes.Repeat([]byte{b}, 32), AccountID: account, Username: "u", CSRF: "csrf",
+			SignIn: signIn, LastSeenAt: t0, CreatedAt: t0}
+		if err := s.CreateSession(ctx, se); err != nil {
+			t.Fatal(err)
+		}
+		return se.IDHash
+	}
+	pw, oidc := mk(1, admin.ID, SignInPassword), mk(2, user.ID, SignInOIDC)
+	in := SignInSettings{Mode: SignInModeOIDC, Issuer: "https://accounts.google.com", ClientID: "c", UpdatedAt: t0}
+	if err := s.ChangeSignInSettings(ctx, in, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, _ := s.Session(ctx, oidc); !found {
+		t.Fatal("a change that ends no sessions ended one")
+	}
+	in.Issuer = "https://login.example.com"
+	if err := s.ChangeSignInSettings(ctx, in, true); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.SignInSettings(ctx); got.Issuer != in.Issuer {
+		t.Fatalf("issuer = %q; want the new one", got.Issuer)
+	}
+	if _, found, _ := s.Session(ctx, oidc); found {
+		t.Error("the oidc session survived a change that ends them")
+	}
+	if _, found, _ := s.Session(ctx, pw); !found {
+		t.Error("the local admin's session ended")
+	}
+	// A refused change (unknown mode) ends nothing.
+	oidc2 := mk(3, user.ID, SignInOIDC)
+	if err := s.ChangeSignInSettings(ctx, SignInSettings{Mode: "saml"}, true); err == nil {
+		t.Error("ChangeSignInSettings with mode saml = nil error")
+	}
+	if _, found, _ := s.Session(ctx, oidc2); !found {
+		t.Error("a refused change ended a session")
+	}
+}

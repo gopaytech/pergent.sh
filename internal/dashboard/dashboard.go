@@ -75,6 +75,11 @@ type Options struct {
 	// Fetcher reads the skill sources admins install from and check for
 	// updates. Nil answers those routes 503.
 	Fetcher *skillfetch.Fetcher
+	// HTTPClient talks to the identity provider: its discovery document, key
+	// set and token endpoint, and the sign-in test button. Nil means a client
+	// with a 10 s timeout. Either way no redirect is followed. A test sets one
+	// that trusts its fake provider.
+	HTTPClient *http.Client
 	// Readiness queues readiness scans (Scan now) and re-judges the last
 	// scans after a skill setting is saved; the engine is one. Nil answers
 	// Scan now 404, as with scans off, and saves recheck nothing.
@@ -160,8 +165,12 @@ type Dashboard struct {
 	listBudget      time.Duration
 	listLimit       int
 	now             func() time.Time
-	inputs          *inputsCache
-	catalog         *catalogCache
+	// idp is the client for the identity provider (idpClient), oidc its last
+	// discovery document.
+	idp     *http.Client
+	oidc    *oidcCache
+	inputs  *inputsCache
+	catalog *catalogCache
 }
 
 // New builds the dashboard. The config must have dashboard.url.
@@ -189,11 +198,15 @@ func New(o Options) (*Dashboard, error) {
 	if o.Wake == nil {
 		o.Wake = func() {}
 	}
+	if o.HTTPClient == nil {
+		o.HTTPClient = &http.Client{}
+	}
 	return &Dashboard{Auth: auth, Repos: repos, Store: o.Store, Log: o.Log,
 		cfg: o.Config, registry: o.Instances, connector: o.Connector,
 		sources: o.Sources, catalogs: o.Catalogs, fetcher: o.Fetcher, readiness: o.Readiness,
 		reconcileSoon: o.ReconcileSoon, wake: o.Wake, loadLLM: o.Instances.LoadLLM, heldSecrets: o.Instances.HeldSecrets, now: o.Now,
 		availableBudget: AvailableBudget, listBudget: listBudget, listLimit: listLimit,
+		idp: idpClient(o.HTTPClient), oidc: &oidcCache{},
 		inputs:  &inputsCache{entries: map[string]inputsEntry{}, flights: map[string]*inputsFlight{}},
 		catalog: &catalogCache{entries: map[string]catalogEntry{}, flights: map[string]*catalogFlight{}}}, nil
 }
@@ -206,6 +219,10 @@ func New(o Options) (*Dashboard, error) {
 //     form's token in X-CSRF-Token (204 and the session cookie);
 //   - POST /auth/password/change: {current, new}, for a password session
 //     (204);
+//   - GET /auth/oidc/login: send the browser to the OIDC provider (state,
+//     nonce and PKCE verifier in a sealed, short-lived cookie);
+//   - GET /auth/oidc/callback: finish OIDC sign-in, then the allowlist; every
+//     refusal redirects to /signin?error=<code>;
 //   - GET /api/instances: what the sign-in page offers, without a session;
 //   - GET /api/me: the signed-in user;
 //   - the read API, the write API, the users, teams and audit log API, the
@@ -221,6 +238,8 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("POST /auth/password", d.Auth.passwordSignIn)
 	mux.Handle("POST /auth/password/change", d.Auth.Require(http.HandlerFunc(d.Auth.changePassword)))
 	mux.HandleFunc("GET /api/instances", d.instances)
+	mux.HandleFunc("GET /auth/oidc/login", d.oidcLogin)
+	mux.HandleFunc("GET /auth/oidc/callback", d.oidcCallback)
 	mux.Handle("GET /api/me", d.Auth.Require(http.HandlerFunc(d.me)))
 	d.writeRoutes(mux)
 	d.orgRoutes(mux)
@@ -288,12 +307,15 @@ type instancesView struct {
 	Password bool `json:"password"`
 	// Instances are always empty: no instance offers a sign-in any more.
 	Instances []InstanceView `json:"instances"`
+	// SSO is the OIDC button, absent when OIDC sign-in is not set up.
+	SSO *ssoView `json:"sso,omitempty"`
 }
 
 // instances answers the sign-in page's question. It needs no session and
-// says nothing but that the password form is there.
-func (d *Dashboard) instances(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, instancesView{Password: true, Instances: []InstanceView{}})
+// says only that the password form is there and, when OIDC is set up, the
+// label of its button.
+func (d *Dashboard) instances(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, instancesView{Password: true, Instances: []InstanceView{}, SSO: d.ssoButton(r.Context())})
 }
 
 // writeJSON writes v as the JSON body.

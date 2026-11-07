@@ -42,6 +42,61 @@ describe("SignIn", () => {
     expect(fake.find("GET", "/api/me")).toHaveLength(0);
   });
 
+  it("has a button for the SSO provider, to the OIDC login route", async () => {
+    const fake = fakeApi({ "GET /api/instances": { body: { password: true, instances: [], sso: { label: "Google" } } } });
+    renderApp("/signin");
+    expect(await screen.findByRole("link", { name: "Sign in with Google" })).toHaveAttribute("href", "/auth/oidc/login");
+    expect(screen.getByLabelText("Username")).toBeInTheDocument();
+    expect(screen.queryByText("No sign-in is configured.")).not.toBeInTheDocument();
+    expect(fake.find("GET", "/api/me")).toHaveLength(0);
+  });
+
+  it("has no SSO button when sso is absent or null", async () => {
+    fakeApi({ "GET /api/instances": { body: { password: true, instances: [], sso: null } } });
+    renderApp("/signin");
+    expect(await screen.findByLabelText("Username")).toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("offers the SSO button alone when there is no password form", async () => {
+    fakeApi({ "GET /api/instances": { body: { password: false, instances: [], sso: { label: "Acme SSO" } } } });
+    renderApp("/signin");
+    expect(await screen.findByRole("link", { name: "Sign in with Acme SSO" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Username")).not.toBeInTheDocument();
+    expect(screen.queryByText("No sign-in is configured.")).not.toBeInTheDocument();
+  });
+
+  it("tells a refused person to ask an admin", async () => {
+    fakeApi({ "GET /api/instances": { body: { password: true, instances: [], sso: { label: "Google" } } } });
+    renderApp("/signin?error=not_allowed");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Ask an admin to add you");
+    expect(await screen.findByRole("link", { name: "Sign in with Google" })).toBeInTheDocument();
+  });
+
+  it("shows a message only for the codes it knows", async () => {
+    fakeApi({ "GET /api/instances": { body: { password: true, instances: [], sso: { label: "Google" } } } });
+    renderApp("/signin?error=%3Cb%3Ehello%3C%2Fb%3E");
+    await screen.findByLabelText("Username");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    const card = screen.getByRole("heading", { name: "Sign in to pergent.sh" }).parentElement;
+    expect(card).not.toHaveTextContent(/hello/);
+  });
+
+  it("explains each refusal code", async () => {
+    for (const [code, text] of [
+      ["expired", /expired/],
+      ["failed", /Sign-in failed/],
+      ["denied", /not completed/],
+      ["not_set_up", /isn't set up yet/],
+      ["unavailable", /can't be reached/],
+    ] as const) {
+      fakeApi({ "GET /api/instances": { body: { password: true, instances: [] } } });
+      const { unmount } = renderApp(`/signin?error=${code}`);
+      expect(await screen.findByRole("alert")).toHaveTextContent(text);
+      unmount();
+    }
+  });
+
   it("shows only the password form when no instance has sign-in", async () => {
     fakeApi({ "GET /api/instances": { body: { password: true, instances: [] } } });
     renderApp("/signin");
