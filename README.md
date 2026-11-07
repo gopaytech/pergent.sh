@@ -222,6 +222,12 @@ pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is hand
 
 ## ⬆️ Upgrading
 
+### Upgrading to 0.8.2
+
+There is no migration, and nothing to change in the config or the chart. 0.8.1 keeps working on the same database, so you can roll back. Reviews still run pergent v0.5.4.
+
+The **Integrations** page now shows each instance's webhook URL, with a copy button. [`openapi.yaml`](openapi.yaml) at the root of the repository describes the HTTP API ([HTTP routes](#-http-routes)).
+
 ### Upgrading to 0.8.1
 
 Reviews now run pergent v0.5.4 (the default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.5.4`). There is no migration, and nothing to change in the config or the chart. 0.8.0 keeps working on the same database, so you can roll back.

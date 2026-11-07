@@ -1331,6 +1331,19 @@ func TestOpenAPIDocumentIsValid(t *testing.T) {
 	if specString(info["title"]) == "" || specString(info["version"]) == "" {
 		t.Error("info.title and info.version are required")
 	}
+	chart, err := os.ReadFile(filepath.Join(repoRoot(t), "charts/pergent-sh/Chart.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var meta struct {
+		Version string `yaml:"version"`
+	}
+	if err := yaml.Unmarshal(chart, &meta); err != nil {
+		t.Fatal(err)
+	}
+	if v := specString(info["version"]); v != meta.Version {
+		t.Errorf("info.version is %q, but the chart is %q: a release bumps both", v, meta.Version)
+	}
 	if len(specMap(d.root["paths"])) == 0 {
 		t.Fatal("paths is empty")
 	}
