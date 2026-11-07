@@ -224,11 +224,11 @@ pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is hand
 
 ## ⬆️ Upgrading
 
-### Upgrading to 0.11.0
+### Upgrading to 0.10.0
 
-This release changes how people sign in and what they can reach. Local admins keep working, and everyone else now signs in with OIDC or a JWT from your proxy ([Sign-in](#sign-in)). The order for an install:
+This release changes how people sign in and what they can reach, and it changes the review comment. Local admins keep working, and everyone else now signs in with OIDC or a JWT from your proxy ([Sign-in](#sign-in)). The order for an install:
 
-1. **Upgrade.** Back up Postgres first. Migration `0028` runs at startup, and every session ends, so everyone signs in again.
+1. **Upgrade.** Back up Postgres first. Migrations `0027` and `0028` run at startup and add columns and rows, dropping nothing, and every session ends, so everyone signs in again.
 2. **Sign in as a local admin** at `/admin/sign-in` (the page for local admins; `/sign-in` has no password form). Your local admins and their passwords are unchanged. If you only ever signed in with GitHub or GitLab you may not know the `admin` password: it was logged once, when the account was made, and may be gone. Set a new one from inside the pod with `admin reset-password` ([Lost password](#lost-password)) before you start.
 3. **Set up sign-in** under **Admin → Integrations → Sign-in**, or `dashboard.sign_in` in the config file. This can't be done before the upgrade.
 4. **Add people** under **Admin → Users → Add user** (an email, and the teams they should be on), or from **Admin → Teams**.
@@ -242,17 +242,14 @@ What is gone, and what changes:
 - **`hidden` is gone from the answer to deleting a skill that is in use** (409 `the skill is in use`). Only admins delete skills, and admins see every repository, so the answer lists them all.
 - **`oauth_client_id_env` and `oauth_client_secret_env` warn and are ignored.** An instance in the config that still names them loads, and pergent.sh logs a warning for each at start. A later release refuses them.
 - **The chart** drops the OAuth comments from `values.yaml`; add `dashboard.sign_in` under `config` and the client secret to the Secret `existingSecret` names if you set sign-in in the config file.
-- **To roll back, first remove `dashboard.sign_in` from the config.** The previous release refuses a config key it does not know, so it would not start with it. The rows this release added (SSO accounts, team members, the sign-in settings) stay in the database and are not used.
+- **To roll back to 0.9.0, first remove `dashboard.sign_in` and `repositories[].comment_layout` from the config.** 0.9.0 refuses a config key it does not know, so it would not start with them. The rows this release added (SSO accounts, team members, the sign-in settings) stay in the database and are not used.
 
-### Upgrading to 0.10.0
+The review comment and the reviews:
 
-This release changes the review comment and adds [Comment layout](#-comment-layout), a per-repository setting for its shape. It is unset by default.
-
+- **The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.7.0`.** A review now reads the change's title and description, which pergent.sh hands to the Job; a stated intent never excuses a blocking problem. A config that sets its own `jobs.image` keeps the image it names, and an older image ignores the description. The comment layout does not depend on the image: pergent.sh draws the comment itself from the result the Job sends.
 - **The default comment changes for every repository.** The model's summary is back at the top, the checks are grouped by area and open, and the confidence reason shows only when the score is below 5. Anything that reads the comment's Markdown will need to follow. The hidden findings block does not change, so the next review reads the same findings as before.
-- **The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.6.0`.** A config that sets its own `jobs.image` keeps the image it names. The layout does not depend on it: pergent.sh draws the comment itself from the result the Job sends.
-- **Migration `0027` runs at startup.** It adds three nullable columns (`comment_layout` on `dashboard_repos`, `repo_defaults` and `runs`). A null value means the default layout, and 0.9.0 keeps working on the migrated database, so you can roll back.
 - **A run from before this release has no recorded layout.** If it is published again (a dismissal does that), its comment takes the new default shape.
-- **To roll back, first remove `comment_layout` from the config.** 0.9.0 refuses a config key it does not know, so it would not start with `repositories[].comment_layout` in it. The dashboard's setting needs no change: 0.9.0 ignores the column.
+- **[Comment layout](#-comment-layout)** is a new per-repository setting for the comment's shape, unset by default. A null value means the default layout.
 
 ### Upgrading to 0.9.0
 
@@ -1489,7 +1486,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `llm.base_url` | none | Custom API base URL for the provider. |
 | `llm.api_key_env` | `OPENCODE_API_KEY` | Name of the env var with the LLM key. |
 | `jobs.namespace` | required | Namespace the Jobs run in. |
-| `jobs.image` | `ghcr.io/gopaytech/pergent:v0.6.0` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
+| `jobs.image` | `ghcr.io/gopaytech/pergent:v0.7.0` | The pergent image the Jobs run. It must be pinned by a tag other than `latest`, or by digest. |
 | `jobs.max_running` | `5` | Most Jobs running at once. Further runs wait in the queue. At least 1. |
 | `jobs.timeout` | `30m` | pergent's own review budget per Job (`--timeout`). The Job's deadline adds 2 minutes to deliver and a clone allowance of at least 2 minutes. At startup pergent.sh warns about a timeout shorter than its step limit times 30 seconds. |
 | `jobs.max_turns` | `40` | pergent's step limit per opencode run (`--max-turns`) for every repository, 5 to 200. |
