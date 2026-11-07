@@ -1527,3 +1527,20 @@ func TestDispatchRecordsTheLayout(t *testing.T) {
 		}
 	})
 }
+
+// The Job gets the title and description the platform has when it starts.
+func TestDispatchPassesChangeDescription(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Enqueue(3, head)
+	mr := openMR(3, head)
+	mr.Title, mr.Description = "Add login", "It drops the old cookie on purpose."
+	env.GitLab.SetMR(mr)
+	env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+
+	dispatch(t, env)
+
+	if got, want := env.ConfigMap(id).Data["change-description.md"], "Add login\n\nIt drops the old cookie on purpose."; got != want {
+		t.Errorf("change-description.md = %q, want %q", got, want)
+	}
+}

@@ -621,3 +621,56 @@ func TestBuildJobLimitsWorkVolume(t *testing.T) {
 	}
 	t.Fatal("no work volume")
 }
+
+func TestBuildJobDescription(t *testing.T) {
+	env := func(p JobParams) (string, bool) {
+		for _, e := range containerByName(t, BuildJob(p).Spec.Template.Spec.Containers, "pergent").Env {
+			if e.Name == "PERGENT_CHANGE_DESCRIPTION" {
+				return e.Value, true
+			}
+		}
+		return "", false
+	}
+	item := func(p JobParams) bool {
+		for _, v := range BuildJob(p).Spec.Template.Spec.Volumes {
+			if v.ConfigMap == nil {
+				continue
+			}
+			for _, it := range v.ConfigMap.Items {
+				if it.Key == "change-description.md" && it.Path == "change-description.md" {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	p := testParams()
+	p.Inputs.Description = []byte("Fix it")
+	if got, _ := env(p); got != "/in/change-description.md" {
+		t.Errorf("PERGENT_CHANGE_DESCRIPTION = %q", got)
+	}
+	// A flag would make an older image exit 2.
+	for _, a := range containerByName(t, BuildJob(p).Spec.Template.Spec.Containers, "pergent").Args {
+		if strings.HasPrefix(a, "--change-description") {
+			t.Errorf("unexpected arg %q", a)
+		}
+	}
+	if got := BuildConfigMap(p, nil).Data["change-description.md"]; got != "Fix it" {
+		t.Errorf("change-description.md = %q", got)
+	}
+	if !item(p) {
+		t.Error("no change-description.md item in the inputs volume")
+	}
+
+	p.Inputs.Description = nil
+	if _, ok := env(p); ok {
+		t.Error("PERGENT_CHANGE_DESCRIPTION set without a description")
+	}
+	if _, ok := BuildConfigMap(p, nil).Data["change-description.md"]; ok {
+		t.Error("change-description.md present without a description")
+	}
+	if item(p) {
+		t.Error("change-description.md item without a description")
+	}
+}

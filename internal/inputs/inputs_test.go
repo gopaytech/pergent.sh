@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
 )
@@ -607,5 +608,83 @@ func TestAddQuietLineDoesNotWriteIntoSharedBytes(t *testing.T) {
 	}
 	if string(base[:cap(base)][5:20]) != string(make([]byte, 15)) {
 		t.Errorf("AddQuietLine wrote into the old backing array")
+	}
+}
+
+func TestAddDescription(t *testing.T) {
+	cases := []struct {
+		name, title, description, want string
+	}{
+		{"both", "Fix it", "On purpose.", "Fix it\n\nOn purpose."},
+		{"title only", "Fix it", "", "Fix it"},
+		{"trimmed", " Fix it ", "\nOn purpose.\n", "Fix it \n\n\nOn purpose."},
+		{"bad bytes", "Fix \xff it", "", "Fix � it"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			in := &Inputs{}
+			in.AddDescription(c.title, c.description)
+			if got := string(in.Description); got != c.want {
+				t.Errorf("Description = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestAddDescriptionNone(t *testing.T) {
+	in := &Inputs{}
+	in.AddDescription(" ", "\n")
+	if in.Description != nil {
+		t.Errorf("Description = %q, want nil", in.Description)
+	}
+}
+
+// GitLab allows a description of a megabyte: it must not take the ConfigMap's
+// budget from the skills. Cutting inside a rune must still leave valid text.
+func TestAddDescriptionIsBounded(t *testing.T) {
+	in := &Inputs{}
+	in.AddDescription(strings.Repeat("a", maxDescription-1)+"€", strings.Repeat("b", 1<<20))
+	if !utf8.Valid(in.Description) {
+		t.Error("the description is not valid UTF-8")
+	}
+	if n := len(in.Description); n > maxDescription+2 {
+		t.Errorf("description is %d bytes, want about %d", n, maxDescription)
+	}
+}
+
+func TestSizeCountsDescription(t *testing.T) {
+	in := &Inputs{Skills: map[string][]byte{"a": make([]byte, 10)}, Description: make([]byte, 7)}
+	if in.Size() != 17 {
+		t.Errorf("size = %d, want 17", in.Size())
+	}
+}
+
+// The description goes after the dismissals and before the previous result:
+// it never turns an incremental review into a full one.
+func TestFitDropsDescriptionBeforePrevious(t *testing.T) {
+	in := &Inputs{
+		Skills: map[string][]byte{"a": make([]byte, 40)}, Previous: make([]byte, 20), Carried: make([]byte, 20),
+		Dismissals: make([]byte, 20), Description: make([]byte, 40),
+	}
+	if err := in.Fit(100); err != nil {
+		t.Fatal(err)
+	}
+	if in.Dismissals != nil || in.Description != nil {
+		t.Errorf("dismissals %d bytes, description %d bytes; want both dropped", len(in.Dismissals), len(in.Description))
+	}
+	if in.Previous == nil || in.Carried == nil {
+		t.Errorf("previous %d bytes, carried %d bytes; want both kept", len(in.Previous), len(in.Carried))
+	}
+}
+
+func TestFitKeepsDescriptionWhenDismissalsAreEnough(t *testing.T) {
+	in := &Inputs{
+		Skills: map[string][]byte{"a": make([]byte, 40)}, Dismissals: make([]byte, 40), Description: make([]byte, 40),
+	}
+	if err := in.Fit(100); err != nil {
+		t.Fatal(err)
+	}
+	if in.Dismissals != nil || in.Description == nil {
+		t.Errorf("dismissals %d bytes, description %d bytes; want only the dismissals dropped", len(in.Dismissals), len(in.Description))
 	}
 }

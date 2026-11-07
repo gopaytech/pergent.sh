@@ -55,6 +55,7 @@ func (f *Forge) GetChange(ctx context.Context, projectID, iid int64) (forge.Chan
 		HeadSHA:      mr.SHA,
 		TargetBranch: mr.TargetBranch,
 		Title:        mr.Title,
+		Description:  mr.Description,
 		WebURL:       mr.WebURL,
 		SourceBranch: mr.SourceBranch,
 		Author:       mr.Author.Username,
