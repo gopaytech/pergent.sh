@@ -520,6 +520,13 @@ func TestDecideNeutralizesQuickActions(t *testing.T) {
 		})
 	}
 	d := Decide(Outcome{Result: clean}, config.FailureStatusFailed)
+	// The summary and the check reach the comment, so the line loop above
+	// has them to look at.
+	for _, want := range []string{"**Summary:** summary", "| c | ❌ | detail"} {
+		if !strings.Contains(d.Comment, want) {
+			t.Errorf("the comment lacks %q:\n%s", want, d.Comment)
+		}
+	}
 	if block := blockOf(clean); !strings.HasSuffix(d.Comment, "\n"+block) {
 		t.Errorf("findings block changed: want the comment to end with %q:\n%s", block, d.Comment)
 	}
@@ -1417,13 +1424,15 @@ func TestDecideQuietComment(t *testing.T) {
 	o := quietFixtureOutcome(r)
 	o.Quiet = true
 	d := Decide(o, config.FailureStatusFailed)
-	for _, bad := range []string{"<summary>Files (", "<summary>Checks:", "omitted to fit", "Output is escaped", "go.sum"} {
+	// The passed check and the n/a check are named by their own text: the
+	// layout shows checks open, so no summary line stands for them.
+	for _, bad := range []string{"<summary>Files (", "omitted to fit", "Output is escaped", "Uploads are checked", "go.sum"} {
 		if strings.Contains(d.Comment, bad) {
 			t.Errorf("a quiet comment has %q:\n%s", bad, d.Comment)
 		}
 	}
 	for _, want := range []string{
-		"· quiet</sub>", "1 of 2 checks passed", "**Failed checks (1)**", "Queries are parameterised",
+		"· quiet</sub>", "1 of 2 checks passed", "#### Input", "| Queries are parameterised | ❌ | string concatenation |",
 		"❌ <b>Unchecked input</b>", "💡 <b>Unchecked input</b>", "plain", "a smaller one",
 		"<!-- pergent:findings ",
 	} {
