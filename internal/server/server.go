@@ -67,15 +67,19 @@ func Routes(d Deps) *http.ServeMux {
 	mux := http.NewServeMux()
 	// Webhooks accept repositories switched on in the config or the dashboard.
 	repos := &settings.Resolver{Config: d.Config, Store: d.Store, Instances: d.Instances}
-	var commands webhook.CommandStore
+	var (
+		commands   webhook.CommandStore
+		projects   webhook.ProjectStore
+		deliveries webhook.DeliveryStore
+	)
 	if d.Store != nil {
-		commands = d.Store
+		commands, projects, deliveries = d.Store, d.Store, d.Store
 	}
 	mux.Handle("POST /webhooks/gitlab/{instance}", &webhook.Handler{
-		Config: d.Config, Instances: d.Instances, Secrets: d.WebhookSecrets, Queue: d.Store, Repos: repos, Commands: commands, Bots: d.Bots, Wake: d.Wake, Log: d.Log,
+		Config: d.Config, Instances: d.Instances, Secrets: d.WebhookSecrets, Queue: d.Store, Repos: repos, Projects: projects, Commands: commands, Bots: d.Bots, Wake: d.Wake, Log: d.Log,
 	})
 	mux.Handle("POST /webhooks/github/{instance}", &webhook.GitHubHandler{
-		Config: d.Config, Instances: d.Instances, Secrets: d.GitHubWebhookSecrets, Queue: d.Store, Repos: repos, Commands: commands, Bots: d.Bots, Wake: d.Wake, Log: d.Log,
+		Config: d.Config, Instances: d.Instances, Secrets: d.GitHubWebhookSecrets, Queue: d.Store, Repos: repos, Projects: projects, Deliveries: deliveries, Commands: commands, Bots: d.Bots, Wake: d.Wake, Log: d.Log,
 	})
 	mux.Handle("POST /runs/{id}/result", &callback.Handler{
 		Results: d.Store, Now: d.Now, Wake: d.Wake, Log: d.Log,

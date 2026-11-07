@@ -56,6 +56,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/skillfetch"
 	"github.com/gopaytech/pergent.sh/internal/store"
 	"github.com/gopaytech/pergent.sh/internal/syncmap"
+	"github.com/gopaytech/pergent.sh/internal/webhook"
 )
 
 const (
@@ -327,6 +328,8 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	loops = append(loops, func(ctx context.Context) { every(ctx, auditPruneEvery, pruneOld) })
 	pruneCmds := pruneCommands(st.PruneCommands, time.Now, log)
 	loops = append(loops, func(ctx context.Context) { every(ctx, commandPruneEvery, pruneCmds) })
+	pruneHooks := pruneDeliveries(st.PruneDeliveries, time.Now, log)
+	loops = append(loops, func(ctx context.Context) { every(ctx, commandPruneEvery, pruneHooks) })
 	if eng.Scans {
 		loops = append(loops, eng.RunScans)
 	}
@@ -423,6 +426,21 @@ func pruneCommands(prune func(context.Context, time.Time) (int, error), now func
 			log.Warn("couldn't prune the comment commands", "error", err.Error())
 		case n > 0:
 			log.Info("pruned the comment commands", "commands", n)
+		}
+	}
+}
+
+// pruneDeliveries returns a pass that deletes the webhook deliveries too old
+// to be accepted (prune is store.Store.PruneDeliveries). It only touches the
+// database; a failure is logged and tried again next time.
+func pruneDeliveries(prune func(context.Context, time.Time) (int, error), now func() time.Time, log *slog.Logger) func(context.Context) {
+	return func(ctx context.Context) {
+		n, err := prune(ctx, now().Add(-webhook.DeliveryRetention))
+		switch {
+		case err != nil && ctx.Err() == nil:
+			log.Warn("couldn't prune the webhook deliveries", "error", err.Error())
+		case n > 0:
+			log.Info("pruned the webhook deliveries", "deliveries", n)
 		}
 	}
 }

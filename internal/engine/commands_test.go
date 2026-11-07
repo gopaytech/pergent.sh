@@ -114,6 +114,29 @@ func (f *commandFixture) review(skills ...result.Skill) string {
 	return id
 }
 
+// serveNote serves the comment GitLab has for a command: the engine reads it
+// back before it acts.
+func (f *commandFixture) serveNote(iid, id int64, user string, userID int64, body string) {
+	f.GitLab.Reply(http.MethodGet, notePath(iid, id), http.StatusOK, map[string]any{
+		"id": id, "body": body, "system": false, "author": map[string]any{"id": userID, "username": user},
+	})
+}
+
+// commandText is a comment that says the command.
+func commandText(kind, arg, reason string) string {
+	switch kind {
+	case "review":
+		return "@pergent-review review"
+	case "review_failed":
+		return "@pergent-review review failed"
+	case "help":
+		return "@pergent-review help"
+	case "dismiss":
+		return "@pergent-review dismiss " + arg + " " + reason
+	}
+	return "@pergent-review what is this"
+}
+
 // say stores a command by user (a key of commandUsers) in a new comment on
 // merge request iid, written at `at`, and returns its comment ID.
 func (f *commandFixture) say(iid int64, user, kind, arg, reason string, at time.Time) int64 {
@@ -127,6 +150,7 @@ func (f *commandFixture) sayAs(iid int64, user string, userID int64, kind, arg, 
 	f.comments++
 	id := 1000 + f.comments
 	f.GitLab.Reply(http.MethodPost, emojiPath(iid, id), http.StatusCreated, `{}`)
+	f.serveNote(iid, id, user, userID, commandText(kind, arg, reason))
 	_, err := f.Store.InsertCommand(f.ctx, store.Command{
 		MR:          store.MRKey{Instance: testInstance, ProjectID: testProjectID, IID: iid},
 		ProjectPath: testProjectPath, Platform: "gitlab", Kind: kind, Arg: arg, Reason: reason,
@@ -1808,6 +1832,7 @@ func (f *commandFixture) sayInThread(iid int64, user, discussion, kind, arg, rea
 	f.comments++
 	id := 1000 + f.comments
 	f.GitLab.Reply(http.MethodPost, emojiPath(iid, id), http.StatusCreated, `{}`)
+	f.serveNote(iid, id, user, commandUsers[user], commandText(kind, arg, reason))
 	_, err := f.Store.InsertCommand(f.ctx, store.Command{
 		MR:          store.MRKey{Instance: testInstance, ProjectID: testProjectID, IID: iid},
 		ProjectPath: testProjectPath, Platform: "gitlab", Kind: kind, Arg: arg, Reason: reason,
@@ -2539,6 +2564,33 @@ func TestThreadDismissByAuthorWithReadAccess(t *testing.T) {
 			if rs := f.refusals(); len(rs) != 0 {
 				t.Errorf("the author was audited as refused: %+v", rs)
 			}
+		})
+	}
+}
+
+// A Note Hook is only as good as the instance's one secret: a command that
+// names a maintainer, on a comment that says something else or is someone
+// else's, is never carried out.
+func TestForgedCommandIsDropped(t *testing.T) {
+	for name, fake := range map[string]func(f *commandFixture, c int64){
+		"another author": func(f *commandFixture, c int64) {
+			f.serveNote(1, c, "rep", commandUsers["rep"], commandText("dismiss", "abc123", "constant"))
+		},
+		"other text": func(f *commandFixture, c int64) { f.serveNote(1, c, "mo", commandUsers["mo"], "LGTM") },
+		"no such comment": func(f *commandFixture, c int64) {
+			f.GitLab.Reply(http.MethodGet, notePath(1, c), http.StatusNotFound, `{"message":"404 Not found"}`)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newCommandFixture(t)
+			f.review(skillWithFinding(t, "has_blocking_issues", "blocking"))
+			c := f.say(1, "mo", "dismiss", "abc123", "constant", time.Now())
+			fake(f, c)
+			f.run()
+			if d := f.dismissals(1); len(d) != 0 {
+				t.Fatalf("dismissals = %+v, want none", d)
+			}
+			f.wantReplies(1)
 		})
 	}
 }

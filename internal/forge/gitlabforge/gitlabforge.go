@@ -81,6 +81,8 @@ func (f *Forge) DefaultBranch(ctx context.Context, projectID int64) (string, err
 
 var _ forge.SourceReader = (*Forge)(nil)
 
+var _ forge.CommentReader = (*Forge)(nil)
+
 // unreadable reports whether err says the review bot may not read what it
 // asked for: GitLab's 404 (it hides what a user can't see) or 403 (a bot below
 // Reporter, a restricted repository feature).
@@ -265,6 +267,15 @@ func (f *Forge) IsBot(ctx context.Context, userID int64) (bool, error) {
 	}
 	bot, err := f.c.UserIsBot(ctx, userID)
 	return bot, mapErr(err)
+}
+
+// Comment reads a note of merge request iid back from GitLab.
+func (f *Forge) Comment(ctx context.Context, projectID, iid, noteID int64) (forge.Comment, error) {
+	n, err := f.c.GetNote(ctx, projectID, iid, noteID)
+	if err != nil {
+		return forge.Comment{}, mapErr(err)
+	}
+	return forge.Comment{AuthorID: n.Author.ID, Author: n.Author.Username, Body: n.Body, System: n.System}, nil
 }
 
 // ChangeRef is the ref GitLab keeps merge request iid's head at.

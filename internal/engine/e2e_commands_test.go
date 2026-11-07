@@ -66,6 +66,9 @@ func (e *cmdE2E) say(t *testing.T, username string, userID int64, body string) i
 	e.next++
 	id := e.next
 	e.env.GitLab.Reply(http.MethodPost, emojiPath(1, id), http.StatusCreated, `{}`)
+	e.env.GitLab.Reply(http.MethodGet, notePath(1, id), http.StatusOK, map[string]any{
+		"id": id, "body": body, "system": false, "author": map[string]any{"id": userID, "username": username},
+	})
 	hook, _ := json.Marshal(map[string]any{
 		"object_kind": "note",
 		"user":        map[string]any{"id": userID, "username": username},
@@ -91,6 +94,9 @@ func (e *cmdE2E) sayInThread(t *testing.T, username string, userID int64, typ, d
 	e.next++
 	id := e.next
 	e.env.GitLab.Reply(http.MethodPost, emojiPath(1, id), http.StatusCreated, `{}`)
+	e.env.GitLab.Reply(http.MethodGet, notePath(1, id), http.StatusOK, map[string]any{
+		"id": id, "body": body, "system": false, "author": map[string]any{"id": userID, "username": username},
+	})
 	hook, _ := json.Marshal(map[string]any{
 		"object_kind": "note",
 		"user":        map[string]any{"id": userID, "username": username},

@@ -159,6 +159,9 @@ func TestBuildJobShape(t *testing.T) {
 	if vols["work"].EmptyDir == nil {
 		t.Errorf("work must be an emptyDir")
 	}
+	if got := vols["work"].EmptyDir.SizeLimit; got != nil {
+		t.Errorf("work size limit = %v with no WorkSize, want none", got)
+	}
 	cm := vols["inputs"].ConfigMap
 	if cm == nil || cm.Name != p.Name+"-inputs" || len(cm.Items) == 0 {
 		t.Errorf("inputs volume = %+v", vols["inputs"])
@@ -600,4 +603,21 @@ func TestBuildJobInstructionsOnly(t *testing.T) {
 	if !found {
 		t.Error("no volume item for instructions.md")
 	}
+}
+
+// A change's author decides how much the checkout takes, so the work volume is
+// limited, as a fetch or scan Job's is.
+func TestBuildJobLimitsWorkVolume(t *testing.T) {
+	p := testParams()
+	p.WorkSize = resource.MustParse("20Gi")
+	job := BuildJob(p)
+	for _, v := range job.Spec.Template.Spec.Volumes {
+		if v.Name == "work" {
+			if v.EmptyDir == nil || v.EmptyDir.SizeLimit == nil || v.EmptyDir.SizeLimit.String() != "20Gi" {
+				t.Fatalf("work volume = %+v", v.EmptyDir)
+			}
+			return
+		}
+	}
+	t.Fatal("no work volume")
 }

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/policy"
 	"github.com/gopaytech/pergent.sh/internal/server"
@@ -277,5 +278,23 @@ func TestEndToEndGitHub(t *testing.T) {
 		if strings.Contains(env.Logs(), tok) {
 			t.Errorf("secret %q logged", tok)
 		}
+	}
+}
+
+// A captured delivery sent again doesn't count: the signature has no time in
+// it, and the old head's run would supersede the newest head's.
+func TestEndToEndGitHubReplayedDelivery(t *testing.T) {
+	e := newGitHubE2E(t)
+	env := e.env
+	headA, headB := sha('a'), sha('c')
+	e.signedHook(t, "opened", 1, headA, nil)
+	e.signedHook(t, "synchronize", 1, headB, nil)
+	e.signedHook(t, "opened", 1, headA, nil)
+	runs, err := env.Store.ClaimQueued(env.ctx, 100, env.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].HeadSHA != headB {
+		t.Fatalf("queued = %+v, want one run of %s", runs, headB)
 	}
 }

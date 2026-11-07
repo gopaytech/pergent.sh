@@ -13,6 +13,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/webhook"
 )
 
 const (
@@ -448,6 +449,13 @@ func (e *Engine) handleCommand(ctx, bctx context.Context, cmd store.Command, log
 	if recent {
 		return dropped("the same command was answered within 30 seconds"), nil
 	}
+	if genuine, err := commentIsGenuine(ctx, plat.Forge, cmd); err != nil {
+		return verdict{}, fmt.Errorf("read the comment back: %w", err)
+	} else if !genuine {
+		// No reaction and no reply: the comment may be someone else's.
+		log.Warn("a command doesn't match its comment on the platform; it may be forged", "comment", cmd.CommentID, "claimed_author", cmd.Author)
+		return verdict{outcome: "dropped: the comment on the platform doesn't say this"}, nil
+	}
 	change, err := plat.Forge.GetChange(ctx, cmd.MR.ProjectID, cmd.MR.IID)
 	if errors.Is(err, forge.ErrNotFound) {
 		return dropped("the change is gone"), nil
@@ -475,6 +483,27 @@ func (e *Engine) handleCommand(ctx, bctx context.Context, cmd store.Command, log
 		v.auditHead = change.HeadSHA
 	}
 	return v, nil
+}
+
+// commentIsGenuine reads a command's comment back where the platform's
+// webhooks can't vouch for it (forge.CommentReader): the comment must be on
+// that change, by that person, and say that command. On GitLab one secret
+// serves every project of the instance, so the author and the text in a Note
+// Hook are only a claim. A command that fails this is never acted on.
+func commentIsGenuine(ctx context.Context, f forge.Forge, cmd store.Command) (bool, error) {
+	reader, ok := f.(forge.CommentReader)
+	if !ok {
+		return true, nil
+	}
+	c, err := reader.Comment(ctx, cmd.MR.ProjectID, cmd.MR.IID, cmd.CommentID)
+	if errors.Is(err, forge.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return !c.System && c.AuthorID == cmd.AuthorID && strings.EqualFold(c.Author, cmd.Author) &&
+		webhook.CommandMatches(cmd, c.Body, f.Mention()), nil
 }
 
 // carryOut is the gate and then the command itself.

@@ -116,7 +116,7 @@ paths:
         **200** with a warning in the log, because GitLab counts failed
         deliveries toward disabling the hook. The check order is: method
         (405 from the router), instance (404), token (401), event, body size
-        (413), body (400), payload.
+        (413), bytes buffered (503), body (400), payload.
       x-pergent-access: none
       security:
         - gitlabWebhookToken: []
@@ -139,6 +139,11 @@ paths:
         '200':
           description: Handled, or ignored (other event, unknown project, unusable payload). No body.
         '400': {$ref: '#/components/responses/PlainTextError'}
+        '503':
+          description: Too many bytes of webhook bodies are held at once. Sent with `Retry-After`.
+          content:
+            text/plain:
+              schema: {type: string}
         '401':
           description: The token is missing or wrong (or the instance has no secret).
           content:
@@ -170,8 +175,14 @@ paths:
         A repository that is not switched on gets 200 and is ignored. An
         unusable payload is answered 200, as for GitLab.
 
-        The check order is: method (405 from the router), instance (404), body
-        size (413), body (400), signature (401), event, payload.
+        A `pull_request` delivery whose exact body was handled already, or whose
+        pull request's `updated_at` is over 7 days old, is answered 200 and
+        ignored: the signature has no time in it, so a captured delivery must
+        not count again. A delivery that was answered 5xx can be sent again.
+
+        The check order is: method (405 from the router), instance (404),
+        signature's shape (401), body size (413), bytes buffered (503), body
+        (400), signature (401), event, payload.
       x-pergent-access: none
       security:
         - githubWebhookSignature: []
@@ -194,6 +205,11 @@ paths:
         '200':
           description: Handled, or ignored. No body.
         '400': {$ref: '#/components/responses/PlainTextError'}
+        '503':
+          description: Too many bytes of webhook bodies are held at once. Sent with `Retry-After`.
+          content:
+            text/plain:
+              schema: {type: string}
         '401':
           description: The signature is missing or wrong (or the instance has no secret).
           content:

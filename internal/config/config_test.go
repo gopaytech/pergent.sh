@@ -58,6 +58,10 @@ func TestLoadValid(t *testing.T) {
 		t.Errorf("LLM.APIKeyEnv = %q", cfg.LLM.APIKeyEnv)
 	}
 
+	if got := cfg.Jobs.WorkSize.String(); got != "20Gi" {
+		t.Errorf("Jobs.WorkSize = %q, want 20Gi", got)
+	}
+
 	res := cfg.Jobs.Resources
 	for _, c := range []struct {
 		list corev1.ResourceList

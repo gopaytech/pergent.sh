@@ -600,3 +600,32 @@ func TestRefusedBefore(t *testing.T) {
 		t.Error("an unfinished command counted")
 	}
 }
+
+func TestDeliveries(t *testing.T) {
+	s := newStore(t)
+	a, b := []byte("sum-a"), []byte("sum-b")
+	if seen, err := s.DeliverySeen(ctx, "gh", a); seen || err != nil {
+		t.Fatalf("before = %v, %v", seen, err)
+	}
+	for _, at := range []time.Time{t0, t0.Add(time.Hour)} {
+		if err := s.RecordDelivery(ctx, "gh", a, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.RecordDelivery(ctx, "gh", b, t0.Add(48*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if seen, err := s.DeliverySeen(ctx, "gh", a); !seen || err != nil {
+		t.Fatalf("after = %v, %v", seen, err)
+	}
+	if seen, err := s.DeliverySeen(ctx, "other", a); seen || err != nil {
+		t.Fatalf("another instance = %v, %v", seen, err)
+	}
+	n, err := s.PruneDeliveries(ctx, t0.Add(24*time.Hour))
+	if err != nil || n != 1 {
+		t.Fatalf("PruneDeliveries = %d, %v; want 1", n, err)
+	}
+	if seen, _ := s.DeliverySeen(ctx, "gh", b); !seen {
+		t.Fatal("a recent delivery was pruned")
+	}
+}

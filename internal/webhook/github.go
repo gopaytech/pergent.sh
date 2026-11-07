@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -30,6 +29,22 @@ const (
 	githubReviewComment = "pull_request_review_comment"
 )
 
+// DeliveryRetention is how long a pull_request delivery is remembered. It is
+// longer than deliveryMaxAge, so none is forgotten while it is still accepted.
+const DeliveryRetention = 8 * 24 * time.Hour
+
+// deliveryMaxAge is how old a pull request's updated_at may be in a delivery.
+// GitHub sends within seconds.
+const deliveryMaxAge = 7 * 24 * time.Hour
+
+// DeliveryStore remembers the signed pull_request deliveries already handled,
+// by the SHA-256 of the body. The X-GitHub-Delivery header is not signed, so
+// it can't tell a replay.
+type DeliveryStore interface {
+	DeliverySeen(ctx context.Context, instance string, sum []byte) (bool, error)
+	RecordDelivery(ctx context.Context, instance string, sum []byte, at time.Time) error
+}
+
 // GitHubHandler serves POST /webhooks/github/{instance}: the review App's
 // pull_request webhook. Like the GitLab handler it authenticates the event,
 // queues work and answers fast; the engine does the rest.
@@ -44,6 +59,11 @@ type GitHubHandler struct {
 	Queue   Queue
 	// Repos finds the repositories switched on; nil means the config's.
 	Repos Repositories
+	// Projects tells which project an ID is; nil skips that check.
+	Projects ProjectStore
+	// Deliveries remembers the pull_request deliveries handled; nil keeps
+	// none.
+	Deliveries DeliveryStore
 	// Commands keeps the commands found in pull request comments; Bots
 	// tells which comments are the bots' own and what mention addresses the
 	// review App. Without either, comments are ignored.
@@ -112,10 +132,11 @@ type reviewCommentEvent struct {
 type pullRequestEvent struct {
 	Action      string `json:"action"`
 	PullRequest struct {
-		Number int64 `json:"number"`
-		Draft  bool  `json:"draft"`
-		Merged bool  `json:"merged"`
-		Head   struct {
+		Number    int64     `json:"number"`
+		Draft     bool      `json:"draft"`
+		Merged    bool      `json:"merged"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Head      struct {
 			SHA string `json:"sha"`
 		} `json:"head"`
 		Base struct {
@@ -162,20 +183,20 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The signature covers the raw body, so the body is read first.
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-	if err != nil {
-		var tooBig *http.MaxBytesError
-		if errors.As(err, &tooBig) {
-			log.Warn("webhook rejected", "outcome", "body_too_large")
-			http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
-			return
-		}
-		log.Warn("webhook rejected", "outcome", "read_error")
-		http.Error(w, "cannot read body", http.StatusBadRequest)
+	// Nothing is read for a request that can't pass.
+	signature := r.Header.Get(githubSignatureHeader)
+	if h.secret(name) == "" || !signatureWellFormed(signature) {
+		log.Warn("webhook rejected", "outcome", "bad_signature")
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if !signatureMatches(h.secret(name), body, r.Header.Get(githubSignatureHeader)) {
+	// The signature covers the raw body, so the body is read first.
+	body, release, ok := readBody(w, r, log)
+	if !ok {
+		return
+	}
+	defer release()
+	if !signatureMatches(h.secret(name), body, signature) {
 		log.Warn("webhook rejected", "outcome", "bad_signature")
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -203,6 +224,59 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		unusable(w, log, "malformed_json")
 		return
 	}
+	sum := sha256.Sum256(body)
+	replayed, err := h.replayed(r.Context(), name, sum[:], ev.PullRequest.UpdatedAt)
+	if err != nil {
+		log.Error("webhook failed", "outcome", "lookup_error", "err", err)
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
+	if replayed {
+		log.Warn("webhook ignored", "outcome", outcomeIgnore, "reason", "replayed_delivery")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	rec := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+	h.pullRequest(rec, r, log, name, ev)
+	// Remembered only once handled: a delivery that failed can be sent again.
+	if h.Deliveries != nil && rec.status < http.StatusInternalServerError {
+		dctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), fatesRequestTimeout)
+		defer cancel()
+		if err := h.Deliveries.RecordDelivery(dctx, name, sum[:], time.Now()); err != nil {
+			log.Warn("recording the delivery failed", "err", err)
+		}
+	}
+}
+
+// replayed reports whether a signed pull_request delivery is one that must not
+// count again. The signature covers only the body and has no time in it, so
+// the same bytes verify for as long as the secret stands. A captured delivery
+// could otherwise be sent again to cancel a live review or start another.
+// updated is the pull request's updated_at, inside the signed body: older than
+// deliveryMaxAge, the delivery may have left the store.
+func (h *GitHubHandler) replayed(ctx context.Context, instance string, sum []byte, updated time.Time) (bool, error) {
+	if !updated.IsZero() && time.Since(updated) > deliveryMaxAge {
+		return true, nil
+	}
+	if h.Deliveries == nil {
+		return false, nil
+	}
+	return h.Deliveries.DeliverySeen(ctx, instance, sum)
+}
+
+// statusWriter remembers the status of the answer.
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusWriter) WriteHeader(status int) {
+	s.status = status
+	s.ResponseWriter.WriteHeader(status)
+}
+
+// pullRequest handles a signed pull_request event.
+func (h *GitHubHandler) pullRequest(w http.ResponseWriter, r *http.Request, log *slog.Logger, name string, ev pullRequestEvent) {
 	pr := ev.PullRequest
 	log = log.With("repository", ev.Repository.FullName, "number", pr.Number, "action", ev.Action)
 	repo, ok, err := lookup(r.Context(), repositories(h.Repos, h.Config, h.registry()), config.PlatformGitHub, name, ev.Repository.FullName)
@@ -243,6 +317,14 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mr := store.MRKey{Instance: name, ProjectID: ev.Repository.ID, IID: pr.Number}
+	if same, err := sameProject(r.Context(), h.Projects, name, ev.Repository.ID, project); err != nil {
+		log.Error("webhook failed", "outcome", "lookup_error", "err", err)
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	} else if !same {
+		unusable(w, log, "project_id_mismatch")
+		return
+	}
 
 	if ev.Action == "closed" {
 		n, err := h.Queue.SupersedeMR(r.Context(), mr)
@@ -341,7 +423,7 @@ func (h *GitHubHandler) comment(w http.ResponseWriter, r *http.Request, log *slo
 	case ev.Issue.PullRequest == nil || string(*ev.Issue.PullRequest) == "null":
 		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "not_a_pull_request")
 	default:
-		outcome, reason, err := commands{Bots: h.Bots, Store: h.Commands,
+		outcome, reason, err := commands{Bots: h.Bots, Store: h.Commands, Projects: h.Projects,
 			Repos: repositories(h.Repos, h.Config, h.registry()), Wake: h.Wake}.receive(r.Context(), comment{
 			Platform: config.PlatformGitHub, Instance: instance, Project: ev.Repository.FullName,
 			ProjectID: ev.Repository.ID, IID: ev.Issue.Number, CommentID: c.ID,
@@ -376,7 +458,7 @@ func (h *GitHubHandler) reviewComment(w http.ResponseWriter, r *http.Request, lo
 	case c.InReplyToID == 0:
 		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "not_a_reply")
 	default:
-		outcome, reason, err := commands{Bots: h.Bots, Store: h.Commands,
+		outcome, reason, err := commands{Bots: h.Bots, Store: h.Commands, Projects: h.Projects,
 			Repos: repositories(h.Repos, h.Config, h.registry()), Wake: h.Wake}.receive(r.Context(), comment{
 			Platform: config.PlatformGitHub, Instance: instance, Project: ev.Repository.FullName,
 			ProjectID: ev.Repository.ID, IID: ev.PullRequest.Number, CommentID: c.ID,
@@ -405,6 +487,16 @@ func (h *GitHubHandler) logger() *slog.Logger {
 		return h.Log
 	}
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// signatureWellFormed reports whether header can be a signature at all.
+func signatureWellFormed(header string) bool {
+	hexSum, ok := strings.CutPrefix(header, githubSignaturePrefix)
+	if !ok || len(hexSum) != hex.EncodedLen(sha256.Size) {
+		return false
+	}
+	_, err := hex.DecodeString(hexSum)
+	return err == nil
 }
 
 // signatureMatches checks an X-Hub-Signature-256 header ("sha256=<hex>")

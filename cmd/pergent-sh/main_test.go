@@ -18,6 +18,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/server"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/webhook"
 )
 
 // A skill a config repository names that the library lacks never stops
@@ -428,5 +429,26 @@ func TestWarnTimeouts(t *testing.T) {
 	warnTimeouts(cfg, log)
 	if logs.Len() != 0 {
 		t.Errorf("logged for a timeout that fits:\n%s", logs.String())
+	}
+}
+
+// pruneDeliveries forgets a delivery only once it is too old to be accepted.
+func TestPruneDeliveries(t *testing.T) {
+	var logs strings.Builder
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	at := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
+	var got time.Time
+	pruneDeliveries(func(_ context.Context, before time.Time) (int, error) {
+		got = before
+		return 3, nil
+	}, func() time.Time { return at }, log)(context.Background())
+	if want := at.Add(-webhook.DeliveryRetention); !got.Equal(want) || !strings.Contains(logs.String(), "deliveries=3") {
+		t.Errorf("pruned before %s, want %s; logs:\n%s", got, want, logs.String())
+	}
+	logs.Reset()
+	pruneDeliveries(func(context.Context, time.Time) (int, error) { return 0, errors.New("database down") },
+		time.Now, log)(context.Background())
+	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "database down") {
+		t.Errorf("a failed prune isn't a warning:\n%s", logs.String())
 	}
 }

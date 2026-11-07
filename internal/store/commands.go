@@ -169,6 +169,32 @@ func (s *Store) PruneCommands(ctx context.Context, before time.Time) (int, error
 	return int(tag.RowsAffected()), nil
 }
 
+// DeliverySeen reports whether a webhook delivery with this body's SHA-256 was
+// handled for instance.
+func (s *Store) DeliverySeen(ctx context.Context, instance string, sum []byte) (bool, error) {
+	var seen bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM webhook_deliveries
+		WHERE instance = $1 AND body_sha256 = $2)`, instance, sum).Scan(&seen)
+	return seen, err
+}
+
+// RecordDelivery remembers a webhook delivery that was handled.
+func (s *Store) RecordDelivery(ctx context.Context, instance string, sum []byte, at time.Time) error {
+	_, err := s.pool.Exec(ctx, `INSERT INTO webhook_deliveries (instance, body_sha256, received_at)
+		VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, instance, sum, at)
+	return err
+}
+
+// PruneDeliveries deletes the deliveries received before the given time and
+// returns how many it deleted.
+func (s *Store) PruneDeliveries(ctx context.Context, before time.Time) (int, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM webhook_deliveries WHERE received_at < $1`, before)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 // RecentCommand reports whether a command of the given kind and argument
 // was answered for mr, having been written at or after since: it came to
 // CommandDone or to a CommandNoop. A command still being answered has no
