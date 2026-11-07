@@ -123,7 +123,7 @@ func TestSkillResultsNoAccess(t *testing.T) {
 	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: testID("acme/payments"), Path: "acme/payments"}); err != nil {
 		t.Fatal(err)
 	}
-	c := e.signInGitLab(false, "acme/widgets")
+	c := e.userOnMain(false, "acme/widgets")
 	e.wantStatus(c, resultsURL("acme/payments", ""), http.StatusNotFound)
 	wantCode(t, e.get(nil, resultsURL("acme/widgets", "")), "signed out", http.StatusUnauthorized)
 	rec := e.get(c, resultsURL("acme/widgets", ""))

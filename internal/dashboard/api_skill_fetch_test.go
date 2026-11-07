@@ -177,7 +177,7 @@ func TestAnyAdminReadsAnySource(t *testing.T) {
 	files := map[string]string{"style.md": "Be kind."}
 	e.skillRepo("main", "acme/skills", "v1.0", commitV1, files)
 	e.skillRepo("gh", "acme/skills", "v1.0", commitV1, files)
-	admin := e.signInGitLab(true)
+	admin := e.userOnMain(true)
 	body := map[string]any{"instance": "main", "repo": "acme/skills", "ref": "v1.0"}
 
 	id := e.startFetch(admin, body)
@@ -202,16 +202,58 @@ func TestAnyAdminReadsAnySource(t *testing.T) {
 
 	// Viewers and maintainers can't read sources.
 	e2 := newEnv(t, nil)
-	viewer := e2.signInGitLab(false, "acme/skills")
+	viewer := e2.userOnMain(false, "acme/skills")
 	rec = e2.sendJSON(viewer, "POST", "/api/admin/skill-fetches", body)
 	wantCode(t, rec, "a viewer", http.StatusForbidden)
+}
+
+// Reading a source, installing from it and updating from it are for admins:
+// a maintainer and a viewer get 403 on each, even holding the ID of an admin's
+// read, and nothing is installed.
+func TestInstallSkillNeedsAdmin(t *testing.T) {
+	e := newEnv(t, nil)
+	e.skillRepo("main", "acme/skills", "v1.0", commitV1, map[string]string{"style.md": "Be kind."})
+	admin := e.userOnMain(true)
+	id, _ := e.fetchDone(admin, map[string]any{"instance": "main", "repo": "acme/skills", "ref": "v1.0"})
+
+	e2 := newEnv(t, nil)
+	e2.skillRepo("main", "acme/skills", "v1.0", commitV1, map[string]string{"style.md": "Be kind."})
+	maintainer := e2.signInRole(store.RoleMaintainer)
+	e3 := newEnv(t, nil)
+	e3.skillRepo("main", "acme/skills", "v1.0", commitV1, map[string]string{"style.md": "Be kind."})
+	viewer := e3.signInRole(store.RoleViewer)
+
+	for name, who := range map[string]struct {
+		e *env
+		c *http.Cookie
+	}{"maintainer": {e2, maintainer}, "viewer": {e3, viewer}} {
+		rec := who.e.sendJSON(who.c, "POST", "/api/admin/skill-fetches", map[string]any{"instance": "main", "repo": "acme/skills", "ref": "v1.0"})
+		wantCode(t, rec, name+" starting a read", http.StatusForbidden)
+		for _, w := range []struct{ method, target string }{
+			{"GET", "/api/admin/skill-fetches/" + id},
+			{"POST", "/api/admin/skill-fetches/" + id + "/install"},
+			{"POST", "/api/admin/skill-fetches/" + id + "/update"},
+		} {
+			rec := who.e.sendJSON(who.c, w.method, w.target, map[string]any{"names": []string{"style"}})
+			wantCode(t, rec, name+" "+w.method+" "+w.target, http.StatusForbidden)
+		}
+		if _, found := who.e.storedSkill("style"); found {
+			t.Errorf("a %s installed a skill", name)
+		}
+	}
+
+	// The admin's own read is not harmed, and installs.
+	e.skillAction(admin, id, "install", map[string]any{"names": []string{"style"}})
+	if _, found := e.storedSkill("style"); !found {
+		t.Error("the admin's install did not store the skill")
+	}
 }
 
 // Only the admin who started a read sees it and acts on it.
 func TestFetchOnlyRequesterSees(t *testing.T) {
 	e := newEnv(t, nil)
 	e.skillRepo("main", "acme/skills", "v1.0", commitV1, map[string]string{"style.md": "Be kind."})
-	admin := e.signInGitLab(true)
+	admin := e.userOnMain(true)
 	id, _ := e.fetchDone(admin, map[string]any{"instance": "main", "repo": "acme/skills", "ref": "v1.0"})
 
 	op := e.operator()
@@ -480,7 +522,7 @@ func TestPrivateSourceHiddenFromUsers(t *testing.T) {
 		return SkillSourceView{}
 	}
 
-	viewer := e.signInGitLab(false)
+	viewer := e.userOnMain(false)
 	if s := sourceOf(viewer, "alpha"); !s.Hidden || s.Repo != "" || s.Path != "" || s.Instance != "main" {
 		t.Errorf("alpha's source for a user = %+v", s)
 	}
@@ -571,7 +613,7 @@ func TestAddToDefaultsKeepsOtherDefaultChanges(t *testing.T) {
 
 	t.Run("create", func(t *testing.T) {
 		e := newEnv(t, nil)
-		admin := e.signInGitLab(true, "acme/widgets")
+		admin := e.userOnMain(true, "acme/widgets")
 		check(t, e, func() *httptest.ResponseRecorder {
 			return e.sendJSON(admin, "POST", "/api/admin/skills", map[string]any{"name": "raced", "content": "Raced.", "addToDefaults": true})
 		})

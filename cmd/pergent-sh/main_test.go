@@ -142,6 +142,57 @@ func TestReadLLMKey(t *testing.T) {
 	}
 }
 
+// An OIDC sign-in in the config file stops startup when the variable that
+// holds its client secret is unset or empty, and names the variable (never a
+// value). JWT mode and no sign-in have no such secret.
+func TestCheckSignInSecret(t *testing.T) {
+	cfg := &config.Config{}
+	if err := checkSignInSecret(cfg); err != nil {
+		t.Errorf("checkSignInSecret with no sign-in = %v", err)
+	}
+	cfg.Dashboard.SignIn = config.SignIn{Mode: config.SignInJWT, ClientSecretEnv: "PERGENT_TEST_OIDC_SECRET"}
+	t.Setenv("PERGENT_TEST_OIDC_SECRET", "")
+	if err := checkSignInSecret(cfg); err != nil {
+		t.Errorf("checkSignInSecret in jwt mode = %v", err)
+	}
+
+	cfg.Dashboard.SignIn = config.SignIn{Mode: config.SignInOIDC, ClientSecretEnv: "PERGENT_TEST_OIDC_SECRET"}
+	err := checkSignInSecret(cfg)
+	if err == nil || !strings.Contains(err.Error(), "dashboard.sign_in.client_secret_env") || !strings.Contains(err.Error(), "PERGENT_TEST_OIDC_SECRET") {
+		t.Errorf("checkSignInSecret with the variable empty = %v; want an error naming the key and the variable", err)
+	}
+	t.Setenv("PERGENT_TEST_OIDC_SECRET", "s3cret-value")
+	if err := checkSignInSecret(cfg); err != nil {
+		t.Errorf("checkSignInSecret with the variable set = %v", err)
+	}
+	// The secret is never in an error.
+	t.Setenv("PERGENT_TEST_OIDC_SECRET", "")
+	if err := checkSignInSecret(cfg); err != nil && strings.Contains(err.Error(), "s3cret-value") {
+		t.Errorf("error holds the secret: %v", err)
+	}
+}
+
+// The start-up sweep logs how many sessions it ended, says nothing when there
+// were none, and stops startup when it fails.
+func TestEndStaleSSOSessions(t *testing.T) {
+	run := func(n int, err error) (string, error) {
+		var logs strings.Builder
+		log := slog.New(slog.NewTextHandler(&logs, nil))
+		got := endStaleSSOSessions(context.Background(), func(context.Context) (int, error) { return n, err }, log)
+		return logs.String(), got
+	}
+	if out, err := run(0, nil); err != nil || out != "" {
+		t.Errorf("none ended = %q, %v; want no log and no error", out, err)
+	}
+	if out, err := run(3, nil); err != nil || !strings.Contains(out, "sessions=3") {
+		t.Errorf("3 ended = %q, %v; want the count logged", out, err)
+	}
+	boom := errors.New("database down")
+	if _, err := run(0, boom); !errors.Is(err, boom) {
+		t.Errorf("a failed sweep = %v; want it to stop startup", err)
+	}
+}
+
 // testSecretKey is a fixed 32-byte PERGENT_SH_SECRET_KEY, standard base64.
 const testSecretKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 

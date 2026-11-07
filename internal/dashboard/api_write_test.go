@@ -187,6 +187,65 @@ func TestWritesRequireAdmin(t *testing.T) {
 	}
 }
 
+// Switching a repository on is for admins: a maintainer of every repository,
+// and a viewer, get 403 on the picker and on the switch-on, and the review
+// bot is never asked. An SSO admin, who has no platform account, switches one
+// on; the bot's reach is the only check.
+func TestAddRepositoryNeedsAdmin(t *testing.T) {
+	for _, role := range []string{store.RoleMaintainer, store.RoleViewer} {
+		t.Run(role, func(t *testing.T) {
+			e := newEnv(t, nil)
+			e.cat["main"].set("acme/tools")
+			c := e.signInRole(role)
+			wantCode(t, e.get(c, "/api/repositories/available?instance=main"), "GET available", http.StatusForbidden)
+			wantCode(t, e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"acme/tools"}`), "POST", http.StatusForbidden)
+			if _, found := e.storedRepo("main", "acme/tools"); found {
+				t.Error("someone who is not an admin switched a repository on")
+			}
+			if n := e.cat["main"].callCount(); n != 0 {
+				t.Errorf("the bot was asked %d times for someone who is not an admin", n)
+			}
+			if n := e.reconciles.Load(); n != 0 {
+				t.Errorf("ReconcileSoon called %d times", n)
+			}
+		})
+	}
+
+	e := newEnv(t, nil)
+	e.cat["main"].set("acme/tools")
+	boss := e.sessionFor(e.ssoAdmin("boss@example.com"))
+	wantCode(t, e.send(boss, "POST", "/api/repositories", `{"instance":"main","project":"acme/tools"}`), "an SSO admin switching on", http.StatusCreated)
+	if r, found := e.storedRepo("main", "acme/tools"); !found || r.CreatedBy != "boss@example.com" {
+		t.Errorf("stored repository = %+v, %v; want switched on by boss@example.com", r, found)
+	}
+	// Not what the bot doesn't reach.
+	wantCode(t, e.send(boss, "POST", "/api/repositories", `{"instance":"main","project":"acme/hidden"}`), "a repository the bot can't reach", http.StatusNotFound)
+}
+
+// A switch-on and a picker listing name their instance: none is guessed, and an
+// instance that isn't there is 404. Nothing asks the bot first.
+func TestAddRepositoryNeedsInstance(t *testing.T) {
+	e := newEnv(t, nil)
+	e.cat["main"].set("acme/tools")
+	c := e.userOnMain(true)
+	rec := e.send(c, "POST", "/api/repositories", `{"project":"acme/tools"}`)
+	wantCode(t, rec, "POST without an instance", http.StatusBadRequest)
+	if got := errorOf(t, rec); got != msgNameInstance {
+		t.Errorf("error = %q; want %q", got, msgNameInstance)
+	}
+	wantCode(t, e.send(c, "POST", "/api/repositories", `{"instance":"nope","project":"acme/tools"}`), "POST on an unknown instance", http.StatusNotFound)
+	wantCode(t, e.get(c, "/api/repositories/available"), "GET available without an instance", http.StatusBadRequest)
+	wantCode(t, e.get(c, "/api/repositories/available?instance=nope"), "GET available on an unknown instance", http.StatusNotFound)
+	if _, found := e.storedRepo("main", "acme/tools"); found {
+		t.Error("a switch-on without a valid instance stored a repository")
+	}
+	if n := e.cat["main"].callCount(); n != 0 {
+		t.Errorf("the bot was asked %d times before the instance was known", n)
+	}
+	// With the instance it works.
+	wantCode(t, e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"acme/tools"}`), "POST with the instance", http.StatusCreated)
+}
+
 // Review Focus 3: a user calling a write endpoint for a repository their
 // teams don't cover gets 404, the same answer as for one that doesn't exist.
 func TestUserCannotWriteUncoveredRepo(t *testing.T) {
@@ -240,7 +299,7 @@ func TestConfigManagedIs409(t *testing.T) {
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	e.cat["main"].set("acme/widgets", "acme/gadgets")
-	c := e.signInGitLab(true)
+	c := e.userOnMain(true)
 
 	for _, w := range writes("main", "acme/widgets") {
 		rec := e.send(c, w.method, w.target, w.body)
@@ -269,7 +328,7 @@ func TestSettingsValidation(t *testing.T) {
 	})
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	e.skill("style", "x")
-	c := e.signInGitLab(true, "acme/gadgets")
+	c := e.userOnMain(true, "acme/gadgets")
 	target := "/api/repositories/main/acme/gadgets/settings"
 
 	for _, tc := range []struct {
@@ -432,7 +491,7 @@ func TestSettingsValidation(t *testing.T) {
 func TestSettingsMemoryFloor(t *testing.T) {
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
-	c := e.signInGitLab(true, "acme/gadgets")
+	c := e.userOnMain(true, "acme/gadgets")
 	target := "/api/repositories/main/acme/gadgets/settings"
 	wantCode(t, e.send(c, "PUT", target, `{"jobMemory":"255Mi"}`), "255Mi", http.StatusBadRequest)
 	wantCode(t, e.send(c, "PUT", target, `{"jobMemory":"256Mi"}`), "256Mi", http.StatusOK)
@@ -477,7 +536,7 @@ func TestCapsNeedAdmin(t *testing.T) {
 		t.Errorf("after a maintainer's reset row = %+v; want approve cleared, caps 7 and 70 kept", r)
 	}
 
-	admin := e.signInGitLab(true) // the same alice, made an admin
+	admin := e.userOnMain(true) // the same alice, made an admin
 	wantCode(t, e.send(admin, "PUT", target, `{"rerunLimitPerMR":15,"rerunLimitPerRepo":null}`), "admin PUT caps", http.StatusOK)
 	r, _ = e.storedRepo("main", "acme/gadgets")
 	if r.RerunLimitPerMR == nil || *r.RerunLimitPerMR != 15 || r.RerunLimitPerRepo != nil {
@@ -493,7 +552,7 @@ func TestCapsNeedAdmin(t *testing.T) {
 func TestSettingsCapMessages(t *testing.T) {
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
-	c := e.signInGitLab(true, "acme/gadgets")
+	c := e.userOnMain(true, "acme/gadgets")
 	target := "/api/repositories/main/acme/gadgets/settings"
 	for key, body := range map[string]string{"rerunLimitPerMR": `{"rerunLimitPerMR":0}`, "rerunLimitPerRepo": `{"rerunLimitPerRepo":1001}`} {
 		rec := e.send(c, "PUT", target, body)
@@ -510,7 +569,7 @@ func TestSettingsCapMessages(t *testing.T) {
 func TestSwitchOnTriggersReconcile(t *testing.T) {
 	e := newEnv(t, nil)
 	e.cat["main"].set("acme/gadgets")
-	c := e.signInGitLab(true)
+	c := e.userOnMain(true)
 
 	rec := e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"ACME/Gadgets"}`)
 	wantCode(t, rec, "POST", http.StatusCreated)
@@ -560,7 +619,7 @@ func TestSwitchOnTriggersReconcile(t *testing.T) {
 func TestSwitchOnOnlyAvailable(t *testing.T) {
 	e := newEnv(t, nil)
 	e.cat["main"].set("acme/gadgets", "acme/bot-only")
-	c := e.signInGitLab(true)
+	c := e.userOnMain(true)
 
 	unknown := e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"acme/nothing-here"}`)
 	wantCode(t, unknown, "POST unknown", http.StatusNotFound)
@@ -603,7 +662,7 @@ func TestSwitchOnBeyondListingCap(t *testing.T) {
 		all = append(all, fmt.Sprintf("acme/repo-%d", i))
 	}
 	e.cat["main"].set(all...)
-	c := e.signInGitLab(true)
+	c := e.userOnMain(true)
 	got := getJSON[availableBody](e, c, "/api/repositories/available?instance=main")
 	if len(got.Items) != 2 || !got.Truncated {
 		t.Fatalf("available = %v truncated %v; want the first 2, truncated", projectsOf(got.Items), got.Truncated)
@@ -618,7 +677,7 @@ func TestSwitchOnChecksBeforeTellingOnOrOff(t *testing.T) {
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/hidden", nil)
 	e.cat["main"].set("acme/reachable")
-	c := e.signInGitLab(true)
+	c := e.userOnMain(true)
 
 	for _, p := range []string{"acme/hidden", "acme/off"} {
 		before := e.cat["main"].checkCount()
@@ -653,7 +712,7 @@ func TestAvailableListsWhatTheBotReaches(t *testing.T) {
 		e := newEnv(t, nil)
 		e.dashboardRepo("main", "acme/dash", nil)
 		e.cat["main"].set("acme/gadgets", "acme/tools", "acme/widgets", "acme/dash", "Acme/Zeta")
-		c := e.signInGitLab(true)
+		c := e.userOnMain(true)
 
 		got := getJSON[availableBody](e, c, "/api/repositories/available?instance=main")
 		if want := []string{"Acme/Zeta", "acme/gadgets", "acme/tools"}; !slices.Equal(projectsOf(got.Items), want) || got.Truncated {
@@ -680,7 +739,7 @@ func TestAvailableListsWhatTheBotReaches(t *testing.T) {
 	t.Run("github", func(t *testing.T) {
 		e := newEnv(t, nil)
 		e.cat["gh"].set("acme/gadgets", "acme/widgets")
-		c := e.signInGitHub(true)
+		c := e.userOnGH(true)
 
 		got := getJSON[availableBody](e, c, "/api/repositories/available?instance=gh")
 		if want := []string{"acme/gadgets"}; !slices.Equal(projectsOf(got.Items), want) || got.Truncated {
@@ -702,7 +761,7 @@ func TestAvailableListsWhatTheBotReaches(t *testing.T) {
 			all = append(all, fmt.Sprintf("acme/repo-%03d", i))
 		}
 		e.cat["main"].set(all...)
-		c := e.signInGitLab(true)
+		c := e.userOnMain(true)
 		got := getJSON[availableBody](e, c, "/api/repositories/available?instance=main")
 		if len(got.Items) != 500 || !got.Truncated || got.Items[0].Project != "acme/repo-000" {
 			t.Errorf("available has %d items, truncated %v", len(got.Items), got.Truncated)
@@ -711,7 +770,7 @@ func TestAvailableListsWhatTheBotReaches(t *testing.T) {
 
 	t.Run("the bot fails", func(t *testing.T) {
 		e := newEnv(t, nil)
-		c := e.signInGitLab(true)
+		c := e.userOnMain(true)
 		e.cat["main"].setFail(errors.New("gitlab: status 500: SECRET"))
 		rec := e.get(c, "/api/repositories/available?instance=main")
 		wantCode(t, rec, "available while the bot fails", http.StatusBadGateway)
@@ -722,7 +781,7 @@ func TestAvailableListsWhatTheBotReaches(t *testing.T) {
 
 	t.Run("an instance that is not there", func(t *testing.T) {
 		e := newEnv(t, nil)
-		c := e.signInGitLab(true)
+		c := e.userOnMain(true)
 		wantCode(t, e.get(c, "/api/repositories/available?instance=nope"), "unknown instance", http.StatusNotFound)
 		wantCode(t, e.get(c, "/api/repositories/available"), "no instance", http.StatusBadRequest)
 	})
@@ -732,7 +791,7 @@ func TestAvailableListsWhatTheBotReaches(t *testing.T) {
 func TestWriteAnswersHoldNoSecret(t *testing.T) {
 	e := newEnv(t, withSecrets(t))
 	e.cat["main"].set("acme/gadgets")
-	c := e.signInGitLab(true)
+	c := e.userOnMain(true)
 	e.get(c, "/api/repositories/available?instance=main")
 	e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"acme/gadgets"}`)
 	e.send(c, "PUT", "/api/repositories/main/acme/gadgets/settings", `{"jobMemory":"lots"}`)
@@ -757,7 +816,7 @@ func ptr[T any](v T) *T { return &v }
 func TestWriteNeedsCSRF(t *testing.T) {
 	e := newEnv(t, nil)
 	e.cat["main"].set("acme/gadgets")
-	c := e.signInGitLab(true)
+	c := e.userOnMain(true)
 	req := httptest.NewRequest("POST", "/api/repositories", strings.NewReader(`{"instance":"main","project":"acme/gadgets"}`))
 	req.AddCookie(c)
 	rec := httptest.NewRecorder()
@@ -778,7 +837,7 @@ func TestAvailableSearch(t *testing.T) {
 		all = append(all, fmt.Sprintf("acme/repo-%d", i))
 	}
 	e.cat["main"].set(all...)
-	c := e.signInGitLab(true)
+	c := e.userOnMain(true)
 	got := getJSON[availableBody](e, c, "/api/repositories/available?instance=main&search=REPO-9")
 	if !slices.Equal(projectsOf(got.Items), []string{"acme/repo-9"}) || got.Truncated {
 		t.Errorf("search = %v truncated %v", projectsOf(got.Items), got.Truncated)
@@ -798,7 +857,7 @@ func TestAvailableListingBudget(t *testing.T) {
 		all = append(all, fmt.Sprintf("acme/repo-%03d", i))
 	}
 	e.cat["main"].set(all...)
-	c := e.signInGitLab(true)
+	c := e.userOnMain(true)
 	e.d.listBudget = 300 * time.Millisecond
 
 	e.cat["main"].mu.Lock()
@@ -813,6 +872,57 @@ func TestAvailableListingBudget(t *testing.T) {
 	e.clock.advance(catalogTTL)
 	e.cat["main"].setFail(errors.New("down"))
 	wantCode(t, e.get(c, "/api/repositories/available?instance=main&search=repo"), "nothing read", http.StatusBadGateway)
+}
+
+// The whole picker request has its own budget (45 s), below the server's write
+// timeout. The listing runs detached from the request that started it, within
+// listBudget, so a request that waits for a listing already under way is the
+// one the budget cuts: it answers 502 when the budget is gone, and does not
+// wait for the listing, which finishes and is kept for the next request.
+func TestAvailableRequestBudget(t *testing.T) {
+	e := newEnv(t, nil)
+	e.cat["main"].set("acme/a", "acme/b", "acme/c", "acme/d", "acme/e")
+	c := e.userOnMain(true)
+	e.d.availableBudget = 200 * time.Millisecond
+	e.d.listBudget = time.Minute
+	e.cat["main"].mu.Lock()
+	e.cat["main"].slow = 600 * time.Millisecond // 2.4 s for five repositories
+	e.cat["main"].mu.Unlock()
+
+	leader := make(chan *httptest.ResponseRecorder, 1)
+	go func() { leader <- e.get(c, "/api/repositories/available?instance=main") }()
+	deadline := time.Now().Add(5 * time.Second)
+	for e.cat["main"].callCount() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the first listing never started")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	start := time.Now()
+	rec := e.get(c, "/api/repositories/available?instance=main")
+	wantCode(t, rec, "a request that waits for a listing under way", http.StatusBadGateway)
+	if took := time.Since(start); took > 1500*time.Millisecond {
+		t.Errorf("the waiting request took %v; want about the 200ms budget, not the listing's 2.4 s", took)
+	}
+	if got := errorOf(t, rec); got != msgListFailed {
+		t.Errorf("error = %q; want the fixed text", got)
+	}
+
+	// The listing was not cut: it finishes, answers its own request and is kept.
+	first := <-leader
+	wantCode(t, first, "the request that started the listing", http.StatusOK)
+	var body availableBody
+	if err := json.Unmarshal(first.Body.Bytes(), &body); err != nil || len(body.Items) != 5 {
+		t.Errorf("the first request listed %d items (%v); want all 5", len(body.Items), err)
+	}
+	e.d.availableBudget = AvailableBudget
+	if got := getJSON[availableBody](e, c, "/api/repositories/available?instance=main"); len(got.Items) != 5 {
+		t.Errorf("the next request listed %d items; want 5", len(got.Items))
+	}
+	if n := e.cat["main"].callCount(); n != 1 {
+		t.Errorf("the bot listed %d times; want once, kept for the next request", n)
+	}
 }
 
 // The step limit takes a whole number from 5 to 200 or null, and nothing
@@ -891,7 +1001,7 @@ func TestParseDefaultsMaxTurns(t *testing.T) {
 func TestInlineFindingsSetting(t *testing.T) {
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
-	c := e.signInGitLab(true, "acme/gadgets")
+	c := e.userOnMain(true, "acme/gadgets")
 	target := "/api/repositories/main/acme/gadgets/settings"
 
 	rec := e.send(c, "PUT", target, `{"inlineFindings":false}`)
@@ -940,7 +1050,7 @@ func TestInlineFindingsSetting(t *testing.T) {
 func TestCommandsAuthorAndMaintainersOnlySetting(t *testing.T) {
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
-	c := e.signInGitLab(true, "acme/gadgets")
+	c := e.userOnMain(true, "acme/gadgets")
 	target := "/api/repositories/main/acme/gadgets/settings"
 
 	rec := e.send(c, "PUT", target, `{"commandsAuthorAndMaintainersOnly":false}`)
@@ -992,7 +1102,7 @@ func TestCommandsAuthorAndMaintainersOnlySetting(t *testing.T) {
 func TestIncrementalReviewsSetting(t *testing.T) {
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
-	c := e.signInGitLab(true, "acme/gadgets")
+	c := e.userOnMain(true, "acme/gadgets")
 	target := "/api/repositories/main/acme/gadgets/settings"
 
 	rec := e.send(c, "PUT", target, `{"incrementalReviews":false}`)
@@ -1044,7 +1154,7 @@ func TestIncrementalReviewsSetting(t *testing.T) {
 func TestLearnFromDismissalsSetting(t *testing.T) {
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
-	c := e.signInGitLab(true, "acme/gadgets")
+	c := e.userOnMain(true, "acme/gadgets")
 	target := "/api/repositories/main/acme/gadgets/settings"
 
 	rec := e.send(c, "PUT", target, `{"learnFromDismissals":false}`)
@@ -1098,7 +1208,7 @@ func TestLearnFromDismissalsSetting(t *testing.T) {
 func TestQuietReviewsSetting(t *testing.T) {
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
-	c := e.signInGitLab(true, "acme/gadgets")
+	c := e.userOnMain(true, "acme/gadgets")
 	target := "/api/repositories/main/acme/gadgets/settings"
 
 	rec := e.send(c, "PUT", target, `{"quietReviews":true}`)
@@ -1166,7 +1276,7 @@ func TestQuietReviewsSetting(t *testing.T) {
 	// A repository the config lists is read-only.
 	k := newEnv(t, nil)
 	k.cat["main"].set("acme/widgets")
-	cfg := k.signInGitLab(true, "acme/widgets")
+	cfg := k.userOnMain(true, "acme/widgets")
 	wantCode(t, k.send(cfg, "PUT", "/api/repositories/main/acme/widgets/settings", `{"quietReviews":true}`), "PUT on a config repository", http.StatusConflict)
 	if _, found := k.storedRepo("main", "acme/widgets"); found {
 		t.Errorf("a dashboard row was made for the config repository")
@@ -1183,7 +1293,7 @@ func TestQuietReviewsSetting(t *testing.T) {
 func TestPutCommentLayout(t *testing.T) {
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
-	c := e.signInGitLab(true, "acme/gadgets")
+	c := e.userOnMain(true, "acme/gadgets")
 	target := "/api/repositories/main/acme/gadgets/settings"
 	asText := func(v any) string {
 		b, _ := json.Marshal(v)
@@ -1274,7 +1384,7 @@ func TestPutCommentLayout(t *testing.T) {
 	// A repository the config lists is read-only.
 	k := newEnv(t, nil)
 	k.cat["main"].set("acme/widgets")
-	cfg := k.signInGitLab(true, "acme/widgets")
+	cfg := k.userOnMain(true, "acme/widgets")
 	wantCode(t, k.send(cfg, "PUT", "/api/repositories/main/acme/widgets/settings", `{"commentLayout":["findings:open"]}`), "PUT on a config repository", http.StatusConflict)
 	if _, found := k.storedRepo("main", "acme/widgets"); found {
 		t.Errorf("a dashboard row was made for the config repository")

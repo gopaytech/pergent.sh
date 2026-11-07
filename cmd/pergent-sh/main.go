@@ -202,6 +202,11 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	if _, err := readLLMKey(cfg); err != nil {
 		return err
 	}
+	// So is the OIDC client secret of a dashboard.sign_in in the file: with the
+	// variable unset every sign-in would fail at the token endpoint.
+	if err := checkSignInSecret(cfg); err != nil {
+		return err
+	}
 
 	st, err := store.Open(ctx, dbURL)
 	if err != nil {
@@ -300,6 +305,14 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	})
 	if err != nil {
 		return err
+	}
+	// A change of sign-in in the config file, or a rollback, shows only now:
+	// end the OIDC and JWT sessions the settings in force no longer vouch for
+	// before anything is served.
+	if dash != nil {
+		if err := endStaleSSOSessions(ctx, dash.EndStaleSSOSessions, log); err != nil {
+			return err
+		}
 	}
 	// Connecting reaches GitLab and GitHub: a config instance that doesn't
 	// work stops startup; one added in the dashboard is recorded instead.
@@ -576,6 +589,35 @@ func readLLMKey(cfg *config.Config) (string, error) {
 		return "", fmt.Errorf("llm.api_key_env: %w", err)
 	}
 	return key, nil
+}
+
+// checkSignInSecret returns an error when the file sets OIDC sign-in and the
+// variable named by dashboard.sign_in.client_secret_env is unset or empty. The
+// secret itself is not kept: the dashboard reads it when a sign-in needs it.
+func checkSignInSecret(cfg *config.Config) error {
+	si := cfg.Dashboard.SignIn
+	if si.Mode != config.SignInOIDC {
+		return nil
+	}
+	if _, err := requireEnv(si.ClientSecretEnv); err != nil {
+		return fmt.Errorf("dashboard.sign_in.client_secret_env: %w", err)
+	}
+	return nil
+}
+
+// endStaleSSOSessions ends the sessions the sign-in settings in force no longer
+// vouch for (end is dashboard.Dashboard.EndStaleSSOSessions) and logs how many.
+// A failure stops startup: a session that should have ended must not be left to
+// work because a query failed.
+func endStaleSSOSessions(ctx context.Context, end func(context.Context) (int, error), log *slog.Logger) error {
+	n, err := end(ctx)
+	if err != nil {
+		return fmt.Errorf("ending the sign-in sessions the settings no longer allow: %w", err)
+	}
+	if n > 0 {
+		log.Info("ended sign-in sessions the sign-in settings no longer allow", "sessions", n)
+	}
+	return nil
 }
 
 // requireEnv reads an environment variable that must be set and not empty.

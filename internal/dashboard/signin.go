@@ -157,6 +157,21 @@ func (d *Dashboard) readSignIn(ctx context.Context) (signIn, error) {
 	return s, nil
 }
 
+// EndStaleSSOSessions ends the OIDC and JWT sessions that the sign-in settings
+// in force, from the config file or the dashboard, no longer vouch for: a
+// session whose sign-in is not the mode in force, or whose issuer is not the
+// issuer in force. Changing the settings in the dashboard ends them already; a
+// change in the config file, or a rollback, only shows at the next start, so
+// the server calls this once before it serves. A local admin's session is never
+// touched. It returns how many sessions it ended.
+func (d *Dashboard) EndStaleSSOSessions(ctx context.Context) (int, error) {
+	s, err := d.signInSettings(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return d.Store.DeleteStaleSSOSessions(ctx, s.mode, s.issuer)
+}
+
 // ssoView is the sign-in page's button.
 type ssoView struct {
 	Label string `json:"label"`
@@ -359,8 +374,19 @@ func quoteShort(s string) string {
 // JWKS and answers whether that worked, and nothing else. The body is
 // optional; what it leaves out is taken from the settings in force.
 // Nothing the other side sent comes back: no status, no error text, no
-// document, no address. The answer is {"ok": true|false}.
+// document, no address. The answer is {"ok": true|false}. A test that gets as
+// far as fetching is written to the audit log with the actor and the mode.
 func (d *Dashboard) testSignIn(w http.ResponseWriter, r *http.Request) {
+	if mode := d.signInTest(w, r); mode != "" {
+		// Who ran it and the mode, nothing the other side said: the button
+		// makes the server fetch an address an admin typed.
+		d.audit(r.Context(), session(r), "sign_in_tested", "", "", "mode="+mode)
+	}
+}
+
+// signInTest answers the test button and returns the mode it tested, or ""
+// when it refused the request.
+func (d *Dashboard) signInTest(w http.ResponseWriter, r *http.Request) string {
 	ctx := r.Context()
 	var in struct {
 		Mode    string `json:"mode"`
@@ -370,20 +396,20 @@ func (d *Dashboard) testSignIn(w http.ResponseWriter, r *http.Request) {
 	data, err := io.ReadAll(io.LimitReader(r.Body, maxTestFieldBytes*4))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, msgBadTestBody)
-		return
+		return ""
 	}
 	if len(bytes.TrimSpace(data)) > 0 {
 		dec := json.NewDecoder(bytes.NewReader(data))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&in); err != nil {
 			writeError(w, http.StatusBadRequest, msgBadTestBody)
-			return
+			return ""
 		}
 	}
 	s, err := d.signInSettings(ctx)
 	if err != nil {
 		d.failed(w, r, "reading the sign-in settings", err)
-		return
+		return ""
 	}
 	mode, issuer, jwks := strings.TrimSpace(in.Mode), strings.TrimSpace(in.Issuer), strings.TrimSpace(in.JWKSURL)
 	if mode == "" {
@@ -397,7 +423,7 @@ func (d *Dashboard) testSignIn(w http.ResponseWriter, r *http.Request) {
 	}
 	if mode != config.SignInOIDC && mode != config.SignInJWT {
 		writeError(w, http.StatusBadRequest, msgNothingToTest)
-		return
+		return ""
 	}
 	target := issuer
 	if mode == config.SignInJWT {
@@ -405,11 +431,11 @@ func (d *Dashboard) testSignIn(w http.ResponseWriter, r *http.Request) {
 	}
 	if target == "" {
 		writeError(w, http.StatusBadRequest, msgNothingToTest)
-		return
+		return ""
 	}
 	if problems := (config.SignIn{Issuer: issuer, JWKSURL: jwks}).Problems(false); len(problems) > 0 {
 		writeError(w, http.StatusBadRequest, "the issuer and the JWKS URL must be https URLs")
-		return
+		return ""
 	}
 	ok := false
 	if mode == config.SignInOIDC {
@@ -418,6 +444,7 @@ func (d *Dashboard) testSignIn(w http.ResponseWriter, r *http.Request) {
 		ok = d.jwksWorks(ctx, jwks)
 	}
 	writeJSON(w, http.StatusOK, SignInTestView{OK: ok})
+	return mode
 }
 
 // fetchSmall GETs rawURL with the identity-provider client and returns the

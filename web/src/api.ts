@@ -418,12 +418,10 @@ export type SkillDetail = LibrarySkill & { content: string; versions: SkillVersi
 export type SkillVersionDetail = SkillVersion & { content: string };
 
 // SkillInUse is the body of the 409 a delete gets while repositories or the
-// default list name the skill. hidden counts the repositories the caller
-// can't see.
+// default list name the skill.
 export type SkillInUse = {
   error: string;
   repositories: { instance: string; project: string }[];
-  hidden: number;
   inDefaults: boolean;
 };
 

@@ -553,15 +553,16 @@ func TestOIDCRefusesUnverifiedEmail(t *testing.T) {
 func TestOIDCRefusesMissingEmail(t *testing.T) {
 	o := newOIDCHarness(t, nil)
 	for name, edit := range map[string]func(c map[string]any){
-		"absent":              func(c map[string]any) { delete(c, "email") },
-		"empty":               func(c map[string]any) { c["email"] = "" },
-		"not a string":        func(c map[string]any) { c["email"] = 42 },
-		"two addresses":       func(c map[string]any) { c["email"] = "a@example.com, b@example.com" },
-		"a name and address":  func(c map[string]any) { c["email"] = "Alice <alice@example.com>" },
-		"two at signs":        func(c map[string]any) { c["email"] = "alice@example.com@evil.com" },
-		"no at sign":          func(c map[string]any) { c["email"] = "alice" },
-		"a space":             func(c map[string]any) { c["email"] = "alice @example.com" },
-		"a zero-width joiner": func(c map[string]any) { c["email"] = "ali\u200dce@example.com" },
+		"absent":                 func(c map[string]any) { delete(c, "email") },
+		"empty":                  func(c map[string]any) { c["email"] = "" },
+		"not a string":           func(c map[string]any) { c["email"] = 42 },
+		"two addresses":          func(c map[string]any) { c["email"] = "a@example.com, b@example.com" },
+		"a name and address":     func(c map[string]any) { c["email"] = "Alice <alice@example.com>" },
+		"two at signs":           func(c map[string]any) { c["email"] = "alice@example.com@evil.com" },
+		"no at sign":             func(c map[string]any) { c["email"] = "alice" },
+		"a space":                func(c map[string]any) { c["email"] = "alice @example.com" },
+		"a zero-width joiner":    func(c map[string]any) { c["email"] = "ali\u200dce@example.com" },
+		"a dot after the domain": func(c map[string]any) { c["email"] = "alice@example.com." },
 	} {
 		t.Run(name, func(t *testing.T) {
 			o.refusedCallback(func(f *fakeIssuer) { f.claims = edit }, signInErrFailed)
@@ -709,6 +710,8 @@ func TestAllowlist(t *testing.T) {
 		{"empty email", list, "", false, false},
 		{"empty email, added", empty, "", true, true}, // the caller never asks with an empty email
 		{"trailing at sign", list, "alice@", false, false},
+		{"a dot after the domain", list, "alice@example.com.", false, false},
+		{"upper-case domain", list, "alice@EXAMPLE.COM", false, true},
 	}
 	for _, tt := range tests {
 		if got := tt.s.allowed(tt.email, map[string]any{}, tt.added); got != tt.want {
@@ -891,7 +894,7 @@ func TestTestButtonSaysOnlyWhetherItWorked(t *testing.T) {
 	o := newOIDCHarness(t, nil)
 	post := func(body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
-		o.d.testSignIn(rec, httptest.NewRequest("POST", "/api/admin/sign-in/test", strings.NewReader(body)))
+		o.d.signInTest(rec, httptest.NewRequest("POST", "/api/admin/sign-in/test", strings.NewReader(body)))
 		return rec
 	}
 	exactly := func(what string, rec *httptest.ResponseRecorder, code int, ok bool) {
@@ -958,7 +961,7 @@ func TestTestButtonWithNothingSet(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	d.testSignIn(rec, httptest.NewRequest("POST", "/api/admin/sign-in/test", nil))
+	d.signInTest(rec, httptest.NewRequest("POST", "/api/admin/sign-in/test", nil))
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("test with nothing set = %d %s; want 400", rec.Code, rec.Body)
 	}
@@ -1517,6 +1520,105 @@ func TestIssuerChangeEndsSSOSessions(t *testing.T) {
 	}
 }
 
+// ssoSession stores a session of the account that began with signIn (OIDC or
+// a JWT) vouched for by issuer, and returns its cookie.
+func (e *env) ssoSession(account int64, signIn, issuer string) *http.Cookie {
+	e.t.Helper()
+	id := randomString(sessionIDBytes)
+	err := e.st.CreateSession(ctx, store.Session{IDHash: hashID(id), AccountID: account, Username: "x",
+		SignIn: signIn, Issuer: issuer, CSRF: randomString(32), LastSeenAt: e.clock.now(), CreatedAt: e.clock.now()})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return &http.Cookie{Name: SessionCookieName, Value: id}
+}
+
+// A change in the config file, or a rollback, ends no session by itself: at
+// the start the server ends every OIDC and JWT session that the settings in
+// force (the config file's, else the dashboard's) don't vouch for. A local
+// admin's session is never touched.
+func TestStartupEndsSessionsTheSettingsNoLongerVouchFor(t *testing.T) {
+	const issuer, other = "https://idp.example.com", "https://old-idp.example.com"
+	kept := func(t *testing.T, e *env, c *http.Cookie, want bool, what string) {
+		t.Helper()
+		if _, found := e.storedSession(c); found != want {
+			t.Errorf("%s: session present = %v, want %v", what, found, want)
+		}
+	}
+
+	t.Run("the config file sets OIDC", func(t *testing.T) {
+		t.Setenv(testSecretEnv, testClientSecret)
+		e := newEnv(t, func(cfg *config.Config) {
+			cfg.Dashboard.SignIn = config.SignIn{Mode: config.SignInOIDC, Issuer: issuer, ClientID: testClientID,
+				ClientSecretEnv: testSecretEnv, AllowedDomains: []string{"example.com"}}
+		})
+		user := e.sso("carol@example.com")
+		local := e.operator()
+		same := e.ssoSession(user, store.SignInOIDC, issuer)
+		oldIssuer := e.ssoSession(user, store.SignInOIDC, other)
+		wrongMode := e.ssoSession(user, store.SignInJWT, issuer)
+		// The dashboard's own saved settings are not the ones in force.
+		if err := e.st.PutSignInSettings(ctx, store.SignInSettings{Mode: store.SignInModeJWT, Issuer: other, UpdatedAt: e.clock.now()}); err != nil {
+			t.Fatal(err)
+		}
+
+		n, err := e.d.EndStaleSSOSessions(ctx)
+		if err != nil || n != 2 {
+			t.Fatalf("EndStaleSSOSessions = %d, %v; want 2", n, err)
+		}
+		kept(t, e, same, true, "oidc, the issuer in force")
+		kept(t, e, oldIssuer, false, "oidc, another issuer")
+		kept(t, e, wrongMode, false, "jwt")
+		kept(t, e, local, true, "the local admin")
+		if code, _ := e.me(same); code != http.StatusOK {
+			t.Errorf("the kept session = %d; want it to work", code)
+		}
+	})
+
+	t.Run("the dashboard switched to JWT", func(t *testing.T) {
+		e := newEnv(t, nil)
+		user := e.sso("carol@example.com")
+		local := e.operator()
+		// An OIDC session of the same issuer: Require doesn't check a mode for
+		// it, so only the sweep can end it.
+		oidcSame := e.ssoSession(user, store.SignInOIDC, issuer)
+		jwtSame := e.ssoSession(user, store.SignInJWT, issuer)
+		jwtOld := e.ssoSession(user, store.SignInJWT, other)
+		if err := e.st.PutSignInSettings(ctx, store.SignInSettings{Mode: store.SignInModeJWT, Issuer: issuer,
+			Audience: "a", Header: "X-A", JWKSURL: issuer + "/jwks", UpdatedAt: e.clock.now()}); err != nil {
+			t.Fatal(err)
+		}
+
+		n, err := e.d.EndStaleSSOSessions(ctx)
+		if err != nil || n != 2 {
+			t.Fatalf("EndStaleSSOSessions = %d, %v; want 2", n, err)
+		}
+		kept(t, e, oidcSame, false, "oidc after a switch to jwt")
+		kept(t, e, jwtOld, false, "jwt, another issuer")
+		kept(t, e, jwtSame, true, "jwt, the issuer in force")
+		kept(t, e, local, true, "the local admin")
+	})
+
+	t.Run("no sign-in is set", func(t *testing.T) {
+		e := newEnv(t, nil)
+		user := e.sso("carol@example.com")
+		local := e.operator()
+		a := e.ssoSession(user, store.SignInOIDC, issuer)
+		b := e.ssoSession(user, store.SignInJWT, issuer)
+		n, err := e.d.EndStaleSSOSessions(ctx)
+		if err != nil || n != 2 {
+			t.Fatalf("EndStaleSSOSessions = %d, %v; want 2", n, err)
+		}
+		kept(t, e, a, false, "oidc")
+		kept(t, e, b, false, "jwt")
+		kept(t, e, local, true, "the local admin")
+		// And with nothing left to end, nothing is.
+		if n, err := e.d.EndStaleSSOSessions(ctx); err != nil || n != 0 {
+			t.Errorf("EndStaleSSOSessions again = %d, %v; want 0", n, err)
+		}
+	})
+}
+
 // What the config file sets wins, and the dashboard cannot change it.
 func TestConfigSignInWinsOverTheDashboard(t *testing.T) {
 	f := newFakeIssuer(t)
@@ -1584,5 +1686,31 @@ func TestTestButtonThroughTheAPI(t *testing.T) {
 	rec = e.sendJSON(c, "POST", "/api/admin/sign-in/test", map[string]any{"mode": "oidc", "issuer": f.url()})
 	if rec.Code != 200 || rec.Body.String() != "{\"ok\":false}\n" {
 		t.Errorf("test of a dead provider = %d %q", rec.Code, rec.Body)
+	}
+
+	// Each test that got as far as fetching is audited: who, and the mode,
+	// never the address or the answer. A refused request is not.
+	rec = e.sendJSON(c, "POST", "/api/admin/sign-in/test", map[string]any{"mode": "jwt", "jwksURL": "http://idp.example.com/keys"})
+	wantCode(t, rec, "an http key set", http.StatusBadRequest)
+	got := e.auditOf("sign_in_tested")
+	if len(got) != 2 {
+		t.Fatalf("sign_in_tested entries = %+v; want one for each of the two tests", got)
+	}
+	for _, a := range got {
+		if a.Actor != "ops (password)" || a.Detail != "mode=oidc" || a.Instance != "" || a.Project != "" {
+			t.Errorf("entry = %+v; want ops (password), mode=oidc and nothing else", a)
+		}
+		if strings.Contains(a.Detail, f.url()) || strings.Contains(a.Detail, "false") {
+			t.Errorf("entry %+v holds the address or the answer", a)
+		}
+	}
+
+	// Someone who is not an admin runs nothing and leaves no entry.
+	rec = e.sendJSON(e.aliceSession(), "POST", "/api/admin/sign-in/test", map[string]any{"mode": "oidc", "issuer": "https://idp.example.com"})
+	if rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
+		t.Errorf("test as a user = %d; want 403 or 404", rec.Code)
+	}
+	if n := len(e.auditOf("sign_in_tested")); n != 2 {
+		t.Errorf("sign_in_tested entries = %d after a user's refused test; want 2", n)
 	}
 }

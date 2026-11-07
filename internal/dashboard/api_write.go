@@ -28,17 +28,16 @@ import (
 const (
 	// maxAvailable is the most repositories the picker lists.
 	maxAvailable = 500
-	// listLimit is the most repositories read from each side (the admin's
-	// and the review bot's or App's) for the picker.
+	// listLimit is the most repositories read from the review bot or App
+	// for the picker.
 	listLimit = 5000
-	// AvailableBudget bounds the whole GET /api/repositories/available,
-	// renewing the user's token included, so that even a truncated answer
-	// is written well before the server's 60 s WriteTimeout and the 60 s
-	// proxy timeout of an ingress in front of it.
+	// AvailableBudget bounds the whole GET /api/repositories/available, so
+	// that even a truncated answer is written well before the server's 60 s
+	// WriteTimeout and the 60 s proxy timeout in front of it.
 	AvailableBudget = 45 * time.Second
-	// listBudget bounds each side's listing for the picker, within
+	// listBudget bounds the bot's listing for the picker, within
 	// AvailableBudget; each request of it has platformTimeout. What was read
-	// when either runs out is used.
+	// when it runs out is used.
 	listBudget = 20 * time.Second
 	// maxSearch is the longest picker search.
 	maxSearch = 100

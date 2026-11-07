@@ -566,12 +566,11 @@ type SkillWrittenView struct {
 }
 
 // SkillInUseView is the 409 of a delete of a skill that is in use (D8):
-// Repositories are the ones the caller can see that name it, Hidden counts
-// the others, InDefaults says the default list names it.
+// Repositories are the ones that name it, InDefaults says the default list
+// names it.
 type SkillInUseView struct {
 	Error        string              `json:"error"`
 	Repositories []SkillUserRepoView `json:"repositories"`
-	Hidden       int                 `json:"hidden"`
 	InDefaults   bool                `json:"inDefaults"`
 }
 

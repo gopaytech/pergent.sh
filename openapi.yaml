@@ -3736,16 +3736,13 @@ components:
     SkillInUseView:
       description: The 409 of a delete of a skill that is in use.
       type: object
-      required: [error, repositories, hidden, inDefaults]
+      required: [error, repositories, inDefaults]
       properties:
         error: {type: string}
         repositories:
           type: array
           items: {$ref: '#/components/schemas/SkillUserRepoView'}
-          description: The ones the caller can see that name it.
-        hidden:
-          type: integer
-          description: How many others name it.
+          description: The repositories that name it.
         inDefaults:
           type: boolean
           description: The default list names it.
@@ -4031,7 +4028,7 @@ components:
           description: Nothing else works until the password is changed.
         waitingUsers:
           type: integer
-          description: Always 0. Kept for the pages until they stop reading it.
+          description: For an admin, how many users are waiting for a team (SSO accounts with role user that signed in and are on no team); 0 for anyone else.
         csrfToken:
           type: string
           description: The token writes send in X-CSRF-Token.

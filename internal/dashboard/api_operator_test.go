@@ -665,7 +665,7 @@ func TestOnlyAdminsTouchInstances(t *testing.T) {
 	e := newEnv(t, nil)
 	op := e.operator()
 	e.addLab(op)
-	viewer := e.signInGitLab(false, "acme/widgets")
+	viewer := e.userOnMain(false, "acme/widgets")
 	waiting := e.sessionFor(e.sso("waiting@example.com"))
 	boss := e.sessionFor(e.ssoAdmin("boss@example.com"))
 
@@ -963,7 +963,7 @@ func TestLLMConfigWins(t *testing.T) {
 		t.Errorf("the LLM was stored despite the config's: %+v", rows)
 	}
 	// A platform admin sees it too, not editable either.
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 	if v := getJSON[LLMAdminView](e, admin, "/api/admin/llm"); v.Editable || v.Model != "from-config" {
 		t.Errorf("platform admin's view = %+v", v)
 	}
@@ -993,7 +993,7 @@ func sameDefaults(a, b DefaultsView) bool {
 // the form can show the first and keep the rest following it.
 func TestDefaultsViewConfigAndPinned(t *testing.T) {
 	e := newEnv(t, func(c *config.Config) { c.Jobs.Timeout = 30 * time.Minute })
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 
 	// Nothing saved: the effective values are the config's, nothing is pinned.
 	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")
@@ -1030,7 +1030,7 @@ func TestDefaultsViewConfigAndPinned(t *testing.T) {
 // it back to the built-in one.
 func TestDefaultsMaxTurns(t *testing.T) {
 	e := newEnv(t, nil)
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 
 	v := decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"maxTurns": 80}), "PUT", http.StatusOK)
 	if v.MaxTurns != 80 {
@@ -1061,7 +1061,7 @@ func TestDefaultsMaxTurns(t *testing.T) {
 // switched on in the dashboard, not to the config's.
 func TestDefaults(t *testing.T) {
 	e := newEnv(t, nil)
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")
 	if want := (DefaultsView{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, LearnFromDismissals: true, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40, RerunLimitPerMR: 10, RerunLimitPerRepo: 50}); !sameDefaults(v, want) {
 		t.Errorf("defaults = %+v, want %+v", v, want)
@@ -1144,7 +1144,7 @@ func TestDefaults(t *testing.T) {
 	}
 
 	// Maintainers and viewers can't change them.
-	viewer := e.signInGitHub(false, "acme/widgets")
+	viewer := e.userOnGH(false, "acme/widgets")
 	if rec := e.send(viewer, "PUT", "/api/admin/defaults", `{}`); rec.Code != http.StatusForbidden {
 		t.Errorf("PUT as a viewer = %d, want 403", rec.Code)
 	}
@@ -1344,7 +1344,7 @@ func TestPutLLMSavedButNotReloaded(t *testing.T) {
 func TestDefaultsRefusedToNonAdmins(t *testing.T) {
 	e := newEnv(t, nil)
 	for name, c := range map[string]*http.Cookie{
-		"viewer":     e.signInGitHub(false, "acme/widgets"),
+		"viewer":     e.userOnGH(false, "acme/widgets"),
 		"waiting":    e.sessionFor(e.sso("waiting@example.com")),
 		"no session": nil,
 	} {
@@ -1407,7 +1407,7 @@ func TestConnectFailureAfterCheckRecordsAttention(t *testing.T) {
 // out of a body it is the built-in one (on), and a dashboard repository takes it.
 func TestDefaultsInlineFindings(t *testing.T) {
 	e := newEnv(t, nil)
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 
 	v := decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"inlineFindings": false}), "PUT", http.StatusOK)
 	if v.InlineFindings {
@@ -1442,7 +1442,7 @@ func TestDefaultsInlineFindings(t *testing.T) {
 // one (on), and a dashboard repository takes it.
 func TestDefaultsCommandsAuthorAndMaintainersOnly(t *testing.T) {
 	e := newEnv(t, nil)
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 
 	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")
 	if !v.CommandsAuthorAndMaintainersOnly || !v.Config.CommandsAuthorAndMaintainersOnly || v.Pinned["commandsAuthorAndMaintainersOnly"] {
@@ -1478,7 +1478,7 @@ func TestDefaultsCommandsAuthorAndMaintainersOnly(t *testing.T) {
 // one (on), and a dashboard repository takes it.
 func TestDefaultsIncrementalReviews(t *testing.T) {
 	e := newEnv(t, nil)
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 
 	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")
 	if !v.IncrementalReviews || !v.Config.IncrementalReviews || v.Pinned["incrementalReviews"] {
@@ -1514,7 +1514,7 @@ func TestDefaultsIncrementalReviews(t *testing.T) {
 // one (on), and a dashboard repository takes it.
 func TestDefaultsLearnFromDismissals(t *testing.T) {
 	e := newEnv(t, nil)
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 
 	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")
 	if !v.LearnFromDismissals || !v.Config.LearnFromDismissals || v.Pinned["learnFromDismissals"] {
@@ -1550,7 +1550,7 @@ func TestDefaultsLearnFromDismissals(t *testing.T) {
 // of a body it is the built-in one (off), and a dashboard repository takes it.
 func TestDefaultsQuietReviews(t *testing.T) {
 	e := newEnv(t, nil)
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 
 	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")
 	if v.QuietReviews || v.Config.QuietReviews || v.Pinned["quietReviews"] {
@@ -1607,7 +1607,7 @@ func TestDefaultsQuietReviews(t *testing.T) {
 // repository does not.
 func TestPutDefaultsCommentLayout(t *testing.T) {
 	e := newEnv(t, nil)
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 	builtIn := []string{"summary:open", "findings:collapsed", "dismissed:collapsed", "checks:open", "files:collapsed"}
 
 	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")

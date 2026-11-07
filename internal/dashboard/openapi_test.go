@@ -906,7 +906,7 @@ var openAPIUntypedSchemas = map[string]string{
 	"UpdateInstanceRequest":     "struct in Dashboard.updateInstance",
 	"PutLLMRequest":             "struct in Dashboard.putLLM",
 	"PutSignInRequest":          "putSignInBody, decoded in Dashboard.putSignIn",
-	"TestSignInRequest":         "struct in Dashboard.testSignIn",
+	"TestSignInRequest":         "struct in Dashboard.signInTest",
 	"CreateSkillRequest":        "struct in Dashboard.createSkill",
 	"UpdateSkillRequest":        "struct in Dashboard.updateSkill",
 	"CopySkillRequest":          "struct in Dashboard.copySkill",

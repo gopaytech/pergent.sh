@@ -118,6 +118,58 @@ func TestUserSeesOnlyTeamRepos(t *testing.T) {
 	}
 }
 
+// /api/me tells an admin how many users wait for a team, the ones the Users
+// page marks waiting: SSO accounts with role user that signed in and are on no
+// team. A local admin, an SSO admin, an invitation that never signed in, an old
+// platform account and a user on a team don't count, and nobody else is told.
+func TestMeCountsUsersWaitingForAnAdmin(t *testing.T) {
+	e := newEnv(t, nil)
+	local := e.operator()
+	boss := e.sessionFor(e.ssoAdmin("boss@example.com"))
+	e.platformAccount("main", 9, "old")
+	if _, err := e.st.AddSSOAccount(ctx, "invited@example.com", e.clock.now()); err != nil {
+		t.Fatal(err)
+	}
+	e.sso("zed@example.com")
+	alice := e.aliceSession()
+	if _, me := e.me(local); me.WaitingUsers != 2 {
+		t.Fatalf("waitingUsers for a local admin = %d; want 2 (alice and zed)", me.WaitingUsers)
+	}
+	if _, me := e.me(boss); me.WaitingUsers != 2 {
+		t.Errorf("waitingUsers for an SSO admin = %d; want 2", me.WaitingUsers)
+	}
+	// It is what the Users page marks.
+	marked := 0
+	for _, u := range getJSON[[]UserView](e, local, "/api/users") {
+		if u.Waiting {
+			marked++
+		}
+	}
+	if marked != 2 {
+		t.Errorf("the Users page marks %d waiting; want the same 2", marked)
+	}
+	if _, me := e.me(alice); me.WaitingUsers != 0 || !me.Waiting {
+		t.Errorf("/api/me for a waiting user = %+v; want waitingUsers 0", me)
+	}
+
+	e.team("devs", viewerMembers(e.alice()))
+	if _, me := e.me(local); me.WaitingUsers != 1 {
+		t.Errorf("waitingUsers with alice on a team = %d; want 1", me.WaitingUsers)
+	}
+	e.sso("invited@example.com") // the invitation signs in
+	if _, me := e.me(local); me.WaitingUsers != 2 {
+		t.Errorf("waitingUsers after the invitation signed in = %d; want 2", me.WaitingUsers)
+	}
+	e.team("more", viewerMembers(e.sso("zed@example.com"), e.sso("invited@example.com")))
+	if _, me := e.me(local); me.WaitingUsers != 0 {
+		t.Errorf("waitingUsers with everyone placed = %d; want 0", me.WaitingUsers)
+	}
+	// A team member's own answer is 0, whatever the others do.
+	if _, me := e.me(alice); me.WaitingUsers != 0 || me.Waiting {
+		t.Errorf("/api/me for a member = %+v", me)
+	}
+}
+
 // A user signing in for the first time is on no team: /api/me says they
 // wait, everything else is 403 "waiting", and nothing asks the review bot or
 // the platform about a repository.
@@ -322,13 +374,23 @@ func TestPlatformSessionGetsNothing(t *testing.T) {
 	// A membership row from before the upgrade (the store refuses new ones).
 	team := e.team("old", nil, store.TeamRepo{Instance: "main"})
 	e.exec(`INSERT INTO team_members (team_id, account_id, role) VALUES ($1, $2, 'viewer')`, team, old.ID)
-	id := randomString(sessionIDBytes)
-	err = e.st.CreateSession(ctx, store.Session{IDHash: hashID(id), AccountID: old.ID, Platform: config.PlatformGitLab,
-		Instance: "main", UserID: 9, Username: "alice", CSRF: "csrf-token-example", LastSeenAt: e.clock.now(), CreatedAt: e.clock.now()})
-	if err != nil {
-		t.Fatal(err)
+	// platformSession stores a session of the old account, as a pod of the
+	// previous release makes it, and returns its cookie.
+	platformSession := func(csrf string) *http.Cookie {
+		t.Helper()
+		id := randomString(sessionIDBytes)
+		err := e.st.CreateSession(ctx, store.Session{IDHash: hashID(id), AccountID: old.ID, Platform: config.PlatformGitLab,
+			Instance: "main", UserID: 9, Username: "alice", CSRF: csrf, LastSeenAt: e.clock.now(), CreatedAt: e.clock.now()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &http.Cookie{Name: SessionCookieName, Value: id}
 	}
-	c := &http.Cookie{Name: SessionCookieName, Value: id}
+	c := platformSession("csrf-token-example")
+	// A second session for the write at the end: the first request ends the
+	// first one, and a write sent with its cookie would be refused for having
+	// no session, which proves nothing about the account.
+	second := platformSession("csrf-token-second")
 	if se, found := e.storedSession(c); !found || se.SignIn != store.SignInPassword {
 		t.Fatalf("stored session = %+v, %v; want one that reads as a password session", se, found)
 	}
@@ -341,14 +403,25 @@ func TestPlatformSessionGetsNothing(t *testing.T) {
 	if _, found := e.storedSession(c); found {
 		t.Error("the session of a platform account was kept")
 	}
-	// A write is refused too, with or without the CSRF token.
+	// A write with a live session of the same account, and the right CSRF
+	// token, is refused because of the account, and the session ends.
+	if _, found := e.storedSession(second); !found {
+		t.Fatal("the second session is gone before it was used")
+	}
 	req := httptest.NewRequest("POST", "/api/teams", strings.NewReader(`{"name":"x"}`))
-	req.AddCookie(c)
-	req.Header.Set(CSRFHeader, "csrf-token-example")
+	req.AddCookie(second)
+	req.Header.Set(CSRFHeader, "csrf-token-second")
 	rec := httptest.NewRecorder()
 	e.h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("POST /api/teams = %d %s; want 401", rec.Code, rec.Body)
+	}
+	if _, found := e.storedSession(second); found {
+		t.Error("the write did not end the second session")
+	}
+	var teams int
+	if err := e.db.QueryRow(ctx, `SELECT count(*) FROM teams WHERE name = 'x'`).Scan(&teams); err != nil || teams != 0 {
+		t.Errorf("teams named x = %d, %v; want none", teams, err)
 	}
 	// And the account does not show on the Users page.
 	admin := e.ssoAdmin("root@example.com")
@@ -358,6 +431,34 @@ func TestPlatformSessionGetsNothing(t *testing.T) {
 			t.Errorf("users lists a platform account: %+v", u)
 		}
 	}
+}
+
+// A failure to read the account's teams answers 500 with a fixed text, ends
+// nothing and gives no access: it is never read as "waiting" or as access.
+func TestAccessLoadFailureAnswers500(t *testing.T) {
+	e := newEnv(t, nil)
+	overviewFixture(e)
+	e.team("devs", viewerMembers(e.alice()), store.TeamRepo{Instance: "main"})
+	c := e.aliceSession()
+	wantCode(t, e.get(c, "/api/repositories"), "GET /api/repositories before", http.StatusOK)
+
+	e.exec(`ALTER TABLE team_members RENAME TO team_members_gone`)
+	for _, target := range []string{"/api/me", "/api/repositories", "/api/overview", "/test/session"} {
+		rec := e.get(c, target)
+		wantCode(t, rec, "GET "+target+" while the teams can't be read", http.StatusInternalServerError)
+		if got := errorOf(t, rec); got != "could not load the session" {
+			t.Errorf("GET %s error = %q; want the fixed text", target, got)
+		}
+		if strings.Contains(rec.Body.String(), "team_members") {
+			t.Errorf("GET %s leaks the failure: %s", target, rec.Body)
+		}
+	}
+	if _, found := e.storedSession(c); !found {
+		t.Error("a load failure ended the session")
+	}
+
+	e.exec(`ALTER TABLE team_members_gone RENAME TO team_members`)
+	wantCode(t, e.get(c, "/api/repositories"), "GET /api/repositories after", http.StatusOK)
 }
 
 // GitHub and GitLab sign-in is gone: the routes are not there.

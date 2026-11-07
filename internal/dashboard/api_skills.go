@@ -413,7 +413,7 @@ func (d *Dashboard) deleteSkill(w http.ResponseWriter, r *http.Request) {
 	var inUse *store.SkillInUseError
 	switch {
 	case errors.As(err, &inUse):
-		writeJSON(w, http.StatusConflict, skillInUseView(se, inUse))
+		writeJSON(w, http.StatusConflict, skillInUseView(inUse))
 		return
 	case errors.Is(err, store.ErrSkillNotFound):
 		notFound(w)
@@ -446,16 +446,13 @@ func (d *Dashboard) configReposNaming(name string) []store.RepoRef {
 	return out
 }
 
-// skillInUseView is the 409's body for se: the repositories it can see,
-// by instance and project, and a count of those it can't.
-func skillInUseView(se Session, e *store.SkillInUseError) SkillInUseView {
+// skillInUseView is the 409's body: every repository that names the skill,
+// by instance and project. Only an admin deletes a skill, and an admin sees
+// every repository, so none is left out.
+func skillInUseView(e *store.SkillInUseError) SkillInUseView {
 	v := SkillInUseView{Error: msgSkillInUse, Repositories: []SkillUserRepoView{}, InDefaults: e.InDefaults}
 	for _, repo := range e.Repos {
-		if se.CanSee(repo.Instance, repo.Project) {
-			v.Repositories = append(v.Repositories, SkillUserRepoView{Instance: repo.Instance, Project: repo.Project})
-		} else {
-			v.Hidden++
-		}
+		v.Repositories = append(v.Repositories, SkillUserRepoView{Instance: repo.Instance, Project: repo.Project})
 	}
 	slices.SortFunc(v.Repositories, func(a, b SkillUserRepoView) int {
 		return strings.Compare(a.Instance+"\x00"+lower(a.Project), b.Instance+"\x00"+lower(b.Project))

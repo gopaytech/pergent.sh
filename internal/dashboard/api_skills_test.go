@@ -38,7 +38,7 @@ func TestSkillsListFromStore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 	got := getJSON[[]LibrarySkillView](e, admin, "/api/skills")
 	if len(got) != 2 || got[0].Name != "alpha" || got[1].Name != "beta" {
 		t.Fatalf("skills = %+v; want alpha, beta by name", got)
@@ -69,7 +69,7 @@ func TestSkillsListFromStore(t *testing.T) {
 	// A viewer reads the library but not who wrote it.
 	e2 := newEnv(t, nil)
 	e2.skill("beta", "Beta text.")
-	viewer := e2.signInGitLab(false, "acme/widgets")
+	viewer := e2.userOnMain(false, "acme/widgets")
 	vs := getJSON[[]LibrarySkillView](e2, viewer, "/api/skills")
 	if len(vs) != 1 || vs[0].UpdatedBy != "" || vs[0].Name != "beta" {
 		t.Errorf("viewer's skills = %+v", vs)
@@ -92,7 +92,7 @@ func TestSkillDetailActorOnlyForAdmins(t *testing.T) {
 	if _, err := e.st.UpdateLibrarySkill(ctx, "style", "Second text.", "editor", 1, e.clock.now().Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 
 	d := getJSON[SkillDetailView](e, admin, "/api/skills/style")
 	if d.Name != "style" || d.Version != 2 || d.Content != "Second text." || d.UpdatedBy != "editor" || len(d.Versions) != 2 {
@@ -109,7 +109,7 @@ func TestSkillDetailActorOnlyForAdmins(t *testing.T) {
 	// A viewer: the same, without the actors.
 	e2 := newEnv(t, nil)
 	e2.skill("style", "First text.")
-	viewer := e2.signInGitLab(false, "acme/widgets")
+	viewer := e2.userOnMain(false, "acme/widgets")
 	raw := e2.get(viewer, "/api/skills/style").Body.String()
 	if strings.Contains(raw, "seed") || strings.Contains(raw, "actor") && strings.Contains(raw, `"actor":"`) {
 		t.Errorf("a viewer's detail names an actor: %s", raw)
@@ -136,7 +136,7 @@ func TestRepoSettingsSkillsBudget400(t *testing.T) {
 	e.skill("a", big)
 	e.skill("b", big)
 	e.dashboardRepo("main", "acme/gadgets", nil)
-	c := e.signInGitLab(true, "acme/gadgets")
+	c := e.userOnMain(true, "acme/gadgets")
 	target := "/api/repositories/main/acme/gadgets/settings"
 
 	before, _ := e.storedRepo("main", "acme/gadgets")
@@ -155,7 +155,7 @@ func TestRepoSettingsUnknownSkill400(t *testing.T) {
 	e := newEnv(t, nil)
 	e.skill("a", "x")
 	e.dashboardRepo("main", "acme/gadgets", nil)
-	c := e.signInGitLab(true, "acme/gadgets")
+	c := e.userOnMain(true, "acme/gadgets")
 	target := "/api/repositories/main/acme/gadgets/settings"
 
 	rec := e.send(c, "PUT", target, `{"skills":["a","gone"]}`)
@@ -264,7 +264,7 @@ func TestDefaultsSkillsRoundTrip(t *testing.T) {
 	e := newEnv(t, nil)
 	e.skill("a", "x")
 	e.skill("b", "y")
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 
 	v := decode[DefaultsView](t, e.send(admin, "PUT", "/api/admin/defaults", `{"skills":["b","a","b"]}`), "PUT skills", http.StatusOK)
 	if !slices.Equal(v.Skills, []string{"b", "a"}) {
@@ -322,7 +322,7 @@ func TestDefaultsSkillsRoundTrip(t *testing.T) {
 
 	// Only admins.
 	viewer := newEnv(t, nil)
-	vc := viewer.signInGitLab(false, "acme/widgets")
+	vc := viewer.userOnMain(false, "acme/widgets")
 	wantCode(t, viewer.send(vc, "PUT", "/api/admin/defaults", `{"skills":[]}`), "viewer PUT", http.StatusForbidden)
 }
 
@@ -341,7 +341,7 @@ func TestInputsViewDetectedAndFinal(t *testing.T) {
 		f.files[".claude/skills/claude-two.md"] = "Claude two."
 		f.files[".github/skills/broken.md"] = "---\npaths: 3\n---\nBroken."
 	})
-	c := e.signInGitLab(false, "acme/widgets", "acme/payments")
+	c := e.userOnMain(false, "acme/widgets", "acme/payments")
 
 	v := getJSON[InputsView](e, c, "/api/repositories/main/acme/widgets/inputs")
 	var got []string
@@ -402,7 +402,7 @@ func TestInputsCacheClearedOnDefaultsChange(t *testing.T) {
 	if err := e.st.PutRepoDefaults(ctx, store.RepoDefaults{Skills: []string{"a"}}); err != nil {
 		t.Fatal(err)
 	}
-	admin := e.signInGitLab(true, "acme/gadgets")
+	admin := e.userOnMain(true, "acme/gadgets")
 	names := func() string {
 		v := getJSON[InputsView](e, admin, "/api/repositories/main/acme/gadgets/inputs")
 		var out []string
@@ -435,7 +435,7 @@ func TestInputsCacheInvalidateDropsInFlight(t *testing.T) {
 	src := e.src["main"]
 	gate, entered := make(chan struct{}), make(chan struct{}, 10)
 	src.set(func(f *fakeSource) { f.gate, f.entered = gate, entered })
-	c := e.signInGitLab(false, "acme/widgets")
+	c := e.userOnMain(false, "acme/widgets")
 
 	done := make(chan int)
 	go func() { done <- e.get(c, "/api/repositories/main/acme/widgets/inputs").Code }()
@@ -474,7 +474,7 @@ func TestInputsViewTurnedOnMalformedSkill(t *testing.T) {
 		f.files[".claude/skills/claude-bad.md"] = "---\npaths: 3\n---\nBroken."
 		f.files[".claude/skills/claude-ok.md"] = "Fine."
 	})
-	c := e.signInGitLab(false, "acme/widgets")
+	c := e.userOnMain(false, "acme/widgets")
 	target := "/api/repositories/main/acme/widgets/inputs"
 
 	v := getJSON[InputsView](e, c, target)
@@ -510,7 +510,7 @@ func TestClearingSkillsIgnoresBudget(t *testing.T) {
 	e.skill("a", "x")
 	e.skill("b", "y")
 	e.dashboardRepo("main", "acme/gadgets", nil)
-	admin := e.signInGitLab(true, "acme/gadgets")
+	admin := e.userOnMain(true, "acme/gadgets")
 	overBudget := func() {
 		t.Helper()
 		if err := e.st.PutRepoDefaults(ctx, store.RepoDefaults{Skills: []string{"a", "b"}}); err != nil {
@@ -629,7 +629,7 @@ func TestSkillWritesNeedCSRF(t *testing.T) {
 	e := newEnv(t, nil)
 	e.skill("style", "Style text.")
 	e.skill("gone", "Gone text.")
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 	for _, w := range []struct {
 		method, target, body string
 		ok                   int
@@ -668,7 +668,7 @@ func TestSkillWritesNeedCSRF(t *testing.T) {
 func TestHeldSecretsErrorRefusesSave(t *testing.T) {
 	e := newEnv(t, nil)
 	e.skill("style", "Style text.")
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 	e.d.heldSecrets = func(context.Context) ([]string, error) {
 		return nil, errors.New("held secrets: instance \"lab\": the store is down")
 	}
@@ -717,7 +717,7 @@ func TestCreateSkill(t *testing.T) {
 	if err := e.st.PutRepoDefaults(ctx, store.RepoDefaults{Skills: []string{"existing"}}); err != nil {
 		t.Fatal(err)
 	}
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 
 	got := decode[skillWritten](t, e.sendJSON(admin, "POST", "/api/admin/skills",
 		map[string]any{"name": "plain", "content": "Plain text."}), "POST plain", http.StatusCreated)
@@ -779,7 +779,7 @@ func TestCreateSkill(t *testing.T) {
 
 func TestCreateChecks(t *testing.T) {
 	e := newEnv(t, nil)
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 	for _, tc := range []struct{ what, name, content string }{
 		{"a name with a slash", "a/b", "Text."},
 		{"a name starting with a dot", ".hidden", "Text."},
@@ -832,7 +832,7 @@ func TestCreateAddToDefaultsBudget(t *testing.T) {
 	if err := e.st.PutRepoDefaults(ctx, store.RepoDefaults{Skills: names}); err != nil {
 		t.Fatal(err)
 	}
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 	gen := e.d.inputs.generation()
 
 	rec := e.sendJSON(admin, "POST", "/api/admin/skills", map[string]any{"name": "one-more", "content": big, "addToDefaults": true})
@@ -865,7 +865,7 @@ func TestSaveRefusesHeldSecret(t *testing.T) {
 		"PUT llm", http.StatusOK)
 	e.skill("style", "Style text.")
 	e.installedSkill("remote", "Remote text.")
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 
 	for _, secret := range []string{labReviewToken, labApproveToken, hubReviewKey, hubApproveKey, hubWebhook, llmKeyOne} {
 		content := "Review with this: " + secret + " and nothing else."
@@ -924,7 +924,7 @@ func TestSaveRefusesHeldSecret(t *testing.T) {
 func TestUpdateSkill(t *testing.T) {
 	e := newEnv(t, nil)
 	e.skill("style", "First.")
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 
 	got := decode[skillWritten](t, e.sendJSON(admin, "PUT", "/api/admin/skills/style",
 		map[string]any{"content": "Second.", "version": 1}), "PUT", http.StatusOK)
@@ -958,7 +958,7 @@ func TestUpdateSkill(t *testing.T) {
 func TestUpdateStale409(t *testing.T) {
 	e := newEnv(t, nil)
 	e.skill("style", "First.")
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 	if _, err := e.st.UpdateLibrarySkill(ctx, "style", "Second, by someone else.", "bob", 1, e.clock.now()); err != nil {
 		t.Fatal(err)
 	}
@@ -979,7 +979,7 @@ func TestUpdateStale409(t *testing.T) {
 func TestUpdateInstalled409(t *testing.T) {
 	e := newEnv(t, nil)
 	e.installedSkill("remote", "Remote text.")
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 	rec := e.sendJSON(admin, "PUT", "/api/admin/skills/remote", map[string]any{"content": "Mine.", "version": 1})
 	wantCode(t, rec, "PUT an installed skill", http.StatusConflict)
 	if errorOf(t, rec) != msgInstalledEdit {
@@ -996,7 +996,7 @@ func TestCopySetsFrontmatterName(t *testing.T) {
 	e.skill("bare", "No frontmatter at all.")
 	e.skill("anonymous", "---\npaths:\n  - docs/**\n---\nNo name here.\n")
 	e.installedSkill("remote", "---\nname: remote\n---\nRemote body.\n")
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 
 	copyOf := func(from, to string) *httptest.ResponseRecorder {
 		return e.sendJSON(admin, "POST", "/api/admin/skills/"+from+"/copy", map[string]any{"name": to})
@@ -1063,7 +1063,7 @@ func TestCopySetsFrontmatterName(t *testing.T) {
 func TestDeleteSkill(t *testing.T) {
 	e := newEnv(t, nil)
 	e.skill("style", "Style text.")
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 
 	wantCode(t, e.send(admin, "DELETE", "/api/admin/skills/style", ""), "DELETE", http.StatusNoContent)
 	if _, found := e.storedSkill("style"); found {
@@ -1077,8 +1077,8 @@ func TestDeleteSkill(t *testing.T) {
 	wantCode(t, e.send(admin, "DELETE", "/api/admin/skills/.hidden", ""), "DELETE an invalid name", http.StatusNotFound)
 }
 
-// The 409 of a skill in use names every repository that uses it, for any
-// admin sees them all.
+// The 409 of a skill in use names every repository that uses it: an admin
+// sees them all.
 func TestDeleteInUse409ListsTheRepositories(t *testing.T) {
 	e := newEnv(t, func(cfg *config.Config) {
 		cfg.Repositories[0].Skills = []string{"x"} // main acme/widgets
@@ -1092,7 +1092,7 @@ func TestDeleteInUse409ListsTheRepositories(t *testing.T) {
 	if err := e.st.PutRepoDefaults(ctx, store.RepoDefaults{Skills: []string{"x"}}); err != nil {
 		t.Fatal(err)
 	}
-	admin := e.signInGitLab(true)
+	admin := e.userOnMain(true)
 	gen := e.d.inputs.generation()
 
 	type inUse struct {
@@ -1101,7 +1101,6 @@ func TestDeleteInUse409ListsTheRepositories(t *testing.T) {
 			Instance string `json:"instance"`
 			Project  string `json:"project"`
 		} `json:"repositories"`
-		Hidden     int  `json:"hidden"`
 		InDefaults bool `json:"inDefaults"`
 	}
 	got := decode[inUse](t, e.send(admin, "DELETE", "/api/admin/skills/x", ""), "DELETE a skill in use", http.StatusConflict)
@@ -1110,8 +1109,8 @@ func TestDeleteInUse409ListsTheRepositories(t *testing.T) {
 		seen = append(seen, r.Instance+"/"+r.Project)
 	}
 	if !slices.Equal(seen, []string{"main/acme/gadgets", "main/acme/other", "main/acme/payments", "main/acme/widgets"}) ||
-		got.Hidden != 0 || !got.InDefaults || got.Error == "" {
-		t.Errorf("409 = %+v; want the four repositories listed, none hidden, in the defaults", got)
+		!got.InDefaults || got.Error == "" {
+		t.Errorf("409 = %+v; want the four repositories listed, in the defaults", got)
 	}
 	if _, found := e.storedSkill("x"); !found {
 		t.Error("a skill in use was deleted")
@@ -1126,9 +1125,9 @@ func TestDeleteInUse409ListsTheRepositories(t *testing.T) {
 	if err := e2.st.PutRepoDefaults(ctx, store.RepoDefaults{Skills: []string{"z"}}); err != nil {
 		t.Fatal(err)
 	}
-	only := decode[inUse](t, e2.send(e2.signInGitLab(true, "acme/widgets"), "DELETE", "/api/admin/skills/z", ""), "DELETE", http.StatusConflict)
-	if only.Repositories == nil || len(only.Repositories) != 0 || only.Hidden != 0 || !only.InDefaults {
-		t.Errorf("409 = %+v; want [] repositories, none hidden, in the defaults", only)
+	only := decode[inUse](t, e2.send(e2.userOnMain(true, "acme/widgets"), "DELETE", "/api/admin/skills/z", ""), "DELETE", http.StatusConflict)
+	if only.Repositories == nil || len(only.Repositories) != 0 || !only.InDefaults {
+		t.Errorf("409 = %+v; want [] repositories, in the defaults", only)
 	}
 }
 
@@ -1136,7 +1135,7 @@ func TestDeleteInUse409ListsTheRepositories(t *testing.T) {
 func TestDeleteInUseByGitHubConfigRepo(t *testing.T) {
 	e := newEnv(t, func(cfg *config.Config) { cfg.Repositories[2].Skills = []string{"x"} })
 	e.skill("x", "Text x.")
-	admin := e.signInGitHub(true, "acme/widgets")
+	admin := e.userOnGH(true, "acme/widgets")
 	var got struct {
 		Repositories []struct{ Instance, Project string } `json:"repositories"`
 	}
@@ -1150,7 +1149,7 @@ func TestDeleteInUseByGitHubConfigRepo(t *testing.T) {
 
 func TestSkillAuditHasNoContent(t *testing.T) {
 	e := newEnv(t, nil)
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 	const marker = "DISTINCTIVE-SKILL-TEXT-MARKER"
 
 	decode[skillWritten](t, e.sendJSON(admin, "POST", "/api/admin/skills",
@@ -1197,7 +1196,7 @@ func TestSkillAuditHasNoContent(t *testing.T) {
 // drops the kept inputs views: they list skills and their state.
 func TestSkillWritesInvalidateInputs(t *testing.T) {
 	e := newEnv(t, nil)
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 	check := func(what string, do func() *httptest.ResponseRecorder, code int, atLeast uint64) {
 		t.Helper()
 		before := e.d.inputs.generation()
@@ -1228,7 +1227,7 @@ func TestSkillWriteDropsKeptInputsView(t *testing.T) {
 	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: testID("acme/widgets"), Path: "acme/widgets"}); err != nil {
 		t.Fatal(err)
 	}
-	c := e.signInGitLab(true, "acme/widgets")
+	c := e.userOnMain(true, "acme/widgets")
 	if err := e.st.PutRepoDefaults(ctx, store.RepoDefaults{Skills: []string{"a"}}); err != nil {
 		t.Fatal(err)
 	}

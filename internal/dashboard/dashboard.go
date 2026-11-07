@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -257,7 +256,8 @@ func (d *Dashboard) Handler() http.Handler {
 		h := w.Header()
 		h.Set("Cache-Control", "no-store")
 		h.Set("X-Content-Type-Options", "nosniff")
-		// The callback's URL holds the OAuth code: never pass it on.
+		// The OIDC callback's URL holds the authorization code and the state:
+		// never pass it on.
 		h.Set("Referrer-Policy", "no-referrer")
 		mux.ServeHTTP(w, r)
 	})
@@ -287,21 +287,28 @@ type meView struct {
 	Waiting bool `json:"waiting"`
 	// MustChangePassword: nothing else works until the password is changed.
 	MustChangePassword bool `json:"mustChangePassword"`
-	// WaitingUsers is 0 always (the pages still read it).
+	// WaitingUsers is, for an admin, how many users are waiting for a team
+	// (the Users list marks each of them waiting); 0 for anyone else.
 	WaitingUsers int    `json:"waitingUsers"`
 	CSRFToken    string `json:"csrfToken"`
 }
 
 func (d *Dashboard) me(w http.ResponseWriter, r *http.Request) {
 	se, _ := SessionFrom(r.Context())
-	role := store.RoleUser
+	role, waiting := store.RoleUser, 0
 	if se.Admin {
 		role = store.RoleAdmin
+		n, err := d.Store.CountWaitingAccounts(r.Context())
+		if err != nil {
+			d.failed(w, r, "counting the users waiting for a team", err)
+			return
+		}
+		waiting = n
 	}
 	writeJSON(w, http.StatusOK, meView{
 		Kind: se.Kind, Username: se.Username, Email: se.Email, Role: role, SignIn: se.SignIn,
 		Admin: se.Admin, Operator: se.Admin, Waiting: se.Waiting, MustChangePassword: se.MustChangePassword,
-		CSRFToken: se.CSRFToken,
+		WaitingUsers: waiting, CSRFToken: se.CSRFToken,
 	})
 }
 
@@ -334,14 +341,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // never holds a token or an upstream response.
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
-}
-
-// writeText writes a short plain-text answer, for the browser-facing
-// sign-in routes.
-func writeText(w http.ResponseWriter, status int, format string, args ...any) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(status)
-	_, _ = fmt.Fprintf(w, format+"\n", args...)
 }
 
 // lower is a project path as RepoKey holds it.

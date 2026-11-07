@@ -139,7 +139,7 @@ func TestUsersListed(t *testing.T) {
 func TestDeleteAccountEndsSessions(t *testing.T) {
 	e := newEnv(t, nil)
 	op := e.signInOperator()
-	alice := e.signInGitLab(false, "acme/widgets")
+	alice := e.userOnMain(false, "acme/widgets")
 	id := e.accountOf(alice)
 
 	wantCode(t, e.send(op, "DELETE", "/api/users/"+strconv.FormatInt(id, 10), ""), "DELETE alice", http.StatusNoContent)
@@ -182,7 +182,7 @@ func TestSSOAdminMayDeleteLocalAdmin(t *testing.T) {
 	e := newEnv(t, nil)
 	root := e.addPasswordAccount("root", operatorPassword, false)
 	e.addPasswordAccount("second", operatorPassword, false)
-	c := e.signInGitLab(true)
+	c := e.userOnMain(true)
 	bob := e.sso("bob@example.com")
 
 	wantCode(t, e.send(c, "DELETE", "/api/users/"+strconv.FormatInt(root.ID, 10), ""), "DELETE root", http.StatusNoContent)
@@ -214,7 +214,7 @@ func TestAdminCantDeleteSelf(t *testing.T) {
 	e := newEnv(t, nil)
 	local := e.signInOperator()
 	e.addPasswordAccount("second", operatorPassword, false)
-	sso := e.signInGitLab(true)
+	sso := e.userOnMain(true)
 	for name, c := range map[string]*http.Cookie{"local admin": local, "sso admin": sso} {
 		rec := e.send(c, "DELETE", "/api/users/"+strconv.FormatInt(e.accountOf(c), 10), "")
 		wantCode(t, rec, name+" DELETE self", http.StatusConflict)
@@ -231,7 +231,7 @@ func TestAdminCantDeleteSelf(t *testing.T) {
 func TestLastLocalAdminCantBeRemoved(t *testing.T) {
 	e := newEnv(t, nil)
 	root := e.addPasswordAccount("root", operatorPassword, false)
-	c := e.signInGitLab(true)
+	c := e.userOnMain(true)
 	rec := e.send(c, "DELETE", "/api/users/"+strconv.FormatInt(root.ID, 10), "")
 	wantCode(t, rec, "DELETE the last local admin", http.StatusConflict)
 	if got := body(rec); got != `{"error":"the last password account can't be removed"}` {
@@ -252,7 +252,7 @@ func TestLastLocalAdminCantBeRemoved(t *testing.T) {
 func TestAdminCantRemoveOwnRole(t *testing.T) {
 	e := newEnv(t, nil)
 	root := e.addPasswordAccount("root", operatorPassword, false)
-	c := e.signInGitLab(true)
+	c := e.userOnMain(true)
 	self := strconv.FormatInt(e.accountOf(c), 10)
 	rec := e.send(c, "PUT", "/api/admin/users/"+self+"/role", `{"role":"user"}`)
 	wantCode(t, rec, "PUT own role", http.StatusConflict)
@@ -316,7 +316,7 @@ func TestCreatePasswordAccount(t *testing.T) {
 	}
 	wantCode(t, e.send(op, "POST", "/api/admin/accounts", `{"username":"`+strings.Repeat("a", 64)+`"}`), "POST 64 characters", http.StatusCreated)
 
-	admin := e.signInGitLab(true)
+	admin := e.userOnMain(true)
 	wantCode(t, e.send(admin, "POST", "/api/admin/accounts", `{"username":"by-sso-admin"}`), "POST by an SSO admin", http.StatusCreated)
 	var created []string
 	for _, a := range e.auditEntries() {
@@ -504,7 +504,7 @@ func TestOrgWritesNeedCSRF(t *testing.T) {
 func TestAuditPages(t *testing.T) {
 	e := newEnv(t, nil)
 	e.addPasswordAccount("root", operatorPassword, false)
-	c := e.signInGitLab(true)
+	c := e.userOnMain(true)
 	e.addAudit(store.AuditEntry{Actor: "carol", Action: "repository_on", Instance: "main", Project: "acme/widgets"})
 	e.exec(`INSERT INTO audit_log (at, actor, action, instance, project)
 		SELECT now(), 'carol', 'settings_reset', 'main', 'acme/payments' FROM generate_series(1, 150)`)
@@ -603,7 +603,7 @@ func TestAuditNoSecrets(t *testing.T) {
 func TestWritesAudited(t *testing.T) {
 	e := newEnv(t, nil)
 	e.cat["main"].set("acme/gadgets")
-	c := e.signInGitLab(true)
+	c := e.userOnMain(true)
 	id := e.accountOf(c)
 	base := "/api/repositories/main/acme/gadgets"
 
@@ -637,7 +637,7 @@ func TestWritesAudited(t *testing.T) {
 func TestDeveloperGets403OnOrgRoutes(t *testing.T) {
 	e := newEnv(t, nil)
 	root := e.addPasswordAccount("root", operatorPassword, false)
-	c := e.signInGitLab(false, "acme/widgets")
+	c := e.userOnMain(false, "acme/widgets")
 	bob := e.sso("bob@example.com")
 	team := e.team("devs", nil)
 	tid := strconv.FormatInt(team, 10)

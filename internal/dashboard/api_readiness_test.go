@@ -285,7 +285,7 @@ func TestReadinessHiddenRepo404(t *testing.T) {
 	e.dashboardRepo("main", "acme/hidden", nil)
 	e.scanRow("acme/hidden", store.ScanDone, e.clock.now().Add(-time.Hour), podAllPassed, jobGoRepo, "")
 	// alice is an admin who can't see acme/hidden on GitLab.
-	c := e.signInGitLab(true, "acme/gadgets")
+	c := e.userOnMain(true, "acme/gadgets")
 	if _, se := e.session(c); !se.Admin || se.CanSee("main", "acme/hidden") {
 		t.Fatalf("session = %+v; want an admin who can't see acme/hidden", se)
 	}
