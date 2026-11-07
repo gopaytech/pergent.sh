@@ -515,3 +515,97 @@ func TestLoadInstructions(t *testing.T) {
 		t.Errorf("got %q, %v", got, err)
 	}
 }
+
+// wantQuietLine is the sentence a quiet review adds to its instructions, copied
+// here word for word so a change to the constant fails a test.
+const wantQuietLine = "When you raise a suggestion of your own, raise it only if it would change how the code behaves or clearly helps the next person who reads it, and leave out style, naming, formatting and other nitpicks. This applies to nothing else: it does not change what is blocking, how you report or judge a checklist item, or how you check findings another reviewer raised."
+
+const wantQuietSection = "\n# Quiet review\n\n" + wantQuietLine + "\n"
+
+func TestAddQuietLineAfterTeamText(t *testing.T) {
+	src := &fakeSource{files: map[string]string{
+		"AGENTS.md":                "agents text",
+		".pergent/instructions.md": "team text",
+	}}
+	in, err := ResolveSkills(context.Background(), src, libEntries(), nil, 7, "sha1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := string(in.Instructions)
+	in.AddQuietLine()
+	if got, want := string(in.Instructions), old+wantQuietSection; got != want {
+		t.Errorf("instructions = %q\nwant %q", got, want)
+	}
+}
+
+func TestAddQuietLineWithNoInstructions(t *testing.T) {
+	in := &Inputs{Skills: map[string][]byte{"a": []byte("x")}}
+	in.AddQuietLine()
+	if got := string(in.Instructions); got != wantQuietSection {
+		t.Errorf("instructions = %q, want %q", got, wantQuietSection)
+	}
+}
+
+// The line counts toward the limit: skills that fit without it and not with it
+// are too large.
+func TestAddQuietLineCountsInSize(t *testing.T) {
+	in := &Inputs{Skills: map[string][]byte{"a": []byte("x")}, Instructions: []byte("team\n")}
+	before := in.Size()
+	in.AddQuietLine()
+	if got := in.Size() - before; got != len(wantQuietSection) {
+		t.Errorf("size grew by %d, want %d", got, len(wantQuietSection))
+	}
+
+	limit := 1000
+	in = &Inputs{Skills: map[string][]byte{"a": make([]byte, limit-10)}}
+	if err := in.Fit(limit); err != nil {
+		t.Fatalf("fits without the line, got %v", err)
+	}
+	in.AddQuietLine()
+	if err := in.Fit(limit); !errors.Is(err, ErrTooLarge) {
+		t.Errorf("Fit with the line = %v, want ErrTooLarge", err)
+	}
+}
+
+func TestAddQuietLineLeavesSkills(t *testing.T) {
+	in := &Inputs{
+		Skills:   map[string][]byte{"a": []byte("x"), "b": []byte("y")},
+		Sources:  map[string]string{"a": SourceLibrary},
+		Versions: map[string]int{"a": 2},
+		Previous: []byte("p"), Carried: []byte("c"), Dismissals: []byte("d"),
+	}
+	in.AddQuietLine()
+	if len(in.Skills) != 2 || string(in.Skills["a"]) != "x" || string(in.Skills["b"]) != "y" {
+		t.Errorf("skills = %v", in.Skills)
+	}
+	if in.Sources["a"] != SourceLibrary || in.Versions["a"] != 2 ||
+		string(in.Previous) != "p" || string(in.Carried) != "c" || string(in.Dismissals) != "d" {
+		t.Errorf("something else changed: %+v", in)
+	}
+}
+
+// The line's last sentence keeps the setting from reaching anything but a
+// reviewer's own suggestions (Review Focus 5).
+func TestQuietLineKeepsItsLastSentence(t *testing.T) {
+	in := &Inputs{}
+	in.AddQuietLine()
+	if !strings.HasSuffix(string(in.Instructions), "how you check findings another reviewer raised.\n") {
+		t.Errorf("instructions end %q", in.Instructions)
+	}
+}
+
+// Only shares Instructions with its source, so AddQuietLine must not write
+// into the shared bytes.
+func TestAddQuietLineDoesNotWriteIntoSharedBytes(t *testing.T) {
+	base := make([]byte, 5, 1000)
+	copy(base, "team\n")
+	in := &Inputs{Skills: map[string][]byte{"a": []byte("x")}, Instructions: base}
+	only := in.Only([]string{"a"})
+	in.AddQuietLine()
+	if string(only.Instructions) != "team\n" {
+		t.Errorf("shared instructions = %q", only.Instructions)
+	}
+	if string(base[:cap(base)][5:20]) != string(make([]byte, 15)) {
+		t.Errorf("AddQuietLine wrote into the old backing array")
+	}
+}

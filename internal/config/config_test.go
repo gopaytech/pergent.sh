@@ -39,7 +39,7 @@ func TestLoadValid(t *testing.T) {
 	if cfg.CallbackURL != cfg.PublicURL {
 		t.Errorf("CallbackURL = %q, want PublicURL %q", cfg.CallbackURL, cfg.PublicURL)
 	}
-	if cfg.Jobs.Image != "ghcr.io/gopaytech/pergent:v0.5.4" {
+	if cfg.Jobs.Image != "ghcr.io/gopaytech/pergent:v0.5.5" {
 		t.Errorf("Jobs.Image = %q", cfg.Jobs.Image)
 	}
 	if cfg.Jobs.MaxRunning != 5 {
@@ -642,6 +642,24 @@ func TestLoadRepositorySettings(t *testing.T) {
 	if plain.Approve != nil || plain.ReviewDrafts != nil || plain.InlineFindings != nil || plain.CommandsAuthorAndMaintainersOnly != nil || plain.IncrementalReviews != nil || plain.LearnFromDismissals != nil || plain.JobTimeout != nil || plain.JobMemory != nil ||
 		plain.RerunLimitPerMR != nil || plain.RerunLimitPerRepo != nil {
 		t.Errorf("omitted repository settings are set: %+v", plain)
+	}
+}
+
+func TestQuietReviewsConfigKey(t *testing.T) {
+	base, err := os.ReadFile("testdata/valid.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Replace(string(base), "    project: acme/widgets\n", "    project: acme/widgets\n    quiet_reviews: true\n", 1)
+	cfg, err := Load(writeConfig(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Repositories[0].QuietReviews; got == nil || !*got {
+		t.Errorf("QuietReviews = %v, want true", got)
+	}
+	if got := loadValid(t).Repositories[0].QuietReviews; got != nil {
+		t.Errorf("QuietReviews unset = %v, want nil", *got)
 	}
 }
 

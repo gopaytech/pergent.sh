@@ -56,6 +56,7 @@ describe("AdminSettings defaults", () => {
       commandsAuthorAndMaintainersOnly: null,
       incrementalReviews: null,
       learnFromDismissals: null,
+      quietReviews: null,
       failureStatus: null,
       jobTimeoutSeconds: 900,
       maxTurns: null,
@@ -157,6 +158,29 @@ describe("AdminSettings defaults", () => {
     expect(within(form).getByRole("switch", { name: "Learn from dismissals" })).not.toBeChecked();
   });
 
+  it("shows the quiet reviews switch after the learn from dismissals switch, sends a change and nulls it when it equals the config", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "PUT /api/admin/defaults": { body: { ...defaults, quietReviews: true } },
+    });
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    expect(
+      within(form).getByText(/Fewer nitpicks, no suggestion threads and a shorter comment. Blocking findings, failures and approval stay the same./),
+    ).toBeInTheDocument();
+    const names = within(form)
+      .getAllByRole("switch")
+      .map((el) => el.getAttribute("aria-label") ?? el.textContent);
+    expect(names.indexOf("Quiet reviews")).toBe(names.indexOf("Learn from dismissals") + 1);
+    const toggle = within(form).getByRole("switch", { name: "Quiet reviews" });
+    expect(toggle).not.toBeChecked();
+    await userEvent.click(toggle);
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ quietReviews: true, learnFromDismissals: null });
+    expect(await screen.findByText("Defaults saved.")).toBeInTheDocument();
+    expect(within(form).getByRole("switch", { name: "Quiet reviews" })).toBeChecked();
+  });
+
   it("saves changed re-run caps", async () => {
     const fake = fakeApi({
       ...routes(),
@@ -190,6 +214,7 @@ describe("AdminSettings defaults", () => {
       commandsAuthorAndMaintainersOnly: null,
       incrementalReviews: null,
       learnFromDismissals: null,
+      quietReviews: null,
       failureStatus: null,
       jobTimeoutSeconds: null,
       maxTurns: null,
@@ -211,6 +236,7 @@ describe("AdminSettings defaults", () => {
     expect(row("Only the author and maintainers use commands")).toHaveTextContent("From config: on");
     expect(row("Incremental reviews")).toHaveTextContent("From config: on");
     expect(row("Learn from dismissals")).toHaveTextContent("From config: on");
+    expect(row("Quiet reviews")).toHaveTextContent("From config: off");
     expect(row("Status when a review fails")).toHaveTextContent("From config: failed (blocks merge)");
     expect(row("Timeout")).toHaveTextContent("From config: 600");
     expect(row("Max steps")).toHaveTextContent("From config: 40");
@@ -301,6 +327,25 @@ describe("AdminSettings defaults", () => {
     expect(within(row).getByRole("switch", { name: "Learn from dismissals" })).toBeChecked();
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
     expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ learnFromDismissals: null });
+  });
+
+  it("shows a pinned quiet reviews switch against the config, and Use config value sends null for it", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "GET /api/admin/defaults": {
+        body: { ...defaults, quietReviews: true, pinned: { quietReviews: true } },
+      },
+      "PUT /api/admin/defaults": { body: defaults },
+    });
+    renderApp("/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    const row = within(form).getByText("Quiet reviews", { selector: ".name" }).closest(".set") as HTMLElement;
+    expect(within(row).getByText("Saved here; the config says off.")).toBeInTheDocument();
+    expect(within(row).getByRole("switch", { name: "Quiet reviews" })).toBeChecked();
+    await userEvent.click(within(row).getByRole("button", { name: /^Use config value/ }));
+    expect(within(row).getByRole("switch", { name: "Quiet reviews" })).not.toBeChecked();
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ quietReviews: null });
   });
 
   it("keeps a pinned value that differs from the config when saving", async () => {

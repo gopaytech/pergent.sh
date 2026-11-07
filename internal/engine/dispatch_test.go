@@ -1260,3 +1260,186 @@ func TestDispatchRerunPassesDismissalsOfItsSkills(t *testing.T) {
 		t.Errorf("dismissals.json = %s\nwant %s", got, want)
 	}
 }
+
+// The section a quiet review adds to its instructions, written out word for
+// word so a change to the constant fails a test.
+const quietSection = "\n# Quiet review\n\n" +
+	"When you raise a suggestion of your own, raise it only if it would change how the code behaves or clearly helps the next person who reads it, and leave out style, naming, formatting and other nitpicks. " +
+	"This applies to nothing else: it does not change what is blocking, how you report or judge a checklist item, or how you check findings another reviewer raised.\n"
+
+func quietOn(env *testEnv, on bool) { env.Engine.Config.Repositories[0].QuietReviews = &on }
+
+// A quiet repository with no instructions of its own gets a file holding only
+// the quiet section, and the run records that it is quiet.
+func TestDispatchQuietAddsTheLine(t *testing.T) {
+	env := newTestEnv(t)
+	quietOn(env, true)
+	head := sha('a')
+	id := env.Enqueue(3, head)
+	env.GitLab.SetMR(openMR(3, head))
+	env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+
+	dispatch(t, env)
+
+	job := env.Job(id)
+	if job == nil {
+		t.Fatalf("no job; run = %+v\n%s", env.Run(id), env.Logs())
+	}
+	if !hasArg(job.Spec.Template.Spec.Containers[0].Args, "--instructions=/in/instructions.md") {
+		t.Errorf("job args %v lack --instructions", job.Spec.Template.Spec.Containers[0].Args)
+	}
+	if got := env.ConfigMap(id).Data["instructions.md"]; got != quietSection {
+		t.Errorf("instructions.md = %q, want %q", got, quietSection)
+	}
+	if !env.Run(id).Quiet {
+		t.Error("the run does not read quiet")
+	}
+}
+
+// Off changes nothing: no file, no flag, and the team's instructions are
+// exactly what the repository holds.
+func TestDispatchQuietOffChangesNothing(t *testing.T) {
+	t.Run("no instructions", func(t *testing.T) {
+		env := newTestEnv(t)
+		quietOn(env, false)
+		head := sha('a')
+		id := env.Enqueue(3, head)
+		env.GitLab.SetMR(openMR(3, head))
+		env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+
+		dispatch(t, env)
+
+		job := env.Job(id)
+		if job == nil {
+			t.Fatalf("no job; run = %+v\n%s", env.Run(id), env.Logs())
+		}
+		for _, a := range job.Spec.Template.Spec.Containers[0].Args {
+			if strings.HasPrefix(a, "--instructions") {
+				t.Errorf("job got the argument %q", a)
+			}
+		}
+		if _, ok := env.ConfigMap(id).Data["instructions.md"]; ok {
+			t.Error("instructions.md present with quiet off")
+		}
+		if env.Run(id).Quiet {
+			t.Error("the run reads quiet")
+		}
+	})
+	t.Run("team instructions", func(t *testing.T) {
+		env := newTestEnv(t)
+		quietOn(env, false)
+		env.GitLab.Reply(http.MethodGet, filePath("AGENTS.md"), http.StatusOK, "agents text")
+		env.GitLab.Reply(http.MethodGet, filePath(".pergent/instructions.md"), http.StatusOK, "team text")
+		head := sha('a')
+		id := env.Enqueue(3, head)
+		env.GitLab.SetMR(openMR(3, head))
+		env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+
+		dispatch(t, env)
+
+		if env.Job(id) == nil {
+			t.Fatalf("no job; run = %+v\n%s", env.Run(id), env.Logs())
+		}
+		const want = "# Project instructions (AGENTS.md)\n\nagents text\n\n# Team review instructions (.pergent/instructions.md)\n\nteam text\n"
+		if got := env.ConfigMap(id).Data["instructions.md"]; got != want {
+			t.Errorf("instructions.md = %q, want %q", got, want)
+		}
+		if env.Run(id).Quiet {
+			t.Error("the run reads quiet")
+		}
+	})
+	t.Run("team instructions with quiet on", func(t *testing.T) {
+		env := newTestEnv(t)
+		quietOn(env, true)
+		env.GitLab.Reply(http.MethodGet, filePath(".pergent/instructions.md"), http.StatusOK, "team text")
+		head := sha('a')
+		id := env.Enqueue(3, head)
+		env.GitLab.SetMR(openMR(3, head))
+		env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+
+		dispatch(t, env)
+
+		if env.Job(id) == nil {
+			t.Fatalf("no job; run = %+v\n%s", env.Run(id), env.Logs())
+		}
+		const want = "\n# Team review instructions (.pergent/instructions.md)\n\nteam text\n"
+		if got := env.ConfigMap(id).Data["instructions.md"]; got != want+quietSection {
+			t.Errorf("instructions.md = %q, want the team text then the quiet section", got)
+		}
+	})
+}
+
+// The line counts toward the 900 KiB: skills that fit without it do not fit
+// with it.
+func TestDispatchQuietOverBudgetFails(t *testing.T) {
+	env := newTestEnv(t)
+	quietOn(env, true)
+	env.AddSkill("huge", string(bytes.Repeat([]byte("x"), inputs.ConfigMapLimit-len(securitySkill)-10)))
+	env.SetDefaultSkills("security", "huge")
+	head := sha('a')
+	id := env.Enqueue(3, head)
+	env.GitLab.SetMR(openMR(3, head))
+
+	dispatch(t, env)
+
+	r := env.Run(id)
+	if r.State != store.Reported {
+		t.Fatalf("state = %s, want reported\n%s", r.State, env.Logs())
+	}
+	if want := "the skills and instructions for this repository are larger than 900 KiB"; r.FailureReason != want {
+		t.Errorf("failure reason = %q, want %q", r.FailureReason, want)
+	}
+	if len(env.Jobs()) != 0 {
+		t.Errorf("a job was launched")
+	}
+}
+
+// The setting is read at each dispatch: a Launch that fails with it on leaves
+// nothing behind, and the next dispatch, with it off, has no line and an
+// unquiet run.
+func TestDispatchQuietIsReadAtEachDispatch(t *testing.T) {
+	env := newTestEnv(t)
+	quietOn(env, true)
+	fail := true
+	env.Kube.PrependReactor("create", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if fail {
+			return true, nil, errors.New("apiserver unavailable")
+		}
+		return false, nil, nil
+	})
+	head := sha('a')
+	id := env.Enqueue(3, head)
+	env.GitLab.SetMR(openMR(3, head))
+	env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+
+	dispatch(t, env)
+
+	r := env.Run(id)
+	if r.State != store.Queued || r.Attempts != 1 {
+		t.Fatalf("run = state %s attempts %d, want queued 1\n%s", r.State, r.Attempts, env.Logs())
+	}
+	if !r.Quiet {
+		t.Error("the failed attempt did not record quiet before Launch")
+	}
+
+	fail = false
+	quietOn(env, false)
+	env.SetNow(r.NotBefore)
+	dispatch(t, env)
+
+	job := env.Job(id)
+	if job == nil {
+		t.Fatalf("no job; run = %+v\n%s", env.Run(id), env.Logs())
+	}
+	for _, a := range job.Spec.Template.Spec.Containers[0].Args {
+		if strings.HasPrefix(a, "--instructions") {
+			t.Errorf("job got the argument %q", a)
+		}
+	}
+	if _, ok := env.ConfigMap(id).Data["instructions.md"]; ok {
+		t.Error("instructions.md present after quiet went off")
+	}
+	if env.Run(id).Quiet {
+		t.Error("the run still reads quiet")
+	}
+}

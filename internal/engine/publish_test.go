@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -25,6 +26,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/store"
 	"github.com/gopaytech/pergent.sh/internal/syncmap"
+	"github.com/gopaytech/pergent.sh/internal/threads"
 )
 
 const (
@@ -1972,5 +1974,171 @@ func TestIncrementalFailureReasonPublishedAsIs(t *testing.T) {
 	wantPublished(t, env, id)
 	if queued, err := env.Store.ClaimQueued(env.ctx, 100, env.Now().Add(time.Hour)); err != nil || len(queued) != 0 {
 		t.Errorf("queued %+v, %v; want no run", queued, err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Quiet reviews: the comment follows the run's own quiet, never the setting
+
+// The outcome of a stored result carries the run's quiet, and the failure
+// paths, which render no layout, do not need it.
+func TestOutcomeCarriesTheRunsQuiet(t *testing.T) {
+	e := &Engine{}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	head := sha('a')
+	res := resultFor(t, head, reviewed("no_blocking_issues", "a.go"))
+	for _, quiet := range []bool{true, false} {
+		o := e.outcome(store.Run{BaseSHA: sha('b'), HeadSHA: head, Result: res, Quiet: quiet}, log)
+		if o.Result == nil || o.FailureReason != "" || o.Quiet != quiet {
+			t.Errorf("outcome of a run with Quiet %v = %+v, want its result and Quiet %v", quiet, o, quiet)
+		}
+	}
+}
+
+// reportQuiet is Report with the run's quiet recorded as a dispatch does:
+// quiet nil leaves it NULL, as a run from before the setting.
+func reportQuiet(t *testing.T, env *testEnv, iid int64, head string, res []byte, quiet *bool) string {
+	t.Helper()
+	id := env.Dispatched(iid, head)
+	if quiet != nil {
+		if err := env.Store.SetRunQuiet(env.ctx, id, *quiet); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out, err := env.Store.StoreResult(env.ctx, id, "seed-token", res, env.Now()); err != nil || out != store.ResultStored {
+		t.Fatalf("StoreResult = %v, %v", out, err)
+	}
+	return id
+}
+
+// A quiet comment says so and has no Files list; an off one has the list and
+// says nothing.
+func wantQuietComment(t *testing.T, body string, quiet bool) {
+	t.Helper()
+	if has := strings.Contains(body, "quiet</sub>"); has != quiet {
+		t.Errorf("comment says quiet = %v, want %v:\n%s", has, quiet, body)
+	}
+	if has := strings.Contains(body, "<summary>Files ("); has == quiet {
+		t.Errorf("comment has the Files list = %v, want %v:\n%s", has, !quiet, body)
+	}
+}
+
+// A run that was never marked (one from before the setting, or one whose
+// dispatch did not record it) is off, whatever the repository says now.
+func TestPublishNullQuietRunIsOff(t *testing.T) {
+	env := newTestEnv(t)
+	quietOn(env, true)
+	head := sha('a')
+	id := reportQuiet(t, env, 1, head, resultFor(t, head, reviewed("no_blocking_issues", "api/handler.go")), nil)
+	servePublish(env, 1, head)
+
+	publish(t, env)
+
+	body := createdComment(t, env, 1)
+	wantLayout(t, body)
+	wantQuietComment(t, body, false)
+	wantStatus(t, env, head, gitlab.StatusSuccess, "No blocking issues")
+	wantPublished(t, env, id)
+}
+
+// quietPair is a blocking finding and a suggestion on the diff.
+func quietPair() result.Skill {
+	return with("has_blocking_issues",
+		finding(fpBlocking, "db/query.go", 11, 0, "blocking", ""),
+		finding(fpSuggestion, "db/query.go", 12, 0, "suggestion", "x"))
+}
+
+// publishQuietPair publishes quietPair as a run with quiet recorded, in a
+// repository whose setting is now setting, and returns the comment.
+func publishQuietPair(t *testing.T, quiet, setting bool) (*inlineEnv, string) {
+	t.Helper()
+	e := newInlineEnv(t)
+	quietOn(e.env, setting)
+	head := sha('a')
+	servePublish(e.env, 1, head)
+	e.env.GitLab.ServeDiff(1, head, queryFile)
+	id := reportQuiet(t, e.env, 1, head, resultFor(t, head, quietPair()), boolPtr(quiet))
+	publish(t, e.env)
+	wantPublished(t, e.env, id)
+	return e, e.comment(t)
+}
+
+// The run was quiet when it was dispatched; the setting was turned off since.
+// The comment and the threads follow the run.
+func TestPublishQuietRunAfterSettingOff(t *testing.T) {
+	e, body := publishQuietPair(t, true, false)
+	wantQuietComment(t, body, true)
+	if !strings.Contains(body, "Title of bbb") || !strings.Contains(body, threads.NoteKeptQuiet) {
+		t.Errorf("the suggestion must be in the comment with the quiet note:\n%s", body)
+	}
+	if n := len(e.disc.Posted()); n != 1 {
+		t.Errorf("%d discussions started, want only the blocking finding's", n)
+	}
+	if rows := e.rows(t); len(rows) != 1 || rows[fpBlocking].State != "open" {
+		t.Errorf("rows = %+v, want the blocking finding's thread alone", rows)
+	}
+}
+
+// The run was off when it was dispatched; the setting was turned on since.
+func TestPublishOffRunAfterSettingOn(t *testing.T) {
+	e, body := publishQuietPair(t, false, true)
+	wantQuietComment(t, body, false)
+	if strings.Contains(body, threads.NoteKeptQuiet) {
+		t.Errorf("an off run's comment has the quiet note:\n%s", body)
+	}
+	if n := len(e.disc.Posted()); n != 2 {
+		t.Errorf("%d discussions started, want both findings'", n)
+	}
+	if rows := e.rows(t); len(rows) != 2 {
+		t.Errorf("rows = %+v, want a thread for each finding", rows)
+	}
+}
+
+// reportIncrementalQuiet is reportIncremental for a run recorded as quiet.
+func reportIncrementalQuiet(t *testing.T, env *testEnv, head, base string, res []byte) string {
+	t.Helper()
+	id := env.Dispatched(1, head)
+	if err := env.Store.SetIncremental(env.ctx, id, &base); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.Store.SetRunQuiet(env.ctx, id, true); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := env.Store.StoreResult(env.ctx, id, "seed-token", res, env.Now()); err != nil || out != store.ResultStored {
+		t.Fatalf("StoreResult = %v, %v", out, err)
+	}
+	return id
+}
+
+// An incremental quiet run on an off run's review: the merge keeps the
+// carried suggestion, the meta line holds the combined note and the run stays
+// quiet through the merge.
+func TestPublishQuietMergesACarriedResult(t *testing.T) {
+	const kept = "aaaaaa000001"
+	env := newTestEnv(t)
+	headA, headB := sha('a'), sha('c')
+	last := reviewed("no_blocking_issues", "a.go", "b.go")
+	last.Findings = []json.RawMessage{finding(kept, "a.go", 3, 0, "suggestion", "")}
+	base := env.Publish(1, headA, resultFor(t, headA, last))
+	id := reportIncrementalQuiet(t, env, headB, base, resultFor(t, headB, partialReview([]string{"b.go"}, []string{"a.go"})))
+	servePublish(env, 1, headB)
+
+	publish(t, env)
+
+	body := createdComment(t, env, 1)
+	wantLayout(t, body)
+	wantQuietComment(t, body, true)
+	if want := "Re-reviewed 1 file · 1 carried over from `" + headA[:7] + "` · quiet</sub>"; !strings.Contains(body, want) {
+		t.Errorf("comment lacks %q:\n%s", want, body)
+	}
+	if !strings.Contains(body, "Title of aaa") {
+		t.Errorf("comment lacks the carried suggestion:\n%s", body)
+	}
+	wantPublished(t, env, id)
+	if r := env.Run(id); !r.Quiet {
+		t.Errorf("the run stopped being quiet after the merge")
+	}
+	if r, err := result.Parse(env.Run(id).Result); err != nil || !r.Merged || r.Incremental == nil {
+		t.Errorf("stored result = %+v, %v, want the merged result of an incremental review", r, err)
 	}
 }

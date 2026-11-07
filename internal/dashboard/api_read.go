@@ -580,7 +580,7 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 	}
 	view := RunDetailView{
 		Run: runSummary(digests[idx], prev, j), Instance: run.MR.Instance, Project: run.ProjectPath, Number: run.MR.IID,
-		Status: j.status, Approved: run.Approved, ApprovalReason: j.reason, Model: run.Model, MaxTurns: run.MaxTurns,
+		Status: j.status, Approved: run.Approved, ApprovalReason: j.reason, Model: run.Model, MaxTurns: run.MaxTurns, Quiet: run.Quiet,
 		Files:  FilesView{Reviewed: []string{}, Skipped: []SkippedFile{}, NotReviewed: []NotReviewedFile{}},
 		Skills: []SkillView{},
 	}
@@ -885,6 +885,7 @@ func settingViews(repo settings.Effective) map[string]SettingView {
 		"commandsAuthorAndMaintainersOnly": {repo.CommandsAuthorAndMaintainersOnly, ov[settings.KeyCommandsAuthorAndMaintainersOnly]},
 		"incrementalReviews":               {repo.IncrementalReviews, ov[settings.KeyIncrementalReviews]},
 		"learnFromDismissals":              {repo.LearnFromDismissals, ov[settings.KeyLearnFromDismissals]},
+		"quietReviews":                     {repo.QuietReviews, ov[settings.KeyQuietReviews]},
 		"failureStatus":                    {string(repo.FailureStatus), ov[settings.KeyFailureStatus]},
 		"skills":                           {repo.Skills, ov[settings.KeySkills]},
 		"repoSkills":                       {nonNil(repo.RepoSkills), ov[settings.KeyRepoSkills]},

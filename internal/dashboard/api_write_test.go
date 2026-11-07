@@ -291,6 +291,11 @@ func TestSettingsValidation(t *testing.T) {
 		{`{"learnFromDismissals":false}`, true, func(r store.DashboardRepo) bool { return r.LearnFromDismissals != nil && !*r.LearnFromDismissals }},
 		{`{"learnFromDismissals":"no"}`, false, nil},
 		{`{"learnFromDismissals":null}`, true, func(r store.DashboardRepo) bool { return r.LearnFromDismissals == nil }},
+		{`{"quietReviews":true}`, true, func(r store.DashboardRepo) bool { return r.QuietReviews != nil && *r.QuietReviews }},
+		// false is the override a repository needs when the admin default is on.
+		{`{"quietReviews":false}`, true, func(r store.DashboardRepo) bool { return r.QuietReviews != nil && !*r.QuietReviews }},
+		{`{"quietReviews":"no"}`, false, nil},
+		{`{"quietReviews":null}`, true, func(r store.DashboardRepo) bool { return r.QuietReviews == nil }},
 		{`{"failureStatus":"neutral"}`, true, func(r store.DashboardRepo) bool { return r.FailureStatus != nil && *r.FailureStatus == "neutral" }},
 		{`{"failureStatus":"success"}`, false, nil},
 		{`{"failureStatus":"failed"}`, true, func(r store.DashboardRepo) bool { return r.FailureStatus != nil && *r.FailureStatus == "failed" }},
@@ -385,7 +390,7 @@ func TestSettingsValidation(t *testing.T) {
 	wantCode(t, rec, "reset", http.StatusOK)
 	r, found := e.storedRepo("main", "acme/gadgets")
 	if !found || r.Approve != nil || r.ReviewDrafts != nil || r.FailureStatus != nil || r.Skills != nil ||
-		r.InlineFindings != nil || r.CommandsAuthorAndMaintainersOnly != nil || r.IncrementalReviews != nil || r.LearnFromDismissals != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil ||
+		r.InlineFindings != nil || r.CommandsAuthorAndMaintainersOnly != nil || r.IncrementalReviews != nil || r.LearnFromDismissals != nil || r.QuietReviews != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil ||
 		r.CreatedBy != "carol" {
 		t.Errorf("after reset row = %+v, %v", r, found)
 	}
@@ -1276,6 +1281,89 @@ func TestLearnFromDismissalsSetting(t *testing.T) {
 	}
 	if !strings.Contains(msgBadSettings, "learnFromDismissals") {
 		t.Errorf("msgBadSettings = %q", msgBadSettings)
+	}
+}
+
+// Quiet reviews is stored on its own: true or false, null back to the default
+// (off); a reset clears it; anything else is 400 with its message. A
+// maintainer may change it, the audit entry names it, and a repository the
+// config manages refuses it.
+func TestQuietReviewsSetting(t *testing.T) {
+	e := newEnv(t, nil)
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	c := e.signInGitLab(true, "acme/gadgets")
+	target := "/api/repositories/main/acme/gadgets/settings"
+
+	rec := e.send(c, "PUT", target, `{"quietReviews":true}`)
+	wantCode(t, rec, "PUT true", http.StatusOK)
+	var detail RepositoryDetailView
+	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if s := detail.Settings["quietReviews"]; s.Value != true || !s.Overridden {
+		t.Errorf("quietReviews = %+v, want true overridden", s)
+	}
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.QuietReviews == nil || !*r.QuietReviews {
+		t.Errorf("stored = %v, want true", r.QuietReviews)
+	}
+	if g, _, err := e.d.Repos.Get(ctx, "main", "acme/gadgets"); err != nil || !g.QuietReviews {
+		t.Errorf("effective = %+v, %v; want quiet reviews on", g, err)
+	}
+	var details []string
+	for _, a := range e.auditEntries() {
+		if a.Action == "settings_updated" {
+			details = append(details, a.Detail)
+		}
+	}
+	if !slices.Equal(details, []string{"quietReviews"}) {
+		t.Errorf("settings_updated details = %q; want quietReviews named", details)
+	}
+
+	rec = e.send(c, "PUT", target, `{"quietReviews":"x"}`)
+	wantCode(t, rec, "PUT x", http.StatusBadRequest)
+	if got := errorOf(t, rec); got != "quietReviews must be true, false or null" {
+		t.Errorf("error = %q", got)
+	}
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.QuietReviews == nil || !*r.QuietReviews {
+		t.Errorf("a refused PUT changed the row: %v", r.QuietReviews)
+	}
+
+	rec = e.send(c, "PUT", target, `{"quietReviews":null}`)
+	wantCode(t, rec, "PUT null", http.StatusOK)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.QuietReviews != nil {
+		t.Errorf("stored after null = %v, want NULL", r.QuietReviews)
+	}
+	if g, ok, err := e.d.Repos.Get(ctx, "main", "acme/gadgets"); err != nil || !ok || g.QuietReviews {
+		t.Errorf("effective after null = %+v, %v, %v; want the default, off", g, ok, err)
+	}
+
+	e.send(c, "PUT", target, `{"quietReviews":true}`)
+	wantCode(t, e.send(c, "POST", target+"/reset", ""), "reset", http.StatusOK)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.QuietReviews != nil {
+		t.Errorf("stored after reset = %v, want NULL", r.QuietReviews)
+	}
+	if !strings.Contains(msgBadSettings, "quietReviews") {
+		t.Errorf("msgBadSettings = %q", msgBadSettings)
+	}
+
+	// A maintainer changes it like the other switches.
+	m := newEnv(t, nil)
+	m.dashboardRepo("main", "acme/gadgets", nil)
+	m.gl.setProject("acme/gadgets", gitlabProject("private", 20, 0))
+	m.aliceOn("main", store.RoleMaintainer)
+	maintainer := m.signIn("gitlab", "main")
+	wantCode(t, m.send(maintainer, "PUT", target, `{"quietReviews":true}`), "maintainer PUT", http.StatusOK)
+	if r, _ := m.storedRepo("main", "acme/gadgets"); r.QuietReviews == nil || !*r.QuietReviews {
+		t.Errorf("after a maintainer's PUT stored = %v, want true", r.QuietReviews)
+	}
+
+	// A repository the config lists is read-only.
+	k := newEnv(t, nil)
+	k.cat["main"].set("acme/widgets")
+	cfg := k.signInGitLab(true, "acme/widgets")
+	wantCode(t, k.send(cfg, "PUT", "/api/repositories/main/acme/widgets/settings", `{"quietReviews":true}`), "PUT on a config repository", http.StatusConflict)
+	if _, found := k.storedRepo("main", "acme/widgets"); found {
+		t.Errorf("a dashboard row was made for the config repository")
 	}
 }
 

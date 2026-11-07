@@ -150,6 +150,7 @@ func runInline(ctx context.Context, d inlineDeps, run store.Run, o policy.Outcom
 	plan := threads.Decide(threads.Input{
 		Head: run.HeadSHA, Findings: fs.findings, Dismissed: fs.dismissed, Skills: fs.skills,
 		Diff: diff, Threads: set.list, Map: mapper.Map, OnlyBlocking: d.blocks(ctx),
+		Quiet: run.Quiet, // the run's own value, recorded at dispatch, never the repository's
 	})
 	x := &inlineRun{ctx: ctx, d: d, run: run, change: ch, fs: fs, diff: diff, set: set, mapper: mapper}
 	return x.apply(plan)

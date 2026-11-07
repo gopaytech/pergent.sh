@@ -270,6 +270,8 @@ type RepoDefaults struct {
 	// LearnFromDismissals is whether later reviews are told what people with
 	// write access dismissed, and why (nil: the default, on).
 	LearnFromDismissals *bool
+	// QuietReviews is whether a review says less (nil: the default, off).
+	QuietReviews *bool
 }
 
 // RepoDefaults returns the defaults; the zero value when none were put.
@@ -277,11 +279,11 @@ func (s *Store) RepoDefaults(ctx context.Context) (RepoDefaults, error) {
 	var d RepoDefaults
 	err := s.pool.QueryRow(ctx, `SELECT approve, review_drafts, failure_status, job_timeout_seconds, max_turns, job_memory,
 			rerun_limit_per_mr, rerun_limit_per_repo, skills, updated_at, inline_findings,
-			commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals
+			commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews
 		FROM repo_defaults WHERE id = 1`).
 		Scan(&d.Approve, &d.ReviewDrafts, &d.FailureStatus, &d.JobTimeoutSeconds, &d.MaxTurns, &d.JobMemory,
 			&d.RerunLimitPerMR, &d.RerunLimitPerRepo, &d.Skills, &d.UpdatedAt, &d.InlineFindings,
-			&d.CommandsAuthorAndMaintainersOnly, &d.IncrementalReviews, &d.LearnFromDismissals)
+			&d.CommandsAuthorAndMaintainersOnly, &d.IncrementalReviews, &d.LearnFromDismissals, &d.QuietReviews)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RepoDefaults{}, nil
 	}
@@ -344,8 +346,8 @@ func (s *Store) PutRepoDefaults(ctx context.Context, d RepoDefaults) error {
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO repo_defaults (id, approve, review_drafts, failure_status, job_timeout_seconds, max_turns, job_memory,
 			rerun_limit_per_mr, rerun_limit_per_repo, skills, updated_at, inline_findings,
-			commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals)
-		VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, now(), $10, $11, $12, $13)
+			commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews)
+		VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, now(), $10, $11, $12, $13, $14)
 		ON CONFLICT (id) DO UPDATE SET approve = EXCLUDED.approve, review_drafts = EXCLUDED.review_drafts,
 			failure_status = EXCLUDED.failure_status, job_timeout_seconds = EXCLUDED.job_timeout_seconds,
 			max_turns = EXCLUDED.max_turns, job_memory = EXCLUDED.job_memory, rerun_limit_per_mr = EXCLUDED.rerun_limit_per_mr,
@@ -353,9 +355,10 @@ func (s *Store) PutRepoDefaults(ctx context.Context, d RepoDefaults) error {
 			inline_findings = EXCLUDED.inline_findings,
 			commands_author_and_maintainers_only = EXCLUDED.commands_author_and_maintainers_only,
 			incremental_reviews = EXCLUDED.incremental_reviews,
-			learn_from_dismissals = EXCLUDED.learn_from_dismissals`,
+			learn_from_dismissals = EXCLUDED.learn_from_dismissals,
+			quiet_reviews = EXCLUDED.quiet_reviews`,
 		d.Approve, d.ReviewDrafts, d.FailureStatus, d.JobTimeoutSeconds, d.MaxTurns, d.JobMemory, d.RerunLimitPerMR, d.RerunLimitPerRepo, skills, d.InlineFindings,
-		d.CommandsAuthorAndMaintainersOnly, d.IncrementalReviews, d.LearnFromDismissals); err != nil {
+		d.CommandsAuthorAndMaintainersOnly, d.IncrementalReviews, d.LearnFromDismissals, d.QuietReviews); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

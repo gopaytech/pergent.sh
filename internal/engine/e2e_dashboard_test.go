@@ -752,3 +752,70 @@ func TestEndToEndDashboard(t *testing.T) {
 		}
 	}
 }
+
+// A dismissal in the dashboard decides the review again from the run, not the
+// setting: a quiet run whose repository has since turned quiet off is
+// republished with no Files list, says quiet and lists the dismissal, and its
+// thread says who dismissed the finding.
+func TestDismissRepublishKeepsTheRunsShape(t *testing.T) {
+	e := newDashboardE2E(t)
+	env := e.env
+	t.Setenv(adminPasswordEnv, bootstrapPassword)
+	env.Engine.Config.Dashboard.AdminPasswordEnv = adminPasswordEnv
+	if err := dashboard.Bootstrap(env.ctx, env.Store, env.Engine.Config, env.Now(), env.Engine.Log); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	operator := e.passwordSignIn(t, "admin", bootstrapPassword)
+	if status, body := e.write(t, operator, http.MethodPost, "/auth/password/change",
+		map[string]string{"current": bootstrapPassword, "new": changedPassword}); status != http.StatusNoContent {
+		t.Fatalf("password change = %d: %s", status, body)
+	}
+
+	// The fake GitLab of the inline tests: the diff, the comparison, the
+	// discussions and the project of merge request 1.
+	env.GitLab.Reply(http.MethodPut, notePath(1, createdNote), http.StatusOK, map[string]any{"id": createdNote})
+	env.GitLab.Reply(http.MethodGet, projectPath(), http.StatusOK, map[string]any{"id": testProjectID})
+	env.GitLab.ServeCompare()
+	disc := env.GitLab.ServeDiscussions(t, 1)
+	ie := &inlineEnv{env: env, disc: disc}
+
+	// A quiet run, published while the repository was quiet.
+	head := sha('a')
+	servePublish(env, 1, head)
+	env.GitLab.ServeDiff(1, head, queryFile)
+	quietOn(env, true)
+	reportQuiet(t, env, 1, head, resultFor(t, head, quietPair()), boolPtr(true))
+	publish(t, env)
+	first := ie.comment(t)
+	wantQuietComment(t, first, true)
+	if n := len(disc.Posted()); n != 1 {
+		t.Fatalf("%d discussions started, want the blocking finding's alone", n)
+	}
+
+	// The setting is turned off; then the blocking finding is dismissed.
+	quietOn(env, false)
+	status, body := e.write(t, operator, http.MethodPost, "/api/reviews/"+testInstance+"/"+testProjectPath+"/1/dismiss",
+		map[string]string{"fingerprint": fpBlocking, "reason": "the input is a constant"})
+	if status != http.StatusOK || !strings.Contains(string(body), "dismissed") {
+		t.Fatalf("dismiss = %d: %s", status, body)
+	}
+	publish(t, env)
+
+	second := ie.comment(t)
+	if second == first {
+		t.Fatalf("the comment was not written again after the dismissal:\n%s", second)
+	}
+	wantQuietComment(t, second, true)
+	for _, want := range []string{"Dismissed (1)", "the input is a constant", "Title of bbb"} {
+		if !strings.Contains(second, want) {
+			t.Errorf("comment after the dismissal lacks %q:\n%s", want, second)
+		}
+	}
+	replies := disc.Replies(t)
+	if len(replies) != 1 || !strings.HasPrefix(replies[0], "Dismissed by ") || !strings.Contains(replies[0], "the input is a constant") {
+		t.Errorf("replies = %q, want one saying who dismissed the finding", replies)
+	}
+	if n := len(disc.Posted()); n != 1 {
+		t.Errorf("%d discussions started, want no new thread after the dismissal", n)
+	}
+}

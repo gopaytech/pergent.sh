@@ -88,7 +88,7 @@ func get(t *testing.T, r *Resolver, instance, project string) Effective {
 }
 
 var allKeys = []string{KeyApprove, KeyReviewDrafts, KeyInlineFindings, KeyFailureStatus, KeySkills, KeyJobTimeout, KeyMaxTurns, KeyJobMemory,
-	KeyRerunLimitPerMR, KeyRerunLimitPerRepo, KeyRepoSkills, KeyCommandsAuthorAndMaintainersOnly, KeyIncrementalReviews, KeyLearnFromDismissals}
+	KeyRerunLimitPerMR, KeyRerunLimitPerRepo, KeyRepoSkills, KeyCommandsAuthorAndMaintainersOnly, KeyIncrementalReviews, KeyLearnFromDismissals, KeyQuietReviews}
 
 // wantOverridden checks exactly the given keys are overridden.
 func wantOverridden(t *testing.T, eff Effective, keys ...string) {
@@ -121,6 +121,9 @@ func wantDefaults(t *testing.T, eff Effective, except ...string) {
 	}
 	if !skip(KeyLearnFromDismissals) && !eff.LearnFromDismissals {
 		t.Errorf("LearnFromDismissals = false, want the default true")
+	}
+	if !skip(KeyQuietReviews) && eff.QuietReviews {
+		t.Errorf("QuietReviews = true, want the default false")
 	}
 	if !skip(KeyFailureStatus) && eff.FailureStatus != config.FailureStatusFailed {
 		t.Errorf("FailureStatus = %q, want the default failed", eff.FailureStatus)
@@ -160,7 +163,7 @@ func TestResolverConfigKeys(t *testing.T) {
 		MaxTurns:        ptr(120),
 		JobMemory:       ptr(resource.MustParse("6Gi")),
 		RerunLimitPerMR: ptr(20), RerunLimitPerRepo: ptr(100),
-		CommandsAuthorAndMaintainersOnly: ptr(false), IncrementalReviews: ptr(false), LearnFromDismissals: ptr(false),
+		CommandsAuthorAndMaintainersOnly: ptr(false), IncrementalReviews: ptr(false), LearnFromDismissals: ptr(false), QuietReviews: ptr(true),
 	})
 	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)} // no store: config only
 
@@ -168,7 +171,7 @@ func TestResolverConfigKeys(t *testing.T) {
 	if eff.Platform != config.PlatformGitHub || eff.Instance != "gh" || eff.Project != "Acme/Payments" || eff.Source != SourceConfig {
 		t.Errorf("identity = %s %s %s %s", eff.Platform, eff.Instance, eff.Project, eff.Source)
 	}
-	if eff.Approve || eff.ReviewDrafts || eff.InlineFindings || eff.CommandsAuthorAndMaintainersOnly || eff.IncrementalReviews || eff.LearnFromDismissals || eff.FailureStatus != config.FailureStatusNeutral ||
+	if eff.Approve || eff.ReviewDrafts || eff.InlineFindings || eff.CommandsAuthorAndMaintainersOnly || eff.IncrementalReviews || eff.LearnFromDismissals || !eff.QuietReviews || eff.FailureStatus != config.FailureStatusNeutral ||
 		!slices.Equal(eff.Skills, []string{"security"}) || !slices.Equal(eff.RepoSkills, []string{"team"}) ||
 		eff.JobTimeout != 20*time.Minute || eff.MaxTurns != 120 || eff.JobMemory.Cmp(resource.MustParse("6Gi")) != 0 || eff.RerunLimitPerMR != 20 || eff.RerunLimitPerRepo != 100 {
 		t.Errorf("config keys not reflected: %+v", eff)
@@ -232,7 +235,7 @@ func TestResolverDefaultsAndOverrides(t *testing.T) {
 		Instance: "gh", Project: "Acme/Gadgets",
 		Approve: ptr(true), ReviewDrafts: ptr(false), InlineFindings: ptr(false), FailureStatus: ptr("neutral"),
 		Skills: []string{"security"}, RepoSkills: []string{"team"}, JobTimeoutSeconds: ptr(1200), MaxTurns: ptr(120), JobMemory: ptr("6Gi"),
-		RerunLimitPerMR: ptr(20), RerunLimitPerRepo: ptr(100), CommandsAuthorAndMaintainersOnly: ptr(false), IncrementalReviews: ptr(false), LearnFromDismissals: ptr(false),
+		RerunLimitPerMR: ptr(20), RerunLimitPerRepo: ptr(100), CommandsAuthorAndMaintainersOnly: ptr(false), IncrementalReviews: ptr(false), LearnFromDismissals: ptr(false), QuietReviews: ptr(true),
 	})
 	// A row of an instance no longer configured is not a repository.
 	upsert(t, st, store.DashboardRepo{Instance: "gone", Project: "acme/old"})
@@ -253,7 +256,7 @@ func TestResolverDefaultsAndOverrides(t *testing.T) {
 	if full.Platform != config.PlatformGitHub || full.Project != "Acme/Gadgets" {
 		t.Errorf("identity = %+v", full)
 	}
-	if !full.Approve || full.ReviewDrafts || full.InlineFindings || full.CommandsAuthorAndMaintainersOnly || full.IncrementalReviews || full.LearnFromDismissals || full.FailureStatus != config.FailureStatusNeutral ||
+	if !full.Approve || full.ReviewDrafts || full.InlineFindings || full.CommandsAuthorAndMaintainersOnly || full.IncrementalReviews || full.LearnFromDismissals || !full.QuietReviews || full.FailureStatus != config.FailureStatusNeutral ||
 		!slices.Equal(full.Skills, []string{"security"}) || !slices.Equal(full.RepoSkills, []string{"team"}) ||
 		full.JobTimeout != 20*time.Minute || full.MaxTurns != 120 || full.JobMemory.Cmp(resource.MustParse("6Gi")) != 0 || full.RerunLimitPerMR != 20 || full.RerunLimitPerRepo != 100 {
 		t.Errorf("overrides not applied: %+v", full)
@@ -330,7 +333,7 @@ func TestBrowserDefaultsApplyToDashboardReposOnly(t *testing.T) {
 	if err := st.PutRepoDefaults(ctx, store.RepoDefaults{
 		Approve: ptr(false), ReviewDrafts: ptr(false), InlineFindings: ptr(false), FailureStatus: ptr("neutral"),
 		JobTimeoutSeconds: ptr(1200), JobMemory: ptr("2Gi"),
-		RerunLimitPerMR: ptr(30), RerunLimitPerRepo: ptr(200), CommandsAuthorAndMaintainersOnly: ptr(false), IncrementalReviews: ptr(false), LearnFromDismissals: ptr(false),
+		RerunLimitPerMR: ptr(30), RerunLimitPerRepo: ptr(200), CommandsAuthorAndMaintainersOnly: ptr(false), IncrementalReviews: ptr(false), LearnFromDismissals: ptr(false), QuietReviews: ptr(true),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +343,7 @@ func TestBrowserDefaultsApplyToDashboardReposOnly(t *testing.T) {
 
 	// A dashboard repository takes the defaults; none counts as overridden.
 	eff := get(t, r, "main", "acme/payments")
-	if eff.Approve || eff.ReviewDrafts || eff.InlineFindings || eff.CommandsAuthorAndMaintainersOnly || eff.IncrementalReviews || eff.LearnFromDismissals || eff.FailureStatus != config.FailureStatusNeutral ||
+	if eff.Approve || eff.ReviewDrafts || eff.InlineFindings || eff.CommandsAuthorAndMaintainersOnly || eff.IncrementalReviews || eff.LearnFromDismissals || !eff.QuietReviews || eff.FailureStatus != config.FailureStatusNeutral ||
 		eff.JobTimeout != 20*time.Minute || eff.JobMemory.Cmp(resource.MustParse("2Gi")) != 0 ||
 		eff.RerunLimitPerMR != 30 || eff.RerunLimitPerRepo != 200 {
 		t.Errorf("dashboard repository = %+v", eff)
@@ -495,5 +498,58 @@ func TestResolverConfigIgnoresStoredMaxTurns(t *testing.T) {
 	}
 	if eff := get(t, r, "main", "acme/payments"); eff.MaxTurns != 80 || eff.Overridden[KeyMaxTurns] {
 		t.Errorf("dashboard repository = %d, overridden %v; want the stored 80, false", eff.MaxTurns, eff.Overridden[KeyMaxTurns])
+	}
+}
+
+func TestResolverQuietReviewsConfig(t *testing.T) {
+	cfg := testConfig()
+	cfg.Repositories = append(cfg.Repositories, config.Repository{GitHub: "gh", Project: "Acme/Quiet", QuietReviews: ptr(true)})
+	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)} // no store: config only
+
+	unset := get(t, r, "main", "acme/widgets")
+	if unset.QuietReviews || unset.Overridden[KeyQuietReviews] {
+		t.Errorf("unset: QuietReviews = %v, overridden = %v; want false, false", unset.QuietReviews, unset.Overridden[KeyQuietReviews])
+	}
+	on := get(t, r, "gh", "acme/quiet")
+	if !on.QuietReviews || !on.Overridden[KeyQuietReviews] {
+		t.Errorf("true: QuietReviews = %v, overridden = %v; want true, true", on.QuietReviews, on.Overridden[KeyQuietReviews])
+	}
+}
+
+// A config repository reads no default stored in the dashboard.
+func TestResolverConfigIgnoresStoredQuietReviews(t *testing.T) {
+	cfg := testConfig()
+	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)}
+	yes := true
+	eff := r.defaultsFor(SourceConfig, config.PlatformGitLab, "main", "acme/widgets", store.RepoDefaults{QuietReviews: &yes})
+	if eff.QuietReviews {
+		t.Errorf("QuietReviews = true, want false: a config repository reads no stored default")
+	}
+}
+
+func TestResolverQuietReviewsDashboard(t *testing.T) {
+	cfg := testConfig()
+	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)}
+	cases := []struct {
+		name           string
+		row, stored    *bool
+		want, overridn bool
+	}{
+		{"neither", nil, nil, false, false},
+		{"stored default on", nil, ptr(true), true, false},
+		{"row off beats stored default on", ptr(false), ptr(true), false, true},
+		{"row on", ptr(true), nil, true, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			row := store.DashboardRepo{Instance: "main", Project: "acme/widgets", QuietReviews: c.row}
+			eff, ok := r.fromDashboard(row, store.RepoDefaults{QuietReviews: c.stored})
+			if !ok {
+				t.Fatal("fromDashboard: not ok")
+			}
+			if eff.QuietReviews != c.want || eff.Overridden[KeyQuietReviews] != c.overridn {
+				t.Errorf("QuietReviews = %v, overridden = %v; want %v, %v", eff.QuietReviews, eff.Overridden[KeyQuietReviews], c.want, c.overridn)
+			}
+		})
 	}
 }

@@ -860,3 +860,150 @@ func TestDismissedStateThreadNeverRewordedCandidate(t *testing.T) {
 	}
 	checkDisjoint(t, p)
 }
+
+// ---------------------------------------------------------------------------
+// Quiet reviews
+
+func quietInput() Input {
+	in := base()
+	in.Quiet = true
+	return in
+}
+
+func TestQuietKeepsSuggestions(t *testing.T) {
+	in := quietInput()
+	in.Findings = []Finding{
+		finding("b", "a.go", "blocking", 42, 0),
+		finding("s", "a.go", "suggestion", 44, 0),
+	}
+	p := Decide(in)
+	if len(p.Post) != 1 || p.Post[0].Finding.Fingerprint != "b" {
+		t.Fatalf("post = %+v", p.Post)
+	}
+	if p.Notes["s"] != NoteKeptQuiet || p.Inline["s"] {
+		t.Errorf("notes = %v inline = %v", p.Notes, p.Inline)
+	}
+}
+
+func TestQuietNoteBeatsTheBranchRule(t *testing.T) {
+	in := quietInput()
+	in.OnlyBlocking = true
+	in.Threads = []Thread{thread("r", "a.go", 46, StateFixed)}
+	in.Findings = []Finding{
+		finding("n", "a.go", "suggestion", 44, 0),
+		finding("r", "a.go", "suggestion", 46, 0),
+	}
+	p := Decide(in)
+	if len(p.Post) != 0 || len(p.Reopen) != 0 {
+		t.Fatalf("plan = %+v", p)
+	}
+	for _, fp := range []string{"n", "r"} {
+		if p.Notes[fp] != NoteKeptQuiet || p.Inline[fp] {
+			t.Errorf("%s: notes = %q inline = %v, want NoteKeptQuiet", fp, p.Notes[fp], p.Inline[fp])
+		}
+	}
+}
+
+func TestQuietKeepsAnOpenSuggestionThread(t *testing.T) {
+	in := quietInput()
+	in.Threads = []Thread{thread("s", "a.go", 44, StateOpen)}
+	in.Findings = []Finding{finding("s", "a.go", "suggestion", 44, 0)}
+	p := Decide(in)
+	if !p.Inline["s"] || p.Notes["s"] != "" {
+		t.Errorf("inline = %v notes = %v, want the thread kept on the diff", p.Inline, p.Notes)
+	}
+	if len(p.Post) != 0 || len(p.Resolve) != 0 || len(p.Reopen) != 0 || len(p.Rebind) != 0 {
+		t.Errorf("plan = %+v, want no action", p)
+	}
+}
+
+func TestQuietDoesNotReopenASuggestion(t *testing.T) {
+	in := quietInput()
+	in.Threads = []Thread{thread("s", "a.go", 44, StateFixed), thread("b", "a.go", 42, StateFixed)}
+	in.Findings = []Finding{
+		finding("s", "a.go", "suggestion", 44, 0),
+		finding("b", "a.go", "blocking", 42, 0),
+	}
+	p := Decide(in)
+	if p.Notes["s"] != NoteKeptQuiet || p.Inline["s"] {
+		t.Errorf("suggestion: notes = %v inline = %v", p.Notes, p.Inline)
+	}
+	want := []Reopen{{Thread: in.Threads[1], Reply: "Back in `abcdef1`."}}
+	if !reflect.DeepEqual(p.Reopen, want) || !p.Inline["b"] {
+		t.Errorf("reopen = %+v inline = %v, want only the blocking thread reopened", p.Reopen, p.Inline)
+	}
+}
+
+func TestQuietGoneFindingNoLongerReported(t *testing.T) {
+	in := quietInput()
+	in.Threads = []Thread{thread("f1", "a.go", 42, StateOpen)}
+	p := Decide(in)
+	want := []Resolve{{Thread: in.Threads[0], State: StateFixed, Reply: "No longer reported in `abcdef1`."}}
+	if !reflect.DeepEqual(p.Resolve, want) {
+		t.Fatalf("resolve = %+v, want %+v", p.Resolve, want)
+	}
+}
+
+func TestQuietLeavesOtherReplies(t *testing.T) {
+	t.Run("the file left the change", func(t *testing.T) {
+		in := quietInput()
+		in.Threads = []Thread{thread("f1", "q.go", 42, StateOpen)}
+		p := Decide(in)
+		want := []Resolve{{Thread: in.Threads[0], State: StateGone, Reply: ReplyGone}}
+		if !reflect.DeepEqual(p.Resolve, want) {
+			t.Fatalf("resolve = %+v", p.Resolve)
+		}
+	})
+	t.Run("the skill left a finding out", func(t *testing.T) {
+		in := quietInput()
+		c := in.Skills["go"]
+		c.LeftOut = true
+		in.Skills["go"] = c
+		in.Threads = []Thread{thread("f1", "a.go", 42, StateOpen)}
+		p := Decide(in)
+		wantNote := []Note{{Thread: in.Threads[0], Reply: ReplyLeftOut(head)}}
+		if len(p.Resolve) != 0 || !reflect.DeepEqual(p.Note, wantNote) {
+			t.Fatalf("resolve = %+v, note = %+v; want the left-out note and no resolve", p.Resolve, p.Note)
+		}
+	})
+	t.Run("the skill failed", func(t *testing.T) {
+		in := quietInput()
+		in.Skills["go"] = Coverage{Failed: true, Reviewed: map[string]bool{"a.go": true}}
+		in.Threads = []Thread{thread("f1", "a.go", 42, StateOpen)}
+		p := Decide(in)
+		if len(p.Resolve) != 0 || len(p.Note) != 0 || len(p.Reopen) != 0 {
+			t.Fatalf("plan = %+v, want the thread kept", p)
+		}
+	})
+}
+
+func TestQuietDismissedThreadSaysDismissed(t *testing.T) {
+	in := quietInput()
+	in.Threads = []Thread{thread("d", "a.go", 42, StateOpen)}
+	in.Dismissed = map[string]Dismissal{"d": {By: "alice", Reason: "intended"}}
+	p := Decide(in)
+	want := []Resolve{{Thread: in.Threads[0], State: StateDismissed, Reply: "Dismissed by alice: intended"}}
+	if !reflect.DeepEqual(p.Resolve, want) {
+		t.Fatalf("resolve = %+v, want %+v", p.Resolve, want)
+	}
+}
+
+func TestQuietBlockingFindingStillPosts(t *testing.T) {
+	in := quietInput()
+	b := finding("b", "a.go", "blocking", 42, 43)
+	b.HasSuggestion = true
+	in.Findings = []Finding{b}
+	p := Decide(in)
+	if len(p.Post) != 1 || p.Post[0].Finding.Fingerprint != "b" || !p.Post[0].Suggestion || !p.Inline["b"] {
+		t.Fatalf("plan = %+v, want the blocking finding posted with its suggestion block", p)
+	}
+	if len(p.Notes) != 0 {
+		t.Errorf("notes = %v", p.Notes)
+	}
+}
+
+func TestReplyNoLongerReported(t *testing.T) {
+	if got := ReplyNoLongerReported(head); got != "No longer reported in `abcdef1`." {
+		t.Errorf("ReplyNoLongerReported = %q", got)
+	}
+}

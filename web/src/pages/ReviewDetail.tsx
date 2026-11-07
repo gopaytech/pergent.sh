@@ -238,6 +238,11 @@ function Facts({ run, platform }: { run: RunDetailView; platform: string }) {
         <span className="mono">{run.maxTurns ?? "not recorded"}</span>
       </div>
       {run.incrementalNote && <div>{run.incrementalNote.replaceAll("`", "")}</div>}
+      {run.quiet && (
+        <div>
+          <Pill tone="grey">quiet</Pill>
+        </div>
+      )}
       <div>
         Tokens: {count(run.tokens.in)} in · {count(run.tokens.out)} out
       </div>

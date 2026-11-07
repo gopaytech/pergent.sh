@@ -53,7 +53,7 @@ const (
 	msgAlreadyOn      = "this repository is switched on already"
 	msgWriteFailed    = "could not save the change, please try again"
 	msgBadProjectBody = `the body must be {"project": "<path>"}`
-	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"
+	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"
 	msgNameInstance   = `name the instance: {"instance": "<name>", "project": "<path>"}`
 	msgNeedsPlatform  = "sign in with GitLab or GitHub to add repositories"
 	msgNeedsAdminCaps = "only admins of this repository can change its re-run caps"
@@ -606,7 +606,7 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 	admin := session(r).Role(repo.Instance, repo.Project) >= RoleAdmin
 	d.updateSettings(w, r, repo, func(row *store.DashboardRepo) {
 		row.Approve, row.ReviewDrafts, row.InlineFindings, row.FailureStatus = nil, nil, nil, nil
-		row.CommandsAuthorAndMaintainersOnly, row.IncrementalReviews, row.LearnFromDismissals = nil, nil, nil
+		row.CommandsAuthorAndMaintainersOnly, row.IncrementalReviews, row.LearnFromDismissals, row.QuietReviews = nil, nil, nil, nil
 		row.Skills, row.RepoSkills, row.JobTimeoutSeconds, row.MaxTurns, row.JobMemory = nil, nil, nil, nil, nil
 		if admin {
 			row.RerunLimitPerMR, row.RerunLimitPerRepo = nil, nil
@@ -678,7 +678,7 @@ func (d *Dashboard) parseSettings(r *http.Request) (func(*store.DashboardRepo), 
 		var edit func(*store.DashboardRepo)
 		var msg string
 		switch key {
-		case "approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals":
+		case "approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews":
 			edit, msg = boolSetting(key, raw, null)
 		case "failureStatus":
 			edit, msg = failureStatusSetting(raw, null)
@@ -720,6 +720,7 @@ var boolSettings = map[string]func(row *store.DashboardRepo, v *bool){
 	"commandsAuthorAndMaintainersOnly": func(row *store.DashboardRepo, v *bool) { row.CommandsAuthorAndMaintainersOnly = v },
 	"incrementalReviews":               func(row *store.DashboardRepo, v *bool) { row.IncrementalReviews = v },
 	"learnFromDismissals":              func(row *store.DashboardRepo, v *bool) { row.LearnFromDismissals = v },
+	"quietReviews":                     func(row *store.DashboardRepo, v *bool) { row.QuietReviews = v },
 }
 
 // boolSetting reads the setting key, one of boolSettings, as true, false or

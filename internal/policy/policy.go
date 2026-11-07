@@ -110,6 +110,12 @@ func blocksApproval(rule string) bool { return !reviewedSkipRules[rule] }
 // set, each finding carries its dismiss command and the footer the re-run
 // command. FileURL links a finding's location to the reviewed commit; nil
 // leaves it plain text.
+//
+// Quiet is the run's own quiet setting, recorded when it was dispatched: the
+// comment of a completed review leaves out the Files list and the passed and
+// n/a checks and says "quiet" in its meta line. It changes the comment only,
+// never the status, the description, the approval or the kind. The failure
+// paths render no layout and ignore it.
 type Outcome struct {
 	Result             *result.Result
 	FailureReason      string
@@ -118,6 +124,9 @@ type Outcome struct {
 	ApproveBot         bool
 	ApproveReviewApp   bool
 	ApprovalOff        bool
+
+	// Quiet asks for the shorter comment of a quiet review (render's Short).
+	Quiet bool
 
 	Dismissals []render.Dismissal
 	MaxComment int
@@ -326,7 +335,7 @@ func renderOptions(o Outcome, r *result.Result, changed []string) render.Options
 	if r.PergentVersion != "" {
 		opts.Version = "v" + strings.TrimPrefix(r.PergentVersion, "v")
 	}
-	opts.MetaNote = result.IncrementalNote(r.Incremental)
+	opts.Short, opts.MetaNote = o.Quiet, metaNote(r.Incremental, o.Quiet)
 	if o.Mention != "" {
 		opts.DismissCommand = "@" + o.Mention + " dismiss"
 		opts.Footer = "Run again: `@" + o.Mention + " review`"
@@ -338,6 +347,20 @@ func renderOptions(o Outcome, r *result.Result, changed []string) render.Options
 		}
 	}
 	return opts
+}
+
+// metaNote is the last part of the comment's meta line: what an incremental
+// review covered and, for a quiet review, "quiet", joined with " · ". Empty
+// when there is neither.
+func metaNote(i *result.Incremental, quiet bool) string {
+	var parts []string
+	if n := result.IncrementalNote(i); n != "" {
+		parts = append(parts, n)
+	}
+	if quiet {
+		parts = append(parts, "quiet")
+	}
+	return strings.Join(parts, " · ")
 }
 
 // applyDismissals applies the outcome's dismissals to the result's skills. It

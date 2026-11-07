@@ -344,6 +344,10 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	in.Dismissals, dismissalCounts = d.pastDismissals(ctx, repo, in, mr.AuthorID)
 	hadCarried := len(in.Carried) > 0
 	hadDismissals := len(in.Dismissals) > 0
+	// The quiet line counts toward the budget, so it is added before Fit.
+	if repo.QuietReviews {
+		in.AddQuietLine()
+	}
 	if err := in.Fit(inputs.ConfigMapLimit); err != nil {
 		if errors.Is(err, inputs.ErrTooLarge) {
 			return d.fail(ctx, reasonTooLarge)
@@ -360,6 +364,14 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		if err := d.setIncremental(ctx, last, in, hadCarried); err != nil {
 			return d.retry(ctx, err)
 		}
+	}
+	// The run keeps the value it was dispatched with: the prompt, the threads
+	// and the comment follow the run, never the repository's later setting.
+	// It is written before the Job starts, not with SetRunInputs (best effort,
+	// after the launch): a lost write would give a quiet prompt and a long
+	// comment.
+	if err := e.Store.SetRunQuiet(ctx, run.ID, repo.QuietReviews); err != nil {
+		return d.retry(ctx, fmt.Errorf("record whether the review is quiet: %w", err))
 	}
 
 	token, tokenHash, err := mintToken()

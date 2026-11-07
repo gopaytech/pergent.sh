@@ -504,3 +504,32 @@ func TestAddDefaultSkills(t *testing.T) {
 		t.Errorf("skills = %v; want a, b and all %d concurrent adds", got, n)
 	}
 }
+
+// quiet_reviews in the defaults is NULL (unset), true or false; a put
+// replaces it.
+func TestRepoDefaultsQuietReviews(t *testing.T) {
+	s := newStore(t)
+	read := func() *bool {
+		t.Helper()
+		d, err := s.RepoDefaults(ctx)
+		if err != nil {
+			t.Fatalf("RepoDefaults: %v", err)
+		}
+		return d.QuietReviews
+	}
+	if got := read(); got != nil {
+		t.Errorf("before any put: quiet_reviews = %v; want NULL", *got)
+	}
+	for _, in := range []*bool{ptrTo(true), ptrTo(false), nil, ptrTo(true)} {
+		if err := s.PutRepoDefaults(ctx, RepoDefaults{QuietReviews: in}); err != nil {
+			t.Fatal(err)
+		}
+		got := read()
+		switch {
+		case in == nil && got != nil:
+			t.Errorf("put NULL: quiet_reviews = %v; want NULL", *got)
+		case in != nil && (got == nil || *got != *in):
+			t.Errorf("put %v: quiet_reviews = %v", *in, got)
+		}
+	}
+}

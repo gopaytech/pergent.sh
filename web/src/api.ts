@@ -171,6 +171,9 @@ export type RunDetailView = {
   // What an incremental review covered ("Re-reviewed 2 files · 28 carried over
   // from `abc1234`"); empty for a full review.
   incrementalNote: string;
+  // The review was started quiet (the repository's Quiet reviews switch, as it
+  // was when the review began); false for a run from before it was recorded.
+  quiet: boolean;
   tokens: { in: number; out: number };
   files: {
     reviewed: string[];
@@ -204,6 +207,7 @@ export type RepoSettings = {
   commandsAuthorAndMaintainersOnly: SettingView<boolean>;
   incrementalReviews: SettingView<boolean>;
   learnFromDismissals: SettingView<boolean>;
+  quietReviews: SettingView<boolean>;
   failureStatus: SettingView<string>;
   // skills is null for the default list, otherwise the library skills.
   skills: SettingView<string[] | null>;
@@ -327,6 +331,7 @@ export type SettingsUpdate = Partial<{
   commandsAuthorAndMaintainersOnly: boolean | null;
   incrementalReviews: boolean | null;
   learnFromDismissals: boolean | null;
+  quietReviews: boolean | null;
   failureStatus: string | null;
   skills: string[] | null;
   repoSkills: string[] | null;
@@ -482,6 +487,7 @@ export type DefaultValues = {
   commandsAuthorAndMaintainersOnly: boolean;
   incrementalReviews: boolean;
   learnFromDismissals: boolean;
+  quietReviews: boolean;
   failureStatus: string;
   jobTimeoutSeconds: number;
   maxTurns: number;

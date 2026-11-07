@@ -103,6 +103,10 @@ type Run struct {
 	// recorded at dispatch; nil before.
 	Incremental bool
 	SkillHashes map[string]string
+	// Quiet is whether the run was started quiet, recorded when it started
+	// (SetRunQuiet). False for a run from before the column, or one that
+	// never started: the column is NULL there.
+	Quiet bool
 }
 
 // How a run came to be (Run.Trigger).
@@ -174,7 +178,7 @@ const runColumns = `id::text, instance, project_id, mr_iid, project_path, head_s
 	created_at, dispatched_at, reported_at, not_before, cleaned_up,
 	title, web_url, source_branch, author, model, skill_sources,
 	outcome, outcome_reason, decision_status, approved, trigger, skill_subset, base_run_id::text,
-	skill_versions, skip_reason, max_turns, incremental, skill_hashes`
+	skill_versions, skip_reason, max_turns, incremental, skill_hashes, quiet_reviews`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var (
@@ -182,13 +186,14 @@ func scanRun(row pgx.Row) (Run, error) {
 		state                                string
 		tokenExp, dispatched, rep, notBefore *time.Time
 		sources, versions, hashes            []byte
+		quiet                                *bool // NULL is off
 	)
 	err := row.Scan(&r.ID, &r.MR.Instance, &r.MR.ProjectID, &r.MR.IID, &r.ProjectPath, &r.HeadSHA, &r.BaseSHA, &r.StartSHA,
 		&r.TargetBranch, &state, &r.JobName, &tokenExp, &r.Result, &r.FailureReason, &r.PublishError, &r.Attempts,
 		&r.CreatedAt, &dispatched, &rep, &notBefore, &r.CleanedUp,
 		&r.Title, &r.WebURL, &r.SourceBranch, &r.Author, &r.Model, &sources,
 		&r.Outcome, &r.OutcomeReason, &r.DecisionStatus, &r.Approved, &r.Trigger, &r.SkillSubset, &r.BaseRunID,
-		&versions, &r.SkipReason, &r.MaxTurns, &r.Incremental, &hashes)
+		&versions, &r.SkipReason, &r.MaxTurns, &r.Incremental, &hashes, &quiet)
 	if err != nil {
 		return Run{}, err
 	}
@@ -207,6 +212,7 @@ func scanRun(row pgx.Row) (Run, error) {
 			return Run{}, fmt.Errorf("run %s: skill hashes: %w", r.ID, err)
 		}
 	}
+	r.Quiet = quiet != nil && *quiet
 	r.State = RunState(state)
 	r.TokenExpiresAt = deref(tokenExp)
 	r.DispatchedAt = deref(dispatched)
@@ -869,6 +875,13 @@ func (s *Store) SetSkillSubset(ctx context.Context, runID string, skills []strin
 func (s *Store) SetIncremental(ctx context.Context, runID string, baseRunID *string) error {
 	return s.mustUpdate(ctx, runID, `UPDATE runs SET base_run_id = $2::uuid, incremental = $3
 		WHERE id = $1::uuid AND state IN ('queued', 'running')`, runID, baseRunID, baseRunID != nil)
+}
+
+// SetRunQuiet records whether a run being dispatched (queued or running) is
+// quiet. Any other run is an error.
+func (s *Store) SetRunQuiet(ctx context.Context, runID string, quiet bool) error {
+	return s.mustUpdate(ctx, runID, `UPDATE runs SET quiet_reviews = $2
+		WHERE id = $1::uuid AND state IN ('queued', 'running')`, runID, quiet)
 }
 
 // ReportFailure records that a queued or running run will never produce a

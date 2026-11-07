@@ -99,6 +99,7 @@ type Draft = {
   commandsAuthorAndMaintainersOnly: boolean;
   incrementalReviews: boolean;
   learnFromDismissals: boolean;
+  quietReviews: boolean;
   failureStatus: string;
   // mode "default" is a null skills setting: the default list.
   skillsMode: "default" | "choose";
@@ -167,6 +168,7 @@ function Form({
     commandsAuthorAndMaintainersOnly: settings.commandsAuthorAndMaintainersOnly.value,
     incrementalReviews: settings.incrementalReviews.value,
     learnFromDismissals: settings.learnFromDismissals.value,
+    quietReviews: settings.quietReviews.value,
     failureStatus: settings.failureStatus.value,
     skillsMode: settings.skills.value === null ? "default" : "choose",
     skills: skillsNow,
@@ -206,6 +208,7 @@ function Form({
     }
     if (d.incrementalReviews !== initial.incrementalReviews) body.incrementalReviews = d.incrementalReviews;
     if (d.learnFromDismissals !== initial.learnFromDismissals) body.learnFromDismissals = d.learnFromDismissals;
+    if (d.quietReviews !== initial.quietReviews) body.quietReviews = d.quietReviews;
     if (d.failureStatus !== initial.failureStatus) body.failureStatus = d.failureStatus;
     if (d.skillsMode === "default") {
       // Back to the default list: null resets the setting.
@@ -350,6 +353,18 @@ function Form({
             checked={d.learnFromDismissals}
             disabled={disabled}
             onChange={(v) => set("learnFromDismissals", v)}
+          />
+        </Setting>
+        <Setting
+          name="Quiet reviews"
+          overridden={settings.quietReviews.overridden}
+          help="Fewer nitpicks, no suggestion threads and a shorter comment. Blocking findings, failures and approval stay the same."
+        >
+          <Switch
+            label="Quiet reviews"
+            checked={d.quietReviews}
+            disabled={disabled}
+            onChange={(v) => set("quietReviews", v)}
           />
         </Setting>
       </section>
