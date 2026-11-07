@@ -170,6 +170,8 @@ type Dashboard struct {
 	oidc    *oidcCache
 	inputs  *inputsCache
 	catalog *catalogCache
+	// linkInfo keeps what the list of repositories to link read about each.
+	linkInfo linkInfoCache
 	// adminRoutes are the patterns Handler registered through adminRoute: a
 	// test walks them to prove each is not found for a user.
 	adminRoutes []string

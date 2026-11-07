@@ -1231,3 +1231,57 @@ func TestNoCompareForACandidateOfAnotherKind(t *testing.T) {
 		t.Errorf("compares = %d, want 0", f.calls)
 	}
 }
+
+// A skill that looked at the whole change lists no file: when it finished, a
+// finding it no longer reports is gone, as for any skill that reviewed the file.
+func TestWholeSkillCoversEveryFile(t *testing.T) {
+	whole := func(fs ...Finding) Skill {
+		s := sk(nil, fs...)
+		s.Whole = true
+		return s
+	}
+	t.Run("a finding it stops reporting went away", func(t *testing.T) {
+		f := newFake()
+		f.files[[2]string{"h1", "h2"}] = []diffmap.File{edit("b.go", 10)}
+		got := decide(t, f, nil, review("h1", whole(fnd("x", "a.go", 10))), review("h2", whole()))
+		if fate := one(t, got); fate.Fate != WentAway {
+			t.Errorf("fate = %s, want went_away", fate.Fate)
+		}
+	})
+	t.Run("and fixed when the lines changed", func(t *testing.T) {
+		f := newFake()
+		f.files[[2]string{"h1", "h2"}] = []diffmap.File{edit("a.go", 10)}
+		got := decide(t, f, nil, review("h1", whole(fnd("x", "a.go", 10))), review("h2", whole()))
+		if fate := one(t, got); fate.Fate != Fixed {
+			t.Errorf("fate = %s, want fixed", fate.Fate)
+		}
+	})
+	t.Run("a failed check leaves it open", func(t *testing.T) {
+		f := newFake()
+		f.files[[2]string{"h1", "h2"}] = []diffmap.File{edit("a.go", 10)}
+		failed := whole()
+		failed.Failed = true
+		got := decide(t, f, nil, review("h1", whole(fnd("x", "a.go", 10))), review("h2", failed))
+		if fate := one(t, got); fate.Fate != Open {
+			t.Errorf("fate = %s, want open", fate.Fate)
+		}
+	})
+	t.Run("a review without the check leaves it open", func(t *testing.T) {
+		f := newFake()
+		f.files[[2]string{"h1", "h2"}] = []diffmap.File{edit("a.go", 10)}
+		other := sk(a)
+		other.Name = "other"
+		got := decide(t, f, nil, review("h1", whole(fnd("x", "a.go", 10))), review("h2", other))
+		if fate := one(t, got); fate.Fate != Open {
+			t.Errorf("fate = %s, want open", fate.Fate)
+		}
+	})
+	t.Run("one that is not whole still needs the file", func(t *testing.T) {
+		f := newFake()
+		f.files[[2]string{"h1", "h2"}] = []diffmap.File{edit("a.go", 10)}
+		got := decide(t, f, nil, review("h1", sk(nil, fnd("x", "a.go", 10))), review("h2", sk(nil)))
+		if fate := one(t, got); fate.Fate != Open {
+			t.Errorf("fate = %s, want open", fate.Fate)
+		}
+	})
+}

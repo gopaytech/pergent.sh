@@ -3,7 +3,20 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi } from "../test/fakeApi";
-import { ssoAdmin, viewer, librarySkills, pastDismissals, repoDetail, repoPayments, repoTeams, repoWidgets, reviewBlocking, skillResults } from "../test/fixtures";
+import {
+  linkable,
+  ssoAdmin,
+  viewer,
+  librarySkills,
+  pastDismissals,
+  repoDetail,
+  repoGadgets,
+  repoPayments,
+  repoTeams,
+  repoWidgets,
+  reviewBlocking,
+  skillResults,
+} from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -936,6 +949,152 @@ describe("RepositoryDetail", () => {
       });
       expect(await screen.findByRole("tab", { name: "Past dismissals" })).toBeInTheDocument();
     });
+  });
+});
+
+// The linked repositories section: a GitHub repository the dashboard sets up,
+// whose links an admin edits.
+describe("RepositorySettings: Linked repositories", () => {
+  const gadgets = repoDetail(repoGadgets);
+  const settingsPath = "/api/repositories/hub/acme/gadgets/settings";
+  const linkablePath = "/api/admin/linkable?instance=hub&repo=acme%2Fgadgets";
+  const routes = {
+    ...base,
+    "GET /api/repositories/hub/acme/gadgets": { body: gadgets },
+    "GET /api/repositories/hub/acme/gadgets/inputs": { body: noInputs },
+    "GET /api/repositories/hub/acme/gadgets/teams": { body: repoTeams },
+    [`GET ${linkablePath}`]: { body: linkable },
+  };
+  const withLinks = (enabled: boolean) => ({
+    ...gadgets,
+    settings: {
+      ...gadgets.settings,
+      linkedReposEnabled: { value: enabled, overridden: true },
+      linkedRepos: { value: [{ target: "acme/api", watched: ["render/**"], canBlock: true }], overridden: true },
+    },
+  });
+  const section = () => screen.findByRole("region", { name: "Linked repositories" });
+
+  it("shows an admin the switch first, off, with the repositories to link and why some can't be", async () => {
+    renderAt("/repos/hub/acme/gadgets?tab=settings", routes);
+    const box = await section();
+    const switches = within(box).getAllByRole("switch");
+    expect(switches[0]).toHaveAccessibleName("Linked repositories");
+    expect(switches[0]).not.toBeChecked();
+    expect(within(box).getByText(/Off by default/)).toBeInTheDocument();
+    const list = await within(box).findByRole("list", { name: "Repositories to link" });
+    expect(within(list).getByRole("button", { name: "Add acme/api" })).toBeInTheDocument();
+    expect(within(list).getByText("acme/other-app").closest("[role=listitem]")).toHaveTextContent("another installation");
+    expect(within(list).getByText("acme/ghost").closest("[role=listitem]")).toHaveTextContent("can't read it");
+  });
+
+  it("saves the switch and a new link with the paths it watches, and nothing else", async () => {
+    const saved = withLinks(true);
+    const fake = fakeApi({ ...routes, [`PUT ${settingsPath}`]: { body: saved } });
+    renderApp("/repos/hub/acme/gadgets?tab=settings");
+    const box = await section();
+    await userEvent.click(within(box).getByRole("switch", { name: "Linked repositories" }));
+    await userEvent.click(await within(box).findByRole("button", { name: "Add acme/api" }));
+    await userEvent.type(within(box).getByRole("textbox", { name: "Watched paths of acme/api" }), "render/**{Enter}{Enter}scope/** ");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", settingsPath)[0].body).toEqual({
+      linkedReposEnabled: true,
+      linkedRepos: [{ target: "acme/api", watched: ["render/**", "scope/**"], canBlock: true }],
+    });
+    expect(await screen.findByText("Saved.")).toBeInTheDocument();
+  });
+
+  it("keeps the links while off, says they are ignored, and sends only a change", async () => {
+    const off = withLinks(false);
+    const fake = fakeApi({
+      ...routes,
+      "GET /api/repositories/hub/acme/gadgets": { body: off },
+      [`PUT ${settingsPath}`]: { body: off },
+    });
+    renderApp("/repos/hub/acme/gadgets?tab=settings");
+    const box = await section();
+    expect(within(box).getByText(/ignored until/)).toBeInTheDocument();
+    expect(within(box).getByRole("textbox", { name: "Watched paths of acme/api" })).toHaveValue("render/**");
+    await userEvent.click(within(box).getByRole("switch", { name: "Can block acme/api" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", settingsPath)[0].body).toEqual({
+      linkedRepos: [{ target: "acme/api", watched: ["render/**"], canBlock: false }],
+    });
+  });
+
+  it("sends null when the last link is removed", async () => {
+    const on = withLinks(true);
+    const fake = fakeApi({
+      ...routes,
+      "GET /api/repositories/hub/acme/gadgets": { body: on },
+      [`PUT ${settingsPath}`]: { body: gadgets },
+    });
+    renderApp("/repos/hub/acme/gadgets?tab=settings");
+    const box = await section();
+    await userEvent.click(within(box).getByRole("button", { name: "Remove acme/api" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", settingsPath)[0].body).toEqual({ linkedRepos: null });
+  });
+
+  it("shows the server's reason when a link is refused", async () => {
+    fakeApi({
+      ...routes,
+      [`PUT ${settingsPath}`]: {
+        status: 400,
+        body: { error: "acme/lib: a public repository can't link an internal one: the linked repository must be as open or more open" },
+      },
+    });
+    renderApp("/repos/hub/acme/gadgets?tab=settings");
+    const box = await section();
+    await userEvent.click(await within(box).findByRole("button", { name: "Add acme/lib" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("a public repository can't link an internal one");
+  });
+
+  it("is for admins: a maintainer sees no section, asks for no list and sends no link key", async () => {
+    const asMaintainer = repoDetail(repoGadgets, "maintainer");
+    const fake = fakeApi({
+      ...routes,
+      "GET /api/repositories/hub/acme/gadgets": { body: asMaintainer },
+      [`PUT ${settingsPath}`]: { body: asMaintainer },
+    });
+    renderApp("/repos/hub/acme/gadgets?tab=settings");
+    await userEvent.click(await screen.findByRole("switch", { name: "Review drafts" }));
+    expect(screen.queryByRole("region", { name: "Linked repositories" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "Linked repositories" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", settingsPath)[0].body).toEqual({ reviewDrafts: true });
+    expect(fake.find("GET", linkablePath)).toHaveLength(0);
+  });
+
+  it("says GitLab repositories can't have links, with no controls", async () => {
+    const fake = fakeApi(base);
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const box = await section();
+    expect(box).toHaveTextContent("GitHub repositories only");
+    expect(within(box).queryByRole("switch")).not.toBeInTheDocument();
+    expect(fake.calls.some((c) => c.url.startsWith("/api/admin/linkable"))).toBe(false);
+  });
+
+  it("locks a repository the config sets up, and asks for no list", async () => {
+    const fromConfig = repoDetail({ ...repoGadgets, source: "config" });
+    fromConfig.settings.linkedRepos = { value: [{ target: "acme/api", watched: [], canBlock: true }], overridden: true };
+    const fake = fakeApi({ ...routes, "GET /api/repositories/hub/acme/gadgets": { body: fromConfig } });
+    renderApp("/repos/hub/acme/gadgets?tab=settings");
+    const box = await section();
+    expect(within(box).getByRole("switch", { name: "Linked repositories" })).toBeDisabled();
+    expect(within(box).getByRole("textbox", { name: "Watched paths of acme/api" })).toBeDisabled();
+    expect(within(box).queryByRole("list", { name: "Repositories to link" })).not.toBeInTheDocument();
+    expect(fake.find("GET", linkablePath)).toHaveLength(0);
+  });
+
+  it("says in a maintainer's reset confirmation that the links stay", async () => {
+    fakeApi({ ...routes, "GET /api/repositories/hub/acme/gadgets": { body: repoDetail(repoGadgets, "maintainer") } });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderApp("/repos/hub/acme/gadgets?tab=settings");
+    await userEvent.click(await screen.findByRole("button", { name: "Reset to defaults" }));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("linked repositories"));
+    confirm.mockRestore();
   });
 });
 

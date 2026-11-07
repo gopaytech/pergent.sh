@@ -136,3 +136,19 @@ func TestMatchLinks(t *testing.T) {
 		t.Errorf("Match changed its input: %+v", ls)
 	}
 }
+
+// The reason a link is refused is shown to the admin as it is.
+func TestCheckSaysWhyInPlainWords(t *testing.T) {
+	for _, tc := range []struct {
+		source, target forge.Visibility
+		want           string
+	}{
+		{forge.VisPublic, forge.VisPrivate, "a public repository can't link a private one: the linked repository must be as open or more open"},
+		{forge.VisPublic, forge.VisInternal, "a public repository can't link an internal one: the linked repository must be as open or more open"},
+		{forge.VisInternal, forge.VisPrivate, "an internal repository can't link a private one: the linked repository must be as open or more open"},
+	} {
+		if err := Check(tc.source, tc.target); err == nil || err.Error() != tc.want {
+			t.Errorf("Check(%s, %s) = %v; want %q", tc.source, tc.target, err, tc.want)
+		}
+	}
+}

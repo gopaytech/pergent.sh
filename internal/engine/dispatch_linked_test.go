@@ -482,3 +482,78 @@ func TestIncrementalMatchesNewCommitsOnly(t *testing.T) {
 		t.Errorf("a push that touches a watched path did not match\n%s", env.Logs())
 	}
 }
+
+// teachGH is teach for pull request n of the GitHub repository.
+func teachGH(t *testing.T, env *testEnv, n int64, skill, fp, severity, reason string) {
+	t.Helper()
+	if _, err := env.Store.Dismiss(env.ctx, store.Dismissal{
+		MR: ghKey(n), Fingerprint: fp, Severity: severity, Reason: reason, Actor: "maya (gh)",
+		CreatedAt: env.Now().Add(-time.Hour), Skill: skill, File: "api/auth.go", Title: "Token compared with ==",
+		Teaches: true, DismisserPlatformID: 99,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// What people rejected in the linked repositories' check goes to its next
+// run, next to the skills', when the review has one.
+func TestDispatchPassesImpactDismissals(t *testing.T) {
+	env, gh := linkedGitHub(t)
+	head := sha('a')
+	id := ghEnqueue(t, env, 3, head)
+	gh.ServePR(3, ghPR(3, head))
+	gh.Reply(http.MethodPost, ghRepoAPI+"/check-runs", http.StatusCreated, map[string]any{"id": 1})
+	serveCompare(gh, sha('b'), head, "render/comment.go")
+	teachGH(t, env, 1, "impact", "aaaaaa111111", "suggestion", "The caller is fixed in its own pull request.")
+
+	dispatch(t, env)
+
+	if v := pergentEnv(env, id)["PERGENT_DISMISSALS"]; v != "/in/dismissals.json" {
+		t.Errorf("PERGENT_DISMISSALS = %q", v)
+	}
+	const want = `{"impact":[{"file":"api/auth.go","title":"Token compared with ==","severity":"suggestion","reason":"The caller is fixed in its own pull request."}]}`
+	if got := env.ConfigMap(id).Data["dismissals.json"]; got != want {
+		t.Errorf("dismissals.json = %s\nwant %s", got, want)
+	}
+}
+
+// With Learn from dismissals off, the check is told nothing either.
+func TestDispatchImpactDismissalsNeedTheSetting(t *testing.T) {
+	env, gh := linkedGitHub(t)
+	off := false
+	repos := env.Engine.Config.Repositories
+	repos[len(repos)-1].LearnFromDismissals = &off
+	head := sha('a')
+	id := ghEnqueue(t, env, 3, head)
+	gh.ServePR(3, ghPR(3, head))
+	gh.Reply(http.MethodPost, ghRepoAPI+"/check-runs", http.StatusCreated, map[string]any{"id": 1})
+	serveCompare(gh, sha('b'), head, "render/comment.go")
+	teachGH(t, env, 1, "impact", "aaaaaa111111", "suggestion", "Fine.")
+
+	dispatch(t, env)
+
+	if _, ok := env.ConfigMap(id).Data["dismissals.json"]; ok {
+		t.Error("dismissals.json present with Learn from dismissals off")
+	}
+}
+
+// A change that touches no watched path does not run the check, and the Job
+// carries nothing of it: the same dismissals file as with no links.
+func TestDispatchImpactDismissalsLeftOutWhenTheCheckDoesNotRun(t *testing.T) {
+	env, gh := linkedGitHub(t)
+	head := sha('a')
+	id := ghEnqueue(t, env, 3, head)
+	gh.ServePR(3, ghPR(3, head))
+	gh.Reply(http.MethodPost, ghRepoAPI+"/check-runs", http.StatusCreated, map[string]any{"id": 1})
+	serveCompare(gh, sha('b'), head, "cmd/main.go")
+	teachGH(t, env, 1, "impact", "aaaaaa111111", "suggestion", "Fine.")
+
+	dispatch(t, env)
+
+	if got, ok := env.ConfigMap(id).Data["dismissals.json"]; ok {
+		t.Errorf("dismissals.json = %s for a review with no impact check", got)
+	}
+	if _, ok := pergentEnv(env, id)["PERGENT_DISMISSALS"]; ok {
+		t.Error("PERGENT_DISMISSALS set for a review with no impact check")
+	}
+}

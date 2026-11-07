@@ -346,8 +346,11 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	}
 	// What people rejected earlier is the same for a full and an incremental
 	// review, and no skill's hash counts it.
+	// The linked repositories' check is told its own rejected findings, when
+	// the run may have one (the plan below can still find nothing to check).
 	var dismissalCounts map[string]int
-	in.Dismissals, dismissalCounts = d.pastDismissals(ctx, repo, in, mr.AuthorID)
+	withImpact := d.mayLink(plat, repo)
+	in.Dismissals, dismissalCounts = d.pastDismissals(ctx, repo, in, mr.AuthorID, withImpact)
 	in.AddDescription(mr.Title, mr.Description)
 	hadCarried := len(in.Carried) > 0
 	hadDismissals := len(in.Dismissals) > 0
@@ -382,6 +385,12 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	links := d.linkedRepos(ctx, plat, repo, project, mr, last, havePrev, in)
 	if in.Linked, err = links.encode(); err != nil {
 		return d.retry(ctx, err)
+	}
+	if len(links.Entries) == 0 && dismissalCounts[impactSkill] > 0 && in.Dismissals != nil {
+		// The check does not run on this change: what people rejected in it
+		// goes nowhere, and the Job is the one it would be without links.
+		d.log.Info("the linked repositories' check does not run; its past dismissals are left out", "entries", dismissalCounts[impactSkill])
+		in.Dismissals, _ = d.pastDismissals(ctx, repo, in, mr.AuthorID, false)
 	}
 	if len(links.Entries) > 0 {
 		if in.Size() > inputs.ConfigMapLimit {

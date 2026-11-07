@@ -562,3 +562,43 @@ func TestPlanLinksTellsTheCause(t *testing.T) {
 		t.Errorf("entries = %+v", plan.Entries)
 	}
 }
+
+// The check's past dismissals are asked for only when the run may have one:
+// the same names as before otherwise.
+func TestDismissalSkills(t *testing.T) {
+	in := &inputs.Inputs{Skills: map[string][]byte{"style": nil, "security": nil}}
+	if got, want := dismissalSkills(in, false), []string{"security", "style"}; !slices.Equal(got, want) {
+		t.Errorf("without the check = %v; want %v", got, want)
+	}
+	if got, want := dismissalSkills(in, true), []string{"impact", "security", "style"}; !slices.Equal(got, want) {
+		t.Errorf("with the check = %v; want %v", got, want)
+	}
+	// A library skill named impact is not listed twice.
+	in.Skills["impact"] = nil
+	if got, want := dismissalSkills(in, true), []string{"impact", "security", "style"}; !slices.Equal(got, want) {
+		t.Errorf("with a skill named impact = %v; want %v", got, want)
+	}
+}
+
+func TestMayLink(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(f *linkedFixture)
+		want bool
+	}{
+		{"on, with links, on GitHub", func(*linkedFixture) {}, true},
+		{"the setting is off", func(f *linkedFixture) { f.repo.LinkedReposEnabled = false }, false},
+		{"there are no links", func(f *linkedFixture) { f.repo.LinkedRepos = nil }, false},
+		{"the platform is GitLab", func(f *linkedFixture) { f.plat.Kind = config.PlatformGitLab }, false},
+		{"a re-run of other skills", func(f *linkedFixture) { f.d.partial = true }, false},
+		{"a re-run of the check", func(f *linkedFixture) { f.d.partial, f.d.rerunImpact = true, true }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLinkedFixture(t)
+			tc.edit(f)
+			if got := f.d.mayLink(f.plat, f.repo); got != tc.want {
+				t.Errorf("mayLink = %v; want %v", got, tc.want)
+			}
+		})
+	}
+}

@@ -1029,6 +1029,57 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ErrorBody'}
+  /api/admin/linkable:
+    get:
+      operationId: listLinkableRepositories
+      tags: [Repositories]
+      summary: Repositories a repository may link (the links picker)
+      description: |
+        Admins only: the repositories the instance's review App reaches
+        (the picker's list, kept 5 minutes, 200 at most by name), each with
+        whether `repo` may link it, and why not. Itself, ones already linked
+        and the third link's limit are told without a read. For the others the
+        visibility and installation are read once each, 8 at a time within 12
+        seconds and kept 5 minutes; one not read in time, or whose read failed,
+        comes back unchecked and is checked again by the save of the links.
+        400 without `instance` and `repo`, or for a GitLab repository; 404 for
+        an instance or a repository switched on that is not there; 502 when
+        the platform cannot be asked.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: instance
+          in: query
+          required: true
+          schema: {type: string}
+        - name: repo
+          in: query
+          required: true
+          description: The repository that would link, `owner/name`, switched on.
+          schema: {type: string}
+        - name: search
+          in: query
+          description: Keep repositories whose path holds this.
+          schema:
+            type: string
+            maxLength: 100
+      responses:
+        '200':
+          description: The repositories.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LinkableView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '502':
+          description: The platform could not be asked, or nothing could be read.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorBody'}
   /api/repositories/{instance}/{project}:
     get:
       operationId: getRepository
@@ -1040,6 +1091,10 @@ paths:
         `learnFromDismissals`, `quietReviews`, `commentLayout` (the
         `block:state` list; while `overridden` is false it is the default in
         effect: the admin default, else the built-in layout),
+        `linkedReposEnabled` (the impact check across linked repositories;
+        off unless set), `linkedRepos` (the links, a list of `LinkView`:
+        shown to admins only, an empty list to anyone else; `overridden` is
+        true while the repository has any),
         `failureStatus`, `skills`
         (null: the default list), `repoSkills`, `jobTimeoutSeconds`,
         `maxTurns`, `jobMemory`
@@ -2870,6 +2925,23 @@ components:
           type: [boolean, 'null']
         quietReviews:
           type: [boolean, 'null']
+        linkedReposEnabled:
+          type: [boolean, 'null']
+          description: Admins only (403 for a maintainer). Null follows the default (off).
+        linkedRepos:
+          type: [array, 'null']
+          description: |
+            Admins only (403 for a maintainer). The repository's links: null
+            or `[]` clears them. At most 3, each a plain `owner/name` other
+            than the repository itself and not repeated, with at most 50
+            watched globs of at most 200 characters each. `canBlock` left out
+            is true. GitHub repositories only, and every target must be as
+            open as the repository or more, and in the same installation of
+            the review App: the platform is asked on every save. A rule that
+            fails is 400 with the reason, a platform that cannot tell is 502,
+            and nothing is saved.
+          maxItems: 3
+          items: {$ref: '#/components/schemas/LinkView'}
         commentLayout:
           type: [array, 'null']
           description: |
@@ -2937,6 +3009,8 @@ components:
         learnFromDismissals:
           type: [boolean, 'null']
         quietReviews:
+          type: [boolean, 'null']
+        linkedReposEnabled:
           type: [boolean, 'null']
         commentLayout:
           type: [array, 'null']
@@ -3072,6 +3146,52 @@ components:
         truncated:
           type: boolean
           description: True when there were more, or a list was too long or too slow to read whole.
+    LinkView:
+      description: One link of a repository to another, for the impact check.
+      type: object
+      required: [target, watched, canBlock]
+      properties:
+        target:
+          type: string
+          description: The linked repository, `owner/name`.
+        watched:
+          type: array
+          items: {type: string}
+          description: Globs of changed files that make the check run. None means every change.
+        canBlock:
+          type: boolean
+          description: Whether a finding on this link may block. Off makes every finding of it a suggestion.
+    LinkableView:
+      description: Repositories the instance's review App reaches, each with whether the repository may link it. 200 at most, by name.
+      type: object
+      required: [items, truncated]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/LinkableRepo'}
+        truncated:
+          type: boolean
+          description: True when there were more repositories than are listed.
+    LinkableRepo:
+      type: object
+      required: [repo, visibility, checked, linkable, reason]
+      properties:
+        repo: {type: string}
+        visibility:
+          type: string
+          enum: ['', public, internal, private]
+          description: Who may read it, when it was read; otherwise "".
+        checked:
+          type: boolean
+          description: |
+            Whether the rules were applied to it. One that was not (the reads
+            ran out of time, or one failed) is `linkable` with a `reason` that
+            says it is checked when the links are saved: the save is what
+            enforces the rules.
+        linkable: {type: boolean}
+        reason:
+          type: string
+          description: Why it cannot be linked, in plain words; "" when it can.
     CanView:
       description: What the session may do to the review with the buttons. A hint for the page; the routes
         check again.
@@ -3101,7 +3221,7 @@ components:
     DefaultValues:
       description: DefaultsView's settings without the skill list, with the same keys.
       type: object
-      required: [approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, commentLayout, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo]
+      required: [approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, linkedReposEnabled, commentLayout, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo]
       properties:
         approve: {type: boolean}
         reviewDrafts: {type: boolean}
@@ -3110,6 +3230,7 @@ components:
         incrementalReviews: {type: boolean}
         learnFromDismissals: {type: boolean}
         quietReviews: {type: boolean}
+        linkedReposEnabled: {type: boolean}
         commentLayout:
           type: array
           items: {type: string}
@@ -3123,7 +3244,7 @@ components:
     DefaultsView:
       description: The settings a repository gets when it sets none.
       type: object
-      required: [approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, commentLayout, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, skills, config, pinned]
+      required: [approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, linkedReposEnabled, commentLayout, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, skills, config, pinned]
       properties:
         approve: {type: boolean}
         reviewDrafts: {type: boolean}
@@ -3132,6 +3253,7 @@ components:
         incrementalReviews: {type: boolean}
         learnFromDismissals: {type: boolean}
         quietReviews: {type: boolean}
+        linkedReposEnabled: {type: boolean}
         commentLayout:
           type: array
           items: {type: string}
@@ -3541,7 +3663,7 @@ components:
           type: object
           additionalProperties: {$ref: '#/components/schemas/SettingView'}
           description: Keyed approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews,
-            learnFromDismissals, quietReviews, commentLayout, failureStatus, skills, repoSkills, jobTimeoutSeconds, maxTurns, jobMemory,
+            learnFromDismissals, quietReviews, commentLayout, linkedReposEnabled, linkedRepos, failureStatus, skills, repoSkills, jobTimeoutSeconds, maxTurns, jobMemory,
             rerunLimitPerMR and rerunLimitPerRepo.
         attention:
           type: array

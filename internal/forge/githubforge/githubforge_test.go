@@ -1378,3 +1378,43 @@ func TestLinkTarget(t *testing.T) {
 		}
 	}
 }
+
+// LinkInfo is Visibility and the installation in one lookup and one read, with
+// Visibility's rules: nothing that GitHub left out or contradicts is public.
+func TestLinkInfo(t *testing.T) {
+	f := newFake(t)
+	for _, name := range []string{"open", "closed", "unsaid", "mismatch", "hidden", "broken"} {
+		f.reply("GET", "/repos/acme/"+name+"/installation", 200, map[string]any{"id": installationID})
+	}
+	f.reply("GET", "/repos/acme/open", 200, map[string]any{"private": false, "visibility": "public"})
+	f.reply("GET", "/repos/acme/closed", 200, map[string]any{"private": true, "visibility": "private"})
+	f.reply("GET", "/repos/acme/unsaid", 200, map[string]any{"private": false})
+	f.reply("GET", "/repos/acme/mismatch", 200, map[string]any{"private": true, "visibility": "public"})
+	f.reply("GET", "/repos/acme/hidden", 404, map[string]string{"message": "Not Found"})
+	f.reply("GET", "/repos/acme/broken", 500, map[string]string{"message": "boom"})
+	g := f.forgeWithoutRepos(t)
+
+	for repo, want := range map[string]forge.Visibility{"acme/open": forge.VisPublic, "acme/closed": forge.VisPrivate} {
+		v, id, err := g.LinkInfo(ctx, repo)
+		if err != nil || v != want || id != installationID {
+			t.Errorf("LinkInfo(%s) = %q, %d, %v; want %q, %d", repo, v, id, err, want, installationID)
+		}
+	}
+	for _, repo := range []string{"acme/unsaid", "acme/mismatch", "acme/hidden", "acme/broken", "acme/other", "acme", "", "acme/a/b"} {
+		if v, id, err := g.LinkInfo(ctx, repo); err == nil || v != "" || id != 0 {
+			t.Errorf("LinkInfo(%q) = %q, %d, %v; want an error and nothing else", repo, v, id, err)
+		}
+	}
+	for _, repo := range []string{"acme/hidden", "acme/other", "acme"} {
+		if _, _, err := g.LinkInfo(ctx, repo); !errors.Is(err, forge.ErrSourceNotFound) {
+			t.Errorf("LinkInfo(%q) = %v; want ErrSourceNotFound", repo, err)
+		}
+	}
+	// One lookup of the installation and one read of the repository each.
+	if n := len(f.requests("GET", "/repos/acme/open/installation")); n != 1 {
+		t.Errorf("%d installation lookups for acme/open; want 1", n)
+	}
+	if n := len(f.requests("GET", "/repos/acme/open")); n != 1 {
+		t.Errorf("%d reads of acme/open; want 1", n)
+	}
+}

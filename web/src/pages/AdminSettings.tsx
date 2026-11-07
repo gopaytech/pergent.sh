@@ -67,6 +67,7 @@ function Defaults({ v }: { v: DefaultsView }) {
   const [incremental, setIncremental] = useState(v.incrementalReviews);
   const [learn, setLearn] = useState(v.learnFromDismissals);
   const [quiet, setQuiet] = useState(v.quietReviews);
+  const [linked, setLinked] = useState(v.linkedReposEnabled);
   // null is the built-in layout, which is all the config gives.
   const [layout, setLayout] = useState<string[] | null>(pinnedLayout(v));
   const [failureStatus, setFailureStatus] = useState(v.failureStatus);
@@ -125,6 +126,7 @@ function Defaults({ v }: { v: DefaultsView }) {
       incrementalReviews: orNull(incremental, cfg.incrementalReviews),
       learnFromDismissals: orNull(learn, cfg.learnFromDismissals),
       quietReviews: orNull(quiet, cfg.quietReviews),
+      linkedReposEnabled: orNull(linked, cfg.linkedReposEnabled),
       commentLayout: layout === null || layout.join() === cfg.commentLayout.join() ? null : layout,
       failureStatus: orNull(failureStatus, cfg.failureStatus),
       jobTimeoutSeconds: orNull(Number(t), cfg.jobTimeoutSeconds),
@@ -278,6 +280,25 @@ function Defaults({ v }: { v: DefaultsView }) {
         </div>
         <div className="wide">
           <CommentLayoutEditor value={layout} defaults={cfg.commentLayout} disabled={save.isPending} onChange={setLayout} />
+        </div>
+      </div>
+      <div className="set">
+        <div>
+          <div className="name">Linked repositories</div>
+          <div className="help">
+            Off by default. The impact check across a repository's linked repositories is on for repositories switched on in
+            the dashboard that don't set it. The links themselves are set on each repository's page, by an admin.
+            <FromConfig
+              field="Linked repositories"
+              pinned={pinned("linkedReposEnabled")}
+              shown={onOff(cfg.linkedReposEnabled)}
+              disabled={save.isPending}
+              onUse={() => setLinked(cfg.linkedReposEnabled)}
+            />
+          </div>
+        </div>
+        <div>
+          <Switch label="Linked repositories" checked={linked} disabled={save.isPending} onChange={setLinked} />
         </div>
       </div>
       <div className="set">

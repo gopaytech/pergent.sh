@@ -1226,3 +1226,70 @@ func TestFatesSweepFollowsARenamedRepository(t *testing.T) {
 		t.Errorf("job = %+v; want a pending merge\n%s", j, env.Logs())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// The linked repositories' check: no database
+
+// impactFate is the fate of the impact finding (render/comment.go:12) after
+// the impact skills of the reviews, in order; a nil skill is a review that has
+// only another skill. Every comparison edits line 12.
+func impactFate(t *testing.T, skills ...*result.Skill) string {
+	t.Helper()
+	var runs []store.Run
+	for i, s := range skills {
+		head := sha(byte('a' + i))
+		if s == nil {
+			other := fateSkill(t, "no_blocking_issues")
+			other.Name = "style"
+			runs = append(runs, store.Run{HeadSHA: head, Result: resultFor(t, head, other)})
+			continue
+		}
+		runs = append(runs, store.Run{HeadSHA: head, Result: resultFor(t, head, *s)})
+	}
+	in := fatesInput(runs, nil)
+	in.Compare = func(from, to string) ([]diffmap.File, error) {
+		return []diffmap.File{diffmap.Parse("render/comment.go", "", "@@ -11,3 +11,3 @@\n a\n-b\n+c\n d\n", false)}, nil
+	}
+	got, err := fates.Decide(in)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Decide = %+v, %v; want one fate", got, err)
+	}
+	if got[0].Skill != result.ImpactSkill {
+		t.Fatalf("skill = %q; want impact", got[0].Skill)
+	}
+	return got[0].Fate
+}
+
+// The check lists no reviewed file, yet a finding it stops reporting is gone
+// when the check finished, and stays open when it failed or did not run.
+func TestImpactFindingsGetAFate(t *testing.T) {
+	open := func() *result.Skill { s := impactSkillOf(t, "has_blocking_issues", "blocking"); return &s }
+	clean := func() *result.Skill { s := impactSkillOf(t, "no_blocking_issues", ""); return &s }
+	failed := func() *result.Skill { s := impactSkillOf(t, "failed", ""); return &s }
+
+	if got := impactFate(t, open(), clean()); got != fates.Fixed {
+		t.Errorf("after a clean check: fate = %s; want fixed (the lines changed)", got)
+	}
+	if got := impactFate(t, open(), clean(), clean()); got != fates.Fixed {
+		t.Errorf("after two clean checks: fate = %s; want fixed", got)
+	}
+	if got := impactFate(t, open()); got != fates.Open {
+		t.Errorf("reported to the end: fate = %s; want open", got)
+	}
+	if got := impactFate(t, open(), failed()); got != fates.Open {
+		t.Errorf("after a failed check: fate = %s; want open", got)
+	}
+	if got := impactFate(t, open(), nil); got != fates.Open {
+		t.Errorf("after a review where it did not run: fate = %s; want open", got)
+	}
+}
+
+func TestFatesInputMarksOnlyImpactAsWhole(t *testing.T) {
+	sec := fateSkill(t, "no_blocking_issues")
+	imp := impactSkillOf(t, "no_blocking_issues", "")
+	got := fatesInput([]store.Run{{HeadSHA: sha('a'), Result: resultFor(t, sha('a'), sec, imp)}}, nil)
+	skills := got.Reviews[0].Skills
+	if len(skills) != 2 || skills[0].Whole || !skills[1].Whole {
+		t.Errorf("Whole = %+v; want only the impact skill", skills)
+	}
+}

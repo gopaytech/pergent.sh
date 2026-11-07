@@ -331,7 +331,11 @@ type Last7View struct {
 // with write access dismissed, and why), quietReviews (whether a review says
 // less: fewer nitpicks, no suggestion threads, a shorter comment), commentLayout (the
 // comment's blocks as a list of "block:state" texts in order, such as
-// "findings:collapsed"; the default in effect, the admin default else the built-in layout, until the repository sets one), failureStatus, skills (null: the default list of skills; otherwise the library skills
+// "findings:collapsed"; the default in effect, the admin default else the built-in layout, until the repository sets one),
+// linkedReposEnabled (whether the impact check across linked repositories
+// is on; off by default), linkedRepos (the repository's links, at most 3, each
+// {target, watched, canBlock}: kept while the setting is off; shown to admins
+// only, an empty list to anyone else), failureStatus, skills (null: the default list of skills; otherwise the library skills
 // reviewed), repoSkills
 // (the detected repository skills turned on, a list, empty when none),
 // jobTimeoutSeconds, maxTurns, jobMemory ("" when none), rerunLimitPerMR and
@@ -671,6 +675,10 @@ type DefaultsView struct {
 	// QuietReviews is whether a review says less: fewer nitpicks, no
 	// suggestion threads and a shorter comment.
 	QuietReviews bool `json:"quietReviews"`
+	// LinkedReposEnabled is whether a repository that sets none has the impact
+	// check across its linked repositories on. Links are per repository, so
+	// there is no default list.
+	LinkedReposEnabled bool `json:"linkedReposEnabled"`
 	// CommentLayout is the shape of the review comment, as "block:state"
 	// entries in order. A repository that sets none gets this one: the layout
 	// saved here, else the built-in layout. It is never empty.
@@ -694,7 +702,7 @@ type DefaultsView struct {
 	// Pinned says which defaults were saved here and so no longer follow the
 	// config, by JSON key (approve, reviewDrafts, inlineFindings,
 	// commandsAuthorAndMaintainersOnly, incrementalReviews,
-	// learnFromDismissals, quietReviews, commentLayout, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory,
+	// learnFromDismissals, quietReviews, commentLayout, linkedReposEnabled, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory,
 	// rerunLimitPerMR, rerunLimitPerRepo). Every key is present.
 	Pinned map[string]bool `json:"pinned"`
 }
@@ -713,6 +721,8 @@ type DefaultValues struct {
 	LearnFromDismissals bool `json:"learnFromDismissals"`
 	// QuietReviews: see DefaultsView.
 	QuietReviews bool `json:"quietReviews"`
+	// LinkedReposEnabled: see DefaultsView.
+	LinkedReposEnabled bool `json:"linkedReposEnabled"`
 	// CommentLayout: see DefaultsView. The config has no layout, so here it
 	// is always the built-in one.
 	CommentLayout     []string `json:"commentLayout"`
@@ -768,7 +778,13 @@ type LLMView struct {
 //     the default, the admin default else the built-in layout: the blocks are summary, findings, dismissed, checks and
 //     files, the states open and collapsed, a block left out is hidden,
 //     findings is required and each block is named once; anything else is
-//     400), failureStatus ("failed" or
+//     400), linkedReposEnabled (true or false; only an admin changes it, else
+//     403), linkedRepos (null or a list of at most 3 links, each {"target":
+//     "owner/name", "watched": [globs, at most 50], "canBlock": true}; only an
+//     admin changes it, else 403; GitHub repositories only; 400 with the reason
+//     when a rule fails: itself, twice, a bad glob, a target more private than
+//     the repository, a target the review App can't read or in another
+//     installation, and 502 when GitHub can't tell, with nothing saved), failureStatus ("failed" or
 //     "neutral"), skills (a non-empty list of library skill names, or
 //     null for the default list; a name the library lacks is 400 `skill
 //     "x" is not in the skill library`, and so is a list whose texts come to
@@ -783,8 +799,12 @@ type LLMView struct {
 //     out of bounds, is 400 and nothing changes. 200, RepositoryDetailView.
 //   - POST /api/repositories/{instance}/{project...}/settings/reset: every
 //     setting back to its default, except that a maintainer's reset leaves
-//     the two re-run caps as they are (only an admin resets those). 200,
-//     RepositoryDetailView.
+//     the two re-run caps, the linked repositories setting and the links as
+//     they are (only an admin resets those). 200, RepositoryDetailView.
+//   - GET /api/admin/linkable?instance=&repo=&search= (admins only): LinkableView,
+//     the repositories the instance's review App reaches (at most 200, by name),
+//     each with whether `repo` (a repository switched on, GitHub only; 400 for
+//     GitLab) may link it, and why not. See LinkableRepo.
 //
 // Users whose teams cover a repository switched on see it at their next
 // request.

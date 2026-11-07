@@ -207,6 +207,12 @@ func (f *Forge) Visibility(ctx context.Context, repo string) (forge.Visibility, 
 	if err != nil {
 		return "", mapErr(err)
 	}
+	return visibilityOf(owner, name, r)
+}
+
+// visibilityOf is what GitHub says about who may read owner/name: the
+// visibility field, checked against the private flag.
+func visibilityOf(owner, name string, r github.Repository) (forge.Visibility, error) {
 	var v forge.Visibility
 	switch r.Visibility {
 	case "public":
@@ -222,6 +228,36 @@ func (f *Forge) Visibility(ctx context.Context, repo string) (forge.Visibility, 
 		return "", fmt.Errorf("githubforge: GitHub says %s/%s is %s and private=%v", owner, name, r.Visibility, r.Private)
 	}
 	return v, nil
+}
+
+// LinkInfo is Visibility and the installation of the review App that covers
+// repo ("owner/name"), in one installation lookup and one repository read, for
+// a list of many (the dashboard's choice of a repository to link). The errors
+// are Visibility's.
+func (f *Forge) LinkInfo(ctx context.Context, repo string) (forge.Visibility, int64, error) {
+	owner, name, ok := strings.Cut(strings.Trim(repo, "/"), "/")
+	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+		return "", 0, forge.ErrSourceNotFound
+	}
+	id, err := f.app.Installation(ctx, owner, name)
+	if unreadable(err) {
+		return "", 0, forge.ErrSourceNotFound
+	}
+	if err != nil {
+		return "", 0, err
+	}
+	r, err := f.app.Client(id).Repo(ctx, owner, name)
+	if unreadable(err) {
+		return "", 0, forge.ErrSourceNotFound
+	}
+	if err != nil {
+		return "", 0, mapErr(err)
+	}
+	v, err := visibilityOf(owner, name, r)
+	if err != nil {
+		return "", 0, err
+	}
+	return v, id, nil
 }
 
 // Target is a repository as a review's clone token needs it.

@@ -66,9 +66,17 @@ func Check(source, target forge.Visibility) error {
 		return fmt.Errorf("the linked repository's visibility %q is not public, internal or private", target)
 	}
 	if t > s {
-		return fmt.Errorf("a %s repository can't link a %s one: the linked repository must be as open or more open", source, target)
+		return fmt.Errorf("%s repository can't link %s one: the linked repository must be as open or more open", withArticle(source), withArticle(target))
 	}
 	return nil
+}
+
+// withArticle is v with "a" or "an" before it: "a public", "an internal".
+func withArticle(v forge.Visibility) string {
+	if v == forge.VisInternal {
+		return "an " + string(v)
+	}
+	return "a " + string(v)
 }
 
 // Validate checks the links of the repository source ("owner/name"): at most

@@ -57,6 +57,7 @@ describe("AdminSettings defaults", () => {
       incrementalReviews: null,
       learnFromDismissals: null,
       quietReviews: null,
+      linkedReposEnabled: null,
       commentLayout: null,
       failureStatus: null,
       jobTimeoutSeconds: 900,
@@ -182,6 +183,30 @@ describe("AdminSettings defaults", () => {
     expect(within(form).getByRole("switch", { name: "Quiet reviews" })).toBeChecked();
   });
 
+  it("shows the linked repositories switch, off by default, and sends only the on/off default", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "PUT /api/admin/defaults": { body: { ...defaults, linkedReposEnabled: true, pinned: { linkedReposEnabled: true } } },
+    });
+    renderApp("/admin/settings");
+    const form = await screen.findByRole("form", { name: "Repository defaults" });
+    const row = within(form).getByText("Linked repositories", { selector: ".name" }).closest(".set") as HTMLElement;
+    expect(row).toHaveTextContent("Off by default");
+    // The links are not a default.
+    expect(row).toHaveTextContent("set on each repository's page");
+    expect(within(row).queryByRole("textbox")).not.toBeInTheDocument();
+    const toggle = within(row).getByRole("switch", { name: "Linked repositories" });
+    expect(toggle).not.toBeChecked();
+    await userEvent.click(toggle);
+    await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
+    const body = fake.find("PUT", "/api/admin/defaults")[0].body as Record<string, unknown>;
+    expect(body).toMatchObject({ linkedReposEnabled: true });
+    expect(body).not.toHaveProperty("linkedRepos");
+    expect(await screen.findByText("Defaults saved.")).toBeInTheDocument();
+    expect(within(form).getByRole("switch", { name: "Linked repositories" })).toBeChecked();
+    expect(within(form).getByRole("switch", { name: "Linked repositories" }).closest(".set")).toHaveTextContent("Saved here");
+  });
+
   it("shows the comment layout after the quiet reviews switch and sends a changed list with the other defaults", async () => {
     const fake = fakeApi({
       ...routes(),
@@ -273,6 +298,7 @@ describe("AdminSettings defaults", () => {
       incrementalReviews: null,
       learnFromDismissals: null,
       quietReviews: null,
+      linkedReposEnabled: null,
       commentLayout: null,
       failureStatus: null,
       jobTimeoutSeconds: null,
@@ -296,6 +322,7 @@ describe("AdminSettings defaults", () => {
     expect(row("Incremental reviews")).toHaveTextContent("From config: on");
     expect(row("Learn from dismissals")).toHaveTextContent("From config: on");
     expect(row("Quiet reviews")).toHaveTextContent("From config: off");
+    expect(row("Linked repositories")).toHaveTextContent("From config: off");
     expect(row("Comment layout")).toHaveTextContent("Not saved here: repositories switched on in the dashboard start with the built-in layout.");
     expect(row("Status when a review fails")).toHaveTextContent("From config: failed (blocks merge)");
     expect(row("Timeout")).toHaveTextContent("From config: 600");
