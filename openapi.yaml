@@ -990,8 +990,9 @@ paths:
       description: |
         `settings` is keyed `approve`, `reviewDrafts`, `inlineFindings`,
         `commandsAuthorAndMaintainersOnly`, `incrementalReviews`,
-        `learnFromDismissals`, `failureStatus`, `skills` (null: the default
-        list), `repoSkills`, `jobTimeoutSeconds`, `maxTurns`, `jobMemory`
+        `learnFromDismissals`, `quietReviews`, `failureStatus`, `skills`
+        (null: the default list), `repoSkills`, `jobTimeoutSeconds`,
+        `maxTurns`, `jobMemory`
         (`""` when none), `rerunLimitPerMR` and `rerunLimitPerRepo`; each
         value says whether the repository sets it (`overridden`) or follows
         the default.
@@ -2607,6 +2608,8 @@ components:
           type: [boolean, 'null']
         learnFromDismissals:
           type: [boolean, 'null']
+        quietReviews:
+          type: [boolean, 'null']
         failureStatus:
           type: [string, 'null']
           enum: [failed, neutral, null]
@@ -2660,6 +2663,8 @@ components:
         incrementalReviews:
           type: [boolean, 'null']
         learnFromDismissals:
+          type: [boolean, 'null']
+        quietReviews:
           type: [boolean, 'null']
         failureStatus:
           type: [string, 'null']
@@ -2814,7 +2819,7 @@ components:
     DefaultValues:
       description: DefaultsView's settings without the skill list, with the same keys.
       type: object
-      required: [approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo]
+      required: [approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo]
       properties:
         approve: {type: boolean}
         reviewDrafts: {type: boolean}
@@ -2822,6 +2827,7 @@ components:
         commandsAuthorAndMaintainersOnly: {type: boolean}
         incrementalReviews: {type: boolean}
         learnFromDismissals: {type: boolean}
+        quietReviews: {type: boolean}
         failureStatus: {type: string}
         jobTimeoutSeconds: {type: integer}
         maxTurns: {type: integer}
@@ -2831,7 +2837,7 @@ components:
     DefaultsView:
       description: The settings a repository gets when it sets none.
       type: object
-      required: [approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, skills, config, pinned]
+      required: [approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, skills, config, pinned]
       properties:
         approve: {type: boolean}
         reviewDrafts: {type: boolean}
@@ -2839,6 +2845,7 @@ components:
         commandsAuthorAndMaintainersOnly: {type: boolean}
         incrementalReviews: {type: boolean}
         learnFromDismissals: {type: boolean}
+        quietReviews: {type: boolean}
         failureStatus: {type: string}
         jobTimeoutSeconds: {type: integer}
         maxTurns: {type: integer}
@@ -3214,7 +3221,7 @@ components:
           type: object
           additionalProperties: {$ref: '#/components/schemas/SettingView'}
           description: Keyed approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews,
-            learnFromDismissals, failureStatus, skills, repoSkills, jobTimeoutSeconds, maxTurns, jobMemory,
+            learnFromDismissals, quietReviews, failureStatus, skills, repoSkills, jobTimeoutSeconds, maxTurns, jobMemory,
             rerunLimitPerMR and rerunLimitPerRepo.
         attention:
           type: array
@@ -3313,7 +3320,7 @@ components:
     RunDetailView:
       description: One run. A run without a usable result has no skills or files.
       type: object
-      required: [run, instance, project, number, status, approved, approvalReason, pergentVersion, model, maxTurns, incrementalNote, tokens, files, skills, latestDecided]
+      required: [run, instance, project, number, status, approved, approvalReason, pergentVersion, model, maxTurns, quiet, incrementalNote, tokens, files, skills, latestDecided]
       properties:
         run: {$ref: '#/components/schemas/RunSummary'}
         instance: {type: string}
@@ -3336,6 +3343,9 @@ components:
         maxTurns:
           type: [integer, 'null']
           description: The step limit each opencode run had; null when not recorded.
+        quiet:
+          type: boolean
+          description: The review was started quiet; false for a run that did not record it.
         incrementalNote:
           type: string
           description: What an incremental review covered; "" for a full review.
