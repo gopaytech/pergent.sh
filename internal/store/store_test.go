@@ -945,6 +945,27 @@ func TestMigrateTwice(t *testing.T) {
 	}
 }
 
+// A migration's number is its identity in schema_migrations, so two files with
+// one number apply only the first: the second is skipped with no error. Two
+// branches adding the next number can both pass and only clash once merged.
+func TestMigrationNumbersAreUnique(t *testing.T) {
+	entries, err := migrationFS.ReadDir("migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[int]string{}
+	for _, e := range entries {
+		v, err := migrationVersion(e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if other, ok := seen[v]; ok {
+			t.Errorf("%s and %s share number %d", other, e.Name(), v)
+		}
+		seen[v] = e.Name()
+	}
+}
+
 func TestMigrateConcurrent(t *testing.T) {
 	url := os.Getenv(testURLEnv)
 	if url == "" {
