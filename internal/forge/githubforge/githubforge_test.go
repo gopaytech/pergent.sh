@@ -159,7 +159,7 @@ func sha(c byte) string { return strings.Repeat(string(c), 40) }
 func pr(state string, merged, draft bool) map[string]any {
 	return map[string]any{
 		"number": 3, "state": state, "merged": merged, "draft": draft,
-		"title": "Add login", "html_url": "https://github.example.com/acme/widgets/pull/3",
+		"title": "Add login", "body": "Why it changes.", "html_url": "https://github.example.com/acme/widgets/pull/3",
 		"user": map[string]any{"id": 5, "login": "alice"},
 		"head": map[string]any{"ref": "feature", "sha": sha('a')},
 		"base": map[string]any{"ref": "main", "sha": sha('5')},
@@ -180,7 +180,7 @@ func TestGetChangeOpen(t *testing.T) {
 	}
 	want := forge.Change{Number: 3, State: forge.StateOpen, Draft: true, HeadSHA: sha('a'),
 		TargetBranch: "main", BaseSHA: sha('b'), StartSHA: sha('5'),
-		SourceBranch: "feature", Title: "Add login", Author: "alice", AuthorID: 5,
+		SourceBranch: "feature", Title: "Add login", Description: "Why it changes.", Author: "alice", AuthorID: 5,
 		WebURL: "https://github.example.com/acme/widgets/pull/3"}
 	if got != want {
 		t.Fatalf("GetChange = %+v\nwant %+v", got, want)

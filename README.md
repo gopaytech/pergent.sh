@@ -245,6 +245,7 @@ This release adds [Quiet reviews](#-quiet-reviews): a review that raises fewer n
 
 The migration adds one table, `webhook_deliveries`. Back up Postgres first, as for any migration.
 
+- Reviews can use the change's title and description. pergent.sh passes them to every Job, read when the Job starts, as data the author wrote; verification runs never get them. Editing them starts no review. An image older than the pergent release that reads them ignores them, so reviews keep working as before until `jobs.image` moves to it.
 - Review Jobs now limit their work volume to `jobs.work_size`, 20Gi by default. A repository whose checkout is larger fails its review until you raise it.
 - On GitLab, a comment command is read back from GitLab before it is acted on, so each one costs one more API call.
 - The chart now sets `callback_url` to its own Service unless `config.callback_url` is set, so Jobs post their results inside the cluster over plain HTTP instead of through `public_url`. To keep the old path, set `config.callback_url` to your `public_url`. In a mesh that requires mTLS, check first that Jobs can reach the Service.
@@ -1321,7 +1322,7 @@ A Job has two containers, started in order. Both run the pinned pergent image an
 **The pergent container** runs `pergent agent` and gets:
 
 - the checkout, which is untrusted code under review, read-only to the agent;
-- the skills, the instructions, the previous review and, for an incremental review, the files to carry over (`carried.json`), mounted read-only at `/in`;
+- the skills, the instructions, the previous review, the change's title and description (`change-description.md`) and, for an incremental review, the files to carry over (`carried.json`), mounted read-only at `/in`;
 - `OPENCODE_API_KEY` (the LLM key) and a one-time result token. The result token is random, stored only as a hash, valid for one result and expires shortly after the Job's deadline;
 - the provider, model and, if set, base URL.
 

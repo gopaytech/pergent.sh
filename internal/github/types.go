@@ -60,6 +60,7 @@ type PullRequest struct {
 	Merged  bool   `json:"merged"`
 	Draft   bool   `json:"draft"`
 	Title   string `json:"title"`
+	Body    string `json:"body"`
 	HTMLURL string `json:"html_url"`
 	User    User   `json:"user"`
 	Head    Ref    `json:"head"`

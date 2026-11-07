@@ -29,8 +29,9 @@ const (
 // user ID, 0 when the platform didn't say) tell who the change's author is:
 // the engine compares AuthorID with a commenter's, never usernames, to keep
 // the author from dismissing blocking findings of their own change. Title,
-// WebURL (its page on the platform) and SourceBranch are only shown in the
-// dashboard; the engine decides nothing on them.
+// WebURL (its page on the platform) and SourceBranch are shown in the
+// dashboard; the engine decides nothing on them. Title and Description also
+// go to the review Job, as data: the author wrote them.
 type Change struct {
 	Number       int64
 	State        ChangeState
@@ -40,6 +41,7 @@ type Change struct {
 	BaseSHA      string
 	StartSHA     string
 	Title        string
+	Description  string
 	WebURL       string
 	SourceBranch string
 	Author       string

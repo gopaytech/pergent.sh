@@ -148,6 +148,7 @@ func BuildJob(p JobParams) *batchv1.Job {
 	hasPrevious := p.Inputs != nil && len(p.Inputs.Previous) > 0
 	hasCarried := p.Inputs != nil && len(p.Inputs.Carried) > 0
 	hasDismissals := p.Inputs != nil && len(p.Inputs.Dismissals) > 0
+	hasDescription := p.Inputs != nil && len(p.Inputs.Description) > 0
 
 	args := []string{
 		"agent",
@@ -185,6 +186,10 @@ func BuildJob(p JobParams) *batchv1.Job {
 		// An environment variable, not an argument: an older image ignores a
 		// variable it doesn't know, but exits 2 on an unknown flag.
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "PERGENT_DISMISSALS", Value: "/in/dismissals.json"})
+	}
+	if hasDescription {
+		// An environment variable for the same reason.
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "PERGENT_CHANGE_DESCRIPTION", Value: "/in/change-description.md"})
 	}
 	mainEnv = append(mainEnv,
 		secretEnv("OPENCODE_API_KEY", secret, keyLLMKey),
@@ -239,6 +244,9 @@ func BuildJob(p JobParams) *batchv1.Job {
 	if hasDismissals {
 		items = append(items, corev1.KeyToPath{Key: "dismissals.json", Path: "dismissals.json"})
 	}
+	if hasDescription {
+		items = append(items, corev1.KeyToPath{Key: "change-description.md", Path: "change-description.md"})
+	}
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: p.Name, Namespace: p.Namespace, Labels: labels(p.RunID)},
@@ -288,7 +296,7 @@ func ownerRef(job *batchv1.Job) []metav1.OwnerReference {
 }
 
 // BuildConfigMap holds the skills, instructions, previous review, carried
-// files and past dismissals. owner may be nil (tests); Launch always passes
+// files, past dismissals and the change's description. owner may be nil (tests); Launch always passes
 // the created Job.
 func BuildConfigMap(p JobParams, owner *batchv1.Job) *corev1.ConfigMap {
 	data := map[string]string{}
@@ -307,6 +315,9 @@ func BuildConfigMap(p JobParams, owner *batchv1.Job) *corev1.ConfigMap {
 		}
 		if len(p.Inputs.Dismissals) > 0 {
 			data["dismissals.json"] = string(p.Inputs.Dismissals)
+		}
+		if len(p.Inputs.Description) > 0 {
+			data["change-description.md"] = string(p.Inputs.Description)
 		}
 	}
 	return &corev1.ConfigMap{

@@ -179,14 +179,15 @@ func TestGetChangeDetails(t *testing.T) {
 	f := newFake(t)
 	f.on(http.MethodGet, mr, http.StatusOK, map[string]any{"iid": 3, "state": "opened", "sha": "h",
 		"target_branch": "main", "source_branch": "feature/login", "title": "Add login",
-		"web_url": "https://gitlab.example.com/acme/widgets/-/merge_requests/3",
-		"author":  map[string]any{"id": 5, "username": "alice"}})
+		"description": "Why it changes.",
+		"web_url":     "https://gitlab.example.com/acme/widgets/-/merge_requests/3",
+		"author":      map[string]any{"id": 5, "username": "alice"}})
 	got, err := f.forge().GetChange(context.Background(), 7, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := forge.Change{Number: 3, State: forge.StateOpen, HeadSHA: "h", TargetBranch: "main",
-		SourceBranch: "feature/login", Title: "Add login", Author: "alice", AuthorID: 5,
+		SourceBranch: "feature/login", Title: "Add login", Description: "Why it changes.", Author: "alice", AuthorID: 5,
 		WebURL: "https://gitlab.example.com/acme/widgets/-/merge_requests/3"}
 	if got != want {
 		t.Errorf("GetChange = %+v\nwant %+v", got, want)

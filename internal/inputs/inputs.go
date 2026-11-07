@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/gopaytech/pergent.sh/internal/forge"
 )
@@ -59,6 +60,10 @@ type Inputs struct {
 	// skill ({"<skill>": [{"file", "title", "severity", "reason"}]}); nil when
 	// there is none. It is not part of any skill's hash.
 	Dismissals []byte
+	// Description is the change's title and description, as its author wrote
+	// them; nil when there is none. It is not part of any skill's hash, so
+	// editing it starts no review.
+	Description []byte
 }
 
 // LibraryEntry is one skill of the library as ResolveSkills receives it.
@@ -275,9 +280,25 @@ func (in *Inputs) AddQuietLine() {
 	in.Instructions = append(out, section...)
 }
 
+// maxDescription is the most of a change's title and description a Job gets.
+// It only keeps a long description out of the ConfigMap's budget: pergent cuts
+// what it attaches to less than this and says so.
+const maxDescription = 32 << 10
+
+// AddDescription sets the change's title and description.
+func (in *Inputs) AddDescription(title, description string) {
+	text := strings.TrimSpace(title + "\n\n" + description)
+	if len(text) > maxDescription {
+		text = text[:maxDescription]
+	}
+	if text = strings.ToValidUTF8(text, "\uFFFD"); text != "" {
+		in.Description = []byte(text)
+	}
+}
+
 // Size is the total number of bytes the inputs put into a ConfigMap.
 func (in *Inputs) Size() int {
-	n := len(in.Instructions) + len(in.Previous) + len(in.Carried) + len(in.Dismissals)
+	n := len(in.Instructions) + len(in.Previous) + len(in.Carried) + len(in.Dismissals) + len(in.Description)
 	for _, c := range in.Skills {
 		n += len(c)
 	}
@@ -285,14 +306,19 @@ func (in *Inputs) Size() int {
 }
 
 // Fit makes the inputs fit limit bytes: over the limit, the dismissals are
-// dropped first, so a long list never turns an incremental review into a full
-// one; then the previous result, together with the carried files (the review
-// is then a full one). If they are still over, it returns ErrTooLarge.
+// dropped first and then the change's description, so neither ever turns an
+// incremental review into a full one; then the previous result, together with
+// the carried files (the review is then a full one). If they are still over,
+// it returns ErrTooLarge.
 func (in *Inputs) Fit(limit int) error {
 	if in.Size() <= limit {
 		return nil
 	}
 	in.Dismissals = nil
+	if in.Size() <= limit {
+		return nil
+	}
+	in.Description = nil
 	if in.Size() <= limit {
 		return nil
 	}
