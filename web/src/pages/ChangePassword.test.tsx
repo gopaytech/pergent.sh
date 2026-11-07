@@ -2,7 +2,7 @@ import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { fakeApi } from "../test/fakeApi";
+import { fakeApi, untilLogout } from "../test/fakeApi";
 import { mustChange, operator, overview } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
@@ -69,7 +69,7 @@ describe("ChangePassword", () => {
     fakeApi({
       "GET /api/me": { body: mustChange },
       "POST /auth/password/change": { status: 401, body: { error: "wrong password" } },
-      "GET /api/instances": { body: { password: true, instances: [] } },
+      "GET /api/sign-in-options": { body: { password: true, jwt: false } },
     });
     renderApp("/");
     await fill("not the password", "a much better password");
@@ -137,9 +137,8 @@ describe("ChangePassword", () => {
 
   it("lets the account sign out instead", async () => {
     fakeApi({
-      "GET /api/me": { body: mustChange },
-      "POST /auth/logout": { status: 204 },
-      "GET /api/instances": { body: { password: true, instances: [] } },
+      ...untilLogout(mustChange),
+      "GET /api/sign-in-options": { body: { password: true, jwt: false } },
     });
     renderApp("/");
     await userEvent.click(await screen.findByRole("button", { name: "Sign out" }));

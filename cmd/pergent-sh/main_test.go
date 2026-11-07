@@ -216,9 +216,9 @@ func TestNewDashboardRoutes(t *testing.T) {
 		t.Fatalf("newDashboard = %v, %v", d, err)
 	}
 	h := server.Routes(server.Deps{Config: cfg, Dashboard: dashboardHandler(d), Log: log})
-	code, body := get(t, h, "/api/instances")
-	if code != http.StatusOK || !strings.Contains(body, `"password":true`) || !strings.Contains(body, `"instances":[]`) {
-		t.Errorf("GET /api/instances = %d %s; want the password form and no instance", code, body)
+	code, body := get(t, h, "/api/sign-in-options")
+	if code != http.StatusOK || !strings.Contains(body, `"password":true`) || strings.Contains(body, "instances") {
+		t.Errorf("GET /api/sign-in-options = %d %s; want the password form and no instance", code, body)
 	}
 	if code, _ := get(t, h, "/auth/gitlab/main/login"); code != http.StatusNotFound {
 		t.Errorf("GET /auth/gitlab/main/login = %d, want 404", code)
@@ -236,7 +236,7 @@ func TestNewDashboardRoutes(t *testing.T) {
 		t.Fatalf("newDashboard with the dashboard off = %v, %v; want nil, nil", d, err)
 	}
 	h = server.Routes(server.Deps{Config: off, Dashboard: dashboardHandler(d), Log: log})
-	for _, path := range []string{"/", "/api/instances", "/auth/gitlab/main/login"} {
+	for _, path := range []string{"/", "/api/sign-in-options", "/auth/gitlab/main/login"} {
 		if code, _ := get(t, h, path); code != http.StatusNotFound {
 			t.Errorf("GET %s with the dashboard off = %d, want 404", path, code)
 		}

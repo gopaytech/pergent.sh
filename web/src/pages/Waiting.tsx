@@ -9,9 +9,7 @@ export default function Waiting() {
   return (
     <CenteredCard>
       <h1>Waiting for a team</h1>
-      <p className="sub">
-        You're signed in as {me.username}. An admin needs to add you to a team.
-      </p>
+      <p className="sub">You're signed in as {me.email || me.username}. An admin needs to add you to a team.</p>
       <SignOut />
     </CenteredCard>
   );

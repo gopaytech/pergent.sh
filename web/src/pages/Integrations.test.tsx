@@ -8,10 +8,7 @@ import {
   instanceGitHub,
   instanceGitHubOneApp,
   instanceGitLab,
-  integrations,
-  integrationsGitHub,
   operator,
-  platformAdmin,
 } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
@@ -27,55 +24,10 @@ const onlyCopy = (el: HTMLElement) => {
   return buttons.length === 1 && buttons[0].getAttribute("aria-label") === "Copy webhook URL";
 };
 
-describe("Integrations for a platform admin", () => {
-  it("shows the instance, the approver and each repository's installation, read-only", async () => {
-    const fake = fakeApi({ "GET /api/me": { body: platformAdmin }, "GET /api/integrations": { body: integrations } });
-    renderApp("/integrations");
-    expect(await screen.findByRole("heading", { name: "Integrations" })).toBeInTheDocument();
-    const inst = await screen.findByRole("region", { name: "GitLab · main" });
-    expect(within(inst).getByText("Connected")).toHaveClass("pill", "ok");
-    expect(inst).toHaveTextContent("Approves with a bot user's token");
-    expect(inst).toHaveTextContent("Token expires 2026-11-09");
-    const row = screen.getByText("acme/payments").closest("tr") as HTMLElement;
-    expect(within(row).getByText("Installed")).toHaveClass("pill", "ok");
-    expect(within(row).getByText("Can't approve")).toHaveClass("pill", "bad");
-    expect(row).toHaveTextContent("Inline findings are off: the review App has Pull requests: Read-only.");
-    const widgets = screen.getByText("acme/widgets").closest("tr") as HTMLElement;
-    expect(widgets).not.toHaveTextContent("Inline findings");
-    expect(screen.queryByRole("button", { name: /Add .* instance/ })).not.toBeInTheDocument();
-    expect(fake.find("GET", "/api/admin/instances")).toHaveLength(0);
-  });
-});
-
-describe("Integrations on GitHub", () => {
-  const note =
-    "Can't read classic branch protection (the review App lacks Administration: Read); a \"require conversation resolution\" rule there is treated as off.";
-
-  it("says when classic branch protection can't be read, only where inline findings are on", async () => {
-    fakeApi({ "GET /api/me": { body: platformAdmin }, "GET /api/integrations": { body: integrationsGitHub } });
-    renderApp("/integrations");
-    const orders = (await screen.findByText("acme/orders")).closest("tr") as HTMLElement;
-    expect(orders).toHaveTextContent(note);
-    expect(orders).not.toHaveTextContent("Inline findings");
-    const payments = screen.getByText("acme/payments").closest("tr") as HTMLElement;
-    expect(payments).toHaveTextContent("Inline findings are off");
-    expect(payments).not.toHaveTextContent("classic branch protection");
-    const widgets = screen.getByText("acme/widgets").closest("tr") as HTMLElement;
-    expect(widgets).not.toHaveTextContent("classic branch protection");
-  });
-
-  it("does not raise it as a Needs attention item", async () => {
-    fakeApi({ "GET /api/me": { body: platformAdmin }, "GET /api/integrations": { body: integrationsGitHub } });
-    renderApp("/integrations");
-    await screen.findByText("acme/orders");
-    expect(screen.queryByText(/Needs attention/)).not.toBeInTheDocument();
-  });
-});
-
-describe("Integrations for an operator", () => {
+describe("Integrations", () => {
   it("lists every instance, marking the config's and showing which secrets are set", async () => {
     const fake = fakeApi({ "GET /api/me": { body: operator }, "GET /api/admin/instances": { body: instances } });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     const main = await card("GitLab · main");
     expect(within(main).getByText("config")).toBeInTheDocument();
     expect(main).toHaveTextContent("https://gitlab.example.com");
@@ -99,7 +51,7 @@ describe("Integrations for an operator", () => {
       "GET /api/me": { body: operator },
       "GET /api/admin/instances": { body: [...instances, instanceGitHubOneApp] },
     });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     const main = await card("GitLab · main");
     expect(main).toHaveTextContent("Webhook URL: https://pergent.example.com/webhooks/gitlab/main");
     expect(main).toHaveTextContent("pergent.sh sets this on each project.");
@@ -117,7 +69,7 @@ describe("Integrations for an operator", () => {
   it("copies the webhook URL", async () => {
     const user = userEvent.setup();
     fakeApi({ "GET /api/me": { body: operator }, "GET /api/admin/instances": { body: instances } });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     const hub = await card("GitHub · hub");
     await user.click(within(hub).getByRole("button", { name: "Copy webhook URL" }));
     expect(await navigator.clipboard.readText()).toBe("https://pergent.example.com/webhooks/github/hub");
@@ -129,7 +81,7 @@ describe("Integrations for an operator", () => {
     try {
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       fakeApi({ "GET /api/me": { body: operator }, "GET /api/admin/instances": { body: instances } });
-      renderApp("/integrations");
+      renderApp("/admin/integrations");
       const hub = await card("GitHub · hub");
       await user.click(within(hub).getByRole("button", { name: "Copy webhook URL" }));
       expect(within(hub).getByRole("button", { name: "Copied" })).toBeInTheDocument();
@@ -142,7 +94,7 @@ describe("Integrations for an operator", () => {
 
   it("says the review App approves, and lists no approve secret for it", async () => {
     fakeApi({ "GET /api/me": { body: operator }, "GET /api/admin/instances": { body: [instanceGitHubOneApp] } });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     const solo = await card("GitHub · solo");
     expect(solo).toHaveTextContent("Approves with the review App");
     expect(solo).not.toHaveTextContent("Approve App ID");
@@ -152,7 +104,7 @@ describe("Integrations for an operator", () => {
 
   it("gives a config instance no way to change it", async () => {
     fakeApi({ "GET /api/me": { body: operator }, "GET /api/admin/instances": { body: instances } });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     const main = await card("GitLab · main");
     expect(onlyCopy(main)).toBe(true);
     expect(within(main).queryByRole("textbox")).not.toBeInTheDocument();
@@ -170,7 +122,7 @@ describe("Integrations for an operator", () => {
       "GET /api/admin/instances": () => ({ body: listed++ === 0 ? instances : [instanceGitLab, instanceGitHub, instanceDashboardGitLab] }),
       "PUT /api/admin/instances/extra": { body: instanceDashboardGitLab },
     });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     const extra = await card("GitLab · extra");
     const group = within(extra).getByRole("group", { name: "Review token" });
     await userEvent.click(within(group).getByRole("button", { name: "Replace" }));
@@ -196,7 +148,7 @@ describe("Integrations for an operator", () => {
       "GET /api/admin/instances": { body: instances },
       "PUT /api/admin/instances/extra": { status: 400, body: { error: "GitLab refused the token" } },
     });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     const extra = await card("GitLab · extra");
     const group = within(extra).getByRole("group", { name: "Approve token" });
     await userEvent.click(within(group).getByRole("button", { name: "Replace" }));
@@ -212,7 +164,7 @@ describe("Integrations for an operator", () => {
       "GET /api/admin/instances": { body: instances },
       "PUT /api/admin/instances/hub": { body: instanceGitHub },
     });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     const hub = await card("GitHub · hub");
     const group = within(hub).getByRole("group", { name: "Approve App private key" });
     await userEvent.click(within(group).getByRole("button", { name: "Replace" }));
@@ -236,7 +188,7 @@ describe("Integrations for an operator", () => {
       "GET /api/admin/instances": { body: instances },
       "PUT /api/admin/instances/hub": { body: instanceGitHub },
     });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     const group = within(await card("GitHub · hub")).getByRole("group", { name: "Review App private key" });
     await userEvent.click(within(group).getByRole("button", { name: "Replace" }));
     const body = "Zm9v".repeat(20) + "+/==";
@@ -258,7 +210,7 @@ describe("Integrations for an operator", () => {
       "GET /api/admin/instances": () => ({ body: listed++ === 0 ? [instanceGitLab] : [instanceGitLab, instanceDashboardGitLab] }),
       "POST /api/admin/instances": { status: 201, body: instanceDashboardGitLab },
     });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     await userEvent.click(await screen.findByRole("button", { name: "Add GitLab instance" }));
     const form = screen.getByRole("form", { name: "Add GitLab instance" });
     // Every field starts empty, and no webhook secret is asked.
@@ -309,7 +261,7 @@ describe("Integrations for an operator", () => {
       "GET /api/admin/instances": { body: [] },
       "POST /api/admin/instances": { status: 201, body: instanceGitHub },
     });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     await userEvent.click(await screen.findByRole("button", { name: "Add GitHub instance" }));
     return { fake, form: screen.getByRole("form", { name: "Add GitHub instance" }) };
   };
@@ -403,7 +355,7 @@ describe("Integrations for an operator", () => {
       "GET /api/admin/instances": { body: [] },
       "POST /api/admin/instances": { status: 400, body: { error: "the review token can't reach GitLab" } },
     });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     await userEvent.click(await screen.findByRole("button", { name: "Add GitLab instance" }));
     const form = screen.getByRole("form", { name: "Add GitLab instance" });
     await userEvent.type(within(form).getByLabelText("Name"), "extra");
@@ -429,7 +381,7 @@ describe("Integrations for an operator", () => {
         },
         "DELETE /api/admin/instances/extra": { status: 202, body: { status: "removing" } },
       });
-      renderApp("/integrations");
+      renderApp("/admin/integrations");
       const extra = await card("GitLab · extra");
       await userEvent.click(within(extra).getByRole("button", { name: "Remove" }));
       expect(confirm).toHaveBeenCalledWith(expect.stringContaining("extra"));
@@ -447,7 +399,7 @@ describe("Integrations for an operator", () => {
   it("removes nothing when the confirmation is declined", async () => {
     vi.stubGlobal("confirm", vi.fn(() => false));
     const fake = fakeApi({ "GET /api/me": { body: operator }, "GET /api/admin/instances": { body: instances } });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     await userEvent.click(within(await card("GitLab · extra")).getByRole("button", { name: "Remove" }));
     expect(fake.calls.filter((c) => c.method === "DELETE")).toHaveLength(0);
   });

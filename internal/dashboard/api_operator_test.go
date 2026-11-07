@@ -240,9 +240,8 @@ func TestAddGitLabInstance(t *testing.T) {
 	}
 
 	// No sign-in is offered through it: an instance is no way to sign in.
-	signin := decode[instancesView](t, e.do("GET", "/api/instances", nil, nil), "GET /api/instances", http.StatusOK)
-	if len(signin.Instances) != 0 {
-		t.Errorf("sign-in instances = %+v, want none", signin.Instances)
+	if body := e.do("GET", "/api/sign-in-options", nil, nil).Body.String(); strings.Contains(body, "lab") {
+		t.Errorf("the sign-in options name an instance: %s", body)
 	}
 
 	// Its webhooks: refused with a wrong secret, accepted with the
@@ -688,8 +687,8 @@ func TestOnlyAdminsTouchInstances(t *testing.T) {
 			} else {
 				rec = e.send(c, tc.method, tc.target, tc.body)
 			}
-			if rec.Code != http.StatusForbidden {
-				t.Errorf("%s %s as a %s = %d %s, want 403", tc.method, tc.target, name, rec.Code, rec.Body)
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("%s %s as a %s = %d %s, want 404", tc.method, tc.target, name, rec.Code, rec.Body)
 			}
 		}
 	}
@@ -1145,11 +1144,11 @@ func TestDefaults(t *testing.T) {
 
 	// Maintainers and viewers can't change them.
 	viewer := e.userOnGH(false, "acme/widgets")
-	if rec := e.send(viewer, "PUT", "/api/admin/defaults", `{}`); rec.Code != http.StatusForbidden {
-		t.Errorf("PUT as a viewer = %d, want 403", rec.Code)
+	if rec := e.send(viewer, "PUT", "/api/admin/defaults", `{}`); rec.Code != http.StatusNotFound {
+		t.Errorf("PUT as a viewer = %d, want 404", rec.Code)
 	}
-	if rec := e.get(viewer, "/api/admin/defaults"); rec.Code != http.StatusForbidden {
-		t.Errorf("GET as a viewer = %d, want 403", rec.Code)
+	if rec := e.get(viewer, "/api/admin/defaults"); rec.Code != http.StatusNotFound {
+		t.Errorf("GET as a viewer = %d, want 404", rec.Code)
 	}
 }
 
@@ -1248,7 +1247,7 @@ func TestOperatorAPINeverReturnsSecrets(t *testing.T) {
 	e.sendJSON(c, "PUT", "/api/admin/instances/lab", map[string]any{"secrets": map[string]string{"approve_token": "bad-token-SECRET-000"}})
 	e.conn.checkErr = nil
 	for _, target := range []string{"/api/admin/instances", "/api/admin/llm", "/api/admin/defaults", "/api/admin/settings",
-		"/api/integrations?instance=lab", "/api/me", "/api/instances", "/api/audit"} {
+		"/api/integrations?instance=lab", "/api/me", "/api/sign-in-options", "/api/audit"} {
 		e.get(c, target)
 	}
 
@@ -1339,8 +1338,8 @@ func TestPutLLMSavedButNotReloaded(t *testing.T) {
 	}
 }
 
-// Only admins change the defaults: a maintainer or viewer is 403 with a valid
-// body, and nothing changes.
+// Only admins change the defaults: a maintainer or viewer gets 404 (the route
+// is not theirs to know) with a valid body, and nothing changes.
 func TestDefaultsRefusedToNonAdmins(t *testing.T) {
 	e := newEnv(t, nil)
 	for name, c := range map[string]*http.Cookie{
@@ -1354,7 +1353,7 @@ func TestDefaultsRefusedToNonAdmins(t *testing.T) {
 		} else {
 			rec = e.send(c, "PUT", "/api/admin/defaults", `{"approve": false}`)
 		}
-		want := http.StatusForbidden
+		want := http.StatusNotFound
 		if c == nil {
 			want = http.StatusUnauthorized
 		}

@@ -18,19 +18,17 @@ export type Outcome =
   | "unknown";
 
 // Me is the signed-in account, from GET /api/me: a local admin ("password")
-// or an SSO account. admin is the account's role. platform, instance,
-// operator (the same as admin) and waitingUsers are kept for the pages that
-// still read them. waiting is a user on no team.
+// or an SSO account. role is the account's role and admin says the same as a
+// flag. signIn is how the session began; the web signs out of a "jwt" session
+// to /signed-out. waiting is a user on no team; waitingUsers, for an admin, is
+// how many users wait for one.
 export type Me = {
   kind: "password" | "sso";
   username: string;
   email: string;
   role: "admin" | "user";
   signIn: "password" | "oidc" | "jwt";
-  platform: Platform | "";
-  instance: string;
   admin: boolean;
-  operator: boolean;
   waiting: boolean;
   mustChangePassword: boolean;
   waitingUsers: number;
@@ -39,11 +37,10 @@ export type Me = {
 
 export type Role = "admin" | "maintainer" | "viewer";
 
-export type InstanceView = { platform: string; instance: string; label: string };
-
-// InstancesView is GET /api/instances: whether the password form is shown,
-// the instances with sign-in, and the OIDC button when it is set up.
-export type InstancesView = { password: boolean; instances: InstanceView[]; sso?: { label: string } | null };
+// SignInOptions is GET /api/sign-in-options: whether the password form is
+// shown (on /admin/sign-in), the SSO button when it is set up, and whether a
+// proxy signs people in (jwt: no button, a page load starts the session).
+export type SignInOptions = { password: boolean; sso?: { label: string } | null; jwt: boolean };
 
 export type StatsView = { reviews: number; approved: number; blocking: number; failed: number };
 
@@ -673,7 +670,7 @@ const gateCodes = new Set(["waiting", "password_change_required"]);
 // on that page and recovers from it.
 const wrongPasswordIs401 = new Set(["/auth/password", "/auth/password/change"]);
 
-async function request<T>(method: string, path: string, body?: unknown, csrf?: string): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, csrf?: string, quiet401 = false): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (method !== "GET") {
     // Every write carries the session's CSRF token.
@@ -686,7 +683,7 @@ async function request<T>(method: string, path: string, body?: unknown, csrf?: s
     body: body === undefined ? undefined : JSON.stringify(body),
     credentials: "same-origin",
   });
-  if (res.status === 401 && !wrongPasswordIs401.has(path)) {
+  if (res.status === 401 && !quiet401 && !wrongPasswordIs401.has(path)) {
     for (const fn of [...unauthorized]) fn();
   }
   if (!res.ok) {
@@ -715,6 +712,9 @@ async function request<T>(method: string, path: string, body?: unknown, csrf?: s
 
 export const api = {
   get: <T>(path: string) => request<T>("GET", path),
+  // probe is get for a page that expects a 401 and shows it: the 401 does not
+  // send the browser to the sign-in page.
+  probe: <T>(path: string) => request<T>("GET", path, undefined, undefined, true),
   post: <T>(path: string, body: unknown, csrf: string) => request<T>("POST", path, body, csrf),
   put: <T>(path: string, body: unknown, csrf: string) => request<T>("PUT", path, body, csrf),
   del: <T>(path: string, csrf: string) => request<T>("DELETE", path, undefined, csrf),
@@ -752,7 +752,6 @@ export function query(params: [string, string | number | undefined][]): string {
 export const paths = {
   review: (instance: string, project: string, number: number) => `/reviews/${seg(instance)}/${proj(project)}/${seg(String(number))}`,
   repo: (instance: string, project: string) => `/repos/${seg(instance)}/${proj(project)}`,
-  login: (platform: string, instance: string) => `/auth/${seg(platform)}/${seg(instance)}/login`,
 
   apiReview: (instance: string, project: string, number: number) =>
     `/api/reviews/${seg(instance)}/${proj(project)}/${seg(String(number))}`,

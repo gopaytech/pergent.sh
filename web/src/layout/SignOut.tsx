@@ -1,21 +1,28 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 
 import { ErrorBox } from "../ui";
+import { inAdminArea, useMe } from "./me";
 import { useWrite } from "./write";
 
 // SignOut ends the session. Only once the server says it has ended does
-// the page drop what it loaded and go to sign-in; a failure is shown and
-// the user stays signed in, and knows it.
+// the page drop what it loaded and move on; a failure is shown and the user
+// stays signed in, and knows it. Where it moves to: /signed-out for a session
+// a proxy started (JWT sign-in: the proxy still vouches for the person, so the
+// sign-in page would sign them straight in again), else the sign-in page of
+// the area the user was in.
 export default function SignOut() {
   const navigate = useNavigate();
   const client = useQueryClient();
   const write = useWrite();
+  const me = useMe();
+  const { pathname } = useLocation();
   const out = useMutation({
     mutationFn: () => write<void>("POST", "/auth/logout"),
     onSuccess: () => {
       client.clear();
-      navigate("/signin", { replace: true });
+      if (me.signIn === "jwt") navigate("/signed-out", { replace: true });
+      else navigate(me.admin && inAdminArea(pathname) ? "/admin/sign-in" : "/sign-in", { replace: true });
     },
   });
   return (

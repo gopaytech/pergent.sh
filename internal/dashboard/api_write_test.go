@@ -152,7 +152,8 @@ func writes(instance, project string) []struct{ method, target, body string } {
 }
 
 // Review Focus 2: a viewer calling a write endpoint directly, with a valid
-// session and CSRF token, gets 403 and nothing changes.
+// session and CSRF token, gets 404 on the switch-on, switch-off and picker
+// (an admin's routes) and 403 on a repository's settings, and nothing changes.
 func TestWritesRequireAdmin(t *testing.T) {
 	for _, instance := range []string{"main", "gh"} {
 		t.Run(instance, func(t *testing.T) {
@@ -164,10 +165,14 @@ func TestWritesRequireAdmin(t *testing.T) {
 				t.Fatalf("session = %+v; want a viewer who sees acme/gadgets", se)
 			}
 
-			wantCode(t, e.get(c, "/api/repositories/available?instance="+instance), "GET available", http.StatusForbidden)
+			wantCode(t, e.get(c, "/api/repositories/available?instance="+instance), "GET available", http.StatusNotFound)
 			for _, w := range append(writes(instance, "acme/gadgets"),
 				struct{ method, target, body string }{"POST", "/api/repositories", `{"instance":"` + instance + `","project":"acme/tools"}`}) {
-				wantCode(t, e.send(c, w.method, w.target, w.body), w.method+" "+w.target, http.StatusForbidden)
+				want := http.StatusForbidden // a repository's own settings: its maintainers
+				if w.target == "/api/repositories" || w.method == "DELETE" {
+					want = http.StatusNotFound // an admin's route
+				}
+				wantCode(t, e.send(c, w.method, w.target, w.body), w.method+" "+w.target, want)
 			}
 
 			r, found := e.storedRepo(instance, "acme/gadgets")
@@ -197,8 +202,8 @@ func TestAddRepositoryNeedsAdmin(t *testing.T) {
 			e := newEnv(t, nil)
 			e.cat["main"].set("acme/tools")
 			c := e.signInRole(role)
-			wantCode(t, e.get(c, "/api/repositories/available?instance=main"), "GET available", http.StatusForbidden)
-			wantCode(t, e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"acme/tools"}`), "POST", http.StatusForbidden)
+			wantCode(t, e.get(c, "/api/repositories/available?instance=main"), "GET available", http.StatusNotFound)
+			wantCode(t, e.send(c, "POST", "/api/repositories", `{"instance":"main","project":"acme/tools"}`), "POST", http.StatusNotFound)
 			if _, found := e.storedRepo("main", "acme/tools"); found {
 				t.Error("someone who is not an admin switched a repository on")
 			}
@@ -280,7 +285,7 @@ func TestUserCannotWriteUncoveredRepo(t *testing.T) {
 	for _, w := range []struct{ method, target, body string }{
 		{"DELETE", "/api/repositories/main/acme/gadgets", ""}, {"DELETE", "/api/repositories/main/acme/hidden", ""},
 	} {
-		wantCode(t, e.send(c, w.method, w.target, w.body), w.method+" "+w.target, http.StatusForbidden)
+		wantCode(t, e.send(c, w.method, w.target, w.body), w.method+" "+w.target, http.StatusNotFound)
 	}
 	if r, found := e.storedRepo("main", "acme/hidden"); !found || r.Approve == nil || !*r.Approve {
 		t.Errorf("acme/hidden changed: %+v, %v", r, found)

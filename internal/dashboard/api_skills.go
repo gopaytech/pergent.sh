@@ -201,11 +201,10 @@ func msgLibraryFull() string {
 }
 
 func (d *Dashboard) skillWriteRoutes(mux *http.ServeMux) {
-	admin := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, d.Auth.Require(requireAdmin(h))) }
-	admin("POST /api/admin/skills", d.createSkill)
-	admin("PUT /api/admin/skills/{name}", d.updateSkill)
-	admin("POST /api/admin/skills/{name}/copy", d.copySkill)
-	admin("DELETE /api/admin/skills/{name}", d.deleteSkill)
+	d.adminRoute(mux, "POST /api/admin/skills", d.createSkill)
+	d.adminRoute(mux, "PUT /api/admin/skills/{name}", d.updateSkill)
+	d.adminRoute(mux, "POST /api/admin/skills/{name}/copy", d.copySkill)
+	d.adminRoute(mux, "DELETE /api/admin/skills/{name}", d.deleteSkill)
 }
 
 // auditSkill records a library write: the skill's name leads the detail,

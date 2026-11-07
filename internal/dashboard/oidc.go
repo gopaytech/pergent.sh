@@ -37,7 +37,7 @@ const (
 	// maxIDToken bounds an ID token pergent.sh will parse.
 	maxIDToken = 16 << 10
 
-	// The codes the sign-in page turns into a message (`/signin?error=`).
+	// The codes the sign-in page turns into a message (`/sign-in?error=`).
 	signInErrExpired    = "expired"
 	signInErrFailed     = "failed"
 	signInErrDenied     = "denied"
@@ -299,7 +299,7 @@ func (a *Auth) readOIDCState(r *http.Request) (oidcState, bool) {
 // signInPage sends the browser to the sign-in page with a code it shows as a
 // message. The code is one of ours: nothing from the provider is passed on.
 func signInPage(w http.ResponseWriter, r *http.Request, code string) {
-	http.Redirect(w, r, "/signin?error="+url.QueryEscape(code), http.StatusSeeOther)
+	http.Redirect(w, r, "/sign-in?error="+url.QueryEscape(code), http.StatusSeeOther)
 }
 
 // oidcLogin sends the browser to the provider. Nothing from the request but

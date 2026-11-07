@@ -7,8 +7,11 @@ package dashboard
 // marked [CI].
 
 import (
+	"context"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -37,6 +40,13 @@ func jwtToken(f *fakeIssuer, now time.Time, edit func(c map[string]any)) string 
 		edit(c)
 	}
 	return f.sign(c)
+}
+
+// forgetJWTVerifier drops the verifier and the keys it cached.
+func (a *Auth) forgetJWTVerifier() {
+	a.jwt.mu.Lock()
+	a.jwt.v, a.jwt.key, a.jwt.hc = nil, "", nil
+	a.jwt.mu.Unlock()
 }
 
 // jwtHarness is a dashboard whose config file sets JWT validation against a
@@ -357,6 +367,126 @@ func TestJWTPostStartsNothing(t *testing.T) {
 	}
 }
 
+// A request another site makes (an image, a script, a fetch) carries the
+// proxy's header too and starts nothing; the dashboard has no store, so an
+// attempt would panic. A navigation, or a request with no Sec-Fetch headers, is
+// not turned away by this rule.
+func TestJWTCrossSiteSubrequestStartsNothing(t *testing.T) {
+	j := newJWTHarness(t, nil)
+	tok := "Bearer " + j.token(nil)
+	for _, mode := range []string{"no-cors", "cors", "same-origin", ""} {
+		for name, h := range map[string]http.Handler{"/api/me": j.h, "a page": j.pages} {
+			target := "/api/me"
+			if name == "a page" {
+				target = "/repos"
+			}
+			req := jwtRequest("GET", target, tok)
+			req.Header.Set("Sec-Fetch-Site", "cross-site")
+			if mode != "" {
+				req.Header.Set("Sec-Fetch-Mode", mode)
+			}
+			rec := j.serve(h, req)
+			if cookie(rec, SessionCookieName) != nil {
+				t.Errorf("a cross-site %q request for %s started a session", mode, name)
+			}
+			if name == "/api/me" && rec.Code != http.StatusUnauthorized {
+				t.Errorf("GET /api/me cross-site (%q) = %d, want 401", mode, rec.Code)
+			}
+		}
+	}
+	for _, c := range []struct {
+		site, mode string
+		want       bool
+	}{
+		{"cross-site", "navigate", false}, {"cross-site", "cors", true}, {"cross-site", "", true},
+		{"same-site", "cors", false}, {"same-origin", "no-cors", false}, {"none", "navigate", false}, {"", "", false},
+	} {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("Sec-Fetch-Site", c.site)
+		req.Header.Set("Sec-Fetch-Mode", c.mode)
+		if got := crossSiteSubrequest(req); got != c.want {
+			t.Errorf("crossSiteSubrequest(%q, %q) = %v, want %v", c.site, c.mode, got, c.want)
+		}
+	}
+}
+
+// When the settings cannot be read, a request with no session gets what it
+// would get on an install that does not use a header: 401 on /api/me and the
+// page as it is (the dashboard here has no store: a start would panic). A
+// session that jwt started is not ended, and not kept: 503 (jwtSessionHolds).
+func TestJWTSettingsReadFailure(t *testing.T) {
+	j := newJWTHarness(t, nil)
+	tok := "Bearer " + j.token(nil)
+	j.d.Auth.settings = func(context.Context) (signIn, error) { return signIn{}, errors.New("database is down") }
+	rec := j.serve(j.h, jwtRequest("GET", "/api/me", tok))
+	if rec.Code != http.StatusUnauthorized || cookie(rec, SessionCookieName) != nil {
+		t.Errorf("GET /api/me with the settings unreadable = %d %s; want 401", rec.Code, rec.Body)
+	}
+	rec = j.serve(j.pages, jwtRequest("GET", "/", tok))
+	if rec.Code != http.StatusOK || cookie(rec, SessionCookieName) != nil || rec.Header().Get("Cache-Control") != "" {
+		t.Errorf("GET / with the settings unreadable = %d, cookie %v; want the page", rec.Code, cookie(rec, SessionCookieName))
+	}
+	holds, st := j.d.Auth.jwtSessionHolds(jwtRequest("GET", "/api/me", tok), store.Session{Issuer: j.f.url()}, "alice@example.com")
+	if holds || st != headerUnavailable {
+		t.Errorf("jwtSessionHolds with the settings unreadable = %v, %d; want false, headerUnavailable (503, nothing ended)", holds, st)
+	}
+}
+
+// A token that cannot pass is turned away from its own claims, before the key
+// set is asked for anything: one with an unknown key id would otherwise cost a
+// fetch of the key set on each request.
+func TestJWTTurnsAwayMisfitsBeforeFetchingKeys(t *testing.T) {
+	j := newJWTHarness(t, nil)
+	j.f.signWith = newFakeIssuer(t).key // no key of the issuer's signed it
+	for name, edit := range map[string]func(c map[string]any){
+		"other issuer":   func(c map[string]any) { c["iss"] = "https://other.example.com" },
+		"other audience": func(c map[string]any) { c["aud"] = "another-app" },
+		"audience list":  func(c map[string]any) { c["aud"] = []string{"a", "b"} },
+		"expired":        func(c map[string]any) { c["exp"] = time.Now().Add(-time.Minute).Unix() },
+		"no expiry":      func(c map[string]any) { delete(c, "exp") },
+		"no audience":    func(c map[string]any) { delete(c, "aud") },
+	} {
+		email, st := j.read(j.token(edit))
+		wantHeader(t, name, email, st, "", headerInvalid)
+	}
+	if n := j.f.jwksHits.Load(); n != 0 {
+		t.Errorf("the key set was fetched %d times for tokens that could not pass", n)
+	}
+	// One that fits goes to the keys (and here fails the signature).
+	email, st := j.read(j.token(nil))
+	wantHeader(t, "fits, wrong key", email, st, "", headerInvalid)
+	if j.f.jwksHits.Load() == 0 {
+		t.Error("a token that fits was not checked against the keys")
+	}
+}
+
+func TestClaimsFit(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	seg := func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+	tok := func(payload string) string { return seg(`{"alg":"RS256"}`) + "." + seg(payload) + ".sig" }
+	good := `{"iss":"https://i","aud":"a","exp":1800000100}`
+	for name, c := range map[string]struct {
+		raw  string
+		want bool
+	}{
+		"fits":               {tok(good), true},
+		"audience in a list": {tok(`{"iss":"https://i","aud":["x","a"],"exp":1800000100}`), true},
+		"expired":            {tok(`{"iss":"https://i","aud":"a","exp":1799999999}`), false},
+		"other issuer":       {tok(`{"iss":"https://j","aud":"a","exp":1800000100}`), false},
+		"other audience":     {tok(`{"iss":"https://i","aud":"b","exp":1800000100}`), false},
+		"audience a number":  {tok(`{"iss":"https://i","aud":7,"exp":1800000100}`), false},
+		"no expiry":          {tok(`{"iss":"https://i","aud":"a"}`), false},
+		"payload not JSON":   {tok(`nope`), false},
+		"payload not base64": {seg(`{}`) + ".%%%." + "sig", false},
+		"two parts":          {seg(`{}`) + "." + seg(good), false},
+		"empty":              {"", false},
+	} {
+		if got := claimsFit(c.raw, "https://i", "a", now); got != c.want {
+			t.Errorf("%s: claimsFit = %v, want %v", name, got, c.want)
+		}
+	}
+}
+
 // /signed-out starts nothing, even with a valid header, and neither do the
 // paths that are not pages.
 func TestSignOutShowsNoRestart(t *testing.T) {
@@ -528,12 +658,23 @@ func TestJWTStartsASessionOnAPage(t *testing.T) {
 	if rec.Code != http.StatusOK || rec.Body.String() != "page" || c == nil {
 		t.Fatalf("GET page with a valid header = %d %q, cookie %v; want the page and a session", rec.Code, rec.Body, c)
 	}
+	// A response that sets the session cookie is not for a shared cache.
+	if cc := rec.Header().Get("Cache-Control"); cc != "private, no-store" {
+		t.Errorf("Cache-Control of a page that set a session = %q, want private, no-store", cc)
+	}
 	if se, found := e.storedSession(c); !found || se.SignIn != store.SignInJWT {
 		t.Errorf("stored session = %+v, %v", se, found)
 	}
 	// With the session, no second one starts.
-	if rec := serve("/", e.jwtToken(f, "alice@example.com"), c); cookie(rec, SessionCookieName) != nil {
+	if rec := serve("/", e.jwtToken(f, "alice@example.com"), c); cookie(rec, SessionCookieName) != nil || rec.Header().Get("Cache-Control") != "" {
 		t.Error("a page request that has a session started another")
+	}
+	// A session row past its limit is no session: the page starts a new one.
+	e.clock.advance(SSOMaxSessionAge + time.Minute)
+	f.now = e.clock.now
+	rec2 := serve("/", e.jwtToken(f, "alice@example.com"), c)
+	if c2 := cookie(rec2, SessionCookieName); c2 == nil || c2.Value == c.Value {
+		t.Errorf("a page request with an expired session row = cookie %v; want a new session", c2)
 	}
 	for name, token := range map[string]string{"no header": "", "bad header": "not-a-token", "other audience": jwtToken(f, e.clock.now(), func(c map[string]any) { c["aud"] = "x" })} {
 		before := e.sessionCount()
@@ -549,6 +690,33 @@ func TestJWTStartsASessionOnAPage(t *testing.T) {
 	}
 	if hits == 0 {
 		t.Error("the page handler was never reached")
+	}
+}
+
+// A local admin's password session is not touched by a valid header for
+// someone else, on a page or on /api/me: no session starts, and the account is
+// still the admin's.
+func TestPasswordSessionWithAValidHeader(t *testing.T) {
+	e := newEnv(t, nil)
+	f := newFakeIssuer(t)
+	e.useJWT(f, nil)
+	admin := e.operator()
+	before := e.sessionCount()
+	pages := e.d.Pages(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("page")) }))
+	req := httptest.NewRequest("GET", "/repos", nil)
+	req.Header.Set(jwtHeader, "Bearer "+e.jwtToken(f, "bob@example.com"))
+	req.AddCookie(admin)
+	rec := httptest.NewRecorder()
+	pages.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || cookie(rec, SessionCookieName) != nil || e.sessionCount() != before {
+		t.Errorf("a page with a password session and bob's header = %d, cookie %v, sessions %d -> %d; want the page and nothing new",
+			rec.Code, cookie(rec, SessionCookieName), before, e.sessionCount())
+	}
+	rec = e.jwtDo("GET", "/api/me", "Bearer "+e.jwtToken(f, "bob@example.com"), admin, nil)
+	var me meBody
+	decodeInto(t, rec, &me)
+	if rec.Code != http.StatusOK || me.Kind != "password" || me.Username != "ops" || cookie(rec, SessionCookieName) != nil || e.sessionCount() != before {
+		t.Errorf("GET /api/me with a password session and bob's header = %d %+v, sessions %d; want ops", rec.Code, me, e.sessionCount())
 	}
 }
 

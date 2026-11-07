@@ -1,36 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 
-import { api, type Approver, type IntegrationView, type InstanceAdminView, type Platform } from "../api";
-import { useMe } from "../layout/me";
+import { api, type Approver, type InstanceAdminView, type Platform } from "../api";
 import { useWrite } from "../layout/write";
 import { ErrorBox, Loading, Pill, noFill, platformName, secretFill, secretText } from "../ui";
 
-// Integrations is the instances pergent.sh reviews on. An operator sees
-// every one and adds, changes and removes those kept in the dashboard; a
-// platform admin sees its own instance, read-only.
+// Integrations is the instances pergent.sh reviews on, for admins: they see
+// every one and add, change and remove those kept in the dashboard.
 export default function Integrations() {
-  const me = useMe();
-  return me.operator ? <Instances /> : <OwnInstance />;
-}
-
-// --- a platform admin's own instance ---
-
-function OwnInstance() {
-  const data = useQuery({ queryKey: ["integrations"], queryFn: () => api.get<IntegrationView>("/api/integrations") });
-  return (
-    <div className="narrow">
-      <div className="top">
-        <div>
-          <h1>Integrations</h1>
-          <div className="sub">The instance you signed in with, read-only</div>
-        </div>
-      </div>
-      {data.isPending && <Loading />}
-      {data.isError && <ErrorBox error={data.error} />}
-      {data.isSuccess && <OwnBody v={data.data} />}
-    </div>
-  );
+  return <Instances />;
 }
 
 // approverWords says who approves, for a card.
@@ -44,62 +22,6 @@ function approverWords(approver: Approver): string {
       return "Approves with a bot user's token";
   }
 }
-
-function OwnBody({ v }: { v: IntegrationView }) {
-  const platform = platformName(v.platform);
-  return (
-    <>
-      <section className="card" aria-label={`${platform} · ${v.instance}`}>
-        <h2>
-          {platform} · {v.instance}{" "}
-          {v.connected ? <Pill tone="ok">Connected</Pill> : <Pill tone="bad">Not connected</Pill>}
-        </h2>
-        <div className="facts">
-          <div>{approverWords(v.approver)}</div>
-          {v.tokenExpiry && <div className="warn-text">Token expires {v.tokenExpiry.slice(0, 10)}</div>}
-        </div>
-      </section>
-      <section className="card scroll" aria-label="Repositories">
-        <h2>Repositories</h2>
-        {v.repos.length === 0 ? (
-          <div className="row empty-row">No repositories are switched on.</div>
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Repository</th>
-                <th>{v.platform === "github" ? "Review App" : "Webhook and deploy token"}</th>
-                <th>Approver</th>
-              </tr>
-            </thead>
-            <tbody>
-              {v.repos.map((r) => (
-                <tr key={r.project}>
-                  <td className="mr">
-                    {r.project}
-                    {!r.inlineAvailable && (
-                      <div className="warn-text">Inline findings are off: the review App has Pull requests: Read-only.</div>
-                    )}
-                    {v.platform === "github" && r.inlineAvailable && !r.protectionReadable && (
-                      <div className="warn-text">
-                        Can't read classic branch protection (the review App lacks Administration: Read); a "require
-                        conversation resolution" rule there is treated as off.
-                      </div>
-                    )}
-                  </td>
-                  <td>{r.installed ? <Pill tone="ok">Installed</Pill> : <Pill tone="bad">Not installed</Pill>}</td>
-                  <td>{r.approverReachable ? <Pill tone="ok">Can approve</Pill> : <Pill tone="bad">Can't approve</Pill>}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
-    </>
-  );
-}
-
-// --- an operator's instances ---
 
 // secretOrder is the order a card lists the secrets an instance takes, and
 // secretLabels what each is called.

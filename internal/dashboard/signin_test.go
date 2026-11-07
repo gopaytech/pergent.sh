@@ -24,6 +24,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -68,6 +69,8 @@ type fakeIssuer struct {
 	now func() time.Time
 	// jwksDown makes the key set answer 500 with a body that must not leak.
 	jwksDown bool
+	// jwksHits counts the requests the key set was given.
+	jwksHits atomic.Int32
 }
 
 type issuedCode struct{ nonce, challenge, redirect string }
@@ -109,6 +112,7 @@ func (f *fakeIssuer) discovery(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (f *fakeIssuer) jwks(w http.ResponseWriter, _ *http.Request) {
+	f.jwksHits.Add(1)
 	f.mu.Lock()
 	down := f.jwksDown
 	f.mu.Unlock()
@@ -297,7 +301,7 @@ func callbackRequest(code, state string, c *http.Cookie) *http.Request {
 // the response is something else.
 func signInPageCode(rec *httptest.ResponseRecorder) string {
 	loc := rec.Header().Get("Location")
-	rest, ok := strings.CutPrefix(loc, "/signin?error=")
+	rest, ok := strings.CutPrefix(loc, "/sign-in?error=")
 	if rec.Code != http.StatusSeeOther || !ok {
 		return ""
 	}
@@ -318,7 +322,7 @@ func (o *oidcHarness) refusedCallback(edit func(f *fakeIssuer), want string) {
 	code, state := o.f.approve(loc)
 	rec := o.serve(callbackRequest(code, state, c))
 	if got := signInPageCode(rec); got != want {
-		o.t.Fatalf("callback = %d, Location %q; want a redirect to /signin?error=%s", rec.Code, rec.Header().Get("Location"), want)
+		o.t.Fatalf("callback = %d, Location %q; want a redirect to /sign-in?error=%s", rec.Code, rec.Header().Get("Location"), want)
 	}
 	if s := cookie(rec, SessionCookieName); s != nil {
 		o.t.Errorf("a refused sign-in set a session cookie: %+v", s)
@@ -396,7 +400,7 @@ func TestOIDCLoginWhenNotSetUp(t *testing.T) {
 			o := newOIDCHarness(t, tweak)
 			rec := o.serve(httptest.NewRequest("GET", "/auth/oidc/login", nil))
 			if got := signInPageCode(rec); got != signInErrNotSetUp {
-				t.Errorf("login = %d %q; want /signin?error=not_set_up", rec.Code, rec.Header().Get("Location"))
+				t.Errorf("login = %d %q; want /sign-in?error=not_set_up", rec.Code, rec.Header().Get("Location"))
 			}
 			if cookie(rec, oidcStateCookie) != nil {
 				t.Error("login that is not set up set a state cookie")
@@ -578,7 +582,7 @@ func TestOIDCRefusesBadState(t *testing.T) {
 		t.Helper()
 		rec := o.serve(req)
 		if got := signInPageCode(rec); got != want {
-			t.Errorf("%s: callback = %d %q; want /signin?error=%s", what, rec.Code, rec.Header().Get("Location"), want)
+			t.Errorf("%s: callback = %d %q; want /sign-in?error=%s", what, rec.Code, rec.Header().Get("Location"), want)
 		}
 		if cookie(rec, SessionCookieName) != nil {
 			t.Errorf("%s: set a session", what)
@@ -848,9 +852,9 @@ func TestInstancesOffersTheSSOButton(t *testing.T) {
 	get := func(h http.Handler) map[string]any {
 		t.Helper()
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/instances", nil))
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/sign-in-options", nil))
 		if rec.Code != 200 {
-			t.Fatalf("GET /api/instances = %d %s", rec.Code, rec.Body)
+			t.Fatalf("GET /api/sign-in-options = %d %s", rec.Code, rec.Body)
 		}
 		var m map[string]any
 		if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
@@ -867,7 +871,7 @@ func TestInstancesOffersTheSSOButton(t *testing.T) {
 	body, _ := json.Marshal(m)
 	for _, secret := range []string{testClientSecret, testClientID, o.f.url(), testSecretEnv} {
 		if strings.Contains(string(body), secret) {
-			t.Errorf("GET /api/instances shows %q", secret)
+			t.Errorf("GET /api/sign-in-options shows %q", secret)
 		}
 	}
 	// No label: a default one. Not OIDC, or not ready: no button, and the
@@ -1093,7 +1097,7 @@ func TestOIDCSignIn(t *testing.T) {
 		t.Fatalf("stored session = %+v, %v", se, found)
 	}
 	code, me := e.me(c)
-	if code != 200 || me.Kind != "sso" || me.Email != "alice@example.com" || me.Role != "user" || me.SignIn != "oidc" || me.Admin || me.Operator {
+	if code != 200 || me.Kind != "sso" || me.Email != "alice@example.com" || me.Role != "user" || me.SignIn != "oidc" || me.Admin {
 		t.Errorf("/api/me = %d %+v", code, me)
 	}
 	if !strings.Contains(strings.Join(e.audits(), "\n"), "alice@example.com sign_in") {
@@ -1174,7 +1178,7 @@ func TestRefusedCreatesNoAccount(t *testing.T) {
 		f.claims = func(c map[string]any) { c["email"] = email }
 		rec := e.oidcSignIn(f, nil)
 		if got := signInPageCode(rec); got != signInErrNotAllowed {
-			t.Errorf("%s: callback = %d %q; want /signin?error=not_allowed", email, rec.Code, rec.Header().Get("Location"))
+			t.Errorf("%s: callback = %d %q; want /sign-in?error=not_allowed", email, rec.Code, rec.Header().Get("Location"))
 		}
 		if cookie(rec, SessionCookieName) != nil {
 			t.Errorf("%s: a session cookie was set", email)
@@ -1303,8 +1307,8 @@ func TestSignInSettingsRoundTripThroughTheAPI(t *testing.T) {
 	var inst struct {
 		SSO *ssoView `json:"sso"`
 	}
-	if err := json.Unmarshal(e.get(nil, "/api/instances").Body.Bytes(), &inst); err != nil || inst.SSO == nil || inst.SSO.Label != "Google" {
-		t.Errorf("GET /api/instances sso = %+v, %v", inst.SSO, err)
+	if err := json.Unmarshal(e.get(nil, "/api/sign-in-options").Body.Bytes(), &inst); err != nil || inst.SSO == nil || inst.SSO.Label != "Google" {
+		t.Errorf("GET /api/sign-in-options sso = %+v, %v", inst.SSO, err)
 	}
 	// JWT's fields are stored too; the email claim defaults.
 	rec = e.putSignIn(c, map[string]any{"mode": "jwt", "issuer": "https://proxy.example.com", "audience": "pergent",
@@ -1316,7 +1320,7 @@ func TestSignInSettingsRoundTripThroughTheAPI(t *testing.T) {
 	var jwtInst struct {
 		SSO *ssoView `json:"sso"`
 	}
-	if err := json.Unmarshal(e.get(nil, "/api/instances").Body.Bytes(), &jwtInst); err != nil || jwtInst.SSO != nil {
+	if err := json.Unmarshal(e.get(nil, "/api/sign-in-options").Body.Bytes(), &jwtInst); err != nil || jwtInst.SSO != nil {
 		t.Errorf("the OIDC button is offered in jwt mode: %+v", jwtInst.SSO)
 	}
 	// The save is audited, without values.
@@ -1380,7 +1384,7 @@ func TestClientSecretIsWriteOnly(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT = %d %s", rec.Code, rec.Body)
 	}
-	for _, body := range []string{rec.Body.String(), e.get(c, "/api/admin/sign-in").Body.String(), e.get(nil, "/api/instances").Body.String(),
+	for _, body := range []string{rec.Body.String(), e.get(c, "/api/admin/sign-in").Body.String(), e.get(nil, "/api/sign-in-options").Body.String(),
 		e.get(c, "/api/admin/settings").Body.String(), e.get(c, "/api/me").Body.String()} {
 		if strings.Contains(body, testClientSecret) {
 			t.Errorf("a response shows the secret: %s", body)

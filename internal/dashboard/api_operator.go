@@ -62,22 +62,21 @@ const (
 var instanceNamePattern = regexp.MustCompile(`^[a-z0-9-]+$`)
 
 // operatorRoutes adds the instances, LLM and defaults API to mux, every
-// route behind Auth.Require (which checks X-CSRF-Token on writes), for admins
-// only.
+// route through adminRoute: a session (X-CSRF-Token on writes), and 404 for
+// anyone who is not an admin.
 func (d *Dashboard) operatorRoutes(mux *http.ServeMux) {
-	admin := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, d.Auth.Require(requireAdmin(h))) }
-	admin("GET /api/admin/instances", d.listInstances)
-	admin("POST /api/admin/instances", d.addInstance)
-	admin("PUT /api/admin/instances/{name}", d.updateInstance)
-	admin("DELETE /api/admin/instances/{name}", d.removeInstance)
-	admin("GET /api/admin/instances/{name}/repositories", d.instanceRepositories)
-	admin("GET /api/admin/sign-in", d.getSignIn)
-	admin("PUT /api/admin/sign-in", d.putSignIn)
-	admin("POST /api/admin/sign-in/test", d.testSignIn)
-	admin("GET /api/admin/llm", d.getLLM)
-	admin("PUT /api/admin/llm", d.putLLM)
-	admin("GET /api/admin/defaults", d.getDefaults)
-	admin("PUT /api/admin/defaults", d.putDefaults)
+	d.adminRoute(mux, "GET /api/admin/instances", d.listInstances)
+	d.adminRoute(mux, "POST /api/admin/instances", d.addInstance)
+	d.adminRoute(mux, "PUT /api/admin/instances/{name}", d.updateInstance)
+	d.adminRoute(mux, "DELETE /api/admin/instances/{name}", d.removeInstance)
+	d.adminRoute(mux, "GET /api/admin/instances/{name}/repositories", d.instanceRepositories)
+	d.adminRoute(mux, "GET /api/admin/sign-in", d.getSignIn)
+	d.adminRoute(mux, "PUT /api/admin/sign-in", d.putSignIn)
+	d.adminRoute(mux, "POST /api/admin/sign-in/test", d.testSignIn)
+	d.adminRoute(mux, "GET /api/admin/llm", d.getLLM)
+	d.adminRoute(mux, "PUT /api/admin/llm", d.putLLM)
+	d.adminRoute(mux, "GET /api/admin/defaults", d.getDefaults)
+	d.adminRoute(mux, "PUT /api/admin/defaults", d.putDefaults)
 }
 
 // --- views ---

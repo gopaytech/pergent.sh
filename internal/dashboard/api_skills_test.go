@@ -323,7 +323,7 @@ func TestDefaultsSkillsRoundTrip(t *testing.T) {
 	// Only admins.
 	viewer := newEnv(t, nil)
 	vc := viewer.userOnMain(false, "acme/widgets")
-	wantCode(t, viewer.send(vc, "PUT", "/api/admin/defaults", `{"skills":[]}`), "viewer PUT", http.StatusForbidden)
+	wantCode(t, viewer.send(vc, "PUT", "/api/admin/defaults", `{"skills":[]}`), "viewer PUT", http.StatusNotFound)
 }
 
 func TestInputsViewDetectedAndFinal(t *testing.T) {
@@ -607,7 +607,7 @@ func TestSkillWritesNeedAdmin(t *testing.T) {
 			{"POST", "/api/admin/skills/style/copy", `{"name":"copy"}`},
 			{"DELETE", "/api/admin/skills/style", ``},
 		} {
-			wantCode(t, tc.who.send(tc.c, w.method, w.target, w.body), w.method+" "+w.target, http.StatusForbidden)
+			wantCode(t, tc.who.send(tc.c, w.method, w.target, w.body), w.method+" "+w.target, http.StatusNotFound)
 		}
 		if n := tc.who.libraryCount(); n != 1 {
 			t.Errorf("library holds %d skills after refused writes; want 1", n)

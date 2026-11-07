@@ -17,7 +17,7 @@ const findRow = async (name: string) => (await screen.findByText(name)).closest(
 describe("Users", () => {
   it("lists the waiting accounts first, marked waiting", async () => {
     fakeApi({ "GET /api/me": { body: operator }, "GET /api/users": { body: users } });
-    renderApp("/users");
+    renderApp("/admin/users");
     expect(await screen.findByRole("heading", { name: "Users" })).toBeInTheDocument();
     await screen.findByText("newcomer@example.com");
     const rows = screen.getAllByRole("row").slice(1);
@@ -43,7 +43,7 @@ describe("Users", () => {
       "GET /api/users": () => ({ body: listed++ === 0 ? users : [userDev, userOperator] }),
       "DELETE /api/users/7": { status: 204 },
     });
-    renderApp("/users");
+    renderApp("/admin/users");
     await userEvent.click(within(await findRow("newcomer@example.com")).getByRole("button", { name: "Remove" }));
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("newcomer@example.com"));
     const [del] = fake.find("DELETE", "/api/users/7");
@@ -55,7 +55,7 @@ describe("Users", () => {
   it("removes nothing when the confirmation is declined", async () => {
     vi.stubGlobal("confirm", vi.fn(() => false));
     const fake = fakeApi({ "GET /api/me": { body: operator }, "GET /api/users": { body: users } });
-    renderApp("/users");
+    renderApp("/admin/users");
     await userEvent.click(within(await findRow("newcomer@example.com")).getByRole("button", { name: "Remove" }));
     expect(fake.calls.filter((c) => c.method === "DELETE")).toHaveLength(0);
   });
@@ -67,7 +67,7 @@ describe("Users", () => {
       "GET /api/users": { body: users },
       "DELETE /api/users/1": { status: 409, body: { error: "the last password account can't be removed" } },
     });
-    renderApp("/users");
+    renderApp("/admin/users");
     await userEvent.click(within(await findRow("admin")).getByRole("button", { name: "Remove" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("the last password account can't be removed");
   });
@@ -79,7 +79,7 @@ describe("Users", () => {
       "GET /api/users": () => ({ body: listed++ === 0 ? users : [...users, { ...userOperator, id: 9, username: "ops2" }] }),
       "POST /api/admin/accounts": { status: 201, body: { username: "ops2", password: "Zx9-generated-secret-value" } },
     });
-    renderApp("/users");
+    renderApp("/admin/users");
     await userEvent.click(await screen.findByRole("button", { name: "Add password admin" }));
     await userEvent.type(screen.getByLabelText("Username"), "ops2");
     await userEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -109,7 +109,7 @@ describe("Users", () => {
       "GET /api/users": { body: users },
       "POST /api/admin/accounts": { status: 409, body: { error: "this username is taken" } },
     });
-    renderApp("/users");
+    renderApp("/admin/users");
     await userEvent.click(await screen.findByRole("button", { name: "Add password admin" }));
     await userEvent.type(screen.getByLabelText("Username"), "admin");
     await userEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -118,7 +118,7 @@ describe("Users", () => {
 
   it("lets any admin add and remove accounts, local admins included", async () => {
     fakeApi({ "GET /api/me": { body: operator }, "GET /api/users": { body: users } });
-    renderApp("/users");
+    renderApp("/admin/users");
     await screen.findByText("newcomer@example.com");
     expect(screen.getByRole("button", { name: "Add password admin" })).toBeInTheDocument();
     expect(within(rowOf("admin")).getByRole("button", { name: "Remove" })).toBeInTheDocument();

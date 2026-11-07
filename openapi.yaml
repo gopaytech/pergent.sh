@@ -47,6 +47,17 @@ info:
     `POST /auth/password/change`. A repository, review or run the user cannot
     see is answered exactly like one that does not exist (404).
 
+    *Two areas.* The dashboard has a user area (Repositories, Reviews, Skills;
+    sign-in at `/sign-in`) and an admin area (Users, Teams, Integrations,
+    Settings, Audit log; sign-in at `/admin/sign-in`). The server enforces the
+    split on the data: a route marked `x-pergent-access: admin` answers anyone
+    who is not an admin, an account waiting for a team included, `404` with the
+    body of an unknown path, never `403`. The web app is one app served for any
+    page path; it shows a user the "not found" page for an admin page, but the
+    data behind it is what the server holds back. A route both areas use (such
+    as reading the skill library) is a `session` route that checks in its
+    handler.
+
     *CSRF.* Every request other than GET, HEAD and OPTIONS behind a session
     must send the session's CSRF token in `X-CSRF-Token` (it is in the
     `csrfToken` field of `GET /api/me`); a missing or wrong token is 403 with
@@ -536,8 +547,8 @@ paths:
         nonce and the PKCE verifier travel in the sealed, short-lived
         `__Host-pergent_oidc` cookie (`HttpOnly`, `Secure`, `SameSite=Lax`,
         10 minutes). When OIDC is not set up, or the provider cannot be read,
-        the browser goes to `/signin?error=not_set_up` or
-        `/signin?error=unavailable`.
+        the browser goes to `/sign-in?error=not_set_up` or
+        `/sign-in?error=unavailable`.
       x-pergent-access: none
       security: []
       responses:
@@ -550,7 +561,7 @@ paths:
               description: The `__Host-pergent_oidc` state cookie.
               schema: {type: string}
         '303':
-          description: To `/signin?error=<code>`.
+          description: To `/sign-in?error=<code>`.
           headers:
             Location:
               schema: {type: string}
@@ -571,7 +582,7 @@ paths:
         account made (a user with no team) and a session begun, ending the one
         the browser came with. The session ends after 8 hours idle or 24 hours.
 
-        Every refusal answers `303` to `/signin?error=<code>`, with no account
+        Every refusal answers `303` to `/sign-in?error=<code>`, with no account
         and no session. The codes are `expired` (state missing or wrong),
         `denied` (the provider reported an error), `failed` (the token or its
         email was refused), `not_allowed` (not on the allowlist: the page says
@@ -585,32 +596,34 @@ paths:
         - {name: error, in: query, schema: {type: string}}
       responses:
         '303':
-          description: To `/` when signed in, else to `/signin?error=<code>`.
+          description: To `/` when signed in, else to `/sign-in?error=<code>`.
           headers:
             Location:
               schema: {type: string}
             Set-Cookie:
               description: The `__Host-pergent_session` cookie when signed in; the state cookie is cleared either way.
               schema: {type: string}
-  /api/instances:
+  /api/sign-in-options:
     get:
-      operationId: listSignInInstances
+      operationId: getSignInOptions
       tags: [Sign-in]
-      summary: What the sign-in page offers
+      summary: What the sign-in pages offer
       description: |
-        The only `/api/` route that needs no session. It says that the password
-        form is shown and lists no instance: sign-in through GitLab or GitHub is
-        gone, and an instance is no way to sign in. When OIDC sign-in is set up
-        it also carries `sso`, the label of its button, which goes to
-        `GET /auth/oidc/login`.
+        The only `/api/` route that needs no session. `/sign-in` (for users)
+        shows the SSO button only; `/admin/sign-in` (for admins) shows the
+        password form, and the button too when there is one. When OIDC sign-in
+        is set up `sso` carries the label of the button, which goes to
+        `GET /auth/oidc/login`. In JWT mode `jwt` is true and there is no
+        button: a proxy signs people in, and loading a page starts the session.
+        It names no instance, client or address.
       x-pergent-access: none
       security: []
       responses:
         '200':
-          description: The password form, and an empty list.
+          description: The password form, and the SSO button or the JWT mode.
           content:
             application/json:
-              schema: {$ref: '#/components/schemas/instancesView'}
+              schema: {$ref: '#/components/schemas/signInOptionsView'}
   /api/me:
     get:
       operationId: getMe
@@ -1046,7 +1059,7 @@ paths:
       tags: [Repositories]
       summary: Switch a repository off
       description: |
-        Admins only (403 otherwise). A repository set up in
+        Admins only (404 for anyone else). A repository set up in
         the config file is 409: remove it from the config. pergent.sh removes
         its webhook and clone credentials.
       x-pergent-access: admin
@@ -2401,8 +2414,8 @@ components:
       description: |
         The session may not do this. `code` tells which kind: `csrf` (a write
         without the right `X-CSRF-Token`), `waiting` (an account on no team),
-        `password_change_required`; with no `code` the role is too low (admin,
-        or the repository role).
+        `password_change_required`; with no `code` the repository role is too
+        low. (An admin-only route answers a user 404, not 403.)
       content:
         application/json:
           schema: {$ref: '#/components/schemas/ErrorBody'}
@@ -3175,18 +3188,6 @@ components:
           additionalProperties: {$ref: '#/components/schemas/SecretView'}
           description: 'By field. The fields an instance takes: review_token, approve_token and webhook_secret
             (GitLab); review_app_key, approve_app_key or approve_token, and webhook_secret (GitHub).'
-    InstanceView:
-      description: One instance people can sign in with. GET /api/instances never lists one any more.
-      type: object
-      required: [platform, instance, label]
-      properties:
-        platform:
-          type: string
-          enum: [gitlab, github]
-        instance: {type: string}
-        label:
-          type: string
-          description: The button's text after "Sign in with".
     IntegrationRepo:
       description: One repository the admin can see.
       type: object
@@ -3969,27 +3970,26 @@ components:
         teams:
           type: array
           items: {$ref: '#/components/schemas/TeamRef'}
-    instancesView:
-      description: Body of GET /api/instances.
+    signInOptionsView:
+      description: Body of GET /api/sign-in-options.
       type: object
-      required: [password, instances]
+      required: [password, jwt]
       properties:
         password:
           type: boolean
-          description: The password form is shown. Always true.
-        instances:
-          type: array
-          items: {$ref: '#/components/schemas/InstanceView'}
-          description: Always empty.
+          description: The password form is shown, on `/admin/sign-in`. Always true.
         sso:
           anyOf:
             - {$ref: '#/components/schemas/ssoView'}
             - {type: 'null'}
-          description: The OIDC button. Absent when OIDC sign-in is not set up.
+          description: The OIDC button, on both sign-in pages. Absent when OIDC sign-in is not set up, and in JWT mode.
+        jwt:
+          type: boolean
+          description: A proxy signs people in (JWT mode). There is no button; a page load signs the person in.
     meView:
       description: The signed-in user. Body of GET /api/me.
       type: object
-      required: [kind, username, email, role, signIn, platform, instance, admin, operator, waiting, mustChangePassword, waitingUsers, csrfToken]
+      required: [kind, username, email, role, signIn, admin, waiting, mustChangePassword, waitingUsers, csrfToken]
       properties:
         kind:
           type: string
@@ -4008,18 +4008,9 @@ components:
           type: string
           enum: [password, oidc, jwt]
           description: How the session began.
-        platform:
-          type: string
-          description: Always "". Kept for the pages until they stop reading it.
-        instance:
-          type: string
-          description: Always "". Kept for the pages until they stop reading it.
         admin:
           type: boolean
           description: The account's role is admin; it sees and may do everything.
-        operator:
-          type: boolean
-          description: The same as admin. Kept for the pages until they stop reading it.
         waiting:
           type: boolean
           description: A user on no team, which sees nothing.

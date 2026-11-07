@@ -204,11 +204,11 @@ func TestAnyAdminReadsAnySource(t *testing.T) {
 	e2 := newEnv(t, nil)
 	viewer := e2.userOnMain(false, "acme/skills")
 	rec = e2.sendJSON(viewer, "POST", "/api/admin/skill-fetches", body)
-	wantCode(t, rec, "a viewer", http.StatusForbidden)
+	wantCode(t, rec, "a viewer", http.StatusNotFound)
 }
 
 // Reading a source, installing from it and updating from it are for admins:
-// a maintainer and a viewer get 403 on each, even holding the ID of an admin's
+// a maintainer and a viewer get 404 on each, even holding the ID of an admin's
 // read, and nothing is installed.
 func TestInstallSkillNeedsAdmin(t *testing.T) {
 	e := newEnv(t, nil)
@@ -228,14 +228,14 @@ func TestInstallSkillNeedsAdmin(t *testing.T) {
 		c *http.Cookie
 	}{"maintainer": {e2, maintainer}, "viewer": {e3, viewer}} {
 		rec := who.e.sendJSON(who.c, "POST", "/api/admin/skill-fetches", map[string]any{"instance": "main", "repo": "acme/skills", "ref": "v1.0"})
-		wantCode(t, rec, name+" starting a read", http.StatusForbidden)
+		wantCode(t, rec, name+" starting a read", http.StatusNotFound)
 		for _, w := range []struct{ method, target string }{
 			{"GET", "/api/admin/skill-fetches/" + id},
 			{"POST", "/api/admin/skill-fetches/" + id + "/install"},
 			{"POST", "/api/admin/skill-fetches/" + id + "/update"},
 		} {
 			rec := who.e.sendJSON(who.c, w.method, w.target, map[string]any{"names": []string{"style"}})
-			wantCode(t, rec, name+" "+w.method+" "+w.target, http.StatusForbidden)
+			wantCode(t, rec, name+" "+w.method+" "+w.target, http.StatusNotFound)
 		}
 		if _, found := who.e.storedSkill("style"); found {
 			t.Errorf("a %s installed a skill", name)

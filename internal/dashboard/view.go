@@ -53,17 +53,6 @@ const (
 	OutcomeUnknown    = store.OutcomeUnknown
 )
 
-// InstanceView is one instance users can sign in with. GET /api/instances
-// is the only endpoint that needs no session; its list is always empty now:
-// no instance offers a sign-in.
-type InstanceView struct {
-	// Platform is "gitlab" or "github".
-	Platform string `json:"platform"`
-	Instance string `json:"instance"`
-	// Label is the button's text after "Sign in with".
-	Label string `json:"label"`
-}
-
 // OverviewView is GET /api/overview?days=7 (days 1 to 90, default 7):
 // numbers over the runs started in the last days, the 10 most recently
 // updated reviews of the last 90 days and the setup problems of the

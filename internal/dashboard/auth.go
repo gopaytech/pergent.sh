@@ -239,7 +239,16 @@ func sessionExpired(se store.Session, now time.Time) bool {
 // account's email, and the mode and issuer it began under (otherwise it
 // ends, 401); when the signing keys cannot be fetched the answer is 503 and
 // nothing ends. A local admin's session skips all of this.
-func (a *Auth) Require(next http.Handler) http.Handler {
+func (a *Auth) Require(next http.Handler) http.Handler { return a.require(next, false) }
+
+// RequireAdmin is Require for a route only admins may use. Anyone else, an
+// account waiting for a team included, gets 404 with the body of an unknown
+// path: a user can't tell an admin route from a path that isn't there. It is
+// checked after the session, the CSRF token and the sign-in checks, so what
+// those say is what an unknown path says too.
+func (a *Auth) RequireAdmin(next http.Handler) http.Handler { return a.require(next, true) }
+
+func (a *Auth) require(next http.Handler, adminOnly bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		hash, hasCookie := sessionHash(r)
@@ -328,6 +337,10 @@ func (a *Auth) Require(next http.Handler) http.Handler {
 		if err != nil {
 			a.log.Error("dashboard: loading session access failed", "error", err.Error())
 			writeError(w, http.StatusInternalServerError, "could not load the session")
+			return
+		}
+		if adminOnly && !acc.admin {
+			notFound(w)
 			return
 		}
 		if acc.waiting && !allowedWhileWaiting(r) {

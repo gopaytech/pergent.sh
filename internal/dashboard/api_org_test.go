@@ -268,11 +268,11 @@ func TestAdminCantRemoveOwnRole(t *testing.T) {
 	bob := e.sso("bob@example.com")
 	bobSession := e.sessionFor(bob)
 	target := "/api/admin/users/" + strconv.FormatInt(bob, 10) + "/role"
-	e.wantStatus(bobSession, "/api/users", http.StatusForbidden)
+	e.wantStatus(bobSession, "/api/users", http.StatusNotFound)
 	wantCode(t, e.send(c, "PUT", target, `{"role":"admin"}`), "make bob an admin", http.StatusNoContent)
 	e.wantStatus(bobSession, "/api/users", http.StatusOK)
 	wantCode(t, e.send(c, "PUT", target, `{"role":"user"}`), "make bob a user again", http.StatusNoContent)
-	e.wantStatus(bobSession, "/api/users", http.StatusForbidden)
+	e.wantStatus(bobSession, "/api/users", http.StatusNotFound)
 
 	for _, b := range []string{`{"role":"owner"}`, `{"role":"viewer"}`, `{}`, `{"role":"admin","x":1}`, `nope`} {
 		wantCode(t, e.send(c, "PUT", target, b), "PUT "+b, http.StatusBadRequest)
@@ -633,8 +633,8 @@ func TestWritesAudited(t *testing.T) {
 	}
 }
 
-// A viewer (no admin) gets 403 on every route here, and nothing changes.
-func TestDeveloperGets403OnOrgRoutes(t *testing.T) {
+// A viewer (no admin) gets 404 on every route here, and nothing changes.
+func TestDeveloperGets404OnOrgRoutes(t *testing.T) {
 	e := newEnv(t, nil)
 	root := e.addPasswordAccount("root", operatorPassword, false)
 	c := e.userOnMain(false, "acme/widgets")
@@ -653,7 +653,7 @@ func TestDeveloperGets403OnOrgRoutes(t *testing.T) {
 		{"DELETE", "/api/teams/" + tid, ""},
 		{"GET", "/api/audit", ""},
 	} {
-		wantCode(t, e.send(c, r.method, r.target, r.body), r.method+" "+r.target, http.StatusForbidden)
+		wantCode(t, e.send(c, r.method, r.target, r.body), r.method+" "+r.target, http.StatusNotFound)
 	}
 	if got, found, _ := e.st.Account(ctx, bob); !found || got.Role != store.RoleUser {
 		t.Errorf("bob = %+v, %v", got, found)

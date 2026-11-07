@@ -1114,13 +1114,13 @@ func TestAdminSettings(t *testing.T) {
 	}
 }
 
-func TestAdminEndpointsForbiddenToDevelopers(t *testing.T) {
+func TestAdminEndpointsNotFoundForDevelopers(t *testing.T) {
 	e := newEnv(t, withSecrets(t))
 	c := e.userOnMain(false, "acme/widgets")
 	for _, target := range []string{"/api/integrations?instance=main", "/api/admin/settings"} {
-		rec := e.wantStatus(c, target, http.StatusForbidden)
+		rec := e.wantStatus(c, target, http.StatusNotFound)
 		if strings.Contains(rec.Body.String(), "anthropic") || strings.Contains(rec.Body.String(), "acme/widgets") {
-			t.Errorf("403 body of %s = %s", target, rec.Body)
+			t.Errorf("404 body of %s = %s", target, rec.Body)
 		}
 	}
 }

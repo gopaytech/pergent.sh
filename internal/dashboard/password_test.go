@@ -265,8 +265,8 @@ func TestPasswordSignIn(t *testing.T) {
 		t.Fatalf("session cookie = %+v", sc)
 	}
 	code, m := e.me(sc)
-	if code != 200 || m.Kind != "password" || m.Username != "ops" || !m.Admin || !m.Operator || m.Waiting || m.MustChangePassword ||
-		m.Platform != "" || m.Instance != "" || m.CSRFToken == "" {
+	if code != 200 || m.Kind != "password" || m.Username != "ops" || !m.Admin || m.Role != "admin" || m.SignIn != "password" || m.Waiting || m.MustChangePassword ||
+		m.CSRFToken == "" {
 		t.Errorf("/api/me = %d %+v", code, m)
 	}
 	se, found := e.storedSession(sc)

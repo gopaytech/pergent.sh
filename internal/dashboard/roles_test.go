@@ -1,10 +1,7 @@
 package dashboard
 
 import (
-	"context"
 	"maps"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/gopaytech/pergent.sh/internal/settings"
@@ -130,27 +127,6 @@ func TestSessionRole(t *testing.T) {
 	for r, name := range map[Role]string{RoleNone: "", RoleViewer: "viewer", RoleMaintainer: "maintainer", RoleAdmin: "admin"} {
 		if r.String() != name {
 			t.Errorf("Role(%d).String() = %q, want %q", r, r.String(), name)
-		}
-	}
-}
-
-// requireAdmin lets admins through; everyone else gets 403 and h never runs.
-func TestRequireAdmin(t *testing.T) {
-	sessions := map[string]Session{
-		"admin":   {Admin: true, All: true},
-		"user":    {},
-		"waiting": {Waiting: true},
-	}
-	for name, se := range sessions {
-		ran := false
-		h := requireAdmin(func(w http.ResponseWriter, _ *http.Request) { ran = true; w.WriteHeader(http.StatusOK) })
-		req := httptest.NewRequest("GET", "/", nil)
-		req = req.WithContext(context.WithValue(req.Context(), sessionKey{}, se))
-		rec := httptest.NewRecorder()
-		h(rec, req)
-		want := name == "admin"
-		if ran != want || (rec.Code == http.StatusOK) != want || (!want && rec.Code != http.StatusForbidden) {
-			t.Errorf("requireAdmin for %s: ran %v, %d; want ran %v", name, ran, rec.Code, want)
 		}
 	}
 }

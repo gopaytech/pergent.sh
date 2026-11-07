@@ -15,11 +15,14 @@ package dashboard
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"path"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -38,9 +41,15 @@ const (
 	// issuer or audience, expired, a refused algorithm, no usable email, or
 	// the sign-in is not set up to check one.
 	headerInvalid
-	// headerUnavailable: it could not be decided because the signing keys (or
-	// the settings) could not be read. This says nothing about the token.
+	// headerUnavailable: it could not be decided because the signing keys
+	// could not be fetched. This says nothing about the token.
 	headerUnavailable
+	// headerNoSettings: the sign-in settings could not be read, so whether a
+	// header means anything is not known. A session that jwt started is kept
+	// (503); a request with no session starts none, and gets what it would get
+	// on an install that does not use a header (401), so a database blip does
+	// not turn the sign-in page into an error.
+	headerNoSettings
 )
 
 const (
@@ -73,13 +82,6 @@ func (a *Auth) jwtVerifierFor(s signIn) *tokenVerifier {
 	return a.jwt.v
 }
 
-// forgetJWTVerifier drops the verifier and the keys it cached.
-func (a *Auth) forgetJWTVerifier() {
-	a.jwt.mu.Lock()
-	a.jwt.v, a.jwt.key, a.jwt.hc = nil, "", nil
-	a.jwt.mu.Unlock()
-}
-
 // headerToken is the token in a header value: "Bearer <token>" (the word in
 // any case) or the bare token.
 func headerToken(v string) string {
@@ -90,36 +92,75 @@ func headerToken(v string) string {
 	return v
 }
 
-// rawHeader finds the token in the request without checking it. The status
-// is headerNone (no header, or the mode is not jwt), headerInvalid (the header
-// is there twice, so the browser could have sent one of them),
-// headerUnavailable (the settings could not be read) or, when there is a
-// token to check, headerValid: that only means "found", and raw holds it.
-func (a *Auth) rawHeader(r *http.Request) (s signIn, raw string, st headerStatus) {
+// rawHeader finds the token in the request without checking it. found is
+// true, with the token in raw, when there is one to check; otherwise st says
+// why not: headerNone (no header, or the mode is not jwt), headerInvalid (the
+// header is there twice, so the browser could have sent one of them) or
+// headerNoSettings (the settings could not be read).
+func (a *Auth) rawHeader(r *http.Request) (s signIn, raw string, found bool, st headerStatus) {
 	if a.settings == nil {
-		return signIn{}, "", headerNone
+		return signIn{}, "", false, headerNone
 	}
 	s, err := a.settings(r.Context())
 	if err != nil {
 		a.log.Error("dashboard JWT sign-in: reading the settings failed", "error", err.Error())
-		return signIn{}, "", headerUnavailable
+		return signIn{}, "", false, headerNoSettings
 	}
 	if s.mode != config.SignInJWT || s.header == "" {
-		return s, "", headerNone
+		return s, "", false, headerNone
 	}
 	values := r.Header.Values(s.header)
 	if len(values) == 0 {
-		return s, "", headerNone
+		return s, "", false, headerNone
 	}
 	if len(values) > 1 {
 		a.log.Warn("dashboard JWT sign-in: the header came more than once; refused")
-		return s, "", headerInvalid
+		return s, "", false, headerInvalid
 	}
 	raw = headerToken(values[0])
 	if raw == "" {
-		return s, "", headerNone
+		return s, "", false, headerNone
 	}
-	return s, raw, headerValid
+	return s, raw, true, headerNone
+}
+
+// claimsFit reads the payload of raw WITHOUT checking its signature and
+// reports whether its issuer, audience and expiry are the ones wanted. It is
+// only a way to turn away a token that cannot pass, before the key set is
+// asked for anything (a token with an unknown key id costs a fetch of the key
+// set): a token that fits is checked in full by the verifier, and nothing read
+// here is trusted. A claim it cannot read counts as a misfit.
+func claimsFit(raw, issuer, audience string, now time.Time) bool {
+	parts := strings.Split(raw, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return false
+	}
+	var c struct {
+		Iss string          `json:"iss"`
+		Aud json.RawMessage `json:"aud"`
+		Exp *float64        `json:"exp"`
+	}
+	if json.Unmarshal(payload, &c) != nil || c.Iss != issuer || c.Exp == nil || time.Unix(int64(*c.Exp), 0).Before(now) {
+		return false
+	}
+	var one string
+	if json.Unmarshal(c.Aud, &one) == nil {
+		return one == audience
+	}
+	var many []string
+	if json.Unmarshal(c.Aud, &many) != nil {
+		return false
+	}
+	for _, a := range many {
+		if a == audience {
+			return true
+		}
+	}
+	return false
 }
 
 // checkToken verifies raw for settings s and reads the email out of it. It
@@ -131,6 +172,10 @@ func (a *Auth) checkToken(r *http.Request, s signIn, raw string) (string, map[st
 		// Without an issuer and an audience a token meant for another app
 		// would pass: refuse every token until they are set.
 		a.log.Warn("dashboard JWT sign-in: the issuer, the audience and the JWKS URL must all be set; every token is refused")
+		return "", nil, headerInvalid
+	}
+	if !claimsFit(raw, s.issuer, s.audience, a.now()) {
+		a.log.Debug("dashboard JWT sign-in: the token is for another issuer or audience, or has expired")
 		return "", nil, headerInvalid
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), idpTimeout)
@@ -155,8 +200,8 @@ func (a *Auth) checkToken(r *http.Request, s signIn, raw string) (string, map[st
 
 // readHeader is fromHeader with the settings and the token's claims too.
 func (a *Auth) readHeader(r *http.Request) (s signIn, email string, claims map[string]any, st headerStatus) {
-	s, raw, st := a.rawHeader(r)
-	if st != headerValid {
+	s, raw, found, st := a.rawHeader(r)
+	if !found {
 		return s, "", nil, st
 	}
 	email, claims, st = a.checkToken(r, s, raw)
@@ -199,6 +244,13 @@ func isPagePath(p string) bool {
 	return true
 }
 
+// crossSiteSubrequest reports whether r came from another site and is not a
+// navigation, as the browser's Sec-Fetch headers say. (A client that sends none
+// is not a browser, or is an old one: not refused.)
+func crossSiteSubrequest(r *http.Request) bool {
+	return r.Header.Get("Sec-Fetch-Site") == "cross-site" && r.Header.Get("Sec-Fetch-Mode") != "navigate"
+}
+
 // startOutcome is what trying to start a session from the header came to.
 type startOutcome int
 
@@ -218,6 +270,11 @@ const (
 // may start one (a GET of a page or /api/me). On startedSession the cookie is
 // set on w and the session is returned.
 func (a *Auth) startFromHeader(w http.ResponseWriter, r *http.Request) (store.Session, startOutcome) {
+	// A page another site loads as an image, a script or a fetch carries the
+	// proxy's header too: only a navigation may start a session.
+	if crossSiteSubrequest(r) {
+		return store.Session{}, startNothing
+	}
 	s, email, claims, st := a.readHeader(r)
 	switch st {
 	case headerUnavailable:
@@ -280,8 +337,8 @@ func (a *Auth) startOnAPI(w http.ResponseWriter, r *http.Request, staleCookie bo
 func (a *Auth) jwtSessionHolds(r *http.Request, se store.Session, accountEmail string) (bool, headerStatus) {
 	s, email, _, st := a.readHeader(r)
 	switch {
-	case st == headerUnavailable:
-		return false, st
+	case st == headerUnavailable || st == headerNoSettings:
+		return false, headerUnavailable
 	case s.mode != config.SignInJWT || s.issuer != se.Issuer:
 		return false, st
 	case st != headerValid || accountEmail == "" || email != accountEmail:
@@ -298,28 +355,33 @@ func (d *Dashboard) Pages(next http.Handler) http.Handler { return d.Auth.pages(
 
 func (a *Auth) pages(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && isPagePath(r.URL.Path) {
-			a.startOnPage(w, r)
+		if r.Method == http.MethodGet && isPagePath(r.URL.Path) && a.startOnPage(w, r) {
+			// The response sets the session cookie: no cache may keep it.
+			w.Header().Set("Cache-Control", "private, no-store")
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-func (a *Auth) startOnPage(w http.ResponseWriter, r *http.Request) {
+// startOnPage starts a session for the page request if the header proves a
+// person and the request has no live session. It reports whether it did.
+func (a *Auth) startOnPage(w http.ResponseWriter, r *http.Request) bool {
 	// The cheap questions first: is jwt on, and is there a token at all?
-	_, raw, st := a.rawHeader(r)
-	if st != headerValid || raw == "" {
-		return
+	if _, _, found, _ := a.rawHeader(r); !found {
+		return false
 	}
 	if hash, ok := sessionHash(r); ok {
-		_, found, err := a.store.Session(r.Context(), hash)
+		se, found, err := a.store.Session(r.Context(), hash)
 		if err != nil {
 			a.log.Error("dashboard: loading a session failed", "error", err.Error())
-			return
+			return false
 		}
-		if found {
-			return
+		// An expired row is no session: Require would delete it on its next
+		// request, and the person must not be turned away meanwhile.
+		if found && !sessionExpired(se, a.now()) {
+			return false
 		}
 	}
-	a.startFromHeader(w, r)
+	_, outcome := a.startFromHeader(w, r)
+	return outcome == startedSession
 }

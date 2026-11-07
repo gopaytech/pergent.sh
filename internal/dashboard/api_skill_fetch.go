@@ -52,11 +52,10 @@ const (
 )
 
 func (d *Dashboard) skillFetchRoutes(mux *http.ServeMux) {
-	admin := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, d.Auth.Require(requireAdmin(h))) }
-	admin("POST /api/admin/skill-fetches", d.startSkillFetch)
-	admin("GET /api/admin/skill-fetches/{id}", d.skillFetch)
-	admin("POST /api/admin/skill-fetches/{id}/install", d.installSkills)
-	admin("POST /api/admin/skill-fetches/{id}/update", d.updateSkills)
+	d.adminRoute(mux, "POST /api/admin/skill-fetches", d.startSkillFetch)
+	d.adminRoute(mux, "GET /api/admin/skill-fetches/{id}", d.skillFetch)
+	d.adminRoute(mux, "POST /api/admin/skill-fetches/{id}/install", d.installSkills)
+	d.adminRoute(mux, "POST /api/admin/skill-fetches/{id}/update", d.updateSkills)
 }
 
 func (d *Dashboard) startSkillFetch(w http.ResponseWriter, r *http.Request) {

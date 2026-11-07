@@ -170,6 +170,9 @@ type Dashboard struct {
 	oidc    *oidcCache
 	inputs  *inputsCache
 	catalog *catalogCache
+	// adminRoutes are the patterns Handler registered through adminRoute: a
+	// test walks them to prove each is not found for a user.
+	adminRoutes []string
 }
 
 // New builds the dashboard. The config must have dashboard.url.
@@ -224,8 +227,9 @@ func New(o Options) (*Dashboard, error) {
 //   - GET /auth/oidc/login: send the browser to the OIDC provider (state,
 //     nonce and PKCE verifier in a sealed, short-lived cookie);
 //   - GET /auth/oidc/callback: finish OIDC sign-in, then the allowlist; every
-//     refusal redirects to /signin?error=<code>;
-//   - GET /api/instances: what the sign-in page offers, without a session;
+//     refusal redirects to /sign-in?error=<code>;
+//   - GET /api/sign-in-options: what the sign-in pages offer, without a
+//     session;
 //   - GET /api/me: the signed-in user (with JWT sign-in it also starts a
 //     session, for a valid token and no session: see jwt.go; Pages does the
 //     same for the web app's pages);
@@ -237,11 +241,12 @@ func New(o Options) (*Dashboard, error) {
 // Every response is marked no-store.
 func (d *Dashboard) Handler() http.Handler {
 	mux := http.NewServeMux()
+	d.adminRoutes = nil
 	mux.HandleFunc("POST /auth/logout", d.Auth.logout)
 	mux.HandleFunc("GET /auth/csrf", d.Auth.loginCSRF)
 	mux.HandleFunc("POST /auth/password", d.Auth.passwordSignIn)
 	mux.Handle("POST /auth/password/change", d.Auth.Require(http.HandlerFunc(d.Auth.changePassword)))
-	mux.HandleFunc("GET /api/instances", d.instances)
+	mux.HandleFunc("GET /api/sign-in-options", d.signInOptions)
 	mux.HandleFunc("GET /auth/oidc/login", d.oidcLogin)
 	mux.HandleFunc("GET /auth/oidc/callback", d.oidcCallback)
 	mux.Handle("GET /api/me", d.Auth.Require(http.HandlerFunc(d.me)))
@@ -263,6 +268,16 @@ func (d *Dashboard) Handler() http.Handler {
 	})
 }
 
+// adminRoute registers an API route only admins may use, and is the only way
+// one is registered. Auth.RequireAdmin answers anyone else 404 with the body
+// of an unknown path, so the server enforces the admin area's data and a user
+// can't tell that the route exists. A route that serves users too is
+// registered with Auth.Require, and checks in its handler what each may do.
+func (d *Dashboard) adminRoute(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
+	d.adminRoutes = append(d.adminRoutes, pattern)
+	mux.Handle(pattern, d.Auth.RequireAdmin(h))
+}
+
 // meView is the body of GET /api/me.
 type meView struct {
 	// Kind is "password" (a local admin) or "sso".
@@ -275,14 +290,8 @@ type meView struct {
 	Role string `json:"role"`
 	// SignIn is how the session began: "password", "oidc" or "jwt".
 	SignIn string `json:"signIn"`
-	// Platform and Instance are "" always. The pages still read them; they
-	// go with the pages' next change.
-	Platform string `json:"platform"`
-	Instance string `json:"instance"`
 	// Admin: the account's role is admin; it sees and may do everything.
 	Admin bool `json:"admin"`
-	// Operator is Admin, for the pages that still ask for it.
-	Operator bool `json:"operator"`
 	// Waiting: a user on no team, which sees nothing.
 	Waiting bool `json:"waiting"`
 	// MustChangePassword: nothing else works until the password is changed.
@@ -307,27 +316,30 @@ func (d *Dashboard) me(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, meView{
 		Kind: se.Kind, Username: se.Username, Email: se.Email, Role: role, SignIn: se.SignIn,
-		Admin: se.Admin, Operator: se.Admin, Waiting: se.Waiting, MustChangePassword: se.MustChangePassword,
+		Admin: se.Admin, Waiting: se.Waiting, MustChangePassword: se.MustChangePassword,
 		WaitingUsers: waiting, CSRFToken: se.CSRFToken,
 	})
 }
 
-// instancesView is the body of GET /api/instances.
-type instancesView struct {
-	// Password: the password form is shown. It is always true: a dashboard
-	// that answers has local admins.
+// signInOptionsView is the body of GET /api/sign-in-options.
+type signInOptionsView struct {
+	// Password: the password form is shown, on /admin/sign-in. It is always
+	// true: a dashboard that answers has local admins.
 	Password bool `json:"password"`
-	// Instances are always empty: no instance offers a sign-in any more.
-	Instances []InstanceView `json:"instances"`
-	// SSO is the OIDC button, absent when OIDC sign-in is not set up.
+	// SSO is the OIDC button, on /sign-in and /admin/sign-in; absent when
+	// OIDC sign-in is not set up.
 	SSO *ssoView `json:"sso,omitempty"`
+	// JWT: a proxy signs people in. There is no button; loading a page signs
+	// the person in.
+	JWT bool `json:"jwt"`
 }
 
-// instances answers the sign-in page's question. It needs no session and
-// says only that the password form is there and, when OIDC is set up, the
-// label of its button.
-func (d *Dashboard) instances(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, instancesView{Password: true, Instances: []InstanceView{}, SSO: d.ssoButton(r.Context())})
+// signInOptions answers the sign-in pages' question. It needs no session. It
+// names no instance, client or address: only whether the password form is
+// there, the label of the SSO button, and whether a proxy signs people in.
+func (d *Dashboard) signInOptions(w http.ResponseWriter, r *http.Request) {
+	sso, jwt := d.signInChoices(r.Context())
+	writeJSON(w, http.StatusOK, signInOptionsView{Password: true, SSO: sso, JWT: jwt})
 }
 
 // writeJSON writes v as the JSON body.

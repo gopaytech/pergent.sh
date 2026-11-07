@@ -41,19 +41,18 @@ const (
 var usernamePattern = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,64}$`)
 
 // orgRoutes adds the users, teams and audit log API to mux: every route
-// behind Auth.Require (which checks X-CSRF-Token on writes), for admins
-// only.
+// through adminRoute: a session (X-CSRF-Token on writes), and 404 for anyone
+// who is not an admin.
 func (d *Dashboard) orgRoutes(mux *http.ServeMux) {
-	admin := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, d.Auth.Require(requireAdmin(h))) }
-	admin("GET /api/users", d.users)
-	admin("DELETE /api/users/{id}", d.deleteUser)
-	admin("PUT /api/admin/users/{id}/role", d.setUserRole)
-	admin("POST /api/admin/accounts", d.createPasswordAccount)
-	admin("GET /api/teams", d.teams)
-	admin("POST /api/teams", d.createTeam)
-	admin("PUT /api/teams/{id}", d.updateTeam)
-	admin("DELETE /api/teams/{id}", d.deleteTeam)
-	admin("GET /api/audit", d.auditLog)
+	d.adminRoute(mux, "GET /api/users", d.users)
+	d.adminRoute(mux, "DELETE /api/users/{id}", d.deleteUser)
+	d.adminRoute(mux, "PUT /api/admin/users/{id}/role", d.setUserRole)
+	d.adminRoute(mux, "POST /api/admin/accounts", d.createPasswordAccount)
+	d.adminRoute(mux, "GET /api/teams", d.teams)
+	d.adminRoute(mux, "POST /api/teams", d.createTeam)
+	d.adminRoute(mux, "PUT /api/teams/{id}", d.updateTeam)
+	d.adminRoute(mux, "DELETE /api/teams/{id}", d.deleteTeam)
+	d.adminRoute(mux, "GET /api/audit", d.auditLog)
 }
 
 // audit records what the session's user did; a failure to is logged, not

@@ -177,23 +177,28 @@ type ssoView struct {
 	Label string `json:"label"`
 }
 
-// ssoButton is the button GET /api/instances offers, nil when OIDC sign-in is
-// not set up. A failure to read the settings offers none: the page still
-// has the password form.
-func (d *Dashboard) ssoButton(ctx context.Context) *ssoView {
+// signInChoices is what GET /api/sign-in-options offers besides the password
+// form: the button, nil unless OIDC sign-in is set up, and whether the mode is
+// jwt (a proxy signs people in, so there is nothing to press). A failure to
+// read the settings offers neither: the admin page still has the password
+// form.
+func (d *Dashboard) signInChoices(ctx context.Context) (sso *ssoView, jwt bool) {
 	s, err := d.signInSettings(ctx)
 	if err != nil {
 		d.Log.Error("dashboard: reading the sign-in settings for the sign-in page failed", "error", err.Error())
-		return nil
+		return nil, false
+	}
+	if s.mode == config.SignInJWT {
+		return nil, true
 	}
 	if !s.oidcReady() {
-		return nil
+		return nil, false
 	}
 	label := s.label
 	if label == "" {
 		label = defaultSignInLabel
 	}
-	return &ssoView{Label: label}
+	return &ssoView{Label: label}, false
 }
 
 // signInView is GET /api/admin/sign-in for the settings in force. The secret

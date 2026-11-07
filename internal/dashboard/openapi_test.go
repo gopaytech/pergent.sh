@@ -139,8 +139,9 @@ func (d specDoc) operations() []specOp {
 // --- the routes in the code ---
 
 // Access levels a route can be behind in the router: nothing, a session
-// (Auth.Require) or an admin (requireAdmin). The handler may check more (a
-// repository role); the spec says so in prose.
+// (Auth.Require) or an admin (Dashboard.adminRoute, which wraps the handler
+// in Auth.RequireAdmin). The handler may check more (a repository role); the
+// spec says so in prose.
 var accessRank = map[string]int{"none": 0, "session": 1, "admin": 2}
 
 type codeRoute struct {
@@ -172,7 +173,7 @@ func maxAccess(a, b string) string {
 }
 
 // gateOf reads how a handler expression is gated: it finds Require and
-// requireAdmin anywhere inside it.
+// RequireAdmin anywhere inside it.
 func gateOf(nodes ...ast.Node) string {
 	access := "none"
 	for _, n := range nodes {
@@ -182,12 +183,10 @@ func gateOf(nodes ...ast.Node) string {
 		ast.Inspect(n, func(n ast.Node) bool {
 			switch x := n.(type) {
 			case *ast.SelectorExpr:
-				if x.Sel.Name == "Require" {
+				switch x.Sel.Name {
+				case "Require":
 					access = maxAccess(access, "session")
-				}
-			case *ast.Ident:
-				switch x.Name {
-				case "requireAdmin":
+				case "RequireAdmin":
 					access = maxAccess(access, "admin")
 				}
 			}
@@ -196,6 +195,10 @@ func gateOf(nodes ...ast.Node) string {
 	}
 	return access
 }
+
+// adminRouteHelper is the name of the Dashboard method every admin API route
+// is registered with.
+const adminRouteHelper = "adminRoute"
 
 type routeHelper struct {
 	lit    *ast.FuncLit
@@ -291,6 +294,10 @@ func scanRoutesInFile(fset *token.FileSet, file *ast.File) (routes []codeRoute, 
 		return fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line)
 	}
 	for _, decl := range file.Decls {
+		// The one helper admin routes go through: its callers are read below.
+		if fd, ok := decl.(*ast.FuncDecl); ok && fd.Name.Name == adminRouteHelper {
+			continue
+		}
 		muxes := muxVars(decl)
 		helpers := map[string]*routeHelper{}
 		var ranges []rangeVar
@@ -398,6 +405,19 @@ func scanRoutesInFile(fset *token.FileSet, file *ast.File) (routes []codeRoute, 
 					}
 				}
 				unresolved = append(unresolved, where(call.Pos())+": a route pattern this test can't read")
+				return true
+			}
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == adminRouteHelper {
+				if len(call.Args) != 3 {
+					unresolved = append(unresolved, where(call.Pos())+": "+adminRouteHelper+" is called with something other than (mux, pattern, handler)")
+					return true
+				}
+				lit, ok := stringLit(call.Args[1])
+				if !ok {
+					unresolved = append(unresolved, where(call.Pos())+": "+adminRouteHelper+" is called with a pattern that is not a string literal")
+					return true
+				}
+				add(lit, "admin", call.Pos())
 				return true
 			}
 			if id, ok := call.Fun.(*ast.Ident); ok {
@@ -692,9 +712,8 @@ func (d *D) routes(mux *http.ServeMux) {
 	mux.Handle("/", h)
 	get := func(pattern string, h http.HandlerFunc) { mux.Handle("GET "+pattern, d.Auth.Require(h)) }
 	get("/c", d.c)
-	get("/d", requireAdmin(d.d))
-	admin := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, d.Auth.Require(requireAdmin(h))) }
-	admin("PUT /e", d.e)
+	get("/d", d.Auth.RequireAdmin(d.d))
+	d.adminRoute(mux, "PUT /e", d.e)
 	admin2 := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, d.Auth.Require(h)) }
 	admin2("DELETE /f", d.f)
 	for _, method := range []string{"PUT", "DELETE"} {
@@ -743,6 +762,24 @@ func f(m *http.ServeMux) {
 		}
 	}
 
+	// The admin helper: its callers are the routes, and its own body is not read.
+	routes, unresolved = scanSource(t, `package x
+func (d *D) routes(mux *http.ServeMux) {
+	d.adminRoute(mux, "GET /m", d.m)
+	mux.Handle("GET /n", d.Auth.RequireAdmin(h))
+}
+func (d *D) adminRoute(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
+	mux.Handle(pattern, d.Auth.RequireAdmin(h))
+}`)
+	if len(unresolved) != 0 || len(routes) != 2 || routes[0].Access != "admin" || routes[1].Access != "admin" {
+		t.Errorf("admin routes: %v, unresolved %v; want GET /m and GET /n, both admin", routes, unresolved)
+	}
+	_, unresolved = scanSource(t, `package x
+func f(d *D, mux *http.ServeMux, p string) { d.adminRoute(mux, p, h) }`)
+	if len(unresolved) != 1 {
+		t.Errorf("adminRoute called with a variable pattern must be reported as unresolved, got %v", unresolved)
+	}
+
 	_, unresolved = scanSource(t, `package x
 func f(mux *http.ServeMux, p string) {
 	mux.Handle(p, h)
@@ -789,8 +826,7 @@ func inputSchema(v any) schemaType  { return schemaType{Type: reflect.TypeOf(v),
 // "readiness.Checklist".
 var openAPISchemas = map[string]schemaType{
 	"meView":                 outputSchema(meView{}),
-	"instancesView":          outputSchema(instancesView{}),
-	"InstanceView":           outputSchema(InstanceView{}),
+	"signInOptionsView":      outputSchema(signInOptionsView{}),
 	"OverviewView":           outputSchema(OverviewView{}),
 	"SetupView":              outputSchema(SetupView{}),
 	"StatsView":              outputSchema(StatsView{}),
@@ -1276,7 +1312,6 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 		{"RepositoryView", "health", healths},
 		{"IntegrationView", "approver", approvers},
 		{"InstanceAdminView", "approver", approvers},
-		{"InstanceView", "platform", platforms},
 		{"readiness.Item", "state", itemStates},
 	}
 	families := []struct {

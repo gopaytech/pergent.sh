@@ -22,42 +22,37 @@ import type {
   UserView,
 } from "../api";
 
-// An SSO account the pages still treat as an admin without the operator
-// switch (the old "platform admin"): the server answers admin and operator
-// together now, but the pages' other paths are still tested.
-export const platformAdmin: Me = {
+// An SSO account an admin made an admin.
+export const ssoAdmin: Me = {
   kind: "sso",
-  username: "platform-user",
-  email: "platform-user@example.com",
+  username: "sso-admin",
+  email: "sso-admin@example.com",
   role: "admin",
   signIn: "oidc",
-  platform: "gitlab",
-  instance: "main",
   admin: true,
-  operator: false,
   waiting: false,
   mustChangePassword: false,
   waitingUsers: 0,
   csrfToken: "csrf-123",
 };
 
-// The operator: a password account, which sees everything.
+// The local admin: a password account.
 export const operator: Me = {
-  ...platformAdmin,
+  ...ssoAdmin,
   kind: "password",
   username: "admin",
   email: "",
   signIn: "password",
-  platform: "",
-  instance: "",
-  operator: true,
 };
 
-export const maintainer: Me = { ...platformAdmin, username: "maint-user", role: "user", admin: false, csrfToken: "csrf-maint" };
-export const viewer: Me = { ...platformAdmin, username: "dev-user", role: "user", admin: false, csrfToken: "csrf-dev" };
+// A user on a team with the maintainer role, and one with the viewer role. The
+// API tells the roles apart per repository; /api/me does not.
+const userMe: Me = { ...ssoAdmin, username: "dev-user", email: "dev-user@example.com", role: "user", admin: false };
+export const maintainer: Me = { ...userMe, username: "maint-user", email: "maint-user@example.com", csrfToken: "csrf-maint" };
+export const viewer: Me = { ...userMe, csrfToken: "csrf-dev" };
 
 // On no team yet: sees nothing.
-export const waiting: Me = { ...viewer, username: "new-user", waiting: true };
+export const waiting: Me = { ...viewer, username: "new-user", email: "new-user@example.com", waiting: true };
 
 // A password account that must change its password first.
 export const mustChange: Me = { ...operator, mustChangePassword: true };

@@ -1,14 +1,11 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type FormEvent } from "react";
-import { useNavigate, useSearchParams } from "react-router";
+import { useQuery } from "@tanstack/react-query";
+import { Navigate, useSearchParams } from "react-router";
 
-import { api, paths, type InstancesView } from "../api";
+import { ApiError, api, type Me, type SignInOptions } from "../api";
 import { CenteredCard, ErrorBox, Loading } from "../ui";
 
-const platforms = new Set(["gitlab", "github"]);
-
 // signInErrors are the messages for the codes the server puts in
-// /signin?error=<code> when an SSO sign-in is refused. Only these codes show
+// /sign-in?error=<code> when an SSO sign-in is refused. Only these codes show
 // anything: the page never prints text it got from the address.
 const signInErrors: Record<string, string> = {
   not_allowed: "Ask an admin to add you",
@@ -19,102 +16,76 @@ const signInErrors: Record<string, string> = {
   unavailable: "The sign-in provider can't be reached right now. Please try again.",
 };
 
-// SignIn has the password form, and the SSO button when OIDC is set up. The
-// button goes to the server's login route, which sends the browser on to the
-// identity provider and back.
-export default function SignIn() {
+const jwtWords = "Your organisation signs you in before this page loads. Reload the page to try again, or ask your admin.";
+
+// useSignInPage reads what both sign-in pages need: the options, the refusal
+// the address carries, and whether the browser is signed in already (a quiet
+// read of /api/me: its 401 is the usual answer here, not a reason to go to the
+// sign-in page, which is this one). With JWT sign-in the page load itself
+// signs the person in, so a signed-in browser is sent on.
+export function useSignInPage() {
   const [params] = useSearchParams();
   const code = params.get("error") ?? "";
-  const refusal = Object.hasOwn(signInErrors, code) ? signInErrors[code] : null;
-  const instances = useQuery({
-    queryKey: ["instances"],
-    queryFn: () => api.get<InstancesView>("/api/instances"),
+  const options = useQuery({
+    queryKey: ["sign-in-options"],
+    queryFn: () => api.get<SignInOptions>("/api/sign-in-options"),
   });
-  const usable = (instances.data?.instances ?? []).filter((i) => platforms.has(i.platform));
-  const sso = instances.data?.sso ?? null;
-  const nothing = instances.isError || (instances.isSuccess && !instances.data.password && usable.length === 0 && !sso);
+  const signedIn = useQuery({
+    queryKey: ["signed-in"],
+    queryFn: () => api.probe<Me>("/api/me"),
+    retry: false,
+    staleTime: 0,
+  });
+  const probeError = signedIn.error instanceof ApiError ? signedIn.error : null;
+  // The words for a refusal: the address's code, else the proxy's.
+  const refusal =
+    (Object.hasOwn(signInErrors, code) ? signInErrors[code] : null) ??
+    (probeError?.code === "not_allowed" ? signInErrors.not_allowed : null);
+  return { options, signedIn, probeError, refusal };
+}
+
+// SignedInRedirect sends a signed-in browser on: an admin to /admin, a user to
+// /.
+export function SignedInRedirect({ me, admin }: { me: Me; admin: boolean }) {
+  return <Navigate to={admin && me.admin ? "/admin" : "/"} replace />;
+}
+
+export function Refusal({ text }: { text: string | null }) {
   return (
-    <CenteredCard>
-      <h1>Sign in to pergent.sh</h1>
-      <p className="sub">See why a merge request or pull request wasn't approved, and manage the repositories pergent reviews.</p>
-      {refusal && (
-        <div className="error" role="alert">
-          {refusal}
-        </div>
-      )}
-      {instances.isPending && <Loading />}
-      {instances.isError && <ErrorBox error={instances.error} />}
-      {instances.isSuccess && instances.data.password && <PasswordForm />}
-      {nothing && <p className="sub">No sign-in is configured.</p>}
-      {(usable.length > 0 || sso) && (
-        <>
-          {instances.data?.password && <div className="signin-or">or</div>}
-          <div className="signin-buttons">
-            {sso && (
-              <a className="btn primary" href="/auth/oidc/login">
-                Sign in with {sso.label}
-              </a>
-            )}
-            {usable.map((i) => (
-              <a key={`${i.platform}/${i.instance}`} className="btn primary" href={paths.login(i.platform, i.instance)}>
-                Sign in with {i.label}
-              </a>
-            ))}
-          </div>
-        </>
-      )}
-    </CenteredCard>
+    text && (
+      <div className="error" role="alert">
+        {text}
+      </div>
+    )
   );
 }
 
-function PasswordForm() {
-  const client = useQueryClient();
-  const navigate = useNavigate();
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const signIn = useMutation({
-    mutationFn: () => api.signIn(username, password),
-    // The closure holds the password: drop it with the form, not after 5
-    // minutes.
-    gcTime: 0,
-    onSuccess: () => {
-      // Nothing loaded before belongs to this session.
-      client.clear();
-      navigate("/", { replace: true });
-    },
-    // A wrong password is typed again; the username stays.
-    onError: () => setPassword(""),
-  });
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    signIn.mutate();
-  };
+// SignIn is the users' sign-in page: the SSO button, nothing else. It has no
+// password form and no link to the admin one. With no SSO set up it says so;
+// with JWT sign-in there is nothing to press (the page load signs the person
+// in) and it says that.
+export default function SignIn() {
+  const { options, signedIn, probeError, refusal } = useSignInPage();
+  if (signedIn.isSuccess) return <SignedInRedirect me={signedIn.data} admin={false} />;
+  const sso = options.data?.sso ?? null;
+  const jwt = options.data?.jwt === true;
   return (
-    <form className="stack" onSubmit={submit}>
-      <label htmlFor="signin-username">Username</label>
-      <input
-        id="signin-username"
-        type="text"
-        autoComplete="username"
-        autoCapitalize="none"
-        spellCheck={false}
-        value={username}
-        onChange={(e) => setUsername(e.target.value)}
-        required
-      />
-      <label htmlFor="signin-password">Password</label>
-      <input
-        id="signin-password"
-        type="password"
-        autoComplete="current-password"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        required
-      />
-      {signIn.isError && <ErrorBox error={signIn.error} />}
-      <button type="submit" className="btn primary" disabled={signIn.isPending}>
-        Sign in
-      </button>
-    </form>
+    <CenteredCard>
+      <h1>Sign in to pergent.sh</h1>
+      <p className="sub">See why a merge request or pull request wasn't approved, and the repositories pergent reviews.</p>
+      <Refusal text={refusal} />
+      {options.isPending && <Loading />}
+      {options.isError && <ErrorBox error={options.error} />}
+      {options.isSuccess && sso && (
+        <div className="signin-buttons">
+          <a className="btn primary" href="/auth/oidc/login">
+            Sign in with {sso.label}
+          </a>
+        </div>
+      )}
+      {options.isSuccess && jwt && !refusal && <p className="sub">{jwtWords}</p>}
+      {jwt && probeError?.status === 503 && <ErrorBox error={probeError} />}
+      {options.isSuccess && !sso && !jwt && <p className="sub">Sign-in isn't set up yet. Ask your admin.</p>}
+    </CenteredCard>
   );
 }

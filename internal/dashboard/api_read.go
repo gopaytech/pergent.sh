@@ -63,7 +63,8 @@ var outcomes = map[string]bool{
 	OutcomeNoBlocking: true, OutcomeFailed: true, OutcomeSuperseded: true, OutcomeSkipped: true, OutcomeUnknown: true,
 }
 
-// readRoutes adds the read API to mux, every route behind Auth.Require.
+// readRoutes adds the read API to mux, every route behind a session; the
+// Integrations and Settings pages' data are admin routes (adminRoute).
 func (d *Dashboard) readRoutes(mux *http.ServeMux) {
 	get := func(pattern string, h http.HandlerFunc) { mux.Handle("GET "+pattern, d.Auth.Require(h)) }
 	get("/api/overview", d.overview)
@@ -76,26 +77,14 @@ func (d *Dashboard) readRoutes(mux *http.ServeMux) {
 	get("/api/skills", d.skills)
 	get("/api/skills/{name}", d.skill)
 	get("/api/skills/{name}/versions/{v}", d.skillVersion)
-	get("/api/integrations", requireAdmin(d.integrations))
-	get("/api/admin/settings", requireAdmin(d.adminSettings))
+	d.adminRoute(mux, "GET /api/integrations", d.integrations)
+	d.adminRoute(mux, "GET /api/admin/settings", d.adminSettings)
 	// Anything else is 404, also the instance alone (which the mux would
 	// otherwise redirect to the {rest...} routes).
 	none := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { notFound(w) })
 	get("/api/reviews/{instance}", none)
 	get("/api/repositories/{instance}", none)
 	mux.Handle("/api/", d.Auth.Require(none))
-}
-
-// requireAdmin serves h to admins (local admins and SSO accounts an admin
-// made one), 403 to others.
-func requireAdmin(h http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if se, _ := SessionFrom(r.Context()); !se.Admin {
-			writeError(w, http.StatusForbidden, "only admins can see this")
-			return
-		}
-		h(w, r)
-	}
 }
 
 // failed logs err and answers 500 with a message that says nothing of it.

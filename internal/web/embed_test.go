@@ -91,6 +91,19 @@ func TestAssetCacheHeaders(t *testing.T) {
 	}
 }
 
+// A page response that carries a session cookie (the JWT sign-in sets one in
+// front of this handler) keeps the Cache-Control the wrapper gave it.
+func TestPageKeepsAWrappersCacheControl(t *testing.T) {
+	h := newHandler(testFS())
+	wrapped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "private, no-store")
+		h.ServeHTTP(w, r)
+	})
+	if got := get(wrapped, http.MethodGet, "/repos").Header().Get("Cache-Control"); got != "private, no-store" {
+		t.Errorf("Cache-Control = %q, want private, no-store", got)
+	}
+}
+
 func TestSecurityHeaders(t *testing.T) {
 	h := newHandler(testFS())
 	want := map[string]string{

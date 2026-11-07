@@ -66,15 +66,14 @@ var (
 	maxJobMemory = resource.MustParse("32Gi")
 )
 
-// writeRoutes adds the write API to mux: every route behind Auth.Require
-// (which checks X-CSRF-Token); switching on and off and the picker for
-// admins only, a repository's settings for its maintainers and admins (403
-// otherwise).
+// writeRoutes adds the write API to mux: every route behind a session
+// (Auth.Require checks X-CSRF-Token); switching on and off and the picker
+// are admin routes (adminRoute: 404 for anyone else), a repository's settings
+// are for its maintainers and admins (403 otherwise).
 func (d *Dashboard) writeRoutes(mux *http.ServeMux) {
-	admin := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, d.Auth.Require(requireAdmin(h))) }
-	admin("GET /api/repositories/available", d.available)
-	admin("POST /api/repositories", d.switchOn)
-	admin("DELETE /api/repositories/{instance}/{rest...}", d.switchOff)
+	d.adminRoute(mux, "GET /api/repositories/available", d.available)
+	d.adminRoute(mux, "POST /api/repositories", d.switchOn)
+	d.adminRoute(mux, "DELETE /api/repositories/{instance}/{rest...}", d.switchOff)
 	mux.Handle("PUT /api/repositories/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.putSettings)))
 	mux.Handle("POST /api/repositories/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.repositoryPost)))
 	// The instance alone is 404, not a redirect to the {rest...} routes.

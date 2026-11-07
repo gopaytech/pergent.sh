@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ChecklistItem, ReadinessView, ScanView } from "../api";
 import { fakeApi } from "../test/fakeApi";
-import { overview, platformAdmin, repoDetail, repoPayments, repoWidgets, reviewBlocking } from "../test/fixtures";
+import { overview, ssoAdmin, repoDetail, repoPayments, repoWidgets, reviewBlocking } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -77,7 +77,7 @@ const route = (body: ReadinessView, repo = "acme/payments") => ({
 });
 
 const base = (readiness: ReadinessView, repo = repoPayments) => ({
-  "GET /api/me": { body: platformAdmin },
+  "GET /api/me": { body: ssoAdmin },
   [`GET /api/repositories/main/${repo.project}`]: { body: repoDetail(repo) },
   [`GET /api/repositories/main/${repo.project}/inputs`]: { body: noInputs },
   "GET /api/reviews?project=acme%2Fpayments&days=90": { body: { items: [reviewBlocking], nextCursor: "" } },
@@ -345,7 +345,7 @@ describe("Readiness", () => {
     const puts = fake.find("PUT", "/api/repositories/main/acme/payments/settings");
     expect(puts).toHaveLength(1);
     expect(puts[0].body).toEqual({ skills: ["code-review", "security-review"] });
-    expect(puts[0].headers.get("X-CSRF-Token")).toBe(platformAdmin.csrfToken);
+    expect(puts[0].headers.get("X-CSRF-Token")).toBe(ssoAdmin.csrfToken);
     confirm.mockRestore();
   });
 
@@ -488,7 +488,7 @@ describe("Readiness", () => {
       updatedAt: new Date().toISOString(),
     });
     fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       "GET /api/overview?days=7": {
         body: {
           ...overview,

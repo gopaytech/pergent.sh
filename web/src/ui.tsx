@@ -170,7 +170,7 @@ export function NotFound() {
           <div className="sub">This page doesn't exist or you don't have access to it.</div>
         </div>
       </div>
-      <div className="card empty">Check the address, or ask an admin for access on the platform.</div>
+      <div className="card empty">Check the address, or ask an admin for access.</div>
     </>
   );
 }

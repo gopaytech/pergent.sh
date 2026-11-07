@@ -112,9 +112,9 @@ func TestUserSeesOnlyTeamRepos(t *testing.T) {
 	if !se.CanSee("main", "ACME/Widgets") || se.Role("main", "acme/widgets") != RoleViewer {
 		t.Errorf("session = %+v; want a viewer on acme/widgets, ignoring case", se)
 	}
-	// What a user may not do: an admin page.
+	// What a user may not do: an admin page's data is not found.
 	for _, target := range []string{"/api/users", "/api/teams", "/api/audit", "/api/admin/settings", "/api/integrations?instance=main"} {
-		e.wantStatus(c, target, http.StatusForbidden)
+		e.wantStatus(c, target, http.StatusNotFound)
 	}
 }
 
@@ -473,9 +473,13 @@ func TestPlatformSignInRoutesAreGone(t *testing.T) {
 		}
 	}
 	// The sign-in page's question has no instance to offer.
-	rec := e.get(nil, "/api/instances")
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"password":true`) || !strings.Contains(rec.Body.String(), `"instances":[]`) {
-		t.Errorf("GET /api/instances = %d %s; want the password form and no instance", rec.Code, rec.Body)
+	rec := e.get(nil, "/api/sign-in-options")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"password":true`) || strings.Contains(rec.Body.String(), "instances") {
+		t.Errorf("GET /api/sign-in-options = %d %s; want the password form and no instance", rec.Code, rec.Body)
+	}
+	// The old name is gone.
+	if rec := e.get(nil, "/api/instances"); rec.Code == http.StatusOK {
+		t.Errorf("GET /api/instances = 200 %s; the route was renamed", rec.Body)
 	}
 }
 
@@ -497,8 +501,8 @@ func TestMaintainerCanEditSettings(t *testing.T) {
 		t.Errorf("approve = %v, want false", r.Approve)
 	}
 	wantCode(t, e.send(c, "POST", "/api/repositories/main/acme/gadgets/settings/reset", ""), "maintainer reset", http.StatusOK)
-	wantCode(t, e.send(c, "DELETE", "/api/repositories/main/acme/gadgets", ""), "maintainer switch off", http.StatusForbidden)
-	wantCode(t, e.get(c, "/api/repositories/available?instance=main"), "maintainer picker", http.StatusForbidden)
+	wantCode(t, e.send(c, "DELETE", "/api/repositories/main/acme/gadgets", ""), "maintainer switch off", http.StatusNotFound)
+	wantCode(t, e.get(c, "/api/repositories/available?instance=main"), "maintainer picker", http.StatusNotFound)
 	wantCode(t, e.send(c, "PUT", "/api/repositories/main/acme/gadgets/settings", `{"rerunLimitPerMR":5}`), "maintainer re-run caps", http.StatusForbidden)
 	if _, found := e.storedRepo("main", "acme/gadgets"); !found {
 		t.Fatal("the maintainer switched acme/gadgets off")

@@ -297,10 +297,7 @@ type meBody struct {
 	Email              string `json:"email"`
 	Role               string `json:"role"`
 	SignIn             string `json:"signIn"`
-	Platform           string `json:"platform"`
-	Instance           string `json:"instance"`
 	Admin              bool   `json:"admin"`
-	Operator           bool   `json:"operator"`
 	Waiting            bool   `json:"waiting"`
 	MustChangePassword bool   `json:"mustChangePassword"`
 	WaitingUsers       int    `json:"waitingUsers"`

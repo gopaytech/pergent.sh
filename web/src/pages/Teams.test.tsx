@@ -31,7 +31,7 @@ const teamCard = (name: string) => screen.getByRole("region", { name }) as HTMLE
 describe("Teams", () => {
   it("lists the teams with their members, each with a role, and repositories", async () => {
     fakeApi({ "GET /api/teams": { body: [teamPayments, teamEmpty] }, ...base });
-    renderApp("/teams");
+    renderApp("/admin/teams");
     expect(await screen.findByRole("heading", { name: "Teams" })).toBeInTheDocument();
     const payments = await screen.findByRole("region", { name: "Payments" });
     expect(payments).toHaveTextContent("dev-user@example.com (maintainer)");
@@ -47,7 +47,7 @@ describe("Teams", () => {
       "POST /api/teams": { status: 201, body: teamPayments },
       ...base,
     });
-    renderApp("/teams");
+    renderApp("/admin/teams");
     await userEvent.type(await screen.findByLabelText("Team name"), "Payments");
     expect(screen.queryByLabelText("Role")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Create team" }));
@@ -64,7 +64,7 @@ describe("Teams", () => {
       "POST /api/teams": { status: 409, body: { error: "a team with this name exists already" } },
       ...base,
     });
-    renderApp("/teams");
+    renderApp("/admin/teams");
     await userEvent.type(await screen.findByLabelText("Team name"), "Payments");
     await userEvent.click(screen.getByRole("button", { name: "Create team" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("a team with this name exists already");
@@ -78,7 +78,7 @@ describe("Teams", () => {
       "PUT /api/teams/2": { body: teamPayments },
       ...base,
     });
-    renderApp("/teams");
+    renderApp("/admin/teams");
     await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
     const editor = screen.getByRole("form", { name: "Edit Payments" });
     const gone = await within(editor).findByRole("checkbox", { name: /acme\/gone.*switched off/ });
@@ -96,7 +96,7 @@ describe("Teams", () => {
       "PUT /api/teams/2": { body: teamPayments },
       ...base,
     });
-    renderApp("/teams");
+    renderApp("/admin/teams");
     await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
     const editor = screen.getByRole("form", { name: "Edit Payments" });
     expect(within(editor).queryByLabelText("Role")).not.toBeInTheDocument();
@@ -140,7 +140,7 @@ describe("Teams", () => {
       "PUT /api/teams/2": { body: teamPayments },
       ...base,
     });
-    renderApp("/teams");
+    renderApp("/admin/teams");
     await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
     const editor = screen.getByRole("form", { name: "Edit Payments" });
     expect(await within(editor).findByRole("checkbox", { name: "All repositories of extra" })).toBeInTheDocument();
@@ -159,7 +159,7 @@ describe("Teams", () => {
       "PUT /api/teams/2": { status: 400, body: { error: "members must be accounts that sign in with SSO" } },
       ...base,
     });
-    renderApp("/teams");
+    renderApp("/admin/teams");
     await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("members must be accounts that sign in with SSO");
@@ -175,7 +175,7 @@ describe("Teams", () => {
       "DELETE /api/teams/2": { status: 204 },
       ...base,
     });
-    renderApp("/teams");
+    renderApp("/admin/teams");
     await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Remove" }));
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Payments"));
     expect(fake.find("DELETE", "/api/teams/2")[0].headers.get("X-CSRF-Token")).toBe("csrf-123");

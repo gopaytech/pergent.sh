@@ -24,7 +24,9 @@ export default function AttentionRows({
   linkRepos = true,
 }: {
   items: AttentionView[];
-  platform: string;
+  // platform is the platform of the repository the rows are about, when
+  // there is one: an instance-wide row then reads "GitLab · main".
+  platform?: string;
   linkRepos?: boolean;
 }) {
   if (items.length === 0) return <div className="row empty-row">Nothing needs attention.</div>;

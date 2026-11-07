@@ -1,35 +1,37 @@
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { NavLink, Outlet } from "react-router";
+import { NavLink, Outlet, useLocation } from "react-router";
 
 import { api, type Me } from "../api";
 import ChangePassword from "../pages/ChangePassword";
 import Waiting from "../pages/Waiting";
-import { ErrorBox, Loading, NotFound, platformName } from "../ui";
-import { MeContext, useMe } from "./me";
+import { ErrorBox, Loading, NotFound } from "../ui";
+import { MeContext, inAdminArea, useMe } from "./me";
 import SignOut from "./SignOut";
 
 type NavItem = { to: string; label: string; icon: string; end?: boolean; badge?: string };
 
-const main: NavItem[] = [
+// The user area: what a user sees, and an admin too.
+const userItems: NavItem[] = [
   { to: "/", label: "Overview", icon: "🏠", end: true },
   { to: "/repos", label: "Repositories", icon: "📁" },
   { to: "/reviews", label: "Reviews", icon: "🔍" },
   { to: "/skills", label: "Skills", icon: "🧩" },
 ];
 
-// adminItems is the Admin section; Users says how many accounts wait for a
+// adminItems is the admin area; Users says how many accounts wait for a
 // team.
 const adminItems = (waitingUsers: number): NavItem[] => [
-  { to: "/users", label: "Users", icon: "👤", badge: waitingUsers > 0 ? `${waitingUsers} waiting` : undefined },
-  { to: "/teams", label: "Teams", icon: "👥" },
-  { to: "/integrations", label: "Integrations", icon: "🔌" },
-  { to: "/settings", label: "Settings", icon: "⚙️" },
-  { to: "/audit", label: "Audit log", icon: "📜" },
+  { to: "/admin", label: "Admin", icon: "🛡️", end: true },
+  { to: "/admin/users", label: "Users", icon: "👤", badge: waitingUsers > 0 ? `${waitingUsers} waiting` : undefined },
+  { to: "/admin/teams", label: "Teams", icon: "👥" },
+  { to: "/admin/integrations", label: "Integrations", icon: "🔌" },
+  { to: "/admin/settings", label: "Settings", icon: "⚙️" },
+  { to: "/admin/audit", label: "Audit log", icon: "📜" },
 ];
 
 // roleLabel is what the menu calls the signed-in account.
-const roleLabel = (me: Me) => (me.operator ? "operator" : me.admin ? "admin" : "member");
+const roleLabel = (me: Me) => (me.admin ? "admin" : "user");
 
 // waitingRefetch is how often a waiting account asks whether it was added to
 // a team, in ms.
@@ -63,8 +65,12 @@ function initials(name: string) {
 
 // Layout is the dashboard's shell: the dark menu on the left, the page on
 // the right. It loads the signed-in user first; a 401 sends the browser to
-// the sign-in page (see App).
+// the sign-in page (see App). The menu shows the area the path is in: the
+// user pages, or, for an admin under /admin, the admin pages, each with a link
+// to the other. Hiding a link is not the check: the server holds the admin
+// data back from a user, and AdminOnly shows a user the not-found page.
 export default function Layout() {
+  const { pathname } = useLocation();
   const me = useQuery({
     queryKey: ["me"],
     queryFn: () => api.get<Me>("/api/me"),
@@ -72,6 +78,10 @@ export default function Layout() {
     // A waiting account asks again, so one added to a team gets in without
     // a reload.
     refetchInterval: (q) => (q.state.data?.waiting ? waitingRefetch : false),
+    // With JWT sign-in, reading /api/me again signs the person in again if the
+    // proxy still vouches for them: a tab left open after signing out in
+    // another must not do that by itself.
+    refetchOnWindowFocus: (q) => q.state.data?.signIn !== "jwt",
   });
   if (me.isPending) return <Loading />;
   if (me.isError) {
@@ -87,6 +97,7 @@ export default function Layout() {
   if (user.mustChangePassword || user.waiting) {
     return <MeContext.Provider value={user}>{user.mustChangePassword ? <ChangePassword /> : <Waiting />}</MeContext.Provider>;
   }
+  const admin = user.admin && inAdminArea(pathname);
   return (
     <MeContext.Provider value={user}>
       <div className="shell">
@@ -97,15 +108,33 @@ export default function Layout() {
             </div>
             pergent.sh
           </div>
-          <div className="org" title="The instance you signed in with">
-            {user.operator ? "All instances" : `${platformName(user.platform)} · ${user.instance}`}
-          </div>
+          {admin && <div className="org">Admin area</div>}
           <nav className="nav" aria-label="Main">
-            <Nav items={main} />
-            {user.admin && (
+            {admin ? (
               <>
-                <div className="section-label">Admin</div>
                 <Nav items={adminItems(user.waitingUsers)} />
+                <div className="section-label">Back to</div>
+                <Nav items={[{ to: "/", label: "User pages", icon: "↩️", end: true }]} />
+              </>
+            ) : (
+              <>
+                <Nav items={userItems} />
+                {user.admin && (
+                  <>
+                    <div className="section-label">Admin</div>
+                    <Nav
+                      items={[
+                        {
+                          to: "/admin",
+                          label: "Admin area",
+                          icon: "🛡️",
+                          end: true,
+                          badge: user.waitingUsers > 0 ? `${user.waitingUsers} waiting` : undefined,
+                        },
+                      ]}
+                    />
+                  </>
+                )}
               </>
             )}
           </nav>
