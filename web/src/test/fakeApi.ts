@@ -41,3 +41,16 @@ export function fakeApi(routes: Record<string, Route>) {
     find: (method: string, url: string) => calls.filter((c) => c.method === method && c.url === url),
   };
 }
+
+// untilLogout answers GET /api/me with me until POST /auth/logout is made,
+// then 401 like the server: use both in the routes of a test that signs out.
+export function untilLogout(me: unknown) {
+  let out = false;
+  return {
+    "GET /api/me": (): Reply => (out ? { status: 401, body: { error: "not signed in" } } : { body: me }),
+    "POST /auth/logout": (): Reply => {
+      out = true;
+      return { status: 204 };
+    },
+  };
+}

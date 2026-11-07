@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi } from "../test/fakeApi";
-import { platformAdmin, viewer, librarySkills, pastDismissals, repoDetail, repoPayments, repoWidgets, reviewBlocking, skillResults } from "../test/fixtures";
+import { ssoAdmin, viewer, librarySkills, pastDismissals, repoDetail, repoPayments, repoTeams, repoWidgets, reviewBlocking, skillResults } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -14,12 +14,14 @@ const widgets = repoDetail(repoWidgets);
 const noInputs = { branch: "main", skills: [], detected: [], instructions: "" };
 
 const base = {
-  "GET /api/me": { body: platformAdmin },
+  "GET /api/me": { body: ssoAdmin },
   "GET /api/repositories/main/acme/payments": { body: payments },
   "GET /api/repositories/main/acme/widgets": { body: widgets },
   "GET /api/skills": { body: librarySkills },
   "GET /api/repositories/main/acme/payments/inputs": { body: noInputs },
   "GET /api/repositories/main/acme/widgets/inputs": { body: noInputs },
+  "GET /api/repositories/main/acme/payments/teams": { body: repoTeams },
+  "GET /api/repositories/main/acme/widgets/teams": { body: repoTeams },
   "GET /api/reviews?project=acme%2Fpayments&days=90": { body: { items: [reviewBlocking], nextCursor: "" } },
 };
 
@@ -51,7 +53,7 @@ describe("RepositoryDetail", () => {
   it("hides Settings from a viewer of the repository, even an admin elsewhere", async () => {
     renderAt("/repos/main/acme/payments?tab=settings", {
       ...base,
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       "GET /api/repositories/main/acme/payments": { body: repoDetail(repoPayments, "viewer") },
     });
     await screen.findByRole("heading", { name: "acme/payments" });
@@ -724,7 +726,7 @@ describe("RepositoryDetail", () => {
     let mes = 0;
     const fake = fakeApi({
       ...base,
-      "GET /api/me": () => ({ body: mes++ === 0 ? platformAdmin : { ...platformAdmin, csrfToken: "csrf-new" } }),
+      "GET /api/me": () => ({ body: mes++ === 0 ? ssoAdmin : { ...ssoAdmin, csrfToken: "csrf-new" } }),
       "PUT /api/repositories/main/acme/payments/settings": () =>
         puts++ === 0 ? { status: 403, body: { error: "missing or wrong CSRF token", code: "csrf" } } : { body: payments },
     });

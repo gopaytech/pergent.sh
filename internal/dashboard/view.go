@@ -11,12 +11,11 @@ import (
 // camelCase. The frontend mirrors these types. Times are RFC 3339 strings.
 //
 // Every endpoint needs a signed-in session (401 otherwise) and answers only
-// about the repositories its user can see: for an operator (a password
-// admin) every one, on every instance; for a platform account those its
-// teams cover, on the instance it signed in with, that the platform also
-// lets it see. A platform account on no team gets 403 {"error": "an admin
-// needs to add you to a team", "code": "waiting"} for everything but GET
-// /api/me. A repository, review or run the user can't see is answered
+// about the repositories its user can see: for an admin every one, on every
+// instance; for any other account those its teams cover, on every instance.
+// The platform is never asked. An account that is not an admin and is on no
+// team gets 403 {"error": "an admin needs to add you to a team", "code":
+// "waiting"} for everything but GET /api/me. A repository, review or run the user can't see is answered
 // exactly like one that doesn't exist: left out of lists, 404 for its own
 // URL. Errors are {"error": "message"}. Nothing here ever holds a token,
 // key or secret.
@@ -54,23 +53,11 @@ const (
 	OutcomeUnknown    = store.OutcomeUnknown
 )
 
-// InstanceView is one instance users can sign in with. GET /api/instances
-// is a list of them; it is the only endpoint that needs no session. The
-// sign-in button goes to /auth/{platform}/{instance}/login.
-type InstanceView struct {
-	// Platform is "gitlab" or "github".
-	Platform string `json:"platform"`
-	Instance string `json:"instance"`
-	// Label is the button's text after "Sign in with".
-	Label string `json:"label"`
-}
-
 // OverviewView is GET /api/overview?days=7 (days 1 to 90, default 7):
 // numbers over the runs started in the last days, the 10 most recently
 // updated reviews of the last 90 days and the setup problems of the
-// repositories the user can see (instance-wide ones only for the admins of
-// that instance and for operators; the library's own, with no instance,
-// for every admin). Setup is the setup checklist, for
+// repositories the user can see (instance-wide ones and the library's own,
+// with no instance, only for admins). Setup is the setup checklist, for
 // admins only, and null once all four items are done (and for everyone
 // else).
 type OverviewView struct {
@@ -290,7 +277,9 @@ type FindingView struct {
 
 // DismissedView is a dismissal of a finding.
 type DismissedView struct {
-	// By is who dismissed it, as the audit log names them.
+	// By is who dismissed it, as the thread names them: the part of an SSO
+	// account's email before the "@", "root (password)" for a local admin, and
+	// for a dismissal by the "@bot dismiss" command the form it always had.
 	By     string    `json:"by"`
 	Reason string    `json:"reason"`
 	At     time.Time `json:"at"`
@@ -443,7 +432,7 @@ type ReadinessView struct {
 }
 
 // ScanView is one readiness scan. State is "queued", "running", "done" or
-// "failed". StartedBy is who asked ("alice (gitlab main)"), "switch-on" or
+// "failed". StartedBy is who asked (an SSO account's email), "switch-on" or
 // "upgrade". Branch and Commit are "" until the scan read them; Error is why
 // a failed scan couldn't scan the files. FinishedAt is null until it ends.
 type ScanView struct {
@@ -506,9 +495,8 @@ type SkillResultView struct {
 
 // SkillSourceView is where an installed skill came from. Kind is "instance"
 // (read through the API of a connected instance) or "url" (a public git
-// URL). Repo is shown to operators and to users of that instance who can see
-// the repository on it (D11); others get Hidden, and the page says it is "a
-// private repository on <instance>". URL is public. Path is the skill's
+// URL). Repo is shown to admins only; others get Hidden, and the page says
+// it is "a private repository on <instance>". URL is public. Path is the skill's
 // file in the repository, sent with Repo and URL, never with Hidden (a path
 // in a private repository is private too), for a check for updates to name
 // the folder.
@@ -567,12 +555,11 @@ type SkillWrittenView struct {
 }
 
 // SkillInUseView is the 409 of a delete of a skill that is in use (D8):
-// Repositories are the ones the caller can see that name it, Hidden counts
-// the others, InDefaults says the default list names it.
+// Repositories are the ones that name it, InDefaults says the default list
+// names it.
 type SkillInUseView struct {
 	Error        string              `json:"error"`
 	Repositories []SkillUserRepoView `json:"repositories"`
-	Hidden       int                 `json:"hidden"`
 	InDefaults   bool                `json:"inDefaults"`
 }
 
@@ -660,48 +647,9 @@ type AttentionView struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-// IntegrationView is GET /api/integrations (admins only, 403 otherwise):
-// the session's instance; an operator, who has none, names it with
-// ?instance=.
-type IntegrationView struct {
-	Instance string `json:"instance"`
-	Platform string `json:"platform"`
-	// Connected is whether pergent.sh is connected to the instance now: its
-	// review side serves the dashboard. An instance of the config always
-	// is (pergent.sh doesn't start otherwise); one added in the dashboard
-	// that couldn't be reached at startup, or whose connection failed, is
-	// not until it is saved again. Without that wiring it is true.
-	Connected bool `json:"connected"`
-	// Approver is "app" (a GitHub approve App), "review_app" (the review
-	// App itself) or "token" (a bot user).
-	Approver string `json:"approver"`
-	// TokenExpiry is set while the approve token expires within 14 days.
-	TokenExpiry *time.Time        `json:"tokenExpiry,omitempty"`
-	Repos       []IntegrationRepo `json:"repos"`
-}
-
-// IntegrationRepo is one repository the admin can see.
-type IntegrationRepo struct {
-	Project string `json:"project"`
-	// Installed: pergent.sh's webhook and deploy token (GitLab) or the
-	// review App (GitHub) are in place.
-	Installed bool `json:"installed"`
-	// ApproverReachable: the approve bot or App can approve there.
-	ApproverReachable bool `json:"approverReachable"`
-	// InlineAvailable is false when the review App is installed but may only
-	// read pull requests, so it can't post inline threads. It says nothing
-	// (true) for a repository without the review App.
-	InlineAvailable bool `json:"inlineAvailable"`
-	// ProtectionReadable is false when the review App is installed but lacks
-	// Administration: Read, so it can't read classic branch protection. It
-	// says nothing (true) for a repository without the review App.
-	ProtectionReadable bool `json:"protectionReadable"`
-}
-
 // AdminSettingsView is GET /api/admin/settings (admins only): the defaults
 // a repository switched on in the dashboard gets, and the model. Never a key.
 type AdminSettingsView struct {
-	Instance string       `json:"instance"`
 	Defaults DefaultsView `json:"defaults"`
 	LLM      LLMView      `json:"llm"`
 }
@@ -794,25 +742,21 @@ type LLMView struct {
 // repository listed in the config is read-only here (409). Each change is
 // recorded in the audit log: repository_on, repository_off,
 // settings_updated (detail: the settings in the body) and settings_reset.
-// Errors are {"error": "message"}. The picker needs a platform token: an
-// operator gets 400 {"error": "sign in with GitLab or GitHub to add
-// repositories"} and uses GET /api/admin/instances/{name}/repositories.
+// Errors are {"error": "message"}.
 //
-//   - GET /api/repositories/available?search=: AvailableView, the
-//     repositories that can be switched on; search (at most 100
+//   - GET /api/repositories/available?instance=&search=: AvailableView, the
+//     repositories of the instance that can be switched on (400 without an
+//     instance, 404 for one that is not there); search (at most 100
 //     characters) keeps those whose path holds it (GitLab also matches
 //     names), so ones beyond the first 500 can be found.
-//   - POST /api/repositories {"project": "acme/widgets"}: switches on a
-//     repository with every setting at its default. It is checked on its
-//     own, not against the picker's lists: the admin must be a member with
-//     read access (GitLab: Reporter or above; GitHub: pull) and the review
-//     bot (GitLab: Maintainer or above) or App (GitHub: installed) must
-//     reach it, else 404, whether it is on or not; then 409 when it is on
-//     already. 201, RepositoryDetailView, the project spelled as the
-//     platform does. pergent.sh sets it up (webhook and clone credentials)
-//     within seconds. An operator names the instance too ({"instance":
-//     "lab", "project": ...}) and needs no membership: only the review bot
-//     or App must reach it.
+//   - POST /api/repositories {"instance": "lab", "project": "acme/widgets"}:
+//     switches on a repository with every setting at its default. It is
+//     checked on its own, not against the picker's lists: the review bot
+//     (GitLab: Maintainer or above) or App (GitHub: installed) must reach
+//     it, else 404, whether it is on or not; then 409 when it is on
+//     already. 201, RepositoryDetailView, the project spelled as given.
+//     pergent.sh sets it up (webhook and clone credentials) within
+//     seconds.
 //   - DELETE /api/repositories/{instance}/{project...}: switches it off.
 //     200, RepositoryDetailView with repo.on false and the default
 //     settings. pergent.sh removes its webhook and clone credentials.
@@ -834,27 +778,24 @@ type LLMView struct {
 //     number, 5 to 200) and jobMemory (a Kubernetes quantity such as
 //     "6Gi", from 256Mi, and no less than jobs.resources.requests.memory,
 //     to 32Gi), and rerunLimitPerMR and
-//     rerunLimitPerRepo (a whole number, 1 to 1000; only an admin of
-//     the repository changes these, else 403, and a maintainer's reset
-//     leaves them). Any other key, or a value
+//     rerunLimitPerRepo (a whole number, 1 to 1000; only an admin changes
+//     these, else 403, and a maintainer's reset leaves them). Any other key, or a value
 //     out of bounds, is 400 and nothing changes. 200, RepositoryDetailView.
 //   - POST /api/repositories/{instance}/{project...}/settings/reset: every
 //     setting back to its default, except that a maintainer's reset leaves
-//     the two re-run caps as they are (only an admin of the repository
-//     resets those). 200, RepositoryDetailView.
+//     the two re-run caps as they are (only an admin resets those). 200,
+//     RepositoryDetailView.
 //
 // Users whose teams cover a repository switched on see it at their next
-// request, once the platform says they may.
+// request.
 
 // AvailableView is GET /api/repositories/available: the repositories of the
-// session's instance that the admin is a member of with read access
-// (GitLab: Reporter or above; GitHub: pull) and the review bot (GitLab:
-// Maintainer or above) or review App (GitHub: its installations) reaches,
-// and that aren't switched on, by project ignoring case. 500 at most;
-// truncated is true when there were more, or when a list it is made from
-// was too long (5000) or too slow (60 s, each request 10 s) to read whole.
-// 502 when GitLab or GitHub can't be asked, or nothing could be read in
-// time.
+// instance that the review bot (GitLab: Maintainer or above) or review App
+// (GitHub: its installations) reaches and that aren't switched on, by project
+// ignoring case. 500 at most; truncated is true when there were more, or when
+// the list it is made from was too long (5000) or too slow (20 s, each
+// request 10 s) to read whole. 502 when GitLab or GitHub can't be asked, or
+// nothing could be read in time.
 type AvailableView struct {
 	Items     []AvailableRepo `json:"items"`
 	Truncated bool            `json:"truncated"`
@@ -872,81 +813,78 @@ type AvailableRepo struct {
 //
 // Every write needs the X-CSRF-Token header, as above, and is recorded in
 // the audit log: account_created and account_deleted (detail: the
-// username), team_created (detail: "name (role)"), team_updated (detail:
-// "name: " and the parts changed, of name, "role before->after", "members
-// +added -removed" by username, and repos) and team_deleted (detail: the
-// name). Sign-ins are recorded too (sign_in; for a password account also
-// sign_in_failed, locked, password_changed). Errors are {"error":
-// "message"}.
+// username), account_role_changed (detail: "email: user->admin"),
+// team_created (detail: the name), team_updated (detail: "name: " and the
+// parts changed, of name, "members +added:role -removed name:old->new" by
+// username, and repos) and team_deleted (detail: the name). Sign-ins are
+// recorded too (sign_in; for a local admin also sign_in_failed, locked,
+// password_changed). Errors are {"error": "message"}.
 //
-// An entry's actor tells who acted: "alice (gitlab main)" for a platform
-// account (username, platform and instance), "root (password)" for a
-// password admin, "cli" for a password reset from the command line.
+// An entry's actor tells who acted: the full email of an SSO account, "root
+// (password)" for a local admin, "cli" for a password reset from the command
+// line; entries made before this change read "alice (gitlab main)" for a
+// platform account and stay as they are.
 //
-//   - GET /api/users: []UserView, the waiting accounts first, then
-//     everyone by username. A platform admin is listed the platform
-//     accounts of its own instance only (no password accounts, none of
-//     another instance's).
+//   - GET /api/users: []UserView, everyone by username (the old platform
+//     accounts are left out).
 //   - DELETE /api/users/{id}: removes the account with its sessions and team
-//     memberships (its next request is 401; a platform account is made
-//     again, on no team, at its next sign-in). A password account needs a
-//     password admin (403); the last one can't be removed (409). A platform
-//     admin removes accounts of its own instance only (403 {"error": "you
-//     can only remove accounts of your own instance"}). 204.
-//   - POST /api/admin/accounts {"username"} (password admins only): a new
-//     password admin with a generated password, which must be changed at
-//     its first sign-in. The username is 1 to 64 letters, digits, ".", "_"
-//     or "-" (400), not taken ignoring case (409). 201, NewAccountView: the
-//     only time the password is shown.
+//     memberships (its next request is 401; an SSO account is made again, on
+//     no team, at its next sign-in if the allowlist lets it in). Your own
+//     account is 409; the last local admin can't be removed (409). 204.
+//   - POST /api/admin/users {"email", "teams": [{"teamId", "role"}]}: gives a
+//     person access before they sign in: the SSO account is made as invited
+//     (Added, so the allowlist lets the email in) and put on each team with
+//     its role ("viewer" when none). A bad email, a team that isn't there or
+//     a role that isn't viewer or maintainer is 400 and nothing is made; an
+//     email added already is 409. 201, UserView; 200 for an account that
+//     signed in already without being added.
+//   - GET /api/repositories/{instance}/{project...}/teams and PUT the same
+//     with {"teams": [team ID, ...]} (admins; 404 for anyone else):
+//     RepoTeamsView, every team with whether it lists the repository itself
+//     or covers its whole instance. The PUT sets which teams list the
+//     repository itself, as the Teams page does through PUT /api/teams/{id};
+//     a team that isn't there is 400. 200, RepoTeamsView.
+//   - PUT /api/admin/users/{id}/role {"role": "admin" or "user"}: an SSO
+//     account's role. Your own role is 409, and so is a local admin's (always
+//     an admin). 204.
+//   - POST /api/admin/accounts {"username"}: a new local admin with a
+//     generated password, which must be changed at its first sign-in. The
+//     username is 1 to 64 letters, digits, ".", "_" or "-" (400), not taken
+//     ignoring case (409). 201, NewAccountView: the only time the password is
+//     shown.
 //   - GET /api/teams: []TeamView, by name ignoring case.
-//   - POST /api/teams {"name", "role"}: a team with no members and no
-//     repositories; a name taken ignoring case is 409. 201, TeamView.
-//   - PUT /api/teams/{id} {"name", "role", "members": [account IDs],
-//     "repos": [{"instance", "project"}]}: replaces them all. Members are
-//     platform accounts (400 otherwise). An admin team has "repos": [] (400
-//     otherwise). A repository is one switched on, or {"instance": X,
-//     "project": ""} for every repository of instance X (400 otherwise).
-//     A platform admin changes the members of its own instance only: those
-//     of other instances stay on the team whatever it names, and naming one
-//     that isn't on the team already is 409 {"error": "you can only change
-//     members of your own instance"}. For a platform admin the team's
-//     repositories it can't see are kept as they are, and it can name
-//     repositories of its own instance only
-//     (400); changing the role of a team that covers repositories it
-//     can't see is 409 {"error": "this team covers repositories you can't
-//     see; a password admin can change its role or remove it"}, since the
-//     hidden ones would change role out of its sight (and an admin team has
-//     none). 200, TeamView; 404 for no such team.
+//   - POST /api/teams {"name"}: a team with no members and no repositories;
+//     a name taken ignoring case is 409. 201, TeamView.
+//   - PUT /api/teams/{id} {"name", "members": [{"accountId", "role"}],
+//     "repos": [{"instance", "project"}]}: replaces them all. Members are SSO
+//     accounts (400 otherwise), each with the role "viewer" or "maintainer"
+//     (400 otherwise); an account named twice has the higher role. A
+//     repository is one switched on, or {"instance": X, "project": ""} for
+//     every repository of instance X, which also covers repositories
+//     switched on later (400 otherwise). 200, TeamView; 404 for no such
+//     team.
 //   - DELETE /api/teams/{id}: removes the team (not its members' accounts).
-//     For a platform admin a team covering repositories it can't see is
-//     409, as above. 204.
+//     204.
 //   - GET /api/audit?before=<id>: AuditPageView, 100 entries at most,
 //     newest first, older than the entry before when given. Its next is
 //     the before of the page after, 0 at the end of the log (the page after
-//     can still be empty when the log ends just there). A platform admin's
-//     request reads at most 50 chunks of 100 entries: when those don't fill
-//     the page, it answers what they held, so a short page with next not 0
-//     isn't the last.
-//
-// A platform admin sees only what it can see: a team's repositories of
-// other instances, and those its platform hides from it, are counted in
-// hiddenRepos and never named, and a team's members of other instances are
-// counted in hiddenMembers; audit entries about a repository it can't see
-// or about another instance are left out, and so are a password admin's own
-// sign-ins and password changes.
+//     can still be empty when the log ends just there).
 
-// UserView is one account.
+// UserView is one account. Role is "admin" or "user". Invited is set for an SSO
+// account an admin added that has not signed in yet.
 type UserView struct {
 	ID int64 `json:"id"`
-	// Kind is "password" or "platform".
+	// Kind is "password" (a local admin) or "sso".
 	Kind     string `json:"kind"`
 	Username string `json:"username"`
-	// Platform and Instance are "" for a password account.
-	Platform string `json:"platform"`
-	Instance string `json:"instance"`
+	// Email is an SSO account's email; "" for a local admin.
+	Email   string `json:"email"`
+	Role    string `json:"role"`
+	Invited bool   `json:"invited"`
 	// LastSignInAt is null for an account that never signed in.
 	LastSignInAt *time.Time `json:"lastSignInAt"`
-	// Waiting: a platform account on no team, which sees nothing.
+	// Waiting: an SSO account that signed in, is not an admin and is on no
+	// team, which sees nothing.
 	Waiting bool      `json:"waiting"`
 	Teams   []TeamRef `json:"teams"`
 }
@@ -957,8 +895,7 @@ type TeamRef struct {
 	Name string `json:"name"`
 }
 
-// NewAccountView is a password admin just made, with its generated
-// password.
+// NewAccountView is a local admin just made, with its generated password.
 type NewAccountView struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
@@ -966,34 +903,44 @@ type NewAccountView struct {
 
 // TeamView is one team.
 type TeamView struct {
-	ID   int64  `json:"id"`
-	Name string `json:"name"`
-	// Role is "admin", "maintainer" or "viewer".
-	Role    string           `json:"role"`
+	ID      int64            `json:"id"`
+	Name    string           `json:"name"`
 	Members []TeamMemberView `json:"members"`
-	// Repos are the repositories it covers that the session can see, by
-	// instance and project; a project "" covers every repository of the
-	// instance. An admin team has none.
+	// Repos are the repositories it covers, by instance and project; a
+	// project "" covers every repository of the instance.
 	Repos []TeamRepoView `json:"repos"`
-	// HiddenRepos counts the team's repositories the session can't see.
-	HiddenRepos int `json:"hiddenRepos"`
-	// HiddenMembers counts the team's members of other instances, which a
-	// platform admin never sees named; 0 for an operator.
-	HiddenMembers int `json:"hiddenMembers"`
 }
 
-// TeamMemberView is a team's member: a platform account.
+// TeamMemberView is a team's member: an SSO account and its role on the team,
+// "viewer" or "maintainer".
 type TeamMemberView struct {
-	ID       int64  `json:"id"`
-	Username string `json:"username"`
-	Platform string `json:"platform"`
-	Instance string `json:"instance"`
+	AccountID int64  `json:"accountId"`
+	Username  string `json:"username"`
+	Email     string `json:"email"`
+	Role      string `json:"role"`
 }
 
 // TeamRepoView is a repository a team covers.
 type TeamRepoView struct {
 	Instance string `json:"instance"`
 	Project  string `json:"project"`
+}
+
+// RepoTeamsView is GET .../teams of a repository: every team, by name
+// ignoring case.
+type RepoTeamsView struct {
+	Teams []RepoTeamView `json:"teams"`
+}
+
+// RepoTeamView is a team as one repository's settings show it. Direct is set
+// when the team lists the repository itself; WholeInstance when it covers
+// every repository of the repository's instance (so it covers this one too).
+type RepoTeamView struct {
+	ID            int64  `json:"id"`
+	Name          string `json:"name"`
+	Members       int    `json:"members"`
+	Direct        bool   `json:"direct"`
+	WholeInstance bool   `json:"wholeInstance"`
 }
 
 // AuditPageView is a page of the audit log. Next is the before of the
@@ -1015,8 +962,7 @@ type AuditView struct {
 	Detail   string    `json:"detail"`
 }
 
-// --- Instances, the LLM and the defaults (operators; the last two are
-// readable by admins) ---
+// --- Instances, the LLM and the defaults (admins) ---
 //
 // Secrets are write-only: a request carries a value, a response only whether
 // it is set and when it last changed. Every write needs the CSRF token and is
@@ -1029,14 +975,14 @@ type AuditView struct {
 //     then those added in the dashboard.
 //   - POST /api/admin/instances {"name", "platform", "url" (GitLab) or
 //     "apiURL", "reviewAppID" and "approveAppID" (GitHub; 0 approves with a
-//     token, the reviewAppID with the review App itself), "oauthClientID",
+//     token, the reviewAppID with the review App itself),
 //     "secrets": {field: value}}: checks the credentials the way startup
 //     does (400 with the reason when they fail, and nothing is stored),
 //     stores them sealed and connects. A GitLab instance's webhook_secret
 //     is generated; giving one is 400. 201,
 //     InstanceAdminView; 409 when the name is taken in the config or the
 //     dashboard.
-//   - PUT /api/admin/instances/{name} {"oauthClientID", "secrets": {...}}:
+//   - PUT /api/admin/instances/{name} {"secrets": {...}}:
 //     replaces what it names, checks the whole, connects again. An address
 //     or App ID that differs is 400; an instance of the config is 409.
 //     200, InstanceAdminView.
@@ -1046,11 +992,19 @@ type AuditView struct {
 //     instance and its secrets within a minute or so. 409 for the config's.
 //   - GET /api/admin/instances/{name}/repositories?search=: AvailableView,
 //     the repositories the instance's review bot or App can set up that
-//     aren't switched on, for an operator, who has no platform account.
+//     aren't switched on (the same list as the picker's).
 //   - GET /api/admin/llm: LLMAdminView (admins). PUT /api/admin/llm
-//     {"provider", "model", "baseURL", "apiKey"} (operators; 409 when the
+//     {"provider", "model", "baseURL", "apiKey"} (admins; 409 when the
 //     config has an llm: block; the key is needed only when none is
 //     stored): 200, LLMAdminView.
+//   - GET /api/admin/sign-in: SignInAdminView (admins). PUT /api/admin/sign-in
+//     {"mode", "label", "issuer", "clientID", "clientSecret", "header",
+//     "audience", "jwksURL", "emailClaim", "allowedDomains", "allowedEmails"}
+//     (admins; 409 when dashboard.sign_in is set in the config file; a
+//     missing clientSecret keeps the stored one, "" removes it; a new issuer
+//     or mode ends every SSO session, and a new issuer needs the secret
+//     again): 200, SignInAdminView. POST /api/admin/sign-in/test reads the
+//     provider's discovery document or key set: 200, SignInTestView.
 //   - GET /api/admin/defaults, PUT /api/admin/defaults (admins): DefaultsView
 //     for the repositories switched on in the dashboard; the PUT body has the
 //     same keys with the same bounds as a repository's settings, and
@@ -1065,6 +1019,34 @@ type AuditView struct {
 type SecretView struct {
 	Set       bool       `json:"set"`
 	UpdatedAt *time.Time `json:"updatedAt"`
+}
+
+// SignInAdminView is GET /api/admin/sign-in (and the answer of its PUT): the
+// sign-in settings in force. Source is "config" when dashboard.sign_in in the
+// config file sets them (then Editable is false and the PUT is 409), else
+// "dashboard". The client secret is never sent, only whether one is set.
+// CallbackURL is the redirect URI to register at the identity provider.
+type SignInAdminView struct {
+	Source         string     `json:"source"`
+	Editable       bool       `json:"editable"`
+	Mode           string     `json:"mode"`
+	Label          string     `json:"label"`
+	Issuer         string     `json:"issuer"`
+	ClientID       string     `json:"clientID"`
+	ClientSecret   SecretView `json:"clientSecret"`
+	Header         string     `json:"header"`
+	Audience       string     `json:"audience"`
+	JWKSURL        string     `json:"jwksURL"`
+	EmailClaim     string     `json:"emailClaim"`
+	AllowedDomains []string   `json:"allowedDomains"`
+	AllowedEmails  []string   `json:"allowedEmails"`
+	CallbackURL    string     `json:"callbackURL"`
+}
+
+// SignInTestView is the answer of POST /api/admin/sign-in/test: whether the
+// provider's discovery document or key set could be read, and nothing else.
+type SignInTestView struct {
+	OK bool `json:"ok"`
 }
 
 // InstanceAdminView is one instance in GET /api/admin/instances.
@@ -1086,18 +1068,17 @@ type InstanceAdminView struct {
 	// Approver is "app" (a GitHub approve App), "review_app" (the review
 	// App itself; ApproveAppID is then the review App's ID) or "token" (a
 	// bot user).
-	Approver      string `json:"approver"`
-	OAuthClientID string `json:"oauthClientID"`
+	Approver string `json:"approver"`
 	// Secrets lists the fields the instance takes: review_token,
-	// approve_token, webhook_secret and oauth_client_secret (GitLab);
-	// review_app_key, approve_app_key or approve_token (neither when the
-	// review App approves), webhook_secret and oauth_client_secret (GitHub).
+	// approve_token and webhook_secret (GitLab); review_app_key,
+	// approve_app_key or approve_token (neither when the review App
+	// approves) and webhook_secret (GitHub).
 	Secrets map[string]SecretView `json:"secrets"`
 }
 
 // LLMAdminView is GET /api/admin/llm: where the model comes from ("config"
 // or "dashboard"), the model, and whether a key is set. Editable is true for
-// an operator when the config has no llm: block.
+// an admin when the config has no llm: block.
 type LLMAdminView struct {
 	Source   string     `json:"source"`
 	Provider string     `json:"provider"`

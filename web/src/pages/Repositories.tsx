@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 
 import {
@@ -27,7 +27,7 @@ export default function Repositories() {
       <div className="top">
         <div>
           <h1>Repositories</h1>
-          <div className="sub">The repositories pergent reviews that you can see{me.platform && ` on ${platformName(me.platform)}`}</div>
+          <div className="sub">The repositories pergent reviews that you can see</div>
         </div>
         {me.admin && (
           <button type="button" className="btn primary" onClick={() => setParams(adding ? {} : { add: "1" })}>
@@ -35,7 +35,7 @@ export default function Repositories() {
           </button>
         )}
       </div>
-      {adding && (me.operator ? <OperatorPicker /> : <Picker />)}
+      {adding && <Picker />}
       {repos.isPending && <Loading />}
       {repos.isError && <ErrorBox error={repos.error} />}
       {repos.isSuccess &&
@@ -108,13 +108,6 @@ function Row({ repo, admin }: { repo: RepositoryView; admin: boolean }) {
   );
 }
 
-// OperatorPicker is the picker for an operator, who has no platform account
-// and no instance of their own: it asks for the instance first.
-function OperatorPicker() {
-  const [instance, setInstance] = useState("");
-  return <Picker instance={instance} choice={<InstanceChoice instance={instance} onChange={setInstance} />} />;
-}
-
 function InstanceChoice({ instance, onChange }: { instance: string; onChange: (name: string) => void }) {
   const instances = useQuery({
     queryKey: ["admin-instances"],
@@ -140,10 +133,11 @@ function InstanceChoice({ instance, onChange }: { instance: string; onChange: (n
   );
 }
 
-// Picker lists the repositories the admin and pergent can both reach, to
-// switch one on. An admin has its own instance (instance is undefined); an
-// operator names one, and "" is not yet chosen.
-function Picker({ instance, choice }: { instance?: string; choice?: ReactNode }) {
+// Picker lists the repositories the review bot or App of an instance can
+// reach, to switch one on. The admin names the instance first.
+function Picker() {
+  const [instance, setInstance] = useState("");
+  const choice = <InstanceChoice instance={instance} onChange={setInstance} />;
   const write = useWrite();
   const navigate = useNavigate();
   const client = useQueryClient();
@@ -154,17 +148,16 @@ function Picker({ instance, choice }: { instance?: string; choice?: ReactNode })
   // has no skills and isn't reviewed. A library that can't be read says nothing.
   const library = useQuery({ queryKey: ["skills"], queryFn: () => api.get<LibrarySkill[]>("/api/skills") });
   const noDefaults = library.isSuccess && !library.data.some((s) => s.inDefaults);
-  const base =
-    instance === undefined ? "/api/repositories/available" : `/api/admin/instances/${encodeURIComponent(instance)}/repositories`;
+  const base = `/api/admin/instances/${encodeURIComponent(instance)}/repositories`;
   const available = useQuery({
-    queryKey: ["available", instance ?? "", search],
+    queryKey: ["available", instance, search],
     queryFn: () => api.get<AvailableView>(`${base}?search=${encodeURIComponent(search)}`),
     staleTime: 0,
     enabled: chosen,
   });
   const on = useMutation({
     mutationFn: (project: string) =>
-      write<RepositoryDetailView>("POST", "/api/repositories", instance === undefined ? { project } : { project, instance }),
+      write<RepositoryDetailView>("POST", "/api/repositories", { project, instance }),
     onSuccess: (detail) => {
       client.invalidateQueries({ queryKey: ["repositories"] });
       client.invalidateQueries({ queryKey: ["available"] });
@@ -183,7 +176,7 @@ function Picker({ instance, choice }: { instance?: string; choice?: ReactNode })
           <span aria-hidden="true">⚠️</span>
           <span className="prose">
             No default skills are set. A repository you switch on gets no skills and is not reviewed, unless it has its own in
-            .pergent/skills. <Link to="/settings">Set the default skills</Link>
+            .pergent/skills. <Link to="/admin/settings">Set the default skills</Link>
           </span>
         </div>
       )}

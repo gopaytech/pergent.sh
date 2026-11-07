@@ -153,7 +153,7 @@ func (d *Dashboard) scanNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx, se := r.Context(), session(r)
-	sc, err := d.readiness.RequestScan(ctx, repo.Instance, repo.Project, actorLabel(se.Kind, se.Platform, se.Instance, se.Username))
+	sc, err := d.readiness.RequestScan(ctx, repo.Instance, repo.Project, actorLabel(se.Kind, se.Username))
 	var soon *readiness.ScanTooSoonError
 	switch {
 	case errors.Is(err, readiness.ErrScanBusy):

@@ -28,17 +28,16 @@ import (
 const (
 	// maxAvailable is the most repositories the picker lists.
 	maxAvailable = 500
-	// listLimit is the most repositories read from each side (the admin's
-	// and the review bot's or App's) for the picker.
+	// listLimit is the most repositories read from the review bot or App
+	// for the picker.
 	listLimit = 5000
-	// AvailableBudget bounds the whole GET /api/repositories/available,
-	// renewing the user's token included, so that even a truncated answer
-	// is written well before the server's 60 s WriteTimeout and the 60 s
-	// proxy timeout of an ingress in front of it.
+	// AvailableBudget bounds the whole GET /api/repositories/available, so
+	// that even a truncated answer is written well before the server's 60 s
+	// WriteTimeout and the 60 s proxy timeout in front of it.
 	AvailableBudget = 45 * time.Second
-	// listBudget bounds each side's listing for the picker, within
+	// listBudget bounds the bot's listing for the picker, within
 	// AvailableBudget; each request of it has platformTimeout. What was read
-	// when either runs out is used.
+	// when it runs out is used.
 	listBudget = 20 * time.Second
 	// maxSearch is the longest picker search.
 	maxSearch = 100
@@ -57,10 +56,9 @@ const (
 	msgBadProjectBody = `the body must be {"project": "<path>"}`
 	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, commentLayout, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"
 	msgNameInstance   = `name the instance: {"instance": "<name>", "project": "<path>"}`
-	msgNeedsPlatform  = "sign in with GitLab or GitHub to add repositories"
-	msgNeedsAdminCaps = "only admins of this repository can change its re-run caps"
-	msgNeedsRole      = "only maintainers and admins of this repository can change its settings"
-	msgNeedsRoleScan  = "only maintainers and admins of this repository can scan it"
+	msgNeedsAdminCaps = "only admins can change its re-run caps"
+	msgNeedsRole      = "only maintainers of this repository and admins can change its settings"
+	msgNeedsRoleScan  = "only maintainers of this repository and admins can scan it"
 )
 
 var (
@@ -68,16 +66,15 @@ var (
 	maxJobMemory = resource.MustParse("32Gi")
 )
 
-// writeRoutes adds the write API to mux: every route behind Auth.Require
-// (which checks X-CSRF-Token); switching on and off and the picker for
-// admins only, a repository's settings for its maintainers and admins (403
-// otherwise).
+// writeRoutes adds the write API to mux: every route behind a session
+// (Auth.Require checks X-CSRF-Token); switching on and off and the picker
+// are admin routes (adminRoute: 404 for anyone else), a repository's settings
+// are for its maintainers and admins (403 otherwise).
 func (d *Dashboard) writeRoutes(mux *http.ServeMux) {
-	admin := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, d.Auth.Require(requireAdmin(h))) }
-	admin("GET /api/repositories/available", needsPlatform(d.available))
-	admin("POST /api/repositories", d.switchOn)
-	admin("DELETE /api/repositories/{instance}/{rest...}", d.switchOff)
-	mux.Handle("PUT /api/repositories/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.putSettings)))
+	d.adminRoute(mux, "GET /api/repositories/available", d.available)
+	d.adminRoute(mux, "POST /api/repositories", d.switchOn)
+	d.adminRoute(mux, "DELETE /api/repositories/{instance}/{rest...}", d.switchOff)
+	mux.Handle("PUT /api/repositories/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.repositoryPut)))
 	mux.Handle("POST /api/repositories/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.repositoryPost)))
 	// The instance alone is 404, not a redirect to the {rest...} routes.
 	none := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { notFound(w) })
@@ -86,110 +83,15 @@ func (d *Dashboard) writeRoutes(mux *http.ServeMux) {
 	}
 }
 
-// needsPlatform serves h to platform sessions: the picker asks the platform
-// with the user's token, which a password session hasn't got (400).
-func needsPlatform(h http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if se, _ := SessionFrom(r.Context()); se.Kind != store.AccountPlatform {
-			writeError(w, http.StatusBadRequest, msgNeedsPlatform)
-			return
-		}
-		h(w, r)
-	}
-}
-
 // --- GET /api/repositories/available ---
 
 func (d *Dashboard) available(w http.ResponseWriter, r *http.Request) {
-	se := session(r)
-	ctx, cancel := context.WithTimeoutCause(r.Context(), d.availableBudget, errOutOfBudget)
-	defer cancel()
-	search := strings.TrimSpace(r.URL.Query().Get("search"))
-	if len(search) > maxSearch {
-		writeError(w, http.StatusBadRequest, "search must be at most 100 characters")
+	instance := r.URL.Query().Get("instance")
+	if instance == "" {
+		writeError(w, http.StatusBadRequest, msgNameInstance)
 		return
 	}
-	on, err := d.onProjects(ctx, se)
-	if err != nil {
-		d.failed(w, r, "listing repositories", err)
-		return
-	}
-	reach, truncated, err := d.reachable(ctx, se, search)
-	if err != nil {
-		d.Log.Warn("dashboard: listing the repositories that can be switched on failed",
-			"instance", se.Instance, "user", se.Username, "error", err.Error())
-		writeError(w, http.StatusBadGateway, msgListFailed)
-		return
-	}
-	keys := make([]string, 0, len(reach))
-	for k := range reach {
-		if !on[k] {
-			keys = append(keys, k)
-		}
-	}
-	sort.Strings(keys)
-	view := AvailableView{Items: []AvailableRepo{}, Truncated: truncated}
-	for _, k := range keys {
-		if len(view.Items) == maxAvailable {
-			view.Truncated = true
-			break
-		}
-		view.Items = append(view.Items, AvailableRepo{Instance: se.Instance, Project: reach[k], Platform: se.Platform})
-	}
-	writeJSON(w, http.StatusOK, view)
-}
-
-// onProjects is the lower-cased paths of the repositories switched on for
-// the session's instance, in the config or the dashboard, seen or not.
-func (d *Dashboard) onProjects(ctx context.Context, se Session) (map[string]bool, error) {
-	all, err := d.Repos.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	on := map[string]bool{}
-	for _, e := range all {
-		if e.Instance == se.Instance {
-			on[lower(e.Project)] = true
-		}
-	}
-	return on, nil
-}
-
-// reachable returns the repositories of the session's instance holding
-// search that both its user (a member with read access, asked with their
-// token now) and the review bot or App (asked at most every 5 minutes)
-// reach, by lower-cased path, each spelled as the user's list has it.
-// truncated is true when a list was too long, or too slow, to read whole.
-func (d *Dashboard) reachable(ctx context.Context, se Session, search string) (map[string]string, bool, error) {
-	type listed struct {
-		repos     []string
-		truncated bool
-		err       error
-	}
-	review := make(chan listed, 1)
-	go func() {
-		repos, truncated, err := d.catalogRepos(ctx, se.Instance, search)
-		review <- listed{repos, truncated, err}
-	}()
-	mine, mineTruncated, err := d.memberRepos(ctx, se, search)
-	bot := <-review
-	if err != nil {
-		return nil, false, fmt.Errorf("listing the user's repositories: %w", err)
-	}
-	if bot.err != nil {
-		return nil, false, fmt.Errorf("listing the review bot's or App's repositories: %w", bot.err)
-	}
-	reached := make(map[string]bool, len(bot.repos))
-	for _, p := range bot.repos {
-		reached[lower(p)] = true
-	}
-	out := map[string]string{}
-	for _, p := range mine {
-		if k := lower(p); reached[k] && out[k] == "" {
-			out[k] = p
-		}
-	}
-	return out, mineTruncated || bot.truncated, nil
+	d.listAvailable(w, r, instance)
 }
 
 // errOutOfBudget is the cause of a picker listing cut short by its budget
@@ -214,23 +116,6 @@ func (d *Dashboard) withinBudget(ctx context.Context, side string, list func(ctx
 		return nil, false, err
 	}
 	return repos, truncated, nil
-}
-
-// memberRepos lists the session user's repositories holding search with
-// their token.
-func (d *Dashboard) memberRepos(ctx context.Context, se Session, search string) ([]string, bool, error) {
-	p, token, err := d.Auth.userToken(ctx, se)
-	if err != nil {
-		return nil, false, err
-	}
-	return d.withinBudget(ctx, "user", func(ctx context.Context) ([]string, bool, error) {
-		repos, truncated, err := p.memberRepos(ctx, token, search, d.listLimit)
-		if err != nil && token != "" {
-			// The error goes to the log: it must not hold the token.
-			err = errors.New(strings.ReplaceAll(err.Error(), token, "[REDACTED]"))
-		}
-		return repos, truncated, err
-	})
 }
 
 // catalogCache keeps each instance's review-side lists, by search, for
@@ -304,64 +189,33 @@ func (d *Dashboard) catalogRepos(ctx context.Context, instance, search string) (
 	return f.repos, f.truncated, f.err
 }
 
-// projectAvailable checks project on its own, whatever the lists hold: the
-// session's user must be a member with read access (asked with their
-// token) and the review bot or App must reach it. It returns the path as
-// the platform spells it, with the project's ID.
-func (d *Dashboard) projectAvailable(ctx context.Context, se Session, project string) (store.VisibleProject, bool, error) {
-	cat, ok := d.catalogs.Get(se.Instance)
-	if !ok || cat == nil {
-		return store.VisibleProject{}, false, errors.New("no repository list for the instance")
-	}
-	p, token, err := d.Auth.userToken(ctx, se)
-	if err != nil {
-		return store.VisibleProject{}, false, err
-	}
-	repo, ok, err := p.memberRepo(ctx, token, project)
-	if err != nil || !ok {
-		return store.VisibleProject{}, false, err
-	}
-	reached, err := cat.CanReach(ctx, repo.Path)
-	if err != nil || !reached {
-		return store.VisibleProject{}, false, err
-	}
-	return repo, true, nil
-}
-
 // --- POST /api/repositories ---
 
 func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	var body struct {
-		Project string `json:"project"`
-		// Instance is named by an operator, who has none of their own.
+		Project  string `json:"project"`
 		Instance string `json:"instance"`
 	}
 	if err := decodeStrict(r, &body); err != nil || strings.TrimSpace(body.Project) == "" || len(body.Project) > 1024 {
 		writeError(w, http.StatusBadRequest, msgBadProjectBody)
 		return
 	}
-	instance := se.Instance
-	if se.Operator {
-		instance = body.Instance
-		if instance == "" {
-			writeError(w, http.StatusBadRequest, msgNameInstance)
-			return
-		}
-		if !d.knownInstance(instance) {
-			notFound(w)
-			return
-		}
-	} else if body.Instance != "" && body.Instance != instance {
-		writeError(w, http.StatusBadRequest, msgOtherInstance)
+	instance := body.Instance
+	if instance == "" {
+		writeError(w, http.StatusBadRequest, msgNameInstance)
+		return
+	}
+	if !d.knownInstance(instance) {
+		notFound(w)
 		return
 	}
 
-	// The client's word isn't taken: the admin and the review side must
-	// reach the repository now. This comes before anything about whether
-	// it is on, so a repository the admin can't reach is 404 the same way,
-	// after the same calls, on or off.
-	avail, ok, err := d.switchOnAvailable(ctx, se, instance, body.Project)
+	// The client's word isn't taken: the review bot or App must reach the
+	// repository now. This comes before anything about whether it is on, so a
+	// repository it can't reach is 404 the same way, after the same calls,
+	// on or off.
+	name, ok, err := d.switchOnAvailable(ctx, instance, body.Project)
 	if err != nil {
 		d.Log.Warn("dashboard: checking a repository to switch on failed",
 			"instance", instance, "user", se.Username, "error", err.Error())
@@ -372,7 +226,6 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	name := avail.Path
 	if d.Repos.InConfig(instance, name) {
 		writeError(w, http.StatusConflict, msgConfigManaged)
 		return
@@ -392,13 +245,6 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 	d.Log.Info("dashboard: repository switched on", "instance", instance, "project", name, "by", se.Username)
 	d.audit(ctx, se, "repository_on", instance, name, "")
 	d.reconcileSoon(instance, name)
-	if !se.Operator {
-		// The admin checked they can see it just now: stored, it is shown
-		// even if the check their next request makes for it fails.
-		if err := d.Store.AddSessionProject(ctx, se.idHash, avail); err != nil {
-			d.Log.Warn("dashboard: adding a switched-on repository to the session failed", "error", err.Error())
-		}
-	}
 	repo, ok, err := d.Repos.Get(ctx, instance, name)
 	if err == nil && !ok {
 		err = errors.New("the repository switched on isn't there")
@@ -412,31 +258,23 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 		d.failed(w, r, "loading a repository", err)
 		return
 	}
-	// This request's session predates the repository; its admin team
-	// covers it as admin from the next one on.
-	view.Role = RoleAdmin.String()
 	writeJSON(w, http.StatusCreated, view)
 }
 
-// switchOnAvailable checks project on instance can be switched on by the
-// session: a platform session's user must be a member with read access
-// (projectAvailable); an operator sees everything and has no platform
-// account, so only the review bot or App has to reach it, and the project
-// keeps the spelling it was given.
-func (d *Dashboard) switchOnAvailable(ctx context.Context, se Session, instance, project string) (store.VisibleProject, bool, error) {
-	if !se.Operator {
-		return d.projectAvailable(ctx, se, project)
-	}
+// switchOnAvailable checks that the review bot or App of instance reaches
+// project, and returns it as given (trimmed): an admin has no platform account
+// to ask, so the bot's access is the only check.
+func (d *Dashboard) switchOnAvailable(ctx context.Context, instance, project string) (string, bool, error) {
 	project = strings.TrimSpace(project)
 	cat, ok := d.catalogs.Get(instance)
 	if !ok || cat == nil {
-		return store.VisibleProject{}, false, errors.New("no repository list for the instance")
+		return "", false, errors.New("no repository list for the instance")
 	}
 	reached, err := cat.CanReach(ctx, project)
 	if err != nil || !reached {
-		return store.VisibleProject{}, false, err
+		return "", false, err
 	}
-	return store.VisibleProject{Instance: instance, Path: project}, true, nil
+	return project, true, nil
 }
 
 // decodeStrict reads one JSON value of at most maxWriteBody bytes into v;
@@ -562,7 +400,17 @@ func (d *Dashboard) repositoryPost(w http.ResponseWriter, r *http.Request) {
 	d.resetSettings(w, r)
 }
 
-// --- PUT .../settings and POST .../settings/reset ---
+// --- PUT .../settings, PUT .../teams and POST .../settings/reset ---
+
+// repositoryPut serves the PUTs to one repository: .../teams (putRepositoryTeams,
+// admins only) and .../settings (putSettings, which answers any other path 404).
+func (d *Dashboard) repositoryPut(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.PathValue("rest"), "/teams") {
+		d.putRepositoryTeams(w, r)
+		return
+	}
+	d.putSettings(w, r)
+}
 
 func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {
 	repo, ok := d.target(w, r, "/settings", RoleMaintainer)

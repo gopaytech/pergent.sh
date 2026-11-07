@@ -54,7 +54,7 @@ spec:
             - name: PERGENT_SH_IMAGE
               value: {{ include "pergent-sh.image" . | quote }}
           {{- if .Values.adminPassword.existingSecret }}
-            # The first password admin's password, under the name the config's
+            # The first local admin's password, under the name the config's
             # dashboard.admin_password_env gives it.
             - name: {{ .Values.config.dashboard.admin_password_env }}
               valueFrom:

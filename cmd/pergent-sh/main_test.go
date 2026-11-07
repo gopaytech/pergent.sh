@@ -15,7 +15,6 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/dashboard"
-	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/server"
 	"github.com/gopaytech/pergent.sh/internal/store"
 	"github.com/gopaytech/pergent.sh/internal/webhook"
@@ -114,63 +113,13 @@ func TestServeUntilDoneAnswersWhileLoopsBlock(t *testing.T) {
 // Dashboard wiring
 
 // dashboardConfig is a config with GitLab instance main and GitHub instance
-// gh, both set up for sign-in through the env vars named, and the dashboard
-// on unless url is "".
+// gh, and the dashboard on unless url is "".
 func dashboardConfig(url string) *config.Config {
 	return &config.Config{
-		GitLab: []config.Instance{{Name: "main", URL: "https://gitlab.example.com",
-			OAuthClientIDEnv: "GL_OAUTH_ID", OAuthClientSecretEnv: "GL_OAUTH_SECRET"}},
-		GitHub: []config.GitHubInstance{{Name: "gh", APIURL: "https://api.github.com",
-			OAuthClientIDEnv: "GH_OAUTH_ID", OAuthClientSecretEnv: "GH_OAUTH_SECRET"}},
+		GitLab:    []config.Instance{{Name: "main", URL: "https://gitlab.example.com"}},
+		GitHub:    []config.GitHubInstance{{Name: "gh", APIURL: "https://api.github.com"}},
 		Dashboard: config.Dashboard{URL: url},
 	}
-}
-
-func setOAuthEnv(t *testing.T) {
-	t.Setenv("GL_OAUTH_ID", "gl-oauth-id-example")
-	t.Setenv("GL_OAUTH_SECRET", "gl-oauth-secret-example")
-	t.Setenv("GH_OAUTH_ID", "gh-oauth-id-example")
-	t.Setenv("GH_OAUTH_SECRET", "gh-oauth-secret-example")
-}
-
-// With the dashboard on, an instance used for sign-in whose OAuth env var is
-// unset stops pergent.sh before it connects to anything, naming the
-// instance and the variable, never a value. With it off, nothing is needed.
-func TestCheckDashboardEnv(t *testing.T) {
-	setOAuthEnv(t)
-	if err := checkDashboardEnv(dashboardConfig("https://dashboard.example.com")); err != nil {
-		t.Fatalf("checkDashboardEnv with every variable set = %v", err)
-	}
-	for _, tc := range []struct{ unset, instance string }{
-		{"GL_OAUTH_ID", `gitlab instance "main"`},
-		{"GL_OAUTH_SECRET", `gitlab instance "main"`},
-		{"GH_OAUTH_ID", `github instance "gh"`},
-		{"GH_OAUTH_SECRET", `github instance "gh"`},
-	} {
-		t.Run(tc.unset, func(t *testing.T) {
-			setOAuthEnv(t)
-			t.Setenv(tc.unset, "")
-			err := checkDashboardEnv(dashboardConfig("https://dashboard.example.com"))
-			if err == nil {
-				t.Fatal("checkDashboardEnv succeeded")
-			}
-			msg := err.Error()
-			if !strings.Contains(msg, tc.instance) || !strings.Contains(msg, tc.unset) || !strings.Contains(msg, "dashboard") {
-				t.Errorf("error = %q; want it to name the dashboard, %s and %s", msg, tc.instance, tc.unset)
-			}
-			if strings.Contains(msg, "-example") {
-				t.Errorf("error %q holds a value", msg)
-			}
-		})
-	}
-	t.Run("dashboard off", func(t *testing.T) {
-		for _, name := range []string{"GL_OAUTH_ID", "GL_OAUTH_SECRET", "GH_OAUTH_ID", "GH_OAUTH_SECRET"} {
-			t.Setenv(name, "")
-		}
-		if err := checkDashboardEnv(dashboardConfig("")); err != nil {
-			t.Errorf("checkDashboardEnv with the dashboard off = %v", err)
-		}
-	})
 }
 
 // The LLM key is read only when the file has an llm: block; without one
@@ -193,6 +142,52 @@ func TestReadLLMKey(t *testing.T) {
 	}
 }
 
+// An OIDC sign-in in the config file stops startup when the variable that
+// holds its client secret is unset or empty, and names the variable (never a
+// value). JWT mode and no sign-in have no such secret.
+func TestCheckSignInSecret(t *testing.T) {
+	cfg := &config.Config{}
+	if err := checkSignInSecret(cfg); err != nil {
+		t.Errorf("checkSignInSecret with no sign-in = %v", err)
+	}
+	cfg.Dashboard.SignIn = config.SignIn{Mode: config.SignInJWT, ClientSecretEnv: "PERGENT_TEST_OIDC_SECRET"}
+	t.Setenv("PERGENT_TEST_OIDC_SECRET", "")
+	if err := checkSignInSecret(cfg); err != nil {
+		t.Errorf("checkSignInSecret in jwt mode = %v", err)
+	}
+
+	cfg.Dashboard.SignIn = config.SignIn{Mode: config.SignInOIDC, ClientSecretEnv: "PERGENT_TEST_OIDC_SECRET"}
+	err := checkSignInSecret(cfg)
+	if err == nil || !strings.Contains(err.Error(), "dashboard.sign_in.client_secret_env") || !strings.Contains(err.Error(), "PERGENT_TEST_OIDC_SECRET") {
+		t.Errorf("checkSignInSecret with the variable empty = %v; want an error naming the key and the variable", err)
+	}
+	t.Setenv("PERGENT_TEST_OIDC_SECRET", "s3cret-value")
+	if err := checkSignInSecret(cfg); err != nil {
+		t.Errorf("checkSignInSecret with the variable set = %v", err)
+	}
+}
+
+// The start-up sweep logs how many sessions it ended, says nothing when there
+// were none, and stops startup when it fails.
+func TestEndStaleSSOSessions(t *testing.T) {
+	run := func(n int, err error) (string, error) {
+		var logs strings.Builder
+		log := slog.New(slog.NewTextHandler(&logs, nil))
+		got := endStaleSSOSessions(context.Background(), func(context.Context) (int, error) { return n, err }, log)
+		return logs.String(), got
+	}
+	if out, err := run(0, nil); err != nil || out != "" {
+		t.Errorf("none ended = %q, %v; want no log and no error", out, err)
+	}
+	if out, err := run(3, nil); err != nil || !strings.Contains(out, "sessions=3") {
+		t.Errorf("3 ended = %q, %v; want the count logged", out, err)
+	}
+	boom := errors.New("database down")
+	if _, err := run(0, boom); !errors.Is(err, boom) {
+		t.Errorf("a failed sweep = %v; want it to stop startup", err)
+	}
+}
+
 // testSecretKey is a fixed 32-byte PERGENT_SH_SECRET_KEY, standard base64.
 const testSecretKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 
@@ -204,10 +199,10 @@ func get(t *testing.T, h http.Handler, path string) (int, string) {
 	return rec.Code, rec.Body.String()
 }
 
-// With dashboard.url set the routes serve the sign-in instances, the API
-// and the app; without it there is no dashboard and none of them exist.
+// With dashboard.url set the routes serve the sign-in page's question, the
+// API and the app; without it there is no dashboard and none of them exist.
+// The platforms' sign-in routes exist in neither case.
 func TestNewDashboardRoutes(t *testing.T) {
-	setOAuthEnv(t)
 	var logs strings.Builder
 	log := slog.New(slog.NewTextHandler(&logs, nil))
 	cfg := dashboardConfig("https://dashboard.example.com")
@@ -215,29 +210,13 @@ func TestNewDashboardRoutes(t *testing.T) {
 	if err != nil || d == nil {
 		t.Fatalf("newDashboard = %v, %v", d, err)
 	}
-	// Sign-in is offered through an instance once it is connected.
-	reg := instances.New(cfg, nil, nil)
-	for _, inst := range reg.All() {
-		var s instances.Secrets
-		var err error
-		if inst.GitLab != nil {
-			_, s.OAuthClientSecret, err = inst.GitLab.OAuthClient()
-		} else {
-			_, s.OAuthClientSecret, err = inst.GitHub.OAuthClient()
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		d.Auth.SetProvider(inst, s)
-	}
 	h := server.Routes(server.Deps{Config: cfg, Dashboard: dashboardHandler(d), Log: log})
-	code, body := get(t, h, "/api/instances")
-	if code != http.StatusOK || !strings.Contains(body, `"password":true`) ||
-		!strings.Contains(body, `"instance":"main"`) || !strings.Contains(body, `"instance":"gh"`) {
-		t.Errorf("GET /api/instances = %d %s; want both instances", code, body)
+	code, body := get(t, h, "/api/sign-in-options")
+	if code != http.StatusOK || !strings.Contains(body, `"password":true`) || strings.Contains(body, "instances") {
+		t.Errorf("GET /api/sign-in-options = %d %s; want the password form and no instance", code, body)
 	}
-	if strings.Contains(body, "example") {
-		t.Errorf("GET /api/instances holds a value from the environment: %s", body)
+	if code, _ := get(t, h, "/auth/gitlab/main/login"); code != http.StatusNotFound {
+		t.Errorf("GET /auth/gitlab/main/login = %d, want 404", code)
 	}
 	if code, _ := get(t, h, "/api/me"); code != http.StatusUnauthorized {
 		t.Errorf("GET /api/me without a session = %d, want 401", code)
@@ -252,10 +231,31 @@ func TestNewDashboardRoutes(t *testing.T) {
 		t.Fatalf("newDashboard with the dashboard off = %v, %v; want nil, nil", d, err)
 	}
 	h = server.Routes(server.Deps{Config: off, Dashboard: dashboardHandler(d), Log: log})
-	for _, path := range []string{"/", "/api/instances", "/auth/gitlab/main/login"} {
+	for _, path := range []string{"/", "/api/sign-in-options", "/auth/gitlab/main/login"} {
 		if code, _ := get(t, h, path); code != http.StatusNotFound {
 			t.Errorf("GET %s with the dashboard off = %d, want 404", path, code)
 		}
+	}
+}
+
+// The pages wrapper (JWT sign-in) is the dashboard's, and absent without one.
+func TestDashboardPages(t *testing.T) {
+	if dashboardPages(nil) != nil {
+		t.Error("dashboardPages(nil) is not nil")
+	}
+	d, err := newDashboard(dashboard.Options{Config: dashboardConfig("https://dashboard.example.com"), SecretKey: testSecretKey})
+	if err != nil || d == nil {
+		t.Fatalf("newDashboard = %v, %v", d, err)
+	}
+	if dashboardPages(d) == nil {
+		t.Fatal("dashboardPages(d) is nil")
+	}
+	// With no JWT sign-in set up the pages come as they are.
+	rec := httptest.NewRecorder()
+	dashboardPages(d)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("app")) })).
+		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "app" || len(rec.Result().Cookies()) != 0 {
+		t.Errorf("GET / = %d %q, cookies %v", rec.Code, rec.Body, rec.Result().Cookies())
 	}
 }
 
@@ -429,6 +429,23 @@ func TestWarnTimeouts(t *testing.T) {
 	warnTimeouts(cfg, log)
 	if logs.Len() != 0 {
 		t.Errorf("logged for a timeout that fits:\n%s", logs.String())
+	}
+}
+
+// The OAuth keys of an instance only warn: the log names the instance and
+// never an env var's value.
+func TestWarnTimeoutsWarnsOldOAuthKeys(t *testing.T) {
+	t.Setenv("OLD_OAUTH_SECRET", "must-not-be-logged")
+	var logs strings.Builder
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	cfg := &config.Config{
+		Jobs:   config.Jobs{Timeout: 30 * time.Minute, MaxTurns: 40},
+		GitLab: []config.Instance{{Name: "main", OAuthClientIDEnv: "OLD_OAUTH_ID", OAuthClientSecretEnv: "OLD_OAUTH_SECRET"}},
+	}
+	warnTimeouts(cfg, log)
+	out := logs.String()
+	if strings.Count(out, "level=WARN") != 1 || !strings.Contains(out, "gitlab[0] (main)") || strings.Contains(out, "must-not-be-logged") {
+		t.Errorf("logs:\n%s", out)
 	}
 }
 

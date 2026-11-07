@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/mail"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -13,22 +17,39 @@ import (
 // The kinds of account.
 const (
 	AccountPassword = "password" // an operator who signs in with a password
-	AccountPlatform = "platform" // a GitLab or GitHub user who signed in with OAuth
+	AccountPlatform = "platform" // a GitLab or GitHub user who signed in with OAuth; no longer used, and hidden
+	AccountSSO      = "sso"      // a person who signs in through OIDC or a JWT, identified by email
 )
+
+// RoleUser is an account's other role besides RoleAdmin (teams.go). On a
+// team a user is a viewer or a maintainer instead (see TeamMember).
+const RoleUser = "user"
 
 var (
 	// ErrExists is returned when a name (a username, a team name) is taken.
 	ErrExists = errors.New("already exists")
 	// ErrLastPasswordAccount is returned when deleting the only password
 	// account, which would leave nobody able to sign in with a password.
-	ErrLastPasswordAccount = errors.New("the last password account can't be removed")
+	ErrLastPasswordAccount = errors.New("the last local admin can't be removed")
+	// ErrBadEmail is returned by NormalizeEmail, and by what calls it, for a
+	// string that isn't exactly one email address.
+	ErrBadEmail = errors.New("store: not an email address")
 )
 
 // Account is a sign-in identity. The fields of the other kind are zero.
 type Account struct {
-	ID       int64
-	Kind     string
+	ID   int64
+	Kind string
+	// Username is the name shown for the account; an SSO account's is its
+	// email.
 	Username string
+	// Role is RoleAdmin or RoleUser. A password account is always an admin.
+	Role string
+	// SSO accounts: the lower-cased email, and whether an admin added it
+	// before it first signed in (the flag stays set after the first
+	// sign-in). The account is invited while LastSignInAt is nil.
+	Email string
+	Added bool
 	// Platform accounts: the platform, the instance and the user's ID there.
 	Platform, Instance string
 	PlatformUserID     int64
@@ -45,13 +66,45 @@ type Account struct {
 }
 
 const accountColumns = `id, kind, username, COALESCE(platform, ''), COALESCE(instance, ''), COALESCE(platform_user_id, 0),
-	COALESCE(password_hash, ''), must_change_password, failed_attempts, locked_until, created_at, last_sign_in_at`
+	COALESCE(password_hash, ''), must_change_password, failed_attempts, locked_until, created_at, last_sign_in_at,
+	COALESCE(email, ''), CASE WHEN kind = 'password' THEN 'admin' ELSE role END, added`
 
 func scanAccount(row pgx.Row) (Account, error) {
 	var a Account
 	err := row.Scan(&a.ID, &a.Kind, &a.Username, &a.Platform, &a.Instance, &a.PlatformUserID,
-		&a.PasswordHash, &a.MustChangePassword, &a.FailedAttempts, &a.LockedUntil, &a.CreatedAt, &a.LastSignInAt)
+		&a.PasswordHash, &a.MustChangePassword, &a.FailedAttempts, &a.LockedUntil, &a.CreatedAt, &a.LastSignInAt,
+		&a.Email, &a.Role, &a.Added)
 	return a, err
+}
+
+// NormalizeEmail returns s as the one form the store keeps an email in. It
+// lower-cases ASCII letters only, so two different addresses never fold into
+// one (the Kelvin sign U+212A stays as it is, and is not a "k"). s must be
+// exactly one address: no surrounding or inner spaces or control characters,
+// no display name, one "@" with something on both sides, at most 254 bytes.
+func NormalizeEmail(s string) (string, error) {
+	if s == "" || len(s) > 254 || !utf8.ValidString(s) {
+		return "", ErrBadEmail
+	}
+	if strings.Count(s, "@") != 1 || strings.HasPrefix(s, "@") || strings.HasSuffix(s, "@") {
+		return "", ErrBadEmail
+	}
+	var out strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			r += 'a' - 'A'
+		case unicode.IsSpace(r), unicode.IsControl(r), unicode.Is(unicode.Z, r), unicode.Is(unicode.Cf, r),
+			strings.ContainsRune(`<>,;:"\()[]`, r):
+			return "", ErrBadEmail
+		}
+		out.WriteRune(r)
+	}
+	// One plain address, no display name.
+	if a, err := mail.ParseAddress(out.String()); err != nil || a.Name != "" || a.Address != out.String() {
+		return "", ErrBadEmail
+	}
+	return out.String(), nil
 }
 
 // isUniqueViolation reports whether err is PostgreSQL's unique_violation.
@@ -74,8 +127,8 @@ func (s *Store) CreatePasswordAccount(ctx context.Context, username, hash string
 	if hash == "" {
 		return Account{}, errors.New("store: a password account needs a password hash")
 	}
-	a, err := scanAccount(s.pool.QueryRow(ctx, `INSERT INTO accounts (kind, username, password_hash, must_change_password, created_at)
-		VALUES ('password', $1, $2, $3, $4) RETURNING `+accountColumns, username, hash, mustChange, at))
+	a, err := scanAccount(s.pool.QueryRow(ctx, `INSERT INTO accounts (kind, username, password_hash, must_change_password, role, created_at)
+		VALUES ('password', $1, $2, $3, 'admin', $4) RETURNING `+accountColumns, username, hash, mustChange, at))
 	if isUniqueViolation(err) {
 		return Account{}, ErrExists
 	}
@@ -103,13 +156,14 @@ func (s *Store) CountPasswordAccounts(ctx context.Context) (int, error) {
 	return n, err
 }
 
-// CountWaitingAccounts returns how many platform accounts of instance (""
-// for every instance) are on no team: they wait for an admin to place them.
-func (s *Store) CountWaitingAccounts(ctx context.Context, instance string) (int, error) {
+// CountWaitingAccounts returns how many SSO accounts are waiting: users (not
+// admins) who have signed in and are on no team, until an admin places them.
+// An invited account that never signed in does not wait.
+func (s *Store) CountWaitingAccounts(ctx context.Context) (int, error) {
 	var n int
-	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM accounts a WHERE kind = 'platform'
-		AND ($1 = '' OR instance = $1)
-		AND NOT EXISTS (SELECT 1 FROM team_members m WHERE m.account_id = a.id)`, instance).Scan(&n)
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM accounts a
+		WHERE a.kind = 'sso' AND a.role = 'user' AND a.last_sign_in_at IS NOT NULL
+		AND NOT EXISTS (SELECT 1 FROM team_members m WHERE m.account_id = a.id)`).Scan(&n)
 	return n, err
 }
 
@@ -137,12 +191,12 @@ func (s *Store) Account(ctx context.Context, id int64) (Account, bool, error) {
 	return a, true, nil
 }
 
-// Accounts returns every account: the platform accounts that are in no team
-// first (they wait to be placed), then everyone by username.
+// Accounts returns every account that can sign in: the local admins and the
+// SSO accounts, by username ignoring case. Platform accounts are left out:
+// no sign-in reaches them any more.
 func (s *Store) Accounts(ctx context.Context) ([]Account, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+accountColumns+` FROM accounts a
-		ORDER BY (kind = 'platform' AND NOT EXISTS (SELECT 1 FROM team_members m WHERE m.account_id = a.id)) DESC,
-			lower(username), id`)
+	rows, err := s.pool.Query(ctx, `SELECT `+accountColumns+` FROM accounts
+		WHERE kind <> 'platform' ORDER BY lower(username), id`)
 	if err != nil {
 		return nil, err
 	}
@@ -156,6 +210,91 @@ func (s *Store) Accounts(ctx context.Context) ([]Account, error) {
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// AddSSOAccount makes an admin's invitation: the SSO account of email, with
+// Added set, which lets that email sign in whatever the allowlist says. The
+// account has not signed in yet (LastSignInAt is nil) unless it already had;
+// one that exists keeps its role and its sign-in time and gets Added set.
+// email is normalised as NormalizeEmail does; one that isn't an address is
+// an error.
+func (s *Store) AddSSOAccount(ctx context.Context, email string, at time.Time) (Account, error) {
+	email, err := NormalizeEmail(email)
+	if err != nil {
+		return Account{}, err
+	}
+	return s.upsertSSO(ctx, `INSERT INTO accounts (kind, username, email, added, created_at)
+		VALUES ('sso', $1, $1, true, $2)
+		ON CONFLICT (email) DO UPDATE SET added = true
+		RETURNING `+accountColumns, email, at)
+}
+
+// upsertSSO runs an INSERT ... ON CONFLICT (email) of an SSO account. Two
+// statements for one address that run at the same time can both pass the
+// conflict check on email and then meet at the lower(email) index, and the
+// second gets a unique violation. Run again, the statement sees the first
+// one's row and updates it. A violation that comes back is a true fold: a
+// different address that lower() reads as the same (ErrExists).
+func (s *Store) upsertSSO(ctx context.Context, query, email string, at time.Time) (Account, error) {
+	a, err := scanAccount(s.pool.QueryRow(ctx, query, email, at))
+	if isUniqueViolation(err) {
+		a, err = scanAccount(s.pool.QueryRow(ctx, query, email, at))
+		if isUniqueViolation(err) {
+			return Account{}, ErrExists
+		}
+	}
+	return a, err
+}
+
+// SignInSSOAccount records a sign-in of the person with email at time at:
+// it makes the SSO account when there is none (a plain user, Added false),
+// and otherwise sets its last sign-in time, keeping its role and Added. The
+// caller has already decided that email may sign in. email is normalised as
+// NormalizeEmail does.
+func (s *Store) SignInSSOAccount(ctx context.Context, email string, at time.Time) (Account, error) {
+	email, err := NormalizeEmail(email)
+	if err != nil {
+		return Account{}, err
+	}
+	return s.upsertSSO(ctx, `INSERT INTO accounts (kind, username, email, created_at, last_sign_in_at)
+		VALUES ('sso', $1, $1, $2, $2)
+		ON CONFLICT (email) DO UPDATE SET last_sign_in_at = EXCLUDED.last_sign_in_at
+		RETURNING `+accountColumns, email, at)
+}
+
+// SSOAccountByEmail returns the SSO account of email (normalised as
+// NormalizeEmail does); found is false when there is none.
+func (s *Store) SSOAccountByEmail(ctx context.Context, email string) (Account, bool, error) {
+	email, err := NormalizeEmail(email)
+	if err != nil {
+		return Account{}, false, err
+	}
+	a, err := scanAccount(s.pool.QueryRow(ctx, `SELECT `+accountColumns+` FROM accounts
+		WHERE kind = 'sso' AND email = $1`, email))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Account{}, false, nil
+	}
+	if err != nil {
+		return Account{}, false, err
+	}
+	return a, true, nil
+}
+
+// SetAccountRole sets the role (RoleAdmin or RoleUser) of an SSO account.
+// A password account is always an admin, and an ID that isn't an SSO
+// account is an error.
+func (s *Store) SetAccountRole(ctx context.Context, id int64, role string) error {
+	if role != RoleAdmin && role != RoleUser {
+		return fmt.Errorf("store: unknown account role %q", role)
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE accounts SET role = $2 WHERE id = $1 AND kind = 'sso'`, id, role)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("store: no SSO account %d", id)
+	}
+	return nil
 }
 
 // DeleteAccount removes an account with its sessions and team memberships;

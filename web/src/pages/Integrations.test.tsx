@@ -8,10 +8,11 @@ import {
   instanceGitHub,
   instanceGitHubOneApp,
   instanceGitLab,
-  integrations,
-  integrationsGitHub,
   operator,
-  platformAdmin,
+  signInFromConfig,
+  signInJWT,
+  signInNone,
+  signInOIDC,
 } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
@@ -27,60 +28,16 @@ const onlyCopy = (el: HTMLElement) => {
   return buttons.length === 1 && buttons[0].getAttribute("aria-label") === "Copy webhook URL";
 };
 
-describe("Integrations for a platform admin", () => {
-  it("shows the instance, the approver and each repository's installation, read-only", async () => {
-    const fake = fakeApi({ "GET /api/me": { body: platformAdmin }, "GET /api/integrations": { body: integrations } });
-    renderApp("/integrations");
-    expect(await screen.findByRole("heading", { name: "Integrations" })).toBeInTheDocument();
-    const inst = await screen.findByRole("region", { name: "GitLab · main" });
-    expect(within(inst).getByText("Connected")).toHaveClass("pill", "ok");
-    expect(inst).toHaveTextContent("Approves with a bot user's token");
-    expect(inst).toHaveTextContent("Token expires 2026-11-09");
-    const row = screen.getByText("acme/payments").closest("tr") as HTMLElement;
-    expect(within(row).getByText("Installed")).toHaveClass("pill", "ok");
-    expect(within(row).getByText("Can't approve")).toHaveClass("pill", "bad");
-    expect(row).toHaveTextContent("Inline findings are off: the review App has Pull requests: Read-only.");
-    const widgets = screen.getByText("acme/widgets").closest("tr") as HTMLElement;
-    expect(widgets).not.toHaveTextContent("Inline findings");
-    expect(screen.queryByRole("button", { name: /Add .* instance/ })).not.toBeInTheDocument();
-    expect(fake.find("GET", "/api/admin/instances")).toHaveLength(0);
-  });
-});
-
-describe("Integrations on GitHub", () => {
-  const note =
-    "Can't read classic branch protection (the review App lacks Administration: Read); a \"require conversation resolution\" rule there is treated as off.";
-
-  it("says when classic branch protection can't be read, only where inline findings are on", async () => {
-    fakeApi({ "GET /api/me": { body: platformAdmin }, "GET /api/integrations": { body: integrationsGitHub } });
-    renderApp("/integrations");
-    const orders = (await screen.findByText("acme/orders")).closest("tr") as HTMLElement;
-    expect(orders).toHaveTextContent(note);
-    expect(orders).not.toHaveTextContent("Inline findings");
-    const payments = screen.getByText("acme/payments").closest("tr") as HTMLElement;
-    expect(payments).toHaveTextContent("Inline findings are off");
-    expect(payments).not.toHaveTextContent("classic branch protection");
-    const widgets = screen.getByText("acme/widgets").closest("tr") as HTMLElement;
-    expect(widgets).not.toHaveTextContent("classic branch protection");
-  });
-
-  it("does not raise it as a Needs attention item", async () => {
-    fakeApi({ "GET /api/me": { body: platformAdmin }, "GET /api/integrations": { body: integrationsGitHub } });
-    renderApp("/integrations");
-    await screen.findByText("acme/orders");
-    expect(screen.queryByText(/Needs attention/)).not.toBeInTheDocument();
-  });
-});
-
-describe("Integrations for an operator", () => {
+describe("Integrations", () => {
   it("lists every instance, marking the config's and showing which secrets are set", async () => {
-    const fake = fakeApi({ "GET /api/me": { body: operator }, "GET /api/admin/instances": { body: instances } });
-    renderApp("/integrations");
+    fakeApi({ "GET /api/me": { body: operator }, "GET /api/admin/instances": { body: instances } });
+    renderApp("/admin/integrations");
     const main = await card("GitLab · main");
     expect(within(main).getByText("config")).toBeInTheDocument();
     expect(main).toHaveTextContent("https://gitlab.example.com");
     expect(within(within(main).getByRole("group", { name: "Review token" })).getByText("set")).toBeInTheDocument();
-    expect(within(main).getByRole("group", { name: "OAuth client secret" })).toHaveTextContent("not set");
+    // Signing in with GitLab or GitHub is gone: no OAuth client to show.
+    expect(within(main).queryByRole("group", { name: /OAuth/ })).not.toBeInTheDocument();
 
     const hub = await card("GitHub · hub");
     expect(within(hub).queryByText("config")).not.toBeInTheDocument();
@@ -90,7 +47,6 @@ describe("Integrations for an operator", () => {
     expect(within(hub).getByRole("group", { name: "Review App private key" })).toHaveTextContent("set · changed 2 h ago");
     expect(within(hub).getByRole("group", { name: "Approve App private key" })).toHaveTextContent("not set");
     expect(await card("GitLab · extra")).toBeInTheDocument();
-    expect(fake.find("GET", "/api/integrations")).toHaveLength(0);
   });
 
   it("shows each instance's webhook URL and who sets it", async () => {
@@ -98,7 +54,7 @@ describe("Integrations for an operator", () => {
       "GET /api/me": { body: operator },
       "GET /api/admin/instances": { body: [...instances, instanceGitHubOneApp] },
     });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     const main = await card("GitLab · main");
     expect(main).toHaveTextContent("Webhook URL: https://pergent.example.com/webhooks/gitlab/main");
     expect(main).toHaveTextContent("pergent.sh sets this on each project.");
@@ -116,7 +72,7 @@ describe("Integrations for an operator", () => {
   it("copies the webhook URL", async () => {
     const user = userEvent.setup();
     fakeApi({ "GET /api/me": { body: operator }, "GET /api/admin/instances": { body: instances } });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     const hub = await card("GitHub · hub");
     await user.click(within(hub).getByRole("button", { name: "Copy webhook URL" }));
     expect(await navigator.clipboard.readText()).toBe("https://pergent.example.com/webhooks/github/hub");
@@ -128,7 +84,7 @@ describe("Integrations for an operator", () => {
     try {
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       fakeApi({ "GET /api/me": { body: operator }, "GET /api/admin/instances": { body: instances } });
-      renderApp("/integrations");
+      renderApp("/admin/integrations");
       const hub = await card("GitHub · hub");
       await user.click(within(hub).getByRole("button", { name: "Copy webhook URL" }));
       expect(within(hub).getByRole("button", { name: "Copied" })).toBeInTheDocument();
@@ -141,7 +97,7 @@ describe("Integrations for an operator", () => {
 
   it("says the review App approves, and lists no approve secret for it", async () => {
     fakeApi({ "GET /api/me": { body: operator }, "GET /api/admin/instances": { body: [instanceGitHubOneApp] } });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     const solo = await card("GitHub · solo");
     expect(solo).toHaveTextContent("Approves with the review App");
     expect(solo).not.toHaveTextContent("Approve App ID");
@@ -151,7 +107,7 @@ describe("Integrations for an operator", () => {
 
   it("gives a config instance no way to change it", async () => {
     fakeApi({ "GET /api/me": { body: operator }, "GET /api/admin/instances": { body: instances } });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     const main = await card("GitLab · main");
     expect(onlyCopy(main)).toBe(true);
     expect(within(main).queryByRole("textbox")).not.toBeInTheDocument();
@@ -169,7 +125,7 @@ describe("Integrations for an operator", () => {
       "GET /api/admin/instances": () => ({ body: listed++ === 0 ? instances : [instanceGitLab, instanceGitHub, instanceDashboardGitLab] }),
       "PUT /api/admin/instances/extra": { body: instanceDashboardGitLab },
     });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     const extra = await card("GitLab · extra");
     const group = within(extra).getByRole("group", { name: "Review token" });
     await userEvent.click(within(group).getByRole("button", { name: "Replace" }));
@@ -195,7 +151,7 @@ describe("Integrations for an operator", () => {
       "GET /api/admin/instances": { body: instances },
       "PUT /api/admin/instances/extra": { status: 400, body: { error: "GitLab refused the token" } },
     });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     const extra = await card("GitLab · extra");
     const group = within(extra).getByRole("group", { name: "Approve token" });
     await userEvent.click(within(group).getByRole("button", { name: "Replace" }));
@@ -205,28 +161,13 @@ describe("Integrations for an operator", () => {
     expect(within(group).getByLabelText("New Approve token")).toBeInTheDocument();
   });
 
-  it("changes an instance's OAuth client ID", async () => {
-    const fake = fakeApi({
-      "GET /api/me": { body: operator },
-      "GET /api/admin/instances": { body: instances },
-      "PUT /api/admin/instances/extra": { body: instanceDashboardGitLab },
-    });
-    renderApp("/integrations");
-    const extra = await card("GitLab · extra");
-    const group = within(extra).getByRole("group", { name: "OAuth client ID" });
-    await userEvent.click(within(group).getByRole("button", { name: "Change" }));
-    await userEvent.type(within(group).getByLabelText("New OAuth client ID"), "client-77");
-    await userEvent.click(within(group).getByRole("button", { name: "Save" }));
-    expect(fake.find("PUT", "/api/admin/instances/extra")[0].body).toEqual({ oauthClientID: "client-77" });
-  });
-
   it("rebuilds a GitHub App key the browser flattened to one line", async () => {
     const fake = fakeApi({
       "GET /api/me": { body: operator },
       "GET /api/admin/instances": { body: instances },
       "PUT /api/admin/instances/hub": { body: instanceGitHub },
     });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     const hub = await card("GitHub · hub");
     const group = within(hub).getByRole("group", { name: "Approve App private key" });
     await userEvent.click(within(group).getByRole("button", { name: "Replace" }));
@@ -250,7 +191,7 @@ describe("Integrations for an operator", () => {
       "GET /api/admin/instances": { body: instances },
       "PUT /api/admin/instances/hub": { body: instanceGitHub },
     });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     const group = within(await card("GitHub · hub")).getByRole("group", { name: "Review App private key" });
     await userEvent.click(within(group).getByRole("button", { name: "Replace" }));
     const body = "Zm9v".repeat(20) + "+/==";
@@ -272,20 +213,21 @@ describe("Integrations for an operator", () => {
       "GET /api/admin/instances": () => ({ body: listed++ === 0 ? [instanceGitLab] : [instanceGitLab, instanceDashboardGitLab] }),
       "POST /api/admin/instances": { status: 201, body: instanceDashboardGitLab },
     });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     await userEvent.click(await screen.findByRole("button", { name: "Add GitLab instance" }));
     const form = screen.getByRole("form", { name: "Add GitLab instance" });
     // Every field starts empty, and no webhook secret is asked.
     for (const box of within(form).getAllByLabelText(/./, { selector: "input" })) expect(box).toHaveValue("");
     expect(within(form).queryByLabelText(/webhook/i)).not.toBeInTheDocument();
-    for (const label of ["Review token", "Approve token", "OAuth client secret"]) {
+    for (const label of ["Review token", "Approve token"]) {
       const input = within(form).getByLabelText(label);
       expect(input).toHaveAttribute("type", "password");
       expect(input).toHaveAttribute("autocomplete", "new-password");
       expect(input).toHaveAttribute("data-1p-ignore");
     }
     // The text fields before a password field get no saved username.
-    for (const label of ["Name", "Address", "OAuth client ID"]) {
+    expect(within(form).queryByLabelText(/OAuth/)).not.toBeInTheDocument();
+    for (const label of ["Name", "Address"]) {
       expect(within(form).getByLabelText(label)).toHaveAttribute("data-lpignore", "true");
     }
     await userEvent.type(within(form).getByLabelText("Name"), "extra");
@@ -300,7 +242,6 @@ describe("Integrations for an operator", () => {
       name: "extra",
       platform: "gitlab",
       url: "https://gitlab2.example.com",
-      oauthClientID: "",
       secrets: { review_token: "glpat-review", approve_token: "glpat-approve" },
     });
     expect(JSON.stringify(post.body)).not.toContain("webhook_secret");
@@ -323,7 +264,7 @@ describe("Integrations for an operator", () => {
       "GET /api/admin/instances": { body: [] },
       "POST /api/admin/instances": { status: 201, body: instanceGitHub },
     });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     await userEvent.click(await screen.findByRole("button", { name: "Add GitHub instance" }));
     return { fake, form: screen.getByRole("form", { name: "Add GitHub instance" }) };
   };
@@ -348,7 +289,6 @@ describe("Integrations for an operator", () => {
       apiURL: "https://api.github.example.com",
       reviewAppID: 11,
       approveAppID: 11,
-      oauthClientID: "",
       secrets: { review_app_key: "key-1", webhook_secret: "hook" },
     });
   });
@@ -360,8 +300,6 @@ describe("Integrations for an operator", () => {
     await fillGitHub(form);
     await userEvent.type(within(form).getByLabelText("Approve App ID"), "12");
     await userEvent.type(within(form).getByLabelText("Approve App private key"), "key-2");
-    await userEvent.type(within(form).getByLabelText("OAuth client ID"), "oauth-id");
-    await userEvent.type(within(form).getByLabelText("OAuth client secret"), "oauth-secret");
     await userEvent.click(within(form).getByRole("button", { name: "Add" }));
     expect(fake.find("POST", "/api/admin/instances")[0].body).toEqual({
       name: "hub",
@@ -369,12 +307,10 @@ describe("Integrations for an operator", () => {
       apiURL: "https://api.github.example.com",
       reviewAppID: 11,
       approveAppID: 12,
-      oauthClientID: "oauth-id",
       secrets: {
         review_app_key: "key-1",
         approve_app_key: "key-2",
         webhook_secret: "hook",
-        oauth_client_secret: "oauth-secret",
       },
     });
   });
@@ -422,7 +358,7 @@ describe("Integrations for an operator", () => {
       "GET /api/admin/instances": { body: [] },
       "POST /api/admin/instances": { status: 400, body: { error: "the review token can't reach GitLab" } },
     });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     await userEvent.click(await screen.findByRole("button", { name: "Add GitLab instance" }));
     const form = screen.getByRole("form", { name: "Add GitLab instance" });
     await userEvent.type(within(form).getByLabelText("Name"), "extra");
@@ -448,7 +384,7 @@ describe("Integrations for an operator", () => {
         },
         "DELETE /api/admin/instances/extra": { status: 202, body: { status: "removing" } },
       });
-      renderApp("/integrations");
+      renderApp("/admin/integrations");
       const extra = await card("GitLab · extra");
       await userEvent.click(within(extra).getByRole("button", { name: "Remove" }));
       expect(confirm).toHaveBeenCalledWith(expect.stringContaining("extra"));
@@ -466,8 +402,268 @@ describe("Integrations for an operator", () => {
   it("removes nothing when the confirmation is declined", async () => {
     vi.stubGlobal("confirm", vi.fn(() => false));
     const fake = fakeApi({ "GET /api/me": { body: operator }, "GET /api/admin/instances": { body: instances } });
-    renderApp("/integrations");
+    renderApp("/admin/integrations");
     await userEvent.click(within(await card("GitLab · extra")).getByRole("button", { name: "Remove" }));
     expect(fake.calls.filter((c) => c.method === "DELETE")).toHaveLength(0);
+  });
+});
+
+describe("Integrations: Sign-in", () => {
+  const routes = (signIn: unknown) => ({
+    "GET /api/me": { body: operator },
+    "GET /api/admin/instances": { body: instances },
+    "GET /api/admin/sign-in": { body: signIn },
+  });
+  // The section once its settings are in.
+  const section = async () => {
+    const box = await screen.findByRole("region", { name: "Sign-in" });
+    await vi.waitFor(() => expect(within(box).queryByText("Loading…")).not.toBeInTheDocument());
+    return box;
+  };
+
+  it("starts with the mode only when nothing is set up, and says what that means", async () => {
+    fakeApi(routes(signInNone));
+    renderApp("/admin/integrations");
+    const box = await section();
+    expect(within(box).getByLabelText("Mode")).toHaveValue("");
+    expect(within(box).getAllByRole("option").map((o) => o.textContent)).toEqual(["Not set up", "OIDC", "JWT from a proxy"]);
+    expect(box).toHaveTextContent("Only local admins can sign in");
+    expect(within(box).queryByLabelText("Issuer")).not.toBeInTheDocument();
+    expect(within(box).queryByLabelText("Allowed domains")).not.toBeInTheDocument();
+    expect(within(box).queryByRole("button", { name: "Test" })).not.toBeInTheDocument();
+  });
+
+  it("shows the OIDC fields and not the JWT ones, with the secret write-only", async () => {
+    fakeApi(routes(signInOIDC));
+    renderApp("/admin/integrations");
+    const box = await section();
+    expect(within(box).getByLabelText("Mode")).toHaveValue("oidc");
+    expect(within(box).getByLabelText("Label")).toHaveValue("Google");
+    expect(within(box).getByLabelText("Issuer")).toHaveValue("https://accounts.google.com");
+    expect(within(box).getByLabelText("Client ID")).toHaveValue("123-abc.apps.googleusercontent.com");
+    const secret = within(box).getByLabelText("Client secret");
+    expect(secret).toHaveAttribute("type", "password");
+    expect(secret).toHaveValue("");
+    expect(box).toHaveTextContent("set · changed 1 h ago");
+    expect(within(box).getByLabelText("Allowed domains")).toHaveValue("example.com");
+    expect(within(box).getByLabelText("Allowed emails")).toHaveValue("friend@example.org");
+    expect(box).toHaveTextContent("https://dash.example.com/auth/oidc/callback");
+    for (const jwtOnly of ["Header", "Audience", "JWKS URL", "Email claim"]) {
+      expect(within(box).queryByLabelText(jwtOnly)).not.toBeInTheDocument();
+    }
+  });
+
+  it("shows the JWT fields and not the OIDC ones", async () => {
+    fakeApi(routes(signInJWT));
+    renderApp("/admin/integrations");
+    const box = await section();
+    expect(within(box).getByLabelText("Header")).toHaveValue("X-Auth-Token");
+    expect(within(box).getByLabelText("Issuer")).toHaveValue("https://proxy.example.com");
+    expect(within(box).getByLabelText("Audience")).toHaveValue("pergent");
+    expect(within(box).getByLabelText("JWKS URL")).toHaveValue("https://proxy.example.com/keys");
+    expect(within(box).getByLabelText("Email claim")).toHaveValue("email");
+    for (const oidcOnly of ["Label", "Client ID", "Client secret"]) {
+      expect(within(box).queryByLabelText(oidcOnly)).not.toBeInTheDocument();
+    }
+  });
+
+  it("changes the fields when the mode changes", async () => {
+    fakeApi(routes(signInNone));
+    renderApp("/admin/integrations");
+    const box = await section();
+    await userEvent.selectOptions(within(box).getByLabelText("Mode"), "oidc");
+    expect(within(box).getByLabelText("Client secret")).toBeInTheDocument();
+    expect(within(box).getByText("not set")).toBeInTheDocument();
+    expect(within(box).queryByLabelText("Header")).not.toBeInTheDocument();
+    await userEvent.selectOptions(within(box).getByLabelText("Mode"), "jwt");
+    expect(within(box).getByLabelText("Header")).toBeInTheDocument();
+    expect(within(box).queryByLabelText("Client secret")).not.toBeInTheDocument();
+  });
+
+  it("saves OIDC with the secret left out when none is typed, and lists one per line", async () => {
+    const fake = fakeApi({ ...routes(signInOIDC), "PUT /api/admin/sign-in": { body: signInOIDC } });
+    renderApp("/admin/integrations");
+    const box = await section();
+    await userEvent.clear(within(box).getByLabelText("Allowed domains"));
+    await userEvent.type(within(box).getByLabelText("Allowed domains"), "example.com{Enter}Corp.Example{Enter}");
+    await userEvent.click(within(box).getByRole("button", { name: "Save" }));
+    const [put] = fake.find("PUT", "/api/admin/sign-in");
+    expect(put.headers.get("X-CSRF-Token")).toBe("csrf-123");
+    expect(put.body).toEqual({
+      mode: "oidc",
+      label: "Google",
+      issuer: "https://accounts.google.com",
+      clientID: "123-abc.apps.googleusercontent.com",
+      header: "",
+      audience: "",
+      jwksURL: "",
+      emailClaim: "",
+      allowedDomains: ["example.com", "Corp.Example"],
+      allowedEmails: ["friend@example.org"],
+    });
+    expect(put.body).not.toHaveProperty("clientSecret");
+  });
+
+  it("sends a typed secret once, clears the field and never shows it", async () => {
+    const fake = fakeApi({ ...routes(signInNone), "PUT /api/admin/sign-in": { body: signInOIDC } });
+    renderApp("/admin/integrations");
+    const box = await section();
+    await userEvent.selectOptions(within(box).getByLabelText("Mode"), "oidc");
+    await userEvent.type(within(box).getByLabelText("Label"), "Google");
+    await userEvent.type(within(box).getByLabelText("Issuer"), "https://accounts.google.com");
+    await userEvent.type(within(box).getByLabelText("Client ID"), "123-abc.apps.googleusercontent.com");
+    await userEvent.type(within(box).getByLabelText("Client secret"), "GOCSPX-very-secret");
+    await userEvent.click(within(box).getByRole("button", { name: "Save" }));
+    const [put] = fake.find("PUT", "/api/admin/sign-in");
+    expect((put.body as { clientSecret?: string }).clientSecret).toBe("GOCSPX-very-secret");
+    await vi.waitFor(() => expect(within(box).getByLabelText("Client secret")).toHaveValue(""));
+    expect(document.body.textContent).not.toContain("GOCSPX-very-secret");
+    expect(box).toHaveTextContent("set");
+  });
+
+  it("asks for the secret again when the issuer changes", async () => {
+    const fake = fakeApi({ ...routes(signInOIDC), "PUT /api/admin/sign-in": { body: signInOIDC } });
+    renderApp("/admin/integrations");
+    const box = await section();
+    expect(box).not.toHaveTextContent("Enter the client secret again");
+    expect(within(box).getByLabelText("Client secret")).not.toBeRequired();
+    await userEvent.clear(within(box).getByLabelText("Issuer"));
+    await userEvent.type(within(box).getByLabelText("Issuer"), "https://login.example.net");
+    expect(box).toHaveTextContent("Enter the client secret again");
+    expect(box).toHaveTextContent("never sent to a new issuer");
+    expect(within(box).getByLabelText("Client secret")).toBeRequired();
+    // Put the issuer back and the hint goes.
+    await userEvent.clear(within(box).getByLabelText("Issuer"));
+    await userEvent.type(within(box).getByLabelText("Issuer"), "https://accounts.google.com");
+    expect(box).not.toHaveTextContent("Enter the client secret again");
+    expect(fake.find("PUT", "/api/admin/sign-in")).toHaveLength(0);
+  });
+
+  it("saves JWT without the OIDC fields", async () => {
+    const fake = fakeApi({ ...routes(signInNone), "PUT /api/admin/sign-in": { body: signInJWT } });
+    renderApp("/admin/integrations");
+    const box = await section();
+    await userEvent.selectOptions(within(box).getByLabelText("Mode"), "jwt");
+    await userEvent.type(within(box).getByLabelText("Header"), "X-Auth-Token");
+    await userEvent.type(within(box).getByLabelText("Issuer"), "https://proxy.example.com");
+    await userEvent.type(within(box).getByLabelText("Audience"), "pergent");
+    await userEvent.type(within(box).getByLabelText("JWKS URL"), "https://proxy.example.com/keys");
+    await userEvent.type(within(box).getByLabelText("Allowed emails"), "a@example.org");
+    await userEvent.click(within(box).getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/admin/sign-in")[0].body).toEqual({
+      mode: "jwt",
+      label: "",
+      issuer: "https://proxy.example.com",
+      clientID: "",
+      header: "X-Auth-Token",
+      audience: "pergent",
+      jwksURL: "https://proxy.example.com/keys",
+      emailClaim: "",
+      allowedDomains: [],
+      allowedEmails: ["a@example.org"],
+    });
+  });
+
+  it("is read-only when the config file sets it, with the secret only set or not set", async () => {
+    const fake = fakeApi(routes(signInFromConfig));
+    renderApp("/admin/integrations");
+    const box = await section();
+    expect(box).toHaveTextContent("config");
+    expect(box).toHaveTextContent("managed by the config file");
+    expect(box).toHaveTextContent("OIDC");
+    expect(box).toHaveTextContent("https://accounts.google.com");
+    expect(box).toHaveTextContent("123-abc.apps.googleusercontent.com");
+    expect(box).toHaveTextContent("example.com");
+    expect(within(box).getByText("set")).toBeInTheDocument();
+    expect(within(box).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(within(box).queryByLabelText("Client secret")).not.toBeInTheDocument();
+    expect(within(box).queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    expect(fake.calls.filter((c) => c.method === "PUT")).toHaveLength(0);
+  });
+
+  it("tests the provider and shows only whether it worked", async () => {
+    let worked = true;
+    const fake = fakeApi({
+      ...routes(signInOIDC),
+      "POST /api/admin/sign-in/test": () => ({ body: { ok: worked } }),
+    });
+    renderApp("/admin/integrations");
+    const box = await section();
+    await userEvent.click(within(box).getByRole("button", { name: "Test" }));
+    expect(await within(box).findByRole("status")).toHaveTextContent("It worked.");
+    expect(fake.find("POST", "/api/admin/sign-in/test")[0].body).toEqual({
+      mode: "oidc",
+      issuer: "https://accounts.google.com",
+      jwksURL: "",
+    });
+    worked = false;
+    await userEvent.click(within(box).getByRole("button", { name: "Test" }));
+    await vi.waitFor(() => expect(within(box).getByRole("status")).toHaveTextContent("It did not work."));
+    expect(within(box).getByRole("status").textContent).toBe("It did not work.");
+  });
+
+  it("tests the key set in JWT mode", async () => {
+    const fake = fakeApi({ ...routes(signInJWT), "POST /api/admin/sign-in/test": { body: { ok: true } } });
+    renderApp("/admin/integrations");
+    const box = await section();
+    await userEvent.click(within(box).getByRole("button", { name: "Test" }));
+    await within(box).findByRole("status");
+    expect(fake.find("POST", "/api/admin/sign-in/test")[0].body).toEqual({
+      mode: "jwt",
+      issuer: "https://proxy.example.com",
+      jwksURL: "https://proxy.example.com/keys",
+    });
+  });
+
+  it("shows the server's text when a save is refused, and keeps what was typed", async () => {
+    fakeApi({
+      ...routes(signInOIDC),
+      "PUT /api/admin/sign-in": { status: 400, body: { error: "issuer must be an https URL" } },
+    });
+    renderApp("/admin/integrations");
+    const box = await section();
+    await userEvent.clear(within(box).getByLabelText("Label"));
+    await userEvent.type(within(box).getByLabelText("Label"), "Workspace");
+    await userEvent.click(within(box).getByRole("button", { name: "Save" }));
+    expect(await within(box).findByRole("alert")).toHaveTextContent("issuer must be an https URL");
+    expect(within(box).getByLabelText("Label")).toHaveValue("Workspace");
+  });
+  it("clears a new secret and says Saved even when nothing else on the page changes", async () => {
+    const fake = fakeApi({ ...routes(signInOIDC), "PUT /api/admin/sign-in": { body: signInOIDC } });
+    renderApp("/admin/integrations");
+    const box = await section();
+    await userEvent.type(within(box).getByLabelText("Client secret"), "GOCSPX-only-the-secret");
+    await userEvent.click(within(box).getByRole("button", { name: "Save" }));
+    expect(await within(box).findByText("Saved.")).toBeInTheDocument();
+    expect(within(box).getByLabelText("Client secret")).toHaveValue("");
+    expect((fake.find("PUT", "/api/admin/sign-in")[0].body as { clientSecret?: string }).clientSecret).toBe("GOCSPX-only-the-secret");
+    expect(document.body.textContent).not.toContain("GOCSPX-only-the-secret");
+    // Every save says it, a second one too.
+    await userEvent.click(within(box).getByRole("button", { name: "Save" }));
+    await vi.waitFor(() => expect(fake.find("PUT", "/api/admin/sign-in")).toHaveLength(2));
+    expect(await within(box).findByText("Saved.")).toBeInTheDocument();
+  });
+
+  it("says which address Test reads, and the saved one when the field is blank", async () => {
+    const fake = fakeApi({ ...routes(signInOIDC), "POST /api/admin/sign-in/test": { body: { ok: true } } });
+    renderApp("/admin/integrations");
+    const box = await section();
+    expect(box).toHaveTextContent("Test reads https://accounts.google.com.");
+    await userEvent.clear(within(box).getByLabelText("Issuer"));
+    expect(box).toHaveTextContent("is empty, so Test reads the saved one: https://accounts.google.com.");
+    await userEvent.click(within(box).getByRole("button", { name: "Test" }));
+    await within(box).findByRole("status");
+    expect(fake.find("POST", "/api/admin/sign-in/test")[0].body).toEqual({ mode: "oidc", issuer: "", jwksURL: "" });
+  });
+
+  it("has a Test button when the config file sets it, which reads the saved settings", async () => {
+    const fake = fakeApi({ ...routes(signInFromConfig), "POST /api/admin/sign-in/test": { body: { ok: false } } });
+    renderApp("/admin/integrations");
+    const box = await section();
+    expect(box).toHaveTextContent("Reads https://accounts.google.com, the address set in the config file.");
+    await userEvent.click(within(box).getByRole("button", { name: "Test" }));
+    expect(await within(box).findByRole("status")).toHaveTextContent("It did not work.");
+    expect(fake.find("POST", "/api/admin/sign-in/test")[0].body).toEqual({});
+    expect(within(box).queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
   });
 });

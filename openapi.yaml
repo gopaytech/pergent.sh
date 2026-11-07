@@ -35,17 +35,28 @@ info:
     `{"error": "message"}`, with a `code` for a few (see `ErrorBody`). Times
     are RFC 3339. Field names are camelCase.
 
-    *Roles.* An **operator** is a password account: it sees and may do
-    everything. An **admin** is an operator or a member of a team with the
-    `admin` role. A repository has its own role (`viewer`, `maintainer`,
-    `admin`) from the teams that cover it, capped by what the platform lets
-    the user see. A user the platform does not vouch for has no role at all.
-    A platform account on no team is *waiting*: every `/api/` route but
-    `GET /api/me` answers 403 with `code: waiting`. A password account that
-    must change its password gets 403 with `code: password_change_required`
-    for everything but `GET /api/me`, `POST /auth/logout` and
+    *Roles.* An account is an **admin** or a **user**. An admin (a local
+    admin who signs in with a password, or an SSO account an admin made one)
+    sees and may do everything, with no team. A user sees only the repositories
+    their teams cover, with the highest role their teams give on each: on a
+    team a user is a `viewer` or a `maintainer`. Nothing asks GitLab or GitHub
+    what a person may read. A user on no team is *waiting*: every `/api/` route
+    but `GET /api/me` answers 403 with `code: waiting`. A local admin that must
+    change its password gets 403 with `code: password_change_required` for
+    everything but `GET /api/me`, `POST /auth/logout` and
     `POST /auth/password/change`. A repository, review or run the user cannot
     see is answered exactly like one that does not exist (404).
+
+    *Two areas.* The dashboard has a user area (Repositories, Reviews, Skills;
+    sign-in at `/sign-in`) and an admin area (Users, Teams, Integrations,
+    Settings, Audit log; sign-in at `/admin/sign-in`). The server enforces the
+    split on the data: a route marked `x-pergent-access: admin` answers anyone
+    who is not an admin, an account waiting for a team included, `404` with the
+    body of an unknown path, never `403`. The web app is one app served for any
+    page path; it shows a user the "not found" page for an admin page, but the
+    data behind it is what the server holds back. A route both areas use (such
+    as reading the skill library) is a `session` route that checks in its
+    handler.
 
     *CSRF.* Every request other than GET, HEAD and OPTIONS behind a session
     must send the session's CSRF token in `X-CSRF-Token` (it is in the
@@ -67,7 +78,7 @@ info:
     schemas named after Go types.
 
     **Extensions.** `x-pergent-access` is how the router gates the route:
-    `none` (the handler decides), `session`, `admin` or `operator`. A handler
+    `none` (the handler decides), `session` or `admin`. A handler
     can still ask for more (a repository role), which the description says.
     `x-pergent-pattern` names the registered `{rest...}` pattern an operation
     belongs to.
@@ -95,7 +106,7 @@ tags:
   - name: Organization
     description: Users, teams and the audit log.
   - name: Instances and settings
-    description: Operator and admin configuration.
+    description: Admin configuration.
 security: []
 paths:
   # ---------------------------------------------------------------- webhooks
@@ -403,88 +414,6 @@ paths:
                 type: string
                 const: ok
   # --------------------------------------------------------------------- auth
-  /auth/{platform}/{instance}/login:
-    get:
-      operationId: startSignIn
-      tags: [Sign-in]
-      summary: Start sign-in with GitLab or GitHub
-      description: |
-        Sets the OAuth state cookie and redirects the browser to the
-        provider. Nothing from the request but the route chooses where: there
-        is no `next` parameter and the Host header is not used.
-      x-pergent-access: none
-      security: []
-      parameters:
-        - $ref: '#/components/parameters/Platform'
-        - $ref: '#/components/parameters/InstanceName'
-      responses:
-        '302':
-          description: Redirect to the provider's authorize URL.
-          headers:
-            Location:
-              schema: {type: string}
-            Set-Cookie:
-              description: The `__Host-pergent_oauth_state` cookie (signed, 10 minutes).
-              schema: {type: string}
-        '404':
-          description: That instance has no sign-in on that platform, or is being removed.
-          content:
-            text/plain:
-              schema: {type: string}
-  /auth/{platform}/{instance}/callback:
-    get:
-      operationId: finishSignIn
-      tags: [Sign-in]
-      summary: Finish sign-in (the provider's redirect)
-      description: |
-        The provider sends the browser here with `code` and `state`. The state
-        must match the signed state cookie. A new session replaces the one the
-        browser came with. On success the browser is sent to `/` with the
-        session cookie.
-      x-pergent-access: none
-      security:
-        - oauthStateCookie: []
-      parameters:
-        - $ref: '#/components/parameters/Platform'
-        - $ref: '#/components/parameters/InstanceName'
-        - name: state
-          in: query
-          schema: {type: string}
-        - name: code
-          in: query
-          schema: {type: string}
-        - name: error
-          in: query
-          description: Set by the provider when the user refused.
-          schema: {type: string}
-      responses:
-        '303':
-          description: Signed in. Redirect to `/`.
-          headers:
-            Location:
-              schema:
-                type: string
-                const: /
-            Set-Cookie:
-              description: The `__Host-pergent_session` cookie (7 days at most, 8 hours idle).
-              schema: {type: string}
-        '400': {$ref: '#/components/responses/PlainTextError'}
-        '403':
-          description: The provider reported an error (the user refused).
-          content:
-            text/plain:
-              schema: {type: string}
-        '404':
-          description: That instance has no sign-in on that platform, or is being removed.
-          content:
-            text/plain:
-              schema: {type: string}
-        '500': {$ref: '#/components/responses/PlainTextError'}
-        '502':
-          description: The provider could not be reached, or the user's repositories could not be checked.
-          content:
-            text/plain:
-              schema: {type: string}
   /auth/logout:
     post:
       operationId: signOut
@@ -570,9 +499,9 @@ paths:
     post:
       operationId: changePassword
       tags: [Sign-in]
-      summary: Change the signed-in password account's password
+      summary: Change the signed-in local admin's password
       description: |
-        For a password account only (403 for a platform account). A wrong
+        For a local admin (a password account) only (403 for an SSO account). A wrong
         current password counts toward the account's lock; while the account
         is locked every change is refused (401). The account's other sessions
         end. Allowed while the password change is still required.
@@ -606,32 +535,123 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ErrorBody'}
-  /api/instances:
+  /auth/oidc/login:
     get:
-      operationId: listSignInInstances
+      operationId: oidcLogin
       tags: [Sign-in]
-      summary: List the instances people can sign in with
-      description: The only `/api/` route that needs no session. It says nothing but names and labels.
+      summary: Start OIDC sign-in
+      description: |
+        Sends the browser to the identity provider's authorization endpoint
+        (authorization code flow with PKCE, scopes `openid email`, a state and
+        a nonce). Nothing in the request chooses where it goes. The state, the
+        nonce and the PKCE verifier travel in the sealed, short-lived
+        `__Host-pergent_oidc` cookie (`HttpOnly`, `Secure`, `SameSite=Lax`,
+        10 minutes). When OIDC is not set up, or the provider cannot be read,
+        the browser goes to `/sign-in?error=not_set_up` or
+        `/sign-in?error=unavailable`.
+      x-pergent-access: none
+      security: []
+      responses:
+        '302':
+          description: To the provider.
+          headers:
+            Location:
+              schema: {type: string}
+            Set-Cookie:
+              description: The `__Host-pergent_oidc` state cookie.
+              schema: {type: string}
+        '303':
+          description: To `/sign-in?error=<code>`.
+          headers:
+            Location:
+              schema: {type: string}
+  /auth/oidc/callback:
+    get:
+      operationId: oidcCallback
+      tags: [Sign-in]
+      summary: Finish OIDC sign-in
+      description: |
+        The provider sends the browser back here. In order: the `state` equals
+        the cookie's (constant-time), the code is exchanged (with the PKCE
+        verifier), and the ID token is checked: signature (asymmetric
+        algorithms only), issuer, audience, expiry and nonce. Its `email` claim
+        must be one email address and `email_verified` must be true. Then the
+        allowlist decides: the email is on the exact list, or its domain is on
+        the domain list (with Google as the issuer also the token's `hd` claim
+        must equal the domain), or an admin added the account. Only then is an
+        account made (a user with no team) and a session begun, ending the one
+        the browser came with. The session ends after 8 hours idle or 24 hours.
+
+        Every refusal answers `303` to `/sign-in?error=<code>`, with no account
+        and no session. The codes are `expired` (state missing or wrong),
+        `denied` (the provider reported an error), `failed` (the token or its
+        email was refused), `not_allowed` (not on the allowlist: the page says
+        to ask an admin), `not_set_up` and `unavailable`. Nothing from the
+        provider is repeated.
+      x-pergent-access: none
+      security: []
+      parameters:
+        - {name: code, in: query, schema: {type: string}}
+        - {name: state, in: query, schema: {type: string}}
+        - {name: error, in: query, schema: {type: string}}
+      responses:
+        '303':
+          description: To `/` when signed in, else to `/sign-in?error=<code>`.
+          headers:
+            Location:
+              schema: {type: string}
+            Set-Cookie:
+              description: The `__Host-pergent_session` cookie when signed in; the state cookie is cleared either way.
+              schema: {type: string}
+  /api/sign-in-options:
+    get:
+      operationId: getSignInOptions
+      tags: [Sign-in]
+      summary: What the sign-in pages offer
+      description: |
+        The only `/api/` route that needs no session. `/sign-in` (for users)
+        shows the SSO button only; `/admin/sign-in` (for admins) shows the
+        password form, and the button too when there is one. When OIDC sign-in
+        is set up `sso` carries the label of the button, which goes to
+        `GET /auth/oidc/login`. In JWT mode `jwt` is true and there is no
+        button: a proxy signs people in, and loading a page starts the session.
+        It names no instance, client or address.
       x-pergent-access: none
       security: []
       responses:
         '200':
-          description: The instances with a sign-in now, GitLab first.
+          description: The password form, and the SSO button or the JWT mode.
           content:
             application/json:
-              schema: {$ref: '#/components/schemas/instancesView'}
+              schema: {$ref: '#/components/schemas/signInOptionsView'}
   /api/me:
     get:
       operationId: getMe
       tags: [Sign-in]
       summary: The signed-in user
       description: |
-        Works for a waiting account and for a password account that must
-        change its password. Its `csrfToken` is the token writes send in
+        Works for a waiting account and for a local admin that must change its
+        password. Its `csrfToken` is the token writes send in
         `X-CSRF-Token`.
+
+        With JWT sign-in this is also one of the two requests that can start a
+        session (the other is a `GET` of a page): a valid token in the proxy's
+        header and no session starts one, and the answer is the new session's
+        user. A valid token for an email that is not allowed is 401 with
+        `code` `not_allowed`. When the signing keys cannot be fetched the
+        answer is 503 and no session ends. With `?probe=1` it never starts
+        one (the admin sign-in page asks this way, so a local admin whose
+        proxy identity is allowed can still reach the password form): with no
+        session the answer is 401 whatever the header holds.
       x-pergent-access: session
       security:
         - sessionCookie: []
+      parameters:
+        - name: probe
+          in: query
+          required: false
+          description: Set to `1` to ask without starting a session from the JWT header.
+          schema: {type: string, enum: ['1']}
       responses:
         '200':
           description: The user.
@@ -640,6 +660,11 @@ paths:
               schema: {$ref: '#/components/schemas/meView'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '500': {$ref: '#/components/responses/InternalError'}
+        '503':
+          description: JWT sign-in only. The signing keys cannot be fetched and none is cached, so the token can't be checked. Nothing ends.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorBody'}
   # ------------------------------------------------------ overview and reviews
   /api/overview:
     get:
@@ -795,11 +820,12 @@ paths:
       tags: [Overview and reviews]
       summary: Dismiss a finding of the latest review
       description: |
-        For maintainers and admins of the repository (403 otherwise). A
-        blocking finding needs a `reason` (up to 500 characters), cannot be
-        dismissed by the change's author (403), and not on a merged or closed
-        change (409); when the platform cannot say who opened it, the answer is
-        502. A suggestion needs no reason. The review is decided again with the
+        For maintainers of the repository and admins (403 otherwise). A
+        blocking finding needs a `reason` (up to 500 characters) and is not
+        dismissed on a merged or closed change (409); when the platform cannot
+        say what state the change is in, the answer is 502. The change's author
+        may dismiss too: an account has no platform identity to tell it by. A
+        suggestion needs no reason. The review is decided again with the
         dismissal.
       x-pergent-access: session
       x-pergent-pattern: POST /api/reviews/{instance}/{rest...}
@@ -933,13 +959,12 @@ paths:
       summary: Switch a repository on
       description: |
         Admins only. The repository is checked on its own, not against the
-        picker's lists: a platform admin must be a member with read access
-        (GitLab: Reporter or above; GitHub: pull) and the review bot (GitLab:
-        Maintainer or above) or App (GitHub: installed) must reach it, else
-        404 whether it is on or not; then 409 when it is on already, or set up
-        by the config. An operator names the instance too and needs no
-        membership. Every setting starts at its default; pergent.sh sets up the
-        webhook and clone credentials within seconds.
+        picker's lists: the instance's review bot (GitLab: Maintainer or
+        above) or App (GitHub: installed) must reach it, else 404 whether it
+        is on or not (404 also for an instance that is not there); then 409
+        when it is on already, or set up by the config. Nothing asks what the
+        admin may read on the platform. Every setting starts at its default;
+        pergent.sh sets up the webhook and clone credentials within seconds.
       x-pergent-access: admin
       security:
         - sessionCookie: []
@@ -951,7 +976,7 @@ paths:
             schema: {$ref: '#/components/schemas/SwitchOnRequest'}
       responses:
         '201':
-          description: Switched on. The project is spelled as the platform spells it.
+          description: Switched on. The project is spelled as given.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/RepositoryDetailView'}
@@ -968,15 +993,21 @@ paths:
       tags: [Repositories]
       summary: Repositories that can be switched on (the picker)
       description: |
-        Admins only, and only for a platform session: the picker asks the
-        platform with the user's token, which a password session has not got
-        (400; an operator uses `GET /api/admin/instances/{name}/repositories`).
-        500 repositories at most; `truncated` is true when there were more or a
-        list was too long (5000) or too slow (60 s) to read whole.
+        Admins only: the repositories of one instance that its review bot or
+        App reaches and that are not switched on (the same list as
+        `GET /api/admin/instances/{name}/repositories`). 500 repositories at
+        most; `truncated` is true when there were more or the list was too
+        long (5000) or too slow (20 s) to read whole. 400 without an
+        `instance`, 404 for one that is not there.
       x-pergent-access: admin
       security:
         - sessionCookie: []
       parameters:
+        - name: instance
+          in: query
+          required: true
+          description: The instance whose repositories are listed.
+          schema: {type: string}
         - name: search
           in: query
           description: Keep repositories whose path holds this (GitLab also matches names).
@@ -1037,7 +1068,7 @@ paths:
       tags: [Repositories]
       summary: Switch a repository off
       description: |
-        Admins of the repository only (403 otherwise). A repository set up in
+        Admins only (404 for anyone else). A repository set up in
         the config file is 409: remove it from the config. pergent.sh removes
         its webhook and clone credentials.
       x-pergent-access: admin
@@ -1180,6 +1211,69 @@ paths:
               schema:
                 type: array
                 items: {$ref: '#/components/schemas/SkillResultView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/teams:
+    get:
+      operationId: getRepositoryTeams
+      tags: [Repositories]
+      summary: The teams of a repository
+      description: |
+        Admins only (404 for anyone else, as for an unknown repository). Every
+        team by name ignoring case, with whether it lists this repository
+        itself (`direct`) or covers every repository of its instance
+        (`wholeInstance`). It reads the same rows as the Teams page.
+      x-pergent-access: session
+      x-pergent-pattern: GET /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      responses:
+        '200':
+          description: The teams.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RepoTeamsView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    put:
+      operationId: putRepositoryTeams
+      tags: [Repositories]
+      summary: Set the teams that list a repository
+      description: |
+        Admins only (404 for anyone else). `teams` are the IDs of the teams
+        that list this repository themselves: a team in the list that does not
+        yet gets the repository, one that has it and is not in the list loses
+        it. A team's other repositories and its whole-instance cover stay. A
+        team that is not there is 400 and nothing changes. A repository set up
+        in the config file can be given to teams too. Each team changed is an
+        audit entry.
+      x-pergent-access: session
+      x-pergent-pattern: PUT /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutRepositoryTeamsRequest'}
+      responses:
+        '200':
+          description: The teams after the change.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RepoTeamsView'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
@@ -1531,10 +1625,11 @@ paths:
       summary: Read a skill source (a repository of an instance, or a public URL)
       description: |
         Admins only. Starts a read of a folder of skills; poll
-        `GET /api/admin/skill-fetches/{id}`. A platform admin reads
-        repositories of its own instance that its user can see there (403
-        otherwise); an operator reads any the bot or App reaches. A URL is
-        read by a token-less Job. 503 when installing skills is not set up.
+        `GET /api/admin/skill-fetches/{id}`. It reads any repository the
+        instance's review bot or App reaches (400 without an instance and a
+        repository, or a URL); nothing asks what the admin may read on the
+        platform. A URL is read by a token-less Job. 503 when installing skills
+        is not set up.
       x-pergent-access: admin
       security:
         - sessionCookie: []
@@ -1659,9 +1754,10 @@ paths:
       tags: [Organization]
       summary: List accounts
       description: |
-        Admins only. Waiting accounts first, then everyone by username. A
-        platform admin is listed the platform accounts of its own instance
-        only (no password accounts, none of another instance's).
+        Admins only. Everyone by username: the local admins and the SSO
+        accounts, each with its role. An SSO account an admin added that has
+        not signed in is `invited`; one that signed in, is no admin and is on no
+        team is `waiting`. The old platform accounts are left out.
       x-pergent-access: admin
       security:
         - sessionCookie: []
@@ -1683,10 +1779,9 @@ paths:
       summary: Remove an account
       description: |
         Admins only. Removes the account with its sessions and team
-        memberships (a platform account is made again, on no team, at its next
-        sign-in). A password account needs an operator (403); the last
-        password account cannot be removed (409). A platform admin removes
-        accounts of its own instance only (403).
+        memberships (an SSO account is made again, on no team, at its next
+        sign-in if the allowlist lets it in). Your own account is 409, and so is
+        the last local admin.
       x-pergent-access: admin
       security:
         - sessionCookie: []
@@ -1701,18 +1796,90 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/users:
+    post:
+      operationId: addUser
+      tags: [Organization]
+      summary: Add a user by email
+      description: |
+        Admins only. Gives a person access before they have signed in: makes
+        the SSO account as `invited` (an admin added it, so the allowlist
+        lets that email in whatever it says) and puts it on each team in
+        `teams` with its role (`viewer` when none). The email is lower-cased
+        with ASCII rules and must be exactly one address (400). A team that is
+        not there, a role that is not `viewer` or `maintainer` and a team
+        named twice are 400, and nothing is made. An email added already is
+        409. An account that signed in earlier without being added is marked
+        added and answered 200. If a team cannot be written after the account
+        was made, the answer is 500 and the account stays: put it on teams
+        from the Teams page.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AddUserRequest'}
+      responses:
+        '200':
+          description: The account existed and is now marked added.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UserView'}
+        '201':
+          description: Added.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UserView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/users/{id}/role:
+    put:
+      operationId: setUserRole
+      tags: [Organization]
+      summary: Make an SSO account an admin or a user
+      description: |
+        Admins only. The account's next request reads the new role. Your own
+        role cannot be changed (409), so one admin always stays to change the
+        others'; a local admin is always an admin (409). The old platform
+        accounts are 404.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/NumericId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SetAccountRoleRequest'}
+      responses:
+        '204':
+          description: The role is set.
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/accounts:
     post:
       operationId: createPasswordAccount
       tags: [Organization]
-      summary: Add a password admin
+      summary: Add a local admin
       description: |
-        Operators only. Makes a password admin with a generated password,
+        Admins only. Makes a local admin with a generated password,
         which must be changed at its first sign-in. The password is in the
         answer only, once: it is never logged or audited. The username is 1 to
         64 letters, digits, `.`, `_` or `-` (400), not taken ignoring case
         (409).
-      x-pergent-access: operator
+      x-pergent-access: admin
       security:
         - sessionCookie: []
           csrfToken: []
@@ -1743,9 +1910,8 @@ paths:
       tags: [Organization]
       summary: List teams
       description: |
-        Admins only, by name ignoring case. A platform admin sees only what it
-        can see: repositories and members it cannot see are counted in
-        `hiddenRepos` and `hiddenMembers`, never named.
+        Admins only, by name ignoring case. Each team with its members, each
+        with a role on the team, and the repositories it covers.
       x-pergent-access: admin
       security:
         - sessionCookie: []
@@ -1789,15 +1955,13 @@ paths:
     put:
       operationId: updateTeam
       tags: [Organization]
-      summary: Replace a team's name, role, members and repositories
+      summary: Replace a team's name, members and repositories
       description: |
-        Admins only. Members are platform accounts (400 otherwise). An admin
-        team has `repos: []` (400 otherwise). A repository is one switched on,
-        or `{"instance": X, "project": ""}` for every repository of instance X
-        (400 otherwise). A platform admin changes the members of its own
-        instance only, keeps the team's repositories it cannot see as they
-        are, and names repositories of its own instance only; changing the
-        role of a team that covers repositories it cannot see is 409.
+        Admins only. Members are SSO accounts (400 otherwise), each with the
+        role `viewer` or `maintainer` on this team (400 otherwise); an account
+        named twice has the higher role. A repository is one switched on, or
+        `{"instance": X, "project": ""}` for every repository of instance X,
+        which also covers repositories switched on later (400 otherwise).
       x-pergent-access: admin
       security:
         - sessionCookie: []
@@ -1826,8 +1990,7 @@ paths:
       tags: [Organization]
       summary: Remove a team
       description: |
-        Admins only. Removes the team, not its members' accounts. For a
-        platform admin a team that covers repositories it cannot see is 409.
+        Admins only. Removes the team, not its members' accounts.
       x-pergent-access: admin
       security:
         - sessionCookie: []
@@ -1850,11 +2013,7 @@ paths:
       description: |
         Admins only. 100 entries at most, newest first, older than `before`
         when given. `next` is the `before` of the page after, 0 at the end of
-        the log. A platform admin sees only entries about a repository it can
-        see, about its own instance, or about no instance (not a password
-        admin's own sign-ins and password changes); its request reads at most
-        50 chunks of 100 entries, so a short page with `next` not 0 is not the
-        last. `detail` never holds a secret.
+        the log. Every admin sees every entry. `detail` never holds a secret.
       x-pergent-access: admin
       security:
         - sessionCookie: []
@@ -1877,32 +2036,6 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
   # ------------------------------------------------- instances and settings
-  /api/integrations:
-    get:
-      operationId: getIntegrations
-      tags: [Instances and settings]
-      summary: Integration health of an instance
-      description: |
-        Admins only: the session's instance. An operator has none and names
-        one with `?instance=` (404 for an unknown name).
-      x-pergent-access: admin
-      security:
-        - sessionCookie: []
-      parameters:
-        - name: instance
-          in: query
-          description: For an operator, the instance to describe.
-          schema: {type: string}
-      responses:
-        '200':
-          description: The integration.
-          content:
-            application/json:
-              schema: {$ref: '#/components/schemas/IntegrationView'}
-        '401': {$ref: '#/components/responses/Unauthorized'}
-        '403': {$ref: '#/components/responses/Forbidden'}
-        '404': {$ref: '#/components/responses/NotFound'}
-        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/settings:
     get:
       operationId: getAdminSettings
@@ -1926,8 +2059,8 @@ paths:
       operationId: listInstances
       tags: [Instances and settings]
       summary: List the configured instances
-      description: Operators only. The config's first, then those added in the dashboard. Secrets are write-only.
-      x-pergent-access: operator
+      description: Admins only. The config's first, then those added in the dashboard. Secrets are write-only.
+      x-pergent-access: admin
       security:
         - sessionCookie: []
       responses:
@@ -1946,12 +2079,12 @@ paths:
       tags: [Instances and settings]
       summary: Add an instance
       description: |
-        Operators only. Checks the credentials the way startup does (400 with
+        Admins only. Checks the credentials the way startup does (400 with
         the reason when they fail, and nothing is stored), stores them sealed
         and connects. A GitLab instance's `webhook_secret` is generated; giving
         one is 400. A name taken in the config or the dashboard is 409. The
         check can take up to 40 seconds.
-      x-pergent-access: operator
+      x-pergent-access: admin
       security:
         - sessionCookie: []
           csrfToken: []
@@ -1975,12 +2108,12 @@ paths:
     put:
       operationId: updateInstance
       tags: [Instances and settings]
-      summary: Change an instance's OAuth client or secrets
+      summary: Change an instance's secrets
       description: |
-        Operators only. Replaces what it names, checks the whole, connects
+        Admins only. Replaces what it names, checks the whole, connects
         again. An address or App ID that differs is 400. An instance of the
         config, or one being removed, is 409.
-      x-pergent-access: operator
+      x-pergent-access: admin
       security:
         - sessionCookie: []
           csrfToken: []
@@ -2008,11 +2141,12 @@ paths:
       tags: [Instances and settings]
       summary: Remove an instance
       description: |
-        Operators only. Its runs are superseded and its repositories, accounts
-        and sessions go now; pergent.sh takes the webhooks off the platform and
+        Admins only. Its runs are superseded and its repositories (and any
+        old platform accounts and sessions of it) go now; pergent.sh takes the
+        webhooks off the platform and
         deletes the instance and its secrets within a minute or so. An
         instance of the config is 409.
-      x-pergent-access: operator
+      x-pergent-access: admin
       security:
         - sessionCookie: []
           csrfToken: []
@@ -2035,10 +2169,9 @@ paths:
       tags: [Instances and settings]
       summary: Repositories an instance's bot or App can set up
       description: |
-        Operators only: the picker for an operator, who has no platform
-        account. The repositories the instance's review bot or App can set up
-        that are not switched on; 500 at most.
-      x-pergent-access: operator
+        Admins only: the repositories the instance's review bot or App can set
+        up that are not switched on; 500 at most.
+      x-pergent-access: admin
       security:
         - sessionCookie: []
       parameters:
@@ -2083,10 +2216,10 @@ paths:
       tags: [Instances and settings]
       summary: Set the model reviews use
       description: |
-        Operators only. 409 when the config has an `llm:` block. The key is
+        Admins only. 409 when the config has an `llm:` block. The key is
         needed only when none is stored; a key sent is sealed and never
         returned.
-      x-pergent-access: operator
+      x-pergent-access: admin
       security:
         - sessionCookie: []
           csrfToken: []
@@ -2105,6 +2238,92 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/sign-in:
+    get:
+      operationId: getSignIn
+      tags: [Instances and settings]
+      summary: How people sign in
+      description: |
+        Admins only. The OIDC or JWT settings in force and the allowlist. The
+        client secret is never sent, only whether one is set. `source` is
+        `config` when `dashboard.sign_in` in the config file sets them: they are
+        then read-only. `callbackURL` is the redirect URI to register at the
+        identity provider.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: The settings.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SignInAdminView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    put:
+      operationId: putSignIn
+      tags: [Instances and settings]
+      summary: Set how people sign in
+      description: |
+        Admins only; 409 when the config file sets `dashboard.sign_in`.
+        Issuer and JWKS URLs must be `https`. `clientSecret` is sealed and never
+        returned; leave it out to keep the stored one, send `""` to remove it.
+        OIDC needs one. Changing the mode or the issuer ends every OIDC and JWT
+        session (a local admin's stays), and changing the issuer needs the
+        client secret entered again: a stored secret is dropped when the issuer
+        changes, so it is never sent to a new token endpoint. Emails are
+        lower-cased (ASCII only) and domains too; lists hold at most 500 entries.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutSignInRequest'}
+      responses:
+        '200':
+          description: Saved.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SignInAdminView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/sign-in/test:
+    post:
+      operationId: testSignIn
+      tags: [Instances and settings]
+      summary: Test the identity provider
+      description: |
+        Admins only. Reads the OIDC discovery document (mode `oidc`) or the JWKS
+        (mode `jwt`) and says only whether that worked: nothing the other side
+        sent comes back, no status, error text, document or address. The body is
+        optional; what it leaves out is taken from the settings in force.
+        A 400 is for an address that is not `https`, or nothing to test.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TestSignInRequest'}
+      responses:
+        '200':
+          description: Whether it worked.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SignInTestView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/defaults:
     get:
@@ -2159,11 +2378,16 @@ components:
       in: cookie
       name: __Host-pergent_session
       description: |
-        The dashboard session, set by sign-in (`GET /auth/{platform}/{instance}/callback`
-        or `POST /auth/password`). 32 random bytes, base64url. `HttpOnly`,
-        `Secure`, `SameSite=Lax`, `Path=/`. It ends after 8 hours idle or 7 days.
+        The dashboard session, set by sign-in (`GET /auth/oidc/callback` or
+        `POST /auth/password`). 32 random bytes, base64url. `HttpOnly`,
+        `Secure`, `SameSite=Lax`, `Path=/`. It ends after 8 hours idle, or after
+        7 days for a local admin and 24 hours for a session that began with OIDC
+        or a JWT.
         A missing, unknown or ended session is 401 with `{"error": "not signed in"}`
-        or `"session expired"`.
+        or `"session expired"`. With JWT sign-in every request of a session that
+        a JWT started also needs a valid token for the same email in the
+        proxy's header, or the session ends (401); with the signing keys down
+        the answer is 503 and it does not end.
     csrfToken:
       type: apiKey
       in: header
@@ -2178,14 +2402,6 @@ components:
       in: cookie
       name: __Host-pergent_login_csrf
       description: Set by `GET /auth/csrf`. `HttpOnly`, `Secure`, `SameSite=Strict`, 10 minutes.
-    oauthStateCookie:
-      type: apiKey
-      in: cookie
-      name: __Host-pergent_oauth_state
-      description: |
-        Set by `GET /auth/{platform}/{instance}/login`: a signed cookie holding
-        the OAuth state and PKCE verifier. `HttpOnly`, `Secure`, `SameSite=Lax`,
-        10 minutes. The callback's `state` query must match it.
     gitlabWebhookToken:
       type: apiKey
       in: header
@@ -2227,13 +2443,6 @@ components:
       required: true
       description: The instance's name.
       schema: {type: string}
-    Platform:
-      name: platform
-      in: path
-      required: true
-      schema:
-        type: string
-        enum: [gitlab, github]
     ProjectPath:
       name: project
       in: path
@@ -2292,8 +2501,8 @@ components:
       description: |
         The session may not do this. `code` tells which kind: `csrf` (a write
         without the right `X-CSRF-Token`), `waiting` (an account on no team),
-        `password_change_required`; with no `code` the role is too low (admin,
-        operator, or the repository role).
+        `password_change_required`; with no `code` the repository role is too
+        low. (An admin-only route answers a user 404, not 403.)
       content:
         application/json:
           schema: {$ref: '#/components/schemas/ErrorBody'}
@@ -2339,8 +2548,8 @@ components:
         error: {type: string}
         code:
           type: string
-          description: Present on some 403s only.
-          enum: [csrf, waiting, password_change_required]
+          description: Present on some 403s, and on the 401 of `GET /api/me` for a JWT whose email is not allowed.
+          enum: [csrf, waiting, password_change_required, not_allowed]
     StatusBody:
       type: object
       description: A short word for what happened. The operation lists the values.
@@ -2387,14 +2596,14 @@ components:
           description: At least 12 characters, and different from the current one.
     SwitchOnRequest:
       type: object
-      required: [project]
+      required: [instance, project]
       properties:
+        instance:
+          type: string
+          description: The instance the repository is on.
         project:
           type: string
           maxLength: 1024
-        instance:
-          type: string
-          description: Needed from an operator, who has no instance of their own. A platform admin may leave it out, or send its own.
     RerunRequest:
       type: object
       properties:
@@ -2427,37 +2636,76 @@ components:
         username:
           type: string
           pattern: '^[a-zA-Z0-9._-]{1,64}$'
-    CreateTeamRequest:
+    AddUserRequest:
       type: object
-      required: [name, role]
+      required: [email]
       properties:
-        name:
+        email:
           type: string
-          minLength: 1
-          maxLength: 100
-        role:
-          type: string
-          enum: [admin, maintainer, viewer]
-    UpdateTeamRequest:
-      type: object
-      required: [name, role]
-      properties:
-        name:
-          type: string
-          minLength: 1
-          maxLength: 100
-        role:
-          type: string
-          enum: [admin, maintainer, viewer]
-        members:
+          description: Exactly one address; lower-cased with ASCII rules.
+        teams:
           type: array
-          description: Account ids of platform accounts.
+          description: Teams to put the account on, each once.
+          items:
+            type: object
+            required: [teamId]
+            properties:
+              teamId:
+                type: integer
+                format: int64
+              role:
+                type: string
+                enum: [viewer, maintainer]
+                description: Defaults to `viewer`.
+    PutRepositoryTeamsRequest:
+      type: object
+      required: [teams]
+      properties:
+        teams:
+          type: array
+          description: The IDs of the teams that list the repository themselves. `[]` takes it off every team that lists it.
           items:
             type: integer
             format: int64
+    SetAccountRoleRequest:
+      type: object
+      required: [role]
+      properties:
+        role:
+          type: string
+          enum: [admin, user]
+    CreateTeamRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+    UpdateTeamRequest:
+      type: object
+      required: [name, members, repos]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        members:
+          type: array
+          description: SSO accounts with their role on this team. An account named twice has the higher role.
+          items:
+            type: object
+            required: [accountId, role]
+            properties:
+              accountId:
+                type: integer
+                format: int64
+              role:
+                type: string
+                enum: [viewer, maintainer]
         repos:
           type: array
-          description: An empty `project` covers every repository of the instance. Empty for an admin team.
+          description: An empty `project` covers every repository of the instance, now and later.
           items: {$ref: '#/components/schemas/TeamRepoView'}
     CreateInstanceRequest:
       type: object
@@ -2484,29 +2732,22 @@ components:
           type: integer
           format: int64
           description: GitHub only. 0 approves with a bot user's token, the `reviewAppID` with the review App, another App ID with an approve App.
-        oauthClientID:
-          type: string
-          maxLength: 256
-          description: Without spaces. Goes with the `oauth_client_secret` secret, both or neither.
         secrets:
           type: object
           description: |
-            Secret values by field. GitLab: `review_token`, `approve_token`,
-            `oauth_client_secret` (`webhook_secret` is generated: do not send
-            it). GitHub: `review_app_key`, `approve_app_key` or
-            `approve_token` by the approver, `webhook_secret`,
-            `oauth_client_secret`. Each at most 16 KiB. Write-only.
+            Secret values by field. GitLab: `review_token`, `approve_token`
+            (`webhook_secret` is generated: do not send it). GitHub:
+            `review_app_key`, `approve_app_key` or `approve_token` by the
+            approver, `webhook_secret`. Each at most 16 KiB. Write-only.
           additionalProperties:
             type: string
             format: password
     UpdateInstanceRequest:
       type: object
       description: |
-        At least one of `oauthClientID` and `secrets`. The address and App IDs
-        cannot change; they are accepted only with their current value.
+        `secrets` is needed. The address and App IDs cannot change; they are
+        accepted only with their current value.
       properties:
-        oauthClientID:
-          type: [string, 'null']
         secrets:
           type: object
           additionalProperties:
@@ -2568,7 +2809,7 @@ components:
           description: The new name.
     StartSkillFetchRequest:
       type: object
-      description: A repository of an instance (`instance` and `repo`), or a public `url`, not both. A platform admin may leave `instance` out.
+      description: A repository of an instance (`instance` and `repo`), or a public `url`, not both.
       required: [ref]
       properties:
         instance: {type: string}
@@ -2758,9 +2999,8 @@ components:
     AdminSettingsView:
       description: The defaults a repository switched on in the dashboard gets, and the model. Never a key.
       type: object
-      required: [instance, defaults, llm]
+      required: [defaults, llm]
       properties:
-        instance: {type: string}
         defaults: {$ref: '#/components/schemas/DefaultsView'}
         llm: {$ref: '#/components/schemas/LLMView'}
     AttentionView:
@@ -2799,8 +3039,8 @@ components:
           format: date-time
         actor:
           type: string
-          description: '"alice (gitlab main)" for a platform account, "root (password)" for a password admin,
-            "cli" for a password reset from the command line.'
+          description: 'The full email of an SSO account, "root (password)" for a local admin, "cli" for
+            a password reset from the command line. Older entries of platform accounts read "alice (gitlab main)".'
         action: {type: string}
         instance:
           type: string
@@ -3034,7 +3274,7 @@ components:
     InstanceAdminView:
       description: One instance.
       type: object
-      required: [name, platform, source, removing, url, apiURL, reviewAppID, approveAppID, webhookURL, approver, oauthClientID, secrets]
+      required: [name, platform, source, removing, url, apiURL, reviewAppID, approveAppID, webhookURL, approver, secrets]
       properties:
         name: {type: string}
         platform:
@@ -3061,66 +3301,96 @@ components:
           type: string
           enum: [app, review_app, token]
           description: '"app", "review_app" or "token".'
-        oauthClientID: {type: string}
         secrets:
           type: object
           additionalProperties: {$ref: '#/components/schemas/SecretView'}
-          description: 'By field. The fields an instance takes: review_token, approve_token, webhook_secret
-            and oauth_client_secret (GitLab); review_app_key, approve_app_key or approve_token, webhook_secret
-            and oauth_client_secret (GitHub).'
-    InstanceView:
-      description: One instance people can sign in with. The sign-in button goes to /auth/{platform}/{instance}/login.
+          description: 'By field. The fields an instance takes: review_token, approve_token and webhook_secret
+            (GitLab); review_app_key, approve_app_key or approve_token, and webhook_secret (GitHub).'
+    SignInAdminView:
+      description: The sign-in settings in force. The client secret is never sent.
       type: object
-      required: [platform, instance, label]
+      required: [source, editable, mode, label, issuer, clientID, clientSecret, header, audience, jwksURL, emailClaim, allowedDomains, allowedEmails, callbackURL]
       properties:
-        platform:
+        source:
           type: string
-          enum: [gitlab, github]
-        instance: {type: string}
+          enum: [config, dashboard]
+        editable:
+          type: boolean
+          description: False when the config file sets the sign-in.
+        mode:
+          type: string
+          enum: ['', oidc, jwt]
+          description: Empty means only local admins sign in.
         label:
           type: string
-          description: The button's text after "Sign in with".
-    IntegrationRepo:
-      description: One repository the admin can see.
-      type: object
-      required: [project, installed, approverReachable, inlineAvailable, protectionReadable]
-      properties:
-        project: {type: string}
-        installed:
-          type: boolean
-          description: pergent.sh's webhook and deploy token (GitLab) or the review App (GitHub) are in place.
-        approverReachable:
-          type: boolean
-          description: The approve bot or App can approve there.
-        inlineAvailable:
-          type: boolean
-          description: False when the review App may only read pull requests.
-        protectionReadable:
-          type: boolean
-          description: 'False when the review App lacks Administration: Read.'
-    IntegrationView:
-      description: The integration health of an instance.
-      type: object
-      required: [instance, platform, connected, approver, repos]
-      properties:
-        instance: {type: string}
-        platform:
-          type: string
-          enum: [gitlab, github]
-        connected:
-          type: boolean
-          description: Whether pergent.sh is connected to the instance now.
-        approver:
-          type: string
-          enum: [app, review_app, token]
-          description: '"app" (a GitHub approve App), "review_app" or "token" (a bot user).'
-        tokenExpiry:
-          type: [string, 'null']
-          format: date-time
-          description: Set while the approve token expires within 14 days.
-        repos:
+          description: 'The name on the button, "Sign in with <label>"; "SSO" when empty.'
+        issuer: {type: string}
+        clientID: {type: string}
+        clientSecret:
+          $ref: '#/components/schemas/SecretView'
+          description: Whether a secret is set. `updatedAt` is always null.
+        header: {type: string}
+        audience: {type: string}
+        jwksURL: {type: string}
+        emailClaim: {type: string}
+        allowedDomains:
           type: array
-          items: {$ref: '#/components/schemas/IntegrationRepo'}
+          items: {type: string}
+        allowedEmails:
+          type: array
+          items: {type: string}
+        callbackURL:
+          type: string
+          description: dashboard.url and /auth/oidc/callback, the redirect URI to register.
+    SignInTestView:
+      description: Whether the provider's discovery document or key set could be read.
+      type: object
+      required: [ok]
+      properties:
+        ok: {type: boolean}
+    ssoView:
+      description: The sign-in page's OIDC button.
+      type: object
+      required: [label]
+      properties:
+        label: {type: string}
+    PutSignInRequest:
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: ['', oidc, jwt]
+        label: {type: string, maxLength: 64}
+        issuer:
+          type: string
+          description: An https URL.
+        clientID: {type: string}
+        clientSecret:
+          type: [string, 'null']
+          description: Absent or null keeps the stored secret, "" removes it, anything else replaces it (at most 16 KiB).
+        header: {type: string}
+        audience: {type: string}
+        jwksURL:
+          type: string
+          description: An https URL.
+        emailClaim:
+          type: string
+          description: '"email" when empty in jwt mode.'
+        allowedDomains:
+          type: array
+          items: {type: string}
+        allowedEmails:
+          type: array
+          items: {type: string}
+    TestSignInRequest:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [oidc, jwt]
+        issuer: {type: string}
+        jwksURL: {type: string}
     LLMAdminView:
       description: Where the model comes from ("config" or "dashboard"), the model, and whether a key is set.
       type: object
@@ -3135,7 +3405,7 @@ components:
         key: {$ref: '#/components/schemas/SecretView'}
         editable:
           type: boolean
-          description: 'True for an operator when the config has no llm: block.'
+          description: 'True for an admin when the config has no llm: block.'
     LLMView:
       description: The model reviews use.
       type: object
@@ -3177,7 +3447,7 @@ components:
       properties:
         text: {type: string}
     NewAccountView:
-      description: A password admin just made, with its generated password. The only time the password is
+      description: A local admin just made, with its generated password. The only time the password is
         shown.
       type: object
       required: [username, password]
@@ -3544,16 +3814,13 @@ components:
     SkillInUseView:
       description: The 409 of a delete of a skill that is in use.
       type: object
-      required: [error, repositories, hidden, inDefaults]
+      required: [error, repositories, inDefaults]
       properties:
         error: {type: string}
         repositories:
           type: array
           items: {$ref: '#/components/schemas/SkillUserRepoView'}
-          description: The ones the caller can see that name it.
-        hidden:
-          type: integer
-          description: How many others name it.
+          description: The repositories that name it.
         inDefaults:
           type: boolean
           description: The default list names it.
@@ -3591,7 +3858,7 @@ components:
         instance: {type: string}
         repo:
           type: string
-          description: Shown to operators and to users who can see the repository; others get hidden.
+          description: Shown to admins only; others get hidden.
         url: {type: string}
         path:
           type: string
@@ -3704,14 +3971,17 @@ components:
         blocking: {type: integer}
         failed: {type: integer}
     TeamMemberView:
-      description: 'A team''s member: a platform account.'
+      description: 'A team''s member: an SSO account and its role on the team.'
       type: object
-      required: [id, username, platform, instance]
+      required: [accountId, username, email, role]
       properties:
-        id: {type: integer}
+        accountId: {type: integer}
         username: {type: string}
-        platform: {type: string}
-        instance: {type: string}
+        email: {type: string}
+        role:
+          type: string
+          enum: [viewer, maintainer]
+          description: '"viewer" or "maintainer".'
     TeamRef:
       description: Names a team.
       type: object
@@ -3729,28 +3999,18 @@ components:
     TeamView:
       description: One team.
       type: object
-      required: [id, name, role, members, repos, hiddenRepos, hiddenMembers]
+      required: [id, name, members, repos]
       properties:
         id: {type: integer}
         name: {type: string}
-        role:
-          type: string
-          enum: [admin, maintainer, viewer]
-          description: '"admin", "maintainer" or "viewer".'
         members:
           type: array
           items: {$ref: '#/components/schemas/TeamMemberView'}
         repos:
           type: array
           items: {$ref: '#/components/schemas/TeamRepoView'}
-          description: The repositories it covers that the session can see; a project "" covers every repository
-            of the instance. An admin team has none.
-        hiddenRepos:
-          type: integer
-          description: The team's repositories the session cannot see.
-        hiddenMembers:
-          type: integer
-          description: The team's members of other instances, never named to a platform admin; 0 for an operator.
+          description: The repositories it covers; a project "" covers every repository of the instance, now
+            and later.
     TokensView:
       type: object
       required: [in, out]
@@ -3760,70 +4020,107 @@ components:
     UserView:
       description: One account.
       type: object
-      required: [id, kind, username, platform, instance, lastSignInAt, waiting, teams]
+      required: [id, kind, username, email, role, invited, lastSignInAt, waiting, teams]
       properties:
         id: {type: integer}
         kind:
           type: string
-          enum: [password, platform]
-          description: '"password" or "platform".'
+          enum: [password, sso]
+          description: '"password" (a local admin) or "sso".'
         username: {type: string}
-        platform: {type: string}
-        instance: {type: string}
+        email:
+          type: string
+          description: An SSO account's email; "" for a local admin.
+        role:
+          type: string
+          enum: [admin, user]
+        invited:
+          type: boolean
+          description: An SSO account an admin added that has not signed in yet.
         lastSignInAt:
           type: [string, 'null']
           format: date-time
           description: Null for an account that never signed in.
         waiting:
           type: boolean
-          description: A platform account on no team.
+          description: An SSO account that signed in, is not an admin and is on no team.
         teams:
           type: array
           items: {$ref: '#/components/schemas/TeamRef'}
-    instancesView:
-      description: Body of GET /api/instances.
+    RepoTeamView:
+      description: A team as one repository's settings show it.
       type: object
-      required: [password, instances]
+      required: [id, name, members, direct, wholeInstance]
+      properties:
+        id: {type: integer}
+        name: {type: string}
+        members:
+          type: integer
+          description: How many accounts are on the team.
+        direct:
+          type: boolean
+          description: The team lists this repository itself.
+        wholeInstance:
+          type: boolean
+          description: The team covers every repository of the repository's instance.
+    RepoTeamsView:
+      description: Body of GET and PUT .../teams of a repository.
+      type: object
+      required: [teams]
+      properties:
+        teams:
+          type: array
+          items: {$ref: '#/components/schemas/RepoTeamView'}
+    signInOptionsView:
+      description: Body of GET /api/sign-in-options.
+      type: object
+      required: [password, jwt]
       properties:
         password:
           type: boolean
-          description: The password form is shown. Always true.
-        instances:
-          type: array
-          items: {$ref: '#/components/schemas/InstanceView'}
-          description: Those with sign-in, the config's first.
+          description: The password form is shown, on `/admin/sign-in`. Always true.
+        sso:
+          anyOf:
+            - {$ref: '#/components/schemas/ssoView'}
+            - {type: 'null'}
+          description: The OIDC button, on both sign-in pages. Absent when OIDC sign-in is not set up, and in JWT mode.
+        jwt:
+          type: boolean
+          description: A proxy signs people in (JWT mode). There is no button; a page load signs the person in.
     meView:
       description: The signed-in user. Body of GET /api/me.
       type: object
-      required: [kind, username, platform, instance, admin, operator, waiting, mustChangePassword, waitingUsers, csrfToken]
+      required: [kind, username, email, role, signIn, admin, waiting, mustChangePassword, waitingUsers, csrfToken]
       properties:
         kind:
           type: string
-          enum: [password, platform]
-          description: '"password" or "platform".'
-        username: {type: string}
-        platform:
+          enum: [password, sso]
+          description: '"password" (a local admin) or "sso".'
+        username:
           type: string
-          description: '"" for a password account.'
-        instance:
+          description: The name shown; the email of an SSO account.
+        email:
           type: string
-          description: '"" for a password account.'
+          description: An SSO account's email; "" for a local admin.
+        role:
+          type: string
+          enum: [admin, user]
+        signIn:
+          type: string
+          enum: [password, oidc, jwt]
+          description: How the session began.
         admin:
           type: boolean
-          description: An operator or a member of an admin team.
-        operator:
-          type: boolean
-          description: A password account, which sees everything.
+          description: The account's role is admin; it sees and may do everything.
         waiting:
           type: boolean
-          description: A platform account on no team, which sees nothing.
+          description: A user on no team, which sees nothing.
         mustChangePassword:
           type: boolean
           description: Nothing else works until the password is changed.
         waitingUsers:
           type: integer
-          description: 'Platform accounts on no team: of every instance for an operator, of their own for
-            a platform admin; 0 for everyone else.'
+          description: For an admin, how many users are waiting for a team (SSO accounts with role user that signed in and are on no team); 0 for anyone else.
         csrfToken:
           type: string
           description: The token writes send in X-CSRF-Token.

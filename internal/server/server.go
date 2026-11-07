@@ -40,6 +40,10 @@ type Deps struct {
 	Now func() time.Time
 	// Dashboard serves /auth/ and /api/. Nil turns the dashboard off.
 	Dashboard http.Handler
+	// Pages wraps the handler of the web app's pages (dashboard.Pages): with
+	// JWT sign-in a page load by someone the proxy has logged in starts a
+	// session. Nil serves the pages as they are.
+	Pages func(http.Handler) http.Handler
 	// SkillFetches records what a skill fetch Job read from a public URL
 	// (skillfetch.Fetcher). Nil: no such Job runs, and the route is absent.
 	SkillFetches callback.FetchResults
@@ -98,7 +102,11 @@ func Routes(d Deps) *http.ServeMux {
 		guarded := noStore(d.Dashboard)
 		mux.Handle("/auth/", guarded)
 		mux.Handle("/api/", guarded)
-		mux.Handle("/", web.Handler())
+		app := web.Handler()
+		if d.Pages != nil {
+			app = d.Pages(app)
+		}
+		mux.Handle("/", app)
 	}
 	return mux
 }

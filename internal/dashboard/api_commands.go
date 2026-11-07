@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	msgNeedsRoleReview = "only maintainers and admins of this repository can do this"
+	msgNeedsRoleReview = "only maintainers of this repository and admins can do this"
 	msgBadRerun        = `the body must be {"failed": true or false}`
 	msgBadDismiss      = `the body must be {"fingerprint": ..., "reason": ...}`
 	msgBadRestore      = `the body must be {"fingerprint": ...}`
@@ -26,8 +26,6 @@ const (
 	msgNoSuchFinding   = "there is no such finding in the latest review"
 	msgChangeNotOpen   = "this change is not open"
 	msgDraftsNotOn     = "drafts aren't reviewed in this repository"
-	msgAuthorBlocking  = "the author of a change can't dismiss its blocking findings"
-	msgAuthorUnknown   = "could not tell who opened this change, so its blocking findings can't be dismissed now; please try again"
 	msgPlatformFailed  = "could not read this change from its platform, please try again"
 	msgRedecideFailed  = "the change was saved, but the review could not be decided again yet; the next review will use it"
 )
@@ -51,19 +49,15 @@ func (d *Dashboard) commandRoutes(mux *http.ServeMux) {
 }
 
 // buttonsFor is the session's role on a repository and what the buttons
-// offer it. author is the username who opened the change: the platform user
-// of that name is not offered to dismiss blocking findings (the dismiss route
-// compares user IDs).
-func buttonsFor(se Session, instance, project, author string) (string, CanView) {
+// offer it: a maintainer or an admin gets all of them. (A session has no
+// platform identity, so the change's author is not told apart from anyone
+// else.)
+func buttonsFor(se Session, instance, project string) (string, CanView) {
 	role := se.Role(instance, project)
 	if role < RoleMaintainer {
 		return role.String(), CanView{}
 	}
-	can := CanView{Rerun: true, DismissBlocking: true, DismissSuggestion: true, Restore: true}
-	if !se.Operator && se.Instance == instance && author != "" && strings.EqualFold(se.Username, author) {
-		can.DismissBlocking = false
-	}
-	return role.String(), can
+	return role.String(), CanView{Rerun: true, DismissBlocking: true, DismissSuggestion: true, Restore: true}
 }
 
 // reviewButton is one button press: who, on which change.
@@ -265,7 +259,7 @@ func (d *Dashboard) dismiss(w http.ResponseWriter, r *http.Request, b reviewButt
 		return
 	}
 	// Anything but a suggestion is dismissed as a blocking finding, which
-	// needs a reason and someone other than the change's author.
+	// needs a reason and an open change.
 	severity := "blocking"
 	if f.Severity == "suggestion" {
 		severity = "suggestion"
@@ -283,10 +277,10 @@ func (d *Dashboard) dismiss(w http.ResponseWriter, r *http.Request, b reviewButt
 	accountID := se.AccountID
 	created, err := d.Store.Dismiss(context.WithoutCancel(ctx), store.Dismissal{
 		MR: b.mr, Fingerprint: fingerprint, Severity: severity, Reason: reason,
-		Actor: actorLabel(se.Kind, se.Platform, se.Instance, se.Username), ActorID: &accountID, CreatedAt: d.now(),
+		Actor: dismissalName(se), ActorID: &accountID, CreatedAt: d.now(),
 		// The buttons are for maintainers and admins, so a dismissal teaches.
+		// DismisserPlatformID stays 0: an account has no platform identity.
 		Skill: f.Skill, File: f.File, Title: f.Title, Teaches: true,
-		DismisserPlatformID: dismisserPlatformID(se, b.mr.Instance),
 	})
 	if err != nil {
 		d.Log.Error("dashboard: storing a dismissal failed", "instance", b.mr.Instance, "project", b.project, "error", err.Error())
@@ -313,14 +307,12 @@ func (d *Dashboard) dismiss(w http.ResponseWriter, r *http.Request, b reviewButt
 }
 
 // mayDismissBlocking tells whether the session may dismiss a blocking
-// finding of the change. Nobody may on a merged or closed change, a password
-// admin included, and when the platform can't say what state it is in the
-// request fails closed. A password admin has no platform identity, so it is
-// never the change's author; a platform user may unless they opened it, and
-// when the author can't be told it fails closed too. When it may not, it has
-// answered the request.
+// finding of the change. Nobody may on a merged or closed change, an admin
+// included, and when the platform can't say what state it is in the request
+// fails closed. Anyone else who reaches the button may, the change's author
+// too: an account has no platform identity to compare. When it may not, it
+// has answered the request.
 func (d *Dashboard) mayDismissBlocking(w http.ResponseWriter, r *http.Request, b reviewButton) bool {
-	se := session(r)
 	change, ok := d.platformChange(w, r, b)
 	if !ok {
 		return false
@@ -330,28 +322,7 @@ func (d *Dashboard) mayDismissBlocking(w http.ResponseWriter, r *http.Request, b
 		writeError(w, http.StatusConflict, "this change is "+string(change.State))
 		return false
 	}
-	if se.Operator {
-		return true
-	}
-	if change.AuthorID == 0 || se.UserID == 0 || se.Instance != b.mr.Instance {
-		writeError(w, http.StatusBadGateway, msgAuthorUnknown)
-		return false
-	}
-	if actions.IsAuthor(se.UserID, change.AuthorID) {
-		writeError(w, http.StatusForbidden, msgAuthorBlocking)
-		return false
-	}
 	return true
-}
-
-// dismisserPlatformID is the platform user ID of the session on instance, 0
-// when it has none there: a password account has no platform user, and a
-// user ID of another instance means someone else here.
-func dismisserPlatformID(se Session, instance string) int64 {
-	if se.Instance != instance {
-		return 0
-	}
-	return se.UserID
 }
 
 // restore undoes a dismissal.

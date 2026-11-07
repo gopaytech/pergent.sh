@@ -12,7 +12,6 @@ describe("paths", () => {
     expect(paths.apiReview("main", "acme/payments", 77)).toBe("/api/reviews/main/acme/payments/77");
     expect(paths.apiRepo("main", "acme/payments")).toBe("/api/repositories/main/acme/payments");
     expect(paths.apiRun("a/b")).toBe("/api/runs/a%2Fb");
-    expect(paths.login("gitlab", "main/../x")).toBe("/auth/gitlab/main%2F..%2Fx/login");
   });
 });
 
@@ -72,6 +71,16 @@ describe("api", () => {
     await api.get("/api/overview").catch(() => undefined);
     off();
     expect(seen).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not tell them when a page probes and expects the 401", async () => {
+    fakeApi({ "GET /api/me": { status: 401, body: { error: "ask an admin to add you", code: "not_allowed" } } });
+    const seen = vi.fn();
+    const off = onUnauthorized(seen);
+    const err = await api.probe("/api/me").catch((e: unknown) => e);
+    off();
+    expect(seen).not.toHaveBeenCalled();
+    expect(err).toMatchObject({ status: 401, code: "not_allowed" });
   });
 });
 

@@ -156,27 +156,33 @@ func withSecrets(t *testing.T) func(*config.Config) {
 	}
 }
 
-// signInGitLab signs alice in on main, able to see the given projects (as
-// a Reporter), on an admin team when admin is true and otherwise on a
-// viewer team covering every repository of main.
-func (e *env) signInGitLab(admin bool, visible ...string) *http.Cookie {
+// userOn is alice's session as a viewer of the given repositories of
+// instance (a team of exactly those), or, with admin, as an admin, who sees
+// every repository of every instance.
+func (e *env) userOn(instance string, admin bool, visible ...string) *http.Cookie {
 	e.t.Helper()
-	for _, p := range visible {
-		e.gl.setProject(p, gitlabProject("private", 20, 0))
+	if admin {
+		e.ssoAdmin(aliceEmail)
+		return e.aliceSession()
 	}
-	e.aliceOn("main", map[bool]string{true: store.RoleAdmin, false: store.RoleViewer}[admin])
-	return e.signIn("gitlab", "main")
+	repos := make([]store.TeamRepo, len(visible))
+	for i, p := range visible {
+		repos[i] = store.TeamRepo{Instance: instance, Project: p}
+	}
+	e.team("viewers of "+instance, []store.TeamMember{{AccountID: e.alice(), Role: store.RoleViewer}}, repos...)
+	return e.aliceSession()
 }
 
-// signInGitHub signs alice in on gh, able to see the given repositories, on
-// a team as signInGitLab.
-func (e *env) signInGitHub(admin bool, visible ...string) *http.Cookie {
+// userOnMain is alice's session on main: see userOn.
+func (e *env) userOnMain(admin bool, visible ...string) *http.Cookie {
 	e.t.Helper()
-	for _, p := range visible {
-		e.gh.setRepo(p, githubRepo(true, true))
-	}
-	e.aliceOn("gh", map[bool]string{true: store.RoleAdmin, false: store.RoleViewer}[admin])
-	return e.signIn("github", "gh")
+	return e.userOn("main", admin, visible...)
+}
+
+// userOnGH is alice's session on gh: see userOn.
+func (e *env) userOnGH(admin bool, visible ...string) *http.Cookie {
+	e.t.Helper()
+	return e.userOn("gh", admin, visible...)
 }
 
 func (e *env) get(c *http.Cookie, target string) *httptest.ResponseRecorder {
@@ -223,7 +229,7 @@ func (e *env) exec(sql string, args ...any) {
 
 // runFix is a run to store. Zero fields take defaults: instance main,
 // target main, published, created an hour before the clock, a 2-minute Job,
-// the project ID the fake platforms give its path.
+// the project ID tests give its path (testID).
 // outcome, reason, status and approved are the publisher's recorded
 // decision (status defaults from the outcome); model and sources (JSON)
 // what the dispatcher recorded.
@@ -270,9 +276,12 @@ func (e *env) addRun(f runFix) string {
 		f.duration = 2 * time.Minute
 	}
 	if f.projectID == 0 {
-		// The ID the fake platforms give the project.
 		f.projectID = testID(f.project)
 	}
+	// The project reconcile would have stored (a session's repositories get
+	// their project ID from here), unless a test stored it already.
+	e.exec(`INSERT INTO projects (instance, project_id, path) VALUES ($1, $2, $3) ON CONFLICT (instance, project_id) DO NOTHING`,
+		f.instance, f.projectID, f.project)
 	mr := store.MRKey{Instance: f.instance, ProjectID: f.projectID, IID: f.number}
 	id, _, err := e.st.EnqueueRun(ctx, mr, f.project, f.head, f.target)
 	if err != nil {
@@ -396,7 +405,7 @@ func overviewFixture(e *env) {
 func TestOverview(t *testing.T) {
 	e := newEnv(t, nil)
 	overviewFixture(e)
-	c := e.signInGitLab(false, "acme/widgets")
+	c := e.userOnMain(false, "acme/widgets")
 
 	ov := getJSON[OverviewView](e, c, "/api/overview")
 	if want := (StatsView{Reviews: 4, Approved: 1, Blocking: 1, Failed: 1}); ov.Stats != want {
@@ -440,19 +449,21 @@ func TestOverview(t *testing.T) {
 func TestOverviewInstanceItemsOnlyForAdmins(t *testing.T) {
 	e := newEnv(t, nil)
 	overviewFixture(e)
-	c := e.signInGitLab(true, "acme/widgets")
+	c := e.userOnMain(true, "acme/widgets")
 	ov := getJSON[OverviewView](e, c, "/api/overview")
 	var kinds []string
 	for _, a := range ov.Attention {
 		kinds = append(kinds, a.Instance+"/"+a.Project+"/"+a.Kind)
 	}
-	if strings.Join(kinds, ",") != "main//token_expiry,main/acme/widgets/single_approval" {
+	// An admin sees the setup problems of every instance.
+	want := "gh/acme/widgets/approver_unreachable,main//token_expiry,main/acme/payments/out_of_memory,main/acme/widgets/single_approval"
+	if strings.Join(kinds, ",") != want {
 		t.Errorf("admin attention = %v", kinds)
 	}
 }
 
-// Setup problems are shown only for repositories switched on, even when the
-// session's access list (refreshed every 5 minutes) still names one.
+// Setup problems are shown only for repositories switched on, even when a
+// team still names one.
 func TestAttentionOnlyForActiveRepos(t *testing.T) {
 	e := newEnv(t, nil)
 	if err := e.st.UpsertDashboardRepo(ctx, store.DashboardRepo{Instance: "main", Project: "acme/tools"}); err != nil {
@@ -461,7 +472,7 @@ func TestAttentionOnlyForActiveRepos(t *testing.T) {
 	if err := e.st.SetAttention(ctx, "main", "acme/tools", "out_of_memory", "tools ran out of memory"); err != nil {
 		t.Fatal(err)
 	}
-	c := e.signInGitLab(false, "acme/widgets", "acme/tools")
+	c := e.userOnMain(false, "acme/widgets", "acme/tools")
 	if ov := getJSON[OverviewView](e, c, "/api/overview"); len(ov.Attention) != 1 {
 		t.Fatalf("attention while switched on = %+v", ov.Attention)
 	}
@@ -483,7 +494,7 @@ func TestReviewsList(t *testing.T) {
 	// Older than the default 90 days.
 	e.addRun(runFix{project: "acme/widgets", number: 8, head: head('8'), outcome: OutcomeApproved, approved: true,
 		at: e.clock.now().Add(-100 * 24 * time.Hour)})
-	c := e.signInGitLab(false, "acme/widgets")
+	c := e.userOnMain(false, "acme/widgets")
 
 	numbers := func(v ReviewListView) string {
 		var out []string
@@ -524,7 +535,7 @@ func TestReviewsListPages(t *testing.T) {
 		}
 		e.addRun(f)
 	}
-	c := e.signInGitLab(false, "acme/widgets")
+	c := e.userOnMain(false, "acme/widgets")
 
 	var all []int64
 	cursor := ""
@@ -574,7 +585,7 @@ func TestReviewDetail(t *testing.T) {
 		result: cleanResult(head('b')), outcome: OutcomeApproved, approved: true, at: now.Add(-time.Hour), duration: 90 * time.Second,
 		title: "Add login", webURL: "https://gitlab.example.com/acme/widgets/-/merge_requests/3",
 		sourceBranch: "feature/login", user: "bob"})
-	c := e.signInGitLab(false, "acme/widgets")
+	c := e.userOnMain(false, "acme/widgets")
 
 	v := getJSON[ReviewDetailView](e, c, "/api/reviews/main/Acme/Widgets/3")
 	wantHeader := ReviewHeader{Instance: "main", Project: "acme/widgets", Platform: "gitlab", Number: 3,
@@ -642,7 +653,7 @@ func TestReviewOutcomes(t *testing.T) {
 	add(runFix{number: 11, state: store.Superseded, reason: store.SupersededDraft})
 	// Published, then superseded by a review of the same head again.
 	add(runFix{number: 12, state: store.Superseded, reason: "Blocking issues found"})
-	c := e.signInGitLab(false, "acme/widgets")
+	c := e.userOnMain(false, "acme/widgets")
 
 	byNumber := map[int64]ReviewSummary{}
 	for _, r := range getJSON[ReviewListView](e, c, "/api/reviews").Items {
@@ -715,7 +726,7 @@ func TestRunDetail(t *testing.T) {
 	older := e.addRun(runFix{project: "acme/widgets", number: 5, head: head('c'), result: cleanResult(head('c')),
 		outcome: OutcomeApproved, approved: true})
 	e.cfg.LLM.Model = "a-newer-model" // changed since: the runs keep theirs
-	c := e.signInGitLab(false, "acme/widgets")
+	c := e.userOnMain(false, "acme/widgets")
 
 	v := getJSON[RunDetailView](e, c, "/api/runs/"+id)
 	if v.Run.ID != id || v.Run.Outcome != OutcomeBlocking || v.Run.Trigger != "first" || v.Instance != "main" ||
@@ -790,7 +801,7 @@ func TestRunLog(t *testing.T) {
 	if err := e.st.PutRunLog(ctx, id, "cloning...\ntoken [REDACTED]\n"); err != nil {
 		t.Fatal(err)
 	}
-	c := e.signInGitLab(false, "acme/widgets")
+	c := e.userOnMain(false, "acme/widgets")
 	if v := getJSON[LogView](e, c, "/api/runs/"+id+"/log"); v.Text != "cloning...\ntoken [REDACTED]\n" {
 		t.Errorf("log = %q", v.Text)
 	}
@@ -804,7 +815,7 @@ func TestRepositories(t *testing.T) {
 	if err := e.st.UpsertDashboardRepo(ctx, store.DashboardRepo{Instance: "main", Project: "acme/tools"}); err != nil {
 		t.Fatal(err)
 	}
-	c := e.signInGitLab(false, "acme/widgets", "acme/tools")
+	c := e.userOnMain(false, "acme/widgets", "acme/tools")
 
 	repos := getJSON[[]RepositoryView](e, c, "/api/repositories")
 	want := []RepositoryView{
@@ -831,7 +842,7 @@ func TestRepositoryDetail(t *testing.T) {
 	if err := e.st.SetAttention(ctx, "main", "acme/widgets", "single_approval", "One approval is enough."); err != nil {
 		t.Fatal(err)
 	}
-	c := e.signInGitLab(false, "acme/widgets")
+	c := e.userOnMain(false, "acme/widgets")
 
 	v := getJSON[RepositoryDetailView](e, c, "/api/repositories/main/ACME/widgets")
 	if v.Repo.Project != "acme/widgets" || v.Repo.Source != "config" || v.Repo.Health != "attention" {
@@ -870,7 +881,7 @@ func TestRepositoryInputs(t *testing.T) {
 		f.files["AGENTS.md"] = "Be kind."
 		f.files[".pergent/instructions.md"] = "Check migrations."
 	})
-	c := e.signInGitLab(false, "acme/widgets")
+	c := e.userOnMain(false, "acme/widgets")
 
 	v := getJSON[InputsView](e, c, "/api/repositories/main/acme/widgets/inputs")
 	if v.Branch != "trunk" {
@@ -902,7 +913,6 @@ func TestRepositoryInputs(t *testing.T) {
 		t.Errorf("a second view read the repository again")
 	}
 	e.clock.advance(6 * time.Minute)
-	e.gl.setProject("acme/widgets", gitlabProject("private", 20, 0))
 	src.set(func(f *fakeSource) { f.fail = errors.New("gitlab: status 500: internal " + reviewToken) })
 	rec := e.wantStatus(c, "/api/repositories/main/acme/widgets/inputs", http.StatusBadGateway)
 	if strings.Contains(rec.Body.String(), "500") || strings.Contains(rec.Body.String(), reviewToken) {
@@ -932,7 +942,7 @@ func TestRepositoryInputsSkillRemovedFromLibrary(t *testing.T) {
 	// removal that raced a save.
 	e.exec(`DELETE FROM library_skills WHERE name = 'gone'`)
 
-	c := e.signInGitLab(false, "acme/tools", "acme/old")
+	c := e.userOnMain(false, "acme/tools", "acme/old")
 	for project, want := range map[string]string{
 		"acme/tools": `code-review:Review the code.:,gone::skill "gone" is not in the skill library`,
 		"acme/old":   `gone::skill "gone" is not in the skill library`,
@@ -953,24 +963,18 @@ func TestRepositoryInputsHidden(t *testing.T) {
 	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: testID("acme/payments"), Path: "acme/payments"}); err != nil {
 		t.Fatal(err)
 	}
-	c := e.signInGitLab(false, "acme/widgets")
+	c := e.userOnMain(false, "acme/widgets")
 	e.wantStatus(c, "/api/repositories/main/acme/payments/inputs", http.StatusNotFound)
 	if n := e.src["main"].callCount(); n != 0 {
 		t.Errorf("%d reads of a repository the user can't see", n)
 	}
-	// A repository reconcile hasn't stored yet: try again soon.
+	// A repository covered but not stored yet by reconcile: try again soon.
 	rec := e.wantStatus(c, "/api/repositories/main/acme/widgets/inputs", http.StatusServiceUnavailable)
 	if !strings.Contains(rec.Body.String(), "try again in a minute") {
 		t.Errorf("503 body = %s", rec.Body)
 	}
-	// Nor is one stored for a project that had its path before: it is
-	// never read.
-	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: 7, Path: "acme/widgets"}); err != nil {
-		t.Fatal(err)
-	}
-	e.wantStatus(c, "/api/repositories/main/acme/widgets/inputs", http.StatusServiceUnavailable)
 	if n := e.src["main"].callCount(); n != 0 {
-		t.Errorf("%d reads of an earlier project at the path", n)
+		t.Errorf("%d reads of a repository that is not stored yet", n)
 	}
 }
 
@@ -984,7 +988,7 @@ func TestRepositoryInputsReadOnce(t *testing.T) {
 	src := e.src["main"]
 	gate, entered := make(chan struct{}), make(chan struct{}, 10)
 	src.set(func(f *fakeSource) { f.gate, f.entered = gate, entered })
-	c := e.signInGitLab(false, "acme/widgets")
+	c := e.userOnMain(false, "acme/widgets")
 
 	const n = 5
 	codes := make(chan int, n)
@@ -1014,80 +1018,14 @@ func TestRepositoryInputsReadOnce(t *testing.T) {
 	}
 }
 
-func TestIntegrations(t *testing.T) {
-	e := newEnv(t, withSecrets(t))
-	if err := e.st.UpsertProject(ctx, store.Project{Instance: "main", ProjectID: 7, Path: "acme/widgets", HookID: 3,
-		DeployTokenID: 4, DeployTokenUsername: "deploy-user", DeployTokenSealed: []byte(deployToken)}); err != nil {
-		t.Fatal(err)
-	}
-	c := e.signInGitLab(true, "acme/widgets")
-	v := getJSON[IntegrationView](e, c, "/api/integrations")
-	want := IntegrationView{Instance: "main", Platform: "gitlab", Connected: true, Approver: "token",
-		Repos: []IntegrationRepo{{Project: "acme/widgets", Installed: true, ApproverReachable: true, InlineAvailable: true, ProtectionReadable: true}}}
-	if v.Instance != want.Instance || v.Platform != want.Platform || !v.Connected || v.Approver != want.Approver ||
-		v.TokenExpiry != nil || len(v.Repos) != 1 || v.Repos[0] != want.Repos[0] {
-		t.Errorf("integrations = %+v\nwant %+v", v, want)
-	}
-}
-
-func TestIntegrationsGitHub(t *testing.T) {
-	e := newEnv(t, withSecrets(t))
-	if err := e.st.UpsertGitHubProject(ctx, store.Project{Instance: "gh", ProjectID: 900, Path: "acme/widgets",
-		InstallationID: 55, ApproveAvailable: false}); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.st.SetAttention(ctx, "gh", "", "token_expiry", "The approve bot's token expires on 2026-11-10."); err != nil {
-		t.Fatal(err)
-	}
-	c := e.signInGitHub(true, "acme/widgets")
-	v := getJSON[IntegrationView](e, c, "/api/integrations")
-	if v.Instance != "gh" || v.Platform != "github" || v.Approver != "token" || v.TokenExpiry == nil ||
-		!v.TokenExpiry.Equal(time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)) {
-		t.Errorf("integrations = %+v", v)
-	}
-	// The review App has Pull requests: Read-only there.
-	if len(v.Repos) != 1 || v.Repos[0] != (IntegrationRepo{Project: "acme/widgets", Installed: true, ApproverReachable: false, InlineAvailable: false, ProtectionReadable: false}) {
-		t.Errorf("repos = %+v", v.Repos)
-	}
-
-	// Once the permission is read and write, inline is available.
-	if err := e.st.UpsertGitHubProject(ctx, store.Project{Instance: "gh", ProjectID: 900, Path: "acme/widgets",
-		InstallationID: 55, InlineAvailable: true}); err != nil {
-		t.Fatal(err)
-	}
-	v = getJSON[IntegrationView](e, c, "/api/integrations")
-	if len(v.Repos) != 1 || !v.Repos[0].InlineAvailable {
-		t.Errorf("repos after the permission = %+v; want inline available", v.Repos)
-	}
-
-	// Administration: Read turns protectionReadable on.
-	if err := e.st.UpsertGitHubProject(ctx, store.Project{Instance: "gh", ProjectID: 900, Path: "acme/widgets",
-		InstallationID: 55, InlineAvailable: true, ProtectionReadable: true}); err != nil {
-		t.Fatal(err)
-	}
-	v = getJSON[IntegrationView](e, c, "/api/integrations")
-	if len(v.Repos) != 1 || !v.Repos[0].ProtectionReadable {
-		t.Errorf("repos after Administration: Read = %+v; want protection readable", v.Repos)
-	}
-
-	// Without the review App there is nothing to say about inline.
-	if err := e.st.UpsertGitHubProject(ctx, store.Project{Instance: "gh", ProjectID: 900, Path: "acme/widgets"}); err != nil {
-		t.Fatal(err)
-	}
-	v = getJSON[IntegrationView](e, c, "/api/integrations")
-	if len(v.Repos) != 1 || v.Repos[0].Installed || !v.Repos[0].InlineAvailable || !v.Repos[0].ProtectionReadable {
-		t.Errorf("repos without an installation = %+v; want not installed, nothing reported off", v.Repos)
-	}
-}
-
 func TestAdminSettings(t *testing.T) {
 	e := newEnv(t, withSecrets(t))
-	c := e.signInGitLab(true, "acme/widgets")
+	c := e.userOnMain(true, "acme/widgets")
 	v := getJSON[AdminSettingsView](e, c, "/api/admin/settings")
 	// The built-in layout, spelled out: the server builds it from pergent's
 	// render.DefaultLayout and a change there should show here.
 	layout := []string{"summary:open", "findings:collapsed", "dismissed:collapsed", "checks:open", "files:collapsed"}
-	want := AdminSettingsView{Instance: "main",
+	want := AdminSettingsView{
 		Defaults: DefaultsView{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, LearnFromDismissals: true, CommentLayout: layout, FailureStatus: "failed",
 			JobTimeoutSeconds: 600, MaxTurns: 40,
 			RerunLimitPerMR: 10, RerunLimitPerRepo: 50, Skills: []string{},
@@ -1104,13 +1042,13 @@ func TestAdminSettings(t *testing.T) {
 	}
 }
 
-func TestAdminEndpointsForbiddenToDevelopers(t *testing.T) {
+func TestAdminEndpointsNotFoundForDevelopers(t *testing.T) {
 	e := newEnv(t, withSecrets(t))
-	c := e.signInGitLab(false, "acme/widgets")
-	for _, target := range []string{"/api/integrations", "/api/admin/settings"} {
-		rec := e.wantStatus(c, target, http.StatusForbidden)
+	c := e.userOnMain(false, "acme/widgets")
+	for _, target := range []string{"/api/admin/settings"} {
+		rec := e.wantStatus(c, target, http.StatusNotFound)
 		if strings.Contains(rec.Body.String(), "anthropic") || strings.Contains(rec.Body.String(), "acme/widgets") {
-			t.Errorf("403 body of %s = %s", target, rec.Body)
+			t.Errorf("404 body of %s = %s", target, rec.Body)
 		}
 	}
 }
@@ -1129,86 +1067,78 @@ func readEndpoints(id string) []string {
 		"/api/overview", "/api/reviews", "/api/reviews?project=acme/widgets",
 		"/api/reviews/main/acme/widgets/1", "/api/runs/" + id, "/api/runs/" + id + "/log",
 		"/api/repositories", "/api/repositories/main/acme/widgets", "/api/repositories/main/acme/widgets/inputs",
-		"/api/skills", "/api/integrations", "/api/admin/settings", "/api/me",
+		"/api/skills", "/api/admin/settings", "/api/me",
 	}
 }
 
-// A repository the user can't see never shows in a list, and its own URLs
-// are 404, for a developer and for an admin.
+// A repository the user's teams don't cover never shows in a list, and its
+// own URLs are 404.
 func TestReadAPIHidesInvisibleRepos(t *testing.T) {
-	for _, admin := range []bool{false, true} {
-		t.Run(fmt.Sprint("admin=", admin), func(t *testing.T) {
-			e := newEnv(t, nil)
-			overviewFixture(e)
-			hidden := e.addRun(runFix{project: "acme/payments", projectID: 8, number: 9, head: head('9'),
-				result: blockingResult(head('9')), title: "Payments secret change"})
-			if err := e.st.PutRunLog(ctx, hidden, "payments log"); err != nil {
-				t.Fatal(err)
-			}
-			// MR 20 moved from acme/widgets into acme/payments: its later
-			// run is hidden.
-			moved := e.addRun(runFix{project: "acme/widgets", number: 20, head: head('a'), outcome: OutcomeBlocking,
-				at: e.clock.now().Add(-2 * time.Hour)})
-			movedHidden := e.addRun(runFix{project: "acme/payments", number: 20, head: head('b'), outcome: OutcomeApproved,
-				approved: true, title: "Moved payments change"})
-			for _, p := range []store.Project{{Instance: "main", ProjectID: 7, Path: "acme/widgets", HookID: 1},
-				{Instance: "main", ProjectID: 8, Path: "acme/payments", HookID: 2}} {
-				if err := e.st.UpsertProject(ctx, p); err != nil {
-					t.Fatal(err)
-				}
-			}
-			c := e.signInGitLab(admin, "acme/widgets")
+	e := newEnv(t, nil)
+	overviewFixture(e)
+	hidden := e.addRun(runFix{project: "acme/payments", projectID: 8, number: 9, head: head('9'),
+		result: blockingResult(head('9')), title: "Payments secret change"})
+	if err := e.st.PutRunLog(ctx, hidden, "payments log"); err != nil {
+		t.Fatal(err)
+	}
+	// MR 20 moved from acme/widgets into acme/payments: its later
+	// run is hidden.
+	moved := e.addRun(runFix{project: "acme/widgets", number: 20, head: head('a'), outcome: OutcomeBlocking,
+		at: e.clock.now().Add(-2 * time.Hour)})
+	movedHidden := e.addRun(runFix{project: "acme/payments", number: 20, head: head('b'), outcome: OutcomeApproved,
+		approved: true, title: "Moved payments change"})
+	for _, p := range []store.Project{{Instance: "main", ProjectID: 7, Path: "acme/widgets", HookID: 1},
+		{Instance: "main", ProjectID: 8, Path: "acme/payments", HookID: 2}} {
+		if err := e.st.UpsertProject(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := e.userOnMain(false, "acme/widgets")
 
-			for _, target := range []string{"/api/overview", "/api/overview?days=90", "/api/reviews",
-				"/api/reviews?project=acme/payments", "/api/repositories", "/api/integrations"} {
-				rec := e.get(c, target)
-				if target == "/api/integrations" && !admin {
-					continue
-				}
-				if rec.Code != http.StatusOK {
-					t.Errorf("GET %s = %d", target, rec.Code)
-				}
-				if body := strings.ToLower(rec.Body.String()); strings.Contains(body, "payments") || strings.Contains(body, hidden) {
-					t.Errorf("GET %s shows acme/payments: %s", target, rec.Body)
-				}
-			}
-			for _, target := range []string{
-				"/api/reviews/main/acme/payments/9", "/api/reviews/main/acme/payments/5",
-				"/api/runs/" + hidden, "/api/runs/" + hidden + "/log", "/api/runs/" + movedHidden,
-				"/api/reviews/main/acme/payments/20",
-				"/api/repositories/main/acme/payments", "/api/repositories/main/acme/payments/inputs",
-				// Another instance's repository with the same path.
-				"/api/reviews/gh/acme/widgets/7", "/api/repositories/gh/acme/widgets",
-			} {
-				rec := e.wantStatus(c, target, http.StatusNotFound)
-				if strings.Contains(strings.ToLower(rec.Body.String()), "payments") {
-					t.Errorf("404 body of %s = %s", target, rec.Body)
-				}
-			}
-			if n := e.src["main"].callCount(); n != 0 {
-				t.Errorf("%d repository reads for hidden repositories", n)
-			}
-			// The moved MR's visible run is shown, its hidden one isn't.
-			v := getJSON[ReviewDetailView](e, c, "/api/reviews/main/acme/widgets/20")
-			if len(v.Runs) != 1 || v.Runs[0].ID != moved {
-				t.Errorf("moved MR runs = %+v; want only %s", v.Runs, moved)
-			}
-			body := e.get(c, "/api/reviews/main/acme/widgets/20").Body.String()
-			if strings.Contains(body, movedHidden) || strings.Contains(strings.ToLower(body), "payments") {
-				t.Errorf("moved MR shows its hidden run: %s", body)
-			}
-			if d := getJSON[RunDetailView](e, c, "/api/runs/"+moved); d.Run.ID != moved {
-				t.Errorf("moved MR's visible run = %+v", d.Run)
-			}
-		})
+	for _, target := range []string{"/api/overview", "/api/overview?days=90", "/api/reviews",
+		"/api/reviews?project=acme/payments", "/api/repositories"} {
+		rec := e.get(c, target)
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s = %d", target, rec.Code)
+		}
+		if body := strings.ToLower(rec.Body.String()); strings.Contains(body, "payments") || strings.Contains(body, hidden) {
+			t.Errorf("GET %s shows acme/payments: %s", target, rec.Body)
+		}
+	}
+	for _, target := range []string{
+		"/api/reviews/main/acme/payments/9", "/api/reviews/main/acme/payments/5",
+		"/api/runs/" + hidden, "/api/runs/" + hidden + "/log", "/api/runs/" + movedHidden,
+		"/api/reviews/main/acme/payments/20",
+		"/api/repositories/main/acme/payments", "/api/repositories/main/acme/payments/inputs",
+		// Another instance's repository with the same path.
+		"/api/reviews/gh/acme/widgets/7", "/api/repositories/gh/acme/widgets",
+	} {
+		rec := e.wantStatus(c, target, http.StatusNotFound)
+		if strings.Contains(strings.ToLower(rec.Body.String()), "payments") {
+			t.Errorf("404 body of %s = %s", target, rec.Body)
+		}
+	}
+	if n := e.src["main"].callCount(); n != 0 {
+		t.Errorf("%d repository reads for hidden repositories", n)
+	}
+	// The moved MR's visible run is shown, its hidden one isn't.
+	v := getJSON[ReviewDetailView](e, c, "/api/reviews/main/acme/widgets/20")
+	if len(v.Runs) != 1 || v.Runs[0].ID != moved {
+		t.Errorf("moved MR runs = %+v; want only %s", v.Runs, moved)
+	}
+	body := e.get(c, "/api/reviews/main/acme/widgets/20").Body.String()
+	if strings.Contains(body, movedHidden) || strings.Contains(strings.ToLower(body), "payments") {
+		t.Errorf("moved MR shows its hidden run: %s", body)
+	}
+	if d := getJSON[RunDetailView](e, c, "/api/runs/"+moved); d.Run.ID != moved {
+		t.Errorf("moved MR's visible run = %+v", d.Run)
 	}
 }
 
-// No response of the read API holds a token, key or secret: not the
-// integrations' nor any other.
-func TestNoSecretInIntegrations(t *testing.T) {
-	for _, platform := range []string{"gitlab", "github"} {
-		t.Run(platform, func(t *testing.T) {
+// No response of the read API holds a token, key or secret.
+func TestNoSecretInTheReadAPI(t *testing.T) {
+	for _, instance := range []string{"main", "gh"} {
+		t.Run(instance, func(t *testing.T) {
 			e := newEnv(t, withSecrets(t))
 			overviewFixture(e)
 			id := e.addRun(runFix{project: "acme/widgets", number: 1, head: head('1'), result: cleanResult(head('1'))})
@@ -1223,25 +1153,26 @@ func TestNoSecretInIntegrations(t *testing.T) {
 				InstallationID: 55, ApproveAvailable: true}); err != nil {
 				t.Fatal(err)
 			}
-			var c *http.Cookie
-			if platform == "gitlab" {
-				c = e.signInGitLab(true, "acme/widgets")
-			} else {
-				c = e.signInGitHub(true, "acme/widgets")
-			}
-			secrets := append([]string{llmKey, reviewToken, approveToken, webhookSecret, deployToken, ghAppKey,
-				glClientSecret, ghClientSecret, e.key, c.Value, "deploy-user", "llm.example.com"},
-				append(e.gl.tokens(), e.gh.tokens()...)...)
+			c := e.userOnMain(true)
+			secrets := []string{llmKey, reviewToken, approveToken, webhookSecret, deployToken, ghAppKey,
+				e.key, c.Value, "deploy-user", "llm.example.com"}
 
 			targets := readEndpoints(id)
 			targets = append(targets, "/api/reviews/gh/acme/widgets/7", "/api/repositories/gh/acme/widgets",
-				"/api/repositories/gh/acme/widgets/inputs")
+				"/api/repositories/gh/acme/widgets/inputs",
+				"/api/admin/instances", "/api/admin/llm", "/api/admin/defaults")
 			for _, target := range targets {
 				rec := e.get(c, target)
 				if rec.Code >= 500 && rec.Code != http.StatusBadGateway {
 					t.Errorf("GET %s = %d %s", target, rec.Code, rec.Body)
 				}
 				for _, s := range secrets {
+					// The model's address is public to everyone on the read API
+					// and shown to admins, by design, on their LLM page: no key,
+					// token or secret may be in it either way.
+					if s == "llm.example.com" && target == "/api/admin/llm" {
+						continue
+					}
 					if s != "" && strings.Contains(rec.Body.String(), s) {
 						t.Errorf("GET %s shows the secret %q: %s", target, s, rec.Body)
 					}
@@ -1249,9 +1180,6 @@ func TestNoSecretInIntegrations(t *testing.T) {
 				if strings.Contains(rec.Body.String(), "SECRET") {
 					t.Errorf("GET %s shows a secret: %s", target, rec.Body)
 				}
-			}
-			if v := getJSON[IntegrationView](e, c, "/api/integrations"); len(v.Repos) != 1 {
-				t.Errorf("integrations = %+v", v)
 			}
 		})
 	}
@@ -1269,7 +1197,7 @@ func TestReusedPathHidesEarlierProject(t *testing.T) {
 	}
 	newRun := e.addRun(runFix{project: "acme/widgets", number: 2, head: head('2'),
 		result: cleanResult(head('2')), outcome: OutcomeApproved, approved: true, title: "New project's change"})
-	c := e.signInGitLab(false, "acme/widgets") // the project at the path now: testID("acme/widgets")
+	c := e.userOnMain(false, "acme/widgets") // the project at the path now: testID("acme/widgets")
 
 	if _, se := e.session(c); se.Visible[RepoKey{"main", "acme/widgets"}] != testID("acme/widgets") {
 		t.Fatalf("visible = %v", se.Visible)
@@ -1321,7 +1249,7 @@ func TestSetupChecklist(t *testing.T) {
 	if got := setup(); got == nil || *got != (SetupView{LLM: true}) {
 		t.Errorf("with an LLM = %+v", got)
 	}
-	e.cfg.GitLab = []config.Instance{{Name: "main", URL: e.gl.srv.URL}}
+	e.cfg.GitLab = []config.Instance{{Name: "main", URL: glURL}}
 	if got := setup(); got == nil || *got != (SetupView{LLM: true, Instance: true}) {
 		t.Errorf("with an instance = %+v", got)
 	}
@@ -1345,13 +1273,12 @@ func TestSetupChecklist(t *testing.T) {
 
 func TestSetupChecklistOnlyForAdmins(t *testing.T) {
 	e := newEnv(t, nil) // no LLM, no skill: not set up
-	viewer := e.signInGitLab(false, "acme/widgets")
+	viewer := e.userOnMain(false, "acme/widgets")
 	if ov := getJSON[OverviewView](e, viewer, "/api/overview"); ov.Setup != nil {
 		t.Errorf("viewer setup = %+v, want null", ov.Setup)
 	}
-	e.team("admins", store.RoleAdmin, []int64{e.alice("main")})
-	admin := e.signIn("gitlab", "main", viewer)
-	ov := getJSON[OverviewView](e, admin, "/api/overview")
+	e.ssoAdmin(aliceEmail) // the same session, now an admin's
+	ov := getJSON[OverviewView](e, viewer, "/api/overview")
 	if ov.Setup == nil || ov.Setup.LLM || ov.Setup.Skill || !ov.Setup.Instance || !ov.Setup.Repository {
 		t.Errorf("admin setup = %+v", ov.Setup)
 	}
@@ -1367,7 +1294,7 @@ func TestRunDetailSkillVersionAndFolder(t *testing.T) {
 	id := e.addRun(runFix{project: "acme/widgets", number: 1, head: head('a'), result: res, outcome: OutcomeApproved,
 		approved: true, sources: `{"code-review":"library","team-rules":".agents/skills","old-run":"repo"}`,
 		versions: `{"code-review":3}`})
-	c := e.signInGitLab(false, "acme/widgets")
+	c := e.userOnMain(false, "acme/widgets")
 
 	v := getJSON[RunDetailView](e, c, "/api/runs/"+id)
 	if len(v.Skills) != 4 {
@@ -1417,7 +1344,7 @@ func TestRunDetailIncrementalNote(t *testing.T) {
 	waiting := e.addRun(runFix{project: "acme/widgets", number: 4, head: head('d'), result: cleanResult(head('d')), state: store.Reported, incremental: true})
 	errored := e.addRun(runFix{project: "acme/widgets", number: 5, head: head('e'), state: store.Superseded, incremental: true,
 		result: `{"schema_version":1,"status":"error","base":"` + baseSHA + `","head":"` + head('e') + `","comment":{"markdown":"x"}}`})
-	c := e.signInGitLab(false, "acme/widgets")
+	c := e.userOnMain(false, "acme/widgets")
 
 	for name, id := range map[string]string{"a reported run": waiting, "an error result": errored} {
 		if v := getJSON[RunDetailView](e, c, "/api/runs/"+id); v.IncrementalNote != "" {
@@ -1444,7 +1371,7 @@ func TestRunDetailQuiet(t *testing.T) {
 	e := newEnv(t, nil)
 	quiet := e.addRun(runFix{project: "acme/widgets", number: 1, head: head('a'), result: cleanResult(head('a')), outcome: OutcomeApproved, approved: true, quiet: true})
 	plain := e.addRun(runFix{project: "acme/widgets", number: 2, head: head('b'), result: cleanResult(head('b')), outcome: OutcomeApproved, approved: true})
-	c := e.signInGitLab(false, "acme/widgets")
+	c := e.userOnMain(false, "acme/widgets")
 
 	if v := getJSON[RunDetailView](e, c, "/api/runs/"+quiet); !v.Quiet {
 		t.Errorf("quiet = false for a quiet run")
@@ -1466,7 +1393,7 @@ func TestSkippedRunOutcome(t *testing.T) {
 		skipReason: "this repository has no skills", at: now.Add(-time.Minute)})
 	e.addRun(runFix{project: "acme/widgets", number: 2, head: head('2'), outcome: OutcomeFailed,
 		failure: "the review Job ran out of memory (OOMKilled)", at: now.Add(-2 * time.Minute)})
-	c := e.signInGitLab(false, "acme/widgets")
+	c := e.userOnMain(false, "acme/widgets")
 
 	const reason = "Not reviewed: this repository has no skills."
 	byNumber := map[int64]ReviewSummary{}
@@ -1515,14 +1442,14 @@ func TestRepoSkillURLGitLab(t *testing.T) {
 		f.files[".pergent/skills/team-rules.md"] = skillFile("team-rules")
 		f.files[".agents/skills/agent-rules.md"] = skillFile("agent-rules")
 	})
-	c := e.signInGitLab(false, "acme/widgets")
+	c := e.userOnMain(false, "acme/widgets")
 
 	v := getJSON[InputsView](e, c, "/api/repositories/main/acme/widgets/inputs")
 	urls := map[string]string{}
 	for _, s := range v.Skills {
 		urls[s.Name] = s.URL
 	}
-	base := e.gl.srv.URL + "/acme/widgets/-/blob/release/1.x/"
+	base := glURL + "/acme/widgets/-/blob/release/1.x/"
 	if urls["team-rules"] != base+".pergent/skills/team-rules.md" || urls["agent-rules"] != base+".agents/skills/agent-rules.md" {
 		t.Errorf("urls = %v", urls)
 	}
@@ -1539,16 +1466,16 @@ func TestRepoSkillURLGitHub(t *testing.T) {
 	e.src["gh"].set(func(f *fakeSource) {
 		f.files[".claude/skills/claude-rules.md"] = skillFile("claude-rules")
 	})
-	c := e.signInGitHub(false, "acme/widgets")
+	c := e.userOnGH(false, "acme/widgets")
 
 	v := getJSON[InputsView](e, c, "/api/repositories/gh/acme/widgets/inputs")
-	// The fake instance's API is at <server>/api/v3, so its web address is the server.
-	want := e.gh.srv.URL + "/acme/widgets/blob/trunk/.claude/skills/claude-rules.md"
+	// The instance's API is at <host>/api/v3, so its web address is the host.
+	want := "https://github.example.com/acme/widgets/blob/trunk/.claude/skills/claude-rules.md"
 	if len(v.Skills) != 1 || v.Skills[0].URL != want {
 		t.Errorf("skills = %+v, want url %s", v.Skills, want)
 	}
 
-	// github.com, and the web address of an enterprise server (as sign-in's).
+	// github.com, and the web address of an enterprise server.
 	for api, web := range map[string]string{
 		"":                                "https://github.com",
 		"https://api.github.com":          "https://github.com",
@@ -1579,8 +1506,8 @@ func TestRepoSkillURLEscapesPath(t *testing.T) {
 }
 
 // An item with no instance is about the library as a whole: every admin
-// sees it, whichever instance they signed in with; a viewer never does.
-func TestGlobalAttentionForPlatformAdmin(t *testing.T) {
+// sees it; a viewer never does.
+func TestGlobalAttentionForAdmins(t *testing.T) {
 	kinds := func(e *env, c *http.Cookie) string {
 		var out []string
 		for _, a := range getJSON[OverviewView](e, c, "/api/overview").Attention {
@@ -1592,9 +1519,9 @@ func TestGlobalAttentionForPlatformAdmin(t *testing.T) {
 		signIn func(e *env) *http.Cookie
 		want   string
 	}{
-		"viewer":         {func(e *env) *http.Cookie { return e.signInGitLab(false, "acme/widgets") }, ""},
-		"platform admin": {func(e *env) *http.Cookie { return e.signInGitLab(true, "acme/widgets") }, "//library_problem"},
-		"operator":       {func(e *env) *http.Cookie { return e.signInOperator() }, "//library_problem,gh//token_expiry"},
+		"viewer":      {func(e *env) *http.Cookie { return e.userOnMain(false, "acme/widgets") }, ""},
+		"sso admin":   {func(e *env) *http.Cookie { return e.userOnMain(true) }, "//library_problem,gh//token_expiry"},
+		"local admin": {func(e *env) *http.Cookie { return e.signInOperator() }, "//library_problem,gh//token_expiry"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := newEnv(t, nil)
@@ -1608,21 +1535,6 @@ func TestGlobalAttentionForPlatformAdmin(t *testing.T) {
 				t.Errorf("attention = %q, want %q", got, tc.want)
 			}
 		})
-	}
-}
-
-// An instance whose review App approves is reported as such.
-func TestIntegrationsGitHubReviewAppApprover(t *testing.T) {
-	with := withSecrets(t)
-	e := newEnv(t, func(c *config.Config) {
-		with(c)
-		// withSecrets gives the instance an approve token: exactly one
-		// approver may be set.
-		c.GitHub[0].ApproveTokenEnv, c.GitHub[0].ApproveWithReviewApp = "", true
-	})
-	c := e.signInGitHub(true, "acme/widgets")
-	if v := getJSON[IntegrationView](e, c, "/api/integrations"); v.Approver != "review_app" {
-		t.Errorf("approver = %q, want review_app", v.Approver)
 	}
 }
 

@@ -9,8 +9,7 @@
 // serve needs DATABASE_URL and PERGENT_SH_SECRET_KEY in the environment, plus
 // the LLM key, the GitLab tokens, the GitHub App private keys (or approve
 // token) and the webhook secrets the config file names. With dashboard.url
-// set it also serves the dashboard, and needs the OAuth client ID and secret
-// of every instance the config sets up for sign-in.
+// set it also serves the dashboard.
 //
 // admin reset-password gives a dashboard password account a new random
 // password, printed on stdout, which must be changed at the next sign-in. It
@@ -162,10 +161,15 @@ func parseArgs(args []string, stderr io.Writer) (cmd command, err error) {
 }
 
 // warnTimeouts logs, once each, the timeouts in cfg that are short for their
-// step limit. They are not errors: the review may still finish in time.
+// step limit, and the config keys that are ignored now (the instances' OAuth
+// client). They are not errors: the review may still finish in time, and an
+// old config must not stop reviews.
 func warnTimeouts(cfg *config.Config, log *slog.Logger) {
 	for _, w := range config.TimeoutWarnings(cfg) {
 		log.Warn("job timeout may be too short", "config", w)
+	}
+	for _, w := range config.DeprecatedWarnings(cfg) {
+		log.Warn("config key is ignored", "config", w)
 	}
 }
 
@@ -177,9 +181,6 @@ func warnTimeouts(cfg *config.Config, log *slog.Logger) {
 func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		return err
-	}
-	if err := checkDashboardEnv(cfg); err != nil {
 		return err
 	}
 	warnTimeouts(cfg, log)
@@ -199,6 +200,11 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	// The config's llm: block must have its key; an LLM set in the dashboard
 	// is read from the database below.
 	if _, err := readLLMKey(cfg); err != nil {
+		return err
+	}
+	// So is the OIDC client secret of a dashboard.sign_in in the file: with the
+	// variable unset every sign-in would fail at the token endpoint.
+	if err := checkSignInSecret(cfg); err != nil {
 		return err
 	}
 
@@ -300,8 +306,18 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// A change of sign-in in the config file, or a rollback, shows only now:
+	// end the OIDC and JWT sessions the settings in force no longer vouch for
+	// before anything is served.
+	// A database that hangs must not hang startup with it: the sweep gets 30
+	// seconds, and a failure stops startup.
 	if dash != nil {
-		conn.auth = dash.Auth
+		sweepCtx, cancel := context.WithTimeout(ctx, endStaleSessionsTimeout)
+		err := endStaleSSOSessions(sweepCtx, dash.EndStaleSSOSessions, log)
+		cancel()
+		if err != nil {
+			return err
+		}
 	}
 	// Connecting reaches GitLab and GitHub: a config instance that doesn't
 	// work stops startup; one added in the dashboard is recorded instead.
@@ -310,7 +326,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	}
 	handler := server.Routes(server.Deps{
 		Config: cfg, Instances: reg, WebhookSecrets: conn.gitlabHooks, GitHubWebhookSecrets: conn.githubHooks,
-		Store: st, Bots: commandBots(conn.platforms), Wake: eng.Wake, Dashboard: dashboardHandler(dash),
+		Store: st, Bots: commandBots(conn.platforms), Wake: eng.Wake, Dashboard: dashboardHandler(dash), Pages: dashboardPages(dash),
 		SkillFetches: fetchResults, ReadinessScans: scanResults, Log: log,
 	})
 	ln, err := net.Listen("tcp", cfg.Listen)
@@ -342,32 +358,6 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	return serveUntilDone(ctx, ln, handler, together(loops...), log)
 }
 
-// checkDashboardEnv makes sure, when the dashboard is on, that every
-// instance set up for sign-in has its OAuth client ID and secret in the
-// environment. The error names the instance and the variable, never a
-// value. With the dashboard off nothing is read.
-func checkDashboardEnv(cfg *config.Config) error {
-	if !cfg.DashboardEnabled() {
-		return nil
-	}
-	var errs []error
-	for _, inst := range cfg.GitLab {
-		if inst.HasOAuth() {
-			if _, _, err := inst.OAuthClient(); err != nil {
-				errs = append(errs, fmt.Errorf("dashboard sign-in: %w", err))
-			}
-		}
-	}
-	for _, inst := range cfg.GitHub {
-		if inst.HasOAuth() {
-			if _, _, err := inst.OAuthClient(); err != nil {
-				errs = append(errs, fmt.Errorf("dashboard sign-in: %w", err))
-			}
-		}
-	}
-	return errors.Join(errs...)
-}
-
 // newDashboard builds the dashboard when dashboard.url is set, and returns
 // nil, nil when it isn't. Its Skills & instructions view and "add
 // repository" picker use each instance's review bot or review App (the
@@ -387,6 +377,15 @@ func dashboardHandler(d *dashboard.Dashboard) http.Handler {
 		return nil
 	}
 	return d.Handler()
+}
+
+// dashboardPages is d's wrapper for the web app's pages (JWT sign-in), or nil
+// when d is nil.
+func dashboardPages(d *dashboard.Dashboard) func(http.Handler) http.Handler {
+	if d == nil {
+		return nil
+	}
+	return d.Pages
 }
 
 // pruneSessions returns a pass that deletes the dashboard sessions that can
@@ -595,6 +594,38 @@ func readLLMKey(cfg *config.Config) (string, error) {
 		return "", fmt.Errorf("llm.api_key_env: %w", err)
 	}
 	return key, nil
+}
+
+// checkSignInSecret returns an error when the file sets OIDC sign-in and the
+// variable named by dashboard.sign_in.client_secret_env is unset or empty. The
+// secret itself is not kept: the dashboard reads it when a sign-in needs it.
+func checkSignInSecret(cfg *config.Config) error {
+	si := cfg.Dashboard.SignIn
+	if si.Mode != config.SignInOIDC {
+		return nil
+	}
+	if _, err := requireEnv(si.ClientSecretEnv); err != nil {
+		return fmt.Errorf("dashboard.sign_in.client_secret_env: %w", err)
+	}
+	return nil
+}
+
+// endStaleSessionsTimeout bounds the start-up sweep of stale SSO sessions.
+const endStaleSessionsTimeout = 30 * time.Second
+
+// endStaleSSOSessions ends the sessions the sign-in settings in force no longer
+// vouch for (end is dashboard.Dashboard.EndStaleSSOSessions) and logs how many.
+// A failure stops startup: a session that should have ended must not be left to
+// work because a query failed.
+func endStaleSSOSessions(ctx context.Context, end func(context.Context) (int, error), log *slog.Logger) error {
+	n, err := end(ctx)
+	if err != nil {
+		return fmt.Errorf("ending the sign-in sessions the settings no longer allow: %w", err)
+	}
+	if n > 0 {
+		log.Info("ended sign-in sessions the sign-in settings no longer allow", "sessions", n)
+	}
+	return nil
 }
 
 // requireEnv reads an environment variable that must be set and not empty.

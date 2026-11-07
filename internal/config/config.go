@@ -62,8 +62,8 @@ type Config struct {
 
 // Dashboard is the web dashboard. It is enabled when URL is set.
 type Dashboard struct {
-	// URL is the https address the dashboard is served at; the OAuth
-	// callbacks are under it.
+	// URL is the https address the dashboard is served at; the OIDC
+	// callback is under it.
 	URL string `yaml:"url"`
 	// AdminPasswordEnv names the env var holding the password of the first
 	// admin account, created when the dashboard starts with no accounts.
@@ -71,6 +71,10 @@ type Dashboard struct {
 	// Admins is kept only to refuse it: admins are teams in the dashboard
 	// now, not platform groups named here.
 	Admins yaml.Node `yaml:"admins"`
+	// SignIn sets how people other than the local admins sign in: OIDC, or a
+	// validated JWT from a proxy, behind an email allowlist. When its mode is
+	// set it wins over what an admin saved in the dashboard.
+	SignIn SignIn `yaml:"sign_in"`
 }
 
 // DashboardEnabled reports whether the dashboard is on: dashboard.url is set.
@@ -732,27 +736,12 @@ func checkGitHubInstance(i int, inst GitHubInstance) []error {
 	return errs
 }
 
-// checkDashboard returns every problem with dashboard: and the instances'
-// OAuth env names.
+// checkDashboard returns every problem with dashboard:. (The instances'
+// OAuth env names are no longer checked: they only warn, see
+// DeprecatedWarnings.)
 func (c *Config) checkDashboard() []error {
 	var errs []error
 	add := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
-
-	// Both OAuth env names or neither, on every instance.
-	oauth := func(prefix, name, idEnv, secretEnv string) {
-		switch {
-		case idEnv != "" && secretEnv == "":
-			add("%s (%s): oauth_client_secret_env is required with oauth_client_id_env", prefix, name)
-		case idEnv == "" && secretEnv != "":
-			add("%s (%s): oauth_client_id_env is required with oauth_client_secret_env", prefix, name)
-		}
-	}
-	for i, inst := range c.GitLab {
-		oauth(fmt.Sprintf("gitlab[%d]", i), inst.Name, inst.OAuthClientIDEnv, inst.OAuthClientSecretEnv)
-	}
-	for i, inst := range c.GitHub {
-		oauth(fmt.Sprintf("github[%d]", i), inst.Name, inst.OAuthClientIDEnv, inst.OAuthClientSecretEnv)
-	}
 
 	d := c.Dashboard
 	if d.AdminPasswordEnv != "" && !envNameRE.MatchString(d.AdminPasswordEnv) {
@@ -760,6 +749,12 @@ func (c *Config) checkDashboard() []error {
 	}
 	if !d.Admins.IsZero() {
 		add(`dashboard.admins was removed: admins are now teams in the dashboard (see the README, "Teams")`)
+	}
+	for _, p := range d.SignIn.Problems(true) {
+		add("dashboard.sign_in: %s", p)
+	}
+	if d.SignIn.Set() && d.URL == "" {
+		add("dashboard.sign_in needs dashboard.url: the sign-in routes are part of the dashboard")
 	}
 	if d.URL == "" {
 		return errs

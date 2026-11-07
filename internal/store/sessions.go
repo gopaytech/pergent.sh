@@ -14,7 +14,8 @@ import (
 // of the session ID in the browser's cookie; the ID itself is never stored.
 // AccountID is the account that signed in. For a platform account,
 // TokenSealed is its OAuth token, sealed by the caller; a password session
-// has no token and an empty Platform and Instance and a zero UserID.
+// has no token and an empty Platform and Instance and a zero UserID. An SSO
+// session has none of those either; SignIn says how any session began.
 type Session struct {
 	IDHash             []byte
 	AccountID          int64
@@ -24,23 +25,35 @@ type Session struct {
 	// AccessScope is what the last access check allowed the session: the
 	// repositories its teams covered then (see SetSessionAccess).
 	AccessScope string
-	TokenSealed []byte
-	CSRF        string
+	// SignIn is how the session began: SignInPassword, SignInOIDC or
+	// SignInJWT; empty is stored as SignInPassword. Issuer is the issuer
+	// that vouched for an SSO session ("" for a password one).
+	SignIn, Issuer string
+	TokenSealed    []byte
+	CSRF           string
 	// AccessCheckedAt is when the user's repositories were last checked
 	// with the platform; nil until the first check.
 	AccessCheckedAt       *time.Time
 	LastSeenAt, CreatedAt time.Time
 }
 
+// How a session began.
+const (
+	SignInPassword = "password"
+	SignInOIDC     = "oidc"
+	SignInJWT      = "jwt"
+)
+
 // CreateSession stores a new session with its LastSeenAt and CreatedAt. Its
 // account must exist. AccessScope and AccessCheckedAt are not stored:
 // SetSessionAccess sets them.
 func (s *Store) CreateSession(ctx context.Context, se Session) error {
 	_, err := s.pool.Exec(ctx, `INSERT INTO sessions (id_hash, account_id, platform, instance, user_id, username,
-			token_sealed, csrf, last_seen_at, created_at)
-		VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, ''), NULLIF($5::bigint, 0), $6, $7, $8, $9, $10)`,
+			token_sealed, csrf, last_seen_at, created_at, sign_in, issuer)
+		VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, ''), NULLIF($5::bigint, 0), $6, $7, $8, $9, $10,
+			COALESCE(NULLIF($11, ''), 'password'), $12)`,
 		se.IDHash, se.AccountID, se.Platform, se.Instance, se.UserID, se.Username, se.TokenSealed, se.CSRF,
-		se.LastSeenAt, se.CreatedAt)
+		se.LastSeenAt, se.CreatedAt, se.SignIn, se.Issuer)
 	return err
 }
 
@@ -49,11 +62,11 @@ func (s *Store) CreateSession(ctx context.Context, se Session) error {
 func (s *Store) Session(ctx context.Context, idHash []byte) (Session, bool, error) {
 	var se Session
 	err := s.pool.QueryRow(ctx, `SELECT id_hash, account_id, COALESCE(platform, ''), COALESCE(instance, ''),
-			COALESCE(user_id, 0), username, access_scope,
+			COALESCE(user_id, 0), username, access_scope, sign_in, issuer,
 			token_sealed, csrf, access_checked_at, last_seen_at, created_at
 		FROM sessions WHERE id_hash = $1`, idHash).Scan(
 		&se.IDHash, &se.AccountID, &se.Platform, &se.Instance, &se.UserID, &se.Username, &se.AccessScope,
-		&se.TokenSealed, &se.CSRF, &se.AccessCheckedAt, &se.LastSeenAt, &se.CreatedAt)
+		&se.SignIn, &se.Issuer, &se.TokenSealed, &se.CSRF, &se.AccessCheckedAt, &se.LastSeenAt, &se.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Session{}, false, nil
 	}
@@ -68,6 +81,20 @@ func (s *Store) Session(ctx context.Context, idHash []byte) (Session, bool, erro
 func (s *Store) DeleteSession(ctx context.Context, idHash []byte) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE id_hash = $1`, idHash)
 	return err
+}
+
+// DeleteStaleSSOSessions ends the sessions that began with OIDC or a JWT and
+// that the sign-in settings in force (mode and issuer) no longer vouch for: the
+// session's sign-in differs from mode, or its issuer from issuer. A mode that
+// is neither oidc nor jwt keeps none of them. A password session is never
+// touched. It returns how many sessions it ended.
+func (s *Store) DeleteStaleSSOSessions(ctx context.Context, mode, issuer string) (int, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM sessions
+		WHERE sign_in IN ('oidc', 'jwt') AND NOT (sign_in = $1::text AND issuer = $2::text)`, mode, issuer)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
 }
 
 // TouchSession records that the session was used at the given time.
@@ -185,11 +212,14 @@ func (s *Store) SessionProjects(ctx context.Context, idHash []byte) ([]VisiblePr
 	return pgx.CollectRows(rows, pgx.RowToStructByPos[VisibleProject])
 }
 
-// PruneSessions deletes the sessions created before createdBefore or last
-// used before idleBefore, and returns how many there were.
-func (s *Store) PruneSessions(ctx context.Context, createdBefore, idleBefore time.Time) (int, error) {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE created_at < $1 OR last_seen_at < $2`,
-		createdBefore, idleBefore)
+// PruneSessions deletes the sessions created before createdBefore (an SSO
+// session: before ssoCreatedBefore) or last used before idleBefore, and
+// returns how many there were.
+func (s *Store) PruneSessions(ctx context.Context, createdBefore, ssoCreatedBefore, idleBefore time.Time) (int, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM sessions
+		WHERE created_at < CASE WHEN sign_in = 'password' THEN $1::timestamptz ELSE $2::timestamptz END
+		   OR last_seen_at < $3::timestamptz`,
+		createdBefore, ssoCreatedBefore, idleBefore)
 	if err != nil {
 		return 0, err
 	}

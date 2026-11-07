@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi } from "../test/fakeApi";
-import { platformAdmin, skillInstalledDetail, skillWrittenDetail, viewer } from "../test/fixtures";
+import { ssoAdmin, skillInstalledDetail, skillWrittenDetail, viewer } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -11,7 +11,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe("SkillEditor: new", () => {
   it("create posts name, content and addToDefaults; Add to default skills is off at first", async () => {
     const fake = fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       "GET /api/skills": { body: [] },
       "POST /api/admin/skills": { status: 201, body: { version: 1 } },
     });
@@ -29,7 +29,7 @@ describe("SkillEditor: new", () => {
 
   it("sends addToDefaults when the box is ticked", async () => {
     const fake = fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       "GET /api/skills": { body: [] },
       "POST /api/admin/skills": { status: 201, body: { version: 1 } },
     });
@@ -43,7 +43,7 @@ describe("SkillEditor: new", () => {
 
   it("shows the server's refusal and stays on the form", async () => {
     fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       "POST /api/admin/skills": { status: 409, body: { error: "name already in the library" } },
     });
     renderApp("/skills/new");
@@ -76,7 +76,7 @@ describe("SkillEditor: one skill", () => {
 
   it("an admin edits a written skill and saves with the version it opened", async () => {
     const fake = fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       "GET /api/skills/code-review": { body: skillWrittenDetail },
       "PUT /api/admin/skills/code-review": { body: { version: 3 } },
     });
@@ -94,7 +94,7 @@ describe("SkillEditor: one skill", () => {
   it("a stale save shows 'changed since you opened it' with Reload", async () => {
     let reads = 0;
     fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       "GET /api/skills/code-review": () => ({
         body: reads++ === 0 ? skillWrittenDetail : { ...skillWrittenDetail, version: 3, content: "Newer text.\n" },
       }),
@@ -112,7 +112,7 @@ describe("SkillEditor: one skill", () => {
   it("saves against the version the draft was opened from, even after a refetch brings a newer one", async () => {
     let reads = 0;
     const fake = fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       "GET /api/skills/code-review": () => ({
         body: reads++ === 0 ? skillWrittenDetail : { ...skillWrittenDetail, version: 3, content: "Another admin's text.\n" },
       }),
@@ -134,7 +134,7 @@ describe("SkillEditor: one skill", () => {
   it("moving to another cached skill shows its text and version, not the first one's draft", async () => {
     const other = { ...skillWrittenDetail, name: "style-guide", version: 7, content: "Be kind.\n" };
     const fake = fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       "GET /api/skills/code-review": { body: skillWrittenDetail },
       "PUT /api/admin/skills/style-guide": { body: { version: 8 } },
     });
@@ -154,7 +154,7 @@ describe("SkillEditor: one skill", () => {
   it("a second save names the version the first one made", async () => {
     let version = 2;
     const fake = fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       "GET /api/skills/code-review": () => ({ body: { ...skillWrittenDetail, version } }),
       "PUT /api/admin/skills/code-review": () => ({ body: { version: ++version } }),
     });
@@ -178,7 +178,7 @@ describe("SkillEditor: one skill", () => {
   });
 
   it("an installed skill is read-only for an admin, who can copy it", async () => {
-    fakeApi({ "GET /api/me": { body: platformAdmin }, "GET /api/skills/security-review": { body: skillInstalledDetail } });
+    fakeApi({ "GET /api/me": { body: ssoAdmin }, "GET /api/skills/security-review": { body: skillInstalledDetail } });
     renderApp("/skills/view/security-review");
     const pre = await screen.findByText(/Look for security bugs\./);
     expect(pre.tagName).toBe("PRE");

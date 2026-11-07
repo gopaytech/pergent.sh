@@ -6,6 +6,9 @@ import type { Me } from "../api";
 // lives here, in memory only.
 export const MeContext = createContext<Me | null>(null);
 
+// inAdminArea says whether a path is in the admin area (/admin and below).
+export const inAdminArea = (pathname: string) => pathname === "/admin" || pathname.startsWith("/admin/");
+
 // useMe returns the signed-in user; only pages inside Layout call it.
 export function useMe(): Me {
   const me = useContext(MeContext);

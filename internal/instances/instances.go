@@ -7,6 +7,7 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -370,11 +371,45 @@ func (r *Registry) HeldSecrets(ctx context.Context) ([]string, error) {
 		out = slices.AppendSeq(out, maps.Values(s.Fields()))
 	}
 	out = append(out, r.LLMKeys()...)
+	signIn, err := r.signInSecrets(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("held secrets: %w", err)
+	}
+	out = append(out, signIn...)
 	out = append(out, envValue("PERGENT_SH_SECRET_KEY"))
 	out = append(out, databasePasswords(envValue("DATABASE_URL"))...)
 	out = slices.DeleteFunc(out, func(v string) bool { return v == "" })
 	slices.Sort(out)
 	return slices.Compact(out), nil
+}
+
+// signInSecrets are the OIDC client secrets pergent.sh holds: the one the
+// config names by env var, and the one stored sealed from the dashboard
+// (kept even while the config wins: it is still a secret). A stored one
+// that can't be read or opened is an error, so the caller fails closed.
+func (r *Registry) signInSecrets(ctx context.Context) ([]string, error) {
+	var out []string
+	if env := r.cfg.Dashboard.SignIn.ClientSecretEnv; env != "" {
+		out = append(out, envValue(env))
+	}
+	if r.st == nil {
+		return out, nil
+	}
+	row, err := r.st.SignInSettings(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sign-in settings: %w", err)
+	}
+	if len(row.ClientSecretSealed) > 0 {
+		if r.box == nil {
+			return nil, errors.New("sign-in client secret can't be opened: no key")
+		}
+		plain, err := r.box.Open(row.ClientSecretSealed)
+		if err != nil {
+			return nil, errors.New("sign-in client secret can't be opened")
+		}
+		out = append(out, string(plain))
+	}
+	return out, nil
 }
 
 // databasePasswords is the password in the database URL, as typed and as it

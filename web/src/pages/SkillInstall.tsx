@@ -3,7 +3,6 @@ import { useState, type FormEvent } from "react";
 import { Link } from "react-router";
 
 import { paths, type FetchedSkill, type SkillFetchResult } from "../api";
-import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
 import { FetchStatus, useSkillFetch, useStartFetch } from "../skillFetch";
 import { ErrorBox, Loading, Pill, bytesText } from "../ui";
@@ -12,9 +11,8 @@ import { ErrorBox, Loading, Pill, bytesText } from "../ui";
 // a repository of a connected instance, or a public URL. It reads the source
 // first, lists the skills found, and installs the ticked ones.
 export default function SkillInstall() {
-  const me = useMe();
   const [kind, setKind] = useState<"instance" | "url">("instance");
-  const [instance, setInstance] = useState(me.instance);
+  const [instance, setInstance] = useState("");
   const [repo, setRepo] = useState("");
   const [url, setUrl] = useState("");
   const [ref, setRef] = useState("");
@@ -64,13 +62,9 @@ export default function SkillInstall() {
                 type="text"
                 autoComplete="off"
                 value={instance}
-                disabled={!me.operator}
                 onChange={(e) => setInstance(e.target.value)}
                 required
               />
-              {!me.operator && (
-                <div className="meta">You can install from repositories of your own instance that you can see.</div>
-              )}
             </div>
             <div>
               <label htmlFor="fetch-repo">Repository</label>

@@ -1,159 +1,154 @@
 import { screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi } from "../test/fakeApi";
-import { operator, overview } from "../test/fixtures";
+import { operator, overview, viewer } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
 
-const instances = {
-  password: true,
-  instances: [
-    { platform: "gitlab", instance: "main", label: "GitLab (main)" },
-    { platform: "github", instance: "gh com", label: "GitHub (gh com)" },
-    // Not a platform: no button.
-    { platform: "javascript:", instance: "x", label: "Evil" },
-  ],
-};
-
-async function fill(username: string, password: string) {
-  await userEvent.type(await screen.findByLabelText("Username"), username);
-  await userEvent.type(screen.getByLabelText("Password"), password);
-  await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
-}
+const options = (extra: object = {}) => ({ body: { password: true, jwt: false, ...extra } });
 
 describe("SignIn", () => {
-  it("has one button per instance, to its login route", async () => {
-    const fake = fakeApi({ "GET /api/instances": { body: instances } });
-    renderApp("/signin");
+  it("has the SSO button, to the OIDC login route, and nothing else", async () => {
+    const fake = fakeApi({ "GET /api/sign-in-options": options({ sso: { label: "Google" } }) });
+    renderApp("/sign-in");
     expect(await screen.findByRole("heading", { name: "Sign in to pergent.sh" })).toBeInTheDocument();
-    expect(await screen.findByRole("link", { name: "Sign in with GitLab (main)" })).toHaveAttribute(
-      "href",
-      "/auth/gitlab/main/login",
-    );
-    expect(screen.getByRole("link", { name: "Sign in with GitHub (gh com)" })).toHaveAttribute(
-      "href",
-      "/auth/github/gh%20com/login",
-    );
-    expect(screen.queryByRole("link", { name: /Evil/ })).not.toBeInTheDocument();
-    // The sign-in page asks nothing of the session.
-    expect(fake.find("GET", "/api/me")).toHaveLength(0);
+    expect(await screen.findByRole("link", { name: "Sign in with Google" })).toHaveAttribute("href", "/auth/oidc/login");
+    // No password form, even though the server has local admins.
+    expect(screen.queryByLabelText("Username")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
+    expect(screen.queryByText("Sign-in isn't set up yet. Ask your admin.")).not.toBeInTheDocument();
+    // The only link is the button: nothing leads to the admin sign-in.
+    expect(screen.getAllByRole("link")).toHaveLength(1);
+    expect(document.querySelector("[href*='admin']")).toBeNull();
+    expect(document.body).not.toHaveTextContent(/admin\/sign-in/);
+    expect(fake.find("POST", "/auth/password")).toHaveLength(0);
+    expect(fake.find("GET", "/auth/csrf")).toHaveLength(0);
   });
 
-  it("shows only the password form when no instance has sign-in", async () => {
-    fakeApi({ "GET /api/instances": { body: { password: true, instances: [] } } });
-    renderApp("/signin");
-    expect(await screen.findByLabelText("Username")).toBeInTheDocument();
+  it("says sign-in isn't set up when there is no SSO", async () => {
+    fakeApi({ "GET /api/sign-in-options": options() });
+    renderApp("/sign-in");
+    expect(await screen.findByText("Sign-in isn't set up yet. Ask your admin.")).toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
-  });
-
-  it("empties the password, not the username, after a failed sign-in", async () => {
-    fakeApi({
-      "GET /api/instances": { body: instances },
-      "GET /auth/csrf": { body: { csrfToken: "login-csrf" } },
-      "POST /auth/password": { status: 401, body: { error: "wrong username or password" } },
-    });
-    renderApp("/signin");
-    await fill("admin", "nope nope nope");
-    expect(await screen.findByRole("alert")).toBeInTheDocument();
-    expect(screen.getByLabelText("Password")).toHaveValue("");
-    expect(screen.getByLabelText("Username")).toHaveValue("admin");
-  });
-
-  it("keeps no closure with the password once the form is gone", async () => {
-    fakeApi({
-      "GET /api/instances": { body: instances },
-      "GET /auth/csrf": { body: { csrfToken: "login-csrf" } },
-      "POST /auth/password": { status: 401, body: { error: "wrong username or password" } },
-    });
-    const { client, unmount } = renderApp("/signin");
-    await fill("admin", "nope nope nope");
-    await screen.findByRole("alert");
-    unmount();
-    await vi.waitFor(() => expect(client.getMutationCache().getAll()).toHaveLength(0));
-  });
-
-  it("says no sign-in is configured when there is no password form and no button", async () => {
-    fakeApi({ "GET /api/instances": { body: { password: false, instances: [{ platform: "javascript:", instance: "x", label: "Evil" }] } } });
-    renderApp("/signin");
-    expect(await screen.findByText("No sign-in is configured.")).toBeInTheDocument();
     expect(screen.queryByLabelText("Username")).not.toBeInTheDocument();
   });
 
-  it("says no sign-in is configured when the instances can't be read", async () => {
-    fakeApi({ "GET /api/instances": { status: 500, body: { error: "try again" } } });
-    renderApp("/signin");
+  it("has no SSO button when sso is null", async () => {
+    fakeApi({ "GET /api/sign-in-options": options({ sso: null }) });
+    renderApp("/sign-in");
+    expect(await screen.findByText("Sign-in isn't set up yet. Ask your admin.")).toBeInTheDocument();
+  });
+
+  it("shows the error and not the 'not set up' text when the options can't be read", async () => {
+    fakeApi({ "GET /api/sign-in-options": { status: 500, body: { error: "try again" } } });
+    renderApp("/sign-in");
     expect(await screen.findByRole("alert")).toHaveTextContent("try again");
-    expect(screen.getByText("No sign-in is configured.")).toBeInTheDocument();
+    expect(screen.queryByText("Sign-in isn't set up yet. Ask your admin.")).not.toBeInTheDocument();
   });
 
-  it("doesn't say it while a button or the password form is there", async () => {
-    fakeApi({ "GET /api/instances": { body: { password: false, instances: [instances.instances[0]] } } });
-    renderApp("/signin");
-    await screen.findByRole("link", { name: "Sign in with GitLab (main)" });
-    expect(screen.queryByText("No sign-in is configured.")).not.toBeInTheDocument();
+  it("tells a refused person to ask an admin", async () => {
+    fakeApi({ "GET /api/sign-in-options": options({ sso: { label: "Google" } }) });
+    renderApp("/sign-in?error=not_allowed");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Ask an admin to add you");
+    expect(await screen.findByRole("link", { name: "Sign in with Google" })).toBeInTheDocument();
   });
 
-  it("shows the password form above the platform buttons", async () => {
-    fakeApi({ "GET /api/instances": { body: instances } });
-    renderApp("/signin");
-    const form = await screen.findByRole("button", { name: "Sign in" });
-    const button = await screen.findByRole("link", { name: "Sign in with GitLab (main)" });
-    expect(form.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  it("shows a message only for the codes it knows", async () => {
+    fakeApi({ "GET /api/sign-in-options": options({ sso: { label: "Google" } }) });
+    renderApp("/sign-in?error=%3Cb%3Ehello%3C%2Fb%3E");
+    await screen.findByRole("link", { name: "Sign in with Google" });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    const card = screen.getByRole("heading", { name: "Sign in to pergent.sh" }).parentElement;
+    expect(card).not.toHaveTextContent(/hello/);
   });
 
-  it("posts the username and password with the CSRF token from /auth/csrf, then opens the dashboard", async () => {
-    const fake = fakeApi({
-      "GET /api/instances": { body: instances },
-      "GET /auth/csrf": { body: { csrfToken: "login-csrf" } },
-      "POST /auth/password": { status: 204 },
-      "GET /api/me": { body: operator },
+  it("explains each refusal code", async () => {
+    for (const [code, text] of [
+      ["not_allowed", /Ask an admin to add you/],
+      ["expired", /expired/],
+      ["failed", /Sign-in failed/],
+      ["denied", /not completed/],
+      ["not_set_up", /isn't set up yet/],
+      ["unavailable", /can't be reached/],
+    ] as const) {
+      fakeApi({ "GET /api/sign-in-options": options({ sso: { label: "Google" } }) });
+      const { unmount } = renderApp(`/sign-in?error=${code}`);
+      expect(await screen.findByRole("alert")).toHaveTextContent(text);
+      unmount();
+    }
+  });
+
+  it("keeps the refusal code when it comes to the old address", async () => {
+    fakeApi({ "GET /api/sign-in-options": options({ sso: { label: "Google" } }) });
+    renderApp("/signin?error=not_allowed");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Ask an admin to add you");
+    expect(screen.getByTestId("location")).toHaveTextContent(/^\/sign-in\?error=not_allowed$/);
+  });
+
+  it("sends a browser that is signed in already on, to the user pages", async () => {
+    fakeApi({
+      "GET /api/sign-in-options": options({ sso: { label: "Google" } }),
+      "GET /api/me": { body: viewer },
       "GET /api/overview?days=7": { body: overview },
     });
-    renderApp("/signin");
-    await fill("admin", "correct horse battery");
+    renderApp("/sign-in");
     expect(await screen.findByRole("navigation", { name: "Main" })).toBeInTheDocument();
-    const [post] = fake.find("POST", "/auth/password");
-    expect(post.body).toEqual({ username: "admin", password: "correct horse battery" });
-    expect(post.headers.get("X-CSRF-Token")).toBe("login-csrf");
-    expect(fake.find("GET", "/auth/csrf")).toHaveLength(1);
     expect(screen.getByTestId("location")).toHaveTextContent(/^\/$/);
   });
 
-  it("shows the server's text for a wrong password and stays on the form", async () => {
-    fakeApi({
-      "GET /api/instances": { body: instances },
-      "GET /auth/csrf": { body: { csrfToken: "login-csrf" } },
-      "POST /auth/password": { status: 401, body: { error: "wrong username or password" } },
-    });
-    renderApp("/signin");
-    await fill("admin", "nope nope nope");
-    expect(await screen.findByRole("alert")).toHaveTextContent("wrong username or password");
-    expect(screen.getByTestId("location")).toHaveTextContent(/^\/signin$/);
-    expect(screen.getByLabelText("Username")).toHaveValue("admin");
-  });
-
-  it("shows the text of a rate limit", async () => {
-    fakeApi({
-      "GET /api/instances": { body: instances },
-      "GET /auth/csrf": { body: { csrfToken: "login-csrf" } },
-      "POST /auth/password": { status: 429, body: { error: "too many sign-in attempts, try again later" } },
-    });
-    renderApp("/signin");
-    await fill("admin", "whatever whatever");
-    expect(await screen.findByRole("alert")).toHaveTextContent("too many sign-in attempts, try again later");
-  });
-
-  it("says so when the CSRF token can't be fetched", async () => {
+  it("does not take an expected 401 for a signed-out session", async () => {
+    // A 401 from the probe must not clear the cache and navigate (a loop).
     const fake = fakeApi({
-      "GET /api/instances": { body: instances },
-      "GET /auth/csrf": { status: 500, body: { error: "try again" } },
+      "GET /api/sign-in-options": options({ sso: { label: "Google" } }),
+      "GET /api/me": { status: 401, body: { error: "not signed in" } },
     });
-    renderApp("/signin");
-    await fill("admin", "whatever whatever");
-    expect(await screen.findByRole("alert")).toHaveTextContent("try again");
-    expect(fake.find("POST", "/auth/password")).toHaveLength(0);
+    renderApp("/sign-in");
+    await screen.findByRole("link", { name: "Sign in with Google" });
+    expect(screen.getByTestId("location")).toHaveTextContent(/^\/sign-in$/);
+    expect(fake.find("GET", "/api/me")).toHaveLength(1);
+  });
+
+  describe("with JWT sign-in", () => {
+    it("has no button to press, and says the page load signs the person in", async () => {
+      fakeApi({
+        "GET /api/sign-in-options": options({ jwt: true }),
+        "GET /api/me": { status: 401, body: { error: "not signed in" } },
+      });
+      renderApp("/sign-in");
+      expect(await screen.findByText(/signs you in before this page loads/)).toBeInTheDocument();
+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
+      expect(screen.queryByText("Sign-in isn't set up yet. Ask your admin.")).not.toBeInTheDocument();
+    });
+
+    it("sends the person on once the page load has signed them in", async () => {
+      fakeApi({
+        "GET /api/sign-in-options": options({ jwt: true }),
+        "GET /api/me": { body: operator },
+        "GET /api/overview?days=7": { body: overview },
+      });
+      renderApp("/sign-in");
+      expect(await screen.findByRole("navigation", { name: "Main" })).toBeInTheDocument();
+      expect(screen.getByTestId("location")).toHaveTextContent(/^\/$/);
+    });
+
+    it("tells a person the proxy vouches for, but nobody added, to ask an admin", async () => {
+      fakeApi({
+        "GET /api/sign-in-options": options({ jwt: true }),
+        "GET /api/me": { status: 401, body: { error: "ask an admin to add you", code: "not_allowed" } },
+      });
+      renderApp("/sign-in");
+      expect(await screen.findByRole("alert")).toHaveTextContent("Ask an admin to add you");
+    });
+
+    it("shows an outage of the signing keys", async () => {
+      fakeApi({
+        "GET /api/sign-in-options": options({ jwt: true }),
+        "GET /api/me": { status: 503, body: { error: "sign-in is unavailable: the signing keys could not be read; try again in a moment" } },
+      });
+      renderApp("/sign-in");
+      expect(await screen.findByRole("alert")).toHaveTextContent(/sign-in is unavailable/);
+    });
   });
 });

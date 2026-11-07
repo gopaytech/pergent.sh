@@ -1,14 +1,11 @@
 package dashboard
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"slices"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/skillfetch"
@@ -19,8 +16,8 @@ import (
 //
 //   - POST /api/admin/skill-fetches: {instance, repo} or {url}, with ref,
 //     and path, purpose ("install" or "update") and fromRef when wanted:
-//     starts a read (202 {id}). A platform admin reads repositories of its
-//     own instance that its user can see there; an operator any (D19).
+//     starts a read (202 {id}) of any repository the instance's review bot
+//     or App reaches, or of a public URL.
 //   - GET /api/admin/skill-fetches/{id}: the read (SkillFetchView).
 //   - POST /api/admin/skill-fetches/{id}/install: {names, addToDefaults}.
 //   - POST /api/admin/skill-fetches/{id}/update: {names}, for a check for
@@ -36,8 +33,6 @@ const (
 	msgBadFetchBody   = `the body must be {"instance": ..., "repo": ...} or {"url": ...}, with "ref", and "path", "purpose" and "fromRef" when wanted`
 	msgBadNamesBody   = `the body must be {"names": [the skills to install], "addToDefaults": true or false}`
 	msgBadUpdateBody  = `the body must be {"names": [the skills to update]}`
-	msgCeiling        = "you can install only from repositories of your own instance that you can see"
-	msgCeilingFailed  = "could not check your access to the repository on the platform, please try again"
 	msgNotConnected   = "the instance is not connected to pergent.sh"
 	msgNoFetcher      = "installing skills is not set up"
 	msgFetchRunning   = "the source is still being read"
@@ -57,11 +52,10 @@ const (
 )
 
 func (d *Dashboard) skillFetchRoutes(mux *http.ServeMux) {
-	admin := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, d.Auth.Require(requireAdmin(h))) }
-	admin("POST /api/admin/skill-fetches", d.startSkillFetch)
-	admin("GET /api/admin/skill-fetches/{id}", d.skillFetch)
-	admin("POST /api/admin/skill-fetches/{id}/install", d.installSkills)
-	admin("POST /api/admin/skill-fetches/{id}/update", d.updateSkills)
+	d.adminRoute(mux, "POST /api/admin/skill-fetches", d.startSkillFetch)
+	d.adminRoute(mux, "GET /api/admin/skill-fetches/{id}", d.skillFetch)
+	d.adminRoute(mux, "POST /api/admin/skill-fetches/{id}/install", d.installSkills)
+	d.adminRoute(mux, "POST /api/admin/skill-fetches/{id}/update", d.updateSkills)
 }
 
 func (d *Dashboard) startSkillFetch(w http.ResponseWriter, r *http.Request) {
@@ -83,9 +77,6 @@ func (d *Dashboard) startSkillFetch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, msgNoFetcher)
 		return
 	}
-	if !se.Operator && in.URL == "" && in.Instance == "" {
-		in.Instance = se.Instance
-	}
 	req, err := skillfetch.Normalize(skillfetch.Request{Instance: in.Instance, Repo: in.Repo, URL: in.URL, Ref: in.Ref,
 		FromRef: in.FromRef, Path: in.Path, Purpose: in.Purpose, Actor: skillActor(se), ActorID: se.AccountID})
 	var bad skillfetch.RequestError
@@ -96,18 +87,6 @@ func (d *Dashboard) startSkillFetch(w http.ResponseWriter, r *http.Request) {
 		}
 		writeError(w, http.StatusBadRequest, msg)
 		return
-	}
-	if req.URL == "" {
-		ok, err := d.withinCeiling(ctx, se, req.Instance, req.Repo)
-		if err != nil {
-			d.Log.Warn("dashboard: checking a user's access to a skill source failed", "instance", req.Instance, "error", err.Error())
-			writeError(w, http.StatusBadGateway, msgCeilingFailed)
-			return
-		}
-		if !ok {
-			writeError(w, http.StatusForbidden, msgCeiling)
-			return
-		}
 	}
 	id, err := d.fetcher.Start(ctx, req)
 	switch {
@@ -125,35 +104,6 @@ func (d *Dashboard) startSkillFetch(w http.ResponseWriter, r *http.Request) {
 	d.Log.Info("dashboard: skill fetch started", "fetch", id, "instance", req.Instance, "ref", req.Ref,
 		"purpose", req.Purpose, "by", se.Username)
 	writeJSON(w, http.StatusAccepted, SkillFetchStartedView{ID: id})
-}
-
-// withinCeiling reports whether se may read repo of instance (D19): an
-// operator anything the bot or App reaches, a platform admin its own
-// instance's repositories that its user can see there, asked of the
-// platform now with the user's token.
-func (d *Dashboard) withinCeiling(ctx context.Context, se Session, instance, repo string) (bool, error) {
-	if se.Operator {
-		return true, nil
-	}
-	if se.Platform == "" || instance != se.Instance {
-		return false, nil
-	}
-	return d.userCanSee(ctx, se, repo)
-}
-
-// userCanSee asks the platform, with the session user's token, whether the
-// user can read repo on the session's instance.
-func (d *Dashboard) userCanSee(ctx context.Context, se Session, repo string) (bool, error) {
-	p, token, err := d.Auth.userToken(ctx, se)
-	if err != nil {
-		return false, err
-	}
-	_, ok, err := p.canSee(ctx, token, repo)
-	if err != nil && token != "" {
-		// The error goes to the log: it must not hold the token.
-		err = errors.New(strings.ReplaceAll(err.Error(), token, "[REDACTED]"))
-	}
-	return ok, err
 }
 
 // ownFetch reads the fetch the path names, for its requester only, while it
@@ -572,144 +522,4 @@ func (d *Dashboard) updateSkills(w http.ResponseWriter, r *http.Request) {
 		d.recheckAll()
 	}
 	writeJSON(w, http.StatusOK, out)
-}
-
-// --- who sees a source repository's path (D11) ---
-
-const (
-	// sightBudget bounds the platform lookups of one request that lists
-	// skills; a repository not answered in time is shown as hidden.
-	sightBudget = 5 * time.Second
-	// sightFailTTL is how long a failure to tell is kept.
-	sightFailTTL = 30 * time.Second
-	// sightWorkers is how many repositories one request asks about at once.
-	sightWorkers = 8
-)
-
-// sightCache keeps, per session and source repository, whether the
-// session's user can see the repository on the platform: an answer for
-// AccessTTL, a failure to tell for sightFailTTL (as "no").
-type sightCache struct {
-	mu      sync.Mutex
-	entries map[string]sightEntry
-}
-
-type sightEntry struct {
-	ok     bool
-	failed bool
-	at     time.Time
-}
-
-func (e sightEntry) ttl() time.Duration {
-	if e.failed {
-		return sightFailTTL
-	}
-	return AccessTTL
-}
-
-// sourceSight is who sees what for one request: whether the session may see
-// each source repository, by sightKey. A repository it lacks is not seen.
-type sourceSight map[string]bool
-
-func sightKey(instance, repo string) string { return instance + "\x00" + lower(repo) }
-
-func (s sourceSight) sees(instance, repo string) bool { return s[sightKey(instance, repo)] }
-
-// sightOf decides, for one request, which of the source repositories of
-// sources se may see: each distinct repository once, a few at a time, all
-// within sightBudget. A repository not answered in time is not seen (D11),
-// so a platform that hangs costs the request the budget, not a wait per
-// skill.
-func (d *Dashboard) sightOf(ctx context.Context, se Session, sources ...*store.SkillSource) sourceSight {
-	type pair struct{ instance, repo string }
-	var todo []pair
-	out := sourceSight{}
-	for _, s := range sources {
-		if s == nil || s.Kind != store.SourceKindInstance {
-			continue
-		}
-		k := sightKey(s.Instance, s.Repo)
-		if _, dup := out[k]; !dup {
-			out[k] = false
-			todo = append(todo, pair{s.Instance, s.Repo})
-		}
-	}
-	if len(todo) == 0 {
-		return out
-	}
-	ctx, cancel := context.WithTimeout(ctx, d.sightBudget)
-	defer cancel()
-	var mu sync.Mutex
-	answers := make(map[string]bool, len(todo))
-	var wg sync.WaitGroup
-	slots := make(chan struct{}, sightWorkers)
-	for _, p := range todo {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			select {
-			case slots <- struct{}{}:
-				defer func() { <-slots }()
-			case <-ctx.Done():
-				return
-			}
-			ok := d.seesSourceRepo(ctx, se, p.instance, p.repo)
-			mu.Lock()
-			answers[sightKey(p.instance, p.repo)] = ok
-			mu.Unlock()
-		}()
-	}
-	done := make(chan struct{})
-	go func() { wg.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-ctx.Done():
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	for k, ok := range answers {
-		out[k] = ok
-	}
-	return out
-}
-
-// seesSourceRepo reports whether se may see the path of repo, a skill
-// source on instance: an operator always; a user of that instance who sees
-// it as a repository of its teams, or whom the platform lets read it (asked
-// with the user's token, the answer kept AccessTTL per session and
-// repository). Anyone else, and a failure to tell, does not; the failure is
-// kept sightFailTTL, so a platform that is down is not asked again at once.
-func (d *Dashboard) seesSourceRepo(ctx context.Context, se Session, instance, repo string) bool {
-	switch {
-	case se.Operator:
-		return true
-	case se.Platform == "" || se.Waiting || se.Instance != instance:
-		return false
-	case se.CanSee(instance, repo):
-		return true
-	}
-	c, key, now := d.sight, string(se.idHash)+"\x00"+lower(repo), d.now()
-	c.mu.Lock()
-	e, found := c.entries[key]
-	c.mu.Unlock()
-	if found && now.Sub(e.at) < e.ttl() && !now.Before(e.at) {
-		return e.ok
-	}
-	ok, err := d.userCanSee(ctx, se, repo)
-	if err != nil {
-		d.Log.Warn("dashboard: checking whether a user can see a skill source failed", "instance", instance, "error", err.Error())
-		if errors.Is(err, context.Canceled) {
-			return false // the user went away: nothing to learn about the platform
-		}
-		ok = false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for k, old := range c.entries {
-		if now.Sub(old.at) >= old.ttl() {
-			delete(c.entries, k)
-		}
-	}
-	c.entries[key] = sightEntry{ok: ok, failed: err != nil, at: now}
-	return ok
 }

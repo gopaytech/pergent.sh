@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi, type Reply } from "../test/fakeApi";
-import { fetchInstallDone, operator, platformAdmin, viewer } from "../test/fixtures";
+import { fetchInstallDone, operator, ssoAdmin, viewer } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -20,6 +20,7 @@ function readThen(done = fetchInstallDone): (call: unknown) => Reply {
 }
 
 async function readRepo(ref = "v1.0") {
+  await userEvent.type(await screen.findByLabelText("Instance"), "main");
   await userEvent.type(await screen.findByLabelText("Repository"), "acme/skills");
   await userEvent.type(screen.getByLabelText("Branch or tag"), ref);
   await userEvent.type(screen.getByLabelText("Folder"), "skills");
@@ -29,12 +30,11 @@ async function readRepo(ref = "v1.0") {
 describe("SkillInstall", () => {
   it("reads an instance repository with its ref and folder, polls until done, and lists the skills with size and problem", async () => {
     const fake = fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       "POST /api/admin/skill-fetches": { status: 202, body: { id } },
       [`GET ${fetchUrl}`]: readThen(),
     });
     renderApp("/skills/install");
-    expect(await screen.findByLabelText("Instance")).toHaveValue("main");
     await readRepo();
     const [post] = fake.find("POST", "/api/admin/skill-fetches");
     expect(post.body).toEqual({
@@ -83,16 +83,15 @@ describe("SkillInstall", () => {
     await screen.findByRole("region", { name: "Skills found" });
   });
 
-  it("an operator types the instance; a platform admin's is its own", async () => {
-    fakeApi({ "GET /api/me": { body: operator } });
-    const { unmount } = renderApp("/skills/install");
-    const box = await screen.findByLabelText("Instance");
-    expect(box).toHaveValue("");
-    expect(box).toBeEnabled();
-    unmount();
-    fakeApi({ "GET /api/me": { body: platformAdmin } });
-    renderApp("/skills/install");
-    expect(await screen.findByLabelText("Instance")).toBeDisabled();
+  it("an admin types the instance, whether a local admin or an SSO admin", async () => {
+    for (const me of [operator, ssoAdmin]) {
+      fakeApi({ "GET /api/me": { body: me } });
+      const { unmount } = renderApp("/skills/install");
+      const box = await screen.findByLabelText("Instance");
+      expect(box).toHaveValue("");
+      expect(box).toBeEnabled();
+      unmount();
+    }
   });
 
   it("the URL help says the Job reaches only jobEgress.cidrs", async () => {
@@ -103,14 +102,14 @@ describe("SkillInstall", () => {
   });
 
   it("says installed skills are readable by every signed-in user", async () => {
-    fakeApi({ "GET /api/me": { body: platformAdmin } });
+    fakeApi({ "GET /api/me": { body: ssoAdmin } });
     renderApp("/skills/install");
     expect(await screen.findByText(/readable by every signed-in user/)).toBeInTheDocument();
   });
 
   it("a taken name can't be ticked and says 'name already in the library'", async () => {
     fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       "POST /api/admin/skill-fetches": { status: 202, body: { id } },
       [`GET ${fetchUrl}`]: { body: fetchInstallDone },
     });
@@ -123,7 +122,7 @@ describe("SkillInstall", () => {
 
   it("installs the ticked names; Add to default skills is off at first and is sent when ticked", async () => {
     const fake = fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       "GET /api/skills": { body: [] },
       "POST /api/admin/skill-fetches": { status: 202, body: { id } },
       [`GET ${fetchUrl}`]: { body: fetchInstallDone },
@@ -147,7 +146,7 @@ describe("SkillInstall", () => {
 
   it("shows each name's refusal beside it", async () => {
     fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       "POST /api/admin/skill-fetches": { status: 202, body: { id } },
       [`GET ${fetchUrl}`]: { body: fetchInstallDone },
       [`POST ${fetchUrl}/install`]: {
@@ -167,24 +166,24 @@ describe("SkillInstall", () => {
     expect(await screen.findByText("the skill contains a secret pergent.sh holds")).toBeInTheDocument();
   });
 
-  it("shows the server's refusal to start a read (the ceiling, a missing image)", async () => {
+  it("shows the server's refusal to start a read (an unknown instance, a missing image)", async () => {
     fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       "POST /api/admin/skill-fetches": {
-        status: 403,
+        status: 404,
         body: {
-          error: "you can install only from repositories of your own instance that you can see",
+          error: "not found",
         },
       },
     });
     renderApp("/skills/install");
     await readRepo();
-    expect(await screen.findByRole("alert")).toHaveTextContent("you can install only from repositories of your own instance");
+    expect(await screen.findByRole("alert")).toHaveTextContent("not found");
   });
 
   it("shows why a read failed and lets the admin read again", async () => {
     fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       "POST /api/admin/skill-fetches": { status: 202, body: { id } },
       [`GET ${fetchUrl}`]: {
         body: {

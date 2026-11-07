@@ -43,12 +43,12 @@ export default function Overview() {
       </div>
       {data.isPending && <Loading />}
       {data.isError && <ErrorBox error={data.error} />}
-      {data.isSuccess && <Body view={data.data} platform={me.platform} />}
+      {data.isSuccess && <Body view={data.data} />}
     </>
   );
 }
 
-function Body({ view, platform }: { view: OverviewView; platform: string }) {
+function Body({ view }: { view: OverviewView }) {
   const { stats } = view;
   const pct = stats.reviews > 0 ? Math.round((stats.approved / stats.reviews) * 100) : 0;
   return (
@@ -69,7 +69,7 @@ function Body({ view, platform }: { view: OverviewView; platform: string }) {
         </section>
         <section className="card attention" aria-label="Needs attention">
           <h2>Needs attention</h2>
-          <AttentionRows items={view.attention} platform={platform} />
+          <AttentionRows items={view.attention} />
         </section>
       </div>
     </>
@@ -78,8 +78,8 @@ function Body({ view, platform }: { view: OverviewView; platform: string }) {
 
 // The setup steps of a new install, in order, each with the page that does it.
 const setupSteps: [keyof SetupView, string, string][] = [
-  ["llm", "Set the model and its key", "/settings"],
-  ["instance", "Connect a GitLab or GitHub instance", "/integrations"],
+  ["llm", "Set the model and its key", "/admin/settings"],
+  ["instance", "Connect a GitLab or GitHub instance", "/admin/integrations"],
   ["skill", "Add a skill to the library", "/skills"],
   ["repository", "Switch on a repository", "/repos?add=1"],
 ];

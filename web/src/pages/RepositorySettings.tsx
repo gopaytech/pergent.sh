@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
+import { Link } from "react-router";
 
 import {
   api,
@@ -9,6 +10,7 @@ import {
   type InputsView,
   type LibrarySkill,
   type RepoSettings,
+  type RepoTeamsView,
   type RepositoryDetailView,
   type SettingsUpdate,
 } from "../api";
@@ -89,7 +91,115 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
       )}
       {save.isError && <ErrorBox error={save.error} />}
       {reset.isError && <ErrorBox error={reset.error} />}
+      {/* Which teams cover a repository is an admin's to say, also for a
+          repository the config sets up: it is not one of its settings. */}
+      {view.role === "admin" && <RepoTeams instance={repo.instance} project={repo.project} />}
     </>
+  );
+}
+
+// RepoTeams is, for an admin, the teams that list this repository: the same
+// data as the Teams page, seen from the repository. A team that covers the
+// whole instance is shown as such and left alone here.
+function RepoTeams({ instance, project }: { instance: string; project: string }) {
+  const key = ["repo-teams", instance, project];
+  // Kept here: a saved answer starts the form again, which would lose it.
+  const [saved, setSaved] = useState(false);
+  const teams = useQuery({ queryKey: key, queryFn: () => api.get<RepoTeamsView>(paths.apiRepoTeams(instance, project)) });
+  return (
+    <section className="card" aria-label="Teams">
+      <h2>
+        <span>Teams</span>
+      </h2>
+      {teams.isPending && <Loading />}
+      {teams.isError && <ErrorBox error={teams.error} />}
+      {teams.isSuccess &&
+        (teams.data.teams.length === 0 ? (
+          <div className="pad meta">
+            No team yet. Create one on <Link to="/admin/teams">Teams</Link>.
+          </div>
+        ) : (
+          // A new answer from the server starts the list again from it.
+          <RepoTeamsForm
+            key={JSON.stringify(teams.data)}
+            data={teams.data}
+            instance={instance}
+            project={project}
+            queryKey={key}
+            saved={saved}
+            setSaved={setSaved}
+          />
+        ))}
+    </section>
+  );
+}
+
+function RepoTeamsForm({
+  data,
+  instance,
+  project,
+  queryKey,
+  saved,
+  setSaved,
+}: {
+  data: RepoTeamsView;
+  instance: string;
+  project: string;
+  queryKey: unknown[];
+  saved: boolean;
+  setSaved: (saved: boolean) => void;
+}) {
+  const client = useQueryClient();
+  const write = useWrite();
+  const [ticked, setTicked] = useState(() => new Set(data.teams.filter((t) => t.direct).map((t) => t.id)));
+  const save = useMutation({
+    mutationFn: (ids: number[]) => write<RepoTeamsView>("PUT", paths.apiRepoTeams(instance, project), { teams: ids }),
+    onMutate: () => setSaved(false),
+    onSuccess: (d) => {
+      client.setQueryData(queryKey, d);
+      // The Teams page and the Users page's team column read the same rows.
+      client.invalidateQueries({ queryKey: ["teams"] });
+      client.invalidateQueries({ queryKey: ["users"] });
+      setSaved(true);
+    },
+  });
+  const toggle = (id: number, on: boolean) => {
+    const next = new Set(ticked);
+    if (on) next.add(id);
+    else next.delete(id);
+    setTicked(next);
+    setSaved(false);
+  };
+  return (
+    <form
+      className="pad stack"
+      onSubmit={(e) => {
+        e.preventDefault();
+        save.mutate([...ticked].sort((a, b) => a - b));
+      }}
+    >
+      {data.teams.map((t) => (
+        <label className="check" key={t.id}>
+          <input type="checkbox" checked={ticked.has(t.id)} onChange={(e) => toggle(t.id, e.target.checked)} />
+          <span>
+            {t.name} <span className="meta">{t.members === 1 ? "1 member" : `${t.members} members`}</span>
+            {t.wholeInstance && <span className="meta"> · covers every repository of {instance}</span>}
+          </span>
+        </label>
+      ))}
+      <div className="meta">A team covers the repositories it lists, or all of an instance. Edit a team's members on Teams.</div>
+      {save.isError && <ErrorBox error={save.error} />}
+      {saved && (
+        <div className="note" role="status">
+          Saved.
+        </div>
+      )}
+      <div className="actions-row">
+        <button type="submit" className="btn primary" disabled={save.isPending}>
+          Save teams
+        </button>
+      </div>
+    </form>
   );
 }
 

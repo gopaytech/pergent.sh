@@ -3,12 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeApi } from "../test/fakeApi";
-import { defaults, librarySkills, llm, operator, platformAdmin, viewer } from "../test/fixtures";
+import { defaults, librarySkills, llm, operator, ssoAdmin, viewer } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
 
-const routes = (me = platformAdmin) => ({
+const routes = (me = ssoAdmin) => ({
   "GET /api/me": { body: me },
   "GET /api/admin/defaults": { body: defaults },
   "GET /api/skills": { body: librarySkills },
@@ -18,7 +18,7 @@ const routes = (me = platformAdmin) => ({
 describe("AdminSettings defaults", () => {
   it("shows the defaults in a form an admin can change", async () => {
     fakeApi(routes());
-    renderApp("/settings");
+    renderApp("/admin/settings");
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     expect(within(form).getByRole("switch", { name: "Approve clean reviews" })).toBeChecked();
@@ -39,7 +39,7 @@ describe("AdminSettings defaults", () => {
       ...routes(),
       "PUT /api/admin/defaults": { body: { ...defaults, approve: false, jobTimeoutSeconds: 900, jobMemory: "6Gi" } },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.click(within(form).getByRole("switch", { name: "Approve clean reviews" }));
     await userEvent.clear(within(form).getByLabelText("Timeout (seconds)"));
@@ -76,7 +76,7 @@ describe("AdminSettings defaults", () => {
       ...routes(),
       "PUT /api/admin/defaults": { body: { ...defaults, inlineFindings: false } },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     expect(
       within(form).getByText(
@@ -101,7 +101,7 @@ describe("AdminSettings defaults", () => {
       ...routes(),
       "PUT /api/admin/defaults": { body: { ...defaults, commandsAuthorAndMaintainersOnly: false } },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     expect(within(form).getByText(/When on, only the author of a change and the repository's maintainers and owners can use pergent commands on it. When off, anyone with write access can./)).toBeInTheDocument();
     const names = within(form)
@@ -122,7 +122,7 @@ describe("AdminSettings defaults", () => {
       ...routes(),
       "PUT /api/admin/defaults": { body: { ...defaults, incrementalReviews: false } },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     expect(within(form).getByText(/After a push, review only the files changed since the last review./)).toBeInTheDocument();
     const names = within(form)
@@ -143,7 +143,7 @@ describe("AdminSettings defaults", () => {
       ...routes(),
       "PUT /api/admin/defaults": { body: { ...defaults, learnFromDismissals: false } },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     expect(within(form).getByText(/Later reviews are told what people with write access rejected, and why./)).toBeInTheDocument();
     const names = within(form)
@@ -164,7 +164,7 @@ describe("AdminSettings defaults", () => {
       ...routes(),
       "PUT /api/admin/defaults": { body: { ...defaults, quietReviews: true } },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     expect(
       within(form).getByText(/Fewer nitpicks, no suggestion threads and a shorter comment. Blocking findings, failures and approval stay the same./),
@@ -187,7 +187,7 @@ describe("AdminSettings defaults", () => {
       ...routes(),
       "PUT /api/admin/defaults": { body: defaults },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const row = within(form).getByText("Comment layout", { selector: ".name" }).closest(".set") as HTMLElement;
     expect(within(form).getByText("Quiet reviews", { selector: ".name" }).closest(".set")?.nextElementSibling).toBe(row);
@@ -206,7 +206,7 @@ describe("AdminSettings defaults", () => {
       ...routes(),
       "PUT /api/admin/defaults": { body: defaults },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const row = within(form).getByText("Comment layout", { selector: ".name" }).closest(".set") as HTMLElement;
     await userEvent.click(within(row).getByRole("button", { name: "Move Files up" }));
@@ -223,7 +223,7 @@ describe("AdminSettings defaults", () => {
       },
       "PUT /api/admin/defaults": { body: defaults },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const row = within(form).getByText("Comment layout", { selector: ".name" }).closest(".set") as HTMLElement;
     expect(within(row).getByText(/Saved here: repositories switched on in the dashboard start with this layout./)).toBeInTheDocument();
@@ -244,7 +244,7 @@ describe("AdminSettings defaults", () => {
       ...routes(),
       "PUT /api/admin/defaults": { body: { ...defaults, rerunLimitPerMR: 3, rerunLimitPerRepo: 120 } },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const perMR = within(form).getByLabelText("Re-run cap per MR/PR (per day)");
     const perRepo = within(form).getByLabelText("Re-run cap per repository (per day)");
@@ -262,7 +262,7 @@ describe("AdminSettings defaults", () => {
 
   it("saving untouched defaults sends null for values equal to the config", async () => {
     const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: defaults } });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
     expect(fake.find("PUT", "/api/admin/defaults")[0].body).toEqual({
@@ -286,7 +286,7 @@ describe("AdminSettings defaults", () => {
 
   it("says under each default what the config gives", async () => {
     fakeApi(routes());
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const row = (name: string) => within(form).getByText(name, { selector: ".name" }).closest(".set") as HTMLElement;
     expect(row("Approve clean reviews")).toHaveTextContent("From config: on");
@@ -319,7 +319,7 @@ describe("AdminSettings defaults", () => {
       "GET /api/admin/defaults": { body: pinnedTimeout },
       "PUT /api/admin/defaults": { body: defaults },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const row = within(form).getByText("Timeout", { selector: ".name" }).closest(".set") as HTMLElement;
     expect(within(row).getByText("Saved here; the config says 1800.")).toBeInTheDocument();
@@ -340,7 +340,7 @@ describe("AdminSettings defaults", () => {
       },
       "PUT /api/admin/defaults": { body: defaults },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const row = within(form).getByText("Only the author and maintainers use commands", { selector: ".name" }).closest(".set") as HTMLElement;
     expect(within(row).getByText("Saved here; the config says on.")).toBeInTheDocument();
@@ -359,7 +359,7 @@ describe("AdminSettings defaults", () => {
       },
       "PUT /api/admin/defaults": { body: defaults },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const row = within(form).getByText("Incremental reviews", { selector: ".name" }).closest(".set") as HTMLElement;
     expect(within(row).getByText("Saved here; the config says on.")).toBeInTheDocument();
@@ -378,7 +378,7 @@ describe("AdminSettings defaults", () => {
       },
       "PUT /api/admin/defaults": { body: defaults },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const row = within(form).getByText("Learn from dismissals", { selector: ".name" }).closest(".set") as HTMLElement;
     expect(within(row).getByText("Saved here; the config says on.")).toBeInTheDocument();
@@ -397,7 +397,7 @@ describe("AdminSettings defaults", () => {
       },
       "PUT /api/admin/defaults": { body: defaults },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const row = within(form).getByText("Quiet reviews", { selector: ".name" }).closest(".set") as HTMLElement;
     expect(within(row).getByText("Saved here; the config says off.")).toBeInTheDocument();
@@ -414,7 +414,7 @@ describe("AdminSettings defaults", () => {
       "GET /api/admin/defaults": { body: pinnedTimeout },
       "PUT /api/admin/defaults": { body: pinnedTimeout },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
     expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ jobTimeoutSeconds: 600, maxTurns: null });
@@ -423,7 +423,7 @@ describe("AdminSettings defaults", () => {
   it("lets a config timeout outside 60-7200 be saved untouched or typed, as null", async () => {
     const long = { ...defaults, jobTimeoutSeconds: 10800, config: { ...defaults.config, jobTimeoutSeconds: 10800 } };
     const fake = fakeApi({ ...routes(), "GET /api/admin/defaults": { body: long }, "PUT /api/admin/defaults": { body: long } });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
     await waitFor(() => expect(fake.find("PUT", "/api/admin/defaults")).toHaveLength(1));
@@ -437,7 +437,7 @@ describe("AdminSettings defaults", () => {
 
   it("still refuses a timeout over 7200 that differs from the config", async () => {
     const fake = fakeApi(routes());
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.clear(within(form).getByLabelText("Timeout (seconds)"));
     await userEvent.type(within(form).getByLabelText("Timeout (seconds)"), "7201");
@@ -448,7 +448,7 @@ describe("AdminSettings defaults", () => {
 
   it("sends a changed value as it is", async () => {
     const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: { ...defaults, jobTimeoutSeconds: 900 } } });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.clear(within(form).getByLabelText("Timeout (seconds)"));
     await userEvent.type(within(form).getByLabelText("Timeout (seconds)"), "900");
@@ -458,7 +458,7 @@ describe("AdminSettings defaults", () => {
 
   it("sends an emptied re-run cap as null, the built-in default", async () => {
     const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: defaults } });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.clear(within(form).getByLabelText("Re-run cap per repository (per day)"));
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
@@ -467,7 +467,7 @@ describe("AdminSettings defaults", () => {
 
   it.each(["0", "1001", "1.5"])("refuses the re-run cap %s without asking the server", async (value) => {
     const fake = fakeApi(routes());
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     const perMR = within(form).getByLabelText("Re-run cap per MR/PR (per day)");
     await userEvent.clear(perMR);
@@ -479,7 +479,7 @@ describe("AdminSettings defaults", () => {
 
   it("sends an empty memory limit as null, the built-in default", async () => {
     const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: defaults } });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
     expect(fake.find("PUT", "/api/admin/defaults")[0].body).toMatchObject({ jobMemory: null });
@@ -487,7 +487,7 @@ describe("AdminSettings defaults", () => {
 
   it.each(["abc", "59", "7201"])("refuses a timeout of %s without asking the server", async (text) => {
     const fake = fakeApi(routes());
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.clear(within(form).getByLabelText("Timeout (seconds)"));
     await userEvent.type(within(form).getByLabelText("Timeout (seconds)"), text);
@@ -498,7 +498,7 @@ describe("AdminSettings defaults", () => {
 
   it("refuses a timeout that isn't a whole number without asking the server", async () => {
     const fake = fakeApi(routes());
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.clear(within(form).getByLabelText("Timeout (seconds)"));
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
@@ -508,7 +508,7 @@ describe("AdminSettings defaults", () => {
 
   it("sends a changed Max steps with the other defaults", async () => {
     const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: { ...defaults, maxTurns: 90 } } });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.clear(within(form).getByLabelText("Max steps"));
     await userEvent.type(within(form).getByLabelText("Max steps"), "90");
@@ -518,7 +518,7 @@ describe("AdminSettings defaults", () => {
 
   it.each(["4", "201", ""])("refuses Max steps %j without asking the server", async (text) => {
     const fake = fakeApi(routes());
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.clear(within(form).getByLabelText("Max steps"));
     if (text !== "") await userEvent.type(within(form).getByLabelText("Max steps"), text);
@@ -532,7 +532,7 @@ describe("AdminSettings defaults", () => {
       ...routes(),
       "PUT /api/admin/defaults": { status: 400, body: { error: "jobMemory must be between 256Mi and 32Gi" } },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     await userEvent.type(within(form).getByLabelText("Memory limit"), "1Mi");
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
@@ -546,7 +546,7 @@ describe("AdminSettings default skills", () => {
       ...routes(),
       "PUT /api/admin/defaults": { body: { ...defaults, skills: ["code-review", "security-review"] } },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const picker = await screen.findByRole("group", { name: "Default skills" });
     expect(within(picker).getByRole("switch", { name: "Default skill code-review" })).toBeChecked();
     expect(within(picker).getByRole("switch", { name: "Default skill security-review" })).not.toBeChecked();
@@ -566,7 +566,7 @@ describe("AdminSettings default skills", () => {
       "GET /api/skills": () => ({ body: skillReads++ === 0 ? librarySkills : librarySkills.map((s) => ({ ...s, inDefaults: true })) }),
       "PUT /api/admin/defaults": { body: { ...defaults, skills: ["code-review", "security-review"] } },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const picker = await screen.findByRole("group", { name: "Default skills" });
     await userEvent.click(within(picker).getByRole("switch", { name: "Default skill security-review" }));
     await userEvent.click(screen.getByRole("button", { name: "Save defaults" }));
@@ -580,7 +580,7 @@ describe("AdminSettings default skills", () => {
       "GET /api/admin/defaults": { body: { ...defaults, skills: ["code-review", "old-skill"] } },
       "PUT /api/admin/defaults": { body: { ...defaults, skills: ["code-review"] } },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const picker = await screen.findByRole("group", { name: "Default skills" });
     const old = within(picker).getByRole("switch", { name: "Default skill old-skill" });
     expect(old).toBeChecked();
@@ -606,7 +606,7 @@ describe("AdminSettings default skills", () => {
         body: { error: "the library skills come to 1000 KiB; a review takes at most 900 KiB" },
       },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const picker = await screen.findByRole("group", { name: "Default skills" });
     const total = within(picker).getByText("Total 1000 KiB of 900 KiB");
     expect(total).toHaveClass("problem");
@@ -618,7 +618,7 @@ describe("AdminSettings default skills", () => {
 
   it("can save an empty default list, and says what that means", async () => {
     const fake = fakeApi({ ...routes(), "PUT /api/admin/defaults": { body: { ...defaults, skills: [] } } });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const picker = await screen.findByRole("group", { name: "Default skills" });
     await userEvent.click(within(picker).getByRole("switch", { name: "Default skill code-review" }));
     expect(within(picker).getByText(/gets no skills/)).toBeInTheDocument();
@@ -632,7 +632,7 @@ describe("AdminSettings default skills", () => {
       "GET /api/skills": { status: 500, body: { error: "boom" } },
       "PUT /api/admin/defaults": { body: defaults },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Repository defaults" });
     expect(await within(form).findByText("boom")).toBeInTheDocument();
     await userEvent.click(within(form).getByRole("button", { name: "Save defaults" }));
@@ -642,9 +642,9 @@ describe("AdminSettings default skills", () => {
 });
 
 describe("AdminSettings model", () => {
-  it("is read-only for a platform admin, without a key", async () => {
+  it("is read-only when the server says it can't be changed, without a key", async () => {
     fakeApi(routes());
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const model = await screen.findByRole("region", { name: "Model" });
     expect(model).toHaveTextContent("anthropic");
     expect(model).toHaveTextContent("claude-sonnet");
@@ -659,7 +659,7 @@ describe("AdminSettings model", () => {
       ...routes(operator),
       "GET /api/admin/llm": { body: { ...llm, source: "config", editable: false, key: { set: true, updatedAt: null } } },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const model = await screen.findByRole("region", { name: "Model" });
     expect(model).toHaveTextContent("from the config file");
     expect(within(model).queryByRole("textbox")).not.toBeInTheDocument();
@@ -674,7 +674,7 @@ describe("AdminSettings model", () => {
       "GET /api/admin/llm": () => ({ body: read++ === 0 ? llm : { ...llm, model: "claude-opus" } }),
       "PUT /api/admin/llm": { body: { ...llm, model: "claude-opus" } },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Model" });
     expect(within(form).getByLabelText("Provider")).toHaveValue("anthropic");
     expect(within(form).getByLabelText("Model")).toHaveValue("claude-sonnet");
@@ -693,12 +693,12 @@ describe("AdminSettings model", () => {
 
   it("sends a replacement key from an empty password input, and forgets it", async () => {
     const fake = fakeApi({ ...routes(operator), "GET /api/admin/llm": { body: llm }, "PUT /api/admin/llm": { body: llm } });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Model" });
     await userEvent.click(within(form).getByRole("button", { name: "Replace" }));
     const key = within(form).getByLabelText("New API key");
     expect(key).toHaveAttribute("type", "password");
-    // "off" doesn't stop a password manager filling the operator's own
+    // "off" doesn't stop a password manager filling the admin's own
     // sign-in here; "new-password" and the managers' opt-outs do.
     expect(key).toHaveAttribute("autocomplete", "new-password");
     expect(key).toHaveAttribute("data-1p-ignore");
@@ -722,7 +722,7 @@ describe("AdminSettings model", () => {
       "GET /api/admin/llm": { body: { ...llm, provider: "", model: "", key: { set: false, updatedAt: null } } },
       "PUT /api/admin/llm": { body: llm },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Model" });
     expect(form).toHaveTextContent("not set");
     await userEvent.selectOptions(within(form).getByLabelText("Provider"), "anthropic");
@@ -744,7 +744,7 @@ describe("AdminSettings model", () => {
       "GET /api/admin/llm": { body: { ...llm, provider: "", model: "", key: { set: false, updatedAt: null } } },
       "PUT /api/admin/llm": { body: llm },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Model" });
     const provider = within(form).getByLabelText("Provider");
     const options = within(provider)
@@ -753,7 +753,7 @@ describe("AdminSettings model", () => {
     expect(options).toEqual(
       expect.arrayContaining(["anthropic", "openai", "deepseek", "google", "openrouter", "groq", "mistral", "xai", "other"]),
     );
-    // Nothing is picked until the operator picks.
+    // Nothing is picked until the admin picks.
     expect(provider).toHaveValue("");
     expect(within(form).queryByLabelText("Provider ID")).not.toBeInTheDocument();
     await userEvent.selectOptions(provider, "deepseek");
@@ -774,7 +774,7 @@ describe("AdminSettings model", () => {
       "GET /api/admin/llm": { body: { ...llm, provider: "my-gateway", baseURL: "https://llm.example.com/v1" } },
       "PUT /api/admin/llm": { body: llm },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Model" });
     expect(within(form).getByLabelText("Provider")).toHaveValue("other");
     const id = within(form).getByLabelText("Provider ID");
@@ -791,7 +791,7 @@ describe("AdminSettings model", () => {
 
   it("leaves the non-secret fields to no password manager either", async () => {
     fakeApi({ ...routes(operator), "GET /api/admin/llm": { body: llm } });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Model" });
     // A password manager fills a saved username into the text field before
     // a password field: the Base URL once showed "admin".
@@ -809,7 +809,7 @@ describe("AdminSettings model", () => {
       "GET /api/admin/llm": { body: llm },
       "PUT /api/admin/llm": { status: 409, body: { error: "the LLM is set in the config file; change it there" } },
     });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     const form = await screen.findByRole("form", { name: "Model" });
     await userEvent.click(within(form).getByRole("button", { name: "Save model" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("the LLM is set in the config file");
@@ -819,7 +819,7 @@ describe("AdminSettings model", () => {
 describe("AdminSettings access", () => {
   it("isn't shown to a viewer", async () => {
     const fake = fakeApi({ "GET /api/me": { body: viewer } });
-    renderApp("/settings");
+    renderApp("/admin/settings");
     expect(await screen.findByRole("heading", { name: "Not found" })).toBeInTheDocument();
     expect(fake.find("GET", "/api/admin/defaults")).toHaveLength(0);
     expect(fake.find("GET", "/api/admin/llm")).toHaveLength(0);

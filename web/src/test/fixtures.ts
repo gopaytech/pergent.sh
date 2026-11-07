@@ -3,7 +3,6 @@ import type {
   Can,
   DefaultsView,
   InstanceAdminView,
-  IntegrationView,
   LibrarySkill,
   LLMAdminView,
   Me,
@@ -11,46 +10,50 @@ import type {
   PastDismissalView,
   RepositoryDetailView,
   RepositoryView,
+  RepoTeamsView,
   ReviewDetailView,
   ReviewSummary,
   Role,
   RunDetailView,
   SkillDetail,
   SkillFetch,
+  SignInAdminView,
   SkillResultView,
   TeamView,
   UserView,
 } from "../api";
 
-// A platform admin: on an admin team of its instance.
-export const platformAdmin: Me = {
-  kind: "platform",
-  username: "platform-user",
-  platform: "gitlab",
-  instance: "main",
+// An SSO account an admin made an admin.
+export const ssoAdmin: Me = {
+  kind: "sso",
+  username: "sso-admin",
+  email: "sso-admin@example.com",
+  role: "admin",
+  signIn: "oidc",
   admin: true,
-  operator: false,
   waiting: false,
   mustChangePassword: false,
   waitingUsers: 0,
   csrfToken: "csrf-123",
 };
 
-// The operator: a password account, which sees everything.
+// The local admin: a password account.
 export const operator: Me = {
-  ...platformAdmin,
+  ...ssoAdmin,
   kind: "password",
   username: "admin",
-  platform: "",
-  instance: "",
-  operator: true,
+  email: "",
+  signIn: "password",
 };
 
-export const maintainer: Me = { ...platformAdmin, username: "maint-user", admin: false, csrfToken: "csrf-maint" };
-export const viewer: Me = { ...platformAdmin, username: "dev-user", admin: false, csrfToken: "csrf-dev" };
+// A user on a team with the maintainer role, and one with the viewer role. The
+// API tells the roles apart per repository; /api/me does not.
+const userMe: Me = { ...ssoAdmin, username: "dev-user", email: "dev-user@example.com", role: "user", admin: false };
+export const maintainer: Me = { ...userMe, username: "maint-user", email: "maint-user@example.com", csrfToken: "csrf-maint" };
+export const viewer: Me = { ...userMe, csrfToken: "csrf-dev" };
 
 // On no team yet: sees nothing.
-export const waiting: Me = { ...viewer, username: "new-user", waiting: true };
+export const waiting: Me = { ...viewer, username: "new-user", email: "new-user@example.com", waiting: true };
 
 // A password account that must change its password first.
 export const mustChange: Me = { ...operator, mustChangePassword: true };
@@ -344,30 +347,74 @@ export const fetchUpdateDone: SkillFetch = {
   ],
 };
 
-export const integrations: IntegrationView = {
-  instance: "main",
-  platform: "gitlab",
-  connected: true,
-  approver: "token",
-  tokenExpiry: "2026-11-09T00:00:00Z",
-  repos: [
-    { project: "acme/payments", installed: true, approverReachable: false, inlineAvailable: false, protectionReadable: true },
-    { project: "acme/widgets", installed: true, approverReachable: true, inlineAvailable: true, protectionReadable: true },
+// The sign-in settings: nothing set up, OIDC against Google, a JWT header, and
+// OIDC set in the config file.
+export const signInNone: SignInAdminView = {
+  source: "dashboard",
+  editable: true,
+  mode: "",
+  label: "",
+  issuer: "",
+  clientID: "",
+  clientSecret: { set: false, updatedAt: null },
+  header: "",
+  audience: "",
+  jwksURL: "",
+  emailClaim: "",
+  allowedDomains: [],
+  allowedEmails: [],
+  callbackURL: "https://dash.example.com/auth/oidc/callback",
+};
+
+export const signInOIDC: SignInAdminView = {
+  ...signInNone,
+  mode: "oidc",
+  label: "Google",
+  issuer: "https://accounts.google.com",
+  clientID: "123-abc.apps.googleusercontent.com",
+  clientSecret: { set: true, updatedAt: minutesAgo(60) },
+  allowedDomains: ["example.com"],
+  allowedEmails: ["friend@example.org"],
+};
+
+export const signInJWT: SignInAdminView = {
+  ...signInNone,
+  mode: "jwt",
+  issuer: "https://proxy.example.com",
+  header: "X-Auth-Token",
+  audience: "pergent",
+  jwksURL: "https://proxy.example.com/keys",
+  emailClaim: "email",
+  allowedDomains: ["example.com"],
+};
+
+export const signInFromConfig: SignInAdminView = {
+  ...signInOIDC,
+  source: "config",
+  editable: false,
+  clientSecret: { set: true, updatedAt: null },
+};
+
+// The teams of acme/payments: one lists it, one covers the whole instance, one
+// has nothing to do with it.
+export const repoTeams: RepoTeamsView = {
+  teams: [
+    { id: 2, name: "Payments", members: 1, direct: true, wholeInstance: false },
+    { id: 3, name: "Platform", members: 0, direct: false, wholeInstance: false },
+    { id: 4, name: "Everyone on main", members: 6, direct: false, wholeInstance: true },
   ],
 };
 
-export const integrationsGitHub: IntegrationView = {
-  instance: "hub",
-  platform: "github",
-  connected: true,
-  approver: "app",
-  repos: [
-    // Inline on, protection unreadable: the only row with the protection note.
-    { project: "acme/orders", installed: true, approverReachable: true, inlineAvailable: true, protectionReadable: false },
-    // Inline off already says enough: no protection note.
-    { project: "acme/payments", installed: true, approverReachable: true, inlineAvailable: false, protectionReadable: false },
-    { project: "acme/widgets", installed: true, approverReachable: true, inlineAvailable: true, protectionReadable: true },
-  ],
+export const userInvited: UserView = {
+  id: 9,
+  kind: "sso",
+  username: "invited@example.com",
+  email: "invited@example.com",
+  role: "user",
+  invited: true,
+  lastSignInAt: null,
+  waiting: false,
+  teams: [{ id: 2, name: "Payments" }],
 };
 
 export const defaults: DefaultsView = {
@@ -426,12 +473,10 @@ export const instanceGitLab: InstanceAdminView = {
   reviewAppID: 0,
   approveAppID: 0,
   approver: "token",
-  oauthClientID: "app-id-1",
   secrets: {
     review_token: { set: true, updatedAt: null },
     approve_token: { set: true, updatedAt: null },
     webhook_secret: { set: true, updatedAt: null },
-    oauth_client_secret: { set: false, updatedAt: null },
   },
 };
 
@@ -446,12 +491,10 @@ export const instanceGitHub: InstanceAdminView = {
   reviewAppID: 11,
   approveAppID: 12,
   approver: "app",
-  oauthClientID: "",
   secrets: {
     review_app_key: { set: true, updatedAt: minutesAgo(120) },
     approve_app_key: { set: false, updatedAt: null },
     webhook_secret: { set: true, updatedAt: minutesAgo(120) },
-    oauth_client_secret: { set: false, updatedAt: null },
   },
 };
 
@@ -465,7 +508,6 @@ export const instanceGitHubOneApp: InstanceAdminView = {
   secrets: {
     review_app_key: { set: true, updatedAt: minutesAgo(120) },
     webhook_secret: { set: true, updatedAt: minutesAgo(120) },
-    oauth_client_secret: { set: false, updatedAt: null },
   },
 };
 
@@ -475,21 +517,20 @@ export const instanceDashboardGitLab: InstanceAdminView = {
   webhookURL: "https://pergent.example.com/webhooks/gitlab/extra",
   source: "dashboard",
   url: "https://gitlab2.example.com",
-  oauthClientID: "",
   secrets: {
     review_token: { set: true, updatedAt: minutesAgo(120) },
     approve_token: { set: true, updatedAt: minutesAgo(120) },
     webhook_secret: { set: true, updatedAt: minutesAgo(120) },
-    oauth_client_secret: { set: false, updatedAt: null },
   },
 };
 
 export const userWaiting: UserView = {
   id: 7,
-  kind: "platform",
-  username: "newcomer",
-  platform: "gitlab",
-  instance: "main",
+  kind: "sso",
+  username: "newcomer@example.com",
+  email: "newcomer@example.com",
+  role: "user",
+  invited: false,
   lastSignInAt: minutesAgo(5),
   waiting: true,
   teams: [],
@@ -497,10 +538,11 @@ export const userWaiting: UserView = {
 
 export const userDev: UserView = {
   id: 5,
-  kind: "platform",
-  username: "dev-user",
-  platform: "gitlab",
-  instance: "main",
+  kind: "sso",
+  username: "dev-user@example.com",
+  email: "dev-user@example.com",
+  role: "user",
+  invited: false,
   lastSignInAt: minutesAgo(180),
   waiting: false,
   teams: [{ id: 2, name: "Payments" }],
@@ -510,8 +552,9 @@ export const userOperator: UserView = {
   id: 1,
   kind: "password",
   username: "admin",
-  platform: "",
-  instance: "",
+  email: "",
+  role: "admin",
+  invited: false,
   lastSignInAt: null,
   waiting: false,
   teams: [],
@@ -520,21 +563,15 @@ export const userOperator: UserView = {
 export const teamPayments: TeamView = {
   id: 2,
   name: "Payments",
-  role: "maintainer",
-  members: [{ id: 5, username: "dev-user", platform: "gitlab", instance: "main" }],
+  members: [{ accountId: 5, username: "dev-user@example.com", email: "dev-user@example.com", role: "maintainer" }],
   repos: [{ instance: "main", project: "acme/payments" }],
-  hiddenRepos: 0,
-  hiddenMembers: 0,
 };
 
-export const teamAdmins: TeamView = {
+export const teamEmpty: TeamView = {
   id: 3,
-  name: "Admins",
-  role: "admin",
+  name: "Platform",
   members: [],
   repos: [],
-  hiddenRepos: 0,
-  hiddenMembers: 0,
 };
 
 export const auditPage1: AuditPageView = {

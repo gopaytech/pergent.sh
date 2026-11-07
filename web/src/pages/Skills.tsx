@@ -137,12 +137,8 @@ function inUseBody(err: unknown): SkillInUse | null {
   if (!(err instanceof ApiError) || err.status !== 409) return null;
   const b = err.body as Partial<SkillInUse> | undefined;
   if (!b || !Array.isArray(b.repositories)) return null;
-  return { error: err.message, repositories: b.repositories, hidden: b.hidden ?? 0, inDefaults: b.inDefaults ?? false };
+  return { error: err.message, repositories: b.repositories, inDefaults: b.inDefaults ?? false };
 }
-
-// hiddenText counts the repositories that use a skill and that the admin
-// can't see.
-const hiddenText = (n: number) => `+${n} repositories you can't see`;
 
 function InUseBox({ name, inUse }: { name: string; inUse: SkillInUse }) {
   return (
@@ -153,7 +149,6 @@ function InUseBox({ name, inUse }: { name: string; inUse: SkillInUse }) {
           <li key={`${r.instance}/${r.project}`}>{`${r.instance}: ${r.project}`}</li>
         ))}
         {inUse.inDefaults && <li>the default skills</li>}
-        {inUse.hidden > 0 && <li>{hiddenText(inUse.hidden)}</li>}
       </ul>
     </div>
   );

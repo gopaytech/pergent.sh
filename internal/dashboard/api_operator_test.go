@@ -29,7 +29,6 @@ import (
 const (
 	labReviewToken  = "lab-review-token-SECRET-111"
 	labApproveToken = "lab-approve-token-SECRET-222"
-	labOAuthSecret  = "lab-oauth-client-secret-SECRET-333"
 	hubReviewKey    = "-----BEGIN RSA PRIVATE KEY-----\nhub-review-key-SECRET-444\n-----END RSA PRIVATE KEY-----"
 	hubApproveKey   = "-----BEGIN RSA PRIVATE KEY-----\nhub-approve-key-SECRET-555\n-----END RSA PRIVATE KEY-----"
 	hubWebhook      = "hub-webhook-secret-SECRET-666"
@@ -42,7 +41,6 @@ const (
 // dashboard and the webhooks read.
 type fakeConnector struct {
 	mu       sync.Mutex
-	auth     *Auth
 	sources  *syncmap.Map[RepoSource]
 	catalogs *syncmap.Map[RepoCatalog]
 	hooks    *syncmap.Map[string] // the webhook secret of each instance connected
@@ -93,7 +91,6 @@ func (c *fakeConnector) Connect(_ context.Context, inst instances.Instance, s in
 		c.sources.Set(inst.Name, newFakeSource())
 		c.catalogs.Set(inst.Name, &fakeCatalog{})
 	}
-	c.auth.SetProvider(inst, s)
 	return nil
 }
 
@@ -104,7 +101,6 @@ func (c *fakeConnector) Disconnect(name string) {
 	c.hooks.Delete(name)
 	c.sources.Delete(name)
 	c.catalogs.Delete(name)
-	c.auth.RemoveProvider(name)
 }
 
 func (c *fakeConnector) connectCalls() []connectCall {
@@ -139,8 +135,8 @@ func (e *env) sendJSON(c *http.Cookie, method, target string, body any) *httptes
 // labBody is the body that adds the GitLab instance "lab".
 func labBody(edit func(m map[string]any)) map[string]any {
 	m := map[string]any{
-		"name": "lab", "platform": "gitlab", "url": "https://gitlab.lab.example.com", "oauthClientID": "lab-client",
-		"secrets": map[string]string{"review_token": labReviewToken, "approve_token": labApproveToken, "oauth_client_secret": labOAuthSecret},
+		"name": "lab", "platform": "gitlab", "url": "https://gitlab.lab.example.com",
+		"secrets": map[string]string{"review_token": labReviewToken, "approve_token": labApproveToken},
 	}
 	if edit != nil {
 		edit(m)
@@ -185,13 +181,16 @@ func TestAddGitLabInstance(t *testing.T) {
 
 	view := e.addLab(c)
 	if view.Name != "lab" || view.Platform != "gitlab" || view.Source != "dashboard" || view.Removing ||
-		view.URL != "https://gitlab.lab.example.com" || view.Approver != "token" || view.OAuthClientID != "lab-client" {
+		view.URL != "https://gitlab.lab.example.com" || view.Approver != "token" {
 		t.Fatalf("view = %+v", view)
 	}
-	for _, f := range []string{"review_token", "approve_token", "webhook_secret", "oauth_client_secret"} {
+	for _, f := range []string{"review_token", "approve_token", "webhook_secret"} {
 		if sv, ok := view.Secrets[f]; !ok || !sv.Set || sv.UpdatedAt == nil {
 			t.Errorf("secrets[%s] = %+v, want set with a time", f, sv)
 		}
+	}
+	if _, ok := view.Secrets["oauth_client_secret"]; ok || len(view.Secrets) != 3 {
+		t.Errorf("secrets = %+v; want the three an instance takes, no OAuth client secret", view.Secrets)
 	}
 
 	// Checked with the secrets sent and the generated webhook secret, then
@@ -201,7 +200,7 @@ func TestAddGitLabInstance(t *testing.T) {
 		t.Fatalf("checks %d, connects %d; want one each", len(checks), len(connects))
 	}
 	s := connects[0].s
-	if s.ReviewToken != labReviewToken || s.ApproveToken != labApproveToken || s.OAuthClientSecret != labOAuthSecret ||
+	if s.ReviewToken != labReviewToken || s.ApproveToken != labApproveToken ||
 		!regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(s.WebhookSecret) || checks[0].s != s {
 		t.Errorf("connected with %+v; want the secrets sent and a generated 32-byte hex webhook secret", s)
 	}
@@ -210,7 +209,7 @@ func TestAddGitLabInstance(t *testing.T) {
 	}
 
 	// Registered, stored, with the secrets sealed.
-	if inst, ok := e.reg.Get("lab"); !ok || inst.Source != instances.SourceDashboard || inst.OAuthClientID != "lab-client" {
+	if inst, ok := e.reg.Get("lab"); !ok || inst.Source != instances.SourceDashboard {
 		t.Errorf("registry lab = %+v, %v", inst, ok)
 	}
 	got, _, err := e.reg.Secrets(ctx, "lab")
@@ -236,15 +235,13 @@ func TestAddGitLabInstance(t *testing.T) {
 	if sv := list[2].Secrets["webhook_secret"]; !sv.Set {
 		t.Errorf("GET shows webhook_secret %+v, want set", sv)
 	}
-	if v := list[1]; v.Source != "config" || v.URL != e.gl.srv.URL || v.Secrets["review_token"].Set || !v.Secrets["oauth_client_secret"].Set ||
-		v.OAuthClientID != glClientID {
+	if v := list[1]; v.Source != "config" || v.URL != glURL || v.Secrets["review_token"].Set {
 		t.Errorf("config instance main = %+v", v)
 	}
 
-	// Sign-in through it works as soon as it is added.
-	signin := decode[instancesView](t, e.do("GET", "/api/instances", nil, nil), "GET /api/instances", http.StatusOK)
-	if !slices.Contains(signin.Instances, InstanceView{Platform: "gitlab", Instance: "lab", Label: "GitLab (lab)"}) {
-		t.Errorf("sign-in instances = %+v, want lab", signin.Instances)
+	// No sign-in is offered through it: an instance is no way to sign in.
+	if body := e.do("GET", "/api/sign-in-options", nil, nil).Body.String(); strings.Contains(body, "lab") {
+		t.Errorf("the sign-in options name an instance: %s", body)
 	}
 
 	// Its webhooks: refused with a wrong secret, accepted with the
@@ -358,12 +355,12 @@ func TestAddGitHubInstanceReviewAppApproves(t *testing.T) {
 	if view.Approver != "review_app" || view.ReviewAppID != 11 || view.ApproveAppID != 11 {
 		t.Errorf("view = %+v", view)
 	}
-	for _, f := range []string{"review_app_key", "webhook_secret", "oauth_client_secret"} {
+	for _, f := range []string{"review_app_key", "webhook_secret"} {
 		if _, ok := view.Secrets[f]; !ok {
 			t.Errorf("secrets lacks %s: %+v", f, view.Secrets)
 		}
 	}
-	for _, f := range []string{"approve_app_key", "approve_token"} {
+	for _, f := range []string{"approve_app_key", "approve_token", "oauth_client_secret"} {
 		if sv, ok := view.Secrets[f]; ok {
 			t.Errorf("a review App approver lists %s: %+v", f, sv)
 		}
@@ -469,7 +466,6 @@ func TestAddInstanceValidation(t *testing.T) {
 	secrets := func(m map[string]string) func(map[string]any) {
 		return func(b map[string]any) { b["secrets"] = m }
 	}
-	full := map[string]string{"review_token": "r", "approve_token": "a"}
 	for _, tc := range []struct {
 		name   string
 		body   map[string]any
@@ -505,11 +501,11 @@ func TestAddInstanceValidation(t *testing.T) {
 		}), 400, "approve_token is required"},
 		{"github without an app", hubBody(func(m map[string]any) { m["reviewAppID"] = 0 }), 400, "reviewAppID must be positive"},
 		{"gitlab webhook secret", labBody(func(m map[string]any) {
-			m["secrets"] = map[string]string{"review_token": "r", "approve_token": "a", "webhook_secret": "mine", "oauth_client_secret": "o"}
+			m["secrets"] = map[string]string{"review_token": "r", "approve_token": "a", "webhook_secret": "mine"}
 		}), 400, "generated"},
-		{"empty secret", labBody(secrets(map[string]string{"review_token": "  ", "approve_token": "a", "oauth_client_secret": "o"})), 400, "review_token must not be empty"},
-		{"missing secret", labBody(secrets(map[string]string{"review_token": "r", "oauth_client_secret": "o"})), 400, "approve_token is required"},
-		{"unknown secret", labBody(secrets(map[string]string{"review_token": "r", "approve_token": "a", "oauth_client_secret": "o", "api_key": "k"})), 400, "api_key is not a secret"},
+		{"empty secret", labBody(secrets(map[string]string{"review_token": "  ", "approve_token": "a"})), 400, "review_token must not be empty"},
+		{"missing secret", labBody(secrets(map[string]string{"review_token": "r"})), 400, "approve_token is required"},
+		{"unknown secret", labBody(secrets(map[string]string{"review_token": "r", "approve_token": "a", "api_key": "k"})), 400, "api_key is not a secret"},
 		{"app key on a token instance", hubBody(func(m map[string]any) {
 			m["approveAppID"] = 0
 			m["secrets"] = map[string]string{"review_app_key": "k", "approve_app_key": "k2", "webhook_secret": "w"}
@@ -517,11 +513,9 @@ func TestAddInstanceValidation(t *testing.T) {
 		{"github without a webhook secret", hubBody(func(m map[string]any) {
 			m["secrets"] = map[string]string{"review_app_key": "k", "approve_app_key": "k2"}
 		}), 400, "webhook_secret is required"},
-		{"client id without a secret", labBody(secrets(full)), 400, "go together"},
-		{"client secret without an id", labBody(func(m map[string]any) {
-			m["oauthClientID"] = ""
-		}), 400, "go together"},
-		{"client id with a space", labBody(func(m map[string]any) { m["oauthClientID"] = "a b" }), 400, "without spaces"},
+		{"an OAuth client secret", labBody(secrets(map[string]string{"review_token": "r", "approve_token": "a", "oauth_client_secret": "o"})),
+			400, "oauth_client_secret is not a secret"},
+		{"an OAuth client ID", labBody(func(m map[string]any) { m["oauthClientID"] = "lab-client" }), 400, "the body must be"},
 		{"unknown field", labBody(func(m map[string]any) { m["token"] = "x" }), 400, "the body must be"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -539,8 +533,8 @@ func TestAddInstanceValidation(t *testing.T) {
 	}
 }
 
-// Secrets and the OAuth client ID can change, checked as a whole with the
-// secrets already stored; the address and App IDs can't.
+// Secrets can change, checked as a whole with the secrets already stored; the
+// address and App IDs can't. There is no OAuth client to change any more.
 func TestUpdateInstance(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.operator()
@@ -548,10 +542,10 @@ func TestUpdateInstance(t *testing.T) {
 	hook := e.conn.connectCalls()[0].s.WebhookSecret
 
 	rec := e.sendJSON(c, "PUT", "/api/admin/instances/lab", map[string]any{
-		"oauthClientID": "lab-client-2", "secrets": map[string]string{"review_token": "new-review-token-SECRET-999"},
+		"secrets": map[string]string{"review_token": "new-review-token-SECRET-999"},
 	})
 	view := decode[InstanceAdminView](t, rec, "PUT", http.StatusOK)
-	if view.OAuthClientID != "lab-client-2" || !view.Secrets["review_token"].Set {
+	if !view.Secrets["review_token"].Set {
 		t.Errorf("view = %+v", view)
 	}
 	if view.Secrets["review_token"].UpdatedAt.Before(*before.Secrets["review_token"].UpdatedAt) {
@@ -561,9 +555,9 @@ func TestUpdateInstance(t *testing.T) {
 		t.Errorf("a secret that wasn't sent changed its updatedAt")
 	}
 	// Checked and connected with the new token and the stored rest.
-	want := instances.Secrets{ReviewToken: "new-review-token-SECRET-999", ApproveToken: labApproveToken, WebhookSecret: hook, OAuthClientSecret: labOAuthSecret}
+	want := instances.Secrets{ReviewToken: "new-review-token-SECRET-999", ApproveToken: labApproveToken, WebhookSecret: hook}
 	checks, connects := e.conn.checkCalls(), e.conn.connectCalls()
-	if len(checks) != 2 || checks[1].s != want || checks[1].inst.OAuthClientID != "lab-client-2" {
+	if len(checks) != 2 || checks[1].s != want {
 		t.Errorf("check = %+v; want the merged secrets", checks)
 	}
 	if len(connects) != 2 || connects[1].s != want {
@@ -572,12 +566,9 @@ func TestUpdateInstance(t *testing.T) {
 	if got, _, _ := e.reg.Secrets(ctx, "lab"); got != want {
 		t.Errorf("stored secrets = %+v", got)
 	}
-	if inst, _ := e.reg.Get("lab"); inst.OAuthClientID != "lab-client-2" {
-		t.Errorf("registry client ID = %q", inst.OAuthClientID)
-	}
 	entries := e.auditEntries()
 	if i := slices.IndexFunc(entries, func(a store.AuditEntry) bool { return a.Action == "instance_updated" }); i < 0 ||
-		entries[i].Detail != "oauth_client_id, review_token" || entries[i].Instance != "lab" {
+		entries[i].Detail != "review_token" || entries[i].Instance != "lab" {
 		t.Errorf("audit = %+v; want instance_updated naming the fields", entries)
 	}
 
@@ -600,19 +591,15 @@ func TestUpdateInstance(t *testing.T) {
 		{"nothing", map[string]any{}, "nothing to change"},
 		{"webhook secret", map[string]any{"secrets": map[string]string{"webhook_secret": "x"}}, "generated"},
 		{"empty secret", map[string]any{"secrets": map[string]string{"review_token": ""}}, "must not be empty"},
+		{"an OAuth client secret", map[string]any{"secrets": map[string]string{"oauth_client_secret": "x"}}, "oauth_client_secret is not a secret"},
+		{"an OAuth client ID", map[string]any{"oauthClientID": "x"}, "the body must be"},
 	} {
 		rec := e.sendJSON(c, "PUT", "/api/admin/instances/lab", tc.body)
 		if rec.Code != http.StatusBadRequest || !strings.Contains(errorOf(t, rec), tc.want) {
 			t.Errorf("%s: PUT = %d %s; want 400 with %q", tc.name, rec.Code, rec.Body, tc.want)
 		}
 	}
-	// Clearing the client ID alone takes sign-in away.
-	decode[InstanceAdminView](t, e.sendJSON(c, "PUT", "/api/admin/instances/lab", map[string]any{"oauthClientID": ""}), "PUT", http.StatusOK)
-	signin := decode[instancesView](t, e.do("GET", "/api/instances", nil, nil), "GET /api/instances", http.StatusOK)
-	if slices.ContainsFunc(signin.Instances, func(v InstanceView) bool { return v.Instance == "lab" }) {
-		t.Errorf("sign-in is still offered through lab: %+v", signin.Instances)
-	}
-	if rec := e.sendJSON(c, "PUT", "/api/admin/instances/nope", map[string]any{"oauthClientID": "x"}); rec.Code != http.StatusNotFound {
+	if rec := e.sendJSON(c, "PUT", "/api/admin/instances/nope", map[string]any{"secrets": map[string]string{"review_token": "x"}}); rec.Code != http.StatusNotFound {
 		t.Errorf("PUT of an unknown instance = %d, want 404", rec.Code)
 	}
 }
@@ -638,7 +625,7 @@ func TestUpdateInstanceImmutable(t *testing.T) {
 		}
 	}
 	// Naming the same address is not a change.
-	rec := e.sendJSON(c, "PUT", "/api/admin/instances/lab", map[string]any{"url": "https://gitlab.lab.example.com", "oauthClientID": "same-id-again"})
+	rec := e.sendJSON(c, "PUT", "/api/admin/instances/lab", map[string]any{"url": "https://gitlab.lab.example.com", "secrets": map[string]string{"review_token": "same-url-token"}})
 	if rec.Code != http.StatusOK {
 		t.Errorf("PUT with the current url = %d %s, want 200", rec.Code, rec.Body)
 	}
@@ -653,7 +640,7 @@ func TestConfigInstanceReadOnly(t *testing.T) {
 	c := e.operator()
 	for _, name := range []string{"main", "gh"} {
 		for _, req := range []struct{ method, body string }{
-			{"PUT", `{"oauthClientID":"x"}`}, {"DELETE", ""},
+			{"PUT", `{"secrets":{"review_token":"x"}}`}, {"DELETE", ""},
 		} {
 			rec := e.send(c, req.method, "/api/admin/instances/"+name, req.body)
 			if rec.Code != http.StatusConflict || !strings.Contains(errorOf(t, rec), "config file") {
@@ -670,13 +657,16 @@ func TestConfigInstanceReadOnly(t *testing.T) {
 	}
 }
 
-// Platform admins, and everyone else, can't touch the instances; admins can
-// read the LLM and the defaults, only operators write the LLM.
-func TestPlatformAdminCannotTouchInstances(t *testing.T) {
+// Only admins touch the instances, the LLM and the defaults: a user with a
+// team, a user on no team and nobody signed in get nothing, and every admin
+// (a local one or an SSO one) may.
+func TestOnlyAdminsTouchInstances(t *testing.T) {
 	e := newEnv(t, nil)
 	op := e.operator()
 	e.addLab(op)
-	admin := e.signInGitLab(true, "acme/widgets")
+	viewer := e.userOnMain(false, "acme/widgets")
+	waiting := e.sessionFor(e.sso("waiting@example.com"))
+	boss := e.sessionFor(e.ssoAdmin("boss@example.com"))
 
 	for _, tc := range []struct{ method, target, body string }{
 		{"GET", "/api/admin/instances", ""},
@@ -684,33 +674,41 @@ func TestPlatformAdminCannotTouchInstances(t *testing.T) {
 		{"PUT", "/api/admin/instances/lab", `{}`},
 		{"DELETE", "/api/admin/instances/lab", ""},
 		{"GET", "/api/admin/instances/lab/repositories", ""},
+		{"GET", "/api/repositories/available?instance=lab", ""},
+		{"GET", "/api/admin/llm", ""},
 		{"PUT", "/api/admin/llm", `{}`},
+		{"GET", "/api/admin/defaults", ""},
+		{"PUT", "/api/admin/defaults", `{}`},
 	} {
-		var rec *httptest.ResponseRecorder
-		if tc.method == "GET" {
-			rec = e.get(admin, tc.target)
-		} else {
-			rec = e.send(admin, tc.method, tc.target, tc.body)
-		}
-		if rec.Code != http.StatusForbidden {
-			t.Errorf("%s %s as a platform admin = %d %s, want 403", tc.method, tc.target, rec.Code, rec.Body)
+		for name, c := range map[string]*http.Cookie{"viewer": viewer, "waiting": waiting} {
+			var rec *httptest.ResponseRecorder
+			if tc.method == "GET" {
+				rec = e.get(c, tc.target)
+			} else {
+				rec = e.send(c, tc.method, tc.target, tc.body)
+			}
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("%s %s as a %s = %d %s, want 404", tc.method, tc.target, name, rec.Code, rec.Body)
+			}
 		}
 	}
 	if _, found, _ := e.st.InstanceRow(ctx, "lab"); !found {
-		t.Error("lab was removed by a platform admin")
+		t.Error("lab was removed by someone who is no admin")
 	}
-	for _, target := range []string{"/api/admin/llm", "/api/admin/defaults"} {
-		if rec := e.get(admin, target); rec.Code != http.StatusOK {
-			t.Errorf("GET %s as a platform admin = %d, want 200", target, rec.Code)
+	// An SSO admin has the same powers as a local one.
+	for _, target := range []string{"/api/admin/instances", "/api/admin/llm", "/api/admin/defaults", "/api/admin/instances/lab/repositories",
+		"/api/repositories/available?instance=lab"} {
+		if rec := e.get(boss, target); rec.Code != http.StatusOK {
+			t.Errorf("GET %s as an SSO admin = %d %s, want 200", target, rec.Code, rec.Body)
 		}
 	}
-	// alice on gh is on no team: a waiting account is no admin.
-	waiting := e.signIn("github", "gh")
-	for _, target := range []string{"/api/admin/instances", "/api/admin/llm", "/api/admin/defaults"} {
-		if rec := e.get(waiting, target); rec.Code != http.StatusForbidden {
-			t.Errorf("GET %s as a non-admin = %d, want 403", target, rec.Code)
-		}
+	v := getJSON[LLMAdminView](e, boss, "/api/admin/llm")
+	if !v.Editable {
+		t.Errorf("an SSO admin may not edit the LLM: %+v", v)
 	}
+	wantCode(t, e.send(boss, "PUT", "/api/admin/llm", `{"provider":"anthropic","model":"m","apiKey":"`+llmKeyOne+`"}`), "SSO admin PUT llm", http.StatusOK)
+	wantCode(t, e.send(boss, "DELETE", "/api/admin/instances/lab", ""), "SSO admin DELETE lab", http.StatusAccepted)
+
 	if rec := e.get(nil, "/api/admin/instances"); rec.Code != http.StatusUnauthorized {
 		t.Errorf("GET without a session = %d, want 401", rec.Code)
 	}
@@ -724,8 +722,8 @@ func TestPlatformAdminCannotTouchInstances(t *testing.T) {
 	}
 }
 
-// labSession makes a platform account on lab with a stored session and
-// returns its cookie.
+// labSession makes an old platform account on lab with a stored session (as a
+// previous release made them) and returns its cookie.
 func (e *env) labSession(userID int64, name string) *http.Cookie {
 	e.t.Helper()
 	acc, err := e.st.UpsertPlatformAccount(ctx, config.PlatformGitLab, "lab", userID, name, e.clock.now())
@@ -745,10 +743,10 @@ func (e *env) labSession(userID int64, name string) *http.Cookie {
 	return &http.Cookie{Name: SessionCookieName, Value: base64.RawURLEncoding.EncodeToString(raw)}
 }
 
-// Removing an instance supersedes its runs, deletes its accounts, sessions
-// and repositories, stops sign-in through it and asks the engine to finish;
-// it is idempotent, and the instance stays registered, removing, until the
-// engine deletes it.
+// Removing an instance supersedes its runs, deletes its (old platform)
+// accounts, their sessions and its repositories and asks the engine to
+// finish; it is idempotent, and the instance stays registered, removing,
+// until the engine deletes it.
 func TestRemoveInstance(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.operator()
@@ -767,10 +765,9 @@ func TestRemoveInstance(t *testing.T) {
 	}
 	otherRun, _, _ := e.st.EnqueueRun(ctx, store.MRKey{Instance: "main", ProjectID: 4, IID: 1}, "acme/widgets", strings.Repeat("b", 40), "main")
 	user := e.labSession(31, "carol")
-	if code, _ := e.me(user); code != http.StatusOK {
-		t.Fatalf("carol's session before the removal = %d", code)
-	}
-	team := e.team("lab devs", store.RoleViewer, []int64{e.accountOf(user)}, store.TeamRepo{Instance: "lab"})
+	carol := e.accountOf(user) // (an old platform account: no request of it is served any more)
+	team := e.team("lab devs", nil, store.TeamRepo{Instance: "lab"})
+	e.exec(`INSERT INTO team_members (team_id, account_id, role) VALUES ($1, $2, 'viewer')`, team, carol)
 	e.reconciled = nil
 
 	rec := e.send(c, "DELETE", "/api/admin/instances/lab", "")
@@ -784,14 +781,24 @@ func TestRemoveInstance(t *testing.T) {
 	if r, _, _ := e.st.Run(ctx, otherRun); r.State != store.Queued {
 		t.Errorf("a run of another instance = %s, want queued", r.State)
 	}
+	if _, found, _ := e.st.Account(ctx, carol); found {
+		t.Error("carol's account was kept")
+	}
+	if _, found := e.storedSession(user); found {
+		t.Error("carol's session was kept")
+	}
 	if code, _ := e.me(user); code != http.StatusUnauthorized {
 		t.Errorf("carol's next request = %d, want 401", code)
+	}
+	var memberships int
+	if err := e.db.QueryRow(ctx, `SELECT count(*) FROM team_members WHERE team_id = $1`, team).Scan(&memberships); err != nil || memberships != 0 {
+		t.Errorf("memberships of the lab team = %d, %v; want none", memberships, err)
 	}
 	if repos, _ := e.st.DashboardRepos(ctx); len(repos) != 1 || repos[0].Instance != "main" {
 		t.Errorf("dashboard repositories = %+v, want main's only", repos)
 	}
-	if tm := e.storedTeam(team); len(tm.Repos) != 0 || len(tm.Members) != 0 {
-		t.Errorf("team after the removal = %+v, want no lab repositories or members", tm)
+	if tm := e.storedTeam(team); len(tm.Repos) != 0 {
+		t.Errorf("team after the removal = %+v, want no lab repositories", tm)
 	}
 	e.mu.Lock()
 	reconciled := slices.Clone(e.reconciled)
@@ -801,7 +808,7 @@ func TestRemoveInstance(t *testing.T) {
 		t.Errorf("reconcile asked for %v, want both repositories of lab", reconciled)
 	}
 
-	// Still there, removing, until the engine is done; nobody signs in.
+	// Still there, removing, until the engine is done.
 	inst, ok := e.reg.Get("lab")
 	if !ok || !inst.Removing {
 		t.Errorf("registry lab = %+v, %v; want removing", inst, ok)
@@ -812,19 +819,12 @@ func TestRemoveInstance(t *testing.T) {
 	if sec, _ := e.st.InstanceSecrets(ctx, "lab"); len(sec) == 0 {
 		t.Error("secrets were deleted before the engine was done")
 	}
-	if code := e.do("GET", "/auth/gitlab/lab/login", nil, nil).Code; code != http.StatusNotFound {
-		t.Errorf("login through lab = %d, want 404", code)
-	}
-	signin := decode[instancesView](t, e.do("GET", "/api/instances", nil, nil), "GET /api/instances", http.StatusOK)
-	if slices.ContainsFunc(signin.Instances, func(v InstanceView) bool { return v.Instance == "lab" }) {
-		t.Errorf("sign-in instances = %+v, want no lab", signin.Instances)
-	}
 	list := decode[[]InstanceAdminView](t, e.get(c, "/api/admin/instances"), "GET", http.StatusOK)
 	if len(list) != 3 || !list[2].Removing {
 		t.Errorf("instances = %+v, want lab removing", list)
 	}
 	for _, tc := range []struct{ method, target, body string }{
-		{"PUT", "/api/admin/instances/lab", `{"oauthClientID":"x"}`},
+		{"PUT", "/api/admin/instances/lab", `{"secrets":{"review_token":"x"}}`},
 	} {
 		if rec := e.send(c, tc.method, tc.target, tc.body); rec.Code != http.StatusConflict {
 			t.Errorf("%s %s of a removing instance = %d, want 409", tc.method, tc.target, rec.Code)
@@ -863,32 +863,6 @@ func TestRemoveInstanceWithoutRepositoriesAsksForAPass(t *testing.T) {
 	defer e.mu.Unlock()
 	if !slices.Equal(e.reconciled, []string{"lab/"}) {
 		t.Errorf("reconcile asked for %v, want a pass naming lab", e.reconciled)
-	}
-}
-
-// Nobody signs in through an instance being removed, even with a sign-in
-// that began before.
-func TestRemovingInstanceRefusesSignIn(t *testing.T) {
-	e := newEnv(t, nil)
-	c := e.operator()
-	e.addLab(c)
-	loc, sc := e.startLogin("gitlab", "lab")
-	if loc.Query().Get("state") == "" {
-		t.Fatal("no state")
-	}
-	e.send(c, "DELETE", "/api/admin/instances/lab", "")
-	rec := e.callback("gitlab", "lab", goodCode, loc.Query().Get("state"), sc)
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("callback of a sign-in begun before the removal = %d, want 404", rec.Code)
-	}
-	if accounts, _ := e.st.Accounts(ctx); slices.ContainsFunc(accounts, func(a store.Account) bool { return a.Instance == "lab" }) {
-		t.Error("an account was made on a removing instance")
-	}
-	// Even when the provider is still installed (a connect racing the removal).
-	inst, _ := e.reg.Get("lab")
-	e.d.Auth.SetProvider(inst, instances.Secrets{OAuthClientSecret: "x"})
-	if code := e.do("GET", "/auth/gitlab/lab/login", nil, nil).Code; code != http.StatusNotFound {
-		t.Errorf("login with a provider left behind = %d, want 404", code)
 	}
 }
 
@@ -988,7 +962,7 @@ func TestLLMConfigWins(t *testing.T) {
 		t.Errorf("the LLM was stored despite the config's: %+v", rows)
 	}
 	// A platform admin sees it too, not editable either.
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 	if v := getJSON[LLMAdminView](e, admin, "/api/admin/llm"); v.Editable || v.Model != "from-config" {
 		t.Errorf("platform admin's view = %+v", v)
 	}
@@ -1018,7 +992,7 @@ func sameDefaults(a, b DefaultsView) bool {
 // the form can show the first and keep the rest following it.
 func TestDefaultsViewConfigAndPinned(t *testing.T) {
 	e := newEnv(t, func(c *config.Config) { c.Jobs.Timeout = 30 * time.Minute })
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 
 	// Nothing saved: the effective values are the config's, nothing is pinned.
 	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")
@@ -1055,7 +1029,7 @@ func TestDefaultsViewConfigAndPinned(t *testing.T) {
 // it back to the built-in one.
 func TestDefaultsMaxTurns(t *testing.T) {
 	e := newEnv(t, nil)
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 
 	v := decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"maxTurns": 80}), "PUT", http.StatusOK)
 	if v.MaxTurns != 80 {
@@ -1086,7 +1060,7 @@ func TestDefaultsMaxTurns(t *testing.T) {
 // switched on in the dashboard, not to the config's.
 func TestDefaults(t *testing.T) {
 	e := newEnv(t, nil)
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")
 	if want := (DefaultsView{Approve: true, ReviewDrafts: true, InlineFindings: true, CommandsAuthorAndMaintainersOnly: true, IncrementalReviews: true, LearnFromDismissals: true, FailureStatus: "failed", JobTimeoutSeconds: 600, MaxTurns: 40, RerunLimitPerMR: 10, RerunLimitPerRepo: 50}); !sameDefaults(v, want) {
 		t.Errorf("defaults = %+v, want %+v", v, want)
@@ -1169,18 +1143,21 @@ func TestDefaults(t *testing.T) {
 	}
 
 	// Maintainers and viewers can't change them.
-	viewer := e.signInGitHub(false, "acme/widgets")
-	if rec := e.send(viewer, "PUT", "/api/admin/defaults", `{}`); rec.Code != http.StatusForbidden {
-		t.Errorf("PUT as a viewer = %d, want 403", rec.Code)
+	// (A separate account: alice is an admin in this test.)
+	bob := e.sso("viewer@example.com")
+	e.team("viewers of gh", viewerMembers(bob), store.TeamRepo{Instance: "gh", Project: "acme/widgets"})
+	viewer := e.sessionFor(bob)
+	if rec := e.send(viewer, "PUT", "/api/admin/defaults", `{}`); rec.Code != http.StatusNotFound {
+		t.Errorf("PUT as a viewer = %d, want 404", rec.Code)
 	}
-	if rec := e.get(viewer, "/api/admin/defaults"); rec.Code != http.StatusForbidden {
-		t.Errorf("GET as a viewer = %d, want 403", rec.Code)
+	if rec := e.get(viewer, "/api/admin/defaults"); rec.Code != http.StatusNotFound {
+		t.Errorf("GET as a viewer = %d, want 404", rec.Code)
 	}
 }
 
-// An operator picks repositories of any instance without a platform
-// account: those the review bot or App reaches that aren't on yet; switching
-// one on needs only that, and a repository of the config is 409.
+// An admin picks repositories of any instance: those the review bot or App
+// reaches that aren't on yet; switching one on needs only that, and a
+// repository of the config is 409.
 func TestOperatorPicksRepositories(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.operator()
@@ -1205,9 +1182,6 @@ func TestOperatorPicksRepositories(t *testing.T) {
 	}
 	e.cat["main"].setFail(nil)
 
-	if n := e.gl.api() + e.gl.calls(); n != 0 {
-		t.Errorf("%d calls to the platform with a user token", n)
-	}
 	body := func(instance, project string) map[string]string {
 		return map[string]string{"instance": instance, "project": project}
 	}
@@ -1241,29 +1215,6 @@ func TestOperatorPicksRepositories(t *testing.T) {
 	if rec := e.send(c, "DELETE", "/api/repositories/main/acme/gadgets", ""); rec.Code != http.StatusOK {
 		t.Errorf("DELETE = %d %s", rec.Code, rec.Body)
 	}
-	// A platform admin still names no other instance than its own.
-	admin := e.signInGitLab(true, "acme/widgets")
-	if rec := e.sendJSON(admin, "POST", "/api/repositories", body("gh", "acme/tools")); rec.Code != http.StatusBadRequest {
-		t.Errorf("a platform admin naming another instance = %d %s, want 400", rec.Code, rec.Body)
-	}
-}
-
-// An operator reads the integrations of the instance it names.
-func TestIntegrationsForOperator(t *testing.T) {
-	e := newEnv(t, nil)
-	c := e.operator()
-	v := getJSON[IntegrationView](e, c, "/api/integrations?instance=gh")
-	if v.Instance != "gh" || v.Platform != "github" || !v.Connected || len(v.Repos) != 1 || v.Repos[0].Project != "acme/widgets" {
-		t.Errorf("integrations of gh = %+v", v)
-	}
-	if rec := e.get(c, "/api/integrations"); rec.Code != http.StatusNotFound {
-		t.Errorf("integrations without an instance = %d, want 404", rec.Code)
-	}
-	e.addLab(c)
-	e.sources.Delete("lab") // not connected
-	if v := getJSON[IntegrationView](e, c, "/api/integrations?instance=lab"); v.Connected {
-		t.Errorf("an instance that isn't connected shows connected: %+v", v)
-	}
 }
 
 // No response, log line or audit entry ever holds a secret entered in the
@@ -1281,11 +1232,11 @@ func TestOperatorAPINeverReturnsSecrets(t *testing.T) {
 	e.sendJSON(c, "PUT", "/api/admin/instances/lab", map[string]any{"secrets": map[string]string{"approve_token": "bad-token-SECRET-000"}})
 	e.conn.checkErr = nil
 	for _, target := range []string{"/api/admin/instances", "/api/admin/llm", "/api/admin/defaults", "/api/admin/settings",
-		"/api/integrations?instance=lab", "/api/me", "/api/instances", "/api/audit"} {
+		"/api/me", "/api/sign-in-options", "/api/audit"} {
 		e.get(c, target)
 	}
 
-	secrets := []string{labReviewToken, labApproveToken, labApproveToken + "-v2", labOAuthSecret, hubReviewKey, hubApproveKey, hubWebhook,
+	secrets := []string{labReviewToken, labApproveToken, labApproveToken + "-v2", hubReviewKey, hubApproveKey, hubWebhook,
 		llmKeyOne, llmKeyTwo, "bad-token-SECRET-000", "hub-review-key-SECRET-444", "hub-approve-key-SECRET-555"}
 	for _, h := range e.conn.connectCalls() {
 		if h.inst.Name == "lab" {
@@ -1315,8 +1266,7 @@ func TestOperatorAPINeverReturnsSecrets(t *testing.T) {
 }
 
 // A change that is checking while the instance is removed does not undo the
-// removal: the store refuses it (409), the registry stays removing and no
-// sign-in provider comes back.
+// removal: the store refuses it (409) and the registry stays removing.
 func TestUpdateRacingARemovalKeepsItRemoved(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.operator()
@@ -1328,29 +1278,24 @@ func TestUpdateRacingARemovalKeepsItRemoved(t *testing.T) {
 			t.Errorf("MarkInstanceRemoving = %v, %v", ok, err)
 		}
 		e.reg.SetRemoving("lab")
-		e.d.Auth.RemoveProvider("lab")
 		return nil
 	}
-	rec := e.sendJSON(c, "PUT", "/api/admin/instances/lab", map[string]any{"oauthClientID": "lab-client-2"})
+	rec := e.sendJSON(c, "PUT", "/api/admin/instances/lab", map[string]any{"secrets": map[string]string{"review_token": "raced-token"}})
 	if rec.Code != http.StatusConflict || strings.TrimSpace(rec.Body.String()) != `{"error":"this instance is being removed"}` {
 		t.Fatalf("PUT = %d %s, want 409 this instance is being removed", rec.Code, rec.Body)
 	}
 	inst, ok := e.reg.Get("lab")
-	if !ok || !inst.Removing || inst.OAuthClientID != "lab-client" {
-		t.Errorf("registry lab = %+v, %v; want removing, client ID unchanged", inst, ok)
+	if !ok || !inst.Removing {
+		t.Errorf("registry lab = %+v, %v; want removing", inst, ok)
 	}
-	if row, _, _ := e.st.InstanceRow(ctx, "lab"); !row.Removing || row.OAuthClientID != "lab-client" {
+	if row, _, _ := e.st.InstanceRow(ctx, "lab"); !row.Removing {
 		t.Errorf("stored lab = %+v", row)
+	}
+	if got, _, _ := e.reg.Secrets(ctx, "lab"); got.ReviewToken != labReviewToken {
+		t.Errorf("the refused change stored the review token %q", got.ReviewToken)
 	}
 	if n := len(e.conn.connectCalls()); n != connects {
 		t.Errorf("connected %d more times", n-connects)
-	}
-	if code := e.do("GET", "/auth/gitlab/lab/login", nil, nil).Code; code != http.StatusNotFound {
-		t.Errorf("login through lab = %d, want 404", code)
-	}
-	signin := decode[instancesView](t, e.do("GET", "/api/instances", nil, nil), "GET /api/instances", http.StatusOK)
-	if slices.ContainsFunc(signin.Instances, func(v InstanceView) bool { return v.Instance == "lab" }) {
-		t.Errorf("sign-in is offered through lab: %+v", signin.Instances)
 	}
 }
 
@@ -1378,13 +1323,13 @@ func TestPutLLMSavedButNotReloaded(t *testing.T) {
 	}
 }
 
-// Only admins change the defaults: a maintainer or viewer is 403 with a valid
-// body, and nothing changes.
+// Only admins change the defaults: a maintainer or viewer gets 404 (the route
+// is not theirs to know) with a valid body, and nothing changes.
 func TestDefaultsRefusedToNonAdmins(t *testing.T) {
 	e := newEnv(t, nil)
 	for name, c := range map[string]*http.Cookie{
-		"viewer":     e.signInGitHub(false, "acme/widgets"),
-		"waiting":    e.signIn("gitlab", "main"),
+		"viewer":     e.userOnGH(false, "acme/widgets"),
+		"waiting":    e.sessionFor(e.sso("waiting@example.com")),
 		"no session": nil,
 	} {
 		var rec *httptest.ResponseRecorder
@@ -1393,7 +1338,7 @@ func TestDefaultsRefusedToNonAdmins(t *testing.T) {
 		} else {
 			rec = e.send(c, "PUT", "/api/admin/defaults", `{"approve": false}`)
 		}
-		want := http.StatusForbidden
+		want := http.StatusNotFound
 		if c == nil {
 			want = http.StatusUnauthorized
 		}
@@ -1446,7 +1391,7 @@ func TestConnectFailureAfterCheckRecordsAttention(t *testing.T) {
 // out of a body it is the built-in one (on), and a dashboard repository takes it.
 func TestDefaultsInlineFindings(t *testing.T) {
 	e := newEnv(t, nil)
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 
 	v := decode[DefaultsView](t, e.sendJSON(admin, "PUT", "/api/admin/defaults", map[string]any{"inlineFindings": false}), "PUT", http.StatusOK)
 	if v.InlineFindings {
@@ -1481,7 +1426,7 @@ func TestDefaultsInlineFindings(t *testing.T) {
 // one (on), and a dashboard repository takes it.
 func TestDefaultsCommandsAuthorAndMaintainersOnly(t *testing.T) {
 	e := newEnv(t, nil)
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 
 	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")
 	if !v.CommandsAuthorAndMaintainersOnly || !v.Config.CommandsAuthorAndMaintainersOnly || v.Pinned["commandsAuthorAndMaintainersOnly"] {
@@ -1517,7 +1462,7 @@ func TestDefaultsCommandsAuthorAndMaintainersOnly(t *testing.T) {
 // one (on), and a dashboard repository takes it.
 func TestDefaultsIncrementalReviews(t *testing.T) {
 	e := newEnv(t, nil)
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 
 	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")
 	if !v.IncrementalReviews || !v.Config.IncrementalReviews || v.Pinned["incrementalReviews"] {
@@ -1553,7 +1498,7 @@ func TestDefaultsIncrementalReviews(t *testing.T) {
 // one (on), and a dashboard repository takes it.
 func TestDefaultsLearnFromDismissals(t *testing.T) {
 	e := newEnv(t, nil)
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 
 	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")
 	if !v.LearnFromDismissals || !v.Config.LearnFromDismissals || v.Pinned["learnFromDismissals"] {
@@ -1589,7 +1534,7 @@ func TestDefaultsLearnFromDismissals(t *testing.T) {
 // of a body it is the built-in one (off), and a dashboard repository takes it.
 func TestDefaultsQuietReviews(t *testing.T) {
 	e := newEnv(t, nil)
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 
 	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")
 	if v.QuietReviews || v.Config.QuietReviews || v.Pinned["quietReviews"] {
@@ -1646,7 +1591,7 @@ func TestDefaultsQuietReviews(t *testing.T) {
 // repository does not.
 func TestPutDefaultsCommentLayout(t *testing.T) {
 	e := newEnv(t, nil)
-	admin := e.signInGitLab(true, "acme/widgets")
+	admin := e.userOnMain(true, "acme/widgets")
 	builtIn := []string{"summary:open", "findings:collapsed", "dismissed:collapsed", "checks:open", "files:collapsed"}
 
 	v := getJSON[DefaultsView](e, admin, "/api/admin/defaults")

@@ -41,7 +41,6 @@ type connector struct {
 	// instance; nil without the dashboard.
 	sources  *syncmap.Map[dashboard.RepoSource]
 	catalogs *syncmap.Map[dashboard.RepoCatalog]
-	auth     *dashboard.Auth // nil without the dashboard
 	// githubRepos resolves a GitHub instance's repository IDs.
 	githubRepos func(instance string) githubforge.Repos
 }
@@ -56,9 +55,8 @@ func (c *connector) Check(ctx context.Context, inst instances.Instance, s instan
 	return err
 }
 
-// Connect checks inst, then puts it in use: its platform, its webhook secret
-// and, with an OAuth client, its sign-in. Connecting again replaces what was
-// connected. The webhook secret is taken first, whether the platform can be
+// Connect checks inst, then puts it in use: its platform and its webhook
+// secret. Connecting again replaces what was connected. The webhook secret is taken first, whether the platform can be
 // reached or not: an instance registered in the dashboard accepts its
 // webhooks and queues the events, and its runs wait until it is connected. A
 // connection clears the instance's "unreachable" item.
@@ -74,9 +72,6 @@ func (c *connector) Connect(ctx context.Context, inst instances.Instance, s inst
 	}
 	c.platforms.Set(inst.Name, plat)
 	c.serveDashboard(inst.Name, plat)
-	if c.auth != nil {
-		c.auth.SetProvider(inst, s)
-	}
 	if c.store != nil {
 		if err := c.store.ClearAttention(ctx, inst.Name, "", attInstanceUnreachable); err != nil {
 			c.log.Warn("couldn't clear the unreachable instance item", "instance", inst.Name, "error", err.Error())
@@ -117,9 +112,6 @@ func (c *connector) Disconnect(name string) {
 	}
 	if c.catalogs != nil {
 		c.catalogs.Delete(name)
-	}
-	if c.auth != nil {
-		c.auth.RemoveProvider(name)
 	}
 }
 

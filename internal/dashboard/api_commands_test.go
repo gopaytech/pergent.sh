@@ -20,7 +20,7 @@ const (
 	buttonProject = "acme/widgets"
 	blockingFP    = "a1b2c3d4e5f6"
 	suggestionFP  = "b2c3d4e5f6a1"
-	// bobID opened the change; alice (user 9 on GitLab) did not.
+	// bobID opened the change.
 	bobID = 12
 )
 
@@ -58,12 +58,11 @@ func (e *env) buttonBlockingReview() string {
 	return e.buttonReview(resultJSON(head('1'), buttonSkill("code-review"), skillJSON("style", "no_blocking_issues")))
 }
 
-// signInRole signs alice in on main with role on every repository there.
+// signInRole is alice's session with role on every repository of main.
 func (e *env) signInRole(role string) *http.Cookie {
 	e.t.Helper()
-	e.gl.setProject(buttonProject, gitlabProject("private", 20, 0))
 	e.aliceOn("main", role)
-	return e.signIn("gitlab", "main")
+	return e.aliceSession()
 }
 
 func (e *env) auditOf(action string) []store.AuditEntry {
@@ -147,7 +146,7 @@ func TestRerunButton(t *testing.T) {
 		t.Errorf("Wake called %d times; want 1", n)
 	}
 	a := e.auditOf("review_rerun")
-	if len(a) != 1 || a[0].Actor != "alice (gitlab main)" || a[0].Instance != "main" || a[0].Project != buttonProject ||
+	if len(a) != 1 || a[0].Actor != aliceEmail || a[0].Instance != "main" || a[0].Project != buttonProject ||
 		!strings.Contains(a[0].Detail, "mr=7") || !strings.Contains(a[0].Detail, "head="+head('1')) {
 		t.Errorf("audit = %+v", a)
 	}
@@ -346,7 +345,7 @@ func TestDismissButtonBlockingNeedsMaintainer(t *testing.T) {
 	wantCode(t, rec, "dismiss", http.StatusOK)
 	ds := e2.dismissalsOf()
 	if len(ds) != 1 || ds[0].Fingerprint != blockingFP || ds[0].Severity != "blocking" ||
-		ds[0].Reason != "the input is a constant" || ds[0].Actor != "alice (gitlab main)" || ds[0].ActorID == nil {
+		ds[0].Reason != "the input is a constant" || ds[0].Actor != "alice" || ds[0].ActorID == nil {
 		t.Fatalf("dismissals = %+v", ds)
 	}
 	// The review is decided again, not run again.
@@ -358,7 +357,7 @@ func TestDismissButtonBlockingNeedsMaintainer(t *testing.T) {
 		t.Errorf("Wake called %d times; want 1", n)
 	}
 	a := e2.auditOf("finding_dismissed")
-	if len(a) != 1 || a[0].Actor != "alice (gitlab main)" || a[0].Project != buttonProject ||
+	if len(a) != 1 || a[0].Actor != aliceEmail || a[0].Project != buttonProject ||
 		!strings.Contains(a[0].Detail, "mr=7") || !strings.Contains(a[0].Detail, "head="+head('1')) ||
 		!strings.Contains(a[0].Detail, "fingerprint="+blockingFP) || !strings.Contains(a[0].Detail, "the input is a constant") {
 		t.Errorf("audit = %+v", a)
@@ -431,15 +430,15 @@ func TestDashboardDismissTeaches(t *testing.T) {
 		t.Fatalf("dismissals = %+v", ds)
 	}
 	for _, d := range ds {
-		if !d.Teaches || d.DismisserPlatformID != aliceID["main"] || d.Skill != "code-review" || d.File != "api/handler.go" {
-			t.Errorf("dismissal = %+v; want it to teach, from alice (%d) with the finding's details", d, aliceID["main"])
+		if !d.Teaches || d.DismisserPlatformID != 0 || d.Skill != "code-review" || d.File != "api/handler.go" {
+			t.Errorf("dismissal = %+v; want it to teach, with no dismisser ID (an account has no platform identity) and the finding's details", d)
 		}
 	}
 	if byFP := map[string]string{ds[0].Fingerprint: ds[0].Title, ds[1].Fingerprint: ds[1].Title}; byFP[blockingFP] != "Request body is used before validation" {
 		t.Errorf("titles = %v", byFP)
 	}
 
-	// A password admin has no platform user.
+	// A local admin has no platform user either.
 	e2 := newEnv(t, nil)
 	e2.buttonBlockingReview()
 	wantCode(t, e2.send(e2.signInOperator(), "POST", buttonURL("dismiss"), `{"fingerprint":"`+blockingFP+`","reason":"constant"}`),
@@ -449,56 +448,35 @@ func TestDashboardDismissTeaches(t *testing.T) {
 	}
 }
 
-func TestDismisserPlatformID(t *testing.T) {
-	user := Session{Platform: "gitlab", Instance: "main", UserID: 9}
-	for _, c := range []struct {
-		name     string
-		se       Session
-		instance string
-		want     int64
-	}{
-		{"the change's instance", user, "main", 9},
-		{"another instance", user, "gh", 0},
-		{"a password account", Session{Operator: true}, "main", 0},
-		{"no user ID", Session{Instance: "main"}, "main", 0},
-	} {
-		if got := dismisserPlatformID(c.se, c.instance); got != c.want {
-			t.Errorf("%s: dismisserPlatformID = %d, want %d", c.name, got, c.want)
-		}
-	}
-}
-
-func TestButtonAuthorCannotDismissBlocking(t *testing.T) {
-	// alice (user 9) opened the change.
+// The dashboard has no platform identity to tell the author of a change
+// from anyone else: a maintainer dismisses a blocking finding of any change,
+// theirs too. The change's state still decides, and an unreadable change
+// fails closed.
+func TestMaintainerDismissesOwnBlocker(t *testing.T) {
+	// alice opened the change.
 	e := newEnv(t, nil)
 	e.buttonBlockingReview()
-	e.src["main"].set(func(f *fakeSource) { f.change.Author, f.change.AuthorID = "alice", aliceID["main"] })
-	c := e.signInRole(store.RoleAdmin)
+	e.src["main"].set(func(f *fakeSource) { f.change.Author, f.change.AuthorID = "alice", 9 })
+	c := e.signInRole(store.RoleMaintainer)
 
 	rec := e.send(c, "POST", buttonURL("dismiss"), `{"fingerprint":"`+blockingFP+`","reason":"mine"}`)
-	wantCode(t, rec, "author dismisses blocking", http.StatusForbidden)
-	if len(e.dismissalsOf()) != 0 || len(e.auditOf("finding_dismissed")) != 0 {
-		t.Error("the author dismissed a blocking finding of their own change")
+	wantCode(t, rec, "author dismisses blocking", http.StatusOK)
+	if ds := e.dismissalsOf(); len(ds) != 1 || ds[0].Actor != "alice" || ds[0].DismisserPlatformID != 0 {
+		t.Errorf("dismissals = %+v; want alice's, with no dismisser ID", ds)
 	}
-	// A suggestion is anyone's who may re-run, the author included.
+	if a := e.auditOf("finding_dismissed"); len(a) != 1 || a[0].Actor != aliceEmail {
+		t.Errorf("audit = %+v; want the full email in the audit log", a)
+	}
 	wantCode(t, e.send(c, "POST", buttonURL("dismiss"), `{"fingerprint":"`+suggestionFP+`"}`), "author dismisses suggestion", http.StatusOK)
 
 	t.Run("fails closed", func(t *testing.T) {
-		for name, fn := range map[string]func(*fakeSource){
-			"platform error": func(f *fakeSource) { f.changeErr = errors.New("gitlab: status 500") },
-			"unknown author": func(f *fakeSource) { f.change.AuthorID = 0 },
-		} {
-			e := newEnv(t, nil)
-			e.buttonBlockingReview()
-			e.src["main"].set(fn)
-			c := e.signInRole(store.RoleMaintainer)
-			rec := e.send(c, "POST", buttonURL("dismiss"), `{"fingerprint":"`+blockingFP+`","reason":"x"}`)
-			if rec.Code < 400 || len(e.dismissalsOf()) != 0 {
-				t.Errorf("%s: dismiss = %d %s, %d dismissals; want it refused", name, rec.Code, rec.Body, len(e.dismissalsOf()))
-			}
-			// A suggestion needs no author check.
-			wantCode(t, e.send(c, "POST", buttonURL("dismiss"), `{"fingerprint":"`+suggestionFP+`"}`),
-				name+": suggestion", http.StatusOK)
+		e := newEnv(t, nil)
+		e.buttonBlockingReview()
+		e.src["main"].set(func(f *fakeSource) { f.changeErr = errors.New("gitlab: status 500") })
+		c := e.signInRole(store.RoleMaintainer)
+		rec := e.send(c, "POST", buttonURL("dismiss"), `{"fingerprint":"`+blockingFP+`","reason":"x"}`)
+		if rec.Code < 400 || len(e.dismissalsOf()) != 0 {
+			t.Errorf("dismiss = %d %s, %d dismissals; want it refused", rec.Code, rec.Body, len(e.dismissalsOf()))
 		}
 	})
 
@@ -510,7 +488,7 @@ func TestButtonAuthorCannotDismissBlocking(t *testing.T) {
 			"dismiss", http.StatusOK)
 	})
 
-	t.Run("a password admin is never the author", func(t *testing.T) {
+	t.Run("a local admin", func(t *testing.T) {
 		e := newEnv(t, nil)
 		e.buttonBlockingReview()
 		c := e.signInOperator()
@@ -526,7 +504,7 @@ func TestButtonAuthorCannotDismissBlocking(t *testing.T) {
 		}
 	})
 
-	t.Run("a password admin is refused when the change can't be read", func(t *testing.T) {
+	t.Run("a local admin is refused when the change can't be read", func(t *testing.T) {
 		e := newEnv(t, nil)
 		e.buttonBlockingReview()
 		e.src["main"].set(func(f *fakeSource) { f.changeErr = errors.New("down") })
@@ -537,6 +515,27 @@ func TestButtonAuthorCannotDismissBlocking(t *testing.T) {
 			t.Error("a finding was dismissed without knowing the change's state")
 		}
 	})
+}
+
+// Dismissed by: a dismissal made by an SSO account is named by the part of the
+// email before the "@", on the pull request and in the dashboard; the audit log
+// keeps the full email.
+func TestDismissedByShowsNoAddress(t *testing.T) {
+	e := newEnv(t, nil)
+	runID := e.buttonBlockingReview()
+	c := e.signInRole(store.RoleMaintainer)
+	wantCode(t, e.send(c, "POST", buttonURL("dismiss"), `{"fingerprint":"`+blockingFP+`","reason":"constant"}`), "dismiss", http.StatusOK)
+	ds := e.dismissalsOf()
+	if len(ds) != 1 || ds[0].Actor != "alice" || strings.Contains(ds[0].Actor, "@") {
+		t.Fatalf("dismissals = %+v; want Actor alice", ds)
+	}
+	rec := e.get(c, "/api/runs/"+runID)
+	if strings.Contains(rec.Body.String(), aliceEmail) || !strings.Contains(rec.Body.String(), `"by":"alice"`) {
+		t.Errorf("the run page = %s; want the dismissal by alice, with no address", rec.Body)
+	}
+	if a := e.auditOf("finding_dismissed"); len(a) != 1 || a[0].Actor != aliceEmail {
+		t.Errorf("audit = %+v; want the full email", a)
+	}
 }
 
 func TestRestoreButton(t *testing.T) {
@@ -551,7 +550,7 @@ func TestRestoreButton(t *testing.T) {
 		}
 		e.exec(`UPDATE runs SET approved = true WHERE id = $1::uuid`, runID)
 		// alice opened the change: restoring only makes the review stricter.
-		e.src["main"].set(func(f *fakeSource) { f.change.Author, f.change.AuthorID = "alice", aliceID["main"] })
+		e.src["main"].set(func(f *fakeSource) { f.change.Author, f.change.AuthorID = "alice", 9 })
 		return e, runID
 	}
 
@@ -582,7 +581,7 @@ func TestRestoreButton(t *testing.T) {
 		t.Errorf("Wake called %d times; want 1", n)
 	}
 	a := e2.auditOf("finding_restored")
-	if len(a) != 1 || a[0].Actor != "alice (gitlab main)" || !strings.Contains(a[0].Detail, "fingerprint="+blockingFP) ||
+	if len(a) != 1 || a[0].Actor != aliceEmail || !strings.Contains(a[0].Detail, "fingerprint="+blockingFP) ||
 		!strings.Contains(a[0].Detail, "mr=7") || !strings.Contains(a[0].Detail, "head="+head('1')) {
 		t.Errorf("audit = %+v", a)
 	}
@@ -614,14 +613,13 @@ func TestButtonsWorkOnConfigRepos(t *testing.T) {
 	// And a repository switched on in the dashboard behaves the same.
 	e2 := newEnv(t, nil)
 	e2.dashboardRepo("main", buttonProject+"-2", nil)
-	e2.gl.setProject(buttonProject+"-2", gitlabProject("private", 20, 0))
 	e2.addRun(runFix{project: buttonProject + "-2", number: 7, head: head('1'),
 		result: resultJSON(head('1'), buttonSkill("code-review")), outcome: OutcomeBlocking})
 	e2.src["main"].set(func(f *fakeSource) {
 		f.change = forge.Change{State: forge.StateOpen, HeadSHA: head('1'), TargetBranch: "main", AuthorID: bobID}
 	})
 	e2.aliceOn("main", store.RoleMaintainer)
-	c2 := e2.signIn("gitlab", "main")
+	c2 := e2.aliceSession()
 	base := "/api/reviews/main/" + buttonProject + "-2/7/"
 	wantCode(t, e2.send(c2, "POST", base+"dismiss", `{"fingerprint":"`+suggestionFP+`"}`), "dismiss", http.StatusOK)
 	wantCode(t, e2.send(c2, "POST", base+"rerun", `{}`), "rerun", http.StatusAccepted)
@@ -650,8 +648,9 @@ func TestViewerCannotPressButtons(t *testing.T) {
 		t.Errorf("the platform was asked %d times", n)
 	}
 
-	// A repository the session can't see is not found, whatever its role elsewhere.
-	wantCode(t, e.send(v, "POST", "/api/reviews/main/acme/payments/7/rerun", `{}`), "invisible repository", http.StatusNotFound)
+	// A repository no team of the session covers is not found, whatever its
+	// role elsewhere.
+	wantCode(t, e.send(v, "POST", "/api/reviews/gh/acme/widgets/7/rerun", `{}`), "invisible repository", http.StatusNotFound)
 }
 
 func TestReviewViewCarriesRoleAndDismissals(t *testing.T) {
@@ -675,14 +674,14 @@ func TestReviewViewCarriesRoleAndDismissals(t *testing.T) {
 		})
 	}
 
-	t.Run("the author may not dismiss blocking findings", func(t *testing.T) {
+	t.Run("the author is offered everything", func(t *testing.T) {
 		e := newEnv(t, nil)
 		e.addRun(runFix{project: buttonProject, number: 7, head: head('1'), user: "alice", result: cleanResult(head('1')),
 			outcome: OutcomeApproved})
 		c := e.signInRole(store.RoleMaintainer)
 		v := getJSON[ReviewDetailView](e, c, "/api/reviews/main/"+buttonProject+"/7")
-		if !v.Can.Rerun || v.Can.DismissBlocking || !v.Can.DismissSuggestion || !v.Can.Restore {
-			t.Errorf("can = %+v; want everything but dismissing blocking findings", v.Can)
+		if !v.Can.Rerun || !v.Can.DismissBlocking || !v.Can.DismissSuggestion || !v.Can.Restore {
+			t.Errorf("can = %+v; want everything", v.Can)
 		}
 	})
 
@@ -719,7 +718,7 @@ func TestReviewViewCarriesRoleAndDismissals(t *testing.T) {
 			t.Fatalf("dismissed = %+v", sk.Dismissed)
 		}
 		d := sk.Dismissed[0]
-		if d.Fingerprint != blockingFP || d.ID != "a1b2c3" || d.Dismissed == nil || d.Dismissed.By != "alice (gitlab main)" ||
+		if d.Fingerprint != blockingFP || d.ID != "a1b2c3" || d.Dismissed == nil || d.Dismissed.By != "alice" ||
 			d.Dismissed.Reason != "constant" || d.Dismissed.At.IsZero() {
 			t.Errorf("dismissed finding = %+v", d)
 		}

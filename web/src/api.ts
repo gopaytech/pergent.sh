@@ -17,16 +17,18 @@ export type Outcome =
   | "skipped"
   | "unknown";
 
-// Me is the signed-in account, from GET /api/me. An operator is a password
-// account (platform and instance are ""); admin is an operator or a member
-// of an admin team; waiting is a platform account on no team.
+// Me is the signed-in account, from GET /api/me: a local admin ("password")
+// or an SSO account. role is the account's role and admin says the same as a
+// flag. signIn is how the session began; the web signs out of a "jwt" session
+// to /signed-out. waiting is a user on no team; waitingUsers, for an admin, is
+// how many users wait for one.
 export type Me = {
-  kind: "password" | "platform";
+  kind: "password" | "sso";
   username: string;
-  platform: Platform | "";
-  instance: string;
+  email: string;
+  role: "admin" | "user";
+  signIn: "password" | "oidc" | "jwt";
   admin: boolean;
-  operator: boolean;
   waiting: boolean;
   mustChangePassword: boolean;
   waitingUsers: number;
@@ -35,11 +37,10 @@ export type Me = {
 
 export type Role = "admin" | "maintainer" | "viewer";
 
-export type InstanceView = { platform: string; instance: string; label: string };
-
-// InstancesView is GET /api/instances: whether the password form is shown,
-// and the instances with sign-in.
-export type InstancesView = { password: boolean; instances: InstanceView[] };
+// SignInOptions is GET /api/sign-in-options: whether the password form is
+// shown (on /admin/sign-in), the SSO button when it is set up, and whether a
+// proxy signs people in (jwt: no button, a page load starts the session).
+export type SignInOptions = { password: boolean; sso?: { label: string } | null; jwt: boolean };
 
 export type StatsView = { reviews: number; approved: number; blocking: number; failed: number };
 
@@ -99,8 +100,7 @@ export type RunSummary = {
 };
 
 // Can is what the session may do to a review with the buttons. The server
-// computes it as a hint (it tells the change's author by username); the
-// routes check again and may still refuse.
+// computes it as a hint; the routes check again and may still refuse.
 export type Can = {
   rerun: boolean;
   dismissBlocking: boolean;
@@ -414,12 +414,10 @@ export type SkillDetail = LibrarySkill & { content: string; versions: SkillVersi
 export type SkillVersionDetail = SkillVersion & { content: string };
 
 // SkillInUse is the body of the 409 a delete gets while repositories or the
-// default list name the skill. hidden counts the repositories the caller
-// can't see.
+// default list name the skill.
 export type SkillInUse = {
   error: string;
   repositories: { instance: string; project: string }[];
-  hidden: number;
   inDefaults: boolean;
 };
 
@@ -469,15 +467,6 @@ export type SkillFetchResult = { name: string; ok: boolean; error?: string };
 // itself, or a bot user's token.
 export type Approver = "app" | "review_app" | "token";
 
-export type IntegrationView = {
-  instance: string;
-  platform: Platform;
-  connected: boolean;
-  approver: Approver;
-  tokenExpiry?: string;
-  repos: { project: string; installed: boolean; approverReachable: boolean; inlineAvailable: boolean; protectionReadable: boolean }[];
-};
-
 // SecretView says whether a secret is set and when it last changed; the
 // value is never sent. updatedAt is null for a secret from the config's
 // environment.
@@ -519,8 +508,8 @@ export type DefaultsView = DefaultValues & {
 };
 
 // LLMAdminView is GET /api/admin/llm: where the model comes from, the model
-// and whether a key is set. editable is true for an operator when the
-// config has no llm: block.
+// and whether a key is set. editable is true for an admin when the config
+// has no llm: block.
 export type LLMAdminView = {
   source: "config" | "dashboard";
   provider: string;
@@ -530,11 +519,10 @@ export type LLMAdminView = {
   editable: boolean;
 };
 
-// InstanceAdminView is one instance in GET /api/admin/instances (operators).
+// InstanceAdminView is one instance in GET /api/admin/instances (admins).
 // secrets has the fields the instance takes: review_token, approve_token,
-// webhook_secret, oauth_client_secret (GitLab); review_app_key,
-// approve_app_key or approve_token, webhook_secret, oauth_client_secret
-// (GitHub).
+// webhook_secret (GitLab); review_app_key, approve_app_key or approve_token,
+// webhook_secret (GitHub).
 export type InstanceAdminView = {
   name: string;
   platform: Platform;
@@ -548,50 +536,94 @@ export type InstanceAdminView = {
   // approveAppID is the review App's own ID when the review App approves.
   approveAppID: number;
   approver: Approver;
-  oauthClientID: string;
   secrets: Record<string, SecretView>;
 };
 
 export type TeamRef = { id: number; name: string };
 
-// UserView is one account in GET /api/users.
+// UserView is one account in GET /api/users: a local admin ("password") or
+// an SSO account. invited is an SSO account an admin added that has not
+// signed in yet.
 export type UserView = {
   id: number;
-  kind: "password" | "platform";
+  kind: "password" | "sso";
   username: string;
-  platform: Platform | "";
-  instance: string;
+  email: string;
+  role: "admin" | "user";
+  invited: boolean;
   lastSignInAt: string | null;
   waiting: boolean;
   teams: TeamRef[];
 };
 
-// NewAccountView is a password admin just made, with its generated password:
+// NewAccountView is a local admin just made, with its generated password:
 // the only time it is shown.
 export type NewAccountView = { username: string; password: string };
 
-export type TeamMemberView = { id: number; username: string; platform: Platform; instance: string };
+// TeamMemberView is a team's member: an SSO account and its role on the team.
+export type MemberRole = "viewer" | "maintainer";
+export type TeamMemberView = { accountId: number; username: string; email: string; role: MemberRole };
 
 // TeamRepoView is a repository a team covers; project "" covers every
 // repository of the instance.
 export type TeamRepoView = { instance: string; project: string };
 
-// TeamView is one team. repos are those the session can see; hiddenRepos
-// counts the rest, which a save keeps. members are those the session can see
-// (a platform admin its own instance's); hiddenMembers counts the rest,
-// which a save keeps too.
+// TeamView is one team. A team has no role of its own: each member has one.
 export type TeamView = {
   id: number;
   name: string;
-  role: Role;
   members: TeamMemberView[];
   repos: TeamRepoView[];
-  hiddenRepos: number;
-  hiddenMembers: number;
+};
+
+// AddUserBody is the body of POST /api/admin/users: an email, and the teams to
+// put the account on, each with its role (viewer when left out).
+export type AddUserBody = { email: string; teams?: { teamId: number; role?: MemberRole }[] };
+
+// RepoTeamView is a team on a repository's settings page: direct is set when
+// it lists the repository itself, wholeInstance when it covers every
+// repository of the instance.
+export type RepoTeamView = { id: number; name: string; members: number; direct: boolean; wholeInstance: boolean };
+
+// RepoTeamsView is GET and PUT .../teams of a repository (admins).
+export type RepoTeamsView = { teams: RepoTeamView[] };
+
+// SignInMode is how people other than local admins sign in: "" (not set up),
+// OIDC, or a JWT header a proxy adds.
+export type SignInMode = "" | "oidc" | "jwt";
+
+// SignInAdminView is GET /api/admin/sign-in (and the answer of its PUT). The
+// client secret is never sent, only whether one is set. source is "config"
+// when the config file sets it: then editable is false.
+export type SignInAdminView = {
+  source: "config" | "dashboard";
+  editable: boolean;
+  mode: SignInMode;
+  label: string;
+  issuer: string;
+  clientID: string;
+  clientSecret: SecretView;
+  header: string;
+  audience: string;
+  jwksURL: string;
+  emailClaim: string;
+  allowedDomains: string[];
+  allowedEmails: string[];
+  callbackURL: string;
+};
+
+// SignInBody is the body of PUT /api/admin/sign-in. A clientSecret left out
+// keeps the stored one; "" removes it.
+export type SignInBody = Omit<SignInAdminView, "source" | "editable" | "clientSecret" | "callbackURL"> & {
+  clientSecret?: string;
 };
 
 // TeamUpdate is the body of PUT /api/teams/{id}: it replaces everything.
-export type TeamUpdate = { name: string; role: Role; members: number[]; repos: TeamRepoView[] };
+export type TeamUpdate = {
+  name: string;
+  members: { accountId: number; role: MemberRole }[];
+  repos: TeamRepoView[];
+};
 
 export type AuditView = {
   id: number;
@@ -670,7 +702,7 @@ const gateCodes = new Set(["waiting", "password_change_required"]);
 // on that page and recovers from it.
 const wrongPasswordIs401 = new Set(["/auth/password", "/auth/password/change"]);
 
-async function request<T>(method: string, path: string, body?: unknown, csrf?: string): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, csrf?: string, quiet401 = false): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (method !== "GET") {
     // Every write carries the session's CSRF token.
@@ -683,7 +715,7 @@ async function request<T>(method: string, path: string, body?: unknown, csrf?: s
     body: body === undefined ? undefined : JSON.stringify(body),
     credentials: "same-origin",
   });
-  if (res.status === 401 && !wrongPasswordIs401.has(path)) {
+  if (res.status === 401 && !quiet401 && !wrongPasswordIs401.has(path)) {
     for (const fn of [...unauthorized]) fn();
   }
   if (!res.ok) {
@@ -712,6 +744,9 @@ async function request<T>(method: string, path: string, body?: unknown, csrf?: s
 
 export const api = {
   get: <T>(path: string) => request<T>("GET", path),
+  // probe is get for a page that expects a 401 and shows it: the 401 does not
+  // send the browser to the sign-in page.
+  probe: <T>(path: string) => request<T>("GET", path, undefined, undefined, true),
   post: <T>(path: string, body: unknown, csrf: string) => request<T>("POST", path, body, csrf),
   put: <T>(path: string, body: unknown, csrf: string) => request<T>("PUT", path, body, csrf),
   del: <T>(path: string, csrf: string) => request<T>("DELETE", path, undefined, csrf),
@@ -749,7 +784,6 @@ export function query(params: [string, string | number | undefined][]): string {
 export const paths = {
   review: (instance: string, project: string, number: number) => `/reviews/${seg(instance)}/${proj(project)}/${seg(String(number))}`,
   repo: (instance: string, project: string) => `/repos/${seg(instance)}/${proj(project)}`,
-  login: (platform: string, instance: string) => `/auth/${seg(platform)}/${seg(instance)}/login`,
 
   apiReview: (instance: string, project: string, number: number) =>
     `/api/reviews/${seg(instance)}/${proj(project)}/${seg(String(number))}`,
@@ -768,6 +802,7 @@ export const paths = {
   // Stop using: POST {fingerprint}.
   apiRepoPastDismissalStop: (instance: string, project: string) =>
     `/api/repositories/${seg(instance)}/${proj(project)}/past-dismissals/stop`,
+  apiRepoTeams: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/teams`,
   apiRepoSettings: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/settings`,
   apiRepoReadiness: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/readiness`,
   apiRepoReadinessScan: (instance: string, project: string) =>

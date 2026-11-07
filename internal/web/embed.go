@@ -111,7 +111,9 @@ func serve(w http.ResponseWriter, r *http.Request, name string, data []byte) {
 	if strings.HasPrefix(name, "assets/") {
 		// Vite names these by content hash, so they never change.
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	} else {
+	} else if w.Header().Get("Cache-Control") == "" {
+		// A wrapper that set a session cookie on this response has already
+		// said "private, no-store": keep it.
 		w.Header().Set("Cache-Control", "no-cache")
 	}
 	http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(data))

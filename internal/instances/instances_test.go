@@ -683,3 +683,44 @@ func TestReviewAppApproverHoldsNoApproveSecret(t *testing.T) {
 		t.Errorf("HeldSecrets = %v", held)
 	}
 }
+
+// The OIDC client secret is held: the one the config names by env var (no
+// database needed), and the one stored sealed from the dashboard.
+func TestHeldSecretsHoldsTheSignInClientSecret(t *testing.T) {
+	t.Setenv("T_SIGNIN_SECRET", "oidc-client-secret-from-env")
+	cfg := &config.Config{Dashboard: config.Dashboard{SignIn: config.SignIn{Mode: config.SignInOIDC, ClientSecretEnv: "T_SIGNIN_SECRET"}}}
+	got, err := New(cfg, nil, nil).HeldSecrets(ctx)
+	if err != nil || !slices.Contains(got, "oidc-client-secret-from-env") {
+		t.Errorf("HeldSecrets = %v, %v; want the config's client secret", got, err)
+	}
+	t.Setenv("T_SIGNIN_SECRET", "")
+	if got, err := New(cfg, nil, nil).HeldSecrets(ctx); err != nil || slices.Contains(got, "") {
+		t.Errorf("HeldSecrets with the env var unset = %v, %v; want no empty entry", got, err)
+	}
+}
+
+// [CI] The stored client secret is held; one that can't be opened fails the
+// check closed, and the error holds no secret.
+func TestHeldSecretsHoldsTheStoredSignInClientSecret(t *testing.T) {
+	st := newStore(t)
+	box := newBox(t, 1)
+	if err := st.PutSignInSettings(ctx, store.SignInSettings{Mode: store.SignInModeOIDC, Issuer: "https://idp.example.com",
+		ClientID: "c", ClientSecretSealed: box.Seal([]byte("stored-oidc-client-secret"))}); err != nil {
+		t.Fatal(err)
+	}
+	reg := New(testConfig(), st, box)
+	if err := reg.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, err := reg.HeldSecrets(ctx)
+	if err != nil || !slices.Contains(got, "stored-oidc-client-secret") {
+		t.Errorf("HeldSecrets = %v, %v; want the stored client secret", got, err)
+	}
+	other := New(testConfig(), st, newBox(t, 2)) // another key
+	if err := other.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := other.HeldSecrets(ctx); err == nil || strings.Contains(err.Error(), "stored-oidc-client-secret") {
+		t.Errorf("HeldSecrets with the wrong key = %v, %v; want an error without the secret", got, err)
+	}
+}

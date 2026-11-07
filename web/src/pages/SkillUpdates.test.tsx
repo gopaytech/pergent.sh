@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SkillDetail } from "../api";
 import { fakeApi } from "../test/fakeApi";
-import { fetchUpdateDone, platformAdmin, skillInstalledDetail, skillWrittenDetail, viewer } from "../test/fixtures";
+import { fetchUpdateDone, ssoAdmin, skillInstalledDetail, skillWrittenDetail, viewer } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -31,7 +31,7 @@ async function checkAgainst(ref: string) {
 describe("SkillUpdates", () => {
   it("starts from the skill's source: its folder, repository and ref", async () => {
     fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       [`GET ${skillUrl}`]: { body: skillInstalledDetail },
     });
     renderApp(page);
@@ -43,7 +43,7 @@ describe("SkillUpdates", () => {
 
   it("a new tag is sent as ref, with fromRef, the repository and the folder", async () => {
     const fake = fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       [`GET ${skillUrl}`]: { body: skillInstalledDetail },
       "POST /api/admin/skill-fetches": { status: 202, body: { id } },
       [`GET ${fetchUrl}`]: { body: fetchUpdateDone },
@@ -63,7 +63,7 @@ describe("SkillUpdates", () => {
 
   it("a public URL source is sent as url", async () => {
     const fake = fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       [`GET ${skillUrl}`]: {
         body: withSource({
           kind: "url",
@@ -90,7 +90,7 @@ describe("SkillUpdates", () => {
 
   it("a skill at the top of its repository checks the top folder (no path sent)", async () => {
     const fake = fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       [`GET ${skillUrl}`]: { body: withSource({ path: "security-review.md" }) },
       "POST /api/admin/skill-fetches": { status: 202, body: { id } },
       [`GET ${fetchUrl}`]: { body: fetchUpdateDone },
@@ -103,7 +103,7 @@ describe("SkillUpdates", () => {
 
   it("a private repository the admin can't see is typed in", async () => {
     fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       [`GET ${skillUrl}`]: {
         body: withSource({ repo: undefined, path: undefined, hidden: true }),
       },
@@ -126,7 +126,7 @@ describe("SkillUpdates", () => {
       ],
     };
     fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       [`GET ${skillUrl}`]: { body: skillInstalledDetail },
       "POST /api/admin/skill-fetches": { status: 202, body: { id } },
       [`GET ${fetchUrl}`]: { body: hostile },
@@ -146,7 +146,7 @@ describe("SkillUpdates", () => {
 
   it("shows 'removed at the source' and 'renamed at the source' with Update disabled", async () => {
     fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       [`GET ${skillUrl}`]: { body: skillInstalledDetail },
       "POST /api/admin/skill-fetches": { status: 202, body: { id } },
       [`GET ${fetchUrl}`]: { body: fetchUpdateDone },
@@ -166,7 +166,7 @@ describe("SkillUpdates", () => {
 
   it("Update posts the name and shows the result; the library views reload", async () => {
     const fake = fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       [`GET ${skillUrl}`]: { body: skillInstalledDetail },
       "POST /api/admin/skill-fetches": { status: 202, body: { id } },
       [`GET ${fetchUrl}`]: { body: fetchUpdateDone },
@@ -187,7 +187,7 @@ describe("SkillUpdates", () => {
 
   it("shows the server's refusal beside the skill", async () => {
     fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       [`GET ${skillUrl}`]: { body: skillInstalledDetail },
       "POST /api/admin/skill-fetches": { status: 202, body: { id } },
       [`GET ${fetchUrl}`]: { body: fetchUpdateDone },
@@ -210,7 +210,7 @@ describe("SkillUpdates", () => {
 
   it("says a skill written in the dashboard has no source", async () => {
     fakeApi({
-      "GET /api/me": { body: platformAdmin },
+      "GET /api/me": { body: ssoAdmin },
       "GET /api/skills/code-review": { body: skillWrittenDetail },
     });
     renderApp("/skills/updates?skill=code-review");
@@ -219,7 +219,7 @@ describe("SkillUpdates", () => {
   });
 
   it("asks for a skill when none is named", async () => {
-    fakeApi({ "GET /api/me": { body: platformAdmin } });
+    fakeApi({ "GET /api/me": { body: ssoAdmin } });
     renderApp("/skills/updates");
     expect(await screen.findByText(/Choose a skill/)).toBeInTheDocument();
   });

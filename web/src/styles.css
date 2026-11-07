@@ -110,6 +110,11 @@ aside {
   margin: 14px 10px 4px;
 }
 
+.me .grow {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .me {
   margin-top: auto;
   display: flex;
@@ -1224,6 +1229,47 @@ legend {
 
 .check input {
   width: auto;
+}
+
+/* A role in a table cell keeps its own width (select is 100% wide elsewhere). */
+.table select {
+  width: auto;
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+/* A role beside a ticked member or team keeps its own width. */
+.check select {
+  width: auto;
+  flex: none;
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+/* Add a member by email, inside the members group of a team. */
+.add-email {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.add-email label {
+  flex: 0 0 100%;
+  margin: 0;
+}
+
+.add-email input[type="text"] {
+  flex: 1 1 220px;
+  width: auto;
+  max-width: 320px;
+}
+
+.stack .add-email .btn {
+  margin-top: 0;
+  padding: 4px 9px;
+  font-size: 12px;
 }
 
 .stack .meta {

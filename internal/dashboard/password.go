@@ -233,7 +233,6 @@ func (a *Auth) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "sign-in failed, please try again")
 			return
 		}
-		a.forget(hash)
 	}
 	id := randomString(sessionIDBytes)
 	if err := a.store.CreateSession(ctx, store.Session{
@@ -296,7 +295,7 @@ func (a *Auth) failedSignIn(ctx context.Context, acc store.Account, detail strin
 // audit records what acc did; a failure to is logged, not returned.
 func (a *Auth) audit(ctx context.Context, acc store.Account, action, detail string, now time.Time) {
 	id := acc.ID
-	if err := a.store.Audit(ctx, store.AuditEntry{At: now, ActorID: &id, Actor: actorLabel(acc.Kind, acc.Platform, acc.Instance, acc.Username),
+	if err := a.store.Audit(ctx, store.AuditEntry{At: now, ActorID: &id, Actor: actorLabel(acc.Kind, acc.Username),
 		Action: action, Instance: acc.Instance, Detail: detail}); err != nil {
 		a.log.Error("dashboard: recording an audit entry failed", "action", action, "error", err.Error())
 	}

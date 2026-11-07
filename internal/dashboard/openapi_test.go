@@ -139,9 +139,10 @@ func (d specDoc) operations() []specOp {
 // --- the routes in the code ---
 
 // Access levels a route can be behind in the router: nothing, a session
-// (Auth.Require), an admin (requireAdmin) or an operator (requireOperator).
-// The handler may check more (a repository role); the spec says so in prose.
-var accessRank = map[string]int{"none": 0, "session": 1, "admin": 2, "operator": 3}
+// (Auth.Require) or an admin (Dashboard.adminRoute, which wraps the handler
+// in Auth.RequireAdmin). The handler may check more (a repository role); the
+// spec says so in prose.
+var accessRank = map[string]int{"none": 0, "session": 1, "admin": 2}
 
 type codeRoute struct {
 	Pattern string // "GET /api/me", or "/api/" for a method-less one
@@ -171,9 +172,9 @@ func maxAccess(a, b string) string {
 	return a
 }
 
-// accessOf reads how a handler expression is gated: it finds Require,
-// requireAdmin and requireOperator anywhere inside it.
-func accessOf(nodes ...ast.Node) string {
+// gateOf reads how a handler expression is gated: it finds Require and
+// RequireAdmin anywhere inside it.
+func gateOf(nodes ...ast.Node) string {
 	access := "none"
 	for _, n := range nodes {
 		if n == nil {
@@ -182,15 +183,11 @@ func accessOf(nodes ...ast.Node) string {
 		ast.Inspect(n, func(n ast.Node) bool {
 			switch x := n.(type) {
 			case *ast.SelectorExpr:
-				if x.Sel.Name == "Require" {
+				switch x.Sel.Name {
+				case "Require":
 					access = maxAccess(access, "session")
-				}
-			case *ast.Ident:
-				switch x.Name {
-				case "requireAdmin":
+				case "RequireAdmin":
 					access = maxAccess(access, "admin")
-				case "requireOperator":
-					access = maxAccess(access, "operator")
 				}
 			}
 			return true
@@ -198,6 +195,10 @@ func accessOf(nodes ...ast.Node) string {
 	}
 	return access
 }
+
+// adminRouteHelper is the name of the Dashboard method every admin API route
+// is registered with.
+const adminRouteHelper = "adminRoute"
 
 type routeHelper struct {
 	lit    *ast.FuncLit
@@ -293,6 +294,10 @@ func scanRoutesInFile(fset *token.FileSet, file *ast.File) (routes []codeRoute, 
 		return fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line)
 	}
 	for _, decl := range file.Decls {
+		// The one helper admin routes go through: its callers are read below.
+		if fd, ok := decl.(*ast.FuncDecl); ok && fd.Name.Name == adminRouteHelper {
+			continue
+		}
 		muxes := muxVars(decl)
 		helpers := map[string]*routeHelper{}
 		var ranges []rangeVar
@@ -308,7 +313,7 @@ func scanRoutesInFile(fset *token.FileSet, file *ast.File) (routes []codeRoute, 
 					len(lit.Type.Params.List[0].Names) == 0 || lit.Type.Params.List[0].Names[0].Name != "pattern" {
 					return true
 				}
-				h := &routeHelper{lit: lit, access: accessOf(lit.Body)}
+				h := &routeHelper{lit: lit, access: gateOf(lit.Body)}
 				ast.Inspect(lit.Body, func(n ast.Node) bool {
 					call, ok := n.(*ast.CallExpr)
 					if !ok {
@@ -378,7 +383,7 @@ func scanRoutesInFile(fset *token.FileSet, file *ast.File) (routes []codeRoute, 
 				if insideHelper(call.Pos()) {
 					return true // read through the helper's callers
 				}
-				access := accessOf(call.Args[1])
+				access := gateOf(call.Args[1])
 				switch a := call.Args[0].(type) {
 				case *ast.BasicLit:
 					if s, ok := stringLit(a); ok {
@@ -402,6 +407,19 @@ func scanRoutesInFile(fset *token.FileSet, file *ast.File) (routes []codeRoute, 
 				unresolved = append(unresolved, where(call.Pos())+": a route pattern this test can't read")
 				return true
 			}
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == adminRouteHelper {
+				if len(call.Args) != 3 {
+					unresolved = append(unresolved, where(call.Pos())+": "+adminRouteHelper+" is called with something other than (mux, pattern, handler)")
+					return true
+				}
+				lit, ok := stringLit(call.Args[1])
+				if !ok {
+					unresolved = append(unresolved, where(call.Pos())+": "+adminRouteHelper+" is called with a pattern that is not a string literal")
+					return true
+				}
+				add(lit, "admin", call.Pos())
+				return true
+			}
 			if id, ok := call.Fun.(*ast.Ident); ok {
 				if h := helpers[id.Name]; h != nil && len(call.Args) > 0 {
 					lit, ok := stringLit(call.Args[0])
@@ -413,7 +431,7 @@ func scanRoutesInFile(fset *token.FileSet, file *ast.File) (routes []codeRoute, 
 					for _, a := range call.Args[1:] {
 						rest = append(rest, a)
 					}
-					access := maxAccess(h.access, accessOf(rest...))
+					access := maxAccess(h.access, gateOf(rest...))
 					add(h.prefix+lit, access, call.Pos())
 				}
 			}
@@ -694,11 +712,10 @@ func (d *D) routes(mux *http.ServeMux) {
 	mux.Handle("/", h)
 	get := func(pattern string, h http.HandlerFunc) { mux.Handle("GET "+pattern, d.Auth.Require(h)) }
 	get("/c", d.c)
-	get("/d", requireAdmin(d.d))
-	admin := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, d.Auth.Require(requireAdmin(h))) }
-	admin("PUT /e", d.e)
-	op := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, d.Auth.Require(requireOperator(h))) }
-	op("DELETE /f", d.f)
+	get("/d", d.Auth.RequireAdmin(d.d))
+	d.adminRoute(mux, "PUT /e", d.e)
+	admin2 := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, d.Auth.Require(h)) }
+	admin2("DELETE /f", d.f)
 	for _, method := range []string{"PUT", "DELETE"} {
 		mux.Handle(method+" /g", d.Auth.Require(none))
 	}
@@ -714,7 +731,7 @@ func (d *D) routes(mux *http.ServeMux) {
 	}
 	want := map[string]string{
 		"POST /a/{id}": "none", "GET /b": "none", "/": "none",
-		"GET /c": "session", "GET /d": "admin", "PUT /e": "admin", "DELETE /f": "operator",
+		"GET /c": "session", "GET /d": "admin", "PUT /e": "admin", "DELETE /f": "session",
 		"PUT /g": "session", "DELETE /g": "session",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -743,6 +760,24 @@ func f(m *http.ServeMux) {
 		if len(unresolved) != 1 || len(routes) != 0 {
 			t.Errorf("%s must be reported as unresolved: routes %v, unresolved %v", name, routes, unresolved)
 		}
+	}
+
+	// The admin helper: its callers are the routes, and its own body is not read.
+	routes, unresolved = scanSource(t, `package x
+func (d *D) routes(mux *http.ServeMux) {
+	d.adminRoute(mux, "GET /m", d.m)
+	mux.Handle("GET /n", d.Auth.RequireAdmin(h))
+}
+func (d *D) adminRoute(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
+	mux.Handle(pattern, d.Auth.RequireAdmin(h))
+}`)
+	if len(unresolved) != 0 || len(routes) != 2 || routes[0].Access != "admin" || routes[1].Access != "admin" {
+		t.Errorf("admin routes: %v, unresolved %v; want GET /m and GET /n, both admin", routes, unresolved)
+	}
+	_, unresolved = scanSource(t, `package x
+func f(d *D, mux *http.ServeMux, p string) { d.adminRoute(mux, p, h) }`)
+	if len(unresolved) != 1 {
+		t.Errorf("adminRoute called with a variable pattern must be reported as unresolved, got %v", unresolved)
 	}
 
 	_, unresolved = scanSource(t, `package x
@@ -791,8 +826,7 @@ func inputSchema(v any) schemaType  { return schemaType{Type: reflect.TypeOf(v),
 // "readiness.Checklist".
 var openAPISchemas = map[string]schemaType{
 	"meView":                 outputSchema(meView{}),
-	"instancesView":          outputSchema(instancesView{}),
-	"InstanceView":           outputSchema(InstanceView{}),
+	"signInOptionsView":      outputSchema(signInOptionsView{}),
 	"OverviewView":           outputSchema(OverviewView{}),
 	"SetupView":              outputSchema(SetupView{}),
 	"StatsView":              outputSchema(StatsView{}),
@@ -837,8 +871,6 @@ var openAPISchemas = map[string]schemaType{
 	"SkillUpdateView":        outputSchema(SkillUpdateView{}),
 	"SkillFetchResultView":   outputSchema(SkillFetchResultView{}),
 	"AttentionView":          outputSchema(AttentionView{}),
-	"IntegrationView":        outputSchema(IntegrationView{}),
-	"IntegrationRepo":        outputSchema(IntegrationRepo{}),
 	"AdminSettingsView":      outputSchema(AdminSettingsView{}),
 	"DefaultsView":           outputSchema(DefaultsView{}),
 	"DefaultValues":          outputSchema(DefaultValues{}),
@@ -846,6 +878,8 @@ var openAPISchemas = map[string]schemaType{
 	"AvailableView":          outputSchema(AvailableView{}),
 	"AvailableRepo":          outputSchema(AvailableRepo{}),
 	"UserView":               outputSchema(UserView{}),
+	"RepoTeamsView":          outputSchema(RepoTeamsView{}),
+	"RepoTeamView":           outputSchema(RepoTeamView{}),
 	"TeamRef":                outputSchema(TeamRef{}),
 	"NewAccountView":         outputSchema(NewAccountView{}),
 	"TeamView":               outputSchema(TeamView{}),
@@ -856,6 +890,9 @@ var openAPISchemas = map[string]schemaType{
 	"SecretView":             outputSchema(SecretView{}),
 	"InstanceAdminView":      outputSchema(InstanceAdminView{}),
 	"LLMAdminView":           outputSchema(LLMAdminView{}),
+	"SignInAdminView":        outputSchema(SignInAdminView{}),
+	"SignInTestView":         outputSchema(SignInTestView{}),
+	"ssoView":                outputSchema(ssoView{}),
 	"readiness.Checklist":    outputSchema(readiness.Checklist{}),
 	"readiness.Section":      outputSchema(readiness.Section{}),
 	"readiness.Item":         outputSchema(readiness.Item{}),
@@ -898,11 +935,16 @@ var openAPIUntypedSchemas = map[string]string{
 	"ScanBusyBody":              "struct in Dashboard.scanNow",
 	"ScanTooSoonBody":           "struct in Dashboard.scanNow",
 	"CreateAccountRequest":      "struct in Dashboard.createPasswordAccount",
+	"AddUserRequest":            "struct in Dashboard.addUser",
+	"PutRepositoryTeamsRequest": "struct in Dashboard.putRepositoryTeams",
+	"SetAccountRoleRequest":     "struct in Dashboard.setUserRole",
 	"CreateTeamRequest":         "struct in Dashboard.createTeam",
 	"UpdateTeamRequest":         "struct in Dashboard.updateTeam",
 	"CreateInstanceRequest":     "struct in Dashboard.addInstance",
 	"UpdateInstanceRequest":     "struct in Dashboard.updateInstance",
 	"PutLLMRequest":             "struct in Dashboard.putLLM",
+	"PutSignInRequest":          "putSignInBody, decoded in Dashboard.putSignIn",
+	"TestSignInRequest":         "struct in Dashboard.signInTest",
 	"CreateSkillRequest":        "struct in Dashboard.createSkill",
 	"UpdateSkillRequest":        "struct in Dashboard.updateSkill",
 	"CopySkillRequest":          "struct in Dashboard.copySkill",
@@ -1239,7 +1281,10 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 	outcomes := []string{OutcomeRunning, OutcomeApproved, OutcomeBlocking, OutcomeDraft, OutcomeNoBlocking,
 		OutcomeFailed, OutcomeSuperseded, OutcomeSkipped, OutcomeUnknown}
 	roles := []string{store.RoleAdmin, store.RoleMaintainer, store.RoleViewer}
-	kinds := []string{store.AccountPassword, store.AccountPlatform}
+	teamRoles := []string{store.RoleMaintainer, store.RoleViewer}
+	accountRoles := []string{store.RoleAdmin, store.RoleUser}
+	kinds := []string{store.AccountPassword, store.AccountSSO}
+	signIns := []string{store.SignInPassword, store.SignInOIDC, store.SignInJWT}
 	scanStates := []string{string(store.ScanQueued), string(store.ScanRunning), string(store.ScanDone), string(store.ScanFailed)}
 	fetchStatuses := []string{store.FetchRunning, store.FetchDone, store.FetchFailed}
 	fetchPurposes := []string{store.FetchInstall, store.FetchUpdate}
@@ -1253,18 +1298,21 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 	}{
 		{"ReviewSummary", "outcome", outcomes},
 		{"RunSummary", "outcome", outcomes},
-		{"TeamView", "role", roles},
+		{"TeamMemberView", "role", teamRoles},
 		{"ReviewDetailView", "role", append(append([]string{}, roles...), "")},
 		{"RepositoryDetailView", "role", roles},
 		{"UserView", "kind", kinds},
+		{"UserView", "role", accountRoles},
 		{"meView", "kind", kinds},
+		{"meView", "role", accountRoles},
+		{"meView", "signIn", signIns},
+		{"SignInAdminView", "mode", []string{"", store.SignInModeOIDC, store.SignInModeJWT}},
+		{"PutSignInRequest", "mode", []string{"", store.SignInModeOIDC, store.SignInModeJWT}},
 		{"ScanView", "state", scanStates},
 		{"SkillFetchView", "status", fetchStatuses},
 		{"SkillFetchView", "purpose", fetchPurposes},
 		{"RepositoryView", "health", healths},
-		{"IntegrationView", "approver", approvers},
 		{"InstanceAdminView", "approver", approvers},
-		{"InstanceView", "platform", platforms},
 		{"readiness.Item", "state", itemStates},
 	}
 	families := []struct {
@@ -1272,8 +1320,12 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 		known               [][]string
 	}{
 		{"internal/store/*.go", "Outcome", "", [][]string{outcomes}},
-		{"internal/store/*.go", "Role", "", [][]string{roles}},
-		{"internal/store/*.go", "Account", "", [][]string{kinds}},
+		// An account's role is admin or user (a team member's, viewer or
+		// maintainer, is in the roles above). The platform kind is hidden: no
+		// view of the API shows it.
+		{"internal/store/*.go", "Role", "", [][]string{roles, accountRoles}},
+		{"internal/store/*.go", "Account", "", [][]string{kinds, {store.AccountPlatform}}},
+		{"internal/store/*.go", "SignIn", "", [][]string{signIns}},
 		{"internal/store/*.go", "Scan", "", [][]string{scanStates}},
 		{"internal/store/*.go", "Fetch", "", [][]string{fetchStatuses, fetchPurposes}},
 		{"internal/dashboard/*.go", "health", "", [][]string{healths}},
@@ -1432,7 +1484,7 @@ func TestOpenAPIDocumentIsValid(t *testing.T) {
 		if _, ok := op.Op["x-pergent-access"].(string); !ok {
 			t.Errorf("%s: x-pergent-access is required (none, session, admin or operator)", id)
 		} else if _, known := accessRank[specString(op.Op["x-pergent-access"])]; !known {
-			t.Errorf("%s: x-pergent-access %q is not none, session, admin or operator", id, op.Op["x-pergent-access"])
+			t.Errorf("%s: x-pergent-access %q is not none, session or admin", id, op.Op["x-pergent-access"])
 		}
 		if sec, ok := op.Op["security"]; !ok {
 			t.Errorf("%s: security is required (write [] for none)", id)
