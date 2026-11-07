@@ -1272,8 +1272,10 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 		known               [][]string
 	}{
 		{"internal/store/*.go", "Outcome", "", [][]string{outcomes}},
-		{"internal/store/*.go", "Role", "", [][]string{roles}},
-		{"internal/store/*.go", "Account", "", [][]string{kinds}},
+		// RoleUser and AccountSSO are the store's, not served yet: the API
+		// takes them when the sign-in code switches over.
+		{"internal/store/*.go", "Role", "", [][]string{roles, {store.RoleUser}}},
+		{"internal/store/*.go", "Account", "", [][]string{kinds, {store.AccountSSO}}},
 		{"internal/store/*.go", "Scan", "", [][]string{scanStates}},
 		{"internal/store/*.go", "Fetch", "", [][]string{fetchStatuses, fetchPurposes}},
 		{"internal/dashboard/*.go", "health", "", [][]string{healths}},

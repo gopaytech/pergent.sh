@@ -110,7 +110,7 @@ func (d *Dashboard) users(w http.ResponseWriter, r *http.Request) {
 	of := map[int64][]TeamRef{}
 	for _, t := range teams {
 		for _, m := range t.Members {
-			of[m] = append(of[m], TeamRef{ID: t.ID, Name: t.Name})
+			of[m.AccountID] = append(of[m.AccountID], TeamRef{ID: t.ID, Name: t.Name})
 		}
 	}
 	out := make([]UserView, 0, len(accounts))
@@ -231,7 +231,8 @@ func seesTeamRepo(se Session, tr store.TeamRepo) bool {
 // teamView is t as the session sees it; accounts are by ID.
 func teamView(se Session, t store.Team, accounts map[int64]store.Account) TeamView {
 	v := TeamView{ID: t.ID, Name: t.Name, Role: t.Role, Members: []TeamMemberView{}, Repos: []TeamRepoView{}}
-	for _, id := range t.Members {
+	for _, m := range t.Members {
+		id := m.AccountID
 		a := accounts[id]
 		if !seesAccount(se, a) {
 			v.HiddenMembers++
@@ -408,7 +409,7 @@ func (d *Dashboard) updateTeam(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		t.Name, t.Role, t.Members, t.Repos = name, in.Role, members, saved
+		t.Name, t.Role, t.Members, t.Repos = name, in.Role, withMemberRoles(t.Members, members), saved
 		after = *t
 		return nil
 	})
@@ -454,6 +455,30 @@ func (d *Dashboard) updateTeam(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, teamView(se, t, accounts))
 }
 
+// memberIDs are the account IDs of members.
+func memberIDs(members []store.TeamMember) []int64 {
+	out := make([]int64, len(members))
+	for i, m := range members {
+		out[i] = m.AccountID
+	}
+	return out
+}
+
+// withMemberRoles is ids as members: one that is on prev keeps its role
+// there, any other is a viewer. This page sets no member roles yet.
+func withMemberRoles(prev []store.TeamMember, ids []int64) []store.TeamMember {
+	out := make([]store.TeamMember, len(ids))
+	for i, id := range ids {
+		out[i] = store.TeamMember{AccountID: id, Role: store.RoleViewer}
+		for _, m := range prev {
+			if m.AccountID == id {
+				out[i].Role = m.Role
+			}
+		}
+	}
+	return out
+}
+
 // teamMembers is the member list to store for a team change that names
 // submitted. An operator's is the one submitted. A platform admin changes
 // only the members of its own instance: those of other instances stay on
@@ -465,9 +490,9 @@ func teamMembers(se Session, t store.Team, submitted []int64, accounts map[int64
 	}
 	own := func(id int64) bool { return accounts[id].Instance == se.Instance }
 	var out []int64
-	for _, id := range t.Members {
-		if !own(id) {
-			out = append(out, id)
+	for _, m := range t.Members {
+		if !own(m.AccountID) {
+			out = append(out, m.AccountID)
 		}
 	}
 	kept := slices.Clone(out)
@@ -548,7 +573,7 @@ func teamChanges(before, after store.Team, userName func(int64) string) []string
 		slices.Sort(out)
 		return slices.Compact(out)
 	}
-	was, now := members(before.Members), members(after.Members)
+	was, now := members(memberIDs(before.Members)), members(memberIDs(after.Members))
 	if !slices.Equal(was, now) {
 		var names []string
 		for _, id := range now {

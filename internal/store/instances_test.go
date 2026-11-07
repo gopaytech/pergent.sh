@@ -182,8 +182,9 @@ func TestDeleteInstanceDataCascades(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	addPlatformMember(t, s, team.ID, labUser.ID)
+	addPlatformMember(t, s, team.ID, mainUser.ID)
 	if ok, err := s.UpdateTeam(ctx, team.ID, func(tm *Team) error {
-		tm.Members = []int64{labUser.ID, mainUser.ID}
 		tm.Repos = []TeamRepo{{"lab", "acme/widgets"}, {"lab", ""}, {"main", "acme/widgets"}}
 		return nil
 	}); err != nil || !ok {
@@ -237,8 +238,21 @@ func TestDeleteInstanceDataCascades(t *testing.T) {
 		}
 	}
 	tm, _, _ := s.Team(ctx, team.ID)
-	if len(tm.Members) != 1 || tm.Members[0] != mainUser.ID || len(tm.Repos) != 1 || tm.Repos[0] != (TeamRepo{"main", "acme/widgets"}) {
-		t.Fatalf("team = %+v; want only main's member and repository", tm)
+	var members []int64
+	rows, err := s.pool.Query(ctx, `SELECT account_id FROM team_members WHERE team_id = $1`, team.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		members = append(members, id)
+	}
+	rows.Close()
+	if len(members) != 1 || members[0] != mainUser.ID || len(tm.Repos) != 1 || tm.Repos[0] != (TeamRepo{"main", "acme/widgets"}) {
+		t.Fatalf("team members %v, team %+v; want only main's member and repository", members, tm)
 	}
 	repos, _ := s.DashboardRepos(ctx)
 	if len(repos) != 1 || repos[0].Instance != "main" {

@@ -7,6 +7,23 @@ import (
 	"time"
 )
 
+// viewers makes the viewer members for the accounts ids.
+func viewers(ids ...int64) []TeamMember {
+	out := make([]TeamMember, len(ids))
+	for i, id := range ids {
+		out[i] = TeamMember{AccountID: id, Role: RoleViewer}
+	}
+	return out
+}
+
+func memberIDs(ms []TeamMember) []int64 {
+	out := make([]int64, len(ms))
+	for i, m := range ms {
+		out[i] = m.AccountID
+	}
+	return out
+}
+
 func TestCreateTeam(t *testing.T) {
 	s := newStore(t)
 	tm, err := s.CreateTeam(ctx, "Platform", RoleMaintainer, t0)
@@ -26,13 +43,13 @@ func TestCreateTeam(t *testing.T) {
 
 func TestUpdateTeamReplaces(t *testing.T) {
 	s := newStore(t)
-	a := mustPlatform(t, s, "main", 1, "alice")
-	b := mustPlatform(t, s, "main", 2, "bob")
+	a := mustSSO(t, s, "alice@example.com")
+	b := mustSSO(t, s, "bob@example.com")
 	tm, _ := s.CreateTeam(ctx, "devs", RoleViewer, t0)
 
 	ok, err := s.UpdateTeam(ctx, tm.ID, func(t *Team) error {
 		t.Name, t.Role = "developers", RoleMaintainer
-		t.Members = []int64{b.ID, a.ID, a.ID}
+		t.Members = viewers(b.ID, a.ID, a.ID)
 		t.Repos = []TeamRepo{{Instance: "main"}, {Instance: "main", Project: "acme/widgets"}, {Instance: "main", Project: "ACME/Widgets"}}
 		return nil
 	})
@@ -43,7 +60,7 @@ func TestUpdateTeamReplaces(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("Team = %v, %v", found, err)
 	}
-	if got.Name != "developers" || got.Role != RoleMaintainer || !slices.Equal(got.Members, []int64{a.ID, b.ID}) ||
+	if got.Name != "developers" || got.Role != RoleMaintainer || !slices.Equal(memberIDs(got.Members), []int64{a.ID, b.ID}) ||
 		!slices.Equal(got.Repos, []TeamRepo{{Instance: "main"}, {Instance: "main", Project: "acme/widgets"}}) {
 		t.Fatalf("team = %+v (members and repos deduplicated and sorted; an empty project is the whole instance)", got)
 	}
@@ -54,14 +71,14 @@ func TestUpdateTeamReplaces(t *testing.T) {
 
 	// A second update replaces what the first set.
 	if ok, err := s.UpdateTeam(ctx, tm.ID, func(t *Team) error {
-		t.Members = []int64{b.ID}
+		t.Members = viewers(b.ID)
 		t.Repos = []TeamRepo{{Instance: "other", Project: "acme/tools"}}
 		return nil
 	}); err != nil || !ok {
 		t.Fatalf("second UpdateTeam = %v, %v", ok, err)
 	}
 	got, _, _ = s.Team(ctx, tm.ID)
-	if !slices.Equal(got.Members, []int64{b.ID}) || !slices.Equal(got.Repos, []TeamRepo{{Instance: "other", Project: "acme/tools"}}) {
+	if !slices.Equal(memberIDs(got.Members), []int64{b.ID}) || !slices.Equal(got.Repos, []TeamRepo{{Instance: "other", Project: "acme/tools"}}) {
 		t.Fatalf("team after the second update = %+v", got)
 	}
 
@@ -89,11 +106,11 @@ func TestUpdateTeamReplaces(t *testing.T) {
 
 func TestTeamsListAndDelete(t *testing.T) {
 	s := newStore(t)
-	a := mustPlatform(t, s, "main", 1, "alice")
+	a := mustSSO(t, s, "alice@example.com")
 	t1, _ := s.CreateTeam(ctx, "zeta", RoleViewer, t0)
 	t2, _ := s.CreateTeam(ctx, "Alpha", RoleAdmin, t0)
 	if _, err := s.UpdateTeam(ctx, t1.ID, func(t *Team) error {
-		t.Members = []int64{a.ID}
+		t.Members = viewers(a.ID)
 		t.Repos = []TeamRepo{{Instance: "main", Project: "acme/widgets"}}
 		return nil
 	}); err != nil {
@@ -103,7 +120,7 @@ func TestTeamsListAndDelete(t *testing.T) {
 	if err != nil || len(all) != 2 || all[0].ID != t2.ID || all[1].ID != t1.ID {
 		t.Fatalf("Teams = %+v, %v; want Alpha then zeta", all, err)
 	}
-	if !slices.Equal(all[1].Members, []int64{a.ID}) || len(all[1].Repos) != 1 {
+	if !slices.Equal(memberIDs(all[1].Members), []int64{a.ID}) || len(all[1].Repos) != 1 {
 		t.Fatalf("zeta = %+v", all[1])
 	}
 	if _, found, _ := s.Team(ctx, 9999); found {
@@ -126,15 +143,15 @@ func TestTeamsListAndDelete(t *testing.T) {
 
 func TestAccountTeams(t *testing.T) {
 	s := newStore(t)
-	a := mustPlatform(t, s, "main", 1, "alice")
-	b := mustPlatform(t, s, "main", 2, "bob")
+	a := mustSSO(t, s, "alice@example.com")
+	b := mustSSO(t, s, "bob@example.com")
 	t1, _ := s.CreateTeam(ctx, "one", RoleViewer, t0)
 	t2, _ := s.CreateTeam(ctx, "two", RoleMaintainer, t0)
 	t3, _ := s.CreateTeam(ctx, "three", RoleAdmin, t0)
 	set := func(id int64, members ...int64) {
 		t.Helper()
 		if _, err := s.UpdateTeam(ctx, id, func(t *Team) error {
-			t.Members = members
+			t.Members = viewers(members...)
 			t.Repos = []TeamRepo{{Instance: "main"}}
 			return nil
 		}); err != nil {
@@ -149,7 +166,7 @@ func TestAccountTeams(t *testing.T) {
 	if err != nil || len(got) != 2 || got[0].ID != t1.ID || got[1].ID != t2.ID {
 		t.Fatalf("AccountTeams(alice) = %+v, %v; want one, two", got, err)
 	}
-	if !slices.Equal(got[1].Members, []int64{a.ID, b.ID}) || len(got[1].Repos) != 1 {
+	if !slices.Equal(memberIDs(got[1].Members), []int64{a.ID, b.ID}) || len(got[1].Repos) != 1 {
 		t.Fatalf("team two = %+v (members and repos are loaded)", got[1])
 	}
 	if got, err := s.AccountTeams(ctx, 9999); err != nil || len(got) != 0 {
@@ -161,16 +178,16 @@ func TestAccountTeams(t *testing.T) {
 // nothing of the update is kept.
 func TestUpdateTeamUnknownMember(t *testing.T) {
 	s := newStore(t)
-	a := mustPlatform(t, s, "main", 1, "alice")
+	a := mustSSO(t, s, "alice@example.com")
 	tm, _ := s.CreateTeam(ctx, "devs", RoleViewer, t0)
-	if _, err := s.UpdateTeam(ctx, tm.ID, func(t *Team) error { t.Members = []int64{a.ID}; return nil }); err != nil {
+	if _, err := s.UpdateTeam(ctx, tm.ID, func(t *Team) error { t.Members = viewers(a.ID); return nil }); err != nil {
 		t.Fatal(err)
 	}
-	ok, err := s.UpdateTeam(ctx, tm.ID, func(t *Team) error { t.Name = "renamed"; t.Members = []int64{a.ID, 99999}; return nil })
+	ok, err := s.UpdateTeam(ctx, tm.ID, func(t *Team) error { t.Name = "renamed"; t.Members = viewers(a.ID, 99999); return nil })
 	if !errors.Is(err, ErrUnknownAccount) || ok {
 		t.Fatalf("UpdateTeam with an unknown member = %v, %v; want ErrUnknownAccount", ok, err)
 	}
-	if got, _, _ := s.Team(ctx, tm.ID); got.Name != "devs" || !slices.Equal(got.Members, []int64{a.ID}) {
+	if got, _, _ := s.Team(ctx, tm.ID); got.Name != "devs" || !slices.Equal(memberIDs(got.Members), []int64{a.ID}) {
 		t.Errorf("team after the refused update = %+v", got)
 	}
 }
@@ -226,5 +243,105 @@ func TestDeleteTeamChecked(t *testing.T) {
 	}
 	if !slices.Equal(saw, []TeamRepo{{Instance: "main", Project: "acme/widgets"}}) {
 		t.Errorf("check saw %+v; want the repository the update added", saw)
+	}
+}
+
+// A member has a role on the team: viewer unless it says maintainer. The
+// roles come back on Team and on AccountTeams, an account named twice is one
+// member with the higher role, and a platform account can't be a member.
+func TestTeamMemberRoles(t *testing.T) {
+	s := newStore(t)
+	a := mustSSO(t, s, "alice@example.com")
+	b := mustSSO(t, s, "bob@example.com")
+	c := mustSSO(t, s, "carol@example.com")
+	tm, err := s.CreateTeam(ctx, "devs", RoleViewer, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.UpdateTeam(ctx, tm.ID, func(t *Team) error {
+		t.Members = []TeamMember{{a.ID, RoleMaintainer}, {b.ID, ""}, {c.ID, RoleViewer}, {c.ID, RoleMaintainer}, {c.ID, RoleViewer}}
+		return nil
+	}); err != nil || !ok {
+		t.Fatalf("UpdateTeam = %v, %v", ok, err)
+	}
+	want := []TeamMember{{a.ID, RoleMaintainer}, {b.ID, RoleViewer}, {c.ID, RoleMaintainer}}
+	got, _, _ := s.Team(ctx, tm.ID)
+	if !slices.Equal(got.Members, want) {
+		t.Fatalf("members = %+v; want %+v", got.Members, want)
+	}
+	teams, err := s.AccountTeams(ctx, b.ID)
+	if err != nil || len(teams) != 1 || !slices.Equal(teams[0].Members, want) {
+		t.Fatalf("AccountTeams = %+v, %v", teams, err)
+	}
+
+	// A role can change; the same account keeps one row.
+	if ok, err := s.UpdateTeam(ctx, tm.ID, func(t *Team) error {
+		t.Members = []TeamMember{{a.ID, RoleViewer}, {b.ID, RoleMaintainer}}
+		return nil
+	}); err != nil || !ok {
+		t.Fatalf("second UpdateTeam = %v, %v", ok, err)
+	}
+	got, _, _ = s.Team(ctx, tm.ID)
+	if want := []TeamMember{{a.ID, RoleViewer}, {b.ID, RoleMaintainer}}; !slices.Equal(got.Members, want) {
+		t.Fatalf("members after the change = %+v; want %+v", got.Members, want)
+	}
+
+	// A bad role is an error and keeps the team as it was; so does an
+	// account that is not one, or is a platform account.
+	platform := mustPlatform(t, s, "main", 1, "pat")
+	for name, members := range map[string][]TeamMember{
+		"admin role":      {{a.ID, RoleAdmin}},
+		"unknown role":    {{a.ID, "owner"}},
+		"unknown account": {{a.ID, RoleViewer}, {99999, RoleViewer}},
+		"platform":        {{a.ID, RoleViewer}, {platform.ID, RoleViewer}},
+	} {
+		ok, err := s.UpdateTeam(ctx, tm.ID, func(t *Team) error { t.Name = "renamed"; t.Members = members; return nil })
+		if err == nil || ok {
+			t.Errorf("%s: UpdateTeam = %v, %v; want an error", name, ok, err)
+		}
+	}
+	if err := func() error {
+		_, err := s.UpdateTeam(ctx, tm.ID, func(t *Team) error { t.Members = viewers(99999); return nil })
+		return err
+	}(); !errors.Is(err, ErrUnknownAccount) {
+		t.Errorf("unknown account = %v; want ErrUnknownAccount", err)
+	}
+	if again, _, _ := s.Team(ctx, tm.ID); again.Name != "devs" || len(again.Members) != 2 || again.Members[1].Role != RoleMaintainer {
+		t.Fatalf("team after the refused updates = %+v", again)
+	}
+
+	// The stored role is checked by the database too, and a row written the
+	// old way (no role) reads as a viewer.
+	if _, err := s.pool.Exec(ctx, `UPDATE team_members SET role = 'admin'`); err == nil {
+		t.Error("the database took a team member role of admin")
+	}
+	if _, err := s.pool.Exec(ctx, `INSERT INTO team_members (team_id, account_id) VALUES ($1, $2)`, tm.ID, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := s.Team(ctx, tm.ID); got.Members[2] != (TeamMember{c.ID, RoleViewer}) {
+		t.Fatalf("a member row with no role = %+v; want viewer", got.Members)
+	}
+}
+
+// Platform accounts stay on a team in the database (the previous release
+// reads them) but are never listed, and a change to the team leaves them.
+func TestTeamKeepsPlatformMembershipsUnlisted(t *testing.T) {
+	s := newStore(t)
+	p := mustPlatform(t, s, "main", 1, "pat")
+	a := mustSSO(t, s, "alice@example.com")
+	tm, _ := s.CreateTeam(ctx, "devs", RoleViewer, t0)
+	addPlatformMember(t, s, tm.ID, p.ID)
+	if got, _, _ := s.Team(ctx, tm.ID); len(got.Members) != 0 {
+		t.Fatalf("members = %+v; want none (the platform member is hidden)", got.Members)
+	}
+	if ok, err := s.UpdateTeam(ctx, tm.ID, func(t *Team) error { t.Members = viewers(a.ID); return nil }); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if ok, err := s.UpdateTeam(ctx, tm.ID, func(t *Team) error { t.Members = nil; return nil }); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	var n int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM team_members WHERE team_id = $1 AND account_id = $2`, tm.ID, p.ID).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("platform membership rows = %d, %v; want 1 kept", n, err)
 	}
 }

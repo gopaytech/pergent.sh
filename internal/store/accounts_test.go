@@ -2,6 +2,8 @@ package store
 
 import (
 	"errors"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,6 +25,24 @@ func mustPlatform(t *testing.T, s *Store, instance string, userID int64, usernam
 		t.Fatalf("UpsertPlatformAccount(%s): %v", username, err)
 	}
 	return a
+}
+
+func mustSSO(t *testing.T, s *Store, email string) Account {
+	t.Helper()
+	a, err := s.SignInSSOAccount(ctx, email, t0)
+	if err != nil {
+		t.Fatalf("SignInSSOAccount(%s): %v", email, err)
+	}
+	return a
+}
+
+// addPlatformMember puts a platform account on a team the way the previous
+// release did; UpdateTeam refuses platform accounts.
+func addPlatformMember(t *testing.T, s *Store, teamID, accountID int64) {
+	t.Helper()
+	if _, err := s.pool.Exec(ctx, `INSERT INTO team_members (team_id, account_id) VALUES ($1, $2)`, teamID, accountID); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestPasswordAccountCaseInsensitive(t *testing.T) {
@@ -234,18 +254,21 @@ func TestUpsertPlatformAccount(t *testing.T) {
 	}
 }
 
-func TestAccountsWaitingFirst(t *testing.T) {
+// Platform accounts are not listed, on a team or not; the rest come by
+// username ignoring case.
+func TestAccountsHidePlatformRows(t *testing.T) {
 	s := newStore(t)
 	admin := mustPassword(t, s, "admin")
 	member := mustPlatform(t, s, "main", 1, "alice")
-	waiting := mustPlatform(t, s, "main", 2, "zed")
+	mustPlatform(t, s, "main", 2, "aaron")
+	zed := mustSSO(t, s, "zed@example.com")
+	bea := mustSSO(t, s, "Bea@example.com")
 	team, err := s.CreateTeam(ctx, "devs", RoleViewer, t0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := s.UpdateTeam(ctx, team.ID, func(tm *Team) error { tm.Members = []int64{member.ID}; return nil }); err != nil || !ok {
-		t.Fatalf("UpdateTeam = %v, %v", ok, err)
-	}
+	addPlatformMember(t, s, team.ID, member.ID)
+
 	all, err := s.Accounts(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -254,10 +277,18 @@ func TestAccountsWaitingFirst(t *testing.T) {
 	for _, a := range all {
 		ids = append(ids, a.ID)
 	}
-	// zed has no team, so it comes first; then alice and admin by username.
-	want := []int64{waiting.ID, admin.ID, member.ID}
-	if len(ids) != 3 || ids[0] != want[0] || ids[1] != want[1] || ids[2] != want[2] {
-		t.Fatalf("order = %v; want %v", ids, want)
+	want := []int64{admin.ID, bea.ID, zed.ID}
+	if !slices.Equal(ids, want) {
+		t.Fatalf("Accounts = %v; want %v (no platform account)", ids, want)
+	}
+	// Account still finds a platform row by ID, so a code path that has an
+	// ID is not surprised.
+	if _, found, err := s.Account(ctx, member.ID); err != nil || !found {
+		t.Fatalf("Account(platform) = %v, %v", found, err)
+	}
+	// The team lists no platform member.
+	if got, _, _ := s.Team(ctx, team.ID); len(got.Members) != 0 {
+		t.Fatalf("team members = %+v; want none", got.Members)
 	}
 }
 
@@ -276,9 +307,7 @@ func TestCountWaitingAccounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := s.UpdateTeam(ctx, team.ID, func(tm *Team) error { tm.Members = []int64{member.ID}; return nil }); err != nil || !ok {
-		t.Fatalf("UpdateTeam = %v, %v", ok, err)
-	}
+	addPlatformMember(t, s, team.ID, member.ID)
 	if n, err := s.CountWaitingAccounts(ctx, ""); err != nil || n != 2 {
 		t.Fatalf("CountWaitingAccounts with alice on a team = %d, %v; want 2", n, err)
 	}
@@ -296,14 +325,14 @@ func TestCountWaitingAccounts(t *testing.T) {
 func TestDeleteAccountCascades(t *testing.T) {
 	s := newStore(t)
 	mustPassword(t, s, "admin")
-	a := mustPlatform(t, s, "main", 1, "alice")
+	a := mustSSO(t, s, "alice@example.com")
 	se := newSession(t, s, 1, t0)
 	se.AccountID = a.ID
 	if err := s.CreateSession(ctx, se); err != nil {
 		t.Fatal(err)
 	}
 	team, _ := s.CreateTeam(ctx, "devs", RoleViewer, t0)
-	if _, err := s.UpdateTeam(ctx, team.ID, func(tm *Team) error { tm.Members = []int64{a.ID}; return nil }); err != nil {
+	if _, err := s.UpdateTeam(ctx, team.ID, func(tm *Team) error { tm.Members = viewers(a.ID); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if ok, err := s.DeleteAccount(ctx, a.ID); err != nil || !ok {
@@ -450,5 +479,199 @@ func TestResetPasswordTogether(t *testing.T) {
 	}
 	if log, _ := s.AuditLog(ctx, 0, 10); len(log) != 1 {
 		t.Errorf("a refused reset was audited: %+v", log)
+	}
+}
+
+func TestNormalizeEmail(t *testing.T) {
+	good := map[string]string{
+		"alice@example.com":      "alice@example.com",
+		"Alice@Example.COM":      "alice@example.com",
+		"a.b+tag@sub.example.io": "a.b+tag@sub.example.io",
+		// ASCII lower-casing only: the Kelvin sign (U+212A) is not a "K", and
+		// is kept as it is, so it can't fold into "k".
+		"K@example.com": "K@example.com",
+		"İ@example.com": "İ@example.com",
+	}
+	for in, want := range good {
+		got, err := NormalizeEmail(in)
+		if err != nil || got != want {
+			t.Errorf("NormalizeEmail(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	if got, _ := NormalizeEmail("K@example.com"); got == "k@example.com" {
+		t.Error("the Kelvin sign was folded to k")
+	}
+	for _, in := range []string{
+		"", " ", "alice", "@example.com", "alice@", "a@b@example.com", "alice@@example.com",
+		" alice@example.com", "alice@example.com ", "alice@exam ple.com", "ali ce@example.com",
+		"alice@example.com\n", "alice@example.com\x00", "\talice@example.com",
+		" alice@example.com", "alice@example.com ", "ali‍ce@example.com",
+		"Alice <alice@example.com>", "alice@example.com, bob@example.com", "\"a b\"@example.com",
+		"alice@example.com;bob@example.com", "alice(comment)@example.com", "ali\xffce@example.com",
+	} {
+		if got, err := NormalizeEmail(in); err == nil {
+			t.Errorf("NormalizeEmail(%q) = %q, nil; want an error", in, got)
+		}
+	}
+	long := strings.Repeat("a", 250) + "@b.co"
+	if _, err := NormalizeEmail(long); err == nil {
+		t.Error("an email over 254 bytes was accepted")
+	}
+}
+
+// An invited email, then its first sign-in, is one row.
+func TestAddThenSignInSSOAccount(t *testing.T) {
+	s := newStore(t)
+	added, err := s.AddSSOAccount(ctx, "a@example.com", t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added.Kind != AccountSSO || added.Email != "a@example.com" || added.Username != "a@example.com" || !added.Added ||
+		added.Role != RoleUser || added.LastSignInAt != nil || added.PasswordHash != "" || added.Platform != "" ||
+		added.Instance != "" || added.PlatformUserID != 0 || !added.CreatedAt.Equal(t0) {
+		t.Fatalf("added = %+v; want an invited user", added)
+	}
+	later := t0.Add(time.Hour)
+	in, err := s.SignInSSOAccount(ctx, "A@Example.com", later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.ID != added.ID || !in.Added || in.Role != RoleUser || in.LastSignInAt == nil || !in.LastSignInAt.Equal(later) ||
+		!in.CreatedAt.Equal(t0) || in.Email != "a@example.com" {
+		t.Fatalf("signed in = %+v; want the same row, Added, signed in at %v", in, later)
+	}
+	var n int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM accounts WHERE kind = 'sso'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("sso rows = %d, %v; want 1", n, err)
+	}
+	// Adding again keeps the sign-in time and the role.
+	if err := s.SetAccountRole(ctx, added.ID, RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.AddSSOAccount(ctx, "a@EXAMPLE.com", later.Add(time.Hour))
+	if err != nil || again.ID != added.ID || again.Role != RoleAdmin || again.LastSignInAt == nil || !again.LastSignInAt.Equal(later) {
+		t.Fatalf("AddSSOAccount again = %+v, %v; want the same row, still admin, still signed in", again, err)
+	}
+	got, found, err := s.SSOAccountByEmail(ctx, "A@example.COM")
+	if err != nil || !found || got.ID != added.ID {
+		t.Fatalf("SSOAccountByEmail = %+v, %v, %v", got, found, err)
+	}
+	if _, found, err := s.SSOAccountByEmail(ctx, "nobody@example.com"); err != nil || found {
+		t.Fatalf("SSOAccountByEmail of nobody = %v, %v", found, err)
+	}
+	if _, _, err := s.SSOAccountByEmail(ctx, "not an email"); err == nil {
+		t.Error("SSOAccountByEmail of a bad email = nil error")
+	}
+	for _, bad := range []string{"", "a@b@c", " a@example.com"} {
+		if _, err := s.AddSSOAccount(ctx, bad, t0); err == nil {
+			t.Errorf("AddSSOAccount(%q) = nil error", bad)
+		}
+		if _, err := s.SignInSSOAccount(ctx, bad, t0); err == nil {
+			t.Errorf("SignInSSOAccount(%q) = nil error", bad)
+		}
+	}
+}
+
+func TestSignInSSOAccountNotAdded(t *testing.T) {
+	s := newStore(t)
+	a, err := s.SignInSSOAccount(ctx, "new@example.com", t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Added || a.Role != RoleUser || a.Kind != AccountSSO || a.LastSignInAt == nil || !a.LastSignInAt.Equal(t0) {
+		t.Fatalf("account = %+v; want a user that signed in and was not added", a)
+	}
+	// A second sign-in keeps Added false and the creation time.
+	b, err := s.SignInSSOAccount(ctx, "new@example.com", t0.Add(time.Minute))
+	if err != nil || b.ID != a.ID || b.Added || !b.CreatedAt.Equal(t0) || !b.LastSignInAt.Equal(t0.Add(time.Minute)) {
+		t.Fatalf("second sign-in = %+v, %v", b, err)
+	}
+}
+
+// Two addresses that differ beyond ASCII case are two accounts, and the
+// Kelvin sign never takes over the account of a plain "k".
+func TestSSOAccountsStayApart(t *testing.T) {
+	s := newStore(t)
+	plain := mustSSO(t, s, "k@example.com")
+	kelvin, err := s.SignInSSOAccount(ctx, "K@example.com", t0)
+	switch {
+	case errors.Is(err, ErrExists):
+		// A database whose lower() folds the Kelvin sign refuses the second
+		// address; it is never merged.
+	case err != nil:
+		t.Fatal(err)
+	case kelvin.ID == plain.ID:
+		t.Fatalf("the Kelvin sign signed in to the account of k: %+v", kelvin)
+	}
+	if got, found, err := s.SSOAccountByEmail(ctx, "K@example.com"); err != nil || !found || got.ID != plain.ID {
+		t.Fatalf("SSOAccountByEmail(K) = %+v, %v, %v; want the plain account", got, found, err)
+	}
+}
+
+func TestSetAccountRole(t *testing.T) {
+	s := newStore(t)
+	a := mustSSO(t, s, "a@example.com")
+	if err := s.SetAccountRole(ctx, a.ID, RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := s.Account(ctx, a.ID); got.Role != RoleAdmin {
+		t.Fatalf("role = %q; want admin", got.Role)
+	}
+	if err := s.SetAccountRole(ctx, a.ID, RoleUser); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := s.Account(ctx, a.ID); got.Role != RoleUser {
+		t.Fatalf("role = %q; want user", got.Role)
+	}
+	for _, role := range []string{"", "viewer", "maintainer", "owner"} {
+		if err := s.SetAccountRole(ctx, a.ID, role); err == nil {
+			t.Errorf("SetAccountRole(%q) = nil error", role)
+		}
+	}
+	if err := s.SetAccountRole(ctx, 9999, RoleAdmin); err == nil {
+		t.Error("SetAccountRole of an unknown account = nil error")
+	}
+	// A password account is an admin and can't be made a user.
+	p := mustPassword(t, s, "admin")
+	if p.Role != RoleAdmin {
+		t.Errorf("password account role = %q; want admin", p.Role)
+	}
+	if err := s.SetAccountRole(ctx, p.ID, RoleUser); err == nil {
+		t.Error("SetAccountRole of a password account = nil error")
+	}
+}
+
+// The previous release is rolled back onto the migrated database: a
+// password account it makes (it knows no role) is still an admin, and an
+// SSO account can't sign in with a password.
+func TestPasswordAccountsAreAdmins(t *testing.T) {
+	s := newStore(t)
+	if _, err := s.pool.Exec(ctx, `INSERT INTO accounts (kind, username, password_hash, created_at)
+		VALUES ('password', 'old', 'hash', $1)`, t0); err != nil {
+		t.Fatal(err)
+	}
+	a, found, err := s.PasswordAccount(ctx, "old")
+	if err != nil || !found || a.Role != RoleAdmin {
+		t.Fatalf("PasswordAccount = %+v, %v, %v; want an admin", a, found, err)
+	}
+	mustSSO(t, s, "a@example.com")
+	if _, found, _ := s.PasswordAccount(ctx, "a@example.com"); found {
+		t.Error("PasswordAccount found an SSO account")
+	}
+	if n, _ := s.CountPasswordAccounts(ctx); n != 1 {
+		t.Errorf("CountPasswordAccounts = %d; want 1", n)
+	}
+	// The row checks keep an SSO account free of a password and a platform
+	// identity.
+	for _, q := range []string{
+		`INSERT INTO accounts (kind, username, email, password_hash, created_at) VALUES ('sso', 'x', 'x@example.com', 'h', now())`,
+		`INSERT INTO accounts (kind, username, email, platform, instance, platform_user_id, created_at) VALUES ('sso', 'y', 'y@example.com', 'gitlab', 'main', 1, now())`,
+		`INSERT INTO accounts (kind, username, created_at) VALUES ('sso', 'z', now())`,
+		`INSERT INTO accounts (kind, username, email, password_hash, created_at) VALUES ('password', 'w', 'w@example.com', 'h', now())`,
+		`INSERT INTO accounts (kind, username, created_at) VALUES ('other', 'v', now())`,
+	} {
+		if _, err := s.pool.Exec(ctx, q); err == nil {
+			t.Errorf("accepted: %s", q)
+		}
 	}
 }

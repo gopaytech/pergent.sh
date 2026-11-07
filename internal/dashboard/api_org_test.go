@@ -259,7 +259,7 @@ func TestTeamCRUD(t *testing.T) {
 		t.Errorf("repos = %+v", updated.Repos)
 	}
 	stored := e.storedTeam(created.ID)
-	if !slices.Equal(stored.Members, []int64{bob, zed}) || len(stored.Repos) != 2 {
+	if !slices.Equal(memberIDsOf(stored.Members), []int64{bob, zed}) || len(stored.Repos) != 2 {
 		t.Errorf("stored = %+v", stored)
 	}
 
@@ -328,7 +328,7 @@ func TestTeamMembersMustBePlatform(t *testing.T) {
 		b := `{"name":"devs","role":"viewer","members":[` + members + `],"repos":[]}`
 		wantCode(t, e.send(c, "PUT", target, b), "PUT members "+members, http.StatusBadRequest)
 	}
-	if tm := e.storedTeam(id); !slices.Equal(tm.Members, []int64{bob}) {
+	if tm := e.storedTeam(id); !slices.Equal(memberIDsOf(tm.Members), []int64{bob}) {
 		t.Errorf("members = %v", tm.Members)
 	}
 }
@@ -548,12 +548,12 @@ func TestPlatformAdminTeamMembersOfOtherInstances(t *testing.T) {
 	if len(got.Members) != 2 || got.HiddenMembers != 1 {
 		t.Errorf("PUT answer = %+v", got)
 	}
-	if tm := e.storedTeam(id); !slices.Equal(tm.Members, []int64{bob, carol, zed}) {
+	if tm := e.storedTeam(id); !slices.Equal(memberIDsOf(tm.Members), []int64{bob, carol, zed}) {
 		t.Errorf("stored members = %v; want bob, carol and zed", tm.Members)
 	}
 	// Removing its own members leaves the others.
 	wantCode(t, put(carol), "PUT removing bob", http.StatusOK)
-	if tm := e.storedTeam(id); !slices.Equal(tm.Members, []int64{carol, zed}) {
+	if tm := e.storedTeam(id); !slices.Equal(memberIDsOf(tm.Members), []int64{carol, zed}) {
 		t.Errorf("stored members = %v; want carol and zed", tm.Members)
 	}
 	// Naming zed, who is on the team already, changes nothing.
@@ -564,7 +564,7 @@ func TestPlatformAdminTeamMembersOfOtherInstances(t *testing.T) {
 	if rec.Code != http.StatusConflict || body(rec) != `{"error":"you can only change members of your own instance"}` {
 		t.Errorf("PUT adding yan = %d %s; want 409", rec.Code, rec.Body)
 	}
-	if tm := e.storedTeam(id); !slices.Equal(tm.Members, []int64{carol, zed}) {
+	if tm := e.storedTeam(id); !slices.Equal(memberIDsOf(tm.Members), []int64{carol, zed}) {
 		t.Errorf("the refused change changed the members: %v", tm.Members)
 	}
 
@@ -574,7 +574,7 @@ func TestPlatformAdminTeamMembersOfOtherInstances(t *testing.T) {
 	if len(got.Members) != 1 || got.HiddenMembers != 0 || got.Members[0].ID != yan {
 		t.Errorf("operator PUT answer = %+v", got)
 	}
-	if tm := e.storedTeam(id); !slices.Equal(tm.Members, []int64{yan}) {
+	if tm := e.storedTeam(id); !slices.Equal(memberIDsOf(tm.Members), []int64{yan}) {
 		t.Errorf("stored members = %v; want yan only", tm.Members)
 	}
 }
@@ -598,7 +598,7 @@ func TestTeamMemberRemovedMeanwhile(t *testing.T) {
 	if rec.Code != http.StatusBadRequest || !strings.Contains(body(rec), "members must be accounts") {
 		t.Errorf("PUT = %d %s; want 400 about the members", rec.Code, rec.Body)
 	}
-	if tm := e.storedTeam(id); !slices.Equal(tm.Members, []int64{bob}) {
+	if tm := e.storedTeam(id); !slices.Equal(memberIDsOf(tm.Members), []int64{bob}) {
 		t.Errorf("members = %v; want bob only", tm.Members)
 	}
 }

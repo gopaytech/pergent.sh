@@ -833,6 +833,24 @@ func (e *env) alice(instance string) int64 {
 	return a.ID
 }
 
+// viewerMembers makes viewer members of the accounts ids.
+func viewerMembers(ids ...int64) []store.TeamMember {
+	out := make([]store.TeamMember, len(ids))
+	for i, id := range ids {
+		out[i] = store.TeamMember{AccountID: id, Role: store.RoleViewer}
+	}
+	return out
+}
+
+// memberIDsOf are the account IDs of members.
+func memberIDsOf(ms []store.TeamMember) []int64 {
+	out := make([]int64, len(ms))
+	for i, m := range ms {
+		out[i] = m.AccountID
+	}
+	return out
+}
+
 // team stores a team with members and repos and returns its ID.
 func (e *env) team(name, role string, members []int64, repos ...store.TeamRepo) int64 {
 	e.t.Helper()
@@ -841,7 +859,7 @@ func (e *env) team(name, role string, members []int64, repos ...store.TeamRepo) 
 		e.t.Fatal(err)
 	}
 	ok, err := e.st.UpdateTeam(ctx, t.ID, func(tm *store.Team) error {
-		tm.Members, tm.Repos = members, repos
+		tm.Members, tm.Repos = viewerMembers(members...), repos
 		return nil
 	})
 	if err != nil || !ok {

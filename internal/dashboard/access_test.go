@@ -759,7 +759,9 @@ func TestMeWaitingUsers(t *testing.T) {
 	if _, me := e.me(op); me.WaitingUsers != 1 {
 		t.Errorf("waitingUsers with bob on a team = %d, want 1", me.WaitingUsers)
 	}
-	e.editTeam(viewers, func(tm *store.Team) { tm.Members = append(tm.Members, e.accountOf(waiting)) })
+	e.editTeam(viewers, func(tm *store.Team) {
+		tm.Members = append(tm.Members, store.TeamMember{AccountID: e.accountOf(waiting), Role: store.RoleViewer})
+	})
 	if _, me := e.me(waiting); me.Waiting || me.Admin || me.WaitingUsers != 0 {
 		t.Errorf("a viewer's /api/me = %+v; want no count", me)
 	}

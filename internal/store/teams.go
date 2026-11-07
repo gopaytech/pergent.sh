@@ -22,6 +22,13 @@ func validRole(role string) bool {
 	return role == RoleAdmin || role == RoleMaintainer || role == RoleViewer
 }
 
+// TeamMember is an account on a team with its role there: RoleViewer or
+// RoleMaintainer. An empty Role is stored as RoleViewer.
+type TeamMember struct {
+	AccountID int64
+	Role      string
+}
+
 // ErrUnknownAccount is returned when a team change names a member that isn't
 // an account (it was removed meanwhile).
 var ErrUnknownAccount = errors.New("no such account")
@@ -30,14 +37,19 @@ var ErrUnknownAccount = errors.New("no such account")
 // covers every repository of Instance.
 type TeamRepo struct{ Instance, Project string }
 
-// Team is a named group of accounts that has one role on its repositories.
-// Members are account IDs, ascending; Repos are ordered by instance and
-// project ignoring case.
+// Team is a named group of accounts. Members are ordered by account ID and
+// each has a role on the team; platform accounts (no longer used) are never
+// listed. Repos are ordered by instance and project ignoring case.
+//
+// Role is the team's own role, the old model. It is still stored and read
+// here, for the dashboard code that has not switched to member roles yet, and
+// goes with that code. A team's access is meant to come from its members'
+// roles.
 type Team struct {
 	ID        int64
 	Name      string
 	Role      string
-	Members   []int64
+	Members   []TeamMember
 	Repos     []TeamRepo
 	CreatedAt time.Time
 }
@@ -83,17 +95,20 @@ func loadTeams(ctx context.Context, q interface {
 		ids[i] = teams[i].ID
 		byID[teams[i].ID] = &teams[i]
 	}
-	rows, err = q.Query(ctx, `SELECT team_id, account_id FROM team_members WHERE team_id = ANY($1) ORDER BY account_id`, ids)
+	rows, err = q.Query(ctx, `SELECT m.team_id, m.account_id, m.role FROM team_members m
+		JOIN accounts a ON a.id = m.account_id
+		WHERE m.team_id = ANY($1) AND a.kind <> 'platform' ORDER BY m.account_id`, ids)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
-		var teamID, accountID int64
-		if err := rows.Scan(&teamID, &accountID); err != nil {
+		var teamID int64
+		var m TeamMember
+		if err := rows.Scan(&teamID, &m.AccountID, &m.Role); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		byID[teamID].Members = append(byID[teamID].Members, accountID)
+		byID[teamID].Members = append(byID[teamID].Members, m)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -136,9 +151,12 @@ func (s *Store) AccountTeams(ctx context.Context, accountID int64) ([]Team, erro
 
 // UpdateTeam reads the team under a lock, hands it to apply, and stores what
 // apply left: its name, role, members and repositories replace the old ones
-// (duplicates are one). When apply fails nothing changes and its error is
-// returned. ok is false when there is no such team; a name taken ignoring
-// case is ErrExists, a member that isn't an account ErrUnknownAccount.
+// (an account named twice is one member, with the higher role). A member
+// role must be RoleViewer, RoleMaintainer or empty (viewer). When apply
+// fails nothing changes and its error is returned. ok is false when there is no such team; a name taken ignoring
+// case is ErrExists, a member that isn't an account (or is a platform
+// account) ErrUnknownAccount. The memberships of platform accounts are left
+// as they are.
 func (s *Store) UpdateTeam(ctx context.Context, id int64, apply func(*Team) error) (ok bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -171,18 +189,44 @@ func (s *Store) UpdateTeam(ctx context.Context, id int64, apply func(*Team) erro
 		}
 		return false, err
 	}
-	members := slices.Clone(t.Members)
-	slices.Sort(members)
-	members = slices.Compact(members)
-	if _, err := tx.Exec(ctx, `DELETE FROM team_members WHERE team_id = $1`, id); err != nil {
+	byAccount := map[int64]string{}
+	for _, m := range t.Members {
+		role := m.Role
+		if role == "" {
+			role = RoleViewer
+		}
+		if role != RoleViewer && role != RoleMaintainer {
+			return false, fmt.Errorf("store: unknown member role %q", m.Role)
+		}
+		if role == RoleMaintainer || byAccount[m.AccountID] == "" {
+			byAccount[m.AccountID] = role
+		}
+	}
+	accountIDs := make([]int64, 0, len(byAccount))
+	for accountID := range byAccount {
+		accountIDs = append(accountIDs, accountID)
+	}
+	slices.Sort(accountIDs)
+	roles := make([]string, len(accountIDs))
+	for i, accountID := range accountIDs {
+		roles[i] = byAccount[accountID]
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM team_members m WHERE m.team_id = $1
+		AND EXISTS (SELECT 1 FROM accounts a WHERE a.id = m.account_id AND a.kind <> 'platform')`, id); err != nil {
 		return false, err
 	}
-	if len(members) > 0 {
-		if _, err := tx.Exec(ctx, `INSERT INTO team_members (team_id, account_id) SELECT $1, unnest($2::bigint[])`, id, members); err != nil {
+	if len(accountIDs) > 0 {
+		tag, err := tx.Exec(ctx, `INSERT INTO team_members (team_id, account_id, role)
+			SELECT $1::bigint, u.id, u.role FROM unnest($2::bigint[], $3::text[]) AS u(id, role)
+			JOIN accounts a ON a.id = u.id AND a.kind <> 'platform'`, id, accountIDs, roles)
+		if err != nil {
 			if isForeignKeyViolation(err) {
 				return false, ErrUnknownAccount
 			}
 			return false, err
+		}
+		if tag.RowsAffected() != int64(len(accountIDs)) {
+			return false, ErrUnknownAccount
 		}
 	}
 	seen := map[TeamRepo]bool{}
