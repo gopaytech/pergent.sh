@@ -156,13 +156,14 @@ func (s *Store) CountPasswordAccounts(ctx context.Context) (int, error) {
 	return n, err
 }
 
-// CountWaitingAccounts returns how many platform accounts of instance (""
-// for every instance) are on no team: they wait for an admin to place them.
-func (s *Store) CountWaitingAccounts(ctx context.Context, instance string) (int, error) {
+// CountWaitingAccounts returns how many SSO accounts are waiting: users (not
+// admins) who have signed in and are on no team, until an admin places them.
+// An invited account that never signed in does not wait.
+func (s *Store) CountWaitingAccounts(ctx context.Context) (int, error) {
 	var n int
-	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM accounts a WHERE kind = 'platform'
-		AND ($1 = '' OR instance = $1)
-		AND NOT EXISTS (SELECT 1 FROM team_members m WHERE m.account_id = a.id)`, instance).Scan(&n)
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM accounts a
+		WHERE a.kind = 'sso' AND a.role = 'user' AND a.last_sign_in_at IS NOT NULL
+		AND NOT EXISTS (SELECT 1 FROM team_members m WHERE m.account_id = a.id)`).Scan(&n)
 	return n, err
 }
 

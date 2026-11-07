@@ -58,8 +58,10 @@ func (s *Store) SignInSettings(ctx context.Context) (SignInSettings, error) {
 
 // PutSignInSettings stores the settings, replacing the earlier ones (UpdatedAt
 // is the time of the call when the field is zero). A nil ClientSecretSealed keeps the
-// secret already stored; an empty, non-nil one removes it. Putting settings
-// does not end any session: ChangeSignInSettings can.
+// secret already stored, unless the issuer changes: a secret never stays beside
+// an issuer other than the one it was entered for, whoever else saved in
+// between. An empty, non-nil one removes it. Putting settings does not end any
+// session: ChangeSignInSettings can.
 func (s *Store) PutSignInSettings(ctx context.Context, in SignInSettings) error {
 	return s.ChangeSignInSettings(ctx, in, false)
 }
@@ -102,7 +104,9 @@ func (s *Store) ChangeSignInSettings(ctx context.Context, in SignInSettings, end
 			jwks_url = EXCLUDED.jwks_url, email_claim = EXCLUDED.email_claim,
 			allowed_domains = EXCLUDED.allowed_domains, allowed_emails = EXCLUDED.allowed_emails,
 			updated_at = EXCLUDED.updated_at,
-			client_secret_sealed = CASE WHEN $12 THEN EXCLUDED.client_secret_sealed ELSE sign_in_settings.client_secret_sealed END`,
+			client_secret_sealed = CASE WHEN $12::boolean THEN EXCLUDED.client_secret_sealed
+				WHEN sign_in_settings.issuer <> EXCLUDED.issuer THEN NULL
+				ELSE sign_in_settings.client_secret_sealed END`,
 		in.Mode, in.Label, in.Issuer, in.ClientID, secret, in.Header, in.Audience, in.JWKSURL, in.EmailClaim,
 		domains, emails, secretGiven, at); err != nil {
 		return err

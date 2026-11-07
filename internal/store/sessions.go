@@ -83,11 +83,18 @@ func (s *Store) DeleteSession(ctx context.Context, idHash []byte) error {
 	return err
 }
 
-// DeleteSSOSessions ends every session that began with OIDC or a JWT, and
-// keeps the password ones. It is for a change of sign-in mode or issuer.
-func (s *Store) DeleteSSOSessions(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE sign_in IN ('oidc', 'jwt')`)
-	return err
+// DeleteStaleSSOSessions ends the sessions that began with OIDC or a JWT and
+// that the sign-in settings in force (mode and issuer) no longer vouch for: the
+// session's sign-in differs from mode, or its issuer from issuer. A mode that
+// is neither oidc nor jwt keeps none of them. A password session is never
+// touched. It returns how many sessions it ended.
+func (s *Store) DeleteStaleSSOSessions(ctx context.Context, mode, issuer string) (int, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM sessions
+		WHERE sign_in IN ('oidc', 'jwt') AND NOT (sign_in = $1::text AND issuer = $2::text)`, mode, issuer)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
 }
 
 // TouchSession records that the session was used at the given time.
@@ -210,7 +217,8 @@ func (s *Store) SessionProjects(ctx context.Context, idHash []byte) ([]VisiblePr
 // returns how many there were.
 func (s *Store) PruneSessions(ctx context.Context, createdBefore, ssoCreatedBefore, idleBefore time.Time) (int, error) {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM sessions
-		WHERE created_at < CASE WHEN sign_in = 'password' THEN $1 ELSE $2 END OR last_seen_at < $3`,
+		WHERE created_at < CASE WHEN sign_in = 'password' THEN $1::timestamptz ELSE $2::timestamptz END
+		   OR last_seen_at < $3::timestamptz`,
 		createdBefore, ssoCreatedBefore, idleBefore)
 	if err != nil {
 		return 0, err

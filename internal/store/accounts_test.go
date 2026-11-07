@@ -292,33 +292,50 @@ func TestAccountsHidePlatformRows(t *testing.T) {
 	}
 }
 
-// Waiting accounts are the platform accounts on no team; a password account
-// never waits.
+// Waiting accounts are the SSO accounts with role user that signed in and are
+// on no team. A local admin, an SSO admin, an invited account that never
+// signed in and an old platform account never wait.
 func TestCountWaitingAccounts(t *testing.T) {
 	s := newStore(t)
-	mustPassword(t, s, "admin")
-	member := mustPlatform(t, s, "main", 1, "alice")
-	mustPlatform(t, s, "main", 2, "zed")
-	mustPlatform(t, s, "main", 3, "yan")
-	if n, err := s.CountWaitingAccounts(ctx, ""); err != nil || n != 3 {
-		t.Fatalf("CountWaitingAccounts = %d, %v; want 3", n, err)
+	mustPassword(t, s, "root")
+	if n, err := s.CountWaitingAccounts(ctx); err != nil || n != 0 {
+		t.Fatalf("CountWaitingAccounts with only a local admin = %d, %v; want 0", n, err)
 	}
+	alice := mustSSO(t, s, "alice@example.com")
+	mustSSO(t, s, "zed@example.com")
+	boss := mustSSO(t, s, "boss@example.com")
+	if err := s.SetAccountRole(ctx, boss.ID, RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddSSOAccount(ctx, "invited@example.com", t0); err != nil {
+		t.Fatal(err)
+	}
+	mustPlatform(t, s, "main", 1, "old")
+	if n, err := s.CountWaitingAccounts(ctx); err != nil || n != 2 {
+		t.Fatalf("CountWaitingAccounts = %d, %v; want 2 (alice and zed)", n, err)
+	}
+
 	team, err := s.CreateTeam(ctx, "devs", t0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	addPlatformMember(t, s, team.ID, member.ID)
-	if n, err := s.CountWaitingAccounts(ctx, ""); err != nil || n != 2 {
-		t.Fatalf("CountWaitingAccounts with alice on a team = %d, %v; want 2", n, err)
+	if ok, err := s.UpdateTeam(ctx, team.ID, func(tm *Team) error {
+		tm.Members = []TeamMember{{AccountID: alice.ID, Role: RoleViewer}}
+		return nil
+	}); err != nil || !ok {
+		t.Fatalf("UpdateTeam = %v, %v", ok, err)
 	}
-	if _, err := s.UpsertPlatformAccount(ctx, "github", "gh", 4, "xu", t0); err != nil {
+	if n, err := s.CountWaitingAccounts(ctx); err != nil || n != 1 {
+		t.Fatalf("CountWaitingAccounts with alice on a team = %d, %v; want 1", n, err)
+	}
+
+	// The invitation signs in: it waits now. An admin made a user waits too.
+	mustSSO(t, s, "invited@example.com")
+	if err := s.SetAccountRole(ctx, boss.ID, RoleUser); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := s.CountWaitingAccounts(ctx, "main"); err != nil || n != 2 {
-		t.Fatalf("CountWaitingAccounts on main = %d, %v; want 2", n, err)
-	}
-	if n, err := s.CountWaitingAccounts(ctx, ""); err != nil || n != 3 {
-		t.Fatalf("CountWaitingAccounts on every instance = %d, %v; want 3", n, err)
+	if n, err := s.CountWaitingAccounts(ctx); err != nil || n != 3 {
+		t.Fatalf("CountWaitingAccounts after the invitation signed in = %d, %v; want 3 (zed, invited, boss)", n, err)
 	}
 }
 

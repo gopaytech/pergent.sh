@@ -39,18 +39,30 @@ func TestSignInSettingsRoundTrip(t *testing.T) {
 		t.Fatalf("settings = %+v; want %+v", got, oidc)
 	}
 
-	// A nil sealed secret keeps the stored one; the lists are replaced, and
-	// an empty list reads back as nil.
+	// A nil sealed secret keeps the stored one while the issuer stays; the
+	// lists are replaced, and an empty list reads back as nil.
+	same := SignInSettings{Mode: SignInModeJWT, Issuer: oidc.Issuer, Audience: "pergent", Header: "X-Jwt",
+		JWKSURL: "https://proxy.example.com/jwks", EmailClaim: "email", UpdatedAt: t0.Add(30 * time.Minute)}
+	if err := s.PutSignInSettings(ctx, same); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.SignInSettings(ctx)
+	if got.Mode != SignInModeJWT || got.Label != "" || got.ClientID != "" || got.Issuer != oidc.Issuer ||
+		!bytes.Equal(got.ClientSecretSealed, []byte("sealed-1")) || got.AllowedDomains != nil || got.AllowedEmails != nil ||
+		!got.UpdatedAt.Equal(t0.Add(30*time.Minute)) {
+		t.Fatalf("settings after the second put = %+v", got)
+	}
+
+	// A new issuer with a nil secret drops the stored one: it was entered for
+	// the old issuer.
 	next := SignInSettings{Mode: SignInModeJWT, Issuer: "https://proxy.example.com", Audience: "pergent", Header: "X-Jwt",
 		JWKSURL: "https://proxy.example.com/jwks", EmailClaim: "email", UpdatedAt: t0.Add(time.Hour)}
 	if err := s.PutSignInSettings(ctx, next); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = s.SignInSettings(ctx)
-	if got.Mode != SignInModeJWT || got.Label != "" || got.ClientID != "" || got.Issuer != next.Issuer ||
-		!bytes.Equal(got.ClientSecretSealed, []byte("sealed-1")) || got.AllowedDomains != nil || got.AllowedEmails != nil ||
-		!got.UpdatedAt.Equal(t0.Add(time.Hour)) {
-		t.Fatalf("settings after the second put = %+v", got)
+	if got.Issuer != next.Issuer || got.ClientSecretSealed != nil || !got.UpdatedAt.Equal(t0.Add(time.Hour)) {
+		t.Fatalf("settings after an issuer change = %+v; want the secret gone", got)
 	}
 
 	// A new secret replaces it; an empty one removes it.
@@ -88,9 +100,52 @@ func TestSignInSettingsRoundTrip(t *testing.T) {
 	}
 }
 
-// A session records how it began; DeleteSSOSessions ends the OIDC and JWT
-// ones and keeps the password ones.
-func TestDeleteSSOSessionsKeepsPassword(t *testing.T) {
+// A kept secret never sits beside a different issuer, whatever order two
+// saves ran in: the store decides it in the upsert. A secret given in the
+// same save as the issuer is the one for that issuer, and stays.
+func TestKeptSecretNeverSurvivesAnIssuerChange(t *testing.T) {
+	s := newStore(t)
+	a := SignInSettings{Mode: SignInModeOIDC, Issuer: "https://a.example.com", ClientID: "c",
+		ClientSecretSealed: []byte("for-a"), UpdatedAt: t0}
+	if err := s.PutSignInSettings(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+
+	// The save that read the old row and keeps the secret lands after another
+	// save moved the issuer to b, with its own secret.
+	b := a
+	b.Issuer, b.ClientSecretSealed = "https://b.example.com", []byte("for-b")
+	if err := s.PutSignInSettings(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	stale := a
+	stale.ClientSecretSealed = nil // keep
+	if err := s.PutSignInSettings(ctx, stale); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.SignInSettings(ctx)
+	if got.Issuer != a.Issuer || got.ClientSecretSealed != nil {
+		t.Fatalf("settings = issuer %q, secret %q; want issuer a and no secret (b's secret must not sit beside a)",
+			got.Issuer, got.ClientSecretSealed)
+	}
+
+	// Same issuer: a nil secret keeps the stored one.
+	if err := s.PutSignInSettings(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	keep := a
+	keep.ClientSecretSealed, keep.Label = nil, "relabelled"
+	if err := s.PutSignInSettings(ctx, keep); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.SignInSettings(ctx); got.Label != "relabelled" || !bytes.Equal(got.ClientSecretSealed, []byte("for-a")) {
+		t.Fatalf("settings = label %q, secret %q; want the secret kept", got.Label, got.ClientSecretSealed)
+	}
+}
+
+// A session records how it began; with no sign-in set, DeleteStaleSSOSessions
+// ends the OIDC and JWT ones and keeps the password ones.
+func TestDeleteStaleSSOSessionsKeepsPassword(t *testing.T) {
 	s := newStore(t)
 	admin := mustPassword(t, s, "admin")
 	user := mustSSO(t, s, "alice@example.com")
@@ -123,8 +178,9 @@ func TestDeleteSSOSessionsKeepsPassword(t *testing.T) {
 		t.Error("CreateSession with sign-in saml = nil error")
 	}
 
-	if err := s.DeleteSSOSessions(ctx); err != nil {
-		t.Fatal(err)
+	// No sign-in set: every SSO session goes, the password ones stay.
+	if n, err := s.DeleteStaleSSOSessions(ctx, "", ""); err != nil || n != 2 {
+		t.Fatalf("DeleteStaleSSOSessions with no sign-in = %d, %v; want 2", n, err)
 	}
 	for name, h := range map[string][]byte{"oidc": oidc, "jwt": jwt} {
 		if _, found, _ := s.Session(ctx, h); found {
@@ -136,8 +192,70 @@ func TestDeleteSSOSessionsKeepsPassword(t *testing.T) {
 			t.Errorf("the %s session is gone", name)
 		}
 	}
-	if err := s.DeleteSSOSessions(ctx); err != nil {
-		t.Fatalf("DeleteSSOSessions with none to delete: %v", err)
+	if n, err := s.DeleteStaleSSOSessions(ctx, "", ""); err != nil || n != 0 {
+		t.Fatalf("DeleteStaleSSOSessions with none to delete = %d, %v", n, err)
+	}
+}
+
+// The sweep keeps an SSO session only while its sign-in and its issuer are the
+// settings in force: a different issuer, or the other mode, ends it. A
+// password session stays whatever the settings say.
+func TestDeleteStaleSSOSessions(t *testing.T) {
+	s := newStore(t)
+	admin := mustPassword(t, s, "admin")
+	user := mustSSO(t, s, "alice@example.com")
+	mk := func(b byte, account int64, signIn, issuer string) []byte {
+		t.Helper()
+		se := Session{IDHash: bytes.Repeat([]byte{b}, 32), AccountID: account, Username: "u", CSRF: "csrf",
+			SignIn: signIn, Issuer: issuer, LastSeenAt: t0, CreatedAt: t0}
+		if err := s.CreateSession(ctx, se); err != nil {
+			t.Fatal(err)
+		}
+		return se.IDHash
+	}
+	const google, proxy = "https://accounts.google.com", "https://proxy.example.com"
+	pw := mk(1, admin.ID, SignInPassword, "")
+	oidcGoogle := mk(2, user.ID, SignInOIDC, google)
+	oidcOther := mk(3, user.ID, SignInOIDC, "https://login.example.com")
+	jwtProxy := mk(4, user.ID, SignInJWT, proxy)
+	jwtGoogle := mk(5, user.ID, SignInJWT, google)
+
+	check := func(what string, kept ...[]byte) {
+		t.Helper()
+		all := map[string][]byte{"password": pw, "oidc google": oidcGoogle, "oidc other": oidcOther,
+			"jwt proxy": jwtProxy, "jwt google": jwtGoogle}
+		for name, h := range all {
+			_, found, err := s.Session(ctx, h)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := slices.ContainsFunc(kept, func(k []byte) bool { return bytes.Equal(k, h) })
+			if found != want {
+				t.Errorf("%s: the %s session is there = %v, want %v", what, name, found, want)
+			}
+		}
+	}
+
+	// OIDC against google: the other issuer and the JWT ones go.
+	if n, err := s.DeleteStaleSSOSessions(ctx, SignInModeOIDC, google); err != nil || n != 3 {
+		t.Fatalf("DeleteStaleSSOSessions(oidc, google) = %d, %v; want 3", n, err)
+	}
+	check("oidc against google", pw, oidcGoogle)
+
+	// The settings switched to JWT: the OIDC session goes although its issuer
+	// is the same, which Require doesn't check for an OIDC session.
+	jwtAgain := mk(6, user.ID, SignInJWT, google)
+	if n, err := s.DeleteStaleSSOSessions(ctx, SignInModeJWT, google); err != nil || n != 1 {
+		t.Fatalf("DeleteStaleSSOSessions(jwt, google) = %d, %v; want the oidc session only", n, err)
+	}
+	if _, found, _ := s.Session(ctx, oidcGoogle); found {
+		t.Error("an oidc session survived a switch to jwt")
+	}
+	if _, found, _ := s.Session(ctx, jwtAgain); !found {
+		t.Error("a jwt session of the issuer in force was ended")
+	}
+	if _, found, _ := s.Session(ctx, pw); !found {
+		t.Error("the local admin's session was ended")
 	}
 }
 

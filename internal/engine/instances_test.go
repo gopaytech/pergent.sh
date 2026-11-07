@@ -226,11 +226,12 @@ func TestFinishRemovals(t *testing.T) {
 		t.Fatal(err)
 	}
 	// An account made by a sign-in that raced the removal goes with it.
-	if _, err := env.Store.UpsertPlatformAccount(env.ctx, config.PlatformGitLab, "lab", 9, "alice", env.Now()); err != nil {
+	straggler, err := env.Store.UpsertPlatformAccount(env.ctx, config.PlatformGitLab, "lab", 9, "alice", env.Now())
+	if err != nil {
 		t.Fatal(err)
 	}
-	if n, err := env.Store.CountWaitingAccounts(env.ctx, "lab"); err != nil || n != 1 {
-		t.Fatalf("platform accounts of lab = %d, %v; want the straggler", n, err)
+	if _, found, err := env.Store.Account(env.ctx, straggler.ID); err != nil || !found {
+		t.Fatalf("Account(straggler) = %v, %v; want it there", found, err)
 	}
 	env.Engine.finishRemovals(env.ctx)
 
@@ -243,8 +244,8 @@ func TestFinishRemovals(t *testing.T) {
 	if secrets, err := env.Store.InstanceSecrets(env.ctx, "lab"); err != nil || len(secrets) != 0 {
 		t.Errorf("InstanceSecrets(lab) = %v, %v; want none", secrets, err)
 	}
-	if n, err := env.Store.CountWaitingAccounts(env.ctx, "lab"); err != nil || n != 0 {
-		t.Errorf("platform accounts of lab = %d, %v; want the straggler gone", n, err)
+	if _, found, err := env.Store.Account(env.ctx, straggler.ID); err != nil || found {
+		t.Errorf("Account(straggler) = %v, %v; want the straggler gone", found, err)
 	}
 	if len(gone) != 1 || gone[0] != "lab" {
 		t.Errorf("OnInstanceRemoved calls = %v, want [lab]", gone)

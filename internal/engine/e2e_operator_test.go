@@ -153,8 +153,8 @@ func TestRemoveInstanceWithQueuedRuns(t *testing.T) {
 	}
 	carol := randomSession(t, env, store.Session{AccountID: acc.ID, Platform: config.PlatformGitLab, Instance: labName,
 		UserID: 77, Username: "carol", TokenSealed: []byte("sealed")})
-	if n, err := env.Store.CountWaitingAccounts(env.ctx, labName); err != nil || n != 1 {
-		t.Fatalf("platform accounts of lab before the removal = %d, %v; want carol's", n, err)
+	if _, found, err := env.Store.Account(env.ctx, acc.ID); err != nil || !found {
+		t.Fatalf("Account(carol) before the removal = %v, %v; want it there", found, err)
 	}
 	hookStatus := func() int {
 		status, _, _, _ := e.do(t, http.MethodPost, "/webhooks/gitlab/"+labName, json.RawMessage(`{}`), nil,
@@ -180,8 +180,8 @@ func TestRemoveInstanceWithQueuedRuns(t *testing.T) {
 	if accounts, _ := env.Store.Accounts(env.ctx); len(accounts) != 1 || accounts[0].Username != "ops" {
 		t.Errorf("accounts = %+v, want ops only", accounts)
 	}
-	if n, err := env.Store.CountWaitingAccounts(env.ctx, labName); err != nil || n != 0 {
-		t.Errorf("platform accounts of lab after the removal = %d, %v; want none", n, err)
+	if _, found, err := env.Store.Account(env.ctx, acc.ID); err != nil || found {
+		t.Errorf("Account(carol) after the removal = %v, %v; want it gone", found, err)
 	}
 	// Superseded, so dispatch has nothing to do for it.
 	dispatch(t, env)
