@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -764,4 +765,98 @@ func TestDashboardRepoCommentLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	want("upsert again", read(), a)
+}
+
+// linked_repos_enabled is NULL (the default, off) or a bool, and linked_repos
+// is NULL (no links) or a list whose order, watched paths and can_block are
+// kept, through insert, update and upsert. An empty list is stored as NULL,
+// and a link with no watched paths reads back with none.
+func TestDashboardRepoLinks(t *testing.T) {
+	s := newStore(t)
+	read := func() DashboardRepo {
+		t.Helper()
+		r, found, err := s.DashboardRepo(ctx, "gh", "acme/widgets")
+		if err != nil || !found {
+			t.Fatalf("DashboardRepo = %v, %v", found, err)
+		}
+		return r
+	}
+	wantLinks := func(step string, want []Link) {
+		t.Helper()
+		got := read().LinkedRepos
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: linked_repos = %#v; want %#v", step, got, want)
+		}
+	}
+	wantEnabled := func(step string, want *bool) {
+		t.Helper()
+		got := read().LinkedReposEnabled
+		if (got == nil) != (want == nil) || (got != nil && *got != *want) {
+			t.Errorf("%s: linked_repos_enabled = %v; want %v", step, got, want)
+		}
+	}
+	a := []Link{
+		{Target: "acme/pergent.sh", Watched: []string{"render/**", "scope/**"}, CanBlock: false},
+		{Target: "acme/docs", CanBlock: true},
+	}
+	b := []Link{{Target: "acme/api", Watched: []string{"*.proto"}, CanBlock: true}}
+
+	// Insert: the links and the setting are stored; a second insert of the
+	// same repository is left alone.
+	if created, err := s.InsertDashboardRepo(ctx, DashboardRepo{Instance: "gh", Project: "acme/widgets", CreatedBy: "alice", LinkedReposEnabled: ptrTo(true), LinkedRepos: a}); err != nil || !created {
+		t.Fatalf("InsertDashboardRepo = %v, %v", created, err)
+	}
+	wantLinks("insert", a)
+	wantEnabled("insert", ptrTo(true))
+	if created, err := s.InsertDashboardRepo(ctx, DashboardRepo{Instance: "gh", Project: "acme/widgets", CreatedBy: "bob", LinkedRepos: b}); err != nil || created {
+		t.Fatalf("second InsertDashboardRepo = %v, %v; want not created", created, err)
+	}
+	wantLinks("second insert", a)
+
+	// Update: other links, then NULL, then an empty list, then links again;
+	// another setting changed alone leaves them as they are.
+	for _, step := range []struct {
+		name string
+		set  []Link
+		want []Link
+	}{{"update", b, b}, {"update NULL", nil, nil}, {"update empty", []Link{}, nil}, {"update again", a, a}} {
+		if found, err := s.UpdateDashboardRepo(ctx, "gh", "acme/widgets", func(r *DashboardRepo) { r.LinkedRepos = step.set }); err != nil || !found {
+			t.Fatalf("%s: UpdateDashboardRepo = %v, %v", step.name, found, err)
+		}
+		wantLinks(step.name, step.want)
+	}
+	for _, v := range []*bool{ptrTo(false), nil, ptrTo(true)} {
+		if _, err := s.UpdateDashboardRepo(ctx, "gh", "acme/widgets", func(r *DashboardRepo) { r.LinkedReposEnabled = v }); err != nil {
+			t.Fatal(err)
+		}
+		wantEnabled("update of the setting", v)
+		wantLinks("update of the setting alone", a)
+	}
+	if _, err := s.UpdateDashboardRepo(ctx, "gh", "acme/widgets", func(r *DashboardRepo) { r.MaxTurns = ptrTo(80) }); err != nil {
+		t.Fatal(err)
+	}
+	wantLinks("update of another setting", a)
+	wantEnabled("update of another setting", ptrTo(true))
+
+	// Upsert replaces every setting, NULL included.
+	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "gh", Project: "acme/widgets", CreatedBy: "alice", LinkedReposEnabled: ptrTo(false), LinkedRepos: b}); err != nil {
+		t.Fatal(err)
+	}
+	wantLinks("upsert", b)
+	wantEnabled("upsert", ptrTo(false))
+	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "gh", Project: "acme/widgets", CreatedBy: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	wantLinks("upsert NULL", nil)
+	wantEnabled("upsert NULL", nil)
+	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "gh", Project: "acme/widgets", CreatedBy: "alice", LinkedRepos: a}); err != nil {
+		t.Fatal(err)
+	}
+	wantLinks("upsert again", a)
+
+	// The list reads the same way as one row.
+	all, err := s.DashboardRepos(ctx)
+	if err != nil || len(all) != 1 || !reflect.DeepEqual(all[0].LinkedRepos, a) {
+		t.Errorf("DashboardRepos = %+v, %v; want one row with the links", all, err)
+	}
 }

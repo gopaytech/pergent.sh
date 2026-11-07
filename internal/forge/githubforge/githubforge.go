@@ -189,6 +189,41 @@ func (f *Forge) GetFileAt(ctx context.Context, project, path, commit string) ([]
 	return b, ok, mapErr(err)
 }
 
+// Visibility reads who may read repo ("owner/name"), through the review
+// App's installation on it. It believes only what GitHub says: GitHub's
+// visibility field (public, internal or private), checked against its
+// private flag. A repository the App can't read is forge.ErrSourceNotFound,
+// and a repository whose visibility GitHub left out or contradicts is an
+// error. None of them is ever public.
+func (f *Forge) Visibility(ctx context.Context, repo string) (forge.Visibility, error) {
+	c, owner, name, err := f.source(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	r, err := c.Repo(ctx, owner, name)
+	if unreadable(err) {
+		return "", forge.ErrSourceNotFound
+	}
+	if err != nil {
+		return "", mapErr(err)
+	}
+	var v forge.Visibility
+	switch r.Visibility {
+	case "public":
+		v = forge.VisPublic
+	case "internal":
+		v = forge.VisInternal
+	case "private":
+		v = forge.VisPrivate
+	default:
+		return "", fmt.Errorf("githubforge: GitHub did not say whether %s/%s is public, internal or private (visibility %q)", owner, name, r.Visibility)
+	}
+	if (v == forge.VisPublic) == r.Private {
+		return "", fmt.Errorf("githubforge: GitHub says %s/%s is %s and private=%v", owner, name, r.Visibility, r.Private)
+	}
+	return v, nil
+}
+
 // GetChange reads pull request number. A closed pull request GitHub reports
 // as merged is forge.StateMerged. TargetBranch and StartSHA are the base ref
 // and the base commit GitHub recorded for the pull request (inputs are read

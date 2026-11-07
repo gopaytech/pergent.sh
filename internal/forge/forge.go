@@ -106,6 +106,17 @@ const (
 	AccessMaintain
 )
 
+// Visibility is who may read a repository. The levels are ordered, most open
+// first: public, internal (everyone in the organization or enterprise),
+// private. Compare with the links package, not with <.
+type Visibility string
+
+const (
+	VisPublic   Visibility = "public"
+	VisInternal Visibility = "internal"
+	VisPrivate  Visibility = "private"
+)
+
 // Forge is the review bot's side of one platform instance. Its GetFile and
 // ListTree make it an inputs.Source (declared here rather than embedded, as
 // inputs depends on this package for TreeEntry).
@@ -154,6 +165,11 @@ type Forge interface {
 	// (a command from such an author must not be acted on then). GitHub's
 	// webhook says it itself and never asks.
 	IsBot(ctx context.Context, userID int64) (bool, error)
+	// Visibility reads who may read repo, a path ("owner/name"), through the
+	// review App's installation. It is only ever told by the platform: a
+	// repository it can't read, or can't tell, is an error (never public),
+	// and a platform that has no such rule answers ErrUnsupported.
+	Visibility(ctx context.Context, repo string) (Visibility, error)
 }
 
 // MaxSourceFile is the most a SourceReader reads of one file: 900 KiB, the
@@ -307,4 +323,7 @@ var (
 	// ErrFileTooLarge is matched by GetFileAt's error for a file over
 	// MaxSourceFile.
 	ErrFileTooLarge = errors.New("forge: file is too large")
+	// ErrUnsupported is matched by an error for something the platform has no
+	// support for (GitLab has no linked repositories).
+	ErrUnsupported = errors.New("forge: not supported on this platform")
 )

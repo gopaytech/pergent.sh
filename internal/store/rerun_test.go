@@ -1,6 +1,7 @@
 package store
 
 import (
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
@@ -687,6 +688,85 @@ func TestSetRunLayout(t *testing.T) {
 		t.Errorf("the reported run changed: CommentLayout = %v, want %v", got, a)
 	}
 	if err := s.SetRunLayout(ctx, "bad", a); err == nil {
+		t.Error("a malformed id was accepted")
+	}
+}
+
+// A run that never had SetRunLinks called has a NULL linked_repos. It reads as
+// nil (no links) through every path that scans a run.
+func TestRunLinksNullReadsNil(t *testing.T) {
+	s := newStore(t)
+	queued := enqueue(t, s, mr1, "aaa")
+	if r, found, err := s.Run(ctx, queued); err != nil || !found || r.LinkedRepos != nil {
+		t.Fatalf("Run of a queued run = links %#v, found %v, %v; want nil, true, nil", r.LinkedRepos, found, err)
+	}
+	claimed, err := s.ClaimQueued(ctx, 10, t0)
+	if err != nil || len(claimed) != 1 || claimed[0].ID != queued || claimed[0].LinkedRepos != nil {
+		t.Fatalf("ClaimQueued = %+v, %v; want the run, no links", claimed, err)
+	}
+	rep := reported(t, s, mr2, "bbb", `{"status":"completed"}`)
+	toPublish, err := s.RunsToPublish(ctx, t0.Add(time.Hour), 10)
+	if err != nil || len(toPublish) != 1 || toPublish[0].ID != rep || toPublish[0].LinkedRepos != nil {
+		t.Fatalf("RunsToPublish = %+v, %v; want the reported run, no links", toPublish, err)
+	}
+}
+
+// SetRunLinks records the links of a run being dispatched (queued or
+// running), in order, and reads back through every path that scans a run; an
+// empty list clears it; any other run is an error.
+func TestSetRunLinks(t *testing.T) {
+	s := newStore(t)
+	id := enqueue(t, s, mr1, "aaa")
+	a := []Link{
+		{Target: "acme/pergent.sh", Watched: []string{"render/**"}, CanBlock: false},
+		{Target: "acme/docs", CanBlock: true},
+	}
+	b := []Link{{Target: "acme/api", Watched: []string{"*.proto"}, CanBlock: true}}
+
+	for _, links := range [][]Link{a, b, nil, a} {
+		if err := s.SetRunLinks(ctx, id, links); err != nil {
+			t.Fatalf("SetRunLinks(%v) of a queued run: %v", links, err)
+		}
+		got := getRun(t, s, id).LinkedRepos
+		if !reflect.DeepEqual(got, links) {
+			t.Errorf("queued run: LinkedRepos = %#v, want %#v", got, links)
+		}
+	}
+
+	claimed, err := s.ClaimQueued(ctx, 10, t0)
+	if err != nil || len(claimed) != 1 || !reflect.DeepEqual(claimed[0].LinkedRepos, a) {
+		t.Fatalf("ClaimQueued = %+v, %v; want the run with links %v", claimed, err, a)
+	}
+	if err := s.SetRunLinks(ctx, id, b); err != nil {
+		t.Fatalf("SetRunLinks of a running run: %v", err)
+	}
+	if got := getRun(t, s, id).LinkedRepos; !reflect.DeepEqual(got, b) {
+		t.Errorf("running run: LinkedRepos = %v, want %v", got, b)
+	}
+	if err := s.SetRunLinks(ctx, id, []Link{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := getRun(t, s, id).LinkedRepos; got != nil {
+		t.Errorf("an empty list: LinkedRepos = %#v, want nil", got)
+	}
+	if err := s.SetRunLinks(ctx, id, a); err != nil {
+		t.Fatal(err)
+	}
+
+	tok := "tok-links"
+	if err := s.MarkDispatched(ctx, id, "job-"+id, "base", "start", hash(tok), t0.Add(time.Hour), t0); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := s.StoreResult(ctx, id, tok, []byte(`{"status":"completed"}`), t0.Add(time.Minute)); err != nil || out != ResultStored {
+		t.Fatalf("StoreResult = %v, %v", out, err)
+	}
+	if err := s.SetRunLinks(ctx, id, b); err == nil {
+		t.Error("SetRunLinks of a reported run succeeded")
+	}
+	if got := getRun(t, s, id).LinkedRepos; !reflect.DeepEqual(got, a) {
+		t.Errorf("the reported run changed: LinkedRepos = %v, want %v", got, a)
+	}
+	if err := s.SetRunLinks(ctx, "bad", a); err == nil {
 		t.Error("a malformed id was accepted")
 	}
 }

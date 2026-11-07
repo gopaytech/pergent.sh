@@ -50,6 +50,7 @@ const (
 	KeyLearnFromDismissals              = "learn_from_dismissals"
 	KeyQuietReviews                     = "quiet_reviews"
 	KeyCommentLayout                    = "comment_layout"
+	KeyLinkedReposEnabled               = "linked_repos_enabled"
 )
 
 // The re-run caps when nothing sets them: per merge request and per
@@ -83,6 +84,14 @@ type Effective struct {
 	// CommentLayout is the shape of the review comment, "block:state" entries
 	// in order; nil means the default layout.
 	CommentLayout []string
+	// LinkedReposEnabled is whether the impact check across linked
+	// repositories is on. The default is false: while it is off the links
+	// are kept and ignored.
+	LinkedReposEnabled bool
+	// LinkedRepos are the repository's own links, whether or not the check is
+	// on; there is no default list. Nothing here has checked them against
+	// the rules: that is links.Validate, at review time.
+	LinkedRepos   []store.Link
 	FailureStatus config.FailureStatus
 	// Skills are the library skills reviewed; nil means the default list.
 	Skills []string
@@ -251,7 +260,7 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 		Overridden: map[string]bool{
 			KeyApprove: false, KeyReviewDrafts: false, KeyInlineFindings: false, KeyFailureStatus: false,
 			KeySkills: false, KeyRepoSkills: false, KeyJobTimeout: false, KeyMaxTurns: false, KeyJobMemory: false,
-			KeyRerunLimitPerMR: false, KeyRerunLimitPerRepo: false, KeyCommandsAuthorAndMaintainersOnly: false, KeyIncrementalReviews: false, KeyLearnFromDismissals: false, KeyQuietReviews: false, KeyCommentLayout: false,
+			KeyRerunLimitPerMR: false, KeyRerunLimitPerRepo: false, KeyCommandsAuthorAndMaintainersOnly: false, KeyIncrementalReviews: false, KeyLearnFromDismissals: false, KeyQuietReviews: false, KeyCommentLayout: false, KeyLinkedReposEnabled: false,
 		},
 	}
 	if source != SourceDashboard {
@@ -280,6 +289,9 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 	}
 	if len(stored.CommentLayout) > 0 {
 		eff.CommentLayout = slices.Clone(stored.CommentLayout)
+	}
+	if stored.LinkedReposEnabled != nil {
+		eff.LinkedReposEnabled = *stored.LinkedReposEnabled
 	}
 	if stored.FailureStatus != nil {
 		if fs, ok := failureStatus(*stored.FailureStatus); ok {
@@ -336,6 +348,20 @@ func (r *Resolver) usableMemory(s string) (resource.Quantity, bool) {
 	return q, true
 }
 
+// cloneLinks copies a repository's links, so no caller changes the stored or
+// configured ones; an empty list is nil.
+func cloneLinks(ls []store.Link) []store.Link {
+	if len(ls) == 0 {
+		return nil
+	}
+	out := make([]store.Link, len(ls))
+	for i, l := range ls {
+		out[i] = l
+		out[i].Watched = slices.Clone(l.Watched)
+	}
+	return out
+}
+
 // jobsMemory is the memory entry of list (jobs.resources), copied; zero
 // when there is none.
 func (r *Resolver) jobsMemory(list corev1.ResourceList) resource.Quantity {
@@ -377,6 +403,10 @@ func (r *Resolver) fromConfig(repo config.Repository) (Effective, bool) {
 	if len(repo.CommentLayout) > 0 {
 		eff.CommentLayout, eff.Overridden[KeyCommentLayout] = slices.Clone(repo.CommentLayout), true
 	}
+	if repo.LinkedReposEnabled != nil {
+		eff.LinkedReposEnabled, eff.Overridden[KeyLinkedReposEnabled] = *repo.LinkedReposEnabled, true
+	}
+	eff.LinkedRepos = cloneLinks(repo.LinkedRepos)
 	if repo.FailureStatus != "" && repo.FailureStatus != config.FailureStatusFailed {
 		eff.FailureStatus, eff.Overridden[KeyFailureStatus] = repo.FailureStatus, true
 	}
@@ -438,6 +468,10 @@ func (r *Resolver) fromDashboard(row store.DashboardRepo, stored store.RepoDefau
 	if len(row.CommentLayout) > 0 {
 		eff.CommentLayout, eff.Overridden[KeyCommentLayout] = slices.Clone(row.CommentLayout), true
 	}
+	if row.LinkedReposEnabled != nil {
+		eff.LinkedReposEnabled, eff.Overridden[KeyLinkedReposEnabled] = *row.LinkedReposEnabled, true
+	}
+	eff.LinkedRepos = cloneLinks(row.LinkedRepos)
 	if row.FailureStatus != nil {
 		if fs, ok := failureStatus(*row.FailureStatus); ok {
 			eff.FailureStatus, eff.Overridden[KeyFailureStatus] = fs, true

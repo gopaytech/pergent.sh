@@ -19,10 +19,15 @@ type User struct {
 
 // Repository holds the fields pergent.sh reads.
 type Repository struct {
-	ID            int64  `json:"id"`
-	FullName      string `json:"full_name"`
-	CloneURL      string `json:"clone_url"`
-	Private       bool   `json:"private"`
+	ID       int64  `json:"id"`
+	FullName string `json:"full_name"`
+	CloneURL string `json:"clone_url"`
+	// Private is true for a private or internal repository: use Visibility
+	// to tell them apart.
+	Private bool `json:"private"`
+	// Visibility is GitHub's own word: "public", "private" or "internal".
+	// Empty when GitHub left it out (an older GitHub Enterprise Server).
+	Visibility    string `json:"visibility"`
 	DefaultBranch string `json:"default_branch"`
 }
 

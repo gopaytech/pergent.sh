@@ -751,3 +751,15 @@ func TestComment(t *testing.T) {
 		t.Fatalf("a note on another merge request: err = %v, want forge.ErrNotFound", err)
 	}
 }
+
+// Linked repositories are GitHub only.
+func TestVisibilityUnsupported(t *testing.T) {
+	f := newFake(t)
+	got, err := f.forge().Visibility(context.Background(), "acme/widgets")
+	if !errors.Is(err, forge.ErrUnsupported) || got != "" {
+		t.Fatalf("Visibility = %q, %v; want ErrUnsupported and no visibility", got, err)
+	}
+	if len(f.reqs) != 0 {
+		t.Errorf("Visibility asked GitLab: %+v", f.reqs)
+	}
+}

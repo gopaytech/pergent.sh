@@ -579,3 +579,29 @@ func TestRepoDefaultsCommentLayout(t *testing.T) {
 		}
 	}
 }
+
+// linked_repos_enabled in the defaults is NULL (unset, off) or a bool; a put
+// replaces it. The defaults hold no links.
+func TestRepoDefaultsLinkedRepos(t *testing.T) {
+	s := newStore(t)
+	read := func() *bool {
+		t.Helper()
+		d, err := s.RepoDefaults(ctx)
+		if err != nil {
+			t.Fatalf("RepoDefaults: %v", err)
+		}
+		return d.LinkedReposEnabled
+	}
+	if got := read(); got != nil {
+		t.Errorf("before any put: linked_repos_enabled = %v; want nil", *got)
+	}
+	for _, in := range []*bool{ptrTo(true), ptrTo(false), nil, ptrTo(true)} {
+		if err := s.PutRepoDefaults(ctx, RepoDefaults{LinkedReposEnabled: in}); err != nil {
+			t.Fatal(err)
+		}
+		got := read()
+		if (got == nil) != (in == nil) || (got != nil && *got != *in) {
+			t.Errorf("put %v: linked_repos_enabled = %v", in, got)
+		}
+	}
+}

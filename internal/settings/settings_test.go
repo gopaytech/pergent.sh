@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"os"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -88,7 +89,7 @@ func get(t *testing.T, r *Resolver, instance, project string) Effective {
 }
 
 var allKeys = []string{KeyApprove, KeyReviewDrafts, KeyInlineFindings, KeyFailureStatus, KeySkills, KeyJobTimeout, KeyMaxTurns, KeyJobMemory,
-	KeyRerunLimitPerMR, KeyRerunLimitPerRepo, KeyRepoSkills, KeyCommandsAuthorAndMaintainersOnly, KeyIncrementalReviews, KeyLearnFromDismissals, KeyQuietReviews, KeyCommentLayout}
+	KeyRerunLimitPerMR, KeyRerunLimitPerRepo, KeyRepoSkills, KeyCommandsAuthorAndMaintainersOnly, KeyIncrementalReviews, KeyLearnFromDismissals, KeyQuietReviews, KeyCommentLayout, KeyLinkedReposEnabled}
 
 // wantOverridden checks exactly the given keys are overridden.
 func wantOverridden(t *testing.T, eff Effective, keys ...string) {
@@ -127,6 +128,12 @@ func wantDefaults(t *testing.T, eff Effective, except ...string) {
 	}
 	if !skip(KeyCommentLayout) && eff.CommentLayout != nil {
 		t.Errorf("CommentLayout = %q, want nil (the default layout)", eff.CommentLayout)
+	}
+	if !skip(KeyLinkedReposEnabled) && eff.LinkedReposEnabled {
+		t.Errorf("LinkedReposEnabled = true, want the default false")
+	}
+	if eff.LinkedRepos != nil {
+		t.Errorf("LinkedRepos = %+v, want none: links have no default", eff.LinkedRepos)
 	}
 	if !skip(KeyFailureStatus) && eff.FailureStatus != config.FailureStatusFailed {
 		t.Errorf("FailureStatus = %q, want the default failed", eff.FailureStatus)
@@ -167,7 +174,8 @@ func TestResolverConfigKeys(t *testing.T) {
 		JobMemory:       ptr(resource.MustParse("6Gi")),
 		RerunLimitPerMR: ptr(20), RerunLimitPerRepo: ptr(100),
 		CommandsAuthorAndMaintainersOnly: ptr(false), IncrementalReviews: ptr(false), LearnFromDismissals: ptr(false), QuietReviews: ptr(true),
-		CommentLayout: []string{"findings:open", "files:collapsed"},
+		CommentLayout:      []string{"findings:open", "files:collapsed"},
+		LinkedReposEnabled: ptr(true),
 	})
 	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)} // no store: config only
 
@@ -182,6 +190,9 @@ func TestResolverConfigKeys(t *testing.T) {
 	}
 	if !slices.Equal(eff.CommentLayout, []string{"findings:open", "files:collapsed"}) {
 		t.Errorf("CommentLayout = %q", eff.CommentLayout)
+	}
+	if !eff.LinkedReposEnabled {
+		t.Errorf("LinkedReposEnabled = false, want true")
 	}
 	wantOverridden(t, eff, allKeys...)
 
@@ -243,7 +254,8 @@ func TestResolverDefaultsAndOverrides(t *testing.T) {
 		Approve: ptr(true), ReviewDrafts: ptr(false), InlineFindings: ptr(false), FailureStatus: ptr("neutral"),
 		Skills: []string{"security"}, RepoSkills: []string{"team"}, JobTimeoutSeconds: ptr(1200), MaxTurns: ptr(120), JobMemory: ptr("6Gi"),
 		RerunLimitPerMR: ptr(20), RerunLimitPerRepo: ptr(100), CommandsAuthorAndMaintainersOnly: ptr(false), IncrementalReviews: ptr(false), LearnFromDismissals: ptr(false), QuietReviews: ptr(true),
-		CommentLayout: []string{"findings:open", "files:collapsed"},
+		CommentLayout:      []string{"findings:open", "files:collapsed"},
+		LinkedReposEnabled: ptr(true),
 	})
 	// A row of an instance no longer configured is not a repository.
 	upsert(t, st, store.DashboardRepo{Instance: "gone", Project: "acme/old"})
@@ -271,6 +283,9 @@ func TestResolverDefaultsAndOverrides(t *testing.T) {
 	}
 	if !slices.Equal(full.CommentLayout, []string{"findings:open", "files:collapsed"}) {
 		t.Errorf("CommentLayout = %q", full.CommentLayout)
+	}
+	if !full.LinkedReposEnabled {
+		t.Errorf("LinkedReposEnabled = false, want true")
 	}
 	wantOverridden(t, full, allKeys...)
 
@@ -627,5 +642,99 @@ func TestResolveCommentLayoutConfig(t *testing.T) {
 	eff := r.defaultsFor(SourceConfig, config.PlatformGitLab, "main", "acme/widgets", store.RepoDefaults{CommentLayout: admin})
 	if eff.CommentLayout != nil {
 		t.Errorf("CommentLayout = %q, want nil: a config repository reads no stored default", eff.CommentLayout)
+	}
+}
+
+// The setting is off by default, an admin default can turn it on, and the
+// repository's own value beats that. A config repository reads no admin
+// default.
+func TestResolveLinkedRepos(t *testing.T) {
+	cfg := testConfig()
+	cfg.Repositories = append(cfg.Repositories,
+		config.Repository{GitHub: "gh", Project: "Acme/On", LinkedReposEnabled: ptr(true)},
+		config.Repository{GitHub: "gh", Project: "Acme/Off", LinkedReposEnabled: ptr(false)})
+	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)} // no store: config only
+
+	cases := []struct {
+		name        string
+		row, stored *bool
+		want        bool
+		overridden  bool
+	}{
+		{"neither: off by default", nil, nil, false, false},
+		{"the admin default on", nil, ptr(true), true, false},
+		{"the admin default off", nil, ptr(false), false, false},
+		{"the repository off beats the admin default on", ptr(false), ptr(true), false, true},
+		{"the repository on beats the admin default off", ptr(true), ptr(false), true, true},
+		{"the repository on alone", ptr(true), nil, true, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			row := store.DashboardRepo{Instance: "main", Project: "acme/widgets", LinkedReposEnabled: c.row}
+			eff, ok := r.fromDashboard(row, store.RepoDefaults{LinkedReposEnabled: c.stored})
+			if !ok {
+				t.Fatal("fromDashboard: not ok")
+			}
+			if eff.LinkedReposEnabled != c.want || eff.Overridden[KeyLinkedReposEnabled] != c.overridden {
+				t.Errorf("LinkedReposEnabled = %v, overridden = %v; want %v, %v",
+					eff.LinkedReposEnabled, eff.Overridden[KeyLinkedReposEnabled], c.want, c.overridden)
+			}
+		})
+	}
+
+	// Config: unset is off; a value is the repository's own.
+	if eff := get(t, r, "main", "acme/widgets"); eff.LinkedReposEnabled || eff.Overridden[KeyLinkedReposEnabled] {
+		t.Errorf("config unset: enabled = %v, overridden = %v; want false, false", eff.LinkedReposEnabled, eff.Overridden[KeyLinkedReposEnabled])
+	}
+	if eff := get(t, r, "gh", "acme/on"); !eff.LinkedReposEnabled || !eff.Overridden[KeyLinkedReposEnabled] {
+		t.Errorf("config true: enabled = %v, overridden = %v; want true, true", eff.LinkedReposEnabled, eff.Overridden[KeyLinkedReposEnabled])
+	}
+	if eff := get(t, r, "gh", "acme/off"); eff.LinkedReposEnabled || !eff.Overridden[KeyLinkedReposEnabled] {
+		t.Errorf("config false: enabled = %v, overridden = %v; want false, true", eff.LinkedReposEnabled, eff.Overridden[KeyLinkedReposEnabled])
+	}
+	eff := r.defaultsFor(SourceConfig, config.PlatformGitLab, "main", "acme/widgets", store.RepoDefaults{LinkedReposEnabled: ptr(true)})
+	if eff.LinkedReposEnabled {
+		t.Error("LinkedReposEnabled = true: a config repository reads no stored default")
+	}
+}
+
+// Links come only from the repository: never from the admin defaults. They
+// are kept whether or not the setting is on, and the result is a copy.
+func TestResolveLinks(t *testing.T) {
+	links := []store.Link{
+		{Target: "acme/pergent.sh", Watched: []string{"render/**"}, CanBlock: false},
+		{Target: "acme/docs", CanBlock: true},
+	}
+	cfg := testConfig()
+	cfg.Repositories = append(cfg.Repositories, config.Repository{GitHub: "gh", Project: "Acme/Linked", LinkedRepos: links})
+	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)}
+
+	// Config: the links are kept with the setting off.
+	got := get(t, r, "gh", "acme/linked")
+	if got.LinkedReposEnabled || !reflect.DeepEqual(got.LinkedRepos, links) {
+		t.Errorf("config: enabled = %v, links = %+v; want false and the links", got.LinkedReposEnabled, got.LinkedRepos)
+	}
+	if none := get(t, r, "main", "acme/widgets"); none.LinkedRepos != nil {
+		t.Errorf("no links: LinkedRepos = %+v; want nil", none.LinkedRepos)
+	}
+
+	// Dashboard: the row's links, with the admin default on or off.
+	row := store.DashboardRepo{Instance: "main", Project: "acme/widgets", LinkedRepos: links}
+	eff, ok := r.fromDashboard(row, store.RepoDefaults{LinkedReposEnabled: ptr(true)})
+	if !ok || !eff.LinkedReposEnabled || !reflect.DeepEqual(eff.LinkedRepos, links) {
+		t.Errorf("dashboard: ok = %v, enabled = %v, links = %+v", ok, eff.LinkedReposEnabled, eff.LinkedRepos)
+	}
+	// A row without links has none, whatever the defaults say.
+	eff, _ = r.fromDashboard(store.DashboardRepo{Instance: "main", Project: "acme/widgets"}, store.RepoDefaults{LinkedReposEnabled: ptr(true)})
+	if eff.LinkedRepos != nil {
+		t.Errorf("a row without links: LinkedRepos = %+v; want nil", eff.LinkedRepos)
+	}
+
+	// The result is a copy, down to the watched paths.
+	eff, _ = r.fromDashboard(row, store.RepoDefaults{})
+	eff.LinkedRepos[0].Target = "changed"
+	eff.LinkedRepos[0].Watched[0] = "changed"
+	if row.LinkedRepos[0].Target != "acme/pergent.sh" || row.LinkedRepos[0].Watched[0] != "render/**" {
+		t.Error("LinkedRepos shares memory with the stored row")
 	}
 }

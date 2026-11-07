@@ -1160,6 +1160,31 @@ A layout moves and folds the blocks, nothing more. It never changes a verdict, a
 - Repositories can have different comments. Someone who reads across repositories meets several shapes.
 - A summary is text a model wrote about the repository. It is escaped like any other model text, but it is visible in the comment.
 
+## 🔗 Linked repositories
+
+A change to an API or a shared package can break its callers in another repository, and a review that only has the checkout can't see that. A repository can **link** other repositories, so that a change touching the paths it watches can be checked against the code that uses them. The setting and the links are in place in this version; the review does not use them yet, so turning the setting on changes nothing in a review.
+
+**Off by default.** The setting is **Linked repositories**, `linked_repos_enabled` in the config ([Config reference](#-config-reference)). A repository that leaves it unset takes the admin default, which starts off; a repository listed in the config reads no admin default, so unset there means off. While the setting is off, a repository's links are kept and ignored.
+
+**Links.** A link is a target repository (`owner/name`), a list of **watched paths** and a **Can block** switch. A repository has at most 3 links. Watched paths are globs, written as a skill's `paths` are (`render/**`; a directory is `render/**`, not `render/`; a pattern without a `/` matches a file name at any depth). A link with no watched paths matches every change; with paths, it matches a change that touches one. Can block is on unless set to `false`. Links belong to one repository: there is no admin default for them, and they are written by admins only (today in the config).
+
+```yaml
+repositories:
+  - github: gh
+    project: gopaytech/pergent
+    linked_repos_enabled: true
+    linked_repos:
+      - target: gopaytech/pergent.sh
+        watched: ["render/**", "scope/**"]
+        can_block: false
+```
+
+**Rules for a link.**
+
+- GitHub only. A GitLab repository in the config with `linked_repos` is refused when the config loads.
+- The target can't be the repository itself, can't be linked twice, and needs an `owner/name` with no scheme or extra path. The config refuses a bad glob and more than 3 links, naming the repository and the link.
+- A repository may link one that is as open or more open: a public repository links public ones; an internal one, internal or public; a private one, anything. Visibility is read from GitHub, including `internal`, through the review App's installation, and never assumed: a repository the App can't read, or whose visibility GitHub does not say, is an error and is never taken for public.
+
 ## 📈 Skill results
 
 A skill that raises findings nobody acts on costs reviewers time. The **Skill results** tab of a repository shows which skills people act on and which they set aside, so you can fix or drop the weak ones. Anyone who can see the repository can open it.
@@ -1477,6 +1502,8 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `repositories[].learn_from_dismissals` | `true` | Later reviews are told what people with write access rejected, and why. With `false`, reviews are not told. The dashboard's "Learn from dismissals" switch is the same setting for a repository the dashboard manages. |
 | `repositories[].quiet_reviews` | `false` | A review says less: fewer nitpicks, no suggestion threads and a shorter comment, with blocking findings, failures, verdicts and approval unchanged. See [Quiet reviews](#-quiet-reviews). The dashboard's "Quiet reviews" switch is the same setting for a repository the dashboard manages. |
 | `repositories[].comment_layout` | the default layout | The blocks of the review comment, in order, each open or collapsed. A list of one-key entries, `block: state`, such as `- findings: collapsed`. The blocks are `summary`, `findings`, `dismissed`, `checks` and `files`; the states are `open` and `collapsed`; `findings` is required. A block left out is not in the comment. The config refuses a list with an unknown block, an unknown state, a block twice, no `findings` block, or no entries (`comment_layout: []` is an error, not the same as leaving the key out). For an unknown block, an unknown state and a block listed twice the error names the entry; the other two have no entry to name. See [Comment layout](#-comment-layout). A review reads the layout when it starts and keeps it, so a change takes effect with the next review. The layout changes the comment only: no verdict, status, score or approval depends on it. The dashboard's layout editor is the same setting for a repository the dashboard manages, and a repository listed in the config reads no admin default. |
+| `repositories[].linked_repos_enabled` | `false` | Whether the repository's [linked repositories](#-linked-repositories) are used. While it is `false` the links are kept and ignored. A repository listed in the config reads no admin default. |
+| `repositories[].linked_repos` | none | Up to 3 links, GitHub repositories only: a list of `target` (`owner/name`), `watched` (globs of this repository's files; none matches every change) and `can_block` (default `true`). The config refuses a GitLab repository with links, a bad glob, a target that is the repository itself or is listed twice, and more than 3 links. An empty list (`linked_repos: []`) is allowed and means no links. See [Linked repositories](#-linked-repositories). |
 | `repositories[].max_turns` | `jobs.max_turns` | pergent's step limit per opencode run (`--max-turns`) for this repository, 5 to 200. The dashboard's "Max steps" is the same setting for a repository the dashboard manages. |
 | `repositories[].commands_author_and_maintainers_only` | `true` | Only the author of a change and the repository's maintainers and owners can use [commands](#-commands) on it. With `false`, anyone with write access can. The author can always re-run and dismiss suggestions. The dashboard's "Only the author and maintainers use commands" switch is the same setting for a repository the dashboard manages. |
 | `repositories[].rerun_limit_per_mr` | 10 | How many times a merge request or pull request can be re-run by [comment or button](#-commands) per UTC day, 1 to 1000. The full review pergent.sh restarts by itself after a failed merge of an incremental result counts too. Pushes and opened requests always run and never count. |
