@@ -3826,7 +3826,7 @@ components:
     RepositoryDetailView:
       description: A repository with its effective settings.
       type: object
-      required: [repo, settings, attention, role, waiting]
+      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly]
       properties:
         repo: {$ref: '#/components/schemas/RepositoryView'}
         settings:
@@ -3847,6 +3847,10 @@ components:
           type: array
           items: {$ref: '#/components/schemas/WaitingView'}
           description: The changes waiting for someone to start their review, newest first.
+        instanceTrustedAuthorsOnly:
+          type: string
+          enum: [follow_visibility, 'on', 'off']
+          description: The instance's trusted-authors mode, which the repository follows unless it sets its own.
     RepositoryView:
       description: One repository switched on.
       type: object

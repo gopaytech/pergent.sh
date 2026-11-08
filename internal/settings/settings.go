@@ -115,6 +115,9 @@ type Effective struct {
 	// unknown). Whether a follow_visibility repository is public is read at
 	// review time.
 	TrustedAuthorsOnly string
+	// InstanceTrustedAuthorsOnly is the instance's mode, which the
+	// repository follows unless it sets its own.
+	InstanceTrustedAuthorsOnly string
 	// TrustedAuthors is the repository's allowlist, matched by user ID.
 	TrustedAuthors []store.TrustedAuthor
 	// Overridden tells, for each setting key, whether the repository sets
@@ -265,9 +268,10 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 		MaxTurns:                         r.Config.Jobs.MaxTurns,
 		JobMemory:                        r.jobsMemory(r.Config.Jobs.Resources.Limits),
 
-		RerunLimitPerMR:    DefaultRerunLimitPerMR,
-		RerunLimitPerRepo:  DefaultRerunLimitPerRepo,
-		TrustedAuthorsOnly: r.instanceTrust(instance),
+		RerunLimitPerMR:            DefaultRerunLimitPerMR,
+		RerunLimitPerRepo:          DefaultRerunLimitPerRepo,
+		TrustedAuthorsOnly:         r.instanceTrust(instance),
+		InstanceTrustedAuthorsOnly: r.instanceTrust(instance),
 		Overridden: map[string]bool{
 			KeyTrustedAuthorsOnly: false, KeyTrustedAuthors: false,
 			KeyApprove: false, KeyReviewDrafts: false, KeyInlineFindings: false, KeyFailureStatus: false,

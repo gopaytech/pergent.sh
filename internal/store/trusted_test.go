@@ -297,3 +297,43 @@ func TestHeadSeenBy(t *testing.T) {
 		}
 	}
 }
+
+// A change waiting for a start isn't a review: the overview's counts leave
+// it out.
+func TestRunStatsLeaveOutWaiting(t *testing.T) {
+	s := newStore(t)
+	id := enqueue(t, s, mr1, sha('a'))
+	if _, err := s.HoldRun(ctx, id, WaitUntrusted); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.RunStats(ctx, Visibility{All: true}, t0.Add(-24*time.Hour*365*10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, c := range got {
+		if c.Reviews != 0 {
+			t.Errorf("%v counts %d reviews, want 0", k, c.Reviews)
+		}
+	}
+}
+
+// A waiting run with a newer live run of its change (left by a release that
+// didn't know waiting runs) isn't listed: only a change whose newest run
+// waits is.
+func TestWaitingChangesNewestOnly(t *testing.T) {
+	s := newStore(t)
+	id := enqueue(t, s, mr1, sha('a'))
+	if _, err := s.HoldRun(ctx, id, WaitUntrusted); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.WaitingChanges(ctx, mr1.Instance, "acme/widgets"); err != nil || len(got) != 1 {
+		t.Fatalf("waiting = %+v, %v; want one", got, err)
+	}
+	if _, err := s.pool.Exec(ctx, `INSERT INTO runs (instance, project_id, mr_iid, project_path, head_sha, target_branch, created_at)
+		VALUES ($1, $2, $3, 'acme/widgets', $4, 'main', now() + interval '1 second')`, mr1.Instance, mr1.ProjectID, mr1.IID, sha('b')); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.WaitingChanges(ctx, mr1.Instance, "acme/widgets"); err != nil || len(got) != 0 {
+		t.Errorf("waiting with a newer run = %+v, %v; want none", got, err)
+	}
+}

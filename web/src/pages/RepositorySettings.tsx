@@ -96,6 +96,7 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
         canSetLinks={canSetLinks}
         // Who is trusted is an admin's to say too.
         canSetTrust={view.role === "admin"}
+        instanceTrust={view.instanceTrustedAuthorsOnly}
         platform={repo.platform}
         linkable={
           linkable.isError
@@ -307,6 +308,7 @@ function Form({
   canSetCaps,
   canSetLinks,
   canSetTrust,
+  instanceTrust,
   platform,
   linkable,
   onSearch,
@@ -322,6 +324,8 @@ function Form({
   canSetCaps: boolean;
   canSetLinks: boolean;
   canSetTrust: boolean;
+  // instanceTrust is the instance's mode, which "Instance default" follows.
+  instanceTrust: TrustMode;
   platform: string;
   linkable: LinkableState;
   onSearch: (text: string) => void;
@@ -547,9 +551,7 @@ function Form({
             onChange={(e) => set("trustedAuthorsOnly", e.target.value as Draft["trustedAuthorsOnly"])}
           >
             <option value="">
-              {settings.trustedAuthorsOnly.overridden
-                ? "Instance default"
-                : `Instance default (${trustModeWords(settings.trustedAuthorsOnly.value)})`}
+              Instance default ({trustModeWords(instanceTrust)})
             </option>
             <option value="on">on</option>
             <option value="off">off</option>

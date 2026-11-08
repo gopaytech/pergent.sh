@@ -45,7 +45,9 @@ const gadgetsSettings = "/api/repositories/main/acme/gadgets/settings"
 // as sent; an unknown name saves nothing.
 func TestTrustedAuthorsSave(t *testing.T) {
 	e := newEnv(t, nil)
-	e.dashboardRepo("main", "acme/gadgets", nil)
+	e.dashboardRepo("main", "acme/gadgets", func(r *store.DashboardRepo) {
+		r.TrustedAuthors = []store.TrustedAuthor{{ID: 9, Username: "old-name"}}
+	})
 	e.src["main"].set(func(f *fakeSource) { f.users = map[string]forge.User{"alice": {ID: 5, Username: "Alice"}} })
 	c := e.sessionFor(e.ssoAdmin("boss@example.com"))
 
@@ -63,6 +65,14 @@ func TestTrustedAuthorsSave(t *testing.T) {
 	}
 	if r, _ := e.storedRepo("main", "acme/gadgets"); !slices.Equal(r.TrustedAuthors, want) {
 		t.Errorf("an unknown name changed the list: %+v", r.TrustedAuthors)
+	}
+
+	// An ID that isn't the stored one for that name is not taken: the name is
+	// looked up.
+	rec = e.send(c, "PUT", gadgetsSettings, `{"trustedAuthors":[{"id":666,"username":"alice"},{"id":9,"username":"old-name"}]}`)
+	wantCode(t, rec, "forged id", http.StatusOK)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); !slices.Equal(r.TrustedAuthors, want) {
+		t.Errorf("an id sent with a name = %+v, want %+v", r.TrustedAuthors, want)
 	}
 
 	e.src["main"].set(func(f *fakeSource) { f.userErr = errors.New("gitlab: status 500") })
@@ -89,6 +99,10 @@ func TestTrustedAuthorsOnlySetting(t *testing.T) {
 	v := getJSON[RepositoryDetailView](e, c, "/api/repositories/main/acme/gadgets")
 	if s := v.Settings["trustedAuthorsOnly"]; s.Value != "off" || !s.Overridden {
 		t.Errorf("setting = %+v, want off, overridden", s)
+	}
+	// What the instance would give is shown beside it.
+	if v.InstanceTrustedAuthorsOnly != "follow_visibility" {
+		t.Errorf("instance mode = %q, want follow_visibility", v.InstanceTrustedAuthorsOnly)
 	}
 	wantCode(t, e.send(c, "PUT", gadgetsSettings, `{"trustedAuthorsOnly":null}`), "reset", http.StatusOK)
 	v = getJSON[RepositoryDetailView](e, c, "/api/repositories/main/acme/gadgets")

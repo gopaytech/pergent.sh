@@ -354,6 +354,9 @@ type RepositoryDetailView struct {
 	// access to start it (Start review: admins and maintainers), newest
 	// first.
 	Waiting []WaitingView `json:"waiting"`
+	// InstanceTrustedAuthorsOnly is the instance's trusted-authors mode,
+	// what the repository follows when it sets none.
+	InstanceTrustedAuthorsOnly string `json:"instanceTrustedAuthorsOnly"`
 }
 
 // WaitingView is a change of an author the repository doesn't trust, not

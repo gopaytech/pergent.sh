@@ -283,6 +283,9 @@ export type RepositoryDetailView = {
   role: Role;
   // waiting are the changes waiting for someone to start their review.
   waiting: WaitingView[];
+  // instanceTrustedAuthorsOnly is the instance's mode, which the repository
+  // follows unless it sets its own.
+  instanceTrustedAuthorsOnly: TrustMode;
 };
 
 // --- readiness (GET .../readiness) ---

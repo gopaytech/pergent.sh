@@ -48,11 +48,16 @@ describe("Trusted authors: repository settings", () => {
   });
 
   it("sends null to follow the instance again", async () => {
-    const detail = withTrust(repoDetail(repoPayments), { trustedAuthorsOnly: { value: "on", overridden: true } });
+    const detail = {
+      ...withTrust(repoDetail(repoPayments), { trustedAuthorsOnly: { value: "on" as const, overridden: true } }),
+      instanceTrustedAuthorsOnly: "off" as const,
+    };
     const fake = fakeApi(settingsRoutes(detail));
     renderApp("/repos/main/acme/payments?tab=settings");
     const select = await screen.findByLabelText("Trusted authors only");
     expect(select).toHaveValue("on");
+    // What following the instance would give is named.
+    expect(within(select).getByRole("option", { name: "Instance default (off)" })).toBeInTheDocument();
     await userEvent.selectOptions(select, "");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({ trustedAuthorsOnly: null });

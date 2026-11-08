@@ -1522,11 +1522,16 @@ type WaitingChange struct {
 }
 
 // WaitingChanges returns the merge requests of project (its path, matched
-// ignoring case) on instance whose run waits, newest first, at most 100.
+// ignoring case) on instance whose newest live run waits, newest first, at
+// most 100. A waiting run with a newer one (left by a release that didn't
+// know waiting runs) isn't listed.
 func (s *Store) WaitingChanges(ctx context.Context, instance, project string) ([]WaitingChange, error) {
-	rows, err := s.pool.Query(ctx, `SELECT mr_iid, head_sha, title, author, web_url, created_at, skip_reason FROM runs
-		WHERE instance = $1 AND lower(project_path) = lower($2) AND state = 'waiting'
-		ORDER BY created_at DESC, id DESC LIMIT 100`, instance, project)
+	rows, err := s.pool.Query(ctx, `SELECT r.mr_iid, r.head_sha, r.title, r.author, r.web_url, r.created_at, r.skip_reason FROM runs r
+		WHERE r.instance = $1 AND lower(r.project_path) = lower($2) AND r.state = 'waiting'
+		  AND NOT EXISTS (SELECT 1 FROM runs n
+			WHERE n.instance = r.instance AND n.project_id = r.project_id AND n.mr_iid = r.mr_iid
+			  AND n.state <> 'superseded' AND (n.created_at, n.id) > (r.created_at, r.id))
+		ORDER BY r.created_at DESC, r.id DESC LIMIT 100`, instance, project)
 	if err != nil {
 		return nil, err
 	}

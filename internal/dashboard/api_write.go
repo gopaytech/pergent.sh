@@ -575,8 +575,9 @@ func trustedAuthorsSetting(raw json.RawMessage, null bool) (func(*store.Dashboar
 	return func(row *store.DashboardRepo) { row.TrustedAuthors = as }, ""
 }
 
-// resolveTrusted looks up, on repo's platform, each entry of as without an ID
-// and drops later entries of an ID already listed. A name the platform doesn't
+// resolveTrusted looks up, on repo's platform, each entry of as without an ID,
+// or with one that isn't the repository's stored entry, and drops later
+// entries of an ID already listed. A name the platform doesn't
 // know is a 400 naming it; a platform that can't answer is a 502.
 func (d *Dashboard) resolveTrusted(ctx context.Context, repo settings.Effective, as []store.TrustedAuthor) ([]store.TrustedAuthor, *linkProblem) {
 	if len(as) == 0 {
@@ -591,6 +592,12 @@ func (d *Dashboard) resolveTrusted(ctx context.Context, repo settings.Effective,
 	out := make([]store.TrustedAuthor, 0, len(as))
 	seen := map[int64]bool{}
 	for _, a := range as {
+		// An entry with an ID is kept only as it is stored (one the page got
+		// back); any other is looked up by its name, so a name is never
+		// stored beside someone else's ID.
+		if a.ID != 0 && !slices.Contains(repo.TrustedAuthors, a) {
+			a.ID = 0
+		}
 		if a.ID == 0 {
 			u, err := src.UserByName(ctx, repo.Project, a.Username)
 			if errors.Is(err, forge.ErrNotFound) {
