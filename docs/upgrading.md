@@ -28,7 +28,7 @@ Nothing changes unless you turn a new setting on. Migrations `0029` and `0030` r
 - **The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.8.0`,** which has the impact check. A config that sets its own `jobs.image` to an older image gets a `failed` impact check on every matching review, and no approval, until it moves.
 - **To roll back, first remove `linked_repos` and `linked_repos_enabled` from the config.** 0.10.0 refuses a config key it doesn't know.
 
-- A GitLab instance can now approve with its review bot, with `approve_with_review_bot: true` in place of `approve_token_env`, or **The review bot (one user)** in the dashboard's add form. See [Requirements](../README.md#-requirements) for what this gives up. Two tokens of one user are still refused without it.
+- A GitLab instance can now approve with its review bot, with `approve_with_review_bot: true` in place of `approve_token_env`, or **The review bot (one user)** in the dashboard's add form. See [Requirements](setup/install.md#-requirements) for what this gives up. Two tokens of one user are still refused without it.
 - **To roll back, first remove `approve_with_review_bot` from the config.** 0.10.0 refuses a config key it doesn't know, so it would not start with it. An instance added in the dashboard this way stays stored, but 0.10.0 can't connect it, because it has no approve token.
 
 ## Upgrading to 0.10.0
@@ -186,7 +186,7 @@ Nothing to do. The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.5.3`, w
 0.5.0 adds the [readiness scan](concepts/dashboard.md#readiness-scan). Nothing is removed, but these things change:
 
 1. **Migration `0015` runs at startup.** It adds the `readiness_scans` table. Back up PostgreSQL first and keep the backup: 0.4.0 does not know the new table.
-2. **`/readiness-scans/` must be reachable by the Jobs**, like `/runs/` ([Exposing pergent.sh](../README.md#exposing-pergentsh)). A scan Job that can't post its result ends as `the scan took longer than 5 minutes` or `the scan Job ended without a result`. The scan Jobs use the NetworkPolicy the chart already makes for review Jobs, so there is no new chart value; the clone needs the GitLab or GitHub address in `jobEgress.cidrs`, as a review does.
+2. **`/readiness-scans/` must be reachable by the Jobs**, like `/runs/` ([Exposing pergent.sh](setup/install.md#exposing-pergentsh)). A scan Job that can't post its result ends as `the scan took longer than 5 minutes` or `the scan Job ended without a result`. The scan Jobs use the NetworkPolicy the chart already makes for review Jobs, so there is no new chart value; the clone needs the GitLab or GitHub address in `jobEgress.cidrs`, as a review does.
 3. **Scans need the dashboard** (`dashboard.url`) and the `PERGENT_SH_IMAGE` variable the chart sets. Without the dashboard no scan runs.
 4. **Every repository that is switched on is scanned once after the upgrade**, if it was never scanned: oldest first, 2 at a time, starting before the first reconcile. These scans are not in the audit log. Expect new "Needs attention" items for repositories that lack project context or skill coverage.
 5. **Optional:** to let the scan read classic branch protection on GitHub, give the review App **Administration: Read-only** ([Create the review App](setup/github.md#1-create-the-review-app)). Nothing breaks without it.
@@ -204,7 +204,7 @@ Nothing to do. The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.5.3`, w
 3. **A repository with no `skills` setting now uses the default skill list**, not every skill. The default list starts empty. A repository whose `skills` is `[]` in the config is refused at startup (leave the key out for the default list; a list names at least one skill).
 4. **With no skills, there is no review.** A repository that has no skill in its `.pergent/skills` folder and none turned on, and whose list (or the default list) names no library skill, is skipped: no Job, no comment, no status ([No skills, no review](concepts/skills.md#no-skills-no-review)). Until the library has skills and the default list (or the repository) names one, that is every repository without `.pergent/skills`.
 5. **Migration `0014` runs at startup.** It adds the library, the default skill list and the new run columns, and lets a run be `skipped`. Back up PostgreSQL first and keep the backup: 0.2.0 does not know the new tables.
-6. **Skill fetch Jobs** read public URLs. The chart passes `PERGENT_SH_IMAGE` for them (set it to the pergent.sh image if you do not use the chart). `/skill-fetches/` must be reachable by the Jobs like `/runs/`, and the host of a URL must be inside `jobEgress.cidrs` ([Exposing pergent.sh](../README.md#exposing-pergentsh), [Installing from git](concepts/skills.md#installing-from-git)). Without the dashboard (`dashboard.url`) there is no skill fetching.
+6. **Skill fetch Jobs** read public URLs. The chart passes `PERGENT_SH_IMAGE` for them (set it to the pergent.sh image if you do not use the chart). `/skill-fetches/` must be reachable by the Jobs like `/runs/`, and the host of a URL must be inside `jobEgress.cidrs` ([Exposing pergent.sh](setup/install.md#exposing-pergentsh), [Installing from git](concepts/skills.md#installing-from-git)). Without the dashboard (`dashboard.url`) there is no skill fetching.
 
 To upgrade:
 

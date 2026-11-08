@@ -69,7 +69,7 @@ jobEgress:
 #     webhook_secret_env: GITHUB_WEBHOOK_SECRET
 
 # To turn the dashboard on, set config.dashboard.url and route its host to
-# the Service (see "Exposing pergent.sh" in the README). The README's "Dashboard" section explains each
+# the Service (see "Exposing pergent.sh" in docs/setup/install.md). The "Dashboard" page in docs/concepts explains each
 # step. Local admins sign in with a password at /admin/sign-in. Everyone else
 # signs in with OIDC (or a JWT from your proxy), which an admin sets up on
 # Admin -> Integrations -> Sign-in, or here. The client secret is not in the
@@ -107,7 +107,7 @@ serviceAccount:
   annotations: {}
 
 # The chart creates no Ingress. Route traffic to this Service yourself (Gateway API,
-# your own Ingress, a LoadBalancer); the README's "Exposing pergent.sh" lists the paths.
+# your own Ingress, a LoadBalancer); "Exposing pergent.sh" in docs/setup/install.md lists the paths.
 service:
   # -- Service type.
   type: ClusterIP

@@ -13,7 +13,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `gitlab[].url` | required | Base URL of the GitLab instance. It must be `https` (the bot tokens travel in a header), without a trailing slash. A redirect to another host is never followed. |
 | `gitlab[].review_token_env` | required | Name of the env var with the review bot token. |
 | `gitlab[].approve_token_env` | one of `approve_token_env` and `approve_with_review_bot` | Name of the env var with the approve bot token. It must belong to a different user than the review bot token. |
-| `gitlab[].approve_with_review_bot` | one of `approve_token_env` and `approve_with_review_bot` | `true` to let the review bot's own user approve too, with no approve token. See [Requirements](../../README.md#-requirements) for what this gives up. |
+| `gitlab[].approve_with_review_bot` | one of `approve_token_env` and `approve_with_review_bot` | `true` to let the review bot's own user approve too, with no approve token. See [Requirements](../setup/install.md#-requirements) for what this gives up. |
 | `gitlab[].webhook_secret_env` | required | Name of the env var with the webhook secret. GitLab sends it as `X-Gitlab-Token`. |
 | `gitlab[].trusted_authors_only` | `follow_visibility` | The default of the instance's repositories for [Trusted authors](../concepts/trusted-authors.md): `follow_visibility` (on for a public project, off for an internal or private one), `on` or `off` (every author reviewed). |
 | `github[].name` | required | Instance name, `[a-z0-9-]+`, unique across `gitlab` and `github`. Part of the webhook URL. One instance is one pair of Apps and covers every organization they are installed on. |
