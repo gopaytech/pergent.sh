@@ -18,7 +18,7 @@ Tests for the store and the end-to-end flow skip unless `PERGENT_SH_TEST_DATABAS
 - Open a pull request against `main`. `main` is protected, and `test`, `web` and `chart` must pass before merging. pergent reviews every pull request.
 - Keep commits small, with a subject like `fix: …`, `feat: …`, `docs: …` or `test: …`.
 - Write tests first where you can, and test behaviour rather than mocks.
-- Put user-facing changes in the README in the same pull request, and anything an operator must do in its Upgrading section.
+- Put user-facing changes in `docs/` in the same pull request, and anything an operator must do in `docs/upgrading.md`.
 - This repository is public: use example names, never a private hostname, company name or internal system.
 
 ## Database changes
