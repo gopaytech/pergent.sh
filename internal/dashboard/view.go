@@ -765,7 +765,8 @@ type LLMView struct {
 //     checked on its own, not against the picker's lists: the review bot
 //     (GitLab: Maintainer or above) or App (GitHub: installed) must reach
 //     it, else 404, whether it is on or not; then 409 when it is on
-//     already. 201, RepositoryDetailView, the project spelled as given.
+//     already. 201, RepositoryDetailView, the project spelled as GitLab spells it for
+//     GitLab, and as sent (trimmed) for GitHub.
 //     pergent.sh sets it up (webhook and clone credentials) within
 //     seconds.
 //   - DELETE /api/repositories/{instance}/{project...}: switches it off.

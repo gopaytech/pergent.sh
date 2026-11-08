@@ -976,7 +976,7 @@ paths:
             schema: {$ref: '#/components/schemas/SwitchOnRequest'}
       responses:
         '201':
-          description: Switched on. The project is spelled as given.
+          description: Switched on. The project is spelled as GitLab spells it for GitLab, and as sent (trimmed) for GitHub.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/RepositoryDetailView'}

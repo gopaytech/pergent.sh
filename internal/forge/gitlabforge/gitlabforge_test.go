@@ -527,7 +527,7 @@ func TestReachableNameIsGitLabsSpelling(t *testing.T) {
 	if err != nil || !ok || name != "acme/widgets" {
 		t.Fatalf("ReachableName = %q, %v, %v; want acme/widgets, true", name, ok, err)
 	}
-	if q := f.only().Query; q != "min_access_level=40&per_page=100&search=Widgets&search_namespaces=true&simple=true" {
+	if q := f.only().Query; q != "min_access_level=40&per_page=100&search=Acme%2FWidgets&search_namespaces=true&simple=true" {
 		t.Errorf("query = %q", q)
 	}
 
@@ -549,7 +549,7 @@ func TestCanReachInheritedAccess(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("CanReach = %v, %v; want true", ok, err)
 	}
-	if q := f.only().Query; q != "min_access_level=40&per_page=100&search=widgets&search_namespaces=true&simple=true" {
+	if q := f.only().Query; q != "min_access_level=40&per_page=100&search=acme%2Fteam%2Fwidgets&search_namespaces=true&simple=true" {
 		t.Errorf("query = %q", q)
 	}
 }

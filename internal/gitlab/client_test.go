@@ -889,7 +889,7 @@ func TestHasMemberAccess(t *testing.T) {
 }
 
 // ListsProject asks the project listing, the way the picker does, searching
-// the project's name; the listing counts access gained through a group or a
+// the project's full path; the listing counts access gained through a group or a
 // share, which GET /projects/:path does not show.
 func TestListsProject(t *testing.T) {
 	c, reqs := serve(t, jsonReply([]map[string]any{
@@ -902,7 +902,7 @@ func TestListsProject(t *testing.T) {
 		t.Fatalf("requests = %d, want 1", len(*reqs))
 	}
 	expect(t, (*reqs)[0], "GET", "/api/v4/projects",
-		"min_access_level=40&per_page=100&search=widgets&search_namespaces=true&simple=true")
+		"min_access_level=40&per_page=100&search=acme%2Fteam%2Fwidgets&search_namespaces=true&simple=true")
 }
 
 // The name must be the whole name (acme/widgets is not acme/widgets-old),
@@ -924,6 +924,36 @@ func TestListsProjectIsWholeNameAnyCase(t *testing.T) {
 	}
 }
 
+// GitLab matches a search shorter than 3 characters exactly, against a name:
+// searching a project called ab by its name finds ab only for the search "ab"
+// and never for "acme/ab". The fake does the same; searching the whole path
+// (always 3 characters or more) finds projects with a one- or two-character
+// name.
+func TestListsProjectWithAShortName(t *testing.T) {
+	listing := []string{"acme/abc", "acme/a", "acme/ab", "other/ab", "acme/team/x"}
+	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		search := strings.ToLower(r.URL.Query().Get("search"))
+		out := []map[string]any{}
+		for _, p := range listing {
+			name := p[strings.LastIndex(p, "/")+1:]
+			if (len(search) < 3 && name == search) || (len(search) >= 3 && strings.Contains(strings.ToLower(p), search)) {
+				out = append(out, map[string]any{"path_with_namespace": p})
+			}
+		}
+		jsonReply(out)(w, r)
+	})
+	for _, path := range []string{"acme/a", "acme/ab", "Acme/AB", "acme/team/x"} {
+		got, ok, err := c.ListsProject(context.Background(), path, ProjectLookup{MinAccessLevel: 40, MaxPages: 3})
+		if err != nil || !ok || !strings.EqualFold(got, path) {
+			t.Errorf("ListsProject(%q) = %q, %v, %v; want it found", path, got, ok, err)
+		}
+	}
+	if got, ok, err := c.ListsProject(context.Background(), "acme/b", ProjectLookup{MinAccessLevel: 40, MaxPages: 3}); err != nil || ok {
+		t.Errorf("ListsProject(acme/b) = %q, %v, %v; want none", got, ok, err)
+	}
+	expect(t, (*reqs)[1], "GET", "/api/v4/projects", "min_access_level=40&per_page=100&search=acme%2Fab&search_namespaces=true&simple=true")
+}
+
 func TestListsProjectReadsLaterPages(t *testing.T) {
 	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -942,7 +972,7 @@ func TestListsProjectReadsLaterPages(t *testing.T) {
 		t.Fatalf("requests = %d, want 2", len(*reqs))
 	}
 	expect(t, (*reqs)[1], "GET", "/api/v4/projects",
-		"min_access_level=40&page=2&per_page=100&search=widgets&search_namespaces=true&simple=true")
+		"min_access_level=40&page=2&per_page=100&search=acme%2Fwidgets&search_namespaces=true&simple=true")
 }
 
 // The pages running out is a plain no; the page budget ending first is not
@@ -1001,7 +1031,7 @@ func TestProjectPathsPaginatesWithMinAccessLevel(t *testing.T) {
 	expect(t, (*reqs)[1], "GET", "/api/v4/projects", "min_access_level=40&page=2&per_page=100&simple=true")
 }
 
-// ProjectPage reads the one page asked for, in path order, and says whether
+// ProjectPage reads the one page asked for, in ID order, and says whether
 // GitLab names a later one.
 func TestProjectPage(t *testing.T) {
 	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {

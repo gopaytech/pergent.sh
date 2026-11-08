@@ -935,18 +935,21 @@ type ProjectLookup struct {
 // with the same MinAccessLevel, and returns the path as GitLab spells it: GitLab
 // paths are unique whatever the case, so the match ignores it. It asks the way
 // the picker does, GET /projects?min_access_level=, searching the project's
-// name with search_namespaces and paging until the path turns up.
+// path with search_namespaces and paging until the path turns up.
 // GET /projects/:path would not do: its permissions leave out access gained
 // through an ancestor group or a share. found is false when the listing has
 // no such project. When o.MaxPages end with more pages to read, the answer is
 // ErrSearchIncomplete, not "not found".
 func (c *Client) ListsProject(ctx context.Context, path string, o ProjectLookup) (listed string, found bool, err error) {
-	name := path[strings.LastIndex(path, "/")+1:]
-	if name == "" {
+	if path == "" || strings.HasSuffix(path, "/") {
 		return "", false, nil
 	}
+	// The whole path is searched, not the name: GitLab matches a search under
+	// 3 characters exactly (a project called ab would be compared with
+	// acme/ab and missed), and a path is always longer and matches far fewer
+	// projects than a common name would.
 	q := url.Values{"min_access_level": {strconv.Itoa(o.MinAccessLevel)}, "simple": {"true"},
-		"search": {name}, "search_namespaces": {"true"}}
+		"search": {path}, "search_namespaces": {"true"}}
 	q.Set("per_page", "100")
 	for pages := 1; ; pages++ {
 		pctx, cancel := ctx, context.CancelFunc(func() {})
