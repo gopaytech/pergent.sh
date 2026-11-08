@@ -1602,3 +1602,73 @@ func TestTrustedAuthorsConfigInvalid(t *testing.T) {
 		})
 	}
 }
+
+func TestMetricsListen(t *testing.T) {
+	cfg := loadValid(t)
+	if cfg.MetricsListen != "" {
+		t.Errorf("MetricsListen = %q, want empty (off)", cfg.MetricsListen)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate with metrics off = %v", err)
+	}
+
+	path := writeConfig(t, mustRead(t, "testdata/valid.yaml")+"\nmetrics_listen: \":9090\"\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load with metrics_listen: %v", err)
+	}
+	if cfg.MetricsListen != ":9090" {
+		t.Errorf("MetricsListen = %q, want :9090", cfg.MetricsListen)
+	}
+}
+
+func TestMetricsListenRefused(t *testing.T) {
+	for _, tt := range []struct {
+		name, metrics, listen string
+	}{
+		{"no host and port", "9090", ""},
+		{"same as listen", ":8080", ""},
+		{"same as a custom listen", ":9000", ":9000"},
+		{"a host and the listen wildcard", "127.0.0.1:8080", ""},
+		{"the same host and port", "10.0.0.1:9000", "10.0.0.1:9000"},
+		{"port is not a number", "x:y", ""},
+		{"no port", "localhost:", ""},
+		{"port too large", ":70000", ""},
+		{"port zero", ":0", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := loadValid(t)
+			cfg.MetricsListen = tt.metrics
+			if tt.listen != "" {
+				cfg.Listen = tt.listen
+			}
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), "metrics_listen") {
+				t.Fatalf("Validate() = %v, want an error naming metrics_listen", err)
+			}
+		})
+	}
+}
+
+func TestMetricsListenAcceptedBesideListen(t *testing.T) {
+	for _, tt := range []struct{ metrics, listen string }{
+		{":9090", ":8080"},
+		{"127.0.0.1:9090", ":8080"},
+		{"127.0.0.1:8080", "10.0.0.1:8080"},
+	} {
+		cfg := loadValid(t)
+		cfg.MetricsListen, cfg.Listen = tt.metrics, tt.listen
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("metrics_listen %q with listen %q: %v", tt.metrics, tt.listen, err)
+		}
+	}
+}
+
+func mustRead(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}

@@ -459,3 +459,103 @@ func TestUsageProjectID(t *testing.T) {
 		t.Errorf("UsageProjectID on another instance = %v, %v", ok, err)
 	}
 }
+
+func TestMetricsTotals(t *testing.T) {
+	s := newStore(t)
+	security := skillRow("security", "no_blocking_issues", 100, 10)
+	security.Findings, security.Blocking = 3, 1
+	style := skillRow("style", "has_blocking_issues", 50, 5)
+	style.Findings, style.Blocking = 2, 2
+	seedUsage(t, s, usageMR(7, 1), usageAt(5, 10, 0), TriggerPush, false, "m", security, style)
+	seedUsage(t, s, usageMR(7, 2), usageAt(5, 11, 0), TriggerPush, true, "m", skillRow("security", "failed", 20, 0))
+	seedUsage(t, s, usageMR(7, 3), usageAt(5, 12, 0), "rerun", false, "other-model", skillRow("security", "no_blocking_issues", 7, 3))
+	// A result from an older pergent adds nothing to the sums it didn't report.
+	seedUsage(t, s, usageMR(8, 1), usageAt(5, 10, 0), TriggerPush, false, "m", SkillUsage{Skill: "security", Verdict: "no_blocking_issues", In: 1, Out: 1})
+
+	setState := func(id, state, failure string) {
+		t.Helper()
+		if _, err := s.pool.Exec(ctx, `UPDATE runs SET state = $2::text, failure_reason = $3::text WHERE id = $1::uuid`, id, state, failure); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setState(dispatched(t, s, usageMR(9, 10), "noresult", "tok-noresult"), "reported", "the Job failed")
+	setState(dispatched(t, s, usageMR(9, 11), "stopped", "tok-stopped"), "superseded", "")
+	setState(dispatched(t, s, usageMR(9, 12), "nofailure", "tok-nofailure"), "reported", "")
+
+	if err := s.UpsertProject(ctx, Project{Instance: mr1.Instance, ProjectID: 7, Path: "acme/p7"}); err != nil {
+		t.Fatal(err)
+	}
+	for i, d := range []Dismissal{
+		{MR: usageMR(7, 1), Fingerprint: "a", Severity: "blocking", Skill: "security"},
+		{MR: usageMR(7, 2), Fingerprint: "b", Severity: "suggestion", Skill: "security"},
+		{MR: usageMR(5, 1), Fingerprint: "c", Severity: "suggestion", Skill: "style"}, // no projects row
+	} {
+		if _, err := s.Dismiss(ctx, d); err != nil {
+			t.Fatalf("Dismiss %d: %v", i, err)
+		}
+	}
+
+	got, err := s.MetricsTotals(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := mr1.Instance
+
+	tokens := map[[4]string]TokenSum{}
+	rows := map[[4]string]int64{}
+	for _, u := range got.Tokens {
+		tokens[[4]string{u.Instance, u.Project, u.Skill, u.Model}] = u.Tokens
+		rows[[4]string{u.Instance, u.Project, u.Skill, u.Model}] = u.Rows
+	}
+	if rows[[4]string{in, "acme/p7", "security", "m"}] != 2 || rows[[4]string{in, "acme/p8", "security", "m"}] != 1 {
+		t.Errorf("token rows = %v, want 2 for p7's security and 1 for p8's (all of p8's unreported)", rows)
+	}
+	wantTokens(t, "security on p7", tokens[[4]string{in, "acme/p7", "security", "m"}], TokenSum{In: 120, Out: 10})
+	wantTokens(t, "security on p7 re-run", tokens[[4]string{in, "acme/p7", "security", "other-model"}], TokenSum{In: 7, Out: 3})
+	wantTokens(t, "security on p8", tokens[[4]string{in, "acme/p8", "security", "m"}], TokenSum{In: 1, Out: 1, Unknown: 1})
+
+	reviews := map[[4]string]int64{}
+	for _, r := range got.Reviews {
+		reviews[[4]string{r.Instance, r.Project, r.Trigger, fmt.Sprint(r.Incremental)}] += r.Reviews
+	}
+	if reviews[[4]string{in, "acme/p7", TriggerPush, "false"}] != 1 || reviews[[4]string{in, "acme/p7", TriggerPush, "true"}] != 1 ||
+		reviews[[4]string{in, "acme/p7", "rerun", "false"}] != 1 {
+		t.Errorf("reviews = %v", reviews)
+	}
+
+	unfinished := map[string]UnfinishedTotal{}
+	for _, u := range got.Unfinished {
+		unfinished[u.Instance+" "+u.Project] = u
+	}
+	if u := unfinished[in+" acme/widgets"]; u.NoResult != 1 || u.Superseded != 1 {
+		t.Errorf("unfinished = %+v, want 1 no result and 1 superseded", got.Unfinished)
+	}
+
+	runs := map[[4]string]int64{}
+	for _, r := range got.SkillRuns {
+		runs[[4]string{r.Instance, r.Project, r.Skill, r.Verdict}] = r.Runs
+	}
+	if runs[[4]string{in, "acme/p7", "security", "no_blocking_issues"}] != 2 || runs[[4]string{in, "acme/p7", "security", "failed"}] != 1 ||
+		runs[[4]string{in, "acme/p7", "style", "has_blocking_issues"}] != 1 {
+		t.Errorf("skill runs = %v", runs)
+	}
+
+	findings := map[[3]string]FindingTotal{}
+	for _, f := range got.Findings {
+		findings[[3]string{f.Instance, f.Project, f.Skill}] = f
+	}
+	if f, ok := findings[[3]string{in, "acme/p7", "security"}]; !ok || f.Blocking != 1 || f.Suggestions != 2 {
+		t.Errorf("security findings = %+v (found %v), want 1 blocking and 2 suggestions", f, ok)
+	}
+	if f, ok := findings[[3]string{in, "acme/p7", "style"}]; !ok || f.Blocking != 2 || f.Suggestions != 0 {
+		t.Errorf("style findings = %+v (found %v), want 2 blocking and 0 suggestions", f, ok)
+	}
+
+	dismissals := map[[3]string]int64{}
+	for _, d := range got.Dismissals {
+		dismissals[[3]string{d.Instance, d.Project, d.Skill}] = d.Dismissals
+	}
+	if dismissals[[3]string{in, "acme/p7", "security"}] != 2 || dismissals[[3]string{in, "", "style"}] != 1 {
+		t.Errorf("dismissals = %v", dismissals)
+	}
+}

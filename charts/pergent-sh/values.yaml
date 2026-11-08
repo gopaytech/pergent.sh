@@ -114,6 +114,20 @@ service:
   # -- Service port.
   port: 8080
 
+# Prometheus metrics: token, review and finding counters read from the database at each scrape. Off by default. They are served on their own port, through their own ClusterIP Service, never through the main Service, which may be a LoadBalancer.
+metrics:
+  # -- Serve /metrics on metrics.port.
+  enabled: false
+  # -- Port of the metrics server and its Service.
+  port: 9090
+  serviceMonitor:
+    # -- Create a ServiceMonitor (needs the Prometheus Operator's CRDs).
+    enabled: false
+    # -- Scrape interval.
+    interval: 60s
+    # -- Extra labels, for a Prometheus that selects ServiceMonitors by label.
+    labels: {}
+
 # -- Resources of the pergent.sh pod.
 resources:
   requests:

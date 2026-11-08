@@ -45,6 +45,7 @@ type fake struct {
 	recordErr error
 	recorded  []recordedUsage
 	onRecord  func() // called as RecordUsage starts
+	recordCtx error  // the context's error once onRecord has returned
 }
 
 // recordedUsage is one RecordUsage call.
@@ -83,10 +84,11 @@ func (f *fake) ReplaceWithFailure(_ context.Context, id, reason string) error {
 	return f.replErr
 }
 
-func (f *fake) RecordUsage(_ context.Context, id string, skills []store.SkillUsage) error {
+func (f *fake) RecordUsage(ctx context.Context, id string, skills []store.SkillUsage) error {
 	if f.onRecord != nil {
 		f.onRecord()
 	}
+	f.recordCtx = ctx.Err()
 	f.recorded = append(f.recorded, recordedUsage{id, skills})
 	return f.recordErr
 }
@@ -96,10 +98,11 @@ func newFake() *fake {
 }
 
 type env struct {
-	f     *fake
-	woken int
-	logs  bytes.Buffer
-	h     http.Handler
+	f       *fake
+	woken   int
+	logs    bytes.Buffer
+	h       http.Handler
+	handler *Handler
 }
 
 func newEnv(f *fake) *env {
@@ -108,7 +111,7 @@ func newEnv(f *fake) *env {
 	mux := http.NewServeMux()
 	mux.Handle("POST /runs/{id}/result", h)
 	mux.Handle("/runs/{id}/result", h)
-	e.h = mux
+	e.h, e.handler = mux, h
 	return e
 }
 
@@ -119,6 +122,7 @@ func (e *env) post(id, auth, body string) *httptest.ResponseRecorder {
 	}
 	rec := httptest.NewRecorder()
 	e.h.ServeHTTP(rec, req)
+	e.handler.usageWork.Wait()
 	return rec
 }
 
@@ -455,6 +459,57 @@ func TestPublishingIsWokenBeforeUsageIsRecorded(t *testing.T) {
 	}
 	if wokenAtRecord != 1 {
 		t.Errorf("woken = %d when usage was recorded; want 1, so before", wokenAtRecord)
+	}
+}
+
+// The Job has its answer while the usage is still being written, so a slow
+// database never holds it up. The write outlives the request: a Job that hangs
+// up as soon as it has its answer doesn't lose the usage.
+func TestAnswerDoesNotWaitForUsage(t *testing.T) {
+	f := newFake()
+	e := newEnv(f)
+	release := make(chan struct{})
+	f.onRecord = func() { <-release }
+
+	ctx, hangUp := context.WithCancel(context.Background())
+	defer hangUp()
+	req := httptest.NewRequest(http.MethodPost, "/runs/"+runID+"/result", strings.NewReader(usageJSON())).WithContext(ctx)
+	req.Header.Set("Authorization", "Bearer good")
+	rec := httptest.NewRecorder()
+	answered := make(chan struct{})
+	go func() {
+		e.h.ServeHTTP(rec, req)
+		close(answered)
+	}()
+	select {
+	case <-answered:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("the answer waited for the usage to be written")
+	}
+	if rec.Code != 200 {
+		t.Errorf("status = %d: %s", rec.Code, rec.Body)
+	}
+
+	hangUp()
+	close(release)
+	e.handler.usageWork.Wait()
+	if len(f.recorded) != 1 || f.recordCtx != nil {
+		t.Errorf("recorded = %+v, context error = %v", f.recorded, f.recordCtx)
+	}
+}
+
+// Recording runs outside the request now, where a panic would take the whole
+// process with it.
+func TestUsagePanicStaysInItsOwnWork(t *testing.T) {
+	f := newFake()
+	e := newEnv(f)
+	f.onRecord = func() { panic("boom") }
+	if rec := e.post(runID, "Bearer good", usageJSON()); rec.Code != 200 {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	if out := e.logs.String(); !strings.Contains(out, "level=ERROR") || !strings.Contains(out, "usage") {
+		t.Errorf("log = %q", out)
 	}
 }
 
