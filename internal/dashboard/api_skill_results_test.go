@@ -133,6 +133,116 @@ func TestSkillResultsNoAccess(t *testing.T) {
 	}
 }
 
+func tokensURL(project, query string) string {
+	return "/api/repositories/main/" + project + "/skill-results/tokens" + query
+}
+
+// decidedByBot stores a merged change opened by a bot, with fates rows.
+func (e *env) decidedByBot(project string, number int64, at time.Time, rows ...store.FindingFate) {
+	e.t.Helper()
+	mr := store.MRKey{Instance: "main", ProjectID: testID(project), IID: number}
+	if err := e.st.RequestFates(ctx, mr, project, true, at); err != nil {
+		e.t.Fatal(err)
+	}
+	if stored, err := e.st.ReplaceFates(ctx, mr, at, project, rows, true, true, at); err != nil || !stored {
+		e.t.Fatalf("ReplaceFates(%v) = %v, %v; want it stored", mr, stored, err)
+	}
+}
+
+// tokensFixture stores the usage of changes in every state on acme/widgets
+// and returns the time the decided ones were decided.
+func (e *env) tokensFixture() {
+	e.t.Helper()
+	now := e.clock.now()
+	at := now.Add(-24 * time.Hour)
+	run := func(number int64, skills ...store.SkillUsage) {
+		e.t.Helper()
+		e.usageRun(runFix{project: buttonProject, number: number, head: head(byte('a' + number)), at: now.Add(-48 * time.Hour)}, skills...)
+	}
+	// Merged with findings: counted.
+	e.decidedFates(buttonProject, 1, true, at, fates("security", "h1", "blocking", "fixed", 3)...)
+	run(1, usageSkill("security", "no_blocking_issues", 100, 10), usageSkill("style", "no_blocking_issues", 20, 2))
+	// Merged with no findings: counted, so a skill that found nothing has its tokens.
+	e.decidedFates(buttonProject, 2, true, at)
+	run(2, usageSkill("security", "no_blocking_issues", 50, 5))
+	// Still open: left out.
+	run(3, usageSkill("security", "no_blocking_issues", 7000, 700))
+	// Closed with a dismissal: counted.
+	e.decidedFates(buttonProject, 4, false, at, fates("style", "h1", "suggestion", "dismissed", 1)...)
+	run(4, usageSkill("style", "no_blocking_issues", 30, 3))
+	// Closed without one: the tab doesn't count it, and neither do these.
+	e.decidedFates(buttonProject, 5, false, at, fates("security", "h1", "blocking", "open", 1)...)
+	run(5, usageSkill("security", "no_blocking_issues", 9000, 900))
+	// Opened by a bot: the tab leaves its findings out.
+	e.decidedByBot(buttonProject, 6, at, fates("security", "h1", "blocking", "fixed", 1)...)
+	run(6, usageSkill("security", "no_blocking_issues", 8000, 800))
+	// Merged 60 days ago: in the 90 days only.
+	e.decidedFates(buttonProject, 7, true, now.Add(-60*24*time.Hour), fates("security", "h1", "blocking", "fixed", 1)...)
+	run(7, usageSkill("security", "no_blocking_issues", 1, 1))
+}
+
+// An admin reads each skill's tokens on the changes the tab counts.
+func TestSkillTokensOnDecidedChanges(t *testing.T) {
+	e := newEnv(t, nil)
+	e.tokensFixture()
+	c := e.operator()
+
+	got := getJSON[[]SkillTokensView](e, c, tokensURL(buttonProject, ""))
+	want := []SkillTokensView{{Skill: "security", Tokens: TokensView{In: 150, Out: 15}}, {Skill: "style", Tokens: TokensView{In: 50, Out: 5}}}
+	if !slices.Equal(got, want) {
+		t.Errorf("30 days = %+v; want %+v", got, want)
+	}
+	got = getJSON[[]SkillTokensView](e, c, tokensURL(buttonProject, "?days=90"))
+	want[0].Tokens = TokensView{In: 151, Out: 16}
+	if !slices.Equal(got, want) {
+		t.Errorf("90 days = %+v; want %+v", got, want)
+	}
+}
+
+// The tab itself keeps its rows, and a repository with nothing decided has an
+// empty list.
+func TestSkillTokensEmpty(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.operator()
+	rec := e.get(c, tokensURL(buttonProject, ""))
+	wantCode(t, rec, "nothing decided", http.StatusOK)
+	if got := strings.TrimSpace(rec.Body.String()); got != "[]" {
+		t.Errorf("body = %s; want []", got)
+	}
+}
+
+// Anyone but an admin gets the 404 of a repository that is not there.
+func TestSkillTokensAreForAdmins(t *testing.T) {
+	e := newEnv(t, nil)
+	e.tokensFixture()
+	viewer := e.signInRole(store.RoleViewer)
+
+	unknown := e.get(viewer, "/api/repositories/main/acme/nothing/skill-results/tokens")
+	for _, q := range []string{"", "?days=90", "?days=7"} {
+		rec := e.get(viewer, tokensURL(buttonProject, q))
+		if rec.Code != http.StatusNotFound || rec.Body.String() != unknown.Body.String() {
+			t.Errorf("GET tokens%s as a viewer = %d %s; want 404 %s", q, rec.Code, rec.Body, unknown.Body)
+		}
+	}
+	wantCode(t, e.get(nil, tokensURL(buttonProject, "")), "signed out", http.StatusUnauthorized)
+	// The tab is still open to the viewer.
+	wantCode(t, e.get(viewer, resultsURL(buttonProject, "")), "the tab", http.StatusOK)
+}
+
+func TestSkillTokensBadDays(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.operator()
+	for _, q := range []string{"?days=7", "?days=0", "?days=x", "?days=", "?days=365"} {
+		rec := e.get(c, tokensURL(buttonProject, q))
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "days must be 30 or 90") {
+			t.Errorf("GET tokens%s = %d %s; want 400", q, rec.Code, rec.Body)
+		}
+	}
+	for _, q := range []string{"", "?days=30", "?days=90"} {
+		wantCode(t, e.get(c, tokensURL(buttonProject, q)), "tokens"+q, http.StatusOK)
+	}
+}
+
 // A path that was reused by another project shows the project the session
 // sees, and the same project ID on another instance is another project.
 func TestSkillResultsProjectID(t *testing.T) {

@@ -859,6 +859,7 @@ var openAPISchemas = map[string]schemaType{
 	"ScanView":               outputSchema(ScanView{}),
 	"PastDismissalView":      outputSchema(PastDismissalView{}),
 	"SkillResultView":        outputSchema(SkillResultView{}),
+	"SkillTokensView":        outputSchema(SkillTokensView{}),
 	"SkillSourceView":        outputSchema(SkillSourceView{}),
 	"LibrarySkillView":       outputSchema(LibrarySkillView{}),
 	"SkillVersionView":       outputSchema(SkillVersionView{}),

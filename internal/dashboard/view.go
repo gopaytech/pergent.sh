@@ -522,6 +522,17 @@ type SkillResultView struct {
 	EditedAt  *time.Time `json:"editedAt"`
 }
 
+// SkillTokensView is one row of GET /api/repositories/{instance}/{project...}
+// /skill-results/tokens?days=30|90 (any other days is 400; none is 30), for
+// admins only (404 for anyone else): the tokens one skill used on the changes
+// the Skill results tab counts for the same window, all the reviews of each
+// change, not only those inside the window. Rows come by skill, and the list
+// is [] when no change was counted or none has recorded usage.
+type SkillTokensView struct {
+	Skill  string     `json:"skill"`
+	Tokens TokensView `json:"tokens"`
+}
+
 // SkillSourceView is where an installed skill came from. Kind is "instance"
 // (read through the API of a connected instance) or "url" (a public git
 // URL). Repo is shown to admins only; others get Hidden, and the page says

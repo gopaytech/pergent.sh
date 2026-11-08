@@ -373,3 +373,40 @@ func (s *Store) UsageRows(ctx context.Context, since time.Time, instance string,
 	}
 	return rows.Err()
 }
+
+// SkillTokens is what one skill used on the changes the Skill results tab
+// counts.
+type SkillTokens struct {
+	Skill   string
+	In, Out int64
+}
+
+// UsageOnDecidedChanges returns, per skill, the tokens used on the changes
+// the Skill results tab counted in the window from since: every change merged
+// in it that a person opened (a bot-opened one is known only from its
+// findings, so one with none is counted whoever opened it), and the changes
+// closed in it that hold a dismissal. A change with no findings is counted
+// when it was merged. The tokens are all those the change's reviews used, not
+// only those used in the window.
+func (s *Store) UsageOnDecidedChanges(ctx context.Context, instance string, projectID int64, since time.Time) ([]SkillTokens, error) {
+	rows, err := s.pool.Query(ctx, `WITH decided AS (
+			SELECT j.mr_iid FROM fate_jobs j
+			WHERE j.instance = $1::text AND j.project_id = $2::bigint AND j.finished_at >= $3::timestamptz AND j.merged
+			  AND NOT EXISTS (SELECT 1 FROM finding_fates f WHERE f.instance = j.instance AND f.project_id = j.project_id
+			                  AND f.mr_iid = j.mr_iid AND f.by_bot)
+			UNION
+			SELECT mr_iid FROM finding_fates WHERE `+countedFates+`
+		)
+		SELECT u.skill, COALESCE(sum(u.tokens_in), 0), COALESCE(sum(u.tokens_out), 0)
+		FROM run_usage u JOIN decided d ON d.mr_iid = u.mr_iid
+		WHERE u.instance = $1::text AND u.project_id = $2::bigint
+		GROUP BY u.skill ORDER BY u.skill`, instance, projectID, since)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (SkillTokens, error) {
+		var t SkillTokens
+		err := row.Scan(&t.Skill, &t.In, &t.Out)
+		return t, err
+	})
+}

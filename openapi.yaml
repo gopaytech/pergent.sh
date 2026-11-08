@@ -1328,6 +1328,48 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/skill-results/tokens:
+    get:
+      operationId: listSkillResultTokens
+      tags: [Usage]
+      summary: What each skill used on the changes the Skill results tab counts
+      description: |
+        Admins only (404 for anyone else, as for an unknown repository). The
+        tokens, input and output, each skill used on the changes that
+        `GET /api/repositories/{instance}/{project}/skill-results` counts for
+        the same window: the changes merged in it that a person opened, and
+        the changes closed in it that hold a dismissal. A change merged with no
+        findings is counted too, whoever opened it, since a bot is known only
+        from findings. All the reviews of a change count, not only those inside
+        the window. Rows come by skill, and the list is `[]` when no change was
+        counted or none has recorded usage.
+      x-pergent-access: session
+      x-pergent-pattern: GET /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+        - name: days
+          in: query
+          description: The window. Any other value is 400.
+          schema:
+            type: integer
+            enum: [30, 90]
+            default: 30
+      responses:
+        '200':
+          description: The rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/SkillTokensView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/repositories/{instance}/{project}/usage:
     get:
       operationId: getRepositoryUsage
@@ -4274,6 +4316,13 @@ components:
           format: date-time
           description: 'Set when the window holds more than one version of the skill: when the newest first
             appears.'
+    SkillTokensView:
+      description: The tokens one skill used on the changes the Skill results tab counts.
+      type: object
+      required: [skill, tokens]
+      properties:
+        skill: {type: string}
+        tokens: {$ref: '#/components/schemas/TokensView'}
     SkillSourceView:
       description: Where an installed skill came from.
       type: object

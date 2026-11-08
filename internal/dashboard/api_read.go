@@ -778,10 +778,12 @@ func (d *Dashboard) repositoryViews(ctx context.Context, se Session, repos []set
 // repository serves a repository's detail, with a trailing /inputs its
 // skills and instructions, with a trailing /readiness its Readiness tab, with
 // a trailing /past-dismissals its Past dismissals, with a trailing
-// /skill-results its Skill results, with a trailing /teams (admins only)
+// /skill-results its Skill results, with a trailing /skill-results/tokens
+// (admins only) what each skill used on the changes those count, with a
+// trailing /teams (admins only)
 // the teams that cover it, or with a trailing /usage (admins only) what it
 // used. A repository whose own path is the one asked for wins over the
-// /inputs, /readiness, /past-dismissals, /skill-results, /teams or /usage of
+// /inputs, /readiness, /past-dismissals, /skill-results, /skill-results/tokens, /teams or /usage of
 // another.
 func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
@@ -825,6 +827,13 @@ func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 	if project, ok := strings.CutSuffix(rest, "/past-dismissals"); ok {
 		if repo, ok := find(project); ok {
 			d.repositoryPastDismissals(w, r, se, repo)
+			return
+		}
+	}
+	// Before /skill-results: a path ending in /tokens is never that tab's.
+	if project, ok := strings.CutSuffix(rest, "/skill-results/tokens"); ok {
+		if repo, ok := find(project); ok {
+			d.repositorySkillTokens(w, r, se, repo)
 			return
 		}
 	}
