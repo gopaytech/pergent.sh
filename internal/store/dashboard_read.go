@@ -114,6 +114,7 @@ const outcomeSQL = `(CASE r.state
 	WHEN 'reported' THEN CASE WHEN r.failure_reason <> '' THEN 'failed' ELSE 'running' END
 	WHEN 'superseded' THEN 'superseded'
 	WHEN 'skipped' THEN 'skipped'
+	WHEN 'waiting' THEN 'waiting'
 	WHEN 'publish_failed' THEN 'failed'
 	ELSE COALESCE(NULLIF(r.outcome, ''), 'unknown') END)`
 

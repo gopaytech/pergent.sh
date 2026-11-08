@@ -26,6 +26,9 @@ type InstanceRow struct {
 	OAuthClientID        string
 	Removing             bool
 	CreatedAt            time.Time
+	// TrustedAuthorsOnly is the instance's trusted-authors setting, the
+	// default of its repositories: "follow_visibility", "on" or "off".
+	TrustedAuthorsOnly string
 }
 
 // ErrRemoving is returned by UpdateInstance for an instance being removed.
@@ -37,11 +40,11 @@ type SealedSecret struct {
 	UpdatedAt time.Time
 }
 
-const instanceColumns = `name, platform, url, api_url, review_app_id, approve_app_id, approve_with_review_bot, oauth_client_id, removing, created_at`
+const instanceColumns = `name, platform, url, api_url, review_app_id, approve_app_id, approve_with_review_bot, oauth_client_id, removing, created_at, trusted_authors_only`
 
 func scanInstance(row pgx.Row) (InstanceRow, error) {
 	var r InstanceRow
-	err := row.Scan(&r.Name, &r.Platform, &r.URL, &r.APIURL, &r.ReviewAppID, &r.ApproveAppID, &r.ApproveWithReviewBot, &r.OAuthClientID, &r.Removing, &r.CreatedAt)
+	err := row.Scan(&r.Name, &r.Platform, &r.URL, &r.APIURL, &r.ReviewAppID, &r.ApproveAppID, &r.ApproveWithReviewBot, &r.OAuthClientID, &r.Removing, &r.CreatedAt, &r.TrustedAuthorsOnly)
 	return r, err
 }
 
@@ -104,6 +107,30 @@ func (s *Store) CreateInstance(ctx context.Context, row InstanceRow, secrets map
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// SetInstanceTrustMode sets the instance's trusted-authors setting
+// ("follow_visibility", "on" or "off"; anything else is an error from the
+// database). found is false when there is no such instance; an instance being
+// removed is ErrRemoving, and nothing changes.
+func (s *Store) SetInstanceTrustMode(ctx context.Context, name, mode string) (found bool, err error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE instances SET trusted_authors_only = $2
+		WHERE name = $1 AND NOT removing`, name, mode)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() == 1 {
+		return true, nil
+	}
+	var removing bool
+	err = s.pool.QueryRow(ctx, `SELECT removing FROM instances WHERE name = $1`, name).Scan(&removing)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, ErrRemoving
 }
 
 // UpdateInstance sets the OAuth client ID (nil keeps it) and replaces the

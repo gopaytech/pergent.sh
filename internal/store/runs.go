@@ -34,6 +34,19 @@ const (
 	// Skipped is a run that was not reviewed because it had no skills; its
 	// SkipReason says so.
 	Skipped RunState = "skipped"
+	// Waiting is a push's run held because the repository doesn't trust its
+	// author (or couldn't tell); its SkipReason says which. It is never
+	// claimed: someone with write access starts it (StartRun), or a newer
+	// head or a close supersedes it.
+	Waiting RunState = "waiting"
+)
+
+// Why a run waits (Run.SkipReason of a Waiting run).
+const (
+	// WaitUntrusted: the author isn't trusted by the repository.
+	WaitUntrusted = "untrusted_author"
+	// WaitCheckFailed: the author's access couldn't be read.
+	WaitCheckFailed = "trust_check_failed"
 )
 
 var (
@@ -126,6 +139,10 @@ const (
 	TriggerRerun = "rerun"
 	// TriggerRerunFailed is a re-run of the failed skills on request.
 	TriggerRerunFailed = "rerun_failed"
+	// TriggerStart is the review of an untrusted author's change, started by
+	// someone with write access. It counts against the merge request's re-run
+	// cap, not the repository's.
+	TriggerStart = "start"
 )
 
 // A run's outcome, as the publisher records it (RunDecision.Outcome) and as
@@ -140,7 +157,9 @@ const (
 	OutcomeFailed     = "failed"
 	OutcomeSuperseded = "superseded"
 	OutcomeSkipped    = "skipped"
-	OutcomeUnknown    = "unknown"
+	// OutcomeWaiting is a run held until someone with write access starts it.
+	OutcomeWaiting = "waiting"
+	OutcomeUnknown = "unknown"
 )
 
 // RunDecision is what the publisher decided for a run.
@@ -318,7 +337,7 @@ func (s *Store) EnqueueRun(ctx context.Context, mr MRKey, projectPath, headSHA, 
 
 	if _, err := tx.Exec(ctx, `UPDATE runs SET state = 'superseded'
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND (head_sha <> $4 OR target_branch <> $5)
-		  AND state IN ('queued', 'running', 'reported')`,
+		  AND state IN ('queued', 'running', 'reported', 'waiting')`,
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch); err != nil {
 		return "", false, err
 	}
@@ -396,7 +415,7 @@ func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA
 
 	if _, err := tx.Exec(ctx, `UPDATE runs SET state = 'superseded'
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND (head_sha <> $4 OR target_branch <> $5)
-		  AND state IN ('queued', 'running', 'reported')`,
+		  AND state IN ('queued', 'running', 'reported', 'waiting')`,
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch); err != nil {
 		return "", false, err
 	}
@@ -427,10 +446,10 @@ func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA
 	return id, true, nil
 }
 
-// CountReruns returns how many runs asked for (TriggerRerun and
-// TriggerRerunFailed) were created at or after since: those of the merge
-// request mr, or, with mr nil, of every merge request of the project
-// projectID on instance. A run since superseded still counts. The count and
+// CountReruns returns how many runs asked for (TriggerRerun,
+// TriggerRerunFailed and, for one merge request, TriggerStart) were created at
+// or after since: those of the merge request mr, or, with mr nil, of every
+// merge request of the project projectID on instance, starts left out. A run since superseded still counts. The count and
 // the EnqueueRerun after it are not one step, so a cap checked with them is
 // exact for one caller at a time (one engine replica's command step) and
 // may be overshot by a few by concurrent button presses.
@@ -442,7 +461,7 @@ func (s *Store) CountReruns(ctx context.Context, mr *MRKey, instance string, pro
 	var n int
 	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM runs
 		WHERE instance = $1 AND project_id = $2 AND ($3::bigint IS NULL OR mr_iid = $3)
-		  AND trigger <> 'push' AND created_at >= $4`,
+		  AND trigger <> 'push' AND ($3::bigint IS NOT NULL OR trigger <> 'start') AND created_at >= $4`,
 		instance, projectID, iid, since).Scan(&n)
 	return n, err
 }
@@ -485,7 +504,7 @@ func (s *Store) supersedeMR(ctx context.Context, mr MRKey, reason, headSHA, targ
 		return 0, err
 	}
 	tag, err := tx.Exec(ctx, `UPDATE runs SET state = 'superseded', outcome_reason = COALESCE(NULLIF($4, ''), outcome_reason)
-		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND state IN ('queued', 'running', 'reported')
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND state IN ('queued', 'running', 'reported', 'waiting')
 		  AND ($5 = '' OR head_sha <> $5 OR target_branch <> $6)`,
 		mr.Instance, mr.ProjectID, mr.IID, reason, headSHA, targetBranch)
 	if err != nil {
@@ -503,7 +522,7 @@ func (s *Store) supersedeMR(ctx context.Context, mr MRKey, reason, headSHA, targ
 // (SupersedeMR), taking the same per-MR lock as EnqueueRun.
 func (s *Store) SupersedeInstance(ctx context.Context, instance string) (int, error) {
 	rows, err := s.pool.Query(ctx, `SELECT DISTINCT project_id, mr_iid FROM runs
-		WHERE instance = $1 AND state IN ('queued', 'running', 'reported')`, instance)
+		WHERE instance = $1 AND state IN ('queued', 'running', 'reported', 'waiting')`, instance)
 	if err != nil {
 		return 0, err
 	}
@@ -723,6 +742,107 @@ func (s *Store) SkipRun(ctx context.Context, id, reason string, now time.Time) (
 		return false, err
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+// HoldRun moves a queued, or claimed and not yet dispatched, run to Waiting
+// with the reason (WaitUntrusted or WaitCheckFailed). ok is false when the
+// run was in another state or unknown; a malformed id is an error.
+func (s *Store) HoldRun(ctx context.Context, id, reason string) (ok bool, err error) {
+	if !validUUID(id) {
+		return false, fmt.Errorf("store: run %q not found", id)
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'waiting', skip_reason = $2
+		WHERE id = $1::uuid AND state IN ('queued', 'running') AND dispatched_at IS NULL`, id, cutText(reason))
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// StartRun starts the review of headSHA onto targetBranch of an untrusted
+// author's merge request. A waiting run of that head and target becomes a
+// queued run with TriggerStart (created is false, id is that run's). With
+// none, a live (queued, running or reported) run of that head and target is
+// left as it is and returned. Otherwise a new queued TriggerStart run is
+// created, superseding the live runs of other heads and targets and an older
+// finished run of this one, as EnqueueRerun does. The caller checks the
+// merge request's re-run cap first.
+func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, targetBranch string) (id string, created bool, err error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+
+	if err := lockMR(ctx, tx, mr); err != nil {
+		return "", false, err
+	}
+	err = tx.QueryRow(ctx, `UPDATE runs SET state = 'queued', trigger = 'start', skip_reason = '', not_before = NULL
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
+		  AND state = 'waiting'
+		RETURNING id::text`,
+		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch).Scan(&id)
+	if err == nil {
+		return id, false, tx.Commit(ctx)
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", false, err
+	}
+	err = tx.QueryRow(ctx, `SELECT id::text FROM runs
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
+		  AND state IN ('queued', 'running', 'reported')`,
+		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch).Scan(&id)
+	if err == nil {
+		return id, false, tx.Commit(ctx)
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", false, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE runs SET state = 'superseded'
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND (head_sha <> $4 OR target_branch <> $5)
+		  AND state IN ('queued', 'running', 'reported', 'waiting')`,
+		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch); err != nil {
+		return "", false, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE runs SET state = 'superseded',
+			cleaned_up = cleaned_up OR state IN ('published', 'publish_failed')
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
+		  AND state <> 'superseded'`,
+		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch); err != nil {
+		return "", false, err
+	}
+	err = tx.QueryRow(ctx, `INSERT INTO runs (instance, project_id, mr_iid, project_path, head_sha, target_branch, trigger)
+		VALUES ($1, $2, $3, $4, $5, $6, 'start') RETURNING id::text`,
+		mr.Instance, mr.ProjectID, mr.IID, projectPath, headSHA, targetBranch).Scan(&id)
+	if err != nil {
+		return "", false, err
+	}
+	return id, true, tx.Commit(ctx)
+}
+
+// ClaimUntrustedNote records that the note about an untrusted author is
+// posted on mr, at now. It is true only for the first claim, so the note is
+// posted once per merge request; ReleaseUntrustedNote undoes a claim whose
+// note couldn't be posted.
+func (s *Store) ClaimUntrustedNote(ctx context.Context, mr MRKey, now time.Time) (bool, error) {
+	var first bool
+	err := s.pool.QueryRow(ctx, `INSERT INTO merge_requests (instance, project_id, mr_iid, untrusted_noted_at)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (instance, project_id, mr_iid) DO UPDATE SET untrusted_noted_at = EXCLUDED.untrusted_noted_at
+			WHERE merge_requests.untrusted_noted_at IS NULL
+		RETURNING true`, mr.Instance, mr.ProjectID, mr.IID, now).Scan(&first)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return first, err
+}
+
+// ReleaseUntrustedNote forgets that the note about an untrusted author is
+// posted on mr.
+func (s *Store) ReleaseUntrustedNote(ctx context.Context, mr MRKey) error {
+	_, err := s.pool.Exec(ctx, `UPDATE merge_requests SET untrusted_noted_at = NULL
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3`, mr.Instance, mr.ProjectID, mr.IID)
+	return err
 }
 
 // cutText shortens s to at most maxChangeDetail bytes, on a rune boundary.
