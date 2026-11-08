@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: pergent.sh
-  version: 0.12.0
+  version: 0.13.0
   summary: HTTP routes of the pergent.sh server.
   description: |
     pergent.sh runs pergent code reviews as Kubernetes Jobs. It serves one port,

@@ -1,12 +1,13 @@
 # ⬆️ Upgrading
 
-## Upgrading to the next release
+## Upgrading to 0.13.0
 
 **Admins can see where the model tokens went.** [Usage](concepts/usage.md) is new, under **Admin → Usage**, and the Skill results tab has a cost section for admins. Nothing new appears for other people, and nothing needs turning on; only the review page's token count changes for everyone (below).
 
 Migration `0032` runs at startup and adds a table and a column, dropping nothing, so back up Postgres first, as for any migration. 0.12.0 keeps working on the migrated database: it ignores both.
 
 - **The usage of earlier reviews is filled in after the upgrade, in the background.** pergent.sh serves at once and reads the stored results one page at a time, oldest first, so the Usage page fills up as it goes. Only a review that left a result is filled in. For a merged incremental review filled in this way, the tokens of the `impact` skill are left out, except in a `review failed` re-run that ran `impact` itself. A result that cannot be read is marked and not read again.
+- **The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.9.0`,** which reports cache and reasoning tokens. A config that sets its own `jobs.image` keeps the image it names.
 - **Cache and reasoning counts need the pergent release that reports them.** A Job that runs an older pergent shows them as unknown, not as zero. Input and output tokens are there for every review that left a result.
 - **The review page counts a `review failed` re-run once.** It showed the tokens of the skills the re-run kept a second time.
 - **Prometheus metrics are new and off by default.** Nothing needs doing. To turn them on, set `metrics.enabled: true` in the chart (or `metrics_listen` in the config) and scrape the new `-metrics` Service inside the cluster: see [Metrics](concepts/metrics.md). To roll back with them on, first set `metrics.enabled: false` (or remove `metrics_listen` from your config): the previous release refuses a config key it doesn't know.
