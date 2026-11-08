@@ -55,6 +55,7 @@ export default function RepositoryDetail() {
         <Waiting
           instance={repo.instance}
           project={repo.project}
+          mark={repo.platform === "github" ? "#" : "!"}
           items={view.waiting}
           canStart={view.role === "admin" || view.role === "maintainer"}
           queryKey={queryKey}
@@ -91,12 +92,15 @@ export default function RepositoryDetail() {
 function Waiting({
   instance,
   project,
+  mark,
   items,
   canStart,
   queryKey,
 }: {
   instance: string;
   project: string;
+  // mark is how the platform writes a change's number: ! on GitLab, # on GitHub.
+  mark: string;
   items: WaitingView[];
   canStart: boolean;
   queryKey: unknown[];
@@ -116,7 +120,18 @@ function Waiting({
       {items.map((w) => (
         <div className="row" key={w.number}>
           <div className="grow">
-            {safeHref(w.webUrl) ? <ExternalLink href={w.webUrl}>!{w.number}</ExternalLink> : <span>!{w.number}</span>} by {w.author}
+            {safeHref(w.webUrl) ? (
+              <ExternalLink href={w.webUrl}>
+                {mark}
+                {w.number}
+              </ExternalLink>
+            ) : (
+              <span>
+                {mark}
+                {w.number}
+              </span>
+            )}{" "}
+            by {w.author}
             {w.title && <span className="meta"> · {w.title}</span>}
             {w.reason === "trust_check_failed" && <div className="meta">Couldn't check the author's access.</div>}
           </div>
@@ -124,7 +139,7 @@ function Waiting({
             <button
               type="button"
               className="btn small"
-              aria-label={`Start review of !${w.number}`}
+              aria-label={`Start review of ${mark}${w.number}`}
               disabled={start.isPending}
               onClick={() => start.mutate(w.number)}
             >

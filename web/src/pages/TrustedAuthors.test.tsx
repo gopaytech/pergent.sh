@@ -171,6 +171,17 @@ describe("Trusted authors: waiting changes", () => {
     expect(post.headers.get("X-CSRF-Token")).toBe(ssoAdmin.csrfToken);
   });
 
+  it("writes a GitHub pull request with #", async () => {
+    fakeApi({
+      "GET /api/me": { body: viewer },
+      "GET /api/repositories/main/acme/payments": { body: { ...waiting("viewer"), repo: { ...repoPayments, platform: "github" } } },
+      "GET /api/reviews?project=acme%2Fpayments&days=90": { body: { items: [], truncated: false } },
+    });
+    renderApp("/repos/main/acme/payments");
+    const box = await screen.findByRole("region", { name: "Waiting for a start" });
+    expect(box).toHaveTextContent("#12 by stranger");
+  });
+
   it("shows a viewer the list without the button", async () => {
     fakeApi({
       "GET /api/me": { body: viewer },
