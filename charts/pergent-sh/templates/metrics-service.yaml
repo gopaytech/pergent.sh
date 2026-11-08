@@ -1,0 +1,22 @@
+{{- if .Values.metrics.enabled }}
+# Always ClusterIP, whatever service.type is: the counters name repositories,
+# so they are scraped inside the cluster and never exposed with the main
+# Service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pergent-sh.fullname" . }}-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pergent-sh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+spec:
+  type: ClusterIP
+  ports:
+    - name: metrics
+      port: {{ .Values.metrics.port }}
+      targetPort: metrics
+      protocol: TCP
+  selector:
+    {{- include "pergent-sh.selectorLabels" . | nindent 4 }}
+{{- end }}

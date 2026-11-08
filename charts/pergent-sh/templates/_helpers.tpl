@@ -52,6 +52,9 @@ to this chart's Service and need no public route. config.callback_url wins.
 {{- if not $config.callback_url -}}
 {{- $_ := set $config "callback_url" (printf "http://%s.%s.svc:%d" (include "pergent-sh.fullname" .) .Release.Namespace (int .Values.service.port)) -}}
 {{- end -}}
+{{- if .Values.metrics.enabled -}}
+{{- $_ := set $config "metrics_listen" (printf ":%d" (int .Values.metrics.port)) -}}
+{{- end -}}
 {{- toYaml $config -}}
 {{- end -}}
 
@@ -75,6 +78,12 @@ reach its Jobs, or whose Jobs land where the Role does not reach.
 {{- end -}}
 {{- if not (hasSuffix ":8080" (toString .Values.config.listen)) -}}
 {{- fail "config.listen must end in :8080: the container port, Service and probes use 8080" -}}
+{{- end -}}
+{{- if .Values.config.metrics_listen -}}
+{{- fail "metrics_listen is set by the chart: use metrics.enabled and metrics.port" -}}
+{{- end -}}
+{{- if and .Values.metrics.enabled (eq (int .Values.metrics.port) 8080) -}}
+{{- fail "metrics.port must not be 8080: that is the port of the main server" -}}
 {{- end -}}
 {{- $dashboard := default dict .Values.config.dashboard -}}
 {{- if and .Values.adminPassword.existingSecret (not $dashboard.admin_password_env) -}}

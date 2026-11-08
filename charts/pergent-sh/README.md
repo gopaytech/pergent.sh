@@ -33,6 +33,11 @@ helm install pergent-sh pergent-sh/pergent-sh -n pergent-sh -f values.yaml
 | jobEgress.cidrs | list | `["0.0.0.0/0"]` | CIDRs the Jobs may reach on TCP 443 and 80. The default 0.0.0.0/0 lets a Job reach ANY address on 80/443, including in-cluster services and the cloud metadata endpoint: narrow it to GitLab or GitHub and the LLM provider. An EMPTY list allows no external egress at all: Jobs can then only use DNS and the pergent.sh callback (on 8080). |
 | jobEgress.except | list | `[]` | Optional ranges carved out of EVERY cidr above (NetworkPolicy "except"), e.g. 169.254.169.254/32. Kubernetes rejects an entry that lies outside its cidr, so use this with broad cidrs such as the default 0.0.0.0/0. |
 | jobsNamespace | string | `"pergent"` | The namespace the review Jobs run in. It must already exist. The chart creates the Role, RoleBinding and NetworkPolicy there. Must equal config.jobs.namespace. |
+| metrics.enabled | bool | `false` | Serve /metrics on metrics.port. |
+| metrics.port | int | `9090` | Port of the metrics server and its Service. |
+| metrics.serviceMonitor.enabled | bool | `false` | Create a ServiceMonitor (needs the Prometheus Operator's CRDs). |
+| metrics.serviceMonitor.interval | string | `"60s"` | Scrape interval. |
+| metrics.serviceMonitor.labels | object | `{}` | Extra labels, for a Prometheus that selects ServiceMonitors by label. |
 | nameOverride | string | `""` | Overrides the chart name in resource names. |
 | nodeSelector | object | `{}` | Node selector of the pod. |
 | podAnnotations | object | `{}` | Annotations of the pod. |
