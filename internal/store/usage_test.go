@@ -540,13 +540,15 @@ func TestMetricsTotals(t *testing.T) {
 		t.Errorf("skill runs = %v", runs)
 	}
 
+	findings := map[[3]string]FindingTotal{}
 	for _, f := range got.Findings {
-		if f.Instance == in && f.Project == "acme/p7" && f.Skill == "security" && (f.Blocking != 1 || f.Suggestions != 2) {
-			t.Errorf("security findings = %+v, want 1 blocking and 2 suggestions", f)
-		}
-		if f.Instance == in && f.Project == "acme/p7" && f.Skill == "style" && (f.Blocking != 2 || f.Suggestions != 0) {
-			t.Errorf("style findings = %+v, want 2 blocking and 0 suggestions", f)
-		}
+		findings[[3]string{f.Instance, f.Project, f.Skill}] = f
+	}
+	if f, ok := findings[[3]string{in, "acme/p7", "security"}]; !ok || f.Blocking != 1 || f.Suggestions != 2 {
+		t.Errorf("security findings = %+v (found %v), want 1 blocking and 2 suggestions", f, ok)
+	}
+	if f, ok := findings[[3]string{in, "acme/p7", "style"}]; !ok || f.Blocking != 2 || f.Suggestions != 0 {
+		t.Errorf("style findings = %+v (found %v), want 2 blocking and 0 suggestions", f, ok)
 	}
 
 	dismissals := map[[3]string]int64{}

@@ -1,4 +1,4 @@
-// Package metrics writes pergent.sh's counters in the Prometheus text
+// Package metrics writes pergent.sh's metrics in the Prometheus text
 // exposition format, version 0.0.4, by hand: the format is small and the
 // service has no other use for a client library. Every value is computed
 // from the database at each scrape, so the counters survive restarts.
@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// The metric names. All are counters.
+// The metric names. All are counters except FindingsDismissed, a gauge.
 const (
 	TokensTotal            = "pergent_tokens_total"
 	ReviewsTotal           = "pergent_reviews_total"
@@ -24,12 +24,12 @@ const (
 	ReviewsSupersededTotal = "pergent_reviews_superseded_total"
 	SkillRunsTotal         = "pergent_skill_runs_total"
 	FindingsTotal          = "pergent_findings_total"
-	DismissalsTotal        = "pergent_dismissals_total"
+	FindingsDismissed      = "pergent_findings_dismissed"
 )
 
 // names lists the metrics New declares, with their help text.
 var names = []string{TokensTotal, ReviewsTotal, ReviewsNoResultTotal, ReviewsSupersededTotal,
-	SkillRunsTotal, FindingsTotal, DismissalsTotal}
+	SkillRunsTotal, FindingsTotal, FindingsDismissed}
 
 var help = map[string]string{
 	TokensTotal:            "Tokens used by reviews, by kind: input, output, reasoning, cache_read or cache_write. The reasoning, cache_read and cache_write series are absent for a repository, skill and model when no review reported them, and count only the reviews that did when some did not.",
@@ -38,8 +38,12 @@ var help = map[string]string{
 	ReviewsSupersededTotal: "Reviews stopped by a newer push before they left a result.",
 	SkillRunsTotal:         "Skill runs, by verdict.",
 	FindingsTotal:          "Findings reported, by severity: blocking or suggestion.",
-	DismissalsTotal:        "Findings people dismissed. Dismissals are deleted when a repository is switched off, so this counter can drop, which Prometheus reads as a reset.",
+	FindingsDismissed:      "Findings currently dismissed. A gauge: restoring a finding, or switching a repository off, removes its dismissal and lowers it.",
 }
+
+// gauges lists the metrics that go down as well as up; every other metric is
+// a counter.
+var gauges = map[string]bool{FindingsDismissed: true}
 
 // Label is one label of a series.
 type Label struct{ Name, Value string }
@@ -51,10 +55,10 @@ type Sample struct {
 	Value  int64
 }
 
-// Metric is a counter and its series.
+// Metric is a counter or a gauge and its series. An empty Type is a counter.
 type Metric struct {
-	Name, Help string
-	Samples    []Sample
+	Name, Help, Type string
+	Samples          []Sample
 }
 
 // Snapshot is the counters at one moment.
@@ -66,7 +70,11 @@ type Snapshot struct {
 func New() Snapshot {
 	s := Snapshot{Metrics: make([]Metric, 0, len(names))}
 	for _, n := range names {
-		s.Metrics = append(s.Metrics, Metric{Name: n, Help: help[n]})
+		typ := "counter"
+		if gauges[n] {
+			typ = "gauge"
+		}
+		s.Metrics = append(s.Metrics, Metric{Name: n, Help: help[n], Type: typ})
 	}
 	return s
 }
@@ -117,7 +125,11 @@ func Write(w io.Writer, s Snapshot) error {
 	metrics := slices.Clone(s.Metrics)
 	slices.SortStableFunc(metrics, func(a, b Metric) int { return strings.Compare(a.Name, b.Name) })
 	for _, m := range metrics {
-		fmt.Fprintf(&buf, "# HELP %s %s\n# TYPE %s counter\n", m.Name, escapeHelp(m.Help), m.Name)
+		typ := m.Type
+		if typ == "" {
+			typ = "counter"
+		}
+		fmt.Fprintf(&buf, "# HELP %s %s\n# TYPE %s %s\n", m.Name, escapeHelp(m.Help), m.Name, typ)
 		type keyed struct {
 			key string
 			Sample
@@ -157,9 +169,19 @@ const queryTimeout = 10 * time.Second
 
 // Handler answers a scrape with the snapshot source returns. A source that
 // fails gives a 500 with an empty body: the error is logged, never sent, as
-// it may name a query or a table.
+// it may name a query or a table. One scrape runs at a time, as each reads
+// the whole usage table and the port has no sign-in; a scrape that arrives
+// while another runs gets a 503 with an empty body.
 func Handler(source func(context.Context) (Snapshot, error), log *slog.Logger) http.Handler {
+	busy := make(chan struct{}, 1)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case busy <- struct{}{}:
+			defer func() { <-busy }()
+		default:
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), queryTimeout)
 		defer cancel()
 		snap, err := source(ctx)

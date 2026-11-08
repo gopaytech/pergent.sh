@@ -162,8 +162,14 @@ func TestSnapshotOfBoundsTheLabels(t *testing.T) {
 			{Instance: "main", Project: "acme/old-name", Trigger: "push", Incremental: true, Reviews: 4},
 		},
 		Unfinished: []store.UnfinishedTotal{{Instance: "main", Project: "acme/gone", NoResult: 2, Superseded: 1}},
-		SkillRuns:  []store.SkillRunTotal{{Instance: "main", Project: "acme/widgets", Skill: "security", Verdict: "failed", Runs: 5}},
-		Findings:   []store.FindingTotal{{Instance: "main", Project: "acme/widgets", Skill: "security", Blocking: 1, Suggestions: 3}},
+		SkillRuns: []store.SkillRunTotal{
+			{Instance: "main", Project: "acme/widgets", Skill: "security", Verdict: "failed", Runs: 5},
+			// Verdicts that are not pergent's own are one series, whatever the text; so is the fixed impact check's skill name.
+			{Instance: "main", Project: "acme/widgets", Skill: "security", Verdict: "maybe", Runs: 2},
+			{Instance: "main", Project: "acme/widgets", Skill: "security", Verdict: "see https://evil.example/x", Runs: 3},
+			{Instance: "main", Project: "acme/widgets", Skill: "impact", Verdict: "has_blocking_issues", Runs: 4},
+		},
+		Findings: []store.FindingTotal{{Instance: "main", Project: "acme/widgets", Skill: "security", Blocking: 1, Suggestions: 3}},
 		Dismissals: []store.DismissalTotal{
 			{Instance: "main", Project: "acme/widgets", Skill: "security", Dismissals: 2},
 			{Instance: "main", Project: "", Skill: "", Dismissals: 1},
@@ -198,16 +204,18 @@ func TestSnapshotOfBoundsTheLabels(t *testing.T) {
 		`pergent_reviews_no_result_total{platform_instance="main",repository="(switched off)"} 2`,
 		`pergent_reviews_superseded_total{platform_instance="main",repository="(switched off)"} 1`,
 		`pergent_skill_runs_total{platform_instance="main",repository="acme/Widgets",skill="security",verdict="failed"} 5`,
+		`pergent_skill_runs_total{platform_instance="main",repository="acme/Widgets",skill="security",verdict="(other)"} 5`,
+		`pergent_skill_runs_total{platform_instance="main",repository="acme/Widgets",skill="impact",verdict="has_blocking_issues"} 4`,
 		`pergent_findings_total{platform_instance="main",repository="acme/Widgets",skill="security",severity="blocking"} 1`,
 		`pergent_findings_total{platform_instance="main",repository="acme/Widgets",skill="security",severity="suggestion"} 3`,
-		`pergent_dismissals_total{platform_instance="main",repository="acme/Widgets",skill="security"} 2`,
-		`pergent_dismissals_total{platform_instance="main",repository="(switched off)",skill="(other)"} 1`,
+		`pergent_findings_dismissed{platform_instance="main",repository="acme/Widgets",skill="security"} 2`,
+		`pergent_findings_dismissed{platform_instance="main",repository="(switched off)",skill="(other)"} 1`,
 	} {
 		if !strings.Contains(out, want+"\n") {
 			t.Errorf("missing %s\nin:\n%s", want, out)
 		}
 	}
-	for _, bad := range []string{"acme/gone", "acme/old-name", "typo-skill", `repository="acme/widgets"`} {
+	for _, bad := range []string{"acme/gone", "acme/old-name", "typo-skill", "evil.example", "maybe", `repository="acme/widgets"`} {
 		if strings.Contains(out, bad) {
 			t.Errorf("the page names %q:\n%s", bad, out)
 		}
@@ -255,7 +263,7 @@ func TestMetricsSourceReadsAllThree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out := metricsText(t, snap); !strings.Contains(out, `pergent_dismissals_total{platform_instance="main",repository="acme/widgets",skill="security"} 1`+"\n") {
+	if out := metricsText(t, snap); !strings.Contains(out, `pergent_findings_dismissed{platform_instance="main",repository="acme/widgets",skill="security"} 1`+"\n") {
 		t.Errorf("page = %s", out)
 	}
 	boom := errors.New("boom")

@@ -75,7 +75,11 @@ func TestSnapshotAdd(t *testing.T) {
 	}
 	out := buf.String()
 	for _, name := range names {
-		if strings.Count(out, "# TYPE "+name+" counter\n") != 1 {
+		typ := "counter"
+		if name == FindingsDismissed {
+			typ = "gauge"
+		}
+		if strings.Count(out, "# TYPE "+name+" "+typ+"\n") != 1 {
 			t.Errorf("%s has no single # TYPE line:\n%s", name, out)
 		}
 		if strings.Count(out, "# HELP "+name+" ") != 1 {
@@ -90,7 +94,7 @@ func TestSnapshotAdd(t *testing.T) {
 func TestHandlerServesTheText(t *testing.T) {
 	h := Handler(func(context.Context) (Snapshot, error) {
 		s := New()
-		s.Add(DismissalsTotal, 2, labels("platform_instance", "main", "repository", "acme/widgets", "skill", "security")...)
+		s.Add(FindingsDismissed, 2, labels("platform_instance", "main", "repository", "acme/widgets", "skill", "security")...)
 		return s, nil
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	rec := httptest.NewRecorder()
@@ -101,7 +105,7 @@ func TestHandlerServesTheText(t *testing.T) {
 	if got := rec.Header().Get("Content-Type"); got != "text/plain; version=0.0.4; charset=utf-8" {
 		t.Errorf("Content-Type = %q", got)
 	}
-	if !strings.Contains(rec.Body.String(), `pergent_dismissals_total{platform_instance="main",repository="acme/widgets",skill="security"} 2`+"\n") {
+	if !strings.Contains(rec.Body.String(), `pergent_findings_dismissed{platform_instance="main",repository="acme/widgets",skill="security"} 2`+"\n") {
 		t.Errorf("body = %q", rec.Body.String())
 	}
 }
@@ -137,5 +141,68 @@ func TestHandlerGivesTheSourceATimeout(t *testing.T) {
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if left <= 5*time.Second || left > 10*time.Second {
 		t.Errorf("time left = %v, want about 10s", left)
+	}
+}
+
+// The dismissed findings go down when one is restored, so the page types them
+// as a gauge and every other metric as a counter.
+func TestFindingsDismissedIsAGauge(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Write(&buf, New()); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "# TYPE pergent_findings_dismissed gauge\n") || strings.Contains(out, "dismissals_total") {
+		t.Errorf("the dismissed findings are not a gauge:\n%s", out)
+	}
+	if !strings.Contains(out, "# TYPE pergent_tokens_total counter\n") {
+		t.Errorf("the token metric is not a counter:\n%s", out)
+	}
+}
+
+// A scrape that arrives while another runs gets a 503 with an empty body, and
+// the next one, once the first is done, is served.
+func TestHandlerRunsOneScrapeAtATime(t *testing.T) {
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	h := Handler(func(context.Context) (Snapshot, error) {
+		started <- struct{}{}
+		<-release
+		return New(), nil
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	first := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		h.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		close(done)
+	}()
+	<-started
+	busy := httptest.NewRecorder()
+	second := make(chan struct{})
+	go func() {
+		h.ServeHTTP(busy, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		close(second)
+	}()
+	select {
+	case <-second:
+	case <-time.After(2 * time.Second):
+		t.Error("a scrape while one runs waited for it instead of being refused")
+		close(release)
+		<-second
+		<-done
+		return
+	}
+	if busy.Code != http.StatusServiceUnavailable || busy.Body.Len() != 0 {
+		t.Errorf("a scrape while one runs = %d %q, want 503 with no body", busy.Code, busy.Body.String())
+	}
+	close(release)
+	<-done
+	if first.Code != http.StatusOK {
+		t.Errorf("the first scrape = %d, want 200", first.Code)
+	}
+	again := httptest.NewRecorder()
+	h.ServeHTTP(again, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if again.Code != http.StatusOK {
+		t.Errorf("a scrape after the first finished = %d, want 200", again.Code)
 	}
 }

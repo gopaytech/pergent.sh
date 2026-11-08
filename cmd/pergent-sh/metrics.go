@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/metrics"
+	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -22,6 +23,9 @@ import (
 const (
 	labelSwitchedOff = "(switched off)"
 	labelOtherSkill  = "(other)"
+	// labelOtherVerdict stands for a verdict this code does not know: the
+	// result is the pergent job's own content, so its text is not a label.
+	labelOtherVerdict = "(other)"
 )
 
 // metricsStore is the part of the store the metrics read.
@@ -59,13 +63,14 @@ func metricsSource(st metricsStore, repos repoLister) func(context.Context) (met
 // snapshotOf turns the totals into the metrics. A repository is named only if
 // it is in on (matched ignoring case, as the platforms do, and spelled as on
 // has it), and a skill only if the library or a switched-on repository's own
-// lists name it; everything else gets labelSwitchedOff or labelOtherSkill and
-// is added to the others with the same labels. No merge request number, title
-// or other text a person wrote is a label.
+// lists name it, or it is the fixed impact check; everything else gets
+// labelSwitchedOff or labelOtherSkill and is added to the others with the same
+// labels. A verdict is one of the three pergent writes, or labelOtherVerdict.
+// No merge request number, title or other text a person wrote is a label.
 func snapshotOf(t store.MetricsTotals, on []settings.Effective, library []store.LibrarySkill) metrics.Snapshot {
 	type repoKey struct{ instance, project string }
 	repos := make(map[repoKey]string, len(on))
-	skills := make(map[string]bool, len(library))
+	skills := map[string]bool{result.ImpactSkill: true}
 	for _, s := range library {
 		skills[s.Name] = true
 	}
@@ -89,6 +94,13 @@ func snapshotOf(t store.MetricsTotals, on []settings.Effective, library []store.
 			return name
 		}
 		return labelOtherSkill
+	}
+	verdict := func(v string) string {
+		switch v {
+		case "no_blocking_issues", "has_blocking_issues", "failed":
+			return v
+		}
+		return labelOtherVerdict
 	}
 	label := func(name, value string) metrics.Label { return metrics.Label{Name: name, Value: value} }
 
@@ -123,7 +135,7 @@ func snapshotOf(t store.MetricsTotals, on []settings.Effective, library []store.
 	}
 	for _, u := range t.SkillRuns {
 		snap.Add(metrics.SkillRunsTotal, u.Runs, label("platform_instance", u.Instance), label("repository", repo(u.Instance, u.Project)),
-			label("skill", skill(u.Skill)), label("verdict", u.Verdict))
+			label("skill", skill(u.Skill)), label("verdict", verdict(u.Verdict)))
 	}
 	for _, u := range t.Findings {
 		base := []metrics.Label{label("platform_instance", u.Instance), label("repository", repo(u.Instance, u.Project)), label("skill", skill(u.Skill))}
@@ -131,7 +143,7 @@ func snapshotOf(t store.MetricsTotals, on []settings.Effective, library []store.
 		snap.Add(metrics.FindingsTotal, u.Suggestions, append(base[:3:3], label("severity", "suggestion"))...)
 	}
 	for _, u := range t.Dismissals {
-		snap.Add(metrics.DismissalsTotal, u.Dismissals, label("platform_instance", u.Instance), label("repository", repo(u.Instance, u.Project)),
+		snap.Add(metrics.FindingsDismissed, u.Dismissals, label("platform_instance", u.Instance), label("repository", repo(u.Instance, u.Project)),
 			label("skill", skill(u.Skill)))
 	}
 	return snap
