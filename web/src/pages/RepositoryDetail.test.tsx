@@ -16,6 +16,7 @@ import {
   repoWidgets,
   reviewBlocking,
   skillResults,
+  skillTokens,
 } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
@@ -35,6 +36,7 @@ const base = {
   "GET /api/repositories/main/acme/widgets/inputs": { body: noInputs },
   "GET /api/repositories/main/acme/payments/teams": { body: repoTeams },
   "GET /api/repositories/main/acme/widgets/teams": { body: repoTeams },
+  "GET /api/repositories/main/acme/payments/skill-results/tokens": { body: [] },
   "GET /api/reviews?project=acme%2Fpayments&days=90": { body: { items: [reviewBlocking], nextCursor: "" } },
 };
 
@@ -853,6 +855,87 @@ describe("RepositoryDetail", () => {
       });
       expect(await screen.findByRole("alert")).toHaveTextContent("could not read the results");
       expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    });
+
+    describe("Skill cost on these changes", () => {
+      const tokensPath = `${listPath}/tokens`;
+      const heading = "Skill cost on these changes";
+
+      it("shows an admin the tokens per skill and per fixed finding, summed over the skill's rows", async () => {
+        const fake = fakeApi({
+          ...base,
+          [`GET ${listPath}`]: { body: [...skillResults, { ...skillResults[0], severity: "suggestion", fixed: 1 }] },
+          [`GET ${tokensPath}`]: { body: skillTokens },
+        });
+        renderApp("/repos/main/acme/payments?tab=skill-results");
+        const section = await screen.findByRole("region", { name: heading });
+        expect(within(section).getByRole("heading", { name: heading })).toBeInTheDocument();
+        const rows = within(section).getAllByRole("row").slice(1);
+        // security fixed 3 + 1; no fixed finding is a dash, not a division by zero.
+        expect(rows.map((r) => within(r).getAllByRole("cell").map((c) => c.textContent))).toEqual([
+          ["security", "40k", "8k", "4", "12k"],
+          ["code-review", "150k", "30k", "15", "12k"],
+          ["style", "5k", "1k", "1", "6k"],
+          ["docs", "2k", "400", "0", "—"],
+        ]);
+        expect(fake.find("GET", tokensPath)).toHaveLength(1);
+      });
+
+      it("reads the 90 days with the table", async () => {
+        const fake = fakeApi({
+          ...base,
+          [`GET ${listPath}`]: { body: skillResults },
+          [`GET ${listPath}?days=90`]: { body: skillResults },
+          [`GET ${tokensPath}`]: { body: skillTokens },
+          [`GET ${tokensPath}?days=90`]: { body: [skillTokens[0]] },
+        });
+        renderApp("/repos/main/acme/payments?tab=skill-results");
+        await screen.findByRole("region", { name: heading });
+        await userEvent.selectOptions(screen.getByRole("combobox", { name: "Period" }), "90");
+        await waitFor(() => expect(fake.find("GET", `${tokensPath}?days=90`)).toHaveLength(1));
+        const section = screen.getByRole("region", { name: heading });
+        await waitFor(() => expect(within(section).getAllByRole("row")).toHaveLength(1 + 1));
+      });
+
+      it("shows a skill's name as text", async () => {
+        const name = "<img src=x onerror=alert(1)>";
+        fakeApi({ ...base, [`GET ${listPath}`]: { body: skillResults }, [`GET ${tokensPath}`]: { body: [{ skill: name, tokens: { in: 1, out: 1 } }] } });
+        renderApp("/repos/main/acme/payments?tab=skill-results");
+        expect(await screen.findByText(name)).toBeInTheDocument();
+        expect(document.querySelector("img")).toBeNull();
+      });
+
+      it("says so when no usage was recorded", async () => {
+        fakeApi({ ...base, [`GET ${listPath}`]: { body: skillResults }, [`GET ${tokensPath}`]: { body: [] } });
+        renderApp("/repos/main/acme/payments?tab=skill-results");
+        const section = await screen.findByRole("region", { name: heading });
+        expect(within(section).getByText(/No usage recorded/)).toBeInTheDocument();
+      });
+
+      it("shows its own error and keeps the results", async () => {
+        fakeApi({
+          ...base,
+          [`GET ${listPath}`]: { body: skillResults },
+          [`GET ${tokensPath}`]: { status: 500, body: { error: "could not read the usage" } },
+        });
+        renderApp("/repos/main/acme/payments?tab=skill-results");
+        expect(await screen.findByRole("alert")).toHaveTextContent("could not read the usage");
+        expect(screen.getByText("security")).toBeInTheDocument();
+      });
+
+      it("is not shown to a user, who never asks for it", async () => {
+        const fake = fakeApi({
+          ...base,
+          "GET /api/me": { body: viewer },
+          "GET /api/repositories/main/acme/payments": { body: repoDetail(repoPayments, "viewer") },
+          [`GET ${listPath}`]: { body: skillResults },
+          [`GET ${tokensPath}`]: { body: skillTokens },
+        });
+        renderApp("/repos/main/acme/payments?tab=skill-results");
+        await screen.findByText("security");
+        expect(screen.queryByText(heading)).not.toBeInTheDocument();
+        expect(fake.calls.filter((c) => c.url.includes("/tokens"))).toHaveLength(0);
+      });
     });
 
     it("emphasises Addressed", async () => {

@@ -22,6 +22,8 @@ import SkillInstall from "./pages/SkillInstall";
 import Skills from "./pages/Skills";
 import SkillUpdates from "./pages/SkillUpdates";
 import Teams from "./pages/Teams";
+import Usage from "./pages/Usage";
+import UsageRepository from "./pages/UsageRepository";
 import Users from "./pages/Users";
 import { NotFound } from "./ui";
 
@@ -142,6 +144,23 @@ export default function App() {
           element={
             <AdminOnly>
               <AuditLog />
+            </AdminOnly>
+          }
+        />
+        <Route
+          path="admin/usage"
+          element={
+            <AdminOnly>
+              <Usage />
+            </AdminOnly>
+          }
+        />
+        {/* The project path has slashes, as in the repository route. */}
+        <Route
+          path="admin/usage/:instance/*"
+          element={
+            <AdminOnly>
+              <UsageRepository />
             </AdminOnly>
           }
         />
