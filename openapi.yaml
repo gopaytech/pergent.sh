@@ -425,12 +425,14 @@ paths:
       tags: [Metrics]
       summary: Prometheus metrics
       description: |
-        Token, review, skill-run, finding and dismissal counters in the
-        Prometheus text format (version 0.0.4), computed from the database at
+        Token, review, skill-run and finding counters and a gauge of the
+        findings now dismissed, in the Prometheus text format (version 0.0.4),
+        computed from the database at
         each scrape. Served only when `metrics_listen` is set, and only on that
         port: the main port (and so `public_url`) never answers it, and the
-        metrics port answers nothing else. A failure reading the database is a
-        500 with an empty body; the error is in the log.
+        metrics port answers nothing else. One scrape runs at a time: another
+        that arrives meanwhile is a 503 with an empty body. A failure reading
+        the database is a 500 with an empty body; the error is in the log.
       x-pergent-access: none
       security: []
       servers:
@@ -438,11 +440,13 @@ paths:
           description: The metrics_listen port, reached inside the cluster.
       responses:
         '200':
-          description: The counters.
+          description: The metrics.
           content:
             text/plain:
               schema:
                 type: string
+        '503':
+          description: Another scrape is running. The body is empty.
         '500':
           description: The database could not be read. The body is empty.
   # --------------------------------------------------------------------- auth
