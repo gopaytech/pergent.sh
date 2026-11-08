@@ -372,6 +372,8 @@ func testConfig(gitlabURL string) *config.Config {
 		GitLab: []config.Instance{{
 			Name: testInstance, URL: gitlabURL,
 			ReviewTokenEnv: "GITLAB_REVIEW_TOKEN", ApproveTokenEnv: "GITLAB_APPROVE_TOKEN", WebhookSecretEnv: "GITLAB_WEBHOOK_SECRET",
+			// Every author is trusted unless a test turns it on.
+			TrustedAuthorsOnly: config.TrustOff,
 		}},
 		Repositories: []config.Repository{{
 			GitLab: testInstance, Project: testProjectPath, FailureStatus: config.FailureStatusFailed,
