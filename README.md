@@ -226,6 +226,16 @@ pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is hand
 
 ## ⬆️ Upgrading
 
+### Upgrading to the next release
+
+**Admins can see where the model tokens went.** [Usage](#usage) is new, under **Admin → Usage**, and the Skill results tab has a cost section for admins. Nothing changes for other people, and nothing needs turning on.
+
+Migration `0032` runs at startup and adds a table and a column, dropping nothing, so back up Postgres first, as for any migration. 0.12.0 keeps working on the migrated database: it ignores both.
+
+- **The usage of earlier reviews is filled in after the upgrade, in the background.** pergent.sh serves at once and reads the stored results one page at a time, oldest first, so the Usage page fills up as it goes. For a merged incremental review filled in this way, the tokens of the `impact` skill are left out. A result that cannot be read is marked and not read again.
+- **Cache and reasoning counts need the pergent release that reports them.** A Job that runs an older pergent shows them as unknown, not as zero. Input and output tokens are there for every review.
+- **The review page counts a `review failed` re-run once.** It showed the tokens of the skills the re-run kept a second time.
+
 ### Upgrading to 0.12.0
 
 **Public repositories stop reviewing strangers' changes automatically.** [Trusted authors](#-trusted-authors) is new and on for public repositories by default: a change from an author without write access, and not on the repository's allowlist, waits until someone with write access starts its review. Private and internal repositories are unchanged. To keep reviewing every author on an instance, set it to **always off**: `trusted_authors_only: off` under the instance in the config, or **Admin → Integrations** for an instance added in the dashboard.
@@ -601,7 +611,7 @@ The dashboard has a **user area** and an **admin area**, each with its own sign-
 |---|---|---|
 | Sign in | `/sign-in`: the SSO button only | `/admin/sign-in`: username and password, and the SSO button when SSO is set up |
 | Lands on | `/` | `/admin` |
-| Pages | Overview, Repositories, Reviews, Skills | Users, Teams, Integrations, Settings, Audit log (`/admin/users`, `/admin/teams`, `/admin/integrations`, `/admin/settings`, `/admin/audit`) |
+| Pages | Overview, Repositories, Reviews, Skills | Users, Teams, Integrations, Settings, Usage, Audit log (`/admin/users`, `/admin/teams`, `/admin/integrations`, `/admin/settings`, `/admin/usage`, `/admin/audit`) |
 | Menu | The user pages. | The admin pages, with a link back to the user pages. An admin on the user pages has a link across to `/admin`. |
 
 - `/sign-in` has no password form and no link to `/admin/sign-in`: **the admin path is this one, in the README**, and local admins use it. With no SSO set up, `/sign-in` says `Sign-in isn't set up yet. Ask your admin.` With [JWT sign-in](#sign-in) there is no button: loading a page signs the person in, and `/sign-in` says so and sends a signed-in browser on. A refused SSO sign-in comes back to `/sign-in?error=<code>`; `not_allowed` reads `Ask an admin to add you`.
@@ -885,15 +895,23 @@ A repository keeps its latest finished scan, and one that is queued or running. 
 
 Switching a repository off deletes its scans and drops its items.
 
-### Usage
-
-Admins read what the reviews used from `GET /api/admin/usage?days=N` and, for one repository that is switched on, `GET /api/repositories/{instance}/{project}/usage?days=N` (both in [`openapi.yaml`](openapi.yaml)): tokens used in the last 1 to 90 days (30 by default), by day, repository, skill, model and merge request, with the tokens of skills that failed, the median review of each kind and the reviews far above it. Every total and ranking adds input and output tokens. Cache reads, cache writes and reasoning tokens are shown apart, and a result from an older pergent that did not report them counts as unknown, never zero. Nobody else can read usage; for anyone else it is a 404 like any path that is not there.
-
-**Export.** `GET /api/admin/usage.csv?days=N` (with `instance` and `project` for one repository) downloads one row a run and skill, oldest first: when it was reported, the repository, the merge request number, the trigger, whether it was incremental, the model, the skill, its verdict and its token, finding and blocking counts. It has no titles and no text a person wrote, and no dismissals. A cell that a spreadsheet would read as a formula starts with a `'`. The file is streamed and holds **200,000 rows at most**; a longer one stops there without saying so, so narrow it with `days`, `instance` and `project`.
-
 ### Audit log
 
 Admins read the audit log under **Admin → Audit log**: who did what and when, for every change made in the dashboard. Each entry names its actor as the full email of an SSO account, `root (password)` for a local admin or `cli` for a reset from the command line (entries made before this change read `alice (gitlab main)` and stay as they are). It records password sign-ins, failed password sign-ins and lockouts, OIDC and JWT sign-ins (`sign_in`; a refused one is not, see [Sign-in](#sign-in)), password changes and resets, accounts (added, removed, made an admin or a user), teams (the members added and removed by username, and a member's role before and after), instances and which of their fields changed, the LLM and the defaults (which fields; the default skill list shows as `skills`), the sign-in settings (`sign_in_updated`: which fields changed, never a value or the client secret) and each press of the sign-in test button (`sign_in_tested`: who, and the mode, never the address or the answer), the skill library (`skill_created`, `skill_updated`, `skill_installed`, `skill_source_updated`, `skill_copied` and `skill_deleted`, each naming the skill, with its version or the skill it was copied from, and for an install or an update the source (a private repository by its instance only), the branch or tag and the short commit; a skill's text is never in an entry), repositories switched on and off with their settings changed or reset, `readiness_scan_requested` (a **Scan now** that was accepted; the scans started by switch-on or the upgrade are not audited), and the review actions: `review_rerun`, `review_rerun_failed`, `review_start` (the review of an untrusted author's change started), `finding_dismissed` and `finding_restored`, from a comment or a button, each with the merge request, the head commit and, for a finding, its fingerprint and the reason given, `command_refused`, a comment refused because of who wrote it ([Who may do what](#who-may-do-what)), and `dismissal_stopped`, a **Stop using** on the Past dismissals tab, with the finding's fingerprint (only a stop that changed something). It is kept for 90 days and never holds a secret value: an entry for a secret names the field, not its content. Every admin sees every entry.
+
+### Usage
+
+Admins read where the model tokens went under **Admin → Usage** (`/admin/usage`). Nobody else can: for anyone else the page and its API are a 404, like a path that is not there. The page shows the last 7, 30 or 90 days (30 by default) and lists each repository, the busiest first, with its tokens and its number of reviews. Under it are the tokens of each day. A repository's name opens its page (`/admin/usage/<instance>/<project>`), which lists the tokens of each skill, the 50 merge requests that used most (each linking to the merge request), each model, each day, what was wasted, and what a review costs.
+
+- **What is counted.** Every total, ranking and median adds input and output tokens only. Cache reads, cache writes and reasoning tokens are shown apart and are never added in. A review by a pergent that does not report them shows them as "unknown", not as zero ([Upgrading](#-upgrading)).
+- **Days** are cut at midnight UTC, and the page says so.
+- **Wasted.** The tokens of skills that failed, counted per skill: a review where one skill failed wastes that skill's tokens, not those of the skills that passed. Re-runs (`review`, `review failed` and the dashboard's buttons for them) are shown apart, not as waste, because a re-run that worked did useful work. A skill that failed in a re-run is in both figures, so don't add them. A `start` of an untrusted author's change is not a re-run. Reviews that left no result (a timeout, out of memory, a deleted Job) and reviews superseded by a push are counted, with their tokens shown as unknown. A failed review that a later re-run replaced still counts as one with no result.
+- **Cost per review.** The median tokens of a full review and of an incremental review, kept apart, because an incremental review covers only what changed. A re-run of only the failed skills is in neither. A review that used more than three times the median of its kind is listed, the costliest first (up to 20).
+- **A repository switched off**, or on an instance that was removed, keeps its usage, marked "switched off": those tokens were spent. It has no page of its own, but its row links to its CSV export.
+- **The review page** shows a review's own tokens to anyone who can see that review, as before. A `review failed` re-run shows only the tokens of the skills it ran.
+- **Usage is never pruned.** It is one small row for each skill of a review, and reviews are never pruned either.
+
+**Export.** `GET /api/admin/usage.csv?days=N` (with `instance` and `project` for one repository) is the **Download CSV** link on both pages. It has one row for each skill of each review, oldest first, with these columns: `reported_at`, `instance`, `repository`, `merge_request`, `trigger`, `incremental`, `model`, `skill`, `verdict`, `tokens_in`, `tokens_out`, `cache_read`, `cache_write`, `reasoning`, `findings` and `blocking`. The cache and reasoning cells are empty when the Job did not report them. The file has no titles and no other text a person wrote, and no dismissals: those belong to a change, not to one review, and are on the [Skill results](#-skill-results) tab. A cell a spreadsheet would read as a formula starts with a `'`. The file holds **200,000 rows at most**; a longer one stops there without any mark. The server gives a response 60 seconds to be written, so a very large export can be cut short: narrow the period, or export one repository.
 
 ### Logs and "Needs attention"
 
@@ -1288,6 +1306,13 @@ Only merged changes opened by people count. A change closed without a merge, and
 
 When a skill was edited inside the window, its row says so, for example `Edited 12 days ago: numbers include the old version`. Rows aren't split by version, because that would leave too few findings in each.
 
+**Skill cost on these changes.** Admins also see a section under the table with the tokens each skill used on the changes the table counts, over the same 30 or 90 days, and the tokens it spent per fixed finding: input plus output, divided by its Fixed. A skill with nothing fixed shows none. Read it with these in mind:
+
+- A change merged with no findings is counted, so the section covers more changes than the table.
+- A bot-opened change merged with no findings is counted too, because a bot is known only from its findings. The table leaves bot changes out.
+- A change counted because of one skill's dismissal counts the tokens of every skill on it.
+- The tokens are those of all of a counted change's reviews, not only the ones inside the period.
+
 **What to expect.**
 
 - Addressed reads low with [incremental reviews](#-incremental-reviews). A finding stays reported until its own file changes. If the author fixes it from another file, it ends as open at merge, though a full review would have dropped it.
@@ -1550,6 +1575,7 @@ Deploy tokens are created per project with the name `pergent-sh`, valid for 30 d
 | `GET /auth/oidc/login`, `GET /auth/oidc/callback`, `POST /auth/logout` | [Dashboard](#-dashboard) sign-in with OIDC ([Sign-in](#sign-in)), and sign-out. The callback sends every refusal to `/sign-in?error=<code>`. Only with `dashboard.url` set. |
 | `GET /auth/csrf`, `POST /auth/password`, `POST /auth/password/change` | Password sign-in. `GET /auth/csrf` hands out the sign-in form's CSRF token (a cookie and `{"csrfToken": ...}`); `POST /auth/password` takes `{"username", "password"}` with that token in `X-CSRF-Token` and answers 204 and the session cookie; `POST /auth/password/change` takes `{"current", "new"}` for a signed-in password account. See [Password sign-in limits](#password-sign-in-limits). Only with `dashboard.url` set. |
 | `/api/...` | The dashboard's JSON API. Every route but `GET /api/sign-in-options` needs a session; the admin routes answer a user `404`, like an unknown path; writes need the `X-CSRF-Token` header. Only with `dashboard.url` set. The review page's buttons use `POST /api/reviews/{instance}/{project}/{number}/rerun` (`{"failed": true or false}`; 202 with `queued`, `already queued`, `nothing failed` or `whole review`; 429 at a re-run cap), `.../dismiss` (`{"fingerprint", "reason"}`; 200 with `dismissed` or `already dismissed`; a reason of up to 500 characters; 400 `the reason is too long` above) and `.../restore` (`{"fingerprint"}`; 200 with `restored` or `not dismissed`), for maintainers and admins of the repository, config repositories included. The Readiness tab uses `GET /api/repositories/{instance}/{project}/readiness` (anyone who can see the repository) and `POST .../readiness/scan` (maintainers and admins; 202 with the queued scan, 409 while one is queued or running, 429 within 5 minutes of the latest scan, 404 for a repository that isn't switched on or when scans are off). |
+| `GET /api/admin/usage`, `GET /api/admin/usage.csv`, `GET /api/repositories/{instance}/{project}/usage` and `GET /api/repositories/{instance}/{project}/skill-results/tokens` | The [Usage](#usage) page and a repository's usage page, the CSV export, and the Skill results tab's cost section ([Skill results](#-skill-results)). Admins only: anyone else gets `404`. `days` is 1 to 90 (30 by default), and 30 or 90 for the tokens route. The repository routes need a repository that is switched on. |
 | `GET /` and every other path | The dashboard's pages: `/sign-in`, `/admin/sign-in`, `/signed-out`, the user pages and the admin pages under `/admin` ([Two areas](#two-areas)). Only with `dashboard.url` set; without it they are 404. With JWT sign-in, a `GET` of a page by someone with no session and a valid token starts a session ([Sign-in](#sign-in)); `/signed-out` never does. |
 
 Logs are JSON on stdout. Secrets are never logged.
