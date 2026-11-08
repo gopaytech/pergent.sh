@@ -123,6 +123,16 @@ type RepoCatalog interface {
 	CanReach(ctx context.Context, project string) (bool, error)
 }
 
+// SpellingRepoCatalog is a RepoCatalog whose platform treats paths as one
+// whatever their case (GitLab) and so says how it spells one. Switching on
+// uses that spelling, not what the client sent.
+type SpellingRepoCatalog interface {
+	RepoCatalog
+	// ReachableName is CanReach that also returns project as the platform
+	// spells it.
+	ReachableName(ctx context.Context, project string) (name string, reached bool, err error)
+}
+
 // PagedRepoCatalog is a RepoCatalog whose platform searches and pages on its
 // own side (GitLab), so the picker asks it for one page at a time. One that
 // isn't (GitHub's installation list has no search) is read whole through

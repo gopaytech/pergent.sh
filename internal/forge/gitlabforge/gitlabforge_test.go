@@ -485,7 +485,7 @@ func TestCanReach(t *testing.T) {
 		{"listed among others", 200, listed("acme/widgets-old", "other/widgets", "acme/widgets"), true, false},
 		{"not listed", 200, listed(), false, false},
 		{"only a longer name is listed", 200, listed("acme/widgets-old"), false, false},
-		{"only another case is listed", 200, listed("Acme/Widgets"), false, false},
+		{"listed in another case", 200, listed("Acme/Widgets"), true, false},
 		{"not found", 404, map[string]any{"message": "404 Not Found"}, false, false},
 		{"forbidden", 403, map[string]any{"message": "403 Forbidden"}, false, false},
 		{"broken", 400, map[string]any{"message": "400 Bad request"}, false, true},
@@ -501,7 +501,7 @@ func TestCanReach(t *testing.T) {
 	}
 }
 
-// The picker's page is one request to GitLab, in path order, at Maintainer
+// The picker's page is one request to GitLab, in ID order, at Maintainer
 // level; the search goes to GitLab.
 func TestReachablePage(t *testing.T) {
 	f := newFake(t)
@@ -512,9 +512,29 @@ func TestReachablePage(t *testing.T) {
 	if err != nil || !more || len(got) != 1 || got[0] != "acme/widgets" {
 		t.Fatalf("got=%v more=%v err=%v", got, more, err)
 	}
-	want := "min_access_level=40&order_by=path&page=2&per_page=50&search=wid&search_namespaces=true&simple=true&sort=asc"
+	want := "min_access_level=40&order_by=id&page=2&per_page=50&search=wid&search_namespaces=true&simple=true&sort=asc"
 	if q := f.only().Query; q != want {
 		t.Errorf("query = %q, want %q", q, want)
+	}
+}
+
+// ReachableName answers with GitLab's spelling of the path, whatever case was
+// asked for.
+func TestReachableNameIsGitLabsSpelling(t *testing.T) {
+	f := newFake(t)
+	f.on("GET", "/projects", 200, []map[string]any{{"path_with_namespace": "acme/widgets-old"}, {"path_with_namespace": "acme/widgets"}})
+	name, ok, err := f.forge().ReachableName(context.Background(), "Acme/Widgets")
+	if err != nil || !ok || name != "acme/widgets" {
+		t.Fatalf("ReachableName = %q, %v, %v; want acme/widgets, true", name, ok, err)
+	}
+	if q := f.only().Query; q != "min_access_level=40&per_page=100&search=Widgets&search_namespaces=true&simple=true" {
+		t.Errorf("query = %q", q)
+	}
+
+	f = newFake(t)
+	f.on("GET", "/projects", 200, []map[string]any{{"path_with_namespace": "acme/widgets-old"}})
+	if name, ok, err := f.forge().ReachableName(context.Background(), "acme/widgets"); err != nil || ok || name != "" {
+		t.Fatalf("ReachableName of a project not listed = %q, %v, %v; want none", name, ok, err)
 	}
 }
 

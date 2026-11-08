@@ -296,13 +296,22 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 }
 
 // switchOnAvailable checks that the review bot or App of instance reaches
-// project, and returns it as given (trimmed): an admin has no platform account
-// to ask, so the bot's access is the only check.
+// project, and returns the name to switch it on under: as the platform
+// spells it when it says (GitLab, whatever case the client sent), otherwise as
+// given (trimmed). An admin has no platform account to ask, so the bot's access
+// is the only check.
 func (d *Dashboard) switchOnAvailable(ctx context.Context, instance, project string) (string, bool, error) {
 	project = strings.TrimSpace(project)
 	cat, ok := d.catalogs.Get(instance)
 	if !ok || cat == nil {
 		return "", false, errors.New("no repository list for the instance")
+	}
+	if sp, ok := cat.(SpellingRepoCatalog); ok {
+		name, reached, err := sp.ReachableName(ctx, project)
+		if err != nil || !reached {
+			return "", false, err
+		}
+		return name, true, nil
 	}
 	reached, err := cat.CanReach(ctx, project)
 	if err != nil || !reached {

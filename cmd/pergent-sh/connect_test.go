@@ -204,8 +204,9 @@ func githubConfig(t *testing.T, apiURL string, token bool) *config.Config {
 // review App's installation 55.
 // GitLab's Forge pages the picker on the platform; GitHub's is read whole.
 var (
-	_ dashboard.PagedRepoCatalog = (*gitlabforge.Forge)(nil)
-	_ dashboard.RepoCatalog      = (*githubforge.Forge)(nil)
+	_ dashboard.PagedRepoCatalog    = (*gitlabforge.Forge)(nil)
+	_ dashboard.SpellingRepoCatalog = (*gitlabforge.Forge)(nil)
+	_ dashboard.RepoCatalog         = (*githubforge.Forge)(nil)
 )
 
 func testRepos(string) githubforge.Repos {

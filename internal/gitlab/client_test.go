@@ -894,9 +894,9 @@ func TestHasMemberAccess(t *testing.T) {
 func TestListsProject(t *testing.T) {
 	c, reqs := serve(t, jsonReply([]map[string]any{
 		{"id": 6, "path_with_namespace": "acme/widgets-old"}, {"id": 7, "path_with_namespace": "acme/team/widgets"}}))
-	ok, err := c.ListsProject(context.Background(), "acme/team/widgets", ProjectLookup{MinAccessLevel: 40, MaxPages: 3})
-	if err != nil || !ok {
-		t.Fatalf("ListsProject = %v, %v; want true", ok, err)
+	got, ok, err := c.ListsProject(context.Background(), "acme/team/widgets", ProjectLookup{MinAccessLevel: 40, MaxPages: 3})
+	if err != nil || !ok || got != "acme/team/widgets" {
+		t.Fatalf("ListsProject = %q, %v, %v; want acme/team/widgets, true", got, ok, err)
 	}
 	if len(*reqs) != 1 {
 		t.Fatalf("requests = %d, want 1", len(*reqs))
@@ -905,13 +905,21 @@ func TestListsProject(t *testing.T) {
 		"min_access_level=40&per_page=100&search=widgets&search_namespaces=true&simple=true")
 }
 
-func TestListsProjectIsExact(t *testing.T) {
+// The name must be the whole name (acme/widgets is not acme/widgets-old),
+// but the case is not compared: GitLab paths are unique whatever the case, and
+// the path comes back as GitLab spells it.
+func TestListsProjectIsWholeNameAnyCase(t *testing.T) {
 	c, _ := serve(t, jsonReply([]map[string]any{
 		{"path_with_namespace": "acme/widgets-old"}, {"path_with_namespace": "other/acme/widgets"},
 		{"path_with_namespace": "Acme/Widgets"}}))
-	for _, path := range []string{"acme/widgets", "acme/widget", "ACME/widgets"} {
-		if ok, err := c.ListsProject(context.Background(), path, ProjectLookup{MinAccessLevel: 40, MaxPages: 3}); err != nil || ok {
-			t.Errorf("ListsProject(%q) = %v, %v; want false", path, ok, err)
+	for _, path := range []string{"acme/widgets", "ACME/WIDGETS", "Acme/Widgets"} {
+		if got, ok, err := c.ListsProject(context.Background(), path, ProjectLookup{MinAccessLevel: 40, MaxPages: 3}); err != nil || !ok || got != "Acme/Widgets" {
+			t.Errorf("ListsProject(%q) = %q, %v, %v; want Acme/Widgets, true", path, got, ok, err)
+		}
+	}
+	for _, path := range []string{"acme/widget", "acme/widgets-ol", "widgets"} {
+		if got, ok, err := c.ListsProject(context.Background(), path, ProjectLookup{MinAccessLevel: 40, MaxPages: 3}); err != nil || ok || got != "" {
+			t.Errorf("ListsProject(%q) = %q, %v, %v; want none", path, got, ok, err)
 		}
 	}
 }
@@ -926,7 +934,7 @@ func TestListsProjectReadsLaterPages(t *testing.T) {
 		w.Header().Set("X-Next-Page", "2")
 		_ = json.NewEncoder(w).Encode([]map[string]any{{"path_with_namespace": "acme/widgets-old"}})
 	})
-	ok, err := c.ListsProject(context.Background(), "acme/widgets", ProjectLookup{MinAccessLevel: 40, MaxPages: 3})
+	_, ok, err := c.ListsProject(context.Background(), "acme/widgets", ProjectLookup{MinAccessLevel: 40, MaxPages: 3})
 	if err != nil || !ok {
 		t.Fatalf("ListsProject = %v, %v; want true", ok, err)
 	}
@@ -941,7 +949,7 @@ func TestListsProjectReadsLaterPages(t *testing.T) {
 // known, and is an error.
 func TestListsProjectEnds(t *testing.T) {
 	c, _ := serve(t, jsonReply([]map[string]any{}))
-	if ok, err := c.ListsProject(context.Background(), "acme/widgets", ProjectLookup{MinAccessLevel: 40, MaxPages: 3}); err != nil || ok {
+	if _, ok, err := c.ListsProject(context.Background(), "acme/widgets", ProjectLookup{MinAccessLevel: 40, MaxPages: 3}); err != nil || ok {
 		t.Fatalf("empty listing = %v, %v; want false, nil", ok, err)
 	}
 
@@ -950,7 +958,7 @@ func TestListsProjectEnds(t *testing.T) {
 		w.Header().Set("X-Next-Page", "9")
 		_ = json.NewEncoder(w).Encode([]map[string]any{{"path_with_namespace": "acme/widgets-old"}})
 	})
-	ok, err := c.ListsProject(context.Background(), "acme/widgets", ProjectLookup{MinAccessLevel: 40, MaxPages: 2})
+	_, ok, err := c.ListsProject(context.Background(), "acme/widgets", ProjectLookup{MinAccessLevel: 40, MaxPages: 2})
 	if ok || !errors.Is(err, ErrSearchIncomplete) {
 		t.Fatalf("ListsProject over the page budget = %v, %v; want false, ErrSearchIncomplete", ok, err)
 	}
@@ -963,11 +971,11 @@ func TestListsProjectErrors(t *testing.T) {
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"message":"404 Not Found"}`, 404)
 	})
-	if _, err := c.ListsProject(context.Background(), "acme/widgets", ProjectLookup{MinAccessLevel: 40, MaxPages: 3}); !errors.Is(err, ErrNotFound) {
+	if _, _, err := c.ListsProject(context.Background(), "acme/widgets", ProjectLookup{MinAccessLevel: 40, MaxPages: 3}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 	c, reqs := serve(t, jsonReply([]map[string]any{}))
-	if ok, err := c.ListsProject(context.Background(), "widgets/", ProjectLookup{MinAccessLevel: 40, MaxPages: 3}); err != nil || ok || len(*reqs) != 0 {
+	if _, ok, err := c.ListsProject(context.Background(), "widgets/", ProjectLookup{MinAccessLevel: 40, MaxPages: 3}); err != nil || ok || len(*reqs) != 0 {
 		t.Fatalf("a path with no name = %v, %v after %d requests; want false, nil, 0", ok, err, len(*reqs))
 	}
 }
@@ -1008,7 +1016,7 @@ func TestProjectPage(t *testing.T) {
 	if len(*reqs) != 1 {
 		t.Fatalf("requests = %d, want 1", len(*reqs))
 	}
-	expect(t, (*reqs)[0], "GET", "/api/v4/projects", "min_access_level=40&order_by=path&page=2&per_page=50&simple=true&sort=asc")
+	expect(t, (*reqs)[0], "GET", "/api/v4/projects", "min_access_level=40&order_by=id&page=2&per_page=50&simple=true&sort=asc")
 
 	// The last page names no next one; a search goes to GitLab.
 	c, reqs = serve(t, jsonReply([]map[string]any{{"path_with_namespace": "acme/widgets"}}))
@@ -1017,7 +1025,7 @@ func TestProjectPage(t *testing.T) {
 		t.Fatalf("got=%v more=%v err=%v", got, more, err)
 	}
 	expect(t, (*reqs)[0], "GET", "/api/v4/projects",
-		"min_access_level=40&order_by=path&page=1&per_page=50&search=wid+gets&search_namespaces=true&simple=true&sort=asc")
+		"min_access_level=40&order_by=id&page=1&per_page=50&search=wid+gets&search_namespaces=true&simple=true&sort=asc")
 }
 
 func TestProjectPageError(t *testing.T) {

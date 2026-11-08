@@ -376,7 +376,7 @@ func (f *Forge) ReachableRepos(ctx context.Context, search string, limit int) ([
 }
 
 // ReachablePage returns the page (1-based) of perPage of the projects
-// ReachableRepos lists, ordered by path, and whether GitLab has a later page.
+// ReachableRepos lists, ordered by ID, and whether GitLab has a later page.
 // It makes the one request, which has 10 s.
 func (f *Forge) ReachablePage(ctx context.Context, search string, page, perPage int) ([]string, bool, error) {
 	return f.c.ProjectPage(ctx, gitlab.ProjectPageOptions{MinAccessLevel: maintainer, Search: search,
@@ -391,19 +391,27 @@ const (
 )
 
 // CanReach reports whether the review bot can set project up: whether
-// ReachableRepos would list it. It asks the same listing (the project's name
-// searched, then paged for the exact path), because the project's own
-// permissions leave out Maintainer access gained through an ancestor group
-// or a share, and the picker shows those. A project it can't see is false; a
-// failure to tell, or a search that ran out of pages or time, is an error.
+// ReachableRepos would list it, ignoring case. See ReachableName.
 func (f *Forge) CanReach(ctx context.Context, project string) (bool, error) {
+	_, ok, err := f.ReachableName(ctx, project)
+	return ok, err
+}
+
+// ReachableName is CanReach that also returns the project's path as GitLab
+// spells it (GitLab paths are unique whatever the case), the name to switch
+// it on under. It asks the same listing as the picker (the project's name
+// searched, then paged for the path), because the project's own permissions
+// leave out Maintainer access gained through an ancestor group or a share, and
+// the picker shows those. A project it can't see is false; a failure to tell,
+// or a search that ran out of pages or time, is an error.
+func (f *Forge) ReachableName(ctx context.Context, project string) (string, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, reachBudget)
 	defer cancel()
-	ok, err := f.c.ListsProject(ctx, project, gitlab.ProjectLookup{MinAccessLevel: maintainer,
+	name, ok, err := f.c.ListsProject(ctx, project, gitlab.ProjectLookup{MinAccessLevel: maintainer,
 		MaxPages: reachPages, CallTimeout: callTimeout})
 	var ae *gitlab.APIError
 	if errors.Is(err, gitlab.ErrNotFound) || (errors.As(err, &ae) && ae.Status == http.StatusForbidden) {
-		return false, nil
+		return "", false, nil
 	}
-	return ok, err
+	return name, ok, err
 }

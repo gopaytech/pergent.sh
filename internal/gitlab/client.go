@@ -931,17 +931,19 @@ type ProjectLookup struct {
 	CallTimeout time.Duration
 }
 
-// ListsProject reports whether ProjectPaths with the same MinAccessLevel
-// would list the project at path, spelt exactly as GitLab spells it. It asks
-// the way the picker does, GET /projects?min_access_level=, searching the
-// project's name with search_namespaces and paging until the path turns up.
+// ListsProject finds the project at path in the listing ProjectPaths reads
+// with the same MinAccessLevel, and returns the path as GitLab spells it: GitLab
+// paths are unique whatever the case, so the match ignores it. It asks the way
+// the picker does, GET /projects?min_access_level=, searching the project's
+// name with search_namespaces and paging until the path turns up.
 // GET /projects/:path would not do: its permissions leave out access gained
-// through an ancestor group or a share. When o.MaxPages end with more pages
-// to read, the answer is ErrSearchIncomplete, not false.
-func (c *Client) ListsProject(ctx context.Context, path string, o ProjectLookup) (bool, error) {
+// through an ancestor group or a share. found is false when the listing has
+// no such project. When o.MaxPages end with more pages to read, the answer is
+// ErrSearchIncomplete, not "not found".
+func (c *Client) ListsProject(ctx context.Context, path string, o ProjectLookup) (listed string, found bool, err error) {
 	name := path[strings.LastIndex(path, "/")+1:]
 	if name == "" {
-		return false, nil
+		return "", false, nil
 	}
 	q := url.Values{"min_access_level": {strconv.Itoa(o.MinAccessLevel)}, "simple": {"true"},
 		"search": {name}, "search_namespaces": {"true"}}
@@ -954,25 +956,25 @@ func (c *Client) ListsProject(ctx context.Context, path string, o ProjectLookup)
 		resp, err := c.do(pctx, http.MethodGet, "/projects", q, nil)
 		cancel()
 		if err != nil {
-			return false, err
+			return "", false, err
 		}
 		var page []struct {
 			Path string `json:"path_with_namespace"`
 		}
 		if err := decode(resp.body, &page); err != nil {
-			return false, err
+			return "", false, err
 		}
 		for _, p := range page {
-			if p.Path == path {
-				return true, nil
+			if strings.EqualFold(p.Path, path) {
+				return p.Path, true, nil
 			}
 		}
 		next := strings.TrimSpace(resp.header.Get("X-Next-Page"))
 		if next == "" {
-			return false, nil
+			return "", false, nil
 		}
 		if pages >= o.MaxPages {
-			return false, ErrSearchIncomplete
+			return "", false, ErrSearchIncomplete
 		}
 		q.Set("page", next)
 	}
@@ -993,12 +995,13 @@ type ProjectPageOptions struct {
 }
 
 // ProjectPage returns the paths on one page of the projects the token's user
-// is a member of with at least o.MinAccessLevel, ordered by path so pages
-// don't move between requests: GET /projects?order_by=path&sort=asc&page=&per_page=.
+// is a member of with at least o.MinAccessLevel, ordered by ID (unique, so
+// pages don't move between requests and no project falls between two):
+// GET /projects?order_by=id&sort=asc&page=&per_page=.
 // hasMore is true when GitLab names a later page (X-Next-Page).
 func (c *Client) ProjectPage(ctx context.Context, o ProjectPageOptions) (paths []string, hasMore bool, err error) {
 	q := url.Values{"min_access_level": {strconv.Itoa(o.MinAccessLevel)}, "simple": {"true"},
-		"order_by": {"path"}, "sort": {"asc"},
+		"order_by": {"id"}, "sort": {"asc"},
 		"page": {strconv.Itoa(o.Page)}, "per_page": {strconv.Itoa(o.PerPage)}}
 	if o.Search != "" {
 		q.Set("search", o.Search)

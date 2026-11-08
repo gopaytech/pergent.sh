@@ -646,7 +646,8 @@ func (d *Dashboard) instanceRepositories(w http.ResponseWriter, r *http.Request)
 // and GET /api/admin/instances/{name}/repositories.
 //
 // A catalog that pages on the platform (PagedRepoCatalog, GitLab) is asked for
-// the one page, which keeps the platform's order. Another is read whole, kept
+// the one page, in the platform's order (by ID), which is sorted within the
+// page. Another is read whole, kept
 // 5 minutes, sorted, and served 50 at a time.
 func (d *Dashboard) listAvailable(w http.ResponseWriter, r *http.Request, name string) {
 	if inst, ok := d.registry.Get(name); !ok || inst.Removing {
@@ -694,10 +695,17 @@ func (d *Dashboard) listAvailable(w http.ResponseWriter, r *http.Request, name s
 				writeError(w, http.StatusBadGateway, msgListFailed)
 				return
 			}
+			var off []string
 			for _, p := range repos {
 				if !on[lower(p)] {
-					add(p)
+					off = append(off, p)
 				}
+			}
+			// The platform pages by ID, so no project falls between two
+			// pages; each page is sorted by path for display.
+			sort.Strings(off)
+			for _, p := range off {
+				add(p)
 			}
 			view.HasMore = hasMore
 			writeJSON(w, http.StatusOK, view)

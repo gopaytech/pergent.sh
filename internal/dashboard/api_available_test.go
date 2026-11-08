@@ -58,7 +58,25 @@ func (p *pagedCatalog) pageCalls() []pageAsk {
 	return slices.Clone(p.asked)
 }
 
-var _ PagedRepoCatalog = (*pagedCatalog)(nil)
+// ReachableName makes the fake spell a path as GitLab does: the case it holds.
+func (p *pagedCatalog) ReachableName(_ context.Context, project string) (string, bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.fail != nil {
+		return "", false, p.fail
+	}
+	for _, r := range p.repos {
+		if strings.EqualFold(r, project) {
+			return r, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+var (
+	_ PagedRepoCatalog    = (*pagedCatalog)(nil)
+	_ SpellingRepoCatalog = (*pagedCatalog)(nil)
+)
 
 // A dashboard with no store: the picker needs only the config (acme/widgets
 // and acme/payments are on, on "main" and "gl"), the registry and a catalog
@@ -298,5 +316,56 @@ func TestAvailablePageFails(t *testing.T) {
 	e.gl.setFail(nil)
 	if got := e.page(t, "gl", "page=1"); len(got.Items) != 1 {
 		t.Errorf("after the failure: %+v; want the list again (a failure isn't kept)", got)
+	}
+}
+
+// GitLab pages by ID, so a page comes in no order of path; the picker sorts
+// within the page and never across pages.
+func TestAvailableSortsWithinAPage(t *testing.T) {
+	e := newPickerEnv(t)
+	e.gl.set("acme/zeta", "acme/alpha", "Acme/Mid", "acme/beta")
+	got := e.page(t, "gl", "")
+	if want := []string{"Acme/Mid", "acme/alpha", "acme/beta", "acme/zeta"}; !slices.Equal(projectsOf(got.Items), want) {
+		t.Errorf("items = %v, want %v", projectsOf(got.Items), want)
+	}
+	e.gl.set(append([]string{"acme/zzz"}, pickNames(60, "acme/a-%02d")...)...)
+	e.clock.advance(catalogTTL)
+	one, two := e.page(t, "gl", ""), e.page(t, "gl", "page=2")
+	if !one.HasMore || len(one.Items) != 50 || one.Items[0].Project != "acme/a-00" || one.Items[49].Project != "acme/zzz" {
+		t.Errorf("page 1 = %d items from %s to %s, hasMore %v; want 50, a-00 to zzz, more", len(one.Items),
+			one.Items[0].Project, one.Items[len(one.Items)-1].Project, one.HasMore)
+	}
+	if two.Items[0].Project != "acme/a-49" {
+		t.Errorf("page 2 starts at %s; want the platform's next project, not a re-sorted list", two.Items[0].Project)
+	}
+}
+
+// Switching on uses GitLab's spelling of the path, whatever case the client
+// sent; a platform that has no spelling to give (GitHub, and the fake of
+// "main") keeps the name as sent, trimmed.
+func TestSwitchOnUsesThePlatformsSpelling(t *testing.T) {
+	e := newPickerEnv(t)
+	e.gl.set("acme/gadgets", "acme/widgets-old", "acme/Widgets-New")
+	e.main.set("acme/gadgets")
+	ctx := context.Background()
+
+	for _, sent := range []string{"Acme/Gadgets", " ACME/GADGETS ", "acme/gadgets"} {
+		name, ok, err := e.d.switchOnAvailable(ctx, "gl", sent)
+		if err != nil || !ok || name != "acme/gadgets" {
+			t.Errorf("gl %q = %q, %v, %v; want acme/gadgets", sent, name, ok, err)
+		}
+	}
+	if name, ok, err := e.d.switchOnAvailable(ctx, "gl", "acme/widgets-new"); err != nil || !ok || name != "acme/Widgets-New" {
+		t.Errorf("gl widgets-new = %q, %v, %v; want GitLab's spelling acme/Widgets-New", name, ok, err)
+	}
+	if _, ok, err := e.d.switchOnAvailable(ctx, "gl", "acme/widgets"); err != nil || ok {
+		t.Errorf("gl acme/widgets = %v, %v; want not reached (only longer names are listed)", ok, err)
+	}
+	if name, ok, err := e.d.switchOnAvailable(ctx, "main", " Acme/Gadgets "); err != nil || !ok || name != "Acme/Gadgets" {
+		t.Errorf("main = %q, %v, %v; want the name as sent, trimmed", name, ok, err)
+	}
+	e.gl.setFail(errors.New("down"))
+	if _, ok, err := e.d.switchOnAvailable(ctx, "gl", "acme/gadgets"); err == nil || ok {
+		t.Errorf("gl while down = %v, %v; want an error", ok, err)
 	}
 }
