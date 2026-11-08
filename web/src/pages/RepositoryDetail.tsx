@@ -1,7 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams, useSearchParams } from "react-router";
 
-import { api, isStatus, paths, safeHref, type InputsView, type RepositoryDetailView } from "../api";
+import { api, isStatus, paths, safeHref, type InputsView, type RepositoryDetailView, type WaitingView } from "../api";
+import { useWrite } from "../layout/write";
 import { ErrorBox, ExternalLink, Loading, NotFound, Tabs, platformName, skillOrigin } from "../ui";
 import AttentionRows from "./Attention";
 import PastDismissals from "./PastDismissals";
@@ -50,6 +51,15 @@ export default function RepositoryDetail() {
       <div className="sub spaced">
         {platformName(repo.platform)} · {repo.instance} · {repo.source === "config" ? "managed by config" : "switched on in the dashboard"}
       </div>
+      {view.waiting.length > 0 && (
+        <Waiting
+          instance={repo.instance}
+          project={repo.project}
+          items={view.waiting}
+          canStart={view.role === "admin" || view.role === "maintainer"}
+          queryKey={queryKey}
+        />
+      )}
       <Tabs<Tab> tabs={tabs} value={tab} onChange={(t) => setSearch(t === "reviews" ? {} : { tab: t }, { replace: true })} />
       <div role="tabpanel">
         {tab === "reviews" && <ReviewList filter={{ project: repo.project, days: 90 }} label="Reviews of this repository" />}
@@ -73,6 +83,58 @@ export default function RepositoryDetail() {
         )}
       </div>
     </div>
+  );
+}
+
+// Waiting is the changes of authors the repository doesn't trust, whose review
+// waits for someone with write access to start it.
+function Waiting({
+  instance,
+  project,
+  items,
+  canStart,
+  queryKey,
+}: {
+  instance: string;
+  project: string;
+  items: WaitingView[];
+  canStart: boolean;
+  queryKey: unknown[];
+}) {
+  const client = useQueryClient();
+  const write = useWrite();
+  const start = useMutation({
+    mutationFn: (n: number) => write<{ status: string }>("POST", paths.apiReviewAction(instance, project, n, "start"), {}),
+    onSuccess: () => client.invalidateQueries({ queryKey }),
+  });
+  return (
+    <section className="card" aria-label="Waiting for a start">
+      <h2>Waiting for a start</h2>
+      <p className="pad meta">
+        Changes from authors this repository doesn't trust. Nobody reviews them until someone with write access starts the review.
+      </p>
+      {items.map((w) => (
+        <div className="row" key={w.number}>
+          <div className="grow">
+            {safeHref(w.webUrl) ? <ExternalLink href={w.webUrl}>!{w.number}</ExternalLink> : <span>!{w.number}</span>} by {w.author}
+            {w.title && <span className="meta"> · {w.title}</span>}
+            {w.reason === "trust_check_failed" && <div className="meta">Couldn't check the author's access.</div>}
+          </div>
+          {canStart && (
+            <button
+              type="button"
+              className="btn small"
+              aria-label={`Start review of !${w.number}`}
+              disabled={start.isPending}
+              onClick={() => start.mutate(w.number)}
+            >
+              Start review
+            </button>
+          )}
+        </div>
+      ))}
+      {start.isError && <ErrorBox error={start.error} />}
+    </section>
   );
 }
 
