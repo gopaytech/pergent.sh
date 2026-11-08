@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -42,6 +43,7 @@ type fake struct {
 	srv    *httptest.Server
 	mu     sync.Mutex
 	routes map[string]reply
+	pages  map[string]func(query url.Values) (status int, body any, next string)
 	reqs   []request
 }
 
@@ -52,7 +54,7 @@ type reply struct {
 
 func newFake(t *testing.T) *fake {
 	t.Helper()
-	f := &fake{t: t, routes: map[string]reply{}}
+	f := &fake{t: t, routes: map[string]reply{}, pages: map[string]func(url.Values) (int, any, string){}}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		var body map[string]any
@@ -63,8 +65,18 @@ func newFake(t *testing.T) *fake {
 		f.mu.Lock()
 		f.reqs = append(f.reqs, request{r.Method, p, r.URL.RawQuery, r.Header.Get("PRIVATE-TOKEN"), body})
 		rep, ok := f.routes[r.Method+" "+p]
+		page := f.pages[r.Method+" "+p]
 		f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
+		if page != nil {
+			status, body, next := page(r.URL.Query())
+			if next != "" {
+				w.Header().Set("X-Next-Page", next)
+			}
+			w.WriteHeader(status)
+			_ = json.NewEncoder(w).Encode(body)
+			return
+		}
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = io.WriteString(w, `{"message":"404 Not Found"}`)
@@ -87,6 +99,13 @@ func (f *fake) on(method, path string, status int, body any) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.routes[method+" "+path] = reply{status, body}
+}
+
+// onPages answers a route by the request's query, and may name the next page.
+func (f *fake) onPages(method, path string, h func(query url.Values) (status int, body any, next string)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pages[method+" "+path] = h
 }
 
 func (f *fake) requests() []request {
@@ -444,10 +463,16 @@ func TestReachableRepos(t *testing.T) {
 	}
 }
 
+// The review bot can set a project up exactly when the picker lists it, so
+// CanReach asks the listing: access gained through an ancestor group or a
+// share shows in it, while the project's own permissions are null.
 func TestCanReach(t *testing.T) {
-	access := func(level int) map[string]any {
-		return map[string]any{"path_with_namespace": "acme/widgets",
-			"permissions": map[string]any{"project_access": nil, "group_access": map[string]any{"access_level": level}}}
+	listed := func(paths ...string) []map[string]any {
+		out := []map[string]any{}
+		for _, p := range paths {
+			out = append(out, map[string]any{"path_with_namespace": p})
+		}
+		return out
 	}
 	for _, tc := range []struct {
 		name   string
@@ -456,20 +481,69 @@ func TestCanReach(t *testing.T) {
 		want   bool
 		err    bool
 	}{
-		{"maintainer through the group", 200, access(40), true, false},
-		{"developer", 200, access(30), false, false},
-		{"not found", 404, map[string]any{"message": "404 Project Not Found"}, false, false},
+		{"listed", 200, listed("acme/widgets"), true, false},
+		{"listed among others", 200, listed("acme/widgets-old", "other/widgets", "acme/widgets"), true, false},
+		{"not listed", 200, listed(), false, false},
+		{"only a longer name is listed", 200, listed("acme/widgets-old"), false, false},
+		{"only another case is listed", 200, listed("Acme/Widgets"), false, false},
+		{"not found", 404, map[string]any{"message": "404 Not Found"}, false, false},
 		{"forbidden", 403, map[string]any{"message": "403 Forbidden"}, false, false},
 		{"broken", 400, map[string]any{"message": "400 Bad request"}, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFake(t)
-			f.on("GET", "/projects/acme%2Fwidgets", tc.status, tc.body)
+			f.on("GET", "/projects", tc.status, tc.body)
 			ok, err := f.forge().CanReach(context.Background(), "acme/widgets")
 			if ok != tc.want || (err != nil) != tc.err {
 				t.Fatalf("CanReach = %v, %v", ok, err)
 			}
 		})
+	}
+}
+
+// A project reached through a group above its own, or a share, has null
+// permissions on GET /projects/:path; the listing is the only thing asked.
+func TestCanReachInheritedAccess(t *testing.T) {
+	f := newFake(t)
+	f.on("GET", "/projects/acme%2Fteam%2Fwidgets", 200, map[string]any{"path_with_namespace": "acme/team/widgets",
+		"permissions": map[string]any{"project_access": nil, "group_access": nil}})
+	f.on("GET", "/projects", 200, []map[string]any{{"path_with_namespace": "acme/team/widgets"}})
+	ok, err := f.forge().CanReach(context.Background(), "acme/team/widgets")
+	if err != nil || !ok {
+		t.Fatalf("CanReach = %v, %v; want true", ok, err)
+	}
+	if q := f.only().Query; q != "min_access_level=40&per_page=100&search=widgets&search_namespaces=true&simple=true" {
+		t.Errorf("query = %q", q)
+	}
+}
+
+func TestCanReachReadsLaterPages(t *testing.T) {
+	f := newFake(t)
+	f.onPages("GET", "/projects", func(q url.Values) (int, any, string) {
+		if q.Get("page") == "2" {
+			return 200, []map[string]any{{"path_with_namespace": "acme/widgets"}}, ""
+		}
+		return 200, []map[string]any{{"path_with_namespace": "acme/widgets-old"}}, "2"
+	})
+	ok, err := f.forge().CanReach(context.Background(), "acme/widgets")
+	if err != nil || !ok {
+		t.Fatalf("CanReach = %v, %v; want true", ok, err)
+	}
+	if n := len(f.requests()); n != 2 {
+		t.Errorf("requests = %d, want 2", n)
+	}
+
+	// Pages that never end are not read for ever, and not a plain no.
+	f = newFake(t)
+	f.onPages("GET", "/projects", func(q url.Values) (int, any, string) {
+		return 200, []map[string]any{{"path_with_namespace": "acme/widgets-old"}}, "9"
+	})
+	ok, err = f.forge().CanReach(context.Background(), "acme/widgets")
+	if ok || !errors.Is(err, gitlab.ErrSearchIncomplete) {
+		t.Fatalf("CanReach = %v, %v; want false and ErrSearchIncomplete", ok, err)
+	}
+	if n := len(f.requests()); n != reachPages {
+		t.Errorf("requests = %d, want %d", n, reachPages)
 	}
 }
 

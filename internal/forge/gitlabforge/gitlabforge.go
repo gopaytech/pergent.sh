@@ -375,19 +375,27 @@ func (f *Forge) ReachableRepos(ctx context.Context, search string, limit int) ([
 		Limit: limit, CallTimeout: callTimeout})
 }
 
-// CanReach reports whether the review bot can set project up: it is
-// Maintainer or above there, through the project or its group. A project
-// it can't see is false; a failure to tell is an error.
+// reachPages and reachBudget bound CanReach's search: at most 20 pages of
+// 100 projects, and 20 s in all (callTimeout for each request).
+const (
+	reachPages  = 20
+	reachBudget = 20 * time.Second
+)
+
+// CanReach reports whether the review bot can set project up: whether
+// ReachableRepos would list it. It asks the same listing (the project's name
+// searched, then paged for the exact path), because the project's own
+// permissions leave out Maintainer access gained through an ancestor group
+// or a share, and the picker shows those. A project it can't see is false; a
+// failure to tell, or a search that ran out of pages or time, is an error.
 func (f *Forge) CanReach(ctx context.Context, project string) (bool, error) {
-	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	ctx, cancel := context.WithTimeout(ctx, reachBudget)
 	defer cancel()
-	a, err := f.c.ProjectAccess(ctx, project)
+	ok, err := f.c.ListsProject(ctx, project, gitlab.ProjectLookup{MinAccessLevel: maintainer,
+		MaxPages: reachPages, CallTimeout: callTimeout})
 	var ae *gitlab.APIError
 	if errors.Is(err, gitlab.ErrNotFound) || (errors.As(err, &ae) && ae.Status == http.StatusForbidden) {
 		return false, nil
 	}
-	if err != nil {
-		return false, err
-	}
-	return a.ProjectAccessLevel >= maintainer || a.GroupAccessLevel >= maintainer, nil
+	return ok, err
 }

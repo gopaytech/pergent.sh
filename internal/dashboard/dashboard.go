@@ -118,8 +118,8 @@ type RepoCatalog interface {
 	// to limit; truncated is true when there were more. On an error it
 	// also returns those read before it.
 	ReachableRepos(ctx context.Context, search string, limit int) (repos []string, truncated bool, err error)
-	// CanReach reports whether project is one; a failure to tell is an
-	// error.
+	// CanReach reports whether ReachableRepos would list project; a
+	// failure to tell is an error.
 	CanReach(ctx context.Context, project string) (bool, error)
 }
 

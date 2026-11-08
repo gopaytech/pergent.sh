@@ -867,34 +867,6 @@ func TestNewOAuthSendsBearer(t *testing.T) {
 	}
 }
 
-func TestProjectAccess(t *testing.T) {
-	c, reqs := serve(t, jsonReply(map[string]any{
-		"id": 7, "path_with_namespace": "acme/widgets", "visibility": "private",
-		"repository_access_level": "enabled", "merge_requests_access_level": "private",
-		"permissions": map[string]any{
-			"project_access": map[string]any{"access_level": 10},
-			"group_access":   map[string]any{"access_level": 30},
-		},
-	}))
-	a, err := c.ProjectAccess(context.Background(), "acme/widgets")
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := ProjectAccess{ID: 7, Path: "acme/widgets", Visibility: "private", RepositoryAccess: "enabled", MergeRequestsAccess: "private",
-		ProjectAccessLevel: 10, GroupAccessLevel: 30}
-	if a != want {
-		t.Fatalf("ProjectAccess = %+v, want %+v", a, want)
-	}
-	expect(t, (*reqs)[0], "GET", "/api/v4/projects/acme%2Fwidgets", "")
-
-	// No membership: GitLab sends null permissions.
-	c, _ = serve(t, jsonReply(map[string]any{"visibility": "public",
-		"permissions": map[string]any{"project_access": nil, "group_access": nil}}))
-	if a, err := c.ProjectAccess(context.Background(), "acme/widgets"); err != nil || a.ProjectAccessLevel != 0 || a.GroupAccessLevel != 0 {
-		t.Fatalf("ProjectAccess without membership = %+v, %v", a, err)
-	}
-}
-
 // HasMemberAccess asks the project listing, which counts shares, narrowed
 // to the one project ID.
 func TestHasMemberAccess(t *testing.T) {
@@ -916,12 +888,87 @@ func TestHasMemberAccess(t *testing.T) {
 	}
 }
 
-func TestProjectAccessNotFound(t *testing.T) {
-	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, `{"message":"404 Project Not Found"}`, 404)
+// ListsProject asks the project listing, the way the picker does, searching
+// the project's name; the listing counts access gained through a group or a
+// share, which GET /projects/:path does not show.
+func TestListsProject(t *testing.T) {
+	c, reqs := serve(t, jsonReply([]map[string]any{
+		{"id": 6, "path_with_namespace": "acme/widgets-old"}, {"id": 7, "path_with_namespace": "acme/team/widgets"}}))
+	ok, err := c.ListsProject(context.Background(), "acme/team/widgets", ProjectLookup{MinAccessLevel: 40, MaxPages: 3})
+	if err != nil || !ok {
+		t.Fatalf("ListsProject = %v, %v; want true", ok, err)
+	}
+	if len(*reqs) != 1 {
+		t.Fatalf("requests = %d, want 1", len(*reqs))
+	}
+	expect(t, (*reqs)[0], "GET", "/api/v4/projects",
+		"min_access_level=40&per_page=100&search=widgets&search_namespaces=true&simple=true")
+}
+
+func TestListsProjectIsExact(t *testing.T) {
+	c, _ := serve(t, jsonReply([]map[string]any{
+		{"path_with_namespace": "acme/widgets-old"}, {"path_with_namespace": "other/acme/widgets"},
+		{"path_with_namespace": "Acme/Widgets"}}))
+	for _, path := range []string{"acme/widgets", "acme/widget", "ACME/widgets"} {
+		if ok, err := c.ListsProject(context.Background(), path, ProjectLookup{MinAccessLevel: 40, MaxPages: 3}); err != nil || ok {
+			t.Errorf("ListsProject(%q) = %v, %v; want false", path, ok, err)
+		}
+	}
+}
+
+func TestListsProjectReadsLaterPages(t *testing.T) {
+	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("page") == "2" {
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"path_with_namespace": "acme/widgets"}})
+			return
+		}
+		w.Header().Set("X-Next-Page", "2")
+		_ = json.NewEncoder(w).Encode([]map[string]any{{"path_with_namespace": "acme/widgets-old"}})
 	})
-	if _, err := c.ProjectAccess(context.Background(), "acme/widgets"); !errors.Is(err, ErrNotFound) {
+	ok, err := c.ListsProject(context.Background(), "acme/widgets", ProjectLookup{MinAccessLevel: 40, MaxPages: 3})
+	if err != nil || !ok {
+		t.Fatalf("ListsProject = %v, %v; want true", ok, err)
+	}
+	if len(*reqs) != 2 {
+		t.Fatalf("requests = %d, want 2", len(*reqs))
+	}
+	expect(t, (*reqs)[1], "GET", "/api/v4/projects",
+		"min_access_level=40&page=2&per_page=100&search=widgets&search_namespaces=true&simple=true")
+}
+
+// The pages running out is a plain no; the page budget ending first is not
+// known, and is an error.
+func TestListsProjectEnds(t *testing.T) {
+	c, _ := serve(t, jsonReply([]map[string]any{}))
+	if ok, err := c.ListsProject(context.Background(), "acme/widgets", ProjectLookup{MinAccessLevel: 40, MaxPages: 3}); err != nil || ok {
+		t.Fatalf("empty listing = %v, %v; want false, nil", ok, err)
+	}
+
+	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Next-Page", "9")
+		_ = json.NewEncoder(w).Encode([]map[string]any{{"path_with_namespace": "acme/widgets-old"}})
+	})
+	ok, err := c.ListsProject(context.Background(), "acme/widgets", ProjectLookup{MinAccessLevel: 40, MaxPages: 2})
+	if ok || !errors.Is(err, ErrSearchIncomplete) {
+		t.Fatalf("ListsProject over the page budget = %v, %v; want false, ErrSearchIncomplete", ok, err)
+	}
+	if len(*reqs) != 2 {
+		t.Fatalf("requests = %d, want 2", len(*reqs))
+	}
+}
+
+func TestListsProjectErrors(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"404 Not Found"}`, 404)
+	})
+	if _, err := c.ListsProject(context.Background(), "acme/widgets", ProjectLookup{MinAccessLevel: 40, MaxPages: 3}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	c, reqs := serve(t, jsonReply([]map[string]any{}))
+	if ok, err := c.ListsProject(context.Background(), "widgets/", ProjectLookup{MinAccessLevel: 40, MaxPages: 3}); err != nil || ok || len(*reqs) != 0 {
+		t.Fatalf("a path with no name = %v, %v after %d requests; want false, nil, 0", ok, err, len(*reqs))
 	}
 }
 
