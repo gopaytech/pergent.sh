@@ -87,6 +87,26 @@ func TestDashboardRoutesOffWhenNotConfigured(t *testing.T) {
 	}
 }
 
+// The main handler, which public_url reaches, never serves the metrics:
+// they have a port of their own. With the dashboard on, /metrics falls to the
+// app like any other path, and what it returns is not the exposition format.
+func TestMainHandlerHasNoMetrics(t *testing.T) {
+	stub := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "dashboard") })
+	for name, d := range map[string]Deps{
+		"no dashboard":   dashboardDeps("", nil),
+		"with dashboard": dashboardDeps("https://pergent.example.com", stub),
+	} {
+		rec := status(Routes(d), http.MethodGet, "/metrics")
+		if strings.Contains(rec.Header().Get("Content-Type"), "version=0.0.4") || strings.Contains(rec.Body.String(), "# TYPE") ||
+			strings.Contains(rec.Body.String(), "pergent_") {
+			t.Errorf("%s: GET /metrics = %d %q %q, want no metrics", name, rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
+		}
+	}
+	if rec := status(Routes(dashboardDeps("", nil)), http.MethodGet, "/metrics"); rec.Code != http.StatusNotFound {
+		t.Errorf("GET /metrics without the dashboard = %d, want 404", rec.Code)
+	}
+}
+
 // With a handler and dashboard.url, /auth/ and /api/ go to the handler, other
 // paths get the embedded app, and the other routes still win.
 func TestDashboardRoutesMounted(t *testing.T) {

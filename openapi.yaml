@@ -4,8 +4,9 @@ info:
   version: 0.12.0
   summary: HTTP routes of the pergent.sh server.
   description: |
-    pergent.sh runs pergent code reviews as Kubernetes Jobs. It serves one port.
-    This document describes every route it serves, except the embedded
+    pergent.sh runs pergent code reviews as Kubernetes Jobs. It serves one port,
+    plus a second one with a single route (`GET /metrics`) when `metrics_listen`
+    is set. This document describes every route it serves, except the embedded
     dashboard pages.
 
     **Not described:** the dashboard single-page app. `GET /` and every other
@@ -25,6 +26,7 @@ info:
     | `/auth/...` | the dashboard in a browser | none, or the sign-in cookies |
     | `/api/...` | the dashboard in a browser | session cookie, plus `X-CSRF-Token` on writes |
     | `/healthz` | probes | none |
+    | `/metrics` | Prometheus, on the `metrics_listen` port only | none: the port is not exposed through `public_url` |
 
     **Conditional routes.** `/auth/` and `/api/` exist only when `dashboard.url`
     is set. `/skill-fetches/{id}/result` and `/readiness-scans/{id}/result`
@@ -95,6 +97,8 @@ tags:
     description: Results posted by Jobs that pergent.sh started.
   - name: Health
     description: The probe the kubelet calls.
+  - name: Metrics
+    description: Counters for Prometheus, on a port of their own.
   - name: Sign-in
     description: Dashboard sign-in and sign-out.
   - name: Overview and reviews
@@ -415,6 +419,32 @@ paths:
               schema:
                 type: string
                 const: ok
+  /metrics:
+    get:
+      operationId: getMetrics
+      tags: [Metrics]
+      summary: Prometheus metrics
+      description: |
+        Token, review, skill-run, finding and dismissal counters in the
+        Prometheus text format (version 0.0.4), computed from the database at
+        each scrape. Served only when `metrics_listen` is set, and only on that
+        port: the main port (and so `public_url`) never answers it, and the
+        metrics port answers nothing else. A failure reading the database is a
+        500 with an empty body; the error is in the log.
+      x-pergent-access: none
+      security: []
+      servers:
+        - url: http://pergent-sh-metrics:9090
+          description: The metrics_listen port, reached inside the cluster.
+      responses:
+        '200':
+          description: The counters.
+          content:
+            text/plain:
+              schema:
+                type: string
+        '500':
+          description: The database could not be read. The body is empty.
   # --------------------------------------------------------------------- auth
   /auth/logout:
     post:
