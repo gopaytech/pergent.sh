@@ -51,6 +51,8 @@ const (
 	KeyQuietReviews                     = "quiet_reviews"
 	KeyCommentLayout                    = "comment_layout"
 	KeyLinkedReposEnabled               = "linked_repos_enabled"
+	KeyTrustedAuthorsOnly               = "trusted_authors_only"
+	KeyTrustedAuthors                   = "trusted_authors"
 )
 
 // The re-run caps when nothing sets them: per merge request and per
@@ -107,6 +109,14 @@ type Effective struct {
 	// RerunLimitPerMR and RerunLimitPerRepo cap the re-runs asked for (by
 	// comment or button) per merge request and per repository and UTC day.
 	RerunLimitPerMR, RerunLimitPerRepo int
+	// TrustedAuthorsOnly is the resolved trusted-authors mode: the
+	// repository's config.TrustOn or config.TrustOff when it sets one, else
+	// its instance's (config.TrustFollowVisibility when the instance is
+	// unknown). Whether a follow_visibility repository is public is read at
+	// review time.
+	TrustedAuthorsOnly string
+	// TrustedAuthors is the repository's allowlist, matched by user ID.
+	TrustedAuthors []store.TrustedAuthor
 	// Overridden tells, for each setting key, whether the repository sets
 	// it rather than taking the default. Every key is present.
 	Overridden map[string]bool
@@ -255,9 +265,11 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 		MaxTurns:                         r.Config.Jobs.MaxTurns,
 		JobMemory:                        r.jobsMemory(r.Config.Jobs.Resources.Limits),
 
-		RerunLimitPerMR:   DefaultRerunLimitPerMR,
-		RerunLimitPerRepo: DefaultRerunLimitPerRepo,
+		RerunLimitPerMR:    DefaultRerunLimitPerMR,
+		RerunLimitPerRepo:  DefaultRerunLimitPerRepo,
+		TrustedAuthorsOnly: r.instanceTrust(instance),
 		Overridden: map[string]bool{
+			KeyTrustedAuthorsOnly: false, KeyTrustedAuthors: false,
 			KeyApprove: false, KeyReviewDrafts: false, KeyInlineFindings: false, KeyFailureStatus: false,
 			KeySkills: false, KeyRepoSkills: false, KeyJobTimeout: false, KeyMaxTurns: false, KeyJobMemory: false,
 			KeyRerunLimitPerMR: false, KeyRerunLimitPerRepo: false, KeyCommandsAuthorAndMaintainersOnly: false, KeyIncrementalReviews: false, KeyLearnFromDismissals: false, KeyQuietReviews: false, KeyCommentLayout: false, KeyLinkedReposEnabled: false,
@@ -369,6 +381,15 @@ func (r *Resolver) jobsMemory(list corev1.ResourceList) resource.Quantity {
 	return q.DeepCopy()
 }
 
+// instanceTrust is the trusted-authors mode of the instance called name;
+// config.TrustFollowVisibility when it is unknown.
+func (r *Resolver) instanceTrust(name string) string {
+	if inst, ok := r.registry().Get(name); ok && inst.TrustedAuthorsOnly != "" {
+		return inst.TrustedAuthorsOnly
+	}
+	return config.TrustFollowVisibility
+}
+
 // fromConfig resolves a config repository; ok is false when its instance
 // isn't registered (config.Validate rules that out). The config defaults
 // failure_status to failed, so failure_status counts as overridden only when
@@ -407,6 +428,12 @@ func (r *Resolver) fromConfig(repo config.Repository) (Effective, bool) {
 		eff.LinkedReposEnabled, eff.Overridden[KeyLinkedReposEnabled] = *repo.LinkedReposEnabled, true
 	}
 	eff.LinkedRepos = cloneLinks(repo.LinkedRepos)
+	if repo.TrustedAuthorsOnly != nil {
+		eff.TrustedAuthorsOnly, eff.Overridden[KeyTrustedAuthorsOnly] = *repo.TrustedAuthorsOnly, true
+	}
+	if len(repo.TrustedAuthors) > 0 {
+		eff.TrustedAuthors, eff.Overridden[KeyTrustedAuthors] = slices.Clone(repo.TrustedAuthors), true
+	}
 	if repo.FailureStatus != "" && repo.FailureStatus != config.FailureStatusFailed {
 		eff.FailureStatus, eff.Overridden[KeyFailureStatus] = repo.FailureStatus, true
 	}
@@ -467,6 +494,12 @@ func (r *Resolver) fromDashboard(row store.DashboardRepo, stored store.RepoDefau
 	}
 	if len(row.CommentLayout) > 0 {
 		eff.CommentLayout, eff.Overridden[KeyCommentLayout] = slices.Clone(row.CommentLayout), true
+	}
+	if m := row.TrustedAuthorsOnly; m != nil && (*m == config.TrustOn || *m == config.TrustOff) {
+		eff.TrustedAuthorsOnly, eff.Overridden[KeyTrustedAuthorsOnly] = *m, true
+	}
+	if len(row.TrustedAuthors) > 0 {
+		eff.TrustedAuthors, eff.Overridden[KeyTrustedAuthors] = slices.Clone(row.TrustedAuthors), true
 	}
 	if row.LinkedReposEnabled != nil {
 		eff.LinkedReposEnabled, eff.Overridden[KeyLinkedReposEnabled] = *row.LinkedReposEnabled, true

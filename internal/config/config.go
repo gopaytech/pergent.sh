@@ -103,7 +103,19 @@ type Instance struct {
 	// neither are set; neither means no sign-in with this instance.
 	OAuthClientIDEnv     string `yaml:"oauth_client_id_env"`
 	OAuthClientSecretEnv string `yaml:"oauth_client_secret_env"`
+	// TrustedAuthorsOnly is the default of the instance's repositories:
+	// TrustFollowVisibility (also when empty), TrustOn or TrustOff.
+	TrustedAuthorsOnly string `yaml:"trusted_authors_only"`
 }
+
+// The values of trusted_authors_only. A repository takes TrustOn or TrustOff;
+// an instance also TrustFollowVisibility: on for a public repository, off
+// otherwise.
+const (
+	TrustFollowVisibility = "follow_visibility"
+	TrustOn               = "on"
+	TrustOff              = "off"
+)
 
 // GitHubInstance is a GitHub App (and the webhook that feeds it), usually
 // with a second one, and the env vars holding their secrets. One instance
@@ -128,6 +140,8 @@ type GitHubInstance struct {
 	// dashboard. Both or neither are set.
 	OAuthClientIDEnv     string `yaml:"oauth_client_id_env"`
 	OAuthClientSecretEnv string `yaml:"oauth_client_secret_env"`
+	// TrustedAuthorsOnly is as for Instance.
+	TrustedAuthorsOnly string `yaml:"trusted_authors_only"`
 }
 
 // The three ways a GitHub instance approves, as Approver reports them.
@@ -224,6 +238,10 @@ type Repository struct {
 	// RerunLimitPerMR and RerunLimitPerRepo cap the re-runs asked for per
 	// merge request and per repository and day (1 to 1000).
 	RerunLimitPerMR, RerunLimitPerRepo *int
+	// TrustedAuthorsOnly is TrustOn or TrustOff (nil: the instance's).
+	TrustedAuthorsOnly *string
+	// TrustedAuthors is the repository's allowlist, matched by ID.
+	TrustedAuthors []store.TrustedAuthor
 }
 
 // LLM is the model every review uses.
@@ -293,6 +311,9 @@ type fileRepository struct {
 
 	LinkedReposEnabled *bool      `yaml:"linked_repos_enabled"`
 	LinkedRepos        []fileLink `yaml:"linked_repos"`
+
+	TrustedAuthorsOnly *string               `yaml:"trusted_authors_only"`
+	TrustedAuthors     []store.TrustedAuthor `yaml:"trusted_authors"`
 }
 
 // fileLink is one entry of linked_repos. can_block is true when left out.
@@ -316,6 +337,8 @@ func (f fileRepository) repository() Repository {
 		QuietReviews:                     f.QuietReviews,
 		CommentLayout:                    []string(f.CommentLayout),
 		LinkedReposEnabled:               f.LinkedReposEnabled,
+		TrustedAuthorsOnly:               f.TrustedAuthorsOnly,
+		TrustedAuthors:                   f.TrustedAuthors,
 	}
 	if f.LinkedRepos != nil {
 		r.LinkedRepos = make([]store.Link, 0, len(f.LinkedRepos))
@@ -585,6 +608,9 @@ func (c *Config) Validate() error {
 		if (inst.ApproveTokenEnv != "") == inst.ApproveWithReviewBot {
 			add("gitlab[%d] (%s): exactly one of approve_token_env and approve_with_review_bot must be set", i, inst.Name)
 		}
+		if !validInstanceTrust(inst.TrustedAuthorsOnly) {
+			add("gitlab[%d] (%s): trusted_authors_only must be follow_visibility, on or off, got %q", i, inst.Name, inst.TrustedAuthorsOnly)
+		}
 	}
 
 	githubNames := make(map[string]bool, len(c.GitHub))
@@ -595,6 +621,9 @@ func (c *Config) Validate() error {
 		claim(PlatformGitHub, inst.Name)
 		githubNames[inst.Name] = true
 		errs = append(errs, checkGitHubInstance(i, inst)...)
+		if !validInstanceTrust(inst.TrustedAuthorsOnly) {
+			add("github[%d] (%s): trusted_authors_only must be follow_visibility, on or off, got %q", i, inst.Name, inst.TrustedAuthorsOnly)
+		}
 	}
 
 	seen := make(map[[3]string]bool, len(c.Repositories))
@@ -631,6 +660,22 @@ func (c *Config) Validate() error {
 		// empty list would silently mean the default list too.
 		if repo.Skills != nil && len(repo.Skills) == 0 {
 			add("repositories[%d] (%s): skills must be a list of skill names, or left out for the default list", i, repo.Project)
+		}
+		if m := repo.TrustedAuthorsOnly; m != nil && *m != TrustOn && *m != TrustOff {
+			add("repositories[%d] (%s): trusted_authors_only must be on or off, got %q", i, repo.Project, *m)
+		}
+		trustedIDs := make(map[int64]bool, len(repo.TrustedAuthors))
+		for j, a := range repo.TrustedAuthors {
+			switch {
+			case a.ID <= 0:
+				add("repositories[%d] (%s): trusted_authors[%d]: id is required (the user's numeric ID on the platform)", i, repo.Project, j)
+			case trustedIDs[a.ID]:
+				add("repositories[%d] (%s): trusted_authors[%d]: id %d is listed twice", i, repo.Project, j, a.ID)
+			}
+			trustedIDs[a.ID] = true
+			if strings.TrimSpace(a.Username) == "" {
+				add("repositories[%d] (%s): trusted_authors[%d]: username is required", i, repo.Project, j)
+			}
 		}
 		for _, name := range repo.RepoSkills {
 			if !skillNameRE.MatchString(name) {
@@ -1085,4 +1130,10 @@ func TimeoutWarnings(c *Config) []string {
 // WebhookURL is where platform sends instance's webhooks.
 func WebhookURL(publicURL, platform, instance string) string {
 	return strings.TrimRight(publicURL, "/") + "/webhooks/" + platform + "/" + instance
+}
+
+// validInstanceTrust reports whether m is an instance's trusted_authors_only:
+// empty (follow visibility) or one of the three values.
+func validInstanceTrust(m string) bool {
+	return m == "" || m == TrustFollowVisibility || m == TrustOn || m == TrustOff
 }
