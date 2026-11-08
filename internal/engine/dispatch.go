@@ -243,15 +243,29 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		return nil
 	}
 	if run.Trigger == store.TriggerPush {
-		// Before any token, Job or model call: a push of an author the
+		// Before any token, Job or model call. The retries of a check that
+		// fails run for trustPatience from its first failure: a push of an author the
 		// repository doesn't trust waits for someone with write access to
 		// start it. A run asked for (a re-run, a start) was asked for by
 		// someone allowed to.
-		trusted, err := authorTrust(ctx, plat.Forge, repo, run.MR.ProjectID, run.ProjectPath, mr, d.log)
+		trusted, err := authorTrust(ctx, plat.Forge, repo, run.MR.ProjectID, run.ProjectPath, mr, d.log, d.redact)
+		if err != nil {
+			if ctx.Err() != nil {
+				// Shutting down: not a failed check.
+				return d.postpone(ctx, e.now())
+			}
+			sctx, cancel := settleCtx(ctx)
+			since, serr := e.Store.TrustCheckFailing(sctx, run.ID, e.now())
+			cancel()
+			if serr != nil {
+				return d.retry(ctx, fmt.Errorf("record the failed trust check: %w", serr))
+			}
+			if e.now().Sub(since) < trustPatience {
+				d.log.Info("the author's access can't be read yet; trying again", "delay", trustRetryDelay, "error", d.redact(err.Error()))
+				return d.postpone(ctx, e.now().Add(trustRetryDelay))
+			}
+		}
 		switch {
-		case err != nil && e.now().Sub(run.CreatedAt) < trustPatience:
-			d.log.Info("the author's access can't be read yet; trying again", "delay", trustRetryDelay, "error", d.redact(err.Error()))
-			return d.postpone(ctx, e.now().Add(trustRetryDelay))
 		case err != nil:
 			d.log.Warn("the author's access can't be read; the run waits for someone to start it", "error", d.redact(err.Error()))
 			return d.hold(ctx, plat, store.WaitCheckFailed, checkFailedDescription(plat.Forge.Mention()), false)
@@ -908,7 +922,6 @@ func (d *dispatcher) requeue(ctx context.Context, notBefore time.Time) error {
 	return fmt.Errorf("requeue: %w", err)
 }
 
-// postpone puts the run back in the queue without counting an attempt.
 // hold makes the run wait for someone with write access to start it, for
 // reason, sets the pending status with description on its head and, with
 // note, posts the note about an untrusted author once per merge request. A
@@ -922,7 +935,10 @@ func (d *dispatcher) hold(ctx context.Context, plat Platform, reason, descriptio
 		return d.retry(ctx, fmt.Errorf("hold the run: %w", err))
 	}
 	if !held {
-		return nil
+		// Superseded meanwhile, or started while it was being checked (it
+		// is a start now): back to the queue, which a superseded run
+		// doesn't go to, so the start is dispatched.
+		return d.postpone(ctx, e.now())
 	}
 	d.log.Info("run waits for someone with write access to start it", "reason", reason)
 	if err := plat.Forge.SetStatus(sctx, run.MR.ProjectID, run.HeadSHA, forge.StatusPending, description); err != nil {
@@ -948,6 +964,7 @@ func (d *dispatcher) hold(ctx context.Context, plat Platform, reason, descriptio
 	return nil
 }
 
+// postpone puts the run back in the queue without counting an attempt.
 func (d *dispatcher) postpone(ctx context.Context, notBefore time.Time) error {
 	sctx, cancel := settleCtx(ctx)
 	defer cancel()

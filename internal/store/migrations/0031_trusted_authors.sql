@@ -31,5 +31,9 @@ ALTER TABLE dashboard_repos ADD COLUMN trusted_authors jsonb;
 ALTER TABLE instances ADD COLUMN trusted_authors_only text NOT NULL DEFAULT 'follow_visibility'
     CHECK (trusted_authors_only IN ('follow_visibility', 'on', 'off'));
 
+-- When the trust check of a run first failed to read the author's access
+-- (NULL: it hasn't): the retries run for a while from then.
+ALTER TABLE runs ADD COLUMN trust_check_since timestamptz;
+
 -- When the note about an untrusted author was posted on the change (NULL: never).
 ALTER TABLE merge_requests ADD COLUMN untrusted_noted_at timestamptz;

@@ -35,23 +35,24 @@ func untrustedNote(mention string) string {
 
 // authorTrust reports whether the repository trusts the change's author to
 // have it reviewed without anyone starting it. It does when the repository's
-// mode is off (follow_visibility: when the repository isn't public), when the
+// mode is off (follow_visibility: when the repository is private or internal), when the
 // author's ID is on the repository's allowlist, or when the author has write
 // access or better. A visibility that can't be read counts as public; a mode
 // it doesn't know counts as on. err is only an error reading the author's
 // access: the caller must not take it for trust. log gets the visibility
-// error, which isn't returned.
-func authorTrust(ctx context.Context, f forge.Forge, repo settings.Effective, projectID int64, projectPath string, ch forge.Change, log *slog.Logger) (bool, error) {
+// error, which isn't returned, through redact.
+func authorTrust(ctx context.Context, f forge.Forge, repo settings.Effective, projectID int64, projectPath string, ch forge.Change,
+	log *slog.Logger, redact func(string) string) (bool, error) {
 	switch repo.TrustedAuthorsOnly {
 	case config.TrustOff:
 		return true, nil
 	case config.TrustFollowVisibility:
 		vis, err := f.Visibility(ctx, projectPath)
-		if err == nil && vis != forge.VisPublic {
+		if err == nil && (vis == forge.VisPrivate || vis == forge.VisInternal) {
 			return true, nil
 		}
 		if err != nil {
-			log.Warn("the repository's visibility can't be read; it counts as public", "error", err.Error())
+			log.Warn("the repository's visibility can't be read; it counts as public", "error", redact(err.Error()))
 		}
 	}
 	if ch.AuthorID == 0 {

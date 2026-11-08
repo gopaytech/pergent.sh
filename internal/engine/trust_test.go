@@ -60,11 +60,12 @@ func TestAuthorTrust(t *testing.T) {
 		{name: "follow, unreadable but developer", mode: config.TrustFollowVisibility, f: trustForge{visErr: boom, access: forge.AccessWrite}, ch: alice, want: true, wantVis: 1, wantAccess: 1},
 		{name: "access error", mode: config.TrustOn, f: trustForge{accessErr: boom}, ch: alice, wantErr: true, wantAccess: 1},
 		{name: "unknown mode is on", mode: "", f: trustForge{access: forge.AccessRead}, ch: alice, want: false, wantAccess: 1},
+		{name: "follow, empty visibility is public", mode: config.TrustFollowVisibility, f: trustForge{vis: "", access: forge.AccessRead}, ch: alice, want: false, wantVis: 1, wantAccess: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := tc.f
 			repo := settings.Effective{TrustedAuthorsOnly: tc.mode, TrustedAuthors: tc.list}
-			got, err := authorTrust(context.Background(), &f, repo, 7, "acme/widgets", tc.ch, slog.New(slog.DiscardHandler))
+			got, err := authorTrust(context.Background(), &f, repo, 7, "acme/widgets", tc.ch, slog.New(slog.DiscardHandler), func(s string) string { return s })
 			if (err != nil) != tc.wantErr || got != tc.want {
 				t.Errorf("authorTrust = %v, %v; want %v (error %v)", got, err, tc.want, tc.wantErr)
 			}

@@ -744,15 +744,16 @@ func (s *Store) SkipRun(ctx context.Context, id, reason string, now time.Time) (
 	return tag.RowsAffected() == 1, nil
 }
 
-// HoldRun moves a queued, or claimed and not yet dispatched, run to Waiting
-// with the reason (WaitUntrusted or WaitCheckFailed). ok is false when the
+// HoldRun moves a push's queued, or claimed and not yet dispatched, run to
+// Waiting with the reason (WaitUntrusted or WaitCheckFailed). A run started
+// meanwhile (StartRun made it a TriggerStart) is not held. ok is false when the
 // run was in another state or unknown; a malformed id is an error.
 func (s *Store) HoldRun(ctx context.Context, id, reason string) (ok bool, err error) {
 	if !validUUID(id) {
 		return false, fmt.Errorf("store: run %q not found", id)
 	}
 	tag, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'waiting', skip_reason = $2
-		WHERE id = $1::uuid AND state IN ('queued', 'running') AND dispatched_at IS NULL`, id, cutText(reason))
+		WHERE id = $1::uuid AND state IN ('queued', 'running') AND dispatched_at IS NULL AND trigger = 'push'`, id, cutText(reason))
 	if err != nil {
 		return false, err
 	}
@@ -761,7 +762,9 @@ func (s *Store) HoldRun(ctx context.Context, id, reason string) (ok bool, err er
 
 // StartRun starts the review of headSHA onto targetBranch of an untrusted
 // author's merge request. A waiting run of that head and target becomes a
-// queued run with TriggerStart (started is true, id is that run's). With
+// queued run with TriggerStart (started is true, id is that run's), and so
+// does a push's run of it not dispatched yet, queued or claimed (being
+// checked): the dispatcher's hold then leaves it alone. With
 // none, a live (queued, running or reported) run of that head and target is
 // left as it is and returned, started false. Otherwise a new queued TriggerStart run is
 // created, superseding the live runs of other heads and targets and an older
@@ -780,6 +783,17 @@ func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, ta
 	err = tx.QueryRow(ctx, `UPDATE runs SET state = 'queued', trigger = 'start', skip_reason = '', not_before = NULL
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
 		  AND state = 'waiting'
+		RETURNING id::text`,
+		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch).Scan(&id)
+	if err == nil {
+		return id, true, tx.Commit(ctx)
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", false, err
+	}
+	err = tx.QueryRow(ctx, `UPDATE runs SET trigger = 'start'
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
+		  AND state IN ('queued', 'running') AND dispatched_at IS NULL AND trigger = 'push'
 		RETURNING id::text`,
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch).Scan(&id)
 	if err == nil {
@@ -818,6 +832,18 @@ func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, ta
 		return "", false, err
 	}
 	return id, true, tx.Commit(ctx)
+}
+
+// TrustCheckFailing records that run id's trust check failed at now and
+// returns when it first failed, now on the first failure.
+func (s *Store) TrustCheckFailing(ctx context.Context, id string, now time.Time) (time.Time, error) {
+	if !validUUID(id) {
+		return time.Time{}, fmt.Errorf("store: run %q not found", id)
+	}
+	var since time.Time
+	err := s.pool.QueryRow(ctx, `UPDATE runs SET trust_check_since = COALESCE(trust_check_since, $2)
+		WHERE id = $1::uuid RETURNING trust_check_since`, id, now).Scan(&since)
+	return since, err
 }
 
 // ClaimUntrustedNote records that the note about an untrusted author is

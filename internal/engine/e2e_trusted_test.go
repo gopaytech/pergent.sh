@@ -199,3 +199,22 @@ func TestStartRunSkipsCheck(t *testing.T) {
 		t.Errorf("the author's access was read %d times", n)
 	}
 }
+
+// The retry window starts at the first failed check, not when the run was
+// queued: a run that waited in a backlog still gets its retries.
+func TestTrustCheckPatienceAfterBacklog(t *testing.T) {
+	head := sha('a')
+	env := trustEnv(t, 3, head, 0)
+	env.GitLab.Reply(http.MethodGet, "/projects/7/members/all/42", http.StatusForbidden, `{"message":"403 Forbidden"}`)
+	id := env.Enqueue(3, head)
+	env.SetNow(env.Now().Add(time.Hour))
+	dispatch(t, env)
+	if r := env.Run(id); r.State != store.Queued {
+		t.Fatalf("after a first failed check an hour after queueing: run = %s/%q, want queued for a retry", r.State, r.SkipReason)
+	}
+	env.SetNow(env.Now().Add(trustPatience + time.Minute))
+	dispatch(t, env)
+	if r := env.Run(id); r.State != store.Waiting || r.SkipReason != store.WaitCheckFailed {
+		t.Errorf("past the window: run = %s/%q, want waiting/trust_check_failed", r.State, r.SkipReason)
+	}
+}

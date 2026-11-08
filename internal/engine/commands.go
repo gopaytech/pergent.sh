@@ -484,7 +484,7 @@ func (e *Engine) handleCommand(ctx, bctx context.Context, cmd store.Command, log
 		}
 	}
 	if cmd.Kind == "review" || cmd.Kind == "review_failed" {
-		trusted, err := authorTrust(ctx, plat.Forge, repo, cmd.MR.ProjectID, cmd.ProjectPath, change, log)
+		trusted, err := authorTrust(ctx, plat.Forge, repo, cmd.MR.ProjectID, cmd.ProjectPath, change, log, e.redact)
 		if err != nil {
 			return verdict{}, fmt.Errorf("check the change's author: %w", err)
 		}

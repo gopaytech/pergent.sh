@@ -241,3 +241,36 @@ func TestMigrationKeepsPreviousReleaseTrusted(t *testing.T) {
 		t.Errorf("the previous release claimed %d runs, want none", n)
 	}
 }
+
+// A start that comes before the dispatcher held the push run (queued, or
+// claimed and still being checked) makes that run a start, and the hold
+// that follows doesn't take it back.
+func TestStartBeforeHold(t *testing.T) {
+	s := newStore(t)
+	id := enqueue(t, s, mr1, sha('a'))
+	got, started, err := s.StartRun(ctx, mr1, "acme/widgets", sha('a'), "main")
+	if err != nil || !started || got != id {
+		t.Fatalf("StartRun = %s, %v, %v; want %s, true", got, started, err, id)
+	}
+	if r := mustRun(t, s, id); r.State != Queued || r.Trigger != TriggerStart {
+		t.Errorf("run = %s/%s, want queued/start", r.State, r.Trigger)
+	}
+	if ok, err := s.HoldRun(ctx, id, WaitUntrusted); err != nil || ok {
+		t.Errorf("HoldRun of a start = %v, %v; want false", ok, err)
+	}
+
+	// Claimed, not dispatched: the same.
+	id2 := enqueue(t, s, mr1, sha('b'))
+	if _, err := s.ClaimQueued(ctx, 10, t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, started, err := s.StartRun(ctx, mr1, "acme/widgets", sha('b'), "main"); err != nil || !started {
+		t.Fatalf("StartRun of a claimed run = %v, %v", started, err)
+	}
+	if r := mustRun(t, s, id2); r.Trigger != TriggerStart {
+		t.Errorf("claimed run trigger = %s, want start", r.Trigger)
+	}
+	if ok, _ := s.HoldRun(ctx, id2, WaitUntrusted); ok {
+		t.Error("a claimed start was held")
+	}
+}
