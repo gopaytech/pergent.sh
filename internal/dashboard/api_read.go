@@ -865,9 +865,10 @@ func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Ef
 	}
 	wv := make([]WaitingView, 0, len(waiting))
 	for _, c := range waiting {
-		wv = append(wv, WaitingView{Number: c.IID, Title: c.Title, Author: c.Author, WebURL: c.WebURL, Since: c.Since, Reason: c.Reason})
+		wv = append(wv, WaitingView{Number: c.IID, Head: c.Head, Title: c.Title, Author: c.Author, WebURL: c.WebURL, Since: c.Since, Reason: c.Reason})
 	}
-	return RepositoryDetailView{Repo: views[0], Settings: settingsView, Attention: items, Role: role.String(), Waiting: wv}, nil
+	return RepositoryDetailView{Repo: views[0], Settings: settingsView, Attention: items, Role: role.String(), Waiting: wv,
+		InstanceTrustedAuthorsOnly: repo.InstanceTrustedAuthorsOnly}, nil
 }
 
 // settingViews is repo's settings as RepositoryDetailView shows them.

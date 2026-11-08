@@ -834,6 +834,18 @@ func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, ta
 	return id, true, tx.Commit(ctx)
 }
 
+// HeadSeenBy reports whether pergent.sh had queued a run of headSHA onto
+// targetBranch for mr at or before at: whether that head existed when
+// someone asked, at at, for the review of the change to be started.
+func (s *Store) HeadSeenBy(ctx context.Context, mr MRKey, headSHA, targetBranch string, at time.Time) (bool, error) {
+	var seen bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
+		  AND created_at <= $6)`,
+		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch, at).Scan(&seen)
+	return seen, err
+}
+
 // TrustCheckFailing records that run id's trust check failed at now and
 // returns when it first failed, now on the first failure.
 func (s *Store) TrustCheckFailing(ctx context.Context, id string, now time.Time) (time.Time, error) {
@@ -1503,23 +1515,29 @@ func (s *Store) queryApprovals(ctx context.Context, sql string, args ...any) ([]
 // of it, when the run was queued and why it waits.
 type WaitingChange struct {
 	IID                   int64
+	Head                  string
 	Title, Author, WebURL string
 	Since                 time.Time
 	Reason                string
 }
 
 // WaitingChanges returns the merge requests of project (its path, matched
-// ignoring case) on instance whose run waits, newest first, at most 100.
+// ignoring case) on instance whose newest live run waits, newest first, at
+// most 100. A waiting run with a newer one (left by a release that didn't
+// know waiting runs) isn't listed.
 func (s *Store) WaitingChanges(ctx context.Context, instance, project string) ([]WaitingChange, error) {
-	rows, err := s.pool.Query(ctx, `SELECT mr_iid, title, author, web_url, created_at, skip_reason FROM runs
-		WHERE instance = $1 AND lower(project_path) = lower($2) AND state = 'waiting'
-		ORDER BY created_at DESC, id DESC LIMIT 100`, instance, project)
+	rows, err := s.pool.Query(ctx, `SELECT r.mr_iid, r.head_sha, r.title, r.author, r.web_url, r.created_at, r.skip_reason FROM runs r
+		WHERE r.instance = $1 AND lower(r.project_path) = lower($2) AND r.state = 'waiting'
+		  AND NOT EXISTS (SELECT 1 FROM runs n
+			WHERE n.instance = r.instance AND n.project_id = r.project_id AND n.mr_iid = r.mr_iid
+			  AND n.state <> 'superseded' AND (n.created_at, n.id) > (r.created_at, r.id))
+		ORDER BY r.created_at DESC, r.id DESC LIMIT 100`, instance, project)
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (WaitingChange, error) {
 		var c WaitingChange
-		err := row.Scan(&c.IID, &c.Title, &c.Author, &c.WebURL, &c.Since, &c.Reason)
+		err := row.Scan(&c.IID, &c.Head, &c.Title, &c.Author, &c.WebURL, &c.Since, &c.Reason)
 		return c, err
 	})
 }

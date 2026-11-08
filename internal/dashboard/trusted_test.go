@@ -45,7 +45,9 @@ const gadgetsSettings = "/api/repositories/main/acme/gadgets/settings"
 // as sent; an unknown name saves nothing.
 func TestTrustedAuthorsSave(t *testing.T) {
 	e := newEnv(t, nil)
-	e.dashboardRepo("main", "acme/gadgets", nil)
+	e.dashboardRepo("main", "acme/gadgets", func(r *store.DashboardRepo) {
+		r.TrustedAuthors = []store.TrustedAuthor{{ID: 9, Username: "old-name"}}
+	})
 	e.src["main"].set(func(f *fakeSource) { f.users = map[string]forge.User{"alice": {ID: 5, Username: "Alice"}} })
 	c := e.sessionFor(e.ssoAdmin("boss@example.com"))
 
@@ -63,6 +65,14 @@ func TestTrustedAuthorsSave(t *testing.T) {
 	}
 	if r, _ := e.storedRepo("main", "acme/gadgets"); !slices.Equal(r.TrustedAuthors, want) {
 		t.Errorf("an unknown name changed the list: %+v", r.TrustedAuthors)
+	}
+
+	// An ID that isn't the stored one for that name is not taken: the name is
+	// looked up.
+	rec = e.send(c, "PUT", gadgetsSettings, `{"trustedAuthors":[{"id":666,"username":"alice"},{"id":9,"username":"old-name"}]}`)
+	wantCode(t, rec, "forged id", http.StatusOK)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); !slices.Equal(r.TrustedAuthors, want) {
+		t.Errorf("an id sent with a name = %+v, want %+v", r.TrustedAuthors, want)
 	}
 
 	e.src["main"].set(func(f *fakeSource) { f.userErr = errors.New("gitlab: status 500") })
@@ -89,6 +99,10 @@ func TestTrustedAuthorsOnlySetting(t *testing.T) {
 	v := getJSON[RepositoryDetailView](e, c, "/api/repositories/main/acme/gadgets")
 	if s := v.Settings["trustedAuthorsOnly"]; s.Value != "off" || !s.Overridden {
 		t.Errorf("setting = %+v, want off, overridden", s)
+	}
+	// What the instance would give is shown beside it.
+	if v.InstanceTrustedAuthorsOnly != "follow_visibility" {
+		t.Errorf("instance mode = %q, want follow_visibility", v.InstanceTrustedAuthorsOnly)
 	}
 	wantCode(t, e.send(c, "PUT", gadgetsSettings, `{"trustedAuthorsOnly":null}`), "reset", http.StatusOK)
 	v = getJSON[RepositoryDetailView](e, c, "/api/repositories/main/acme/gadgets")
@@ -162,7 +176,7 @@ func TestWaitingList(t *testing.T) {
 		t.Fatalf("waiting = %+v, want one", v.Waiting)
 	}
 	w := v.Waiting[0]
-	if w.Number != 7 || w.Title != "Add the handler" || w.Author != "bob" || w.Reason != store.WaitCheckFailed || w.WebURL == "" {
+	if w.Number != 7 || w.Title != "Add the handler" || w.Author != "bob" || w.Reason != store.WaitCheckFailed || w.WebURL == "" || w.Head != head('1') {
 		t.Errorf("waiting = %+v", w)
 	}
 
@@ -181,11 +195,18 @@ func TestStartButton(t *testing.T) {
 	e := newEnv(t, nil)
 	id := e.waitingChange(head('1'), store.WaitUntrusted)
 	viewer := e.signInRole(store.RoleViewer)
-	wantCode(t, e.send(viewer, "POST", buttonURL("start"), `{}`), "viewer", http.StatusForbidden)
+	body := `{"head":"` + head('1') + `"}`
+	wantCode(t, e.send(viewer, "POST", buttonURL("start"), body), "viewer", http.StatusForbidden)
 
 	e.aliceOn("main", store.RoleMaintainer)
 	c := e.aliceSession()
-	rec := e.send(c, "POST", buttonURL("start"), `{}`)
+	wantCode(t, e.send(c, "POST", buttonURL("start"), `{}`), "no head", http.StatusBadRequest)
+	// The change has a newer push than the page showed: nothing starts.
+	wantCode(t, e.send(c, "POST", buttonURL("start"), `{"head":"`+head('2')+`"}`), "head moved", http.StatusConflict)
+	if rows := e.runRows(); len(rows) != 1 || rows[0].State != "waiting" {
+		t.Fatalf("after a moved head: runs = %+v, want still waiting", rows)
+	}
+	rec := e.send(c, "POST", buttonURL("start"), body)
 	if rec.Code != http.StatusAccepted || statusOf(t, rec) != "queued" {
 		t.Fatalf("start = %d %s; want 202 queued", rec.Code, rec.Body)
 	}
@@ -199,7 +220,7 @@ func TestStartButton(t *testing.T) {
 	if e.wakes.Load() == 0 {
 		t.Error("the engine wasn't woken")
 	}
-	wantCode(t, e.send(c, "POST", buttonURL("start"), `{}`), "not waiting", http.StatusConflict)
+	wantCode(t, e.send(c, "POST", buttonURL("start"), body), "not waiting", http.StatusConflict)
 }
 
 // Who is trusted is an admin's to say: a maintainer can't change it, and a

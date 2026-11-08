@@ -1386,6 +1386,7 @@ A reply never says more than the commenter could see on the platform, and never 
 | The ID isn't in the latest review | 👎 | `no finding <id> in the latest review` |
 | A draft, in a repository that doesn't review drafts | 👎 | `drafts aren't reviewed in this repository` |
 | `review` on an untrusted author's change by someone without write access, the author included | 👎 | `only someone with write access can start the review of this change` |
+| `review` on an untrusted author's change pushed after the comment was written | 👎 | `this change was pushed after your comment; start the review again` |
 | A re-run cap is reached | 👎 | `re-run limit reached for this MR; it resets at 00:00 UTC` (`PR` on GitHub) |
 | The same command again within 30 seconds, the repository switched off, a GitLab bot as the author, or the change closed, merged or gone | 👎 | none |
 | The commenter had a command on the change answered without doing anything (a reply of help, a refusal, a command with nothing to do, a drop, a command given up on after errors) less than 2 minutes ago | none | none |
@@ -1494,7 +1495,7 @@ On a public repository anyone can open a change, usually from a fork, and so sta
 - a pending status on each head (GitLab commit status `pending`, GitHub a `queued` check run), `Waiting for someone with write access to start the review`, so a required pergent check keeps the change unmergeable;
 - the change is listed under **Waiting for a start** on the repository's page in the dashboard.
 
-Someone with write access starts the review with `@<bot> review`, even while **Only the author and maintainers use commands** is on, or an admin or a maintainer of the repository's team presses **Start review**. Each new head waits again and needs another start. A started review is a normal review, and a clean one is approved as usual. A start counts against the change's re-run cap (10 a day by default), not the repository's. The author's own `@<bot> review` is refused, whatever else they may do on their change.
+Someone with write access starts the review with `@<bot> review`, even while **Only the author and maintainers use commands** is on, or an admin or a maintainer of the repository's team presses **Start review**. A start reviews only the head that was there when it was asked for: a push that lands between the comment (or the page the button was pressed on) and its handling isn't started, and the answer says to start it again (`this change was pushed after your comment; start the review again`, or a 409 asking to reload the page). Each new head waits again and needs another start. A started review is a normal review, and a clean one is approved as usual. A start counts against the change's re-run cap (10 a day by default), not the repository's. The author's own `@<bot> review` is refused, whatever else they may do on their change.
 
 **Who is trusted is checked when the run comes up for dispatch, not cached:** someone taken off the allowlist or out of the repository is untrusted from their next push. When the author's access can't be read, pergent.sh tries again for about 10 minutes; then the run waits with the status `Couldn't check the author's access. Someone with write access can start the review with @<bot> review`, and no note.
 

@@ -25,7 +25,8 @@ const (
 	msgReasonTooLong   = "the reason is too long"
 	msgNoSuchFinding   = "there is no such finding in the latest review"
 	msgChangeNotOpen   = "this change is not open"
-	msgBadStart        = "the body must be empty or {}"
+	msgBadStart        = `the body must be {"head": "<the commit the page shows>"}`
+	msgHeadMoved       = "this change was pushed since the page was loaded; reload it and start the review again"
 	msgNotWaiting      = "this change isn't waiting for someone to start its review"
 	msgDraftsNotOn     = "drafts aren't reviewed in this repository"
 	msgPlatformFailed  = "could not read this change from its platform, please try again"
@@ -105,6 +106,11 @@ func (d *Dashboard) reviewAction(w http.ResponseWriter, r *http.Request) {
 	var restore struct {
 		Fingerprint string `json:"fingerprint"`
 	}
+	// start names the head the page showed: a change pushed since doesn't
+	// start.
+	var start struct {
+		Head string `json:"head"`
+	}
 	switch action {
 	case "rerun":
 		// No body at all is a re-run of everything.
@@ -113,8 +119,7 @@ func (d *Dashboard) reviewAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "start":
-		var none struct{}
-		if err := decodeStrict(r, &none); err != nil && !errors.Is(err, io.EOF) {
+		if err := decodeStrict(r, &start); err != nil || !validHead(start.Head) {
 			writeError(w, http.StatusBadRequest, msgBadStart)
 			return
 		}
@@ -160,7 +165,7 @@ func (d *Dashboard) reviewAction(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, msgNotWaiting)
 			return
 		}
-		d.start(w, r, b)
+		d.start(w, r, b, start.Head)
 	case "dismiss":
 		d.dismiss(w, r, b, strings.TrimSpace(dismiss.Fingerprint), strings.TrimSpace(dismiss.Reason))
 	case "restore":
@@ -257,8 +262,9 @@ func (d *Dashboard) rerun(w http.ResponseWriter, r *http.Request, b reviewButton
 // start is the Start review button of a change whose review waits because
 // the repository doesn't trust its author: like a comment from someone with
 // write access, it starts the review of the change's head on the platform
-// now, against the change's re-run cap only.
-func (d *Dashboard) start(w http.ResponseWriter, r *http.Request, b reviewButton) {
+// now, against the change's re-run cap only, when that head is the one the
+// page showed (seen).
+func (d *Dashboard) start(w http.ResponseWriter, r *http.Request, b reviewButton, seen string) {
 	ctx := r.Context()
 	change, ok := d.platformChange(w, r, b)
 	if !ok {
@@ -273,6 +279,9 @@ func (d *Dashboard) start(w http.ResponseWriter, r *http.Request, b reviewButton
 		return
 	case change.HeadSHA == "":
 		writeError(w, http.StatusBadGateway, msgPlatformFailed)
+		return
+	case change.HeadSHA != seen:
+		writeError(w, http.StatusConflict, msgHeadMoved)
 		return
 	}
 	res, err := actions.Start(ctx, d.Store, actions.StartRequest{
@@ -435,5 +444,19 @@ func (d *Dashboard) redecide(r *http.Request, mr store.MRKey) bool {
 		return false
 	}
 	d.wake()
+	return true
+}
+
+// validHead reports whether s is a commit SHA as the platforms write one:
+// 40 or 64 lowercase hex digits.
+func validHead(s string) bool {
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
 	return true
 }

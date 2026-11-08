@@ -823,9 +823,10 @@ paths:
         For a change whose newest run waits because the repository doesn't
         trust its author (409 otherwise): starts the review of the change's
         head on the platform now, like `@<bot> review` from someone with write
-        access. The body is empty or `{}`. For maintainers and admins of the
-        repository (403 otherwise). The change must be open (409), and a draft
-        only where drafts are reviewed (409). A start counts against the
+        access. The body names the head the page showed (`WaitingView.head`):
+        when the change has been pushed since, nothing starts (409). For
+        maintainers and admins of the repository (403 otherwise). The change
+        must be open (409), and a draft only where drafts are reviewed (409). A start counts against the
         change's re-run cap only (429), not the repository's.
       x-pergent-access: session
       x-pergent-pattern: POST /api/reviews/{instance}/{rest...}
@@ -836,6 +837,11 @@ paths:
         - $ref: '#/components/parameters/InstanceName'
         - $ref: '#/components/parameters/ProjectPath'
         - $ref: '#/components/parameters/Number'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/StartRequest'}
       responses:
         '202':
           description: '`status` is `queued` or `already queued`.'
@@ -3090,6 +3096,14 @@ components:
           maxItems: 100
           description: The repository's allowlist. An entry without `id` is looked up by username when it is saved (400 when the platform doesn't know it), then stored by ID.
           items: {$ref: '#/components/schemas/TrustedAuthorInput'}
+    StartRequest:
+      type: object
+      required: [head]
+      additionalProperties: false
+      properties:
+        head:
+          type: string
+          pattern: '^([0-9a-f]{40}|[0-9a-f]{64})$'
     InstanceTrustRequest:
       type: object
       required: [mode]
@@ -3118,9 +3132,12 @@ components:
     WaitingView:
       description: A change whose review waits for someone with write access to start it.
       type: object
-      required: [number, title, author, webUrl, since, reason]
+      required: [number, head, title, author, webUrl, since, reason]
       properties:
         number: {type: integer}
+        head:
+          type: string
+          description: The commit that waits. Start review sends it back.
         title: {type: string}
         author: {type: string}
         webUrl: {type: string}
@@ -3809,7 +3826,7 @@ components:
     RepositoryDetailView:
       description: A repository with its effective settings.
       type: object
-      required: [repo, settings, attention, role, waiting]
+      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly]
       properties:
         repo: {$ref: '#/components/schemas/RepositoryView'}
         settings:
@@ -3830,6 +3847,10 @@ components:
           type: array
           items: {$ref: '#/components/schemas/WaitingView'}
           description: The changes waiting for someone to start their review, newest first.
+        instanceTrustedAuthorsOnly:
+          type: string
+          enum: [follow_visibility, 'on', 'off']
+          description: The instance's trusted-authors mode, which the repository follows unless it sets its own.
     RepositoryView:
       description: One repository switched on.
       type: object

@@ -929,6 +929,7 @@ var openAPIUntypedSchemas = map[string]string{
 	"ErrorBody":                 "map[string]string{error, code}",
 	"StatusBody":                "map[string]string{status}",
 	"InstanceTrustRequest":      "struct in Dashboard.putInstanceTrust",
+	"StartRequest":              "struct in Dashboard.reviewAction",
 	"TrustedAuthorInput":        "store.TrustedAuthor with id optional, in trustedAuthorsSetting",
 	"Outcome":                   "the Outcome* constants, spelled in the enum",
 	"CSRFTokenBody":             "map[string]string{csrfToken}",

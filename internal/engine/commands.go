@@ -76,6 +76,9 @@ const (
 	// replyStartNeedsWrite refuses the review of an untrusted author's
 	// change to anyone without write access, its author included.
 	replyStartNeedsWrite = "only someone with write access can start the review of this change"
+	// replyPushedSince refuses to start a head pushed after the comment
+	// asked: the person who asked hasn't seen it.
+	replyPushedSince = "this change was pushed after your comment; start the review again"
 )
 
 // Why a command was refused, as the outcome's text says it ("refused: " +
@@ -644,7 +647,8 @@ func (c *commandRun) rerun(ctx context.Context, failedOnly bool) (verdict, error
 
 // start starts the review of an untrusted author's change at its head, for
 // someone with write access (never its author for being the author): the
-// whole review, whatever the command asked for.
+// whole review, whatever the command asked for, of the change's head when
+// that head was known before the comment.
 func (c *commandRun) start(ctx context.Context) (verdict, error) {
 	if c.access < forge.AccessWrite {
 		return refused(whyUntrusted, replyStartNeedsWrite), nil
@@ -654,6 +658,17 @@ func (c *commandRun) start(ctx context.Context) (verdict, error) {
 	}
 	if c.change.HeadSHA == "" {
 		return verdict{}, errors.New("the platform reports no head commit")
+	}
+	// Only a head pergent.sh knew when the comment came is started: a push
+	// that lands in between is a head nobody with write access has seen.
+	// A push whose webhook comes late counts as later: asked again, it
+	// starts.
+	seen, err := c.e.Store.HeadSeenBy(ctx, c.cmd.MR, c.change.HeadSHA, c.change.TargetBranch, c.cmd.CreatedAt)
+	if err != nil {
+		return verdict{}, fmt.Errorf("check the head was known: %w", err)
+	}
+	if !seen {
+		return refused("pushed after the command", replyPushedSince), nil
 	}
 	res, err := actions.Start(ctx, c.e.Store, actions.StartRequest{
 		MR: c.cmd.MR, ProjectPath: c.cmd.ProjectPath, Head: c.change.HeadSHA, TargetBranch: c.change.TargetBranch,

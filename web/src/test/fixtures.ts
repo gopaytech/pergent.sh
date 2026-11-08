@@ -291,6 +291,7 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
   },
   attention: repo.health === "attention" ? [overview.attention[0]] : [],
   waiting: [],
+  instanceTrustedAuthorsOnly: "follow_visibility",
 });
 
 // A skill written in the dashboard, on the default list.
