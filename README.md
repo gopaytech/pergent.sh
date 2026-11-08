@@ -258,7 +258,7 @@ Migration `0032` runs at startup and adds a table and a column, dropping nothing
 - **The usage of earlier reviews is filled in after the upgrade, in the background.** pergent.sh serves at once and reads the stored results one page at a time, oldest first, so the Usage page fills up as it goes. Only a review that left a result is filled in. For a merged incremental review filled in this way, the tokens of the `impact` skill are left out, except in a `review failed` re-run that ran `impact` itself. A result that cannot be read is marked and not read again.
 - **Cache and reasoning counts need the pergent release that reports them.** A Job that runs an older pergent shows them as unknown, not as zero. Input and output tokens are there for every review that left a result.
 - **The review page counts a `review failed` re-run once.** It showed the tokens of the skills the re-run kept a second time.
-- **Prometheus metrics are new and off by default.** Nothing needs doing. To turn them on, set `metrics.enabled: true` in the chart (or `metrics_listen` in the config) and scrape the new `-metrics` Service inside the cluster: see [Metrics](#metrics).
+- **Prometheus metrics are new and off by default.** Nothing needs doing. To turn them on, set `metrics.enabled: true` in the chart (or `metrics_listen` in the config) and scrape the new `-metrics` Service inside the cluster: see [Metrics](#metrics). To roll back with them on, first set `metrics.enabled: false` (or remove `metrics_listen` from your config): the previous release refuses a config key it doesn't know.
 
 ### Upgrading to 0.12.0
 

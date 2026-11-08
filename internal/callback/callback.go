@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/result"
@@ -22,6 +23,9 @@ import (
 const maxBodyBytes = 11 << 20
 
 const unusable = "pergent sent a result pergent.sh couldn't use: "
+
+// usageTimeout bounds writing one result's usage.
+const usageTimeout = 30 * time.Second
 
 // Results is the part of the store the handler needs.
 type Results interface {
@@ -39,6 +43,9 @@ type Handler struct {
 	// Wake nudges the publisher after a result or failure was recorded. May be nil.
 	Wake func()
 	Log  *slog.Logger
+
+	// usageWork counts the usage writes still running, so a test can wait.
+	usageWork sync.WaitGroup
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -114,10 +121,30 @@ func (h *Handler) stored(w http.ResponseWriter, ctx context.Context, id string, 
 		http.Error(w, "unusable result: "+reason, http.StatusBadRequest)
 		return
 	}
-	// Waking comes first, so that publishing never waits on usage.
 	h.wake()
-	h.recordUsage(ctx, id, body)
+	h.recordUsageLater(ctx, id, body)
 	w.WriteHeader(http.StatusOK)
+}
+
+// recordUsageLater writes the usage without holding up publishing or the
+// answer to the Job. It outlives the request, so a Job that hangs up once it
+// has its answer doesn't lose it; a write lost to a restart is picked up by
+// the background fill at the next start.
+func (h *Handler) recordUsageLater(ctx context.Context, id string, body []byte) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), usageTimeout)
+	h.usageWork.Add(1)
+	go func() {
+		defer h.usageWork.Done()
+		defer cancel()
+		// Outside the request, net/http no longer stops a panic from
+		// ending the process.
+		defer func() {
+			if p := recover(); p != nil {
+				h.log().Error("recording a result's usage panicked", "run", id, "panic", p)
+			}
+		}()
+		h.recordUsage(ctx, id, body)
+	}()
 }
 
 // recordUsage stores what the accepted result's skills used. Usage is for
