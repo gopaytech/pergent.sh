@@ -15,6 +15,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/store"
+	"github.com/gopaytech/pergent.sh/internal/usage"
 )
 
 // maxBodyBytes is a little above the 10 MB cap pergent puts on its result.
@@ -28,6 +29,7 @@ type Results interface {
 	StoreResult(ctx context.Context, id, token string, body []byte, now time.Time) (store.ResultOutcome, error)
 	ReportFailure(ctx context.Context, id, reason string, now time.Time) (bool, error)
 	ReplaceWithFailure(ctx context.Context, id, reason string) error
+	RecordUsage(ctx context.Context, id string, skills []store.SkillUsage) error
 }
 
 // Handler serves POST /runs/{id}/result.
@@ -112,8 +114,35 @@ func (h *Handler) stored(w http.ResponseWriter, ctx context.Context, id string, 
 		http.Error(w, "unusable result: "+reason, http.StatusBadRequest)
 		return
 	}
+	h.recordUsage(ctx, id, body)
 	h.wake()
 	w.WriteHeader(http.StatusOK)
+}
+
+// recordUsage stores what the accepted result's skills used. Usage is for
+// the admin views only: a failure is logged and never changes the review.
+func (h *Handler) recordUsage(ctx context.Context, id string, body []byte) {
+	run, found, err := h.Results.Run(ctx, id)
+	if err != nil || !found {
+		h.log().Warn("couldn't record the result's usage", "run", id, "found", found, "error", errText(err))
+		return
+	}
+	skills, err := usage.FromResult(body, run)
+	if err != nil {
+		// The run is still marked, so it isn't read again later.
+		h.log().Warn("couldn't read the result's usage", "run", id, "error", err.Error())
+		skills = nil
+	}
+	if err := h.Results.RecordUsage(ctx, id, skills); err != nil {
+		h.log().Warn("couldn't record the result's usage", "run", id, "error", err.Error())
+	}
+}
+
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // check returns why a stored result cannot be used, or "".
