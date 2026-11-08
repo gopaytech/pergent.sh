@@ -224,6 +224,29 @@ For GitHub, put the Apps' private keys (the whole `.pem` file of each) and the r
 
 pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is handy for local development.
 
+### Metrics
+
+pergent.sh can serve Prometheus counters for the model tokens, reviews and findings the [Usage](#usage) page shows. They are off by default. Setting `metrics_listen` (with the chart, `metrics.enabled: true`) starts a second server on that port that answers `GET /metrics` and nothing else: any other path is a 404 and a `POST` to `/metrics` a 405. The main port never serves it (with the dashboard on, a `GET /metrics` there is only the dashboard's page). The page is the Prometheus text format, version 0.0.4, and there is no sign-in: the port names repositories, skills and models, so keep it inside the cluster.
+
+Every value is read from the database at each scrape, so the counters survive a restart and cover every review that left a result, including the ones filled in after an upgrade ([Upgrading](#-upgrading)). A scrape that cannot read the database gets a 500 with an empty body, and the error goes to the log. All seven are counters:
+
+| Metric | Labels | Counts |
+| --- | --- | --- |
+| `pergent_tokens_total` | `platform_instance`, `repository`, `skill`, `model`, `kind` | Tokens by `kind`: `input`, `output`, `reasoning`, `cache_read` or `cache_write`. |
+| `pergent_reviews_total` | `platform_instance`, `repository`, `trigger`, `incremental` | Reviews that left a result. `trigger` is `push`, `start`, `rerun` or `rerun_failed`; `incremental` is `true` or `false`. |
+| `pergent_reviews_no_result_total` | `platform_instance`, `repository` | Reviews that failed before leaving a result. |
+| `pergent_reviews_superseded_total` | `platform_instance`, `repository` | Reviews stopped by a newer push before they left a result. |
+| `pergent_skill_runs_total` | `platform_instance`, `repository`, `skill`, `verdict` | Skill runs, by verdict. |
+| `pergent_findings_total` | `platform_instance`, `repository`, `skill`, `severity` | Findings reported, by `severity`: `blocking` or `suggestion`. |
+| `pergent_dismissals_total` | `platform_instance`, `repository`, `skill` | Findings people dismissed. |
+
+- **`platform_instance`** is the name of the GitLab or GitHub instance in pergent.sh. It is not called `instance` because Prometheus sets `instance` to the address it scraped and moves a label of that name from the page to `exported_instance` (unless `honor_labels` is on), and the scrape address says nothing about the platform.
+- **Tokens add up as on the Usage page.** A total of tokens is `input` plus `output`. The other three kinds are counted apart and are never part of it. The `reasoning`, `cache_read` and `cache_write` series are absent for a repository, skill and model until a review of that group reported them, and no zero stands in for a count that is unknown. That needs a Job that runs the pergent release that reports them; until then only `input` and `output` appear. When some reviews of a group reported them and some did not, the series count only those that did.
+- **The labels are bounded.** A `repository` is named only while it is switched on. When a repository is switched off, or its instance is removed, its counts move to the repository `(switched off)`, so that series jumps and the repository's own series disappear; switch it back on and its series return and `(switched off)` drops. Prometheus reads a drop as a reset, so a `rate()` across it is off for one interval. A `skill` is named only if the library or a switched-on repository's skill list names it. Every other skill, including one that comes from the repository's own `.pergent/skills` folder, is `(other)`. No merge request number, title, finding text or other text a person wrote is ever a label.
+- **`pergent_dismissals_total` can drop.** Dismissals are deleted with their repository when it is switched off (at the next reconcile) and with an instance when it is removed, so this counter goes down then, which Prometheus reads as a reset. The other counters read usage that is never pruned.
+
+**Scrape it inside the cluster.** The chart adds a Service of its own, named like the main one plus `-metrics` (`pergent-sh-metrics` for a release called `pergent-sh`), on `metrics.port` (9090), always of type `ClusterIP`, so a `service.type: LoadBalancer` on the main Service never carries it. Never route it through `public_url` or any Ingress or Gateway: the main port does not serve it, and the metrics port has no sign-in at all. Point Prometheus at `http://<that Service>.<namespace>.svc:9090/metrics`, or set `metrics.serviceMonitor.enabled: true` to have the chart create a ServiceMonitor (it needs the Prometheus Operator's CRDs; `metrics.serviceMonitor.interval` is 60s by default, and `metrics.serviceMonitor.labels` adds the labels a Prometheus selects ServiceMonitors by).
+
 ## ⬆️ Upgrading
 
 ### Upgrading to the next release
@@ -235,6 +258,7 @@ Migration `0032` runs at startup and adds a table and a column, dropping nothing
 - **The usage of earlier reviews is filled in after the upgrade, in the background.** pergent.sh serves at once and reads the stored results one page at a time, oldest first, so the Usage page fills up as it goes. Only a review that left a result is filled in. For a merged incremental review filled in this way, the tokens of the `impact` skill are left out, except in a `review failed` re-run that ran `impact` itself. A result that cannot be read is marked and not read again.
 - **Cache and reasoning counts need the pergent release that reports them.** A Job that runs an older pergent shows them as unknown, not as zero. Input and output tokens are there for every review that left a result.
 - **The review page counts a `review failed` re-run once.** It showed the tokens of the skills the re-run kept a second time.
+- **Prometheus metrics are new and off by default.** Nothing needs doing. To turn them on, set `metrics.enabled: true` in the chart (or `metrics_listen` in the config) and scrape the new `-metrics` Service inside the cluster: see [Metrics](#metrics).
 
 ### Upgrading to 0.12.0
 
@@ -901,7 +925,7 @@ Admins read the audit log under **Admin → Audit log**: who did what and when, 
 
 ### Usage
 
-Admins read where the model tokens went under **Admin → Usage** (`/admin/usage`). Nobody else can: for anyone else the page and its API are a 404, like a path that is not there. The page shows the last 7, 30 or 90 days (30 by default) and lists each repository, the busiest first, with its tokens and its number of reviews. Under it are the tokens of each day. A repository's name opens its page (`/admin/usage/<instance>/<project>`), which lists the tokens of each skill, the 50 merge requests that used most (each linking to the merge request), each model, each day, what was wasted, and what a review costs.
+Admins read where the model tokens went under **Admin → Usage** (`/admin/usage`). Nobody else can: for anyone else the page and its API are a 404, like a path that is not there. The page shows the last 7, 30 or 90 days (30 by default) and lists each repository, the busiest first, with its tokens and its number of reviews. Under it are the tokens of each day. A repository's name opens its page (`/admin/usage/<instance>/<project>`), which lists the tokens of each skill, the 50 merge requests that used most (the number of each links to its reviews and its title to the merge request), each model, each day, what was wasted, and what a review costs.
 
 - **What is counted.** Every total, ranking and median adds input and output tokens only. Cache reads, cache writes and reasoning tokens are shown apart and are never added in. A review by a pergent that does not report them shows them as "unknown", not as zero ([Upgrading](#-upgrading)); the page says for how many skill runs they are unknown, a skill run being one skill in one review.
 - **Days** are cut at midnight UTC, and the page says so.
@@ -1571,6 +1595,7 @@ Deploy tokens are created per project with the name `pergent-sh`, valid for 30 d
 | `POST /runs/{id}/result` | A review Job delivering its result, with its one-time bearer token. |
 | `POST /skill-fetches/{id}/result` | A skill fetch Job delivering the skills it read from a public URL, with its one-time bearer token (only with the dashboard on). A wrong token gets 401, a second result or one after the fetch gave up 409, a body over 4 MiB 413. |
 | `POST /readiness-scans/{id}/result` | A readiness scan Job delivering what it found in a repository, with its one-time bearer token (only with the dashboard on). A wrong token gets 401, a second result or one after the scan ended 409, a body over 1 MiB 413. |
+| `GET /metrics` | Prometheus, on the `metrics_listen` port only; the main port never serves it ([Metrics](#metrics)). No sign-in: scrape it inside the cluster, never through `public_url`. |
 | `GET /healthz` | Health check. It answers as soon as the server starts: pergent.sh serves right away and runs the startup reconcile in the background. |
 | `GET /auth/oidc/login`, `GET /auth/oidc/callback`, `POST /auth/logout` | [Dashboard](#-dashboard) sign-in with OIDC ([Sign-in](#sign-in)), and sign-out. The callback sends every refusal to `/sign-in?error=<code>`. Only with `dashboard.url` set. |
 | `GET /auth/csrf`, `POST /auth/password`, `POST /auth/password/change` | Password sign-in. `GET /auth/csrf` hands out the sign-in form's CSRF token (a cookie and `{"csrfToken": ...}`); `POST /auth/password` takes `{"username", "password"}` with that token in `X-CSRF-Token` and answers 204 and the session cookie; `POST /auth/password/change` takes `{"current", "new"}` for a signed-in password account. See [Password sign-in limits](#password-sign-in-limits). Only with `dashboard.url` set. |
@@ -1604,6 +1629,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | Field | Default | Description |
 | --- | --- | --- |
 | `listen` | `:8080` | Address of the HTTP server. |
+| `metrics_listen` | none (metrics off) | Address of a second server that answers only `GET /metrics`, such as `:9090`: the [Prometheus counters](#metrics). Empty or left out: no metrics. It must be `host:port` or `:port` with a port from 1 to 65535, and must not use `listen`'s port on the same address or on every address. The chart sets it from `metrics.enabled` and `metrics.port`, and refuses it in `config`. |
 | `public_url` | required | HTTPS base URL where GitLab and GitHub reach pergent.sh, without a trailing slash. The GitLab webhook is created as `<public_url>/webhooks/gitlab/<instance name>`; the GitHub review App's webhook URL is `<public_url>/webhooks/github/<instance name>`. |
 | `callback_url` | `public_url`; the chart's Service with the chart | Base URL where Jobs post their result (`<callback_url>/runs/<id>/result`). `http` or `https`, no trailing slash. Without the chart, set it to the in-cluster Service to keep that traffic inside the cluster. |
 | `skills_dir` | removed | The skill library lives in the dashboard now. A config that still has it is refused at startup (`skills_dir was removed: skills live in the dashboard (see the README, "Skills and instructions")`). |
