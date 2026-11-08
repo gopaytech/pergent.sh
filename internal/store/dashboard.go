@@ -61,6 +61,45 @@ type DashboardRepo struct {
 	// admins only (nil: none). They belong to the repository, not to the
 	// defaults.
 	LinkedRepos []Link
+	// TrustedAuthorsOnly is "on" or "off" (nil: the instance's setting).
+	TrustedAuthorsOnly *string
+	// TrustedAuthors is the repository's allowlist (nil: nobody).
+	TrustedAuthors []TrustedAuthor
+}
+
+// TrustedAuthor is one user on a repository's allowlist: the platform's user
+// ID, which is what is matched, and the username it had when it was added,
+// for display.
+type TrustedAuthor struct {
+	ID       int64  `json:"id" yaml:"id"`
+	Username string `json:"username" yaml:"username"`
+}
+
+// trustedParam is the jsonb value of an allowlist; an empty list is NULL.
+func trustedParam(as []TrustedAuthor) (any, error) {
+	if len(as) == 0 {
+		return nil, nil
+	}
+	b, err := json.Marshal(as)
+	if err != nil {
+		return nil, fmt.Errorf("store: trusted authors: %w", err)
+	}
+	return b, nil
+}
+
+// readTrusted decodes a stored allowlist; NULL and an empty list are nil.
+func readTrusted(b []byte) ([]TrustedAuthor, error) {
+	if len(b) == 0 {
+		return nil, nil
+	}
+	var as []TrustedAuthor
+	if err := json.Unmarshal(b, &as); err != nil {
+		return nil, fmt.Errorf("store: trusted authors: %w", err)
+	}
+	if len(as) == 0 {
+		return nil, nil
+	}
+	return as, nil
 }
 
 // Link is one linked repository: Target is the other repository's path
@@ -118,15 +157,15 @@ func readLinks(b []byte) ([]Link, error) {
 const dashboardRepoColumns = `instance, project, approve, review_drafts, failure_status, skills, repo_skills,
 	job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by, created_at, updated_at,
 	inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
-	linked_repos_enabled, linked_repos`
+	linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors`
 
 func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 	var r DashboardRepo
-	var links []byte
+	var links, trusted []byte
 	err := row.Scan(&r.Instance, &r.Project, &r.Approve, &r.ReviewDrafts, &r.FailureStatus, &r.Skills, &r.RepoSkills,
 		&r.JobTimeoutSeconds, &r.MaxTurns, &r.JobMemory, &r.RerunLimitPerMR, &r.RerunLimitPerRepo, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt,
 		&r.InlineFindings, &r.CommandsAuthorAndMaintainersOnly, &r.IncrementalReviews, &r.LearnFromDismissals, &r.QuietReviews, &r.CommentLayout,
-		&r.LinkedReposEnabled, &links)
+		&r.LinkedReposEnabled, &links, &r.TrustedAuthorsOnly, &trusted)
 	if len(r.Skills) == 0 {
 		r.Skills = nil
 	}
@@ -139,7 +178,10 @@ func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 	if err != nil {
 		return r, err
 	}
-	r.LinkedRepos, err = readLinks(links)
+	if r.LinkedRepos, err = readLinks(links); err != nil {
+		return r, err
+	}
+	r.TrustedAuthors, err = readTrusted(trusted)
 	return r, err
 }
 
@@ -189,6 +231,10 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 	if err != nil {
 		return err
 	}
+	trusted, err := trustedParam(r.TrustedAuthors)
+	if err != nil {
+		return err
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -200,8 +246,8 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 	if _, err := tx.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
 			failure_status, skills, repo_skills, job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by,
 			inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
-			linked_repos_enabled, linked_repos)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb)
+			linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22, $23::jsonb)
 		ON CONFLICT (instance, lower(project)) DO UPDATE SET
 			project = EXCLUDED.project, approve = EXCLUDED.approve, review_drafts = EXCLUDED.review_drafts,
 			failure_status = EXCLUDED.failure_status, skills = EXCLUDED.skills, repo_skills = EXCLUDED.repo_skills,
@@ -214,11 +260,12 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 			quiet_reviews = EXCLUDED.quiet_reviews,
 			comment_layout = EXCLUDED.comment_layout,
 			linked_repos_enabled = EXCLUDED.linked_repos_enabled,
-			linked_repos = EXCLUDED.linked_repos, updated_at = now()`,
+			linked_repos = EXCLUDED.linked_repos,
+			trusted_authors_only = EXCLUDED.trusted_authors_only, trusted_authors = EXCLUDED.trusted_authors, updated_at = now()`,
 		r.Instance, r.Project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, repoSkills,
 		r.JobTimeoutSeconds, r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy, r.InlineFindings,
 		r.CommandsAuthorAndMaintainersOnly, r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout),
-		r.LinkedReposEnabled, links); err != nil {
+		r.LinkedReposEnabled, links, r.TrustedAuthorsOnly, trusted); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -243,6 +290,10 @@ func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (creat
 	if err != nil {
 		return false, err
 	}
+	trusted, err := trustedParam(r.TrustedAuthors)
+	if err != nil {
+		return false, err
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -254,13 +305,13 @@ func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (creat
 	tag, err := tx.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
 			failure_status, skills, repo_skills, job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by,
 			inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
-			linked_repos_enabled, linked_repos)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb)
+			linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22, $23::jsonb)
 		ON CONFLICT (instance, lower(project)) DO NOTHING`,
 		r.Instance, r.Project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, nilIfEmpty(r.RepoSkills),
 		r.JobTimeoutSeconds, r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy, r.InlineFindings,
 		r.CommandsAuthorAndMaintainersOnly, r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout),
-		r.LinkedReposEnabled, links)
+		r.LinkedReposEnabled, links, r.TrustedAuthorsOnly, trusted)
 	if err != nil {
 		return false, err
 	}
@@ -298,6 +349,10 @@ func (s *Store) UpdateDashboardRepo(ctx context.Context, instance, project strin
 	if err != nil {
 		return false, err
 	}
+	trusted, err := trustedParam(r.TrustedAuthors)
+	if err != nil {
+		return false, err
+	}
 	if err := lockNamedSkills(ctx, tx, skills); err != nil {
 		return false, err
 	}
@@ -305,11 +360,12 @@ func (s *Store) UpdateDashboardRepo(ctx context.Context, instance, project strin
 			skills = $6, repo_skills = $7, job_timeout_seconds = $8, max_turns = $9, job_memory = $10,
 			rerun_limit_per_mr = $11, rerun_limit_per_repo = $12, inline_findings = $13,
 			commands_author_and_maintainers_only = $14, incremental_reviews = $15, learn_from_dismissals = $16, quiet_reviews = $17, comment_layout = $18,
-			linked_repos_enabled = $19, linked_repos = $20::jsonb, updated_at = now()
+			linked_repos_enabled = $19, linked_repos = $20::jsonb, trusted_authors_only = $21, trusted_authors = $22::jsonb, updated_at = now()
 		WHERE instance = $1 AND lower(project) = lower($2)`,
 		instance, project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, nilIfEmpty(r.RepoSkills), r.JobTimeoutSeconds,
 		r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.InlineFindings, r.CommandsAuthorAndMaintainersOnly,
-		r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout), r.LinkedReposEnabled, links); err != nil {
+		r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout), r.LinkedReposEnabled, links,
+		r.TrustedAuthorsOnly, trusted); err != nil {
 		return false, err
 	}
 	return true, tx.Commit(ctx)

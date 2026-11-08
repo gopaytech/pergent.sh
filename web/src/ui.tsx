@@ -38,6 +38,7 @@ const outcomes: Record<Outcome, [Tone, string]> = {
   superseded: ["grey", "Superseded"],
   skipped: ["grey", "Not reviewed"],
   unknown: ["grey", "Unknown"],
+  waiting: ["grey", "Waiting for a start"],
 };
 
 export function OutcomePill({ outcome }: { outcome: string }) {
@@ -55,6 +56,7 @@ export const outcomeOptions: [Outcome, string][] = [
   ["superseded", "Superseded"],
   ["skipped", "Not reviewed"],
   ["unknown", "Unknown"],
+  ["waiting", "Waiting for a start"],
 ];
 
 export const platformName = (p: string) => (p === "github" ? "GitHub" : p === "gitlab" ? "GitLab" : p);

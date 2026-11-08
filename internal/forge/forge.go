@@ -61,7 +61,16 @@ const (
 	StatusFailed   StatusState = "failed"
 	StatusNeutral  StatusState = "neutral"
 	StatusCanceled StatusState = "canceled"
+	// StatusPending is a status that isn't finished and isn't running: the
+	// review waits for someone to start it. A required check stays unmet.
+	StatusPending StatusState = "pending"
 )
+
+// User is a platform user: its ID and its username (GitHub's login).
+type User struct {
+	ID       int64
+	Username string
+}
 
 // TreeEntry is one entry of a repository tree. Type is "blob" or "tree".
 type TreeEntry struct {
@@ -170,6 +179,11 @@ type Forge interface {
 	// repository it can't read, or can't tell, is an error (never public),
 	// and a platform that has no such rule answers ErrUnsupported.
 	Visibility(ctx context.Context, repo string) (Visibility, error)
+	// UserByName looks a user up by username (GitHub: login), matched as the
+	// platform does, ignoring case. repo ("owner/name") is the repository it
+	// is asked for, which GitHub reads the user through. A user the platform
+	// doesn't know is ErrNotFound.
+	UserByName(ctx context.Context, repo, username string) (User, error)
 }
 
 // MaxSourceFile is the most a SourceReader reads of one file: 900 KiB, the

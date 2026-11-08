@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"reflect"
 	"slices"
@@ -736,5 +737,55 @@ func TestResolveLinks(t *testing.T) {
 	eff.LinkedRepos[0].Watched[0] = "changed"
 	if row.LinkedRepos[0].Target != "acme/pergent.sh" || row.LinkedRepos[0].Watched[0] != "render/**" {
 		t.Error("LinkedRepos shares memory with the stored row")
+	}
+}
+
+// A repository's trusted-authors mode is its own when set, else its
+// instance's; the allowlist is the repository's.
+func TestTrustedAuthorsOnlyResolution(t *testing.T) {
+	st := newStore(t)
+	alice := []store.TrustedAuthor{{ID: 5, Username: "alice"}}
+	for _, instMode := range []string{"", config.TrustOn, config.TrustOff} {
+		for _, repoMode := range []*string{nil, ptr("on"), ptr("off")} {
+			want, overridden := instMode, repoMode != nil
+			if want == "" {
+				want = config.TrustFollowVisibility
+			}
+			if repoMode != nil {
+				want = *repoMode
+			}
+			cfg := testConfig()
+			cfg.GitLab[0].TrustedAuthorsOnly = instMode
+			cfg.Repositories[0].TrustedAuthorsOnly = repoMode
+			cfg.Repositories[0].TrustedAuthors = alice
+			r := &Resolver{Config: cfg, Store: st, Instances: instances.New(cfg, st, nil)}
+
+			eff, ok, err := r.Get(ctx, "main", "acme/widgets")
+			if err != nil || !ok {
+				t.Fatalf("config repo: %v %v", ok, err)
+			}
+			if eff.TrustedAuthorsOnly != want || eff.Overridden[KeyTrustedAuthorsOnly] != overridden || !slices.Equal(eff.TrustedAuthors, alice) {
+				t.Errorf("config repo, instance %q repo %v: got %q overridden=%v %+v, want %q overridden=%v",
+					instMode, repoMode, eff.TrustedAuthorsOnly, eff.Overridden[KeyTrustedAuthorsOnly], eff.TrustedAuthors, want, overridden)
+			}
+
+			repoName := "unset"
+			if repoMode != nil {
+				repoName = *repoMode
+			}
+			project := fmt.Sprintf("acme/dash-%s-%s", want, repoName) + instMode
+			if err := st.UpsertDashboardRepo(ctx, store.DashboardRepo{Instance: "main", Project: project, CreatedBy: "admin",
+				TrustedAuthorsOnly: repoMode, TrustedAuthors: alice}); err != nil {
+				t.Fatal(err)
+			}
+			eff, ok, err = r.Get(ctx, "main", project)
+			if err != nil || !ok {
+				t.Fatalf("dashboard repo: %v %v", ok, err)
+			}
+			if eff.TrustedAuthorsOnly != want || eff.Overridden[KeyTrustedAuthorsOnly] != overridden || !slices.Equal(eff.TrustedAuthors, alice) {
+				t.Errorf("dashboard repo, instance %q repo %v: got %q overridden=%v, want %q overridden=%v",
+					instMode, repoMode, eff.TrustedAuthorsOnly, eff.Overridden[KeyTrustedAuthorsOnly], want, overridden)
+			}
+		}
 	}
 }

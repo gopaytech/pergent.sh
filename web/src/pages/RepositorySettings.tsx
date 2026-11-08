@@ -15,6 +15,8 @@ import {
   type RepoTeamsView,
   type RepositoryDetailView,
   type SettingsUpdate,
+  type TrustedAuthor,
+  type TrustMode,
 } from "../api";
 import CommentLayoutEditor from "../CommentLayoutEditor";
 import LinkedReposEditor, { tidyLinks, type LinkableState } from "../LinkedReposEditor";
@@ -92,6 +94,8 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
         // Only an admin of the repository changes its re-run caps.
         canSetCaps={view.role === "admin"}
         canSetLinks={canSetLinks}
+        // Who is trusted is an admin's to say too.
+        canSetTrust={view.role === "admin"}
         platform={repo.platform}
         linkable={
           linkable.isError
@@ -111,7 +115,7 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
           const caps =
             view.role === "admin"
               ? ""
-              : " The re-run caps stay as they are; only an admin of this repository resets them. So do the linked repositories.";
+              : " The re-run caps stay as they are; only an admin of this repository resets them. So do the linked repositories and who is trusted.";
           if (window.confirm(`Put every setting of this repository back to its default?${caps}`)) reset.mutate();
         }}
       />
@@ -258,7 +262,13 @@ type Draft = {
   jobMemory: string;
   rerunLimitPerMR: string;
   rerunLimitPerRepo: string;
+  // "" follows the instance.
+  trustedAuthorsOnly: "" | "on" | "off";
+  trustedAuthors: TrustedAuthor[];
 };
+
+// trustModeWords is a trusted-authors mode in words.
+const trustModeWords = (m: TrustMode) => (m === "follow_visibility" ? "follow visibility" : m);
 
 const stepsProblem = "Max steps is a whole number from 5 to 200.";
 const capProblem = "The re-run caps are whole numbers from 1 to 1000.";
@@ -296,6 +306,7 @@ function Form({
   locked,
   canSetCaps,
   canSetLinks,
+  canSetTrust,
   platform,
   linkable,
   onSearch,
@@ -310,6 +321,7 @@ function Form({
   locked: boolean;
   canSetCaps: boolean;
   canSetLinks: boolean;
+  canSetTrust: boolean;
   platform: string;
   linkable: LinkableState;
   onSearch: (text: string) => void;
@@ -343,7 +355,11 @@ function Form({
     jobMemory: settings.jobMemory.value,
     rerunLimitPerMR: String(settings.rerunLimitPerMR.value),
     rerunLimitPerRepo: String(settings.rerunLimitPerRepo.value),
+    trustedAuthorsOnly:
+      settings.trustedAuthorsOnly.overridden && settings.trustedAuthorsOnly.value !== "follow_visibility" ? settings.trustedAuthorsOnly.value : "",
+    trustedAuthors: settings.trustedAuthors.value,
   };
+  const [newAuthor, setNewAuthor] = useState("");
   const [d, setD] = useState<Draft>(initial);
   const [problem, setProblem] = useState("");
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((old) => ({ ...old, [k]: v }));
@@ -374,6 +390,14 @@ function Form({
     if (d.incrementalReviews !== initial.incrementalReviews) body.incrementalReviews = d.incrementalReviews;
     if (d.learnFromDismissals !== initial.learnFromDismissals) body.learnFromDismissals = d.learnFromDismissals;
     if (d.quietReviews !== initial.quietReviews) body.quietReviews = d.quietReviews;
+    // Who is trusted is an admin's: a maintainer's save never carries it
+    // (the server would refuse the whole save).
+    if (canSetTrust) {
+      if (d.trustedAuthorsOnly !== initial.trustedAuthorsOnly) body.trustedAuthorsOnly = d.trustedAuthorsOnly === "" ? null : d.trustedAuthorsOnly;
+      if (JSON.stringify(d.trustedAuthors) !== JSON.stringify(initial.trustedAuthors)) {
+        body.trustedAuthors = d.trustedAuthors.length === 0 ? null : d.trustedAuthors;
+      }
+    }
     // The linked repositories are an admin's: a maintainer's save never
     // carries them (the server would refuse the whole save). No links is sent
     // as null.
@@ -511,6 +535,83 @@ function Form({
             onChange={(v) => set("commandsAuthorAndMaintainersOnly", v)}
           />
         </Setting>
+        <Setting
+          name="Trusted authors only"
+          overridden={settings.trustedAuthorsOnly.overridden}
+          help="When on, a change from an author without write access and not on the list below isn't reviewed until someone with write access starts it. The instance's default follows the repository's visibility: on for a public repository."
+        >
+          <select
+            aria-label="Trusted authors only"
+            value={d.trustedAuthorsOnly}
+            disabled={disabled || !canSetTrust}
+            onChange={(e) => set("trustedAuthorsOnly", e.target.value as Draft["trustedAuthorsOnly"])}
+          >
+            <option value="">
+              {settings.trustedAuthorsOnly.overridden
+                ? "Instance default"
+                : `Instance default (${trustModeWords(settings.trustedAuthorsOnly.value)})`}
+            </option>
+            <option value="on">on</option>
+            <option value="off">off</option>
+          </select>
+        </Setting>
+        <div className="set" role="group" aria-label="Trusted authors">
+          <div>
+            <div className="name">
+              Trusted authors <Badge overridden={settings.trustedAuthors.overridden} />
+            </div>
+            <div className="help">
+              People without write access whose changes are reviewed without anyone starting them, such as a regular outside
+              contributor or a bot. A username is looked up when you save, and kept by the platform's user ID.
+            </div>
+            {d.trustedAuthors.length === 0 && <div className="meta">Nobody.</div>}
+            {d.trustedAuthors.map((a) => (
+              <div className="row" key={`${a.id ?? "new"}/${a.username}`}>
+                <span className="grow mono">{a.username}</span>
+                {!disabled && canSetTrust && (
+                  <button
+                    type="button"
+                    className="btn small"
+                    aria-label={`Remove ${a.username}`}
+                    onClick={() =>
+                      set(
+                        "trustedAuthors",
+                        d.trustedAuthors.filter((x) => x !== a),
+                      )
+                    }
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+            ))}
+            {!locked && !canSetTrust && <div className="meta">Only admins of this repository change who is trusted.</div>}
+          </div>
+          {!disabled && canSetTrust && (
+            <div className="search">
+              <input
+                aria-label="Add a username"
+                placeholder="username"
+                maxLength={255}
+                value={newAuthor}
+                onChange={(e) => setNewAuthor(e.target.value)}
+              />
+              <button
+                type="button"
+                className="btn small"
+                onClick={() => {
+                  const name = newAuthor.trim();
+                  if (name !== "" && !d.trustedAuthors.some((a) => a.username.toLowerCase() === name.toLowerCase())) {
+                    set("trustedAuthors", [...d.trustedAuthors, { username: name }]);
+                  }
+                  setNewAuthor("");
+                }}
+              >
+                Add
+              </button>
+            </div>
+          )}
+        </div>
         <Setting
           name="Incremental reviews"
           overridden={settings.incrementalReviews.overridden}

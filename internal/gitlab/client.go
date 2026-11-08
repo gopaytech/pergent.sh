@@ -759,6 +759,21 @@ func (c *Client) UserIsBot(ctx context.Context, userID int64) (bool, error) {
 	return u.Bot, nil
 }
 
+// UserByUsername returns the user whose username is username, ignoring case
+// (GET /users?username=). None is ErrNotFound.
+func (c *Client) UserByUsername(ctx context.Context, username string) (User, error) {
+	var users []User
+	if _, err := c.getJSON(ctx, "/users", url.Values{"username": {username}}, &users); err != nil {
+		return User{}, err
+	}
+	for _, u := range users {
+		if u.ID > 0 && strings.EqualFold(u.Username, username) {
+			return u, nil
+		}
+	}
+	return User{}, fmt.Errorf("user %q: %w", username, ErrNotFound)
+}
+
 // SetCommitStatus sets the "pergent" status on sha. The description is cut to
 // 255 bytes on a UTF-8 boundary.
 func (c *Client) SetCommitStatus(ctx context.Context, projectID int64, sha string, state StatusState, description string) error {

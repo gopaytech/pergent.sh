@@ -49,6 +49,7 @@ const (
 	msgImmutable         = "an instance's address and App IDs can't change: remove it and add it again"
 	msgConfigInstance    = "this instance is managed by the config file; change it there"
 	msgInstanceRemoving  = "this instance is being removed"
+	msgBadTrustMode      = `the body must be {"mode": "follow_visibility" | "on" | "off"}`
 	msgNothingToChange   = `nothing to change: give "secrets"`
 
 	msgBadLLMBody     = `the body must be {"provider": ..., "model": ..., "baseURL": ..., "apiKey": ...}`
@@ -69,6 +70,7 @@ func (d *Dashboard) operatorRoutes(mux *http.ServeMux) {
 	d.adminRoute(mux, "GET /api/admin/instances", d.listInstances)
 	d.adminRoute(mux, "POST /api/admin/instances", d.addInstance)
 	d.adminRoute(mux, "PUT /api/admin/instances/{name}", d.updateInstance)
+	d.adminRoute(mux, "PUT /api/admin/instances/{name}/trusted-authors", d.putInstanceTrust)
 	d.adminRoute(mux, "DELETE /api/admin/instances/{name}", d.removeInstance)
 	d.adminRoute(mux, "GET /api/admin/instances/{name}/repositories", d.instanceRepositories)
 	d.adminRoute(mux, "GET /api/admin/sign-in", d.getSignIn)
@@ -156,8 +158,9 @@ func approverOfRow(row store.InstanceRow) string {
 // env var holds a value; a dashboard instance's when the sealed value opens.
 func (d *Dashboard) instanceView(ctx context.Context, inst instances.Instance) (InstanceAdminView, error) {
 	v := InstanceAdminView{Name: inst.Name, Platform: inst.Platform, Source: string(inst.Source), Removing: inst.Removing,
-		WebhookURL: config.WebhookURL(d.cfg.PublicURL, inst.Platform, inst.Name),
-		Approver:   approverOf(inst), Secrets: map[string]SecretView{}}
+		TrustedAuthorsOnly: inst.TrustedAuthorsOnly,
+		WebhookURL:         config.WebhookURL(d.cfg.PublicURL, inst.Platform, inst.Name),
+		Approver:           approverOf(inst), Secrets: map[string]SecretView{}}
 	switch {
 	case inst.GitLab != nil:
 		v.URL = inst.GitLab.URL
@@ -518,6 +521,49 @@ func (d *Dashboard) updateInstance(w http.ResponseWriter, r *http.Request) {
 	d.Log.Info("dashboard: instance updated", "instance", name, "fields", changed, "by", se.Username)
 	d.audit(ctx, se, "instance_updated", name, "", strings.Join(changed, ", "))
 	d.writeInstance(w, r, cur, http.StatusOK)
+}
+
+// putInstanceTrust sets a dashboard instance's trusted-authors mode, the
+// default of its repositories: 204, or 409 for a config instance (its mode is
+// in the config file) or one being removed.
+func (d *Dashboard) putInstanceTrust(w http.ResponseWriter, r *http.Request) {
+	se, name := session(r), r.PathValue("name")
+	inst, ok := d.registry.Get(name)
+	if !ok {
+		notFound(w)
+		return
+	}
+	if inst.Source == instances.SourceConfig {
+		writeError(w, http.StatusConflict, msgConfigInstance)
+		return
+	}
+	var in struct {
+		Mode string `json:"mode"`
+	}
+	if err := decodeStrict(r, &in); err != nil ||
+		(in.Mode != config.TrustFollowVisibility && in.Mode != config.TrustOn && in.Mode != config.TrustOff) {
+		writeError(w, http.StatusBadRequest, msgBadTrustMode)
+		return
+	}
+	ctx := r.Context()
+	found, err := d.Store.SetInstanceTrustMode(ctx, name, in.Mode)
+	if errors.Is(err, store.ErrRemoving) {
+		writeError(w, http.StatusConflict, msgInstanceRemoving)
+		return
+	}
+	if err != nil {
+		d.Log.Error("dashboard: setting an instance's trusted authors failed", "instance", name, "error", err.Error())
+		writeError(w, http.StatusInternalServerError, msgWriteFailed)
+		return
+	}
+	if !found {
+		notFound(w)
+		return
+	}
+	d.registry.SetTrustMode(name, in.Mode)
+	d.Log.Info("dashboard: instance updated", "instance", name, "trusted_authors_only", in.Mode, "by", se.Username)
+	d.audit(ctx, se, "instance_updated", name, "", "trusted_authors_only="+in.Mode)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func urlOf(inst instances.Instance) string {

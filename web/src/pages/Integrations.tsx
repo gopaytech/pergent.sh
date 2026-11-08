@@ -169,6 +169,7 @@ function InstanceCard({ inst }: { inst: InstanceAdminView }) {
         )}
         <WebhookURL inst={inst} />
         <div>{approverWords(inst.approver)}</div>
+        <TrustMode inst={inst} locked={locked} />
         {config && <div className="meta">This instance is managed by the config file; change it there.</div>}
       </div>
       {fields.map((f) => (
@@ -189,6 +190,35 @@ function InstanceCard({ inst }: { inst: InstanceAdminView }) {
         </div>
       )}
     </section>
+  );
+}
+
+// TrustMode is the instance's trusted-authors default: whether its
+// repositories review only trusted authors without someone starting it.
+function TrustMode({ inst, locked }: { inst: InstanceAdminView; locked: boolean }) {
+  const client = useQueryClient();
+  const write = useWrite();
+  const change = useMutation({
+    mutationFn: (mode: string) => write<void>("PUT", `/api/admin/instances/${encodeURIComponent(inst.name)}/trusted-authors`, { mode }),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["admin-instances"] }),
+  });
+  return (
+    <div>
+      <label>
+        Trusted authors only{" "}
+        <select
+          aria-label="Trusted authors only"
+          value={inst.trustedAuthorsOnly}
+          disabled={locked || change.isPending}
+          onChange={(e) => change.mutate(e.target.value)}
+        >
+          <option value="follow_visibility">follow visibility (on for public repositories)</option>
+          <option value="on">on</option>
+          <option value="off">off (trust every author)</option>
+        </select>
+      </label>
+      {change.isError && <ErrorBox error={change.error} />}
+    </div>
   );
 }
 

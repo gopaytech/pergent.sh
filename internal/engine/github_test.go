@@ -270,6 +270,8 @@ func addGitHub(t *testing.T, env *testEnv, approveInstalled bool) *fakeGitHub {
 		ReviewApp:        config.App{AppID: ghReviewApp, PrivateKeyEnv: "GITHUB_REVIEW_KEY"},
 		ApproveApp:       &config.App{AppID: ghApproveApp, PrivateKeyEnv: "GITHUB_APPROVE_KEY"},
 		WebhookSecretEnv: "GITHUB_WEBHOOK_SECRET",
+		// Every author is trusted unless a test turns it on.
+		TrustedAuthorsOnly: config.TrustOff,
 	})
 	cfg.Repositories = append(cfg.Repositories, config.Repository{
 		GitHub: ghInstance, Project: ghRepoPath, FailureStatus: config.FailureStatusFailed,

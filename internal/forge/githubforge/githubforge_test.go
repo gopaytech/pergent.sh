@@ -1418,3 +1418,40 @@ func TestLinkInfo(t *testing.T) {
 		t.Errorf("%d reads of acme/open; want 1", n)
 	}
 }
+
+// Pending is a queued Check Run: not finished, so a required check stays unmet.
+func TestSetStatusPending(t *testing.T) {
+	f := newFake(t)
+	f.reply("POST", "/repos/acme/widgets/check-runs", 201, map[string]any{"id": 1})
+	if err := f.forge(t).SetStatus(ctx, repoID, sha('a'), forge.StatusPending, "Waiting"); err != nil {
+		t.Fatal(err)
+	}
+	reqs := f.requests("POST", "/repos/acme/widgets/check-runs")
+	if len(reqs) != 1 {
+		t.Fatalf("%d check runs", len(reqs))
+	}
+	jsonEq(t, reqs[0].Body, `{"name":"pergent","head_sha":"`+sha('a')+`","status":"queued","output":{"title":"Waiting","summary":"See the pergent comment on this pull request."}}`)
+}
+
+// A login is looked up as it is, bot logins included.
+func TestUserByName(t *testing.T) {
+	f := newFake(t)
+	f.reply("GET", "/repos/acme/widgets/installation", 200, map[string]any{"id": 66})
+	f.reply("GET", "/users/dependabot%5Bbot%5D", 200, map[string]any{"id": 49699333, "login": "dependabot[bot]", "type": "Bot"})
+	u, err := f.forge(t).UserByName(ctx, "acme/widgets", "dependabot[bot]")
+	if err != nil || u != (forge.User{ID: 49699333, Username: "dependabot[bot]"}) {
+		t.Fatalf("UserByName = %+v, %v", u, err)
+	}
+	f = newFake(t)
+	f.reply("GET", "/repos/acme/widgets/installation", 200, map[string]any{"id": 66})
+	f.reply("GET", "/users/ghost", 404, map[string]any{"message": "Not Found"})
+	if _, err := f.forge(t).UserByName(ctx, "acme/widgets", "ghost"); !errors.Is(err, forge.ErrNotFound) {
+		t.Errorf("404: err = %v, want ErrNotFound", err)
+	}
+	f = newFake(t)
+	f.reply("GET", "/repos/acme/widgets/installation", 200, map[string]any{"id": 66})
+	f.reply("GET", "/users/alice", 500, map[string]any{"message": "boom"})
+	if _, err := f.forge(t).UserByName(ctx, "acme/widgets", "alice"); err == nil || errors.Is(err, forge.ErrNotFound) {
+		t.Errorf("500: err = %v, want an error that isn't ErrNotFound", err)
+	}
+}

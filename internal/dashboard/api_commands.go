@@ -25,6 +25,8 @@ const (
 	msgReasonTooLong   = "the reason is too long"
 	msgNoSuchFinding   = "there is no such finding in the latest review"
 	msgChangeNotOpen   = "this change is not open"
+	msgBadStart        = "the body must be empty or {}"
+	msgNotWaiting      = "this change isn't waiting for someone to start its review"
 	msgDraftsNotOn     = "drafts aren't reviewed in this repository"
 	msgPlatformFailed  = "could not read this change from its platform, please try again"
 	msgRedecideFailed  = "the change was saved, but the review could not be decided again yet; the next review will use it"
@@ -79,7 +81,7 @@ func (d *Dashboard) reviewAction(w http.ResponseWriter, r *http.Request) {
 	}
 	action, rest := rest[i+1:], rest[:i]
 	i = strings.LastIndex(rest, "/")
-	if i <= 0 || (action != "rerun" && action != "dismiss" && action != "restore") {
+	if i <= 0 || (action != "rerun" && action != "dismiss" && action != "restore" && action != "start") {
 		notFound(w)
 		return
 	}
@@ -108,6 +110,12 @@ func (d *Dashboard) reviewAction(w http.ResponseWriter, r *http.Request) {
 		// No body at all is a re-run of everything.
 		if err := decodeStrict(r, &rerun); err != nil && !errors.Is(err, io.EOF) {
 			writeError(w, http.StatusBadRequest, msgBadRerun)
+			return
+		}
+	case "start":
+		var none struct{}
+		if err := decodeStrict(r, &none); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, msgBadStart)
 			return
 		}
 	case "dismiss":
@@ -147,6 +155,12 @@ func (d *Dashboard) reviewAction(w http.ResponseWriter, r *http.Request) {
 	switch action {
 	case "rerun":
 		d.rerun(w, r, b, rerun.Failed)
+	case "start":
+		if runs[len(runs)-1].State != store.Waiting {
+			writeError(w, http.StatusConflict, msgNotWaiting)
+			return
+		}
+		d.start(w, r, b)
 	case "dismiss":
 		d.dismiss(w, r, b, strings.TrimSpace(dismiss.Fingerprint), strings.TrimSpace(dismiss.Reason))
 	case "restore":
@@ -236,6 +250,47 @@ func (d *Dashboard) rerun(w http.ResponseWriter, r *http.Request, b reviewButton
 			accepted(w, http.StatusAccepted, "whole review")
 			return
 		}
+		accepted(w, http.StatusAccepted, "queued")
+	}
+}
+
+// start is the Start review button of a change whose review waits because
+// the repository doesn't trust its author: like a comment from someone with
+// write access, it starts the review of the change's head on the platform
+// now, against the change's re-run cap only.
+func (d *Dashboard) start(w http.ResponseWriter, r *http.Request, b reviewButton) {
+	ctx := r.Context()
+	change, ok := d.platformChange(w, r, b)
+	if !ok {
+		return
+	}
+	switch {
+	case change.State != forge.StateOpen:
+		writeError(w, http.StatusConflict, msgChangeNotOpen)
+		return
+	case change.Draft && !b.repo.ReviewDrafts:
+		writeError(w, http.StatusConflict, msgDraftsNotOn)
+		return
+	case change.HeadSHA == "":
+		writeError(w, http.StatusBadGateway, msgPlatformFailed)
+		return
+	}
+	res, err := actions.Start(ctx, d.Store, actions.StartRequest{
+		MR: b.mr, ProjectPath: b.project, Head: change.HeadSHA, TargetBranch: change.TargetBranch,
+		Repo: b.repo, Now: d.now(),
+	})
+	if err != nil {
+		d.failed(w, r, "starting a review", err)
+		return
+	}
+	switch res.Status {
+	case actions.RerunCapped:
+		writeError(w, http.StatusTooManyRequests, actions.CapMessage(actions.Term(b.repo.Platform)))
+	case actions.RerunAlreadyQueued:
+		accepted(w, http.StatusAccepted, "already queued")
+	default:
+		d.wake()
+		d.auditReview(r, b, res.Action, change.HeadSHA, res.Detail)
 		accepted(w, http.StatusAccepted, "queued")
 	}
 }

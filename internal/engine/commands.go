@@ -73,6 +73,9 @@ const (
 	replyDraft         = "drafts aren't reviewed in this repository"
 	replyNothingFailed = "nothing failed"
 	replyWholeFailed   = "the whole review failed, so all of it is re-run"
+	// replyStartNeedsWrite refuses the review of an untrusted author's
+	// change to anyone without write access, its author included.
+	replyStartNeedsWrite = "only someone with write access can start the review of this change"
 )
 
 // Why a command was refused, as the outcome's text says it ("refused: " +
@@ -82,6 +85,9 @@ const (
 	whyNotAuthorOrMaintainer = "not the author or a maintainer"
 	whyNoPermission          = "no permission"
 	whyAuthorOfChange        = "author of the change"
+	// whyUntrusted: the change's author isn't trusted and the commenter
+	// has no write access to start its review.
+	whyUntrusted = "author not trusted"
 )
 
 // replyOnlyAuthorAndMaintainers is the gate's refusal reply. term is what the
@@ -94,7 +100,7 @@ func replyOnlyAuthorAndMaintainers(term string) string {
 // commenter is, which the audit log records.
 func whoMayOutcome(outcome string) bool {
 	switch outcome {
-	case "refused: " + whyNotAuthorOrMaintainer, "refused: " + whyNoPermission, "refused: " + whyAuthorOfChange:
+	case "refused: " + whyNotAuthorOrMaintainer, "refused: " + whyNoPermission, "refused: " + whyAuthorOfChange, "refused: " + whyUntrusted:
 		return true
 	}
 	return false
@@ -397,6 +403,9 @@ type commandRun struct {
 	log    *slog.Logger
 	// access is the commenter's access on the platform, read once.
 	access forge.Access
+	// untrusted is set, for a review command, when the repository doesn't
+	// trust the change's author: only write access starts its review.
+	untrusted bool
 }
 
 // handleCommand carries out or refuses one command within ctx; the first
@@ -474,6 +483,13 @@ func (e *Engine) handleCommand(ctx, bctx context.Context, cmd store.Command, log
 			return verdict{}, err
 		}
 	}
+	if cmd.Kind == "review" || cmd.Kind == "review_failed" {
+		trusted, err := authorTrust(ctx, plat.Forge, repo, cmd.MR.ProjectID, cmd.ProjectPath, change, log, e.redact)
+		if err != nil {
+			return verdict{}, fmt.Errorf("check the change's author: %w", err)
+		}
+		c.untrusted = !trusted
+	}
 
 	v, err := c.carryOut(ctx)
 	if err != nil {
@@ -510,7 +526,10 @@ func commentIsGenuine(ctx context.Context, f forge.Forge, cmd store.Command) (bo
 func (c *commandRun) carryOut(ctx context.Context) (verdict, error) {
 	// The author of the change and the repository's maintainers and owners
 	// use commands; anyone else is refused, whatever the command is.
-	if c.repo.CommandsAuthorAndMaintainersOnly && !c.isChangeAuthor() && c.access < forge.AccessMaintain {
+	// Starting the review of an untrusted author's change is for write
+	// access, so the gate lets it by for that.
+	starter := c.untrusted && c.access >= forge.AccessWrite && (c.cmd.Kind == "review" || c.cmd.Kind == "review_failed")
+	if c.repo.CommandsAuthorAndMaintainersOnly && !c.isChangeAuthor() && c.access < forge.AccessMaintain && !starter {
 		return c.refuseGate(ctx)
 	}
 	switch c.cmd.Kind {
@@ -583,6 +602,9 @@ func (e *Engine) auditCommand(ctx context.Context, cmd store.Command, log *slog.
 
 // rerun is "review" and, with failedOnly, "review failed".
 func (c *commandRun) rerun(ctx context.Context, failedOnly bool) (verdict, error) {
+	if c.untrusted {
+		return c.start(ctx)
+	}
 	if !c.mayWrite() {
 		return refused(whyNoPermission, replyNoPermission), nil
 	}
@@ -617,6 +639,37 @@ func (c *commandRun) rerun(ctx context.Context, failedOnly bool) (verdict, error
 	if res.Whole {
 		return done(replyWholeFailed), nil
 	}
+	return done(""), nil
+}
+
+// start starts the review of an untrusted author's change at its head, for
+// someone with write access (never its author for being the author): the
+// whole review, whatever the command asked for.
+func (c *commandRun) start(ctx context.Context) (verdict, error) {
+	if c.access < forge.AccessWrite {
+		return refused(whyUntrusted, replyStartNeedsWrite), nil
+	}
+	if c.change.Draft && !c.repo.ReviewDrafts {
+		return refused("draft", replyDraft), nil
+	}
+	if c.change.HeadSHA == "" {
+		return verdict{}, errors.New("the platform reports no head commit")
+	}
+	res, err := actions.Start(ctx, c.e.Store, actions.StartRequest{
+		MR: c.cmd.MR, ProjectPath: c.cmd.ProjectPath, Head: c.change.HeadSHA, TargetBranch: c.change.TargetBranch,
+		Repo: c.repo, Now: c.e.now(),
+	})
+	if err != nil {
+		return verdict{}, err
+	}
+	switch res.Status {
+	case actions.RerunCapped:
+		return refused("re-run limit reached", replyCap(changeTerm(c.cmd.Platform))), nil
+	case actions.RerunAlreadyQueued:
+		return done(""), nil
+	}
+	c.e.Wake()
+	c.audit(ctx, res.Action, c.change.HeadSHA, res.Detail)
 	return done(""), nil
 }
 

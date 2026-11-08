@@ -15,7 +15,27 @@ export type Outcome =
   | "failed"
   | "superseded"
   | "skipped"
-  | "unknown";
+  | "unknown"
+  | "waiting";
+
+// TrustMode is how a repository trusts authors: follow_visibility (only a
+// public repository is limited to trusted authors), on or off.
+export type TrustMode = "follow_visibility" | "on" | "off";
+
+// TrustedAuthor is one user on a repository's allowlist, stored by the
+// platform's user ID; an entry without id is looked up by username on save.
+export type TrustedAuthor = { id?: number; username: string };
+
+// WaitingView is a change whose review waits for someone with write access to
+// start it. reason is "untrusted_author" or "trust_check_failed".
+export type WaitingView = {
+  number: number;
+  title: string;
+  author: string;
+  webUrl: string;
+  since: string;
+  reason: "untrusted_author" | "trust_check_failed";
+};
 
 // Me is the signed-in account, from GET /api/me: a local admin ("password")
 // or an SSO account. role is the account's role and admin says the same as a
@@ -247,6 +267,10 @@ export type RepoSettings = {
   jobMemory: SettingView<string>;
   rerunLimitPerMR: SettingView<number>;
   rerunLimitPerRepo: SettingView<number>;
+  // trustedAuthorsOnly is the mode in effect: the repository's own while
+  // overridden, else its instance's.
+  trustedAuthorsOnly: SettingView<TrustMode>;
+  trustedAuthors: SettingView<TrustedAuthor[]>;
 };
 
 export type RepositoryDetailView = {
@@ -255,6 +279,8 @@ export type RepositoryDetailView = {
   attention: AttentionView[];
   // role is the session's role on this repository.
   role: Role;
+  // waiting are the changes waiting for someone to start their review.
+  waiting: WaitingView[];
 };
 
 // --- readiness (GET .../readiness) ---
@@ -373,6 +399,8 @@ export type SettingsUpdate = Partial<{
   jobMemory: string | null;
   rerunLimitPerMR: number | null;
   rerunLimitPerRepo: number | null;
+  trustedAuthorsOnly: "on" | "off" | null;
+  trustedAuthors: TrustedAuthor[] | null;
 }>;
 
 // InputSkill is one skill of the set a review would run. source is
@@ -556,6 +584,8 @@ export type LLMAdminView = {
 // webhook_secret (GitHub).
 export type InstanceAdminView = {
   name: string;
+  // trustedAuthorsOnly is the default of the instance's repositories.
+  trustedAuthorsOnly: TrustMode;
   platform: Platform;
   source: "config" | "dashboard";
   removing: boolean;
@@ -823,7 +853,7 @@ export const paths = {
   apiReview: (instance: string, project: string, number: number) =>
     `/api/reviews/${seg(instance)}/${proj(project)}/${seg(String(number))}`,
   // action is "rerun", "dismiss" or "restore".
-  apiReviewAction: (instance: string, project: string, number: number, action: "rerun" | "dismiss" | "restore") =>
+  apiReviewAction: (instance: string, project: string, number: number, action: "rerun" | "dismiss" | "restore" | "start") =>
     `/api/reviews/${seg(instance)}/${proj(project)}/${seg(String(number))}/${action}`,
   apiRun: (id: string) => `/api/runs/${seg(id)}`,
   apiRunLog: (id: string) => `/api/runs/${seg(id)}/log`,

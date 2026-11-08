@@ -734,3 +734,24 @@ func TestHeldSecretsHoldsTheStoredSignInClientSecret(t *testing.T) {
 		t.Errorf("HeldSecrets with the wrong key = %v, %v; want an error without the secret", got, err)
 	}
 }
+
+// Every instance says how it trusts authors; unset in the config is
+// follow_visibility.
+func TestInstanceTrustMode(t *testing.T) {
+	if got := FromRow(store.InstanceRow{Name: "lab", Platform: config.PlatformGitLab, TrustedAuthorsOnly: "off"}).TrustedAuthorsOnly; got != "off" {
+		t.Errorf("dashboard instance = %q, want off", got)
+	}
+	if got := FromRow(store.InstanceRow{Name: "lab", Platform: config.PlatformGitHub}).TrustedAuthorsOnly; got != config.TrustFollowVisibility {
+		t.Errorf("dashboard instance with no value = %q, want follow_visibility", got)
+	}
+	cfg := &config.Config{
+		GitLab: []config.Instance{{Name: "main"}, {Name: "closed", TrustedAuthorsOnly: "on"}},
+		GitHub: []config.GitHubInstance{{Name: "gh"}},
+	}
+	r := New(cfg, nil, nil)
+	for name, want := range map[string]string{"main": "follow_visibility", "closed": "on", "gh": "follow_visibility"} {
+		if inst, _ := r.Get(name); inst.TrustedAuthorsOnly != want {
+			t.Errorf("%s = %q, want %q", name, inst.TrustedAuthorsOnly, want)
+		}
+	}
+}

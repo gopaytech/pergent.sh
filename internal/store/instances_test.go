@@ -38,6 +38,8 @@ func TestCreateInstanceAndSecrets(t *testing.T) {
 		t.Fatalf("CreatedAt = %v; want %v", got.CreatedAt, t0)
 	}
 	got.CreatedAt = row.CreatedAt
+	// A new instance follows its repositories' visibility.
+	row.TrustedAuthorsOnly = "follow_visibility"
 	if got != row {
 		t.Fatalf("InstanceRow = %+v; want %+v", got, row)
 	}

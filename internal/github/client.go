@@ -499,6 +499,17 @@ func (c *Client) Repo(ctx context.Context, owner, repo string) (Repository, erro
 	return r, err
 }
 
+// UserByLogin returns the user called login (GET /users/{login}). An unknown
+// login is ErrNotFound.
+func (c *Client) UserByLogin(ctx context.Context, login string) (User, error) {
+	var u User
+	if login == "" || strings.Contains(login, "/") {
+		return u, fmt.Errorf("user %q: %w", login, ErrNotFound)
+	}
+	err := c.getJSON(ctx, "/users/"+url.PathEscape(login), nil, &u)
+	return u, err
+}
+
 // RepoAccess is what a user token may do in a repository.
 type RepoAccess struct {
 	// ID is the repository's ID.

@@ -34,6 +34,8 @@ import (
 //   - "superseded": replaced by a newer push, or the change was closed;
 //   - "skipped": not reviewed because the repository has no skills (no Job,
 //     no comment, no status); never counted as a review or a failure;
+//   - "waiting": held because the repository doesn't trust the change's
+//     author, until someone with write access starts it;
 //   - "unknown": published before pergent.sh recorded outcomes.
 //
 // A published run's outcome, reason and status are what the publisher
@@ -51,6 +53,7 @@ const (
 	OutcomeSuperseded = store.OutcomeSuperseded
 	OutcomeSkipped    = store.OutcomeSkipped
 	OutcomeUnknown    = store.OutcomeUnknown
+	OutcomeWaiting    = store.OutcomeWaiting
 )
 
 // OverviewView is GET /api/overview?days=7 (days 1 to 90, default 7):
@@ -347,6 +350,22 @@ type RepositoryDetailView struct {
 	// Role is the session's role on the repository: "admin", "maintainer"
 	// or "viewer".
 	Role string `json:"role"`
+	// Waiting are the changes whose review waits for someone with write
+	// access to start it (Start review: admins and maintainers), newest
+	// first.
+	Waiting []WaitingView `json:"waiting"`
+}
+
+// WaitingView is a change of an author the repository doesn't trust, not
+// reviewed until someone starts it. Reason is "untrusted_author" or
+// "trust_check_failed" (the author's access couldn't be read).
+type WaitingView struct {
+	Number int64     `json:"number"`
+	Title  string    `json:"title"`
+	Author string    `json:"author"`
+	WebURL string    `json:"webUrl"`
+	Since  time.Time `json:"since"`
+	Reason string    `json:"reason"`
 }
 
 // SettingView is a setting's effective value and whether the repository
@@ -1083,6 +1102,9 @@ type SignInTestView struct {
 // InstanceAdminView is one instance in GET /api/admin/instances.
 type InstanceAdminView struct {
 	Name string `json:"name"`
+	// TrustedAuthorsOnly is the default of the instance's repositories:
+	// "follow_visibility", "on" or "off".
+	TrustedAuthorsOnly string `json:"trustedAuthorsOnly"`
 	// Platform is "gitlab" or "github"; Source is "config" or "dashboard".
 	Platform string `json:"platform"`
 	Source   string `json:"source"`

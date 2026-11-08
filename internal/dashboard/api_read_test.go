@@ -41,6 +41,9 @@ type fakeSource struct {
 	change      forge.Change
 	changeErr   error
 	changeCalls int
+	// users answers UserByName by lower-cased name (userErr: an error).
+	users   map[string]forge.User
+	userErr error
 }
 
 func newFakeSource() *fakeSource {
@@ -856,7 +859,8 @@ func TestRepositoryDetail(t *testing.T) {
 		`"learnFromDismissals":{"value":true,"overridden":false},"linkedRepos":{"value":[],"overridden":false},"linkedReposEnabled":{"value":false,"overridden":false},` +
 		`"maxTurns":{"value":40,"overridden":false},"quietReviews":{"value":false,"overridden":false},"repoSkills":{"value":[],"overridden":false},` +
 		`"rerunLimitPerMR":{"value":10,"overridden":false},"rerunLimitPerRepo":{"value":50,"overridden":false},` +
-		`"reviewDrafts":{"value":true,"overridden":false},"skills":{"value":["code-review"],"overridden":true}}`
+		`"reviewDrafts":{"value":true,"overridden":false},"skills":{"value":["code-review"],"overridden":true},` +
+		`"trustedAuthors":{"value":[],"overridden":false},"trustedAuthorsOnly":{"value":"follow_visibility","overridden":false}}`
 	if string(settings) != want {
 		t.Errorf("settings = %s\nwant %s", settings, want)
 	}

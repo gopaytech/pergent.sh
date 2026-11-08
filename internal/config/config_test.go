@@ -1534,3 +1534,71 @@ func TestLinkedReposConfig(t *testing.T) {
 		})
 	}
 }
+
+// withTrustKeys loads github.yaml with extra keys under the gitlab instance
+// "main", the github instance "gh" and the github repository acme/widgets.
+func withTrustKeys(t *testing.T, gitlabKey, githubKey, repoKey string) (*Config, error) {
+	t.Helper()
+	base, err := os.ReadFile("testdata/github.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(base)
+	for _, r := range []struct{ anchor, extra string }{
+		{"    webhook_secret_env: GITLAB_WEBHOOK_SECRET\n", gitlabKey},
+		{"    webhook_secret_env: GITHUB_WEBHOOK_SECRET\n", githubKey},
+		{"    project: acme/widgets\n    skills: [security]\n", repoKey},
+	} {
+		if !strings.Contains(body, r.anchor) {
+			t.Fatalf("github.yaml has no %q", r.anchor)
+		}
+		body = strings.Replace(body, r.anchor, r.anchor+r.extra, 1)
+	}
+	return Load(writeConfig(t, body))
+}
+
+func TestTrustedAuthorsConfig(t *testing.T) {
+	cfg, err := withTrustKeys(t, "    trusted_authors_only: off\n", "", `    trusted_authors_only: on
+    trusted_authors:
+      - id: 12
+        username: alice
+`)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.GitLab[0].TrustedAuthorsOnly; got != "off" {
+		t.Errorf("gitlab mode = %q, want off", got)
+	}
+	if got := cfg.GitHub[0].TrustedAuthorsOnly; got != "" {
+		t.Errorf("github mode = %q, want unset", got)
+	}
+	repo := cfg.Repositories[1]
+	if repo.TrustedAuthorsOnly == nil || *repo.TrustedAuthorsOnly != "on" {
+		t.Errorf("repository mode = %v, want on", repo.TrustedAuthorsOnly)
+	}
+	if want := []store.TrustedAuthor{{ID: 12, Username: "alice"}}; !slices.Equal(repo.TrustedAuthors, want) {
+		t.Errorf("allowlist = %+v, want %+v", repo.TrustedAuthors, want)
+	}
+}
+
+func TestTrustedAuthorsConfigInvalid(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		gitlab, github, repo string
+		want                 string
+	}{
+		{"instance mode", "    trusted_authors_only: maybe\n", "", "", "gitlab[0] (main): trusted_authors_only"},
+		{"github instance mode", "", "    trusted_authors_only: always\n", "", "github[0] (gh): trusted_authors_only"},
+		{"repository follows visibility", "", "", "    trusted_authors_only: follow_visibility\n", "trusted_authors_only must be on or off"},
+		{"author without id", "", "", "    trusted_authors:\n      - username: alice\n", "trusted_authors[0]: id"},
+		{"author without username", "", "", "    trusted_authors:\n      - id: 3\n", "trusted_authors[0]: username"},
+		{"author twice", "", "", "    trusted_authors:\n      - {id: 3, username: a}\n      - {id: 3, username: b}\n", "trusted_authors[1]: id 3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := withTrustKeys(t, tc.gitlab, tc.github, tc.repo)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("Load error = %v, want one containing %q", err, tc.want)
+			}
+		})
+	}
+}

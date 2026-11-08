@@ -849,6 +849,8 @@ var openAPISchemas = map[string]schemaType{
 	"RepositoryView":         outputSchema(RepositoryView{}),
 	"Last7View":              outputSchema(Last7View{}),
 	"RepositoryDetailView":   outputSchema(RepositoryDetailView{}),
+	"WaitingView":            outputSchema(WaitingView{}),
+	"TrustedAuthor":          outputSchema(store.TrustedAuthor{}),
 	"SettingView":            outputSchema(SettingView{}),
 	"InputsView":             outputSchema(InputsView{}),
 	"InputSkill":             outputSchema(InputSkill{}),
@@ -926,6 +928,8 @@ var openAPISchemas = map[string]schemaType{
 var openAPIUntypedSchemas = map[string]string{
 	"ErrorBody":                 "map[string]string{error, code}",
 	"StatusBody":                "map[string]string{status}",
+	"InstanceTrustRequest":      "struct in Dashboard.putInstanceTrust",
+	"TrustedAuthorInput":        "store.TrustedAuthor with id optional, in trustedAuthorsSetting",
 	"Outcome":                   "the Outcome* constants, spelled in the enum",
 	"CSRFTokenBody":             "map[string]string{csrfToken}",
 	"PasswordSignInRequest":     "struct in Auth.passwordSignIn",
@@ -1283,7 +1287,7 @@ func stringConsts(t *testing.T, glob, prefix, block string) map[string]string {
 func TestOpenAPIEnumsMatchCode(t *testing.T) {
 	d := loadSpec(t)
 	outcomes := []string{OutcomeRunning, OutcomeApproved, OutcomeBlocking, OutcomeDraft, OutcomeNoBlocking,
-		OutcomeFailed, OutcomeSuperseded, OutcomeSkipped, OutcomeUnknown}
+		OutcomeFailed, OutcomeSuperseded, OutcomeSkipped, OutcomeUnknown, OutcomeWaiting}
 	roles := []string{store.RoleAdmin, store.RoleMaintainer, store.RoleViewer}
 	teamRoles := []string{store.RoleMaintainer, store.RoleViewer}
 	accountRoles := []string{store.RoleAdmin, store.RoleUser}

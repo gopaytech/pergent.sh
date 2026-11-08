@@ -34,7 +34,8 @@ type RunDigest struct {
 	// decision's ("", "", false before one).
 	OutcomeReason, DecisionStatus string
 	Approved                      bool
-	// SkipReason is why a Skipped run was skipped; "" for any other run.
+	// SkipReason is why a Skipped run was skipped or a Waiting run waits; ""
+	// for any other run.
 	SkipReason string
 }
 
@@ -114,6 +115,7 @@ const outcomeSQL = `(CASE r.state
 	WHEN 'reported' THEN CASE WHEN r.failure_reason <> '' THEN 'failed' ELSE 'running' END
 	WHEN 'superseded' THEN 'superseded'
 	WHEN 'skipped' THEN 'skipped'
+	WHEN 'waiting' THEN 'waiting'
 	WHEN 'publish_failed' THEN 'failed'
 	ELSE COALESCE(NULLIF(r.outcome, ''), 'unknown') END)`
 

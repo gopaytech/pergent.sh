@@ -286,8 +286,11 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
     jobMemory: { value: "6Gi", overridden: true },
     rerunLimitPerMR: { value: 10, overridden: false },
     rerunLimitPerRepo: { value: 50, overridden: false },
+    trustedAuthorsOnly: { value: "follow_visibility", overridden: false },
+    trustedAuthors: { value: [], overridden: false },
   },
   attention: repo.health === "attention" ? [overview.attention[0]] : [],
+  waiting: [],
 });
 
 // A skill written in the dashboard, on the default list.
@@ -499,6 +502,7 @@ export const llm: LLMAdminView = {
 
 export const instanceGitLab: InstanceAdminView = {
   name: "main",
+  trustedAuthorsOnly: "follow_visibility",
   platform: "gitlab",
   source: "config",
   removing: false,
@@ -517,6 +521,7 @@ export const instanceGitLab: InstanceAdminView = {
 
 export const instanceGitHub: InstanceAdminView = {
   name: "hub",
+  trustedAuthorsOnly: "follow_visibility",
   platform: "github",
   source: "dashboard",
   removing: false,

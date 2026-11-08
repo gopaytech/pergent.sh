@@ -153,6 +153,9 @@ type RepoSource interface {
 	// GetChange reads one merge request or pull request: the buttons ask
 	// for its head and state.
 	GetChange(ctx context.Context, projectID, number int64) (forge.Change, error)
+	// UserByName looks a user up by username for the repository repo
+	// ("owner/name"): a repository's allowlist is stored by user ID.
+	UserByName(ctx context.Context, repo, username string) (forge.User, error)
 }
 
 // Dashboard is the dashboard's routes and what they share.
