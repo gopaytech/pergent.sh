@@ -429,3 +429,150 @@ func (s *Store) UsageOnDecidedChanges(ctx context.Context, instance string, proj
 		return t, err
 	})
 }
+
+// MetricsTotals are the counts the metrics are made of, over every day kept.
+// Each row is one repository (as the path it was reported under) and the
+// other values it is counted by; mapping them to the labels metrics may carry
+// is the caller's work, and the caller adds rows that end up with the same
+// labels.
+type MetricsTotals struct {
+	Tokens     []TokenTotal
+	Reviews    []ReviewTotal
+	Unfinished []UnfinishedTotal
+	SkillRuns  []SkillRunTotal
+	Findings   []FindingTotal
+	Dismissals []DismissalTotal
+}
+
+// TokenTotal is what one skill used with one model in one repository.
+type TokenTotal struct {
+	Instance, Project, Skill, Model string
+	Tokens                          TokenSum
+}
+
+// ReviewTotal is the reviews with a result in one repository, by trigger and
+// kind. A review is counted once, however many skills it ran.
+type ReviewTotal struct {
+	Instance, Project, Trigger string
+	Incremental                bool
+	Reviews                    int64
+}
+
+// UnfinishedTotal is the reviews of one repository that left no result.
+type UnfinishedTotal struct {
+	Instance, Project string
+	NoResult          int64
+	Superseded        int64
+}
+
+// SkillRunTotal is the runs of one skill in one repository that ended in one
+// verdict.
+type SkillRunTotal struct {
+	Instance, Project, Skill, Verdict string
+	Runs                              int64
+}
+
+// FindingTotal is the findings one skill reported in one repository.
+type FindingTotal struct {
+	Instance, Project, Skill string
+	Blocking, Suggestions    int64
+}
+
+// DismissalTotal is the findings dismissed in one repository, by the skill
+// that reported them. Project is empty when the projects table has no row for
+// the repository.
+type DismissalTotal struct {
+	Instance, Project, Skill string
+	Dismissals               int64
+}
+
+// MetricsTotals returns the counts for the metrics, one grouped query per
+// kind. A review with no result and one stopped by a newer push are told
+// apart as UsageWasted does, so the page and the metrics agree. Dismissals
+// come from the dismissals table, which loses a repository's rows when the
+// repository is switched off.
+func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
+	var t MetricsTotals
+	rows, err := s.pool.Query(ctx, `SELECT instance, project_path, skill, model, `+tokenSumColumns+`
+		FROM run_usage GROUP BY instance, project_path, skill, model`)
+	if err != nil {
+		return MetricsTotals{}, err
+	}
+	if t.Tokens, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (TokenTotal, error) {
+		var u TokenTotal
+		err := row.Scan(append([]any{&u.Instance, &u.Project, &u.Skill, &u.Model}, u.Tokens.dests()...)...)
+		return u, err
+	}); err != nil {
+		return MetricsTotals{}, err
+	}
+
+	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path, trigger, incremental, count(DISTINCT run_id)
+		FROM run_usage GROUP BY instance, project_path, trigger, incremental`); err != nil {
+		return MetricsTotals{}, err
+	}
+	if t.Reviews, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (ReviewTotal, error) {
+		var u ReviewTotal
+		err := row.Scan(&u.Instance, &u.Project, &u.Trigger, &u.Incremental, &u.Reviews)
+		return u, err
+	}); err != nil {
+		return MetricsTotals{}, err
+	}
+
+	// Reviews with no result have no usage rows, so these two come from runs,
+	// told apart as UsageWasted does.
+	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path,
+			count(*) FILTER (WHERE result IS NULL AND failure_reason <> '' AND dispatched_at IS NOT NULL),
+			count(*) FILTER (WHERE state = 'superseded' AND result IS NULL AND failure_reason = '' AND dispatched_at IS NOT NULL)
+		FROM runs GROUP BY instance, project_path
+		HAVING count(*) FILTER (WHERE result IS NULL AND failure_reason <> '' AND dispatched_at IS NOT NULL) > 0
+			OR count(*) FILTER (WHERE state = 'superseded' AND result IS NULL AND failure_reason = '' AND dispatched_at IS NOT NULL) > 0`); err != nil {
+		return MetricsTotals{}, err
+	}
+	if t.Unfinished, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (UnfinishedTotal, error) {
+		var u UnfinishedTotal
+		err := row.Scan(&u.Instance, &u.Project, &u.NoResult, &u.Superseded)
+		return u, err
+	}); err != nil {
+		return MetricsTotals{}, err
+	}
+
+	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path, skill, verdict, count(*)
+		FROM run_usage GROUP BY instance, project_path, skill, verdict`); err != nil {
+		return MetricsTotals{}, err
+	}
+	if t.SkillRuns, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (SkillRunTotal, error) {
+		var u SkillRunTotal
+		err := row.Scan(&u.Instance, &u.Project, &u.Skill, &u.Verdict, &u.Runs)
+		return u, err
+	}); err != nil {
+		return MetricsTotals{}, err
+	}
+
+	// findings counts every finding of the skill, blocking ones included.
+	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path, skill,
+			COALESCE(sum(blocking), 0), COALESCE(sum(findings - blocking), 0)
+		FROM run_usage GROUP BY instance, project_path, skill`); err != nil {
+		return MetricsTotals{}, err
+	}
+	if t.Findings, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (FindingTotal, error) {
+		var u FindingTotal
+		err := row.Scan(&u.Instance, &u.Project, &u.Skill, &u.Blocking, &u.Suggestions)
+		return u, err
+	}); err != nil {
+		return MetricsTotals{}, err
+	}
+
+	if rows, err = s.pool.Query(ctx, `SELECT d.instance, COALESCE(p.path, ''), d.skill, count(*)
+		FROM dismissals d LEFT JOIN projects p ON p.instance = d.instance AND p.project_id = d.project_id
+		GROUP BY d.instance, p.path, d.skill`); err != nil {
+		return MetricsTotals{}, err
+	}
+	if t.Dismissals, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (DismissalTotal, error) {
+		var u DismissalTotal
+		err := row.Scan(&u.Instance, &u.Project, &u.Skill, &u.Dismissals)
+		return u, err
+	}); err != nil {
+		return MetricsTotals{}, err
+	}
+	return t, nil
+}
