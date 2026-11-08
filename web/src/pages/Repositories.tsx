@@ -3,6 +3,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 
 import {
+  ApiError,
   api,
   paths,
   type AvailableView,
@@ -218,14 +219,20 @@ function Picker() {
           </button>
         </form>
       )}
-      {on.isError && <ErrorBox error={on.error} />}
+      {on.isError &&
+        (on.error instanceof ApiError && on.error.status === 404 ? (
+          <div className="error" role="alert">
+            The review bot can't reach this repository now. It may have been renamed or moved. Reload the list.
+          </div>
+        ) : (
+          <ErrorBox error={on.error} />
+        ))}
       {chosen && available.isPending && <Loading />}
       {available.isError && !available.isFetchNextPageError && <ErrorBox error={available.error} />}
       {chosen && available.data && (
         <>
           {truncated && <div className="pad meta">The list is too long to read whole. Search to find others.</div>}
           {items.length === 0 && !available.hasNextPage && <div className="row empty-row">No repository to switch on.</div>}
-
           {items.map((r) => (
             <div className="row" key={`${r.instance}/${r.project}`}>
               <div className="grow mr">{r.project}</div>

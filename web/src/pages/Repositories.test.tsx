@@ -74,6 +74,24 @@ describe("Repositories", () => {
     expect(await screen.findByTestId("location")).toHaveTextContent("/repos/main/acme/payments");
   });
 
+  it("says what to do when the repository can't be reached any more", async () => {
+    fakeApi({
+      "GET /api/me": { body: operator },
+      "GET /api/repositories": { body: [repoWidgets] },
+      "GET /api/admin/instances": { body: [instanceGitLab] },
+      "GET /api/admin/instances/main/repositories?search=": {
+        body: { items: [{ instance: "main", project: "acme/payments", platform: "gitlab" }], page: 1, hasMore: false, truncated: false },
+      },
+      "POST /api/repositories": { status: 404, body: { error: "not found" } },
+    });
+    renderApp("/repos?add=1");
+    const picker = await screen.findByRole("region", { name: "Add repository" });
+    await userEvent.selectOptions(await within(picker).findByLabelText("Instance"), "main");
+    await userEvent.click(await within(picker).findByRole("button", { name: "Switch on acme/payments" }));
+    expect(await screen.findByText(/can't reach this repository now/)).toBeInTheDocument();
+    expect(screen.queryByText("not found")).not.toBeInTheDocument();
+  });
+
   const gitlabPage = (from: number, count: number, page: number, hasMore: boolean, truncated = false) => ({
     items: Array.from({ length: count }, (_, i) => ({
       instance: "main",
