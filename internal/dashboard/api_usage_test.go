@@ -1,7 +1,9 @@
 package dashboard
 
 import (
+	"encoding/csv"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -211,5 +213,119 @@ func TestUsageOfARepositoryWithNone(t *testing.T) {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("body %s lacks %s", rec.Body, want)
 		}
+	}
+}
+
+// A cell a spreadsheet would read as a formula is written as text.
+func TestCSVCell(t *testing.T) {
+	for in, want := range map[string]string{"": "", "acme/widgets": "acme/widgets", "=cmd": "'=cmd", "+1": "'+1", "-x": "'-x", "@a": "'@a",
+		"\tx": "'\tx", "\rx": "'\rx", "a=b": "a=b"} {
+		if got := csvCell(in); got != want {
+			t.Errorf("csvCell(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+const csvHeader = "reported_at,instance,repository,merge_request,trigger,incremental,model,skill,verdict," +
+	"tokens_in,tokens_out,cache_read,cache_write,reasoning,findings,blocking"
+
+func csvRows(t *testing.T, rec *httptest.ResponseRecorder) [][]string {
+	t.Helper()
+	rows, err := csv.NewReader(strings.NewReader(rec.Body.String())).ReadAll()
+	if err != nil {
+		t.Fatalf("body %q is not CSV: %v", rec.Body, err)
+	}
+	return rows
+}
+
+func TestUsageCSV(t *testing.T) {
+	e := newEnv(t, nil)
+	e.usageFixture()
+	// A skill whose pergent reported no cache counts, and a name that a
+	// spreadsheet would read as a formula.
+	e.usageRun(runFix{project: "acme/widgets", number: 4, head: head('4'), at: e.clock.now().Add(-time.Hour), title: "=HYPERLINK(\"x\")", model: "=m"},
+		store.SkillUsage{Skill: "+skill", Verdict: "has_blocking_issues", In: 7, Out: 3, Findings: 2, Blocking: 1})
+	rec := e.get(e.operator(), "/api/admin/usage.csv?days=30")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET usage.csv = %d %s", rec.Code, rec.Body)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/csv; charset=utf-8" {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	if cd := rec.Header().Get("Content-Disposition"); cd != `attachment; filename="pergent-usage-30d.csv"` {
+		t.Errorf("Content-Disposition = %q", cd)
+	}
+	rows := csvRows(t, rec)
+	if got := strings.Join(rows[0], ","); got != csvHeader {
+		t.Errorf("header = %s, want %s", got, csvHeader)
+	}
+	// Three runs and four skills in the fixture, and the new one.
+	if len(rows) != 1+5 {
+		t.Fatalf("%d rows, want the header and 5: %v", len(rows), rows)
+	}
+	for _, r := range rows[1:] {
+		if len(r) != 16 {
+			t.Errorf("row %v has %d cells, want 16", r, len(r))
+		}
+	}
+	// Oldest first: the first review of acme/widgets, two days ago.
+	first := rows[1]
+	if first[1] != "main" || first[2] != "acme/widgets" || first[3] != "1" || first[4] != "push" || first[5] != "false" ||
+		first[6] != "m1" || first[7] != "security" || first[9] != "800" || first[10] != "100" || first[11] != "0" {
+		t.Errorf("first row = %v", first)
+	}
+	if _, err := time.Parse(time.RFC3339, first[0]); err != nil || !strings.HasSuffix(first[0], "Z") {
+		t.Errorf("reported_at = %q, want RFC 3339 in UTC", first[0])
+	}
+	last := rows[5]
+	if last[6] != "'=m" || last[7] != "'+skill" || last[11] != "" || last[12] != "" || last[13] != "" || last[14] != "2" || last[15] != "1" {
+		t.Errorf("last row = %v; want the formulas as text and empty cache and reasoning counts", last)
+	}
+	if strings.Contains(rec.Body.String(), "HYPERLINK") || strings.Contains(rec.Body.String(), "Add login") {
+		t.Errorf("the body holds a title: %s", rec.Body)
+	}
+}
+
+func TestUsageCSVOfARepository(t *testing.T) {
+	e := newEnv(t, nil)
+	e.usageFixture()
+	c := e.operator()
+
+	rows := csvRows(t, e.get(c, "/api/admin/usage.csv?instance=main&project=acme/widgets"))
+	if len(rows) != 1+3 {
+		t.Errorf("acme/widgets: %d rows, want the header and 3: %v", len(rows), rows)
+	}
+	for _, r := range rows[1:] {
+		if r[2] != "acme/widgets" {
+			t.Errorf("row %v is of another repository", r)
+		}
+	}
+	// A repository without usage, or not stored, is a header alone.
+	if rows := csvRows(t, e.get(c, "/api/admin/usage.csv?instance=gh&project=acme/widgets")); len(rows) != 1 {
+		t.Errorf("gh/acme/widgets: %v, want the header alone", rows)
+	}
+	// The period leaves out what is older.
+	if rows := csvRows(t, e.get(c, "/api/admin/usage.csv?days=1")); len(rows) != 1+2 {
+		t.Errorf("days=1: %v, want the header and 2 rows", rows)
+	}
+}
+
+func TestUsageCSVBadQuery(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.operator()
+	for _, q := range []string{"?days=0", "?days=91", "?days=x", "?instance=main", "?project=acme/widgets", "?instance=&project=acme/widgets"} {
+		wantCode(t, e.get(c, "/api/admin/usage.csv"+q), "usage.csv"+q, http.StatusBadRequest)
+	}
+}
+
+func TestUsageCSVIsForAdmins(t *testing.T) {
+	e := newEnv(t, nil)
+	e.usageFixture()
+	viewer := e.signInRole(store.RoleViewer)
+	unknown := e.get(viewer, "/api/no-such-route")
+	rec := e.get(viewer, "/api/admin/usage.csv")
+	if rec.Code != http.StatusNotFound || rec.Body.String() != unknown.Body.String() {
+		t.Errorf("usage.csv as a viewer = %d %s; want 404 %s", rec.Code, rec.Body, unknown.Body)
 	}
 }

@@ -81,6 +81,7 @@ func (d *Dashboard) operatorRoutes(mux *http.ServeMux) {
 	d.adminRoute(mux, "GET /api/admin/defaults", d.getDefaults)
 	d.adminRoute(mux, "PUT /api/admin/defaults", d.putDefaults)
 	d.adminRoute(mux, "GET /api/admin/usage", d.usageOverview)
+	d.adminRoute(mux, "GET /api/admin/usage.csv", d.usageCSV)
 }
 
 // --- views ---

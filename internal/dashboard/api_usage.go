@@ -1,7 +1,11 @@
 package dashboard
 
 import (
+	"encoding/csv"
+	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/settings"
@@ -165,4 +169,107 @@ func (d *Dashboard) repositoryUsage(w http.ResponseWriter, r *http.Request, se S
 			Total: o.Total, At: o.At.UTC().Format(time.RFC3339)})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// --- GET /api/admin/usage.csv ---
+
+// maxUsageCSVRows is the most rows an export holds. A longer one ends there,
+// without a mark: 90 days of a busy installation is far below it.
+const maxUsageCSVRows = 200000
+
+const msgBadUsageRepository = "instance and project go together: give both or neither"
+
+// usageCSVHeader is the first row of an export.
+var usageCSVHeader = []string{"reported_at", "instance", "repository", "merge_request", "trigger", "incremental", "model",
+	"skill", "verdict", "tokens_in", "tokens_out", "cache_read", "cache_write", "reasoning", "findings", "blocking"}
+
+// csvCell keeps a spreadsheet from reading a cell as a formula.
+func csvCell(s string) string {
+	if s != "" && strings.ContainsRune("=+-@\t\r", rune(s[0])) {
+		return "'" + s
+	}
+	return s
+}
+
+// optionalCount is a count the Job may not have reported: "" when it didn't.
+func optionalCount(n *int64) string {
+	if n == nil {
+		return ""
+	}
+	return strconv.FormatInt(*n, 10)
+}
+
+// usageCSV exports what each skill of each run used in the last days, one row
+// a run and skill, oldest first, for every repository or for the one given by
+// instance and project. A row holds no title and no text a person wrote, and
+// no dismissal: those belong to a change. The rows go out as the database
+// sends them.
+func (d *Dashboard) usageCSV(w http.ResponseWriter, r *http.Request) {
+	ctx, se := r.Context(), session(r)
+	days, ok := parseDays(r, defaultUsageDays, maxUsageDays)
+	if !ok {
+		writeError(w, http.StatusBadRequest, msgBadUsageDays)
+		return
+	}
+	instance, project := r.URL.Query().Get("instance"), r.URL.Query().Get("project")
+	if (instance == "") != (project == "") {
+		writeError(w, http.StatusBadRequest, msgBadUsageRepository)
+		return
+	}
+	var projectID int64
+	// A repository the platform hasn't told us the ID of has no usage: a
+	// header alone.
+	noUsage := false
+	if instance != "" {
+		var found bool
+		var err error
+		if projectID, found, err = d.projectID(ctx, se, instance, project); err != nil {
+			d.failed(w, r, "exporting usage", err)
+			return
+		}
+		noUsage = !found
+	}
+
+	out := csv.NewWriter(w)
+	started := false
+	start := func() error {
+		if started {
+			return nil
+		}
+		started = true
+		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="pergent-usage-%dd.csv"`, days))
+		return out.Write(usageCSVHeader)
+	}
+	if !noUsage {
+		err := d.Store.UsageRows(ctx, d.now().Add(-time.Duration(days)*day), instance, projectID, maxUsageCSVRows, func(u store.UsageRow) error {
+			if err := start(); err != nil {
+				return err
+			}
+			return out.Write([]string{
+				u.ReportedAt.UTC().Format(time.RFC3339), csvCell(u.Instance), csvCell(u.Project),
+				// A merge request's number is a number, not text.
+				strconv.FormatInt(u.MR, 10), csvCell(u.Trigger), strconv.FormatBool(u.Incremental), csvCell(u.Model),
+				csvCell(u.Skill), csvCell(u.Verdict), strconv.FormatInt(u.In, 10), strconv.FormatInt(u.Out, 10),
+				optionalCount(u.CacheRead), optionalCount(u.CacheWrite), optionalCount(u.Reasoning),
+				strconv.Itoa(u.Findings), strconv.Itoa(u.Blocking)})
+		})
+		if err != nil {
+			if ctx.Err() != nil {
+				return // the download was cancelled
+			}
+			if !started {
+				d.failed(w, r, "exporting usage", err)
+				return
+			}
+			// The status and part of the file are sent. End the response
+			// without its last chunk, so that the download fails instead of
+			// passing for a whole file.
+			d.Log.Error("dashboard: exporting usage failed", "path", r.URL.Path, "error", err.Error())
+			panic(http.ErrAbortHandler)
+		}
+	}
+	if err := start(); err == nil {
+		out.Flush()
+	}
 }

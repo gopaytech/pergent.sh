@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -371,4 +372,58 @@ func TestUsageCacheUnknown(t *testing.T) {
 		t.Fatalf("UsageByRepository = %+v, %v", got, err)
 	}
 	wantTokens(t, "tokens", got[0].Tokens, TokenSum{In: 2, Out: 2, CacheRead: 5, CacheWrite: 8, Reasoning: 9, Unknown: 1})
+}
+
+// The rows come oldest first, with a count the Job didn't report as nil, for
+// one repository or all, and no more than the limit.
+func TestUsageRows(t *testing.T) {
+	s := newStore(t)
+	seedUsage(t, s, usageMR(7, 2), usageAt(6, 10, 0), TriggerPush, true, "m2", skillRow("style", "has_blocking_issues", 20, 2))
+	seedUsage(t, s, usageMR(7, 1), usageAt(5, 10, 0), TriggerPush, false, "m1",
+		SkillUsage{Skill: "security", Verdict: "no_blocking_issues", In: 10, Out: 1, Findings: 3, Blocking: 1})
+	seedUsage(t, s, usageMR(8, 1), usageAt(5, 12, 0), TriggerPush, false, "m1", skillRow("security", "failed", 400, 0))
+	// Before the period: not listed.
+	seedUsage(t, s, usageMR(7, 3), usageSince.Add(-time.Second), TriggerPush, false, "m1", skillRow("security", "failed", 5000, 0))
+
+	collect := func(instance string, projectID int64, limit int) []UsageRow {
+		t.Helper()
+		var got []UsageRow
+		if err := s.UsageRows(ctx, usageSince, instance, projectID, limit, func(u UsageRow) error {
+			got = append(got, u)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	all := collect("", 0, 100)
+	if len(all) != 3 {
+		t.Fatalf("UsageRows(all) = %d rows, want 3: %+v", len(all), all)
+	}
+	if !all[0].ReportedAt.Equal(usageAt(5, 10, 0)) || !all[1].ReportedAt.Equal(usageAt(5, 12, 0)) || !all[2].ReportedAt.Equal(usageAt(6, 10, 0)) {
+		t.Errorf("times = %v, %v, %v; want oldest first", all[0].ReportedAt, all[1].ReportedAt, all[2].ReportedAt)
+	}
+	first := all[0]
+	if first.Project != "acme/p7" || first.MR != 1 || first.Trigger != TriggerPush || first.Incremental || first.Model != "m1" ||
+		first.Skill != "security" || first.Verdict != "no_blocking_issues" || first.In != 10 || first.Out != 1 ||
+		first.Findings != 3 || first.Blocking != 1 {
+		t.Errorf("first = %+v", first)
+	}
+	if first.CacheRead != nil || first.CacheWrite != nil || first.Reasoning != nil {
+		t.Errorf("first counts = %v, %v, %v; want nil for what the Job didn't report", first.CacheRead, first.CacheWrite, first.Reasoning)
+	}
+	if all[2].CacheRead == nil || *all[2].CacheRead != 0 || !all[2].Incremental {
+		t.Errorf("third = %+v; want a reported 0 and an incremental review", all[2])
+	}
+	if one := collect(mr1.Instance, 7, 100); len(one) != 2 {
+		t.Errorf("UsageRows(project 7) = %d rows, want 2", len(one))
+	}
+	if two := collect("", 0, 2); len(two) != 2 || !two[1].ReportedAt.Equal(usageAt(5, 12, 0)) {
+		t.Errorf("UsageRows(limit 2) = %+v; want the 2 oldest", two)
+	}
+	stop := errors.New("stop")
+	n := 0
+	if err := s.UsageRows(ctx, usageSince, "", 0, 100, func(UsageRow) error { n++; return stop }); !errors.Is(err, stop) || n != 1 {
+		t.Errorf("an error from each: err = %v after %d rows; want it returned after 1", err, n)
+	}
 }

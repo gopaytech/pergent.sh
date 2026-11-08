@@ -316,3 +316,48 @@ func (s *Store) UsageCostPerReview(ctx context.Context, instance string, project
 	}
 	return c, nil
 }
+
+// UsageRow is one run and skill, as the CSV export lists it. It holds no
+// title and no text a person wrote. CacheRead, CacheWrite and Reasoning are
+// nil when the Job didn't report them.
+type UsageRow struct {
+	ReportedAt                       time.Time
+	Instance, Project                string
+	MR                               int64
+	Trigger                          string
+	Incremental                      bool
+	Model, Skill, Verdict            string
+	In, Out                          int64
+	CacheRead, CacheWrite, Reasoning *int64
+	Findings, Blocking               int
+}
+
+// UsageRows calls each with the usage rows since the given time, oldest
+// first, at most limit of them, for one repository or, with an empty
+// instance, for every one. It hands them over as the database sends them
+// instead of collecting them, so an export of 90 days is never in memory at
+// once. An error from each stops it and is returned.
+func (s *Store) UsageRows(ctx context.Context, since time.Time, instance string, projectID int64, limit int, each func(UsageRow) error) error {
+	rows, err := s.pool.Query(ctx, `SELECT reported_at, instance, project_path, mr_iid, trigger, incremental, model, skill, verdict,
+			tokens_in, tokens_out, cache_read, cache_write, reasoning, findings, blocking
+		FROM run_usage
+		WHERE reported_at >= $1::timestamptz AND ($2::text = '' OR (instance = $2::text AND project_id = $3::bigint))
+		ORDER BY reported_at, run_id, skill
+		LIMIT $4::integer`, since, instance, projectID, limit)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var u UsageRow
+		if err := rows.Scan(&u.ReportedAt, &u.Instance, &u.Project, &u.MR, &u.Trigger, &u.Incremental, &u.Model, &u.Skill,
+			&u.Verdict, &u.In, &u.Out, &u.CacheRead, &u.CacheWrite, &u.Reasoning, &u.Findings, &u.Blocking); err != nil {
+			return err
+		}
+		u.ReportedAt = u.ReportedAt.UTC()
+		if err := each(u); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}

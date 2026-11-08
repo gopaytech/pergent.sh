@@ -2220,6 +2220,49 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/usage.csv:
+    get:
+      operationId: exportUsageCsv
+      tags: [Usage]
+      summary: Export usage as CSV
+      description: |
+        Admins only. One row a run and skill, oldest first, in the last `days`
+        days, for every repository or, with `instance` and `project`, for one
+        (a repository that is not stored is the header alone). `instance` and
+        `project` go together: one without the other is 400. Columns:
+        `reported_at` (RFC 3339, UTC), `instance`, `repository` (the path the
+        run was reported under), `merge_request` (its number), `trigger`,
+        `incremental`, `model`, `skill`, `verdict`, `tokens_in`, `tokens_out`,
+        `cache_read`, `cache_write`, `reasoning` (empty when pergent did not
+        report them), `findings` and `blocking`. There are no titles and no
+        text a person wrote, and no dismissals. A text cell that starts with
+        `=`, `+`, `-`, `@`, a tab or a carriage return gets a `'` in front, so
+        that a spreadsheet does not read it as a formula. The rows are streamed
+        and stop at 200,000, with no mark. If the stream fails after it began,
+        the response ends without its last chunk, so the download fails.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/UsageDays'
+        - name: instance
+          in: query
+          description: The instance of one repository; with `project`.
+          schema: {type: string}
+        - name: project
+          in: query
+          description: The path of one repository; with `instance`.
+          schema: {type: string}
+      responses:
+        '200':
+          description: The CSV, with a header row. Sent as an attachment named `pergent-usage-<days>d.csv`.
+          content:
+            text/csv:
+              schema: {type: string}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
   # ------------------------------------------------- instances and settings
   /api/admin/settings:
     get:
