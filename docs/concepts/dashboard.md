@@ -28,7 +28,7 @@ The dashboard has a **user area** and an **admin area**, each with its own sign-
 ## Turning it on
 
 1. Pick the dashboard's address, for example `https://pergent-dashboard.example.com`. It must be `https` and a bare host, without a path: the dashboard, its API (`/api/`) and its sign-in routes (`/auth/`) are served at `/` of that host, and its cookies only work over https. It can be an internal-only host. Webhooks and Job results stay on `public_url`, which GitHub.com must still reach from the internet.
-2. Set it in the config, and route that host's `/`, `/api/` and `/auth/` to the pergent.sh Service ([Exposing pergent.sh](../../README.md#exposing-pergentsh)):
+2. Set it in the config, and route that host's `/`, `/api/` and `/auth/` to the pergent.sh Service ([Exposing pergent.sh](../setup/install.md#exposing-pergentsh)):
 
    ```yaml
    config:
@@ -76,7 +76,7 @@ A local admin who lost the password asks pergent.sh for a new one from inside th
 kubectl -n pergent-sh exec deploy/pergent-sh -- /pergent-sh admin reset-password admin
 ```
 
-(`deploy/pergent-sh` is the Deployment of a release called `pergent-sh`, as in [Install with Helm](../../README.md#-install-with-helm). The chart names the Deployment `<release>-pergent-sh`, or just `<release>` when the release name contains `pergent-sh`; `kubectl -n pergent-sh get deploy` shows it.) The command needs only `DATABASE_URL`, which the pod's environment has. It prints `new password for admin: ...` on stdout (never in the JSON log), clears the account's lock and ends its sessions, and the account must change that password at its next sign-in. The reset is recorded in the audit log with the actor `cli`.
+(`deploy/pergent-sh` is the Deployment of a release called `pergent-sh`, as in [Install with Helm](../setup/install.md#-install-with-helm). The chart names the Deployment `<release>-pergent-sh`, or just `<release>` when the release name contains `pergent-sh`; `kubectl -n pergent-sh get deploy` shows it.) The command needs only `DATABASE_URL`, which the pod's environment has. It prints `new password for admin: ...` on stdout (never in the JSON log), clears the account's lock and ends its sessions, and the account must change that password at its next sign-in. The reset is recorded in the audit log with the actor `cli`.
 
 ## Password sign-in limits
 

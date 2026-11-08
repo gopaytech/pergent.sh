@@ -2,7 +2,7 @@
 
 ## Setting up
 
-You need Go, Node and, for the database tests, PostgreSQL. The README's Development section has the database command.
+You need Go, Node and, for the database tests, PostgreSQL. `docs/development.md` has the database command.
 
 ```bash
 make build
