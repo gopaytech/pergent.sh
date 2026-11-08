@@ -162,11 +162,10 @@ function Picker() {
     refetchOnWindowFocus: false,
     enabled: chosen,
   });
-  // A repository switched on here leaves the list at once; one that came on
-  // two pages (the list moved between requests) shows once.
-  const [gone, setGone] = useState<string[]>([]);
+  // A repository that came on two pages (the list moved between requests)
+  // shows once.
   const items = useMemo(() => {
-    const seen = new Set(gone);
+    const seen = new Set<string>();
     const out: AvailableView["items"] = [];
     for (const r of (available.data?.pages ?? []).flatMap((p) => p.items)) {
       const key = `${r.instance}/${r.project}`;
@@ -175,13 +174,12 @@ function Picker() {
       out.push(r);
     }
     return out;
-  }, [available.data, gone]);
+  }, [available.data]);
   const truncated = available.data?.pages.some((p) => p.truncated) ?? false;
   const on = useMutation({
     mutationFn: (project: string) =>
       write<RepositoryDetailView>("POST", "/api/repositories", { project, instance }),
-    onSuccess: (detail, project) => {
-      setGone((g) => [...g, `${instance}/${project}`]);
+    onSuccess: (detail) => {
       client.invalidateQueries({ queryKey: ["repositories"] });
       client.invalidateQueries({ queryKey: ["available"] });
       navigate(paths.repo(detail.repo.instance, detail.repo.project));
