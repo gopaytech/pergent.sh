@@ -595,10 +595,10 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 		// A re-run of failed skills stores the other skills' results with its
 		// own, so the sum of the result counts their tokens a second time.
 		// The usage table has only what this run used. Until it is filled in
-		// the sum of the result stands.
+		// the sum of the result stands, and so it does when the usage can't be
+		// read: usage never breaks a review's page.
 		if in, out, found, err := d.Store.RunUsage(ctx, run.ID); err != nil {
-			d.failed(w, r, "loading a run's usage", err)
-			return
+			d.Log.Warn("dashboard: reading a run's usage failed", "run", run.ID, "error", err.Error())
 		} else if found {
 			view.Tokens = TokensView{In: in, Out: out}
 		}

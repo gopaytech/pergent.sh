@@ -1313,6 +1313,30 @@ func TestSetupChecklistOnlyForAdmins(t *testing.T) {
 	}
 }
 
+// A usage table that can't be read leaves the page as it was: the sum of the
+// result, and a warning in the log.
+func TestRunDetailKeepsThePageWhenUsageCannotBeRead(t *testing.T) {
+	e := newEnv(t, nil)
+	own := skillJSON("own", "no_blocking_issues")
+	id := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: resultJSON(head('a'), own),
+		outcome: OutcomeApproved, approved: true})
+	c := e.userOnMain(false, "acme/widgets")
+	e.exec(`DROP TABLE run_usage`)
+
+	rec := e.get(c, "/api/runs/"+id)
+	wantCode(t, rec, "a run whose usage can't be read", http.StatusOK)
+	var v RunDetailView
+	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.Tokens != (TokensView{In: 100, Out: 10}) || len(v.Skills) != 1 {
+		t.Errorf("tokens = %+v, skills = %d; want the sum of the result and its skill", v.Tokens, len(v.Skills))
+	}
+	if !strings.Contains(e.logs.String(), "reading a run's usage failed") {
+		t.Errorf("log lacks the warning:\n%s", e.logs.String())
+	}
+}
+
 func TestRunDetailSkillVersionAndFolder(t *testing.T) {
 	e := newEnv(t, nil)
 	res := resultJSON(head('a'),
