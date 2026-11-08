@@ -228,12 +228,12 @@ pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is hand
 
 ### Upgrading to the next release
 
-**Admins can see where the model tokens went.** [Usage](#usage) is new, under **Admin → Usage**, and the Skill results tab has a cost section for admins. Nothing changes for other people, and nothing needs turning on.
+**Admins can see where the model tokens went.** [Usage](#usage) is new, under **Admin → Usage**, and the Skill results tab has a cost section for admins. Nothing new appears for other people, and nothing needs turning on; only the review page's token count changes for everyone (below).
 
 Migration `0032` runs at startup and adds a table and a column, dropping nothing, so back up Postgres first, as for any migration. 0.12.0 keeps working on the migrated database: it ignores both.
 
-- **The usage of earlier reviews is filled in after the upgrade, in the background.** pergent.sh serves at once and reads the stored results one page at a time, oldest first, so the Usage page fills up as it goes. For a merged incremental review filled in this way, the tokens of the `impact` skill are left out. A result that cannot be read is marked and not read again.
-- **Cache and reasoning counts need the pergent release that reports them.** A Job that runs an older pergent shows them as unknown, not as zero. Input and output tokens are there for every review.
+- **The usage of earlier reviews is filled in after the upgrade, in the background.** pergent.sh serves at once and reads the stored results one page at a time, oldest first, so the Usage page fills up as it goes. Only a review that left a result is filled in. For a merged incremental review filled in this way, the tokens of the `impact` skill are left out, except in a `review failed` re-run that ran `impact` itself. A result that cannot be read is marked and not read again.
+- **Cache and reasoning counts need the pergent release that reports them.** A Job that runs an older pergent shows them as unknown, not as zero. Input and output tokens are there for every review that left a result.
 - **The review page counts a `review failed` re-run once.** It showed the tokens of the skills the re-run kept a second time.
 
 ### Upgrading to 0.12.0
@@ -903,7 +903,7 @@ Admins read the audit log under **Admin → Audit log**: who did what and when, 
 
 Admins read where the model tokens went under **Admin → Usage** (`/admin/usage`). Nobody else can: for anyone else the page and its API are a 404, like a path that is not there. The page shows the last 7, 30 or 90 days (30 by default) and lists each repository, the busiest first, with its tokens and its number of reviews. Under it are the tokens of each day. A repository's name opens its page (`/admin/usage/<instance>/<project>`), which lists the tokens of each skill, the 50 merge requests that used most (each linking to the merge request), each model, each day, what was wasted, and what a review costs.
 
-- **What is counted.** Every total, ranking and median adds input and output tokens only. Cache reads, cache writes and reasoning tokens are shown apart and are never added in. A review by a pergent that does not report them shows them as "unknown", not as zero ([Upgrading](#-upgrading)).
+- **What is counted.** Every total, ranking and median adds input and output tokens only. Cache reads, cache writes and reasoning tokens are shown apart and are never added in. A review by a pergent that does not report them shows them as "unknown", not as zero ([Upgrading](#-upgrading)); the page says for how many skill runs they are unknown, a skill run being one skill in one review.
 - **Days** are cut at midnight UTC, and the page says so.
 - **Wasted.** The tokens of skills that failed, counted per skill: a review where one skill failed wastes that skill's tokens, not those of the skills that passed. Re-runs (`review`, `review failed` and the dashboard's buttons for them) are shown apart, not as waste, because a re-run that worked did useful work. A skill that failed in a re-run is in both figures, so don't add them. A `start` of an untrusted author's change is not a re-run. Reviews that left no result (a timeout, out of memory, a deleted Job) and reviews superseded by a push are counted, with their tokens shown as unknown. A failed review that a later re-run replaced still counts as one with no result.
 - **Cost per review.** The median tokens of a full review and of an incremental review, kept apart, because an incremental review covers only what changed. A re-run of only the failed skills is in neither. A review that used more than three times the median of its kind is listed, the costliest first (up to 20).
