@@ -233,6 +233,7 @@ pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is hand
 Migration `0031` runs at startup and adds a run state, a run trigger and nullable or defaulted columns, dropping nothing, so back up Postgres first, as for any migration. 0.11.x keeps working on the migrated database: it never starts a waiting run, and shows one as `unknown`.
 
 - **To roll back, first remove `gitlab[].trusted_authors_only`, `github[].trusted_authors_only`, `repositories[].trusted_authors_only` and `repositories[].trusted_authors` from the config.** 0.11.x refuses a config key it doesn't know.
+- **Add repository on GitLab** lists 50 repositories at a time with **Load more**, instead of reading every project first, and switching on a project the review bot reaches as Maintainer through a parent group or a share now works.
 
 ### Upgrading to 0.11.0
 
