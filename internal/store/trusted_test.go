@@ -51,12 +51,12 @@ func TestStartRunTurnsWaitingIntoQueuedStart(t *testing.T) {
 	if _, err := s.HoldRun(ctx, id, WaitUntrusted); err != nil {
 		t.Fatal(err)
 	}
-	got, created, err := s.StartRun(ctx, mr1, "acme/widgets", sha('a'), "main")
+	got, started, err := s.StartRun(ctx, mr1, "acme/widgets", sha('a'), "main")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != id || created {
-		t.Errorf("StartRun = %s, %v; want %s, false", got, created, id)
+	if got != id || !started {
+		t.Errorf("StartRun = %s, %v; want %s, true", got, started, id)
 	}
 	r := mustRun(t, s, id)
 	if r.State != Queued || r.Trigger != TriggerStart {

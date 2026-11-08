@@ -761,13 +761,13 @@ func (s *Store) HoldRun(ctx context.Context, id, reason string) (ok bool, err er
 
 // StartRun starts the review of headSHA onto targetBranch of an untrusted
 // author's merge request. A waiting run of that head and target becomes a
-// queued run with TriggerStart (created is false, id is that run's). With
+// queued run with TriggerStart (started is true, id is that run's). With
 // none, a live (queued, running or reported) run of that head and target is
-// left as it is and returned. Otherwise a new queued TriggerStart run is
+// left as it is and returned, started false. Otherwise a new queued TriggerStart run is
 // created, superseding the live runs of other heads and targets and an older
 // finished run of this one, as EnqueueRerun does. The caller checks the
 // merge request's re-run cap first.
-func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, targetBranch string) (id string, created bool, err error) {
+func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, targetBranch string) (id string, started bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return "", false, err
@@ -783,7 +783,7 @@ func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, ta
 		RETURNING id::text`,
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch).Scan(&id)
 	if err == nil {
-		return id, false, tx.Commit(ctx)
+		return id, true, tx.Commit(ctx)
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return "", false, err

@@ -136,6 +136,43 @@ func Rerun(ctx context.Context, st *store.Store, req RerunRequest) (RerunResult,
 	return res, nil
 }
 
+// StartRequest asks for the review of an untrusted author's change mr at
+// Head and TargetBranch to be started. Repo holds the change's cap and Now is
+// the clock it counts by.
+type StartRequest struct {
+	MR                 store.MRKey
+	ProjectPath        string
+	Head, TargetBranch string
+	Repo               settings.Effective
+	Now                time.Time
+}
+
+// Start is what a comment command and a button follow to start the review of
+// an untrusted author's change: the change's re-run cap (a start doesn't
+// count against the repository's), then the waiting run of the head queued as
+// a start, or a new start. The caller checks that the person has write
+// access, drafts and the change's state first, and wakes the engine and
+// audits when the result is RerunQueued.
+func Start(ctx context.Context, st *store.Store, req StartRequest) (RerunResult, error) {
+	now := req.Now.UTC()
+	since := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	n, err := st.CountReruns(ctx, &req.MR, "", 0, since)
+	if err != nil {
+		return RerunResult{}, fmt.Errorf("count the re-runs of the change: %w", err)
+	}
+	if n >= req.Repo.RerunLimitPerMR {
+		return RerunResult{Status: RerunCapped}, nil
+	}
+	_, started, err := st.StartRun(ctx, req.MR, req.ProjectPath, req.Head, req.TargetBranch)
+	if err != nil {
+		return RerunResult{}, fmt.Errorf("start the review: %w", err)
+	}
+	if !started {
+		return RerunResult{Status: RerunAlreadyQueued}, nil
+	}
+	return RerunResult{Status: RerunQueued, Action: "review_start", Detail: "skills=all"}, nil
+}
+
 // MaxReasonRunes is the longest reason of a dismissal, in characters. A
 // comment's reason is cut to it, the dashboard refuses a longer one.
 const MaxReasonRunes = 500
