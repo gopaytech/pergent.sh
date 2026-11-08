@@ -2645,8 +2645,9 @@ components:
         (no usable review), `superseded` (replaced by a newer push, or the
         change was closed), `skipped` (the repository has no skills; never a
         review or a failure), `unknown` (published before outcomes were
-        recorded).
-      enum: [running, approved, blocking, draft, no_blocking, failed, superseded, skipped, unknown]
+        recorded), `waiting` (the repository doesn't trust the change's
+        author; held until someone with write access starts the review).
+      enum: [running, approved, blocking, draft, no_blocking, failed, superseded, skipped, unknown, waiting]
     # ----------------------------------------------------------- request bodies
     PasswordSignInRequest:
       type: object

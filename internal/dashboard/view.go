@@ -34,6 +34,8 @@ import (
 //   - "superseded": replaced by a newer push, or the change was closed;
 //   - "skipped": not reviewed because the repository has no skills (no Job,
 //     no comment, no status); never counted as a review or a failure;
+//   - "waiting": held because the repository doesn't trust the change's
+//     author, until someone with write access starts it;
 //   - "unknown": published before pergent.sh recorded outcomes.
 //
 // A published run's outcome, reason and status are what the publisher
@@ -51,6 +53,7 @@ const (
 	OutcomeSuperseded = store.OutcomeSuperseded
 	OutcomeSkipped    = store.OutcomeSkipped
 	OutcomeUnknown    = store.OutcomeUnknown
+	OutcomeWaiting    = store.OutcomeWaiting
 )
 
 // OverviewView is GET /api/overview?days=7 (days 1 to 90, default 7):

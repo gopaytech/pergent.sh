@@ -34,7 +34,8 @@ type RunDigest struct {
 	// decision's ("", "", false before one).
 	OutcomeReason, DecisionStatus string
 	Approved                      bool
-	// SkipReason is why a Skipped run was skipped; "" for any other run.
+	// SkipReason is why a Skipped run was skipped or a Waiting run waits; ""
+	// for any other run.
 	SkipReason string
 }
 
