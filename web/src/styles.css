@@ -1062,6 +1062,10 @@ details.skill-doc[open] summary::before {
   font-variant-numeric: tabular-nums;
 }
 
+.table progress {
+  width: 100%;
+}
+
 .table td .error {
   margin: 6px 0 0;
 }

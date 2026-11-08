@@ -127,11 +127,30 @@ describe("Usage of a repository", () => {
     expect(screen.getByRole("link", { name: "Fix the ledger" })).toHaveAttribute("href", "https://gitlab.example.com/acme/payments/-/merge_requests/77");
   });
 
-  it("says unknown cache counts are unknown for the reviews, never zero", async () => {
+  it("links a merge request's number to its review page", async () => {
+    fakeApi(routes());
+    renderApp("/admin/usage/main/acme/payments");
+    const mrs = await screen.findByRole("region", { name: "Merge requests" });
+    expect(within(mrs).getByRole("link", { name: "77" })).toHaveAttribute("href", "/reviews/main/acme/payments/77");
+    expect(within(mrs).getByRole("link", { name: "78" })).toHaveAttribute("href", "/reviews/main/acme/payments/78");
+  });
+
+  it("counts failed runs for skills only, since a model has none to count", async () => {
+    fakeApi(routes());
+    renderApp("/admin/usage/main/acme/payments");
+    const skills = await screen.findByRole("region", { name: "Skills" });
+    const models = screen.getByRole("region", { name: "Models" });
+    expect(within(skills).getByRole("columnheader", { name: "Failed" })).toBeInTheDocument();
+    expect(within(models).queryByRole("columnheader", { name: "Failed" })).toBeNull();
+    // The model's row keeps its runs and tokens.
+    expect(within(models).getByText("claude-sonnet").closest("tr")).toHaveTextContent("21");
+  });
+
+  it("says unknown cache counts are unknown for the skill runs, never zero", async () => {
     fakeApi(routes());
     renderApp("/admin/usage/main/acme/payments");
     const security = (await screen.findByText("security")).closest("tr") as HTMLElement;
-    expect(security).toHaveTextContent("unknown for 3 reviews");
+    expect(security).toHaveTextContent("unknown for 3 skill runs");
     expect(security).not.toHaveTextContent("cache read 0");
     // Reported counts show as they are.
     const style = screen.getByText("style").closest("tr") as HTMLElement;

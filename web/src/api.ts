@@ -424,7 +424,8 @@ export type UsageOverviewView = {
   repositories: UsageRepositoryRowView[];
 };
 
-// UsageNamedView is one skill or model of a repository's usage.
+// UsageNamedView is one skill or model of a repository's usage. failed is
+// the runs in which a skill failed; for a model it is always 0.
 export type UsageNamedView = { name: string; tokens: UsageTokensView; runs: number; failed: number };
 
 // UsageMRView is one merge request of a repository's usage.

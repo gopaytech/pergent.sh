@@ -14,15 +14,19 @@ export const total = (t: UsageTokensView) => t.in + t.out;
 // reviews says "1 review" or "3 reviews".
 export const reviewsText = (n: number) => `${n} ${n === 1 ? "review" : "reviews"}`;
 
+// skillRunsText says "1 skill run" or "3 skill runs": what unknown counts is
+// the runs of a skill, so a review of two skills is two of them.
+const skillRunsText = (n: number) => `${n} ${n === 1 ? "skill run" : "skill runs"}`;
+
 // apartText is what was reported apart from the totals. A pergent too old to
 // report cache and reasoning leaves them unknown, which is never shown as
-// zero: unknown counts the reviews it covers.
+// zero: unknown counts the skill runs it covers.
 export function apartText(t: UsageTokensView): string {
   const parts: string[] = [];
   if (t.unknown === 0 || t.cacheRead + t.cacheWrite + t.reasoning > 0) {
     parts.push(`cache read ${count(t.cacheRead)}`, `cache write ${count(t.cacheWrite)}`, `reasoning ${count(t.reasoning)}`);
   }
-  if (t.unknown > 0) parts.push(`unknown for ${reviewsText(t.unknown)}`);
+  if (t.unknown > 0) parts.push(`unknown for ${skillRunsText(t.unknown)}`);
   return parts.join(" · ");
 }
 

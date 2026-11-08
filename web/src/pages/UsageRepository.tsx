@@ -56,7 +56,7 @@ function Body({ view, instance, project }: { view: UsageRepositoryView; instance
   const { wasted } = view;
   return (
     <>
-      <Named title="Skills" first="Skill" rows={view.skills} />
+      <Named title="Skills" first="Skill" rows={view.skills} failed />
       <section className="card scroll" aria-label="Merge requests">
         <h2>Merge requests</h2>
         {view.mergeRequests.length === 0 ? (
@@ -72,7 +72,7 @@ function Body({ view, instance, project }: { view: UsageRepositoryView; instance
               {view.mergeRequests.map((m) => (
                 <tr key={m.iid}>
                   <td>
-                    <span className="meta">{m.iid} </span>
+                    <Link to={paths.review(instance, project, m.iid)}>{m.iid}</Link>{" "}
                     {safeHref(m.webURL) ? <ExternalLink href={m.webURL}>{m.title}</ExternalLink> : m.title}
                   </td>
                   <td className="num">{m.reviews}</td>
@@ -148,8 +148,10 @@ function Body({ view, instance, project }: { view: UsageRepositoryView; instance
   );
 }
 
-// Named is a table of skills or models, each with its runs and failed runs.
-function Named({ title, first, rows }: { title: string; first: string; rows: UsageNamedView[] }) {
+// Named is a table of skills or models, each with its runs. Only the skills
+// have failed runs: the API has no count of them for a model, so a model's
+// table leaves the column out instead of showing a 0 that means nothing.
+function Named({ title, first, rows, failed = false }: { title: string; first: string; rows: UsageNamedView[]; failed?: boolean }) {
   return (
     <section className="card scroll" aria-label={title}>
       <h2>{title}</h2>
@@ -160,7 +162,7 @@ function Named({ title, first, rows }: { title: string; first: string; rows: Usa
           <thead>
             <UsageHead first={first}>
               <th className="num">Runs</th>
-              <th className="num">Failed</th>
+              {failed && <th className="num">Failed</th>}
             </UsageHead>
           </thead>
           <tbody>
@@ -168,7 +170,7 @@ function Named({ title, first, rows }: { title: string; first: string; rows: Usa
               <tr key={r.name}>
                 <td>{r.name}</td>
                 <td className="num">{r.runs}</td>
-                <td className="num">{r.failed}</td>
+                {failed && <td className="num">{r.failed}</td>}
                 <UsageCells tokens={r.tokens} />
               </tr>
             ))}

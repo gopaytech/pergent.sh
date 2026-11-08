@@ -696,7 +696,7 @@ export const usageRepository: UsageRepositoryView = {
     { name: "security", tokens: tok(500_000, 100_000, { cacheRead: 0, cacheWrite: 0, reasoning: 0, unknown: 3 }), runs: 12, failed: 1 },
     { name: "style", tokens: tok(400_000, 100_000, { cacheRead: 7_000, cacheWrite: 1_000, reasoning: 2_000, unknown: 0 }), runs: 9, failed: 0 },
   ],
-  models: [{ name: "claude-sonnet", tokens: tok(900_000, 200_000), runs: 21, failed: 1 }],
+  models: [{ name: "claude-sonnet", tokens: tok(900_000, 200_000), runs: 21, failed: 0 }],
   mergeRequests: [
     { iid: 77, title: "Fix the ledger", webURL: "https://gitlab.example.com/acme/payments/-/merge_requests/77", tokens: tok(600_000, 100_000), reviews: 4 },
     { iid: 78, title: "<img src=x onerror=alert(1)>", webURL: "https://gitlab.example.com/acme/payments/-/merge_requests/78", tokens: tok(300_000, 100_000), reviews: 2 },
