@@ -479,6 +479,12 @@ func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, msgNeedsAdminLinks)
 		return
 	}
+	// So is who is trusted: turning it off, or a name on the list, lets a
+	// stranger's change be reviewed, and approved, without anyone asking.
+	if slices.ContainsFunc(keys, isTrustKey) && session(r).Role(repo.Instance, repo.Project) < RoleAdmin {
+		writeError(w, http.StatusForbidden, msgNeedsAdminTrust)
+		return
+	}
 	// The rules for links that need the platform run before the save; a link
 	// that fails them is never stored.
 	if slices.Contains(keys, "linkedRepos") {
@@ -523,6 +529,10 @@ func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	d.updateSettings(w, r, repo, edit, "settings changed", "settings_updated", strings.Join(keys, ", "))
 }
+
+// isTrustKey reports whether key is one of the trusted-authors settings,
+// which only an admin of the repository changes.
+func isTrustKey(key string) bool { return key == "trustedAuthorsOnly" || key == "trustedAuthors" }
 
 // maxTrustedAuthors is the most users a repository's allowlist holds.
 const maxTrustedAuthors = 100
@@ -613,11 +623,11 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 		row.Approve, row.ReviewDrafts, row.InlineFindings, row.FailureStatus = nil, nil, nil, nil
 		row.CommandsAuthorAndMaintainersOnly, row.IncrementalReviews, row.LearnFromDismissals, row.QuietReviews = nil, nil, nil, nil
 		row.CommentLayout = nil
-		row.TrustedAuthorsOnly, row.TrustedAuthors = nil, nil
 		row.Skills, row.RepoSkills, row.JobTimeoutSeconds, row.MaxTurns, row.JobMemory = nil, nil, nil, nil, nil
 		if admin {
 			row.RerunLimitPerMR, row.RerunLimitPerRepo = nil, nil
 			row.LinkedReposEnabled, row.LinkedRepos = nil, nil
+			row.TrustedAuthorsOnly, row.TrustedAuthors = nil, nil
 		}
 	}, "settings reset", "settings_reset", "")
 }

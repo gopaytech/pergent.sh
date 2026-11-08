@@ -47,7 +47,7 @@ func TestTrustedAuthorsSave(t *testing.T) {
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
 	e.src["main"].set(func(f *fakeSource) { f.users = map[string]forge.User{"alice": {ID: 5, Username: "Alice"}} })
-	c := e.signInRole(store.RoleMaintainer)
+	c := e.sessionFor(e.ssoAdmin("boss@example.com"))
 
 	rec := e.send(c, "PUT", gadgetsSettings, `{"trustedAuthors":[{"username":"alice"},{"id":9,"username":"old-name"}]}`)
 	wantCode(t, rec, "save", http.StatusOK)
@@ -81,7 +81,7 @@ func TestTrustedAuthorsSave(t *testing.T) {
 func TestTrustedAuthorsOnlySetting(t *testing.T) {
 	e := newEnv(t, nil)
 	e.dashboardRepo("main", "acme/gadgets", nil)
-	c := e.signInRole(store.RoleMaintainer)
+	c := e.sessionFor(e.ssoAdmin("boss@example.com"))
 	wantCode(t, e.send(c, "PUT", gadgetsSettings, `{"trustedAuthorsOnly":"maybe"}`), "bad mode", http.StatusBadRequest)
 	wantCode(t, e.send(c, "PUT", gadgetsSettings, `{"trustedAuthorsOnly":"follow_visibility"}`), "repository can't follow", http.StatusBadRequest)
 
@@ -200,4 +200,22 @@ func TestStartButton(t *testing.T) {
 		t.Error("the engine wasn't woken")
 	}
 	wantCode(t, e.send(c, "POST", buttonURL("start"), `{}`), "not waiting", http.StatusConflict)
+}
+
+// Who is trusted is an admin's to say: a maintainer can't change it, and a
+// maintainer's reset leaves it as it is.
+func TestTrustSettingsAreAdmins(t *testing.T) {
+	e := newEnv(t, nil)
+	off := "off"
+	e.dashboardRepo("main", "acme/gadgets", func(r *store.DashboardRepo) {
+		r.TrustedAuthorsOnly, r.TrustedAuthors = &off, []store.TrustedAuthor{{ID: 9, Username: "bob"}}
+	})
+	c := e.signInRole(store.RoleMaintainer)
+	wantCode(t, e.send(c, "PUT", gadgetsSettings, `{"trustedAuthorsOnly":"on"}`), "maintainer mode", http.StatusForbidden)
+	wantCode(t, e.send(c, "PUT", gadgetsSettings, `{"trustedAuthors":null}`), "maintainer list", http.StatusForbidden)
+	wantCode(t, e.send(c, "POST", gadgetsSettings+"/reset", ""), "maintainer reset", http.StatusOK)
+	r, _ := e.storedRepo("main", "acme/gadgets")
+	if r.TrustedAuthorsOnly == nil || *r.TrustedAuthorsOnly != "off" || len(r.TrustedAuthors) != 1 {
+		t.Errorf("after a maintainer's reset: %v %+v; want them kept", r.TrustedAuthorsOnly, r.TrustedAuthors)
+	}
 }

@@ -38,6 +38,8 @@ const (
 	maxWatchedLen = 200
 
 	msgNeedsAdminLinks = "only admins can change the linked repositories"
+
+	msgNeedsAdminTrust = "only admins of this repository change who is trusted"
 	msgBadLinks        = `linkedRepos must be a list of at most 3 links like {"target": "owner/name", "watched": ["glob", ...], "canBlock": true}, or null for none`
 	msgLinksGitLab     = "linked repositories work on GitHub repositories only"
 	msgLinksNoApp      = "this instance can't check linked repositories right now, so nothing was saved"

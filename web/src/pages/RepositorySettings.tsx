@@ -94,6 +94,8 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
         // Only an admin of the repository changes its re-run caps.
         canSetCaps={view.role === "admin"}
         canSetLinks={canSetLinks}
+        // Who is trusted is an admin's to say too.
+        canSetTrust={view.role === "admin"}
         platform={repo.platform}
         linkable={
           linkable.isError
@@ -113,7 +115,7 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
           const caps =
             view.role === "admin"
               ? ""
-              : " The re-run caps stay as they are; only an admin of this repository resets them. So do the linked repositories.";
+              : " The re-run caps stay as they are; only an admin of this repository resets them. So do the linked repositories and who is trusted.";
           if (window.confirm(`Put every setting of this repository back to its default?${caps}`)) reset.mutate();
         }}
       />
@@ -304,6 +306,7 @@ function Form({
   locked,
   canSetCaps,
   canSetLinks,
+  canSetTrust,
   platform,
   linkable,
   onSearch,
@@ -318,6 +321,7 @@ function Form({
   locked: boolean;
   canSetCaps: boolean;
   canSetLinks: boolean;
+  canSetTrust: boolean;
   platform: string;
   linkable: LinkableState;
   onSearch: (text: string) => void;
@@ -386,9 +390,13 @@ function Form({
     if (d.incrementalReviews !== initial.incrementalReviews) body.incrementalReviews = d.incrementalReviews;
     if (d.learnFromDismissals !== initial.learnFromDismissals) body.learnFromDismissals = d.learnFromDismissals;
     if (d.quietReviews !== initial.quietReviews) body.quietReviews = d.quietReviews;
-    if (d.trustedAuthorsOnly !== initial.trustedAuthorsOnly) body.trustedAuthorsOnly = d.trustedAuthorsOnly === "" ? null : d.trustedAuthorsOnly;
-    if (JSON.stringify(d.trustedAuthors) !== JSON.stringify(initial.trustedAuthors)) {
-      body.trustedAuthors = d.trustedAuthors.length === 0 ? null : d.trustedAuthors;
+    // Who is trusted is an admin's: a maintainer's save never carries it
+    // (the server would refuse the whole save).
+    if (canSetTrust) {
+      if (d.trustedAuthorsOnly !== initial.trustedAuthorsOnly) body.trustedAuthorsOnly = d.trustedAuthorsOnly === "" ? null : d.trustedAuthorsOnly;
+      if (JSON.stringify(d.trustedAuthors) !== JSON.stringify(initial.trustedAuthors)) {
+        body.trustedAuthors = d.trustedAuthors.length === 0 ? null : d.trustedAuthors;
+      }
     }
     // The linked repositories are an admin's: a maintainer's save never
     // carries them (the server would refuse the whole save). No links is sent
@@ -535,7 +543,7 @@ function Form({
           <select
             aria-label="Trusted authors only"
             value={d.trustedAuthorsOnly}
-            disabled={disabled}
+            disabled={disabled || !canSetTrust}
             onChange={(e) => set("trustedAuthorsOnly", e.target.value as Draft["trustedAuthorsOnly"])}
           >
             <option value="">
@@ -560,7 +568,7 @@ function Form({
             {d.trustedAuthors.map((a) => (
               <div className="row" key={`${a.id ?? "new"}/${a.username}`}>
                 <span className="grow mono">{a.username}</span>
-                {!disabled && (
+                {!disabled && canSetTrust && (
                   <button
                     type="button"
                     className="btn small"
@@ -577,8 +585,9 @@ function Form({
                 )}
               </div>
             ))}
+            {!locked && !canSetTrust && <div className="meta">Only admins of this repository change who is trusted.</div>}
           </div>
-          {!disabled && (
+          {!disabled && canSetTrust && (
             <div className="search">
               <input
                 aria-label="Add a username"

@@ -103,6 +103,25 @@ describe("Trusted authors: repository settings", () => {
   });
 });
 
+describe("Trusted authors: maintainers", () => {
+  it("shows a maintainer who is trusted, read-only, and saves without it", async () => {
+    const detail = withTrust(repoDetail(repoPayments, "maintainer"), {
+      trustedAuthors: { value: [{ id: 9, username: "bob" }], overridden: true },
+    });
+    const fake = fakeApi(settingsRoutes(detail));
+    renderApp("/repos/main/acme/payments?tab=settings");
+    expect(await screen.findByLabelText("Trusted authors only")).toBeDisabled();
+    const list = screen.getByRole("group", { name: "Trusted authors" });
+    expect(list).toHaveTextContent("bob");
+    expect(within(list).queryByRole("button", { name: "Remove bob" })).not.toBeInTheDocument();
+    expect(list).toHaveTextContent("Only admins of this repository change who is trusted.");
+    await userEvent.click(screen.getByRole("switch", { name: "Review drafts" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    const body = fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body as Record<string, unknown>;
+    expect(Object.keys(body)).toEqual(["reviewDrafts"]);
+  });
+});
+
 describe("Trusted authors: instances", () => {
   it("sets a dashboard instance's default", async () => {
     const fake = fakeApi({
