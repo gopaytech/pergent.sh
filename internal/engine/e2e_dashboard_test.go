@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -164,6 +165,32 @@ func serveDashboardGitLab(t *testing.T, env *testEnv) {
 			"expires_at": env.Now().Add(30 * 24 * time.Hour).Format(time.RFC3339),
 		})
 	}
+
+	// GET /projects lists the projects the token's user has min_access_level
+	// on, narrowed by id_after and id_before as GitLab does: switch-on asks it
+	// for the one project's ID.
+	gl.Handle(http.MethodGet, "/projects", func(w http.ResponseWriter, r *http.Request) {
+		levels, ok := dashAccess[r.Header.Get("PRIVATE-TOKEN")]
+		if !ok {
+			reply(w, http.StatusUnauthorized, map[string]string{"message": "401 Unauthorized"})
+			return
+		}
+		q := r.URL.Query()
+		num := func(key string, def int64) int64 {
+			if n, err := strconv.ParseInt(q.Get(key), 10, 64); err == nil {
+				return n
+			}
+			return def
+		}
+		minLevel, after, before := num("min_access_level", 1), num("id_after", 0), num("id_before", math.MaxInt64)
+		page := []map[string]any{}
+		for path, id := range dashProjectIDs {
+			if level := int64(levels[path]); level > 0 && level >= minLevel && id > after && id < before {
+				page = append(page, map[string]any{"id": id, "path_with_namespace": path})
+			}
+		}
+		reply(w, http.StatusOK, page)
+	})
 }
 
 // do sends a request to the routes with cookies and headers and returns the
