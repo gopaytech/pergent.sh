@@ -153,6 +153,7 @@ The repository page lists changes waiting for a start (for example `!12 by stran
 - Nothing is turned on explicitly: an unset setting follows visibility, which is what protects existing public repositories.
 - The README's **Upgrading** section says that public repositories stop reviewing changes from authors without write access, and how to turn it off or add an allowlist.
 - The previous release keeps working on the same database: new columns are nullable or defaulted, and nothing it reads changes meaning.
+- The new config keys (`gitlab[].trusted_authors_only`, `github[].trusted_authors_only`, `repositories[].trusted_authors_only`, `repositories[].trusted_authors`) are refused by the previous release, which rejects unknown keys. The Upgrading section says to remove them before rolling back.
 
 ## Testing
 
