@@ -150,8 +150,8 @@ describe("Trusted authors: waiting changes", () => {
   const waiting = (role: "admin" | "viewer") => ({
     ...repoDetail(repoPayments, role),
     waiting: [
-      { number: 12, title: "Fix it", author: "stranger", webUrl: "https://gitlab.example.com/acme/payments/-/merge_requests/12", since: "2026-11-08T08:00:00Z", reason: "untrusted_author" as const },
-      { number: 13, title: "Other", author: "someone", webUrl: "", since: "2026-11-08T07:00:00Z", reason: "trust_check_failed" as const },
+      { number: 12, head: "a".repeat(40), title: "Fix it", author: "stranger", webUrl: "https://gitlab.example.com/acme/payments/-/merge_requests/12", since: "2026-11-08T08:00:00Z", reason: "untrusted_author" as const },
+      { number: 13, head: "b".repeat(40), title: "Other", author: "someone", webUrl: "", since: "2026-11-08T07:00:00Z", reason: "trust_check_failed" as const },
     ],
   });
 
@@ -169,6 +169,7 @@ describe("Trusted authors: waiting changes", () => {
     await userEvent.click(within(box).getByRole("button", { name: "Start review of !12" }));
     const [post] = fake.find("POST", "/api/reviews/main/acme/payments/12/start");
     expect(post.headers.get("X-CSRF-Token")).toBe(ssoAdmin.csrfToken);
+    expect(post.body).toEqual({ head: "a".repeat(40) });
   });
 
   it("writes a GitHub pull request with #", async () => {

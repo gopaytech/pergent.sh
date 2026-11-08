@@ -165,3 +165,35 @@ func TestStartCaps(t *testing.T) {
 	e.answer(t)
 	e.wantReactions(t, c2, eyes, down)
 }
+
+// A start reviews only a head that existed when it was asked for: a push
+// that lands after the comment, before it is handled, waits again.
+func TestStartRefusesHeadPushedAfterComment(t *testing.T) {
+	e, head := trustedCommands(t, userReporter, "rep")
+	env := e.env
+	first := waitingRun(t, env, head)
+
+	c := e.say(t, "dev", userDeveloper, "@pergent-review review")
+	// The stranger pushes before the command is handled.
+	head2 := sha('c')
+	setAuthor(env, head2, userReporter, "rep")
+	second := waitingRun(t, env, head2)
+	e.answer(t)
+	e.wantReactions(t, c, eyes, down)
+	e.wantReplies(t, "this change was pushed after your comment; start the review again")
+	if r := env.Run(second); r.State != store.Waiting {
+		t.Errorf("the newer head = %s/%s, want still waiting", r.State, r.Trigger)
+	}
+	if r := env.Run(first); r.State != store.Superseded {
+		t.Errorf("the older head = %s, want superseded", r.State)
+	}
+
+	// Asked again, it starts.
+	env.SetNow(env.Now().Add(3 * 60e9))
+	c2 := e.say(t, "dev", userDeveloper, "@pergent-review review")
+	e.answer(t)
+	e.wantReactions(t, c2, eyes, up)
+	if r := env.Run(second); r.Trigger != store.TriggerStart {
+		t.Errorf("after a new comment: %s/%s, want a start", r.State, r.Trigger)
+	}
+}

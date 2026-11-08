@@ -108,7 +108,8 @@ function Waiting({
   const client = useQueryClient();
   const write = useWrite();
   const start = useMutation({
-    mutationFn: (n: number) => write<{ status: string }>("POST", paths.apiReviewAction(instance, project, n, "start"), {}),
+    // The head shown is sent back: a change pushed since doesn't start.
+    mutationFn: (w: WaitingView) => write<{ status: string }>("POST", paths.apiReviewAction(instance, project, w.number, "start"), { head: w.head }),
     onSuccess: () => client.invalidateQueries({ queryKey }),
   });
   return (
@@ -141,7 +142,7 @@ function Waiting({
               className="btn small"
               aria-label={`Start review of ${mark}${w.number}`}
               disabled={start.isPending}
-              onClick={() => start.mutate(w.number)}
+              onClick={() => start.mutate(w)}
             >
               Start review
             </button>

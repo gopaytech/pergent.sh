@@ -30,6 +30,8 @@ export type TrustedAuthor = { id?: number; username: string };
 // start it. reason is "untrusted_author" or "trust_check_failed".
 export type WaitingView = {
   number: number;
+  // head is the commit that waits; Start review sends it back.
+  head: string;
   title: string;
   author: string;
   webUrl: string;

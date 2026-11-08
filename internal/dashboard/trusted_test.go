@@ -162,7 +162,7 @@ func TestWaitingList(t *testing.T) {
 		t.Fatalf("waiting = %+v, want one", v.Waiting)
 	}
 	w := v.Waiting[0]
-	if w.Number != 7 || w.Title != "Add the handler" || w.Author != "bob" || w.Reason != store.WaitCheckFailed || w.WebURL == "" {
+	if w.Number != 7 || w.Title != "Add the handler" || w.Author != "bob" || w.Reason != store.WaitCheckFailed || w.WebURL == "" || w.Head != head('1') {
 		t.Errorf("waiting = %+v", w)
 	}
 
@@ -181,11 +181,18 @@ func TestStartButton(t *testing.T) {
 	e := newEnv(t, nil)
 	id := e.waitingChange(head('1'), store.WaitUntrusted)
 	viewer := e.signInRole(store.RoleViewer)
-	wantCode(t, e.send(viewer, "POST", buttonURL("start"), `{}`), "viewer", http.StatusForbidden)
+	body := `{"head":"` + head('1') + `"}`
+	wantCode(t, e.send(viewer, "POST", buttonURL("start"), body), "viewer", http.StatusForbidden)
 
 	e.aliceOn("main", store.RoleMaintainer)
 	c := e.aliceSession()
-	rec := e.send(c, "POST", buttonURL("start"), `{}`)
+	wantCode(t, e.send(c, "POST", buttonURL("start"), `{}`), "no head", http.StatusBadRequest)
+	// The change has a newer push than the page showed: nothing starts.
+	wantCode(t, e.send(c, "POST", buttonURL("start"), `{"head":"`+head('2')+`"}`), "head moved", http.StatusConflict)
+	if rows := e.runRows(); len(rows) != 1 || rows[0].State != "waiting" {
+		t.Fatalf("after a moved head: runs = %+v, want still waiting", rows)
+	}
+	rec := e.send(c, "POST", buttonURL("start"), body)
 	if rec.Code != http.StatusAccepted || statusOf(t, rec) != "queued" {
 		t.Fatalf("start = %d %s; want 202 queued", rec.Code, rec.Body)
 	}
@@ -199,7 +206,7 @@ func TestStartButton(t *testing.T) {
 	if e.wakes.Load() == 0 {
 		t.Error("the engine wasn't woken")
 	}
-	wantCode(t, e.send(c, "POST", buttonURL("start"), `{}`), "not waiting", http.StatusConflict)
+	wantCode(t, e.send(c, "POST", buttonURL("start"), body), "not waiting", http.StatusConflict)
 }
 
 // Who is trusted is an admin's to say: a maintainer can't change it, and a

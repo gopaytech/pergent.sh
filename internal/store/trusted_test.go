@@ -274,3 +274,26 @@ func TestStartBeforeHold(t *testing.T) {
 		t.Error("a claimed start was held")
 	}
 }
+
+// A head is seen by a moment when a run of it (onto that target) was queued
+// at or before it.
+func TestHeadSeenBy(t *testing.T) {
+	s := newStore(t)
+	id := enqueue(t, s, mr1, sha('a'))
+	created := mustRun(t, s, id).CreatedAt
+	for _, tc := range []struct {
+		head, target string
+		at           time.Time
+		want         bool
+	}{
+		{sha('a'), "main", created, true},
+		{sha('a'), "main", created.Add(time.Minute), true},
+		{sha('a'), "main", created.Add(-time.Second), false},
+		{sha('b'), "main", created.Add(time.Minute), false},
+		{sha('a'), "develop", created.Add(time.Minute), false},
+	} {
+		if got, err := s.HeadSeenBy(ctx, mr1, tc.head, tc.target, tc.at); err != nil || got != tc.want {
+			t.Errorf("HeadSeenBy(%s, %s, %v) = %v, %v; want %v", tc.head[:3], tc.target, tc.at.Sub(created), got, err, tc.want)
+		}
+	}
+}

@@ -834,6 +834,18 @@ func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, ta
 	return id, true, tx.Commit(ctx)
 }
 
+// HeadSeenBy reports whether pergent.sh had queued a run of headSHA onto
+// targetBranch for mr at or before at: whether that head existed when
+// someone asked, at at, for the review of the change to be started.
+func (s *Store) HeadSeenBy(ctx context.Context, mr MRKey, headSHA, targetBranch string, at time.Time) (bool, error) {
+	var seen bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs
+		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
+		  AND created_at <= $6)`,
+		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch, at).Scan(&seen)
+	return seen, err
+}
+
 // TrustCheckFailing records that run id's trust check failed at now and
 // returns when it first failed, now on the first failure.
 func (s *Store) TrustCheckFailing(ctx context.Context, id string, now time.Time) (time.Time, error) {
@@ -1503,6 +1515,7 @@ func (s *Store) queryApprovals(ctx context.Context, sql string, args ...any) ([]
 // of it, when the run was queued and why it waits.
 type WaitingChange struct {
 	IID                   int64
+	Head                  string
 	Title, Author, WebURL string
 	Since                 time.Time
 	Reason                string
@@ -1511,7 +1524,7 @@ type WaitingChange struct {
 // WaitingChanges returns the merge requests of project (its path, matched
 // ignoring case) on instance whose run waits, newest first, at most 100.
 func (s *Store) WaitingChanges(ctx context.Context, instance, project string) ([]WaitingChange, error) {
-	rows, err := s.pool.Query(ctx, `SELECT mr_iid, title, author, web_url, created_at, skip_reason FROM runs
+	rows, err := s.pool.Query(ctx, `SELECT mr_iid, head_sha, title, author, web_url, created_at, skip_reason FROM runs
 		WHERE instance = $1 AND lower(project_path) = lower($2) AND state = 'waiting'
 		ORDER BY created_at DESC, id DESC LIMIT 100`, instance, project)
 	if err != nil {
@@ -1519,7 +1532,7 @@ func (s *Store) WaitingChanges(ctx context.Context, instance, project string) ([
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (WaitingChange, error) {
 		var c WaitingChange
-		err := row.Scan(&c.IID, &c.Title, &c.Author, &c.WebURL, &c.Since, &c.Reason)
+		err := row.Scan(&c.IID, &c.Head, &c.Title, &c.Author, &c.WebURL, &c.Since, &c.Reason)
 		return c, err
 	})
 }
