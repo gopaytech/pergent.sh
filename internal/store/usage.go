@@ -53,6 +53,18 @@ func (s *Store) RunsWithoutUsage(ctx context.Context, limit int) ([]Run, error) 
 		WHERE NOT usage_recorded AND result IS NOT NULL ORDER BY created_at LIMIT $1`, limit)
 }
 
+// RunUsage returns what run id used, summed over its recorded skills; found
+// is false when its usage isn't recorded yet. A re-run of failed skills keeps
+// the other skills' results in its stored result, so its own tokens are only
+// in the table.
+func (s *Store) RunUsage(ctx context.Context, id string) (in, out int64, found bool, err error) {
+	// bool_or over no rows is NULL.
+	var recorded *bool
+	err = s.pool.QueryRow(ctx, `SELECT COALESCE(sum(tokens_in), 0), COALESCE(sum(tokens_out), 0), bool_or(true)
+		FROM run_usage WHERE run_id = $1::uuid`, id).Scan(&in, &out, &recorded)
+	return in, out, recorded != nil && *recorded, err
+}
+
 // TokenSum is input and output tokens, plus the counts reported apart and how
 // many rows didn't report them.
 type TokenSum struct {

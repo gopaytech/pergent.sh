@@ -592,6 +592,16 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 			view.IncrementalNote = notMergedNote
 		}
 		fillSkills(&view, res, run.Result, run.SkillSources, run.SkillVersions, dismissals)
+		// A re-run of failed skills stores the other skills' results with its
+		// own, so the sum of the result counts their tokens a second time.
+		// The usage table has only what this run used. Until it is filled in
+		// the sum of the result stands.
+		if in, out, found, err := d.Store.RunUsage(ctx, run.ID); err != nil {
+			d.failed(w, r, "loading a run's usage", err)
+			return
+		} else if found {
+			view.Tokens = TokensView{In: in, Out: out}
+		}
 	}
 	writeJSON(w, http.StatusOK, view)
 }

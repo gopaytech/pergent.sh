@@ -30,6 +30,21 @@ func TestRecordUsage(t *testing.T) {
 	}
 }
 
+// A run's usage is the sum of its skills, and found only once it is recorded.
+func TestRunUsage(t *testing.T) {
+	s := newStore(t)
+	id := reported(t, s, mr1, "head1", `{"schema_version":1,"status":"completed","skills":[]}`)
+	if in, out, found, err := s.RunUsage(ctx, id); err != nil || found || in != 0 || out != 0 {
+		t.Errorf("before = %d, %d, %v, %v; want 0, 0, false", in, out, found, err)
+	}
+	if err := s.RecordUsage(ctx, id, []SkillUsage{{Skill: "a", In: 10, Out: 2}, {Skill: "b", In: 5, Out: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if in, out, found, err := s.RunUsage(ctx, id); err != nil || !found || in != 15 || out != 3 {
+		t.Errorf("after = %d, %d, %v, %v; want 15, 3, true", in, out, found, err)
+	}
+}
+
 // Counts the Job didn't report are stored as NULL, and the row takes the
 // run's own repository, merge request and trigger.
 func TestRecordUsageKeepsUnknownCountsNull(t *testing.T) {

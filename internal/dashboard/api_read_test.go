@@ -797,6 +797,30 @@ func TestRunDetail(t *testing.T) {
 	}
 }
 
+// A re-run of failed skills stores the skills it kept with its own, so the
+// result counts the kept skills' tokens again. The page shows what the run
+// used itself, from the usage table, and the sum of the result only until
+// that is filled in.
+func TestRunDetailTokensComeFromUsage(t *testing.T) {
+	e := newEnv(t, nil)
+	kept := skillJSON("kept", "no_blocking_issues")
+	own := skillJSON("own", "no_blocking_issues")
+	own["tokens"] = map[string]any{"input": 5, "output": 1}
+	f := runFix{project: "acme/widgets", number: 3, head: head('a'), result: resultJSON(head('a'), kept, own), outcome: OutcomeApproved, approved: true}
+	c := e.userOnMain(false, "acme/widgets")
+
+	id := e.addRun(f)
+	if v := getJSON[RunDetailView](e, c, "/api/runs/"+id); v.Tokens != (TokensView{In: 105, Out: 11}) {
+		t.Errorf("tokens before usage is recorded = %+v; want the sum of the result", v.Tokens)
+	}
+	if err := e.st.RecordUsage(ctx, id, []store.SkillUsage{usageSkill("own", "no_blocking_issues", 5, 1)}); err != nil {
+		t.Fatal(err)
+	}
+	if v := getJSON[RunDetailView](e, c, "/api/runs/"+id); v.Tokens != (TokensView{In: 5, Out: 1}) {
+		t.Errorf("tokens = %+v; want the run's own, 5 and 1", v.Tokens)
+	}
+}
+
 func TestRunLog(t *testing.T) {
 	e := newEnv(t, nil)
 	id := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: cleanResult(head('a'))})
