@@ -36,15 +36,29 @@ These would make the feature a failure even if it "works":
 
 ## At a glance
 
-On a repository with **Trusted authors only** on (a public repository, unless someone turned it off):
+Each connected instance (a GitLab server or a GitHub App) has **Trusted authors only** set to *follow visibility* (the default), *always on* or *always off*. A repository's own setting wins over the instance's. The tables below are for *follow visibility*.
 
-| Who opens or pushes the change | Reviewed automatically? | Can start a stranger's review? | Approved when the review is clean? |
+**GitHub**
+
+| Author of the change | Public repository | Private repository |
+|---|---|---|
+| Stranger: no access, opens a PR from a fork | ❌ waits for a start (note, pending status) | ✅ reviewed (they need read access to fork it at all) |
+| `read` or `triage` collaborator | ❌ waits | ✅ |
+| On the repository's allowlist | ✅ | ✅ |
+| `write`, `maintain` or `admin` | ✅, and can start a stranger's review | ✅ |
+
+**GitLab**
+
+| Author of the change | Public project | Internal project | Private project |
 |---|---|---|---|
-| Stranger (no access, or read only), usually from a fork | ❌ waits: one note, pending status | ❌ (not even their own) | ✅ once someone with write access started it |
-| On the repository's allowlist, no write access | ✅ | ❌ | ✅ |
-| Write access (GitLab Developer, GitHub write) | ✅ | ✅ `@<bot> review` | ✅ |
-| Maintainer and above | ✅ | ✅ `@<bot> review` | ✅ |
-| Dashboard admin, or maintainer of the repository's team | (not an author) | ✅ **Start review** button | n/a |
+| No membership (any account on the server, or a fork) | ❌ waits for a start | ✅ reviewed | ✅ reviewed |
+| Guest or Reporter | ❌ waits | ✅ | ✅ |
+| On the repository's allowlist | ✅ | ✅ | ✅ |
+| Developer, Maintainer or Owner (inherited access too) | ✅, and can start a stranger's review | ✅ | ✅ |
+
+With the instance (or the repository) set to *always off*, every cell is ✅, as today. With *always on*, every ✅ for a stranger, `read`/`triage` or Guest/Reporter becomes ❌ waits.
+
+**Who can start a waiting change's review:** someone with write access (`@<bot> review`), or a dashboard admin or maintainer of the repository's team (**Start review**). Not the author, not a reader, not an allowlisted user without write access. A started review approves as usual when it is clean.
 
 | What happens | Result |
 |---|---|
@@ -53,8 +67,6 @@ On a repository with **Trusted authors only** on (a public repository, unless so
 | Someone with write access comments `@<bot> review` | A run on the current head; counts against the per-change cap, not the repository's daily cap |
 | The stranger pushes again | Waits again: pending status, no second note |
 | The author's access can't be checked (after about 10 minutes of retries) | No run, no note; pending status saying the check failed |
-| Private or GitLab internal repository, setting unset | As today: every author reviewed automatically |
-| Public repository, setting turned off | As today: every author reviewed automatically |
 
 ## Behaviour
 
@@ -81,10 +93,14 @@ The check runs in the engine, **after** the webhook, never inside the webhook re
 
 ### The setting
 
-A repository setting, **Trusted authors only**: dashboard switch on the repository's Settings, key `trustedAuthorsOnly` in the API, `trusted_authors_only` in the config file. It works like the other repository settings: an override per repository, a default on **Admin → Settings**, and a config key that makes a config-managed repository read-only in the dashboard.
+**Trusted authors only** has three values: *follow visibility*, *always on*, *always off*. It is set in two places:
 
-- **Default: on for public repositories, off for private and internal ones.** "Unset" means "follow the visibility", so an existing public repository is protected the moment the upgrade is running, and a repository made public later becomes protected too.
-- An explicit on or off, on the repository or as the instance default, wins over visibility.
+- **On the instance** (each connected GitLab server or GitHub App): **Admin → Integrations → the instance**, or `gitlab[].trusted_authors_only` / `github[].trusted_authors_only` in the config file. Default *follow visibility*. An owner of a private GitLab who trusts every account on it sets *always off* once.
+- **On the repository**: a switch on the repository's Settings (key `trustedAuthorsOnly` in the API, `repositories[].trusted_authors_only` in the config file; a config-managed repository's value is read-only in the dashboard). Unset means "use the instance's value". An explicit value wins over the instance's.
+
+*Follow visibility* means on for public repositories, off for private and internal ones. Because it is the default, an existing public repository is protected the moment the upgrade is running, and a repository made public later becomes protected too.
+
+*My call:* this setting has no default on **Admin → Settings**; the instance value is its default, for dashboard and config-managed repositories alike, so there is one place to look.
 - Visibility is read from the platform: GitHub's repository `visibility`, GitLab's project `visibility` (`public`, `internal`, `private`). GitLab `internal` (visible to every account on that instance, not to the internet) counts as private. On GitLab this is new: `gitlabforge.Visibility` currently returns `ErrUnsupported`. **If visibility can't be read, the repository counts as public** (fail closed): changes from untrusted authors wait. The error is logged.
 
 ### The allowlist
@@ -133,7 +149,7 @@ The repository page lists changes waiting for a start (for example `!12 by stran
 
 ## Upgrade
 
-- A new migration (the next free number on `main` when the work starts; `0031` today, re-checked against parallel work) adds the per-repository setting, the per-repository list, the instance default for the setting, and the per-change "note posted" flag.
+- A new migration (the next free number on `main` when the work starts; `0031` today, re-checked against parallel work) adds the per-repository setting, the per-repository list, the instance's setting, and the per-change "note posted" flag.
 - Nothing is turned on explicitly: an unset setting follows visibility, which is what protects existing public repositories.
 - The README's **Upgrading** section says that public repositories stop reviewing changes from authors without write access, and how to turn it off or add an allowlist.
 - The previous release keeps working on the same database: new columns are nullable or defaulted, and nothing it reads changes meaning.
@@ -149,6 +165,7 @@ What must be pinned by tests, at minimum:
 - Allowlist on the repository, matched by user ID (a renamed user stays trusted); removed from the list → untrusted on the next push; an allowlist on one repository trusts nobody on another.
 - Private repository with the setting unset: unchanged behaviour (fork changes are reviewed).
 - Explicit off on a public repository: everyone reviewed as today.
+- Instance *always off*: a public project on it reviews every author; a repository set to on overrides it. Instance *always on*: a private repository waits for strangers; a repository set to off overrides it.
 - Config-managed repository: `trusted_authors_only` and `trusted_authors` read from config; the dashboard shows them read-only.
 - GitLab and GitHub both, including GitLab inherited Developer access.
 - A GitHub `write` user starts a stranger's review while "Only the author and maintainers use commands" is on; their `dismiss` on someone else's change is still refused.
