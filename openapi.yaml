@@ -814,6 +814,46 @@ paths:
               schema: {$ref: '#/components/schemas/ErrorBody'}
         '500': {$ref: '#/components/responses/InternalError'}
         '502': {$ref: '#/components/responses/BadGateway'}
+  /api/reviews/{instance}/{project}/{number}/start:
+    post:
+      operationId: startReview
+      tags: [Overview and reviews]
+      summary: Start the review of an untrusted author's change
+      description: |
+        For a change whose newest run waits because the repository doesn't
+        trust its author (409 otherwise): starts the review of the change's
+        head on the platform now, like `@<bot> review` from someone with write
+        access. The body is empty or `{}`. For maintainers and admins of the
+        repository (403 otherwise). The change must be open (409), and a draft
+        only where drafts are reviewed (409). A start counts against the
+        change's re-run cap only (429), not the repository's.
+      x-pergent-access: session
+      x-pergent-pattern: POST /api/reviews/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+        - $ref: '#/components/parameters/Number'
+      responses:
+        '202':
+          description: '`status` is `queued` or `already queued`.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/StatusBody'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429':
+          description: The change's re-run cap for the UTC day is reached.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorBody'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '502': {$ref: '#/components/responses/BadGateway'}
   /api/reviews/{instance}/{project}/{number}/dismiss:
     post:
       operationId: dismissFinding
@@ -1106,7 +1146,8 @@ paths:
         `failureStatus`, `skills`
         (null: the default list), `repoSkills`, `jobTimeoutSeconds`,
         `maxTurns`, `jobMemory`
-        (`""` when none), `rerunLimitPerMR` and `rerunLimitPerRepo`; each
+        (`""` when none), `rerunLimitPerMR`, `rerunLimitPerRepo`,
+        `trustedAuthorsOnly` (the mode in effect) and `trustedAuthors`; each
         value says whether the repository sets it (`overridden`) or follows
         the default.
       x-pergent-access: session
@@ -2226,6 +2267,35 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/instances/{name}/trusted-authors:
+    put:
+      operationId: setInstanceTrustedAuthors
+      tags: [Instances and settings]
+      summary: Set an instance's trusted-authors default
+      description: |
+        Admins only. The default of the instance's repositories:
+        `follow_visibility` (on for a public repository, off otherwise), `on`
+        or `off`. A repository's own setting wins over it. An instance of the
+        config (set `trusted_authors_only` there), or one being removed, is 409.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstancePathName'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/InstanceTrustRequest'}
+      responses:
+        '204': {description: Set.}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/instances/{name}/repositories:
     get:
       operationId: listInstanceRepositories
@@ -3011,6 +3081,53 @@ components:
           minimum: 1
           maximum: 1000
           description: Admins of the repository only.
+        trustedAuthorsOnly:
+          type: [string, 'null']
+          enum: ['on', 'off', null]
+          description: Whether only trusted authors are reviewed without someone starting it. Null follows the instance.
+        trustedAuthors:
+          type: [array, 'null']
+          maxItems: 100
+          description: The repository's allowlist. An entry without `id` is looked up by username when it is saved (400 when the platform doesn't know it), then stored by ID.
+          items: {$ref: '#/components/schemas/TrustedAuthorInput'}
+    InstanceTrustRequest:
+      type: object
+      required: [mode]
+      additionalProperties: false
+      properties:
+        mode:
+          type: string
+          enum: [follow_visibility, 'on', 'off']
+    TrustedAuthor:
+      description: A user on a repository's allowlist, matched by ID; username is the name it had when added.
+      type: object
+      required: [id, username]
+      properties:
+        id: {type: integer}
+        username: {type: string}
+    TrustedAuthorInput:
+      type: object
+      required: [username]
+      additionalProperties: false
+      properties:
+        id:
+          type: integer
+          minimum: 0
+          description: The platform's user ID; left out for a username to look up.
+        username: {type: string}
+    WaitingView:
+      description: A change whose review waits for someone with write access to start it.
+      type: object
+      required: [number, title, author, webUrl, since, reason]
+      properties:
+        number: {type: integer}
+        title: {type: string}
+        author: {type: string}
+        webUrl: {type: string}
+        since: {type: string, format: date-time}
+        reason:
+          type: string
+          enum: [untrusted_author, trust_check_failed]
     DefaultsRequest:
       type: object
       description: |
@@ -3428,9 +3545,13 @@ components:
     InstanceAdminView:
       description: One instance.
       type: object
-      required: [name, platform, source, removing, url, apiURL, reviewAppID, approveAppID, webhookURL, approver, secrets]
+      required: [name, trustedAuthorsOnly, platform, source, removing, url, apiURL, reviewAppID, approveAppID, webhookURL, approver, secrets]
       properties:
         name: {type: string}
+        trustedAuthorsOnly:
+          type: string
+          enum: [follow_visibility, 'on', 'off']
+          description: The default of the instance's repositories.
         platform:
           type: string
           enum: [gitlab, github]
@@ -3688,7 +3809,7 @@ components:
     RepositoryDetailView:
       description: A repository with its effective settings.
       type: object
-      required: [repo, settings, attention, role]
+      required: [repo, settings, attention, role, waiting]
       properties:
         repo: {$ref: '#/components/schemas/RepositoryView'}
         settings:
@@ -3696,7 +3817,8 @@ components:
           additionalProperties: {$ref: '#/components/schemas/SettingView'}
           description: Keyed approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews,
             learnFromDismissals, quietReviews, commentLayout, linkedReposEnabled, linkedRepos, failureStatus, skills, repoSkills, jobTimeoutSeconds, maxTurns, jobMemory,
-            rerunLimitPerMR and rerunLimitPerRepo.
+            rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly (the mode in
+            effect, follow_visibility, on or off) and trustedAuthors (a list of TrustedAuthor).
         attention:
           type: array
           items: {$ref: '#/components/schemas/AttentionView'}
@@ -3704,6 +3826,10 @@ components:
           type: string
           enum: [admin, maintainer, viewer]
           description: The session's role on the repository.
+        waiting:
+          type: array
+          items: {$ref: '#/components/schemas/WaitingView'}
+          description: The changes waiting for someone to start their review, newest first.
     RepositoryView:
       description: One repository switched on.
       type: object

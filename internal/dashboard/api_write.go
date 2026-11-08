@@ -21,6 +21,7 @@ import (
 	"github.com/gopaytech/pergent/render"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -57,8 +58,9 @@ const (
 	msgConfigManaged  = "this repository is managed by the config file; change it there"
 	msgAlreadyOn      = "this repository is switched on already"
 	msgWriteFailed    = "could not save the change, please try again"
+	msgUserLookup     = "could not look the user up on the platform, please try again"
 	msgBadProjectBody = `the body must be {"project": "<path>"}`
-	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, commentLayout, linkedReposEnabled, linkedRepos, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"
+	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, commentLayout, linkedReposEnabled, linkedRepos, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly, trustedAuthors"
 	msgNameInstance   = `name the instance: {"instance": "<name>", "project": "<path>"}`
 	msgNeedsAdminCaps = "only admins can change its re-run caps"
 	msgNeedsRole      = "only maintainers of this repository and admins can change its settings"
@@ -503,7 +505,101 @@ func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// The allowlist's new names are looked up on the platform before the
+	// save, and stored by user ID; a name it doesn't know saves nothing.
+	if slices.Contains(keys, "trustedAuthors") {
+		var probe store.DashboardRepo
+		edit(&probe)
+		resolved, p := d.resolveTrusted(r.Context(), repo, probe.TrustedAuthors)
+		if p != nil {
+			writeError(w, p.status, p.msg)
+			return
+		}
+		inner := edit
+		edit = func(row *store.DashboardRepo) {
+			inner(row)
+			row.TrustedAuthors = resolved
+		}
+	}
 	d.updateSettings(w, r, repo, edit, "settings changed", "settings_updated", strings.Join(keys, ", "))
+}
+
+// maxTrustedAuthors is the most users a repository's allowlist holds.
+const maxTrustedAuthors = 100
+
+// trustModeSetting reads trustedAuthorsOnly: "on", "off" or null (the
+// instance's).
+func trustModeSetting(raw json.RawMessage, null bool) (func(*store.DashboardRepo), string) {
+	var v *string
+	if !null {
+		var m string
+		if json.Unmarshal(raw, &m) != nil || (m != config.TrustOn && m != config.TrustOff) {
+			return nil, `trustedAuthorsOnly must be "on", "off" or null`
+		}
+		v = &m
+	}
+	return func(row *store.DashboardRepo) { row.TrustedAuthorsOnly = v }, ""
+}
+
+// trustedAuthorsSetting reads trustedAuthors: a list of {"id"?, "username"}
+// (an entry without an id is looked up on save) or null (nobody).
+func trustedAuthorsSetting(raw json.RawMessage, null bool) (func(*store.DashboardRepo), string) {
+	const bad = `trustedAuthors must be a list of {"id"?: number, "username": string}, at most 100, or null`
+	var as []store.TrustedAuthor
+	if !null {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.DisallowUnknownFields()
+		if dec.Decode(&as) != nil || len(as) > maxTrustedAuthors {
+			return nil, bad
+		}
+		for i := range as {
+			as[i].Username = strings.TrimSpace(as[i].Username)
+			if as[i].ID < 0 || as[i].Username == "" || len(as[i].Username) > 255 {
+				return nil, bad
+			}
+		}
+	}
+	if len(as) == 0 {
+		as = nil
+	}
+	return func(row *store.DashboardRepo) { row.TrustedAuthors = as }, ""
+}
+
+// resolveTrusted looks up, on repo's platform, each entry of as without an ID
+// and drops later entries of an ID already listed. A name the platform doesn't
+// know is a 400 naming it; a platform that can't answer is a 502.
+func (d *Dashboard) resolveTrusted(ctx context.Context, repo settings.Effective, as []store.TrustedAuthor) ([]store.TrustedAuthor, *linkProblem) {
+	if len(as) == 0 {
+		return nil, nil
+	}
+	src, ok := d.sources.Get(repo.Instance)
+	if !ok {
+		return nil, &linkProblem{http.StatusBadGateway, msgUserLookup}
+	}
+	ctx, cancel := context.WithTimeout(ctx, platformTimeout)
+	defer cancel()
+	out := make([]store.TrustedAuthor, 0, len(as))
+	seen := map[int64]bool{}
+	for _, a := range as {
+		if a.ID == 0 {
+			u, err := src.UserByName(ctx, repo.Project, a.Username)
+			if errors.Is(err, forge.ErrNotFound) {
+				return nil, &linkProblem{http.StatusBadRequest, "trustedAuthors: " + strconv.Quote(a.Username) + " is not a user on " + repo.Instance}
+			}
+			if err != nil {
+				d.Log.Warn("dashboard: looking a user up failed", "instance", repo.Instance, "project", repo.Project,
+					"error", d.registry.Redact(err.Error()))
+				return nil, &linkProblem{http.StatusBadGateway, msgUserLookup}
+			}
+			a = store.TrustedAuthor{ID: u.ID, Username: u.Username}
+		}
+		if seen[a.ID] {
+			continue
+		}
+		seen[a.ID] = true
+		out = append(out, a)
+	}
+	return out, nil
 }
 
 func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
@@ -517,6 +613,7 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 		row.Approve, row.ReviewDrafts, row.InlineFindings, row.FailureStatus = nil, nil, nil, nil
 		row.CommandsAuthorAndMaintainersOnly, row.IncrementalReviews, row.LearnFromDismissals, row.QuietReviews = nil, nil, nil, nil
 		row.CommentLayout = nil
+		row.TrustedAuthorsOnly, row.TrustedAuthors = nil, nil
 		row.Skills, row.RepoSkills, row.JobTimeoutSeconds, row.MaxTurns, row.JobMemory = nil, nil, nil, nil, nil
 		if admin {
 			row.RerunLimitPerMR, row.RerunLimitPerRepo = nil, nil
@@ -609,6 +706,10 @@ func (d *Dashboard) parseSettings(r *http.Request) (func(*store.DashboardRepo), 
 			edit, msg = d.memorySetting(raw, null)
 		case "rerunLimitPerMR", "rerunLimitPerRepo":
 			edit, msg = rerunLimitSetting(key, raw, null)
+		case "trustedAuthorsOnly":
+			edit, msg = trustModeSetting(raw, null)
+		case "trustedAuthors":
+			edit, msg = trustedAuthorsSetting(raw, null)
 		default:
 			msg = msgBadSettings
 		}

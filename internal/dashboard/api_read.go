@@ -859,7 +859,15 @@ func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Ef
 		// one may not be allowed to see. The setting itself is shown.
 		settingsView["linkedRepos"] = SettingView{Value: []LinkView{}}
 	}
-	return RepositoryDetailView{Repo: views[0], Settings: settingsView, Attention: items, Role: role.String()}, nil
+	waiting, err := d.Store.WaitingChanges(ctx, repo.Instance, repo.Project)
+	if err != nil {
+		return RepositoryDetailView{}, err
+	}
+	wv := make([]WaitingView, 0, len(waiting))
+	for _, c := range waiting {
+		wv = append(wv, WaitingView{Number: c.IID, Title: c.Title, Author: c.Author, WebURL: c.WebURL, Since: c.Since, Reason: c.Reason})
+	}
+	return RepositoryDetailView{Repo: views[0], Settings: settingsView, Attention: items, Role: role.String(), Waiting: wv}, nil
 }
 
 // settingViews is repo's settings as RepositoryDetailView shows them.
@@ -884,7 +892,17 @@ func settingViews(repo settings.Effective) map[string]SettingView {
 		"jobMemory":                        {quantityText(repo.JobMemory), ov[settings.KeyJobMemory]},
 		"rerunLimitPerMR":                  {repo.RerunLimitPerMR, ov[settings.KeyRerunLimitPerMR]},
 		"rerunLimitPerRepo":                {repo.RerunLimitPerRepo, ov[settings.KeyRerunLimitPerRepo]},
+		"trustedAuthorsOnly":               {repo.TrustedAuthorsOnly, ov[settings.KeyTrustedAuthorsOnly]},
+		"trustedAuthors":                   {nonNilAuthors(repo.TrustedAuthors), ov[settings.KeyTrustedAuthors]},
 	}
+}
+
+// nonNilAuthors is as, or an empty list for none.
+func nonNilAuthors(as []store.TrustedAuthor) []store.TrustedAuthor {
+	if as == nil {
+		return []store.TrustedAuthor{}
+	}
+	return as
 }
 
 // layoutText is a comment layout as the API shows it: its "block:state"

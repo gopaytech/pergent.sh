@@ -231,6 +231,12 @@ func (r *Registry) SetRemoving(name string) (Instance, bool) {
 	return r.change(name, func(inst *Instance) { inst.Removing = true })
 }
 
+// SetTrustMode sets the trusted-authors mode of the instance of the dashboard
+// called name, in place, and returns it; ok is false when there is none.
+func (r *Registry) SetTrustMode(name, mode string) (Instance, bool) {
+	return r.change(name, func(inst *Instance) { inst.TrustedAuthorsOnly = trustMode(mode) })
+}
+
 // SetOAuthClientID sets the OAuth client ID of the instance of the dashboard
 // called name, in place, and returns it; ok is false when there is none.
 func (r *Registry) SetOAuthClientID(name, clientID string) (Instance, bool) {

@@ -41,6 +41,9 @@ type fakeSource struct {
 	change      forge.Change
 	changeErr   error
 	changeCalls int
+	// users answers UserByName by lower-cased name (userErr: an error).
+	users   map[string]forge.User
+	userErr error
 }
 
 func newFakeSource() *fakeSource {

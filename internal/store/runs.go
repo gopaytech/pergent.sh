@@ -1471,3 +1471,29 @@ func (s *Store) queryApprovals(ctx context.Context, sql string, args ...any) ([]
 	}
 	return out, rows.Err()
 }
+
+// WaitingChange is a merge request whose run waits for someone with write
+// access to start it (a Waiting run): its number, what the dispatcher read
+// of it, when the run was queued and why it waits.
+type WaitingChange struct {
+	IID                   int64
+	Title, Author, WebURL string
+	Since                 time.Time
+	Reason                string
+}
+
+// WaitingChanges returns the merge requests of project (its path, matched
+// ignoring case) on instance whose run waits, newest first, at most 100.
+func (s *Store) WaitingChanges(ctx context.Context, instance, project string) ([]WaitingChange, error) {
+	rows, err := s.pool.Query(ctx, `SELECT mr_iid, title, author, web_url, created_at, skip_reason FROM runs
+		WHERE instance = $1 AND lower(project_path) = lower($2) AND state = 'waiting'
+		ORDER BY created_at DESC, id DESC LIMIT 100`, instance, project)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (WaitingChange, error) {
+		var c WaitingChange
+		err := row.Scan(&c.IID, &c.Title, &c.Author, &c.WebURL, &c.Since, &c.Reason)
+		return c, err
+	})
+}
