@@ -91,6 +91,28 @@ jobs:
           helm template t charts/pergent-sh --namespace pergent-sh -f charts/pergent-sh/ci-values.yaml \
             --set config.callback_url=https://pergent.example.com \
             | grep -q 'callback_url: https://pergent.example.com$'
+          # Metrics are off by default, and a Service of their own when on. A
+          # failing `! cmd` does not stop a bash -e script, so these use if.
+          if helm template t charts/pergent-sh --namespace pergent-sh -f charts/pergent-sh/ci-values.yaml \
+            | grep -qE 'metrics_listen|-metrics$'; then
+            echo "metrics are on by default" >&2
+            exit 1
+          fi
+          metrics=$(helm template t charts/pergent-sh --namespace pergent-sh -f charts/pergent-sh/ci-values.yaml \
+            --set metrics.enabled=true)
+          echo "$metrics" | grep -q 'metrics_listen: :9090$'
+          echo "$metrics" | grep -q 'containerPort: 9090$'
+          echo "$metrics" | grep -q 'name: t-pergent-sh-metrics$'
+          # The metrics Service stays ClusterIP when the main one is a LoadBalancer.
+          helm template t charts/pergent-sh --namespace pergent-sh -f charts/pergent-sh/ci-values.yaml \
+            --set metrics.enabled=true --set service.type=LoadBalancer \
+            --show-only templates/metrics-service.yaml | grep -q 'type: ClusterIP$'
+          # The chart sets metrics_listen itself.
+          if helm template t charts/pergent-sh --namespace pergent-sh -f charts/pergent-sh/ci-values.yaml \
+            --set config.metrics_listen=:9090 > /dev/null 2>&1; then
+            echo "config.metrics_listen was accepted" >&2
+            exit 1
+          fi
 
   # Publishes the newest main build as ghcr.io/gopaytech/pergent.sh:main and
   # :sha-<short sha>. Not on pull requests. `latest` stays the release tag

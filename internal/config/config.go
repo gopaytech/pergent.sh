@@ -9,9 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,15 +54,16 @@ const (
 
 // Config is the whole config file after defaults.
 type Config struct {
-	Listen       string           `yaml:"listen"`
-	PublicURL    string           `yaml:"public_url"`
-	CallbackURL  string           `yaml:"callback_url"`
-	GitLab       []Instance       `yaml:"gitlab"`
-	GitHub       []GitHubInstance `yaml:"github"`
-	Repositories []Repository     `yaml:"repositories"`
-	LLM          LLM              `yaml:"llm"`
-	Jobs         Jobs             `yaml:"jobs"`
-	Dashboard    Dashboard        `yaml:"dashboard"`
+	Listen        string           `yaml:"listen"`
+	MetricsListen string           `yaml:"metrics_listen"` // empty means off; serves only GET /metrics
+	PublicURL     string           `yaml:"public_url"`
+	CallbackURL   string           `yaml:"callback_url"`
+	GitLab        []Instance       `yaml:"gitlab"`
+	GitHub        []GitHubInstance `yaml:"github"`
+	Repositories  []Repository     `yaml:"repositories"`
+	LLM           LLM              `yaml:"llm"`
+	Jobs          Jobs             `yaml:"jobs"`
+	Dashboard     Dashboard        `yaml:"dashboard"`
 }
 
 // Dashboard is the web dashboard. It is enabled when URL is set.
@@ -270,15 +273,16 @@ type Jobs struct {
 // fileConfig mirrors Config for decoding: Jobs needs string durations and
 // quantities, and pointers tell an omitted number from an explicit 0.
 type fileConfig struct {
-	Listen       string           `yaml:"listen"`
-	PublicURL    string           `yaml:"public_url"`
-	CallbackURL  string           `yaml:"callback_url"`
-	GitLab       []Instance       `yaml:"gitlab"`
-	GitHub       []GitHubInstance `yaml:"github"`
-	Repositories []fileRepository `yaml:"repositories"`
-	LLM          LLM              `yaml:"llm"`
-	Jobs         fileJobs         `yaml:"jobs"`
-	Dashboard    Dashboard        `yaml:"dashboard"`
+	Listen        string           `yaml:"listen"`
+	MetricsListen string           `yaml:"metrics_listen"`
+	PublicURL     string           `yaml:"public_url"`
+	CallbackURL   string           `yaml:"callback_url"`
+	GitLab        []Instance       `yaml:"gitlab"`
+	GitHub        []GitHubInstance `yaml:"github"`
+	Repositories  []fileRepository `yaml:"repositories"`
+	LLM           LLM              `yaml:"llm"`
+	Jobs          fileJobs         `yaml:"jobs"`
+	Dashboard     Dashboard        `yaml:"dashboard"`
 
 	// SkillsDir is kept only to refuse it: the skill library lives in the
 	// dashboard now, not in a directory.
@@ -465,14 +469,15 @@ func Load(path string) (*Config, error) {
 	}
 
 	cfg := &Config{
-		Listen:       raw.Listen,
-		PublicURL:    raw.PublicURL,
-		CallbackURL:  raw.CallbackURL,
-		GitLab:       raw.GitLab,
-		GitHub:       raw.GitHub,
-		Repositories: make([]Repository, 0, len(raw.Repositories)),
-		LLM:          raw.LLM,
-		Dashboard:    raw.Dashboard,
+		Listen:        raw.Listen,
+		MetricsListen: raw.MetricsListen,
+		PublicURL:     raw.PublicURL,
+		CallbackURL:   raw.CallbackURL,
+		GitLab:        raw.GitLab,
+		GitHub:        raw.GitHub,
+		Repositories:  make([]Repository, 0, len(raw.Repositories)),
+		LLM:           raw.LLM,
+		Dashboard:     raw.Dashboard,
 		Jobs: Jobs{
 			Namespace:   raw.Jobs.Namespace,
 			Image:       raw.Jobs.Image,
@@ -562,6 +567,9 @@ func (c *Config) Validate() error {
 	add := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
 
 	if err := checkURL("public_url", c.PublicURL, true); err != nil {
+		errs = append(errs, err)
+	}
+	if err := checkMetricsListen(c.MetricsListen, c.Listen); err != nil {
 		errs = append(errs, err)
 	}
 	if c.CallbackURL != "" {
@@ -821,6 +829,35 @@ func checkGitHubInstance(i int, inst GitHubInstance) []error {
 		add("%s: webhook_secret_env is required", prefix)
 	}
 	return errs
+}
+
+// checkMetricsListen refuses a metrics_listen that is not host:port or that
+// the main server already listens on. Empty is off. A port both addresses
+// share is refused when their hosts are the same or either one is every
+// address, because the second bind would fail at start-up.
+func checkMetricsListen(addr, listen string) error {
+	if addr == "" {
+		return nil
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("metrics_listen %q must be host:port or :port: %w", addr, err)
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("metrics_listen %q must have a port from 1 to 65535, got %q", addr, port)
+	}
+	mainHost, mainPort, err := net.SplitHostPort(listen)
+	if err != nil {
+		// listen is not checked here; the same text is the most that can be said.
+		if addr == listen {
+			return fmt.Errorf("metrics_listen %q must differ from listen", addr)
+		}
+		return nil
+	}
+	if port == mainPort && (host == mainHost || host == "" || mainHost == "") {
+		return fmt.Errorf("metrics_listen %q must differ from listen %q: the metrics port serves nothing else", addr, listen)
+	}
+	return nil
 }
 
 // checkDashboard returns every problem with dashboard:. (The instances'

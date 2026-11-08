@@ -52,6 +52,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
 	"github.com/gopaytech/pergent.sh/internal/server"
+	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/skillfetch"
 	"github.com/gopaytech/pergent.sh/internal/store"
 	"github.com/gopaytech/pergent.sh/internal/syncmap"
@@ -334,6 +335,13 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", cfg.Listen, err)
 	}
+	// The metrics port is opened here too, so a port that is taken stops
+	// start-up. Its handler is its own: /metrics is never on the main one.
+	metricsLn, err := listenMetrics(cfg.MetricsListen)
+	if err != nil {
+		_ = ln.Close()
+		return err
+	}
 	log.Info("pergent-sh serving", "listen", cfg.Listen, "repositories", len(cfg.Repositories),
 		"dashboard", cfg.DashboardEnabled())
 	// Engine.Run reconciles first, in its own goroutine, so a slow GitLab
@@ -356,6 +364,11 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	})
 	if eng.Scans {
 		loops = append(loops, eng.RunScans)
+	}
+	if metricsLn != nil {
+		log.Info("serving metrics", "listen", cfg.MetricsListen)
+		source := metricsSource(st, &settings.Resolver{Config: cfg, Store: st, Instances: reg})
+		loops = append(loops, serveMetrics(metricsLn, metricsHandler(source, log), log))
 	}
 	if dash != nil {
 		prune := pruneSessions(dash.Auth.PruneSessions, time.Now, log)
