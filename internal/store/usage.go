@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -342,6 +343,24 @@ type UsageRow struct {
 	In, Out                          int64
 	CacheRead, CacheWrite, Reasoning *int64
 	Findings, Blocking               int
+}
+
+// UsageProjectID returns the platform ID of the repository at project (matched
+// ignoring case) on instance, as its latest usage row has it; ok is false when
+// the repository has none. The projects table forgets a repository that is
+// switched off, its usage stays.
+func (s *Store) UsageProjectID(ctx context.Context, instance, project string) (int64, bool, error) {
+	var id int64
+	err := s.pool.QueryRow(ctx, `SELECT project_id FROM run_usage
+		WHERE instance = $1::text AND lower(project_path) = lower($2::text)
+		ORDER BY reported_at DESC LIMIT 1`, instance, project).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return id, true, nil
 }
 
 // UsageRows calls each with the usage rows since the given time, oldest

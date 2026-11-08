@@ -223,7 +223,12 @@ func (d *Dashboard) usageCSV(w http.ResponseWriter, r *http.Request) {
 	if instance != "" {
 		var found bool
 		var err error
-		if projectID, found, err = d.projectID(ctx, se, instance, project); err != nil {
+		if projectID, found, err = d.projectID(ctx, se, instance, project); err == nil && !found {
+			// Switching a repository off deletes its project but not its
+			// usage, so the usage names the repository too.
+			projectID, found, err = d.Store.UsageProjectID(ctx, instance, project)
+		}
+		if err != nil {
 			d.failed(w, r, "exporting usage", err)
 			return
 		}
@@ -262,9 +267,10 @@ func (d *Dashboard) usageCSV(w http.ResponseWriter, r *http.Request) {
 				d.failed(w, r, "exporting usage", err)
 				return
 			}
-			// The status and part of the file are sent. End the response
-			// without its last chunk, so that the download fails instead of
-			// passing for a whole file.
+			// The file is begun, and whether any of it has left depends on
+			// the writer's buffer, so the status can't be changed to an
+			// error. End the response without its last chunk, so that the
+			// download fails either way instead of passing for a whole file.
 			d.Log.Error("dashboard: exporting usage failed", "path", r.URL.Path, "error", err.Error())
 			panic(http.ErrAbortHandler)
 		}

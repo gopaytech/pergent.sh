@@ -13,8 +13,9 @@ type Runs interface {
 	RecordUsage(ctx context.Context, id string, skills []store.SkillUsage) error
 }
 
-// backfillPage is how many results are read at once: each can be 10 MB.
-const backfillPage = 20
+// backfillPage is how many results are read at once: each can be 10 MB, and
+// the pod has 512Mi, so a page stays well under that.
+const backfillPage = 5
 
 // Backfill records the usage of every run whose result was stored before
 // usage was recorded, page by page, until none is left or ctx ends. A result

@@ -44,6 +44,7 @@ type fake struct {
 
 	recordErr error
 	recorded  []recordedUsage
+	onRecord  func() // called as RecordUsage starts
 }
 
 // recordedUsage is one RecordUsage call.
@@ -83,6 +84,9 @@ func (f *fake) ReplaceWithFailure(_ context.Context, id, reason string) error {
 }
 
 func (f *fake) RecordUsage(_ context.Context, id string, skills []store.SkillUsage) error {
+	if f.onRecord != nil {
+		f.onRecord()
+	}
 	f.recorded = append(f.recorded, recordedUsage{id, skills})
 	return f.recordErr
 }
@@ -436,6 +440,21 @@ func TestAcceptedResultRecordsItsUsage(t *testing.T) {
 	got := e.f.recorded[0].skills
 	if len(got) != 2 || got[0].Skill != "style" || got[0].In != 1200 || got[1].Skill != "security" || got[1].In != 5000 {
 		t.Errorf("skills = %+v", got)
+	}
+}
+
+// Publishing is woken before the usage is written, so a slow database never
+// holds it back.
+func TestPublishingIsWokenBeforeUsageIsRecorded(t *testing.T) {
+	f := newFake()
+	e := newEnv(f)
+	wokenAtRecord := -1
+	f.onRecord = func() { wokenAtRecord = e.woken }
+	if rec := e.post(runID, "Bearer good", usageJSON()); rec.Code != 200 {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	if wokenAtRecord != 1 {
+		t.Errorf("woken = %d when usage was recorded; want 1, so before", wokenAtRecord)
 	}
 }
 

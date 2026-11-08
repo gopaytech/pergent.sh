@@ -114,8 +114,9 @@ func (h *Handler) stored(w http.ResponseWriter, ctx context.Context, id string, 
 		http.Error(w, "unusable result: "+reason, http.StatusBadRequest)
 		return
 	}
-	h.recordUsage(ctx, id, body)
+	// Waking comes first, so that publishing never waits on usage.
 	h.wake()
+	h.recordUsage(ctx, id, body)
 	w.WriteHeader(http.StatusOK)
 }
 

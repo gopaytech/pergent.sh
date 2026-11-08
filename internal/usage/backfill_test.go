@@ -11,9 +11,11 @@ import (
 type fakeRuns struct {
 	pending  [][]store.Run
 	recorded map[string][]store.SkillUsage
+	limits   []int
 }
 
 func (f *fakeRuns) RunsWithoutUsage(ctx context.Context, limit int) ([]store.Run, error) {
+	f.limits = append(f.limits, limit)
 	if len(f.pending) == 0 {
 		return nil, nil
 	}
@@ -35,6 +37,12 @@ func TestBackfillRecordsEveryPageAndMarksOddResults(t *testing.T) {
 	n := Backfill(context.Background(), f, slog.New(slog.DiscardHandler))
 	if n != 2 || len(f.recorded["a"]) != 1 || f.recorded["b"] != nil {
 		t.Errorf("n = %d, recorded = %+v", n, f.recorded)
+	}
+	// A page holds results of up to 10 MB each, in a pod of 512Mi.
+	for _, l := range f.limits {
+		if l > 5 {
+			t.Errorf("a page of %d results; want at most 5", l)
+		}
 	}
 	if _, ok := f.recorded["b"]; !ok {
 		t.Error("an odd result wasn't marked, so it would be read again on every start")

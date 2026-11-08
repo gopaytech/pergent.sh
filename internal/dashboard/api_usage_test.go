@@ -311,6 +311,19 @@ func TestUsageCSVOfARepository(t *testing.T) {
 	}
 }
 
+// A repository switched off loses its project row but keeps its usage, and
+// its export is still its rows.
+func TestUsageCSVOfASwitchedOffRepository(t *testing.T) {
+	e := newEnv(t, nil)
+	e.usageFixture()
+	e.exec(`DELETE FROM projects WHERE instance = 'main' AND lower(path) = 'acme/old'`)
+
+	rows := csvRows(t, e.get(e.operator(), "/api/admin/usage.csv?instance=main&project=acme/old"))
+	if len(rows) != 1+1 || rows[1][2] != "acme/old" || rows[1][9] != "150" {
+		t.Errorf("acme/old: %v, want the header and its one row", rows)
+	}
+}
+
 func TestUsageCSVBadQuery(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.operator()

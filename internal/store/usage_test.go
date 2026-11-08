@@ -442,3 +442,20 @@ func TestUsageRows(t *testing.T) {
 		t.Errorf("an error from each: err = %v after %d rows; want it returned after 1", err, n)
 	}
 }
+
+func TestUsageProjectID(t *testing.T) {
+	s := newStore(t)
+	// A repository's project row is gone once it is switched off, its usage
+	// is not: the usage names the project too.
+	seedUsage(t, s, usageMR(7, 1), usageAt(5, 10, 0), TriggerPush, false, "m1", skillRow("security", "no_blocking_issues", 10, 1))
+	id, ok, err := s.UsageProjectID(ctx, mr1.Instance, "ACME/p7")
+	if err != nil || !ok || id != 7 {
+		t.Errorf("UsageProjectID = %d, %v, %v; want 7 for the path in any case", id, ok, err)
+	}
+	if _, ok, err := s.UsageProjectID(ctx, mr1.Instance, "acme/none"); ok || err != nil {
+		t.Errorf("UsageProjectID of an unknown path = %v, %v", ok, err)
+	}
+	if _, ok, err := s.UsageProjectID(ctx, "other", "acme/p7"); ok || err != nil {
+		t.Errorf("UsageProjectID on another instance = %v, %v", ok, err)
+	}
+}
