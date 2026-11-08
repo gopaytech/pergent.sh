@@ -202,6 +202,12 @@ func githubConfig(t *testing.T, apiURL string, token bool) *config.Config {
 
 // testRepos resolves every repository ID to acme/widgets, reached by the
 // review App's installation 55.
+// GitLab's Forge pages the picker on the platform; GitHub's is read whole.
+var (
+	_ dashboard.PagedRepoCatalog = (*gitlabforge.Forge)(nil)
+	_ dashboard.RepoCatalog      = (*githubforge.Forge)(nil)
+)
+
 func testRepos(string) githubforge.Repos {
 	return githubforge.ReposFunc(func(context.Context, int64) (githubforge.Repo, error) {
 		return githubforge.Repo{Owner: "acme", Name: "widgets", InstallationID: 55}, nil

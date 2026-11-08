@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,10 +27,12 @@ import (
 )
 
 const (
-	// maxAvailable is the most repositories the picker lists.
-	maxAvailable = 500
-	// listLimit is the most repositories read from the review bot or App
-	// for the picker.
+	// availablePerPage is the most repositories one page of the picker
+	// holds; maxAvailablePage the highest page asked for.
+	availablePerPage = 50
+	maxAvailablePage = 10000
+	// listLimit is the most repositories read from a review bot or App that
+	// can't search and page on the platform (GitHub), for the picker.
 	listLimit = 5000
 	// AvailableBudget bounds the whole GET /api/repositories/available, so
 	// that even a truncated answer is written well before the server's 60 s
@@ -49,6 +52,7 @@ const (
 	minJobTimeout = time.Minute
 	maxJobTimeout = 2 * time.Hour
 
+	msgBadPage        = "page must be a whole number from 1 to 10000"
 	msgListFailed     = "could not list the repositories on the platform, please try again"
 	msgConfigManaged  = "this repository is managed by the config file; change it there"
 	msgAlreadyOn      = "this repository is switched on already"
@@ -119,60 +123,56 @@ func (d *Dashboard) withinBudget(ctx context.Context, side string, list func(ctx
 	return repos, truncated, nil
 }
 
-// catalogCache keeps each instance's review-side lists, by search, for
-// catalogTTL, and the listings in progress, so requests share one.
+// catalogCache keeps each instance's review-side lists, by search (and by
+// page, on a platform that pages), for catalogTTL, and the listings in
+// progress, so requests share one.
 type catalogCache struct {
 	mu      sync.Mutex
 	entries map[string]catalogEntry
 	flights map[string]*catalogFlight
 }
 
+// catalogEntry is what one listing read. hasMore is a page's: the platform
+// has a later one. truncated is a whole list's: it was cut short.
 type catalogEntry struct {
 	repos     []string
+	hasMore   bool
 	truncated bool
 	at        time.Time
 }
 
 type catalogFlight struct {
-	done      chan struct{}
-	repos     []string
-	truncated bool
-	err       error
+	done chan struct{}
+	res  catalogEntry
+	err  error
 }
 
-// catalogRepos returns the repositories holding search that the review bot
-// or App of instance reaches: a list younger than 5 minutes, the one being
-// made, or a new one, made within the listing budget and not cut short by
-// the request that started it going away (others may wait for it).
-// Failures aren't kept.
-func (d *Dashboard) catalogRepos(ctx context.Context, instance, search string) ([]string, bool, error) {
-	cat, ok := d.catalogs.Get(instance)
-	if !ok || cat == nil {
-		return nil, false, errors.New("no repository list for the instance")
-	}
-	c, key := d.catalog, instance+"\x00"+strings.ToLower(search)
+// cached returns the listing kept under key if it is younger than 5 minutes,
+// the one being made, or a new one from fetch, made within the request's
+// budget but not cut short by the request that started it going away
+// (others may wait for it). Failures aren't kept.
+func (d *Dashboard) cached(ctx context.Context, key string, fetch func(ctx context.Context) (catalogEntry, error)) (catalogEntry, error) {
+	c := d.catalog
 	c.mu.Lock()
 	now := d.now()
 	if e, ok := c.entries[key]; ok && now.Sub(e.at) < catalogTTL && !now.Before(e.at) {
 		c.mu.Unlock()
-		return e.repos, e.truncated, nil
+		return e, nil
 	}
 	if f, ok := c.flights[key]; ok {
 		c.mu.Unlock()
 		select {
 		case <-f.done:
-			return f.repos, f.truncated, f.err
+			return f.res, f.err
 		case <-ctx.Done():
-			return nil, false, ctx.Err()
+			return catalogEntry{}, ctx.Err()
 		}
 	}
 	f := &catalogFlight{done: make(chan struct{})}
 	c.flights[key] = f
 	c.mu.Unlock()
 
-	f.repos, f.truncated, f.err = d.withinBudget(context.WithoutCancel(ctx), "review", func(ctx context.Context) ([]string, bool, error) {
-		return cat.ReachableRepos(ctx, search, d.listLimit)
-	})
+	f.res, f.err = fetch(context.WithoutCancel(ctx))
 
 	c.mu.Lock()
 	delete(c.flights, key)
@@ -183,11 +183,44 @@ func (d *Dashboard) catalogRepos(ctx context.Context, instance, search string) (
 				delete(c.entries, k)
 			}
 		}
-		c.entries[key] = catalogEntry{repos: f.repos, truncated: f.truncated, at: now}
+		f.res.at = now
+		c.entries[key] = f.res
 	}
 	c.mu.Unlock()
 	close(f.done)
-	return f.repos, f.truncated, f.err
+	return f.res, f.err
+}
+
+// catalogRepos returns the repositories holding search that the review bot
+// or App of instance reaches, read whole (up to d.listLimit) within the
+// listing budget; see cached.
+func (d *Dashboard) catalogRepos(ctx context.Context, instance, search string) ([]string, bool, error) {
+	cat, ok := d.catalogs.Get(instance)
+	if !ok || cat == nil {
+		return nil, false, errors.New("no repository list for the instance")
+	}
+	res, err := d.cached(ctx, "list\x00"+instance+"\x00"+strings.ToLower(search), func(ctx context.Context) (catalogEntry, error) {
+		repos, truncated, err := d.withinBudget(ctx, "review", func(ctx context.Context) ([]string, bool, error) {
+			return cat.ReachableRepos(ctx, search, d.listLimit)
+		})
+		return catalogEntry{repos: repos, truncated: truncated}, err
+	})
+	return res.repos, res.truncated, err
+}
+
+// catalogPage returns the page (1-based) of availablePerPage repositories
+// holding search that the review bot of instance reaches, asked of the
+// platform alone, and whether it has a later page; see cached. An error
+// leaves nothing read to show: a page is all or nothing.
+func (d *Dashboard) catalogPage(ctx context.Context, cat PagedRepoCatalog, instance, search string, page int) ([]string, bool, error) {
+	key := "page\x00" + instance + "\x00" + strings.ToLower(search) + "\x00" + strconv.Itoa(page)
+	res, err := d.cached(ctx, key, func(ctx context.Context) (catalogEntry, error) {
+		ctx, cancel := context.WithTimeoutCause(ctx, d.listBudget, errOutOfBudget)
+		defer cancel()
+		repos, hasMore, err := cat.ReachablePage(ctx, search, page, availablePerPage)
+		return catalogEntry{repos: repos, hasMore: hasMore}, err
+	})
+	return res.repos, res.hasMore, err
 }
 
 // --- POST /api/repositories ---

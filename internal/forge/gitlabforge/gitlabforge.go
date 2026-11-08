@@ -375,6 +375,14 @@ func (f *Forge) ReachableRepos(ctx context.Context, search string, limit int) ([
 		Limit: limit, CallTimeout: callTimeout})
 }
 
+// ReachablePage returns the page (1-based) of perPage of the projects
+// ReachableRepos lists, ordered by path, and whether GitLab has a later page.
+// It makes the one request, which has 10 s.
+func (f *Forge) ReachablePage(ctx context.Context, search string, page, perPage int) ([]string, bool, error) {
+	return f.c.ProjectPage(ctx, gitlab.ProjectPageOptions{MinAccessLevel: maintainer, Search: search,
+		Page: page, PerPage: perPage, CallTimeout: callTimeout})
+}
+
 // reachPages and reachBudget bound CanReach's search: at most 20 pages of
 // 100 projects, and 20 s in all (callTimeout for each request).
 const (

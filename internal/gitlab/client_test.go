@@ -993,6 +993,40 @@ func TestProjectPathsPaginatesWithMinAccessLevel(t *testing.T) {
 	expect(t, (*reqs)[1], "GET", "/api/v4/projects", "min_access_level=40&page=2&per_page=100&simple=true")
 }
 
+// ProjectPage reads the one page asked for, in path order, and says whether
+// GitLab names a later one.
+func TestProjectPage(t *testing.T) {
+	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Next-Page", "3")
+		_ = json.NewEncoder(w).Encode([]map[string]any{{"path_with_namespace": "acme/a"}, {"id": 2}, {"path_with_namespace": "acme/b"}})
+	})
+	got, more, err := c.ProjectPage(context.Background(), ProjectPageOptions{MinAccessLevel: 40, Page: 2, PerPage: 50})
+	if err != nil || !more || strings.Join(got, ",") != "acme/a,acme/b" {
+		t.Fatalf("got=%v more=%v err=%v", got, more, err)
+	}
+	if len(*reqs) != 1 {
+		t.Fatalf("requests = %d, want 1", len(*reqs))
+	}
+	expect(t, (*reqs)[0], "GET", "/api/v4/projects", "min_access_level=40&order_by=path&page=2&per_page=50&simple=true&sort=asc")
+
+	// The last page names no next one; a search goes to GitLab.
+	c, reqs = serve(t, jsonReply([]map[string]any{{"path_with_namespace": "acme/widgets"}}))
+	got, more, err = c.ProjectPage(context.Background(), ProjectPageOptions{MinAccessLevel: 40, Search: "wid gets", Page: 1, PerPage: 50})
+	if err != nil || more || len(got) != 1 {
+		t.Fatalf("got=%v more=%v err=%v", got, more, err)
+	}
+	expect(t, (*reqs)[0], "GET", "/api/v4/projects",
+		"min_access_level=40&order_by=path&page=1&per_page=50&search=wid+gets&search_namespaces=true&simple=true&sort=asc")
+}
+
+func TestProjectPageError(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"400 Bad request"}`, 400) })
+	if got, more, err := c.ProjectPage(context.Background(), ProjectPageOptions{MinAccessLevel: 40, Page: 1, PerPage: 50}); err == nil || got != nil || more {
+		t.Fatalf("got=%v more=%v err=%v; want an error", got, more, err)
+	}
+}
+
 func TestProjectPathsSearch(t *testing.T) {
 	c, reqs := serve(t, jsonReply([]map[string]any{{"path_with_namespace": "acme/widgets"}}))
 	if _, _, err := c.ProjectPaths(context.Background(), ProjectListOptions{MinAccessLevel: 20, Search: "wid gets", Limit: 10}); err != nil {

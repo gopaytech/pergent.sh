@@ -978,6 +978,55 @@ func (c *Client) ListsProject(ctx context.Context, path string, o ProjectLookup)
 	}
 }
 
+// ProjectPageOptions selects the one page ProjectPage reads.
+type ProjectPageOptions struct {
+	// MinAccessLevel is the least member access level, as in
+	// ProjectListOptions.
+	MinAccessLevel int
+	// Search, when not "", is searched as in ProjectListOptions.
+	Search string
+	// Page is the page to read (1-based) and PerPage its size (GitLab
+	// allows 100 at most).
+	Page, PerPage int
+	// CallTimeout bounds the request; 0 means only ctx bounds it.
+	CallTimeout time.Duration
+}
+
+// ProjectPage returns the paths on one page of the projects the token's user
+// is a member of with at least o.MinAccessLevel, ordered by path so pages
+// don't move between requests: GET /projects?order_by=path&sort=asc&page=&per_page=.
+// hasMore is true when GitLab names a later page (X-Next-Page).
+func (c *Client) ProjectPage(ctx context.Context, o ProjectPageOptions) (paths []string, hasMore bool, err error) {
+	q := url.Values{"min_access_level": {strconv.Itoa(o.MinAccessLevel)}, "simple": {"true"},
+		"order_by": {"path"}, "sort": {"asc"},
+		"page": {strconv.Itoa(o.Page)}, "per_page": {strconv.Itoa(o.PerPage)}}
+	if o.Search != "" {
+		q.Set("search", o.Search)
+		q.Set("search_namespaces", "true")
+	}
+	pctx, cancel := ctx, context.CancelFunc(func() {})
+	if o.CallTimeout > 0 {
+		pctx, cancel = context.WithTimeout(ctx, o.CallTimeout)
+	}
+	defer cancel()
+	resp, err := c.do(pctx, http.MethodGet, "/projects", q, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	var page []struct {
+		Path string `json:"path_with_namespace"`
+	}
+	if err := decode(resp.body, &page); err != nil {
+		return nil, false, err
+	}
+	for _, p := range page {
+		if p.Path != "" {
+			paths = append(paths, p.Path)
+		}
+	}
+	return paths, strings.TrimSpace(resp.header.Get("X-Next-Page")) != "", nil
+}
+
 // ProjectPaths returns the paths of the projects the token's user is a
 // member of with at least o.MinAccessLevel, directly or through a group:
 // GET /projects?min_access_level=&simple=true. It stops after o.Limit

@@ -123,6 +123,18 @@ type RepoCatalog interface {
 	CanReach(ctx context.Context, project string) (bool, error)
 }
 
+// PagedRepoCatalog is a RepoCatalog whose platform searches and pages on its
+// own side (GitLab), so the picker asks it for one page at a time. One that
+// isn't (GitHub's installation list has no search) is read whole through
+// ReachableRepos and served from that list.
+type PagedRepoCatalog interface {
+	RepoCatalog
+	// ReachablePage returns the page (1-based) of perPage repositories
+	// holding search ("" for all), in a stable order, and whether the
+	// platform has a later page.
+	ReachablePage(ctx context.Context, search string, page, perPage int) (repos []string, hasMore bool, err error)
+}
+
 // RepoSource reads a repository, named by its platform ID, with the review
 // bot or the review App; gitlabforge.Forge and githubforge.Forge are ones.
 type RepoSource interface {

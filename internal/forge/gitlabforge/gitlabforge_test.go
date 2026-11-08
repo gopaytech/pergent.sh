@@ -501,6 +501,23 @@ func TestCanReach(t *testing.T) {
 	}
 }
 
+// The picker's page is one request to GitLab, in path order, at Maintainer
+// level; the search goes to GitLab.
+func TestReachablePage(t *testing.T) {
+	f := newFake(t)
+	f.onPages("GET", "/projects", func(q url.Values) (int, any, string) {
+		return 200, []map[string]any{{"path_with_namespace": "acme/widgets"}}, "3"
+	})
+	got, more, err := f.forge().ReachablePage(context.Background(), "wid", 2, 50)
+	if err != nil || !more || len(got) != 1 || got[0] != "acme/widgets" {
+		t.Fatalf("got=%v more=%v err=%v", got, more, err)
+	}
+	want := "min_access_level=40&order_by=path&page=2&per_page=50&search=wid&search_namespaces=true&simple=true&sort=asc"
+	if q := f.only().Query; q != want {
+		t.Errorf("query = %q, want %q", q, want)
+	}
+}
+
 // A project reached through a group above its own, or a share, has null
 // permissions on GET /projects/:path; the listing is the only thing asked.
 func TestCanReachInheritedAccess(t *testing.T) {
