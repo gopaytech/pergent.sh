@@ -375,19 +375,58 @@ func (f *Forge) ReachableRepos(ctx context.Context, search string, limit int) ([
 		Limit: limit, CallTimeout: callTimeout})
 }
 
-// CanReach reports whether the review bot can set project up: it is
-// Maintainer or above there, through the project or its group. A project
-// it can't see is false; a failure to tell is an error.
+// ReachablePage returns the page (1-based) of perPage of the projects
+// ReachableRepos lists, ordered by ID, and whether GitLab has a later page.
+// It makes the one request, which has 10 s.
+func (f *Forge) ReachablePage(ctx context.Context, search string, page, perPage int) ([]string, bool, error) {
+	return f.c.ProjectPage(ctx, gitlab.ProjectPageOptions{MinAccessLevel: maintainer, Search: search,
+		Page: page, PerPage: perPage, CallTimeout: callTimeout})
+}
+
+// CanReach reports whether the review bot can set project up: whether
+// ReachableRepos would list it. See ReachableName.
 func (f *Forge) CanReach(ctx context.Context, project string) (bool, error) {
-	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	_, ok, err := f.ReachableName(ctx, project)
+	return ok, err
+}
+
+// ReachableName is CanReach that also returns the project's path as GitLab
+// spells it (GitLab paths are unique whatever the case), the name to switch
+// it on under. It looks the project up by its path, and then asks the project
+// listing the picker reads (min_access_level, narrowed to that one ID), because
+// the project's own permissions leave out Maintainer access gained through an
+// ancestor group or a share, and the picker shows those. Two requests, with no
+// search and no paging. A project it can't see is false; so is a path GitLab
+// answers with another project's (an old path of a renamed project, or an ID);
+// a failure to tell is an error.
+func (f *Forge) ReachableName(ctx context.Context, project string) (string, bool, error) {
+	if project == "" || strings.HasSuffix(project, "/") {
+		return "", false, nil
+	}
+	notReached := func(err error) bool {
+		var ae *gitlab.APIError
+		return errors.Is(err, gitlab.ErrNotFound) || (errors.As(err, &ae) && ae.Status == http.StatusForbidden)
+	}
+	pctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
-	a, err := f.c.ProjectAccess(ctx, project)
-	var ae *gitlab.APIError
-	if errors.Is(err, gitlab.ErrNotFound) || (errors.As(err, &ae) && ae.Status == http.StatusForbidden) {
-		return false, nil
+	p, err := f.c.GetProject(pctx, project)
+	if notReached(err) {
+		return "", false, nil
 	}
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
-	return a.ProjectAccessLevel >= maintainer || a.GroupAccessLevel >= maintainer, nil
+	if p.ID == 0 || !strings.EqualFold(p.PathWithNamespace, project) {
+		return "", false, nil
+	}
+	lctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	ok, err := f.c.HasMemberAccess(lctx, p.ID, maintainer)
+	if notReached(err) {
+		return "", false, nil
+	}
+	if err != nil || !ok {
+		return "", false, err
+	}
+	return p.PathWithNamespace, true, nil
 }

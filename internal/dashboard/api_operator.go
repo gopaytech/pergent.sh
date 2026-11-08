@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -638,11 +639,16 @@ func (d *Dashboard) instanceRepositories(w http.ResponseWriter, r *http.Request)
 	d.listAvailable(w, r, r.PathValue("name"))
 }
 
-// listAvailable answers with the repositories of the instance called name
-// that the review bot or App can set up and that aren't switched on: 404 for
-// an instance that is not there or is being removed. It serves the picker
-// (GET /api/repositories/available?instance=) and
-// GET /api/admin/instances/{name}/repositories.
+// listAvailable answers with one page of the repositories of the instance
+// called name that the review bot or App can set up and that aren't switched
+// on: 404 for an instance that is not there or is being removed, 400 for a
+// bad page. It serves the picker (GET /api/repositories/available?instance=)
+// and GET /api/admin/instances/{name}/repositories.
+//
+// A catalog that pages on the platform (PagedRepoCatalog, GitLab) is asked for
+// the one page, in the platform's order (by ID), which is sorted within the
+// page. Another is read whole, kept 5 minutes, sorted, and served 50 at a time
+// (a page is cut before the repositories switched on are dropped from it).
 func (d *Dashboard) listAvailable(w http.ResponseWriter, r *http.Request, name string) {
 	if inst, ok := d.registry.Get(name); !ok || inst.Removing {
 		notFound(w)
@@ -652,6 +658,15 @@ func (d *Dashboard) listAvailable(w http.ResponseWriter, r *http.Request, name s
 	if len(search) > maxSearch {
 		writeError(w, http.StatusBadRequest, "search must be at most 100 characters")
 		return
+	}
+	page := 1
+	if v := r.URL.Query().Get("page"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > maxAvailablePage {
+			writeError(w, http.StatusBadRequest, msgBadPage)
+			return
+		}
+		page = n
 	}
 	ctx, cancel := context.WithTimeoutCause(r.Context(), d.availableBudget, errOutOfBudget)
 	defer cancel()
@@ -666,26 +681,58 @@ func (d *Dashboard) listAvailable(w http.ResponseWriter, r *http.Request, name s
 			on[lower(e.Project)] = true
 		}
 	}
+	platform, _ := d.registry.Platform(name)
+	view := AvailableView{Items: []AvailableRepo{}, Page: page}
+	add := func(p string) {
+		view.Items = append(view.Items, AvailableRepo{Instance: name, Project: p, Platform: platform})
+	}
+
+	if cat, ok := d.catalogs.Get(name); ok {
+		if paged, ok := cat.(PagedRepoCatalog); ok {
+			repos, hasMore, err := d.catalogPage(ctx, paged, name, search, page)
+			if err != nil {
+				d.Log.Warn("dashboard: listing the repositories that can be switched on failed", "instance", name, "error", err.Error())
+				writeError(w, http.StatusBadGateway, msgListFailed)
+				return
+			}
+			var off []string
+			for _, p := range repos {
+				if !on[lower(p)] {
+					off = append(off, p)
+				}
+			}
+			// The platform pages by ID, so no project falls between two
+			// pages; each page is sorted by path for display.
+			sort.Strings(off)
+			for _, p := range off {
+				add(p)
+			}
+			view.HasMore = hasMore
+			writeJSON(w, http.StatusOK, view)
+			return
+		}
+	}
+
 	repos, truncated, err := d.catalogRepos(ctx, name, search)
 	if err != nil {
 		d.Log.Warn("dashboard: listing the repositories that can be switched on failed", "instance", name, "error", err.Error())
 		writeError(w, http.StatusBadGateway, msgListFailed)
 		return
 	}
-	platform, _ := d.registry.Platform(name)
-	view := AvailableView{Items: []AvailableRepo{}, Truncated: truncated}
+	// The pages are cut from the sorted list as it is, and the switched-on
+	// repositories are dropped from each page after, as on GitLab: a
+	// repository switched on between two Load more clicks then leaves its own
+	// page and moves no later page by one, so none is skipped.
 	sorted := slices.Clone(repos)
 	sort.Strings(sorted)
-	for _, p := range sorted {
-		if on[lower(p)] {
-			continue
+	from := min((page-1)*availablePerPage, len(sorted))
+	to := min(from+availablePerPage, len(sorted))
+	for _, p := range sorted[from:to] {
+		if !on[lower(p)] {
+			add(p)
 		}
-		if len(view.Items) == maxAvailable {
-			view.Truncated = true
-			break
-		}
-		view.Items = append(view.Items, AvailableRepo{Instance: name, Project: p, Platform: platform})
 	}
+	view.HasMore, view.Truncated = to < len(sorted), truncated
 	writeJSON(w, http.StatusOK, view)
 }
 

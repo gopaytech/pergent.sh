@@ -867,34 +867,6 @@ func TestNewOAuthSendsBearer(t *testing.T) {
 	}
 }
 
-func TestProjectAccess(t *testing.T) {
-	c, reqs := serve(t, jsonReply(map[string]any{
-		"id": 7, "path_with_namespace": "acme/widgets", "visibility": "private",
-		"repository_access_level": "enabled", "merge_requests_access_level": "private",
-		"permissions": map[string]any{
-			"project_access": map[string]any{"access_level": 10},
-			"group_access":   map[string]any{"access_level": 30},
-		},
-	}))
-	a, err := c.ProjectAccess(context.Background(), "acme/widgets")
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := ProjectAccess{ID: 7, Path: "acme/widgets", Visibility: "private", RepositoryAccess: "enabled", MergeRequestsAccess: "private",
-		ProjectAccessLevel: 10, GroupAccessLevel: 30}
-	if a != want {
-		t.Fatalf("ProjectAccess = %+v, want %+v", a, want)
-	}
-	expect(t, (*reqs)[0], "GET", "/api/v4/projects/acme%2Fwidgets", "")
-
-	// No membership: GitLab sends null permissions.
-	c, _ = serve(t, jsonReply(map[string]any{"visibility": "public",
-		"permissions": map[string]any{"project_access": nil, "group_access": nil}}))
-	if a, err := c.ProjectAccess(context.Background(), "acme/widgets"); err != nil || a.ProjectAccessLevel != 0 || a.GroupAccessLevel != 0 {
-		t.Fatalf("ProjectAccess without membership = %+v, %v", a, err)
-	}
-}
-
 // HasMemberAccess asks the project listing, which counts shares, narrowed
 // to the one project ID.
 func TestHasMemberAccess(t *testing.T) {
@@ -913,15 +885,6 @@ func TestHasMemberAccess(t *testing.T) {
 	c, _ = serve(t, jsonReply([]map[string]any{}))
 	if ok, err := c.HasMemberAccess(context.Background(), 7, 20); err != nil || ok {
 		t.Fatalf("HasMemberAccess with none = %v, %v; want false", ok, err)
-	}
-}
-
-func TestProjectAccessNotFound(t *testing.T) {
-	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, `{"message":"404 Project Not Found"}`, 404)
-	})
-	if _, err := c.ProjectAccess(context.Background(), "acme/widgets"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }
 
@@ -944,6 +907,40 @@ func TestProjectPathsPaginatesWithMinAccessLevel(t *testing.T) {
 	}
 	expect(t, (*reqs)[0], "GET", "/api/v4/projects", "min_access_level=40&per_page=100&simple=true")
 	expect(t, (*reqs)[1], "GET", "/api/v4/projects", "min_access_level=40&page=2&per_page=100&simple=true")
+}
+
+// ProjectPage reads the one page asked for, in ID order, and says whether
+// GitLab names a later one.
+func TestProjectPage(t *testing.T) {
+	c, reqs := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Next-Page", "3")
+		_ = json.NewEncoder(w).Encode([]map[string]any{{"path_with_namespace": "acme/a"}, {"id": 2}, {"path_with_namespace": "acme/b"}})
+	})
+	got, more, err := c.ProjectPage(context.Background(), ProjectPageOptions{MinAccessLevel: 40, Page: 2, PerPage: 50})
+	if err != nil || !more || strings.Join(got, ",") != "acme/a,acme/b" {
+		t.Fatalf("got=%v more=%v err=%v", got, more, err)
+	}
+	if len(*reqs) != 1 {
+		t.Fatalf("requests = %d, want 1", len(*reqs))
+	}
+	expect(t, (*reqs)[0], "GET", "/api/v4/projects", "min_access_level=40&order_by=id&page=2&per_page=50&simple=true&sort=asc")
+
+	// The last page names no next one; a search goes to GitLab.
+	c, reqs = serve(t, jsonReply([]map[string]any{{"path_with_namespace": "acme/widgets"}}))
+	got, more, err = c.ProjectPage(context.Background(), ProjectPageOptions{MinAccessLevel: 40, Search: "wid gets", Page: 1, PerPage: 50})
+	if err != nil || more || len(got) != 1 {
+		t.Fatalf("got=%v more=%v err=%v", got, more, err)
+	}
+	expect(t, (*reqs)[0], "GET", "/api/v4/projects",
+		"min_access_level=40&order_by=id&page=1&per_page=50&search=wid+gets&search_namespaces=true&simple=true&sort=asc")
+}
+
+func TestProjectPageError(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"message":"400 Bad request"}`, 400) })
+	if got, more, err := c.ProjectPage(context.Background(), ProjectPageOptions{MinAccessLevel: 40, Page: 1, PerPage: 50}); err == nil || got != nil || more {
+		t.Fatalf("got=%v more=%v err=%v; want an error", got, more, err)
+	}
 }
 
 func TestProjectPathsSearch(t *testing.T) {

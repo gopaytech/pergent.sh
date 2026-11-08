@@ -765,7 +765,7 @@ func TestAvailableListsWhatTheBotReaches(t *testing.T) {
 		}
 	})
 
-	t.Run("capped at 500", func(t *testing.T) {
+	t.Run("50 a page", func(t *testing.T) {
 		e := newEnv(t, nil)
 		var all []string
 		for i := range 600 {
@@ -773,10 +773,15 @@ func TestAvailableListsWhatTheBotReaches(t *testing.T) {
 		}
 		e.cat["main"].set(all...)
 		c := e.userOnMain(true)
-		got := getJSON[availableBody](e, c, "/api/repositories/available?instance=main")
-		if len(got.Items) != 500 || !got.Truncated || got.Items[0].Project != "acme/repo-000" {
-			t.Errorf("available has %d items, truncated %v", len(got.Items), got.Truncated)
+		got := getJSON[AvailableView](e, c, "/api/repositories/available?instance=main")
+		if len(got.Items) != 50 || got.Page != 1 || !got.HasMore || got.Truncated || got.Items[0].Project != "acme/repo-000" {
+			t.Errorf("available has %d items, page %d, hasMore %v, truncated %v", len(got.Items), got.Page, got.HasMore, got.Truncated)
 		}
+		got = getJSON[AvailableView](e, c, "/api/repositories/available?instance=main&page=12")
+		if len(got.Items) != 50 || got.Page != 12 || got.HasMore || got.Items[0].Project != "acme/repo-550" {
+			t.Errorf("page 12 has %d items from %v, hasMore %v", len(got.Items), projectsOf(got.Items[:1]), got.HasMore)
+		}
+		wantCode(t, e.get(c, "/api/repositories/available?instance=main&page=0"), "page 0", http.StatusBadRequest)
 	})
 
 	t.Run("the bot fails", func(t *testing.T) {

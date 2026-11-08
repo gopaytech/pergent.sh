@@ -976,7 +976,7 @@ paths:
             schema: {$ref: '#/components/schemas/SwitchOnRequest'}
       responses:
         '201':
-          description: Switched on. The project is spelled as given.
+          description: Switched on. The project is spelled as GitLab spells it for GitLab, and as sent (trimmed) for GitHub.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/RepositoryDetailView'}
@@ -993,12 +993,19 @@ paths:
       tags: [Repositories]
       summary: Repositories that can be switched on (the picker)
       description: |
-        Admins only: the repositories of one instance that its review bot or
-        App reaches and that are not switched on (the same list as
-        `GET /api/admin/instances/{name}/repositories`). 500 repositories at
-        most; `truncated` is true when there were more or the list was too
-        long (5000) or too slow (20 s) to read whole. 400 without an
-        `instance`, 404 for one that is not there.
+        Admins only: one page of the repositories of one instance that its
+        review bot or App reaches and that are not switched on (the same list
+        as `GET /api/admin/instances/{name}/repositories`). A page holds 50
+        at most. On GitLab a page is one request to GitLab in its ID order (so no
+        project falls between two pages), sorted by path within the page, and
+        a page with switched-on projects left out holds fewer than 50; on
+        GitHub, which cannot search on its side, the list is read whole,
+        sorted, cut into pages of 50, and the switched-on ones are left out of
+        each page after. `hasMore` says whether to ask for the next
+        page. `truncated` is true when the list a page is made from was too
+        long (5000) or too slow (20 s) to read whole (GitHub only). 400
+        without an `instance` or with a bad `page`, 404 for an instance that
+        is not there.
       x-pergent-access: admin
       security:
         - sessionCookie: []
@@ -1014,9 +1021,10 @@ paths:
           schema:
             type: string
             maxLength: 100
+        - $ref: '#/components/parameters/AvailablePage'
       responses:
         '200':
-          description: The repositories.
+          description: One page of the repositories.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/AvailableView'}
@@ -2224,8 +2232,9 @@ paths:
       tags: [Instances and settings]
       summary: Repositories an instance's bot or App can set up
       description: |
-        Admins only: the repositories the instance's review bot or App can set
-        up that are not switched on; 500 at most.
+        Admins only: one page of the repositories the instance's review bot or
+        App can set up that are not switched on, 50 at most (see
+        `GET /api/repositories/available`, the same list).
       x-pergent-access: admin
       security:
         - sessionCookie: []
@@ -2236,9 +2245,10 @@ paths:
           schema:
             type: string
             maxLength: 100
+        - $ref: '#/components/parameters/AvailablePage'
       responses:
         '200':
-          description: The repositories.
+          description: One page of the repositories.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/AvailableView'}
@@ -2498,6 +2508,15 @@ components:
       required: true
       description: The instance's name.
       schema: {type: string}
+    AvailablePage:
+      name: page
+      in: query
+      description: The page of the list, 1 when left out. 400 for anything but a whole number from 1 to 10000.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 10000
+        default: 1
     ProjectPath:
       name: project
       in: path
@@ -3140,16 +3159,24 @@ components:
           type: string
           enum: [gitlab, github]
     AvailableView:
-      description: Repositories that can be switched on, 500 at most.
+      description: One page of the repositories that can be switched on, 50 at most.
       type: object
-      required: [items, truncated]
+      required: [items, page, hasMore, truncated]
       properties:
         items:
           type: array
+          maxItems: 50
           items: {$ref: '#/components/schemas/AvailableRepo'}
+        page:
+          type: integer
+          minimum: 1
+          description: The page asked for.
+        hasMore:
+          type: boolean
+          description: True when a later page may hold more.
         truncated:
           type: boolean
-          description: True when there were more, or a list was too long or too slow to read whole.
+          description: True when the list the page is made from was too long or too slow to read whole (GitHub only; a GitLab page is never truncated).
     LinkView:
       description: One link of a repository to another, for the impact check.
       type: object

@@ -323,61 +323,13 @@ func (c *Client) GetProject(ctx context.Context, path string) (Project, error) {
 	return p, err
 }
 
-// ProjectAccess is what the token's user may do in a project, as GitLab
-// reports it in GET /projects/:path.
-type ProjectAccess struct {
-	// ID is the project's ID.
-	ID int64
-	// Path is the project's full path as GitLab spells it.
-	Path string
-	// Visibility is "public", "internal" or "private".
-	Visibility string
-	// RepositoryAccess and MergeRequestsAccess are the features' access
-	// levels: "enabled" (everyone who can see the project), "private"
-	// (members only) or "disabled".
-	RepositoryAccess, MergeRequestsAccess string
-	// ProjectAccessLevel and GroupAccessLevel are the user's access level
-	// as a member of the project and of its group (0: not a member).
-	// Reporter is 20.
-	ProjectAccessLevel, GroupAccessLevel int
-}
-
-// ProjectAccess returns the token user's access to the project at path. A
-// project the user can't see is ErrNotFound.
-func (c *Client) ProjectAccess(ctx context.Context, path string) (ProjectAccess, error) {
-	type level struct {
-		AccessLevel int `json:"access_level"`
-	}
-	var p struct {
-		ID                  int64  `json:"id"`
-		Path                string `json:"path_with_namespace"`
-		Visibility          string `json:"visibility"`
-		RepositoryAccess    string `json:"repository_access_level"`
-		MergeRequestsAccess string `json:"merge_requests_access_level"`
-		Permissions         struct {
-			ProjectAccess *level `json:"project_access"`
-			GroupAccess   *level `json:"group_access"`
-		} `json:"permissions"`
-	}
-	if _, err := c.getJSON(ctx, "/projects/"+seg(path), nil, &p); err != nil {
-		return ProjectAccess{}, err
-	}
-	a := ProjectAccess{ID: p.ID, Path: p.Path, Visibility: p.Visibility, RepositoryAccess: p.RepositoryAccess,
-		MergeRequestsAccess: p.MergeRequestsAccess}
-	if p.Permissions.ProjectAccess != nil {
-		a.ProjectAccessLevel = p.Permissions.ProjectAccess.AccessLevel
-	}
-	if p.Permissions.GroupAccess != nil {
-		a.GroupAccessLevel = p.Permissions.GroupAccess.AccessLevel
-	}
-	return a, nil
-}
-
 // HasMemberAccess reports whether the token's user has at least minLevel
 // on project id however GitLab grants it: as a member of the project or
 // its group, or through a group the project or its group is shared with.
-// ProjectAccess's permissions leave shares out; the project listing
-// (GET /projects?min_access_level=, narrowed to the one ID) counts them.
+// GET /projects/:path's permissions leave out access from an ancestor group
+// and shares; the project listing (GET /projects?min_access_level=, narrowed
+// to the one ID with id_after and id_before, and the ID checked in the answer)
+// counts them, as the picker's list does.
 func (c *Client) HasMemberAccess(ctx context.Context, id int64, minLevel int) (bool, error) {
 	q := url.Values{
 		"min_access_level": {strconv.Itoa(minLevel)}, "simple": {"true"},
@@ -964,6 +916,56 @@ type ProjectListOptions struct {
 	Limit int
 	// CallTimeout bounds each page's request; 0 means only ctx bounds it.
 	CallTimeout time.Duration
+}
+
+// ProjectPageOptions selects the one page ProjectPage reads.
+type ProjectPageOptions struct {
+	// MinAccessLevel is the least member access level, as in
+	// ProjectListOptions.
+	MinAccessLevel int
+	// Search, when not "", is searched as in ProjectListOptions.
+	Search string
+	// Page is the page to read (1-based) and PerPage its size (GitLab
+	// allows 100 at most).
+	Page, PerPage int
+	// CallTimeout bounds the request; 0 means only ctx bounds it.
+	CallTimeout time.Duration
+}
+
+// ProjectPage returns the paths on one page of the projects the token's user
+// is a member of with at least o.MinAccessLevel, ordered by ID (unique, so
+// pages don't move between requests and no project falls between two):
+// GET /projects?order_by=id&sort=asc&page=&per_page=.
+// hasMore is true when GitLab names a later page (X-Next-Page).
+func (c *Client) ProjectPage(ctx context.Context, o ProjectPageOptions) (paths []string, hasMore bool, err error) {
+	q := url.Values{"min_access_level": {strconv.Itoa(o.MinAccessLevel)}, "simple": {"true"},
+		"order_by": {"id"}, "sort": {"asc"},
+		"page": {strconv.Itoa(o.Page)}, "per_page": {strconv.Itoa(o.PerPage)}}
+	if o.Search != "" {
+		q.Set("search", o.Search)
+		q.Set("search_namespaces", "true")
+	}
+	pctx, cancel := ctx, context.CancelFunc(func() {})
+	if o.CallTimeout > 0 {
+		pctx, cancel = context.WithTimeout(ctx, o.CallTimeout)
+	}
+	defer cancel()
+	resp, err := c.do(pctx, http.MethodGet, "/projects", q, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	var page []struct {
+		Path string `json:"path_with_namespace"`
+	}
+	if err := decode(resp.body, &page); err != nil {
+		return nil, false, err
+	}
+	for _, p := range page {
+		if p.Path != "" {
+			paths = append(paths, p.Path)
+		}
+	}
+	return paths, strings.TrimSpace(resp.header.Get("X-Next-Page")) != "", nil
 }
 
 // ProjectPaths returns the paths of the projects the token's user is a

@@ -43,10 +43,10 @@ describe("Repositories", () => {
       "GET /api/repositories": { body: [repoWidgets] },
       "GET /api/admin/instances": { body: [instanceGitLab, { ...instanceDashboardGitLab, removing: true }] },
       "GET /api/admin/instances/main/repositories?search=": {
-        body: { items: [{ instance: "main", project: "acme/payments", platform: "gitlab" }], truncated: false },
+        body: { items: [{ instance: "main", project: "acme/payments", platform: "gitlab" }], page: 1, hasMore: false, truncated: false },
       },
       "GET /api/admin/instances/main/repositories?search=pay": {
-        body: { items: [{ instance: "main", project: "acme/payments", platform: "gitlab" }], truncated: false },
+        body: { items: [{ instance: "main", project: "acme/payments", platform: "gitlab" }], page: 1, hasMore: false, truncated: false },
       },
       "POST /api/repositories": { status: 201, body: repoDetail(repoPayments) },
     });
@@ -74,6 +74,151 @@ describe("Repositories", () => {
     expect(await screen.findByTestId("location")).toHaveTextContent("/repos/main/acme/payments");
   });
 
+  it("says what to do when the repository can't be reached any more", async () => {
+    fakeApi({
+      "GET /api/me": { body: operator },
+      "GET /api/repositories": { body: [repoWidgets] },
+      "GET /api/admin/instances": { body: [instanceGitLab] },
+      "GET /api/admin/instances/main/repositories?search=": {
+        body: { items: [{ instance: "main", project: "acme/payments", platform: "gitlab" }], page: 1, hasMore: false, truncated: false },
+      },
+      "POST /api/repositories": { status: 404, body: { error: "not found" } },
+    });
+    renderApp("/repos?add=1");
+    const picker = await screen.findByRole("region", { name: "Add repository" });
+    await userEvent.selectOptions(await within(picker).findByLabelText("Instance"), "main");
+    await userEvent.click(await within(picker).findByRole("button", { name: "Switch on acme/payments" }));
+    expect(await screen.findByText(/can't reach this repository now/)).toBeInTheDocument();
+    expect(screen.queryByText("not found")).not.toBeInTheDocument();
+  });
+
+  const gitlabPage = (from: number, count: number, page: number, hasMore: boolean, truncated = false) => ({
+    items: Array.from({ length: count }, (_, i) => ({
+      instance: "main",
+      project: `acme/repo-${String(from + i).padStart(3, "0")}`,
+      platform: "gitlab",
+    })),
+    page,
+    hasMore,
+    truncated,
+  });
+
+  const openPicker = async () => {
+    renderApp("/repos?add=1");
+    const picker = await screen.findByRole("region", { name: "Add repository" });
+    await userEvent.selectOptions(await within(picker).findByLabelText("Instance"), "main");
+    return picker;
+  };
+
+  it("lists 50 at a time: Load more appends the next page and goes away on the last", async () => {
+    const fake = fakeApi({
+      "GET /api/me": { body: operator },
+      "GET /api/repositories": { body: [repoWidgets] },
+      "GET /api/admin/instances": { body: [instanceGitLab] },
+      "GET /api/admin/instances/main/repositories?search=": { body: gitlabPage(0, 50, 1, true) },
+      "GET /api/admin/instances/main/repositories?search=&page=2": { body: gitlabPage(50, 49, 2, true) },
+      "GET /api/admin/instances/main/repositories?search=&page=3": { body: gitlabPage(99, 5, 3, false) },
+    });
+    const picker = await openPicker();
+    expect(await within(picker).findByText("acme/repo-000")).toBeInTheDocument();
+    expect(within(picker).getAllByRole("button", { name: /^Switch on / })).toHaveLength(50);
+
+    await userEvent.click(within(picker).getByRole("button", { name: "Load more" }));
+    expect(await within(picker).findByText("acme/repo-050")).toBeInTheDocument();
+    // The first page stays, and the next is under it.
+    expect(within(picker).getByText("acme/repo-000")).toBeInTheDocument();
+    expect(within(picker).getAllByRole("button", { name: /^Switch on / })).toHaveLength(99);
+    expect(fake.find("GET", "/api/admin/instances/main/repositories?search=&page=2")).toHaveLength(1);
+
+    await userEvent.click(within(picker).getByRole("button", { name: "Load more" }));
+    expect(await within(picker).findByText("acme/repo-103")).toBeInTheDocument();
+    expect(within(picker).getAllByRole("button", { name: /^Switch on / })).toHaveLength(104);
+    expect(within(picker).queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
+    expect(within(picker).queryByText("No repository to switch on.")).not.toBeInTheDocument();
+    // Nothing was read ahead.
+    expect(fake.calls.filter((c) => c.url.includes("/repositories?"))).toHaveLength(3);
+  });
+
+  it("starts again at page 1 for a new search", async () => {
+    const fake = fakeApi({
+      "GET /api/me": { body: operator },
+      "GET /api/repositories": { body: [repoWidgets] },
+      "GET /api/admin/instances": { body: [instanceGitLab] },
+      "GET /api/admin/instances/main/repositories?search=": { body: gitlabPage(0, 50, 1, true) },
+      "GET /api/admin/instances/main/repositories?search=&page=2": { body: gitlabPage(50, 10, 2, false) },
+      "GET /api/admin/instances/main/repositories?search=pay": {
+        body: { items: [{ instance: "main", project: "acme/payments", platform: "gitlab" }], page: 1, hasMore: true, truncated: false },
+      },
+    });
+    const picker = await openPicker();
+    await within(picker).findByText("acme/repo-000");
+    await userEvent.click(within(picker).getByRole("button", { name: "Load more" }));
+    await within(picker).findByText("acme/repo-050");
+
+    await userEvent.type(within(picker).getByRole("searchbox", { name: "Search" }), "pay");
+    await userEvent.click(within(picker).getByRole("button", { name: "Search" }));
+    expect(await within(picker).findByText("acme/payments")).toBeInTheDocument();
+    // Only the search's first page: the old list is gone, and Load more is the search's.
+    expect(within(picker).getAllByRole("button", { name: /^Switch on / })).toHaveLength(1);
+    expect(within(picker).queryByText("acme/repo-000")).not.toBeInTheDocument();
+    expect(within(picker).getByRole("button", { name: "Load more" })).toBeEnabled();
+    expect(fake.find("GET", "/api/admin/instances/main/repositories?search=pay")).toHaveLength(1);
+    expect(fake.calls.some((c) => c.url.includes("search=pay&page="))).toBe(false);
+  });
+
+  it("keeps the list and offers Load more again when the next page fails", async () => {
+    let fail = true;
+    fakeApi({
+      "GET /api/me": { body: operator },
+      "GET /api/repositories": { body: [repoWidgets] },
+      "GET /api/admin/instances": { body: [instanceGitLab] },
+      "GET /api/admin/instances/main/repositories?search=": { body: gitlabPage(0, 50, 1, true) },
+      "GET /api/admin/instances/main/repositories?search=&page=2": () =>
+        fail ? { status: 502, body: { error: "could not ask GitLab" } } : { body: gitlabPage(50, 1, 2, false) },
+    });
+    const picker = await openPicker();
+    await within(picker).findByText("acme/repo-000");
+    await userEvent.click(within(picker).getByRole("button", { name: "Load more" }));
+    expect(await within(picker).findByText("could not ask GitLab")).toBeInTheDocument();
+    expect(within(picker).getAllByRole("button", { name: /^Switch on / })).toHaveLength(50);
+
+    fail = false;
+    await userEvent.click(within(picker).getByRole("button", { name: "Load more" }));
+    expect(await within(picker).findByText("acme/repo-050")).toBeInTheDocument();
+    expect(within(picker).queryByText("could not ask GitLab")).not.toBeInTheDocument();
+  });
+
+  it("says when the list is cut short, and offers Load more after an empty page", async () => {
+    fakeApi({
+      "GET /api/me": { body: operator },
+      "GET /api/repositories": { body: [repoWidgets] },
+      "GET /api/admin/instances": { body: [instanceGitLab] },
+      "GET /api/admin/instances/main/repositories?search=": { body: { items: [], page: 1, hasMore: true, truncated: true } },
+    });
+    const picker = await openPicker();
+    expect(await within(picker).findByText(/too long to read whole/)).toBeInTheDocument();
+    // A page can be empty and not the last: no "nothing" yet, but Load more.
+    expect(within(picker).queryByText("No repository to switch on.")).not.toBeInTheDocument();
+    expect(within(picker).getByText("Everything on this page is already switched on.")).toBeInTheDocument();
+    expect(within(picker).getByRole("button", { name: "Load more" })).toBeInTheDocument();
+  });
+
+  it("says so when a later page is empty because everything on it is switched on", async () => {
+    fakeApi({
+      "GET /api/me": { body: operator },
+      "GET /api/repositories": { body: [repoWidgets] },
+      "GET /api/admin/instances": { body: [instanceGitLab] },
+      "GET /api/admin/instances/main/repositories?search=": { body: gitlabPage(0, 3, 1, true) },
+      "GET /api/admin/instances/main/repositories?search=&page=2": { body: gitlabPage(3, 0, 2, true) },
+    });
+    const picker = await openPicker();
+    await within(picker).findByText("acme/repo-000");
+    expect(within(picker).queryByText("Everything on this page is already switched on.")).not.toBeInTheDocument();
+    await userEvent.click(within(picker).getByRole("button", { name: "Load more" }));
+    expect(await within(picker).findByText("Everything on this page is already switched on.")).toBeInTheDocument();
+    expect(within(picker).getAllByRole("button", { name: /^Switch on / })).toHaveLength(3);
+  });
+
   it("warns on Add repository when the default skill list is empty", async () => {
     fakeApi({
       "GET /api/me": { body: ssoAdmin },
@@ -94,7 +239,7 @@ describe("Repositories", () => {
       "GET /api/me": { body: ssoAdmin },
       "GET /api/repositories": { body: [repoWidgets] },
       "GET /api/admin/instances": { body: [instanceGitLab] },
-      "GET /api/admin/instances/main/repositories?search=": { body: { items: [], truncated: false } },
+      "GET /api/admin/instances/main/repositories?search=": { body: { items: [], page: 1, hasMore: false, truncated: false } },
       "GET /api/skills": { body: librarySkills },
     });
     renderApp("/repos?add=1");

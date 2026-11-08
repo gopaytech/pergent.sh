@@ -754,17 +754,19 @@ type LLMView struct {
 // settings_updated (detail: the settings in the body) and settings_reset.
 // Errors are {"error": "message"}.
 //
-//   - GET /api/repositories/available?instance=&search=: AvailableView, the
-//     repositories of the instance that can be switched on (400 without an
-//     instance, 404 for one that is not there); search (at most 100
-//     characters) keeps those whose path holds it (GitLab also matches
-//     names), so ones beyond the first 500 can be found.
+//   - GET /api/repositories/available?instance=&search=&page=: AvailableView,
+//     a page of the repositories of the instance that can be switched on
+//     (400 without an instance or with a page that is not a whole number
+//     from 1 to 10000, 404 for an instance that is not there); search (at
+//     most 100 characters) keeps those whose path holds it (GitLab also
+//     matches names); page is 1 when left out.
 //   - POST /api/repositories {"instance": "lab", "project": "acme/widgets"}:
 //     switches on a repository with every setting at its default. It is
 //     checked on its own, not against the picker's lists: the review bot
 //     (GitLab: Maintainer or above) or App (GitHub: installed) must reach
 //     it, else 404, whether it is on or not; then 409 when it is on
-//     already. 201, RepositoryDetailView, the project spelled as given.
+//     already. 201, RepositoryDetailView, the project spelled as GitLab spells it for
+//     GitLab, and as sent (trimmed) for GitHub.
 //     pergent.sh sets it up (webhook and clone credentials) within
 //     seconds.
 //   - DELETE /api/repositories/{instance}/{project...}: switches it off.
@@ -809,15 +811,24 @@ type LLMView struct {
 // Users whose teams cover a repository switched on see it at their next
 // request.
 
-// AvailableView is GET /api/repositories/available: the repositories of the
-// instance that the review bot (GitLab: Maintainer or above) or review App
-// (GitHub: its installations) reaches and that aren't switched on, by project
-// ignoring case. 500 at most; truncated is true when there were more, or when
-// the list it is made from was too long (5000) or too slow (20 s, each
-// request 10 s) to read whole. 502 when GitLab or GitHub can't be asked, or
-// nothing could be read in time.
+// AvailableView is GET /api/repositories/available: one page of the
+// repositories of the instance that the review bot (GitLab: Maintainer or
+// above) or review App (GitHub: its installations) reaches and that aren't
+// switched on, by project ignoring case. Items holds 50 at most and Page is
+// the page asked for (1-based). On GitLab a page is one request to the
+// platform in its order, so one with switched-on repositories left out holds
+// fewer than 50; on GitHub, which can't search on its side, the list is read
+// whole, sorted, cut into pages of 50, and the switched-on ones are left out
+// of each page after (so a page can hold fewer there too, and switching one
+// on moves no later page).
+// HasMore is true when a later page may hold more. Truncated is true when
+// the list a page is made from was too long (5000) or too slow (20 s, each
+// request 10 s) to read whole; GitLab pages are never truncated. 502 when
+// GitLab or GitHub can't be asked, or nothing could be read in time.
 type AvailableView struct {
 	Items     []AvailableRepo `json:"items"`
+	Page      int             `json:"page"`
+	HasMore   bool            `json:"hasMore"`
 	Truncated bool            `json:"truncated"`
 }
 
@@ -1010,7 +1021,7 @@ type AuditView struct {
 //     runs are superseded and its repositories, accounts and sessions go
 //     now; pergent.sh takes the webhooks off the platform and deletes the
 //     instance and its secrets within a minute or so. 409 for the config's.
-//   - GET /api/admin/instances/{name}/repositories?search=: AvailableView,
+//   - GET /api/admin/instances/{name}/repositories?search=&page=: AvailableView,
 //     the repositories the instance's review bot or App can set up that
 //     aren't switched on (the same list as the picker's).
 //   - GET /api/admin/llm: LLMAdminView (admins). PUT /api/admin/llm

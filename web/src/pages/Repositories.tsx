@@ -1,8 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type FormEvent } from "react";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo, useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 
 import {
+  ApiError,
   api,
   paths,
   type AvailableView,
@@ -149,12 +150,32 @@ function Picker() {
   const library = useQuery({ queryKey: ["skills"], queryFn: () => api.get<LibrarySkill[]>("/api/skills") });
   const noDefaults = library.isSuccess && !library.data.some((s) => s.inDefaults);
   const base = `/api/admin/instances/${encodeURIComponent(instance)}/repositories`;
-  const available = useQuery({
+  // The list comes 50 at a time; Load more reads the next page. Pages stay
+  // while one is refetched, so a window focus doesn't read them all again.
+  const available = useInfiniteQuery({
     queryKey: ["available", instance, search],
-    queryFn: () => api.get<AvailableView>(`${base}?search=${encodeURIComponent(search)}`),
+    queryFn: ({ pageParam }) =>
+      api.get<AvailableView>(`${base}?search=${encodeURIComponent(search)}${pageParam > 1 ? `&page=${pageParam}` : ""}`),
+    initialPageParam: 1,
+    getNextPageParam: (last) => (last.hasMore ? last.page + 1 : undefined),
     staleTime: 0,
+    refetchOnWindowFocus: false,
     enabled: chosen,
   });
+  // A repository that came on two pages (the list moved between requests)
+  // shows once.
+  const items = useMemo(() => {
+    const seen = new Set<string>();
+    const out: AvailableView["items"] = [];
+    for (const r of (available.data?.pages ?? []).flatMap((p) => p.items)) {
+      const key = `${r.instance}/${r.project}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(r);
+    }
+    return out;
+  }, [available.data]);
+  const truncated = available.data?.pages.some((p) => p.truncated) ?? false;
   const on = useMutation({
     mutationFn: (project: string) =>
       write<RepositoryDetailView>("POST", "/api/repositories", { project, instance }),
@@ -196,16 +217,21 @@ function Picker() {
           </button>
         </form>
       )}
-      {on.isError && <ErrorBox error={on.error} />}
+      {on.isError &&
+        (on.error instanceof ApiError && on.error.status === 404 ? (
+          <div className="error" role="alert">
+            The review bot can't reach this repository now. It may have been renamed or moved. Reload the list.
+          </div>
+        ) : (
+          <ErrorBox error={on.error} />
+        ))}
       {chosen && available.isPending && <Loading />}
-      {available.isError && <ErrorBox error={available.error} />}
-      {chosen && available.isSuccess && (
+      {available.isError && !available.isFetchNextPageError && <ErrorBox error={available.error} />}
+      {chosen && available.data && (
         <>
-          {available.data.truncated && (
-            <div className="pad meta">Showing the first 500 repositories. Search to find others.</div>
-          )}
-          {available.data.items.length === 0 && <div className="row empty-row">No repository to switch on.</div>}
-          {available.data.items.map((r) => (
+          {truncated && <div className="pad meta">The list is too long to read whole. Search to find others.</div>}
+          {items.length === 0 && !available.hasNextPage && <div className="row empty-row">No repository to switch on.</div>}
+          {items.map((r) => (
             <div className="row" key={`${r.instance}/${r.project}`}>
               <div className="grow mr">{r.project}</div>
               <button
@@ -219,6 +245,17 @@ function Picker() {
               </button>
             </div>
           ))}
+          {available.hasNextPage && available.data.pages.at(-1)?.items.length === 0 && (
+            <div className="row empty-row">Everything on this page is already switched on.</div>
+          )}
+          {available.hasNextPage && (
+            <div className="foot">
+              <button type="button" className="btn" disabled={available.isFetchingNextPage} onClick={() => available.fetchNextPage()}>
+                Load more
+              </button>
+            </div>
+          )}
+          {available.isFetchNextPageError && <ErrorBox error={available.error} />}
         </>
       )}
     </section>

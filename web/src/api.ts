@@ -670,8 +670,12 @@ export type AuditView = {
 // after, 0 at the end. A short page with a next is not the last.
 export type AuditPageView = { entries: AuditView[]; next: number };
 
+// AvailableView is one page (50 at most) of the repositories that can be
+// switched on; hasMore says a later page may hold more.
 export type AvailableView = {
   items: { instance: string; project: string; platform: Platform }[];
+  page: number;
+  hasMore: boolean;
   truncated: boolean;
 };
 

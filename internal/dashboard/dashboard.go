@@ -118,9 +118,31 @@ type RepoCatalog interface {
 	// to limit; truncated is true when there were more. On an error it
 	// also returns those read before it.
 	ReachableRepos(ctx context.Context, search string, limit int) (repos []string, truncated bool, err error)
-	// CanReach reports whether project is one; a failure to tell is an
-	// error.
+	// CanReach reports whether ReachableRepos would list project; a
+	// failure to tell is an error.
 	CanReach(ctx context.Context, project string) (bool, error)
+}
+
+// SpellingRepoCatalog is a RepoCatalog whose platform treats paths as one
+// whatever their case (GitLab) and so says how it spells one. Switching on
+// uses that spelling, not what the client sent.
+type SpellingRepoCatalog interface {
+	RepoCatalog
+	// ReachableName is CanReach that also returns project as the platform
+	// spells it.
+	ReachableName(ctx context.Context, project string) (name string, reached bool, err error)
+}
+
+// PagedRepoCatalog is a RepoCatalog whose platform searches and pages on its
+// own side (GitLab), so the picker asks it for one page at a time. One that
+// isn't (GitHub's installation list has no search) is read whole through
+// ReachableRepos and served from that list.
+type PagedRepoCatalog interface {
+	RepoCatalog
+	// ReachablePage returns the page (1-based) of perPage repositories
+	// holding search ("" for all), in a stable order, and whether the
+	// platform has a later page.
+	ReachablePage(ctx context.Context, search string, page, perPage int) (repos []string, hasMore bool, err error)
 }
 
 // RepoSource reads a repository, named by its platform ID, with the review

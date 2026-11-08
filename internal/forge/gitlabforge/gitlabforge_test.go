@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -42,6 +44,7 @@ type fake struct {
 	srv    *httptest.Server
 	mu     sync.Mutex
 	routes map[string]reply
+	pages  map[string]func(query url.Values) (status int, body any, next string)
 	reqs   []request
 }
 
@@ -52,7 +55,7 @@ type reply struct {
 
 func newFake(t *testing.T) *fake {
 	t.Helper()
-	f := &fake{t: t, routes: map[string]reply{}}
+	f := &fake{t: t, routes: map[string]reply{}, pages: map[string]func(url.Values) (int, any, string){}}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		var body map[string]any
@@ -63,8 +66,18 @@ func newFake(t *testing.T) *fake {
 		f.mu.Lock()
 		f.reqs = append(f.reqs, request{r.Method, p, r.URL.RawQuery, r.Header.Get("PRIVATE-TOKEN"), body})
 		rep, ok := f.routes[r.Method+" "+p]
+		page := f.pages[r.Method+" "+p]
 		f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
+		if page != nil {
+			status, body, next := page(r.URL.Query())
+			if next != "" {
+				w.Header().Set("X-Next-Page", next)
+			}
+			w.WriteHeader(status)
+			_ = json.NewEncoder(w).Encode(body)
+			return
+		}
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = io.WriteString(w, `{"message":"404 Not Found"}`)
@@ -87,6 +100,13 @@ func (f *fake) on(method, path string, status int, body any) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.routes[method+" "+path] = reply{status, body}
+}
+
+// onPages answers a route by the request's query, and may name the next page.
+func (f *fake) onPages(method, path string, h func(query url.Values) (status int, body any, next string)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pages[method+" "+path] = h
 }
 
 func (f *fake) requests() []request {
@@ -444,32 +464,168 @@ func TestReachableRepos(t *testing.T) {
 	}
 }
 
+// The review bot can set a project up exactly when the picker lists it. The
+// project is looked up by its path (for its ID and GitLab's spelling), and the
+// listing the picker reads is asked about that one ID: access gained through an
+// ancestor group or a share shows there, while the project's own permissions
+// are null. No search, no paging.
+
+// reachFake answers GET /projects/<path> with one project whose permissions
+// are null, and GET /projects like GitLab does for id_after, id_before and
+// min_access_level: the listed IDs between the two bounds, only at Maintainer.
+func reachFake(t *testing.T, path string, id int, listed ...int) *fake {
+	t.Helper()
+	f := newFake(t)
+	f.on("GET", "/projects/"+url.PathEscape(path), 200, map[string]any{"id": id, "path_with_namespace": path,
+		"permissions": map[string]any{"project_access": nil, "group_access": nil}})
+	f.onPages("GET", "/projects", func(q url.Values) (int, any, string) {
+		after, _ := strconv.Atoi(q.Get("id_after"))
+		before, _ := strconv.Atoi(q.Get("id_before"))
+		out := []map[string]any{}
+		for _, l := range listed {
+			if q.Get("min_access_level") == "40" && l > after && l < before {
+				out = append(out, map[string]any{"id": l, "path_with_namespace": "acme/listed"})
+			}
+		}
+		return 200, out, ""
+	})
+	return f
+}
+
 func TestCanReach(t *testing.T) {
-	access := func(level int) map[string]any {
-		return map[string]any{"path_with_namespace": "acme/widgets",
-			"permissions": map[string]any{"project_access": nil, "group_access": map[string]any{"access_level": level}}}
+	for _, tc := range []struct {
+		name   string
+		listed []int
+		want   bool
+	}{
+		{"listed", []int{7}, true},
+		{"listed among others", []int{3, 7, 9}, true},
+		{"not listed", nil, false},
+		{"only other projects are listed", []int{3, 8}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := reachFake(t, "acme/widgets", 7, tc.listed...)
+			ok, err := f.forge().CanReach(context.Background(), "acme/widgets")
+			if err != nil || ok != tc.want {
+				t.Fatalf("CanReach = %v, %v; want %v", ok, err, tc.want)
+			}
+		})
 	}
+}
+
+func TestCanReachRefusals(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		status int
-		body   any
 		want   bool
 		err    bool
 	}{
-		{"maintainer through the group", 200, access(40), true, false},
-		{"developer", 200, access(30), false, false},
-		{"not found", 404, map[string]any{"message": "404 Project Not Found"}, false, false},
-		{"forbidden", 403, map[string]any{"message": "403 Forbidden"}, false, false},
-		{"broken", 400, map[string]any{"message": "400 Bad request"}, false, true},
+		{"not found", 404, false, false},
+		{"forbidden", 403, false, false},
+		{"broken", 400, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFake(t)
-			f.on("GET", "/projects/acme%2Fwidgets", tc.status, tc.body)
+			f.on("GET", "/projects/acme%2Fwidgets", tc.status, map[string]any{"message": "no"})
 			ok, err := f.forge().CanReach(context.Background(), "acme/widgets")
 			if ok != tc.want || (err != nil) != tc.err {
 				t.Fatalf("CanReach = %v, %v", ok, err)
 			}
+			if n := len(f.requests()); n != 1 {
+				t.Errorf("made %d requests, want 1 (no listing for a project it can't read)", n)
+			}
 		})
+	}
+	// The listing failing is an error, not a no.
+	f := newFake(t)
+	f.on("GET", "/projects/acme%2Fwidgets", 200, map[string]any{"id": 7, "path_with_namespace": "acme/widgets"})
+	f.on("GET", "/projects", 400, map[string]any{"message": "400 Bad request"})
+	if ok, err := f.forge().CanReach(context.Background(), "acme/widgets"); ok || err == nil {
+		t.Fatalf("CanReach with the listing broken = %v, %v; want an error", ok, err)
+	}
+}
+
+// A project reached through a group above its own, or a share, has null
+// permissions on GET /projects/:path; the listing narrowed to its ID is what
+// says it is reached, and it is asked at Maintainer level.
+func TestCanReachInheritedAccess(t *testing.T) {
+	f := reachFake(t, "acme/team/widgets", 7, 7)
+	ok, err := f.forge().CanReach(context.Background(), "acme/team/widgets")
+	if err != nil || !ok {
+		t.Fatalf("CanReach = %v, %v; want true", ok, err)
+	}
+	reqs := f.requests()
+	if len(reqs) != 2 || reqs[0].Path != "/projects/acme%2Fteam%2Fwidgets" || reqs[0].Query != "" ||
+		reqs[1].Path != "/projects" || reqs[1].Query != "id_after=6&id_before=8&min_access_level=40&simple=true" {
+		t.Errorf("requests = %+v; want the project, then the listing narrowed to ID 7 at level 40", reqs)
+	}
+}
+
+// Nothing depends on the name: a short one, and one that is a substring of
+// many projects, take the same two requests, with no search and no page.
+func TestCanReachNeedsNoSearch(t *testing.T) {
+	for _, path := range []string{"acme/x", "acme/ab", "acme/api"} {
+		t.Run(path, func(t *testing.T) {
+			f := reachFake(t, path, 12, 12)
+			ok, err := f.forge().CanReach(context.Background(), path)
+			if err != nil || !ok {
+				t.Fatalf("CanReach = %v, %v; want true", ok, err)
+			}
+			reqs := f.requests()
+			if len(reqs) != 2 {
+				t.Fatalf("requests = %+v, want 2", reqs)
+			}
+			for _, r := range reqs {
+				if strings.Contains(r.Query, "search") || strings.Contains(r.Query, "page") {
+					t.Errorf("request %s ?%s searches or pages", r.Path, r.Query)
+				}
+			}
+		})
+	}
+}
+
+// ReachableName answers with GitLab's spelling of the path, whatever case was
+// asked for (GitLab finds a project by its path without regard to case).
+func TestReachableNameIsGitLabsSpelling(t *testing.T) {
+	f := newFake(t)
+	f.on("GET", "/projects/Acme%2FWidgets", 200, map[string]any{"id": 7, "path_with_namespace": "acme/widgets"})
+	f.on("GET", "/projects", 200, []map[string]any{{"id": 7, "path_with_namespace": "acme/widgets"}})
+	name, ok, err := f.forge().ReachableName(context.Background(), "Acme/Widgets")
+	if err != nil || !ok || name != "acme/widgets" {
+		t.Fatalf("ReachableName = %q, %v, %v; want acme/widgets, true", name, ok, err)
+	}
+
+	f = reachFake(t, "acme/widgets", 7)
+	if name, ok, err := f.forge().ReachableName(context.Background(), "acme/widgets"); err != nil || ok || name != "" {
+		t.Fatalf("ReachableName of a project not listed = %q, %v, %v; want none", name, ok, err)
+	}
+}
+
+// GitLab answers a path that is another project's (a renamed project's old
+// path, or a number, which is an ID) with that project; it is not the one
+// asked for, so it is not reached, and the listing isn't asked.
+func TestReachableNameIsForTheProjectAskedFor(t *testing.T) {
+	for _, asked := range []string{"7", "acme/old-name"} {
+		t.Run(asked, func(t *testing.T) {
+			f := newFake(t)
+			f.on("GET", "/projects/"+url.PathEscape(asked), 200, map[string]any{"id": 7, "path_with_namespace": "acme/widgets"})
+			name, ok, err := f.forge().ReachableName(context.Background(), asked)
+			if err != nil || ok || name != "" {
+				t.Fatalf("ReachableName(%q) = %q, %v, %v; want none", asked, name, ok, err)
+			}
+			if n := len(f.requests()); n != 1 {
+				t.Errorf("made %d requests, want 1", n)
+			}
+		})
+	}
+	f := newFake(t)
+	for _, asked := range []string{"", "acme/"} {
+		if _, ok, err := f.forge().ReachableName(context.Background(), asked); err != nil || ok {
+			t.Errorf("ReachableName(%q) = %v, %v; want false", asked, ok, err)
+		}
+	}
+	if n := len(f.requests()); n != 0 {
+		t.Errorf("made %d requests for an empty or open path, want 0", n)
 	}
 }
 
