@@ -269,6 +269,9 @@ func TestUsageWasted(t *testing.T) {
 	// A re-run is counted apart, and its failed skill is waste as well.
 	seedUsage(t, s, usageMR(7, 2), usageAt(5, 11, 0), "rerun", false, "m", skillRow("security", "no_blocking_issues", 7, 3))
 	seedUsage(t, s, usageMR(7, 3), usageAt(5, 12, 0), "rerun_failed", false, "m", skillRow("security", "failed", 20, 0))
+	// The first review of an untrusted author's change, once started, is
+	// not a re-run.
+	seedUsage(t, s, usageMR(7, 5), usageAt(5, 13, 0), TriggerStart, false, "m", skillRow("security", "no_blocking_issues", 4000, 0))
 	// Before the period, and another repository: not counted.
 	seedUsage(t, s, usageMR(7, 4), usageAt(1, 0, 0).Add(-time.Second), TriggerPush, false, "m", skillRow("security", "failed", 5000, 0))
 	seedUsage(t, s, usageMR(8, 1), usageAt(5, 10, 0), TriggerPush, false, "m", skillRow("security", "failed", 9000, 0))
@@ -282,6 +285,9 @@ func TestUsageWasted(t *testing.T) {
 	}
 	// A reported run with no result and a reason: no result.
 	setState(dispatched(t, s, usageMR(7, 10), "noresult", "tok-noresult"), "reported", "the Job failed")
+	// A review with no result that a re-run then superseded still counts as
+	// no result, not as superseded.
+	setState(dispatched(t, s, usageMR(7, 15), "failedthenrerun", "tok-failedthenrerun"), "superseded", "the Job failed")
 	// A reported run with no result and no reason is still being told apart
 	// from a failure: not counted.
 	setState(dispatched(t, s, usageMR(7, 11), "nofailure", "tok-nofailure"), "reported", "")
@@ -298,8 +304,8 @@ func TestUsageWasted(t *testing.T) {
 	}
 	wantTokens(t, "Failed", got.Failed, TokenSum{In: 120, Out: 10})
 	wantTokens(t, "Reruns", got.Reruns, TokenSum{In: 27, Out: 3})
-	if got.RerunCount != 2 || got.NoResult != 1 || got.Superseded != 1 {
-		t.Errorf("RerunCount, NoResult, Superseded = %d, %d, %d; want 2, 1, 1", got.RerunCount, got.NoResult, got.Superseded)
+	if got.RerunCount != 2 || got.NoResult != 2 || got.Superseded != 1 {
+		t.Errorf("RerunCount, NoResult, Superseded = %d, %d, %d; want 2, 2, 1", got.RerunCount, got.NoResult, got.Superseded)
 	}
 }
 

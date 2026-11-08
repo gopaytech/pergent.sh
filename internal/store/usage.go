@@ -233,7 +233,7 @@ func (s *Store) UsageByMR(ctx context.Context, instance string, projectID int64,
 
 // UsageWasted returns the usage of a repository that bought no finished
 // review since the given time: the tokens of skills that failed, the tokens
-// of re-runs (counted apart, they are asked for), and the reviews that left
+// of re-runs asked for (counted apart), and the reviews that left
 // no result, whose tokens are unknown.
 func (s *Store) UsageWasted(ctx context.Context, instance string, projectID int64, since time.Time) (WastedUsage, error) {
 	var w WastedUsage
@@ -244,24 +244,26 @@ func (s *Store) UsageWasted(ctx context.Context, instance string, projectID int6
 			COALESCE(sum(cache_write) FILTER (WHERE verdict = 'failed'), 0),
 			COALESCE(sum(reasoning)  FILTER (WHERE verdict = 'failed'), 0),
 			count(*) FILTER (WHERE verdict = 'failed' AND (cache_read IS NULL OR cache_write IS NULL OR reasoning IS NULL)),
-			COALESCE(sum(tokens_in)  FILTER (WHERE trigger <> 'push'), 0),
-			COALESCE(sum(tokens_out) FILTER (WHERE trigger <> 'push'), 0),
-			COALESCE(sum(cache_read) FILTER (WHERE trigger <> 'push'), 0),
-			COALESCE(sum(cache_write) FILTER (WHERE trigger <> 'push'), 0),
-			COALESCE(sum(reasoning)  FILTER (WHERE trigger <> 'push'), 0),
-			count(*) FILTER (WHERE trigger <> 'push' AND (cache_read IS NULL OR cache_write IS NULL OR reasoning IS NULL)),
-			count(DISTINCT run_id) FILTER (WHERE trigger <> 'push')
+			COALESCE(sum(tokens_in)  FILTER (WHERE trigger IN ('rerun', 'rerun_failed')), 0),
+			COALESCE(sum(tokens_out) FILTER (WHERE trigger IN ('rerun', 'rerun_failed')), 0),
+			COALESCE(sum(cache_read) FILTER (WHERE trigger IN ('rerun', 'rerun_failed')), 0),
+			COALESCE(sum(cache_write) FILTER (WHERE trigger IN ('rerun', 'rerun_failed')), 0),
+			COALESCE(sum(reasoning)  FILTER (WHERE trigger IN ('rerun', 'rerun_failed')), 0),
+			count(*) FILTER (WHERE trigger IN ('rerun', 'rerun_failed') AND (cache_read IS NULL OR cache_write IS NULL OR reasoning IS NULL)),
+			count(DISTINCT run_id) FILTER (WHERE trigger IN ('rerun', 'rerun_failed'))
 		FROM run_usage WHERE instance = $1::text AND project_id = $2::bigint AND reported_at >= $3::timestamptz`,
 		instance, projectID, since).Scan(append(append(w.Failed.dests(), w.Reruns.dests()...), &w.RerunCount)...)
 	if err != nil {
 		return WastedUsage{}, err
 	}
 	// A review with no result has no usage rows, so these two come from runs.
-	// A superseded run that kept its result is not counted: its skills are in
-	// run_usage like any other.
+	// The failure reason tells them apart in any state: a review that failed
+	// keeps its reason when a later re-run supersedes it, and a run stopped
+	// by a newer push has none. A superseded run that kept its result is
+	// counted in neither: its skills are in run_usage like any other.
 	err = s.pool.QueryRow(ctx, `SELECT
-			count(*) FILTER (WHERE result IS NULL AND failure_reason <> '' AND state IN ('reported', 'published', 'publish_failed')),
-			count(*) FILTER (WHERE state = 'superseded' AND result IS NULL AND dispatched_at IS NOT NULL)
+			count(*) FILTER (WHERE result IS NULL AND failure_reason <> '' AND dispatched_at IS NOT NULL),
+			count(*) FILTER (WHERE state = 'superseded' AND result IS NULL AND failure_reason = '' AND dispatched_at IS NOT NULL)
 		FROM runs WHERE instance = $1::text AND project_id = $2::bigint AND created_at >= $3::timestamptz`,
 		instance, projectID, since).Scan(&w.NoResult, &w.Superseded)
 	if err != nil {
