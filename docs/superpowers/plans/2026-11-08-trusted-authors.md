@@ -162,7 +162,6 @@
 **Interfaces:**
 - Consumes: Task 1 (`HoldRun`, `ClaimUntrustedNote`, `ReleaseUntrustedNote`, `Waiting`, `TriggerStart`, `WaitUntrusted`, `WaitCheckFailed`), Task 2 (`Effective.TrustedAuthorsOnly/TrustedAuthors`), Task 3 (`StatusPending`, `Visibility`, `AccessLevel`).
 - Produces:
-  - `type trust int` with `trustYes`, `trustNo`
   - `func authorTrust(ctx context.Context, f forge.Forge, repo settings.Effective, projectID int64, projectPath string, ch forge.Change) (trusted bool, err error)`. It's true when the mode resolves to off, when `ch.AuthorID` is on `repo.TrustedAuthors` (by ID, and only if non-zero), or when `AccessLevel(projectID, ch.Author, ch.AuthorID) >= forge.AccessWrite`. `follow_visibility` reads `f.Visibility(ctx, projectPath)`: public means on, internal or private means off, and an error means on (logged, never returned). A non-nil `err` is only an access-check error.
   - `const trustPatience = 10 * time.Minute` (a var, so tests can shorten it); `waitingDescription`, `checkFailedDescription(mention string) string`, `untrustedNote(mention string) string` with the exact copy from Global Constraints.
 
@@ -171,7 +170,7 @@
   - `e2e_trusted_test.go` on the fake GitLab, with an instance mode `on`:
     - `TestUntrustedRunWaits`: a Reporter author's MR hook → after `DispatchOnce` the run is `waiting`, there's one note with the exact text, the pending status has the waiting description, and no Job was created. A second push gives a new head that is waiting, a pending status, and still one note.
     - `TestTrustedRunGoesAhead`: a Developer author is dispatched as today.
-    - `TestTrustCheckRetriesThenGivesUp`: the member endpoint answers 500. Before `trustPatience` the run is postponed; past it, the run is `waiting` with `trust_check_failed`, there's no note, and the pending status has the check-failed text. Separately, the endpoint fails once and then answers Developer: the run is dispatched.
+    - `TestTrustCheckRetriesThenGivesUp`: the member endpoint answers 500. Before `trustPatience` the run is postponed; past it, the run is `waiting` with `trust_check_failed`, there's no note, and the pending status has the check-failed text. Separately, the endpoint fails once and then answers Developer: the run is dispatched on the next pass after `trustRetryDelay`.
     - `TestUntrustedDraftIsADraft`: a draft with `review_drafts: false` is superseded as a draft, with no note.
     - `TestStartRunSkipsCheck`: a waiting run, then `StartRun`, then `DispatchOnce` dispatches it with no access call.
 
@@ -179,7 +178,7 @@
 
 - [ ] **Step 3: Implement.** In `dispatch`, right after the moved-head check and before the diff-refs wait, run the check only when `run.Trigger == store.TriggerPush`:
   - Trusted: carry on.
-  - Access error, with `now - run.CreatedAt < trustPatience`: `postpone(now + dispatchBackoff<<min(Attempts,5))`. At or past the window: `HoldRun(WaitCheckFailed)`, set the pending status with `checkFailedDescription`, no note.
+  - Access error, with `now - run.CreatedAt < trustPatience`: `postpone(now + trustRetryDelay)` with `trustRetryDelay = 30 * time.Second` (a var). At or past the window: `HoldRun(WaitCheckFailed)`, set the pending status with `checkFailedDescription`, no note.
   - Untrusted: `HoldRun(WaitUntrusted)`, then `SetStatus(StatusPending, waitingDescription)`. If `ClaimUntrustedNote` is true, `Forge.Reply(untrustedNote)`. On a reply error, `ReleaseUntrustedNote` and log it (the run stays waiting; the next push tries the note again).
 
 - [ ] **Step 4: Run, expect a pass;** then `go vet ./...`.
