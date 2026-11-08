@@ -225,6 +225,7 @@ function Picker() {
         <>
           {truncated && <div className="pad meta">The list is too long to read whole. Search to find others.</div>}
           {items.length === 0 && !available.hasNextPage && <div className="row empty-row">No repository to switch on.</div>}
+
           {items.map((r) => (
             <div className="row" key={`${r.instance}/${r.project}`}>
               <div className="grow mr">{r.project}</div>
@@ -239,6 +240,9 @@ function Picker() {
               </button>
             </div>
           ))}
+          {available.hasNextPage && available.data.pages.at(-1)?.items.length === 0 && (
+            <div className="row empty-row">Everything on this page is already switched on.</div>
+          )}
           {available.hasNextPage && (
             <div className="foot">
               <button type="button" className="btn" disabled={available.isFetchingNextPage} onClick={() => available.fetchNextPage()}>

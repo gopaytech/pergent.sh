@@ -818,7 +818,9 @@ type LLMView struct {
 // the page asked for (1-based). On GitLab a page is one request to the
 // platform in its order, so one with switched-on repositories left out holds
 // fewer than 50; on GitHub, which can't search on its side, the list is read
-// whole and served 50 at a time after the switched-on ones are left out.
+// whole, sorted, cut into pages of 50, and the switched-on ones are left out
+// of each page after (so a page can hold fewer there too, and switching one
+// on moves no later page).
 // HasMore is true when a later page may hold more. Truncated is true when
 // the list a page is made from was too long (5000) or too slow (20 s, each
 // request 10 s) to read whole; GitLab pages are never truncated. 502 when

@@ -231,19 +231,22 @@ func TestAvailablePageCache(t *testing.T) {
 }
 
 // A platform that can't page (GitHub) is read whole once, kept, and served 50
-// at a time from that list; switched-on repositories are left out before the
-// list is cut into pages, so every page but the last holds 50.
+// at a time from that list. The pages are cut from the sorted list first and
+// the repositories switched on are dropped from each page after, as on
+// GitLab, so switching one on between two Load more clicks moves no later page.
 func TestAvailableServesAWholeListInPages(t *testing.T) {
 	e := newPickerEnv(t)
 	all := pickNames(120, "acme/repo-%03d")
-	e.gh.set(append([]string{"acme/widgets", "Acme/Zeta"}, all...)...)
+	// Acme/Widgets is on already (the config has acme/widgets) and sorts first.
+	e.gh.set(append([]string{"Acme/Widgets", "Acme/Zeta"}, all...)...)
 
 	one := e.page(t, "gh", "")
-	if one.Page != 1 || len(one.Items) != 50 || !one.HasMore || one.Truncated {
-		t.Fatalf("page 1 = page %d, %d items, hasMore %v, truncated %v", one.Page, len(one.Items), one.HasMore, one.Truncated)
+	if one.Page != 1 || len(one.Items) != 49 || !one.HasMore || one.Truncated {
+		t.Fatalf("page 1 = page %d, %d items, hasMore %v, truncated %v; want 49 (one of its 50 is on), more",
+			one.Page, len(one.Items), one.HasMore, one.Truncated)
 	}
-	if one.Items[0].Project != "Acme/Zeta" || one.Items[1].Project != "acme/repo-000" {
-		t.Errorf("items start %v; want the sorted list without acme/widgets", projectsOf(one.Items[:2]))
+	if one.Items[0].Project != "Acme/Zeta" || one.Items[1].Project != "acme/repo-000" || one.Items[48].Project != "acme/repo-047" {
+		t.Errorf("items %v ... %v; want the sorted list without Acme/Widgets", projectsOf(one.Items[:2]), projectsOf(one.Items[48:]))
 	}
 	for _, it := range one.Items {
 		if it.Instance != "gh" || it.Platform != "github" {
@@ -252,9 +255,10 @@ func TestAvailableServesAWholeListInPages(t *testing.T) {
 	}
 	two := e.page(t, "gh", "page=2")
 	three := e.page(t, "gh", "page=3")
-	if len(two.Items) != 50 || !two.HasMore || len(three.Items) != 21 || three.HasMore {
-		t.Errorf("pages 2 and 3 hold %d and %d items, hasMore %v and %v; want 50, 21, true, false",
-			len(two.Items), len(three.Items), two.HasMore, three.HasMore)
+	if len(two.Items) != 50 || !two.HasMore || len(three.Items) != 22 || three.HasMore ||
+		two.Items[0].Project != "acme/repo-048" || three.Items[0].Project != "acme/repo-098" {
+		t.Errorf("pages 2 and 3 hold %d and %d items from %s and %s, hasMore %v and %v; want 50 and 22 from repo-048 and repo-098, true and false",
+			len(two.Items), len(three.Items), two.Items[0].Project, three.Items[0].Project, two.HasMore, three.HasMore)
 	}
 	seen := map[string]bool{}
 	for _, b := range []pickerBody{one, two, three} {
@@ -273,6 +277,16 @@ func TestAvailableServesAWholeListInPages(t *testing.T) {
 	}
 	if n := e.gh.callCount(); n != 1 {
 		t.Errorf("the list was read %d times for 4 pages, want 1", n)
+	}
+
+	// acme/repo-060 is switched on between two Load more clicks: its own page
+	// loses it, and the next page starts where it did.
+	e.d.cfg.Repositories = append(e.d.cfg.Repositories, config.Repository{GitHub: "gh", Project: "acme/repo-060"})
+	two = e.page(t, "gh", "page=2")
+	three = e.page(t, "gh", "page=3")
+	if len(two.Items) != 49 || three.Items[0].Project != "acme/repo-098" || len(three.Items) != 22 {
+		t.Errorf("after switching one on, page 2 holds %d and page 3 starts at %s with %d items; want 49, repo-098, 22",
+			len(two.Items), three.Items[0].Project, len(three.Items))
 	}
 }
 

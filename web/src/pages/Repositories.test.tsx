@@ -181,7 +181,24 @@ describe("Repositories", () => {
     expect(await within(picker).findByText(/too long to read whole/)).toBeInTheDocument();
     // A page can be empty and not the last: no "nothing" yet, but Load more.
     expect(within(picker).queryByText("No repository to switch on.")).not.toBeInTheDocument();
+    expect(within(picker).getByText("Everything on this page is already switched on.")).toBeInTheDocument();
     expect(within(picker).getByRole("button", { name: "Load more" })).toBeInTheDocument();
+  });
+
+  it("says so when a later page is empty because everything on it is switched on", async () => {
+    fakeApi({
+      "GET /api/me": { body: operator },
+      "GET /api/repositories": { body: [repoWidgets] },
+      "GET /api/admin/instances": { body: [instanceGitLab] },
+      "GET /api/admin/instances/main/repositories?search=": { body: gitlabPage(0, 3, 1, true) },
+      "GET /api/admin/instances/main/repositories?search=&page=2": { body: gitlabPage(3, 0, 2, true) },
+    });
+    const picker = await openPicker();
+    await within(picker).findByText("acme/repo-000");
+    expect(within(picker).queryByText("Everything on this page is already switched on.")).not.toBeInTheDocument();
+    await userEvent.click(within(picker).getByRole("button", { name: "Load more" }));
+    expect(await within(picker).findByText("Everything on this page is already switched on.")).toBeInTheDocument();
+    expect(within(picker).getAllByRole("button", { name: /^Switch on / })).toHaveLength(3);
   });
 
   it("warns on Add repository when the default skill list is empty", async () => {

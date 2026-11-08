@@ -647,8 +647,8 @@ func (d *Dashboard) instanceRepositories(w http.ResponseWriter, r *http.Request)
 //
 // A catalog that pages on the platform (PagedRepoCatalog, GitLab) is asked for
 // the one page, in the platform's order (by ID), which is sorted within the
-// page. Another is read whole, kept
-// 5 minutes, sorted, and served 50 at a time.
+// page. Another is read whole, kept 5 minutes, sorted, and served 50 at a time
+// (a page is cut before the repositories switched on are dropped from it).
 func (d *Dashboard) listAvailable(w http.ResponseWriter, r *http.Request, name string) {
 	if inst, ok := d.registry.Get(name); !ok || inst.Removing {
 		notFound(w)
@@ -719,19 +719,20 @@ func (d *Dashboard) listAvailable(w http.ResponseWriter, r *http.Request, name s
 		writeError(w, http.StatusBadGateway, msgListFailed)
 		return
 	}
-	var off []string
-	for _, p := range repos {
+	// The pages are cut from the sorted list as it is, and the switched-on
+	// repositories are dropped from each page after, as on GitLab: a
+	// repository switched on between two Load more clicks then leaves its own
+	// page and moves no later page by one, so none is skipped.
+	sorted := slices.Clone(repos)
+	sort.Strings(sorted)
+	from := min((page-1)*availablePerPage, len(sorted))
+	to := min(from+availablePerPage, len(sorted))
+	for _, p := range sorted[from:to] {
 		if !on[lower(p)] {
-			off = append(off, p)
+			add(p)
 		}
 	}
-	sort.Strings(off)
-	from := min((page-1)*availablePerPage, len(off))
-	to := min(from+availablePerPage, len(off))
-	for _, p := range off[from:to] {
-		add(p)
-	}
-	view.HasMore, view.Truncated = to < len(off), truncated
+	view.HasMore, view.Truncated = to < len(sorted), truncated
 	writeJSON(w, http.StatusOK, view)
 }
 

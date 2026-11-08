@@ -999,8 +999,9 @@ paths:
         at most. On GitLab a page is one request to GitLab in its ID order (so no
         project falls between two pages), sorted by path within the page, and
         a page with switched-on projects left out holds fewer than 50; on
-        GitHub, which cannot search on its side, the list is read whole and
-        served 50 at a time. `hasMore` says whether to ask for the next
+        GitHub, which cannot search on its side, the list is read whole,
+        sorted, cut into pages of 50, and the switched-on ones are left out of
+        each page after. `hasMore` says whether to ask for the next
         page. `truncated` is true when the list a page is made from was too
         long (5000) or too slow (20 s) to read whole (GitHub only). 400
         without an `instance` or with a bad `page`, 404 for an instance that
