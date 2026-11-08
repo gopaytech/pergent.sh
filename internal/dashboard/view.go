@@ -1146,3 +1146,95 @@ type LLMAdminView struct {
 	Key      SecretView `json:"key"`
 	Editable bool       `json:"editable"`
 }
+
+// UsageTokensView is tokens used: input and output, which every total and
+// ranking adds up, and the counts reported apart. Unknown counts the
+// review-and-skill rows whose pergent didn't report the apart counts.
+type UsageTokensView struct {
+	In         int64 `json:"in"`
+	Out        int64 `json:"out"`
+	CacheRead  int64 `json:"cacheRead"`
+	CacheWrite int64 `json:"cacheWrite"`
+	Reasoning  int64 `json:"reasoning"`
+	Unknown    int64 `json:"unknown"`
+}
+
+// UsageDayView is one UTC day's usage.
+type UsageDayView struct {
+	Day    string          `json:"day"` // YYYY-MM-DD
+	Tokens UsageTokensView `json:"tokens"`
+}
+
+// UsageRepositoryRowView is one repository in GET /api/admin/usage.
+// SwitchedOn is false for a repository switched off since, or on an
+// instance that was removed: its usage is kept.
+type UsageRepositoryRowView struct {
+	Instance   string          `json:"instance"`
+	Project    string          `json:"project"`
+	SwitchedOn bool            `json:"switchedOn"`
+	Tokens     UsageTokensView `json:"tokens"`
+	Reviews    int64           `json:"reviews"`
+}
+
+// UsageOverviewView is GET /api/admin/usage (admins).
+type UsageOverviewView struct {
+	Days         int                      `json:"days"`
+	Tokens       UsageTokensView          `json:"tokens"`
+	Reviews      int64                    `json:"reviews"`
+	Daily        []UsageDayView           `json:"daily"`
+	Repositories []UsageRepositoryRowView `json:"repositories"`
+}
+
+// UsageNamedView is one skill or model of a repository's usage.
+type UsageNamedView struct {
+	Name   string          `json:"name"`
+	Tokens UsageTokensView `json:"tokens"`
+	Runs   int64           `json:"runs"`
+	Failed int64           `json:"failed"`
+}
+
+// UsageMRView is one merge request of a repository's usage.
+type UsageMRView struct {
+	IID     int64           `json:"iid"`
+	Title   string          `json:"title"`
+	WebURL  string          `json:"webURL"`
+	Tokens  UsageTokensView `json:"tokens"`
+	Reviews int64           `json:"reviews"`
+}
+
+// UsageWastedView is a repository's wasted tokens: those of skills that
+// failed. Reruns are those of the re-runs someone asked for (a rerun or a
+// rerun of the failed skills), shown apart and not waste; a skill that
+// failed in a re-run is in both Failed and Reruns. NoResult and Superseded
+// count reviews whose tokens are unknown.
+type UsageWastedView struct {
+	Failed     UsageTokensView `json:"failed"`
+	Reruns     UsageTokensView `json:"reruns"`
+	RerunCount int64           `json:"rerunCount"`
+	NoResult   int64           `json:"noResult"`
+	Superseded int64           `json:"superseded"`
+}
+
+// UsageOutlierView is a review that used more than three times its kind's
+// median.
+type UsageOutlierView struct {
+	RunID       string `json:"runID"`
+	IID         int64  `json:"iid"`
+	Incremental bool   `json:"incremental"`
+	Total       int64  `json:"total"`
+	At          string `json:"at"`
+}
+
+// UsageRepositoryView is GET /api/repositories/{instance}/{project}/usage
+// (admins).
+type UsageRepositoryView struct {
+	Days              int                `json:"days"`
+	Daily             []UsageDayView     `json:"daily"`
+	Skills            []UsageNamedView   `json:"skills"`
+	Models            []UsageNamedView   `json:"models"`
+	MergeRequests     []UsageMRView      `json:"mergeRequests"`
+	Wasted            UsageWastedView    `json:"wasted"`
+	FullMedian        *float64           `json:"fullMedian"`
+	IncrementalMedian *float64           `json:"incrementalMedian"`
+	Outliers          []UsageOutlierView `json:"outliers"`
+}

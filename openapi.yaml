@@ -105,6 +105,8 @@ tags:
     description: The skill library, and installing skills from git.
   - name: Organization
     description: Users, teams and the audit log.
+  - name: Usage
+    description: What the reviews used, for admins.
   - name: Instances and settings
     description: Admin configuration.
 security: []
@@ -1326,6 +1328,47 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/usage:
+    get:
+      operationId: getRepositoryUsage
+      tags: [Usage]
+      summary: What a repository used
+      description: |
+        Admins only (404 for anyone else, as for an unknown repository), and
+        only for a repository that is switched on. Tokens used in the last
+        `days` days, counted as in `GET /api/admin/usage`: each day, each
+        skill and each model busiest first, and the 50 busiest merge requests
+        with the title and address of their latest review. `skills[].failed`
+        counts the runs in which the skill failed; it is 0 for a model.
+        `wasted.failed` is the tokens of skills that failed. `wasted.reruns`
+        is the tokens of re-runs someone asked for (a rerun or a rerun of the
+        failed skills), apart and not waste; a skill that failed in a re-run is
+        in both. `noResult` counts reviews that left no result and
+        `superseded` those stopped by a newer push before one, whose tokens are
+        unknown. `fullMedian` and `incrementalMedian` are the median tokens of
+        a full review and of an incremental one, null with none of that kind
+        (a re-run of only the failed skills is neither). `outliers` are the
+        reviews above three times their kind's median, costliest first, 20 at
+        most. A repository with no stored project ID has empty lists.
+      x-pergent-access: session
+      x-pergent-pattern: GET /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+        - $ref: '#/components/parameters/UsageDays'
+      responses:
+        '200':
+          description: The usage.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UsageRepositoryView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/repositories/{instance}/{project}/teams:
     get:
       operationId: getRepositoryTeams
@@ -2145,6 +2188,38 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/usage:
+    get:
+      operationId: getUsage
+      tags: [Usage]
+      summary: What every repository used
+      description: |
+        Admins only. Tokens used in the last `days` days: the total, each UTC
+        day (a day with no usage is left out, oldest first) and the
+        repositories, busiest first. Every total and ranking adds input and
+        output tokens only; `cacheRead`, `cacheWrite` and `reasoning` are
+        shown apart. `unknown` counts the review-and-skill rows whose pergent
+        did not report those three counts, so a result from an older pergent
+        is unknown and never zero. `reviews` counts a review once, however
+        many skills it ran. A repository switched off since, or on an
+        instance that was removed, is listed with `switchedOn` false: its
+        usage is kept. A repository is told by its instance and its path
+        ignoring case.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/UsageDays'
+      responses:
+        '200':
+          description: The usage.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UsageOverviewView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
   # ------------------------------------------------- instances and settings
   /api/admin/settings:
     get:
@@ -2584,6 +2659,15 @@ components:
       required: true
       description: The instance's name.
       schema: {type: string}
+    UsageDays:
+      name: days
+      in: query
+      description: How many days back the usage counts. Any other value is 400.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 90
+        default: 30
     AvailablePage:
       name: page
       in: query
@@ -4318,6 +4402,168 @@ components:
       properties:
         in: {type: integer}
         out: {type: integer}
+    UsageTokensView:
+      description: >-
+        Tokens used. `in` and `out` are what every total and ranking adds up;
+        the rest are reported apart.
+      type: object
+      required: [in, out, cacheRead, cacheWrite, reasoning, unknown]
+      properties:
+        in: {type: integer, format: int64}
+        out: {type: integer, format: int64}
+        cacheRead:
+          type: integer
+          format: int64
+          description: Only from the rows that reported it (see `unknown`).
+        cacheWrite:
+          type: integer
+          format: int64
+          description: Only from the rows that reported it (see `unknown`).
+        reasoning:
+          type: integer
+          format: int64
+          description: Only from the rows that reported it (see `unknown`).
+        unknown:
+          type: integer
+          format: int64
+          description: The review-and-skill rows whose pergent did not report the cache and reasoning counts.
+    UsageDayView:
+      description: One UTC day's usage.
+      type: object
+      required: [day, tokens]
+      properties:
+        day:
+          type: string
+          format: date
+          description: YYYY-MM-DD, in UTC.
+        tokens: {$ref: '#/components/schemas/UsageTokensView'}
+    UsageRepositoryRowView:
+      description: One repository in `GET /api/admin/usage`.
+      type: object
+      required: [instance, project, switchedOn, tokens, reviews]
+      properties:
+        instance: {type: string}
+        project:
+          type: string
+          description: The path it was last reported under.
+        switchedOn:
+          type: boolean
+          description: False for a repository switched off since, or on an instance that was removed; its usage is kept.
+        tokens: {$ref: '#/components/schemas/UsageTokensView'}
+        reviews:
+          type: integer
+          format: int64
+          description: Reviews, a review once however many skills it ran.
+    UsageOverviewView:
+      description: Body of `GET /api/admin/usage`.
+      type: object
+      required: [days, tokens, reviews, daily, repositories]
+      properties:
+        days: {type: integer}
+        tokens: {$ref: '#/components/schemas/UsageTokensView'}
+        reviews: {type: integer, format: int64}
+        daily:
+          type: array
+          items: {$ref: '#/components/schemas/UsageDayView'}
+        repositories:
+          type: array
+          description: Busiest first.
+          items: {$ref: '#/components/schemas/UsageRepositoryRowView'}
+    UsageNamedView:
+      description: One skill or model of a repository's usage.
+      type: object
+      required: [name, tokens, runs, failed]
+      properties:
+        name: {type: string}
+        tokens: {$ref: '#/components/schemas/UsageTokensView'}
+        runs:
+          type: integer
+          format: int64
+          description: A run once, however many skills it ran.
+        failed:
+          type: integer
+          format: int64
+          description: The runs in which the skill failed; 0 for a model.
+    UsageMRView:
+      description: One merge request of a repository's usage.
+      type: object
+      required: [iid, title, webURL, tokens, reviews]
+      properties:
+        iid: {type: integer, format: int64}
+        title:
+          type: string
+          description: The title of its latest review.
+        webURL:
+          type: string
+          description: Its address; "" when it is not an http or https address.
+        tokens: {$ref: '#/components/schemas/UsageTokensView'}
+        reviews: {type: integer, format: int64}
+    UsageWastedView:
+      description: >-
+        The tokens that bought no finished review. `reruns` are those of the
+        re-runs someone asked for, apart and not waste; a skill that failed in
+        a re-run is in both `failed` and `reruns`.
+      type: object
+      required: [failed, reruns, rerunCount, noResult, superseded]
+      properties:
+        failed: {$ref: '#/components/schemas/UsageTokensView'}
+        reruns: {$ref: '#/components/schemas/UsageTokensView'}
+        rerunCount: {type: integer, format: int64}
+        noResult:
+          type: integer
+          format: int64
+          description: Reviews that left no result; their tokens are unknown.
+        superseded:
+          type: integer
+          format: int64
+          description: Reviews stopped by a newer push before their result; their tokens are unknown.
+    UsageOutlierView:
+      description: A review that used more than three times its kind's median.
+      type: object
+      required: [runID, iid, incremental, total, at]
+      properties:
+        runID: {type: string}
+        iid: {type: integer, format: int64}
+        incremental: {type: boolean}
+        total:
+          type: integer
+          format: int64
+          description: Input plus output tokens.
+        at:
+          type: string
+          format: date-time
+    UsageRepositoryView:
+      description: Body of `GET /api/repositories/{instance}/{project}/usage`.
+      type: object
+      required: [days, daily, skills, models, mergeRequests, wasted, fullMedian, incrementalMedian, outliers]
+      properties:
+        days: {type: integer}
+        daily:
+          type: array
+          items: {$ref: '#/components/schemas/UsageDayView'}
+        skills:
+          type: array
+          description: Busiest first.
+          items: {$ref: '#/components/schemas/UsageNamedView'}
+        models:
+          type: array
+          description: Busiest first.
+          items: {$ref: '#/components/schemas/UsageNamedView'}
+        mergeRequests:
+          type: array
+          description: The 50 busiest, busiest first.
+          items: {$ref: '#/components/schemas/UsageMRView'}
+        wasted: {$ref: '#/components/schemas/UsageWastedView'}
+        fullMedian:
+          type: [number, 'null']
+          description: The median tokens of a full review; null with none.
+        incrementalMedian:
+          type: [number, 'null']
+          description: The median tokens of an incremental review; null with none.
+        outliers:
+          type: array
+          description: Costliest first, 20 at most.
+          items: {$ref: '#/components/schemas/UsageOutlierView'}
     UserView:
       description: One account.
       type: object

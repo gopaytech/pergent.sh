@@ -768,10 +768,11 @@ func (d *Dashboard) repositoryViews(ctx context.Context, se Session, repos []set
 // repository serves a repository's detail, with a trailing /inputs its
 // skills and instructions, with a trailing /readiness its Readiness tab, with
 // a trailing /past-dismissals its Past dismissals, with a trailing
-// /skill-results its Skill results, or with a trailing /teams (admins only)
-// the teams that cover it. A repository whose own path is the one asked for
-// wins over the /inputs, /readiness, /past-dismissals, /skill-results or
-// /teams of another.
+// /skill-results its Skill results, with a trailing /teams (admins only)
+// the teams that cover it, or with a trailing /usage (admins only) what it
+// used. A repository whose own path is the one asked for wins over the
+// /inputs, /readiness, /past-dismissals, /skill-results, /teams or /usage of
+// another.
 func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	instance, rest := r.PathValue("instance"), r.PathValue("rest")
@@ -826,6 +827,12 @@ func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 	if project, ok := strings.CutSuffix(rest, "/teams"); ok {
 		if repo, ok := find(project); ok {
 			d.repositoryTeams(w, r, se, repo)
+			return
+		}
+	}
+	if project, ok := strings.CutSuffix(rest, "/usage"); ok {
+		if repo, ok := find(project); ok {
+			d.repositoryUsage(w, r, se, repo)
 			return
 		}
 	}
