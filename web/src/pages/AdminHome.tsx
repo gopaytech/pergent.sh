@@ -7,6 +7,7 @@ const areas: [string, string, string][] = [
   ["/admin/teams", "Teams", "Which repositories each team covers, and its members' roles."],
   ["/admin/integrations", "Integrations", "The GitLab and GitHub instances, and how people sign in."],
   ["/admin/settings", "Settings", "The model, the defaults and the skill library's default list."],
+  ["/admin/usage", "Usage", "Where model tokens go."],
   ["/admin/audit", "Audit log", "What admins and the bot did."],
 ];
 

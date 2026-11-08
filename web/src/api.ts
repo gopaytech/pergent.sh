@@ -382,6 +382,86 @@ export type SkillResultView = {
   editedAt: string | null;
 };
 
+// SkillTokensView is the tokens one skill used on the changes the Skill
+// results tab counts (GET .../skill-results/tokens?days=30|90, admins only;
+// read by the Skill results tab). Rows come by skill; [] when none recorded.
+export type SkillTokensView = { skill: string; tokens: { in: number; out: number } };
+
+// UsageTokensView is tokens used: in and out, which every total adds up, and
+// the counts reported apart. unknown counts the review-and-skill rows whose
+// pergent didn't report the apart counts: cache and reasoning are then
+// unknown, never zero.
+export type UsageTokensView = {
+  in: number;
+  out: number;
+  cacheRead: number;
+  cacheWrite: number;
+  reasoning: number;
+  unknown: number;
+};
+
+// UsageDayView is one UTC day's usage (day is YYYY-MM-DD).
+export type UsageDayView = { day: string; tokens: UsageTokensView };
+
+// UsageRepositoryRowView is one repository of the usage overview. A
+// repository switched off since (or on a removed instance) keeps its usage
+// but has no detail page.
+export type UsageRepositoryRowView = {
+  instance: string;
+  project: string;
+  switchedOn: boolean;
+  tokens: UsageTokensView;
+  reviews: number;
+};
+
+// UsageOverviewView is GET /api/admin/usage?days=N (admins), read by the
+// Usage page.
+export type UsageOverviewView = {
+  days: number;
+  tokens: UsageTokensView;
+  reviews: number;
+  daily: UsageDayView[];
+  repositories: UsageRepositoryRowView[];
+};
+
+// UsageNamedView is one skill or model of a repository's usage. failed is
+// the runs in which a skill failed; for a model it is always 0.
+export type UsageNamedView = { name: string; tokens: UsageTokensView; runs: number; failed: number };
+
+// UsageMRView is one merge request of a repository's usage.
+export type UsageMRView = { iid: number; title: string; webURL: string; tokens: UsageTokensView; reviews: number };
+
+// UsageWastedView is the tokens of skills that failed, and apart from them
+// those of re-runs someone asked for. A skill that failed in a re-run is in
+// both, so the two never add up. noResult and superseded count reviews whose
+// tokens are unknown.
+export type UsageWastedView = {
+  failed: UsageTokensView;
+  reruns: UsageTokensView;
+  rerunCount: number;
+  noResult: number;
+  superseded: number;
+};
+
+// UsageOutlierView is a review that used more than three times its kind's
+// median.
+export type UsageOutlierView = { runID: string; iid: number; incremental: boolean; total: number; at: string };
+
+// UsageRepositoryView is GET /api/repositories/{instance}/{project}/usage
+// ?days=N (admins), read by the repository Usage page. A median is null when
+// there was no review of that kind.
+export type UsageRepositoryView = {
+  days: number;
+  daily: UsageDayView[];
+  skills: UsageNamedView[];
+  models: UsageNamedView[];
+  mergeRequests: UsageMRView[];
+  wasted: UsageWastedView;
+  fullMedian: number | null;
+  incrementalMedian: number | null;
+  outliers: UsageOutlierView[];
+};
+
 // SettingsUpdate is the body of PUT .../settings: only the keys to change;
 // null resets one to its default.
 export type SettingsUpdate = Partial<{
@@ -869,6 +949,17 @@ export const paths = {
   // days is 30 or 90.
   apiRepoSkillResults: (instance: string, project: string, days: 30 | 90) =>
     `/api/repositories/${seg(instance)}/${proj(project)}/skill-results${days === 30 ? "" : `?days=${days}`}`,
+  // Admin pages and routes. The CSV is a plain GET download; instance and
+  // project narrow it to one repository.
+  usageRepo: (instance: string, project: string) => `/admin/usage/${seg(instance)}/${proj(project)}`,
+  apiUsage: (days: number) => `/api/admin/usage?days=${days}`,
+  apiRepoUsage: (instance: string, project: string, days: number) =>
+    `/api/repositories/${seg(instance)}/${proj(project)}/usage?days=${days}`,
+  apiUsageCSV: (days: number, instance?: string, project?: string) =>
+    `/api/admin/usage.csv${query([["days", String(days)], ["instance", instance], ["project", project]])}`,
+  // days is 30 or 90.
+  apiRepoSkillTokens: (instance: string, project: string, days: 30 | 90) =>
+    `/api/repositories/${seg(instance)}/${proj(project)}/skill-results/tokens${days === 30 ? "" : `?days=${days}`}`,
   // Stop using: POST {fingerprint}.
   apiRepoPastDismissalStop: (instance: string, project: string) =>
     `/api/repositories/${seg(instance)}/${proj(project)}/past-dismissals/stop`,

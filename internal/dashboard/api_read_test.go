@@ -797,6 +797,30 @@ func TestRunDetail(t *testing.T) {
 	}
 }
 
+// A re-run of failed skills stores the skills it kept with its own, so the
+// result counts the kept skills' tokens again. The page shows what the run
+// used itself, from the usage table, and the sum of the result only until
+// that is filled in.
+func TestRunDetailTokensComeFromUsage(t *testing.T) {
+	e := newEnv(t, nil)
+	kept := skillJSON("kept", "no_blocking_issues")
+	own := skillJSON("own", "no_blocking_issues")
+	own["tokens"] = map[string]any{"input": 5, "output": 1}
+	f := runFix{project: "acme/widgets", number: 3, head: head('a'), result: resultJSON(head('a'), kept, own), outcome: OutcomeApproved, approved: true}
+	c := e.userOnMain(false, "acme/widgets")
+
+	id := e.addRun(f)
+	if v := getJSON[RunDetailView](e, c, "/api/runs/"+id); v.Tokens != (TokensView{In: 105, Out: 11}) {
+		t.Errorf("tokens before usage is recorded = %+v; want the sum of the result", v.Tokens)
+	}
+	if err := e.st.RecordUsage(ctx, id, []store.SkillUsage{usageSkill("own", "no_blocking_issues", 5, 1)}); err != nil {
+		t.Fatal(err)
+	}
+	if v := getJSON[RunDetailView](e, c, "/api/runs/"+id); v.Tokens != (TokensView{In: 5, Out: 1}) {
+		t.Errorf("tokens = %+v; want the run's own, 5 and 1", v.Tokens)
+	}
+}
+
 func TestRunLog(t *testing.T) {
 	e := newEnv(t, nil)
 	id := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: cleanResult(head('a'))})
@@ -1286,6 +1310,30 @@ func TestSetupChecklistOnlyForAdmins(t *testing.T) {
 	ov := getJSON[OverviewView](e, viewer, "/api/overview")
 	if ov.Setup == nil || ov.Setup.LLM || ov.Setup.Skill || !ov.Setup.Instance || !ov.Setup.Repository {
 		t.Errorf("admin setup = %+v", ov.Setup)
+	}
+}
+
+// A usage table that can't be read leaves the page as it was: the sum of the
+// result, and a warning in the log.
+func TestRunDetailKeepsThePageWhenUsageCannotBeRead(t *testing.T) {
+	e := newEnv(t, nil)
+	own := skillJSON("own", "no_blocking_issues")
+	id := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: resultJSON(head('a'), own),
+		outcome: OutcomeApproved, approved: true})
+	c := e.userOnMain(false, "acme/widgets")
+	e.exec(`DROP TABLE run_usage`)
+
+	rec := e.get(c, "/api/runs/"+id)
+	wantCode(t, rec, "a run whose usage can't be read", http.StatusOK)
+	var v RunDetailView
+	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.Tokens != (TokensView{In: 100, Out: 10}) || len(v.Skills) != 1 {
+		t.Errorf("tokens = %+v, skills = %d; want the sum of the result and its skill", v.Tokens, len(v.Skills))
+	}
+	if !strings.Contains(e.logs.String(), "reading a run's usage failed") {
+		t.Errorf("log lacks the warning:\n%s", e.logs.String())
 	}
 }
 

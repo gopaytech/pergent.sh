@@ -1,9 +1,11 @@
 package callback
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -39,6 +41,16 @@ type fake struct {
 	reported []string
 	stored   int
 	replErr  error
+
+	recordErr error
+	recorded  []recordedUsage
+	onRecord  func() // called as RecordUsage starts
+}
+
+// recordedUsage is one RecordUsage call.
+type recordedUsage struct {
+	id     string
+	skills []store.SkillUsage
 }
 
 func (f *fake) Run(_ context.Context, id string) (store.Run, bool, error) {
@@ -71,6 +83,14 @@ func (f *fake) ReplaceWithFailure(_ context.Context, id, reason string) error {
 	return f.replErr
 }
 
+func (f *fake) RecordUsage(_ context.Context, id string, skills []store.SkillUsage) error {
+	if f.onRecord != nil {
+		f.onRecord()
+	}
+	f.recorded = append(f.recorded, recordedUsage{id, skills})
+	return f.recordErr
+}
+
 func newFake() *fake {
 	return &fake{known: true, token: "good", run: store.Run{ID: runID, BaseSHA: base, HeadSHA: head}}
 }
@@ -78,12 +98,13 @@ func newFake() *fake {
 type env struct {
 	f     *fake
 	woken int
+	logs  bytes.Buffer
 	h     http.Handler
 }
 
 func newEnv(f *fake) *env {
 	e := &env{f: f}
-	h := &Handler{Results: f, Now: func() time.Time { return now }, Wake: func() { e.woken++ }}
+	h := &Handler{Results: f, Now: func() time.Time { return now }, Wake: func() { e.woken++ }, Log: slog.New(slog.NewTextHandler(&e.logs, nil))}
 	mux := http.NewServeMux()
 	mux.Handle("POST /runs/{id}/result", h)
 	mux.Handle("/runs/{id}/result", h)
@@ -396,5 +417,83 @@ func TestImpactSkillAgainstTheRecordedLinks(t *testing.T) {
 				t.Errorf("status = %d replaced = %v; want the run failed", rec.Code, f.replaced)
 			}
 		})
+	}
+}
+
+// usageJSON is a completed result of two skills that carry their tokens.
+func usageJSON() string {
+	return `{"schema_version":1,"status":"completed","base":"` + base + `","head":"` + head + `",` +
+		`"skills":[` +
+		`{"name":"style","verdict":"no_blocking_issues","findings":[],"tokens":{"input":1200,"output":300}},` +
+		`{"name":"security","verdict":"has_blocking_issues","findings":[{"severity":"blocking"}],"tokens":{"input":5000,"output":700}}` +
+		`],"comment":{"markdown":"hi"}}`
+}
+
+func TestAcceptedResultRecordsItsUsage(t *testing.T) {
+	e := newEnv(newFake())
+	if rec := e.post(runID, "Bearer good", usageJSON()); rec.Code != 200 {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	if len(e.f.recorded) != 1 || e.f.recorded[0].id != runID {
+		t.Fatalf("recorded = %+v", e.f.recorded)
+	}
+	got := e.f.recorded[0].skills
+	if len(got) != 2 || got[0].Skill != "style" || got[0].In != 1200 || got[1].Skill != "security" || got[1].In != 5000 {
+		t.Errorf("skills = %+v", got)
+	}
+}
+
+// Publishing is woken before the usage is written, so a slow database never
+// holds it back.
+func TestPublishingIsWokenBeforeUsageIsRecorded(t *testing.T) {
+	f := newFake()
+	e := newEnv(f)
+	wokenAtRecord := -1
+	f.onRecord = func() { wokenAtRecord = e.woken }
+	if rec := e.post(runID, "Bearer good", usageJSON()); rec.Code != 200 {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	if wokenAtRecord != 1 {
+		t.Errorf("woken = %d when usage was recorded; want 1, so before", wokenAtRecord)
+	}
+}
+
+// A result turned into a failure shows as a review with no result, so its
+// tokens are unknown: nothing is recorded for it.
+func TestUnusableResultRecordsNoUsage(t *testing.T) {
+	e := newEnv(newFake())
+	rec := e.post(runID, "Bearer good", strings.Replace(usageJSON(), head, strings.Repeat("a", 40), 1))
+	if rec.Code != 400 || len(e.f.replaced) != 1 {
+		t.Fatalf("status = %d replaced = %v", rec.Code, e.f.replaced)
+	}
+	if len(e.f.recorded) != 0 {
+		t.Errorf("recorded = %+v", e.f.recorded)
+	}
+}
+
+func TestRecordUsageFailureNeverChangesTheAnswer(t *testing.T) {
+	f := newFake()
+	f.recordErr = errors.New("database is down")
+	e := newEnv(f)
+	rec := e.post(runID, "Bearer good", usageJSON())
+	if rec.Code != 200 || e.woken != 1 || len(f.replaced) != 0 {
+		t.Errorf("status = %d woken = %d replaced = %v", rec.Code, e.woken, f.replaced)
+	}
+	if out := e.logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "usage") {
+		t.Errorf("log = %q", out)
+	}
+}
+
+// A body usage can't read still marks the run, so it isn't read again later.
+func TestUnreadableUsageStillMarksTheRun(t *testing.T) {
+	e := newEnv(newFake())
+	if rec := e.post(runID, "Bearer good", resultJSON(base, head)); rec.Code != 200 {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	if len(e.f.recorded) != 1 || e.f.recorded[0].skills != nil {
+		t.Errorf("recorded = %+v", e.f.recorded)
+	}
+	if !strings.Contains(e.logs.String(), "level=WARN") {
+		t.Errorf("log = %q", e.logs.String())
 	}
 }

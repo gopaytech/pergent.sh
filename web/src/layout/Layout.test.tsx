@@ -14,7 +14,7 @@ afterEach(() => {
 
 const users = [userDev];
 const base = { "GET /api/overview?days=7": { body: overview } };
-const adminPages = ["Users", "Teams", "Integrations", "Settings", "Audit log"];
+const adminPages = ["Users", "Teams", "Integrations", "Settings", "Usage", "Audit log"];
 const userPages = ["Overview", "Repositories", "Reviews", "Skills"];
 
 // linkNames are the menu's links by their label, without the icon and the badge.
@@ -132,6 +132,7 @@ describe("Layout: the admin area", () => {
       "/admin/teams",
       "/admin/integrations",
       "/admin/settings",
+      "/admin/usage",
       "/admin/audit",
     ]);
     expect(screen.getByRole("note")).toHaveTextContent("2 users are waiting for a team");

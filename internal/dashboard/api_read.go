@@ -592,6 +592,16 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 			view.IncrementalNote = notMergedNote
 		}
 		fillSkills(&view, res, run.Result, run.SkillSources, run.SkillVersions, dismissals)
+		// A re-run of failed skills stores the other skills' results with its
+		// own, so the sum of the result counts their tokens a second time.
+		// The usage table has only what this run used. Until it is filled in
+		// the sum of the result stands, and so it does when the usage can't be
+		// read: usage never breaks a review's page.
+		if in, out, found, err := d.Store.RunUsage(ctx, run.ID); err != nil {
+			d.Log.Warn("dashboard: reading a run's usage failed", "run", run.ID, "error", err.Error())
+		} else if found {
+			view.Tokens = TokensView{In: in, Out: out}
+		}
 	}
 	writeJSON(w, http.StatusOK, view)
 }
@@ -768,10 +778,13 @@ func (d *Dashboard) repositoryViews(ctx context.Context, se Session, repos []set
 // repository serves a repository's detail, with a trailing /inputs its
 // skills and instructions, with a trailing /readiness its Readiness tab, with
 // a trailing /past-dismissals its Past dismissals, with a trailing
-// /skill-results its Skill results, or with a trailing /teams (admins only)
-// the teams that cover it. A repository whose own path is the one asked for
-// wins over the /inputs, /readiness, /past-dismissals, /skill-results or
-// /teams of another.
+// /skill-results its Skill results, with a trailing /skill-results/tokens
+// (admins only) what each skill used on the changes those count, with a
+// trailing /teams (admins only)
+// the teams that cover it, or with a trailing /usage (admins only) what it
+// used. A repository whose own path is the one asked for wins over the
+// /inputs, /readiness, /past-dismissals, /skill-results, /skill-results/tokens, /teams or /usage of
+// another.
 func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	instance, rest := r.PathValue("instance"), r.PathValue("rest")
@@ -817,6 +830,13 @@ func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Before /skill-results: a path ending in /tokens is never that tab's.
+	if project, ok := strings.CutSuffix(rest, "/skill-results/tokens"); ok {
+		if repo, ok := find(project); ok {
+			d.repositorySkillTokens(w, r, se, repo)
+			return
+		}
+	}
 	if project, ok := strings.CutSuffix(rest, "/skill-results"); ok {
 		if repo, ok := find(project); ok {
 			d.repositorySkillResults(w, r, se, repo)
@@ -826,6 +846,12 @@ func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 	if project, ok := strings.CutSuffix(rest, "/teams"); ok {
 		if repo, ok := find(project); ok {
 			d.repositoryTeams(w, r, se, repo)
+			return
+		}
+	}
+	if project, ok := strings.CutSuffix(rest, "/usage"); ok {
+		if repo, ok := find(project); ok {
+			d.repositoryUsage(w, r, se, repo)
 			return
 		}
 	}

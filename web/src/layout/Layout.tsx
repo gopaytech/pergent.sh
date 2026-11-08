@@ -27,6 +27,7 @@ const adminItems = (waitingUsers: number): NavItem[] => [
   { to: "/admin/teams", label: "Teams", icon: "👥" },
   { to: "/admin/integrations", label: "Integrations", icon: "🔌" },
   { to: "/admin/settings", label: "Settings", icon: "⚙️" },
+  { to: "/admin/usage", label: "Usage", icon: "📈" },
   { to: "/admin/audit", label: "Audit log", icon: "📜" },
 ];
 

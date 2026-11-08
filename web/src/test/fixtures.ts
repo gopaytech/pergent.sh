@@ -20,7 +20,11 @@ import type {
   SkillFetch,
   SignInAdminView,
   SkillResultView,
+  SkillTokensView,
   TeamView,
+  UsageOverviewView,
+  UsageRepositoryView,
+  UsageTokensView,
   UserView,
 } from "../api";
 
@@ -657,4 +661,56 @@ export const pastDismissals: PastDismissalView[] = [
     number: 9,
     fingerprint: "b2c3d4e5f6a1",
   },
+];
+
+// Tokens with the apart counts reported, and with none of them reported.
+const tok = (inn: number, out: number, apart = { cacheRead: 0, cacheWrite: 0, reasoning: 0, unknown: 0 }): UsageTokensView => ({ in: inn, out, ...apart });
+
+// The usage overview: the repository with the most tokens first, one switched
+// off since (its usage is kept, it has no detail page).
+export const usageOverview: UsageOverviewView = {
+  days: 30,
+  tokens: tok(1_200_000, 300_000, { cacheRead: 500_000, cacheWrite: 20_000, reasoning: 0, unknown: 0 }),
+  reviews: 40,
+  daily: [
+    { day: "2026-11-05", tokens: tok(200_000, 50_000) },
+    { day: "2026-11-06", tokens: tok(600_000, 150_000) },
+    { day: "2026-11-07", tokens: tok(400_000, 100_000) },
+  ],
+  repositories: [
+    { instance: "main", project: "acme/payments", switchedOn: true, tokens: tok(900_000, 200_000), reviews: 30 },
+    { instance: "main", project: "acme/widgets", switchedOn: true, tokens: tok(200_000, 80_000), reviews: 8 },
+    { instance: "main", project: "acme/old", switchedOn: false, tokens: tok(100_000, 20_000), reviews: 2 },
+  ],
+};
+
+// One repository's usage: the apart counts of the first skill are unknown for
+// three reviews, a median is missing for incremental reviews.
+export const usageRepository: UsageRepositoryView = {
+  days: 30,
+  daily: [
+    { day: "2026-11-06", tokens: tok(600_000, 150_000) },
+    { day: "2026-11-07", tokens: tok(300_000, 50_000) },
+  ],
+  skills: [
+    { name: "security", tokens: tok(500_000, 100_000, { cacheRead: 0, cacheWrite: 0, reasoning: 0, unknown: 3 }), runs: 12, failed: 1 },
+    { name: "style", tokens: tok(400_000, 100_000, { cacheRead: 7_000, cacheWrite: 1_000, reasoning: 2_000, unknown: 0 }), runs: 9, failed: 0 },
+  ],
+  models: [{ name: "claude-sonnet", tokens: tok(900_000, 200_000), runs: 21, failed: 0 }],
+  mergeRequests: [
+    { iid: 77, title: "Fix the ledger", webURL: "https://gitlab.example.com/acme/payments/-/merge_requests/77", tokens: tok(600_000, 100_000), reviews: 4 },
+    { iid: 78, title: "<img src=x onerror=alert(1)>", webURL: "https://gitlab.example.com/acme/payments/-/merge_requests/78", tokens: tok(300_000, 100_000), reviews: 2 },
+  ],
+  wasted: { failed: tok(40_000, 5_000), reruns: tok(90_000, 10_000), rerunCount: 2, noResult: 1, superseded: 3 },
+  fullMedian: 120_000,
+  incrementalMedian: null,
+  outliers: [{ runID: "run-9", iid: 77, incremental: false, total: 450_000, at: "2026-11-06T10:15:00Z" }],
+};
+
+// What the Skill results tab reads for admins: tokens per skill on the same changes.
+export const skillTokens: SkillTokensView[] = [
+  { skill: "security", tokens: { in: 40_000, out: 8_000 } },
+  { skill: "code-review", tokens: { in: 150_000, out: 30_000 } },
+  { skill: "style", tokens: { in: 5_000, out: 1_000 } },
+  { skill: "docs", tokens: { in: 2_000, out: 400 } },
 ];

@@ -55,6 +55,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/skillfetch"
 	"github.com/gopaytech/pergent.sh/internal/store"
 	"github.com/gopaytech/pergent.sh/internal/syncmap"
+	tokenusage "github.com/gopaytech/pergent.sh/internal/usage"
 	"github.com/gopaytech/pergent.sh/internal/webhook"
 )
 
@@ -346,6 +347,13 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	loops = append(loops, func(ctx context.Context) { every(ctx, commandPruneEvery, pruneCmds) })
 	pruneHooks := pruneDeliveries(st.PruneDeliveries, time.Now, log)
 	loops = append(loops, func(ctx context.Context) { every(ctx, commandPruneEvery, pruneHooks) })
+	// Results stored before usage was recorded are read here, after the
+	// server listens: parsing each (up to 10 MB) must never hold up startup.
+	loops = append(loops, func(ctx context.Context) {
+		if n := tokenusage.Backfill(ctx, st, log); n > 0 {
+			log.Info("recorded the usage of earlier reviews", "runs", n)
+		}
+	})
 	if eng.Scans {
 		loops = append(loops, eng.RunScans)
 	}
