@@ -326,8 +326,10 @@ func (c *Client) GetProject(ctx context.Context, path string) (Project, error) {
 // HasMemberAccess reports whether the token's user has at least minLevel
 // on project id however GitLab grants it: as a member of the project or
 // its group, or through a group the project or its group is shared with.
-// GET /projects/:path's permissions leave shares out; the project listing
-// (GET /projects?min_access_level=, narrowed to the one ID) counts them.
+// GET /projects/:path's permissions leave out access from an ancestor group
+// and shares; the project listing (GET /projects?min_access_level=, narrowed
+// to the one ID with id_after and id_before, and the ID checked in the answer)
+// counts them, as the picker's list does.
 func (c *Client) HasMemberAccess(ctx context.Context, id int64, minLevel int) (bool, error) {
 	q := url.Values{
 		"min_access_level": {strconv.Itoa(minLevel)}, "simple": {"true"},
@@ -914,73 +916,6 @@ type ProjectListOptions struct {
 	Limit int
 	// CallTimeout bounds each page's request; 0 means only ctx bounds it.
 	CallTimeout time.Duration
-}
-
-// ErrSearchIncomplete is ListsProject's error when its page budget ended
-// before the search did: it can't tell.
-var ErrSearchIncomplete = errors.New("gitlab: the project search ran out of pages before it found an answer")
-
-// ProjectLookup bounds ListsProject.
-type ProjectLookup struct {
-	// MinAccessLevel is the least member access level, as in
-	// ProjectListOptions.
-	MinAccessLevel int
-	// MaxPages is the most pages (100 projects each) read.
-	MaxPages int
-	// CallTimeout bounds each page's request; 0 means only ctx bounds it.
-	CallTimeout time.Duration
-}
-
-// ListsProject finds the project at path in the listing ProjectPaths reads
-// with the same MinAccessLevel, and returns the path as GitLab spells it: GitLab
-// paths are unique whatever the case, so the match ignores it. It asks the way
-// the picker does, GET /projects?min_access_level=, searching the project's
-// path with search_namespaces and paging until the path turns up.
-// GET /projects/:path would not do: its permissions leave out access gained
-// through an ancestor group or a share. found is false when the listing has
-// no such project. When o.MaxPages end with more pages to read, the answer is
-// ErrSearchIncomplete, not "not found".
-func (c *Client) ListsProject(ctx context.Context, path string, o ProjectLookup) (listed string, found bool, err error) {
-	if path == "" || strings.HasSuffix(path, "/") {
-		return "", false, nil
-	}
-	// The whole path is searched, not the name: GitLab matches a search under
-	// 3 characters exactly (a project called ab would be compared with
-	// acme/ab and missed), and a path is always longer and matches far fewer
-	// projects than a common name would.
-	q := url.Values{"min_access_level": {strconv.Itoa(o.MinAccessLevel)}, "simple": {"true"},
-		"search": {path}, "search_namespaces": {"true"}}
-	q.Set("per_page", "100")
-	for pages := 1; ; pages++ {
-		pctx, cancel := ctx, context.CancelFunc(func() {})
-		if o.CallTimeout > 0 {
-			pctx, cancel = context.WithTimeout(ctx, o.CallTimeout)
-		}
-		resp, err := c.do(pctx, http.MethodGet, "/projects", q, nil)
-		cancel()
-		if err != nil {
-			return "", false, err
-		}
-		var page []struct {
-			Path string `json:"path_with_namespace"`
-		}
-		if err := decode(resp.body, &page); err != nil {
-			return "", false, err
-		}
-		for _, p := range page {
-			if strings.EqualFold(p.Path, path) {
-				return p.Path, true, nil
-			}
-		}
-		next := strings.TrimSpace(resp.header.Get("X-Next-Page"))
-		if next == "" {
-			return "", false, nil
-		}
-		if pages >= o.MaxPages {
-			return "", false, ErrSearchIncomplete
-		}
-		q.Set("page", next)
-	}
 }
 
 // ProjectPageOptions selects the one page ProjectPage reads.

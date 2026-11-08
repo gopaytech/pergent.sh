@@ -383,15 +383,8 @@ func (f *Forge) ReachablePage(ctx context.Context, search string, page, perPage 
 		Page: page, PerPage: perPage, CallTimeout: callTimeout})
 }
 
-// reachPages and reachBudget bound CanReach's search: at most 20 pages of
-// 100 projects, and 20 s in all (callTimeout for each request).
-const (
-	reachPages  = 20
-	reachBudget = 20 * time.Second
-)
-
 // CanReach reports whether the review bot can set project up: whether
-// ReachableRepos would list it, ignoring case. See ReachableName.
+// ReachableRepos would list it. See ReachableName.
 func (f *Forge) CanReach(ctx context.Context, project string) (bool, error) {
 	_, ok, err := f.ReachableName(ctx, project)
 	return ok, err
@@ -399,19 +392,41 @@ func (f *Forge) CanReach(ctx context.Context, project string) (bool, error) {
 
 // ReachableName is CanReach that also returns the project's path as GitLab
 // spells it (GitLab paths are unique whatever the case), the name to switch
-// it on under. It asks the same listing as the picker (the project's name
-// searched, then paged for the path), because the project's own permissions
-// leave out Maintainer access gained through an ancestor group or a share, and
-// the picker shows those. A project it can't see is false; a failure to tell,
-// or a search that ran out of pages or time, is an error.
+// it on under. It looks the project up by its path, and then asks the project
+// listing the picker reads (min_access_level, narrowed to that one ID), because
+// the project's own permissions leave out Maintainer access gained through an
+// ancestor group or a share, and the picker shows those. Two requests, with no
+// search and no paging. A project it can't see is false; so is a path GitLab
+// answers with another project's (an old path of a renamed project, or an ID);
+// a failure to tell is an error.
 func (f *Forge) ReachableName(ctx context.Context, project string) (string, bool, error) {
-	ctx, cancel := context.WithTimeout(ctx, reachBudget)
-	defer cancel()
-	name, ok, err := f.c.ListsProject(ctx, project, gitlab.ProjectLookup{MinAccessLevel: maintainer,
-		MaxPages: reachPages, CallTimeout: callTimeout})
-	var ae *gitlab.APIError
-	if errors.Is(err, gitlab.ErrNotFound) || (errors.As(err, &ae) && ae.Status == http.StatusForbidden) {
+	if project == "" || strings.HasSuffix(project, "/") {
 		return "", false, nil
 	}
-	return name, ok, err
+	notReached := func(err error) bool {
+		var ae *gitlab.APIError
+		return errors.Is(err, gitlab.ErrNotFound) || (errors.As(err, &ae) && ae.Status == http.StatusForbidden)
+	}
+	pctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	p, err := f.c.GetProject(pctx, project)
+	if notReached(err) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if p.ID == 0 || !strings.EqualFold(p.PathWithNamespace, project) {
+		return "", false, nil
+	}
+	lctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	ok, err := f.c.HasMemberAccess(lctx, p.ID, maintainer)
+	if notReached(err) {
+		return "", false, nil
+	}
+	if err != nil || !ok {
+		return "", false, err
+	}
+	return p.PathWithNamespace, true, nil
 }
