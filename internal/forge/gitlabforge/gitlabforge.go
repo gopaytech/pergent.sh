@@ -180,6 +180,8 @@ func State(s forge.StatusState) gitlab.StatusState {
 		return gitlab.StatusSkipped
 	case forge.StatusCanceled:
 		return gitlab.StatusCanceled
+	case forge.StatusPending:
+		return gitlab.StatusPending
 	default:
 		return gitlab.StatusFailed
 	}
@@ -270,9 +272,31 @@ func (f *Forge) IsBot(ctx context.Context, userID int64) (bool, error) {
 	return bot, mapErr(err)
 }
 
-// Visibility is not supported on GitLab: linked repositories are GitHub only.
-func (f *Forge) Visibility(context.Context, string) (forge.Visibility, error) {
-	return "", forge.ErrUnsupported
+// Visibility reads the project's visibility. A project the review bot can't
+// read is forge.ErrSourceNotFound; a missing or unknown value is an error,
+// never public.
+func (f *Forge) Visibility(ctx context.Context, repo string) (forge.Visibility, error) {
+	p, err := f.c.GetProject(ctx, repo)
+	if unreadable(err) {
+		return "", forge.ErrSourceNotFound
+	}
+	if err != nil {
+		return "", mapErr(err)
+	}
+	switch v := forge.Visibility(p.Visibility); v {
+	case forge.VisPublic, forge.VisInternal, forge.VisPrivate:
+		return v, nil
+	}
+	return "", fmt.Errorf("gitlab: project %s has visibility %q", repo, p.Visibility)
+}
+
+// UserByName looks a user up by username; repo is not used.
+func (f *Forge) UserByName(ctx context.Context, _, username string) (forge.User, error) {
+	u, err := f.c.UserByUsername(ctx, username)
+	if err != nil {
+		return forge.User{}, mapErr(err)
+	}
+	return forge.User{ID: u.ID, Username: u.Username}, nil
 }
 
 // Comment reads a note of merge request iid back from GitLab.

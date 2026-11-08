@@ -248,8 +248,9 @@ func TestSetStatus(t *testing.T) {
 		forge.StatusFailed:   "failed",
 		forge.StatusNeutral:  "skipped",
 		forge.StatusCanceled: "canceled",
+		forge.StatusPending:  "pending",
 		"":                   "failed",
-		"pending":            "failed",
+		"weird":              "failed",
 	} {
 		t.Run(string(in), func(t *testing.T) {
 			f := newFake(t)
@@ -441,8 +442,9 @@ func TestState(t *testing.T) {
 		forge.StatusFailed:   gitlab.StatusFailed,
 		forge.StatusNeutral:  gitlab.StatusSkipped,
 		forge.StatusCanceled: gitlab.StatusCanceled,
+		forge.StatusPending:  gitlab.StatusPending,
 		"":                   gitlab.StatusFailed,
-		"pending":            gitlab.StatusFailed,
+		"weird":              gitlab.StatusFailed,
 	} {
 		if got := State(in); got != want {
 			t.Errorf("State(%q) = %q, want %q", in, got, want)
@@ -908,14 +910,52 @@ func TestComment(t *testing.T) {
 	}
 }
 
-// Linked repositories are GitHub only.
-func TestVisibilityUnsupported(t *testing.T) {
-	f := newFake(t)
-	got, err := f.forge().Visibility(context.Background(), "acme/widgets")
-	if !errors.Is(err, forge.ErrUnsupported) || got != "" {
-		t.Fatalf("Visibility = %q, %v; want ErrUnsupported and no visibility", got, err)
+// GitLab's project visibility is read from the project.
+func TestVisibility(t *testing.T) {
+	for vis, want := range map[string]forge.Visibility{"public": forge.VisPublic, "internal": forge.VisInternal, "private": forge.VisPrivate} {
+		f := newFake(t)
+		f.on("GET", "/projects/acme%2Fwidgets", 200, map[string]any{"id": 7, "path_with_namespace": "acme/widgets", "visibility": vis})
+		if got, err := f.forge().Visibility(context.Background(), "acme/widgets"); err != nil || got != want {
+			t.Errorf("%s: Visibility = %q, %v; want %q", vis, got, err, want)
+		}
 	}
-	if len(f.reqs) != 0 {
-		t.Errorf("Visibility asked GitLab: %+v", f.reqs)
+	for name, body := range map[string]map[string]any{
+		"missing": {"id": 7, "path_with_namespace": "acme/widgets"},
+		"unknown": {"id": 7, "path_with_namespace": "acme/widgets", "visibility": "everyone"},
+	} {
+		f := newFake(t)
+		f.on("GET", "/projects/acme%2Fwidgets", 200, body)
+		if got, err := f.forge().Visibility(context.Background(), "acme/widgets"); err == nil {
+			t.Errorf("%s: Visibility = %q, want an error", name, got)
+		}
+	}
+	f := newFake(t)
+	f.on("GET", "/projects/acme%2Fwidgets", 404, map[string]any{"message": "404 Project Not Found"})
+	if _, err := f.forge().Visibility(context.Background(), "acme/widgets"); !errors.Is(err, forge.ErrSourceNotFound) {
+		t.Errorf("404: err = %v, want ErrSourceNotFound", err)
+	}
+}
+
+// A username is looked up exactly, ignoring case.
+func TestUserByName(t *testing.T) {
+	f := newFake(t)
+	f.on("GET", "/users", 200, []map[string]any{{"id": 5, "username": "Alice"}})
+	u, err := f.forge().UserByName(context.Background(), "acme/widgets", "alice")
+	if err != nil || u != (forge.User{ID: 5, Username: "Alice"}) {
+		t.Fatalf("UserByName = %+v, %v", u, err)
+	}
+	if q := f.only().Query; q != "username=alice" {
+		t.Errorf("asked with query %q, want username=alice", q)
+	}
+
+	f = newFake(t)
+	f.on("GET", "/users", 200, []map[string]any{{"id": 6, "username": "alice2"}})
+	if _, err := f.forge().UserByName(context.Background(), "acme/widgets", "alice"); !errors.Is(err, forge.ErrNotFound) {
+		t.Errorf("no exact match: err = %v, want ErrNotFound", err)
+	}
+	f = newFake(t)
+	f.on("GET", "/users", 500, map[string]any{"message": "boom"})
+	if _, err := f.forge().UserByName(context.Background(), "acme/widgets", "alice"); err == nil || errors.Is(err, forge.ErrNotFound) {
+		t.Errorf("500: err = %v, want an error that isn't ErrNotFound", err)
 	}
 }

@@ -20,6 +20,7 @@ const (
 	StatusFailed   StatusState = "failed"
 	StatusCanceled StatusState = "canceled"
 	StatusSkipped  StatusState = "skipped"
+	StatusPending  StatusState = "pending"
 )
 
 // DiffRefs are the three SHAs GitLab computes for a merge request.
@@ -83,6 +84,8 @@ type Project struct {
 	DefaultBranch                             string `json:"default_branch"`
 	OnlyAllowMergeIfPipelineSucceeds          *bool  `json:"only_allow_merge_if_pipeline_succeeds"`
 	OnlyAllowMergeIfAllDiscussionsAreResolved *bool  `json:"only_allow_merge_if_all_discussions_are_resolved"`
+	// Visibility is "public", "internal" or "private".
+	Visibility string `json:"visibility"`
 }
 
 // Diff is one file of a merge request's or a comparison's diff. Diff holds

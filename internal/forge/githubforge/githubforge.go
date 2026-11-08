@@ -369,11 +369,27 @@ func (f *Forge) SetStatus(ctx context.Context, repoID int64, sha string, s forge
 		return err
 	}
 	status, conclusion, title := "completed", Conclusion(s), description
-	if s == forge.StatusRunning {
+	switch s {
+	case forge.StatusRunning:
 		status, conclusion, title = "in_progress", "", runningTitle
+	case forge.StatusPending:
+		status, conclusion = "queued", ""
 	}
 	_, err = c.CreateCheckRun(ctx, r.Owner, r.Name, checkName, sha, status, conclusion, title, checkSummary)
 	return mapErr(err)
+}
+
+// UserByName looks a login up through the installation that covers repo.
+func (f *Forge) UserByName(ctx context.Context, repo, username string) (forge.User, error) {
+	c, _, _, err := f.source(ctx, repo)
+	if err != nil {
+		return forge.User{}, err
+	}
+	u, err := c.UserByLogin(ctx, username)
+	if err != nil {
+		return forge.User{}, mapErr(err)
+	}
+	return forge.User{ID: u.ID, Username: u.Login}, nil
 }
 
 // Conclusion maps a finished status onto a Check Run conclusion. Anything
