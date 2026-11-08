@@ -94,38 +94,44 @@ func snapshotOf(t store.MetricsTotals, on []settings.Effective, library []store.
 
 	snap := metrics.New()
 	for _, u := range t.Tokens {
-		base := []metrics.Label{label("instance", u.Instance), label("repository", repo(u.Instance, u.Project)),
+		base := []metrics.Label{label("platform_instance", u.Instance), label("repository", repo(u.Instance, u.Project)),
 			label("skill", skill(u.Skill)), label("model", u.Model)}
-		for _, k := range []struct {
+		type kindCount struct {
 			kind string
 			n    int64
-		}{
-			{"input", u.Tokens.In}, {"output", u.Tokens.Out}, {"reasoning", u.Tokens.Reasoning},
-			{"cache_read", u.Tokens.CacheRead}, {"cache_write", u.Tokens.CacheWrite},
-		} {
+		}
+		kinds := []kindCount{{"input", u.Tokens.In}, {"output", u.Tokens.Out}}
+		// Cache and reasoning counts are unknown, not zero, for results from
+		// an older pergent: when no row of the group reported them the series
+		// are left out. When some did, their sum stands.
+		if u.Tokens.Unknown < u.Rows {
+			kinds = append(kinds, kindCount{"reasoning", u.Tokens.Reasoning},
+				kindCount{"cache_read", u.Tokens.CacheRead}, kindCount{"cache_write", u.Tokens.CacheWrite})
+		}
+		for _, k := range kinds {
 			snap.Add(metrics.TokensTotal, k.n, append(base[:4:4], label("kind", k.kind))...)
 		}
 	}
 	for _, u := range t.Reviews {
-		snap.Add(metrics.ReviewsTotal, u.Reviews, label("instance", u.Instance), label("repository", repo(u.Instance, u.Project)),
+		snap.Add(metrics.ReviewsTotal, u.Reviews, label("platform_instance", u.Instance), label("repository", repo(u.Instance, u.Project)),
 			label("trigger", u.Trigger), label("incremental", strconv.FormatBool(u.Incremental)))
 	}
 	for _, u := range t.Unfinished {
-		l := []metrics.Label{label("instance", u.Instance), label("repository", repo(u.Instance, u.Project))}
+		l := []metrics.Label{label("platform_instance", u.Instance), label("repository", repo(u.Instance, u.Project))}
 		snap.Add(metrics.ReviewsNoResultTotal, u.NoResult, l...)
 		snap.Add(metrics.ReviewsSupersededTotal, u.Superseded, l...)
 	}
 	for _, u := range t.SkillRuns {
-		snap.Add(metrics.SkillRunsTotal, u.Runs, label("instance", u.Instance), label("repository", repo(u.Instance, u.Project)),
+		snap.Add(metrics.SkillRunsTotal, u.Runs, label("platform_instance", u.Instance), label("repository", repo(u.Instance, u.Project)),
 			label("skill", skill(u.Skill)), label("verdict", u.Verdict))
 	}
 	for _, u := range t.Findings {
-		base := []metrics.Label{label("instance", u.Instance), label("repository", repo(u.Instance, u.Project)), label("skill", skill(u.Skill))}
+		base := []metrics.Label{label("platform_instance", u.Instance), label("repository", repo(u.Instance, u.Project)), label("skill", skill(u.Skill))}
 		snap.Add(metrics.FindingsTotal, u.Blocking, append(base[:3:3], label("severity", "blocking"))...)
 		snap.Add(metrics.FindingsTotal, u.Suggestions, append(base[:3:3], label("severity", "suggestion"))...)
 	}
 	for _, u := range t.Dismissals {
-		snap.Add(metrics.DismissalsTotal, u.Dismissals, label("instance", u.Instance), label("repository", repo(u.Instance, u.Project)),
+		snap.Add(metrics.DismissalsTotal, u.Dismissals, label("platform_instance", u.Instance), label("repository", repo(u.Instance, u.Project)),
 			label("skill", skill(u.Skill)))
 	}
 	return snap

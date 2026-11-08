@@ -55,7 +55,7 @@ func metricsGet(t *testing.T, method, url string) (int, string, http.Header) {
 func TestMetricsServerServesOnlyMetrics(t *testing.T) {
 	addr, _, _ := startMetrics(t, func(context.Context) (metrics.Snapshot, error) {
 		s := metrics.New()
-		s.Add(metrics.ReviewsNoResultTotal, 3, metrics.Label{Name: "instance", Value: "main"}, metrics.Label{Name: "repository", Value: "acme/widgets"})
+		s.Add(metrics.ReviewsNoResultTotal, 3, metrics.Label{Name: "platform_instance", Value: "main"}, metrics.Label{Name: "repository", Value: "acme/widgets"})
 		return s, nil
 	})
 	code, body, header := metricsGet(t, http.MethodGet, "http://"+addr+"/metrics")
@@ -66,7 +66,7 @@ func TestMetricsServerServesOnlyMetrics(t *testing.T) {
 		t.Errorf("Content-Type = %q", got)
 	}
 	if !strings.Contains(body, "# TYPE pergent_reviews_no_result_total counter\n") ||
-		!strings.Contains(body, `pergent_reviews_no_result_total{instance="main",repository="acme/widgets"} 3`+"\n") {
+		!strings.Contains(body, `pergent_reviews_no_result_total{platform_instance="main",repository="acme/widgets"} 3`+"\n") {
 		t.Errorf("body = %q", body)
 	}
 	for _, p := range []string{"/healthz", "/api/me", "/api/", "/", "/metrics/", "/runs/1/result", "/webhooks/gitlab/main"} {
@@ -145,16 +145,16 @@ func TestSnapshotOfBoundsTheLabels(t *testing.T) {
 	zero := store.TokenSum{}
 	totals := store.MetricsTotals{
 		Tokens: []store.TokenTotal{
-			{Instance: "main", Project: "Acme/Widgets", Skill: "security", Model: "m", Tokens: store.TokenSum{In: 10, Out: 2, CacheRead: 5, Reasoning: 1}},
+			{Instance: "main", Project: "Acme/Widgets", Skill: "security", Model: "m", Tokens: store.TokenSum{In: 10, Out: 2, CacheRead: 5, Reasoning: 1}, Rows: 1},
 			// The same repository under another spelling and an older path: one series each way.
-			{Instance: "main", Project: "acme/widgets", Skill: "security", Model: "m", Tokens: store.TokenSum{In: 1, Out: 1}},
-			{Instance: "main", Project: "acme/gone", Skill: "security", Model: "m", Tokens: store.TokenSum{In: 100}},
-			{Instance: "main", Project: "acme/old-name", Skill: "security", Model: "m", Tokens: store.TokenSum{In: 200}},
-			{Instance: "main", Project: "acme/widgets", Skill: "typo-skill", Model: "m", Tokens: store.TokenSum{In: 3}},
-			{Instance: "main", Project: "acme/widgets", Skill: "another-skill", Model: "m", Tokens: store.TokenSum{In: 4}},
-			{Instance: "main", Project: "acme/widgets", Skill: "own", Model: "m", Tokens: store.TokenSum{Out: 6}},
-			{Instance: "main", Project: "acme/widgets", Skill: "from-repo", Model: "m", Tokens: store.TokenSum{Out: 7}},
-			{Instance: "other", Project: "acme/widgets", Skill: "security", Model: "m", Tokens: zero}, // another instance's repository
+			{Instance: "main", Project: "acme/widgets", Skill: "security", Model: "m", Tokens: store.TokenSum{In: 1, Out: 1}, Rows: 1},
+			{Instance: "main", Project: "acme/gone", Skill: "security", Model: "m", Tokens: store.TokenSum{In: 100}, Rows: 1},
+			{Instance: "main", Project: "acme/old-name", Skill: "security", Model: "m", Tokens: store.TokenSum{In: 200}, Rows: 1},
+			{Instance: "main", Project: "acme/widgets", Skill: "typo-skill", Model: "m", Tokens: store.TokenSum{In: 3}, Rows: 1},
+			{Instance: "main", Project: "acme/widgets", Skill: "another-skill", Model: "m", Tokens: store.TokenSum{In: 4}, Rows: 1},
+			{Instance: "main", Project: "acme/widgets", Skill: "own", Model: "m", Tokens: store.TokenSum{Out: 6}, Rows: 1},
+			{Instance: "main", Project: "acme/widgets", Skill: "from-repo", Model: "m", Tokens: store.TokenSum{Out: 7}, Rows: 1},
+			{Instance: "other", Project: "acme/widgets", Skill: "security", Model: "m", Tokens: zero, Rows: 1}, // another instance's repository
 		},
 		Reviews: []store.ReviewTotal{
 			{Instance: "main", Project: "acme/widgets", Trigger: "push", Incremental: true, Reviews: 2},
@@ -180,28 +180,28 @@ func TestSnapshotOfBoundsTheLabels(t *testing.T) {
 
 	for _, want := range []string{
 		// Two spellings of one switched-on repository are one series; the label is the spelling of the list.
-		`pergent_tokens_total{instance="main",repository="acme/Widgets",skill="security",model="m",kind="input"} 11`,
-		`pergent_tokens_total{instance="main",repository="acme/Widgets",skill="security",model="m",kind="output"} 3`,
-		`pergent_tokens_total{instance="main",repository="acme/Widgets",skill="security",model="m",kind="cache_read"} 5`,
-		`pergent_tokens_total{instance="main",repository="acme/Widgets",skill="security",model="m",kind="reasoning"} 1`,
-		`pergent_tokens_total{instance="main",repository="acme/Widgets",skill="security",model="m",kind="cache_write"} 0`,
+		`pergent_tokens_total{platform_instance="main",repository="acme/Widgets",skill="security",model="m",kind="input"} 11`,
+		`pergent_tokens_total{platform_instance="main",repository="acme/Widgets",skill="security",model="m",kind="output"} 3`,
+		`pergent_tokens_total{platform_instance="main",repository="acme/Widgets",skill="security",model="m",kind="cache_read"} 5`,
+		`pergent_tokens_total{platform_instance="main",repository="acme/Widgets",skill="security",model="m",kind="reasoning"} 1`,
+		`pergent_tokens_total{platform_instance="main",repository="acme/Widgets",skill="security",model="m",kind="cache_write"} 0`,
 		// Two repositories not switched on are one.
-		`pergent_tokens_total{instance="main",repository="(switched off)",skill="security",model="m",kind="input"} 300`,
-		`pergent_tokens_total{instance="main",repository="acme/Widgets",skill="(other)",model="m",kind="input"} 3`,
-		`pergent_tokens_total{instance="main",repository="acme/Widgets",skill="another-skill",model="m",kind="input"} 4`,
-		`pergent_tokens_total{instance="main",repository="acme/Widgets",skill="own",model="m",kind="output"} 6`,
-		`pergent_tokens_total{instance="main",repository="acme/Widgets",skill="from-repo",model="m",kind="output"} 7`,
+		`pergent_tokens_total{platform_instance="main",repository="(switched off)",skill="security",model="m",kind="input"} 300`,
+		`pergent_tokens_total{platform_instance="main",repository="acme/Widgets",skill="(other)",model="m",kind="input"} 3`,
+		`pergent_tokens_total{platform_instance="main",repository="acme/Widgets",skill="another-skill",model="m",kind="input"} 4`,
+		`pergent_tokens_total{platform_instance="main",repository="acme/Widgets",skill="own",model="m",kind="output"} 6`,
+		`pergent_tokens_total{platform_instance="main",repository="acme/Widgets",skill="from-repo",model="m",kind="output"} 7`,
 		// The same path on another instance is not switched on there.
-		`pergent_tokens_total{instance="other",repository="(switched off)",skill="security",model="m",kind="input"} 0`,
-		`pergent_reviews_total{instance="main",repository="acme/Widgets",trigger="push",incremental="true"} 2`,
-		`pergent_reviews_total{instance="main",repository="(switched off)",trigger="push",incremental="true"} 5`,
-		`pergent_reviews_no_result_total{instance="main",repository="(switched off)"} 2`,
-		`pergent_reviews_superseded_total{instance="main",repository="(switched off)"} 1`,
-		`pergent_skill_runs_total{instance="main",repository="acme/Widgets",skill="security",verdict="failed"} 5`,
-		`pergent_findings_total{instance="main",repository="acme/Widgets",skill="security",severity="blocking"} 1`,
-		`pergent_findings_total{instance="main",repository="acme/Widgets",skill="security",severity="suggestion"} 3`,
-		`pergent_dismissals_total{instance="main",repository="acme/Widgets",skill="security"} 2`,
-		`pergent_dismissals_total{instance="main",repository="(switched off)",skill="(other)"} 1`,
+		`pergent_tokens_total{platform_instance="other",repository="(switched off)",skill="security",model="m",kind="input"} 0`,
+		`pergent_reviews_total{platform_instance="main",repository="acme/Widgets",trigger="push",incremental="true"} 2`,
+		`pergent_reviews_total{platform_instance="main",repository="(switched off)",trigger="push",incremental="true"} 5`,
+		`pergent_reviews_no_result_total{platform_instance="main",repository="(switched off)"} 2`,
+		`pergent_reviews_superseded_total{platform_instance="main",repository="(switched off)"} 1`,
+		`pergent_skill_runs_total{platform_instance="main",repository="acme/Widgets",skill="security",verdict="failed"} 5`,
+		`pergent_findings_total{platform_instance="main",repository="acme/Widgets",skill="security",severity="blocking"} 1`,
+		`pergent_findings_total{platform_instance="main",repository="acme/Widgets",skill="security",severity="suggestion"} 3`,
+		`pergent_dismissals_total{platform_instance="main",repository="acme/Widgets",skill="security"} 2`,
+		`pergent_dismissals_total{platform_instance="main",repository="(switched off)",skill="(other)"} 1`,
 	} {
 		if !strings.Contains(out, want+"\n") {
 			t.Errorf("missing %s\nin:\n%s", want, out)
@@ -255,7 +255,7 @@ func TestMetricsSourceReadsAllThree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out := metricsText(t, snap); !strings.Contains(out, `pergent_dismissals_total{instance="main",repository="acme/widgets",skill="security"} 1`+"\n") {
+	if out := metricsText(t, snap); !strings.Contains(out, `pergent_dismissals_total{platform_instance="main",repository="acme/widgets",skill="security"} 1`+"\n") {
 		t.Errorf("page = %s", out)
 	}
 	boom := errors.New("boom")
@@ -264,5 +264,44 @@ func TestMetricsSourceReadsAllThree(t *testing.T) {
 	}
 	if _, err := metricsSource(st, fakeRepos{err: boom})(context.Background()); !errors.Is(err, boom) {
 		t.Errorf("a failing repository list gave %v, want its error", err)
+	}
+}
+
+// The cache and reasoning counts are unknown, never zero: with no row of a
+// group reporting them their series are absent, and with some rows reporting
+// them the sum of those stands.
+func TestSnapshotOfLeavesOutUnknownCounts(t *testing.T) {
+	on := []settings.Effective{metricsEff("main", "acme/widgets", []string{"security", "style", "docs"}, nil)}
+	totals := store.MetricsTotals{Tokens: []store.TokenTotal{
+		// Two rows, both from an older pergent.
+		{Instance: "main", Project: "acme/widgets", Skill: "security", Model: "m", Tokens: store.TokenSum{In: 10, Out: 2, Unknown: 2}, Rows: 2},
+		// Three rows, one of which did not report.
+		{Instance: "main", Project: "acme/widgets", Skill: "style", Model: "m", Tokens: store.TokenSum{In: 30, Out: 3, CacheRead: 8, CacheWrite: 4, Reasoning: 2, Unknown: 1}, Rows: 3},
+		// A row that reported zeros: the series are there, with 0.
+		{Instance: "main", Project: "acme/widgets", Skill: "docs", Model: "m", Tokens: store.TokenSum{In: 1, Out: 1}, Rows: 1},
+	}}
+	out := metricsText(t, snapshotOf(totals, on, nil))
+	series := func(skill, kind string) string {
+		return `pergent_tokens_total{platform_instance="main",repository="acme/widgets",skill="` + skill + `",model="m",kind="` + kind + `"}`
+	}
+	for _, kind := range []string{"input", "output"} {
+		if !strings.Contains(out, series("security", kind)) {
+			t.Errorf("security: %s is missing:\n%s", kind, out)
+		}
+	}
+	for _, kind := range []string{"reasoning", "cache_read", "cache_write"} {
+		if strings.Contains(out, series("security", kind)) {
+			t.Errorf("security: %s is written though no row reported it:\n%s", kind, out)
+		}
+	}
+	for kind, n := range map[string]string{"input": "30", "output": "3", "reasoning": "2", "cache_read": "8", "cache_write": "4"} {
+		if want := series("style", kind) + " " + n + "\n"; !strings.Contains(out, want) {
+			t.Errorf("style: missing %q in:\n%s", want, out)
+		}
+	}
+	for _, kind := range []string{"reasoning", "cache_read", "cache_write"} {
+		if want := series("docs", kind) + " 0\n"; !strings.Contains(out, want) {
+			t.Errorf("docs: a reported zero must be written, missing %q in:\n%s", want, out)
+		}
 	}
 }

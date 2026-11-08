@@ -502,8 +502,13 @@ func TestMetricsTotals(t *testing.T) {
 	in := mr1.Instance
 
 	tokens := map[[4]string]TokenSum{}
+	rows := map[[4]string]int64{}
 	for _, u := range got.Tokens {
 		tokens[[4]string{u.Instance, u.Project, u.Skill, u.Model}] = u.Tokens
+		rows[[4]string{u.Instance, u.Project, u.Skill, u.Model}] = u.Rows
+	}
+	if rows[[4]string{in, "acme/p7", "security", "m"}] != 2 || rows[[4]string{in, "acme/p8", "security", "m"}] != 1 {
+		t.Errorf("token rows = %v, want 2 for p7's security and 1 for p8's (all of p8's unreported)", rows)
 	}
 	wantTokens(t, "security on p7", tokens[[4]string{in, "acme/p7", "security", "m"}], TokenSum{In: 120, Out: 10})
 	wantTokens(t, "security on p7 re-run", tokens[[4]string{in, "acme/p7", "security", "other-model"}], TokenSum{In: 7, Out: 3})

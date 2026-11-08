@@ -65,7 +65,7 @@ b_total{repository="z/y",kind="output"} 7
 
 func TestSnapshotAdd(t *testing.T) {
 	s := New()
-	s.Add(TokensTotal, 4, labels("instance", "main")...)
+	s.Add(TokensTotal, 4, labels("platform_instance", "main")...)
 	if len(s.Metrics) != len(names) {
 		t.Fatalf("New declares %d metrics, want %d", len(s.Metrics), len(names))
 	}
@@ -82,7 +82,7 @@ func TestSnapshotAdd(t *testing.T) {
 			t.Errorf("%s has no single # HELP line:\n%s", name, out)
 		}
 	}
-	if !strings.Contains(out, "pergent_tokens_total{instance=\"main\"} 4\n") {
+	if !strings.Contains(out, "pergent_tokens_total{platform_instance=\"main\"} 4\n") {
 		t.Errorf("the added sample is missing:\n%s", out)
 	}
 }
@@ -90,7 +90,7 @@ func TestSnapshotAdd(t *testing.T) {
 func TestHandlerServesTheText(t *testing.T) {
 	h := Handler(func(context.Context) (Snapshot, error) {
 		s := New()
-		s.Add(DismissalsTotal, 2, labels("instance", "main", "repository", "acme/widgets", "skill", "security")...)
+		s.Add(DismissalsTotal, 2, labels("platform_instance", "main", "repository", "acme/widgets", "skill", "security")...)
 		return s, nil
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	rec := httptest.NewRecorder()
@@ -101,7 +101,7 @@ func TestHandlerServesTheText(t *testing.T) {
 	if got := rec.Header().Get("Content-Type"); got != "text/plain; version=0.0.4; charset=utf-8" {
 		t.Errorf("Content-Type = %q", got)
 	}
-	if !strings.Contains(rec.Body.String(), `pergent_dismissals_total{instance="main",repository="acme/widgets",skill="security"} 2`+"\n") {
+	if !strings.Contains(rec.Body.String(), `pergent_dismissals_total{platform_instance="main",repository="acme/widgets",skill="security"} 2`+"\n") {
 		t.Errorf("body = %q", rec.Body.String())
 	}
 }

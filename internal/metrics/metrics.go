@@ -32,7 +32,7 @@ var names = []string{TokensTotal, ReviewsTotal, ReviewsNoResultTotal, ReviewsSup
 	SkillRunsTotal, FindingsTotal, DismissalsTotal}
 
 var help = map[string]string{
-	TokensTotal:            "Tokens used by reviews, by kind: input, output, reasoning, cache_read or cache_write. A count a Job did not report adds nothing.",
+	TokensTotal:            "Tokens used by reviews, by kind: input, output, reasoning, cache_read or cache_write. The reasoning, cache_read and cache_write series are absent for a repository, skill and model when no review reported them, and count only the reviews that did when some did not.",
 	ReviewsTotal:           "Reviews that left a result, by what started them and whether they covered only the files changed since the last review.",
 	ReviewsNoResultTotal:   "Reviews that failed before leaving a result.",
 	ReviewsSupersededTotal: "Reviews stopped by a newer push before they left a result.",

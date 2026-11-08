@@ -448,6 +448,7 @@ type MetricsTotals struct {
 type TokenTotal struct {
 	Instance, Project, Skill, Model string
 	Tokens                          TokenSum
+	Rows                            int64 // run and skill rows counted; Tokens.Unknown of them did not report cache and reasoning
 }
 
 // ReviewTotal is the reviews with a result in one repository, by trigger and
@@ -493,14 +494,14 @@ type DismissalTotal struct {
 // repository is switched off.
 func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	var t MetricsTotals
-	rows, err := s.pool.Query(ctx, `SELECT instance, project_path, skill, model, `+tokenSumColumns+`
+	rows, err := s.pool.Query(ctx, `SELECT instance, project_path, skill, model, `+tokenSumColumns+`, count(*)
 		FROM run_usage GROUP BY instance, project_path, skill, model`)
 	if err != nil {
 		return MetricsTotals{}, err
 	}
 	if t.Tokens, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (TokenTotal, error) {
 		var u TokenTotal
-		err := row.Scan(append([]any{&u.Instance, &u.Project, &u.Skill, &u.Model}, u.Tokens.dests()...)...)
+		err := row.Scan(append([]any{&u.Instance, &u.Project, &u.Skill, &u.Model}, append(u.Tokens.dests(), &u.Rows)...)...)
 		return u, err
 	}); err != nil {
 		return MetricsTotals{}, err
