@@ -379,6 +379,8 @@ function Form({
     trustedAuthors: settings.trustedAuthors.value,
     model: settings.model.value ?? "",
   };
+  // What "Default" would give the repository; none flagged, none named.
+  const defaultChoice = modelChoices.find((c) => c.default);
   const [newAuthor, setNewAuthor] = useState("");
   const [d, setD] = useState<Draft>(initial);
   const [problem, setProblem] = useState("");
@@ -583,8 +585,7 @@ function Form({
           <select aria-label="Model" value={d.model} disabled={disabled || !canSetModel} onChange={(e) => set("model", e.target.value)}>
             {canSetModel ? (
               <>
-                {/* Only the default's own label is known while the repository follows it. */}
-                <option value="">{initial.model === "" && modelNow !== "" ? `Default (${modelNow})` : "Default"}</option>
+                <option value="">{defaultChoice ? `Default (${defaultChoice.label})` : "Default"}</option>
                 {modelChoices.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.label}

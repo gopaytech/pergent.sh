@@ -370,10 +370,13 @@ type RepositoryDetailView struct {
 }
 
 // ModelChoiceView is an entry of the list of models a repository can be
-// given: its ID, and "provider / model" to show.
+// given: its ID, and "provider / model" to show. Default marks the entry
+// reviews use when a repository names none, so the page can name what
+// "Default" would move the repository to.
 type ModelChoiceView struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
+	ID      string `json:"id"`
+	Label   string `json:"label"`
+	Default bool   `json:"default"`
 }
 
 // WaitingView is a change of an author the repository doesn't trust, not

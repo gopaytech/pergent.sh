@@ -4066,12 +4066,15 @@ components:
     ModelChoiceView:
       description: An entry of the list a repository can be given, never with its base URL or key.
       type: object
-      required: [id, label]
+      required: [id, label, default]
       properties:
         id: {type: string}
         label:
           type: string
           description: '`provider / model`.'
+        default:
+          type: boolean
+          description: True for the entry reviews use when a repository names none, which is what choosing the default gives.
     LLMView:
       description: The model reviews use.
       type: object

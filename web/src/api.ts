@@ -279,8 +279,8 @@ export type RepoSettings = {
 };
 
 // ModelChoice is an entry of the list of models a repository can be given:
-// its ID, and "provider / model" to show.
-export type ModelChoice = { id: string; label: string };
+// its ID, "provider / model" to show, and whether it is the default.
+export type ModelChoice = { id: string; label: string; default: boolean };
 
 export type RepositoryDetailView = {
   repo: RepositoryView;

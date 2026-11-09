@@ -430,7 +430,7 @@ func (d *Dashboard) modelChoices(role Role) []ModelChoiceView {
 		return out
 	}
 	for _, m := range d.registry.Models() {
-		out = append(out, ModelChoiceView{ID: m.ID, Label: modelLabel(m.LLM.Provider, m.LLM.Model)})
+		out = append(out, ModelChoiceView{ID: m.ID, Label: modelLabel(m.LLM.Provider, m.LLM.Model), Default: m.Default})
 	}
 	return out
 }

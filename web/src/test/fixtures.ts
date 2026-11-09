@@ -303,8 +303,8 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
   modelChoices:
     role === "admin"
       ? [
-          { id: "m-sonnet", label: "anthropic / claude-sonnet" },
-          { id: "m-opus", label: "anthropic / claude-opus" },
+          { id: "m-sonnet", label: "anthropic / claude-sonnet", default: true },
+          { id: "m-opus", label: "anthropic / claude-opus", default: false },
         ]
       : [],
 });

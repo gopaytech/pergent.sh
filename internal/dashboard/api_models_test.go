@@ -297,7 +297,8 @@ func TestAdminSetsAndClearsModel(t *testing.T) {
 	if r, _ := e.storedRepo("main", "acme/gadgets"); r.ModelID == nil || *r.ModelID != two.ID {
 		t.Errorf("stored model = %v, want %s", r.ModelID, two.ID)
 	}
-	if len(v.ModelChoices) != 2 || v.ModelChoices[1] != (ModelChoiceView{ID: two.ID, Label: "openai / gpt-x"}) {
+	// The first entry added is the default, and the choices say so.
+	if len(v.ModelChoices) != 2 || !v.ModelChoices[0].Default || v.ModelChoices[1] != (ModelChoiceView{ID: two.ID, Label: "openai / gpt-x"}) {
 		t.Errorf("choices = %+v", v.ModelChoices)
 	}
 

@@ -133,6 +133,21 @@ describe("RepositorySettings: Model", () => {
     ]);
   });
 
+  it("names the default on the first option also when the repository names its own model", async () => {
+    fakeApi(routes(withModel(repoDetail(repoPayments), "m-opus", "anthropic / claude-opus")));
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const select = await screen.findByLabelText("Model");
+    expect(within(select).getAllByRole("option")[0]).toHaveTextContent("Default (anthropic / claude-sonnet)");
+  });
+
+  it("says plain Default when no choice is the default", async () => {
+    const detail = repoDetail(repoPayments);
+    fakeApi(routes({ ...detail, modelChoices: detail.modelChoices.map((c) => ({ ...c, default: false })) }));
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const select = await screen.findByLabelText("Model");
+    expect(within(select).getAllByRole("option")[0]).toHaveTextContent(/^Default$/);
+  });
+
   it("sends the ID of the model picked, and nothing else", async () => {
     const fake = fakeApi(routes(repoDetail(repoPayments)));
     renderApp("/repos/main/acme/payments?tab=settings");
