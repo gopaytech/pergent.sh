@@ -146,6 +146,89 @@ describe("Usage of a repository", () => {
     expect(within(models).getByText("claude-sonnet").closest("tr")).toHaveTextContent("21");
   });
 
+  it("shows the models of each merge request as provider / model, the name alone without a provider", async () => {
+    fakeApi({
+      "GET /api/me": { body: operator },
+      [`GET ${repoPath}`]: {
+        body: {
+          ...usageRepository,
+          mergeRequests: [
+            {
+              ...usageRepository.mergeRequests[0],
+              models: [
+                { provider: "anthropic", model: "claude-sonnet" },
+                { provider: "openrouter", model: "claude-sonnet" },
+              ],
+            },
+            { ...usageRepository.mergeRequests[1], models: [{ provider: "", model: "old-model" }] },
+          ],
+        },
+      },
+    });
+    renderApp("/admin/usage/main/acme/payments");
+    const mrs = await screen.findByRole("region", { name: "Merge requests" });
+    const first = within(mrs).getByRole("link", { name: "77" }).closest("tr") as HTMLElement;
+    expect(first).toHaveTextContent("anthropic / claude-sonnet");
+    expect(first).toHaveTextContent("openrouter / claude-sonnet");
+    const second = within(mrs).getByRole("link", { name: "78" }).closest("tr") as HTMLElement;
+    expect(second).toHaveTextContent("old-model");
+    expect(second).not.toHaveTextContent(" / old-model");
+  });
+
+  it("shows a merge request that ran on no recorded model with no models", async () => {
+    fakeApi(routes());
+    renderApp("/admin/usage/main/acme/payments");
+    const mrs = await screen.findByRole("region", { name: "Merge requests" });
+    expect(within(mrs).getByRole("link", { name: "78" }).closest("tr")).not.toHaveTextContent("claude");
+  });
+
+  it("shows a provider or model as text, never as HTML", async () => {
+    fakeApi({
+      "GET /api/me": { body: operator },
+      [`GET ${repoPath}`]: {
+        body: {
+          ...usageRepository,
+          mergeRequests: [{ ...usageRepository.mergeRequests[0], models: [{ provider: "<img src=x onerror=alert(1)>", model: "<b>m</b>" }] }],
+          models: [{ ...usageRepository.models[0], provider: "<img src=y onerror=alert(2)>", name: "<i>n</i>" }],
+        },
+      },
+    });
+    renderApp("/admin/usage/main/acme/payments");
+    expect(await screen.findByText(/<img src=x onerror=alert\(1\)> \/ <b>m<\/b>/)).toBeInTheDocument();
+    expect(screen.getByText("<img src=y onerror=alert(2)>")).toBeInTheDocument();
+    expect(document.querySelector("img, i")).toBeNull();
+  });
+
+  it("lists one model name under two providers as two rows, each with its provider", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    fakeApi({
+      "GET /api/me": { body: operator },
+      [`GET ${repoPath}`]: {
+        body: {
+          ...usageRepository,
+          models: [
+            { provider: "anthropic", name: "claude-sonnet", tokens: { ...usageRepository.models[0].tokens }, runs: 21, failed: 0 },
+            { provider: "openrouter", name: "claude-sonnet", tokens: { ...usageRepository.models[0].tokens, in: 5_000, out: 1_000 }, runs: 4, failed: 0 },
+          ],
+        },
+      },
+    });
+    renderApp("/admin/usage/main/acme/payments");
+    const models = await screen.findByRole("region", { name: "Models" });
+    expect(within(models).getByRole("columnheader", { name: "Provider" })).toBeInTheDocument();
+    const rows = within(models).getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("anthropic");
+    expect(rows[0]).toHaveTextContent("claude-sonnet");
+    expect(rows[0]).toHaveTextContent("21");
+    expect(rows[1]).toHaveTextContent("openrouter");
+    expect(rows[1]).toHaveTextContent("claude-sonnet");
+    expect(rows[1]).toHaveTextContent("4");
+    // Two rows with one key would make React warn.
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
+  });
+
   it("says unknown cache counts are unknown for the skill runs, never zero", async () => {
     fakeApi(routes());
     renderApp("/admin/usage/main/acme/payments");

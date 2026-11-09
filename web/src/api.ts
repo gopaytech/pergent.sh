@@ -273,7 +273,14 @@ export type RepoSettings = {
   // overridden, else its instance's.
   trustedAuthorsOnly: SettingView<TrustMode>;
   trustedAuthors: SettingView<TrustedAuthor[]>;
+  // model is the ID of the entry of the list of models the repository runs
+  // on; null follows the default.
+  model: SettingView<string | null>;
 };
+
+// ModelChoice is an entry of the list of models a repository can be given:
+// its ID, and "provider / model" to show.
+export type ModelChoice = { id: string; label: string };
 
 export type RepositoryDetailView = {
   repo: RepositoryView;
@@ -286,6 +293,12 @@ export type RepositoryDetailView = {
   // instanceTrustedAuthorsOnly is the instance's mode, which the repository
   // follows unless it sets its own.
   instanceTrustedAuthorsOnly: TrustMode;
+  // model is "provider / model", the one the repository runs on: its own
+  // choice, else the default. "" when there is none. Never a base URL or key.
+  model: string;
+  // modelChoices are the entries an admin of the repository can pick from;
+  // empty for anyone else.
+  modelChoices: ModelChoice[];
 };
 
 // --- readiness (GET .../readiness) ---
@@ -494,6 +507,9 @@ export type SettingsUpdate = Partial<{
   rerunLimitPerRepo: number | null;
   trustedAuthorsOnly: "on" | "off" | null;
   trustedAuthors: TrustedAuthor[] | null;
+  // Admins only, like the two above: the ID of an entry of the list of
+  // models, or null to follow the default.
+  model: string | null;
 }>;
 
 // InputSkill is one skill of the set a review would run. source is
@@ -659,17 +675,34 @@ export type DefaultsView = DefaultValues & {
   pinned: Record<string, boolean>;
 };
 
-// LLMAdminView is GET /api/admin/llm: where the model comes from, the model
-// and whether a key is set. editable is true for an admin when the config
-// has no llm: block.
-export type LLMAdminView = {
-  source: "config" | "dashboard";
+// RepoRef names a repository by instance and project.
+export type RepoRef = { instance: string; project: string };
+
+// ModelAdminView is one entry of the list of models (GET /api/admin/models).
+// source is "config" (read-only, ID "config") or "dashboard". default is the
+// entry reviews use when a repository names none; while the config file has
+// an llm: block, that is its entry alone. The key is only whether it is set.
+// repositories are those that name the entry.
+export type ModelAdminView = {
+  id: string;
   provider: string;
   model: string;
   baseURL: string;
+  source: "config" | "dashboard";
+  default: boolean;
   key: SecretView;
-  editable: boolean;
+  repositories: RepoRef[];
 };
+
+// ModelsAdminView is the list of models. canSetDefault is false while the
+// config file has an llm: block (adding, changing and removing still work).
+// followingDefault counts the repositories that name no model, which a change
+// of the default moves.
+export type ModelsAdminView = { canSetDefault: boolean; followingDefault: number; models: ModelAdminView[] };
+
+// ModelInUseView is the body of the 409 a removal gets while repositories
+// name the model.
+export type ModelInUseView = { error: string; repositories: RepoRef[] };
 
 // InstanceAdminView is one instance in GET /api/admin/instances (admins).
 // secrets has the fields the instance takes: review_token, approve_token

@@ -5,8 +5,9 @@ import type {
   InstanceAdminView,
   LibrarySkill,
   LinkableView,
-  LLMAdminView,
   Me,
+  ModelAdminView,
+  ModelsAdminView,
   OverviewView,
   PastDismissalView,
   RepositoryDetailView,
@@ -292,10 +293,20 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
     rerunLimitPerRepo: { value: 50, overridden: false },
     trustedAuthorsOnly: { value: "follow_visibility", overridden: false },
     trustedAuthors: { value: [], overridden: false },
+    model: { value: null, overridden: false },
   },
   attention: repo.health === "attention" ? [overview.attention[0]] : [],
   waiting: [],
   instanceTrustedAuthorsOnly: "follow_visibility",
+  model: "anthropic / claude-sonnet",
+  // Only an admin of the repository is given the choices.
+  modelChoices:
+    role === "admin"
+      ? [
+          { id: "m-sonnet", label: "anthropic / claude-sonnet" },
+          { id: "m-opus", label: "anthropic / claude-opus" },
+        ]
+      : [],
 });
 
 // A skill written in the dashboard, on the default list.
@@ -496,14 +507,32 @@ export const defaults: DefaultsView = {
   pinned: {},
 };
 
-export const llm: LLMAdminView = {
-  source: "dashboard",
+const modelKey = { set: true, updatedAt: minutesAgo(3 * 24 * 60) };
+
+// The default of the list, and one a repository names.
+export const modelSonnet: ModelAdminView = {
+  id: "m-sonnet",
   provider: "anthropic",
   model: "claude-sonnet",
   baseURL: "",
-  key: { set: true, updatedAt: minutesAgo(3 * 24 * 60) },
-  editable: true,
+  source: "dashboard",
+  default: true,
+  key: modelKey,
+  repositories: [],
 };
+export const modelOpus: ModelAdminView = {
+  id: "m-opus",
+  provider: "anthropic",
+  model: "claude-opus",
+  baseURL: "https://llm.example.com/v1",
+  source: "dashboard",
+  default: false,
+  key: modelKey,
+  repositories: [{ instance: "main", project: "acme/payments" }],
+};
+
+// The list of models: three repositories follow the default.
+export const models: ModelsAdminView = { canSetDefault: true, followingDefault: 3, models: [modelSonnet, modelOpus] };
 
 export const instanceGitLab: InstanceAdminView = {
   name: "main",

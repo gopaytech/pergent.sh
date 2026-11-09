@@ -1,31 +1,40 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 
-import { api, skillBudget, type DefaultsView, type LibrarySkill, type LLMAdminView } from "../api";
+import {
+  api,
+  ApiError,
+  skillBudget,
+  type DefaultsView,
+  type LibrarySkill,
+  type ModelAdminView,
+  type ModelInUseView,
+  type ModelsAdminView,
+} from "../api";
 import CommentLayoutEditor from "../CommentLayoutEditor";
 import { useWrite } from "../layout/write";
 import { ErrorBox, Loading, Switch, bytesText, noFill, secretFill, secretText } from "../ui";
 
 // AdminSettings holds what an admin sets for the whole of pergent.sh: the
-// defaults a repository switched on in the dashboard gets, and the model
-// reviews use.
+// defaults a repository switched on in the dashboard gets, and the list of
+// models reviews can run on.
 export default function AdminSettings() {
   const defaults = useQuery({ queryKey: ["admin-defaults"], queryFn: () => api.get<DefaultsView>("/api/admin/defaults") });
-  const llm = useQuery({ queryKey: ["admin-llm"], queryFn: () => api.get<LLMAdminView>("/api/admin/llm") });
+  const models = useQuery({ queryKey: modelsKey, queryFn: () => api.get<ModelsAdminView>("/api/admin/models") });
   return (
     <div className="narrow">
       <div className="top">
         <div>
           <h1>Settings</h1>
-          <div className="sub">What a repository starts with, and the model reviews use.</div>
+          <div className="sub">What a repository starts with, and the models reviews run on.</div>
         </div>
       </div>
       {defaults.isPending && <Loading />}
       {defaults.isError && <ErrorBox error={defaults.error} />}
       {defaults.isSuccess && <Defaults v={defaults.data} />}
-      {llm.isPending && <Loading />}
-      {llm.isError && <ErrorBox error={llm.error} />}
-      {llm.isSuccess && (llm.data.editable ? <ModelForm v={llm.data} /> : <ModelView v={llm.data} />)}
+      {models.isPending && <Loading />}
+      {models.isError && <ErrorBox error={models.error} />}
+      {models.isSuccess && <Models v={models.data} />}
     </div>
   );
 }
@@ -552,36 +561,13 @@ function SkillPicker({
   );
 }
 
-// --- the model ---
+// --- the models ---
 
-function Item({ k, v }: { k: string; v: string }) {
-  return (
-    <div className="kv">
-      <dt>{k}</dt>
-      <dd>{v}</dd>
-    </div>
-  );
-}
+const modelsKey = ["admin-models"];
 
-// ModelView shows the model when it can't be changed. The key is
-// only ever whether it is set.
-function ModelView({ v }: { v: LLMAdminView }) {
-  return (
-    <section className="card" aria-label="Model">
-      <h2>
-        <span>Model</span>
-        {v.source === "config" && <span className="badge cfg">from the config file</span>}
-      </h2>
-      <dl className="kvs">
-        <Item k="Provider" v={v.provider || "not set"} />
-        <Item k="Model" v={v.model || "not set"} />
-        {v.baseURL && <Item k="Base URL" v={v.baseURL} />}
-        <Item k="Key" v={secretText(v.key)} />
-      </dl>
-      {v.source !== "config" && <div className="foot meta">The model can't be changed here.</div>}
-    </section>
-  );
-}
+const labelOf = (m: { provider: string; model: string }) => `${m.provider} / ${m.model}`;
+const repoText = (r: { instance: string; project: string }) => `${r.instance}: ${r.project}`;
+const repositoriesText = (n: number) => `${n} ${n === 1 ? "repository" : "repositories"}`;
 
 // providers are the opencode provider IDs offered in the list. Any other
 // ID can still be typed under "Other".
@@ -596,45 +582,248 @@ const providers: [string, string][] = [
   ["xai", "xAI (Grok)"],
 ];
 
-// ModelForm edits the model an admin may change. The key is write-only:
-// it is sent when replaced and never shown.
-function ModelForm({ v }: { v: LLMAdminView }) {
+// Models is the list reviews can run on: the default, the ones a repository
+// can be given, and the form to add one. Keys are write-only: they are sent
+// when typed and never shown.
+function Models({ v }: { v: ModelsAdminView }) {
+  return (
+    <>
+      <section className="card" aria-label="Models">
+        <h2>Models</h2>
+        <div className="pad meta">
+          A repository runs on the default model unless an admin of the repository picks another one on its Settings tab.
+        </div>
+        {!v.canSetDefault && (
+          <div className="pad meta">
+            The config file has an llm: block, which is the default; change it there. The models below can still be added,
+            changed and removed.
+          </div>
+        )}
+        {v.models.length === 0 && <div className="pad meta">No model yet. Add one below; the first is the default.</div>}
+        {v.models.map((m) => (
+          <ModelRow key={m.id} m={m} canSetDefault={v.canSetDefault} following={v.followingDefault} />
+        ))}
+      </section>
+      <AddModel />
+    </>
+  );
+}
+
+// inUseBody is the 409 body of a removal of a model that repositories name,
+// or null for any other failure.
+function inUseBody(err: unknown): ModelInUseView | null {
+  if (!(err instanceof ApiError) || err.status !== 409) return null;
+  const b = err.body as Partial<ModelInUseView> | undefined;
+  if (!b || !Array.isArray(b.repositories)) return null;
+  return { error: err.message, repositories: b.repositories };
+}
+
+function ModelRow({ m, canSetDefault, following }: { m: ModelAdminView; canSetDefault: boolean; following: number }) {
   const client = useQueryClient();
   const write = useWrite();
-  const listed = providers.some(([id]) => id === v.provider);
-  const [choice, setChoice] = useState(listed ? v.provider : v.provider ? "other" : "");
-  const [otherID, setOtherID] = useState(listed ? "" : v.provider);
-  const [model, setModel] = useState(v.model);
-  const [baseURL, setBaseURL] = useState(v.baseURL);
+  const [editing, setEditing] = useState(false);
+  const label = labelOf(m);
+  // A change of the list moves what the repository pages offer.
+  const changed = () => {
+    client.invalidateQueries({ queryKey: modelsKey });
+    client.invalidateQueries({ queryKey: ["repo"] });
+  };
+  const makeDefault = useMutation({
+    mutationFn: () => write<ModelsAdminView>("POST", `/api/admin/models/${encodeURIComponent(m.id)}/default`, {}),
+    onSuccess: (list) => {
+      client.setQueryData(modelsKey, list);
+      client.invalidateQueries({ queryKey: ["repo"] });
+    },
+  });
+  const remove = useMutation({
+    mutationFn: () => write<void>("DELETE", `/api/admin/models/${encodeURIComponent(m.id)}`),
+    onSuccess: changed,
+  });
+  const inUse = remove.isError ? inUseBody(remove.error) : null;
+  const fromConfig = m.source === "config";
+  const busy = makeDefault.isPending || remove.isPending;
+  return (
+    <div className="pad stack" role="group" aria-label={label}>
+      <div className="row">
+        <b className="grow mono">{label}</b>
+        {m.default && <span className="badge">default</span>}
+        {fromConfig && <span className="badge cfg">from the config file</span>}
+      </div>
+      {m.baseURL && <div className="meta">Base URL {m.baseURL}</div>}
+      <div className="meta">Key {secretText(m.key)}</div>
+      {m.repositories.length > 0 && <div className="meta">Used by {m.repositories.map(repoText).join(", ")}</div>}
+      {m.default && following > 0 && (
+        <div className="meta">
+          {repositoriesText(following)} name no model and follow it.
+        </div>
+      )}
+      {!fromConfig && !editing && (
+        <div className="actions-row">
+          <button type="button" className="btn small" aria-label={`Edit ${label}`} disabled={busy} onClick={() => setEditing(true)}>
+            Edit
+          </button>
+          {canSetDefault && !m.default && (
+            <button
+              type="button"
+              className="btn small"
+              aria-label={`Set ${label} as default`}
+              disabled={busy}
+              onClick={() => {
+                const moved =
+                  following === 0
+                    ? "No repository follows the default today."
+                    : `The ${repositoriesText(following)} that name no model will review with it from now on.`;
+                if (window.confirm(`Make ${label} the default model? ${moved}`)) makeDefault.mutate();
+              }}
+            >
+              Set as default
+            </button>
+          )}
+          {!m.default && (
+            <button
+              type="button"
+              className="btn small"
+              aria-label={`Remove ${label}`}
+              disabled={busy}
+              onClick={() => {
+                if (window.confirm(`Remove ${label} from the list? Its key is deleted.`)) remove.mutate();
+              }}
+            >
+              Remove
+            </button>
+          )}
+        </div>
+      )}
+      {!fromConfig && m.default && !editing && <div className="meta">Make another model the default to remove this one.</div>}
+      {editing && <EditModel m={m} onDone={() => setEditing(false)} onSaved={changed} />}
+      {makeDefault.isError && <ErrorBox error={makeDefault.error} />}
+      {remove.isError &&
+        (inUse ? (
+          <div className="error" role="alert">
+            {label} is in use. Change the model of these repositories first:
+            <ul>
+              {inUse.repositories.map((r) => (
+                <li key={repoText(r)}>{repoText(r)}</li>
+              ))}
+            </ul>
+          </div>
+        ) : (
+          <ErrorBox error={remove.error} />
+        ))}
+    </div>
+  );
+}
+
+// EditModel changes the base URL of an entry and, when typed, its key. The
+// provider and model never change: another one is a new entry.
+function EditModel({ m, onDone, onSaved }: { m: ModelAdminView; onDone: () => void; onSaved: () => void }) {
+  const write = useWrite();
+  const label = labelOf(m);
+  const [baseURL, setBaseURL] = useState(m.baseURL);
   const [key, setKey] = useState("");
-  // With a key stored, its input waits for Replace; with none, it is needed.
+  // With a key stored, its input waits for Replace; with none, it is offered.
   const [replacing, setReplacing] = useState(false);
-  const [note, setNote] = useState("");
-  const askKey = !v.key.set || replacing;
+  const askKey = !m.key.set || replacing;
   const save = useMutation({
-    mutationFn: (body: Record<string, string>) => write<LLMAdminView>("PUT", "/api/admin/llm", body),
+    mutationFn: (body: Record<string, string>) => write<ModelAdminView>("PUT", `/api/admin/models/${encodeURIComponent(m.id)}`, body),
     // The closure holds the key: drop it with the input, not after 5 minutes.
     gcTime: 0,
-    onMutate: () => setNote(""),
-    onSuccess: (saved) => {
+    onSuccess: () => {
       setKey("");
-      setReplacing(false);
-      setNote("Model saved.");
-      client.setQueryData(["admin-llm"], saved);
+      onSaved();
+      onDone();
     },
   });
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    save.mutate({
+    // An empty base URL clears it; a key goes only when one was typed.
+    save.mutate({ baseURL: baseURL.trim(), ...(askKey && key !== "" ? { apiKey: key } : {}) });
+  };
+  const id = `model-${m.id}`;
+  return (
+    <form className="stack" aria-label={`Edit ${label}`} onSubmit={submit}>
+      <label htmlFor={`${id}-base-url`}>Base URL</label>
+      <input
+        id={`${id}-base-url`}
+        type="text"
+        {...noFill}
+        spellCheck={false}
+        placeholder="the provider's own"
+        value={baseURL}
+        onChange={(e) => setBaseURL(e.target.value)}
+      />
+      <div className="meta">Empty uses the provider's own API. Set it for a proxy or an OpenAI-compatible server.</div>
+      <div className="name">API key</div>
+      <div className="meta">{secretText(m.key)}</div>
+      {askKey ? (
+        <input
+          type="password"
+          aria-label="New API key"
+          {...secretFill}
+          spellCheck={false}
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+        />
+      ) : (
+        <div>
+          <button type="button" className="btn small" onClick={() => setReplacing(true)}>
+            Replace
+          </button>
+        </div>
+      )}
+      {save.isError && <ErrorBox error={save.error} />}
+      <div className="actions-row">
+        <button type="submit" className="btn primary small" disabled={save.isPending}>
+          Save
+        </button>
+        <button type="button" className="btn small" disabled={save.isPending} onClick={onDone}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
+// AddModel adds an entry to the list. The key is write-only: it is sent
+// once and the input is emptied.
+function AddModel() {
+  const client = useQueryClient();
+  const write = useWrite();
+  const [choice, setChoice] = useState("");
+  const [otherID, setOtherID] = useState("");
+  const [model, setModel] = useState("");
+  const [baseURL, setBaseURL] = useState("");
+  const [key, setKey] = useState("");
+  const [note, setNote] = useState("");
+  const add = useMutation({
+    mutationFn: (body: Record<string, string>) => write<ModelAdminView>("POST", "/api/admin/models", body),
+    // The closure holds the key: drop it with the input, not after 5 minutes.
+    gcTime: 0,
+    onMutate: () => setNote(""),
+    onSuccess: (added) => {
+      setChoice("");
+      setOtherID("");
+      setModel("");
+      setBaseURL("");
+      setKey("");
+      setNote(`Added ${labelOf(added)}.`);
+      // The first entry is the default: the list says which.
+      client.invalidateQueries({ queryKey: modelsKey });
+      client.invalidateQueries({ queryKey: ["repo"] });
+    },
+  });
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    add.mutate({
       provider: (choice === "other" ? otherID : choice).trim(),
       model: model.trim(),
       baseURL: baseURL.trim(),
-      ...(askKey && key !== "" ? { apiKey: key } : {}),
+      apiKey: key,
     });
   };
   return (
-    <form className="card pad stack" aria-label="Model" onSubmit={submit}>
-      <h2>Model</h2>
+    <form className="card pad stack" aria-label="Add a model" onSubmit={submit}>
+      <h2>Add a model</h2>
       <label htmlFor="llm-provider">Provider</label>
       <select id="llm-provider" value={choice} onChange={(e) => setChoice(e.target.value)} required>
         <option value="" disabled>
@@ -684,34 +873,25 @@ function ModelForm({ v }: { v: LLMAdminView }) {
         onChange={(e) => setBaseURL(e.target.value)}
       />
       <div className="meta">Empty uses the provider's own API. Set it for a proxy or an OpenAI-compatible server.</div>
-      <div className="name">API key</div>
-      <div className="meta">{secretText(v.key)}</div>
-      {askKey ? (
-        <input
-          type="password"
-          aria-label="New API key"
-          {...secretFill}
-          spellCheck={false}
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-          required={!v.key.set}
-        />
-      ) : (
-        <div>
-          <button type="button" className="btn small" onClick={() => setReplacing(true)}>
-            Replace
-          </button>
-        </div>
-      )}
-      {save.isError && <ErrorBox error={save.error} />}
+      <label htmlFor="llm-api-key">API key</label>
+      <input
+        id="llm-api-key"
+        type="password"
+        {...secretFill}
+        spellCheck={false}
+        value={key}
+        onChange={(e) => setKey(e.target.value)}
+        required
+      />
+      {add.isError && <ErrorBox error={add.error} />}
       {note && (
         <div className="note" role="status">
           {note}
         </div>
       )}
       <div className="actions-row">
-        <button type="submit" className="btn primary" disabled={save.isPending}>
-          Save model
+        <button type="submit" className="btn primary" disabled={add.isPending}>
+          Add model
         </button>
       </div>
     </form>

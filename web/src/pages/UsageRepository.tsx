@@ -12,6 +12,10 @@ const when = (at: string) => `${at.slice(0, 16).replace("T", " ")} UTC`;
 // median is a median of tokens, or a dash when there was no review of that kind.
 const median = (m: number | null) => (m === null ? dash : count(Math.round(m)));
 
+// modelText is a model as "provider / model", the name alone when the
+// reviews recorded no provider.
+const modelText = (m: { provider: string; model: string }) => (m.provider === "" ? m.model : `${m.provider} / ${m.model}`);
+
 // UsageRepository is one repository's usage, for admins: per skill, merge
 // request, model and day, what was wasted and what a review costs. Titles,
 // skill and model names are text only.
@@ -65,6 +69,7 @@ function Body({ view, instance, project }: { view: UsageRepositoryView; instance
           <table className="table">
             <thead>
               <UsageHead first="Merge request">
+                <th>Models</th>
                 <th className="num">Reviews</th>
               </UsageHead>
             </thead>
@@ -75,6 +80,7 @@ function Body({ view, instance, project }: { view: UsageRepositoryView; instance
                     <Link to={paths.review(instance, project, m.iid)}>{m.iid}</Link>{" "}
                     {safeHref(m.webURL) ? <ExternalLink href={m.webURL}>{m.title}</ExternalLink> : m.title}
                   </td>
+                  <td>{m.models.map(modelText).join(", ")}</td>
                   <td className="num">{m.reviews}</td>
                   <UsageCells tokens={m.tokens} />
                 </tr>
@@ -83,7 +89,7 @@ function Body({ view, instance, project }: { view: UsageRepositoryView; instance
           </table>
         )}
       </section>
-      <Named title="Models" first="Model" rows={view.models} />
+      <Named title="Models" first="Model" rows={view.models} provider />
       <DailyTable daily={view.daily} />
       <section className="card scroll" aria-label="Wasted">
         <h2>Wasted</h2>
@@ -150,8 +156,21 @@ function Body({ view, instance, project }: { view: UsageRepositoryView; instance
 
 // Named is a table of skills or models, each with its runs. Only the skills
 // have failed runs: the API has no count of them for a model, so a model's
-// table leaves the column out instead of showing a 0 that means nothing.
-function Named({ title, first, rows, failed = false }: { title: string; first: string; rows: UsageNamedView[]; failed?: boolean }) {
+// table leaves the column out instead of showing a 0 that means nothing. Only
+// the models have a provider, and one name can be there under two of them.
+function Named({
+  title,
+  first,
+  rows,
+  failed = false,
+  provider = false,
+}: {
+  title: string;
+  first: string;
+  rows: UsageNamedView[];
+  failed?: boolean;
+  provider?: boolean;
+}) {
   return (
     <section className="card scroll" aria-label={title}>
       <h2>{title}</h2>
@@ -161,14 +180,16 @@ function Named({ title, first, rows, failed = false }: { title: string; first: s
         <table className="table">
           <thead>
             <UsageHead first={first}>
+              {provider && <th>Provider</th>}
               <th className="num">Runs</th>
               {failed && <th className="num">Failed</th>}
             </UsageHead>
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.name}>
+              <tr key={`${r.provider}\0${r.name}`}>
                 <td>{r.name}</td>
+                {provider && <td>{r.provider === "" ? dash : r.provider}</td>}
                 <td className="num">{r.runs}</td>
                 {failed && <td className="num">{r.failed}</td>}
                 <UsageCells tokens={r.tokens} />
