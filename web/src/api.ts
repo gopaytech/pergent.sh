@@ -639,6 +639,10 @@ export type Approver = "app" | "review_app" | "review_bot" | "token";
 // environment.
 export type SecretView = { set: boolean; updatedAt: string | null };
 
+// CommentFooterView is the text at the bottom of every review comment. note
+// is what an admin set; "" means default is used.
+export type CommentFooterView = { note: string; default: string };
+
 // DefaultsView is the settings a repository switched on in the browser gets
 // when it sets none (jobMemory "" is none).
 export type DefaultValues = {

@@ -8,6 +8,7 @@ package policy
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -147,6 +148,8 @@ type Outcome struct {
 	Redact     func(string) string
 	Hide       func(string) string
 	Mention    string
+	// FooterNote is the footer's text an admin set; "" is the built-in text.
+	FooterNote string
 	FileURL    func(path string, line, endLine int) string
 
 	// InlineOn says findings are posted as inline threads: Inline holds the
@@ -377,7 +380,38 @@ func renderOptions(o Outcome, r *result.Result, changed []string) render.Options
 			opts.Footer = "Run again: `@" + o.Mention + " review` · or reply `@" + o.Mention + " dismiss <reason>` in a finding's thread"
 		}
 	}
+	opts.Footer = withFooterNote(o.FooterNote, opts.Footer)
 	return opts
+}
+
+// DefaultFooterNote is the footer's text when an admin set none.
+const DefaultFooterNote = "Reviewed by [pergent](https://github.com/gopaytech/pergent.sh)"
+
+// withFooterNote puts the note, or the built-in text, in front of the footer.
+func withFooterNote(note, footer string) string {
+	if note == "" {
+		note = DefaultFooterNote
+	}
+	note = noMentions(note)
+	if footer == "" {
+		return note
+	}
+	return note + " · " + footer
+}
+
+// mention finds a URL, which is left whole, or an @ with no word before it,
+// the one an address doesn't have.
+var mention = regexp.MustCompile(`https?://[^\s)]+|\B@`)
+
+// noMentions breaks every mention with a zero-width joiner, as render does:
+// the text is in every review comment, and must not notify anyone on each.
+func noMentions(s string) string {
+	return mention.ReplaceAllStringFunc(s, func(m string) string {
+		if m == "@" {
+			return "@\u200d"
+		}
+		return m
+	})
 }
 
 // metaNote is the last part of the comment's meta line: what an incremental

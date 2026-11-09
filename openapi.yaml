@@ -2757,6 +2757,50 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/comment-footer:
+    get:
+      operationId: getCommentFooter
+      tags: [Instances and settings]
+      summary: The text at the bottom of every review comment
+      description: Admins only.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: The text.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CommentFooterView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    put:
+      operationId: putCommentFooter
+      tags: [Instances and settings]
+      summary: Set the text at the bottom of every review comment
+      description: |
+        Admins only. An empty `note` goes back to the built-in text. A note is
+        one line of at most 200 bytes, with no `<` and no image, or it is 400.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutCommentFooterRequest'}
+      responses:
+        '200':
+          description: Saved.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CommentFooterView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/defaults:
     get:
       operationId: getDefaults
@@ -3473,6 +3517,15 @@ components:
         reason:
           type: string
           enum: [untrusted_author, trust_check_failed]
+    PutCommentFooterRequest:
+      type: object
+      required: [note]
+      additionalProperties: false
+      properties:
+        note:
+          type: string
+          maxLength: 200
+          description: The text. Empty goes back to the built-in text.
     DefaultsRequest:
       type: object
       description: |
@@ -3735,6 +3788,17 @@ components:
         jobMemory: {type: string}
         rerunLimitPerMR: {type: integer}
         rerunLimitPerRepo: {type: integer}
+    CommentFooterView:
+      type: object
+      required: [note, default]
+      additionalProperties: false
+      properties:
+        note:
+          type: string
+          description: The text an admin set. Empty means `default` is used.
+        default:
+          type: string
+          description: The built-in text.
     DefaultsView:
       description: The settings a repository gets when it sets none.
       type: object

@@ -1,5 +1,11 @@
 # ⬆️ Upgrading
 
+## Upgrading to the next release
+
+**Review comments end with a short text.** By default it links to pergent.sh. An admin can change it under **Admin → Settings**: [The footer text](concepts/comment-layout.md#the-footer-text). Existing comments change the next time they are updated.
+
+Migration `0034` runs at startup and only adds a table, so back up Postgres first, as for any migration. The previous release keeps working on the migrated database, and to roll back nothing needs removing from the config: there is no new config key. It ignores the table, so its comments have no footer text.
+
 ## Upgrading to 0.14.0
 
 **Reviews can run on a model from a list.** An admin keeps the list under **Admin → Settings**, picks the default, and can give a repository a model of its own: [Models](concepts/models.md).

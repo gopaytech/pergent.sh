@@ -39,6 +39,15 @@ A comment still over the limit after every step is cut there, with a note, whate
 
 A layout moves and folds the blocks, nothing more. It never changes a verdict, a status, a score, an approval or a count.
 
+## The footer text
+
+The last line of a review comment starts with a short text. By default it is `Reviewed by [pergent](https://github.com/gopaytech/pergent.sh)`. An admin can replace it for the whole deployment under **Admin → Settings**, for example with who runs pergent.sh and how to reach them. Clearing the field goes back to the default.
+
+- It is one line of at most 200 bytes. Markdown links work; `<` and images are refused.
+- An `@` shows as plain text and notifies nobody, because the text is on every review. Addresses and URLs keep theirs.
+- It applies to the next comment pergent.sh posts or updates. Comments already posted keep their text.
+- A "couldn't review" comment has no footer.
+
 **Leaving a block out.**
 
 - Leave out `checks`, and the failed checks still show. The passed and n/a checks do not.

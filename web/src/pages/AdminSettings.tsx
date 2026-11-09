@@ -5,6 +5,7 @@ import {
   api,
   ApiError,
   skillBudget,
+  type CommentFooterView,
   type DefaultsView,
   type LibrarySkill,
   type ModelAdminView,
@@ -20,22 +21,78 @@ import { ErrorBox, Loading, Switch, bytesText, noFill, secretFill, secretText } 
 // models reviews can run on.
 export default function AdminSettings() {
   const defaults = useQuery({ queryKey: ["admin-defaults"], queryFn: () => api.get<DefaultsView>("/api/admin/defaults") });
+  const footer = useQuery({ queryKey: ["admin-comment-footer"], queryFn: () => api.get<CommentFooterView>("/api/admin/comment-footer") });
   const models = useQuery({ queryKey: modelsKey, queryFn: () => api.get<ModelsAdminView>("/api/admin/models") });
   return (
     <div className="narrow">
       <div className="top">
         <div>
           <h1>Settings</h1>
-          <div className="sub">What a repository starts with, and the models reviews run on.</div>
+          <div className="sub">What a repository starts with, the review comment's footer, and the models reviews run on.</div>
         </div>
       </div>
       {defaults.isPending && <Loading />}
       {defaults.isError && <ErrorBox error={defaults.error} />}
       {defaults.isSuccess && <Defaults v={defaults.data} />}
+      {footer.isPending && <Loading />}
+      {footer.isError && <ErrorBox error={footer.error} />}
+      {footer.isSuccess && <CommentFooter v={footer.data} />}
       {models.isPending && <Loading />}
       {models.isError && <ErrorBox error={models.error} />}
       {models.isSuccess && <Models v={models.data} />}
     </div>
+  );
+}
+
+// --- the comment footer ---
+
+function CommentFooter({ v }: { v: CommentFooterView }) {
+  const client = useQueryClient();
+  const write = useWrite();
+  const [text, setText] = useState(v.note);
+  const [note, setNote] = useState("");
+  const save = useMutation({
+    mutationFn: (next: string) => write<CommentFooterView>("PUT", "/api/admin/comment-footer", { note: next }),
+    onMutate: () => setNote(""),
+    onSuccess: (saved) => {
+      client.setQueryData(["admin-comment-footer"], saved);
+      setText(saved.note);
+      setNote("Comment footer saved.");
+    },
+  });
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    save.mutate(text.trim());
+  };
+  return (
+    <form className="card pad stack" aria-label="Comment footer" onSubmit={submit}>
+      <h2>Comment footer</h2>
+      <label htmlFor="comment-footer-note">Text</label>
+      <input
+        id="comment-footer-note"
+        type="text"
+        {...noFill}
+        placeholder={v.default}
+        maxLength={200}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+      />
+      <div className="meta">
+        One line at the bottom of every review comment, from the next comment on. Markdown links work. An @ shows as plain text and notifies
+        nobody. Empty uses the default.
+      </div>
+      {save.isError && <ErrorBox error={save.error} />}
+      <div className="foot">
+        {note && (
+          <span className="meta grow" role="status">
+            {note}
+          </span>
+        )}
+        <button type="submit" className="btn primary" disabled={save.isPending}>
+          Save footer
+        </button>
+      </div>
+    </form>
   );
 }
 

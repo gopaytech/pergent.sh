@@ -718,6 +718,13 @@ type AdminSettingsView struct {
 	LLM      LLMView      `json:"llm"`
 }
 
+// CommentFooterView is the text at the bottom of every review comment.
+type CommentFooterView struct {
+	// Note is what an admin set; "" means Default is used.
+	Note    string `json:"note"`
+	Default string `json:"default"`
+}
+
 // DefaultsView is the settings a repository gets when it sets none.
 type DefaultsView struct {
 	Approve        bool `json:"approve"`

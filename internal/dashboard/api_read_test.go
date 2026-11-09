@@ -1193,7 +1193,7 @@ func TestNoSecretInTheReadAPI(t *testing.T) {
 			targets := readEndpoints(id)
 			targets = append(targets, "/api/reviews/gh/acme/widgets/7", "/api/repositories/gh/acme/widgets",
 				"/api/repositories/gh/acme/widgets/inputs",
-				"/api/admin/instances", "/api/admin/models", "/api/admin/defaults")
+				"/api/admin/instances", "/api/admin/models", "/api/admin/defaults", "/api/admin/comment-footer")
 			for _, target := range targets {
 				rec := e.get(c, target)
 				if rec.Code >= 500 && rec.Code != http.StatusBadGateway {
