@@ -52,6 +52,16 @@ Leave it out of `rate()` and `increase()` panels and alerts:
 rate(pergent_tokens_total{repository!="(switched off)"}[5m])
 ```
 
+## Grafana dashboard
+
+[`docs/grafana/pergent-sh.json`](../grafana/pergent-sh.json) is an example dashboard: reviews, tokens by model, repository and skill, and a table of each skill's runs and findings. Import it under **Dashboards → New → Import** and pick your Prometheus data source at the top. The Instance, Repository, Skill and Model filters fill in from the metrics.
+
+Its panels leave out `(switched off)`. Reviews are rare next to a scrape, so its charts show bars of at least an hour.
+
+A series only exists from its first count, so `increase()` can't see the count that created it: the first review of a new repository, skill or model is missing from the charts. Totals on the [Usage](usage.md) page include it.
+
+Metrics hold tokens, not prices, so the dashboard shows no cost.
+
 ## Scrape errors
 
 - `500` with an empty body: the database couldn't be read. The error goes to the log.
