@@ -111,7 +111,7 @@ func (d *Dashboard) modelsView(ctx context.Context) (ModelsAdminView, error) {
 	if err != nil {
 		return ModelsAdminView{}, err
 	}
-	v := ModelsAdminView{Editable: !d.cfg.HasLLM(), FollowingDefault: following, Models: []ModelAdminView{}}
+	v := ModelsAdminView{CanSetDefault: !d.cfg.HasLLM(), FollowingDefault: following, Models: []ModelAdminView{}}
 	for _, m := range d.registry.Models() {
 		if m.ID == store.ConfigModelID {
 			v.Models = append(v.Models, ModelAdminView{ID: m.ID, Provider: m.LLM.Provider, Model: m.LLM.Model, BaseURL: m.LLM.BaseURL,
@@ -370,7 +370,10 @@ func (d *Dashboard) deleteModel(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	err = d.Store.DeleteLLMModel(ctx, id)
+	// While the config has an llm: block it is the default, and the flag on
+	// a dashboard entry is dormant: the entry may go, and the store passes
+	// the flag on.
+	err = d.Store.DeleteLLMModel(ctx, id, d.cfg.HasLLM())
 	var inUse *store.ModelInUseError
 	switch {
 	case errors.As(err, &inUse):

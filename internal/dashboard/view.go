@@ -1096,7 +1096,8 @@ type AuditView struct {
 //     default (409 while the config has an llm: block, which is the default):
 //     200, ModelsAdminView. DELETE /api/admin/models/{id}: 204; 409
 //     ModelInUseView while a repository names it, and 409 {"error"} for the
-//     default and the config's entry. A key is sealed and never returned.
+//     default (not while the config has an llm: block: that entry is the
+//     default then) and the config's entry. A key is sealed and never returned.
 //   - GET /api/admin/sign-in: SignInAdminView (admins). PUT /api/admin/sign-in
 //     {"mode", "label", "issuer", "clientID", "clientSecret", "header",
 //     "audience", "jwksURL", "emailClaim", "allowedDomains", "allowedEmails"}
@@ -1180,11 +1181,11 @@ type InstanceAdminView struct {
 }
 
 // ModelsAdminView is GET /api/admin/models: the list of models and how many
-// repositories follow the default. Editable is false while the config file
-// has an llm: block: that entry is the default then, and "set as default" is
-// 409 (entries can still be added, changed and removed).
+// repositories follow the default. CanSetDefault is false while the config
+// file has an llm: block: that entry is the default then, and "set as
+// default" is 409. Entries can still be added, changed and removed.
 type ModelsAdminView struct {
-	Editable bool `json:"editable"`
+	CanSetDefault bool `json:"canSetDefault"`
 	// FollowingDefault counts the repositories that name no model: those of
 	// the dashboard that chose none and those of the config file. A change of
 	// the default moves them.

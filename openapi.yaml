@@ -2620,7 +2620,8 @@ paths:
       summary: Remove a model from the list
       description: |
         Admins only. A model a repository names is 409, with the repositories
-        in the body (`ModelInUseView`); so is the default, and the entry the
+        in the body (`ModelInUseView`); so is the default (unless the config
+        file has an `llm:` block, which is the default then), and the entry the
         config file supplies. A repository is never moved to another model by
         a removal.
       x-pergent-access: admin
@@ -4013,11 +4014,11 @@ components:
     ModelsAdminView:
       description: The list of models and how many repositories follow the default.
       type: object
-      required: [editable, followingDefault, models]
+      required: [canSetDefault, followingDefault, models]
       properties:
-        editable:
+        canSetDefault:
           type: boolean
-          description: False while the config file has an `llm:` block, which is the default then and cannot be replaced as such.
+          description: False while the config file has an `llm:` block, which is the default then; making another entry the default is 409. Entries can still be added, changed and removed.
         followingDefault:
           type: integer
           description: The repositories that name no model, the config file's included. A change of the default moves them.

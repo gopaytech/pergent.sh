@@ -192,11 +192,15 @@ func (s *Store) SetDefaultLLMModel(ctx context.Context, id string, at time.Time)
 }
 
 // DeleteLLMModel removes an entry. The default is refused with
-// ErrModelIsDefault, and an entry a dashboard repository names with a
+// ErrModelIsDefault, unless shadowed: the config file's llm: block is the
+// default then and the flag is dormant, so the entry may go once no
+// repository names it (that check answers first), and the oldest entry left
+// takes the flag and is written to llm_settings; with none left there is no
+// default. An entry a dashboard repository names is refused with a
 // *ModelInUseError listing them. The entry's row is locked first, and a save
 // of a repository naming it locks the row too (lockModel), so a delete and
 // such a save cannot both succeed. A missing entry is ErrModelNotFound.
-func (s *Store) DeleteLLMModel(ctx context.Context, id string) error {
+func (s *Store) DeleteLLMModel(ctx context.Context, id string, shadowed bool) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -214,7 +218,7 @@ func (s *Store) DeleteLLMModel(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if isDefault {
+	if isDefault && !shadowed {
 		return ErrModelIsDefault
 	}
 	inUse := &ModelInUseError{}
@@ -240,6 +244,21 @@ func (s *Store) DeleteLLMModel(ctx context.Context, id string) error {
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM llm_models WHERE id = $1`, id); err != nil {
 		return err
+	}
+	if isDefault {
+		// The row is gone, so the index allows a default again.
+		next, err := scanModel(tx.QueryRow(ctx, `UPDATE llm_models SET is_default = true
+			WHERE id = (SELECT id FROM llm_models ORDER BY created_at, id LIMIT 1)
+			RETURNING `+modelColumns))
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+		case err != nil:
+			return err
+		default:
+			if err := writeDefaultToSettings(ctx, tx, next, next.UpdatedAt); err != nil {
+				return err
+			}
+		}
 	}
 	return tx.Commit(ctx)
 }

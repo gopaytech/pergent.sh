@@ -748,8 +748,8 @@ func TestOnlyAdminsTouchInstances(t *testing.T) {
 		}
 	}
 	v := getJSON[ModelsAdminView](e, boss, "/api/admin/models")
-	if !v.Editable {
-		t.Errorf("an SSO admin may not edit the models: %+v", v)
+	if !v.CanSetDefault {
+		t.Errorf("an SSO admin may not set the default: %+v", v)
 	}
 	wantCode(t, e.send(boss, "POST", "/api/admin/models", `{"provider":"anthropic","model":"m","apiKey":"`+llmKeyOne+`"}`), "SSO admin POST models", http.StatusCreated)
 	wantCode(t, e.send(boss, "DELETE", "/api/admin/instances/lab", ""), "SSO admin DELETE lab", http.StatusAccepted)
@@ -914,11 +914,11 @@ func TestRemoveInstanceWithoutRepositoriesAsksForAPass(t *testing.T) {
 // The list of models is the admins' to change: an entry takes a key the
 // first time and never sends it back, its provider and model are fixed, and
 // the first entry is the default.
-func TestModelsEditable(t *testing.T) {
+func TestModelsAddAndChange(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.operator()
 	v := getJSON[ModelsAdminView](e, c, "/api/admin/models")
-	if !v.Editable || len(v.Models) != 0 || v.FollowingDefault != 3 {
+	if !v.CanSetDefault || len(v.Models) != 0 || v.FollowingDefault != 3 {
 		t.Errorf("empty list = %+v, want editable, no entry, and the 3 config repositories following the default", v)
 	}
 	post := func(body map[string]any) *httptest.ResponseRecorder {
@@ -1005,7 +1005,7 @@ func TestModelsConfigWins(t *testing.T) {
 	})
 	c := e.operator()
 	v := getJSON[ModelsAdminView](e, c, "/api/admin/models")
-	if v.Editable || len(v.Models) != 1 {
+	if v.CanSetDefault || len(v.Models) != 1 {
 		t.Fatalf("list = %+v, want the config's entry alone, and the default not editable", v)
 	}
 	m := v.Models[0]
@@ -1027,9 +1027,29 @@ func TestModelsConfigWins(t *testing.T) {
 	if rec.Code != http.StatusConflict || !strings.Contains(errorOf(t, rec), "config file") {
 		t.Errorf("default while the config has an llm: block = %d %s, want 409", rec.Code, rec.Body)
 	}
+	// The entry added first is flagged default in the table, but the config's
+	// is the default, so the flag is dormant and the entry can be removed: not
+	// while a repository names it, with the in-use answer first.
+	other := decode[ModelAdminView](t, e.sendJSON(c, "POST", "/api/admin/models",
+		map[string]any{"provider": "bedrock", "model": "haiku", "apiKey": llmKeyThree}), "POST second", http.StatusCreated)
+	e.dashboardRepo("main", "acme/gadgets", func(r *store.DashboardRepo) { r.ModelID = &added.ID })
+	inUse := decode[ModelInUseView](t, e.send(c, "DELETE", "/api/admin/models/"+added.ID, ""), "DELETE in use", http.StatusConflict)
+	if inUse.Error != msgModelInUse || !slices.Equal(inUse.Repositories, []RepoRefView{{Instance: "main", Project: "acme/gadgets"}}) {
+		t.Errorf("in-use 409 = %+v", inUse)
+	}
+	wantCode(t, e.send(c, "PUT", gadgetsSettings, `{"model":null}`), "move gadgets off", http.StatusOK)
+	wantCode(t, e.send(c, "DELETE", "/api/admin/models/"+added.ID, ""), "DELETE shadowed default", http.StatusNoContent)
+	rows, err := e.st.LLMModels(ctx)
+	if err != nil || len(rows) != 1 || rows[0].ID != other.ID || !rows[0].Default {
+		t.Errorf("stored models = %+v, %v; want the second, which took the flag", rows, err)
+	}
+	if v := getJSON[ModelsAdminView](e, c, "/api/admin/models"); len(v.Models) != 2 || v.Models[0].ID != "config" || !v.Models[0].Default || v.Models[1].Default {
+		t.Errorf("list = %+v; want the config's entry the only default", v.Models)
+	}
+
 	// A platform admin sees the same, and the older settings view agrees.
 	admin := e.userOnMain(true, "acme/widgets")
-	if v := getJSON[ModelsAdminView](e, admin, "/api/admin/models"); v.Editable || v.Models[0].Model != "from-config" {
+	if v := getJSON[ModelsAdminView](e, admin, "/api/admin/models"); v.CanSetDefault || v.Models[0].Model != "from-config" {
 		t.Errorf("platform admin's view = %+v", v)
 	}
 	if s := getJSON[AdminSettingsView](e, admin, "/api/admin/settings"); s.LLM.Model != "from-config" {

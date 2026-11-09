@@ -381,7 +381,7 @@ func TestDeleteLLMModelInUse(t *testing.T) {
 		}
 	}
 
-	err := s.DeleteLLMModel(ctx, b.ID)
+	err := s.DeleteLLMModel(ctx, b.ID, false)
 	var inUse *ModelInUseError
 	if !errors.As(err, &inUse) || !slices.Equal(inUse.Repos, []RepoRef{{"gh", "Acme/API"}, {"lab", "acme/web"}}) {
 		t.Fatalf("DeleteLLMModel of a model two repositories name = %#v; want those two, in order", err)
@@ -396,13 +396,13 @@ func TestDeleteLLMModelInUse(t *testing.T) {
 			t.Fatal(found, err)
 		}
 	}
-	if err := s.DeleteLLMModel(ctx, b.ID); err != nil {
+	if err := s.DeleteLLMModel(ctx, b.ID, false); err != nil {
 		t.Fatalf("DeleteLLMModel of an unused model: %v", err)
 	}
-	if err := s.DeleteLLMModel(ctx, b.ID); !errors.Is(err, ErrModelNotFound) {
+	if err := s.DeleteLLMModel(ctx, b.ID, false); !errors.Is(err, ErrModelNotFound) {
 		t.Errorf("DeleteLLMModel again = %v; want ErrModelNotFound", err)
 	}
-	if err := s.DeleteLLMModel(ctx, c.ID); !errors.As(err, &inUse) || len(inUse.Repos) != 1 {
+	if err := s.DeleteLLMModel(ctx, c.ID, false); !errors.As(err, &inUse) || len(inUse.Repos) != 1 {
 		t.Errorf("DeleteLLMModel of the model the third repository names = %v", err)
 	}
 	if repo, _, _ := s.DashboardRepo(ctx, "lab", "acme/cli"); repo.ModelID == nil || *repo.ModelID != c.ID {
@@ -414,14 +414,14 @@ func TestDeleteDefaultRefused(t *testing.T) {
 	s := newStore(t)
 	a := newModel(t, s, "anthropic", "sonnet", "", []byte("ka"))
 	b := newModel(t, s, "openai", "gpt", "", nil)
-	if err := s.DeleteLLMModel(ctx, a.ID); !errors.Is(err, ErrModelIsDefault) {
+	if err := s.DeleteLLMModel(ctx, a.ID, false); !errors.Is(err, ErrModelIsDefault) {
 		t.Fatalf("DeleteLLMModel of the default = %v; want ErrModelIsDefault", err)
 	}
 	// Even when a repository names it: the default is the answer to give.
 	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "lab", Project: "acme/web", ModelID: &a.ID}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteLLMModel(ctx, a.ID); !errors.Is(err, ErrModelIsDefault) {
+	if err := s.DeleteLLMModel(ctx, a.ID, false); !errors.Is(err, ErrModelIsDefault) {
 		t.Fatalf("DeleteLLMModel of a default a repository names = %v; want ErrModelIsDefault", err)
 	}
 	if len(mustModels(t, s)) != 2 {
@@ -432,12 +432,72 @@ func TestDeleteDefaultRefused(t *testing.T) {
 		t.Fatal(found, err)
 	}
 	var inUse *ModelInUseError
-	if err := s.DeleteLLMModel(ctx, a.ID); !errors.As(err, &inUse) {
+	if err := s.DeleteLLMModel(ctx, a.ID, false); !errors.As(err, &inUse) {
 		t.Errorf("DeleteLLMModel of the old default = %v; want in use", err)
 	}
 	// llm_settings still follows the default, and the refusals wrote nothing.
 	if r, _ := settings(t, s); r.Provider != "openai" {
 		t.Errorf("llm_settings = %+v; want the new default", r)
+	}
+}
+
+// While the config file's llm: block is the default, the flag on a dashboard
+// entry is dormant: it may be deleted unless a repository names it, and the
+// oldest entry left takes the flag, in llm_settings too.
+func TestDeleteShadowedDefault(t *testing.T) {
+	s := newStore(t)
+	// Added an hour apart, so "oldest" is not a tie.
+	add := func(provider, model string, key string, hours time.Duration) LLMModel {
+		m, err := s.CreateLLMModel(ctx, LLMModel{Provider: provider, Model: model, APIKeySealed: []byte(key)}, t0.Add(hours*time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	a, b, c := add("anthropic", "sonnet", "ka", 0), add("openai", "gpt", "kb", 1), add("bedrock", "haiku", "kc", 2)
+	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "lab", Project: "acme/web", ModelID: &a.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	// In use answers first, and nothing changes.
+	var inUse *ModelInUseError
+	if err := s.DeleteLLMModel(ctx, a.ID, true); !errors.As(err, &inUse) || len(inUse.Repos) != 1 {
+		t.Fatalf("DeleteLLMModel of a shadowed default a repository names = %v; want in use", err)
+	}
+	if got := defaultsOf(mustModels(t, s)); !slices.Equal(got, []string{a.ID}) {
+		t.Fatalf("defaults after a refusal = %v; want a", got)
+	}
+	// Not shadowed, it is still the default and is refused.
+	if err := s.DeleteLLMModel(ctx, a.ID, false); !errors.Is(err, ErrModelIsDefault) {
+		t.Fatalf("DeleteLLMModel of the default = %v; want ErrModelIsDefault", err)
+	}
+
+	if found, err := s.UpdateDashboardRepo(ctx, "lab", "acme/web", func(r *DashboardRepo) { r.ModelID = nil }); err != nil || !found {
+		t.Fatal(found, err)
+	}
+	if err := s.DeleteLLMModel(ctx, a.ID, true); err != nil {
+		t.Fatalf("DeleteLLMModel of a shadowed default: %v", err)
+	}
+	// The oldest entry left is the default, here and in llm_settings.
+	if got := defaultsOf(mustModels(t, s)); !slices.Equal(got, []string{b.ID}) {
+		t.Errorf("defaults = %v; want b, the oldest left", got)
+	}
+	if r, found := settings(t, s); !found || r.Provider != "openai" || string(r.APIKeySealed) != "kb" {
+		t.Errorf("llm_settings = %+v, %v; want b written back", r, found)
+	}
+	// A shadowed entry that is not the flagged one goes without moving it.
+	if err := s.DeleteLLMModel(ctx, c.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := defaultsOf(mustModels(t, s)); !slices.Equal(got, []string{b.ID}) {
+		t.Errorf("defaults = %v; want b still", got)
+	}
+	// The last one leaves no default.
+	if err := s.DeleteLLMModel(ctx, b.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustModels(t, s); len(got) != 0 {
+		t.Errorf("models = %+v; want none", got)
 	}
 }
 
@@ -452,11 +512,11 @@ func mustModels(t *testing.T, s *Store) []LLMModel {
 
 func TestDeleteLLMModelMissing(t *testing.T) {
 	s := newStore(t)
-	if err := s.DeleteLLMModel(ctx, "no-such-id"); !errors.Is(err, ErrModelNotFound) {
+	if err := s.DeleteLLMModel(ctx, "no-such-id", false); !errors.Is(err, ErrModelNotFound) {
 		t.Errorf("DeleteLLMModel of a missing entry = %v; want ErrModelNotFound", err)
 	}
 	// The config entry has no row to delete.
-	if err := s.DeleteLLMModel(ctx, ConfigModelID); !errors.Is(err, ErrModelNotFound) {
+	if err := s.DeleteLLMModel(ctx, ConfigModelID, false); !errors.Is(err, ErrModelNotFound) {
 		t.Errorf("DeleteLLMModel(config) = %v; want ErrModelNotFound", err)
 	}
 }
@@ -610,7 +670,7 @@ func TestDeleteRacesRepoModelSave(t *testing.T) {
 			t.Fatal(err)
 		}
 		nils, errs := race(
-			func() error { return s.DeleteLLMModel(ctx, m.ID) },
+			func() error { return s.DeleteLLMModel(ctx, m.ID, false) },
 			func() error {
 				_, err := s.UpdateDashboardRepo(ctx, "lab", project, func(r *DashboardRepo) { r.ModelID = &m.ID })
 				return err
@@ -636,7 +696,7 @@ func TestDeleteRacesRepoModelInsert(t *testing.T) {
 		m := newModel(t, s, "openai", fmt.Sprintf("gpt-%d", i), "", nil)
 		project := fmt.Sprintf("acme/repo-%d", i)
 		nils, errs := race(
-			func() error { return s.DeleteLLMModel(ctx, m.ID) },
+			func() error { return s.DeleteLLMModel(ctx, m.ID, false) },
 			func() error {
 				_, err := s.InsertDashboardRepo(ctx, DashboardRepo{Instance: "lab", Project: project, ModelID: &m.ID})
 				return err
