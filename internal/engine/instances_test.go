@@ -515,6 +515,82 @@ func TestDispatchFailsWhenChosenModelIsGone(t *testing.T) {
 	if !strings.Contains(env.Logs(), "model_id="+gone) {
 		t.Errorf("the log does not say which entry was unusable:\n%s", env.Logs())
 	}
+	if r.Provider != nil || r.Model != nil {
+		t.Errorf("run provider/model = %v / %v; an entry that is gone has none to record", r.Provider, r.Model)
+	}
+}
+
+// addUnopenableModel puts an entry in the list whose key was sealed under
+// another secret key, so it is listed and can't be used.
+func addUnopenableModel(t *testing.T, env *testEnv, provider, model string) string {
+	t.Helper()
+	m, err := env.Store.CreateLLMModel(env.ctx, store.LLMModel{Provider: provider, Model: model,
+		APIKeySealed: []byte("not sealed by this box")}, env.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.Engine.Instances.LoadLLM(env.ctx); err != nil {
+		t.Fatal(err)
+	}
+	return m.ID
+}
+
+// A default whose key can't be opened doesn't stop a repository that chose
+// another entry: it runs on its own entry, and only that key is in the Job.
+func TestDispatchRunsTheChosenModelWhenTheDefaultIsUnusable(t *testing.T) {
+	env := newTestEnv(t)
+	env.Engine.Config.LLM = config.LLM{}
+	addUnopenableModel(t, env, "openai", "gpt-default") // the first entry is the default
+	chosen := addModel(t, env, "litellm", "gpt-chosen", "https://proxy.example.com/v1", "key-chosen")
+	chooseModel(t, env, &chosen)
+	head := sha('a')
+	id := env.Enqueue(3, head)
+	env.GitLab.SetMR(openMR(3, head))
+	env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+
+	dispatch(t, env)
+
+	if env.Job(id) == nil {
+		t.Fatalf("no job; run = %+v\n%s", env.Run(id), env.Logs())
+	}
+	if got := jobEnv(env, id)["OPENCODE_MODEL"]; got != "gpt-chosen" {
+		t.Errorf("the Job's model = %q, want the chosen entry's", got)
+	}
+	if got := string(env.Secret(id).Data["llm-api-key"]); got != "key-chosen" {
+		t.Errorf("the Job's key = %q, want the chosen entry's", got)
+	}
+}
+
+// A chosen entry whose key can't be opened fails the run whatever the default
+// is: no fallback. The failed review keeps the model it tried, for the
+// dashboard, while the reason that reaches the comment names nothing.
+func TestDispatchFailsWhenChosenModelHasNoUsableKey(t *testing.T) {
+	env := newTestEnv(t)
+	env.Engine.Config.LLM = config.LLM{}
+	addModel(t, env, "openai", "gpt-default", "https://default.example.com/v1", "key-default")
+	chosen := addUnopenableModel(t, env, "litellm", "gpt-chosen")
+	chooseModel(t, env, &chosen)
+	head := sha('a')
+	id := env.Enqueue(3, head)
+	env.GitLab.SetMR(openMR(3, head))
+
+	dispatch(t, env)
+
+	r := env.Run(id)
+	if r.State != store.Reported || r.FailureReason != reasonModelUnusable {
+		t.Fatalf("run = state %s reason %q; want reported, %q", r.State, r.FailureReason, reasonModelUnusable)
+	}
+	if n := len(env.Jobs()); n != 0 {
+		t.Errorf("%d jobs launched; the default must not stand in", n)
+	}
+	if r.Provider == nil || *r.Provider != "litellm" || r.Model == nil || *r.Model != "gpt-chosen" {
+		t.Errorf("run provider/model = %v / %v, want the entry it tried, litellm / gpt-chosen", r.Provider, r.Model)
+	}
+	for _, leak := range []string{"litellm", "gpt-chosen", "gpt-default"} {
+		if strings.Contains(r.FailureReason, leak) {
+			t.Errorf("the failure reason names %q", leak)
+		}
+	}
 }
 
 // With models listed but none that can be used (the key can't be opened), a

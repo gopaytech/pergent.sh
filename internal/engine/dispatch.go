@@ -324,13 +324,24 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		var ok bool
 		if model, ok = e.registry().ModelByID(repo.ModelID); !ok {
 			d.log.Warn("the model chosen for this repository can't be used", "model_id", repo.ModelID)
+			// An entry that exists but has no usable key is the model this run
+			// tried: the dashboard shows it on the failed review. Best effort,
+			// since the run fails either way.
+			models := e.registry().Models()
+			if i := slices.IndexFunc(models, func(m instances.Model) bool { return m.ID == repo.ModelID }); i >= 0 {
+				tried := models[i].LLM
+				if err := e.Store.SetRunModel(ctx, run.ID, tried.Provider, tried.Model); err != nil {
+					d.log.Error("couldn't record the model the failed review tried", "model_id", repo.ModelID, "error", e.redact(err.Error()))
+				}
+			}
 			return d.fail(ctx, reasonModelUnusable)
 		}
 	} else {
 		var ok bool
 		if model, ok = e.registry().DefaultModel(); !ok {
-			// Set to nothing since the pass began: the run waits.
-			d.log.Warn(msgNoLLM)
+			// The default has no usable key, or was removed since the pass
+			// began: the run waits, as when the list is empty.
+			e.warnEvery("no-llm", msgNoLLM)
 			return d.postpone(ctx, e.now().Add(waitDelay))
 		}
 	}
