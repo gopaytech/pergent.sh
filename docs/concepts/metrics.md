@@ -34,6 +34,8 @@ Values are read from the database at each scrape, so they survive a restart and 
 
 **Tokens** add up like the Usage page: a total is `input` plus `output`. The `reasoning`, `cache_read` and `cache_write` series are absent until a Job runs a pergent that reports them. Absent means unknown; there's no zero standing in for it.
 
+**`model`** is the model name alone, with no provider. The same name from two providers is one series. The [Usage](usage.md) page and its CSV show the provider.
+
 **`repository`** is named only while the repository is switched on. Otherwise it's `(switched off)`.
 
 **`skill`** is named only if the library or a switched-on repository's skill list names it, or it's the fixed `impact` check. Anything else, including skills from a repository's `.pergent/skills` folder, is `(other)`.

@@ -40,7 +40,7 @@ The chart is in `charts/pergent-sh`. Postgres is not part of it. Every value is 
 
    Keep `PERGENT_SH_SECRET_KEY`: it encrypts every secret you enter in the dashboard and the stored deploy tokens. Changing it isn't supported; see [Environment variables](../reference/configuration.md).
 
-   Instances, their tokens and keys, and the LLM key are entered in the dashboard (step 5), so they need no keys in the Secret. If you keep them in the config file instead, put their keys in this Secret too; see [Instances and the LLM in the config file](../reference/configuration.md).
+   Instances, their tokens and keys, and the models' keys are entered in the dashboard (step 5), so they need no keys in the Secret. If you keep them in the config file instead, put their keys in this Secret too; see [Instances and the LLM in the config file](../reference/configuration.md).
 
 3. Write your values:
 
@@ -87,7 +87,7 @@ What the chart creates:
 - A NetworkPolicy in `jobsNamespace` for the Job pods, review Jobs, [skill fetch Jobs](../concepts/skills.md#installing-from-git) and [readiness scan Jobs](../concepts/dashboard.md#readiness-scan) alike (those labelled `app.kubernetes.io/managed-by: pergent-sh`): no ingress; egress to DNS (UDP and TCP 53), to TCP 443 and 80 in `jobEgress.cidrs`, and to TCP 8080 of the pergent.sh pods for the result callback. A NetworkPolicy only takes effect when your CNI enforces them.
 - A ConfigMap for `config.yaml`.
 
-**Narrow `jobEgress.cidrs`.** The default `0.0.0.0/0` lets a Job reach any address on ports 80 and 443, including in-cluster services and the cloud metadata endpoint. Set it to the addresses of GitLab (or GitHub) and the LLM provider. An empty list (`cidrs: []`) allows no external egress at all: Jobs then reach only DNS and pergent.sh's port 8080. The optional `jobEgress.except` list is added to every `ipBlock` as NetworkPolicy `except` (for example `169.254.169.254/32`); it applies to every cidr, and Kubernetes rejects an entry outside its cidr, so use it with a broad cidr such as the default `0.0.0.0/0`.
+**Narrow `jobEgress.cidrs`.** The default `0.0.0.0/0` lets a Job reach any address on ports 80 and 443, including in-cluster services and the cloud metadata endpoint. Set it to the addresses of GitLab (or GitHub) and every LLM provider you add a model for ([Models](../concepts/models.md#a-new-provider-needs-network-access)). An empty list (`cidrs: []`) allows no external egress at all: Jobs then reach only DNS and pergent.sh's port 8080. The optional `jobEgress.except` list is added to every `ipBlock` as NetworkPolicy `except` (for example `169.254.169.254/32`); it applies to every cidr, and Kubernetes rejects an entry outside its cidr, so use it with a broad cidr such as the default `0.0.0.0/0`.
 
 **Public skill sources need `jobEgress.cidrs` too.** A skill fetch Job clones a public `https` URL under the same NetworkPolicy, so the host of every URL admins install skills from must be inside `jobEgress.cidrs`. With a narrow list, add the address of that host (for example GitHub's, for skills on github.com), or the fetch fails with `could not fetch <url> at <ref>; the URL, branch or tag may be wrong, or outside jobEgress.cidrs`. Skills of a repository on a connected GitLab or GitHub instance are read by the pergent.sh pod through the platform's API, not by a Job, and need nothing here.
 

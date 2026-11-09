@@ -11,8 +11,8 @@ See where the model tokens went under **Admin → Usage** (`/admin/usage`). It's
 
 **One repository** (`/admin/usage/<instance>/<project>`):
 
-- Tokens per skill and per model.
-- The 50 merge requests that used the most.
+- Tokens per skill and per model, with the model's provider.
+- The 50 merge requests that used the most, with the models each used.
 - The tokens of each day.
 - What was wasted, and what a review costs.
 
@@ -45,9 +45,10 @@ Both pages have a **Download CSV** link: `GET /api/admin/usage.csv?days=N`, with
 
 There's one row per skill per review, oldest first:
 
-`reported_at`, `instance`, `repository`, `merge_request`, `trigger`, `incremental`, `model`, `skill`, `verdict`, `tokens_in`, `tokens_out`, `cache_read`, `cache_write`, `reasoning`, `findings`, `blocking`
+`reported_at`, `instance`, `repository`, `merge_request`, `trigger`, `incremental`, `model`, `skill`, `verdict`, `tokens_in`, `tokens_out`, `cache_read`, `cache_write`, `reasoning`, `findings`, `blocking`, `provider`
 
 - Cache and reasoning cells are empty when the Job didn't report them.
+- `provider` is the last column, so the others keep their places. It is empty for a review from before providers were recorded. See [Models](models.md).
 - There are no titles, no other text a person wrote, and no dismissals. Dismissals are on [Skill results](skill-results.md).
 - A cell a spreadsheet would read as a formula starts with `'`.
 - The file stops at **200,000 rows**, with no mark that it was cut.
