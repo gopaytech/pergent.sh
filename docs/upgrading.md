@@ -1,6 +1,6 @@
 # ⬆️ Upgrading
 
-## Upgrading to the next release
+## Upgrading to 0.15.0
 
 **Review comments end with a short text.** By default it links to pergent.sh. An admin can change it under **Admin → Settings**: [The footer text](concepts/comment-layout.md#the-footer-text). Existing comments change the next time they are updated.
 
