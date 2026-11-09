@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -107,8 +108,15 @@ func TestModelsAdminLifecycle(t *testing.T) {
 	if m, ok := e.reg.DefaultModel(); !ok || m.ID != two.ID {
 		t.Errorf("registry default = %+v, %v", m, ok)
 	}
-	// Again changes nothing and is not audited a second time.
+	// Again changes nothing and is not audited a second time, but reads the
+	// list back, so a retry after a failed read-back gets the engine current.
+	reads, load := 0, e.d.loadLLM
+	e.d.loadLLM = func(ctx context.Context) error { reads++; return load(ctx) }
 	decode[ModelsAdminView](t, e.send(c, "POST", modelsURL+"/"+two.ID+"/default", ""), "default again", http.StatusOK)
+	e.d.loadLLM = load
+	if reads != 1 {
+		t.Errorf("default again read the list back %d times, want 1", reads)
+	}
 	wantCode(t, e.send(c, "POST", modelsURL+"/no-such-entry/default", ""), "default of an unknown entry", http.StatusNotFound)
 
 	// The default can't go; another can.

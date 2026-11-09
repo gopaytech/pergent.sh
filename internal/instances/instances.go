@@ -124,6 +124,10 @@ type Registry struct {
 	llm     []llmEntry
 	llmSeen []string
 
+	// loadMu serialises LoadLLM from the read to the swap, so a slow read
+	// that began before a change can't replace the list a later read set.
+	loadMu sync.Mutex
+
 	log *slog.Logger // nil: slog.Default()
 }
 
@@ -639,6 +643,8 @@ func (r *Registry) LoadLLM(ctx context.Context) error {
 	if r.st == nil {
 		return nil
 	}
+	r.loadMu.Lock()
+	defer r.loadMu.Unlock()
 	rows, err := r.st.LLMModels(ctx)
 	if err != nil {
 		return fmt.Errorf("read the models: %w", err)
@@ -678,9 +684,13 @@ func (r *Registry) LLMKeys() []string {
 }
 
 // Redact is text with every LLM key LLMKeys holds replaced by "***": the one
-// way anything bound for a log, the store or a page is cleaned of them.
+// way anything bound for a log, the store or a page is cleaned of them. The
+// longest key goes first: a key that is the start of another would otherwise
+// leave the rest of the longer one in the text.
 func (r *Registry) Redact(text string) string {
-	for _, key := range r.LLMKeys() {
+	keys := r.LLMKeys()
+	slices.SortStableFunc(keys, func(a, b string) int { return len(b) - len(a) })
+	for _, key := range keys {
 		text = strings.ReplaceAll(text, key, "***")
 	}
 	return text

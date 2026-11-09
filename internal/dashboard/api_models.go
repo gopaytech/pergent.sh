@@ -344,6 +344,11 @@ func (d *Dashboard) setDefaultModel(w http.ResponseWriter, r *http.Request) {
 		}
 		d.Log.Info("dashboard: default model changed", "model_id", id, "model", modelLabel(next.Provider, next.Model), "by", se.Username)
 		d.audit(ctx, se, "model_default_changed", "", "", detail)
+	} else {
+		// Already the default: nothing to record, but the earlier change may
+		// have saved without the engine reading it back, and asking again is
+		// how an operator retries that.
+		d.reloadModels(ctx, "")
 	}
 	v, err := d.modelsView(ctx)
 	if err != nil {

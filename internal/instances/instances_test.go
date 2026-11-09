@@ -594,6 +594,17 @@ func TestLLMKeysCoverEveryEntry(t *testing.T) {
 	}
 }
 
+// A key that is the start of another is replaced after it, so the tail of the
+// longer one doesn't stay in the text. This needs no database.
+func TestRedactLongestKeyFirst(t *testing.T) {
+	r := New(testConfig(), nil, nil)
+	r.noteKey("sk-abc")
+	r.noteKey("sk-abcdef-tail")
+	if got := r.Redact("a sk-abcdef-tail b sk-abc c"); got != "a *** b *** c" {
+		t.Errorf("Redact = %q, want both keys replaced whole", got)
+	}
+}
+
 // An entry whose key is sealed under another secret key warns and is not
 // usable, while the entries before and after it still are.
 func TestUnopenableKeyIsNotUsable(t *testing.T) {
