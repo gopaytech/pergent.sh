@@ -9,7 +9,7 @@ When someone opens or pushes to a merge request (or pull request) in a repositor
 
 People can also act on a review where they already are, in a comment on the merge request (`@<bot> review`, `@<bot> review failed`, `@<bot> dismiss <id> <reason>`) or with the buttons on the dashboard's review page: run the review again, run only the skills that failed, and set aside a finding that isn't a real problem. See [Commands](commands.md).
 
-Everything that can comment, set statuses or approve stays inside pergent.sh. A Job only ever holds a read-only clone token, the LLM key and a one-time token to hand in its result.
+Everything that can comment, set statuses or approve stays inside pergent.sh. A Job only ever holds a read-only clone token, the key of its model and a one-time token to hand in its result.
 
 This release covers GitLab (gitlab.com or any self-managed instance) and GitHub.com; see [GitHub](../setup/github.md) for the GitHub setup. An optional web [dashboard](dashboard.md) shows every review, lets admins manage teams, write and install skills, switch repositories on and change their settings, and lets admins add GitLab and GitHub instances, their secrets and the LLM without editing the config file. An instance added in the dashboard never blocks startup: when pergent.sh can't reach it, it starts anyway and the dashboard shows what to fix. Comment [commands](commands.md) and the dashboard's buttons re-run a review or dismiss a finding; they never change settings, answer questions or run code (see [Limits](../reference/limits.md)).
 

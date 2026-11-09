@@ -69,13 +69,13 @@ The first review after a change of model is a full review, not an incremental on
 | Going back to a default that is the same model | No |
 | The upgrade to the release with the list | No |
 
-A re-run of only the failed skills, or an incremental review, uses the model set at the time. So one published review can combine results from two models.
+An incremental review after a change of model is a full one, so it never mixes models. A re-run of only the failed skills uses the model set at the time, so one published review can combine results from two models.
 
 ## Where you see the model
 
 Only in the dashboard, never in the comment.
 
-- The review page shows the model of the latest review.
+- A review's page shows the model it ran on.
 - [Usage](usage.md) shows the provider next to each model, and every model a merge request used.
 - The [audit log](dashboard.md#audit-log) records every change to the list and to a repository's model. It names the provider and model, never the key.
 
