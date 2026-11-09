@@ -138,7 +138,7 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 	// decided: the comment lists the others.
 	view := e.syncInline(ctx, plat, run, repo, ok, o, log)
 	o.InlineOn, o.Inline, o.FindingNotes = view.On, view.Inline, view.Notes
-	o.MaxComment, o.Redact = kube.CommentLimitGitLab, e.redact
+	o.MaxComment, o.Redact, o.Hide = kube.CommentLimitGitLab, e.redact, e.hideModel(run)
 	if plat.isGitHub() {
 		o.MaxComment = kube.CommentLimitGitHub
 	}
@@ -338,6 +338,33 @@ func (e *Engine) replaceStepAdvice(ctx context.Context, run store.Run, advice st
 	}
 	run.Result = out
 	return run, nil
+}
+
+// hideModel is how the comment's failure text is cleaned of the model and
+// provider the run used (policy.HideModel): the comment never names them, and
+// a provider's error can. It changes the text given to the comment only; the
+// stored result keeps the full text for the dashboard. The base URLs are those
+// of the entries that have the run's provider and model; a run that recorded
+// neither is left alone, and so is one whose entry is gone and which has no
+// URL to hide.
+func (e *Engine) hideModel(run store.Run) func(string) string {
+	var provider, model string
+	if run.Provider != nil {
+		provider = *run.Provider
+	}
+	if run.Model != nil {
+		model = *run.Model
+	}
+	if provider == "" && model == "" {
+		return nil
+	}
+	var urls []string
+	for _, m := range e.registry().Models() {
+		if m.LLM.Provider == provider && m.LLM.Model == model && m.LLM.BaseURL != "" {
+			urls = append(urls, m.LLM.BaseURL)
+		}
+	}
+	return func(text string) string { return policy.HideModel(text, provider, model, urls...) }
 }
 
 // dismissals are the dismissals of the merge request in the renderer's form.

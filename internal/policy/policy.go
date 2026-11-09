@@ -106,6 +106,12 @@ func blocksApproval(rule string) bool { return !reviewedSkipRules[rule] }
 // comment (see result.Merge) covers the re-run skills only. An error
 // result's comment is used as it is.
 //
+// Hide, when set, is applied to the text of a failure that reaches the
+// comment: the run's failure reason, an error result's message and comment,
+// and each failed batch's message. It is how the comment stays free of the
+// model and provider a provider's error names (HideModel); the result and the
+// dashboard keep the full text.
+//
 // Mention is the bot's name as a comment mentions it, without the "@"; when
 // set, each finding carries its dismiss command and the footer the re-run
 // command. FileURL links a finding's location to the reviewed commit; nil
@@ -139,6 +145,7 @@ type Outcome struct {
 	Dismissals []render.Dismissal
 	MaxComment int
 	Redact     func(string) string
+	Hide       func(string) string
 	Mention    string
 	FileURL    func(path string, line, endLine int) string
 
@@ -217,9 +224,13 @@ func NeutralizeQuickActions(comment string) string {
 
 func decide(o Outcome, failure config.FailureStatus) Decision {
 	failed := failureStatus(failure)
+	hide := o.Hide
+	if hide == nil {
+		hide = func(s string) string { return s }
+	}
 
 	if o.FailureReason != "" {
-		return Decision{Comment: withMarker(ErrorComment(o.FailureReason)), Status: failed, Description: descCouldNotReview, Kind: KindFailed}
+		return Decision{Comment: withMarker(ErrorComment(hide(o.FailureReason))), Status: failed, Description: descCouldNotReview, Kind: KindFailed}
 	}
 	r := o.Result
 	if r == nil {
@@ -227,11 +238,11 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 	}
 	switch r.Status {
 	case "error":
-		comment := r.Comment.Markdown
+		comment := hide(r.Comment.Markdown)
 		if comment == "" {
 			reason := "the review failed"
 			if r.Error != nil && r.Error.Message != "" {
-				reason = r.Error.Message
+				reason = hide(r.Error.Message)
 			}
 			comment = ErrorComment(reason)
 		}
@@ -259,6 +270,7 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 	// block and a cut comment can't hide a credential from the pass over the
 	// finished comment.
 	rs = redactSkills(rs, redact)
+	rs = hideInFailures(rs, hide)
 	comment := withMarker(redact(render.Comment(rs, renderOptions(o, r, redactAll(result.ChangedFiles(r), redact)))))
 	block := render.FindingsBlock(rs)
 	if r.MergeNote != "" {
@@ -396,6 +408,26 @@ func applyDismissals(o Outcome, r *result.Result) ([]render.Skill, bool) {
 		}
 	}
 	return nil, false
+}
+
+// hideInFailures is skills with hide applied to the message and lead of every
+// failure and to the notes, which carry a failed verification's error. skills
+// is not modified.
+func hideInFailures(skills []render.Skill, hide func(string) string) []render.Skill {
+	out := make([]render.Skill, len(skills))
+	for i, s := range skills {
+		s.Failures = nil
+		for _, f := range skills[i].Failures {
+			f.Message, f.Lead = hide(f.Message), hide(f.Lead)
+			s.Failures = append(s.Failures, f)
+		}
+		s.Notes = nil
+		for _, n := range skills[i].Notes {
+			s.Notes = append(s.Notes, hide(n))
+		}
+		out[i] = s
+	}
+	return out
 }
 
 // redactSkills is skills with redact applied to every text in them that came

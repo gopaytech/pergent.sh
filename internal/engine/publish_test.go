@@ -706,6 +706,60 @@ func TestPublishReplacesStepLimitAdviceInKeptSkills(t *testing.T) {
 	}
 }
 
+// A provider's error can name the model, the provider and the base URL the
+// run used. The comment says "the model" and "the provider" instead; the
+// stored result, which the dashboard shows, keeps the full text. A run that
+// recorded no model is left as it is.
+func TestPublishHidesTheModelInBatchFailures(t *testing.T) {
+	const baseURL = "https://llm.example.com/v1"
+	failing := func() result.Skill {
+		s := reviewed("failed", "a.go")
+		s.Failures = []result.Failure{
+			{Files: []string{"a.go"}, Message: "opencode reported UnknownError: Model not found: openai/gpt-example."},
+			{Files: []string{"b.go"}, Message: "POST " + baseURL + "/chat/completions: 502"},
+		}
+		return s
+	}
+	for _, tc := range []struct {
+		name     string
+		recorded bool
+	}{{"model recorded", true}, {"no model recorded", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnv(t)
+			addModel(t, env, "openai", "gpt-example", baseURL, "key-example")
+			head := sha('a')
+			res := resultFor(t, head, failing())
+			id := env.Dispatched(1, head)
+			if tc.recorded {
+				if err := env.Store.SetRunModel(env.ctx, id, "openai", "gpt-example"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if out, err := env.Store.StoreResult(env.ctx, id, "seed-token", res, env.Now()); err != nil || out != store.ResultStored {
+				t.Fatalf("StoreResult = %v, %v", out, err)
+			}
+			servePublish(env, 1, head)
+
+			publish(t, env)
+
+			wantPublished(t, env, id)
+			body := createdComment(t, env, 1)
+			named := strings.Contains(body, "gpt-example") || strings.Contains(body, "openai") || strings.Contains(body, "llm.example.com")
+			if tc.recorded {
+				if named || !strings.Contains(body, "Model not found: the model") || !strings.Contains(body, "the provider") {
+					t.Errorf("the comment names the model or provider, or lost the rest of the text:\n%s", body)
+				}
+			} else if !named {
+				t.Errorf("a run with no recorded model was changed:\n%s", body)
+			}
+			// The dashboard keeps the full text.
+			if got := string(env.Run(id).Result); !strings.Contains(got, "Model not found: openai/gpt-example.") {
+				t.Errorf("the stored result lost the full text: %s", got)
+			}
+		})
+	}
+}
+
 // A result without the phrase is stored and published as it came.
 func TestPublishLeavesResultWithoutStepLimitAdvice(t *testing.T) {
 	env := newTestEnv(t)
