@@ -176,6 +176,24 @@ describe("the old admin addresses", () => {
 describe("signing out", () => {
   const options = { "GET /api/sign-in-options": { body: { password: true, jwt: false } } };
 
+  // Dropped while the page is still up, /api/me would be read again by the
+  // page on its way out: with JWT sign-in, that read can sign the person in.
+  it("drops what it loaded only once the signed-in pages are gone", async () => {
+    fakeApi({ ...base, ...options, ...untilLogout(ssoAdmin) });
+    const { client } = renderApp("/");
+    const clear = client.clear.bind(client);
+    let buttonWhenCleared: HTMLElement | null | undefined;
+    vi.spyOn(client, "clear").mockImplementation(() => {
+      buttonWhenCleared = screen.queryByRole("button", { name: "Sign out" });
+      clear();
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Sign out" }));
+    await screen.findByRole("heading", { name: "Sign in to pergent.sh" });
+    expect(client.clear).toHaveBeenCalledOnce();
+    expect(buttonWhenCleared).toBeNull();
+    expect(client.getQueryData(["me"])).toBeUndefined();
+  });
+
   it("goes to the sign-in page from the user pages", async () => {
     fakeApi({ ...base, ...options, ...untilLogout(ssoAdmin) });
     renderApp("/");
