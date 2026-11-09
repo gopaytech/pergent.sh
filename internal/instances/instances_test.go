@@ -61,6 +61,16 @@ func newBox(t *testing.T, fill byte) *secretbox.Box {
 	return box
 }
 
+// addModel adds an entry to the store's list; the first one is the default.
+func addModel(t *testing.T, st *store.Store, provider, model, baseURL string, sealedKey []byte, at time.Time) store.LLMModel {
+	t.Helper()
+	m, err := st.CreateLLMModel(ctx, store.LLMModel{Provider: provider, Model: model, BaseURL: baseURL, APIKeySealed: sealedKey}, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
 func testConfig() *config.Config {
 	return &config.Config{
 		Dashboard: config.Dashboard{URL: "https://pergent.example.com"},
@@ -305,9 +315,7 @@ func TestLLMFromConfigOrStore(t *testing.T) {
 	}
 
 	// A row without a key is not enough.
-	if err := st.PutLLM(ctx, "anthropic", "claude-sonnet-4", "", nil, time.Now()); err != nil {
-		t.Fatal(err)
-	}
+	first := addModel(t, st, "anthropic", "claude-sonnet-4", "", nil, time.Now())
 	if err := r.LoadLLM(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -319,8 +327,8 @@ func TestLLMFromConfigOrStore(t *testing.T) {
 	}
 
 	at := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
-	if err := st.PutLLM(ctx, "anthropic", "claude-sonnet-4", "https://llm.example.com/v1", box.Seal([]byte("key-one")), at); err != nil {
-		t.Fatal(err)
+	if found, err := st.UpdateLLMModel(ctx, first.ID, "https://llm.example.com/v1", box.Seal([]byte("key-one")), at); err != nil || !found {
+		t.Fatalf("UpdateLLMModel = %v, %v", found, err)
 	}
 	if err := r.LoadLLM(ctx); err != nil {
 		t.Fatal(err)
@@ -335,8 +343,9 @@ func TestLLMFromConfigOrStore(t *testing.T) {
 	}
 
 	// A change is picked up by LoadLLM; every key seen is remembered.
-	if err := st.PutLLM(ctx, "openai", "gpt", "", box.Seal([]byte("key-two")), at); err != nil {
-		t.Fatal(err)
+	second := addModel(t, st, "openai", "gpt", "", box.Seal([]byte("key-two")), at)
+	if found, err := st.SetDefaultLLMModel(ctx, second.ID, at); err != nil || !found {
+		t.Fatalf("SetDefaultLLMModel = %v, %v", found, err)
 	}
 	if _, key, _, _ := r.LLM(); key != "key-one" {
 		t.Errorf("key before LoadLLM = %q, want the loaded one", key)
@@ -377,9 +386,7 @@ func TestLLMFromConfigOrStore(t *testing.T) {
 func TestLLMKeyUnopenable(t *testing.T) {
 	st := newStore(t)
 	other := newBox(t, 2)
-	if err := st.PutLLM(ctx, "anthropic", "m", "", other.Seal([]byte("plain-llm-value-9")), time.Now()); err != nil {
-		t.Fatal(err)
-	}
+	addModel(t, st, "anthropic", "m", "", other.Seal([]byte("plain-llm-value-9")), time.Now())
 	r := New(testConfig(), st, newBox(t, 1))
 	var logs strings.Builder
 	r.SetLog(slog.New(slog.NewTextHandler(&logs, nil)))
@@ -438,7 +445,7 @@ func TestLLMReadsModelAndKeyTogether(t *testing.T) {
 	r := New(testConfig(), nil, nil)
 	set := func(n string) {
 		r.llmMu.Lock()
-		r.llm = llmRow{llm: config.LLM{Provider: "p", Model: "model-" + n}, key: "key-" + n, found: true}
+		r.llm = []llmEntry{{Model: Model{ID: "id", LLM: config.LLM{Provider: "p", Model: "model-" + n}, Key: "key-" + n, Default: true, Source: SourceDashboard}}}
 		r.llmMu.Unlock()
 	}
 	set("a")
@@ -462,6 +469,158 @@ func TestLLMReadsModelAndKeyTogether(t *testing.T) {
 	}
 }
 
+// With an llm: block in the config and a nil store the list is that block,
+// read-only and the default.
+func TestModelsFromConfigIsReadOnlyDefault(t *testing.T) {
+	cfg := testConfig()
+	cfg.LLM = config.LLM{Provider: "anthropic", Model: "from-config", APIKeyEnv: "T_LLM_KEY"}
+	t.Setenv("T_LLM_KEY", "key-env")
+	r := New(cfg, nil, nil)
+
+	models := r.Models()
+	if len(models) != 1 {
+		t.Fatalf("Models() = %+v, want one entry", models)
+	}
+	if m := models[0]; m.ID != ConfigModelID || m.Source != SourceConfig || !m.Default || m.Key != "key-env" || m.LLM.Model != "from-config" {
+		t.Errorf("Models()[0] = %+v", m)
+	}
+	if m, ok := r.DefaultModel(); !ok || m.ID != ConfigModelID {
+		t.Errorf("DefaultModel() = %+v, %v", m, ok)
+	}
+	if m, ok := r.ModelByID(ConfigModelID); !ok || m.Key != "key-env" {
+		t.Errorf("ModelByID(config) = %+v, %v", m, ok)
+	}
+
+	// The entry stays in the list without a key, but is not usable.
+	t.Setenv("T_LLM_KEY", "")
+	if got := r.Models(); len(got) != 1 || got[0].Key != "" {
+		t.Errorf("Models() with the key variable empty = %+v", got)
+	}
+	if _, ok := r.DefaultModel(); ok {
+		t.Error("DefaultModel() is ok with the config's key variable empty")
+	}
+	if _, ok := r.ModelByID(ConfigModelID); ok {
+		t.Error("ModelByID(config) is ok with the config's key variable empty")
+	}
+}
+
+func TestModelByIDMissing(t *testing.T) {
+	r := New(testConfig(), nil, nil) // no llm: block, no store
+	for _, id := range []string{"", "nope", ConfigModelID} {
+		if m, ok := r.ModelByID(id); ok {
+			t.Errorf("ModelByID(%q) = %+v, true; want not ok", id, m)
+		}
+	}
+	if len(r.Models()) != 0 {
+		t.Errorf("Models() = %+v, want none", r.Models())
+	}
+	if _, ok := r.DefaultModel(); ok {
+		t.Error("DefaultModel() is ok with nothing set")
+	}
+}
+
+// The list holds the config's entry first, then the store's; the store's
+// default is the default only while the config has no llm: block.
+func TestModelsListsConfigThenStore(t *testing.T) {
+	st := newStore(t)
+	box := newBox(t, 1)
+	a := addModel(t, st, "anthropic", "a", "", box.Seal([]byte("key-a")), time.Now())
+	b := addModel(t, st, "openai", "b", "", nil, time.Now().Add(time.Second))
+	cfg := testConfig()
+	r := New(cfg, st, box)
+	if err := r.LoadLLM(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	got := r.Models()
+	if len(got) != 2 || got[0].ID != a.ID || !got[0].Default || got[1].ID != b.ID || got[1].Default {
+		t.Fatalf("Models() = %+v", got)
+	}
+	if m, ok := r.DefaultModel(); !ok || m.ID != a.ID || m.Key != "key-a" || m.Source != SourceDashboard {
+		t.Errorf("DefaultModel() = %+v, %v", m, ok)
+	}
+	if _, ok := r.ModelByID(b.ID); ok {
+		t.Error("ModelByID is ok for an entry without a key")
+	}
+
+	cfg.LLM = config.LLM{Provider: "anthropic", Model: "from-config", APIKeyEnv: "T_LLM_KEY"}
+	t.Setenv("T_LLM_KEY", "key-env")
+	got = r.Models()
+	if len(got) != 3 || got[0].ID != ConfigModelID || !got[0].Default || got[1].Default || got[2].Default {
+		t.Fatalf("Models() with a config block = %+v", got)
+	}
+	if m, ok := r.DefaultModel(); !ok || m.ID != ConfigModelID {
+		t.Errorf("DefaultModel() with a config block = %+v, %v", m, ok)
+	}
+	if m, ok := r.ModelByID(a.ID); !ok || m.Key != "key-a" || m.Default {
+		t.Errorf("ModelByID(a) with a config block = %+v, %v", m, ok)
+	}
+}
+
+// Every entry's key, and a key replaced since start, is remembered and
+// hidden by Redact.
+func TestLLMKeysCoverEveryEntry(t *testing.T) {
+	st := newStore(t)
+	box := newBox(t, 1)
+	a := addModel(t, st, "anthropic", "a", "", box.Seal([]byte("key-a-secret")), time.Now())
+	addModel(t, st, "openai", "b", "", box.Seal([]byte("key-b-secret")), time.Now())
+	r := New(testConfig(), st, box)
+	if err := r.LoadLLM(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if found, err := st.UpdateLLMModel(ctx, a.ID, "", box.Seal([]byte("key-a-newer")), time.Now()); err != nil || !found {
+		t.Fatalf("UpdateLLMModel = %v, %v", found, err)
+	}
+	if err := r.LoadLLM(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"key-a-newer", "key-a-secret", "key-b-secret"}
+	if got := r.LLMKeys(); !slices.Equal(got, want) {
+		t.Fatalf("LLMKeys = %v, want %v", got, want)
+	}
+	text := "x key-a-secret y key-a-newer z key-b-secret"
+	if got := r.Redact(text); got != "x *** y *** z ***" {
+		t.Errorf("Redact = %q", got)
+	}
+	held, err := r.HeldSecrets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range want {
+		if !slices.Contains(held, k) {
+			t.Errorf("HeldSecrets lacks %q", k)
+		}
+	}
+}
+
+// An entry whose key is sealed under another secret key warns and is not
+// usable, while the entries before and after it still are.
+func TestUnopenableKeyIsNotUsable(t *testing.T) {
+	st := newStore(t)
+	box := newBox(t, 1)
+	good := addModel(t, st, "anthropic", "good", "", box.Seal([]byte("key-good")), time.Now())
+	bad := addModel(t, st, "openai", "bad", "", newBox(t, 2).Seal([]byte("key-bad-secret")), time.Now().Add(time.Second))
+	r := New(testConfig(), st, box)
+	var logs strings.Builder
+	r.SetLog(slog.New(slog.NewTextHandler(&logs, nil)))
+	if err := r.LoadLLM(ctx); err != nil {
+		t.Fatalf("LoadLLM = %v, want the unopenable key reported as not set", err)
+	}
+	if _, ok := r.ModelByID(bad.ID); ok {
+		t.Error("ModelByID is ok for a key sealed with another secret key")
+	}
+	if m, ok := r.ModelByID(good.ID); !ok || m.Key != "key-good" {
+		t.Errorf("ModelByID(good) = %+v, %v", m, ok)
+	}
+	if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "field=api_key") || strings.Contains(out, "key-bad-secret") {
+		t.Errorf("log = %q; want a Warn naming the api_key field", out)
+	}
+	if got := r.LLMKeys(); !slices.Equal(got, []string{"key-good"}) {
+		t.Errorf("LLMKeys = %v, want only the one that opened", got)
+	}
+}
+
 // HeldSecrets lists every secret of every instance, the config's and the
 // dashboard's, GitLab and GitHub, App and token approvers, and every LLM key.
 func TestHeldSecretsCoversEveryField(t *testing.T) {
@@ -482,9 +641,7 @@ func TestHeldSecretsCoversEveryField(t *testing.T) {
 		map[string]string{FieldReviewAppKey: "hub-review-key", FieldApproveAppKey: "hub-approve-key", FieldWebhookSecret: "hub-hook-secret"})
 	addRow(t, st, box, store.InstanceRow{Name: "hub2", Platform: config.PlatformGitHub, APIURL: "https://ghe.example.com/api/v3", ReviewAppID: 3},
 		map[string]string{FieldReviewAppKey: "hub2-review-key", FieldApproveToken: "hub2-approve-pat", FieldWebhookSecret: "hub2-hook-secret"})
-	if err := st.PutLLM(ctx, "anthropic", "claude-sonnet-4", "", box.Seal([]byte("llm-key-one")), time.Now()); err != nil {
-		t.Fatal(err)
-	}
+	llmModel := addModel(t, st, "anthropic", "claude-sonnet-4", "", box.Seal([]byte("llm-key-one")), time.Now())
 
 	reg := New(testConfig(), st, box)
 	if err := reg.Load(ctx); err != nil {
@@ -516,8 +673,8 @@ func TestHeldSecretsCoversEveryField(t *testing.T) {
 	}
 
 	// A key the LLM held earlier still counts.
-	if err := st.PutLLM(ctx, "anthropic", "claude-sonnet-4", "", box.Seal([]byte("llm-key-two")), time.Now()); err != nil {
-		t.Fatal(err)
+	if found, err := st.UpdateLLMModel(ctx, llmModel.ID, "", box.Seal([]byte("llm-key-two")), time.Now()); err != nil || !found {
+		t.Fatalf("UpdateLLMModel = %v, %v", found, err)
 	}
 	if err := reg.LoadLLM(ctx); err != nil {
 		t.Fatal(err)

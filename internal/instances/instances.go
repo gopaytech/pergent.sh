@@ -117,22 +117,21 @@ type Registry struct {
 	mu   sync.RWMutex
 	dash map[string]Instance
 
-	// llm is the LLM set in the dashboard (the store's row, its key opened);
-	// llmSeen is every key held since start, for redaction.
+	// llm is the list of models set in the dashboard (the store's entries,
+	// their keys opened); llmSeen is every key held since start, for
+	// redaction.
 	llmMu   sync.RWMutex
-	llm     llmRow
+	llm     []llmEntry
 	llmSeen []string
 
 	log *slog.Logger // nil: slog.Default()
 }
 
-// llmRow is the store's LLM row with its key opened. key is "" when the row
-// has none or it can't be opened.
-type llmRow struct {
-	llm       config.LLM
-	key       string
+// llmEntry is an entry of the store's list with its key opened. Model.Key is
+// "" when the entry has none or it can't be opened.
+type llmEntry struct {
+	Model
 	updatedAt time.Time
-	found     bool
 }
 
 // New returns a Registry over cfg and, for the dashboard's instances and
@@ -513,12 +512,27 @@ func (r *Registry) configSecrets(inst Instance) (Secrets, error) {
 	return s, nil
 }
 
-// LLMState is the LLM as the dashboard shows it. Source is SourceConfig when
-// the config file has an llm: block (then the dashboard can't change it) and
-// SourceDashboard otherwise, even when nothing is set yet. KeySet is false
-// when the key is missing, the env var empty or the stored key can't be
-// opened. UpdatedAt is when the dashboard last saved it; zero for the
-// config's.
+// ConfigModelID is the fixed ID of the entry the config file's llm: block
+// supplies; a repository may name it.
+const ConfigModelID = store.ConfigModelID
+
+// Model is one entry of the list of models. Key is in the clear and empty
+// when the entry has none, its env var is empty or the stored one can't be
+// opened. Default is the entry reviews use when a repository names none.
+type Model struct {
+	ID      string
+	LLM     config.LLM
+	Key     string
+	Default bool
+	Source  Source
+}
+
+// LLMState is the default LLM as the dashboard shows it. Source is
+// SourceConfig when the config file has an llm: block (then the dashboard
+// can't change it) and SourceDashboard otherwise, even when nothing is set
+// yet. KeySet is false when the key is missing, the env var empty or the
+// stored key can't be opened. UpdatedAt is when the dashboard last saved the
+// entry; zero for the config's.
 type LLMState struct {
 	Source    Source
 	LLM       config.LLM
@@ -526,11 +540,51 @@ type LLMState struct {
 	UpdatedAt time.Time
 }
 
-// LLM returns the LLM reviews use: the config's llm: block when it has one,
-// with its key from the env var it names, otherwise the one set in the
-// dashboard. ok is false when there is none, or its key is missing or can't
-// be opened. The model and the key are read together, so a LoadLLM at the
-// same time can't pair the old model with the new key.
+// Models returns every entry of the list: the config's llm: block first when
+// it has one, then those of the dashboard, oldest first. The config's entry
+// is the default whenever it exists. Entries without a usable key are in the
+// list, with an empty Key.
+func (r *Registry) Models() []Model {
+	var out []Model
+	if m, ok := r.configModel(); ok {
+		out = append(out, m)
+	}
+	r.llmMu.RLock()
+	defer r.llmMu.RUnlock()
+	for _, e := range r.llm {
+		m := e.Model
+		m.Default = m.Default && !r.cfg.HasLLM()
+		out = append(out, m)
+	}
+	return out
+}
+
+// DefaultModel returns the model a repository that names none runs on: the
+// config's entry whenever the config has an llm: block, otherwise the
+// dashboard's default. ok is false when there is none or its key is missing
+// or can't be opened.
+func (r *Registry) DefaultModel() (Model, bool) {
+	m, _ := r.defaultModel()
+	return m, m.Key != ""
+}
+
+// ModelByID returns the entry with that ID. ok is false when there is none
+// (ConfigModelID included, once the config has no llm: block) or its key is
+// missing or can't be opened.
+func (r *Registry) ModelByID(id string) (Model, bool) {
+	for _, m := range r.Models() {
+		if m.ID == id {
+			return m, m.Key != ""
+		}
+	}
+	return Model{}, false
+}
+
+// LLM returns the LLM a review uses when its repository names no model: the
+// default entry (see DefaultModel), with its key. ok is false when there is
+// none, or its key is missing or can't be opened. The model and the key are
+// read together, so a LoadLLM at the same time can't pair the old model with
+// the new key.
 func (r *Registry) LLM() (llm config.LLM, key string, source Source, ok bool) {
 	st, key := r.llmState()
 	if key == "" {
@@ -539,49 +593,73 @@ func (r *Registry) LLM() (llm config.LLM, key string, source Source, ok bool) {
 	return st.LLM, key, st.Source, true
 }
 
-// LLMStatus describes the LLM without its key (see LLMState).
+// LLMStatus describes the default LLM without its key (see LLMState).
 func (r *Registry) LLMStatus() LLMState {
 	st, _ := r.llmState()
 	return st
 }
 
-// llmState is the LLM and its key, read as one.
+// llmState is the default LLM and its key, read as one.
 func (r *Registry) llmState() (LLMState, string) {
-	if r.cfg.HasLLM() {
-		key := envValue(r.cfg.LLM.APIKeyEnv)
-		r.noteKey(key)
-		return LLMState{Source: SourceConfig, LLM: r.cfg.LLM, KeySet: key != ""}, key
+	m, updatedAt := r.defaultModel()
+	return LLMState{Source: m.Source, LLM: m.LLM, KeySet: m.Key != "", UpdatedAt: updatedAt}, m.Key
+}
+
+// defaultModel is the default entry, read as one, and when the dashboard last
+// saved it. With nothing set it is the zero Model from the dashboard.
+func (r *Registry) defaultModel() (Model, time.Time) {
+	if m, ok := r.configModel(); ok {
+		return m, time.Time{}
 	}
 	r.llmMu.RLock()
 	defer r.llmMu.RUnlock()
-	return LLMState{Source: SourceDashboard, LLM: r.llm.llm, KeySet: r.llm.key != "", UpdatedAt: r.llm.updatedAt}, r.llm.key
+	for _, e := range r.llm {
+		if e.Default {
+			return e.Model, e.updatedAt
+		}
+	}
+	return Model{Source: SourceDashboard}, time.Time{}
 }
 
-// LoadLLM reads the LLM row from the store again: at startup, and after the
-// dashboard saved it. A key that can't be opened, because
+// configModel is the entry of the config's llm: block, its key from the env
+// var it names; ok is false when the config has none.
+func (r *Registry) configModel() (Model, bool) {
+	if !r.cfg.HasLLM() {
+		return Model{}, false
+	}
+	key := envValue(r.cfg.LLM.APIKeyEnv)
+	r.noteKey(key)
+	return Model{ID: ConfigModelID, LLM: r.cfg.LLM, Key: key, Default: true, Source: SourceConfig}, true
+}
+
+// LoadLLM reads the list of models from the store again: at startup, and
+// after the dashboard changed it. A key that can't be opened, because
 // PERGENT_SH_SECRET_KEY changed, counts as not set.
 func (r *Registry) LoadLLM(ctx context.Context) error {
 	if r.st == nil {
 		return nil
 	}
-	row, found, err := r.st.LLM(ctx)
+	rows, err := r.st.LLMModels(ctx)
 	if err != nil {
-		return fmt.Errorf("read the LLM: %w", err)
+		return fmt.Errorf("read the models: %w", err)
 	}
-	next := llmRow{found: found}
-	if found {
-		next.llm = config.LLM{Provider: row.Provider, Model: row.Model, BaseURL: row.BaseURL}
-		next.updatedAt = row.UpdatedAt
+	next := make([]llmEntry, 0, len(rows))
+	for _, row := range rows {
+		e := llmEntry{updatedAt: row.UpdatedAt, Model: Model{
+			ID: row.ID, LLM: config.LLM{Provider: row.Provider, Model: row.Model, BaseURL: row.BaseURL},
+			Default: row.Default, Source: SourceDashboard,
+		}}
 		if len(row.APIKeySealed) > 0 && r.box != nil {
 			if plain, err := r.box.Open(row.APIKeySealed); err == nil {
-				next.key = string(plain)
+				e.Key = string(plain)
 			} else {
-				r.logger().Warn("the LLM api_key couldn't be opened with PERGENT_SH_SECRET_KEY; it counts as not set",
-					"field", "api_key")
+				r.logger().Warn("a model's api_key couldn't be opened with PERGENT_SH_SECRET_KEY; it counts as not set",
+					"field", "api_key", "model_id", row.ID)
 			}
 		}
+		r.noteKey(e.Key)
+		next = append(next, e)
 	}
-	r.noteKey(next.key)
 	r.llmMu.Lock()
 	r.llm = next
 	r.llmMu.Unlock()

@@ -139,7 +139,8 @@ func TestDispatchWaitsWithoutLLM(t *testing.T) {
 		t.Errorf("the wait was logged %d times after a minute, want twice", n)
 	}
 
-	if err := env.Store.PutLLM(env.ctx, "openai", "gpt-example", "https://llm.example.com/v1", env.Box.Seal([]byte("llm-key-new")), env.Now()); err != nil {
+	if _, err := env.Store.CreateLLMModel(env.ctx, store.LLMModel{Provider: "openai", Model: "gpt-example", BaseURL: "https://llm.example.com/v1",
+		APIKeySealed: env.Box.Seal([]byte("llm-key-new"))}, env.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if err := env.Engine.Instances.LoadLLM(env.ctx); err != nil {
@@ -172,10 +173,18 @@ func TestDispatchWaitsWithoutLLM(t *testing.T) {
 func TestRedactsEveryLLMKeySeen(t *testing.T) {
 	env := newTestEnv(t)
 	env.Engine.Config.LLM = config.LLM{}
+	var id string // the one entry, created by the first save, its key replaced by the next
 	save := func(key string) {
 		t.Helper()
-		if err := env.Store.PutLLM(env.ctx, "openai", "m", "", env.Box.Seal([]byte(key)), env.Now()); err != nil {
-			t.Fatal(err)
+		sealed := env.Box.Seal([]byte(key))
+		if id == "" {
+			m, err := env.Store.CreateLLMModel(env.ctx, store.LLMModel{Provider: "openai", Model: "m", APIKeySealed: sealed}, env.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			id = m.ID
+		} else if found, err := env.Store.UpdateLLMModel(env.ctx, id, "", sealed, env.Now()); err != nil || !found {
+			t.Fatalf("UpdateLLMModel = %v, %v", found, err)
 		}
 		if err := env.Engine.Instances.LoadLLM(env.ctx); err != nil {
 			t.Fatal(err)
