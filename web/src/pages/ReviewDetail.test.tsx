@@ -87,7 +87,7 @@ describe("ReviewDetail", () => {
     expect(await within(run).findByText("v0.1.0")).toBeInTheDocument();
     expect(run).toHaveTextContent("Status on GitLab: failed");
     expect(run).toHaveTextContent("Approved: no — Blocking issues were found.");
-    expect(run).toHaveTextContent("model claude-sonnet · max steps 40");
+    expect(run).toHaveTextContent("model anthropic / claude-sonnet · max steps 40");
     expect(run).toHaveTextContent("Tokens: 48.2k in · 6.1k out");
     expect(run).toHaveTextContent("Files: 2 reviewed · 1 skipped · 1 not reviewed");
 
@@ -102,7 +102,22 @@ describe("ReviewDetail", () => {
     renderAndWait({ ...runDetail, maxTurns: null });
     const run = await screen.findByRole("region", { name: "This run" });
     expect(await within(run).findByText("v0.1.0")).toBeInTheDocument();
-    expect(run).toHaveTextContent("model claude-sonnet · max steps not recorded");
+    expect(run).toHaveTextContent("model anthropic / claude-sonnet · max steps not recorded");
+  });
+
+  it("shows the model alone for a run that recorded no provider", async () => {
+    renderAndWait({ ...runDetail, provider: null });
+    const run = await screen.findByRole("region", { name: "This run" });
+    expect(await within(run).findByText("v0.1.0")).toBeInTheDocument();
+    expect(run).toHaveTextContent("model claude-sonnet · max steps 40");
+    expect(run).not.toHaveTextContent("/ claude-sonnet");
+  });
+
+  it("says the model was not recorded when neither was", async () => {
+    renderAndWait({ ...runDetail, provider: null, model: null });
+    const run = await screen.findByRole("region", { name: "This run" });
+    expect(await within(run).findByText("v0.1.0")).toBeInTheDocument();
+    expect(run).toHaveTextContent("model not recorded · max steps 40");
   });
 
   it("lists the findings with their fix", async () => {

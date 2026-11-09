@@ -4329,7 +4329,7 @@ components:
     RunDetailView:
       description: One run. A run without a usable result has no skills or files.
       type: object
-      required: [run, instance, project, number, status, approved, approvalReason, pergentVersion, model, maxTurns, quiet, incrementalNote, tokens, files, skills, latestDecided]
+      required: [run, instance, project, number, status, approved, approvalReason, pergentVersion, model, provider, maxTurns, quiet, incrementalNote, tokens, files, skills, latestDecided]
       properties:
         run: {$ref: '#/components/schemas/RunSummary'}
         instance: {type: string}
@@ -4349,6 +4349,9 @@ components:
         model:
           type: [string, 'null']
           description: The model the review ran with; null for a run that did not record it.
+        provider:
+          type: [string, 'null']
+          description: The provider the review ran with; null for a run that did not record it, as before the list of models.
         maxTurns:
           type: [integer, 'null']
           description: The step limit each opencode run had; null when not recorded.

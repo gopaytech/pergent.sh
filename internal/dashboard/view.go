@@ -192,6 +192,10 @@ type RunDetailView struct {
 	// Model is the model the review ran with, as recorded when it started;
 	// null for a run that didn't record it.
 	Model *string `json:"model"`
+	// Provider is the provider the review ran with, as recorded when it
+	// started; null for a run that didn't record it (an earlier release
+	// recorded the model alone).
+	Provider *string `json:"provider"`
 	// MaxTurns is the step limit each opencode run of the review had, as
 	// recorded when it started; null for a run that didn't record it.
 	MaxTurns *int `json:"maxTurns"`

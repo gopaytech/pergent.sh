@@ -554,7 +554,7 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 	}
 	view := RunDetailView{
 		Run: runSummary(digests[idx], prev, j), Instance: run.MR.Instance, Project: run.ProjectPath, Number: run.MR.IID,
-		Status: j.status, Approved: run.Approved, ApprovalReason: j.reason, Model: run.Model, MaxTurns: run.MaxTurns, Quiet: run.Quiet,
+		Status: j.status, Approved: run.Approved, ApprovalReason: j.reason, Model: run.Model, Provider: run.Provider, MaxTurns: run.MaxTurns, Quiet: run.Quiet,
 		Files:  FilesView{Reviewed: []string{}, Skipped: []SkippedFile{}, NotReviewed: []NotReviewedFile{}},
 		Skills: []SkillView{},
 	}

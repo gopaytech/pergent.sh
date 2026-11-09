@@ -188,6 +188,8 @@ export type RunDetailView = {
   approvalReason: string;
   pergentVersion: string;
   model: string | null;
+  // The provider the run used; null for a run from before it was recorded.
+  provider: string | null;
   // The step limit the run had; null for a run from before it was recorded.
   maxTurns: number | null;
   // What an incremental review covered ("Re-reviewed 2 files · 28 carried over

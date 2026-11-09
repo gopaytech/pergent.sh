@@ -726,7 +726,7 @@ func TestRunDetail(t *testing.T) {
 	// code-review is a library skill, but this repository replaced it
 	// with its own when the review ran.
 	id := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: string(b), duration: time.Minute,
-		outcome: OutcomeBlocking, model: "claude-sonnet-4", maxTurns: ptr(40), sources: `{"code-review":"repo","team-rules":"repo"}`})
+		outcome: OutcomeBlocking, provider: "anthropic", model: "claude-sonnet-4", maxTurns: ptr(40), sources: `{"code-review":"repo","team-rules":"repo"}`})
 	failed := e.addRun(runFix{project: "acme/widgets", number: 4, head: head('b'), outcome: OutcomeFailed,
 		failure: "the review Job ran out of memory (OOMKilled)"})
 	// A run that recorded no model or skill sources.
@@ -741,8 +741,8 @@ func TestRunDetail(t *testing.T) {
 		t.Errorf("run = %+v", v)
 	}
 	if v.Status != "failed" || v.Approved || v.ApprovalReason == "" || v.PergentVersion != "0.1.0" ||
-		v.Model == nil || *v.Model != "claude-sonnet-4" {
-		t.Errorf("status %q approved %v reason %q version %q model %v", v.Status, v.Approved, v.ApprovalReason, v.PergentVersion, v.Model)
+		v.Model == nil || *v.Model != "claude-sonnet-4" || v.Provider == nil || *v.Provider != "anthropic" {
+		t.Errorf("status %q approved %v reason %q version %q provider %v model %v", v.Status, v.Approved, v.ApprovalReason, v.PergentVersion, v.Provider, v.Model)
 	}
 	if v.Tokens != (TokensView{In: 52410, Out: 1850}) {
 		t.Errorf("tokens = %+v", v.Tokens)
@@ -776,16 +776,16 @@ func TestRunDetail(t *testing.T) {
 
 	f := getJSON[RunDetailView](e, c, "/api/runs/"+failed)
 	if f.Run.Outcome != OutcomeFailed || f.Run.Reason != "the review Job ran out of memory (OOMKilled)" ||
-		f.Status != "failed" || len(f.Skills) != 0 || f.Files.Reviewed == nil || f.Model != nil {
+		f.Status != "failed" || len(f.Skills) != 0 || f.Files.Reviewed == nil || f.Model != nil || f.Provider != nil {
 		t.Errorf("failed run = %+v", f)
 	}
 
 	o := getJSON[RunDetailView](e, c, "/api/runs/"+older)
-	if o.Model != nil || len(o.Skills) != 1 || o.Skills[0].Source != nil || !o.Approved || o.ApprovalReason != "" || o.Status != "success" {
+	if o.Model != nil || o.Provider != nil || len(o.Skills) != 1 || o.Skills[0].Source != nil || !o.Approved || o.ApprovalReason != "" || o.Status != "success" {
 		t.Errorf("run without recorded inputs = %+v", o)
 	}
 	raw := e.get(c, "/api/runs/"+older).Body.String()
-	if !strings.Contains(raw, `"model":null`) || !strings.Contains(raw, `"source":null`) || !strings.Contains(raw, `"maxTurns":null`) {
+	if !strings.Contains(raw, `"model":null`) || !strings.Contains(raw, `"provider":null`) || !strings.Contains(raw, `"source":null`) || !strings.Contains(raw, `"maxTurns":null`) {
 		t.Errorf("body = %s; want null model, maxTurns and source", raw)
 	}
 	// The step limit is the one the run was dispatched with.

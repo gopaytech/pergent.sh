@@ -162,6 +162,7 @@ export const runDetail: RunDetailView = {
   latestDecided: true,
   pergentVersion: "v0.1.0",
   model: "claude-sonnet",
+  provider: "anthropic",
   maxTurns: 40,
   incrementalNote: "",
   quiet: false,
