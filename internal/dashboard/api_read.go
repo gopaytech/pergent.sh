@@ -894,7 +894,8 @@ func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Ef
 		wv = append(wv, WaitingView{Number: c.IID, Head: c.Head, Title: c.Title, Author: c.Author, WebURL: c.WebURL, Since: c.Since, Reason: c.Reason})
 	}
 	return RepositoryDetailView{Repo: views[0], Settings: settingsView, Attention: items, Role: role.String(), Waiting: wv,
-		InstanceTrustedAuthorsOnly: repo.InstanceTrustedAuthorsOnly}, nil
+		InstanceTrustedAuthorsOnly: repo.InstanceTrustedAuthorsOnly,
+		Model:                      d.effectiveModel(repo.ModelID), ModelChoices: d.modelChoices(role)}, nil
 }
 
 // settingViews is repo's settings as RepositoryDetailView shows them.
@@ -921,6 +922,7 @@ func settingViews(repo settings.Effective) map[string]SettingView {
 		"rerunLimitPerRepo":                {repo.RerunLimitPerRepo, ov[settings.KeyRerunLimitPerRepo]},
 		"trustedAuthorsOnly":               {repo.TrustedAuthorsOnly, ov[settings.KeyTrustedAuthorsOnly]},
 		"trustedAuthors":                   {nonNilAuthors(repo.TrustedAuthors), ov[settings.KeyTrustedAuthors]},
+		"model":                            {modelValue(repo), ov[settings.KeyModel]},
 	}
 }
 

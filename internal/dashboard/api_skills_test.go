@@ -861,8 +861,8 @@ func TestSaveRefusesHeldSecret(t *testing.T) {
 	op := e.operator()
 	e.addLab(op)
 	e.sendJSON(op, "POST", "/api/admin/instances", hubBody(nil))
-	wantCode(t, e.sendJSON(op, "PUT", "/api/admin/llm", map[string]any{"provider": "anthropic", "model": "claude-sonnet-4", "apiKey": llmKeyOne}),
-		"PUT llm", http.StatusOK)
+	wantCode(t, e.sendJSON(op, "POST", "/api/admin/models", map[string]any{"provider": "anthropic", "model": "claude-sonnet-4", "apiKey": llmKeyOne}),
+		"POST models", http.StatusCreated)
 	e.skill("style", "Style text.")
 	e.installedSkill("remote", "Remote text.")
 	admin := e.userOnMain(true, "acme/widgets")

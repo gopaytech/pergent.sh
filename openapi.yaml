@@ -1189,9 +1189,11 @@ paths:
         (null: the default list), `repoSkills`, `jobTimeoutSeconds`,
         `maxTurns`, `jobMemory`
         (`""` when none), `rerunLimitPerMR`, `rerunLimitPerRepo`,
-        `trustedAuthorsOnly` (the mode in effect) and `trustedAuthors`; each
-        value says whether the repository sets it (`overridden`) or follows
-        the default.
+        `trustedAuthorsOnly` (the mode in effect), `trustedAuthors` and `model`
+        (the ID of the entry of the list of models, null for the default);
+        each value says whether the repository sets it (`overridden`) or
+        follows the default. `model` and `modelChoices` of the body name the
+        model reviews run on and the entries an admin can choose from.
       x-pergent-access: session
       x-pergent-pattern: GET /api/repositories/{instance}/{rest...}
       security:
@@ -2528,32 +2530,37 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
         '502': {$ref: '#/components/responses/BadGateway'}
-  /api/admin/llm:
+  /api/admin/models:
     get:
-      operationId: getLLM
+      operationId: listModels
       tags: [Instances and settings]
-      summary: The model reviews use
-      description: Admins only. Whether a key is set and when it changed; never the key.
+      summary: The list of models reviews can run on
+      description: |
+        Admins only. The config file's `llm:` block first, as a read-only entry
+        with the ID `config`, then the entries added in the dashboard, oldest
+        first. Whether a key is set and when it changed; never the key.
+        `followingDefault` counts the repositories that name no model.
       x-pergent-access: admin
       security:
         - sessionCookie: []
       responses:
         '200':
-          description: The model.
+          description: The list.
           content:
             application/json:
-              schema: {$ref: '#/components/schemas/LLMAdminView'}
+              schema: {$ref: '#/components/schemas/ModelsAdminView'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
-    put:
-      operationId: putLLM
+    post:
+      operationId: createModel
       tags: [Instances and settings]
-      summary: Set the model reviews use
+      summary: Add a model to the list
       description: |
-        Admins only. 409 when the config has an `llm:` block. The key is
-        needed only when none is stored; a key sent is sealed and never
-        returned.
+        Admins only. The first entry becomes the default. The key is sealed and
+        never returned. The same provider, model and base URL as an entry
+        there is 409. Nothing is checked against the provider: a review that
+        cannot use the model fails and says why.
       x-pergent-access: admin
       security:
         - sessionCookie: []
@@ -2562,16 +2569,105 @@ paths:
         required: true
         content:
           application/json:
-            schema: {$ref: '#/components/schemas/PutLLMRequest'}
+            schema: {$ref: '#/components/schemas/CreateModelRequest'}
       responses:
-        '200':
-          description: Saved.
+        '201':
+          description: Added.
           content:
             application/json:
-              schema: {$ref: '#/components/schemas/LLMAdminView'}
+              schema: {$ref: '#/components/schemas/ModelAdminView'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/models/{id}:
+    put:
+      operationId: updateModel
+      tags: [Instances and settings]
+      summary: Change a model's base URL or key
+      description: |
+        Admins only. Only the base URL and the key change: a `provider` or
+        `model` in the body is 400, as a different one is a new entry. The key
+        is replaced only when `apiKey` is sent. The entry the config file
+        supplies (`config`) is 409. The change applies from the next review.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/ModelId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateModelRequest'}
+      responses:
+        '200':
+          description: Changed.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ModelAdminView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: deleteModel
+      tags: [Instances and settings]
+      summary: Remove a model from the list
+      description: |
+        Admins only. A model a repository names is 409, with the repositories
+        in the body (`ModelInUseView`); so is the default, and the entry the
+        config file supplies. A repository is never moved to another model by
+        a removal.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/ModelId'
+      responses:
+        '204':
+          description: Removed.
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: The model is in use, or is the default, or is the config file's.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ModelInUseView'
+                  - $ref: '#/components/schemas/ErrorBody'
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/models/{id}/default:
+    post:
+      operationId: setDefaultModel
+      tags: [Instances and settings]
+      summary: Make a model the default
+      description: |
+        Admins only. Every repository that names no model moves to it from its
+        next review (`followingDefault` of the list says how many). 409 while
+        the config file has an `llm:` block, which is the default.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/ModelId'
+      responses:
+        '200':
+          description: The list, with the new default.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ModelsAdminView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/sign-in:
@@ -2777,6 +2873,12 @@ components:
       in: path
       required: true
       description: The instance's name.
+      schema: {type: string}
+    ModelId:
+      name: id
+      in: path
+      required: true
+      description: The model's ID in the list; `config` is the entry the config file supplies.
       schema: {type: string}
     UsageDays:
       name: days
@@ -3121,9 +3223,10 @@ components:
         approveAppID:
           type: [integer, 'null']
           format: int64
-    PutLLMRequest:
+    CreateModelRequest:
       type: object
-      required: [provider, model]
+      required: [provider, model, apiKey]
+      additionalProperties: false
       properties:
         provider:
           type: string
@@ -3135,9 +3238,22 @@ components:
           type: string
           description: Empty, or an absolute http or https URL without credentials (at most 2048 characters).
         apiKey:
+          type: string
+          format: password
+          description: At most 16 KiB. Sealed, and never returned.
+    UpdateModelRequest:
+      type: object
+      required: [baseURL]
+      additionalProperties: false
+      description: A `provider` or `model` is 400, as they never change.
+      properties:
+        baseURL:
+          type: string
+          description: Empty, or an absolute http or https URL without credentials (at most 2048 characters).
+        apiKey:
           type: [string, 'null']
           format: password
-          description: Needed only when none is stored. At most 16 KiB. Never returned.
+          description: Replaces the key when sent. At most 16 KiB. Never returned.
     CreateSkillRequest:
       type: object
       required: [name, content]
@@ -3299,6 +3415,14 @@ components:
           maxItems: 100
           description: The repository's allowlist. An entry without `id` is looked up by username when it is saved (400 when the platform doesn't know it), then stored by ID.
           items: {$ref: '#/components/schemas/TrustedAuthorInput'}
+        model:
+          type: [string, 'null']
+          description: |
+            The ID of an entry of the list of models (`GET /api/admin/models`)
+            the repository runs on; null follows the default. Admins of the
+            repository only (403 for a maintainer). An ID that is not in the
+            list is 400, and so is `config` while the config file has no `llm:`
+            block.
     StartRequest:
       type: object
       required: [head]
@@ -3886,21 +4010,67 @@ components:
           enum: [oidc, jwt]
         issuer: {type: string}
         jwksURL: {type: string}
-    LLMAdminView:
-      description: Where the model comes from ("config" or "dashboard"), the model, and whether a key is set.
+    ModelsAdminView:
+      description: The list of models and how many repositories follow the default.
       type: object
-      required: [source, provider, model, baseURL, key, editable]
+      required: [editable, followingDefault, models]
       properties:
-        source:
+        editable:
+          type: boolean
+          description: False while the config file has an `llm:` block, which is the default then and cannot be replaced as such.
+        followingDefault:
+          type: integer
+          description: The repositories that name no model, the config file's included. A change of the default moves them.
+        models:
+          type: array
+          items: {$ref: '#/components/schemas/ModelAdminView'}
+    ModelAdminView:
+      description: One entry of the list of models.
+      type: object
+      required: [id, provider, model, baseURL, source, default, key, repositories]
+      properties:
+        id:
           type: string
-          enum: [config, dashboard]
+          description: The entry's ID, which stays; `config` for the entry the config file supplies.
         provider: {type: string}
         model: {type: string}
         baseURL: {type: string}
-        key: {$ref: '#/components/schemas/SecretView'}
-        editable:
+        source:
+          type: string
+          enum: [config, dashboard]
+        default:
           type: boolean
-          description: 'True for an admin when the config has no llm: block.'
+          description: The entry reviews use when a repository names none. While the config has an `llm:` block that is its entry alone.
+        key: {$ref: '#/components/schemas/SecretView'}
+        repositories:
+          type: array
+          items: {$ref: '#/components/schemas/RepoRefView'}
+          description: The repositories that name the entry.
+    RepoRefView:
+      description: A repository, by instance and project.
+      type: object
+      required: [instance, project]
+      properties:
+        instance: {type: string}
+        project: {type: string}
+    ModelInUseView:
+      description: The 409 of a removal of a model that repositories name.
+      type: object
+      required: [error, repositories]
+      properties:
+        error: {type: string}
+        repositories:
+          type: array
+          items: {$ref: '#/components/schemas/RepoRefView'}
+    ModelChoiceView:
+      description: An entry of the list a repository can be given, never with its base URL or key.
+      type: object
+      required: [id, label]
+      properties:
+        id: {type: string}
+        label:
+          type: string
+          description: '`provider / model`.'
     LLMView:
       description: The model reviews use.
       type: object
@@ -4029,7 +4199,7 @@ components:
     RepositoryDetailView:
       description: A repository with its effective settings.
       type: object
-      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly]
+      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, modelChoices]
       properties:
         repo: {$ref: '#/components/schemas/RepositoryView'}
         settings:
@@ -4038,7 +4208,9 @@ components:
           description: Keyed approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews,
             learnFromDismissals, quietReviews, commentLayout, linkedReposEnabled, linkedRepos, failureStatus, skills, repoSkills, jobTimeoutSeconds, maxTurns, jobMemory,
             rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly (the mode in
-            effect, follow_visibility, on or off) and trustedAuthors (a list of TrustedAuthor).
+            effect, follow_visibility, on or off), trustedAuthors (a list of TrustedAuthor)
+            and model (the ID of the entry of the list of models the repository names, null
+            while it follows the default).
         attention:
           type: array
           items: {$ref: '#/components/schemas/AttentionView'}
@@ -4054,6 +4226,15 @@ components:
           type: string
           enum: [follow_visibility, 'on', 'off']
           description: The instance's trusted-authors mode, which the repository follows unless it sets its own.
+        model:
+          type: string
+          description: |
+            `provider / model` the repository's reviews run on: the entry it names, else the default.
+            Empty when there is none. Never the base URL or the key.
+        modelChoices:
+          type: array
+          items: {$ref: '#/components/schemas/ModelChoiceView'}
+          description: The entries of the list the repository can be given; empty unless the session is an admin of the repository.
     RepositoryView:
       description: One repository switched on.
       type: object

@@ -717,8 +717,11 @@ func TestOnlyAdminsTouchInstances(t *testing.T) {
 		{"DELETE", "/api/admin/instances/lab", ""},
 		{"GET", "/api/admin/instances/lab/repositories", ""},
 		{"GET", "/api/repositories/available?instance=lab", ""},
-		{"GET", "/api/admin/llm", ""},
-		{"PUT", "/api/admin/llm", `{}`},
+		{"GET", "/api/admin/models", ""},
+		{"POST", "/api/admin/models", `{}`},
+		{"PUT", "/api/admin/models/x", `{}`},
+		{"POST", "/api/admin/models/x/default", ""},
+		{"DELETE", "/api/admin/models/x", ""},
 		{"GET", "/api/admin/defaults", ""},
 		{"PUT", "/api/admin/defaults", `{}`},
 	} {
@@ -738,17 +741,17 @@ func TestOnlyAdminsTouchInstances(t *testing.T) {
 		t.Error("lab was removed by someone who is no admin")
 	}
 	// An SSO admin has the same powers as a local one.
-	for _, target := range []string{"/api/admin/instances", "/api/admin/llm", "/api/admin/defaults", "/api/admin/instances/lab/repositories",
+	for _, target := range []string{"/api/admin/instances", "/api/admin/models", "/api/admin/defaults", "/api/admin/instances/lab/repositories",
 		"/api/repositories/available?instance=lab"} {
 		if rec := e.get(boss, target); rec.Code != http.StatusOK {
 			t.Errorf("GET %s as an SSO admin = %d %s, want 200", target, rec.Code, rec.Body)
 		}
 	}
-	v := getJSON[LLMAdminView](e, boss, "/api/admin/llm")
+	v := getJSON[ModelsAdminView](e, boss, "/api/admin/models")
 	if !v.Editable {
-		t.Errorf("an SSO admin may not edit the LLM: %+v", v)
+		t.Errorf("an SSO admin may not edit the models: %+v", v)
 	}
-	wantCode(t, e.send(boss, "PUT", "/api/admin/llm", `{"provider":"anthropic","model":"m","apiKey":"`+llmKeyOne+`"}`), "SSO admin PUT llm", http.StatusOK)
+	wantCode(t, e.send(boss, "POST", "/api/admin/models", `{"provider":"anthropic","model":"m","apiKey":"`+llmKeyOne+`"}`), "SSO admin POST models", http.StatusCreated)
 	wantCode(t, e.send(boss, "DELETE", "/api/admin/instances/lab", ""), "SSO admin DELETE lab", http.StatusAccepted)
 
 	if rec := e.get(nil, "/api/admin/instances"); rec.Code != http.StatusUnauthorized {
@@ -908,59 +911,67 @@ func TestRemoveInstanceWithoutRepositoriesAsksForAPass(t *testing.T) {
 	}
 }
 
-// The LLM is edited by operators when the config has none: the key is
-// needed the first time only, and is never sent back.
-func TestLLMEditable(t *testing.T) {
+// The list of models is the admins' to change: an entry takes a key the
+// first time and never sends it back, its provider and model are fixed, and
+// the first entry is the default.
+func TestModelsEditable(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.operator()
-	v := getJSON[LLMAdminView](e, c, "/api/admin/llm")
-	if v.Source != "dashboard" || !v.Editable || v.Key.Set || v.Provider != "" {
-		t.Errorf("empty LLM view = %+v", v)
+	v := getJSON[ModelsAdminView](e, c, "/api/admin/models")
+	if !v.Editable || len(v.Models) != 0 || v.FollowingDefault != 3 {
+		t.Errorf("empty list = %+v, want editable, no entry, and the 3 config repositories following the default", v)
 	}
-	put := func(body map[string]any) *httptest.ResponseRecorder {
-		return e.sendJSON(c, "PUT", "/api/admin/llm", body)
+	post := func(body map[string]any) *httptest.ResponseRecorder {
+		return e.sendJSON(c, "POST", "/api/admin/models", body)
 	}
-
-	if rec := put(map[string]any{"provider": "anthropic", "model": "claude-sonnet-4"}); rec.Code != http.StatusBadRequest ||
+	if rec := post(map[string]any{"provider": "anthropic", "model": "claude-sonnet-4"}); rec.Code != http.StatusBadRequest ||
 		!strings.Contains(errorOf(t, rec), "apiKey is required") {
-		t.Errorf("first PUT without a key = %d %s, want 400", rec.Code, rec.Body)
+		t.Errorf("POST without a key = %d %s, want 400", rec.Code, rec.Body)
 	}
-	rec := put(map[string]any{"provider": "anthropic", "model": "claude-sonnet-4", "baseURL": "https://llm.example.com/v1", "apiKey": llmKeyOne})
-	v = decode[LLMAdminView](t, rec, "PUT /api/admin/llm", http.StatusOK)
-	if v.Source != "dashboard" || v.Provider != "anthropic" || v.Model != "claude-sonnet-4" || v.BaseURL != "https://llm.example.com/v1" ||
-		!v.Key.Set || v.Key.UpdatedAt == nil || !v.Editable {
-		t.Errorf("view after PUT = %+v", v)
+	rec := post(map[string]any{"provider": "anthropic", "model": "claude-sonnet-4", "baseURL": "https://llm.example.com/v1", "apiKey": llmKeyOne})
+	first := decode[ModelAdminView](t, rec, "POST /api/admin/models", http.StatusCreated)
+	if first.ID == "" || first.Source != "dashboard" || first.Provider != "anthropic" || first.Model != "claude-sonnet-4" ||
+		first.BaseURL != "https://llm.example.com/v1" || !first.Default || !first.Key.Set || first.Key.UpdatedAt == nil {
+		t.Errorf("first entry = %+v, want the default with a key", first)
 	}
 	llm, key, src, ok := e.reg.LLM()
 	if !ok || key != llmKeyOne || llm.Model != "claude-sonnet-4" || src != instances.SourceDashboard {
-		t.Errorf("registry LLM = %+v, %q, %s, %v", llm, key, src, ok)
+		t.Errorf("registry default = %+v, %q, %s, %v", llm, key, src, ok)
 	}
 
-	// Without a key the stored one stays; a new key replaces it.
-	v = decode[LLMAdminView](t, put(map[string]any{"provider": "anthropic", "model": "claude-opus-4", "baseURL": ""}), "PUT", http.StatusOK)
-	if v.Model != "claude-opus-4" || v.BaseURL != "" || !v.Key.Set {
-		t.Errorf("view after PUT without a key = %+v", v)
+	// A second one is not the default; a new key and base URL apply to the
+	// entry, and the stored key stays when none is sent.
+	second := decode[ModelAdminView](t, post(map[string]any{"provider": "openai", "model": "gpt-x", "apiKey": llmKeyTwo}), "POST", http.StatusCreated)
+	if second.Default || second.ID == first.ID {
+		t.Errorf("second entry = %+v, want another entry that is not the default", second)
+	}
+	put := func(id string, body map[string]any) *httptest.ResponseRecorder {
+		return e.sendJSON(c, "PUT", "/api/admin/models/"+id, body)
+	}
+	upd := decode[ModelAdminView](t, put(first.ID, map[string]any{"baseURL": ""}), "PUT", http.StatusOK)
+	if upd.BaseURL != "" || !upd.Key.Set || upd.Provider != "anthropic" || upd.Model != "claude-sonnet-4" {
+		t.Errorf("after PUT without a key = %+v", upd)
 	}
 	if _, key, _, _ := e.reg.LLM(); key != llmKeyOne {
 		t.Errorf("the key changed to %q", key)
 	}
-	decode[LLMAdminView](t, put(map[string]any{"provider": "anthropic", "model": "claude-opus-4", "apiKey": llmKeyTwo}), "PUT", http.StatusOK)
-	if _, key, _, _ := e.reg.LLM(); key != llmKeyTwo {
+	decode[ModelAdminView](t, put(first.ID, map[string]any{"baseURL": "", "apiKey": llmKeyTwo + "-v2"}), "PUT", http.StatusOK)
+	if _, key, _, _ := e.reg.LLM(); key != llmKeyTwo+"-v2" {
 		t.Errorf("the key = %q, want the new one", key)
 	}
-	if got := e.reg.LLMKeys(); !slices.Contains(got, llmKeyOne) || !slices.Contains(got, llmKeyTwo) {
-		t.Errorf("LLMKeys = %v, want both for redaction", got)
+	if got := e.reg.LLMKeys(); !slices.Contains(got, llmKeyOne) || !slices.Contains(got, llmKeyTwo+"-v2") {
+		t.Errorf("LLMKeys = %v, want the replaced key too, for redaction", got)
 	}
 
 	var details []string
 	for _, a := range e.auditEntries() {
-		if a.Action == "llm_updated" {
+		if a.Action == "model_updated" {
 			details = append(details, a.Detail)
 		}
 	}
 	slices.Reverse(details)
-	if !slices.Equal(details, []string{"provider, model, base_url, api_key", "model, base_url", "api_key"}) {
-		t.Errorf("llm_updated details = %q", details)
+	if !slices.Equal(details, []string{"anthropic / claude-sonnet-4 (base_url)", "anthropic / claude-sonnet-4 (api_key)"}) {
+		t.Errorf("model_updated details = %q", details)
 	}
 
 	for _, tc := range []struct {
@@ -968,47 +979,59 @@ func TestLLMEditable(t *testing.T) {
 		body map[string]any
 		want string
 	}{
-		{"no provider", map[string]any{"provider": " ", "model": "m"}, "provider and model"},
-		{"no model", map[string]any{"provider": "p"}, "provider and model"},
-		{"relative base url", map[string]any{"provider": "p", "model": "m", "baseURL": "llm.example.com"}, "baseURL"},
-		{"ftp base url", map[string]any{"provider": "p", "model": "m", "baseURL": "ftp://llm.example.com"}, "baseURL"},
-		{"base url with credentials", map[string]any{"provider": "p", "model": "m", "baseURL": "https://u:p@llm.example.com"}, "baseURL"},
+		{"no provider", map[string]any{"provider": " ", "model": "m", "apiKey": "k"}, "provider and model"},
+		{"no model", map[string]any{"provider": "p", "apiKey": "k"}, "provider and model"},
+		{"relative base url", map[string]any{"provider": "p", "model": "m", "apiKey": "k", "baseURL": "llm.example.com"}, "baseURL"},
+		{"ftp base url", map[string]any{"provider": "p", "model": "m", "apiKey": "k", "baseURL": "ftp://llm.example.com"}, "baseURL"},
+		{"base url with credentials", map[string]any{"provider": "p", "model": "m", "apiKey": "k", "baseURL": "https://u:p@llm.example.com"}, "baseURL"},
 		{"empty key", map[string]any{"provider": "p", "model": "m", "apiKey": " "}, "apiKey must not be empty"},
-		{"unknown field", map[string]any{"provider": "p", "model": "m", "key": "k"}, "the body must be"},
+		{"unknown field", map[string]any{"provider": "p", "model": "m", "apiKey": "k", "key": "k"}, "the body must be"},
 	} {
-		if rec := put(tc.body); rec.Code != http.StatusBadRequest || !strings.Contains(errorOf(t, rec), tc.want) {
-			t.Errorf("%s: PUT = %d %s; want 400 with %q", tc.name, rec.Code, rec.Body, tc.want)
+		if rec := post(tc.body); rec.Code != http.StatusBadRequest || !strings.Contains(errorOf(t, rec), tc.want) {
+			t.Errorf("%s: POST = %d %s; want 400 with %q", tc.name, rec.Code, rec.Body, tc.want)
 		}
 	}
-	if llm, _, _, _ := e.reg.LLM(); llm.Provider != "anthropic" {
-		t.Errorf("a refused PUT changed the LLM: %+v", llm)
+	if got := len(getJSON[ModelsAdminView](e, c, "/api/admin/models").Models); got != 2 {
+		t.Errorf("%d entries after refused adds, want 2", got)
 	}
 }
 
-// An llm: block in the config wins: the dashboard shows it read-only.
-func TestLLMConfigWins(t *testing.T) {
+// An llm: block in the config wins: the dashboard shows it as a read-only
+// entry, and it is the default whatever the dashboard's entries say.
+func TestModelsConfigWins(t *testing.T) {
 	t.Setenv("PERGENT_TEST_LLM_KEY", llmKeyOne)
 	e := newEnv(t, func(cfg *config.Config) {
 		cfg.LLM = config.LLM{Provider: "anthropic", Model: "from-config", APIKeyEnv: "PERGENT_TEST_LLM_KEY"}
 	})
 	c := e.operator()
-	v := getJSON[LLMAdminView](e, c, "/api/admin/llm")
-	if v.Source != "config" || v.Editable || v.Model != "from-config" || !v.Key.Set || v.Key.UpdatedAt != nil {
-		t.Errorf("view = %+v", v)
+	v := getJSON[ModelsAdminView](e, c, "/api/admin/models")
+	if v.Editable || len(v.Models) != 1 {
+		t.Fatalf("list = %+v, want the config's entry alone, and the default not editable", v)
 	}
-	rec := e.sendJSON(c, "PUT", "/api/admin/llm", map[string]any{"provider": "p", "model": "m", "apiKey": "k"})
+	m := v.Models[0]
+	if m.ID != "config" || m.Source != "config" || m.Model != "from-config" || !m.Default || !m.Key.Set || m.Key.UpdatedAt != nil {
+		t.Errorf("config entry = %+v", m)
+	}
+	// It can't be changed, removed or replaced as the default.
+	wantCode(t, e.sendJSON(c, "PUT", "/api/admin/models/config", map[string]any{"baseURL": ""}), "PUT config", http.StatusConflict)
+	wantCode(t, e.send(c, "DELETE", "/api/admin/models/config", ""), "DELETE config", http.StatusConflict)
+	wantCode(t, e.send(c, "POST", "/api/admin/models/config/default", ""), "default config", http.StatusConflict)
+
+	// An entry can still be added, but the config's stays the default.
+	added := decode[ModelAdminView](t, e.sendJSON(c, "POST", "/api/admin/models",
+		map[string]any{"provider": "openai", "model": "gpt-x", "apiKey": llmKeyTwo}), "POST", http.StatusCreated)
+	if added.Default {
+		t.Errorf("an entry added beside the config's is the default: %+v", added)
+	}
+	rec := e.send(c, "POST", "/api/admin/models/"+added.ID+"/default", "")
 	if rec.Code != http.StatusConflict || !strings.Contains(errorOf(t, rec), "config file") {
-		t.Errorf("PUT = %d %s, want 409", rec.Code, rec.Body)
+		t.Errorf("default while the config has an llm: block = %d %s, want 409", rec.Code, rec.Body)
 	}
-	if rows, found, _ := e.st.LLM(ctx); found {
-		t.Errorf("the LLM was stored despite the config's: %+v", rows)
-	}
-	// A platform admin sees it too, not editable either.
+	// A platform admin sees the same, and the older settings view agrees.
 	admin := e.userOnMain(true, "acme/widgets")
-	if v := getJSON[LLMAdminView](e, admin, "/api/admin/llm"); v.Editable || v.Model != "from-config" {
+	if v := getJSON[ModelsAdminView](e, admin, "/api/admin/models"); v.Editable || v.Models[0].Model != "from-config" {
 		t.Errorf("platform admin's view = %+v", v)
 	}
-	// The older settings view agrees.
 	if s := getJSON[AdminSettingsView](e, admin, "/api/admin/settings"); s.LLM.Model != "from-config" {
 		t.Errorf("settings LLM = %+v", s.LLM)
 	}
@@ -1267,13 +1290,14 @@ func TestOperatorAPINeverReturnsSecrets(t *testing.T) {
 	e.addLab(c)
 	e.sendJSON(c, "POST", "/api/admin/instances", hubBody(nil))
 	e.sendJSON(c, "PUT", "/api/admin/instances/lab", map[string]any{"secrets": map[string]string{"approve_token": labApproveToken + "-v2"}})
-	e.sendJSON(c, "PUT", "/api/admin/llm", map[string]any{"provider": "anthropic", "model": "m", "apiKey": llmKeyOne})
-	e.sendJSON(c, "PUT", "/api/admin/llm", map[string]any{"provider": "anthropic", "model": "m2", "apiKey": llmKeyTwo})
+	m := decode[ModelAdminView](t, e.sendJSON(c, "POST", "/api/admin/models", map[string]any{"provider": "anthropic", "model": "m", "apiKey": llmKeyOne}),
+		"POST /api/admin/models", http.StatusCreated)
+	e.sendJSON(c, "PUT", "/api/admin/models/"+m.ID, map[string]any{"baseURL": "", "apiKey": llmKeyTwo})
 	// Failing writes echo nothing either.
 	e.conn.checkErr = func(_ instances.Instance, s instances.Secrets) error { return errors.New("rejected " + s.ApproveToken) }
 	e.sendJSON(c, "PUT", "/api/admin/instances/lab", map[string]any{"secrets": map[string]string{"approve_token": "bad-token-SECRET-000"}})
 	e.conn.checkErr = nil
-	for _, target := range []string{"/api/admin/instances", "/api/admin/llm", "/api/admin/defaults", "/api/admin/settings",
+	for _, target := range []string{"/api/admin/instances", "/api/admin/models", "/api/admin/defaults", "/api/admin/settings",
 		"/api/me", "/api/sign-in-options", "/api/audit"} {
 		e.get(c, target)
 	}
@@ -1341,26 +1365,27 @@ func TestUpdateRacingARemovalKeepsItRemoved(t *testing.T) {
 	}
 }
 
-// If the LLM was saved but reading it back fails, the change is not lost: the
-// answer is 200 with what was saved, and the failure is logged at Error
+// If a model was saved but reading the list back fails, the change is not
+// lost: the answer is the saved entry, and the failure is logged at Error
 // without the key.
-func TestPutLLMSavedButNotReloaded(t *testing.T) {
+func TestAddModelSavedButNotReloaded(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.operator()
 	e.d.loadLLM = func(context.Context) error { return errors.New("database went away (" + llmKeyOne + ")") }
-	rec := e.sendJSON(c, "PUT", "/api/admin/llm", map[string]any{"provider": "anthropic", "model": "claude-sonnet-4", "baseURL": "https://llm.example.com/v1", "apiKey": llmKeyOne})
-	v := decode[LLMAdminView](t, rec, "PUT /api/admin/llm", http.StatusOK)
-	if v.Provider != "anthropic" || v.Model != "claude-sonnet-4" || v.BaseURL != "https://llm.example.com/v1" || !v.Key.Set || !v.Editable {
+	rec := e.sendJSON(c, "POST", "/api/admin/models", map[string]any{"provider": "anthropic", "model": "claude-sonnet-4", "baseURL": "https://llm.example.com/v1", "apiKey": llmKeyOne})
+	v := decode[ModelAdminView](t, rec, "POST /api/admin/models", http.StatusCreated)
+	if v.Provider != "anthropic" || v.Model != "claude-sonnet-4" || v.BaseURL != "https://llm.example.com/v1" || !v.Key.Set || !v.Default {
 		t.Errorf("view = %+v, want what was saved", v)
 	}
-	if row, found, _ := e.st.LLM(ctx); !found || row.Model != "claude-sonnet-4" {
-		t.Errorf("stored LLM = %+v, %v", row, found)
+	rows, err := e.st.LLMModels(ctx)
+	if err != nil || len(rows) != 1 || rows[0].Model != "claude-sonnet-4" {
+		t.Errorf("stored models = %+v, %v", rows, err)
 	}
 	logs := e.logs.String()
 	if !strings.Contains(logs, "level=ERROR") || !strings.Contains(logs, "database went away") || strings.Contains(logs, llmKeyOne) {
 		t.Errorf("log = %s; want the failure at Error with the key hidden", logs)
 	}
-	if !slices.ContainsFunc(e.auditEntries(), func(a store.AuditEntry) bool { return a.Action == "llm_updated" }) {
+	if !slices.ContainsFunc(e.auditEntries(), func(a store.AuditEntry) bool { return a.Action == "model_added" }) {
 		t.Error("the save was not audited")
 	}
 }

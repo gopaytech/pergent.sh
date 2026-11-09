@@ -881,7 +881,7 @@ func TestRepositoryDetail(t *testing.T) {
 		`"failureStatus":{"value":"failed","overridden":false},` +
 		`"incrementalReviews":{"value":true,"overridden":false},"inlineFindings":{"value":true,"overridden":false},"jobMemory":{"value":"","overridden":false},"jobTimeoutSeconds":{"value":600,"overridden":false},` +
 		`"learnFromDismissals":{"value":true,"overridden":false},"linkedRepos":{"value":[],"overridden":false},"linkedReposEnabled":{"value":false,"overridden":false},` +
-		`"maxTurns":{"value":40,"overridden":false},"quietReviews":{"value":false,"overridden":false},"repoSkills":{"value":[],"overridden":false},` +
+		`"maxTurns":{"value":40,"overridden":false},"model":{"value":null,"overridden":false},"quietReviews":{"value":false,"overridden":false},"repoSkills":{"value":[],"overridden":false},` +
 		`"rerunLimitPerMR":{"value":10,"overridden":false},"rerunLimitPerRepo":{"value":50,"overridden":false},` +
 		`"reviewDrafts":{"value":true,"overridden":false},"skills":{"value":["code-review"],"overridden":true},` +
 		`"trustedAuthors":{"value":[],"overridden":false},"trustedAuthorsOnly":{"value":"follow_visibility","overridden":false}}`
@@ -1189,7 +1189,7 @@ func TestNoSecretInTheReadAPI(t *testing.T) {
 			targets := readEndpoints(id)
 			targets = append(targets, "/api/reviews/gh/acme/widgets/7", "/api/repositories/gh/acme/widgets",
 				"/api/repositories/gh/acme/widgets/inputs",
-				"/api/admin/instances", "/api/admin/llm", "/api/admin/defaults")
+				"/api/admin/instances", "/api/admin/models", "/api/admin/defaults")
 			for _, target := range targets {
 				rec := e.get(c, target)
 				if rec.Code >= 500 && rec.Code != http.StatusBadGateway {
@@ -1197,9 +1197,9 @@ func TestNoSecretInTheReadAPI(t *testing.T) {
 				}
 				for _, s := range secrets {
 					// The model's address is public to everyone on the read API
-					// and shown to admins, by design, on their LLM page: no key,
+					// and shown to admins, by design, on their models page: no key,
 					// token or secret may be in it either way.
-					if s == "llm.example.com" && target == "/api/admin/llm" {
+					if s == "llm.example.com" && target == "/api/admin/models" {
 						continue
 					}
 					if s != "" && strings.Contains(rec.Body.String(), s) {

@@ -341,8 +341,10 @@ type Last7View struct {
 // only, an empty list to anyone else), failureStatus, skills (null: the default list of skills; otherwise the library skills
 // reviewed), repoSkills
 // (the detected repository skills turned on, a list, empty when none),
-// jobTimeoutSeconds, maxTurns, jobMemory ("" when none), rerunLimitPerMR and
-// rerunLimitPerRepo.
+// jobTimeoutSeconds, maxTurns, jobMemory ("" when none), rerunLimitPerMR,
+// rerunLimitPerRepo, trustedAuthorsOnly, trustedAuthors and model (the ID of
+// the entry of the list of models the repository runs on; null follows the
+// default).
 type RepositoryDetailView struct {
 	Repo      RepositoryView         `json:"repo"`
 	Settings  map[string]SettingView `json:"settings"`
@@ -357,6 +359,21 @@ type RepositoryDetailView struct {
 	// InstanceTrustedAuthorsOnly is the instance's trusted-authors mode,
 	// what the repository follows when it sets none.
 	InstanceTrustedAuthorsOnly string `json:"instanceTrustedAuthorsOnly"`
+	// Model is the provider and model reviews of the repository run on, as
+	// "provider / model": the one it chose, else the default's. "" when
+	// neither is there. Anyone who sees the repository sees it; the base URL
+	// and the key are never in it.
+	Model string `json:"model"`
+	// ModelChoices are the entries of the list a repository can be given, for
+	// an admin of the repository; empty for anyone else.
+	ModelChoices []ModelChoiceView `json:"modelChoices"`
+}
+
+// ModelChoiceView is an entry of the list of models a repository can be
+// given: its ID, and "provider / model" to show.
+type ModelChoiceView struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
 }
 
 // WaitingView is a change of an author the repository doesn't trust, not
@@ -833,12 +850,16 @@ type LLMView struct {
 //     "6Gi", from 256Mi, and no less than jobs.resources.requests.memory,
 //     to 32Gi), and rerunLimitPerMR and
 //     rerunLimitPerRepo (a whole number, 1 to 1000; only an admin changes
-//     these, else 403, and a maintainer's reset leaves them). Any other key, or a value
+//     these, else 403, and a maintainer's reset leaves them), and model (the
+//     ID of an entry of the list of models, or null to follow the default;
+//     only an admin of the repository changes it, else 403, and a
+//     maintainer's reset leaves it; an ID that is not in the list, "config"
+//     included while the config has no llm: block, is 400). Any other key, or a value
 //     out of bounds, is 400 and nothing changes. 200, RepositoryDetailView.
 //   - POST /api/repositories/{instance}/{project...}/settings/reset: every
 //     setting back to its default, except that a maintainer's reset leaves
-//     the two re-run caps, the linked repositories setting and the links as
-//     they are (only an admin resets those). 200, RepositoryDetailView.
+//     the two re-run caps, the linked repositories setting, the links and
+//     the model as they are (only an admin resets those). 200, RepositoryDetailView.
 //   - GET /api/admin/linkable?instance=&repo=&search= (admins only): LinkableView,
 //     the repositories the instance's review App reaches (at most 200, by name),
 //     each with whether `repo` (a repository switched on, GitHub only; 400 for
@@ -1035,8 +1056,9 @@ type AuditView struct {
 // it is set and when it last changed. Every write needs the CSRF token and is
 // recorded in the audit log without a value: instance_added,
 // instance_updated (detail: the fields changed), instance_removed,
-// llm_updated (detail: the fields changed, "api_key" among them) and
-// defaults_updated.
+// model_added, model_updated (detail: the model, then the fields changed,
+// "api_key" among them), model_default_changed, model_removed (detail: the
+// provider and model) and defaults_updated.
 //
 //   - GET /api/admin/instances: [InstanceAdminView], the config's first,
 //     then those added in the dashboard.
@@ -1060,10 +1082,21 @@ type AuditView struct {
 //   - GET /api/admin/instances/{name}/repositories?search=&page=: AvailableView,
 //     the repositories the instance's review bot or App can set up that
 //     aren't switched on (the same list as the picker's).
-//   - GET /api/admin/llm: LLMAdminView (admins). PUT /api/admin/llm
-//     {"provider", "model", "baseURL", "apiKey"} (admins; 409 when the
-//     config has an llm: block; the key is needed only when none is
-//     stored): 200, LLMAdminView.
+//   - GET /api/admin/models: ModelsAdminView (admins), the list of models:
+//     the config file's llm: block first, as a read-only entry with the ID
+//     "config", then those added in the dashboard, oldest first. POST
+//     /api/admin/models {"provider", "model", "baseURL", "apiKey"} adds one
+//     (the key is required; 400 for a missing or oversized field, 409 for
+//     the same provider, model and base URL as an entry there): 201,
+//     ModelAdminView. The first entry is the default.
+//     PUT /api/admin/models/{id} {"baseURL", "apiKey"?} changes the base URL
+//     and, when given, the key; a provider or model in the body is 400, as
+//     they never change (add another entry), and the config's entry is 409:
+//     200, ModelAdminView. POST /api/admin/models/{id}/default makes it the
+//     default (409 while the config has an llm: block, which is the default):
+//     200, ModelsAdminView. DELETE /api/admin/models/{id}: 204; 409
+//     ModelInUseView while a repository names it, and 409 {"error"} for the
+//     default and the config's entry. A key is sealed and never returned.
 //   - GET /api/admin/sign-in: SignInAdminView (admins). PUT /api/admin/sign-in
 //     {"mode", "label", "issuer", "clientID", "clientSecret", "header",
 //     "audience", "jwksURL", "emailClaim", "allowedDomains", "allowedEmails"}
@@ -1146,16 +1179,46 @@ type InstanceAdminView struct {
 	Secrets map[string]SecretView `json:"secrets"`
 }
 
-// LLMAdminView is GET /api/admin/llm: where the model comes from ("config"
-// or "dashboard"), the model, and whether a key is set. Editable is true for
-// an admin when the config has no llm: block.
-type LLMAdminView struct {
-	Source   string     `json:"source"`
-	Provider string     `json:"provider"`
-	Model    string     `json:"model"`
-	BaseURL  string     `json:"baseURL"`
-	Key      SecretView `json:"key"`
-	Editable bool       `json:"editable"`
+// ModelsAdminView is GET /api/admin/models: the list of models and how many
+// repositories follow the default. Editable is false while the config file
+// has an llm: block: that entry is the default then, and "set as default" is
+// 409 (entries can still be added, changed and removed).
+type ModelsAdminView struct {
+	Editable bool `json:"editable"`
+	// FollowingDefault counts the repositories that name no model: those of
+	// the dashboard that chose none and those of the config file. A change of
+	// the default moves them.
+	FollowingDefault int              `json:"followingDefault"`
+	Models           []ModelAdminView `json:"models"`
+}
+
+// ModelAdminView is one entry of the list. Source is "config" (read-only, ID
+// "config") or "dashboard". Default is true for the entry reviews use when a
+// repository names none; while the config has an llm: block that is its entry
+// alone. Key says whether a key is set and when it changed; the key is never
+// sent. Repositories are those that name the entry, by instance and project.
+type ModelAdminView struct {
+	ID           string        `json:"id"`
+	Provider     string        `json:"provider"`
+	Model        string        `json:"model"`
+	BaseURL      string        `json:"baseURL"`
+	Source       string        `json:"source"`
+	Default      bool          `json:"default"`
+	Key          SecretView    `json:"key"`
+	Repositories []RepoRefView `json:"repositories"`
+}
+
+// RepoRefView names a repository by instance and project.
+type RepoRefView struct {
+	Instance string `json:"instance"`
+	Project  string `json:"project"`
+}
+
+// ModelInUseView is the 409 of a delete of a model that repositories name:
+// Repositories are the ones that do.
+type ModelInUseView struct {
+	Error        string        `json:"error"`
+	Repositories []RepoRefView `json:"repositories"`
 }
 
 // UsageTokensView is tokens used: input and output, which every total and

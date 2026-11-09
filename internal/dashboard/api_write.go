@@ -60,7 +60,7 @@ const (
 	msgWriteFailed    = "could not save the change, please try again"
 	msgUserLookup     = "could not look the user up on the platform, please try again"
 	msgBadProjectBody = `the body must be {"project": "<path>"}`
-	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, commentLayout, linkedReposEnabled, linkedRepos, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly, trustedAuthors"
+	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, commentLayout, linkedReposEnabled, linkedRepos, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly, trustedAuthors, model"
 	msgNameInstance   = `name the instance: {"instance": "<name>", "project": "<path>"}`
 	msgNeedsAdminCaps = "only admins can change its re-run caps"
 	msgNeedsRole      = "only maintainers of this repository and admins can change its settings"
@@ -424,6 +424,7 @@ func (d *Dashboard) switchOff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view.Settings = settingViews(def)
+	view.Model = d.effectiveModel("")
 	view.Attention = []AttentionView{}
 	writeJSON(w, http.StatusOK, view)
 }
@@ -485,6 +486,21 @@ func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, msgNeedsAdminTrust)
 		return
 	}
+	// So is the model: it decides what the repository's reviews cost.
+	if slices.ContainsFunc(keys, isModelKey) && session(r).Role(repo.Instance, repo.Project) < RoleAdmin {
+		writeError(w, http.StatusForbidden, msgNeedsAdminModel)
+		return
+	}
+	// The entry the config's llm: block supplies is not stored, so only the
+	// registry knows whether it is there.
+	if slices.Contains(keys, "model") {
+		var probe store.DashboardRepo
+		edit(&probe)
+		if probe.ModelID != nil && *probe.ModelID == store.ConfigModelID && !d.hasConfigModel() {
+			writeError(w, http.StatusBadRequest, msgUnknownModel)
+			return
+		}
+	}
 	// The rules for links that need the platform run before the save; a link
 	// that fails them is never stored.
 	if slices.Contains(keys, "linkedRepos") {
@@ -527,7 +543,14 @@ func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {
 			row.TrustedAuthors = resolved
 		}
 	}
-	d.updateSettings(w, r, repo, edit, "settings changed", "settings_updated", strings.Join(keys, ", "))
+	// The audit detail names the model a change gives, not only the key.
+	details := slices.Clone(keys)
+	if i := slices.Index(details, "model"); i >= 0 {
+		var probe store.DashboardRepo
+		edit(&probe)
+		details[i] = d.modelSettingDetail(probe.ModelID)
+	}
+	d.updateSettings(w, r, repo, edit, "settings changed", "settings_updated", strings.Join(details, ", "))
 }
 
 // isTrustKey reports whether key is one of the trusted-authors settings,
@@ -549,6 +572,21 @@ func trustModeSetting(raw json.RawMessage, null bool) (func(*store.DashboardRepo
 		v = &m
 	}
 	return func(row *store.DashboardRepo) { row.TrustedAuthorsOnly = v }, ""
+}
+
+// modelSetting reads model: the ID of an entry of the list of models, or null
+// (follow the default). Whether the entry is there is the save's to say
+// (store.ErrModelNotFound), except for the config's, which putSettings checks.
+func modelSetting(raw json.RawMessage, null bool) (func(*store.DashboardRepo), string) {
+	var v *string
+	if !null {
+		var id string
+		if json.Unmarshal(raw, &id) != nil || id == "" || len(id) > maxLLMField {
+			return nil, msgUnknownModel
+		}
+		v = &id
+	}
+	return func(row *store.DashboardRepo) { row.ModelID = v }, ""
 }
 
 // trustedAuthorsSetting reads trustedAuthors: a list of {"id"?, "username"}
@@ -626,6 +664,11 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	// A maintainer's reset leaves the caps, which only an admin changes.
 	admin := session(r).Role(repo.Instance, repo.Project) >= RoleAdmin
+	detail := ""
+	if admin && repo.ModelID != "" {
+		// The model goes back to the default: say which one it was.
+		detail = "model (default, was " + d.effectiveModelOrID(repo.ModelID) + ")"
+	}
 	d.updateSettings(w, r, repo, func(row *store.DashboardRepo) {
 		row.Approve, row.ReviewDrafts, row.InlineFindings, row.FailureStatus = nil, nil, nil, nil
 		row.CommandsAuthorAndMaintainersOnly, row.IncrementalReviews, row.LearnFromDismissals, row.QuietReviews = nil, nil, nil, nil
@@ -635,8 +678,9 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 			row.RerunLimitPerMR, row.RerunLimitPerRepo = nil, nil
 			row.LinkedReposEnabled, row.LinkedRepos = nil, nil
 			row.TrustedAuthorsOnly, row.TrustedAuthors = nil, nil
+			row.ModelID = nil
 		}
-	}, "settings reset", "settings_reset", "")
+	}, "settings reset", "settings_reset", detail)
 }
 
 // updateSettings applies edit to repo's stored settings, records action
@@ -654,6 +698,10 @@ func (d *Dashboard) updateSettings(w http.ResponseWriter, r *http.Request, repo 
 	})
 	if msg, ok := skillMissing(err); ok {
 		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	if errors.Is(err, store.ErrModelNotFound) {
+		writeError(w, http.StatusBadRequest, msgUnknownModel)
 		return
 	}
 	if err != nil {
@@ -727,6 +775,8 @@ func (d *Dashboard) parseSettings(r *http.Request) (func(*store.DashboardRepo), 
 			edit, msg = trustModeSetting(raw, null)
 		case "trustedAuthors":
 			edit, msg = trustedAuthorsSetting(raw, null)
+		case "model":
+			edit, msg = modelSetting(raw, null)
 		default:
 			msg = msgBadSettings
 		}
