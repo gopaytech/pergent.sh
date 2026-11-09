@@ -54,7 +54,7 @@ See [Config reference](../reference/configuration.md).
 | A repository's model is gone, or its key can't be opened | The review fails. It never falls back to the default. |
 | No model at all, or no default for a repository that picked none | The review waits. |
 
-The comment on the pull request or merge request says the chosen model can't be used and where an admin changes it. It doesn't name the model or the provider. The pergent.sh log has the entry's ID.
+The comment on the pull request or merge request says the chosen model can't be used and where an admin changes it. It doesn't name the model or the provider. The pergent.sh log has the entry's ID, and the failed review's page shows the model it tried.
 
 A key can't be opened when `PERGENT_SH_SECRET_KEY` changed. It counts as not set, and has to be entered again.
 
@@ -69,13 +69,13 @@ The first review after a change of model is a full review, not an incremental on
 | Going back to a default that is the same model | No |
 | The upgrade to the release with the list | No |
 
-An incremental review after a change of model is a full one, so it never mixes models. A re-run of only the failed skills uses the model set at the time, so one published review can combine results from two models.
+A change of model makes the next review a full one. A re-run of only the failed skills uses the model set at the time, so one published review can combine results from two models, and the review after it can carry files over from that combined result.
 
 ## Where you see the model
 
-Only in the dashboard, never in the comment.
+Only in the dashboard, never in the comment. That includes an error from the provider: where it names the model, the provider or the base URL, the comment says "the model" or "the provider" instead, and the review's page keeps the full text.
 
-- A review's page shows the model it ran on.
+- A review's page shows the provider and model it ran on, or the one it tried when it couldn't start.
 - [Usage](usage.md) shows the provider next to each model, and every model a merge request used.
 - The [audit log](dashboard.md#audit-log) records every change to the list and to a repository's model. It names the provider and model, never the key.
 

@@ -98,10 +98,10 @@ func (d *dispatcher) planCarried(ctx context.Context, plat Platform, repo settin
 
 // modelChanged reports whether a review on provider and model differs from
 // last, which ran on the pair it recorded. A run that recorded no model (it
-// predates the list, or never launched) and an unresolved pair are no change.
-// A run from before the provider was recorded has a model only: it is
-// compared by the model, so an upgrade does not turn the next push into a
-// full review when the model is the same.
+// predates the list, or ended before a model was chosen) and an unresolved
+// pair are no change. A run from before the provider was recorded has a model
+// only: it is compared by the model, so an upgrade does not turn the next push
+// into a full review when the model is the same.
 func modelChanged(last store.Run, provider, model string) bool {
 	if last.Model == nil || (provider == "" && model == "") {
 		return false
