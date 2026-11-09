@@ -1260,21 +1260,30 @@ type UsageOverviewView struct {
 	Repositories []UsageRepositoryRowView `json:"repositories"`
 }
 
-// UsageNamedView is one skill or model of a repository's usage.
+// UsageNamedView is one skill or model of a repository's usage. Provider is
+// the model's provider; it is empty for a skill.
 type UsageNamedView struct {
-	Name   string          `json:"name"`
-	Tokens UsageTokensView `json:"tokens"`
-	Runs   int64           `json:"runs"`
-	Failed int64           `json:"failed"`
+	Provider string          `json:"provider"`
+	Name     string          `json:"name"`
+	Tokens   UsageTokensView `json:"tokens"`
+	Runs     int64           `json:"runs"`
+	Failed   int64           `json:"failed"`
+}
+
+// UsageModelView is a model a merge request's reviews ran on.
+type UsageModelView struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
 }
 
 // UsageMRView is one merge request of a repository's usage.
 type UsageMRView struct {
-	IID     int64           `json:"iid"`
-	Title   string          `json:"title"`
-	WebURL  string          `json:"webURL"`
-	Tokens  UsageTokensView `json:"tokens"`
-	Reviews int64           `json:"reviews"`
+	IID     int64            `json:"iid"`
+	Title   string           `json:"title"`
+	WebURL  string           `json:"webURL"`
+	Tokens  UsageTokensView  `json:"tokens"`
+	Reviews int64            `json:"reviews"`
+	Models  []UsageModelView `json:"models"`
 }
 
 // UsageWastedView is a repository's wasted tokens: those of skills that

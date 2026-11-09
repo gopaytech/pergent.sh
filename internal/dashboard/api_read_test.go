@@ -250,6 +250,7 @@ type runFix struct {
 	undispatched            bool
 	sourceBranch, user      string
 	model, sources          string
+	provider                string
 	maxTurns                *int
 	// versions (JSON) and skipReason are what a run records of the library
 	// skills it used and of why it was skipped.
@@ -306,12 +307,15 @@ func (e *env) addRun(f runFix) string {
 		r := f.at.Add(10*time.Second + f.duration)
 		reported = &r
 	}
-	var result, model, sources, versions *string
+	var result, model, sources, versions, provider *string
 	if f.result != "" {
 		result = &f.result
 	}
 	if f.model != "" {
 		model = &f.model
+	}
+	if f.provider != "" {
+		provider = &f.provider
 	}
 	if f.sources != "" {
 		sources = &f.sources
@@ -336,10 +340,10 @@ func (e *env) addRun(f runFix) string {
 	e.exec(`UPDATE runs SET state = $2, result = $3::jsonb, failure_reason = $4, base_sha = $5, created_at = $6,
 			dispatched_at = $7, reported_at = $8, title = $9, web_url = $10, source_branch = $11, author = $12,
 			outcome = $13, outcome_reason = $14, decision_status = $15, approved = $16, model = $17,
-			skill_sources = $18::jsonb, skill_versions = $19::jsonb, skip_reason = $20, max_turns = $21, incremental = $22
+			skill_sources = $18::jsonb, skill_versions = $19::jsonb, skip_reason = $20, max_turns = $21, incremental = $22, provider = $23
 		WHERE id = $1::uuid`,
 		id, string(f.state), result, f.failure, baseSHA, f.at, dispatched, reported, f.title, f.webURL,
-		f.sourceBranch, f.user, f.outcome, f.reason, f.status, f.approved, model, sources, versions, f.skipReason, f.maxTurns, f.incremental)
+		f.sourceBranch, f.user, f.outcome, f.reason, f.status, f.approved, model, sources, versions, f.skipReason, f.maxTurns, f.incremental, provider)
 	return id
 }
 

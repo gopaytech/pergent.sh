@@ -20,7 +20,7 @@ type SkillUsage struct {
 }
 
 // RecordUsage stores what each skill of run id used, with the run's
-// repository, merge request, trigger, model and time, and marks the run as
+// repository, merge request, trigger, provider, model and time, and marks the run as
 // recorded, even with no skills. A row already there is kept.
 func (s *Store) RecordUsage(ctx context.Context, id string, skills []SkillUsage) error {
 	tx, err := s.pool.Begin(ctx)
@@ -30,10 +30,10 @@ func (s *Store) RecordUsage(ctx context.Context, id string, skills []SkillUsage)
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 	for _, u := range skills {
 		if _, err := tx.Exec(ctx, `INSERT INTO run_usage (run_id, skill, instance, project_id, project_path, mr_iid,
-				trigger, incremental, model, verdict, reported_at, tokens_in, tokens_out, cache_read, cache_write,
+				trigger, incremental, provider, model, verdict, reported_at, tokens_in, tokens_out, cache_read, cache_write,
 				reasoning, findings, blocking)
 			SELECT r.id, $2::text, r.instance, r.project_id, r.project_path, r.mr_iid, r.trigger, r.incremental,
-				COALESCE(r.model, ''), $3::text, COALESCE(r.reported_at, r.created_at), $4::bigint, $5::bigint,
+				COALESCE(r.provider, ''), COALESCE(r.model, ''), $3::text, COALESCE(r.reported_at, r.created_at), $4::bigint, $5::bigint,
 				$6::bigint, $7::bigint, $8::bigint, $9::integer, $10::integer
 			FROM runs r WHERE r.id = $1::uuid
 			ON CONFLICT (run_id, skill) DO NOTHING`,
@@ -94,21 +94,31 @@ type DayUsage struct {
 	Tokens TokenSum
 }
 
-// NamedUsage is what one skill or one model used.
+// NamedUsage is what one skill or one model used. Provider is the model's
+// provider, empty for a skill and for a model recorded before providers were.
 type NamedUsage struct {
-	Name   string
-	Tokens TokenSum
-	Runs   int64
-	Failed int64 // runs where this skill failed (skills only)
+	Provider string
+	Name     string
+	Tokens   TokenSum
+	Runs     int64
+	Failed   int64 // runs where this skill failed (skills only)
 }
 
-// MRUsage is what one merge request used, with its latest title.
+// ModelUsed is a model a review ran on, with its provider ("" when the review
+// was recorded before providers were).
+type ModelUsed struct {
+	Provider, Model string
+}
+
+// MRUsage is what one merge request used, with its latest title and the
+// models its reviews ran on.
 type MRUsage struct {
 	IID     int64
 	Title   string
 	WebURL  string
 	Tokens  TokenSum
 	Reviews int64
+	Models  []ModelUsed // by provider, then model; a review with no recorded model adds none
 }
 
 // WastedUsage is the usage that bought no finished review.
@@ -196,18 +206,19 @@ func (s *Store) UsageDaily(ctx context.Context, since time.Time, instance string
 // UsageBySkill returns what each skill used in a repository since the given
 // time, busiest first, with the runs in which it failed.
 func (s *Store) UsageBySkill(ctx context.Context, instance string, projectID int64, since time.Time) ([]NamedUsage, error) {
-	return s.namedUsage(ctx, `SELECT skill, `+tokenSumColumns+`, count(*), count(*) FILTER (WHERE verdict = 'failed')
+	return s.namedUsage(ctx, `SELECT ''::text, skill, `+tokenSumColumns+`, count(*), count(*) FILTER (WHERE verdict = 'failed')
 		FROM run_usage WHERE instance = $1::text AND project_id = $2::bigint AND reported_at >= $3::timestamptz
 		GROUP BY skill ORDER BY COALESCE(sum(tokens_in), 0) + COALESCE(sum(tokens_out), 0) DESC, skill`,
 		instance, projectID, since)
 }
 
 // UsageByModel returns what each model used in a repository since the given
-// time, busiest first. Runs counts a run once, however many skills it ran.
+// time, busiest first; one provider's model is apart from another's of the
+// same name. Runs counts a run once, however many skills it ran.
 func (s *Store) UsageByModel(ctx context.Context, instance string, projectID int64, since time.Time) ([]NamedUsage, error) {
-	return s.namedUsage(ctx, `SELECT model, `+tokenSumColumns+`, count(DISTINCT run_id), 0::bigint
+	return s.namedUsage(ctx, `SELECT provider, model, `+tokenSumColumns+`, count(DISTINCT run_id), 0::bigint
 		FROM run_usage WHERE instance = $1::text AND project_id = $2::bigint AND reported_at >= $3::timestamptz
-		GROUP BY model ORDER BY COALESCE(sum(tokens_in), 0) + COALESCE(sum(tokens_out), 0) DESC, model`,
+		GROUP BY provider, model ORDER BY COALESCE(sum(tokens_in), 0) + COALESCE(sum(tokens_out), 0) DESC, model, provider`,
 		instance, projectID, since)
 }
 
@@ -218,14 +229,14 @@ func (s *Store) namedUsage(ctx context.Context, query string, args ...any) ([]Na
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (NamedUsage, error) {
 		var u NamedUsage
-		err := row.Scan(append([]any{&u.Name}, append(u.Tokens.dests(), &u.Runs, &u.Failed)...)...)
+		err := row.Scan(append([]any{&u.Provider, &u.Name}, append(u.Tokens.dests(), &u.Runs, &u.Failed)...)...)
 		return u, err
 	})
 }
 
 // UsageByMR returns what the busiest limit merge requests of a repository
 // used since the given time, busiest first, with the title and address of the
-// latest run.
+// latest run and the models its reviews ran on.
 func (s *Store) UsageByMR(ctx context.Context, instance string, projectID int64, since time.Time, limit int) ([]MRUsage, error) {
 	rows, err := s.pool.Query(ctx, `SELECT u.mr_iid, (array_agg(r.title ORDER BY r.created_at DESC))[1],
 			(array_agg(r.web_url ORDER BY r.created_at DESC))[1], `+tokenSumColumnsOfUsage+`, count(DISTINCT u.run_id)
@@ -237,11 +248,39 @@ func (s *Store) UsageByMR(ctx context.Context, instance string, projectID int64,
 	if err != nil {
 		return nil, err
 	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (MRUsage, error) {
+	mrs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (MRUsage, error) {
 		var u MRUsage
 		err := row.Scan(append([]any{&u.IID, &u.Title, &u.WebURL}, append(u.Tokens.dests(), &u.Reviews)...)...)
 		return u, err
 	})
+	if err != nil || len(mrs) == 0 {
+		return mrs, err
+	}
+
+	// The models come from a second query over the same window, so each is
+	// listed once however many skills and reviews used it.
+	iids := make([]int64, len(mrs))
+	at := make(map[int64]int, len(mrs))
+	for i, m := range mrs {
+		iids[i], at[m.IID] = m.IID, i
+	}
+	rows, err = s.pool.Query(ctx, `SELECT mr_iid, provider, model FROM run_usage
+		WHERE instance = $1::text AND project_id = $2::bigint AND reported_at >= $3::timestamptz
+			AND mr_iid = ANY($4::bigint[]) AND model <> ''
+		GROUP BY mr_iid, provider, model ORDER BY mr_iid, provider, model`, instance, projectID, since, iids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var iid int64
+		var m ModelUsed
+		if err := rows.Scan(&iid, &m.Provider, &m.Model); err != nil {
+			return nil, err
+		}
+		mrs[at[iid]].Models = append(mrs[at[iid]].Models, m)
+	}
+	return mrs, rows.Err()
 }
 
 // UsageWasted returns the usage of a repository that bought no finished
@@ -339,7 +378,8 @@ type UsageRow struct {
 	MR                               int64
 	Trigger                          string
 	Incremental                      bool
-	Model, Skill, Verdict            string
+	Provider, Model                  string
+	Skill, Verdict                   string
 	In, Out                          int64
 	CacheRead, CacheWrite, Reasoning *int64
 	Findings, Blocking               int
@@ -370,7 +410,7 @@ func (s *Store) UsageProjectID(ctx context.Context, instance, project string) (i
 // once. An error from each stops it and is returned.
 func (s *Store) UsageRows(ctx context.Context, since time.Time, instance string, projectID int64, limit int, each func(UsageRow) error) error {
 	rows, err := s.pool.Query(ctx, `SELECT reported_at, instance, project_path, mr_iid, trigger, incremental, model, skill, verdict,
-			tokens_in, tokens_out, cache_read, cache_write, reasoning, findings, blocking
+			tokens_in, tokens_out, cache_read, cache_write, reasoning, findings, blocking, provider
 		FROM run_usage
 		WHERE reported_at >= $1::timestamptz AND ($2::text = '' OR (instance = $2::text AND project_id = $3::bigint))
 		ORDER BY reported_at, run_id, skill
@@ -382,7 +422,7 @@ func (s *Store) UsageRows(ctx context.Context, since time.Time, instance string,
 	for rows.Next() {
 		var u UsageRow
 		if err := rows.Scan(&u.ReportedAt, &u.Instance, &u.Project, &u.MR, &u.Trigger, &u.Incremental, &u.Model, &u.Skill,
-			&u.Verdict, &u.In, &u.Out, &u.CacheRead, &u.CacheWrite, &u.Reasoning, &u.Findings, &u.Blocking); err != nil {
+			&u.Verdict, &u.In, &u.Out, &u.CacheRead, &u.CacheWrite, &u.Reasoning, &u.Findings, &u.Blocking, &u.Provider); err != nil {
 			return err
 		}
 		u.ReportedAt = u.ReportedAt.UTC()

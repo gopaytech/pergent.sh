@@ -898,6 +898,7 @@ var openAPISchemas = map[string]schemaType{
 	"UsageRepositoryRowView": outputSchema(UsageRepositoryRowView{}),
 	"UsageOverviewView":      outputSchema(UsageOverviewView{}),
 	"UsageNamedView":         outputSchema(UsageNamedView{}),
+	"UsageModelView":         outputSchema(UsageModelView{}),
 	"UsageMRView":            outputSchema(UsageMRView{}),
 	"UsageWastedView":        outputSchema(UsageWastedView{}),
 	"UsageOutlierView":       outputSchema(UsageOutlierView{}),

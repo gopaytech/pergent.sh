@@ -426,10 +426,18 @@ export type UsageOverviewView = {
 
 // UsageNamedView is one skill or model of a repository's usage. failed is
 // the runs in which a skill failed; for a model it is always 0.
-export type UsageNamedView = { name: string; tokens: UsageTokensView; runs: number; failed: number };
+export type UsageNamedView = { provider: string; name: string; tokens: UsageTokensView; runs: number; failed: number };
 
 // UsageMRView is one merge request of a repository's usage.
-export type UsageMRView = { iid: number; title: string; webURL: string; tokens: UsageTokensView; reviews: number };
+export type UsageModelView = { provider: string; model: string };
+export type UsageMRView = {
+  iid: number;
+  title: string;
+  webURL: string;
+  tokens: UsageTokensView;
+  reviews: number;
+  models: UsageModelView[];
+};
 
 // UsageWastedView is the tokens of skills that failed, and apart from them
 // those of re-runs someone asked for. A skill that failed in a re-run is in

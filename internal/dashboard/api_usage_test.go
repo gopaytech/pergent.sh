@@ -35,7 +35,7 @@ func (e *env) usageFixture() {
 	e.t.Helper()
 	now := e.clock.now()
 	e.usageRun(runFix{project: "acme/widgets", number: 1, head: head('1'), at: now.Add(-48 * time.Hour), title: "Add login",
-		webURL: "https://gitlab.example.com/acme/widgets/-/merge_requests/1", model: "m1"},
+		webURL: "https://gitlab.example.com/acme/widgets/-/merge_requests/1", model: "m1", provider: "anthropic"},
 		usageSkill("security", "no_blocking_issues", 800, 100), usageSkill("style", "no_blocking_issues", 200, 60))
 	e.usageRun(runFix{project: "acme/widgets", number: 2, head: head('2'), at: now.Add(-2 * time.Hour), title: "Refactor",
 		model: "m2", incremental: true},
@@ -163,9 +163,19 @@ func TestUsageOfARepository(t *testing.T) {
 	if len(got.Models) != 2 || got.Models[0].Name != "m1" || got.Models[0].Runs != 1 || got.Models[1].Name != "m2" {
 		t.Errorf("models = %+v; want m1 then m2", got.Models)
 	}
+	if got.Models[0].Provider != "anthropic" || got.Models[1].Provider != "" || got.Skills[0].Provider != "" {
+		t.Errorf("providers = %q, %q, skill %q; want anthropic, none for a run without one, none for a skill",
+			got.Models[0].Provider, got.Models[1].Provider, got.Skills[0].Provider)
+	}
 	if len(got.MergeRequests) != 2 || got.MergeRequests[0].IID != 1 || got.MergeRequests[0].Title != "Add login" ||
 		got.MergeRequests[0].WebURL == "" || got.MergeRequests[0].Reviews != 1 {
 		t.Errorf("mergeRequests = %+v; want !1 first, with its title and address", got.MergeRequests)
+	}
+	if m := got.MergeRequests[0].Models; len(m) != 1 || m[0] != (UsageModelView{Provider: "anthropic", Model: "m1"}) {
+		t.Errorf("!1 models = %+v; want anthropic's m1", m)
+	}
+	if m := got.MergeRequests[1].Models; len(m) != 1 || m[0] != (UsageModelView{Model: "m2"}) {
+		t.Errorf("!2 models = %+v; want m2 with no provider", m)
 	}
 	if got.Wasted.Failed.In != 0 || got.Wasted.RerunCount != 0 || got.Wasted.NoResult != 0 {
 		t.Errorf("wasted = %+v; want no waste on acme/widgets", got.Wasted)
@@ -227,7 +237,7 @@ func TestCSVCell(t *testing.T) {
 }
 
 const csvHeader = "reported_at,instance,repository,merge_request,trigger,incremental,model,skill,verdict," +
-	"tokens_in,tokens_out,cache_read,cache_write,reasoning,findings,blocking"
+	"tokens_in,tokens_out,cache_read,cache_write,reasoning,findings,blocking,provider"
 
 func csvRows(t *testing.T, rec *httptest.ResponseRecorder) [][]string {
 	t.Helper()
@@ -243,7 +253,7 @@ func TestUsageCSV(t *testing.T) {
 	e.usageFixture()
 	// A skill whose pergent reported no cache counts, and a name that a
 	// spreadsheet would read as a formula.
-	e.usageRun(runFix{project: "acme/widgets", number: 4, head: head('4'), at: e.clock.now().Add(-time.Hour), title: "=HYPERLINK(\"x\")", model: "=m"},
+	e.usageRun(runFix{project: "acme/widgets", number: 4, head: head('4'), at: e.clock.now().Add(-time.Hour), title: "=HYPERLINK(\"x\")", model: "=m", provider: "=p"},
 		store.SkillUsage{Skill: "+skill", Verdict: "has_blocking_issues", In: 7, Out: 3, Findings: 2, Blocking: 1})
 	rec := e.get(e.operator(), "/api/admin/usage.csv?days=30")
 
@@ -265,8 +275,8 @@ func TestUsageCSV(t *testing.T) {
 		t.Fatalf("%d rows, want the header and 5: %v", len(rows), rows)
 	}
 	for _, r := range rows[1:] {
-		if len(r) != 16 {
-			t.Errorf("row %v has %d cells, want 16", r, len(r))
+		if len(r) != 17 {
+			t.Errorf("row %v has %d cells, want 17", r, len(r))
 		}
 	}
 	// Oldest first: the first review of acme/widgets, two days ago.
@@ -279,11 +289,28 @@ func TestUsageCSV(t *testing.T) {
 		t.Errorf("reported_at = %q, want RFC 3339 in UTC", first[0])
 	}
 	last := rows[5]
+	if last[16] != "'=p" {
+		t.Errorf("last provider = %q, want the formula as text", last[16])
+	}
+	if first[16] != "anthropic" {
+		t.Errorf("first provider = %q, want anthropic", first[16])
+	}
 	if last[6] != "'=m" || last[7] != "'+skill" || last[11] != "" || last[12] != "" || last[13] != "" || last[14] != "2" || last[15] != "1" {
 		t.Errorf("last row = %v; want the formulas as text and empty cache and reasoning counts", last)
 	}
 	if strings.Contains(rec.Body.String(), "HYPERLINK") || strings.Contains(rec.Body.String(), "Add login") {
 		t.Errorf("the body holds a title: %s", rec.Body)
+	}
+}
+
+// The provider is the last column, so a script reading the others by position
+// keeps working.
+func TestUsageCSVHasProviderLast(t *testing.T) {
+	old := []string{"reported_at", "instance", "repository", "merge_request", "trigger", "incremental", "model",
+		"skill", "verdict", "tokens_in", "tokens_out", "cache_read", "cache_write", "reasoning", "findings", "blocking"}
+	if len(usageCSVHeader) != len(old)+1 || usageCSVHeader[len(old)] != "provider" ||
+		strings.Join(usageCSVHeader[:len(old)], ",") != strings.Join(old, ",") {
+		t.Errorf("header = %v; want %v and provider last", usageCSVHeader, old)
 	}
 }
 

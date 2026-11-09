@@ -4780,8 +4780,11 @@ components:
     UsageNamedView:
       description: One skill or model of a repository's usage.
       type: object
-      required: [name, tokens, runs, failed]
+      required: [provider, name, tokens, runs, failed]
       properties:
+        provider:
+          type: string
+          description: The model's provider; "" for a skill.
         name: {type: string}
         tokens: {$ref: '#/components/schemas/UsageTokensView'}
         runs:
@@ -4792,10 +4795,19 @@ components:
           type: integer
           format: int64
           description: The runs in which the skill failed; 0 for a model.
+    UsageModelView:
+      description: A model a merge request's reviews ran on.
+      type: object
+      required: [provider, model]
+      properties:
+        provider:
+          type: string
+          description: '"" for a review recorded before providers were.'
+        model: {type: string}
     UsageMRView:
       description: One merge request of a repository's usage.
       type: object
-      required: [iid, title, webURL, tokens, reviews]
+      required: [iid, title, webURL, tokens, reviews, models]
       properties:
         iid: {type: integer, format: int64}
         title:
@@ -4806,6 +4818,12 @@ components:
           description: Its address; "" when it is not an http or https address.
         tokens: {$ref: '#/components/schemas/UsageTokensView'}
         reviews: {type: integer, format: int64}
+        models:
+          type: array
+          description: >-
+            The models its reviews in the period ran on, by provider then
+            model; a review with no recorded model adds none.
+          items: {$ref: '#/components/schemas/UsageModelView'}
     UsageWastedView:
       description: >-
         The tokens that bought no finished review. `reruns` are those of the

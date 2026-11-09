@@ -693,13 +693,13 @@ export const usageRepository: UsageRepositoryView = {
     { day: "2026-11-07", tokens: tok(300_000, 50_000) },
   ],
   skills: [
-    { name: "security", tokens: tok(500_000, 100_000, { cacheRead: 0, cacheWrite: 0, reasoning: 0, unknown: 3 }), runs: 12, failed: 1 },
-    { name: "style", tokens: tok(400_000, 100_000, { cacheRead: 7_000, cacheWrite: 1_000, reasoning: 2_000, unknown: 0 }), runs: 9, failed: 0 },
+    { provider: "", name: "security", tokens: tok(500_000, 100_000, { cacheRead: 0, cacheWrite: 0, reasoning: 0, unknown: 3 }), runs: 12, failed: 1 },
+    { provider: "", name: "style", tokens: tok(400_000, 100_000, { cacheRead: 7_000, cacheWrite: 1_000, reasoning: 2_000, unknown: 0 }), runs: 9, failed: 0 },
   ],
-  models: [{ name: "claude-sonnet", tokens: tok(900_000, 200_000), runs: 21, failed: 0 }],
+  models: [{ provider: "anthropic", name: "claude-sonnet", tokens: tok(900_000, 200_000), runs: 21, failed: 0 }],
   mergeRequests: [
-    { iid: 77, title: "Fix the ledger", webURL: "https://gitlab.example.com/acme/payments/-/merge_requests/77", tokens: tok(600_000, 100_000), reviews: 4 },
-    { iid: 78, title: "<img src=x onerror=alert(1)>", webURL: "https://gitlab.example.com/acme/payments/-/merge_requests/78", tokens: tok(300_000, 100_000), reviews: 2 },
+    { iid: 77, title: "Fix the ledger", webURL: "https://gitlab.example.com/acme/payments/-/merge_requests/77", tokens: tok(600_000, 100_000), reviews: 4, models: [{ provider: "anthropic", model: "claude-sonnet" }] },
+    { iid: 78, title: "<img src=x onerror=alert(1)>", webURL: "https://gitlab.example.com/acme/payments/-/merge_requests/78", tokens: tok(300_000, 100_000), reviews: 2, models: [] },
   ],
   wasted: { failed: tok(40_000, 5_000), reruns: tok(90_000, 10_000), rerunCount: 2, noResult: 1, superseded: 3 },
   fullMedian: 120_000,
