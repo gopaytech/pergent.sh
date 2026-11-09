@@ -2,8 +2,9 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { ModelAdminView, ModelsAdminView } from "../api";
 import { fakeApi } from "../test/fakeApi";
-import { defaults, librarySkills, llm, operator, ssoAdmin, viewer } from "../test/fixtures";
+import { defaults, librarySkills, modelOpus, modelSonnet, models, operator, ssoAdmin, viewer } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -12,7 +13,7 @@ const routes = (me = ssoAdmin) => ({
   "GET /api/me": { body: me },
   "GET /api/admin/defaults": { body: defaults },
   "GET /api/skills": { body: librarySkills },
-  "GET /api/admin/llm": { body: { ...llm, editable: false } },
+  "GET /api/admin/models": { body: models },
 });
 
 describe("AdminSettings defaults", () => {
@@ -668,158 +669,95 @@ describe("AdminSettings default skills", () => {
   });
 });
 
-describe("AdminSettings model", () => {
-  it("is read-only when the server says it can't be changed, without a key", async () => {
-    fakeApi(routes());
+describe("AdminSettings models", () => {
+  const listed = (over: Partial<ModelsAdminView> = {}) => ({ ...routes(operator), "GET /api/admin/models": { body: { ...models, ...over } } });
+  const entry = (label: string) => screen.findByRole("group", { name: label });
+
+  it("lists each model with its provider, default mark, base URL, key and repositories", async () => {
+    fakeApi(listed());
     renderApp("/admin/settings");
-    const model = await screen.findByRole("region", { name: "Model" });
-    expect(model).toHaveTextContent("anthropic");
-    expect(model).toHaveTextContent("claude-sonnet");
-    expect(model).toHaveTextContent("set · changed 3 days ago");
-    expect(within(model).queryByRole("textbox")).not.toBeInTheDocument();
-    expect(within(model).queryByRole("button")).not.toBeInTheDocument();
-    expect(model).not.toHaveTextContent("from the config file");
+    const sonnet = await entry("anthropic / claude-sonnet");
+    expect(within(sonnet).getByText("default")).toBeInTheDocument();
+    expect(sonnet).toHaveTextContent("set · changed 3 days ago");
+    // The repositories that name no model follow the default.
+    expect(sonnet).toHaveTextContent("3 repositories name no model and follow it");
+    const opus = await entry("anthropic / claude-opus");
+    expect(within(opus).queryByText("default")).not.toBeInTheDocument();
+    expect(opus).toHaveTextContent("https://llm.example.com/v1");
+    expect(opus).toHaveTextContent("main: acme/payments");
+    // No key is ever in the page, nor an input for one until Replace.
+    expect(within(opus).queryByLabelText("New API key")).not.toBeInTheDocument();
+    expect(within(opus).queryByRole("textbox")).not.toBeInTheDocument();
   });
 
-  it("says so when the model comes from the config file", async () => {
-    fakeApi({
-      ...routes(operator),
-      "GET /api/admin/llm": { body: { ...llm, source: "config", editable: false, key: { set: true, updatedAt: null } } },
-    });
+  it("shows a provider or model as text, never as HTML", async () => {
+    const evil = { ...modelOpus, id: "m-evil", provider: "<img src=x onerror=alert(1)>", model: "<i>x</i>", repositories: [] };
+    fakeApi(listed({ models: [modelSonnet, evil] }));
     renderApp("/admin/settings");
-    const model = await screen.findByRole("region", { name: "Model" });
-    expect(model).toHaveTextContent("from the config file");
-    expect(within(model).queryByRole("textbox")).not.toBeInTheDocument();
-    expect(model).toHaveTextContent("Key");
-    expect(model).toHaveTextContent("set");
+    const row = await entry("<img src=x onerror=alert(1)> / <i>x</i>");
+    expect(row).toHaveTextContent("<img src=x onerror=alert(1)>");
+    expect(document.querySelector("img")).toBeNull();
+    expect(row.querySelector("i")).toBeNull();
   });
 
-  it("is editable for an operator, with a write-only key", async () => {
-    let read = 0;
+  it("adds a model with a POST of provider, model, base URL and key, and lists the new list", async () => {
+    let added = false;
     const fake = fakeApi({
       ...routes(operator),
-      "GET /api/admin/llm": () => ({ body: read++ === 0 ? llm : { ...llm, model: "claude-opus" } }),
-      "PUT /api/admin/llm": { body: { ...llm, model: "claude-opus" } },
+      "GET /api/admin/models": () => ({ body: added ? { ...models, models: [...models.models, { ...modelOpus, id: "m-ds", provider: "deepseek", model: "deepseek-chat", repositories: [] }] } : models }),
+      "POST /api/admin/models": () => {
+        added = true;
+        return { status: 201, body: { ...modelOpus, id: "m-ds", provider: "deepseek", model: "deepseek-chat" } };
+      },
     });
     renderApp("/admin/settings");
-    const form = await screen.findByRole("form", { name: "Model" });
-    expect(within(form).getByLabelText("Provider")).toHaveValue("anthropic");
-    expect(within(form).getByLabelText("Model")).toHaveValue("claude-sonnet");
-    expect(within(form).getByLabelText("Base URL")).toHaveValue("");
-    // A key that is set is not shown, nor its input, until Replace.
-    expect(form).toHaveTextContent("set · changed 3 days ago");
-    expect(within(form).queryByLabelText("New API key")).not.toBeInTheDocument();
-    await userEvent.clear(within(form).getByLabelText("Model"));
-    await userEvent.type(within(form).getByLabelText("Model"), "claude-opus");
-    await userEvent.click(within(form).getByRole("button", { name: "Save model" }));
-    const [put] = fake.find("PUT", "/api/admin/llm");
-    expect(put.headers.get("X-CSRF-Token")).toBe("csrf-123");
-    expect(put.body).toEqual({ provider: "anthropic", model: "claude-opus", baseURL: "" });
-    expect(await screen.findByText("Model saved.")).toBeInTheDocument();
-  });
-
-  it("sends a replacement key from an empty password input, and forgets it", async () => {
-    const fake = fakeApi({ ...routes(operator), "GET /api/admin/llm": { body: llm }, "PUT /api/admin/llm": { body: llm } });
-    renderApp("/admin/settings");
-    const form = await screen.findByRole("form", { name: "Model" });
-    await userEvent.click(within(form).getByRole("button", { name: "Replace" }));
-    const key = within(form).getByLabelText("New API key");
-    expect(key).toHaveAttribute("type", "password");
-    // "off" doesn't stop a password manager filling the admin's own
-    // sign-in here; "new-password" and the managers' opt-outs do.
-    expect(key).toHaveAttribute("autocomplete", "new-password");
-    expect(key).toHaveAttribute("data-1p-ignore");
-    expect(key).toHaveAttribute("data-lpignore", "true");
-    expect(key).toHaveValue("");
-    await userEvent.type(key, "sk-new-key");
-    await userEvent.click(within(form).getByRole("button", { name: "Save model" }));
-    expect(fake.find("PUT", "/api/admin/llm")[0].body).toEqual({
-      provider: "anthropic",
-      model: "claude-sonnet",
-      baseURL: "",
-      apiKey: "sk-new-key",
-    });
-    await vi.waitFor(() => expect(screen.queryByLabelText("New API key")).not.toBeInTheDocument());
-    expect(document.body.textContent).not.toContain("sk-new-key");
-  });
-
-  it("asks for the key straight away when none is stored", async () => {
-    const fake = fakeApi({
-      ...routes(operator),
-      "GET /api/admin/llm": { body: { ...llm, provider: "", model: "", key: { set: false, updatedAt: null } } },
-      "PUT /api/admin/llm": { body: llm },
-    });
-    renderApp("/admin/settings");
-    const form = await screen.findByRole("form", { name: "Model" });
-    expect(form).toHaveTextContent("not set");
-    await userEvent.selectOptions(within(form).getByLabelText("Provider"), "anthropic");
-    await userEvent.type(within(form).getByLabelText("Model"), "claude-sonnet");
-    await userEvent.type(within(form).getByLabelText("Base URL"), "https://llm.example.com");
-    await userEvent.type(within(form).getByLabelText("New API key"), "sk-first");
-    await userEvent.click(within(form).getByRole("button", { name: "Save model" }));
-    expect(fake.find("PUT", "/api/admin/llm")[0].body).toEqual({
-      provider: "anthropic",
-      model: "claude-sonnet",
-      baseURL: "https://llm.example.com",
-      apiKey: "sk-first",
-    });
-  });
-
-  it("picks the provider from a list", async () => {
-    const fake = fakeApi({
-      ...routes(operator),
-      "GET /api/admin/llm": { body: { ...llm, provider: "", model: "", key: { set: false, updatedAt: null } } },
-      "PUT /api/admin/llm": { body: llm },
-    });
-    renderApp("/admin/settings");
-    const form = await screen.findByRole("form", { name: "Model" });
+    const form = await screen.findByRole("form", { name: "Add a model" });
     const provider = within(form).getByLabelText("Provider");
     const options = within(provider)
       .getAllByRole("option")
       .map((o) => (o as HTMLOptionElement).value);
-    expect(options).toEqual(
-      expect.arrayContaining(["anthropic", "openai", "deepseek", "google", "openrouter", "groq", "mistral", "xai", "other"]),
-    );
+    expect(options).toEqual(expect.arrayContaining(["anthropic", "openai", "deepseek", "google", "openrouter", "groq", "mistral", "xai", "other"]));
     // Nothing is picked until the admin picks.
     expect(provider).toHaveValue("");
-    expect(within(form).queryByLabelText("Provider ID")).not.toBeInTheDocument();
     await userEvent.selectOptions(provider, "deepseek");
     await userEvent.type(within(form).getByLabelText("Model"), "deepseek-chat");
-    await userEvent.type(within(form).getByLabelText("New API key"), "sk-ds");
-    await userEvent.click(within(form).getByRole("button", { name: "Save model" }));
-    expect(fake.find("PUT", "/api/admin/llm")[0].body).toEqual({
-      provider: "deepseek",
-      model: "deepseek-chat",
-      baseURL: "",
-      apiKey: "sk-ds",
-    });
+    await userEvent.type(within(form).getByLabelText("Base URL"), "https://api.deepseek.example.com");
+    const key = within(form).getByLabelText("API key");
+    // "off" doesn't stop a password manager filling the admin's own
+    // sign-in here; "new-password" and the managers' opt-outs do.
+    expect(key).toHaveAttribute("type", "password");
+    expect(key).toHaveAttribute("autocomplete", "new-password");
+    expect(key).toHaveAttribute("data-1p-ignore");
+    expect(key).toHaveAttribute("data-lpignore", "true");
+    await userEvent.type(key, "sk-first");
+    await userEvent.click(within(form).getByRole("button", { name: "Add model" }));
+    const [post] = fake.find("POST", "/api/admin/models");
+    expect(post.headers.get("X-CSRF-Token")).toBe("csrf-123");
+    expect(post.body).toEqual({ provider: "deepseek", model: "deepseek-chat", baseURL: "https://api.deepseek.example.com", apiKey: "sk-first" });
+    expect(await entry("deepseek / deepseek-chat")).toBeInTheDocument();
+    // The form is empty again and the key is gone from the page.
+    await vi.waitFor(() => expect(within(form).getByLabelText("API key")).toHaveValue(""));
+    expect(within(form).getByLabelText("Model")).toHaveValue("");
+    expect(document.body.textContent).not.toContain("sk-first");
   });
 
-  it("takes any other provider ID, and shows a stored one that isn't listed", async () => {
-    const fake = fakeApi({
-      ...routes(operator),
-      "GET /api/admin/llm": { body: { ...llm, provider: "my-gateway", baseURL: "https://llm.example.com/v1" } },
-      "PUT /api/admin/llm": { body: llm },
-    });
+  it("takes any other provider ID", async () => {
+    const fake = fakeApi({ ...listed(), "POST /api/admin/models": { status: 201, body: modelOpus } });
     renderApp("/admin/settings");
-    const form = await screen.findByRole("form", { name: "Model" });
-    expect(within(form).getByLabelText("Provider")).toHaveValue("other");
-    const id = within(form).getByLabelText("Provider ID");
-    expect(id).toHaveValue("my-gateway");
-    await userEvent.clear(id);
-    await userEvent.type(id, "together");
-    await userEvent.click(within(form).getByRole("button", { name: "Save model" }));
-    expect(fake.find("PUT", "/api/admin/llm")[0].body).toEqual({
-      provider: "together",
-      model: "claude-sonnet",
-      baseURL: "https://llm.example.com/v1",
-    });
+    const form = await screen.findByRole("form", { name: "Add a model" });
+    expect(within(form).queryByLabelText("Provider ID")).not.toBeInTheDocument();
+    await userEvent.selectOptions(within(form).getByLabelText("Provider"), "other");
+    await userEvent.type(within(form).getByLabelText("Provider ID"), "together");
+    await userEvent.type(within(form).getByLabelText("Model"), "llama");
+    await userEvent.type(within(form).getByLabelText("API key"), "sk-t");
+    await userEvent.click(within(form).getByRole("button", { name: "Add model" }));
+    expect(fake.find("POST", "/api/admin/models")[0].body).toEqual({ provider: "together", model: "llama", baseURL: "", apiKey: "sk-t" });
   });
 
   it("leaves the non-secret fields to no password manager either", async () => {
-    fakeApi({ ...routes(operator), "GET /api/admin/llm": { body: llm } });
+    fakeApi(listed());
     renderApp("/admin/settings");
-    const form = await screen.findByRole("form", { name: "Model" });
+    const form = await screen.findByRole("form", { name: "Add a model" });
     // A password manager fills a saved username into the text field before
     // a password field: the Base URL once showed "admin".
     for (const label of ["Model", "Base URL"]) {
@@ -830,16 +768,176 @@ describe("AdminSettings model", () => {
     }
   });
 
-  it("shows the server's text when the model is refused", async () => {
+  it("shows the server's text when an add is refused", async () => {
     fakeApi({
-      ...routes(operator),
-      "GET /api/admin/llm": { body: llm },
-      "PUT /api/admin/llm": { status: 409, body: { error: "the LLM is set in the config file; change it there" } },
+      ...listed(),
+      "POST /api/admin/models": { status: 409, body: { error: "a model with this provider, model and base URL is in the list already" } },
     });
     renderApp("/admin/settings");
-    const form = await screen.findByRole("form", { name: "Model" });
-    await userEvent.click(within(form).getByRole("button", { name: "Save model" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("the LLM is set in the config file");
+    const form = await screen.findByRole("form", { name: "Add a model" });
+    await userEvent.selectOptions(within(form).getByLabelText("Provider"), "anthropic");
+    await userEvent.type(within(form).getByLabelText("Model"), "claude-sonnet");
+    await userEvent.type(within(form).getByLabelText("API key"), "sk-x");
+    await userEvent.click(within(form).getByRole("button", { name: "Add model" }));
+    expect(await within(form).findByRole("alert")).toHaveTextContent("is in the list already");
+  });
+
+  it("changes only the base URL and key of an entry: provider and model can't be edited", async () => {
+    const fake = fakeApi({ ...listed(), "PUT /api/admin/models/m-opus": { body: modelOpus } });
+    renderApp("/admin/settings");
+    const row = await entry("anthropic / claude-opus");
+    await userEvent.click(within(row).getByRole("button", { name: "Edit anthropic / claude-opus" }));
+    const form = screen.getByRole("form", { name: "Edit anthropic / claude-opus" });
+    expect(within(form).queryByLabelText("Provider")).not.toBeInTheDocument();
+    expect(within(form).queryByLabelText("Model")).not.toBeInTheDocument();
+    expect(within(form).getByLabelText("Base URL")).toHaveValue("https://llm.example.com/v1");
+    // A key that is set is not shown, nor its input, until Replace.
+    expect(within(form).queryByLabelText("New API key")).not.toBeInTheDocument();
+    await userEvent.clear(within(form).getByLabelText("Base URL"));
+    await userEvent.click(within(form).getByRole("button", { name: "Save" }));
+    // An empty base URL clears it; no key was typed, so none is sent.
+    const [put] = fake.find("PUT", "/api/admin/models/m-opus");
+    expect(put.headers.get("X-CSRF-Token")).toBe("csrf-123");
+    expect(put.body).toEqual({ baseURL: "" });
+    await vi.waitFor(() => expect(screen.queryByRole("form", { name: "Edit anthropic / claude-opus" })).not.toBeInTheDocument());
+  });
+
+  it("sends a replacement key from an empty password input, and forgets it", async () => {
+    const fake = fakeApi({ ...listed(), "PUT /api/admin/models/m-opus": { body: modelOpus } });
+    renderApp("/admin/settings");
+    const row = await entry("anthropic / claude-opus");
+    await userEvent.click(within(row).getByRole("button", { name: "Edit anthropic / claude-opus" }));
+    const form = screen.getByRole("form", { name: "Edit anthropic / claude-opus" });
+    await userEvent.click(within(form).getByRole("button", { name: "Replace" }));
+    const key = within(form).getByLabelText("New API key");
+    expect(key).toHaveAttribute("type", "password");
+    expect(key).toHaveAttribute("autocomplete", "new-password");
+    expect(key).toHaveValue("");
+    await userEvent.type(key, "sk-new-key");
+    await userEvent.click(within(form).getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/admin/models/m-opus")[0].body).toEqual({ baseURL: "https://llm.example.com/v1", apiKey: "sk-new-key" });
+    await vi.waitFor(() => expect(screen.queryByLabelText("New API key")).not.toBeInTheDocument());
+    expect(document.body.textContent).not.toContain("sk-new-key");
+  });
+
+  it("makes another model the default after a confirmation naming the repositories it moves", async () => {
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirm);
+    const fake = fakeApi({
+      ...routes(operator),
+      "GET /api/admin/models": { body: models },
+      "POST /api/admin/models/m-opus/default": {
+        body: { ...models, models: [{ ...modelSonnet, default: false }, { ...modelOpus, default: true }] },
+      },
+    });
+    renderApp("/admin/settings");
+    const row = await entry("anthropic / claude-opus");
+    await userEvent.click(within(row).getByRole("button", { name: "Set anthropic / claude-opus as default" }));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("anthropic / claude-opus"));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("3 repositories"));
+    expect(fake.find("POST", "/api/admin/models/m-opus/default")[0].headers.get("X-CSRF-Token")).toBe("csrf-123");
+    // The answer is the new list: the mark moved.
+    await vi.waitFor(async () => expect(within(await entry("anthropic / claude-opus")).getByText("default")).toBeInTheDocument());
+    expect(within(await entry("anthropic / claude-sonnet")).queryByText("default")).not.toBeInTheDocument();
+  });
+
+  it("changes nothing when the default's confirmation is refused", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => false));
+    const fake = fakeApi(listed());
+    renderApp("/admin/settings");
+    const row = await entry("anthropic / claude-opus");
+    await userEvent.click(within(row).getByRole("button", { name: "Set anthropic / claude-opus as default" }));
+    expect(fake.find("POST", "/api/admin/models/m-opus/default")).toHaveLength(0);
+  });
+
+  it("offers neither set-as-default nor removal on the default entry", async () => {
+    fakeApi(listed());
+    renderApp("/admin/settings");
+    const row = await entry("anthropic / claude-sonnet");
+    expect(within(row).queryByRole("button", { name: /as default/ })).not.toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: /^Remove/ })).not.toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Edit anthropic / claude-sonnet" })).toBeInTheDocument();
+  });
+
+  it("removes a model and reads the list again", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    let removed = false;
+    const fake = fakeApi({
+      ...routes(operator),
+      "GET /api/admin/models": () => ({ body: removed ? { ...models, models: [modelSonnet] } : models }),
+      "DELETE /api/admin/models/m-opus": () => {
+        removed = true;
+        return { status: 204 };
+      },
+    });
+    renderApp("/admin/settings");
+    const row = await entry("anthropic / claude-opus");
+    await userEvent.click(within(row).getByRole("button", { name: "Remove anthropic / claude-opus" }));
+    expect(fake.find("DELETE", "/api/admin/models/m-opus")[0].headers.get("X-CSRF-Token")).toBe("csrf-123");
+    await vi.waitFor(() => expect(screen.queryByRole("group", { name: "anthropic / claude-opus" })).not.toBeInTheDocument());
+  });
+
+  it("names the repositories a refused removal is held back by", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    fakeApi({
+      ...listed(),
+      "DELETE /api/admin/models/m-opus": {
+        status: 409,
+        body: {
+          error: "the model is in use: change the model of the repositories that name it first",
+          repositories: [
+            { instance: "main", project: "acme/payments" },
+            { instance: "hub", project: "acme/<b>gadgets</b>" },
+          ],
+        },
+      },
+    });
+    renderApp("/admin/settings");
+    const row = await entry("anthropic / claude-opus");
+    await userEvent.click(within(row).getByRole("button", { name: "Remove anthropic / claude-opus" }));
+    const alert = await within(row).findByRole("alert");
+    expect(alert).toHaveTextContent("main: acme/payments");
+    expect(alert).toHaveTextContent("hub: acme/<b>gadgets</b>");
+    expect(alert.querySelector("b")).toBeNull();
+  });
+
+  it("shows the server's text when a removal is refused for another reason", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    fakeApi({ ...listed(), "DELETE /api/admin/models/m-opus": { status: 500, body: { error: "could not save" } } });
+    renderApp("/admin/settings");
+    const row = await entry("anthropic / claude-opus");
+    await userEvent.click(within(row).getByRole("button", { name: "Remove anthropic / claude-opus" }));
+    expect(await within(row).findByRole("alert")).toHaveTextContent("could not save");
+  });
+
+  it("gives the config file's entry no controls, and says where to change it", async () => {
+    const config: ModelAdminView = { ...modelSonnet, id: "config", source: "config", default: true, repositories: [{ instance: "main", project: "acme/widgets" }] };
+    fakeApi(listed({ canSetDefault: false, models: [config, { ...modelOpus, default: false }] }));
+    renderApp("/admin/settings");
+    const row = await entry("anthropic / claude-sonnet");
+    expect(row).toHaveTextContent("from the config file");
+    expect(row).toHaveTextContent("main: acme/widgets");
+    expect(within(row).queryByRole("button")).not.toBeInTheDocument();
+    // The config's llm: block is the default, but entries can still be
+    // added, changed and removed.
+    expect(screen.getByText(/llm: block/)).toBeInTheDocument();
+    const other = await entry("anthropic / claude-opus");
+    expect(within(other).queryByRole("button", { name: /as default/ })).not.toBeInTheDocument();
+    expect(within(other).getByRole("button", { name: "Edit anthropic / claude-opus" })).toBeInTheDocument();
+    expect(within(other).getByRole("button", { name: "Remove anthropic / claude-opus" })).toBeInTheDocument();
+    expect(screen.getByRole("form", { name: "Add a model" })).toBeInTheDocument();
+  });
+
+  it("says so when the list is empty", async () => {
+    fakeApi(listed({ models: [], followingDefault: 0 }));
+    renderApp("/admin/settings");
+    expect(await screen.findByText(/No model yet/)).toBeInTheDocument();
+  });
+
+  it("shows the error when the list can't be read", async () => {
+    fakeApi({ ...routes(operator), "GET /api/admin/models": { status: 500, body: { error: "boom" } } });
+    renderApp("/admin/settings");
+    expect(await screen.findByText("boom")).toBeInTheDocument();
   });
 });
 
@@ -849,6 +947,6 @@ describe("AdminSettings access", () => {
     renderApp("/admin/settings");
     expect(await screen.findByRole("heading", { name: "Not found" })).toBeInTheDocument();
     expect(fake.find("GET", "/api/admin/defaults")).toHaveLength(0);
-    expect(fake.find("GET", "/api/admin/llm")).toHaveLength(0);
+    expect(fake.find("GET", "/api/admin/models")).toHaveLength(0);
   });
 });

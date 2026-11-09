@@ -48,7 +48,7 @@ func usageDays(days []store.DayUsage) []UsageDayView {
 func usageNamed(rows []store.NamedUsage) []UsageNamedView {
 	out := make([]UsageNamedView, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, UsageNamedView{Name: r.Name, Tokens: usageTokens(r.Tokens), Runs: r.Runs, Failed: r.Failed})
+		out = append(out, UsageNamedView{Provider: r.Provider, Name: r.Name, Tokens: usageTokens(r.Tokens), Runs: r.Runs, Failed: r.Failed})
 	}
 	return out
 }
@@ -158,8 +158,12 @@ func (d *Dashboard) repositoryUsage(w http.ResponseWriter, r *http.Request, se S
 
 	out.Daily, out.Skills, out.Models = usageDays(daily), usageNamed(skills), usageNamed(models)
 	for _, m := range mrs {
+		models := make([]UsageModelView, 0, len(m.Models))
+		for _, u := range m.Models {
+			models = append(models, UsageModelView{Provider: u.Provider, Model: u.Model})
+		}
 		out.MergeRequests = append(out.MergeRequests, UsageMRView{IID: m.IID, Title: m.Title, WebURL: safeURL(m.WebURL),
-			Tokens: usageTokens(m.Tokens), Reviews: m.Reviews})
+			Tokens: usageTokens(m.Tokens), Reviews: m.Reviews, Models: models})
 	}
 	out.Wasted = UsageWastedView{Failed: usageTokens(wasted.Failed), Reruns: usageTokens(wasted.Reruns),
 		RerunCount: wasted.RerunCount, NoResult: wasted.NoResult, Superseded: wasted.Superseded}
@@ -181,7 +185,7 @@ const msgBadUsageRepository = "instance and project go together: give both or ne
 
 // usageCSVHeader is the first row of an export.
 var usageCSVHeader = []string{"reported_at", "instance", "repository", "merge_request", "trigger", "incremental", "model",
-	"skill", "verdict", "tokens_in", "tokens_out", "cache_read", "cache_write", "reasoning", "findings", "blocking"}
+	"skill", "verdict", "tokens_in", "tokens_out", "cache_read", "cache_write", "reasoning", "findings", "blocking", "provider"}
 
 // csvCell keeps a spreadsheet from reading a cell as a formula.
 func csvCell(s string) string {
@@ -201,7 +205,8 @@ func optionalCount(n *int64) string {
 
 // usageCSV exports what each skill of each run used in the last days, one row
 // a run and skill, oldest first, for every repository or for the one given by
-// instance and project. A row holds no title and no text a person wrote, and
+// instance and project; the provider is the last column, so the others keep
+// their places. A row holds no title and no text a person wrote, and
 // no dismissal: those belong to a change. The rows go out as the database
 // sends them.
 func (d *Dashboard) usageCSV(w http.ResponseWriter, r *http.Request) {
@@ -257,7 +262,7 @@ func (d *Dashboard) usageCSV(w http.ResponseWriter, r *http.Request) {
 				strconv.FormatInt(u.MR, 10), csvCell(u.Trigger), strconv.FormatBool(u.Incremental), csvCell(u.Model),
 				csvCell(u.Skill), csvCell(u.Verdict), strconv.FormatInt(u.In, 10), strconv.FormatInt(u.Out, 10),
 				optionalCount(u.CacheRead), optionalCount(u.CacheWrite), optionalCount(u.Reasoning),
-				strconv.Itoa(u.Findings), strconv.Itoa(u.Blocking)})
+				strconv.Itoa(u.Findings), strconv.Itoa(u.Blocking), csvCell(u.Provider)})
 		})
 		if err != nil {
 			if ctx.Err() != nil {

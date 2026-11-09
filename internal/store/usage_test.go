@@ -30,6 +30,82 @@ func TestRecordUsage(t *testing.T) {
 	}
 }
 
+// The provider a run launched on is copied to its usage rows, "" when the run
+// has none.
+func TestRecordUsageCopiesProvider(t *testing.T) {
+	s := newStore(t)
+	on := seedUsageOn(t, s, usageMR(7, 1), usageAt(5, 10, 0), TriggerPush, false, "anthropic", "sonnet", skillRow("security", "no_blocking_issues", 1, 0))
+	none := seedUsage(t, s, usageMR(7, 2), usageAt(5, 11, 0), TriggerPush, false, "old", skillRow("security", "no_blocking_issues", 1, 0))
+	for id, want := range map[string]string{on: "anthropic", none: ""} {
+		var got string
+		if err := s.pool.QueryRow(ctx, `SELECT provider FROM run_usage WHERE run_id = $1::uuid`, id).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("provider of run %s = %q, want %q", id, got, want)
+		}
+	}
+}
+
+// A merge request lists each model its reviews ran on once, whatever the
+// number of skills and reviews, by provider then model. A model of one
+// provider is not another provider's of the same name, and a run with no
+// model lists none.
+func TestUsageByMRListsEachModel(t *testing.T) {
+	s := newStore(t)
+	two := func(skill string) []SkillUsage {
+		return []SkillUsage{skillRow(skill, "no_blocking_issues", 10, 0), skillRow(skill+"2", "no_blocking_issues", 10, 0)}
+	}
+	seedUsageOn(t, s, usageMR(7, 3), usageAt(5, 10, 0), TriggerPush, false, "openai", "gpt", two("a")...)
+	seedUsageOn(t, s, usageMR(7, 3), usageAt(5, 11, 0), TriggerPush, false, "anthropic", "sonnet", two("a")...)
+	seedUsageOn(t, s, usageMR(7, 3), usageAt(5, 12, 0), TriggerPush, false, "anthropic", "sonnet", two("a")...)
+	seedUsageOn(t, s, usageMR(7, 3), usageAt(5, 13, 0), TriggerPush, false, "gateway", "sonnet", two("a")...)
+	// Never recorded: it adds tokens and no model.
+	seedUsage(t, s, usageMR(7, 3), usageAt(5, 14, 0), TriggerPush, false, "", skillRow("a", "no_blocking_issues", 10, 0))
+	seedUsage(t, s, usageMR(7, 4), usageAt(5, 15, 0), TriggerPush, false, "", skillRow("a", "no_blocking_issues", 10, 0))
+	// Another repository's, and one before the period.
+	seedUsageOn(t, s, usageMR(8, 3), usageAt(5, 10, 0), TriggerPush, false, "other", "elsewhere", skillRow("a", "no_blocking_issues", 10, 0))
+	seedUsageOn(t, s, usageMR(7, 4), usageSince.Add(-time.Second), TriggerPush, false, "old", "too-old", skillRow("a", "no_blocking_issues", 10, 0))
+
+	mrs, err := s.UsageByMR(ctx, mr1.Instance, 7, usageSince, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mrs) != 2 || mrs[0].IID != 3 || mrs[1].IID != 4 {
+		t.Fatalf("UsageByMR = %+v, want !3 then !4", mrs)
+	}
+	want := []ModelUsed{{"anthropic", "sonnet"}, {"gateway", "sonnet"}, {"openai", "gpt"}}
+	if fmt.Sprint(mrs[0].Models) != fmt.Sprint(want) {
+		t.Errorf("!3 models = %+v, want %+v", mrs[0].Models, want)
+	}
+	if len(mrs[1].Models) != 0 {
+		t.Errorf("!4 models = %+v, want none: its run has no model", mrs[1].Models)
+	}
+
+	// The tokens do not repeat once per model.
+	wantTokens(t, "!3", mrs[0].Tokens, TokenSum{In: 90})
+}
+
+// A model is told apart by its provider.
+func TestUsageByModelSplitsByProvider(t *testing.T) {
+	s := newStore(t)
+	seedUsageOn(t, s, usageMR(7, 1), usageAt(5, 10, 0), TriggerPush, false, "anthropic", "sonnet", skillRow("a", "no_blocking_issues", 100, 0))
+	seedUsageOn(t, s, usageMR(7, 2), usageAt(5, 11, 0), TriggerPush, false, "gateway", "sonnet", skillRow("a", "no_blocking_issues", 50, 0))
+	seedUsage(t, s, usageMR(7, 3), usageAt(5, 12, 0), TriggerPush, false, "sonnet", skillRow("a", "no_blocking_issues", 5, 0))
+
+	models, err := s.UsageByModel(ctx, mr1.Instance, 7, usageSince)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 3 || models[0].Provider != "anthropic" || models[1].Provider != "gateway" || models[2].Provider != "" || models[2].Name != "sonnet" {
+		t.Fatalf("UsageByModel = %+v, want anthropic, gateway and a recorded-before-providers sonnet", models)
+	}
+	skills, err := s.UsageBySkill(ctx, mr1.Instance, 7, usageSince)
+	if err != nil || len(skills) != 1 || skills[0].Provider != "" {
+		t.Errorf("UsageBySkill = %+v, %v; want one skill with no provider", skills, err)
+	}
+}
+
 // A run's usage is the sum of its skills, and found only once it is recorded.
 func TestRunUsage(t *testing.T) {
 	s := newStore(t)
@@ -138,11 +214,19 @@ func usageMR(projectID, iid int64) MRKey {
 // The project's path is acme/p<id>.
 func seedUsage(t *testing.T, s *Store, mr MRKey, at time.Time, trigger string, incremental bool, model string, skills ...SkillUsage) string {
 	t.Helper()
+	return seedUsageOn(t, s, mr, at, trigger, incremental, "", model, skills...)
+}
+
+// seedUsageOn is seedUsage for a run that was launched on provider, which is
+// "" for a run recorded before providers were.
+func seedUsageOn(t *testing.T, s *Store, mr MRKey, at time.Time, trigger string, incremental bool, provider, model string, skills ...SkillUsage) string {
+	t.Helper()
 	head := fmt.Sprintf("usage%d", usageSeq.Add(1))
 	id := reported(t, s, mr, head, `{"schema_version":1,"status":"completed","skills":[]}`)
 	if _, err := s.pool.Exec(ctx, `UPDATE runs SET created_at = $2::timestamptz, reported_at = $2::timestamptz, trigger = $3::text,
-			incremental = $4::boolean, model = $5::text, project_path = $6::text WHERE id = $1::uuid`,
-		id, at, trigger, incremental, model, fmt.Sprintf("acme/p%d", mr.ProjectID)); err != nil {
+			incremental = $4::boolean, model = $5::text, project_path = $6::text, provider = NULLIF($7::text, '')
+		WHERE id = $1::uuid`,
+		id, at, trigger, incremental, model, fmt.Sprintf("acme/p%d", mr.ProjectID), provider); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.RecordUsage(ctx, id, skills); err != nil {
@@ -394,7 +478,7 @@ func TestUsageCacheUnknown(t *testing.T) {
 func TestUsageRows(t *testing.T) {
 	s := newStore(t)
 	seedUsage(t, s, usageMR(7, 2), usageAt(6, 10, 0), TriggerPush, true, "m2", skillRow("style", "has_blocking_issues", 20, 2))
-	seedUsage(t, s, usageMR(7, 1), usageAt(5, 10, 0), TriggerPush, false, "m1",
+	seedUsageOn(t, s, usageMR(7, 1), usageAt(5, 10, 0), TriggerPush, false, "anthropic", "m1",
 		SkillUsage{Skill: "security", Verdict: "no_blocking_issues", In: 10, Out: 1, Findings: 3, Blocking: 1})
 	seedUsage(t, s, usageMR(8, 1), usageAt(5, 12, 0), TriggerPush, false, "m1", skillRow("security", "failed", 400, 0))
 	// Before the period: not listed.
@@ -421,8 +505,11 @@ func TestUsageRows(t *testing.T) {
 	first := all[0]
 	if first.Project != "acme/p7" || first.MR != 1 || first.Trigger != TriggerPush || first.Incremental || first.Model != "m1" ||
 		first.Skill != "security" || first.Verdict != "no_blocking_issues" || first.In != 10 || first.Out != 1 ||
-		first.Findings != 3 || first.Blocking != 1 {
+		first.Findings != 3 || first.Blocking != 1 || first.Provider != "anthropic" {
 		t.Errorf("first = %+v", first)
+	}
+	if all[1].Provider != "" {
+		t.Errorf("second provider = %q, want empty for a run with none", all[1].Provider)
 	}
 	if first.CacheRead != nil || first.CacheWrite != nil || first.Reasoning != nil {
 		t.Errorf("first counts = %v, %v, %v; want nil for what the Job didn't report", first.CacheRead, first.CacheWrite, first.Reasoning)

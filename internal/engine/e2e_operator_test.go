@@ -256,14 +256,23 @@ func TestLLMEditable(t *testing.T) {
 		t.Fatalf("run without an LLM = %s, want queued", r.State)
 	}
 
+	// Each model is a new entry; the one added last is made the default, as
+	// one that replaces the model in use would be.
 	put := func(model, key string) {
 		t.Helper()
-		body := map[string]string{"provider": "anthropic", "model": model, "baseURL": "https://llm.example.com/v1"}
-		if key != "" {
-			body["apiKey"] = key
+		body := map[string]string{"provider": "anthropic", "model": model, "baseURL": "https://llm.example.com/v1", "apiKey": key}
+		status, out := e.write(t, ops, http.MethodPost, "/api/admin/models", body)
+		if status != http.StatusCreated {
+			t.Fatalf("POST /api/admin/models = %d: %s", status, out)
 		}
-		if status, out := e.write(t, ops, http.MethodPut, "/api/admin/llm", body); status != http.StatusOK {
-			t.Fatalf("PUT /api/admin/llm = %d: %s", status, out)
+		var added struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(out, &added); err != nil || added.ID == "" {
+			t.Fatalf("POST /api/admin/models answered %s: %v", out, err)
+		}
+		if status, out := e.write(t, ops, http.MethodPost, "/api/admin/models/"+added.ID+"/default", nil); status != http.StatusOK {
+			t.Fatalf("POST /api/admin/models/%s/default = %d: %s", added.ID, status, out)
 		}
 	}
 	jobEnv := func(id string) map[string]string {

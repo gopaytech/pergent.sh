@@ -33,7 +33,6 @@ const (
 	// maxSecretBytes bounds one secret (a GitHub App private key is about
 	// 1.7 KB).
 	maxSecretBytes = 16 << 10
-	maxLLMField    = 256
 
 	msgBadInstanceBody   = `the body must be {"name": ..., "platform": "gitlab" or "github", "url" (GitLab) or "apiURL" and "reviewAppID" (GitHub), "secrets": {...}}`
 	msgBadInstanceUpdate = `the body must be {"secrets": {...}}`
@@ -52,18 +51,13 @@ const (
 	msgBadTrustMode      = `the body must be {"mode": "follow_visibility" | "on" | "off"}`
 	msgNothingToChange   = `nothing to change: give "secrets"`
 
-	msgBadLLMBody     = `the body must be {"provider": ..., "model": ..., "baseURL": ..., "apiKey": ...}`
-	msgLLMRequired    = "provider and model are required, each at most 256 characters"
-	msgBadBaseURL     = "baseURL must be empty or an absolute http or https URL"
-	msgKeyRequired    = "apiKey is required: none is stored"
-	msgConfigLLM      = "the LLM is set in the config file; change it there"
 	msgBadDefaults    = "the body must be a JSON object of defaults: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, commentLayout, linkedReposEnabled, failureStatus, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo"
 	instanceNameLimit = 63
 )
 
 var instanceNamePattern = regexp.MustCompile(`^[a-z0-9-]+$`)
 
-// operatorRoutes adds the instances, LLM and defaults API to mux, every
+// operatorRoutes adds the instances, models and defaults API to mux, every
 // route through adminRoute: a session (X-CSRF-Token on writes), and 404 for
 // anyone who is not an admin.
 func (d *Dashboard) operatorRoutes(mux *http.ServeMux) {
@@ -76,8 +70,11 @@ func (d *Dashboard) operatorRoutes(mux *http.ServeMux) {
 	d.adminRoute(mux, "GET /api/admin/sign-in", d.getSignIn)
 	d.adminRoute(mux, "PUT /api/admin/sign-in", d.putSignIn)
 	d.adminRoute(mux, "POST /api/admin/sign-in/test", d.testSignIn)
-	d.adminRoute(mux, "GET /api/admin/llm", d.getLLM)
-	d.adminRoute(mux, "PUT /api/admin/llm", d.putLLM)
+	d.adminRoute(mux, "GET /api/admin/models", d.getModels)
+	d.adminRoute(mux, "POST /api/admin/models", d.createModel)
+	d.adminRoute(mux, "PUT /api/admin/models/{id}", d.updateModel)
+	d.adminRoute(mux, "POST /api/admin/models/{id}/default", d.setDefaultModel)
+	d.adminRoute(mux, "DELETE /api/admin/models/{id}", d.deleteModel)
 	d.adminRoute(mux, "GET /api/admin/defaults", d.getDefaults)
 	d.adminRoute(mux, "PUT /api/admin/defaults", d.putDefaults)
 	d.adminRoute(mux, "GET /api/admin/usage", d.usageOverview)
@@ -782,100 +779,6 @@ func (d *Dashboard) listAvailable(w http.ResponseWriter, r *http.Request, name s
 	}
 	view.HasMore, view.Truncated = to < len(sorted), truncated
 	writeJSON(w, http.StatusOK, view)
-}
-
-// --- the LLM ---
-
-func (d *Dashboard) llmView(se Session) LLMAdminView {
-	st := d.registry.LLMStatus()
-	v := LLMAdminView{Source: string(st.Source), Provider: st.LLM.Provider, Model: st.LLM.Model, BaseURL: st.LLM.BaseURL,
-		Key: SecretView{Set: st.KeySet}, Editable: se.Admin && st.Source == instances.SourceDashboard}
-	if st.KeySet && !st.UpdatedAt.IsZero() {
-		at := st.UpdatedAt
-		v.Key.UpdatedAt = &at
-	}
-	return v
-}
-
-func (d *Dashboard) getLLM(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, d.llmView(session(r)))
-}
-
-func (d *Dashboard) putLLM(w http.ResponseWriter, r *http.Request) {
-	ctx, se := r.Context(), session(r)
-	before := d.registry.LLMStatus()
-	if before.Source == instances.SourceConfig {
-		writeError(w, http.StatusConflict, msgConfigLLM)
-		return
-	}
-	var in struct {
-		Provider string  `json:"provider"`
-		Model    string  `json:"model"`
-		BaseURL  string  `json:"baseURL"`
-		APIKey   *string `json:"apiKey"`
-	}
-	if err := decodeStrict(r, &in); err != nil {
-		writeError(w, http.StatusBadRequest, msgBadLLMBody)
-		return
-	}
-	in.Provider, in.Model, in.BaseURL = strings.TrimSpace(in.Provider), strings.TrimSpace(in.Model), strings.TrimSpace(in.BaseURL)
-	if in.Provider == "" || in.Model == "" || len(in.Provider) > maxLLMField || len(in.Model) > maxLLMField {
-		writeError(w, http.StatusBadRequest, msgLLMRequired)
-		return
-	}
-	if in.BaseURL != "" {
-		u, err := url.Parse(in.BaseURL)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || len(in.BaseURL) > 2048 {
-			writeError(w, http.StatusBadRequest, msgBadBaseURL)
-			return
-		}
-	}
-	var sealed []byte
-	switch {
-	case in.APIKey != nil:
-		if strings.TrimSpace(*in.APIKey) == "" || len(*in.APIKey) > maxSecretBytes {
-			writeError(w, http.StatusBadRequest, "apiKey must not be empty, and at most 16 KiB")
-			return
-		}
-		sealed = d.Auth.box.Seal([]byte(*in.APIKey))
-	case !before.KeySet:
-		writeError(w, http.StatusBadRequest, msgKeyRequired)
-		return
-	}
-	if err := d.Store.PutLLM(ctx, in.Provider, in.Model, in.BaseURL, sealed, d.now()); err != nil {
-		d.Log.Error("dashboard: saving the LLM failed", "error", err.Error())
-		writeError(w, http.StatusInternalServerError, msgWriteFailed)
-		return
-	}
-	loadErr := d.loadLLM(ctx)
-	var changed []string
-	for _, f := range []struct{ name, before, after string }{
-		{"provider", before.LLM.Provider, in.Provider}, {"model", before.LLM.Model, in.Model}, {"base_url", before.LLM.BaseURL, in.BaseURL},
-	} {
-		if f.before != f.after {
-			changed = append(changed, f.name)
-		}
-	}
-	if in.APIKey != nil {
-		changed = append(changed, "api_key")
-	}
-	d.Log.Info("dashboard: LLM updated", "fields", changed, "by", se.Username)
-	d.audit(ctx, se, "llm_updated", "", "", strings.Join(changed, ", "))
-	if loadErr != nil {
-		// Saved, but not read back: the engine uses the earlier LLM until
-		// pergent.sh restarts or the LLM is saved again. The change is not
-		// lost, so the answer is the saved one.
-		msg := loadErr.Error()
-		if in.APIKey != nil {
-			msg = strings.ReplaceAll(msg, *in.APIKey, "[REDACTED]")
-		}
-		d.Log.Error("dashboard: the LLM was saved but reading it back failed; saving it again tries again", "error", msg)
-		at := d.now()
-		writeJSON(w, http.StatusOK, LLMAdminView{Source: string(instances.SourceDashboard), Provider: in.Provider, Model: in.Model,
-			BaseURL: in.BaseURL, Key: SecretView{Set: true, UpdatedAt: &at}, Editable: se.Admin})
-		return
-	}
-	writeJSON(w, http.StatusOK, d.llmView(se))
 }
 
 // --- the defaults ---

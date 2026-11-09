@@ -5,8 +5,9 @@ import type {
   InstanceAdminView,
   LibrarySkill,
   LinkableView,
-  LLMAdminView,
   Me,
+  ModelAdminView,
+  ModelsAdminView,
   OverviewView,
   PastDismissalView,
   RepositoryDetailView,
@@ -161,6 +162,7 @@ export const runDetail: RunDetailView = {
   latestDecided: true,
   pergentVersion: "v0.1.0",
   model: "claude-sonnet",
+  provider: "anthropic",
   maxTurns: 40,
   incrementalNote: "",
   quiet: false,
@@ -292,10 +294,20 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
     rerunLimitPerRepo: { value: 50, overridden: false },
     trustedAuthorsOnly: { value: "follow_visibility", overridden: false },
     trustedAuthors: { value: [], overridden: false },
+    model: { value: null, overridden: false },
   },
   attention: repo.health === "attention" ? [overview.attention[0]] : [],
   waiting: [],
   instanceTrustedAuthorsOnly: "follow_visibility",
+  model: "anthropic / claude-sonnet",
+  // Only an admin of the repository is given the choices.
+  modelChoices:
+    role === "admin"
+      ? [
+          { id: "m-sonnet", label: "anthropic / claude-sonnet", default: true },
+          { id: "m-opus", label: "anthropic / claude-opus", default: false },
+        ]
+      : [],
 });
 
 // A skill written in the dashboard, on the default list.
@@ -496,14 +508,32 @@ export const defaults: DefaultsView = {
   pinned: {},
 };
 
-export const llm: LLMAdminView = {
-  source: "dashboard",
+const modelKey = { set: true, updatedAt: minutesAgo(3 * 24 * 60) };
+
+// The default of the list, and one a repository names.
+export const modelSonnet: ModelAdminView = {
+  id: "m-sonnet",
   provider: "anthropic",
   model: "claude-sonnet",
   baseURL: "",
-  key: { set: true, updatedAt: minutesAgo(3 * 24 * 60) },
-  editable: true,
+  source: "dashboard",
+  default: true,
+  key: modelKey,
+  repositories: [],
 };
+export const modelOpus: ModelAdminView = {
+  id: "m-opus",
+  provider: "anthropic",
+  model: "claude-opus",
+  baseURL: "https://llm.example.com/v1",
+  source: "dashboard",
+  default: false,
+  key: modelKey,
+  repositories: [{ instance: "main", project: "acme/payments" }],
+};
+
+// The list of models: three repositories follow the default.
+export const models: ModelsAdminView = { canSetDefault: true, followingDefault: 3, models: [modelSonnet, modelOpus] };
 
 export const instanceGitLab: InstanceAdminView = {
   name: "main",
@@ -693,13 +723,13 @@ export const usageRepository: UsageRepositoryView = {
     { day: "2026-11-07", tokens: tok(300_000, 50_000) },
   ],
   skills: [
-    { name: "security", tokens: tok(500_000, 100_000, { cacheRead: 0, cacheWrite: 0, reasoning: 0, unknown: 3 }), runs: 12, failed: 1 },
-    { name: "style", tokens: tok(400_000, 100_000, { cacheRead: 7_000, cacheWrite: 1_000, reasoning: 2_000, unknown: 0 }), runs: 9, failed: 0 },
+    { provider: "", name: "security", tokens: tok(500_000, 100_000, { cacheRead: 0, cacheWrite: 0, reasoning: 0, unknown: 3 }), runs: 12, failed: 1 },
+    { provider: "", name: "style", tokens: tok(400_000, 100_000, { cacheRead: 7_000, cacheWrite: 1_000, reasoning: 2_000, unknown: 0 }), runs: 9, failed: 0 },
   ],
-  models: [{ name: "claude-sonnet", tokens: tok(900_000, 200_000), runs: 21, failed: 0 }],
+  models: [{ provider: "anthropic", name: "claude-sonnet", tokens: tok(900_000, 200_000), runs: 21, failed: 0 }],
   mergeRequests: [
-    { iid: 77, title: "Fix the ledger", webURL: "https://gitlab.example.com/acme/payments/-/merge_requests/77", tokens: tok(600_000, 100_000), reviews: 4 },
-    { iid: 78, title: "<img src=x onerror=alert(1)>", webURL: "https://gitlab.example.com/acme/payments/-/merge_requests/78", tokens: tok(300_000, 100_000), reviews: 2 },
+    { iid: 77, title: "Fix the ledger", webURL: "https://gitlab.example.com/acme/payments/-/merge_requests/77", tokens: tok(600_000, 100_000), reviews: 4, models: [{ provider: "anthropic", model: "claude-sonnet" }] },
+    { iid: 78, title: "<img src=x onerror=alert(1)>", webURL: "https://gitlab.example.com/acme/payments/-/merge_requests/78", tokens: tok(300_000, 100_000), reviews: 2, models: [] },
   ],
   wasted: { failed: tok(40_000, 5_000), reruns: tok(90_000, 10_000), rerunCount: 2, noResult: 1, superseded: 3 },
   fullMedian: 120_000,

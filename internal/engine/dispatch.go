@@ -21,6 +21,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/github"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/settings"
@@ -63,7 +64,10 @@ const (
 	reasonNoDiff       = "GitLab hasn't computed this merge request's diff yet"
 	reasonNoMergeBase  = "GitHub hasn't computed this pull request's merge base yet"
 	reasonCouldntStart = "pergent.sh couldn't start the review: "
-	runningDescription = "pergent review running"
+	// reasonModelUnusable reaches the comment: it names neither the model nor
+	// the provider.
+	reasonModelUnusable = "the model chosen for this repository can't be used: an admin can change it on the repository's Settings tab"
+	runningDescription  = "pergent review running"
 )
 
 // settleTimeout bounds the store and cleanup calls that record a run's
@@ -82,9 +86,9 @@ var settleTimeout = 10 * time.Second
 // an attempt. One run's trouble never stops the others. The returned error
 // joins store failures only.
 func (e *Engine) DispatchOnce(ctx context.Context) error {
-	if _, _, _, ok := e.registry().LLM(); !ok {
+	if len(e.registry().Models()) == 0 {
 		// Nothing can be reviewed: runs stay queued, not claimed, until an
-		// operator sets the LLM.
+		// operator adds a model.
 		e.warnEvery("no-llm", msgNoLLM)
 		return nil
 	}
@@ -169,6 +173,9 @@ type dispatcher struct {
 	// run's results for the others. rerunImpact says the linked repositories'
 	// check is one of the things it re-runs. Both are set by subset.
 	partial, rerunImpact bool
+	// provider and model are those the run's Job reviews with, set once they
+	// are resolved. Empty, the run is not compared with the last review's.
+	provider, model string
 }
 
 func (d *dispatcher) dispatch(ctx context.Context) error {
@@ -308,12 +315,38 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			return d.retry(ctx, fmt.Errorf("open the clone token: %w", err))
 		}
 	}
-	llm, llmKey, _, ok := e.registry().LLM()
-	if !ok {
-		// Set to nothing since the pass began: the run waits.
-		d.log.Warn(msgNoLLM)
-		return d.postpone(ctx, e.now().Add(waitDelay))
+	// A repository that chose a model runs on it or on nothing: if the entry
+	// is gone or has no usable key, falling back to the default would review
+	// on a model, and send the code to a provider, the repository never
+	// asked for. The reason names no entry, since it reaches the comment.
+	var model instances.Model
+	if repo.ModelID != "" {
+		var ok bool
+		if model, ok = e.registry().ModelByID(repo.ModelID); !ok {
+			d.log.Warn("the model chosen for this repository can't be used", "model_id", repo.ModelID)
+			// An entry that exists but has no usable key is the model this run
+			// tried: the dashboard shows it on the failed review. Best effort,
+			// since the run fails either way.
+			models := e.registry().Models()
+			if i := slices.IndexFunc(models, func(m instances.Model) bool { return m.ID == repo.ModelID }); i >= 0 {
+				tried := models[i].LLM
+				if err := e.Store.SetRunModel(ctx, run.ID, tried.Provider, tried.Model); err != nil {
+					d.log.Error("couldn't record the model the failed review tried", "model_id", repo.ModelID, "error", e.redact(err.Error()))
+				}
+			}
+			return d.fail(ctx, reasonModelUnusable)
+		}
+	} else {
+		var ok bool
+		if model, ok = e.registry().DefaultModel(); !ok {
+			// The default has no usable key, or was removed since the pass
+			// began: the run waits, as when the list is empty.
+			e.warnEvery("no-llm", msgNoLLM)
+			return d.postpone(ctx, e.now().Add(waitDelay))
+		}
 	}
+	llm, llmKey := model.LLM, model.Key
+	d.provider, d.model = llm.Provider, llm.Model
 	d.secrets = append(d.secrets, string(gitToken), llmKey)
 
 	var previous []byte
@@ -483,6 +516,12 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	// would give a default comment to a repository that asked for another.
 	if err := e.Store.SetRunLayout(ctx, run.ID, repo.CommentLayout); err != nil {
 		return d.retry(ctx, fmt.Errorf("record the comment layout: %w", err))
+	}
+	// So is the provider and model: the next push compares them with its own
+	// to decide whether it can be incremental, and a lost write would carry
+	// files reviewed by another model.
+	if err := e.Store.SetRunModel(ctx, run.ID, d.provider, d.model); err != nil {
+		return d.retry(ctx, fmt.Errorf("record the review's model: %w", err))
 	}
 
 	token, tokenHash, err := mintToken()

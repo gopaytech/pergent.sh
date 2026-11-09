@@ -33,6 +33,7 @@ const (
 	fullNothing      = "nothing to carry"
 	fullTooLarge     = "inputs too large"
 	fullImpactOpen   = "an open linked-repositories check can't be repeated"
+	fullModelChanged = "the model changed"
 )
 
 // Why a skill carries no files, as the log says it.
@@ -58,6 +59,10 @@ func (d *dispatcher) planCarried(ctx context.Context, plat Platform, repo settin
 		return nil, fullTarget, nil
 	case last.HeadSHA == run.HeadSHA:
 		return nil, fullSameHead, nil
+	case modelChanged(last, d.provider, d.model):
+		// What the files carried over were reviewed by is not what reviews
+		// the rest, and the findings of one model are not the other's.
+		return nil, fullModelChanged, nil
 	case imagePinnedBeforeCarried(d.e.Config.Jobs.Image):
 		return nil, fullOlderPergent, nil
 	}
@@ -89,6 +94,22 @@ func (d *dispatcher) planCarried(ctx context.Context, plat Platform, repo settin
 		return nil, fullNothing, nil
 	}
 	return carried, "", nil
+}
+
+// modelChanged reports whether a review on provider and model differs from
+// last, which ran on the pair it recorded. A run that recorded no model (it
+// predates the list, or ended before a model was chosen) and an unresolved
+// pair are no change. A run from before the provider was recorded has a model
+// only: it is compared by the model, so an upgrade does not turn the next push
+// into a full review when the model is the same.
+func modelChanged(last store.Run, provider, model string) bool {
+	if last.Model == nil || (provider == "" && model == "") {
+		return false
+	}
+	if *last.Model != model {
+		return true
+	}
+	return last.Provider != nil && *last.Provider != provider
 }
 
 // imagePinnedBeforeCarried reports whether the Jobs image is tagged with a

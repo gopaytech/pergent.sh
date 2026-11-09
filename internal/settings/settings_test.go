@@ -581,6 +581,39 @@ func TestResolverQuietReviewsDashboard(t *testing.T) {
 	}
 }
 
+// A dashboard repository names its model; a config repository follows the
+// default, and an empty name does too.
+func TestModelIDFromDashboard(t *testing.T) {
+	cfg := testConfig()
+	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)}
+	named, empty := "model-1", ""
+
+	row := store.DashboardRepo{Instance: "main", Project: "acme/other", ModelID: &named}
+	eff, ok := r.fromDashboard(row, store.RepoDefaults{})
+	if !ok {
+		t.Fatal("fromDashboard: not ok")
+	}
+	if eff.ModelID != "model-1" || !eff.Overridden[KeyModel] {
+		t.Errorf("named: ModelID = %q, overridden = %v; want model-1, true", eff.ModelID, eff.Overridden[KeyModel])
+	}
+
+	for name, id := range map[string]*string{"unset": nil, "empty": &empty} {
+		row := store.DashboardRepo{Instance: "main", Project: "acme/other", ModelID: id}
+		eff, _ := r.fromDashboard(row, store.RepoDefaults{})
+		if eff.ModelID != "" || eff.Overridden[KeyModel] {
+			t.Errorf("%s: ModelID = %q, overridden = %v; want follow the default", name, eff.ModelID, eff.Overridden[KeyModel])
+		}
+	}
+
+	cfgEff := get(t, r, "main", "acme/widgets")
+	if cfgEff.ModelID != "" || cfgEff.Overridden[KeyModel] {
+		t.Errorf("config repository: ModelID = %q, overridden = %v; want follow the default", cfgEff.ModelID, cfgEff.Overridden[KeyModel])
+	}
+	if v, ok := cfgEff.Overridden[KeyModel]; !ok || v {
+		t.Errorf("Overridden lacks %q", KeyModel)
+	}
+}
+
 func TestResolveCommentLayout(t *testing.T) {
 	cfg := testConfig()
 	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)}

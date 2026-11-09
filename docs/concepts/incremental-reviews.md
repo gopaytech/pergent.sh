@@ -9,6 +9,7 @@ A review is incremental when all of these hold. Otherwise it is a full review, a
 - The change has a completed review for the same target branch, and its head is an ancestor of the new head. After a rebase or force-push it is not, so the review is full.
 - The forge lists the files changed between the two heads.
 - That review was made by pergent v0.5.2 or later.
+- The model is unchanged: a different provider or model makes the next review a full one ([Models](models.md#a-change-of-model)).
 
 A file is carried over, per skill, only when that skill reviewed it last time, the push didn't change it, and it has no open blocking finding. A file whose review failed, a new file, and every file of a new or edited skill are reviewed again. Open blocking findings are always checked again.
 

@@ -9,7 +9,7 @@ A Job has two containers, started in order. Both run the pinned pergent image an
 - the checkout, which is untrusted code under review, read-only to the agent;
 - the skills, the instructions, the previous review, the change's title and description (`change-description.md`) and, for an incremental review, the files to carry over (`carried.json`), mounted read-only at `/in`;
 - with [linked repositories](linked-repositories.md#a-review-with-links), the clones in `/work/linked-N` and `linked-repos.json`. A clone's `.git` stays and can be read, so it holds no token: its remote is the plain https address;
-- `OPENCODE_API_KEY` (the LLM key) and a one-time result token. The result token is random, stored only as a hash, valid for one result and expires shortly after the Job's deadline;
+- `OPENCODE_API_KEY` (the key of the model it runs on, and no other) and a one-time result token. The result token is random, stored only as a hash, valid for one result and expires shortly after the Job's deadline;
 - the provider, model and, if set, base URL.
 
 The agent in the pergent container can only read files, grep and list. It cannot edit files or run commands, and `*.env`, `*.pem`, `*.key` and `*.tfvars` files are denied. pergent deletes instruction files found in the checkout, so the reviewed repository cannot change the instructions.

@@ -35,7 +35,7 @@ pergent.sh runs [pergent](https://github.com/gopaytech/pergent) code reviews on 
 3. pergent.sh posts one comment, updated on every push, with findings as threads on the diff and a status named `pergent`.
 4. A clean review is approved. A person can re-run it or dismiss a finding from a comment or the dashboard.
 
-The Job only holds a read-only clone token, the LLM key and a one-time result token. [More on how it works](docs/concepts/how-it-works.md).
+The Job only holds a read-only clone token, the key of its model and a one-time result token. [More on how it works](docs/concepts/how-it-works.md).
 
 ## Requirements
 

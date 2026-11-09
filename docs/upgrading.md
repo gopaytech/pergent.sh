@@ -1,5 +1,18 @@
 # ⬆️ Upgrading
 
+## Upgrading to the next release
+
+**Reviews can run on a model from a list.** An admin keeps the list under **Admin → Settings**, picks the default, and can give a repository a model of its own: [Models](concepts/models.md).
+
+Migration `0033` runs at startup and only adds a table and columns, so back up Postgres first, as for any migration. The previous release keeps working on the migrated database.
+
+- **Nothing changes for your reviews.** The LLM you have set becomes the first entry and the default, and every repository follows the default. A config file's `llm:` block shows as a read-only entry. The upgrade is not a model change, so no full reviews follow it.
+- **`GET` and `PUT /api/admin/llm` are replaced by `/api/admin/models`.** Move any script that calls them. The routes are in [HTTP routes](reference/http-routes.md).
+- **The CSV export has a new last column, `provider`.** The others keep their places. The metrics are unchanged.
+- **A model from a new provider needs its address in `jobEgress.cidrs`.** See [Models](concepts/models.md#a-new-provider-needs-network-access).
+- **The LLM is copied into the list once, at the migration.** If you roll back, change the LLM on the older release and upgrade again, that change doesn't reach the list.
+- **To roll back, nothing needs removing from the config:** there is no new config key. The default entry is kept in the old LLM setting, so the previous release runs on the current default. It has no models per repository, so after a rollback every repository runs on that default.
+
 ## Upgrading to 0.13.0
 
 **Admins can see where the model tokens went.** [Usage](concepts/usage.md) is new, under **Admin → Usage**, and the Skill results tab has a cost section for admins. Nothing new appears for other people, and nothing needs turning on; only the review page's token count changes for everyone (below).

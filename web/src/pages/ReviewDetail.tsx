@@ -224,6 +224,12 @@ function ThisRun({ id, platform }: { id: string; platform: string }) {
   );
 }
 
+// modelText is the model a run used as "provider / model"; the model alone
+// when no provider was recorded (a run from before the list of models), and a
+// note when neither was.
+const modelText = (provider: string | null, model: string | null) =>
+  model === null ? (provider === null ? "not recorded" : provider) : provider === null ? model : `${provider} / ${model}`;
+
 function Facts({ run, platform }: { run: RunDetailView; platform: string }) {
   const f = run.files;
   return (
@@ -234,7 +240,7 @@ function Facts({ run, platform }: { run: RunDetailView; platform: string }) {
       <div>{run.approved ? "Approved: yes" : `Approved: no — ${run.approvalReason || "not approved"}`}</div>
       <div>
         pergent <span className="mono">{run.pergentVersion || "not recorded"}</span> · model{" "}
-        <span className="mono">{run.model ?? "not recorded"}</span> · max steps{" "}
+        <span className="mono">{modelText(run.provider, run.model)}</span> · max steps{" "}
         <span className="mono">{run.maxTurns ?? "not recorded"}</span>
       </div>
       {run.incrementalNote && <div>{run.incrementalNote.replaceAll("`", "")}</div>}

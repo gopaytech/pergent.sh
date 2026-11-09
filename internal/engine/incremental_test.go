@@ -367,6 +367,58 @@ func TestPlanCarriedFullReviews(t *testing.T) {
 	}
 }
 
+// A review is a full one when the model it will run on is not the one the last
+// review ran on. What an older run never recorded, and a run with nothing
+// resolved, say nothing: they are no change.
+func TestModelChanged(t *testing.T) {
+	p, m, other := "anthropic", "claude-a", "claude-b"
+	for name, tc := range map[string]struct {
+		last            store.Run
+		provider, model string
+		want            bool
+	}{
+		"same":                {store.Run{Provider: &p, Model: &m}, p, m, false},
+		"other model":         {store.Run{Provider: &p, Model: &m}, p, other, true},
+		"other provider":      {store.Run{Provider: &p, Model: &m}, "litellm", m, true},
+		"upgrade, same model": {store.Run{Model: &m}, "litellm", m, false},
+		"upgrade, other":      {store.Run{Model: &m}, p, other, true},
+		"never recorded":      {store.Run{}, p, m, false},
+		"nothing resolved":    {store.Run{Provider: &p, Model: &m}, "", "", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := modelChanged(tc.last, tc.provider, tc.model); got != tc.want {
+				t.Errorf("modelChanged = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A push whose model differs from the last review's is reviewed in full. The
+// cases that carry files need the store (past dismissals), and no change is
+// what TestModelChanged pins.
+func TestPlanCarriedFullWhenModelChanged(t *testing.T) {
+	p, m := "anthropic", "claude-a"
+	for _, tc := range []struct {
+		name            string
+		provider, model string
+	}{
+		{"other model", p, "claude-b"},
+		{"other provider", "litellm", m},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newPlanFixture(t)
+			f.last.Provider, f.last.Model = &p, &m
+			f.d.provider, f.d.model = tc.provider, tc.model
+
+			carried, reason := f.plan(t)
+
+			if len(carried) != 0 || reason != fullModelChanged {
+				t.Errorf("planCarried = %v, %q; want a full review: %q", carried, reason, fullModelChanged)
+			}
+		})
+	}
+}
+
 // The tag of the Jobs image, when it names a pergent version.
 func TestImageTag(t *testing.T) {
 	for image, want := range map[string]string{

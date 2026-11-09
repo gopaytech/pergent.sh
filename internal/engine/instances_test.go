@@ -1,10 +1,14 @@
 package engine
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"k8s.io/apimachinery/pkg/runtime"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
@@ -139,7 +143,8 @@ func TestDispatchWaitsWithoutLLM(t *testing.T) {
 		t.Errorf("the wait was logged %d times after a minute, want twice", n)
 	}
 
-	if err := env.Store.PutLLM(env.ctx, "openai", "gpt-example", "https://llm.example.com/v1", env.Box.Seal([]byte("llm-key-new")), env.Now()); err != nil {
+	if _, err := env.Store.CreateLLMModel(env.ctx, store.LLMModel{Provider: "openai", Model: "gpt-example", BaseURL: "https://llm.example.com/v1",
+		APIKeySealed: env.Box.Seal([]byte("llm-key-new"))}, env.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if err := env.Engine.Instances.LoadLLM(env.ctx); err != nil {
@@ -172,10 +177,18 @@ func TestDispatchWaitsWithoutLLM(t *testing.T) {
 func TestRedactsEveryLLMKeySeen(t *testing.T) {
 	env := newTestEnv(t)
 	env.Engine.Config.LLM = config.LLM{}
+	var id string // the one entry, created by the first save, its key replaced by the next
 	save := func(key string) {
 		t.Helper()
-		if err := env.Store.PutLLM(env.ctx, "openai", "m", "", env.Box.Seal([]byte(key)), env.Now()); err != nil {
-			t.Fatal(err)
+		sealed := env.Box.Seal([]byte(key))
+		if id == "" {
+			m, err := env.Store.CreateLLMModel(env.ctx, store.LLMModel{Provider: "openai", Model: "m", APIKeySealed: sealed}, env.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			id = m.ID
+		} else if found, err := env.Store.UpdateLLMModel(env.ctx, id, "", sealed, env.Now()); err != nil || !found {
+			t.Fatalf("UpdateLLMModel = %v, %v", found, err)
 		}
 		if err := env.Engine.Instances.LoadLLM(env.ctx); err != nil {
 			t.Fatal(err)
@@ -359,5 +372,275 @@ func TestStuckRemovalIsReported(t *testing.T) {
 	}
 	if items, _ := env.Store.Attention(env.ctx); len(items) != 0 {
 		t.Errorf("attention = %+v, want it cleared with the removal", items)
+	}
+}
+
+// addModel puts an entry in the dashboard's list with its own key, and loads
+// the list. The first one is the default while the config has no llm: block.
+func addModel(t *testing.T, env *testEnv, provider, model, baseURL, key string) string {
+	t.Helper()
+	m, err := env.Store.CreateLLMModel(env.ctx, store.LLMModel{Provider: provider, Model: model, BaseURL: baseURL,
+		APIKeySealed: env.Box.Seal([]byte(key))}, env.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.Engine.Instances.LoadLLM(env.ctx); err != nil {
+		t.Fatal(err)
+	}
+	return m.ID
+}
+
+// chooseModel makes acme/widgets a dashboard repository that runs on the
+// entry id (nil: whatever is the default). The config's repository has no
+// model setting, so it is dropped.
+func chooseModel(t *testing.T, env *testEnv, id *string) {
+	t.Helper()
+	env.Engine.Config.Repositories = nil
+	dashboardRepo(t, env, store.DashboardRepo{Instance: testInstance, Project: testProjectPath, CreatedBy: "alice", ModelID: id})
+}
+
+// jobEnv is the environment of the review container of run id's Job.
+func jobEnv(env *testEnv, id string) map[string]string {
+	vars := map[string]string{}
+	for _, v := range env.Job(id).Spec.Template.Spec.Containers[0].Env {
+		vars[v.Name] = v.Value
+	}
+	return vars
+}
+
+// A repository that chose a model runs on it: the Job has that entry's model
+// and base URL, and its Secret holds that entry's key and no other, whatever
+// the default is.
+func TestDispatchUsesTheRepositorysModel(t *testing.T) {
+	env := newTestEnv(t)
+	addModel(t, env, "openai", "gpt-example", "https://llm.example.com/v1", "key-default")
+	chosen := addModel(t, env, "litellm", "gpt-chosen", "https://proxy.example.com/v1", "key-chosen")
+	chooseModel(t, env, &chosen)
+	head := sha('a')
+	id := env.Enqueue(3, head)
+	env.GitLab.SetMR(openMR(3, head))
+	env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+
+	dispatch(t, env)
+
+	if env.Job(id) == nil {
+		t.Fatalf("no job; run = %+v\n%s", env.Run(id), env.Logs())
+	}
+	vars := jobEnv(env, id)
+	if vars["OPENCODE_PROVIDER"] != "litellm" || vars["OPENCODE_MODEL"] != "gpt-chosen" || vars["OPENCODE_BASE_URL"] != "https://proxy.example.com/v1" {
+		t.Errorf("the Job's LLM env = %v, want the chosen entry's", vars)
+	}
+	data := env.Secret(id).Data
+	if got := string(data["llm-api-key"]); got != "key-chosen" {
+		t.Errorf("the Job's key = %q, want the chosen entry's", got)
+	}
+	for k, v := range data {
+		for _, other := range []string{"key-default", testLLMKey} {
+			if strings.Contains(string(v), other) {
+				t.Errorf("the Job's Secret key %q holds the key of an entry the run does not use", k)
+			}
+		}
+	}
+	if r := env.Run(id); r.Provider == nil || *r.Provider != "litellm" || r.Model == nil || *r.Model != "gpt-chosen" {
+		t.Errorf("run provider/model = %v / %v, want litellm / gpt-chosen", r.Provider, r.Model)
+	}
+	if strings.Contains(env.Logs(), "key-chosen") {
+		t.Errorf("the key reached the log:\n%s", env.Logs())
+	}
+}
+
+// A repository that chose none follows the default as it is when the run
+// starts, so changing the default moves the next review.
+func TestDispatchFollowsDefault(t *testing.T) {
+	env := newTestEnv(t)
+	env.Engine.Config.LLM = config.LLM{}
+	first := addModel(t, env, "openai", "gpt-first", "https://one.example.com/v1", "key-first")
+	second := addModel(t, env, "openai", "gpt-second", "https://two.example.com/v1", "key-second")
+	chooseModel(t, env, nil)
+	run := func(iid int64, head string) string {
+		id := env.Enqueue(iid, head)
+		env.GitLab.SetMR(openMR(iid, head))
+		env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+		dispatch(t, env)
+		if env.Job(id) == nil {
+			t.Fatalf("no job; run = %+v\n%s", env.Run(id), env.Logs())
+		}
+		return id
+	}
+
+	a := run(3, sha('a'))
+	if got := jobEnv(env, a)["OPENCODE_MODEL"]; got != "gpt-first" || string(env.Secret(a).Data["llm-api-key"]) != "key-first" {
+		t.Errorf("first run: model %q, want the default, %s", got, first)
+	}
+	if found, err := env.Store.SetDefaultLLMModel(env.ctx, second, env.Now()); err != nil || !found {
+		t.Fatalf("SetDefaultLLMModel = %v, %v", found, err)
+	}
+	if err := env.Engine.Instances.LoadLLM(env.ctx); err != nil {
+		t.Fatal(err)
+	}
+	b := run(4, sha('c'))
+	if got := jobEnv(env, b)["OPENCODE_MODEL"]; got != "gpt-second" || string(env.Secret(b).Data["llm-api-key"]) != "key-second" {
+		t.Errorf("second run: model %q, want the new default", got)
+	}
+}
+
+// A repository whose chosen entry can't be used fails with a reason that
+// names nothing of it, and never runs on the default instead: the code would
+// go to a provider the repository did not ask for.
+func TestDispatchFailsWhenChosenModelIsGone(t *testing.T) {
+	env := newTestEnv(t)
+	env.Engine.Config.LLM = config.LLM{}
+	addModel(t, env, "openai", "gpt-default", "https://default.example.com/v1", "key-default")
+	// The config's entry, once the config has no llm: block, is gone.
+	gone := store.ConfigModelID
+	chooseModel(t, env, &gone)
+	head := sha('a')
+	id := env.Enqueue(3, head)
+	env.GitLab.SetMR(openMR(3, head))
+
+	dispatch(t, env)
+
+	r := env.Run(id)
+	if r.State != store.Reported || r.FailureReason != reasonModelUnusable {
+		t.Fatalf("run = state %s reason %q; want reported, %q", r.State, r.FailureReason, reasonModelUnusable)
+	}
+	for _, leak := range []string{"openai", "gpt-default", "default.example.com", "key-default", gone} {
+		if strings.Contains(r.FailureReason, leak) {
+			t.Errorf("the failure reason names %q", leak)
+		}
+	}
+	if n := len(env.Jobs()); n != 0 {
+		t.Errorf("%d jobs launched; the default must not stand in", n)
+	}
+	if !strings.Contains(env.Logs(), "model_id="+gone) {
+		t.Errorf("the log does not say which entry was unusable:\n%s", env.Logs())
+	}
+	if r.Provider != nil || r.Model != nil {
+		t.Errorf("run provider/model = %v / %v; an entry that is gone has none to record", r.Provider, r.Model)
+	}
+}
+
+// addUnopenableModel puts an entry in the list whose key was sealed under
+// another secret key, so it is listed and can't be used.
+func addUnopenableModel(t *testing.T, env *testEnv, provider, model string) string {
+	t.Helper()
+	m, err := env.Store.CreateLLMModel(env.ctx, store.LLMModel{Provider: provider, Model: model,
+		APIKeySealed: []byte("not sealed by this box")}, env.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.Engine.Instances.LoadLLM(env.ctx); err != nil {
+		t.Fatal(err)
+	}
+	return m.ID
+}
+
+// A default whose key can't be opened doesn't stop a repository that chose
+// another entry: it runs on its own entry, and only that key is in the Job.
+func TestDispatchRunsTheChosenModelWhenTheDefaultIsUnusable(t *testing.T) {
+	env := newTestEnv(t)
+	env.Engine.Config.LLM = config.LLM{}
+	addUnopenableModel(t, env, "openai", "gpt-default") // the first entry is the default
+	chosen := addModel(t, env, "litellm", "gpt-chosen", "https://proxy.example.com/v1", "key-chosen")
+	chooseModel(t, env, &chosen)
+	head := sha('a')
+	id := env.Enqueue(3, head)
+	env.GitLab.SetMR(openMR(3, head))
+	env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+
+	dispatch(t, env)
+
+	if env.Job(id) == nil {
+		t.Fatalf("no job; run = %+v\n%s", env.Run(id), env.Logs())
+	}
+	if got := jobEnv(env, id)["OPENCODE_MODEL"]; got != "gpt-chosen" {
+		t.Errorf("the Job's model = %q, want the chosen entry's", got)
+	}
+	if got := string(env.Secret(id).Data["llm-api-key"]); got != "key-chosen" {
+		t.Errorf("the Job's key = %q, want the chosen entry's", got)
+	}
+}
+
+// A chosen entry whose key can't be opened fails the run whatever the default
+// is: no fallback. The failed review keeps the model it tried, for the
+// dashboard, while the reason that reaches the comment names nothing.
+func TestDispatchFailsWhenChosenModelHasNoUsableKey(t *testing.T) {
+	env := newTestEnv(t)
+	env.Engine.Config.LLM = config.LLM{}
+	addModel(t, env, "openai", "gpt-default", "https://default.example.com/v1", "key-default")
+	chosen := addUnopenableModel(t, env, "litellm", "gpt-chosen")
+	chooseModel(t, env, &chosen)
+	head := sha('a')
+	id := env.Enqueue(3, head)
+	env.GitLab.SetMR(openMR(3, head))
+
+	dispatch(t, env)
+
+	r := env.Run(id)
+	if r.State != store.Reported || r.FailureReason != reasonModelUnusable {
+		t.Fatalf("run = state %s reason %q; want reported, %q", r.State, r.FailureReason, reasonModelUnusable)
+	}
+	if n := len(env.Jobs()); n != 0 {
+		t.Errorf("%d jobs launched; the default must not stand in", n)
+	}
+	if r.Provider == nil || *r.Provider != "litellm" || r.Model == nil || *r.Model != "gpt-chosen" {
+		t.Errorf("run provider/model = %v / %v, want the entry it tried, litellm / gpt-chosen", r.Provider, r.Model)
+	}
+	for _, leak := range []string{"litellm", "gpt-chosen", "gpt-default"} {
+		if strings.Contains(r.FailureReason, leak) {
+			t.Errorf("the failure reason names %q", leak)
+		}
+	}
+}
+
+// With models listed but none that can be used (the key can't be opened), a
+// run is claimed and waits, as it does when the list is empty: nothing is
+// failed or counted as an attempt.
+func TestDispatchWaitsWithoutAnyModel(t *testing.T) {
+	env := newTestEnv(t)
+	env.Engine.Config.LLM = config.LLM{}
+	if _, err := env.Store.CreateLLMModel(env.ctx, store.LLMModel{Provider: "openai", Model: "gpt-example",
+		APIKeySealed: []byte("not sealed by this box")}, env.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.Engine.Instances.LoadLLM(env.ctx); err != nil {
+		t.Fatal(err)
+	}
+	head := sha('a')
+	id := env.Enqueue(3, head)
+	env.GitLab.SetMR(openMR(3, head))
+
+	dispatch(t, env)
+
+	if r := env.Run(id); r.State != store.Queued || r.Attempts != 0 || r.FailureReason != "" {
+		t.Errorf("run = state %s attempts %d reason %q; want queued, no attempt", r.State, r.Attempts, r.FailureReason)
+	}
+	if n := len(env.Jobs()); n != 0 {
+		t.Errorf("%d jobs launched without a usable model", n)
+	}
+	if !strings.Contains(env.Logs(), "no LLM is set") {
+		t.Errorf("the wait was not logged:\n%s", env.Logs())
+	}
+}
+
+// The provider and model are recorded before the Job is launched: a launch
+// that fails leaves them on the run, and the next push compares with them.
+func TestRunRecordsProviderBeforeLaunch(t *testing.T) {
+	env := newTestEnv(t)
+	env.Kube.PrependReactor("create", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("apiserver unavailable")
+	})
+	head := sha('a')
+	id := env.Enqueue(3, head)
+	env.GitLab.SetMR(openMR(3, head))
+
+	dispatch(t, env)
+
+	r := env.Run(id)
+	if r.State != store.Queued || r.Attempts != 1 {
+		t.Fatalf("run = state %s attempts %d; want queued after one attempt", r.State, r.Attempts)
+	}
+	if r.Provider == nil || *r.Provider != "anthropic" || r.Model == nil || *r.Model != "claude-sonnet-4" {
+		t.Errorf("run provider/model = %v / %v, want anthropic / claude-sonnet-4", r.Provider, r.Model)
 	}
 }

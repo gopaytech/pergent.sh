@@ -11,6 +11,7 @@ import {
   type LibrarySkill,
   type LinkableView,
   type Link as RepoLink,
+  type ModelChoice,
   type RepoSettings,
   type RepoTeamsView,
   type RepositoryDetailView,
@@ -96,6 +97,10 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
         canSetLinks={canSetLinks}
         // Who is trusted is an admin's to say too.
         canSetTrust={view.role === "admin"}
+        // So is the model: it decides what the reviews cost.
+        canSetModel={view.role === "admin"}
+        modelNow={view.model}
+        modelChoices={view.modelChoices}
         instanceTrust={view.instanceTrustedAuthorsOnly}
         platform={repo.platform}
         linkable={
@@ -116,7 +121,7 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
           const caps =
             view.role === "admin"
               ? ""
-              : " The re-run caps stay as they are; only an admin of this repository resets them. So do the linked repositories and who is trusted.";
+              : " The re-run caps stay as they are; only an admin of this repository resets them. So do the linked repositories, who is trusted and the model.";
           if (window.confirm(`Put every setting of this repository back to its default?${caps}`)) reset.mutate();
         }}
       />
@@ -266,6 +271,8 @@ type Draft = {
   // "" follows the instance.
   trustedAuthorsOnly: "" | "on" | "off";
   trustedAuthors: TrustedAuthor[];
+  // The ID of the entry of the list of models; "" follows the default.
+  model: string;
 };
 
 // trustModeWords is a trusted-authors mode in words.
@@ -308,6 +315,9 @@ function Form({
   canSetCaps,
   canSetLinks,
   canSetTrust,
+  canSetModel,
+  modelNow,
+  modelChoices,
   instanceTrust,
   platform,
   linkable,
@@ -324,6 +334,11 @@ function Form({
   canSetCaps: boolean;
   canSetLinks: boolean;
   canSetTrust: boolean;
+  canSetModel: boolean;
+  // modelNow is "provider / model" the repository runs on, modelChoices what
+  // an admin of it can pick.
+  modelNow: string;
+  modelChoices: ModelChoice[];
   // instanceTrust is the instance's mode, which "Instance default" follows.
   instanceTrust: TrustMode;
   platform: string;
@@ -362,7 +377,10 @@ function Form({
     trustedAuthorsOnly:
       settings.trustedAuthorsOnly.overridden && settings.trustedAuthorsOnly.value !== "follow_visibility" ? settings.trustedAuthorsOnly.value : "",
     trustedAuthors: settings.trustedAuthors.value,
+    model: settings.model.value ?? "",
   };
+  // What "Default" would give the repository; none flagged, none named.
+  const defaultChoice = modelChoices.find((c) => c.default);
   const [newAuthor, setNewAuthor] = useState("");
   const [d, setD] = useState<Draft>(initial);
   const [problem, setProblem] = useState("");
@@ -402,6 +420,8 @@ function Form({
         body.trustedAuthors = d.trustedAuthors.length === 0 ? null : d.trustedAuthors;
       }
     }
+    // The model is an admin's too (the server would refuse the whole save).
+    if (canSetModel && d.model !== initial.model) body.model = d.model === "" ? null : d.model;
     // The linked repositories are an admin's: a maintainer's save never
     // carries them (the server would refuse the whole save). No links is sent
     // as null.
@@ -556,6 +576,30 @@ function Form({
             <option value="on">on</option>
             <option value="off">off</option>
           </select>
+        </Setting>
+        <Setting
+          name="Model"
+          overridden={settings.model.overridden}
+          help="The model this repository's reviews run on. The default follows the one an admin of pergent.sh made the default."
+        >
+          <select aria-label="Model" value={d.model} disabled={disabled || !canSetModel} onChange={(e) => set("model", e.target.value)}>
+            {canSetModel ? (
+              <>
+                <option value="">{defaultChoice ? `Default (${defaultChoice.label})` : "Default"}</option>
+                {modelChoices.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.label}
+                  </option>
+                ))}
+                {initial.model !== "" && !modelChoices.some((c) => c.id === initial.model) && (
+                  <option value={initial.model}>{modelNow || initial.model} (not in the list)</option>
+                )}
+              </>
+            ) : (
+              <option value={initial.model}>{modelNow || "none set"}</option>
+            )}
+          </select>
+          {!locked && !canSetModel && <div className="meta">Only admins of this repository change the model.</div>}
         </Setting>
         <div className="set" role="group" aria-label="Trusted authors">
           <div>

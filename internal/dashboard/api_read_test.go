@@ -250,6 +250,7 @@ type runFix struct {
 	undispatched            bool
 	sourceBranch, user      string
 	model, sources          string
+	provider                string
 	maxTurns                *int
 	// versions (JSON) and skipReason are what a run records of the library
 	// skills it used and of why it was skipped.
@@ -306,12 +307,15 @@ func (e *env) addRun(f runFix) string {
 		r := f.at.Add(10*time.Second + f.duration)
 		reported = &r
 	}
-	var result, model, sources, versions *string
+	var result, model, sources, versions, provider *string
 	if f.result != "" {
 		result = &f.result
 	}
 	if f.model != "" {
 		model = &f.model
+	}
+	if f.provider != "" {
+		provider = &f.provider
 	}
 	if f.sources != "" {
 		sources = &f.sources
@@ -336,10 +340,10 @@ func (e *env) addRun(f runFix) string {
 	e.exec(`UPDATE runs SET state = $2, result = $3::jsonb, failure_reason = $4, base_sha = $5, created_at = $6,
 			dispatched_at = $7, reported_at = $8, title = $9, web_url = $10, source_branch = $11, author = $12,
 			outcome = $13, outcome_reason = $14, decision_status = $15, approved = $16, model = $17,
-			skill_sources = $18::jsonb, skill_versions = $19::jsonb, skip_reason = $20, max_turns = $21, incremental = $22
+			skill_sources = $18::jsonb, skill_versions = $19::jsonb, skip_reason = $20, max_turns = $21, incremental = $22, provider = $23
 		WHERE id = $1::uuid`,
 		id, string(f.state), result, f.failure, baseSHA, f.at, dispatched, reported, f.title, f.webURL,
-		f.sourceBranch, f.user, f.outcome, f.reason, f.status, f.approved, model, sources, versions, f.skipReason, f.maxTurns, f.incremental)
+		f.sourceBranch, f.user, f.outcome, f.reason, f.status, f.approved, model, sources, versions, f.skipReason, f.maxTurns, f.incremental, provider)
 	return id
 }
 
@@ -722,7 +726,7 @@ func TestRunDetail(t *testing.T) {
 	// code-review is a library skill, but this repository replaced it
 	// with its own when the review ran.
 	id := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), result: string(b), duration: time.Minute,
-		outcome: OutcomeBlocking, model: "claude-sonnet-4", maxTurns: ptr(40), sources: `{"code-review":"repo","team-rules":"repo"}`})
+		outcome: OutcomeBlocking, provider: "anthropic", model: "claude-sonnet-4", maxTurns: ptr(40), sources: `{"code-review":"repo","team-rules":"repo"}`})
 	failed := e.addRun(runFix{project: "acme/widgets", number: 4, head: head('b'), outcome: OutcomeFailed,
 		failure: "the review Job ran out of memory (OOMKilled)"})
 	// A run that recorded no model or skill sources.
@@ -737,8 +741,8 @@ func TestRunDetail(t *testing.T) {
 		t.Errorf("run = %+v", v)
 	}
 	if v.Status != "failed" || v.Approved || v.ApprovalReason == "" || v.PergentVersion != "0.1.0" ||
-		v.Model == nil || *v.Model != "claude-sonnet-4" {
-		t.Errorf("status %q approved %v reason %q version %q model %v", v.Status, v.Approved, v.ApprovalReason, v.PergentVersion, v.Model)
+		v.Model == nil || *v.Model != "claude-sonnet-4" || v.Provider == nil || *v.Provider != "anthropic" {
+		t.Errorf("status %q approved %v reason %q version %q provider %v model %v", v.Status, v.Approved, v.ApprovalReason, v.PergentVersion, v.Provider, v.Model)
 	}
 	if v.Tokens != (TokensView{In: 52410, Out: 1850}) {
 		t.Errorf("tokens = %+v", v.Tokens)
@@ -772,16 +776,16 @@ func TestRunDetail(t *testing.T) {
 
 	f := getJSON[RunDetailView](e, c, "/api/runs/"+failed)
 	if f.Run.Outcome != OutcomeFailed || f.Run.Reason != "the review Job ran out of memory (OOMKilled)" ||
-		f.Status != "failed" || len(f.Skills) != 0 || f.Files.Reviewed == nil || f.Model != nil {
+		f.Status != "failed" || len(f.Skills) != 0 || f.Files.Reviewed == nil || f.Model != nil || f.Provider != nil {
 		t.Errorf("failed run = %+v", f)
 	}
 
 	o := getJSON[RunDetailView](e, c, "/api/runs/"+older)
-	if o.Model != nil || len(o.Skills) != 1 || o.Skills[0].Source != nil || !o.Approved || o.ApprovalReason != "" || o.Status != "success" {
+	if o.Model != nil || o.Provider != nil || len(o.Skills) != 1 || o.Skills[0].Source != nil || !o.Approved || o.ApprovalReason != "" || o.Status != "success" {
 		t.Errorf("run without recorded inputs = %+v", o)
 	}
 	raw := e.get(c, "/api/runs/"+older).Body.String()
-	if !strings.Contains(raw, `"model":null`) || !strings.Contains(raw, `"source":null`) || !strings.Contains(raw, `"maxTurns":null`) {
+	if !strings.Contains(raw, `"model":null`) || !strings.Contains(raw, `"provider":null`) || !strings.Contains(raw, `"source":null`) || !strings.Contains(raw, `"maxTurns":null`) {
 		t.Errorf("body = %s; want null model, maxTurns and source", raw)
 	}
 	// The step limit is the one the run was dispatched with.
@@ -881,7 +885,7 @@ func TestRepositoryDetail(t *testing.T) {
 		`"failureStatus":{"value":"failed","overridden":false},` +
 		`"incrementalReviews":{"value":true,"overridden":false},"inlineFindings":{"value":true,"overridden":false},"jobMemory":{"value":"","overridden":false},"jobTimeoutSeconds":{"value":600,"overridden":false},` +
 		`"learnFromDismissals":{"value":true,"overridden":false},"linkedRepos":{"value":[],"overridden":false},"linkedReposEnabled":{"value":false,"overridden":false},` +
-		`"maxTurns":{"value":40,"overridden":false},"quietReviews":{"value":false,"overridden":false},"repoSkills":{"value":[],"overridden":false},` +
+		`"maxTurns":{"value":40,"overridden":false},"model":{"value":null,"overridden":false},"quietReviews":{"value":false,"overridden":false},"repoSkills":{"value":[],"overridden":false},` +
 		`"rerunLimitPerMR":{"value":10,"overridden":false},"rerunLimitPerRepo":{"value":50,"overridden":false},` +
 		`"reviewDrafts":{"value":true,"overridden":false},"skills":{"value":["code-review"],"overridden":true},` +
 		`"trustedAuthors":{"value":[],"overridden":false},"trustedAuthorsOnly":{"value":"follow_visibility","overridden":false}}`
@@ -1189,7 +1193,7 @@ func TestNoSecretInTheReadAPI(t *testing.T) {
 			targets := readEndpoints(id)
 			targets = append(targets, "/api/reviews/gh/acme/widgets/7", "/api/repositories/gh/acme/widgets",
 				"/api/repositories/gh/acme/widgets/inputs",
-				"/api/admin/instances", "/api/admin/llm", "/api/admin/defaults")
+				"/api/admin/instances", "/api/admin/models", "/api/admin/defaults")
 			for _, target := range targets {
 				rec := e.get(c, target)
 				if rec.Code >= 500 && rec.Code != http.StatusBadGateway {
@@ -1197,9 +1201,9 @@ func TestNoSecretInTheReadAPI(t *testing.T) {
 				}
 				for _, s := range secrets {
 					// The model's address is public to everyone on the read API
-					// and shown to admins, by design, on their LLM page: no key,
+					// and shown to admins, by design, on their models page: no key,
 					// token or secret may be in it either way.
-					if s == "llm.example.com" && target == "/api/admin/llm" {
+					if s == "llm.example.com" && target == "/api/admin/models" {
 						continue
 					}
 					if s != "" && strings.Contains(rec.Body.String(), s) {
