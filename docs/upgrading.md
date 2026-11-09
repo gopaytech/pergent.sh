@@ -1,6 +1,6 @@
 # ⬆️ Upgrading
 
-## Upgrading to the next release
+## Upgrading to 0.14.0
 
 **Reviews can run on a model from a list.** An admin keeps the list under **Admin → Settings**, picks the default, and can give a repository a model of its own: [Models](concepts/models.md).
 
