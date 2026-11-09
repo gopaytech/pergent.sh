@@ -41,6 +41,7 @@ const (
 	KeyJobTimeout     = "job_timeout"
 	KeyMaxTurns       = "max_turns"
 	KeyJobMemory      = "job_memory"
+	KeyModel          = "model"
 
 	KeyRerunLimitPerMR   = "rerun_limit_per_mr"
 	KeyRerunLimitPerRepo = "rerun_limit_per_repo"
@@ -106,6 +107,10 @@ type Effective struct {
 	// JobMemory is the Job's memory limit; zero when neither the
 	// repository nor jobs.resources.limits sets one.
 	JobMemory resource.Quantity
+	// ModelID is the entry of the list of models the repository runs on;
+	// empty means it follows the default. Whether the entry still exists
+	// and has a key is the caller's to check at review time.
+	ModelID string
 	// RerunLimitPerMR and RerunLimitPerRepo cap the re-runs asked for (by
 	// comment or button) per merge request and per repository and UTC day.
 	RerunLimitPerMR, RerunLimitPerRepo int
@@ -275,7 +280,7 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 		Overridden: map[string]bool{
 			KeyTrustedAuthorsOnly: false, KeyTrustedAuthors: false,
 			KeyApprove: false, KeyReviewDrafts: false, KeyInlineFindings: false, KeyFailureStatus: false,
-			KeySkills: false, KeyRepoSkills: false, KeyJobTimeout: false, KeyMaxTurns: false, KeyJobMemory: false,
+			KeySkills: false, KeyRepoSkills: false, KeyJobTimeout: false, KeyMaxTurns: false, KeyJobMemory: false, KeyModel: false,
 			KeyRerunLimitPerMR: false, KeyRerunLimitPerRepo: false, KeyCommandsAuthorAndMaintainersOnly: false, KeyIncrementalReviews: false, KeyLearnFromDismissals: false, KeyQuietReviews: false, KeyCommentLayout: false, KeyLinkedReposEnabled: false,
 		},
 	}
@@ -530,6 +535,9 @@ func (r *Resolver) fromDashboard(row store.DashboardRepo, stored store.RepoDefau
 		if q, ok := r.usableMemory(*row.JobMemory); ok {
 			eff.JobMemory, eff.Overridden[KeyJobMemory] = q, true
 		}
+	}
+	if row.ModelID != nil && *row.ModelID != "" {
+		eff.ModelID, eff.Overridden[KeyModel] = *row.ModelID, true
 	}
 	if usableCap(row.RerunLimitPerMR) {
 		eff.RerunLimitPerMR, eff.Overridden[KeyRerunLimitPerMR] = *row.RerunLimitPerMR, true
