@@ -1,6 +1,7 @@
 import type {
   AuditPageView,
   Can,
+  CommentFooterView,
   DefaultsView,
   InstanceAdminView,
   LibrarySkill,
@@ -468,6 +469,11 @@ export const userInvited: UserView = {
   lastSignInAt: null,
   waiting: false,
   teams: [{ id: 2, name: "Payments" }],
+};
+
+export const commentFooter: CommentFooterView = {
+  note: "",
+  default: "Reviewed by [pergent](https://github.com/gopaytech/pergent.sh)",
 };
 
 export const defaults: DefaultsView = {

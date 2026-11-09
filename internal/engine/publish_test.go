@@ -2397,3 +2397,25 @@ func TestPublishMergedKeepsTheLayout(t *testing.T) {
 		}
 	})
 }
+
+// The text an admin set reaches the comment, in place of the built-in one, and
+// a mention in it stays plain text.
+func TestPublishUsesFooterNote(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	env.Report(1, head, resultFor(t, head, skillWithFinding(t, "has_blocking_issues", "blocking")))
+	servePublish(env, 1, head)
+	if err := env.Store.PutCommentFooterNote(env.ctx, "Ask @platform for help", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	publish(t, env)
+
+	body := createdComment(t, env, 1)
+	if !strings.Contains(body, "Ask @‍platform for help · Run again:") {
+		t.Errorf("comment lacks the footer text:\n%s", body)
+	}
+	if strings.Contains(body, policy.DefaultFooterNote) {
+		t.Errorf("comment still has the built-in text:\n%s", body)
+	}
+}

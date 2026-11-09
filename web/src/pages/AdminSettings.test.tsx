@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ModelAdminView, ModelsAdminView } from "../api";
 import { fakeApi } from "../test/fakeApi";
-import { defaults, librarySkills, modelOpus, modelSonnet, models, operator, ssoAdmin, viewer } from "../test/fixtures";
+import { commentFooter, defaults, librarySkills, modelOpus, modelSonnet, models, operator, ssoAdmin, viewer } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -12,8 +12,56 @@ afterEach(() => vi.unstubAllGlobals());
 const routes = (me = ssoAdmin) => ({
   "GET /api/me": { body: me },
   "GET /api/admin/defaults": { body: defaults },
+  "GET /api/admin/comment-footer": { body: commentFooter },
   "GET /api/skills": { body: librarySkills },
   "GET /api/admin/models": { body: models },
+});
+
+describe("AdminSettings comment footer", () => {
+  it("shows the default as a hint, and sends the text trimmed", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "PUT /api/admin/comment-footer": { body: { ...commentFooter, note: "Run by the team" } },
+    });
+    renderApp("/admin/settings");
+    const form = await screen.findByRole("form", { name: "Comment footer" });
+    const input = within(form).getByLabelText("Text");
+    expect(input).toHaveValue("");
+    expect(input).toHaveAttribute("placeholder", commentFooter.default);
+    await userEvent.type(input, "  Run by the team ");
+    await userEvent.click(within(form).getByRole("button", { name: "Save footer" }));
+    expect(await within(form).findByRole("status")).toHaveTextContent("Comment footer saved.");
+    const [put] = fake.find("PUT", "/api/admin/comment-footer");
+    expect(put.headers.get("X-CSRF-Token")).toBe("csrf-123");
+    expect(put.body).toEqual({ note: "Run by the team" });
+    expect(input).toHaveValue("Run by the team");
+  });
+
+  it("sends an empty text to go back to the default", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      "GET /api/admin/comment-footer": { body: { ...commentFooter, note: "Run by the team" } },
+      "PUT /api/admin/comment-footer": { body: commentFooter },
+    });
+    renderApp("/admin/settings");
+    const form = await screen.findByRole("form", { name: "Comment footer" });
+    await userEvent.clear(within(form).getByLabelText("Text"));
+    await userEvent.click(within(form).getByRole("button", { name: "Save footer" }));
+    await within(form).findByRole("status");
+    expect(fake.find("PUT", "/api/admin/comment-footer")[0].body).toEqual({ note: "" });
+  });
+
+  it("shows why the server refused the text", async () => {
+    fakeApi({
+      ...routes(),
+      "PUT /api/admin/comment-footer": { status: 400, body: { error: "The footer text can't contain <." } },
+    });
+    renderApp("/admin/settings");
+    const form = await screen.findByRole("form", { name: "Comment footer" });
+    await userEvent.type(within(form).getByLabelText("Text"), "a <b>");
+    await userEvent.click(within(form).getByRole("button", { name: "Save footer" }));
+    expect(await within(form).findByText(/can't contain </)).toBeInTheDocument();
+  });
 });
 
 describe("AdminSettings defaults", () => {

@@ -143,6 +143,12 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 		o.MaxComment = kube.CommentLimitGitHub
 	}
 	o.Mention, o.FileURL = plat.Forge.Mention(), fileURL(plat.isGitHub(), run.WebURL, run.HeadSHA)
+	if note, err := e.Store.CommentFooterNote(ctx); err != nil {
+		// Only the footer's wording is lost: the comment says the built-in text.
+		log.Warn("couldn't read the comment's footer text", "error", err.Error())
+	} else {
+		o.FooterNote = note
+	}
 	if policy.Decide(o, failure).Approve {
 		// Only a review that would be approved depends on whether the
 		// change is a draft and the approve side can reach the repository.

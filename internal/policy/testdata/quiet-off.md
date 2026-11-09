@@ -39,6 +39,6 @@ Not a real problem? Reply `@pergent-bot dismiss fedcba <reason>`
 
 > 1 failed check has no matching finding; the verdict is based on findings.
 
-<sub>Run again: `@pergent-bot review` · pergent v0.5.5</sub>
+<sub>Reviewed by [pergent](https://github.com/gopaytech/pergent.sh) · Run again: `@pergent-bot review` · pergent v0.5.5</sub>
 
 <!-- pergent:findings eyJ2ZXJzaW9uIjoxLCJza2lsbHMiOnsic2VjdXJpdHkiOlt7ImZpbGUiOiJkYi9xdWVyeS5nbyIsImxpbmUiOjMsInNldmVyaXR5IjoiYmxvY2tpbmciLCJ0aXRsZSI6IlVuY2hlY2tlZCBpbnB1dCIsImV4cGxhbmF0aW9uIjoicGxhaW4iLCJmaW5nZXJwcmludCI6ImFiYzEyM2RlZjQ1NiJ9LHsiZmlsZSI6ImRiL3F1ZXJ5LmdvIiwibGluZSI6Mywic2V2ZXJpdHkiOiJzdWdnZXN0aW9uIiwidGl0bGUiOiJVbmNoZWNrZWQgaW5wdXQiLCJleHBsYW5hdGlvbiI6ImEgc21hbGxlciBvbmUiLCJmaW5nZXJwcmludCI6ImZlZGNiYTY1NDMyMSJ9XX19 -->

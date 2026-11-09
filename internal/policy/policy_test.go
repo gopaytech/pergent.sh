@@ -1271,7 +1271,7 @@ func TestRenderOptionsInline(t *testing.T) {
 		want := render.Options{
 			MaxLen: 1000, ChangedFiles: changed, Commit: r.Head, Version: "v0.3.0",
 			DismissCommand: "@pergent-bot dismiss",
-			Footer:         "Run again: `@pergent-bot review` · or reply `@pergent-bot dismiss <reason>` in a finding's thread",
+			Footer:         DefaultFooterNote + " · Run again: `@pergent-bot review` · or reply `@pergent-bot dismiss <reason>` in a finding's thread",
 			Inline:         inline, FindingNote: notes, FindingsTitle: "Not on the diff",
 		}
 		if !reflect.DeepEqual(got, want) {
@@ -1281,8 +1281,8 @@ func TestRenderOptionsInline(t *testing.T) {
 
 	t.Run("on without a mention", func(t *testing.T) {
 		got := renderOptions(Outcome{Result: r, InlineOn: true, Inline: inline, FindingNotes: notes}, r, changed)
-		if got.Footer != "" || got.DismissCommand != "" {
-			t.Errorf("footer %q and dismiss command %q, want none without a mention", got.Footer, got.DismissCommand)
+		if got.Footer != DefaultFooterNote || got.DismissCommand != "" {
+			t.Errorf("footer %q and dismiss command %q, want no command without a mention", got.Footer, got.DismissCommand)
 		}
 		if got.FindingsTitle != "Not on the diff" || !reflect.DeepEqual(got.Inline, inline) || !reflect.DeepEqual(got.FindingNote, notes) {
 			t.Errorf("options = %+v, want the inline set, the notes and the title", got)
@@ -1296,7 +1296,7 @@ func TestRenderOptionsInline(t *testing.T) {
 		want := render.Options{
 			MaxLen: 1000, ChangedFiles: changed, Commit: r.Head, Version: "v0.3.0",
 			DismissCommand: "@pergent-bot dismiss",
-			Footer:         "Run again: `@pergent-bot review`",
+			Footer:         DefaultFooterNote + " · Run again: `@pergent-bot review`",
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("options =\n%+v\nwant\n%+v", got, want)
@@ -1384,7 +1384,7 @@ func TestRenderOptionsQuiet(t *testing.T) {
 	off := render.Options{
 		MaxLen: 1000, ChangedFiles: changed, Commit: r.Head, Version: "v0.3.0",
 		DismissCommand: "@pergent-bot dismiss",
-		Footer:         "Run again: `@pergent-bot review`",
+		Footer:         DefaultFooterNote + " · Run again: `@pergent-bot review`",
 	}
 
 	t.Run("off", func(t *testing.T) {
@@ -1754,5 +1754,46 @@ func TestDecideQuietWinsOverLayout(t *testing.T) {
 	}
 	if !strings.Contains(d.Comment, "quiet</sub>") {
 		t.Errorf("the comment does not say quiet:\n%s", d.Comment)
+	}
+}
+
+// The text an admin sets stands in front of the commands, and without one the
+// built-in text does.
+func TestFooterNote(t *testing.T) {
+	const cmd = "Run again: `@bot review`"
+	for name, tc := range map[string]struct {
+		note, mention, want string
+	}{
+		"built-in":       {"", "bot", DefaultFooterNote + " · " + cmd},
+		"own text":       {"Managed by the platform team", "bot", "Managed by the platform team · " + cmd},
+		"no bot to name": {"Managed by the platform team", "", "Managed by the platform team"},
+		"built-in alone": {"", "", DefaultFooterNote},
+		"mention":        {"ask @team", "", "ask @\u200dteam"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := renderOptions(Outcome{FooterNote: tc.note, Mention: tc.mention}, &result.Result{}, nil).Footer
+			if got != tc.want {
+				t.Errorf("Footer = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A mention in the text must not notify anyone on every reviewed change, and
+// an address or a link that holds an @ must keep working.
+func TestFooterNoteCantMention(t *testing.T) {
+	for in, want := range map[string]string{
+		"contact @platform for onboarding": "contact @\u200dplatform for onboarding",
+		"@platform first":                  "@\u200dplatform first",
+		"(@a, @b)":                         "(@\u200da, @\u200db)",
+		"@@a":                              "@\u200d@\u200da",
+		"a/@b":                             "a/@\u200db",
+		"mail me@example.com":              "mail me@example.com",
+		"[team](https://x.test/@team)":     "[team](https://x.test/@team)",
+		"no mention":                       "no mention",
+	} {
+		if got := noMentions(in); got != want {
+			t.Errorf("noMentions(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
