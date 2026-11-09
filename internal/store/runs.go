@@ -92,6 +92,9 @@ type Run struct {
 	// recorded at dispatch; nil before.
 	Model        *string
 	SkillSources map[string]string
+	// Provider is the provider the run was started with (SetRunModel); nil
+	// before the column, or for a run that never started.
+	Provider *string
 	// MaxTurns is the step limit the run was dispatched with; nil before
 	// the limit was recorded.
 	MaxTurns *int
@@ -207,7 +210,7 @@ const runColumns = `id::text, instance, project_id, mr_iid, project_path, head_s
 	title, web_url, source_branch, author, model, skill_sources,
 	outcome, outcome_reason, decision_status, approved, trigger, skill_subset, base_run_id::text,
 	skill_versions, skip_reason, max_turns, incremental, skill_hashes, quiet_reviews, comment_layout,
-	linked_repos`
+	linked_repos, provider`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var (
@@ -223,7 +226,7 @@ func scanRun(row pgx.Row) (Run, error) {
 		&r.CreatedAt, &dispatched, &rep, &notBefore, &r.CleanedUp,
 		&r.Title, &r.WebURL, &r.SourceBranch, &r.Author, &r.Model, &sources,
 		&r.Outcome, &r.OutcomeReason, &r.DecisionStatus, &r.Approved, &r.Trigger, &r.SkillSubset, &r.BaseRunID,
-		&versions, &r.SkipReason, &r.MaxTurns, &r.Incremental, &hashes, &quiet, &r.CommentLayout, &links)
+		&versions, &r.SkipReason, &r.MaxTurns, &r.Incremental, &hashes, &quiet, &r.CommentLayout, &links, &r.Provider)
 	if err != nil {
 		return Run{}, err
 	}
@@ -1057,6 +1060,13 @@ func (s *Store) SetIncremental(ctx context.Context, runID string, baseRunID *str
 func (s *Store) SetRunQuiet(ctx context.Context, runID string, quiet bool) error {
 	return s.mustUpdate(ctx, runID, `UPDATE runs SET quiet_reviews = $2
 		WHERE id = $1::uuid AND state IN ('queued', 'running')`, runID, quiet)
+}
+
+// SetRunModel records the provider and model of a run being dispatched
+// (queued or running), before its Job starts. Any other run is an error.
+func (s *Store) SetRunModel(ctx context.Context, runID, provider, model string) error {
+	return s.mustUpdate(ctx, runID, `UPDATE runs SET provider = $2, model = $3
+		WHERE id = $1::uuid AND state IN ('queued', 'running')`, runID, cutText(provider), cutText(model))
 }
 
 // SetRunLayout records the comment layout of a run being dispatched (queued

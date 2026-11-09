@@ -65,6 +65,10 @@ type DashboardRepo struct {
 	TrustedAuthorsOnly *string
 	// TrustedAuthors is the repository's allowlist (nil: nobody).
 	TrustedAuthors []TrustedAuthor
+	// ModelID names the repository's entry in the list of models, or
+	// ConfigModelID (nil: follow the default). Saving it locks the entry, so
+	// it can't be deleted meanwhile.
+	ModelID *string
 }
 
 // TrustedAuthor is one user on a repository's allowlist: the platform's user
@@ -157,7 +161,7 @@ func readLinks(b []byte) ([]Link, error) {
 const dashboardRepoColumns = `instance, project, approve, review_drafts, failure_status, skills, repo_skills,
 	job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by, created_at, updated_at,
 	inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
-	linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors`
+	linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id`
 
 func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 	var r DashboardRepo
@@ -165,7 +169,7 @@ func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 	err := row.Scan(&r.Instance, &r.Project, &r.Approve, &r.ReviewDrafts, &r.FailureStatus, &r.Skills, &r.RepoSkills,
 		&r.JobTimeoutSeconds, &r.MaxTurns, &r.JobMemory, &r.RerunLimitPerMR, &r.RerunLimitPerRepo, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt,
 		&r.InlineFindings, &r.CommandsAuthorAndMaintainersOnly, &r.IncrementalReviews, &r.LearnFromDismissals, &r.QuietReviews, &r.CommentLayout,
-		&r.LinkedReposEnabled, &links, &r.TrustedAuthorsOnly, &trusted)
+		&r.LinkedReposEnabled, &links, &r.TrustedAuthorsOnly, &trusted, &r.ModelID)
 	if len(r.Skills) == 0 {
 		r.Skills = nil
 	}
@@ -224,7 +228,8 @@ func (s *Store) DashboardRepo(ctx context.Context, instance, project string) (Da
 // its CreatedBy and CreatedAt stay. UpdatedAt is the database's now. Each
 // library skill r names is locked until the row is stored, so it can't be
 // deleted meanwhile; one that is not in the library is ErrSkillNotFound and
-// nothing is written.
+// nothing is written. The model r names is locked the same way; one that is
+// not in the list is ErrModelNotFound.
 func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error {
 	skills, repoSkills := nilIfEmpty(r.Skills), nilIfEmpty(r.RepoSkills)
 	links, err := linksParam(r.LinkedRepos)
@@ -243,11 +248,14 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 	if err := lockNamedSkills(ctx, tx, skills); err != nil {
 		return err
 	}
+	if err := lockModel(ctx, tx, r.ModelID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
 			failure_status, skills, repo_skills, job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by,
 			inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
-			linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22, $23::jsonb)
+			linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22, $23::jsonb, $24)
 		ON CONFLICT (instance, lower(project)) DO UPDATE SET
 			project = EXCLUDED.project, approve = EXCLUDED.approve, review_drafts = EXCLUDED.review_drafts,
 			failure_status = EXCLUDED.failure_status, skills = EXCLUDED.skills, repo_skills = EXCLUDED.repo_skills,
@@ -261,11 +269,12 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 			comment_layout = EXCLUDED.comment_layout,
 			linked_repos_enabled = EXCLUDED.linked_repos_enabled,
 			linked_repos = EXCLUDED.linked_repos,
-			trusted_authors_only = EXCLUDED.trusted_authors_only, trusted_authors = EXCLUDED.trusted_authors, updated_at = now()`,
+			trusted_authors_only = EXCLUDED.trusted_authors_only, trusted_authors = EXCLUDED.trusted_authors,
+			model_id = EXCLUDED.model_id, updated_at = now()`,
 		r.Instance, r.Project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, repoSkills,
 		r.JobTimeoutSeconds, r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy, r.InlineFindings,
 		r.CommandsAuthorAndMaintainersOnly, r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout),
-		r.LinkedReposEnabled, links, r.TrustedAuthorsOnly, trusted); err != nil {
+		r.LinkedReposEnabled, links, r.TrustedAuthorsOnly, trusted, r.ModelID); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -283,7 +292,8 @@ func nilIfEmpty(s []string) []string {
 // has a row, which is left as it is; created tells which. Each library skill
 // r names is locked until the row is stored, so it can't be deleted
 // meanwhile; one that is not in the library is ErrSkillNotFound and nothing
-// is written.
+// is written. The model r names is locked the same way; one that is not in
+// the list is ErrModelNotFound.
 func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (created bool, err error) {
 	skills := nilIfEmpty(r.Skills)
 	links, err := linksParam(r.LinkedRepos)
@@ -302,16 +312,19 @@ func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (creat
 	if err := lockNamedSkills(ctx, tx, skills); err != nil {
 		return false, err
 	}
+	if err := lockModel(ctx, tx, r.ModelID); err != nil {
+		return false, err
+	}
 	tag, err := tx.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
 			failure_status, skills, repo_skills, job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by,
 			inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
-			linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22, $23::jsonb)
+			linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22, $23::jsonb, $24)
 		ON CONFLICT (instance, lower(project)) DO NOTHING`,
 		r.Instance, r.Project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, nilIfEmpty(r.RepoSkills),
 		r.JobTimeoutSeconds, r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy, r.InlineFindings,
 		r.CommandsAuthorAndMaintainersOnly, r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout),
-		r.LinkedReposEnabled, links, r.TrustedAuthorsOnly, trusted)
+		r.LinkedReposEnabled, links, r.TrustedAuthorsOnly, trusted, r.ModelID)
 	if err != nil {
 		return false, err
 	}
@@ -324,11 +337,12 @@ func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (creat
 // UpdateDashboardRepo changes the settings of the dashboard repository
 // project on instance (matched ignoring case): apply gets the stored row,
 // locked until the change is stored, and its settings (approve through
-// the re-run caps, and the skill lists) are written back; the rest of the row
-// stays. found is false, and nothing is created, when there is no such row.
-// Each library skill the new Skills names is locked until the change is
-// stored, so it can't be deleted meanwhile; one that is not in the library is
-// ErrSkillNotFound and nothing is written.
+// the re-run caps, the skill lists and the model) are written back; the rest
+// of the row stays. found is false, and nothing is created, when there is no
+// such row. Each library skill the new Skills names is locked until the
+// change is stored, so it can't be deleted meanwhile; one that is not in the
+// library is ErrSkillNotFound and nothing is written. The new ModelID is
+// locked the same way; one that is not in the list is ErrModelNotFound.
 func (s *Store) UpdateDashboardRepo(ctx context.Context, instance, project string, apply func(*DashboardRepo)) (found bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -356,16 +370,20 @@ func (s *Store) UpdateDashboardRepo(ctx context.Context, instance, project strin
 	if err := lockNamedSkills(ctx, tx, skills); err != nil {
 		return false, err
 	}
+	if err := lockModel(ctx, tx, r.ModelID); err != nil {
+		return false, err
+	}
 	if _, err := tx.Exec(ctx, `UPDATE dashboard_repos SET approve = $3, review_drafts = $4, failure_status = $5,
 			skills = $6, repo_skills = $7, job_timeout_seconds = $8, max_turns = $9, job_memory = $10,
 			rerun_limit_per_mr = $11, rerun_limit_per_repo = $12, inline_findings = $13,
 			commands_author_and_maintainers_only = $14, incremental_reviews = $15, learn_from_dismissals = $16, quiet_reviews = $17, comment_layout = $18,
-			linked_repos_enabled = $19, linked_repos = $20::jsonb, trusted_authors_only = $21, trusted_authors = $22::jsonb, updated_at = now()
+			linked_repos_enabled = $19, linked_repos = $20::jsonb, trusted_authors_only = $21, trusted_authors = $22::jsonb, model_id = $23,
+			updated_at = now()
 		WHERE instance = $1 AND lower(project) = lower($2)`,
 		instance, project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, nilIfEmpty(r.RepoSkills), r.JobTimeoutSeconds,
 		r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.InlineFindings, r.CommandsAuthorAndMaintainersOnly,
 		r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout), r.LinkedReposEnabled, links,
-		r.TrustedAuthorsOnly, trusted); err != nil {
+		r.TrustedAuthorsOnly, trusted, r.ModelID); err != nil {
 		return false, err
 	}
 	return true, tx.Commit(ctx)
