@@ -14,7 +14,8 @@ func TestHoldForQuotaHoldsPushAndAutoRerun(t *testing.T) {
 	if err != nil || !created {
 		t.Fatalf("EnqueueRerun = %v, %v", created, err)
 	}
-	for _, id := range []string{push, rerun} {
+	hold := func(id string) {
+		t.Helper()
 		ok, err := s.HoldForQuota(ctx, id)
 		if err != nil || !ok {
 			t.Fatalf("HoldForQuota(%s) = %v, %v; want true", id, ok, err)
@@ -23,7 +24,15 @@ func TestHoldForQuotaHoldsPushAndAutoRerun(t *testing.T) {
 			t.Errorf("run %s = %s/%q, want waiting/%q", id, r.State, r.SkipReason, WaitQuota)
 		}
 	}
+	// The push run is held while queued; the re-run after the dispatcher
+	// claimed it (running, not dispatched).
+	hold(push)
 	claimed, err := s.ClaimQueued(ctx, 10, t0.Add(time.Hour))
+	if err != nil || len(claimed) != 1 || claimed[0].ID != rerun || claimed[0].State != Running {
+		t.Fatalf("ClaimQueued = %+v, %v; want the re-run, running", claimed, err)
+	}
+	hold(rerun)
+	claimed, err = s.ClaimQueued(ctx, 10, t0.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,18 +65,93 @@ func TestHoldForQuotaLeavesCheckedRuns(t *testing.T) {
 }
 
 // A start that came before the hold makes the run a start, and the hold that
-// follows leaves it alone.
+// follows leaves it alone, whether the run was queued or already claimed.
 func TestHoldForQuotaLeavesAStartAlone(t *testing.T) {
+	for _, claim := range []bool{false, true} {
+		t.Run(map[bool]string{false: "queued", true: "claimed"}[claim], func(t *testing.T) {
+			s := newStore(t)
+			id := enqueue(t, s, mr1, sha('a'))
+			if claim {
+				if got, err := s.ClaimQueued(ctx, 10, t0.Add(time.Hour)); err != nil || len(got) != 1 {
+					t.Fatalf("ClaimQueued = %+v, %v", got, err)
+				}
+			}
+			if got, started, err := s.StartRun(ctx, mr1, "acme/widgets", sha('a'), "main"); err != nil || !started || got != id {
+				t.Fatalf("StartRun = %s, %v, %v; want %s, true", got, started, err, id)
+			}
+			if ok, err := s.HoldForQuota(ctx, id); err != nil || ok {
+				t.Errorf("HoldForQuota of a start = %v, %v; want false", ok, err)
+			}
+			r := mustRun(t, s, id)
+			wantState := Queued
+			if claim {
+				wantState = Running
+			}
+			if r.State != wantState || r.Trigger != TriggerStart || !r.QuotaChecked {
+				t.Errorf("run = %s/%s checked %v, want %s/start/true", r.State, r.Trigger, r.QuotaChecked, wantState)
+			}
+		})
+	}
+}
+
+// A start made by the previous release (during a rolling deploy) has no quota
+// flag; it is still never held.
+func TestHoldForQuotaLeavesAnUnflaggedStart(t *testing.T) {
 	s := newStore(t)
 	id := enqueue(t, s, mr1, sha('a'))
-	if got, started, err := s.StartRun(ctx, mr1, "acme/widgets", sha('a'), "main"); err != nil || !started || got != id {
-		t.Fatalf("StartRun = %s, %v, %v; want %s, true", got, started, err, id)
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET trigger = 'start', quota_checked = false WHERE id = $1::uuid`, id); err != nil {
+		t.Fatal(err)
 	}
 	if ok, err := s.HoldForQuota(ctx, id); err != nil || ok {
-		t.Errorf("HoldForQuota of a start = %v, %v; want false", ok, err)
+		t.Errorf("HoldForQuota of an unflagged start = %v, %v; want false", ok, err)
 	}
-	if r := mustRun(t, s, id); r.State != Queued || r.Trigger != TriggerStart || !r.QuotaChecked {
-		t.Errorf("run = %s/%s checked %v, want queued/start/true", r.State, r.Trigger, r.QuotaChecked)
+	if r := mustRun(t, s, id); r.State != Queued {
+		t.Errorf("run = %s, want queued", r.State)
+	}
+}
+
+// A start that lands on the publisher's own re-run makes that run checked, so
+// the dispatcher doesn't hold a run a person asked for.
+func TestStartRunMarksExistingAutoRerunChecked(t *testing.T) {
+	s := newStore(t)
+	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", sha('a'), "main", TriggerRerun, nil, nil, true, false)
+	if err != nil || !created {
+		t.Fatalf("EnqueueRerun = %v, %v", created, err)
+	}
+	got, started, err := s.StartRun(ctx, mr1, "acme/widgets", sha('a'), "main")
+	if err != nil || started || got != id {
+		t.Fatalf("StartRun = %s, %v, %v; want %s, false", got, started, err, id)
+	}
+	if ok, err := s.HoldForQuota(ctx, id); err != nil || ok {
+		t.Errorf("HoldForQuota = %v, %v; want false", ok, err)
+	}
+	if r := mustRun(t, s, id); r.State != Queued || !r.QuotaChecked {
+		t.Errorf("run = %s, checked %v; want queued, true", r.State, r.QuotaChecked)
+	}
+}
+
+// A person's re-run that lands on the publisher's own re-run makes it checked;
+// an automatic one landing on a run changes nothing.
+func TestManualRerunMarksExistingAutoRerunChecked(t *testing.T) {
+	s := newStore(t)
+	id, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", sha('a'), "main", TriggerRerun, nil, nil, true, false)
+	if err != nil || !created {
+		t.Fatalf("EnqueueRerun = %v, %v", created, err)
+	}
+	if got, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", sha('a'), "main", TriggerRerun, nil, nil, true, false); err != nil || created || got != id {
+		t.Fatalf("automatic duplicate = %s, %v, %v; want %s, false", got, created, err, id)
+	}
+	if r := mustRun(t, s, id); r.QuotaChecked {
+		t.Fatal("an automatic duplicate marked the run checked")
+	}
+	if got, created, err := s.EnqueueRerun(ctx, mr1, "acme/widgets", sha('a'), "main", TriggerRerun, nil, nil, true, true); err != nil || created || got != id {
+		t.Fatalf("manual duplicate = %s, %v, %v; want %s, false", got, created, err, id)
+	}
+	if ok, err := s.HoldForQuota(ctx, id); err != nil || ok {
+		t.Errorf("HoldForQuota = %v, %v; want false", ok, err)
+	}
+	if r := mustRun(t, s, id); r.State != Queued || !r.QuotaChecked {
+		t.Errorf("run = %s, checked %v; want queued, true", r.State, r.QuotaChecked)
 	}
 }
 

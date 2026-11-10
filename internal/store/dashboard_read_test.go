@@ -364,8 +364,9 @@ func TestProjectByPath(t *testing.T) {
 	}
 }
 
-// The dashboard's list queries can use the per-project indexes: they read a
-// bounded range of a repository's runs, never the whole table.
+// The dashboard's list queries use a per-project index and never scan the
+// whole runs table. The one-project reviews query pins runs_project_updated_idx;
+// the two-project cursor query may use either per-project index (see below).
 func TestDashboardQueriesUseIndexes(t *testing.T) {
 	s := newStore(t)
 	since := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)

@@ -413,6 +413,13 @@ func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA
 		  AND NOT ($6 AND trigger = 'push' AND (dispatched_at IS NULL OR incremental))`,
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch, replace).Scan(&id)
 	if err == nil {
+		// Someone asked for this review, so the quota is not looked at again
+		// for the run it lands on (the publisher's own re-run, say).
+		if quotaChecked {
+			if err := markQuotaChecked(ctx, tx, id); err != nil {
+				return "", false, err
+			}
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return "", false, err
 		}
@@ -816,6 +823,9 @@ func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, ta
 		  AND state IN ('queued', 'running', 'reported')`,
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch).Scan(&id)
 	if err == nil {
+		if err := markQuotaChecked(ctx, tx, id); err != nil {
+			return "", false, err
+		}
 		return id, false, tx.Commit(ctx)
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {

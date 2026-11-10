@@ -11,18 +11,27 @@ import (
 
 // HoldForQuota moves a queued, or claimed and not yet dispatched, run to
 // Waiting with the reason WaitQuota. A run the quota was looked at for
-// (QuotaChecked: asked for, or started) is not held. ok is false when the run
-// was in another state or unknown; a malformed id is an error.
+// (QuotaChecked: asked for, or started) is not held, nor is a start, whatever
+// its flag: the previous release makes starts without it. ok is false when the
+// run was in another state or unknown; a malformed id is an error.
 func (s *Store) HoldForQuota(ctx context.Context, id string) (ok bool, err error) {
 	if !validUUID(id) {
 		return false, fmt.Errorf("store: run %q not found", id)
 	}
 	tag, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'waiting', skip_reason = $2
-		WHERE id = $1::uuid AND state IN ('queued', 'running') AND dispatched_at IS NULL AND NOT quota_checked`, id, WaitQuota)
+		WHERE id = $1::uuid AND state IN ('queued', 'running') AND dispatched_at IS NULL AND NOT quota_checked
+		  AND trigger <> 'start'`, id, WaitQuota)
 	if err != nil {
 		return false, err
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+// markQuotaChecked marks run id, if it is not dispatched yet, as one the quota
+// was looked at for: a request that landed on it was asked for by a person.
+func markQuotaChecked(ctx context.Context, tx pgx.Tx, id string) error {
+	_, err := tx.Exec(ctx, `UPDATE runs SET quota_checked = true WHERE id = $1::uuid AND dispatched_at IS NULL`, id)
+	return err
 }
 
 // ClaimQuotaNote records that the note about a used-up quota is posted on
