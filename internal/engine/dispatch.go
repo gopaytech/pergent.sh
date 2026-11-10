@@ -281,10 +281,13 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			return d.hold(ctx, plat, store.WaitUntrusted, waitingDescription, true)
 		}
 	}
-	if !run.QuotaChecked {
+	if !run.QuotaChecked && run.Trigger != store.TriggerStart {
 		// An automatic run (a push, pergent.sh's own full re-run) on a
 		// used-up monthly token quota waits. A run somebody asked for was
-		// checked when they asked, and goes ahead.
+		// checked when they asked, and goes ahead. A start is always a
+		// person's request, even when the previous release queued it without
+		// the flag: HoldForQuota refuses it too, so checking it would
+		// postpone it and check it again, for ever.
 		usedUp, err := quota.Check(ctx, e.Store, e.now(), run.MR.Instance, run.MR.ProjectID, repo)
 		if err != nil {
 			return d.retry(ctx, fmt.Errorf("read the token quota: %w", err))

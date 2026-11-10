@@ -50,7 +50,7 @@ func wantHeld(t *testing.T, env *testEnv, id string) {
 	}
 }
 
-// A repository with no quota is reviewed as before, and nothing is read.
+// A repository with no quota is reviewed as before.
 func TestNoQuotaReviewsAsToday(t *testing.T) {
 	env := quotaPushEnv(t, 0, 0)
 	head := sha('a')
@@ -214,6 +214,9 @@ func TestQuotaReadErrorRetries(t *testing.T) {
 	if n := len(notes(env, 3)); n != 0 {
 		t.Errorf("%d notes, want none", n)
 	}
+	if logs := env.Logs(); !strings.Contains(logs, "read the token quota") {
+		t.Errorf("the retry isn't about the quota read; logs:\n%s", logs)
+	}
 }
 
 // The note is posted once a month: a change held in November gets it again in
@@ -239,8 +242,12 @@ func TestNoteAgainNextMonth(t *testing.T) {
 	id2 := env.Enqueue(3, head2)
 	dispatch(t, env)
 	wantHeld(t, env, id2)
-	if n := len(notes(env, 3)); n != 2 {
-		t.Errorf("%d notes after December's push, want 2", n)
+	ns := notes(env, 3)
+	if len(ns) != 2 {
+		t.Fatalf("%d notes after December's push, want 2", len(ns))
+	}
+	if want := `{"body":"` + quotaNote + `"}`; ns[1] != want {
+		t.Errorf("second note = %s, want %s", ns[1], want)
 	}
 }
 
@@ -293,5 +300,47 @@ func TestQuotaNoteRetriedAfterFailedReply(t *testing.T) {
 	wantHeld(t, env, id2)
 	if ns := notes(env, 3); len(ns) != failed+1 || !strings.Contains(ns[failed], quotaNote) {
 		t.Errorf("notes = %v, want one more try after the %d failed", ns, failed)
+	}
+}
+
+// A start the previous release queued without the quota flag is a person's
+// request: it goes ahead on a used-up quota, with no hold and no note, instead
+// of being checked again and again.
+func TestUnflaggedStartDispatchesOnUsedUpQuota(t *testing.T) {
+	env := quotaPushEnv(t, 100, 100)
+	head := sha('a')
+	servePush(env, head)
+	id, _, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(3), testProjectPath, head, "main", store.TriggerStart, nil, nil, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := pgx.ParseConfig(os.Getenv(testDBEnv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.RuntimeParams["search_path"] = env.schema
+	conn, err := pgx.ConnectConfig(env.ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(env.ctx)
+	if _, err := conn.Exec(env.ctx, `UPDATE runs SET quota_checked = false WHERE id = $1::uuid`, id); err != nil {
+		t.Fatal(err)
+	}
+	if r := env.Run(id); r.Trigger != store.TriggerStart || r.QuotaChecked {
+		t.Fatalf("run = trigger %q quota_checked %v, want a start with the flag off", r.Trigger, r.QuotaChecked)
+	}
+
+	dispatch(t, env)
+	if env.Job(id) == nil {
+		t.Fatalf("no job; run = %+v; logs:\n%s", env.Run(id), env.Logs())
+	}
+	if n := len(notes(env, 3)); n != 0 {
+		t.Errorf("%d notes, want none", n)
+	}
+	for _, st := range statusesOf(t, env, head) {
+		if strings.Contains(st, quotaDescription) {
+			t.Errorf("status %q is the quota hold", st)
+		}
 	}
 }
