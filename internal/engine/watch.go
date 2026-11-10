@@ -105,12 +105,12 @@ func (e *Engine) watch(ctx context.Context, run store.Run, now time.Time) (bool,
 
 	var reason string
 	switch {
-	case obs.Stuck != "":
+	case obs.Stuck.Reason != "":
 		if err := e.Launcher.Delete(ctx, run.JobName); err != nil {
-			log.Warn("couldn't delete the stuck review job; will try again", "reason", obs.Stuck, "error", e.redact(err.Error()))
+			log.Warn("couldn't delete the stuck review job; will try again", "reason", obs.Stuck.Reason, "error", e.redact(err.Error()))
 			return false, nil
 		}
-		reason = obs.Stuck
+		reason = obs.Stuck.Reason
 	case !obs.Exists:
 		if now.Sub(run.DispatchedAt) < watchGrace {
 			return false, nil
@@ -120,7 +120,7 @@ func (e *Engine) watch(ctx context.Context, run store.Run, now time.Time) (bool,
 		if now.Sub(obs.FinishedAt) < watchGrace {
 			return false, nil
 		}
-		reason = obs.Failure
+		reason = obs.Failure.Reason
 		if reason == "" {
 			reason = reasonFinishedNoSend
 		}

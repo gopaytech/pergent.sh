@@ -222,7 +222,7 @@ func (l *Launcher) ScanFailure(ctx context.Context, name string) (string, error)
 		return "", err
 	case !obs.Exists:
 		return msgScanNoResult, nil
-	case !obs.Finished || obs.Failure == "":
+	case !obs.Finished || obs.Failure.Reason == "":
 		return "", nil
 	case facts.storage:
 		return msgScanTooLargeRepo, nil

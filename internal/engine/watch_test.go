@@ -98,7 +98,7 @@ func TestWatchReportsOOM(t *testing.T) {
 
 	watch(t, env)
 
-	wantFailure(t, env, id, "the review job ran out of memory (OOMKilled)")
+	wantFailure(t, env, id, "The review job ran out of memory (OOMKilled)")
 	if !woken(env) {
 		t.Errorf("the publisher was not woken after the report")
 	}
@@ -120,7 +120,7 @@ func TestWatchWaitsGraceBeforeReporting(t *testing.T) {
 
 	env.SetNow(finished.Add(61 * time.Second))
 	watch(t, env)
-	wantFailure(t, env, id, "the review job hit its deadline (DeadlineExceeded)")
+	wantFailure(t, env, id, "The review job hit its deadline (DeadlineExceeded)")
 }
 
 func TestWatchCompleteWithoutResult(t *testing.T) {
@@ -145,7 +145,7 @@ func TestWatchStuckImagePull(t *testing.T) {
 	if env.Job(id) != nil {
 		t.Errorf("the stuck Job was not deleted")
 	}
-	wantFailure(t, env, id, "couldn't start the review job (ImagePullBackOff)")
+	wantFailure(t, env, id, "The review couldn't start (ImagePullBackOff)")
 	if !woken(env) {
 		t.Errorf("the publisher was not woken after the report")
 	}
@@ -172,7 +172,7 @@ func TestWatchStuckDeleteFailsRetriesNextPass(t *testing.T) {
 	if env.Job(id) != nil {
 		t.Errorf("the stuck Job was not deleted")
 	}
-	wantFailure(t, env, id, "couldn't start the review job (ErrImagePull)")
+	wantFailure(t, env, id, "The review couldn't start (ErrImagePull)")
 }
 
 func TestWatchJobDisappeared(t *testing.T) {
