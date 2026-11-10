@@ -606,6 +606,86 @@ pre {
   color: var(--warn);
 }
 
+/* --- token quota --- */
+
+.quota {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 16px;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+
+.quota-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 4px 0;
+}
+
+.quota-line .name {
+  min-width: 110px;
+  font-weight: 600;
+}
+
+/* The bar: calm, amber from 80%, red when the quota is used up (the colours
+   are the pills' own). */
+.quota-meter {
+  width: 200px;
+  max-width: 100%;
+  height: 8px;
+  border: 0;
+  border-radius: 4px;
+  appearance: none;
+  background: var(--line);
+}
+
+.quota-meter::-webkit-meter-bar {
+  height: 8px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--line);
+}
+
+.quota-meter::-webkit-meter-optimum-value,
+.quota-meter::-webkit-meter-suboptimum-value,
+.quota-meter::-webkit-meter-even-less-good-value {
+  border-radius: 4px;
+  background: var(--accent);
+}
+
+.quota-meter::-moz-meter-bar {
+  border-radius: 4px;
+  background: var(--accent);
+}
+
+.quota-meter.warn,
+.quota-meter.full {
+  background: var(--line);
+}
+
+.quota-meter.warn::-webkit-meter-optimum-value,
+.quota-meter.warn::-webkit-meter-suboptimum-value,
+.quota-meter.warn::-webkit-meter-even-less-good-value {
+  background: var(--warn);
+}
+
+.quota-meter.warn::-moz-meter-bar {
+  background: var(--warn);
+}
+
+.quota-meter.full::-webkit-meter-optimum-value,
+.quota-meter.full::-webkit-meter-suboptimum-value,
+.quota-meter.full::-webkit-meter-even-less-good-value {
+  background: var(--bad);
+}
+
+.quota-meter.full::-moz-meter-bar {
+  background: var(--bad);
+}
+
 /* --- overview --- */
 
 .stats {

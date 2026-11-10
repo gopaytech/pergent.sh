@@ -17,6 +17,7 @@ import (
 	"github.com/gopaytech/pergent/render"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/quota"
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -68,11 +69,15 @@ const (
 	RerunNothingFailed
 	// RerunCapped: a re-run cap is reached; nothing was queued.
 	RerunCapped
+	// RerunQuotaUsedUp: a monthly token quota is used up; nothing was queued.
+	RerunQuotaUsedUp
 )
 
 // RerunRequest asks for the review of the change mr at Head and TargetBranch
 // to be run again. ProjectPath is the repository's path as the platform
-// spells it. Repo holds the caps and Now is the clock they count by.
+// spells it. Repo holds the caps and the quotas, and Now is the clock they
+// count by. PastQuota is set only for an admin's dashboard action, which goes
+// past a used-up quota.
 type RerunRequest struct {
 	MR                 store.MRKey
 	ProjectPath        string
@@ -80,6 +85,7 @@ type RerunRequest struct {
 	FailedOnly         bool
 	Repo               settings.Effective
 	Now                time.Time
+	PastQuota          bool
 }
 
 // RerunResult is what Rerun did. Action and Detail are what the audit log
@@ -93,7 +99,10 @@ type RerunResult struct {
 
 // Rerun is the one sequence a comment command and a button follow: for "failed
 // only", the skills to run again (nothing failed ends it; no way to single
-// them out re-runs the whole review), then the caps, then queueing the run.
+// them out re-runs the whole review), then the token quota (an admin's
+// request goes past it; a used-up quota with a review of the head already
+// queued or running answers RerunAlreadyQueued), then the caps, then queueing
+// the run.
 // The caller checks permissions, drafts and the change's state first, and
 // wakes the engine and audits when the result is RerunQueued.
 func Rerun(ctx context.Context, st *store.Store, req RerunRequest) (RerunResult, error) {
@@ -118,6 +127,22 @@ func Rerun(ctx context.Context, st *store.Store, req RerunRequest) (RerunResult,
 		}
 	}
 
+	used, err := quotaUsedUp(ctx, st, req.PastQuota, req.Now, req.MR, req.Repo)
+	if err != nil {
+		return RerunResult{}, err
+	}
+	if used {
+		// A review of the head that is queued or running is on its way: the
+		// request is answered as any request for it is, not refused.
+		active, err := st.ReviewActiveForRerun(ctx, req.MR, req.Head, req.TargetBranch, !req.FailedOnly)
+		if err != nil {
+			return RerunResult{}, fmt.Errorf("look for the head's review: %w", err)
+		}
+		if active {
+			return RerunResult{Status: RerunAlreadyQueued}, nil
+		}
+		return RerunResult{Status: RerunQuotaUsedUp}, nil
+	}
 	capped, err := CapReached(ctx, st, req.Now, req.MR, req.Repo)
 	if err != nil {
 		return RerunResult{}, err
@@ -125,7 +150,7 @@ func Rerun(ctx context.Context, st *store.Store, req RerunRequest) (RerunResult,
 	if capped {
 		return RerunResult{Status: RerunCapped}, nil
 	}
-	_, created, err := st.EnqueueRerun(ctx, req.MR, req.ProjectPath, req.Head, req.TargetBranch, trigger, skills, base, !req.FailedOnly)
+	_, created, err := st.EnqueueRerun(ctx, req.MR, req.ProjectPath, req.Head, req.TargetBranch, trigger, skills, base, !req.FailedOnly, true)
 	if err != nil {
 		return RerunResult{}, fmt.Errorf("queue the re-run: %w", err)
 	}
@@ -136,24 +161,57 @@ func Rerun(ctx context.Context, st *store.Store, req RerunRequest) (RerunResult,
 	return res, nil
 }
 
+// quotaUsedUp tells whether a request for the change mr is refused because a
+// monthly token quota of its repository or instance is used up. An admin's
+// request (pastQuota) is checked nowhere.
+func quotaUsedUp(ctx context.Context, st *store.Store, pastQuota bool, now time.Time, mr store.MRKey, repo settings.Effective) (bool, error) {
+	if pastQuota {
+		return false, nil
+	}
+	used, err := quota.Check(ctx, st, now, mr.Instance, mr.ProjectID, repo)
+	if err != nil {
+		return false, fmt.Errorf("check the token quota: %w", err)
+	}
+	return used, nil
+}
+
 // StartRequest asks for the review of an untrusted author's change mr at
-// Head and TargetBranch to be started. Repo holds the change's cap and Now is
-// the clock it counts by.
+// Head and TargetBranch to be started. Repo holds the change's cap and the
+// quotas, and Now is the clock they count by. PastQuota is set only for an
+// admin's dashboard action, which goes past a used-up quota.
 type StartRequest struct {
 	MR                 store.MRKey
 	ProjectPath        string
 	Head, TargetBranch string
 	Repo               settings.Effective
 	Now                time.Time
+	PastQuota          bool
 }
 
 // Start is what a comment command and a button follow to start the review of
-// an untrusted author's change: the change's re-run cap (a start doesn't
-// count against the repository's), then the waiting run of the head queued as
+// an untrusted author's change: the token quota (an admin's start goes past
+// it; a used-up quota with a review of the head already queued or running
+// answers RerunAlreadyQueued), the change's re-run cap (a start doesn't count against the
+// repository's), then the waiting run of the head queued as
 // a start, or a new start. The caller checks that the person has write
 // access, drafts and the change's state first, and wakes the engine and
 // audits when the result is RerunQueued.
 func Start(ctx context.Context, st *store.Store, req StartRequest) (RerunResult, error) {
+	used, err := quotaUsedUp(ctx, st, req.PastQuota, req.Now, req.MR, req.Repo)
+	if err != nil {
+		return RerunResult{}, err
+	}
+	if used {
+		// As for Rerun: a review of the head already on its way isn't refused.
+		active, err := st.ReviewActiveForStart(ctx, req.MR, req.Head, req.TargetBranch)
+		if err != nil {
+			return RerunResult{}, fmt.Errorf("look for the head's review: %w", err)
+		}
+		if active {
+			return RerunResult{Status: RerunAlreadyQueued}, nil
+		}
+		return RerunResult{Status: RerunQuotaUsedUp}, nil
+	}
 	now := req.Now.UTC()
 	since := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	n, err := st.CountReruns(ctx, &req.MR, "", 0, since)

@@ -331,7 +331,7 @@ func TestSkippedRunWithdrawsApprovalOfSameHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	env.SetDefaultSkills()
-	id, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main", store.TriggerRerun, nil, nil, false)
+	id, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main", store.TriggerRerun, nil, nil, false, false)
 	if err != nil || !created {
 		t.Fatalf("EnqueueRerun = %v, %v", created, err)
 	}
@@ -364,7 +364,7 @@ func TestSkippedRunOwesWithdrawalWhenItFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	env.SetDefaultSkills()
-	id, _, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main", store.TriggerRerun, nil, nil, false)
+	id, _, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main", store.TriggerRerun, nil, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,7 +435,7 @@ func TestRerunOfSkippedHeadDispatches(t *testing.T) {
 	}
 
 	env.SetDefaultSkills("security")
-	rerun, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main", store.TriggerRerun, nil, nil, false)
+	rerun, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(1), testProjectPath, head, "main", store.TriggerRerun, nil, nil, false, false)
 	if err != nil || !created || rerun == id {
 		t.Fatalf("EnqueueRerun = %s, %v, %v; want a new run", rerun, created, err)
 	}

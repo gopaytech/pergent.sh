@@ -47,6 +47,8 @@ const (
 	WaitUntrusted = "untrusted_author"
 	// WaitCheckFailed: the author's access couldn't be read.
 	WaitCheckFailed = "trust_check_failed"
+	// WaitQuota: the repository's monthly token quota is used up.
+	WaitQuota = "quota_used_up"
 )
 
 var (
@@ -129,6 +131,10 @@ type Run struct {
 	// (SetRunQuiet). False for a run from before the column, or one that
 	// never started: the column is NULL there.
 	Quiet bool
+	// QuotaChecked is true once the monthly token quota has been looked at
+	// for the run (it was asked for, or started), so the dispatcher never
+	// holds it for the quota.
+	QuotaChecked bool
 	// CommentLayout is the layout of the comment, recorded when the run started
 	// (SetRunLayout); nil is the default layout, for a run from before the
 	// column or one that never started.
@@ -216,7 +222,7 @@ const runColumns = `id::text, instance, project_id, mr_iid, project_path, head_s
 	title, web_url, source_branch, author, model, skill_sources,
 	outcome, outcome_reason, decision_status, approved, trigger, skill_subset, base_run_id::text,
 	skill_versions, skip_reason, max_turns, incremental, skill_hashes, quiet_reviews, comment_layout,
-	linked_repos, provider, failure_step, failure_detail, pod_name, checkout_seen`
+	linked_repos, provider, failure_step, failure_detail, pod_name, checkout_seen, quota_checked`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var (
@@ -233,7 +239,7 @@ func scanRun(row pgx.Row) (Run, error) {
 		&r.Title, &r.WebURL, &r.SourceBranch, &r.Author, &r.Model, &sources,
 		&r.Outcome, &r.OutcomeReason, &r.DecisionStatus, &r.Approved, &r.Trigger, &r.SkillSubset, &r.BaseRunID,
 		&versions, &r.SkipReason, &r.MaxTurns, &r.Incremental, &hashes, &quiet, &r.CommentLayout, &links, &r.Provider,
-		&r.FailureStep, &r.FailureDetail, &r.PodName, &r.CheckoutSeen)
+		&r.FailureStep, &r.FailureDetail, &r.PodName, &r.CheckoutSeen, &r.QuotaChecked)
 	if err != nil {
 		return Run{}, err
 	}
@@ -394,7 +400,7 @@ func (s *Store) EnqueueRun(ctx context.Context, mr MRKey, projectPath, headSHA, 
 // The caller checks the re-run caps (CountReruns) before calling; with
 // more than one caller at a time, for example two button presses, a cap may
 // be overshot by a few.
-func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA, targetBranch, trigger string, skills []string, baseRunID *string, replace bool) (id string, created bool, err error) {
+func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA, targetBranch, trigger string, skills []string, baseRunID *string, replace, quotaChecked bool) (id string, created bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return "", false, err
@@ -408,12 +414,16 @@ func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA
 	// was never dispatched, which also matches a run that failed before
 	// dispatch, not only one still waiting in the queue. So is an incremental
 	// one.
-	err = tx.QueryRow(ctx, `SELECT id::text FROM runs
-		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
-		  AND state IN ('queued', 'running', 'reported')
-		  AND NOT ($6 AND trigger = 'push' AND (dispatched_at IS NULL OR incremental))`,
+	err = tx.QueryRow(ctx, liveRerunRunSQL,
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch, replace).Scan(&id)
 	if err == nil {
+		// Someone asked for this review, so the quota is not looked at again
+		// for the run it lands on (the publisher's own re-run, say).
+		if quotaChecked {
+			if err := markQuotaChecked(ctx, tx, id); err != nil {
+				return "", false, err
+			}
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return "", false, err
 		}
@@ -443,10 +453,10 @@ func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA
 		skills = nil
 	}
 	err = tx.QueryRow(ctx, `INSERT INTO runs (instance, project_id, mr_iid, project_path, head_sha, target_branch,
-			trigger, skill_subset, base_run_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::uuid) RETURNING id::text`,
+			trigger, skill_subset, base_run_id, quota_checked)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::uuid, $10) RETURNING id::text`,
 		mr.Instance, mr.ProjectID, mr.IID, projectPath, headSHA, targetBranch,
-		trigger, skills, baseRunID).Scan(&id)
+		trigger, skills, baseRunID, quotaChecked).Scan(&id)
 	if err != nil {
 		return "", false, err
 	}
@@ -770,6 +780,58 @@ func (s *Store) HoldRun(ctx context.Context, id, reason string) (ok bool, err er
 	return tag.RowsAffected() == 1, nil
 }
 
+// liveRerunRunSQL finds the run of a head and target that EnqueueRerun leaves
+// as it is ($6 is replace): queued, running or reported, but not, with
+// replace, a push's run that hasn't been dispatched or reviews only some files.
+const liveRerunRunSQL = `SELECT id::text FROM runs
+	WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
+	  AND state IN ('queued', 'running', 'reported')
+	  AND NOT ($6 AND trigger = 'push' AND (dispatched_at IS NULL OR incremental))`
+
+// liveStartRunSQL finds a live (queued, running or reported) run of a head and
+// target, which StartRun reaches only when no waiting run or undispatched
+// push run of it was there to start.
+const liveStartRunSQL = `SELECT id::text FROM runs
+	WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
+	  AND state IN ('queued', 'running', 'reported')`
+
+// undispatchedPushRunSQL is the condition of a push's run that is queued or
+// claimed and not dispatched yet, which StartRun turns into a start.
+const undispatchedPushRunSQL = `state IN ('queued', 'running') AND dispatched_at IS NULL AND trigger = 'push'`
+
+// onItsWaySQL narrows a live-run lookup to a run on its way for the quota: one
+// the dispatcher won't hold, so it was looked at (quota_checked), has a Job, or
+// was started by a person. An undispatched run with none of these (the
+// publisher's own re-run, a push's run) is held by the dispatcher on a used-up
+// quota, and is no reason to answer "already queued".
+const onItsWaySQL = ` AND (quota_checked OR dispatched_at IS NOT NULL OR trigger = 'start')`
+
+// ReviewActiveForRerun reports whether EnqueueRerun (with replace) would find
+// the head's review already queued, running or reported and queue nothing,
+// and the dispatcher won't hold that review for the quota.
+func (s *Store) ReviewActiveForRerun(ctx context.Context, mr MRKey, headSHA, targetBranch string, replace bool) (bool, error) {
+	var id string
+	err := s.pool.QueryRow(ctx, liveRerunRunSQL+onItsWaySQL, mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch, replace).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// ReviewActiveForStart reports whether StartRun would find the head's review
+// already queued, running or reported and start nothing: a waiting run, or a
+// push's queued run that hasn't been dispatched, is one it starts. A review
+// the dispatcher will hold for the quota doesn't count.
+func (s *Store) ReviewActiveForStart(ctx context.Context, mr MRKey, headSHA, targetBranch string) (bool, error) {
+	var id string
+	err := s.pool.QueryRow(ctx, liveStartRunSQL+` AND NOT (`+undispatchedPushRunSQL+`)`+onItsWaySQL,
+		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // StartRun starts the review of headSHA onto targetBranch of an untrusted
 // author's merge request. A waiting run of that head and target becomes a
 // queued run with TriggerStart (started is true, id is that run's), and so
@@ -790,7 +852,7 @@ func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, ta
 	if err := lockMR(ctx, tx, mr); err != nil {
 		return "", false, err
 	}
-	err = tx.QueryRow(ctx, `UPDATE runs SET state = 'queued', trigger = 'start', skip_reason = '', not_before = NULL
+	err = tx.QueryRow(ctx, `UPDATE runs SET state = 'queued', trigger = 'start', skip_reason = '', not_before = NULL, quota_checked = true
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
 		  AND state = 'waiting'
 		RETURNING id::text`,
@@ -801,9 +863,9 @@ func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, ta
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return "", false, err
 	}
-	err = tx.QueryRow(ctx, `UPDATE runs SET trigger = 'start'
+	err = tx.QueryRow(ctx, `UPDATE runs SET trigger = 'start', quota_checked = true
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
-		  AND state IN ('queued', 'running') AND dispatched_at IS NULL AND trigger = 'push'
+		  AND `+undispatchedPushRunSQL+`
 		RETURNING id::text`,
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch).Scan(&id)
 	if err == nil {
@@ -812,11 +874,12 @@ func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, ta
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return "", false, err
 	}
-	err = tx.QueryRow(ctx, `SELECT id::text FROM runs
-		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
-		  AND state IN ('queued', 'running', 'reported')`,
+	err = tx.QueryRow(ctx, liveStartRunSQL,
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch).Scan(&id)
 	if err == nil {
+		if err := markQuotaChecked(ctx, tx, id); err != nil {
+			return "", false, err
+		}
 		return id, false, tx.Commit(ctx)
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -835,8 +898,8 @@ func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, ta
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch); err != nil {
 		return "", false, err
 	}
-	err = tx.QueryRow(ctx, `INSERT INTO runs (instance, project_id, mr_iid, project_path, head_sha, target_branch, trigger)
-		VALUES ($1, $2, $3, $4, $5, $6, 'start') RETURNING id::text`,
+	err = tx.QueryRow(ctx, `INSERT INTO runs (instance, project_id, mr_iid, project_path, head_sha, target_branch, trigger, quota_checked)
+		VALUES ($1, $2, $3, $4, $5, $6, 'start', true) RETURNING id::text`,
 		mr.Instance, mr.ProjectID, mr.IID, projectPath, headSHA, targetBranch).Scan(&id)
 	if err != nil {
 		return "", false, err

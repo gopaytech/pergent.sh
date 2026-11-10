@@ -814,8 +814,9 @@ paths:
         review or only its failed skills. The body may be left out (a re-run
         of everything). For maintainers and admins of the repository (403
         otherwise), config repositories included. The change must be open
-        (409), and a draft only where drafts are reviewed (409). At a re-run
-        cap the answer is 429.
+        (409), and a draft only where drafts are reviewed (409). A used-up
+        monthly token quota refuses a maintainer's re-run (409, nothing is
+        queued); an admin's goes past it. At a re-run cap the answer is 429.
       x-pergent-access: session
       x-pergent-pattern: POST /api/reviews/{instance}/{rest...}
       security:
@@ -856,13 +857,15 @@ paths:
       tags: [Overview and reviews]
       summary: Start the review of an untrusted author's change
       description: |
-        For a change whose newest run waits because the repository doesn't
-        trust its author (409 otherwise): starts the review of the change's
-        head on the platform now, like `@<bot> review` from someone with write
+        For a change whose newest run waits (409 otherwise), because the
+        repository doesn't trust its author or because the monthly token quota
+        is used up: starts the review of the change's head on the platform now, like `@<bot> review` from someone with write
         access. The body names the head the page showed (`WaitingView.head`):
         when the change has been pushed since, nothing starts (409). For
         maintainers and admins of the repository (403 otherwise). The change
-        must be open (409), and a draft only where drafts are reviewed (409). A start counts against the
+        must be open (409), and a draft only where drafts are reviewed (409). A used-up
+        monthly token quota refuses a maintainer's start (409, the change
+        stays waiting); an admin's goes past it. A start counts against the
         change's re-run cap only (429), not the repository's.
       x-pergent-access: session
       x-pergent-pattern: POST /api/reviews/{instance}/{rest...}
@@ -1217,7 +1220,9 @@ paths:
         `maxTurns`, `jobMemory`
         (`""` when none), `rerunLimitPerMR`, `rerunLimitPerRepo`,
         `trustedAuthorsOnly` (the mode in effect), `trustedAuthors` and `model`
-        (the ID of the entry of the list of models, null for the default);
+        (the ID of the entry of the list of models, null for the default) and
+        `monthlyTokenQuota` (the repository's token quota per UTC month, null
+        for none; shown to admins only, left out for anyone else);
         each value says whether the repository sets it (`overridden`) or
         follows the default. `model` and `modelChoices` of the body name the
         model reviews run on and the entries an admin can choose from.
@@ -2525,6 +2530,37 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/instances/{name}/token-quota:
+    put:
+      operationId: setInstanceTokenQuota
+      tags: [Instances and settings]
+      summary: Set an instance's monthly token quota
+      description: |
+        Admins only. The tokens (in plus out) the reviews of the whole
+        instance may use in a UTC calendar month: a whole number from 1 to
+        1000000000000000, or null for none. Once it is used up, no review of
+        any of the instance's repositories starts until the next month, unless
+        an admin starts one. An instance of the config (set `monthly_token_quota`
+        there), or one being removed, is 409.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstancePathName'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/InstanceTokenQuotaRequest'}
+      responses:
+        '204': {description: Set.}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/instances/{name}/repositories:
     get:
       operationId: listInstanceRepositories
@@ -3487,6 +3523,15 @@ components:
           maxItems: 100
           description: The repository's allowlist. An entry without `id` is looked up by username when it is saved (400 when the platform doesn't know it), then stored by ID.
           items: {$ref: '#/components/schemas/TrustedAuthorInput'}
+        monthlyTokenQuota:
+          type: [integer, 'null']
+          minimum: 1
+          maximum: 1000000000000000
+          description: |
+            Admins only (403 for a maintainer; a maintainer's reset leaves it).
+            The tokens (in plus out) the repository's reviews may use in a UTC
+            calendar month. A whole number: a fraction, a string or a number
+            above the maximum is 400. Null means no quota of its own.
         model:
           type: [string, 'null']
           description: |
@@ -3503,6 +3548,16 @@ components:
         head:
           type: string
           pattern: '^([0-9a-f]{40}|[0-9a-f]{64})$'
+    InstanceTokenQuotaRequest:
+      type: object
+      required: [monthlyTokenQuota]
+      additionalProperties: false
+      properties:
+        monthlyTokenQuota:
+          type: [integer, 'null']
+          minimum: 1
+          maximum: 1000000000000000
+          description: A whole number of tokens per UTC month, or null for none. Required; a fraction or a string is 400.
     InstanceTrustRequest:
       type: object
       required: [mode]
@@ -3543,7 +3598,11 @@ components:
         since: {type: string, format: date-time}
         reason:
           type: string
-          enum: [untrusted_author, trust_check_failed]
+          enum: [untrusted_author, trust_check_failed, quota_used_up]
+          description: |
+            Why the review waits: the author is not trusted, the author's
+            access could not be read, or the monthly token quota is used up (an
+            admin starts it).
     PutCommentFooterRequest:
       type: object
       required: [note]
@@ -3981,13 +4040,19 @@ components:
     InstanceAdminView:
       description: One instance.
       type: object
-      required: [name, trustedAuthorsOnly, platform, source, removing, url, apiURL, reviewAppID, approveAppID, webhookURL, approver, secrets]
+      required: [name, trustedAuthorsOnly, monthlyTokenQuota, tokensThisMonth, platform, source, removing, url, apiURL, reviewAppID, approveAppID, webhookURL, approver, secrets]
       properties:
         name: {type: string}
         trustedAuthorsOnly:
           type: string
           enum: [follow_visibility, 'on', 'off']
           description: The default of the instance's repositories.
+        monthlyTokenQuota:
+          type: [integer, 'null']
+          description: The instance's token quota per UTC month, null for none.
+        tokensThisMonth:
+          type: integer
+          description: The tokens (in plus out) the instance's reviews used this UTC month.
         platform:
           type: string
           enum: [gitlab, github]
@@ -4318,7 +4383,7 @@ components:
     RepositoryDetailView:
       description: A repository with its effective settings.
       type: object
-      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, modelChoices]
+      required: [repo, settings, attention, role, waiting, instanceTrustedAuthorsOnly, model, modelChoices, quota]
       properties:
         repo: {$ref: '#/components/schemas/RepositoryView'}
         settings:
@@ -4328,8 +4393,9 @@ components:
             learnFromDismissals, quietReviews, commentLayout, linkedReposEnabled, linkedRepos, failureStatus, skills, repoSkills, jobTimeoutSeconds, maxTurns, jobMemory,
             rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly (the mode in
             effect, follow_visibility, on or off), trustedAuthors (a list of TrustedAuthor)
-            and model (the ID of the entry of the list of models the repository names, null
-            while it follows the default).
+            model (the ID of the entry of the list of models the repository names, null
+            while it follows the default) and monthlyTokenQuota (the repository's token quota
+            per UTC month, null for none; left out for anyone but an admin).
         attention:
           type: array
           items: {$ref: '#/components/schemas/AttentionView'}
@@ -4354,6 +4420,28 @@ components:
           type: array
           items: {$ref: '#/components/schemas/ModelChoiceView'}
           description: The entries of the list the repository can be given; empty unless the session is an admin of the repository.
+        quota:
+          description: This month's tokens against the repository's and its instance's quotas. Null for anyone but an admin, and when the usage could not be read.
+          oneOf:
+            - {$ref: '#/components/schemas/QuotaView'}
+            - {type: 'null'}
+    QuotaView:
+      description: What a repository and its instance used this UTC month, each against its quota.
+      type: object
+      required: [repository, instance]
+      properties:
+        repository: {$ref: '#/components/schemas/QuotaUseView'}
+        instance: {$ref: '#/components/schemas/QuotaUseView'}
+    QuotaUseView:
+      type: object
+      required: [used, limit]
+      properties:
+        used:
+          type: integer
+          description: Tokens (in plus out) used this UTC month.
+        limit:
+          type: [integer, 'null']
+          description: The quota, null when there is none.
     RepositoryView:
       description: One repository switched on.
       type: object

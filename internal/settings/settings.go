@@ -54,6 +54,7 @@ const (
 	KeyLinkedReposEnabled               = "linked_repos_enabled"
 	KeyTrustedAuthorsOnly               = "trusted_authors_only"
 	KeyTrustedAuthors                   = "trusted_authors"
+	KeyMonthlyTokenQuota                = "monthly_token_quota"
 )
 
 // The re-run caps when nothing sets them: per merge request and per
@@ -125,6 +126,13 @@ type Effective struct {
 	InstanceTrustedAuthorsOnly string
 	// TrustedAuthors is the repository's allowlist, matched by user ID.
 	TrustedAuthors []store.TrustedAuthor
+	// MonthlyTokenQuota is the repository's own token budget per UTC
+	// calendar month, from 1 to config.MaxMonthlyTokenQuota; nil means it has
+	// none (an unusable stored value counts as none).
+	MonthlyTokenQuota *int64
+	// InstanceMonthlyTokenQuota is the instance's budget; nil when it has none
+	// or is not registered.
+	InstanceMonthlyTokenQuota *int64
 	// Overridden tells, for each setting key, whether the repository sets
 	// it rather than taking the default. Every key is present.
 	Overridden map[string]bool
@@ -277,8 +285,9 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 		RerunLimitPerRepo:          DefaultRerunLimitPerRepo,
 		TrustedAuthorsOnly:         r.instanceTrust(instance),
 		InstanceTrustedAuthorsOnly: r.instanceTrust(instance),
+		InstanceMonthlyTokenQuota:  r.instanceQuota(instance),
 		Overridden: map[string]bool{
-			KeyTrustedAuthorsOnly: false, KeyTrustedAuthors: false,
+			KeyTrustedAuthorsOnly: false, KeyTrustedAuthors: false, KeyMonthlyTokenQuota: false,
 			KeyApprove: false, KeyReviewDrafts: false, KeyInlineFindings: false, KeyFailureStatus: false,
 			KeySkills: false, KeyRepoSkills: false, KeyJobTimeout: false, KeyMaxTurns: false, KeyJobMemory: false, KeyModel: false,
 			KeyRerunLimitPerMR: false, KeyRerunLimitPerRepo: false, KeyCommandsAuthorAndMaintainersOnly: false, KeyIncrementalReviews: false, KeyLearnFromDismissals: false, KeyQuietReviews: false, KeyCommentLayout: false, KeyLinkedReposEnabled: false,
@@ -399,6 +408,17 @@ func (r *Resolver) instanceTrust(name string) string {
 	return config.TrustFollowVisibility
 }
 
+// instanceQuota is a copy of the monthly token quota of the instance called
+// name; nil when it has none or is unknown.
+func (r *Resolver) instanceQuota(name string) *int64 {
+	inst, ok := r.registry().Get(name)
+	if !ok || inst.MonthlyTokenQuota == nil {
+		return nil
+	}
+	q := *inst.MonthlyTokenQuota
+	return &q
+}
+
 // fromConfig resolves a config repository; ok is false when its instance
 // isn't registered (config.Validate rules that out). The config defaults
 // failure_status to failed, so failure_status counts as overridden only when
@@ -442,6 +462,10 @@ func (r *Resolver) fromConfig(repo config.Repository) (Effective, bool) {
 	}
 	if len(repo.TrustedAuthors) > 0 {
 		eff.TrustedAuthors, eff.Overridden[KeyTrustedAuthors] = slices.Clone(repo.TrustedAuthors), true
+	}
+	if q := repo.MonthlyTokenQuota; q != nil {
+		v := *q
+		eff.MonthlyTokenQuota, eff.Overridden[KeyMonthlyTokenQuota] = &v, true
 	}
 	if repo.FailureStatus != "" && repo.FailureStatus != config.FailureStatusFailed {
 		eff.FailureStatus, eff.Overridden[KeyFailureStatus] = repo.FailureStatus, true
@@ -509,6 +533,10 @@ func (r *Resolver) fromDashboard(row store.DashboardRepo, stored store.RepoDefau
 	}
 	if len(row.TrustedAuthors) > 0 {
 		eff.TrustedAuthors, eff.Overridden[KeyTrustedAuthors] = slices.Clone(row.TrustedAuthors), true
+	}
+	if q := row.MonthlyTokenQuota; q != nil && config.ValidTokenQuota(*q) {
+		v := *q
+		eff.MonthlyTokenQuota, eff.Overridden[KeyMonthlyTokenQuota] = &v, true
 	}
 	if row.LinkedReposEnabled != nil {
 		eff.LinkedReposEnabled, eff.Overridden[KeyLinkedReposEnabled] = *row.LinkedReposEnabled, true

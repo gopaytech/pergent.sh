@@ -65,6 +65,9 @@ type DashboardRepo struct {
 	TrustedAuthorsOnly *string
 	// TrustedAuthors is the repository's allowlist (nil: nobody).
 	TrustedAuthors []TrustedAuthor
+	// MonthlyTokenQuota is the repository's token budget per UTC calendar
+	// month (nil: none of its own). The database refuses a value below 1.
+	MonthlyTokenQuota *int64
 	// ModelID names the repository's entry in the list of models, or
 	// ConfigModelID (nil: follow the default). Saving it locks the entry, so
 	// it can't be deleted meanwhile.
@@ -161,7 +164,7 @@ func readLinks(b []byte) ([]Link, error) {
 const dashboardRepoColumns = `instance, project, approve, review_drafts, failure_status, skills, repo_skills,
 	job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by, created_at, updated_at,
 	inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
-	linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id`
+	linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id, monthly_token_quota`
 
 func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 	var r DashboardRepo
@@ -169,7 +172,7 @@ func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 	err := row.Scan(&r.Instance, &r.Project, &r.Approve, &r.ReviewDrafts, &r.FailureStatus, &r.Skills, &r.RepoSkills,
 		&r.JobTimeoutSeconds, &r.MaxTurns, &r.JobMemory, &r.RerunLimitPerMR, &r.RerunLimitPerRepo, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt,
 		&r.InlineFindings, &r.CommandsAuthorAndMaintainersOnly, &r.IncrementalReviews, &r.LearnFromDismissals, &r.QuietReviews, &r.CommentLayout,
-		&r.LinkedReposEnabled, &links, &r.TrustedAuthorsOnly, &trusted, &r.ModelID)
+		&r.LinkedReposEnabled, &links, &r.TrustedAuthorsOnly, &trusted, &r.ModelID, &r.MonthlyTokenQuota)
 	if len(r.Skills) == 0 {
 		r.Skills = nil
 	}
@@ -254,8 +257,8 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 	if _, err := tx.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
 			failure_status, skills, repo_skills, job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by,
 			inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
-			linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22, $23::jsonb, $24)
+			linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id, monthly_token_quota)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22, $23::jsonb, $24, $25)
 		ON CONFLICT (instance, lower(project)) DO UPDATE SET
 			project = EXCLUDED.project, approve = EXCLUDED.approve, review_drafts = EXCLUDED.review_drafts,
 			failure_status = EXCLUDED.failure_status, skills = EXCLUDED.skills, repo_skills = EXCLUDED.repo_skills,
@@ -270,11 +273,11 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 			linked_repos_enabled = EXCLUDED.linked_repos_enabled,
 			linked_repos = EXCLUDED.linked_repos,
 			trusted_authors_only = EXCLUDED.trusted_authors_only, trusted_authors = EXCLUDED.trusted_authors,
-			model_id = EXCLUDED.model_id, updated_at = now()`,
+			model_id = EXCLUDED.model_id, monthly_token_quota = EXCLUDED.monthly_token_quota, updated_at = now()`,
 		r.Instance, r.Project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, repoSkills,
 		r.JobTimeoutSeconds, r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy, r.InlineFindings,
 		r.CommandsAuthorAndMaintainersOnly, r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout),
-		r.LinkedReposEnabled, links, r.TrustedAuthorsOnly, trusted, r.ModelID); err != nil {
+		r.LinkedReposEnabled, links, r.TrustedAuthorsOnly, trusted, r.ModelID, r.MonthlyTokenQuota); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -318,13 +321,13 @@ func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (creat
 	tag, err := tx.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
 			failure_status, skills, repo_skills, job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by,
 			inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
-			linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22, $23::jsonb, $24)
+			linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id, monthly_token_quota)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22, $23::jsonb, $24, $25)
 		ON CONFLICT (instance, lower(project)) DO NOTHING`,
 		r.Instance, r.Project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, nilIfEmpty(r.RepoSkills),
 		r.JobTimeoutSeconds, r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy, r.InlineFindings,
 		r.CommandsAuthorAndMaintainersOnly, r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout),
-		r.LinkedReposEnabled, links, r.TrustedAuthorsOnly, trusted, r.ModelID)
+		r.LinkedReposEnabled, links, r.TrustedAuthorsOnly, trusted, r.ModelID, r.MonthlyTokenQuota)
 	if err != nil {
 		return false, err
 	}
@@ -378,12 +381,12 @@ func (s *Store) UpdateDashboardRepo(ctx context.Context, instance, project strin
 			rerun_limit_per_mr = $11, rerun_limit_per_repo = $12, inline_findings = $13,
 			commands_author_and_maintainers_only = $14, incremental_reviews = $15, learn_from_dismissals = $16, quiet_reviews = $17, comment_layout = $18,
 			linked_repos_enabled = $19, linked_repos = $20::jsonb, trusted_authors_only = $21, trusted_authors = $22::jsonb, model_id = $23,
-			updated_at = now()
+			monthly_token_quota = $24, updated_at = now()
 		WHERE instance = $1 AND lower(project) = lower($2)`,
 		instance, project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, nilIfEmpty(r.RepoSkills), r.JobTimeoutSeconds,
 		r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.InlineFindings, r.CommandsAuthorAndMaintainersOnly,
 		r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout), r.LinkedReposEnabled, links,
-		r.TrustedAuthorsOnly, trusted, r.ModelID); err != nil {
+		r.TrustedAuthorsOnly, trusted, r.ModelID, r.MonthlyTokenQuota); err != nil {
 		return false, err
 	}
 	return true, tx.Commit(ctx)

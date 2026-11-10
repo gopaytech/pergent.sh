@@ -10,6 +10,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/actions"
 	"github.com/gopaytech/pergent.sh/internal/forge"
+	"github.com/gopaytech/pergent.sh/internal/quota"
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -628,6 +629,8 @@ func (c *commandRun) rerun(ctx context.Context, failedOnly bool) (verdict, error
 	switch res.Status {
 	case actions.RerunNothingFailed:
 		return noop("nothing failed", replyNothingFailed), nil
+	case actions.RerunQuotaUsedUp:
+		return c.refuseQuota(ctx), nil
 	case actions.RerunCapped:
 		return refused("re-run limit reached", replyCap(changeTerm(c.cmd.Platform))), nil
 	case actions.RerunAlreadyQueued:
@@ -643,6 +646,25 @@ func (c *commandRun) rerun(ctx context.Context, failedOnly bool) (verdict, error
 		return done(replyWholeFailed), nil
 	}
 	return done(""), nil
+}
+
+// refuseQuota is the refusal of a request by hand while a monthly token quota
+// is used up: a 👎 and, when the quota note isn't posted on the change this
+// month, the note as the reply (the same once-a-month claim as the held
+// runs'), else the 👎 only. Nothing was queued, and the change's review, its
+// status and its approval are as they were. A claim that fails is logged and
+// answered with the 👎 alone, no reply.
+func (c *commandRun) refuseQuota(ctx context.Context) verdict {
+	v := refused(whyQuota, quotaNote)
+	now := c.e.now()
+	first, err := c.e.Store.ClaimQuotaNote(ctx, c.cmd.MR, quota.MonthStart(now), now)
+	if err != nil {
+		c.log.Error("claiming the quota note failed", "error", c.e.redact(err.Error()))
+	}
+	if err != nil || !first {
+		v.reply, v.replyRequired = "", false
+	}
+	return v
 }
 
 // start starts the review of an untrusted author's change at its head, for
@@ -678,6 +700,8 @@ func (c *commandRun) start(ctx context.Context) (verdict, error) {
 		return verdict{}, err
 	}
 	switch res.Status {
+	case actions.RerunQuotaUsedUp:
+		return c.refuseQuota(ctx), nil
 	case actions.RerunCapped:
 		return refused("re-run limit reached", replyCap(changeTerm(c.cmd.Platform))), nil
 	case actions.RerunAlreadyQueued:

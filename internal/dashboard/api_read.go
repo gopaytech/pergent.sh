@@ -919,6 +919,8 @@ func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Ef
 		// The links name other repositories, which someone who may see this
 		// one may not be allowed to see. The setting itself is shown.
 		settingsView["linkedRepos"] = SettingView{Value: []LinkView{}}
+		// The quota, like its usage, is for admins to see.
+		delete(settingsView, "monthlyTokenQuota")
 	}
 	waiting, err := d.Store.WaitingChanges(ctx, repo.Instance, repo.Project)
 	if err != nil {
@@ -930,7 +932,8 @@ func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Ef
 	}
 	return RepositoryDetailView{Repo: views[0], Settings: settingsView, Attention: items, Role: role.String(), Waiting: wv,
 		InstanceTrustedAuthorsOnly: repo.InstanceTrustedAuthorsOnly,
-		Model:                      d.effectiveModel(repo.ModelID), ModelChoices: d.modelChoices(role)}, nil
+		Model:                      d.effectiveModel(repo.ModelID), ModelChoices: d.modelChoices(role),
+		Quota: d.quotaView(ctx, se, repo)}, nil
 }
 
 // settingViews is repo's settings as RepositoryDetailView shows them.
@@ -958,6 +961,7 @@ func settingViews(repo settings.Effective) map[string]SettingView {
 		"trustedAuthorsOnly":               {repo.TrustedAuthorsOnly, ov[settings.KeyTrustedAuthorsOnly]},
 		"trustedAuthors":                   {nonNilAuthors(repo.TrustedAuthors), ov[settings.KeyTrustedAuthors]},
 		"model":                            {modelValue(repo), ov[settings.KeyModel]},
+		"monthlyTokenQuota":                {repo.MonthlyTokenQuota, ov[settings.KeyMonthlyTokenQuota]},
 	}
 }
 

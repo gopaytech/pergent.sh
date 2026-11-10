@@ -1,5 +1,15 @@
 # ⬆️ Upgrading
 
+## Upgrading to the next release
+
+**Admins can give an instance and a repository a monthly token quota.** Once it is used up, no new review starts on it until the 1st or until an admin starts one: [Monthly token quota](concepts/token-quota.md). Nothing is limited after the upgrade, and nothing needs turning on.
+
+Migration `0037` runs at startup and adds columns (nullable, or with a default) and an index on `run_usage`, dropping nothing, so back up Postgres first, as for any migration.
+
+- **To roll back, first remove `gitlab[].monthly_token_quota`, `github[].monthly_token_quota` and `repositories[].monthly_token_quota` from the config.** The previous release refuses a config key it doesn't know.
+- **Rolling back removes the quota.** The previous release ignores the new columns, so a quota set in the dashboard stays stored but nothing checks it. During a rolling upgrade, replicas of the previous release also start reviews without the check. It doesn't start a change a quota held by itself, but its **Start review** and a writer's `review` command can.
+- **The tokens counted are those in [Usage](concepts/usage.md).** A Job with no result and a superseded review count as zero.
+
 ## Upgrading to 0.16.0
 
 **A failed review can be traced to its Job.** Admins see the Job and pod on the review page, a failed review keeps its clone log and the pod's state, and the failure line names the step that failed: [Troubleshooting a failed review](setup/troubleshooting.md).

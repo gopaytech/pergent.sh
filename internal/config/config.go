@@ -109,7 +109,15 @@ type Instance struct {
 	// TrustedAuthorsOnly is the default of the instance's repositories:
 	// TrustFollowVisibility (also when empty), TrustOn or TrustOff.
 	TrustedAuthorsOnly string `yaml:"trusted_authors_only"`
+	// MonthlyTokenQuota is the instance's token budget per UTC calendar
+	// month, from 1 to MaxMonthlyTokenQuota (nil: none).
+	MonthlyTokenQuota *int64 `yaml:"monthly_token_quota"`
 }
+
+// MaxMonthlyTokenQuota is the largest monthly_token_quota. It keeps the sums
+// the quota is compared with far from overflowing, and below 2^53, where a
+// number sent to the browser stays exact.
+const MaxMonthlyTokenQuota int64 = 1_000_000_000_000_000
 
 // The values of trusted_authors_only. A repository takes TrustOn or TrustOff;
 // an instance also TrustFollowVisibility: on for a public repository, off
@@ -145,6 +153,8 @@ type GitHubInstance struct {
 	OAuthClientSecretEnv string `yaml:"oauth_client_secret_env"`
 	// TrustedAuthorsOnly is as for Instance.
 	TrustedAuthorsOnly string `yaml:"trusted_authors_only"`
+	// MonthlyTokenQuota is as for Instance.
+	MonthlyTokenQuota *int64 `yaml:"monthly_token_quota"`
 }
 
 // The three ways a GitHub instance approves, as Approver reports them.
@@ -245,6 +255,9 @@ type Repository struct {
 	TrustedAuthorsOnly *string
 	// TrustedAuthors is the repository's allowlist, matched by ID.
 	TrustedAuthors []store.TrustedAuthor
+	// MonthlyTokenQuota is the repository's token budget per UTC calendar
+	// month, from 1 to MaxMonthlyTokenQuota (nil: none of its own).
+	MonthlyTokenQuota *int64
 }
 
 // LLM is the model every review uses.
@@ -318,6 +331,8 @@ type fileRepository struct {
 
 	TrustedAuthorsOnly *string               `yaml:"trusted_authors_only"`
 	TrustedAuthors     []store.TrustedAuthor `yaml:"trusted_authors"`
+
+	MonthlyTokenQuota *int64 `yaml:"monthly_token_quota"`
 }
 
 // fileLink is one entry of linked_repos. can_block is true when left out.
@@ -343,6 +358,7 @@ func (f fileRepository) repository() Repository {
 		LinkedReposEnabled:               f.LinkedReposEnabled,
 		TrustedAuthorsOnly:               f.TrustedAuthorsOnly,
 		TrustedAuthors:                   f.TrustedAuthors,
+		MonthlyTokenQuota:                f.MonthlyTokenQuota,
 	}
 	if f.LinkedRepos != nil {
 		r.LinkedRepos = make([]store.Link, 0, len(f.LinkedRepos))
@@ -619,6 +635,9 @@ func (c *Config) Validate() error {
 		if !validInstanceTrust(inst.TrustedAuthorsOnly) {
 			add("gitlab[%d] (%s): trusted_authors_only must be follow_visibility, on or off, got %q", i, inst.Name, inst.TrustedAuthorsOnly)
 		}
+		if q := inst.MonthlyTokenQuota; q != nil && !ValidTokenQuota(*q) {
+			add("gitlab[%d] (%s): monthly_token_quota must be from 1 to %d, got %d", i, inst.Name, MaxMonthlyTokenQuota, *q)
+		}
 	}
 
 	githubNames := make(map[string]bool, len(c.GitHub))
@@ -631,6 +650,9 @@ func (c *Config) Validate() error {
 		errs = append(errs, checkGitHubInstance(i, inst)...)
 		if !validInstanceTrust(inst.TrustedAuthorsOnly) {
 			add("github[%d] (%s): trusted_authors_only must be follow_visibility, on or off, got %q", i, inst.Name, inst.TrustedAuthorsOnly)
+		}
+		if q := inst.MonthlyTokenQuota; q != nil && !ValidTokenQuota(*q) {
+			add("github[%d] (%s): monthly_token_quota must be from 1 to %d, got %d", i, inst.Name, MaxMonthlyTokenQuota, *q)
 		}
 	}
 
@@ -671,6 +693,9 @@ func (c *Config) Validate() error {
 		}
 		if m := repo.TrustedAuthorsOnly; m != nil && *m != TrustOn && *m != TrustOff {
 			add("repositories[%d] (%s): trusted_authors_only must be on or off, got %q", i, repo.Project, *m)
+		}
+		if q := repo.MonthlyTokenQuota; q != nil && !ValidTokenQuota(*q) {
+			add("repositories[%d] (%s): monthly_token_quota must be from 1 to %d, got %d", i, repo.Project, MaxMonthlyTokenQuota, *q)
 		}
 		trustedIDs := make(map[int64]bool, len(repo.TrustedAuthors))
 		for j, a := range repo.TrustedAuthors {
@@ -1167,6 +1192,12 @@ func TimeoutWarnings(c *Config) []string {
 // WebhookURL is where platform sends instance's webhooks.
 func WebhookURL(publicURL, platform, instance string) string {
 	return strings.TrimRight(publicURL, "/") + "/webhooks/" + platform + "/" + instance
+}
+
+// ValidTokenQuota reports whether q is a usable monthly token quota: from 1 to
+// MaxMonthlyTokenQuota. The config, the settings and the dashboard share it.
+func ValidTokenQuota(q int64) bool {
+	return q >= 1 && q <= MaxMonthlyTokenQuota
 }
 
 // validInstanceTrust reports whether m is an instance's trusted_authors_only:

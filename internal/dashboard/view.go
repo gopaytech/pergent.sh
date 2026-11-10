@@ -371,7 +371,8 @@ type Last7View struct {
 // jobTimeoutSeconds, maxTurns, jobMemory ("" when none), rerunLimitPerMR,
 // rerunLimitPerRepo, trustedAuthorsOnly, trustedAuthors and model (the ID of
 // the entry of the list of models the repository runs on; null follows the
-// default).
+// default) and monthlyTokenQuota (the repository's token quota per UTC month,
+// null for none; shown to admins only, left out for anyone else).
 type RepositoryDetailView struct {
 	Repo      RepositoryView         `json:"repo"`
 	Settings  map[string]SettingView `json:"settings"`
@@ -394,6 +395,24 @@ type RepositoryDetailView struct {
 	// ModelChoices are the entries of the list a repository can be given, for
 	// an admin of the repository; empty for anyone else.
 	ModelChoices []ModelChoiceView `json:"modelChoices"`
+	// Quota is this month's tokens against the repository's and its
+	// instance's quotas, for an admin; null for anyone else, and when the
+	// usage can't be read.
+	Quota *QuotaView `json:"quota"`
+}
+
+// QuotaView is what a repository and its instance used this month (UTC), each
+// against its quota.
+type QuotaView struct {
+	Repository QuotaUseView `json:"repository"`
+	Instance   QuotaUseView `json:"instance"`
+}
+
+// QuotaUseView is the tokens (in plus out) used this month and the quota they
+// count against; Limit is null when there is none.
+type QuotaUseView struct {
+	Used  int64  `json:"used"`
+	Limit *int64 `json:"limit"`
 }
 
 // ModelChoiceView is an entry of the list of models a repository can be
@@ -407,8 +426,9 @@ type ModelChoiceView struct {
 }
 
 // WaitingView is a change of an author the repository doesn't trust, not
-// reviewed until someone starts it. Reason is "untrusted_author" or
-// "trust_check_failed" (the author's access couldn't be read).
+// reviewed until someone starts it, or a change the monthly token quota holds.
+// Reason is "untrusted_author", "trust_check_failed" (the author's access
+// couldn't be read) or "quota_used_up" (only an admin starts it).
 type WaitingView struct {
 	Number int64 `json:"number"`
 	// Head is the commit that waits; Start review sends it back, and a
@@ -891,12 +911,14 @@ type LLMView struct {
 //     ID of an entry of the list of models, or null to follow the default;
 //     only an admin of the repository changes it, else 403, and a
 //     maintainer's reset leaves it; an ID that is not in the list, "config"
-//     included while the config has no llm: block, is 400). Any other key, or a value
+//     included while the config has no llm: block, is 400), and monthlyTokenQuota (a
+//     whole number from 1 to 1000000000000000, or null for none; only an admin
+//     changes it, else 403, and a maintainer's reset leaves it). Any other key, or a value
 //     out of bounds, is 400 and nothing changes. 200, RepositoryDetailView.
 //   - POST /api/repositories/{instance}/{project...}/settings/reset: every
 //     setting back to its default, except that a maintainer's reset leaves
-//     the two re-run caps, the linked repositories setting, the links and
-//     the model as they are (only an admin resets those). 200, RepositoryDetailView.
+//     the two re-run caps, the linked repositories setting, the links, who is
+//     trusted, the model and the token quota as they are (only an admin resets those). 200, RepositoryDetailView.
 //   - GET /api/admin/linkable?instance=&repo=&search= (admins only): LinkableView,
 //     the repositories the instance's review App reaches (at most 200, by name),
 //     each with whether `repo` (a repository switched on, GitHub only; 400 for
@@ -1112,6 +1134,10 @@ type AuditView struct {
 //     replaces what it names, checks the whole, connects again. An address
 //     or App ID that differs is 400; an instance of the config is 409.
 //     200, InstanceAdminView.
+//   - PUT /api/admin/instances/{name}/token-quota {"monthlyTokenQuota": n|null}:
+//     the instance's token quota per UTC month (a whole number from 1 to
+//     1000000000000000, or null for none; else 400). 204; 409 for an instance
+//     of the config (set it there) or one being removed.
 //   - DELETE /api/admin/instances/{name}: 202 {"status": "removing"}. Its
 //     runs are superseded and its repositories, accounts and sessions go
 //     now; pergent.sh takes the webhooks off the platform and deletes the
@@ -1193,6 +1219,10 @@ type InstanceAdminView struct {
 	// TrustedAuthorsOnly is the default of the instance's repositories:
 	// "follow_visibility", "on" or "off".
 	TrustedAuthorsOnly string `json:"trustedAuthorsOnly"`
+	// MonthlyTokenQuota is the instance's token quota per UTC month; null
+	// for none. TokensThisMonth is what its reviews used this month.
+	MonthlyTokenQuota *int64 `json:"monthlyTokenQuota"`
+	TokensThisMonth   int64  `json:"tokensThisMonth"`
 	// Platform is "gitlab" or "github"; Source is "config" or "dashboard".
 	Platform string `json:"platform"`
 	Source   string `json:"source"`

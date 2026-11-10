@@ -37,6 +37,7 @@
 | [Learn from dismissals](concepts/learn-from-dismissals.md) | Teach reviews what isn't a problem |
 | [Linked repositories](concepts/linked-repositories.md) | Check a change against the repositories that depend on it |
 | [Trusted authors](concepts/trusted-authors.md) | Who gets reviewed without being started |
+| [Monthly token quota](concepts/token-quota.md) | A ceiling on the tokens an instance or repository spends |
 | [What a Job can and cannot see](concepts/job-isolation.md) | How a review is sandboxed |
 | [Fork merge requests](concepts/fork-merge-requests.md) | Changes from forks |
 | [Switching a repository off](concepts/switching-off.md) | What's removed and what's kept |

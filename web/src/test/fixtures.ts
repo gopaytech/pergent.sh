@@ -305,11 +305,15 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
     trustedAuthorsOnly: { value: "follow_visibility", overridden: false },
     trustedAuthors: { value: [], overridden: false },
     model: { value: null, overridden: false },
+    // Only an admin is sent the quota.
+    ...(role === "admin" ? { monthlyTokenQuota: { value: null, overridden: false } } : {}),
   },
   attention: repo.health === "attention" ? [overview.attention[0]] : [],
   waiting: [],
   instanceTrustedAuthorsOnly: "follow_visibility",
   model: "anthropic / claude-sonnet",
+  // Only an admin is given the usage against the quotas.
+  quota: null,
   // Only an admin of the repository is given the choices.
   modelChoices:
     role === "admin"
@@ -553,6 +557,8 @@ export const models: ModelsAdminView = { canSetDefault: true, followingDefault: 
 export const instanceGitLab: InstanceAdminView = {
   name: "main",
   trustedAuthorsOnly: "follow_visibility",
+  monthlyTokenQuota: null,
+  tokensThisMonth: 0,
   platform: "gitlab",
   source: "config",
   removing: false,
@@ -572,6 +578,8 @@ export const instanceGitLab: InstanceAdminView = {
 export const instanceGitHub: InstanceAdminView = {
   name: "hub",
   trustedAuthorsOnly: "follow_visibility",
+  monthlyTokenQuota: null,
+  tokensThisMonth: 0,
   platform: "github",
   source: "dashboard",
   removing: false,

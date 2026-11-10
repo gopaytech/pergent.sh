@@ -1,6 +1,6 @@
 # 🔐 Trusted authors
 
-On a public repository anyone can open a change, usually from a fork, and so start a review on your LLM account, or try to talk the review into a clean result. With **Trusted authors only** on, pergent.sh reviews a change by itself only when its author is trusted: they have write access to the repository (GitLab Developer or above, inherited access included; GitHub `write`, `maintain` or `admin`), or they are on the repository's allowlist. Anyone else's change waits:
+On a public repository anyone can open a change, usually from a fork, and so start a review on your LLM account, or try to talk the review into a clean result. With **Trusted authors only** on, pergent.sh reviews a change by itself only when its author is trusted: they have write access to the repository (GitLab Developer or above, inherited access included; GitHub `write`, `maintain` or `admin`), or they are on the repository's allowlist. Anyone else's change waits (trust is checked before the [monthly token quota](token-quota.md), so an untrusted author's change waits for trust first):
 
 - no run, no Job and no LLM call;
 - one note on the change, posted once: ``Not reviewed automatically: the author isn't a trusted author of this repository. Someone with write access can start a review with `@<bot> review`.``

@@ -22,6 +22,7 @@ import {
 import CommentLayoutEditor from "../CommentLayoutEditor";
 import LinkedReposEditor, { tidyLinks, type LinkableState } from "../LinkedReposEditor";
 import { useWrite } from "../layout/write";
+import { parseQuota, quotaProblem, quotaText } from "../quota";
 import { ErrorBox, Loading, Switch, bytesText } from "../ui";
 
 // SettingsTab edits a repository's settings (maintainers and admins only;
@@ -99,6 +100,8 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
         canSetTrust={view.role === "admin"}
         // So is the model: it decides what the reviews cost.
         canSetModel={view.role === "admin"}
+        // And the token quota.
+        canSetQuota={view.role === "admin"}
         modelNow={view.model}
         modelChoices={view.modelChoices}
         instanceTrust={view.instanceTrustedAuthorsOnly}
@@ -121,7 +124,7 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
           const caps =
             view.role === "admin"
               ? ""
-              : " The re-run caps stay as they are; only an admin of this repository resets them. So do the linked repositories, who is trusted and the model.";
+              : " The re-run caps stay as they are; only an admin of this repository resets them. So do the linked repositories, who is trusted, the model and the token quota.";
           if (window.confirm(`Put every setting of this repository back to its default?${caps}`)) reset.mutate();
         }}
       />
@@ -273,6 +276,8 @@ type Draft = {
   trustedAuthors: TrustedAuthor[];
   // The ID of the entry of the list of models; "" follows the default.
   model: string;
+  // The quota as typed; "" is none of its own.
+  monthlyTokenQuota: string;
 };
 
 // trustModeWords is a trusted-authors mode in words.
@@ -316,6 +321,7 @@ function Form({
   canSetLinks,
   canSetTrust,
   canSetModel,
+  canSetQuota,
   modelNow,
   modelChoices,
   instanceTrust,
@@ -335,6 +341,7 @@ function Form({
   canSetLinks: boolean;
   canSetTrust: boolean;
   canSetModel: boolean;
+  canSetQuota: boolean;
   // modelNow is "provider / model" the repository runs on, modelChoices what
   // an admin of it can pick.
   modelNow: string;
@@ -378,6 +385,7 @@ function Form({
       settings.trustedAuthorsOnly.overridden && settings.trustedAuthorsOnly.value !== "follow_visibility" ? settings.trustedAuthorsOnly.value : "",
     trustedAuthors: settings.trustedAuthors.value,
     model: settings.model.value ?? "",
+    monthlyTokenQuota: quotaText(settings.monthlyTokenQuota?.value ?? null),
   };
   // What "Default" would give the repository; none flagged, none named.
   const defaultChoice = modelChoices.find((c) => c.default);
@@ -422,6 +430,15 @@ function Form({
     }
     // The model is an admin's too (the server would refuse the whole save).
     if (canSetModel && d.model !== initial.model) body.model = d.model === "" ? null : d.model;
+    // So is the token quota: it stops the repository's reviews.
+    if (canSetQuota && settings.monthlyTokenQuota && d.monthlyTokenQuota.trim() !== initial.monthlyTokenQuota) {
+      const quota = parseQuota(d.monthlyTokenQuota);
+      if (quota === undefined) {
+        setProblem(quotaProblem);
+        return;
+      }
+      if (quota !== settings.monthlyTokenQuota.value) body.monthlyTokenQuota = quota;
+    }
     // The linked repositories are an admin's: a maintainer's save never
     // carries them (the server would refuse the whole save). No links is sent
     // as null.
@@ -601,6 +618,23 @@ function Form({
           </select>
           {!locked && !canSetModel && <div className="meta">Only admins of this repository change the model.</div>}
         </Setting>
+        {canSetQuota && settings.monthlyTokenQuota && (
+          <Setting
+            name="Monthly token quota"
+            overridden={settings.monthlyTokenQuota.overridden}
+            help="Tokens per calendar month (UTC), input plus output. Empty: limited only by the instance's quota."
+          >
+            <input
+              type="text"
+              inputMode="numeric"
+              aria-label="Monthly token quota"
+              placeholder="no quota"
+              value={d.monthlyTokenQuota}
+              disabled={disabled}
+              onChange={(e) => set("monthlyTokenQuota", e.target.value)}
+            />
+          </Setting>
+        )}
         <div className="set" role="group" aria-label="Trusted authors">
           <div>
             <div className="name">

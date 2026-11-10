@@ -11,6 +11,7 @@ import {
   type SignInMode,
 } from "../api";
 import { useWrite } from "../layout/write";
+import { QuotaLine, parseQuota, quotaProblem, quotaText } from "../quota";
 import { CopyButton, ErrorBox, Loading, Pill, noFill, platformName, secretFill, secretText } from "../ui";
 
 // Integrations is, for admins, the instances pergent.sh reviews on (they add,
@@ -170,6 +171,7 @@ function InstanceCard({ inst }: { inst: InstanceAdminView }) {
         <WebhookURL inst={inst} />
         <div>{approverWords(inst.approver)}</div>
         <TrustMode inst={inst} locked={locked} />
+        <TokenQuota key={String(inst.monthlyTokenQuota)} inst={inst} locked={locked} />
         {config && <div className="meta">This instance is managed by the config file; change it there.</div>}
       </div>
       {fields.map((f) => (
@@ -217,6 +219,56 @@ function TrustMode({ inst, locked }: { inst: InstanceAdminView; locked: boolean 
           <option value="off">off (trust every author)</option>
         </select>
       </label>
+      {change.isError && <ErrorBox error={change.error} />}
+    </div>
+  );
+}
+
+// TokenQuota is the instance's tokens per UTC month, with what its
+// repositories used so far. Empty: no quota.
+function TokenQuota({ inst, locked }: { inst: InstanceAdminView; locked: boolean }) {
+  const client = useQueryClient();
+  const write = useWrite();
+  const [text, setText] = useState(quotaText(inst.monthlyTokenQuota));
+  const [problem, setProblem] = useState("");
+  const change = useMutation({
+    mutationFn: (monthlyTokenQuota: number | null) =>
+      write<void>("PUT", `/api/admin/instances/${encodeURIComponent(inst.name)}/token-quota`, { monthlyTokenQuota }),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["admin-instances"] }),
+  });
+  const save = () => {
+    const quota = parseQuota(text);
+    if (quota === undefined) {
+      setProblem(quotaProblem);
+      return;
+    }
+    setProblem("");
+    change.mutate(quota);
+  };
+  return (
+    <div>
+      <QuotaLine ariaLabel="Instance token quota" use={{ used: inst.tokensThisMonth, limit: inst.monthlyTokenQuota }} />
+      <div className="search">
+        <label>
+          Monthly token quota{" "}
+          <input
+            type="text"
+            inputMode="numeric"
+            aria-label="Monthly token quota"
+            placeholder="no quota"
+            value={text}
+            disabled={locked}
+            onChange={(e) => setText(e.target.value)}
+          />
+        </label>
+        {!locked && (
+          <button type="button" className="btn small" disabled={change.isPending} onClick={save}>
+            Save
+          </button>
+        )}
+      </div>
+      <div className="meta">Tokens per calendar month (UTC), input plus output. Empty: no quota.</div>
+      {problem && <div className="meta problem">{problem}</div>}
       {change.isError && <ErrorBox error={change.error} />}
     </div>
   );

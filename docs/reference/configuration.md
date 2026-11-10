@@ -16,8 +16,10 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `gitlab[].approve_with_review_bot` | one of `approve_token_env` and `approve_with_review_bot` | `true` to let the review bot's own user approve too, with no approve token. See [Requirements](../setup/install.md#-requirements) for what this gives up. |
 | `gitlab[].webhook_secret_env` | required | Name of the env var with the webhook secret. GitLab sends it as `X-Gitlab-Token`. |
 | `gitlab[].trusted_authors_only` | `follow_visibility` | The default of the instance's repositories for [Trusted authors](../concepts/trusted-authors.md): `follow_visibility` (on for a public project, off for an internal or private one), `on` or `off` (every author reviewed). |
+| `gitlab[].monthly_token_quota` | none (unlimited) | The instance's [monthly token quota](../concepts/token-quota.md): a whole number of tokens (input plus output) per UTC month, 1 to 1000000000000000. When it is used up, no review starts on the instance until the 1st or until an admin starts one. Set here, it wins over the dashboard and shows there read-only. |
 | `github[].name` | required | Instance name, `[a-z0-9-]+`, unique across `gitlab` and `github`. Part of the webhook URL. One instance is one pair of Apps and covers every organization they are installed on. |
 | `github[].trusted_authors_only` | `follow_visibility` | As `gitlab[].trusted_authors_only`: on for a public repository, off for a private one. |
+| `github[].monthly_token_quota` | none (unlimited) | As `gitlab[].monthly_token_quota`. |
 | `github[].api_url` | `https://api.github.com` | GitHub's REST API. Only GitHub.com is supported: another `https` URL (GitHub Enterprise Server) is accepted but untested. |
 | `github[].review_app.app_id` | required | The review App's numeric App ID. |
 | `github[].review_app.private_key_env` | required | Name of the env var with the review App's private key. |
@@ -59,6 +61,7 @@ The config file is YAML (`pergent-sh serve --config <path>`, default `/etc/perge
 | `repositories[].rerun_limit_per_repo` | 50 | The same cap for the whole repository, 1 to 1000. |
 | `repositories[].trusted_authors_only` | the instance's | `on` or `off`: whether only [trusted authors](../concepts/trusted-authors.md) are reviewed without someone starting it. |
 | `repositories[].trusted_authors` | none | The repository's allowlist: a list of `{id, username}`, the platform's numeric user ID (required) and the username, for reading. |
+| `repositories[].monthly_token_quota` | none | The repository's own [monthly token quota](../concepts/token-quota.md), inside its instance's: 1 to 1000000000000000 tokens per UTC month. Without it the repository is limited only by the instance's quota. |
 | `llm.provider` | required with an `llm:` block | opencode provider ID, such as `anthropic`. The whole `llm:` block is optional when `dashboard.url` is set (admins keep the [list of models](../concepts/models.md) in the dashboard). A block that is present adds a read-only entry, `config`, to that list. It is the default while it exists, so **Set as default** is unavailable; other entries can still be added and picked. Any field set makes the block present: it must then be complete (`provider`, `model` and the key variable). Without `dashboard.url` it is required. A repository in the config file follows the default. |
 | `llm.model` | required with an `llm:` block | Model name, such as `claude-sonnet-4`. |
 | `llm.base_url` | none | Custom API base URL for the provider. |
