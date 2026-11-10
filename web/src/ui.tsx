@@ -1,6 +1,6 @@
 // Small pieces the pages share. Every bit of text from the API is passed to
 // React as a child, so it is shown as text: no HTML is ever built from it.
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { ApiError, safeHref, type Outcome, type SecretView, type SkillSource } from "./api";
 
@@ -160,6 +160,31 @@ export function ExternalLink({ href, children }: { href: string | undefined; chi
     <a href={safe} target="_blank" rel="noopener noreferrer">
       {children}
     </a>
+  );
+}
+
+// CopyButton puts text on the clipboard. what names it for screen readers
+// ("Copy <what>"); it says Copied for a moment. No clipboard is no harm: the
+// text is on screen to select.
+export function CopyButton({ text, what }: { text: string; what: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+    } catch {
+      // No clipboard here: the text is on screen to select.
+    }
+  };
+  return (
+    <button type="button" className="btn small" aria-label={copied ? "Copied" : `Copy ${what}`} onClick={copy}>
+      {copied ? "Copied" : "Copy"}
+    </button>
   );
 }
 

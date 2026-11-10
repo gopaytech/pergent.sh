@@ -31,8 +31,8 @@ const usageTimeout = 30 * time.Second
 type Results interface {
 	Run(ctx context.Context, id string) (store.Run, bool, error)
 	StoreResult(ctx context.Context, id, token string, body []byte, now time.Time) (store.ResultOutcome, error)
-	ReportFailure(ctx context.Context, id, reason string, now time.Time) (bool, error)
-	ReplaceWithFailure(ctx context.Context, id, reason string) error
+	ReportFailure(ctx context.Context, id string, f store.Failure, now time.Time) (bool, error)
+	ReplaceWithFailure(ctx context.Context, id string, f store.Failure) error
 	RecordUsage(ctx context.Context, id string, skills []store.SkillUsage) error
 }
 
@@ -111,7 +111,7 @@ func (h *Handler) stored(w http.ResponseWriter, ctx context.Context, id string, 
 		return
 	}
 	if reason != "" {
-		if err := h.Results.ReplaceWithFailure(ctx, id, unusable+reason); err != nil {
+		if err := h.Results.ReplaceWithFailure(ctx, id, store.Failure{Reason: unusable + reason, Step: "delivery"}); err != nil {
 			h.log().Error("replace result with failure", "run", id, "error", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
@@ -251,7 +251,7 @@ func checkSkills(res *result.Result, run store.Run) string {
 }
 
 func (h *Handler) invalid(w http.ResponseWriter, ctx context.Context, id string, now time.Time, reason string) {
-	if _, err := h.Results.ReportFailure(ctx, id, unusable+reason, now); err != nil {
+	if _, err := h.Results.ReportFailure(ctx, id, store.Failure{Reason: unusable + reason, Step: "delivery"}, now); err != nil {
 		h.log().Error("report failure", "run", id, "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

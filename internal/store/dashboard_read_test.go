@@ -369,10 +369,14 @@ func TestDashboardQueriesUseIndexes(t *testing.T) {
 	s := newStore(t)
 	since := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	// A year of runs over 200 repositories, so the planner has a table
-	// worth choosing an index for.
-	if _, err := s.pool.Exec(ctx, `INSERT INTO runs (instance, project_id, mr_iid, project_path, head_sha, state, created_at)
+	// worth choosing an index for. Spread over a year, the reviews windows
+	// select part of it; packed into two weeks, the 90-day window held every
+	// row and the two project indexes tied. Each run reports 5 minutes after
+	// it starts, so updated_at isn't created_at.
+	if _, err := s.pool.Exec(ctx, `INSERT INTO runs (instance, project_id, mr_iid, project_path, head_sha, state, created_at, reported_at)
 		SELECT 'main', i % 200, i, 'acme/repo-' || (i % 200), md5(i::text), 'published',
-			$1::timestamptz - (i || ' minutes')::interval
+			$1::timestamptz - (i * 26 || ' minutes')::interval,
+			$1::timestamptz - (i * 26 || ' minutes')::interval + interval '5 minutes'
 		FROM generate_series(1, 20000) i`, since); err != nil {
 		t.Fatal(err)
 	}

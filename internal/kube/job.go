@@ -20,6 +20,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
@@ -32,6 +33,15 @@ const (
 	labelManagedBy = "app.kubernetes.io/managed-by"
 	labelRun       = "pergent.sh/run"
 	managedBy      = "pergent-sh"
+
+	// LabelInstance to LabelHead name the change a review Job is for (labels);
+	// AnnotationProject and AnnotationMRURL name it in full (annotations).
+	LabelInstance     = "pergent.sh/instance"
+	LabelProjectID    = "pergent.sh/project-id"
+	LabelMR           = "pergent.sh/mr"
+	LabelHead         = "pergent.sh/head"
+	AnnotationProject = "pergent.sh/project"
+	AnnotationMRURL   = "pergent.sh/mr-url"
 
 	keyGitToken    = "git-token"
 	keyLLMKey      = "llm-api-key"
@@ -81,6 +91,11 @@ type JobParams struct {
 	// after the checkout. Nil is none, and the Job is then what it was before
 	// linked repositories existed.
 	LinkedClones []LinkedClone
+	// The change this Job reviews, so a Job found in the cluster can be traced
+	// to it. Labels carry Instance, ProjectID, IID and HeadSHA; annotations carry
+	// ProjectPath and MRURL, which a label value cannot hold. A zero value is left out.
+	Instance, ProjectPath, MRURL string
+	ProjectID, IID               int64
 }
 
 // LinkedClone is one linked repository to clone: Dir is its directory name
@@ -144,8 +159,42 @@ func checkLinkedClones(cs []LinkedClone) error {
 	return nil
 }
 
-func labels(runID string) map[string]string {
-	return map[string]string{labelManagedBy: managedBy, labelRun: runID}
+// labels are the run and, when set, the change it reviews. A value Kubernetes
+// would refuse as a label is left out, so one odd name never stops a Job.
+func labels(p JobParams) map[string]string {
+	l := map[string]string{labelManagedBy: managedBy, labelRun: p.RunID}
+	set := func(key, value string) {
+		if value != "" && len(validation.IsValidLabelValue(value)) == 0 {
+			l[key] = value
+		}
+	}
+	set(LabelInstance, p.Instance)
+	if p.ProjectID != 0 {
+		set(LabelProjectID, strconv.FormatInt(p.ProjectID, 10))
+	}
+	if p.IID != 0 {
+		set(LabelMR, strconv.FormatInt(p.IID, 10))
+	}
+	set(LabelHead, p.HeadSHA)
+	return l
+}
+
+// annotations hold what a label value cannot: the project's full path and the
+// change's URL. Nil when neither is set.
+func annotations(p JobParams) map[string]string {
+	var a map[string]string
+	set := func(key, value string) {
+		if value == "" {
+			return
+		}
+		if a == nil {
+			a = map[string]string{}
+		}
+		a[key] = value
+	}
+	set(AnnotationProject, p.ProjectPath)
+	set(AnnotationMRURL, p.MRURL)
+	return a
 }
 
 func secretsName(p JobParams) string { return p.Name + "-secrets" }
@@ -310,13 +359,13 @@ func BuildJob(p JobParams) *batchv1.Job {
 	}
 
 	return &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: p.Name, Namespace: p.Namespace, Labels: labels(p.RunID)},
+		ObjectMeta: metav1.ObjectMeta{Name: p.Name, Namespace: p.Namespace, Labels: labels(p), Annotations: annotations(p)},
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            ptr(int32(0)),
 			ActiveDeadlineSeconds:   ptr(int64(Deadline(p.Timeout, p.CloneAllowance) / time.Second)),
 			TTLSecondsAfterFinished: ptr(int32(3600)),
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels(p.RunID)},
+				ObjectMeta: metav1.ObjectMeta{Labels: labels(p), Annotations: annotations(p)},
 				Spec: corev1.PodSpec{
 					RestartPolicy:                 corev1.RestartPolicyNever,
 					TerminationGracePeriodSeconds: ptr(int64(30)),
@@ -386,7 +435,7 @@ func BuildConfigMap(p JobParams, owner *batchv1.Job) *corev1.ConfigMap {
 	}
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: inputsName(p), Namespace: p.Namespace, Labels: labels(p.RunID),
+			Name: inputsName(p), Namespace: p.Namespace, Labels: labels(p),
 			OwnerReferences: ownerRef(owner),
 		},
 		Data: data,
@@ -397,7 +446,7 @@ func BuildConfigMap(p JobParams, owner *batchv1.Job) *corev1.ConfigMap {
 func BuildSecret(p JobParams, owner *batchv1.Job, s Secrets) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: secretsName(p), Namespace: p.Namespace, Labels: labels(p.RunID),
+			Name: secretsName(p), Namespace: p.Namespace, Labels: labels(p),
 			OwnerReferences: ownerRef(owner),
 		},
 		Type: corev1.SecretTypeOpaque,

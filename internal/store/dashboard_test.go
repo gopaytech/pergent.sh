@@ -240,7 +240,7 @@ func TestRunsToLog(t *testing.T) {
 		}
 	})
 	logged := mk(12, "l", func(id string) {
-		if _, err := s.ReportFailure(ctx, id, "x", now); err != nil {
+		if _, err := s.ReportFailure(ctx, id, Failure{Reason: "x"}, now); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.PutRunLog(ctx, id, "have it"); err != nil {
@@ -248,7 +248,7 @@ func TestRunsToLog(t *testing.T) {
 		}
 	})
 	old := mk(13, "o", func(id string) {
-		if _, err := s.ReportFailure(ctx, id, "x", now.Add(-5*time.Hour)); err != nil {
+		if _, err := s.ReportFailure(ctx, id, Failure{Reason: "x"}, now.Add(-5*time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -345,7 +345,7 @@ func TestCountFailedRuns(t *testing.T) {
 		if _, err := s.pool.Exec(ctx, `UPDATE runs SET project_path = $2 WHERE id = $1::uuid`, id, project); err != nil {
 			t.Fatal(err)
 		}
-		if ok, err := s.ReportFailure(ctx, id, reason, at); err != nil || !ok {
+		if ok, err := s.ReportFailure(ctx, id, Failure{Reason: reason}, at); err != nil || !ok {
 			t.Fatalf("ReportFailure = %v, %v", ok, err)
 		}
 	}

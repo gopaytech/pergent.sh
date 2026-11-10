@@ -5,7 +5,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/gitlab"
+	"github.com/gopaytech/pergent.sh/internal/policy"
+	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -55,7 +58,7 @@ func TestPublishRecordsDecision(t *testing.T) {
 			var id string
 			if tc.failure != "" {
 				id = env.Dispatched(1, head)
-				if _, err := env.Store.ReportFailure(env.ctx, id, tc.failure, env.Now()); err != nil {
+				if _, err := env.Store.ReportFailure(env.ctx, id, store.Failure{Reason: tc.failure}, env.Now()); err != nil {
 					t.Fatal(err)
 				}
 			} else {
@@ -78,6 +81,26 @@ func TestPublishRecordsDecision(t *testing.T) {
 				t.Errorf("reason = %q, want one containing %q", r.OutcomeReason, tc.inReason)
 			}
 		})
+	}
+}
+
+// pergent's own error result failed at the review step: the dashboard's
+// reason says so. The comment keeps today's text.
+func TestErrorResultReasonNamesStep(t *testing.T) {
+	o := policy.Outcome{Result: &result.Result{Status: "error", Error: &result.Error{Code: "untrusted_instructions", Message: "untrusted instructions"}}}
+	d := policy.Decide(o, config.FailureStatusFailed)
+
+	rd := decisionOf(o, d, false, approvalMade)
+	if rd.Outcome != store.OutcomeFailed || rd.Reason != "the review failed: untrusted instructions" {
+		t.Errorf("decision = %q, %q; want failed with %q", rd.Outcome, rd.Reason, "the review failed: untrusted instructions")
+	}
+	if !strings.Contains(d.Comment, "untrusted instructions") || strings.Contains(d.Comment, "the review failed: untrusted") {
+		t.Errorf("comment = %q; want today's text", d.Comment)
+	}
+	// A failure reason the watcher stored already names its step.
+	o = policy.Outcome{FailureReason: "the clone failed (checkout exited with code 128)"}
+	if rd := decisionOf(o, policy.Decide(o, config.FailureStatusFailed), false, approvalMade); rd.Reason != o.FailureReason {
+		t.Errorf("reason = %q, want %q", rd.Reason, o.FailureReason)
 	}
 }
 

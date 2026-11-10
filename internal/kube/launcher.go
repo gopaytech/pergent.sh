@@ -116,23 +116,42 @@ const logTailLines = 20000
 // newest pod of the Job, cut on a UTF-8 boundary. It fails when the Job has
 // no pod or the container has no log to give.
 func (l *Launcher) Logs(ctx context.Context, jobName string, keepBytes int) (string, error) {
+	return l.containerLog(ctx, jobName, containerPergent, keepBytes)
+}
+
+// CheckoutLog is Logs for the checkout init container, which clones the
+// repository and any linked ones.
+func (l *Launcher) CheckoutLog(ctx context.Context, jobName string, keepBytes int) (string, error) {
+	return l.containerLog(ctx, jobName, containerCheckout, keepBytes)
+}
+
+// jobPods lists the pods of a Job, oldest first.
+func (l *Launcher) jobPods(ctx context.Context, jobName string) ([]corev1.Pod, error) {
 	pods, err := l.Client.CoreV1().Pods(l.Namespace).List(ctx, metav1.ListOptions{LabelSelector: "job-name=" + jobName})
 	if err != nil {
-		return "", fmt.Errorf("list pods of job %s: %w", jobName, err)
+		return nil, fmt.Errorf("list pods of job %s: %w", jobName, err)
 	}
-	if len(pods.Items) == 0 {
-		return "", fmt.Errorf("job %s has no pod", jobName)
-	}
-	sort.Slice(pods.Items, func(i, j int) bool {
+	sort.SliceStable(pods.Items, func(i, j int) bool {
 		return pods.Items[i].CreationTimestamp.Before(&pods.Items[j].CreationTimestamp)
 	})
-	pod := pods.Items[len(pods.Items)-1].Name
+	return pods.Items, nil
+}
+
+func (l *Launcher) containerLog(ctx context.Context, jobName, container string, keepBytes int) (string, error) {
+	pods, err := l.jobPods(ctx, jobName)
+	if err != nil {
+		return "", err
+	}
+	if len(pods) == 0 {
+		return "", fmt.Errorf("job %s has no pod", jobName)
+	}
+	pod := pods[len(pods)-1].Name
 
 	stream := l.LogStream
 	if stream == nil {
 		stream = l.clientLogStream
 	}
-	body, err := stream(ctx, pod, containerPergent, logTailLines)
+	body, err := stream(ctx, pod, container, logTailLines)
 	if err != nil {
 		return "", fmt.Errorf("read the log of pod %s: %w", pod, err)
 	}

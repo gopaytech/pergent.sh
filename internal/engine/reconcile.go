@@ -101,6 +101,7 @@ func (e *Engine) reconcile(ctx context.Context, only map[repoKey]bool) error {
 		}
 		wanted[keyOf(repo.Instance, repo.Project)] = true
 		e.refreshOutOfMemory(ctx, repo.Instance, repo.Project)
+		e.refreshCloneFailing(ctx, repo.Instance, repo.Project)
 		var id int64
 		if repo.Platform == config.PlatformGitHub {
 			id, err = e.reconcileGitHubRepo(ctx, repo)

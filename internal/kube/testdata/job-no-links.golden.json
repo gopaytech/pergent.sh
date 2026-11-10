@@ -6,6 +6,7 @@
       "creationTimestamp": null,
       "labels": {
         "app.kubernetes.io/managed-by": "pergent-sh",
+        "pergent.sh/head": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b",
         "pergent.sh/run": "7f3a9c12-0b4d-4e5f-8a6b-1c2d3e4f5a6b"
       }
     },
@@ -23,6 +24,7 @@
       "creationTimestamp": null,
       "labels": {
         "app.kubernetes.io/managed-by": "pergent-sh",
+        "pergent.sh/head": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b",
         "pergent.sh/run": "7f3a9c12-0b4d-4e5f-8a6b-1c2d3e4f5a6b"
       }
     },
@@ -34,6 +36,7 @@
           "creationTimestamp": null,
           "labels": {
             "app.kubernetes.io/managed-by": "pergent-sh",
+            "pergent.sh/head": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b",
             "pergent.sh/run": "7f3a9c12-0b4d-4e5f-8a6b-1c2d3e4f5a6b"
           }
         },

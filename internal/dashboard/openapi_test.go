@@ -846,6 +846,8 @@ var openAPISchemas = map[string]schemaType{
 	"DismissedView":          outputSchema(DismissedView{}),
 	"CheckView":              outputSchema(CheckView{}),
 	"LogView":                outputSchema(LogView{}),
+	"KubernetesView":         outputSchema(KubernetesView{}),
+	"DiagnosticsView":        outputSchema(DiagnosticsView{}),
 	"RepositoryView":         outputSchema(RepositoryView{}),
 	"Last7View":              outputSchema(Last7View{}),
 	"RepositoryDetailView":   outputSchema(RepositoryDetailView{}),

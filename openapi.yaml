@@ -1015,6 +1015,33 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/ErrorBody'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/runs/{id}/diagnostics:
+    get:
+      operationId: getRunDiagnostics
+      tags: [Overview and reviews]
+      summary: What was kept of a failed Job
+      description: An admin of the run's repository gets the clone log as it was and the pod's state. Anyone
+        else who can see the run gets the clone log with linked repositories masked, which may be empty, and no
+        podState.
+      x-pergent-access: session
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: The diagnostics.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DiagnosticsView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404':
+          description: No such run, or nothing was kept.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorBody'}
+        '500': {$ref: '#/components/responses/InternalError'}
   # ------------------------------------------------------------- repositories
   /api/repositories:
     get:
@@ -4179,6 +4206,30 @@ components:
       required: [text]
       properties:
         text: {type: string}
+    DiagnosticsView:
+      description: What was kept of a failed Job. For an admin the clone log is whole and podState is the
+        pod's state; for anyone else the clone log has linked repositories masked (it may be empty) and
+        podState is left out.
+      type: object
+      required: [cloneLog]
+      properties:
+        cloneLog: {type: string}
+        podState:
+          type: [string, 'null']
+          description: The pod's state when the Job failed. Admins only, and the key is left out for others, never null.
+    KubernetesView:
+      description: The cluster side of a run, for an admin to look up with kubectl.
+      type: object
+      required: [namespace, job, pod, detail]
+      properties:
+        namespace: {type: string}
+        job: {type: string}
+        pod:
+          type: string
+          description: '"" until a pod was seen.'
+        detail:
+          type: string
+          description: More text about why the Job failed to start; "" when there is none.
     NewAccountView:
       description: A local admin just made, with its generated password. The only time the password is
         shown.
@@ -4433,6 +4484,12 @@ components:
         latestDecided:
           type: boolean
           description: True for the one run of the change that dismiss and restore act on.
+        kubernetes:
+          description: The run's Job and pod. Admins only, and the key is left out for others, never null.
+            Present from the moment the run has a Job.
+          oneOf:
+          - $ref: '#/components/schemas/KubernetesView'
+          - type: 'null'
     RunSummary:
       description: One run in a review's history.
       type: object

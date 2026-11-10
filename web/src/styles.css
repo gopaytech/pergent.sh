@@ -691,7 +691,8 @@ pre {
   line-height: 1.8;
 }
 
-.webhook-url code {
+.webhook-url code,
+.kube-command code {
   overflow-wrap: anywhere;
 }
 
