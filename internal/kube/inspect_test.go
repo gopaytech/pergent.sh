@@ -214,10 +214,31 @@ func TestInspectReasons(t *testing.T) {
 				Failure: Failure{Step: StepDelivery, Reason: "the review job couldn't deliver its result (exit code 4)"}},
 		},
 		{
-			name: "other failure",
+			name: "pergent exit 1 after the clone",
 			job:  jobWith("j", cond(batchv1.JobFailed, "BackoffLimitExceeded", failedAt)),
 			pods: []*corev1.Pod{podFor("j", cloneStart, []corev1.ContainerStatus{okInit}, []corev1.ContainerStatus{terminated("pergent", 1, "Error", cloneEnd, failedAt)})},
 			want: Observation{Exists: true, Finished: true, FinishedAt: failedAt, Clone: 37 * time.Second, PodName: "j-abcde", Checkout: 2,
+				Failure: Failure{Step: StepReview, Reason: "the review job failed (BackoffLimitExceeded)"}},
+		},
+		{
+			name: "pergent exit 2 after the clone",
+			job:  jobWith("j", cond(batchv1.JobFailed, "BackoffLimitExceeded", failedAt)),
+			pods: []*corev1.Pod{podFor("j", cloneStart, []corev1.ContainerStatus{okInit}, []corev1.ContainerStatus{terminated("pergent", 2, "Error", cloneEnd, failedAt)})},
+			want: Observation{Exists: true, Finished: true, FinishedAt: failedAt, Clone: 37 * time.Second, PodName: "j-abcde", Checkout: 2,
+				Failure: Failure{Step: StepReview, Reason: "the review job failed (BackoffLimitExceeded)"}},
+		},
+		{
+			name: "failure after the clone, no pergent exit seen",
+			job:  jobWith("j", cond(batchv1.JobFailed, "BackoffLimitExceeded", failedAt)),
+			pods: []*corev1.Pod{podFor("j", cloneStart, []corev1.ContainerStatus{okInit}, []corev1.ContainerStatus{running("pergent")})},
+			want: Observation{Exists: true, Finished: true, FinishedAt: failedAt, Clone: 37 * time.Second, PodName: "j-abcde", Checkout: 2,
+				Failure: Failure{Step: StepUnknown, Reason: "the review job failed (BackoffLimitExceeded)"}},
+		},
+		{
+			name: "pergent exit 1, clone not seen to finish",
+			job:  jobWith("j", cond(batchv1.JobFailed, "BackoffLimitExceeded", failedAt)),
+			pods: []*corev1.Pod{podFor("j", cloneStart, nil, []corev1.ContainerStatus{terminated("pergent", 1, "Error", cloneEnd, failedAt)})},
+			want: Observation{Exists: true, Finished: true, FinishedAt: failedAt, PodName: "j-abcde",
 				Failure: Failure{Step: StepUnknown, Reason: "the review job failed (BackoffLimitExceeded)"}},
 		},
 		{
@@ -439,15 +460,26 @@ func TestInspectListsJobEventsOnlyForTheNoPodRule(t *testing.T) {
 	}
 }
 
-// TestInspectEventsErrorIsAnError: only Forbidden means "no detail"; any other
-// failure to read the events is an error, so the watcher looks again.
-func TestInspectEventsErrorIsAnError(t *testing.T) {
+// TestInspectEventsErrorLeavesOutTheDetail: events that can't be read, for
+// any reason, only leave out the detail. The Job with no pod is still stuck,
+// and Inspect (so the watcher, and ScanFailure) doesn't fail on it.
+func TestInspectEventsErrorLeavesOutTheDetail(t *testing.T) {
 	cs := inspectCluster(t, jobCreated("j", inspectNow.Add(-11*time.Minute)), nil)
 	cs.PrependReactor("list", "events", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, errors.New("connection reset")
 	})
-	if _, err := (&Launcher{Client: cs, Namespace: "reviews"}).Inspect(context.Background(), "j", inspectNow); err == nil {
-		t.Error("Inspect returned no error when the events could not be read")
+	l := &Launcher{Client: cs, Namespace: "reviews"}
+	got, err := l.Inspect(context.Background(), "j", inspectNow)
+	if err != nil {
+		t.Fatalf("Inspect = %v; want no error when the events can't be read", err)
+	}
+	want := Failure{Step: StepStarting, Reason: "the review couldn't start: no pod could be created"}
+	if got.Stuck != want {
+		t.Errorf("Stuck = %+v; want %+v", got.Stuck, want)
+	}
+	// ScanFailure reads the Job the same way: the Job is still running.
+	if text, err := l.ScanFailure(context.Background(), "j"); err != nil || text != "" {
+		t.Errorf("ScanFailure = %q, %v; want \"\", nil", text, err)
 	}
 }
 

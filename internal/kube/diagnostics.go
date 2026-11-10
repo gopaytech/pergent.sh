@@ -65,7 +65,7 @@ func (l *Launcher) CheckoutRepoURL(ctx context.Context, jobName string) (string,
 // otherRepository stands in for a repository MaskLinked can't name.
 const otherRepository = "<another repository>"
 
-var urlInText = regexp.MustCompile("https?://[^\\s'\"<>`]+")
+var urlInText = regexp.MustCompile("(?i)https?://[^\\s'\"<>`]+")
 
 // MaskLinked makes a clone log safe to show to someone who may not know the
 // linked repositories, failing closed: no linked repository's name is left in
@@ -222,8 +222,8 @@ func maskMoved(text string) string {
 // PodState describes the newest pod of a Job as text for an admin: its phase,
 // its PodScheduled condition, each container's state, then the newest events
 // of the pod and of the Job, oldest first. A Job with no pod has only its Job
-// events. eventsForbidden says the cluster refused to list events, so the text
-// may lack them.
+// events. Events that can't be read are left out; eventsForbidden says the
+// cluster refused to list them, so the text may lack them.
 func (l *Launcher) PodState(ctx context.Context, jobName string) (text string, eventsForbidden bool, err error) {
 	pods, err := l.jobPods(ctx, jobName)
 	if err != nil {
@@ -234,16 +234,11 @@ func (l *Launcher) PodState(ctx context.Context, jobName string) (text string, e
 	if n := len(pods); n > 0 {
 		pod := &pods[n-1]
 		writePodLines(&b, pod)
-		evs, forbidden, err := l.ObjectEvents(ctx, "Pod", pod.Name)
-		if err != nil {
-			return "", false, fmt.Errorf("list events of pod %s: %w", pod.Name, err)
-		}
+		// events that can't be read are left out, as forbidden ones are
+		evs, forbidden, _ := l.ObjectEvents(ctx, "Pod", pod.Name)
 		events, eventsForbidden = evs, forbidden
 	}
-	evs, forbidden, err := l.ObjectEvents(ctx, "Job", jobName)
-	if err != nil {
-		return "", false, fmt.Errorf("list events of job %s: %w", jobName, err)
-	}
+	evs, forbidden, _ := l.ObjectEvents(ctx, "Job", jobName)
 	events, eventsForbidden = append(events, evs...), eventsForbidden || forbidden
 
 	sort.SliceStable(events, func(i, j int) bool { return eventTime(events[i]).Before(eventTime(events[j])) })

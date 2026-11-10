@@ -152,7 +152,8 @@ func (l *Launcher) inspect(ctx context.Context, name string, now time.Time) (Obs
 	}
 	var initExit *int32
 	// cloneOOM: the checkout container was OOMKilled; oom: any other was.
-	var cloneOOM, oom, exit4 bool
+	// pergentFailed: the pergent container exited with a code other than 0.
+	var cloneOOM, oom, exit4, pergentFailed bool
 	for i := range pods.Items {
 		pod := &pods.Items[i]
 		if pod.Status.Reason == "Evicted" || storageMessage(pod.Status.Message) {
@@ -203,6 +204,9 @@ func (l *Launcher) inspect(ctx context.Context, name string, now time.Time) (Obs
 			if t != nil && cs.Name == containerPergent && t.ExitCode == 4 {
 				exit4 = true
 			}
+			if t != nil && cs.Name == containerPergent && t.ExitCode != 0 {
+				pergentFailed = true
+			}
 			if !obs.Finished && obs.Stuck.Reason == "" && now.Sub(pod.CreationTimestamp.Time) > stuckAfter {
 				obs.Stuck = imageFailure(cs)
 			}
@@ -211,10 +215,8 @@ func (l *Launcher) inspect(ctx context.Context, name string, now time.Time) (Obs
 
 	if !obs.Finished && len(pods.Items) == 0 && obs.Stuck.Reason == "" &&
 		!job.CreationTimestamp.IsZero() && now.Sub(job.CreationTimestamp.Time) > noPodAfter {
-		events, _, err := l.ObjectEvents(ctx, "Job", name)
-		if err != nil {
-			return Observation{}, jobFacts{}, fmt.Errorf("list events of job %s: %w", name, err)
-		}
+		// Events that can't be read only leave out the detail.
+		events, _, _ := l.ObjectEvents(ctx, "Job", name)
 		obs.Stuck = Failure{Step: StepStarting, Reason: "the review couldn't start: no pod could be created", Detail: failedCreate(events)}
 	}
 
@@ -238,7 +240,12 @@ func (l *Launcher) inspect(ctx context.Context, name string, now time.Time) (Obs
 			if reason == "" {
 				reason = "unknown reason"
 			}
-			obs.Failure = Failure{Step: StepUnknown, Reason: fmt.Sprintf("the review job failed (%s)", reason)}
+			step := StepUnknown
+			if obs.Checkout == 2 && pergentFailed {
+				// pergent itself exited with an error after the clone.
+				step = StepReview
+			}
+			obs.Failure = Failure{Step: step, Reason: fmt.Sprintf("the review job failed (%s)", reason)}
 		}
 	}
 	facts.oom = oom || cloneOOM

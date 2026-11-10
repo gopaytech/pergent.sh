@@ -35,6 +35,8 @@ func TestMaskLinked(t *testing.T) {
 		{"a name that only starts like the main one", "https://h/g/main-two.git", otherRepository},
 		{"a redirect to a new place", "warning: redirecting to https://h/g/new-name.git/", "warning: redirecting to " + otherRepository},
 		{"a URL of an unknown repository", "fetching https://h/g/stranger.git, then more", "fetching " + otherRepository + ", then more"},
+		{"an unknown repository, the scheme in capitals", "fetching HTTPS://h/g/stranger.git, then more", "fetching " + otherRepository + ", then more"},
+		{"a linked repository, the scheme in capitals", "fatal: repository 'HTTP://h/g/other.git/' not found", "fatal: repository 'linked-1/' not found"},
 		{"a longer name that is not linked", "https://h/g/other-three.git", otherRepository},
 		{"the bare path of a linked repository", "ERROR: Repository not found: g/other.", "ERROR: Repository not found: linked-1."},
 		{"the bare path in another case", "ERROR: G/OTHER-two not found", "ERROR: linked-2 not found"},
@@ -243,14 +245,45 @@ func TestPodStateEventsForbidden(t *testing.T) {
 	}
 }
 
+// TestPodStateEventsError: events that can't be read are left out, as when
+// listing them is forbidden, and the pod lines stay. Only Forbidden sets
+// eventsForbidden.
 func TestPodStateEventsError(t *testing.T) {
 	pod := unscheduled("j", inspectNow.Add(-time.Hour), inspectNow.Add(-50*time.Minute), "no node")
-	cs := inspectCluster(t, jobWith("j"), []*corev1.Pod{pod})
+	cs := inspectCluster(t, jobWith("j"), []*corev1.Pod{pod}, jobEvent("j", "FailedCreate", "quota", inspectNow))
 	cs.PrependReactor("list", "events", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, errors.New("boom")
 	})
 	l := &Launcher{Client: cs, Namespace: "reviews"}
-	if _, _, err := l.PodState(context.Background(), "j"); err == nil {
-		t.Error("a failed event listing was not an error")
+	text, forbidden, err := l.PodState(context.Background(), "j")
+	if err != nil || forbidden {
+		t.Fatalf("err = %v, forbidden = %v; want nil, false", err, forbidden)
+	}
+	if !strings.Contains(text, "Pod j-abcde: phase Pending") || !strings.Contains(text, "PodScheduled=False") {
+		t.Errorf("pod lines missing:\n%s", text)
+	}
+	if strings.Contains(text, "Events") {
+		t.Errorf("events in the text though they couldn't be read:\n%s", text)
+	}
+}
+
+// TestPodStateJobEventsError: the pod's events still show when only the
+// Job's can't be read.
+func TestPodStateJobEventsError(t *testing.T) {
+	pod := unscheduled("j", inspectNow.Add(-time.Hour), inspectNow.Add(-50*time.Minute), "no node")
+	cs := inspectCluster(t, jobWith("j"), []*corev1.Pod{pod}, objectEvent("Pod", "j-abcde", "FailedScheduling", "no node", inspectNow))
+	cs.PrependReactor("list", "events", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if strings.Contains(a.(k8stesting.ListAction).GetListRestrictions().Fields.String(), "kind=Job") {
+			return true, nil, errors.New("boom")
+		}
+		return false, nil, nil
+	})
+	l := &Launcher{Client: cs, Namespace: "reviews"}
+	text, forbidden, err := l.PodState(context.Background(), "j")
+	if err != nil || forbidden {
+		t.Fatalf("err = %v, forbidden = %v; want nil, false", err, forbidden)
+	}
+	if !strings.Contains(text, "Pod j-abcde: phase Pending") || !strings.Contains(text, "FailedScheduling (x1): no node") {
+		t.Errorf("want the pod lines and the pod's event:\n%s", text)
 	}
 }
