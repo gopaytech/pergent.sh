@@ -24,7 +24,7 @@ function show(items: AttentionView[]) {
 describe("AttentionRows", () => {
   it("shows a repository whose clones keep failing as Failing, with the engine's message", () => {
     const message =
-      "Clones of this repository failed 2 times in the last 7 days. Check the clone token's access and the network to the platform.";
+      "Clones of this repository failed 2 times in the last 7 days. Check the clone token's access and the network to the platform, or the Job memory limit if a clone ran out of memory.";
     show([row("clone_failing", message)]);
     expect(screen.getByText(message)).toBeInTheDocument();
     expect(screen.getByText("Failing")).toHaveClass("pill", "bad");

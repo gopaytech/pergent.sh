@@ -310,7 +310,7 @@ Admins read the audit log under **Admin → Audit log**: who did what and when, 
   - one approval is enough to merge, so pergent's approval alone can unlock it;
   - the GitHub approve App isn't installed on the repository or lacks Pull requests: write (for the review App: it lacks that permission), or the approve bot user can't reach it;
   - reviews running out of memory (two or more in the last 7 days);
-  - clones of the repository failing (`clone_failing`: two or more reviews failed at the clone step in the last 7 days; check the clone token's access and the network). It goes when fewer do;
+  - clones of the repository failing (`clone_failing`: two or more reviews failed at the clone step in the last 7 days; check the clone token's access and the network, or the Job memory limit for a clone that ran out of memory). It goes when fewer do;
   - the GitHub approve bot's token expires within 14 days. This one concerns the whole instance and is shown to admins;
   - a run failed because a skill it needs is missing (`skill "x" is not in the skill library`, or `skill "x" is turned on but not found in the repository`), or was skipped because the repository has no skills (`this repository has no skills`). Either goes when a later run of the repository starts a Job ([Skills and instructions](skills.md));
   - the [readiness scan](#readiness-scan) found that no skill the repository uses matches its files (`no_skill_coverage`: `No skill this repository uses matches its files, so its reviews check nothing useful. The Readiness tab suggests skills that fit.`). It goes when a scan finds a match, or when the skills change and the last scan shows one;

@@ -140,7 +140,7 @@ func (e *Engine) refreshCloneFailing(ctx context.Context, instance, project stri
 		return
 	}
 	e.setAttention(ctx, instance, project, attCloneFailing,
-		"Clones of this repository failed "+strconv.Itoa(n)+" times in the last 7 days. Check the clone token's access and the network to the platform.")
+		"Clones of this repository failed "+strconv.Itoa(n)+" times in the last 7 days. Check the clone token's access and the network to the platform, or the Job memory limit if a clone ran out of memory.")
 }
 
 // attentionStore is the part of the store the token-expiry recorder writes.

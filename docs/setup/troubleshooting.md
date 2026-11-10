@@ -71,7 +71,7 @@ A failure before a Job exists (no skills, a change too large, a model that can't
 
 ## Repeated clone failures
 
-When 2 or more reviews of a repository failed at the clone step in 7 days, "Needs attention" says its clones keep failing. Check the clone token's access and the network to the platform. The item goes when fewer fail ([Logs and "Needs attention"](../concepts/dashboard.md#logs-and-needs-attention)).
+When 2 or more reviews of a repository failed at the clone step in 7 days, "Needs attention" says its clones keep failing. Check the clone token's access and the network to the platform, or the Job memory limit if a clone ran out of memory. The item goes when fewer fail ([Logs and "Needs attention"](../concepts/dashboard.md#logs-and-needs-attention)).
 
 ## Counting failures
 

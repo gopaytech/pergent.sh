@@ -73,7 +73,10 @@ var urlInText = regexp.MustCompile("(?i)https?://[^\\s'\"<>`]+")
 // in any case) and its bare path ("group/name") become its directory name
 // ("linked-1"). Every other URL but repoURL's becomes otherRepository, which
 // covers a redirect to a repository's new place, and so does the target of a
-// "was moved to" line. The rest of the text stays.
+// "was moved to" line. The rest of the text stays. With no linked repositories
+// there is nothing to hide, since the only repository a clone log can name is
+// the one under review (or its new place, which a viewer may see), so the text
+// is returned as it is.
 func MaskLinked(text string, clones []LinkedClone, repoURL string) string {
 	if text == "" || len(clones) == 0 {
 		return text

@@ -260,7 +260,7 @@ func TestCloneFailingAttention(t *testing.T) {
 
 	cloneFailedRun(t, env, 3)
 	watch(t, env)
-	want := "Clones of this repository failed 2 times in the last 7 days. Check the clone token's access and the network to the platform."
+	want := "Clones of this repository failed 2 times in the last 7 days. Check the clone token's access and the network to the platform, or the Job memory limit if a clone ran out of memory."
 	if got := attention(t, env); got[key] != want || len(got) != 1 {
 		t.Fatalf("attention after two clone failures = %v; want %q", got, want)
 	}
