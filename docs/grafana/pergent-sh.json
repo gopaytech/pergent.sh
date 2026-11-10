@@ -934,6 +934,82 @@
       }
     },
     {
+      "type": "bargauge",
+      "title": "Reviews with no result by step",
+      "description": "Where reviews failed before leaving a result: starting, clone, review, delivery, unknown, or other for a failure before a Job existed.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (step) (increase(pergent_reviews_no_result_total{platform_instance=~\"$platform_instance\",repository=~\"$repository\",repository!=\"(switched off)\"}[$__range]))",
+          "legendFormat": "{{step}}",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "noValue": "No data in this range",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "basic",
+        "orientation": "horizontal",
+        "namePlacement": "left",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "maxVizHeight": 300,
+        "sizing": "auto",
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "id": 24,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      }
+    },
+    {
       "id": 13,
       "type": "row",
       "title": "Tokens",
@@ -942,7 +1018,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 22
+        "y": 28
       },
       "panels": []
     },
@@ -1011,7 +1087,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 23
+        "y": 29
       }
     },
     {
@@ -1079,7 +1155,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 23
+        "y": 29
       }
     },
     {
@@ -1147,7 +1223,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 31
+        "y": 37
       }
     },
     {
@@ -1223,7 +1299,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 31
+        "y": 37
       }
     },
     {
@@ -1299,7 +1375,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 39
+        "y": 45
       }
     },
     {
@@ -1375,7 +1451,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 39
+        "y": 45
       }
     },
     {
@@ -1387,7 +1463,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 47
+        "y": 53
       },
       "panels": []
     },
@@ -1456,7 +1532,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 48
+        "y": 54
       }
     },
     {
@@ -1524,7 +1600,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 48
+        "y": 54
       }
     },
     {
@@ -1727,7 +1803,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 56
+        "y": 62
       }
     }
   ]

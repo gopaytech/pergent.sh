@@ -37,6 +37,8 @@ comment_layout:
 
 A comment still over the limit after every step is cut there, with a note, whatever the layout, so a very long list of blocking findings can lose its end. The headline, the meta line and the failures come first and stay.
 
+**A Job failure names its step.** When a review's Job fails, the "couldn't review" comment says where it failed, as in `pergent couldn't review this MR: the clone failed (checkout exited with code 128)`. Other texts are `the review job ran out of memory (OOMKilled)` and `the review couldn't start: no node could run it`. It never carries the Job, pod or namespace name, the scheduler's message or an event: those are for admins on the review page ([Troubleshooting a failed review](../setup/troubleshooting.md)). A comment changes the next time it is updated.
+
 A layout moves and folds the blocks, nothing more. It never changes a verdict, a status, a score, an approval or a count.
 
 ## The footer text

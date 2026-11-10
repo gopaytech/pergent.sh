@@ -20,7 +20,7 @@ Point Prometheus at `http://<that Service>.<namespace>.svc:9090/metrics`, or set
 | --- | --- | --- | --- |
 | `pergent_tokens_total` | counter | `platform_instance`, `repository`, `skill`, `model`, `kind` | Tokens. `kind` is `input`, `output`, `reasoning`, `cache_read` or `cache_write`. |
 | `pergent_reviews_total` | counter | `platform_instance`, `repository`, `trigger`, `incremental` | Reviews that left a result. `trigger` is `push`, `start`, `rerun` or `rerun_failed`. |
-| `pergent_reviews_no_result_total` | counter | `platform_instance`, `repository`, `step` | Reviews that failed before leaving a result. `step` is where: `starting`, `clone`, `review`, `delivery`, `unknown`, or `other` for a failure before a Job existed. `sum without (step)` is the count before the label. |
+| `pergent_reviews_no_result_total` | counter | `platform_instance`, `repository`, `step` | Reviews that failed before leaving a result. `step` is where: `starting`, `clone`, `review`, `delivery`, `unknown`, or `other` for a failure before a Job existed, and for any review that failed before the label existed. `sum without (step)` is the count before the label. |
 | `pergent_reviews_superseded_total` | counter | `platform_instance`, `repository` | Reviews stopped by a newer push. |
 | `pergent_skill_runs_total` | counter | `platform_instance`, `repository`, `skill`, `verdict` | Skill runs. `verdict` is `no_blocking_issues`, `has_blocking_issues`, `failed` or `(other)`. |
 | `pergent_findings_total` | counter | `platform_instance`, `repository`, `skill`, `severity` | Findings. `severity` is `blocking` or `suggestion`. |
@@ -54,7 +54,7 @@ rate(pergent_tokens_total{repository!="(switched off)"}[5m])
 
 ## Grafana dashboard
 
-[`docs/grafana/pergent-sh.json`](../grafana/pergent-sh.json) is an example dashboard: reviews, tokens by model, repository and skill, and a table of each skill's runs and findings. Import it under **Dashboards → New → Import** and pick your Prometheus data source at the top. The Instance, Repository, Skill and Model filters fill in from the metrics.
+[`docs/grafana/pergent-sh.json`](../grafana/pergent-sh.json) is an example dashboard: reviews, reviews with no result by step, tokens by model, repository and skill, and a table of each skill's runs and findings. Import it under **Dashboards → New → Import** and pick your Prometheus data source at the top. The Instance, Repository, Skill and Model filters fill in from the metrics.
 
 Its panels leave out `(switched off)`. Reviews are rare next to a scrape, so its charts show bars of at least an hour.
 

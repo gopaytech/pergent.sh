@@ -305,11 +305,12 @@ Admins read the audit log under **Admin → Audit log**: who did what and when, 
 
 ## Logs and "Needs attention"
 
-- **Logs.** When a review Job ends, or before the Job of a superseded run is deleted, pergent.sh keeps the last 200 KB of the pergent container's log, with the Job's clone token, LLM key and result token replaced by `[REDACTED]`. Logs are deleted after 30 days. A Job that is gone before its log is read (Jobs are removed an hour after they finish) has no log.
+- **Logs.** When a review Job ends, or before the Job of a superseded run is deleted, pergent.sh keeps the last 200 KB of the pergent container's log, with the Job's clone token, LLM key and result token replaced by `[REDACTED]`. Logs are deleted after 30 days. A Job that is gone before its log is read (Jobs are removed an hour after they finish) has no log. A failed review also keeps the last 64 KB of the clone log (the `checkout` container), redacted the same way, and admins also get the pod's state; both are deleted after 30 days too ([Troubleshooting a failed review](../setup/troubleshooting.md#when-the-job-is-gone)).
 - **Needs attention** lists setup problems that pergent.sh detects, kept up to date by the hourly reconcile, the Job watcher and the readiness scan (not computed when the page loads):
   - one approval is enough to merge, so pergent's approval alone can unlock it;
   - the GitHub approve App isn't installed on the repository or lacks Pull requests: write (for the review App: it lacks that permission), or the approve bot user can't reach it;
   - reviews running out of memory (two or more in the last 7 days);
+  - clones of the repository failing (`clone_failing`: two or more reviews failed at the clone step in the last 7 days; check the clone token's access and the network). It goes when fewer do;
   - the GitHub approve bot's token expires within 14 days. This one concerns the whole instance and is shown to admins;
   - a run failed because a skill it needs is missing (`skill "x" is not in the skill library`, or `skill "x" is turned on but not found in the repository`), or was skipped because the repository has no skills (`this repository has no skills`). Either goes when a later run of the repository starts a Job ([Skills and instructions](skills.md));
   - the [readiness scan](#readiness-scan) found that no skill the repository uses matches its files (`no_skill_coverage`: `No skill this repository uses matches its files, so its reviews check nothing useful. The Readiness tab suggests skills that fit.`). It goes when a scan finds a match, or when the skills change and the last scan shows one;
