@@ -2,7 +2,6 @@ package store
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -364,17 +363,20 @@ func TestProjectByPath(t *testing.T) {
 	}
 }
 
-// The dashboard's list queries use a per-project index and never scan the
-// whole runs table. The one-project reviews query pins runs_project_updated_idx;
-// the two-project cursor query may use either per-project index (see below).
+// The dashboard's list queries can use the per-project indexes: they read a
+// bounded range of a repository's runs, never the whole table.
 func TestDashboardQueriesUseIndexes(t *testing.T) {
 	s := newStore(t)
 	since := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	// A year of runs over 200 repositories, so the planner has a table
-	// worth choosing an index for.
-	if _, err := s.pool.Exec(ctx, `INSERT INTO runs (instance, project_id, mr_iid, project_path, head_sha, state, created_at)
+	// worth choosing an index for. Spread over a year, the reviews windows
+	// select part of it; packed into two weeks, the 90-day window held every
+	// row and the two project indexes tied. Each run reports 5 minutes after
+	// it starts, so updated_at isn't created_at.
+	if _, err := s.pool.Exec(ctx, `INSERT INTO runs (instance, project_id, mr_iid, project_path, head_sha, state, created_at, reported_at)
 		SELECT 'main', i % 200, i, 'acme/repo-' || (i % 200), md5(i::text), 'published',
-			$1::timestamptz - (i || ' minutes')::interval
+			$1::timestamptz - (i * 26 || ' minutes')::interval,
+			$1::timestamptz - (i * 26 || ' minutes')::interval + interval '5 minutes'
 		FROM generate_series(1, 20000) i`, since); err != nil {
 		t.Fatal(err)
 	}
@@ -386,23 +388,18 @@ func TestDashboardQueriesUseIndexes(t *testing.T) {
 	two, twoArgs := visibleCond(Visibility{Projects: []VisibleProject{repo(7), repo(8)}}, 6)
 	oneStats, oneStatsArgs := visibleCond(Visibility{Projects: []VisibleProject{repo(7)}}, 2)
 	for _, q := range []struct {
-		name, sql string
-		// indexes are the per-project indexes the plan may use. The two
-		// projects' cursor query costs the same on either of the two (the
-		// planner's pick moves with the width of a runs row), and both read
-		// only those projects' runs.
-		indexes []string
-		args    []any
+		name, sql, index string
+		args             []any
 	}{
-		{"reviews", reviewDigestsSQL(one), []string{"runs_project_updated_idx"},
+		{"reviews", reviewDigestsSQL(one), "runs_project_updated_idx",
 			append([]any{since.Add(-7 * 24 * time.Hour), nil, zeroUUID, "", 51}, oneArgs...)},
-		{"reviews after a cursor", reviewDigestsSQL(two), []string{"runs_project_updated_idx", "runs_project_created_idx"},
+		{"reviews after a cursor", reviewDigestsSQL(two), "runs_project_updated_idx",
 			append([]any{since.Add(-90 * 24 * time.Hour), since.Add(-time.Hour), zeroUUID, "approved", 51}, twoArgs...)},
-		{"stats", runStatsSQL(oneStats), []string{"runs_project_created_idx"}, append([]any{since.Add(-7 * 24 * time.Hour)}, oneStatsArgs...)},
+		{"stats", runStatsSQL(oneStats), "runs_project_created_idx", append([]any{since.Add(-7 * 24 * time.Hour)}, oneStatsArgs...)},
 	} {
 		plan := explain(t, s, q.sql, q.args...)
-		if !slices.ContainsFunc(q.indexes, func(index string) bool { return strings.Contains(plan, index) }) {
-			t.Errorf("%s: plan doesn't use %s:\n%s", q.name, strings.Join(q.indexes, " or "), plan)
+		if !strings.Contains(plan, q.index) {
+			t.Errorf("%s: plan doesn't use %s:\n%s", q.name, q.index, plan)
 		}
 		if strings.Contains(plan, "Seq Scan on runs") {
 			t.Errorf("%s: plan scans the runs table:\n%s", q.name, plan)

@@ -209,9 +209,17 @@ export type RunDetailView = {
   // latestDecided: this is the run dismiss and restore act on (the change's
   // newest published or decided review), the only one that shows dismissals.
   latestDecided: boolean;
+  // Where the run's Job is, for admins. The key is absent for everyone else
+  // and for a run with no Job. pod is "" before one exists; detail is "" when
+  // there is nothing more to say (a scheduler message, for one).
+  kubernetes?: { namespace: string; job: string; pod: string; detail: string };
 };
 
 export type LogView = { text: string };
+
+// DiagnosticsView is what was kept of a failed run's Job. podState is for
+// admins: the key is absent for everyone else. Either text may be "".
+export type DiagnosticsView = { cloneLog: string; podState?: string };
 
 export type RepositoryView = {
   instance: string;
@@ -1007,6 +1015,7 @@ export const paths = {
     `/api/reviews/${seg(instance)}/${proj(project)}/${seg(String(number))}/${action}`,
   apiRun: (id: string) => `/api/runs/${seg(id)}`,
   apiRunLog: (id: string) => `/api/runs/${seg(id)}/log`,
+  apiRunDiagnostics: (id: string) => `/api/runs/${seg(id)}/diagnostics`,
   apiRepo: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}`,
   apiRepoInputs: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/inputs`,
   apiRepoPastDismissals: (instance: string, project: string) =>

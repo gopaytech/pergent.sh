@@ -478,6 +478,7 @@ func (s *Store) UsageOnDecidedChanges(ctx context.Context, instance string, proj
 type MetricsTotals struct {
 	Tokens     []TokenTotal
 	Reviews    []ReviewTotal
+	NoResult   []NoResultTotal
 	Unfinished []UnfinishedTotal
 	SkillRuns  []SkillRunTotal
 	Findings   []FindingTotal
@@ -499,10 +500,17 @@ type ReviewTotal struct {
 	Reviews                    int64
 }
 
-// UnfinishedTotal is the reviews of one repository that left no result.
+// NoResultTotal is the reviews of one repository that failed before leaving a
+// result, by the step they failed at ("" for a failure before any Job).
+type NoResultTotal struct {
+	Instance, Project, Step string
+	Reviews                 int64
+}
+
+// UnfinishedTotal is the reviews of one repository that a newer push stopped
+// before they left a result.
 type UnfinishedTotal struct {
 	Instance, Project string
-	NoResult          int64
 	Superseded        int64
 }
 
@@ -561,17 +569,27 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 
 	// Reviews with no result have no usage rows, so these two come from runs,
 	// told apart as UsageWasted does.
-	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path,
-			count(*) FILTER (WHERE result IS NULL AND failure_reason <> '' AND dispatched_at IS NOT NULL),
-			count(*) FILTER (WHERE state = 'superseded' AND result IS NULL AND failure_reason = '' AND dispatched_at IS NOT NULL)
-		FROM runs GROUP BY instance, project_path
-		HAVING count(*) FILTER (WHERE result IS NULL AND failure_reason <> '' AND dispatched_at IS NOT NULL) > 0
-			OR count(*) FILTER (WHERE state = 'superseded' AND result IS NULL AND failure_reason = '' AND dispatched_at IS NOT NULL) > 0`); err != nil {
+	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path, failure_step, count(*)
+		FROM runs WHERE result IS NULL AND failure_reason <> '' AND dispatched_at IS NOT NULL
+		GROUP BY instance, project_path, failure_step`); err != nil {
+		return MetricsTotals{}, err
+	}
+	if t.NoResult, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (NoResultTotal, error) {
+		var u NoResultTotal
+		err := row.Scan(&u.Instance, &u.Project, &u.Step, &u.Reviews)
+		return u, err
+	}); err != nil {
+		return MetricsTotals{}, err
+	}
+
+	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path, count(*)
+		FROM runs WHERE state = 'superseded' AND result IS NULL AND failure_reason = '' AND dispatched_at IS NOT NULL
+		GROUP BY instance, project_path`); err != nil {
 		return MetricsTotals{}, err
 	}
 	if t.Unfinished, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (UnfinishedTotal, error) {
 		var u UnfinishedTotal
-		err := row.Scan(&u.Instance, &u.Project, &u.NoResult, &u.Superseded)
+		err := row.Scan(&u.Instance, &u.Project, &u.Superseded)
 		return u, err
 	}); err != nil {
 		return MetricsTotals{}, err

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Can, FindingView, ReviewDetailView, RunDetailView } from "../api";
 import { fakeApi } from "../test/fakeApi";
-import { allCan, ssoAdmin, reviewDetail, runDetail } from "../test/fixtures";
+import { allCan, ssoAdmin, reviewDetail, runDetail, runKubernetes } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -181,6 +181,117 @@ describe("ReviewDetail", () => {
     renderAppAt();
     await userEvent.click(await screen.findByRole("tab", { name: "Logs" }));
     expect(await screen.findByText("No log was kept for this run.")).toBeInTheDocument();
+  });
+
+  it("shows an admin the Job, the pod and the four kubectl commands, each with a copy button", async () => {
+    const user = userEvent.setup();
+    renderAndWait({ ...runDetail, kubernetes: { ...runKubernetes, detail: "0/3 nodes are available: 3 Insufficient memory.\n<b>x</b>" } });
+    const block = await screen.findByRole("group", { name: "Kubernetes" });
+    expect(block).toHaveTextContent("pergent-jobs");
+    expect(block).toHaveTextContent("pergent-3f9a1c2b7d4e");
+    expect(block).toHaveTextContent("pergent-3f9a1c2b7d4e-x7k2p");
+    const commands = [
+      "kubectl -n pergent-jobs get pods -l job-name=pergent-3f9a1c2b7d4e",
+      "kubectl -n pergent-jobs logs pergent-3f9a1c2b7d4e-x7k2p -c checkout",
+      "kubectl -n pergent-jobs logs pergent-3f9a1c2b7d4e-x7k2p -c pergent",
+      "kubectl -n pergent-jobs describe pod pergent-3f9a1c2b7d4e-x7k2p",
+    ];
+    for (const c of commands) expect(within(block).getByText(c).tagName).toBe("CODE");
+    expect(within(block).getAllByRole("button", { name: /^Copy / })).toHaveLength(4);
+    await user.click(within(block).getByRole("button", { name: "Copy kubectl logs -c checkout" }));
+    expect(await navigator.clipboard.readText()).toBe(commands[1]);
+    expect(within(block).getByRole("button", { name: "Copied" })).toBeInTheDocument();
+    // The detail is text, never HTML.
+    const detail = within(block).getByText(/Insufficient memory/);
+    expect(detail.tagName).toBe("PRE");
+    expect(detail).toHaveTextContent("<b>x</b>");
+    expect(detail.querySelector("b")).toBeNull();
+    expect(block).toHaveTextContent("The Job is deleted an hour after it finishes; after that only what was kept here is left.");
+  });
+
+  it("leaves out the commands that need a pod while there is no pod", async () => {
+    renderAndWait({ ...runDetail, kubernetes: { ...runKubernetes, pod: "" } });
+    const block = await screen.findByRole("group", { name: "Kubernetes" });
+    expect(within(block).getByText("kubectl -n pergent-jobs get pods -l job-name=pergent-3f9a1c2b7d4e")).toBeInTheDocument();
+    expect(within(block).getAllByRole("button", { name: /^Copy / })).toHaveLength(1);
+    expect(block).not.toHaveTextContent("logs");
+    expect(block).not.toHaveTextContent("describe");
+    expect(block.querySelector("pre")).toBeNull();
+  });
+
+  it("shows no Kubernetes block when the run has none", async () => {
+    renderAndWait();
+    await screen.findByRole("region", { name: "This run" });
+    expect(await screen.findByText("v0.1.0")).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Kubernetes" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/kubectl/)).not.toBeInTheDocument();
+  });
+
+  it("shows the clone log after the review log, and the pod state when the answer has one", async () => {
+    const fake = fakeApi({
+      ...routes(),
+      [`GET /api/runs/${newest}/log`]: { body: { text: "line one" } },
+      [`GET /api/runs/${newest}/diagnostics`]: {
+        body: { cloneLog: "fatal: Authentication failed\n<b>x</b>", podState: "phase: Pending\nPodScheduled: Unschedulable" },
+      },
+    });
+    const { container } = renderAppAt();
+    expect(fake.find("GET", `/api/runs/${newest}/diagnostics`)).toHaveLength(0);
+    await userEvent.click(await screen.findByRole("tab", { name: "Logs" }));
+    const clone = await screen.findByText(/Authentication failed/);
+    expect(clone.tagName).toBe("PRE");
+    expect(clone).toHaveTextContent("<b>x</b>");
+    expect(container.querySelector("pre b")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Clone log" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Pod state" })).toBeInTheDocument();
+    expect(screen.getByText(/PodScheduled: Unschedulable/).tagName).toBe("PRE");
+    const log = screen.getByText("line one");
+    expect(log.compareDocumentPosition(clone) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("shows no pod state when the answer has none, and nothing for an empty clone log", async () => {
+    fakeApi({
+      ...routes(),
+      [`GET /api/runs/${newest}/log`]: { body: { text: "line one" } },
+      [`GET /api/runs/${newest}/diagnostics`]: { body: { cloneLog: "cloned fine" } },
+    });
+    const { unmount } = renderAppAt();
+    await userEvent.click(await screen.findByRole("tab", { name: "Logs" }));
+    expect(await screen.findByText("cloned fine")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Pod state" })).not.toBeInTheDocument();
+    unmount();
+
+    fakeApi({
+      ...routes(),
+      [`GET /api/runs/${newest}/log`]: { body: { text: "line one" } },
+      [`GET /api/runs/${newest}/diagnostics`]: { body: { cloneLog: "" } },
+    });
+    renderAppAt();
+    await userEvent.click(await screen.findByRole("tab", { name: "Logs" }));
+    expect(await screen.findByText("line one")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Clone log" })).not.toBeInTheDocument());
+  });
+
+  it("shows nothing extra when no diagnostics were kept, and still the kept diagnostics when the review log is gone", async () => {
+    fakeApi({
+      ...routes(),
+      [`GET /api/runs/${newest}/log`]: { body: { text: "line one" } },
+    });
+    const { unmount } = renderAppAt();
+    await userEvent.click(await screen.findByRole("tab", { name: "Logs" }));
+    expect(await screen.findByText("line one")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Clone log" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    unmount();
+
+    fakeApi({
+      ...routes(),
+      [`GET /api/runs/${newest}/diagnostics`]: { body: { cloneLog: "fatal: could not read" } },
+    });
+    renderAppAt();
+    await userEvent.click(await screen.findByRole("tab", { name: "Logs" }));
+    expect(await screen.findByText("No log was kept for this run.")).toBeInTheDocument();
+    expect(await screen.findByText("fatal: could not read")).toBeInTheDocument();
   });
 
   it("selects an older run", async () => {

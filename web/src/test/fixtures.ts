@@ -218,6 +218,15 @@ export const runDetail: RunDetailView = {
   ],
 };
 
+// What an admin's run detail carries when the run has a Job. The key is left
+// out for everyone else and for a run with no Job.
+export const runKubernetes: NonNullable<RunDetailView["kubernetes"]> = {
+  namespace: "pergent-jobs",
+  job: "pergent-3f9a1c2b7d4e",
+  pod: "pergent-3f9a1c2b7d4e-x7k2p",
+  detail: "",
+};
+
 export const repoPayments: RepositoryView = {
   instance: "main",
   project: "acme/payments",

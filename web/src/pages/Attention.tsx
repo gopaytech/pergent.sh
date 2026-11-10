@@ -7,6 +7,7 @@ const kinds: Record<string, [Tone, string]> = {
   single_approval: ["warn", "Setup"],
   approver_unreachable: ["warn", "Setup"],
   out_of_memory: ["bad", "Failing"],
+  clone_failing: ["bad", "Failing"],
   token_expiry: ["draft", "Token"],
   no_skill_coverage: ["warn", "Skills"],
   inputs_over_budget: ["bad", "Failing"],

@@ -131,7 +131,7 @@ Admins only (the owner's choice: no warning on merge requests, no metrics).
 
 ## Upgrade
 
-- A new migration (the next free number on `main` when the work starts; `0035` today, re-checked against parallel work) adds the instance quota, the repository quota, and the per-merge-request "quota note posted" time. Both quotas are nullable: nothing is limited after the upgrade.
+- A new migration (the next free number on `main` when the work starts; it was `0035`, then `0036` was taken by parallel work, so it is `0037`) adds the instance quota, the repository quota, and the per-merge-request "quota note posted" time. Both quotas are nullable: nothing is limited after the upgrade.
 - Quota-held runs reuse the `waiting` state with the new `skip_reason` `quota_used_up` (my call: the previous release has no quotas, so a new state would protect nothing on rollback). `HoldRun` holds only `trigger = 'push'` runs today, as its guard against a race with `StartRun`; holding pergent.sh's own full re-run needs that guard widened without losing the race protection.
 - How an admin's start is marked as past the quota (a column on the run, or a new trigger) is the builder's call, as long as the previous release ignores it safely.
 - The new config keys are refused by the previous release, which rejects unknown keys. `docs/upgrading.md` says to remove them before rolling back, and that a rollback removes the quota.

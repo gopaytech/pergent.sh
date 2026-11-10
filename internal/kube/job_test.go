@@ -2,6 +2,7 @@ package kube
 
 import (
 	"encoding/json"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -685,5 +686,76 @@ func TestBuildJobDescription(t *testing.T) {
 	}
 	if item(p) {
 		t.Error("change-description.md item without a description")
+	}
+}
+
+func tracedParams() JobParams {
+	p := testParams()
+	p.Instance = "gitlab"
+	p.ProjectID = 123
+	p.IID = 42
+	p.ProjectPath = "group/sub/repo"
+	p.MRURL = "https://gitlab.example.com/group/sub/repo/-/merge_requests/42"
+	return p
+}
+
+func TestJobLabelsNameTheChange(t *testing.T) {
+	p := tracedParams()
+	job := BuildJob(p)
+	want := map[string]string{
+		"pergent.sh/run":               p.RunID,
+		"app.kubernetes.io/managed-by": "pergent-sh",
+		"pergent.sh/instance":          "gitlab",
+		"pergent.sh/project-id":        "123",
+		"pergent.sh/mr":                "42",
+		"pergent.sh/head":              testHead,
+	}
+	wantNotes := map[string]string{
+		"pergent.sh/project": "group/sub/repo",
+		"pergent.sh/mr-url":  "https://gitlab.example.com/group/sub/repo/-/merge_requests/42",
+	}
+	for what, got := range map[string]map[string]string{
+		"job":          job.Labels,
+		"pod template": job.Spec.Template.Labels,
+		"secret":       BuildSecret(p, job, Secrets{}).Labels,
+		"config map":   BuildConfigMap(p, job).Labels,
+	} {
+		if !maps.Equal(got, want) {
+			t.Errorf("%s labels = %v; want %v", what, got, want)
+		}
+	}
+	for what, got := range map[string]map[string]string{
+		"job":          job.Annotations,
+		"pod template": job.Spec.Template.Annotations,
+	} {
+		if !maps.Equal(got, wantNotes) {
+			t.Errorf("%s annotations = %v; want %v", what, got, wantNotes)
+		}
+	}
+}
+
+func TestJobLabelLeavesOutInvalidValue(t *testing.T) {
+	p := tracedParams()
+	p.Instance = "Bad/Name"
+	job := BuildJob(p)
+	if v, ok := job.Labels["pergent.sh/instance"]; ok {
+		t.Errorf("label pergent.sh/instance = %q; want it left out", v)
+	}
+	for _, k := range []string{"pergent.sh/project-id", "pergent.sh/mr", "pergent.sh/head"} {
+		if job.Labels[k] == "" {
+			t.Errorf("label %s is missing", k)
+		}
+	}
+}
+
+func TestJobLabelsWithoutTracingAreToday(t *testing.T) {
+	p := testParams()
+	p.HeadSHA = ""
+	job := BuildJob(p)
+	if len(job.Labels) != 2 || len(job.Spec.Template.Labels) != 2 {
+		t.Errorf("labels = %v, %v; want only the run and managed-by", job.Labels, job.Spec.Template.Labels)
+	}
+	if job.Annotations != nil || job.Spec.Template.Annotations != nil {
+		t.Errorf("annotations = %v, %v; want none", job.Annotations, job.Spec.Template.Annotations)
 	}
 }

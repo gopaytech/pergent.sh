@@ -69,6 +69,7 @@ func (d *Dashboard) readRoutes(mux *http.ServeMux) {
 	get("/api/reviews/{instance}/{rest...}", d.review)
 	get("/api/runs/{id}", d.run)
 	get("/api/runs/{id}/log", d.runLog)
+	get("/api/runs/{id}/diagnostics", d.runDiagnostics)
 	get("/api/repositories", d.repositories)
 	get("/api/repositories/{instance}/{rest...}", d.repository)
 	get("/api/skills", d.skills)
@@ -561,6 +562,12 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 	if run.Approved {
 		view.ApprovalReason = ""
 	}
+	// The cluster's names and its words about a failure are for admins: a
+	// viewer's JSON has no kubernetes key at all.
+	if run.JobName != "" && se.Role(run.MR.Instance, run.ProjectPath) >= RoleAdmin {
+		view.Kubernetes = &KubernetesView{Namespace: d.cfg.Jobs.Namespace, Job: run.JobName, Pod: run.PodName,
+			Detail: run.FailureDetail}
+	}
 	// The change's dismissals are applied to its newest decided review only,
 	// the one a dismissal or restore decides again; an older run shows what
 	// was published for it.
@@ -726,6 +733,34 @@ func (d *Dashboard) runLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, LogView{Text: text})
+}
+
+func (d *Dashboard) runDiagnostics(w http.ResponseWriter, r *http.Request) {
+	ctx, se := r.Context(), session(r)
+	run, found, err := d.visibleRun(ctx, se, r.PathValue("id"))
+	if err != nil {
+		d.failed(w, r, "loading a run", err)
+		return
+	}
+	if !found {
+		notFound(w)
+		return
+	}
+	diag, found, err := d.Store.RunDiagnostics(ctx, run.ID)
+	if err != nil {
+		d.failed(w, r, "loading a run's diagnostics", err)
+		return
+	}
+	if !found {
+		notFound(w)
+		return
+	}
+	if se.Role(run.MR.Instance, run.ProjectPath) < RoleAdmin {
+		// The masked log hides linked repositories; it may be empty.
+		writeJSON(w, http.StatusOK, DiagnosticsView{CloneLog: diag.CloneLogMasked})
+		return
+	}
+	writeJSON(w, http.StatusOK, DiagnosticsView{CloneLog: diag.CloneLog, PodState: &diag.PodState})
 }
 
 // --- GET /api/repositories and /api/repositories/{instance}/{project...} ---

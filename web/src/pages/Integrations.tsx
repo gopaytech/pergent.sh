@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 
 import {
   api,
@@ -12,7 +12,7 @@ import {
 } from "../api";
 import { useWrite } from "../layout/write";
 import { QuotaLine, parseQuota, quotaProblem, quotaText } from "../quota";
-import { ErrorBox, Loading, Pill, noFill, platformName, secretFill, secretText } from "../ui";
+import { CopyButton, ErrorBox, Loading, Pill, noFill, platformName, secretFill, secretText } from "../ui";
 
 // Integrations is, for admins, the instances pergent.sh reviews on (they add,
 // change and remove those kept in the dashboard) and how people sign in.
@@ -275,28 +275,9 @@ function TokenQuota({ inst, locked }: { inst: InstanceAdminView; locked: boolean
 }
 
 function WebhookURL({ inst }: { inst: InstanceAdminView }) {
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    if (!copied) {
-      return;
-    }
-    const timer = setTimeout(() => setCopied(false), 1500);
-    return () => clearTimeout(timer);
-  }, [copied]);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(inst.webhookURL);
-      setCopied(true);
-    } catch {
-      // No clipboard here: the URL is on screen to select.
-    }
-  };
   return (
     <div className="webhook-url">
-      Webhook URL: <code>{inst.webhookURL}</code>{" "}
-      <button type="button" className="btn small" aria-label={copied ? "Copied" : "Copy webhook URL"} onClick={copy}>
-        {copied ? "Copied" : "Copy"}
-      </button>
+      Webhook URL: <code>{inst.webhookURL}</code> <CopyButton text={inst.webhookURL} what="webhook URL" />
       <div className="meta">
         {inst.platform === "gitlab" ? "pergent.sh sets this on each project." : "Set this on the review App."}
       </div>

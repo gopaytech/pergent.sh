@@ -478,6 +478,9 @@ const (
 const (
 	reasonHeldDraft = "No blocking issues; not approved: draft"
 	reasonHeldMoved = "No blocking issues; not approved: the change was closed, or its head or target branch moved, before it could be approved"
+	// reasonReviewFailed starts the reason of pergent's own error result,
+	// naming its step as the watcher's failures do.
+	reasonReviewFailed = "the review failed: "
 )
 
 // decisionOf is what is recorded on a run for the dashboard: the outcome,
@@ -506,7 +509,8 @@ func decisionOf(o policy.Outcome, d policy.Decision, approved bool, held heldBac
 		case o.FailureReason != "":
 			rd.Reason = o.FailureReason
 		case o.Result != nil && o.Result.Status != "completed" && o.Result.Error != nil && o.Result.Error.Message != "":
-			rd.Reason = o.Result.Error.Message
+			// pergent's own error result: the Job failed at the review.
+			rd.Reason = reasonReviewFailed + o.Result.Error.Message
 		}
 	}
 	return rd
@@ -846,7 +850,7 @@ func (e *Engine) withdraw(ctx context.Context, a store.Approval, done, failed st
 func (e *Engine) cleanUp(ctx context.Context, run store.Run, log *slog.Logger) error {
 	if run.JobName != "" {
 		// Its log goes with the Job: keep it first, best effort and once.
-		e.captureLogWithin(ctx, run, log.With("job", run.JobName), supersededLogTimeout)
+		e.captureLogWithin(ctx, run, kube.Observation{}, log.With("job", run.JobName), supersededLogTimeout)
 		if err := e.Launcher.Delete(ctx, run.JobName); err != nil {
 			return err
 		}

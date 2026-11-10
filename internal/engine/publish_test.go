@@ -542,7 +542,7 @@ func TestPublishFailureReasonComment(t *testing.T) {
 	head := sha('a')
 	id := env.Enqueue(1, head)
 	reason := "the review Job ended without a result"
-	if ok, err := env.Store.ReportFailure(env.ctx, id, reason, env.Now()); err != nil || !ok {
+	if ok, err := env.Store.ReportFailure(env.ctx, id, store.Failure{Reason: reason}, env.Now()); err != nil || !ok {
 		t.Fatalf("ReportFailure = %v, %v", ok, err)
 	}
 	servePublish(env, 1, head)
@@ -2014,7 +2014,7 @@ func TestIncrementalFailureReasonPublishedAsIs(t *testing.T) {
 		t.Fatal(err)
 	}
 	reason := "the review Job ended without a result"
-	if ok, err := env.Store.ReportFailure(env.ctx, id, reason, env.Now()); err != nil || !ok {
+	if ok, err := env.Store.ReportFailure(env.ctx, id, store.Failure{Reason: reason}, env.Now()); err != nil || !ok {
 		t.Fatalf("ReportFailure = %v, %v", ok, err)
 	}
 	servePublish(env, 1, headB)

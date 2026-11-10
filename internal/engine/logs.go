@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -30,47 +31,172 @@ const (
 	redacted = "[REDACTED]"
 )
 
-// captureLog stores the redacted tail of the log of run's finished Job, once
-// per run: a failure is logged and not tried again, and never touches the
-// run. The values to hide are the ones in the Job's own Secret (its clone,
-// model and result tokens) and the engine's model key; with the Secret
-// unreadable nothing says what to hide, so nothing is stored.
-func (e *Engine) captureLog(ctx context.Context, run store.Run, log *slog.Logger) {
-	e.captureLogWithin(ctx, run, log, logTimeout)
+// captureLog stores the redacted tail of the log of run's Job, once per run:
+// a failure is logged and not tried again, and never touches the run. The
+// values to hide are the ones in the Job's own Secret (its clone, model and
+// result tokens) and the engine's model key; with the Secret unreadable
+// nothing says what to hide, so nothing is stored.
+//
+// obs is what the watcher saw of the Job. A Job that failed or is stuck also
+// keeps its diagnostics (see captureDiagnostics), once, and so does one that
+// completed with a linked repository whose clone failed. The zero obs keeps
+// only the log.
+func (e *Engine) captureLog(ctx context.Context, run store.Run, obs kube.Observation, log *slog.Logger) {
+	e.captureLogWithin(ctx, run, obs, log, logTimeout)
 }
 
 // captureLogWithin is captureLog bounded by timeout.
-func (e *Engine) captureLogWithin(ctx context.Context, run store.Run, log *slog.Logger, timeout time.Duration) {
-	if !e.firstLogTry(run.ID) {
+func (e *Engine) captureLogWithin(ctx context.Context, run store.Run, obs kube.Observation, log *slog.Logger, timeout time.Duration) {
+	failed := obs.Failure.Reason != "" || obs.Stuck.Reason != ""
+	takeLog := e.firstLogTry(run.ID)
+	takeDiag := (failed || obs.Finished && len(run.LinkedRepos) > 0) && e.firstLogTry(diagKey(run.ID))
+	if !takeLog && !takeDiag {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	secrets, err := e.Launcher.JobSecrets(ctx, run.JobName)
+	hide, err := e.jobHide(ctx, run.JobName)
 	if err != nil {
 		log.Info("not keeping the review job's log: its secrets can't be read", "error", e.redact(err.Error()))
 		return
 	}
-	hide := append([]string{secrets.GitToken, secrets.LLMKey, secrets.ResultToken}, e.registry().LLMKeys()...)
-	// More than is kept is read and hidden in first, so a secret across the
-	// point where the kept tail starts is hidden whole, not left in part.
-	read := logKeepBytes + logMargin(hide)
-	text, err := e.Launcher.Logs(ctx, run.JobName, read)
+	if takeLog {
+		e.capturePergentLog(ctx, run, hide, log)
+	}
+	if takeDiag {
+		e.captureDiagnostics(ctx, run, failed, hide, log)
+	}
+}
+
+// diagKey is the key of run id's diagnostics in logTried, apart from its log.
+func diagKey(id string) string { return "diag:" + id }
+
+// jobHide is what to hide in text read from a Job: the values of its own
+// Secret and the engine's model keys.
+func (e *Engine) jobHide(ctx context.Context, jobName string) ([]string, error) {
+	secrets, err := e.Launcher.JobSecrets(ctx, jobName)
+	if err != nil {
+		return nil, err
+	}
+	return append([]string{secrets.GitToken, secrets.LLMKey, secrets.ResultToken}, e.registry().LLMKeys()...), nil
+}
+
+// capturePergentLog stores the redacted tail of the pergent container's log.
+func (e *Engine) capturePergentLog(ctx context.Context, run store.Run, hide []string, log *slog.Logger) {
+	text, err := readRedacted(hide, logKeepBytes, func(n int) (string, error) {
+		return e.Launcher.Logs(ctx, run.JobName, n)
+	})
 	if err != nil {
 		log.Info("couldn't read the review job's log", "error", e.redact(err.Error()))
 		return
 	}
-	// A read that may have been cut starts within a line, perhaps within a
-	// secret that no longer matches; hiding the secrets after it can leave
-	// less than is kept, so that line is dropped here, not by keepTail.
-	if len(text) > read-utf8.UTFMax {
-		text = afterFirstLine(text)
-	}
-	text = keepTail(store.CleanText(redactAll(text, hide...)), logKeepBytes)
 	if err := e.Store.PutRunLog(ctx, run.ID, text); err != nil {
 		log.Info("couldn't store the review job's log", "error", e.redact(err.Error()))
 	}
+}
+
+// captureDiagnostics stores what a failed Job left, redacted with hide: the
+// checkout container's clone log, the same log with the linked repositories
+// masked, and, for a Job that failed or is stuck, its pod state. A Job that
+// completed keeps them only when a linked repository's clone failed. A part
+// that can't be read is logged and left empty.
+func (e *Engine) captureDiagnostics(ctx context.Context, run store.Run, failed bool, hide []string, log *slog.Logger) {
+	var d store.Diagnostics
+	text, err := readRedacted(hide, kube.CloneLogKeepBytes, func(n int) (string, error) {
+		return e.Launcher.CheckoutLog(ctx, run.JobName, n)
+	})
+	if err != nil {
+		log.Info("couldn't read the review job's clone log", "error", e.redact(err.Error()))
+	}
+	if !failed && !linkedCloneFailed(text) {
+		return
+	}
+	if text != "" {
+		d.CloneLog = text
+		d.CloneLogMasked = e.maskClones(ctx, run, text, log)
+	}
+	if failed {
+		state, forbidden, err := e.Launcher.PodState(ctx, run.JobName)
+		if err != nil {
+			log.Info("couldn't read the review job's pod state", "error", e.redact(err.Error()))
+		}
+		d.PodState = redactAll(state, hide...)
+		if forbidden {
+			// Once per run: the diagnostics are taken once.
+			log.Warn("the review job's pod state has no events: the cluster refused to list them (the Role needs list on events)")
+		}
+	}
+	if d == (store.Diagnostics{}) {
+		return
+	}
+	if err := e.Store.PutRunDiagnostics(ctx, run.ID, d); err != nil {
+		log.Info("couldn't store the review job's diagnostics", "error", e.redact(err.Error()))
+	}
+}
+
+// maskClones is a redacted clone log with the run's linked repositories
+// masked (kube.MaskLinked). When the Job can't say which repositories it
+// clones, nothing is safe to show, so it is "".
+func (e *Engine) maskClones(ctx context.Context, run store.Run, text string, log *slog.Logger) string {
+	clones, err := e.Launcher.LinkedClones(ctx, run.JobName)
+	if err != nil {
+		log.Info("not keeping the masked clone log: the review job's linked repositories can't be read", "error", e.redact(err.Error()))
+		return ""
+	}
+	repoURL, err := e.Launcher.CheckoutRepoURL(ctx, run.JobName)
+	if err != nil {
+		log.Info("not keeping the masked clone log: the review job's repository can't be read", "error", e.redact(err.Error()))
+		return ""
+	}
+	return kube.MaskLinked(text, clones, repoURL)
+}
+
+// linkedCloneFailed reports whether a clone log says a linked repository's
+// clone failed (checkout.sh's "could not clone linked-N").
+func linkedCloneFailed(text string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "could not clone ") {
+			return true
+		}
+	}
+	return false
+}
+
+// readRedacted reads the tail of a log with read(n), hides the secrets in
+// it and keeps its last keep bytes.
+func readRedacted(hide []string, keep int, read func(n int) (string, error)) (string, error) {
+	// More than is kept is read and hidden in first, so a secret across the
+	// point where the kept tail starts is hidden whole, not left in part.
+	n := keep + logMargin(hide)
+	text, err := read(n)
+	if err != nil {
+		return "", err
+	}
+	// A read that may have been cut starts within a line, perhaps within a
+	// secret that no longer matches; hiding the secrets after it can leave
+	// less than is kept, so that line is dropped here, not by keepTail.
+	if len(text) > n-utf8.UTFMax {
+		text = afterFirstLine(text)
+	}
+	return keepTail(store.CleanText(redactAll(text, hide...)), keep), nil
+}
+
+// redactDetail hides the Job's secrets in a failure's admin-only detail (a
+// scheduler or event message). With the Job's Secret unreadable nothing says
+// what to hide, so the detail is dropped rather than kept raw.
+func (e *Engine) redactDetail(ctx context.Context, run store.Run, detail string, log *slog.Logger) string {
+	if detail == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, logTimeout)
+	defer cancel()
+	hide, err := e.jobHide(ctx, run.JobName)
+	if err != nil {
+		log.Info("not keeping the failure's detail: the review job's secrets can't be read", "error", e.redact(err.Error()))
+		return ""
+	}
+	return redactAll(detail, hide...)
 }
 
 // firstLogTry reports whether run id's log has not been tried yet, and
@@ -129,13 +255,13 @@ func (e *Engine) captureReportedLogs(ctx context.Context, now time.Time) error {
 			// Gone with its pods: there is no log to take.
 			e.firstLogTry(run.ID)
 		case obs.Finished:
-			e.captureLog(ctx, run, log)
+			e.captureLog(ctx, run, obs, log)
 		}
 	}
 	return nil
 }
 
-// pruneRunLogs deletes the logs older than the retention.
+// pruneRunLogs deletes the logs and diagnostics older than the retention.
 func (e *Engine) pruneRunLogs(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
@@ -143,12 +269,12 @@ func (e *Engine) pruneRunLogs(ctx context.Context) {
 	n, err := e.Store.PruneRunLogs(ctx, e.now().Add(-logRetention))
 	if err != nil {
 		if ctx.Err() == nil {
-			e.log().Error("couldn't prune old review logs", "error", e.redact(err.Error()))
+			e.log().Error("couldn't prune old review logs and diagnostics", "error", e.redact(err.Error()))
 		}
 		return
 	}
 	if n > 0 {
-		e.log().Info("pruned old review logs", "logs", n)
+		e.log().Info("pruned old review logs and diagnostics", "rows", n)
 	}
 }
 

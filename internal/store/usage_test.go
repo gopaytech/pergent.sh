@@ -547,6 +547,43 @@ func TestUsageProjectID(t *testing.T) {
 	}
 }
 
+// Reviews with no result are counted by the step that failed, "" for a
+// failure before any Job. A stopped run and a run that kept its result are
+// not counted.
+func TestMetricsTotalsNoResultByStep(t *testing.T) {
+	s := newStore(t)
+	fail := func(mr MRKey, head, step string) {
+		t.Helper()
+		id := dispatched(t, s, mr, head, "tok-"+head)
+		if ok, err := s.ReportFailure(ctx, id, Failure{Reason: "the Job failed", Step: step}, t0); err != nil || !ok {
+			t.Fatalf("ReportFailure = %v, %v", ok, err)
+		}
+	}
+	fail(usageMR(9, 1), "aaaa", "clone")
+	fail(usageMR(9, 2), "bbbb", "clone")
+	fail(usageMR(9, 3), "cccc", "")
+	// A superseded run with no failure, and a run that has its result.
+	stopped := dispatched(t, s, usageMR(9, 4), "dddd", "tok-dddd")
+	if _, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'superseded' WHERE id = $1::uuid`, stopped); err != nil {
+		t.Fatal(err)
+	}
+	seedUsage(t, s, usageMR(9, 5), usageAt(5, 10, 0), TriggerPush, false, "m", skillRow("security", "no_blocking_issues", 1, 1))
+
+	got, err := s.MetricsTotals(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[[3]string]int64{}
+	for _, n := range got.NoResult {
+		counts[[3]string{n.Instance, n.Project, n.Step}] += n.Reviews
+	}
+	in := mr1.Instance
+	want := map[[3]string]int64{{in, "acme/widgets", "clone"}: 2, {in, "acme/widgets", ""}: 1}
+	if len(counts) != len(want) || counts[[3]string{in, "acme/widgets", "clone"}] != 2 || counts[[3]string{in, "acme/widgets", ""}] != 1 {
+		t.Errorf("no result by step = %v, want %v", counts, want)
+	}
+}
+
 func TestMetricsTotals(t *testing.T) {
 	s := newStore(t)
 	security := skillRow("security", "no_blocking_issues", 100, 10)
@@ -614,8 +651,12 @@ func TestMetricsTotals(t *testing.T) {
 	for _, u := range got.Unfinished {
 		unfinished[u.Instance+" "+u.Project] = u
 	}
-	if u := unfinished[in+" acme/widgets"]; u.NoResult != 1 || u.Superseded != 1 {
-		t.Errorf("unfinished = %+v, want 1 no result and 1 superseded", got.Unfinished)
+	if u := unfinished[in+" acme/widgets"]; u.Superseded != 1 {
+		t.Errorf("unfinished = %+v, want 1 superseded", got.Unfinished)
+	}
+	// The failed run was given no step, so it is counted with the empty one.
+	if len(got.NoResult) != 1 || got.NoResult[0] != (NoResultTotal{Instance: in, Project: "acme/widgets", Step: "", Reviews: 1}) {
+		t.Errorf("no result = %+v, want 1 with no step", got.NoResult)
 	}
 
 	runs := map[[4]string]int64{}

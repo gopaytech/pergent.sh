@@ -80,6 +80,12 @@ type Run struct {
 	TokenExpiresAt                                        time.Time
 	Result                                                []byte
 	FailureReason                                         string
+	// FailureStep is where the run failed ("" before any Job), FailureDetail
+	// is more text for an admin, PodName is the pod of its Job and
+	// CheckoutSeen is how far the checkout was seen to get (0 nothing, 1
+	// running, 2 done).
+	FailureStep, FailureDetail, PodName string
+	CheckoutSeen                        int
 	// PublishError is the text of the last failed publish, if any.
 	PublishError string
 	// Attempts counts dispatch retries while the run is queued or running,
@@ -216,7 +222,7 @@ const runColumns = `id::text, instance, project_id, mr_iid, project_path, head_s
 	title, web_url, source_branch, author, model, skill_sources,
 	outcome, outcome_reason, decision_status, approved, trigger, skill_subset, base_run_id::text,
 	skill_versions, skip_reason, max_turns, incremental, skill_hashes, quiet_reviews, comment_layout,
-	linked_repos, provider, quota_checked`
+	linked_repos, provider, failure_step, failure_detail, pod_name, checkout_seen, quota_checked`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var (
@@ -232,7 +238,8 @@ func scanRun(row pgx.Row) (Run, error) {
 		&r.CreatedAt, &dispatched, &rep, &notBefore, &r.CleanedUp,
 		&r.Title, &r.WebURL, &r.SourceBranch, &r.Author, &r.Model, &sources,
 		&r.Outcome, &r.OutcomeReason, &r.DecisionStatus, &r.Approved, &r.Trigger, &r.SkillSubset, &r.BaseRunID,
-		&versions, &r.SkipReason, &r.MaxTurns, &r.Incremental, &hashes, &quiet, &r.CommentLayout, &links, &r.Provider, &r.QuotaChecked)
+		&versions, &r.SkipReason, &r.MaxTurns, &r.Incremental, &hashes, &quiet, &r.CommentLayout, &links, &r.Provider,
+		&r.FailureStep, &r.FailureDetail, &r.PodName, &r.CheckoutSeen, &r.QuotaChecked)
 	if err != nil {
 		return Run{}, err
 	}
@@ -1153,19 +1160,19 @@ func (s *Store) SetRunLinks(ctx context.Context, runID string, links []Link) err
 
 // ReportFailure records that a queued or running run will never produce a
 // result (the Job died, the inputs did not fit, ...) so it is reported with
-// reason. It reports whether it changed the run; a run that already has a
-// result or a failure is left alone.
-func (s *Store) ReportFailure(ctx context.Context, id, reason string, now time.Time) (bool, error) {
+// the failure f. It reports whether it changed the run;
+// a run that already has a result or a failure is left alone.
+func (s *Store) ReportFailure(ctx context.Context, id string, f Failure, now time.Time) (bool, error) {
 	if !validUUID(id) {
 		return false, nil
 	}
-	if reason == "" {
-		reason = "review failed"
+	if f.Reason == "" {
+		f.Reason = "review failed"
 	}
 	tag, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'reported', failure_reason = $2,
-		reported_at = $3, not_before = $3, attempts = 0
+		failure_step = $4, failure_detail = $5, reported_at = $3, not_before = $3, attempts = 0
 		WHERE id = $1::uuid AND state IN ('queued', 'running') AND result IS NULL AND failure_reason = ''`,
-		id, reason, now)
+		id, f.Reason, now, f.Step, CleanText(f.Detail))
 	if err != nil {
 		return false, err
 	}
@@ -1187,19 +1194,21 @@ func (s *Store) Run(ctx context.Context, id string) (Run, bool, error) {
 	return r, true, nil
 }
 
-// ReplaceWithFailure turns the stored result of a reported run into a failure
-// with reason: it clears the result and keeps the state reported, so the
+// ReplaceWithFailure turns the stored result of a reported run into the
+// failure f: it clears the result and keeps the state reported, so the
 // publisher posts an error comment. It returns ErrNotReported when the run is
 // not reported with a result.
-func (s *Store) ReplaceWithFailure(ctx context.Context, id, reason string) error {
+func (s *Store) ReplaceWithFailure(ctx context.Context, id string, f Failure) error {
 	if !validUUID(id) {
 		return ErrNotReported
 	}
-	if reason == "" {
-		reason = "review failed"
+	if f.Reason == "" {
+		f.Reason = "review failed"
 	}
-	tag, err := s.pool.Exec(ctx, `UPDATE runs SET result = NULL, failure_reason = $2
-		WHERE id = $1::uuid AND state = 'reported' AND result IS NOT NULL`, id, reason)
+	tag, err := s.pool.Exec(ctx, `UPDATE runs SET result = NULL, failure_reason = $2,
+		failure_step = $3, failure_detail = $4
+		WHERE id = $1::uuid AND state = 'reported' AND result IS NOT NULL`,
+		id, f.Reason, f.Step, CleanText(f.Detail))
 	if err != nil {
 		return err
 	}

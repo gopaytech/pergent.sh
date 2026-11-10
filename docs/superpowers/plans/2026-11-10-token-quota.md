@@ -42,12 +42,12 @@
 ### Task 1: Migration and run-side store
 
 **Files:**
-- Create: `internal/store/migrations/0035_token_quota.sql`, `internal/store/quota.go`, `internal/store/quota_test.go`
+- Create: `internal/store/migrations/0037_token_quota.sql`, `internal/store/quota.go`, `internal/store/quota_test.go`
 - Modify: `internal/store/runs.go` (`Run`, run columns/scan, `EnqueueRerun`, `StartRun`), every caller of `EnqueueRerun` (`internal/actions/actions.go`, `internal/engine/publish.go:314`, tests)
 
 **Interfaces:**
 - Produces:
-  - Migration `0035_token_quota.sql` (re-check that 0035 is still free on `origin/main`; if not, take the next): `runs.quota_checked boolean NOT NULL DEFAULT false`; `merge_requests.quota_noted_at timestamptz`; `dashboard_repos.monthly_token_quota bigint CHECK (monthly_token_quota > 0)`; `instances.monthly_token_quota bigint CHECK (monthly_token_quota > 0)`; `CREATE INDEX run_usage_instance_idx ON run_usage (instance, reported_at)`. Header comment says the previous release ignores all of it and never claims a waiting run.
+  - Migration `0037_token_quota.sql` (renumbered: 0035 and 0036 were taken on `origin/main`, so this is the next free number): `runs.quota_checked boolean NOT NULL DEFAULT false`; `merge_requests.quota_noted_at timestamptz`; `dashboard_repos.monthly_token_quota bigint CHECK (monthly_token_quota > 0)`; `instances.monthly_token_quota bigint CHECK (monthly_token_quota > 0)`; `CREATE INDEX run_usage_instance_idx ON run_usage (instance, reported_at)`. Header comment says the previous release ignores all of it and never claims a waiting run.
   - `const WaitQuota = "quota_used_up"` next to `WaitUntrusted`.
   - `Run.QuotaChecked bool`.
   - `func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA, targetBranch, trigger string, skills []string, baseRunID *string, replace, quotaChecked bool) (id string, created bool, err error)`: the new run's `quota_checked` is `quotaChecked`. `actions.Rerun` passes `true`; `publish.go:314` passes `false`.
@@ -306,7 +306,7 @@
 - Consumes: the copy in Global Constraints, verbatim.
 
 - [ ] **Step 1: Write `docs/concepts/token-quota.md`**: where to set each quota (Integrations, repository Settings, config keys), empty means unlimited, a repository's quota sits inside its instance's, what counts (input + output, UTC month, by when a review finished), what happens to automatic reviews (held, the status and note quoted verbatim, waiting box, admin's Start) and to requests by hand (refused with the reason, the note as the reply once a month), admins' Start and Re-run go past it and count, nothing starts by itself on the 1st, the overshoot (a review that starts with room can go over, and reviews started together near the limit can all run), the known gap (a Job with no result, or a superseded review, counts as zero), and that rolling back removes the quota.
-- [ ] **Step 2: Update the other pages** listed above; upgrading says migration `0035` runs at startup (back up Postgres first), nothing is limited after the upgrade, and to remove the three `monthly_token_quota` keys before rolling back.
+- [ ] **Step 2: Update the other pages** listed above; upgrading says migration `0037` runs at startup (back up Postgres first), nothing is limited after the upgrade, and to remove the three `monthly_token_quota` keys before rolling back.
 - [ ] **Step 3: Check** every quoted text matches `internal/engine/quota.go` exactly: `grep -rn "monthly token quota is used up" docs internal/engine/quota.go`.
 - [ ] **Step 4: Run the full gates** (Go and web, as in Global Constraints) and the name scan over the whole branch: `git diff origin/main... | grep -i -E 'golabs|gojek|gopay[^t]'` prints nothing.
 - [ ] **Step 5: Commit** `docs: the monthly token quota`

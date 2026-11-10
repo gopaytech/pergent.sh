@@ -4,11 +4,25 @@
 
 **Admins can give an instance and a repository a monthly token quota.** Once it is used up, no new review starts on it until the 1st or until an admin starts one: [Monthly token quota](concepts/token-quota.md). Nothing is limited after the upgrade, and nothing needs turning on.
 
-Migration `0036` runs at startup and adds columns (nullable, or with a default) and an index on `run_usage`, dropping nothing, so back up Postgres first, as for any migration.
+Migration `0037` runs at startup and adds columns (nullable, or with a default) and an index on `run_usage`, dropping nothing, so back up Postgres first, as for any migration.
 
 - **To roll back, first remove `gitlab[].monthly_token_quota`, `github[].monthly_token_quota` and `repositories[].monthly_token_quota` from the config.** The previous release refuses a config key it doesn't know.
 - **Rolling back removes the quota.** The previous release ignores the new columns, so a quota set in the dashboard stays stored but nothing checks it. During a rolling upgrade, replicas of the previous release also start reviews without the check. It doesn't start a change a quota held by itself, but its **Start review** and a writer's `review` command can.
 - **The tokens counted are those in [Usage](concepts/usage.md).** A Job with no result and a superseded review count as zero.
+
+## Upgrading to 0.16.0
+
+**A failed review can be traced to its Job.** Admins see the Job and pod on the review page, a failed review keeps its clone log and the pod's state, and the failure line names the step that failed: [Troubleshooting a failed review](setup/troubleshooting.md).
+
+Migration `0036` runs at startup and only adds columns and a table, so back up Postgres first, as for any migration. The previous release keeps working on the migrated database and ignores the new columns and table. There is no new config key, so to roll back nothing needs removing from the config.
+
+- **The chart's Role needs `list` on `events`.** Apply the new chart. Without it a failed review's pod state has no events, and pergent.sh logs a warning, once per run. Nothing else is affected. If you manage the Role yourself, add `apiGroups: [""]`, `resources: ["events"]`, `verbs: ["list"]` to the one in `jobsNamespace`.
+- **New Jobs carry labels and annotations.** The Job, pod, Secret and ConfigMap of a review get `pergent.sh/instance`, `pergent.sh/project-id`, `pergent.sh/mr` and `pergent.sh/head`, and the annotations `pergent.sh/project` and `pergent.sh/mr-url`. Jobs already running keep what they have.
+- **Failure texts change wording, and name the step.** For example `the clone failed (checkout exited with code 128)` or `the review couldn't start: no node could run it`. A comment changes the next time it is updated. A text that matched `OOMKilled` still does.
+- **A pod that can't be scheduled, and a Job that makes no pod, now fail the review after 10 minutes,** not at the Job's deadline. Pods whose containers are starting are not affected. The image error rule is unchanged, at 5 minutes. These reviews are not retried: press **Re-run**.
+- **`pergent_reviews_no_result_total` has a new `step` label:** `starting`, `clone`, `review`, `delivery`, `unknown`, or `other` for a failure before a Job existed. Totals are unchanged, and `sum without (step) (...)` gives the old count. A query that already sums the metric needs no change. A repository with only superseded runs no longer gets a zero series. Reviews from before the upgrade count as `other`. See [Metrics](concepts/metrics.md).
+- **"Needs attention" has a new kind, `clone_failing`,** for a repository whose clone failed twice or more in 7 days.
+- **Reviews from before the upgrade have no clone log or pod state.** Only new failures keep them.
 
 ## Upgrading to 0.15.0
 
