@@ -400,7 +400,7 @@ func TestSupersedeInstance(t *testing.T) {
 	if _, err := s.ClaimQueued(ctx, 10, t0.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := s.ReportFailure(ctx, reported, "no clone token", t0); err != nil || !ok {
+	if ok, err := s.ReportFailure(ctx, reported, Failure{Reason: "no clone token"}, t0); err != nil || !ok {
 		t.Fatalf("ReportFailure = %v, %v", ok, err)
 	}
 	queued := enqueue("lab", 1, 1, head('a'))

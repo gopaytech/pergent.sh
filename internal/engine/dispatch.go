@@ -920,7 +920,7 @@ func (d *dispatcher) fail(ctx context.Context, reason string) error {
 	d.log.Warn("review can't start; reporting the run as failed", "reason", reason)
 	sctx, cancel := settleCtx(ctx)
 	defer cancel()
-	if _, err := d.e.Store.ReportFailure(sctx, d.run.ID, reason, d.e.now()); err != nil {
+	if _, err := d.e.Store.ReportFailure(sctx, d.run.ID, store.Failure{Reason: reason}, d.e.now()); err != nil {
 		return fmt.Errorf("report failure: %w", err)
 	}
 	return nil

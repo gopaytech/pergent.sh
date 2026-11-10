@@ -375,7 +375,7 @@ func TestStoreResultOutcomes(t *testing.T) {
 
 	t.Run("after ReportFailure is a conflict", func(t *testing.T) {
 		id := dispatched(t, s, MRKey{mr1.Instance, 8, 4}, "ggg", "tok")
-		ok, err := s.ReportFailure(ctx, id, "job failed: OOMKilled", t0.Add(time.Minute))
+		ok, err := s.ReportFailure(ctx, id, Failure{Reason: "job failed: OOMKilled"}, t0.Add(time.Minute))
 		if err != nil || !ok {
 			t.Fatalf("ReportFailure = %v, %v", ok, err)
 		}
@@ -438,21 +438,21 @@ func TestStoreResultKeepsHashForSingleUse(t *testing.T) {
 func TestReportFailureOnlyMovesUnreportedRuns(t *testing.T) {
 	s := newStore(t)
 	queued := enqueue(t, s, mr1, "aaa")
-	ok, err := s.ReportFailure(ctx, queued, "no job", t0)
+	ok, err := s.ReportFailure(ctx, queued, Failure{Reason: "no job"}, t0)
 	if err != nil || !ok {
 		t.Fatalf("queued run: %v %v", ok, err)
 	}
 	if r := getRun(t, s, queued); r.State != Reported || r.FailureReason != "no job" || !r.ReportedAt.Equal(t0) {
 		t.Errorf("run = %+v", r)
 	}
-	if ok, _ := s.ReportFailure(ctx, queued, "again", t0); ok {
+	if ok, _ := s.ReportFailure(ctx, queued, Failure{Reason: "again"}, t0); ok {
 		t.Errorf("second ReportFailure returned true")
 	}
 	done := reported(t, s, mr2, "bbb", `{"status":"completed"}`)
-	if ok, _ := s.ReportFailure(ctx, done, "late", t0); ok {
+	if ok, _ := s.ReportFailure(ctx, done, Failure{Reason: "late"}, t0); ok {
 		t.Errorf("ReportFailure moved a run that has a result")
 	}
-	if ok, _ := s.ReportFailure(ctx, "00000000-0000-0000-0000-000000000000", "x", t0); ok {
+	if ok, _ := s.ReportFailure(ctx, "00000000-0000-0000-0000-000000000000", Failure{Reason: "x"}, t0); ok {
 		t.Errorf("ReportFailure on unknown id returned true")
 	}
 }
@@ -490,7 +490,7 @@ func TestRunsToPublishAndMarkPublished(t *testing.T) {
 func TestRunWithFailureReasonIsPublishable(t *testing.T) {
 	s := newStore(t)
 	id := dispatched(t, s, mr1, "aaa", "tok")
-	if ok, err := s.ReportFailure(ctx, id, "boom", t0); err != nil || !ok {
+	if ok, err := s.ReportFailure(ctx, id, Failure{Reason: "boom"}, t0); err != nil || !ok {
 		t.Fatal(ok, err)
 	}
 	got, err := s.RunsToPublish(ctx, t0, 10)
@@ -542,7 +542,7 @@ func TestPublishRetryCountsFromReport(t *testing.T) {
 	if _, err := s.ClaimQueued(ctx, 1, t0.Add(10*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := s.ReportFailure(ctx, id, "x", t0.Add(10*time.Hour)); err != nil || !ok {
+	if ok, err := s.ReportFailure(ctx, id, Failure{Reason: "x"}, t0.Add(10*time.Hour)); err != nil || !ok {
 		t.Fatal(ok, err)
 	}
 	if r := getRun(t, s, id); r.Attempts != 0 {

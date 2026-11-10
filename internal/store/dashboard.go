@@ -432,14 +432,19 @@ func (s *Store) RunLog(ctx context.Context, runID string) (string, bool, error) 
 	return text, true, nil
 }
 
-// PruneRunLogs deletes the logs stored before the given time and returns how
-// many there were.
+// PruneRunLogs deletes the logs and the diagnostics stored before the given
+// time and returns how many there were in all.
 func (s *Store) PruneRunLogs(ctx context.Context, before time.Time) (int, error) {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM run_logs WHERE created_at < $1`, before)
 	if err != nil {
 		return 0, err
 	}
-	return int(tag.RowsAffected()), nil
+	n := int(tag.RowsAffected())
+	tag, err = s.pool.Exec(ctx, `DELETE FROM run_diagnostics WHERE created_at < $1`, before)
+	if err != nil {
+		return n, err
+	}
+	return n + int(tag.RowsAffected()), nil
 }
 
 // runLogLookback bounds how long before RunsToLog's since a run may have

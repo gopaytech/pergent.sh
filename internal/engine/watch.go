@@ -128,7 +128,7 @@ func (e *Engine) watch(ctx context.Context, run store.Run, now time.Time) (bool,
 		return false, nil
 	}
 
-	changed, err := e.Store.ReportFailure(ctx, run.ID, reason, now)
+	changed, err := e.Store.ReportFailure(ctx, run.ID, store.Failure{Reason: reason}, now)
 	if err != nil {
 		return false, fmt.Errorf("report failure: %w", err)
 	}

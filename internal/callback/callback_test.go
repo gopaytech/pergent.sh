@@ -39,6 +39,7 @@ type fake struct {
 	runErr   error
 	replaced []string
 	reported []string
+	steps    []string // the step of each reported failure
 	stored   int
 	replErr  error
 
@@ -74,8 +75,9 @@ func (f *fake) StoreResult(_ context.Context, id, token string, _ []byte, _ time
 	return f.outcome, nil
 }
 
-func (f *fake) ReportFailure(_ context.Context, id, reason string, _ time.Time) (bool, error) {
-	f.reported = append(f.reported, reason)
+func (f *fake) ReportFailure(_ context.Context, id string, fail store.Failure, _ time.Time) (bool, error) {
+	f.reported = append(f.reported, fail.Reason)
+	f.steps = append(f.steps, fail.Step)
 	return true, nil
 }
 
@@ -239,6 +241,9 @@ func TestInvalidJSONWithGoodTokenFailsRun(t *testing.T) {
 	}
 	if len(f.reported) != 1 || !strings.HasPrefix(f.reported[0], "pergent sent a result pergent.sh couldn't use: ") || e.woken != 1 {
 		t.Errorf("reported = %v woken = %d", f.reported, e.woken)
+	}
+	if len(f.steps) != 1 || f.steps[0] != "delivery" {
+		t.Errorf("failure steps = %v, want [delivery]", f.steps)
 	}
 }
 

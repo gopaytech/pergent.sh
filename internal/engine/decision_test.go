@@ -55,7 +55,7 @@ func TestPublishRecordsDecision(t *testing.T) {
 			var id string
 			if tc.failure != "" {
 				id = env.Dispatched(1, head)
-				if _, err := env.Store.ReportFailure(env.ctx, id, tc.failure, env.Now()); err != nil {
+				if _, err := env.Store.ReportFailure(env.ctx, id, store.Failure{Reason: tc.failure}, env.Now()); err != nil {
 					t.Fatal(err)
 				}
 			} else {
