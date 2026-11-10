@@ -178,7 +178,7 @@ export function CopyButton({ text, what }: { text: string; what: string }) {
       await navigator.clipboard.writeText(text);
       setCopied(true);
     } catch {
-      // See above.
+      // No clipboard here: the text is on screen to select.
     }
   };
   return (
