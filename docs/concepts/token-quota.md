@@ -1,6 +1,6 @@
 # 🪙 Monthly token quota
 
-Every review spends tokens on your LLM account. A busy repository, a loop of pushes or re-runs, or a team with write access can use the account up, and then every repository's reviews fail. A **monthly token quota** is a ceiling no one can get past without an admin: once it is used up, no new review starts on it and no LLM call is made, until the 1st of the next month or until an admin starts one.
+Every review spends tokens on your LLM account. A busy repository, a loop of pushes or re-runs, or a team with write access can use the account up, and then every repository's reviews fail. A **monthly token quota** is a ceiling no one can get past without an admin: once it is used up, no new review starts on it and no LLM call is made, until the first push after the 1st of the next month, or until an admin starts one.
 
 A quota is optional. With none set anywhere, pergent.sh behaves exactly as before.
 
