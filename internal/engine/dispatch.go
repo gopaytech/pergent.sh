@@ -568,6 +568,11 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		WorkSize:       e.Config.Jobs.WorkSize,
 		Inputs:         in,
 		LinkedClones:   links.Clones,
+		Instance:       run.MR.Instance,
+		ProjectID:      run.MR.ProjectID,
+		IID:            run.MR.IID,
+		ProjectPath:    run.ProjectPath,
+		MRURL:          mr.WebURL,
 	}
 	secrets := kube.Secrets{GitToken: string(gitToken), LLMKey: llmKey, ResultToken: token}
 	if err := e.Launcher.Launch(ctx, params, secrets); err != nil {
