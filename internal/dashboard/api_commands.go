@@ -29,6 +29,7 @@ const (
 	msgHeadMoved       = "this change was pushed since the page was loaded; reload it and start the review again"
 	msgNotWaiting      = "this change isn't waiting for someone to start its review"
 	msgDraftsNotOn     = "drafts aren't reviewed in this repository"
+	msgQuotaUsedUp     = "the monthly token quota is used up"
 	msgPlatformFailed  = "could not read this change from its platform, please try again"
 	msgRedecideFailed  = "the change was saved, but the review could not be decided again yet; the next review will use it"
 )
@@ -37,7 +38,8 @@ const (
 // checks X-CSRF-Token):
 //   - POST /api/reviews/{instance}/{project...}/{number}/rerun
 //     {"failed": bool}: 202 {"status": "queued" | "already queued" |
-//     "nothing failed" | "whole review"}, 429 at a re-run cap;
+//     "nothing failed" | "whole review"}, 409 when a monthly token quota is used
+//     up (an admin's goes past it), 429 at a re-run cap;
 //   - POST …/{number}/dismiss {"fingerprint", "reason"}: 200 {"status":
 //     "dismissed" | "already dismissed"};
 //   - POST …/{number}/restore {"fingerprint"}: 200 {"status": "restored" |
@@ -69,6 +71,12 @@ type reviewButton struct {
 	mr   store.MRKey
 	// project is the change's repository path as its runs spell it.
 	project string
+}
+
+// pastQuota tells whether se's press goes past a used-up monthly token quota:
+// only an admin's does.
+func (b reviewButton) pastQuota(se Session) bool {
+	return se.Role(b.repo.Instance, b.repo.Project) == RoleAdmin
 }
 
 func (d *Dashboard) reviewAction(w http.ResponseWriter, r *http.Request) {
@@ -234,7 +242,7 @@ func (d *Dashboard) rerun(w http.ResponseWriter, r *http.Request, b reviewButton
 
 	res, err := actions.Rerun(ctx, d.Store, actions.RerunRequest{
 		MR: b.mr, ProjectPath: b.project, Head: change.HeadSHA, TargetBranch: change.TargetBranch,
-		FailedOnly: failedOnly, Repo: b.repo, Now: d.now(),
+		FailedOnly: failedOnly, Repo: b.repo, Now: d.now(), PastQuota: b.pastQuota(session(r)),
 	})
 	if err != nil {
 		d.failed(w, r, "queueing a re-run", err)
@@ -243,6 +251,8 @@ func (d *Dashboard) rerun(w http.ResponseWriter, r *http.Request, b reviewButton
 	switch res.Status {
 	case actions.RerunNothingFailed:
 		accepted(w, http.StatusAccepted, "nothing failed")
+	case actions.RerunQuotaUsedUp:
+		writeError(w, http.StatusConflict, msgQuotaUsedUp)
 	case actions.RerunCapped:
 		writeError(w, http.StatusTooManyRequests, actions.CapMessage(actions.Term(b.repo.Platform)))
 	case actions.RerunAlreadyQueued:
@@ -286,13 +296,15 @@ func (d *Dashboard) start(w http.ResponseWriter, r *http.Request, b reviewButton
 	}
 	res, err := actions.Start(ctx, d.Store, actions.StartRequest{
 		MR: b.mr, ProjectPath: b.project, Head: change.HeadSHA, TargetBranch: change.TargetBranch,
-		Repo: b.repo, Now: d.now(),
+		Repo: b.repo, Now: d.now(), PastQuota: b.pastQuota(session(r)),
 	})
 	if err != nil {
 		d.failed(w, r, "starting a review", err)
 		return
 	}
 	switch res.Status {
+	case actions.RerunQuotaUsedUp:
+		writeError(w, http.StatusConflict, msgQuotaUsedUp)
 	case actions.RerunCapped:
 		writeError(w, http.StatusTooManyRequests, actions.CapMessage(actions.Term(b.repo.Platform)))
 	case actions.RerunAlreadyQueued:

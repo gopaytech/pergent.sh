@@ -814,8 +814,9 @@ paths:
         review or only its failed skills. The body may be left out (a re-run
         of everything). For maintainers and admins of the repository (403
         otherwise), config repositories included. The change must be open
-        (409), and a draft only where drafts are reviewed (409). At a re-run
-        cap the answer is 429.
+        (409), and a draft only where drafts are reviewed (409). A used-up
+        monthly token quota refuses a maintainer's re-run (409, nothing is
+        queued); an admin's goes past it. At a re-run cap the answer is 429.
       x-pergent-access: session
       x-pergent-pattern: POST /api/reviews/{instance}/{rest...}
       security:
@@ -862,7 +863,9 @@ paths:
         access. The body names the head the page showed (`WaitingView.head`):
         when the change has been pushed since, nothing starts (409). For
         maintainers and admins of the repository (403 otherwise). The change
-        must be open (409), and a draft only where drafts are reviewed (409). A start counts against the
+        must be open (409), and a draft only where drafts are reviewed (409). A used-up
+        monthly token quota refuses a maintainer's start (409, the change
+        stays waiting); an admin's goes past it. A start counts against the
         change's re-run cap only (429), not the repository's.
       x-pergent-access: session
       x-pergent-pattern: POST /api/reviews/{instance}/{rest...}
