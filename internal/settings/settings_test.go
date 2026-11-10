@@ -90,7 +90,7 @@ func get(t *testing.T, r *Resolver, instance, project string) Effective {
 }
 
 var allKeys = []string{KeyApprove, KeyReviewDrafts, KeyInlineFindings, KeyFailureStatus, KeySkills, KeyJobTimeout, KeyMaxTurns, KeyJobMemory,
-	KeyRerunLimitPerMR, KeyRerunLimitPerRepo, KeyRepoSkills, KeyCommandsAuthorAndMaintainersOnly, KeyIncrementalReviews, KeyLearnFromDismissals, KeyQuietReviews, KeyCommentLayout, KeyLinkedReposEnabled}
+	KeyRerunLimitPerMR, KeyRerunLimitPerRepo, KeyRepoSkills, KeyCommandsAuthorAndMaintainersOnly, KeyIncrementalReviews, KeyLearnFromDismissals, KeyQuietReviews, KeyCommentLayout, KeyLinkedReposEnabled, KeyMonthlyTokenQuota}
 
 // wantOverridden checks exactly the given keys are overridden.
 func wantOverridden(t *testing.T, eff Effective, keys ...string) {
@@ -177,6 +177,7 @@ func TestResolverConfigKeys(t *testing.T) {
 		CommandsAuthorAndMaintainersOnly: ptr(false), IncrementalReviews: ptr(false), LearnFromDismissals: ptr(false), QuietReviews: ptr(true),
 		CommentLayout:      []string{"findings:open", "files:collapsed"},
 		LinkedReposEnabled: ptr(true),
+		MonthlyTokenQuota:  ptr(int64(5000)),
 	})
 	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)} // no store: config only
 
@@ -194,6 +195,9 @@ func TestResolverConfigKeys(t *testing.T) {
 	}
 	if !eff.LinkedReposEnabled {
 		t.Errorf("LinkedReposEnabled = false, want true")
+	}
+	if eff.MonthlyTokenQuota == nil || *eff.MonthlyTokenQuota != 5000 {
+		t.Errorf("MonthlyTokenQuota = %v, want 5000", eff.MonthlyTokenQuota)
 	}
 	wantOverridden(t, eff, allKeys...)
 
@@ -257,6 +261,7 @@ func TestResolverDefaultsAndOverrides(t *testing.T) {
 		RerunLimitPerMR: ptr(20), RerunLimitPerRepo: ptr(100), CommandsAuthorAndMaintainersOnly: ptr(false), IncrementalReviews: ptr(false), LearnFromDismissals: ptr(false), QuietReviews: ptr(true),
 		CommentLayout:      []string{"findings:open", "files:collapsed"},
 		LinkedReposEnabled: ptr(true),
+		MonthlyTokenQuota:  ptr(int64(5000)),
 	})
 	// A row of an instance no longer configured is not a repository.
 	upsert(t, st, store.DashboardRepo{Instance: "gone", Project: "acme/old"})
@@ -287,6 +292,9 @@ func TestResolverDefaultsAndOverrides(t *testing.T) {
 	}
 	if !full.LinkedReposEnabled {
 		t.Errorf("LinkedReposEnabled = false, want true")
+	}
+	if full.MonthlyTokenQuota == nil || *full.MonthlyTokenQuota != 5000 {
+		t.Errorf("MonthlyTokenQuota = %v, want 5000", full.MonthlyTokenQuota)
 	}
 	wantOverridden(t, full, allKeys...)
 
@@ -820,5 +828,75 @@ func TestTrustedAuthorsOnlyResolution(t *testing.T) {
 					instMode, repoMode, eff.TrustedAuthorsOnly, eff.Overridden[KeyTrustedAuthorsOnly], want, overridden)
 			}
 		}
+	}
+}
+
+// A repository's own quota and its instance's are both resolved; the
+// repository without one has none of its own.
+func TestTokenQuotaResolution(t *testing.T) {
+	st := newStore(t)
+	cfg := testConfig()
+	reg := instances.New(cfg, st, nil)
+	hundred := int64(100)
+	reg.Put(instances.FromRow(store.InstanceRow{Name: "lab", Platform: config.PlatformGitLab, MonthlyTokenQuota: &hundred}))
+	r := &Resolver{Config: cfg, Store: st, Instances: reg}
+	upsert(t, st, store.DashboardRepo{Instance: "lab", Project: "acme/capped", CreatedBy: "admin", MonthlyTokenQuota: ptr(int64(10))})
+	upsert(t, st, store.DashboardRepo{Instance: "lab", Project: "acme/free", CreatedBy: "admin"})
+
+	eff := get(t, r, "lab", "acme/capped")
+	if eff.MonthlyTokenQuota == nil || *eff.MonthlyTokenQuota != 10 || !eff.Overridden[KeyMonthlyTokenQuota] {
+		t.Errorf("capped: quota = %v overridden=%v, want 10 and true", eff.MonthlyTokenQuota, eff.Overridden[KeyMonthlyTokenQuota])
+	}
+	if eff.InstanceMonthlyTokenQuota == nil || *eff.InstanceMonthlyTokenQuota != 100 {
+		t.Errorf("capped: instance quota = %v, want 100", eff.InstanceMonthlyTokenQuota)
+	}
+	eff = get(t, r, "lab", "acme/free")
+	if eff.MonthlyTokenQuota != nil || eff.Overridden[KeyMonthlyTokenQuota] {
+		t.Errorf("free: quota = %v overridden=%v, want nil and false", eff.MonthlyTokenQuota, eff.Overridden[KeyMonthlyTokenQuota])
+	}
+	if eff.InstanceMonthlyTokenQuota == nil || *eff.InstanceMonthlyTokenQuota != 100 {
+		t.Errorf("free: instance quota = %v, want 100", eff.InstanceMonthlyTokenQuota)
+	}
+
+	// An instance the registry doesn't know has no quota (it is not
+	// resolvable, so ask the defaults directly).
+	if got := r.defaultsFor(SourceDashboard, config.PlatformGitLab, "ghost", "acme/x", store.RepoDefaults{}); got.InstanceMonthlyTokenQuota != nil {
+		t.Errorf("unregistered instance quota = %d, want nil", *got.InstanceMonthlyTokenQuota)
+	}
+	if eff := get(t, r, "main", "acme/widgets"); eff.InstanceMonthlyTokenQuota != nil {
+		t.Errorf("a config instance with no quota resolves to %d, want nil", *eff.InstanceMonthlyTokenQuota)
+	}
+}
+
+// A stored quota outside 1 to 10^15 is ignored.
+func TestTokenQuotaIgnoresInvalidStoredValue(t *testing.T) {
+	st := newStore(t)
+	cfg := testConfig()
+	r := &Resolver{Config: cfg, Store: st, Instances: instances.New(cfg, st, nil)}
+	row := store.DashboardRepo{Instance: "main", Project: "acme/big", MonthlyTokenQuota: ptr(config.MaxMonthlyTokenQuota + 1)}
+	eff, ok := r.fromDashboard(row, store.RepoDefaults{})
+	if !ok || eff.MonthlyTokenQuota != nil || eff.Overridden[KeyMonthlyTokenQuota] {
+		t.Errorf("too large: quota = %v overridden=%v, want nil and false", eff.MonthlyTokenQuota, eff.Overridden[KeyMonthlyTokenQuota])
+	}
+	row.MonthlyTokenQuota = ptr(config.MaxMonthlyTokenQuota)
+	if eff, _ := r.fromDashboard(row, store.RepoDefaults{}); eff.MonthlyTokenQuota == nil || *eff.MonthlyTokenQuota != config.MaxMonthlyTokenQuota {
+		t.Errorf("largest: quota = %v, want %d", eff.MonthlyTokenQuota, config.MaxMonthlyTokenQuota)
+	}
+	row.MonthlyTokenQuota = ptr(int64(0))
+	if eff, _ := r.fromDashboard(row, store.RepoDefaults{}); eff.MonthlyTokenQuota != nil {
+		t.Errorf("zero: quota = %d, want nil", *eff.MonthlyTokenQuota)
+	}
+}
+
+// A quota set in the config wins over a dashboard row of the same repository.
+func TestConfigQuotaWins(t *testing.T) {
+	st := newStore(t)
+	cfg := testConfig()
+	cfg.Repositories[0].MonthlyTokenQuota = ptr(int64(3))
+	upsert(t, st, store.DashboardRepo{Instance: "main", Project: "acme/widgets", CreatedBy: "alice", MonthlyTokenQuota: ptr(int64(99))})
+	r := &Resolver{Config: cfg, Store: st, Instances: instances.New(cfg, st, nil)}
+	eff := get(t, r, "main", "acme/widgets")
+	if eff.Source != SourceConfig || eff.MonthlyTokenQuota == nil || *eff.MonthlyTokenQuota != 3 || !eff.Overridden[KeyMonthlyTokenQuota] {
+		t.Errorf("Get = %v source=%s overridden=%v, want 3 from the config", eff.MonthlyTokenQuota, eff.Source, eff.Overridden[KeyMonthlyTokenQuota])
 	}
 }

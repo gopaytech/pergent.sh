@@ -923,3 +923,52 @@ func TestInstanceTrustMode(t *testing.T) {
 		}
 	}
 }
+
+// Every instance carries its monthly token quota, from the config or the row.
+func TestInstanceTokenQuota(t *testing.T) {
+	q := int64(5000)
+	row := FromRow(store.InstanceRow{Name: "lab", Platform: config.PlatformGitLab, MonthlyTokenQuota: &q})
+	if row.MonthlyTokenQuota == nil || *row.MonthlyTokenQuota != 5000 {
+		t.Errorf("FromRow quota = %v, want 5000", row.MonthlyTokenQuota)
+	}
+	if got := FromRow(store.InstanceRow{Name: "lab", Platform: config.PlatformGitHub}).MonthlyTokenQuota; got != nil {
+		t.Errorf("FromRow with no quota = %d, want nil", *got)
+	}
+
+	gl, gh := int64(100), int64(200)
+	cfg := &config.Config{
+		GitLab: []config.Instance{{Name: "main", MonthlyTokenQuota: &gl}, {Name: "plain"}},
+		GitHub: []config.GitHubInstance{{Name: "gh", MonthlyTokenQuota: &gh}},
+	}
+	r := New(cfg, nil, nil)
+	for name, want := range map[string]int64{"main": 100, "gh": 200} {
+		if inst, _ := r.Get(name); inst.MonthlyTokenQuota == nil || *inst.MonthlyTokenQuota != want {
+			t.Errorf("%s quota = %v, want %d", name, inst.MonthlyTokenQuota, want)
+		}
+	}
+	if inst, _ := r.Get("plain"); inst.MonthlyTokenQuota != nil {
+		t.Errorf("plain quota = %d, want nil", *inst.MonthlyTokenQuota)
+	}
+
+	r.Put(row)
+	if inst, ok := r.Get("lab"); !ok || inst.MonthlyTokenQuota == nil || *inst.MonthlyTokenQuota != 5000 {
+		t.Fatalf("Get(lab) = %+v, %v", inst, ok)
+	}
+	nine := int64(9)
+	if inst, ok := r.SetTokenQuota("lab", &nine); !ok || inst.MonthlyTokenQuota == nil || *inst.MonthlyTokenQuota != 9 {
+		t.Errorf("SetTokenQuota = %v, %v; want 9", inst.MonthlyTokenQuota, ok)
+	}
+	if inst, _ := r.Get("lab"); inst.MonthlyTokenQuota == nil || *inst.MonthlyTokenQuota != 9 {
+		t.Errorf("Get after SetTokenQuota = %v, want 9", inst.MonthlyTokenQuota)
+	}
+	if inst, ok := r.SetTokenQuota("lab", nil); !ok || inst.MonthlyTokenQuota != nil {
+		t.Errorf("SetTokenQuota(nil) = %v, %v; want nil", inst.MonthlyTokenQuota, ok)
+	}
+	if _, ok := r.SetTokenQuota("nope", &nine); ok {
+		t.Error("SetTokenQuota of an unknown instance found it")
+	}
+	// A config instance is not changed through the registry.
+	if _, ok := r.SetTokenQuota("main", &nine); ok {
+		t.Error("SetTokenQuota changed a config instance")
+	}
+}

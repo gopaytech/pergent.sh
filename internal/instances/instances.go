@@ -63,6 +63,9 @@ type Instance struct {
 	// config.TrustFollowVisibility, config.TrustOn or config.TrustOff,
 	// never empty.
 	TrustedAuthorsOnly string
+	// MonthlyTokenQuota is the instance's token budget per UTC calendar
+	// month (nil: none). The registry never shares it with its source.
+	MonthlyTokenQuota *int64
 }
 
 // HasOAuth reports whether people can sign in to the dashboard through the
@@ -240,6 +243,13 @@ func (r *Registry) SetTrustMode(name, mode string) (Instance, bool) {
 	return r.change(name, func(inst *Instance) { inst.TrustedAuthorsOnly = trustMode(mode) })
 }
 
+// SetTokenQuota sets the monthly token quota of the instance of the dashboard
+// called name, in place (nil clears it), and returns it; ok is false when
+// there is none.
+func (r *Registry) SetTokenQuota(name string, quota *int64) (Instance, bool) {
+	return r.change(name, func(inst *Instance) { inst.MonthlyTokenQuota = cloneQuota(quota) })
+}
+
 // SetOAuthClientID sets the OAuth client ID of the instance of the dashboard
 // called name, in place, and returns it; ok is false when there is none.
 func (r *Registry) SetOAuthClientID(name, clientID string) (Instance, bool) {
@@ -279,12 +289,14 @@ func (r *Registry) config(name string) (Instance, bool) {
 
 func (r *Registry) fromGitLab(inst config.Instance) Instance {
 	return Instance{Name: inst.Name, Platform: config.PlatformGitLab, Source: SourceConfig,
-		GitLab: &inst, OAuthClientID: envValue(inst.OAuthClientIDEnv), TrustedAuthorsOnly: trustMode(inst.TrustedAuthorsOnly)}
+		GitLab: &inst, OAuthClientID: envValue(inst.OAuthClientIDEnv), TrustedAuthorsOnly: trustMode(inst.TrustedAuthorsOnly),
+		MonthlyTokenQuota: cloneQuota(inst.MonthlyTokenQuota)}
 }
 
 func (r *Registry) fromGitHub(inst config.GitHubInstance) Instance {
 	return Instance{Name: inst.Name, Platform: config.PlatformGitHub, Source: SourceConfig,
-		GitHub: &inst, OAuthClientID: envValue(inst.OAuthClientIDEnv), TrustedAuthorsOnly: trustMode(inst.TrustedAuthorsOnly)}
+		GitHub: &inst, OAuthClientID: envValue(inst.OAuthClientIDEnv), TrustedAuthorsOnly: trustMode(inst.TrustedAuthorsOnly),
+		MonthlyTokenQuota: cloneQuota(inst.MonthlyTokenQuota)}
 }
 
 // trustMode is m, or config.TrustFollowVisibility when m is empty.
@@ -293,6 +305,15 @@ func trustMode(m string) string {
 		return config.TrustFollowVisibility
 	}
 	return m
+}
+
+// cloneQuota is a copy of q, so no two holders share the number.
+func cloneQuota(q *int64) *int64 {
+	if q == nil {
+		return nil
+	}
+	v := *q
+	return &v
 }
 
 func envValue(name string) string {
@@ -305,7 +326,8 @@ func envValue(name string) string {
 // FromRow is the instance of the dashboard a store row describes.
 func FromRow(row store.InstanceRow) Instance {
 	inst := Instance{Name: row.Name, Platform: row.Platform, Source: SourceDashboard,
-		Removing: row.Removing, OAuthClientID: row.OAuthClientID, TrustedAuthorsOnly: trustMode(row.TrustedAuthorsOnly)}
+		Removing: row.Removing, OAuthClientID: row.OAuthClientID, TrustedAuthorsOnly: trustMode(row.TrustedAuthorsOnly),
+		MonthlyTokenQuota: cloneQuota(row.MonthlyTokenQuota)}
 	if row.Platform == config.PlatformGitHub {
 		gh := &config.GitHubInstance{Name: row.Name, APIURL: row.APIURL, ReviewApp: config.App{AppID: row.ReviewAppID}}
 		switch {

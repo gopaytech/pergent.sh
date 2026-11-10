@@ -1603,6 +1603,57 @@ func TestTrustedAuthorsConfigInvalid(t *testing.T) {
 	}
 }
 
+// The monthly token quota is read from an instance and a repository entry.
+func TestTokenQuotaConfig(t *testing.T) {
+	const key = "    monthly_token_quota: 5000000\n"
+	cfg, err := withTrustKeys(t, key, key, key)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for name, got := range map[string]*int64{
+		"gitlab":     cfg.GitLab[0].MonthlyTokenQuota,
+		"github":     cfg.GitHub[0].MonthlyTokenQuota,
+		"repository": cfg.Repositories[1].MonthlyTokenQuota,
+	} {
+		if got == nil || *got != 5000000 {
+			t.Errorf("%s quota = %v, want 5000000", name, got)
+		}
+	}
+	cfg, err = withTrustKeys(t, "", "", "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.GitLab[0].MonthlyTokenQuota != nil || cfg.GitHub[0].MonthlyTokenQuota != nil || cfg.Repositories[1].MonthlyTokenQuota != nil {
+		t.Error("a quota is set when the file names none")
+	}
+}
+
+func TestTokenQuotaConfigInvalid(t *testing.T) {
+	for _, v := range []string{"0", "-1", "1000000000000001", "9007199254740993"} {
+		key := "    monthly_token_quota: " + v + "\n"
+		for _, tc := range []struct {
+			place                string
+			gitlab, github, repo string
+			want                 string
+		}{
+			{"gitlab", key, "", "", "gitlab[0] (main): monthly_token_quota must be from 1 to 1000000000000000, got " + v},
+			{"github", "", key, "", "github[0] (gh): monthly_token_quota must be from 1 to 1000000000000000, got " + v},
+			{"repository", "", "", key, "repositories[1] (acme/widgets): monthly_token_quota must be from 1 to 1000000000000000, got " + v},
+		} {
+			t.Run(tc.place+" "+v, func(t *testing.T) {
+				_, err := withTrustKeys(t, tc.gitlab, tc.github, tc.repo)
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Errorf("Load error = %v, want one containing %q", err, tc.want)
+				}
+			})
+		}
+	}
+	// The largest allowed value loads.
+	if _, err := withTrustKeys(t, "    monthly_token_quota: 1000000000000000\n", "", ""); err != nil {
+		t.Errorf("the largest quota was refused: %v", err)
+	}
+}
+
 func TestMetricsListen(t *testing.T) {
 	cfg := loadValid(t)
 	if cfg.MetricsListen != "" {
