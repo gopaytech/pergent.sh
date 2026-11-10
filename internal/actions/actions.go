@@ -100,7 +100,9 @@ type RerunResult struct {
 // Rerun is the one sequence a comment command and a button follow: for "failed
 // only", the skills to run again (nothing failed ends it; no way to single
 // them out re-runs the whole review), then the token quota (an admin's
-// request goes past it), then the caps, then queueing the run.
+// request goes past it; a used-up quota with a review of the head already
+// queued or running answers RerunAlreadyQueued), then the caps, then queueing
+// the run.
 // The caller checks permissions, drafts and the change's state first, and
 // wakes the engine and audits when the result is RerunQueued.
 func Rerun(ctx context.Context, st *store.Store, req RerunRequest) (RerunResult, error) {
@@ -188,7 +190,8 @@ type StartRequest struct {
 
 // Start is what a comment command and a button follow to start the review of
 // an untrusted author's change: the token quota (an admin's start goes past
-// it), the change's re-run cap (a start doesn't count against the
+// it; a used-up quota with a review of the head already queued or running
+// answers RerunAlreadyQueued), the change's re-run cap (a start doesn't count against the
 // repository's), then the waiting run of the head queued as
 // a start, or a new start. The caller checks that the person has write
 // access, drafts and the change's state first, and wakes the engine and

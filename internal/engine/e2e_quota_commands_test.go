@@ -141,6 +141,8 @@ func TestWriterStartRefusedForQuotaKeepsTrustWait(t *testing.T) {
 	env := e.env
 	q := int64(10)
 	env.Engine.Config.Repositories[0].MonthlyTokenQuota = &q
+	// Mid-month, so the test doesn't straddle the 1st.
+	env.SetNow(time.Date(2026, time.November, 15, 12, 0, 0, 0, time.UTC))
 	seedQuotaUsage(t, env, 10)
 	id := waitingRun(t, env, head)
 

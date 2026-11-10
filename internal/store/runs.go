@@ -788,6 +788,10 @@ const liveStartRunSQL = `SELECT id::text FROM runs
 	WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
 	  AND state IN ('queued', 'running', 'reported')`
 
+// undispatchedPushRunSQL is the condition of a push's run that is queued or
+// claimed and not dispatched yet, which StartRun turns into a start.
+const undispatchedPushRunSQL = `state IN ('queued', 'running') AND dispatched_at IS NULL AND trigger = 'push'`
+
 // ReviewActiveForRerun reports whether EnqueueRerun (with replace) would find
 // the head's review already queued, running or reported and queue nothing.
 func (s *Store) ReviewActiveForRerun(ctx context.Context, mr MRKey, headSHA, targetBranch string, replace bool) (bool, error) {
@@ -804,7 +808,7 @@ func (s *Store) ReviewActiveForRerun(ctx context.Context, mr MRKey, headSHA, tar
 // push's queued run that hasn't been dispatched, is one it starts.
 func (s *Store) ReviewActiveForStart(ctx context.Context, mr MRKey, headSHA, targetBranch string) (bool, error) {
 	var id string
-	err := s.pool.QueryRow(ctx, liveStartRunSQL+` AND NOT (state IN ('queued', 'running') AND dispatched_at IS NULL AND trigger = 'push')`,
+	err := s.pool.QueryRow(ctx, liveStartRunSQL+` AND NOT (`+undispatchedPushRunSQL+`)`,
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
@@ -845,7 +849,7 @@ func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, ta
 	}
 	err = tx.QueryRow(ctx, `UPDATE runs SET trigger = 'start', quota_checked = true
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
-		  AND state IN ('queued', 'running') AND dispatched_at IS NULL AND trigger = 'push'
+		  AND `+undispatchedPushRunSQL+`
 		RETURNING id::text`,
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch).Scan(&id)
 	if err == nil {
