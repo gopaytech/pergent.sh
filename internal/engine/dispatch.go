@@ -23,6 +23,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/kube"
+	"github.com/gopaytech/pergent.sh/internal/quota"
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -278,6 +279,18 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			return d.hold(ctx, plat, store.WaitCheckFailed, checkFailedDescription(plat.Forge.Mention()), false)
 		case !trusted:
 			return d.hold(ctx, plat, store.WaitUntrusted, waitingDescription, true)
+		}
+	}
+	if !run.QuotaChecked {
+		// An automatic run (a push, pergent.sh's own full re-run) on a
+		// used-up monthly token quota waits. A run somebody asked for was
+		// checked when they asked, and goes ahead.
+		usedUp, err := quota.Check(ctx, e.Store, e.now(), run.MR.Instance, run.MR.ProjectID, repo)
+		if err != nil {
+			return d.retry(ctx, fmt.Errorf("read the token quota: %w", err))
+		}
+		if usedUp {
+			return d.holdForQuota(ctx, plat)
 		}
 	}
 	if mr.HeadSHA == "" || mr.BaseSHA == "" || mr.StartSHA == "" {
@@ -980,27 +993,54 @@ func (d *dispatcher) hold(ctx context.Context, plat Platform, reason, descriptio
 		return d.postpone(ctx, e.now())
 	}
 	d.log.Info("run waits for someone with write access to start it", "reason", reason)
-	if err := plat.Forge.SetStatus(sctx, run.MR.ProjectID, run.HeadSHA, forge.StatusPending, description); err != nil {
-		d.log.Warn("the pending status can't be set", "error", d.redact(err.Error()))
-	}
-	if !note {
-		return nil
-	}
-	first, err := e.Store.ClaimUntrustedNote(sctx, run.MR, e.now())
-	if err != nil {
-		d.log.Warn("the note about an untrusted author can't be recorded", "error", d.redact(err.Error()))
-		return nil
-	}
-	if !first {
-		return nil
-	}
-	if err := plat.Forge.Reply(sctx, run.MR.ProjectID, run.MR.IID, untrustedNote(plat.Forge.Mention())); err != nil {
-		d.log.Warn("the note about an untrusted author can't be posted", "error", d.redact(err.Error()))
-		if err := e.Store.ReleaseUntrustedNote(sctx, run.MR); err != nil {
-			d.log.Warn("the note about an untrusted author can't be forgotten", "error", d.redact(err.Error()))
+	var n *holdNote
+	if note {
+		n = &holdNote{
+			what:    "an untrusted author",
+			text:    untrustedNote(plat.Forge.Mention()),
+			claim:   func(c context.Context) (bool, error) { return e.Store.ClaimUntrustedNote(c, run.MR, e.now()) },
+			release: func(c context.Context) error { return e.Store.ReleaseUntrustedNote(c, run.MR) },
 		}
 	}
+	d.announceHold(sctx, plat, description, n)
 	return nil
+}
+
+// holdNote is the note a held run's change gets once: claim says whether it is
+// the first (and records it), release forgets a claim whose note wasn't
+// posted. what names the reason in the log.
+type holdNote struct {
+	what    string
+	text    string
+	claim   func(context.Context) (bool, error)
+	release func(context.Context) error
+}
+
+// announceHold tells people a run was held: the pending status with
+// description on its head and, with note, its note if it is the first. What
+// can't be set or posted is logged: the run waits either way.
+func (d *dispatcher) announceHold(ctx context.Context, plat Platform, description string, note *holdNote) {
+	run := d.run
+	if err := plat.Forge.SetStatus(ctx, run.MR.ProjectID, run.HeadSHA, forge.StatusPending, description); err != nil {
+		d.log.Warn("the pending status can't be set", "error", d.redact(err.Error()))
+	}
+	if note == nil {
+		return
+	}
+	first, err := note.claim(ctx)
+	if err != nil {
+		d.log.Warn("the note about "+note.what+" can't be recorded", "error", d.redact(err.Error()))
+		return
+	}
+	if !first {
+		return
+	}
+	if err := plat.Forge.Reply(ctx, run.MR.ProjectID, run.MR.IID, note.text); err != nil {
+		d.log.Warn("the note about "+note.what+" can't be posted", "error", d.redact(err.Error()))
+		if err := note.release(ctx); err != nil {
+			d.log.Warn("the note about "+note.what+" can't be forgotten", "error", d.redact(err.Error()))
+		}
+	}
 }
 
 // postpone puts the run back in the queue without counting an attempt.

@@ -46,7 +46,13 @@ func seedQuotaUsage(t *testing.T, env *testEnv, tokens int64) {
 // seedQuotaUsageAt is seedQuotaUsage with the result coming in at at.
 func seedQuotaUsageAt(t *testing.T, env *testEnv, at time.Time, tokens int64) {
 	t.Helper()
-	id := env.Enqueue(9, sha('9'))
+	seedUsageOf(t, env, env.Enqueue(9, sha('9')), at, tokens)
+}
+
+// seedUsageOf runs the queued run id through a stored result that reported
+// tokens tokens at at. Like seedQuotaUsageAt it claims every queued run.
+func seedUsageOf(t *testing.T, env *testEnv, id string, at time.Time, tokens int64) {
+	t.Helper()
 	// The runs' created_at is the database's clock, whatever the engine's.
 	if _, err := env.Store.ClaimQueued(env.ctx, 100, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
