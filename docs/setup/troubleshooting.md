@@ -34,7 +34,7 @@ The Job and pod also carry the annotations `pergent.sh/project` (the full path) 
 
 ## When the Job is gone
 
-A Job and its pods are deleted an hour after they finish. A failed review keeps what it needs for 30 days, under the **Logs** tab of the review page:
+A Job and its pods are deleted an hour after they finish. pergent.sh keeps the pergent log of a review, and a failed Job also keeps its clone log and pod state. They stay for 30 days, under the **Logs** tab of the review page:
 
 - **The pergent log**: the last 200 KB of the `pergent` container.
 - **The clone log**: the last 64 KB of the `checkout` container, which clones. Anyone who can see the review can read it. Lines that name a linked repository show it as `linked-1`, `linked-2` and so on to people who aren't admins, and show other repositories' addresses as a placeholder. Credentials are replaced by `[REDACTED]`, as in the pergent log.
@@ -59,10 +59,11 @@ The failure line starts with what failed. The **Logs** tab and the comment show 
 | `review` | `the review job ran out of memory (OOMKilled)` | The memory limit is too low for this change. | Raise the memory limit. |
 | `review` | `the review didn't finish before the deadline (DeadlineExceeded)` | The model is slow, or the change is big. | The pergent log. Check `jobs.timeout`. |
 | `review` | `the review failed: <reason>` | pergent refused or couldn't finish the review, for example untrusted instructions. The reason is its own. | The pergent log. |
+| `review` or `unknown` | `the review job failed (<reason>)` | Usually pergent exited with an error code, such as 1 or 2, and the Job failed with `BackoffLimitExceeded`. The step is `review` when the clone had finished, and `unknown` otherwise. | The pergent log. |
 | `delivery` | `the review job couldn't deliver its result (exit code 4)` | The Job couldn't post to pergent.sh. | The pergent log. Check `callback_url` and the NetworkPolicy. |
 | `delivery` | `the review job finished without sending a result` | The Job ended and sent nothing. | The pergent log. |
 | `unknown` | `the review job hit its deadline (DeadlineExceeded)` | The deadline passed and the pod was already gone, so the step isn't known. | The pergent log, if any. |
-| `unknown` | `the review job disappeared before sending a result`, `the review job failed (<reason>)` | Someone deleted the Job, or the cluster lost it. | `kubectl get events`. |
+| `unknown` | `the review job disappeared before sending a result` | Someone deleted the Job, or the cluster lost it. | `kubectl get events`. |
 
 A `starting` failure is not retried. Press **Re-run** on the review when the cause is fixed.
 
