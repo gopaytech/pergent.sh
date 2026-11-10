@@ -28,24 +28,42 @@ func TestMaskLinked(t *testing.T) {
 		{"the longer name is not cut", "could not read https://h/g/other-two.git", "could not read linked-2"},
 		{"longer without .git", "could not read https://h/g/other-two", "could not read linked-2"},
 		{"credentials in the URL", "fatal: unable to access 'https://oauth2:s3cret@h/g/other.git/'", "fatal: unable to access 'linked-1/'"},
-		{"an unlinked repository stays", "fetching https://h/g/main.git", "fetching https://h/g/main.git"},
-		{"a longer name that is not linked stays", "https://h/g/other-three.git", "https://h/g/other-three.git"},
+		{"host and path in another case", "fatal: repository 'https://H/G/Other.GIT/' not found", "fatal: repository 'linked-1/' not found"},
+		{"a path under the repository", "GET https://h/g/other.git/info/refs failed", "GET linked-1/info/refs failed"},
+		{"the main repository stays", "From https://h/g/main.git", "From https://h/g/main.git"},
+		{"the main repository, a path and credentials", "https://oauth2:tok@h/g/main/info/refs", "https://oauth2:tok@h/g/main/info/refs"},
+		{"a name that only starts like the main one", "https://h/g/main-two.git", otherRepository},
+		{"a redirect to a new place", "warning: redirecting to https://h/g/new-name.git/", "warning: redirecting to " + otherRepository},
+		{"a URL of an unknown repository", "fetching https://h/g/stranger.git, then more", "fetching " + otherRepository + ", then more"},
+		{"a longer name that is not linked", "https://h/g/other-three.git", otherRepository},
+		{"the bare path of a linked repository", "ERROR: Repository not found: g/other.", "ERROR: Repository not found: linked-1."},
+		{"the bare path in another case", "ERROR: G/OTHER-two not found", "ERROR: linked-2 not found"},
+		{"a bare path that is only the start of another name", "see g/other-three", "see g/other-three"},
+		{"moved, both paths", "remote: Project 'g/other' was moved to 'g/new-name'", "remote: Project 'linked-1' was moved to " + otherRepository},
+		{"moved, the target on the next line", "remote: Project 'g/other' was moved to:\nremote:   'g/new-name'\nremote: Please update", "remote: Project 'linked-1' was moved to:\nremote:   " + otherRepository + "\nremote: Please update"},
+		{"moved, with the new URL", "remote: git remote set-url origin https://h/g/new-name.git", "remote: git remote set-url origin " + otherRepository},
 		{"no URL", "cloned linked-1", "cloned linked-1"},
 	}
+	const mainURL = "https://h/g/main.git"
 	for _, c := range cases {
-		if got := MaskLinked(c.in, clones); got != c.want {
+		if got := MaskLinked(c.in, clones, mainURL); got != c.want {
 			t.Errorf("%s: MaskLinked(%q) = %q; want %q", c.name, c.in, got, c.want)
 		}
 	}
 	// the clone listed first must not win over the longer one
 	reversed := []LinkedClone{clones[1], clones[0]}
-	if got := MaskLinked("https://h/g/other-two.git https://h/g/other.git", reversed); got != "linked-2 linked-1" {
+	if got := MaskLinked("https://h/g/other-two.git https://h/g/other.git", reversed, mainURL); got != "linked-2 linked-1" {
 		t.Errorf("reversed list: %q", got)
 	}
-	if got := MaskLinked("https://h/g/other.git", nil); got != "https://h/g/other.git" {
+	// a subgroup path: sorted by the name without ".git", the longer path wins
+	nested := []LinkedClone{{Dir: "linked-1", CloneURL: "https://h/g/a.git"}, {Dir: "linked-2", CloneURL: "https://h/g/a/b"}}
+	if got := MaskLinked("https://h/g/a/b.git and https://h/g/a.git g/a/b", nested, mainURL); got != "linked-2 and linked-1 linked-2" {
+		t.Errorf("nested paths: %q", got)
+	}
+	if got := MaskLinked("https://h/g/other.git", nil, mainURL); got != "https://h/g/other.git" {
 		t.Errorf("no clones changed the text: %q", got)
 	}
-	if got := MaskLinked("", clones); got != "" {
+	if got := MaskLinked("", clones, mainURL); got != "" {
 		t.Errorf("empty text: %q", got)
 	}
 }
@@ -74,6 +92,21 @@ func TestLinkedClonesFromJob(t *testing.T) {
 		t.Errorf("Job without links: %v, %v; want none", got, err)
 	}
 	if _, err := l.LinkedClones(context.Background(), "pergent-review-gone"); err == nil {
+		t.Error("a missing Job gave no error")
+	}
+}
+
+func TestCheckoutRepoURLFromJob(t *testing.T) {
+	l, _ := fakeLauncher()
+	p := linkedParams()
+	if err := l.Launch(context.Background(), p, Secrets{GitToken: "g", LLMKey: "l", ResultToken: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := l.CheckoutRepoURL(context.Background(), p.Name)
+	if err != nil || got != p.RepoURL || got == "" {
+		t.Errorf("CheckoutRepoURL = %q, %v; want %q", got, err, p.RepoURL)
+	}
+	if _, err := l.CheckoutRepoURL(context.Background(), "pergent-review-gone"); err == nil {
 		t.Error("a missing Job gave no error")
 	}
 }
