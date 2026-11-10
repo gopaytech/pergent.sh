@@ -201,7 +201,10 @@ func TestStartRefusedOnUsedUpQuota(t *testing.T) {
 	if err != nil || res.Status != RerunQuotaUsedUp {
 		t.Fatalf("Start = %+v, %v; want RerunQuotaUsedUp", res, err)
 	}
-	run, _, _ := st.Run(ctx, id)
+	run, ok, err := st.Run(ctx, id)
+	if err != nil || !ok {
+		t.Fatalf("Run = %v, %v", ok, err)
+	}
 	if run.State != store.Waiting || run.SkipReason != store.WaitQuota {
 		t.Errorf("held run = %s/%q after a refused start, want waiting/%s", run.State, run.SkipReason, store.WaitQuota)
 	}
@@ -224,8 +227,74 @@ func TestStartPastQuota(t *testing.T) {
 	if err != nil || res.Status != RerunQueued {
 		t.Fatalf("Start = %+v, %v; want RerunQueued", res, err)
 	}
-	run, _, _ := st.Run(ctx, id)
+	run, ok, err := st.Run(ctx, id)
+	if err != nil || !ok {
+		t.Fatalf("Run = %v, %v", ok, err)
+	}
 	if run.State != store.Queued || run.Trigger != store.TriggerStart || !run.QuotaChecked {
 		t.Errorf("run = %s/%s checked %v; want queued/start, checked", run.State, run.Trigger, run.QuotaChecked)
+	}
+}
+
+// activeRun stores a dispatched (running) review of the head of quotaMR.
+func activeRun(t *testing.T, st *store.Store) string {
+	t.Helper()
+	id, _, err := st.EnqueueRun(ctx, quotaMR, "acme/web", "head1", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.ClaimQueued(ctx, 10, quotaNow); err != nil || len(got) == 0 {
+		t.Fatalf("ClaimQueued = %v, %v", got, err)
+	}
+	sum := sha256.Sum256([]byte("tok-" + id))
+	if err := st.MarkDispatched(ctx, id, "job-"+id, "base", "start", sum[:], quotaNow.Add(time.Hour), quotaNow); err != nil {
+		t.Fatalf("MarkDispatched: %v", err)
+	}
+	return id
+}
+
+// A review of the head that is running when the quota runs out isn't refused:
+// the request is answered as already queued, and nothing is counted.
+func TestRerunWhileReviewRunsIsNotRefused(t *testing.T) {
+	st := newStore(t)
+	seedUsage(t, st, 1000, quotaNow.Add(-time.Hour), 10)
+	id := activeRun(t, st)
+
+	res, err := Rerun(ctx, st, rerunRequest(quotaRepo()))
+	if err != nil || res.Status != RerunAlreadyQueued {
+		t.Fatalf("Rerun = %+v, %v; want RerunAlreadyQueued", res, err)
+	}
+	if n := reruns(t, st); n != 0 {
+		t.Errorf("CountReruns = %d, want 0", n)
+	}
+	if run, ok, err := st.Run(ctx, id); err != nil || !ok || run.State != store.Running {
+		t.Errorf("run = %+v, %v, %v; want it left running", run.State, ok, err)
+	}
+}
+
+func TestStartWhileReviewRunsIsNotRefused(t *testing.T) {
+	st := newStore(t)
+	seedUsage(t, st, 1000, quotaNow.Add(-time.Hour), 10)
+	activeRun(t, st)
+
+	res, err := Start(ctx, st, startRequest(quotaRepo()))
+	if err != nil || res.Status != RerunAlreadyQueued {
+		t.Fatalf("Start = %+v, %v; want RerunAlreadyQueued", res, err)
+	}
+}
+
+// A push's run that isn't dispatched yet is not "on its way": a full review
+// replaces it, so the quota refuses it.
+func TestRerunOfUndispatchedPushRunIsRefused(t *testing.T) {
+	st := newStore(t)
+	seedUsage(t, st, 1000, quotaNow.Add(-time.Hour), 10)
+	if _, _, err := st.EnqueueRun(ctx, quotaMR, "acme/web", "head1", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := Rerun(ctx, st, rerunRequest(quotaRepo())); err != nil || res.Status != RerunQuotaUsedUp {
+		t.Fatalf("Rerun = %+v, %v; want RerunQuotaUsedUp", res, err)
+	}
+	if res, err := Start(ctx, st, startRequest(quotaRepo())); err != nil || res.Status != RerunQuotaUsedUp {
+		t.Fatalf("Start = %+v, %v; want RerunQuotaUsedUp", res, err)
 	}
 }

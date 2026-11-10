@@ -407,10 +407,7 @@ func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA
 	// was never dispatched, which also matches a run that failed before
 	// dispatch, not only one still waiting in the queue. So is an incremental
 	// one.
-	err = tx.QueryRow(ctx, `SELECT id::text FROM runs
-		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
-		  AND state IN ('queued', 'running', 'reported')
-		  AND NOT ($6 AND trigger = 'push' AND (dispatched_at IS NULL OR incremental))`,
+	err = tx.QueryRow(ctx, liveRerunRunSQL,
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch, replace).Scan(&id)
 	if err == nil {
 		// Someone asked for this review, so the quota is not looked at again
@@ -776,6 +773,45 @@ func (s *Store) HoldRun(ctx context.Context, id, reason string) (ok bool, err er
 	return tag.RowsAffected() == 1, nil
 }
 
+// liveRerunRunSQL finds the run of a head and target that EnqueueRerun leaves
+// as it is ($6 is replace): queued, running or reported, but not, with
+// replace, a push's run that hasn't been dispatched or reviews only some files.
+const liveRerunRunSQL = `SELECT id::text FROM runs
+	WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
+	  AND state IN ('queued', 'running', 'reported')
+	  AND NOT ($6 AND trigger = 'push' AND (dispatched_at IS NULL OR incremental))`
+
+// liveStartRunSQL finds a live (queued, running or reported) run of a head and
+// target, which StartRun reaches only when no waiting run or undispatched
+// push run of it was there to start.
+const liveStartRunSQL = `SELECT id::text FROM runs
+	WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
+	  AND state IN ('queued', 'running', 'reported')`
+
+// ReviewActiveForRerun reports whether EnqueueRerun (with replace) would find
+// the head's review already queued, running or reported and queue nothing.
+func (s *Store) ReviewActiveForRerun(ctx context.Context, mr MRKey, headSHA, targetBranch string, replace bool) (bool, error) {
+	var id string
+	err := s.pool.QueryRow(ctx, liveRerunRunSQL, mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch, replace).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// ReviewActiveForStart reports whether StartRun would find the head's review
+// already queued, running or reported and start nothing: a waiting run, or a
+// push's queued run that hasn't been dispatched, is one it starts.
+func (s *Store) ReviewActiveForStart(ctx context.Context, mr MRKey, headSHA, targetBranch string) (bool, error) {
+	var id string
+	err := s.pool.QueryRow(ctx, liveStartRunSQL+` AND NOT (state IN ('queued', 'running') AND dispatched_at IS NULL AND trigger = 'push')`,
+		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // StartRun starts the review of headSHA onto targetBranch of an untrusted
 // author's merge request. A waiting run of that head and target becomes a
 // queued run with TriggerStart (started is true, id is that run's), and so
@@ -818,9 +854,7 @@ func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, ta
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return "", false, err
 	}
-	err = tx.QueryRow(ctx, `SELECT id::text FROM runs
-		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
-		  AND state IN ('queued', 'running', 'reported')`,
+	err = tx.QueryRow(ctx, liveStartRunSQL,
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch).Scan(&id)
 	if err == nil {
 		if err := markQuotaChecked(ctx, tx, id); err != nil {

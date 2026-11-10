@@ -653,7 +653,7 @@ func (c *commandRun) rerun(ctx context.Context, failedOnly bool) (verdict, error
 // month, the note as the reply (the same once-a-month claim as the held
 // runs'), else the 👎 only. Nothing was queued, and the change's review, its
 // status and its approval are as they were. A claim that fails is logged and
-// answered with the 👎 alone: the note may be posted twice, never often.
+// answered with the 👎 alone, no reply.
 func (c *commandRun) refuseQuota(ctx context.Context) verdict {
 	v := refused(whyQuota, quotaNote)
 	now := c.e.now()

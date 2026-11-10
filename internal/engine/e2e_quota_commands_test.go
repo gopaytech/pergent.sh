@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/kube"
+	"github.com/gopaytech/pergent.sh/internal/quota"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -20,6 +21,8 @@ func quotaCommands(t *testing.T, used int64) *cmdE2E {
 	gl := env.GitLab
 	q := int64(10)
 	env.Engine.Config.Repositories[0].MonthlyTokenQuota = &q
+	// Mid-month, so no test straddles the 1st.
+	env.SetNow(time.Date(2026, time.November, 15, 12, 0, 0, 0, time.UTC))
 	gl.Reply(http.MethodGet, membersPath(userDeveloper), http.StatusOK, member(30))
 	gl.Reply(http.MethodGet, membersPath(userMaintainer), http.StatusOK, member(40))
 	for _, id := range []int64{userDeveloper, userMaintainer} {
@@ -64,11 +67,17 @@ func seedQuotaUsageAt(t *testing.T, env *testEnv, at time.Time, tokens int64) {
 	}
 }
 
-// wantOutcome checks the log has the command answered with outcome.
-func wantOutcome(t *testing.T, env *testEnv, outcome string) {
+// wantOutcome checks the log has n lines of a command answered with outcome.
+func wantOutcome(t *testing.T, env *testEnv, outcome string, n int) {
 	t.Helper()
-	if logs := env.Logs(); !strings.Contains(logs, "command answered") || !strings.Contains(logs, outcome) {
-		t.Errorf("no command answered with %q in the log:\n%s", outcome, logs)
+	got := 0
+	for _, line := range strings.Split(env.Logs(), "\n") {
+		if strings.Contains(line, "command answered") && strings.Contains(line, outcome) {
+			got++
+		}
+	}
+	if got != n {
+		t.Errorf("%d log lines of a command answered with %q, want %d:\n%s", got, outcome, n, env.Logs())
 	}
 }
 
@@ -91,7 +100,7 @@ func TestReviewCommandRefusedOnUsedUpQuota(t *testing.T) {
 	e.answer(t)
 	e.wantReactions(t, c, eyes, down)
 	e.wantReplies(t, quotaNote)
-	wantOutcome(t, env, "refused: the monthly token quota is used up")
+	wantOutcome(t, env, "refused: "+whyQuota, 1)
 	if r := env.Run(run); r.State != store.Published {
 		t.Errorf("the published review = %s, want it left published", r.State)
 	}
@@ -122,6 +131,7 @@ func TestSecondQuotaRefusalHasNoReply(t *testing.T) {
 	e.answer(t)
 	e.wantReactions(t, c2, eyes, down)
 	e.wantReplies(t, quotaNote)
+	wantOutcome(t, env, "refused: "+whyQuota, 2)
 }
 
 // The quota is looked at after trust: a writer's start of an untrusted
@@ -138,7 +148,7 @@ func TestWriterStartRefusedForQuotaKeepsTrustWait(t *testing.T) {
 	e.answer(t)
 	e.wantReactions(t, c, eyes, down)
 	e.wantReplies(t, quotaNote)
-	wantOutcome(t, env, "refused: the monthly token quota is used up")
+	wantOutcome(t, env, "refused: "+whyQuota, 1)
 	r := env.Run(id)
 	if r.State != store.Waiting || r.SkipReason != store.WaitUntrusted {
 		t.Errorf("run = %s/%q, want waiting/%s", r.State, r.SkipReason, store.WaitUntrusted)
@@ -201,5 +211,29 @@ func TestReviewCommandAfterTheFirstReviewsHeldHead(t *testing.T) {
 	}
 	if r := env.Run(id); r.State != store.Superseded {
 		t.Errorf("the held run = %s, want superseded", r.State)
+	}
+}
+
+// A review of the head that is running when the quota runs out is on its way:
+// the command is answered as any request for it is, not refused, and the
+// note stays unclaimed.
+func TestReviewCommandWhileReviewRunsNotRefused(t *testing.T) {
+	e := quotaCommands(t, 10)
+	env := e.env
+	head := sha('a')
+	servePublish(env, 1, head)
+	id := env.Dispatched(1, head)
+
+	c := e.say(t, "dev", userDeveloper, "@pergent-review review")
+	e.answer(t)
+	e.wantReactions(t, c, eyes, up)
+	e.wantReplies(t)
+	wantOutcome(t, env, "refused: "+whyQuota, 0)
+	if r := env.Run(id); r.State != store.Running {
+		t.Errorf("the running review = %s, want it left running", r.State)
+	}
+	now := env.Now()
+	if first, err := env.Store.ClaimQuotaNote(env.ctx, env.MRKey(1), quota.MonthStart(now), now); err != nil || !first {
+		t.Errorf("ClaimQuotaNote = %v, %v; want the note still unclaimed", first, err)
 	}
 }

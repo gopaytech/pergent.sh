@@ -130,6 +130,15 @@ func Rerun(ctx context.Context, st *store.Store, req RerunRequest) (RerunResult,
 		return RerunResult{}, err
 	}
 	if used {
+		// A review of the head that is queued or running is on its way: the
+		// request is answered as any request for it is, not refused.
+		active, err := st.ReviewActiveForRerun(ctx, req.MR, req.Head, req.TargetBranch, !req.FailedOnly)
+		if err != nil {
+			return RerunResult{}, fmt.Errorf("look for the head's review: %w", err)
+		}
+		if active {
+			return RerunResult{Status: RerunAlreadyQueued}, nil
+		}
 		return RerunResult{Status: RerunQuotaUsedUp}, nil
 	}
 	capped, err := CapReached(ctx, st, req.Now, req.MR, req.Repo)
@@ -190,6 +199,14 @@ func Start(ctx context.Context, st *store.Store, req StartRequest) (RerunResult,
 		return RerunResult{}, err
 	}
 	if used {
+		// As for Rerun: a review of the head already on its way isn't refused.
+		active, err := st.ReviewActiveForStart(ctx, req.MR, req.Head, req.TargetBranch)
+		if err != nil {
+			return RerunResult{}, fmt.Errorf("look for the head's review: %w", err)
+		}
+		if active {
+			return RerunResult{Status: RerunAlreadyQueued}, nil
+		}
 		return RerunResult{Status: RerunQuotaUsedUp}, nil
 	}
 	now := req.Now.UTC()
