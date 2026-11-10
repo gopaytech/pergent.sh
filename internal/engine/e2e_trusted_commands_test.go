@@ -145,7 +145,7 @@ func TestStartCaps(t *testing.T) {
 	env.Engine.Config.Repositories[0].RerunLimitPerRepo = &one
 	env.Engine.Config.Repositories[0].RerunLimitPerMR = &one
 	// Another change of the repository used the repository's cap.
-	if _, _, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(9), testProjectPath, sha('9'), "main", store.TriggerRerun, nil, nil, true); err != nil {
+	if _, _, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(9), testProjectPath, sha('9'), "main", store.TriggerRerun, nil, nil, true, false); err != nil {
 		t.Fatal(err)
 	}
 	id := waitingRun(t, env, head)

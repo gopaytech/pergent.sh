@@ -377,7 +377,7 @@ func TestRerunKeepsImpact(t *testing.T) {
 	env, _, head, base := impactRerunEnv(t,
 		namedSkill(t, "a", "failed", "", ""), namedSkill(t, "b", "no_blocking_issues", "", ""),
 		impactSkillOf(t, "no_blocking_issues", "", "Impact: checked acme/api, nothing found"))
-	id, created, err := env.Store.EnqueueRerun(env.ctx, ghKey(3), ghRepoPath, head, "main", store.TriggerRerunFailed, []string{"a"}, &base, false)
+	id, created, err := env.Store.EnqueueRerun(env.ctx, ghKey(3), ghRepoPath, head, "main", store.TriggerRerunFailed, []string{"a"}, &base, false, false)
 	if err != nil || !created {
 		t.Fatalf("EnqueueRerun = %v, %v", created, err)
 	}
@@ -407,7 +407,7 @@ func TestReviewFailedRerunsImpactAlone(t *testing.T) {
 	failed.Failures = []result.Failure{{Message: result.ImpactNotRunMessage}}
 	env, _, head, base := impactRerunEnv(t,
 		namedSkill(t, "a", "no_blocking_issues", "", ""), namedSkill(t, "b", "no_blocking_issues", "", ""), failed)
-	id, created, err := env.Store.EnqueueRerun(env.ctx, ghKey(3), ghRepoPath, head, "main", store.TriggerRerunFailed, []string{"impact"}, &base, false)
+	id, created, err := env.Store.EnqueueRerun(env.ctx, ghKey(3), ghRepoPath, head, "main", store.TriggerRerunFailed, []string{"impact"}, &base, false, false)
 	if err != nil || !created {
 		t.Fatalf("EnqueueRerun = %v, %v", created, err)
 	}
@@ -445,7 +445,7 @@ func TestRerunOfImpactWithTheSettingOffBecomesAFullReview(t *testing.T) {
 	off := false
 	repos := env.Engine.Config.Repositories
 	repos[len(repos)-1].LinkedReposEnabled = &off
-	id, _, err := env.Store.EnqueueRerun(env.ctx, ghKey(3), ghRepoPath, head, "main", store.TriggerRerunFailed, []string{"impact"}, &base, false)
+	id, _, err := env.Store.EnqueueRerun(env.ctx, ghKey(3), ghRepoPath, head, "main", store.TriggerRerunFailed, []string{"impact"}, &base, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

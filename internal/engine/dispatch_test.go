@@ -1071,7 +1071,7 @@ func TestPushDispatch(t *testing.T) {
 	t.Run("rerun", func(t *testing.T) {
 		env := newTestEnv(t)
 		publishedReview(t, env, headA, "0.5.0", nil)
-		id, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(3), testProjectPath, headB, "main", store.TriggerRerun, nil, nil, false)
+		id, created, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(3), testProjectPath, headB, "main", store.TriggerRerun, nil, nil, false, false)
 		if err != nil || !created {
 			t.Fatalf("EnqueueRerun = %v, %v", created, err)
 		}

@@ -311,7 +311,7 @@ func (e *Engine) mergeIncremental(ctx context.Context, run store.Run, log *slog.
 		log.Info("not queuing a full review: the run is no longer waiting to be published", "state", cur.State)
 		return run, true, nil
 	}
-	id, created, err := e.Store.EnqueueRerun(ctx, run.MR, run.ProjectPath, run.HeadSHA, run.TargetBranch, store.TriggerRerun, nil, nil, true)
+	id, created, err := e.Store.EnqueueRerun(ctx, run.MR, run.ProjectPath, run.HeadSHA, run.TargetBranch, store.TriggerRerun, nil, nil, true, false)
 	if err != nil {
 		return run, false, fmt.Errorf("queue a full review: %w", err)
 	}

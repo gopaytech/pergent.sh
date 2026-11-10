@@ -47,6 +47,8 @@ const (
 	WaitUntrusted = "untrusted_author"
 	// WaitCheckFailed: the author's access couldn't be read.
 	WaitCheckFailed = "trust_check_failed"
+	// WaitQuota: the repository's monthly token quota is used up.
+	WaitQuota = "quota_used_up"
 )
 
 var (
@@ -123,6 +125,10 @@ type Run struct {
 	// (SetRunQuiet). False for a run from before the column, or one that
 	// never started: the column is NULL there.
 	Quiet bool
+	// QuotaChecked is true once the monthly token quota has been looked at
+	// for the run (it was asked for, or started), so the dispatcher never
+	// holds it for the quota.
+	QuotaChecked bool
 	// CommentLayout is the layout of the comment, recorded when the run started
 	// (SetRunLayout); nil is the default layout, for a run from before the
 	// column or one that never started.
@@ -210,7 +216,7 @@ const runColumns = `id::text, instance, project_id, mr_iid, project_path, head_s
 	title, web_url, source_branch, author, model, skill_sources,
 	outcome, outcome_reason, decision_status, approved, trigger, skill_subset, base_run_id::text,
 	skill_versions, skip_reason, max_turns, incremental, skill_hashes, quiet_reviews, comment_layout,
-	linked_repos, provider`
+	linked_repos, provider, quota_checked`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var (
@@ -226,7 +232,7 @@ func scanRun(row pgx.Row) (Run, error) {
 		&r.CreatedAt, &dispatched, &rep, &notBefore, &r.CleanedUp,
 		&r.Title, &r.WebURL, &r.SourceBranch, &r.Author, &r.Model, &sources,
 		&r.Outcome, &r.OutcomeReason, &r.DecisionStatus, &r.Approved, &r.Trigger, &r.SkillSubset, &r.BaseRunID,
-		&versions, &r.SkipReason, &r.MaxTurns, &r.Incremental, &hashes, &quiet, &r.CommentLayout, &links, &r.Provider)
+		&versions, &r.SkipReason, &r.MaxTurns, &r.Incremental, &hashes, &quiet, &r.CommentLayout, &links, &r.Provider, &r.QuotaChecked)
 	if err != nil {
 		return Run{}, err
 	}
@@ -387,7 +393,7 @@ func (s *Store) EnqueueRun(ctx context.Context, mr MRKey, projectPath, headSHA, 
 // The caller checks the re-run caps (CountReruns) before calling; with
 // more than one caller at a time, for example two button presses, a cap may
 // be overshot by a few.
-func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA, targetBranch, trigger string, skills []string, baseRunID *string, replace bool) (id string, created bool, err error) {
+func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA, targetBranch, trigger string, skills []string, baseRunID *string, replace, quotaChecked bool) (id string, created bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return "", false, err
@@ -436,10 +442,10 @@ func (s *Store) EnqueueRerun(ctx context.Context, mr MRKey, projectPath, headSHA
 		skills = nil
 	}
 	err = tx.QueryRow(ctx, `INSERT INTO runs (instance, project_id, mr_iid, project_path, head_sha, target_branch,
-			trigger, skill_subset, base_run_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::uuid) RETURNING id::text`,
+			trigger, skill_subset, base_run_id, quota_checked)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::uuid, $10) RETURNING id::text`,
 		mr.Instance, mr.ProjectID, mr.IID, projectPath, headSHA, targetBranch,
-		trigger, skills, baseRunID).Scan(&id)
+		trigger, skills, baseRunID, quotaChecked).Scan(&id)
 	if err != nil {
 		return "", false, err
 	}
@@ -783,7 +789,7 @@ func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, ta
 	if err := lockMR(ctx, tx, mr); err != nil {
 		return "", false, err
 	}
-	err = tx.QueryRow(ctx, `UPDATE runs SET state = 'queued', trigger = 'start', skip_reason = '', not_before = NULL
+	err = tx.QueryRow(ctx, `UPDATE runs SET state = 'queued', trigger = 'start', skip_reason = '', not_before = NULL, quota_checked = true
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
 		  AND state = 'waiting'
 		RETURNING id::text`,
@@ -794,7 +800,7 @@ func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, ta
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return "", false, err
 	}
-	err = tx.QueryRow(ctx, `UPDATE runs SET trigger = 'start'
+	err = tx.QueryRow(ctx, `UPDATE runs SET trigger = 'start', quota_checked = true
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
 		  AND state IN ('queued', 'running') AND dispatched_at IS NULL AND trigger = 'push'
 		RETURNING id::text`,
@@ -828,8 +834,8 @@ func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, ta
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch); err != nil {
 		return "", false, err
 	}
-	err = tx.QueryRow(ctx, `INSERT INTO runs (instance, project_id, mr_iid, project_path, head_sha, target_branch, trigger)
-		VALUES ($1, $2, $3, $4, $5, $6, 'start') RETURNING id::text`,
+	err = tx.QueryRow(ctx, `INSERT INTO runs (instance, project_id, mr_iid, project_path, head_sha, target_branch, trigger, quota_checked)
+		VALUES ($1, $2, $3, $4, $5, $6, 'start', true) RETURNING id::text`,
 		mr.Instance, mr.ProjectID, mr.IID, projectPath, headSHA, targetBranch).Scan(&id)
 	if err != nil {
 		return "", false, err

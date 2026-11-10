@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -384,18 +385,23 @@ func TestDashboardQueriesUseIndexes(t *testing.T) {
 	two, twoArgs := visibleCond(Visibility{Projects: []VisibleProject{repo(7), repo(8)}}, 6)
 	oneStats, oneStatsArgs := visibleCond(Visibility{Projects: []VisibleProject{repo(7)}}, 2)
 	for _, q := range []struct {
-		name, sql, index string
-		args             []any
+		name, sql string
+		// indexes are the per-project indexes the plan may use. The two
+		// projects' cursor query costs the same on either of the two (the
+		// planner's pick moves with the width of a runs row), and both read
+		// only those projects' runs.
+		indexes []string
+		args    []any
 	}{
-		{"reviews", reviewDigestsSQL(one), "runs_project_updated_idx",
+		{"reviews", reviewDigestsSQL(one), []string{"runs_project_updated_idx"},
 			append([]any{since.Add(-7 * 24 * time.Hour), nil, zeroUUID, "", 51}, oneArgs...)},
-		{"reviews after a cursor", reviewDigestsSQL(two), "runs_project_updated_idx",
+		{"reviews after a cursor", reviewDigestsSQL(two), []string{"runs_project_updated_idx", "runs_project_created_idx"},
 			append([]any{since.Add(-90 * 24 * time.Hour), since.Add(-time.Hour), zeroUUID, "approved", 51}, twoArgs...)},
-		{"stats", runStatsSQL(oneStats), "runs_project_created_idx", append([]any{since.Add(-7 * 24 * time.Hour)}, oneStatsArgs...)},
+		{"stats", runStatsSQL(oneStats), []string{"runs_project_created_idx"}, append([]any{since.Add(-7 * 24 * time.Hour)}, oneStatsArgs...)},
 	} {
 		plan := explain(t, s, q.sql, q.args...)
-		if !strings.Contains(plan, q.index) {
-			t.Errorf("%s: plan doesn't use %s:\n%s", q.name, q.index, plan)
+		if !slices.ContainsFunc(q.indexes, func(index string) bool { return strings.Contains(plan, index) }) {
+			t.Errorf("%s: plan doesn't use %s:\n%s", q.name, strings.Join(q.indexes, " or "), plan)
 		}
 		if strings.Contains(plan, "Seq Scan on runs") {
 			t.Errorf("%s: plan scans the runs table:\n%s", q.name, plan)
