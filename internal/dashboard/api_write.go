@@ -60,7 +60,7 @@ const (
 	msgWriteFailed    = "could not save the change, please try again"
 	msgUserLookup     = "could not look the user up on the platform, please try again"
 	msgBadProjectBody = `the body must be {"project": "<path>"}`
-	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, commentLayout, linkedReposEnabled, linkedRepos, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly, trustedAuthors, model"
+	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, commentLayout, linkedReposEnabled, linkedRepos, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly, trustedAuthors, model, monthlyTokenQuota"
 	msgNameInstance   = `name the instance: {"instance": "<name>", "project": "<path>"}`
 	msgNeedsAdminCaps = "only admins can change its re-run caps"
 	msgNeedsRole      = "only maintainers of this repository and admins can change its settings"
@@ -486,6 +486,11 @@ func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, msgNeedsAdminTrust)
 		return
 	}
+	// So is the token quota: it stops the repository's reviews.
+	if slices.ContainsFunc(keys, isQuotaKey) && session(r).Role(repo.Instance, repo.Project) < RoleAdmin {
+		writeError(w, http.StatusForbidden, msgNeedsAdminQuota)
+		return
+	}
 	// So is the model: it decides what the repository's reviews cost.
 	if slices.ContainsFunc(keys, isModelKey) && session(r).Role(repo.Instance, repo.Project) < RoleAdmin {
 		writeError(w, http.StatusForbidden, msgNeedsAdminModel)
@@ -662,7 +667,8 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// A maintainer's reset leaves the caps, which only an admin changes.
+	// A maintainer's reset leaves the caps, the links, who is trusted, the
+	// model and the token quota, which only an admin changes.
 	admin := session(r).Role(repo.Instance, repo.Project) >= RoleAdmin
 	detail := ""
 	if admin && repo.ModelID != "" {
@@ -679,6 +685,7 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 			row.LinkedReposEnabled, row.LinkedRepos = nil, nil
 			row.TrustedAuthorsOnly, row.TrustedAuthors = nil, nil
 			row.ModelID = nil
+			row.MonthlyTokenQuota = nil
 		}
 	}, "settings reset", "settings_reset", detail)
 }
@@ -777,6 +784,8 @@ func (d *Dashboard) parseSettings(r *http.Request) (func(*store.DashboardRepo), 
 			edit, msg = trustedAuthorsSetting(raw, null)
 		case "model":
 			edit, msg = modelSetting(raw, null)
+		case "monthlyTokenQuota":
+			edit, msg = quotaSetting(raw)
 		default:
 			msg = msgBadSettings
 		}

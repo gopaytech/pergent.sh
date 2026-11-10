@@ -21,6 +21,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/instances"
+	"github.com/gopaytech/pergent.sh/internal/quota"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -65,6 +66,7 @@ func (d *Dashboard) operatorRoutes(mux *http.ServeMux) {
 	d.adminRoute(mux, "POST /api/admin/instances", d.addInstance)
 	d.adminRoute(mux, "PUT /api/admin/instances/{name}", d.updateInstance)
 	d.adminRoute(mux, "PUT /api/admin/instances/{name}/trusted-authors", d.putInstanceTrust)
+	d.adminRoute(mux, "PUT /api/admin/instances/{name}/token-quota", d.putInstanceQuota)
 	d.adminRoute(mux, "DELETE /api/admin/instances/{name}", d.removeInstance)
 	d.adminRoute(mux, "GET /api/admin/instances/{name}/repositories", d.instanceRepositories)
 	d.adminRoute(mux, "GET /api/admin/sign-in", d.getSignIn)
@@ -159,9 +161,9 @@ func approverOfRow(row store.InstanceRow) string {
 // env var holds a value; a dashboard instance's when the sealed value opens.
 func (d *Dashboard) instanceView(ctx context.Context, inst instances.Instance) (InstanceAdminView, error) {
 	v := InstanceAdminView{Name: inst.Name, Platform: inst.Platform, Source: string(inst.Source), Removing: inst.Removing,
-		TrustedAuthorsOnly: inst.TrustedAuthorsOnly,
-		WebhookURL:         config.WebhookURL(d.cfg.PublicURL, inst.Platform, inst.Name),
-		Approver:           approverOf(inst), Secrets: map[string]SecretView{}}
+		TrustedAuthorsOnly: inst.TrustedAuthorsOnly, MonthlyTokenQuota: inst.MonthlyTokenQuota,
+		WebhookURL: config.WebhookURL(d.cfg.PublicURL, inst.Platform, inst.Name),
+		Approver:   approverOf(inst), Secrets: map[string]SecretView{}}
 	switch {
 	case inst.GitLab != nil:
 		v.URL = inst.GitLab.URL
@@ -169,6 +171,11 @@ func (d *Dashboard) instanceView(ctx context.Context, inst instances.Instance) (
 		v.APIURL, v.ReviewAppID = inst.GitHub.APIURL, inst.GitHub.ReviewApp.AppID
 		v.ApproveAppID = approveAppIDOf(inst)
 	}
+	used, err := d.Store.TokensSince(ctx, inst.Name, 0, quota.MonthStart(d.now()))
+	if err != nil {
+		return InstanceAdminView{}, err
+	}
+	v.TokensThisMonth = used
 	fields := secretFields(inst.Platform, v.Approver)
 	if inst.Source == instances.SourceConfig {
 		envs := configEnvs(inst)

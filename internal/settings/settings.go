@@ -534,7 +534,7 @@ func (r *Resolver) fromDashboard(row store.DashboardRepo, stored store.RepoDefau
 	if len(row.TrustedAuthors) > 0 {
 		eff.TrustedAuthors, eff.Overridden[KeyTrustedAuthors] = slices.Clone(row.TrustedAuthors), true
 	}
-	if q := row.MonthlyTokenQuota; q != nil && *q >= 1 && *q <= config.MaxMonthlyTokenQuota {
+	if q := row.MonthlyTokenQuota; q != nil && config.ValidTokenQuota(*q) {
 		v := *q
 		eff.MonthlyTokenQuota, eff.Overridden[KeyMonthlyTokenQuota] = &v, true
 	}

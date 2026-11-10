@@ -635,7 +635,7 @@ func (c *Config) Validate() error {
 		if !validInstanceTrust(inst.TrustedAuthorsOnly) {
 			add("gitlab[%d] (%s): trusted_authors_only must be follow_visibility, on or off, got %q", i, inst.Name, inst.TrustedAuthorsOnly)
 		}
-		if q := inst.MonthlyTokenQuota; q != nil && !validTokenQuota(*q) {
+		if q := inst.MonthlyTokenQuota; q != nil && !ValidTokenQuota(*q) {
 			add("gitlab[%d] (%s): monthly_token_quota must be from 1 to %d, got %d", i, inst.Name, MaxMonthlyTokenQuota, *q)
 		}
 	}
@@ -651,7 +651,7 @@ func (c *Config) Validate() error {
 		if !validInstanceTrust(inst.TrustedAuthorsOnly) {
 			add("github[%d] (%s): trusted_authors_only must be follow_visibility, on or off, got %q", i, inst.Name, inst.TrustedAuthorsOnly)
 		}
-		if q := inst.MonthlyTokenQuota; q != nil && !validTokenQuota(*q) {
+		if q := inst.MonthlyTokenQuota; q != nil && !ValidTokenQuota(*q) {
 			add("github[%d] (%s): monthly_token_quota must be from 1 to %d, got %d", i, inst.Name, MaxMonthlyTokenQuota, *q)
 		}
 	}
@@ -694,7 +694,7 @@ func (c *Config) Validate() error {
 		if m := repo.TrustedAuthorsOnly; m != nil && *m != TrustOn && *m != TrustOff {
 			add("repositories[%d] (%s): trusted_authors_only must be on or off, got %q", i, repo.Project, *m)
 		}
-		if q := repo.MonthlyTokenQuota; q != nil && !validTokenQuota(*q) {
+		if q := repo.MonthlyTokenQuota; q != nil && !ValidTokenQuota(*q) {
 			add("repositories[%d] (%s): monthly_token_quota must be from 1 to %d, got %d", i, repo.Project, MaxMonthlyTokenQuota, *q)
 		}
 		trustedIDs := make(map[int64]bool, len(repo.TrustedAuthors))
@@ -1194,8 +1194,9 @@ func WebhookURL(publicURL, platform, instance string) string {
 	return strings.TrimRight(publicURL, "/") + "/webhooks/" + platform + "/" + instance
 }
 
-// validTokenQuota reports whether q is a usable monthly_token_quota.
-func validTokenQuota(q int64) bool {
+// ValidTokenQuota reports whether q is a usable monthly token quota: from 1 to
+// MaxMonthlyTokenQuota. The config, the settings and the dashboard share it.
+func ValidTokenQuota(q int64) bool {
 	return q >= 1 && q <= MaxMonthlyTokenQuota
 }
 
