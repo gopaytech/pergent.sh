@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -27,15 +28,18 @@ const (
 // WatchOnce looks at the Job of every running run and turns a Job that can no
 // longer send a result into the run's failure reason, so the publisher posts
 // it instead of the merge request hearing nothing:
-//   - a Job stuck on an unrecoverable start error is deleted, then reported;
+//   - a Job stuck on an unrecoverable start error has what it left kept, is
+//     deleted, then reported;
 //   - a Job gone for 60 s after dispatch is reported;
 //   - a Job finished for 60 s without a result is reported, with why it
 //     failed when the cluster says.
 //
-// Along the way it keeps the log of each finished Job once (see captureLog),
-// whether its run is still running or already reported.
+// Each report names the step the Job failed at. Along the way it keeps the
+// log of each finished Job once, and the diagnostics of a failed one (see
+// captureLog), whether its run is still running or already reported.
 //
-// It also records the checkout time a Job measured, and requeues runs claimed
+// It also records the checkout time a Job measured, the Job's pod and how far
+// its checkout got, and requeues runs claimed
 // over 5 minutes ago that never got a Job. A result that wins the race with a
 // report is kept. One Job the cluster can't be asked about is logged and
 // skipped; the returned error joins store failures.
@@ -88,9 +92,30 @@ func (e *Engine) watch(ctx context.Context, run store.Run, now time.Time) (bool,
 		return false, nil
 	}
 
+	// The pod and how far its checkout got, for the review page and for the
+	// step a deadline hit (the deadline takes the pod with it).
+	if obs.PodName != "" && obs.PodName != run.PodName {
+		if err := e.Store.SetRunPod(ctx, run.ID, obs.PodName); err != nil {
+			log.Info("couldn't record the review job's pod", "error", e.redact(err.Error()))
+		}
+	}
+	seen := max(run.CheckoutSeen, obs.Checkout)
+	if seen > run.CheckoutSeen {
+		if err := e.Store.AdvanceCheckoutSeen(ctx, run.ID, seen); err != nil {
+			log.Info("couldn't record how far the checkout got", "error", e.redact(err.Error()))
+		}
+	}
+	if obs.Failure.Deadline {
+		if obs.Failure.Step == kube.StepClone {
+			// The deadline killed the checkout.
+			seen = max(seen, 1)
+		}
+		obs.Failure = kube.DeadlineFailure(seen)
+	}
+
 	if obs.Exists && obs.Finished {
 		// The Job is deleted an hour after it finishes: keep its log now.
-		e.captureLog(ctx, run, log)
+		e.captureLog(ctx, run, obs, log)
 	}
 
 	// The checkout container also clones the linked repositories of a run that
@@ -103,42 +128,50 @@ func (e *Engine) watch(ctx context.Context, run store.Run, now time.Time) (bool,
 		}
 	}
 
-	var reason string
+	var f kube.Failure
 	switch {
 	case obs.Stuck.Reason != "":
+		// Its pod, events and Secret go with the Job: keep what it left, and
+		// redact the detail, first.
+		e.captureLog(ctx, run, obs, log)
+		f = obs.Stuck
+		f.Detail = e.redactDetail(ctx, run, f.Detail, log)
 		if err := e.Launcher.Delete(ctx, run.JobName); err != nil {
-			log.Warn("couldn't delete the stuck review job; will try again", "reason", obs.Stuck.Reason, "error", e.redact(err.Error()))
+			log.Warn("couldn't delete the stuck review job; will try again", "reason", f.Reason, "error", e.redact(err.Error()))
 			return false, nil
 		}
-		reason = obs.Stuck.Reason
 	case !obs.Exists:
 		if now.Sub(run.DispatchedAt) < watchGrace {
 			return false, nil
 		}
-		reason = reasonDisappeared
+		f = kube.Failure{Step: kube.StepUnknown, Reason: reasonDisappeared}
 	case obs.Finished:
 		if now.Sub(obs.FinishedAt) < watchGrace {
 			return false, nil
 		}
-		reason = obs.Failure.Reason
-		if reason == "" {
-			reason = reasonFinishedNoSend
+		f = obs.Failure
+		if f.Reason == "" {
+			f = kube.Failure{Step: kube.StepDelivery, Reason: reasonFinishedNoSend}
 		}
+		f.Detail = e.redactDetail(ctx, run, f.Detail, log)
 	default:
 		return false, nil
 	}
 
-	changed, err := e.Store.ReportFailure(ctx, run.ID, store.Failure{Reason: reason}, now)
+	changed, err := e.Store.ReportFailure(ctx, run.ID, store.Failure{Reason: f.Reason, Step: f.Step, Detail: f.Detail}, now)
 	if err != nil {
 		return false, fmt.Errorf("report failure: %w", err)
 	}
 	if !changed {
-		log.Info("the run got its result meanwhile; not reporting the job", "reason", reason)
+		log.Info("the run got its result meanwhile; not reporting the job", "reason", f.Reason)
 		return false, nil
 	}
-	log.Warn("review job ended without a result; run reported as failed", "reason", reason)
-	if strings.Contains(reason, "OOMKilled") {
+	log.Warn("review job ended without a result; run reported as failed", "reason", f.Reason, "step", f.Step)
+	if strings.Contains(f.Reason, "OOMKilled") {
 		e.refreshOutOfMemory(ctx, run.MR.Instance, run.ProjectPath)
+	}
+	if f.Step == kube.StepClone {
+		e.refreshCloneFailing(ctx, run.MR.Instance, run.ProjectPath)
 	}
 	return true, nil
 }

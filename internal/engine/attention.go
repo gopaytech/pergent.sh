@@ -11,6 +11,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
+	"github.com/gopaytech/pergent.sh/internal/kube"
 )
 
 // The kinds of setup problem recorded for the dashboard's "Needs attention"
@@ -19,6 +20,7 @@ const (
 	attSingleApproval      = "single_approval"
 	attApproverUnreachable = "approver_unreachable"
 	attOutOfMemory         = "out_of_memory"
+	attCloneFailing        = "clone_failing"
 	attTokenExpiry         = "token_expiry"
 	attSkillMissing        = "skill_missing"
 	attNoSkills            = "no_skills"
@@ -43,6 +45,10 @@ const (
 	// oomThreshold how many of them make a problem.
 	oomWindow    = 7 * 24 * time.Hour
 	oomThreshold = 2
+	// cloneWindow and cloneThreshold are the same for failures at the clone
+	// step.
+	cloneWindow    = 7 * 24 * time.Hour
+	cloneThreshold = 2
 
 	// attentionTimeout bounds one best-effort write of an item.
 	attentionTimeout = 5 * time.Second
@@ -116,6 +122,25 @@ func (e *Engine) refreshOutOfMemory(ctx context.Context, instance, project strin
 	}
 	e.setAttention(ctx, instance, project, attOutOfMemory,
 		"Reviews ran out of memory "+strconv.Itoa(n)+" times in the last 7 days. Raise the Job memory limit.")
+}
+
+// refreshCloneFailing records clone_failing for a repository when at least
+// two of its runs failed at the clone step in the last 7 days, and clears it
+// when fewer did. It runs when and as refreshOutOfMemory does, and counts the
+// step, not the text. A count that can't be read leaves the item as it was.
+func (e *Engine) refreshCloneFailing(ctx context.Context, instance, project string) {
+	n, err := e.Store.CountFailedRunsAtStep(ctx, instance, project, kube.StepClone, e.now().Add(-cloneWindow))
+	if err != nil {
+		e.log().Info("couldn't count the reviews whose clone failed",
+			"instance", instance, "project", project, "error", e.redact(err.Error()))
+		return
+	}
+	if n < cloneThreshold {
+		e.clearAttention(ctx, instance, project, attCloneFailing)
+		return
+	}
+	e.setAttention(ctx, instance, project, attCloneFailing,
+		"Clones of this repository failed "+strconv.Itoa(n)+" times in the last 7 days. Check the clone token's access and the network to the platform.")
 }
 
 // attentionStore is the part of the store the token-expiry recorder writes.

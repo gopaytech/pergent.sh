@@ -235,6 +235,44 @@ func TestAttentionOutOfMemoryIgnoresOtherFailures(t *testing.T) {
 	}
 }
 
+func cloneFailedRun(t *testing.T, env *testEnv, iid int64) {
+	t.Helper()
+	id := env.Dispatched(iid, sha(byte('a'+iid)))
+	now := env.Now()
+	putJob(t, env, id, now.Add(-5*time.Minute),
+		[]corev1.ContainerStatus{terminatedStatus("checkout", 128, "Error", now.Add(-4*time.Minute), now.Add(-2*time.Minute))}, nil,
+		jobCond(batchv1.JobFailed, "BackoffLimitExceeded", now.Add(-2*time.Minute)))
+}
+
+// The watcher records clone_failing from the second failure at the clone
+// step in 7 days, and reconcile removes it once the failures age out. A
+// failure at another step doesn't count. [CI]
+func TestCloneFailingAttention(t *testing.T) {
+	env := newTestEnv(t)
+	key := testInstance + "|" + testProjectPath + "|clone_failing"
+
+	cloneFailedRun(t, env, 1)
+	oomRun(t, env, 2)
+	watch(t, env)
+	if got := attention(t, env); len(got) != 0 {
+		t.Fatalf("attention after one clone failure = %v; want none", got)
+	}
+
+	cloneFailedRun(t, env, 3)
+	watch(t, env)
+	want := "Clones of this repository failed 2 times in the last 7 days. Check the clone token's access and the network to the platform."
+	if got := attention(t, env); got[key] != want || len(got) != 1 {
+		t.Fatalf("attention after two clone failures = %v; want %q", got, want)
+	}
+
+	serveProject(env, testProjectID, testProjectPath)
+	env.SetNow(env.Now().Add(8 * 24 * time.Hour))
+	reconcile(t, env)
+	if got := attention(t, env); len(got) != 0 {
+		t.Fatalf("attention after the failures aged out = %v; want none", got)
+	}
+}
+
 // eventually waits for cond to hold.
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()

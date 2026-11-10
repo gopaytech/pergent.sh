@@ -271,6 +271,216 @@ func TestWatchInspectErrorSkipsRun(t *testing.T) {
 	}
 }
 
+// putBareJob stores run id's Job, created at created, with the given
+// conditions and no pod.
+func putBareJob(t *testing.T, env *testEnv, id string, created time.Time, conds ...batchv1.JobCondition) {
+	t.Helper()
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: kube.JobName(id), Namespace: testNamespace, CreationTimestamp: metav1.NewTime(created)},
+		Status:     batchv1.JobStatus{Conditions: conds},
+	}
+	if _, err := env.Kube.BatchV1().Jobs(testNamespace).Create(env.ctx, job, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// putUnscheduledPod stores a pod of run id's Job that the scheduler has failed
+// to place since since, with message.
+func putUnscheduledPod(t *testing.T, env *testEnv, id string, since time.Time, message string) {
+	t.Helper()
+	name := kube.JobName(id)
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name + "-abcde", Namespace: testNamespace,
+			Labels:            map[string]string{"job-name": name},
+			CreationTimestamp: metav1.NewTime(since),
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodPending, Conditions: []corev1.PodCondition{{
+			Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: "Unschedulable",
+			Message: message, LastTransitionTime: metav1.NewTime(since),
+		}}},
+	}
+	if _, err := env.Kube.CoreV1().Pods(testNamespace).Create(env.ctx, pod, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// putEvent stores an event about the object kind/name.
+func putEvent(t *testing.T, env *testEnv, kind, name, reason, message string, at time.Time) {
+	t.Helper()
+	ev := &corev1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: name + "." + reason, Namespace: testNamespace},
+		InvolvedObject: corev1.ObjectReference{Kind: kind, Name: name, Namespace: testNamespace},
+		Type:           corev1.EventTypeWarning, Reason: reason, Message: message, Count: 1,
+		LastTimestamp: metav1.NewTime(at),
+	}
+	if _, err := env.Kube.CoreV1().Events(testNamespace).Create(env.ctx, ev, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runningStatus(name string) corev1.ContainerStatus {
+	return corev1.ContainerStatus{Name: name, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}
+}
+
+func storedDiagnostics(t *testing.T, env *testEnv, id string) (store.Diagnostics, bool) {
+	t.Helper()
+	d, found, err := env.Store.RunDiagnostics(env.ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d, found
+}
+
+// A pod no node can run fails at the starting step once it has waited 10
+// minutes. The scheduler's message is the admin-only detail, the pod state is
+// kept, and both are taken before the Job is deleted. [CI]
+func TestWatchStoresStepAndDetail(t *testing.T) {
+	env := newTestEnv(t)
+	id := env.Dispatched(1, sha('a'))
+	const message = "0/3 nodes are available: 3 Insufficient memory."
+	putBareJob(t, env, id, env.Now().Add(-12*time.Minute))
+	putUnscheduledPod(t, env, id, env.Now().Add(-11*time.Minute), message)
+	putJobSecret(t, env, id, kube.Secrets{GitToken: "git-token-1", LLMKey: "llm-key-1", ResultToken: "result-token-1"})
+	// No container started, so neither has a log.
+	serveContainerLogs(env, map[string]string{})
+	keptBeforeDelete := false
+	env.Kube.PrependReactor("delete", "jobs", func(k8stesting.Action) (bool, runtime.Object, error) {
+		_, keptBeforeDelete, _ = env.Store.RunDiagnostics(env.ctx, id)
+		return false, nil, nil
+	})
+
+	watch(t, env)
+
+	wantFailure(t, env, id, "the review couldn't start: no node could run it")
+	if r := env.Run(id); r.FailureStep != kube.StepStarting || r.FailureDetail != message {
+		t.Errorf("step %q, detail %q; want %q, %q", r.FailureStep, r.FailureDetail, kube.StepStarting, message)
+	}
+	if env.Job(id) != nil {
+		t.Errorf("the stuck Job was not deleted")
+	}
+	d, found := storedDiagnostics(t, env, id)
+	if !found || d.CloneLog != "" || !strings.Contains(d.PodState, "PodScheduled=False: Unschedulable: "+message) {
+		t.Errorf("diagnostics = %+v, %v; want the pod state with the scheduler's message, no clone log", d, found)
+	}
+	if !keptBeforeDelete {
+		t.Errorf("the diagnostics were not stored before the Job was deleted")
+	}
+}
+
+// The admin-only detail is redacted like the log; with the Job's Secret
+// unreadable it is left out, never stored raw. [CI]
+func TestWatchRedactsDetail(t *testing.T) {
+	env := newTestEnv(t)
+	withSecret := env.Dispatched(1, sha('a'))
+	without := env.Dispatched(2, sha('a'))
+	for _, id := range []string{withSecret, without} {
+		putBareJob(t, env, id, env.Now().Add(-11*time.Minute))
+		putEvent(t, env, "Job", kube.JobName(id), "FailedCreate",
+			"pods is forbidden: exceeded quota, token git-token-1 in the way", env.Now().Add(-time.Minute))
+	}
+	putJobSecret(t, env, withSecret, kube.Secrets{GitToken: "git-token-1", LLMKey: "llm-key-1", ResultToken: "result-token-1"})
+
+	watch(t, env)
+
+	wantFailure(t, env, withSecret, "the review couldn't start: no pod could be created")
+	if r := env.Run(withSecret); r.FailureStep != kube.StepStarting || r.FailureDetail != "pods is forbidden: exceeded quota, token [REDACTED] in the way" {
+		t.Errorf("step %q, detail %q; want the event's message redacted", r.FailureStep, r.FailureDetail)
+	}
+	wantFailure(t, env, without, "the review couldn't start: no pod could be created")
+	if r := env.Run(without); r.FailureStep != kube.StepStarting || r.FailureDetail != "" {
+		t.Errorf("step %q, detail %q; want no detail without the Secret", r.FailureStep, r.FailureDetail)
+	}
+}
+
+// The deadline kills the pod, so the step comes from what earlier passes saw:
+// a checkout seen done means the deadline passed during the review. [CI]
+func TestWatchRefinesDeadlineStep(t *testing.T) {
+	env := newTestEnv(t)
+	id := env.Dispatched(1, sha('a'))
+	if err := env.Store.AdvanceCheckoutSeen(env.ctx, id, 2); err != nil {
+		t.Fatal(err)
+	}
+	putBareJob(t, env, id, env.Now().Add(-time.Hour), jobCond(batchv1.JobFailed, "DeadlineExceeded", env.Now().Add(-2*time.Minute)))
+
+	watch(t, env)
+
+	wantFailure(t, env, id, "the review didn't finish before the deadline (DeadlineExceeded)")
+	if r := env.Run(id); r.FailureStep != kube.StepReview {
+		t.Errorf("step = %q, want %q", r.FailureStep, kube.StepReview)
+	}
+}
+
+// Without anything seen earlier, the deadline's step is unknown; a checkout
+// the deadline killed is the clone, whatever was seen. [CI]
+func TestWatchDeadlineStepWithoutProgress(t *testing.T) {
+	env := newTestEnv(t)
+	unseen := env.Dispatched(1, sha('a'))
+	putBareJob(t, env, unseen, env.Now().Add(-time.Hour), jobCond(batchv1.JobFailed, "DeadlineExceeded", env.Now().Add(-2*time.Minute)))
+	killed := env.Dispatched(2, sha('a'))
+	now := env.Now()
+	putJob(t, env, killed, now.Add(-time.Hour),
+		[]corev1.ContainerStatus{terminatedStatus("checkout", 137, "Error", now.Add(-time.Hour), now.Add(-2*time.Minute))}, nil,
+		jobCond(batchv1.JobFailed, "DeadlineExceeded", now.Add(-2*time.Minute)))
+
+	watch(t, env)
+
+	wantFailure(t, env, unseen, "the review job hit its deadline (DeadlineExceeded)")
+	if r := env.Run(unseen); r.FailureStep != kube.StepUnknown {
+		t.Errorf("step = %q, want %q", r.FailureStep, kube.StepUnknown)
+	}
+	wantFailure(t, env, killed, "the clone didn't finish before the deadline (DeadlineExceeded)")
+	if r := env.Run(killed); r.FailureStep != kube.StepClone {
+		t.Errorf("step = %q, want %q", r.FailureStep, kube.StepClone)
+	}
+}
+
+// Each pass records the Job's pod and how far its checkout got. [CI]
+func TestWatchRecordsPodAndProgress(t *testing.T) {
+	env := newTestEnv(t)
+	id := env.Dispatched(1, sha('a'))
+	now := env.Now()
+	putJob(t, env, id, now.Add(-time.Minute), []corev1.ContainerStatus{runningStatus("checkout")}, nil)
+
+	watch(t, env)
+	if r := env.Run(id); r.PodName != kube.JobName(id)+"-abcde" || r.CheckoutSeen != 1 {
+		t.Errorf("pod %q, checkout seen %d; want the pod and 1", r.PodName, r.CheckoutSeen)
+	}
+
+	pod, err := env.Kube.CoreV1().Pods(testNamespace).Get(env.ctx, kube.JobName(id)+"-abcde", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod.Status.InitContainerStatuses = []corev1.ContainerStatus{terminatedStatus("checkout", 0, "Completed", now.Add(-time.Minute), now)}
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{runningStatus("pergent")}
+	if _, err := env.Kube.CoreV1().Pods(testNamespace).Update(env.ctx, pod, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	watch(t, env)
+	if r := env.Run(id); r.CheckoutSeen != 2 {
+		t.Errorf("checkout seen %d after the checkout finished; want 2", r.CheckoutSeen)
+	}
+	wantRunning(t, env, id)
+}
+
+// The watcher's own failures name their step. [CI]
+func TestWatchFailureSteps(t *testing.T) {
+	env := newTestEnv(t)
+	gone := env.Dispatched(1, sha('a'))
+	quiet := env.Dispatched(2, sha('a'))
+	now := env.Now()
+	putJob(t, env, quiet, now.Add(-5*time.Minute), nil, nil, jobCond(batchv1.JobComplete, "", now.Add(-2*time.Minute)))
+	env.SetNow(now.Add(2 * time.Minute))
+
+	watch(t, env)
+
+	for id, step := range map[string]string{gone: kube.StepUnknown, quiet: kube.StepDelivery} {
+		if r := env.Run(id); r.State != store.Reported || r.FailureStep != step {
+			t.Errorf("run = %s at step %q (%s); want reported at %q", r.State, r.FailureStep, r.FailureReason, step)
+		}
+	}
+}
+
 // A run claimed but never given a Job (pergent.sh stopped in between) goes
 // back to the queue once its claim is five minutes old.
 func TestWatchRecoversUnlaunchedRun(t *testing.T) {
