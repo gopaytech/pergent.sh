@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams, useSearchParams } from "react-router";
 
-import { api, isStatus, paths, safeHref, type InputsView, type RepositoryDetailView, type WaitingView } from "../api";
+import { api, isStatus, paths, safeHref, type InputsView, type RepositoryDetailView, type Role, type WaitingView } from "../api";
 import { useWrite } from "../layout/write";
+import { QuotaLine } from "../quota";
 import { ErrorBox, ExternalLink, Loading, NotFound, Tabs, platformName, skillOrigin } from "../ui";
 import AttentionRows from "./Attention";
 import PastDismissals from "./PastDismissals";
@@ -51,13 +52,19 @@ export default function RepositoryDetail() {
       <div className="sub spaced">
         {platformName(repo.platform)} · {repo.instance} · {repo.source === "config" ? "managed by config" : "switched on in the dashboard"}
       </div>
+      {view.quota && (
+        <div className="quota" role="group" aria-label="Token usage this month">
+          <QuotaLine label="This repository" ariaLabel="Repository token quota" use={view.quota.repository} />
+          <QuotaLine label="Its instance" ariaLabel="Instance token quota" use={view.quota.instance} />
+        </div>
+      )}
       {view.waiting.length > 0 && (
         <Waiting
           instance={repo.instance}
           project={repo.project}
           mark={repo.platform === "github" ? "#" : "!"}
           items={view.waiting}
-          canStart={view.role === "admin" || view.role === "maintainer"}
+          role={view.role}
           queryKey={queryKey}
         />
       )}
@@ -87,14 +94,15 @@ export default function RepositoryDetail() {
   );
 }
 
-// Waiting is the changes of authors the repository doesn't trust, whose review
-// waits for someone with write access to start it.
+// Waiting is the changes whose review waits for someone to start it: authors
+// the repository doesn't trust (a maintainer or an admin starts those) and
+// changes held by a used-up token quota (only an admin starts those).
 function Waiting({
   instance,
   project,
   mark,
   items,
-  canStart,
+  role,
   queryKey,
 }: {
   instance: string;
@@ -102,7 +110,7 @@ function Waiting({
   // mark is how the platform writes a change's number: ! on GitLab, # on GitHub.
   mark: string;
   items: WaitingView[];
-  canStart: boolean;
+  role: Role;
   queryKey: unknown[];
 }) {
   const client = useQueryClient();
@@ -116,7 +124,7 @@ function Waiting({
     <section className="card" aria-label="Waiting for a start">
       <h2>Waiting for a start</h2>
       <p className="pad meta">
-        Changes from authors this repository doesn't trust. Nobody reviews them until someone with write access starts the review.
+        Nobody reviews these changes until someone starts the review.
       </p>
       {items.map((w) => (
         <div className="row" key={w.number}>
@@ -135,8 +143,9 @@ function Waiting({
             by {w.author}
             {w.title && <span className="meta"> · {w.title}</span>}
             {w.reason === "trust_check_failed" && <div className="meta">Couldn't check the author's access.</div>}
+            {w.reason === "quota_used_up" && <div className="meta">Monthly token quota used up.</div>}
           </div>
-          {canStart && (
+          {(role === "admin" || (role === "maintainer" && w.reason !== "quota_used_up")) && (
             <button
               type="button"
               className="btn small"

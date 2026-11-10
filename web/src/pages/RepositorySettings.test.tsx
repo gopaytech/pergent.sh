@@ -207,7 +207,7 @@ describe("RepositorySettings: Model", () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     renderApp("/repos/main/acme/payments?tab=settings");
     await userEvent.click(await screen.findByRole("button", { name: "Reset to defaults" }));
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("who is trusted and the model"));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("who is trusted, the model and the token quota"));
     confirm.mockRestore();
   });
 });

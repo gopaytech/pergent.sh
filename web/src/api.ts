@@ -27,7 +27,8 @@ export type TrustMode = "follow_visibility" | "on" | "off";
 export type TrustedAuthor = { id?: number; username: string };
 
 // WaitingView is a change whose review waits for someone with write access to
-// start it. reason is "untrusted_author" or "trust_check_failed".
+// start it. reason is "untrusted_author", "trust_check_failed" or
+// "quota_used_up" (the monthly token quota held it; only an admin starts it).
 export type WaitingView = {
   number: number;
   // head is the commit that waits; Start review sends it back.
@@ -36,7 +37,7 @@ export type WaitingView = {
   author: string;
   webUrl: string;
   since: string;
-  reason: "untrusted_author" | "trust_check_failed";
+  reason: "untrusted_author" | "trust_check_failed" | "quota_used_up";
 };
 
 // Me is the signed-in account, from GET /api/me: a local admin ("password")
@@ -278,6 +279,9 @@ export type RepoSettings = {
   // model is the ID of the entry of the list of models the repository runs
   // on; null follows the default.
   model: SettingView<string | null>;
+  // monthlyTokenQuota is the tokens (in plus out) the repository's reviews may
+  // use in a UTC month; null is none of its own. Only an admin is sent it.
+  monthlyTokenQuota?: SettingView<number | null>;
 };
 
 // ModelChoice is an entry of the list of models a repository can be given:
@@ -301,7 +305,15 @@ export type RepositoryDetailView = {
   // modelChoices are the entries an admin of the repository can pick from;
   // empty for anyone else.
   modelChoices: ModelChoice[];
+  // quota is this month's tokens against the quotas; null for anyone but an
+  // admin, and when the usage could not be read.
+  quota: QuotaView | null;
 };
+
+// QuotaUseView is the tokens used this UTC month against a quota (limit null:
+// there is none); QuotaView has the repository's and its instance's.
+export type QuotaUseView = { used: number; limit: number | null };
+export type QuotaView = { repository: QuotaUseView; instance: QuotaUseView };
 
 // --- readiness (GET .../readiness) ---
 //
@@ -512,6 +524,8 @@ export type SettingsUpdate = Partial<{
   // Admins only, like the two above: the ID of an entry of the list of
   // models, or null to follow the default.
   model: string | null;
+  // Admins only too: tokens per UTC month, or null for none.
+  monthlyTokenQuota: number | null;
 }>;
 
 // InputSkill is one skill of the set a review would run. source is
@@ -718,6 +732,10 @@ export type InstanceAdminView = {
   name: string;
   // trustedAuthorsOnly is the default of the instance's repositories.
   trustedAuthorsOnly: TrustMode;
+  // monthlyTokenQuota is the instance's tokens per UTC month, null for none;
+  // tokensThisMonth is what its repositories used so far.
+  monthlyTokenQuota: number | null;
+  tokensThisMonth: number;
   platform: Platform;
   source: "config" | "dashboard";
   removing: boolean;

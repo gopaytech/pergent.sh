@@ -110,7 +110,8 @@ describe("Integrations", () => {
     renderApp("/admin/integrations");
     const main = await card("GitLab · main");
     expect(onlyCopy(main)).toBe(true);
-    expect(within(main).queryByRole("textbox")).not.toBeInTheDocument();
+    // The token quota is shown, but cannot be edited.
+    expect(within(main).queryAllByRole("textbox").filter((el) => !(el as HTMLInputElement).disabled)).toEqual([]);
     expect(main).toHaveTextContent("managed by the config file");
     // The others have them.
     const hub = await card("GitHub · hub");
