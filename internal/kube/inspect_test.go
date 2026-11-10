@@ -154,48 +154,48 @@ func TestInspectReasons(t *testing.T) {
 			job:  jobWith("j", cond(batchv1.JobFailed, "BackoffLimitExceeded", failedAt)),
 			pods: []*corev1.Pod{podFor("j", cloneStart, []corev1.ContainerStatus{terminated("checkout", 128, "Error", cloneStart, cloneEnd)}, []corev1.ContainerStatus{waiting("pergent", "PodInitializing")})},
 			want: Observation{Exists: true, Finished: true, FinishedAt: failedAt, Clone: 37 * time.Second, PodName: "j-abcde",
-				Failure: Failure{Step: StepClone, Reason: "The clone failed (checkout exited with code 128)"}},
+				Failure: Failure{Step: StepClone, Reason: "the clone failed (checkout exited with code 128)"}},
 		},
 		{
 			name: "deadline exceeded while the checkout was killed",
 			job:  jobWith("j", cond(batchv1.JobFailed, "DeadlineExceeded", failedAt)),
 			pods: []*corev1.Pod{podFor("j", cloneStart, []corev1.ContainerStatus{terminated("checkout", 137, "Error", cloneStart, cloneEnd)}, nil)},
 			want: Observation{Exists: true, Finished: true, FinishedAt: failedAt, Clone: 37 * time.Second, PodName: "j-abcde",
-				Failure: Failure{Step: StepClone, Reason: "The clone didn't finish before the deadline (DeadlineExceeded)", Deadline: true}},
+				Failure: Failure{Step: StepClone, Reason: "the clone didn't finish before the deadline (DeadlineExceeded)", Deadline: true}},
 		},
 		{
 			name: "deadline exceeded while the checkout was terminated",
 			job:  jobWith("j", cond(batchv1.JobFailed, "DeadlineExceeded", failedAt)),
 			pods: []*corev1.Pod{podFor("j", cloneStart, []corev1.ContainerStatus{terminated("checkout", 143, "Error", cloneStart, cloneEnd)}, nil)},
 			want: Observation{Exists: true, Finished: true, FinishedAt: failedAt, Clone: 37 * time.Second, PodName: "j-abcde",
-				Failure: Failure{Step: StepClone, Reason: "The clone didn't finish before the deadline (DeadlineExceeded)", Deadline: true}},
+				Failure: Failure{Step: StepClone, Reason: "the clone didn't finish before the deadline (DeadlineExceeded)", Deadline: true}},
 		},
 		{
 			name: "deadline exceeded after the clone",
 			job:  jobWith("j", cond(batchv1.JobFailed, "DeadlineExceeded", failedAt)),
 			pods: []*corev1.Pod{podFor("j", cloneStart, []corev1.ContainerStatus{okInit}, []corev1.ContainerStatus{terminated("pergent", 143, "Error", cloneEnd, failedAt)})},
 			want: Observation{Exists: true, Finished: true, FinishedAt: failedAt, Clone: 37 * time.Second, PodName: "j-abcde", Checkout: 2,
-				Failure: Failure{Step: StepReview, Reason: "The review didn't finish before the deadline (DeadlineExceeded)", Deadline: true}},
+				Failure: Failure{Step: StepReview, Reason: "the review didn't finish before the deadline (DeadlineExceeded)", Deadline: true}},
 		},
 		{
 			name: "deadline exceeded with no pods left",
 			job:  jobWith("j", cond(batchv1.JobFailed, "DeadlineExceeded", failedAt)),
 			want: Observation{Exists: true, Finished: true, FinishedAt: failedAt,
-				Failure: Failure{Step: StepUnknown, Reason: "The review job hit its deadline (DeadlineExceeded)", Deadline: true}},
+				Failure: Failure{Step: StepUnknown, Reason: "the review job hit its deadline (DeadlineExceeded)", Deadline: true}},
 		},
 		{
 			name: "oom killed main container",
 			job:  jobWith("j", cond(batchv1.JobFailed, "BackoffLimitExceeded", failedAt)),
 			pods: []*corev1.Pod{podFor("j", cloneStart, []corev1.ContainerStatus{okInit}, []corev1.ContainerStatus{terminated("pergent", 137, "OOMKilled", cloneEnd, failedAt)})},
 			want: Observation{Exists: true, Finished: true, FinishedAt: failedAt, Clone: 37 * time.Second, PodName: "j-abcde", Checkout: 2,
-				Failure: Failure{Step: StepReview, Reason: "The review job ran out of memory (OOMKilled)"}},
+				Failure: Failure{Step: StepReview, Reason: "the review job ran out of memory (OOMKilled)"}},
 		},
 		{
 			name: "oom killed checkout container",
 			job:  jobWith("j", cond(batchv1.JobFailed, "BackoffLimitExceeded", failedAt)),
 			pods: []*corev1.Pod{podFor("j", cloneStart, []corev1.ContainerStatus{terminated("checkout", 137, "OOMKilled", cloneStart, cloneEnd)}, nil)},
 			want: Observation{Exists: true, Finished: true, FinishedAt: failedAt, Clone: 37 * time.Second, PodName: "j-abcde",
-				Failure: Failure{Step: StepClone, Reason: "The clone ran out of memory (OOMKilled)"}},
+				Failure: Failure{Step: StepClone, Reason: "the clone ran out of memory (OOMKilled)"}},
 		},
 		{
 			name: "oom beats exit 4",
@@ -204,52 +204,52 @@ func TestInspectReasons(t *testing.T) {
 				[]corev1.ContainerStatus{okInit},
 				[]corev1.ContainerStatus{terminated("pergent", 4, "OOMKilled", cloneEnd, failedAt)})},
 			want: Observation{Exists: true, Finished: true, FinishedAt: failedAt, Clone: 37 * time.Second, PodName: "j-abcde", Checkout: 2,
-				Failure: Failure{Step: StepReview, Reason: "The review job ran out of memory (OOMKilled)"}},
+				Failure: Failure{Step: StepReview, Reason: "the review job ran out of memory (OOMKilled)"}},
 		},
 		{
 			name: "pergent exit 4",
 			job:  jobWith("j", cond(batchv1.JobFailed, "BackoffLimitExceeded", failedAt)),
 			pods: []*corev1.Pod{podFor("j", cloneStart, []corev1.ContainerStatus{okInit}, []corev1.ContainerStatus{terminated("pergent", 4, "Error", cloneEnd, failedAt)})},
 			want: Observation{Exists: true, Finished: true, FinishedAt: failedAt, Clone: 37 * time.Second, PodName: "j-abcde", Checkout: 2,
-				Failure: Failure{Step: StepDelivery, Reason: "The review job couldn't deliver its result (exit code 4)"}},
+				Failure: Failure{Step: StepDelivery, Reason: "the review job couldn't deliver its result (exit code 4)"}},
 		},
 		{
 			name: "other failure",
 			job:  jobWith("j", cond(batchv1.JobFailed, "BackoffLimitExceeded", failedAt)),
 			pods: []*corev1.Pod{podFor("j", cloneStart, []corev1.ContainerStatus{okInit}, []corev1.ContainerStatus{terminated("pergent", 1, "Error", cloneEnd, failedAt)})},
 			want: Observation{Exists: true, Finished: true, FinishedAt: failedAt, Clone: 37 * time.Second, PodName: "j-abcde", Checkout: 2,
-				Failure: Failure{Step: StepUnknown, Reason: "The review job failed (BackoffLimitExceeded)"}},
+				Failure: Failure{Step: StepUnknown, Reason: "the review job failed (BackoffLimitExceeded)"}},
 		},
 		{
 			name: "failure with no reason",
 			job:  jobWith("j", cond(batchv1.JobFailed, "", failedAt)),
 			want: Observation{Exists: true, Finished: true, FinishedAt: failedAt,
-				Failure: Failure{Step: StepUnknown, Reason: "The review job failed (unknown reason)"}},
+				Failure: Failure{Step: StepUnknown, Reason: "the review job failed (unknown reason)"}},
 		},
 		{
 			name: "stuck: ErrImagePull for over 5 minutes",
 			job:  jobWith("j"),
 			pods: []*corev1.Pod{podFor("j", inspectNow.Add(-6*time.Minute), []corev1.ContainerStatus{waiting("checkout", "ErrImagePull")}, nil)},
-			want: Observation{Exists: true, PodName: "j-abcde", Stuck: Failure{Step: StepStarting, Reason: "The review couldn't start (ErrImagePull)"}},
+			want: Observation{Exists: true, PodName: "j-abcde", Stuck: Failure{Step: StepStarting, Reason: "the review couldn't start (ErrImagePull)"}},
 		},
 		{
 			name: "stuck: ImagePullBackOff on the main container",
 			job:  jobWith("j"),
 			pods: []*corev1.Pod{podFor("j", inspectNow.Add(-6*time.Minute), []corev1.ContainerStatus{okInit}, []corev1.ContainerStatus{waiting("pergent", "ImagePullBackOff")})},
 			want: Observation{Exists: true, PodName: "j-abcde", Checkout: 2, Clone: 37 * time.Second,
-				Stuck: Failure{Step: StepStarting, Reason: "The review couldn't start (ImagePullBackOff)"}},
+				Stuck: Failure{Step: StepStarting, Reason: "the review couldn't start (ImagePullBackOff)"}},
 		},
 		{
 			name: "stuck: CreateContainerConfigError",
 			job:  jobWith("j"),
 			pods: []*corev1.Pod{podFor("j", inspectNow.Add(-6*time.Minute), nil, []corev1.ContainerStatus{waiting("pergent", "CreateContainerConfigError")})},
-			want: Observation{Exists: true, PodName: "j-abcde", Stuck: Failure{Step: StepStarting, Reason: "The review couldn't start (CreateContainerConfigError)"}},
+			want: Observation{Exists: true, PodName: "j-abcde", Stuck: Failure{Step: StepStarting, Reason: "the review couldn't start (CreateContainerConfigError)"}},
 		},
 		{
 			name: "stuck: InvalidImageName",
 			job:  jobWith("j"),
 			pods: []*corev1.Pod{podFor("j", inspectNow.Add(-6*time.Minute), []corev1.ContainerStatus{waiting("checkout", "InvalidImageName")}, nil)},
-			want: Observation{Exists: true, PodName: "j-abcde", Stuck: Failure{Step: StepStarting, Reason: "The review couldn't start (InvalidImageName)"}},
+			want: Observation{Exists: true, PodName: "j-abcde", Stuck: Failure{Step: StepStarting, Reason: "the review couldn't start (InvalidImageName)"}},
 		},
 		{
 			name: "not stuck yet: ErrImagePull under 5 minutes",
@@ -303,7 +303,7 @@ func TestInspectTenMinuteRules(t *testing.T) {
 		{
 			name: "unscheduled for 11 minutes", job: jobCreated("j", inspectNow.Add(-time.Hour)),
 			pods:     []*corev1.Pod{unscheduled("j", inspectNow.Add(-time.Hour), inspectNow.Add(-over), noNode)},
-			wantStep: StepStarting, wantReason: "The review couldn't start: no node could run it", wantDetail: noNode, wantStuck: true,
+			wantStep: StepStarting, wantReason: "the review couldn't start: no node could run it", wantDetail: noNode, wantStuck: true,
 		},
 		{
 			name: "unscheduled for 9m59s", job: jobCreated("j", inspectNow.Add(-time.Hour)),
@@ -322,7 +322,7 @@ func TestInspectTenMinuteRules(t *testing.T) {
 		{
 			name: "no condition time, pod created 11 minutes ago", job: jobCreated("j", inspectNow.Add(-time.Hour)),
 			pods:     []*corev1.Pod{unscheduled("j", inspectNow.Add(-over), time.Time{}, noNode)},
-			wantStep: StepStarting, wantReason: "The review couldn't start: no node could run it", wantDetail: noNode, wantStuck: true,
+			wantStep: StepStarting, wantReason: "the review couldn't start: no node could run it", wantDetail: noNode, wantStuck: true,
 		},
 		{
 			name: "no condition time, pod created 9m59s ago", job: jobCreated("j", inspectNow.Add(-time.Hour)),
@@ -344,7 +344,7 @@ func TestInspectTenMinuteRules(t *testing.T) {
 		{
 			name: "no pod for 11 minutes, FailedCreate event", job: jobCreated("j", inspectNow.Add(-over)),
 			events:   []*corev1.Event{jobEvent("j", "FailedCreate", quota, inspectNow.Add(-5*time.Minute))},
-			wantStep: StepStarting, wantReason: "The review couldn't start: no pod could be created", wantDetail: quota, wantStuck: true,
+			wantStep: StepStarting, wantReason: "the review couldn't start: no pod could be created", wantDetail: quota, wantStuck: true,
 		},
 		{
 			name: "no pod for 11 minutes, newest FailedCreate wins", job: jobCreated("j", inspectNow.Add(-over)),
@@ -355,12 +355,12 @@ func TestInspectTenMinuteRules(t *testing.T) {
 				objectEvent("Job", "other", "FailedCreate", "another job's message", inspectNow.Add(-30*time.Second)),
 				objectEvent("Pod", "j", "FailedCreate", "a pod's message", inspectNow.Add(-20*time.Second)),
 			},
-			wantStep: StepStarting, wantReason: "The review couldn't start: no pod could be created", wantDetail: quota, wantStuck: true,
+			wantStep: StepStarting, wantReason: "the review couldn't start: no pod could be created", wantDetail: quota, wantStuck: true,
 		},
 		{
 			name: "no pod for 11 minutes, no FailedCreate event", job: jobCreated("j", inspectNow.Add(-over)),
 			events:   []*corev1.Event{jobEvent("j", "SuccessfulCreate", "created pod", inspectNow.Add(-time.Minute))},
-			wantStep: StepStarting, wantReason: "The review couldn't start: no pod could be created", wantDetail: "", wantStuck: true,
+			wantStep: StepStarting, wantReason: "the review couldn't start: no pod could be created", wantDetail: "", wantStuck: true,
 		},
 		{
 			name: "no pod for 9m59s", job: jobCreated("j", inspectNow.Add(-justUnder)),
@@ -373,7 +373,7 @@ func TestInspectTenMinuteRules(t *testing.T) {
 		{
 			name: "no pod for 11 minutes, events forbidden", job: jobCreated("j", inspectNow.Add(-over)),
 			forbidden: true,
-			wantStep:  StepStarting, wantReason: "The review couldn't start: no pod could be created", wantDetail: "", wantStuck: true,
+			wantStep:  StepStarting, wantReason: "the review couldn't start: no pod could be created", wantDetail: "", wantStuck: true,
 		},
 		{
 			name: "no pod, creation time unknown", job: jobWith("j"),
@@ -499,9 +499,9 @@ func TestDeadlineFailure(t *testing.T) {
 		checkout int
 		want     Failure
 	}{
-		{0, Failure{Step: StepUnknown, Reason: "The review job hit its deadline (DeadlineExceeded)", Deadline: true}},
-		{1, Failure{Step: StepClone, Reason: "The clone didn't finish before the deadline (DeadlineExceeded)", Deadline: true}},
-		{2, Failure{Step: StepReview, Reason: "The review didn't finish before the deadline (DeadlineExceeded)", Deadline: true}},
+		{0, Failure{Step: StepUnknown, Reason: "the review job hit its deadline (DeadlineExceeded)", Deadline: true}},
+		{1, Failure{Step: StepClone, Reason: "the clone didn't finish before the deadline (DeadlineExceeded)", Deadline: true}},
+		{2, Failure{Step: StepReview, Reason: "the review didn't finish before the deadline (DeadlineExceeded)", Deadline: true}},
 	}
 	for _, c := range cases {
 		if got := DeadlineFailure(c.checkout); got != c.want {
@@ -556,7 +556,7 @@ func TestInspectStuckWinsOverUnfinished(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Stuck != (Failure{}) || got.Failure.Reason != "The review job hit its deadline (DeadlineExceeded)" {
+	if got.Stuck != (Failure{}) || got.Failure.Reason != "the review job hit its deadline (DeadlineExceeded)" {
 		t.Errorf("got %+v", got)
 	}
 }

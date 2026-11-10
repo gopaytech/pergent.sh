@@ -67,11 +67,11 @@ type Observation struct {
 func DeadlineFailure(checkout int) Failure {
 	switch checkout {
 	case 1:
-		return Failure{Step: StepClone, Reason: "The clone didn't finish before the deadline (DeadlineExceeded)", Deadline: true}
+		return Failure{Step: StepClone, Reason: "the clone didn't finish before the deadline (DeadlineExceeded)", Deadline: true}
 	case 2:
-		return Failure{Step: StepReview, Reason: "The review didn't finish before the deadline (DeadlineExceeded)", Deadline: true}
+		return Failure{Step: StepReview, Reason: "the review didn't finish before the deadline (DeadlineExceeded)", Deadline: true}
 	}
-	return Failure{Step: StepUnknown, Reason: "The review job hit its deadline (DeadlineExceeded)", Deadline: true}
+	return Failure{Step: StepUnknown, Reason: "the review job hit its deadline (DeadlineExceeded)", Deadline: true}
 }
 
 var stuckReasons = map[string]bool{
@@ -215,7 +215,7 @@ func (l *Launcher) inspect(ctx context.Context, name string, now time.Time) (Obs
 		if err != nil {
 			return Observation{}, jobFacts{}, fmt.Errorf("list events of job %s: %w", name, err)
 		}
-		obs.Stuck = Failure{Step: StepStarting, Reason: "The review couldn't start: no pod could be created", Detail: failedCreate(events)}
+		obs.Stuck = Failure{Step: StepStarting, Reason: "the review couldn't start: no pod could be created", Detail: failedCreate(events)}
 	}
 
 	if failed != nil {
@@ -224,13 +224,13 @@ func (l *Launcher) inspect(ctx context.Context, name string, now time.Time) (Obs
 			// The deadline killed the checkout: not a failed clone.
 			obs.Failure = DeadlineFailure(1)
 		case cloneOOM:
-			obs.Failure = Failure{Step: StepClone, Reason: "The clone ran out of memory (OOMKilled)"}
+			obs.Failure = Failure{Step: StepClone, Reason: "the clone ran out of memory (OOMKilled)"}
 		case initExit != nil:
-			obs.Failure = Failure{Step: StepClone, Reason: fmt.Sprintf("The clone failed (checkout exited with code %d)", *initExit)}
+			obs.Failure = Failure{Step: StepClone, Reason: fmt.Sprintf("the clone failed (checkout exited with code %d)", *initExit)}
 		case oom:
-			obs.Failure = Failure{Step: StepReview, Reason: "The review job ran out of memory (OOMKilled)"}
+			obs.Failure = Failure{Step: StepReview, Reason: "the review job ran out of memory (OOMKilled)"}
 		case exit4:
-			obs.Failure = Failure{Step: StepDelivery, Reason: "The review job couldn't deliver its result (exit code 4)"}
+			obs.Failure = Failure{Step: StepDelivery, Reason: "the review job couldn't deliver its result (exit code 4)"}
 		case failed.Reason == "DeadlineExceeded":
 			obs.Failure = DeadlineFailure(obs.Checkout)
 		default:
@@ -238,7 +238,7 @@ func (l *Launcher) inspect(ctx context.Context, name string, now time.Time) (Obs
 			if reason == "" {
 				reason = "unknown reason"
 			}
-			obs.Failure = Failure{Step: StepUnknown, Reason: fmt.Sprintf("The review job failed (%s)", reason)}
+			obs.Failure = Failure{Step: StepUnknown, Reason: fmt.Sprintf("the review job failed (%s)", reason)}
 		}
 	}
 	facts.oom = oom || cloneOOM
@@ -249,7 +249,7 @@ func (l *Launcher) inspect(ctx context.Context, name string, now time.Time) (Obs
 // config error that won't clear, or none.
 func imageFailure(cs corev1.ContainerStatus) Failure {
 	if w := cs.State.Waiting; w != nil && stuckReasons[w.Reason] {
-		return Failure{Step: StepStarting, Reason: fmt.Sprintf("The review couldn't start (%s)", w.Reason)}
+		return Failure{Step: StepStarting, Reason: fmt.Sprintf("the review couldn't start (%s)", w.Reason)}
 	}
 	return Failure{}
 }
@@ -270,7 +270,7 @@ func unscheduledFailure(pod *corev1.Pod, now time.Time) Failure {
 		if since.IsZero() || now.Sub(since) <= unscheduledAfter {
 			return Failure{}
 		}
-		return Failure{Step: StepStarting, Reason: "The review couldn't start: no node could run it", Detail: c.Message}
+		return Failure{Step: StepStarting, Reason: "the review couldn't start: no node could run it", Detail: c.Message}
 	}
 	return Failure{}
 }

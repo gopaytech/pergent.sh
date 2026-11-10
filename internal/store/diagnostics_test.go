@@ -8,7 +8,7 @@ import (
 func TestReportFailureStoresStepAndDetail(t *testing.T) {
 	s := newStore(t)
 	id := dispatched(t, s, mr1, "aaaa", "tok")
-	reason := "The clone failed (checkout exited with code 128)"
+	reason := "the clone failed (checkout exited with code 128)"
 	if ok, err := s.ReportFailure(ctx, id, Failure{Reason: reason, Step: "clone"}, t0); err != nil || !ok {
 		t.Fatalf("ReportFailure = %v, %v", ok, err)
 	}
