@@ -1125,30 +1125,30 @@ func TestRunLookup(t *testing.T) {
 func TestReplaceWithFailure(t *testing.T) {
 	s := newStore(t)
 	id := reported(t, s, mr1, "aaa", `{"status":"completed"}`)
-	if err := s.ReplaceWithFailure(ctx, id, "unusable"); err != nil {
+	if err := s.ReplaceWithFailure(ctx, id, Failure{Reason: "unusable", Step: "delivery"}); err != nil {
 		t.Fatalf("ReplaceWithFailure: %v", err)
 	}
 	r := getRun(t, s, id)
-	if r.State != Reported || r.FailureReason != "unusable" || r.Result != nil {
-		t.Errorf("run = state %s reason %q result %q", r.State, r.FailureReason, r.Result)
+	if r.State != Reported || r.FailureReason != "unusable" || r.FailureStep != "delivery" || r.Result != nil {
+		t.Errorf("run = state %s reason %q step %q result %q", r.State, r.FailureReason, r.FailureStep, r.Result)
 	}
 
 	// A run with a failure but no result, a queued run, and an unknown or
 	// malformed id are not replaced.
-	if err := s.ReplaceWithFailure(ctx, id, "again"); !errors.Is(err, ErrNotReported) {
+	if err := s.ReplaceWithFailure(ctx, id, Failure{Reason: "again"}); !errors.Is(err, ErrNotReported) {
 		t.Errorf("run without result: %v", err)
 	}
 	queued := enqueue(t, s, mr2, "bbb")
-	if err := s.ReplaceWithFailure(ctx, queued, "x"); !errors.Is(err, ErrNotReported) {
+	if err := s.ReplaceWithFailure(ctx, queued, Failure{Reason: "x"}); !errors.Is(err, ErrNotReported) {
 		t.Errorf("queued run: %v", err)
 	}
 	if r := getRun(t, s, queued); r.State != Queued || r.FailureReason != "" {
 		t.Errorf("queued run changed: %+v", r)
 	}
-	if err := s.ReplaceWithFailure(ctx, "00000000-0000-0000-0000-000000000000", "x"); !errors.Is(err, ErrNotReported) {
+	if err := s.ReplaceWithFailure(ctx, "00000000-0000-0000-0000-000000000000", Failure{Reason: "x"}); !errors.Is(err, ErrNotReported) {
 		t.Errorf("unknown id: %v", err)
 	}
-	if err := s.ReplaceWithFailure(ctx, "nope", "x"); !errors.Is(err, ErrNotReported) {
+	if err := s.ReplaceWithFailure(ctx, "nope", Failure{Reason: "x"}); !errors.Is(err, ErrNotReported) {
 		t.Errorf("malformed id: %v", err)
 	}
 }

@@ -1131,19 +1131,21 @@ func (s *Store) Run(ctx context.Context, id string) (Run, bool, error) {
 	return r, true, nil
 }
 
-// ReplaceWithFailure turns the stored result of a reported run into a failure
-// with reason: it clears the result and keeps the state reported, so the
+// ReplaceWithFailure turns the stored result of a reported run into the
+// failure f: it clears the result and keeps the state reported, so the
 // publisher posts an error comment. It returns ErrNotReported when the run is
 // not reported with a result.
-func (s *Store) ReplaceWithFailure(ctx context.Context, id, reason string) error {
+func (s *Store) ReplaceWithFailure(ctx context.Context, id string, f Failure) error {
 	if !validUUID(id) {
 		return ErrNotReported
 	}
-	if reason == "" {
-		reason = "review failed"
+	if f.Reason == "" {
+		f.Reason = "review failed"
 	}
-	tag, err := s.pool.Exec(ctx, `UPDATE runs SET result = NULL, failure_reason = $2
-		WHERE id = $1::uuid AND state = 'reported' AND result IS NOT NULL`, id, reason)
+	tag, err := s.pool.Exec(ctx, `UPDATE runs SET result = NULL, failure_reason = $2,
+		failure_step = $3, failure_detail = $4
+		WHERE id = $1::uuid AND state = 'reported' AND result IS NOT NULL`,
+		id, f.Reason, f.Step, CleanText(f.Detail))
 	if err != nil {
 		return err
 	}

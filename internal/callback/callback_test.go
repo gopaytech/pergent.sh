@@ -38,6 +38,7 @@ type fake struct {
 	run      store.Run
 	runErr   error
 	replaced []string
+	repSteps []string // the step of each replaced result
 	reported []string
 	steps    []string // the step of each reported failure
 	stored   int
@@ -81,8 +82,9 @@ func (f *fake) ReportFailure(_ context.Context, id string, fail store.Failure, _
 	return true, nil
 }
 
-func (f *fake) ReplaceWithFailure(_ context.Context, id, reason string) error {
-	f.replaced = append(f.replaced, reason)
+func (f *fake) ReplaceWithFailure(_ context.Context, id string, fail store.Failure) error {
+	f.replaced = append(f.replaced, fail.Reason)
+	f.repSteps = append(f.repSteps, fail.Step)
 	return f.replErr
 }
 
@@ -206,6 +208,9 @@ func TestHeadMismatchFailsRun(t *testing.T) {
 	if len(e.f.replaced) != 1 || !strings.Contains(e.f.replaced[0], "different commit") ||
 		!strings.HasPrefix(e.f.replaced[0], "pergent sent a result pergent.sh couldn't use: ") {
 		t.Errorf("replaced = %v", e.f.replaced)
+	}
+	if len(e.f.repSteps) != 1 || e.f.repSteps[0] != "delivery" {
+		t.Errorf("replaced steps = %v, want [delivery]", e.f.repSteps)
 	}
 	if e.woken != 1 {
 		t.Errorf("woken = %d", e.woken)

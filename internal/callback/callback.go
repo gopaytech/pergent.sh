@@ -32,7 +32,7 @@ type Results interface {
 	Run(ctx context.Context, id string) (store.Run, bool, error)
 	StoreResult(ctx context.Context, id, token string, body []byte, now time.Time) (store.ResultOutcome, error)
 	ReportFailure(ctx context.Context, id string, f store.Failure, now time.Time) (bool, error)
-	ReplaceWithFailure(ctx context.Context, id, reason string) error
+	ReplaceWithFailure(ctx context.Context, id string, f store.Failure) error
 	RecordUsage(ctx context.Context, id string, skills []store.SkillUsage) error
 }
 
@@ -111,7 +111,7 @@ func (h *Handler) stored(w http.ResponseWriter, ctx context.Context, id string, 
 		return
 	}
 	if reason != "" {
-		if err := h.Results.ReplaceWithFailure(ctx, id, unusable+reason); err != nil {
+		if err := h.Results.ReplaceWithFailure(ctx, id, store.Failure{Reason: unusable + reason, Step: "delivery"}); err != nil {
 			h.log().Error("replace result with failure", "run", id, "error", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
