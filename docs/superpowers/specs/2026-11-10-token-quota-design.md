@@ -77,7 +77,7 @@ There are two places, and each run is checked in exactly one of them:
 
 The owner's choice: refuse, don't hold.
 
-- **A `@<bot> review` command** gets 👎 and the reason `the monthly token quota is used up` in the commands table, as other refused commands do. No numbers, and it doesn't say which quota. It counts against the existing "one do-nothing answer per 2 minutes" limit, so it can't make the bot comment in a loop.
+- **A `@<bot> review` command** gets 👎 and the reason `the monthly token quota is used up` in the commands table, as other refused commands do. No numbers, and it doesn't say which quota. If the quota note (below) hasn't been posted on that merge request this month, it is posted as the reply, sharing the same once-a-month flag; otherwise the 👎 is all (the owner's decision). It counts against the existing "one do-nothing answer per 2 minutes" limit, so it can't make the bot comment in a loop.
 - **A maintainer's Re-run or Start review** is refused by the route with the same reason, shown beside the button.
 - Nothing is queued, so a refused request uses no re-run cap.
 - An existing review of the head, its commit status and the approve bot's approval stay as they are: they come from a real review.
@@ -135,7 +135,11 @@ Admins only (the owner's choice: no warning on merge requests, no metrics).
 - Quota-held runs reuse the `waiting` state with the new `skip_reason` `quota_used_up` (my call: the previous release has no quotas, so a new state would protect nothing on rollback). `HoldRun` holds only `trigger = 'push'` runs today, as its guard against a race with `StartRun`; holding pergent.sh's own full re-run needs that guard widened without losing the race protection.
 - How an admin's start is marked as past the quota (a column on the run, or a new trigger) is the builder's call, as long as the previous release ignores it safely.
 - The new config keys are refused by the previous release, which rejects unknown keys. The README's **Upgrading** section says to remove them before rolling back, and that a rollback removes the quota.
-- The README gets a short **Token quota** section: where to set it, what counts, what people see at the limit, and the overshoot.
+- The README gets a short **Token quota** section: where to set it, what counts, what people see at the limit, the overshoot (reviews started together near the limit can all run), and the known gap that a Job with no result counts as zero.
+
+## Delivery
+
+One pergent.sh pull request: the migration, the dispatcher and command checks, the dashboard, the README and `openapi.yaml`. pergent needs no change. No release until the owner says so (the owner's decision).
 - `openapi.yaml` gains the repository setting, the instance endpoint and the new waiting reason.
 
 ## Testing
