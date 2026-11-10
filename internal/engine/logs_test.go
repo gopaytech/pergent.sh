@@ -449,6 +449,42 @@ func TestRunLogSecretAcrossCut(t *testing.T) {
 	}
 }
 
+// The clone log is cut as the pergent log is: a secret across the point where
+// its kept tail starts is hidden whole, in both the full and the masked clone
+// log. [CI]
+func TestCloneLogSecretAcrossCut(t *testing.T) {
+	env := newTestEnv(t)
+	now := env.Now()
+	const clone = "glpat-clone-token-START-0123456789-ENDSUFFIX"
+	// The kept tail starts 20 bytes before the token's end.
+	tail := clone[len(clone)-20:] + "\n" + strings.Repeat("x", 99) + "\n"
+	rest := strings.Repeat("y", kube.CloneLogKeepBytes-len(tail)-1) + "\n"
+	serveContainerLogs(env, map[string]string{
+		"pergent":  "x\n",
+		"checkout": strings.Repeat("early line\n", 1000) + "cloning with " + clone[:len(clone)-20] + tail + rest,
+	})
+	id := env.Dispatched(1, sha('1'))
+	putJob(t, env, id, now.Add(-time.Minute),
+		[]corev1.ContainerStatus{terminatedStatus("checkout", 128, "Error", now.Add(-time.Minute), now.Add(-2*time.Second))}, nil,
+		jobCond(batchv1.JobFailed, "BackoffLimitExceeded", now.Add(-time.Second)))
+	putJobSecret(t, env, id, kube.Secrets{GitToken: clone, LLMKey: testLLMKey, ResultToken: "result-token-abc"})
+
+	watch(t, env)
+	d, found := storedDiagnostics(t, env, id)
+	if !found {
+		t.Fatal("no diagnostics stored")
+	}
+	for name, text := range map[string]string{"clone log": d.CloneLog, "masked clone log": d.CloneLogMasked} {
+		if strings.Contains(text, "ENDSUFFIX") || strings.Contains(text, "DACTED") {
+			t.Errorf("the stored %s keeps part of the token or its mark: %q", name, text[:min(len(text), 80)])
+		}
+		if len(text) > kube.CloneLogKeepBytes || !strings.HasPrefix(text, strings.Repeat("x", 99)+"\n") {
+			t.Errorf("stored %s is %d bytes starting %q; want at most %d from the first whole line",
+				name, len(text), text[:min(len(text), 40)], kube.CloneLogKeepBytes)
+		}
+	}
+}
+
 // A secret across the start of what is read is hidden too, even when hiding
 // the many secrets after it leaves less than is kept: the read starts within
 // a line, and that partial line is never stored.

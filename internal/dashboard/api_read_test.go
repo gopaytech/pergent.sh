@@ -857,8 +857,33 @@ func rawKeys(e *env, c *http.Cookie, target string) map[string]json.RawMessage {
 // setJob records the Job fields the engine would have set on the run.
 func (e *env) setJob(id, job, pod, detail string) {
 	e.t.Helper()
-	e.exec(`UPDATE runs SET job_name = $2, pod_name = $3, failure_step = 'start', failure_detail = $4
+	e.exec(`UPDATE runs SET job_name = $2, pod_name = $3, failure_step = 'starting', failure_detail = $4
 		WHERE id = $1::uuid`, id, job, pod, detail)
+}
+
+// belowAdmin are sessions on acme/widgets with every role below RoleAdmin: a
+// viewer, a maintainer of the repository, and a maintainer of every
+// repository of the instance. A team role never reaches RoleAdmin (roleOf),
+// so only an admin account does.
+func belowAdmin(e *env) map[string]*http.Cookie {
+	e.t.Helper()
+	repo := e.sso("repo-maintainer@example.com")
+	e.team("widgets maintainers", []store.TeamMember{{AccountID: repo, Role: store.RoleMaintainer}},
+		store.TeamRepo{Instance: "main", Project: "acme/widgets"})
+	inst := e.sso("instance-maintainer@example.com")
+	e.team("main maintainers", []store.TeamMember{{AccountID: inst, Role: store.RoleMaintainer}},
+		store.TeamRepo{Instance: "main"})
+	below := map[string]*http.Cookie{
+		"viewer":                e.userOnMain(false, "acme/widgets"),
+		"repository maintainer": e.sessionFor(repo),
+		"instance maintainer":   e.sessionFor(inst),
+	}
+	for who, want := range map[string]Role{"viewer": RoleViewer, "repository maintainer": RoleMaintainer, "instance maintainer": RoleMaintainer} {
+		if _, se := e.session(below[who]); se.Role("main", "acme/widgets") != want {
+			e.t.Fatalf("%s has role %v on acme/widgets; want %v", who, se.Role("main", "acme/widgets"), want)
+		}
+	}
+	return below
 }
 
 func TestRunKubernetesAdminOnly(t *testing.T) {
@@ -887,23 +912,26 @@ func TestRunKubernetesAdminOnly(t *testing.T) {
 		t.Error("a run with no Job has a kubernetes key")
 	}
 
-	// A viewer's JSON has no kubernetes key, and nothing of the Job or the
-	// detail anywhere in the body.
-	viewer := e.userOnMain(false, "acme/widgets")
-	for _, id := range []string{failed, running} {
-		rec := e.wantStatus(viewer, "/api/runs/"+id, http.StatusOK)
-		if _, ok := rawKeys(e, viewer, "/api/runs/"+id)["kubernetes"]; ok {
-			t.Errorf("viewer's run %s has a kubernetes key", id)
-		}
-		for _, secret := range []string{"pergent-abc123", "pergent-def456", "pergent-jobs", "insufficient memory"} {
-			if strings.Contains(rec.Body.String(), secret) {
-				t.Errorf("viewer's run %s shows %q: %s", id, secret, rec.Body)
+	// Below admin (a viewer, a maintainer of the repository, a maintainer of
+	// the whole instance) the JSON has no kubernetes key, and nothing of the
+	// Job or the detail anywhere in the body.
+	below := belowAdmin(e)
+	for who, c := range below {
+		for _, id := range []string{failed, running} {
+			rec := e.wantStatus(c, "/api/runs/"+id, http.StatusOK)
+			if _, ok := rawKeys(e, c, "/api/runs/"+id)["kubernetes"]; ok {
+				t.Errorf("%s's run %s has a kubernetes key", who, id)
+			}
+			for _, secret := range []string{"pergent-abc123", "pergent-def456", "pergent-jobs", "insufficient memory"} {
+				if strings.Contains(rec.Body.String(), secret) {
+					t.Errorf("%s's run %s shows %q: %s", who, id, secret, rec.Body)
+				}
 			}
 		}
 	}
 	// The review page's run list carries none of it either.
 	for _, target := range []string{"/api/reviews/main/acme/widgets/3", "/api/reviews"} {
-		for _, c := range []*http.Cookie{admin, viewer} {
+		for _, c := range []*http.Cookie{admin, below["viewer"], below["repository maintainer"], below["instance maintainer"]} {
 			if body := e.get(c, target).Body.String(); strings.Contains(body, "insufficient memory") ||
 				strings.Contains(body, "pergent-abc123") {
 				t.Errorf("GET %s shows the Job or its detail: %s", target, body)
@@ -926,17 +954,20 @@ func TestRunDiagnosticsMaskedForViewer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	viewer := e.userOnMain(false, "acme/widgets")
+	below := belowAdmin(e)
+	viewer := below["viewer"]
 	target := "/api/runs/" + id + "/diagnostics"
-	if v := getJSON[DiagnosticsView](e, viewer, target); v.CloneLog != "fatal: unable to access [linked repository]" || v.PodState != nil {
-		t.Errorf("viewer diagnostics = %+v; want the masked log and no pod state", v)
-	}
-	keys := rawKeys(e, viewer, target)
-	if _, ok := keys["podState"]; ok {
-		t.Errorf("viewer's JSON has a podState key: %v", keys)
-	}
-	if rec := e.get(viewer, target); strings.Contains(rec.Body.String(), "private-lib") {
-		t.Errorf("viewer sees the linked repository: %s", rec.Body)
+	for who, c := range below {
+		if v := getJSON[DiagnosticsView](e, c, target); v.CloneLog != "fatal: unable to access [linked repository]" || v.PodState != nil {
+			t.Errorf("%s diagnostics = %+v; want the masked log and no pod state", who, v)
+		}
+		keys := rawKeys(e, c, target)
+		if _, ok := keys["podState"]; ok {
+			t.Errorf("%s's JSON has a podState key: %v", who, keys)
+		}
+		if rec := e.get(c, target); strings.Contains(rec.Body.String(), "private-lib") {
+			t.Errorf("%s sees the linked repository: %s", who, rec.Body)
+		}
 	}
 	v := getJSON[DiagnosticsView](e, viewer, "/api/runs/"+empty+"/diagnostics")
 	if v.CloneLog != "" || v.PodState != nil {
