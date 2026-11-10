@@ -18,7 +18,7 @@ Only admins set or change a quota. Maintainers and viewers see neither the field
 - When the instance's quota runs out, every repository on it is held, including those with room left under their own quota.
 - **The config file wins.** An instance or repository whose quota is set in the config shows it read-only in the dashboard, as for [Trusted authors](trusted-authors.md). For an instance in the config the dashboard route answers 409.
 - A maintainer's **Reset to defaults** on a repository leaves its quota as it is. An admin's reset clears it.
-- Changes are recorded in the [audit log](dashboard.md#audit-log): an instance's as `instance_updated` with the detail `monthly_token_quota=<n>` or `monthly_token_quota=none`, a repository's as `settings_updated` naming `monthlyTokenQuota`.
+- Changes are recorded in the [audit log](dashboard.md#audit-log): an instance's as `instance_updated` with the detail `monthly_token_quota=<n>` or `monthly_token_quota=none`, a repository's as `settings_updated` with the detail `monthlyTokenQuota=<n>` or `monthlyTokenQuota=none`.
 
 ## What counts
 
@@ -35,7 +35,7 @@ The check is "usage so far this month is below the quota". Usage exactly at the 
 
 - no Job and no LLM call;
 - a pending status on the head, set again on each new head: `Monthly token quota used up. An admin can start the review in the dashboard.` A required pergent check keeps the change unmergeable, and the change is never approved;
-- one note on the change, the first time in a calendar month that a quota holds it: `Not reviewed: the monthly token quota is used up. Reviews start again on the 1st, or an admin can start this one from the pergent.sh dashboard.` Later pushes that month post nothing. The note says nothing about numbers, and not which quota ran out, because on a public repository anyone reads it;
+- one note on the change, the first time in a calendar month that a quota holds it: `Not reviewed: the monthly token quota is used up. Reviews start again with the first push after the 1st, or an admin can start this one from the pergent.sh dashboard.` Later pushes that month post nothing. The note says nothing about numbers, and not which quota ran out, because on a public repository anyone reads it;
 - the change is listed under **Waiting for a start** on the repository's page, with the line `Monthly token quota used up.` Everyone who can see the repository sees the entry; only admins get the **Start review** button.
 
 Trust is checked before the quota: an untrusted author's change waits for [trust](trusted-authors.md) first and doesn't touch the quota.
@@ -45,7 +45,7 @@ Trust is checked before the quota: an untrusted author's change waits for [trust
 - a comment gets 👎 and the reason `the monthly token quota is used up`. The note above is the reply only the first time that month for that change (it shares the once-a-month flag with the held pushes); later refusals get 👎 alone;
 - a button answers 409 `the monthly token quota is used up`, shown beside the button;
 - an earlier review of the change, its status and the bot's approval stay as they are;
-- if a review of that head is already queued or running, the request is answered as "already queued", not refused;
+- if a review of that head is already queued or running, the request is answered as "already queued", not refused (a queued review that the quota is about to hold does not count, so the request is refused);
 - a change waiting for trust that someone with write access tries to start stays waiting for trust;
 - when the usage can't be read, the request is answered as failed and nothing is queued.
 

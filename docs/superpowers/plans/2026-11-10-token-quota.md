@@ -21,7 +21,7 @@
 - A used-up quota: usage `>=` quota.
 - Exact copy (used verbatim in code, tests and docs):
   - Status: `Monthly token quota used up. An admin can start the review in the dashboard.`
-  - Note: `Not reviewed: the monthly token quota is used up. Reviews start again on the 1st, or an admin can start this one from the pergent.sh dashboard.`
+  - Note: `Not reviewed: the monthly token quota is used up. Reviews start again with the first push after the 1st, or an admin can start this one from the pergent.sh dashboard.`
   - Refusal reason (commands table and dashboard error): `the monthly token quota is used up`
   - Waiting box reason line: `Monthly token quota used up.`
 - No numbers and no "repository"/"instance" in anything posted on a merge request.
@@ -158,7 +158,7 @@
   - `actions.RerunQuotaUsedUp` (new `RerunStatus`, after `RerunCapped`).
   - `RerunRequest.PastQuota bool` and `StartRequest.PastQuota bool`: true only for an admin's dashboard action.
   - `actions.Rerun` and `actions.Start`: after the "nothing failed" result and before the caps, `if !req.PastQuota` call `quota.Check(ctx, st, req.Now, req.MR.Instance, req.MR.ProjectID, req.Repo)`; used up → `RerunResult{Status: RerunQuotaUsedUp}` with nothing queued; an error is returned as the error. `Rerun` passes `quotaChecked = true` to `EnqueueRerun`.
-  - In `internal/engine/quota.go`: `const quotaDescription = "Monthly token quota used up. An admin can start the review in the dashboard."`, `const quotaNote = "Not reviewed: the monthly token quota is used up. Reviews start again on the 1st, or an admin can start this one from the pergent.sh dashboard."`, `const whyQuota = "the monthly token quota is used up"`.
+  - In `internal/engine/quota.go`: `const quotaDescription = "Monthly token quota used up. An admin can start the review in the dashboard."`, `const quotaNote = "Not reviewed: the monthly token quota is used up. Reviews start again with the first push after the 1st, or an admin can start this one from the pergent.sh dashboard."`, `const whyQuota = "the monthly token quota is used up"`.
   - Commands: on `RerunQuotaUsedUp`, `v := refused(whyQuota, quotaNote)`; `first, err := e.Store.ClaimQuotaNote(ctx, mr, quota.MonthStart(now), now)`; when `!first` (or err, logged) blank `v.reply` and `v.replyRequired` as `refuseGate` does. `PastQuota` is always false here.
   - Dashboard: `PastQuota: session(r).Role(b.repo.Instance, b.repo.Project) == RoleAdmin`; `RerunQuotaUsedUp` → `409` with `msgQuotaUsedUp = "the monthly token quota is used up"`.
   - Trust before quota: a writer's start of an untrusted change is checked for write access first, then for the quota; refused for the quota, its run stays waiting with `WaitUntrusted`.

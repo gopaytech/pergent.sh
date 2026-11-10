@@ -27,10 +27,13 @@ func (s *Store) HoldForQuota(ctx context.Context, id string) (ok bool, err error
 	return tag.RowsAffected() == 1, nil
 }
 
-// markQuotaChecked marks run id, if it is not dispatched yet, as one the quota
-// was looked at for: a request that landed on it was asked for by a person.
+// markQuotaChecked marks run id, if it is queued or running and not
+// dispatched yet, as one the quota was looked at for: a request that landed on
+// it was asked for by a person. A run a concurrent HoldForQuota just moved to
+// waiting is left alone.
 func markQuotaChecked(ctx context.Context, tx pgx.Tx, id string) error {
-	_, err := tx.Exec(ctx, `UPDATE runs SET quota_checked = true WHERE id = $1::uuid AND dispatched_at IS NULL`, id)
+	_, err := tx.Exec(ctx, `UPDATE runs SET quota_checked = true WHERE id = $1::uuid AND dispatched_at IS NULL
+		  AND state IN ('queued', 'running')`, id)
 	return err
 }
 

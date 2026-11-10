@@ -280,3 +280,26 @@ func TestMigrationKeepsPreviousReleaseQuota(t *testing.T) {
 		}
 	}
 }
+
+// A run a concurrent HoldForQuota just moved to waiting is not marked checked.
+func TestMarkQuotaCheckedLeavesAWaitingRun(t *testing.T) {
+	s := newStore(t)
+	id := enqueue(t, s, mr1, sha('a'))
+	if ok, err := s.HoldForQuota(ctx, id); err != nil || !ok {
+		t.Fatalf("HoldForQuota = %v, %v", ok, err)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	if err := markQuotaChecked(ctx, tx, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if r := mustRun(t, s, id); r.State != Waiting || r.QuotaChecked {
+		t.Errorf("run = %s, checked %v; want waiting, unchecked", r.State, r.QuotaChecked)
+	}
+}

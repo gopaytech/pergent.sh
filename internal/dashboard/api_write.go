@@ -548,12 +548,18 @@ func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {
 			row.TrustedAuthors = resolved
 		}
 	}
-	// The audit detail names the model a change gives, not only the key.
+	// The audit detail names the model and the quota a change gives, not only
+	// the key.
 	details := slices.Clone(keys)
 	if i := slices.Index(details, "model"); i >= 0 {
 		var probe store.DashboardRepo
 		edit(&probe)
 		details[i] = d.modelSettingDetail(probe.ModelID)
+	}
+	if i := slices.Index(details, "monthlyTokenQuota"); i >= 0 {
+		var probe store.DashboardRepo
+		edit(&probe)
+		details[i] = "monthlyTokenQuota=" + quotaText(probe.MonthlyTokenQuota)
 	}
 	d.updateSettings(w, r, repo, edit, "settings changed", "settings_updated", strings.Join(details, ", "))
 }

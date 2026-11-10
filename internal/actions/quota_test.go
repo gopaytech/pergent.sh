@@ -298,3 +298,24 @@ func TestRerunOfUndispatchedPushRunIsRefused(t *testing.T) {
 		t.Fatalf("Start = %+v, %v; want RerunQuotaUsedUp", res, err)
 	}
 }
+
+// An undispatched re-run the quota was not looked at for (the publisher's own
+// re-run) is a run the dispatcher holds, so it isn't "on its way": the
+// request is refused for the quota.
+func TestRerunOfUnflaggedAutoRerunIsRefused(t *testing.T) {
+	st := newStore(t)
+	seedUsage(t, st, 1000, quotaNow.Add(-time.Hour), 10)
+	id, created, err := st.EnqueueRerun(ctx, quotaMR, "acme/web", "head1", "main", store.TriggerRerun, nil, nil, true, false)
+	if err != nil || !created {
+		t.Fatalf("EnqueueRerun = %v, %v", created, err)
+	}
+	if res, err := Rerun(ctx, st, rerunRequest(quotaRepo())); err != nil || res.Status != RerunQuotaUsedUp {
+		t.Fatalf("Rerun = %+v, %v; want RerunQuotaUsedUp", res, err)
+	}
+	if res, err := Start(ctx, st, startRequest(quotaRepo())); err != nil || res.Status != RerunQuotaUsedUp {
+		t.Fatalf("Start = %+v, %v; want RerunQuotaUsedUp", res, err)
+	}
+	if run, ok, err := st.Run(ctx, id); err != nil || !ok || run.QuotaChecked {
+		t.Errorf("run = %+v, %v, %v; want it left unflagged", run.QuotaChecked, ok, err)
+	}
+}

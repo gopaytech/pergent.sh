@@ -792,11 +792,19 @@ const liveStartRunSQL = `SELECT id::text FROM runs
 // claimed and not dispatched yet, which StartRun turns into a start.
 const undispatchedPushRunSQL = `state IN ('queued', 'running') AND dispatched_at IS NULL AND trigger = 'push'`
 
+// onItsWaySQL narrows a live-run lookup to a run on its way for the quota: one
+// the dispatcher won't hold, so it was looked at (quota_checked), has a Job, or
+// was started by a person. An undispatched run with none of these (the
+// publisher's own re-run, a push's run) is held by the dispatcher on a used-up
+// quota, and is no reason to answer "already queued".
+const onItsWaySQL = ` AND (quota_checked OR dispatched_at IS NOT NULL OR trigger = 'start')`
+
 // ReviewActiveForRerun reports whether EnqueueRerun (with replace) would find
-// the head's review already queued, running or reported and queue nothing.
+// the head's review already queued, running or reported and queue nothing,
+// and the dispatcher won't hold that review for the quota.
 func (s *Store) ReviewActiveForRerun(ctx context.Context, mr MRKey, headSHA, targetBranch string, replace bool) (bool, error) {
 	var id string
-	err := s.pool.QueryRow(ctx, liveRerunRunSQL, mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch, replace).Scan(&id)
+	err := s.pool.QueryRow(ctx, liveRerunRunSQL+onItsWaySQL, mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch, replace).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -805,10 +813,11 @@ func (s *Store) ReviewActiveForRerun(ctx context.Context, mr MRKey, headSHA, tar
 
 // ReviewActiveForStart reports whether StartRun would find the head's review
 // already queued, running or reported and start nothing: a waiting run, or a
-// push's queued run that hasn't been dispatched, is one it starts.
+// push's queued run that hasn't been dispatched, is one it starts. A review
+// the dispatcher will hold for the quota doesn't count.
 func (s *Store) ReviewActiveForStart(ctx context.Context, mr MRKey, headSHA, targetBranch string) (bool, error) {
 	var id string
-	err := s.pool.QueryRow(ctx, liveStartRunSQL+` AND NOT (`+undispatchedPushRunSQL+`)`,
+	err := s.pool.QueryRow(ctx, liveStartRunSQL+` AND NOT (`+undispatchedPushRunSQL+`)`+onItsWaySQL,
 		mr.Instance, mr.ProjectID, mr.IID, headSHA, targetBranch).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil

@@ -75,10 +75,10 @@ describe("Token quota: repository settings", () => {
   });
 
   it("hides the quota from a maintainer", async () => {
-    fakeApi({
-      ...settingsRoutes(repoDetail(repoPayments, "maintainer")),
-      "GET /api/repositories/main/acme/payments": { body: repoDetail(repoPayments, "maintainer") },
-    });
+    // Even a payload that carries the quota (the server sends it to admins
+    // only) must not show it to a maintainer.
+    const detail = { ...withQuota(repoDetail(repoPayments, "maintainer"), 10), quota: { repository: { used: 5, limit: 10 }, instance: { used: 5, limit: null } } };
+    fakeApi(settingsRoutes(detail));
     renderApp("/repos/main/acme/payments?tab=settings");
     await screen.findByLabelText("Trusted authors only");
     expect(screen.queryByLabelText("Monthly token quota")).not.toBeInTheDocument();
@@ -144,11 +144,7 @@ describe("Token quota: usage on the repository page", () => {
   });
 
   it("shows nothing to a maintainer", async () => {
-    fakeApi({
-      "GET /api/me": { body: ssoAdmin },
-      "GET /api/repositories/main/acme/payments": { body: repoDetail(repoPayments, "maintainer") },
-      "GET /api/reviews?project=acme%2Fpayments&days=90": { body: noReviews },
-    });
+    fakeApi(pageRoutes({ ...repoDetail(repoPayments, "maintainer"), quota: { repository: { used: 5, limit: 10 }, instance: { used: 5, limit: null } } }));
     renderApp("/repos/main/acme/payments");
     await screen.findByRole("heading", { name: "acme/payments" });
     expect(screen.queryByText(/Tokens this month/)).not.toBeInTheDocument();

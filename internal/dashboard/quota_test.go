@@ -3,6 +3,7 @@ package dashboard
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -169,8 +170,14 @@ func TestQuotaSettingBounds(t *testing.T) {
 	if s := v.Settings["monthlyTokenQuota"]; s.Value != nil || s.Overridden {
 		t.Errorf("setting = %+v; want null, not overridden", s)
 	}
-	if a := e.auditOf("settings_updated"); len(a) == 0 || a[len(a)-1].Detail != "monthlyTokenQuota" {
-		t.Errorf("audit = %+v; want the key named", a)
+	var details []string
+	for _, a := range e.auditOf("settings_updated") {
+		details = append(details, a.Detail)
+	}
+	// newest first
+	want := []string{"monthlyTokenQuota=none", "monthlyTokenQuota=1000000000000000", "monthlyTokenQuota=1", "monthlyTokenQuota=5000000"}
+	if !slices.Equal(details, want) {
+		t.Errorf("audit details = %q; want %q", details, want)
 	}
 }
 
@@ -314,6 +321,9 @@ func TestInstanceTokenQuota(t *testing.T) {
 	}
 	if a := e.auditOf("instance_updated"); len(a) != 1 || a[0].Detail != "monthly_token_quota=1000" || a[0].Instance != "lab" {
 		t.Errorf("audit = %+v; want monthly_token_quota=1000 on lab", a)
+	}
+	if logs := e.logs.String(); !strings.Contains(logs, "monthly_token_quota=1000 ") || strings.Contains(logs, "monthly_token_quota=monthly_token_quota") {
+		t.Errorf("log = %q; want the bare value 1000", logs)
 	}
 
 	wantCode(t, e.send(boss, "PUT", url, `{"monthlyTokenQuota":null}`), "clear", http.StatusNoContent)

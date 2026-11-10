@@ -16,7 +16,7 @@ const (
 	quotaDescription = "Monthly token quota used up. An admin can start the review in the dashboard."
 	// quotaNote is the one note a change gets in a month, and the reply of a
 	// command that was refused while the note wasn't posted yet.
-	quotaNote = "Not reviewed: the monthly token quota is used up. Reviews start again on the 1st, or an admin can start this one from the pergent.sh dashboard."
+	quotaNote = "Not reviewed: the monthly token quota is used up. Reviews start again with the first push after the 1st, or an admin can start this one from the pergent.sh dashboard."
 	// whyQuota is the outcome of a command refused for the quota, as the
 	// commands table says it ("refused: " + why).
 	whyQuota = "the monthly token quota is used up"

@@ -120,11 +120,18 @@ func (d *Dashboard) putInstanceQuota(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.registry.SetTokenQuota(name, v)
-	detail := "monthly_token_quota=none"
-	if v != nil {
-		detail = "monthly_token_quota=" + strconv.FormatInt(*v, 10)
-	}
-	d.Log.Info("dashboard: instance updated", "instance", name, "monthly_token_quota", detail, "by", se.Username)
+	value := quotaText(v)
+	detail := "monthly_token_quota=" + value
+	d.Log.Info("dashboard: instance updated", "instance", name, "monthly_token_quota", value, "by", se.Username)
 	d.audit(ctx, se, "instance_updated", name, "", detail)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// quotaText is a quota as the log and the audit log name it: the number, or
+// "none" for no quota.
+func quotaText(v *int64) string {
+	if v == nil {
+		return "none"
+	}
+	return strconv.FormatInt(*v, 10)
 }

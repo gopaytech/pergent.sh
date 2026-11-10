@@ -90,7 +90,7 @@ The owner's choice: refuse, don't hold.
 2. **A pending status** on the head, set again on each new head:
    `Monthly token quota used up. An admin can start the review in the dashboard.`
 3. **One note** on the merge request, the first time in a calendar month that a quota holds it. Later pushes that month post nothing. A plain comment, no LLM:
-   > Not reviewed: the monthly token quota is used up. Reviews start again on the 1st, or an admin can start this one from the pergent.sh dashboard.
+   > Not reviewed: the monthly token quota is used up. Reviews start again with the first push after the 1st, or an admin can start this one from the pergent.sh dashboard.
 
    It doesn't say whether the repository's or the instance's quota ran out, or any number (see Anti-goals). "Posted this month" is stored per merge request, so a restart or a webhook replay doesn't post it twice.
 4. **Listed as waiting** in the repository's **Waiting for a start** box, with the reason `Monthly token quota used up`. Everyone who can see the repository sees the entry; only admins get the **Start review** button.

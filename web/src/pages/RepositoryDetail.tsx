@@ -52,7 +52,7 @@ export default function RepositoryDetail() {
       <div className="sub spaced">
         {platformName(repo.platform)} · {repo.instance} · {repo.source === "config" ? "managed by config" : "switched on in the dashboard"}
       </div>
-      {view.quota && (
+      {view.role === "admin" && view.quota && (
         <div className="quota" role="group" aria-label="Token usage this month">
           <QuotaLine label="This repository" ariaLabel="Repository token quota" use={view.quota.repository} />
           <QuotaLine label="Its instance" ariaLabel="Instance token quota" use={view.quota.instance} />

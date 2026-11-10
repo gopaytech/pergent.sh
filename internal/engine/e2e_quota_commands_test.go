@@ -101,12 +101,19 @@ func TestReviewCommandRefusedOnUsedUpQuota(t *testing.T) {
 	env := e.env
 	head := sha('a')
 	run := publishedHead(t, env, head)
+	approves, unapproves := e.calls(http.MethodPost, approvePath(1)), e.calls(http.MethodPost, unapprovePath(1))
 
 	c := e.say(t, "dev", userDeveloper, "@pergent-review review")
 	e.answer(t)
 	e.wantReactions(t, c, eyes, down)
 	e.wantReplies(t, quotaNote)
 	wantOutcome(t, env, "refused: "+whyQuota, 1)
+	if n := e.calls(http.MethodPost, approvePath(1)); n != approves {
+		t.Errorf("approve calls = %d after the refusal, want the %d before", n, approves)
+	}
+	if n := e.calls(http.MethodPost, unapprovePath(1)); n != unapproves {
+		t.Errorf("unapprove calls = %d after the refusal, want the %d before", n, unapproves)
+	}
 	if r := env.Run(run); r.State != store.Published {
 		t.Errorf("the published review = %s, want it left published", r.State)
 	}
