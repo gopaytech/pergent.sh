@@ -134,12 +134,12 @@ Admins only (the owner's choice: no warning on merge requests, no metrics).
 - A new migration (the next free number on `main` when the work starts; `0035` today, re-checked against parallel work) adds the instance quota, the repository quota, and the per-merge-request "quota note posted" time. Both quotas are nullable: nothing is limited after the upgrade.
 - Quota-held runs reuse the `waiting` state with the new `skip_reason` `quota_used_up` (my call: the previous release has no quotas, so a new state would protect nothing on rollback). `HoldRun` holds only `trigger = 'push'` runs today, as its guard against a race with `StartRun`; holding pergent.sh's own full re-run needs that guard widened without losing the race protection.
 - How an admin's start is marked as past the quota (a column on the run, or a new trigger) is the builder's call, as long as the previous release ignores it safely.
-- The new config keys are refused by the previous release, which rejects unknown keys. The README's **Upgrading** section says to remove them before rolling back, and that a rollback removes the quota.
-- The README gets a short **Token quota** section: where to set it, what counts, what people see at the limit, the overshoot (reviews started together near the limit can all run), and the known gap that a Job with no result counts as zero.
+- The new config keys are refused by the previous release, which rejects unknown keys. `docs/upgrading.md` says to remove them before rolling back, and that a rollback removes the quota.
+- A new page, `docs/concepts/token-quota.md` (listed in `docs/README.md`), says where to set it, what counts, what people see at the limit, the overshoot (reviews started together near the limit can all run), and the known gap that a Job with no result counts as zero.
 
 ## Delivery
 
-One pergent.sh pull request: the migration, the dispatcher and command checks, the dashboard, the README and `openapi.yaml`. pergent needs no change. No release until the owner says so (the owner's decision).
+One pergent.sh pull request: the migration, the dispatcher and command checks, the dashboard, the docs and `openapi.yaml`. pergent needs no change. No release until the owner says so (the owner's decision).
 - `openapi.yaml` gains the repository setting, the instance endpoint and the new waiting reason.
 
 ## Testing
