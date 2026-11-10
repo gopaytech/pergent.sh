@@ -214,6 +214,20 @@ type RunDetailView struct {
 	// outcome. Only that run shows dismissals; false when the change has no
 	// such run.
 	LatestDecided bool `json:"latestDecided"`
+	// Kubernetes names the review's Job and pod, and says what the cluster
+	// told us when it failed to start. Admins only: for anyone else the key
+	// is left out. Present from the moment the run has a Job.
+	Kubernetes *KubernetesView `json:"kubernetes,omitempty"`
+}
+
+// KubernetesView is the cluster side of a run, for an admin to look it up
+// with kubectl. Pod is "" until a pod was seen; Detail is more text about
+// the failure ("" when there is none).
+type KubernetesView struct {
+	Namespace string `json:"namespace"`
+	Job       string `json:"job"`
+	Pod       string `json:"pod"`
+	Detail    string `json:"detail"`
 }
 
 // TokensView sums the skills' token counts.
@@ -306,6 +320,15 @@ type CheckView struct {
 // log (404 when none was kept).
 type LogView struct {
 	Text string `json:"text"`
+}
+
+// DiagnosticsView is GET /api/runs/{id}/diagnostics: what was kept of a failed
+// Job. An admin gets the clone log as it was and the pod's state; anyone else
+// gets the clone log with linked repositories masked (it may be empty) and
+// no podState key.
+type DiagnosticsView struct {
+	CloneLog string  `json:"cloneLog"`
+	PodState *string `json:"podState,omitempty"`
 }
 
 // RepositoryView is one repository switched on. GET /api/repositories is

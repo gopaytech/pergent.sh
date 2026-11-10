@@ -840,6 +840,138 @@ func TestRunLog(t *testing.T) {
 	e.wantStatus(c, "/api/runs/bad/log", http.StatusNotFound)
 }
 
+// rawKeys decodes the body of GET target into its top-level keys.
+func rawKeys(e *env, c *http.Cookie, target string) map[string]json.RawMessage {
+	e.t.Helper()
+	rec := e.get(c, target)
+	if rec.Code != http.StatusOK {
+		e.t.Fatalf("GET %s = %d %s", target, rec.Code, rec.Body)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		e.t.Fatalf("GET %s body %s: %v", target, rec.Body, err)
+	}
+	return m
+}
+
+// setJob records the Job fields the engine would have set on the run.
+func (e *env) setJob(id, job, pod, detail string) {
+	e.t.Helper()
+	e.exec(`UPDATE runs SET job_name = $2, pod_name = $3, failure_step = 'start', failure_detail = $4
+		WHERE id = $1::uuid`, id, job, pod, detail)
+}
+
+func TestRunKubernetesAdminOnly(t *testing.T) {
+	e := newEnv(t, func(cfg *config.Config) { cfg.Jobs.Namespace = "pergent-jobs" })
+	failed := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), outcome: OutcomeFailed,
+		failure: "The review Job's pod could not be scheduled."})
+	e.setJob(failed, "pergent-abc123", "pergent-abc123-xyz", "0/3 nodes are available: insufficient memory.")
+	// A running run shows its Job as soon as it has one, with no pod yet.
+	running := e.addRun(runFix{project: "acme/widgets", number: 4, head: head('b'), state: store.Running})
+	e.exec(`UPDATE runs SET job_name = 'pergent-def456' WHERE id = $1::uuid`, running)
+	// No Job yet: no block, for an admin too.
+	queued := e.addRun(runFix{project: "acme/widgets", number: 5, head: head('c'), state: store.Queued})
+
+	admin := e.sessionFor(e.ssoAdmin("root@example.com"))
+	v := getJSON[RunDetailView](e, admin, "/api/runs/"+failed)
+	want := &KubernetesView{Namespace: "pergent-jobs", Job: "pergent-abc123", Pod: "pergent-abc123-xyz",
+		Detail: "0/3 nodes are available: insufficient memory."}
+	if v.Kubernetes == nil || *v.Kubernetes != *want {
+		t.Errorf("admin kubernetes = %+v; want %+v", v.Kubernetes, want)
+	}
+	v = getJSON[RunDetailView](e, admin, "/api/runs/"+running)
+	if v.Kubernetes == nil || *v.Kubernetes != (KubernetesView{Namespace: "pergent-jobs", Job: "pergent-def456"}) {
+		t.Errorf("running admin kubernetes = %+v; want the Job alone", v.Kubernetes)
+	}
+	if _, ok := rawKeys(e, admin, "/api/runs/"+queued)["kubernetes"]; ok {
+		t.Error("a run with no Job has a kubernetes key")
+	}
+
+	// A viewer's JSON has no kubernetes key, and nothing of the Job or the
+	// detail anywhere in the body.
+	viewer := e.userOnMain(false, "acme/widgets")
+	for _, id := range []string{failed, running} {
+		rec := e.wantStatus(viewer, "/api/runs/"+id, http.StatusOK)
+		if _, ok := rawKeys(e, viewer, "/api/runs/"+id)["kubernetes"]; ok {
+			t.Errorf("viewer's run %s has a kubernetes key", id)
+		}
+		for _, secret := range []string{"pergent-abc123", "pergent-def456", "pergent-jobs", "insufficient memory"} {
+			if strings.Contains(rec.Body.String(), secret) {
+				t.Errorf("viewer's run %s shows %q: %s", id, secret, rec.Body)
+			}
+		}
+	}
+	// The review page's run list carries none of it either.
+	for _, target := range []string{"/api/reviews/main/acme/widgets/3", "/api/reviews"} {
+		for _, c := range []*http.Cookie{admin, viewer} {
+			if body := e.get(c, target).Body.String(); strings.Contains(body, "insufficient memory") ||
+				strings.Contains(body, "pergent-abc123") {
+				t.Errorf("GET %s shows the Job or its detail: %s", target, body)
+			}
+		}
+	}
+}
+
+func TestRunDiagnosticsMaskedForViewer(t *testing.T) {
+	e := newEnv(t, nil)
+	id := e.addRun(runFix{project: "acme/widgets", number: 3, head: head('a'), outcome: OutcomeFailed, failure: "clone failed"})
+	if err := e.st.PutRunDiagnostics(ctx, id, store.Diagnostics{
+		CloneLog: "fatal: unable to access https://gitlab.example.com/acme/private-lib.git", CloneLogMasked: "fatal: unable to access [linked repository]",
+		PodState: "phase: Pending\nPodScheduled: False"}); err != nil {
+		t.Fatal(err)
+	}
+	// Masked text may be empty (the engine fails closed): the viewer gets "".
+	empty := e.addRun(runFix{project: "acme/widgets", number: 4, head: head('b'), outcome: OutcomeFailed, failure: "clone failed"})
+	if err := e.st.PutRunDiagnostics(ctx, empty, store.Diagnostics{CloneLog: "secret path", PodState: "state"}); err != nil {
+		t.Fatal(err)
+	}
+
+	viewer := e.userOnMain(false, "acme/widgets")
+	target := "/api/runs/" + id + "/diagnostics"
+	if v := getJSON[DiagnosticsView](e, viewer, target); v.CloneLog != "fatal: unable to access [linked repository]" || v.PodState != nil {
+		t.Errorf("viewer diagnostics = %+v; want the masked log and no pod state", v)
+	}
+	keys := rawKeys(e, viewer, target)
+	if _, ok := keys["podState"]; ok {
+		t.Errorf("viewer's JSON has a podState key: %v", keys)
+	}
+	if rec := e.get(viewer, target); strings.Contains(rec.Body.String(), "private-lib") {
+		t.Errorf("viewer sees the linked repository: %s", rec.Body)
+	}
+	v := getJSON[DiagnosticsView](e, viewer, "/api/runs/"+empty+"/diagnostics")
+	if v.CloneLog != "" || v.PodState != nil {
+		t.Errorf("viewer diagnostics with no masked log = %+v; want an empty log and no pod state", v)
+	}
+	if _, ok := rawKeys(e, viewer, "/api/runs/"+empty+"/diagnostics")["cloneLog"]; !ok {
+		t.Error("viewer's JSON has no cloneLog key")
+	}
+
+	admin := e.sessionFor(e.ssoAdmin("root@example.com"))
+	got := getJSON[DiagnosticsView](e, admin, target)
+	if got.CloneLog != "fatal: unable to access https://gitlab.example.com/acme/private-lib.git" ||
+		got.PodState == nil || *got.PodState != "phase: Pending\nPodScheduled: False" {
+		t.Errorf("admin diagnostics = %+v; want the full log and pod state", got)
+	}
+}
+
+func TestRunDiagnosticsNotFound(t *testing.T) {
+	e := newEnv(t, nil)
+	none := e.addRun(runFix{project: "acme/widgets", number: 4, head: head('b'), result: cleanResult(head('b'))})
+	hidden := e.addRun(runFix{project: "acme/payments", projectID: 8, number: 9, head: head('9'), result: cleanResult(head('9'))})
+	if err := e.st.PutRunDiagnostics(ctx, hidden, store.Diagnostics{CloneLog: "log", CloneLogMasked: "log", PodState: "state"}); err != nil {
+		t.Fatal(err)
+	}
+	c := e.userOnMain(false, "acme/widgets")
+	e.wantStatus(c, "/api/runs/"+none+"/diagnostics", http.StatusNotFound)
+	e.wantStatus(c, "/api/runs/bad/diagnostics", http.StatusNotFound)
+	// A run the caller can't see answers as an unknown one.
+	rec := e.wantStatus(c, "/api/runs/"+hidden+"/diagnostics", http.StatusNotFound)
+	if strings.Contains(rec.Body.String(), "payments") {
+		t.Errorf("the 404 names the hidden repository: %s", rec.Body)
+	}
+	e.wantStatus(nil, "/api/runs/"+none+"/diagnostics", http.StatusUnauthorized)
+}
+
 func TestRepositories(t *testing.T) {
 	e := newEnv(t, nil)
 	overviewFixture(e)
@@ -1098,7 +1230,7 @@ func TestReadAPIRequiresSignIn(t *testing.T) {
 func readEndpoints(id string) []string {
 	return []string{
 		"/api/overview", "/api/reviews", "/api/reviews?project=acme/widgets",
-		"/api/reviews/main/acme/widgets/1", "/api/runs/" + id, "/api/runs/" + id + "/log",
+		"/api/reviews/main/acme/widgets/1", "/api/runs/" + id, "/api/runs/" + id + "/log", "/api/runs/" + id + "/diagnostics",
 		"/api/repositories", "/api/repositories/main/acme/widgets", "/api/repositories/main/acme/widgets/inputs",
 		"/api/skills", "/api/admin/settings", "/api/me",
 	}
@@ -1140,7 +1272,7 @@ func TestReadAPIHidesInvisibleRepos(t *testing.T) {
 	}
 	for _, target := range []string{
 		"/api/reviews/main/acme/payments/9", "/api/reviews/main/acme/payments/5",
-		"/api/runs/" + hidden, "/api/runs/" + hidden + "/log", "/api/runs/" + movedHidden,
+		"/api/runs/" + hidden, "/api/runs/" + hidden + "/log", "/api/runs/" + hidden + "/diagnostics", "/api/runs/" + movedHidden,
 		"/api/reviews/main/acme/payments/20",
 		"/api/repositories/main/acme/payments", "/api/repositories/main/acme/payments/inputs",
 		// Another instance's repository with the same path.
