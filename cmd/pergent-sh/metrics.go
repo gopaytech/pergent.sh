@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/metrics"
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/settings"
@@ -26,6 +27,9 @@ const (
 	// labelOtherVerdict stands for a verdict this code does not know: the
 	// result is the pergent job's own content, so its text is not a label.
 	labelOtherVerdict = "(other)"
+	// labelOtherStep stands for a failure before any Job existed (no step)
+	// and for a step this code does not know.
+	labelOtherStep = "other"
 )
 
 // metricsStore is the part of the store the metrics read.
@@ -66,6 +70,7 @@ func metricsSource(st metricsStore, repos repoLister) func(context.Context) (met
 // lists name it, or it is the fixed impact check; everything else gets
 // labelSwitchedOff or labelOtherSkill and is added to the others with the same
 // labels. A verdict is one of the three pergent writes, or labelOtherVerdict.
+// A step is one of the five a failed review records, or labelOtherStep.
 // No merge request number, title or other text a person wrote is a label.
 func snapshotOf(t store.MetricsTotals, on []settings.Effective, library []store.LibrarySkill) metrics.Snapshot {
 	type repoKey struct{ instance, project string }
@@ -102,6 +107,13 @@ func snapshotOf(t store.MetricsTotals, on []settings.Effective, library []store.
 		}
 		return labelOtherVerdict
 	}
+	step := func(v string) string {
+		switch v {
+		case kube.StepStarting, kube.StepClone, kube.StepReview, kube.StepDelivery, kube.StepUnknown:
+			return v
+		}
+		return labelOtherStep
+	}
 	label := func(name, value string) metrics.Label { return metrics.Label{Name: name, Value: value} }
 
 	snap := metrics.New()
@@ -128,10 +140,12 @@ func snapshotOf(t store.MetricsTotals, on []settings.Effective, library []store.
 		snap.Add(metrics.ReviewsTotal, u.Reviews, label("platform_instance", u.Instance), label("repository", repo(u.Instance, u.Project)),
 			label("trigger", u.Trigger), label("incremental", strconv.FormatBool(u.Incremental)))
 	}
+	for _, u := range t.NoResult {
+		snap.Add(metrics.ReviewsNoResultTotal, u.Reviews, label("platform_instance", u.Instance), label("repository", repo(u.Instance, u.Project)),
+			label("step", step(u.Step)))
+	}
 	for _, u := range t.Unfinished {
-		l := []metrics.Label{label("platform_instance", u.Instance), label("repository", repo(u.Instance, u.Project))}
-		snap.Add(metrics.ReviewsNoResultTotal, u.NoResult, l...)
-		snap.Add(metrics.ReviewsSupersededTotal, u.Superseded, l...)
+		snap.Add(metrics.ReviewsSupersededTotal, u.Superseded, label("platform_instance", u.Instance), label("repository", repo(u.Instance, u.Project)))
 	}
 	for _, u := range t.SkillRuns {
 		snap.Add(metrics.SkillRunsTotal, u.Runs, label("platform_instance", u.Instance), label("repository", repo(u.Instance, u.Project)),

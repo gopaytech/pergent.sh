@@ -138,6 +138,39 @@ func metricsText(t *testing.T, s metrics.Snapshot) string {
 	return b.String()
 }
 
+// A review with no result is counted by the step it failed at; one that
+// failed before a Job existed has no step and is "other", and so is any step
+// pergent.sh does not write.
+func TestNoResultMetricHasStep(t *testing.T) {
+	on := []settings.Effective{metricsEff("main", "acme/widgets", []string{"security"}, nil)}
+	totals := store.MetricsTotals{NoResult: []store.NoResultTotal{
+		{Instance: "main", Project: "acme/widgets", Step: "", Reviews: 1},
+		{Instance: "main", Project: "acme/widgets", Step: "clone", Reviews: 2},
+		{Instance: "main", Project: "acme/widgets", Step: "starting", Reviews: 3},
+		{Instance: "main", Project: "acme/widgets", Step: "review", Reviews: 4},
+		{Instance: "main", Project: "acme/widgets", Step: "delivery", Reviews: 5},
+		{Instance: "main", Project: "acme/widgets", Step: "unknown", Reviews: 6},
+		{Instance: "main", Project: "acme/widgets", Step: "made up by a bug", Reviews: 7},
+	}}
+	out := metricsText(t, snapshotOf(totals, on, nil))
+	for _, want := range []string{
+		`pergent_reviews_no_result_total{platform_instance="main",repository="acme/widgets",step="clone"} 2`,
+		`pergent_reviews_no_result_total{platform_instance="main",repository="acme/widgets",step="starting"} 3`,
+		`pergent_reviews_no_result_total{platform_instance="main",repository="acme/widgets",step="review"} 4`,
+		`pergent_reviews_no_result_total{platform_instance="main",repository="acme/widgets",step="delivery"} 5`,
+		`pergent_reviews_no_result_total{platform_instance="main",repository="acme/widgets",step="unknown"} 6`,
+		// "" and the step nobody writes are one series.
+		`pergent_reviews_no_result_total{platform_instance="main",repository="acme/widgets",step="other"} 8`,
+	} {
+		if !strings.Contains(out, want+"\n") {
+			t.Errorf("missing %s\nin:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "made up") {
+		t.Errorf("the page carries a step pergent.sh does not write:\n%s", out)
+	}
+}
+
 // Repositories not switched on and skills nobody lists collapse into one
 // label each, series that collapse are added, and nothing a person wrote
 // reaches a label.
@@ -161,7 +194,11 @@ func TestSnapshotOfBoundsTheLabels(t *testing.T) {
 			{Instance: "main", Project: "acme/gone", Trigger: "push", Incremental: true, Reviews: 1},
 			{Instance: "main", Project: "acme/old-name", Trigger: "push", Incremental: true, Reviews: 4},
 		},
-		Unfinished: []store.UnfinishedTotal{{Instance: "main", Project: "acme/gone", NoResult: 2, Superseded: 1}},
+		NoResult: []store.NoResultTotal{
+			{Instance: "main", Project: "acme/gone", Step: "clone", Reviews: 2},
+			{Instance: "main", Project: "acme/gone", Step: "", Reviews: 1},
+		},
+		Unfinished: []store.UnfinishedTotal{{Instance: "main", Project: "acme/gone", Superseded: 1}},
 		SkillRuns: []store.SkillRunTotal{
 			{Instance: "main", Project: "acme/widgets", Skill: "security", Verdict: "failed", Runs: 5},
 			// Verdicts that are not pergent's own are one series, whatever the text; so is the fixed impact check's skill name.
@@ -201,7 +238,8 @@ func TestSnapshotOfBoundsTheLabels(t *testing.T) {
 		`pergent_tokens_total{platform_instance="other",repository="(switched off)",skill="security",model="m",kind="input"} 0`,
 		`pergent_reviews_total{platform_instance="main",repository="acme/Widgets",trigger="push",incremental="true"} 2`,
 		`pergent_reviews_total{platform_instance="main",repository="(switched off)",trigger="push",incremental="true"} 5`,
-		`pergent_reviews_no_result_total{platform_instance="main",repository="(switched off)"} 2`,
+		`pergent_reviews_no_result_total{platform_instance="main",repository="(switched off)",step="clone"} 2`,
+		`pergent_reviews_no_result_total{platform_instance="main",repository="(switched off)",step="other"} 1`,
 		`pergent_reviews_superseded_total{platform_instance="main",repository="(switched off)"} 1`,
 		`pergent_skill_runs_total{platform_instance="main",repository="acme/Widgets",skill="security",verdict="failed"} 5`,
 		`pergent_skill_runs_total{platform_instance="main",repository="acme/Widgets",skill="security",verdict="(other)"} 5`,

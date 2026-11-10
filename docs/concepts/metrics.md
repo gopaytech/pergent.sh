@@ -20,7 +20,7 @@ Point Prometheus at `http://<that Service>.<namespace>.svc:9090/metrics`, or set
 | --- | --- | --- | --- |
 | `pergent_tokens_total` | counter | `platform_instance`, `repository`, `skill`, `model`, `kind` | Tokens. `kind` is `input`, `output`, `reasoning`, `cache_read` or `cache_write`. |
 | `pergent_reviews_total` | counter | `platform_instance`, `repository`, `trigger`, `incremental` | Reviews that left a result. `trigger` is `push`, `start`, `rerun` or `rerun_failed`. |
-| `pergent_reviews_no_result_total` | counter | `platform_instance`, `repository` | Reviews that failed before leaving a result. |
+| `pergent_reviews_no_result_total` | counter | `platform_instance`, `repository`, `step` | Reviews that failed before leaving a result. `step` is where: `starting`, `clone`, `review`, `delivery`, `unknown`, or `other` for a failure before a Job existed. `sum without (step)` is the count before the label. |
 | `pergent_reviews_superseded_total` | counter | `platform_instance`, `repository` | Reviews stopped by a newer push. |
 | `pergent_skill_runs_total` | counter | `platform_instance`, `repository`, `skill`, `verdict` | Skill runs. `verdict` is `no_blocking_issues`, `has_blocking_issues`, `failed` or `(other)`. |
 | `pergent_findings_total` | counter | `platform_instance`, `repository`, `skill`, `severity` | Findings. `severity` is `blocking` or `suggestion`. |
