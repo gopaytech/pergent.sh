@@ -511,7 +511,7 @@ func TestDeadlineFailure(t *testing.T) {
 }
 
 // TestObjectEvents: the helper reads one object's events by kind and name,
-// oldest first (a timeline), and a refusal to list is no events, not an error.
+// oldest first (a timeline), and a refusal to list is no events and forbidden, not an error.
 func TestObjectEvents(t *testing.T) {
 	cs := inspectCluster(t, jobWith("j"), nil,
 		objectEvent("Pod", "j-abcde", "Scheduled", "assigned", inspectNow.Add(-3*time.Minute)),
@@ -520,9 +520,9 @@ func TestObjectEvents(t *testing.T) {
 		jobEvent("j-abcde", "FailedCreate", "a Job with the pod's name", inspectNow),
 	)
 	l := &Launcher{Client: cs, Namespace: "reviews"}
-	got, err := l.ObjectEvents(context.Background(), "Pod", "j-abcde")
-	if err != nil {
-		t.Fatal(err)
+	got, forbidden, err := l.ObjectEvents(context.Background(), "Pod", "j-abcde")
+	if err != nil || forbidden {
+		t.Fatal(err, forbidden)
 	}
 	if len(got) != 2 || got[0].Reason != "Scheduled" || got[1].Reason != "Pulling" {
 		t.Errorf("events = %v; want [Scheduled Pulling]", reasons(got))
@@ -531,9 +531,9 @@ func TestObjectEvents(t *testing.T) {
 	cs.PrependReactor("list", "events", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "events"}, "", errors.New("no"))
 	})
-	got, err = l.ObjectEvents(context.Background(), "Pod", "j-abcde")
-	if err != nil || len(got) != 0 {
-		t.Errorf("forbidden: events = %v, err = %v; want none, nil", reasons(got), err)
+	got, forbidden, err = l.ObjectEvents(context.Background(), "Pod", "j-abcde")
+	if err != nil || !forbidden || len(got) != 0 {
+		t.Errorf("forbidden: events = %v, forbidden = %v, err = %v; want none, true, nil", reasons(got), forbidden, err)
 	}
 }
 

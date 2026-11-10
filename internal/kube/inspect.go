@@ -211,7 +211,7 @@ func (l *Launcher) inspect(ctx context.Context, name string, now time.Time) (Obs
 
 	if !obs.Finished && len(pods.Items) == 0 && obs.Stuck.Reason == "" &&
 		!job.CreationTimestamp.IsZero() && now.Sub(job.CreationTimestamp.Time) > noPodAfter {
-		events, err := l.ObjectEvents(ctx, "Job", name)
+		events, _, err := l.ObjectEvents(ctx, "Job", name)
 		if err != nil {
 			return Observation{}, jobFacts{}, fmt.Errorf("list events of job %s: %w", name, err)
 		}
@@ -288,16 +288,16 @@ func failedCreate(events []corev1.Event) string {
 
 // ObjectEvents lists the events about one object of the namespace (kind "Job"
 // or "Pod"), oldest first. A cluster that refuses to list events (the chart's
-// Role may lack it) is no events and no error.
-func (l *Launcher) ObjectEvents(ctx context.Context, kind, name string) ([]corev1.Event, error) {
+// Role may lack it) is no events, forbidden=true and no error.
+func (l *Launcher) ObjectEvents(ctx context.Context, kind, name string) (events []corev1.Event, forbidden bool, err error) {
 	list, err := l.Client.CoreV1().Events(l.Namespace).List(ctx, metav1.ListOptions{
 		FieldSelector: "involvedObject.kind=" + kind + ",involvedObject.name=" + name,
 	})
 	if apierrors.IsForbidden(err) {
-		return nil, nil
+		return nil, true, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var out []corev1.Event
 	for _, e := range list.Items {
@@ -307,7 +307,7 @@ func (l *Launcher) ObjectEvents(ctx context.Context, kind, name string) ([]corev
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return eventTime(out[i]).Before(eventTime(out[j])) })
-	return out, nil
+	return out, false, nil
 }
 
 // eventTime is when an event last happened.
