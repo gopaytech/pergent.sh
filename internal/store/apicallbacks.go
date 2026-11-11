@@ -13,6 +13,11 @@ import (
 // project.
 const AttentionCallbackFailing = "callback_failing"
 
+// CallbackNoURL is the error of the attempt that gives up on a callback
+// because its client has no callback URL. Such a callback is not a delivery
+// failure: CountUndeliveredAPICallbacks leaves it out.
+const CallbackNoURL = "the client has no callback URL"
+
 // The states of an API review's callback (APICallbackAttempts).
 const (
 	CallbackNone      = "none"
@@ -169,10 +174,14 @@ func (s *Store) APICallbackAttempts(ctx context.Context, runID string) (state st
 
 // CountUndeliveredAPICallbacks counts the client's callbacks made at or after
 // since that are not delivered and had at least one failed attempt, given up
-// or not.
+// or not. One given up because the client had no callback URL (an attempt
+// with the error CallbackNoURL) is not counted: an admin turned callbacks
+// off, nothing failed to deliver.
 func (s *Store) CountUndeliveredAPICallbacks(ctx context.Context, clientID int64, since time.Time) (int, error) {
 	var n int
-	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM api_callbacks
-		WHERE client_id = $1 AND created_at >= $2 AND delivered_at IS NULL AND attempts > 0`, clientID, since).Scan(&n)
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM api_callbacks cb
+		WHERE cb.client_id = $1 AND cb.created_at >= $2 AND cb.delivered_at IS NULL AND cb.attempts > 0
+		  AND NOT EXISTS (SELECT 1 FROM api_callback_attempts a WHERE a.callback_id = cb.id AND a.error = $3)`,
+		clientID, since, CallbackNoURL).Scan(&n)
 	return n, err
 }

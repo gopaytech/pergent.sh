@@ -34,14 +34,14 @@ const (
 	callbackMaxRetry   = time.Hour
 	callbackWindow     = 24 * time.Hour
 	// callbackFailingThreshold is how many callbacks of a client made in the
-	// last callbackWindow, not delivered, raise callback_failing.
+	// last callbackWindow, not delivered (CountUndeliveredAPICallbacks), raise
+	// callback_failing.
 	callbackFailingThreshold = 3
 	// maxCallbackError is the most of an attempt's error that is stored.
 	maxCallbackError = 500
 	// callbackDrain is the most of a callback URL's answer that is read.
 	callbackDrain = 64 << 10
 
-	msgNoCallbackURL      = "the client has no callback URL"
 	msgCallbackRedirect   = "the callback URL answered with a redirect, which is not followed"
 	msgCallbackSecretGone = "the client's callback secret can't be opened: rotate it"
 	callbackHidden        = "***"
@@ -144,7 +144,7 @@ func (e *Engine) sendCallback(ctx context.Context, hc *http.Client, cb store.API
 	now := e.now()
 	a := store.CallbackAttempt{At: now}
 	if cb.URL == "" {
-		a.Error = msgNoCallbackURL
+		a.Error = store.CallbackNoURL
 		log.Warn("giving up on a callback: the client has no callback URL")
 		return true, e.recordCallback(ctx, cb, a, false, true)
 	}

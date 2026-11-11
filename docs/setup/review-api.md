@@ -296,6 +296,7 @@ When a review ends (`completed`, `failed` or `superseded`), pergent.sh `POST`s i
 - **A rotation** puts two `v1=` values in the header for 24 hours, the new secret's first. Accept the callback if **any** `v1=` matches.
 - **The URL and secret** are read at each attempt, so a fix to either applies to the next retry.
 - **Failing callbacks** raise a **Needs attention** item for the client, seen by admins, once 3 of its callbacks from the last 24 hours are undelivered. It clears when fewer are.
+- **Emptying the Callback URL** turns callbacks off: those not yet delivered are given up at their next try (`the client has no callback URL`), and they no longer count as failing, so the item clears.
 
 To check a callback, compute the HMAC over the raw bytes you received, compare it with each `v1=`, and refuse a `t` older than a few minutes. In a shell, with the body saved as `body.json` (don't read it into a variable: that drops a trailing newline):
 

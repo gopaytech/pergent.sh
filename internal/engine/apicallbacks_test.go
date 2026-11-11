@@ -382,9 +382,8 @@ func TestCallbackRotationSendsBoth(t *testing.T) {
 	rc := newReceiver(t, nil)
 	a := newCallbackE2E(t, rc.srv.URL)
 	env := a.env
-	catchUp(env)
 	const newSecret = "pgs_new-secret-example"
-	until := env.Now().Add(24 * time.Hour)
+	until := time.Now().UTC().Add(24 * time.Hour)
 	if _, _, err := env.Store.UpdateAPIClient(env.ctx, "gateway", func(c *store.APIClient) {
 		c.PreviousSecretSealed, c.PreviousSecretUntil = c.CallbackSecretSealed, until
 		c.CallbackSecretSealed = env.Box.Seal([]byte(newSecret))
@@ -392,6 +391,7 @@ func TestCallbackRotationSendsBoth(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.supersede(t)
+	catchUp(env)
 
 	deliver(t, env)
 	got := rc.requests()
@@ -591,6 +591,41 @@ func TestCallbackFailingAttention(t *testing.T) {
 	}
 	if got := failing(); len(got) != 0 {
 		t.Errorf("after a delivery left two: %+v, want the item cleared", got)
+	}
+}
+
+// Emptying the URL is not a delivery failure: the callbacks it gives up on
+// stop counting, and the item goes in that pass.
+func TestCallbackFailingClearedWhenURLEmptied(t *testing.T) {
+	rc := newReceiver(t, answerWith(http.StatusBadGateway))
+	a := newCallbackE2E(t, rc.srv.URL)
+	env := a.env
+	for range 4 {
+		a.ask(t, "route:1", twoFiles())
+	}
+	catchUp(env)
+	deliver(t, env)
+	att, err := env.Store.Attention(env.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(att) != 1 || att[0].Kind != attCallbackFailing {
+		t.Fatalf("after three failed callbacks: %+v, want the client's item", att)
+	}
+
+	a.setCallbackURL(t, "")
+	advance(env, 10*time.Second)
+	deliver(t, env)
+
+	due, err := env.Store.DueAPICallbacks(env.ctx, env.Now().Add(48*time.Hour), 10)
+	if err != nil || len(due) != 0 {
+		t.Fatalf("due after emptying the URL = %d, %v; want all given up", len(due), err)
+	}
+	if att, err := env.Store.Attention(env.ctx); err != nil || len(att) != 0 {
+		t.Errorf("attention after emptying the URL = %+v, %v; want none", att, err)
+	}
+	if n := len(rc.requests()); n != 3 {
+		t.Errorf("receiver got %d requests, want the 3 first attempts only", n)
 	}
 }
 

@@ -201,7 +201,7 @@ func TestAPICallbackGivesUp(t *testing.T) {
 	enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:1"))
 	cb := dueFor(t, s, time.Now().Add(time.Minute))[id]
 
-	a := CallbackAttempt{At: time.Now(), Error: "the client has no callback URL"}
+	a := CallbackAttempt{At: time.Now(), Error: CallbackNoURL}
 	if err := s.RecordAPICallbackAttempt(ctx, cb.ID, a, false, time.Now(), true); err != nil {
 		t.Fatal(err)
 	}
@@ -310,6 +310,14 @@ func TestCountUndeliveredAPICallbacks(t *testing.T) {
 	}
 	if n := count(); n != 2 {
 		t.Errorf("after a give-up = %d, want 2", n)
+	}
+	// One that failed, then gave up because the client's URL was emptied, is
+	// not a delivery failure: not counted.
+	if err := s.RecordAPICallbackAttempt(ctx, due[ids[2]].ID, CallbackAttempt{At: time.Now(), Error: CallbackNoURL}, false, time.Now(), true); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(); n != 1 {
+		t.Errorf("after a give-up for no URL = %d, want 1", n)
 	}
 	// Made before since: not counted.
 	if n, err := s.CountUndeliveredAPICallbacks(ctx, c.ID, time.Now().Add(time.Hour)); err != nil || n != 0 {
