@@ -395,16 +395,14 @@ func BuildJob(p JobParams) *batchv1.Job {
 			Items:                items,
 		}}},
 	}
-	var podSecurity *corev1.PodSecurityContext
 	if p.Import != nil {
-		// Only the checkout container mounts it. The file is root's and 0400,
-		// so the image's non-root user reads it through the group.
+		// 0444: readable by any user the image runs as. Only the checkout
+		// container mounts it.
 		volumes = append(volumes, corev1.Volume{Name: "files", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
 			SecretName:  filesName(p),
 			Items:       []corev1.KeyToPath{{Key: keyImport, Path: keyImport}},
-			DefaultMode: ptr(int32(0o400)),
+			DefaultMode: ptr(int32(0o444)),
 		}}})
-		podSecurity = &corev1.PodSecurityContext{FSGroup: ptr(int64(fetchUser))}
 	}
 
 	return &batchv1.Job{
@@ -420,7 +418,6 @@ func BuildJob(p JobParams) *batchv1.Job {
 					TerminationGracePeriodSeconds: ptr(int64(30)),
 					AutomountServiceAccountToken:  ptr(false),
 					EnableServiceLinks:            ptr(false),
-					SecurityContext:               podSecurity,
 					Volumes:                       volumes,
 					InitContainers:                []corev1.Container{checkout},
 					Containers:                    []corev1.Container{pergent},

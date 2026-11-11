@@ -85,12 +85,12 @@ func TestAPIJobShape(t *testing.T) {
 	if s.SecretName != p.Name+"-files" || len(s.Items) != 1 || s.Items[0].Key != "import" || s.Items[0].Path != "import" {
 		t.Errorf("files volume = %+v; want Secret %s-files with item import", s, p.Name)
 	}
-	if s.DefaultMode == nil || *s.DefaultMode != 0o400 {
-		t.Errorf("files volume mode = %v; want 0400", s.DefaultMode)
+	// Readable by any user the image runs as; only the checkout container mounts it.
+	if s.DefaultMode == nil || *s.DefaultMode != 0o444 {
+		t.Errorf("files volume mode = %v; want 0444", s.DefaultMode)
 	}
-	// The file is root's: the image's non-root user reads it through the group.
-	if sc := pod.SecurityContext; sc == nil || sc.FSGroup == nil || *sc.FSGroup != fetchUser {
-		t.Errorf("pod security context = %+v; want fsGroup %d", sc, fetchUser)
+	if pod.SecurityContext != nil {
+		t.Errorf("pod security context = %+v; want none", pod.SecurityContext)
 	}
 
 	// The pergent container still gets the Job's own Secret and the same args.
