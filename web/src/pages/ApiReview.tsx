@@ -6,6 +6,7 @@ import {
   api,
   isStatus,
   paths,
+  type APICallback,
   type APIFinding,
   type APIReviewDetail,
   type APISkill,
@@ -145,7 +146,34 @@ function Result({ view }: { view: APIReviewDetail }) {
       {skills.map((s) => (
         <Skill key={s.name} skill={s} />
       ))}
+      {view.callback.state !== "none" && <Callback callback={view.callback} />}
     </>
+  );
+}
+
+const callbackStates: Record<string, string> = {
+  pending: "Will be tried again.",
+  delivered: "Delivered.",
+  gave_up: "Given up.",
+};
+
+// Callback is the review's callback to its client: where it stands and every
+// try, oldest first. The error is the redacted text pergent.sh stored.
+function Callback({ callback }: { callback: APICallback }) {
+  return (
+    <section className="card pad" aria-label="Callback">
+      <h3 className="group">Callback</h3>
+      <div className="meta">{callbackStates[callback.state] ?? callback.state}</div>
+      <ul className="files">
+        {callback.attempts.map((a, i) => (
+          <li key={`${a.at}/${i}`}>
+            <span className="meta">{utcText(a.at)}</span>{" "}
+            {a.statusCode === 0 ? `No answer: ${a.error}` : `Answered ${a.statusCode}${a.error ? `. ${a.error}` : ""}`}{" "}
+            <span className="meta">{a.durationMs} ms</span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

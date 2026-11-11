@@ -310,6 +310,11 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		Wake: eng.Wake, Fetcher: fetcher, Readiness: eng,
 		// Removing an API client ends its live reviews: their Jobs go.
 		DeleteJob: launcher.Delete,
+		// Send test callback goes the way a real callback does: the engine's
+		// sender and client, which never follows a redirect.
+		SendCallback: func(ctx context.Context, url string, body []byte, delivery string, secrets ...string) store.CallbackAttempt {
+			return engine.SendCallback(ctx, eng.CallbackClient, url, body, delivery, secrets...)
+		},
 	})
 	if err != nil {
 		return err

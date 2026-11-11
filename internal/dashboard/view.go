@@ -1493,6 +1493,30 @@ type APICallbackSecretView struct {
 	CallbackSecret string `json:"callbackSecret"`
 }
 
+// APICallbackTestView is the answer of Send test callback: what the URL
+// answered, or why it did not. StatusCode is 0 for no answer; Error is the
+// redacted text of a failure, "" when the URL answered without a redirect.
+type APICallbackTestView struct {
+	StatusCode int    `json:"statusCode"`
+	Error      string `json:"error"`
+	DurationMs int64  `json:"durationMs"`
+}
+
+// APICallbackAttemptView is one try of a review's callback.
+type APICallbackAttemptView struct {
+	At         time.Time `json:"at"`
+	StatusCode int       `json:"statusCode"`
+	Error      string    `json:"error"`
+	DurationMs int64     `json:"durationMs"`
+}
+
+// APICallbackView is a review's callback: none, pending, delivered or
+// gave_up, and the tries so far, oldest first.
+type APICallbackView struct {
+	State    string                   `json:"state"`
+	Attempts []APICallbackAttemptView `json:"attempts"`
+}
+
 // APIKeyCreatedView is the 201 of POST /api/admin/api-clients/{name}/keys:
 // the only time the key is shown.
 type APIKeyCreatedView struct {
@@ -1543,5 +1567,6 @@ type APIReviewDetailView struct {
 	CreatedAt  time.Time             `json:"createdAt"`
 	FinishedAt *time.Time            `json:"finishedAt"`
 	Failure    *APIReviewFailureView `json:"failure"`
+	Callback   APICallbackView       `json:"callback"`
 	Review     json.RawMessage       `json:"review"`
 }

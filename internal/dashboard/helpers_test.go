@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/engine"
 	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
@@ -221,6 +222,9 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *env {
 			e.mu.Lock()
 			e.reconciled = append(e.reconciled, instance+"/"+project)
 			e.mu.Unlock()
+		},
+		SendCallback: func(ctx context.Context, url string, body []byte, delivery string, secrets ...string) store.CallbackAttempt {
+			return engine.SendCallback(ctx, nil, url, body, delivery, secrets...)
 		},
 		Log: log,
 	})

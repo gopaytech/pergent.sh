@@ -305,6 +305,12 @@ t=1762851790   # from X-Pergent-Signature
 { printf '%s.' "$t"; cat body.json; } | openssl dgst -sha256 -hmac "$CALLBACK_SECRET"
 ```
 
+### Try the callback
+
+On the client's **Settings** tab press **Send test callback**. pergent.sh sends your Callback URL a test review the way it sends a real one: the same headers, the same secrets (the old one too, during a rotation), a new `X-Pergent-Delivery` each time, and no redirect followed. The tab then reads `Answered 204 in 42 ms`, or the reason it got no answer. It is a failure unless the URL answered `2xx`.
+
+The body is a review with `"test": true`, the ID `00000000-0000-0000-0000-000000000000`, the subject `pergent.sh test callback` and the verdict `nothing_reviewed`. Never treat it as a pass: a receiver that gates on `no_blocking_issues` rejects it, and one that sees `test: true` should drop it. It is not stored as a callback of any review and does not count as failing. The button needs a Callback URL; without one it answers `this client has no callback URL`.
+
 ## Send the change again, don't re-run
 
 There is no re-run. To review again, send the change again with the same `subject`: a review of that subject still queued or running is superseded, and the new one reviews what you send now. Use a new `Idempotency-Key` for each new attempt; reuse one only to retry a request whose answer you lost.
@@ -315,7 +321,7 @@ The files and the description go to the model, so they leave your system. Remove
 
 ## See a client's reviews in the dashboard
 
-A client's page opens on its **Reviews** tab: its reviews, newest first, with the subject, tenant, title, status and verdict. Filter by tenant, subject or status, and press **Load more** for older ones. A review's subject opens its page: who asked (subject, tenant, the key's name), the model, the tokens, each skill's findings (with the fix and the replacement text) and its files (reviewed, skipped with the rule, and not reviewed with the reason). A failed review reads `Failed at <step>: <reason>`, with the admin-only detail below. The **Logs** tab shows the Job's log, the clone log and the pod's state. The page has no re-run button: the caller sends the change again.
+A client's page opens on its **Reviews** tab: its reviews, newest first, with the subject, tenant, title, status and verdict. Filter by tenant, subject or status, and press **Load more** for older ones. A review's subject opens its page: who asked (subject, tenant, the key's name), the model, the tokens, each skill's findings (with the fix and the replacement text) and its files (reviewed, skipped with the rule, and not reviewed with the reason). A failed review reads `Failed at <step>: <reason>`, with the admin-only detail below. A review with a callback lists its **Callback**: delivered, pending or given up, and each attempt with its time, the status the URL answered (or the error) and how long it took. The **Logs** tab shows the Job's log, the clone log and the pod's state. The page has no re-run button: the caller sends the change again.
 
 The list of clients shows, for each, the reviews of the UTC month so far, how many failed and the tokens they used.
 
@@ -330,4 +336,4 @@ A failed review has a `failure` with the step it failed at: see [A failed review
 
 ## Audit log
 
-Making, changing and removing a client, making and revoking a key, and rotating a callback secret are in **Admin → Audit log**.
+Making, changing and removing a client, making and revoking a key, rotating a callback secret and sending a test callback (`api_callback_tested`, naming the client) are in **Admin → Audit log**.

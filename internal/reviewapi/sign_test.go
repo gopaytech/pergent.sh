@@ -58,3 +58,22 @@ func TestBodyIsWhatGetWrites(t *testing.T) {
 		t.Errorf("superseded body = %s", b)
 	}
 }
+
+// The test callback's body says it is a test and that nothing was reviewed,
+// and is encoded as the API encodes a review.
+func TestTestReviewIsNotAPass(t *testing.T) {
+	now := time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
+	r := TestReview(now)
+	if r.ID != "00000000-0000-0000-0000-000000000000" || r.Subject != "pergent.sh test callback" ||
+		r.Status != StatusCompleted || r.Verdict != VerdictNothingReviewed || !r.Test {
+		t.Errorf("review = %+v", r)
+	}
+	b, err := Encode(r)
+	if err != nil || !strings.HasSuffix(string(b), "}\n") || !strings.Contains(string(b), `"test":true`) ||
+		!strings.Contains(string(b), `"verdict":"nothing_reviewed"`) {
+		t.Errorf("Encode = %s, %v", b, err)
+	}
+	if body, err := Body(store.APIReview{}); err != nil || !strings.HasSuffix(string(body), "\n") {
+		t.Errorf("Body = %q, %v; the pending body still ends in a newline", body, err)
+	}
+}

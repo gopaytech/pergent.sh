@@ -2896,6 +2896,43 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/api-clients/{name}/test-callback:
+    post:
+      operationId: testApiClientCallback
+      tags: [API clients]
+      summary: Send a test callback
+      description: |
+        Admins only. Posts a test review to the client's callback URL, signed and
+        sent as a real callback is: the same headers, the same secrets (the
+        previous one too, during a rotation's overlap), a new delivery ID, and
+        no redirect followed. The body has `test: true`, the review ID
+        `00000000-0000-0000-0000-000000000000` and the verdict `nothing_reviewed`,
+        so it is never a pass. Nothing is stored for it but an audit entry. The
+        answer is 200 whatever the URL answered: `statusCode` is its status, or 0
+        for no answer, with the reason in `error` (the URL's path and query and
+        the secrets are left out). A client with no callback URL is 409.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/ApiClientName'
+      responses:
+        '200':
+          description: What the callback URL answered, or why it did not.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/APICallbackTestView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503':
+          description: Test callbacks are not available.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorBody'}
   /api/admin/api-clients/{name}/keys:
     post:
       operationId: createApiKey
@@ -5073,7 +5110,7 @@ components:
     APIReviewDetailView:
       description: One API review.
       type: object
-      required: [id, client, tenant, subject, title, keyName, status, model, createdAt, finishedAt, failure, review]
+      required: [id, client, tenant, subject, title, keyName, status, model, createdAt, finishedAt, failure, callback, review]
       properties:
         id: {type: string, format: uuid}
         client: {type: string}
@@ -5094,10 +5131,41 @@ components:
             - {$ref: '#/components/schemas/APIReviewFailureView'}
             - {type: 'null'}
           description: Null unless the review failed.
+        callback: {$ref: '#/components/schemas/APICallbackView'}
         review:
           allOf:
             - $ref: '#/components/schemas/ReviewApiReview'
           description: The v1 body, as the API answers with it.
+    APICallbackView:
+      description: The review's callback to its client, and every try made so far.
+      type: object
+      required: [state, attempts]
+      properties:
+        state:
+          type: string
+          enum: [none, pending, delivered, gave_up]
+          description: '`none` when the review has no callback (the client had no URL, or it has not finished).'
+        attempts:
+          type: array
+          description: Oldest first.
+          items: {$ref: '#/components/schemas/APICallbackAttemptView'}
+    APICallbackAttemptView:
+      type: object
+      required: [at, statusCode, error, durationMs]
+      properties:
+        at: {type: string, format: date-time}
+        statusCode: {type: integer, description: 'What the URL answered; 0 for no answer.'}
+        error: {type: string, description: 'Redacted. Empty when the URL answered without a redirect.'}
+        durationMs: {type: integer, format: int64}
+    APICallbackTestView:
+      type: object
+      required: [statusCode, error, durationMs]
+      properties:
+        statusCode: {type: integer, description: 'What the URL answered; 0 for no answer.'}
+        error:
+          type: string
+          description: 'Redacted: the URL''s path and query and the secrets are left out. Empty when the URL answered without a redirect.'
+        durationMs: {type: integer, format: int64}
     APIKeyView:
       description: One of a client's keys. Never the key itself; the prefix finds it in a leak scan.
       type: object

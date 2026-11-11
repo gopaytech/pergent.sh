@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -27,6 +27,7 @@ const base = {
 };
 
 describe("API client: settings", () => {
+  const testBox = () => screen.findByRole("region", { name: "Test callback" });
   const openSettings = async () => {
     renderApp("/api-clients/fastgateway");
     await userEvent.click(await screen.findByRole("tab", { name: "Settings" }));
@@ -129,6 +130,74 @@ describe("API client: settings", () => {
     expect(await screen.findByText("The old secret also works until 2026-11-12 10:00 UTC.")).toBeInTheDocument();
     await userEvent.click(within(box).getByRole("button", { name: "Done" }));
     expect(document.body.textContent).not.toContain("whsec_rotated");
+  });
+
+  it("sends a test callback and says what the URL answered", async () => {
+    const fake = fakeApi({ ...base, [`POST ${url}/test-callback`]: { body: { statusCode: 204, error: "", durationMs: 42 } } });
+    await openSettings();
+    await userEvent.click(await screen.findByRole("button", { name: "Send test callback" }));
+    expect(await within(await testBox()).findByRole("status")).toHaveTextContent("Answered 204 in 42 ms");
+    expect(fake.find("POST", `${url}/test-callback`)).toHaveLength(1);
+    expect(fake.find("POST", `${url}/test-callback`)[0].body).toBeUndefined();
+    expect(within(await testBox()).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows the error text of a callback that got no answer, as text", async () => {
+    fakeApi({
+      ...base,
+      [`POST ${url}/test-callback`]: { body: { statusCode: 0, error: "dial tcp: <b>connection refused</b>", durationMs: 3 } },
+    });
+    await openSettings();
+    await userEvent.click(await screen.findByRole("button", { name: "Send test callback" }));
+    const alert = await within(await testBox()).findByRole("alert");
+    expect(alert).toHaveTextContent("No answer: dial tcp: <b>connection refused</b>");
+    expect(document.body.querySelector("[role=alert] b")).toBeNull();
+    expect(screen.queryByText(/Answered/)).not.toBeInTheDocument();
+  });
+
+  it("does not take a non-2xx answer or a redirect for a delivery", async () => {
+    const answers = [
+      { statusCode: 500, error: "", durationMs: 80 },
+      { statusCode: 302, error: "the callback URL answered with a redirect, which is not followed", durationMs: 9 },
+    ];
+    let n = 0;
+    fakeApi({ ...base, [`POST ${url}/test-callback`]: () => ({ body: answers[n++] }) });
+    await openSettings();
+    const button = await screen.findByRole("button", { name: "Send test callback" });
+    await userEvent.click(button);
+    expect(await within(await testBox()).findByRole("alert")).toHaveTextContent("Answered 500 in 80 ms. Only a 2xx answer is a delivery.");
+    expect(within(await testBox()).queryByRole("status")).not.toBeInTheDocument();
+    await userEvent.click(button);
+    await waitFor(() => expect(within(screen.getByRole("region", { name: "Test callback" })).getByRole("alert")).toHaveTextContent("Answered 302 in 9 ms. the callback URL answered with a redirect, which is not followed"));
+  });
+
+  it("clears the last answer when the button is pressed again", async () => {
+    let n = 0;
+    fakeApi({
+      ...base,
+      [`POST ${url}/test-callback`]: () => ({ body: { statusCode: n++ === 0 ? 204 : 410, error: "", durationMs: 1 } }),
+    });
+    await openSettings();
+    await userEvent.click(await screen.findByRole("button", { name: "Send test callback" }));
+    expect(await within(await testBox()).findByRole("status")).toHaveTextContent("Answered 204");
+    await userEvent.click(screen.getByRole("button", { name: "Send test callback" }));
+    expect(await within(await testBox()).findByRole("alert")).toHaveTextContent("Answered 410");
+    expect(within(await testBox()).queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("can't send a test callback for a client with no callback URL", async () => {
+    const fake = fakeApi({ ...base, [`GET ${url}`]: { body: { ...apiClientFastgateway, callbackUrl: "" } } });
+    await openSettings();
+    expect(await screen.findByRole("button", { name: "Send test callback" })).toBeDisabled();
+    expect(screen.getByText("Save a callback URL first.")).toBeInTheDocument();
+    expect(fake.calls.filter((c) => c.method === "POST")).toEqual([]);
+  });
+
+  it("shows the server's refusal of a test callback", async () => {
+    fakeApi({ ...base, [`POST ${url}/test-callback`]: { status: 409, body: { error: "this client has no callback URL" } } });
+    await openSettings();
+    await userEvent.click(await screen.findByRole("button", { name: "Send test callback" }));
+    expect(await within(await testBox()).findByRole("alert")).toHaveTextContent("this client has no callback URL");
   });
 
   it("rotates nothing when the confirmation is declined", async () => {

@@ -88,6 +88,46 @@ describe("API review", () => {
     expect(screen.queryByRole("region", { name: /^Skill / })).not.toBeInTheDocument();
   });
 
+  it("lists each callback attempt with its time, what the URL answered and how long it took", async () => {
+    const view: APIReviewDetail = {
+      ...apiReviewDone,
+      callback: {
+        state: "pending",
+        attempts: [
+          { at: "2026-11-10T09:04:10Z", statusCode: 0, error: "dial tcp: connection <b>refused</b>", durationMs: 1200 },
+          { at: "2026-11-10T09:04:20Z", statusCode: 502, error: "", durationMs: 80 },
+        ],
+      },
+    };
+    renderPage(view);
+    const section = await screen.findByRole("region", { name: "Callback" });
+    expect(section).toHaveTextContent("Will be tried again");
+    const rows = within(section).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("2026-11-10 09:04 UTC");
+    expect(rows[0]).toHaveTextContent("No answer: dial tcp: connection <b>refused</b>");
+    expect(rows[0]).toHaveTextContent("1200 ms");
+    expect(rows[1]).toHaveTextContent("Answered 502");
+    expect(rows[1]).toHaveTextContent("80 ms");
+    // Error text is text, never markup.
+    expect(section.querySelector("b")).toBeNull();
+  });
+
+  it.each([
+    ["delivered", "Delivered"],
+    ["gave_up", "Given up"],
+  ] as const)("says a callback is %s", async (state, text) => {
+    const attempts = [{ at: "2026-11-10T09:04:10Z", statusCode: 200, error: "", durationMs: 30 }];
+    renderPage({ ...apiReviewDone, callback: { state, attempts } });
+    expect(await screen.findByRole("region", { name: "Callback" })).toHaveTextContent(text);
+  });
+
+  it("shows no callback section when the review has none", async () => {
+    renderPage(apiReviewDone);
+    await screen.findByRole("heading", { name: "Add the retry loop" });
+    expect(screen.queryByRole("region", { name: "Callback" })).not.toBeInTheDocument();
+  });
+
   it("says a review with no result yet has none", async () => {
     const queued: APIReviewDetail = {
       ...apiReviewFailed,

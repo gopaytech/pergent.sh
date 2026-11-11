@@ -868,6 +868,16 @@ export type APIReviewBody = {
   test?: boolean;
 };
 
+// APICallback is a review's callback to its client: none, pending, delivered
+// or gave_up, and every try so far, oldest first. statusCode is 0 for no
+// answer; error is redacted and "" when the URL answered without a redirect.
+export type APICallbackState = "none" | "pending" | "delivered" | "gave_up";
+export type APICallbackAttempt = { at: string; statusCode: number; error: string; durationMs: number };
+export type APICallback = { state: APICallbackState; attempts: APICallbackAttempt[] };
+
+// APICallbackTest is the answer of POST /api/admin/api-clients/{name}/test-callback.
+export type APICallbackTest = { statusCode: number; error: string; durationMs: number };
+
 // APIReviewDetail is GET /api/admin/api-reviews/{id}. failure.detail is more
 // than the caller is told, for admins, and may be "". model is null for a
 // review that never started.
@@ -883,6 +893,7 @@ export type APIReviewDetail = {
   createdAt: string;
   finishedAt: string | null;
   failure: { step: string; reason: string; detail: string } | null;
+  callback: APICallback;
   review: APIReviewBody;
 };
 
@@ -1219,6 +1230,7 @@ export const paths = {
   clientPage: (name: string) => `/api-clients/${seg(name)}`,
   apiAdminClient: (name: string) => `/api/admin/api-clients/${seg(name)}`,
   apiAdminClientSecret: (name: string) => `/api/admin/api-clients/${seg(name)}/secret`,
+  apiAdminClientTestCallback: (name: string) => `/api/admin/api-clients/${seg(name)}/test-callback`,
   apiAdminClientKeys: (name: string) => `/api/admin/api-clients/${seg(name)}/keys`,
   apiAdminClientKey: (name: string, id: number) => `/api/admin/api-clients/${seg(name)}/keys/${seg(String(id))}`,
   apiAdminClientReviews: (name: string) => `/api/admin/api-clients/${seg(name)}/reviews`,

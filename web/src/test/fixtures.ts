@@ -851,6 +851,7 @@ export const apiReviewDone: APIReviewDetail = {
   createdAt: "2026-11-10T09:00:00Z",
   finishedAt: "2026-11-10T09:04:00Z",
   failure: null,
+  callback: { state: "none", attempts: [] },
   review: {
     id: "0f1e2d3c4b5a",
     subject: "change-1042",
@@ -921,6 +922,7 @@ export const apiReviewFailed: APIReviewDetail = {
   createdAt: "2026-11-10T11:00:00Z",
   finishedAt: "2026-11-10T11:01:00Z",
   failure: { step: "starting", reason: "the checkout failed", detail: "fatal: bad object <b>abc</b>" },
+  callback: { state: "none", attempts: [] },
   review: {
     id: "5e4d3c2b1a09",
     subject: "change-1044",

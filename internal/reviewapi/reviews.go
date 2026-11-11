@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -208,11 +209,28 @@ func Body(rv store.APIReview) ([]byte, error) {
 	if len(rv.Response) > 0 {
 		return rv.Response, nil
 	}
-	b, err := json.Marshal(Pending(rv))
+	return Encode(Pending(rv))
+}
+
+// Encode is b as writeJSON writes a review: JSON and a newline.
+func Encode(b Review) ([]byte, error) {
+	out, err := json.Marshal(b)
 	if err != nil {
 		return nil, err
 	}
-	return append(b, '\n'), nil
+	return append(out, '\n'), nil
+}
+
+// TestReviewID is the ID of a test callback's review: no review has it.
+const TestReviewID = "00000000-0000-0000-0000-000000000000"
+
+// TestReview is the body of a test callback, made at now. Its verdict is
+// nothing_reviewed and Test is true, so a receiver that gates on the verdict
+// can't take it for a pass.
+func TestReview(now time.Time) Review {
+	t := now.UTC()
+	return Review{ID: TestReviewID, Subject: "pergent.sh test callback", Status: StatusCompleted,
+		CreatedAt: t, FinishedAt: &t, Verdict: VerdictNothingReviewed, Test: true}
 }
 
 // writeReview answers with the review's Body.

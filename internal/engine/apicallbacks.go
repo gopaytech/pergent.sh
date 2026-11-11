@@ -118,12 +118,18 @@ func (e *Engine) DeliverCallbacksOnce(ctx context.Context) error {
 // to follow a redirect: a callback goes to the URL an admin typed, and
 // nowhere its answer points.
 func (e *Engine) callbackClient() *http.Client {
-	hc := http.Client{Timeout: callbackTimeout}
-	if e.CallbackClient != nil {
-		hc = *e.CallbackClient
+	return noRedirects(e.CallbackClient)
+}
+
+// noRedirects is a copy of hc (a client with a 10 s timeout when nil) that
+// never follows a redirect: the 3xx is the answer.
+func noRedirects(hc *http.Client) *http.Client {
+	c := http.Client{Timeout: callbackTimeout}
+	if hc != nil {
+		c = *hc
 	}
-	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &hc
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &c
 }
 
 // sendCallback makes one attempt of cb and records it. The URL and secrets
@@ -157,7 +163,7 @@ func (e *Engine) sendCallback(ctx context.Context, hc *http.Client, cb store.API
 	if !ok {
 		a.Error = msgCallbackSecretGone
 	} else {
-		a.StatusCode, a.Error, a.Duration = e.postCallback(ctx, hc, cb, body, now, secrets)
+		a = sendCallbackAt(ctx, hc, cb.URL, body, cb.ID, now, e.redact, secrets)
 		if ctx.Err() != nil {
 			return false, nil
 		}
@@ -197,29 +203,50 @@ func (e *Engine) callbackSecrets(cb store.APICallback, now time.Time, log *slog.
 	return secrets, true
 }
 
-// postCallback posts body, signed with secrets at now, and returns the
-// status (0 for no answer), the error to store (redacted, "" when the URL
-// answered without a redirect) and how long it took.
-func (e *Engine) postCallback(ctx context.Context, hc *http.Client, cb store.APICallback, body []byte, now time.Time, secrets []string) (int, string, time.Duration) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cb.URL, bytes.NewReader(body))
+// SendCallback posts body to url as a callback, signed with secrets at the
+// current time, with delivery as its X-Pergent-Delivery, and returns the
+// attempt: the status (0 for no answer), the error to store (redacted, "" when
+// the URL answered without a redirect) and how long it took. It is the one
+// way a callback is sent: the engine's and an admin's test callback both go
+// through it. hc is not followed through a redirect, whatever it is; nil is a
+// client with a 10 s timeout.
+func SendCallback(ctx context.Context, hc *http.Client, url string, body []byte, delivery string, secrets ...string) store.CallbackAttempt {
+	return sendCallbackAt(ctx, hc, url, body, delivery, time.Now(), nil, secrets)
+}
+
+// sendCallbackAt is SendCallback signing at now, with redact, when not nil,
+// applied to a transport error before the URL and the secrets are taken out
+// of it.
+func sendCallbackAt(ctx context.Context, hc *http.Client, rawURL string, body []byte, delivery string, now time.Time, redact func(string) string, secrets []string) store.CallbackAttempt {
+	a := store.CallbackAttempt{At: now}
+	failed := func(err error) string {
+		text := err.Error()
+		if redact != nil {
+			text = redact(text)
+		}
+		return callbackError(text, rawURL, secrets)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, bytes.NewReader(body))
 	if err != nil {
-		return 0, callbackError(e.redact(err.Error()), cb.URL, secrets), 0
+		a.Error = failed(err)
+		return a
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Pergent-Delivery", cb.ID)
+	req.Header.Set("X-Pergent-Delivery", delivery)
 	req.Header.Set("X-Pergent-Signature", reviewapi.Sign(body, now, secrets...))
 	start := time.Now()
-	resp, err := hc.Do(req)
+	resp, err := noRedirects(hc).Do(req)
 	if err != nil {
-		return 0, callbackError(e.redact(err.Error()), cb.URL, secrets), time.Since(start)
+		a.Error, a.Duration = failed(err), time.Since(start)
+		return a
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, callbackDrain))
 	_ = resp.Body.Close()
-	took := time.Since(start)
+	a.StatusCode, a.Duration = resp.StatusCode, time.Since(start)
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-		return resp.StatusCode, msgCallbackRedirect, took
+		a.Error = msgCallbackRedirect
 	}
-	return resp.StatusCode, "", took
+	return a
 }
 
 // recordCallback records attempt a of cb, within a settle context of its

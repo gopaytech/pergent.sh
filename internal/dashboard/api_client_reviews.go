@@ -119,6 +119,16 @@ func (d *Dashboard) getAPIReview(w http.ResponseWriter, r *http.Request) {
 	if f := reviewapi.FailureOf(rv); f != nil {
 		v.Failure = &APIReviewFailureView{Step: f.Step, Reason: f.Reason, Detail: rv.Run.FailureDetail}
 	}
+	state, attempts, err := d.Store.APICallbackAttempts(r.Context(), rv.Run.ID)
+	if err != nil {
+		d.failed(w, r, "loading an API review's callback", err)
+		return
+	}
+	v.Callback = APICallbackView{State: state, Attempts: make([]APICallbackAttemptView, 0, len(attempts))}
+	for _, a := range attempts {
+		v.Callback.Attempts = append(v.Callback.Attempts, APICallbackAttemptView{At: a.At.UTC(), StatusCode: a.StatusCode,
+			Error: a.Error, DurationMs: a.Duration.Milliseconds()})
+	}
 	writeJSON(w, http.StatusOK, v)
 }
 
