@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/readiness"
@@ -1437,10 +1438,14 @@ type APIKeyInput struct {
 	ExpiresAt *time.Time `json:"expiresAt"`
 }
 
-// APIClientRowView is one line of the list of clients.
+// APIClientRowView is one line of the list of clients. The counts are of the
+// reviews created from the 1st of the UTC month; tokens are in plus out.
 type APIClientRowView struct {
-	Name string `json:"name"`
-	Keys int    `json:"keys"`
+	Name             string `json:"name"`
+	Keys             int    `json:"keys"`
+	ReviewsThisMonth int64  `json:"reviewsThisMonth"`
+	FailedThisMonth  int64  `json:"failedThisMonth"`
+	TokensThisMonth  int64  `json:"tokensThisMonth"`
 }
 
 // APIClientListView is GET /api/admin/api-clients, by name.
@@ -1491,4 +1496,50 @@ type APICallbackSecretView struct {
 type APIKeyCreatedView struct {
 	Key    APIKeyView `json:"key"`
 	Secret string     `json:"secret"`
+}
+
+// APIReviewRowView is one line of a client's reviews. Verdict is "" while the
+// review has none.
+type APIReviewRowView struct {
+	ID         string     `json:"id"`
+	Tenant     string     `json:"tenant"`
+	Subject    string     `json:"subject"`
+	Title      string     `json:"title"`
+	Status     string     `json:"status"`
+	Verdict    string     `json:"verdict"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	FinishedAt *time.Time `json:"finishedAt"`
+}
+
+// APIReviewListView is GET /api/admin/api-clients/{name}/reviews, newest
+// first. NextCursor is not "" when there is a next page.
+type APIReviewListView struct {
+	Items      []APIReviewRowView `json:"items"`
+	NextCursor string             `json:"nextCursor"`
+}
+
+// APIReviewFailureView is why an API review failed. Reason is what the caller
+// is told; Detail is more, for admins, and may be "".
+type APIReviewFailureView struct {
+	Step   string `json:"step"`
+	Reason string `json:"reason"`
+	Detail string `json:"detail"`
+}
+
+// APIReviewDetailView is GET /api/admin/api-reviews/{id}. Review is the v1
+// body of the review: the one stored when it was published, or, before that,
+// the body the API would answer with.
+type APIReviewDetailView struct {
+	ID         string                `json:"id"`
+	Client     string                `json:"client"`
+	Tenant     string                `json:"tenant"`
+	Subject    string                `json:"subject"`
+	Title      string                `json:"title"`
+	KeyName    string                `json:"keyName"`
+	Status     string                `json:"status"`
+	Model      *string               `json:"model"`
+	CreatedAt  time.Time             `json:"createdAt"`
+	FinishedAt *time.Time            `json:"finishedAt"`
+	Failure    *APIReviewFailureView `json:"failure"`
+	Review     json.RawMessage       `json:"review"`
 }

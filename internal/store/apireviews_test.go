@@ -699,3 +699,50 @@ func TestChangesWithoutFatesLeaveOutAPIReviews(t *testing.T) {
 		t.Errorf("ChangesWithoutFates = %+v, %v; want only the merge request %+v", got, err, mr1)
 	}
 }
+
+func TestAPIClientStats(t *testing.T) {
+	s := newStore(t)
+	a := newAPIClient(t, s, "client-a")
+	b := newAPIClient(t, s, "client-b")
+	idle := newAPIClient(t, s, "client-idle")
+	newAPIKey(t, s, a.ID, "ci", "11111111")
+	newAPIKey(t, s, a.ID, "ops", "22222222")
+	newAPIKey(t, s, b.ID, "ci", "33333333")
+
+	since := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	setCreated := func(id string, at time.Time) {
+		t.Helper()
+		if _, err := s.pool.Exec(ctx, `UPDATE api_reviews SET created_at = $2 WHERE run_id = $1::uuid`, id, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inMonth := since.Add(48 * time.Hour)
+
+	ok := seedAPIUsage(t, s, a.ID, "s1", inMonth, SkillUsage{Skill: "security", Verdict: "no_blocking_issues", In: 100, Out: 20},
+		SkillUsage{Skill: "style", Verdict: "no_blocking_issues", In: 30, Out: 5})
+	setCreated(ok, inMonth)
+	setRun(t, s, ok, `state = 'published'`)
+	bad := seedAPIUsage(t, s, a.ID, "s2", inMonth, SkillUsage{Skill: "security", Verdict: "failed", In: 7, Out: 3})
+	setCreated(bad, inMonth)
+	setRun(t, s, bad, `state = 'published', result = '{"status":"failed"}'::jsonb`)
+	queued := enqueueAPI(t, s, apiRequest(a.ID, "acme", "s3")) // no usage yet
+	setCreated(queued, inMonth)
+	old := seedAPIUsage(t, s, a.ID, "s4", since.Add(-time.Second), SkillUsage{Skill: "security", Verdict: "failed", In: 1000, Out: 1000})
+	setCreated(old, since.Add(-time.Second))
+	setRun(t, s, old, `state = 'published', result = '{"status":"failed"}'::jsonb`)
+	other := seedAPIUsage(t, s, b.ID, "s1", inMonth, SkillUsage{Skill: "security", Verdict: "no_blocking_issues", In: 4, Out: 1})
+	setCreated(other, inMonth)
+
+	got, err := s.APIClientStats(ctx, since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[int64]APIClientStats{
+		a.ID:    {Keys: 2, Reviews: 3, Failed: 1, Tokens: 165},
+		b.ID:    {Keys: 1, Reviews: 1, Failed: 0, Tokens: 5},
+		idle.ID: {},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("APIClientStats = %+v, want %+v", got, want)
+	}
+}

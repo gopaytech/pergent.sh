@@ -201,16 +201,24 @@ func (d *Dashboard) listAPIClients(w http.ResponseWriter, r *http.Request) {
 		d.failed(w, r, "listing the API clients", err)
 		return
 	}
+	stats, err := d.Store.APIClientStats(r.Context(), monthStart(d.now()))
+	if err != nil {
+		d.failed(w, r, "counting the API clients' reviews", err)
+		return
+	}
 	out := APIClientListView{Items: make([]APIClientRowView, 0, len(clients))}
 	for _, c := range clients {
-		keys, err := d.Store.APIKeys(r.Context(), c.ID)
-		if err != nil {
-			d.failed(w, r, "listing the API keys", err)
-			return
-		}
-		out.Items = append(out.Items, APIClientRowView{Name: c.Name, Keys: len(keys)})
+		st := stats[c.ID]
+		out.Items = append(out.Items, APIClientRowView{Name: c.Name, Keys: int(st.Keys),
+			ReviewsThisMonth: st.Reviews, FailedThisMonth: st.Failed, TokensThisMonth: st.Tokens})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// monthStart is midnight UTC on the 1st of the month t is in, UTC.
+func monthStart(t time.Time) time.Time {
+	t = t.UTC()
+	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
 }
 
 // --- POST /api/admin/api-clients ---

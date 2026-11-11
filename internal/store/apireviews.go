@@ -280,6 +280,45 @@ func (s *Store) APIReviews(ctx context.Context, f APIReviewFilter) ([]APIReview,
 	return out, rows.Err()
 }
 
+// APIClientStats is what a client did from some time on: its API reviews (of
+// any status), how many of them failed (the v1 status), the tokens its
+// reviews' skills used, and how many keys it has now.
+type APIClientStats struct {
+	Keys, Reviews, Failed, Tokens int64
+}
+
+// APIClientStats returns the stats of every client by ID, with the reviews
+// created at or after since. A client with no review has zero counts; every
+// client is there. It is one query, whatever the number of clients.
+func (s *Store) APIClientStats(ctx context.Context, since time.Time) (map[int64]APIClientStats, error) {
+	rows, err := s.pool.Query(ctx, `SELECT c.id, (SELECT count(*) FROM api_keys k WHERE k.client_id = c.id),
+			COALESCE(m.reviews, 0), COALESCE(m.failed, 0), COALESCE(m.tokens, 0)
+		FROM api_clients c LEFT JOIN (
+			SELECT ar.client_id, count(*) AS reviews, count(*) FILTER (WHERE `+apiStatusSQL["failed"]+`) AS failed,
+				COALESCE(sum(u.tokens), 0)::bigint AS tokens
+			FROM api_reviews ar JOIN runs ON runs.id = ar.run_id
+			LEFT JOIN (SELECT run_id, sum(tokens_in + tokens_out) AS tokens FROM run_usage GROUP BY run_id) u
+				ON u.run_id = ar.run_id
+			WHERE ar.created_at >= $1
+			GROUP BY ar.client_id) m ON m.client_id = c.id`, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]APIClientStats{}
+	for rows.Next() {
+		var (
+			id int64
+			st APIClientStats
+		)
+		if err := rows.Scan(&id, &st.Keys, &st.Reviews, &st.Failed, &st.Tokens); err != nil {
+			return nil, err
+		}
+		out[id] = st
+	}
+	return out, rows.Err()
+}
+
 // APIReviewInputs returns the sealed inputs of the API review runID. found is
 // false once they are dropped, or for an unknown run.
 func (s *Store) APIReviewInputs(ctx context.Context, runID string) ([]byte, bool, error) {

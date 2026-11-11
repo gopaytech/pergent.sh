@@ -2949,6 +2949,116 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/api-clients/{name}/reviews:
+    get:
+      operationId: listApiClientReviews
+      tags: [API clients]
+      summary: A client's reviews
+      description: |
+        Admins only. The client's API reviews, newest first, 50 at most.
+        `tenant` and `subject` match exactly; leave them out to match any.
+        `nextCursor`, when not empty, is passed as `cursor` for the next page.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/ApiClientName'
+        - name: tenant
+          in: query
+          description: Only this tenant's reviews.
+          schema: {type: string}
+        - name: subject
+          in: query
+          description: Only this subject's reviews.
+          schema: {type: string}
+        - name: status
+          in: query
+          description: Only reviews with this status.
+          schema:
+            type: string
+            enum: [queued, running, completed, failed, superseded]
+        - name: cursor
+          in: query
+          description: A `nextCursor` of an earlier answer.
+          schema: {type: string}
+      responses:
+        '200':
+          description: One page of reviews.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/APIReviewListView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/api-reviews/{id}:
+    get:
+      operationId: getApiReview
+      tags: [API clients]
+      summary: One API review
+      description: |
+        Admins only. The review of any client. `review` is the v1 body the API
+        answers with: the one stored when the review was published, or, before
+        that, the body the API builds from the review's state. A merge request's
+        run is not found here.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/ApiReviewId'
+      responses:
+        '200':
+          description: The review.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/APIReviewDetailView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/api-reviews/{id}/log:
+    get:
+      operationId: getApiReviewLog
+      tags: [API clients]
+      summary: The redacted tail of an API review's Job log
+      description: Admins only. Not found when no log was kept.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/ApiReviewId'
+      responses:
+        '200':
+          description: The log text.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LogView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/api-reviews/{id}/diagnostics:
+    get:
+      operationId: getApiReviewDiagnostics
+      tags: [API clients]
+      summary: What was kept of a failed API review Job
+      description: Admins only. The clone log as it was and the pod's state. Not found when nothing was kept.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/ApiReviewId'
+      responses:
+        '200':
+          description: The diagnostics.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DiagnosticsView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/sign-in:
     get:
       operationId: getSignIn
@@ -3380,6 +3490,14 @@ components:
       required: true
       description: The client's name.
       schema: {type: string}
+    ApiReviewId:
+      name: id
+      in: path
+      required: true
+      description: The API review's id.
+      schema:
+        type: string
+        format: uuid
     ApiKeyId:
       name: id
       in: path
@@ -4895,12 +5013,15 @@ components:
           format: date-time
           description: In the future. Null or left out for a key that does not expire.
     APIClientRowView:
-      description: One line of the list of clients.
+      description: One line of the list of clients. The counts are of the reviews created from the 1st of the UTC month.
       type: object
-      required: [name, keys]
+      required: [name, keys, reviewsThisMonth, failedThisMonth, tokensThisMonth]
       properties:
         name: {type: string}
         keys: {type: integer, description: How many keys the client has.}
+        reviewsThisMonth: {type: integer, format: int64, description: Reviews of any status.}
+        failedThisMonth: {type: integer, format: int64, description: Reviews whose status is `failed`.}
+        tokensThisMonth: {type: integer, format: int64, description: Input plus output tokens the reviews used.}
     APIClientListView:
       type: object
       required: [items]
@@ -4908,6 +5029,72 @@ components:
         items:
           type: array
           items: {$ref: '#/components/schemas/APIClientRowView'}
+    APIReviewRowView:
+      description: One line of a client's reviews.
+      type: object
+      required: [id, tenant, subject, title, status, verdict, createdAt, finishedAt]
+      properties:
+        id: {type: string, format: uuid}
+        tenant: {type: string}
+        subject: {type: string}
+        title: {type: string}
+        status:
+          type: string
+          enum: [queued, running, completed, failed, superseded]
+        verdict:
+          type: string
+          description: Empty while the review has none.
+        createdAt: {type: string, format: date-time}
+        finishedAt: {type: [string, 'null'], format: date-time}
+    APIReviewListView:
+      description: One page of a client's reviews, newest first.
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/APIReviewRowView'}
+        nextCursor:
+          type: string
+          description: 'Not "" when there is a next page: pass it as cursor.'
+    APIReviewFailureView:
+      description: Why an API review failed.
+      type: object
+      required: [step, reason, detail]
+      properties:
+        step:
+          type: string
+          enum: [starting, review, delivery, unknown]
+        reason: {type: string, description: What the caller is told.}
+        detail: {type: string, description: More, for admins. May be empty.}
+    APIReviewDetailView:
+      description: One API review.
+      type: object
+      required: [id, client, tenant, subject, title, keyName, status, model, createdAt, finishedAt, failure, review]
+      properties:
+        id: {type: string, format: uuid}
+        client: {type: string}
+        tenant: {type: string}
+        subject: {type: string}
+        title: {type: string}
+        keyName: {type: string, description: The name of the key the review was asked for with.}
+        status:
+          type: string
+          enum: [queued, running, completed, failed, superseded]
+        model:
+          type: [string, 'null']
+          description: The model the review ran with; null for a review that did not record it.
+        createdAt: {type: string, format: date-time}
+        finishedAt: {type: [string, 'null'], format: date-time}
+        failure:
+          oneOf:
+            - {$ref: '#/components/schemas/APIReviewFailureView'}
+            - {type: 'null'}
+          description: Null unless the review failed.
+        review:
+          allOf:
+            - $ref: '#/components/schemas/ReviewApiReview'
+          description: The v1 body, as the API answers with it.
     APIKeyView:
       description: One of a client's keys. Never the key itself; the prefix finds it in a leak scan.
       type: object

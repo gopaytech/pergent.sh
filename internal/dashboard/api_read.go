@@ -317,7 +317,13 @@ type cursorJSON struct {
 }
 
 func encodeCursor(r store.RunDigest) string {
-	b, _ := json.Marshal(cursorJSON{At: r.UpdatedAt, ID: r.ID})
+	return encodeCursorAt(r.UpdatedAt, r.ID)
+}
+
+// encodeCursorAt is the cursor that ends a page at the row with this time and
+// run ID.
+func encodeCursorAt(at time.Time, id string) string {
+	b, _ := json.Marshal(cursorJSON{At: at, ID: id})
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
