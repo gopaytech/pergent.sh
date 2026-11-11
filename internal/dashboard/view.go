@@ -1328,13 +1328,33 @@ type UsageRepositoryRowView struct {
 	Reviews    int64           `json:"reviews"`
 }
 
-// UsageOverviewView is GET /api/admin/usage (admins).
+// UsageTenantView is one tenant of an API client in GET /api/admin/usage.
+// Tenant is "" for reviews asked for with no tenant.
+type UsageTenantView struct {
+	Tenant  string          `json:"tenant"`
+	Tokens  UsageTokensView `json:"tokens"`
+	Reviews int64           `json:"reviews"`
+}
+
+// UsageClientView is one API client in GET /api/admin/usage, with its busiest
+// tenants. MoreTenants counts the tenants left out of Tenants.
+type UsageClientView struct {
+	Name        string            `json:"name"`
+	Tokens      UsageTokensView   `json:"tokens"`
+	Reviews     int64             `json:"reviews"`
+	Tenants     []UsageTenantView `json:"tenants"`
+	MoreTenants int               `json:"moreTenants"`
+}
+
+// UsageOverviewView is GET /api/admin/usage (admins). Tokens and Reviews
+// cover the repositories and the clients.
 type UsageOverviewView struct {
 	Days         int                      `json:"days"`
 	Tokens       UsageTokensView          `json:"tokens"`
 	Reviews      int64                    `json:"reviews"`
 	Daily        []UsageDayView           `json:"daily"`
 	Repositories []UsageRepositoryRowView `json:"repositories"`
+	Clients      []UsageClientView        `json:"clients"`
 }
 
 // UsageNamedView is one skill or model of a repository's usage. Provider is

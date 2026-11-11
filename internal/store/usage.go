@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
@@ -72,6 +73,16 @@ type TokenSum struct {
 	In, Out                          int64
 	CacheRead, CacheWrite, Reasoning int64
 	Unknown                          int64 // rows without cache and reasoning counts
+}
+
+// add adds b to t.
+func (t *TokenSum) add(b TokenSum) {
+	t.In += b.In
+	t.Out += b.Out
+	t.CacheRead += b.CacheRead
+	t.CacheWrite += b.CacheWrite
+	t.Reasoning += b.Reasoning
+	t.Unknown += b.Unknown
 }
 
 // dests are the scan targets for tokenSumColumns, in its order.
@@ -183,6 +194,73 @@ func (s *Store) UsageByRepository(ctx context.Context, since time.Time) ([]RepoU
 		err := row.Scan(append([]any{&u.Instance, &u.ProjectID, &u.ProjectPath}, append(u.Tokens.dests(), &u.Reviews)...)...)
 		return u, err
 	})
+}
+
+// TenantUsage is what the reviews of one tenant of an API client used. Tenant
+// is "" for reviews asked for with no tenant.
+type TenantUsage struct {
+	Tenant  string
+	Tokens  TokenSum
+	Reviews int64
+}
+
+// ClientUsage is what one API client's reviews used, with its tenants, busiest
+// first.
+type ClientUsage struct {
+	Name    string
+	Tokens  TokenSum
+	Reviews int64
+	Tenants []TenantUsage
+}
+
+// UsageByAPIClient returns what each API client's reviews used since the given
+// time, busiest first, with its tenants busiest first. It counts as
+// UsageByRepository does, by when the usage was reported, so the page's totals
+// are its daily chart's: a client with no usage in the period is not listed,
+// and Reviews counts the reviews that left usage.
+func (s *Store) UsageByAPIClient(ctx context.Context, since time.Time) ([]ClientUsage, error) {
+	rows, err := s.pool.Query(ctx, `SELECT c.name, ar.tenant, `+tokenSumColumnsOfUsage+`, count(DISTINCT u.run_id)
+		FROM run_usage u JOIN api_reviews ar ON ar.run_id = u.run_id JOIN api_clients c ON c.id = ar.client_id
+		WHERE u.reported_at >= $1::timestamptz
+		GROUP BY c.name, ar.tenant
+		ORDER BY COALESCE(sum(u.tokens_in), 0) + COALESCE(sum(u.tokens_out), 0) DESC, c.name, ar.tenant`, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ClientUsage
+	at := map[string]int{}
+	for rows.Next() {
+		var (
+			name string
+			t    TenantUsage
+		)
+		if err := rows.Scan(append([]any{&name, &t.Tenant}, append(t.Tokens.dests(), &t.Reviews)...)...); err != nil {
+			return nil, err
+		}
+		i, ok := at[name]
+		if !ok {
+			i = len(out)
+			at[name] = i
+			out = append(out, ClientUsage{Name: name})
+		}
+		c := &out[i]
+		c.Tenants = append(c.Tenants, t)
+		c.Tokens.add(t.Tokens)
+		// A run has one tenant, so the counts add up.
+		c.Reviews += t.Reviews
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	total := func(c ClientUsage) int64 { return c.Tokens.In + c.Tokens.Out }
+	sort.SliceStable(out, func(i, j int) bool {
+		if a, b := total(out[i]), total(out[j]); a != b {
+			return a > b
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
 }
 
 // UsageDaily returns what was used on each day since the given time, oldest
@@ -485,6 +563,11 @@ type MetricsTotals struct {
 	SkillRuns  []SkillRunTotal
 	Findings   []FindingTotal
 	Dismissals []DismissalTotal
+	// The API clients' counts are by client, never by tenant: a tenant is the
+	// caller's own customer.
+	APIReviews   []APIReviewTotal
+	APITokens    []APITokenTotal
+	APICallbacks []APICallbackTotal
 }
 
 // TokenTotal is what one skill used with one model in one repository.
@@ -537,8 +620,41 @@ type DismissalTotal struct {
 	Dismissals               int64
 }
 
+// APIReviewTotal is the finished API reviews of one client that ended in one
+// result: a stored verdict (Outcome* of runs.outcome) or "superseded". A
+// review still queued or running is not counted yet.
+type APIReviewTotal struct {
+	Client, Result string
+	Reviews        int64
+}
+
+// APITokenTotal is what the reviews of one API client used. Rows is the run
+// and skill rows counted; Tokens.Unknown of them did not report cache and
+// reasoning.
+type APITokenTotal struct {
+	Client string
+	Tokens TokenSum
+	Rows   int64
+}
+
+// The outcomes of an API client's callbacks (APICallbackTotal).
+const (
+	CallbackOutcomeDelivered     = "delivered"
+	CallbackOutcomeFailedAttempt = "failed_attempt"
+	CallbackOutcomeGaveUp        = "gave_up"
+)
+
+// APICallbackTotal is the callbacks of one API client by outcome. Delivered
+// and gave_up count callbacks; failed_attempt counts tries, so a callback
+// that failed twice and then went through adds 2 and 1.
+type APICallbackTotal struct {
+	Client, Outcome string
+	Count           int64
+}
+
 // MetricsTotals returns the counts for the metrics, one grouped query per
-// kind. An API review has no repository and is left out of all of them. A review with no result and one stopped by a newer push are told
+// kind. An API review has no repository and is left out of the first seven;
+// the API clients' counts are the last three. A review with no result and one stopped by a newer push are told
 // apart as UsageWasted does, so the page and the metrics agree. Dismissals
 // come from the dismissals table, which loses a repository's rows when the
 // repository is switched off.
@@ -631,6 +747,62 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	if t.Dismissals, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (DismissalTotal, error) {
 		var u DismissalTotal
 		err := row.Scan(&u.Instance, &u.Project, &u.Skill, &u.Dismissals)
+		return u, err
+	}); err != nil {
+		return MetricsTotals{}, err
+	}
+
+	// An API review is finished once published, and its recorded outcome says
+	// how; a superseded one never was, and one whose publishing failed is a
+	// failure as the v1 status has it.
+	if rows, err = s.pool.Query(ctx, `SELECT c.name,
+			CASE r.state WHEN 'superseded' THEN 'superseded' WHEN 'publish_failed' THEN 'failed' ELSE r.outcome END, count(*)
+		FROM api_reviews ar JOIN runs r ON r.id = ar.run_id JOIN api_clients c ON c.id = ar.client_id
+		WHERE r.state IN ('published', 'publish_failed', 'superseded')
+		GROUP BY 1, 2`); err != nil {
+		return MetricsTotals{}, err
+	}
+	if t.APIReviews, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (APIReviewTotal, error) {
+		var u APIReviewTotal
+		err := row.Scan(&u.Client, &u.Result, &u.Reviews)
+		return u, err
+	}); err != nil {
+		return MetricsTotals{}, err
+	}
+
+	if rows, err = s.pool.Query(ctx, `SELECT c.name, `+tokenSumColumnsOfUsage+`, count(*)
+		FROM run_usage u JOIN api_reviews ar ON ar.run_id = u.run_id JOIN api_clients c ON c.id = ar.client_id
+		GROUP BY c.name`); err != nil {
+		return MetricsTotals{}, err
+	}
+	if t.APITokens, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (APITokenTotal, error) {
+		var u APITokenTotal
+		err := row.Scan(append([]any{&u.Client}, append(u.Tokens.dests(), &u.Rows)...)...)
+		return u, err
+	}); err != nil {
+		return MetricsTotals{}, err
+	}
+
+	// A callback given up for want of a URL is an admin's choice, not a
+	// failure: CountUndeliveredAPICallbacks leaves it out too.
+	if rows, err = s.pool.Query(ctx, `SELECT c.name, 'delivered', count(*)
+			FROM api_callbacks cb JOIN api_clients c ON c.id = cb.client_id
+			WHERE cb.delivered_at IS NOT NULL GROUP BY c.name
+		UNION ALL
+		SELECT c.name, 'failed_attempt', count(*)
+			FROM api_callback_attempts a JOIN api_callbacks cb ON cb.id = a.callback_id JOIN api_clients c ON c.id = cb.client_id
+			WHERE NOT (a.error = '' AND a.status_code BETWEEN 200 AND 299) AND a.error <> $1::text GROUP BY c.name
+		UNION ALL
+		SELECT c.name, 'gave_up', count(*)
+			FROM api_callbacks cb JOIN api_clients c ON c.id = cb.client_id
+			WHERE cb.gave_up_at IS NOT NULL
+			  AND NOT EXISTS (SELECT 1 FROM api_callback_attempts a WHERE a.callback_id = cb.id AND a.error = $1::text)
+			GROUP BY c.name`, CallbackNoURL); err != nil {
+		return MetricsTotals{}, err
+	}
+	if t.APICallbacks, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (APICallbackTotal, error) {
+		var u APICallbackTotal
+		err := row.Scan(&u.Client, &u.Outcome, &u.Count)
 		return u, err
 	}); err != nil {
 		return MetricsTotals{}, err

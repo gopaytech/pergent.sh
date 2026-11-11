@@ -60,10 +60,15 @@ func TestDashboardNamesRealMetrics(t *testing.T) {
 }
 
 // Switching a repository off moves its whole count to "(switched off)", which
-// increase() reads as a burst of usage: no query counts that series.
+// increase() reads as a burst of usage: no query counts that series. The API
+// metrics have a client label and no repository, so they are left to the next
+// test.
 func TestDashboardLeavesOutSwitchedOff(t *testing.T) {
 	for _, expr := range dashboardExprs(t) {
 		for _, sel := range regexp.MustCompile(`pergent_[a-z_]+\{[^}]*\}`).FindAllString(expr, -1) {
+			if strings.HasPrefix(sel, "pergent_api_") {
+				continue
+			}
 			if !strings.Contains(sel, `repository!="(switched off)"`) {
 				t.Errorf("selector counts (switched off): %s", sel)
 			}
@@ -71,5 +76,28 @@ func TestDashboardLeavesOutSwitchedOff(t *testing.T) {
 		if regexp.MustCompile(`pergent_[a-z_]+(\[|\)|\s|$)`).MatchString(expr) {
 			t.Errorf("a metric with no selector: %s", expr)
 		}
+	}
+}
+
+// The API metrics are by client: a query asks for a client and never filters
+// by the repository labels they do not have, and none names a tenant.
+func TestDashboardAPIQueriesUseClient(t *testing.T) {
+	n := 0
+	for _, expr := range dashboardExprs(t) {
+		if !strings.Contains(expr, "pergent_api_") {
+			continue
+		}
+		n++
+		for _, bad := range []string{"repository", "platform_instance", "tenant", "$skill", "$model"} {
+			if strings.Contains(expr, bad) {
+				t.Errorf("an API query names %q: %s", bad, expr)
+			}
+		}
+		if !strings.Contains(expr, "client=~") {
+			t.Errorf("an API query has no client selector: %s", expr)
+		}
+	}
+	if n == 0 {
+		t.Error("the dashboard has no API query")
 	}
 }

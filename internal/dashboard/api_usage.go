@@ -17,6 +17,9 @@ const (
 	maxUsageDays     = 90
 	// usageMRLimit is how many merge requests a repository's usage lists.
 	usageMRLimit = 50
+	// usageTenantLimit is how many tenants a client's usage lists: a caller
+	// makes as many as it likes.
+	usageTenantLimit = 100
 
 	msgBadUsageDays = "days must be a number from 1 to 90"
 )
@@ -56,8 +59,10 @@ func usageNamed(rows []store.NamedUsage) []UsageNamedView {
 // --- GET /api/admin/usage ---
 
 // usageOverview serves what every repository used in the last days: the
-// totals, each day, and the repositories busiest first, those switched off
-// since and those of a removed instance too.
+// totals, each day, the repositories busiest first, those switched off since
+// and those of a removed instance too, and the API clients busiest first. The
+// totals are the repositories plus the clients, which is what the daily chart
+// adds up to.
 func (d *Dashboard) usageOverview(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	days, ok := parseDays(r, defaultUsageDays, maxUsageDays)
@@ -67,6 +72,11 @@ func (d *Dashboard) usageOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	since := d.now().Add(-time.Duration(days) * day)
 	repos, err := d.Store.UsageByRepository(ctx, since)
+	if err != nil {
+		d.failed(w, r, "reading usage", err)
+		return
+	}
+	clients, err := d.Store.UsageByAPIClient(ctx, since)
 	if err != nil {
 		d.failed(w, r, "reading usage", err)
 		return
@@ -83,7 +93,8 @@ func (d *Dashboard) usageOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	switchedOn := byProject(on)
 
-	out := UsageOverviewView{Days: days, Daily: usageDays(daily), Repositories: make([]UsageRepositoryRowView, 0, len(repos))}
+	out := UsageOverviewView{Days: days, Daily: usageDays(daily), Repositories: make([]UsageRepositoryRowView, 0, len(repos)),
+		Clients: make([]UsageClientView, 0, len(clients))}
 	var total store.TokenSum
 	for _, u := range repos {
 		_, isOn := switchedOn[repoKey(u.Instance, u.ProjectPath)]
@@ -92,6 +103,20 @@ func (d *Dashboard) usageOverview(w http.ResponseWriter, r *http.Request) {
 		addTokens(&total, u.Tokens)
 		// A run belongs to one repository, so the counts add up.
 		out.Reviews += u.Reviews
+	}
+	for _, c := range clients {
+		v := UsageClientView{Name: c.Name, Tokens: usageTokens(c.Tokens), Reviews: c.Reviews,
+			Tenants: make([]UsageTenantView, 0, min(len(c.Tenants), usageTenantLimit))}
+		for i, t := range c.Tenants {
+			if i == usageTenantLimit {
+				v.MoreTenants = len(c.Tenants) - usageTenantLimit
+				break
+			}
+			v.Tenants = append(v.Tenants, UsageTenantView{Tenant: t.Tenant, Tokens: usageTokens(t.Tokens), Reviews: t.Reviews})
+		}
+		out.Clients = append(out.Clients, v)
+		addTokens(&total, c.Tokens)
+		out.Reviews += c.Reviews
 	}
 	out.Tokens = usageTokens(total)
 	writeJSON(w, http.StatusOK, out)

@@ -452,14 +452,29 @@ export type UsageRepositoryRowView = {
   reviews: number;
 };
 
+// UsageTenantView is one tenant of an API client in the usage overview;
+// tenant is "" for reviews asked for with no tenant.
+export type UsageTenantView = { tenant: string; tokens: UsageTokensView; reviews: number };
+
+// UsageClientView is one API client of the usage overview, with its busiest
+// tenants. moreTenants counts the tenants with usage that tenants leaves out.
+export type UsageClientView = {
+  name: string;
+  tokens: UsageTokensView;
+  reviews: number;
+  tenants: UsageTenantView[];
+  moreTenants: number;
+};
+
 // UsageOverviewView is GET /api/admin/usage?days=N (admins), read by the
-// Usage page.
+// Usage page. tokens and reviews cover the repositories and the clients.
 export type UsageOverviewView = {
   days: number;
   tokens: UsageTokensView;
   reviews: number;
   daily: UsageDayView[];
   repositories: UsageRepositoryRowView[];
+  clients: UsageClientView[];
 };
 
 // UsageNamedView is one skill or model of a repository's usage. failed is

@@ -740,6 +740,20 @@ export const usageOverview: UsageOverviewView = {
     { instance: "main", project: "acme/widgets", switchedOn: true, tokens: tok(200_000, 80_000), reviews: 8 },
     { instance: "main", project: "acme/old", switchedOn: false, tokens: tok(100_000, 20_000), reviews: 2 },
   ],
+  clients: [
+    {
+      name: "fastgateway",
+      tokens: tok(50_000, 10_000),
+      reviews: 6,
+      tenants: [
+        { tenant: "acme", tokens: tok(40_000, 8_000), reviews: 4 },
+        { tenant: "<img src=x onerror=alert(1)>", tokens: tok(10_000, 2_000), reviews: 1 },
+        { tenant: "", tokens: tok(0, 0), reviews: 1 },
+      ],
+      moreTenants: 0,
+    },
+    { name: "docs-bot", tokens: tok(5_000, 1_000), reviews: 2, tenants: [{ tenant: "beta", tokens: tok(5_000, 1_000), reviews: 2 }], moreTenants: 7 },
+  ],
 };
 
 // One repository's usage: the apart counts of the first skill are unknown for

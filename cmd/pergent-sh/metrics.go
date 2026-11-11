@@ -64,6 +64,23 @@ func metricsSource(st metricsStore, repos repoLister) func(context.Context) (met
 	}
 }
 
+type kindCount struct {
+	kind string
+	n    int64
+}
+
+// tokenKinds are the token counts of rows run and skill rows, by kind. Cache
+// and reasoning counts are unknown, not zero, for results from an older
+// pergent: when no row reported them the series are left out. When some did,
+// their sum stands.
+func tokenKinds(t store.TokenSum, rows int64) []kindCount {
+	kinds := []kindCount{{"input", t.In}, {"output", t.Out}}
+	if t.Unknown < rows {
+		kinds = append(kinds, kindCount{"reasoning", t.Reasoning}, kindCount{"cache_read", t.CacheRead}, kindCount{"cache_write", t.CacheWrite})
+	}
+	return kinds
+}
+
 // snapshotOf turns the totals into the metrics. A repository is named only if
 // it is in on (matched ignoring case, as the platforms do, and spelled as on
 // has it), and a skill only if the library or a switched-on repository's own
@@ -107,6 +124,22 @@ func snapshotOf(t store.MetricsTotals, on []settings.Effective, library []store.
 		}
 		return labelOtherVerdict
 	}
+	// result is what an API review ended in: the recorded outcome of a v1
+	// verdict, or superseded.
+	result := func(v string) string {
+		switch v {
+		case store.OutcomeNoBlocking, store.OutcomeBlocking, store.OutcomeNothingReviewed, store.OutcomeFailed, store.OutcomeSuperseded:
+			return v
+		}
+		return labelOtherVerdict
+	}
+	callbackOutcome := func(v string) string {
+		switch v {
+		case store.CallbackOutcomeDelivered, store.CallbackOutcomeFailedAttempt, store.CallbackOutcomeGaveUp:
+			return v
+		}
+		return labelOtherVerdict
+	}
 	step := func(v string) string {
 		switch v {
 		case kube.StepStarting, kube.StepClone, kube.StepReview, kube.StepDelivery, kube.StepUnknown:
@@ -120,18 +153,7 @@ func snapshotOf(t store.MetricsTotals, on []settings.Effective, library []store.
 	for _, u := range t.Tokens {
 		base := []metrics.Label{label("platform_instance", u.Instance), label("repository", repo(u.Instance, u.Project)),
 			label("skill", skill(u.Skill)), label("model", u.Model)}
-		type kindCount struct {
-			kind string
-			n    int64
-		}
-		kinds := []kindCount{{"input", u.Tokens.In}, {"output", u.Tokens.Out}}
-		// Cache and reasoning counts are unknown, not zero, for results from
-		// an older pergent: when no row of the group reported them the series
-		// are left out. When some did, their sum stands.
-		if u.Tokens.Unknown < u.Rows {
-			kinds = append(kinds, kindCount{"reasoning", u.Tokens.Reasoning},
-				kindCount{"cache_read", u.Tokens.CacheRead}, kindCount{"cache_write", u.Tokens.CacheWrite})
-		}
+		kinds := tokenKinds(u.Tokens, u.Rows)
 		for _, k := range kinds {
 			snap.Add(metrics.TokensTotal, k.n, append(base[:4:4], label("kind", k.kind))...)
 		}
@@ -159,6 +181,20 @@ func snapshotOf(t store.MetricsTotals, on []settings.Effective, library []store.
 	for _, u := range t.Dismissals {
 		snap.Add(metrics.FindingsDismissed, u.Dismissals, label("platform_instance", u.Instance), label("repository", repo(u.Instance, u.Project)),
 			label("skill", skill(u.Skill)))
+	}
+	// An API client's name is its own label: clients are few and only an admin
+	// makes one. No tenant, subject or key is a label.
+	for _, u := range t.APIReviews {
+		snap.Add(metrics.APIReviewsTotal, u.Reviews, label("client", u.Client), label("result", result(u.Result)))
+	}
+	for _, u := range t.APITokens {
+		kinds := tokenKinds(u.Tokens, u.Rows)
+		for _, k := range kinds {
+			snap.Add(metrics.APITokensTotal, k.n, label("client", u.Client), label("kind", k.kind))
+		}
+	}
+	for _, u := range t.APICallbacks {
+		snap.Add(metrics.APICallbacksTotal, u.Count, label("client", u.Client), label("outcome", callbackOutcome(u.Outcome)))
 	}
 	return snap
 }

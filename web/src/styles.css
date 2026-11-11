@@ -1144,6 +1144,14 @@ details.skill-doc[open] summary::before {
   font-variant-numeric: tabular-nums;
 }
 
+/* A tenant's row under its API client on the Usage page. */
+.table .tenant-row td:first-child {
+  padding-left: 28px;
+}
+.table .tenant-row td {
+  color: var(--muted);
+}
+
 .table progress {
   width: 100%;
 }

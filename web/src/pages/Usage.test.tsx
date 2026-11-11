@@ -24,6 +24,35 @@ describe("Usage", () => {
     expect(within(rows[0]).getAllByRole("cell").slice(0, 5).map((c) => c.textContent)).toEqual(["main/acme/payments", "30", "900k", "200k", "1.1M"]);
   });
 
+  it("lists the API clients with their tenants under each", async () => {
+    fakeApi({ "GET /api/me": { body: operator }, [`GET ${overviewPath}`]: { body: usageOverview } });
+    renderApp("/admin/usage");
+    const clients = (await screen.findByRole("region", { name: "API clients" })) as HTMLElement;
+    const rows = within(clients).getAllByRole("row").slice(1);
+    // A client's row, then one row per tenant under it; "" is no tenant.
+    expect(rows.map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual([
+      "fastgateway",
+      "acme",
+      "<img src=x onerror=alert(1)>",
+      "(no tenant)",
+      "docs-bot",
+      "beta",
+      "and 7 more tenants",
+    ]);
+    expect(within(rows[0]).getAllByRole("cell").slice(0, 5).map((c) => c.textContent)).toEqual(["fastgateway", "6", "50k", "10k", "60k"]);
+    expect(within(rows[1]).getAllByRole("cell").slice(0, 5).map((c) => c.textContent)).toEqual(["acme", "4", "40k", "8k", "48k"]);
+    expect(within(clients).getByRole("link", { name: "fastgateway" })).toHaveAttribute("href", "/api-clients/fastgateway");
+    // A tenant is text the caller wrote: shown as text, never as markup.
+    expect(clients.querySelector("img")).toBeNull();
+  });
+
+  it("says so when no API client used anything", async () => {
+    fakeApi({ "GET /api/me": { body: operator }, [`GET ${overviewPath}`]: { body: { ...usageOverview, clients: [] } } });
+    renderApp("/admin/usage");
+    const clients = await screen.findByRole("region", { name: "API clients" });
+    expect(within(clients).getByText("No usage in this period.")).toBeInTheDocument();
+  });
+
   it("links a repository to its page, and a switched-off one only to its CSV", async () => {
     fakeApi({ "GET /api/me": { body: operator }, [`GET ${overviewPath}`]: { body: usageOverview } });
     renderApp("/admin/usage");

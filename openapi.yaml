@@ -2320,9 +2320,10 @@ paths:
       description: |
         Admins only. Tokens used in the last `days` days: the total, each UTC
         day (a day with no usage is left out, oldest first) and the
-        repositories, busiest first. Every total and ranking adds input and
-        output tokens only; `cacheRead`, `cacheWrite` and `reasoning` are
-        shown apart. `unknown` counts the review-and-skill rows whose pergent
+        repositories and the API clients, busiest first (a client lists its
+        tenants). `tokens` and `reviews` cover both, as `daily` does. Every
+        total and ranking adds input and output tokens only; `cacheRead`,
+        `cacheWrite` and `reasoning` are shown apart. `unknown` counts the review-and-skill rows whose pergent
         did not report those three counts, so a result from an older pergent
         is unknown and never zero. `reviews` counts a review once, however
         many skills it ran. A repository switched off since, or on an
@@ -6252,10 +6253,41 @@ components:
           type: integer
           format: int64
           description: Reviews, a review once however many skills it ran.
+    UsageTenantView:
+      description: One tenant of an API client in `GET /api/admin/usage`.
+      type: object
+      required: [tenant, tokens, reviews]
+      properties:
+        tenant:
+          type: string
+          description: The tenant the reviews were asked for under; "" for none.
+        tokens: {$ref: '#/components/schemas/UsageTokensView'}
+        reviews:
+          type: integer
+          format: int64
+          description: Reviews, a review once however many skills it ran.
+    UsageClientView:
+      description: One API client in `GET /api/admin/usage`.
+      type: object
+      required: [name, tokens, reviews, tenants, moreTenants]
+      properties:
+        name: {type: string}
+        tokens: {$ref: '#/components/schemas/UsageTokensView'}
+        reviews:
+          type: integer
+          format: int64
+          description: Reviews that left usage, a review once however many skills it ran.
+        tenants:
+          type: array
+          description: Busiest first, at most 100.
+          items: {$ref: '#/components/schemas/UsageTenantView'}
+        moreTenants:
+          type: integer
+          description: Tenants with usage left out of `tenants`.
     UsageOverviewView:
       description: Body of `GET /api/admin/usage`.
       type: object
-      required: [days, tokens, reviews, daily, repositories]
+      required: [days, tokens, reviews, daily, repositories, clients]
       properties:
         days: {type: integer}
         tokens: {$ref: '#/components/schemas/UsageTokensView'}
@@ -6267,6 +6299,10 @@ components:
           type: array
           description: Busiest first.
           items: {$ref: '#/components/schemas/UsageRepositoryRowView'}
+        clients:
+          type: array
+          description: API clients with usage in the period, busiest first, each with its tenants.
+          items: {$ref: '#/components/schemas/UsageClientView'}
     UsageNamedView:
       description: One skill or model of a repository's usage.
       type: object

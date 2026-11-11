@@ -494,7 +494,13 @@ func TestAPIReviewsPages(t *testing.T) {
 // and records its skills, as seedUsage does for a merge request.
 func seedAPIUsage(t *testing.T, s *Store, clientID int64, subject string, at time.Time, skills ...SkillUsage) string {
 	t.Helper()
-	id := enqueueAPI(t, s, apiRequest(clientID, "acme", subject))
+	return seedTenantUsage(t, s, clientID, "acme", subject, at, skills...)
+}
+
+// seedTenantUsage is seedAPIUsage for a review asked for under tenant.
+func seedTenantUsage(t *testing.T, s *Store, clientID int64, tenant, subject string, at time.Time, skills ...SkillUsage) string {
+	t.Helper()
+	id := enqueueAPI(t, s, apiRequest(clientID, tenant, subject))
 	setRun(t, s, id, `state = 'reported', created_at = $2::timestamptz, reported_at = $2::timestamptz, dispatched_at = $2::timestamptz,
 		trigger = $3::text, model = 'm', result = '{"schema_version":1,"status":"completed","skills":[]}'::jsonb`, at, TriggerPush)
 	if err := s.RecordUsage(ctx, id, skills); err != nil {
@@ -936,5 +942,169 @@ func TestClaimQueuedIgnoresCapForMR(t *testing.T) {
 	setRun(t, s, a1, `state = 'reported'`)
 	if got, err := s.ClaimQueued(ctx, 10, claimAt); err != nil || !slices.Equal(runIDs(got), []string{a2}) {
 		t.Errorf("once a1 is reported = %v, %v; want %s", runIDs(got), err, a2)
+	}
+}
+
+// The usage page lists each client's usage with its tenants, busiest first,
+// counting by when the usage was reported as UsageByRepository does; a
+// client with no usage in the period, and a merge request's usage, are not in
+// it.
+func TestUsageByAPIClient(t *testing.T) {
+	s := newStore(t)
+	a := newAPIClient(t, s, "client-a")
+	b := newAPIClient(t, s, "client-b")
+	newAPIClient(t, s, "client-idle")
+
+	// client-a: acme has two reviews (one with two skills), beta has one.
+	seedTenantUsage(t, s, a.ID, "acme", "s1", usageAt(5, 10, 0), skillRow("security", "no_blocking_issues", 100, 20), skillRow("style", "no_blocking_issues", 30, 5))
+	seedTenantUsage(t, s, a.ID, "acme", "s2", usageAt(6, 10, 0), skillRow("security", "no_blocking_issues", 10, 0))
+	seedTenantUsage(t, s, a.ID, "beta", "s1", usageAt(7, 10, 0), skillRow("security", "no_blocking_issues", 300, 40))
+	// Before the period: not counted.
+	seedTenantUsage(t, s, a.ID, "acme", "s3", usageSince.Add(-time.Second), skillRow("security", "no_blocking_issues", 9000, 0))
+	// client-b is busier, and asks with no tenant.
+	seedTenantUsage(t, s, b.ID, "", "s1", usageAt(5, 11, 0), skillRow("security", "no_blocking_issues", 1000, 100))
+	// A merge request's usage is a repository's.
+	seedUsage(t, s, usageMR(7, 1), usageAt(5, 12, 0), TriggerPush, false, "m", skillRow("security", "no_blocking_issues", 70000, 0))
+
+	got, err := s.UsageByAPIClient(ctx, usageSince)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Name != "client-b" || got[1].Name != "client-a" {
+		t.Fatalf("UsageByAPIClient = %+v, want client-b then client-a, no idle client", got)
+	}
+	wantTokens(t, "client-b", got[0].Tokens, TokenSum{In: 1000, Out: 100})
+	if got[0].Reviews != 1 || len(got[0].Tenants) != 1 || got[0].Tenants[0].Tenant != "" || got[0].Tenants[0].Reviews != 1 {
+		t.Errorf("client-b = %+v, want one review of the empty tenant", got[0])
+	}
+	ca := got[1]
+	// Reviews counts a review once, however many skills it ran.
+	wantTokens(t, "client-a", ca.Tokens, TokenSum{In: 440, Out: 65})
+	if ca.Reviews != 3 || len(ca.Tenants) != 2 {
+		t.Fatalf("client-a = %+v, want 3 reviews over 2 tenants", ca)
+	}
+	// beta used 340, acme 165: busiest first.
+	if ca.Tenants[0].Tenant != "beta" || ca.Tenants[0].Reviews != 1 {
+		t.Errorf("first tenant = %+v, want beta with one review", ca.Tenants[0])
+	}
+	wantTokens(t, "beta", ca.Tenants[0].Tokens, TokenSum{In: 300, Out: 40})
+	if ca.Tenants[1].Tenant != "acme" || ca.Tenants[1].Reviews != 2 {
+		t.Errorf("second tenant = %+v, want acme with two reviews", ca.Tenants[1])
+	}
+	wantTokens(t, "acme", ca.Tenants[1].Tokens, TokenSum{In: 140, Out: 25})
+
+	// The page's total is its daily chart's: the repositories plus the clients.
+	repos, err := s.UsageByRepository(ctx, usageSince)
+	if err != nil {
+		t.Fatal(err)
+	}
+	days, err := s.UsageDaily(ctx, usageSince, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total, daily int64
+	for _, r := range repos {
+		total += r.Tokens.In + r.Tokens.Out
+	}
+	for _, c := range got {
+		total += c.Tokens.In + c.Tokens.Out
+	}
+	for _, d := range days {
+		daily += d.Tokens.In + d.Tokens.Out
+	}
+	if total != daily {
+		t.Errorf("repositories plus clients = %d tokens, the daily chart = %d", total, daily)
+	}
+}
+
+// The metrics count each API client's reviews by result, tokens and
+// callbacks, by client name and never by tenant.
+func TestMetricsTotalsAPIClients(t *testing.T) {
+	s := newStore(t)
+	a := newCallbackClient(t, s, "client-a")
+	b := newAPIClient(t, s, "client-b")
+	newAPIClient(t, s, "client-idle")
+
+	finish := func(clientID int64, tenant, subject string, dec RunDecision, skills ...SkillUsage) string {
+		t.Helper()
+		id := seedTenantUsage(t, s, clientID, tenant, subject, usageAt(5, 10, 0), skills...)
+		if err := s.FinishAPIReview(ctx, id, []byte(`{"status":"completed"}`), dec); err != nil {
+			t.Fatalf("FinishAPIReview: %v", err)
+		}
+		return id
+	}
+	clean := finish(a.ID, "acme", "s1", RunDecision{Outcome: OutcomeNoBlocking}, skillRow("security", "no_blocking_issues", 100, 20))
+	finish(a.ID, "beta", "s2", RunDecision{Outcome: OutcomeNoBlocking}, skillRow("security", "no_blocking_issues", 10, 1))
+	blocking := finish(a.ID, "acme", "s3", RunDecision{Outcome: OutcomeBlocking}, skillRow("security", "has_blocking_issues", 5, 5))
+	finish(b.ID, "", "s1", RunDecision{Outcome: OutcomeNothingReviewed})
+	finish(b.ID, "", "s2", RunDecision{Outcome: OutcomeFailed, Reason: "the review failed"})
+	// Publishing that failed is a failure; a newer request supersedes the first
+	// of its subject; a queued review is not counted yet.
+	pf := enqueueAPI(t, s, apiRequest(b.ID, "", "s3"))
+	setRun(t, s, pf, `state = 'publish_failed'`)
+	old := enqueueAPI(t, s, apiRequest(b.ID, "", "s4"))
+	enqueueAPI(t, s, apiRequest(b.ID, "", "s4"))
+	if apiState(t, s, old) != Superseded {
+		t.Fatal("the first request was not superseded")
+	}
+
+	// Callbacks of client-a: the clean review's takes two failed tries, then a
+	// 2xx; the blocking review's gives up; one more was given up for want of a URL.
+	now := time.Now()
+	attempt := func(runID string, att CallbackAttempt, delivered, gaveUp bool) {
+		t.Helper()
+		state, _ := callbackState(t, s, runID)
+		if state == CallbackNone {
+			t.Fatalf("review %s has no callback", runID)
+		}
+		var cb string
+		if err := s.pool.QueryRow(ctx, `SELECT id::text FROM api_callbacks WHERE run_id = $1::uuid`, runID).Scan(&cb); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.RecordAPICallbackAttempt(ctx, cb, att, delivered, now.Add(time.Minute), gaveUp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	attempt(clean, CallbackAttempt{At: now, StatusCode: 500}, false, false)
+	attempt(clean, CallbackAttempt{At: now, Error: "timeout"}, false, false)
+	attempt(clean, CallbackAttempt{At: now, StatusCode: 204}, true, false)
+	attempt(blocking, CallbackAttempt{At: now, StatusCode: 503}, false, true)
+	noURL := finish(a.ID, "acme", "s5", RunDecision{Outcome: OutcomeNoBlocking})
+	attempt(noURL, CallbackAttempt{At: now, Error: CallbackNoURL}, false, true)
+
+	got, err := s.MetricsTotals(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviews := map[[2]string]int64{}
+	for _, r := range got.APIReviews {
+		reviews[[2]string{r.Client, r.Result}] += r.Reviews
+	}
+	wantReviews := map[[2]string]int64{
+		{"client-a", OutcomeNoBlocking}: 3, {"client-a", OutcomeBlocking}: 1,
+		{"client-b", OutcomeNothingReviewed}: 1, {"client-b", OutcomeFailed}: 2, {"client-b", OutcomeSuperseded}: 1,
+	}
+	if !reflect.DeepEqual(reviews, wantReviews) {
+		t.Errorf("APIReviews = %v, want %v", reviews, wantReviews)
+	}
+
+	tokens := map[string]APITokenTotal{}
+	for _, r := range got.APITokens {
+		tokens[r.Client] = r
+	}
+	if len(tokens) != 1 || tokens["client-a"].Rows != 3 {
+		t.Fatalf("APITokens = %+v, want one row group for client-a over 3 rows", got.APITokens)
+	}
+	wantTokens(t, "client-a tokens", tokens["client-a"].Tokens, TokenSum{In: 115, Out: 26})
+
+	callbacks := map[[2]string]int64{}
+	for _, r := range got.APICallbacks {
+		callbacks[[2]string{r.Client, r.Outcome}] += r.Count
+	}
+	wantCallbacks := map[[2]string]int64{
+		{"client-a", CallbackOutcomeDelivered}: 1, {"client-a", CallbackOutcomeFailedAttempt}: 3, {"client-a", CallbackOutcomeGaveUp}: 1,
+	}
+	if !reflect.DeepEqual(callbacks, wantCallbacks) {
+		t.Errorf("APICallbacks = %v, want %v", callbacks, wantCallbacks)
 	}
 }
