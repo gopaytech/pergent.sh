@@ -25,6 +25,8 @@ type Store interface {
 	// Idempotency-Key, and the hash of the request it came with.
 	APIReviewByKey(ctx context.Context, clientID int64, key string) (store.APIReview, []byte, bool, error)
 	ResolveLibrary(ctx context.Context, names []string) (store.ResolvedLibrary, error)
+
+	DismissStore
 }
 
 // ModelSource tells which models exist. *instances.Registry satisfies it.
@@ -68,6 +70,8 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/client", h.RequireKey(http.HandlerFunc(h.client)))
 	mux.Handle("POST /v1/reviews", h.RequireKey(http.HandlerFunc(h.createReview)))
 	mux.Handle("GET /v1/reviews/{id}", h.RequireKey(http.HandlerFunc(h.getReview)))
+	mux.Handle("POST /v1/reviews/{id}/findings/{finding}/dismiss", h.RequireKey(http.HandlerFunc(h.dismissFinding)))
+	mux.Handle("DELETE /v1/reviews/{id}/findings/{finding}/dismiss", h.RequireKey(http.HandlerFunc(h.restoreFinding)))
 	mux.Handle("/v1/", h.RequireKey(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, CodeNotFound, "not found")
 	})))

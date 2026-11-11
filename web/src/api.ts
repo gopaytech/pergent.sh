@@ -878,9 +878,35 @@ export type APICallback = { state: APICallbackState; attempts: APICallbackAttemp
 // APICallbackTest is the answer of POST /api/admin/api-clients/{name}/test-callback.
 export type APICallbackTest = { statusCode: number; error: string; durationMs: number };
 
+// APIReviewEvent is a dismissal or a restore made on a review; actor is
+// "key <name>" or an admin's username, and reason is "" for a restore.
+export type APIReviewEvent = {
+  at: string;
+  kind: "dismissed" | "undismissed";
+  fingerprint: string;
+  title: string;
+  actor: string;
+  reason: string;
+};
+
+// APIDismissal is a finding dismissed now for a review's subject, by this
+// review or another.
+export type APIDismissal = {
+  fingerprint: string;
+  severity: "blocking" | "suggestion";
+  reason: string;
+  actor: string;
+  createdAt: string;
+};
+
+// APIDismissStatus is the answer of the dismiss routes.
+export type APIDismissStatus = { status: "dismissed" | "already_dismissed" | "restored" | "not_dismissed" };
+
 // APIReviewDetail is GET /api/admin/api-reviews/{id}. failure.detail is more
 // than the caller is told, for admins, and may be "". model is null for a
-// review that never started.
+// review that never started. history is the dismissals made on this review,
+// dismissals what is dismissed for its subject now: the stored body does not
+// change when a finding is dismissed.
 export type APIReviewDetail = {
   id: string;
   client: string;
@@ -895,6 +921,8 @@ export type APIReviewDetail = {
   failure: { step: string; reason: string; detail: string } | null;
   callback: APICallback;
   review: APIReviewBody;
+  history: APIReviewEvent[];
+  dismissals: APIDismissal[];
 };
 
 // InstanceAdminView is one instance in GET /api/admin/instances (admins).
@@ -1235,6 +1263,8 @@ export const paths = {
   apiAdminClientKey: (name: string, id: number) => `/api/admin/api-clients/${seg(name)}/keys/${seg(String(id))}`,
   apiAdminClientReviews: (name: string) => `/api/admin/api-clients/${seg(name)}/reviews`,
   apiAdminReview: (id: string) => `/api/admin/api-reviews/${seg(id)}`,
+  apiAdminReviewDismiss: (id: string, finding: string) =>
+    `/api/admin/api-reviews/${seg(id)}/findings/${seg(finding)}/dismiss`,
   apiAdminReviewLog: (id: string) => `/api/admin/api-reviews/${seg(id)}/log`,
   apiAdminReviewDiagnostics: (id: string) => `/api/admin/api-reviews/${seg(id)}/diagnostics`,
   clientReviewPage: (name: string, id: string) => `/api-clients/${seg(name)}/reviews/${seg(id)}`,

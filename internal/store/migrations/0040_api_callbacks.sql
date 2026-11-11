@@ -18,4 +18,31 @@ CREATE TABLE api_callback_attempts (
     error       text        NOT NULL DEFAULT '',
     duration_ms integer     NOT NULL
 );
--- (Task 18 appends api_dismissals and api_review_events to this file.)
+-- Findings people set aside, by subject: a later review of the same client,
+-- tenant and subject honours them.
+CREATE TABLE api_dismissals (
+    client_id   bigint      NOT NULL REFERENCES api_clients (id) ON DELETE CASCADE,
+    tenant      text        NOT NULL,
+    subject     text        NOT NULL,
+    fingerprint text        NOT NULL,
+    severity    text        NOT NULL CHECK (severity IN ('blocking', 'suggestion')),
+    skill       text        NOT NULL,
+    file        text        NOT NULL,
+    title       text        NOT NULL,
+    reason      text        NOT NULL,
+    actor       text        NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (client_id, tenant, subject, fingerprint)
+);
+-- Who dismissed or restored a finding, and when, on the review it was done on.
+CREATE TABLE api_review_events (
+    id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    run_id      uuid        NOT NULL REFERENCES runs (id) ON DELETE CASCADE,
+    at          timestamptz NOT NULL DEFAULT now(),
+    kind        text        NOT NULL CHECK (kind IN ('dismissed', 'undismissed')),
+    fingerprint text        NOT NULL,
+    title       text        NOT NULL,
+    actor       text        NOT NULL,
+    reason      text        NOT NULL DEFAULT ''
+);
+CREATE INDEX api_review_events_run_idx ON api_review_events (run_id, at);

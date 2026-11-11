@@ -1569,4 +1569,29 @@ type APIReviewDetailView struct {
 	Failure    *APIReviewFailureView `json:"failure"`
 	Callback   APICallbackView       `json:"callback"`
 	Review     json.RawMessage       `json:"review"`
+	// History is the dismissals and restores made on this review, oldest
+	// first. Dismissals is what is dismissed now for its subject, from this
+	// review or another, so the page knows which findings to offer a Stop for.
+	History    []APIReviewEventView `json:"history"`
+	Dismissals []APIDismissalView   `json:"dismissals"`
+}
+
+// APIReviewEventView is a dismissal or a restore made on an API review. Actor
+// is "key <name>" or an admin's username.
+type APIReviewEventView struct {
+	At          time.Time `json:"at"`
+	Kind        string    `json:"kind"`
+	Fingerprint string    `json:"fingerprint"`
+	Title       string    `json:"title"`
+	Actor       string    `json:"actor"`
+	Reason      string    `json:"reason"`
+}
+
+// APIDismissalView is a finding dismissed for a review's subject.
+type APIDismissalView struct {
+	Fingerprint string    `json:"fingerprint"`
+	Severity    string    `json:"severity"`
+	Reason      string    `json:"reason"`
+	Actor       string    `json:"actor"`
+	CreatedAt   time.Time `json:"createdAt"`
 }

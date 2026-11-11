@@ -33,6 +33,12 @@ type fakeStore struct {
 	enqueued []store.NewAPIReview
 	// readErr fails APIReview.
 	readErr error
+	// dismissals by "<client>/<tenant>/<subject>/<fingerprint>", and every
+	// dismiss or restore that changed one (see dismiss_test.go).
+	dismissals map[string]store.APIDismissal
+	events     []fakeEvent
+	// dismissErr fails DismissAPIFinding and UndismissAPIFinding.
+	dismissErr error
 }
 
 type fakeKey struct {

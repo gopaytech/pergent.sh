@@ -11,7 +11,7 @@ Migration `0039` runs at startup too. It adds a table, a sequence, two columns t
 - **During a rolling upgrade, or after a rollback, the previous release meets API reviews it doesn't know.** It claims a queued one, finds no repository `''`, and supersedes it. It can't publish an API review that is reported. It lists API reviews in **Usage** under an empty repository. After a rollback, callers may see `superseded` reviews: they send their changes again.
 - **The review API's hourly, in-flight and token limits are stored but not enforced yet.** Only the request size and the number of files hold in this release.
 
-Migration `0040` runs at startup too. It adds two tables (`api_callbacks`, `api_callback_attempts`) and an index, dropping nothing. The previous release ignores them, so after a rollback no callback is sent; the results stay readable with `GET`.
+Migration `0040` runs at startup too. It adds four tables (`api_callbacks`, `api_callback_attempts`, `api_dismissals`, `api_review_events`) and two indexes, dropping nothing. The previous release ignores them, so after a rollback no callback is sent; the results stay readable with `GET`, and dismissals stay stored.
 
 ## Upgrading to 0.16.0
 

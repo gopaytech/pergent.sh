@@ -299,3 +299,121 @@ func TestClientListMonthCounts(t *testing.T) {
 		t.Errorf("quiet = %+v, want %+v", got["quiet"], want)
 	}
 }
+
+// publishAPIReview makes the review id completed, with the stored body holding
+// one blocking finding, f1.
+func (e *env) publishAPIReview(id, subject string) string {
+	e.t.Helper()
+	stored := `{"id":"` + id + `","subject":"` + subject + `","tenant":"acme","title":"Route change","status":"completed",
+		"created_at":"2026-10-01T10:00:00Z","finished_at":"2026-10-01T10:05:00Z","verdict":"has_blocking_issues",
+		"skills":[{"name":"security","verdict":"has_blocking_issues","findings":[
+			{"id":"f1","fingerprint":"fp-sql","file":"a.go","line":3,"severity":"blocking","title":"SQL built from input","explanation":"e"}],
+			"files":{"reviewed":["a.go"],"skipped":[],"not_reviewed":[]}}]}`
+	e.exec(`UPDATE runs SET state = 'published', result = '{"status":"completed"}'::jsonb WHERE id = $1::uuid`, id)
+	e.exec(`UPDATE api_reviews SET response = $2::jsonb, finished_at = $3 WHERE run_id = $1::uuid`, id, stored,
+		time.Date(2026, 10, 1, 10, 5, 0, 0, time.UTC))
+	return stored
+}
+
+// An admin dismisses a finding of a completed review: it is stored under the
+// review's client, tenant and subject with the admin's username as the actor,
+// the review's history shows it, the review's body is the one stored, and
+// nothing reaches the audit log. A restore takes it back.
+func TestAdminDismissStoresUnderSubject(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.signInOperator()
+	e.addAPIClient(c, goodClient(nil))
+	id := e.askAPIReview("fastgateway", "acme", "route:1")
+	e.publishAPIReview(id, "route:1")
+	url := "/api/admin/api-reviews/" + id + "/findings/f1/dismiss"
+	audited := len(e.auditEntries())
+	before := getJSON[APIReviewDetailView](e, c, "/api/admin/api-reviews/"+id)
+	if len(before.History) != 0 || len(before.Dismissals) != 0 {
+		t.Fatalf("a new review has history %+v, dismissals %+v", before.History, before.Dismissals)
+	}
+
+	rec := e.send(c, "POST", url, `{"reason":"  checked upstream "}`)
+	if got := decode[reviewapi.DismissResult](t, rec, "POST dismiss", http.StatusOK); got.Status != "dismissed" {
+		t.Errorf("status %q, want dismissed", got.Status)
+	}
+	if got := decode[reviewapi.DismissResult](t, e.send(c, "POST", url, `{"reason":"again"}`), "POST dismiss again", http.StatusOK); got.Status != "already_dismissed" {
+		t.Errorf("status %q, want already_dismissed", got.Status)
+	}
+	stored, err := e.st.APIDismissals(ctx, mustClientID(t, e, "fastgateway"), "acme", "route:1")
+	if err != nil || len(stored) != 1 {
+		t.Fatalf("APIDismissals = %+v, %v", stored, err)
+	}
+	if d := stored[0]; d.Fingerprint != "fp-sql" || d.Severity != "blocking" || d.Skill != "security" || d.File != "a.go" ||
+		d.Title != "SQL built from input" || d.Reason != "checked upstream" || d.Actor != "ops" {
+		t.Errorf("stored %+v", d)
+	}
+
+	after := getJSON[APIReviewDetailView](e, c, "/api/admin/api-reviews/"+id)
+	if len(after.History) != 1 || after.History[0].Kind != "dismissed" || after.History[0].Fingerprint != "fp-sql" ||
+		after.History[0].Title != "SQL built from input" || after.History[0].Actor != "ops" || after.History[0].Reason != "checked upstream" {
+		t.Errorf("history = %+v", after.History)
+	}
+	if len(after.Dismissals) != 1 || after.Dismissals[0].Fingerprint != "fp-sql" || after.Dismissals[0].Actor != "ops" {
+		t.Errorf("dismissals = %+v", after.Dismissals)
+	}
+	if !reflect.DeepEqual(compact(t, after.Review), compact(t, before.Review)) {
+		t.Errorf("the review changed: %s, was %s", after.Review, before.Review)
+	}
+
+	if got := decode[reviewapi.DismissResult](t, e.send(c, "DELETE", url, ""), "DELETE dismiss", http.StatusOK); got.Status != "restored" {
+		t.Errorf("status %q, want restored", got.Status)
+	}
+	if got := decode[reviewapi.DismissResult](t, e.send(c, "DELETE", url, ""), "DELETE dismiss again", http.StatusOK); got.Status != "not_dismissed" {
+		t.Errorf("status %q, want not_dismissed", got.Status)
+	}
+	final := getJSON[APIReviewDetailView](e, c, "/api/admin/api-reviews/"+id)
+	if len(final.History) != 2 || final.History[1].Kind != "undismissed" || final.History[1].Actor != "ops" || len(final.Dismissals) != 0 {
+		t.Errorf("history = %+v, dismissals = %+v", final.History, final.Dismissals)
+	}
+	if n := len(e.auditEntries()); n != audited {
+		t.Errorf("%d audit entries were written, want none: %+v", n-audited, e.auditEntries())
+	}
+}
+
+// The refusals: a missing or long reason, a review not completed, a finding
+// the stored result does not hold, an unknown review, and a session that is
+// not an admin.
+func TestAdminDismissRefusals(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.signInOperator()
+	e.addAPIClient(c, goodClient(nil))
+	id := e.askAPIReview("fastgateway", "acme", "route:1")
+	queued := e.askAPIReview("fastgateway", "acme", "route:2")
+	e.publishAPIReview(id, "route:1")
+	url := func(id, finding string) string {
+		return "/api/admin/api-reviews/" + id + "/findings/" + finding + "/dismiss"
+	}
+
+	const noReason = "a dismissal needs a reason of at most 500 characters"
+	for _, body := range []string{`{}`, `{"reason":"  "}`, `{"reason":"` + strings.Repeat("é", 501) + `"}`} {
+		rec := e.send(c, "POST", url(id, "f1"), body)
+		if rec.Code != http.StatusBadRequest || errorOf(t, rec) != noReason {
+			t.Errorf("reason %.20q = %d %s", body, rec.Code, rec.Body)
+		}
+	}
+	if rec := e.send(c, "POST", url(id, "f1"), `{"reason":"r","extra":1}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("an unknown field = %d %s", rec.Code, rec.Body)
+	}
+	rec := e.send(c, "POST", url(queued, "f1"), `{"reason":"r"}`)
+	if rec.Code != http.StatusConflict || errorOf(t, rec) != "findings can be dismissed once the review is completed" {
+		t.Errorf("a queued review = %d %s", rec.Code, rec.Body)
+	}
+	for _, method := range []string{"POST", "DELETE"} {
+		for _, target := range []string{url(id, "nope"), url("00000000-0000-0000-0000-000000000000", "f1"), url("not-an-id", "f1")} {
+			if rec := e.send(c, method, target, `{"reason":"r"}`); rec.Code != http.StatusNotFound {
+				t.Errorf("%s %s = %d %s", method, target, rec.Code, rec.Body)
+			}
+		}
+		if rec := e.send(e.aliceSession(), method, url(id, "f1"), `{"reason":"r"}`); rec.Code != http.StatusNotFound {
+			t.Errorf("%s as a non-admin = %d %s", method, rec.Code, rec.Body)
+		}
+	}
+	if got, _ := e.st.APIDismissals(ctx, mustClientID(t, e, "fastgateway"), "acme", "route:1"); len(got) != 0 {
+		t.Errorf("a refused dismissal was stored: %+v", got)
+	}
+}

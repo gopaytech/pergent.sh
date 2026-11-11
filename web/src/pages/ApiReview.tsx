@@ -1,5 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
 
 import {
@@ -7,12 +7,14 @@ import {
   isStatus,
   paths,
   type APICallback,
+  type APIDismissStatus,
   type APIFinding,
   type APIReviewDetail,
   type APISkill,
   type APIStatus,
   type APIVerdict,
 } from "../api";
+import { useWrite } from "../layout/write";
 import RunLog from "../RunLog";
 import { ErrorBox, Loading, NotFound, Pill, Tabs, count, utcText, type Tone } from "../ui";
 
@@ -144,8 +146,9 @@ function Result({ view }: { view: APIReviewDetail }) {
       )}
       {skills.length === 0 && !failure && <div className="card empty">{noResult(view.status)}</div>}
       {skills.map((s) => (
-        <Skill key={s.name} skill={s} />
+        <Skill key={s.name} skill={s} view={view} />
       ))}
+      {view.history.length > 0 && <History view={view} />}
       {view.callback.state !== "none" && <Callback callback={view.callback} />}
     </>
   );
@@ -192,7 +195,7 @@ function noResult(status: string): string {
 // then the dismissed ones.
 const rank = (f: APIFinding) => (f.dismissed ? 2 : f.severity === "blocking" ? 0 : 1);
 
-function Skill({ skill }: { skill: APISkill }) {
+function Skill({ skill, view }: { skill: APISkill; view: APIReviewDetail }) {
   const findings = [...skill.findings].sort((a, b) => rank(a) - rank(b));
   const { reviewed, skipped, not_reviewed: notReviewed } = skill.files;
   return (
@@ -205,7 +208,7 @@ function Skill({ skill }: { skill: APISkill }) {
         </div>
       </div>
       {findings.map((f, i) => (
-        <Finding key={`${f.id}/${i}`} f={f} />
+        <Finding key={`${f.id}/${i}`} f={f} view={view} />
       ))}
       <div className="pad">
         <h3 className="group">Reviewed ({reviewed.length})</h3>
@@ -251,8 +254,14 @@ function Skill({ skill }: { skill: APISkill }) {
   );
 }
 
-function Finding({ f }: { f: APIFinding }) {
+// Finding is a finding of the review. A completed review's finding can be
+// dismissed for the subject, and a finding dismissed for it can be stopped.
+// What is dismissed now comes from the page's dismissals, not from the stored
+// body, which a dismissal leaves as it was.
+function Finding({ f, view }: { f: APIFinding; view: APIReviewDetail }) {
   const where = f.line ? `${f.file}:${f.line}${f.end_line && f.end_line > f.line ? `-${f.end_line}` : ""}` : f.file;
+  const now = view.dismissals.find((d) => d.fingerprint === f.fingerprint);
+  const may = view.status === "completed";
   return (
     <div className="finding">
       <Pill tone={f.severity === "blocking" ? "bad" : "grey"}>{f.severity}</Pill> <span className="t">{f.title}</span>{" "}
@@ -271,11 +280,123 @@ function Finding({ f }: { f: APIFinding }) {
           <pre className="fix">{f.suggestion}</pre>
         </>
       )}
-      {f.dismissed && (
-        <div className="meta">
-          Dismissed: {f.dismissed.reason} · {utcText(f.dismissed.at)}
+      {now ? (
+        <div className="dismissal">
+          <div className="meta">
+            Dismissed by {now.actor} · {utcText(now.createdAt)}
+          </div>
+          <div className="prose">Reason: {now.reason}</div>
         </div>
+      ) : (
+        f.dismissed && (
+          <div className="meta">
+            Dismissed: {f.dismissed.reason} · {utcText(f.dismissed.at)}
+          </div>
+        )
       )}
+      {may && f.id !== "" && (now ? <StopControl view={view} f={f} /> : <DismissControl view={view} f={f} />)}
     </div>
+  );
+}
+
+// useDismissal is the write that dismisses, or with method DELETE stops
+// dismissing, a finding for the review's subject, and reads the review again.
+function useDismissal(view: APIReviewDetail, f: APIFinding, method: "POST" | "DELETE", done: () => void) {
+  const cache = useQueryClient();
+  const write = useWrite();
+  return useMutation({
+    mutationFn: (reason: string) =>
+      write<APIDismissStatus>(method, paths.apiAdminReviewDismiss(view.id, f.id), method === "POST" ? { reason } : undefined),
+    onSuccess: async () => {
+      done();
+      await cache.invalidateQueries({ queryKey: ["api-review", view.id] });
+    },
+  });
+}
+
+// DismissControl is the Dismiss button and the form it opens. A reason is
+// required (the server refuses one over 500 characters).
+function DismissControl({ view, f }: { view: APIReviewDetail; f: APIFinding }) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [problem, setProblem] = useState("");
+  const dismiss = useDismissal(view, f, "POST", () => {
+    setOpen(false);
+    setReason("");
+  });
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const why = reason.trim();
+    if (why === "") {
+      setProblem("Dismissing a finding needs a reason.");
+      return;
+    }
+    setProblem("");
+    dismiss.mutate(why);
+  };
+  if (!open) {
+    return (
+      <div className="finding-actions">
+        <button type="button" className="btn small" onClick={() => setOpen(true)}>
+          Dismiss
+        </button>
+      </div>
+    );
+  }
+  return (
+    <form className="dismiss-form" onSubmit={submit}>
+      <textarea
+        aria-label="Reason"
+        placeholder="Why is this not a problem? (required)"
+        rows={2}
+        maxLength={500}
+        value={reason}
+        disabled={dismiss.isPending}
+        onChange={(e) => setReason(e.target.value)}
+      />
+      <div className="actions-row">
+        <button type="submit" className="btn small primary" disabled={dismiss.isPending}>
+          Dismiss finding
+        </button>
+        <button type="button" className="btn small" disabled={dismiss.isPending} onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+        {problem && <span className="meta problem">{problem}</span>}
+      </div>
+      {dismiss.isError && <ErrorBox error={dismiss.error} />}
+    </form>
+  );
+}
+
+// StopControl takes the dismissal back, so later reviews of the subject
+// report the finding again.
+function StopControl({ view, f }: { view: APIReviewDetail; f: APIFinding }) {
+  const stop = useDismissal(view, f, "DELETE", () => {});
+  return (
+    <div className="finding-actions">
+      <button type="button" className="btn small" disabled={stop.isPending} onClick={() => stop.mutate("")}>
+        Stop
+      </button>
+      {stop.isError && <ErrorBox error={stop.error} />}
+    </div>
+  );
+}
+
+// History is every dismissal and restore made on this review, oldest first,
+// with who did it. actor, title and reason are text people or the model wrote.
+function History({ view }: { view: APIReviewDetail }) {
+  return (
+    <section className="card pad" aria-label="History">
+      <h3 className="group">History</h3>
+      <ul className="files">
+        {view.history.map((e, i) => (
+          <li key={`${e.at}/${i}`}>
+            <span className="meta">{utcText(e.at)}</span> {e.kind === "dismissed" ? "Dismissed" : "Stopped dismissing"}{" "}
+            <b>{e.title}</b> <span className="meta">by {e.actor}</span>
+            {e.reason && <div className="prose">Reason: {e.reason}</div>}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

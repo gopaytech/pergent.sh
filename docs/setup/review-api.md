@@ -1,8 +1,8 @@
 # 🔗 Review API
 
-The review API lets another system ask pergent.sh for reviews. This page covers **API clients and their keys**, and **asking for a review and reading it**.
+The review API lets another system ask pergent.sh for reviews. This page covers **API clients and their keys**, and **asking for a review and reading it**, and **dismissing a finding**.
 
-**Not built yet:** dismissals, a review knowing its subject's earlier findings, and the hourly, in-flight and token limits come in a later part. You can set their fields now, but nothing enforces them yet. Don't rely on them.
+**Not built yet:** a review knowing its subject's earlier findings (a dismissal is stored but later reviews do not use it yet), and the hourly, in-flight and token limits come in a later part. You can set their fields now, but nothing enforces them yet. Don't rely on them.
 
 It exists only when the dashboard is on (`dashboard.url` is set). It adds no config key.
 
@@ -310,6 +310,23 @@ t=1762851790   # from X-Pergent-Signature
 On the client's **Settings** tab press **Send test callback**. pergent.sh sends your Callback URL a test review the way it sends a real one: the same headers, the same secrets (the old one too, during a rotation), a new `X-Pergent-Delivery` each time, and no redirect followed. The tab then reads `Answered 204 in 42 ms`, or the reason it got no answer. It is a failure unless the URL answered `2xx`.
 
 The body is a review with `"test": true`, the ID `00000000-0000-0000-0000-000000000000`, the subject `pergent.sh test callback` and the verdict `nothing_reviewed`. Never treat it as a pass: a receiver that gates on `no_blocking_issues` rejects it, and one that sees `test: true` should drop it. It is not stored as a callback of any review and does not count as failing. The button needs a Callback URL; without one it answers `this client has no callback URL`.
+
+## Dismiss a finding
+
+A finding that is wrong can be set aside for its **subject** (the client, `tenant` and `subject` together), so later reviews of the subject honour it. `{finding}` is the finding's `id` in that review's result.
+
+```
+curl -X POST -H "Authorization: Bearer pgk_1a2b3c4d_..." -d '{"reason": "checked upstream"}' \
+  https://<dashboard host>/v1/reviews/<id>/findings/<finding id>/dismiss
+```
+
+- `200 {"status": "dismissed"}`, or `{"status": "already_dismissed"}` (nothing changes, the first reason stays).
+- `DELETE` on the same path takes it back: `{"status": "restored"}` or `{"status": "not_dismissed"}`. It has no body.
+- `reason` is required, 1 to 500 characters (`422 invalid` otherwise).
+- The review must be `completed` (`409 not_finished`), and the finding must be in its result (`404 not_found`).
+- The review it was made on does not change, and no callback is sent. The actor is recorded as `key <key name>` and is in no response body.
+
+An admin does the same on the review's page: **Dismiss** on a finding (a reason is required) and **Stop** on one that is dismissed. The page lists each dismissal and restore under **History**, with who did it. These are not in the audit log.
 
 ## Send the change again, don't re-run
 

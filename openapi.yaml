@@ -3096,6 +3096,68 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/api-reviews/{id}/findings/{finding}/dismiss:
+    post:
+      operationId: dismissApiReviewFinding
+      tags: [API clients]
+      summary: Dismiss a finding of an API review
+      description: |
+        Admins only. Sets the finding aside for the review's subject (its
+        client, tenant and subject together), so later reviews of the subject
+        honour it. `finding` is the finding's `id` in the review's stored
+        result; the review must be completed. The review it was made on is not
+        changed and no callback is sent. The dismissal is recorded in the
+        review's `history` with the admin's username as the actor, and is not
+        written to the audit log. `reason` is 1 to 500 characters.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/ApiReviewId'
+        - $ref: '#/components/parameters/ApiFindingId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReviewApiDismissRequest'}
+      responses:
+        '200':
+          description: '`dismissed`, or `already_dismissed` when the subject had dismissed it already (nothing changes).'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiDismissResult'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: restoreApiReviewFinding
+      tags: [API clients]
+      summary: Take back the dismissal of a finding of an API review
+      description: |
+        Admins only. The reverse of the dismissal, for the review's subject.
+        Recorded in the review's `history` as `undismissed`.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/ApiReviewId'
+        - $ref: '#/components/parameters/ApiFindingId'
+      responses:
+        '200':
+          description: '`restored`, or `not_dismissed` when it was not dismissed (nothing changes).'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiDismissResult'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/sign-in:
     get:
       operationId: getSignIn
@@ -3435,6 +3497,110 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ReviewApiError'}
+  /v1/reviews/{id}/findings/{finding}/dismiss:
+    post:
+      operationId: dismissReviewApiFinding
+      tags: [Review API]
+      summary: Dismiss a finding
+      description: |
+        Sets a finding aside for the review's subject (the client, `tenant`
+        and `subject` together), so later reviews of the subject honour it.
+        `finding` is the finding's `id` in this review's result. The review
+        must be completed. Dismissing a finding that is dismissed already
+        answers `already_dismissed` and changes nothing. The review it was made
+        on is not changed and no callback is sent.
+
+        The checks run in this order and the first that fails answers: the key
+        (401); the review (404, the same answer for another client's review,
+        an unknown ID and one that is not a review ID); the body and the
+        `reason` (413, 422); whether the review is completed (409); the finding
+        (404).
+      x-pergent-access: key
+      security:
+        - reviewApiKey: []
+      parameters:
+        - $ref: '#/components/parameters/ReviewApiReviewId'
+        - $ref: '#/components/parameters/ReviewApiFindingId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReviewApiDismissRequest'}
+      responses:
+        '200':
+          description: The finding is dismissed (`dismissed`), or was already (`already_dismissed`).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiDismissResult'}
+        '401':
+          description: The key is missing, unknown, revoked or expired. The body is the same for each.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '404':
+          description: There is no such review for this client, or the review has no such finding. The code is `not_found`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '409':
+          description: The review is not completed. The code is `not_finished`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '413':
+          description: The body is over 16384 bytes. The code is `too_large`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '422':
+          description: The code is `invalid`. The body is not valid JSON or UTF-8 text, or `reason` is empty or over 500 characters.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '500':
+          description: The dismissal could not be stored. The code is `internal`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+    delete:
+      operationId: restoreReviewApiFinding
+      tags: [Review API]
+      summary: Take back a dismissal
+      description: |
+        The reverse of the dismissal, for the review's subject. It has no
+        body. The same checks apply, except the body.
+      x-pergent-access: key
+      security:
+        - reviewApiKey: []
+      parameters:
+        - $ref: '#/components/parameters/ReviewApiReviewId'
+        - $ref: '#/components/parameters/ReviewApiFindingId'
+      responses:
+        '200':
+          description: The dismissal is gone (`restored`), or there was none (`not_dismissed`).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiDismissResult'}
+        '401':
+          description: The key is missing, unknown, revoked or expired. The body is the same for each.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '404':
+          description: There is no such review for this client, or the review has no such finding. The code is `not_found`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '409':
+          description: The review is not completed. The code is `not_finished`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '500':
+          description: The dismissal could not be read or stored. The code is `internal`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
 components:
   securitySchemes:
     sessionCookie:
@@ -3535,6 +3701,24 @@ components:
       schema:
         type: string
         format: uuid
+    ApiFindingId:
+      name: finding
+      in: path
+      required: true
+      description: The finding's `id` in the review's stored result.
+      schema: {type: string}
+    ReviewApiReviewId:
+      name: id
+      in: path
+      required: true
+      description: The review's ID, from the `202` that queued it.
+      schema: {type: string, format: uuid}
+    ReviewApiFindingId:
+      name: finding
+      in: path
+      required: true
+      description: The finding's `id` in the review's result.
+      schema: {type: string}
     ApiKeyId:
       name: id
       in: path
@@ -5110,7 +5294,7 @@ components:
     APIReviewDetailView:
       description: One API review.
       type: object
-      required: [id, client, tenant, subject, title, keyName, status, model, createdAt, finishedAt, failure, callback, review]
+      required: [id, client, tenant, subject, title, keyName, status, model, createdAt, finishedAt, failure, callback, review, history, dismissals]
       properties:
         id: {type: string, format: uuid}
         client: {type: string}
@@ -5136,6 +5320,55 @@ components:
           allOf:
             - $ref: '#/components/schemas/ReviewApiReview'
           description: The v1 body, as the API answers with it.
+        history:
+          type: array
+          description: The dismissals and restores made on this review, oldest first.
+          items: {$ref: '#/components/schemas/APIReviewEventView'}
+        dismissals:
+          type: array
+          description: What is dismissed now for the review's subject, from this review or another. Oldest first.
+          items: {$ref: '#/components/schemas/APIDismissalView'}
+    ReviewApiDismissRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Why the finding is set aside. Images are removed and the text is trimmed; 1 to 500 characters are left.
+    ReviewApiDismissResult:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [dismissed, already_dismissed, restored, not_dismissed]
+    APIReviewEventView:
+      description: A dismissal or a restore made on an API review.
+      type: object
+      required: [at, kind, fingerprint, title, actor, reason]
+      properties:
+        at: {type: string, format: date-time}
+        kind:
+          type: string
+          enum: [dismissed, undismissed]
+        fingerprint: {type: string}
+        title: {type: string}
+        actor: {type: string, description: '`key <name>` for a client''s key, else an admin''s username.'}
+        reason: {type: string, description: Empty for a restore.}
+    APIDismissalView:
+      description: A finding dismissed for a review's subject.
+      type: object
+      required: [fingerprint, severity, reason, actor, createdAt]
+      properties:
+        fingerprint: {type: string}
+        severity:
+          type: string
+          enum: [blocking, suggestion]
+        reason: {type: string}
+        actor: {type: string}
+        createdAt: {type: string, format: date-time}
     APICallbackView:
       description: The review's callback to its client, and every try made so far.
       type: object

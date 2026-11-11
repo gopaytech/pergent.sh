@@ -185,21 +185,29 @@ func (h *Handler) createReview(w http.ResponseWriter, r *http.Request) {
 	writeReview(w, http.StatusAccepted, rv)
 }
 
-// getReview is GET /v1/reviews/{id}. A review of another client, an unknown ID
-// and a malformed one get one answer, so a caller learns nothing about IDs it
+// reviewOf reads the review the path names, for the client of the key. A
+// review of another client, an unknown ID and a malformed one get one answer
+// (written here, with false returned), so a caller learns nothing about IDs it
 // does not own.
-func (h *Handler) getReview(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) reviewOf(w http.ResponseWriter, r *http.Request) (store.APIReview, bool) {
 	rv, found, err := h.Store.APIReview(r.Context(), clientOf(r).ID, r.PathValue("id"))
 	if err != nil {
 		h.log().Error("review API: reading a review failed", "client_id", clientOf(r).ID, "err", err)
 		writeInternal(w)
-		return
+		return store.APIReview{}, false
 	}
 	if !found {
 		writeError(w, http.StatusNotFound, CodeNotFound, reviewNotFoundMsg)
-		return
+		return store.APIReview{}, false
 	}
-	writeReview(w, http.StatusOK, rv)
+	return rv, true
+}
+
+// getReview is GET /v1/reviews/{id}.
+func (h *Handler) getReview(w http.ResponseWriter, r *http.Request) {
+	if rv, ok := h.reviewOf(w, r); ok {
+		writeReview(w, http.StatusOK, rv)
+	}
 }
 
 // Body is the body of GET /v1/reviews/{id} for rv, which its callback posts
