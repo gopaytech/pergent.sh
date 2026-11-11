@@ -75,7 +75,7 @@ On the **Settings** tab press **Rotate secret**. The new secret is shown once. T
 
 ## Remove a client
 
-On the **Settings** tab press **Remove client**. Its keys stop at once and its data is deleted. It cannot be undone.
+On the **Settings** tab press **Remove client**. Its keys stop at once, the Jobs of its running reviews are deleted, and its data is deleted. It cannot be undone.
 
 ## Check a key
 
@@ -149,6 +149,22 @@ Send an `Idempotency-Key` header (1 to 200 printable ASCII characters) to retry 
 `GET /v1/reviews/{id}` answers `200` with the review. While it waits or runs the body holds its `status` (`queued`, `running`, `failed`, `superseded`) and the request's `subject`, `tenant` and `title`. When it has finished, the body also holds the `verdict`, each skill's findings and files, and the tokens used. Only the verdict `no_blocking_issues` is a pass: a review that failed, or that reviewed no file, is never one.
 
 A review of another client, an ID that does not exist and an ID that is not a review ID all get the same `404 not_found`. The fields are in [`openapi.yaml`](../../openapi.yaml) (`ReviewApiReview`).
+
+## How a review runs
+
+- It is a Kubernetes Job, like a merge request's review. Both share `jobs.max_running`, first in, first out.
+- It uses the client's skills and model, read when the Job starts. The Job's timeout, memory and Max steps are the defaults on **Admin → Settings**.
+- The files reach the Job in a Secret of their own. The watcher deletes it once the Job has built its commits, or when the Job ends first. The stored copy is deleted when the Job starts.
+- Nothing is posted to GitLab or GitHub.
+
+A failed review has a `failure` with the `step` it failed at and a `reason`:
+
+| `step` | When | Example `reason` |
+| --- | --- | --- |
+| `starting` | Before the Job, or while it builds the commits | `this client has no skills: an admin chooses them in its settings`, `the model chosen for this API client can't be used: an admin can change it in the client's settings`, `skill "x" is not in the skill library`, `the review's files are no longer stored` |
+| `review` | While pergent reviews | `the review job ran out of memory (OOMKilled)`, `pergent couldn't review the change` |
+| `delivery` | When the result comes back | `pergent sent a result pergent.sh couldn't use` |
+| `unknown` | The Job vanished, or hit its deadline before it started | `the review job disappeared before sending a result` |
 
 ## Audit log
 

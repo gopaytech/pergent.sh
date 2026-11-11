@@ -64,7 +64,8 @@ func publishBackoff(attempts int) time.Duration {
 // PublishOnce posts up to 20 due reported runs: for each, the pergent comment
 // (updated in place), the commit status on the run's head and, only for a
 // clean review of the merge request's current head, the approve bot's
-// approval. A GitLab or store error puts the run back with backoff (the
+// approval. An API review posts nothing: publishAPI stores its v1 result. A
+// GitLab or store error puts the run back with backoff (the
 // store gives up after the 10th attempt). One run's trouble never stops the
 // others; the returned error is a failure to list the runs.
 func (e *Engine) PublishOnce(ctx context.Context) error {
@@ -75,7 +76,13 @@ func (e *Engine) PublishOnce(ctx context.Context) error {
 	for _, run := range runs {
 		log := e.log().With("run", run.ID, "instance", run.MR.Instance, "project", run.ProjectPath,
 			"mr", run.MR.IID, "head", run.HeadSHA)
-		err := e.publish(ctx, run, log)
+		var err error
+		if run.Kind == store.KindAPI {
+			log = e.log().With("run", run.ID, "kind", store.KindAPI, "head", run.HeadSHA)
+			err = e.publishAPI(ctx, run, log)
+		} else {
+			err = e.publish(ctx, run, log)
+		}
 		if err == nil {
 			continue
 		}
@@ -718,6 +725,10 @@ func (e *Engine) retryPublish(ctx context.Context, run store.Run, text string, l
 // head so a required check isn't left running (GitHub's Check Run stays
 // in_progress from dispatch otherwise). Nothing is approved.
 func (e *Engine) giveUp(ctx context.Context, run store.Run, log *slog.Logger) {
+	if run.Kind == store.KindAPI {
+		// No approval and no commit status: the review reads as failed.
+		return
+	}
 	plat, ok := e.Platforms.Get(run.MR.Instance)
 	if !ok || plat.Forge == nil {
 		log.Warn("couldn't set the final status: no bots for the instance")
@@ -855,7 +866,8 @@ func (e *Engine) cleanUp(ctx context.Context, run store.Run, log *slog.Logger) e
 			return err
 		}
 	}
-	if !run.DispatchedAt.IsZero() {
+	// An API review has no commit status to cancel.
+	if !run.DispatchedAt.IsZero() && run.Kind != store.KindAPI {
 		// A newer run of the same head (a full review replacing an
 		// incremental one) owns the commit status: cancelling this one would
 		// overwrite that run's.

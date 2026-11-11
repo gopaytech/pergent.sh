@@ -308,6 +308,8 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		// The engine queues the readiness scans (eng.Scans is on whenever
 		// the dashboard is) and rechecks them after a skill setting is saved.
 		Wake: eng.Wake, Fetcher: fetcher, Readiness: eng,
+		// Removing an API client ends its live reviews: their Jobs go.
+		DeleteJob: launcher.Delete,
 	})
 	if err != nil {
 		return err
