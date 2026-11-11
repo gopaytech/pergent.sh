@@ -1855,3 +1855,18 @@ func TestSettingViewsInlineFindings(t *testing.T) {
 		t.Errorf("inlineFindings = %+v, want true not overridden", got)
 	}
 }
+
+// An API review has no repository: its run is not found, even for an admin.
+func TestRunRoutesHideAPIReviews(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.signInOperator()
+	e.addAPIClient(c, goodClient(nil))
+	id, created, err := e.st.EnqueueAPIReview(ctx, store.NewAPIReview{ClientID: mustClientID(t, e, "fastgateway"), Tenant: "acme",
+		Subject: "route:1", Title: "Route change", KeyName: "ci", BaseSHA: "base", HeadSHA: "head", InputsSealed: []byte("sealed")})
+	if err != nil || !created {
+		t.Fatalf("EnqueueAPIReview = %v, %v", created, err)
+	}
+	for _, target := range []string{"/api/runs/" + id, "/api/runs/" + id + "/log", "/api/runs/" + id + "/diagnostics"} {
+		e.wantStatus(c, target, http.StatusNotFound)
+	}
+}

@@ -511,10 +511,11 @@ func runSummary(run store.RunDigest, prev *store.RunDigest, j judged) RunSummary
 
 // visibleRun returns the run id when the session can see its repository,
 // its path and its project ID both; found is false otherwise, as for an
-// unknown id.
+// unknown id. An API review has no repository: it is not found here, for an
+// admin too.
 func (d *Dashboard) visibleRun(ctx context.Context, se Session, id string) (store.Run, bool, error) {
 	run, found, err := d.Store.Run(ctx, id)
-	if err != nil || !found {
+	if err != nil || !found || run.Kind != store.KindMR {
 		return store.Run{}, false, err
 	}
 	if !se.CanSeeRun(run.MR.Instance, run.ProjectPath, run.MR.ProjectID) {

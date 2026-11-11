@@ -464,3 +464,195 @@ func TestAPIReviewsPages(t *testing.T) {
 		t.Error("a cursor with a malformed ID was accepted")
 	}
 }
+
+// seedAPIUsage makes an API review of client that finished at the given time
+// and records its skills, as seedUsage does for a merge request.
+func seedAPIUsage(t *testing.T, s *Store, clientID int64, subject string, at time.Time, skills ...SkillUsage) string {
+	t.Helper()
+	id := enqueueAPI(t, s, apiRequest(clientID, "acme", subject))
+	setRun(t, s, id, `state = 'reported', created_at = $2::timestamptz, reported_at = $2::timestamptz, dispatched_at = $2::timestamptz,
+		trigger = $3::text, model = 'm', result = '{"schema_version":1,"status":"completed","skills":[]}'::jsonb`, at, TriggerPush)
+	if err := s.RecordUsage(ctx, id, skills); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func TestReviewDigestsLeaveOutAPIReviews(t *testing.T) {
+	s := newStore(t)
+	c := newAPIClient(t, s, "fastgateway")
+	mr := dispatched(t, s, mr1, "aaa", "tok-aaa")
+	api := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:1"))
+
+	got, err := s.ReviewDigests(ctx, ReviewFilter{Visible: Visibility{All: true}, Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != mr {
+		ids := make([]string, len(got))
+		for i, d := range got {
+			ids[i] = d.ID
+		}
+		t.Errorf("digests = %v, want only the merge request's run %s (not the API review %s)", ids, mr, api)
+	}
+}
+
+func TestUsageByRepositoryLeavesOutAPIReviews(t *testing.T) {
+	s := newStore(t)
+	c := newAPIClient(t, s, "fastgateway")
+	seedUsage(t, s, usageMR(7, 1), usageAt(5, 10, 0), TriggerPush, false, "m", skillRow("security", "no_blocking_issues", 100, 10))
+	seedAPIUsage(t, s, c.ID, "route:1", usageAt(5, 11, 0), skillRow("gateway", "no_blocking_issues", 5000, 500))
+
+	got, err := s.UsageByRepository(ctx, usageSince)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ProjectID != 7 || got[0].Instance != mr1.Instance {
+		t.Fatalf("UsageByRepository = %+v, want only project 7", got)
+	}
+	wantTokens(t, "project 7", got[0].Tokens, TokenSum{In: 100, Out: 10})
+
+	var rows []UsageRow
+	if err := s.UsageRows(ctx, usageSince, "", 0, 100, func(u UsageRow) error {
+		rows = append(rows, u)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Skill != "security" {
+		t.Errorf("UsageRows = %+v, want only the merge request's row", rows)
+	}
+}
+
+// The admin overview counts API reviews too, under the empty repository.
+func TestRunStatsCountAPIReviews(t *testing.T) {
+	s := newStore(t)
+	c := newAPIClient(t, s, "fastgateway")
+	enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:1"))
+	enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:2"))
+	dispatched(t, s, mr1, "aaa", "tok-aaa")
+
+	got, err := s.RunStats(ctx, Visibility{All: true}, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := got[PathKey{}].Reviews; n != 2 {
+		t.Errorf("API reviews = %d, want 2 (stats %+v)", n, got)
+	}
+	if n := got[PathKey{Instance: mr1.Instance, Path: "acme/widgets"}].Reviews; n != 1 {
+		t.Errorf("merge request reviews = %d, want 1 (stats %+v)", n, got)
+	}
+}
+
+func TestMetricsTotalsLeaveOutAPIReviews(t *testing.T) {
+	s := newStore(t)
+	c := newAPIClient(t, s, "fastgateway")
+	seedUsage(t, s, usageMR(7, 1), usageAt(5, 10, 0), TriggerPush, false, "m", skillRow("security", "no_blocking_issues", 100, 10))
+	seedAPIUsage(t, s, c.ID, "route:1", usageAt(5, 11, 0), skillRow("gateway", "failed", 5000, 500))
+	// One API review that failed before it left a result, and one a newer
+	// request stopped: both are counted from runs, not run_usage.
+	failed := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:2"))
+	setRun(t, s, failed, `state = 'reported', dispatched_at = now(), failure_reason = 'the Job failed'`)
+	stopped := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:3"))
+	setRun(t, s, stopped, `dispatched_at = now()`)
+	enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:3"))
+	if apiState(t, s, stopped) != Superseded {
+		t.Fatal("the first request was not superseded")
+	}
+
+	got, err := s.MetricsTotals(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Tokens) != 1 || len(got.Reviews) != 1 || len(got.SkillRuns) != 1 || len(got.Findings) != 1 {
+		t.Errorf("usage totals = %d, %d, %d, %d rows, want the merge request's one each", len(got.Tokens), len(got.Reviews), len(got.SkillRuns), len(got.Findings))
+	}
+	var instances []string
+	for _, r := range got.Tokens {
+		instances = append(instances, r.Instance)
+	}
+	for _, r := range got.Reviews {
+		instances = append(instances, r.Instance)
+	}
+	for _, r := range got.NoResult {
+		instances = append(instances, r.Instance)
+	}
+	for _, r := range got.Unfinished {
+		instances = append(instances, r.Instance)
+	}
+	for _, r := range got.SkillRuns {
+		instances = append(instances, r.Instance)
+	}
+	for _, r := range got.Findings {
+		instances = append(instances, r.Instance)
+	}
+	for _, r := range got.Dismissals {
+		instances = append(instances, r.Instance)
+	}
+	if len(instances) == 0 {
+		t.Fatal("no totals at all")
+	}
+	for _, in := range instances {
+		if in == "" {
+			t.Errorf("a total has the empty instance: %+v", got)
+			break
+		}
+	}
+	if len(got.NoResult) != 0 || len(got.Unfinished) != 0 {
+		t.Errorf("no result = %+v, unfinished = %+v, want none: the merge request has none", got.NoResult, got.Unfinished)
+	}
+}
+
+func TestDeleteAPIClientReturnsLiveJobs(t *testing.T) {
+	s := newStore(t)
+	c := newAPIClient(t, s, "fastgateway")
+	other := newAPIClient(t, s, "other")
+
+	live := seedAPIUsage(t, s, c.ID, "route:1", usageAt(5, 10, 0), skillRow("gateway", "no_blocking_issues", 10, 1))
+	setRun(t, s, live, `state = 'running', job_name = 'pergent-review-abc'`)
+	// Only a running review with a Job is named.
+	done := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:2"))
+	setRun(t, s, done, `state = 'reported', job_name = 'pergent-review-done'`)
+	queued := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:3"))
+	otherLive := enqueueAPI(t, s, apiRequest(other.ID, "acme", "route:1"))
+	setRun(t, s, otherLive, `state = 'running', job_name = 'pergent-review-other'`)
+
+	jobs, found, err := s.DeleteAPIClient(ctx, "fastgateway")
+	if err != nil || !found {
+		t.Fatalf("DeleteAPIClient = %v, %v, %v", jobs, found, err)
+	}
+	if !slices.Equal(jobs, []string{"pergent-review-abc"}) {
+		t.Errorf("jobs = %v, want [pergent-review-abc]", jobs)
+	}
+
+	count := func(q string, id string) int {
+		t.Helper()
+		var n int
+		if err := s.pool.QueryRow(ctx, q, id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	for _, id := range []string{live, done, queued} {
+		if n := count(`SELECT count(*) FROM runs WHERE id = $1::uuid`, id); n != 0 {
+			t.Errorf("run %s survived its client", id)
+		}
+		if n := count(`SELECT count(*) FROM api_reviews WHERE run_id = $1::uuid`, id); n != 0 {
+			t.Errorf("api_reviews row of %s survived its client", id)
+		}
+		if n := count(`SELECT count(*) FROM run_usage WHERE run_id = $1::uuid`, id); n != 0 {
+			t.Errorf("run_usage rows of %s survived its client", id)
+		}
+	}
+	if n := count(`SELECT count(*) FROM runs WHERE id = $1::uuid`, otherLive); n != 1 {
+		t.Error("another client's run was deleted")
+	}
+
+	// A client with nothing running names no Job, and an unknown one is not found.
+	if jobs, found, err := s.DeleteAPIClient(ctx, "other"); err != nil || !found || len(jobs) != 1 {
+		t.Errorf("DeleteAPIClient(other) = %v, %v, %v", jobs, found, err)
+	}
+	if jobs, found, err := s.DeleteAPIClient(ctx, "gone"); err != nil || found || jobs != nil {
+		t.Errorf("DeleteAPIClient(gone) = %v, %v, %v", jobs, found, err)
+	}
+}

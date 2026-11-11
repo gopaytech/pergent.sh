@@ -167,11 +167,12 @@ const (
 
 // UsageByRepository returns what each repository used since the given time,
 // busiest first, with the path it was last reported under. Reviews counts a
-// run once, however many skills it ran.
+// run once, however many skills it ran. An API review has no repository (its
+// instance is empty) and is left out.
 func (s *Store) UsageByRepository(ctx context.Context, since time.Time) ([]RepoUsage, error) {
 	rows, err := s.pool.Query(ctx, `SELECT instance, project_id, (array_agg(project_path ORDER BY reported_at DESC))[1], `+tokenSumColumns+`,
 			count(DISTINCT run_id)
-		FROM run_usage WHERE reported_at >= $1::timestamptz
+		FROM run_usage WHERE reported_at >= $1::timestamptz AND instance <> ''
 		GROUP BY instance, project_id
 		ORDER BY COALESCE(sum(tokens_in), 0) + COALESCE(sum(tokens_out), 0) DESC, instance, project_id`, since)
 	if err != nil {
@@ -407,12 +408,13 @@ func (s *Store) UsageProjectID(ctx context.Context, instance, project string) (i
 // first, at most limit of them, for one repository or, with an empty
 // instance, for every one. It hands them over as the database sends them
 // instead of collecting them, so an export of 90 days is never in memory at
-// once. An error from each stops it and is returned.
+// once. An error from each stops it and is returned. An API review has no
+// repository and is left out.
 func (s *Store) UsageRows(ctx context.Context, since time.Time, instance string, projectID int64, limit int, each func(UsageRow) error) error {
 	rows, err := s.pool.Query(ctx, `SELECT reported_at, instance, project_path, mr_iid, trigger, incremental, model, skill, verdict,
 			tokens_in, tokens_out, cache_read, cache_write, reasoning, findings, blocking, provider
 		FROM run_usage
-		WHERE reported_at >= $1::timestamptz AND ($2::text = '' OR (instance = $2::text AND project_id = $3::bigint))
+		WHERE reported_at >= $1::timestamptz AND instance <> '' AND ($2::text = '' OR (instance = $2::text AND project_id = $3::bigint))
 		ORDER BY reported_at, run_id, skill
 		LIMIT $4::integer`, since, instance, projectID, limit)
 	if err != nil {
@@ -536,14 +538,14 @@ type DismissalTotal struct {
 }
 
 // MetricsTotals returns the counts for the metrics, one grouped query per
-// kind. A review with no result and one stopped by a newer push are told
+// kind. An API review has no repository and is left out of all of them. A review with no result and one stopped by a newer push are told
 // apart as UsageWasted does, so the page and the metrics agree. Dismissals
 // come from the dismissals table, which loses a repository's rows when the
 // repository is switched off.
 func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	var t MetricsTotals
 	rows, err := s.pool.Query(ctx, `SELECT instance, project_path, skill, model, `+tokenSumColumns+`, count(*)
-		FROM run_usage GROUP BY instance, project_path, skill, model`)
+		FROM run_usage WHERE instance <> '' GROUP BY instance, project_path, skill, model`)
 	if err != nil {
 		return MetricsTotals{}, err
 	}
@@ -556,7 +558,7 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	}
 
 	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path, trigger, incremental, count(DISTINCT run_id)
-		FROM run_usage GROUP BY instance, project_path, trigger, incremental`); err != nil {
+		FROM run_usage WHERE instance <> '' GROUP BY instance, project_path, trigger, incremental`); err != nil {
 		return MetricsTotals{}, err
 	}
 	if t.Reviews, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (ReviewTotal, error) {
@@ -570,7 +572,7 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	// Reviews with no result have no usage rows, so these two come from runs,
 	// told apart as UsageWasted does.
 	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path, failure_step, count(*)
-		FROM runs WHERE result IS NULL AND failure_reason <> '' AND dispatched_at IS NOT NULL
+		FROM runs WHERE instance <> '' AND result IS NULL AND failure_reason <> '' AND dispatched_at IS NOT NULL
 		GROUP BY instance, project_path, failure_step`); err != nil {
 		return MetricsTotals{}, err
 	}
@@ -583,7 +585,7 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	}
 
 	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path, count(*)
-		FROM runs WHERE state = 'superseded' AND result IS NULL AND failure_reason = '' AND dispatched_at IS NOT NULL
+		FROM runs WHERE instance <> '' AND state = 'superseded' AND result IS NULL AND failure_reason = '' AND dispatched_at IS NOT NULL
 		GROUP BY instance, project_path`); err != nil {
 		return MetricsTotals{}, err
 	}
@@ -596,7 +598,7 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	}
 
 	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path, skill, verdict, count(*)
-		FROM run_usage GROUP BY instance, project_path, skill, verdict`); err != nil {
+		FROM run_usage WHERE instance <> '' GROUP BY instance, project_path, skill, verdict`); err != nil {
 		return MetricsTotals{}, err
 	}
 	if t.SkillRuns, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (SkillRunTotal, error) {
@@ -610,7 +612,7 @@ func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	// findings counts every finding of the skill, blocking ones included.
 	if rows, err = s.pool.Query(ctx, `SELECT instance, project_path, skill,
 			COALESCE(sum(blocking), 0), COALESCE(sum(findings - blocking), 0)
-		FROM run_usage GROUP BY instance, project_path, skill`); err != nil {
+		FROM run_usage WHERE instance <> '' GROUP BY instance, project_path, skill`); err != nil {
 		return MetricsTotals{}, err
 	}
 	if t.Findings, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (FindingTotal, error) {

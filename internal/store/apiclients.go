@@ -220,14 +220,41 @@ func (s *Store) UpdateAPIClient(ctx context.Context, name string, apply func(*AP
 	return out, true, tx.Commit(ctx)
 }
 
-// DeleteAPIClient removes a client and, with it, its keys. found is false when
-// there is no such client. jobs is nil until a client's reviews are stored.
+// DeleteAPIClient removes a client and, with it, its keys, its reviews and
+// their usage. found is false when there is no such client. jobs are the Job
+// names of its reviews that were running, read in the same transaction as the
+// delete, so a review the delete takes is named and none is missed; nil when
+// there are none.
 func (s *Store) DeleteAPIClient(ctx context.Context, name string) (jobs []string, found bool, err error) {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM api_clients WHERE name = $1`, name)
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, false, err
 	}
-	return nil, tag.RowsAffected() > 0, nil
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	rows, err := tx.Query(ctx, `SELECT r.job_name FROM runs r JOIN api_clients c ON c.id = r.api_client_id
+		WHERE c.name = $1 AND r.state = 'running' AND r.job_name <> '' ORDER BY r.created_at, r.id`, name)
+	if err != nil {
+		return nil, false, err
+	}
+	for rows.Next() {
+		var job string
+		if err := rows.Scan(&job); err != nil {
+			rows.Close()
+			return nil, false, err
+		}
+		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM api_clients WHERE name = $1`, name)
+	if err != nil {
+		return nil, false, err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, false, nil
+	}
+	return jobs, true, tx.Commit(ctx)
 }
 
 const apiKeyColumns = `id, client_id, name, prefix, key_hash, created_at, expires_at, last_used_at`
