@@ -123,20 +123,28 @@ func checkPath(p string) string {
 // isGitName reports whether a segment is, or on some file system would become,
 // the name .git: git refuses these in a path (its NTFS and HFS protections),
 // and the Job's git may run with either off, so both are applied here. The
-// segment is read without HFS-ignorable code points and trailing spaces and
-// dots; .git itself, its NTFS short name git~1 and the stream form .git:x
-// all count. The comparison ignores case.
+// segment is read without HFS-ignorable code points and in lower case. It
+// counts if it starts with .git or the NTFS short name git~1 and the rest,
+// once its leading spaces and dots are gone, is empty or starts with a colon
+// (the stream form .git::$INDEX_ALLOCATION).
 func isGitName(seg string) bool {
-	seg = strings.Map(func(r rune) rune {
+	seg = strings.ToLower(strings.Map(func(r rune) rune {
 		switch {
 		case r >= 0x200c && r <= 0x200f, r >= 0x202a && r <= 0x202e,
 			r >= 0x206a && r <= 0x206f, r == 0xfeff:
 			return -1
 		}
 		return r
-	}, seg)
-	seg = strings.ToLower(strings.TrimRight(seg, " ."))
-	return seg == ".git" || seg == "git~1" || strings.HasPrefix(seg, ".git:")
+	}, seg))
+	for _, name := range []string{".git", "git~1"} {
+		if rest, ok := strings.CutPrefix(seg, name); ok {
+			rest = strings.TrimLeft(rest, " .")
+			if rest == "" || rest[0] == ':' {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Import is what the Job feeds to `git fast-import` and the commits that
