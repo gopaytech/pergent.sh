@@ -648,11 +648,30 @@ func TestDeleteAPIClientReturnsLiveJobs(t *testing.T) {
 		t.Error("another client's run was deleted")
 	}
 
-	// A client with nothing running names no Job, and an unknown one is not found.
+	// A client with one live review names its Job, and an unknown client is not found.
 	if jobs, found, err := s.DeleteAPIClient(ctx, "other"); err != nil || !found || len(jobs) != 1 {
 		t.Errorf("DeleteAPIClient(other) = %v, %v, %v", jobs, found, err)
 	}
 	if jobs, found, err := s.DeleteAPIClient(ctx, "gone"); err != nil || found || jobs != nil {
 		t.Errorf("DeleteAPIClient(gone) = %v, %v, %v", jobs, found, err)
+	}
+}
+
+// The merge and close sweep looks changes up on a forge, which an API review
+// has none on, even once it is published with an outcome.
+func TestChangesWithoutFatesLeaveOutAPIReviews(t *testing.T) {
+	s := newStore(t)
+	c := newAPIClient(t, s, "fastgateway")
+	id := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:1"))
+	setRun(t, s, id, `state = 'reported', job_name = 'job-1', result = '{"status":"completed"}'::jsonb`)
+	dec := RunDecision{Outcome: OutcomeNothingReviewed, Reason: "no skill reviewed a file"}
+	if err := s.FinishAPIReview(ctx, id, []byte(`{"status":"completed"}`), dec); err != nil {
+		t.Fatalf("FinishAPIReview: %v", err)
+	}
+	decidedRun(t, s, mr1, "aaa", time.Now().Add(-time.Hour))
+
+	got, err := s.ChangesWithoutFates(ctx, time.Now().Add(-24*time.Hour), 10)
+	if err != nil || len(got) != 1 || got[0].MR != mr1 {
+		t.Errorf("ChangesWithoutFates = %+v, %v; want only the merge request %+v", got, err, mr1)
 	}
 }
