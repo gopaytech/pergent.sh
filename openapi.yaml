@@ -23,14 +23,24 @@ info:
     | --- | --- | --- |
     | `/webhooks/...` | GitLab, GitHub | `X-Gitlab-Token` header, `X-Hub-Signature-256` signature |
     | `/runs/{id}/result`, `/skill-fetches/{id}/result`, `/readiness-scans/{id}/result` | Jobs pergent.sh started | one-time bearer token per Job |
+    | `/v1/...` | systems that ask for reviews (the review API) | `Authorization: Bearer <key>`, a client key an admin made |
     | `/auth/...` | the dashboard in a browser | none, or the sign-in cookies |
     | `/api/...` | the dashboard in a browser | session cookie, plus `X-CSRF-Token` on writes |
     | `/healthz` | probes | none |
     | `/metrics` | Prometheus, on the `metrics_listen` port only | none: the port is not exposed through `public_url` |
 
-    **Conditional routes.** `/auth/` and `/api/` exist only when `dashboard.url`
-    is set. `/skill-fetches/{id}/result` and `/readiness-scans/{id}/result`
-    exist only then too. Without them the path is 404.
+    **Conditional routes.** `/auth/`, `/api/` and `/v1/` exist only when
+    `dashboard.url` is set. `/skill-fetches/{id}/result` and
+    `/readiness-scans/{id}/result` exist only then too. Without them the path
+    is 404.
+
+    **Review API.** `/v1/` is a separate API from the dashboard's. Every
+    response is sent `Cache-Control: no-store` and `X-Content-Type-Options:
+    nosniff`. Errors are `{"code": "...", "message": "..."}` (see
+    `ReviewApiError`). A missing, unknown, revoked or expired key is always the
+    same 401. A path under `/v1/` that is not a route is 404 `not_found` with
+    a key and 401 without one. Field names are snake_case. v1 only gains
+    optional fields: ignore the ones you do not know.
 
     **Dashboard API.** Every `/api/` and `/auth/` response is sent
     `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. Errors are
@@ -113,6 +123,8 @@ tags:
     description: What the reviews used, for admins.
   - name: Instances and settings
     description: Admin configuration.
+  - name: Review API
+    description: The routes a client system calls with a bearer key to ask for reviews.
 security: []
 paths:
   # ---------------------------------------------------------------- webhooks
@@ -2910,6 +2922,34 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
+  # ------------------------------------------------------------- review API
+  /v1/client:
+    get:
+      operationId: getReviewApiClient
+      tags: [Review API]
+      summary: Show the calling client and its limits
+      description: |
+        The client the key belongs to and the caps on its requests. The
+        answer is the same for every key of the client.
+      x-pergent-access: key
+      security:
+        - reviewApiKey: []
+      responses:
+        '200':
+          description: The client.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiClient'}
+        '401':
+          description: The key is missing, unknown, revoked or expired. The body is the same for each.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '500':
+          description: The key could not be checked. The code is empty.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
 components:
   securitySchemes:
     sessionCookie:
@@ -2965,6 +3005,14 @@ components:
       type: http
       scheme: bearer
       description: The skill fetch Job's one-time token. It opens this fetch's result route only.
+    reviewApiKey:
+      type: http
+      scheme: bearer
+      description: |
+        A client key, `pgk_<prefix>_<secret>`, made by an admin in the
+        dashboard and shown once. It opens the `/v1/` routes of its client
+        only. A missing, unknown, revoked or expired key is 401
+        `unauthorized`, with the same body for each.
     readinessScanToken:
       type: http
       scheme: bearer
@@ -3102,6 +3150,35 @@ components:
         text/plain:
           schema: {type: string}
   schemas:
+    # ------------------------------------------------------------- review API
+    ReviewApiError:
+      type: object
+      description: |
+        The body of every error of `/v1/`. `code` is one of `unauthorized`,
+        `not_found`, `invalid`, `too_large`, `rate_limited`, `budget_used_up`,
+        `cannot_review`, `not_finished` and `idempotency_key_reused`; it is empty
+        on a 5xx. A new code is a `/v2/` change.
+      required: [code, message]
+      properties:
+        code: {type: string}
+        message: {type: string}
+    ReviewApiClient:
+      type: object
+      description: The calling client.
+      required: [name, limits]
+      properties:
+        name: {type: string}
+        limits: {$ref: '#/components/schemas/ReviewApiLimits'}
+    ReviewApiLimits:
+      type: object
+      description: The caps on a client's requests.
+      required: [max_request_bytes, max_files, max_in_flight, requests_per_hour, monthly_token_budget]
+      properties:
+        max_request_bytes: {type: integer, description: The most bytes of files one review request may hold.}
+        max_files: {type: integer, description: The most files one review request may hold.}
+        max_in_flight: {type: integer, description: The most reviews that may be queued or running at once.}
+        requests_per_hour: {type: integer, description: The most calls a key may make in an hour.}
+        monthly_token_budget: {type: integer, format: int64, description: The tokens the client's reviews may use in a month.}
     # ------------------------------------------------------------- shared shapes
     ErrorBody:
       type: object

@@ -11,6 +11,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/callback"
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/instances"
+	"github.com/gopaytech/pergent.sh/internal/reviewapi"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 	"github.com/gopaytech/pergent.sh/internal/syncmap"
@@ -51,7 +52,10 @@ type Deps struct {
 	// (the engine). Nil, when the dashboard is off: no scan runs, and the
 	// route is absent.
 	ReadinessScans callback.ScanResults
-	Log            *slog.Logger
+	// ReviewAPI serves /v1/, the review API. Nil, when the dashboard is off:
+	// the paths are absent.
+	ReviewAPI *reviewapi.Handler
+	Log       *slog.Logger
 }
 
 // Routes serves:
@@ -64,6 +68,8 @@ type Deps struct {
 //   - POST /readiness-scans/{id}/result: what a readiness scan Job found,
 //     when ReadinessScans is set;
 //   - GET /healthz: 200 "ok";
+//   - /v1/: the review API (reviewapi.Handler), when ReviewAPI is set and
+//     dashboard.url is configured;
 //   - when Dashboard is set and dashboard.url is configured: /auth/ and /api/
 //     (the Dashboard handler) and everything else the embedded app. Without
 //     them none of /, /api/ and /auth/ exist.
@@ -98,6 +104,9 @@ func Routes(d Deps) *http.ServeMux {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = io.WriteString(w, "ok")
 	})
+	if d.ReviewAPI != nil && d.Config != nil && d.Config.DashboardEnabled() {
+		d.ReviewAPI.Routes(mux)
+	}
 	if d.Dashboard != nil && d.Config != nil && d.Config.DashboardEnabled() {
 		guarded := noStore(d.Dashboard)
 		mux.Handle("/auth/", guarded)

@@ -33,6 +33,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/readiness"
 	"github.com/gopaytech/pergent.sh/internal/result"
+	"github.com/gopaytech/pergent.sh/internal/reviewapi"
 	"github.com/gopaytech/pergent.sh/internal/skillfetch"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -139,10 +140,11 @@ func (d specDoc) operations() []specOp {
 // --- the routes in the code ---
 
 // Access levels a route can be behind in the router: nothing, a session
-// (Auth.Require) or an admin (Dashboard.adminRoute, which wraps the handler
-// in Auth.RequireAdmin). The handler may check more (a repository role); the
-// spec says so in prose.
-var accessRank = map[string]int{"none": 0, "session": 1, "admin": 2}
+// (Auth.Require), an admin (Dashboard.adminRoute, which wraps the handler
+// in Auth.RequireAdmin) or a client key (reviewapi.Handler.RequireKey, the
+// /v1/ routes). The handler may check more (a repository role); the spec says
+// so in prose. No route is behind both a session and a key.
+var accessRank = map[string]int{"none": 0, "key": 1, "session": 1, "admin": 2}
 
 type codeRoute struct {
 	Pattern string // "GET /api/me", or "/api/" for a method-less one
@@ -172,8 +174,8 @@ func maxAccess(a, b string) string {
 	return a
 }
 
-// gateOf reads how a handler expression is gated: it finds Require and
-// RequireAdmin anywhere inside it.
+// gateOf reads how a handler expression is gated: it finds Require,
+// RequireAdmin and RequireKey anywhere inside it.
 func gateOf(nodes ...ast.Node) string {
 	access := "none"
 	for _, n := range nodes {
@@ -188,6 +190,8 @@ func gateOf(nodes ...ast.Node) string {
 					access = maxAccess(access, "session")
 				case "RequireAdmin":
 					access = maxAccess(access, "admin")
+				case "RequireKey":
+					access = maxAccess(access, "key")
 				}
 			}
 			return true
@@ -486,6 +490,7 @@ var (
 		"/":      "the embedded SPA",
 		"/api/":  "catch-all: 404 for an unknown API path",
 		"/auth/": "catch-all in the server mux that hands /auth/ to the dashboard",
+		"/v1/":   "catch-all: 404 JSON for an unknown review API path",
 	}
 	// Registered only so the mux answers 404 (JSON) instead of redirecting
 	// the instance alone to the {rest...} routes. Same answer as any
@@ -719,6 +724,7 @@ func (d *D) routes(mux *http.ServeMux) {
 	for _, method := range []string{"PUT", "DELETE"} {
 		mux.Handle(method+" /g", d.Auth.Require(none))
 	}
+	mux.Handle("GET /v1/client", h.RequireKey(http.HandlerFunc(h.client)))
 	logger.Handle(ctx, rec)
 }`
 	routes, unresolved := scanSource(t, src)
@@ -732,7 +738,7 @@ func (d *D) routes(mux *http.ServeMux) {
 	want := map[string]string{
 		"POST /a/{id}": "none", "GET /b": "none", "/": "none",
 		"GET /c": "session", "GET /d": "admin", "PUT /e": "admin", "DELETE /f": "session",
-		"PUT /g": "session", "DELETE /g": "session",
+		"PUT /g": "session", "DELETE /g": "session", "GET /v1/client": "key",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("routes = %v, want %v", got, want)
@@ -918,6 +924,9 @@ var openAPISchemas = map[string]schemaType{
 	"SignInAdminView":        outputSchema(SignInAdminView{}),
 	"SignInTestView":         outputSchema(SignInTestView{}),
 	"ssoView":                outputSchema(ssoView{}),
+	"ReviewApiClient":        outputSchema(reviewapi.ClientBody{}),
+	"ReviewApiLimits":        outputSchema(reviewapi.LimitsBody{}),
+	"ReviewApiError":         outputSchema(reviewapi.ErrorBody{}),
 	"readiness.Checklist":    outputSchema(readiness.Checklist{}),
 	"readiness.Section":      outputSchema(readiness.Section{}),
 	"readiness.Item":         outputSchema(readiness.Item{}),
@@ -1514,9 +1523,9 @@ func TestOpenAPIDocumentIsValid(t *testing.T) {
 			}
 		}
 		if _, ok := op.Op["x-pergent-access"].(string); !ok {
-			t.Errorf("%s: x-pergent-access is required (none, session, admin or operator)", id)
+			t.Errorf("%s: x-pergent-access is required (none, key, session or admin)", id)
 		} else if _, known := accessRank[specString(op.Op["x-pergent-access"])]; !known {
-			t.Errorf("%s: x-pergent-access %q is not none, session or admin", id, op.Op["x-pergent-access"])
+			t.Errorf("%s: x-pergent-access %q is not none, key, session or admin", id, op.Op["x-pergent-access"])
 		}
 		if sec, ok := op.Op["security"]; !ok {
 			t.Errorf("%s: security is required (write [] for none)", id)

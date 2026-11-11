@@ -50,6 +50,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/forge/githubforge"
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/kube"
+	"github.com/gopaytech/pergent.sh/internal/reviewapi"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
 	"github.com/gopaytech/pergent.sh/internal/server"
 	"github.com/gopaytech/pergent.sh/internal/settings"
@@ -282,6 +283,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		fetcher      *skillfetch.Fetcher
 		fetchResults callback.FetchResults
 		scanResults  callback.ScanResults
+		api          *reviewapi.Handler
 	)
 	if cfg.DashboardEnabled() {
 		// The readiness scans need the dashboard too (it shows and asks for
@@ -297,6 +299,8 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 			CallbackBase: cfg.CallbackURL, Now: time.Now, Log: log,
 			Launcher: launcher, Namespace: cfg.Jobs.Namespace, GitImage: cfg.Jobs.Image, Image: os.Getenv("PERGENT_SH_IMAGE")}
 		fetchResults = fetcher
+		// The review API is on with the dashboard: its clients are made there.
+		api = &reviewapi.Handler{Store: st, Box: box, Models: reg, Wake: eng.Wake, Log: log}
 	}
 	dash, err := newDashboard(dashboard.Options{
 		Config: cfg, Instances: reg, Connector: conn, Store: st, SecretKey: key, Log: log,
@@ -329,7 +333,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	handler := server.Routes(server.Deps{
 		Config: cfg, Instances: reg, WebhookSecrets: conn.gitlabHooks, GitHubWebhookSecrets: conn.githubHooks,
 		Store: st, Bots: commandBots(conn.platforms), Wake: eng.Wake, Dashboard: dashboardHandler(dash), Pages: dashboardPages(dash),
-		SkillFetches: fetchResults, ReadinessScans: scanResults, Log: log,
+		SkillFetches: fetchResults, ReadinessScans: scanResults, ReviewAPI: api, Log: log,
 	})
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
