@@ -17,7 +17,7 @@ Migration `0040` runs at startup too. It adds four tables (`api_callbacks`, `api
 - **`/v1/` must be exposed for the callers,** on a host they reach, over https: [Exposing pergent.sh](setup/install.md#exposing-pergentsh). Nothing else of the dashboard needs to be public for them.
 - **"Needs attention" has a new kind, `callback_failing`,** for an API client with 3 or more callbacks from the last 24 hours not delivered ([Dashboard](concepts/dashboard.md)). Admins see it; it clears when fewer are, or when the callback URL is emptied.
 - **Metrics:** `pergent_api_reviews_total`, `pergent_api_tokens_total` and `pergent_api_callbacks_total`, labelled by `client` only, and an **API clients** row in the example Grafana dashboard ([Metrics](concepts/metrics.md)). The **Usage** page lists each client with its tenants.
-- **Rolling back to 0.16.0 stops the callbacks, the dismissals and the limits** with the rest of the API: it has no `/v1/` routes. Callbacks not yet sent are never sent, the results stay stored, and dismissals stay stored. API reviews the older release meets are superseded, as described above for migration `0039`: callers send their changes again.
+- **Rolling back to the previous release stops the callbacks, the dismissals and the limits** with the rest of the API: it has no `/v1/` routes. Callbacks not yet sent are never sent, the results stay stored, and dismissals stay stored. API reviews the older release meets are superseded, as described above for migration `0039`: callers send their changes again.
 
 ## Upgrading to 0.16.0
 

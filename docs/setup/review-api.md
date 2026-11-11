@@ -327,7 +327,7 @@ The header is `X-Pergent-Signature: t=<unix seconds>,v1=<hex>`, with one `v1=` p
 A function in Go:
 
 ```go
-package main
+package callbacks
 
 import (
 	"crypto/hmac"
@@ -357,7 +357,7 @@ func verify(header string, body []byte, secret string, now time.Time) error {
 		return errors.New("no timestamp")
 	}
 	if d := now.Sub(time.Unix(sec, 0)); d > 5*time.Minute || d < -5*time.Minute {
-		return errors.New("timestamp too old")
+		return errors.New("timestamp out of range")
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(ts + "."))
