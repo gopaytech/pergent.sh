@@ -2946,7 +2946,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/ReviewApiError'}
         '500':
-          description: The key could not be checked. The code is empty.
+          description: The key could not be checked. The code is `internal`.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ReviewApiError'}
@@ -3156,11 +3156,13 @@ components:
       description: |
         The body of every error of `/v1/`. `code` is one of `unauthorized`,
         `not_found`, `invalid`, `too_large`, `rate_limited`, `budget_used_up`,
-        `cannot_review`, `not_finished` and `idempotency_key_reused`; it is empty
-        on a 5xx. A new code is a `/v2/` change.
+        `cannot_review`, `not_finished`, `idempotency_key_reused` and, for every
+        5xx, `internal`. A new code is a `/v2/` change.
       required: [code, message]
       properties:
-        code: {type: string}
+        code:
+          type: string
+          enum: [unauthorized, not_found, invalid, too_large, rate_limited, budget_used_up, cannot_review, not_finished, idempotency_key_reused, internal]
         message: {type: string}
     ReviewApiClient:
       type: object

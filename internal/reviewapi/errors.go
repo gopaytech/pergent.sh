@@ -6,7 +6,7 @@ import (
 )
 
 // The error codes of v1. A new one is a /v2/ change: a caller that switches on
-// the code must never meet one it does not know.
+// the code must never meet one it does not know. CodeInternal is for every 5xx.
 const (
 	CodeUnauthorized         = "unauthorized"
 	CodeNotFound             = "not_found"
@@ -17,10 +17,10 @@ const (
 	CodeCannotReview         = "cannot_review"
 	CodeNotFinished          = "not_finished"
 	CodeIdempotencyKeyReused = "idempotency_key_reused"
+	CodeInternal             = "internal"
 )
 
-// ErrorBody is the body of every error. A 5xx has an empty code: it is not a
-// refusal a caller can act on.
+// ErrorBody is the body of every error.
 type ErrorBody struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
@@ -38,5 +38,5 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 }
 
 func writeInternal(w http.ResponseWriter) {
-	writeError(w, http.StatusInternalServerError, "", "internal error")
+	writeError(w, http.StatusInternalServerError, CodeInternal, "internal error")
 }

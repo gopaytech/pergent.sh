@@ -17,6 +17,7 @@ type fakeStore struct {
 	keys     map[string]fakeKey
 	touched  []int64
 	touchErr error
+	lookErr  error
 }
 
 type fakeKey struct {
@@ -25,6 +26,9 @@ type fakeKey struct {
 }
 
 func (f *fakeStore) APIKeyByPrefix(_ context.Context, prefix string) (store.APIKey, store.APIClient, bool, error) {
+	if f.lookErr != nil {
+		return store.APIKey{}, store.APIClient{}, false, f.lookErr
+	}
 	k, ok := f.keys[prefix]
 	return k.key, k.client, ok, nil
 }
@@ -67,8 +71,14 @@ func call(mux *http.ServeMux, method, path, authorization string) *httptest.Resp
 func TestRequireKey401(t *testing.T) {
 	_, fs, key, mux := newHandler(t)
 	prefix, _ := ParseKey(key)
-	// The right prefix with a wrong secret.
-	wrong := "pgk_" + prefix + "_" + "x" + key[len("pgk_"+prefix+"_")+1:]
+	// The right prefix with a wrong secret: the good key with its first secret
+	// character changed to another one, so it can never equal the key.
+	head := "pgk_" + prefix + "_"
+	first := "A"
+	if key[len(head)] == 'A' {
+		first = "B"
+	}
+	wrong := head + first + key[len(head)+1:]
 	// An expired key: it expires at the instant of the call.
 	expiredKey, expiredPrefix, expiredHash, _ := NewKey()
 	expiry := testNow
@@ -140,6 +150,22 @@ func TestRequireKeyIgnoresTouchFailure(t *testing.T) {
 	fs.touchErr = errors.New("database down")
 	if rec := call(mux, "GET", "/v1/client", "Bearer "+key); rec.Code != http.StatusOK {
 		t.Errorf("status %d, want 200: the touch is bookkeeping", rec.Code)
+	}
+}
+
+func TestRequireKeyStoreFailureIs500Internal(t *testing.T) {
+	h, fs, key, mux := newHandler(t)
+	h.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	fs.lookErr = errors.New("database down")
+	rec := call(mux, "GET", "/v1/client", "Bearer "+key)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status %d, want 500", rec.Code)
+	}
+	if want := `{"code":"internal","message":"internal error"}` + "\n"; rec.Body.String() != want {
+		t.Errorf("body %q, want %q", rec.Body.String(), want)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control %q, want no-store", got)
 	}
 }
 
