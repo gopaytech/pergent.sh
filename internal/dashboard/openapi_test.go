@@ -938,6 +938,17 @@ var openAPISchemas = map[string]schemaType{
 	"ReviewApiClient":        outputSchema(reviewapi.ClientBody{}),
 	"ReviewApiLimits":        outputSchema(reviewapi.LimitsBody{}),
 	"ReviewApiError":         outputSchema(reviewapi.ErrorBody{}),
+	"ReviewApiRequest":       inputSchema(reviewapi.Request{}),
+	"ReviewApiFile":          inputSchema(reviewapi.File{}),
+	"ReviewApiReview":        outputSchema(reviewapi.Review{}),
+	"ReviewApiSkill":         outputSchema(reviewapi.Skill{}),
+	"ReviewApiFiles":         outputSchema(reviewapi.Files{}),
+	"ReviewApiSkipped":       outputSchema(reviewapi.Skipped{}),
+	"ReviewApiNotReviewed":   outputSchema(reviewapi.NotReviewed{}),
+	"ReviewApiFinding":       outputSchema(reviewapi.Finding{}),
+	"ReviewApiDismissed":     outputSchema(reviewapi.Dismissed{}),
+	"ReviewApiFailure":       outputSchema(reviewapi.Failure{}),
+	"ReviewApiUsage":         outputSchema(reviewapi.Usage{}),
 	"readiness.Checklist":    outputSchema(readiness.Checklist{}),
 	"readiness.Section":      outputSchema(readiness.Section{}),
 	"readiness.Item":         outputSchema(readiness.Item{}),
@@ -1344,6 +1355,13 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 	approvers := []string{approverKindApp, approverKindReviewApp, approverKindReviewBot, approverKindToken}
 	platforms := []string{config.PlatformGitLab, config.PlatformGitHub}
 	itemStates := []string{readiness.Passed, readiness.Warning, readiness.Missing, readiness.Unknown}
+	apiStatuses := []string{reviewapi.StatusQueued, reviewapi.StatusRunning, reviewapi.StatusCompleted, reviewapi.StatusFailed, reviewapi.StatusSuperseded}
+	apiVerdicts := []string{reviewapi.VerdictFailed, reviewapi.VerdictNothingReviewed, reviewapi.VerdictHasBlockingIssues, reviewapi.VerdictNoBlockingIssues}
+	apiSteps := []string{reviewapi.StepStarting, reviewapi.StepReview, reviewapi.StepDelivery, reviewapi.StepUnknown}
+	apiRules := []string{reviewapi.RuleDeleted, reviewapi.RuleBinary, reviewapi.RuleNoContentChanges, reviewapi.RuleLockfile, reviewapi.RuleVendored,
+		reviewapi.RuleGenerated, reviewapi.RuleOutOfScope, reviewapi.RuleExcludedBySkill, reviewapi.RuleOther}
+	apiCodes := []string{reviewapi.CodeUnauthorized, reviewapi.CodeNotFound, reviewapi.CodeInvalid, reviewapi.CodeTooLarge, reviewapi.CodeRateLimited,
+		reviewapi.CodeBudgetUsedUp, reviewapi.CodeCannotReview, reviewapi.CodeNotFinished, reviewapi.CodeIdempotencyKeyReused, reviewapi.CodeInternal}
 	cases := []struct {
 		schema, prop string
 		want         []string
@@ -1366,6 +1384,12 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 		{"RepositoryView", "health", healths},
 		{"InstanceAdminView", "approver", approvers},
 		{"readiness.Item", "state", itemStates},
+		{"ReviewApiReview", "status", apiStatuses},
+		{"ReviewApiReview", "verdict", apiVerdicts},
+		{"ReviewApiSkill", "verdict", apiVerdicts},
+		{"ReviewApiFailure", "step", apiSteps},
+		{"ReviewApiSkipped", "rule", apiRules},
+		{"ReviewApiError", "code", apiCodes},
 	}
 	families := []struct {
 		glob, prefix, block string
@@ -1385,6 +1409,11 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 		{"internal/dashboard/*.go", "approverKind", "", [][]string{approvers}},
 		{"internal/config/*.go", "Platform", "", [][]string{platforms}},
 		{"internal/readiness/*.go", "", "Passed", [][]string{itemStates}},
+		{"internal/reviewapi/*.go", "Status", "", [][]string{apiStatuses}},
+		{"internal/reviewapi/*.go", "Verdict", "", [][]string{apiVerdicts}},
+		{"internal/reviewapi/*.go", "Step", "", [][]string{apiSteps}},
+		{"internal/reviewapi/*.go", "Rule", "", [][]string{apiRules}},
+		{"internal/reviewapi/*.go", "Code", "", [][]string{apiCodes}},
 	}
 	for _, f := range families {
 		consts := stringConsts(t, f.glob, f.prefix, f.block)

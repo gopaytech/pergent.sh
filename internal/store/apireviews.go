@@ -167,6 +167,26 @@ func (s *Store) APIReview(ctx context.Context, clientID int64, id string) (APIRe
 	return s.oneAPIReview(ctx, `runs.id = $1::uuid AND a.client_id = $2`, id, clientID)
 }
 
+// APIReviewByKey returns the client's review that was asked for with
+// idempotency key, and the hash of the request it was sent with. found is
+// false when the client has not used the key (or the review is gone).
+func (s *Store) APIReviewByKey(ctx context.Context, clientID int64, key string) (r APIReview, requestHash []byte, found bool, err error) {
+	var id string
+	err = s.pool.QueryRow(ctx, `SELECT run_id::text, request_hash FROM api_reviews
+		WHERE client_id = $1 AND idempotency_key = $2`, clientID, key).Scan(&id, &requestHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return APIReview{}, nil, false, nil
+	}
+	if err != nil {
+		return APIReview{}, nil, false, err
+	}
+	r, found, err = s.APIReview(ctx, clientID, id)
+	if err != nil || !found {
+		return APIReview{}, nil, false, err
+	}
+	return r, requestHash, true, nil
+}
+
 // APIReviewByID returns the review id, of any client, for an admin.
 func (s *Store) APIReviewByID(ctx context.Context, id string) (APIReview, bool, error) {
 	return s.oneAPIReview(ctx, `runs.id = $1::uuid`, id)

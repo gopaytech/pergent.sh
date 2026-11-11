@@ -213,6 +213,30 @@ func TestEnqueueAPIReviewIdempotent(t *testing.T) {
 	}
 }
 
+func TestAPIReviewByKey(t *testing.T) {
+	s := newStore(t)
+	a := newAPIClient(t, s, "client-a")
+	b := newAPIClient(t, s, "client-b")
+	n := apiRequest(a.ID, "acme", "route:1")
+	n.IdempotencyKey, n.RequestHash = "retry-1", hash("request-1")
+	id := enqueueAPI(t, s, n)
+
+	r, got, found, err := s.APIReviewByKey(ctx, a.ID, "retry-1")
+	if err != nil || !found || r.Run.ID != id || !bytes.Equal(got, n.RequestHash) {
+		t.Errorf("APIReviewByKey = %s, %x, %v, %v; want %s, %x, true", r.Run.ID, got, found, err, id, n.RequestHash)
+	}
+	// The key is the client's own: another client, an unused key and a review
+	// asked for with no key are all not found.
+	for name, c := range map[string]struct {
+		client int64
+		key    string
+	}{"another client": {b.ID, "retry-1"}, "unused key": {a.ID, "retry-2"}, "no key": {a.ID, ""}} {
+		if _, _, found, err := s.APIReviewByKey(ctx, c.client, c.key); err != nil || found {
+			t.Errorf("%s: found=%v err=%v, want not found", name, found, err)
+		}
+	}
+}
+
 func TestAPIReviewOtherClientNotFound(t *testing.T) {
 	s := newStore(t)
 	a := newAPIClient(t, s, "client-a")

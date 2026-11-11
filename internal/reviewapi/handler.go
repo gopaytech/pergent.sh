@@ -18,6 +18,13 @@ import (
 type Store interface {
 	APIKeyByPrefix(ctx context.Context, prefix string) (store.APIKey, store.APIClient, bool, error)
 	TouchAPIKey(ctx context.Context, id int64, now time.Time) error
+
+	EnqueueAPIReview(ctx context.Context, n store.NewAPIReview) (id string, created bool, err error)
+	APIReview(ctx context.Context, clientID int64, id string) (store.APIReview, bool, error)
+	// APIReviewByKey finds the client's review that was asked for with an
+	// Idempotency-Key, and the hash of the request it came with.
+	APIReviewByKey(ctx context.Context, clientID int64, key string) (store.APIReview, []byte, bool, error)
+	ResolveLibrary(ctx context.Context, names []string) (store.ResolvedLibrary, error)
 }
 
 // ModelSource tells which models exist. *instances.Registry satisfies it.
@@ -59,6 +66,8 @@ func (h *Handler) log() *slog.Logger {
 // more from it than from any other call).
 func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/client", h.RequireKey(http.HandlerFunc(h.client)))
+	mux.Handle("POST /v1/reviews", h.RequireKey(http.HandlerFunc(h.createReview)))
+	mux.Handle("GET /v1/reviews/{id}", h.RequireKey(http.HandlerFunc(h.getReview)))
 	mux.Handle("/v1/", h.RequireKey(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, CodeNotFound, "not found")
 	})))

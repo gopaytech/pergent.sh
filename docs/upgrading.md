@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-**Another system can be given API keys to the review API.** An admin makes a client under **API clients** and gives each caller a key: [Review API](setup/review-api.md). Only the clients and keys exist so far. Nothing happens after the upgrade until an admin makes a client.
+**Another system can be given API keys to the review API.** An admin makes a client under **API clients** and gives each caller a key: [Review API](setup/review-api.md). A caller can ask for a review (`POST /v1/reviews`) and read it (`GET /v1/reviews/{id}`); callbacks come later. Nothing happens after the upgrade until an admin makes a client.
 
 Migration `0038` runs at startup and only adds two tables, so back up Postgres first, as for any migration. The previous release keeps working on the migrated database and ignores them. There is no new config key, so to roll back nothing needs removing from the config. The `/v1/` routes exist only with `dashboard.url` set, as the dashboard does. Rolling back removes the clients and keys from use; they stay stored.
 

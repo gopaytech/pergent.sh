@@ -1,6 +1,6 @@
 # 🔗 Review API
 
-The review API lets another system ask pergent.sh for reviews. This page covers the part that exists so far: **API clients and their keys**. Sending a change, reading its result and callbacks come later and are not described here yet.
+The review API lets another system ask pergent.sh for reviews. This page covers **API clients and their keys**, and **asking for a review and reading it**. Callbacks come later and are not described here yet.
 
 It exists only when the dashboard is on (`dashboard.url` is set). It adds no config key.
 
@@ -103,6 +103,50 @@ Every `/v1/` answer is sent `Cache-Control: no-store`. Field names are snake_cas
 | 500 | `internal` | The key could not be checked. Try again. |
 
 v1 only gains optional fields and keeps its codes: ignore a field you don't know. The full description is in [`openapi.yaml`](../../openapi.yaml) and the routes are in [HTTP routes](../reference/http-routes.md).
+
+## Ask for a review
+
+`POST /v1/reviews` queues a review of a change. The change is the content of each file before (`old`) and after (`new`), not a diff.
+
+```json
+{
+  "subject": "route:123",
+  "tenant": "acme",
+  "title": "Rate limit the route",
+  "description": "Why the change is made. The model reads it as data.",
+  "files": [
+    {"path": "routes/api.yaml", "old": "limit: 10\n", "new": "limit: 5\n"},
+    {"path": "routes/new.yaml", "new": "limit: 1\n"}
+  ]
+}
+```
+
+| Field | Rule |
+| --- | --- |
+| `subject` | Required. 1 to 200 characters. Your stable ID for what changed. |
+| `tenant` | At most 100 characters. Your customer or workspace. |
+| `title` | At most 200 characters. Shown on the dashboard. |
+| `description` | At most 32 KiB of UTF-8. Dropped with the files once the review has them. |
+| `files` | Not empty, at most the client's **Max files**. Each has a relative `path` (once in the list, no `..`) and `old`, `new` or both. A file with no `old` is new, one with no `new` is deleted. UTF-8 text. |
+
+`subject`, `tenant` and `title` hold no control character. Unknown fields are ignored. A new request for a subject (client, tenant and subject together) that has a review queued or running supersedes it.
+
+The answer is `202` with the review (`"status": "queued"`) and `Location: /v1/reviews/<id>`. The files are sealed, kept only until the review's Job has them, and then deleted.
+
+Send an `Idempotency-Key` header (1 to 200 printable ASCII characters) to retry safely: the same key with the same body returns the first review and queues nothing. The same key with another body is `422 idempotency_key_reused`.
+
+| Status | `code` | When |
+| --- | --- | --- |
+| 413 | `too_large` | The body is over the client's **Max request bytes** (never more than 819200), there are more files than **Max files**, or the files are too large once packed for the review. |
+| 422 | `invalid` | The body is not valid JSON, or a field or a file breaks its rule. The message names it, a file as `files[<index>]`. |
+| 422 | `idempotency_key_reused` | The `Idempotency-Key` was used before for another body. |
+| 409 | `cannot_review` | The client has no skills, a skill is not in the library, or its model is no longer in the catalog. |
+
+## Read a review
+
+`GET /v1/reviews/{id}` answers `200` with the review. While it waits or runs the body holds its `status` (`queued`, `running`, `failed`, `superseded`) and the request's `subject`, `tenant` and `title`. When it has finished, the body also holds the `verdict`, each skill's findings and files, and the tokens used. Only the verdict `no_blocking_issues` is a pass: a review that failed, or that reviewed no file, is never one.
+
+A review of another client, an ID that does not exist and an ID that is not a review ID all get the same `404 not_found`. The fields are in [`openapi.yaml`](../../openapi.yaml) (`ReviewApiReview`).
 
 ## Audit log
 

@@ -3153,6 +3153,138 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ReviewApiError'}
+  /v1/reviews:
+    post:
+      operationId: createReviewApiReview
+      tags: [Review API]
+      summary: Ask for a review of a change
+      description: |
+        Queues a review of the files sent and answers `202` with the review
+        as it is now (`status: queued`) and a `Location` header. The caller
+        reads the result with `GET /v1/reviews/{id}`.
+
+        A change is sent as the content of each file before (`old`) and after
+        (`new`), not as a diff. A file with no `old` is new, one with no `new`
+        is deleted. Contents are UTF-8 text. A path is relative, has no `..`
+        or `.` and appears once. Paths git can't store (a `.git` segment, a
+        control character, `a` beside `a/b`) are refused.
+
+        A request for a subject (the client, `tenant` and `subject` together)
+        that already has a review queued or running supersedes it. The files
+        and the description are kept only until the review's Job has them.
+
+        The checks run in this order and the first that fails answers: the
+        key (401); the size of the body (413); the `Idempotency-Key` (a
+        review asked for with the same key is answered again with its current
+        state, or 422 `idempotency_key_reused` for another body); the JSON and
+        the field rules (422); the number of files and the size of the packed
+        files (413); whether the client can review at all (409).
+      x-pergent-access: key
+      security:
+        - reviewApiKey: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: |
+            1 to 200 printable ASCII characters, chosen by the caller. A retry
+            with the same key and the same body returns the first review and
+            queues nothing; the same key with another body is 422
+            `idempotency_key_reused`. A key belongs to its client.
+          schema: {type: string, minLength: 1, maxLength: 200}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReviewApiRequest'}
+      responses:
+        '202':
+          description: The review is queued (or, for a retry, the review the key was used for, in its current state).
+          headers:
+            Location:
+              description: The review's URL, `/v1/reviews/<id>`.
+              schema: {type: string}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiReview'}
+        '401':
+          description: The key is missing, unknown, revoked or expired. The body is the same for each.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '409':
+          description: |
+            The client can't review now. The code is `cannot_review`; the
+            message says why: it has no skills, a skill is not in the library,
+            or its model is no longer in the model catalog.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '413':
+          description: |
+            The code is `too_large`. The body is over the client's
+            `max_request_bytes` (never more than 819200), there are more files
+            than its `max_files`, or the files packed for the review are too
+            large.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '422':
+          description: |
+            The code is `invalid` (the body is not valid JSON, a field breaks
+            its rule, or a file does; the message names the field, and a file
+            as `files[<index>]`) or `idempotency_key_reused`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '500':
+          description: The request could not be handled. The code is `internal`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+  /v1/reviews/{id}:
+    get:
+      operationId: getReviewApiReview
+      tags: [Review API]
+      summary: Read a review
+      description: |
+        The review as it is now. Until it finishes the body holds the status
+        and the request's identifiers only. Once it has finished it is the
+        stored result, with the verdict, the skills' findings and the files
+        each looked at.
+
+        A review of another client, an unknown ID and an ID that is not a
+        review ID all get the same `404`.
+      x-pergent-access: key
+      security:
+        - reviewApiKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The review's ID, from the `202` that queued it.
+          schema: {type: string, format: uuid}
+      responses:
+        '200':
+          description: The review.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiReview'}
+        '401':
+          description: The key is missing, unknown, revoked or expired. The body is the same for each.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '404':
+          description: There is no such review for this client. The code is `not_found`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '500':
+          description: The review could not be read. The code is `internal`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
 components:
   securitySchemes:
     sessionCookie:
@@ -3391,11 +3523,182 @@ components:
       description: The caps on a client's requests.
       required: [max_request_bytes, max_files, max_in_flight, requests_per_hour, monthly_token_budget]
       properties:
-        max_request_bytes: {type: integer, description: The most bytes of files one review request may hold.}
+        max_request_bytes: {type: integer, description: The most bytes one review request's body may hold (never more than 819200).}
         max_files: {type: integer, description: The most files one review request may hold.}
         max_in_flight: {type: integer, description: The most reviews that may be queued or running at once.}
         requests_per_hour: {type: integer, description: The most calls a key may make in an hour.}
         monthly_token_budget: {type: integer, format: int64, description: The tokens the client's reviews may use in a month.}
+    ReviewApiRequest:
+      type: object
+      description: |
+        What `POST /v1/reviews` takes. Fields it does not know are ignored.
+        The body may be as large as the client's `max_request_bytes`.
+      required: [subject, files]
+      properties:
+        subject:
+          type: string
+          description: |
+            The caller's stable ID for what changed, such as `route:123`: 1 to
+            200 characters, none a control character. A new review of a subject
+            supersedes one that is queued or running.
+        tenant:
+          type: string
+          description: The caller's customer or workspace. At most 100 characters, none a control character. Empty is a tenant of its own.
+        title:
+          type: string
+          description: A line shown on the dashboard. At most 200 characters, none a control character.
+        description:
+          type: string
+          description: What the change is for. At most 32 KiB of UTF-8. It reaches the model as data, as a merge request's description does, and is dropped with the files.
+        files:
+          type: array
+          description: The changed files, at most the client's `max_files`. Not empty.
+          items: {$ref: '#/components/schemas/ReviewApiFile'}
+    ReviewApiFile:
+      type: object
+      description: One file of the change, with its content before and after.
+      required: [path]
+      properties:
+        path:
+          type: string
+          description: Relative, at most 1024 bytes, no `..` or `.` segment, no leading `/`, once in the list.
+        old:
+          type: [string, 'null']
+          description: The content before. Missing or null means the file is new. UTF-8 text.
+        new:
+          type: [string, 'null']
+          description: The content after. Missing or null means the file was deleted. UTF-8 text.
+    ReviewApiReview:
+      type: object
+      description: |
+        A review. `verdict`, `skills` and `usage` are set once it has a
+        result, `failure` when it failed. Only the verdict `no_blocking_issues`
+        is a pass: a review that failed, or reviewed nothing, is never one.
+        v1 only gains optional fields and values of these enums never change.
+      required: [id, subject, tenant, title, status, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        subject: {type: string}
+        tenant: {type: string}
+        title: {type: string}
+        status:
+          type: string
+          enum: [queued, running, completed, failed, superseded]
+        created_at: {type: string, format: date-time}
+        finished_at:
+          type: [string, 'null']
+          format: date-time
+          description: When the review finished. Missing until then.
+        verdict:
+          type: string
+          description: |
+            The first that applies: `failed` (a skill failed, or the review
+            did), `nothing_reviewed` (no skill reviewed a file),
+            `has_blocking_issues` (a blocking finding that is not dismissed),
+            `no_blocking_issues`.
+          enum: [failed, nothing_reviewed, has_blocking_issues, no_blocking_issues]
+        skills:
+          type: array
+          items: {$ref: '#/components/schemas/ReviewApiSkill'}
+        failure:
+          oneOf:
+            - {$ref: '#/components/schemas/ReviewApiFailure'}
+            - {type: 'null'}
+        usage:
+          oneOf:
+            - {$ref: '#/components/schemas/ReviewApiUsage'}
+            - {type: 'null'}
+        test:
+          type: boolean
+          description: True on the sample body of a test callback, never on a real review.
+    ReviewApiSkill:
+      type: object
+      description: The outcome of one skill. Its verdict covers `files.reviewed` only.
+      required: [name, verdict, findings, files]
+      properties:
+        name: {type: string}
+        verdict:
+          type: string
+          enum: [failed, nothing_reviewed, has_blocking_issues, no_blocking_issues]
+        findings:
+          type: array
+          items: {$ref: '#/components/schemas/ReviewApiFinding'}
+        files: {$ref: '#/components/schemas/ReviewApiFiles'}
+    ReviewApiFiles:
+      type: object
+      description: What a skill looked at.
+      required: [reviewed, skipped, not_reviewed]
+      properties:
+        reviewed:
+          type: array
+          items: {type: string}
+        skipped:
+          type: array
+          items: {$ref: '#/components/schemas/ReviewApiSkipped'}
+        not_reviewed:
+          type: array
+          description: Files that should have been reviewed and were not. The skill is `failed`.
+          items: {$ref: '#/components/schemas/ReviewApiNotReviewed'}
+    ReviewApiSkipped:
+      type: object
+      description: A file left out of the review, and the rule that left it out.
+      required: [path, rule]
+      properties:
+        path: {type: string}
+        rule:
+          type: string
+          enum: [deleted, binary, no_content_changes, lockfile, vendored, generated, out_of_scope, excluded_by_skill, other]
+    ReviewApiNotReviewed:
+      type: object
+      required: [path, reason]
+      properties:
+        path: {type: string}
+        reason: {type: string}
+    ReviewApiFinding:
+      type: object
+      required: [id, fingerprint, file, severity, title, explanation]
+      properties:
+        id: {type: string}
+        fingerprint: {type: string}
+        file: {type: string}
+        line: {type: integer}
+        end_line: {type: integer}
+        severity:
+          type: string
+          enum: [blocking, suggestion]
+        title: {type: string}
+        explanation: {type: string}
+        fix: {type: string}
+        suggestion:
+          type: string
+          description: Exact replacement text for the lines, at most 10 lines.
+        dismissed:
+          oneOf:
+            - {$ref: '#/components/schemas/ReviewApiDismissed'}
+            - {type: 'null'}
+    ReviewApiDismissed:
+      type: object
+      description: Why, and when, an earlier dismissal on the same subject covers the finding. It no longer counts toward a blocking verdict.
+      required: [reason, at]
+      properties:
+        reason: {type: string}
+        at: {type: string, format: date-time}
+    ReviewApiFailure:
+      type: object
+      description: Where a review failed, and why.
+      required: [step, reason]
+      properties:
+        step:
+          type: string
+          enum: [starting, review, delivery, unknown]
+        reason: {type: string}
+    ReviewApiUsage:
+      type: object
+      description: What the review's skills used.
+      required: [tokens_in, tokens_out]
+      properties:
+        tokens_in: {type: integer, format: int64}
+        tokens_out: {type: integer, format: int64}
     # ------------------------------------------------------------- shared shapes
     ErrorBody:
       type: object
