@@ -19,6 +19,11 @@ const userItems: NavItem[] = [
   { to: "/skills", label: "Skills", icon: "🧩" },
 ];
 
+// withAPIClients puts API clients right after Repositories: the review API's
+// clients are an admin's, so a user's menu never has the link.
+const withAPIClients = (items: NavItem[]): NavItem[] =>
+  items.flatMap((item) => (item.to === "/repos" ? [item, { to: "/api-clients", label: "API clients", icon: "🔗" }] : [item]));
+
 // adminItems is the admin area; Users says how many accounts wait for a
 // team.
 const adminItems = (waitingUsers: number): NavItem[] => [
@@ -119,7 +124,7 @@ export default function Layout() {
               </>
             ) : (
               <>
-                <Nav items={userItems} />
+                <Nav items={user.admin ? withAPIClients(userItems) : userItems} />
                 {user.admin && (
                   <>
                     <div className="section-label">Admin</div>

@@ -1,4 +1,7 @@
 import type {
+  APIClientRow,
+  APIClientView,
+  APIKeyView,
   AuditPageView,
   Can,
   CommentFooterView,
@@ -766,4 +769,40 @@ export const skillTokens: SkillTokensView[] = [
   { skill: "code-review", tokens: { in: 150_000, out: 30_000 } },
   { skill: "style", tokens: { in: 5_000, out: 1_000 } },
   { skill: "docs", tokens: { in: 2_000, out: 400 } },
+];
+
+// --- API clients ---
+
+export const apiKeyUsed: APIKeyView = {
+  id: 7,
+  name: "ci",
+  prefix: "pgk_ab12cd34",
+  createdAt: "2026-11-01T08:00:00Z",
+  expiresAt: "2027-01-01T00:00:00Z",
+  lastUsedAt: "2026-11-10T09:30:00Z",
+};
+
+// A key that never expires and was never used.
+export const apiKeyFresh: APIKeyView = {
+  id: 8,
+  name: "staging",
+  prefix: "pgk_ef56gh78",
+  createdAt: "2026-11-09T08:00:00Z",
+  expiresAt: null,
+  lastUsedAt: null,
+};
+
+export const apiClientFastgateway: APIClientView = {
+  name: "fastgateway",
+  skills: ["code-review"],
+  modelId: "",
+  callbackUrl: "https://fastgateway.example.com/hooks/pergent",
+  limits: { maxRequestBytes: 524288, maxFiles: 200, maxInFlight: 5, requestsPerHour: 600, monthlyTokenBudget: 10_000_000 },
+  keys: [apiKeyFresh, apiKeyUsed],
+  createdAt: "2026-10-30T08:00:00Z",
+};
+
+export const apiClientRows: APIClientRow[] = [
+  { name: "fastgateway", keys: 2 },
+  { name: "docs-bot", keys: 0 },
 ];

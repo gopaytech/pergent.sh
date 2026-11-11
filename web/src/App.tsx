@@ -8,6 +8,8 @@ import { inAdminArea, useMe } from "./layout/me";
 import AdminHome from "./pages/AdminHome";
 import AdminSettings from "./pages/AdminSettings";
 import AdminSignIn from "./pages/AdminSignIn";
+import ApiClient from "./pages/ApiClient";
+import ApiClients from "./pages/ApiClients";
 import AuditLog from "./pages/AuditLog";
 import Integrations from "./pages/Integrations";
 import Overview from "./pages/Overview";
@@ -73,6 +75,22 @@ export default function App() {
         <Route path="reviews/:instance/*" element={<ReviewDetail />} />
         <Route path="repos" element={<Repositories />} />
         <Route path="repos/:instance/*" element={<RepositoryDetail />} />
+        <Route
+          path="api-clients"
+          element={
+            <AdminOnly>
+              <ApiClients />
+            </AdminOnly>
+          }
+        />
+        <Route
+          path="api-clients/:name"
+          element={
+            <AdminOnly>
+              <ApiClient />
+            </AdminOnly>
+          }
+        />
         <Route path="skills" element={<Skills />} />
         <Route
           path="skills/new"

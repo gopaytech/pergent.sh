@@ -33,6 +33,7 @@ describe("Layout: the user area", () => {
     renderApp("/");
     const nav = await screen.findByRole("navigation", { name: "Main" });
     expect(linkNames(nav)).toEqual(userPages);
+    expect(within(nav).queryByRole("link", { name: "API clients" })).not.toBeInTheDocument();
     for (const label of [...adminPages, "Admin", "Admin area", "User pages"]) {
       expect(within(nav).queryByRole("link", { name: label })).not.toBeInTheDocument();
     }
@@ -43,7 +44,9 @@ describe("Layout: the user area", () => {
     fakeApi({ ...base, "GET /api/me": { body: ssoAdmin } });
     renderApp("/");
     const nav = await screen.findByRole("navigation", { name: "Main" });
-    expect(linkNames(nav)).toEqual([...userPages, "Admin area"]);
+    // API clients sit right after Repositories, for an admin only.
+    expect(linkNames(nav)).toEqual(["Overview", "Repositories", "API clients", "Reviews", "Skills", "Admin area"]);
+    expect(within(nav).getByRole("link", { name: "API clients" })).toHaveAttribute("href", "/api-clients");
     expect(within(nav).getByRole("link", { name: "Admin area" })).toHaveAttribute("href", "/admin");
     for (const label of adminPages) expect(within(nav).queryByRole("link", { name: label })).not.toBeInTheDocument();
     expect(screen.getByText(/^sso-admin/)).toHaveTextContent("sso-admin · admin");
