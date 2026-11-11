@@ -10,6 +10,7 @@ import AdminSettings from "./pages/AdminSettings";
 import AdminSignIn from "./pages/AdminSignIn";
 import ApiClient from "./pages/ApiClient";
 import ApiClients from "./pages/ApiClients";
+import ApiReview from "./pages/ApiReview";
 import AuditLog from "./pages/AuditLog";
 import Integrations from "./pages/Integrations";
 import Overview from "./pages/Overview";
@@ -88,6 +89,14 @@ export default function App() {
           element={
             <AdminOnly>
               <ApiClient />
+            </AdminOnly>
+          }
+        />
+        <Route
+          path="api-clients/:name/reviews/:id"
+          element={
+            <AdminOnly>
+              <ApiReview />
             </AdminOnly>
           }
         />

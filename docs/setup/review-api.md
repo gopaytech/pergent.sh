@@ -150,6 +150,12 @@ Send an `Idempotency-Key` header (1 to 200 printable ASCII characters) to retry 
 
 A review of another client, an ID that does not exist and an ID that is not a review ID all get the same `404 not_found`. The fields are in [`openapi.yaml`](../../openapi.yaml) (`ReviewApiReview`).
 
+## See a client's reviews in the dashboard
+
+A client's page opens on its **Reviews** tab: its reviews, newest first, with the subject, tenant, title, status and verdict. Filter by tenant, subject or status, and press **Load more** for older ones. A review's subject opens its page: who asked (subject, tenant, the key's name), the model, the tokens, each skill's findings (with the fix and the replacement text, and a dismissal when one covers the finding) and its files (reviewed, skipped with the rule, and not reviewed with the reason). A failed review reads `Failed at <step>: <reason>`, with the admin-only detail below. The **Logs** tab shows the Job's log, the clone log and the pod's state. The page has no re-run button: the caller sends the change again.
+
+The list of clients shows, for each, the reviews of the UTC month so far, how many failed and the tokens they used.
+
 ## How a review runs
 
 - It is a Kubernetes Job, like a merge request's review. Both share `jobs.max_running`, first in, first out.

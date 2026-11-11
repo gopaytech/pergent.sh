@@ -1,5 +1,7 @@
 import type {
   APIClientRow,
+  APIReviewDetail,
+  APIReviewRow,
   APIClientView,
   APIKeyView,
   AuditPageView,
@@ -803,6 +805,131 @@ export const apiClientFastgateway: APIClientView = {
 };
 
 export const apiClientRows: APIClientRow[] = [
-  { name: "fastgateway", keys: 2 },
-  { name: "docs-bot", keys: 0 },
+  { name: "fastgateway", keys: 2, reviewsThisMonth: 42, failedThisMonth: 3, tokensThisMonth: 1_250_000 },
+  { name: "docs-bot", keys: 0, reviewsThisMonth: 0, failedThisMonth: 0, tokensThisMonth: 0 },
 ];
+
+// --- API reviews ---
+
+export const apiReviewRowDone: APIReviewRow = {
+  id: "0f1e2d3c4b5a",
+  tenant: "payments",
+  subject: "change-1042",
+  title: "Add the retry loop",
+  status: "completed",
+  verdict: "has_blocking_issues",
+  createdAt: "2026-11-10T09:00:00Z",
+  finishedAt: "2026-11-10T09:04:00Z",
+};
+
+// A review that has not started: no verdict, not finished.
+export const apiReviewRowQueued: APIReviewRow = {
+  id: "9a8b7c6d5e4f",
+  tenant: "",
+  subject: "change-1043",
+  title: "Rename the ledger",
+  status: "queued",
+  verdict: "",
+  createdAt: "2026-11-10T10:00:00Z",
+  finishedAt: null,
+};
+
+export const apiReviewRows: APIReviewRow[] = [apiReviewRowQueued, apiReviewRowDone];
+
+// A completed review: one skill with a blocking finding (every text field
+// set, one of them HTML), a suggestion and a dismissed finding, and files
+// reviewed, skipped and not reviewed.
+export const apiReviewDone: APIReviewDetail = {
+  id: "0f1e2d3c4b5a",
+  client: "fastgateway",
+  tenant: "payments",
+  subject: "change-1042",
+  title: "Add the retry loop",
+  keyName: "ci",
+  status: "completed",
+  model: "claude-sonnet",
+  createdAt: "2026-11-10T09:00:00Z",
+  finishedAt: "2026-11-10T09:04:00Z",
+  failure: null,
+  review: {
+    id: "0f1e2d3c4b5a",
+    subject: "change-1042",
+    tenant: "payments",
+    title: "Add the retry loop",
+    status: "completed",
+    created_at: "2026-11-10T09:00:00Z",
+    finished_at: "2026-11-10T09:04:00Z",
+    verdict: "has_blocking_issues",
+    usage: { tokens_in: 12_000, tokens_out: 3_400 },
+    skills: [
+      {
+        name: "code-review",
+        verdict: "has_blocking_issues",
+        findings: [
+          {
+            id: "f1",
+            fingerprint: "aa11",
+            file: "internal/ledger/retry.go",
+            line: 42,
+            end_line: 45,
+            severity: "blocking",
+            title: "The loop never stops",
+            explanation: "It retries on every error, <b>forever</b>.",
+            fix: "Stop after 3 tries.",
+            suggestion: "for i := 0; i < 3; i++ {",
+          },
+          {
+            id: "f2",
+            fingerprint: "bb22",
+            file: "internal/ledger/names.go",
+            severity: "suggestion",
+            title: "Name it better",
+            explanation: "The name hides what it does.",
+          },
+          {
+            id: "f3",
+            fingerprint: "cc33",
+            file: "internal/ledger/old.go",
+            line: 7,
+            severity: "suggestion",
+            title: "Old style",
+            explanation: "Use the newer call.",
+            dismissed: { reason: "we keep it on purpose", at: "2026-11-09T12:00:00Z" },
+          },
+        ],
+        files: {
+          reviewed: ["internal/ledger/retry.go", "internal/ledger/names.go"],
+          skipped: [{ path: "go.sum", rule: "lockfile" }],
+          not_reviewed: [{ path: "internal/ledger/big.go", reason: "context overflow" }],
+        },
+      },
+    ],
+  },
+};
+
+// A review that failed while its Job ran: the caller's reason and an admin's
+// detail.
+export const apiReviewFailed: APIReviewDetail = {
+  id: "5e4d3c2b1a09",
+  client: "fastgateway",
+  tenant: "",
+  subject: "change-1044",
+  title: "",
+  keyName: "ci",
+  status: "failed",
+  model: null,
+  createdAt: "2026-11-10T11:00:00Z",
+  finishedAt: "2026-11-10T11:01:00Z",
+  failure: { step: "starting", reason: "the checkout failed", detail: "fatal: bad object <b>abc</b>" },
+  review: {
+    id: "5e4d3c2b1a09",
+    subject: "change-1044",
+    tenant: "",
+    title: "",
+    status: "failed",
+    created_at: "2026-11-10T11:00:00Z",
+    finished_at: "2026-11-10T11:01:00Z",
+    verdict: "failed",
+    failure: { step: "starting", reason: "the checkout failed" },
+  },
+};

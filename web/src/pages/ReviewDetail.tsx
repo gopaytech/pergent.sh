@@ -8,9 +8,7 @@ import {
   paths,
   type Can,
   type CheckView,
-  type DiagnosticsView,
   type FindingView,
-  type LogView,
   type RerunStatus,
   type ReviewDetailView,
   type ReviewHeader,
@@ -19,6 +17,7 @@ import {
   type SkillView,
 } from "../api";
 import { useWrite } from "../layout/write";
+import RunLog from "../RunLog";
 import {
   CopyButton,
   ErrorBox,
@@ -399,7 +398,7 @@ function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
           )}
           {tab === "checks" && <Checks skills={view.skills} />}
           {tab === "files" && <Files files={view.files} />}
-          {tab === "logs" && <Log id={id} />}
+          {tab === "logs" && <RunLog logPath={paths.apiRunLog(id)} diagnosticsPath={paths.apiRunDiagnostics(id)} />}
         </div>
       </div>
     </>
@@ -593,47 +592,5 @@ function Files({ files }: { files: RunDetailView["files"] }) {
         </>
       )}
     </div>
-  );
-}
-
-function Log({ id }: { id: string }) {
-  return (
-    <>
-      <ReviewLog id={id} />
-      <Diagnostics id={id} />
-    </>
-  );
-}
-
-function ReviewLog({ id }: { id: string }) {
-  const log = useQuery({ queryKey: ["log", id], queryFn: () => api.get<LogView>(paths.apiRunLog(id)) });
-  if (isStatus(log.error, 404)) return <div className="pad meta">No log was kept for this run.</div>;
-  if (log.isPending) return <Loading />;
-  if (log.isError) return <ErrorBox error={log.error} />;
-  return <pre className="log">{log.data.text}</pre>;
-}
-
-// Diagnostics is what was kept of a failed run's Job: the clone log, and for
-// admins the pod's state. A run with none kept (404) shows nothing here.
-function Diagnostics({ id }: { id: string }) {
-  const diag = useQuery({ queryKey: ["diagnostics", id], queryFn: () => api.get<DiagnosticsView>(paths.apiRunDiagnostics(id)) });
-  if (diag.isPending || isStatus(diag.error, 404)) return null;
-  if (diag.isError) return <ErrorBox error={diag.error} />;
-  const { cloneLog, podState } = diag.data;
-  return (
-    <>
-      {cloneLog && (
-        <>
-          <h3 className="group">Clone log</h3>
-          <pre className="log">{cloneLog}</pre>
-        </>
-      )}
-      {podState && (
-        <>
-          <h3 className="group">Pod state</h3>
-          <pre className="log">{podState}</pre>
-        </>
-      )}
-    </>
   );
 }

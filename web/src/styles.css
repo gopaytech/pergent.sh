@@ -343,7 +343,8 @@ select.btn {
   margin-bottom: 14px;
 }
 
-.filters select {
+.filters select,
+.filters input[type="text"] {
   width: auto;
   min-width: 160px;
 }
