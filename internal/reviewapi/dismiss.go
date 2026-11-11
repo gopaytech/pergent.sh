@@ -71,7 +71,9 @@ func CheckReason(reason string) (string, error) {
 
 // storedFinding is the finding id of the completed review rv, and the name of
 // the skill that found it. A review that is not completed is ErrNotFinished,
-// and an id the stored result does not hold is ErrNoSuchFinding.
+// and an id the stored result does not hold is ErrNoSuchFinding. So is a
+// finding with no fingerprint: a dismissal is kept by fingerprint, so every
+// such finding of the subject would share it.
 func storedFinding(rv store.APIReview, id string) (skill string, f Finding, err error) {
 	if StatusOf(rv) != StatusCompleted || len(rv.Response) == 0 {
 		return "", Finding{}, ErrNotFinished
@@ -82,7 +84,7 @@ func storedFinding(rv store.APIReview, id string) (skill string, f Finding, err 
 	}
 	for _, s := range body.Skills {
 		for _, f := range s.Findings {
-			if f.ID == id {
+			if f.ID == id && f.Fingerprint != "" {
 				return s.Name, f, nil
 			}
 		}

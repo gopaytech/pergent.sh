@@ -6,9 +6,11 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/instances"
+	"github.com/gopaytech/pergent.sh/internal/quota"
 	"github.com/gopaytech/pergent.sh/internal/secretbox"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -25,6 +27,9 @@ type Store interface {
 	// Idempotency-Key, and the hash of the request it came with.
 	APIReviewByKey(ctx context.Context, clientID int64, key string) (store.APIReview, []byte, bool, error)
 	ResolveLibrary(ctx context.Context, names []string) (store.ResolvedLibrary, error)
+	// APITokensSince is what the client's reviews asked for at or after
+	// since used, in tokens.
+	APITokensSince(ctx context.Context, clientID int64, since time.Time) (int64, error)
 
 	DismissStore
 }
@@ -47,6 +52,11 @@ type Handler struct {
 	// Wake nudges the engine's loops. May be nil.
 	Wake func()
 	Log  *slog.Logger
+	// Limiter holds each key to its client's requests per hour. nil means
+	// one of the handler's own.
+	Limiter *Limiter
+
+	limiterOnce sync.Once
 }
 
 func (h *Handler) now() time.Time {
@@ -54,6 +64,15 @@ func (h *Handler) now() time.Time {
 		return h.Now()
 	}
 	return time.Now()
+}
+
+func (h *Handler) limiter() *Limiter {
+	h.limiterOnce.Do(func() {
+		if h.Limiter == nil {
+			h.Limiter = &Limiter{}
+		}
+	})
+	return h.Limiter
 }
 
 func (h *Handler) log() *slog.Logger {
@@ -96,12 +115,17 @@ func clientOf(r *http.Request) store.APIClient {
 	return c
 }
 
-const unauthorizedMessage = "missing, unknown, revoked or expired key"
+const (
+	unauthorizedMessage = "missing, unknown, revoked or expired key"
+	rateLimitedMessage  = "too many requests for this key"
+)
 
 // RequireKey lets a request through only with a bearer key that is known, not
 // revoked and not expired. Every refusal is the same 401 body, so a caller
-// cannot tell a key that never existed from one that was revoked. The key and
-// its client go in the request context. Every response is uncacheable and not
+// cannot tell a key that never existed from one that was revoked. A key past
+// its client's requests per hour is refused with 429 rate_limited, whatever
+// the route: every request with a good key counts. The key and its client go
+// in the request context. Every response is uncacheable and not
 // content-sniffed.
 func (h *Handler) RequireKey(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -137,6 +161,12 @@ func (h *Handler) RequireKey(next http.Handler) http.Handler {
 			deny()
 			return
 		}
+		// Before the touch: a key that floods is refused without a write.
+		if ok, wait := h.limiter().Allow(k.ID, c.Limits.RequestsPerHour, now); !ok {
+			w.Header().Set("Retry-After", retryAfter(wait))
+			writeError(w, http.StatusTooManyRequests, CodeRateLimited, rateLimitedMessage)
+			return
+		}
 		// The touch is bookkeeping: a failure to write it never fails the call.
 		if err := h.Store.TouchAPIKey(r.Context(), k.ID, now); err != nil {
 			h.log().Warn("review API: recording a key's use failed", "key_id", k.ID, "err", err)
@@ -166,14 +196,36 @@ type LimitsBody struct {
 	MonthlyTokenBudget int64 `json:"monthly_token_budget"`
 }
 
+// UsageBody is what a client's reviews used in the UTC month so far, as
+// GET /v1/client shows it. Month is "2026-11"; TokensLeft is never below 0.
+type UsageBody struct {
+	Month      string `json:"month"`
+	TokensUsed int64  `json:"tokens_used"`
+	TokensLeft int64  `json:"tokens_left"`
+}
+
 // ClientBody is the body of GET /v1/client.
 type ClientBody struct {
 	Name   string     `json:"name"`
 	Limits LimitsBody `json:"limits"`
+	Usage  UsageBody  `json:"usage"`
+}
+
+// tokensUsed is what the client's reviews asked for in the UTC month of now
+// used: the sum its monthly token budget is held to.
+func (h *Handler) tokensUsed(r *http.Request, c store.APIClient, now time.Time) (int64, error) {
+	return h.Store.APITokensSince(r.Context(), c.ID, quota.MonthStart(now))
 }
 
 func (h *Handler) client(w http.ResponseWriter, r *http.Request) {
 	c := clientOf(r)
+	now := h.now()
+	used, err := h.tokensUsed(r, c, now)
+	if err != nil {
+		h.log().Error("review API: reading a client's tokens failed", "client_id", c.ID, "err", err)
+		writeInternal(w)
+		return
+	}
 	writeJSON(w, http.StatusOK, ClientBody{
 		Name: c.Name,
 		Limits: LimitsBody{
@@ -182,6 +234,11 @@ func (h *Handler) client(w http.ResponseWriter, r *http.Request) {
 			MaxInFlight:        c.Limits.MaxInFlight,
 			RequestsPerHour:    c.Limits.RequestsPerHour,
 			MonthlyTokenBudget: c.Limits.MonthlyTokenBudget,
+		},
+		Usage: UsageBody{
+			Month:      now.UTC().Format("2006-01"),
+			TokensUsed: used,
+			TokensLeft: max(c.Limits.MonthlyTokenBudget-used, 0),
 		},
 	})
 }

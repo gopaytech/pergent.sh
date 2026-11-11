@@ -326,6 +326,33 @@ func (s *Store) APIClientStats(ctx context.Context, since time.Time) (map[int64]
 	return out, rows.Err()
 }
 
+// APITokensSince returns the tokens (in plus out) the reviews of the client
+// used, of the reviews asked for at or after since: the month the monthly
+// token budget is held to counts as APIClientStats counts it.
+func (s *Store) APITokensSince(ctx context.Context, clientID int64, since time.Time) (int64, error) {
+	var n int64
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE(sum(u.tokens_in), 0)::bigint + COALESCE(sum(u.tokens_out), 0)::bigint
+		FROM run_usage u JOIN api_reviews ar ON ar.run_id = u.run_id
+		WHERE ar.client_id = $1 AND ar.created_at >= $2`, clientID, since).Scan(&n)
+	return n, err
+}
+
+// LastAPIReview returns the newest published review of the client's tenant
+// and subject whose result status is "completed", other than beforeRunID: the
+// previous review a later one of the subject is given. found is false when
+// there is none.
+func (s *Store) LastAPIReview(ctx context.Context, clientID int64, tenant, subject, beforeRunID string) (run Run, found bool, err error) {
+	runs, err := s.queryRuns(ctx, `SELECT `+runColumns+` FROM runs
+		WHERE id IN (SELECT run_id FROM api_reviews WHERE client_id = $1 AND tenant = $2 AND subject = $3)
+		  AND state = 'published' AND result->>'status' = 'completed' AND id::text <> $4
+		ORDER BY created_at DESC, id DESC LIMIT 1`,
+		clientID, tenant, subject, beforeRunID)
+	if err != nil || len(runs) == 0 {
+		return Run{}, false, err
+	}
+	return runs[0], true, nil
+}
+
 // APIReviewInputs returns the sealed inputs of the API review runID. found is
 // false once they are dropped, or for an unknown run.
 func (s *Store) APIReviewInputs(ctx context.Context, runID string) ([]byte, bool, error) {

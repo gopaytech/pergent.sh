@@ -272,3 +272,27 @@ func TestDismissChangesNothing(t *testing.T) {
 		t.Errorf("the body shows the dismissal: %s", after.Body)
 	}
 }
+
+// A finding with no fingerprint can't be dismissed: every such finding of the
+// subject would share one dismissal.
+func TestDismissFindingWithoutFingerprint(t *testing.T) {
+	_, fs, key, mux := newHandler(t)
+	rv := completedReview(t, fs, completedID, 3)
+	var body Review
+	if err := json.Unmarshal(rv.Response, &body); err != nil {
+		t.Fatal(err)
+	}
+	body.Skills[0].Findings[0].Fingerprint = ""
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rv.Response = b
+	fs.reviews[completedID] = rv
+
+	wantError(t, dismissCall(mux, "POST", key, completedID, findingID, `{"reason":"r"}`), http.StatusNotFound, CodeNotFound, "finding not found")
+	wantError(t, dismissCall(mux, "DELETE", key, completedID, findingID, ""), http.StatusNotFound, CodeNotFound, "finding not found")
+	if len(fs.events) != 0 || len(fs.dismissals) != 0 {
+		t.Errorf("a finding with no fingerprint was dismissed: %v, %v", fs.events, fs.dismissals)
+	}
+}

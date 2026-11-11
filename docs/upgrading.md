@@ -9,7 +9,7 @@ Migration `0038` runs at startup and only adds two tables, so back up Postgres f
 Migration `0039` runs at startup too. It adds a table, a sequence, two columns to `runs` (with a default, or NULL), a `CHECK` constraint on `runs` (`runs_api_shape`: an API review has no instance and no project) and indexes, dropping nothing. The previous release keeps running merge request reviews on the migrated database.
 
 - **During a rolling upgrade, or after a rollback, the previous release meets API reviews it doesn't know.** It claims a queued one, finds no repository `''`, and supersedes it. It can't publish an API review that is reported. It lists API reviews in **Usage** under an empty repository. After a rollback, callers may see `superseded` reviews: they send their changes again.
-- **The review API's hourly, in-flight and token limits are stored but not enforced yet.** Only the request size and the number of files hold in this release.
+- **Every limit of an API client holds.** A key past its client's requests per hour, and a client past its monthly token budget, get `429` ([Limits](setup/review-api.md#limits)). During a rolling upgrade or after a rollback, the previous release claims API reviews without the in-flight cap.
 
 Migration `0040` runs at startup too. It adds four tables (`api_callbacks`, `api_callback_attempts`, `api_dismissals`, `api_review_events`) and two indexes, dropping nothing. The previous release ignores them, so after a rollback no callback is sent; the results stay readable with `GET`, and dismissals stay stored.
 

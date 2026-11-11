@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/kube"
@@ -518,5 +519,47 @@ func TestOtherClientsReviewIsNotFound(t *testing.T) {
 	}
 	if len(fs.enqueued) != 1 {
 		t.Errorf("%d enqueued, want 1: the other client's key is not this client's", len(fs.enqueued))
+	}
+}
+
+func TestBudget429(t *testing.T) {
+	_, fs, key, mux := newHandler(t)
+	prefix, _ := ParseKey(key)
+	k := fs.keys[prefix]
+	k.client.Limits.MonthlyTokenBudget = 1000
+	fs.keys[prefix] = k
+
+	// Under the budget, a request is queued: it asks with the key, now
+	// before the budget is used up.
+	fs.tokens = map[int64]int64{3: 999}
+	if rec := post(mux, key, goodBody, "Idempotency-Key", "first"); rec.Code != http.StatusAccepted {
+		t.Fatalf("under the budget: status %d (%s)", rec.Code, rec.Body)
+	}
+	if want := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC); len(fs.tokensSince) != 1 || !fs.tokensSince[0].Equal(want) {
+		t.Errorf("tokens counted since %v, want the start of the UTC month %v", fs.tokensSince, want)
+	}
+
+	fs.tokens[3] = 1000
+	rec := post(mux, key, strings.Replace(goodBody, "route:1", "route:2", 1))
+	wantError(t, rec, http.StatusTooManyRequests, CodeBudgetUsedUp, "this client's monthly token budget is used up")
+	// Until 2026-12-01T00:00:00Z: 19 days and 12 hours.
+	if got := rec.Header().Get("Retry-After"); got != "1684800" {
+		t.Errorf("Retry-After %q, want 1684800", got)
+	}
+	if len(fs.enqueued) != 1 {
+		t.Errorf("%d enqueued, want only the first: nothing is queued past the budget", len(fs.enqueued))
+	}
+
+	// A retry of a request already queued is answered as before.
+	if rec := post(mux, key, goodBody, "Idempotency-Key", "first"); rec.Code != http.StatusAccepted {
+		t.Errorf("a retry past the budget: status %d, want 202 (%s)", rec.Code, rec.Body)
+	}
+
+	h, fs2, key2, mux2 := newHandler(t)
+	h.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	fs2.tokensErr = errors.New("database down")
+	wantError(t, post(mux2, key2, goodBody), http.StatusInternalServerError, CodeInternal, "internal error")
+	if len(fs2.enqueued) != 0 {
+		t.Errorf("queued when the budget could not be read")
 	}
 }

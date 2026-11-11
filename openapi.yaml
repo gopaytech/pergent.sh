@@ -3341,8 +3341,9 @@ paths:
       tags: [Review API]
       summary: Show the calling client and its limits
       description: |
-        The client the key belongs to and the caps on its requests. The
-        answer is the same for every key of the client.
+        The client the key belongs to, the caps on its requests and the
+        tokens its reviews used this UTC month. The answer is the same for
+        every key of the client.
       x-pergent-access: key
       security:
         - reviewApiKey: []
@@ -3357,6 +3358,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '429': {$ref: '#/components/responses/ReviewApiRateLimited'}
         '500':
           description: The key could not be checked. The code is `internal`.
           content:
@@ -3386,11 +3388,18 @@ paths:
         and the description are kept only until the review's Job has them.
 
         The checks run in this order and the first that fails answers: the
-        key (401); the size of the body (413); the `Idempotency-Key` (a
-        review asked for with the same key is answered again with its current
-        state, or 422 `idempotency_key_reused` for another body); the JSON and
-        the field rules (422); the number of files and the size of the packed
-        files (413); whether the client can review at all (409).
+        key (401); the key's requests per hour (429 `rate_limited`); the size
+        of the body (413); the `Idempotency-Key` (a review asked for with the
+        same key is answered again with its current state, or 422
+        `idempotency_key_reused` for another body); the client's monthly token
+        budget (429 `budget_used_up`); the JSON and the field rules (422); the
+        number of files and the size of the packed files (413); whether the
+        client can review at all (409).
+
+        A later review of a subject is given the subject's newest completed
+        review and what people dismissed on the subject. A finding a
+        dismissal covers stays in the result, with `dismissed`, and does not
+        block.
       x-pergent-access: key
       security:
         - reviewApiKey: []
@@ -3449,6 +3458,21 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '429':
+          description: |
+            The code is `rate_limited` (the key made more requests in the last
+            hour than its client's `requests_per_hour` allows) or
+            `budget_used_up` (the client's reviews asked for this UTC month used
+            its `monthly_token_budget`; a retry with an `Idempotency-Key` used
+            before is still answered). `Retry-After` is the seconds until the
+            next request is allowed or the next UTC month starts.
+          headers:
+            Retry-After:
+              description: Whole seconds to wait, at least 1.
+              schema: {type: integer}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
         '500':
           description: The request could not be handled. The code is `internal`.
           content:
@@ -3492,6 +3516,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '429': {$ref: '#/components/responses/ReviewApiRateLimited'}
         '500':
           description: The review could not be read. The code is `internal`.
           content:
@@ -3557,6 +3582,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '429': {$ref: '#/components/responses/ReviewApiRateLimited'}
         '500':
           description: The dismissal could not be stored. The code is `internal`.
           content:
@@ -3596,6 +3622,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '429': {$ref: '#/components/responses/ReviewApiRateLimited'}
         '500':
           description: The dismissal could not be read or stored. The code is `internal`.
           content:
@@ -3838,6 +3865,18 @@ components:
       content:
         text/plain:
           schema: {type: string}
+    ReviewApiRateLimited:
+      description: |
+        The key made more requests in the last hour than its client's
+        `requests_per_hour` allows. The code is `rate_limited`; every request
+        with a good key counts, on any route.
+      headers:
+        Retry-After:
+          description: Whole seconds until the next request is allowed, at least 1.
+          schema: {type: integer}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ReviewApiError'}
   schemas:
     # ------------------------------------------------------------- review API
     ReviewApiError:
@@ -3856,10 +3895,11 @@ components:
     ReviewApiClient:
       type: object
       description: The calling client.
-      required: [name, limits]
+      required: [name, limits, usage]
       properties:
         name: {type: string}
         limits: {$ref: '#/components/schemas/ReviewApiLimits'}
+        usage: {$ref: '#/components/schemas/ReviewApiClientUsage'}
     ReviewApiLimits:
       type: object
       description: The caps on a client's requests.
@@ -3867,9 +3907,17 @@ components:
       properties:
         max_request_bytes: {type: integer, description: The most bytes one review request's body may hold (never more than 819200).}
         max_files: {type: integer, description: The most files one review request may hold.}
-        max_in_flight: {type: integer, description: The most reviews that may be queued or running at once.}
-        requests_per_hour: {type: integer, description: The most calls a key may make in an hour.}
-        monthly_token_budget: {type: integer, format: int64, description: The tokens the client's reviews may use in a month.}
+        max_in_flight: {type: integer, description: 'The most reviews that may run at once. More wait in the queue, oldest first.'}
+        requests_per_hour: {type: integer, description: 'The most requests each key may make in an hour, on any route. Past it a request is 429 `rate_limited`.'}
+        monthly_token_budget: {type: integer, format: int64, description: 'The tokens the reviews asked for in a UTC month may use. Once used, a request is 429 `budget_used_up` and a queued review fails.'}
+    ReviewApiClientUsage:
+      type: object
+      description: What the client's reviews asked for this UTC month used, the sum its `monthly_token_budget` is held to.
+      required: [month, tokens_used, tokens_left]
+      properties:
+        month: {type: string, description: 'The UTC month, as `2026-11`.'}
+        tokens_used: {type: integer, format: int64, description: Tokens in and out.}
+        tokens_left: {type: integer, format: int64, description: What is left of the budget, never below 0.}
     ReviewApiRequest:
       type: object
       description: |

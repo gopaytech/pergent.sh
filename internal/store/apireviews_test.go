@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -744,5 +745,196 @@ func TestAPIClientStats(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("APIClientStats = %+v, want %+v", got, want)
+	}
+}
+
+// The budget counts a month as the dashboard does: by when each review was
+// asked for, the tokens of the client's reviews and no other's.
+func TestAPITokensSince(t *testing.T) {
+	s := newStore(t)
+	a := newAPIClient(t, s, "client-a")
+	b := newAPIClient(t, s, "client-b")
+	since := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	inMonth := since.Add(48 * time.Hour)
+	setCreated := func(id string, at time.Time) {
+		t.Helper()
+		if _, err := s.pool.Exec(ctx, `UPDATE api_reviews SET created_at = $2 WHERE run_id = $1::uuid`, id, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if got, err := s.APITokensSince(ctx, a.ID, since); err != nil || got != 0 {
+		t.Fatalf("a client with no review: %d, %v; want 0", got, err)
+	}
+	setCreated(seedAPIUsage(t, s, a.ID, "s1", inMonth, SkillUsage{Skill: "security", Verdict: "no_blocking_issues", In: 100, Out: 20},
+		SkillUsage{Skill: "style", Verdict: "no_blocking_issues", In: 30, Out: 5}), inMonth)
+	failed := seedAPIUsage(t, s, a.ID, "s2", inMonth, SkillUsage{Skill: "security", Verdict: "failed", In: 7, Out: 3})
+	setCreated(failed, inMonth)
+	setRun(t, s, failed, `state = 'published', result = '{"status":"failed"}'::jsonb`)
+	// Asked for before the month, reported in it: last month's.
+	setCreated(seedAPIUsage(t, s, a.ID, "s3", inMonth, SkillUsage{Skill: "security", Verdict: "failed", In: 1000, Out: 1000}),
+		since.Add(-time.Second))
+	setCreated(seedAPIUsage(t, s, b.ID, "s1", inMonth, SkillUsage{Skill: "security", Verdict: "no_blocking_issues", In: 4, Out: 1}), inMonth)
+
+	got, err := s.APITokensSince(ctx, a.ID, since)
+	if err != nil || got != 165 {
+		t.Errorf("APITokensSince = %d, %v; want 165", got, err)
+	}
+	stats, err := s.APIClientStats(ctx, since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats[a.ID].Tokens != got {
+		t.Errorf("the dashboard shows %d tokens, the budget counts %d", stats[a.ID].Tokens, got)
+	}
+}
+
+func TestLastAPIReview(t *testing.T) {
+	s := newStore(t)
+	c := newAPIClient(t, s, "gateway")
+	other := newAPIClient(t, s, "other")
+	published := func(clientID int64, tenant, subject, status string, at time.Time) string {
+		t.Helper()
+		id := enqueueAPI(t, s, apiRequest(clientID, tenant, subject))
+		setRun(t, s, id, `state = 'published', result = jsonb_build_object('status', $2::text), created_at = $3::timestamptz`, status, at)
+		return id
+	}
+	older := published(c.ID, "acme", "route:1", "completed", t0)
+	newer := published(c.ID, "acme", "route:1", "completed", t0.Add(time.Hour))
+	published(c.ID, "acme", "route:1", "error", t0.Add(2*time.Hour))
+	// Newer, and of another tenant, subject or client: never the subject's.
+	published(c.ID, "beta", "route:1", "completed", t0.Add(3*time.Hour))
+	published(c.ID, "acme", "route:2", "completed", t0.Add(3*time.Hour))
+	theirs := published(other.ID, "acme", "route:1", "completed", t0.Add(3*time.Hour))
+	reported := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:1"))
+	setRun(t, s, reported, `state = 'reported', result = '{"status":"completed"}'::jsonb, created_at = $2::timestamptz`, t0.Add(4*time.Hour))
+	current := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:1"))
+
+	got, found, err := s.LastAPIReview(ctx, c.ID, "acme", "route:1", current)
+	if err != nil || !found || got.ID != newer {
+		t.Fatalf("LastAPIReview = %s, %v, %v; want the newest completed published review %s", got.ID, found, err, newer)
+	}
+	if string(got.Result) == "" {
+		t.Error("the review comes without its result")
+	}
+	// The run asking is never its own previous review.
+	if got, found, err := s.LastAPIReview(ctx, c.ID, "acme", "route:1", newer); err != nil || !found || got.ID != older {
+		t.Errorf("before %s = %s, %v, %v; want %s", newer, got.ID, found, err, older)
+	}
+	if got, found, err := s.LastAPIReview(ctx, other.ID, "acme", "route:1", current); err != nil || !found || got.ID != theirs {
+		t.Errorf("the other client's = %s, %v, %v; want its own %s", got.ID, found, err, theirs)
+	}
+	if _, found, err := s.LastAPIReview(ctx, c.ID, "acme", "route:9", current); err != nil || found {
+		t.Errorf("a subject with no review: found %v, %v", found, err)
+	}
+	if _, found, err := s.LastAPIReview(ctx, c.ID, "", "route:1", current); err != nil || found {
+		t.Errorf("the empty tenant is a tenant of its own: found %v, %v", found, err)
+	}
+}
+
+// setMaxInFlight sets the client's max_in_flight.
+func setMaxInFlight(t *testing.T, s *Store, name string, n int) {
+	t.Helper()
+	if _, _, err := s.UpdateAPIClient(ctx, name, func(c *APIClient) { c.Limits.MaxInFlight = n }); err != nil {
+		t.Fatalf("UpdateAPIClient(%s): %v", name, err)
+	}
+}
+
+// A claim takes no more of a client's API reviews than fit beside those
+// already running, oldest first, and another client is not held up.
+func TestClaimQueuedCapsAPIClient(t *testing.T) {
+	s := newStore(t)
+	a := newAPIClient(t, s, "client-a")
+	b := newAPIClient(t, s, "client-b")
+	setMaxInFlight(t, s, "client-a", 2)
+	setMaxInFlight(t, s, "client-b", 2)
+	at := func(i int) time.Time { return t0.Add(time.Duration(i) * time.Minute) }
+	queue := func(clientID int64, subject string, i int) string {
+		t.Helper()
+		id := enqueueAPI(t, s, apiRequest(clientID, "acme", subject))
+		setRun(t, s, id, `created_at = $2::timestamptz`, at(i))
+		return id
+	}
+	running := queue(a.ID, "s0", 0)
+	setRun(t, s, running, `state = 'running', job_name = 'job-0'`)
+	a1, a2, a3 := queue(a.ID, "s1", 1), queue(a.ID, "s2", 2), queue(a.ID, "s3", 3)
+	b1, b2, b3 := queue(b.ID, "s1", 4), queue(b.ID, "s2", 5), queue(b.ID, "s3", 6)
+	claimAt := time.Now().Add(time.Hour)
+
+	got, err := s.ClaimQueued(ctx, 10, claimAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{a1, b1, b2}; !slices.Equal(runIDs(got), want) {
+		t.Fatalf("claimed %v, want %v: a's oldest beside its running one, and b's two", runIDs(got), want)
+	}
+	for _, id := range []string{a2, a3, b3} {
+		if st := getRun(t, s, id).State; st != Queued {
+			t.Errorf("%s = %s, want queued", id, st)
+		}
+	}
+	if got, err := s.ClaimQueued(ctx, 10, claimAt); err != nil || len(got) != 0 {
+		t.Errorf("a claim with both clients full = %v, %v; want none", runIDs(got), err)
+	}
+
+	// A review that ends makes room for the next, oldest first.
+	setRun(t, s, running, `state = 'published'`)
+	if got, err := s.ClaimQueued(ctx, 10, claimAt); err != nil || !slices.Equal(runIDs(got), []string{a2}) {
+		t.Errorf("after one ended = %v, %v; want %s", runIDs(got), err, a2)
+	}
+
+	// A raised cap takes effect on the next claim.
+	setMaxInFlight(t, s, "client-b", 3)
+	if got, err := s.ClaimQueued(ctx, 10, claimAt); err != nil || !slices.Equal(runIDs(got), []string{b3}) {
+		t.Errorf("after b's cap was raised = %v, %v; want %s", runIDs(got), err, b3)
+	}
+}
+
+// Merge request runs are claimed as before, first in, first out with API
+// reviews, and an API review the cap holds takes no slot from them.
+func TestClaimQueuedIgnoresCapForMR(t *testing.T) {
+	s := newStore(t)
+	c := newAPIClient(t, s, "gateway")
+	setMaxInFlight(t, s, "gateway", 1)
+	at := func(i int) time.Time { return t0.Add(time.Duration(i) * time.Minute) }
+	mr := func(iid int64, i int) string {
+		t.Helper()
+		id := enqueue(t, s, MRKey{Instance: mr1.Instance, ProjectID: mr1.ProjectID, IID: iid}, "h"+strconv.Itoa(i))
+		setRun(t, s, id, `created_at = $2::timestamptz`, at(i))
+		return id
+	}
+	api := func(subject string, i int) string {
+		t.Helper()
+		id := enqueueAPI(t, s, apiRequest(c.ID, "acme", subject))
+		setRun(t, s, id, `created_at = $2::timestamptz`, at(i))
+		return id
+	}
+	m1 := mr(10, 1)
+	a1 := api("s1", 2)
+	m2 := mr(11, 3)
+	a2 := api("s2", 4)
+	m3 := mr(12, 5)
+	m4 := mr(13, 6)
+	claimAt := time.Now().Add(time.Hour)
+
+	got, err := s.ClaimQueued(ctx, 3, claimAt)
+	if err != nil || !slices.Equal(runIDs(got), []string{m1, a1, m2}) {
+		t.Fatalf("first claim = %v, %v; want %v, oldest first", runIDs(got), err, []string{m1, a1, m2})
+	}
+	// a2 is older than m3, but a1 runs: it waits and takes no slot.
+	got, err = s.ClaimQueued(ctx, 1, claimAt)
+	if err != nil || !slices.Equal(runIDs(got), []string{m3}) {
+		t.Fatalf("second claim = %v, %v; want %s", runIDs(got), err, m3)
+	}
+	got, err = s.ClaimQueued(ctx, 10, claimAt)
+	if err != nil || !slices.Equal(runIDs(got), []string{m4}) {
+		t.Fatalf("third claim = %v, %v; want %s", runIDs(got), err, m4)
+	}
+	if st := getRun(t, s, a2).State; st != Queued {
+		t.Errorf("the held API review = %s, want queued", st)
+	}
+	setRun(t, s, a1, `state = 'reported'`)
+	if got, err := s.ClaimQueued(ctx, 10, claimAt); err != nil || !slices.Equal(runIDs(got), []string{a2}) {
+		t.Errorf("once a1 is reported = %v, %v; want %s", runIDs(got), err, a2)
 	}
 }

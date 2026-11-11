@@ -1,8 +1,6 @@
 # 🔗 Review API
 
-The review API lets another system ask pergent.sh for reviews. This page covers **API clients and their keys**, and **asking for a review and reading it**, and **dismissing a finding**.
-
-**Not built yet:** a review knowing its subject's earlier findings (a dismissal is stored but later reviews do not use it yet), and the hourly, in-flight and token limits come in a later part. You can set their fields now, but nothing enforces them yet. Don't rely on them.
+The review API lets another system ask pergent.sh for reviews. This page covers **API clients and their keys**, **asking for a review and reading it**, **dismissing a finding** and **the limits**.
 
 It exists only when the dashboard is on (`dashboard.url` is set). It adds no config key.
 
@@ -20,17 +18,15 @@ A client is one system that calls the API: a script, a bot, another service. An 
 | Keys | The secrets its callers send. A client can have several. |
 | Callback secret | Signs the callbacks pergent.sh sends to the client. |
 
-New clients get these limits. An admin changes them on the client's **Settings** tab.
+New clients get these limits. An admin changes them on the client's **Settings** tab. What each one does is in [Limits](#limits).
 
-| Limit | Default | Range | Enforced |
-| --- | --- | --- | --- |
-| Max request bytes | 524288 | 1024 to 819200 | Now |
-| Max files | 200 | 1 to 1000 | Now |
-| Max in flight | 5 | 1 to 50 | Not yet: a later part |
-| Requests per hour | 600 | 1 to 100000 | Not yet: a later part |
-| Monthly token budget | 10000000 | more than 0 | Not yet: a later part |
-
-A value you set for a limit that is not enforced yet is kept and shown by `GET /v1/client`, and takes effect when that part ships.
+| Limit | Default | Range |
+| --- | --- | --- |
+| Max request bytes | 524288 | 1024 to 819200 |
+| Max files | 200 | 1 to 1000 |
+| Max in flight | 5 | 1 to 50 |
+| Requests per hour | 600 | 1 to 100000 |
+| Monthly token budget | 10000000 | more than 0 |
 
 ## Make a client
 
@@ -83,7 +79,7 @@ On the **Settings** tab press **Remove client**. Its keys stop at once, the Jobs
 
 ## Check a key
 
-`GET /v1/client` says which client a key belongs to and its limits. It is a good first call.
+`GET /v1/client` says which client a key belongs to, its limits and the tokens its reviews used this UTC month. It is a good first call.
 
 ```json
 {
@@ -94,7 +90,8 @@ On the **Settings** tab press **Remove client**. Its keys stop at once, the Jobs
     "max_in_flight": 5,
     "requests_per_hour": 600,
     "monthly_token_budget": 10000000
-  }
+  },
+  "usage": {"month": "2026-11", "tokens_used": 120000, "tokens_left": 9880000}
 }
 ```
 
@@ -104,6 +101,7 @@ Every `/v1/` answer is sent `Cache-Control: no-store`. Field names are snake_cas
 | --- | --- | --- |
 | 401 | `unauthorized` | The key is missing, unknown, revoked or expired. The body is the same for each. |
 | 404 | `not_found` | A path under `/v1/` that is not a route (the key is checked first). |
+| 429 | `rate_limited` | The key is past its client's **Requests per hour**. Wait the `Retry-After` seconds. |
 | 500 | `internal` | The key could not be checked. Try again. |
 
 v1 only gains optional fields and keeps its codes: ignore a field you don't know. The full description is in [`openapi.yaml`](../../openapi.yaml) and the routes are in [HTTP routes](../reference/http-routes.md).
@@ -161,13 +159,15 @@ Together the files are packed for the review. If they are over 1000000 bytes onc
 
 The checks run in this order, and the first that fails answers:
 
-1. The body is over **Max request bytes** (never more than 819200): `413`.
-2. The `Idempotency-Key` header is not valid: `422`.
-3. The key was used before: the first review is returned, or `422 idempotency_key_reused` for another body. Nothing else is checked.
-4. The body is not UTF-8 text, not valid JSON, or breaks a field or file rule: `422 invalid`.
-5. More files than **Max files**, or files over the packed limit: `413 too_large`.
-6. The client can't review: `409 cannot_review`.
-7. Otherwise the review is queued: `202`.
+1. The key is past its **Requests per hour**: `429 rate_limited`.
+2. The body is over **Max request bytes** (never more than 819200): `413`.
+3. The `Idempotency-Key` header is not valid: `422`.
+4. The key was used before: the first review is returned, or `422 idempotency_key_reused` for another body. Nothing else is checked.
+5. The client's **Monthly token budget** is used up: `429 budget_used_up`.
+6. The body is not UTF-8 text, not valid JSON, or breaks a field or file rule: `422 invalid`.
+7. More files than **Max files**, or files over the packed limit: `413 too_large`.
+8. The client can't review: `409 cannot_review`.
+9. Otherwise the review is queued: `202`.
 
 The answer is `202` with the review (`"status": "queued"`) and a `Location: /v1/reviews/<id>` header. A new request for a subject (client, tenant and subject together) that has a review queued or running supersedes it; a review already being finished is not superseded.
 
@@ -179,6 +179,7 @@ Send an `Idempotency-Key` header (1 to 200 printable ASCII characters) to retry 
 | 422 | `invalid` | The body is not valid JSON or not UTF-8 text, a field or a file breaks its rule, or the `Idempotency-Key` is not valid. The message names it, a file as `files[<index>]`. |
 | 422 | `idempotency_key_reused` | The `Idempotency-Key` was used before for another body. |
 | 409 | `cannot_review` | The client has no skills, a skill is not in the library, or its model is no longer in the catalog. |
+| 429 | `rate_limited`, `budget_used_up` | Past the key's **Requests per hour**, or the client's **Monthly token budget**. See [Limits](#limits). |
 | 500 | `internal` | pergent.sh couldn't queue the review. Retry with the same `Idempotency-Key`. |
 
 ## Read a review
@@ -276,7 +277,7 @@ A review with `status: failed` has `verdict: failed` and a `failure` with the `s
 
 | `step` | When | Example `reason` |
 | --- | --- | --- |
-| `starting` | Before the Job, or while it builds the commits | `this client has no skills: an admin chooses them in its settings`, `the model chosen for this API client can't be used: an admin can change it in the client's settings`, `skill "x" is not in the skill library`, `the review's files are no longer stored` |
+| `starting` | Before the Job, or while it builds the commits | `this client's monthly token budget is used up`, `this client has no skills: an admin chooses them in its settings`, `the model chosen for this API client can't be used: an admin can change it in the client's settings`, `skill "x" is not in the skill library`, `the review's files are no longer stored` |
 | `review` | While pergent reviews | `the review job ran out of memory (OOMKilled)`, `pergent couldn't review the change` |
 | `delivery` | When the result comes back | `pergent sent a result pergent.sh couldn't use` |
 | `unknown` | The Job vanished, or hit its deadline before it started | `the review job disappeared before sending a result` |
@@ -313,7 +314,7 @@ The body is a review with `"test": true`, the ID `00000000-0000-0000-0000-000000
 
 ## Dismiss a finding
 
-A finding that is wrong can be set aside for its **subject** (the client, `tenant` and `subject` together), so later reviews of the subject honour it. `{finding}` is the finding's `id` in that review's result.
+A finding that is wrong can be set aside for its **subject** (the client, `tenant` and `subject` together), so later reviews of the subject honour it: see [Later reviews of a subject](#later-reviews-of-a-subject). `{finding}` is the finding's `id` in that review's result.
 
 ```
 curl -X POST -H "Authorization: Bearer pgk_1a2b3c4d_..." -d '{"reason": "checked upstream"}' \
@@ -323,7 +324,7 @@ curl -X POST -H "Authorization: Bearer pgk_1a2b3c4d_..." -d '{"reason": "checked
 - `200 {"status": "dismissed"}`, or `{"status": "already_dismissed"}` (nothing changes, the first reason stays).
 - `DELETE` on the same path takes it back: `{"status": "restored"}` or `{"status": "not_dismissed"}`. It has no body.
 - `reason` is required, 1 to 500 characters (`422 invalid` otherwise).
-- The review must be `completed` (`409 not_finished`), and the finding must be in its result (`404 not_found`).
+- The review must be `completed` (`409 not_finished`), and the finding must be in its result with a `fingerprint` (`404 not_found`).
 - The review it was made on does not change, and no callback is sent. The actor is recorded as `key <key name>` and is in no response body.
 
 An admin does the same on the review's page: **Dismiss** on a finding (a reason is required) and **Stop** on one that is dismissed. The page lists each dismissal and restore under **History**, with who did it. These are not in the audit log.
@@ -331,6 +332,14 @@ An admin does the same on the review's page: **Dismiss** on a finding (a reason 
 ## Send the change again, don't re-run
 
 There is no re-run. To review again, send the change again with the same `subject`: a review of that subject still queued or running is superseded, and the new one reviews what you send now. Use a new `Idempotency-Key` for each new attempt; reuse one only to retry a request whose answer you lost.
+
+## Later reviews of a subject
+
+A review of a subject that was reviewed before is a re-review, as a merge request's next push is:
+
+- It is given the findings of the subject's newest `completed` review, as data to compare against.
+- It is told what people dismissed on the subject (at most 20 a skill, blocking first), with the reasons, so it can leave them out. If they can't be read, or don't fit, it runs without them.
+- A finding a dismissal covers stays in the result with `dismissed` (`reason`, `at`) and does not block: a skill whose blocking findings are all dismissed is `no_blocking_issues`. A `blocking` dismissal covers both severities, a `suggestion` one only suggestions. The dismissals are read when the review is finished, so one made while it ran counts.
 
 ## Strip secrets before you send
 
@@ -342,9 +351,20 @@ A client's page opens on its **Reviews** tab: its reviews, newest first, with th
 
 The list of clients shows, for each, the reviews of the UTC month so far, how many failed and the tokens they used.
 
+## Limits
+
+| Limit | Past it |
+| --- | --- |
+| Max request bytes, Max files | The request is `413 too_large`. |
+| Requests per hour | Each key may make this many requests an hour, on any route, refilled evenly (600 an hour is one more every 6 seconds). Past it the request is `429 rate_limited`, `too many requests for this key`, with `Retry-After` in whole seconds. The count is kept in memory: a restart gives every key a full hour. |
+| Max in flight | At most this many of the client's reviews run at once. More wait in the queue, oldest first, and hold up no other client and no merge request. |
+| Monthly token budget | Once the tokens of the reviews asked for this UTC month reach it, `POST /v1/reviews` is `429 budget_used_up`, `this client's monthly token budget is used up`, with `Retry-After` until the next month. A review already queued fails at `starting` with the same reason. A retry with an `Idempotency-Key` used before is still answered. |
+
+The tokens are counted as on the **API clients** list: tokens in and out, by the month each review was asked for. A review that is running counts once its result is in, so the budget can be passed by the reviews running when it is reached. `GET /v1/client` shows what is used and left.
+
 ## How a review runs
 
-- It is a Kubernetes Job, like a merge request's review. Both share `jobs.max_running`, first in, first out.
+- It is a Kubernetes Job, like a merge request's review. Both share `jobs.max_running`, first in, first out. A client's **Max in flight** holds its own reviews back too.
 - It uses the client's skills and model, read when the Job starts. The Job's timeout, memory and Max steps are the defaults on **Admin → Settings**.
 - The files reach the Job in a Secret of their own, which only its checkout container reads. The watcher deletes it the first time it sees the checkout done, and before it reports a stuck, vanished or finished Job. If the result arrives before a watcher pass sees the checkout done, the Secret stays until the Job is deleted, an hour after it ends. The stored copy is deleted once the Job has started.
 - Nothing is posted to GitLab or GitHub.

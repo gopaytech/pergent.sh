@@ -943,6 +943,7 @@ var openAPISchemas = map[string]schemaType{
 	"APICallbackView":         outputSchema(APICallbackView{}),
 	"APIKeyCreatedView":       outputSchema(APIKeyCreatedView{}),
 	"ReviewApiClient":         outputSchema(reviewapi.ClientBody{}),
+	"ReviewApiClientUsage":    outputSchema(reviewapi.UsageBody{}),
 	"ReviewApiLimits":         outputSchema(reviewapi.LimitsBody{}),
 	"ReviewApiError":          outputSchema(reviewapi.ErrorBody{}),
 	"ReviewApiRequest":        inputSchema(reviewapi.Request{}),

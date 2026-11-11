@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gopaytech/pergent.sh/internal/kube"
+	"github.com/gopaytech/pergent.sh/internal/quota"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -38,6 +39,10 @@ const (
 	idempotencyKeyHeader = "Idempotency-Key"
 )
 
+// BudgetUsedUpMessage is why a client past its monthly token budget gets no
+// review: the 429 of a request, and the failure of a queued review.
+const BudgetUsedUpMessage = "this client's monthly token budget is used up"
+
 // Request is the body of POST /v1/reviews.
 type Request struct {
 	Subject     string `json:"subject"`
@@ -56,9 +61,9 @@ type Sealed struct {
 }
 
 // createReview is POST /v1/reviews. The order of its checks is part of the
-// API: a retry of a request is answered from what was stored before the body
-// is judged, and a request that can't be reviewed is refused before anything
-// is queued.
+// API: a retry of a request is answered from what was stored before the
+// budget or the body is judged, and a request that can't be reviewed is
+// refused before anything is queued.
 func (h *Handler) createReview(w http.ResponseWriter, r *http.Request) {
 	client := clientOf(r)
 
@@ -95,6 +100,18 @@ func (h *Handler) createReview(w http.ResponseWriter, r *http.Request) {
 			writeReview(w, http.StatusAccepted, prior)
 			return
 		}
+	}
+
+	now := h.now()
+	if used, err := h.tokensUsed(r, client, now); err != nil {
+		h.log().Error("review API: reading a client's tokens failed", "client_id", client.ID, "err", err)
+		writeInternal(w)
+		return
+	} else if used >= client.Limits.MonthlyTokenBudget {
+		// The budget is the UTC month's: it is full again when the next starts.
+		w.Header().Set("Retry-After", retryAfter(quota.MonthStart(now).AddDate(0, 1, 0).Sub(now)))
+		writeError(w, http.StatusTooManyRequests, CodeBudgetUsedUp, BudgetUsedUpMessage)
+		return
 	}
 
 	// encoding/json turns bytes that are not UTF-8 into U+FFFD without an

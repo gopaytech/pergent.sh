@@ -350,3 +350,43 @@ func TestPendingOfAFailedReview(t *testing.T) {
 		t.Fatalf("body = %+v", b)
 	}
 }
+
+// v1 has two severities: anything pergent sends that is not a suggestion is
+// blocking, and blocks.
+func TestMapSeverityIsBlockingOrSuggestion(t *testing.T) {
+	res := parse(t, skillJSON("a", "no_blocking_issues", one,
+		findingJSON("aaaa", "critical"), findingJSON("bbbb", "suggestion"), findingJSON("cccc", "")))
+	verdict, skills, _ := Map(res, nil, nil, nil)
+	got := []string{}
+	for _, f := range skills[0].Findings {
+		got = append(got, f.Severity)
+	}
+	if want := []string{"blocking", "suggestion", "blocking"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("severities = %v, want %v", got, want)
+	}
+	if skills[0].Verdict != VerdictHasBlockingIssues || verdict != VerdictHasBlockingIssues {
+		t.Errorf("verdicts = %q, %q; want has_blocking_issues for both", skills[0].Verdict, verdict)
+	}
+}
+
+// pergent's no_blocking_issues is not trusted while a blocking finding is
+// left undismissed; one that is dismissed lets it stand.
+func TestMapBlockingFindingBlocks(t *testing.T) {
+	at := time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)
+	res := parse(t, skillJSON("a", "no_blocking_issues", one, findingJSON("aaaa", "blocking")))
+	if v, skills, _ := Map(res, nil, nil, nil); v != VerdictHasBlockingIssues || skills[0].Verdict != VerdictHasBlockingIssues {
+		t.Errorf("verdicts = %q, %q; want has_blocking_issues for both", skills[0].Verdict, v)
+	}
+	res = parse(t, skillJSON("a", "no_blocking_issues", one, findingJSON("aaaa", "blocking")))
+	v, skills, _ := Map(res, nil, []DismissalRef{{Fingerprint: "aaaa", Severity: "blocking", Reason: "fine", At: at}}, nil)
+	if v != VerdictNoBlockingIssues || skills[0].Verdict != VerdictNoBlockingIssues {
+		t.Errorf("dismissed: verdicts = %q, %q; want no_blocking_issues for both", skills[0].Verdict, v)
+	}
+	// A skill that reviewed nothing stays nothing_reviewed, and a failed one
+	// failed.
+	res = parse(t, skillJSON("a", "no_blocking_issues", nil, findingJSON("aaaa", "blocking")),
+		skillJSON("b", "failed", one, findingJSON("bbbb", "blocking")))
+	if _, skills, _ := Map(res, nil, nil, nil); skills[0].Verdict != VerdictNothingReviewed || skills[1].Verdict != VerdictFailed {
+		t.Errorf("verdicts = %q, %q; want nothing_reviewed and failed", skills[0].Verdict, skills[1].Verdict)
+	}
+}

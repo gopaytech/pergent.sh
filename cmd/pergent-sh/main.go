@@ -300,7 +300,9 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 			Launcher: launcher, Namespace: cfg.Jobs.Namespace, GitImage: cfg.Jobs.Image, Image: os.Getenv("PERGENT_SH_IMAGE")}
 		fetchResults = fetcher
 		// The review API is on with the dashboard: its clients are made there.
-		api = &reviewapi.Handler{Store: st, Box: box, Models: reg, Wake: eng.Wake, Log: log}
+		// Its requests per hour are counted in memory, once for the process
+		// (one replica).
+		api = &reviewapi.Handler{Store: st, Box: box, Models: reg, Wake: eng.Wake, Log: log, Limiter: &reviewapi.Limiter{}}
 	}
 	dash, err := newDashboard(dashboard.Options{
 		Config: cfg, Instances: reg, Connector: conn, Store: st, SecretKey: key, Log: log,
