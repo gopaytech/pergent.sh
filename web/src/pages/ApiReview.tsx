@@ -21,7 +21,7 @@ import { ErrorBox, Loading, NotFound, Pill, Tabs, count, utcText, type Tone } fr
 const statuses: Record<APIStatus, [Tone, string]> = {
   queued: ["grey", "Queued"],
   running: ["run", "Running"],
-  completed: ["ok", "Completed"],
+  completed: ["grey", "Completed"],
   failed: ["warn", "Failed"],
   superseded: ["grey", "Superseded"],
 };

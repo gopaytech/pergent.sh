@@ -386,6 +386,9 @@ func TestAPIReviewUnusableResultFails(t *testing.T) {
 	publish(t, env)
 
 	a.wantFailed(t, id, reviewapi.StepDelivery, reasonAPIUnusable)
+	if got := a.review(t, id); got["usage"] != nil {
+		t.Errorf("usage = %v; want it left out when the result's usage can't be read", got["usage"])
+	}
 	if r := env.Run(id); r.Result != nil || r.FailureReason != reasonAPIUnusable {
 		t.Errorf("run result %q, failure %q; want the result replaced by the failure", r.Result, r.FailureReason)
 	}

@@ -303,11 +303,13 @@ func (e *Engine) publishAPI(ctx context.Context, run store.Run, log *slog.Logger
 	}
 
 	var usages []store.SkillUsage
-	hadResult := run.Result != nil
-	if hadResult {
+	usageRead := false
+	if run.Result != nil {
 		if usages, err = usage.FromResult(run.Result, run); err != nil {
 			log.Warn("couldn't read the result's usage", "error", err.Error())
 			usages = nil
+		} else {
+			usageRead = true
 		}
 	}
 	var res *result.Result
@@ -348,8 +350,9 @@ func (e *Engine) publishAPI(ctx context.Context, run store.Run, log *slog.Logger
 	if body.Failure != nil {
 		body.Verdict = reviewapi.VerdictFailed
 	}
-	if hadResult {
-		// What the Job spent, also on a result that can't be used.
+	if usageRead {
+		// What the Job spent, also on a result that can't be used. A result
+		// whose usage can't be read says nothing, not zero.
 		body.Usage = &u
 	}
 	response, err := json.Marshal(body)

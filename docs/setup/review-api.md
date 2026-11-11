@@ -83,7 +83,7 @@ On the **Settings** tab press **Remove client**. Its keys stop at once, the Jobs
 
 ```json
 {
-  "name": "ci",
+  "name": "fastgateway",
   "limits": {
     "max_request_bytes": 524288,
     "max_files": 200,
@@ -202,12 +202,12 @@ While it waits or runs the body holds the `id`, the request's `subject`, `tenant
 | `failed` | The review could not be done. The body holds the `failure` (below). |
 | `superseded` | A newer request for the same subject replaced it. No result. |
 
-Poll until the status is `completed`, `failed` or `superseded`; a review takes minutes. What a finished body holds depends on how it ended:
+Poll until the status is `completed`, `failed` or `superseded`; a review takes minutes. Each `GET` counts against the key's requests per hour: poll no faster than every 30 to 60 seconds, or rely on the [callback](#get-the-result-by-callback). What a finished body holds depends on how it ended:
 
 | `status` | `finished_at` | `verdict` | `skills` | `failure` | `usage` |
 | --- | --- | --- | --- | --- | --- |
 | `completed` | yes | yes | yes | no | yes |
-| `failed` | yes | `failed` | left out | yes | only if the Job left a result |
+| `failed` | yes | `failed` | left out | yes | only if the Job left a result that can be read |
 | `superseded` | left out | left out | left out | no | left out |
 
 `usage` is `tokens_in` and `tokens_out`. A `completed` body looks like this:
@@ -457,6 +457,8 @@ An admin sets the limits of each client (the defaults are [above](#what-a-client
 | Requests per hour | Each key holds this many requests, on any route, and gets them back evenly, not all at the top of the hour (600 an hour is one more every 6 seconds). A new key can use all of them at once. Past it the request is `429 rate_limited`, `too many requests for this key`, with `Retry-After`: the seconds until one more is allowed. Every request with a good key takes one, whatever its route or answer; a request refused with `429` takes none. The count is kept in memory: a restart gives every key a full allowance. |
 | Max in flight | At most this many of the client's reviews run at once. More wait in the queue, oldest first, and hold up no other client and no merge request. |
 | Monthly token budget | Once the tokens of the reviews asked for this UTC month reach it, `POST /v1/reviews` is `429 budget_used_up`, `this client's monthly token budget is used up`, with `Retry-After` until the next month. A review already queued fails at `starting` with the same reason. A retry with an `Idempotency-Key` used before is still answered. |
+
+There is no cap on how many reviews a client may queue. Each queued review keeps its sealed files in the database until it is dispatched, so send an `Idempotency-Key` on a retry, or a repeated request queues a second review.
 
 Wait the `Retry-After` seconds after a `429`, then try again; do not retry at once. The tokens are counted as on the **API clients** list: tokens in and out, by the month each review was asked for. A review that is running counts once its result is in, so the budget can be passed by the reviews running when it is reached. `GET /v1/client` shows what is used and left.
 
