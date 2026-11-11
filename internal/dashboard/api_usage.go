@@ -30,16 +30,6 @@ func usageTokens(t store.TokenSum) UsageTokensView {
 		Reasoning: t.Reasoning, Unknown: t.Unknown}
 }
 
-// addTokens adds b to a.
-func addTokens(a *store.TokenSum, b store.TokenSum) {
-	a.In += b.In
-	a.Out += b.Out
-	a.CacheRead += b.CacheRead
-	a.CacheWrite += b.CacheWrite
-	a.Reasoning += b.Reasoning
-	a.Unknown += b.Unknown
-}
-
 func usageDays(days []store.DayUsage) []UsageDayView {
 	out := make([]UsageDayView, 0, len(days))
 	for _, d := range days {
@@ -100,7 +90,7 @@ func (d *Dashboard) usageOverview(w http.ResponseWriter, r *http.Request) {
 		_, isOn := switchedOn[repoKey(u.Instance, u.ProjectPath)]
 		out.Repositories = append(out.Repositories, UsageRepositoryRowView{Instance: u.Instance, Project: u.ProjectPath,
 			SwitchedOn: isOn, Tokens: usageTokens(u.Tokens), Reviews: u.Reviews})
-		addTokens(&total, u.Tokens)
+		total.Add(u.Tokens)
 		// A run belongs to one repository, so the counts add up.
 		out.Reviews += u.Reviews
 	}
@@ -115,7 +105,7 @@ func (d *Dashboard) usageOverview(w http.ResponseWriter, r *http.Request) {
 			v.Tenants = append(v.Tenants, UsageTenantView{Tenant: t.Tenant, Tokens: usageTokens(t.Tokens), Reviews: t.Reviews})
 		}
 		out.Clients = append(out.Clients, v)
-		addTokens(&total, c.Tokens)
+		total.Add(c.Tokens)
 		out.Reviews += c.Reviews
 	}
 	out.Tokens = usageTokens(total)

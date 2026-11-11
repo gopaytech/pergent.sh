@@ -391,14 +391,19 @@ func TestUsageOverviewAddsClients(t *testing.T) {
 	c := e.signInOperator()
 	e.addAPIClient(c, goodClient(nil))
 	e.addAPIClient(c, goodClient(func(m map[string]any) { m["name"] = "quiet" }))
-	e.usageFixture() // repositories: 3 reviews, 1,150 in and 210 out
+	// Repositories (usageFixture): 3 reviews. In: widgets !1 800+200, widgets !2 0,
+	// old !3 150 = 1,150. Out: 100+60, 0, 50 = 210.
+	e.usageFixture()
+	// fastgateway: acme s1 is 400+100 = 500 in and 50+10 = 60 out, acme s2 is
+	// 40 in, beta s1 is 10 in.
 	e.usageAPIReview("fastgateway", "acme", "s1", usageSkill("gateway", "no_blocking_issues", 400, 50), usageSkill("style", "no_blocking_issues", 100, 10))
 	e.usageAPIReview("fastgateway", "acme", "s2", usageSkill("gateway", "no_blocking_issues", 40, 0))
 	e.usageAPIReview("fastgateway", "beta", "s1", usageSkill("gateway", "no_blocking_issues", 10, 0))
 
 	got := getJSON[UsageOverviewView](e, c, "/api/admin/usage")
-	if got.Reviews != 6 || got.Tokens.In != 1150+550+40+10 || got.Tokens.Out != 210+60 {
-		t.Errorf("totals = %+v over %d reviews; want the repositories' plus the client's: 1750 in, 270 out, 6 reviews", got.Tokens, got.Reviews)
+	// Total: reviews 3 + 3 = 6; in 1,150 + (500+40+10 = 550) = 1,700; out 210 + 60 = 270.
+	if got.Reviews != 6 || got.Tokens.In != 1700 || got.Tokens.Out != 270 {
+		t.Errorf("totals = %+v over %d reviews; want the repositories' plus the client's: 1700 in, 270 out, 6 reviews", got.Tokens, got.Reviews)
 	}
 	if len(got.Repositories) != 2 {
 		t.Errorf("repositories = %+v, want only the two merge-request ones", got.Repositories)
@@ -407,9 +412,12 @@ func TestUsageOverviewAddsClients(t *testing.T) {
 		t.Fatalf("clients = %+v, want fastgateway only: a client with no usage is not listed", got.Clients)
 	}
 	fg := got.Clients[0]
-	if fg.Name != "fastgateway" || fg.Reviews != 3 || fg.Tokens.In != 600 || fg.Tokens.Out != 60 || fg.MoreTenants != 0 {
-		t.Errorf("client = %+v, want fastgateway: 3 reviews, 600 in, 60 out", fg)
+	// Client: 3 reviews; in 500+40+10 = 550; out 60.
+	if fg.Name != "fastgateway" || fg.Reviews != 3 || fg.Tokens.In != 550 || fg.Tokens.Out != 60 || fg.MoreTenants != 0 {
+		t.Errorf("client = %+v, want fastgateway: 3 reviews, 550 in, 60 out", fg)
 	}
+	// Tenants: acme 2 reviews, 500+40 = 540 in (550 total tokens beats beta's 10);
+	// beta 1 review, 10 in.
 	if len(fg.Tenants) != 2 || fg.Tenants[0].Tenant != "acme" || fg.Tenants[0].Reviews != 2 || fg.Tenants[0].Tokens.In != 540 ||
 		fg.Tenants[1].Tenant != "beta" || fg.Tenants[1].Reviews != 1 || fg.Tenants[1].Tokens.In != 10 {
 		t.Errorf("tenants = %+v, want acme (2 reviews, 540 in) then beta (1 review, 10 in)", fg.Tenants)

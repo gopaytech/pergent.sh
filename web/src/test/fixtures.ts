@@ -728,12 +728,13 @@ const tok = (inn: number, out: number, apart = { cacheRead: 0, cacheWrite: 0, re
 // off since (its usage is kept, it has no detail page).
 export const usageOverview: UsageOverviewView = {
   days: 30,
-  tokens: tok(1_200_000, 300_000, { cacheRead: 500_000, cacheWrite: 20_000, reasoning: 0, unknown: 0 }),
-  reviews: 40,
+  // The repositories (1,200k in, 300k out) plus the clients (55k in, 11k out); the reviews are 40 + 8.
+  tokens: tok(1_255_000, 311_000, { cacheRead: 500_000, cacheWrite: 20_000, reasoning: 0, unknown: 0 }),
+  reviews: 48,
   daily: [
     { day: "2026-11-05", tokens: tok(200_000, 50_000) },
     { day: "2026-11-06", tokens: tok(600_000, 150_000) },
-    { day: "2026-11-07", tokens: tok(400_000, 100_000) },
+    { day: "2026-11-07", tokens: tok(455_000, 111_000) },
   ],
   repositories: [
     { instance: "main", project: "acme/payments", switchedOn: true, tokens: tok(900_000, 200_000), reviews: 30 },

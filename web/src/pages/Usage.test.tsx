@@ -19,8 +19,8 @@ describe("Usage", () => {
     const repos = (await screen.findByRole("region", { name: "Repositories" })) as HTMLElement;
     const rows = within(repos).getAllByRole("row").slice(1);
     expect(rows.map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["main/acme/payments", "main/acme/widgets", "main/acme/oldswitched offCSV"]);
-    // Input plus output, not the cache: 1.2M + 300k.
-    expect(within(screen.getByRole("region", { name: "Totals" })).getByText("1.5M")).toBeInTheDocument();
+    // Input plus output, not the cache: 1,255k + 311k.
+    expect(within(screen.getByRole("region", { name: "Totals" })).getByText("1.6M")).toBeInTheDocument();
     expect(within(rows[0]).getAllByRole("cell").slice(0, 5).map((c) => c.textContent)).toEqual(["main/acme/payments", "30", "900k", "200k", "1.1M"]);
   });
 
@@ -97,7 +97,7 @@ describe("Usage", () => {
     expect(bars.map((b) => [b.getAttribute("value"), b.getAttribute("max")])).toEqual([
       ["250000", "750000"],
       ["750000", "750000"],
-      ["500000", "750000"],
+      ["566000", "750000"],
     ]);
     expect(document.querySelector("[style]")).toBeNull();
   });

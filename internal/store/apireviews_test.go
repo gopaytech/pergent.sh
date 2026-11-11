@@ -966,6 +966,12 @@ func TestUsageByAPIClient(t *testing.T) {
 	// A merge request's usage is a repository's.
 	seedUsage(t, s, usageMR(7, 1), usageAt(5, 12, 0), TriggerPush, false, "m", skillRow("security", "no_blocking_issues", 70000, 0))
 
+	// Derived from the rows above. client-b: 1000 in + 100 out = 1,100 tokens.
+	// client-a: acme s1 (100+30) in and (20+5) out, acme s2 10 in, so acme is
+	// 140 in, 25 out (165 tokens, 2 reviews); beta is 300 in, 40 out (340 tokens,
+	// 1 review). client-a is 440 in, 65 out (505 tokens, 3 reviews). The 9000 is
+	// before the period and the 70000 is a repository's. Busiest first: client-b
+	// (1,100), then client-a (505); beta (340) before acme (165).
 	got, err := s.UsageByAPIClient(ctx, usageSince)
 	if err != nil {
 		t.Fatal(err)
@@ -1072,6 +1078,13 @@ func TestMetricsTotalsAPIClients(t *testing.T) {
 	noURL := finish(a.ID, "acme", "s5", RunDecision{Outcome: OutcomeNoBlocking})
 	attempt(noURL, CallbackAttempt{At: now, Error: CallbackNoURL}, false, true)
 
+	// Expected values, from the rows above. Reviews: client-a has no_blocking
+	// clean, s2 and s5 (3) and blocking s3 (1); client-b has nothing_reviewed s1
+	// (1), failed s2 and the publish_failed s3 (2) and the superseded first s4
+	// (1); the second s4 is still queued. Tokens: only client-a's three reviews
+	// have skills: in 100+10+5 = 115, out 20+1+5 = 26, over 3 rows. Callbacks of
+	// client-a: delivered 1 (clean); failed_attempt 3 (clean's 500 and timeout,
+	// blocking's 503); gave_up 1 (blocking); the no-URL one is in neither.
 	got, err := s.MetricsTotals(ctx)
 	if err != nil {
 		t.Fatal(err)

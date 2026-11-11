@@ -75,8 +75,8 @@ type TokenSum struct {
 	Unknown                          int64 // rows without cache and reasoning counts
 }
 
-// add adds b to t.
-func (t *TokenSum) add(b TokenSum) {
+// Add adds b to t.
+func (t *TokenSum) Add(b TokenSum) {
 	t.In += b.In
 	t.Out += b.Out
 	t.CacheRead += b.CacheRead
@@ -246,7 +246,7 @@ func (s *Store) UsageByAPIClient(ctx context.Context, since time.Time) ([]Client
 		}
 		c := &out[i]
 		c.Tenants = append(c.Tenants, t)
-		c.Tokens.add(t.Tokens)
+		c.Tokens.Add(t.Tokens)
 		// A run has one tenant, so the counts add up.
 		c.Reviews += t.Reviews
 	}
@@ -653,11 +653,11 @@ type APICallbackTotal struct {
 }
 
 // MetricsTotals returns the counts for the metrics, one grouped query per
-// kind. An API review has no repository and is left out of the first seven;
-// the API clients' counts are the last three. A review with no result and one stopped by a newer push are told
-// apart as UsageWasted does, so the page and the metrics agree. Dismissals
-// come from the dismissals table, which loses a repository's rows when the
-// repository is switched off.
+// kind. An API review has no repository and is left out of all but the last
+// three, which are the API clients'. A review with no result and one stopped
+// by a newer push are told apart as UsageWasted does, so the page and the
+// metrics agree. Dismissals come from the dismissals table, which loses a
+// repository's rows when the repository is switched off.
 func (s *Store) MetricsTotals(ctx context.Context) (MetricsTotals, error) {
 	var t MetricsTotals
 	rows, err := s.pool.Query(ctx, `SELECT instance, project_path, skill, model, `+tokenSumColumns+`, count(*)
