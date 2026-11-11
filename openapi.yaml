@@ -3165,7 +3165,10 @@ paths:
 
         A change is sent as the content of each file before (`old`) and after
         (`new`), not as a diff. A file with no `old` is new, one with no `new`
-        is deleted. Contents are UTF-8 text. A path is relative, has no `..`
+        is deleted. The whole body must be UTF-8 text: a byte that is not UTF-8,
+        or a `\uD800` to `\uDFFF` escape that is not half of a surrogate
+        pair, is refused, so no file is reviewed as other bytes than the
+        caller sent. A path is relative, has no `..`
         or `.` and appears once. Paths git can't store (a `.git` segment, a
         control character, `a` beside `a/b`) are refused.
 
@@ -3231,7 +3234,7 @@ paths:
               schema: {$ref: '#/components/schemas/ReviewApiError'}
         '422':
           description: |
-            The code is `invalid` (the body is not valid JSON, a field breaks
+            The code is `invalid` (the body is not valid JSON or not UTF-8 text, a field breaks
             its rule, or a file does; the message names the field, and a file
             as `files[<index>]`) or `idempotency_key_reused`.
           content:

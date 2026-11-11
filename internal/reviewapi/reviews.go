@@ -32,6 +32,7 @@ const (
 	noSkillsMessage      = "this client has no skills: an admin chooses them in its settings"
 	modelGoneMessage     = "this client's model is no longer in the model catalog"
 	notJSONMessage       = "the body is not valid JSON"
+	notUTF8Message       = "the body is not UTF-8 text"
 	notAnObjectMessage   = "the body must be a JSON object"
 	idempotencyKeyHeader = "Idempotency-Key"
 )
@@ -95,6 +96,12 @@ func (h *Handler) createReview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// encoding/json turns bytes that are not UTF-8 into U+FFFD without an
+	// error, which would review text the caller never sent.
+	if !validText(body) {
+		writeError(w, http.StatusUnprocessableEntity, CodeInvalid, notUTF8Message)
+		return
+	}
 	var req Request
 	if err := json.Unmarshal(body, &req); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, CodeInvalid, decodeMessage(err))
@@ -163,8 +170,16 @@ func (h *Handler) createReview(w http.ResponseWriter, r *http.Request) {
 	rv, found, err := h.Store.APIReview(r.Context(), client.ID, id)
 	if err != nil || !found {
 		h.log().Error("review API: reading a queued review failed", "client_id", client.ID, "review", id, "found", found, "err", err)
-		writeInternal(w)
-		return
+		if !created {
+			writeInternal(w)
+			return
+		}
+		// The review is queued and woken: a 500 would invite a retry that
+		// supersedes it. Answer with what is known.
+		rv = store.APIReview{
+			Run: store.Run{ID: id, State: store.Queued}, ClientID: client.ID, Tenant: req.Tenant,
+			Subject: req.Subject, Title: req.Title, CreatedAt: h.now(),
+		}
 	}
 	writeReview(w, http.StatusAccepted, rv)
 }
@@ -275,11 +290,64 @@ func checkRequest(req Request) string {
 			}
 		}
 	}
-	if !utf8.ValidString(req.Description) {
-		return "description is not UTF-8 text"
-	}
 	if len(req.Description) > maxDescription {
 		return fmt.Sprintf("description must be at most %d bytes", maxDescription)
 	}
 	return ""
+}
+
+// validText reports whether a JSON body is UTF-8 text all the way: no invalid
+// byte, and no \uD800 to \uDFFF escape that is not half of a high and low
+// pair. Both read as U+FFFD, with no error, once decoded.
+func validText(body []byte) bool {
+	if !utf8.Valid(body) {
+		return false
+	}
+	hex4 := func(i int) (rune, bool) {
+		if i+4 > len(body) {
+			return 0, false
+		}
+		var v rune
+		for _, c := range body[i : i+4] {
+			switch {
+			case c >= '0' && c <= '9':
+				v = v<<4 | rune(c-'0')
+			case c >= 'a' && c <= 'f':
+				v = v<<4 | rune(c-'a'+10)
+			case c >= 'A' && c <= 'F':
+				v = v<<4 | rune(c-'A'+10)
+			default:
+				return 0, false
+			}
+		}
+		return v, true
+	}
+	for i := 0; i < len(body); i++ {
+		if body[i] != '\\' {
+			continue
+		}
+		// The escape is two bytes (\\ is a backslash, not the start of \u).
+		if i+1 >= len(body) || body[i+1] != 'u' {
+			i++
+			continue
+		}
+		v, ok := hex4(i + 2)
+		switch {
+		case !ok:
+			// Not a valid escape: the decoder refuses the body.
+		case v >= 0xdc00 && v <= 0xdfff:
+			return false
+		case v >= 0xd800 && v <= 0xdbff:
+			if i+12 > len(body) || body[i+6] != '\\' || body[i+7] != 'u' {
+				return false
+			}
+			if lo, ok := hex4(i + 8); !ok || lo < 0xdc00 || lo > 0xdfff {
+				return false
+			}
+			i += 11
+			continue
+		}
+		i += 5
+	}
+	return true
 }

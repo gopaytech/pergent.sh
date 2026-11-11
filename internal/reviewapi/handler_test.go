@@ -31,6 +31,8 @@ type fakeStore struct {
 	hashes   map[string][]byte // "<client>/<idempotency key>" -> request hash
 	keyed    map[string]string // "<client>/<idempotency key>" -> review ID
 	enqueued []store.NewAPIReview
+	// readErr fails APIReview.
+	readErr error
 }
 
 type fakeKey struct {
@@ -94,6 +96,9 @@ func (f *fakeStore) EnqueueAPIReview(_ context.Context, n store.NewAPIReview) (s
 // APIReview is the real one's contract: another client's review, an unknown ID
 // and a malformed one are all not found.
 func (f *fakeStore) APIReview(_ context.Context, clientID int64, id string) (store.APIReview, bool, error) {
+	if f.readErr != nil {
+		return store.APIReview{}, false, f.readErr
+	}
 	r, ok := f.reviews[id]
 	if !ok || r.ClientID != clientID {
 		return store.APIReview{}, false, nil

@@ -4,12 +4,18 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/gopaytech/pergent.sh/internal/instances"
+	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -178,6 +184,51 @@ func TestCreateReviewRules(t *testing.T) {
 	}
 }
 
+func TestCreateReviewUTF8(t *testing.T) {
+	_, fs, key, mux := newHandler(t)
+	const notUTF8 = "the body is not UTF-8 text"
+	file := func(newContent string) string {
+		return `{"subject":"s","files":[{"path":"a.go","new":"` + newContent + `"}]}`
+	}
+	refused := map[string]string{
+		"a raw 0xff in description":  `{"subject":"s","description":"a` + "\xff" + `b","files":[{"path":"a.go","new":"x"}]}`,
+		"a raw 0xff in a file":       file("a" + "\xff" + "b"),
+		"a latin-1 file":             file("caf" + "\xe9"),
+		"a lone low surrogate":       file(`a\udc00b`),
+		"a lone high surrogate":      file(`a\ud83dz`),
+		"a high one ending the text": file(`a\ud83d`),
+		"a high then a non-low":      file(`\ud83d\u0041`),
+		"two high surrogates":        file(`\ud83d\ud83d\ude00`),
+		"a low then a high":          file(`\ude00\ud83d`),
+		"upper-case hex":             file(`\uDC00`),
+		"after an escaped quote":     file(`\"\udc00`),
+	}
+	for name, body := range refused {
+		t.Run(name, func(t *testing.T) {
+			wantError(t, post(mux, key, body), http.StatusUnprocessableEntity, CodeInvalid, notUTF8)
+		})
+	}
+	if len(fs.enqueued) != 0 {
+		t.Fatalf("%d reviews enqueued by refused requests", len(fs.enqueued))
+	}
+
+	accepted := map[string]string{
+		"a valid pair":                file(`\ud83d\ude00`),
+		"a pair in upper case":        file(`\uD83D\uDE00`),
+		"the character itself":        file("\U0001f600"),
+		"an escaped backslash then u": file(`\\udc00`),
+		"other escapes":               file(`\u00e9\n\t\u2028`),
+	}
+	for name, body := range accepted {
+		if rec := post(mux, key, body); rec.Code != http.StatusAccepted {
+			t.Errorf("%s: status %d, want 202 (%s)", name, rec.Code, rec.Body)
+		}
+	}
+	if len(fs.enqueued) != len(accepted) {
+		t.Fatalf("%d enqueued, want %d", len(fs.enqueued), len(accepted))
+	}
+}
+
 func TestCreateReviewEmptyIdempotencyKeyHeader(t *testing.T) {
 	_, _, key, mux := newHandler(t)
 	req := httptest.NewRequest("POST", "/v1/reviews", strings.NewReader(goodBody))
@@ -227,6 +278,73 @@ func TestCreateReviewTooLarge(t *testing.T) {
 
 	if len(fs.enqueued) != 2 {
 		t.Errorf("%d enqueued, want 2 (the two that passed)", len(fs.enqueued))
+	}
+}
+
+// The stream is bigger than the body: a long path is written twice (in the
+// base and the head commit) for every file, so a body under the hard limit can
+// pack past what a Secret holds.
+func TestCreateReviewPackedFilesTooLarge(t *testing.T) {
+	_, fs, key, mux := newHandler(t)
+	prefix, _ := ParseKey(key)
+	k := fs.keys[prefix]
+	k.client.Limits.MaxFiles, k.client.Limits.MaxRequestBytes = store.HardMaxFiles, store.HardMaxRequestBytes
+	fs.keys[prefix] = k
+
+	dir := strings.Join([]string{strings.Repeat("a", 230), strings.Repeat("b", 230), strings.Repeat("c", 230)}, "/")
+	files := make([]File, store.HardMaxFiles)
+	for i := range files {
+		files[i] = File{Path: fmt.Sprintf("%s/f%04d", dir, i), Old: str("1"), New: str("2")}
+	}
+	body, err := json.Marshal(Request{Subject: "s", Files: files})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) > store.HardMaxRequestBytes {
+		t.Fatalf("test body is %d bytes: it must pass the body limit of %d", len(body), store.HardMaxRequestBytes)
+	}
+	im, err := BuildImport(files)
+	if err != nil || len(im.Stream) <= kube.FilesSecretMaxBytes {
+		t.Fatalf("test stream is %d bytes (err %v): it must be over %d", len(im.Stream), err, kube.FilesSecretMaxBytes)
+	}
+	wantError(t, post(mux, key, string(body)), http.StatusRequestEntityTooLarge, CodeTooLarge,
+		fmt.Sprintf("the files are over %d bytes once packed for the review", kube.FilesSecretMaxBytes))
+	if len(fs.enqueued) != 0 {
+		t.Errorf("%d enqueued, want 0", len(fs.enqueued))
+	}
+}
+
+// The review is queued by the time it is read back: a failure to read it is
+// not a refusal, or a retry would supersede it.
+func TestCreateReviewReadBackFailure(t *testing.T) {
+	h, fs, key, mux := newHandler(t)
+	h.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	woke := 0
+	h.Wake = func() { woke++ }
+	fs.readErr = errors.New("database down")
+
+	rec := post(mux, key, goodBody)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status %d, want 202 (%s)", rec.Code, rec.Body)
+	}
+	var got Review
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(fs.enqueued) != 1 || woke != 1 {
+		t.Fatalf("%d enqueued and %d wakes, want 1 and 1", len(fs.enqueued), woke)
+	}
+	want := Review{ID: "00000000-0000-4000-8000-000000000001", Subject: "route:1", Tenant: "acme", Title: "Route change",
+		Status: StatusQueued, CreatedAt: testNow}
+	if !got.CreatedAt.Equal(testNow) {
+		t.Errorf("created_at %v, want the clock's %v", got.CreatedAt, testNow)
+	}
+	got.CreatedAt = want.CreatedAt
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("body = %+v, want %+v", got, want)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/v1/reviews/"+want.ID {
+		t.Errorf("Location %q", loc)
 	}
 }
 

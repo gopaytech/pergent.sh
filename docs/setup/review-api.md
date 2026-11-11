@@ -129,6 +129,8 @@ v1 only gains optional fields and keeps its codes: ignore a field you don't know
 | `description` | At most 32 KiB of UTF-8. Dropped with the files once the review has them. |
 | `files` | Not empty, at most the client's **Max files**. Each has a relative `path` (once in the list, no `..`) and `old`, `new` or both. A file with no `old` is new, one with no `new` is deleted. UTF-8 text. |
 
+The whole body must be UTF-8 text. A byte that is not UTF-8 (a latin-1 file), or a `\uD800` to `\uDFFF` escape that is not half of a pair, is refused: pergent.sh won't review text you did not send.
+
 `subject`, `tenant` and `title` hold no control character. Unknown fields are ignored. A new request for a subject (client, tenant and subject together) that has a review queued or running supersedes it.
 
 The answer is `202` with the review (`"status": "queued"`) and `Location: /v1/reviews/<id>`. The files are sealed, kept only until the review's Job has them, and then deleted.
@@ -138,7 +140,7 @@ Send an `Idempotency-Key` header (1 to 200 printable ASCII characters) to retry 
 | Status | `code` | When |
 | --- | --- | --- |
 | 413 | `too_large` | The body is over the client's **Max request bytes** (never more than 819200), there are more files than **Max files**, or the files are too large once packed for the review. |
-| 422 | `invalid` | The body is not valid JSON, or a field or a file breaks its rule. The message names it, a file as `files[<index>]`. |
+| 422 | `invalid` | The body is not valid JSON or not UTF-8 text, or a field or a file breaks its rule. The message names it, a file as `files[<index>]`. |
 | 422 | `idempotency_key_reused` | The `Idempotency-Key` was used before for another body. |
 | 409 | `cannot_review` | The client has no skills, a skill is not in the library, or its model is no longer in the catalog. |
 
