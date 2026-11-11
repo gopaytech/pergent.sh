@@ -106,6 +106,7 @@ The chart creates a Service (`pergent-sh.pergent-sh.svc:8080` for the install ab
 | `/skill-fetches/` | the skill fetch Jobs (result callback, only with the dashboard on) | as for `/runs/`. |
 | `/readiness-scans/` | the readiness scan Jobs (result callback, only with the dashboard on) | as for `/runs/`. |
 | `/`, `/api/`, `/auth/` | people, in the [dashboard](../concepts/dashboard.md) | `dashboard.url`'s host, over https. It can be internal-only. |
+| `/v1/` | the systems that call the [review API](review-api.md), with a key (only with the dashboard on) | a host those systems reach, over https. It is the same port and Service as the dashboard, so expose only `/v1/` on a host they reach from outside. |
 | `/healthz` | probes | nowhere; the kubelet calls the pod directly. |
 
-Expose only `/webhooks/` on the public host, so the dashboard and its sign-in stay off the internet. With a public `callback_url`, add `/runs/`, `/skill-fetches/` and `/readiness-scans/`. Whatever sits in front must set `X-Forwarded-For` (see [Password sign-in limits](../concepts/dashboard.md#password-sign-in-limits)).
+Expose only `/webhooks/` on the public host, so the dashboard and its sign-in stay off the internet. Callers of the review API need `/v1/` on a host they reach, and nothing else of the dashboard. With a public `callback_url`, add `/runs/`, `/skill-fetches/` and `/readiness-scans/`. Whatever sits in front must set `X-Forwarded-For` (see [Password sign-in limits](../concepts/dashboard.md#password-sign-in-limits)).

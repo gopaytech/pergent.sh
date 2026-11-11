@@ -6,7 +6,10 @@
 
 Migration `0038` runs at startup and only adds two tables, so back up Postgres first, as for any migration. The previous release keeps working on the migrated database and ignores them. There is no new config key, so to roll back nothing needs removing from the config. The `/v1/` routes exist only with `dashboard.url` set, as the dashboard does. Rolling back removes the clients and keys from use; they stay stored.
 
-Migration `0039` runs at startup too. It adds a table, a sequence and two columns to `runs` (with a default, or NULL), dropping nothing. The previous release keeps running merge request reviews on the migrated database.
+Migration `0039` runs at startup too. It adds a table, a sequence, two columns to `runs` (with a default, or NULL), a `CHECK` constraint on `runs` (`runs_api_shape`: an API review has no instance and no project) and indexes, dropping nothing. The previous release keeps running merge request reviews on the migrated database.
+
+- **During a rolling upgrade, or after a rollback, the previous release meets API reviews it doesn't know.** It claims a queued one, finds no repository `''`, and supersedes it. It can't publish an API review that is reported. It lists API reviews in **Usage** under an empty repository. After a rollback, callers may see `superseded` reviews: they send their changes again.
+- **The review API's limits and callbacks are stored but not enforced or sent yet.** Only the request size and the number of files hold in this release.
 
 ## Upgrading to 0.16.0
 
