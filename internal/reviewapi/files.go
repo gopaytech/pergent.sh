@@ -19,6 +19,10 @@ const Committer = "pergent <pergent@pergent.sh> 0 +0000"
 // maxPathBytes is the longest path a caller may send.
 const maxPathBytes = 1024
 
+// maxSegmentBytes is the longest name in a path: the Job checks the head
+// commit out to disk, and a file name over 255 bytes fails on ext4.
+const maxSegmentBytes = 255
+
 // File is one file of a sent change: its content before (Old) and after (New).
 // A file with only New is added, with only Old is deleted, with both is
 // changed (or unchanged, which the review then skips).
@@ -109,11 +113,30 @@ func checkPath(p string) string {
 		}
 	}
 	for _, s := range segs {
-		if s == "" || strings.EqualFold(s, ".git") {
+		if s == "" || len(s) > maxSegmentBytes || isGitName(s) {
 			return "the path holds a character git can't store"
 		}
 	}
 	return ""
+}
+
+// isGitName reports whether a segment is, or on some file system would become,
+// the name .git: git refuses these in a path (its NTFS and HFS protections),
+// and the Job's git may run with either off, so both are applied here. The
+// segment is read without HFS-ignorable code points and trailing spaces and
+// dots; .git itself, its NTFS short name git~1 and the stream form .git:x
+// all count. The comparison ignores case.
+func isGitName(seg string) bool {
+	seg = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 0x200c && r <= 0x200f, r >= 0x202a && r <= 0x202e,
+			r >= 0x206a && r <= 0x206f, r == 0xfeff:
+			return -1
+		}
+		return r
+	}, seg)
+	seg = strings.ToLower(strings.TrimRight(seg, " ."))
+	return seg == ".git" || seg == "git~1" || strings.HasPrefix(seg, ".git:")
 }
 
 // Import is what the Job feeds to `git fast-import` and the commits that

@@ -13,6 +13,8 @@ func str(s string) *string { return &s }
 
 func TestCheckFiles(t *testing.T) {
 	long := strings.Repeat("a", maxPathBytes+1)
+	seg255 := strings.Repeat("a", maxSegmentBytes)
+	const noStore = "files[0]: the path holds a character git can't store"
 	cases := []struct {
 		name  string
 		files []File
@@ -25,7 +27,14 @@ func TestCheckFiles(t *testing.T) {
 		{"empty content", []File{{Path: "x", New: str("")}}, ""},
 		{"spaces and accents", []File{{Path: "my dir/café menu.txt", New: str("x")}}, ""},
 		{"a dot in a name", []File{{Path: ".github/.gitignore", New: str("x")}, {Path: "a..b/c.d", New: str("x")}}, ""},
-		{"longest path", []File{{Path: long[1:], New: str("x")}}, ""},
+		{"longest path", []File{{Path: strings.Join([]string{seg255, seg255, seg255, seg255}, "/"), New: str("x")}}, ""},
+		{"longest name", []File{{Path: seg255, New: str("x")}}, ""},
+		{".gitmodules", []File{{Path: ".gitmodules", New: str("x")}}, ""},
+		{"look-alikes of .git", []File{
+			{Path: "a ", New: str("x")}, {Path: "b.", New: str("x")}, {Path: "x:y", New: str("x")},
+			{Path: "aux", New: str("x")}, {Path: "git~2/x", New: str("x")}, {Path: " .git", New: str("x")},
+			{Path: ".gi", New: str("x")}, {Path: "git~", New: str("x")}, {Path: "git~10", New: str("x")},
+		}, ""},
 		{"no files", nil, "files must not be empty"},
 		{"empty list", []File{}, "files must not be empty"},
 		{"empty path", []File{{Path: "", New: str("x")}}, "files[0]: the path must be relative"},
@@ -47,6 +56,20 @@ func TestCheckFiles(t *testing.T) {
 		{".git file", []File{{Path: ".git", New: str("x")}}, "files[0]: the path holds a character git can't store"},
 		{".git dir", []File{{Path: "a/.git/config", New: str("x")}}, "files[0]: the path holds a character git can't store"},
 		{".GIT any case", []File{{Path: ".GiT/config", New: str("x")}}, "files[0]: the path holds a character git can't store"},
+		{"name over 255 bytes", []File{{Path: seg255 + "a", New: str("x")}}, noStore},
+		{"name over 255 bytes in a directory", []File{{Path: "d/" + seg255 + "a/f", New: str("x")}}, noStore},
+		{".git trailing space", []File{{Path: ".git ", New: str("x")}}, noStore},
+		{".git trailing dot", []File{{Path: ".git.", New: str("x")}}, noStore},
+		{".git dot in a directory", []File{{Path: ".git./x", New: str("x")}}, noStore},
+		{".git dots and spaces", []File{{Path: "a/.git . ./x", New: str("x")}}, noStore},
+		{"git~1", []File{{Path: "git~1/x", New: str("x")}}, noStore},
+		{"GIT~1", []File{{Path: "GIT~1", New: str("x")}}, noStore},
+		{"git~1 trailing dot", []File{{Path: "a/Git~1./x", New: str("x")}}, noStore},
+		{".git with a zero-width non-joiner", []File{{Path: ".g\u200cit/x", New: str("x")}}, noStore},
+		{".git ending in a zero-width non-joiner", []File{{Path: ".gi\u200ct", New: str("x")}}, noStore},
+		{".git with other ignorable points", []File{{Path: ".g\u202ei\u206ft\ufeff", New: str("x")}}, noStore},
+		{".git NTFS stream", []File{{Path: ".git::$INDEX_ALLOCATION", New: str("x")}}, noStore},
+		{".git stream in a directory", []File{{Path: "a/.GIT:x/y", New: str("x")}}, noStore},
 		{"old not UTF-8", []File{{Path: "a", Old: str("\xff")}}, "files[0]: old is not UTF-8 text"},
 		{"new not UTF-8", []File{{Path: "ok", New: str("x")}, {Path: "a", New: str("\xc3")}}, "files[1]: new is not UTF-8 text"},
 		{"neither", []File{{Path: "a"}}, "files[0]: a file needs old, new or both"},
@@ -185,6 +208,16 @@ func TestImportMatchesGit(t *testing.T) {
 		{"text that looks like a stream", []File{
 			{Path: "tricky", New: str("data 5\nhello\ncommit refs/heads/evil\n")},
 		}},
+		{"look-alikes of .git", []File{
+			{Path: ".gitmodules", New: str("m\n")},
+			{Path: "a ", New: str("1\n")},
+			{Path: "a.", New: str("2\n")},
+			{Path: "x:y", New: str("3\n")},
+			{Path: "aux", New: str("4\n")},
+			{Path: "git~2/x", New: str("5\n")},
+			{Path: " .git", New: str("6\n")},
+		}},
+		{"longest name", []File{{Path: strings.Repeat("a", maxSegmentBytes), New: str("n\n")}}},
 		{"empty base", []File{{Path: "added", New: str("a\n")}, {Path: "dir/also", New: str("b\n")}}},
 		{"empty head", []File{{Path: "a", Old: str("a\n")}, {Path: "d/b", Old: str("b\n")}}},
 		{"file becomes directory", []File{{Path: "a", Old: str("was a file\n")}, {Path: "a/b", New: str("now a dir\n")}}},
