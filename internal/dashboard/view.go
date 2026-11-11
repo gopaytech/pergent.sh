@@ -1176,6 +1176,13 @@ type AuditView struct {
 //     except skills, the default list of library skill names: a missing key
 //     keeps the stored list, null or [] clears it, and a name the library
 //     lacks or a list over 900 KiB is 400 as for a repository.
+//   - the review API's clients (admins; see api_clients.go): GET and POST
+//     /api/admin/api-clients, GET, PUT and DELETE /api/admin/api-clients/{name},
+//     POST .../{name}/secret and POST .../{name}/keys, DELETE .../{name}/keys/{id}.
+//     The audit actions are api_client_created, api_client_updated,
+//     api_client_removed, api_key_created, api_key_revoked and
+//     api_callback_secret_rotated; the detail is the client's name, with the
+//     key's name and prefix for a key, and never a key or a secret.
 
 // SecretView says whether a secret is set and when it last changed. The
 // value is never sent. UpdatedAt is null for a secret that comes from the
@@ -1388,4 +1395,100 @@ type UsageRepositoryView struct {
 	FullMedian        *float64           `json:"fullMedian"`
 	IncrementalMedian *float64           `json:"incrementalMedian"`
 	Outliers          []UsageOutlierView `json:"outliers"`
+}
+
+// --- API clients (admins) ---
+//
+// A key and a callback secret are in the answer that makes them and in no
+// other: they are stored as a hash and sealed, and never read back.
+
+// APILimitsView is a client's caps on its requests.
+type APILimitsView struct {
+	MaxRequestBytes    int   `json:"maxRequestBytes"`
+	MaxFiles           int   `json:"maxFiles"`
+	MaxInFlight        int   `json:"maxInFlight"`
+	RequestsPerHour    int   `json:"requestsPerHour"`
+	MonthlyTokenBudget int64 `json:"monthlyTokenBudget"`
+}
+
+// APIClientInput is the body of POST /api/admin/api-clients. Limits may be
+// left out for the defaults; if it is given, every field of it is checked.
+type APIClientInput struct {
+	Name        string         `json:"name"`
+	Skills      []string       `json:"skills"`
+	ModelID     string         `json:"modelId"`
+	CallbackURL string         `json:"callbackUrl"`
+	Limits      *APILimitsView `json:"limits"`
+}
+
+// APIClientEdit is the body of PUT /api/admin/api-clients/{name}: all of
+// the input but the name, and Limits is required.
+type APIClientEdit struct {
+	Skills      []string       `json:"skills"`
+	ModelID     string         `json:"modelId"`
+	CallbackURL string         `json:"callbackUrl"`
+	Limits      *APILimitsView `json:"limits"`
+}
+
+// APIKeyInput is the body of POST /api/admin/api-clients/{name}/keys.
+// ExpiresAt, when given, is in the future.
+type APIKeyInput struct {
+	Name      string     `json:"name"`
+	ExpiresAt *time.Time `json:"expiresAt"`
+}
+
+// APIClientRowView is one line of the list of clients.
+type APIClientRowView struct {
+	Name string `json:"name"`
+	Keys int    `json:"keys"`
+}
+
+// APIClientListView is GET /api/admin/api-clients, by name.
+type APIClientListView struct {
+	Items []APIClientRowView `json:"items"`
+}
+
+// APIKeyView is one of a client's keys: its prefix finds it in a leak scan,
+// and the key itself is never shown again.
+type APIKeyView struct {
+	ID         int64      `json:"id"`
+	Name       string     `json:"name"`
+	Prefix     string     `json:"prefix"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	ExpiresAt  *time.Time `json:"expiresAt"`
+	LastUsedAt *time.Time `json:"lastUsedAt"`
+}
+
+// APIClientView is one client. PreviousSecretUntil is there while the
+// callback secret before the last rotation still signs; ModelID is "" for the
+// default model. Keys are newest first.
+type APIClientView struct {
+	Name                string        `json:"name"`
+	Skills              []string      `json:"skills"`
+	ModelID             string        `json:"modelId"`
+	CallbackURL         string        `json:"callbackUrl"`
+	PreviousSecretUntil *time.Time    `json:"previousSecretUntil,omitempty"`
+	Limits              APILimitsView `json:"limits"`
+	Keys                []APIKeyView  `json:"keys"`
+	CreatedAt           time.Time     `json:"createdAt"`
+}
+
+// APIClientCreatedView is the 201 of POST /api/admin/api-clients: the only
+// time the callback secret is shown.
+type APIClientCreatedView struct {
+	Client         APIClientView `json:"client"`
+	CallbackSecret string        `json:"callbackSecret"`
+}
+
+// APICallbackSecretView is the answer of a rotation: the new callback secret,
+// shown once.
+type APICallbackSecretView struct {
+	CallbackSecret string `json:"callbackSecret"`
+}
+
+// APIKeyCreatedView is the 201 of POST /api/admin/api-clients/{name}/keys:
+// the only time the key is shown.
+type APIKeyCreatedView struct {
+	Key    APIKeyView `json:"key"`
+	Secret string     `json:"secret"`
 }
