@@ -2,7 +2,7 @@
 
 The review API lets another system ask pergent.sh for reviews. This page covers **API clients and their keys**, and **asking for a review and reading it**.
 
-**Not built yet:** callbacks, dismissals, a review knowing its subject's earlier findings, and the hourly, in-flight and token limits come in a later part. You can set their fields now, but nothing sends or enforces them yet. Don't rely on them.
+**Not built yet:** dismissals, a review knowing its subject's earlier findings, and the hourly, in-flight and token limits come in a later part. You can set their fields now, but nothing enforces them yet. Don't rely on them.
 
 It exists only when the dashboard is on (`dashboard.url` is set). It adds no config key.
 
@@ -15,10 +15,10 @@ A client is one system that calls the API: a script, a bot, another service. An 
 | Name | 1 to 63 characters: `a-z`, `0-9` and `-`. It never changes. |
 | Skills | The library skills its reviews use. |
 | Model | A model from the [list of models](../concepts/models.md), or the default. |
-| Callback URL | Where pergent.sh will send results. Empty means none. Only `http` and `https`, with no user name or password. **Stored only for now: nothing is sent to it yet.** |
+| Callback URL | Where pergent.sh sends each result: [Get the result by callback](#get-the-result-by-callback). Empty means none. Only `http` and `https`, with no user name or password. Use `https`. |
 | Limits | The caps on its requests (below). |
 | Keys | The secrets its callers send. A client can have several. |
-| Callback secret | Will sign the callbacks pergent.sh sends to the client. **Not used yet**, as no callback is sent. |
+| Callback secret | Signs the callbacks pergent.sh sends to the client. |
 
 New clients get these limits. An admin changes them on the client's **Settings** tab.
 
@@ -75,11 +75,11 @@ To replace a key without a gap: make the new one, switch the caller, then revoke
 
 ## Rotate the callback secret
 
-On the **Settings** tab press **Rotate secret**. The new secret is shown once. The old one **keeps signing for 24 hours**, so the caller can switch over without dropping a callback; the tab says until when. Rotating again replaces the old secret that was still signing. No callback is sent yet, so for now the secret signs nothing.
+On the **Settings** tab press **Rotate secret**. The new secret is shown once. The old one **keeps signing for 24 hours**, so the caller can switch over without dropping a callback; the tab says until when. During those 24 hours each callback carries both signatures. Rotating again replaces the old secret that was still signing.
 
 ## Remove a client
 
-On the **Settings** tab press **Remove client**. Its keys stop at once, the Jobs of its running reviews are deleted, and its data is deleted, its queued reviews with it. It cannot be undone.
+On the **Settings** tab press **Remove client**. Its keys stop at once, the Jobs of its running reviews are deleted, and its data is deleted, its queued reviews with it. No callback is sent for them, and callbacks not yet delivered are dropped. It cannot be undone.
 
 ## Check a key
 
@@ -280,6 +280,29 @@ A review with `status: failed` has `verdict: failed` and a `failure` with the `s
 | `review` | While pergent reviews | `the review job ran out of memory (OOMKilled)`, `pergent couldn't review the change` |
 | `delivery` | When the result comes back | `pergent sent a result pergent.sh couldn't use` |
 | `unknown` | The Job vanished, or hit its deadline before it started | `the review job disappeared before sending a result` |
+
+## Get the result by callback
+
+When a review ends (`completed`, `failed` or `superseded`), pergent.sh `POST`s it to the client's **Callback URL**. That is the only callback a review gets: none for `queued` or `running`. The body is the review's `GET /v1/reviews/{id}` body at the time it is sent, byte for byte.
+
+| Header | Value |
+| --- | --- |
+| `Content-Type` | `application/json` |
+| `X-Pergent-Delivery` | A UUID, the same on every retry of this callback. Drop a delivery you already handled. |
+| `X-Pergent-Signature` | `t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<body>">`, with the callback secret as the key. |
+
+- **Delivered** is any `2xx` answer. Anything else, a redirect (never followed) or no answer within 10 seconds is a failed attempt.
+- **Retries** wait 10 s, then twice as long each time, at most an hour, for 24 hours after the review ended. Then pergent.sh gives up. The result stays readable with `GET`.
+- **A rotation** puts two `v1=` values in the header for 24 hours, the new secret's first. Accept the callback if **any** `v1=` matches.
+- **The URL and secret** are read at each attempt, so a fix to either applies to the next retry.
+- **Failing callbacks** raise a **Needs attention** item for the client, seen by admins, once 3 of its callbacks from the last 24 hours are undelivered. It clears when fewer are.
+
+To check a callback, compute the HMAC over the raw bytes you received, compare it with each `v1=`, and refuse a `t` older than a few minutes. In a shell, with the body saved as `body.json` (don't read it into a variable: that drops a trailing newline):
+
+```
+t=1762851790   # from X-Pergent-Signature
+{ printf '%s.' "$t"; cat body.json; } | openssl dgst -sha256 -hmac "$CALLBACK_SECRET"
+```
 
 ## Send the change again, don't re-run
 

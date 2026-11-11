@@ -2,14 +2,16 @@
 
 ## Unreleased
 
-**Another system can be given API keys to the review API.** An admin makes a client under **API clients** and gives each caller a key: [Review API](setup/review-api.md). A caller can ask for a review (`POST /v1/reviews`) and read it (`GET /v1/reviews/{id}`); callbacks come later. Nothing happens after the upgrade until an admin makes a client.
+**Another system can be given API keys to the review API.** An admin makes a client under **API clients** and gives each caller a key: [Review API](setup/review-api.md). A caller can ask for a review (`POST /v1/reviews`), read it (`GET /v1/reviews/{id}`) and get it by a signed callback to the client's callback URL when it ends. Nothing happens after the upgrade until an admin makes a client.
 
 Migration `0038` runs at startup and only adds two tables, so back up Postgres first, as for any migration. The previous release keeps working on the migrated database and ignores them. There is no new config key, so to roll back nothing needs removing from the config. The `/v1/` routes exist only with `dashboard.url` set, as the dashboard does. Rolling back removes the clients and keys from use; they stay stored.
 
 Migration `0039` runs at startup too. It adds a table, a sequence, two columns to `runs` (with a default, or NULL), a `CHECK` constraint on `runs` (`runs_api_shape`: an API review has no instance and no project) and indexes, dropping nothing. The previous release keeps running merge request reviews on the migrated database.
 
 - **During a rolling upgrade, or after a rollback, the previous release meets API reviews it doesn't know.** It claims a queued one, finds no repository `''`, and supersedes it. It can't publish an API review that is reported. It lists API reviews in **Usage** under an empty repository. After a rollback, callers may see `superseded` reviews: they send their changes again.
-- **The review API's limits and callbacks are stored but not enforced or sent yet.** Only the request size and the number of files hold in this release.
+- **The review API's hourly, in-flight and token limits are stored but not enforced yet.** Only the request size and the number of files hold in this release.
+
+Migration `0040` runs at startup too. It adds two tables (`api_callbacks`, `api_callback_attempts`) and an index, dropping nothing. The previous release ignores them, so after a rollback no callback is sent; the results stay readable with `GET`.
 
 ## Upgrading to 0.16.0
 

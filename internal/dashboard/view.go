@@ -746,10 +746,12 @@ type SkillFetchResultView struct {
 }
 
 // AttentionView is one setup problem. Project is "" for a problem of the
-// whole instance (an expiring token).
+// whole instance (an expiring token). Client is the API client a problem is
+// about (failing callbacks), with Instance and Project "".
 type AttentionView struct {
 	Instance  string    `json:"instance"`
 	Project   string    `json:"project"`
+	Client    string    `json:"client,omitempty"`
 	Kind      string    `json:"kind"`
 	Message   string    `json:"message"`
 	UpdatedAt time.Time `json:"updatedAt"`

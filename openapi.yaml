@@ -4428,7 +4428,10 @@ components:
         instance: {type: string}
         project:
           type: string
-          description: '"" for a problem of the whole instance.'
+          description: '"" for a problem of the whole instance, or of an API client.'
+        client:
+          type: string
+          description: The API client the problem is about (`callback_failing`, admins only), with `instance` and `project` "". Left out otherwise.
         kind: {type: string}
         message: {type: string}
         updatedAt:

@@ -469,6 +469,40 @@ func TestOverviewInstanceItemsOnlyForAdmins(t *testing.T) {
 	}
 }
 
+// An API client's failing callbacks are shown to admins only, as the
+// client's, never as a repository's.
+func TestCallbackFailingOnlyForAdmins(t *testing.T) {
+	e := newEnv(t, nil)
+	overviewFixture(e)
+	const msg = "Callbacks to this client failed for 3 reviews in the last 24 hours."
+	if err := e.st.SetAttention(ctx, "", "gateway", "callback_failing", msg); err != nil {
+		t.Fatal(err)
+	}
+
+	admin := e.userOnMain(true, "acme/widgets")
+	var got []AttentionView
+	for _, a := range getJSON[OverviewView](e, admin, "/api/overview").Attention {
+		if a.Kind == "callback_failing" {
+			got = append(got, a)
+		}
+	}
+	if len(got) != 1 || got[0].Client != "gateway" || got[0].Instance != "" || got[0].Project != "" || got[0].Message != msg {
+		t.Errorf("admin attention = %+v; want the gateway client's item", got)
+	}
+	for _, a := range getJSON[RepositoryDetailView](e, admin, "/api/repositories/main/acme/widgets").Attention {
+		if a.Kind == "callback_failing" {
+			t.Errorf("a repository's attention holds the client's item: %+v", a)
+		}
+	}
+
+	user := e.userOnMain(false, "acme/widgets")
+	for _, a := range getJSON[OverviewView](e, user, "/api/overview").Attention {
+		if a.Kind == "callback_failing" || a.Client != "" {
+			t.Errorf("a user sees the client's item: %+v", a)
+		}
+	}
+}
+
 // Setup problems are shown only for repositories switched on, even when a
 // team still names one.
 func TestAttentionOnlyForActiveRepos(t *testing.T) {

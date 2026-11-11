@@ -353,6 +353,9 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	// Engine.Run reconciles first, in its own goroutine, so a slow GitLab
 	// at startup never keeps the routes down.
 	loops := []func(context.Context){eng.Run}
+	// The API reviews' callbacks have a loop of their own, so a slow
+	// callback URL never holds up a review.
+	loops = append(loops, eng.RunCallbacks)
 	// The audit log is kept 90 days, whether the dashboard is on or not
 	// (the reset-password command records there too).
 	pruneOld := pruneAudit(st.PruneAudit, time.Now, log)

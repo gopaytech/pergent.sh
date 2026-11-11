@@ -723,10 +723,17 @@ func (e *Engine) retryPublish(ctx context.Context, run store.Run, text string, l
 // review must not leave an approval standing on its commit; the approval
 // sweep tries again what fails here), and one failed status is set on the
 // head so a required check isn't left running (GitHub's Check Run stays
-// in_progress from dispatch otherwise). Nothing is approved.
+// in_progress from dispatch otherwise). Nothing is approved. An API review
+// has none of these: its callback is queued instead, best effort.
 func (e *Engine) giveUp(ctx context.Context, run store.Run, log *slog.Logger) {
 	if run.Kind == store.KindAPI {
-		// No approval and no commit status: the review reads as failed.
+		// No approval and no commit status: the review reads as failed, and
+		// its callback says so.
+		sctx, cancel := settleCtx(ctx)
+		defer cancel()
+		if err := e.Store.EnqueueAPICallback(sctx, run.ID); err != nil {
+			log.Error("couldn't queue the callback of the review that wasn't published", "error", e.redact(err.Error()))
+		}
 		return
 	}
 	plat, ok := e.Platforms.Get(run.MR.Instance)

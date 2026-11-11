@@ -82,6 +82,9 @@ export type ReviewSummary = {
 export type AttentionView = {
   instance: string;
   project: string;
+  // client is the API client the problem is about (callback_failing), with
+  // instance and project "".
+  client?: string;
   kind: string;
   message: string;
   updatedAt: string;

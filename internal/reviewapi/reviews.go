@@ -201,17 +201,31 @@ func (h *Handler) getReview(w http.ResponseWriter, r *http.Request) {
 	writeReview(w, http.StatusOK, rv)
 }
 
-// writeReview answers with the review's stored response as it is stored, or,
-// before there is one, the pending body.
+// Body is the body of GET /v1/reviews/{id} for rv, which its callback posts
+// too: the stored response as it is stored or, before there is one, the
+// pending body, as writeJSON writes it.
+func Body(rv store.APIReview) ([]byte, error) {
+	if len(rv.Response) > 0 {
+		return rv.Response, nil
+	}
+	b, err := json.Marshal(Pending(rv))
+	if err != nil {
+		return nil, err
+	}
+	return append(b, '\n'), nil
+}
+
+// writeReview answers with the review's Body.
 func writeReview(w http.ResponseWriter, status int, rv store.APIReview) {
 	w.Header().Set("Location", "/v1/reviews/"+rv.Run.ID)
-	if len(rv.Response) > 0 {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		_, _ = w.Write(rv.Response)
+	body, err := Body(rv)
+	if err != nil {
+		writeInternal(w)
 		return
 	}
-	writeJSON(w, status, Pending(rv))
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
 }
 
 // cannotReview is why the client's reviews can't run now, or "".

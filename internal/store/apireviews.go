@@ -91,8 +91,9 @@ func lockAPI(ctx context.Context, tx pgx.Tx, key string) error {
 // EnqueueAPIReview queues an API review: a run of kind KindAPI with no merge
 // request and its api_reviews row, in one transaction. A subject is its
 // client, tenant and subject together. The subject's queued and running API
-// reviews are superseded, as a push supersedes a merge request's; a reported
-// one is not: it finishes, and its callback goes out.
+// reviews are superseded, as a push supersedes a merge request's, and each
+// gets its callback (when the client has a callback URL); a reported one is
+// not: it finishes, and its callback goes out then.
 //
 // With an IdempotencyKey the client used before, nothing is created or
 // superseded: created is false and id is that review's, whatever its state,
@@ -135,9 +136,15 @@ func (s *Store) EnqueueAPIReview(ctx context.Context, n NewAPIReview) (id string
 		}
 	}
 
-	if _, err := tx.Exec(ctx, `UPDATE runs SET state = 'superseded'
-		WHERE id IN (SELECT run_id FROM api_reviews WHERE client_id = $1 AND tenant = $2 AND subject = $3)
-		  AND state IN ('queued', 'running')`, n.ClientID, n.Tenant, n.Subject); err != nil {
+	// Each review superseded gets its callback, when the client has a URL.
+	if _, err := tx.Exec(ctx, `WITH s AS (
+			UPDATE runs SET state = 'superseded'
+			WHERE id IN (SELECT run_id FROM api_reviews WHERE client_id = $1 AND tenant = $2 AND subject = $3)
+			  AND state IN ('queued', 'running')
+			RETURNING id)
+		INSERT INTO api_callbacks (run_id, client_id)
+		SELECT s.id, c.id FROM s JOIN api_clients c ON c.id = $1 WHERE c.callback_url <> ''
+		ON CONFLICT (run_id) DO NOTHING`, n.ClientID, n.Tenant, n.Subject); err != nil {
 		return "", false, err
 	}
 	// The quota is the client's own (its monthly token budget), so the
@@ -364,8 +371,9 @@ func (s *Store) DropSpentAPIInputs(ctx context.Context) (int, error) {
 
 // FinishAPIReview records that a reported API review's result is out: the
 // run is marked published with dec, as MarkPublished does, and the review
-// keeps response, the result as the API returns it, finished now, in one
-// transaction. A run that is not reported, or a response that is not JSON
+// keeps response, the result as the API returns it, finished now, and its
+// callback is queued when the client has a callback URL, in one transaction.
+// A run that is not reported, or a response that is not JSON
 // (ErrInvalidResult), is an error and changes nothing.
 func (s *Store) FinishAPIReview(ctx context.Context, runID string, response []byte, dec RunDecision) error {
 	if !json.Valid(response) {
@@ -394,6 +402,9 @@ func (s *Store) FinishAPIReview(ctx context.Context, runID string, response []by
 	}
 	if tag.RowsAffected() != 1 {
 		return fmt.Errorf("store: run %s is not an API review", runID)
+	}
+	if _, err := tx.Exec(ctx, insertCallbackSQL, runID); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
 }
