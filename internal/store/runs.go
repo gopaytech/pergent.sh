@@ -144,7 +144,21 @@ type Run struct {
 	// Nil is none, for a run from before the column or one that never
 	// started.
 	LinkedRepos []Link
+	// Kind is KindMR for a merge request's review and KindAPI for one asked
+	// for through the review API (see EnqueueAPIReview); APIClientID is the
+	// client of an API review, nil for a merge request's.
+	Kind        string
+	APIClientID *int64
 }
+
+// What a run reviews (Run.Kind).
+const (
+	// KindMR is a merge request's review.
+	KindMR = "mr"
+	// KindAPI is a review asked for through the review API: it has no merge
+	// request (instance '', project 0, and a number of its own as mr_iid).
+	KindAPI = "api"
+)
 
 // How a run came to be (Run.Trigger).
 const (
@@ -175,12 +189,17 @@ const (
 	// OutcomeWaiting is a run held until someone with write access starts it.
 	OutcomeWaiting = "waiting"
 	OutcomeUnknown = "unknown"
+
+	// OutcomeNothingReviewed is an API review in which no skill reviewed a
+	// file: never a pass.
+	OutcomeNothingReviewed = "nothing_reviewed"
 )
 
 // RunDecision is what the publisher decided for a run.
 type RunDecision struct {
 	// Outcome is OutcomeApproved, OutcomeBlocking, OutcomeDraft,
-	// OutcomeNoBlocking or OutcomeFailed.
+	// OutcomeNoBlocking or OutcomeFailed, or OutcomeNothingReviewed for an
+	// API review.
 	Outcome string
 	// Reason says why, in a sentence ("" when approved).
 	Reason string
@@ -222,7 +241,7 @@ const runColumns = `id::text, instance, project_id, mr_iid, project_path, head_s
 	title, web_url, source_branch, author, model, skill_sources,
 	outcome, outcome_reason, decision_status, approved, trigger, skill_subset, base_run_id::text,
 	skill_versions, skip_reason, max_turns, incremental, skill_hashes, quiet_reviews, comment_layout,
-	linked_repos, provider, failure_step, failure_detail, pod_name, checkout_seen, quota_checked`
+	linked_repos, provider, failure_step, failure_detail, pod_name, checkout_seen, quota_checked, kind, api_client_id`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var (
@@ -239,7 +258,7 @@ func scanRun(row pgx.Row) (Run, error) {
 		&r.Title, &r.WebURL, &r.SourceBranch, &r.Author, &r.Model, &sources,
 		&r.Outcome, &r.OutcomeReason, &r.DecisionStatus, &r.Approved, &r.Trigger, &r.SkillSubset, &r.BaseRunID,
 		&versions, &r.SkipReason, &r.MaxTurns, &r.Incremental, &hashes, &quiet, &r.CommentLayout, &links, &r.Provider,
-		&r.FailureStep, &r.FailureDetail, &r.PodName, &r.CheckoutSeen, &r.QuotaChecked)
+		&r.FailureStep, &r.FailureDetail, &r.PodName, &r.CheckoutSeen, &r.QuotaChecked, &r.Kind, &r.APIClientID)
 	if err != nil {
 		return Run{}, err
 	}
@@ -1238,14 +1257,17 @@ func (s *Store) queryRuns(ctx context.Context, sql string, args ...any) ([]Run, 
 // Republish flagged meanwhile stays reported instead, once, with no
 // attempts counted and due now, so the publisher decides it again.
 func (s *Store) MarkPublished(ctx context.Context, id string, dec RunDecision) error {
-	return s.mustUpdate(ctx, id, `UPDATE runs SET
-			state = CASE WHEN redecide THEN 'reported' ELSE 'published' END,
-			attempts = CASE WHEN redecide THEN 0 ELSE attempts END,
-			not_before = CASE WHEN redecide THEN NULL ELSE not_before END,
-			publish_error = '', redecide = false,
-			outcome = $2, outcome_reason = $3, decision_status = $4, approved = $5
-		WHERE id = $1::uuid AND state = 'reported'`, id, dec.Outcome, dec.Reason, dec.Status, dec.Approved)
+	return s.mustUpdate(ctx, id, markPublishedSQL, id, dec.Outcome, dec.Reason, dec.Status, dec.Approved)
 }
+
+// markPublishedSQL is MarkPublished's update, which FinishAPIReview shares.
+const markPublishedSQL = `UPDATE runs SET
+		state = CASE WHEN redecide THEN 'reported' ELSE 'published' END,
+		attempts = CASE WHEN redecide THEN 0 ELSE attempts END,
+		not_before = CASE WHEN redecide THEN NULL ELSE not_before END,
+		publish_error = '', redecide = false,
+		outcome = $2, outcome_reason = $3, decision_status = $4, approved = $5
+	WHERE id = $1::uuid AND state = 'reported'`
 
 // PublishRetry records a failed publish: the run is tried again at notBefore,
 // or becomes publish_failed when this was the 10th failed attempt, which it

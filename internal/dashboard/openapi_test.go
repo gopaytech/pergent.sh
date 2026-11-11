@@ -1371,7 +1371,8 @@ func TestOpenAPIEnumsMatchCode(t *testing.T) {
 		glob, prefix, block string
 		known               [][]string
 	}{
-		{"internal/store/*.go", "Outcome", "", [][]string{outcomes}},
+		// nothing_reviewed is an API review's outcome: no run view shows it.
+		{"internal/store/*.go", "Outcome", "", [][]string{outcomes, {store.OutcomeNothingReviewed}}},
 		// An account's role is admin or user (a team member's, viewer or
 		// maintainer, is in the roles above). The platform kind is hidden: no
 		// view of the API shows it.
