@@ -7,7 +7,8 @@ See where the model tokens went under **Admin → Usage** (`/admin/usage`). It's
 **All repositories** (`/admin/usage`), for the last 7, 30 or 90 days:
 
 - Each repository, busiest first, with its tokens and reviews.
-- Each API client, busiest first, with its tokens and reviews and a line for each of its tenants. The total at the top is the repositories plus the clients, which is what the daily chart adds up to. The CSV is repositories only.
+- Each API client, busiest first, with its tokens and reviews and a line for each of its tenants (the first 100, then `and N more tenants`). A tenant is whatever the caller sent, shown as text; reviews with none are `(no tenant)`. The client's name opens its page. The total at the top is the repositories plus the clients, which is what the daily chart adds up to. The CSV is repositories only.
+- A client's **Monthly token budget** is not this page's window: it is the tokens of the reviews asked for in the UTC month ([Limits](../setup/review-api.md#limits)). `GET /v1/client` shows what is used and left. Prometheus has the same numbers per client: [Metrics](metrics.md).
 - The tokens of each day. Days are cut at midnight UTC.
 
 **One repository** (`/admin/usage/<instance>/<project>`):

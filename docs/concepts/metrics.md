@@ -1,6 +1,6 @@
 # Metrics
 
-pergent.sh can serve Prometheus metrics for the tokens, reviews and findings on the [Usage](usage.md) page. They're off by default.
+pergent.sh can serve Prometheus metrics for the tokens, reviews and findings on the [Usage](usage.md) page, and for the reviews, tokens and callbacks of [API clients](../setup/review-api.md). They're off by default.
 
 ## Turn them on
 
@@ -25,6 +25,9 @@ Point Prometheus at `http://<that Service>.<namespace>.svc:9090/metrics`, or set
 | `pergent_skill_runs_total` | counter | `platform_instance`, `repository`, `skill`, `verdict` | Skill runs. `verdict` is `no_blocking_issues`, `has_blocking_issues`, `failed` or `(other)`. |
 | `pergent_findings_total` | counter | `platform_instance`, `repository`, `skill`, `severity` | Findings. `severity` is `blocking` or `suggestion`. |
 | `pergent_findings_dismissed` | gauge | `platform_instance`, `repository`, `skill` | Findings dismissed right now. Graph it as it is, without `rate()`. |
+| `pergent_api_reviews_total` | counter | `client`, `result` | API reviews that finished. `result` is `no_blocking`, `blocking`, `nothing_reviewed`, `failed`, `superseded` or `(other)`. A review still queued or running is not counted. |
+| `pergent_api_tokens_total` | counter | `client`, `kind` | Tokens used by API reviews. `kind` is `input`, `output`, `reasoning`, `cache_read` or `cache_write`. |
+| `pergent_api_callbacks_total` | counter | `client`, `outcome` | Callbacks to API clients. `outcome` is `delivered`, `gave_up` or `failed_attempt`: the first two count callbacks, `failed_attempt` counts tries that failed. A callback given up because the client's callback URL was emptied is in neither `gave_up` nor `failed_attempt`. |
 
 Values are read from the database at each scrape, so they survive a restart and include earlier reviews.
 
@@ -40,6 +43,8 @@ Values are read from the database at each scrape, so they survive a restart and 
 
 **`skill`** is named only if the library or a switched-on repository's skill list names it, or it's the fixed `impact` check. Anything else, including skills from a repository's `.pergent/skills` folder, is `(other)`.
 
+**`client`** (the three `pergent_api_` metrics) is the API client's name, which only an admin makes. It is the only label they have: a tenant, subject, key or review is never one, and the API metrics carry no `repository`, `skill` or `model`. Removing a client removes its series. A client's tokens add up as on the [Usage](usage.md) page, and the `reasoning`, `cache_read` and `cache_write` series are absent for a client until one of its reviews reports them.
+
 No merge request number, title, finding text or other text a person wrote is ever a label.
 
 ## Watch out for `(switched off)`
@@ -54,9 +59,9 @@ rate(pergent_tokens_total{repository!="(switched off)"}[5m])
 
 ## Grafana dashboard
 
-[`docs/grafana/pergent-sh.json`](../grafana/pergent-sh.json) is an example dashboard: reviews, reviews with no result by step, tokens by model, repository and skill, and a table of each skill's runs and findings. Import it under **Dashboards → New → Import** and pick your Prometheus data source at the top. The Instance, Repository, Skill and Model filters fill in from the metrics.
+[`docs/grafana/pergent-sh.json`](../grafana/pergent-sh.json) is an example dashboard in five rows: Overview, Reviews, Tokens, Skills and findings, and **API clients** (API reviews by result, API tokens by client, API callbacks by outcome). Import it under **Dashboards → New → Import** and pick your Prometheus data source at the top. The Instance, Repository, Skill and Model filters fill in from the metrics. They do not apply to the API clients row, whose metrics have a `client` label and none of those.
 
-Its panels leave out `(switched off)`. Reviews are rare next to a scrape, so its charts show bars of at least an hour.
+Its other panels leave out `(switched off)`. Reviews are rare next to a scrape, so its charts show bars of at least an hour.
 
 A series only exists from its first count, so `increase()` can't see the count that created it: the first review of a new repository, skill or model is missing from the charts. Totals on the [Usage](usage.md) page include it.
 

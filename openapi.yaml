@@ -40,7 +40,17 @@ info:
     `ReviewApiError`). A missing, unknown, revoked or expired key is always the
     same 401. A path under `/v1/` that is not a route is 404 `not_found` with
     a key and 401 without one. Field names are snake_case. v1 only gains
-    optional fields: ignore the ones you do not know.
+    optional fields: ignore the ones you do not know. The enums (`status`,
+    `verdict`, `step`, the skipped `rule`, the error `code`) never gain a
+    value in v1: a new value is a `/v2/` change.
+
+    **Callbacks.** When a review ends, pergent.sh `POST`s it to the client's
+    callback URL. That is a request pergent.sh makes, not a route it serves,
+    so it is the webhook `reviewFinished` below. Its signature is
+    `X-Pergent-Signature: t=<unix seconds>,v1=<hex>`, one `v1=` per secret
+    (two while a rotation's 24 hour overlap lasts): each is the hex
+    HMAC-SHA256, keyed with the callback secret, of `<t>.<raw body>`. Accept
+    a delivery if any `v1=` matches and `t` is within 5 minutes of your clock.
 
     **Dashboard API.** Every `/api/` and `/auth/` response is sent
     `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. Errors are
@@ -3453,16 +3463,18 @@ paths:
               schema: {$ref: '#/components/schemas/ReviewApiError'}
         '422':
           description: |
-            The code is `invalid` (the body is not valid JSON or not UTF-8 text, a field breaks
-            its rule, or a file does; the message names the field, and a file
-            as `files[<index>]`) or `idempotency_key_reused`.
+            The code is `invalid` (the body could not be read, is not valid JSON
+            or not UTF-8 text, a field breaks its rule, or a file does, or the
+            `Idempotency-Key` is not valid; the message names the field, and a
+            file as `files[<index>]`) or `idempotency_key_reused`.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ReviewApiError'}
         '429':
           description: |
-            The code is `rate_limited` (the key made more requests in the last
-            hour than its client's `requests_per_hour` allows) or
+            The code is `rate_limited` (the key has used up the requests its
+            client's `requests_per_hour` allows: it holds that many and gets
+            them back evenly, so there is no hour to wait for) or
             `budget_used_up` (the client's reviews asked for this UTC month used
             its `monthly_token_budget`; a retry with an `Idempotency-Key` used
             before is still answered). `Retry-After` is the seconds until the
@@ -3579,7 +3591,10 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/ReviewApiError'}
         '422':
-          description: The code is `invalid`. The body is not valid JSON or UTF-8 text, or `reason` is empty or over 500 characters.
+          description: |
+            The code is `invalid`. The body could not be read, is not valid
+            JSON or UTF-8 text, or `reason` is empty, over 500 characters or
+            holds a control character other than a line break or a tab.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ReviewApiError'}
@@ -3629,6 +3644,56 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ReviewApiError'}
+webhooks:
+  reviewFinished:
+    post:
+      operationId: receiveReviewFinished
+      tags: [Review API]
+      summary: A review ended (callback)
+      description: |
+        pergent.sh sends this to the client's callback URL when one of its
+        reviews ends (`completed`, `failed` or `superseded`; never for
+        `queued` or `running`). The body is the review as `GET
+        /v1/reviews/{id}` answers it, byte for byte, when the callback is
+        sent. Gate on `verdict`, never on `status`. A body with `test: true`
+        is the sample of the dashboard's test button: drop it.
+
+        **Verify it.** Read the raw body, compute the hex HMAC-SHA256 of
+        `<t>.<body>` (`t` from the signature header, a dot, the raw bytes)
+        keyed with the callback secret, and compare it in constant time with
+        each `v1=` of `X-Pergent-Signature`. Accept if any matches. Refuse a
+        `t` more than 5 minutes from your clock.
+
+        **Answer.** Any `2xx` within 10 seconds is delivered. Anything else,
+        a redirect (never followed) or no answer is a failed attempt. A failed
+        callback is tried again after 10 seconds, then after twice as long
+        each time, at most an hour, until 24 hours after the review ended;
+        then pergent.sh gives up, and the review stays readable with `GET`.
+        Each try is signed afresh, with the same `X-Pergent-Delivery`.
+        A callback is sent at least once: drop a delivery ID you handled.
+        The URL and the secret are read at each try. An emptied callback URL
+        turns callbacks off.
+      parameters:
+        - name: X-Pergent-Delivery
+          in: header
+          required: true
+          description: A UUID, the same on every try of one callback. Use it to drop a repeat.
+          schema: {type: string, format: uuid}
+        - name: X-Pergent-Signature
+          in: header
+          required: true
+          description: '`t=<unix seconds>,v1=<hex>`, with one `v1=` per secret, the current one first. During a rotation there are two.'
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReviewApiReview'}
+      responses:
+        '2XX':
+          description: Delivered. The body is ignored.
+        default:
+          description: Not delivered (any other status, a redirect, or no answer within 10 seconds). It is tried again.
 components:
   securitySchemes:
     sessionCookie:
@@ -3868,9 +3933,11 @@ components:
           schema: {type: string}
     ReviewApiRateLimited:
       description: |
-        The key made more requests in the last hour than its client's
-        `requests_per_hour` allows. The code is `rate_limited`; every request
-        with a good key counts, on any route.
+        The key has used up the requests its client's `requests_per_hour`
+        allows. It holds that many, a token bucket that gets one back every
+        hour divided by `requests_per_hour`, on any route. The code is
+        `rate_limited`; every request with a good key takes one, a request
+        refused with this takes none.
       headers:
         Retry-After:
           description: Whole seconds until the next request is allowed, at least 1.
@@ -3909,7 +3976,7 @@ components:
         max_request_bytes: {type: integer, description: The most bytes one review request's body may hold (never more than 819200).}
         max_files: {type: integer, description: The most files one review request may hold.}
         max_in_flight: {type: integer, description: 'The most reviews that may run at once. More wait in the queue, oldest first.'}
-        requests_per_hour: {type: integer, description: 'The most requests each key may make in an hour, on any route. Past it a request is 429 `rate_limited`.'}
+        requests_per_hour: {type: integer, description: 'The requests each key holds, on any route, refilled evenly (an hour divided by this is one request). Past it a request is 429 `rate_limited`.'}
         monthly_token_budget: {type: integer, format: int64, description: 'The tokens the reviews asked for in a UTC month may use. Once used, a request is 429 `budget_used_up` and a queued review fails.'}
     ReviewApiClientUsage:
       type: object
@@ -3962,9 +4029,12 @@ components:
     ReviewApiReview:
       type: object
       description: |
-        A review. `verdict`, `skills` and `usage` are set once it has a
-        result, `failure` when it failed. Only the verdict `no_blocking_issues`
-        is a pass: a review that failed, or reviewed nothing, is never one.
+        A review. A `completed` one has `finished_at`, `verdict`, `skills` and
+        `usage`. A `failed` one has `finished_at`, the verdict `failed` and a
+        `failure`, no `skills`, and `usage` only if the Job left a result. A
+        `superseded` one has none of them. Only the verdict
+        `no_blocking_issues` is a pass: a review that failed, or reviewed
+        nothing, is never one.
         v1 only gains optional fields and values of these enums never change.
       required: [id, subject, tenant, title, status, created_at]
       properties:
@@ -3979,7 +4049,7 @@ components:
         finished_at:
           type: [string, 'null']
           format: date-time
-          description: When the review finished. Missing until then.
+          description: When the review finished. Missing until then, and on a superseded review.
         verdict:
           type: string
           description: |
