@@ -88,6 +88,46 @@ describe("API review", () => {
     expect(screen.queryByRole("region", { name: /^Skill / })).not.toBeInTheDocument();
   });
 
+  it("lists each callback attempt with its time, what the URL answered and how long it took", async () => {
+    const view: APIReviewDetail = {
+      ...apiReviewDone,
+      callback: {
+        state: "pending",
+        attempts: [
+          { at: "2026-11-10T09:04:10Z", statusCode: 0, error: "dial tcp: connection <b>refused</b>", durationMs: 1200 },
+          { at: "2026-11-10T09:04:20Z", statusCode: 502, error: "", durationMs: 80 },
+        ],
+      },
+    };
+    renderPage(view);
+    const section = await screen.findByRole("region", { name: "Callback" });
+    expect(section).toHaveTextContent("Will be tried again");
+    const rows = within(section).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("2026-11-10 09:04 UTC");
+    expect(rows[0]).toHaveTextContent("No answer: dial tcp: connection <b>refused</b>");
+    expect(rows[0]).toHaveTextContent("1200 ms");
+    expect(rows[1]).toHaveTextContent("Answered 502");
+    expect(rows[1]).toHaveTextContent("80 ms");
+    // Error text is text, never markup.
+    expect(section.querySelector("b")).toBeNull();
+  });
+
+  it.each([
+    ["delivered", "Delivered"],
+    ["gave_up", "Given up"],
+  ] as const)("says a callback is %s", async (state, text) => {
+    const attempts = [{ at: "2026-11-10T09:04:10Z", statusCode: 200, error: "", durationMs: 30 }];
+    renderPage({ ...apiReviewDone, callback: { state, attempts } });
+    expect(await screen.findByRole("region", { name: "Callback" })).toHaveTextContent(text);
+  });
+
+  it("shows no callback section when the review has none", async () => {
+    renderPage(apiReviewDone);
+    await screen.findByRole("heading", { name: "Add the retry loop" });
+    expect(screen.queryByRole("region", { name: "Callback" })).not.toBeInTheDocument();
+  });
+
   it("says a review with no result yet has none", async () => {
     const queued: APIReviewDetail = {
       ...apiReviewFailed,
@@ -156,6 +196,126 @@ describe("API review", () => {
     renderApp(page(done));
     expect(await screen.findByRole("heading", { name: "Not found" })).toBeInTheDocument();
     expect(fake.calls.filter((c) => c.url.startsWith("/api/admin/"))).toEqual([]);
+  });
+});
+
+describe("dismissing a finding", () => {
+  const dismiss = (finding: string) => `${api(done)}/findings/${finding}/dismiss`;
+  const finding = async (title: string) =>
+    (await screen.findByText(title)).closest(".finding") as HTMLElement;
+  const dismissed = {
+    fingerprint: "aa11",
+    severity: "blocking" as const,
+    reason: "checked <b>upstream</b>",
+    actor: "ops",
+    createdAt: "2026-11-10T10:00:00Z",
+  };
+
+  it("needs a reason, sends it with the CSRF token and reads the review again", async () => {
+    let view: APIReviewDetail = apiReviewDone;
+    const fake = fakeApi({
+      "GET /api/me": { body: operator },
+      [`GET ${api(done)}`]: () => ({ body: view }),
+      [`POST ${dismiss("f1")}`]: () => {
+        view = { ...apiReviewDone, dismissals: [dismissed] };
+        return { body: { status: "dismissed" } };
+      },
+    });
+    renderApp(page(done));
+    const blocking = await finding("The loop never stops");
+    await userEvent.click(within(blocking).getByRole("button", { name: "Dismiss" }));
+
+    await userEvent.click(within(blocking).getByRole("button", { name: "Dismiss finding" }));
+    expect(within(blocking).getByText("Dismissing a finding needs a reason.")).toBeInTheDocument();
+    await userEvent.type(within(blocking).getByRole("textbox", { name: "Reason" }), "   ");
+    await userEvent.click(within(blocking).getByRole("button", { name: "Dismiss finding" }));
+    expect(fake.find("POST", dismiss("f1"))).toHaveLength(0);
+
+    await userEvent.type(within(blocking).getByRole("textbox", { name: "Reason" }), "checked <b>upstream</b>  ");
+    await userEvent.click(within(blocking).getByRole("button", { name: "Dismiss finding" }));
+
+    const after = await finding("The loop never stops");
+    expect(await within(after).findByText("Dismissed by ops · 2026-11-10 10:00 UTC")).toBeInTheDocument();
+    // The reason is trimmed on the way out and shown as text.
+    expect(fake.find("POST", dismiss("f1"))[0].body).toEqual({ reason: "checked <b>upstream</b>" });
+    expect(fake.find("POST", dismiss("f1"))[0].headers.get("X-CSRF-Token")).toBe(operator.csrfToken);
+    expect(after).toHaveTextContent("Reason: checked <b>upstream</b>");
+    expect(after.querySelector("b")).toBeNull();
+    expect(within(after).getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    expect(within(after).queryByRole("button", { name: "Dismiss" })).toBeNull();
+    // The other findings are still open to be dismissed.
+    const other = await finding("Name it better");
+    expect(within(other).getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    expect(fake.find("GET", api(done))).toHaveLength(2);
+  });
+
+  it("stops a dismissal with a DELETE that has no body", async () => {
+    let view: APIReviewDetail = { ...apiReviewDone, dismissals: [dismissed] };
+    const fake = fakeApi({
+      "GET /api/me": { body: operator },
+      [`GET ${api(done)}`]: () => ({ body: view }),
+      [`DELETE ${dismiss("f1")}`]: () => {
+        view = apiReviewDone;
+        return { body: { status: "restored" } };
+      },
+    });
+    renderApp(page(done));
+    const blocking = await finding("The loop never stops");
+    await userEvent.click(within(blocking).getByRole("button", { name: "Stop" }));
+    const after = await finding("The loop never stops");
+    expect(await within(after).findByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    expect(fake.find("DELETE", dismiss("f1"))).toHaveLength(1);
+    expect(fake.find("DELETE", dismiss("f1"))[0].body).toBeUndefined();
+    expect(fake.find("DELETE", dismiss("f1"))[0].headers.get("X-CSRF-Token")).toBe(operator.csrfToken);
+    expect(within(after).queryByText(/Dismissed by/)).toBeNull();
+  });
+
+  it("shows what the server refused", async () => {
+    fakeApi({
+      ...routes(apiReviewDone),
+      [`POST ${dismiss("f2")}`]: { status: 400, body: { error: "a dismissal needs a reason of at most 500 characters" } },
+    });
+    renderApp(page(done));
+    const one = await finding("Name it better");
+    await userEvent.click(within(one).getByRole("button", { name: "Dismiss" }));
+    await userEvent.type(within(one).getByRole("textbox", { name: "Reason" }), "style");
+    await userEvent.click(within(one).getByRole("button", { name: "Dismiss finding" }));
+    expect(await within(one).findByRole("alert")).toHaveTextContent("a dismissal needs a reason of at most 500 characters");
+    // The form stays, with the reason.
+    expect(within(one).getByRole("textbox", { name: "Reason" })).toHaveValue("style");
+  });
+
+  it("offers neither Dismiss nor Stop on a review that is not completed", async () => {
+    const queued: APIReviewDetail = { ...apiReviewDone, status: "running", dismissals: [dismissed] };
+    renderPage(queued);
+    await finding("The loop never stops");
+    expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+  });
+
+  it("lists the review's history with who did it, as text", async () => {
+    renderPage({
+      ...apiReviewDone,
+      history: [
+        { at: "2026-11-10T10:00:00Z", kind: "dismissed", fingerprint: "aa11", title: "The <i>loop</i>", actor: "key ci", reason: "fine <b>here</b>" },
+        { at: "2026-11-10T11:00:00Z", kind: "undismissed", fingerprint: "aa11", title: "The <i>loop</i>", actor: "ops", reason: "" },
+      ],
+    });
+    const history = await screen.findByRole("region", { name: "History" });
+    const rows = within(history).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("2026-11-10 10:00 UTC Dismissed The <i>loop</i> by key ci");
+    expect(rows[0]).toHaveTextContent("Reason: fine <b>here</b>");
+    expect(rows[1]).toHaveTextContent("Stopped dismissing");
+    expect(rows[1]).toHaveTextContent("by ops");
+    expect(rows[1]).not.toHaveTextContent("Reason:");
+    expect(history.querySelector("i, .prose b")).toBeNull();
+  });
+
+  it("shows no history section when nothing was dismissed", async () => {
+    renderPage(apiReviewDone);
+    await screen.findByRole("heading", { name: "Add the retry loop" });
+    expect(screen.queryByRole("region", { name: "History" })).toBeNull();
   });
 });
 

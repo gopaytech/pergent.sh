@@ -86,6 +86,10 @@ type Options struct {
 	// DeleteJob deletes a Kubernetes Job by name; removing an API client
 	// calls it for each live review the client had. Nil deletes none.
 	DeleteJob func(ctx context.Context, name string) error
+	// SendCallback sends a callback to an API client's URL, signed, and
+	// returns the attempt (engine.SendCallback with the engine's client). Nil
+	// answers Send test callback 503.
+	SendCallback func(ctx context.Context, url string, body []byte, delivery string, secrets ...string) store.CallbackAttempt
 }
 
 // Readiness is the engine's side of the Readiness tab. RequestScan returns
@@ -180,6 +184,7 @@ type Dashboard struct {
 	fetcher       *skillfetch.Fetcher
 	readiness     Readiness
 	deleteJob     func(ctx context.Context, name string) error
+	sendCallback  func(ctx context.Context, url string, body []byte, delivery string, secrets ...string) store.CallbackAttempt
 	// loadLLM reads the LLM saved in the dashboard again
 	// (instances.Registry.LoadLLM); a field so a test can make it fail.
 	loadLLM func(ctx context.Context) error
@@ -236,7 +241,7 @@ func New(o Options) (*Dashboard, error) {
 	}
 	d := &Dashboard{Auth: auth, Repos: repos, Store: o.Store, Log: o.Log,
 		cfg: o.Config, registry: o.Instances, connector: o.Connector,
-		sources: o.Sources, catalogs: o.Catalogs, fetcher: o.Fetcher, readiness: o.Readiness, deleteJob: o.DeleteJob,
+		sources: o.Sources, catalogs: o.Catalogs, fetcher: o.Fetcher, readiness: o.Readiness, deleteJob: o.DeleteJob, sendCallback: o.SendCallback,
 		reconcileSoon: o.ReconcileSoon, wake: o.Wake, loadLLM: o.Instances.LoadLLM, heldSecrets: o.Instances.HeldSecrets, now: o.Now,
 		availableBudget: AvailableBudget, listBudget: listBudget, listLimit: listLimit,
 		idp: idpClient(o.HTTPClient), oidc: &oidcCache{},

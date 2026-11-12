@@ -220,12 +220,13 @@ func (s *Store) UpdateAPIClient(ctx context.Context, name string, apply func(*AP
 	return out, true, tx.Commit(ctx)
 }
 
-// DeleteAPIClient removes a client and, with it, its keys, its reviews and
-// their usage. found is false when there is no such client. jobs are the Job
-// names of its reviews that were running, nil when there are none. Its queued
-// and running runs are locked (FOR UPDATE) before the delete: ClaimQueued
-// skips a locked queued run, and a MarkDispatched on a locked run waits for the
-// delete, then matches no row, so no run gets a Job that jobs does not name.
+// DeleteAPIClient removes a client and, with it, its keys, its reviews, their
+// usage and callbacks, and its callback_failing item. found is false when
+// there is no such client. jobs are the Job names of its reviews that were
+// running, nil when there are none. Its queued and running runs are locked
+// (FOR UPDATE) before the delete: ClaimQueued skips a locked queued run, and a
+// MarkDispatched on a locked run waits for the delete, then matches no row,
+// so no run gets a Job that jobs does not name.
 func (s *Store) DeleteAPIClient(ctx context.Context, name string) (jobs []string, found bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -256,6 +257,12 @@ func (s *Store) DeleteAPIClient(ctx context.Context, name string) (jobs []string
 	}
 	if tag.RowsAffected() == 0 {
 		return nil, false, nil
+	}
+	// Its callbacks went with its reviews: no attempt is left to clear the
+	// item, and a client made later with the name must not inherit it.
+	if _, err := tx.Exec(ctx, `DELETE FROM repo_attention WHERE instance = '' AND project = $1 AND kind = $2`,
+		name, AttentionCallbackFailing); err != nil {
+		return nil, false, err
 	}
 	return jobs, true, tx.Commit(ctx)
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/kube"
+	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
 // The kinds of setup problem recorded for the dashboard's "Needs attention"
@@ -24,6 +25,9 @@ const (
 	attTokenExpiry         = "token_expiry"
 	attSkillMissing        = "skill_missing"
 	attNoSkills            = "no_skills"
+	// attCallbackFailing is an API client's (instance "", its name as the
+	// project), shown to admins only.
+	attCallbackFailing = store.AttentionCallbackFailing
 
 	// The readiness scan's items (readinessItems): set or cleared by a done
 	// scan, and by a recheck when the skills change.

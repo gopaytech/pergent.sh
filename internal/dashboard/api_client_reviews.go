@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 
@@ -9,7 +10,10 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
-const msgAPIStatus = "status must be one of queued, running, completed, failed, superseded"
+const (
+	msgAPIStatus       = "status must be one of queued, running, completed, failed, superseded"
+	msgBadAPIDismissal = `the body must be {"reason": ...}`
+)
 
 // apiStatuses are the statuses a review has, and the ones the list takes.
 var apiStatuses = []string{reviewapi.StatusQueued, reviewapi.StatusRunning, reviewapi.StatusCompleted,
@@ -20,6 +24,8 @@ func (d *Dashboard) apiClientReviewRoutes(mux *http.ServeMux) {
 	d.adminRoute(mux, "GET /api/admin/api-reviews/{id}", d.getAPIReview)
 	d.adminRoute(mux, "GET /api/admin/api-reviews/{id}/log", d.apiReviewLog)
 	d.adminRoute(mux, "GET /api/admin/api-reviews/{id}/diagnostics", d.apiReviewDiagnostics)
+	d.adminRoute(mux, "POST /api/admin/api-reviews/{id}/findings/{finding}/dismiss", d.dismissAPIFinding)
+	d.adminRoute(mux, "DELETE /api/admin/api-reviews/{id}/findings/{finding}/dismiss", d.restoreAPIFinding)
 }
 
 // reviewBody is the v1 body of r: the one stored when it was published, else
@@ -119,7 +125,113 @@ func (d *Dashboard) getAPIReview(w http.ResponseWriter, r *http.Request) {
 	if f := reviewapi.FailureOf(rv); f != nil {
 		v.Failure = &APIReviewFailureView{Step: f.Step, Reason: f.Reason, Detail: rv.Run.FailureDetail}
 	}
+	state, attempts, err := d.Store.APICallbackAttempts(r.Context(), rv.Run.ID)
+	if err != nil {
+		d.failed(w, r, "loading an API review's callback", err)
+		return
+	}
+	v.Callback = APICallbackView{State: state, Attempts: make([]APICallbackAttemptView, 0, len(attempts))}
+	for _, a := range attempts {
+		v.Callback.Attempts = append(v.Callback.Attempts, APICallbackAttemptView{At: a.At.UTC(), StatusCode: a.StatusCode,
+			Error: a.Error, DurationMs: a.Duration.Milliseconds()})
+	}
+	events, err := d.Store.APIReviewEvents(r.Context(), rv.Run.ID)
+	if err != nil {
+		d.failed(w, r, "loading an API review's history", err)
+		return
+	}
+	v.History = make([]APIReviewEventView, 0, len(events))
+	for _, e := range events {
+		v.History = append(v.History, APIReviewEventView{At: e.At.UTC(), Kind: e.Kind, Fingerprint: e.Fingerprint,
+			Title: e.Title, Actor: e.Actor, Reason: e.Reason})
+	}
+	dismissals, err := d.Store.APIDismissals(r.Context(), rv.ClientID, rv.Tenant, rv.Subject)
+	if err != nil {
+		d.failed(w, r, "loading an API review's dismissals", err)
+		return
+	}
+	v.Dismissals = make([]APIDismissalView, 0, len(dismissals))
+	for _, x := range dismissals {
+		v.Dismissals = append(v.Dismissals, APIDismissalView{Fingerprint: x.Fingerprint, Severity: x.Severity,
+			Reason: x.Reason, Actor: x.Actor, CreatedAt: x.CreatedAt.UTC()})
+	}
 	writeJSON(w, http.StatusOK, v)
+}
+
+// --- POST and DELETE /api/admin/api-reviews/{id}/findings/{finding}/dismiss ---
+
+// refuseDismissal answers a dismissal or a restore that was refused, and
+// returns false for any other error. The review is not changed by either, and
+// no callback goes out.
+func refuseDismissal(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, reviewapi.ErrBadReason), errors.Is(err, reviewapi.ErrReasonControl):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, reviewapi.ErrNotFinished):
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, reviewapi.ErrNoSuchFinding):
+		writeError(w, http.StatusNotFound, err.Error())
+	default:
+		return false
+	}
+	return true
+}
+
+// dismissAPIFinding sets a finding of an API review aside for the review's
+// subject, as the admin who calls. It is not audited: the review's history
+// holds it.
+func (d *Dashboard) dismissAPIFinding(w http.ResponseWriter, r *http.Request) {
+	rv, found, err := d.Store.APIReviewByID(r.Context(), r.PathValue("id"))
+	if err != nil {
+		d.failed(w, r, "loading an API review", err)
+		return
+	}
+	if !found {
+		notFound(w)
+		return
+	}
+	var req reviewapi.DismissRequest
+	if err := decodeStrict(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, msgBadAPIDismissal)
+		return
+	}
+	created, err := reviewapi.DismissFinding(r.Context(), d.Store, rv, r.PathValue("finding"), req.Reason, session(r).Username)
+	if err != nil {
+		if !refuseDismissal(w, err) {
+			d.failed(w, r, "dismissing an API review's finding", err)
+		}
+		return
+	}
+	status := reviewapi.DismissedStatus
+	if !created {
+		status = reviewapi.AlreadyDismissedStatus
+	}
+	writeJSON(w, http.StatusOK, reviewapi.DismissResult{Status: status})
+}
+
+// restoreAPIFinding takes back a dismissal made on the review's subject.
+func (d *Dashboard) restoreAPIFinding(w http.ResponseWriter, r *http.Request) {
+	rv, found, err := d.Store.APIReviewByID(r.Context(), r.PathValue("id"))
+	if err != nil {
+		d.failed(w, r, "loading an API review", err)
+		return
+	}
+	if !found {
+		notFound(w)
+		return
+	}
+	restored, err := reviewapi.RestoreFinding(r.Context(), d.Store, rv, r.PathValue("finding"), session(r).Username)
+	if err != nil {
+		if !refuseDismissal(w, err) {
+			d.failed(w, r, "restoring an API review's finding", err)
+		}
+		return
+	}
+	status := reviewapi.RestoredStatus
+	if !restored {
+		status = reviewapi.NotDismissedStatus
+	}
+	writeJSON(w, http.StatusOK, reviewapi.DismissResult{Status: status})
 }
 
 // --- GET /api/admin/api-reviews/{id}/log and /diagnostics ---

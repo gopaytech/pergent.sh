@@ -132,15 +132,17 @@ type DismissalRef struct {
 }
 
 // Map turns pergent's agent result into the v1 skills and the review's
-// verdict, and sums usage. A skill's verdict is pergent's, with these changes:
-// a skill pergent doesn't call no_blocking_issues or has_blocking_issues, or
-// that lists a file it could not review, is failed; one that is not failed and
-// reviewed no file is nothing_reviewed; one whose blocking findings are all
-// dismissed is no_blocking_issues. The review's verdict is the first that
-// applies: failed (any skill failed, or the result is no completed one),
-// nothing_reviewed (no skill reviewed a file), has_blocking_issues,
-// no_blocking_issues. redact (nil: none) cleans every text the model or the
-// checkout wrote.
+// verdict, and sums usage. A finding's severity is suggestion or, for
+// anything else pergent sends, blocking. A skill's verdict is pergent's, with
+// these changes: a skill pergent doesn't call no_blocking_issues or
+// has_blocking_issues, or that lists a file it could not review, is failed;
+// one that is not failed and reviewed no file is nothing_reviewed; one whose
+// blocking findings are all dismissed is no_blocking_issues; one pergent calls
+// no_blocking_issues with a blocking finding left undismissed is
+// has_blocking_issues. The review's verdict is the first that applies: failed
+// (any skill failed, or the result is no completed one), nothing_reviewed (no
+// skill reviewed a file), has_blocking_issues, no_blocking_issues. redact
+// (nil: none) cleans every text the model or the checkout wrote.
 func Map(res *result.Result, usage []store.SkillUsage, dismissals []DismissalRef, redact func(string) string) (verdict string, skills []Skill, u Usage) {
 	if redact == nil {
 		redact = func(s string) string { return s }
@@ -180,7 +182,7 @@ func mapSkill(raw result.Skill, in, applied render.Skill, dismissals []Dismissal
 	for _, f := range in.Findings {
 		out := Finding{
 			ID: f.ID, Fingerprint: f.Fingerprint, File: redact(f.File), Line: f.Line, EndLine: f.EndLine,
-			Severity: string(f.Severity), Title: redact(f.Title), Explanation: redact(f.Explanation),
+			Severity: severity(f.Severity), Title: redact(f.Title), Explanation: redact(f.Explanation),
 			Fix: redact(f.SuggestedFix), Suggestion: redact(f.Suggestion),
 		}
 		if next < len(applied.Dismissed) && applied.Dismissed[next].Finding == f {
@@ -211,6 +213,9 @@ func mapSkill(raw result.Skill, in, applied render.Skill, dismissals []Dismissal
 	default:
 		s.Verdict = VerdictFailed
 	}
+	if s.Verdict == VerdictNoBlockingIssues && hasBlocking(applied.Findings) {
+		s.Verdict = VerdictHasBlockingIssues
+	}
 	switch {
 	case len(raw.Files.NotReviewed) > 0 || len(raw.Failures) > 0:
 		s.Verdict = VerdictFailed
@@ -218,6 +223,25 @@ func mapSkill(raw result.Skill, in, applied render.Skill, dismissals []Dismissal
 		s.Verdict = VerdictNothingReviewed
 	}
 	return s
+}
+
+// severity is the v1 severity of a finding: suggestion, or blocking for
+// anything else, so a caller never meets a third value.
+func severity(s render.Severity) string {
+	if s == render.Suggestion {
+		return string(render.Suggestion)
+	}
+	return string(render.Blocking)
+}
+
+// hasBlocking reports whether any of fs is not a suggestion.
+func hasBlocking(fs []render.Finding) bool {
+	for _, f := range fs {
+		if f.Severity != render.Suggestion {
+			return true
+		}
+	}
+	return false
 }
 
 // overall is the review's verdict from its skills' verdicts.

@@ -619,6 +619,11 @@ func (s *Store) CountRunning(ctx context.Context) (int, error) {
 // returns them, oldest first. Concurrent callers never claim the same run.
 // The runs of the instances in skip are left alone, queued and unclaimed, so
 // runs that have to wait for an instance take no slot from the others.
+//
+// An API review is claimed only while its client has fewer than its
+// max_in_flight reviews running, counting those this claim takes: its due
+// reviews are numbered oldest first, and those past the cap stay queued and
+// take no slot either. A merge request's run is never held by it.
 func (s *Store) ClaimQueued(ctx context.Context, limit int, now time.Time, skip ...string) ([]Run, error) {
 	if limit <= 0 {
 		return nil, nil
@@ -626,10 +631,22 @@ func (s *Store) ClaimQueued(ctx context.Context, limit int, now time.Time, skip 
 	if skip == nil {
 		skip = []string{} // an empty array, not NULL: `<> ALL(NULL)` is never true
 	}
+	// A query with a window function can't lock rows, so the runs it picks
+	// are locked by the select around it, which checks the claim's conditions
+	// again: a run claimed meanwhile is skipped as before.
 	rows, err := s.pool.Query(ctx, `UPDATE runs SET state = 'running', claimed_at = $2 WHERE id IN (
 			SELECT id FROM runs WHERE state = 'queued' AND (not_before IS NULL OR not_before <= $2)
 			  AND instance <> ALL($3::text[])
-			ORDER BY created_at, id LIMIT $1 FOR UPDATE SKIP LOCKED)
+			  AND id IN (
+				SELECT q.id FROM (
+					SELECT id, kind, api_client_id,
+						row_number() OVER (PARTITION BY api_client_id ORDER BY created_at, id) AS n
+					FROM runs WHERE state = 'queued' AND (not_before IS NULL OR not_before <= $2)
+					  AND instance <> ALL($3::text[])) q
+				WHERE q.kind = 'mr'
+				   OR q.n + (SELECT count(*) FROM runs x WHERE x.api_client_id = q.api_client_id AND x.state = 'running')
+					<= (SELECT c.max_in_flight FROM api_clients c WHERE c.id = q.api_client_id))
+			ORDER BY created_at, id LIMIT $1 FOR UPDATE OF runs SKIP LOCKED)
 		RETURNING `+runColumns, limit, now, skip)
 	if err != nil {
 		return nil, err

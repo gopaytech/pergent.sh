@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"encoding/csv"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -367,5 +368,87 @@ func TestUsageCSVIsForAdmins(t *testing.T) {
 	rec := e.get(viewer, "/api/admin/usage.csv")
 	if rec.Code != http.StatusNotFound || rec.Body.String() != unknown.Body.String() {
 		t.Errorf("usage.csv as a viewer = %d %s; want 404 %s", rec.Code, rec.Body, unknown.Body)
+	}
+}
+
+// usageAPIReview asks for a review of subject under tenant for the client and
+// records what it used, reported an hour before the clock.
+func (e *env) usageAPIReview(client, tenant, subject string, skills ...store.SkillUsage) string {
+	e.t.Helper()
+	id := e.askAPIReview(client, tenant, subject)
+	at := e.clock.now().Add(-time.Hour)
+	e.exec(`UPDATE runs SET created_at = $2::timestamptz, reported_at = $2::timestamptz WHERE id = $1::uuid`, id, at)
+	if err := e.st.RecordUsage(ctx, id, skills); err != nil {
+		e.t.Fatalf("RecordUsage: %v", err)
+	}
+	return id
+}
+
+// The overview lists the API clients with their tenants, and its totals are the
+// repositories plus the clients: the daily chart's.
+func TestUsageOverviewAddsClients(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.signInOperator()
+	e.addAPIClient(c, goodClient(nil))
+	e.addAPIClient(c, goodClient(func(m map[string]any) { m["name"] = "quiet" }))
+	// Repositories (usageFixture): 3 reviews. In: widgets !1 800+200, widgets !2 0,
+	// old !3 150 = 1,150. Out: 100+60, 0, 50 = 210.
+	e.usageFixture()
+	// fastgateway: acme s1 is 400+100 = 500 in and 50+10 = 60 out, acme s2 is
+	// 40 in, beta s1 is 10 in.
+	e.usageAPIReview("fastgateway", "acme", "s1", usageSkill("gateway", "no_blocking_issues", 400, 50), usageSkill("style", "no_blocking_issues", 100, 10))
+	e.usageAPIReview("fastgateway", "acme", "s2", usageSkill("gateway", "no_blocking_issues", 40, 0))
+	e.usageAPIReview("fastgateway", "beta", "s1", usageSkill("gateway", "no_blocking_issues", 10, 0))
+
+	got := getJSON[UsageOverviewView](e, c, "/api/admin/usage")
+	// Total: reviews 3 + 3 = 6; in 1,150 + (500+40+10 = 550) = 1,700; out 210 + 60 = 270.
+	if got.Reviews != 6 || got.Tokens.In != 1700 || got.Tokens.Out != 270 {
+		t.Errorf("totals = %+v over %d reviews; want the repositories' plus the client's: 1700 in, 270 out, 6 reviews", got.Tokens, got.Reviews)
+	}
+	if len(got.Repositories) != 2 {
+		t.Errorf("repositories = %+v, want only the two merge-request ones", got.Repositories)
+	}
+	if len(got.Clients) != 1 {
+		t.Fatalf("clients = %+v, want fastgateway only: a client with no usage is not listed", got.Clients)
+	}
+	fg := got.Clients[0]
+	// Client: 3 reviews; in 500+40+10 = 550; out 60.
+	if fg.Name != "fastgateway" || fg.Reviews != 3 || fg.Tokens.In != 550 || fg.Tokens.Out != 60 || fg.MoreTenants != 0 {
+		t.Errorf("client = %+v, want fastgateway: 3 reviews, 550 in, 60 out", fg)
+	}
+	// Tenants: acme 2 reviews, 500+40 = 540 in (550 total tokens beats beta's 10);
+	// beta 1 review, 10 in.
+	if len(fg.Tenants) != 2 || fg.Tenants[0].Tenant != "acme" || fg.Tenants[0].Reviews != 2 || fg.Tenants[0].Tokens.In != 540 ||
+		fg.Tenants[1].Tenant != "beta" || fg.Tenants[1].Reviews != 1 || fg.Tenants[1].Tokens.In != 10 {
+		t.Errorf("tenants = %+v, want acme (2 reviews, 540 in) then beta (1 review, 10 in)", fg.Tenants)
+	}
+
+	var in, out int64
+	for _, d := range got.Daily {
+		in, out = in+d.Tokens.In, out+d.Tokens.Out
+	}
+	if in != got.Tokens.In || out != got.Tokens.Out {
+		t.Errorf("the daily chart adds up to %d in, %d out; the total says %d, %d", in, out, got.Tokens.In, got.Tokens.Out)
+	}
+}
+
+// With no API usage the clients are an empty array, and a client with more
+// tenants than the page lists says how many are left out.
+func TestUsageOverviewClientsEmptyAndCapped(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.signInOperator()
+	if body := e.get(c, "/api/admin/usage").Body.String(); !strings.Contains(body, `"clients":[]`) {
+		t.Errorf("body %s lacks an empty clients list", body)
+	}
+	e.addAPIClient(c, goodClient(nil))
+	for i := range usageTenantLimit + 3 {
+		e.usageAPIReview("fastgateway", fmt.Sprintf("tenant-%03d", i), "s1", usageSkill("gateway", "no_blocking_issues", int64(1000-i), 0))
+	}
+	got := getJSON[UsageOverviewView](e, c, "/api/admin/usage")
+	if len(got.Clients) != 1 || len(got.Clients[0].Tenants) != usageTenantLimit || got.Clients[0].MoreTenants != 3 {
+		t.Fatalf("clients = %+v, want one client with %d tenants listed and 3 more", got.Clients, usageTenantLimit)
+	}
+	if got.Clients[0].Reviews != usageTenantLimit+3 || got.Clients[0].Tenants[0].Tenant != "tenant-000" {
+		t.Errorf("client = %+v, want every review counted and the busiest tenant first", got.Clients[0])
 	}
 }

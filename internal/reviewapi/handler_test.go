@@ -3,6 +3,7 @@ package reviewapi
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -33,6 +34,17 @@ type fakeStore struct {
 	enqueued []store.NewAPIReview
 	// readErr fails APIReview.
 	readErr error
+	// dismissals by "<client>/<tenant>/<subject>/<fingerprint>", and every
+	// dismiss or restore that changed one (see dismiss_test.go).
+	dismissals map[string]store.APIDismissal
+	events     []fakeEvent
+	// dismissErr fails DismissAPIFinding and UndismissAPIFinding.
+	dismissErr error
+	// tokens is what each client used, by ID; tokensSince records each
+	// APITokensSince's since, and tokensErr fails it.
+	tokens      map[int64]int64
+	tokensSince []time.Time
+	tokensErr   error
 }
 
 type fakeKey struct {
@@ -51,6 +63,11 @@ func (f *fakeStore) APIKeyByPrefix(_ context.Context, prefix string) (store.APIK
 func (f *fakeStore) TouchAPIKey(_ context.Context, id int64, _ time.Time) error {
 	f.touched = append(f.touched, id)
 	return f.touchErr
+}
+
+func (f *fakeStore) APITokensSince(_ context.Context, clientID int64, since time.Time) (int64, error) {
+	f.tokensSince = append(f.tokensSince, since)
+	return f.tokens[clientID], f.tokensErr
 }
 
 func (f *fakeStore) ResolveLibrary(_ context.Context, names []string) (store.ResolvedLibrary, error) {
@@ -290,7 +307,8 @@ func TestRequireKeyPutsKeyAndClientInContext(t *testing.T) {
 func TestClientBodyShowsLimits(t *testing.T) {
 	_, _, key, mux := newHandler(t)
 	rec := call(mux, "GET", "/v1/client", "Bearer "+key)
-	const want = `{"name":"fastgateway","limits":{"max_request_bytes":524288,"max_files":200,"max_in_flight":5,"requests_per_hour":600,"monthly_token_budget":10000000}}` + "\n"
+	const want = `{"name":"fastgateway","limits":{"max_request_bytes":524288,"max_files":200,"max_in_flight":5,"requests_per_hour":600,"monthly_token_budget":10000000},` +
+		`"usage":{"month":"2026-11","tokens_used":0,"tokens_left":10000000}}` + "\n"
 	if rec.Body.String() != want {
 		t.Errorf("body %q, want %q", rec.Body.String(), want)
 	}
@@ -312,4 +330,52 @@ func TestUnknownV1PathIs404JSON(t *testing.T) {
 	if rec := call(mux, "GET", "/v1/nope", ""); rec.Code != http.StatusUnauthorized {
 		t.Errorf("no key: status %d, want 401", rec.Code)
 	}
+}
+
+func TestClientUsage(t *testing.T) {
+	_, fs, key, mux := newHandler(t)
+	fs.tokens = map[int64]int64{3: 120, 4: 5000}
+	rec := call(mux, "GET", "/v1/client", "Bearer "+key)
+	var got struct {
+		Usage json.RawMessage `json:"usage"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %q: %v", rec.Code, rec.Body, err)
+	}
+	if want := `{"month":"2026-11","tokens_used":120,"tokens_left":9999880}`; string(got.Usage) != want {
+		t.Errorf("usage = %s, want %s", got.Usage, want)
+	}
+	if want := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC); len(fs.tokensSince) != 1 || !fs.tokensSince[0].Equal(want) {
+		t.Errorf("tokens counted since %v, want %v", fs.tokensSince, want)
+	}
+
+	// Past the budget, none is left, never less.
+	fs.tokens[3] = 10_000_001
+	rec = call(mux, "GET", "/v1/client", "Bearer "+key)
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"month":"2026-11","tokens_used":10000001,"tokens_left":0}`; string(got.Usage) != want {
+		t.Errorf("usage past the budget = %s, want %s", got.Usage, want)
+	}
+}
+
+// The month is UTC's: 1 December at 01:00 in UTC+2 is still November.
+func TestClientUsageMonthIsUTC(t *testing.T) {
+	h, fs, key, mux := newHandler(t)
+	h.Now = func() time.Time { return time.Date(2026, 12, 1, 1, 0, 0, 0, time.FixedZone("UTC+2", 2*3600)) }
+	rec := call(mux, "GET", "/v1/client", "Bearer "+key)
+	if !strings.Contains(rec.Body.String(), `"month":"2026-11"`) {
+		t.Errorf("body %s, want the month 2026-11", rec.Body)
+	}
+	if want := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC); len(fs.tokensSince) != 1 || !fs.tokensSince[0].Equal(want) {
+		t.Errorf("tokens counted since %v, want %v", fs.tokensSince, want)
+	}
+}
+
+func TestClientUsageReadFailureIs500(t *testing.T) {
+	h, fs, key, mux := newHandler(t)
+	h.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	fs.tokensErr = errors.New("database down")
+	wantError(t, call(mux, "GET", "/v1/client", "Bearer "+key), http.StatusInternalServerError, CodeInternal, "internal error")
 }

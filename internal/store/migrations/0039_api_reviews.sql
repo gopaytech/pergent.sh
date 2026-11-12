@@ -31,3 +31,5 @@ CREATE INDEX api_reviews_subject_idx ON api_reviews (client_id, tenant, subject,
 CREATE INDEX api_reviews_client_idx ON api_reviews (client_id, created_at);
 CREATE UNIQUE INDEX api_reviews_idempotency_idx ON api_reviews (client_id, idempotency_key)
     WHERE idempotency_key IS NOT NULL;
+-- DropSpentAPIInputs finds the reviews that still hold their files.
+CREATE INDEX api_reviews_inputs_idx ON api_reviews (run_id) WHERE inputs_sealed IS NOT NULL;

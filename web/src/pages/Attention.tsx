@@ -12,13 +12,14 @@ const kinds: Record<string, [Tone, string]> = {
   no_skill_coverage: ["warn", "Skills"],
   inputs_over_budget: ["bad", "Failing"],
   no_project_context: ["warn", "Context"],
+  callback_failing: ["bad", "Failing"],
 };
 
 // The kinds the readiness scan raises: their rows open the Readiness tab.
 const readinessKinds = new Set(["no_skill_coverage", "inputs_over_budget", "no_project_context"]);
 
-// AttentionRows lists setup problems: a repository's, or (project "") the
-// whole instance's.
+// AttentionRows lists setup problems: a repository's, (project "") the whole
+// instance's, or (client set) an API client's.
 export default function AttentionRows({
   items,
   platform,
@@ -36,11 +37,13 @@ export default function AttentionRows({
       {items.map((a) => {
         const [tone, label] = kinds[a.kind] ?? ["warn", "Setup"];
         return (
-          <div className="row" key={`${a.instance}/${a.project}/${a.kind}`}>
+          <div className="row" key={`${a.instance}/${a.project}/${a.client ?? ""}/${a.kind}`}>
             <Pill tone={tone}>{label}</Pill>
             <div className="grow">
               <div className="title">
-                {a.project === "" ? (
+                {a.client ? (
+                  <Link to={paths.clientPage(a.client)}>API client {a.client}</Link>
+                ) : a.project === "" ? (
                   platform ? `${platformName(platform)} · ${a.instance}` : a.instance
                 ) : linkRepos ? (
                   <Link to={`${paths.repo(a.instance, a.project)}?tab=${readinessKinds.has(a.kind) ? "readiness" : "setup"}`}>{a.project}</Link>

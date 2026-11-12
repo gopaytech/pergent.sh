@@ -120,6 +120,7 @@ func TestAPIClientRoutesAre404ForUsers(t *testing.T) {
 		{"PUT", apiClientsURL + "/fastgateway"},
 		{"DELETE", apiClientsURL + "/fastgateway"},
 		{"POST", apiClientsURL + "/fastgateway/secret"},
+		{"POST", apiClientsURL + "/fastgateway/test-callback"},
 		{"POST", apiClientsURL + "/fastgateway/keys"},
 		{"DELETE", apiClientsURL + "/fastgateway/keys/1"},
 	} {

@@ -2,14 +2,22 @@
 
 ## Unreleased
 
-**Another system can be given API keys to the review API.** An admin makes a client under **API clients** and gives each caller a key: [Review API](setup/review-api.md). A caller can ask for a review (`POST /v1/reviews`) and read it (`GET /v1/reviews/{id}`); callbacks come later. Nothing happens after the upgrade until an admin makes a client.
+**Another system can be given API keys to the review API.** An admin makes a client under **API clients** and gives each caller a key: [Review API](setup/review-api.md). A caller can ask for a review (`POST /v1/reviews`), read it (`GET /v1/reviews/{id}`), get it by a signed callback to the client's callback URL when it ends, and dismiss its findings for the subject. Every client has limits: request size, files, reviews in flight, requests per hour and a monthly token budget. Nothing happens after the upgrade until an admin makes a client.
 
 Migration `0038` runs at startup and only adds two tables, so back up Postgres first, as for any migration. The previous release keeps working on the migrated database and ignores them. There is no new config key, so to roll back nothing needs removing from the config. The `/v1/` routes exist only with `dashboard.url` set, as the dashboard does. Rolling back removes the clients and keys from use; they stay stored.
 
-Migration `0039` runs at startup too. It adds a table, a sequence, two columns to `runs` (with a default, or NULL), a `CHECK` constraint on `runs` (`runs_api_shape`: an API review has no instance and no project) and indexes, dropping nothing. The previous release keeps running merge request reviews on the migrated database.
+Migration `0039` runs at startup too. It adds a table, a sequence, two columns to `runs` (with a default, or NULL), two `CHECK` constraints (the inline `kind IN ('mr', 'api')` on the new `kind` column, and `runs_api_shape` on `runs`: an API review has no instance and no project) and indexes: `runs_api_client_idx` on `runs`, and four on the new table, among them the unique `api_reviews_idempotency_idx` (one Idempotency-Key once per client) and the partial `api_reviews_inputs_idx` (the reviews that still hold their files). It drops nothing. The previous release keeps running merge request reviews on the migrated database.
 
 - **During a rolling upgrade, or after a rollback, the previous release meets API reviews it doesn't know.** It claims a queued one, finds no repository `''`, and supersedes it. It can't publish an API review that is reported. It lists API reviews in **Usage** under an empty repository. After a rollback, callers may see `superseded` reviews: they send their changes again.
-- **The review API's limits and callbacks are stored but not enforced or sent yet.** Only the request size and the number of files hold in this release.
+- **Every limit of an API client holds.** A key past its client's requests per hour, and a client past its monthly token budget, get `429` ([Limits](setup/review-api.md#limits)). During a rolling upgrade or after a rollback, the previous release claims API reviews without the in-flight cap.
+
+Migration `0040` runs at startup too. It adds four tables (`api_callbacks`, `api_callback_attempts`, `api_dismissals`, `api_review_events`) and two indexes (`api_callbacks_due_idx`, `api_review_events_run_idx`), dropping nothing. Back up Postgres first, as for any migration.
+
+- **The pergent.sh pod needs egress to each client's callback URL.** It sends the callback itself, with a 10 second timeout, and follows no redirect. If your cluster limits what the pergent.sh pod may reach (a NetworkPolicy of your own, an egress proxy), allow the hosts admins give as callback URLs. The chart's NetworkPolicy covers the Job pods only. A callback that can't be sent is retried for 24 hours.
+- **`/v1/` must be exposed for the callers,** on a host they reach, over https: [Exposing pergent.sh](setup/install.md#exposing-pergentsh). Nothing else of the dashboard needs to be public for them.
+- **"Needs attention" has a new kind, `callback_failing`,** for an API client with 3 or more callbacks from the last 24 hours not delivered ([Dashboard](concepts/dashboard.md)). Admins see it; it clears when fewer are, or when the callback URL is emptied.
+- **Metrics:** `pergent_api_reviews_total`, `pergent_api_tokens_total` and `pergent_api_callbacks_total`, labelled by `client` only, and an **API clients** row in the example Grafana dashboard ([Metrics](concepts/metrics.md)). The **Usage** page lists each client with its tenants.
+- **Rolling back to the previous release stops the callbacks, the dismissals and the limits** with the rest of the API: it has no `/v1/` routes. Callbacks not yet sent are never sent, the results stay stored, and dismissals stay stored. API reviews the older release meets are superseded, as described above for migration `0039`: callers send their changes again.
 
 ## Upgrading to 0.16.0
 

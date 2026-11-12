@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/gopaytech/pergent.sh/internal/kube"
+	"github.com/gopaytech/pergent.sh/internal/quota"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -37,6 +39,10 @@ const (
 	idempotencyKeyHeader = "Idempotency-Key"
 )
 
+// BudgetUsedUpMessage is why a client past its monthly token budget gets no
+// review: the 429 of a request, and the failure of a queued review.
+const BudgetUsedUpMessage = "this client's monthly token budget is used up"
+
 // Request is the body of POST /v1/reviews.
 type Request struct {
 	Subject     string `json:"subject"`
@@ -55,9 +61,9 @@ type Sealed struct {
 }
 
 // createReview is POST /v1/reviews. The order of its checks is part of the
-// API: a retry of a request is answered from what was stored before the body
-// is judged, and a request that can't be reviewed is refused before anything
-// is queued.
+// API: a retry of a request is answered from what was stored before the
+// budget or the body is judged, and a request that can't be reviewed is
+// refused before anything is queued.
 func (h *Handler) createReview(w http.ResponseWriter, r *http.Request) {
 	client := clientOf(r)
 
@@ -94,6 +100,18 @@ func (h *Handler) createReview(w http.ResponseWriter, r *http.Request) {
 			writeReview(w, http.StatusAccepted, prior)
 			return
 		}
+	}
+
+	now := h.now()
+	if used, err := h.tokensUsed(r, client, now); err != nil {
+		h.log().Error("review API: reading a client's tokens failed", "client_id", client.ID, "err", err)
+		writeInternal(w)
+		return
+	} else if used >= client.Limits.MonthlyTokenBudget {
+		// The budget is the UTC month's: it is full again when the next starts.
+		w.Header().Set("Retry-After", retryAfter(quota.MonthStart(now).AddDate(0, 1, 0).Sub(now)))
+		writeError(w, http.StatusTooManyRequests, CodeBudgetUsedUp, BudgetUsedUpMessage)
+		return
 	}
 
 	// encoding/json turns bytes that are not UTF-8 into U+FFFD without an
@@ -184,34 +202,73 @@ func (h *Handler) createReview(w http.ResponseWriter, r *http.Request) {
 	writeReview(w, http.StatusAccepted, rv)
 }
 
-// getReview is GET /v1/reviews/{id}. A review of another client, an unknown ID
-// and a malformed one get one answer, so a caller learns nothing about IDs it
+// reviewOf reads the review the path names, for the client of the key. A
+// review of another client, an unknown ID and a malformed one get one answer
+// (written here, with false returned), so a caller learns nothing about IDs it
 // does not own.
-func (h *Handler) getReview(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) reviewOf(w http.ResponseWriter, r *http.Request) (store.APIReview, bool) {
 	rv, found, err := h.Store.APIReview(r.Context(), clientOf(r).ID, r.PathValue("id"))
 	if err != nil {
 		h.log().Error("review API: reading a review failed", "client_id", clientOf(r).ID, "err", err)
 		writeInternal(w)
-		return
+		return store.APIReview{}, false
 	}
 	if !found {
 		writeError(w, http.StatusNotFound, CodeNotFound, reviewNotFoundMsg)
-		return
+		return store.APIReview{}, false
 	}
-	writeReview(w, http.StatusOK, rv)
+	return rv, true
 }
 
-// writeReview answers with the review's stored response as it is stored, or,
-// before there is one, the pending body.
+// getReview is GET /v1/reviews/{id}.
+func (h *Handler) getReview(w http.ResponseWriter, r *http.Request) {
+	if rv, ok := h.reviewOf(w, r); ok {
+		writeReview(w, http.StatusOK, rv)
+	}
+}
+
+// Body is the body of GET /v1/reviews/{id} for rv, which its callback posts
+// too: the stored response as it is stored or, before there is one, the
+// pending body, as writeJSON writes it.
+func Body(rv store.APIReview) ([]byte, error) {
+	if len(rv.Response) > 0 {
+		return rv.Response, nil
+	}
+	return Encode(Pending(rv))
+}
+
+// Encode is b as writeJSON writes a review: JSON and a newline.
+func Encode(b Review) ([]byte, error) {
+	out, err := json.Marshal(b)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, '\n'), nil
+}
+
+// TestReviewID is the ID of a test callback's review: no review has it.
+const TestReviewID = "00000000-0000-0000-0000-000000000000"
+
+// TestReview is the body of a test callback, made at now. Its verdict is
+// nothing_reviewed and Test is true, so a receiver that gates on the verdict
+// can't take it for a pass.
+func TestReview(now time.Time) Review {
+	t := now.UTC()
+	return Review{ID: TestReviewID, Subject: "pergent.sh test callback", Status: StatusCompleted,
+		CreatedAt: t, FinishedAt: &t, Verdict: VerdictNothingReviewed, Test: true}
+}
+
+// writeReview answers with the review's Body.
 func writeReview(w http.ResponseWriter, status int, rv store.APIReview) {
 	w.Header().Set("Location", "/v1/reviews/"+rv.Run.ID)
-	if len(rv.Response) > 0 {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		_, _ = w.Write(rv.Response)
+	body, err := Body(rv)
+	if err != nil {
+		writeInternal(w)
 		return
 	}
-	writeJSON(w, status, Pending(rv))
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
 }
 
 // cannotReview is why the client's reviews can't run now, or "".

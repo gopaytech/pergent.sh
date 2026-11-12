@@ -7,6 +7,7 @@ import {
   isStatus,
   paths,
   type APIClientEdit,
+  type APICallbackTest,
   type APIClientView,
   type APIKeyCreated,
   type APIKeyView,
@@ -98,9 +99,9 @@ function ClientPage({ client, refreshError }: { client: APIClientView; refreshEr
 // limitFields are the limits in the order they are shown: the key in the
 // body, its label and what it caps.
 const limitFields: [keyof APILimits, string, string][] = [
-  ["maxRequestBytes", "Max request bytes", "1024 to 819200. The size of the files in one request."],
+  ["maxRequestBytes", "Max request bytes", "1024 to 819200. The size of the whole JSON request body."],
   ["maxFiles", "Max files", "1 to 1000. The files in one request."],
-  ["maxInFlight", "Max in flight", "1 to 50. Reviews of this client running or queued at once; more wait in the queue."],
+  ["maxInFlight", "Max in flight", "1 to 50. Reviews of this client running at once; more wait in the queue."],
   ["requestsPerHour", "Requests per hour", "1 to 100000. Per key."],
   ["monthlyTokenBudget", "Monthly token budget", "Tokens in and out for a UTC month. A request over it is refused."],
 ];
@@ -110,6 +111,7 @@ function Settings({ client, show }: { client: APIClientView; show: (s: Omit<Show
     <>
       <SettingsForm client={client} />
       <CallbackSecret client={client} show={show} />
+      <TestCallback client={client} />
       <RemoveClient client={client} />
     </>
   );
@@ -232,6 +234,53 @@ function CallbackSecret({ client, show }: { client: APIClientView; show: (s: Omi
         </div>
       </section>
     </>
+  );
+}
+
+// answerOf says what a test callback got. Only a 2xx answer without an error
+// is a delivery: any other is shown as a failure, and a callback that got no
+// answer says why.
+function answerOf(a: APICallbackTest): { ok: boolean; text: string } {
+  if (a.statusCode === 0) return { ok: false, text: `No answer: ${a.error}` };
+  const took = `Answered ${a.statusCode} in ${a.durationMs} ms`;
+  if (a.error) return { ok: false, text: `${took}. ${a.error}` };
+  if (a.statusCode < 200 || a.statusCode >= 300) return { ok: false, text: `${took}. Only a 2xx answer is a delivery.` };
+  return { ok: true, text: took };
+}
+
+// TestCallback sends the client's saved callback URL a test review, signed as
+// a real callback is. The review says test: true and nothing_reviewed, so a
+// receiver can't take it for a pass.
+function TestCallback({ client }: { client: APIClientView }) {
+  const write = useWrite();
+  const send = useMutation({
+    mutationFn: () => write<APICallbackTest>("POST", paths.apiAdminClientTestCallback(client.name)),
+  });
+  const answer = send.data ? answerOf(send.data) : null;
+  return (
+    <section className="card pad stack" aria-label="Test callback">
+      <h2>Test callback</h2>
+      <div className="meta">
+        Sends the saved callback URL a test review, signed like a real one. Its verdict is nothing reviewed and it says it is a test.
+      </div>
+      {!client.callbackUrl && <div className="meta">Save a callback URL first.</div>}
+      {send.isError && <ErrorBox error={send.error} />}
+      {answer &&
+        (answer.ok ? (
+          <div className="note" role="status">
+            {answer.text}
+          </div>
+        ) : (
+          <div className="error" role="alert">
+            {answer.text}
+          </div>
+        ))}
+      <div className="actions-row">
+        <button type="button" className="btn" disabled={send.isPending || !client.callbackUrl} onClick={() => send.mutate()}>
+          Send test callback
+        </button>
+      </div>
+    </section>
   );
 }
 

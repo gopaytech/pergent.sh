@@ -25,11 +25,15 @@ const (
 	SkillRunsTotal         = "pergent_skill_runs_total"
 	FindingsTotal          = "pergent_findings_total"
 	FindingsDismissed      = "pergent_findings_dismissed"
+	// The API clients' metrics are by client, never by tenant.
+	APIReviewsTotal   = "pergent_api_reviews_total"
+	APITokensTotal    = "pergent_api_tokens_total"
+	APICallbacksTotal = "pergent_api_callbacks_total"
 )
 
 // names lists the metrics New declares, with their help text.
 var names = []string{TokensTotal, ReviewsTotal, ReviewsNoResultTotal, ReviewsSupersededTotal,
-	SkillRunsTotal, FindingsTotal, FindingsDismissed}
+	SkillRunsTotal, FindingsTotal, FindingsDismissed, APIReviewsTotal, APITokensTotal, APICallbacksTotal}
 
 var help = map[string]string{
 	TokensTotal:            "Tokens used by reviews, by kind: input, output, reasoning, cache_read or cache_write. The reasoning, cache_read and cache_write series are absent for a repository, skill and model when no review reported them, and count only the reviews that did when some did not.",
@@ -39,6 +43,9 @@ var help = map[string]string{
 	SkillRunsTotal:         "Skill runs, by verdict.",
 	FindingsTotal:          "Findings reported, by severity: blocking or suggestion.",
 	FindingsDismissed:      "Findings currently dismissed. A gauge: restoring a finding, or switching a repository off, removes its dismissal and lowers it.",
+	APIReviewsTotal:        "API reviews that finished, by client and result: no_blocking, blocking, nothing_reviewed, failed or superseded. Reviews still queued or running are not counted. Deleting a client removes its series.",
+	APITokensTotal:         "Tokens used by API reviews, by client and kind: input, output, reasoning, cache_read or cache_write. The reasoning, cache_read and cache_write series are absent for a client when no review reported them, and count only the reviews that did when some did not.",
+	APICallbacksTotal:      "Callbacks to API clients, by client and outcome: delivered and gave_up count callbacks, failed_attempt counts tries that failed. A callback given up because its client has no callback URL is in neither gave_up nor failed_attempt.",
 }
 
 // gauges lists the metrics that go down as well as up; every other metric is

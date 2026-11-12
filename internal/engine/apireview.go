@@ -10,9 +10,11 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
+	"github.com/gopaytech/pergent.sh/internal/actions"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/kube"
+	"github.com/gopaytech/pergent.sh/internal/quota"
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/reviewapi"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -30,14 +32,18 @@ const (
 	reasonClientTooLarge  = "the skills of this API client are larger than 900 KiB"
 	reasonAPICouldntStart = "pergent.sh couldn't start the review"
 	reasonAPIUnusable     = "pergent sent a result pergent.sh couldn't use"
+	// reasonBudget is the text of the 429 a request gets for it.
+	reasonBudget = reviewapi.BudgetUsedUpMessage
 )
 
 // dispatchAPI starts the Job of an API review: the client's skills, on its
 // model, with the dashboard's defaults for the timeout, step limit and memory,
 // and the files the caller sent, which its checkout builds the two commits
-// from. It calls no forge, and sets no status and no attention item. As for a
-// merge request, a store or Kubernetes error is retried and anything else
-// fails the review.
+// from. As for a merge request's re-review, the Job also gets the subject's
+// newest completed review and what people dismissed on the subject. A client
+// past its monthly token budget gets no Job: the review fails. It calls no
+// forge, and sets no status and no attention item. As for a merge request, a
+// store or Kubernetes error is retried and anything else fails the review.
 func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 	e, run := d.e, d.run
 	d.api = true
@@ -54,6 +60,17 @@ func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 		return d.fail(ctx, reasonClientGone)
 	}
 	d.log = d.log.With("api_client", client.Name)
+
+	// The budget is checked again here: reviews queued before it was used up
+	// don't run past it.
+	used, err := e.Store.APITokensSince(ctx, client.ID, quota.MonthStart(e.now()))
+	if err != nil {
+		return d.retry(ctx, fmt.Errorf("read the client's tokens this month: %w", err))
+	}
+	if used >= client.Limits.MonthlyTokenBudget {
+		d.log.Warn("not reviewing: the client's monthly token budget is used up", "used", used, "budget", client.Limits.MonthlyTokenBudget)
+		return d.fail(ctx, reasonBudget)
+	}
 
 	// The skills are read now, as for a merge request: an edit made since the
 	// request is what reviews. A client names its skills; an empty list is
@@ -126,13 +143,31 @@ func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 		return d.fail(ctx, reasonInputsGone)
 	}
 
-	in := &inputs.Inputs{Skills: map[string][]byte{}, Sources: map[string]string{}, Versions: map[string]int{}}
+	// The subject's newest completed review, as a merge request's re-review
+	// gets its previous one.
+	var previous []byte
+	last, havePrev, err := e.Store.LastAPIReview(ctx, client.ID, review.Tenant, review.Subject, run.ID)
+	if err != nil {
+		return d.retry(ctx, fmt.Errorf("load the previous review: %w", err))
+	}
+	if havePrev {
+		if previous, err = result.Trim(last.Result); err != nil {
+			d.log.Warn("reviewing without the previous result: it can't be read", "error", err)
+			previous = nil
+		}
+	}
+
+	in := &inputs.Inputs{Skills: map[string][]byte{}, Sources: map[string]string{}, Versions: map[string]int{}, Previous: previous}
 	for name, sk := range resolved.Skills {
 		in.Skills[name] = []byte(sk.Content)
 		in.Sources[name] = inputs.SourceLibrary
 		in.Versions[name] = sk.Version
 	}
+	var dismissalCounts map[string]int
+	in.Dismissals, dismissalCounts = d.apiDismissals(ctx, review, in)
 	in.AddDescription(review.Title, sent.Description)
+	hadPrevious := len(in.Previous) > 0
+	hadDismissals := len(in.Dismissals) > 0
 	hadDescription := len(in.Description) > 0
 	if err := in.Fit(inputs.ConfigMapLimit); err != nil {
 		d.log.Warn("the review's inputs don't fit", "error", d.redact(err.Error()))
@@ -140,6 +175,15 @@ func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 	}
 	if hadDescription && in.Description == nil {
 		d.log.Warn("reviewing without the change's title and description: the inputs are too large for them")
+	}
+	if hadPrevious && in.Previous == nil {
+		d.log.Warn("reviewing without the previous result: the inputs are too large for it")
+	}
+	switch {
+	case hadDismissals && in.Dismissals == nil:
+		d.log.Warn("reviewing without past dismissals: the inputs are too large for them", "entries", dismissalCounts)
+	case hadDismissals:
+		d.log.Info("past dismissals", "entries", dismissalCounts)
 	}
 
 	if err := e.Store.SetRunModel(ctx, run.ID, d.provider, d.model); err != nil {
@@ -206,6 +250,26 @@ func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 	return nil
 }
 
+// apiDismissals is the JSON of what people dismissed on the review's subject,
+// for the skills in, and how many entries each skill has; nil when there is
+// none. Every one teaches: only the client's keys and the admins can make one.
+// A failure only logs: the review runs without them.
+func (d *dispatcher) apiDismissals(ctx context.Context, review store.APIReview, in *inputs.Inputs) ([]byte, map[string]int) {
+	stored, err := d.e.Store.APIDismissals(ctx, review.ClientID, review.Tenant, review.Subject)
+	if err != nil {
+		d.log.Warn("reviewing without past dismissals: they can't be read", "error", err)
+		return nil, nil
+	}
+	rows := make([]store.Dismissal, len(stored))
+	for i, s := range stored {
+		rows[i] = store.Dismissal{Fingerprint: s.Fingerprint, Severity: s.Severity, Reason: s.Reason, Actor: s.Actor,
+			CreatedAt: s.CreatedAt, Skill: s.Skill, File: s.File, Title: s.Title, Teaches: true}
+	}
+	// No dismisser is recorded, so none is left out as the change's author.
+	past := actions.PastDismissals(rows, dismissalSkills(in, false), 0, func(s string) string { return d.redact(d.e.redact(s)) })
+	return d.encodeDismissals(past)
+}
+
 // errText is err's text, or "" for none.
 func errText(err error) string {
 	if err == nil {
@@ -239,11 +303,13 @@ func (e *Engine) publishAPI(ctx context.Context, run store.Run, log *slog.Logger
 	}
 
 	var usages []store.SkillUsage
-	hadResult := run.Result != nil
-	if hadResult {
+	usageRead := false
+	if run.Result != nil {
 		if usages, err = usage.FromResult(run.Result, run); err != nil {
 			log.Warn("couldn't read the result's usage", "error", err.Error())
 			usages = nil
+		} else {
+			usageRead = true
 		}
 	}
 	var res *result.Result
@@ -261,11 +327,22 @@ func (e *Engine) publishAPI(ctx context.Context, run store.Run, log *slog.Logger
 		}
 	}
 
+	// The subject's dismissals as they are now: one made since the Job
+	// started counts too.
+	stored, err := e.Store.APIDismissals(ctx, review.ClientID, review.Tenant, review.Subject)
+	if err != nil {
+		return fmt.Errorf("load the subject's dismissals: %w", err)
+	}
+	dismissals := make([]reviewapi.DismissalRef, len(stored))
+	for i, d := range stored {
+		dismissals[i] = reviewapi.DismissalRef{Fingerprint: d.Fingerprint, Severity: d.Severity, Reason: d.Reason, At: d.CreatedAt}
+	}
+
 	// The body is built as the run will be once published: StatusOf and
 	// FailureOf read the published state.
 	review.Run = run
 	review.Run.State = store.Published
-	verdict, skills, u := reviewapi.Map(res, usages, nil, e.redact)
+	verdict, skills, u := reviewapi.Map(res, usages, dismissals, e.redact)
 	body := reviewapi.Pending(review)
 	finished := e.now().UTC()
 	body.FinishedAt = &finished
@@ -273,8 +350,9 @@ func (e *Engine) publishAPI(ctx context.Context, run store.Run, log *slog.Logger
 	if body.Failure != nil {
 		body.Verdict = reviewapi.VerdictFailed
 	}
-	if hadResult {
-		// What the Job spent, also on a result that can't be used.
+	if usageRead {
+		// What the Job spent, also on a result that can't be used. A result
+		// whose usage can't be read says nothing, not zero.
 		body.Usage = &u
 	}
 	response, err := json.Marshal(body)

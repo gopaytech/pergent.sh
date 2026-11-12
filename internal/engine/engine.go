@@ -8,6 +8,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
@@ -81,6 +82,9 @@ type Engine struct {
 	// ScanImage is pergent.sh's own image (PERGENT_SH_IMAGE, set by the
 	// chart), which a scan Job runs scan-repo in.
 	ScanImage string
+	// CallbackClient sends the API reviews' callbacks; nil means one with a
+	// 10 s timeout. Whatever it is, a redirect is never followed.
+	CallbackClient *http.Client
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 	// Log may be nil.

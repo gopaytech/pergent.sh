@@ -207,7 +207,8 @@ func parseDays(r *http.Request, def, max int) (int, bool) {
 
 // attention returns the setup problems of the repositories in active (only
 // only's when its Path isn't ""), and, when only is zero, the instance-wide
-// ones and those about the library as a whole (no instance), for admins.
+// ones, those about the library as a whole (no instance) and those about an
+// API client, for admins.
 func (d *Dashboard) attention(ctx context.Context, se Session, active map[RepoKey]settings.Effective, only RepoKey) ([]AttentionView, error) {
 	items, err := d.Store.Attention(ctx)
 	if err != nil {
@@ -215,6 +216,14 @@ func (d *Dashboard) attention(ctx context.Context, se Session, active map[RepoKe
 	}
 	out := []AttentionView{}
 	for _, a := range items {
+		if a.Kind == store.AttentionCallbackFailing {
+			// Stored with the client's name as the project: never a
+			// repository's.
+			if a.Instance == "" && only.Path == "" && se.Admin {
+				out = append(out, AttentionView{Client: a.Project, Kind: a.Kind, Message: a.Message, UpdatedAt: a.UpdatedAt.UTC()})
+			}
+			continue
+		}
 		k := repoKey(a.Instance, a.Project)
 		switch {
 		case a.Project == "":
