@@ -1222,7 +1222,10 @@ paths:
       description: |
         `settings` is keyed `approve`, `reviewDrafts`, `inlineFindings`,
         `commandsAuthorAndMaintainersOnly`, `incrementalReviews`,
-        `learnFromDismissals`, `quietReviews`, `commentLayout` (the
+        `learnFromDismissals`, `quietReviews`, `checkDeleted` (review the
+        lines a change deletes and check what still uses deleted files and
+        renamed files' old paths; off unless set, a repository setting only
+        with no instance default), `commentLayout` (the
         `block:state` list; while `overridden` is false it is the default in
         effect: the admin default, else the built-in layout),
         `linkedReposEnabled` (the impact check across linked repositories;
@@ -3746,6 +3749,13 @@ components:
           type: [boolean, 'null']
         quietReviews:
           type: [boolean, 'null']
+        checkDeleted:
+          type: [boolean, 'null']
+          description: |
+            Review the lines a change deletes and check what still uses
+            deleted files and renamed files' old paths. Costs more tokens.
+            Null follows the default (off). A repository setting only: the
+            admin defaults have no such key.
         linkedReposEnabled:
           type: [boolean, 'null']
           description: Admins only (403 for a maintainer). Null follows the default (off).
@@ -4820,7 +4830,7 @@ components:
           type: object
           additionalProperties: {$ref: '#/components/schemas/SettingView'}
           description: Keyed approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews,
-            learnFromDismissals, quietReviews, commentLayout, linkedReposEnabled, linkedRepos, failureStatus, skills, repoSkills, jobTimeoutSeconds, maxTurns, jobMemory,
+            learnFromDismissals, quietReviews, checkDeleted, commentLayout, linkedReposEnabled, linkedRepos, failureStatus, skills, repoSkills, jobTimeoutSeconds, maxTurns, jobMemory,
             rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly (the mode in
             effect, follow_visibility, on or off), trustedAuthors (a list of TrustedAuthor)
             model (the ID of the entry of the list of models the repository names, null

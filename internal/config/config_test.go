@@ -707,6 +707,24 @@ func TestQuietReviewsConfigKey(t *testing.T) {
 	}
 }
 
+func TestCheckDeletedConfigKey(t *testing.T) {
+	base, err := os.ReadFile("testdata/valid.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Replace(string(base), "    project: acme/widgets\n", "    project: acme/widgets\n    check_deleted: true\n", 1)
+	cfg, err := Load(writeConfig(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Repositories[0].CheckDeleted; got == nil || !*got {
+		t.Errorf("CheckDeleted = %v, want true", got)
+	}
+	if got := loadValid(t).Repositories[0].CheckDeleted; got != nil {
+		t.Errorf("CheckDeleted unset = %v, want nil", *got)
+	}
+}
+
 // withRepoKey loads valid.yaml with extra put under its repository.
 func withRepoKey(t *testing.T, extra string) (*Config, error) {
 	t.Helper()

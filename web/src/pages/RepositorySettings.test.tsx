@@ -211,3 +211,37 @@ describe("RepositorySettings: Model", () => {
     confirm.mockRestore();
   });
 });
+
+describe("RepositorySettings: Review deleted and renamed files", () => {
+  const help =
+    "Reviews the lines a change deletes, and checks what still uses deleted files and renamed files' old paths. Costs more tokens. Needs a pergent image newer than v0.9.0; an older one ignores it.";
+
+  it("shows the switch after Quiet reviews, off, with its help text", async () => {
+    fakeApi(base);
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const toggle = await screen.findByRole("switch", { name: "Review deleted and renamed files" });
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByText(help)).toBeInTheDocument();
+    const switches = screen.getAllByRole("switch").map((el) => el.getAttribute("aria-label") ?? el.textContent);
+    expect(switches.indexOf("Review deleted and renamed files")).toBe(switches.indexOf("Quiet reviews") + 1);
+  });
+
+  it("sends only checkDeleted when it is switched on", async () => {
+    const fake = fakeApi({
+      ...base,
+      "PUT /api/repositories/main/acme/payments/settings": { body: repoDetail(repoPayments) },
+    });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    await userEvent.click(await screen.findByRole("switch", { name: "Review deleted and renamed files" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/repositories/main/acme/payments/settings")[0].body).toEqual({ checkDeleted: true });
+  });
+
+  it("shows it on when the repository sets it", async () => {
+    const own = repoDetail(repoPayments);
+    own.settings.checkDeleted = { value: true, overridden: true };
+    fakeApi({ ...base, "GET /api/repositories/main/acme/payments": { body: own } });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    expect(await screen.findByRole("switch", { name: "Review deleted and renamed files" })).toBeChecked();
+  });
+});

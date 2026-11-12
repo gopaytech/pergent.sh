@@ -261,6 +261,10 @@ export type RepoSettings = {
   incrementalReviews: SettingView<boolean>;
   learnFromDismissals: SettingView<boolean>;
   quietReviews: SettingView<boolean>;
+  // checkDeleted is whether a review reads the lines a change deletes and
+  // checks what still uses deleted and renamed files: off unless set. A
+  // repository setting only.
+  checkDeleted: SettingView<boolean>;
   // linkedReposEnabled is the impact check across linked repositories: off
   // unless set. linkedRepos are the links, kept while it is off; only an
   // admin gets them (an empty list for anyone else).
@@ -515,6 +519,7 @@ export type SettingsUpdate = Partial<{
   incrementalReviews: boolean | null;
   learnFromDismissals: boolean | null;
   quietReviews: boolean | null;
+  checkDeleted: boolean | null;
   // Admins only: the server refuses a maintainer's save that carries either.
   linkedReposEnabled: boolean | null;
   linkedRepos: Link[] | null;
