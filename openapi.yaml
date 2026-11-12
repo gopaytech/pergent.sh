@@ -1232,7 +1232,10 @@ paths:
       description: |
         `settings` is keyed `approve`, `reviewDrafts`, `inlineFindings`,
         `commandsAuthorAndMaintainersOnly`, `incrementalReviews`,
-        `learnFromDismissals`, `quietReviews`, `commentLayout` (the
+        `learnFromDismissals`, `quietReviews`, `checkDeleted` (review the
+        lines a change deletes and check what still uses deleted files and
+        renamed files' old paths; off unless set, a repository setting only
+        with no instance default), `commentLayout` (the
         `block:state` list; while `overridden` is false it is the default in
         effect: the admin default, else the built-in layout),
         `linkedReposEnabled` (the impact check across linked repositories;
@@ -4510,6 +4513,13 @@ components:
           type: [boolean, 'null']
         quietReviews:
           type: [boolean, 'null']
+        checkDeleted:
+          type: [boolean, 'null']
+          description: |
+            Review the lines a change deletes and check what still uses
+            deleted files and renamed files' old paths. Costs more tokens.
+            Null follows the default (off). A repository setting only: the
+            admin defaults have no such key.
         linkedReposEnabled:
           type: [boolean, 'null']
           description: Admins only (403 for a maintainer). Null follows the default (off).
@@ -5736,7 +5746,7 @@ components:
           type: object
           additionalProperties: {$ref: '#/components/schemas/SettingView'}
           description: Keyed approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews,
-            learnFromDismissals, quietReviews, commentLayout, linkedReposEnabled, linkedRepos, failureStatus, skills, repoSkills, jobTimeoutSeconds, maxTurns, jobMemory,
+            learnFromDismissals, quietReviews, checkDeleted, commentLayout, linkedReposEnabled, linkedRepos, failureStatus, skills, repoSkills, jobTimeoutSeconds, maxTurns, jobMemory,
             rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly (the mode in
             effect, follow_visibility, on or off), trustedAuthors (a list of TrustedAuthor)
             model (the ID of the entry of the list of models the repository names, null
@@ -6776,6 +6786,14 @@ components:
               path: {type: string}
               cause: {type: string}
           description: Entries have a `path` and a `cause`.
+        deleted:
+          type: array
+          items: {type: string}
+          description: The reviewed files the change deleted. Written by pergent's `--check-deleted`; absent without it.
+        renamed:
+          type: array
+          items: {$ref: '#/components/schemas/result.Renamed'}
+          description: The reviewed files the change renamed whose old path was checked. Written by pergent's `--check-deleted`; absent without it.
       additionalProperties: true
     result.Finding:
       description: One finding of a skill. pergent.sh reads these fields; the finding may carry others.
@@ -6887,6 +6905,13 @@ components:
           type: integer
           description: The model's own score, 1 to 5 (0 when it gave none).
         confidence_reason: {type: string}
+      additionalProperties: true
+    result.Renamed:
+      description: A reviewed file the change renamed. `path` is its new path, which `reviewed` also lists.
+      type: object
+      properties:
+        path: {type: string}
+        from: {type: string}
       additionalProperties: true
     result.Skipped:
       description: A file left out of a review, and the rule that left it out.

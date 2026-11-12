@@ -37,6 +37,7 @@
 | [Comment layout](concepts/comment-layout.md) | Choose what the review comment shows |
 | [Learn from dismissals](concepts/learn-from-dismissals.md) | Teach reviews what isn't a problem |
 | [Linked repositories](concepts/linked-repositories.md) | Check a change against the repositories that depend on it |
+| [Deleted and renamed files](concepts/deleted-files.md) | Review the lines a change deletes, and what still uses them |
 | [Trusted authors](concepts/trusted-authors.md) | Who gets reviewed without being started |
 | [Monthly token quota](concepts/token-quota.md) | A ceiling on the tokens an instance or repository spends |
 | [What a Job can and cannot see](concepts/job-isolation.md) | How a review is sandboxed |

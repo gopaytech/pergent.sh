@@ -2137,3 +2137,92 @@ func TestInlineRuleKeepsSuggestions(t *testing.T) {
 		t.Errorf("the suggestion must be in the comment with its note:\n%s", body)
 	}
 }
+
+// A finding on a deleted file has no line on the head side, so it never
+// becomes a thread: it stays in the comment, shown as on a deleted file with
+// no link, whatever the platform's diff says about the file.
+func TestNoThreadOnDeletedFile(t *testing.T) {
+	const gone = "pkg/gone.go"
+	for _, flagged := range []bool{true, false} {
+		t.Run(fmt.Sprintf("platform marks it deleted %v", flagged), func(t *testing.T) {
+			e := newInlineEnv(t)
+			head := sha('a')
+			goneFile := fileDiff{OldPath: gone, NewPath: gone, Deleted: flagged, Diff: "@@ -1,3 +0,0 @@\n-a\n-b\n-c"}
+			s := reviewed("has_blocking_issues", "db/query.go", gone)
+			s.Files.Deleted = []string{gone}
+			s.Findings = []json.RawMessage{
+				finding(fpBlocking, gone, 2, 0, "blocking", "replacement"),
+				finding(fpSuggestion, "db/query.go", 99, 0, "suggestion", ""), // off the diff, so listed with a link
+			}
+			servePublish(e.env, 1, head)
+			e.env.GitLab.ServeDiff(1, head, queryFile, goneFile)
+			id := e.env.Report(1, head, resultFor(t, head, s))
+			// A run with a web address gets links on its findings.
+			if err := e.env.Store.SetRunChange(e.env.ctx, id, store.ChangeDetails{WebURL: "https://gitlab.example.com/acme/widgets/-/merge_requests/1"}); err != nil {
+				t.Fatal(err)
+			}
+			publish(t, e.env)
+
+			if posts := e.disc.Posted(); len(posts) != 0 {
+				t.Errorf("%d discussions started, want none: %s", len(posts), posts[0].JSON(t))
+			}
+			if rows := e.rows(t); len(rows) != 0 {
+				t.Errorf("rows = %+v, want no thread", rows)
+			}
+			body := e.comment(t)
+			for _, want := range []string{"Title of aaa", gone + " (deleted), line 2", threads.NoteDeleted} {
+				if !strings.Contains(body, want) {
+					t.Errorf("comment lacks %q:\n%s", want, body)
+				}
+			}
+			if !strings.Contains(body, "/-/blob/"+head+"/db/query.go") {
+				t.Errorf("the finding on the live file has no link, so the check below proves nothing:\n%s", body)
+			}
+			if strings.Contains(body, "/-/blob/"+head+"/"+gone) {
+				t.Errorf("the finding on a deleted file has a link:\n%s", body)
+			}
+			if strings.Contains(body, "replacement") {
+				t.Errorf("the finding on a deleted file shows a suggestion:\n%s", body)
+			}
+		})
+	}
+}
+
+// The same on GitHub: its files API says status "removed" (githubforge turns
+// that into Deleted), and a thread there is on the right side, which a deleted
+// file lacks. The forge's end-to-end fake is not reachable without new
+// infrastructure, so this runs the inline sync with the diff GitHub returns.
+func TestNoThreadOnDeletedFileGitHub(t *testing.T) {
+	const gone = "pkg/gone.go"
+	for _, flagged := range []bool{true, false} {
+		t.Run(fmt.Sprintf("status removed %v", flagged), func(t *testing.T) {
+			h := newHarness(t)
+			h.github = true
+			h.fi.diff = append(h.fi.diff, forge.FileDiff{Path: gone, Deleted: flagged, Patch: "@@ -1,3 +0,0 @@\n-a\n-b\n-c"})
+			s := reviewed("has_blocking_issues", "db/query.go", gone)
+			s.Files.Deleted = []string{gone}
+			s.Findings = []json.RawMessage{finding(fpBlocking, gone, 2, 0, "blocking", "replacement")}
+			r, err := result.Parse(resultFor(t, h.head, s))
+			if err != nil {
+				t.Fatal(err)
+			}
+			v := h.sync(policy.Outcome{Result: r})
+
+			if !v.On {
+				t.Fatalf("view = %+v, the inline sync did not run", v)
+			}
+			if len(h.fi.posted) != 0 {
+				t.Errorf("posted = %+v, want no thread on a deleted file", h.fi.posted)
+			}
+			if v.Inline[fpBlocking] {
+				t.Errorf("view = %+v, the finding is left out of the comment", v)
+			}
+			if v.Notes[fpBlocking] != threads.NoteDeleted {
+				t.Errorf("notes = %v, want the deleted-file note", v.Notes)
+			}
+			if _, ok := h.st.Row(fpBlocking); ok {
+				t.Error("a finding that wasn't posted has a row")
+			}
+		})
+	}
+}

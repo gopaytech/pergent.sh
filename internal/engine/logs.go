@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gopaytech/pergent.sh/internal/kube"
+	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -28,7 +29,8 @@ const (
 	// its Job is deleted, in the loop that also dispatches and publishes.
 	supersededLogTimeout = 10 * time.Second
 
-	redacted = "[REDACTED]"
+	// redacted is the same placeholder pergent writes (result.RedactedMarker).
+	redacted = result.RedactedMarker
 )
 
 // captureLog stores the redacted tail of the log of run's Job, once per run:

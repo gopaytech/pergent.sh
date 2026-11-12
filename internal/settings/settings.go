@@ -50,6 +50,7 @@ const (
 	KeyIncrementalReviews               = "incremental_reviews"
 	KeyLearnFromDismissals              = "learn_from_dismissals"
 	KeyQuietReviews                     = "quiet_reviews"
+	KeyCheckDeleted                     = "check_deleted"
 	KeyCommentLayout                    = "comment_layout"
 	KeyLinkedReposEnabled               = "linked_repos_enabled"
 	KeyTrustedAuthorsOnly               = "trusted_authors_only"
@@ -85,6 +86,11 @@ type Effective struct {
 	LearnFromDismissals bool
 	// QuietReviews is whether a review says less. The default is false.
 	QuietReviews bool
+	// CheckDeleted is whether a review also reads the lines a change deletes
+	// and checks what still uses deleted files and renamed files' old paths.
+	// A repository setting only, with no instance default. The default is
+	// false.
+	CheckDeleted bool
 	// CommentLayout is the shape of the review comment, "block:state" entries
 	// in order; nil means the default layout.
 	CommentLayout []string
@@ -290,7 +296,7 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 			KeyTrustedAuthorsOnly: false, KeyTrustedAuthors: false, KeyMonthlyTokenQuota: false,
 			KeyApprove: false, KeyReviewDrafts: false, KeyInlineFindings: false, KeyFailureStatus: false,
 			KeySkills: false, KeyRepoSkills: false, KeyJobTimeout: false, KeyMaxTurns: false, KeyJobMemory: false, KeyModel: false,
-			KeyRerunLimitPerMR: false, KeyRerunLimitPerRepo: false, KeyCommandsAuthorAndMaintainersOnly: false, KeyIncrementalReviews: false, KeyLearnFromDismissals: false, KeyQuietReviews: false, KeyCommentLayout: false, KeyLinkedReposEnabled: false,
+			KeyRerunLimitPerMR: false, KeyRerunLimitPerRepo: false, KeyCommandsAuthorAndMaintainersOnly: false, KeyIncrementalReviews: false, KeyLearnFromDismissals: false, KeyQuietReviews: false, KeyCheckDeleted: false, KeyCommentLayout: false, KeyLinkedReposEnabled: false,
 		},
 	}
 	if source != SourceDashboard {
@@ -450,6 +456,9 @@ func (r *Resolver) fromConfig(repo config.Repository) (Effective, bool) {
 	if repo.QuietReviews != nil {
 		eff.QuietReviews, eff.Overridden[KeyQuietReviews] = *repo.QuietReviews, true
 	}
+	if repo.CheckDeleted != nil {
+		eff.CheckDeleted, eff.Overridden[KeyCheckDeleted] = *repo.CheckDeleted, true
+	}
 	if len(repo.CommentLayout) > 0 {
 		eff.CommentLayout, eff.Overridden[KeyCommentLayout] = slices.Clone(repo.CommentLayout), true
 	}
@@ -524,6 +533,9 @@ func (r *Resolver) fromDashboard(row store.DashboardRepo, stored store.RepoDefau
 	}
 	if row.QuietReviews != nil {
 		eff.QuietReviews, eff.Overridden[KeyQuietReviews] = *row.QuietReviews, true
+	}
+	if row.CheckDeleted != nil {
+		eff.CheckDeleted, eff.Overridden[KeyCheckDeleted] = *row.CheckDeleted, true
 	}
 	if len(row.CommentLayout) > 0 {
 		eff.CommentLayout, eff.Overridden[KeyCommentLayout] = slices.Clone(row.CommentLayout), true

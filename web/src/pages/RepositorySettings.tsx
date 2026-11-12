@@ -255,6 +255,7 @@ type Draft = {
   incrementalReviews: boolean;
   learnFromDismissals: boolean;
   quietReviews: boolean;
+  checkDeleted: boolean;
   // Admins only: the impact check across linked repositories, and the links
   // (blank lines in the watched paths are kept while typing).
   linkedReposEnabled: boolean;
@@ -369,6 +370,7 @@ function Form({
     incrementalReviews: settings.incrementalReviews.value,
     learnFromDismissals: settings.learnFromDismissals.value,
     quietReviews: settings.quietReviews.value,
+    checkDeleted: settings.checkDeleted.value,
     linkedReposEnabled: settings.linkedReposEnabled.value,
     linkedRepos: settings.linkedRepos.value.map((l) => ({ ...l, watched: [...l.watched] })),
     commentLayout: settings.commentLayout.overridden ? settings.commentLayout.value : null,
@@ -420,6 +422,7 @@ function Form({
     if (d.incrementalReviews !== initial.incrementalReviews) body.incrementalReviews = d.incrementalReviews;
     if (d.learnFromDismissals !== initial.learnFromDismissals) body.learnFromDismissals = d.learnFromDismissals;
     if (d.quietReviews !== initial.quietReviews) body.quietReviews = d.quietReviews;
+    if (d.checkDeleted !== initial.checkDeleted) body.checkDeleted = d.checkDeleted;
     // Who is trusted is an admin's: a maintainer's save never carries it
     // (the server would refuse the whole save).
     if (canSetTrust) {
@@ -726,6 +729,18 @@ function Form({
             checked={d.quietReviews}
             disabled={disabled}
             onChange={(v) => set("quietReviews", v)}
+          />
+        </Setting>
+        <Setting
+          name="Review deleted and renamed files"
+          overridden={settings.checkDeleted.overridden}
+          help="Reviews the lines a change deletes, and checks what still uses deleted files and renamed files' old paths. Costs more tokens. Needs a pergent image newer than v0.9.0; an older one ignores it."
+        >
+          <Switch
+            label="Review deleted and renamed files"
+            checked={d.checkDeleted}
+            disabled={disabled}
+            onChange={(v) => set("checkDeleted", v)}
           />
         </Setting>
       </section>

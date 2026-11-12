@@ -963,6 +963,7 @@ func settingViews(repo settings.Effective) map[string]SettingView {
 		"incrementalReviews":               {repo.IncrementalReviews, ov[settings.KeyIncrementalReviews]},
 		"learnFromDismissals":              {repo.LearnFromDismissals, ov[settings.KeyLearnFromDismissals]},
 		"quietReviews":                     {repo.QuietReviews, ov[settings.KeyQuietReviews]},
+		"checkDeleted":                     {repo.CheckDeleted, ov[settings.KeyCheckDeleted]},
 		"commentLayout":                    {layoutText(repo.CommentLayout), ov[settings.KeyCommentLayout]},
 		"linkedReposEnabled":               {repo.LinkedReposEnabled, ov[settings.KeyLinkedReposEnabled]},
 		"linkedRepos":                      {linksView(repo.LinkedRepos), len(repo.LinkedRepos) > 0},

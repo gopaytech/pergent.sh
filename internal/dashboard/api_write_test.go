@@ -371,6 +371,10 @@ func TestSettingsValidation(t *testing.T) {
 		{`{"quietReviews":false}`, true, func(r store.DashboardRepo) bool { return r.QuietReviews != nil && !*r.QuietReviews }},
 		{`{"quietReviews":"no"}`, false, nil},
 		{`{"quietReviews":null}`, true, func(r store.DashboardRepo) bool { return r.QuietReviews == nil }},
+		{`{"checkDeleted":true}`, true, func(r store.DashboardRepo) bool { return r.CheckDeleted != nil && *r.CheckDeleted }},
+		{`{"checkDeleted":false}`, true, func(r store.DashboardRepo) bool { return r.CheckDeleted != nil && !*r.CheckDeleted }},
+		{`{"checkDeleted":"no"}`, false, nil},
+		{`{"checkDeleted":null}`, true, func(r store.DashboardRepo) bool { return r.CheckDeleted == nil }},
 		{`{"commentLayout":["findings:open","files:collapsed"]}`, true, func(r store.DashboardRepo) bool {
 			return slices.Equal(r.CommentLayout, []string{"findings:open", "files:collapsed"})
 		}},
@@ -472,7 +476,7 @@ func TestSettingsValidation(t *testing.T) {
 	wantCode(t, rec, "reset", http.StatusOK)
 	r, found := e.storedRepo("main", "acme/gadgets")
 	if !found || r.Approve != nil || r.ReviewDrafts != nil || r.FailureStatus != nil || r.Skills != nil ||
-		r.InlineFindings != nil || r.CommandsAuthorAndMaintainersOnly != nil || r.IncrementalReviews != nil || r.LearnFromDismissals != nil || r.QuietReviews != nil || r.CommentLayout != nil || r.LinkedReposEnabled != nil || r.LinkedRepos != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil ||
+		r.InlineFindings != nil || r.CommandsAuthorAndMaintainersOnly != nil || r.IncrementalReviews != nil || r.LearnFromDismissals != nil || r.QuietReviews != nil || r.CheckDeleted != nil || r.CommentLayout != nil || r.LinkedReposEnabled != nil || r.LinkedRepos != nil || r.JobTimeoutSeconds != nil || r.MaxTurns != nil || r.JobMemory != nil || r.RerunLimitPerMR != nil || r.RerunLimitPerRepo != nil ||
 		r.CreatedBy != "carol" {
 		t.Errorf("after reset row = %+v, %v", r, found)
 	}
@@ -1443,5 +1447,96 @@ func TestBoolSettingUnknownKey(t *testing.T) {
 		if msg != "nope is not a setting" {
 			t.Errorf("%s: msg = %q", raw, msg)
 		}
+	}
+}
+
+// Review deleted and renamed files is stored on its own: true or false, null
+// back to the default (off); a reset clears it; anything else is 400 with its
+// message. A maintainer may change it, a viewer may not, the audit entry names
+// it, and a repository the config manages refuses it.
+func TestCheckDeletedSetting(t *testing.T) {
+	e := newEnv(t, nil)
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	c := e.userOnMain(true, "acme/gadgets")
+	target := "/api/repositories/main/acme/gadgets/settings"
+
+	rec := e.send(c, "PUT", target, `{"checkDeleted":true}`)
+	wantCode(t, rec, "PUT true", http.StatusOK)
+	var detail RepositoryDetailView
+	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if s := detail.Settings["checkDeleted"]; s.Value != true || !s.Overridden {
+		t.Errorf("checkDeleted = %+v, want true overridden", s)
+	}
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.CheckDeleted == nil || !*r.CheckDeleted {
+		t.Errorf("stored = %v, want true", r.CheckDeleted)
+	}
+	if g, _, err := e.d.Repos.Get(ctx, "main", "acme/gadgets"); err != nil || !g.CheckDeleted {
+		t.Errorf("effective = %+v, %v; want review deleted files on", g, err)
+	}
+	var details []string
+	for _, a := range e.auditEntries() {
+		if a.Action == "settings_updated" {
+			details = append(details, a.Detail)
+		}
+	}
+	if !slices.Equal(details, []string{"checkDeleted"}) {
+		t.Errorf("settings_updated details = %q; want checkDeleted named", details)
+	}
+
+	rec = e.send(c, "PUT", target, `{"checkDeleted":"x"}`)
+	wantCode(t, rec, "PUT x", http.StatusBadRequest)
+	if got := errorOf(t, rec); got != "checkDeleted must be true, false or null" {
+		t.Errorf("error = %q", got)
+	}
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.CheckDeleted == nil || !*r.CheckDeleted {
+		t.Errorf("a refused PUT changed the row: %v", r.CheckDeleted)
+	}
+
+	rec = e.send(c, "PUT", target, `{"checkDeleted":null}`)
+	wantCode(t, rec, "PUT null", http.StatusOK)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.CheckDeleted != nil {
+		t.Errorf("stored after null = %v, want NULL", r.CheckDeleted)
+	}
+	if g, ok, err := e.d.Repos.Get(ctx, "main", "acme/gadgets"); err != nil || !ok || g.CheckDeleted {
+		t.Errorf("effective after null = %+v, %v, %v; want the default, off", g, ok, err)
+	}
+
+	e.send(c, "PUT", target, `{"checkDeleted":true}`)
+	wantCode(t, e.send(c, "POST", target+"/reset", ""), "reset", http.StatusOK)
+	if r, _ := e.storedRepo("main", "acme/gadgets"); r.CheckDeleted != nil {
+		t.Errorf("stored after reset = %v, want NULL", r.CheckDeleted)
+	}
+	if !strings.Contains(msgBadSettings, "checkDeleted") {
+		t.Errorf("msgBadSettings = %q", msgBadSettings)
+	}
+
+	// A maintainer changes it like the other switches.
+	m := newEnv(t, nil)
+	m.dashboardRepo("main", "acme/gadgets", nil)
+	m.aliceOn("main", store.RoleMaintainer)
+	maintainer := m.aliceSession()
+	wantCode(t, m.send(maintainer, "PUT", target, `{"checkDeleted":true}`), "maintainer PUT", http.StatusOK)
+	if r, _ := m.storedRepo("main", "acme/gadgets"); r.CheckDeleted == nil || !*r.CheckDeleted {
+		t.Errorf("after a maintainer's PUT stored = %v, want true", r.CheckDeleted)
+	}
+
+	// A viewer may not.
+	v := newEnv(t, nil)
+	v.dashboardRepo("main", "acme/gadgets", nil)
+	v.aliceOn("main", store.RoleViewer)
+	wantCode(t, v.send(v.aliceSession(), "PUT", target, `{"checkDeleted":true}`), "viewer PUT", http.StatusForbidden)
+	if r, _ := v.storedRepo("main", "acme/gadgets"); r.CheckDeleted != nil {
+		t.Errorf("a viewer's PUT changed the row: %v", r.CheckDeleted)
+	}
+
+	// A repository the config lists is read-only.
+	k := newEnv(t, nil)
+	k.cat["main"].set("acme/widgets")
+	cfg := k.userOnMain(true, "acme/widgets")
+	wantCode(t, k.send(cfg, "PUT", "/api/repositories/main/acme/widgets/settings", `{"checkDeleted":true}`), "PUT on a config repository", http.StatusConflict)
+	if _, found := k.storedRepo("main", "acme/widgets"); found {
+		t.Errorf("a dashboard row was made for the config repository")
 	}
 }

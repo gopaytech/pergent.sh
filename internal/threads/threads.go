@@ -41,6 +41,9 @@ const (
 	// NoteKeptQuiet is why a suggestion stays in the comment of a quiet review.
 	NoteKeptQuiet = "Kept here: quiet reviews don't post suggestions on the diff."
 	NoteTooLong   = "Too long for an inline comment, so it is listed here."
+	// NoteDeleted is for a finding on a file a skill reviewed as a deletion
+	// (files.deleted): its lines were removed, so there is nothing to anchor to.
+	NoteDeleted = "On a deleted file: there is no line on the new side to comment on."
 )
 
 // Replies posted on a thread when it changes state. ReplyFixed, ReplyBack and
@@ -118,6 +121,9 @@ type Coverage struct {
 	// none (the impact check reads other repositories for callers). A thread
 	// of this skill is judged as if Reviewed held its file.
 	AllFiles bool
+	// Deleted: files the skill reviewed as deletions (files.deleted, written
+	// only by pergent's --check-deleted). A finding on one gets NoteDeleted.
+	Deleted map[string]bool
 	// LeftOut: the skill's notes say it left a finding out because of a past
 	// dismissal. It says which skill, not which finding.
 	LeftOut bool
@@ -450,6 +456,9 @@ func reworded(in Input, t Thread, findings []Finding, taken map[string]bool) (Fi
 // place decides where a new finding goes on the diff. It returns a note,
 // and no post, when the finding can't be a comment on the diff.
 func place(in Input, f Finding) (Post, string) {
+	if deletedFile(in, f.File) {
+		return Post{}, NoteDeleted
+	}
 	d, ok := in.Diff[f.File]
 	if !ok || d.Deleted || f.Line <= 0 {
 		return Post{}, NoteOffDiff
@@ -472,6 +481,17 @@ func place(in Input, f Finding) (Post, string) {
 		post.Suggestion = f.HasSuggestion
 	}
 	return post, ""
+}
+
+// deletedFile reports whether some skill reviewed file as a deletion. Any
+// skill's word counts: a deleted file is deleted for every skill.
+func deletedFile(in Input, file string) bool {
+	for _, c := range in.Skills {
+		if c.Deleted[file] {
+			return true
+		}
+	}
+	return false
 }
 
 // endOf is the last line of a range that starts at line; an unset or smaller

@@ -1078,7 +1078,7 @@ func TestRepositoryDetail(t *testing.T) {
 		t.Errorf("repo = %+v", v.Repo)
 	}
 	settings, _ := json.Marshal(v.Settings)
-	want := `{"approve":{"value":false,"overridden":true},"commandsAuthorAndMaintainersOnly":{"value":true,"overridden":false},` +
+	want := `{"approve":{"value":false,"overridden":true},"checkDeleted":{"value":false,"overridden":false},"commandsAuthorAndMaintainersOnly":{"value":true,"overridden":false},` +
 		`"commentLayout":{"value":["summary:open","findings:collapsed","dismissed:collapsed","checks:open","files:collapsed"],"overridden":false},` +
 		`"failureStatus":{"value":"failed","overridden":false},` +
 		`"incrementalReviews":{"value":true,"overridden":false},"inlineFindings":{"value":true,"overridden":false},"jobMemory":{"value":"","overridden":false},"jobTimeoutSeconds":{"value":600,"overridden":false},` +
@@ -1850,6 +1850,18 @@ func TestSettingViewsQuietReviews(t *testing.T) {
 	repo := settings.Effective{QuietReviews: true, Overridden: map[string]bool{settings.KeyQuietReviews: true}}
 	if got := settingViews(repo)["quietReviews"]; got != (SettingView{true, true}) {
 		t.Errorf("quietReviews = %+v, want true overridden", got)
+	}
+}
+
+// Review deleted and renamed files is a setting of the repository, off unless
+// set.
+func TestSettingViewsCheckDeleted(t *testing.T) {
+	if got := settingViews(settings.Effective{})["checkDeleted"]; got != (SettingView{false, false}) {
+		t.Errorf("checkDeleted = %+v, want false not overridden", got)
+	}
+	repo := settings.Effective{CheckDeleted: true, Overridden: map[string]bool{settings.KeyCheckDeleted: true}}
+	if got := settingViews(repo)["checkDeleted"]; got != (SettingView{true, true}) {
+		t.Errorf("checkDeleted = %+v, want true overridden", got)
 	}
 }
 

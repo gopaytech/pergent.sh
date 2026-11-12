@@ -9,6 +9,7 @@ package policy
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -312,14 +313,14 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 		}
 	case reviewed == 0:
 		return Decision{
-			Comment:     withNote(comment, block, skippedNote(noteNothingReviewed, skills, false)),
+			Comment:     withNote(comment, block, skippedNote(noteNothingReviewed, r, skills, false)),
 			Status:      StatusSuccess,
 			Description: descNothingToReview,
 			Kind:        KindNotApproved,
 		}
-	case blockingSkip(skills):
+	case blockingSkip(r, skills):
 		return Decision{
-			Comment:     withNote(comment, block, skippedNote(notePartlySkipped, skills, true)),
+			Comment:     withNote(comment, block, skippedNote(notePartlySkipped, r, skills, true)),
 			Status:      StatusSuccess,
 			Description: descPartlySkipped,
 			Kind:        KindNotApproved,
@@ -507,6 +508,13 @@ func redactSkills(skills []render.Skill, redact func(string) string) []render.Sk
 			s.Checks = append(s.Checks, rb)
 		}
 		s.Reviewed = redactAll(skills[i].Reviewed, redact)
+		// render matches a finding's file against Deleted by exact string, so
+		// every path is redacted the same way.
+		s.Deleted = redactAll(skills[i].Deleted, redact)
+		s.Renamed = nil
+		for _, r := range skills[i].Renamed {
+			s.Renamed = append(s.Renamed, render.Rename{Path: redact(r.Path), From: redact(r.From)})
+		}
 		s.Notes = redactAll(skills[i].Notes, redact)
 		s.ConfidenceReason = redact(skills[i].ConfidenceReason)
 		out[i] = s
@@ -567,11 +575,13 @@ func withMarker(comment string) string {
 }
 
 // blockingSkip reports whether any skill skipped a file under a rule that
-// blocks approval.
-func blockingSkip(skills []result.Skill) bool {
+// blocks approval. A "deleted" skip of a deletion another skill reviewed
+// (reviewedDeletions) doesn't count.
+func blockingSkip(r *result.Result, skills []result.Skill) bool {
+	reviewed := reviewedDeletions(r, skills)
 	for _, s := range skills {
 		for _, f := range s.Files.Skipped {
-			if blocksApproval(f.Rule) {
+			if blocksApproval(f.Rule) && !(f.Rule == "deleted" && reviewed[f.Path]) {
 				return true
 			}
 		}
@@ -579,20 +589,55 @@ func blockingSkip(skills []result.Skill) bool {
 	return false
 }
 
+// reviewedDeletions is the deletions some skill reviewed: listed in both its
+// files.deleted and files.reviewed, by a clean skill that is not a check and
+// lists nothing it could not review. pergent keeps a deletion out of a skill's
+// scope under the rule "deleted", so that a deletion no skill covers still
+// blocks; one that some skill did cover was reviewed. Only pergent's
+// --check-deleted writes files.deleted, so with the switch off, or on an older
+// image, the set is empty and every "deleted" skip blocks as before.
+//
+// A path holding pergent's redaction marker is never in the set: pergent
+// redacts every path, so two deletions can arrive as the same text
+// (a?token=x.go reviewed, a?token=y.env read-denied and skipped), and one must
+// not pass for the other. Such a deletion blocks as before.
+func reviewedDeletions(r *result.Result, skills []result.Skill) map[string]bool {
+	out := map[string]bool{}
+	for _, s := range skills {
+		if r.IsCheck(s.Name) || s.Verdict != "no_blocking_issues" || len(s.Files.NotReviewed) > 0 {
+			continue
+		}
+		for _, p := range s.Files.Deleted {
+			if slices.Contains(s.Files.Reviewed, p) && !strings.Contains(p, result.RedactedMarker) {
+				out[p] = true
+			}
+		}
+	}
+	return out
+}
+
 // skippedNote is title followed by the distinct skipped paths across skills,
 // one line per path: at most 20 lines and maxNoteBytes in all, then "…and N
 // more" for the rest. A path skipped under different rules by different
 // skills shows its rules sorted (the first three, then "…"). With
 // onlyBlocking, only the paths that some skill skipped under a rule that
-// blocks approval are listed.
+// blocks approval are listed, and a "deleted" skip of a deletion another
+// skill reviewed (reviewedDeletions) is left out, as blockingSkip ignores it.
 //
 // Paths come from the merge request, so each is shown through listedText: a
 // backtick, newline or control character in one can't end its code span or
 // line, and a long one is cut.
-func skippedNote(title string, skills []result.Skill, onlyBlocking bool) string {
+func skippedNote(title string, r *result.Result, skills []result.Skill, onlyBlocking bool) string {
+	reviewed := map[string]bool{}
+	if onlyBlocking {
+		reviewed = reviewedDeletions(r, skills)
+	}
 	rules := map[string]map[string]bool{}
 	for _, s := range skills {
 		for _, f := range s.Files.Skipped {
+			if f.Rule == "deleted" && reviewed[f.Path] {
+				continue
+			}
 			if rules[f.Path] == nil {
 				rules[f.Path] = map[string]bool{}
 			}

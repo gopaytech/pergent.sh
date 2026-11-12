@@ -132,6 +132,41 @@ func TestOffDiffAndNoLine(t *testing.T) {
 	}
 }
 
+// A finding on a file some skill reviewed as a deletion (files.deleted) says
+// why it is not on the diff: the lines were deleted, so "its lines didn't
+// change" would be wrong. With no skill listing the deletion (the switch off,
+// an older pergent) the note is the off-diff one, as before, whatever the
+// platform's diff says about the file.
+func TestNoteOnDeletedFile(t *testing.T) {
+	in := base()
+	in.Diff["gone.go"] = diffmap.File{Path: "gone.go", Deleted: true}
+	in.Diff["gone2.go"] = diffmap.File{Path: "gone2.go"}
+	other := ok()
+	other.Deleted = map[string]bool{"gone2.go": true}
+	cov := ok("a.go", "z.go", "gone.go")
+	cov.Deleted = map[string]bool{"gone.go": true}
+	in.Skills = map[string]Coverage{"go": cov, "docs": other}
+	in.Findings = []Finding{
+		finding("own", "gone.go", "blocking", 2, 0),
+		finding("other", "gone2.go", "blocking", 2, 0), // the platform doesn't flag it; docs reviewed it as deleted
+		finding("noline", "gone.go", "suggestion", 0, 0),
+	}
+	p := Decide(in)
+	if len(p.Post) != 0 {
+		t.Fatalf("post = %+v", p.Post)
+	}
+	for _, fp := range []string{"own", "other", "noline"} {
+		if p.Notes[fp] != NoteDeleted || p.Inline[fp] {
+			t.Errorf("%s: notes = %q inline = %v", fp, p.Notes[fp], p.Inline[fp])
+		}
+	}
+
+	in.Skills = base().Skills
+	if p := Decide(in); p.Notes["own"] != NoteOffDiff || p.Notes["other"] != NoteOffDiff {
+		t.Errorf("without files.deleted: notes = %v, want the off-diff note", p.Notes)
+	}
+}
+
 func TestOnlyBlockingKeepsSuggestions(t *testing.T) {
 	in := base()
 	in.OnlyBlocking = true

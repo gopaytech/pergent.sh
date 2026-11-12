@@ -3,6 +3,7 @@ package kube
 import (
 	"encoding/json"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -412,6 +413,43 @@ func TestCarriedInputs(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("no carried.json item in the inputs volume")
+	}
+}
+
+// The deleted-files switch goes to the Job as an environment variable, not an
+// argument, and only when it is on: off leaves the Job as it was before.
+func TestCheckDeletedEnv(t *testing.T) {
+	envOf := func(p JobParams) []corev1.EnvVar {
+		return containerByName(t, BuildJob(p).Spec.Template.Spec.Containers, "pergent").Env
+	}
+	p := testParams()
+	off := BuildJob(p)
+	for _, e := range envOf(p) {
+		if e.Name == "PERGENT_CHECK_DELETED" {
+			t.Errorf("PERGENT_CHECK_DELETED = %q with the switch off", e.Value)
+		}
+	}
+
+	p.CheckDeleted = true
+	var got []string
+	for _, e := range envOf(p) {
+		if e.Name == "PERGENT_CHECK_DELETED" {
+			got = append(got, e.Value)
+		}
+	}
+	if len(got) != 1 || got[0] != "true" {
+		t.Errorf("PERGENT_CHECK_DELETED = %q, want one value \"true\"", got)
+	}
+	main := containerByName(t, BuildJob(p).Spec.Template.Spec.Containers, "pergent")
+	for _, a := range main.Args {
+		if strings.Contains(a, "check-deleted") {
+			t.Errorf("unexpected arg %q", a)
+		}
+	}
+
+	p.CheckDeleted = false
+	if !reflect.DeepEqual(BuildJob(p), off) {
+		t.Error("a Job with the switch off differs from one built before")
 	}
 }
 

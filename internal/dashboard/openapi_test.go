@@ -983,6 +983,7 @@ var openAPISchemas = map[string]schemaType{
 	"result.BatchChecks":      inputSchema(result.BatchChecks{}),
 	"result.Check":            inputSchema(result.Check{}),
 	"result.Files":            inputSchema(result.Files{}),
+	"result.Renamed":          inputSchema(result.Renamed{}),
 	"result.Skipped":          inputSchema(result.Skipped{}),
 	"result.Error":            inputSchema(result.Error{}),
 	"result.Comment":          inputSchema(result.Comment{}),

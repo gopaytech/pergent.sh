@@ -700,6 +700,57 @@ func TestDashboardRepoQuietReviews(t *testing.T) {
 	want("upsert true", read(), ptrTo(true))
 }
 
+// check_deleted is NULL (the default, off), true or false, through insert,
+// update and upsert.
+func TestDashboardRepoCheckDeleted(t *testing.T) {
+	s := newStore(t)
+	read := func() *bool {
+		t.Helper()
+		r, found, err := s.DashboardRepo(ctx, "main", "acme/widgets")
+		if err != nil || !found {
+			t.Fatalf("DashboardRepo = %v, %v", found, err)
+		}
+		return r.CheckDeleted
+	}
+	want := func(step string, got *bool, want *bool) {
+		t.Helper()
+		switch {
+		case want == nil && got != nil:
+			t.Errorf("%s: check_deleted = %v; want NULL", step, *got)
+		case want != nil && (got == nil || *got != *want):
+			t.Errorf("%s: check_deleted = %v; want %v", step, got, *want)
+		}
+	}
+
+	if created, err := s.InsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "acme/widgets", CreatedBy: "alice", CheckDeleted: ptrTo(true)}); err != nil || !created {
+		t.Fatalf("InsertDashboardRepo = %v, %v", created, err)
+	}
+	want("insert true", read(), ptrTo(true))
+
+	for _, step := range []struct {
+		name string
+		set  *bool
+	}{{"update false", ptrTo(false)}, {"update NULL", nil}, {"update true", ptrTo(true)}} {
+		if found, err := s.UpdateDashboardRepo(ctx, "main", "acme/widgets", func(r *DashboardRepo) { r.CheckDeleted = step.set }); err != nil || !found {
+			t.Fatalf("%s: UpdateDashboardRepo = %v, %v", step.name, found, err)
+		}
+		want(step.name, read(), step.set)
+	}
+	if _, err := s.UpdateDashboardRepo(ctx, "main", "acme/widgets", func(r *DashboardRepo) { r.MaxTurns = ptrTo(80) }); err != nil {
+		t.Fatal(err)
+	}
+	want("update of another setting", read(), ptrTo(true))
+
+	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "acme/widgets", CreatedBy: "alice", CheckDeleted: ptrTo(false)}); err != nil {
+		t.Fatal(err)
+	}
+	want("upsert false", read(), ptrTo(false))
+	if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: "acme/widgets", CreatedBy: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	want("upsert NULL", read(), nil)
+}
+
 // comment_layout is NULL (the default layout) or a list whose order is kept,
 // through insert, update and upsert. An empty list is stored as NULL.
 func TestDashboardRepoCommentLayout(t *testing.T) {

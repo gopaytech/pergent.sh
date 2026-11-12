@@ -60,7 +60,7 @@ const (
 	msgWriteFailed    = "could not save the change, please try again"
 	msgUserLookup     = "could not look the user up on the platform, please try again"
 	msgBadProjectBody = `the body must be {"project": "<path>"}`
-	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, commentLayout, linkedReposEnabled, linkedRepos, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly, trustedAuthors, model, monthlyTokenQuota"
+	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, checkDeleted, commentLayout, linkedReposEnabled, linkedRepos, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly, trustedAuthors, model, monthlyTokenQuota"
 	msgNameInstance   = `name the instance: {"instance": "<name>", "project": "<path>"}`
 	msgNeedsAdminCaps = "only admins can change its re-run caps"
 	msgNeedsRole      = "only maintainers of this repository and admins can change its settings"
@@ -684,6 +684,7 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 	d.updateSettings(w, r, repo, func(row *store.DashboardRepo) {
 		row.Approve, row.ReviewDrafts, row.InlineFindings, row.FailureStatus = nil, nil, nil, nil
 		row.CommandsAuthorAndMaintainersOnly, row.IncrementalReviews, row.LearnFromDismissals, row.QuietReviews = nil, nil, nil, nil
+		row.CheckDeleted = nil
 		row.CommentLayout = nil
 		row.Skills, row.RepoSkills, row.JobTimeoutSeconds, row.MaxTurns, row.JobMemory = nil, nil, nil, nil, nil
 		if admin {
@@ -764,7 +765,7 @@ func (d *Dashboard) parseSettings(r *http.Request) (func(*store.DashboardRepo), 
 		var edit func(*store.DashboardRepo)
 		var msg string
 		switch key {
-		case "approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews", "linkedReposEnabled":
+		case "approve", "reviewDrafts", "inlineFindings", "commandsAuthorAndMaintainersOnly", "incrementalReviews", "learnFromDismissals", "quietReviews", "checkDeleted", "linkedReposEnabled":
 			edit, msg = boolSetting(key, raw, null)
 		case "commentLayout":
 			edit, msg = commentLayoutSetting(raw, null, msgBadSettings)
@@ -819,6 +820,7 @@ var boolSettings = map[string]func(row *store.DashboardRepo, v *bool){
 	"incrementalReviews":               func(row *store.DashboardRepo, v *bool) { row.IncrementalReviews = v },
 	"learnFromDismissals":              func(row *store.DashboardRepo, v *bool) { row.LearnFromDismissals = v },
 	"quietReviews":                     func(row *store.DashboardRepo, v *bool) { row.QuietReviews = v },
+	"checkDeleted":                     func(row *store.DashboardRepo, v *bool) { row.CheckDeleted = v },
 	"linkedReposEnabled":               func(row *store.DashboardRepo, v *bool) { row.LinkedReposEnabled = v },
 }
 

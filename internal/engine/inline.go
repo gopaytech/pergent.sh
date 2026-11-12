@@ -207,6 +207,14 @@ func buildFindings(r *result.Result, ds []render.Dismissal, redact func(string) 
 		// finished it covers the whole change, so a finding it no longer
 		// reports is gone. Failed or absent, it covers nothing.
 		cov.AllFiles = r.IsCheck(s.Name)
+		// A finding on a reviewed deletion gets its own note. With the switch
+		// off, or on an older pergent, no skill lists one.
+		for _, p := range r.Skills[i].Files.Deleted {
+			if cov.Deleted == nil {
+				cov.Deleted = map[string]bool{}
+			}
+			cov.Deleted[p] = true
+		}
 		fs.skills[s.Name] = cov
 
 		for _, f := range s.Findings {

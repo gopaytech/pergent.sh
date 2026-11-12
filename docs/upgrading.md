@@ -19,6 +19,10 @@ Migration `0040` runs at startup too. It adds four tables (`api_callbacks`, `api
 - **Metrics:** `pergent_api_reviews_total`, `pergent_api_tokens_total` and `pergent_api_callbacks_total`, labelled by `client` only, and an **API clients** row in the example Grafana dashboard ([Metrics](concepts/metrics.md)). The **Usage** page lists each client with its tenants.
 - **Rolling back to the previous release stops the callbacks, the dismissals and the limits** with the rest of the API: it has no `/v1/` routes. Callbacks not yet sent are never sent, the results stay stored, and dismissals stay stored. API reviews the older release meets are superseded, as described above for migration `0039`: callers send their changes again.
 
+**A repository can be asked to review deleted and renamed files.** The setting **Review deleted and renamed files** is off by default and per repository only: [Deleted and renamed files](concepts/deleted-files.md). Nothing changes after the upgrade until a maintainer or admin turns it on for a repository. It costs more tokens. It needs a pergent image newer than v0.9.0, and an older image ignores it. pergent.sh's default image is still v0.9.0, so set `jobs.image` to a newer one to use it.
+
+Migration `0041` runs at startup and only adds a nullable column, so back up Postgres first, as for any migration. The previous release keeps working on the migrated database and ignores the column. **To roll back, first remove `repositories[].check_deleted` from the config, if you set it.** The previous release refuses a config key it doesn't know. A value set in the dashboard stays stored and does nothing.
+
 ## Upgrading to 0.16.0
 
 **A failed review can be traced to its Job.** Admins see the Job and pod on the review page, a failed review keeps its clone log and the pod's state, and the failure line names the step that failed: [Troubleshooting a failed review](setup/troubleshooting.md).

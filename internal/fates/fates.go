@@ -320,7 +320,8 @@ func (w *walk) vanished(t *track) error {
 		return nil
 	}
 	// A file renamed since the finding was reported is reviewed under its new
-	// name. A deleted file is never reviewed, and its findings are gone.
+	// name. A deleted file is reviewed only with pergent's --check-deleted;
+	// otherwise it is not, and its findings are gone.
 	moved := t.file
 	if !w.s.Reviewed[t.file] && !w.s.Whole {
 		if t.head == w.r.Head {
@@ -357,6 +358,9 @@ func (w *walk) vanished(t *track) error {
 	t.moved = path
 	switch {
 	case !found:
+		// The heads' diff doesn't touch the file, so nothing about it changed:
+		// went away. That holds for a file deleted at both heads too, and a
+		// restored file is tracked like any other.
 	case d.Deleted:
 		t.fate = Fixed
 	case t.line > 0:

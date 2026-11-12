@@ -273,6 +273,33 @@ func TestFatesInputCarriedFilesAreReviewed(t *testing.T) {
 	}
 }
 
+// A finding on a reviewed deleted file's removed lines that the next review,
+// still deleting it, does not report again went away: the file is deleted at
+// both heads, so nothing about it changed between them.
+func TestFatesInputDeletedFiles(t *testing.T) {
+	deletedSkill := func(findings ...result.Finding) result.Skill {
+		s := fateSkill(t, "no_blocking_issues", findings...)
+		s.Files.Reviewed = append(s.Files.Reviewed, "db/old.go")
+		s.Files.Deleted = []string{"db/old.go"}
+		return s
+	}
+	f := fateFinding("aaaaaaaaaaaa", "blocking", 5)
+	f.File = "db/old.go"
+	runs := []store.Run{
+		{HeadSHA: sha('a'), Result: resultFor(t, sha('a'), deletedSkill(f))},
+		{HeadSHA: sha('b'), Result: resultFor(t, sha('b'), deletedSkill())},
+	}
+	in := fatesInput(runs, nil)
+	// The file is deleted at both heads, so their diff doesn't touch it.
+	in.Compare = func(from, to string) ([]diffmap.File, error) {
+		return []diffmap.File{diffmap.Parse("db/query.go", "", "@@ -11,3 +11,3 @@\n a\n-b\n+c\n d\n", false)}, nil
+	}
+	got, err := fates.Decide(in)
+	if err != nil || len(got) != 1 || got[0].Fate != fates.WentAway {
+		t.Errorf("Decide = %+v, %v; want one went_away fate", got, err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // The pure decisions: no database
 

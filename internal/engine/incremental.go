@@ -38,9 +38,10 @@ const (
 
 // Why a skill carries no files, as the log says it.
 const (
-	carryChanged   = "changed"
-	carryOutside   = "finding outside reviewed files"
-	carryUnchanged = "nothing unchanged"
+	carryChanged     = "changed"
+	carryOutside     = "finding outside reviewed files"
+	carryOpenOutside = "open blocking finding outside reviewed files"
+	carryUnchanged   = "nothing unchanged"
 )
 
 // planCarried decides whether the push run reviews only what changed since
@@ -164,12 +165,20 @@ func (d *dispatcher) setIncremental(ctx context.Context, last store.Run, in *inp
 // is on a file outside its files.reviewed (nothing keeps a model's finding
 // inside the diff, and carrying the other files would lose it on the next
 // push), and when nothing is left to carry. Dismissed findings count for the
-// last rule. The paths are sorted.
+// last rule, except a reference finding (see referenceFinding): pergent's
+// --check-deleted raises those outside the diff on purpose. A reference
+// finding that is a suggestion or was dismissed lets the skill carry, and is
+// lost from the merged result unless the new run reports it again. One that
+// is open and blocking does not: a carried deleted file gets no new reference
+// check, so losing it could approve the change. For the same reason a skill
+// with any open blocking finding carries none of its files.deleted, so their
+// batches check references again. The paths are sorted.
 //
 // Each skill that carries nothing is logged with the reason, so one that
 // falls back to a full review while the others carry can be told: "changed"
 // (a new or edited skill, or one it can't tell), "finding outside reviewed
-// files" or "nothing unchanged".
+// files", "open blocking finding outside reviewed files" or "nothing
+// unchanged".
 func carriedFiles(last *result.Result, lastHashes, hashes map[string]string, changed []string, ds []render.Dismissal, log *slog.Logger) map[string][]string {
 	changedSet := map[string]bool{}
 	for _, p := range changed {
@@ -181,6 +190,7 @@ func carriedFiles(last *result.Result, lastHashes, hashes map[string]string, cha
 	}
 	// ToRender and ApplyDismissals keep the order of last.Skills.
 	open := render.ApplyDismissals(result.ToRender(last), ds)
+	gone := gonePaths(last)
 
 	nothing := func(skill, reason string) {
 		log.Info("nothing carried for a skill", "skill", skill, "reason", reason)
@@ -204,7 +214,7 @@ func carriedFiles(last *result.Result, lastHashes, hashes map[string]string, cha
 		inside := true
 		for _, raw := range s.Findings {
 			var f result.Finding
-			if json.Unmarshal(raw, &f) != nil || !reviewed[f.File] {
+			if json.Unmarshal(raw, &f) != nil || !reviewed[f.File] && !referenceFinding(s, f.File, gone) {
 				inside = false
 				break
 			}
@@ -214,14 +224,30 @@ func carriedFiles(last *result.Result, lastHashes, hashes map[string]string, cha
 			continue
 		}
 		blocked := map[string]bool{}
+		openOutside := false
 		for _, f := range open[i].Findings {
 			if f.Severity == render.Blocking {
 				blocked[f.File] = true
+				openOutside = openOutside || !reviewed[f.File]
+			}
+		}
+		if openOutside {
+			nothing(s.Name, carryOpenOutside)
+			continue
+		}
+		// While the skill has an open blocker, its deleted files are reviewed
+		// again, so their batches check what still uses them: a blocker on a
+		// reviewed file about a carried deletion would get no new check.
+		var deleted map[string]bool
+		if len(blocked) > 0 {
+			deleted = map[string]bool{}
+			for _, p := range s.Files.Deleted {
+				deleted[p] = true
 			}
 		}
 		var files []string
 		for p := range reviewed {
-			if !changedSet[p] && !blocked[p] {
+			if !changedSet[p] && !blocked[p] && !deleted[p] {
 				files = append(files, p)
 			}
 		}
@@ -239,6 +265,38 @@ func carriedFiles(last *result.Result, lastHashes, hashes map[string]string, cha
 		}
 	}
 	return out
+}
+
+// referenceFinding reports whether a finding on file, outside skill s's
+// files.reviewed, is a reference finding: one on a remaining file that still
+// uses a file the change deleted or renamed. It is one when s lists deleted or
+// renamed paths (pergent's --check-deleted checked references for them) and
+// file names a file that can still be there: not empty and not in gone. With
+// neither list, as with the switch off or an older pergent, no finding is one.
+func referenceFinding(s result.Skill, file string, gone map[string]bool) bool {
+	return len(s.Files.Deleted)+len(s.Files.Renamed) > 0 && file != "" && !gone[file]
+}
+
+// gonePaths is every path the last review knows the change removed, in any
+// skill: the reviewed deletions, the old paths of renames, and the files
+// skipped as deleted. A finding on one is about the file itself, never a
+// reference to it.
+func gonePaths(last *result.Result) map[string]bool {
+	gone := map[string]bool{}
+	for _, s := range last.Skills {
+		for _, p := range s.Files.Deleted {
+			gone[p] = true
+		}
+		for _, r := range s.Files.Renamed {
+			gone[r.From] = true
+		}
+		for _, f := range s.Files.Skipped {
+			if f.Rule == "deleted" {
+				gone[f.Path] = true
+			}
+		}
+	}
+	return gone
 }
 
 // skillHashes is the SHA-256 of each skill's content, in hex. A run records

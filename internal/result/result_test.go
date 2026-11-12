@@ -995,3 +995,164 @@ func TestLeftOutCoveredBy(t *testing.T) {
 		}
 	}
 }
+
+const deletedResult = `{"schema_version":1,"status":"completed","skills":[
+  {"name":"a","verdict":"has_blocking_issues",
+   "findings":[{"id":"aaaaaa","fingerprint":"aaaaaa111111","file":"gone.go","line":3,"end_line":5,"severity":"blocking","title":"T","explanation":"E"}],
+   "files":{"reviewed":["gone.go","new/name.go"],"skipped":[],"not_reviewed":[],
+            "deleted":["gone.go"],"renamed":[{"path":"new/name.go","from":"old/name.go"}]}}],
+  "comment":{"markdown":"x"}}`
+
+func TestParseDeletedFields(t *testing.T) {
+	r, err := Parse([]byte(deletedResult))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := r.Skills[0].Files
+	if !slices.Equal(f.Deleted, []string{"gone.go"}) {
+		t.Errorf("Deleted = %v, want gone.go", f.Deleted)
+	}
+	if len(f.Renamed) != 1 || f.Renamed[0] != (Renamed{Path: "new/name.go", From: "old/name.go"}) {
+		t.Errorf("Renamed = %+v, want new/name.go from old/name.go", f.Renamed)
+	}
+
+	got := ToRender(r)[0]
+	if !slices.Equal(got.Deleted, []string{"gone.go"}) {
+		t.Errorf("render Deleted = %v, want gone.go", got.Deleted)
+	}
+	if len(got.Renamed) != 1 || got.Renamed[0] != (render.Rename{Path: "new/name.go", From: "old/name.go"}) {
+		t.Errorf("render Renamed = %+v", got.Renamed)
+	}
+}
+
+// Through the renderer a finding on a deleted file has no link and the Files
+// list marks the file.
+func TestToRenderDeletedFindingHasNoLink(t *testing.T) {
+	r, err := Parse([]byte(deletedResult))
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := func(path string, line, end int) string { return "https://example.test/blob/" + path }
+	out := render.Comment(ToRender(r), render.Options{Commit: "abc", FileURL: link})
+	if !strings.Contains(out, "gone.go (deleted), line 3") && !strings.Contains(out, "(deleted), lines 3") {
+		t.Errorf("the finding is not shown as on a deleted file:\n%s", out)
+	}
+	if strings.Contains(out, "example.test/blob/gone.go") {
+		t.Errorf("a finding on a deleted file has a link:\n%s", out)
+	}
+	if !strings.Contains(out, "(renamed from") {
+		t.Errorf("the Files list does not mark the rename:\n%s", out)
+	}
+}
+
+// A result from a pergent that has no check-deleted switch parses, renders
+// with no marks and is written back the way it came.
+func TestOldResultHasNoDeletedFields(t *testing.T) {
+	data := `{"schema_version":1,"status":"completed","skills":[
+	  {"name":"a","verdict":"no_blocking_issues","files":{"reviewed":["x.go"],"skipped":[{"path":"gone.go","rule":"deleted"}],"not_reviewed":[]}}],
+	  "comment":{"markdown":"x"}}`
+	r, err := Parse([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := r.Skills[0].Files
+	if f.Deleted != nil || f.Renamed != nil {
+		t.Errorf("Deleted = %v, Renamed = %v, want none", f.Deleted, f.Renamed)
+	}
+	rs := ToRender(r)[0]
+	if rs.Deleted != nil || rs.Renamed != nil {
+		t.Errorf("render Deleted = %v, Renamed = %v, want none", rs.Deleted, rs.Renamed)
+	}
+	out, err := json.Marshal(r.Skills[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), `"deleted":`) || strings.Contains(string(out), "renamed") {
+		t.Errorf("the skill is written with the new keys: %s", out)
+	}
+	if comment := render.Comment(ToRender(r), render.Options{Commit: "abc"}); strings.Contains(comment, "(deleted)") || strings.Contains(comment, "renamed from") {
+		t.Errorf("an old result renders with marks:\n%s", comment)
+	}
+}
+
+// A merge keeps what the new run said about deleted and renamed files, for a
+// skill that ran and for a carried one that started no run.
+func TestMergeKeepsDeletedFields(t *testing.T) {
+	base := incResult(t, fromSHA,
+		Skill{Name: "ran", Verdict: "no_blocking_issues", Files: Files{Reviewed: []string{"k.go"}}},
+		Skill{Name: "idle", Verdict: "no_blocking_issues", Files: Files{Reviewed: []string{"k.go"}}})
+	partial := incResult(t, "h",
+		Skill{Name: "ran", Verdict: "no_blocking_issues", Batches: 1, Files: Files{
+			Reviewed: []string{"gone.go", "b.go"}, Carried: []string{"k.go"},
+			Deleted: []string{"gone.go"}, Renamed: []Renamed{{Path: "b.go", From: "a.go"}}}},
+		Skill{Name: "idle", Verdict: "no_blocking_issues", Files: Files{
+			Reviewed: []string{}, Carried: []string{"k.go"},
+			Deleted: []string{"gone.go"}, Renamed: []Renamed{{Path: "b.go", From: "a.go"}}}})
+
+	for _, s := range mergeIncremental(t, partial, base).Skills {
+		if !slices.Equal(s.Files.Deleted, []string{"gone.go"}) || len(s.Files.Renamed) != 1 || s.Files.Renamed[0] != (Renamed{Path: "b.go", From: "a.go"}) {
+			t.Errorf("skill %s: deleted = %v, renamed = %+v, want the new run's", s.Name, s.Files.Deleted, s.Files.Renamed)
+		}
+	}
+
+	// With neither field the merged skill has neither key.
+	plain := incResult(t, "h", Skill{Name: "ran", Verdict: "no_blocking_issues", Batches: 1, Files: Files{Reviewed: []string{"b.go"}, Carried: []string{"k.go"}}})
+	out, err := MergeIncremental(plain, incResult(t, fromSHA, Skill{Name: "ran", Verdict: "no_blocking_issues", Files: Files{Reviewed: []string{"k.go"}}}), fromSHA, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), `"deleted":`) || strings.Contains(string(out), `"renamed"`) {
+		t.Errorf("a merge of a result without the fields wrote them: %s", out)
+	}
+}
+
+// A file deleted in an earlier push and carried is still a reviewed deletion;
+// a renamed one is still marked. A file the new run reviewed again takes the
+// new run's word, so a restored file does not inherit the mark.
+func TestMergeKeepsCarriedDeletions(t *testing.T) {
+	base := incResult(t, fromSHA,
+		Skill{Name: "ran", Verdict: "no_blocking_issues", Files: Files{
+			Reviewed: []string{"gone.go", "gone2.go", "b.go", "c.go", "plain.go"},
+			Deleted:  []string{"gone.go", "gone2.go"},
+			Renamed:  []Renamed{{Path: "b.go", From: "a.go"}, {Path: "c.go", From: "z.go"}}}},
+		Skill{Name: "idle", Verdict: "no_blocking_issues", Files: Files{
+			Reviewed: []string{"gone.go"}, Deleted: []string{"gone.go"}}})
+	partial := incResult(t, "h",
+		Skill{Name: "ran", Verdict: "no_blocking_issues", Batches: 1, Files: Files{
+			// gone2.go came back in this push and c.go was edited again.
+			Reviewed: []string{"gone2.go", "c.go", "new.go"},
+			Carried:  []string{"gone.go", "b.go", "plain.go"},
+			Deleted:  []string{"new.go"}}},
+		Skill{Name: "idle", Verdict: "no_blocking_issues", Files: Files{Reviewed: []string{}, Carried: []string{"gone.go"}}})
+
+	r := mergeIncremental(t, partial, base)
+	ran, idle := r.Skills[0].Files, r.Skills[1].Files
+	if !slices.Equal(ran.Deleted, []string{"new.go", "gone.go"}) {
+		t.Errorf("deleted = %v, want the new run's, then the carried deletion; not the restored gone2.go", ran.Deleted)
+	}
+	if len(ran.Renamed) != 1 || ran.Renamed[0] != (Renamed{Path: "b.go", From: "a.go"}) {
+		t.Errorf("renamed = %+v, want only the carried b.go (c.go was reviewed again)", ran.Renamed)
+	}
+	if !slices.Equal(idle.Deleted, []string{"gone.go"}) {
+		t.Errorf("idle deleted = %v, want gone.go", idle.Deleted)
+	}
+
+	// Through the renderer the carried deletion keeps its mark and has no link.
+	comment := render.Comment(ToRender(r), render.Options{Commit: "abc"})
+	if !strings.Contains(comment, "`gone.go` (deleted)") {
+		t.Errorf("the Files list lost the mark:\n%s", comment)
+	}
+}
+
+// A base with neither field gives the merge it gave before.
+func TestMergeWithoutDeletedFieldsIsUnchanged(t *testing.T) {
+	base := incResult(t, fromSHA, Skill{Name: "sec", Verdict: "no_blocking_issues", Files: Files{Reviewed: []string{"k.go", "m.go"}}})
+	partial := incResult(t, "h", Skill{Name: "sec", Verdict: "no_blocking_issues", Batches: 1, Files: Files{Reviewed: []string{"n.go"}, Carried: []string{"k.go"}}})
+	out, err := MergeIncremental(partial, base, fromSHA, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), `"deleted"`) || strings.Contains(string(out), `"renamed"`) {
+		t.Errorf("the merge wrote the new keys: %s", out)
+	}
+}

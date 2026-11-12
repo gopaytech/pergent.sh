@@ -90,7 +90,7 @@ func get(t *testing.T, r *Resolver, instance, project string) Effective {
 }
 
 var allKeys = []string{KeyApprove, KeyReviewDrafts, KeyInlineFindings, KeyFailureStatus, KeySkills, KeyJobTimeout, KeyMaxTurns, KeyJobMemory,
-	KeyRerunLimitPerMR, KeyRerunLimitPerRepo, KeyRepoSkills, KeyCommandsAuthorAndMaintainersOnly, KeyIncrementalReviews, KeyLearnFromDismissals, KeyQuietReviews, KeyCommentLayout, KeyLinkedReposEnabled, KeyMonthlyTokenQuota}
+	KeyRerunLimitPerMR, KeyRerunLimitPerRepo, KeyRepoSkills, KeyCommandsAuthorAndMaintainersOnly, KeyIncrementalReviews, KeyLearnFromDismissals, KeyQuietReviews, KeyCheckDeleted, KeyCommentLayout, KeyLinkedReposEnabled, KeyMonthlyTokenQuota}
 
 // wantOverridden checks exactly the given keys are overridden.
 func wantOverridden(t *testing.T, eff Effective, keys ...string) {
@@ -126,6 +126,9 @@ func wantDefaults(t *testing.T, eff Effective, except ...string) {
 	}
 	if !skip(KeyQuietReviews) && eff.QuietReviews {
 		t.Errorf("QuietReviews = true, want the default false")
+	}
+	if !skip(KeyCheckDeleted) && eff.CheckDeleted {
+		t.Errorf("CheckDeleted = true, want the default false")
 	}
 	if !skip(KeyCommentLayout) && eff.CommentLayout != nil {
 		t.Errorf("CommentLayout = %q, want nil (the default layout)", eff.CommentLayout)
@@ -174,7 +177,7 @@ func TestResolverConfigKeys(t *testing.T) {
 		MaxTurns:        ptr(120),
 		JobMemory:       ptr(resource.MustParse("6Gi")),
 		RerunLimitPerMR: ptr(20), RerunLimitPerRepo: ptr(100),
-		CommandsAuthorAndMaintainersOnly: ptr(false), IncrementalReviews: ptr(false), LearnFromDismissals: ptr(false), QuietReviews: ptr(true),
+		CommandsAuthorAndMaintainersOnly: ptr(false), IncrementalReviews: ptr(false), LearnFromDismissals: ptr(false), QuietReviews: ptr(true), CheckDeleted: ptr(true),
 		CommentLayout:      []string{"findings:open", "files:collapsed"},
 		LinkedReposEnabled: ptr(true),
 		MonthlyTokenQuota:  ptr(int64(5000)),
@@ -195,6 +198,9 @@ func TestResolverConfigKeys(t *testing.T) {
 	}
 	if !eff.LinkedReposEnabled {
 		t.Errorf("LinkedReposEnabled = false, want true")
+	}
+	if !eff.CheckDeleted {
+		t.Errorf("CheckDeleted = false, want true")
 	}
 	if eff.MonthlyTokenQuota == nil || *eff.MonthlyTokenQuota != 5000 {
 		t.Errorf("MonthlyTokenQuota = %v, want 5000", eff.MonthlyTokenQuota)
@@ -258,7 +264,7 @@ func TestResolverDefaultsAndOverrides(t *testing.T) {
 		Instance: "gh", Project: "Acme/Gadgets",
 		Approve: ptr(true), ReviewDrafts: ptr(false), InlineFindings: ptr(false), FailureStatus: ptr("neutral"),
 		Skills: []string{"security"}, RepoSkills: []string{"team"}, JobTimeoutSeconds: ptr(1200), MaxTurns: ptr(120), JobMemory: ptr("6Gi"),
-		RerunLimitPerMR: ptr(20), RerunLimitPerRepo: ptr(100), CommandsAuthorAndMaintainersOnly: ptr(false), IncrementalReviews: ptr(false), LearnFromDismissals: ptr(false), QuietReviews: ptr(true),
+		RerunLimitPerMR: ptr(20), RerunLimitPerRepo: ptr(100), CommandsAuthorAndMaintainersOnly: ptr(false), IncrementalReviews: ptr(false), LearnFromDismissals: ptr(false), QuietReviews: ptr(true), CheckDeleted: ptr(true),
 		CommentLayout:      []string{"findings:open", "files:collapsed"},
 		LinkedReposEnabled: ptr(true),
 		MonthlyTokenQuota:  ptr(int64(5000)),
@@ -292,6 +298,9 @@ func TestResolverDefaultsAndOverrides(t *testing.T) {
 	}
 	if !full.LinkedReposEnabled {
 		t.Errorf("LinkedReposEnabled = false, want true")
+	}
+	if !full.CheckDeleted {
+		t.Errorf("CheckDeleted = false, want true")
 	}
 	if full.MonthlyTokenQuota == nil || *full.MonthlyTokenQuota != 5000 {
 		t.Errorf("MonthlyTokenQuota = %v, want 5000", full.MonthlyTokenQuota)
@@ -584,6 +593,47 @@ func TestResolverQuietReviewsDashboard(t *testing.T) {
 			}
 			if eff.QuietReviews != c.want || eff.Overridden[KeyQuietReviews] != c.overridn {
 				t.Errorf("QuietReviews = %v, overridden = %v; want %v, %v", eff.QuietReviews, eff.Overridden[KeyQuietReviews], c.want, c.overridn)
+			}
+		})
+	}
+}
+
+func TestResolverCheckDeletedConfig(t *testing.T) {
+	cfg := testConfig()
+	cfg.Repositories = append(cfg.Repositories, config.Repository{GitHub: "gh", Project: "Acme/Deleted", CheckDeleted: ptr(true)})
+	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)} // no store: config only
+
+	unset := get(t, r, "main", "acme/widgets")
+	if unset.CheckDeleted || unset.Overridden[KeyCheckDeleted] {
+		t.Errorf("unset: CheckDeleted = %v, overridden = %v; want false, false", unset.CheckDeleted, unset.Overridden[KeyCheckDeleted])
+	}
+	on := get(t, r, "gh", "acme/deleted")
+	if !on.CheckDeleted || !on.Overridden[KeyCheckDeleted] {
+		t.Errorf("true: CheckDeleted = %v, overridden = %v; want true, true", on.CheckDeleted, on.Overridden[KeyCheckDeleted])
+	}
+}
+
+func TestResolverCheckDeletedDashboard(t *testing.T) {
+	cfg := testConfig()
+	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)}
+	cases := []struct {
+		name           string
+		row            *bool
+		want, overridn bool
+	}{
+		{"unset", nil, false, false},
+		{"on", ptr(true), true, true},
+		{"off", ptr(false), false, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			row := store.DashboardRepo{Instance: "main", Project: "acme/widgets", CheckDeleted: c.row}
+			eff, ok := r.fromDashboard(row, store.RepoDefaults{})
+			if !ok {
+				t.Fatal("fromDashboard: not ok")
+			}
+			if eff.CheckDeleted != c.want || eff.Overridden[KeyCheckDeleted] != c.overridn {
+				t.Errorf("CheckDeleted = %v, overridden = %v; want %v, %v", eff.CheckDeleted, eff.Overridden[KeyCheckDeleted], c.want, c.overridn)
 			}
 		})
 	}

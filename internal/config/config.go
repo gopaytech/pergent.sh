@@ -232,6 +232,10 @@ type Repository struct {
 	// QuietReviews is whether a review says less: the model is told to leave
 	// out nitpicks and the comment is shorter (default false).
 	QuietReviews *bool
+	// CheckDeleted is whether a review also reads the lines a change deletes
+	// and checks what still uses deleted files and renamed files' old paths
+	// (default false).
+	CheckDeleted *bool
 	// CommentLayout is the shape of the review comment, "block:state" entries
 	// in order, checked by render.ParseLayout (nil: the default layout).
 	CommentLayout []string
@@ -323,6 +327,7 @@ type fileRepository struct {
 	IncrementalReviews               *bool `yaml:"incremental_reviews"`
 	LearnFromDismissals              *bool `yaml:"learn_from_dismissals"`
 	QuietReviews                     *bool `yaml:"quiet_reviews"`
+	CheckDeleted                     *bool `yaml:"check_deleted"`
 
 	CommentLayout LayoutEntries `yaml:"comment_layout"`
 
@@ -354,6 +359,7 @@ func (f fileRepository) repository() Repository {
 		IncrementalReviews:               f.IncrementalReviews,
 		LearnFromDismissals:              f.LearnFromDismissals,
 		QuietReviews:                     f.QuietReviews,
+		CheckDeleted:                     f.CheckDeleted,
 		CommentLayout:                    []string(f.CommentLayout),
 		LinkedReposEnabled:               f.LinkedReposEnabled,
 		TrustedAuthorsOnly:               f.TrustedAuthorsOnly,
