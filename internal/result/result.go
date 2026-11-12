@@ -159,6 +159,18 @@ type Files struct {
 	Carried     []string          `json:"carried,omitempty"`
 	Skipped     []Skipped         `json:"skipped"`
 	NotReviewed []json.RawMessage `json:"not_reviewed"`
+	// Deleted lists the reviewed files the change deleted, and Renamed the
+	// pure renames whose old path was checked. Both are written by pergent's
+	// --check-deleted and are absent from an older result.
+	Deleted []string  `json:"deleted,omitempty"`
+	Renamed []Renamed `json:"renamed,omitempty"`
+}
+
+// Renamed is a reviewed file the change renamed: Path is its new path, which
+// files.reviewed also lists, and From the old one.
+type Renamed struct {
+	Path string `json:"path"`
+	From string `json:"from"`
 }
 
 // Skipped is a file left out of a review, and the rule that left it out.
@@ -256,6 +268,10 @@ func ToRender(r *Result) []render.Skill {
 		}
 		for _, f := range s.Files.Skipped {
 			rs.Skipped = append(rs.Skipped, render.Skipped{Path: f.Path, Rule: f.Rule})
+		}
+		rs.Deleted = s.Files.Deleted
+		for _, f := range s.Files.Renamed {
+			rs.Renamed = append(rs.Renamed, render.Rename{Path: f.Path, From: f.From})
 		}
 		for _, sum := range s.Summaries {
 			rs.Summaries = append(rs.Summaries, render.Summary{Batch: sum.Batch, Text: sum.Text})

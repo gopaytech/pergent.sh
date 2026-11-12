@@ -1797,3 +1797,25 @@ func TestFooterNoteCantMention(t *testing.T) {
 		}
 	}
 }
+
+// A reviewed deletion is a reviewed file: nothing in it blocks approval.
+func TestReviewedDeletionApproves(t *testing.T) {
+	r := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{
+		Reviewed: []string{"gone.go"}, Deleted: []string{"gone.go"},
+		Renamed: []result.Renamed{{Path: "new.go", From: "old.go"}}}})
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	if d.Status != StatusSuccess || !d.Approve {
+		t.Errorf("decision = %+v, want success and approve", d)
+	}
+}
+
+// A deletion the review left out (binary, empty, beyond the cap) still keeps
+// the change from being approved.
+func TestSkippedDeletionStillBlocks(t *testing.T) {
+	r := completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{
+		Reviewed: []string{"f.go"}, Skipped: []result.Skipped{{Path: "gone.bin", Rule: "deleted"}}}})
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	if d.Status != StatusSuccess || d.Approve {
+		t.Errorf("decision = %+v, want success and no approval", d)
+	}
+}

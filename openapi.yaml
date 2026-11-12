@@ -5835,6 +5835,14 @@ components:
               path: {type: string}
               cause: {type: string}
           description: Entries have a `path` and a `cause`.
+        deleted:
+          type: array
+          items: {type: string}
+          description: The reviewed files the change deleted. Written by pergent's `--check-deleted`; absent without it.
+        renamed:
+          type: array
+          items: {$ref: '#/components/schemas/result.Renamed'}
+          description: The reviewed files the change renamed whose old path was checked. Written by pergent's `--check-deleted`; absent without it.
       additionalProperties: true
     result.Finding:
       description: One finding of a skill. pergent.sh reads these fields; the finding may carry others.
@@ -5946,6 +5954,13 @@ components:
           type: integer
           description: The model's own score, 1 to 5 (0 when it gave none).
         confidence_reason: {type: string}
+      additionalProperties: true
+    result.Renamed:
+      description: A reviewed file the change renamed. `path` is its new path, which `reviewed` also lists.
+      type: object
+      properties:
+        path: {type: string}
+        from: {type: string}
       additionalProperties: true
     result.Skipped:
       description: A file left out of a review, and the rule that left it out.
