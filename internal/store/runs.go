@@ -144,7 +144,21 @@ type Run struct {
 	// Nil is none, for a run from before the column or one that never
 	// started.
 	LinkedRepos []Link
+	// Kind is KindMR for a merge request's review and KindAPI for one asked
+	// for through the review API (see EnqueueAPIReview); APIClientID is the
+	// client of an API review, nil for a merge request's.
+	Kind        string
+	APIClientID *int64
 }
+
+// What a run reviews (Run.Kind).
+const (
+	// KindMR is a merge request's review.
+	KindMR = "mr"
+	// KindAPI is a review asked for through the review API: it has no merge
+	// request (instance '', project 0, and a number of its own as mr_iid).
+	KindAPI = "api"
+)
 
 // How a run came to be (Run.Trigger).
 const (
@@ -175,12 +189,17 @@ const (
 	// OutcomeWaiting is a run held until someone with write access starts it.
 	OutcomeWaiting = "waiting"
 	OutcomeUnknown = "unknown"
+
+	// OutcomeNothingReviewed is an API review in which no skill reviewed a
+	// file: never a pass.
+	OutcomeNothingReviewed = "nothing_reviewed"
 )
 
 // RunDecision is what the publisher decided for a run.
 type RunDecision struct {
 	// Outcome is OutcomeApproved, OutcomeBlocking, OutcomeDraft,
-	// OutcomeNoBlocking or OutcomeFailed.
+	// OutcomeNoBlocking or OutcomeFailed, or OutcomeNothingReviewed for an
+	// API review.
 	Outcome string
 	// Reason says why, in a sentence ("" when approved).
 	Reason string
@@ -222,7 +241,7 @@ const runColumns = `id::text, instance, project_id, mr_iid, project_path, head_s
 	title, web_url, source_branch, author, model, skill_sources,
 	outcome, outcome_reason, decision_status, approved, trigger, skill_subset, base_run_id::text,
 	skill_versions, skip_reason, max_turns, incremental, skill_hashes, quiet_reviews, comment_layout,
-	linked_repos, provider, failure_step, failure_detail, pod_name, checkout_seen, quota_checked`
+	linked_repos, provider, failure_step, failure_detail, pod_name, checkout_seen, quota_checked, kind, api_client_id`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var (
@@ -239,7 +258,7 @@ func scanRun(row pgx.Row) (Run, error) {
 		&r.Title, &r.WebURL, &r.SourceBranch, &r.Author, &r.Model, &sources,
 		&r.Outcome, &r.OutcomeReason, &r.DecisionStatus, &r.Approved, &r.Trigger, &r.SkillSubset, &r.BaseRunID,
 		&versions, &r.SkipReason, &r.MaxTurns, &r.Incremental, &hashes, &quiet, &r.CommentLayout, &links, &r.Provider,
-		&r.FailureStep, &r.FailureDetail, &r.PodName, &r.CheckoutSeen, &r.QuotaChecked)
+		&r.FailureStep, &r.FailureDetail, &r.PodName, &r.CheckoutSeen, &r.QuotaChecked, &r.Kind, &r.APIClientID)
 	if err != nil {
 		return Run{}, err
 	}
@@ -600,6 +619,11 @@ func (s *Store) CountRunning(ctx context.Context) (int, error) {
 // returns them, oldest first. Concurrent callers never claim the same run.
 // The runs of the instances in skip are left alone, queued and unclaimed, so
 // runs that have to wait for an instance take no slot from the others.
+//
+// An API review is claimed only while its client has fewer than its
+// max_in_flight reviews running, counting those this claim takes: its due
+// reviews are numbered oldest first, and those past the cap stay queued and
+// take no slot either. A merge request's run is never held by it.
 func (s *Store) ClaimQueued(ctx context.Context, limit int, now time.Time, skip ...string) ([]Run, error) {
 	if limit <= 0 {
 		return nil, nil
@@ -607,10 +631,22 @@ func (s *Store) ClaimQueued(ctx context.Context, limit int, now time.Time, skip 
 	if skip == nil {
 		skip = []string{} // an empty array, not NULL: `<> ALL(NULL)` is never true
 	}
+	// A query with a window function can't lock rows, so the runs it picks
+	// are locked by the select around it, which checks the claim's conditions
+	// again: a run claimed meanwhile is skipped as before.
 	rows, err := s.pool.Query(ctx, `UPDATE runs SET state = 'running', claimed_at = $2 WHERE id IN (
 			SELECT id FROM runs WHERE state = 'queued' AND (not_before IS NULL OR not_before <= $2)
 			  AND instance <> ALL($3::text[])
-			ORDER BY created_at, id LIMIT $1 FOR UPDATE SKIP LOCKED)
+			  AND id IN (
+				SELECT q.id FROM (
+					SELECT id, kind, api_client_id,
+						row_number() OVER (PARTITION BY api_client_id ORDER BY created_at, id) AS n
+					FROM runs WHERE state = 'queued' AND (not_before IS NULL OR not_before <= $2)
+					  AND instance <> ALL($3::text[])) q
+				WHERE q.kind = 'mr'
+				   OR q.n + (SELECT count(*) FROM runs x WHERE x.api_client_id = q.api_client_id AND x.state = 'running')
+					<= (SELECT c.max_in_flight FROM api_clients c WHERE c.id = q.api_client_id))
+			ORDER BY created_at, id LIMIT $1 FOR UPDATE OF runs SKIP LOCKED)
 		RETURNING `+runColumns, limit, now, skip)
 	if err != nil {
 		return nil, err
@@ -1238,14 +1274,17 @@ func (s *Store) queryRuns(ctx context.Context, sql string, args ...any) ([]Run, 
 // Republish flagged meanwhile stays reported instead, once, with no
 // attempts counted and due now, so the publisher decides it again.
 func (s *Store) MarkPublished(ctx context.Context, id string, dec RunDecision) error {
-	return s.mustUpdate(ctx, id, `UPDATE runs SET
-			state = CASE WHEN redecide THEN 'reported' ELSE 'published' END,
-			attempts = CASE WHEN redecide THEN 0 ELSE attempts END,
-			not_before = CASE WHEN redecide THEN NULL ELSE not_before END,
-			publish_error = '', redecide = false,
-			outcome = $2, outcome_reason = $3, decision_status = $4, approved = $5
-		WHERE id = $1::uuid AND state = 'reported'`, id, dec.Outcome, dec.Reason, dec.Status, dec.Approved)
+	return s.mustUpdate(ctx, id, markPublishedSQL, id, dec.Outcome, dec.Reason, dec.Status, dec.Approved)
 }
+
+// markPublishedSQL is MarkPublished's update, which FinishAPIReview shares.
+const markPublishedSQL = `UPDATE runs SET
+		state = CASE WHEN redecide THEN 'reported' ELSE 'published' END,
+		attempts = CASE WHEN redecide THEN 0 ELSE attempts END,
+		not_before = CASE WHEN redecide THEN NULL ELSE not_before END,
+		publish_error = '', redecide = false,
+		outcome = $2, outcome_reason = $3, decision_status = $4, approved = $5
+	WHERE id = $1::uuid AND state = 'reported'`
 
 // PublishRetry records a failed publish: the run is tried again at notBefore,
 // or becomes publish_failed when this was the 10th failed attempt, which it

@@ -39,7 +39,8 @@ const (
 // captureLog), whether its run is still running or already reported.
 //
 // It also records the checkout time a Job measured, the Job's pod and how far
-// its checkout got, and requeues runs claimed
+// its checkout got, deletes an API review's files once its checkout is done
+// (or its Job is reported), and requeues runs claimed
 // over 5 minutes ago that never got a Job. A result that wins the race with a
 // report is kept. One Job the cluster can't be asked about is logged and
 // skipped; the returned error joins store failures.
@@ -105,6 +106,12 @@ func (e *Engine) watch(ctx context.Context, run store.Run, now time.Time) (bool,
 			log.Info("couldn't record how far the checkout got", "error", e.redact(err.Error()))
 		}
 	}
+	// An API review's files are read by its checkout alone: they go once it
+	// is done.
+	isAPI := run.Kind == store.KindAPI
+	if isAPI && run.CheckoutSeen < 2 && seen >= 2 {
+		e.deleteFiles(ctx, run, log)
+	}
 	if obs.Failure.Deadline {
 		if obs.Failure.Step == kube.StepClone {
 			// The deadline killed the checkout.
@@ -120,8 +127,9 @@ func (e *Engine) watch(ctx context.Context, run store.Run, now time.Time) (bool,
 
 	// The checkout container also clones the linked repositories of a run that
 	// has them: that time is not the repository's, and would lengthen the
-	// deadline of a later review that clones nothing else.
-	if obs.Clone > 0 && len(run.LinkedRepos) == 0 {
+	// deadline of a later review that clones nothing else. An API review
+	// clones nothing and has no repository.
+	if obs.Clone > 0 && len(run.LinkedRepos) == 0 && !isAPI {
 		seconds := int((obs.Clone + time.Second - 1) / time.Second)
 		if err := e.Store.SetCloneSeconds(ctx, run.MR.Instance, run.MR.ProjectID, seconds); err != nil {
 			log.Warn("couldn't record the checkout time", "error", e.redact(err.Error()))
@@ -158,6 +166,11 @@ func (e *Engine) watch(ctx context.Context, run store.Run, now time.Time) (bool,
 		return false, nil
 	}
 
+	if isAPI {
+		// The Job can't read them any more; its deletion would remove them
+		// only later.
+		e.deleteFiles(ctx, run, log)
+	}
 	changed, err := e.Store.ReportFailure(ctx, run.ID, store.Failure{Reason: f.Reason, Step: f.Step, Detail: f.Detail}, now)
 	if err != nil {
 		return false, fmt.Errorf("report failure: %w", err)
@@ -167,6 +180,10 @@ func (e *Engine) watch(ctx context.Context, run store.Run, now time.Time) (bool,
 		return false, nil
 	}
 	log.Warn("review job ended without a result; run reported as failed", "reason", f.Reason, "step", f.Step)
+	if isAPI {
+		// No repository to raise a "Needs attention" item on.
+		return true, nil
+	}
 	if strings.Contains(f.Reason, "OOMKilled") {
 		e.refreshOutOfMemory(ctx, run.MR.Instance, run.ProjectPath)
 	}

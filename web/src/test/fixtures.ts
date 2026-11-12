@@ -1,5 +1,7 @@
 import type {
   APIClientRow,
+  APIReviewDetail,
+  APIReviewRow,
   APIClientView,
   APIKeyView,
   AuditPageView,
@@ -726,17 +728,32 @@ const tok = (inn: number, out: number, apart = { cacheRead: 0, cacheWrite: 0, re
 // off since (its usage is kept, it has no detail page).
 export const usageOverview: UsageOverviewView = {
   days: 30,
-  tokens: tok(1_200_000, 300_000, { cacheRead: 500_000, cacheWrite: 20_000, reasoning: 0, unknown: 0 }),
-  reviews: 40,
+  // The repositories (1,200k in, 300k out) plus the clients (55k in, 11k out); the reviews are 40 + 8.
+  tokens: tok(1_255_000, 311_000, { cacheRead: 500_000, cacheWrite: 20_000, reasoning: 0, unknown: 0 }),
+  reviews: 48,
   daily: [
     { day: "2026-11-05", tokens: tok(200_000, 50_000) },
     { day: "2026-11-06", tokens: tok(600_000, 150_000) },
-    { day: "2026-11-07", tokens: tok(400_000, 100_000) },
+    { day: "2026-11-07", tokens: tok(455_000, 111_000) },
   ],
   repositories: [
     { instance: "main", project: "acme/payments", switchedOn: true, tokens: tok(900_000, 200_000), reviews: 30 },
     { instance: "main", project: "acme/widgets", switchedOn: true, tokens: tok(200_000, 80_000), reviews: 8 },
     { instance: "main", project: "acme/old", switchedOn: false, tokens: tok(100_000, 20_000), reviews: 2 },
+  ],
+  clients: [
+    {
+      name: "fastgateway",
+      tokens: tok(50_000, 10_000),
+      reviews: 6,
+      tenants: [
+        { tenant: "acme", tokens: tok(40_000, 8_000), reviews: 4 },
+        { tenant: "<img src=x onerror=alert(1)>", tokens: tok(10_000, 2_000), reviews: 1 },
+        { tenant: "", tokens: tok(0, 0), reviews: 1 },
+      ],
+      moreTenants: 0,
+    },
+    { name: "docs-bot", tokens: tok(5_000, 1_000), reviews: 2, tenants: [{ tenant: "beta", tokens: tok(5_000, 1_000), reviews: 2 }], moreTenants: 7 },
   ],
 };
 
@@ -803,6 +820,137 @@ export const apiClientFastgateway: APIClientView = {
 };
 
 export const apiClientRows: APIClientRow[] = [
-  { name: "fastgateway", keys: 2 },
-  { name: "docs-bot", keys: 0 },
+  { name: "fastgateway", keys: 2, reviewsThisMonth: 42, failedThisMonth: 3, tokensThisMonth: 1_250_000 },
+  { name: "docs-bot", keys: 0, reviewsThisMonth: 0, failedThisMonth: 0, tokensThisMonth: 0 },
 ];
+
+// --- API reviews ---
+
+export const apiReviewRowDone: APIReviewRow = {
+  id: "0f1e2d3c4b5a",
+  tenant: "payments",
+  subject: "change-1042",
+  title: "Add the retry loop",
+  status: "completed",
+  verdict: "has_blocking_issues",
+  createdAt: "2026-11-10T09:00:00Z",
+  finishedAt: "2026-11-10T09:04:00Z",
+};
+
+// A review that has not started: no verdict, not finished.
+export const apiReviewRowQueued: APIReviewRow = {
+  id: "9a8b7c6d5e4f",
+  tenant: "",
+  subject: "change-1043",
+  title: "Rename the ledger",
+  status: "queued",
+  verdict: "",
+  createdAt: "2026-11-10T10:00:00Z",
+  finishedAt: null,
+};
+
+export const apiReviewRows: APIReviewRow[] = [apiReviewRowQueued, apiReviewRowDone];
+
+// A completed review: one skill with a blocking finding (every text field
+// set, one of them HTML), a suggestion and a dismissed finding, and files
+// reviewed, skipped and not reviewed.
+export const apiReviewDone: APIReviewDetail = {
+  id: "0f1e2d3c4b5a",
+  client: "fastgateway",
+  tenant: "payments",
+  subject: "change-1042",
+  title: "Add the retry loop",
+  keyName: "ci",
+  status: "completed",
+  model: "claude-sonnet",
+  createdAt: "2026-11-10T09:00:00Z",
+  finishedAt: "2026-11-10T09:04:00Z",
+  failure: null,
+  callback: { state: "none", attempts: [] },
+  history: [],
+  dismissals: [],
+  review: {
+    id: "0f1e2d3c4b5a",
+    subject: "change-1042",
+    tenant: "payments",
+    title: "Add the retry loop",
+    status: "completed",
+    created_at: "2026-11-10T09:00:00Z",
+    finished_at: "2026-11-10T09:04:00Z",
+    verdict: "has_blocking_issues",
+    usage: { tokens_in: 12_000, tokens_out: 3_400 },
+    skills: [
+      {
+        name: "code-review",
+        verdict: "has_blocking_issues",
+        findings: [
+          {
+            id: "f1",
+            fingerprint: "aa11",
+            file: "internal/ledger/retry.go",
+            line: 42,
+            end_line: 45,
+            severity: "blocking",
+            title: "The loop never stops",
+            explanation: "It retries on every error, <b>forever</b>.",
+            fix: "Stop after 3 tries.",
+            suggestion: "for i := 0; i < 3; i++ {",
+          },
+          {
+            id: "f2",
+            fingerprint: "bb22",
+            file: "internal/ledger/names.go",
+            severity: "suggestion",
+            title: "Name it better",
+            explanation: "The name hides what it does.",
+          },
+          {
+            id: "f3",
+            fingerprint: "cc33",
+            file: "internal/ledger/old.go",
+            line: 7,
+            severity: "suggestion",
+            title: "Old style",
+            explanation: "Use the newer call.",
+            dismissed: { reason: "we keep it on purpose", at: "2026-11-09T12:00:00Z" },
+          },
+        ],
+        files: {
+          reviewed: ["internal/ledger/retry.go", "internal/ledger/names.go"],
+          skipped: [{ path: "go.sum", rule: "lockfile" }],
+          not_reviewed: [{ path: "internal/ledger/big.go", reason: "context overflow" }],
+        },
+      },
+    ],
+  },
+};
+
+// A review that failed while its Job ran: the caller's reason and an admin's
+// detail.
+export const apiReviewFailed: APIReviewDetail = {
+  id: "5e4d3c2b1a09",
+  client: "fastgateway",
+  tenant: "",
+  subject: "change-1044",
+  title: "",
+  keyName: "ci",
+  status: "failed",
+  model: null,
+  createdAt: "2026-11-10T11:00:00Z",
+  finishedAt: "2026-11-10T11:01:00Z",
+  failure: { step: "starting", reason: "the checkout failed", detail: "fatal: bad object <b>abc</b>" },
+  callback: { state: "none", attempts: [] },
+  history: [],
+  dismissals: [],
+  review: {
+    id: "5e4d3c2b1a09",
+    subject: "change-1044",
+    tenant: "",
+    title: "",
+    status: "failed",
+    created_at: "2026-11-10T11:00:00Z",
+    finished_at: "2026-11-10T11:01:00Z",
+    verdict: "failed",
+    failure: { step: "starting", reason: "the checkout failed" },
+  },
+};

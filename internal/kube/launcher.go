@@ -25,14 +25,19 @@ type Launcher struct {
 	LogStream func(ctx context.Context, pod, container string, tailLines int64) (io.ReadCloser, error)
 }
 
-// Launch creates the Job suspended, then its Secret and ConfigMap owned by it,
-// then unsuspends it, so the pod never starts without its inputs. If anything
+// Launch creates the Job suspended, then its Secret and ConfigMap owned by it
+// (and, for an API review, the Secret of its files), then unsuspends it, so the
+// pod never starts without its inputs. A stream over FilesSecretMaxBytes is
+// refused before anything is created. If anything
 // fails after the Job exists, the Job (and with it the Secret and ConfigMap) is
 // deleted and the original error returned.
 func (l *Launcher) Launch(ctx context.Context, p JobParams, s Secrets) error {
 	p.Namespace = l.Namespace
 	if err := checkLinkedClones(p.LinkedClones); err != nil {
 		return err
+	}
+	if len(p.Import) > FilesSecretMaxBytes {
+		return fmt.Errorf("the files of job %s are %d bytes; a Secret holds at most %d", p.Name, len(p.Import), FilesSecretMaxBytes)
 	}
 
 	job := BuildJob(p)
@@ -58,6 +63,11 @@ func (l *Launcher) attachAndStart(ctx context.Context, p JobParams, s Secrets, j
 	}
 	if _, err := l.Client.CoreV1().ConfigMaps(l.Namespace).Create(ctx, BuildConfigMap(p, job), metav1.CreateOptions{}); err != nil {
 		return fmt.Errorf("create inputs for job %s: %w", p.Name, err)
+	}
+	if p.Import != nil {
+		if _, err := l.Client.CoreV1().Secrets(l.Namespace).Create(ctx, BuildFilesSecret(p, job), metav1.CreateOptions{}); err != nil {
+			return fmt.Errorf("create files for job %s: %w", p.Name, err)
+		}
 	}
 	patch := []byte(`{"spec":{"suspend":false}}`)
 	if _, err := l.Client.BatchV1().Jobs(l.Namespace).Patch(ctx, p.Name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
@@ -105,6 +115,17 @@ func (l *Launcher) Delete(ctx context.Context, name string) error {
 	err := l.Client.BatchV1().Jobs(l.Namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &policy})
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete job %s: %w", name, err)
+	}
+	return nil
+}
+
+// DeleteFiles removes the Secret of an API review's files, which the Job's
+// deletion would remove in the end. A Secret that is already gone is not an
+// error.
+func (l *Launcher) DeleteFiles(ctx context.Context, jobName string) error {
+	err := l.Client.CoreV1().Secrets(l.Namespace).Delete(ctx, filesName(JobParams{Name: jobName}), metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete the files of job %s: %w", jobName, err)
 	}
 	return nil
 }

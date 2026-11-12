@@ -351,3 +351,95 @@ func TestSnapshotOfLeavesOutUnknownCounts(t *testing.T) {
 		}
 	}
 }
+
+// An API client's metrics carry the client's name and one more label, and
+// never a tenant: a tenant is the caller's own customer, and the number of
+// them is the caller's to grow.
+func TestAPIMetricsHaveClientLabel(t *testing.T) {
+	totals := store.MetricsTotals{
+		APIReviews: []store.APIReviewTotal{
+			{Client: "fastgateway", Result: "no_blocking", Reviews: 5},
+			{Client: "fastgateway", Result: "blocking", Reviews: 2},
+			{Client: "fastgateway", Result: "nothing_reviewed", Reviews: 1},
+			{Client: "fastgateway", Result: "failed", Reviews: 3},
+			{Client: "fastgateway", Result: "superseded", Reviews: 4},
+			// A result this code does not know is one series, whatever the text.
+			{Client: "fastgateway", Result: "see https://evil.example/x", Reviews: 1},
+			{Client: "fastgateway", Result: "approved", Reviews: 2},
+			{Client: "other", Result: "failed", Reviews: 1},
+		},
+		APITokens: []store.APITokenTotal{
+			{Client: "fastgateway", Tokens: store.TokenSum{In: 100, Out: 20, CacheRead: 5, Reasoning: 1}, Rows: 2},
+			// Rows that did not report the apart counts leave those series out.
+			{Client: "other", Tokens: store.TokenSum{In: 7, Out: 3, Unknown: 1}, Rows: 1},
+		},
+		APICallbacks: []store.APICallbackTotal{
+			{Client: "fastgateway", Outcome: "delivered", Count: 9},
+			{Client: "fastgateway", Outcome: "failed_attempt", Count: 4},
+			{Client: "fastgateway", Outcome: "gave_up", Count: 1},
+			{Client: "fastgateway", Outcome: "made up by a bug", Count: 6},
+		},
+	}
+	snap := snapshotOf(totals, nil, nil)
+
+	allowed := map[string]string{
+		metrics.APIReviewsTotal:   "result",
+		metrics.APITokensTotal:    "kind",
+		metrics.APICallbacksTotal: "outcome",
+	}
+	for _, m := range snap.Metrics {
+		second, isAPI := allowed[m.Name]
+		if !isAPI {
+			continue
+		}
+		if len(m.Samples) == 0 {
+			t.Errorf("%s has no samples", m.Name)
+		}
+		for _, s := range m.Samples {
+			if len(s.Labels) != 2 || s.Labels[0].Name != "client" || s.Labels[1].Name != second {
+				t.Errorf("%s sample has labels %+v, want exactly client and %s", m.Name, s.Labels, second)
+			}
+		}
+	}
+	for _, name := range []string{metrics.APIReviewsTotal, metrics.APITokensTotal, metrics.APICallbacksTotal} {
+		if _, ok := allowed[name]; !ok {
+			t.Fatalf("test does not know %s", name)
+		}
+	}
+
+	out := metricsText(t, snap)
+	for _, want := range []string{
+		`pergent_api_reviews_total{client="fastgateway",result="no_blocking"} 5`,
+		`pergent_api_reviews_total{client="fastgateway",result="blocking"} 2`,
+		`pergent_api_reviews_total{client="fastgateway",result="nothing_reviewed"} 1`,
+		`pergent_api_reviews_total{client="fastgateway",result="failed"} 3`,
+		`pergent_api_reviews_total{client="fastgateway",result="superseded"} 4`,
+		`pergent_api_reviews_total{client="fastgateway",result="(other)"} 3`,
+		`pergent_api_reviews_total{client="other",result="failed"} 1`,
+		`pergent_api_tokens_total{client="fastgateway",kind="input"} 100`,
+		`pergent_api_tokens_total{client="fastgateway",kind="output"} 20`,
+		`pergent_api_tokens_total{client="fastgateway",kind="reasoning"} 1`,
+		`pergent_api_tokens_total{client="fastgateway",kind="cache_read"} 5`,
+		`pergent_api_tokens_total{client="fastgateway",kind="cache_write"} 0`,
+		`pergent_api_tokens_total{client="other",kind="input"} 7`,
+		`pergent_api_tokens_total{client="other",kind="output"} 3`,
+		`pergent_api_callbacks_total{client="fastgateway",outcome="delivered"} 9`,
+		`pergent_api_callbacks_total{client="fastgateway",outcome="failed_attempt"} 4`,
+		`pergent_api_callbacks_total{client="fastgateway",outcome="gave_up"} 1`,
+		`pergent_api_callbacks_total{client="fastgateway",outcome="(other)"} 6`,
+	} {
+		if !strings.Contains(out, want+"\n") {
+			t.Errorf("missing %s\nin:\n%s", want, out)
+		}
+	}
+	for _, bad := range []string{"tenant", "evil.example", "made up", `client="other",kind="reasoning"`, `client="other",kind="cache`} {
+		if strings.Contains(out, bad) {
+			t.Errorf("the page has %q:\n%s", bad, out)
+		}
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "# TYPE pergent_api_") && !strings.HasSuffix(line, " counter") {
+			t.Errorf("%s: an API metric only goes up", line)
+		}
+	}
+}

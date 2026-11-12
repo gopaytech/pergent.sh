@@ -300,7 +300,9 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 			Launcher: launcher, Namespace: cfg.Jobs.Namespace, GitImage: cfg.Jobs.Image, Image: os.Getenv("PERGENT_SH_IMAGE")}
 		fetchResults = fetcher
 		// The review API is on with the dashboard: its clients are made there.
-		api = &reviewapi.Handler{Store: st, Box: box, Models: reg, Wake: eng.Wake, Log: log}
+		// Its requests per hour are counted in memory, once for the process
+		// (one replica).
+		api = &reviewapi.Handler{Store: st, Box: box, Models: reg, Wake: eng.Wake, Log: log, Limiter: &reviewapi.Limiter{}}
 	}
 	dash, err := newDashboard(dashboard.Options{
 		Config: cfg, Instances: reg, Connector: conn, Store: st, SecretKey: key, Log: log,
@@ -308,6 +310,13 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 		// The engine queues the readiness scans (eng.Scans is on whenever
 		// the dashboard is) and rechecks them after a skill setting is saved.
 		Wake: eng.Wake, Fetcher: fetcher, Readiness: eng,
+		// Removing an API client ends its live reviews: their Jobs go.
+		DeleteJob: launcher.Delete,
+		// Send test callback goes the way a real callback does: the engine's
+		// sender and client, which never follows a redirect.
+		SendCallback: func(ctx context.Context, url string, body []byte, delivery string, secrets ...string) store.CallbackAttempt {
+			return engine.SendCallback(ctx, eng.CallbackClient, url, body, delivery, secrets...)
+		},
 	})
 	if err != nil {
 		return err
@@ -351,6 +360,9 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	// Engine.Run reconciles first, in its own goroutine, so a slow GitLab
 	// at startup never keeps the routes down.
 	loops := []func(context.Context){eng.Run}
+	// The API reviews' callbacks have a loop of their own, so a slow
+	// callback URL never holds up a review.
+	loops = append(loops, eng.RunCallbacks)
 	// The audit log is kept 90 days, whether the dashboard is on or not
 	// (the reset-password command records there too).
 	pruneOld := pruneAudit(st.PruneAudit, time.Now, log)

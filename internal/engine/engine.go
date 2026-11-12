@@ -8,6 +8,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
@@ -81,6 +82,9 @@ type Engine struct {
 	// ScanImage is pergent.sh's own image (PERGENT_SH_IMAGE, set by the
 	// chart), which a scan Job runs scan-repo in.
 	ScanImage string
+	// CallbackClient sends the API reviews' callbacks; nil means one with a
+	// 10 s timeout. Whatever it is, a redirect is never followed.
+	CallbackClient *http.Client
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 	// Log may be nil.
@@ -381,8 +385,8 @@ func (e *Engine) sweepApprovals(ctx context.Context) {
 	}
 }
 
-// pass dispatches, publishes, cleans up and answers comment commands once,
-// logging failures.
+// pass dispatches, publishes, cleans up, drops the API reviews' stored files
+// no Job needs and answers comment commands once, logging failures.
 func (e *Engine) pass(ctx context.Context) {
 	for _, step := range []struct {
 		name string
@@ -391,6 +395,7 @@ func (e *Engine) pass(ctx context.Context) {
 		{"dispatch", e.DispatchOnce},
 		{"publish", e.PublishOnce},
 		{"cleanup", e.CleanupOnce},
+		{"api inputs", e.dropSpentAPIInputs},
 		// Last, and bounded (commandsBudget), so a slow platform call of a
 		// command never holds up a review.
 		{"commands", e.CommandsOnce},

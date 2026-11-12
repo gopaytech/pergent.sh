@@ -29,6 +29,12 @@ import (
 //go:embed checkout.sh
 var checkoutScript string
 
+// apiCheckoutScript is the checkout of an API review: no clone, the commits are
+// built from the files the caller sent.
+//
+//go:embed apicheckout.sh
+var apiCheckoutScript string
+
 const (
 	labelManagedBy = "app.kubernetes.io/managed-by"
 	labelRun       = "pergent.sh/run"
@@ -43,12 +49,20 @@ const (
 	AnnotationProject = "pergent.sh/project"
 	AnnotationMRURL   = "pergent.sh/mr-url"
 
+	// LabelAPIClient names the API client an API review is for.
+	LabelAPIClient = "pergent.sh/api-client"
+
 	keyGitToken    = "git-token"
 	keyLLMKey      = "llm-api-key"
 	keyResultToken = "result-token"
+	keyImport      = "import"
 
 	containerCheckout = "checkout"
 	containerPergent  = "pergent"
+
+	// FilesSecretMaxBytes bounds the stream of an API review. A Secret holds
+	// 1 MiB, and the Secret's own metadata takes some of it.
+	FilesSecretMaxBytes = 1_000_000
 
 	minCloneAllowance = 2 * time.Minute
 	deliverAllowance  = 2 * time.Minute
@@ -96,6 +110,11 @@ type JobParams struct {
 	// ProjectPath and MRURL, which a label value cannot hold. A zero value is left out.
 	Instance, ProjectPath, MRURL string
 	ProjectID, IID               int64
+	// Import is the `git fast-import` stream of an API review, which has no
+	// clone: its checkout container builds the base and head commits from it.
+	// Non-nil makes the Job an API review's. APIClient names the client.
+	Import    []byte
+	APIClient string
 }
 
 // LinkedClone is one linked repository to clone: Dir is its directory name
@@ -176,6 +195,7 @@ func labels(p JobParams) map[string]string {
 		set(LabelMR, strconv.FormatInt(p.IID, 10))
 	}
 	set(LabelHead, p.HeadSHA)
+	set(LabelAPIClient, p.APIClient)
 	return l
 }
 
@@ -199,6 +219,7 @@ func annotations(p JobParams) map[string]string {
 
 func secretsName(p JobParams) string { return p.Name + "-secrets" }
 func inputsName(p JobParams) string  { return p.Name + "-inputs" }
+func filesName(p JobParams) string   { return p.Name + "-files" }
 
 func ptr[T any](v T) *T { return &v }
 
@@ -312,6 +333,15 @@ func BuildJob(p JobParams) *batchv1.Job {
 		Resources:       p.Resources,
 		SecurityContext: lockedDown(),
 	}
+	if p.Import != nil {
+		// No clone and no token: the commits are built from the mounted stream.
+		checkout.Command = []string{"sh", "-ec", apiCheckoutScript}
+		checkout.Env = []corev1.EnvVar{
+			{Name: "BASE_SHA", Value: p.BaseSHA},
+			{Name: "HEAD_SHA", Value: p.HeadSHA},
+		}
+		checkout.VolumeMounts = append(checkout.VolumeMounts, corev1.VolumeMount{Name: "files", MountPath: "/files", ReadOnly: true})
+	}
 	if len(p.LinkedClones) > 0 {
 		lines := make([]string, len(p.LinkedClones))
 		for i, c := range p.LinkedClones {
@@ -358,6 +388,23 @@ func BuildJob(p JobParams) *batchv1.Job {
 		items = append(items, corev1.KeyToPath{Key: "linked-repos.json", Path: "linked-repos.json"})
 	}
 
+	volumes := []corev1.Volume{
+		{Name: "work", VolumeSource: corev1.VolumeSource{EmptyDir: workVolume(workSizeFor(p.WorkSize, len(p.LinkedClones)))}},
+		{Name: "inputs", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+			LocalObjectReference: corev1.LocalObjectReference{Name: inputsName(p)},
+			Items:                items,
+		}}},
+	}
+	if p.Import != nil {
+		// 0444: readable by any user the image runs as. Only the checkout
+		// container mounts it.
+		volumes = append(volumes, corev1.Volume{Name: "files", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+			SecretName:  filesName(p),
+			Items:       []corev1.KeyToPath{{Key: keyImport, Path: keyImport}},
+			DefaultMode: ptr(int32(0o444)),
+		}}})
+	}
+
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: p.Name, Namespace: p.Namespace, Labels: labels(p), Annotations: annotations(p)},
 		Spec: batchv1.JobSpec{
@@ -371,15 +418,9 @@ func BuildJob(p JobParams) *batchv1.Job {
 					TerminationGracePeriodSeconds: ptr(int64(30)),
 					AutomountServiceAccountToken:  ptr(false),
 					EnableServiceLinks:            ptr(false),
-					Volumes: []corev1.Volume{
-						{Name: "work", VolumeSource: corev1.VolumeSource{EmptyDir: workVolume(workSizeFor(p.WorkSize, len(p.LinkedClones)))}},
-						{Name: "inputs", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
-							LocalObjectReference: corev1.LocalObjectReference{Name: inputsName(p)},
-							Items:                items,
-						}}},
-					},
-					InitContainers: []corev1.Container{checkout},
-					Containers:     []corev1.Container{pergent},
+					Volumes:                       volumes,
+					InitContainers:                []corev1.Container{checkout},
+					Containers:                    []corev1.Container{pergent},
 				},
 			},
 		},
@@ -455,5 +496,18 @@ func BuildSecret(p JobParams, owner *batchv1.Job, s Secrets) *corev1.Secret {
 			keyLLMKey:      []byte(s.LLMKey),
 			keyResultToken: []byte(s.ResultToken),
 		},
+	}
+}
+
+// BuildFilesSecret holds the stream an API review's checkout container builds
+// its commits from, owned by the Job. It is mounted into that container alone.
+func BuildFilesSecret(p JobParams, owner *batchv1.Job) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: filesName(p), Namespace: p.Namespace, Labels: labels(p),
+			OwnerReferences: ownerRef(owner),
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{keyImport: p.Import},
 	}
 }

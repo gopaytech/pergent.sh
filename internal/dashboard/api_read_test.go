@@ -469,6 +469,41 @@ func TestOverviewInstanceItemsOnlyForAdmins(t *testing.T) {
 	}
 }
 
+// An API client's failing callbacks are shown to admins only, as the
+// client's, never as a repository's.
+func TestCallbackFailingOnlyForAdmins(t *testing.T) {
+	e := newEnv(t, nil)
+	overviewFixture(e)
+	const msg = "Callbacks to this client failed for 3 reviews in the last 24 hours."
+	if err := e.st.SetAttention(ctx, "", "gateway", "callback_failing", msg); err != nil {
+		t.Fatal(err)
+	}
+
+	// The user first: userOnMain(true) makes alice an admin for good.
+	user := e.userOnMain(false, "acme/widgets")
+	for _, a := range getJSON[OverviewView](e, user, "/api/overview").Attention {
+		if a.Kind == "callback_failing" || a.Client != "" {
+			t.Errorf("a user sees the client's item: %+v", a)
+		}
+	}
+
+	admin := e.userOnMain(true, "acme/widgets")
+	var got []AttentionView
+	for _, a := range getJSON[OverviewView](e, admin, "/api/overview").Attention {
+		if a.Kind == "callback_failing" {
+			got = append(got, a)
+		}
+	}
+	if len(got) != 1 || got[0].Client != "gateway" || got[0].Instance != "" || got[0].Project != "" || got[0].Message != msg {
+		t.Errorf("admin attention = %+v; want the gateway client's item", got)
+	}
+	for _, a := range getJSON[RepositoryDetailView](e, admin, "/api/repositories/main/acme/widgets").Attention {
+		if a.Kind == "callback_failing" {
+			t.Errorf("a repository's attention holds the client's item: %+v", a)
+		}
+	}
+}
+
 // Setup problems are shown only for repositories switched on, even when a
 // team still names one.
 func TestAttentionOnlyForActiveRepos(t *testing.T) {
@@ -1853,5 +1888,20 @@ func TestSettingViewsInlineFindings(t *testing.T) {
 	repo = settings.Effective{InlineFindings: true}
 	if got := settingViews(repo)["inlineFindings"]; got != (SettingView{true, false}) {
 		t.Errorf("inlineFindings = %+v, want true not overridden", got)
+	}
+}
+
+// An API review has no repository: its run is not found, even for an admin.
+func TestRunRoutesHideAPIReviews(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.signInOperator()
+	e.addAPIClient(c, goodClient(nil))
+	id, created, err := e.st.EnqueueAPIReview(ctx, store.NewAPIReview{ClientID: mustClientID(t, e, "fastgateway"), Tenant: "acme",
+		Subject: "route:1", Title: "Route change", KeyName: "ci", BaseSHA: "base", HeadSHA: "head", InputsSealed: []byte("sealed")})
+	if err != nil || !created {
+		t.Fatalf("EnqueueAPIReview = %v, %v", created, err)
+	}
+	for _, target := range []string{"/api/runs/" + id, "/api/runs/" + id + "/log", "/api/runs/" + id + "/diagnostics"} {
+		e.wantStatus(c, target, http.StatusNotFound)
 	}
 }

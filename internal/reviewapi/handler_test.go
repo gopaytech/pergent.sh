@@ -2,14 +2,20 @@ package reviewapi
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/gopaytech/pergent.sh/internal/instances"
+	"github.com/gopaytech/pergent.sh/internal/secretbox"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
@@ -18,6 +24,27 @@ type fakeStore struct {
 	touched  []int64
 	touchErr error
 	lookErr  error
+
+	// The review API's side. library holds the skills that exist, reviews the
+	// API reviews by ID, enqueued every request that made one.
+	library  map[string]bool
+	reviews  map[string]store.APIReview
+	hashes   map[string][]byte // "<client>/<idempotency key>" -> request hash
+	keyed    map[string]string // "<client>/<idempotency key>" -> review ID
+	enqueued []store.NewAPIReview
+	// readErr fails APIReview.
+	readErr error
+	// dismissals by "<client>/<tenant>/<subject>/<fingerprint>", and every
+	// dismiss or restore that changed one (see dismiss_test.go).
+	dismissals map[string]store.APIDismissal
+	events     []fakeEvent
+	// dismissErr fails DismissAPIFinding and UndismissAPIFinding.
+	dismissErr error
+	// tokens is what each client used, by ID; tokensSince records each
+	// APITokensSince's since, and tokensErr fails it.
+	tokens      map[int64]int64
+	tokensSince []time.Time
+	tokensErr   error
 }
 
 type fakeKey struct {
@@ -38,6 +65,91 @@ func (f *fakeStore) TouchAPIKey(_ context.Context, id int64, _ time.Time) error 
 	return f.touchErr
 }
 
+func (f *fakeStore) APITokensSince(_ context.Context, clientID int64, since time.Time) (int64, error) {
+	f.tokensSince = append(f.tokensSince, since)
+	return f.tokens[clientID], f.tokensErr
+}
+
+func (f *fakeStore) ResolveLibrary(_ context.Context, names []string) (store.ResolvedLibrary, error) {
+	out := store.ResolvedLibrary{Skills: map[string]store.LibrarySkill{}}
+	for _, n := range names {
+		if f.library[n] {
+			out.Skills[n] = store.LibrarySkill{Name: n}
+		} else {
+			out.Missing = append(out.Missing, n)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) EnqueueAPIReview(_ context.Context, n store.NewAPIReview) (string, bool, error) {
+	slot := fmt.Sprintf("%d/%s", n.ClientID, n.IdempotencyKey)
+	if n.IdempotencyKey != "" {
+		if id, ok := f.keyed[slot]; ok {
+			if string(f.hashes[slot]) != string(n.RequestHash) {
+				return "", false, store.ErrIdempotencyMismatch
+			}
+			return id, false, nil
+		}
+	}
+	id := fmt.Sprintf("00000000-0000-4000-8000-%012d", len(f.enqueued)+1)
+	f.enqueued = append(f.enqueued, n)
+	if f.reviews == nil {
+		f.reviews = map[string]store.APIReview{}
+	}
+	f.reviews[id] = store.APIReview{
+		Run: store.Run{ID: id, State: store.Queued}, ClientID: n.ClientID, Tenant: n.Tenant, Subject: n.Subject,
+		Title: n.Title, KeyName: n.KeyName, HasInputs: true, CreatedAt: testNow,
+	}
+	if n.IdempotencyKey != "" {
+		if f.keyed == nil {
+			f.keyed, f.hashes = map[string]string{}, map[string][]byte{}
+		}
+		f.keyed[slot], f.hashes[slot] = id, n.RequestHash
+	}
+	return id, true, nil
+}
+
+// APIReview is the real one's contract: another client's review, an unknown ID
+// and a malformed one are all not found.
+func (f *fakeStore) APIReview(_ context.Context, clientID int64, id string) (store.APIReview, bool, error) {
+	if f.readErr != nil {
+		return store.APIReview{}, false, f.readErr
+	}
+	r, ok := f.reviews[id]
+	if !ok || r.ClientID != clientID {
+		return store.APIReview{}, false, nil
+	}
+	return r, true, nil
+}
+
+func (f *fakeStore) APIReviewByKey(ctx context.Context, clientID int64, key string) (store.APIReview, []byte, bool, error) {
+	slot := fmt.Sprintf("%d/%s", clientID, key)
+	id, ok := f.keyed[slot]
+	if !ok {
+		return store.APIReview{}, nil, false, nil
+	}
+	r, found, err := f.APIReview(ctx, clientID, id)
+	return r, f.hashes[slot], found, err
+}
+
+type fakeModels struct {
+	byID map[string]instances.Model
+	def  *instances.Model
+}
+
+func (m fakeModels) ModelByID(id string) (instances.Model, bool) {
+	v, ok := m.byID[id]
+	return v, ok
+}
+
+func (m fakeModels) DefaultModel() (instances.Model, bool) {
+	if m.def == nil {
+		return instances.Model{}, false
+	}
+	return *m.def, true
+}
+
 var testNow = time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
 
 // newHandler makes a handler over a store that holds one good key, and returns
@@ -48,11 +160,19 @@ func newHandler(t *testing.T) (*Handler, *fakeStore, string, *http.ServeMux) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fs := &fakeStore{keys: map[string]fakeKey{prefix: {
-		key:    store.APIKey{ID: 7, ClientID: 3, Name: "ci", Prefix: prefix, Hash: hash},
-		client: store.APIClient{ID: 3, Name: "fastgateway", Limits: store.DefaultAPILimits},
-	}}}
-	h := &Handler{Store: fs, Now: func() time.Time { return testNow }}
+	fs := &fakeStore{
+		keys: map[string]fakeKey{prefix: {
+			key:    store.APIKey{ID: 7, ClientID: 3, Name: "ci", Prefix: prefix, Hash: hash},
+			client: store.APIClient{ID: 3, Name: "fastgateway", Skills: []string{"security"}, Limits: store.DefaultAPILimits},
+		}},
+		library: map[string]bool{"security": true, "style": true},
+	}
+	box, err := secretbox.New(base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &Handler{Store: fs, Box: box, Now: func() time.Time { return testNow },
+		Models: fakeModels{def: &instances.Model{ID: "default", Default: true}}}
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	return h, fs, key, mux
@@ -187,7 +307,8 @@ func TestRequireKeyPutsKeyAndClientInContext(t *testing.T) {
 func TestClientBodyShowsLimits(t *testing.T) {
 	_, _, key, mux := newHandler(t)
 	rec := call(mux, "GET", "/v1/client", "Bearer "+key)
-	const want = `{"name":"fastgateway","limits":{"max_request_bytes":524288,"max_files":200,"max_in_flight":5,"requests_per_hour":600,"monthly_token_budget":10000000}}` + "\n"
+	const want = `{"name":"fastgateway","limits":{"max_request_bytes":524288,"max_files":200,"max_in_flight":5,"requests_per_hour":600,"monthly_token_budget":10000000},` +
+		`"usage":{"month":"2026-11","tokens_used":0,"tokens_left":10000000}}` + "\n"
 	if rec.Body.String() != want {
 		t.Errorf("body %q, want %q", rec.Body.String(), want)
 	}
@@ -209,4 +330,52 @@ func TestUnknownV1PathIs404JSON(t *testing.T) {
 	if rec := call(mux, "GET", "/v1/nope", ""); rec.Code != http.StatusUnauthorized {
 		t.Errorf("no key: status %d, want 401", rec.Code)
 	}
+}
+
+func TestClientUsage(t *testing.T) {
+	_, fs, key, mux := newHandler(t)
+	fs.tokens = map[int64]int64{3: 120, 4: 5000}
+	rec := call(mux, "GET", "/v1/client", "Bearer "+key)
+	var got struct {
+		Usage json.RawMessage `json:"usage"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %q: %v", rec.Code, rec.Body, err)
+	}
+	if want := `{"month":"2026-11","tokens_used":120,"tokens_left":9999880}`; string(got.Usage) != want {
+		t.Errorf("usage = %s, want %s", got.Usage, want)
+	}
+	if want := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC); len(fs.tokensSince) != 1 || !fs.tokensSince[0].Equal(want) {
+		t.Errorf("tokens counted since %v, want %v", fs.tokensSince, want)
+	}
+
+	// Past the budget, none is left, never less.
+	fs.tokens[3] = 10_000_001
+	rec = call(mux, "GET", "/v1/client", "Bearer "+key)
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"month":"2026-11","tokens_used":10000001,"tokens_left":0}`; string(got.Usage) != want {
+		t.Errorf("usage past the budget = %s, want %s", got.Usage, want)
+	}
+}
+
+// The month is UTC's: 1 December at 01:00 in UTC+2 is still November.
+func TestClientUsageMonthIsUTC(t *testing.T) {
+	h, fs, key, mux := newHandler(t)
+	h.Now = func() time.Time { return time.Date(2026, 12, 1, 1, 0, 0, 0, time.FixedZone("UTC+2", 2*3600)) }
+	rec := call(mux, "GET", "/v1/client", "Bearer "+key)
+	if !strings.Contains(rec.Body.String(), `"month":"2026-11"`) {
+		t.Errorf("body %s, want the month 2026-11", rec.Body)
+	}
+	if want := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC); len(fs.tokensSince) != 1 || !fs.tokensSince[0].Equal(want) {
+		t.Errorf("tokens counted since %v, want %v", fs.tokensSince, want)
+	}
+}
+
+func TestClientUsageReadFailureIs500(t *testing.T) {
+	h, fs, key, mux := newHandler(t)
+	h.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	fs.tokensErr = errors.New("database down")
+	wantError(t, call(mux, "GET", "/v1/client", "Bearer "+key), http.StatusInternalServerError, CodeInternal, "internal error")
 }

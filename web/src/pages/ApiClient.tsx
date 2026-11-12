@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type FormEvent } from "react";
+import { useCallback, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
 import {
@@ -7,6 +7,7 @@ import {
   isStatus,
   paths,
   type APIClientEdit,
+  type APICallbackTest,
   type APIClientView,
   type APIKeyCreated,
   type APIKeyView,
@@ -15,36 +16,71 @@ import {
 import { useWrite } from "../layout/write";
 import OnceSecret from "../OnceSecret";
 import { ErrorBox, Loading, NotFound, Tabs, utcText } from "../ui";
+import ClientReviews from "./ApiClientReviews";
 import { clientsKey } from "./ApiClients";
 import { ClientFields, inLibraryOrder, type ClientFieldsValue } from "./ApiClientFields";
 
-type Tab = "settings" | "keys";
+type Tab = "reviews" | "settings" | "keys";
 
 const clientKey = (name: string) => ["api-client", name];
 
-// ApiClient is one API client: its settings and its keys. An admin's page.
+// Shown is a secret the server made and will not show again, kept by the
+// page until the admin closes it: a tab switch must not lose it.
+type Shown = { id: number; title: string; what: string; secret: string; note?: string };
+
+// ApiClient is one API client: its reviews, settings and keys. An admin's
+// page.
 export default function ApiClient() {
   const { name = "" } = useParams();
-  const [tab, setTab] = useState<Tab>("settings");
   const client = useQuery({
     queryKey: clientKey(name),
     queryFn: () => api.get<APIClientView>(paths.apiAdminClient(name)),
   });
-  if (client.isPending) return <Loading />;
-  if (isStatus(client.error, 404)) return <NotFound />;
-  if (client.isError) return <ErrorBox error={client.error} />;
+  // Only a page with nothing to show gives way to loading, not found or an
+  // error: a read that fails behind a page keeps it, and any secret on it.
+  if (!client.data) {
+    if (client.isPending) return <Loading />;
+    if (isStatus(client.error, 404)) return <NotFound />;
+    return <ErrorBox error={client.error} />;
+  }
+  // The key resets the page's state (the tab, the secrets shown, the
+  // settings form) when the route moves to another client.
+  return <ClientPage key={client.data.name} client={client.data} refreshError={client.isError ? client.error : null} />;
+}
+
+function ClientPage({ client, refreshError }: { client: APIClientView; refreshError: unknown }) {
+  const [tab, setTab] = useState<Tab>("reviews");
+  const [shown, setShown] = useState<Shown[]>([]);
+  const nextID = useRef(0);
+  const show = useCallback((s: Omit<Shown, "id">) => {
+    const id = nextID.current++;
+    setShown((list) => [...list, { ...s, id }]);
+  }, []);
   return (
     <div className="narrow">
       <div className="top">
         <div>
-          <h1>{client.data.name}</h1>
+          <h1>{client.name}</h1>
           <div className="sub">
             <Link to="/api-clients">API clients</Link>
           </div>
         </div>
       </div>
+      {refreshError !== null && <ErrorBox error={refreshError} />}
+      {shown.map((s) => (
+        <OnceSecret
+          key={s.id}
+          title={s.title}
+          what={s.what}
+          secret={s.secret}
+          onDone={() => setShown((list) => list.filter((x) => x.id !== s.id))}
+        >
+          {s.note && <p>{s.note}</p>}
+        </OnceSecret>
+      ))}
       <Tabs
         tabs={[
+          ["reviews", "Reviews"],
           ["settings", "Settings"],
           ["keys", "Keys"],
         ]}
@@ -52,7 +88,9 @@ export default function ApiClient() {
         onChange={setTab}
       />
       <div role="tabpanel">
-        {tab === "settings" ? <Settings client={client.data} /> : <Keys client={client.data} />}
+        {tab === "reviews" && <ClientReviews client={client.name} />}
+        {tab === "settings" && <Settings client={client} show={show} />}
+        {tab === "keys" && <Keys client={client} show={show} />}
       </div>
     </div>
   );
@@ -61,18 +99,19 @@ export default function ApiClient() {
 // limitFields are the limits in the order they are shown: the key in the
 // body, its label and what it caps.
 const limitFields: [keyof APILimits, string, string][] = [
-  ["maxRequestBytes", "Max request bytes", "1024 to 819200. The size of the files in one request."],
+  ["maxRequestBytes", "Max request bytes", "1024 to 819200. The size of the whole JSON request body."],
   ["maxFiles", "Max files", "1 to 1000. The files in one request."],
-  ["maxInFlight", "Max in flight", "1 to 50. Reviews of this client running or queued at once; more wait in the queue."],
+  ["maxInFlight", "Max in flight", "1 to 50. Reviews of this client running at once; more wait in the queue."],
   ["requestsPerHour", "Requests per hour", "1 to 100000. Per key."],
   ["monthlyTokenBudget", "Monthly token budget", "Tokens in and out for a UTC month. A request over it is refused."],
 ];
 
-function Settings({ client }: { client: APIClientView }) {
+function Settings({ client, show }: { client: APIClientView; show: (s: Omit<Shown, "id">) => void }) {
   return (
     <>
       <SettingsForm client={client} />
-      <CallbackSecret client={client} />
+      <CallbackSecret client={client} show={show} />
+      <TestCallback client={client} />
       <RemoveClient client={client} />
     </>
   );
@@ -157,15 +196,19 @@ function SettingsForm({ client }: { client: APIClientView }) {
   );
 }
 
-// CallbackSecret makes a new callback secret and shows it once. The old one
-// keeps signing for a while, so the caller can switch over.
-function CallbackSecret({ client }: { client: APIClientView }) {
+// CallbackSecret makes a new callback secret and hands it to the page to
+// show once. The old one keeps signing for a while, so the caller can switch
+// over.
+function CallbackSecret({ client, show }: { client: APIClientView; show: (s: Omit<Shown, "id">) => void }) {
   const cache = useQueryClient();
   const write = useWrite();
   const rotate = useMutation({
-    mutationFn: () => write<{ callbackSecret: string }>("POST", paths.apiAdminClientSecret(client.name)),
-    // The answer holds the secret: it goes with the box, not after 5 minutes.
-    gcTime: 0,
+    // The secret goes to the page, not into the mutation's state: the page
+    // outlives this tab, and the answer is not kept after it.
+    mutationFn: async () => {
+      const made = await write<{ callbackSecret: string }>("POST", paths.apiAdminClientSecret(client.name));
+      show({ title: "New callback secret", what: "callback secret", secret: made.callbackSecret });
+    },
     onSuccess: () => cache.invalidateQueries({ queryKey: clientKey(client.name) }),
   });
   const confirmRotate = () => {
@@ -175,9 +218,6 @@ function CallbackSecret({ client }: { client: APIClientView }) {
   };
   return (
     <>
-      {rotate.isSuccess && (
-        <OnceSecret title="New callback secret" what="callback secret" secret={rotate.data.callbackSecret} onDone={() => rotate.reset()} />
-      )}
       <section className="card pad stack" aria-label="Callback secret">
         <h2>Callback secret</h2>
         <div className="meta">
@@ -194,6 +234,53 @@ function CallbackSecret({ client }: { client: APIClientView }) {
         </div>
       </section>
     </>
+  );
+}
+
+// answerOf says what a test callback got. Only a 2xx answer without an error
+// is a delivery: any other is shown as a failure, and a callback that got no
+// answer says why.
+function answerOf(a: APICallbackTest): { ok: boolean; text: string } {
+  if (a.statusCode === 0) return { ok: false, text: `No answer: ${a.error}` };
+  const took = `Answered ${a.statusCode} in ${a.durationMs} ms`;
+  if (a.error) return { ok: false, text: `${took}. ${a.error}` };
+  if (a.statusCode < 200 || a.statusCode >= 300) return { ok: false, text: `${took}. Only a 2xx answer is a delivery.` };
+  return { ok: true, text: took };
+}
+
+// TestCallback sends the client's saved callback URL a test review, signed as
+// a real callback is. The review says test: true and nothing_reviewed, so a
+// receiver can't take it for a pass.
+function TestCallback({ client }: { client: APIClientView }) {
+  const write = useWrite();
+  const send = useMutation({
+    mutationFn: () => write<APICallbackTest>("POST", paths.apiAdminClientTestCallback(client.name)),
+  });
+  const answer = send.data ? answerOf(send.data) : null;
+  return (
+    <section className="card pad stack" aria-label="Test callback">
+      <h2>Test callback</h2>
+      <div className="meta">
+        Sends the saved callback URL a test review, signed like a real one. Its verdict is nothing reviewed and it says it is a test.
+      </div>
+      {!client.callbackUrl && <div className="meta">Save a callback URL first.</div>}
+      {send.isError && <ErrorBox error={send.error} />}
+      {answer &&
+        (answer.ok ? (
+          <div className="note" role="status">
+            {answer.text}
+          </div>
+        ) : (
+          <div className="error" role="alert">
+            {answer.text}
+          </div>
+        ))}
+      <div className="actions-row">
+        <button type="button" className="btn" disabled={send.isPending || !client.callbackUrl} onClick={() => send.mutate()}>
+          Send test callback
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -234,17 +321,24 @@ function RemoveClient({ client }: { client: APIClientView }) {
 }
 
 // Keys lists the client's keys and makes new ones. A key is shown once, when
-// it is made; the list has its prefix.
-function Keys({ client }: { client: APIClientView }) {
+// it is made, by the page; the list has its prefix.
+function Keys({ client, show }: { client: APIClientView; show: (s: Omit<Shown, "id">) => void }) {
   const cache = useQueryClient();
   const write = useWrite();
   const [name, setName] = useState("");
   const [expires, setExpires] = useState("");
   const create = useMutation({
-    mutationFn: (body: { name: string; expiresAt: string | null }) =>
-      write<APIKeyCreated>("POST", paths.apiAdminClientKeys(client.name), body),
-    // The answer holds the key: it goes with the box, not after 5 minutes.
-    gcTime: 0,
+    // The key goes to the page, not into the mutation's state: the page
+    // outlives this tab, and the answer is not kept after it.
+    mutationFn: async (body: { name: string; expiresAt: string | null }) => {
+      const made = await write<APIKeyCreated>("POST", paths.apiAdminClientKeys(client.name), body);
+      show({
+        title: "New API key",
+        what: "API key",
+        secret: made.secret,
+        note: `Key ${made.key.name} starts with ${made.key.prefix}. Send it as a bearer token.`,
+      });
+    },
     onSuccess: () => {
       setName("");
       setExpires("");
@@ -258,13 +352,6 @@ function Keys({ client }: { client: APIClientView }) {
   };
   return (
     <>
-      {create.isSuccess && (
-        <OnceSecret title="New API key" what="API key" secret={create.data.secret} onDone={() => create.reset()}>
-          <p>
-            Key {create.data.key.name} starts with {create.data.key.prefix}. Send it as a bearer token.
-          </p>
-        </OnceSecret>
-      )}
       <form className="card pad inline-form" aria-label="New API key form" onSubmit={submit}>
         <div className="grow">
           <label htmlFor="key-name">Key name</label>
