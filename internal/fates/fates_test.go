@@ -1297,23 +1297,22 @@ func added(path string, n int) diffmap.File {
 }
 
 // A finding on a reviewed deleted file (its line is in the removed lines) that
-// a later review does not report again is fixed when the file is still
-// deleted at that review's head. A file restored in between is tracked as any
-// other file.
+// a later review does not report again went away when the file is still
+// deleted at that review's head: nothing about it changed between the heads,
+// and Fixed means code at or near the lines changed. A file restored in
+// between is tracked as any other file.
 func TestFateOfFindingOnDeletedFile(t *testing.T) {
-	deleted := func(fs ...Finding) Skill {
-		s := sk(a, fs...)
-		s.Deleted = map[string]bool{"a.go": true}
-		return s
-	}
-	t.Run("still deleted is fixed", func(t *testing.T) {
+	// a.go is a reviewed deletion: it is in the skill's reviewed files, and
+	// fates needs no other mark for it.
+	deleted := func(fs ...Finding) Skill { return sk(a, fs...) }
+	t.Run("still deleted went away", func(t *testing.T) {
 		// The file was deleted at both heads, so the diff between them
 		// doesn't touch it.
 		f := newFake()
 		f.files[[2]string{"h1", "h2"}] = []diffmap.File{edit("b.go", 10)}
 		got := decide(t, f, nil, review("h1", deleted(fnd("x", "a.go", 10))), review("h2", deleted()))
-		if fate := one(t, got); fate.Fate != Fixed {
-			t.Errorf("fate = %s, want fixed", fate.Fate)
+		if fate := one(t, got); fate.Fate != WentAway {
+			t.Errorf("fate = %s, want went_away", fate.Fate)
 		}
 	})
 	t.Run("on the same head it went away", func(t *testing.T) {

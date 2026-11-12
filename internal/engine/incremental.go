@@ -170,7 +170,9 @@ func (d *dispatcher) setIncremental(ctx context.Context, last store.Run, in *inp
 // finding that is a suggestion or was dismissed lets the skill carry, and is
 // lost from the merged result unless the new run reports it again. One that
 // is open and blocking does not: a carried deleted file gets no new reference
-// check, so losing it could approve the change. The paths are sorted.
+// check, so losing it could approve the change. For the same reason a skill
+// with any open blocking finding carries none of its files.deleted, so their
+// batches check references again. The paths are sorted.
 //
 // Each skill that carries nothing is logged with the reason, so one that
 // falls back to a full review while the others carry can be told: "changed"
@@ -233,9 +235,19 @@ func carriedFiles(last *result.Result, lastHashes, hashes map[string]string, cha
 			nothing(s.Name, carryOpenOutside)
 			continue
 		}
+		// While the skill has an open blocker, its deleted files are reviewed
+		// again, so their batches check what still uses them: a blocker on a
+		// reviewed file about a carried deletion would get no new check.
+		var deleted map[string]bool
+		if len(blocked) > 0 {
+			deleted = map[string]bool{}
+			for _, p := range s.Files.Deleted {
+				deleted[p] = true
+			}
+		}
 		var files []string
 		for p := range reviewed {
-			if !changedSet[p] && !blocked[p] {
+			if !changedSet[p] && !blocked[p] && !deleted[p] {
 				files = append(files, p)
 			}
 		}

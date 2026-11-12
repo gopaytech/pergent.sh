@@ -297,14 +297,6 @@ func fatesInput(runs []store.Run, ds []store.Dismissal) fates.Input {
 			for _, p := range s.Files.Carried {
 				skill.Reviewed[p] = true
 			}
-			// A merged result already lists the carried deletions; a result
-			// without the field (the switch off, an older pergent) has none.
-			for _, p := range s.Files.Deleted {
-				if skill.Deleted == nil {
-					skill.Deleted = map[string]bool{}
-				}
-				skill.Deleted[p] = true
-			}
 			var notes []string
 			for _, n := range s.Notes {
 				if strings.HasPrefix(n, result.LeftOutNotePrefix) {

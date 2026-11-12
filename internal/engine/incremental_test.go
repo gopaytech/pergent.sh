@@ -571,6 +571,41 @@ func TestCarryStopsForOpenBlockingReferenceFinding(t *testing.T) {
 	}
 }
 
+// While a skill has an open blocking finding, its deleted files are not
+// carried, so their batches check references again: push 1 deletes x.go and
+// edits r.go, the skill reviews both and blocks on r.go, push 2 edits y.go. A
+// blocker on r.go about a carried x.go would otherwise get no new reference
+// check. A dismissed blocker or a suggestion carries x.go as before, and so
+// does a skill whose result lists no deletion (the switch off).
+func TestOpenBlockerKeepsDeletionsFromCarrying(t *testing.T) {
+	same := map[string]string{"security": "h1"}
+	skill := func(t *testing.T, severity string, deleted ...string) result.Skill {
+		s := lastSkill("security", []string{"a.go", "r.go", "x.go"}, lastFinding(t, "fp1", "r.go", severity))
+		s.Files.Deleted = deleted
+		return s
+	}
+	for _, tc := range []struct {
+		name string
+		s    func(t *testing.T) result.Skill
+		ds   []render.Dismissal
+		want []string
+	}{
+		{"an open blocker", func(t *testing.T) result.Skill { return skill(t, "blocking", "x.go") }, nil, []string{"a.go"}},
+		{"a dismissed blocker", func(t *testing.T) result.Skill { return skill(t, "blocking", "x.go") },
+			[]render.Dismissal{{Fingerprint: "fp1", Severity: "blocking", By: "alice"}}, []string{"a.go", "r.go", "x.go"}},
+		{"a suggestion", func(t *testing.T) result.Skill { return skill(t, "suggestion", "x.go") }, nil, []string{"a.go", "r.go", "x.go"}},
+		{"no deletion listed", func(t *testing.T) result.Skill { return skill(t, "blocking") }, nil, []string{"a.go", "x.go"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			last := &result.Result{Skills: []result.Skill{tc.s(t)}}
+			got := carriedFiles(last, same, same, []string{"y.go"}, tc.ds, discardLog)
+			if want := map[string][]string{"security": tc.want}; !maps.EqualFunc(got, want, slices.Equal) {
+				t.Errorf("carriedFiles = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 // Without deleted or renamed paths in the skill's result (the switch off, or
 // an older pergent), any finding outside files.reviewed stops the skill
 // carrying, dismissed or not, as before.

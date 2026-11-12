@@ -2170,7 +2170,7 @@ func TestNoThreadOnDeletedFile(t *testing.T) {
 				t.Errorf("rows = %+v, want no thread", rows)
 			}
 			body := e.comment(t)
-			for _, want := range []string{"Title of aaa", gone + " (deleted), line 2", threads.NoteOffDiff} {
+			for _, want := range []string{"Title of aaa", gone + " (deleted), line 2", threads.NoteDeleted} {
 				if !strings.Contains(body, want) {
 					t.Errorf("comment lacks %q:\n%s", want, body)
 				}
@@ -2217,8 +2217,8 @@ func TestNoThreadOnDeletedFileGitHub(t *testing.T) {
 			if v.Inline[fpBlocking] {
 				t.Errorf("view = %+v, the finding is left out of the comment", v)
 			}
-			if v.Notes[fpBlocking] != threads.NoteOffDiff {
-				t.Errorf("notes = %v, want the off-diff note", v.Notes)
+			if v.Notes[fpBlocking] != threads.NoteDeleted {
+				t.Errorf("notes = %v, want the deleted-file note", v.Notes)
 			}
 			if _, ok := h.st.Row(fpBlocking); ok {
 				t.Error("a finding that wasn't posted has a row")

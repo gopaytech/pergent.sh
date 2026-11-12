@@ -46,7 +46,6 @@ type Skill struct {
 	Name, Hash string
 	Failed     bool            // its verdict is "failed"
 	Reviewed   map[string]bool // files it reviewed, carried ones too
-	Deleted    map[string]bool // reviewed files the change deletes (files.deleted), carried ones too
 	LeftOut    bool            // it wrote a "Left out because of past dismissals:" note the review before did not carry
 	Findings   []Finding
 	// Whole is a skill that looked at the whole change and lists no file (the
@@ -359,13 +358,9 @@ func (w *walk) vanished(t *track) error {
 	t.moved = path
 	switch {
 	case !found:
-		// The heads' diff doesn't touch the file. One this review read as a
-		// deleted file was deleted at both heads: still deleted, and what was
-		// said about its removed lines is not said again. A restored file is
-		// not deleted, so it is tracked like any other.
-		if w.s.Deleted[t.file] {
-			t.fate = Fixed
-		}
+		// The heads' diff doesn't touch the file, so nothing about it changed:
+		// went away. That holds for a file deleted at both heads too, and a
+		// restored file is tracked like any other.
 	case d.Deleted:
 		t.fate = Fixed
 	case t.line > 0:

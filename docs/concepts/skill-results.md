@@ -9,7 +9,7 @@ When a change is merged or closed, pergent.sh works out what became of each find
 - **Open at merge**: it was still reported when the change ended, and nobody dismissed it.
 - **Went away**: it stopped being reported, but nothing near its lines changed, or there is no telling. A model changing its mind lands here, and so does a finding a skill left out because of [past dismissals](learn-from-dismissals.md).
 
-A finding on a deleted file (see [Deleted and renamed files](deleted-files.md)) counts as Fixed only if the file is still deleted at the new head. A restored file is tracked like any other file.
+A finding on a deleted file (see [Deleted and renamed files](deleted-files.md)) that stops being reported while the file stays deleted went away: the file didn't change between the two reviews. A restored file is tracked like any other file.
 
 The tab has one row for each skill and severity, for the last 30 or 90 days. **Raised** is the number of findings. **Addressed** is Fixed divided by Raised, as a whole percent. Dismissed doesn't count as addressed. A row shows Addressed only from 10 raised, not 10 findings of any kind. Rows with the lowest Addressed come first, and rows without one come last. So a skill with 9 ignored findings sits at the bottom until it has 10.
 
