@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+**A repository can be asked to review deleted and renamed files.** The setting **Review deleted and renamed files** is off by default and per repository only: [Deleted and renamed files](concepts/deleted-files.md). Nothing changes after the upgrade until a maintainer or admin turns it on for a repository. It costs more tokens. It needs a pergent image newer than v0.9.0, and an older image ignores it. pergent.sh's default image is still v0.9.0, so set `jobs.image` to a newer one to use it.
+
+Migration `0041` runs at startup and only adds a nullable column, so back up Postgres first, as for any migration. The previous release keeps working on the migrated database and ignores the column. **To roll back, first remove `repositories[].check_deleted` from the config, if you set it.** The previous release refuses a config key it doesn't know. A value set in the dashboard stays stored and does nothing.
+
 **Another system can be given API keys to the review API.** An admin makes a client under **API clients** and gives each caller a key: [Review API](setup/review-api.md). Only the clients and keys exist so far. Nothing happens after the upgrade until an admin makes a client.
 
 Migration `0038` runs at startup and only adds two tables, so back up Postgres first, as for any migration. The previous release keeps working on the migrated database and ignores them. There is no new config key, so to roll back nothing needs removing from the config. The `/v1/` routes exist only with `dashboard.url` set, as the dashboard does. Rolling back removes the clients and keys from use; they stay stored.

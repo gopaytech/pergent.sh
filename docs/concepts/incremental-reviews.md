@@ -13,6 +13,8 @@ A review is incremental when all of these hold. Otherwise it is a full review, a
 
 A file is carried over, per skill, only when that skill reviewed it last time, the push didn't change it, and it has no open blocking finding. A file whose review failed, a new file, and every file of a new or edited skill are reviewed again. Open blocking findings are always checked again.
 
+**With [Review deleted and renamed files](deleted-files.md) on,** the carry rule changes in one way. When a skill's last result lists deleted or renamed paths, a suggestion, or a finding people dismissed, on a file outside the files that skill reviewed no longer stops it from carrying, unless the finding is on a deleted path itself. This is any such suggestion or dismissed finding, not only one about a file that still uses a deleted file. An open blocking finding outside the reviewed files still makes the skill review all its files again, because it would otherwise drop out of the combined result. A file deleted in an earlier push and still deleted is carried, with its `(deleted)` mark. A file restored in a later push is reviewed again as a normal file. With the setting off, nothing changes.
+
 **What this gives up.**
 
 - An edit to one file can break another file that didn't change. That goes unnoticed until a full review (`@<bot> review`). The model can read the other file, but nothing sends it there.

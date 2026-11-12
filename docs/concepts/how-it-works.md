@@ -23,6 +23,7 @@ In these docs a "merge request" is also a GitHub pull request, and the "review b
 - **Incremental reviews**: a push reviews only the files it changed and carries the rest over from the last review. See [Incremental reviews](incremental-reviews.md).
 - **Learn from dismissals**: a review is told what people rejected earlier in the repository, and why, so a false positive stops coming back. See [Learn from dismissals](learn-from-dismissals.md).
 - **Quiet reviews**: a repository can ask for a review that says less: fewer nitpicks, no suggestion threads and a shorter comment, with everything that blocks still there. Off by default. See [Quiet reviews](quiet-reviews.md).
+- **Deleted and renamed files**: a repository can ask for the lines a change deletes to be reviewed, and for a check of what still uses deleted files and renamed files' old paths. Off by default. See [Deleted and renamed files](deleted-files.md).
 - **Comment layout**: a repository can choose which blocks of the review comment it shows (summary, findings, dismissed, checks, files), in what order, and whether each starts open or collapsed. See [Comment layout](comment-layout.md).
 - **Models**: admins keep a list of models, pick the default, and can give a repository a model of its own. See [Models](models.md).
 - **Skill results**: a tab for each repository shows how many of each skill's findings people fixed, dismissed or left open, so you can fix or drop the weak skills. See [Skill results](skill-results.md).
