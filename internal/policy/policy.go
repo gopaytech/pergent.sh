@@ -596,6 +596,11 @@ func blockingSkip(r *result.Result, skills []result.Skill) bool {
 // blocks; one that some skill did cover was reviewed. Only pergent's
 // --check-deleted writes files.deleted, so with the switch off, or on an older
 // image, the set is empty and every "deleted" skip blocks as before.
+//
+// A path holding pergent's redaction marker is never in the set: pergent
+// redacts every path, so two deletions can arrive as the same text
+// (a?token=x.go reviewed, a?token=y.env read-denied and skipped), and one must
+// not pass for the other. Such a deletion blocks as before.
 func reviewedDeletions(r *result.Result, skills []result.Skill) map[string]bool {
 	out := map[string]bool{}
 	for _, s := range skills {
@@ -603,7 +608,7 @@ func reviewedDeletions(r *result.Result, skills []result.Skill) map[string]bool 
 			continue
 		}
 		for _, p := range s.Files.Deleted {
-			if slices.Contains(s.Files.Reviewed, p) {
+			if slices.Contains(s.Files.Reviewed, p) && !strings.Contains(p, result.RedactedMarker) {
 				out[p] = true
 			}
 		}

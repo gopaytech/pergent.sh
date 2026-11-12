@@ -166,6 +166,11 @@ type Files struct {
 	Renamed []Renamed `json:"renamed,omitempty"`
 }
 
+// RedactedMarker is the text pergent writes in place of a credential when it
+// redacts a result (its internal/redact placeholder). Every path in Files is
+// redacted, so two different paths can arrive as the same text.
+const RedactedMarker = "[REDACTED]"
+
 // Renamed is a reviewed file the change renamed: Path is its new path, which
 // files.reviewed also lists, and From the old one.
 type Renamed struct {

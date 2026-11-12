@@ -150,3 +150,29 @@ func TestCarriedDeletionOneSkillReviewedApproves(t *testing.T) {
 		t.Errorf("decision = %+v, want approve", d)
 	}
 }
+
+// pergent redacts every path in a result, and two different deletions can
+// redact to the same text: `[?&]token=` has no length minimum. A text file
+// that was reviewed must not stand in for a read-denied one that was skipped,
+// so a path holding the redaction marker never counts as a reviewed deletion.
+func TestRedactedDeletedPathNeverApproves(t *testing.T) {
+	const redacted = "a?token=" + result.RedactedMarker // a?token=x.go and a?token=y.env
+	r := completed(result.Skill{Name: "all", Verdict: "no_blocking_issues", Files: result.Files{
+		Reviewed: []string{"b.go", redacted}, Deleted: []string{redacted},
+		Skipped: []result.Skipped{{Path: redacted, Rule: "deleted"}}}})
+	d := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	if d.Kind != KindNotApproved || d.Approve || d.Description != descPartlySkipped {
+		t.Fatalf("decision = %+v, want not approved, partly skipped", d)
+	}
+	_, note, ok := strings.Cut(d.Comment, notePartlySkipped)
+	if !ok || !strings.Contains(note, "- `"+redacted+"` (deleted)") {
+		t.Errorf("the note doesn't list the redacted deletion:\n%s", d.Comment)
+	}
+}
+
+// The marker is pergent's own placeholder (internal/redact, "[REDACTED]").
+func TestRedactedMarkerIsPergents(t *testing.T) {
+	if result.RedactedMarker != "[REDACTED]" {
+		t.Errorf("RedactedMarker = %q, want pergent's [REDACTED]", result.RedactedMarker)
+	}
+}
