@@ -479,6 +479,14 @@ func TestCallbackFailingOnlyForAdmins(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The user first: userOnMain(true) makes alice an admin for good.
+	user := e.userOnMain(false, "acme/widgets")
+	for _, a := range getJSON[OverviewView](e, user, "/api/overview").Attention {
+		if a.Kind == "callback_failing" || a.Client != "" {
+			t.Errorf("a user sees the client's item: %+v", a)
+		}
+	}
+
 	admin := e.userOnMain(true, "acme/widgets")
 	var got []AttentionView
 	for _, a := range getJSON[OverviewView](e, admin, "/api/overview").Attention {
@@ -492,13 +500,6 @@ func TestCallbackFailingOnlyForAdmins(t *testing.T) {
 	for _, a := range getJSON[RepositoryDetailView](e, admin, "/api/repositories/main/acme/widgets").Attention {
 		if a.Kind == "callback_failing" {
 			t.Errorf("a repository's attention holds the client's item: %+v", a)
-		}
-	}
-
-	user := e.userOnMain(false, "acme/widgets")
-	for _, a := range getJSON[OverviewView](e, user, "/api/overview").Attention {
-		if a.Kind == "callback_failing" || a.Client != "" {
-			t.Errorf("a user sees the client's item: %+v", a)
 		}
 	}
 }

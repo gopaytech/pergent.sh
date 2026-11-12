@@ -344,16 +344,16 @@ func TestAdminDismissStoresUnderSubject(t *testing.T) {
 		t.Fatalf("APIDismissals = %+v, %v", stored, err)
 	}
 	if d := stored[0]; d.Fingerprint != "fp-sql" || d.Severity != "blocking" || d.Skill != "security" || d.File != "a.go" ||
-		d.Title != "SQL built from input" || d.Reason != "checked upstream" || d.Actor != "ops" {
+		d.Title != "SQL built from input" || d.Reason != "checked upstream" || d.Actor != "root" {
 		t.Errorf("stored %+v", d)
 	}
 
 	after := getJSON[APIReviewDetailView](e, c, "/api/admin/api-reviews/"+id)
 	if len(after.History) != 1 || after.History[0].Kind != "dismissed" || after.History[0].Fingerprint != "fp-sql" ||
-		after.History[0].Title != "SQL built from input" || after.History[0].Actor != "ops" || after.History[0].Reason != "checked upstream" {
+		after.History[0].Title != "SQL built from input" || after.History[0].Actor != "root" || after.History[0].Reason != "checked upstream" {
 		t.Errorf("history = %+v", after.History)
 	}
-	if len(after.Dismissals) != 1 || after.Dismissals[0].Fingerprint != "fp-sql" || after.Dismissals[0].Actor != "ops" {
+	if len(after.Dismissals) != 1 || after.Dismissals[0].Fingerprint != "fp-sql" || after.Dismissals[0].Actor != "root" {
 		t.Errorf("dismissals = %+v", after.Dismissals)
 	}
 	if !reflect.DeepEqual(compact(t, after.Review), compact(t, before.Review)) {
@@ -367,7 +367,7 @@ func TestAdminDismissStoresUnderSubject(t *testing.T) {
 		t.Errorf("status %q, want not_dismissed", got.Status)
 	}
 	final := getJSON[APIReviewDetailView](e, c, "/api/admin/api-reviews/"+id)
-	if len(final.History) != 2 || final.History[1].Kind != "undismissed" || final.History[1].Actor != "ops" || len(final.Dismissals) != 0 {
+	if len(final.History) != 2 || final.History[1].Kind != "undismissed" || final.History[1].Actor != "root" || len(final.Dismissals) != 0 {
 		t.Errorf("history = %+v, dismissals = %+v", final.History, final.Dismissals)
 	}
 	if n := len(e.auditEntries()); n != audited {
