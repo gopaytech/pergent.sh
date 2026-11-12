@@ -1139,6 +1139,57 @@ func dismissalsEnv(job *batchv1.Job) (string, bool) {
 	return "", false
 }
 
+// checkDeletedEnv returns the value of PERGENT_CHECK_DELETED on job, and
+// whether it is set.
+func checkDeletedEnv(job *batchv1.Job) (string, bool) {
+	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
+		if e.Name == "PERGENT_CHECK_DELETED" {
+			return e.Value, true
+		}
+	}
+	return "", false
+}
+
+// The repository's deleted-files setting reaches the Job as an environment
+// variable when it is on, and is absent when it is off or unset.
+func TestDispatchPassesCheckDeleted(t *testing.T) {
+	on, off := true, false
+	for _, tc := range []struct {
+		name    string
+		set     *bool
+		wantEnv bool
+	}{
+		{"on", &on, true},
+		{"off", &off, false},
+		{"unset", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnv(t)
+			env.Engine.Config.Repositories[0].CheckDeleted = tc.set
+			head := sha('a')
+			id := env.Enqueue(3, head)
+			env.GitLab.SetMR(openMR(3, head))
+			env.GitLab.Reply(http.MethodPost, statusPath(head), http.StatusCreated, `{}`)
+
+			dispatch(t, env)
+
+			job := env.Job(id)
+			if job == nil {
+				t.Fatalf("no job; run = %+v\n%s", env.Run(id), env.Logs())
+			}
+			v, ok := checkDeletedEnv(job)
+			if ok != tc.wantEnv || (ok && v != "true") {
+				t.Errorf("PERGENT_CHECK_DELETED = %q, %v; want set = %v", v, ok, tc.wantEnv)
+			}
+			for _, a := range job.Spec.Template.Spec.Containers[0].Args {
+				if strings.Contains(a, "check-deleted") {
+					t.Errorf("job got the argument %q", a)
+				}
+			}
+		})
+	}
+}
+
 func authoredBy(mr gitlab.MergeRequest, id int64) gitlab.MergeRequest {
 	mr.Author = gitlab.User{ID: id, Username: "dev"}
 	return mr

@@ -584,6 +584,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		WorkSize:       e.Config.Jobs.WorkSize,
 		Inputs:         in,
 		LinkedClones:   links.Clones,
+		CheckDeleted:   repo.CheckDeleted,
 		Instance:       run.MR.Instance,
 		ProjectID:      run.MR.ProjectID,
 		IID:            run.MR.IID,

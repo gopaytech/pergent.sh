@@ -91,6 +91,10 @@ type JobParams struct {
 	// after the checkout. Nil is none, and the Job is then what it was before
 	// linked repositories existed.
 	LinkedClones []LinkedClone
+	// CheckDeleted asks pergent to review the lines the change deletes and to
+	// check what still uses deleted and renamed files. It reaches the Job only
+	// when true; false leaves the Job as it was before the setting existed.
+	CheckDeleted bool
 	// The change this Job reviews, so a Job found in the cluster can be traced
 	// to it. Labels carry Instance, ProjectID, IID and HeadSHA; annotations carry
 	// ProjectPath and MRURL, which a label value cannot hold. A zero value is left out.
@@ -289,6 +293,10 @@ func BuildJob(p JobParams) *batchv1.Job {
 	if hasLinked {
 		// An environment variable for the same reason.
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "PERGENT_LINKED_REPOS", Value: "/in/linked-repos.json"})
+	}
+	if p.CheckDeleted {
+		// An environment variable for the same reason.
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "PERGENT_CHECK_DELETED", Value: "true"})
 	}
 	mainEnv = append(mainEnv,
 		secretEnv("OPENCODE_API_KEY", secret, keyLLMKey),
