@@ -1285,3 +1285,91 @@ func TestWholeSkillCoversEveryFile(t *testing.T) {
 		}
 	})
 }
+
+// added is the diff of a file that did not exist at the older head: n lines,
+// all new. Its one change sits before old line 1.
+func added(path string, n int) diffmap.File {
+	patch := "@@ -0,0 +1," + itoa(n) + " @@\n"
+	for i := 0; i < n; i++ {
+		patch += "+x\n"
+	}
+	return diffmap.Parse(path, "", patch, false)
+}
+
+// A finding on a reviewed deleted file (its line is in the removed lines) that
+// a later review does not report again is fixed when the file is still
+// deleted at that review's head. A file restored in between is tracked as any
+// other file.
+func TestFateOfFindingOnDeletedFile(t *testing.T) {
+	deleted := func(fs ...Finding) Skill {
+		s := sk(a, fs...)
+		s.Deleted = map[string]bool{"a.go": true}
+		return s
+	}
+	t.Run("still deleted is fixed", func(t *testing.T) {
+		// The file was deleted at both heads, so the diff between them
+		// doesn't touch it.
+		f := newFake()
+		f.files[[2]string{"h1", "h2"}] = []diffmap.File{edit("b.go", 10)}
+		got := decide(t, f, nil, review("h1", deleted(fnd("x", "a.go", 10))), review("h2", deleted()))
+		if fate := one(t, got); fate.Fate != Fixed {
+			t.Errorf("fate = %s, want fixed", fate.Fate)
+		}
+	})
+	t.Run("on the same head it went away", func(t *testing.T) {
+		f := newFake()
+		got := decide(t, f, nil, review("h1", deleted(fnd("x", "a.go", 10))), review("h1", deleted()))
+		if fate := one(t, got); fate.Fate != WentAway {
+			t.Errorf("fate = %s, want went_away", fate.Fate)
+		}
+	})
+	t.Run("left out because of past dismissals it went away", func(t *testing.T) {
+		f := newFake()
+		later := deleted()
+		later.LeftOut = true
+		got := decide(t, f, nil, review("h1", deleted(fnd("x", "a.go", 10))), review("h2", later))
+		if fate := one(t, got); fate.Fate != WentAway {
+			t.Errorf("fate = %s, want went_away", fate.Fate)
+		}
+	})
+	t.Run("not reviewed again it stays open", func(t *testing.T) {
+		f := newFake()
+		f.files[[2]string{"h1", "h2"}] = []diffmap.File{edit("b.go", 10)}
+		got := decide(t, f, nil, review("h1", deleted(fnd("x", "a.go", 10))), review("h2", sk(nil)))
+		if fate := one(t, got); fate.Fate != Open {
+			t.Errorf("fate = %s, want open", fate.Fate)
+		}
+	})
+	t.Run("a failed skill says nothing", func(t *testing.T) {
+		f := newFake()
+		later := deleted()
+		later.Failed = true
+		got := decide(t, f, nil, review("h1", deleted(fnd("x", "a.go", 10))), review("h2", later))
+		if fate := one(t, got); fate.Fate != Open {
+			t.Errorf("fate = %s, want open", fate.Fate)
+		}
+	})
+	t.Run("restored and changed far from its lines went away", func(t *testing.T) {
+		f := newFake()
+		f.files[[2]string{"h1", "h2"}] = []diffmap.File{added("a.go", 20)}
+		got := decide(t, f, nil, review("h1", deleted(fnd("x", "a.go", 10))), review("h2", sk(a)))
+		if fate := one(t, got); fate.Fate != WentAway {
+			t.Errorf("fate = %s, want went_away", fate.Fate)
+		}
+	})
+	t.Run("restored and changed near its lines is fixed", func(t *testing.T) {
+		f := newFake()
+		f.files[[2]string{"h1", "h2"}] = []diffmap.File{added("a.go", 20)}
+		got := decide(t, f, nil, review("h1", deleted(fnd("x", "a.go", 2))), review("h2", sk(a)))
+		if fate := one(t, got); fate.Fate != Fixed {
+			t.Errorf("fate = %s, want fixed", fate.Fate)
+		}
+	})
+	t.Run("restored and reported again is open", func(t *testing.T) {
+		f := newFake()
+		got := decide(t, f, nil, review("h1", deleted(fnd("x", "a.go", 10))), review("h2", sk(a, fnd("x", "a.go", 10))))
+		if fate := one(t, got); fate.Fate != Open {
+			t.Errorf("fate = %s, want open", fate.Fate)
+		}
+	})
+}

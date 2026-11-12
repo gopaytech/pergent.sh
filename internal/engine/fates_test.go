@@ -273,6 +273,43 @@ func TestFatesInputCarriedFilesAreReviewed(t *testing.T) {
 	}
 }
 
+// A reviewed deleted file reaches fates as deleted: a finding on its removed
+// lines that the next review, still deleting it, does not report again is
+// fixed. A skill with no files.deleted has no Deleted, as before.
+func TestFatesInputDeletedFiles(t *testing.T) {
+	deletedSkill := func(findings ...result.Finding) result.Skill {
+		s := fateSkill(t, "no_blocking_issues", findings...)
+		s.Files.Reviewed = append(s.Files.Reviewed, "db/old.go")
+		s.Files.Deleted = []string{"db/old.go"}
+		return s
+	}
+	f := fateFinding("aaaaaaaaaaaa", "blocking", 5)
+	f.File = "db/old.go"
+	runs := []store.Run{
+		{HeadSHA: sha('a'), Result: resultFor(t, sha('a'), deletedSkill(f))},
+		{HeadSHA: sha('b'), Result: resultFor(t, sha('b'), deletedSkill())},
+		{HeadSHA: sha('c'), Result: resultFor(t, sha('c'), fateSkill(t, "no_blocking_issues"))},
+	}
+	in := fatesInput(runs, nil)
+
+	if d := in.Reviews[0].Skills[0].Deleted; !reflect.DeepEqual(d, map[string]bool{"db/old.go": true}) {
+		t.Errorf("Deleted = %v; want db/old.go", d)
+	}
+	if d := in.Reviews[2].Skills[0].Deleted; d != nil {
+		t.Errorf("Deleted = %v; want none", d)
+	}
+
+	// The file is deleted at both heads, so their diff doesn't touch it.
+	in.Reviews = in.Reviews[:2]
+	in.Compare = func(from, to string) ([]diffmap.File, error) {
+		return []diffmap.File{diffmap.Parse("db/query.go", "", "@@ -11,3 +11,3 @@\n a\n-b\n+c\n d\n", false)}, nil
+	}
+	got, err := fates.Decide(in)
+	if err != nil || len(got) != 1 || got[0].Fate != fates.Fixed {
+		t.Errorf("Decide = %+v, %v; want one fixed fate", got, err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // The pure decisions: no database
 
