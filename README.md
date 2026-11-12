@@ -28,6 +28,40 @@
 
 pergent.sh runs [pergent](https://github.com/gopaytech/pergent) code reviews on GitLab merge requests and GitHub pull requests, inside your Kubernetes cluster, with one Job per review.
 
+## Features
+
+**Reviews**
+
+- 🧩 **[Skills](docs/concepts/skills.md):** markdown skills that tell the model what to look for, kept in a shared library.
+- 💬 **[Inline findings](docs/concepts/inline-findings.md):** one comment, updated on every push, plus each finding as a thread on its lines.
+- ✅ **[Approval](docs/concepts/approval.md):** a clean review approves the change, and pergent.sh takes the approval back when that stops being true.
+- ⚡ **[Incremental reviews](docs/concepts/incremental-reviews.md):** a push re-reviews only what it changed.
+- 🗑️ **[Deleted and renamed files](docs/concepts/deleted-files.md):** reviews the lines a change deletes, and what still uses them.
+- 🔗 **[Linked repositories](docs/concepts/linked-repositories.md):** checks a change against the repositories that depend on it.
+- 🍴 **[Fork merge requests](docs/concepts/fork-merge-requests.md):** changes from forks are reviewed too.
+
+**Tuning**
+
+- 🙋 **[Commands](docs/concepts/commands.md):** `@<bot> review` and `dismiss` in a comment, or as buttons on the dashboard.
+- 🧠 **[Learn from dismissals](docs/concepts/learn-from-dismissals.md):** reviews are told what people rejected before, and why.
+- 🤫 **[Quiet reviews](docs/concepts/quiet-reviews.md):** fewer nitpicks and shorter comments, the same blocking findings.
+- 🎛️ **[Comment layout](docs/concepts/comment-layout.md):** each repository chooses what its review comment shows.
+- 🤖 **[Models](docs/concepts/models.md):** a list of models, a default, and a model per repository.
+
+**Control and cost**
+
+- 🛡️ **[Trusted authors](docs/concepts/trusted-authors.md):** a change from an author without write access, and not on the allowlist, waits until someone starts its review.
+- 💰 **[Monthly token quota](docs/concepts/token-quota.md):** a ceiling on the tokens an instance or a repository spends.
+- 🔒 **[Job isolation](docs/concepts/job-isolation.md):** a Job gets only a read-only clone token, and no service account token.
+
+**Insight and operations**
+
+- 🖥️ **[Dashboard](docs/concepts/dashboard.md):** sign-in, teams, repositories, readiness checks and an audit log.
+- 📊 **[Usage](docs/concepts/usage.md) and [metrics](docs/concepts/metrics.md):** where the tokens go, Prometheus metrics and a Grafana dashboard.
+- 📈 **[Skill results](docs/concepts/skill-results.md):** which skills people act on, and which they set aside.
+- 🩺 **[Troubleshooting](docs/setup/troubleshooting.md):** find a failed review's Job and pod, and which step failed.
+- 🔌 **[Review API](docs/setup/review-api.md):** other systems can send changes for review with an API key.
+
 ## How it works
 
 1. A merge request or pull request webhook reaches pergent.sh.
@@ -58,7 +92,7 @@ You need a Secret and a `values.yaml` first: follow the [install guide](docs/set
 
 ## Docs
 
-- [Install](docs/setup/install.md), [GitHub setup](docs/setup/github.md), [GitLab settings](docs/setup/gitlab.md)
+- [Install](docs/setup/install.md), [GitHub setup](docs/setup/github.md), [GitLab settings](docs/setup/gitlab.md), [Review API](docs/setup/review-api.md)
 - [Dashboard](docs/concepts/dashboard.md), [Skills](docs/concepts/skills.md), [Commands](docs/concepts/commands.md), [Approval](docs/concepts/approval.md)
 - [Config reference](docs/reference/configuration.md), [Upgrading](docs/upgrading.md), [Development](docs/development.md)
 - [All docs](docs/README.md)
