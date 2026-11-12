@@ -507,6 +507,13 @@ func redactSkills(skills []render.Skill, redact func(string) string) []render.Sk
 			s.Checks = append(s.Checks, rb)
 		}
 		s.Reviewed = redactAll(skills[i].Reviewed, redact)
+		// render matches a finding's file against Deleted by exact string, so
+		// every path is redacted the same way.
+		s.Deleted = redactAll(skills[i].Deleted, redact)
+		s.Renamed = nil
+		for _, r := range skills[i].Renamed {
+			s.Renamed = append(s.Renamed, render.Rename{Path: redact(r.Path), From: redact(r.From)})
+		}
 		s.Notes = redactAll(skills[i].Notes, redact)
 		s.ConfidenceReason = redact(skills[i].ConfidenceReason)
 		out[i] = s

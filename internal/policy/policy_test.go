@@ -1819,3 +1819,33 @@ func TestSkippedDeletionStillBlocks(t *testing.T) {
 		t.Errorf("decision = %+v, want success and no approval", d)
 	}
 }
+
+// Paths are redacted before they are rendered, and render matches a finding's
+// file against the deleted list by exact string: all of them must be redacted
+// the same way, or a redacted path loses its mark and gets a link.
+func TestRedactedDeletedPathsKeepTheirMarks(t *testing.T) {
+	const secretPath, secretFrom = "cfg/SECRETTOKEN-deleted.go", "old/SECRETTOKEN-from.go"
+	s := result.Skill{Name: "a", Verdict: "has_blocking_issues", Files: result.Files{
+		Reviewed: []string{secretPath, "new/SECRETTOKEN-name.go"}, Deleted: []string{secretPath},
+		Renamed: []result.Renamed{{Path: "new/SECRETTOKEN-name.go", From: secretFrom}}}}
+	s.Findings = []json.RawMessage{json.RawMessage(`{"id":"aaaaaa","fingerprint":"aaaaaa111111","file":"` + secretPath + `","line":3,"severity":"blocking","title":"T","explanation":"E","suggestion":"fix"}`)}
+	d := Decide(Outcome{
+		Result: completed(s), Redact: func(t string) string { return strings.ReplaceAll(t, "SECRETTOKEN", "***") },
+		FileURL: func(path string, line, end int) string { return "https://example.test/blob/" + path },
+	}, config.FailureStatusFailed)
+
+	if strings.Contains(d.Comment, "SECRETTOKEN") {
+		t.Errorf("a raw path is in the comment:\n%s", d.Comment)
+	}
+	for _, want := range []string{"cfg/***-deleted.go (deleted), line 3", "(renamed from `old/***-from.go`)", "new/***-name.go"} {
+		if !strings.Contains(d.Comment, want) {
+			t.Errorf("comment lacks %q:\n%s", want, d.Comment)
+		}
+	}
+	if strings.Contains(d.Comment, "example.test/blob/cfg/") {
+		t.Errorf("a finding on a deleted file has a link:\n%s", d.Comment)
+	}
+	if n := strings.Count(d.Comment, "-deleted.go`"); n != 1 {
+		t.Errorf("the deleted file is listed %d times, want once:\n%s", n, d.Comment)
+	}
+}

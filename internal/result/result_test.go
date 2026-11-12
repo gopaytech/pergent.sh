@@ -1105,3 +1105,54 @@ func TestMergeKeepsDeletedFields(t *testing.T) {
 		t.Errorf("a merge of a result without the fields wrote them: %s", out)
 	}
 }
+
+// A file deleted in an earlier push and carried is still a reviewed deletion;
+// a renamed one is still marked. A file the new run reviewed again takes the
+// new run's word, so a restored file does not inherit the mark.
+func TestMergeKeepsCarriedDeletions(t *testing.T) {
+	base := incResult(t, fromSHA,
+		Skill{Name: "ran", Verdict: "no_blocking_issues", Files: Files{
+			Reviewed: []string{"gone.go", "gone2.go", "b.go", "c.go", "plain.go"},
+			Deleted:  []string{"gone.go", "gone2.go"},
+			Renamed:  []Renamed{{Path: "b.go", From: "a.go"}, {Path: "c.go", From: "z.go"}}}},
+		Skill{Name: "idle", Verdict: "no_blocking_issues", Files: Files{
+			Reviewed: []string{"gone.go"}, Deleted: []string{"gone.go"}}})
+	partial := incResult(t, "h",
+		Skill{Name: "ran", Verdict: "no_blocking_issues", Batches: 1, Files: Files{
+			// gone2.go came back in this push and c.go was edited again.
+			Reviewed: []string{"gone2.go", "c.go", "new.go"},
+			Carried:  []string{"gone.go", "b.go", "plain.go"},
+			Deleted:  []string{"new.go"}}},
+		Skill{Name: "idle", Verdict: "no_blocking_issues", Files: Files{Reviewed: []string{}, Carried: []string{"gone.go"}}})
+
+	r := mergeIncremental(t, partial, base)
+	ran, idle := r.Skills[0].Files, r.Skills[1].Files
+	if !slices.Equal(ran.Deleted, []string{"new.go", "gone.go"}) {
+		t.Errorf("deleted = %v, want the new run's, then the carried deletion; not the restored gone2.go", ran.Deleted)
+	}
+	if len(ran.Renamed) != 1 || ran.Renamed[0] != (Renamed{Path: "b.go", From: "a.go"}) {
+		t.Errorf("renamed = %+v, want only the carried b.go (c.go was reviewed again)", ran.Renamed)
+	}
+	if !slices.Equal(idle.Deleted, []string{"gone.go"}) {
+		t.Errorf("idle deleted = %v, want gone.go", idle.Deleted)
+	}
+
+	// Through the renderer the carried deletion keeps its mark and has no link.
+	comment := render.Comment(ToRender(r), render.Options{Commit: "abc"})
+	if !strings.Contains(comment, "`gone.go` (deleted)") {
+		t.Errorf("the Files list lost the mark:\n%s", comment)
+	}
+}
+
+// A base with neither field gives the merge it gave before.
+func TestMergeWithoutDeletedFieldsIsUnchanged(t *testing.T) {
+	base := incResult(t, fromSHA, Skill{Name: "sec", Verdict: "no_blocking_issues", Files: Files{Reviewed: []string{"k.go", "m.go"}}})
+	partial := incResult(t, "h", Skill{Name: "sec", Verdict: "no_blocking_issues", Batches: 1, Files: Files{Reviewed: []string{"n.go"}, Carried: []string{"k.go"}}})
+	out, err := MergeIncremental(partial, base, fromSHA, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), `"deleted"`) || strings.Contains(string(out), `"renamed"`) {
+		t.Errorf("the merge wrote the new keys: %s", out)
+	}
+}

@@ -733,6 +733,20 @@ func mergeIncrementalSkill(raw json.RawMessage, fresh Skill, rawEarlier json.Raw
 	if files["reviewed"], err = json.Marshal(reviewed); err != nil {
 		return nil, err
 	}
+	// A carried file is reviewed like any other, so a deletion or rename the
+	// last review marked stays marked. A file the new run reviewed again is
+	// not carried and takes the new run's word (a restored file is not deleted).
+	deleted, renamed := carriedMarks(fresh, earlier)
+	if len(deleted) > len(fresh.Files.Deleted) {
+		if files["deleted"], err = json.Marshal(deleted); err != nil {
+			return nil, err
+		}
+	}
+	if len(renamed) > len(fresh.Files.Renamed) {
+		if files["renamed"], err = json.Marshal(renamed); err != nil {
+			return nil, err
+		}
+	}
 	if m["files"], err = json.Marshal(files); err != nil {
 		return nil, err
 	}
@@ -772,6 +786,28 @@ func mergeIncrementalSkill(raw json.RawMessage, fresh Skill, rawEarlier json.Raw
 		}
 	}
 	return json.Marshal(m)
+}
+
+// carriedMarks is the files.deleted and files.renamed of a merged skill: the
+// new run's entries, then the last review's entries for the files the merge
+// carries. Without carried marks they are the new run's own.
+func carriedMarks(fresh, earlier Skill) ([]string, []Renamed) {
+	deleted := slices.Clone(fresh.Files.Deleted)
+	renamed := slices.Clone(fresh.Files.Renamed)
+	for _, p := range fresh.Files.Carried {
+		if slices.Contains(fresh.Files.Reviewed, p) {
+			continue
+		}
+		if slices.Contains(earlier.Files.Deleted, p) && !slices.Contains(deleted, p) {
+			deleted = append(deleted, p)
+		}
+		for _, r := range earlier.Files.Renamed {
+			if r.Path == p && !slices.ContainsFunc(renamed, func(x Renamed) bool { return x.Path == p }) {
+				renamed = append(renamed, r)
+			}
+		}
+	}
+	return deleted, renamed
 }
 
 // maxKeptLeftOutNotes is the most left-out notes of the last review that a

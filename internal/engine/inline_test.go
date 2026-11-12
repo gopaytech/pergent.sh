@@ -2187,3 +2187,42 @@ func TestNoThreadOnDeletedFile(t *testing.T) {
 		})
 	}
 }
+
+// The same on GitHub: its files API says status "removed" (githubforge turns
+// that into Deleted), and a thread there is on the right side, which a deleted
+// file lacks. The forge's end-to-end fake is not reachable without new
+// infrastructure, so this runs the inline sync with the diff GitHub returns.
+func TestNoThreadOnDeletedFileGitHub(t *testing.T) {
+	const gone = "pkg/gone.go"
+	for _, flagged := range []bool{true, false} {
+		t.Run(fmt.Sprintf("status removed %v", flagged), func(t *testing.T) {
+			h := newHarness(t)
+			h.github = true
+			h.fi.diff = append(h.fi.diff, forge.FileDiff{Path: gone, Deleted: flagged, Patch: "@@ -1,3 +0,0 @@\n-a\n-b\n-c"})
+			s := reviewed("has_blocking_issues", "db/query.go", gone)
+			s.Files.Deleted = []string{gone}
+			s.Findings = []json.RawMessage{finding(fpBlocking, gone, 2, 0, "blocking", "replacement")}
+			r, err := result.Parse(resultFor(t, h.head, s))
+			if err != nil {
+				t.Fatal(err)
+			}
+			v := h.sync(policy.Outcome{Result: r})
+
+			if !v.On {
+				t.Fatalf("view = %+v, the inline sync did not run", v)
+			}
+			if len(h.fi.posted) != 0 {
+				t.Errorf("posted = %+v, want no thread on a deleted file", h.fi.posted)
+			}
+			if v.Inline[fpBlocking] {
+				t.Errorf("view = %+v, the finding is left out of the comment", v)
+			}
+			if v.Notes[fpBlocking] != threads.NoteOffDiff {
+				t.Errorf("notes = %v, want the off-diff note", v.Notes)
+			}
+			if _, ok := h.st.Row(fpBlocking); ok {
+				t.Error("a finding that wasn't posted has a row")
+			}
+		})
+	}
+}
