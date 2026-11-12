@@ -23,14 +23,24 @@ info:
     | --- | --- | --- |
     | `/webhooks/...` | GitLab, GitHub | `X-Gitlab-Token` header, `X-Hub-Signature-256` signature |
     | `/runs/{id}/result`, `/skill-fetches/{id}/result`, `/readiness-scans/{id}/result` | Jobs pergent.sh started | one-time bearer token per Job |
+    | `/v1/...` | systems that ask for reviews (the review API) | `Authorization: Bearer <key>`, a client key an admin made |
     | `/auth/...` | the dashboard in a browser | none, or the sign-in cookies |
     | `/api/...` | the dashboard in a browser | session cookie, plus `X-CSRF-Token` on writes |
     | `/healthz` | probes | none |
     | `/metrics` | Prometheus, on the `metrics_listen` port only | none: the port is not exposed through `public_url` |
 
-    **Conditional routes.** `/auth/` and `/api/` exist only when `dashboard.url`
-    is set. `/skill-fetches/{id}/result` and `/readiness-scans/{id}/result`
-    exist only then too. Without them the path is 404.
+    **Conditional routes.** `/auth/`, `/api/` and `/v1/` exist only when
+    `dashboard.url` is set. `/skill-fetches/{id}/result` and
+    `/readiness-scans/{id}/result` exist only then too. Without them the path
+    is 404.
+
+    **Review API.** `/v1/` is a separate API from the dashboard's. Every
+    response is sent `Cache-Control: no-store` and `X-Content-Type-Options:
+    nosniff`. Errors are `{"code": "...", "message": "..."}` (see
+    `ReviewApiError`). A missing, unknown, revoked or expired key is always the
+    same 401. A path under `/v1/` that is not a route is 404 `not_found` with
+    a key and 401 without one. Field names are snake_case. v1 only gains
+    optional fields: ignore the ones you do not know.
 
     **Dashboard API.** Every `/api/` and `/auth/` response is sent
     `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. Errors are
@@ -113,6 +123,10 @@ tags:
     description: What the reviews used, for admins.
   - name: Instances and settings
     description: Admin configuration.
+  - name: API clients
+    description: Admin management of the clients of the review API, their keys and callback secret.
+  - name: Review API
+    description: The routes a client system calls with a bearer key to ask for reviews.
 security: []
 paths:
   # ---------------------------------------------------------------- webhooks
@@ -2734,6 +2748,207 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/api-clients:
+    get:
+      operationId: listApiClients
+      tags: [API clients]
+      summary: The clients of the review API
+      description: |
+        Admins only. Every client, by name, with how many keys it has.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: The list.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/APIClientListView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    post:
+      operationId: createApiClient
+      tags: [API clients]
+      summary: Add a client of the review API
+      description: |
+        Admins only. `skills` are library skills; one the library lacks is allowed, as
+        a review is then refused with 409. `modelId` is empty (the default model) or
+        the ID of a model in the list. `callbackUrl` is empty (no callbacks) or an
+        absolute `http` or `https` URL with a host, no user name or password and no
+        fragment, at most 2000 bytes; a private or in-cluster address is allowed.
+        Leave `limits` out for the defaults; if it is given, every field of it is
+        checked. The callback secret is in this answer and in no other.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/APIClientInput'}
+      responses:
+        '201':
+          description: Added.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/APIClientCreatedView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/api-clients/{name}:
+    get:
+      operationId: getApiClient
+      tags: [API clients]
+      summary: One client of the review API
+      description: |
+        Admins only. The client's settings and its keys, newest first. Never a key or
+        the callback secret. `previousSecretUntil` is there while the secret before
+        the last rotation still signs.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/ApiClientName'
+      responses:
+        '200':
+          description: The client.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/APIClientView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    put:
+      operationId: updateApiClient
+      tags: [API clients]
+      summary: Replace a client's settings
+      description: |
+        Admins only. A full replace: `limits` is required, and the name never
+        changes. The rules are those of adding a client. Keys and secrets stay.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/ApiClientName'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/APIClientEdit'}
+      responses:
+        '200':
+          description: Changed.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/APIClientView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: deleteApiClient
+      tags: [API clients]
+      summary: Remove a client
+      description: |
+        Admins only. Its keys go with it, and the Job of each review it has in
+        flight is deleted.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/ApiClientName'
+      responses:
+        '204':
+          description: Removed.
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/api-clients/{name}/secret:
+    post:
+      operationId: rotateApiCallbackSecret
+      tags: [API clients]
+      summary: Make a new callback secret
+      description: |
+        Admins only. The new secret is in this answer and in no other. The old one
+        keeps signing for 24 hours, so the caller can switch over.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/ApiClientName'
+      responses:
+        '200':
+          description: Rotated.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/APICallbackSecretView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/api-clients/{name}/keys:
+    post:
+      operationId: createApiKey
+      tags: [API clients]
+      summary: Make a key for a client
+      description: |
+        Admins only. The key is in this answer and in no other; only its SHA-256 is
+        stored. `name` is 1 to 100 characters and is the client's own: the same name
+        twice, in any case, is 409. `expiresAt`, when given, is in the future.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/ApiClientName'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/APIKeyInput'}
+      responses:
+        '201':
+          description: Made.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/APIKeyCreatedView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/api-clients/{name}/keys/{id}:
+    delete:
+      operationId: revokeApiKey
+      tags: [API clients]
+      summary: Revoke a key
+      description: |
+        Admins only. The key stops working at once.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/ApiClientName'
+        - $ref: '#/components/parameters/ApiKeyId'
+      responses:
+        '204':
+          description: Revoked.
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/sign-in:
     get:
       operationId: getSignIn
@@ -2910,6 +3125,34 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
+  # ------------------------------------------------------------- review API
+  /v1/client:
+    get:
+      operationId: getReviewApiClient
+      tags: [Review API]
+      summary: Show the calling client and its limits
+      description: |
+        The client the key belongs to and the caps on its requests. The
+        answer is the same for every key of the client.
+      x-pergent-access: key
+      security:
+        - reviewApiKey: []
+      responses:
+        '200':
+          description: The client.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiClient'}
+        '401':
+          description: The key is missing, unknown, revoked or expired. The body is the same for each.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '500':
+          description: The key could not be checked. The code is `internal`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
 components:
   securitySchemes:
     sessionCookie:
@@ -2965,6 +3208,14 @@ components:
       type: http
       scheme: bearer
       description: The skill fetch Job's one-time token. It opens this fetch's result route only.
+    reviewApiKey:
+      type: http
+      scheme: bearer
+      description: |
+        A client key, `pgk_<prefix>_<secret>`, made by an admin in the
+        dashboard and shown once. It opens the `/v1/` routes of its client
+        only. A missing, unknown, revoked or expired key is 401
+        `unauthorized`, with the same body for each.
     readinessScanToken:
       type: http
       scheme: bearer
@@ -2988,6 +3239,18 @@ components:
       required: true
       description: The model's ID in the list; `config` is the entry the config file supplies.
       schema: {type: string}
+    ApiClientName:
+      name: name
+      in: path
+      required: true
+      description: The client's name.
+      schema: {type: string}
+    ApiKeyId:
+      name: id
+      in: path
+      required: true
+      description: The key's ID in the client's list of keys.
+      schema: {type: integer, format: int64}
     UsageDays:
       name: days
       in: query
@@ -3102,6 +3365,37 @@ components:
         text/plain:
           schema: {type: string}
   schemas:
+    # ------------------------------------------------------------- review API
+    ReviewApiError:
+      type: object
+      description: |
+        The body of every error of `/v1/`. `code` is one of `unauthorized`,
+        `not_found`, `invalid`, `too_large`, `rate_limited`, `budget_used_up`,
+        `cannot_review`, `not_finished`, `idempotency_key_reused` and, for every
+        5xx, `internal`. A new code is a `/v2/` change.
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [unauthorized, not_found, invalid, too_large, rate_limited, budget_used_up, cannot_review, not_finished, idempotency_key_reused, internal]
+        message: {type: string}
+    ReviewApiClient:
+      type: object
+      description: The calling client.
+      required: [name, limits]
+      properties:
+        name: {type: string}
+        limits: {$ref: '#/components/schemas/ReviewApiLimits'}
+    ReviewApiLimits:
+      type: object
+      description: The caps on a client's requests.
+      required: [max_request_bytes, max_files, max_in_flight, requests_per_hour, monthly_token_budget]
+      properties:
+        max_request_bytes: {type: integer, description: The most bytes of files one review request may hold.}
+        max_files: {type: integer, description: The most files one review request may hold.}
+        max_in_flight: {type: integer, description: The most reviews that may be queued or running at once.}
+        requests_per_hour: {type: integer, description: The most calls a key may make in an hour.}
+        monthly_token_budget: {type: integer, format: int64, description: The tokens the client's reviews may use in a month.}
     # ------------------------------------------------------------- shared shapes
     ErrorBody:
       type: object
@@ -4231,6 +4525,142 @@ components:
         default:
           type: boolean
           description: True for the entry reviews use when a repository names none, which is what choosing the default gives.
+    APILimitsView:
+      description: The caps on a client's requests.
+      type: object
+      required: [maxRequestBytes, maxFiles, maxInFlight, requestsPerHour, monthlyTokenBudget]
+      properties:
+        maxRequestBytes: {type: integer, minimum: 1024, maximum: 819200}
+        maxFiles: {type: integer, minimum: 1, maximum: 1000}
+        maxInFlight: {type: integer, minimum: 1, maximum: 50}
+        requestsPerHour: {type: integer, minimum: 1, maximum: 100000}
+        monthlyTokenBudget: {type: integer, format: int64, minimum: 1}
+    APIClientInput:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          maxLength: 63
+          pattern: '^[a-z0-9-]+$'
+        skills:
+          type: array
+          items: {type: string}
+          description: Library skill names; none twice.
+        modelId:
+          type: string
+          description: Empty for the default model, else the ID of a model in the list.
+        callbackUrl:
+          type: string
+          maxLength: 2000
+          description: Empty for no callbacks, else an absolute http or https URL.
+        limits:
+          description: The defaults when left out. When given, every field is required and checked.
+          $ref: '#/components/schemas/APILimitsView'
+    APIClientEdit:
+      type: object
+      required: [limits]
+      additionalProperties: false
+      properties:
+        skills:
+          type: array
+          items: {type: string}
+          description: Library skill names; none twice.
+        modelId:
+          type: string
+          description: Empty for the default model, else the ID of a model in the list.
+        callbackUrl:
+          type: string
+          maxLength: 2000
+          description: Empty for no callbacks, else an absolute http or https URL.
+        limits: {$ref: '#/components/schemas/APILimitsView'}
+    APIKeyInput:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        expiresAt:
+          type: [string, 'null']
+          format: date-time
+          description: In the future. Null or left out for a key that does not expire.
+    APIClientRowView:
+      description: One line of the list of clients.
+      type: object
+      required: [name, keys]
+      properties:
+        name: {type: string}
+        keys: {type: integer, description: How many keys the client has.}
+    APIClientListView:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/APIClientRowView'}
+    APIKeyView:
+      description: One of a client's keys. Never the key itself; the prefix finds it in a leak scan.
+      type: object
+      required: [id, name, prefix, createdAt, expiresAt, lastUsedAt]
+      properties:
+        id: {type: integer, format: int64}
+        name: {type: string}
+        prefix: {type: string}
+        createdAt: {type: string, format: date-time}
+        expiresAt: {type: [string, 'null'], format: date-time}
+        lastUsedAt: {type: [string, 'null'], format: date-time}
+    APIClientView:
+      description: One client of the review API.
+      type: object
+      required: [name, skills, modelId, callbackUrl, limits, keys, createdAt]
+      properties:
+        name: {type: string}
+        skills:
+          type: array
+          items: {type: string}
+        modelId:
+          type: string
+          description: Empty for the default model.
+        callbackUrl:
+          type: string
+          description: Empty for no callbacks.
+        previousSecretUntil:
+          type: [string, 'null']
+          format: date-time
+          description: Present while the callback secret before the last rotation still signs.
+        limits: {$ref: '#/components/schemas/APILimitsView'}
+        keys:
+          type: array
+          items: {$ref: '#/components/schemas/APIKeyView'}
+          description: Newest first.
+        createdAt: {type: string, format: date-time}
+    APIClientCreatedView:
+      type: object
+      required: [client, callbackSecret]
+      properties:
+        client: {$ref: '#/components/schemas/APIClientView'}
+        callbackSecret:
+          type: string
+          description: Shown once. Starts with `pgs_`.
+    APICallbackSecretView:
+      type: object
+      required: [callbackSecret]
+      properties:
+        callbackSecret:
+          type: string
+          description: Shown once. Starts with `pgs_`.
+    APIKeyCreatedView:
+      type: object
+      required: [key, secret]
+      properties:
+        key: {$ref: '#/components/schemas/APIKeyView'}
+        secret:
+          type: string
+          description: The key itself, `pgk_<prefix>_<secret>`. Shown once.
     LLMView:
       description: The model reviews use.
       type: object

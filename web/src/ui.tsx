@@ -79,6 +79,13 @@ export function ago(t: string, now = Date.now()): string {
   return d === 1 ? "1 day ago" : `${d} days ago`;
 }
 
+// utcText is a time as "2026-11-12 10:00 UTC", the same whatever the viewer's
+// zone and language. Text it can't read as a time is shown as it is.
+export function utcText(t: string): string {
+  const d = new Date(t);
+  return Number.isNaN(d.getTime()) ? t : `${d.toISOString().slice(0, 16).replace("T", " ")} UTC`;
+}
+
 // secretText says whether a secret is set and, for one stored in the
 // dashboard, when it changed. The value is never known to the page.
 export function secretText(s: SecretView): string {

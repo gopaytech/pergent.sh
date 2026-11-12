@@ -11,6 +11,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/readiness"
+	"github.com/gopaytech/pergent.sh/internal/reviewapi"
 	"github.com/gopaytech/pergent.sh/internal/skillfetch"
 	"github.com/gopaytech/pergent.sh/internal/store"
 	"github.com/gopaytech/pergent.sh/internal/syncmap"
@@ -246,6 +247,26 @@ func TestRoutesScanCallbackOnlyWithDashboard(t *testing.T) {
 	}
 	if code := post(mux, "Bearer t"); code != http.StatusNoContent || sr.calls != 1 {
 		t.Errorf("with a token = %d (%d calls); want 204", code, sr.calls)
+	}
+}
+
+// /v1/ is the review API: it exists only with the dashboard on, and a call
+// without a key reaches its gate (401), not the app behind "/".
+func TestReviewAPIRoutesOnlyWithDashboard(t *testing.T) {
+	stub := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "dashboard") })
+	off := dashboardDeps("", stub)
+	off.ReviewAPI = &reviewapi.Handler{}
+	if rec := status(Routes(off), http.MethodGet, "/v1/client"); rec.Code != http.StatusNotFound {
+		t.Errorf("dashboard off: GET /v1/client = %d, want 404", rec.Code)
+	}
+	on := dashboardDeps("https://pergent.example.com", stub)
+	if rec := status(Routes(on), http.MethodGet, "/v1/client"); rec.Header().Get("Cache-Control") == "no-store" {
+		t.Errorf("no ReviewAPI: GET /v1/client = %d, want the app behind \"/\", not the key gate", rec.Code)
+	}
+	on.ReviewAPI = &reviewapi.Handler{}
+	rec := status(Routes(on), http.MethodGet, "/v1/client")
+	if rec.Code != http.StatusUnauthorized || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("dashboard on: GET /v1/client = %d (Cache-Control %q), want 401 no-store", rec.Code, rec.Header().Get("Cache-Control"))
 	}
 }
 

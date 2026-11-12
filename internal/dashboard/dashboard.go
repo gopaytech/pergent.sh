@@ -83,6 +83,9 @@ type Options struct {
 	// scans after a skill setting is saved; the engine is one. Nil answers
 	// Scan now 404, as with scans off, and saves recheck nothing.
 	Readiness Readiness
+	// DeleteJob deletes a Kubernetes Job by name; removing an API client
+	// calls it for each live review the client had. Nil deletes none.
+	DeleteJob func(ctx context.Context, name string) error
 }
 
 // Readiness is the engine's side of the Readiness tab. RequestScan returns
@@ -176,6 +179,7 @@ type Dashboard struct {
 	wake          func()
 	fetcher       *skillfetch.Fetcher
 	readiness     Readiness
+	deleteJob     func(ctx context.Context, name string) error
 	// loadLLM reads the LLM saved in the dashboard again
 	// (instances.Registry.LoadLLM); a field so a test can make it fail.
 	loadLLM func(ctx context.Context) error
@@ -232,7 +236,7 @@ func New(o Options) (*Dashboard, error) {
 	}
 	d := &Dashboard{Auth: auth, Repos: repos, Store: o.Store, Log: o.Log,
 		cfg: o.Config, registry: o.Instances, connector: o.Connector,
-		sources: o.Sources, catalogs: o.Catalogs, fetcher: o.Fetcher, readiness: o.Readiness,
+		sources: o.Sources, catalogs: o.Catalogs, fetcher: o.Fetcher, readiness: o.Readiness, deleteJob: o.DeleteJob,
 		reconcileSoon: o.ReconcileSoon, wake: o.Wake, loadLLM: o.Instances.LoadLLM, heldSecrets: o.Instances.HeldSecrets, now: o.Now,
 		availableBudget: AvailableBudget, listBudget: listBudget, listLimit: listLimit,
 		idp: idpClient(o.HTTPClient), oidc: &oidcCache{},
@@ -284,6 +288,7 @@ func (d *Dashboard) Handler() http.Handler {
 	d.readRoutes(mux)
 	d.skillWriteRoutes(mux)
 	d.skillFetchRoutes(mux)
+	d.apiClientRoutes(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Cache-Control", "no-store")

@@ -16,6 +16,7 @@
 | [GitLab project settings](setup/gitlab.md) | Settings that make the approval a real gate |
 | [Config reference](reference/configuration.md) | Every config key and environment variable |
 | [Troubleshooting a failed review](setup/troubleshooting.md) | Find a review's Job and pod, and what each failed step means |
+| [Review API](setup/review-api.md) | Let another system ask for reviews |
 | [Upgrading](upgrading.md) | What to do for each release, and how to roll back |
 
 **Concepts**

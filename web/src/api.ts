@@ -732,6 +732,65 @@ export type ModelsAdminView = { canSetDefault: boolean; followingDefault: number
 // name the model.
 export type ModelInUseView = { error: string; repositories: RepoRef[] };
 
+// APILimits are a client's caps on its requests (APILimitsView).
+export type APILimits = {
+  maxRequestBytes: number;
+  maxFiles: number;
+  maxInFlight: number;
+  requestsPerHour: number;
+  monthlyTokenBudget: number;
+};
+
+// APIKeyView is one of a client's keys: the prefix finds it in a leak scan,
+// and the key itself is never shown again. expiresAt and lastUsedAt are null
+// for a key that never expires and one never used.
+export type APIKeyView = {
+  id: number;
+  name: string;
+  prefix: string;
+  createdAt: string;
+  expiresAt: string | null;
+  lastUsedAt: string | null;
+};
+
+// APIClientRow is one line of GET /api/admin/api-clients.
+export type APIClientRow = { name: string; keys: number };
+
+// APIClientView is GET /api/admin/api-clients/{name}. modelId is "" for the
+// default model. previousSecretUntil is there while the callback secret before
+// the last rotation still signs. keys are newest first.
+export type APIClientView = {
+  name: string;
+  skills: string[];
+  modelId: string;
+  callbackUrl: string;
+  previousSecretUntil?: string;
+  limits: APILimits;
+  keys: APIKeyView[];
+  createdAt: string;
+};
+
+// APIClientInput is the body of POST /api/admin/api-clients; limits left out
+// are the defaults.
+export type APIClientInput = {
+  name: string;
+  skills: string[];
+  modelId: string;
+  callbackUrl: string;
+  limits?: APILimits;
+};
+
+// APIClientEdit is the body of PUT /api/admin/api-clients/{name}: the name
+// never changes, and limits are required.
+export type APIClientEdit = Omit<APIClientInput, "name"> & { limits: APILimits };
+
+// APIClientCreated is the 201 of a new client: the only time its callback
+// secret is shown.
+export type APIClientCreated = { client: APIClientView; callbackSecret: string };
+
+// APIKeyCreated is the 201 of a new key: the only time the key is shown.
+export type APIKeyCreated = { key: APIKeyView; secret: string };
+
 // InstanceAdminView is one instance in GET /api/admin/instances (admins).
 // secrets has the fields the instance takes: review_token, approve_token
 // (not when the review bot approves), webhook_secret (GitLab); review_app_key, approve_app_key or approve_token,
@@ -1061,6 +1120,12 @@ export const paths = {
   // The page that checks one installed skill's source for updates.
   skillUpdates: (name: string) => `/skills/updates${query([["skill", name]])}`,
   apiSkillFetches: "/api/admin/skill-fetches",
+  // The API clients of the review API: the pages and the admin routes.
+  clientPage: (name: string) => `/api-clients/${seg(name)}`,
+  apiAdminClient: (name: string) => `/api/admin/api-clients/${seg(name)}`,
+  apiAdminClientSecret: (name: string) => `/api/admin/api-clients/${seg(name)}/secret`,
+  apiAdminClientKeys: (name: string) => `/api/admin/api-clients/${seg(name)}/keys`,
+  apiAdminClientKey: (name: string, id: number) => `/api/admin/api-clients/${seg(name)}/keys/${seg(String(id))}`,
   apiSkillFetch: (id: string) => `/api/admin/skill-fetches/${seg(id)}`,
   // action is "install" or "update".
   apiSkillFetchAction: (id: string, action: "install" | "update") => `/api/admin/skill-fetches/${seg(id)}/${action}`,

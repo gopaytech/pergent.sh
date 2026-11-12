@@ -3,7 +3,7 @@
 This release is deliberately small:
 
 - Commands are `review`, `review failed`, `dismiss` and `help`, and the dashboard has the matching buttons plus Restore. No chat, no questions, no asking the bot to explain or fix code, no commands that change settings, no questions in a finding's thread (only `dismiss`), and no dismissing a finding for every merge request of a repository: a dismissal belongs to one merge request. Restoring is a button only.
-- Dashboard sign-in is a password (local admins), OIDC against one provider (Google Workspace is the one built and tested), or a JWT checked behind a proxy. Signing in with GitLab or GitHub is gone. No SAML or LDAP, no groups or roles read from the provider, no two-factor authentication of our own, and no API tokens for scripts.
+- Dashboard sign-in is a password (local admins), OIDC against one provider (Google Workspace is the one built and tested), or a JWT checked behind a proxy. Signing in with GitLab or GitHub is gone. No SAML or LDAP, no groups or roles read from the provider, no two-factor authentication of our own, and no API tokens for the dashboard. API keys reach only the [review API](../setup/review-api.md), never the dashboard API; they have no scopes.
 - Teams are kept in pergent.sh: they are not synced from GitLab groups or GitHub teams.
 - A GitLab and a GitHub account of one person are two accounts, with no linking.
 - `PERGENT_SH_SECRET_KEY` can't be rotated: see [Environment variables](configuration.md).
