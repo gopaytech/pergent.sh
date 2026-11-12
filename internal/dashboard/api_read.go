@@ -207,7 +207,8 @@ func parseDays(r *http.Request, def, max int) (int, bool) {
 
 // attention returns the setup problems of the repositories in active (only
 // only's when its Path isn't ""), and, when only is zero, the instance-wide
-// ones and those about the library as a whole (no instance), for admins.
+// ones, those about the library as a whole (no instance) and those about an
+// API client, for admins.
 func (d *Dashboard) attention(ctx context.Context, se Session, active map[RepoKey]settings.Effective, only RepoKey) ([]AttentionView, error) {
 	items, err := d.Store.Attention(ctx)
 	if err != nil {
@@ -215,6 +216,14 @@ func (d *Dashboard) attention(ctx context.Context, se Session, active map[RepoKe
 	}
 	out := []AttentionView{}
 	for _, a := range items {
+		if a.Kind == store.AttentionCallbackFailing {
+			// Stored with the client's name as the project: never a
+			// repository's.
+			if a.Instance == "" && only.Path == "" && se.Admin {
+				out = append(out, AttentionView{Client: a.Project, Kind: a.Kind, Message: a.Message, UpdatedAt: a.UpdatedAt.UTC()})
+			}
+			continue
+		}
 		k := repoKey(a.Instance, a.Project)
 		switch {
 		case a.Project == "":
@@ -317,7 +326,13 @@ type cursorJSON struct {
 }
 
 func encodeCursor(r store.RunDigest) string {
-	b, _ := json.Marshal(cursorJSON{At: r.UpdatedAt, ID: r.ID})
+	return encodeCursorAt(r.UpdatedAt, r.ID)
+}
+
+// encodeCursorAt is the cursor that ends a page at the row with this time and
+// run ID.
+func encodeCursorAt(at time.Time, id string) string {
+	b, _ := json.Marshal(cursorJSON{At: at, ID: id})
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
@@ -511,10 +526,11 @@ func runSummary(run store.RunDigest, prev *store.RunDigest, j judged) RunSummary
 
 // visibleRun returns the run id when the session can see its repository,
 // its path and its project ID both; found is false otherwise, as for an
-// unknown id.
+// unknown id. An API review has no repository: it is not found here, for an
+// admin too.
 func (d *Dashboard) visibleRun(ctx context.Context, se Session, id string) (store.Run, bool, error) {
 	run, found, err := d.Store.Run(ctx, id)
-	if err != nil || !found {
+	if err != nil || !found || run.Kind != store.KindMR {
 		return store.Run{}, false, err
 	}
 	if !se.CanSeeRun(run.MR.Instance, run.ProjectPath, run.MR.ProjectID) {

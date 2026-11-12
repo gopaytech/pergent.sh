@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gopaytech/pergent.sh/internal/callback"
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -118,6 +120,7 @@ func TestAPIClientRoutesAre404ForUsers(t *testing.T) {
 		{"PUT", apiClientsURL + "/fastgateway"},
 		{"DELETE", apiClientsURL + "/fastgateway"},
 		{"POST", apiClientsURL + "/fastgateway/secret"},
+		{"POST", apiClientsURL + "/fastgateway/test-callback"},
 		{"POST", apiClientsURL + "/fastgateway/keys"},
 		{"DELETE", apiClientsURL + "/fastgateway/keys/1"},
 	} {
@@ -430,6 +433,52 @@ func TestDeleteAPIClientAudits(t *testing.T) {
 	}
 	if got := decode[APIClientListView](t, e.get(c, apiClientsURL), "list", http.StatusOK).Items; len(got) != 0 {
 		t.Errorf("items = %+v after the delete", got)
+	}
+}
+
+// Removing a client whose review runs deletes that review's Job, and the Job's
+// result is refused afterwards: the review is gone with its client.
+func TestRemoveClientDeletesLiveJobs(t *testing.T) {
+	e := newEnv(t, nil)
+	var deleted []string
+	e.d.deleteJob = func(_ context.Context, name string) error {
+		deleted = append(deleted, name)
+		return nil
+	}
+	c := e.signInOperator()
+	e.addAPIClient(c, goodClient(nil))
+	client, found, err := e.st.APIClientByName(ctx, "fastgateway")
+	if err != nil || !found {
+		t.Fatalf("APIClientByName = %v, %v", found, err)
+	}
+	id, _, err := e.st.EnqueueAPIReview(ctx, store.NewAPIReview{ClientID: client.ID, Subject: "route:1",
+		BaseSHA: "base", HeadSHA: "head", InputsSealed: []byte("sealed"), FileCount: 1, FileBytes: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.ClaimQueued(ctx, 10, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	const token = "result-token-example"
+	sum := sha256.Sum256([]byte(token))
+	if err := e.st.MarkDispatched(ctx, id, "pergent-review-live", "base", "", sum[:], time.Now().Add(time.Hour), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	wantCode(t, e.send(c, "DELETE", apiClientsURL+"/fastgateway", ""), "DELETE", http.StatusNoContent)
+
+	if strings.Join(deleted, ",") != "pergent-review-live" {
+		t.Errorf("deleted Jobs %v, want the live review's", deleted)
+	}
+	results := &callback.Handler{Results: e.st, Log: slogTo(io.Discard)}
+	req := httptest.NewRequest(http.MethodPost, "/runs/"+id+"/result", strings.NewReader(`{"status":"completed"}`))
+	req.SetPathValue("id", id)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	results.ServeHTTP(rec, req)
+	wantCode(t, rec, "POST result after the removal", http.StatusUnauthorized)
+	if _, found, err := e.st.Run(ctx, id); err != nil || found {
+		t.Errorf("the removed client's run: found %v, %v; want it gone", found, err)
 	}
 }
 

@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/readiness"
@@ -745,10 +746,12 @@ type SkillFetchResultView struct {
 }
 
 // AttentionView is one setup problem. Project is "" for a problem of the
-// whole instance (an expiring token).
+// whole instance (an expiring token). Client is the API client a problem is
+// about (failing callbacks), with Instance and Project "".
 type AttentionView struct {
 	Instance  string    `json:"instance"`
 	Project   string    `json:"project"`
+	Client    string    `json:"client,omitempty"`
 	Kind      string    `json:"kind"`
 	Message   string    `json:"message"`
 	UpdatedAt time.Time `json:"updatedAt"`
@@ -1325,13 +1328,33 @@ type UsageRepositoryRowView struct {
 	Reviews    int64           `json:"reviews"`
 }
 
-// UsageOverviewView is GET /api/admin/usage (admins).
+// UsageTenantView is one tenant of an API client in GET /api/admin/usage.
+// Tenant is "" for reviews asked for with no tenant.
+type UsageTenantView struct {
+	Tenant  string          `json:"tenant"`
+	Tokens  UsageTokensView `json:"tokens"`
+	Reviews int64           `json:"reviews"`
+}
+
+// UsageClientView is one API client in GET /api/admin/usage, with its busiest
+// tenants. MoreTenants counts the tenants left out of Tenants.
+type UsageClientView struct {
+	Name        string            `json:"name"`
+	Tokens      UsageTokensView   `json:"tokens"`
+	Reviews     int64             `json:"reviews"`
+	Tenants     []UsageTenantView `json:"tenants"`
+	MoreTenants int               `json:"moreTenants"`
+}
+
+// UsageOverviewView is GET /api/admin/usage (admins). Tokens and Reviews
+// cover the repositories and the clients.
 type UsageOverviewView struct {
 	Days         int                      `json:"days"`
 	Tokens       UsageTokensView          `json:"tokens"`
 	Reviews      int64                    `json:"reviews"`
 	Daily        []UsageDayView           `json:"daily"`
 	Repositories []UsageRepositoryRowView `json:"repositories"`
+	Clients      []UsageClientView        `json:"clients"`
 }
 
 // UsageNamedView is one skill or model of a repository's usage. Provider is
@@ -1437,10 +1460,14 @@ type APIKeyInput struct {
 	ExpiresAt *time.Time `json:"expiresAt"`
 }
 
-// APIClientRowView is one line of the list of clients.
+// APIClientRowView is one line of the list of clients. The counts are of the
+// reviews created from the 1st of the UTC month; tokens are in plus out.
 type APIClientRowView struct {
-	Name string `json:"name"`
-	Keys int    `json:"keys"`
+	Name             string `json:"name"`
+	Keys             int    `json:"keys"`
+	ReviewsThisMonth int64  `json:"reviewsThisMonth"`
+	FailedThisMonth  int64  `json:"failedThisMonth"`
+	TokensThisMonth  int64  `json:"tokensThisMonth"`
 }
 
 // APIClientListView is GET /api/admin/api-clients, by name.
@@ -1486,9 +1513,105 @@ type APICallbackSecretView struct {
 	CallbackSecret string `json:"callbackSecret"`
 }
 
+// APICallbackTestView is the answer of Send test callback: what the URL
+// answered, or why it did not. StatusCode is 0 for no answer; Error is the
+// redacted text of a failure, "" when the URL answered without a redirect.
+type APICallbackTestView struct {
+	StatusCode int    `json:"statusCode"`
+	Error      string `json:"error"`
+	DurationMs int64  `json:"durationMs"`
+}
+
+// APICallbackAttemptView is one try of a review's callback.
+type APICallbackAttemptView struct {
+	At         time.Time `json:"at"`
+	StatusCode int       `json:"statusCode"`
+	Error      string    `json:"error"`
+	DurationMs int64     `json:"durationMs"`
+}
+
+// APICallbackView is a review's callback: none, pending, delivered or
+// gave_up, and the tries so far, oldest first.
+type APICallbackView struct {
+	State    string                   `json:"state"`
+	Attempts []APICallbackAttemptView `json:"attempts"`
+}
+
 // APIKeyCreatedView is the 201 of POST /api/admin/api-clients/{name}/keys:
 // the only time the key is shown.
 type APIKeyCreatedView struct {
 	Key    APIKeyView `json:"key"`
 	Secret string     `json:"secret"`
+}
+
+// APIReviewRowView is one line of a client's reviews. Verdict is "" while the
+// review has none.
+type APIReviewRowView struct {
+	ID         string     `json:"id"`
+	Tenant     string     `json:"tenant"`
+	Subject    string     `json:"subject"`
+	Title      string     `json:"title"`
+	Status     string     `json:"status"`
+	Verdict    string     `json:"verdict"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	FinishedAt *time.Time `json:"finishedAt"`
+}
+
+// APIReviewListView is GET /api/admin/api-clients/{name}/reviews, newest
+// first. NextCursor is not "" when there is a next page.
+type APIReviewListView struct {
+	Items      []APIReviewRowView `json:"items"`
+	NextCursor string             `json:"nextCursor"`
+}
+
+// APIReviewFailureView is why an API review failed. Reason is what the caller
+// is told; Detail is more, for admins, and may be "".
+type APIReviewFailureView struct {
+	Step   string `json:"step"`
+	Reason string `json:"reason"`
+	Detail string `json:"detail"`
+}
+
+// APIReviewDetailView is GET /api/admin/api-reviews/{id}. Review is the v1
+// body of the review: the one stored when it was published, or, before that,
+// the body the API would answer with.
+type APIReviewDetailView struct {
+	ID         string                `json:"id"`
+	Client     string                `json:"client"`
+	Tenant     string                `json:"tenant"`
+	Subject    string                `json:"subject"`
+	Title      string                `json:"title"`
+	KeyName    string                `json:"keyName"`
+	Status     string                `json:"status"`
+	Model      *string               `json:"model"`
+	CreatedAt  time.Time             `json:"createdAt"`
+	FinishedAt *time.Time            `json:"finishedAt"`
+	Failure    *APIReviewFailureView `json:"failure"`
+	Callback   APICallbackView       `json:"callback"`
+	Review     json.RawMessage       `json:"review"`
+	// History is the dismissals and restores made on this review, oldest
+	// first. Dismissals is what is dismissed now for its subject, from this
+	// review or another, so the page knows which findings to offer a Stop for.
+	History    []APIReviewEventView `json:"history"`
+	Dismissals []APIDismissalView   `json:"dismissals"`
+}
+
+// APIReviewEventView is a dismissal or a restore made on an API review. Actor
+// is "key <name>" or an admin's username.
+type APIReviewEventView struct {
+	At          time.Time `json:"at"`
+	Kind        string    `json:"kind"`
+	Fingerprint string    `json:"fingerprint"`
+	Title       string    `json:"title"`
+	Actor       string    `json:"actor"`
+	Reason      string    `json:"reason"`
+}
+
+// APIDismissalView is a finding dismissed for a review's subject.
+type APIDismissalView struct {
+	Fingerprint string    `json:"fingerprint"`
+	Severity    string    `json:"severity"`
+	Reason      string    `json:"reason"`
+	Actor       string    `json:"actor"`
+	CreatedAt   time.Time `json:"createdAt"`
 }

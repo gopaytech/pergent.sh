@@ -343,7 +343,8 @@ select.btn {
   margin-bottom: 14px;
 }
 
-.filters select {
+.filters select,
+.filters input[type="text"] {
   width: auto;
   min-width: 160px;
 }
@@ -1141,6 +1142,14 @@ details.skill-doc[open] summary::before {
 .table .num {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+/* A tenant's row under its API client on the Usage page. */
+.table .tenant-row td:first-child {
+  padding-left: 28px;
+}
+.table .tenant-row td {
+  color: var(--muted);
 }
 
 .table progress {

@@ -84,7 +84,8 @@ var settleTimeout = 10 * time.Second
 // failure reason; a GitLab or Kubernetes error requeues it with backoff until
 // the fifth attempt, which reports it. Waiting for GitLab to compute the diff,
 // and a pass cut short by a cancelled ctx, postpone the run without counting
-// an attempt. One run's trouble never stops the others. The returned error
+// an attempt. An API review shares the queue and the limit, and is started by
+// dispatchAPI. One run's trouble never stops the others. The returned error
 // joins store failures only.
 func (e *Engine) DispatchOnce(ctx context.Context) error {
 	if len(e.registry().Models()) == 0 {
@@ -114,7 +115,13 @@ func (e *Engine) DispatchOnce(ctx context.Context) error {
 		d := &dispatcher{e: e, run: run, log: e.log().With(
 			"run", run.ID, "instance", run.MR.Instance, "project", run.ProjectPath,
 			"mr", run.MR.IID, "head", run.HeadSHA)}
-		if err := d.dispatch(ctx); err != nil {
+		var err error
+		if run.Kind == store.KindAPI {
+			err = d.dispatchAPI(ctx)
+		} else {
+			err = d.dispatch(ctx)
+		}
+		if err != nil {
 			errs = append(errs, fmt.Errorf("dispatch run %s: %w", run.ID, err))
 		}
 	}
@@ -177,6 +184,10 @@ type dispatcher struct {
 	// provider and model are those the run's Job reviews with, set once they
 	// are resolved. Empty, the run is not compared with the last review's.
 	provider, model string
+	// api is true for an API review (dispatchAPI sets it). Its failure
+	// reasons reach the caller, so a retry that gives up says only that the
+	// review couldn't start; the cause is logged.
+	api bool
 }
 
 func (d *dispatcher) dispatch(ctx context.Context) error {
@@ -961,6 +972,9 @@ func (d *dispatcher) retry(ctx context.Context, cause error) error {
 	attempt := d.run.Attempts + 1
 	if attempt >= maxDispatchAttempts {
 		d.log.Error("couldn't start the review; giving up", "attempt", attempt, "error", text)
+		if d.api {
+			return d.fail(ctx, reasonAPICouldntStart)
+		}
 		return d.fail(ctx, reasonCouldntStart+text)
 	}
 	notBefore := d.e.now().Add(dispatchBackoff << d.run.Attempts)

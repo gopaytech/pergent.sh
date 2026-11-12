@@ -33,5 +33,6 @@ In these docs a "merge request" is also a GitHub pull request, and the "review b
 - **Skill library**: skills written in the dashboard or installed from a git repository, plus repository skills and instructions read from the target branch.
 - **Comment commands**: `@<bot> review`, `@<bot> review failed` and `@<bot> dismiss <id> <reason>` in a comment, with matching buttons on the dashboard's review page.
 - **Readiness scan**: advice, per repository, on what is missing for a review to do well, without changing anything and without the LLM.
+- **Review API**: another system sends a change as files, before and after, and reads the verdict and findings back, with no merge request and nothing posted to GitLab or GitHub. See [Review API](../setup/review-api.md).
 - **Job isolation**: a Job holds only a read-only clone token, the key of its model and a one-time result token, never the platform token, and runs under a NetworkPolicy.
 - **A small Helm chart**: it creates a Service and no Ingress, so you route to it with whatever your cluster uses; PostgreSQL stays outside the chart.

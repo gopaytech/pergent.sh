@@ -172,7 +172,8 @@ func (s *Store) FateChecked(ctx context.Context, mr MRKey, at time.Time) error {
 // (FateChecked; never checked first, the one with the oldest review first, so
 // the new open changes of a repository can't keep an old missed merge from
 // being found). A change qualifies
-// with a decided run created at or after since and either no fate job, or a
+// with a decided run (of a merge request: an API review has no change on a
+// forge) created at or after since and either no fate job, or a
 // job finished as a close and a decided run created after it (it was reopened
 // and its merge or close not recorded). Each is one job with the project path
 // of its newest run; Merged, RequestedAt and Attempts are not set, as nothing
@@ -190,7 +191,7 @@ func (s *Store) ChangesWithoutFates(ctx context.Context, since time.Time, limit 
 				       r.instance, r.project_id, r.mr_iid, r.project_path, r.created_at
 				FROM runs r
 				LEFT JOIN fate_jobs j ON j.instance = r.instance AND j.project_id = r.project_id AND j.mr_iid = r.mr_iid
-				WHERE r.outcome <> '' AND r.created_at >= $1
+				WHERE r.kind = 'mr' AND r.outcome <> '' AND r.created_at >= $1
 				  AND (j.instance IS NULL OR (j.finished_at IS NOT NULL AND NOT j.merged AND r.created_at > j.finished_at))
 				ORDER BY r.instance, r.project_id, r.mr_iid, r.created_at DESC, r.id DESC
 			) c

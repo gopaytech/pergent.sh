@@ -15,14 +15,33 @@ const base = {
 };
 
 describe("API clients", () => {
-  it("lists each client with its key count, linked to its page", async () => {
+  it("lists each client with its key count and this month's reviews, failures and tokens, linked to its page", async () => {
     fakeApi({ ...base, "GET /api/admin/api-clients": { body: { items: apiClientRows } } });
     renderApp("/api-clients");
     expect(await screen.findByRole("heading", { name: "API clients" })).toBeInTheDocument();
     const link = await screen.findByRole("link", { name: "fastgateway" });
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
+      "Client",
+      "Keys",
+      "Reviews this month",
+      "Failed this month",
+      "Tokens this month",
+    ]);
     expect(link).toHaveAttribute("href", "/api-clients/fastgateway");
-    expect(link.closest("tr")).toHaveTextContent("2");
-    expect(screen.getByRole("link", { name: "docs-bot" }).closest("tr")).toHaveTextContent("0");
+    expect(within(link.closest("tr") as HTMLElement).getAllByRole("cell").map((c) => c.textContent)).toEqual([
+      "fastgateway",
+      "2",
+      "42",
+      "3",
+      "1,250,000",
+    ]);
+    expect(within(screen.getByRole("link", { name: "docs-bot" }).closest("tr") as HTMLElement).getAllByRole("cell").map((c) => c.textContent)).toEqual([
+      "docs-bot",
+      "0",
+      "0",
+      "0",
+      "0",
+    ]);
   });
 
   it("says so when there are no clients", async () => {

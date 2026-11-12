@@ -40,7 +40,17 @@ info:
     `ReviewApiError`). A missing, unknown, revoked or expired key is always the
     same 401. A path under `/v1/` that is not a route is 404 `not_found` with
     a key and 401 without one. Field names are snake_case. v1 only gains
-    optional fields: ignore the ones you do not know.
+    optional fields: ignore the ones you do not know. The enums (`status`,
+    `verdict`, `step`, the skipped `rule`, the error `code`) never gain a
+    value in v1: a new value is a `/v2/` change.
+
+    **Callbacks.** When a review ends, pergent.sh `POST`s it to the client's
+    callback URL. That is a request pergent.sh makes, not a route it serves,
+    so it is the webhook `reviewFinished` below. Its signature is
+    `X-Pergent-Signature: t=<unix seconds>,v1=<hex>`, one `v1=` per secret
+    (two while a rotation's 24 hour overlap lasts): each is the hex
+    HMAC-SHA256, keyed with the callback secret, of `<t>.<raw body>`. Accept
+    a delivery if any `v1=` matches and `t` is within 5 minutes of your clock.
 
     **Dashboard API.** Every `/api/` and `/auth/` response is sent
     `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. Errors are
@@ -2323,9 +2333,10 @@ paths:
       description: |
         Admins only. Tokens used in the last `days` days: the total, each UTC
         day (a day with no usage is left out, oldest first) and the
-        repositories, busiest first. Every total and ranking adds input and
-        output tokens only; `cacheRead`, `cacheWrite` and `reasoning` are
-        shown apart. `unknown` counts the review-and-skill rows whose pergent
+        repositories and the API clients, busiest first (a client lists its
+        tenants). `tokens` and `reviews` cover both, as `daily` does. Every
+        total and ranking adds input and output tokens only; `cacheRead`,
+        `cacheWrite` and `reasoning` are shown apart. `unknown` counts the review-and-skill rows whose pergent
         did not report those three counts, so a result from an older pergent
         is unknown and never zero. `reviews` counts a review once, however
         many skills it ran. A repository switched off since, or on an
@@ -2899,6 +2910,43 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/api-clients/{name}/test-callback:
+    post:
+      operationId: testApiClientCallback
+      tags: [API clients]
+      summary: Send a test callback
+      description: |
+        Admins only. Posts a test review to the client's callback URL, signed and
+        sent as a real callback is: the same headers, the same secrets (the
+        previous one too, during a rotation's overlap), a new delivery ID, and
+        no redirect followed. The body has `test: true`, the review ID
+        `00000000-0000-0000-0000-000000000000` and the verdict `nothing_reviewed`,
+        so it is never a pass. Nothing is stored for it but an audit entry. The
+        answer is 200 whatever the URL answered: `statusCode` is its status, or 0
+        for no answer, with the reason in `error` (the URL's path and query and
+        the secrets are left out). A client with no callback URL is 409.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/ApiClientName'
+      responses:
+        '200':
+          description: What the callback URL answered, or why it did not.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/APICallbackTestView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503':
+          description: Test callbacks are not available.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorBody'}
   /api/admin/api-clients/{name}/keys:
     post:
       operationId: createApiKey
@@ -2951,6 +2999,178 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/api-clients/{name}/reviews:
+    get:
+      operationId: listApiClientReviews
+      tags: [API clients]
+      summary: A client's reviews
+      description: |
+        Admins only. The client's API reviews, newest first, 50 at most.
+        `tenant` and `subject` match exactly; leave them out to match any.
+        `nextCursor`, when not empty, is passed as `cursor` for the next page.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/ApiClientName'
+        - name: tenant
+          in: query
+          description: Only this tenant's reviews.
+          schema: {type: string}
+        - name: subject
+          in: query
+          description: Only this subject's reviews.
+          schema: {type: string}
+        - name: status
+          in: query
+          description: Only reviews with this status.
+          schema:
+            type: string
+            enum: [queued, running, completed, failed, superseded]
+        - name: cursor
+          in: query
+          description: A `nextCursor` of an earlier answer.
+          schema: {type: string}
+      responses:
+        '200':
+          description: One page of reviews.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/APIReviewListView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/api-reviews/{id}:
+    get:
+      operationId: getApiReview
+      tags: [API clients]
+      summary: One API review
+      description: |
+        Admins only. The review of any client. `review` is the v1 body the API
+        answers with: the one stored when the review was published, or, before
+        that, the body the API builds from the review's state. A merge request's
+        run is not found here.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/ApiReviewId'
+      responses:
+        '200':
+          description: The review.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/APIReviewDetailView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/api-reviews/{id}/log:
+    get:
+      operationId: getApiReviewLog
+      tags: [API clients]
+      summary: The redacted tail of an API review's Job log
+      description: Admins only. Not found when no log was kept.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/ApiReviewId'
+      responses:
+        '200':
+          description: The log text.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LogView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/api-reviews/{id}/diagnostics:
+    get:
+      operationId: getApiReviewDiagnostics
+      tags: [API clients]
+      summary: What was kept of a failed API review Job
+      description: Admins only. The clone log as it was and the pod's state. Not found when nothing was kept.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/ApiReviewId'
+      responses:
+        '200':
+          description: The diagnostics.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DiagnosticsView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/api-reviews/{id}/findings/{finding}/dismiss:
+    post:
+      operationId: dismissApiReviewFinding
+      tags: [API clients]
+      summary: Dismiss a finding of an API review
+      description: |
+        Admins only. Sets the finding aside for the review's subject (its
+        client, tenant and subject together), so later reviews of the subject
+        honour it. `finding` is the finding's `id` in the review's stored
+        result; the review must be completed. The review it was made on is not
+        changed and no callback is sent. The dismissal is recorded in the
+        review's `history` with the admin's username as the actor, and is not
+        written to the audit log. `reason` is 1 to 500 characters.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/ApiReviewId'
+        - $ref: '#/components/parameters/ApiFindingId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReviewApiDismissRequest'}
+      responses:
+        '200':
+          description: '`dismissed`, or `already_dismissed` when the subject had dismissed it already (nothing changes).'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiDismissResult'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: restoreApiReviewFinding
+      tags: [API clients]
+      summary: Take back the dismissal of a finding of an API review
+      description: |
+        Admins only. The reverse of the dismissal, for the review's subject.
+        Recorded in the review's `history` as `undismissed`.
+      x-pergent-access: admin
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/ApiReviewId'
+        - $ref: '#/components/parameters/ApiFindingId'
+      responses:
+        '200':
+          description: '`restored`, or `not_dismissed` when it was not dismissed (nothing changes).'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiDismissResult'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/admin/sign-in:
     get:
@@ -3135,8 +3355,9 @@ paths:
       tags: [Review API]
       summary: Show the calling client and its limits
       description: |
-        The client the key belongs to and the caps on its requests. The
-        answer is the same for every key of the client.
+        The client the key belongs to, the caps on its requests and the
+        tokens its reviews used this UTC month. The answer is the same for
+        every key of the client.
       x-pergent-access: key
       security:
         - reviewApiKey: []
@@ -3151,11 +3372,331 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '429': {$ref: '#/components/responses/ReviewApiRateLimited'}
         '500':
           description: The key could not be checked. The code is `internal`.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ReviewApiError'}
+  /v1/reviews:
+    post:
+      operationId: createReviewApiReview
+      tags: [Review API]
+      summary: Ask for a review of a change
+      description: |
+        Queues a review of the files sent and answers `202` with the review
+        as it is now (`status: queued`) and a `Location` header. The caller
+        reads the result with `GET /v1/reviews/{id}`.
+
+        A change is sent as the content of each file before (`old`) and after
+        (`new`), not as a diff. A file with no `old` is new, one with no `new`
+        is deleted. The whole body must be UTF-8 text: a byte that is not UTF-8,
+        or a `\uD800` to `\uDFFF` escape that is not half of a surrogate
+        pair, is refused, so no file is reviewed as other bytes than the
+        caller sent. A path is relative, has no `..`
+        or `.` and appears once. Paths git can't store (a `.git` segment, a
+        control character, `a` beside `a/b`) are refused.
+
+        A request for a subject (the client, `tenant` and `subject` together)
+        that already has a review queued or running supersedes it. The files
+        and the description are kept only until the review's Job has them.
+
+        The checks run in this order and the first that fails answers: the
+        key (401); the key's requests per hour (429 `rate_limited`); the size
+        of the body (413); the `Idempotency-Key` (a review asked for with the
+        same key is answered again with its current state, or 422
+        `idempotency_key_reused` for another body); the client's monthly token
+        budget (429 `budget_used_up`); the JSON and the field rules (422); the
+        number of files and the size of the packed files (413); whether the
+        client can review at all (409).
+
+        A later review of a subject is given the subject's newest completed
+        review and what people dismissed on the subject. A finding a
+        dismissal covers stays in the result, with `dismissed`, and does not
+        block.
+      x-pergent-access: key
+      security:
+        - reviewApiKey: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: |
+            1 to 200 printable ASCII characters, chosen by the caller. A retry
+            with the same key and the same body returns the first review and
+            queues nothing; the same key with another body is 422
+            `idempotency_key_reused`. A key belongs to its client.
+          schema: {type: string, minLength: 1, maxLength: 200}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReviewApiRequest'}
+      responses:
+        '202':
+          description: The review is queued (or, for a retry, the review the key was used for, in its current state).
+          headers:
+            Location:
+              description: The review's URL, `/v1/reviews/<id>`.
+              schema: {type: string}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiReview'}
+        '401':
+          description: The key is missing, unknown, revoked or expired. The body is the same for each.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '409':
+          description: |
+            The client can't review now. The code is `cannot_review`; the
+            message says why: it has no skills, a skill is not in the library,
+            or its model is no longer in the model catalog.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '413':
+          description: |
+            The code is `too_large`. The body is over the client's
+            `max_request_bytes` (never more than 819200), there are more files
+            than its `max_files`, or the files packed for the review are too
+            large.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '422':
+          description: |
+            The code is `invalid` (the body could not be read, is not valid JSON
+            or not UTF-8 text, a field breaks its rule, or a file does, or the
+            `Idempotency-Key` is not valid; the message names the field, and a
+            file as `files[<index>]`) or `idempotency_key_reused`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '429':
+          description: |
+            The code is `rate_limited` (the key has used up the requests its
+            client's `requests_per_hour` allows: it holds that many and gets
+            them back evenly, so there is no hour to wait for) or
+            `budget_used_up` (the client's reviews asked for this UTC month used
+            its `monthly_token_budget`; a retry with an `Idempotency-Key` used
+            before is still answered). `Retry-After` is the seconds until the
+            next request is allowed or the next UTC month starts.
+          headers:
+            Retry-After:
+              description: Whole seconds to wait, at least 1.
+              schema: {type: integer}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '500':
+          description: The request could not be handled. The code is `internal`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+  /v1/reviews/{id}:
+    get:
+      operationId: getReviewApiReview
+      tags: [Review API]
+      summary: Read a review
+      description: |
+        The review as it is now. Until it finishes the body holds the status
+        and the request's identifiers only. Once it has finished it is the
+        stored result, with the verdict, the skills' findings and the files
+        each looked at.
+
+        A review of another client, an unknown ID and an ID that is not a
+        review ID all get the same `404`.
+      x-pergent-access: key
+      security:
+        - reviewApiKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The review's ID, from the `202` that queued it.
+          schema: {type: string, format: uuid}
+      responses:
+        '200':
+          description: The review.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiReview'}
+        '401':
+          description: The key is missing, unknown, revoked or expired. The body is the same for each.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '404':
+          description: There is no such review for this client. The code is `not_found`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '429': {$ref: '#/components/responses/ReviewApiRateLimited'}
+        '500':
+          description: The review could not be read. The code is `internal`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+  /v1/reviews/{id}/findings/{finding}/dismiss:
+    post:
+      operationId: dismissReviewApiFinding
+      tags: [Review API]
+      summary: Dismiss a finding
+      description: |
+        Sets a finding aside for the review's subject (the client, `tenant`
+        and `subject` together), so later reviews of the subject honour it.
+        `finding` is the finding's `id` in this review's result. The review
+        must be completed. Dismissing a finding that is dismissed already
+        answers `already_dismissed` and changes nothing. The review it was made
+        on is not changed and no callback is sent.
+
+        The checks run in this order and the first that fails answers: the key
+        (401); the review (404, the same answer for another client's review,
+        an unknown ID and one that is not a review ID); the body and the
+        `reason` (413, 422); whether the review is completed (409); the finding
+        (404).
+      x-pergent-access: key
+      security:
+        - reviewApiKey: []
+      parameters:
+        - $ref: '#/components/parameters/ReviewApiReviewId'
+        - $ref: '#/components/parameters/ReviewApiFindingId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReviewApiDismissRequest'}
+      responses:
+        '200':
+          description: The finding is dismissed (`dismissed`), or was already (`already_dismissed`).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiDismissResult'}
+        '401':
+          description: The key is missing, unknown, revoked or expired. The body is the same for each.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '404':
+          description: There is no such review for this client, or the review has no such finding. The code is `not_found`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '409':
+          description: The review is not completed. The code is `not_finished`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '413':
+          description: The body is over 16384 bytes. The code is `too_large`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '422':
+          description: |
+            The code is `invalid`. The body could not be read, is not valid
+            JSON or UTF-8 text, or `reason` is empty, over 500 characters or
+            holds a control character other than a line break or a tab.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '429': {$ref: '#/components/responses/ReviewApiRateLimited'}
+        '500':
+          description: The dismissal could not be stored. The code is `internal`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+    delete:
+      operationId: restoreReviewApiFinding
+      tags: [Review API]
+      summary: Take back a dismissal
+      description: |
+        The reverse of the dismissal, for the review's subject. It has no
+        body. The same checks apply, except the body.
+      x-pergent-access: key
+      security:
+        - reviewApiKey: []
+      parameters:
+        - $ref: '#/components/parameters/ReviewApiReviewId'
+        - $ref: '#/components/parameters/ReviewApiFindingId'
+      responses:
+        '200':
+          description: The dismissal is gone (`restored`), or there was none (`not_dismissed`).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiDismissResult'}
+        '401':
+          description: The key is missing, unknown, revoked or expired. The body is the same for each.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '404':
+          description: There is no such review for this client, or the review has no such finding. The code is `not_found`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '409':
+          description: The review is not completed. The code is `not_finished`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+        '429': {$ref: '#/components/responses/ReviewApiRateLimited'}
+        '500':
+          description: The dismissal could not be read or stored. The code is `internal`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewApiError'}
+webhooks:
+  reviewFinished:
+    post:
+      operationId: receiveReviewFinished
+      tags: [Review API]
+      summary: A review ended (callback)
+      description: |
+        pergent.sh sends this to the client's callback URL when one of its
+        reviews ends (`completed`, `failed` or `superseded`; never for
+        `queued` or `running`). The body is the review as `GET
+        /v1/reviews/{id}` answers it, byte for byte, when the callback is
+        sent. Gate on `verdict`, never on `status`. A body with `test: true`
+        is the sample of the dashboard's test button: drop it.
+
+        **Verify it.** Read the raw body, compute the hex HMAC-SHA256 of
+        `<t>.<body>` (`t` from the signature header, a dot, the raw bytes)
+        keyed with the callback secret, and compare it in constant time with
+        each `v1=` of `X-Pergent-Signature`. Accept if any matches. Refuse a
+        `t` more than 5 minutes from your clock.
+
+        **Answer.** Any `2xx` within 10 seconds is delivered. Anything else,
+        a redirect (never followed) or no answer is a failed attempt. A failed
+        callback is tried again after 10 seconds, then after twice as long
+        each time, at most an hour, until 24 hours after the review ended;
+        then pergent.sh gives up, and the review stays readable with `GET`.
+        Each try is signed afresh, with the same `X-Pergent-Delivery`.
+        A callback is sent at least once: drop a delivery ID you handled.
+        The URL and the secret are read at each try. An emptied callback URL
+        turns callbacks off.
+      parameters:
+        - name: X-Pergent-Delivery
+          in: header
+          required: true
+          description: A UUID, the same on every try of one callback. Use it to drop a repeat.
+          schema: {type: string, format: uuid}
+        - name: X-Pergent-Signature
+          in: header
+          required: true
+          description: '`t=<unix seconds>,v1=<hex>`, with one `v1=` per secret, the current one first. During a rotation there are two.'
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReviewApiReview'}
+      responses:
+        '2XX':
+          description: Delivered. The body is ignored.
+        default:
+          description: Not delivered (any other status, a redirect, or no answer within 10 seconds). It is tried again.
 components:
   securitySchemes:
     sessionCookie:
@@ -3247,6 +3788,32 @@ components:
       in: path
       required: true
       description: The client's name.
+      schema: {type: string}
+    ApiReviewId:
+      name: id
+      in: path
+      required: true
+      description: The API review's id.
+      schema:
+        type: string
+        format: uuid
+    ApiFindingId:
+      name: finding
+      in: path
+      required: true
+      description: The finding's `id` in the review's stored result.
+      schema: {type: string}
+    ReviewApiReviewId:
+      name: id
+      in: path
+      required: true
+      description: The review's ID, from the `202` that queued it.
+      schema: {type: string, format: uuid}
+    ReviewApiFindingId:
+      name: finding
+      in: path
+      required: true
+      description: The finding's `id` in the review's result.
       schema: {type: string}
     ApiKeyId:
       name: id
@@ -3367,6 +3934,20 @@ components:
       content:
         text/plain:
           schema: {type: string}
+    ReviewApiRateLimited:
+      description: |
+        The key has used up the requests its client's `requests_per_hour`
+        allows. It holds that many, a token bucket that gets one back every
+        hour divided by `requests_per_hour`, on any route. The code is
+        `rate_limited`; every request with a good key takes one, a request
+        refused with this takes none.
+      headers:
+        Retry-After:
+          description: Whole seconds until the next request is allowed, at least 1.
+          schema: {type: integer}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ReviewApiError'}
   schemas:
     # ------------------------------------------------------------- review API
     ReviewApiError:
@@ -3385,20 +3966,203 @@ components:
     ReviewApiClient:
       type: object
       description: The calling client.
-      required: [name, limits]
+      required: [name, limits, usage]
       properties:
         name: {type: string}
         limits: {$ref: '#/components/schemas/ReviewApiLimits'}
+        usage: {$ref: '#/components/schemas/ReviewApiClientUsage'}
     ReviewApiLimits:
       type: object
       description: The caps on a client's requests.
       required: [max_request_bytes, max_files, max_in_flight, requests_per_hour, monthly_token_budget]
       properties:
-        max_request_bytes: {type: integer, description: The most bytes of files one review request may hold.}
+        max_request_bytes: {type: integer, description: The most bytes one review request's body may hold (never more than 819200).}
         max_files: {type: integer, description: The most files one review request may hold.}
-        max_in_flight: {type: integer, description: The most reviews that may be queued or running at once.}
-        requests_per_hour: {type: integer, description: The most calls a key may make in an hour.}
-        monthly_token_budget: {type: integer, format: int64, description: The tokens the client's reviews may use in a month.}
+        max_in_flight: {type: integer, description: 'The most reviews that may run at once. More wait in the queue, oldest first.'}
+        requests_per_hour: {type: integer, description: 'The requests each key holds, on any route, refilled evenly (an hour divided by this is one request). Past it a request is 429 `rate_limited`.'}
+        monthly_token_budget: {type: integer, format: int64, description: 'The tokens the reviews asked for in a UTC month may use. Once used, a request is 429 `budget_used_up` and a queued review fails.'}
+    ReviewApiClientUsage:
+      type: object
+      description: What the client's reviews asked for this UTC month used, the sum its `monthly_token_budget` is held to.
+      required: [month, tokens_used, tokens_left]
+      properties:
+        month: {type: string, description: 'The UTC month, as `2026-11`.'}
+        tokens_used: {type: integer, format: int64, description: Tokens in and out.}
+        tokens_left: {type: integer, format: int64, description: What is left of the budget, never below 0.}
+    ReviewApiRequest:
+      type: object
+      description: |
+        What `POST /v1/reviews` takes. Fields it does not know are ignored.
+        The body may be as large as the client's `max_request_bytes`.
+      required: [subject, files]
+      properties:
+        subject:
+          type: string
+          description: |
+            The caller's stable ID for what changed, such as `route:123`: 1 to
+            200 characters, none a control character. A new review of a subject
+            supersedes one that is queued or running.
+        tenant:
+          type: string
+          description: The caller's customer or workspace. At most 100 characters, none a control character. Empty is a tenant of its own.
+        title:
+          type: string
+          description: A line shown on the dashboard. At most 200 characters, none a control character.
+        description:
+          type: string
+          description: What the change is for. At most 32 KiB of UTF-8. It reaches the model as data, as a merge request's description does, and is dropped with the files.
+        files:
+          type: array
+          description: The changed files, at most the client's `max_files`. Not empty.
+          items: {$ref: '#/components/schemas/ReviewApiFile'}
+    ReviewApiFile:
+      type: object
+      description: One file of the change, with its content before and after.
+      required: [path]
+      properties:
+        path:
+          type: string
+          description: Relative, at most 1024 bytes, no `..` or `.` segment, no leading `/`, once in the list.
+        old:
+          type: [string, 'null']
+          description: The content before. Missing or null means the file is new. UTF-8 text.
+        new:
+          type: [string, 'null']
+          description: The content after. Missing or null means the file was deleted. UTF-8 text.
+    ReviewApiReview:
+      type: object
+      description: |
+        A review. A `completed` one has `finished_at`, `verdict`, `skills` and
+        `usage`. A `failed` one has `finished_at`, the verdict `failed` and a
+        `failure`, no `skills`, and `usage` only if the Job left a result. A
+        `superseded` one has none of them. Only the verdict
+        `no_blocking_issues` is a pass: a review that failed, or reviewed
+        nothing, is never one.
+        v1 only gains optional fields and values of these enums never change.
+      required: [id, subject, tenant, title, status, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        subject: {type: string}
+        tenant: {type: string}
+        title: {type: string}
+        status:
+          type: string
+          enum: [queued, running, completed, failed, superseded]
+        created_at: {type: string, format: date-time}
+        finished_at:
+          type: [string, 'null']
+          format: date-time
+          description: When the review finished. Missing until then, and on a superseded review.
+        verdict:
+          type: string
+          description: |
+            The first that applies: `failed` (a skill failed, or the review
+            did), `nothing_reviewed` (no skill reviewed a file),
+            `has_blocking_issues` (a blocking finding that is not dismissed),
+            `no_blocking_issues`.
+          enum: [failed, nothing_reviewed, has_blocking_issues, no_blocking_issues]
+        skills:
+          type: array
+          items: {$ref: '#/components/schemas/ReviewApiSkill'}
+        failure:
+          oneOf:
+            - {$ref: '#/components/schemas/ReviewApiFailure'}
+            - {type: 'null'}
+        usage:
+          oneOf:
+            - {$ref: '#/components/schemas/ReviewApiUsage'}
+            - {type: 'null'}
+        test:
+          type: boolean
+          description: True on the sample body of a test callback, never on a real review.
+    ReviewApiSkill:
+      type: object
+      description: The outcome of one skill. Its verdict covers `files.reviewed` only.
+      required: [name, verdict, findings, files]
+      properties:
+        name: {type: string}
+        verdict:
+          type: string
+          enum: [failed, nothing_reviewed, has_blocking_issues, no_blocking_issues]
+        findings:
+          type: array
+          items: {$ref: '#/components/schemas/ReviewApiFinding'}
+        files: {$ref: '#/components/schemas/ReviewApiFiles'}
+    ReviewApiFiles:
+      type: object
+      description: What a skill looked at.
+      required: [reviewed, skipped, not_reviewed]
+      properties:
+        reviewed:
+          type: array
+          items: {type: string}
+        skipped:
+          type: array
+          items: {$ref: '#/components/schemas/ReviewApiSkipped'}
+        not_reviewed:
+          type: array
+          description: Files that should have been reviewed and were not. The skill is `failed`.
+          items: {$ref: '#/components/schemas/ReviewApiNotReviewed'}
+    ReviewApiSkipped:
+      type: object
+      description: A file left out of the review, and the rule that left it out.
+      required: [path, rule]
+      properties:
+        path: {type: string}
+        rule:
+          type: string
+          enum: [deleted, binary, no_content_changes, lockfile, vendored, generated, out_of_scope, excluded_by_skill, other]
+    ReviewApiNotReviewed:
+      type: object
+      required: [path, reason]
+      properties:
+        path: {type: string}
+        reason: {type: string}
+    ReviewApiFinding:
+      type: object
+      required: [id, fingerprint, file, severity, title, explanation]
+      properties:
+        id: {type: string}
+        fingerprint: {type: string}
+        file: {type: string}
+        line: {type: integer}
+        end_line: {type: integer}
+        severity:
+          type: string
+          enum: [blocking, suggestion]
+        title: {type: string}
+        explanation: {type: string}
+        fix: {type: string}
+        suggestion:
+          type: string
+          description: Exact replacement text for the lines, at most 10 lines.
+        dismissed:
+          oneOf:
+            - {$ref: '#/components/schemas/ReviewApiDismissed'}
+            - {type: 'null'}
+    ReviewApiDismissed:
+      type: object
+      description: Why, and when, an earlier dismissal on the same subject covers the finding. It no longer counts toward a blocking verdict.
+      required: [reason, at]
+      properties:
+        reason: {type: string}
+        at: {type: string, format: date-time}
+    ReviewApiFailure:
+      type: object
+      description: Where a review failed, and why.
+      required: [step, reason]
+      properties:
+        step:
+          type: string
+          enum: [starting, review, delivery, unknown]
+        reason: {type: string}
+    ReviewApiUsage:
+      type: object
+      description: What the review's skills used.
+      required: [tokens_in, tokens_out]
+      properties:
+        tokens_in: {type: integer, format: int64}
+        tokens_out: {type: integer, format: int64}
     # ------------------------------------------------------------- shared shapes
     ErrorBody:
       type: object
@@ -4014,7 +4778,10 @@ components:
         instance: {type: string}
         project:
           type: string
-          description: '"" for a problem of the whole instance.'
+          description: '"" for a problem of the whole instance, or of an API client.'
+        client:
+          type: string
+          description: The API client the problem is about (`callback_failing`, admins only), with `instance` and `project` "". Left out otherwise.
         kind: {type: string}
         message: {type: string}
         updatedAt:
@@ -4599,12 +5366,15 @@ components:
           format: date-time
           description: In the future. Null or left out for a key that does not expire.
     APIClientRowView:
-      description: One line of the list of clients.
+      description: One line of the list of clients. The counts are of the reviews created from the 1st of the UTC month.
       type: object
-      required: [name, keys]
+      required: [name, keys, reviewsThisMonth, failedThisMonth, tokensThisMonth]
       properties:
         name: {type: string}
         keys: {type: integer, description: How many keys the client has.}
+        reviewsThisMonth: {type: integer, format: int64, description: Reviews of any status.}
+        failedThisMonth: {type: integer, format: int64, description: Reviews whose status is `failed`.}
+        tokensThisMonth: {type: integer, format: int64, description: Input plus output tokens the reviews used.}
     APIClientListView:
       type: object
       required: [items]
@@ -4612,6 +5382,152 @@ components:
         items:
           type: array
           items: {$ref: '#/components/schemas/APIClientRowView'}
+    APIReviewRowView:
+      description: One line of a client's reviews.
+      type: object
+      required: [id, tenant, subject, title, status, verdict, createdAt, finishedAt]
+      properties:
+        id: {type: string, format: uuid}
+        tenant: {type: string}
+        subject: {type: string}
+        title: {type: string}
+        status:
+          type: string
+          enum: [queued, running, completed, failed, superseded]
+        verdict:
+          type: string
+          description: Empty while the review has none.
+        createdAt: {type: string, format: date-time}
+        finishedAt: {type: [string, 'null'], format: date-time}
+    APIReviewListView:
+      description: One page of a client's reviews, newest first.
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/APIReviewRowView'}
+        nextCursor:
+          type: string
+          description: 'Not "" when there is a next page: pass it as cursor.'
+    APIReviewFailureView:
+      description: Why an API review failed.
+      type: object
+      required: [step, reason, detail]
+      properties:
+        step:
+          type: string
+          enum: [starting, review, delivery, unknown]
+        reason: {type: string, description: What the caller is told.}
+        detail: {type: string, description: More, for admins. May be empty.}
+    APIReviewDetailView:
+      description: One API review.
+      type: object
+      required: [id, client, tenant, subject, title, keyName, status, model, createdAt, finishedAt, failure, callback, review, history, dismissals]
+      properties:
+        id: {type: string, format: uuid}
+        client: {type: string}
+        tenant: {type: string}
+        subject: {type: string}
+        title: {type: string}
+        keyName: {type: string, description: The name of the key the review was asked for with.}
+        status:
+          type: string
+          enum: [queued, running, completed, failed, superseded]
+        model:
+          type: [string, 'null']
+          description: The model the review ran with; null for a review that did not record it.
+        createdAt: {type: string, format: date-time}
+        finishedAt: {type: [string, 'null'], format: date-time}
+        failure:
+          oneOf:
+            - {$ref: '#/components/schemas/APIReviewFailureView'}
+            - {type: 'null'}
+          description: Null unless the review failed.
+        callback: {$ref: '#/components/schemas/APICallbackView'}
+        review:
+          allOf:
+            - $ref: '#/components/schemas/ReviewApiReview'
+          description: The v1 body, as the API answers with it.
+        history:
+          type: array
+          description: The dismissals and restores made on this review, oldest first.
+          items: {$ref: '#/components/schemas/APIReviewEventView'}
+        dismissals:
+          type: array
+          description: What is dismissed now for the review's subject, from this review or another. Oldest first.
+          items: {$ref: '#/components/schemas/APIDismissalView'}
+    ReviewApiDismissRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Why the finding is set aside. Images are removed and the text is trimmed; 1 to 500 characters are left.
+    ReviewApiDismissResult:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [dismissed, already_dismissed, restored, not_dismissed]
+    APIReviewEventView:
+      description: A dismissal or a restore made on an API review.
+      type: object
+      required: [at, kind, fingerprint, title, actor, reason]
+      properties:
+        at: {type: string, format: date-time}
+        kind:
+          type: string
+          enum: [dismissed, undismissed]
+        fingerprint: {type: string}
+        title: {type: string}
+        actor: {type: string, description: '`key <name>` for a client''s key, else an admin''s username.'}
+        reason: {type: string, description: Empty for a restore.}
+    APIDismissalView:
+      description: A finding dismissed for a review's subject.
+      type: object
+      required: [fingerprint, severity, reason, actor, createdAt]
+      properties:
+        fingerprint: {type: string}
+        severity:
+          type: string
+          enum: [blocking, suggestion]
+        reason: {type: string}
+        actor: {type: string}
+        createdAt: {type: string, format: date-time}
+    APICallbackView:
+      description: The review's callback to its client, and every try made so far.
+      type: object
+      required: [state, attempts]
+      properties:
+        state:
+          type: string
+          enum: [none, pending, delivered, gave_up]
+          description: '`none` when the review has no callback (the client had no URL, or it has not finished).'
+        attempts:
+          type: array
+          description: Oldest first.
+          items: {$ref: '#/components/schemas/APICallbackAttemptView'}
+    APICallbackAttemptView:
+      type: object
+      required: [at, statusCode, error, durationMs]
+      properties:
+        at: {type: string, format: date-time}
+        statusCode: {type: integer, description: 'What the URL answered; 0 for no answer.'}
+        error: {type: string, description: 'Redacted. Empty when the URL answered without a redirect.'}
+        durationMs: {type: integer, format: int64}
+    APICallbackTestView:
+      type: object
+      required: [statusCode, error, durationMs]
+      properties:
+        statusCode: {type: integer, description: 'What the URL answered; 0 for no answer.'}
+        error:
+          type: string
+          description: 'Redacted: the URL''s path and query and the secrets are left out. Empty when the URL answered without a redirect.'
+        durationMs: {type: integer, format: int64}
     APIKeyView:
       description: One of a client's keys. Never the key itself; the prefix finds it in a leak scan.
       type: object
@@ -5417,10 +6333,41 @@ components:
           type: integer
           format: int64
           description: Reviews, a review once however many skills it ran.
+    UsageTenantView:
+      description: One tenant of an API client in `GET /api/admin/usage`.
+      type: object
+      required: [tenant, tokens, reviews]
+      properties:
+        tenant:
+          type: string
+          description: The tenant the reviews were asked for under; "" for none.
+        tokens: {$ref: '#/components/schemas/UsageTokensView'}
+        reviews:
+          type: integer
+          format: int64
+          description: Reviews, a review once however many skills it ran.
+    UsageClientView:
+      description: One API client in `GET /api/admin/usage`.
+      type: object
+      required: [name, tokens, reviews, tenants, moreTenants]
+      properties:
+        name: {type: string}
+        tokens: {$ref: '#/components/schemas/UsageTokensView'}
+        reviews:
+          type: integer
+          format: int64
+          description: Reviews that left usage, a review once however many skills it ran.
+        tenants:
+          type: array
+          description: Busiest first, at most 100.
+          items: {$ref: '#/components/schemas/UsageTenantView'}
+        moreTenants:
+          type: integer
+          description: Tenants with usage left out of `tenants`.
     UsageOverviewView:
       description: Body of `GET /api/admin/usage`.
       type: object
-      required: [days, tokens, reviews, daily, repositories]
+      required: [days, tokens, reviews, daily, repositories, clients]
       properties:
         days: {type: integer}
         tokens: {$ref: '#/components/schemas/UsageTokensView'}
@@ -5432,6 +6379,10 @@ components:
           type: array
           description: Busiest first.
           items: {$ref: '#/components/schemas/UsageRepositoryRowView'}
+        clients:
+          type: array
+          description: API clients with usage in the period, busiest first, each with its tenants.
+          items: {$ref: '#/components/schemas/UsageClientView'}
     UsageNamedView:
       description: One skill or model of a repository's usage.
       type: object

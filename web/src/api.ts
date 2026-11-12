@@ -82,6 +82,9 @@ export type ReviewSummary = {
 export type AttentionView = {
   instance: string;
   project: string;
+  // client is the API client the problem is about (callback_failing), with
+  // instance and project "".
+  client?: string;
   kind: string;
   message: string;
   updatedAt: string;
@@ -453,14 +456,29 @@ export type UsageRepositoryRowView = {
   reviews: number;
 };
 
+// UsageTenantView is one tenant of an API client in the usage overview;
+// tenant is "" for reviews asked for with no tenant.
+export type UsageTenantView = { tenant: string; tokens: UsageTokensView; reviews: number };
+
+// UsageClientView is one API client of the usage overview, with its busiest
+// tenants. moreTenants counts the tenants with usage that tenants leaves out.
+export type UsageClientView = {
+  name: string;
+  tokens: UsageTokensView;
+  reviews: number;
+  tenants: UsageTenantView[];
+  moreTenants: number;
+};
+
 // UsageOverviewView is GET /api/admin/usage?days=N (admins), read by the
-// Usage page.
+// Usage page. tokens and reviews cover the repositories and the clients.
 export type UsageOverviewView = {
   days: number;
   tokens: UsageTokensView;
   reviews: number;
   daily: UsageDayView[];
   repositories: UsageRepositoryRowView[];
+  clients: UsageClientView[];
 };
 
 // UsageNamedView is one skill or model of a repository's usage. failed is
@@ -758,8 +776,15 @@ export type APIKeyView = {
   lastUsedAt: string | null;
 };
 
-// APIClientRow is one line of GET /api/admin/api-clients.
-export type APIClientRow = { name: string; keys: number };
+// APIClientRow is one line of GET /api/admin/api-clients. The counts are of
+// the reviews created from the 1st of the UTC month; tokens are in plus out.
+export type APIClientRow = {
+  name: string;
+  keys: number;
+  reviewsThisMonth: number;
+  failedThisMonth: number;
+  tokensThisMonth: number;
+};
 
 // APIClientView is GET /api/admin/api-clients/{name}. modelId is "" for the
 // default model. previousSecretUntil is there while the callback secret before
@@ -795,6 +820,130 @@ export type APIClientCreated = { client: APIClientView; callbackSecret: string }
 
 // APIKeyCreated is the 201 of a new key: the only time the key is shown.
 export type APIKeyCreated = { key: APIKeyView; secret: string };
+
+// The values of the v1 review's enums: the same the API gives a caller.
+export type APIStatus = "queued" | "running" | "completed" | "failed" | "superseded";
+export type APIVerdict = "no_blocking_issues" | "has_blocking_issues" | "nothing_reviewed" | "failed";
+
+// APIReviewRow is one line of GET /api/admin/api-clients/{name}/reviews.
+// verdict is "" while the review has none.
+export type APIReviewRow = {
+  id: string;
+  tenant: string;
+  subject: string;
+  title: string;
+  status: APIStatus;
+  verdict: APIVerdict | "";
+  createdAt: string;
+  finishedAt: string | null;
+};
+
+// APIReviewList is a page of a client's reviews, newest first. nextCursor is
+// "" when there is no next page.
+export type APIReviewList = { items: APIReviewRow[]; nextCursor: string };
+
+// APIFinding is a finding of the v1 review (snake_case, as the API sends it).
+// line, end_line, fix and suggestion are left out when empty; dismissed is
+// there when an earlier dismissal on the subject covers the finding.
+export type APIFinding = {
+  id: string;
+  fingerprint: string;
+  file: string;
+  line?: number;
+  end_line?: number;
+  severity: "blocking" | "suggestion";
+  title: string;
+  explanation: string;
+  fix?: string;
+  suggestion?: string;
+  dismissed?: { reason: string; at: string };
+};
+
+// APIFiles is what a skill looked at: its verdict covers the reviewed files
+// only. rule is the v1 rule that skipped a file; reason is why one that
+// should have been reviewed was not.
+export type APIFiles = {
+  reviewed: string[];
+  skipped: { path: string; rule: string }[];
+  not_reviewed: { path: string; reason: string }[];
+};
+
+export type APISkill = { name: string; verdict: APIVerdict; findings: APIFinding[]; files: APIFiles };
+
+// APIReviewBody is the v1 body of a review, as the API answers a caller.
+// verdict, skills and usage are there once the review has a result; failure
+// when it failed.
+export type APIReviewBody = {
+  id: string;
+  subject: string;
+  tenant: string;
+  title: string;
+  status: APIStatus;
+  created_at: string;
+  finished_at?: string;
+  verdict?: APIVerdict;
+  skills?: APISkill[];
+  failure?: { step: string; reason: string };
+  usage?: { tokens_in: number; tokens_out: number };
+  test?: boolean;
+};
+
+// APICallback is a review's callback to its client: none, pending, delivered
+// or gave_up, and every try so far, oldest first. statusCode is 0 for no
+// answer; error is redacted and "" when the URL answered without a redirect.
+export type APICallbackState = "none" | "pending" | "delivered" | "gave_up";
+export type APICallbackAttempt = { at: string; statusCode: number; error: string; durationMs: number };
+export type APICallback = { state: APICallbackState; attempts: APICallbackAttempt[] };
+
+// APICallbackTest is the answer of POST /api/admin/api-clients/{name}/test-callback.
+export type APICallbackTest = { statusCode: number; error: string; durationMs: number };
+
+// APIReviewEvent is a dismissal or a restore made on a review; actor is
+// "key <name>" or an admin's username, and reason is "" for a restore.
+export type APIReviewEvent = {
+  at: string;
+  kind: "dismissed" | "undismissed";
+  fingerprint: string;
+  title: string;
+  actor: string;
+  reason: string;
+};
+
+// APIDismissal is a finding dismissed now for a review's subject, by this
+// review or another.
+export type APIDismissal = {
+  fingerprint: string;
+  severity: "blocking" | "suggestion";
+  reason: string;
+  actor: string;
+  createdAt: string;
+};
+
+// APIDismissStatus is the answer of the dismiss routes.
+export type APIDismissStatus = { status: "dismissed" | "already_dismissed" | "restored" | "not_dismissed" };
+
+// APIReviewDetail is GET /api/admin/api-reviews/{id}. failure.detail is more
+// than the caller is told, for admins, and may be "". model is null for a
+// review that never started. history is the dismissals made on this review,
+// dismissals what is dismissed for its subject now: the stored body does not
+// change when a finding is dismissed.
+export type APIReviewDetail = {
+  id: string;
+  client: string;
+  tenant: string;
+  subject: string;
+  title: string;
+  keyName: string;
+  status: APIStatus;
+  model: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+  failure: { step: string; reason: string; detail: string } | null;
+  callback: APICallback;
+  review: APIReviewBody;
+  history: APIReviewEvent[];
+  dismissals: APIDismissal[];
+};
 
 // InstanceAdminView is one instance in GET /api/admin/instances (admins).
 // secrets has the fields the instance takes: review_token, approve_token
@@ -1129,8 +1278,16 @@ export const paths = {
   clientPage: (name: string) => `/api-clients/${seg(name)}`,
   apiAdminClient: (name: string) => `/api/admin/api-clients/${seg(name)}`,
   apiAdminClientSecret: (name: string) => `/api/admin/api-clients/${seg(name)}/secret`,
+  apiAdminClientTestCallback: (name: string) => `/api/admin/api-clients/${seg(name)}/test-callback`,
   apiAdminClientKeys: (name: string) => `/api/admin/api-clients/${seg(name)}/keys`,
   apiAdminClientKey: (name: string, id: number) => `/api/admin/api-clients/${seg(name)}/keys/${seg(String(id))}`,
+  apiAdminClientReviews: (name: string) => `/api/admin/api-clients/${seg(name)}/reviews`,
+  apiAdminReview: (id: string) => `/api/admin/api-reviews/${seg(id)}`,
+  apiAdminReviewDismiss: (id: string, finding: string) =>
+    `/api/admin/api-reviews/${seg(id)}/findings/${seg(finding)}/dismiss`,
+  apiAdminReviewLog: (id: string) => `/api/admin/api-reviews/${seg(id)}/log`,
+  apiAdminReviewDiagnostics: (id: string) => `/api/admin/api-reviews/${seg(id)}/diagnostics`,
+  clientReviewPage: (name: string, id: string) => `/api-clients/${seg(name)}/reviews/${seg(id)}`,
   apiSkillFetch: (id: string) => `/api/admin/skill-fetches/${seg(id)}`,
   // action is "install" or "update".
   apiSkillFetchAction: (id: string, action: "install" | "update") => `/api/admin/skill-fetches/${seg(id)}/${action}`,

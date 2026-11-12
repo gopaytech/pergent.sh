@@ -58,6 +58,12 @@ func (d *dispatcher) pastDismissals(ctx context.Context, repo settings.Effective
 	// on GitHub it is minted later, and the result token is minted later on
 	// both, so neither is removed here.
 	past := actions.PastDismissals(rows, skills, authorID, func(s string) string { return d.redact(d.e.redact(s)) })
+	return d.encodeDismissals(past)
+}
+
+// encodeDismissals is past as the Job gets it, and how many entries each
+// skill has; nil when there is none.
+func (d *dispatcher) encodeDismissals(past map[string][]actions.PastDismissal) ([]byte, map[string]int) {
 	if len(past) == 0 {
 		return nil, nil
 	}

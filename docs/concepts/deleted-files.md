@@ -10,7 +10,7 @@ The setting is **Review deleted and renamed files**, `check_deleted` in the conf
 
 > Reviews the lines a change deletes, and checks what still uses deleted files and renamed files' old paths. Costs more tokens. Needs a pergent image newer than v0.9.0; an older one ignores it.
 
-- **Per repository only.** There is no admin default and no instance default. A repository that never sets it is off.
+- **Per repository only.** There is no admin default and no instance default. A repository that never sets it is off. A [Review API](../setup/review-api.md) review has no repository, so it never reviews deleted files.
 - **Who changes it.** Maintainers and admins, in the repository's **Settings** in the dashboard, or in the config as `repositories[].check_deleted`. A repository listed in the config is read-only in the dashboard, and the config value wins ([Dashboard](dashboard.md#repositories-in-the-config-and-in-the-dashboard)).
 - **Reset to defaults** turns it off.
 - **It costs more tokens.** Removed lines go into the review like any other changed lines, every batch with a deleted file also searches the repository, and a change with nothing else to review costs one more run per skill. Renames, and deletions that can't be batched, are checked for references again on every push, even an incremental one that doesn't touch them. This is why it is off by default. The [Usage](usage.md) page shows the real cost once a repository turns it on.

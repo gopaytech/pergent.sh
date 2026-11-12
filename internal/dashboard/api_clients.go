@@ -2,7 +2,9 @@ package dashboard
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -52,6 +54,11 @@ const (
 	msgAPIKeyExpiry     = "the expiry must be in the future"
 	msgAPIClientExists  = "an API client with this name exists"
 	msgAPIKeyExists     = "the client has a key with this name"
+	msgAPINoCallback    = "this client has no callback URL"
+	msgAPITestOff       = "test callbacks are not available"
+	// msgTestSecretGone is the error of a test callback that can't be signed;
+	// it is the text a real callback records for it.
+	msgTestSecretGone = "the client's callback secret can't be opened: rotate it"
 )
 
 var apiClientName = regexp.MustCompile(`^[a-z0-9-]+$`)
@@ -175,6 +182,7 @@ func (d *Dashboard) apiClientRoutes(mux *http.ServeMux) {
 	d.adminRoute(mux, "PUT /api/admin/api-clients/{name}", d.updateAPIClient)
 	d.adminRoute(mux, "DELETE /api/admin/api-clients/{name}", d.deleteAPIClient)
 	d.adminRoute(mux, "POST /api/admin/api-clients/{name}/secret", d.rotateCallbackSecret)
+	d.adminRoute(mux, "POST /api/admin/api-clients/{name}/test-callback", d.testCallback)
 	d.adminRoute(mux, "POST /api/admin/api-clients/{name}/keys", d.createAPIKey)
 	d.adminRoute(mux, "DELETE /api/admin/api-clients/{name}/keys/{id}", d.deleteAPIKey)
 }
@@ -201,16 +209,24 @@ func (d *Dashboard) listAPIClients(w http.ResponseWriter, r *http.Request) {
 		d.failed(w, r, "listing the API clients", err)
 		return
 	}
+	stats, err := d.Store.APIClientStats(r.Context(), monthStart(d.now()))
+	if err != nil {
+		d.failed(w, r, "counting the API clients' reviews", err)
+		return
+	}
 	out := APIClientListView{Items: make([]APIClientRowView, 0, len(clients))}
 	for _, c := range clients {
-		keys, err := d.Store.APIKeys(r.Context(), c.ID)
-		if err != nil {
-			d.failed(w, r, "listing the API keys", err)
-			return
-		}
-		out.Items = append(out.Items, APIClientRowView{Name: c.Name, Keys: len(keys)})
+		st := stats[c.ID]
+		out.Items = append(out.Items, APIClientRowView{Name: c.Name, Keys: int(st.Keys),
+			ReviewsThisMonth: st.Reviews, FailedThisMonth: st.Failed, TokensThisMonth: st.Tokens})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// monthStart is midnight UTC on the 1st of the month t is in, UTC.
+func monthStart(t time.Time) time.Time {
+	t = t.UTC()
+	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
 }
 
 // --- POST /api/admin/api-clients ---
@@ -370,6 +386,81 @@ func (d *Dashboard) rotateCallbackSecret(w http.ResponseWriter, r *http.Request)
 	d.Log.Info("dashboard: callback secret rotated", "client", c.Name, "by", se.Username)
 	d.audit(ctx, se, "api_callback_secret_rotated", "", "", c.Name)
 	writeJSON(w, http.StatusOK, APICallbackSecretView{CallbackSecret: secret})
+}
+
+// --- POST /api/admin/api-clients/{name}/test-callback ---
+
+// testCallback sends the client's callback URL a test review, signed and sent
+// as a real callback is, and answers with what came back. Its verdict is
+// nothing_reviewed and its body says test: true, so it is never taken for a
+// pass. It is not recorded as a callback of any review. The error in the
+// answer is already redacted: the URL's path and query and the secrets are
+// not in it.
+func (d *Dashboard) testCallback(w http.ResponseWriter, r *http.Request) {
+	c, ok := d.namedAPIClient(w, r)
+	if !ok {
+		return
+	}
+	if c.CallbackURL == "" {
+		writeError(w, http.StatusConflict, msgAPINoCallback)
+		return
+	}
+	if d.sendCallback == nil {
+		writeError(w, http.StatusServiceUnavailable, msgAPITestOff)
+		return
+	}
+	ctx, se := r.Context(), session(r)
+	d.audit(ctx, se, "api_callback_tested", "", "", c.Name)
+	secrets, ok := d.callbackSecrets(c)
+	if !ok {
+		d.Log.Warn("dashboard: a client's callback secret can't be opened", "client", c.Name)
+		writeJSON(w, http.StatusOK, APICallbackTestView{Error: msgTestSecretGone})
+		return
+	}
+	body, err := reviewapi.Encode(reviewapi.TestReview(d.now()))
+	if err != nil {
+		d.failed(w, r, "making a test callback", err)
+		return
+	}
+	delivery, err := newDeliveryID()
+	if err != nil {
+		d.failed(w, r, "making a delivery ID", err)
+		return
+	}
+	a := d.sendCallback(ctx, c.CallbackURL, body, delivery, secrets...)
+	d.Log.Info("dashboard: test callback sent", "client", c.Name, "by", se.Username, "status", a.StatusCode,
+		"took_ms", a.Duration.Milliseconds())
+	writeJSON(w, http.StatusOK, APICallbackTestView{StatusCode: a.StatusCode, Error: a.Error, DurationMs: a.Duration.Milliseconds()})
+}
+
+// callbackSecrets opens the client's callback secret and, while the
+// rotation's overlap lasts, the previous one after it: the secrets a real
+// callback is signed with now. ok is false when the current one can't be
+// opened; a previous one that can't is left out.
+func (d *Dashboard) callbackSecrets(c store.APIClient) ([]string, bool) {
+	cur, err := d.Auth.box.Open(c.CallbackSecretSealed)
+	if err != nil {
+		return nil, false
+	}
+	secrets := []string{string(cur)}
+	if len(c.PreviousSecretSealed) > 0 && c.PreviousSecretUntil.After(d.now()) {
+		if prev, err := d.Auth.box.Open(c.PreviousSecretSealed); err == nil {
+			secrets = append(secrets, string(prev))
+		}
+	}
+	return secrets, true
+}
+
+// newDeliveryID is a random version 4 UUID, the X-Pergent-Delivery of a test
+// callback.
+func newDeliveryID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:]), nil
 }
 
 // --- POST /api/admin/api-clients/{name}/keys ---

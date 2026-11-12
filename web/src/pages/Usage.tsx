@@ -2,12 +2,13 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router";
 
-import { api, paths, type UsageOverviewView } from "../api";
+import { api, paths, type UsageClientView, type UsageOverviewView } from "../api";
 import { ErrorBox, Loading, Pill, count } from "../ui";
 import { apartText, CsvLink, DailyTable, EmptyRow, PeriodSelect, total, UsageCells, UsageHead, UsageNotes } from "./usageParts";
 
-// Usage is where the model tokens went across every repository, for admins:
-// the totals, each day and each repository. The numbers are text only.
+// Usage is where the model tokens went across every repository and API client,
+// for admins: the totals, each repository, each client with its tenants and
+// each day. The numbers are text only.
 export default function Usage() {
   const [days, setDays] = useState(30);
   const data = useQuery({
@@ -19,7 +20,7 @@ export default function Usage() {
       <div className="top">
         <div>
           <h1>Usage</h1>
-          <div className="sub">Where model tokens went in the last {days} days, across every repository</div>
+          <div className="sub">Where model tokens went in the last {days} days, across every repository and API client</div>
         </div>
         <div className="actions-row">
           <PeriodSelect days={days} onChange={setDays} />
@@ -83,7 +84,54 @@ function Body({ view, days }: { view: UsageOverviewView; days: number }) {
           </table>
         )}
       </section>
+      <section className="card scroll" aria-label="API clients">
+        <h2>API clients</h2>
+        {view.clients.length === 0 ? (
+          <EmptyRow>No usage in this period.</EmptyRow>
+        ) : (
+          <table className="table">
+            <thead>
+              <UsageHead first="Client and tenants">
+                <th className="num">Reviews</th>
+              </UsageHead>
+            </thead>
+            <tbody>
+              {view.clients.map((c) => (
+                <ClientRows key={c.name} client={c} />
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
       <DailyTable daily={view.daily} />
+    </>
+  );
+}
+
+// ClientRows is a client's row and one row for each of its tenants under it.
+// A tenant is whatever the caller sent: it is shown as text, "" as no tenant.
+function ClientRows({ client }: { client: UsageClientView }) {
+  return (
+    <>
+      <tr>
+        <td>
+          <Link to={paths.clientPage(client.name)}>{client.name}</Link>
+        </td>
+        <td className="num">{client.reviews}</td>
+        <UsageCells tokens={client.tokens} />
+      </tr>
+      {client.tenants.map((t) => (
+        <tr key={t.tenant} className="tenant-row">
+          <td>{t.tenant === "" ? "(no tenant)" : t.tenant}</td>
+          <td className="num">{t.reviews}</td>
+          <UsageCells tokens={t.tokens} />
+        </tr>
+      ))}
+      {client.moreTenants > 0 && (
+        <tr className="tenant-row">
+          <td colSpan={6}>{`and ${client.moreTenants} more ${client.moreTenants === 1 ? "tenant" : "tenants"}`}</td>
+        </tr>
+      )}
     </>
   );
 }

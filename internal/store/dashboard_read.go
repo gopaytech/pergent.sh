@@ -137,10 +137,12 @@ const digestColumns = `r.id::text, r.instance, r.project_id, r.mr_iid, r.project
 // runs_project_updated_idx: only the runs of the visible projects (visible,
 // from visibleCond with n = 6) updated in the window ($1, before the cursor
 // $2/$3) are looked at, each kept when no newer run of its merge request
-// exists (runs_mr_idx). $4 is the outcome filter (empty for any), $5 the limit.
+// exists (runs_mr_idx). A review asked for through the API is not a merge
+// request's review and is left out, for any visibility. $4 is the outcome
+// filter (empty for any), $5 the limit.
 func reviewDigestsSQL(visible string) string {
 	return `SELECT ` + digestColumns + ` FROM runs r
-	WHERE r.updated_at >= $1::timestamptz` + visible + `
+	WHERE r.updated_at >= $1::timestamptz AND r.kind = 'mr'` + visible + `
 	  AND ($2::timestamptz IS NULL OR (r.updated_at, r.id) < ($2::timestamptz, $3::uuid))
 	  AND NOT EXISTS (SELECT 1 FROM runs n
 		WHERE n.instance = r.instance AND n.project_id = r.project_id AND n.mr_iid = r.mr_iid
