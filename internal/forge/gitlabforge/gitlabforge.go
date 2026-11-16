@@ -168,8 +168,13 @@ func (f *Forge) SetStatus(ctx context.Context, projectID int64, sha string, s fo
 }
 
 // State maps a status onto GitLab's commit status states. GitLab has no
-// neutral state, so neutral is "skipped". Anything else, unknown states
-// included, is "failed": a state pergent.sh doesn't know is never success.
+// neutral state, so neutral is "success": the review is never approved and
+// its comment and description still say it failed, but the status doesn't
+// fail the pipeline, as a neutral Check Run doesn't on GitHub. It can't be
+// "skipped": the status is "running" by then, and GitLab refuses running ->
+// skipped (400), so the publish would retry and end "failed". Anything else,
+// unknown states included, is "failed": a state pergent.sh doesn't know is
+// never success.
 func State(s forge.StatusState) gitlab.StatusState {
 	switch s {
 	case forge.StatusRunning:
@@ -177,7 +182,7 @@ func State(s forge.StatusState) gitlab.StatusState {
 	case forge.StatusSuccess:
 		return gitlab.StatusSuccess
 	case forge.StatusNeutral:
-		return gitlab.StatusSkipped
+		return gitlab.StatusSuccess
 	case forge.StatusCanceled:
 		return gitlab.StatusCanceled
 	case forge.StatusPending:

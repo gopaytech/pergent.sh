@@ -25,7 +25,7 @@ The "Commit status" column is the GitLab commit status. On GitHub the same decis
 | --- | --- | --- |
 | `success` | `success` | `success` |
 | `failed` | `failed` | `failure` |
-| `failure_status` | `failed` or `skipped` (`failure_status: neutral`) | `failure` or `neutral` (`failure_status: neutral`) |
+| `failure_status` | `failed` or `success` (`failure_status: neutral`, still not approved) | `failure` or `neutral` (`failure_status: neutral`) |
 
 A review that is running is `running` on GitLab and an `in_progress` Check Run on GitHub; a superseded run ends as `canceled` on GitLab and `cancelled` on GitHub. See [The `pergent` Check Run](../setup/github.md#the-pergent-check-run).
 

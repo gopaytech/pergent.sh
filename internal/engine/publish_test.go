@@ -523,7 +523,7 @@ func TestPublishNothingReviewedNoApprove(t *testing.T) {
 	wantNoApproval(t, env, 1)
 }
 
-func TestPublishNeutralMapsToSkipped(t *testing.T) {
+func TestPublishNeutralIsSuccessOnGitLab(t *testing.T) {
 	env := newTestEnv(t)
 	env.Engine.Config.Repositories[0].FailureStatus = config.FailureStatusNeutral
 	head := sha('a')
@@ -532,7 +532,7 @@ func TestPublishNeutralMapsToSkipped(t *testing.T) {
 
 	publish(t, env)
 
-	wantStatus(t, env, head, gitlab.StatusSkipped, "Review failed for 1 of 1 skills")
+	wantStatus(t, env, head, gitlab.StatusSuccess, "Review failed for 1 of 1 skills")
 	wantPublished(t, env, id)
 	wantNoApproval(t, env, 1)
 }
