@@ -214,7 +214,7 @@ describe("RepositorySettings: Model", () => {
 
 describe("RepositorySettings: Review deleted and renamed files", () => {
   const help =
-    "Reviews the lines a change deletes, and checks what still uses deleted files and renamed files' old paths. Costs more tokens. Needs a pergent image newer than v0.9.0; an older one ignores it.";
+    "Reviews the lines a change deletes, and checks what still uses deleted files and renamed files' old paths. Costs more tokens. Needs pergent v0.10.0 or newer; an older image ignores it.";
 
   it("shows the switch after Quiet reviews, off, with its help text", async () => {
     fakeApi(base);

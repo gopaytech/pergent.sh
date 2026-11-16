@@ -8,7 +8,7 @@ A repository can turn on a setting that looks at both. It is **off by default**.
 
 The setting is **Review deleted and renamed files**, `check_deleted` in the config ([Config reference](../reference/configuration.md)). The help text under it reads:
 
-> Reviews the lines a change deletes, and checks what still uses deleted files and renamed files' old paths. Costs more tokens. Needs a pergent image newer than v0.9.0; an older one ignores it.
+> Reviews the lines a change deletes, and checks what still uses deleted files and renamed files' old paths. Costs more tokens. Needs pergent v0.10.0 or newer; an older image ignores it.
 
 - **Per repository only.** There is no admin default and no instance default. A repository that never sets it is off. A [Review API](../setup/review-api.md) review has no repository, so it never reviews deleted files.
 - **Who changes it.** Maintainers and admins, in the repository's **Settings** in the dashboard, or in the config as `repositories[].check_deleted`. A repository listed in the config is read-only in the dashboard, and the config value wins ([Dashboard](dashboard.md#repositories-in-the-config-and-in-the-dashboard)).
@@ -19,7 +19,7 @@ When it is on, pergent.sh sets the environment variable `PERGENT_CHECK_DELETED=t
 
 ## It needs a newer pergent image
 
-The switch is pergent's `--check-deleted`. A pergent image newer than v0.9.0 reads it. An older image ignores the variable and reviews as it always did, so turning the setting on with an old image does no harm and does nothing. pergent.sh's default image is still v0.9.0, so set `jobs.image` to a newer pergent image to use the setting ([Config reference](../reference/configuration.md)).
+The switch is pergent's `--check-deleted`. pergent v0.10.0 or newer reads it, and v0.10.0 is pergent.sh's default image. An older image ignores the variable and reviews as it always did, so turning the setting on with an old image does no harm and does nothing. A config that sets its own `jobs.image` needs v0.10.0 or newer to use the setting ([Config reference](../reference/configuration.md)).
 
 ## What it does
 

@@ -1,6 +1,6 @@
 # ⬆️ Upgrading
 
-## Unreleased
+## Upgrading to 0.17.0
 
 **Another system can be given API keys to the review API.** An admin makes a client under **API clients** and gives each caller a key: [Review API](setup/review-api.md). A caller can ask for a review (`POST /v1/reviews`), read it (`GET /v1/reviews/{id}`), get it by a signed callback to the client's callback URL when it ends, and dismiss its findings for the subject. Every client has limits: request size, files, reviews in flight, requests per hour and a monthly token budget. Nothing happens after the upgrade until an admin makes a client.
 
@@ -19,9 +19,11 @@ Migration `0040` runs at startup too. It adds four tables (`api_callbacks`, `api
 - **Metrics:** `pergent_api_reviews_total`, `pergent_api_tokens_total` and `pergent_api_callbacks_total`, labelled by `client` only, and an **API clients** row in the example Grafana dashboard ([Metrics](concepts/metrics.md)). The **Usage** page lists each client with its tenants.
 - **Rolling back to the previous release stops the callbacks, the dismissals and the limits** with the rest of the API: it has no `/v1/` routes. Callbacks not yet sent are never sent, the results stay stored, and dismissals stay stored. API reviews the older release meets are superseded, as described above for migration `0039`: callers send their changes again.
 
-**A repository can be asked to review deleted and renamed files.** The setting **Review deleted and renamed files** is off by default and per repository only: [Deleted and renamed files](concepts/deleted-files.md). Nothing changes after the upgrade until a maintainer or admin turns it on for a repository. It costs more tokens. It needs a pergent image newer than v0.9.0, and an older image ignores it. pergent.sh's default image is still v0.9.0, so set `jobs.image` to a newer one to use it.
+**A repository can be asked to review deleted and renamed files.** The setting **Review deleted and renamed files** is off by default and per repository only: [Deleted and renamed files](concepts/deleted-files.md). Nothing changes after the upgrade until a maintainer or admin turns it on for a repository. It costs more tokens. It needs pergent v0.10.0 or newer, and an older image ignores it.
 
 Migration `0041` runs at startup and only adds a nullable column, so back up Postgres first, as for any migration. The previous release keeps working on the migrated database and ignores the column. **To roll back, first remove `repositories[].check_deleted` from the config, if you set it.** The previous release refuses a config key it doesn't know. A value set in the dashboard stays stored and does nothing.
+
+- **The default `jobs.image` is `ghcr.io/gopaytech/pergent:v0.10.0`,** which reads the setting. A config that sets its own `jobs.image` keeps the image it names, so set it to v0.10.0 or newer to use the setting.
 
 ## Upgrading to 0.16.0
 
