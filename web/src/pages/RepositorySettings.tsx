@@ -536,7 +536,7 @@ function Form({
         <Setting
           name="Status when a review fails"
           overridden={settings.failureStatus.overridden}
-          help={`"neutral" won't block merging when the LLM provider is down.`}
+          help={`"neutral" won't block merging when a review can't be done. On GitLab the status is success; the review is still not approved.`}
         >
           <select
             aria-label="Status when a review fails"

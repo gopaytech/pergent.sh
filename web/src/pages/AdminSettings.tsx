@@ -371,7 +371,7 @@ function Defaults({ v }: { v: DefaultsView }) {
         <div>
           <div className="name">Status when a review fails</div>
           <div className="help">
-            "neutral" won't block merging when the LLM provider is down.
+            "neutral" won't block merging when a review can't be done. On GitLab the status is success; the review is still not approved.
             <FromConfig
               field="Status when a review fails"
               pinned={pinned("failureStatus")}
