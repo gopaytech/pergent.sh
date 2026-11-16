@@ -721,9 +721,11 @@ func (e *Engine) retryPublish(ctx context.Context, run store.Run, text string, l
 // owed (PublishRetry). Each step is best effort and has its own settle
 // context: the approval of that head and target is withdrawn (a failed
 // review must not leave an approval standing on its commit; the approval
-// sweep tries again what fails here), and one failed status is set on the
+// sweep tries again what fails here), and one final status is set on the
 // head so a required check isn't left running (GitHub's Check Run stays
-// in_progress from dispatch otherwise). Nothing is approved. An API review
+// in_progress from dispatch otherwise): the repository's failure_status, or
+// failed when its settings can't be read or it is gone (gaveUpStatus).
+// Nothing is approved. An API review
 // has none of these: its callback is queued instead, best effort.
 func (e *Engine) giveUp(ctx context.Context, run store.Run, log *slog.Logger) {
 	if run.Kind == store.KindAPI {
@@ -748,11 +750,31 @@ func (e *Engine) giveUp(ctx context.Context, run store.Run, log *slog.Logger) {
 	}
 	wcancel()
 
+	rctx, rcancel := settleCtx(ctx)
+	status := e.gaveUpStatus(rctx, run, log)
+	rcancel()
+
 	sctx, cancel := settleCtx(ctx)
 	defer cancel()
-	if err := plat.Forge.SetStatus(sctx, run.MR.ProjectID, run.HeadSHA, forge.StatusFailed, gaveUpDescription); err != nil {
+	if err := plat.Forge.SetStatus(sctx, run.MR.ProjectID, run.HeadSHA, status, gaveUpDescription); err != nil {
 		log.Warn("couldn't set the final status of the review that wasn't posted", "error", e.redact(err.Error()))
 	}
+}
+
+// gaveUpStatus is the final status of a run that gave up: the repository's
+// failure_status, as for any review that couldn't be done. It is neutral only
+// when the settings are read, the repository is found and it asks for
+// neutral; anything else fails closed.
+func (e *Engine) gaveUpStatus(ctx context.Context, run store.Run, log *slog.Logger) forge.StatusState {
+	repo, ok, err := e.settings().Get(ctx, run.MR.Instance, run.ProjectPath)
+	if err != nil {
+		log.Warn("couldn't read the repository settings; the final status is failed", "error", e.redact(err.Error()))
+		return forge.StatusFailed
+	}
+	if ok && repo.FailureStatus == config.FailureStatusNeutral {
+		return forge.StatusNeutral
+	}
+	return forge.StatusFailed
 }
 
 // CleanupOnce deletes the Jobs of superseded runs (keeping each one's log

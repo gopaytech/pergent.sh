@@ -2,7 +2,11 @@
 
 ## Unreleased
 
-**On GitLab, `failure_status: neutral` now sets the `pergent` commit status to `success`.** It used to set `skipped`, which GitLab refuses once the status is `running`, so a review that couldn't be done kept its status `running` through about 50 minutes of retries and then ended `failed`, blocking the merge request. Now the pipeline passes. The review is still not approved, and its comment and the status description still say it failed. GitHub and `failure_status: failed` don't change. Nothing to migrate and no config change.
+**On GitLab, `failure_status: neutral` now sets the `pergent` commit status to `success`.** It used to set `skipped`, which GitLab refuses once the status is `running`, so a review that couldn't be done kept its status `running` through about 50 minutes of retries and then ended `failed`, blocking the merge request. Now the pipeline passes. The review is still not approved, and its comment and the status description still say it failed.
+
+**A review that can't be posted now ends with the repository's `failure_status`.** After the 10 publish attempts, the last status used to be `failed` whatever the repository asked for. With `failure_status: neutral` it is now `success` on GitLab and a `neutral` Check Run on GitHub, still with "pergent couldn't post its review" and never approved. When the settings can't be read, or the repository is gone, it is still `failed`.
+
+Repositories with `failure_status: failed` don't change. Nothing to migrate and no config change.
 
 ## Upgrading to 0.17.0
 
