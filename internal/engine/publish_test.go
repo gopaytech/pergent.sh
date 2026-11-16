@@ -1425,6 +1425,28 @@ func TestPublishGiveUpNeutralIsSuccessOnGitLab(t *testing.T) {
 
 	wantStatus(t, env, head, gitlab.StatusSuccess, "pergent couldn't post its review")
 	wantNoApproval(t, env, 1)
+	if r := env.Run(id); r.DecisionStatus != "neutral" {
+		t.Errorf("recorded status = %q, want neutral", r.DecisionStatus)
+	}
+}
+
+// Blocking findings are failed whatever failure_status says, also when the
+// review with them can't be posted.
+func TestPublishGiveUpNeutralBlockingIsFailed(t *testing.T) {
+	env := newTestEnv(t)
+	env.Engine.Config.Repositories[0].FailureStatus = config.FailureStatusNeutral
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, skillWithFinding(t, "has_blocking_issues", "blocking")))
+	servePublish(env, 1, head)
+	env.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusUnprocessableEntity, `{"message":"Note is too long"}`)
+
+	publishUntilGivenUp(t, env, id)
+
+	wantStatus(t, env, head, gitlab.StatusFailed, "pergent couldn't post its review")
+	wantNoApproval(t, env, 1)
+	if r := env.Run(id); r.DecisionStatus != "failed" {
+		t.Errorf("recorded status = %q, want failed", r.DecisionStatus)
+	}
 }
 
 // A repository removed before the give-up can't say it wants neutral: the

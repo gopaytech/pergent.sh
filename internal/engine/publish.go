@@ -752,6 +752,10 @@ func (e *Engine) giveUp(ctx context.Context, run store.Run, log *slog.Logger) {
 
 	rctx, rcancel := settleCtx(ctx)
 	status := e.gaveUpStatus(rctx, run, log)
+	if err := e.Store.SetGaveUpStatus(rctx, run.ID, string(status)); err != nil {
+		// Only the dashboard's account of the status is lost: it says failed.
+		log.Warn("couldn't record the final status of the review that wasn't posted", "error", e.redact(err.Error()))
+	}
 	rcancel()
 
 	sctx, cancel := settleCtx(ctx)
@@ -764,17 +768,39 @@ func (e *Engine) giveUp(ctx context.Context, run store.Run, log *slog.Logger) {
 // gaveUpStatus is the final status of a run that gave up: the repository's
 // failure_status, as for any review that couldn't be done. It is neutral only
 // when the settings are read, the repository is found and it asks for
-// neutral; anything else fails closed.
+// neutral, and the run's stored result has no blocking findings (blocking
+// findings are failed whatever failure_status says). Anything else fails
+// closed: a result that can't be read again, and the result of an
+// incremental or some-skills run that was never merged with the rest of the
+// review, whose missing part could hold blocking findings. Dismissals are
+// not read, so a dismissed finding still counts here.
 func (e *Engine) gaveUpStatus(ctx context.Context, run store.Run, log *slog.Logger) forge.StatusState {
 	repo, ok, err := e.settings().Get(ctx, run.MR.Instance, run.ProjectPath)
 	if err != nil {
 		log.Warn("couldn't read the repository settings; the final status is failed", "error", e.redact(err.Error()))
 		return forge.StatusFailed
 	}
-	if ok && repo.FailureStatus == config.FailureStatusNeutral {
-		return forge.StatusNeutral
+	if !ok || repo.FailureStatus != config.FailureStatusNeutral {
+		return forge.StatusFailed
 	}
-	return forge.StatusFailed
+	// The publish stores the merged result before it posts: read it again.
+	stored, found, err := e.Store.Run(ctx, run.ID)
+	if err != nil || !found {
+		if err != nil {
+			log.Warn("couldn't read the run again; the final status is failed", "error", e.redact(err.Error()))
+		}
+		return forge.StatusFailed
+	}
+	if stored.FailureReason == "" && stored.Result != nil && (stored.Incremental || len(stored.SkillSubset) > 0) {
+		r, err := result.Parse(stored.Result)
+		if err == nil && r.Status == "completed" && !r.Merged && r.MergeNote == "" {
+			return forge.StatusFailed
+		}
+	}
+	if policy.Decide(e.outcome(stored, log), config.FailureStatusNeutral).Kind == policy.KindBlocking {
+		return forge.StatusFailed
+	}
+	return forge.StatusNeutral
 }
 
 // CleanupOnce deletes the Jobs of superseded runs (keeping each one's log
