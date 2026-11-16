@@ -734,7 +734,7 @@ function Form({
         <Setting
           name="Review deleted and renamed files"
           overridden={settings.checkDeleted.overridden}
-          help="Reviews the lines a change deletes, and checks what still uses deleted files and renamed files' old paths. Costs more tokens. Needs a pergent image newer than v0.9.0; an older one ignores it."
+          help="Reviews the lines a change deletes, and checks what still uses deleted files and renamed files' old paths. Costs more tokens. Needs pergent v0.10.0 or newer; an older image ignores it."
         >
           <Switch
             label="Review deleted and renamed files"
