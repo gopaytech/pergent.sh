@@ -1,5 +1,13 @@
 # ⬆️ Upgrading
 
+## Unreleased
+
+**On GitLab, `failure_status: neutral` now sets the `pergent` commit status to `success`.** It used to set `skipped`, which GitLab refuses once the status is `running`, so a review that couldn't be done kept its status `running` through about 50 minutes of retries and then ended `failed`, blocking the merge request. Now the pipeline passes. The review is still not approved, and its comment and the status description still say it failed.
+
+**A review that can't be posted now ends with the repository's `failure_status`.** After the 10 publish attempts, the last status used to be `failed` whatever the repository asked for. With `failure_status: neutral` it is now `success` on GitLab and a `neutral` Check Run on GitHub, still with "pergent couldn't post its review" and never approved. A review with blocking findings is still `failed`, and so is one whose repository settings can't be read or whose repository is gone.
+
+Repositories with `failure_status: failed` don't change. Nothing to migrate and no config change.
+
 ## Upgrading to 0.17.0
 
 **Another system can be given API keys to the review API.** An admin makes a client under **API clients** and gives each caller a key: [Review API](setup/review-api.md). A caller can ask for a review (`POST /v1/reviews`), read it (`GET /v1/reviews/{id}`), get it by a signed callback to the client's callback URL when it ends, and dismiss its findings for the subject. Every client has limits: request size, files, reviews in flight, requests per hour and a monthly token budget. Nothing happens after the upgrade until an admin makes a client.

@@ -1286,6 +1286,14 @@ const markPublishedSQL = `UPDATE runs SET
 		outcome = $2, outcome_reason = $3, decision_status = $4, approved = $5
 	WHERE id = $1::uuid AND state = 'reported'`
 
+// SetGaveUpStatus records the final status ("failed" or "neutral") the
+// give-up of a publish_failed run sets on its head, so the dashboard shows
+// it. Any other run is left alone and is an error.
+func (s *Store) SetGaveUpStatus(ctx context.Context, id, status string) error {
+	return s.mustUpdate(ctx, id, `UPDATE runs SET decision_status = $2
+		WHERE id = $1::uuid AND state = 'publish_failed'`, id, status)
+}
+
 // PublishRetry records a failed publish: the run is tried again at notBefore,
 // or becomes publish_failed when this was the 10th failed attempt, which it
 // reports (gaveUp), only on that one transition. The retry decides afresh, so

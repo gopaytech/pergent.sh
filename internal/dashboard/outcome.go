@@ -23,6 +23,7 @@ const (
 	statusRunning  = "running"
 	statusCanceled = "canceled"
 	statusFailed   = "failed"
+	statusNeutral  = "neutral"
 
 	approverKindApp       = "app"
 	approverKindReviewApp = "review_app"
@@ -77,6 +78,11 @@ func judge(r store.RunDigest) judged {
 	case OutcomeFailed:
 		switch r.State {
 		case store.PublishFailed:
+			// The give-up records neutral when it set it (SetGaveUpStatus);
+			// anything else recorded is an earlier decision of the run.
+			if r.DecisionStatus == statusNeutral {
+				return judged{OutcomeFailed, reasonNotPosted, statusNeutral}
+			}
 			return judged{OutcomeFailed, reasonNotPosted, statusFailed}
 		case store.Reported:
 			// Decided as failed, not posted yet.

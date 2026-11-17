@@ -246,7 +246,7 @@ func TestSetStatus(t *testing.T) {
 		forge.StatusRunning:  "running",
 		forge.StatusSuccess:  "success",
 		forge.StatusFailed:   "failed",
-		forge.StatusNeutral:  "skipped",
+		forge.StatusNeutral:  "success",
 		forge.StatusCanceled: "canceled",
 		forge.StatusPending:  "pending",
 		"":                   "failed",
@@ -432,15 +432,15 @@ func TestHasApproved(t *testing.T) {
 	}
 }
 
-// GitLab has no neutral commit status, so neutral is "skipped"; anything
-// pergent.sh doesn't know is failed, never success. (Moved here from the
-// engine's GitLabState test.)
+// GitLab has no neutral commit status, so neutral is "success" (GitLab refuses
+// running -> skipped); anything pergent.sh doesn't know is failed, never
+// success. (Moved here from the engine's GitLabState test.)
 func TestState(t *testing.T) {
 	for in, want := range map[forge.StatusState]gitlab.StatusState{
 		forge.StatusRunning:  gitlab.StatusRunning,
 		forge.StatusSuccess:  gitlab.StatusSuccess,
 		forge.StatusFailed:   gitlab.StatusFailed,
-		forge.StatusNeutral:  gitlab.StatusSkipped,
+		forge.StatusNeutral:  gitlab.StatusSuccess,
 		forge.StatusCanceled: gitlab.StatusCanceled,
 		forge.StatusPending:  gitlab.StatusPending,
 		"":                   gitlab.StatusFailed,

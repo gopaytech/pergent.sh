@@ -721,9 +721,11 @@ func (e *Engine) retryPublish(ctx context.Context, run store.Run, text string, l
 // owed (PublishRetry). Each step is best effort and has its own settle
 // context: the approval of that head and target is withdrawn (a failed
 // review must not leave an approval standing on its commit; the approval
-// sweep tries again what fails here), and one failed status is set on the
+// sweep tries again what fails here), and one final status is set on the
 // head so a required check isn't left running (GitHub's Check Run stays
-// in_progress from dispatch otherwise). Nothing is approved. An API review
+// in_progress from dispatch otherwise): the repository's failure_status, or
+// failed when its settings can't be read or it is gone (gaveUpStatus).
+// Nothing is approved. An API review
 // has none of these: its callback is queued instead, best effort.
 func (e *Engine) giveUp(ctx context.Context, run store.Run, log *slog.Logger) {
 	if run.Kind == store.KindAPI {
@@ -748,11 +750,57 @@ func (e *Engine) giveUp(ctx context.Context, run store.Run, log *slog.Logger) {
 	}
 	wcancel()
 
+	rctx, rcancel := settleCtx(ctx)
+	status := e.gaveUpStatus(rctx, run, log)
+	if err := e.Store.SetGaveUpStatus(rctx, run.ID, string(status)); err != nil {
+		// Only the dashboard's account of the status is lost: it says failed.
+		log.Warn("couldn't record the final status of the review that wasn't posted", "error", e.redact(err.Error()))
+	}
+	rcancel()
+
 	sctx, cancel := settleCtx(ctx)
 	defer cancel()
-	if err := plat.Forge.SetStatus(sctx, run.MR.ProjectID, run.HeadSHA, forge.StatusFailed, gaveUpDescription); err != nil {
+	if err := plat.Forge.SetStatus(sctx, run.MR.ProjectID, run.HeadSHA, status, gaveUpDescription); err != nil {
 		log.Warn("couldn't set the final status of the review that wasn't posted", "error", e.redact(err.Error()))
 	}
+}
+
+// gaveUpStatus is the final status of a run that gave up: the repository's
+// failure_status, as for any review that couldn't be done. It is neutral only
+// when the settings are read, the repository is found and it asks for
+// neutral, and the run's stored result has no blocking findings (blocking
+// findings are failed whatever failure_status says). Anything else fails
+// closed: a result that can't be read again, and the result of an
+// incremental or some-skills run that was never merged with the rest of the
+// review, whose missing part could hold blocking findings. Dismissals are
+// not read, so a dismissed finding still counts here.
+func (e *Engine) gaveUpStatus(ctx context.Context, run store.Run, log *slog.Logger) forge.StatusState {
+	repo, ok, err := e.settings().Get(ctx, run.MR.Instance, run.ProjectPath)
+	if err != nil {
+		log.Warn("couldn't read the repository settings; the final status is failed", "error", e.redact(err.Error()))
+		return forge.StatusFailed
+	}
+	if !ok || repo.FailureStatus != config.FailureStatusNeutral {
+		return forge.StatusFailed
+	}
+	// The publish stores the merged result before it posts: read it again.
+	stored, found, err := e.Store.Run(ctx, run.ID)
+	if err != nil || !found {
+		if err != nil {
+			log.Warn("couldn't read the run again; the final status is failed", "error", e.redact(err.Error()))
+		}
+		return forge.StatusFailed
+	}
+	if stored.FailureReason == "" && stored.Result != nil && (stored.Incremental || len(stored.SkillSubset) > 0) {
+		r, err := result.Parse(stored.Result)
+		if err == nil && r.Status == "completed" && !r.Merged && r.MergeNote == "" {
+			return forge.StatusFailed
+		}
+	}
+	if policy.Decide(e.outcome(stored, log), config.FailureStatusNeutral).Kind == policy.KindBlocking {
+		return forge.StatusFailed
+	}
+	return forge.StatusNeutral
 }
 
 // CleanupOnce deletes the Jobs of superseded runs (keeping each one's log

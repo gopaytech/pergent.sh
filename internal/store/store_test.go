@@ -527,6 +527,27 @@ func TestPublishRetryGivesUpAtTen(t *testing.T) {
 	}
 }
 
+// The give-up records the final status it set on a publish_failed run, and
+// only there.
+func TestSetGaveUpStatus(t *testing.T) {
+	s := newStore(t)
+	id := reported(t, s, mr1, "aaa", `{"status":"completed"}`)
+	if err := s.SetGaveUpStatus(ctx, id, "neutral"); err == nil {
+		t.Error("SetGaveUpStatus on a reported run succeeded")
+	}
+	for i := 1; i <= 10; i++ {
+		if _, err := s.PublishRetry(ctx, id, "gitlab 502", t0.Add(time.Duration(i)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.SetGaveUpStatus(ctx, id, "neutral"); err != nil {
+		t.Fatal(err)
+	}
+	if r := getRun(t, s, id); r.State != PublishFailed || r.DecisionStatus != "neutral" {
+		t.Errorf("run = %s, decision status %q; want publish_failed, neutral", r.State, r.DecisionStatus)
+	}
+}
+
 func TestPublishRetryCountsFromReport(t *testing.T) {
 	// Dispatch retries must not eat into the publish budget.
 	s := newStore(t)

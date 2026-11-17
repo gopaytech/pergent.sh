@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -17,6 +18,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/forge"
@@ -523,7 +526,7 @@ func TestPublishNothingReviewedNoApprove(t *testing.T) {
 	wantNoApproval(t, env, 1)
 }
 
-func TestPublishNeutralMapsToSkipped(t *testing.T) {
+func TestPublishNeutralIsSuccessOnGitLab(t *testing.T) {
 	env := newTestEnv(t)
 	env.Engine.Config.Repositories[0].FailureStatus = config.FailureStatusNeutral
 	head := sha('a')
@@ -532,7 +535,7 @@ func TestPublishNeutralMapsToSkipped(t *testing.T) {
 
 	publish(t, env)
 
-	wantStatus(t, env, head, gitlab.StatusSkipped, "Review failed for 1 of 1 skills")
+	wantStatus(t, env, head, gitlab.StatusSuccess, "Review failed for 1 of 1 skills")
 	wantPublished(t, env, id)
 	wantNoApproval(t, env, 1)
 }
@@ -1404,6 +1407,110 @@ func TestPublishFailedSetsFinalStatusOnce(t *testing.T) {
 		if strings.Contains(env.Logs(), secret) {
 			t.Error("a token reached the log")
 		}
+	}
+}
+
+// A repository set to neutral gets its failure_status when publishing gives
+// up too: on GitLab that is success, still with the give-up description and
+// never approved.
+func TestPublishGiveUpNeutralIsSuccessOnGitLab(t *testing.T) {
+	env := newTestEnv(t)
+	env.Engine.Config.Repositories[0].FailureStatus = config.FailureStatusNeutral
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublish(env, 1, head)
+	env.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusUnprocessableEntity, `{"message":"Note is too long"}`)
+
+	publishUntilGivenUp(t, env, id)
+
+	wantStatus(t, env, head, gitlab.StatusSuccess, "pergent couldn't post its review")
+	wantNoApproval(t, env, 1)
+	if r := env.Run(id); r.DecisionStatus != "neutral" {
+		t.Errorf("recorded status = %q, want neutral", r.DecisionStatus)
+	}
+}
+
+// Blocking findings are failed whatever failure_status says, also when the
+// review with them can't be posted.
+func TestPublishGiveUpNeutralBlockingIsFailed(t *testing.T) {
+	env := newTestEnv(t)
+	env.Engine.Config.Repositories[0].FailureStatus = config.FailureStatusNeutral
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, skillWithFinding(t, "has_blocking_issues", "blocking")))
+	servePublish(env, 1, head)
+	env.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusUnprocessableEntity, `{"message":"Note is too long"}`)
+
+	publishUntilGivenUp(t, env, id)
+
+	wantStatus(t, env, head, gitlab.StatusFailed, "pergent couldn't post its review")
+	wantNoApproval(t, env, 1)
+	if r := env.Run(id); r.DecisionStatus != "failed" {
+		t.Errorf("recorded status = %q, want failed", r.DecisionStatus)
+	}
+}
+
+// A repository removed before the give-up can't say it wants neutral: the
+// final status fails closed.
+func TestPublishGiveUpRepositoryGoneIsFailed(t *testing.T) {
+	env := newTestEnv(t)
+	env.Engine.Config.Repositories[0].FailureStatus = config.FailureStatusNeutral
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublish(env, 1, head)
+	env.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusUnprocessableEntity, `{"message":"Note is too long"}`)
+	env.Engine.Config.Repositories = nil
+
+	publishUntilGivenUp(t, env, id)
+
+	wantStatus(t, env, head, gitlab.StatusFailed, "pergent couldn't post its review")
+	wantNoApproval(t, env, 1)
+}
+
+// Settings that can't be read at the give-up fail closed too: the dashboard
+// repository is set to neutral, but its defaults can no longer be read.
+func TestPublishGiveUpUnreadableSettingsIsFailed(t *testing.T) {
+	env := newTestEnv(t)
+	env.Engine.Config.Repositories = nil
+	neutral := string(config.FailureStatusNeutral)
+	if err := env.Store.UpsertDashboardRepo(env.ctx, store.DashboardRepo{
+		Instance: testInstance, Project: testProjectPath, FailureStatus: &neutral,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublish(env, 1, head)
+	env.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusUnprocessableEntity, `{"message":"Note is too long"}`)
+	for i := 0; i < 9; i++ {
+		publish(t, env)
+		env.SetNow(env.Now().Add(11 * time.Minute))
+	}
+	if r := env.Run(id); r.State == store.PublishFailed {
+		t.Fatal("run gave up before its 10th attempt")
+	}
+
+	cfg, err := pgx.ParseConfig(os.Getenv(testDBEnv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.RuntimeParams["search_path"] = env.schema
+	conn, err := pgx.ConnectConfig(env.ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(env.ctx)
+	if _, err := conn.Exec(env.ctx, `DROP TABLE repo_defaults`); err != nil {
+		t.Fatal(err)
+	}
+	publish(t, env)
+
+	if r := env.Run(id); r.State != store.PublishFailed {
+		t.Fatalf("run state = %s after 10 failed publishes, want publish_failed", r.State)
+	}
+	wantStatus(t, env, head, gitlab.StatusFailed, "pergent couldn't post its review")
+	wantNoApproval(t, env, 1)
+	if logs := env.Logs(); !strings.Contains(logs, "couldn't read the repository settings") {
+		t.Errorf("want the settings read failure logged:\n%s", logs)
 	}
 }
 

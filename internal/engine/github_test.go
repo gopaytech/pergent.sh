@@ -1131,6 +1131,63 @@ func TestSweepGitHubClosedDismisses(t *testing.T) {
 	}
 }
 
+// A GitHub repository set to neutral: the Check Run of a review that can't be
+// posted is completed as neutral, with the same title, and nothing is approved.
+func TestPublishGitHubGiveUpNeutralCheckRun(t *testing.T) {
+	env := newTestEnv(t)
+	gh := addGitHub(t, env, true)
+	for i := range env.Engine.Config.Repositories {
+		if env.Engine.Config.Repositories[i].GitHub == ghInstance {
+			env.Engine.Config.Repositories[i].FailureStatus = config.FailureStatusNeutral
+		}
+	}
+	head := sha('a')
+	id := ghReport(t, env, 3, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	servePublishGitHub(gh, 3, head)
+	gh.Reply(http.MethodPost, ghRepoAPI+"/issues/3/comments", http.StatusUnprocessableEntity,
+		map[string]any{"message": "Validation Failed", "errors": []any{map[string]any{"message": "body is too long (maximum is 65536 characters)"}}})
+
+	publishUntilGivenUp(t, env, id)
+
+	run := onlyCheckRun(t, gh)
+	out, _ := run["output"].(map[string]any)
+	if run["status"] != "completed" || run["conclusion"] != "neutral" || run["head_sha"] != head ||
+		out["title"] != "pergent couldn't post its review" {
+		t.Errorf("check run = %v", run)
+	}
+	if reviews := gh.Requests(http.MethodPost, ghPRPath(3)+"/reviews"); len(reviews) != 0 {
+		t.Errorf("approved %d times", len(reviews))
+	}
+	if a := approvals(t, env); len(a) != 0 {
+		t.Errorf("approvals = %+v, want none", a)
+	}
+}
+
+// With neutral, a review with blocking findings that can't be posted still
+// completes its Check Run as a failure.
+func TestPublishGitHubGiveUpNeutralBlockingIsFailure(t *testing.T) {
+	env := newTestEnv(t)
+	gh := addGitHub(t, env, true)
+	for i := range env.Engine.Config.Repositories {
+		if env.Engine.Config.Repositories[i].GitHub == ghInstance {
+			env.Engine.Config.Repositories[i].FailureStatus = config.FailureStatusNeutral
+		}
+	}
+	head := sha('a')
+	id := ghReport(t, env, 3, head, resultFor(t, head, skillWithFinding(t, "has_blocking_issues", "blocking")))
+	servePublishGitHub(gh, 3, head)
+	gh.Reply(http.MethodPost, ghRepoAPI+"/issues/3/comments", http.StatusUnprocessableEntity,
+		map[string]any{"message": "Validation Failed", "errors": []any{map[string]any{"message": "body is too long (maximum is 65536 characters)"}}})
+
+	publishUntilGivenUp(t, env, id)
+
+	run := onlyCheckRun(t, gh)
+	out, _ := run["output"].(map[string]any)
+	if run["status"] != "completed" || run["conclusion"] != "failure" || out["title"] != "pergent couldn't post its review" {
+		t.Errorf("check run = %v", run)
+	}
+}
+
 // GitHub refuses the comment every time (too long, say): after the 10th
 // attempt the in-progress Check Run is completed as a failure, once, and the
 // pull request is never approved.
