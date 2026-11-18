@@ -229,9 +229,13 @@ export type RepositoryView = {
   project: string;
   platform: Platform;
   source: "config" | "dashboard";
+  // on is false while the repository is paused (paused) and once it is
+  // removed.
   on: boolean;
+  paused: boolean;
   last7: { reviews: number; approved: number; failed: number };
-  health: "ok" | "attention";
+  // health is "paused" while it is paused, whatever setup problems are left.
+  health: "ok" | "attention" | "paused";
 };
 
 export type SettingView<T> = { value: T; overridden: boolean };
@@ -446,12 +450,14 @@ export type UsageTokensView = {
 export type UsageDayView = { day: string; tokens: UsageTokensView };
 
 // UsageRepositoryRowView is one repository of the usage overview. A
-// repository switched off since (or on a removed instance) keeps its usage
-// but has no detail page.
+// repository removed since (or on a removed instance) keeps its usage but has
+// no detail page; a paused one has its page.
 export type UsageRepositoryRowView = {
   instance: string;
   project: string;
   switchedOn: boolean;
+  // paused is true for a repository that is paused now: it still has its page.
+  paused: boolean;
   tokens: UsageTokensView;
   reviews: number;
 };
@@ -1230,6 +1236,8 @@ export const paths = {
   apiRunLog: (id: string) => `/api/runs/${seg(id)}/log`,
   apiRunDiagnostics: (id: string) => `/api/runs/${seg(id)}/diagnostics`,
   apiRepo: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}`,
+  // apiAdminRepo pauses (PUT {"enabled": false}) and resumes ({"enabled": true}) a repository.
+  apiAdminRepo: (instance: string, project: string) => `/api/admin/repositories/${seg(instance)}/${proj(project)}`,
   apiRepoInputs: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/inputs`,
   apiRepoPastDismissals: (instance: string, project: string) =>
     `/api/repositories/${seg(instance)}/${proj(project)}/past-dismissals`,

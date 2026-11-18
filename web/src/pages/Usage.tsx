@@ -61,13 +61,16 @@ function Body({ view, days }: { view: UsageOverviewView; days: number }) {
               {view.repositories.map((r) => (
                 <tr key={`${r.instance}/${r.project}`}>
                   <td>
-                    {r.switchedOn ? (
-                      <Link to={paths.usageRepo(r.instance, r.project)}>{`${r.instance}/${r.project}`}</Link>
+                    {r.switchedOn || r.paused ? (
+                      <>
+                        <Link to={paths.usageRepo(r.instance, r.project)}>{`${r.instance}/${r.project}`}</Link>
+                        {r.paused && <Pill tone="grey">paused</Pill>}
+                      </>
                     ) : (
-                      // A repository switched off has no page: the API answers 404.
+                      // A repository removed has no page: the API answers 404.
                       <>
                         {`${r.instance}/${r.project}`}
-                        <Pill tone="grey">switched off</Pill>
+                        <Pill tone="grey">removed</Pill>
                         <div>
                           <a href={paths.apiUsageCSV(days, r.instance, r.project)} download>
                             CSV

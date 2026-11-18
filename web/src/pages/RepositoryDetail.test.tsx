@@ -13,6 +13,7 @@ import {
   repoGadgets,
   repoPayments,
   repoTeams,
+  repoToolsPaused,
   repoWidgets,
   reviewBlocking,
   skillResults,
@@ -1194,6 +1195,80 @@ const detectedInputs = {
   ],
   instructions: "",
 };
+
+describe("RepositoryDetail while paused, and Remove", () => {
+  const tools = repoDetail(repoToolsPaused);
+  const pausedRoutes = {
+    ...base,
+    "GET /api/repositories/main/acme/tools": { body: tools },
+    "GET /api/repositories/main/acme/tools/inputs": { body: noInputs },
+    "GET /api/reviews?project=acme%2Ftools&days=90": { body: { items: [], nextCursor: "" } },
+  };
+  const waitingChange = {
+    number: 5,
+    head: "a".repeat(40),
+    title: "Add a tool",
+    author: "stranger",
+    webUrl: "",
+    since: "2026-11-18T09:00:00Z",
+    reason: "untrusted_author" as const,
+  };
+
+  it("shows the Paused note on a paused repository", async () => {
+    renderAt("/repos/main/acme/tools", pausedRoutes);
+    expect(await screen.findByRole("note", { name: "Paused" })).toHaveTextContent("pergent doesn't review this repository");
+    expect(screen.getByText(/GitLab · main · paused in the dashboard/)).toBeInTheDocument();
+  });
+
+  it("has no Paused note on a running repository", async () => {
+    renderAt("/repos/main/acme/payments", base);
+    expect(await screen.findByRole("heading", { name: "acme/payments" })).toBeInTheDocument();
+    expect(screen.queryByRole("note", { name: "Paused" })).not.toBeInTheDocument();
+  });
+
+  it("hides Start review while paused", async () => {
+    renderAt("/repos/main/acme/tools", { ...pausedRoutes, "GET /api/repositories/main/acme/tools": { body: { ...tools, waiting: [waitingChange] } } });
+    expect(await screen.findByRole("region", { name: "Waiting for a start" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Start review/ })).not.toBeInTheDocument();
+  });
+
+  it("removes a repository after the confirm, and goes back to the list", async () => {
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirm);
+    const fake = fakeApi({
+      ...pausedRoutes,
+      "DELETE /api/repositories/main/acme/tools": { body: { ...tools, repo: { ...repoToolsPaused, paused: false } } },
+      "GET /api/repositories": { body: [] },
+    });
+    renderApp("/repos/main/acme/tools");
+    await userEvent.click(await screen.findByRole("button", { name: "Remove repository" }));
+    expect(confirm).toHaveBeenCalledWith(
+      "Remove acme/tools from pergent? Its settings and team links are deleted, and its webhook and clone credentials are removed. This can't be undone.",
+    );
+    await waitFor(() => expect(fake.find("DELETE", "/api/repositories/main/acme/tools")).toHaveLength(1));
+    expect(await screen.findByRole("heading", { name: "Repositories" })).toBeInTheDocument();
+  });
+
+  it("sends nothing when the Remove confirm is cancelled", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => false));
+    const fake = fakeApi(pausedRoutes);
+    renderApp("/repos/main/acme/tools");
+    await userEvent.click(await screen.findByRole("button", { name: "Remove repository" }));
+    expect(fake.find("DELETE", "/api/repositories/main/acme/tools")).toHaveLength(0);
+  });
+
+  it("has no Remove for a config repository", async () => {
+    renderAt("/repos/main/acme/widgets", base);
+    expect(await screen.findByRole("heading", { name: "acme/widgets" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove repository" })).not.toBeInTheDocument();
+  });
+
+  it("has no Remove for a maintainer", async () => {
+    renderAt("/repos/main/acme/tools", { ...pausedRoutes, "GET /api/repositories/main/acme/tools": { body: repoDetail(repoToolsPaused, "maintainer") } });
+    expect(await screen.findByRole("heading", { name: "acme/tools" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove repository" })).not.toBeInTheDocument();
+  });
+});
 
 function renderAt(path: string, routes: Parameters<typeof fakeApi>[0]) {
   fakeApi(routes);

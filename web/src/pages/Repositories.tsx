@@ -16,13 +16,22 @@ import { useMe } from "../layout/me";
 import { useWrite } from "../layout/write";
 import { ErrorBox, Loading, Pill, Switch, platformName } from "../ui";
 
-// Repositories lists the repositories pergent reviews that the user can
-// see. Admins switch them on (the picker) and off (the switch).
+// Repositories lists the repositories pergent reviews, or has paused, that
+// the user can see. Admins add them (the picker) and pause and resume them
+// (the switch); Remove is on a repository's page.
 export default function Repositories() {
   const me = useMe();
   const [params, setParams] = useSearchParams();
   const adding = me.admin && params.get("add") === "1";
   const repos = useQuery({ queryKey: ["repositories"], queryFn: () => api.get<RepositoryView[]>("/api/repositories") });
+  // An instance being removed can't have a repository resumed: its switch is
+  // drawn disabled. Only admins read the instances.
+  const instances = useQuery({
+    queryKey: ["admin-instances"],
+    queryFn: () => api.get<InstanceAdminView[]>("/api/admin/instances"),
+    enabled: me.admin,
+  });
+  const removing = new Set((instances.data ?? []).filter((i) => i.removing).map((i) => i.name));
   return (
     <>
       <div className="top">
@@ -58,7 +67,7 @@ export default function Repositories() {
               </thead>
               <tbody>
                 {repos.data.map((r) => (
-                  <Row key={`${r.instance}/${r.project}`} repo={r} admin={me.admin} />
+                  <Row key={`${r.instance}/${r.project}`} repo={r} admin={me.admin} removing={removing.has(r.instance)} />
                 ))}
               </tbody>
             </table>
@@ -68,17 +77,15 @@ export default function Repositories() {
   );
 }
 
-function Row({ repo, admin }: { repo: RepositoryView; admin: boolean }) {
+function Row({ repo, admin, removing }: { repo: RepositoryView; admin: boolean; removing: boolean }) {
   const client = useQueryClient();
   const write = useWrite();
-  const off = useMutation({
-    mutationFn: () => write<RepositoryDetailView>("DELETE", paths.apiRepo(repo.instance, repo.project)),
+  // The switch pauses and resumes: nothing is lost, so it asks nothing.
+  const toggle = useMutation({
+    mutationFn: (enabled: boolean) => write<RepositoryDetailView>("PUT", paths.apiAdminRepo(repo.instance, repo.project), { enabled }),
     onSuccess: () => client.invalidateQueries({ queryKey: ["repositories"] }),
   });
   const config = repo.source === "config";
-  const switchOff = () => {
-    if (window.confirm(`Stop reviewing ${repo.project}? pergent removes its webhook and clone credentials.`)) off.mutate();
-  };
   return (
     <tr>
       <td>
@@ -86,7 +93,7 @@ function Row({ repo, admin }: { repo: RepositoryView; admin: boolean }) {
           {repo.project}
         </Link>
         {config && <span className="badge cfg">managed by config</span>}
-        {off.isError && <ErrorBox error={off.error} />}
+        {toggle.isError && <ErrorBox error={toggle.error} />}
       </td>
       <td>
         <span className="plat">{platformName(repo.platform)}</span>
@@ -95,18 +102,25 @@ function Row({ repo, admin }: { repo: RepositoryView; admin: boolean }) {
         <td>
           <Switch
             label={`Review ${repo.project}`}
-            checked={repo.on && !off.isSuccess}
-            disabled={config || off.isPending || !repo.on}
-            onChange={(on) => !on && switchOff()}
+            checked={toggle.isPending ? (toggle.variables ?? repo.on) : repo.on}
+            disabled={config || toggle.isPending || removing}
+            onChange={(on) => toggle.mutate(on)}
           />
         </td>
       )}
       <td className="num">{repo.last7.reviews}</td>
       <td className="num">{repo.last7.approved}</td>
       <td className="num">{repo.last7.failed}</td>
-      <td>{repo.health === "ok" ? <Pill tone="ok">OK</Pill> : <Pill tone="warn">Needs attention</Pill>}</td>
+      <td>
+        <Health health={repo.health} />
+      </td>
     </tr>
   );
+}
+
+function Health({ health }: { health: RepositoryView["health"] }) {
+  if (health === "paused") return <Pill tone="grey">Paused</Pill>;
+  return health === "ok" ? <Pill tone="ok">OK</Pill> : <Pill tone="warn">Needs attention</Pill>;
 }
 
 function InstanceChoice({ instance, onChange }: { instance: string; onChange: (name: string) => void }) {

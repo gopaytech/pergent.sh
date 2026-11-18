@@ -11,6 +11,7 @@ import {
   ssoAdmin,
   repoDetail,
   repoPayments,
+  repoToolsPaused,
   repoWidgets,
   viewer,
 } from "../test/fixtures";
@@ -262,12 +263,16 @@ describe("Repositories", () => {
     expect(await within(picker).findByText("could not ask GitLab")).toBeInTheDocument();
   });
 
-  it("lets an admin switch off a dashboard repository, not a config one", async () => {
-    vi.stubGlobal("confirm", vi.fn(() => true));
+  it("pauses a repository with the switch, with no confirm, and keeps it in the list", async () => {
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirm);
     const fake = fakeApi({
       "GET /api/me": { body: ssoAdmin },
       "GET /api/repositories": { body: [repoPayments, repoWidgets] },
-      "DELETE /api/repositories/main/acme/payments": { body: { ...repoDetail(repoPayments), repo: { ...repoPayments, on: false } } },
+      "GET /api/admin/instances": { body: [instanceGitLab] },
+      "PUT /api/admin/repositories/main/acme/payments": {
+        body: { ...repoDetail(repoPayments), repo: { ...repoPayments, on: false, paused: true, health: "paused" } },
+      },
     });
     renderApp("/repos");
     const widgets = await screen.findByRole("switch", { name: "Review acme/widgets" });
@@ -275,7 +280,51 @@ describe("Repositories", () => {
     const payments = screen.getByRole("switch", { name: "Review acme/payments" });
     expect(payments).toBeChecked();
     await userEvent.click(payments);
-    const [del] = fake.find("DELETE", "/api/repositories/main/acme/payments");
-    expect(del.headers.get("X-CSRF-Token")).toBe("csrf-123");
+    await vi.waitFor(() => expect(fake.find("PUT", "/api/admin/repositories/main/acme/payments")).toHaveLength(1));
+    const [put] = fake.find("PUT", "/api/admin/repositories/main/acme/payments");
+    expect(put.body).toEqual({ enabled: false });
+    expect(put.headers.get("X-CSRF-Token")).toBe("csrf-123");
+    expect(confirm).not.toHaveBeenCalled();
+    expect(fake.find("DELETE", "/api/repositories/main/acme/payments")).toHaveLength(0);
+    // The list is read again.
+    await vi.waitFor(() => expect(fake.find("GET", "/api/repositories").length).toBeGreaterThan(1));
+  });
+
+  it("resumes a paused repository with the switch", async () => {
+    const fake = fakeApi({
+      "GET /api/me": { body: ssoAdmin },
+      "GET /api/repositories": { body: [repoToolsPaused] },
+      "GET /api/admin/instances": { body: [instanceGitLab] },
+      "PUT /api/admin/repositories/main/acme/tools": { body: repoDetail({ ...repoToolsPaused, on: true, paused: false, health: "ok" }) },
+    });
+    renderApp("/repos");
+    const tools = await screen.findByRole("switch", { name: "Review acme/tools" });
+    expect(tools).not.toBeChecked();
+    expect(tools).toBeEnabled();
+    await userEvent.click(tools);
+    await vi.waitFor(() => expect(fake.find("PUT", "/api/admin/repositories/main/acme/tools")).toHaveLength(1));
+    expect(fake.find("PUT", "/api/admin/repositories/main/acme/tools")[0].body).toEqual({ enabled: true });
+  });
+
+  it("shows Paused in the Health column", async () => {
+    fakeApi({ "GET /api/me": { body: viewer }, "GET /api/repositories": { body: [repoToolsPaused] } });
+    renderApp("/repos");
+    const row = (await screen.findByRole("link", { name: "acme/tools" })).closest("tr") as HTMLElement;
+    expect(within(row).getByText("Paused")).toHaveClass("pill", "grey");
+    expect(within(row).queryByText("OK")).not.toBeInTheDocument();
+    expect(within(row).queryByText("Needs attention")).not.toBeInTheDocument();
+  });
+
+  it("draws the switch disabled while the instance is being removed", async () => {
+    fakeApi({
+      "GET /api/me": { body: ssoAdmin },
+      "GET /api/repositories": { body: [repoPayments, repoToolsPaused] },
+      "GET /api/admin/instances": { body: [{ ...instanceGitLab, removing: true }] },
+    });
+    renderApp("/repos");
+    for (const name of ["Review acme/payments", "Review acme/tools"]) {
+      const sw = await screen.findByRole("switch", { name });
+      await vi.waitFor(() => expect(sw).toBeDisabled());
+    }
   });
 });
