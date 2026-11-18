@@ -1300,3 +1300,35 @@ func TestReconcileSingleApprovalSkippedWithoutApprover(t *testing.T) {
 		t.Errorf("read the rules %d times, want never", len(reqs))
 	}
 }
+
+// The review App's Actions: Read permission and check_run subscription are
+// stored on every pass, for logs and reports and for waking a waiting run; an
+// installation that reports neither counts as allowed.
+func TestReconcileGitHubCIAccess(t *testing.T) {
+	env := newTestEnv(t)
+	gh := addGitHub(t, env, true)
+	reconcileGitHubSetup(env, gh)
+	perms := map[string]string{"pull_requests": "write"}
+	events := []string{"pull_request"}
+	gh.Handle(http.MethodGet, ghRepoAPI+"/installation", func(w http.ResponseWriter, r *http.Request) {
+		if jwtApp(r.Header.Get("Authorization")) == ghReviewApp {
+			writeJSON(w, http.StatusOK, map[string]any{"id": ghInstallation, "permissions": perms, "events": events})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": ghApproveInstallation, "permissions": map[string]string{"pull_requests": "write"}})
+	})
+
+	reconcile(t, env)
+	p, ok := ghProject(t, env)
+	if !ok || p.ActionsReadable == nil || *p.ActionsReadable || p.CheckRunEvents == nil || *p.CheckRunEvents {
+		t.Fatalf("stored = %+v; want no Actions read and no check_run event", p)
+	}
+
+	perms = map[string]string{"pull_requests": "write", "actions": "read"}
+	events = []string{"pull_request", "check_run"}
+	reconcile(t, env)
+	p, _ = ghProject(t, env)
+	if p.ActionsReadable == nil || !*p.ActionsReadable || p.CheckRunEvents == nil || !*p.CheckRunEvents {
+		t.Fatalf("stored = %+v; want Actions read and check_run event", p)
+	}
+}

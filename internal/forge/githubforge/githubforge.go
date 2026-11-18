@@ -67,6 +67,9 @@ type Forge struct {
 	// slug[bot].
 	slug  string
 	repos Repos
+	// ownApps are the ids of pergent.sh's own Apps besides the review App:
+	// their check runs are never read as CI.
+	ownApps map[int64]bool
 }
 
 // NewForge returns the review App's Forge. botUserID and slug are the App's
@@ -74,6 +77,20 @@ type Forge struct {
 // unauthenticated and rate-limited, and the slug is not asked per comment.
 func NewForge(app *github.App, botUserID int64, slug string, repos Repos) *Forge {
 	return &Forge{app: app, bot: botUserID, slug: slug, repos: repos}
+}
+
+// IgnoreApps makes ReadCI skip the check runs of these Apps (pergent.sh's own
+// approve App) as well as the review App's, and returns f.
+func (f *Forge) IgnoreApps(ids ...int64) *Forge {
+	if f.ownApps == nil {
+		f.ownApps = map[int64]bool{}
+	}
+	for _, id := range ids {
+		if id > 0 {
+			f.ownApps[id] = true
+		}
+	}
+	return f
 }
 
 // client returns the review installation's client for repoID.

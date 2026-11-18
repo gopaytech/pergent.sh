@@ -406,7 +406,10 @@ func (c *Client) paginateTimed(ctx context.Context, path string, pageTimeout tim
 	if err != nil {
 		return errors.New("github: invalid API URL or path")
 	}
-	u.RawQuery = url.Values{"per_page": {perPage}}.Encode()
+	// A query already in path (check_name, filter) stays.
+	q := u.Query()
+	q.Set("per_page", perPage)
+	u.RawQuery = q.Encode()
 	next := u.String()
 	for page := 0; ; page++ {
 		if page >= maxPages {

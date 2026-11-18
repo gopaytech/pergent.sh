@@ -257,6 +257,7 @@ func (c *connector) buildGitHub(ctx context.Context, inst *config.GitHubInstance
 	instRepos := c.githubRepos(inst.Name)
 
 	var approver *githubforge.Approver
+	var ownApps []int64 // Apps whose check runs are never read as CI
 	switch inst.Approver() {
 	case config.ApproverReviewApp:
 		approver = githubforge.NewAppApprover(reviewApp, reviewBot, reviewSlug, instRepos)
@@ -267,6 +268,7 @@ func (c *connector) buildGitHub(ctx context.Context, inst *config.GitHubInstance
 				inst.Name, inst.ApproveApp.AppID, err)
 		}
 		approver = githubforge.NewAppApprover(approveApp, approveBot, approveSlug, instRepos)
+		ownApps = append(ownApps, inst.ApproveApp.AppID)
 	default:
 		client := github.NewTokenClient(inst.APIURL, s.ApproveToken, c.hc)
 		user, err := client.CurrentUser(ctx)
@@ -278,7 +280,7 @@ func (c *connector) buildGitHub(ctx context.Context, inst *config.GitHubInstance
 	}
 	return engine.Platform{
 		Kind:     config.PlatformGitHub,
-		Forge:    githubforge.NewForge(reviewApp, reviewBot, reviewSlug, instRepos),
+		Forge:    githubforge.NewForge(reviewApp, reviewBot, reviewSlug, instRepos).IgnoreApps(ownApps...),
 		Approver: approver,
 		GitHub:   &engine.GitHub{App: reviewApp, Approve: approver},
 	}, nil
