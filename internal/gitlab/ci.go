@@ -23,6 +23,14 @@ type CIJob struct {
 	Status string `json:"status"`
 	// Bridge is set on a trigger job, which has a status and no log.
 	Bridge bool `json:"-"`
+	// Downstream is a bridge's child pipeline; nil until it is created.
+	Downstream *Downstream `json:"downstream_pipeline"`
+}
+
+// Downstream is the child pipeline a trigger job created.
+type Downstream struct {
+	ID     int64  `json:"id"`
+	Status string `json:"status"`
 }
 
 func (c *Client) pipelines(ctx context.Context, path string, query url.Values, limit int) ([]Pipeline, error) {

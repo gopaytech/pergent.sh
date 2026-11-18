@@ -122,3 +122,20 @@ func TestEnsureHookCIEvents(t *testing.T) {
 		}
 	}
 }
+
+func TestPipelineJobsDecodesDownstream(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/bridges") {
+			_, _ = w.Write([]byte(`[{"id":9,"name":"child","status":"success","downstream_pipeline":{"id":40,"status":"failed"}},{"id":10,"name":"later","status":"created","downstream_pipeline":null}]`))
+			return
+		}
+		_, _ = w.Write([]byte(`[{"id":3,"name":"test","status":"success"}]`))
+	})
+	jobs, err := c.PipelineJobs(context.Background(), 7, 5)
+	if err != nil || len(jobs) != 3 {
+		t.Fatalf("jobs=%v err=%v", jobs, err)
+	}
+	if jobs[0].Downstream != nil || jobs[1].Downstream == nil || jobs[1].Downstream.Status != "failed" || jobs[2].Downstream != nil {
+		t.Fatalf("jobs=%+v", jobs)
+	}
+}

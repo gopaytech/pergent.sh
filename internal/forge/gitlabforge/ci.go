@@ -73,7 +73,7 @@ func (f *Forge) ReadCI(ctx context.Context, t forge.CITarget, jobs []store.CIJob
 		for _, j := range list {
 			// Finished is read from the jobs and bridges, not the pipeline's
 			// status: pergent's own pending commit status can keep it running.
-			if _, ended := ci.FromGitLab(j.Status); !ended {
+			if _, ended := jobStatus(j); !ended {
 				snap.Finished = false
 			}
 			if cur, ok := newest[j.Name]; !ok || j.ID > cur.ID {
@@ -89,7 +89,7 @@ func (f *Forge) ReadCI(ctx context.Context, t forge.CITarget, jobs []store.CIJob
 			snap.Jobs = append(snap.Jobs, job)
 			continue
 		}
-		job.Result, job.Ended = ci.FromGitLab(j.Status)
+		job.Result, job.Ended = jobStatus(j)
 		if j.Bridge && want.Read == "report" {
 			// A trigger job has no artifacts.
 			job.Result, job.Ended, job.Reason = ci.Unreadable, true, "error"
@@ -101,6 +101,24 @@ func (f *Forge) ReadCI(ctx context.Context, t forge.CITarget, jobs []store.CIJob
 		snap.Jobs = append(snap.Jobs, job)
 	}
 	return snap, nil
+}
+
+// jobStatus maps a job's status. A trigger job without strategy: depend is
+// success as soon as its child pipeline is created, so a bridge's result is
+// its child pipeline's status. A bridge with no child yet is running, unless
+// the bridge itself failed, was cancelled or was skipped.
+func jobStatus(j gitlab.CIJob) (ci.Result, bool) {
+	if !j.Bridge {
+		return ci.FromGitLab(j.Status)
+	}
+	if j.Downstream != nil && j.Downstream.Status != "" {
+		return ci.FromGitLab(j.Downstream.Status)
+	}
+	switch r, ended := ci.FromGitLab(j.Status); r {
+	case ci.Failed, ci.Cancelled, ci.Skipped:
+		return r, ended
+	}
+	return ci.Running, false
 }
 
 // readText fills Log (a failed, cancelled or running job) or Report (an ended

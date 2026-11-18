@@ -38,6 +38,7 @@ repositories:
   - `status` reads only the result.
   - `log` adds the tail of the log for a job that failed, was cancelled, or was still running.
   - `report` reads the file at `report.path` for a job that passed or failed.
+  - A GitLab trigger job's result is its child pipeline's status, not the trigger job's own: without `strategy: depend` GitLab marks the trigger job `success` as soon as the child pipeline is created. A trigger job whose child pipeline doesn't exist yet is `running`, unless the trigger job itself failed, was cancelled or was skipped.
   - A GitLab trigger job, and a GitHub check run that is not from Actions, has no report. `report` reads as `unreadable` for those, and blocks if the job is blocking.
 - **`blocks_approval`.** Default `false`. When it is on, any result but `passed` blocks.
 - **`wait`.** How long a review waits, such as `30m`. Default `30m`, from `5m` to `2h`.
@@ -50,7 +51,7 @@ repositories:
 - **The wait ends** when every chosen job has ended, or when the head's CI has finished, or at the deadline: the run's creation time plus `wait`. The status says `Waiting for CI: test, cycode-scan`, and the dashboard shows the deadline.
 - **A short grace for jobs that are not there yet.** When every chosen job is missing, the review still waits up to 3 minutes from the push, never past the wait limit. GitLab creates merge request pipelines after the webhook, and GitHub check suites can lag.
 - **A job not found** after that is `missing`.
-  - On GitLab, "the head's CI finished" is judged from the jobs and trigger jobs of the pipelines that count for the head, not from a pipeline's status.
+  - On GitLab, "the head's CI finished" is judged from the jobs and trigger jobs of the pipelines that count for the head (a trigger job by its child pipeline), not from a pipeline's status.
   - On GitHub, every check suite on the head must be completed. pergent.sh's own check suite is ignored, and so is a suite with no check runs.
 - **Start review** skips the rest of the wait and uses whatever results exist then.
 - **A new push** supersedes a waiting run.

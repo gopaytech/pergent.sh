@@ -104,14 +104,14 @@ func TestReadCIMissingAndFinished(t *testing.T) {
 		{"all ended", "success", "success", "success", true},
 		{"pipeline running, every job ended", "running", "success", "success", true},
 		{"a job still running", "running", "running", "success", false},
-		{"a bridge still running", "success", "success", "running", false},
+		{"a bridge's child still running", "success", "success", "running", false},
 	} {
 		status, finished := tc.name, tc.finished
 		f, _ := newCI(t, map[string][2]any{
 			"/projects/7/pipelines":                  ok(`[{"id":1,"sha":"head1","status":"` + tc.pipeline + `"}]`),
 			"/projects/7/merge_requests/3/pipelines": ok(`[]`),
 			"/projects/7/pipelines/1/jobs":           ok(`[{"id":5,"name":"test","status":"` + tc.job + `"}]`),
-			"/projects/7/pipelines/1/bridges":        ok(`[{"id":6,"name":"child","status":"` + tc.bridge + `"}]`),
+			"/projects/7/pipelines/1/bridges":        ok(`[{"id":6,"name":"child","status":"success","downstream_pipeline":{"id":40,"status":"` + tc.bridge + `"}}]`),
 		})
 		snap, err := f.ReadCI(context.Background(), target, []store.CIJob{statusJob("lint")}, false)
 		if err != nil || snap.Jobs[0].Result != ci.Missing || snap.Finished != finished || snap.Done() != finished {
@@ -270,5 +270,43 @@ func TestReadCITextFailed(t *testing.T) {
 	snap, err = f.ReadCI(context.Background(), target, jobs, false)
 	if err != nil || snap.Jobs[0].Result != ci.Passed || snap.Jobs[0].TextFailed {
 		t.Fatalf("status-only snap=%+v err=%v", snap, err)
+	}
+}
+
+// A trigger job without strategy: depend is success as soon as its child
+// pipeline exists, so the child's status is the job's result.
+func TestReadCIBridgeUsesDownstream(t *testing.T) {
+	for _, tc := range []struct {
+		bridge, downstream string
+		want               ci.Result
+		ended              bool
+	}{
+		{"success", "failed", ci.Failed, true},
+		{"success", "running", ci.Running, false},
+		{"success", "success", ci.Passed, true},
+		{"running", "canceled", ci.Cancelled, true},
+		{"success", "", ci.Running, false},
+		{"pending", "", ci.Running, false},
+		{"failed", "", ci.Failed, true},
+		{"canceled", "", ci.Cancelled, true},
+		{"skipped", "", ci.Skipped, true},
+	} {
+		bridge := `{"id":4,"name":"child","status":"` + tc.bridge + `"}`
+		if tc.downstream != "" {
+			bridge = `{"id":4,"name":"child","status":"` + tc.bridge + `","downstream_pipeline":{"id":40,"status":"` + tc.downstream + `"}}`
+		}
+		f, _ := newCI(t, map[string][2]any{
+			"/projects/7/pipelines":                  ok(`[{"id":1,"sha":"head1","status":"success"}]`),
+			"/projects/7/merge_requests/3/pipelines": ok(`[]`),
+			"/projects/7/pipelines/1/jobs":           ok(`[]`),
+			"/projects/7/pipelines/1/bridges":        ok(`[` + bridge + `]`),
+		})
+		snap, err := f.ReadCI(context.Background(), target, []store.CIJob{statusJob("child")}, false)
+		if err != nil {
+			t.Fatalf("%s/%s: %v", tc.bridge, tc.downstream, err)
+		}
+		if j := snap.Jobs[0]; j.Result != tc.want || j.Ended != tc.ended || snap.Finished != tc.ended {
+			t.Fatalf("%s/%s: snap=%+v", tc.bridge, tc.downstream, snap)
+		}
 	}
 }
