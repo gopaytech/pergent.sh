@@ -273,7 +273,7 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 			}
 			comment = ErrorComment(reason, ci.Line(o.CI))
 		} else {
-			comment += ciNote(ci.Line(o.CI))
+			comment = withCILine(comment, ci.Line(o.CI))
 		}
 		return Decision{Comment: withMarker(comment), Status: failed, Description: descCouldNotReview, Kind: KindFailed}
 	case "completed":
@@ -600,6 +600,25 @@ func ciNote(ciLine string) string {
 	}
 	line = ciEscaper.Replace(line)
 	return "\n\n_" + line + "_"
+}
+
+// findingsBlockStart starts the hidden findings block render writes last.
+const findingsBlockStart = "<!-- pergent:findings "
+
+// withCILine adds the CI line (ciNote) to an error result's own comment. A
+// comment that ends in a hidden findings block on its own line keeps the
+// block last, as the next review reads it there: the line goes before it.
+func withCILine(comment, ciLine string) string {
+	note := ciNote(ciLine)
+	if note == "" {
+		return comment
+	}
+	trimmed := strings.TrimRight(comment, "\n")
+	i := strings.LastIndex(trimmed, findingsBlockStart)
+	if i < 0 || (i > 0 && trimmed[i-1] != '\n') || strings.Contains(trimmed[i:], "\n") {
+		return comment + note
+	}
+	return strings.TrimRight(trimmed[:i], "\n") + note + "\n\n" + trimmed[i:] + comment[len(trimmed):]
 }
 
 var ciEscaper = strings.NewReplacer(

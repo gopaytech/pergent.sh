@@ -1970,6 +1970,30 @@ func TestDecideErrorResultCILine(t *testing.T) {
 	}
 }
 
+// An error result's own comment that ends in a hidden findings block keeps
+// the block last: the CI line goes before it, so the next review still reads
+// the block.
+func TestDecideErrorResultCILineBeforeFindingsBlock(t *testing.T) {
+	block := "<!-- pergent:findings W10= -->"
+	for name, md := range map[string]string{
+		"block last":         Marker + "\n⚠️ failed\n\n" + block,
+		"block, newline end": Marker + "\n⚠️ failed\n\n" + block + "\n",
+	} {
+		e := &result.Result{SchemaVersion: 1, Status: "error", Comment: result.Comment{Markdown: md}}
+		d := Decide(Outcome{Result: e, CI: []store.CIJobResult{ciJob("test", "failed", true)}}, config.FailureStatusFailed)
+		want := Marker + "\n⚠️ failed\n\n_CI: test failed (blocks approval)_\n\n" + block
+		if !strings.HasPrefix(d.Comment, want) || strings.TrimRight(d.Comment, "\n") != want {
+			t.Errorf("%s: comment = %q, want %q", name, d.Comment, want)
+		}
+	}
+	// No CI: the comment is the result's own, byte for byte.
+	md := Marker + "\n⚠️ failed\n\n" + block + "\n"
+	e := &result.Result{SchemaVersion: 1, Status: "error", Comment: result.Comment{Markdown: md}}
+	if d := Decide(Outcome{Result: e}, config.FailureStatusFailed); d.Comment != md {
+		t.Errorf("no CI: comment = %q, want %q", d.Comment, md)
+	}
+}
+
 // The review's own description stays, the CI part follows and is cut first.
 func TestDecideCIDescriptionJoinedAndCapped(t *testing.T) {
 	r := completed(skill("a", "has_blocking_issues", "f.go"))
