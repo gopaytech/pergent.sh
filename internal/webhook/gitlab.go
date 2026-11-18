@@ -125,7 +125,9 @@ type CINotifier interface {
 type ciEvent struct {
 	ObjectKind string `json:"object_kind"`
 	// SHA is the Job Hook's commit.
-	SHA       string `json:"sha"`
+	SHA string `json:"sha"`
+	// BuildName is the Job Hook's job name.
+	BuildName string `json:"build_name"`
 	Ref       string `json:"ref"`
 	ProjectID int64  `json:"project_id"`
 	Project   struct {
@@ -460,6 +462,14 @@ func (h *Handler) ci(w http.ResponseWriter, r *http.Request, log *slog.Logger, i
 		ignore("no_ci_jobs")
 		return
 	}
+	// A job not chosen changes nothing that is read. A Pipeline Hook always
+	// counts: a pipeline ending can end the wait.
+	if event == jobHookEvent && !chosenJob(eff.CIJobs.Jobs, ev.BuildName) {
+		ignore("job_not_chosen")
+		return
+	}
+	// No sameProject check: the event is only a signal to read again, and
+	// the API read decides, so a mismatched ID and path cost one read.
 	if iid != 0 {
 		h.CI.CIChangedMR(instance, eff.Project, iid)
 	} else {
@@ -561,6 +571,17 @@ func lookup(ctx context.Context, repos Repositories, platform, instance, path st
 		return settings.Effective{}, false, err
 	}
 	return eff, true, nil
+}
+
+// chosenJob reports whether name is one of jobs' names, exactly as the
+// reader matches them.
+func chosenJob(jobs []store.CIJob, name string) bool {
+	for _, j := range jobs {
+		if j.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // registry is Instances, or the config's instances alone when it is nil.

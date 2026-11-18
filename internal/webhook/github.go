@@ -87,6 +87,7 @@ type checkRunEvent struct {
 		FullName string `json:"full_name"`
 	} `json:"repository"`
 	CheckRun struct {
+		Name    string `json:"name"`
 		HeadSHA string `json:"head_sha"`
 		App     struct {
 			ID int64 `json:"id"`
@@ -463,6 +464,10 @@ func (h *GitHubHandler) checkRun(w http.ResponseWriter, r *http.Request, log *sl
 	}
 	if !ok || len(eff.CIJobs.Jobs) == 0 {
 		ignore("no_ci_jobs")
+		return
+	}
+	if !chosenJob(eff.CIJobs.Jobs, ev.CheckRun.Name) {
+		ignore("job_not_chosen")
 		return
 	}
 	h.CI.CIChanged(instance, eff.Project, ev.CheckRun.HeadSHA)

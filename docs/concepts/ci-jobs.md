@@ -55,7 +55,7 @@ repositories:
   - On GitHub, every check suite on the head must be completed. pergent.sh's own check suite is ignored, and so is a suite with no check runs.
 - **Start review** skips the rest of the wait and uses whatever results exist then.
 - **A new push** supersedes a waiting run.
-- **Events only signal.** pergent.sh always reads the results through the API. A sweep every 2 minutes also checks waiting runs, so a lost event only delays a run, and it queues runs past their deadline.
+- **Events only signal.** pergent.sh always reads the results through the API. A GitLab job event or a GitHub `check_run` event counts only for a chosen job's exact name. A GitLab pipeline event always counts, since a pipeline that ends can end the wait. A sweep every 2 minutes also checks waiting runs, so a lost event only delays a run, and it queues runs past their deadline.
 
 ## The results
 

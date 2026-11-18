@@ -105,7 +105,7 @@ func TestPipelineHookNotifies(t *testing.T) {
 }
 
 func TestJobHookNotifies(t *testing.T) {
-	body := fmt.Sprintf(`{"object_kind":"build","sha":%q,"project_id":42,"project":{"id":42,"path_with_namespace":"Acme/Widgets"}}`, ciHead)
+	body := fmt.Sprintf(`{"object_kind":"build","build_name":"test","sha":%q,"project_id":42,"project":{"id":42,"path_with_namespace":"Acme/Widgets"}}`, ciHead)
 	ci := &fakeCI{}
 	if code := postGitLab(gitlabCIRig(someJobs, ci), "Job Hook", testSecret, body); code != 200 {
 		t.Fatalf("status %d", code)
@@ -119,7 +119,7 @@ func TestJobHookNotifies(t *testing.T) {
 		t.Fatalf("no ci_jobs notified: %+v", ci.calls)
 	}
 	// Without a path the project id finds it through Projects.
-	noPath := fmt.Sprintf(`{"object_kind":"build","sha":%q,"project_id":42}`, ciHead)
+	noPath := fmt.Sprintf(`{"object_kind":"build","build_name":"test","sha":%q,"project_id":42}`, ciHead)
 	h := gitlabCIRig(someJobs, ci).(*Handler)
 	h.Projects = fakeProjects{}
 	if code := postGitLab(h, "Job Hook", testSecret, noPath); code != 200 {
@@ -164,7 +164,7 @@ func postCheckRun(h http.Handler, body string) int {
 func TestGitHubCheckRunNotifies(t *testing.T) {
 	// A fork: pull_requests is empty, and the event still counts.
 	body := func(app int64) string {
-		return fmt.Sprintf(`{"action":"completed","repository":{"full_name":"Acme/Widgets"},"check_run":{"head_sha":%q,"pull_requests":[],"app":{"id":%d}}}`, ciHead, app)
+		return fmt.Sprintf(`{"action":"completed","repository":{"full_name":"Acme/Widgets"},"check_run":{"name":"test","head_sha":%q,"pull_requests":[],"app":{"id":%d}}}`, ciHead, app)
 	}
 	ci := &fakeCI{}
 	if code := postCheckRun(githubCIRig(someJobs, ci), body(999)); code != 200 {
@@ -191,7 +191,7 @@ func TestGitHubCheckRunNotifies(t *testing.T) {
 // the merge request instead.
 func TestMergedResultsEventsNotifyByMR(t *testing.T) {
 	pipe := fmt.Sprintf(`{"object_kind":"pipeline","project":{"id":42,"path_with_namespace":"Acme/Widgets"},"object_attributes":{"sha":%q,"ref":"refs/merge-requests/12/merge"}}`, ciHead)
-	job := fmt.Sprintf(`{"object_kind":"build","sha":%q,"ref":"refs/merge-requests/9/head","project":{"id":42,"path_with_namespace":"Acme/Widgets"}}`, ciHead)
+	job := fmt.Sprintf(`{"object_kind":"build","build_name":"test","sha":%q,"ref":"refs/merge-requests/9/head","project":{"id":42,"path_with_namespace":"Acme/Widgets"}}`, ciHead)
 	for event, tc := range map[string]struct {
 		body string
 		iid  int64
@@ -222,12 +222,12 @@ func TestGitHubCheckRunIgnoresDashboardOwnApps(t *testing.T) {
 		Queue: &fakeQueue{}, Repos: ciRepos{config.PlatformGitHub, "gh", "Acme/Widgets", someJobs}, CI: ci,
 		Log: slog.New(slog.NewTextHandler(&strings.Builder{}, nil))}
 	for _, app := range []int64{111, 222} {
-		postCheckRun(h, fmt.Sprintf(`{"repository":{"full_name":"Acme/Widgets"},"check_run":{"head_sha":%q,"app":{"id":%d}}}`, ciHead, app))
+		postCheckRun(h, fmt.Sprintf(`{"repository":{"full_name":"Acme/Widgets"},"check_run":{"name":"test","head_sha":%q,"app":{"id":%d}}}`, ciHead, app))
 	}
 	if len(ci.calls) != 0 {
 		t.Fatalf("own apps notified: %+v", ci.calls)
 	}
-	postCheckRun(h, fmt.Sprintf(`{"repository":{"full_name":"Acme/Widgets"},"check_run":{"head_sha":%q,"app":{"id":5}}}`, ciHead))
+	postCheckRun(h, fmt.Sprintf(`{"repository":{"full_name":"Acme/Widgets"},"check_run":{"name":"test","head_sha":%q,"app":{"id":5}}}`, ciHead))
 	if len(ci.calls) != 1 {
 		t.Fatalf("calls = %+v", ci.calls)
 	}
@@ -246,5 +246,41 @@ func TestPipelineHookMergeRequestIID(t *testing.T) {
 	postGitLab(gitlabCIRig(someJobs, ci), "Pipeline Hook", testSecret, without)
 	if len(ci.calls) != 1 || ci.calls[0] != (ciCall{instance: "main", project: "Acme/Widgets", head: ciHead}) {
 		t.Fatalf("calls = %+v, want one by sha", ci.calls)
+	}
+}
+
+// A Job Hook or check_run of a job the repository doesn't choose changes
+// nothing pergent.sh reads: it is ignored, by exact name. A Pipeline Hook
+// always counts, since a pipeline ending can end the wait.
+func TestCIEventsFilteredByJobName(t *testing.T) {
+	job := func(name string) string {
+		return fmt.Sprintf(`{"object_kind":"build","build_name":%q,"sha":%q,"project":{"id":42,"path_with_namespace":"Acme/Widgets"}}`, name, ciHead)
+	}
+	for name, want := range map[string]int{"test": 1, "lint": 0, "Test": 0, "test ": 0, "": 0} {
+		ci := &fakeCI{}
+		if code := postGitLab(gitlabCIRig(someJobs, ci), "Job Hook", testSecret, job(name)); code != 200 {
+			t.Fatalf("Job Hook %q: status %d", name, code)
+		}
+		if len(ci.calls) != want {
+			t.Errorf("Job Hook %q: %d calls, want %d", name, len(ci.calls), want)
+		}
+	}
+	pipe := fmt.Sprintf(`{"object_kind":"pipeline","project":{"id":42,"path_with_namespace":"Acme/Widgets"},"object_attributes":{"sha":%q,"name":"lint"}}`, ciHead)
+	ci := &fakeCI{}
+	postGitLab(gitlabCIRig(someJobs, ci), "Pipeline Hook", testSecret, pipe)
+	if len(ci.calls) != 1 {
+		t.Errorf("Pipeline Hook: %d calls, want 1", len(ci.calls))
+	}
+	run := func(name string) string {
+		return fmt.Sprintf(`{"repository":{"full_name":"Acme/Widgets"},"check_run":{"name":%q,"head_sha":%q,"app":{"id":5}}}`, name, ciHead)
+	}
+	for name, want := range map[string]int{"test": 1, "lint": 0, "TEST": 0, "": 0} {
+		ci := &fakeCI{}
+		if code := postCheckRun(githubCIRig(someJobs, ci), run(name)); code != 200 {
+			t.Fatalf("check_run %q: status %d", name, code)
+		}
+		if len(ci.calls) != want {
+			t.Errorf("check_run %q: %d calls, want %d", name, len(ci.calls), want)
+		}
 	}
 }
