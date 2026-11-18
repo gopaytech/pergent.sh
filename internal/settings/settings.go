@@ -142,6 +142,9 @@ type Effective struct {
 	// Overridden tells, for each setting key, whether the repository sets
 	// it rather than taking the default. Every key is present.
 	Overridden map[string]bool
+	// Paused is true for a dashboard repository that is paused. Only
+	// ListAll and GetAny return one; List and Get never do.
+	Paused bool
 }
 
 // Resolver resolves repositories from Config and, when Store is not nil, the
@@ -165,8 +168,19 @@ func (r *Resolver) registry() *instances.Registry {
 // List returns every repository switched on: the config's first, in config
 // order, then the dashboard's that the config doesn't list, ordered by
 // instance and project. A dashboard row of an instance that isn't
-// registered is left out.
+// registered is left out, and so is a paused one.
 func (r *Resolver) List(ctx context.Context) ([]Effective, error) {
+	return r.list(ctx, false)
+}
+
+// ListAll is List with the paused dashboard repositories too, in the same
+// order, each with Paused set. Only the dashboard reads it: nothing that
+// reviews may.
+func (r *Resolver) ListAll(ctx context.Context) ([]Effective, error) {
+	return r.list(ctx, true)
+}
+
+func (r *Resolver) list(ctx context.Context, paused bool) ([]Effective, error) {
 	out := make([]Effective, 0, len(r.Config.Repositories))
 	for _, repo := range r.Config.Repositories {
 		eff, ok := r.fromConfig(repo)
@@ -177,7 +191,11 @@ func (r *Resolver) List(ctx context.Context) ([]Effective, error) {
 	if r.Store == nil {
 		return out, nil
 	}
-	rows, err := r.Store.DashboardRepos(ctx)
+	read := r.Store.DashboardRepos
+	if paused {
+		read = r.Store.AllDashboardRepos
+	}
+	rows, err := read(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list dashboard repositories: %w", err)
 	}
@@ -198,8 +216,18 @@ func (r *Resolver) List(ctx context.Context) ([]Effective, error) {
 
 // Get returns project on instance, matched ignoring case: the config's
 // repository if the config lists it, otherwise the dashboard's. ok is false
-// when it is switched on in neither.
+// when it is switched on in neither (a paused one is not switched on).
 func (r *Resolver) Get(ctx context.Context, instance, project string) (Effective, bool, error) {
+	return r.get(ctx, instance, project, false)
+}
+
+// GetAny is Get that also finds a paused dashboard repository, with Paused
+// set. Only the dashboard reads it.
+func (r *Resolver) GetAny(ctx context.Context, instance, project string) (Effective, bool, error) {
+	return r.get(ctx, instance, project, true)
+}
+
+func (r *Resolver) get(ctx context.Context, instance, project string, paused bool) (Effective, bool, error) {
 	if repo, ok := r.configRepository(instance, project); ok {
 		eff, ok := r.fromConfig(repo)
 		return eff, ok, nil
@@ -207,7 +235,11 @@ func (r *Resolver) Get(ctx context.Context, instance, project string) (Effective
 	if r.Store == nil {
 		return Effective{}, false, nil
 	}
-	row, found, err := r.Store.DashboardRepo(ctx, instance, project)
+	read := r.Store.DashboardRepo
+	if paused {
+		read = r.Store.AnyDashboardRepo
+	}
+	row, found, err := read(ctx, instance, project)
 	if err != nil {
 		return Effective{}, false, fmt.Errorf("load dashboard repository %s on %s: %w", project, instance, err)
 	}
@@ -513,6 +545,7 @@ func (r *Resolver) fromDashboard(row store.DashboardRepo, stored store.RepoDefau
 		return Effective{}, false
 	}
 	eff := r.defaultsFor(SourceDashboard, platform, row.Instance, row.Project, stored)
+	eff.Paused = !row.Enabled
 	if row.Approve != nil {
 		eff.Approve, eff.Overridden[KeyApprove] = *row.Approve, true
 	}

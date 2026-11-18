@@ -40,7 +40,10 @@ func HookURL(publicURL, instance string) string {
 // clone URL, and whether the approve side reaches it (see
 // reconcileGitHubRepo). For each stored GitLab project no longer switched on
 // it deletes the webhook and the deploy token, then the row; a GitHub
-// repository has nothing to delete but its row. One repository's failure is
+// repository has nothing to delete but its row. A dashboard repository that
+// is paused keeps its row, with its dismissals, commands, inline threads and
+// finding fates: only its webhook and deploy token go (pauseProject). Its
+// readiness scans and setup problems go either way. One repository's failure is
 // logged and the rest continue; the returned error joins them all. At the
 // end, an instance being removed in the dashboard whose projects are all gone
 // is deleted (finishRemovals). When the
@@ -88,6 +91,12 @@ func (e *Engine) reconcile(ctx context.Context, only map[repoKey]bool) error {
 		// look switched off: remove nothing until they can be read.
 		return errors.Join(append(errs, fmt.Errorf("reconcile: %w", err))...)
 	}
+	paused, err := e.pausedRepos(ctx, resolver)
+	if err != nil {
+		// Without them a paused repository would look removed, and lose its
+		// row: remove nothing until they can be read.
+		return errors.Join(append(errs, fmt.Errorf("reconcile: %w", err))...)
+	}
 
 	// The project id each repository switched on resolved to on this pass.
 	wanted := make(map[repoKey]bool, len(repos))
@@ -129,6 +138,16 @@ func (e *Engine) reconcile(ctx context.Context, only map[repoKey]bool) error {
 			continue
 		}
 		if keep(p, wanted, resolved) {
+			continue
+		}
+		if paused[keyOf(p.Instance, p.Path)] {
+			if err := e.pauseProject(ctx, p); err != nil {
+				fail(fmt.Errorf("pause %s (project %d) on %s: %w", p.Path, p.ProjectID, p.Instance, err),
+					"instance", p.Instance, "project", p.Path, "project_id", p.ProjectID)
+				continue
+			}
+			e.dropScans(ctx, p.Instance, p.Path)
+			e.dropAttention(ctx, p.Instance, p.Path)
 			continue
 		}
 		if err := e.removeProject(ctx, p); err != nil {
@@ -174,10 +193,27 @@ func keep(p store.Project, wanted map[repoKey]bool, resolved map[repoKey]int64) 
 	return !ok || id == p.ProjectID
 }
 
+// pausedRepos returns the dashboard repositories that are paused, which the
+// config doesn't list (dropTakenOver deletes those).
+func (e *Engine) pausedRepos(ctx context.Context, resolver *settings.Resolver) (map[repoKey]bool, error) {
+	rows, err := e.Store.AllDashboardRepos(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list dashboard repositories: %w", err)
+	}
+	out := map[repoKey]bool{}
+	for _, row := range rows {
+		if !row.Enabled && !resolver.InConfig(row.Instance, row.Project) {
+			out[keyOf(row.Instance, row.Project)] = true
+		}
+	}
+	return out, nil
+}
+
 // dropTakenOver deletes the dashboard record of every repository the config
-// lists: the config has taken it over, and the record would only mislead.
+// lists, paused or not: the config has taken it over, and the record would
+// only mislead.
 func (e *Engine) dropTakenOver(ctx context.Context, resolver *settings.Resolver) error {
-	rows, err := e.Store.DashboardRepos(ctx)
+	rows, err := e.Store.AllDashboardRepos(ctx)
 	if err != nil {
 		return fmt.Errorf("reconcile: list dashboard repositories: %w", err)
 	}
@@ -322,6 +358,20 @@ func (e *Engine) removeProject(ctx context.Context, p store.Project) error {
 		}
 		return fmt.Errorf("no bots for instance %q", p.Instance)
 	}
+	if err := unhook(ctx, gl, p); err != nil {
+		return err
+	}
+	if err := e.Store.DeleteProject(ctx, p.Instance, p.ProjectID); err != nil {
+		return fmt.Errorf("delete project row: %w", err)
+	}
+	e.log().Info("repository switched off: webhook and deploy token removed",
+		"instance", p.Instance, "project", p.Path, "project_id", p.ProjectID)
+	return nil
+}
+
+// unhook deletes the webhook and the deploy token of GitLab project p, each
+// when it has one.
+func unhook(ctx context.Context, gl *gitlab.Client, p store.Project) error {
 	var errs []error
 	if p.HookID != 0 {
 		if err := gl.DeleteHook(ctx, p.ProjectID, p.HookID); err != nil {
@@ -333,13 +383,32 @@ func (e *Engine) removeProject(ctx context.Context, p store.Project) error {
 			errs = append(errs, fmt.Errorf("revoke deploy token: %w", err))
 		}
 	}
-	if len(errs) > 0 {
-		return errors.Join(errs...)
+	return errors.Join(errs...)
+}
+
+// pauseProject takes a paused repository's webhook and deploy token off
+// GitLab and stores its row without them. The row stays, and with it the
+// dismissals, commands, inline threads and finding fates of its merge
+// requests, so a resume picks them up again; DeleteProject is never called.
+// One with neither (paused before) asks GitLab nothing. A GitHub row, and
+// one of an instance pergent.sh can't reach, are left as they are.
+func (e *Engine) pauseProject(ctx context.Context, p store.Project) error {
+	if p.HookID == 0 && p.DeployTokenID == 0 {
+		return nil
 	}
-	if err := e.Store.DeleteProject(ctx, p.Instance, p.ProjectID); err != nil {
-		return fmt.Errorf("delete project row: %w", err)
+	gl := e.gitLab(p.Instance)
+	if gl == nil {
+		return nil
 	}
-	e.log().Info("repository switched off: webhook and deploy token removed",
+	if err := unhook(ctx, gl, p); err != nil {
+		return err
+	}
+	p.HookID, p.DeployTokenID, p.DeployTokenUsername = 0, 0, ""
+	p.DeployTokenSealed, p.DeployTokenExpiresAt = nil, time.Time{}
+	if err := e.Store.UpsertProject(ctx, p); err != nil {
+		return fmt.Errorf("store project: %w", err)
+	}
+	e.log().Info("repository paused: webhook and deploy token removed, its row kept",
 		"instance", p.Instance, "project", p.Path, "project_id", p.ProjectID)
 	return nil
 }

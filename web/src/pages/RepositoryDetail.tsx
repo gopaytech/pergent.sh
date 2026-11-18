@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams, useSearchParams } from "react-router";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 
 import { api, isStatus, paths, safeHref, type InputsView, type RepositoryDetailView, type Role, type WaitingView } from "../api";
 import { useWrite } from "../layout/write";
@@ -50,8 +50,18 @@ export default function RepositoryDetail() {
       </div>
       <h1>{repo.project}</h1>
       <div className="sub spaced">
-        {platformName(repo.platform)} · {repo.instance} · {repo.source === "config" ? "managed by config" : "switched on in the dashboard"}
+        {platformName(repo.platform)} · {repo.instance} ·{" "}
+        {repo.source === "config" ? "managed by config" : repo.paused ? "paused in the dashboard" : "switched on in the dashboard"}
       </div>
+      {repo.paused && (
+        <div className="alert" role="note" aria-label="Paused">
+          <span className="prose">
+            <strong>Paused:</strong> pergent doesn't review this repository, and its settings are kept. An admin switches it on again
+            under Repositories.
+          </span>
+        </div>
+      )}
+      {view.role === "admin" && repo.source === "dashboard" && <Remove instance={repo.instance} project={repo.project} />}
       {view.role === "admin" && view.quota && (
         <div className="quota" role="group" aria-label="Token usage this month">
           <QuotaLine label="This repository" ariaLabel="Repository token quota" use={view.quota.repository} />
@@ -65,6 +75,7 @@ export default function RepositoryDetail() {
           mark={repo.platform === "github" ? "#" : "!"}
           items={view.waiting}
           role={view.role}
+          paused={repo.paused}
           queryKey={queryKey}
         />
       )}
@@ -94,6 +105,37 @@ export default function RepositoryDetail() {
   );
 }
 
+// Remove deletes a repository from pergent for good, after a confirm, and
+// goes back to the list. Pausing is the list's switch.
+function Remove({ instance, project }: { instance: string; project: string }) {
+  const client = useQueryClient();
+  const write = useWrite();
+  const navigate = useNavigate();
+  const remove = useMutation({
+    mutationFn: () => write<RepositoryDetailView>("DELETE", paths.apiRepo(instance, project)),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ["repositories"] });
+      navigate("/repos");
+    },
+  });
+  const ask = () => {
+    if (
+      window.confirm(
+        `Remove ${project} from pergent? Its settings and team links are deleted, and its webhook and clone credentials are removed. This can't be undone.`,
+      )
+    )
+      remove.mutate();
+  };
+  return (
+    <div className="actions-row">
+      <button type="button" className="btn" disabled={remove.isPending} onClick={ask}>
+        Remove repository
+      </button>
+      {remove.isError && <ErrorBox error={remove.error} />}
+    </div>
+  );
+}
+
 // Waiting is the changes whose review waits for someone to start it: authors
 // the repository doesn't trust (a maintainer or an admin starts those) and
 // changes held by a used-up token quota (only an admin starts those).
@@ -103,6 +145,7 @@ function Waiting({
   mark,
   items,
   role,
+  paused,
   queryKey,
 }: {
   instance: string;
@@ -111,6 +154,8 @@ function Waiting({
   mark: string;
   items: WaitingView[];
   role: Role;
+  // paused hides Start review: nothing starts while the repository is paused.
+  paused: boolean;
   queryKey: unknown[];
 }) {
   const client = useQueryClient();
@@ -145,7 +190,7 @@ function Waiting({
             {w.reason === "trust_check_failed" && <div className="meta">Couldn't check the author's access.</div>}
             {w.reason === "quota_used_up" && <div className="meta">Monthly token quota used up.</div>}
           </div>
-          {(role === "admin" || (role === "maintainer" && w.reason !== "quota_used_up")) && (
+          {!paused && (role === "admin" || (role === "maintainer" && w.reason !== "quota_used_up")) && (
             <button
               type="button"
               className="btn small"

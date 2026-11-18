@@ -332,17 +332,20 @@ type DiagnosticsView struct {
 	PodState *string `json:"podState,omitempty"`
 }
 
-// RepositoryView is one repository switched on. GET /api/repositories is
+// RepositoryView is one repository switched on or paused. GET /api/repositories is
 // a list of them.
 type RepositoryView struct {
 	Instance string `json:"instance"`
 	Project  string `json:"project"`
 	Platform string `json:"platform"`
 	// Source is "config" (read-only here) or "dashboard".
-	Source string    `json:"source"`
+	Source string `json:"source"`
+	// On is false while it is paused (Paused) and once it is removed.
 	On     bool      `json:"on"`
+	Paused bool      `json:"paused"`
 	Last7  Last7View `json:"last7"`
-	// Health is "attention" when it has setup problems, else "ok".
+	// Health is "paused" while it is paused, else "attention" when it has
+	// setup problems, else "ok".
 	Health string `json:"health"`
 }
 
@@ -515,7 +518,8 @@ type ReadinessView struct {
 	Latest    *ScanView            `json:"latest"`
 	Active    *ScanView            `json:"active"`
 	Checklist *readiness.Checklist `json:"checklist"`
-	// CanScan: the session is a maintainer or admin of the repository.
+	// CanScan: the session is a maintainer or admin of the repository, and
+	// it is not paused.
 	CanScan bool `json:"canScan"`
 	// ConfigRepo: the config file sets the repository up, so its skills
 	// are changed there ("Use these skills" shows the lines to paste).
@@ -859,12 +863,12 @@ type LLMView struct {
 // Every write needs the X-CSRF-Token header (403 with "code": "csrf"
 // without it, so the client knows to fetch the token again) and the right
 // role (403 otherwise, and nothing changes): an admin to switch
-// repositories on and off and for the picker, a maintainer or admin of the
+// repositories on, pause, resume and remove them and for the picker, a maintainer or admin of the
 // repository for its settings. A repository the user can't see is answered
 // exactly like one that doesn't exist (404), whatever the write. A
 // repository listed in the config is read-only here (409). Each change is
-// recorded in the audit log: repository_on, repository_off,
-// settings_updated (detail: the settings in the body) and settings_reset.
+// recorded in the audit log: repository_on, repository_paused,
+// repository_resumed, repository_removed, settings_updated (detail: the settings in the body) and settings_reset.
 // Errors are {"error": "message"}.
 //
 //   - GET /api/repositories/available?instance=&search=&page=: AvailableView,
@@ -881,10 +885,16 @@ type LLMView struct {
 //     already. 201, RepositoryDetailView, the project spelled as GitLab spells it for
 //     GitLab, and as sent (trimmed) for GitHub.
 //     pergent.sh sets it up (webhook and clone credentials) within
-//     seconds.
-//   - DELETE /api/repositories/{instance}/{project...}: switches it off.
-//     200, RepositoryDetailView with repo.on false and the default
-//     settings. pergent.sh removes its webhook and clone credentials.
+//     seconds. A paused repository is resumed instead, with its settings:
+//     200.
+//   - PUT /api/admin/repositories/{instance}/{project...} {"enabled": bool}:
+//     pauses (false) or resumes (true) it, its settings kept. 200,
+//     RepositoryDetailView; the state it is in already changes nothing.
+//     409 for a resume while its instance is being removed.
+//   - DELETE /api/repositories/{instance}/{project...}: removes it for good,
+//     with its settings and team links, paused or not. 200,
+//     RepositoryDetailView with repo.on and repo.paused false and the
+//     default settings. pergent.sh removes its webhook and clone credentials.
 //   - PUT /api/repositories/{instance}/{project...}/settings: changes the
 //     settings in the body and leaves the others; a null resets one to its
 //     default. The keys are those of RepositoryDetailView.Settings:
@@ -1318,12 +1328,13 @@ type UsageDayView struct {
 }
 
 // UsageRepositoryRowView is one repository in GET /api/admin/usage.
-// SwitchedOn is false for a repository switched off since, or on an
-// instance that was removed: its usage is kept.
+// SwitchedOn is false for a repository paused (Paused) or removed since, or
+// on an instance that was removed: its usage is kept.
 type UsageRepositoryRowView struct {
 	Instance   string          `json:"instance"`
 	Project    string          `json:"project"`
 	SwitchedOn bool            `json:"switchedOn"`
+	Paused     bool            `json:"paused"`
 	Tokens     UsageTokensView `json:"tokens"`
 	Reviews    int64           `json:"reviews"`
 }

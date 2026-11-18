@@ -8,6 +8,7 @@ import {
   instanceGitLab,
   operator,
   repoPayments,
+  repoToolsPaused,
   repoWidgets,
   teamEmpty,
   teamPayments,
@@ -71,7 +72,18 @@ describe("Teams", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("a team with this name exists already");
   });
 
-  it("shows a covered repository that is no longer switched on as such, unticked", async () => {
+  it("lists a paused repository as a choice, marked paused and linked to its page", async () => {
+    fakeApi({ "GET /api/teams": { body: [teamPayments] }, ...base, "GET /api/repositories": { body: [repoPayments, repoWidgets, repoToolsPaused] } });
+    renderApp("/admin/teams");
+    await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
+    const editor = screen.getByRole("form", { name: "Edit Payments" });
+    const tools = await within(editor).findByRole("checkbox", { name: /acme\/tools.*paused/ });
+    expect(tools).not.toBeChecked();
+    expect(tools).toBeEnabled();
+    expect(within(editor).getByRole("link", { name: "paused" })).toHaveAttribute("href", "/repos/main/acme/tools");
+  });
+
+  it("shows a covered repository that is removed as such, unticked", async () => {
     const fake = fakeApi({
       "GET /api/teams": {
         body: [{ ...teamPayments, repos: [{ instance: "main", project: "acme/payments" }, { instance: "main", project: "acme/gone" }] }],
@@ -82,7 +94,7 @@ describe("Teams", () => {
     renderApp("/admin/teams");
     await userEvent.click(within(await screen.findByRole("region", { name: "Payments" })).getByRole("button", { name: "Edit" }));
     const editor = screen.getByRole("form", { name: "Edit Payments" });
-    const gone = await within(editor).findByRole("checkbox", { name: /acme\/gone.*switched off/ });
+    const gone = await within(editor).findByRole("checkbox", { name: /acme\/gone.*removed/ });
     expect(gone).not.toBeChecked();
     expect(within(editor).getByRole("checkbox", { name: /acme\/payments/ })).toBeChecked();
     await userEvent.click(within(editor).getByRole("button", { name: "Save" }));

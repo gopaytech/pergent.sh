@@ -157,13 +157,29 @@ func (d *Dashboard) activeRepos(ctx context.Context, se Session) ([]settings.Eff
 	if err != nil {
 		return nil, err
 	}
+	return seenBy(se, all), nil
+}
+
+// visibleRepos is activeRepos with the paused repositories too: the list, a
+// repository's page and its writes show and change a paused one. Nothing
+// that starts a Job may go by it alone (refusePaused).
+func (d *Dashboard) visibleRepos(ctx context.Context, se Session) ([]settings.Effective, error) {
+	all, err := d.Repos.ListAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return seenBy(se, all), nil
+}
+
+// seenBy is the repositories of all the session's user can see.
+func seenBy(se Session, all []settings.Effective) []settings.Effective {
 	var out []settings.Effective
 	for _, e := range all {
 		if se.CanSee(e.Instance, e.Project) {
 			out = append(out, e)
 		}
 	}
-	return out, nil
+	return out
 }
 
 func byProject(repos []settings.Effective) map[RepoKey]settings.Effective {
@@ -783,7 +799,7 @@ func (d *Dashboard) runDiagnostics(w http.ResponseWriter, r *http.Request) {
 
 func (d *Dashboard) repositories(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
-	repos, err := d.activeRepos(ctx, se)
+	repos, err := d.visibleRepos(ctx, se)
 	if err != nil {
 		d.failed(w, r, "listing repositories", err)
 		return
@@ -796,7 +812,8 @@ func (d *Dashboard) repositories(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, views)
 }
 
-// repositoryViews describes repos with their last 7 days and health.
+// repositoryViews describes repos with their last 7 days and health; a
+// paused one's health is "paused", whatever setup problems are left.
 func (d *Dashboard) repositoryViews(ctx context.Context, se Session, repos []settings.Effective) ([]RepositoryView, error) {
 	active := byProject(repos)
 	counts, err := d.Store.RunStats(ctx, visibleOf(se, repos), d.now().Add(-defaultDays*day))
@@ -816,11 +833,14 @@ func (d *Dashboard) repositoryViews(ctx context.Context, se Session, repos []set
 		k := repoKey(e.Instance, e.Project)
 		c := counts[store.PathKey(k)]
 		health := healthOK
-		if troubled[k] {
+		switch {
+		case e.Paused:
+			health = healthPaused
+		case troubled[k]:
 			health = healthNeedsAttention
 		}
 		out = append(out, RepositoryView{Instance: e.Instance, Project: e.Project, Platform: e.Platform,
-			Source: string(e.Source), On: true, Health: health,
+			Source: string(e.Source), On: !e.Paused, Paused: e.Paused, Health: health,
 			Last7: Last7View{Reviews: c.Reviews, Approved: c.Approved, Failed: c.Failed}})
 	}
 	return out, nil
@@ -839,7 +859,7 @@ func (d *Dashboard) repositoryViews(ctx context.Context, se Session, repos []set
 func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	instance, rest := r.PathValue("instance"), r.PathValue("rest")
-	repos, err := d.activeRepos(ctx, se)
+	repos, err := d.visibleRepos(ctx, se)
 	if err != nil {
 		d.failed(w, r, "listing repositories", err)
 		return
@@ -918,7 +938,7 @@ func (d *Dashboard) repositoryDetail(w http.ResponseWriter, r *http.Request, se 
 	writeJSON(w, http.StatusOK, view)
 }
 
-// detailView describes repo, switched on, with its settings, setup problems
+// detailView describes repo, switched on or paused, with its settings, setup problems
 // and the session's role on it.
 func (d *Dashboard) detailView(ctx context.Context, se Session, repo settings.Effective) (RepositoryDetailView, error) {
 	views, err := d.repositoryViews(ctx, se, []settings.Effective{repo})

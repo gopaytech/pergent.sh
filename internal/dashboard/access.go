@@ -38,7 +38,8 @@ func (a *Auth) load(ctx context.Context, account store.Account) (accessOf, error
 	if len(mine) == 0 {
 		return accessOf{waiting: true}, nil
 	}
-	repos, err := a.repos.List(ctx)
+	// A paused repository stays visible to those its teams give it to.
+	repos, err := a.repos.ListAll(ctx)
 	if err != nil {
 		return accessOf{}, err
 	}

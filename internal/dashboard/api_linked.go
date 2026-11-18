@@ -273,7 +273,8 @@ func (d *Dashboard) linkable(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	repos, err := d.activeRepos(ctx, se)
+	// A paused repository's links can still be edited.
+	repos, err := d.visibleRepos(ctx, se)
 	if err != nil {
 		d.failed(w, r, "listing repositories", err)
 		return
