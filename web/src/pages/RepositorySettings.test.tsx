@@ -1,10 +1,10 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { RepositoryDetailView } from "../api";
+import type { CIJob, RepositoryDetailView } from "../api";
 import { fakeApi } from "../test/fakeApi";
-import { librarySkills, repoDetail, repoPayments, repoTeams, repoWidgets, ssoAdmin, viewer } from "../test/fixtures";
+import { librarySkills, repoDetail, repoGadgets, repoPayments, repoTeams, repoWidgets, ssoAdmin, viewer } from "../test/fixtures";
 import { renderApp } from "../test/render";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -243,5 +243,131 @@ describe("RepositorySettings: Review deleted and renamed files", () => {
     fakeApi({ ...base, "GET /api/repositories/main/acme/payments": { body: own } });
     renderApp("/repos/main/acme/payments?tab=settings");
     expect(await screen.findByRole("switch", { name: "Review deleted and renamed files" })).toBeChecked();
+  });
+});
+
+describe("RepositorySettings: CI jobs", () => {
+  const payments = "/api/repositories/main/acme/payments";
+  const settingsPath = `${payments}/settings`;
+  const withJobs = (d: RepositoryDetailView, wait: string, jobs: CIJob[]): RepositoryDetailView => ({
+    ...d,
+    settings: { ...d.settings, ciJobs: { value: { wait, jobs }, overridden: jobs.length > 0 } },
+  });
+  const routes = (detail: RepositoryDetailView, extra: Record<string, unknown> = {}) => ({
+    ...base,
+    [`GET ${payments}`]: { body: detail },
+    [`PUT ${settingsPath}`]: { body: detail },
+    [`GET ${payments}/ci-job-names`]: { body: { names: ["build", "test"] } },
+    ...extra,
+  });
+  const card = () => screen.findByRole("region", { name: "CI jobs" });
+
+  it("shows the card with the default wait and no job, for a maintainer too", async () => {
+    fakeApi({ ...routes(repoDetail(repoPayments, "maintainer")), "GET /api/me": { body: viewer } });
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const box = await card();
+    expect(within(box).getByRole("textbox", { name: "How long to wait for CI" })).toHaveValue("30m");
+    expect(within(box).getByText("No CI job yet.")).toBeInTheDocument();
+    expect(within(box).getByText("default")).toBeInTheDocument();
+  });
+
+  it("suggests the names the server lists, and takes free text", async () => {
+    const fake = fakeApi(routes(repoDetail(repoPayments)));
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const box = await card();
+    await userEvent.click(within(box).getByRole("button", { name: "Add a job" }));
+    await waitFor(() => expect(box.querySelectorAll("datalist option")).toHaveLength(2));
+    expect([...box.querySelectorAll("datalist option")].map((o) => o.getAttribute("value"))).toEqual(["build", "test"]);
+    expect(fake.find("GET", `${payments}/ci-job-names`)).toHaveLength(1);
+    await userEvent.type(within(box).getByRole("combobox", { name: "Job name" }), "deploy-docs");
+    expect(within(box).getByText("Not seen in the last 10 runs. Check the name.")).toBeInTheDocument();
+  });
+
+  it("gives no unknown-name warning when the names could not be read", async () => {
+    fakeApi(routes(repoDetail(repoPayments), { [`GET ${payments}/ci-job-names`]: { status: 502, body: { error: "no" } } }));
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const box = await card();
+    await userEvent.click(within(box).getByRole("button", { name: "Add a job" }));
+    await userEvent.type(within(box).getByRole("combobox", { name: "Job name" }), "deploy-docs");
+    expect(within(box).queryByText("Not seen in the last 10 runs. Check the name.")).not.toBeInTheDocument();
+  });
+
+  it("sends ciJobs, and only that, when a job is added", async () => {
+    const fake = fakeApi(routes(repoDetail(repoPayments)));
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const box = await card();
+    await userEvent.click(within(box).getByRole("button", { name: "Add a job" }));
+    await userEvent.type(within(box).getByRole("combobox", { name: "Job name" }), " test ");
+    await userEvent.selectOptions(within(box).getByRole("combobox", { name: "Read" }), "log");
+    await userEvent.click(within(box).getByRole("switch", { name: "Blocks approval" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", settingsPath)[0].body).toEqual({
+      ciJobs: { wait: "30m", jobs: [{ name: "test", read: "log", blocksApproval: true }] },
+    });
+  });
+
+  it("sends the GitHub artifact only on GitHub", async () => {
+    const hub = repoDetail(repoGadgets);
+    const fake = fakeApi({
+      ...base,
+      "GET /api/repositories/hub/acme/gadgets": { body: hub },
+      "PUT /api/repositories/hub/acme/gadgets/settings": { body: hub },
+      "GET /api/repositories/hub/acme/gadgets/inputs": { body: noInputs },
+      "GET /api/repositories/hub/acme/gadgets/teams": { body: repoTeams },
+      "GET /api/repositories/hub/acme/gadgets/ci-job-names": { body: { names: [] } },
+      "GET /api/admin/linkable?instance=hub&repo=acme%2Fgadgets&search=": { body: { items: [], truncated: false } },
+    });
+    renderApp("/repos/hub/acme/gadgets?tab=settings");
+    const box = await card();
+    await userEvent.click(within(box).getByRole("button", { name: "Add a job" }));
+    await userEvent.type(within(box).getByRole("combobox", { name: "Job name" }), "scan");
+    await userEvent.selectOptions(within(box).getByRole("combobox", { name: "Read" }), "report");
+    await userEvent.type(within(box).getByRole("textbox", { name: "Report artifact" }), "scan-out");
+    await userEvent.type(within(box).getByRole("textbox", { name: "Report path" }), "scan.json");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", "/api/repositories/hub/acme/gadgets/settings")[0].body).toEqual({
+      ciJobs: { wait: "30m", jobs: [{ name: "scan", read: "report", report: { artifact: "scan-out", path: "scan.json" }, blocksApproval: false }] },
+    });
+  });
+
+  it("sends null when the last job is removed, and nothing when nothing changed", async () => {
+    const own = withJobs(repoDetail(repoPayments), "45m", [{ name: "test", read: "status", blocksApproval: true }]);
+    const fake = fakeApi(routes(own));
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const box = await card();
+    expect(within(box).getByText("overridden here")).toBeInTheDocument();
+    expect(within(box).getByRole("textbox", { name: "How long to wait for CI" })).toHaveValue("45m");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", settingsPath)).toHaveLength(0);
+    await userEvent.click(within(box).getByRole("button", { name: "Remove test" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", settingsPath)[0].body).toEqual({ ciJobs: null });
+  });
+
+  it("shows the wait of a repository that has no job, and sends a changed wait with its jobs only", async () => {
+    const own = withJobs(repoDetail(repoPayments), "45m", [{ name: "test", read: "status", blocksApproval: false }]);
+    const fake = fakeApi(routes(own));
+    renderApp("/repos/main/acme/payments?tab=settings");
+    const box = await card();
+    const wait = within(box).getByRole("textbox", { name: "How long to wait for CI" });
+    await userEvent.clear(wait);
+    await userEvent.type(wait, "1h");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(fake.find("PUT", settingsPath)[0].body).toEqual({
+      ciJobs: { wait: "1h", jobs: [{ name: "test", read: "status", blocksApproval: false }] },
+    });
+  });
+
+  it("is read-only for a repository the config sets up, and asks for no names", async () => {
+    const widgets = withJobs(repoDetail(repoWidgets), "10m", [{ name: "build", read: "log", blocksApproval: true }]);
+    const fake = fakeApi({ ...base, "GET /api/repositories/main/acme/widgets": { body: widgets } });
+    renderApp("/repos/main/acme/widgets?tab=settings");
+    const box = await card();
+    expect(within(box).getByText("managed by config")).toBeInTheDocument();
+    expect(within(box).getByRole("textbox", { name: "How long to wait for CI" })).toBeDisabled();
+    expect(within(box).getByRole("combobox", { name: "Job name" })).toBeDisabled();
+    expect(within(box).getByRole("button", { name: "Add a job" })).toBeDisabled();
+    expect(within(box).getByRole("button", { name: "Remove build" })).toBeDisabled();
+    expect(fake.calls.filter((c) => c.url.endsWith("/ci-job-names"))).toHaveLength(0);
   });
 });

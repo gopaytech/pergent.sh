@@ -32,6 +32,7 @@ const outcomes: Record<Outcome, [Tone, string]> = {
   approved: ["ok", "Approved"],
   running: ["run", "Running"],
   blocking: ["bad", "Blocking"],
+  ci_blocked: ["warn", "Blocked by CI"],
   draft: ["draft", "Draft"],
   no_blocking: ["ok", "Not approved"],
   failed: ["warn", "Failed"],
@@ -49,6 +50,7 @@ export function OutcomePill({ outcome }: { outcome: string }) {
 export const outcomeOptions: [Outcome, string][] = [
   ["approved", "Approved"],
   ["blocking", "Blocking"],
+  ["ci_blocked", "Blocked by CI"],
   ["no_blocking", "Not approved"],
   ["draft", "Draft"],
   ["running", "Running"],

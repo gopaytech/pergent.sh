@@ -210,10 +210,16 @@ type RunDetailView struct {
 	IncrementalNote string `json:"incrementalNote"`
 	// Quiet is whether the review was started quiet, as recorded when it
 	// started; false for a run that didn't record it.
-	Quiet  bool        `json:"quiet"`
-	Tokens TokensView  `json:"tokens"`
-	Files  FilesView   `json:"files"`
-	Skills []SkillView `json:"skills"`
+	Quiet bool `json:"quiet"`
+	// CIJobs is the snapshot of the CI jobs the repository chose, as the run
+	// was decided with them: no CI text. Null for a run that has none.
+	CIJobs []CIJobResultView `json:"ciJobs"`
+	// CIDeadline is when a run waiting for CI stops waiting; null when it
+	// isn't waiting for CI.
+	CIDeadline *time.Time  `json:"ciDeadline"`
+	Tokens     TokensView  `json:"tokens"`
+	Files      FilesView   `json:"files"`
+	Skills     []SkillView `json:"skills"`
 	// LatestDecided is true for the one run of the change that dismiss and
 	// restore act on: its newest published review, or reported one with an
 	// outcome. Only that run shows dismissals; false when the change has no

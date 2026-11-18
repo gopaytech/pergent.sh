@@ -6,6 +6,8 @@ import {
   api,
   paths,
   skillBudget,
+  type CIJobNamesView,
+  type CIJobs,
   type DetectedSkill,
   type InputsView,
   type LibrarySkill,
@@ -19,6 +21,7 @@ import {
   type TrustedAuthor,
   type TrustMode,
 } from "../api";
+import CIJobsEditor, { tidyCIJobs } from "../CIJobsEditor";
 import CommentLayoutEditor from "../CommentLayoutEditor";
 import LinkedReposEditor, { tidyLinks, type LinkableState } from "../LinkedReposEditor";
 import { useWrite } from "../layout/write";
@@ -50,6 +53,16 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
     queryFn: () => api.get<LinkableView>(paths.apiLinkable(repo.instance, repo.project, search)),
     enabled: canSetLinks && repo.platform === "github" && repo.source !== "config",
     placeholderData: keepPreviousData,
+  });
+
+  // The job names the platform shows in the repository's recent runs, to
+  // suggest in the CI jobs card. Not asked for a repository the config sets up
+  // (nothing there is edited). A failed read gives no names and no warning.
+  const ciNames = useQuery({
+    queryKey: ["ci-job-names", repo.instance, repo.project],
+    queryFn: () => api.get<CIJobNamesView>(paths.apiRepoCIJobNames(repo.instance, repo.project)),
+    enabled: repo.source !== "config",
+    retry: false,
   });
 
   const done = (detail: RepositoryDetailView, message: string) => {
@@ -106,6 +119,7 @@ export default function SettingsTab({ view, queryKey }: { view: RepositoryDetail
         modelChoices={view.modelChoices}
         instanceTrust={view.instanceTrustedAuthorsOnly}
         platform={repo.platform}
+        ciNames={ciNames.isSuccess ? ciNames.data.names : null}
         linkable={
           linkable.isError
             ? { status: "error", error: linkable.error }
@@ -256,6 +270,8 @@ type Draft = {
   learnFromDismissals: boolean;
   quietReviews: boolean;
   checkDeleted: boolean;
+  // The CI jobs as typed (the editor keeps blanks while someone types).
+  ciJobs: CIJobs;
   // Admins only: the impact check across linked repositories, and the links
   // (blank lines in the watched paths are kept while typing).
   linkedReposEnabled: boolean;
@@ -327,6 +343,7 @@ function Form({
   modelChoices,
   instanceTrust,
   platform,
+  ciNames,
   linkable,
   onSearch,
   busy,
@@ -350,6 +367,8 @@ function Form({
   // instanceTrust is the instance's mode, which "Instance default" follows.
   instanceTrust: TrustMode;
   platform: string;
+  // ciNames are the job names seen in the last runs; null when not read.
+  ciNames: string[] | null;
   linkable: LinkableState;
   onSearch: (text: string) => void;
   busy: boolean;
@@ -371,6 +390,7 @@ function Form({
     learnFromDismissals: settings.learnFromDismissals.value,
     quietReviews: settings.quietReviews.value,
     checkDeleted: settings.checkDeleted.value,
+    ciJobs: tidyCIJobs(settings.ciJobs.value),
     linkedReposEnabled: settings.linkedReposEnabled.value,
     linkedRepos: settings.linkedRepos.value.map((l) => ({ ...l, watched: [...l.watched] })),
     commentLayout: settings.commentLayout.overridden ? settings.commentLayout.value : null,
@@ -423,6 +443,12 @@ function Form({
     if (d.learnFromDismissals !== initial.learnFromDismissals) body.learnFromDismissals = d.learnFromDismissals;
     if (d.quietReviews !== initial.quietReviews) body.quietReviews = d.quietReviews;
     if (d.checkDeleted !== initial.checkDeleted) body.checkDeleted = d.checkDeleted;
+    // No jobs clears the setting, as null does.
+    const ci = tidyCIJobs(d.ciJobs);
+    if (JSON.stringify(ci) !== JSON.stringify(initial.ciJobs)) {
+      if (ci.jobs.length > 0) body.ciJobs = ci;
+      else if (initial.ciJobs.jobs.length > 0) body.ciJobs = null;
+    }
     // Who is trusted is an admin's: a maintainer's save never carries it
     // (the server would refuse the whole save).
     if (canSetTrust) {
@@ -743,6 +769,17 @@ function Form({
             onChange={(v) => set("checkDeleted", v)}
           />
         </Setting>
+      </section>
+
+      <section className="card" aria-label="CI jobs">
+        <h2>
+          CI jobs <Badge overridden={settings.ciJobs.overridden} /> {managed}
+        </h2>
+        <div className="pad meta">
+          Choose the CI jobs a review waits for. A blocking job that has not passed holds approval back. A job read as log or report
+          also gives the review its output.
+        </div>
+        <CIJobsEditor value={d.ciJobs} onChange={(v) => set("ciJobs", v)} names={ciNames} github={platform === "github"} disabled={disabled} />
       </section>
 
       {canSetLinks && (

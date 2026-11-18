@@ -10,6 +10,7 @@ export type Outcome =
   | "running"
   | "approved"
   | "blocking"
+  | "ci_blocked"
   | "draft"
   | "no_blocking"
   | "failed"
@@ -202,6 +203,11 @@ export type RunDetailView = {
   // The review was started quiet (the repository's Quiet reviews switch, as it
   // was when the review began); false for a run from before it was recorded.
   quiet: boolean;
+  // The CI jobs the repository chose, as the run was decided with them; null
+  // for a run that has none.
+  ciJobs: CIJobResult[] | null;
+  // When a run waiting for CI stops waiting; null when it is not waiting.
+  ciDeadline: string | null;
   tokens: { in: number; out: number };
   files: {
     reviewed: string[];
@@ -256,6 +262,35 @@ export type LinkableRepo = {
 // LinkableView is GET /api/admin/linkable: 200 repositories at most, by name.
 export type LinkableView = { items: LinkableRepo[]; truncated: boolean };
 
+// CIReport is where a job's report file is: path inside the job's artifacts
+// and, on GitHub only, the workflow artifact's name.
+export type CIReport = { artifact?: string; path: string };
+
+// CIJob is one CI job a repository chose to read. read is "status", "log" or
+// "report"; report is set only for "report".
+export type CIJobRead = "status" | "log" | "report";
+export type CIJob = { name: string; read: CIJobRead; report?: CIReport; blocksApproval: boolean };
+
+// CIJobs is the ciJobs setting: how long a run waits for the jobs ("30m", from
+// 5m to 2h) and the jobs.
+export type CIJobs = { wait: string; jobs: CIJob[] };
+
+// CIJobNamesView is GET .../ci-job-names: job or check names seen lately.
+export type CIJobNamesView = { names: string[] };
+
+// CIJobResult is one chosen job of a run as it was when the run was decided:
+// a snapshot, never any CI text.
+export type CIJobResult = {
+  name: string;
+  result: "passed" | "failed" | "cancelled" | "skipped" | "missing" | "running" | "unreadable";
+  // Why a job is unreadable ("no permission" or "error"); absent otherwise.
+  reason?: string;
+  read: CIJobRead;
+  size: number;
+  cut: boolean;
+  blocks: boolean;
+};
+
 export type RepoSettings = {
   approve: SettingView<boolean>;
   reviewDrafts: SettingView<boolean>;
@@ -268,6 +303,9 @@ export type RepoSettings = {
   // checks what still uses deleted and renamed files: off unless set. A
   // repository setting only.
   checkDeleted: SettingView<boolean>;
+  // ciJobs are the CI jobs a review waits for and reads: none unless set. A
+  // repository setting only; overridden while it has any.
+  ciJobs: SettingView<CIJobs>;
   // linkedReposEnabled is the impact check across linked repositories: off
   // unless set. linkedRepos are the links, kept while it is off; only an
   // admin gets them (an empty list for anyone else).
@@ -538,6 +576,8 @@ export type SettingsUpdate = Partial<{
   learnFromDismissals: boolean | null;
   quietReviews: boolean | null;
   checkDeleted: boolean | null;
+  // null (or no jobs) clears the CI jobs.
+  ciJobs: CIJobs | null;
   // Admins only: the server refuses a maintainer's save that carries either.
   linkedReposEnabled: boolean | null;
   linkedRepos: Link[] | null;
@@ -1257,6 +1297,7 @@ export const paths = {
     `/api/repositories/${seg(instance)}/${proj(project)}/readiness/scan`,
   apiRepoReset: (instance: string, project: string) =>
     `/api/repositories/${seg(instance)}/${proj(project)}/settings/reset`,
+  apiRepoCIJobNames: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/ci-job-names`,
   // The repositories the review App reaches, for the repository to link.
   apiLinkable: (instance: string, project: string, search: string) =>
     `/api/admin/linkable${query([

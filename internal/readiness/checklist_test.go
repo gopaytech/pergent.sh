@@ -620,3 +620,43 @@ func TestFlagsBudgetUnknownLibrarySize(t *testing.T) {
 		t.Errorf("budget %d known %v, want %d known", fl.Budget, fl.BudgetKnown, job.InstructionsBytes+1005)
 	}
 }
+
+// The CI access items are there only when the scan read them: a repository
+// with no CI jobs gets none.
+func TestChecklistCIAccessItems(t *testing.T) {
+	in := goodInput()
+	got := items(BuildChecklist(in))
+	if _, ok := got["ci_actions"]; ok {
+		t.Errorf("ci_actions is listed without a scan result for it")
+	}
+	if _, ok := got["ci_check_runs"]; ok {
+		t.Errorf("ci_check_runs is listed without a scan result for it")
+	}
+
+	in.Pod.ActionsRead = &PodItem{State: Missing, Reason: "the review App can't read Actions"}
+	in.Pod.CheckRunEvent = &PodItem{State: Unknown}
+	c := BuildChecklist(in)
+	got = items(c)
+	if a := got["ci_actions"]; a.State != Missing || a.Reason != "the review App can't read Actions" || a.Why == "" || a.Fix == "" {
+		t.Errorf("ci_actions = %+v; want missing with its reason, why and fix", a)
+	}
+	if r := got["ci_check_runs"]; r.State != Unknown || r.Reason == "" {
+		t.Errorf("ci_check_runs = %+v; want unknown with a reason", r)
+	}
+	var process []string
+	for _, s := range c.Sections {
+		if s.Key == "process" {
+			for _, it := range s.Items {
+				process = append(process, it.Key)
+			}
+		}
+	}
+	want := []string{"codeowners", "approvals", "protected", "required_checks", "ci_actions", "ci_check_runs"}
+	if !slices.Equal(process, want) {
+		t.Errorf("process items = %v; want %v", process, want)
+	}
+	in.Pod.ActionsRead = &PodItem{State: Passed}
+	if a := items(BuildChecklist(in))["ci_actions"]; a.State != Passed || a.Why != "" || a.Fix != "" {
+		t.Errorf("ci_actions passed = %+v; want no advice", a)
+	}
+}

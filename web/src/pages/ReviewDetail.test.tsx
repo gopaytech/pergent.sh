@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { Can, FindingView, ReviewDetailView, RunDetailView } from "../api";
+import type { Can, CIJobResult, FindingView, ReviewDetailView, RunDetailView } from "../api";
 import { fakeApi } from "../test/fakeApi";
 import { allCan, ssoAdmin, reviewDetail, runDetail, runKubernetes } from "../test/fixtures";
 import { renderApp } from "../test/render";
@@ -752,5 +752,42 @@ describe("ReviewDetail buttons", () => {
     const keyWarnings = warn.mock.calls.filter((c) => String(c[0]).includes("same key"));
     warn.mockRestore();
     expect(keyWarnings).toHaveLength(0);
+  });
+});
+
+describe("ReviewDetail: CI jobs", () => {
+  const jobs: CIJobResult[] = [
+    { name: "test", result: "failed", read: "log", size: 2048, cut: true, blocks: true },
+    { name: "scan", result: "unreadable", reason: "no permission", read: "report", size: 0, cut: false, blocks: false },
+    { name: "build", result: "passed", read: "status", size: 0, cut: false, blocks: true },
+  ];
+
+  it("lists each job with its result, what was read, its size and whether it was cut", async () => {
+    renderAndWait({ ...runDetail, ciJobs: jobs });
+    const box = await screen.findByRole("region", { name: "CI jobs" });
+    const rows = within(box).getAllByRole("listitem");
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toHaveTextContent("test");
+    expect(rows[0]).toHaveTextContent("failed");
+    expect(rows[0]).toHaveTextContent("log read, 2 KiB, cut");
+    expect(rows[0]).toHaveTextContent("blocks approval");
+    expect(rows[1]).toHaveTextContent("unreadable (no permission)");
+    expect(rows[1]).toHaveTextContent("report read, nothing read");
+    expect(rows[1]).not.toHaveTextContent("blocks approval");
+    expect(rows[2]).toHaveTextContent("passed");
+    expect(rows[2]).toHaveTextContent("status only");
+    expect(rows[2]).not.toHaveTextContent("cut");
+  });
+
+  it("shows nothing for a run with no CI jobs", async () => {
+    renderAndWait();
+    await screen.findByRole("region", { name: "Skills" });
+    expect(screen.queryByRole("region", { name: "CI jobs" })).not.toBeInTheDocument();
+  });
+
+  it("says a run waits for CI, with its deadline", async () => {
+    renderAndWait({ ...runDetail, ciJobs: null, ciDeadline: "2026-11-18T10:30:00Z", run: { ...runDetail.run, outcome: "waiting", reason: "Waiting for CI." } });
+    const box = await screen.findByRole("region", { name: "CI jobs" });
+    expect(box).toHaveTextContent("Waiting for CI until 2026-11-18 10:30 UTC.");
   });
 });

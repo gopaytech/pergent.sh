@@ -8,6 +8,7 @@ import {
   paths,
   type Can,
   type CheckView,
+  type CIJobResult,
   type FindingView,
   type RerunStatus,
   type ReviewDetailView,
@@ -28,11 +29,13 @@ import {
   Pill,
   Tabs,
   ago,
+  bytesText,
   changeRef,
   count,
   duration,
   platformName,
   skillOrigin,
+  utcText,
   type Tone,
 } from "../ui";
 
@@ -320,6 +323,51 @@ type RunActions = Actions & { done: (note: string) => void };
 
 type Located = FindingView & { skill: string };
 
+const ciTone: Record<CIJobResult["result"], Tone> = {
+  passed: "ok",
+  failed: "bad",
+  cancelled: "warn",
+  skipped: "grey",
+  missing: "warn",
+  running: "run",
+  unreadable: "warn",
+};
+
+// ciRead says what was read of a job: its status only, or the log or report
+// with the size of the text (never the text) and whether it was cut.
+function ciRead(j: CIJobResult) {
+  if (j.read === "status") return "status only";
+  return `${j.read} read, ${j.size > 0 ? bytesText(j.size) : "nothing read"}${j.cut ? ", cut" : ""}`;
+}
+
+// CIJobs is the CI jobs the repository chose, as the run was decided with
+// them, and while the run waits for CI, until when. It shows no CI text.
+function CIJobs({ jobs, deadline }: { jobs: CIJobResult[]; deadline: string | null }) {
+  return (
+    <section className="card" aria-label="CI jobs">
+      <h2>CI jobs</h2>
+      {deadline !== null && <div className="pad">Waiting for CI until {utcText(deadline)}.</div>}
+      <div role="list" aria-label="CI job results">
+        {jobs.map((j) => (
+          <div className="verdict" role="listitem" key={j.name}>
+            <Pill tone={ciTone[j.result] ?? "grey"}>
+              {j.result}
+              {j.reason ? ` (${j.reason})` : ""}
+            </Pill>
+            <div className="grow">
+              <b>{j.name}</b>
+              <div className="meta">
+                {ciRead(j)}
+                {j.blocks && " · blocks approval"}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
   const run = useRun(id);
   const [tab, setTab] = useState<Tab>("findings");
@@ -340,6 +388,7 @@ function RunBody({ id, actions: allowed }: { id: string; actions: Actions }) {
     .sort((a, b) => Number(b.severity === "blocking") - Number(a.severity === "blocking"));
   return (
     <>
+      {(view.ciJobs !== null || view.ciDeadline !== null) && <CIJobs jobs={view.ciJobs ?? []} deadline={view.ciDeadline} />}
       <section className="card" aria-label="Skills">
         <h2>Skills</h2>
         {view.skills.length === 0 && (

@@ -448,3 +448,17 @@ func TestCIJSONHelpers(t *testing.T) {
 		t.Error("readCIResults of bad JSON = nil error")
 	}
 }
+
+func TestRecentRunHeads(t *testing.T) {
+	s := newStore(t)
+	enqueue(t, s, mr1, sha('a'))
+	enqueue(t, s, mr1, sha('b'))
+	enqueue(t, s, mr1, sha('c'))
+	got, err := s.RecentRunHeads(ctx, mr1.Instance, mr1.ProjectID, 2)
+	if err != nil || len(got) != 2 || got[0] != sha('c') || got[1] != sha('b') {
+		t.Errorf("RecentRunHeads(2) = %v, %v; want the 2 newest heads, newest first", got, err)
+	}
+	if none, err := s.RecentRunHeads(ctx, mr1.Instance, mr1.ProjectID+1, 10); err != nil || len(none) != 0 {
+		t.Errorf("RecentRunHeads of another project = %v, %v; want none", none, err)
+	}
+}

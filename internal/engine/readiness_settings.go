@@ -40,6 +40,10 @@ const (
 	// cantReadGitHubProtection: GitHub calls the branch protected, no rule
 	// stops a push, and the classic protection that may can't be read.
 	cantReadGitHubProtection = "the review App can't read the classic branch protection" + needsAdminRead
+	// The CI access reasons, read for a repository that has ci_jobs.
+	noActionsRead   = "the review App can't read Actions (it needs the Actions: Read permission)"
+	noCheckRunEvent = "the review App doesn't get the Check run event (turn it on in the App's settings)"
+	ciAccessUnknown = "pergent.sh hasn't checked the review App's access yet; it does at the next sync"
 )
 
 const (
@@ -257,6 +261,16 @@ func (e *Engine) scanGitHubSettings(ctx context.Context, instance string, app *g
 	})
 	t.Pod.RequiredChecks = gitHubRequiredChecks(branch, types, rulesErr)
 
+	// The review App's CI access matters only to a repository that chose CI
+	// jobs. A failed lookup of its settings leaves the items out.
+	if eff, ok, err := e.settings().Get(ctx, instance, p.Path); err != nil {
+		log.Info("readiness scan: couldn't read the repository's settings", "error", e.redact(err.Error()))
+	} else if ok && len(eff.CIJobs.Jobs) > 0 {
+		a := ciAccessItem(p.ActionsReadable, "the review App can read Actions", noActionsRead, ciAccessUnknown)
+		r := ciAccessItem(p.CheckRunEvents, "the review App gets the Check run event", noCheckRunEvent, ciAccessUnknown)
+		t.Pod.ActionsRead, t.Pod.CheckRunEvent = &a, &r
+	}
+
 	// The clone token is minted as dispatch does: this one repository,
 	// contents:read, never stored.
 	tok, _, err := app.CloneToken(ctx, p.InstallationID, p.ProjectID)
@@ -336,4 +350,17 @@ func approvalsItem(n int) readiness.PodItem {
 
 func unknownItem(reason string) readiness.PodItem {
 	return readiness.PodItem{State: readiness.Unknown, Reason: reason}
+}
+
+// ciAccessItem is one CI access the review App has or lacks, as the last
+// reconcile stored it: nil is never checked, which is unknown and never
+// passed.
+func ciAccessItem(allowed *bool, passed, missing, unchecked string) readiness.PodItem {
+	switch {
+	case allowed == nil:
+		return unknownItem(unchecked)
+	case *allowed:
+		return readiness.PodItem{State: readiness.Passed, Reason: passed}
+	}
+	return readiness.PodItem{State: readiness.Missing, Reason: missing}
 }

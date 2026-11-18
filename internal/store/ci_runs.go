@@ -193,3 +193,24 @@ func (s *Store) SetProjectCIAccess(ctx context.Context, instance string, project
 		WHERE instance = $1 AND project_id = $2`, instance, projectID, actionsReadable, checkRunEvents)
 	return err
 }
+
+// RecentRunHeads lists the head SHAs of a project's runs, the newest head
+// first, each once, at most limit: where GitHub's check run names are read
+// from, since a check run belongs to a commit.
+func (s *Store) RecentRunHeads(ctx context.Context, instance string, projectID int64, limit int) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT head_sha FROM runs WHERE instance = $1 AND project_id = $2
+		GROUP BY head_sha ORDER BY max(created_at) DESC, head_sha LIMIT $3`, instance, projectID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
