@@ -73,6 +73,7 @@ Each job ends as one of:
 
 - **GitLab.** The pipelines that count for the head are those found by commit, and merge request pipelines for merged results whose commit has the head as a parent. The newest attempt of a job wins. A pipeline that ran only in a fork project is not seen, so its jobs are `missing`.
 - **GitHub.** Every check run with the exact name must pass, which is the newest attempt of each. So two workflows that both name a job `test` must both pass.
+- **Each CI read at review time has 60 seconds.** A read still going then counts as failed: before the wait it holds the run, as any failed read does, and at the review every job is `unreadable` (`error`).
 - **If reading a log or report fails at review time,** the job is `unreadable`. If it is blocking, it stays blocking until a new push or a re-run. Later status checks don't flip it.
 
 ## The gate

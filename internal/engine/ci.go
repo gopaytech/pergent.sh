@@ -34,6 +34,11 @@ const (
 // loop it shares with dispatch. A variable so tests can shorten it.
 var ciSweepBudget = 30 * time.Second
 
+// ciDispatchBudget bounds each CI read a dispatch makes (gateCI,
+// addCIResults), so a slow platform can't hold up the engine loop. A variable
+// so tests can shorten it.
+var ciDispatchBudget = 60 * time.Second
+
 // ciDroppedMsg is logged when the inputs have no room for ci-results.md.
 const ciDroppedMsg = "reviewing without the CI job results: the inputs are too large for them"
 
@@ -113,8 +118,8 @@ func ciApplies(run store.Run, repo settings.Effective) bool {
 // on: held is false. Within ciNoPipelineGrace of being queued, a head with
 // none of the jobs yet is not over (ciDone). Otherwise it waits for CI (store.WaitCIPending) until
 // the deadline, with the pending status waitingText and no Job; the CI sweep,
-// a CI event or Start review queues it again. A read that fails holds it too:
-// the deadline still releases it. A platform that can't read CI holds
+// a CI event or Start review queues it again. A read that fails, or is still
+// going at ciDispatchBudget, holds it too: the deadline still releases it. A platform that can't read CI holds
 // nothing, and at dispatch every job is unreadable. held is also true when
 // the run went back to the queue; err is a store error only.
 func (d *dispatcher) gateCI(ctx context.Context, plat Platform, repo settings.Effective) (held bool, err error) {
@@ -129,11 +134,14 @@ func (d *dispatcher) gateCI(ctx context.Context, plat Platform, repo settings.Ef
 	case !e.now().Before(deadline):
 		// Started long after it was queued: the wait is over already.
 	default:
-		snap, rerr := reader.ReadCI(ctx, ciTarget(run, plat), jobs, false)
+		bctx, bcancel := context.WithTimeout(ctx, ciDispatchBudget)
+		snap, rerr := reader.ReadCI(bctx, ciTarget(run, plat), jobs, false)
+		bcancel()
 		switch {
 		case rerr != nil && ctx.Err() != nil:
 			return true, d.postpone(ctx, e.now())
 		case rerr != nil:
+			// A read past ciDispatchBudget is a failed read too.
 			d.log.Warn("the CI jobs can't be read; the run waits for them until its deadline",
 				"deadline", deadline, "error", d.redact(rerr.Error()))
 			wait = true
@@ -170,7 +178,9 @@ func (d *dispatcher) gateCI(ctx context.Context, plat Platform, repo settings.Ef
 // (ci.Build, then the run's own secrets and the LLM keys removed). The snapshot (no text) is
 // recorded first, for the gate at publish: a lost write would decide the
 // review without its CI jobs. A read that fails, or a platform that can't
-// read CI, makes every job unreadable (error), and the file is still written.
+// read CI, makes every job unreadable (error), and the file is still written;
+// a read still going at ciDispatchBudget fails too, and then a job asking
+// for its log or report also counts its text read as failed (TextFailed).
 // The error is a store error (store.ErrRunGone for a run superseded
 // meanwhile) or the read's when ctx ended.
 func (d *dispatcher) addCIResults(ctx context.Context, plat Platform, repo settings.Effective, in *inputs.Inputs) error {
@@ -178,17 +188,30 @@ func (d *dispatcher) addCIResults(ctx context.Context, plat Platform, repo setti
 	var snap ci.Snapshot
 	reader, canRead := ciReader(plat)
 	var rerr error
+	overBudget := false
 	if canRead {
-		snap, rerr = reader.ReadCI(ctx, ciTarget(d.run, plat), jobs, true)
+		bctx, bcancel := context.WithTimeout(ctx, ciDispatchBudget)
+		snap, rerr = reader.ReadCI(bctx, ciTarget(d.run, plat), jobs, true)
+		overBudget = rerr != nil && bctx.Err() != nil
+		bcancel()
 		if rerr != nil {
 			if ctx.Err() != nil {
 				return fmt.Errorf("read the CI jobs: %w", rerr)
 			}
-			d.log.Warn("the CI jobs can't be read; the review is told they are unreadable", "error", d.redact(rerr.Error()))
+			d.log.Warn("the CI jobs can't be read; the review is told they are unreadable",
+				"out_of_time", overBudget, "error", d.redact(rerr.Error()))
 		}
 	}
 	if !canRead || rerr != nil {
 		snap = unreadableCI(d.run.HeadSHA, jobs)
+	}
+	if overBudget {
+		// Out of time with the text unread: a job that asks for text
+		// counts its text read as failed, so a later status-only read
+		// can't soften it (mergeCI). A status job has no text to lose.
+		for i := range snap.Jobs {
+			snap.Jobs[i].TextFailed = snap.Jobs[i].Read != "status"
+		}
 	}
 	if err := d.ciStore().SetRunCI(ctx, d.run.ID, snap.Results()); err != nil {
 		return err

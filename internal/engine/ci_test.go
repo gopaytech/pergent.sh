@@ -103,14 +103,30 @@ type ciForge struct {
 	reads    []bool // withText of each ReadCI
 	targets  []forge.CITarget
 	statuses []string
+	// slow makes a read take that long, or until its context ends.
+	slow time.Duration
 }
 
 var _ forge.CIReader = (*ciForge)(nil)
 
-func (f *ciForge) ReadCI(_ context.Context, t forge.CITarget, _ []store.CIJob, withText bool) (ci.Snapshot, error) {
+func (f *ciForge) ReadCI(ctx context.Context, t forge.CITarget, _ []store.CIJob, withText bool) (ci.Snapshot, error) {
 	f.reads = append(f.reads, withText)
 	f.targets = append(f.targets, t)
+	if f.slow > 0 {
+		select {
+		case <-ctx.Done():
+			return ci.Snapshot{}, ctx.Err()
+		case <-time.After(f.slow):
+		}
+	}
 	return f.snap, f.err
+}
+
+// shortDispatchBudget makes ciDispatchBudget d for the test.
+func shortDispatchBudget(t *testing.T, d time.Duration) {
+	old := ciDispatchBudget
+	ciDispatchBudget = d
+	t.Cleanup(func() { ciDispatchBudget = old })
 }
 
 func (f *ciForge) RecentCINames(context.Context, forge.CITarget) ([]string, error) { return nil, nil }
@@ -295,6 +311,26 @@ func TestGateCI(t *testing.T) {
 		}
 	})
 
+	t.Run("a read past the budget holds", func(t *testing.T) {
+		// A slow platform can't hold the engine loop: the read stops at
+		// ciDispatchBudget and counts as failed, so the run waits.
+		shortDispatchBudget(t, 20*time.Millisecond)
+		st := &memCI{held: true}
+		f := &ciForge{snap: ended, slow: 5 * time.Second}
+		d, _ := ciDispatcher(ciRun(), st)
+		start := time.Now()
+		held, err := d.gateCI(context.Background(), Platform{Forge: f}, ciRepo())
+		if !held || err != nil {
+			t.Fatalf("gateCI = %v, %v; want held, not failed", held, err)
+		}
+		if took := time.Since(start); took > 2*time.Second {
+			t.Errorf("gateCI took %v, want about the budget", took)
+		}
+		if got := st.Calls(); !reflect.DeepEqual(got, []string{"hold"}) {
+			t.Errorf("store calls = %v, want [hold]", got)
+		}
+	})
+
 	t.Run("the deadline already past", func(t *testing.T) {
 		// A run started long after it was queued (an untrusted author's):
 		// the wait is over, so CI isn't read and nothing holds it.
@@ -431,6 +467,33 @@ func TestAddCIResults(t *testing.T) {
 		}
 		if in.CIResults != nil {
 			t.Errorf("a gone run's inputs got the file")
+		}
+	})
+
+	t.Run("a read past the budget", func(t *testing.T) {
+		// The jobs left unread are unreadable (error), and a job whose text
+		// was asked for counts its text read as failed: fail closed.
+		shortDispatchBudget(t, 20*time.Millisecond)
+		st := &memCI{}
+		f := &ciForge{snap: snap, slow: 5 * time.Second}
+		d, _ := ciDispatcher(ciRun(), st)
+		in := &inputs.Inputs{}
+		start := time.Now()
+		if err := d.addCIResults(context.Background(), Platform{Forge: f}, ciRepo(), in); err != nil {
+			t.Fatalf("addCIResults = %v, want the review to go on", err)
+		}
+		if took := time.Since(start); took > 2*time.Second {
+			t.Errorf("addCIResults took %v, want about the budget", took)
+		}
+		want := []store.CIJobResult{
+			{Name: "test", Result: "unreadable", Reason: "error", Read: "log", Blocks: true, TextFailed: true},
+			{Name: "cycode-scan", Result: "unreadable", Reason: "error", Read: "status"},
+		}
+		if !reflect.DeepEqual(st.stored, want) {
+			t.Errorf("stored %+v, want %+v", st.stored, want)
+		}
+		if s := string(in.CIResults); !strings.Contains(s, "## test: unreadable (error) (blocks approval)") {
+			t.Errorf("ci-results.md = %q", s)
 		}
 	})
 
