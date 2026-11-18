@@ -258,7 +258,8 @@ func (c *Client) JobLogs(ctx context.Context, owner, repo string, jobID int64) (
 // RunArtifactFile reads one file out of a workflow run's artifact zip. The zip
 // is read into memory up to 20 MiB (more is an error) and the file up to 2
 // MiB. An artifact or file that isn't there, or a path that is a directory, is
-// ErrNotFound. An empty artifact name takes the run's first live artifact.
+// ErrNotFound. Of the live artifacts with the name (any name when it is
+// empty), the newest, with the highest id, is read.
 func (c *Client) RunArtifactFile(ctx context.Context, owner, repo string, runID int64, artifact, path string) (string, error) {
 	p, err := repoPath(owner, repo, "/actions/runs", id(runID), "/artifacts")
 	if err != nil {
@@ -278,11 +279,12 @@ func (c *Client) RunArtifactFile(ctx context.Context, owner, repo string, runID 
 	if err := c.getJSON(ctx, p, q, &list); err != nil {
 		return "", err
 	}
+	// A re-run's attempts each upload theirs to the same run: the newest
+	// (highest id) wins.
 	var artID int64
 	for _, a := range list.Artifacts {
-		if !a.Expired && (artifact == "" || a.Name == artifact) {
+		if !a.Expired && (artifact == "" || a.Name == artifact) && a.ID > artID {
 			artID = a.ID
-			break
 		}
 	}
 	if artID == 0 {

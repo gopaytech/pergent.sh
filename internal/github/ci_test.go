@@ -166,6 +166,35 @@ func TestRunArtifactFile(t *testing.T) {
 	}
 }
 
+// A re-run's attempts upload artifacts of the same name to the run: the
+// newest (highest id) live one is read.
+func TestRunArtifactFileNewestAttempt(t *testing.T) {
+	old := makeZip(t, map[string]string{"cycode.json": "old"})
+	newest := makeZip(t, map[string]string{"cycode.json": "newest"})
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/acme/widgets/actions/runs/77/artifacts":
+			jsonReply(map[string]any{"artifacts": []map[string]any{
+				{"id": 4, "name": "report", "expired": false},
+				{"id": 12, "name": "report", "expired": true},
+				{"id": 9, "name": "report", "expired": false},
+				{"id": 7, "name": "report", "expired": false},
+				{"id": 11, "name": "other", "expired": false},
+			}})(w, r)
+		case "/repos/acme/widgets/actions/artifacts/9/zip":
+			_, _ = w.Write(newest)
+		case "/repos/acme/widgets/actions/artifacts/4/zip", "/repos/acme/widgets/actions/artifacts/7/zip":
+			_, _ = w.Write(old)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	got, err := c.RunArtifactFile(ctx, "acme", "widgets", 77, "report", "cycode.json")
+	if err != nil || got != "newest" {
+		t.Fatalf("file = %q, %v; want the newest artifact's", got, err)
+	}
+}
+
 func TestRunArtifactFileTooLarge(t *testing.T) {
 	c, _ := artifactServer(t, make([]byte, 20<<20+1))
 	_, err := c.RunArtifactFile(ctx, "acme", "widgets", 77, "report", "cycode.json")
