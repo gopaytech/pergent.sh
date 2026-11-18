@@ -232,3 +232,19 @@ func TestGitHubCheckRunIgnoresDashboardOwnApps(t *testing.T) {
 		t.Fatalf("calls = %+v", ci.calls)
 	}
 }
+
+// A merge request pipeline's own merge_request.iid decides, whatever the ref.
+func TestPipelineHookMergeRequestIID(t *testing.T) {
+	withMR := fmt.Sprintf(`{"object_kind":"pipeline","project":{"id":42,"path_with_namespace":"Acme/Widgets"},"merge_request":{"iid":7},"object_attributes":{"sha":%q,"ref":"feature"}}`, ciHead)
+	ci := &fakeCI{}
+	postGitLab(gitlabCIRig(someJobs, ci), "Pipeline Hook", testSecret, withMR)
+	if len(ci.calls) != 1 || ci.calls[0] != (ciCall{instance: "main", project: "Acme/Widgets", iid: 7}) {
+		t.Fatalf("calls = %+v, want one by MR 7", ci.calls)
+	}
+	ci = &fakeCI{}
+	without := strings.Replace(withMR, `"merge_request":{"iid":7},`, "", 1)
+	postGitLab(gitlabCIRig(someJobs, ci), "Pipeline Hook", testSecret, without)
+	if len(ci.calls) != 1 || ci.calls[0] != (ciCall{instance: "main", project: "Acme/Widgets", head: ciHead}) {
+		t.Fatalf("calls = %+v, want one by sha", ci.calls)
+	}
+}

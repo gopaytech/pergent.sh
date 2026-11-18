@@ -132,6 +132,10 @@ type ciEvent struct {
 		ID                int64  `json:"id"`
 		PathWithNamespace string `json:"path_with_namespace"`
 	} `json:"project"`
+	// MergeRequest is set on a merge request pipeline's Pipeline Hook.
+	MergeRequest *struct {
+		IID int64 `json:"iid"`
+	} `json:"merge_request"`
 	ObjectAttributes struct {
 		// SHA is the Pipeline Hook's commit.
 		SHA string `json:"sha"`
@@ -426,6 +430,10 @@ func (h *Handler) ci(w http.ResponseWriter, r *http.Request, log *slog.Logger, i
 		head, ref = ev.ObjectAttributes.SHA, ev.ObjectAttributes.Ref
 	}
 	iid := mergeRequestRef(ref)
+	// A merge request pipeline names its merge request, whatever its ref is.
+	if event == pipelineHookEvent && ev.MergeRequest != nil && ev.MergeRequest.IID > 0 {
+		iid = ev.MergeRequest.IID
+	}
 	if id == 0 {
 		id = ev.ProjectID
 	}
