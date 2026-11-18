@@ -1,6 +1,6 @@
 # CI job results as review input
 
-Status: design, approved by the owner on 2026-11-18 after three rounds of questions and one builder check. Covers a pergent change and a pergent.sh change. Nothing is built from this until the owner approves it, and nothing is released until the owner decides.
+Status: design, approved by the owner on 2026-11-18 after three rounds of questions and one builder check, and amended the same day after a grilling round (Q1 to Q12, all accepted). Covers a pergent change and a pergent.sh change. Nothing is built from this until the owner approves it, and nothing is released until the owner decides.
 
 ## Why
 
@@ -22,6 +22,9 @@ A review runs on its own today. It never sees what the change's CI already found
 
 - **Uploads from CI.** A job never sends its report to pergent.sh. A later change can add that for other CI systems.
 - **Reporting CI results as findings.** The model uses them as context only. It doesn't turn a scanner's findings into review findings.
+- **A per-skill filter.** Every skill's batches get the whole file. Add a filter only if token cost shows it is needed.
+- **Showing CI text on the dashboard.** No log or report text is stored or shown.
+- **Reading pipelines in a GitLab fork project.** The docs say to run fork pipelines in the target project.
 - **Parsing report formats.** JUnit, SARIF and Cycode JSON go to the model as text, cut to size.
 - **GitLab external commit statuses**, the kind a third-party integration posts outside a pipeline.
 - **Jobs inside GitLab child pipelines.** A trigger job can be chosen, and its result is the child pipeline's status.
@@ -122,7 +125,7 @@ Events are only a signal to check again through the API.
 - **Jobs:** `GET /pipelines/:id/jobs` and `GET /pipelines/:id/bridges` for every pipeline that counts. Per chosen name, the job with the highest id wins, which is the newest attempt.
 - **Log:** `GET /jobs/:id/trace`.
 - **Report:** `GET /jobs/:id/artifacts/<path>`.
-- **Forks:** a pipeline that ran only in a fork project isn't in the target project's lists, so its jobs are `missing`.
+- **Forks:** a pipeline that ran only in a fork project isn't in the target project's lists, so its jobs are `missing`. With a blocking job, pergent never approves such a merge request until its pipeline runs in the target project, which is GitLab's own recommended setup for forks. The concept page says so.
 - **Results:**
 
   | GitLab status | Result | Ended? |
@@ -168,7 +171,14 @@ Events are only a signal to check again through the API.
 - `running`: not ended at the deadline;
 - `unreadable`: an API error or a missing permission.
 
-The wait ends when every chosen job has a result marked as ended. A job that is `missing` is not ended until the deadline, because it may still be created.
+**When the wait ends:**
+- **Every chosen job is waited for,** blocking or not. Choosing a job means the model should see it, and the limit caps the cost.
+- **It ends when every chosen job has a result marked as ended.**
+- **A `missing` job holds it** until the head's CI is finished or the deadline passes:
+  - on GitLab, every pipeline that counts for the head has ended;
+  - on GitHub, every check suite on the head has completed. A suite with no check runs is ignored, because GitHub creates one for every App that can post checks, and the suite of an App that never runs stays `queued` forever.
+
+  A job still not found then is `missing`. A blocking one blocks. If it shows up later, the re-decide after publish fixes the gate, but this review's model never saw it.
 
 ### The file for the review
 
@@ -176,9 +186,9 @@ pergent.sh writes `ci-results.md`, one section per job: its name, its result, an
 
 - **It is written whenever the repository has jobs chosen,** even when every job is `status` only, because the model should know that a test failed.
 - **Caps:**
-  - A log tail is the last 200 lines and at most 32 KiB.
-  - A report is at most 32 KiB.
-  - The whole file is at most 128 KiB.
+  - A log tail is the last 200 lines and at most 16 KiB.
+  - A report is at most 16 KiB.
+  - The whole file is at most 64 KiB, about 16k tokens. It goes to every batch, so a 5-batch change pays about 80k extra input tokens.
   - Each cut is marked in the file.
 - **Reading a big log:** the body is streamed through a rolling 2 MiB buffer, so the tail is the real end of the log. Neither API documents range reads.
 - **Cleaning:**
@@ -196,7 +206,7 @@ pergent.sh writes `ci-results.md`, one section per job: its name, its result, an
   - It is a trusted input in agent mode, as `--change-description` is.
   - A path inside `--repo-path` is a usage error.
   - An unreadable file gives a warning and is ignored.
-- **pergent cuts it to 128 KiB again and redacts it.**
+- **pergent cuts it to 64 KiB again and redacts it.**
 - **Which runs see it:**
   - `reviewBatch` and `crossBatch` attach it as `ci-results.md`, with the message sentence `ciMessage`.
   - It counts against each batch's budget, as the deleted-files list does with `carveOut`.
@@ -228,9 +238,10 @@ pergent.sh writes `ci-results.md`, one section per job: its name, its result, an
   - An `unreadable` job adds `no permission` or `error`.
 - **`ErrorComment`** skips `render`, so it adds the same line itself. A failed review still shows the CI state.
 - **The review's verdict** stays the model's own.
-- **After publish,** a CI event for a published run's head re-reads the jobs. If any result changed, pergent.sh re-decides from the stored result, as a dismissal does:
-  - it updates the comment, the status and the approval;
-  - it withdraws an approval when a blocking job now fails.
+- **After publish,** a CI event for one of the *chosen* jobs on a published run's head re-reads the jobs. Events for other jobs are ignored. If a chosen job's result changed, pergent.sh re-decides from the stored result, as a dismissal does:
+  - it updates the status and the approval;
+  - it withdraws an approval when a blocking job now fails;
+  - it edits the comment only when the CI line or the verdict actually changed.
 
   No new review runs.
 
@@ -240,19 +251,23 @@ pergent.sh writes `ci-results.md`, one section per job: its name, its result, an
 - **`runs`:**
   - `ci_checked` (boolean, default false);
   - `ci_deadline` (timestamptz, nullable);
-  - `ci_jobs` (jsonb, nullable): the last snapshot of each chosen job's name, result, what was read, size, and whether it was cut.
+  - `ci_jobs` (jsonb, nullable): the last snapshot of each chosen job's name, result, what was read, size, and whether it was cut. Never the log or report text. That lives only in the Job's ConfigMap, which is removed with the Job.
 - **`ci_pending`** is a new value of the existing waiting reason.
 
 ### Dashboard
 
-- **The review page** lists each chosen job: its result, what was read and how big it was, and whether the wait timed out.
-- **The settings page** edits the list. It warns when a job name hasn't shown up in the repository's last 10 pipelines or check runs, which is usually a typo.
+- **The review page** lists each chosen job: its result, what was read and how big it was, and whether the wait timed out. It shows no CI text.
+- **The settings page** edits the list.
+  - **Picking a name:** a combo box suggests job and check names from the repository's last 10 pipelines or check runs. Free text is allowed for a job that hasn't run yet.
+  - **Unknown names:** it warns when a name hasn't shown up in those runs, which is usually a typo.
+  - **Model provider warning:** a one-line warning beside `log` and `report` says that the CI output goes to the model provider after secrets are removed, and that redaction catches known shapes, not everything.
 - **Readiness** on GitHub warns when the installation lacks `actions: read` or the `check_run` event.
 - **A `ci_pending` run** shows as waiting for CI, with its deadline.
 
 ## Edge cases
 
-- **No pipeline at all** for the head, for example when CI rules skip it: the run waits until the deadline, and the jobs are `missing`. A blocking one blocks.
+- **No pipeline at all** for the head, for example when CI rules skip it: no pipeline or suite is running, so nothing holds the wait. The jobs are `missing` at once, and a blocking one blocks. A pipeline created later re-decides the gate.
+- **A name that only runs on `main`,** or a typo: it is `missing` as soon as the head's CI ends, so it doesn't add the full limit to every push.
 - **A job that ends while the review runs:** the review uses what was read when the run was queued. The next CI event re-decides the gate after publish.
 - **A manual GitLab job** that nobody ran is `skipped` and counts as ended, so it doesn't hold the wait. A blocking manual job blocks until someone runs it and it passes, and that event re-decides the gate.
 - **Incremental re-reviews:** each push waits for its own head's jobs. Carried files don't change what is read.
@@ -283,7 +298,8 @@ pergent.sh writes `ci-results.md`, one section per job: its name, its result, an
    - the gate, `KindCI` and the CI line, including in `ErrorComment`;
    - re-deciding after publish;
    - the dashboard and readiness;
-   - docs, and the `defaultImage` and `go.mod` pin to the new pergent.
+   - docs: a new `docs/concepts/ci-jobs.md` (the setting, waiting, the gate, the fork limit, the model provider warning), a 🧪 line in the README's Features list, and rows in the config reference;
+   - the `defaultImage` and `go.mod` pin to the new pergent.
 3. **Releases are the owner's call.**
 
 ## Testing
@@ -292,7 +308,7 @@ pergent.sh writes `ci-results.md`, one section per job: its name, its result, an
 - Without the flag, prompts and the comment are byte-identical.
 - Batch and cross-batch runs get `ci-results.md`; verification, repair and impact don't.
 - A path inside `--repo-path` is a usage error, and an unreadable file warns.
-- The 128 KiB cut, and redaction.
+- The 64 KiB cut, and redaction.
 - The file counts against the batch budget.
 - `HeaderNote`: empty leaves the golden files unchanged, set shows one line, and a note starting with `#` or `@` stays plain text.
 
@@ -304,6 +320,9 @@ pergent.sh writes `ci-results.md`, one section per job: its name, its result, an
 **pergent.sh, waiting:**
 - A run whose jobs have all ended queues straight away. Otherwise it waits and queues when they end.
 - The deadline queues a run, and the sweep works without events.
+- A non-blocking job is waited for too.
+- A `missing` job ends the wait once every pipeline (GitLab) or check suite (GitHub) on the head has finished. A GitHub suite with no check runs doesn't hold it.
+- A head with no pipeline at all is `missing` at once.
 - Start review skips the wait.
 - A push supersedes a waiting run.
 - A re-run and a started untrusted run check CI once, and don't loop.
@@ -327,6 +346,9 @@ pergent.sh writes `ci-results.md`, one section per job: its name, its result, an
 
 **pergent.sh, after publish:**
 - A job passing re-decides and approves.
+- An event for a job that isn't chosen does nothing.
+- The comment is edited only when the CI line or the verdict changes.
+- No CI text is stored in `runs.ci_jobs`.
 - A job failing withdraws approval.
 
 **pergent.sh, the file:**
@@ -341,14 +363,15 @@ pergent.sh writes `ci-results.md`, one section per job: its name, its result, an
 
 ## Calls made in the builder check
 
-These weren't asked of the owner. Check them while reading:
+The owner confirmed the first two in the grilling round (Q2, Q3). The rest are mine:
 
-- Every run of a repository with jobs chosen checks CI once, including re-runs and started runs, through its own hold and a `ci_checked` marker.
+- Every run of a repository with jobs chosen checks CI once, including re-runs and started runs, through its own hold and a `ci_checked` marker. **Start review** skips the wait.
 - A blocking CI failure turns the status failed even on a draft, with approval off, or on a neutral review failure.
-- A GitLab `manual` job is `skipped` and ends the wait. A `missing` job holds the wait until the deadline.
+- A GitLab `manual` job is `skipped` and ends the wait.
 - An `unreadable` job's reason is shown as `no permission` or `error` only. A fork pipeline shows as `missing`, because it can't be told apart.
 - `HeaderNote` is written in italics, so its text never starts a markdown line.
 - `wait` is a duration (`30m`), not a number of minutes.
+- On GitHub, a check suite with no check runs is ignored when deciding that the head's CI has finished.
 
 ## Left to the builder
 
