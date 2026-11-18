@@ -42,7 +42,7 @@
 | [Monthly token quota](concepts/token-quota.md) | A ceiling on the tokens an instance or repository spends |
 | [What a Job can and cannot see](concepts/job-isolation.md) | How a review is sandboxed |
 | [Fork merge requests](concepts/fork-merge-requests.md) | Changes from forks |
-| [Switching a repository off](concepts/switching-off.md) | What's removed and what's kept |
+| [Pausing and removing a repository](concepts/switching-off.md) | What's paused, what's removed and what's kept |
 
 **Reference**
 

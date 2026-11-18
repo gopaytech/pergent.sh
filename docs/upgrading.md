@@ -1,5 +1,17 @@
 # ⬆️ Upgrading
 
+## Unreleased
+
+**The switch on Repositories now pauses a repository instead of removing it.** A paused repository stays in the list with all its settings, its dismissals and its review history. pergent.sh takes its webhook and deploy token off the platform and reviews nothing for it until it is switched on again: [Pausing and removing a repository](concepts/switching-off.md). The switch calls `PUT /api/admin/repositories/{instance}/{project}` with `{"enabled": false}` to pause and `{"enabled": true}` to resume. **Remove repository**, on the repository's page, deletes it for good.
+
+- **`DELETE /api/repositories/{instance}/{project}` now removes the repository for good, and also deletes its team links.** A script that used it to switch a repository off now loses the settings and team links: use the `PUT` above to pause instead.
+- Team links left by repositories switched off before this release stay, and the Teams page shows them as `removed`. Untick them there.
+- `POST /api/repositories` on a paused repository resumes it with its settings and answers `200`.
+- The audit log has `repository_paused`, `repository_resumed` and `repository_removed`. Older entries keep `repository_off`.
+- `RepositoryView` has a new `paused` field and `health` can be `paused`; `UsageRepositoryRowView` has a new `paused` field.
+
+Migration `0042` runs at startup and adds one column with a default (`dashboard_repos.enabled`, `true`), so back up Postgres first, as for any migration. The previous release keeps working on the migrated database, **but it ignores the column: after a rollback every paused repository is switched on again** at the next reconcile. Remove the ones you don't want before you roll back. There is no config change.
+
 ## Upgrading to 0.17.1
 
 **On GitLab, `failure_status: neutral` now sets the `pergent` commit status to `success`.** It used to set `skipped`, which GitLab refuses once the status is `running`, so a review that couldn't be done kept its status `running` through about 50 minutes of retries and then ended `failed`, blocking the merge request. Now the pipeline passes. The review is still not approved, and its comment and the status description still say it failed.
