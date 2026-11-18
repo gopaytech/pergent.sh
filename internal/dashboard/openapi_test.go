@@ -496,12 +496,13 @@ var (
 	// the instance alone to the {rest...} routes. Same answer as any
 	// unknown path under /api/.
 	undocumentedPlaceholders = map[string]string{
-		"GET /api/reviews/{instance}":         "404 placeholder",
-		"POST /api/reviews/{instance}":        "404 placeholder",
-		"GET /api/repositories/{instance}":    "404 placeholder",
-		"POST /api/repositories/{instance}":   "404 placeholder",
-		"PUT /api/repositories/{instance}":    "404 placeholder",
-		"DELETE /api/repositories/{instance}": "404 placeholder",
+		"GET /api/reviews/{instance}":            "404 placeholder",
+		"POST /api/reviews/{instance}":           "404 placeholder",
+		"GET /api/repositories/{instance}":       "404 placeholder",
+		"POST /api/repositories/{instance}":      "404 placeholder",
+		"PUT /api/repositories/{instance}":       "404 placeholder",
+		"DELETE /api/repositories/{instance}":    "404 placeholder",
+		"PUT /api/admin/repositories/{instance}": "404 placeholder",
 	}
 )
 
@@ -1003,6 +1004,7 @@ var openAPIUntypedSchemas = map[string]string{
 	"PasswordSignInRequest":     "struct in Auth.passwordSignIn",
 	"PasswordChangeRequest":     "struct in Auth.changePassword",
 	"SwitchOnRequest":           "struct in Dashboard.switchOn",
+	"RepositoryEnabledRequest":  "struct in Dashboard.setEnabled",
 	"RerunRequest":              "struct in Dashboard.reviewAction",
 	"DismissRequest":            "struct in Dashboard.reviewAction",
 	"RestoreRequest":            "struct in Dashboard.reviewAction",

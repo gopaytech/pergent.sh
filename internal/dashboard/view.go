@@ -862,12 +862,12 @@ type LLMView struct {
 // Every write needs the X-CSRF-Token header (403 with "code": "csrf"
 // without it, so the client knows to fetch the token again) and the right
 // role (403 otherwise, and nothing changes): an admin to switch
-// repositories on and off and for the picker, a maintainer or admin of the
+// repositories on, pause, resume and remove them and for the picker, a maintainer or admin of the
 // repository for its settings. A repository the user can't see is answered
 // exactly like one that doesn't exist (404), whatever the write. A
 // repository listed in the config is read-only here (409). Each change is
-// recorded in the audit log: repository_on, repository_off,
-// settings_updated (detail: the settings in the body) and settings_reset.
+// recorded in the audit log: repository_on, repository_paused,
+// repository_resumed, repository_removed, settings_updated (detail: the settings in the body) and settings_reset.
 // Errors are {"error": "message"}.
 //
 //   - GET /api/repositories/available?instance=&search=&page=: AvailableView,
@@ -884,10 +884,16 @@ type LLMView struct {
 //     already. 201, RepositoryDetailView, the project spelled as GitLab spells it for
 //     GitLab, and as sent (trimmed) for GitHub.
 //     pergent.sh sets it up (webhook and clone credentials) within
-//     seconds.
-//   - DELETE /api/repositories/{instance}/{project...}: switches it off.
-//     200, RepositoryDetailView with repo.on false and the default
-//     settings. pergent.sh removes its webhook and clone credentials.
+//     seconds. A paused repository is resumed instead, with its settings:
+//     200.
+//   - PUT /api/admin/repositories/{instance}/{project...} {"enabled": bool}:
+//     pauses (false) or resumes (true) it, its settings kept. 200,
+//     RepositoryDetailView; the state it is in already changes nothing.
+//     409 for a resume while its instance is being removed.
+//   - DELETE /api/repositories/{instance}/{project...}: removes it for good,
+//     with its settings and team links, paused or not. 200,
+//     RepositoryDetailView with repo.on and repo.paused false and the
+//     default settings. pergent.sh removes its webhook and clone credentials.
 //   - PUT /api/repositories/{instance}/{project...}/settings: changes the
 //     settings in the body and leaves the others; a null resets one to its
 //     default. The keys are those of RepositoryDetailView.Settings:

@@ -1101,6 +1101,8 @@ paths:
         when it is on already, or set up by the config. Nothing asks what the
         admin may read on the platform. Every setting starts at its default;
         pergent.sh sets up the webhook and clone credentials within seconds.
+        A repository that is paused is resumed instead, with its settings, and
+        the answer is 200.
       x-pergent-access: admin
       security:
         - sessionCookie: []
@@ -1111,6 +1113,11 @@ paths:
           application/json:
             schema: {$ref: '#/components/schemas/SwitchOnRequest'}
       responses:
+        '200':
+          description: A paused repository resumed, with its settings.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RepositoryDetailView'}
         '201':
           description: Switched on. The project is spelled as GitLab spells it for GitLab, and as sent (trimmed) for GitHub.
           content:
@@ -1271,13 +1278,17 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
     delete:
-      operationId: switchOffRepository
+      operationId: removeRepository
       tags: [Repositories]
-      summary: Switch a repository off
+      summary: Remove a repository for good
       description: |
-        Admins only (404 for anyone else). A repository set up in
-        the config file is 409: remove it from the config. pergent.sh removes
-        its webhook and clone credentials.
+        Admins only (404 for anyone else). Works on a repository switched on
+        or paused. Its settings and its team links are deleted; pergent.sh
+        removes its webhook and clone credentials, and its dismissals,
+        commands, inline threads and finding fates. To stop reviews and keep
+        all that, pause it instead (`PUT /api/admin/repositories/{instance}/{project}`).
+        A repository set up in the config file is 409: remove it from the
+        config.
       x-pergent-access: admin
       x-pergent-pattern: DELETE /api/repositories/{instance}/{rest...}
       security:
@@ -1288,10 +1299,49 @@ paths:
         - $ref: '#/components/parameters/ProjectPath'
       responses:
         '200':
-          description: Switched off. `repo.on` is false and the settings are the defaults.
+          description: Removed. `repo.on` and `repo.paused` are false and the settings are the defaults.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/RepositoryDetailView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/admin/repositories/{instance}/{project}:
+    put:
+      operationId: setRepositoryEnabled
+      tags: [Repositories]
+      summary: Pause or resume a repository
+      description: |
+        Admins only (404 for anyone else). `{"enabled": false}` pauses a
+        repository of the dashboard: it stays with every setting, nothing
+        reviews it, and pergent.sh takes its webhook and clone credentials off
+        the platform within seconds; its dismissals and review history stay.
+        `{"enabled": true}` resumes it: pergent.sh sets them up again and
+        queues a readiness scan. Asking for the state it is in changes
+        nothing. 409 for a repository set up in the config file, and for a
+        resume while its instance is being removed.
+      x-pergent-access: admin
+      x-pergent-pattern: PUT /api/admin/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RepositoryEnabledRequest'}
+      responses:
+        '200':
+          description: Paused or resumed (or it was so already).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RepositoryDetailView'}
+        '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
@@ -4219,6 +4269,13 @@ components:
           format: password
           minLength: 12
           description: At least 12 characters, and different from the current one.
+    RepositoryEnabledRequest:
+      type: object
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+          description: False pauses the repository, true resumes it.
     SwitchOnRequest:
       type: object
       required: [instance, project]
