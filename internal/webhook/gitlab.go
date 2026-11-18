@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -115,6 +116,9 @@ type Handler struct {
 // block.
 type CINotifier interface {
 	CIChanged(instance, project, head string)
+	// CIChangedMR is for a merged-results pipeline, whose sha is the merge
+	// commit's: it names the merge request.
+	CIChangedMR(instance, project string, iid int64)
 }
 
 // ciEvent holds only the fields of a Pipeline Hook or Job Hook that are read.
@@ -122,6 +126,7 @@ type ciEvent struct {
 	ObjectKind string `json:"object_kind"`
 	// SHA is the Job Hook's commit.
 	SHA       string `json:"sha"`
+	Ref       string `json:"ref"`
 	ProjectID int64  `json:"project_id"`
 	Project   struct {
 		ID                int64  `json:"id"`
@@ -130,6 +135,7 @@ type ciEvent struct {
 	ObjectAttributes struct {
 		// SHA is the Pipeline Hook's commit.
 		SHA string `json:"sha"`
+		Ref string `json:"ref"`
 	} `json:"object_attributes"`
 }
 
@@ -233,8 +239,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	event := r.Header.Get(eventHeader)
 	log = log.With("event", event)
 	if event != mrHookEvent && event != noteHookEvent && event != pipelineHookEvent && event != jobHookEvent {
-		// Debug: every project's job events are on, so most are of no use.
-		log.Debug("webhook handled", "outcome", outcomeIgnore, "reason", "other_event")
+		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "other_event")
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -405,7 +410,7 @@ func (h *Handler) ci(w http.ResponseWriter, r *http.Request, log *slog.Logger, i
 	}
 	failed := func(err error) {
 		log.Error("webhook failed", "outcome", "lookup_error", "err", err)
-		http.Error(w, "storage error", http.StatusInternalServerError)
+		w.WriteHeader(http.StatusOK)
 	}
 	if h.CI == nil {
 		ignore("ci_off")
@@ -416,10 +421,11 @@ func (h *Handler) ci(w http.ResponseWriter, r *http.Request, log *slog.Logger, i
 		unusable(w, log, "malformed_json")
 		return
 	}
-	head, path, id := ev.SHA, ev.Project.PathWithNamespace, ev.Project.ID
+	head, ref, path, id := ev.SHA, ev.Ref, ev.Project.PathWithNamespace, ev.Project.ID
 	if event == pipelineHookEvent {
-		head = ev.ObjectAttributes.SHA
+		head, ref = ev.ObjectAttributes.SHA, ev.ObjectAttributes.Ref
 	}
+	iid := mergeRequestRef(ref)
 	if id == 0 {
 		id = ev.ProjectID
 	}
@@ -433,7 +439,7 @@ func (h *Handler) ci(w http.ResponseWriter, r *http.Request, log *slog.Logger, i
 			path = p.Path
 		}
 	}
-	if path == "" || !validSHA(head) {
+	if path == "" || (iid == 0 && !validSHA(head)) {
 		ignore("no_project_or_head")
 		return
 	}
@@ -446,9 +452,31 @@ func (h *Handler) ci(w http.ResponseWriter, r *http.Request, log *slog.Logger, i
 		ignore("no_ci_jobs")
 		return
 	}
-	h.CI.CIChanged(instance, eff.Project, head)
+	if iid != 0 {
+		h.CI.CIChangedMR(instance, eff.Project, iid)
+	} else {
+		h.CI.CIChanged(instance, eff.Project, head)
+	}
 	log.Debug("webhook handled", "outcome", "ci_changed", "project", eff.Project)
 	w.WriteHeader(http.StatusOK)
+}
+
+// mergeRequestRef is the merge request a merged-results pipeline's ref
+// (refs/merge-requests/<iid>/merge or /head) names, 0 for any other ref.
+func mergeRequestRef(ref string) int64 {
+	rest, ok := strings.CutPrefix(ref, "refs/merge-requests/")
+	if !ok {
+		return 0
+	}
+	num, kind, ok := strings.Cut(rest, "/")
+	if !ok || (kind != "merge" && kind != "head") {
+		return 0
+	}
+	n, err := strconv.ParseInt(num, 10, 64)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
 }
 
 // note handles a Note Hook: a new plain comment on a merge request may carry

@@ -276,6 +276,34 @@ func TestCIRunsForHead(t *testing.T) {
 	}
 }
 
+// CIRunsForMR gives the ci_pending runs of one merge request and its newest
+// published run, whatever their head; no other merge request's.
+func TestCIRunsForMR(t *testing.T) {
+	s := newStore(t)
+	pending := enqueue(t, s, mr1, sha('a'))
+	if _, err := s.HoldForCI(ctx, pending, ciDeadline); err != nil {
+		t.Fatal(err)
+	}
+	published(t, s, mr1, sha('b'), "main")
+	newest := published(t, s, mr1, sha('c'), "main")
+	published(t, s, mr2, sha('d'), "main")
+
+	got, err := s.CIRunsForMR(ctx, mr1.Instance, "acme/widgets", mr1.IID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotIDs := map[string]bool{}
+	for _, r := range got {
+		gotIDs[r.ID] = true
+	}
+	if len(got) != 2 || !gotIDs[pending] || !gotIDs[newest] {
+		t.Errorf("CIRunsForMR = %v, want %v and %v", ids(got), pending, newest)
+	}
+	if none, err := s.CIRunsForMR(ctx, mr1.Instance, "acme/other", mr1.IID); err != nil || len(none) != 0 {
+		t.Errorf("CIRunsForMR of another project = %v, %v; want none", ids(none), err)
+	}
+}
+
 // CIRecheckRuns gives the newest published run of each merge request, since a
 // time, whose snapshot has a result other than passed.
 func TestCIRecheckRuns(t *testing.T) {

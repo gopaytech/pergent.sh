@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"reflect"
 	"strings"
@@ -790,7 +791,7 @@ func TestCIChangedNeverBlocks(t *testing.T) {
 	go func() {
 		defer close(done)
 		for i := 0; i < 300; i++ {
-			e.CIChanged("main", "Acme/Widgets", "abc")
+			e.CIChanged("main", "Acme/Widgets", fmt.Sprintf("head%d", i))
 		}
 	}()
 	select {
@@ -803,5 +804,26 @@ func TestCIChangedNeverBlocks(t *testing.T) {
 	}
 	if len(e.ciCh()) != 256 {
 		t.Fatalf("queued = %d, want 256", len(e.ciCh()))
+	}
+}
+
+// Events for one key are one check; one that arrives while it is checked
+// queues another.
+func TestCIChangedCoalesces(t *testing.T) {
+	e := &Engine{Log: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))}
+	for i := 0; i < 20; i++ {
+		e.CIChanged("main", "Acme/Widgets", "abc")
+	}
+	e.CIChanged("main", "ACME/widgets", "abc") // the path's case doesn't matter
+	e.CIChangedMR("main", "Acme/Widgets", 3)
+	e.CIChangedMR("main", "Acme/Widgets", 3)
+	if n := len(e.ciCh()); n != 2 {
+		t.Fatalf("queued = %d, want 2 (one head, one merge request)", n)
+	}
+	ev := <-e.ciCh()
+	e.takeCIEvent(ev) // the loop takes the key before it checks
+	e.CIChanged("main", "Acme/Widgets", "abc")
+	if n := len(e.ciCh()); n != 2 {
+		t.Fatalf("queued = %d, want 2 after an event during a check", n)
 	}
 }

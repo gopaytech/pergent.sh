@@ -398,3 +398,60 @@ func TestCISweepSkipsTextFailedOnly(t *testing.T) {
 		t.Errorf("run = %s, want published", r.State)
 	}
 }
+
+// A CI event releases a waiting run at once, with no sweep.
+func TestCIEventReleasesWaitingRun(t *testing.T) {
+	env := ciEnv(t)
+	head := sha('a')
+	servePush(env, head)
+	serveCI(env, head, "running", "running")
+	id := env.Enqueue(3, head)
+	dispatch(t, env)
+	wantCIHeld(t, env, id)
+
+	serveCI(env, head, "success", "success")
+	env.Engine.CIChanged("main", "acme/widgets", head)
+	env.Engine.checkCIEvent(env.ctx, <-env.Engine.ciCh())
+	if r := env.Run(id); r.State != store.Queued || !r.CIChecked {
+		t.Fatalf("run = %s (ci_checked %v), want queued and checked; logs:\n%s", r.State, r.CIChecked, env.Logs())
+	}
+}
+
+// An all-passed published review is decided again by an event after a retried
+// job fails: the sweep skips such a review, an event does not.
+func TestCIEventRedecidesAllPassedPublished(t *testing.T) {
+	env := ciEnv(t)
+	head := sha('a')
+	env.GitLab.SetMR(openMR(3, head))
+	id := env.Publish(3, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	if err := env.Store.SetRunCI(env.ctx, id, []store.CIJobResult{{Name: "test", Result: "passed", Read: "log", Size: 30, Blocks: true}}); err != nil {
+		t.Fatal(err)
+	}
+	serveCI(env, head, "failed", "failed")
+	env.Engine.CIChanged("main", "acme/widgets", head)
+	env.Engine.checkCIEvent(env.ctx, <-env.Engine.ciCh())
+	r := env.Run(id)
+	if r.State != store.Reported {
+		t.Fatalf("run = %s, want reported to be decided again; logs:\n%s", r.State, env.Logs())
+	}
+	if len(r.CIJobs) != 1 || r.CIJobs[0].Result != "failed" {
+		t.Errorf("snapshot = %+v, want failed", r.CIJobs)
+	}
+}
+
+// A merged-results event names the merge request, whose head the run has.
+func TestCIEventByMergeRequest(t *testing.T) {
+	env := ciEnv(t)
+	head := sha('a')
+	env.GitLab.SetMR(openMR(3, head))
+	id := env.Publish(3, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	if err := env.Store.SetRunCI(env.ctx, id, []store.CIJobResult{{Name: "test", Result: "passed", Read: "log", Size: 30, Blocks: true}}); err != nil {
+		t.Fatal(err)
+	}
+	serveCI(env, head, "failed", "failed")
+	env.Engine.CIChangedMR("main", "acme/widgets", 3)
+	env.Engine.checkCIEvent(env.ctx, <-env.Engine.ciCh())
+	if r := env.Run(id); r.State != store.Reported {
+		t.Fatalf("run = %s, want reported; logs:\n%s", r.State, env.Logs())
+	}
+}

@@ -95,12 +95,23 @@ func TestReadCINewestAttemptWins(t *testing.T) {
 }
 
 func TestReadCIMissingAndFinished(t *testing.T) {
-	for status, finished := range map[string]bool{"success": true, "running": false} {
+	// Finished is read from the jobs and bridges, not the pipeline's status:
+	// pergent's own pending commit status can keep a pipeline running.
+	for _, tc := range []struct {
+		name, pipeline, job, bridge string
+		finished                    bool
+	}{
+		{"all ended", "success", "success", "success", true},
+		{"pipeline running, every job ended", "running", "success", "success", true},
+		{"a job still running", "running", "running", "success", false},
+		{"a bridge still running", "success", "success", "running", false},
+	} {
+		status, finished := tc.name, tc.finished
 		f, _ := newCI(t, map[string][2]any{
-			"/projects/7/pipelines":                  ok(`[{"id":1,"sha":"head1","status":"` + status + `"}]`),
+			"/projects/7/pipelines":                  ok(`[{"id":1,"sha":"head1","status":"` + tc.pipeline + `"}]`),
 			"/projects/7/merge_requests/3/pipelines": ok(`[]`),
-			"/projects/7/pipelines/1/jobs":           ok(`[{"id":5,"name":"test","status":"success"}]`),
-			"/projects/7/pipelines/1/bridges":        ok(`[]`),
+			"/projects/7/pipelines/1/jobs":           ok(`[{"id":5,"name":"test","status":"` + tc.job + `"}]`),
+			"/projects/7/pipelines/1/bridges":        ok(`[{"id":6,"name":"child","status":"` + tc.bridge + `"}]`),
 		})
 		snap, err := f.ReadCI(context.Background(), target, []store.CIJob{statusJob("lint")}, false)
 		if err != nil || snap.Jobs[0].Result != ci.Missing || snap.Finished != finished || snap.Done() != finished {

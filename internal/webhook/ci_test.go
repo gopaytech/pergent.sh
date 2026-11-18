@@ -19,7 +19,10 @@ import (
 
 const ciHead = "0123456789abcdef0123456789abcdef01234567"
 
-type ciCall struct{ instance, project, head string }
+type ciCall struct {
+	instance, project, head string
+	iid                     int64
+}
 
 type fakeCI struct {
 	mu    sync.Mutex
@@ -29,7 +32,13 @@ type fakeCI struct {
 func (f *fakeCI) CIChanged(instance, project, head string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, ciCall{instance, project, head})
+	f.calls = append(f.calls, ciCall{instance: instance, project: project, head: head})
+}
+
+func (f *fakeCI) CIChangedMR(instance, project string, iid int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, ciCall{instance: instance, project: project, iid: iid})
 }
 
 // ciRepos answers for one repository, with or without ci_jobs.
@@ -74,7 +83,7 @@ func TestPipelineHookNotifies(t *testing.T) {
 	if code := postGitLab(gitlabCIRig(someJobs, ci), "Pipeline Hook", testSecret, body); code != 200 {
 		t.Fatalf("status %d", code)
 	}
-	if len(ci.calls) != 1 || ci.calls[0] != (ciCall{"main", "Acme/Widgets", ciHead}) {
+	if len(ci.calls) != 1 || ci.calls[0] != (ciCall{instance: "main", project: "Acme/Widgets", head: ciHead}) {
 		t.Fatalf("calls = %+v", ci.calls)
 	}
 	// No ci_jobs, no call.
@@ -101,7 +110,7 @@ func TestJobHookNotifies(t *testing.T) {
 	if code := postGitLab(gitlabCIRig(someJobs, ci), "Job Hook", testSecret, body); code != 200 {
 		t.Fatalf("status %d", code)
 	}
-	if len(ci.calls) != 1 || ci.calls[0] != (ciCall{"main", "Acme/Widgets", ciHead}) {
+	if len(ci.calls) != 1 || ci.calls[0] != (ciCall{instance: "main", project: "Acme/Widgets", head: ciHead}) {
 		t.Fatalf("calls = %+v", ci.calls)
 	}
 	ci = &fakeCI{}
@@ -161,7 +170,7 @@ func TestGitHubCheckRunNotifies(t *testing.T) {
 	if code := postCheckRun(githubCIRig(someJobs, ci), body(999)); code != 200 {
 		t.Fatalf("status %d", code)
 	}
-	if len(ci.calls) != 1 || ci.calls[0] != (ciCall{"gh", "Acme/Widgets", ciHead}) {
+	if len(ci.calls) != 1 || ci.calls[0] != (ciCall{instance: "gh", project: "Acme/Widgets", head: ciHead}) {
 		t.Fatalf("calls = %+v", ci.calls)
 	}
 	for _, app := range []int64{111, 222} {
@@ -175,5 +184,51 @@ func TestGitHubCheckRunNotifies(t *testing.T) {
 	postCheckRun(githubCIRig(nil, ci), body(999))
 	if len(ci.calls) != 0 {
 		t.Fatalf("no ci_jobs notified: %+v", ci.calls)
+	}
+}
+
+// A merged-results pipeline carries the merge commit's sha: the event names
+// the merge request instead.
+func TestMergedResultsEventsNotifyByMR(t *testing.T) {
+	pipe := fmt.Sprintf(`{"object_kind":"pipeline","project":{"id":42,"path_with_namespace":"Acme/Widgets"},"object_attributes":{"sha":%q,"ref":"refs/merge-requests/12/merge"}}`, ciHead)
+	job := fmt.Sprintf(`{"object_kind":"build","sha":%q,"ref":"refs/merge-requests/9/head","project":{"id":42,"path_with_namespace":"Acme/Widgets"}}`, ciHead)
+	for event, tc := range map[string]struct {
+		body string
+		iid  int64
+	}{"Pipeline Hook": {pipe, 12}, "Job Hook": {job, 9}} {
+		ci := &fakeCI{}
+		if code := postGitLab(gitlabCIRig(someJobs, ci), event, testSecret, tc.body); code != 200 {
+			t.Fatalf("%s: status %d", event, code)
+		}
+		if len(ci.calls) != 1 || ci.calls[0] != (ciCall{instance: "main", project: "Acme/Widgets", iid: tc.iid}) {
+			t.Fatalf("%s: calls = %+v", event, ci.calls)
+		}
+	}
+	// A branch ref keeps the sha path.
+	ci := &fakeCI{}
+	postGitLab(gitlabCIRig(someJobs, ci), "Pipeline Hook", testSecret, strings.Replace(pipe, "refs/merge-requests/12/merge", "feature", 1))
+	if len(ci.calls) != 1 || ci.calls[0].head != ciHead || ci.calls[0].iid != 0 {
+		t.Fatalf("calls = %+v", ci.calls)
+	}
+}
+
+// A dashboard GitHub instance's own Apps are ignored too.
+func TestGitHubCheckRunIgnoresDashboardOwnApps(t *testing.T) {
+	cfg := &config.Config{}
+	reg := instances.New(cfg, nil, nil)
+	reg.Put(instances.FromRow(store.InstanceRow{Name: "gh", Platform: config.PlatformGitHub, ReviewAppID: 111, ApproveAppID: 222}))
+	ci := &fakeCI{}
+	h := &GitHubHandler{Config: cfg, Instances: reg, Secrets: syncmap.New(map[string]string{"gh": ghSecret}),
+		Queue: &fakeQueue{}, Repos: ciRepos{config.PlatformGitHub, "gh", "Acme/Widgets", someJobs}, CI: ci,
+		Log: slog.New(slog.NewTextHandler(&strings.Builder{}, nil))}
+	for _, app := range []int64{111, 222} {
+		postCheckRun(h, fmt.Sprintf(`{"repository":{"full_name":"Acme/Widgets"},"check_run":{"head_sha":%q,"app":{"id":%d}}}`, ciHead, app))
+	}
+	if len(ci.calls) != 0 {
+		t.Fatalf("own apps notified: %+v", ci.calls)
+	}
+	postCheckRun(h, fmt.Sprintf(`{"repository":{"full_name":"Acme/Widgets"},"check_run":{"head_sha":%q,"app":{"id":5}}}`, ciHead))
+	if len(ci.calls) != 1 {
+		t.Fatalf("calls = %+v", ci.calls)
 	}
 }

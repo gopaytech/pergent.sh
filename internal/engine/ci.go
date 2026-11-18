@@ -439,8 +439,23 @@ func mergeCI(stored, read []store.CIJobResult) ([]store.CIJobResult, bool) {
 // dropped, and the sweep finds what was lost.
 const ciEventQueue = 256
 
-// ciEvent is a CI change on a head of a project, as a webhook reported it.
-type ciEvent struct{ instance, project, head string }
+// ciEvent is a CI change on a head of a project, as a webhook reported it; a
+// merged-results pipeline has no head of the run's, so it names the merge
+// request (iid) instead.
+type ciEvent struct {
+	instance, project, head string
+	iid                     int64
+}
+
+// ciKey is what two events must share to count as one.
+type ciKey struct {
+	instance, project, head string
+	iid                     int64
+}
+
+func (ev ciEvent) key() ciKey {
+	return ciKey{ev.instance, strings.ToLower(ev.project), ev.head, ev.iid}
+}
 
 // ciCh is the CI event channel, created on first use.
 func (e *Engine) ciCh() chan ciEvent {
@@ -451,23 +466,64 @@ func (e *Engine) ciCh() chan ciEvent {
 // CIChanged tells the engine that a CI job or pipeline of head changed on
 // project of instance. It never blocks: checking a run is the loop's work
 // (checkCIRun is safe on that goroutine only), so the event is queued, and
-// one that finds the queue full is dropped and logged. The sweep covers it.
+// one that finds the queue full is dropped and logged. An event for a head
+// that is already queued is merged into it.
 func (e *Engine) CIChanged(instance, project, head string) {
+	e.queueCI(ciEvent{instance: instance, project: project, head: head})
+}
+
+// CIChangedMR is CIChanged for a merged-results pipeline, which has the merge
+// commit's sha: it names merge request iid instead.
+func (e *Engine) CIChangedMR(instance, project string, iid int64) {
+	e.queueCI(ciEvent{instance: instance, project: project, iid: iid})
+}
+
+func (e *Engine) queueCI(ev ciEvent) {
+	k := ev.key()
+	e.ciMu.Lock()
+	if e.ciPending[k] {
+		e.ciMu.Unlock()
+		return
+	}
+	if e.ciPending == nil {
+		e.ciPending = map[ciKey]bool{}
+	}
+	e.ciPending[k] = true
+	e.ciMu.Unlock()
 	select {
-	case e.ciCh() <- ciEvent{instance: instance, project: project, head: head}:
+	case e.ciCh() <- ev:
 	default:
-		e.log().Warn("CI event dropped: the queue is full; the next sweep checks the run",
-			"instance", instance, "project", project)
+		e.ciMu.Lock()
+		delete(e.ciPending, k)
+		e.ciMu.Unlock()
+		e.log().Warn("CI event dropped: the queue is full; a waiting run is released by the sweep, a published review may stay as it is",
+			"instance", ev.instance, "project", ev.project)
 	}
 }
 
-// checkCIEvent checks again the runs of ev's head (store.CIRunsForHead), with
-// the sweep's budget, so a burst of events can't hold the loop.
+// takeCIEvent forgets ev's key, before the check: an event that arrives while
+// the check runs queues again.
+func (e *Engine) takeCIEvent(ev ciEvent) {
+	e.ciMu.Lock()
+	delete(e.ciPending, ev.key())
+	e.ciMu.Unlock()
+}
+
+// checkCIEvent checks again the runs of ev's head (store.CIRunsForHead) or
+// merge request (CIRunsForMR), with the sweep's budget, so a burst of events
+// can't hold the loop.
 func (e *Engine) checkCIEvent(ctx context.Context, ev ciEvent) {
+	e.takeCIEvent(ev)
 	if ctx.Err() != nil {
 		return
 	}
-	runs, err := e.Store.CIRunsForHead(ctx, ev.instance, ev.project, ev.head)
+	var runs []store.Run
+	var err error
+	if ev.iid != 0 {
+		runs, err = e.Store.CIRunsForMR(ctx, ev.instance, ev.project, ev.iid)
+	} else {
+		runs, err = e.Store.CIRunsForHead(ctx, ev.instance, ev.project, ev.head)
+	}
 	if err != nil {
 		if ctx.Err() == nil {
 			e.log().Error("CI event: couldn't list the runs of the head; the next sweep tries again",

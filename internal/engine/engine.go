@@ -102,6 +102,9 @@ type Engine struct {
 	// ciEvents holds the CI events (CIChanged) the loop has not looked at.
 	ciOnce   sync.Once
 	ciEvents chan ciEvent
+	// ciMu guards ciPending, the events queued and not yet taken.
+	ciMu      sync.Mutex
+	ciPending map[ciKey]bool
 
 	reconcileOnce sync.Once
 	reconcileReq  chan struct{}

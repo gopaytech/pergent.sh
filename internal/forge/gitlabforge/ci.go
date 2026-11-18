@@ -66,14 +66,16 @@ func (f *Forge) ReadCI(ctx context.Context, t forge.CITarget, jobs []store.CIJob
 	}
 	newest := map[string]gitlab.CIJob{}
 	for _, p := range pipelines {
-		if _, ended := ci.FromGitLab(p.Status); !ended {
-			snap.Finished = false
-		}
 		list, err := f.c.PipelineJobs(ctx, t.ProjectID, p.ID)
 		if err != nil {
 			return ci.Snapshot{}, mapErr(err)
 		}
 		for _, j := range list {
+			// Finished is read from the jobs and bridges, not the pipeline's
+			// status: pergent's own pending commit status can keep it running.
+			if _, ended := ci.FromGitLab(j.Status); !ended {
+				snap.Finished = false
+			}
 			if cur, ok := newest[j.Name]; !ok || j.ID > cur.ID {
 				newest[j.Name] = j
 			}

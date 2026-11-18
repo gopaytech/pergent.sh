@@ -458,7 +458,7 @@ func (h *GitHubHandler) checkRun(w http.ResponseWriter, r *http.Request, log *sl
 	eff, ok, err := lookup(r.Context(), repositories(h.Repos, h.Config, h.registry()), config.PlatformGitHub, instance, ev.Repository.FullName)
 	if err != nil {
 		log.Error("webhook failed", "outcome", "lookup_error", "err", err)
-		http.Error(w, "storage error", http.StatusInternalServerError)
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 	if !ok || len(eff.CIJobs.Jobs) == 0 {
@@ -473,14 +473,12 @@ func (h *GitHubHandler) checkRun(w http.ResponseWriter, r *http.Request, log *sl
 // ownApp reports whether id is the review App or the approve App of the
 // configured instance.
 func (h *GitHubHandler) ownApp(instance string, id int64) bool {
-	if h.Config == nil {
+	inst, ok := h.registry().Get(instance)
+	if !ok || inst.GitHub == nil {
 		return false
 	}
-	inst, ok := h.Config.GitHubInstance(instance)
-	if !ok {
-		return false
-	}
-	return id == inst.ReviewApp.AppID || (inst.ApproveApp != nil && id == inst.ApproveApp.AppID)
+	gh := inst.GitHub
+	return id == gh.ReviewApp.AppID || (gh.ApproveApp != nil && id == gh.ApproveApp.AppID)
 }
 
 // comment handles an issue_comment event: a new comment by a person on a pull

@@ -156,6 +156,20 @@ func (s *Store) CIRunsForHead(ctx context.Context, instance, project, head strin
 		ORDER BY created_at, id`, instance, project, head, WaitCIPending)
 }
 
+// CIRunsForMR is CIRunsForHead for a CI event that names the merge request
+// (a merged-results pipeline, whose sha is the merge commit's): the runs of
+// merge request iid waiting for CI and its newest published run.
+func (s *Store) CIRunsForMR(ctx context.Context, instance, project string, iid int64) ([]Run, error) {
+	return s.queryRuns(ctx, `SELECT `+runColumns+` FROM runs
+		WHERE instance = $1 AND lower(project_path) = lower($2) AND mr_iid = $3 AND kind = 'mr'
+		  AND ((state = 'waiting' AND skip_reason = $4)
+		    OR (state = 'published' AND id = (SELECT n.id FROM runs n
+				WHERE n.instance = runs.instance AND n.project_id = runs.project_id AND n.mr_iid = runs.mr_iid
+				  AND n.kind = 'mr' AND n.state = 'published'
+				ORDER BY n.created_at DESC, n.id DESC LIMIT 1)))
+		ORDER BY created_at, id`, instance, project, iid, WaitCIPending)
+}
+
 // CIRecheckRuns returns the newest published run of each merge request that
 // was reported since, when its snapshot has a job whose result is not
 // "passed": a lost CI event then only delays the gate.
