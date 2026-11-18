@@ -58,3 +58,56 @@ func TestRedactForms(t *testing.T) {
 		}
 	}
 }
+
+// A key whose BEGIN line fell before the start of the text (Tail keeps the
+// last 2 MiB) still loses its body: a run of base64 lines at the very start
+// that ends in an END PRIVATE KEY line.
+func TestRedactKeyBodyWithoutBegin(t *testing.T) {
+	for _, in := range []string{
+		"QUJDREVGR0g=\nMIIEabcdef\n-----END RSA PRIVATE KEY-----\nnext step",
+		"bcdef\n\nMIIEabcdef \n-----END PRIVATE KEY-----\nnext step",
+		"MIIEabcdef\n-----END OPENSSH PRIVATE KEY-----",
+	} {
+		got := Redact(in)
+		if strings.Contains(got, "MIIEabc") || strings.Contains(got, "bcdef") || !strings.HasPrefix(got, "[REDACTED]") {
+			t.Errorf("Redact(%q) = %q", in, got)
+		}
+		if strings.Contains(in, "next step") && !strings.HasSuffix(got, "\nnext step") {
+			t.Errorf("the text after the key went: %q", got)
+		}
+		if Redact(got) != got {
+			t.Errorf("not idempotent: %q", got)
+		}
+	}
+	// Only at the start, and only base64 lines: prose before an END line stays.
+	for _, in := range []string{
+		"step 1 said hello\n-----END RSA PRIVATE KEY-----",
+		"step 2: ok\nMIIEabcdef\n-----END RSA PRIVATE KEY-----",
+	} {
+		if got := Redact(in); !strings.HasPrefix(got, strings.SplitN(in, "\n", 2)[0]) {
+			t.Errorf("Redact(%q) = %q, want the first line kept", in, got)
+		}
+	}
+}
+
+func TestRedactMore(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`Authorization: Basic dXNlcjpwYXNz`, `Authorization: Basic [REDACTED]`},
+		{`curl -H "authorization: basic dXNlcjpwYXNzd29yZA==" x`, `curl -H "authorization: basic [REDACTED]" x`},
+		{`{"Authorization":"Basic dXNlcjpwYXNz"}`, `{"Authorization":"Basic [REDACTED]"}`},
+		{`Basic configuration done`, `Basic configuration done`},
+		{`{"password": "a\"b c", "user": "x"}`, `{"password": "[REDACTED]", "user": "x"}`},
+		{`{"token":"a\\"}, "next": "ok"`, `{"token":"[REDACTED]"}, "next": "ok"`},
+		{`run --password "two words" now`, `run --password [REDACTED] now`},
+		{`run --api-key 'two words' now`, `run --api-key [REDACTED] now`},
+		{`run --secret "a\" b" now`, `run --secret [REDACTED] now`},
+	}
+	for _, c := range cases {
+		if got := Redact(c.in); got != c.want {
+			t.Errorf("Redact(%q) = %q; want %q", c.in, got, c.want)
+		}
+		if got := Redact(Redact(c.in)); got != c.want {
+			t.Errorf("not idempotent for %q: %q", c.in, got)
+		}
+	}
+}
