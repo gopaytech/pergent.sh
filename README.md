@@ -37,6 +37,7 @@ pergent.sh runs [pergent](https://github.com/gopaytech/pergent) code reviews on 
 - ✅ **[Approval](docs/concepts/approval.md):** a clean review approves the change, and pergent.sh takes the approval back when that stops being true.
 - ⚡ **[Incremental reviews](docs/concepts/incremental-reviews.md):** a push re-reviews only what it changed.
 - 🗑️ **[Deleted and renamed files](docs/concepts/deleted-files.md):** reviews the lines a change deletes, and what still uses them.
+- 🧪 **[CI jobs](docs/concepts/ci-jobs.md):** reviews read the results of chosen CI jobs, and a failed one can hold approval back.
 - 🔗 **[Linked repositories](docs/concepts/linked-repositories.md):** checks a change against the repositories that depend on it.
 - 🍴 **[Fork merge requests](docs/concepts/fork-merge-requests.md):** changes from forks are reviewed too.
 
