@@ -131,6 +131,13 @@ func TestReadCIFinishedIgnoresEmptySuites(t *testing.T) {
 	if snap := readOne(t, f, ciJob("test", "status"), false); !snap.Finished {
 		t.Error("no suites at all: want Finished")
 	}
+	// pergent.sh's own queued "pergent" check run (App 123) never holds Finished.
+	own := suite("queued", 1)
+	own["app"] = map[string]any{"id": 123}
+	f.reply("GET", suitesPath, 200, suites(own, suite("completed", 2)))
+	if snap := readOne(t, f, ciJob("test", "status"), false); !snap.Finished {
+		t.Error("the review App's own queued suite stopped Finished")
+	}
 }
 
 func zipOf(t *testing.T, name, body string) []byte {
@@ -216,6 +223,11 @@ func TestReadCIActionsForbidden(t *testing.T) {
 	j := readOne(t, f, ciJob("test", "log"), true).Jobs[0]
 	if j.Result != ci.Unreadable || j.Reason != "no permission" || !j.Ended || !j.TextFailed {
 		t.Errorf("job = %+v; want unreadable/no permission", j)
+	}
+	f.reply("GET", "/repos/acme/widgets/actions/jobs/55/logs", 401, map[string]string{"message": "Bad credentials"})
+	j = readOne(t, f, ciJob("test", "log"), true).Jobs[0]
+	if j.Result != ci.Unreadable || j.Reason != "no permission" || !j.TextFailed {
+		t.Errorf("401 job = %+v; want unreadable/no permission", j)
 	}
 	f.reply("GET", "/repos/acme/widgets/actions/jobs/55/logs", 500, map[string]string{"message": "x"})
 	j = readOne(t, f, ciJob("test", "log"), true).Jobs[0]

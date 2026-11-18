@@ -44,7 +44,8 @@ func (f *Forge) ReadCI(ctx context.Context, t forge.CITarget, jobs []store.CIJob
 		return ci.Snapshot{}, mapErr(err)
 	}
 	for _, s := range suites {
-		if s.RunCount > 0 && s.Status != "completed" {
+		// pergent.sh's own check run (queued while a run waits) never counts.
+		if !f.own(s.AppID) && s.RunCount > 0 && s.Status != "completed" {
 			snap.Finished = false
 		}
 	}
@@ -140,7 +141,8 @@ func (f *Forge) readText(ctx context.Context, c *github.Client, r Repo, want sto
 			return ctx.Err()
 		}
 		job.Result, job.Ended, job.Reason, job.TextFailed = ci.Unreadable, true, "error", true
-		if errors.Is(err, github.ErrForbidden) {
+		var apiErr *github.APIError
+		if errors.Is(err, github.ErrForbidden) || errors.As(err, &apiErr) && apiErr.Status == 401 {
 			job.Reason = "no permission"
 		}
 		return nil
