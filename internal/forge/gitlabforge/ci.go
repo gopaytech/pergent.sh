@@ -164,6 +164,9 @@ func jobStatus(j gitlab.CIJob) (ci.Result, bool) {
 	return ci.Running, false
 }
 
+// reportReadLimit is how much of a report artifact is read before Cap.
+const reportReadLimit = 1 << 20
+
 // readText fills Log (a failed, cancelled or running job) or Report (an ended
 // job that passed or failed). A read that fails makes the job Unreadable; only a ended context
 // is an error.
@@ -186,10 +189,16 @@ func (f *Forge) readText(ctx context.Context, t forge.CITarget, want store.CIJob
 			text, cut, err = ci.Tail(rc)
 		} else {
 			var b []byte
-			// One byte past what Cap keeps is enough to know it was cut.
-			b, err = io.ReadAll(io.LimitReader(rc, 1<<20))
+			// One byte past the read limit says the report was cut there,
+			// whatever Cap then keeps of the rest.
+			b, err = io.ReadAll(io.LimitReader(rc, reportReadLimit+1))
 			if err == nil {
+				over := len(b) > reportReadLimit
+				if over {
+					b = b[:reportReadLimit]
+				}
 				text, cut = ci.Cap(string(b))
+				cut = cut || over
 			}
 		}
 	}

@@ -361,3 +361,29 @@ func TestCommitParentsMemoBounded(t *testing.T) {
 		t.Fatalf("memo holds %d entries, want at most %d", n, parentsMemoSize)
 	}
 }
+
+// A report past the 1 MiB read limit is cut, even when what is kept cleans
+// down to less than the report cap.
+func TestReadCIReportPastReadLimitIsCut(t *testing.T) {
+	for _, tc := range []struct {
+		size int
+		cut  bool
+	}{{1 << 20, false}, {1<<20 + 1, true}} {
+		body := `{"ok":true}` + strings.Repeat("\x00", tc.size-len(`{"ok":true}`))
+		f, _ := newCI(t, map[string][2]any{
+			"/projects/7/pipelines":                  ok(`[{"id":1,"sha":"head1","status":"success"}]`),
+			"/projects/7/merge_requests/3/pipelines": ok(`[]`),
+			"/projects/7/pipelines/1/jobs":           ok(`[{"id":3,"name":"scan","status":"success"}]`),
+			"/projects/7/pipelines/1/bridges":        ok(`[]`),
+			"/projects/7/jobs/3/artifacts/r.json":    ok(body),
+		})
+		jobs := []store.CIJob{{Name: "scan", Read: "report", Report: &store.CIReport{Path: "r.json"}}}
+		snap, err := f.ReadCI(context.Background(), target, jobs, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if j := snap.Jobs[0]; j.Report != `{"ok":true}` || j.Cut != tc.cut {
+			t.Errorf("size %d: report %q cut %v, want cut %v", tc.size, j.Report, j.Cut, tc.cut)
+		}
+	}
+}
