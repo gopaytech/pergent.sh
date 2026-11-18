@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -20,7 +21,8 @@ const (
 )
 
 // Validate checks a repository's ci_jobs: a wait from MinWait to MaxWait, at
-// most MaxJobs jobs with unique names (never "pergent", in any case), a read of
+// most MaxJobs jobs with unique names (never "pergent", in any case; no
+// control characters, no space at either end), a read of
 // status, log or report, and a report only with read: report, with a relative
 // path with no "..", and on GitHub an artifact. No jobs is valid. The error
 // names the field, such as ci_jobs.jobs[1].report.path.
@@ -39,6 +41,10 @@ func Validate(c store.CIJobs, github bool) error {
 			return fmt.Errorf("%s.name must not be empty", field)
 		case len(j.Name) > maxNameBytes:
 			return fmt.Errorf("%s.name must be at most %d bytes, got %d", field, maxNameBytes, len(j.Name))
+		case strings.TrimSpace(j.Name) != j.Name:
+			return fmt.Errorf("%s.name must not start or end with a space, got %q", field, j.Name)
+		case strings.IndexFunc(j.Name, unicode.IsControl) >= 0:
+			return fmt.Errorf("%s.name must not hold control characters, got %q", field, j.Name)
 		case strings.EqualFold(j.Name, "pergent"):
 			return fmt.Errorf("%s.name must not be pergent, which is pergent's own status", field)
 		case seen[j.Name]:

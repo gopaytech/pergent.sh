@@ -117,7 +117,7 @@ A pipeline that ran only in a fork project is not in the target project's lists,
 
 ## Limits
 
-- At most 10 jobs, with unique names.
+- At most 10 jobs, with unique names. A name holds no control characters and has no space at either end.
 - The name `pergent` is refused, because that is pergent.sh's own status.
 - `wait` from `5m` to `2h`.
 - A report `path` is relative, with no `..`.
