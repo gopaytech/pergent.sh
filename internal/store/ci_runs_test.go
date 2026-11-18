@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -59,6 +60,15 @@ func TestHoldForCIHoldsQueuedAndStartedRuns(t *testing.T) {
 	if r := mustRun(t, s, again); r.State != Queued || !r.CIChecked {
 		t.Errorf("checked run = %s, ci_checked %v; want queued, true", r.State, r.CIChecked)
 	}
+	// An API review has no merge request and no CI: never held.
+	c := newAPIClient(t, s, "fastgateway")
+	api := enqueueAPI(t, s, apiRequest(c.ID, "acme", "route:ci"))
+	if ok, err := s.HoldForCI(ctx, api, ciDeadline); err != nil || ok {
+		t.Errorf("HoldForCI of an API review = %v, %v; want false", ok, err)
+	}
+	if r := mustRun(t, s, api); r.State == Waiting || r.CIDeadline != nil {
+		t.Errorf("API review = %s, deadline %v; want not held", r.State, r.CIDeadline)
+	}
 	if ok, err := s.HoldForCI(ctx, "not-a-uuid", ciDeadline); err == nil || ok {
 		t.Errorf("HoldForCI of a malformed id = %v, %v; want an error", ok, err)
 	}
@@ -105,8 +115,8 @@ func TestReleaseCIOnlyCIPending(t *testing.T) {
 	if ok, err := s.ReleaseCI(ctx, old); err != nil || ok {
 		t.Errorf("ReleaseCI of a superseded run = %v, %v; want false", ok, err)
 	}
-	if err := s.SetRunCI(ctx, old, []CIJobResult{{Name: "test", Result: "passed", Read: "status"}}); err == nil {
-		t.Error("SetRunCI of a superseded run succeeded, want an error")
+	if err := s.SetRunCI(ctx, old, []CIJobResult{{Name: "test", Result: "passed", Read: "status"}}); !errors.Is(err, ErrRunGone) {
+		t.Errorf("SetRunCI of a superseded run = %v, want ErrRunGone", err)
 	}
 	if r := mustRun(t, s, old); r.State != Superseded {
 		t.Errorf("old run = %s after release and snapshot, want superseded", r.State)

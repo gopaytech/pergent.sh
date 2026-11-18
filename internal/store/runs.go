@@ -61,6 +61,9 @@ var (
 	// ErrNotRunning is returned by MarkDispatched when the run is not in
 	// state running (it was superseded, or does not exist).
 	ErrNotRunning = errors.New("store: run is not running")
+	// ErrRunGone is returned by SetRunCI when the run is superseded or does
+	// not exist: a sweep racing a supersede, which is normal.
+	ErrRunGone = errors.New("store: run is gone")
 	// ErrNotReported is returned by ReplaceWithFailure when the run is not in
 	// state reported with a result (or does not exist).
 	ErrNotReported = errors.New("store: run is not reported with a result")

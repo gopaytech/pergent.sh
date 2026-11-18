@@ -70,13 +70,15 @@ func readCIResults(b []byte) ([]CIJobResult, error) {
 // HoldForCI moves a queued, or claimed and not yet dispatched, run to Waiting
 // with the reason WaitCIPending, to wait for its CI jobs until deadline. A run
 // CI was already looked at for (CIChecked) is not held. ok is false when the
-// run was in another state or unknown; a malformed id is an error.
+// run was in another state or unknown, or is an API review (no merge request,
+// no CI); a malformed id is an error.
 func (s *Store) HoldForCI(ctx context.Context, id string, deadline time.Time) (ok bool, err error) {
 	if !validUUID(id) {
 		return false, fmt.Errorf("store: run %q not found", id)
 	}
 	tag, err := s.pool.Exec(ctx, `UPDATE runs SET state = 'waiting', skip_reason = $2, ci_deadline = $3
-		WHERE id = $1::uuid AND state IN ('queued', 'running') AND dispatched_at IS NULL AND NOT ci_checked`,
+		WHERE id = $1::uuid AND state IN ('queued', 'running') AND dispatched_at IS NULL AND NOT ci_checked
+		  AND kind = 'mr'`,
 		id, WaitCIPending, deadline)
 	if err != nil {
 		return false, err
@@ -113,15 +115,25 @@ func (s *Store) MarkCIChecked(ctx context.Context, id string) error {
 }
 
 // SetRunCI records the snapshot of the CI jobs a run was decided with; nil or
-// an empty list clears it. A superseded run, or an unknown one, is an error
-// and is left as it is.
+// an empty list clears it. A superseded run, or an unknown one, is left as it
+// is and gives ErrRunGone; a malformed id is another error.
 func (s *Store) SetRunCI(ctx context.Context, id string, jobs []CIJobResult) error {
 	v, err := ciResultsParam(jobs)
 	if err != nil {
 		return err
 	}
-	return s.mustUpdate(ctx, id, `UPDATE runs SET ci_jobs = $2::jsonb
+	if !validUUID(id) {
+		return fmt.Errorf("store: run %q not found", id)
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE runs SET ci_jobs = $2::jsonb
 		WHERE id = $1::uuid AND state IN ('queued', 'running', 'waiting', 'reported', 'published', 'publish_failed')`, id, v)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrRunGone
+	}
+	return nil
 }
 
 // CIPendingRuns returns the runs waiting for CI, the nearest deadline first.
