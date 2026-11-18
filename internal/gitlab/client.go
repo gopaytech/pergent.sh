@@ -243,6 +243,46 @@ func (c *Client) once(ctx context.Context, method, rawURL string, payload []byte
 	return nil, ra, ae
 }
 
+// stream sends a GET and returns the open body, not read: the caller reads it
+// and closes it. A non-2xx reply is *APIError (a 401 or 403 matches
+// ErrForbidden, a 404 ErrNotFound). It is not retried.
+func (c *Client) stream(ctx context.Context, path string, query url.Values) (io.ReadCloser, error) {
+	u, err := url.Parse(c.baseURL + "/api/v4" + path)
+	if err != nil {
+		return nil, errors.New("gitlab: invalid base URL or path")
+	}
+	if len(query) > 0 {
+		u.RawQuery = query.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, errors.New("gitlab: building request")
+	}
+	if c.bearer {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	} else {
+		req.Header.Set("PRIVATE-TOKEN", c.token)
+	}
+	res, err := c.hc.Do(req)
+	if errors.Is(err, errCrossHostRedirect) {
+		return nil, errCrossHostRedirect
+	}
+	if err != nil {
+		var ue *url.Error
+		reason := err.Error()
+		if errors.As(err, &ue) {
+			reason = ue.Err.Error()
+		}
+		return nil, &connError{msg: fmt.Sprintf("gitlab: GET request failed: %s", c.mask(reason))}
+	}
+	if res.StatusCode >= 200 && res.StatusCode < 300 {
+		return res.Body, nil
+	}
+	defer res.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(res.Body, storedBody))
+	return nil, &APIError{Status: res.StatusCode, Body: c.mask(string(data))}
+}
+
 // mask removes the token from text that may reach an error.
 func (c *Client) mask(s string) string {
 	if c.token == "" {
@@ -848,6 +888,8 @@ func (c *Client) EnsureHook(ctx context.Context, projectID int64, hookURL, secre
 		"token":                   secret,
 		"merge_requests_events":   true,
 		"note_events":             true,
+		"pipeline_events":         true,
+		"job_events":              true,
 		"push_events":             false,
 		"enable_ssl_verification": true,
 	}

@@ -1,0 +1,197 @@
+package gitlabforge
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/gopaytech/pergent.sh/internal/ci"
+	"github.com/gopaytech/pergent.sh/internal/forge"
+	"github.com/gopaytech/pergent.sh/internal/gitlab"
+	"github.com/gopaytech/pergent.sh/internal/store"
+)
+
+// ciFake serves routes by path (relative to /api/v4); a route is a status and
+// a body. An unknown path is 404. It records every path asked.
+type ciFake struct {
+	mu     sync.Mutex
+	routes map[string][2]any
+	paths  []string
+}
+
+func newCI(t *testing.T, routes map[string][2]any) (*Forge, *ciFake) {
+	t.Helper()
+	f := &ciFake{routes: routes}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		f.paths = append(f.paths, strings.TrimPrefix(r.URL.Path, "/api/v4"))
+		f.mu.Unlock()
+		rt, ok := f.routes[strings.TrimPrefix(r.URL.Path, "/api/v4")]
+		if !ok {
+			http.Error(w, "nope", 404)
+			return
+		}
+		w.WriteHeader(rt[0].(int))
+		_, _ = w.Write([]byte(rt[1].(string)))
+	}))
+	t.Cleanup(srv.Close)
+	return NewForge(gitlab.New(srv.URL, reviewToken, srv.Client()), gitlab.User{ID: reviewUserID}), f
+}
+
+func (f *ciFake) asked(sub string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, p := range f.paths {
+		if strings.Contains(p, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+func ok(body string) [2]any { return [2]any{200, body} }
+
+var target = forge.CITarget{ProjectID: 7, Change: 3, Head: "head1"}
+
+func statusJob(name string) store.CIJob {
+	return store.CIJob{Name: name, Read: "status", BlocksApproval: true}
+}
+
+func TestReadCIMergedResultsNeedsHeadParent(t *testing.T) {
+	routes := map[string][2]any{
+		"/projects/7/pipelines":                  ok(`[]`),
+		"/projects/7/merge_requests/3/pipelines": ok(`[{"id":10,"sha":"m1","ref":"refs/merge-requests/3/merge","status":"success"},{"id":11,"sha":"m2","ref":"refs/merge-requests/3/merge","status":"failed"},{"id":12,"sha":"head1","ref":"refs/merge-requests/3/head","status":"success"}]`),
+		"/projects/7/repository/commits/m1":      ok(`{"parent_ids":["base","head1"]}`),
+		"/projects/7/repository/commits/m2":      ok(`{"parent_ids":["base","old"]}`),
+		"/projects/7/pipelines/10/jobs":          ok(`[{"id":1,"name":"test","status":"success"}]`),
+		"/projects/7/pipelines/10/bridges":       ok(`[]`),
+		"/projects/7/pipelines/11/jobs":          ok(`[{"id":2,"name":"test","status":"failed"}]`),
+		"/projects/7/pipelines/11/bridges":       ok(`[]`),
+		"/projects/7/pipelines/12/jobs":          ok(`[{"id":0,"name":"other","status":"success"}]`),
+		"/projects/7/pipelines/12/bridges":       ok(`[]`),
+		"/projects/7/merge_requests/3":           ok(`{"head_pipeline":{"id":11}}`),
+	}
+	f, _ := newCI(t, routes)
+	snap, err := f.ReadCI(context.Background(), target, []store.CIJob{statusJob("test")}, false)
+	if err != nil || snap.Jobs[0].Result != ci.Passed {
+		t.Fatalf("snap=%+v err=%v", snap, err)
+	}
+}
+
+func TestReadCINewestAttemptWins(t *testing.T) {
+	f, _ := newCI(t, map[string][2]any{
+		"/projects/7/pipelines":                  ok(`[{"id":1,"sha":"head1","status":"success"}]`),
+		"/projects/7/merge_requests/3/pipelines": ok(`[]`),
+		"/projects/7/pipelines/1/jobs":           ok(`[{"id":5,"name":"test","status":"failed"},{"id":9,"name":"test","status":"success"}]`),
+		"/projects/7/pipelines/1/bridges":        ok(`[]`),
+	})
+	snap, err := f.ReadCI(context.Background(), target, []store.CIJob{statusJob("test")}, false)
+	if err != nil || snap.Jobs[0].Result != ci.Passed || !snap.Jobs[0].Ended || !snap.Jobs[0].Blocks {
+		t.Fatalf("snap=%+v err=%v", snap, err)
+	}
+}
+
+func TestReadCIMissingAndFinished(t *testing.T) {
+	for status, finished := range map[string]bool{"success": true, "running": false} {
+		f, _ := newCI(t, map[string][2]any{
+			"/projects/7/pipelines":                  ok(`[{"id":1,"sha":"head1","status":"` + status + `"}]`),
+			"/projects/7/merge_requests/3/pipelines": ok(`[]`),
+			"/projects/7/pipelines/1/jobs":           ok(`[{"id":5,"name":"test","status":"success"}]`),
+			"/projects/7/pipelines/1/bridges":        ok(`[]`),
+		})
+		snap, err := f.ReadCI(context.Background(), target, []store.CIJob{statusJob("lint")}, false)
+		if err != nil || snap.Jobs[0].Result != ci.Missing || snap.Finished != finished || snap.Done() != finished {
+			t.Fatalf("%s: snap=%+v err=%v", status, snap, err)
+		}
+	}
+}
+
+func TestReadCIBridgeStatus(t *testing.T) {
+	f, fk := newCI(t, map[string][2]any{
+		"/projects/7/pipelines":                  ok(`[{"id":1,"sha":"head1","status":"success"}]`),
+		"/projects/7/merge_requests/3/pipelines": ok(`[]`),
+		"/projects/7/pipelines/1/jobs":           ok(`[]`),
+		"/projects/7/pipelines/1/bridges":        ok(`[{"id":4,"name":"deploy-child","status":"failed"}]`),
+	})
+	snap, err := f.ReadCI(context.Background(), target, []store.CIJob{{Name: "deploy-child", Read: "log"}}, true)
+	if err != nil || snap.Jobs[0].Result != ci.Failed || snap.Jobs[0].Log != "" || fk.asked("/trace") {
+		t.Fatalf("snap=%+v err=%v", snap, err)
+	}
+}
+
+func TestReadCIWithText(t *testing.T) {
+	routes := map[string][2]any{
+		"/projects/7/pipelines":                  ok(`[{"id":1,"sha":"head1","status":"failed"}]`),
+		"/projects/7/merge_requests/3/pipelines": ok(`[]`),
+		"/projects/7/pipelines/1/jobs": ok(`[{"id":1,"name":"build","status":"failed"},{"id":2,"name":"unit","status":"success"},
+			{"id":3,"name":"scan","status":"success"},{"id":4,"name":"gone","status":"success"},{"id":5,"name":"locked","status":"success"}]`),
+		"/projects/7/pipelines/1/bridges":                ok(`[]`),
+		"/projects/7/jobs/1/trace":                       ok("section_start:1:x\r\nline1\r\nboom\r\nsection_end:1:x\r\n"),
+		"/projects/7/jobs/2/trace":                       ok("passed log"),
+		"/projects/7/jobs/3/artifacts/reports/scan.json": ok(`{"ok":true}`),
+		"/projects/7/jobs/5/artifacts/reports/scan.json": {403, "denied"},
+	}
+	jobs := []store.CIJob{
+		{Name: "build", Read: "log"},
+		{Name: "unit", Read: "log"},
+		{Name: "scan", Read: "report", Report: &store.CIReport{Path: "reports/scan.json"}},
+		{Name: "gone", Read: "report", Report: &store.CIReport{Path: "reports/scan.json"}},
+		{Name: "locked", Read: "report", Report: &store.CIReport{Path: "reports/scan.json"}},
+	}
+	f, fk := newCI(t, routes)
+	snap, err := f.ReadCI(context.Background(), target, jobs, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := snap.Jobs[0].Log; got != "line1\nboom" {
+		t.Fatalf("log = %q", got)
+	}
+	if snap.Jobs[1].Log != "" || fk.asked("/jobs/2/trace") {
+		t.Fatalf("passed job log = %q", snap.Jobs[1].Log)
+	}
+	if snap.Jobs[2].Report != `{"ok":true}` {
+		t.Fatalf("report = %q", snap.Jobs[2].Report)
+	}
+	if j := snap.Jobs[3]; j.Result != ci.Unreadable || j.Reason != "error" || !j.Ended {
+		t.Fatalf("404 job = %+v", j)
+	}
+	if j := snap.Jobs[4]; j.Result != ci.Unreadable || j.Reason != "no permission" {
+		t.Fatalf("403 job = %+v", j)
+	}
+
+	f2, fk2 := newCI(t, routes)
+	if _, err := f2.ReadCI(context.Background(), target, jobs, false); err != nil {
+		t.Fatal(err)
+	}
+	if fk2.asked("/trace") || fk2.asked("/artifacts") {
+		t.Fatalf("status-only read asked for text: %v", fk2.paths)
+	}
+}
+
+func TestReadCIForkPipelineMissing(t *testing.T) {
+	f, _ := newCI(t, map[string][2]any{
+		"/projects/7/pipelines":                  ok(`[]`),
+		"/projects/7/merge_requests/3/pipelines": ok(`[]`),
+	})
+	snap, err := f.ReadCI(context.Background(), target, []store.CIJob{statusJob("test")}, false)
+	if err != nil || snap.Jobs[0].Result != ci.Missing || !snap.Finished || !snap.Done() {
+		t.Fatalf("snap=%+v err=%v", snap, err)
+	}
+}
+
+func TestRecentCINames(t *testing.T) {
+	f, _ := newCI(t, map[string][2]any{
+		"/projects/7/pipelines":           ok(`[{"id":1},{"id":2}]`),
+		"/projects/7/pipelines/1/jobs":    ok(`[{"id":1,"name":"b"},{"id":2,"name":"a"}]`),
+		"/projects/7/pipelines/1/bridges": ok(`[]`),
+		"/projects/7/pipelines/2/jobs":    ok(`[{"id":3,"name":"a"}]`),
+		"/projects/7/pipelines/2/bridges": ok(`[{"id":4,"name":"c"}]`),
+	})
+	names, err := f.RecentCINames(context.Background(), target)
+	if err != nil || strings.Join(names, ",") != "a,b,c" {
+		t.Fatalf("names=%v err=%v", names, err)
+	}
+}
