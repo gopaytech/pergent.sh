@@ -1,6 +1,6 @@
 # ⬆️ Upgrading
 
-## Unreleased
+## Upgrading to 0.17.1
 
 **On GitLab, `failure_status: neutral` now sets the `pergent` commit status to `success`.** It used to set `skipped`, which GitLab refuses once the status is `running`, so a review that couldn't be done kept its status `running` through about 50 minutes of retries and then ended `failed`, blocking the merge request. Now the pipeline passes. The review is still not approved, and its comment and the status description still say it failed.
 
