@@ -254,6 +254,9 @@ var (
 	// fateInterval is how often the changes that merged or closed get their
 	// findings' fates worked out (workFates).
 	fateInterval = time.Minute
+	// ciInterval is the CI sweep's (sweepCI): a lost CI event only delays a
+	// run waiting for CI, or a published review's gate, this long.
+	ciInterval = 2 * time.Minute
 	// reconcileSoonGap is the least time between two reconciles
 	// ReconcileSoon starts; requests in between are merged into one.
 	reconcileSoonGap = 10 * time.Second
@@ -261,9 +264,10 @@ var (
 
 // Run runs the loops until ctx is done: dispatch, publish, cleanup and
 // comment commands every 2 s or on Wake, watch every 15 s, sweep the
-// approvals every 5 minutes, work out the fates of the findings of changes
-// that merged or closed every minute (workFates, for at most 30 s a pass),
-// and reconcile every hour (when it also prunes the review logs older than
+// approvals every 5 minutes, check the runs waiting for CI and the published
+// reviews whose CI jobs didn't pass every 2 minutes (sweepCI), work out the
+// fates of the findings of changes that merged or closed every minute
+// (workFates, for at most 30 s a pass), and reconcile every hour (when it also prunes the review logs older than
 // 30 days, sweeps for changes whose merge or close no webhook recorded and
 // prunes fates older than a year), and reconcile the repositories
 // ReconcileSoon names (at most
@@ -275,7 +279,8 @@ var (
 // between claim and dispatch by an earlier stop go back to the queue (with
 // one replica, nothing is being dispatched yet), the readiness scans after
 // the upgrade are queued (upgradeScans, with scans on; RunScans runs them),
-// then Reconcile and SweepApprovals run once.
+// then Reconcile, SweepApprovals and the CI sweep run once, so a run whose CI
+// deadline passed while pergent.sh was down is released by the first pass.
 // Run is started next to the HTTP server, never before it, so a slow GitLab
 // at startup delays only the loops.
 func (e *Engine) Run(ctx context.Context) {
@@ -293,6 +298,7 @@ func (e *Engine) Run(ctx context.Context) {
 		log.Error("startup reconcile failed", "error", e.redact(err.Error()))
 	}
 	e.sweepApprovals(ctx)
+	e.sweepCI(ctx)
 	e.pruneRunLogs(ctx)
 
 	pass := time.NewTicker(passInterval)
@@ -301,6 +307,8 @@ func (e *Engine) Run(ctx context.Context) {
 	defer watch.Stop()
 	sweep := time.NewTicker(sweepInterval)
 	defer sweep.Stop()
+	ciSweep := time.NewTicker(ciInterval)
+	defer ciSweep.Stop()
 	fate := time.NewTicker(fateInterval)
 	defer fate.Stop()
 	reconcile := time.NewTicker(reconcileInterval)
@@ -346,6 +354,8 @@ func (e *Engine) Run(ctx context.Context) {
 			}
 		case <-sweep.C:
 			e.sweepApprovals(ctx)
+		case <-ciSweep.C:
+			e.sweepCI(ctx)
 		case <-fate.C:
 			e.workFates(ctx)
 		case <-reconcile.C:
