@@ -11,6 +11,7 @@ import (
 	"github.com/gopaytech/pergent/render"
 
 	"github.com/gopaytech/pergent.sh/internal/actions"
+	"github.com/gopaytech/pergent.sh/internal/ci"
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/kube"
@@ -826,7 +827,10 @@ func (e *Engine) gaveUpStatus(ctx context.Context, run store.Run, log *slog.Logg
 			return forge.StatusFailed
 		}
 	}
-	if policy.Decide(e.outcome(stored, log), config.FailureStatusNeutral).Kind == policy.KindBlocking {
+	// Blocking findings and a blocking CI job that isn't passed are never
+	// softened to neutral, which GitLab reads as success.
+	o := e.outcome(stored, log)
+	if policy.Decide(o, config.FailureStatusNeutral).Kind == policy.KindBlocking || len(ci.Blocking(o.CI)) > 0 {
 		return forge.StatusFailed
 	}
 	return forge.StatusNeutral

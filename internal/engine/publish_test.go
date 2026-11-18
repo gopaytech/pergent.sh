@@ -1449,6 +1449,39 @@ func TestPublishGiveUpNeutralBlockingIsFailed(t *testing.T) {
 	}
 }
 
+// A blocking CI job that isn't passed is never softened to neutral by a
+// give-up, whether the review itself is clean or failed.
+func TestPublishGiveUpNeutralCIBlockedIsFailed(t *testing.T) {
+	for name, tc := range map[string]struct {
+		result func(t *testing.T, head string) []byte
+	}{
+		"clean review": {func(t *testing.T, head string) []byte {
+			return resultFor(t, head, reviewed("no_blocking_issues", "a.go"))
+		}},
+		"failed review": {func(t *testing.T, head string) []byte { return resultFor(t, head, reviewed("failed", "a.go")) }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := newTestEnv(t)
+			env.Engine.Config.Repositories[0].FailureStatus = config.FailureStatusNeutral
+			head := sha('a')
+			id := env.Report(1, head, tc.result(t, head))
+			if err := env.Store.SetRunCI(env.ctx, id, []store.CIJobResult{{Name: "test", Result: "failed", Read: "status", Blocks: true}}); err != nil {
+				t.Fatal(err)
+			}
+			servePublish(env, 1, head)
+			env.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusUnprocessableEntity, `{"message":"Note is too long"}`)
+
+			publishUntilGivenUp(t, env, id)
+
+			wantStatus(t, env, head, gitlab.StatusFailed, "pergent couldn't post its review")
+			wantNoApproval(t, env, 1)
+			if r := env.Run(id); r.DecisionStatus != "failed" {
+				t.Errorf("recorded status = %q, want failed", r.DecisionStatus)
+			}
+		})
+	}
+}
+
 // A repository removed before the give-up can't say it wants neutral: the
 // final status fails closed.
 func TestPublishGiveUpRepositoryGoneIsFailed(t *testing.T) {
@@ -2660,6 +2693,19 @@ func TestCIRedecideAfterPublish(t *testing.T) {
 		t.Errorf("run = outcome %q approved %v, want %q, not approved", r.Outcome, r.Approved, store.OutcomeCI)
 	}
 	serveNote(env, 1, createdNote, body)
+	// lastStatus is the newest commit status set on head.
+	lastStatus := func(wantState gitlab.StatusState, wantDesc string) {
+		t.Helper()
+		reqs := env.GitLab.Requests(http.MethodPost, statusPath(head))
+		if len(reqs) == 0 {
+			t.Fatal("no commit status was set")
+		}
+		got := reqs[len(reqs)-1].JSON(t)
+		if got["state"] != string(wantState) || got["description"] != wantDesc {
+			t.Errorf("commit status = %v, want %q / %q", got, wantState, wantDesc)
+		}
+	}
+	lastStatus(gitlab.StatusFailed, "CI blocks approval: test failed")
 
 	redecide := func(res string) {
 		t.Helper()
@@ -2676,6 +2722,7 @@ func TestCIRedecideAfterPublish(t *testing.T) {
 	if n := len(env.GitLab.Requests(http.MethodPut, notePath(1, createdNote))); n != 0 {
 		t.Errorf("an unchanged CI result edited the comment %d times", n)
 	}
+	lastStatus(gitlab.StatusFailed, "CI blocks approval: test failed")
 	// Passed: approves.
 	redecide("passed")
 	if n := len(env.GitLab.Requests(http.MethodPost, approvePath(1))); n != 1 {
@@ -2684,8 +2731,13 @@ func TestCIRedecideAfterPublish(t *testing.T) {
 	if r := env.Run(id); r.Outcome != store.OutcomeApproved || !r.Approved {
 		t.Errorf("run = outcome %q approved %v, want approved", r.Outcome, r.Approved)
 	}
-	// Failed again: the status turns failed and the approval is not kept.
+	lastStatus(gitlab.StatusSuccess, "No blocking issues")
+	// Failed again: the status turns failed and the approval is withdrawn.
 	redecide("failed")
+	lastStatus(gitlab.StatusFailed, "CI blocks approval: test failed")
+	if n := len(env.GitLab.Requests(http.MethodPost, unapprovePath(1))); n != 1 {
+		t.Errorf("the approval was withdrawn %d times, want 1", n)
+	}
 	if r := env.Run(id); r.Outcome != store.OutcomeCI || r.Approved {
 		t.Errorf("run = outcome %q approved %v after the job failed again", r.Outcome, r.Approved)
 	}

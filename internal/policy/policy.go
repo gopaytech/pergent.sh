@@ -209,10 +209,13 @@ func Decide(o Outcome, failure config.FailureStatus) Decision {
 	d := decide(o, failure)
 	// After the failure_status mapping, so neutral can't hide a CI block.
 	if blocked := ci.Blocking(o.CI); len(blocked) > 0 {
-		d.Approve, d.Status, d.Description = false, StatusFailed, ciDescription(blocked)
+		d.Approve, d.Status = false, StatusFailed
 		switch d.Kind {
 		case KindApprove, KindNotApproved, KindDraft:
 			d.Kind = KindCI
+			d.Description = ciDescription("", blocked)
+		default: // KindBlocking, KindFailed: the review's own text stays
+			d.Description = ciDescription(d.Description, blocked)
 		}
 	}
 	d.Comment = NeutralizeQuickActions(d.Comment)
@@ -611,28 +614,36 @@ const descCIPrefix = "CI blocks approval: "
 // is 140 characters, GitLab's 255).
 const maxDescription = 140
 
-// ciDescription names the first blocking job and its result, then ", +N
-// more" for the others. A job name can be long: it is cut to fit.
-func ciDescription(blocked []store.CIJobResult) string {
+// ciDescription is the status description of a review a CI job holds back:
+// the CI part names the first blocking job and its result, then ", +N more"
+// for the others. When the review's own description (own) stays, the CI part
+// follows it after "; ". It is cut to maxDescription, the CI part first: a
+// job name can be long.
+func ciDescription(own string, blocked []store.CIJobResult) string {
 	more := ""
 	if n := len(blocked) - 1; n > 0 {
 		more = fmt.Sprintf(", +%d more", n)
 	}
-	text := blocked[0].Name + " " + blocked[0].Result
-	if room := maxDescription - len([]rune(descCIPrefix+more)); len([]rune(text)) > room {
-		// Keep the result: cut the name.
-		res := " " + blocked[0].Result
-		name := []rune(blocked[0].Name)
-		keep := room - len([]rune(res)) - 1
-		if keep < 0 {
-			keep = 0
-		}
-		if keep < len(name) {
-			name = name[:keep]
-		}
-		text = string(name) + "…" + res
+	lead := descCIPrefix
+	if own != "" {
+		lead = own + "; " + descCIPrefix
 	}
-	return descCIPrefix + text + more
+	res := " " + blocked[0].Result
+	name := []rune(blocked[0].Name)
+	room := maxDescription - len([]rune(lead+more+res))
+	if len(name) > room {
+		if room < 1 {
+			room = 0
+		} else {
+			room--
+		}
+		name = append(name[:room], '…')
+	}
+	d := lead + string(name) + res + more
+	if r := []rune(d); len(r) > maxDescription {
+		d = string(r[:maxDescription-1]) + "…"
+	}
+	return d
 }
 
 func failureStatus(f config.FailureStatus) Status {

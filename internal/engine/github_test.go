@@ -1165,6 +1165,31 @@ func TestPublishGitHubGiveUpNeutralCheckRun(t *testing.T) {
 
 // With neutral, a review with blocking findings that can't be posted still
 // completes its Check Run as a failure.
+func TestPublishGitHubGiveUpNeutralCIBlockedIsFailure(t *testing.T) {
+	env := newTestEnv(t)
+	gh := addGitHub(t, env, true)
+	for i := range env.Engine.Config.Repositories {
+		if env.Engine.Config.Repositories[i].GitHub == ghInstance {
+			env.Engine.Config.Repositories[i].FailureStatus = config.FailureStatusNeutral
+		}
+	}
+	head := sha('a')
+	id := ghReport(t, env, 3, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	if err := env.Store.SetRunCI(env.ctx, id, []store.CIJobResult{{Name: "test", Result: "failed", Read: "status", Blocks: true}}); err != nil {
+		t.Fatal(err)
+	}
+	servePublishGitHub(gh, 3, head)
+	gh.Reply(http.MethodPost, ghRepoAPI+"/issues/3/comments", http.StatusUnprocessableEntity,
+		map[string]any{"message": "Validation Failed", "errors": []any{map[string]any{"message": "body is too long (maximum is 65536 characters)"}}})
+
+	publishUntilGivenUp(t, env, id)
+
+	run := onlyCheckRun(t, gh)
+	if run["status"] != "completed" || run["conclusion"] != "failure" {
+		t.Errorf("check run = %v", run)
+	}
+}
+
 func TestPublishGitHubGiveUpNeutralBlockingIsFailure(t *testing.T) {
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
