@@ -15,7 +15,7 @@ const (
 
 var (
 	reCSI     = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
-	reOSC     = regexp.MustCompile(`\x1b\][^\x07]*(?:\x07|\x1b\\)`)
+	reOSC     = regexp.MustCompile(`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
 	reSection = regexp.MustCompile(`section_(?:start|end):\d+:[^\r\n]*\r?\n?`)
 )
 

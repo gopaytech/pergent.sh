@@ -41,6 +41,13 @@ func TestTail(t *testing.T) {
 			t.Fatalf("got %q", got)
 		}
 	})
+	t.Run("osc8 links with ST keep the text between", func(t *testing.T) {
+		in := "before\n\x1b]8;;http://x\x1b\\link\x1b]8;;\x1b\\\nERROR middle failure\nlater \x1b]8;;http://y\x1b\\l\x1b]8;;\x1b\\ end"
+		got, _, _ := Tail(strings.NewReader(in))
+		if !strings.Contains(got, "ERROR middle failure") || got != "before\nlink\nERROR middle failure\nlater l end" {
+			t.Fatalf("got %q", got)
+		}
+	})
 	t.Run("section markers", func(t *testing.T) {
 		in := "section_start:1700000000:build\r\x1b[0K\nreal\nsection_end:1700000001:build\r\x1b[0K\n"
 		got, _, _ := Tail(strings.NewReader(in))

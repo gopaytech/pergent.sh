@@ -38,3 +38,23 @@ func TestRedact(t *testing.T) {
 		t.Errorf("not idempotent: %q", got)
 	}
 }
+
+func TestRedactForms(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`{"password": "hunter2", "api_key":"abc"}`, `{"password": "[REDACTED]", "api_key":"[REDACTED]"}`},
+		{`password: "x y"`, `password: "[REDACTED]"`},
+		{`'secret': 'abc'`, `'secret': '[REDACTED]'`},
+		{`run --password hunter2 now`, `run --password [REDACTED] now`},
+		{`run --token=abc now`, `run --token=[REDACTED] now`},
+		{`https://u:p@ss@host/x`, `https://[REDACTED]@host/x`},
+		{`https://u:p/ss@host`, `https://u:p/ss@host`},
+	}
+	for _, c := range cases {
+		if got := Redact(c.in); got != c.want {
+			t.Errorf("Redact(%q) = %q; want %q", c.in, got, c.want)
+		}
+		if got := Redact(Redact(c.in)); got != c.want {
+			t.Errorf("not idempotent for %q: %q", c.in, got)
+		}
+	}
+}
