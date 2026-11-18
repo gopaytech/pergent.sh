@@ -49,6 +49,9 @@ const (
 	WaitCheckFailed = "trust_check_failed"
 	// WaitQuota: the repository's monthly token quota is used up.
 	WaitQuota = "quota_used_up"
+	// WaitCIPending: the CI jobs the repository chose are still running;
+	// Run.CIDeadline is when the run stops waiting for them.
+	WaitCIPending = "ci_pending"
 )
 
 var (
@@ -135,6 +138,16 @@ type Run struct {
 	// for the run (it was asked for, or started), so the dispatcher never
 	// holds it for the quota.
 	QuotaChecked bool
+	// CIChecked is true once CI was looked at for the run (it waited for its
+	// jobs, or the repository has none to wait for), so the dispatcher never
+	// holds it for CI.
+	CIChecked bool
+	// CIDeadline is when a run waiting for CI (WaitCIPending) stops waiting;
+	// nil for any other run.
+	CIDeadline *time.Time
+	// CIJobs is the snapshot of the CI jobs the run was decided with, one
+	// entry per chosen job and never any CI text; nil when none.
+	CIJobs []CIJobResult
 	// CommentLayout is the layout of the comment, recorded when the run started
 	// (SetRunLayout); nil is the default layout, for a run from before the
 	// column or one that never started.
@@ -241,7 +254,8 @@ const runColumns = `id::text, instance, project_id, mr_iid, project_path, head_s
 	title, web_url, source_branch, author, model, skill_sources,
 	outcome, outcome_reason, decision_status, approved, trigger, skill_subset, base_run_id::text,
 	skill_versions, skip_reason, max_turns, incremental, skill_hashes, quiet_reviews, comment_layout,
-	linked_repos, provider, failure_step, failure_detail, pod_name, checkout_seen, quota_checked, kind, api_client_id`
+	linked_repos, provider, failure_step, failure_detail, pod_name, checkout_seen, quota_checked, kind, api_client_id,
+	ci_checked, ci_deadline, ci_jobs`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var (
@@ -249,7 +263,7 @@ func scanRun(row pgx.Row) (Run, error) {
 		state                                string
 		tokenExp, dispatched, rep, notBefore *time.Time
 		sources, versions, hashes            []byte
-		links                                []byte
+		links, ciJobs                        []byte
 		quiet                                *bool // NULL is off
 	)
 	err := row.Scan(&r.ID, &r.MR.Instance, &r.MR.ProjectID, &r.MR.IID, &r.ProjectPath, &r.HeadSHA, &r.BaseSHA, &r.StartSHA,
@@ -258,7 +272,8 @@ func scanRun(row pgx.Row) (Run, error) {
 		&r.Title, &r.WebURL, &r.SourceBranch, &r.Author, &r.Model, &sources,
 		&r.Outcome, &r.OutcomeReason, &r.DecisionStatus, &r.Approved, &r.Trigger, &r.SkillSubset, &r.BaseRunID,
 		&versions, &r.SkipReason, &r.MaxTurns, &r.Incremental, &hashes, &quiet, &r.CommentLayout, &links, &r.Provider,
-		&r.FailureStep, &r.FailureDetail, &r.PodName, &r.CheckoutSeen, &r.QuotaChecked, &r.Kind, &r.APIClientID)
+		&r.FailureStep, &r.FailureDetail, &r.PodName, &r.CheckoutSeen, &r.QuotaChecked, &r.Kind, &r.APIClientID,
+		&r.CIChecked, &r.CIDeadline, &ciJobs)
 	if err != nil {
 		return Run{}, err
 	}
@@ -282,6 +297,9 @@ func scanRun(row pgx.Row) (Run, error) {
 		r.CommentLayout = nil
 	}
 	if r.LinkedRepos, err = readLinks(links); err != nil {
+		return Run{}, fmt.Errorf("run %s: %w", r.ID, err)
+	}
+	if r.CIJobs, err = readCIResults(ciJobs); err != nil {
 		return Run{}, fmt.Errorf("run %s: %w", r.ID, err)
 	}
 	r.State = RunState(state)
@@ -888,7 +906,8 @@ func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, ta
 	if err := lockMR(ctx, tx, mr); err != nil {
 		return "", false, err
 	}
-	err = tx.QueryRow(ctx, `UPDATE runs SET state = 'queued', trigger = 'start', skip_reason = '', not_before = NULL, quota_checked = true
+	err = tx.QueryRow(ctx, `UPDATE runs SET state = 'queued', trigger = 'start', skip_reason = '', not_before = NULL, quota_checked = true,
+			ci_checked = ci_checked OR skip_reason = 'ci_pending'
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
 		  AND state = 'waiting'
 		RETURNING id::text`,

@@ -258,7 +258,7 @@ func (s *Store) MRRunDigests(ctx context.Context, mr MRKey, v Visibility) ([]Run
 // ProjectByPath returns the stored project whose path is project (matched
 // ignoring case) on instance; ok is false when there is none.
 func (s *Store) ProjectByPath(ctx context.Context, instance, project string) (Project, bool, error) {
-	p, err := scanProject(s.pool.QueryRow(ctx, `SELECT `+projectColumns+` FROM projects
+	p, err := scanProject(s.pool.QueryRow(ctx, `SELECT `+projectSelect+` FROM projects
 		WHERE instance = $1 AND lower(path) = lower($2) ORDER BY project_id DESC LIMIT 1`, instance, project))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Project{}, false, nil

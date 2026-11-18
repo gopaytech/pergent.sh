@@ -36,11 +36,21 @@ type Project struct {
 	// classic branch protection (it has Administration: Read). A GitLab
 	// project (UpsertProject, InstallationID 0) is always stored with true.
 	ProtectionReadable bool
+	// ActionsReadable is whether the review App may read the repository's
+	// Actions (workflow runs, jobs, artifacts), and CheckRunEvents whether it
+	// receives check_run events, both as of the last reconcile. Nil: not known
+	// yet (GitLab, or not reconciled since they were added).
+	ActionsReadable, CheckRunEvents *bool
 }
 
 const projectColumns = `instance, project_id, path, http_url_to_repo, hook_id, deploy_token_id,
 	deploy_token_username, deploy_token_sealed, deploy_token_expires_at, clone_seconds,
 	installation_id, approve_available, inline_available, protection_readable`
+
+// projectSelect is projectColumns and the columns only reconcile writes
+// (SetProjectCIAccess), for a read: an upsert writes projectColumns and leaves
+// those as they are.
+const projectSelect = projectColumns + `, actions_readable, check_run_events`
 
 func scanProject(row pgx.Row) (Project, error) {
 	var (
@@ -49,14 +59,15 @@ func scanProject(row pgx.Row) (Project, error) {
 	)
 	err := row.Scan(&p.Instance, &p.ProjectID, &p.Path, &p.HTTPURLToRepo, &p.HookID, &p.DeployTokenID,
 		&p.DeployTokenUsername, &p.DeployTokenSealed, &expires, &p.CloneSeconds,
-		&p.InstallationID, &p.ApproveAvailable, &p.InlineAvailable, &p.ProtectionReadable)
+		&p.InstallationID, &p.ApproveAvailable, &p.InlineAvailable, &p.ProtectionReadable,
+		&p.ActionsReadable, &p.CheckRunEvents)
 	p.DeployTokenExpiresAt = deref(expires)
 	return p, err
 }
 
 // Project returns one project; ok is false when it is not stored.
 func (s *Store) Project(ctx context.Context, instance string, projectID int64) (Project, bool, error) {
-	p, err := scanProject(s.pool.QueryRow(ctx, `SELECT `+projectColumns+` FROM projects
+	p, err := scanProject(s.pool.QueryRow(ctx, `SELECT `+projectSelect+` FROM projects
 		WHERE instance = $1 AND project_id = $2`, instance, projectID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Project{}, false, nil
@@ -69,7 +80,7 @@ func (s *Store) Project(ctx context.Context, instance string, projectID int64) (
 
 // Projects returns every stored project ordered by instance and id.
 func (s *Store) Projects(ctx context.Context) ([]Project, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+projectColumns+` FROM projects ORDER BY instance, project_id`)
+	rows, err := s.pool.Query(ctx, `SELECT `+projectSelect+` FROM projects ORDER BY instance, project_id`)
 	if err != nil {
 		return nil, err
 	}
