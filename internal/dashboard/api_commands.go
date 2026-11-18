@@ -46,7 +46,7 @@ const (
 //     "not dismissed"}.
 //
 // They work on every repository switched on, those set up in the config file
-// too, for its maintainers and admins.
+// too, for its maintainers and admins; a paused one is 409.
 func (d *Dashboard) commandRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/reviews/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.reviewAction)))
 	none := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { notFound(w) })
@@ -100,7 +100,7 @@ func (d *Dashboard) reviewAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	repo, ok := d.targetAny(w, r, "/"+rest[i+1:]+"/"+action, RoleMaintainer)
-	if !ok {
+	if !ok || refusePaused(w, repo) {
 		return
 	}
 	// Decode the body first: a bad one is 400 whatever the change is.

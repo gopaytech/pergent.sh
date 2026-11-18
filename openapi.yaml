@@ -834,6 +834,8 @@ paths:
       tags: [Overview and reviews]
       summary: Run the review again
       description: |
+        A paused repository is 409 (`the repository is paused`), after the
+        access checks and before anything else.
         Re-runs against the change's head on the platform now, the whole
         review or only its failed skills. The body may be left out (a re-run
         of everything). For maintainers and admins of the repository (403
@@ -881,6 +883,8 @@ paths:
       tags: [Overview and reviews]
       summary: Start the review of an untrusted author's change
       description: |
+        A paused repository is 409 (`the repository is paused`), after the
+        access checks and before anything else.
         For a change whose newest run waits (409 otherwise), because the
         repository doesn't trust its author or because the monthly token quota
         is used up: starts the review of the change's head on the platform now, like `@<bot> review` from someone with write
@@ -929,6 +933,8 @@ paths:
       tags: [Overview and reviews]
       summary: Dismiss a finding of the latest review
       description: |
+        A paused repository is 409 (`the repository is paused`), after the
+        access checks and before anything else.
         For maintainers of the repository and admins (403 otherwise). A
         blocking finding needs a `reason` (up to 500 characters) and is not
         dismissed on a merged or closed change (409); when the platform cannot
@@ -968,7 +974,10 @@ paths:
       operationId: restoreFinding
       tags: [Overview and reviews]
       summary: Undo a dismissal
-      description: For maintainers and admins of the repository (403 otherwise). The review is decided again.
+      description: |
+        A paused repository is 409 (`the repository is paused`), after the
+        access checks and before anything else. For maintainers and admins of the
+        repository (403 otherwise). The review is decided again.
       x-pergent-access: session
       x-pergent-pattern: POST /api/reviews/{instance}/{rest...}
       security:
@@ -1695,6 +1704,8 @@ paths:
       tags: [Repositories]
       summary: Scan the repository now
       description: |
+        A paused repository is 409 (`the repository is paused`), after the
+        access checks and before anything else.
         For maintainers and admins of the repository (403 otherwise), config
         repositories included. A repository that is not switched on, or when
         scans are off, is 404 and nothing is queued. 409 while a scan is
@@ -5782,7 +5793,7 @@ components:
           description: Built now from the latest finished scan; null until a scan has finished.
         canScan:
           type: boolean
-          description: The session is a maintainer or admin of the repository.
+          description: The session is a maintainer or admin of the repository, and it is not paused.
         configRepo:
           type: boolean
           description: The config file sets the repository up, so its skills are changed there.

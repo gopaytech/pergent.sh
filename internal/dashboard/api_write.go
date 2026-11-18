@@ -58,6 +58,7 @@ const (
 	msgConfigManaged  = "this repository is managed by the config file; change it there"
 	msgAlreadyOn      = "this repository is switched on already"
 	msgBadEnabled     = `the body must be {"enabled": true or false}`
+	msgPaused         = "the repository is paused"
 	msgWriteFailed    = "could not save the change, please try again"
 	msgUserLookup     = "could not look the user up on the platform, please try again"
 	msgBadProjectBody = `the body must be {"project": "<path>"}`
@@ -474,6 +475,17 @@ func (d *Dashboard) setEnabled(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
+}
+
+// refusePaused answers 409 msgPaused, and returns true, when repo is paused:
+// nothing that starts a Job or acts on the platform runs for one. target
+// finds a paused repository, so each such action calls it after target.
+func refusePaused(w http.ResponseWriter, repo settings.Effective) bool {
+	if !repo.Paused {
+		return false
+	}
+	writeError(w, http.StatusConflict, msgPaused)
+	return true
 }
 
 // --- DELETE /api/repositories/{instance}/{project...} ---

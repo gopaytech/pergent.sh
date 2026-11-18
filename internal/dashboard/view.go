@@ -518,7 +518,8 @@ type ReadinessView struct {
 	Latest    *ScanView            `json:"latest"`
 	Active    *ScanView            `json:"active"`
 	Checklist *readiness.Checklist `json:"checklist"`
-	// CanScan: the session is a maintainer or admin of the repository.
+	// CanScan: the session is a maintainer or admin of the repository, and
+	// it is not paused.
 	CanScan bool `json:"canScan"`
 	// ConfigRepo: the config file sets the repository up, so its skills
 	// are changed there ("Use these skills" shows the lines to paste).
