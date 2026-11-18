@@ -269,6 +269,7 @@ func BuildJob(p JobParams) *batchv1.Job {
 	hasDismissals := p.Inputs != nil && len(p.Inputs.Dismissals) > 0
 	hasDescription := p.Inputs != nil && len(p.Inputs.Description) > 0
 	hasLinked := p.Inputs != nil && len(p.Inputs.Linked) > 0
+	hasCI := p.Inputs != nil && len(p.Inputs.CIResults) > 0
 
 	args := []string{
 		"agent",
@@ -314,6 +315,10 @@ func BuildJob(p JobParams) *batchv1.Job {
 	if hasLinked {
 		// An environment variable for the same reason.
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "PERGENT_LINKED_REPOS", Value: "/in/linked-repos.json"})
+	}
+	if hasCI {
+		// An environment variable for the same reason.
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "PERGENT_CI_RESULTS", Value: "/in/ci-results.md"})
 	}
 	if p.CheckDeleted {
 		// An environment variable for the same reason.
@@ -395,6 +400,9 @@ func BuildJob(p JobParams) *batchv1.Job {
 	if hasLinked {
 		items = append(items, corev1.KeyToPath{Key: "linked-repos.json", Path: "linked-repos.json"})
 	}
+	if hasCI {
+		items = append(items, corev1.KeyToPath{Key: "ci-results.md", Path: "ci-results.md"})
+	}
 
 	volumes := []corev1.Volume{
 		{Name: "work", VolumeSource: corev1.VolumeSource{EmptyDir: workVolume(workSizeFor(p.WorkSize, len(p.LinkedClones)))}},
@@ -455,8 +463,8 @@ func ownerRef(job *batchv1.Job) []metav1.OwnerReference {
 }
 
 // BuildConfigMap holds the skills, instructions, previous review, carried
-// files, past dismissals and the change's description. owner may be nil (tests); Launch always passes
-// the created Job.
+// files, past dismissals, the change's description and the CI results. owner
+// may be nil (tests); Launch always passes the created Job.
 func BuildConfigMap(p JobParams, owner *batchv1.Job) *corev1.ConfigMap {
 	data := map[string]string{}
 	if p.Inputs != nil {
@@ -477,6 +485,9 @@ func BuildConfigMap(p JobParams, owner *batchv1.Job) *corev1.ConfigMap {
 		}
 		if len(p.Inputs.Description) > 0 {
 			data["change-description.md"] = string(p.Inputs.Description)
+		}
+		if len(p.Inputs.CIResults) > 0 {
+			data["ci-results.md"] = string(p.Inputs.CIResults)
 		}
 		if len(p.Inputs.Linked) > 0 {
 			data["linked-repos.json"] = string(p.Inputs.Linked)

@@ -239,6 +239,48 @@ func TestFitDropsDismissalsFirst(t *testing.T) {
 	}
 }
 
+func TestSizeCountsCIResults(t *testing.T) {
+	in := &Inputs{Skills: map[string][]byte{"a": make([]byte, 10)}, CIResults: make([]byte, 7)}
+	if in.Size() != 17 {
+		t.Errorf("size = %d, want 17", in.Size())
+	}
+}
+
+// The CI results go before the dismissals: they are the largest input and the
+// least needed to keep the review incremental.
+func TestFitDropsCIResultsFirst(t *testing.T) {
+	in := &Inputs{
+		Skills: map[string][]byte{"a": make([]byte, 40)}, Previous: make([]byte, 20), Carried: make([]byte, 20),
+		Dismissals: make([]byte, 20), CIResults: make([]byte, 40),
+	}
+	if err := in.Fit(100); err != nil {
+		t.Fatal(err)
+	}
+	if in.CIResults != nil {
+		t.Error("ci results kept")
+	}
+	if in.Dismissals == nil || in.Previous == nil || in.Carried == nil {
+		t.Errorf("dismissals %d, previous %d, carried %d bytes; want all kept",
+			len(in.Dismissals), len(in.Previous), len(in.Carried))
+	}
+}
+
+func TestFitDropsCIResultsThenDismissals(t *testing.T) {
+	in := &Inputs{
+		Skills: map[string][]byte{"a": make([]byte, 40)}, Previous: make([]byte, 20), Carried: make([]byte, 20),
+		Dismissals: make([]byte, 40), CIResults: make([]byte, 40),
+	}
+	if err := in.Fit(100); err != nil {
+		t.Fatal(err)
+	}
+	if in.CIResults != nil || in.Dismissals != nil {
+		t.Errorf("ci results %d, dismissals %d bytes kept", len(in.CIResults), len(in.Dismissals))
+	}
+	if in.Previous == nil || in.Carried == nil {
+		t.Errorf("previous %d, carried %d bytes; want both kept", len(in.Previous), len(in.Carried))
+	}
+}
+
 func TestFitDropsDismissalsThenPrevious(t *testing.T) {
 	in := &Inputs{
 		Skills: map[string][]byte{"a": make([]byte, 40)}, Previous: make([]byte, 40), Carried: make([]byte, 40),

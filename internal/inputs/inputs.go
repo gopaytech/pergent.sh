@@ -68,6 +68,10 @@ type Inputs struct {
 	// ([{"name", "path", "watched", "can_block", "error"}]); nil when the
 	// feature is off or nothing matched. It is not part of any skill's hash.
 	Linked []byte
+	// CIResults is the ci-results.md of the CI jobs the review waits for (the
+	// status, log tail or report of each); nil when none is chosen. It is not
+	// part of any skill's hash.
+	CIResults []byte
 }
 
 // LibraryEntry is one skill of the library as ResolveSkills receives it.
@@ -302,19 +306,24 @@ func (in *Inputs) AddDescription(title, description string) {
 
 // Size is the total number of bytes the inputs put into a ConfigMap.
 func (in *Inputs) Size() int {
-	n := len(in.Instructions) + len(in.Previous) + len(in.Carried) + len(in.Dismissals) + len(in.Description) + len(in.Linked)
+	n := len(in.Instructions) + len(in.Previous) + len(in.Carried) + len(in.Dismissals) + len(in.Description) + len(in.Linked) + len(in.CIResults)
 	for _, c := range in.Skills {
 		n += len(c)
 	}
 	return n
 }
 
-// Fit makes the inputs fit limit bytes: over the limit, the dismissals are
-// dropped first and then the change's description, so neither ever turns an
-// incremental review into a full one; then the previous result, together with
-// the carried files (the review is then a full one). If they are still over,
-// it returns ErrTooLarge.
+// Fit makes the inputs fit limit bytes: over the limit, the CI results are
+// dropped first, since the review still runs without them; then the dismissals
+// and the change's description, so neither ever turns an incremental review
+// into a full one; then the previous result, together with the carried files
+// (the review is then a full one). If they are still over, it returns
+// ErrTooLarge.
 func (in *Inputs) Fit(limit int) error {
+	if in.Size() <= limit {
+		return nil
+	}
+	in.CIResults = nil
 	if in.Size() <= limit {
 		return nil
 	}
