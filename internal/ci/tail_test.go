@@ -2,8 +2,10 @@ package ci
 
 import (
 	"fmt"
+	"io"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -115,4 +117,52 @@ func noControl(s string) string {
 		}
 	}
 	return ""
+}
+
+// A key whose BEGIN line is more than 2 MiB from the end of the log: the body
+// Tail keeps is still removed.
+func TestTailKeyBeginCutOff(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("-----BEGIN RSA PRIVATE KEY-----\n")
+	line := strings.Repeat("QUJD", 16) + "\n"
+	for b.Len() < 3<<20 {
+		b.WriteString(line)
+	}
+	b.WriteString("-----END RSA PRIVATE KEY-----\nafter the key\n")
+	got, cut, err := Tail(strings.NewReader(b.String()))
+	if err != nil || !cut {
+		t.Fatalf("err=%v cut=%v", err, cut)
+	}
+	if strings.Contains(got, "QUJD") || !strings.HasSuffix(got, "[REDACTED]\nafter the key") {
+		t.Fatalf("tail = %q", got[max(0, len(got)-200):])
+	}
+}
+
+// zeroReader returns (0, nil) for ever.
+type zeroReader struct{ n int }
+
+func (z *zeroReader) Read([]byte) (int, error) { z.n++; return 0, nil }
+
+// A reader that keeps returning nothing and no error ends the read, as EOF,
+// instead of spinning for ever.
+func TestTailZeroReads(t *testing.T) {
+	z := &zeroReader{}
+	done := make(chan struct{})
+	var got string
+	var err error
+	go func() {
+		defer close(done)
+		got, _, err = Tail(io.MultiReader(strings.NewReader("line 1\n"), z))
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Tail spins on a reader that returns (0, nil)")
+	}
+	if err != nil || got != "line 1" {
+		t.Fatalf("got %q, err %v", got, err)
+	}
+	if z.n > maxZeroReads {
+		t.Errorf("read %d times, want at most %d", z.n, maxZeroReads)
+	}
 }

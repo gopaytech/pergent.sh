@@ -11,6 +11,10 @@ const (
 	tailBuffer = 2 << 20
 	tailLines  = 200
 	textCap    = 16 << 10
+	// maxZeroReads is how many reads in a row may return nothing and no
+	// error before Tail takes it as the end: io.Reader allows (0, nil), and
+	// one that only ever says so would spin for ever.
+	maxZeroReads = 100
 )
 
 var (
@@ -41,13 +45,22 @@ func clean(s string) string {
 
 // Tail reads a log through a rolling 2 MiB buffer, so the text is the real end
 // of the log, and keeps its last 200 lines and at most 16 KiB. cut says
-// something was left off the front.
+// something was left off the front. maxZeroReads empty reads in a row end
+// the log, as EOF does.
 func Tail(r io.Reader) (string, bool, error) {
 	var buf []byte
 	cut := false
 	chunk := make([]byte, 64<<10)
+	zero := 0
 	for {
 		n, err := r.Read(chunk)
+		if n == 0 && err == nil {
+			if zero++; zero >= maxZeroReads {
+				break
+			}
+			continue
+		}
+		zero = 0
 		buf = append(buf, chunk[:n]...)
 		if len(buf) > 2*tailBuffer {
 			buf = append(buf[:0], buf[len(buf)-tailBuffer:]...)
