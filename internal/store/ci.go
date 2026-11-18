@@ -40,4 +40,7 @@ type CIJobResult struct {
 	Size   int    `json:"size"`
 	Cut    bool   `json:"cut"`
 	Blocks bool   `json:"blocks"`
+	// TextFailed: the log or report read failed, so Result is unreadable
+	// although a status-only read would say otherwise.
+	TextFailed bool `json:"text_failed,omitempty"`
 }

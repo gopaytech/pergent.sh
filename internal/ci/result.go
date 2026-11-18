@@ -26,6 +26,9 @@ type Job struct {
 	Reason      string
 	Log, Report string
 	Cut         bool
+	// TextFailed: a read that asked for text failed, and Result is Unreadable
+	// for that reason. A status-only read never sets it.
+	TextFailed bool
 }
 
 // Snapshot is the chosen jobs on one head. Finished: every pipeline (GitLab)
@@ -91,7 +94,7 @@ func (s Snapshot) Results() []store.CIJobResult {
 	for _, j := range s.Jobs {
 		out = append(out, store.CIJobResult{
 			Name: j.Name, Result: string(j.Result), Reason: j.Reason, Read: j.Read,
-			Size: len(j.Log) + len(j.Report), Cut: j.Cut, Blocks: j.Blocks,
+			Size: len(j.Log) + len(j.Report), Cut: j.Cut, Blocks: j.Blocks, TextFailed: j.TextFailed,
 		})
 	}
 	return out

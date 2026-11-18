@@ -82,9 +82,9 @@ func TestDone(t *testing.T) {
 }
 
 func TestResults(t *testing.T) {
-	s := Snapshot{Jobs: []Job{{Name: "t", Read: "log", Result: Failed, Blocks: true, Log: "abc", Report: "de", Cut: true, Reason: "error"}}}
+	s := Snapshot{Jobs: []Job{{Name: "t", Read: "log", Result: Failed, Blocks: true, Log: "abc", Report: "de", Cut: true, Reason: "error", TextFailed: true}}}
 	r := s.Results()
-	if len(r) != 1 || r[0].Name != "t" || r[0].Result != "failed" || r[0].Size != 5 || !r[0].Cut || !r[0].Blocks || r[0].Read != "log" || r[0].Reason != "error" {
+	if len(r) != 1 || r[0].Name != "t" || r[0].Result != "failed" || r[0].Size != 5 || !r[0].Cut || !r[0].Blocks || r[0].Read != "log" || r[0].Reason != "error" || !r[0].TextFailed {
 		t.Fatalf("got %+v", r)
 	}
 }

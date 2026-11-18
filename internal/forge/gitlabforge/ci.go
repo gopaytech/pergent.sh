@@ -37,6 +37,11 @@ func (f *Forge) countingPipelines(ctx context.Context, t forge.CITarget) ([]gitl
 			continue
 		}
 		parents, err := f.c.CommitParents(ctx, t.ProjectID, p.SHA)
+		if errors.Is(err, gitlab.ErrNotFound) {
+			// An old merged-results commit can be pruned: it can't be shown
+			// to have the head as a parent, so it doesn't count.
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -83,7 +88,10 @@ func (f *Forge) ReadCI(ctx context.Context, t forge.CITarget, jobs []store.CIJob
 			continue
 		}
 		job.Result, job.Ended = ci.FromGitLab(j.Status)
-		if withText && !j.Bridge {
+		if j.Bridge && want.Read == "report" {
+			// A trigger job has no artifacts.
+			job.Result, job.Ended, job.Reason = ci.Unreadable, true, "error"
+		} else if withText && !j.Bridge {
 			if err := f.readText(ctx, t, want, j, &job); err != nil {
 				return ci.Snapshot{}, err
 			}
@@ -93,14 +101,14 @@ func (f *Forge) ReadCI(ctx context.Context, t forge.CITarget, jobs []store.CIJob
 	return snap, nil
 }
 
-// readText fills Log (a failed job) or Report (an ended job that passed or
-// failed). A read that fails makes the job Unreadable; only a ended context
+// readText fills Log (a failed, cancelled or running job) or Report (an ended
+// job that passed or failed). A read that fails makes the job Unreadable; only a ended context
 // is an error.
 func (f *Forge) readText(ctx context.Context, t forge.CITarget, want store.CIJob, j gitlab.CIJob, job *ci.Job) error {
 	var rc io.ReadCloser
 	var err error
 	switch {
-	case want.Read == "log" && job.Result == ci.Failed:
+	case want.Read == "log" && (job.Result == ci.Failed || job.Result == ci.Cancelled || job.Result == ci.Running):
 		rc, err = f.c.JobTrace(ctx, t.ProjectID, j.ID)
 	case want.Read == "report" && want.Report != nil && (job.Result == ci.Passed || job.Result == ci.Failed):
 		rc, err = f.c.JobArtifact(ctx, t.ProjectID, j.ID, want.Report.Path)
@@ -126,7 +134,7 @@ func (f *Forge) readText(ctx context.Context, t forge.CITarget, want store.CIJob
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		job.Result, job.Ended, job.Reason = ci.Unreadable, true, "error"
+		job.Result, job.Ended, job.Reason, job.TextFailed = ci.Unreadable, true, "error", true
 		if errors.Is(err, gitlab.ErrForbidden) {
 			job.Reason = "no permission"
 		}
