@@ -79,7 +79,7 @@ Each job ends as one of:
 - **Strict.** A blocking job counts only when pergent.sh read `passed` for it on the run's head commit. `failed`, `cancelled`, `skipped`, `missing`, `running` and `unreadable` all block. A job that isn't blocking never blocks.
 - **The `pergent` status turns failed,** and approval is held back, and the status description names the job. This holds on a draft, with approval off, and with `failure_status: neutral`.
 - **The outcome is its own.** When CI is the only reason, the dashboard shows **Blocked by CI**. A review with blocking findings stays "blocking", and a failed review stays failed, with the CI line beside it.
-- **The CI line.** The comment shows one italic line after its header, for example `CI: test passed · cycode-scan failed (blocks approval)`. It holds job names and results only, never log or report text. An `unreadable` job adds `no permission` or `error`. A failed review shows the line too.
+- **The CI line.** The comment shows one italic line after its header, for example `CI: test passed · cycode-scan failed (blocks approval)`. The line pergent.sh writes holds job names and results only. An `unreadable` job adds `no permission` or `error`. A failed review shows the line too.
 - **After the review is published,** pergent.sh checks again on CI events for the chosen jobs, and every 10 minutes for 24 hours when a chosen job hadn't passed. If a result changed, it updates the status and the approval, withdraws an approval when a blocking job now fails, and edits the comment only when the CI line or the verdict changed. No new review runs, and the model doesn't see the later result.
 - **A re-run** checks CI again.
 
@@ -92,8 +92,8 @@ Each job ends as one of:
   - The whole file is at most 64 KiB, and every batch of a review gets it. A change with several batches pays for it several times.
   - Each cut is marked in the file.
 - **Cleaning.** Colour codes are removed. Secrets are removed by pergent.sh, and pergent removes them again.
-- **Data, not instructions.** Logs and reports come from running the change's own code, so its author controls them. The model is told to use them to find where to look and what not to repeat, never to report a CI result itself as a finding, and never to let a passed job excuse a problem. The verification run never gets the file, so it can't talk a blocking finding away.
-- **Nothing is stored or shown.** The dashboard shows each job's result, what was read, its size and whether it was cut. No log or report text is stored, logged, shown on the dashboard or put in the comment.
+- **Data, not instructions.** Logs and reports come from running the change's own code, so its author controls them. The model is told to use them to find where to look and what not to repeat, never to report a CI result itself as a finding, and never to let a passed job excuse a problem. The verification run does not get the file. These are instructions in the prompt, so a malicious log can still influence the review.
+- **What is kept.** pergent.sh's own code never puts log or report text in the comment, the logs, the database or the dashboard. The dashboard shows each job's result, what was read, its size and whether it was cut. The text is in the Job's input ConfigMap while the review runs, and is removed with the Job. The model can quote the text in a finding or a summary, and then it appears in the comment like any other model text.
 - **It needs a newer pergent image.** The model sees the results only with a pergent image that reads `--ci-results`. An older image ignores the file and reviews as before, and the gate still applies, because pergent.sh decides it. The release notes name the version.
 
 ## The model provider
@@ -106,9 +106,9 @@ A pipeline that ran only in a fork project is not in the target project's lists,
 
 ## GitHub
 
-- **The App needs `Actions: Read`** to read logs and reports from Actions, and the **Check run** event ([GitHub setup](../setup/github.md)). pergent.sh already has `Checks` write. Every installation must accept the new permission.
-- **Until it does,** logs and reports from Actions are `unreadable` (`no permission`), and a missing event only slows things down to the sweep.
-- **Readiness.** The dashboard warns when an installation lacks the permission or the event.
+- **`Actions: Read` and the `Check run` event** ([GitHub setup](../setup/github.md)). `Actions: Read` is needed only for a repository that chooses CI jobs with `log` or `report` read from GitHub Actions. A `status`-only read uses `Checks`, which pergent.sh already has, and is not affected. The `Check run` event is optional: without it, results are found by the sweep. Installations must accept the permission.
+- **Until an installation accepts,** logs and reports from Actions are `unreadable` (`no permission`).
+- **Readiness.** The dashboard warns, only for repositories with CI jobs, when the installation lacks the permission or the event.
 - **Other apps.** A check run from another app, such as a scanner's own GitHub App, gives its output text as the log. It has no report.
 - **A report from Actions** is read from a workflow artifact, which is read into memory up to 20 MiB. A bigger one is `unreadable`.
 

@@ -19,7 +19,7 @@ In the organization's settings, **Developer settings → GitHub Apps → New Git
   - Pull requests: **Read and write** when this App approves too (the one-App setup) or posts [inline findings](../concepts/inline-findings.md), else **Read-only**. With Read-only, inline findings are off for that instance: findings stay in the comment, and the Integrations page says so.
   - Contents: **Read-only**
   - Checks: **Read and write**
-  - Actions: **Read-only** (optional). It lets pergent.sh read the logs and report artifacts of GitHub Actions jobs for [CI jobs](../concepts/ci-jobs.md). Without it, those jobs read as `unreadable`.
+  - Actions: **Read-only** (optional). It lets pergent.sh read the logs and report artifacts of GitHub Actions jobs for [CI jobs](../concepts/ci-jobs.md). Needed only for a repository that chooses CI jobs with `log` or `report` read from Actions; a `status`-only read uses Checks. Without it, those jobs read as `unreadable`.
   - Issues: **Read and write** (pull request comments are issue comments; this also covers the 👀, 👍 and 👎 reactions on a command comment)
   - Metadata: **Read-only** (always on; this also covers reading a commenter's repository permission)
   - Administration: **Read-only** (optional). It lets pergent.sh read the classic branch protection's conversation-resolution rule for [inline findings](../concepts/inline-findings.md); without it only rulesets are read, and the classic rule is treated as off. It also lets the [readiness scan](../concepts/dashboard.md#readiness-scan) read classic branch protection. Without it, on a branch that has classic protection, 3 rows of the scan can say "Couldn't check" and name this permission; nothing else changes.
