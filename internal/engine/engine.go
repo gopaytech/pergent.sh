@@ -99,6 +99,10 @@ type Engine struct {
 	// checks the published reviews too. Only the engine loop touches it.
 	ciSweeps int
 
+	// ciEvents holds the CI events (CIChanged) the loop has not looked at.
+	ciOnce   sync.Once
+	ciEvents chan ciEvent
+
 	reconcileOnce sync.Once
 	reconcileReq  chan struct{}
 	// soonMu guards soonKeys, the repositories ReconcileSoon asked for that
@@ -360,6 +364,8 @@ func (e *Engine) Run(ctx context.Context) {
 			e.sweepApprovals(ctx)
 		case <-ciSweep.C:
 			e.sweepCI(ctx)
+		case ev := <-e.ciCh():
+			e.checkCIEvent(ctx, ev)
 		case <-fate.C:
 			e.workFates(ctx)
 		case <-reconcile.C:

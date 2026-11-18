@@ -22,15 +22,17 @@ import (
 )
 
 const (
-	maxBodyBytes  = 5 << 20
-	mrHookEvent   = "Merge Request Hook"
-	noteHookEvent = "Note Hook"
-	tokenHeader   = "X-Gitlab-Token"
-	eventHeader   = "X-Gitlab-Event"
-	mrObjectKind  = "merge_request"
-	noteKind      = "note"
-	instancePath  = "instance"
-	outcomeIgnore = "ignored"
+	maxBodyBytes      = 5 << 20
+	mrHookEvent       = "Merge Request Hook"
+	noteHookEvent     = "Note Hook"
+	pipelineHookEvent = "Pipeline Hook"
+	jobHookEvent      = "Job Hook"
+	tokenHeader       = "X-Gitlab-Token"
+	eventHeader       = "X-Gitlab-Event"
+	mrObjectKind      = "merge_request"
+	noteKind          = "note"
+	instancePath      = "instance"
+	outcomeIgnore     = "ignored"
 )
 
 // fatesRequestTimeout bounds recording the end of a change, which the answer
@@ -103,7 +105,32 @@ type Handler struct {
 	// Wake nudges the dispatcher after a new run or command was queued. May
 	// be nil.
 	Wake func()
-	Log  *slog.Logger
+	// CI is told of Pipeline and Job events of repositories that choose CI
+	// jobs. Nil ignores them.
+	CI  CINotifier
+	Log *slog.Logger
+}
+
+// CINotifier is told that CI changed on a head of a project. It must not
+// block.
+type CINotifier interface {
+	CIChanged(instance, project, head string)
+}
+
+// ciEvent holds only the fields of a Pipeline Hook or Job Hook that are read.
+type ciEvent struct {
+	ObjectKind string `json:"object_kind"`
+	// SHA is the Job Hook's commit.
+	SHA       string `json:"sha"`
+	ProjectID int64  `json:"project_id"`
+	Project   struct {
+		ID                int64  `json:"id"`
+		PathWithNamespace string `json:"path_with_namespace"`
+	} `json:"project"`
+	ObjectAttributes struct {
+		// SHA is the Pipeline Hook's commit.
+		SHA string `json:"sha"`
+	} `json:"object_attributes"`
 }
 
 // noteEvent holds only the fields of a Note Hook that are read.
@@ -205,8 +232,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	event := r.Header.Get(eventHeader)
 	log = log.With("event", event)
-	if event != mrHookEvent && event != noteHookEvent {
-		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "other_event")
+	if event != mrHookEvent && event != noteHookEvent && event != pipelineHookEvent && event != jobHookEvent {
+		// Debug: every project's job events are on, so most are of no use.
+		log.Debug("webhook handled", "outcome", outcomeIgnore, "reason", "other_event")
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -218,6 +246,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer release()
 	if event == noteHookEvent {
 		h.note(w, r, log, name, body)
+		return
+	}
+	if event == pipelineHookEvent || event == jobHookEvent {
+		h.ci(w, r, log, name, event, body)
 		return
 	}
 	var ev mergeRequestEvent
@@ -360,6 +392,62 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		log.Info("webhook handled", "outcome", "enqueued", "run", id, "created", created)
 	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// ci handles a Pipeline Hook or Job Hook: a repository that chooses CI jobs
+// has its waiting and published runs of the head checked again. Nothing here
+// calls GitLab, and the payload's text is never kept.
+func (h *Handler) ci(w http.ResponseWriter, r *http.Request, log *slog.Logger, instance, event string, body []byte) {
+	ignore := func(reason string) {
+		log.Debug("webhook handled", "outcome", outcomeIgnore, "reason", reason)
+		w.WriteHeader(http.StatusOK)
+	}
+	failed := func(err error) {
+		log.Error("webhook failed", "outcome", "lookup_error", "err", err)
+		http.Error(w, "storage error", http.StatusInternalServerError)
+	}
+	if h.CI == nil {
+		ignore("ci_off")
+		return
+	}
+	var ev ciEvent
+	if err := json.Unmarshal(body, &ev); err != nil {
+		unusable(w, log, "malformed_json")
+		return
+	}
+	head, path, id := ev.SHA, ev.Project.PathWithNamespace, ev.Project.ID
+	if event == pipelineHookEvent {
+		head = ev.ObjectAttributes.SHA
+	}
+	if id == 0 {
+		id = ev.ProjectID
+	}
+	if path == "" && id != 0 && h.Projects != nil {
+		p, found, err := h.Projects.Project(r.Context(), instance, id)
+		if err != nil {
+			failed(err)
+			return
+		}
+		if found {
+			path = p.Path
+		}
+	}
+	if path == "" || !validSHA(head) {
+		ignore("no_project_or_head")
+		return
+	}
+	eff, ok, err := lookup(r.Context(), repositories(h.Repos, h.Config, h.registry()), config.PlatformGitLab, instance, path)
+	if err != nil {
+		failed(err)
+		return
+	}
+	if !ok || len(eff.CIJobs.Jobs) == 0 {
+		ignore("no_ci_jobs")
+		return
+	}
+	h.CI.CIChanged(instance, eff.Project, head)
+	log.Debug("webhook handled", "outcome", "ci_changed", "project", eff.Project)
 	w.WriteHeader(http.StatusOK)
 }
 

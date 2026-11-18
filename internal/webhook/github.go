@@ -27,6 +27,7 @@ const (
 	// githubReviewComment is delivered for a comment on a line of the diff,
 	// the replies in a finding's thread among them.
 	githubReviewComment = "pull_request_review_comment"
+	githubCheckRun      = "check_run"
 )
 
 // DeliveryRetention is how long a pull_request delivery is remembered. It is
@@ -72,7 +73,25 @@ type GitHubHandler struct {
 	// Wake nudges the dispatcher after a new run or command was queued. May
 	// be nil.
 	Wake func()
-	Log  *slog.Logger
+	// CI is told of check_run events of repositories that choose CI jobs.
+	// Nil ignores them.
+	CI  CINotifier
+	Log *slog.Logger
+}
+
+// checkRunEvent holds only the fields of a check_run event that are read. A
+// fork's pull request is not in check_run.pull_requests, so the head sha
+// and the repository name are what count.
+type checkRunEvent struct {
+	Repository struct {
+		FullName string `json:"full_name"`
+	} `json:"repository"`
+	CheckRun struct {
+		HeadSHA string `json:"head_sha"`
+		App     struct {
+			ID int64 `json:"id"`
+		} `json:"app"`
+	} `json:"check_run"`
 }
 
 // issueCommentEvent holds only the fields of an issue_comment event that are
@@ -204,7 +223,7 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	event := r.Header.Get(githubEventHeader)
 	log = log.With("event", event)
-	if event != githubPullRequest && event != githubIssueComment && event != githubReviewComment {
+	if event != githubPullRequest && event != githubIssueComment && event != githubReviewComment && event != githubCheckRun {
 		// Includes "ping", sent when the webhook is created.
 		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "other_event")
 		w.WriteHeader(http.StatusOK)
@@ -217,6 +236,10 @@ func (h *GitHubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if event == githubReviewComment {
 		h.reviewComment(w, r, log, name, body)
+		return
+	}
+	if event == githubCheckRun {
+		h.checkRun(w, r, log, name, body)
 		return
 	}
 	var ev pullRequestEvent
@@ -404,6 +427,60 @@ func (h *GitHubHandler) pullRequest(w http.ResponseWriter, r *http.Request, log 
 		log.Info("webhook handled", "outcome", "enqueued", "run", id, "created", created)
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// checkRun handles a check_run event: a repository that chooses CI jobs has
+// its waiting and published runs of the head checked again. The Apps' own
+// checks are ignored: pergent.sh's check changing must not start a loop.
+// Nothing here calls GitHub.
+func (h *GitHubHandler) checkRun(w http.ResponseWriter, r *http.Request, log *slog.Logger, instance string, body []byte) {
+	ignore := func(reason string) {
+		log.Debug("webhook handled", "outcome", outcomeIgnore, "reason", reason)
+		w.WriteHeader(http.StatusOK)
+	}
+	if h.CI == nil {
+		ignore("ci_off")
+		return
+	}
+	var ev checkRunEvent
+	if err := json.Unmarshal(body, &ev); err != nil {
+		unusable(w, log, "malformed_json")
+		return
+	}
+	if id := ev.CheckRun.App.ID; id != 0 && h.ownApp(instance, id) {
+		ignore("own_app")
+		return
+	}
+	if ev.Repository.FullName == "" || !validSHA(ev.CheckRun.HeadSHA) {
+		ignore("no_repository_or_head")
+		return
+	}
+	eff, ok, err := lookup(r.Context(), repositories(h.Repos, h.Config, h.registry()), config.PlatformGitHub, instance, ev.Repository.FullName)
+	if err != nil {
+		log.Error("webhook failed", "outcome", "lookup_error", "err", err)
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
+	if !ok || len(eff.CIJobs.Jobs) == 0 {
+		ignore("no_ci_jobs")
+		return
+	}
+	h.CI.CIChanged(instance, eff.Project, ev.CheckRun.HeadSHA)
+	log.Debug("webhook handled", "outcome", "ci_changed", "repository", eff.Project)
+	w.WriteHeader(http.StatusOK)
+}
+
+// ownApp reports whether id is the review App or the approve App of the
+// configured instance.
+func (h *GitHubHandler) ownApp(instance string, id int64) bool {
+	if h.Config == nil {
+		return false
+	}
+	inst, ok := h.Config.GitHubInstance(instance)
+	if !ok {
+		return false
+	}
+	return id == inst.ReviewApp.AppID || (inst.ApproveApp != nil && id == inst.ApproveApp.AppID)
 }
 
 // comment handles an issue_comment event: a new comment by a person on a pull

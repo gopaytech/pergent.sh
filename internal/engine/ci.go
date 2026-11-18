@@ -434,3 +434,46 @@ func mergeCI(stored, read []store.CIJobResult) ([]store.CIJobResult, bool) {
 	}
 	return out, changed
 }
+
+// ciEventQueue is how many CI events wait for the loop; a burst past it is
+// dropped, and the sweep finds what was lost.
+const ciEventQueue = 256
+
+// ciEvent is a CI change on a head of a project, as a webhook reported it.
+type ciEvent struct{ instance, project, head string }
+
+// ciCh is the CI event channel, created on first use.
+func (e *Engine) ciCh() chan ciEvent {
+	e.ciOnce.Do(func() { e.ciEvents = make(chan ciEvent, ciEventQueue) })
+	return e.ciEvents
+}
+
+// CIChanged tells the engine that a CI job or pipeline of head changed on
+// project of instance. It never blocks: checking a run is the loop's work
+// (checkCIRun is safe on that goroutine only), so the event is queued, and
+// one that finds the queue full is dropped and logged. The sweep covers it.
+func (e *Engine) CIChanged(instance, project, head string) {
+	select {
+	case e.ciCh() <- ciEvent{instance: instance, project: project, head: head}:
+	default:
+		e.log().Warn("CI event dropped: the queue is full; the next sweep checks the run",
+			"instance", instance, "project", project)
+	}
+}
+
+// checkCIEvent checks again the runs of ev's head (store.CIRunsForHead), with
+// the sweep's budget, so a burst of events can't hold the loop.
+func (e *Engine) checkCIEvent(ctx context.Context, ev ciEvent) {
+	if ctx.Err() != nil {
+		return
+	}
+	runs, err := e.Store.CIRunsForHead(ctx, ev.instance, ev.project, ev.head)
+	if err != nil {
+		if ctx.Err() == nil {
+			e.log().Error("CI event: couldn't list the runs of the head; the next sweep tries again",
+				"instance", ev.instance, "project", ev.project, "error", e.redact(err.Error()))
+		}
+		return
+	}
+	e.sweepCIRuns(ctx, runs, e.checkCIRun)
+}

@@ -37,6 +37,9 @@ type Deps struct {
 	Bots webhook.Bots
 	// Wake nudges the engine's loops. May be nil.
 	Wake func()
+	// CI is told of CI events of repositories that choose jobs: the engine.
+	// May be nil.
+	CI webhook.CINotifier
 	// Now is the clock of the result callback; nil means time.Now.
 	Now func() time.Time
 	// Dashboard serves /auth/ and /api/. Nil turns the dashboard off.
@@ -59,7 +62,8 @@ type Deps struct {
 }
 
 // Routes serves:
-//   - POST /webhooks/gitlab/{instance}: GitLab merge request and note webhooks;
+//   - POST /webhooks/gitlab/{instance}: GitLab merge request, note, pipeline and
+//     job webhooks;
 //   - POST /webhooks/github/{instance}: GitHub pull_request, issue_comment and
 //     pull_request_review_comment webhooks;
 //   - POST /runs/{id}/result: a review Job's result;
@@ -86,10 +90,10 @@ func Routes(d Deps) *http.ServeMux {
 		commands, projects, deliveries = d.Store, d.Store, d.Store
 	}
 	mux.Handle("POST /webhooks/gitlab/{instance}", &webhook.Handler{
-		Config: d.Config, Instances: d.Instances, Secrets: d.WebhookSecrets, Queue: d.Store, Repos: repos, Projects: projects, Commands: commands, Bots: d.Bots, Wake: d.Wake, Log: d.Log,
+		Config: d.Config, Instances: d.Instances, Secrets: d.WebhookSecrets, Queue: d.Store, Repos: repos, Projects: projects, Commands: commands, Bots: d.Bots, Wake: d.Wake, CI: d.CI, Log: d.Log,
 	})
 	mux.Handle("POST /webhooks/github/{instance}", &webhook.GitHubHandler{
-		Config: d.Config, Instances: d.Instances, Secrets: d.GitHubWebhookSecrets, Queue: d.Store, Repos: repos, Projects: projects, Deliveries: deliveries, Commands: commands, Bots: d.Bots, Wake: d.Wake, Log: d.Log,
+		Config: d.Config, Instances: d.Instances, Secrets: d.GitHubWebhookSecrets, Queue: d.Store, Repos: repos, Projects: projects, Deliveries: deliveries, Commands: commands, Bots: d.Bots, Wake: d.Wake, CI: d.CI, Log: d.Log,
 	})
 	mux.Handle("POST /runs/{id}/result", &callback.Handler{
 		Results: d.Store, Now: d.Now, Wake: d.Wake, Log: d.Log,

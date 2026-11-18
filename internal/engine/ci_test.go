@@ -780,3 +780,28 @@ func TestCISweepWorth(t *testing.T) {
 		}
 	}
 }
+
+// CIChanged never blocks: past the queue's room the events are dropped and
+// logged.
+func TestCIChangedNeverBlocks(t *testing.T) {
+	var logs bytes.Buffer
+	e := &Engine{Log: slog.New(slog.NewTextHandler(&logs, nil))}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 300; i++ {
+			e.CIChanged("main", "Acme/Widgets", "abc")
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("CIChanged blocked with no reader")
+	}
+	if n := strings.Count(logs.String(), "CI event dropped"); n != 300-256 {
+		t.Fatalf("dropped logs = %d, want %d", n, 300-256)
+	}
+	if len(e.ciCh()) != 256 {
+		t.Fatalf("queued = %d, want 256", len(e.ciCh()))
+	}
+}
