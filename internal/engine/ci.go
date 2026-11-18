@@ -419,12 +419,12 @@ func (e *Engine) redecideCI(ctx context.Context, st ciStore, reader forge.CIRead
 }
 
 // ciSweepWorth says whether the sweep checks a published review again: some
-// job didn't pass and its text read didn't fail. A job whose text read failed
-// is kept as it is (mergeCI), so a review with no other job that didn't pass
+// job didn't pass and can still change (mergeCI). A job whose report read
+// failed is kept as it is, so a review with no other job that didn't pass
 // can only change on a job that passed, which a CI event reports.
 func ciSweepWorth(stored []store.CIJobResult) bool {
 	for _, j := range stored {
-		if j.Result != string(ci.Passed) && !j.TextFailed {
+		if j.Result != string(ci.Passed) && (!j.TextFailed || j.Read == "log") {
 			return true
 		}
 	}
@@ -436,7 +436,9 @@ func ciSweepWorth(stored []store.CIJobResult) bool {
 // the read's result and reason, and keeps what the review was given (what was
 // read, its size and cut) and whether it blocks. An entry whose text read
 // failed (TextFailed) is kept as it is: a status-only read can't say the text
-// could be read now. A stored job the read lacks is kept as it is.
+// could be read now. The one exception is a log job read as passed, which
+// turns passed: a passed job's log is never read, so the review lacked
+// nothing. A stored job the read lacks is kept as it is.
 func mergeCI(stored, read []store.CIJobResult) ([]store.CIJobResult, bool) {
 	byName := make(map[string]store.CIJobResult, len(read))
 	for _, r := range read {
@@ -447,7 +449,14 @@ func mergeCI(stored, read []store.CIJobResult) ([]store.CIJobResult, bool) {
 	for i, s := range stored {
 		out[i] = s
 		r, ok := byName[s.Name]
-		if !ok || s.TextFailed {
+		if !ok {
+			continue
+		}
+		if s.TextFailed {
+			if s.Read == "log" && r.Result == string(ci.Passed) {
+				out[i].Result, out[i].Reason, out[i].TextFailed = r.Result, r.Reason, false
+				changed = true
+			}
 			continue
 		}
 		if r.Result != s.Result || r.Reason != s.Reason {

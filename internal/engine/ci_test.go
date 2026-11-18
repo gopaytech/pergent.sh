@@ -669,11 +669,23 @@ func TestCheckCIRedecidesPublished(t *testing.T) {
 
 		// When another job changes, the kept entry is written as it was.
 		st = &memCI{republish: true}
-		f = &ciForge{snap: snapshot(true, ci.Job{Result: ci.Passed, Ended: true}, ci.Job{Result: ci.Passed, Ended: true})}
+		f = &ciForge{snap: snapshot(true, ci.Job{Result: ci.Running}, ci.Job{Result: ci.Passed, Ended: true})}
 		if err := e.checkCI(context.Background(), st, f, Platform{}, publishedRun(textFailed, scanRunning), ciJobsSet.Jobs); err != nil {
 			t.Fatal(err)
 		}
 		want := []store.CIJobResult{textFailed, {Name: "cycode-scan", Result: "passed", Read: "status"}}
+		if !reflect.DeepEqual(st.stored, want) {
+			t.Errorf("stored %+v, want %+v", st.stored, want)
+		}
+
+		// A log job read as passed turns passed: a passed job's log is never
+		// read, so nothing the review lacked is lost.
+		st = &memCI{republish: true}
+		f = &ciForge{snap: snapshot(true, ci.Job{Result: ci.Passed, Ended: true}, ci.Job{Result: ci.Running})}
+		if err := e.checkCI(context.Background(), st, f, Platform{}, publishedRun(textFailed, scanRunning), ciJobsSet.Jobs); err != nil {
+			t.Fatal(err)
+		}
+		want = []store.CIJobResult{{Name: "test", Result: "passed", Read: "log", Blocks: true}, scanRunning}
 		if !reflect.DeepEqual(st.stored, want) {
 			t.Errorf("stored %+v, want %+v", st.stored, want)
 		}
@@ -824,9 +836,11 @@ func TestCISweepLogsFailuresAndStopsOnShutdown(t *testing.T) {
 }
 
 // The sweep checks a published review again only when a job that didn't pass
-// may still change: one whose text read failed is kept as it is.
+// may still change: one whose report read failed is kept as it is, and one
+// whose log read failed can still turn passed.
 func TestCISweepWorth(t *testing.T) {
-	textFailed := store.CIJobResult{Name: "test", Result: "unreadable", Reason: "error", Read: "log", Blocks: true, TextFailed: true}
+	textFailed := store.CIJobResult{Name: "scan", Result: "unreadable", Reason: "error", Read: "report", Blocks: true, TextFailed: true}
+	logFailed := store.CIJobResult{Name: "test", Result: "unreadable", Reason: "error", Read: "log", Blocks: true, TextFailed: true}
 	passed := store.CIJobResult{Name: "cycode-scan", Result: "passed", Read: "status"}
 	failed := store.CIJobResult{Name: "lint", Result: "failed", Read: "status"}
 	for _, tc := range []struct {
@@ -834,13 +848,38 @@ func TestCISweepWorth(t *testing.T) {
 		jobs []store.CIJobResult
 		want bool
 	}{
-		{"only failed text reads left", []store.CIJobResult{textFailed, passed}, false},
+		{"only failed report reads left", []store.CIJobResult{textFailed, passed}, false},
+		{"a failed log read", []store.CIJobResult{logFailed, passed}, true},
 		{"a failed job too", []store.CIJobResult{textFailed, passed, failed}, true},
 		{"a failed job", []store.CIJobResult{failed}, true},
 		{"all passed", []store.CIJobResult{passed}, false},
 	} {
 		if got := ciSweepWorth(tc.jobs); got != tc.want {
 			t.Errorf("%s: ciSweepWorth = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A failed text read is sticky, except a log job that a status-only read
+// finds passed.
+func TestMergeCITextFailed(t *testing.T) {
+	logFailed := store.CIJobResult{Name: "test", Result: "unreadable", Reason: "error", Read: "log", Blocks: true, Size: 0, TextFailed: true}
+	reportFailed := store.CIJobResult{Name: "scan", Result: "unreadable", Reason: "error", Read: "report", Blocks: true, TextFailed: true}
+	for _, tc := range []struct {
+		name   string
+		stored store.CIJobResult
+		read   string
+		want   store.CIJobResult
+		change bool
+	}{
+		{"log, passed", logFailed, "passed", store.CIJobResult{Name: "test", Result: "passed", Read: "log", Blocks: true}, true},
+		{"log, failed", logFailed, "failed", logFailed, false},
+		{"log, running", logFailed, "running", logFailed, false},
+		{"report, passed", reportFailed, "passed", reportFailed, false},
+	} {
+		got, changed := mergeCI([]store.CIJobResult{tc.stored}, []store.CIJobResult{{Name: tc.stored.Name, Result: tc.read, Read: tc.stored.Read}})
+		if changed != tc.change || !reflect.DeepEqual(got, []store.CIJobResult{tc.want}) {
+			t.Errorf("%s: mergeCI = %+v, %v; want %+v, %v", tc.name, got, changed, tc.want, tc.change)
 		}
 	}
 }
