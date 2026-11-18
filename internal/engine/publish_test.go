@@ -27,6 +27,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/policy"
 	"github.com/gopaytech/pergent.sh/internal/result"
+	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 	"github.com/gopaytech/pergent.sh/internal/syncmap"
 	"github.com/gopaytech/pergent.sh/internal/threads"
@@ -1482,6 +1483,55 @@ func TestPublishGiveUpNeutralCIBlockedIsFailed(t *testing.T) {
 	}
 }
 
+// A run that failed before its CI was read has no snapshot; a give-up still
+// holds its repository's blocking job to the gate, so neutral is not used.
+func TestPublishGiveUpNeutralFailedWithoutCIIsFailed(t *testing.T) {
+	env := newTestEnv(t)
+	env.Engine.Config.Repositories[0].FailureStatus = config.FailureStatusNeutral
+	env.Engine.Config.Repositories[0].CIJobs = &store.CIJobs{WaitSeconds: 1800, Jobs: []store.CIJob{
+		{Name: "test", Read: "status", BlocksApproval: true},
+	}}
+	head := sha('a')
+	id := env.Enqueue(1, head)
+	if ok, err := env.Store.ReportFailure(env.ctx, id, store.Failure{Reason: "the review Job couldn't be created"}, env.Now()); err != nil || !ok {
+		t.Fatalf("ReportFailure = %v, %v", ok, err)
+	}
+	servePublish(env, 1, head)
+	env.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusUnprocessableEntity, `{"message":"Note is too long"}`)
+
+	publishUntilGivenUp(t, env, id)
+
+	wantStatus(t, env, head, gitlab.StatusFailed, "pergent couldn't post its review")
+	wantNoApproval(t, env, 1)
+	if r := env.Run(id); r.DecisionStatus != "failed" {
+		t.Errorf("recorded status = %q, want failed", r.DecisionStatus)
+	}
+}
+
+// A run that failed at dispatch, before its CI was read, is published failed
+// on a neutral repository with a blocking job: the gate isn't skipped.
+func TestPublishNeutralFailedWithoutCIIsFailed(t *testing.T) {
+	env := newTestEnv(t)
+	env.Engine.Config.Repositories[0].FailureStatus = config.FailureStatusNeutral
+	env.Engine.Config.Repositories[0].CIJobs = &store.CIJobs{WaitSeconds: 1800, Jobs: []store.CIJob{
+		{Name: "test", Read: "status", BlocksApproval: true},
+	}}
+	head := sha('a')
+	id := env.Enqueue(1, head)
+	if ok, err := env.Store.ReportFailure(env.ctx, id, store.Failure{Reason: "the review Job couldn't be created"}, env.Now()); err != nil || !ok {
+		t.Fatalf("ReportFailure = %v, %v", ok, err)
+	}
+	servePublish(env, 1, head)
+
+	publish(t, env)
+
+	if got := onlyStatus(t, env, head)["state"]; got != string(gitlab.StatusFailed) {
+		t.Errorf("status = %v, want failed", got)
+	}
+	wantPublished(t, env, id)
+	wantNoApproval(t, env, 1)
+}
+
 // A repository removed before the give-up can't say it wants neutral: the
 // final status fails closed.
 func TestPublishGiveUpRepositoryGoneIsFailed(t *testing.T) {
@@ -2182,7 +2232,7 @@ func TestOutcomeCarriesTheRunsQuiet(t *testing.T) {
 	head := sha('a')
 	res := resultFor(t, head, reviewed("no_blocking_issues", "a.go"))
 	for _, quiet := range []bool{true, false} {
-		o := e.outcome(store.Run{BaseSHA: sha('b'), HeadSHA: head, Result: res, Quiet: quiet}, log)
+		o := e.outcome(store.Run{BaseSHA: sha('b'), HeadSHA: head, Result: res, Quiet: quiet}, nil, log)
 		if o.Result == nil || o.FailureReason != "" || o.Quiet != quiet {
 			t.Errorf("outcome of a run with Quiet %v = %+v, want its result and Quiet %v", quiet, o, quiet)
 		}
@@ -2348,12 +2398,12 @@ func TestOutcomeCarriesTheRunsLayout(t *testing.T) {
 	head := sha('a')
 	res := resultFor(t, head, reviewed("no_blocking_issues", "a.go"))
 	for _, layout := range [][]string{{"findings:collapsed"}, {"checks:open", "findings:open"}, nil} {
-		o := e.outcome(store.Run{BaseSHA: sha('b'), HeadSHA: head, Result: res, CommentLayout: layout}, log)
+		o := e.outcome(store.Run{BaseSHA: sha('b'), HeadSHA: head, Result: res, CommentLayout: layout}, nil, log)
 		if o.Result == nil || o.FailureReason != "" || !slices.Equal(o.Layout, layout) {
 			t.Errorf("outcome of a run with layout %v = %+v, want its result and that layout", layout, o)
 		}
 	}
-	if o := e.outcome(store.Run{FailureReason: "the Job died", CommentLayout: []string{"findings:open"}}, log); o.Result != nil || o.FailureReason != "the Job died" {
+	if o := e.outcome(store.Run{FailureReason: "the Job died", CommentLayout: []string{"findings:open"}}, nil, log); o.Result != nil || o.FailureReason != "the Job died" {
 		t.Errorf("outcome of a failed run = %+v, want its reason", o)
 	}
 }
@@ -2587,12 +2637,62 @@ func TestOutcomeCarriesRunCI(t *testing.T) {
 		"bad result":     {HeadSHA: head, BaseSHA: sha('b'), Result: []byte(`{`), CIJobs: jobs},
 		"other commit":   {HeadSHA: sha('c'), BaseSHA: sha('b'), Result: good.Result, CIJobs: jobs},
 	} {
-		if o := e.outcome(run, log); !slices.Equal(o.CI, jobs) {
+		if o := e.outcome(run, ciJobsSet.Jobs, log); !slices.Equal(o.CI, jobs) {
 			t.Errorf("%s: Outcome.CI = %+v, want %+v", name, o.CI, jobs)
 		}
 	}
-	if o := e.outcome(store.Run{FailureReason: "x"}, log); len(o.CI) != 0 {
+	if o := e.outcome(store.Run{FailureReason: "x"}, nil, log); len(o.CI) != 0 {
 		t.Errorf("a run with no jobs got CI %+v", o.CI)
+	}
+}
+
+// A run that failed before its CI was read (at dispatch, or a retry that gave
+// up) has no snapshot. When the repository chooses CI jobs, every chosen job
+// is decided unreadable: a failed review on a neutral repository would
+// otherwise skip the gate and be success on GitLab.
+func TestOutcomeFailedRunWithoutCISnapshot(t *testing.T) {
+	e := &Engine{}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	head := sha('a')
+	want := unreadableCI(head, ciJobsSet.Jobs).Results()
+	for name, run := range map[string]store.Run{
+		"failure reason": {HeadSHA: head, FailureReason: "boom"},
+		"no result":      {HeadSHA: head},
+		"bad result":     {HeadSHA: head, BaseSHA: sha('b'), Result: []byte(`{`)},
+	} {
+		o := e.outcome(run, ciJobsSet.Jobs, log)
+		if !slices.Equal(o.CI, want) {
+			t.Errorf("%s: Outcome.CI = %+v, want %+v", name, o.CI, want)
+		}
+		if d := policy.Decide(o, config.FailureStatusNeutral); d.Status != policy.StatusFailed || d.Approve {
+			t.Errorf("%s: decided %s, approve %v; want failed, no approval", name, d.Status, d.Approve)
+		}
+	}
+	// A review that finished without a snapshot (CI chosen after it was
+	// dispatched) and a repository with no CI jobs are decided as before.
+	good := store.Run{HeadSHA: head, BaseSHA: sha('b'), Result: resultFor(t, head, reviewed("no_blocking_issues", "a.go"))}
+	if o := e.outcome(good, ciJobsSet.Jobs, log); len(o.CI) != 0 {
+		t.Errorf("a finished review got CI %+v", o.CI)
+	}
+	if o := e.outcome(store.Run{HeadSHA: head, FailureReason: "boom"}, nil, log); len(o.CI) != 0 {
+		t.Errorf("a repository with no CI jobs got CI %+v", o.CI)
+	}
+}
+
+// chosenCI is the repository's current chosen jobs for run: none for an API
+// review, a repository not found or one with no CI jobs.
+func TestChosenCI(t *testing.T) {
+	if got := chosenCI(store.Run{}, ciRepo(), true); !slices.Equal(got, ciJobsSet.Jobs) {
+		t.Errorf("chosen = %+v", got)
+	}
+	if got := chosenCI(store.Run{}, ciRepo(), false); got != nil {
+		t.Errorf("not found: chosen = %+v", got)
+	}
+	if got := chosenCI(store.Run{Kind: store.KindAPI}, ciRepo(), true); got != nil {
+		t.Errorf("API review: chosen = %+v", got)
+	}
+	if got := chosenCI(store.Run{}, settings.Effective{}, true); got != nil {
+		t.Errorf("no CI jobs: chosen = %+v", got)
 	}
 }
 
