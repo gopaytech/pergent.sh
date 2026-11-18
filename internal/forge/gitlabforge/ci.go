@@ -36,7 +36,7 @@ func (f *Forge) countingPipelines(ctx context.Context, t forge.CITarget) ([]gitl
 		if p.Ref != merge || seen[p.ID] {
 			continue
 		}
-		parents, err := f.c.CommitParents(ctx, t.ProjectID, p.SHA)
+		parents, err := f.commitParents(ctx, t.ProjectID, p.SHA)
 		if errors.Is(err, gitlab.ErrNotFound) {
 			// An old merged-results commit can be pruned: it can't be shown
 			// to have the head as a parent, so it doesn't count.
@@ -54,6 +54,49 @@ func (f *Forge) countingPipelines(ctx context.Context, t forge.CITarget) ([]gitl
 		}
 	}
 	return list, nil
+}
+
+// parentsMemoSize bounds the commits whose parents are remembered.
+const parentsMemoSize = 1024
+
+type parentsKey struct {
+	project int64
+	sha     string
+}
+
+// commitParents is CommitParents, remembered: a commit's parents never
+// change, and every read of a head asks again for each merged-results
+// pipeline's commit. A failed lookup is not remembered.
+func (f *Forge) commitParents(ctx context.Context, project int64, sha string) ([]string, error) {
+	f.parentsMu.Lock()
+	ps, ok := f.parents[parentsKey{project, sha}]
+	f.parentsMu.Unlock()
+	if ok {
+		return ps, nil
+	}
+	ps, err := f.c.CommitParents(ctx, project, sha)
+	if err != nil {
+		return nil, err
+	}
+	f.rememberParents(project, sha, ps)
+	return ps, nil
+}
+
+// rememberParents adds one commit to the memo; a full memo first drops one
+// entry it holds.
+func (f *Forge) rememberParents(project int64, sha string, ps []string) {
+	f.parentsMu.Lock()
+	defer f.parentsMu.Unlock()
+	if f.parents == nil {
+		f.parents = map[parentsKey][]string{}
+	}
+	if len(f.parents) >= parentsMemoSize {
+		for k := range f.parents {
+			delete(f.parents, k)
+			break
+		}
+	}
+	f.parents[parentsKey{project, sha}] = ps
 }
 
 // ReadCI reads the chosen jobs on the head. A job nobody ran is Missing. Per

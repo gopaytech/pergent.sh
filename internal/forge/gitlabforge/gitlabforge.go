@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/forge"
@@ -22,6 +23,10 @@ type Forge struct {
 	c *gitlab.Client
 	// user is the review bot: FindComment only finds its notes.
 	user gitlab.User
+
+	// parents memoizes commits' parents (commitParents), which never change.
+	parentsMu sync.Mutex
+	parents   map[parentsKey][]string
 }
 
 // NewForge returns the review bot's Forge; user is who c's token belongs to.

@@ -2,6 +2,7 @@ package gitlabforge
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -308,5 +309,55 @@ func TestReadCIBridgeUsesDownstream(t *testing.T) {
 		if j := snap.Jobs[0]; j.Result != tc.want || j.Ended != tc.ended || snap.Finished != tc.ended {
 			t.Fatalf("%s/%s: snap=%+v", tc.bridge, tc.downstream, snap)
 		}
+	}
+}
+
+func (f *ciFake) count(path string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, p := range f.paths {
+		if p == path {
+			n++
+		}
+	}
+	return n
+}
+
+// A commit's parents never change: each merged-results commit is asked for
+// once, however often the head is read.
+func TestReadCICommitParentsMemoized(t *testing.T) {
+	f, fk := newCI(t, map[string][2]any{
+		"/projects/7/pipelines":                  ok(`[]`),
+		"/projects/7/merge_requests/3/pipelines": ok(`[{"id":10,"sha":"m1","ref":"refs/merge-requests/3/merge","status":"success"}]`),
+		"/projects/7/repository/commits/m1":      ok(`{"parent_ids":["base","head1"]}`),
+		"/projects/7/pipelines/10/jobs":          ok(`[{"id":1,"name":"test","status":"success"}]`),
+		"/projects/7/pipelines/10/bridges":       ok(`[]`),
+	})
+	for i := 0; i < 3; i++ {
+		snap, err := f.ReadCI(context.Background(), target, []store.CIJob{statusJob("test")}, false)
+		if err != nil || snap.Jobs[0].Result != ci.Passed {
+			t.Fatalf("read %d: snap=%+v err=%v", i, snap, err)
+		}
+	}
+	if n := fk.count("/projects/7/repository/commits/m1"); n != 1 {
+		t.Fatalf("parents asked %d times, want 1", n)
+	}
+	// Another project's commit of the same sha is its own entry.
+	other := target
+	other.ProjectID = 8
+	if _, err := f.commitParents(context.Background(), other.ProjectID, "m1"); err == nil {
+		t.Fatal("project 8's commit came from project 7's memo")
+	}
+}
+
+// The memo is bounded.
+func TestCommitParentsMemoBounded(t *testing.T) {
+	f, _ := newCI(t, nil)
+	for i := 0; i < parentsMemoSize+50; i++ {
+		f.rememberParents(7, fmt.Sprintf("sha%d", i), []string{"p"})
+	}
+	if n := len(f.parents); n > parentsMemoSize {
+		t.Fatalf("memo holds %d entries, want at most %d", n, parentsMemoSize)
 	}
 }
