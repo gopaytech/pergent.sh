@@ -893,8 +893,8 @@ func (s *Store) ReviewActiveForStart(ctx context.Context, mr MRKey, headSHA, tar
 // author's merge request. A waiting run of that head and target becomes a
 // queued run with TriggerStart (started is true, id is that run's), and so
 // does a push's run of it not dispatched yet, queued or claimed (being
-// checked): the dispatcher's hold then leaves it alone. With
-// none, a live (queued, running or reported) run of that head and target is
+// checked): the dispatcher's hold then leaves it alone, and so does its CI
+// hold (a start skips the CI wait, and the quota check). With none, a live (queued, running or reported) run of that head and target is
 // left as it is and returned, started false. Otherwise a new queued TriggerStart run is
 // created, superseding the live runs of other heads and targets and an older
 // finished run of this one, as EnqueueRerun does. The caller checks the
@@ -921,7 +921,7 @@ func (s *Store) StartRun(ctx context.Context, mr MRKey, projectPath, headSHA, ta
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return "", false, err
 	}
-	err = tx.QueryRow(ctx, `UPDATE runs SET trigger = 'start', quota_checked = true
+	err = tx.QueryRow(ctx, `UPDATE runs SET trigger = 'start', quota_checked = true, ci_checked = true
 		WHERE instance = $1 AND project_id = $2 AND mr_iid = $3 AND head_sha = $4 AND target_branch = $5
 		  AND `+undispatchedPushRunSQL+`
 		RETURNING id::text`,

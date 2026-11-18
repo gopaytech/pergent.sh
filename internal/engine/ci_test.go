@@ -46,6 +46,8 @@ type memCI struct {
 	republErr error
 	stored    []store.CIJobResult
 	setCalled bool
+
+	republishedHead, republishedTarget string
 }
 
 var _ ciStore = (*memCI)(nil)
@@ -79,8 +81,9 @@ func (m *memCI) SetRunCI(_ context.Context, _ string, jobs []store.CIJobResult) 
 	return m.setErr
 }
 
-func (m *memCI) RepublishNewest(context.Context, store.MRKey) (bool, error) {
+func (m *memCI) Republish(_ context.Context, _ store.MRKey, head, target string) (bool, error) {
 	m.note("republish")
+	m.republishedHead, m.republishedTarget = head, target
 	return m.republish, m.republErr
 }
 
@@ -231,6 +234,46 @@ func TestGateCI(t *testing.T) {
 		d, _ := ciDispatcher(ciRun(), st)
 		if held, err := d.gateCI(context.Background(), Platform{Forge: f}, ciRepo()); !held || err != nil {
 			t.Fatalf("gateCI = %v, %v; want held", held, err)
+		}
+	})
+
+	allMissing := snapshot(true, ci.Job{Result: ci.Missing}, ci.Job{Result: ci.Missing})
+
+	t.Run("no pipeline yet, within the grace", func(t *testing.T) {
+		// GitLab creates the pipeline after the merge request's hook: a head
+		// with none of the jobs yet waits a little for it.
+		st := &memCI{held: true}
+		f := &ciForge{snap: allMissing}
+		run := ciRun()
+		run.CreatedAt = ciNow.Add(-time.Minute)
+		d, _ := ciDispatcher(run, st)
+		if held, err := d.gateCI(context.Background(), Platform{Forge: f}, ciRepo()); !held || err != nil {
+			t.Fatalf("gateCI = %v, %v; want held", held, err)
+		}
+		if want := run.CreatedAt.Add(30 * time.Minute); !st.deadline.Equal(want) {
+			t.Errorf("deadline = %v, want %v", st.deadline, want)
+		}
+	})
+
+	t.Run("no pipeline after the grace", func(t *testing.T) {
+		st := &memCI{held: true}
+		f := &ciForge{snap: allMissing}
+		run := ciRun()
+		run.CreatedAt = ciNow.Add(-ciNoPipelineGrace)
+		d, _ := ciDispatcher(run, st)
+		if held, err := d.gateCI(context.Background(), Platform{Forge: f}, ciRepo()); held || err != nil {
+			t.Fatalf("gateCI = %v, %v; want not held", held, err)
+		}
+	})
+
+	t.Run("one job found within the grace", func(t *testing.T) {
+		st := &memCI{held: true}
+		f := &ciForge{snap: snapshot(true, ci.Job{Result: ci.Missing}, ci.Job{Result: ci.Passed, Ended: true})}
+		run := ciRun()
+		run.CreatedAt = ciNow.Add(-time.Minute)
+		d, _ := ciDispatcher(run, st)
+		if held, err := d.gateCI(context.Background(), Platform{Forge: f}, ciRepo()); held || err != nil {
+			t.Fatalf("gateCI = %v, %v; want not held (the head's CI is finished)", held, err)
 		}
 	})
 
@@ -434,6 +477,7 @@ func engineWoken(e *Engine) bool {
 func TestCheckCIReleasesPending(t *testing.T) {
 	running := snapshot(false, ci.Job{Result: ci.Running}, ci.Job{Result: ci.Passed, Ended: true})
 	ended := snapshot(true, ci.Job{Result: ci.Failed, Ended: true}, ci.Job{Result: ci.Passed, Ended: true})
+	allMissing := snapshot(true, ci.Job{Result: ci.Missing}, ci.Job{Result: ci.Missing})
 	later := ciNow.Add(10 * time.Minute)
 	for _, tc := range []struct {
 		name        string
@@ -454,6 +498,11 @@ func TestCheckCIReleasesPending(t *testing.T) {
 		{name: "a read error waits", run: pendingRun(later), jobs: ciJobsSet.Jobs, reader: true, err: errors.New("gitlab: 502"), wantReads: 1, wantErr: true},
 		{name: "not connected waits for the deadline", run: pendingRun(later), jobs: ciJobsSet.Jobs},
 		{name: "not connected past the deadline", run: pendingRun(ciNow.Add(-time.Second)), jobs: ciJobsSet.Jobs, wantRelease: true},
+		{name: "no pipeline yet, within the grace", run: func() store.Run { r := pendingRun(later); r.CreatedAt = ciNow.Add(-time.Minute); return r }(),
+			jobs: ciJobsSet.Jobs, reader: true, snap: allMissing, wantReads: 1},
+		{name: "no pipeline after the grace", run: pendingRun(later), jobs: ciJobsSet.Jobs, reader: true, snap: allMissing, wantRelease: true, wantReads: 1},
+		{name: "one job found within the grace", run: func() store.Run { r := pendingRun(later); r.CreatedAt = ciNow.Add(-time.Minute); return r }(),
+			jobs: ciJobsSet.Jobs, reader: true, snap: snapshot(true, ci.Job{Result: ci.Missing}, ci.Job{Result: ci.Passed, Ended: true}), wantRelease: true, wantReads: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e, _ := ciEngine()
@@ -507,6 +556,9 @@ func TestCheckCIRedecidesPublished(t *testing.T) {
 		}
 		if got := st.Calls(); !reflect.DeepEqual(got, []string{"republish", "set"}) {
 			t.Fatalf("store calls = %v, want republish then set", got)
+		}
+		if st.republishedHead != sha('a') || st.republishedTarget != "main" {
+			t.Errorf("republished %s onto %s, want this run's head and target", st.republishedHead, st.republishedTarget)
 		}
 		// What the review was given (read, size, cut, blocks) stays; the
 		// result is the new one.
@@ -639,6 +691,92 @@ func TestCheckCILeavesOtherRuns(t *testing.T) {
 		}
 		if len(st.Calls()) != 0 || len(f.reads) != 0 {
 			t.Errorf("%s/%s: store calls %v, reads %d; want none", r.State, r.SkipReason, st.Calls(), len(f.reads))
+		}
+	}
+}
+
+// The published reviews are checked again on every ciRecheckEvery-th sweep,
+// the first (at start) included.
+func TestCISweepRechecksEveryFifth(t *testing.T) {
+	e, _ := ciEngine()
+	var got []bool
+	for range 11 {
+		got = append(got, e.ciSweepRechecks())
+	}
+	want := []bool{true, false, false, false, false, true, false, false, false, false, true}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("rechecks = %v, want %v", got, want)
+	}
+}
+
+// A sweep stops at its budget: the run being checked is cut off, the rest is
+// left for the next sweep, and running out of time is no error.
+func TestCISweepStopsAtBudget(t *testing.T) {
+	old := ciSweepBudget
+	ciSweepBudget = 50 * time.Millisecond
+	t.Cleanup(func() { ciSweepBudget = old })
+	e, logs := ciEngine()
+	runs := []store.Run{ciRun(), ciRun(), ciRun()}
+	runs[1].ID, runs[2].ID = "22222222-2222-2222-2222-222222222222", "33333333-3333-3333-3333-333333333333"
+	var checked []string
+	e.sweepCIRuns(context.Background(), runs, func(ctx context.Context, r store.Run) error {
+		checked = append(checked, r.ID)
+		<-ctx.Done() // a platform call that hangs until the budget ends
+		return ctx.Err()
+	})
+	if len(checked) != 1 {
+		t.Errorf("checked %v, want only the first run", checked)
+	}
+	if strings.Contains(logs.String(), "level=ERROR") {
+		t.Errorf("a sweep out of time was logged as an error:\n%s", logs.String())
+	}
+}
+
+// A run's failure is logged as an error and the sweep goes on; a shutdown
+// stops it quietly.
+func TestCISweepLogsFailuresAndStopsOnShutdown(t *testing.T) {
+	e, logs := ciEngine()
+	runs := []store.Run{ciRun(), ciRun()}
+	var n int
+	e.sweepCIRuns(context.Background(), runs, func(context.Context, store.Run) error {
+		n++
+		return errors.New("gitlab: 502")
+	})
+	if n != 2 || !strings.Contains(logs.String(), "level=ERROR") {
+		t.Errorf("checked %d runs, logs:\n%s; want both checked and the failures logged", n, logs.String())
+	}
+
+	e, logs = ciEngine()
+	ctx, cancel := context.WithCancel(context.Background())
+	n = 0
+	e.sweepCIRuns(ctx, runs, func(context.Context, store.Run) error {
+		n++
+		cancel()
+		return context.Canceled
+	})
+	if n != 1 || strings.Contains(logs.String(), "level=ERROR") {
+		t.Errorf("checked %d runs, logs:\n%s; want one, quietly", n, logs.String())
+	}
+}
+
+// The sweep checks a published review again only when a job that didn't pass
+// may still change: one whose text read failed is kept as it is.
+func TestCISweepWorth(t *testing.T) {
+	textFailed := store.CIJobResult{Name: "test", Result: "unreadable", Reason: "error", Read: "log", Blocks: true, TextFailed: true}
+	passed := store.CIJobResult{Name: "cycode-scan", Result: "passed", Read: "status"}
+	failed := store.CIJobResult{Name: "lint", Result: "failed", Read: "status"}
+	for _, tc := range []struct {
+		name string
+		jobs []store.CIJobResult
+		want bool
+	}{
+		{"only failed text reads left", []store.CIJobResult{textFailed, passed}, false},
+		{"a failed job too", []store.CIJobResult{textFailed, passed, failed}, true},
+		{"a failed job", []store.CIJobResult{failed}, true},
+		{"all passed", []store.CIJobResult{passed}, false},
+	} {
+		if got := ciSweepWorth(tc.jobs); got != tc.want {
+			t.Errorf("%s: ciSweepWorth = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

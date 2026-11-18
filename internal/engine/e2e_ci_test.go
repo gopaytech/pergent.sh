@@ -378,3 +378,23 @@ func TestCISweepRedecidesPublished(t *testing.T) {
 		t.Errorf("the re-check read the log %d times", n)
 	}
 }
+
+// A published review whose only job that didn't pass failed its text read is
+// not checked again by the sweep: a status-only read can't change it.
+func TestCISweepSkipsTextFailedOnly(t *testing.T) {
+	env := ciEnv(t)
+	head := sha('a')
+	env.GitLab.SetMR(openMR(3, head))
+	id := env.Publish(3, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	if err := env.Store.SetRunCI(env.ctx, id, []store.CIJobResult{{Name: "test", Result: "unreadable", Reason: "error", Read: "log", Blocks: true, TextFailed: true}}); err != nil {
+		t.Fatal(err)
+	}
+	serveCI(env, head, "success", "success")
+	env.Engine.sweepCI(env.ctx)
+	if n := len(env.GitLab.Requests(http.MethodGet, "/projects/7/pipelines")); n != 0 {
+		t.Errorf("CI was read %d times", n)
+	}
+	if r := env.Run(id); r.State != store.Published {
+		t.Errorf("run = %s, want published", r.State)
+	}
+}

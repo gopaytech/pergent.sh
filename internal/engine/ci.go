@@ -14,10 +14,25 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
-// ciRecheckFor is how long after it was reported a published review is
-// checked again by the CI sweep, while its snapshot has a chosen job that
-// didn't pass: a lost CI event then only delays the gate.
-const ciRecheckFor = 24 * time.Hour
+const (
+	// ciRecheckFor is how long after it was reported a published review is
+	// checked again by the CI sweep, while its snapshot has a chosen job
+	// that didn't pass: a lost CI event then only delays the gate.
+	ciRecheckFor = 24 * time.Hour
+	// ciRecheckEvery is how many sweeps apart the published reviews are
+	// checked again (every 10 minutes): the runs waiting for CI are checked
+	// on every sweep, and there are far more published reviews.
+	ciRecheckEvery = 5
+	// ciNoPipelineGrace is how long after a run was queued a head with none
+	// of the chosen jobs still waits: GitLab creates a push's pipeline after
+	// the merge request's hook, so the first look often finds nothing.
+	ciNoPipelineGrace = 3 * time.Minute
+)
+
+// ciSweepBudget bounds one CI sweep: it starts no check after it, and every
+// platform call has it as its deadline, so a slow platform can't hold up the
+// loop it shares with dispatch. A variable so tests can shorten it.
+var ciSweepBudget = 30 * time.Second
 
 // ciDroppedMsg is logged when the inputs have no room for ci-results.md.
 const ciDroppedMsg = "reviewing without the CI job results: the inputs are too large for them"
@@ -28,7 +43,7 @@ type ciStore interface {
 	ReleaseCI(ctx context.Context, id string) (bool, error)
 	MarkCIChecked(ctx context.Context, id string) error
 	SetRunCI(ctx context.Context, id string, jobs []store.CIJobResult) error
-	RepublishNewest(ctx context.Context, mr store.MRKey) (bool, error)
+	Republish(ctx context.Context, mr store.MRKey, headSHA, targetBranch string) (bool, error)
 }
 
 var _ ciStore = (*store.Store)(nil)
@@ -66,6 +81,24 @@ func ciReader(plat Platform) (forge.CIReader, bool) {
 	return r, ok
 }
 
+// ciDone says whether the wait for snap's jobs is over at now: snap.Done(),
+// except that within ciNoPipelineGrace of when run was queued a head with
+// none of the jobs at all (every one missing) still waits for its pipeline.
+func ciDone(snap ci.Snapshot, run store.Run, now time.Time) bool {
+	if !snap.Done() {
+		return false
+	}
+	if !now.Before(run.CreatedAt.Add(ciNoPipelineGrace)) {
+		return true
+	}
+	for _, j := range snap.Jobs {
+		if j.Result != ci.Missing {
+			return true
+		}
+	}
+	return len(snap.Jobs) == 0
+}
+
 // ciApplies says whether run waits for and reads CI jobs: the repository
 // chose some, and it is a merge request's review. An API review has no
 // pipeline.
@@ -77,7 +110,8 @@ func ciApplies(run store.Run, repo settings.Effective) bool {
 // the trust and quota gates. When every job has ended (or the head's CI is
 // finished and the jobs not found are missing), or the run's deadline (when
 // it was queued plus the wait) has passed, it is marked as checked and goes
-// on: held is false. Otherwise it waits for CI (store.WaitCIPending) until
+// on: held is false. Within ciNoPipelineGrace of being queued, a head with
+// none of the jobs yet is not over (ciDone). Otherwise it waits for CI (store.WaitCIPending) until
 // the deadline, with the pending status waitingText and no Job; the CI sweep,
 // a CI event or Start review queues it again. A read that fails holds it too:
 // the deadline still releases it. A platform that can't read CI holds
@@ -104,7 +138,7 @@ func (d *dispatcher) gateCI(ctx context.Context, plat Platform, repo settings.Ef
 				"deadline", deadline, "error", d.redact(rerr.Error()))
 			wait = true
 		default:
-			wait = !snap.Done()
+			wait = !ciDone(snap, run, e.now())
 		}
 	}
 	sctx, cancel := settleCtx(ctx)
@@ -177,31 +211,69 @@ func unreadableCI(head string, jobs []store.CIJob) ci.Snapshot {
 	return s
 }
 
-// sweepCI checks again (checkCIRun) every run waiting for CI, and the newest
-// published review of each change reported in the last ciRecheckFor whose
-// snapshot has a job that didn't pass: a lost CI event only delays a run or
-// its gate. One run's trouble is logged and left for the next sweep.
+// sweepCI checks again (checkCIRun) every run waiting for CI and, on every
+// ciRecheckEvery-th sweep (the first included), the newest published review
+// of each change reported in the last ciRecheckFor whose snapshot has a job
+// that didn't pass: a lost CI event only delays a run or its gate. The
+// waiting runs go first, and the sweep stops at ciSweepBudget; what is left
+// waits for the next one. One run's trouble is logged and left for the next
+// sweep.
 func (e *Engine) sweepCI(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
-	pending, err := e.Store.CIPendingRuns(ctx)
+	recheck := e.ciSweepRechecks()
+	runs, err := e.Store.CIPendingRuns(ctx)
 	if err != nil && ctx.Err() == nil {
 		e.log().Error("CI sweep: couldn't list the runs waiting for CI", "error", e.redact(err.Error()))
 	}
-	recheck, err := e.Store.CIRecheckRuns(ctx, e.now().Add(-ciRecheckFor))
-	if err != nil && ctx.Err() == nil {
-		e.log().Error("CI sweep: couldn't list the published reviews to check again", "error", e.redact(err.Error()))
+	if recheck {
+		published, err := e.Store.CIRecheckRuns(ctx, e.now().Add(-ciRecheckFor))
+		if err != nil && ctx.Err() == nil {
+			e.log().Error("CI sweep: couldn't list the published reviews to check again", "error", e.redact(err.Error()))
+		}
+		for _, r := range published {
+			if ciSweepWorth(r.CIJobs) {
+				runs = append(runs, r)
+			}
+		}
 	}
-	for _, run := range append(pending, recheck...) {
+	e.sweepCIRuns(ctx, runs, e.checkCIRun)
+}
+
+// ciSweepRechecks counts a sweep and says whether it checks the published
+// reviews too. Only the engine loop calls it.
+func (e *Engine) ciSweepRechecks() bool {
+	n := e.ciSweeps
+	e.ciSweeps++
+	return n%ciRecheckEvery == 0
+}
+
+// sweepCIRuns runs check on each of runs, in order, for at most
+// ciSweepBudget. A shutdown (ctx) or the end of the budget stops it; neither
+// is an error to log.
+func (e *Engine) sweepCIRuns(ctx context.Context, runs []store.Run, check func(context.Context, store.Run) error) {
+	bctx, cancel := context.WithTimeout(ctx, ciSweepBudget)
+	defer cancel()
+	for i, run := range runs {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := e.checkCIRun(ctx, run); err != nil && ctx.Err() == nil {
-			e.log().Error("CI sweep: couldn't check a run's CI jobs; the next sweep tries again",
-				"run", run.ID, "instance", run.MR.Instance, "project", run.ProjectPath, "mr", run.MR.IID,
-				"error", e.redact(err.Error()))
+		if bctx.Err() != nil {
+			e.log().Info("CI sweep: out of time; the next sweep checks the rest", "left", len(runs)-i)
+			return
 		}
+		err := check(bctx, run)
+		if err == nil || ctx.Err() != nil {
+			continue
+		}
+		if bctx.Err() != nil {
+			e.log().Info("CI sweep: out of time while checking a run; the next sweep tries again", "run", run.ID)
+			continue
+		}
+		e.log().Error("CI sweep: couldn't check a run's CI jobs; the next sweep tries again",
+			"run", run.ID, "instance", run.MR.Instance, "project", run.ProjectPath, "mr", run.MR.IID,
+			"error", e.redact(err.Error()))
 	}
 }
 
@@ -209,7 +281,10 @@ func (e *Engine) sweepCI(ctx context.Context) {
 // is queued (and the dispatcher woken) once every chosen job has ended, at
 // its deadline, or when its repository chooses no jobs any more or is gone.
 // A published review is decided again, with no new review, when a chosen
-// job's result changed. Any other run is left alone.
+// job's result changed. Any other run is left alone. Call it from the engine
+// loop only: a re-decide puts the review back to be published, then writes
+// the new snapshot, and that order is safe only because publish runs on the
+// same goroutine, so it can't read the run in between.
 func (e *Engine) checkCIRun(ctx context.Context, run store.Run) error {
 	repo, ok, err := e.settings().Get(ctx, run.MR.Instance, run.ProjectPath)
 	if err != nil {
@@ -253,11 +328,13 @@ func (e *Engine) releaseCI(ctx context.Context, st ciStore, reader forge.CIReade
 		if err != nil {
 			return fmt.Errorf("read the CI jobs: %w", err)
 		}
-		if !snap.Done() {
+		if !ciDone(snap, run, e.now()) {
 			return nil
 		}
 	}
-	ok, err := st.ReleaseCI(ctx, run.ID)
+	sctx, cancel := settleCtx(ctx)
+	defer cancel()
+	ok, err := st.ReleaseCI(sctx, run.ID)
 	if err != nil {
 		return fmt.Errorf("queue the run waiting for CI: %w", err)
 	}
@@ -271,9 +348,10 @@ func (e *Engine) releaseCI(ctx context.Context, st ciStore, reader forge.CIReade
 
 // redecideCI decides a published review again when a status-only read of the
 // jobs it was decided with gives another result for one of them, while the
-// repository still chooses CI jobs. The review is put back to be published
-// first (RepublishNewest); only then is the new snapshot written, so a
-// failure leaves the old one, and the next sweep sees the change again.
+// repository still chooses CI jobs. The review is put back to be published first (Republish, of this
+// run's head and target only); only then is the new snapshot written, so a
+// failure leaves the old one, and the next sweep sees the change again. That
+// order relies on publish running on the engine loop (see checkCIRun).
 func (e *Engine) redecideCI(ctx context.Context, st ciStore, reader forge.CIReader, plat Platform, run store.Run, jobs []store.CIJob) error {
 	if len(jobs) == 0 || reader == nil || len(run.CIJobs) == 0 {
 		return nil
@@ -293,15 +371,19 @@ func (e *Engine) redecideCI(ctx context.Context, st ciStore, reader forge.CIRead
 		return nil
 	}
 	log := e.log().With("run", run.ID, "instance", run.MR.Instance, "project", run.ProjectPath, "mr", run.MR.IID)
-	ok, err := st.RepublishNewest(ctx, run.MR)
+	// The pair is written whatever is left of the sweep's budget: a
+	// republish with no new snapshot would only be decided the same again.
+	sctx, cancel := settleCtx(ctx)
+	defer cancel()
+	ok, err := st.Republish(sctx, run.MR, run.HeadSHA, run.TargetBranch)
 	if err != nil {
 		return fmt.Errorf("put the review back to be decided again: %w", err)
 	}
 	if !ok {
-		log.Debug("a CI job's result changed, but the review isn't the change's newest any more")
+		log.Debug("a CI job's result changed, but the review isn't the change's newest any more, or of its head")
 		return nil
 	}
-	if err := st.SetRunCI(ctx, run.ID, next); err != nil {
+	if err := st.SetRunCI(sctx, run.ID, next); err != nil {
 		if errors.Is(err, store.ErrRunGone) {
 			log.Debug("a CI job's result changed, but the run was superseded meanwhile")
 			return nil
@@ -311,6 +393,19 @@ func (e *Engine) redecideCI(ctx context.Context, st ciStore, reader forge.CIRead
 	log.Info("a CI job's result changed; the review is decided again")
 	e.Wake()
 	return nil
+}
+
+// ciSweepWorth says whether the sweep checks a published review again: some
+// job didn't pass and its text read didn't fail. A job whose text read failed
+// is kept as it is (mergeCI), so a review with no other job that didn't pass
+// can only change on a job that passed, which a CI event reports.
+func ciSweepWorth(stored []store.CIJobResult) bool {
+	for _, j := range stored {
+		if j.Result != string(ci.Passed) && !j.TextFailed {
+			return true
+		}
+	}
+	return false
 }
 
 // mergeCI is the snapshot to store after a status-only read of a review's

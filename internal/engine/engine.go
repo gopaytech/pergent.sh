@@ -95,6 +95,10 @@ type Engine struct {
 	wakeOnce sync.Once
 	wake     chan struct{}
 
+	// ciSweeps counts the CI sweeps (sweepCI), so every ciRecheckEvery-th
+	// checks the published reviews too. Only the engine loop touches it.
+	ciSweeps int
+
 	reconcileOnce sync.Once
 	reconcileReq  chan struct{}
 	// soonMu guards soonKeys, the repositories ReconcileSoon asked for that

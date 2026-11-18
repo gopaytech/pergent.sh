@@ -153,6 +153,26 @@ func TestStartRunOnCIPendingMarksChecked(t *testing.T) {
 	}
 }
 
+// A start while the dispatcher checks a push's run (claimed, not dispatched)
+// marks CI looked at, as it does the quota: the CI hold then leaves the run
+// alone, and the start skips the wait.
+func TestStartRunDuringGateMarksCIChecked(t *testing.T) {
+	s := newStore(t)
+	id := enqueue(t, s, mr1, sha('a'))
+	if claimed, err := s.ClaimQueued(ctx, 10, t0.Add(time.Hour)); err != nil || len(claimed) != 1 {
+		t.Fatalf("ClaimQueued = %+v, %v", claimed, err)
+	}
+	if got, started, err := s.StartRun(ctx, mr1, "acme/widgets", sha('a'), "main"); err != nil || !started || got != id {
+		t.Fatalf("StartRun = %s, %v, %v; want %s, true", got, started, err, id)
+	}
+	if r := mustRun(t, s, id); r.Trigger != TriggerStart || !r.CIChecked || !r.QuotaChecked {
+		t.Errorf("run trigger %s ci_checked %v quota_checked %v; want start/true/true", r.Trigger, r.CIChecked, r.QuotaChecked)
+	}
+	if ok, err := s.HoldForCI(ctx, id, ciDeadline); err != nil || ok {
+		t.Errorf("HoldForCI of a run started during the gate = %v, %v; want false", ok, err)
+	}
+}
+
 func TestSetRunCIRoundTrip(t *testing.T) {
 	s := newStore(t)
 	id := enqueue(t, s, mr1, sha('a'))
