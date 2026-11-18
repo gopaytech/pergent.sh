@@ -186,6 +186,37 @@ func TestWaitingText(t *testing.T) {
 	}
 }
 
+// The pending status fits GitHub's 140 characters: whole names are left out
+// first, then the first name is cut.
+func TestWaitingTextCapped(t *testing.T) {
+	jobs := func(names ...string) []store.CIJob {
+		out := make([]store.CIJob, len(names))
+		for i, n := range names {
+			out[i] = store.CIJob{Name: n}
+		}
+		return out
+	}
+	long := strings.Repeat("x", 50)
+	for _, tc := range []struct {
+		name string
+		jobs []store.CIJob
+		want string
+	}{
+		{"fits", jobs(long, "b"), "Waiting for CI: " + long + ", b"},
+		{"names left out", jobs(long, long, long, "d"), "Waiting for CI: " + long + ", " + long + ", +2 more"},
+		{"first name cut", jobs(strings.Repeat("é", 200), "b"), "Waiting for CI: " + strings.Repeat("é", 140-len("Waiting for CI: ")-len(", +1 more")-1) + "…, +1 more"},
+		{"one long name", jobs(strings.Repeat("y", 200)), "Waiting for CI: " + strings.Repeat("y", 140-len("Waiting for CI: ")-1) + "…"},
+	} {
+		got := waitingText(tc.jobs)
+		if got != tc.want {
+			t.Errorf("%s: waitingText = %q, want %q", tc.name, got, tc.want)
+		}
+		if n := len([]rune(got)); n > 140 {
+			t.Errorf("%s: %d characters", tc.name, n)
+		}
+	}
+}
+
 func TestCITarget(t *testing.T) {
 	got := ciTarget(ciRun(), Platform{})
 	want := forge.CITarget{ProjectID: testProjectID, Project: testProjectPath, Change: 3, Head: sha('a')}

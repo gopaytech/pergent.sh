@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gopaytech/pergent.sh/internal/ci"
 	"github.com/gopaytech/pergent.sh/internal/forge"
@@ -62,14 +63,39 @@ func (d *dispatcher) ciStore() ciStore {
 	return d.e.Store
 }
 
+// maxWaitingText is GitHub's limit for a status description (GitLab's is
+// 255), in characters.
+const maxWaitingText = 140
+
 // waitingText is the pending status of a run waiting for CI, for example
-// "Waiting for CI: test, cycode-scan". It names the jobs only.
+// "Waiting for CI: test, cycode-scan". It names the jobs only, and fits
+// maxWaitingText: the last names give way to ", +N more" first, then the
+// first name is cut.
 func waitingText(jobs []store.CIJob) string {
+	const lead = "Waiting for CI: "
 	names := make([]string, len(jobs))
 	for i, j := range jobs {
 		names[i] = j.Name
 	}
-	return "Waiting for CI: " + strings.Join(names, ", ")
+	for k := len(names); k >= 1; k-- {
+		d := lead + strings.Join(names[:k], ", ")
+		if k < len(names) {
+			d += fmt.Sprintf(", +%d more", len(names)-k)
+		}
+		if utf8.RuneCountInString(d) <= maxWaitingText {
+			return d
+		}
+	}
+	if len(names) == 0 {
+		return lead
+	}
+	more := ""
+	if n := len(names) - 1; n > 0 {
+		more = fmt.Sprintf(", +%d more", n)
+	}
+	room := max(maxWaitingText-utf8.RuneCountInString(lead+more)-1, 0)
+	name := []rune(names[0])
+	return lead + string(name[:min(room, len(name))]) + "…" + more
 }
 
 // ciTarget is the head of run's change, as a CI read names it.
