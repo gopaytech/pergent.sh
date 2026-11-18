@@ -84,6 +84,7 @@ Each job ends as one of:
 - **The CI line.** The comment shows one italic line after its header, for example `CI: test passed · cycode-scan failed (blocks approval)`. The line pergent.sh writes holds job names and results only. An `unreadable` job adds `no permission` or `error`. A failed review shows the line too. A review that failed before pergent.sh read its CI, such as a Job that couldn't be created, counts every job the repository chooses as `unreadable` (`error`), so a blocking job still holds the status failed.
 - **After the review is published,** pergent.sh checks again on CI events for the chosen jobs, and every 10 minutes for 24 hours when a chosen job hadn't passed. If a result changed, it updates the status and the approval, withdraws an approval when a blocking job now fails, and edits the comment only when the CI line or the verdict changed. No new review runs, and the model doesn't see the later result.
 - **A re-run** checks CI again.
+- **What the gate proves.** It proves only what the change's own pipeline ran. The author of a change controls its CI config, so a job renamed to a chosen name, or one changed to do nothing, passes. Protect the CI config with CODEOWNERS, or run the checks from a pipeline the author can't edit, such as a GitLab pipeline execution policy or a GitHub ruleset that requires a workflow.
 
 ## What the model sees
 
