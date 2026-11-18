@@ -466,6 +466,17 @@ func (f *Forge) UpdateComment(ctx context.Context, repoID, _, commentID int64, b
 	return mapErr(c.UpdateIssueComment(ctx, r.Owner, r.Name, commentID, body))
 }
 
+// CommentBody is the text of conversation comment commentID. A deleted
+// comment is forge.ErrNotFound.
+func (f *Forge) CommentBody(ctx context.Context, repoID, _, commentID int64) (string, error) {
+	c, r, err := f.client(ctx, repoID)
+	if err != nil {
+		return "", err
+	}
+	cm, err := c.IssueComment(ctx, r.Owner, r.Name, commentID)
+	return cm.Body, mapErr(err)
+}
+
 // Bot is the review App's bot user: the login is "<slug>[bot]".
 func (f *Forge) Bot() forge.Identity {
 	return forge.Identity{ID: f.bot, Username: f.slug + "[bot]"}

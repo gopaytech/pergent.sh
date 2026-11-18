@@ -17,6 +17,9 @@ const (
 	// reasonWaitingStart and reasonCheckFailed are a waiting run's reasons.
 	reasonWaitingStart = "Waiting for someone with write access to start the review."
 	reasonCheckFailed  = "Couldn't check the author's access. Someone with write access can start the review."
+	// reasonWaitingCI is the reason of a run held for the CI jobs the
+	// repository chose.
+	reasonWaitingCI = "Waiting for CI."
 	// reasonQuotaUsedUp is the reason of a run the monthly token quota holds.
 	reasonQuotaUsedUp = "the monthly token quota is used up; an admin can start the review"
 
@@ -60,6 +63,9 @@ func judge(r store.RunDigest) judged {
 	case OutcomeWaiting:
 		if r.SkipReason == store.WaitCheckFailed {
 			return judged{OutcomeWaiting, reasonCheckFailed, ""}
+		}
+		if r.SkipReason == store.WaitCIPending {
+			return judged{OutcomeWaiting, reasonWaitingCI, ""}
 		}
 		if r.SkipReason == store.WaitQuota {
 			return judged{OutcomeWaiting, reasonQuotaUsedUp, ""}

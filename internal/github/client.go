@@ -895,6 +895,18 @@ func (c *Client) IssueComments(ctx context.Context, owner, repo string, number i
 	return out, nil
 }
 
+// IssueComment returns one conversation comment. A missing comment is
+// ErrNotFound.
+func (c *Client) IssueComment(ctx context.Context, owner, repo string, commentID int64) (Comment, error) {
+	var cm Comment
+	p, err := repoPath(owner, repo, "/issues/comments", id(commentID))
+	if err != nil {
+		return cm, err
+	}
+	err = c.getJSON(ctx, p, nil, &cm)
+	return cm, err
+}
+
 // CreateIssueComment adds a conversation comment to a pull request and
 // returns its ID.
 func (c *Client) CreateIssueComment(ctx context.Context, owner, repo string, number int64, body string) (int64, error) {

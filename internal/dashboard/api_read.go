@@ -56,7 +56,7 @@ const (
 var errNotSynced = errors.New("the repository isn't stored yet (reconcile hasn't reached it)")
 
 var outcomes = map[string]bool{
-	OutcomeRunning: true, OutcomeApproved: true, OutcomeBlocking: true, OutcomeDraft: true,
+	OutcomeRunning: true, OutcomeApproved: true, OutcomeBlocking: true, OutcomeCI: true, OutcomeDraft: true,
 	OutcomeNoBlocking: true, OutcomeFailed: true, OutcomeSuperseded: true, OutcomeSkipped: true, OutcomeUnknown: true, OutcomeWaiting: true,
 }
 

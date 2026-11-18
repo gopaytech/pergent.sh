@@ -497,6 +497,8 @@ func decisionOf(o policy.Outcome, d policy.Decision, approved bool, held heldBac
 	switch d.Kind {
 	case policy.KindBlocking:
 		rd.Outcome = store.OutcomeBlocking
+	case policy.KindCI:
+		rd.Outcome = store.OutcomeCI
 	case policy.KindNotApproved:
 		rd.Outcome = store.OutcomeNoBlocking
 	case policy.KindDraft:
@@ -552,6 +554,14 @@ func (e *Engine) approveInputs(ctx context.Context, plat Platform, run store.Run
 // failure. A usable result carries the run's own Quiet and comment layout,
 // recorded at dispatch, never the repository's current settings.
 func (e *Engine) outcome(run store.Run, log *slog.Logger) policy.Outcome {
+	o := e.outcomeOf(run, log)
+	// Every outcome carries the run's CI snapshot, a failed review too: the
+	// gate holds back whatever else decides, and the comment shows the line.
+	o.CI = run.CIJobs
+	return o
+}
+
+func (e *Engine) outcomeOf(run store.Run, log *slog.Logger) policy.Outcome {
 	if run.FailureReason != "" || run.Result == nil {
 		return policy.Outcome{FailureReason: run.FailureReason}
 	}
@@ -600,6 +610,9 @@ func (e *Engine) upsertComment(ctx context.Context, f forge.Forge, run store.Run
 		return fmt.Errorf("load note id: %w", err)
 	}
 	if stored != 0 {
+		if commentUnchanged(ctx, f, pid, iid, stored, body) {
+			return nil
+		}
 		err := f.UpdateComment(ctx, pid, iid, stored, body)
 		if err == nil {
 			return nil
@@ -614,7 +627,10 @@ func (e *Engine) upsertComment(ctx context.Context, f forge.Forge, run store.Run
 		return fmt.Errorf("find note: %w", err)
 	}
 	if found && noteID != stored {
-		err := f.UpdateComment(ctx, pid, iid, noteID, body)
+		var err error
+		if !commentUnchanged(ctx, f, pid, iid, noteID, body) {
+			err = f.UpdateComment(ctx, pid, iid, noteID, body)
+		}
 		if err != nil && !errors.Is(err, forge.ErrNotFound) {
 			return err
 		}
@@ -631,6 +647,19 @@ func (e *Engine) upsertComment(ctx context.Context, f forge.Forge, run store.Run
 		return fmt.Errorf("record note id: %w", err)
 	}
 	return nil
+}
+
+// commentUnchanged is true when comment id already holds body, so a republish
+// that decided the same comment edits nothing (a CI event that changed no
+// result, a retry). A forge that can't read a comment back, a comment that
+// can't be read and one that differs are all false: the comment is written.
+func commentUnchanged(ctx context.Context, f forge.Forge, projectID, number, id int64, body string) bool {
+	r, ok := f.(forge.CommentBodyReader)
+	if !ok {
+		return false
+	}
+	got, err := r.CommentBody(ctx, projectID, number, id)
+	return err == nil && got == body
 }
 
 // approve approves the run's head with the approve bot, only while the merge

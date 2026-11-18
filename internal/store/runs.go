@@ -194,9 +194,12 @@ const (
 // the dashboard shows it. Running, superseded, skipped and unknown (published before
 // outcomes were recorded) are never recorded: they follow from the state.
 const (
-	OutcomeRunning    = "running"
-	OutcomeApproved   = "approved"
-	OutcomeBlocking   = "blocking"
+	OutcomeRunning  = "running"
+	OutcomeApproved = "approved"
+	OutcomeBlocking = "blocking"
+	// OutcomeCI is a review held back only by a blocking CI job that isn't
+	// passed: the review itself found nothing blocking.
+	OutcomeCI         = "ci_blocked"
 	OutcomeDraft      = "draft"
 	OutcomeNoBlocking = "no_blocking"
 	OutcomeFailed     = "failed"
@@ -213,7 +216,7 @@ const (
 
 // RunDecision is what the publisher decided for a run.
 type RunDecision struct {
-	// Outcome is OutcomeApproved, OutcomeBlocking, OutcomeDraft,
+	// Outcome is OutcomeApproved, OutcomeBlocking, OutcomeCI, OutcomeDraft,
 	// OutcomeNoBlocking or OutcomeFailed, or OutcomeNothingReviewed for an
 	// API review.
 	Outcome string

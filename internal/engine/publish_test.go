@@ -552,8 +552,8 @@ func TestPublishFailureReasonComment(t *testing.T) {
 
 	publish(t, env)
 
-	if body := createdComment(t, env, 1); body != policy.ErrorComment(reason) {
-		t.Errorf("comment = %q, want %q", body, policy.ErrorComment(reason))
+	if body := createdComment(t, env, 1); body != policy.ErrorComment(reason, "") {
+		t.Errorf("comment = %q, want %q", body, policy.ErrorComment(reason, ""))
 	}
 	wantStatus(t, env, head, gitlab.StatusFailed, "pergent couldn't review this MR")
 	wantPublished(t, env, id)
@@ -2128,8 +2128,8 @@ func TestIncrementalFailureReasonPublishedAsIs(t *testing.T) {
 
 	publish(t, env)
 
-	if body := createdComment(t, env, 1); body != policy.ErrorComment(reason) {
-		t.Errorf("comment = %q, want %q", body, policy.ErrorComment(reason))
+	if body := createdComment(t, env, 1); body != policy.ErrorComment(reason, "") {
+		t.Errorf("comment = %q, want %q", body, policy.ErrorComment(reason, ""))
 	}
 	wantStatus(t, env, headB, gitlab.StatusFailed, "pergent couldn't review this MR")
 	wantPublished(t, env, id)
@@ -2524,5 +2524,169 @@ func TestPublishUsesFooterNote(t *testing.T) {
 	}
 	if strings.Contains(body, policy.DefaultFooterNote) {
 		t.Errorf("comment still has the built-in text:\n%s", body)
+	}
+}
+
+func TestDecisionOfKindCI(t *testing.T) {
+	d := policy.Decision{Kind: policy.KindCI, Status: policy.StatusFailed, Description: "CI blocks approval: test failed"}
+	got := decisionOf(policy.Outcome{}, d, false, approvalMade)
+	want := store.RunDecision{Outcome: store.OutcomeCI, Status: "failed", Reason: "CI blocks approval: test failed"}
+	if got != want {
+		t.Errorf("decisionOf = %+v, want %+v", got, want)
+	}
+	if store.OutcomeCI != "ci_blocked" {
+		t.Errorf("OutcomeCI = %q", store.OutcomeCI)
+	}
+}
+
+func TestOutcomeCarriesRunCI(t *testing.T) {
+	e := &Engine{}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	jobs := []store.CIJobResult{{Name: "test", Result: "failed", Read: "status", Blocks: true}}
+	// A stored result, a failure reason, an unusable result and no result at
+	// all: each carries the snapshot, or a failed review would drop the line.
+	head := sha('a')
+	good := store.Run{HeadSHA: head, BaseSHA: sha('b'), Result: resultFor(t, head, reviewed("no_blocking_issues", "a.go")), CIJobs: jobs}
+	for name, run := range map[string]store.Run{
+		"result":         good,
+		"failure reason": {FailureReason: "boom", CIJobs: jobs},
+		"no result":      {CIJobs: jobs},
+		"bad result":     {HeadSHA: head, BaseSHA: sha('b'), Result: []byte(`{`), CIJobs: jobs},
+		"other commit":   {HeadSHA: sha('c'), BaseSHA: sha('b'), Result: good.Result, CIJobs: jobs},
+	} {
+		if o := e.outcome(run, log); !slices.Equal(o.CI, jobs) {
+			t.Errorf("%s: Outcome.CI = %+v, want %+v", name, o.CI, jobs)
+		}
+	}
+	if o := e.outcome(store.Run{FailureReason: "x"}, log); len(o.CI) != 0 {
+		t.Errorf("a run with no jobs got CI %+v", o.CI)
+	}
+}
+
+// bodyForge is a forge that reads a comment's body back.
+type bodyForge struct {
+	forge.Forge
+	body string
+	err  error
+}
+
+func (f *bodyForge) CommentBody(context.Context, int64, int64, int64) (string, error) {
+	return f.body, f.err
+}
+
+type noReaderForge struct{ forge.Forge }
+
+func TestCommentUnchanged(t *testing.T) {
+	ctx := context.Background()
+	for name, tc := range map[string]struct {
+		f    forge.Forge
+		want bool
+	}{
+		"same body":      {&bodyForge{body: "a"}, true},
+		"other body":     {&bodyForge{body: "b"}, false},
+		"read failed":    {&bodyForge{body: "a", err: errors.New("boom")}, false},
+		"note gone":      {&bodyForge{body: "a", err: forge.ErrNotFound}, false},
+		"cannot read it": {&noReaderForge{}, false},
+	} {
+		if got := commentUnchanged(ctx, tc.f, 1, 2, 3, "a"); got != tc.want {
+			t.Errorf("%s: commentUnchanged = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+// serveNote serves note id of merge request iid with body.
+func serveNote(env *testEnv, iid, id int64, body string) {
+	env.GitLab.Handle(http.MethodGet, notePath(iid, id), func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"id": id, "body": body})
+	})
+}
+
+// A republish whose comment is byte-identical to the one on the change edits
+// nothing.
+func TestUpsertSkipsIdenticalBody(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "api/handler.go")))
+	servePublish(env, 1, head)
+	publish(t, env)
+	body := createdComment(t, env, 1)
+	serveNote(env, 1, createdNote, body)
+	env.GitLab.Reply(http.MethodPut, notePath(1, createdNote), http.StatusOK, `{"id":555}`)
+
+	again := func() {
+		if _, err := env.Store.Republish(env.ctx, env.MRKey(1), head, "main"); err != nil {
+			t.Fatal(err)
+		}
+		publish(t, env)
+	}
+	again()
+	if n := len(env.GitLab.Requests(http.MethodPut, notePath(1, createdNote))); n != 0 {
+		t.Errorf("an identical comment was updated %d times", n)
+	}
+	// A comment that differs is edited.
+	serveNote(env, 1, createdNote, "something else")
+	again()
+	if n := len(env.GitLab.Requests(http.MethodPut, notePath(1, createdNote))); n != 1 {
+		t.Errorf("a changed comment was updated %d times, want 1", n)
+	}
+}
+
+// A blocking CI job that turns passed approves, one that turns failed
+// withdraws the approval, and an unchanged result edits no comment.
+func TestCIRedecideAfterPublish(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	job := func(res string) []store.CIJobResult {
+		return []store.CIJobResult{{Name: "test", Result: res, Read: "status", Blocks: true}}
+	}
+	if err := env.Store.SetRunCI(env.ctx, id, job("failed")); err != nil {
+		t.Fatal(err)
+	}
+	servePublish(env, 1, head)
+	env.GitLab.Reply(http.MethodPut, notePath(1, createdNote), http.StatusOK, `{"id":555}`)
+	env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusCreated, `{}`)
+
+	// Failed: no approval, the CI outcome, the line in the comment.
+	publish(t, env)
+	body := createdComment(t, env, 1)
+	if !strings.Contains(body, "_CI: test failed (blocks approval)_") {
+		t.Errorf("comment lacks the CI line:\n%s", body)
+	}
+	if n := len(env.GitLab.Requests(http.MethodPost, approvePath(1))); n != 0 {
+		t.Errorf("approved %d times with a blocking job failed", n)
+	}
+	if r := env.Run(id); r.Outcome != store.OutcomeCI || r.Approved {
+		t.Errorf("run = outcome %q approved %v, want %q, not approved", r.Outcome, r.Approved, store.OutcomeCI)
+	}
+	serveNote(env, 1, createdNote, body)
+
+	redecide := func(res string) {
+		t.Helper()
+		if _, err := env.Store.Republish(env.ctx, env.MRKey(1), head, "main"); err != nil {
+			t.Fatal(err)
+		}
+		if err := env.Store.SetRunCI(env.ctx, id, job(res)); err != nil {
+			t.Fatal(err)
+		}
+		publish(t, env)
+	}
+	// An unchanged result: published again, no comment edit.
+	redecide("failed")
+	if n := len(env.GitLab.Requests(http.MethodPut, notePath(1, createdNote))); n != 0 {
+		t.Errorf("an unchanged CI result edited the comment %d times", n)
+	}
+	// Passed: approves.
+	redecide("passed")
+	if n := len(env.GitLab.Requests(http.MethodPost, approvePath(1))); n != 1 {
+		t.Fatalf("approved %d times after the job passed, want 1", n)
+	}
+	if r := env.Run(id); r.Outcome != store.OutcomeApproved || !r.Approved {
+		t.Errorf("run = outcome %q approved %v, want approved", r.Outcome, r.Approved)
+	}
+	// Failed again: the status turns failed and the approval is not kept.
+	redecide("failed")
+	if r := env.Run(id); r.Outcome != store.OutcomeCI || r.Approved {
+		t.Errorf("run = outcome %q approved %v after the job failed again", r.Outcome, r.Approved)
 	}
 }

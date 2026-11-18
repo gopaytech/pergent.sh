@@ -26,6 +26,9 @@ import (
 //   - "approved": the approve bot approved this run (also when the approval
 //     was withdrawn later, for example when the change merged);
 //   - "blocking": a skill found blocking issues;
+//   - "ci_blocked": a blocking CI job the repository chose isn't passed
+//     (failed, cancelled, skipped, missing, running or unreadable); the
+//     review itself had no blocking issues;
 //   - "draft": clean, not approved because the change was a draft;
 //   - "no_blocking": clean but not approved, for the reason given (approval
 //     turned off, files skipped, the approve side can't reach the
@@ -48,6 +51,7 @@ const (
 	OutcomeRunning    = store.OutcomeRunning
 	OutcomeApproved   = store.OutcomeApproved
 	OutcomeBlocking   = store.OutcomeBlocking
+	OutcomeCI         = store.OutcomeCI
 	OutcomeDraft      = store.OutcomeDraft
 	OutcomeNoBlocking = store.OutcomeNoBlocking
 	OutcomeFailed     = store.OutcomeFailed

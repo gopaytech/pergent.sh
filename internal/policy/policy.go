@@ -18,8 +18,10 @@ import (
 
 	"github.com/gopaytech/pergent/render"
 
+	"github.com/gopaytech/pergent.sh/internal/ci"
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/result"
+	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
 // Marker identifies pergent's one comment on an MR, so it is updated in place.
@@ -159,6 +161,12 @@ type Outcome struct {
 	InlineOn     bool
 	Inline       map[string]bool
 	FindingNotes map[string]string
+
+	// CI is the run's CI jobs as they were last read (the run's own
+	// snapshot). A blocking job that isn't passed holds the review back,
+	// whatever else decides it (Decide), and the comment carries the CI line.
+	// Empty is a repository with no CI jobs: nothing changes.
+	CI []store.CIJobResult
 }
 
 // Kind is what a decision is, in short.
@@ -176,6 +184,10 @@ const (
 	KindNotApproved Kind = "not_approved"
 	// KindDraft is a clean review of a draft, approved once it is ready.
 	KindDraft Kind = "draft"
+	// KindCI is a review that CI alone holds back: a blocking CI job isn't
+	// passed, and nothing else (blocking findings, a failed review) already
+	// blocks it.
+	KindCI Kind = "ci"
 	// KindApprove is a clean review to approve.
 	KindApprove Kind = "approve"
 )
@@ -195,6 +207,14 @@ type Decision struct {
 // whatever the path that built it.
 func Decide(o Outcome, failure config.FailureStatus) Decision {
 	d := decide(o, failure)
+	// After the failure_status mapping, so neutral can't hide a CI block.
+	if blocked := ci.Blocking(o.CI); len(blocked) > 0 {
+		d.Approve, d.Status, d.Description = false, StatusFailed, ciDescription(blocked)
+		switch d.Kind {
+		case KindApprove, KindNotApproved, KindDraft:
+			d.Kind = KindCI
+		}
+	}
 	d.Comment = NeutralizeQuickActions(d.Comment)
 	return d
 }
@@ -234,11 +254,11 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 	}
 
 	if o.FailureReason != "" {
-		return Decision{Comment: withMarker(ErrorComment(hide(o.FailureReason))), Status: failed, Description: descCouldNotReview, Kind: KindFailed}
+		return Decision{Comment: withMarker(ErrorComment(hide(o.FailureReason), ci.Line(o.CI))), Status: failed, Description: descCouldNotReview, Kind: KindFailed}
 	}
 	r := o.Result
 	if r == nil {
-		return Decision{Comment: ErrorComment("no result was received"), Status: failed, Description: descCouldNotReview, Kind: KindFailed}
+		return Decision{Comment: ErrorComment("no result was received", ci.Line(o.CI)), Status: failed, Description: descCouldNotReview, Kind: KindFailed}
 	}
 	switch r.Status {
 	case "error":
@@ -248,15 +268,17 @@ func decide(o Outcome, failure config.FailureStatus) Decision {
 			if r.Error != nil && r.Error.Message != "" {
 				reason = hide(r.Error.Message)
 			}
-			comment = ErrorComment(reason)
+			comment = ErrorComment(reason, ci.Line(o.CI))
+		} else {
+			comment += ciNote(ci.Line(o.CI))
 		}
 		return Decision{Comment: withMarker(comment), Status: failed, Description: descCouldNotReview, Kind: KindFailed}
 	case "completed":
 	default:
-		return Decision{Comment: ErrorComment(fmt.Sprintf("the result has an unknown status %q", r.Status)), Status: failed, Description: descCouldNotReview, Kind: KindFailed}
+		return Decision{Comment: ErrorComment(fmt.Sprintf("the result has an unknown status %q", r.Status), ci.Line(o.CI)), Status: failed, Description: descCouldNotReview, Kind: KindFailed}
 	}
 	if len(r.Skills) == 0 {
-		return Decision{Comment: ErrorComment("the result has no skills"), Status: failed, Description: descCouldNotReview, Kind: KindFailed}
+		return Decision{Comment: ErrorComment("the result has no skills", ci.Line(o.CI)), Status: failed, Description: descCouldNotReview, Kind: KindFailed}
 	}
 
 	skills := r.Skills
@@ -364,6 +386,7 @@ func renderOptions(o Outcome, r *result.Result, changed []string) render.Options
 		opts.Version = "v" + strings.TrimPrefix(r.PergentVersion, "v")
 	}
 	opts.Short, opts.MetaNote = o.Quiet, metaNote(r.Incremental, o.Quiet)
+	opts.HeaderNote = ci.Line(o.CI)
 	if len(o.Layout) > 0 {
 		// A list render refuses is a later release's block: the default
 		// comment is the fallback, and there is nothing to log per render.
@@ -555,9 +578,61 @@ func notApproved(comment, block, reason, note string) Decision {
 	}
 }
 
-// ErrorComment is the comment for a review that could not run.
-func ErrorComment(reason string) string {
-	return Marker + "\n⚠️ **pergent couldn't review this MR:** " + reason + "."
+// ErrorComment is the comment for a review that could not run. A non-empty
+// ciLine (ci.Line) is written under the header in the same form render gives
+// it, so a failed review still shows the CI state.
+func ErrorComment(reason, ciLine string) string {
+	c := Marker + "\n⚠️ **pergent couldn't review this MR:** " + reason + "."
+	return c + ciNote(ciLine)
+}
+
+// ciNote is the CI line as its own italic line under a comment's header, in
+// the form render gives HeaderNote, "" for no line. Job names are an admin's
+// free text: the line is one line, and what Markdown or a mention would act on
+// is escaped, so a name can't notify anyone or add markup.
+func ciNote(ciLine string) string {
+	line := strings.Join(strings.Fields(ciLine), " ")
+	if line == "" {
+		return ""
+	}
+	line = ciEscaper.Replace(line)
+	return "\n\n_" + line + "_"
+}
+
+var ciEscaper = strings.NewReplacer(
+	`\`, `\\`, "`", "\\`", "*", `\*`, "_", `\_`, "[", `\[`, "]", `\]`, "|", `\|`,
+	"<", "&lt;", ">", "&gt;", "&", "&amp;", "@", "@\u200d", "#", `\#`,
+)
+
+// descCIPrefix starts the status description of a review CI holds back.
+const descCIPrefix = "CI blocks approval: "
+
+// maxDescription keeps the description inside the forges' limits (GitHub's
+// is 140 characters, GitLab's 255).
+const maxDescription = 140
+
+// ciDescription names the first blocking job and its result, then ", +N
+// more" for the others. A job name can be long: it is cut to fit.
+func ciDescription(blocked []store.CIJobResult) string {
+	more := ""
+	if n := len(blocked) - 1; n > 0 {
+		more = fmt.Sprintf(", +%d more", n)
+	}
+	text := blocked[0].Name + " " + blocked[0].Result
+	if room := maxDescription - len([]rune(descCIPrefix+more)); len([]rune(text)) > room {
+		// Keep the result: cut the name.
+		res := " " + blocked[0].Result
+		name := []rune(blocked[0].Name)
+		keep := room - len([]rune(res)) - 1
+		if keep < 0 {
+			keep = 0
+		}
+		if keep < len(name) {
+			name = name[:keep]
+		}
+		text = string(name) + "…" + res
+	}
+	return descCIPrefix + text + more
 }
 
 func failureStatus(f config.FailureStatus) Status {

@@ -300,6 +300,15 @@ type Comment struct {
 	System bool
 }
 
+// CommentBodyReader reads one comment's text. The publisher uses it to leave
+// a comment alone when the new body is the same. It is not CommentReader: a
+// platform that has this one need not vouch for a comment's author.
+type CommentBodyReader interface {
+	// CommentBody returns the body of a comment on the change. A comment
+	// that is gone is ErrNotFound.
+	CommentBody(ctx context.Context, projectID, number, commentID int64) (string, error)
+}
+
 // CommentReader reads a comment back from the platform. A platform whose
 // webhooks are only as good as a secret shared by its projects implements it,
 // so a command is taken from the platform and not from a payload. GitHub signs

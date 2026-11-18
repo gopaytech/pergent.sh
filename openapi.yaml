@@ -4190,14 +4190,16 @@ components:
       description: |
         `running` (queued, being reviewed, or not posted yet), `approved` (the
         approve bot approved this run), `blocking` (a skill found blocking
-        issues), `draft` (clean, not approved because the change was a draft),
+        issues), `ci_blocked` (the review found nothing blocking, but a
+        blocking CI job isn't passed), `draft` (clean, not approved because
+        the change was a draft),
         `no_blocking` (clean but not approved, for the reason given), `failed`
         (no usable review), `superseded` (replaced by a newer push, or the
         change was closed), `skipped` (the repository has no skills; never a
         review or a failure), `unknown` (published before outcomes were
         recorded), `waiting` (the repository doesn't trust the change's
         author; held until someone with write access starts the review).
-      enum: [running, approved, blocking, draft, no_blocking, failed, superseded, skipped, unknown, waiting]
+      enum: [running, approved, blocking, ci_blocked, draft, no_blocking, failed, superseded, skipped, unknown, waiting]
     # ----------------------------------------------------------- request bodies
     PasswordSignInRequest:
       type: object
