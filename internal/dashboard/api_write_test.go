@@ -132,7 +132,7 @@ func (e *env) dashboardRepo(instance, project string, edit func(*store.Dashboard
 
 func (e *env) storedRepo(instance, project string) (store.DashboardRepo, bool) {
 	e.t.Helper()
-	r, found, err := e.st.DashboardRepo(ctx, instance, project)
+	r, found, err := e.st.AnyDashboardRepo(ctx, instance, project)
 	if err != nil {
 		e.t.Fatal(err)
 	}

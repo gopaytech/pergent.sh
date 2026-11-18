@@ -349,7 +349,7 @@ func decodeStrictLimit(r *http.Request, v any, limit int64) error {
 // --- the writes to one repository ---
 
 // target returns the repository the request's {instance}/{rest...} names
-// once suffix is cut from rest: switched on, seen by the session (404
+// once suffix is cut from rest: switched on or paused, seen by the session (404
 // otherwise, as for one that doesn't exist), on which the session's role is
 // need or above (403) and not managed by config (409).
 func (d *Dashboard) target(w http.ResponseWriter, r *http.Request, suffix string, need Role) (settings.Effective, bool) {
@@ -372,7 +372,7 @@ func (d *Dashboard) targetRepo(w http.ResponseWriter, r *http.Request, suffix st
 		notFound(w)
 		return settings.Effective{}, false
 	}
-	repos, err := d.activeRepos(ctx, se)
+	repos, err := d.visibleRepos(ctx, se)
 	if err != nil {
 		d.failed(w, r, "listing repositories", err)
 		return settings.Effective{}, false
@@ -734,9 +734,9 @@ func (d *Dashboard) updateSettings(w http.ResponseWriter, r *http.Request, repo 
 	if skillsChanged {
 		d.recheck(repo.Instance, repo.Project)
 	}
-	now, ok, err := d.Repos.Get(ctx, repo.Instance, repo.Project)
+	now, ok, err := d.Repos.GetAny(ctx, repo.Instance, repo.Project)
 	if err == nil && !ok {
-		err = errors.New("the repository isn't switched on any more")
+		err = errors.New("the repository isn't there any more")
 	}
 	if err != nil {
 		d.failed(w, r, "loading a repository", err)

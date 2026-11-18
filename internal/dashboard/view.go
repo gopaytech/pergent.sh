@@ -332,17 +332,20 @@ type DiagnosticsView struct {
 	PodState *string `json:"podState,omitempty"`
 }
 
-// RepositoryView is one repository switched on. GET /api/repositories is
+// RepositoryView is one repository switched on or paused. GET /api/repositories is
 // a list of them.
 type RepositoryView struct {
 	Instance string `json:"instance"`
 	Project  string `json:"project"`
 	Platform string `json:"platform"`
 	// Source is "config" (read-only here) or "dashboard".
-	Source string    `json:"source"`
+	Source string `json:"source"`
+	// On is false while it is paused (Paused) and once it is removed.
 	On     bool      `json:"on"`
+	Paused bool      `json:"paused"`
 	Last7  Last7View `json:"last7"`
-	// Health is "attention" when it has setup problems, else "ok".
+	// Health is "paused" while it is paused, else "attention" when it has
+	// setup problems, else "ok".
 	Health string `json:"health"`
 }
 
@@ -1318,12 +1321,13 @@ type UsageDayView struct {
 }
 
 // UsageRepositoryRowView is one repository in GET /api/admin/usage.
-// SwitchedOn is false for a repository switched off since, or on an
-// instance that was removed: its usage is kept.
+// SwitchedOn is false for a repository paused (Paused) or removed since, or
+// on an instance that was removed: its usage is kept.
 type UsageRepositoryRowView struct {
 	Instance   string          `json:"instance"`
 	Project    string          `json:"project"`
 	SwitchedOn bool            `json:"switchedOn"`
+	Paused     bool            `json:"paused"`
 	Tokens     UsageTokensView `json:"tokens"`
 	Reviews    int64           `json:"reviews"`
 }

@@ -724,7 +724,9 @@ func (d *Dashboard) listAvailable(w http.ResponseWriter, r *http.Request, name s
 	}
 	ctx, cancel := context.WithTimeoutCause(r.Context(), d.availableBudget, errOutOfBudget)
 	defer cancel()
-	all, err := d.Repos.List(ctx)
+	// A paused repository was added already: POST /api/repositories resumes
+	// it, so the picker leaves it out like one switched on.
+	all, err := d.Repos.ListAll(ctx)
 	if err != nil {
 		d.failed(w, r, "listing repositories", err)
 		return

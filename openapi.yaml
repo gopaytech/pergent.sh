@@ -1074,7 +1074,7 @@ paths:
     get:
       operationId: listRepositories
       tags: [Repositories]
-      summary: List the repositories switched on that the user can see
+      summary: List the repositories switched on or paused that the user can see
       x-pergent-access: session
       security:
         - sessionCookie: []
@@ -5799,9 +5799,9 @@ components:
           type: [integer, 'null']
           description: The quota, null when there is none.
     RepositoryView:
-      description: One repository switched on.
+      description: One repository switched on or paused.
       type: object
-      required: [instance, project, platform, source, 'on', last7, health]
+      required: [instance, project, platform, source, 'on', paused, last7, health]
       properties:
         instance: {type: string}
         project: {type: string}
@@ -5812,12 +5812,17 @@ components:
           type: string
           enum: [config, dashboard]
           description: '"config" (read-only here) or "dashboard".'
-        'on': {type: boolean}
+        'on':
+          type: boolean
+          description: False while it is paused, and once it is removed.
+        paused:
+          type: boolean
+          description: True while it is paused. Nothing reviews it then; its settings are kept.
         last7: {$ref: '#/components/schemas/Last7View'}
         health:
           type: string
-          enum: [ok, attention]
-          description: '"attention" when it has setup problems, else "ok".'
+          enum: [ok, attention, paused]
+          description: '"paused" while it is paused, else "attention" when it has setup problems, else "ok".'
     ReviewDetailView:
       description: The change and every run of it, newest first.
       type: object
@@ -6319,7 +6324,7 @@ components:
     UsageRepositoryRowView:
       description: One repository in `GET /api/admin/usage`.
       type: object
-      required: [instance, project, switchedOn, tokens, reviews]
+      required: [instance, project, switchedOn, paused, tokens, reviews]
       properties:
         instance: {type: string}
         project:
@@ -6327,7 +6332,10 @@ components:
           description: The path it was last reported under.
         switchedOn:
           type: boolean
-          description: False for a repository switched off since, or on an instance that was removed; its usage is kept.
+          description: False for a repository paused or removed since, or on an instance that was removed; its usage is kept.
+        paused:
+          type: boolean
+          description: True for a repository that is paused now.
         tokens: {$ref: '#/components/schemas/UsageTokensView'}
         reviews:
           type: integer
