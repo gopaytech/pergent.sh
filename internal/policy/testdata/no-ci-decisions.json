@@ -1,0 +1,79 @@
+{
+  "approval off": {
+    "Comment": "\u003c!-- pergent --\u003e\n### ✅ No blocking issues\n\n\u003csub\u003eCommit `h` · 1 file · no findings\u003c/sub\u003e\n\n\u003cdetails\u003e\u003csummary\u003eFiles (1)\u003c/summary\u003e\n\n- `a.go`\n\n\u003c/details\u003e\n\n\u003csub\u003eReviewed by [pergent](https://github.com/gopaytech/pergent.sh)\u003c/sub\u003e\n\n---\n**Not approved:** approval is turned off for this repository.\n\n\u003c!-- pergent:findings eyJ2ZXJzaW9uIjoxLCJza2lsbHMiOnsic2VjdXJpdHkiOltdfX0= --\u003e\n",
+    "Status": "success",
+    "Description": "No blocking issues; not approved: approval is turned off",
+    "Approve": false,
+    "Kind": "not_approved"
+  },
+  "blocking": {
+    "Comment": "\u003c!-- pergent --\u003e\n### ❌ 1 blocking issue\n\n\u003csub\u003eCommit `h` · 1 file · 1 blocking\u003c/sub\u003e\n\n#### Findings (1)\n\n\u003cdetails open\u003e\u003csummary\u003e❌ \u003cb\u003eUnchecked input\u003c/b\u003e · \u003ccode\u003edb/query.go:3\u003c/code\u003e · id \u003ccode\u003eabcdef\u003c/code\u003e\u003c/summary\u003e\n\nThe id reaches the query unchecked.\n\n\u003c/details\u003e\n\n\u003cdetails\u003e\u003csummary\u003eFiles (1)\u003c/summary\u003e\n\n- `db/query.go`\n\n\u003c/details\u003e\n\n\u003csub\u003eReviewed by [pergent](https://github.com/gopaytech/pergent.sh)\u003c/sub\u003e\n\n\u003c!-- pergent:findings eyJ2ZXJzaW9uIjoxLCJza2lsbHMiOnsic2VjdXJpdHkiOlt7ImZpbGUiOiJkYi9xdWVyeS5nbyIsImxpbmUiOjMsInNldmVyaXR5IjoiYmxvY2tpbmciLCJ0aXRsZSI6IlVuY2hlY2tlZCBpbnB1dCIsImV4cGxhbmF0aW9uIjoiVGhlIGlkIHJlYWNoZXMgdGhlIHF1ZXJ5IHVuY2hlY2tlZC4iLCJmaW5nZXJwcmludCI6ImFiY2RlZjAxMjM0NTY3ODkifV19fQ== --\u003e\n",
+    "Status": "failed",
+    "Description": "Blocking issues found",
+    "Approve": false,
+    "Kind": "blocking"
+  },
+  "clean": {
+    "Comment": "\u003c!-- pergent --\u003e\n### ✅ No blocking issues\n\n\u003csub\u003eCommit `h` · 1 file · no findings\u003c/sub\u003e\n\n\u003cdetails\u003e\u003csummary\u003eFiles (1)\u003c/summary\u003e\n\n- `a.go`\n\n\u003c/details\u003e\n\n\u003csub\u003eReviewed by [pergent](https://github.com/gopaytech/pergent.sh)\u003c/sub\u003e\n\n\u003c!-- pergent:findings eyJ2ZXJzaW9uIjoxLCJza2lsbHMiOnsic2VjdXJpdHkiOltdfX0= --\u003e\n",
+    "Status": "success",
+    "Description": "No blocking issues",
+    "Approve": true,
+    "Kind": "approve"
+  },
+  "draft": {
+    "Comment": "\u003c!-- pergent --\u003e\n### ✅ No blocking issues\n\n\u003csub\u003eCommit `h` · 1 file · no findings\u003c/sub\u003e\n\n\u003cdetails\u003e\u003csummary\u003eFiles (1)\u003c/summary\u003e\n\n- `a.go`\n\n\u003c/details\u003e\n\n\u003csub\u003eReviewed by [pergent](https://github.com/gopaytech/pergent.sh)\u003c/sub\u003e\n\n---\n**Not approved:** this is a draft. It will be approved when it's marked ready.\n\n\u003c!-- pergent:findings eyJ2ZXJzaW9uIjoxLCJza2lsbHMiOnsic2VjdXJpdHkiOltdfX0= --\u003e\n",
+    "Status": "success",
+    "Description": "No blocking issues; not approved: draft",
+    "Approve": false,
+    "Kind": "draft"
+  },
+  "error result": {
+    "Comment": "\u003c!-- pergent --\u003e\n⚠️ **pergent couldn't review this MR:** boom",
+    "Status": "failed",
+    "Description": "pergent couldn't review this MR",
+    "Approve": false,
+    "Kind": "failed"
+  },
+  "failed skill": {
+    "Comment": "\u003c!-- pergent --\u003e\n### ⚠️ 1 skill failed\n\n\u003csub\u003eCommit `h` · 1 file\u003c/sub\u003e\n\n⚠️ **Review failed:** The run ended without a review and without a reported cause.\n\n\u003cdetails\u003e\u003csummary\u003eFiles (1)\u003c/summary\u003e\n\n- `a.go`\n\n\u003c/details\u003e\n\n\u003csub\u003eReviewed by [pergent](https://github.com/gopaytech/pergent.sh)\u003c/sub\u003e\n\n\u003c!-- pergent:findings eyJ2ZXJzaW9uIjoxLCJza2lsbHMiOnsic2VjdXJpdHkiOltdfX0= --\u003e\n",
+    "Status": "failed",
+    "Description": "Review failed for 1 of 1 skills",
+    "Approve": false,
+    "Kind": "failed"
+  },
+  "failed skill, neutral": {
+    "Comment": "\u003c!-- pergent --\u003e\n### ⚠️ 1 skill failed\n\n\u003csub\u003eCommit `h` · 1 file\u003c/sub\u003e\n\n⚠️ **Review failed:** The run ended without a review and without a reported cause.\n\n\u003cdetails\u003e\u003csummary\u003eFiles (1)\u003c/summary\u003e\n\n- `a.go`\n\n\u003c/details\u003e\n\n\u003csub\u003eReviewed by [pergent](https://github.com/gopaytech/pergent.sh)\u003c/sub\u003e\n\n\u003c!-- pergent:findings eyJ2ZXJzaW9uIjoxLCJza2lsbHMiOnsic2VjdXJpdHkiOltdfX0= --\u003e\n",
+    "Status": "neutral",
+    "Description": "Review failed for 1 of 1 skills",
+    "Approve": false,
+    "Kind": "failed"
+  },
+  "failure reason": {
+    "Comment": "\u003c!-- pergent --\u003e\n⚠️ **pergent couldn't review this MR:** the review Job ended without a result.",
+    "Status": "failed",
+    "Description": "pergent couldn't review this MR",
+    "Approve": false,
+    "Kind": "failed"
+  },
+  "failure, neutral": {
+    "Comment": "\u003c!-- pergent --\u003e\n⚠️ **pergent couldn't review this MR:** the review Job ended without a result.",
+    "Status": "neutral",
+    "Description": "pergent couldn't review this MR",
+    "Approve": false,
+    "Kind": "failed"
+  },
+  "no result": {
+    "Comment": "\u003c!-- pergent --\u003e\n⚠️ **pergent couldn't review this MR:** no result was received.",
+    "Status": "failed",
+    "Description": "pergent couldn't review this MR",
+    "Approve": false,
+    "Kind": "failed"
+  },
+  "nothing reviewed": {
+    "Comment": "\u003c!-- pergent --\u003e\n### ✅ No blocking issues\n\n\u003csub\u003eCommit `h` · 1 file · no findings\u003c/sub\u003e\n\n\u003cdetails\u003e\u003csummary\u003eFiles (1)\u003c/summary\u003e\n\n- `go.sum` — skipped: lockfile\n\n\u003c/details\u003e\n\n\u003csub\u003eReviewed by [pergent](https://github.com/gopaytech/pergent.sh)\u003c/sub\u003e\n\n---\n**Not approved:** every changed file was skipped by pergent's default rules, so nothing was reviewed. A human needs to look.\n\n- `go.sum` (lockfile)\n\n\u003c!-- pergent:findings eyJ2ZXJzaW9uIjoxLCJza2lsbHMiOnsic2VjdXJpdHkiOltdfX0= --\u003e\n",
+    "Status": "success",
+    "Description": "Nothing to review: every changed file is skipped",
+    "Approve": false,
+    "Kind": "not_approved"
+  }
+}

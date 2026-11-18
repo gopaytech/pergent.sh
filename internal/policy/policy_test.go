@@ -468,6 +468,17 @@ func TestDecideNoCIChangesNothing(t *testing.T) {
 	}
 }
 
+// An empty CI list is the same as none, for every noCICases case.
+func TestDecideEmptyCIIsNoCI(t *testing.T) {
+	for name, c := range noCICases() {
+		o := c.o
+		o.CI = []store.CIJobResult{}
+		if a, b := Decide(c.o, c.failure), Decide(o, c.failure); a != b {
+			t.Errorf("%s: an empty CI list changed the decision:\n%+v\n%+v", name, a, b)
+		}
+	}
+}
+
 func TestNoteGoesBeforeRealFindingsBlockShape(t *testing.T) {
 	// The findings block render writes ends with a newline, and so does the
 	// comment.
