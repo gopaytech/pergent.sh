@@ -987,3 +987,46 @@ func TestResolverCIJobs(t *testing.T) {
 		t.Errorf("Overridden has no %q entry set to false", KeyCIJobs)
 	}
 }
+
+// A paused dashboard repository is not switched on: List and Get leave it
+// out. ListAll and GetAny show it, with its settings and Paused set. The
+// config still wins over a paused row of its own repository.
+func TestResolverPausedRepo(t *testing.T) {
+	st := newStore(t)
+	upsert(t, st, store.DashboardRepo{Instance: "main", Project: "acme/gadgets", Approve: ptr(false), CreatedBy: "alice"})
+	upsert(t, st, store.DashboardRepo{Instance: "main", Project: "ACME/widgets", CreatedBy: "alice"})
+	for _, p := range []string{"acme/gadgets", "acme/widgets"} {
+		if _, _, err := st.SetDashboardRepoEnabled(ctx, "main", p, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := testConfig()
+	r := &Resolver{Config: cfg, Store: st, Instances: instances.New(cfg, st, nil)}
+
+	list, err := r.List(ctx)
+	if err != nil || len(list) != 1 || list[0].Source != SourceConfig || list[0].Paused {
+		t.Fatalf("List = %+v, %v; want the config repository alone", list, err)
+	}
+	if _, ok, err := r.Get(ctx, "main", "acme/gadgets"); err != nil || ok {
+		t.Fatalf("Get of a paused repository = %v, %v; want not found", ok, err)
+	}
+	all, err := r.ListAll(ctx)
+	if err != nil || len(all) != 2 || all[0].Source != SourceConfig || all[0].Paused ||
+		all[1].Project != "acme/gadgets" || !all[1].Paused || all[1].Approve {
+		t.Fatalf("ListAll = %+v, %v; want the config repository, then acme/gadgets paused with approve off", all, err)
+	}
+	eff, ok, err := r.GetAny(ctx, "main", "ACME/Gadgets")
+	if err != nil || !ok || !eff.Paused || eff.Approve || !eff.Overridden[KeyApprove] {
+		t.Fatalf("GetAny = %+v, %v, %v; want acme/gadgets paused with approve off", eff, ok, err)
+	}
+	if eff, ok, err := r.GetAny(ctx, "main", "acme/widgets"); err != nil || !ok || eff.Source != SourceConfig || eff.Paused {
+		t.Fatalf("GetAny of a config repository = %+v, %v, %v; want the config's", eff, ok, err)
+	}
+
+	if _, _, err := st.SetDashboardRepoEnabled(ctx, "main", "acme/gadgets", true); err != nil {
+		t.Fatal(err)
+	}
+	if eff := get(t, r, "main", "acme/gadgets"); eff.Paused || eff.Approve {
+		t.Fatalf("Get after resume = %+v; want on with approve off", eff)
+	}
+}

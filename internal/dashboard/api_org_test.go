@@ -626,7 +626,7 @@ func TestWritesAudited(t *testing.T) {
 		aliceEmail + " repository_on main/acme/gadgets ",
 		aliceEmail + " settings_updated main/acme/gadgets approve, skills",
 		aliceEmail + " settings_reset main/acme/gadgets ",
-		aliceEmail + " repository_off main/acme/gadgets ",
+		aliceEmail + " repository_removed main/acme/gadgets ",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("audit = %q; want %q", got, want)

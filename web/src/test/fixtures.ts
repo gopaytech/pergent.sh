@@ -240,6 +240,7 @@ export const repoPayments: RepositoryView = {
   platform: "gitlab",
   source: "dashboard",
   on: true,
+  paused: false,
   last7: { reviews: 40, approved: 31, failed: 2 },
   health: "attention",
 };
@@ -250,8 +251,21 @@ export const repoWidgets: RepositoryView = {
   platform: "gitlab",
   source: "config",
   on: true,
+  paused: false,
   last7: { reviews: 12, approved: 10, failed: 0 },
   health: "ok",
+};
+
+// A dashboard repository that is paused.
+export const repoToolsPaused: RepositoryView = {
+  instance: "main",
+  project: "acme/tools",
+  platform: "gitlab",
+  source: "dashboard",
+  on: false,
+  paused: true,
+  last7: { reviews: 0, approved: 0, failed: 0 },
+  health: "paused",
 };
 
 // A GitHub repository switched on in the dashboard: the one that links.
@@ -261,6 +275,7 @@ export const repoGadgets: RepositoryView = {
   platform: "github",
   source: "dashboard",
   on: true,
+  paused: false,
   last7: { reviews: 5, approved: 4, failed: 0 },
   health: "ok",
 };
@@ -741,9 +756,9 @@ export const usageOverview: UsageOverviewView = {
     { day: "2026-11-07", tokens: tok(455_000, 111_000) },
   ],
   repositories: [
-    { instance: "main", project: "acme/payments", switchedOn: true, tokens: tok(900_000, 200_000), reviews: 30 },
-    { instance: "main", project: "acme/widgets", switchedOn: true, tokens: tok(200_000, 80_000), reviews: 8 },
-    { instance: "main", project: "acme/old", switchedOn: false, tokens: tok(100_000, 20_000), reviews: 2 },
+    { instance: "main", project: "acme/payments", switchedOn: true, paused: false, tokens: tok(900_000, 200_000), reviews: 30 },
+    { instance: "main", project: "acme/widgets", switchedOn: true, paused: false, tokens: tok(200_000, 80_000), reviews: 8 },
+    { instance: "main", project: "acme/old", switchedOn: false, paused: false, tokens: tok(100_000, 20_000), reviews: 2 },
   ],
   clients: [
     {

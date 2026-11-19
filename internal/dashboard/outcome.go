@@ -34,6 +34,7 @@ const (
 	approverKindToken     = "token"
 	healthOK              = "ok"
 	healthNeedsAttention  = "attention"
+	healthPaused          = "paused"
 )
 
 // judged is a run's outcome, the reason for it ("" when approved) and the

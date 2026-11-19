@@ -578,13 +578,13 @@ func (d *Dashboard) updateTeam(w http.ResponseWriter, r *http.Request) {
 }
 
 // teamRepos checks the repositories of a team change and returns those to
-// store, spelled as the resolver spells them. Each must be switched on, or a
-// whole instance that exists (msg otherwise).
+// store, spelled as the resolver spells them. Each must be switched on or
+// paused, or a whole instance that exists (msg otherwise).
 func (d *Dashboard) teamRepos(ctx context.Context, in []TeamRepoView) ([]store.TeamRepo, string, error) {
 	if len(in) == 0 {
 		return nil, "", nil
 	}
-	on, err := d.Repos.List(ctx)
+	on, err := d.Repos.ListAll(ctx)
 	if err != nil {
 		return nil, "", err
 	}

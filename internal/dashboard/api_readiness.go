@@ -60,7 +60,7 @@ func (d *Dashboard) repositoryReadiness(w http.ResponseWriter, r *http.Request, 
 	}
 	view := ReadinessView{
 		Latest: scanView(latest), Active: scanView(active),
-		CanScan:         se.Role(repo.Instance, repo.Project) >= RoleMaintainer,
+		CanScan:         se.Role(repo.Instance, repo.Project) >= RoleMaintainer && !repo.Paused,
 		ConfigRepo:      repo.Source == settings.SourceConfig,
 		FollowsDefaults: repo.Skills == nil,
 		ApplyBase:       nonNil(slices.Clone(library)),
@@ -145,7 +145,7 @@ func scanView(sc *store.ReadinessScan) *ScanView {
 // audited.
 func (d *Dashboard) scanNow(w http.ResponseWriter, r *http.Request) {
 	repo, ok := d.targetRepo(w, r, "/readiness/scan", RoleMaintainer, true, msgNeedsRoleScan)
-	if !ok {
+	if !ok || refusePaused(w, repo) {
 		return
 	}
 	if d.readiness == nil {

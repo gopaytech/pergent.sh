@@ -395,11 +395,13 @@ type ProjectRef struct {
 // creates for a dashboard or config-file repository and deletes when it is
 // switched off, so a repository that is switched off but whose row reconcile
 // has not removed yet is still listed (a config-file one, as it has no
-// dashboard row).
+// dashboard row). A paused dashboard repository keeps its project row and is
+// left out.
 func (s *Store) UnscannedProjects(ctx context.Context) ([]ProjectRef, error) {
 	rows, err := s.pool.Query(ctx, `SELECT p.instance, p.path FROM projects p
 		LEFT JOIN dashboard_repos d ON d.instance = p.instance AND lower(d.project) = lower(p.path)
-		WHERE NOT EXISTS (SELECT 1 FROM readiness_scans r
+		WHERE (d.instance IS NULL OR d.enabled)
+		  AND NOT EXISTS (SELECT 1 FROM readiness_scans r
 			WHERE r.instance = p.instance AND lower(r.project) = lower(p.path))
 		ORDER BY d.created_at ASC NULLS FIRST, p.instance, p.project_id`)
 	if err != nil {

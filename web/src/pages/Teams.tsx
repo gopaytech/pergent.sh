@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
+import { Link } from "react-router";
 
 import {
   ApiError,
   api,
+  paths,
   type AddUserBody,
   type InstanceAdminView,
   type MemberRole,
@@ -148,7 +150,8 @@ function Editor({ team, onClose }: { team: TeamView; onClose: () => void }) {
       team={team}
       accounts={users.data.filter((u) => u.kind === "sso")}
       instanceNames={instanceNames}
-      switchedOn={repos.data.filter((r) => r.on).map((r) => ({ instance: r.instance, project: r.project }))}
+      switchedOn={repos.data.filter((r) => r.on || r.paused).map((r) => ({ instance: r.instance, project: r.project }))}
+      paused={repos.data.filter((r) => r.paused).map((r) => ({ instance: r.instance, project: r.project }))}
       onClose={onClose}
     />
   );
@@ -159,23 +162,27 @@ function EditorForm({
   accounts,
   instanceNames,
   switchedOn,
+  paused,
   onClose,
 }: {
   team: TeamView;
   accounts: UserView[];
   instanceNames: string[];
+  // switchedOn holds the paused repositories too: a team may cover one.
   switchedOn: TeamRepoView[];
+  paused: TeamRepoView[];
   onClose: () => void;
 }) {
   const client = useQueryClient();
   const write = useWrite();
-  // The choices: whole instances and the repositories switched on, and what
-  // the team covers that is neither: shown as switched off and unticked,
-  // since saving it would be refused.
+  // The choices: whole instances and the repositories switched on or paused,
+  // and what the team covers that is none of those: shown as removed and
+  // unticked, since saving it would be refused.
   const available: TeamRepoView[] = [...instanceNames.map((instance) => ({ instance, project: "" })), ...switchedOn];
   const gone = team.repos.filter((r) => !available.some((c) => repoKey(c) === repoKey(r)));
   const choices = [...available, ...gone];
   const isGone = (c: TeamRepoView) => gone.some((g) => repoKey(g) === repoKey(c));
+  const isPaused = (c: TeamRepoView) => paused.some((p) => repoKey(p) === repoKey(c));
 
   const [name, setName] = useState(team.name);
   // The members: account ID to the role on this team.
@@ -339,7 +346,13 @@ function EditorForm({
                   <span className="mr">{c.project}</span> <span className="meta">{c.instance}</span>
                 </>
               )}
-              {isGone(c) && <span className="meta"> (switched off)</span>}
+              {isPaused(c) && (
+                <span className="meta">
+                  {" "}
+                  (<Link to={paths.repo(c.instance, c.project)}>paused</Link>)
+                </span>
+              )}
+              {isGone(c) && <span className="meta"> (removed)</span>}
             </span>
           </label>
         ))}

@@ -49,8 +49,9 @@ func checkBaseURL(s string) bool {
 // modelUsers lists, for each entry of the list, the repositories that name
 // it, and counts those that name none and so follow the default: the
 // repositories of the config file and the dashboard's that chose no model.
+// A paused repository counts: it can't be deleted from under it either.
 func (d *Dashboard) modelUsers(ctx context.Context) (users map[string][]RepoRefView, following int, err error) {
-	repos, err := d.Repos.List(ctx)
+	repos, err := d.Repos.ListAll(ctx)
 	if err != nil {
 		return nil, 0, err
 	}

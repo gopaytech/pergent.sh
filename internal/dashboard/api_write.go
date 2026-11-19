@@ -57,6 +57,8 @@ const (
 	msgListFailed     = "could not list the repositories on the platform, please try again"
 	msgConfigManaged  = "this repository is managed by the config file; change it there"
 	msgAlreadyOn      = "this repository is switched on already"
+	msgBadEnabled     = `the body must be {"enabled": true or false}`
+	msgPaused         = "the repository is paused"
 	msgWriteFailed    = "could not save the change, please try again"
 	msgUserLookup     = "could not look the user up on the platform, please try again"
 	msgBadProjectBody = `the body must be {"project": "<path>"}`
@@ -73,14 +75,16 @@ var (
 )
 
 // writeRoutes adds the write API to mux: every route behind a session
-// (Auth.Require checks X-CSRF-Token); switching on and off and the picker
-// are admin routes (adminRoute: 404 for anyone else), a repository's settings
-// are for its maintainers and admins (403 otherwise).
+// (Auth.Require checks X-CSRF-Token); switching on, pausing, resuming and
+// removing and the picker are admin routes (adminRoute: 404 for anyone
+// else), a repository's settings are for its maintainers and admins (403
+// otherwise).
 func (d *Dashboard) writeRoutes(mux *http.ServeMux) {
 	d.adminRoute(mux, "GET /api/repositories/available", d.available)
 	d.adminRoute(mux, "GET /api/admin/linkable", d.linkable)
 	d.adminRoute(mux, "POST /api/repositories", d.switchOn)
-	d.adminRoute(mux, "DELETE /api/repositories/{instance}/{rest...}", d.switchOff)
+	d.adminRoute(mux, "PUT /api/admin/repositories/{instance}/{rest...}", d.setEnabled)
+	d.adminRoute(mux, "DELETE /api/repositories/{instance}/{rest...}", d.removeRepo)
 	mux.Handle("PUT /api/repositories/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.repositoryPut)))
 	mux.Handle("POST /api/repositories/{instance}/{rest...}", d.Auth.Require(http.HandlerFunc(d.repositoryPost)))
 	// The instance alone is 404, not a redirect to the {rest...} routes.
@@ -88,6 +92,7 @@ func (d *Dashboard) writeRoutes(mux *http.ServeMux) {
 	for _, method := range []string{"DELETE", "PUT", "POST"} {
 		mux.Handle(method+" /api/repositories/{instance}", d.Auth.Require(none))
 	}
+	mux.Handle("PUT /api/admin/repositories/{instance}", d.Auth.Require(none))
 }
 
 // --- GET /api/repositories/available ---
@@ -274,12 +279,28 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, msgWriteFailed)
 		return
 	}
+	status := http.StatusCreated
 	if !created {
-		writeError(w, http.StatusConflict, msgAlreadyOn)
-		return
+		// A paused repository is resumed, with its settings; one switched
+		// on already is a conflict.
+		_, resumed, err := d.Store.SetDashboardRepoEnabled(ctx, instance, name, true)
+		if err != nil {
+			d.Log.Error("dashboard: resuming a repository failed", "instance", instance, "project", name,
+				"error", err.Error())
+			writeError(w, http.StatusInternalServerError, msgWriteFailed)
+			return
+		}
+		if !resumed {
+			writeError(w, http.StatusConflict, msgAlreadyOn)
+			return
+		}
+		status = http.StatusOK
+		d.Log.Info("dashboard: repository resumed", "instance", instance, "project", name, "by", se.Username)
+		d.audit(ctx, se, "repository_resumed", instance, name, "")
+	} else {
+		d.Log.Info("dashboard: repository switched on", "instance", instance, "project", name, "by", se.Username)
+		d.audit(ctx, se, "repository_on", instance, name, "")
 	}
-	d.Log.Info("dashboard: repository switched on", "instance", instance, "project", name, "by", se.Username)
-	d.audit(ctx, se, "repository_on", instance, name, "")
 	d.reconcileSoon(instance, name)
 	repo, ok, err := d.Repos.Get(ctx, instance, name)
 	if err == nil && !ok {
@@ -294,7 +315,7 @@ func (d *Dashboard) switchOn(w http.ResponseWriter, r *http.Request) {
 		d.failed(w, r, "loading a repository", err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, view)
+	writeJSON(w, status, view)
 }
 
 // switchOnAvailable checks that the review bot or App of instance reaches
@@ -349,7 +370,7 @@ func decodeStrictLimit(r *http.Request, v any, limit int64) error {
 // --- the writes to one repository ---
 
 // target returns the repository the request's {instance}/{rest...} names
-// once suffix is cut from rest: switched on, seen by the session (404
+// once suffix is cut from rest: switched on or paused, seen by the session (404
 // otherwise, as for one that doesn't exist), on which the session's role is
 // need or above (403) and not managed by config (409).
 func (d *Dashboard) target(w http.ResponseWriter, r *http.Request, suffix string, need Role) (settings.Effective, bool) {
@@ -372,7 +393,7 @@ func (d *Dashboard) targetRepo(w http.ResponseWriter, r *http.Request, suffix st
 		notFound(w)
 		return settings.Effective{}, false
 	}
-	repos, err := d.activeRepos(ctx, se)
+	repos, err := d.visibleRepos(ctx, se)
 	if err != nil {
 		d.failed(w, r, "listing repositories", err)
 		return settings.Effective{}, false
@@ -395,23 +416,104 @@ func (d *Dashboard) targetRepo(w http.ResponseWriter, r *http.Request, suffix st
 	return settings.Effective{}, false
 }
 
-// --- DELETE /api/repositories/{instance}/{project...} ---
+// --- PUT /api/admin/repositories/{instance}/{project...} ---
 
-func (d *Dashboard) switchOff(w http.ResponseWriter, r *http.Request) {
+// setEnabled pauses ({"enabled": false}) or resumes ({"enabled": true}) a
+// repository of the dashboard: its row and settings stay either way, and
+// reconcile takes its webhook and deploy token off the platform or sets them
+// up again. The state it is in already changes nothing (no audit entry, no
+// reconcile). A resume while its instance is being removed is 409.
+func (d *Dashboard) setEnabled(w http.ResponseWriter, r *http.Request) {
 	ctx, se := r.Context(), session(r)
 	repo, ok := d.target(w, r, "", RoleAdmin)
 	if !ok {
 		return
 	}
-	if err := d.Store.DeleteDashboardRepo(ctx, repo.Instance, repo.Project); err != nil {
-		d.Log.Error("dashboard: switching a repository off failed", "instance", repo.Instance, "project", repo.Project,
+	var body struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := decodeStrict(r, &body); err != nil || body.Enabled == nil {
+		writeError(w, http.StatusBadRequest, msgBadEnabled)
+		return
+	}
+	enabled := *body.Enabled
+	if inst, ok := d.registry.Get(repo.Instance); enabled && (!ok || inst.Removing) {
+		writeError(w, http.StatusConflict, msgInstanceRemoving)
+		return
+	}
+	found, changed, err := d.Store.SetDashboardRepoEnabled(ctx, repo.Instance, repo.Project, enabled)
+	if err != nil {
+		d.Log.Error("dashboard: pausing or resuming a repository failed", "instance", repo.Instance, "project", repo.Project,
 			"error", err.Error())
 		writeError(w, http.StatusInternalServerError, msgWriteFailed)
 		return
 	}
-	d.Log.Info("dashboard: repository switched off", "instance", repo.Instance, "project", repo.Project, "by", se.Username)
-	d.audit(ctx, se, "repository_off", repo.Instance, repo.Project, "")
+	if !found {
+		notFound(w)
+		return
+	}
+	if changed {
+		what, action := "paused", "repository_paused"
+		if enabled {
+			what, action = "resumed", "repository_resumed"
+		}
+		d.Log.Info("dashboard: repository "+what, "instance", repo.Instance, "project", repo.Project, "by", se.Username)
+		d.audit(ctx, se, action, repo.Instance, repo.Project, "")
+		d.reconcileSoon(repo.Instance, repo.Project)
+	}
+	now, ok, err := d.Repos.GetAny(ctx, repo.Instance, repo.Project)
+	if err == nil && !ok {
+		err = errors.New("the repository isn't there any more")
+	}
+	if err != nil {
+		d.failed(w, r, "loading a repository", err)
+		return
+	}
+	view, err := d.detailView(ctx, se, now)
+	if err != nil {
+		d.failed(w, r, "loading a repository", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// refusePaused answers 409 msgPaused, and returns true, when repo is paused:
+// nothing that starts a Job or acts on the platform runs for one. target
+// finds a paused repository, so each such action calls it after target.
+func refusePaused(w http.ResponseWriter, repo settings.Effective) bool {
+	if !repo.Paused {
+		return false
+	}
+	writeError(w, http.StatusConflict, msgPaused)
+	return true
+}
+
+// --- DELETE /api/repositories/{instance}/{project...} ---
+
+// removeRepo removes a repository of the dashboard for good, paused or not:
+// its row, settings and team links. Reconcile then takes its webhook and
+// deploy token off the platform and deletes its project's record.
+func (d *Dashboard) removeRepo(w http.ResponseWriter, r *http.Request) {
+	ctx, se := r.Context(), session(r)
+	repo, ok := d.target(w, r, "", RoleAdmin)
+	if !ok {
+		return
+	}
+	found, err := d.Store.RemoveDashboardRepo(ctx, repo.Instance, repo.Project)
+	if err != nil {
+		d.Log.Error("dashboard: removing a repository failed", "instance", repo.Instance, "project", repo.Project,
+			"error", err.Error())
+		writeError(w, http.StatusInternalServerError, msgWriteFailed)
+		return
+	}
+	if !found {
+		notFound(w)
+		return
+	}
+	d.Log.Info("dashboard: repository removed", "instance", repo.Instance, "project", repo.Project, "by", se.Username)
+	d.audit(ctx, se, "repository_removed", repo.Instance, repo.Project, "")
 	d.reconcileSoon(repo.Instance, repo.Project)
+	repo.Paused = false // gone: neither on nor paused
 	view, err := d.detailView(ctx, se, repo)
 	if err != nil {
 		d.failed(w, r, "loading a repository", err)
@@ -744,9 +846,9 @@ func (d *Dashboard) updateSettings(w http.ResponseWriter, r *http.Request, repo 
 	if skillsChanged {
 		d.recheck(repo.Instance, repo.Project)
 	}
-	now, ok, err := d.Repos.Get(ctx, repo.Instance, repo.Project)
+	now, ok, err := d.Repos.GetAny(ctx, repo.Instance, repo.Project)
 	if err == nil && !ok {
-		err = errors.New("the repository isn't switched on any more")
+		err = errors.New("the repository isn't there any more")
 	}
 	if err != nil {
 		d.failed(w, r, "loading a repository", err)

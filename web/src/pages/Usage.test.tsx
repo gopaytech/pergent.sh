@@ -18,7 +18,7 @@ describe("Usage", () => {
     expect(await screen.findByRole("heading", { name: "Usage" })).toBeInTheDocument();
     const repos = (await screen.findByRole("region", { name: "Repositories" })) as HTMLElement;
     const rows = within(repos).getAllByRole("row").slice(1);
-    expect(rows.map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["main/acme/payments", "main/acme/widgets", "main/acme/oldswitched offCSV"]);
+    expect(rows.map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["main/acme/payments", "main/acme/widgets", "main/acme/oldremovedCSV"]);
     // Input plus output, not the cache: 1,255k + 311k.
     expect(within(screen.getByRole("region", { name: "Totals" })).getByText("1.6M")).toBeInTheDocument();
     expect(within(rows[0]).getAllByRole("cell").slice(0, 5).map((c) => c.textContent)).toEqual(["main/acme/payments", "30", "900k", "200k", "1.1M"]);
@@ -53,18 +53,34 @@ describe("Usage", () => {
     expect(within(clients).getByText("No usage in this period.")).toBeInTheDocument();
   });
 
-  it("links a repository to its page, and a switched-off one only to its CSV", async () => {
+  it("links a repository to its page, and a removed one only to its CSV", async () => {
     fakeApi({ "GET /api/me": { body: operator }, [`GET ${overviewPath}`]: { body: usageOverview } });
     renderApp("/admin/usage");
     const repos = await screen.findByRole("region", { name: "Repositories" });
     expect(within(repos).getByRole("link", { name: "main/acme/payments" })).toHaveAttribute("href", "/admin/usage/main/acme/payments");
     const off = within(repos).getByText("main/acme/old").closest("tr") as HTMLElement;
-    expect(within(off).getByText("switched off")).toBeInTheDocument();
+    expect(within(off).getByText("removed")).toBeInTheDocument();
+    expect(repos).not.toHaveTextContent("switched off");
     expect(within(off).queryByRole("link", { name: "main/acme/old" })).not.toBeInTheDocument();
     expect(within(off).getByRole("link", { name: "CSV" })).toHaveAttribute("href", "/api/admin/usage.csv?days=30&instance=main&project=acme%2Fold");
     // An active repository has its page, so no CSV link on its row.
     const on = within(repos).getByRole("link", { name: "main/acme/payments" }).closest("tr") as HTMLElement;
     expect(within(on).queryByRole("link", { name: "CSV" })).not.toBeInTheDocument();
+  });
+
+  it("says paused, linked to its page, for a paused repository", async () => {
+    const paused = { instance: "main", project: "acme/tools", switchedOn: false, paused: true, tokens: usageOverview.repositories[0].tokens, reviews: 1 };
+    fakeApi({
+      "GET /api/me": { body: operator },
+      [`GET ${overviewPath}`]: { body: { ...usageOverview, repositories: [...usageOverview.repositories, paused] } },
+    });
+    renderApp("/admin/usage");
+    const repos = await screen.findByRole("region", { name: "Repositories" });
+    const link = await within(repos).findByRole("link", { name: "main/acme/tools" });
+    expect(link).toHaveAttribute("href", "/admin/usage/main/acme/tools");
+    const row = link.closest("tr") as HTMLElement;
+    expect(within(row).getByText("paused")).toHaveClass("pill", "grey");
+    expect(within(row).queryByText("removed")).not.toBeInTheDocument();
   });
 
   it("reads another period when chosen", async () => {

@@ -11,14 +11,19 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// DashboardRepo is a repository switched on in the dashboard, a row of
-// dashboard_repos. A nil setting means "use the default"; Skills is nil for
-// the same (an empty list is stored as nil). Project keeps the spelling it
-// was stored with; lookups ignore case.
+// DashboardRepo is a repository added in the dashboard, a row of
+// dashboard_repos: switched on while Enabled, paused otherwise. A nil setting
+// means "use the default"; Skills is nil for the same (an empty list is
+// stored as nil). Project keeps the spelling it was stored with; lookups
+// ignore case.
 type DashboardRepo struct {
 	Instance, Project string
-	Approve           *bool
-	ReviewDrafts      *bool
+	// Enabled is false for a paused repository: its row and settings stay,
+	// but nothing reviews it. Only SetDashboardRepoEnabled writes it; a new
+	// row is enabled.
+	Enabled      bool
+	Approve      *bool
+	ReviewDrafts *bool
 	// InlineFindings is whether findings are posted as threads on their
 	// lines (nil: the default, on).
 	InlineFindings *bool
@@ -171,7 +176,7 @@ func readLinks(b []byte) ([]Link, error) {
 const dashboardRepoColumns = `instance, project, approve, review_drafts, failure_status, skills, repo_skills,
 	job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by, created_at, updated_at,
 	inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
-	linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id, monthly_token_quota, check_deleted, ci_jobs`
+	linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id, monthly_token_quota, check_deleted, ci_jobs, enabled`
 
 func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 	var r DashboardRepo
@@ -179,7 +184,7 @@ func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 	err := row.Scan(&r.Instance, &r.Project, &r.Approve, &r.ReviewDrafts, &r.FailureStatus, &r.Skills, &r.RepoSkills,
 		&r.JobTimeoutSeconds, &r.MaxTurns, &r.JobMemory, &r.RerunLimitPerMR, &r.RerunLimitPerRepo, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt,
 		&r.InlineFindings, &r.CommandsAuthorAndMaintainersOnly, &r.IncrementalReviews, &r.LearnFromDismissals, &r.QuietReviews, &r.CommentLayout,
-		&r.LinkedReposEnabled, &links, &r.TrustedAuthorsOnly, &trusted, &r.ModelID, &r.MonthlyTokenQuota, &r.CheckDeleted, &ci)
+		&r.LinkedReposEnabled, &links, &r.TrustedAuthorsOnly, &trusted, &r.ModelID, &r.MonthlyTokenQuota, &r.CheckDeleted, &ci, &r.Enabled)
 	if len(r.Skills) == 0 {
 		r.Skills = nil
 	}
@@ -202,10 +207,21 @@ func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 	return r, err
 }
 
-// DashboardRepos returns every dashboard repository, ordered by instance and
-// project (ignoring case).
+// DashboardRepos returns every dashboard repository switched on (not
+// paused), ordered by instance and project (ignoring case).
 func (s *Store) DashboardRepos(ctx context.Context) ([]DashboardRepo, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+dashboardRepoColumns+` FROM dashboard_repos
+	return s.dashboardRepos(ctx, `WHERE enabled`)
+}
+
+// AllDashboardRepos is DashboardRepos with the paused repositories too. Only
+// what must show or keep a paused repository reads it: the dashboard and the
+// config takeover. Nothing that reviews may.
+func (s *Store) AllDashboardRepos(ctx context.Context) ([]DashboardRepo, error) {
+	return s.dashboardRepos(ctx, "")
+}
+
+func (s *Store) dashboardRepos(ctx context.Context, where string) ([]DashboardRepo, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+dashboardRepoColumns+` FROM dashboard_repos `+where+`
 		ORDER BY instance, lower(project)`)
 	if err != nil {
 		return nil, err
@@ -223,10 +239,21 @@ func (s *Store) DashboardRepos(ctx context.Context) ([]DashboardRepo, error) {
 }
 
 // DashboardRepo returns the dashboard repository project on instance, the
-// project matched ignoring case; ok is false when there is none.
+// project matched ignoring case; ok is false when there is none or it is
+// paused.
 func (s *Store) DashboardRepo(ctx context.Context, instance, project string) (DashboardRepo, bool, error) {
+	return s.dashboardRepo(ctx, instance, project, ` AND enabled`)
+}
+
+// AnyDashboardRepo is DashboardRepo that also finds a paused repository; see
+// AllDashboardRepos for who may read it.
+func (s *Store) AnyDashboardRepo(ctx context.Context, instance, project string) (DashboardRepo, bool, error) {
+	return s.dashboardRepo(ctx, instance, project, "")
+}
+
+func (s *Store) dashboardRepo(ctx context.Context, instance, project, and string) (DashboardRepo, bool, error) {
 	r, err := scanDashboardRepo(s.pool.QueryRow(ctx, `SELECT `+dashboardRepoColumns+` FROM dashboard_repos
-		WHERE instance = $1 AND lower(project) = lower($2)`, instance, project))
+		WHERE instance = $1 AND lower(project) = lower($2)`+and, instance, project))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DashboardRepo{}, false, nil
 	}
@@ -421,6 +448,49 @@ func (s *Store) DeleteDashboardRepo(ctx context.Context, instance, project strin
 	_, err := s.pool.Exec(ctx, `DELETE FROM dashboard_repos WHERE instance = $1 AND lower(project) = lower($2)`,
 		instance, project)
 	return err
+}
+
+// SetDashboardRepoEnabled switches the dashboard repository project on
+// instance (matched ignoring case) on (enabled) or pauses it. found is false
+// when there is no such row; changed is false when it was in that state
+// already, and then nothing is written.
+func (s *Store) SetDashboardRepoEnabled(ctx context.Context, instance, project string, enabled bool) (found, changed bool, err error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE dashboard_repos SET enabled = $3, updated_at = now()
+		WHERE instance = $1 AND lower(project) = lower($2) AND enabled <> $3`, instance, project, enabled)
+	if err != nil {
+		return false, false, err
+	}
+	if tag.RowsAffected() > 0 {
+		return true, true, nil
+	}
+	_, found, err = s.AnyDashboardRepo(ctx, instance, project)
+	return found, false, err
+}
+
+// RemoveDashboardRepo deletes the dashboard repository project on instance
+// (matched ignoring case), paused or not, and the team links to it, in one
+// transaction. A team's link to the whole instance and links to the same path
+// on another instance stay. found is false, and nothing is deleted, when
+// there is no such row.
+func (s *Store) RemoveDashboardRepo(ctx context.Context, instance, project string) (found bool, err error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	tag, err := tx.Exec(ctx, `DELETE FROM dashboard_repos WHERE instance = $1 AND lower(project) = lower($2)`,
+		instance, project)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() == 0 {
+		return false, nil
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM team_repos
+		WHERE instance = $1 AND project <> '' AND lower(project) = lower($2)`, instance, project); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
 }
 
 // PutRunLog stores the redacted log of a run, replacing an earlier one,
