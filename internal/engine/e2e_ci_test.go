@@ -379,14 +379,15 @@ func TestCISweepRedecidesPublished(t *testing.T) {
 	}
 }
 
-// A published review whose only job that didn't pass failed its text read is
-// not checked again by the sweep: a status-only read can't change it.
+// A published review whose only job that didn't pass failed its report read
+// is not checked again by the sweep: a status-only read can't say the report
+// could be read now.
 func TestCISweepSkipsTextFailedOnly(t *testing.T) {
 	env := ciEnv(t)
 	head := sha('a')
 	env.GitLab.SetMR(openMR(3, head))
 	id := env.Publish(3, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
-	if err := env.Store.SetRunCI(env.ctx, id, []store.CIJobResult{{Name: "test", Result: "unreadable", Reason: "error", Read: "log", Blocks: true, TextFailed: true}}); err != nil {
+	if err := env.Store.SetRunCI(env.ctx, id, []store.CIJobResult{{Name: "test", Result: "unreadable", Reason: "error", Read: "report", Blocks: true, TextFailed: true}}); err != nil {
 		t.Fatal(err)
 	}
 	serveCI(env, head, "success", "success")
@@ -396,6 +397,31 @@ func TestCISweepSkipsTextFailedOnly(t *testing.T) {
 	}
 	if r := env.Run(id); r.State != store.Published {
 		t.Errorf("run = %s, want published", r.State)
+	}
+}
+
+// A published review whose log job failed its log read is checked again by the
+// sweep, and the job turns passed once it passes: a passed job's log is never
+// read, so the review lacked nothing.
+func TestCISweepFlipsTextFailedLog(t *testing.T) {
+	env := ciEnv(t)
+	head := sha('a')
+	env.GitLab.SetMR(openMR(3, head))
+	id := env.Publish(3, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	if err := env.Store.SetRunCI(env.ctx, id, []store.CIJobResult{{Name: "test", Result: "unreadable", Reason: "error", Read: "log", Blocks: true, TextFailed: true}}); err != nil {
+		t.Fatal(err)
+	}
+	serveCI(env, head, "success", "success")
+	env.Engine.sweepCI(env.ctx)
+	r := env.Run(id)
+	if r.State != store.Reported {
+		t.Fatalf("run = %s, want reported to be decided again; logs:\n%s", r.State, env.Logs())
+	}
+	if len(r.CIJobs) != 1 || r.CIJobs[0].Result != "passed" || r.CIJobs[0].TextFailed {
+		t.Errorf("snapshot = %+v, want passed with TextFailed cleared", r.CIJobs)
+	}
+	if n := len(env.GitLab.Requests(http.MethodGet, "/projects/7/jobs/5/trace")); n != 0 {
+		t.Errorf("the re-check read the log %d times", n)
 	}
 }
 
