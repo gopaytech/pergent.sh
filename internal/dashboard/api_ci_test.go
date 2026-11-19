@@ -64,9 +64,10 @@ func TestCIJobsSettingReadWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(detail.Settings["ciJobs"])
-	want := `{"value":{"wait":"45m","jobs":[` +
-		`{"name":"test","read":"log","blocksApproval":true},` +
-		`{"name":"scan","read":"report","report":{"path":"out/scan.json"},"blocksApproval":false}]},"overridden":true}`
+	// Settings values decode as maps, so the keys come back sorted.
+	want := `{"value":{"jobs":[` +
+		`{"blocksApproval":true,"name":"test","read":"log"},` +
+		`{"blocksApproval":false,"name":"scan","read":"report","report":{"path":"out/scan.json"}}],"wait":"45m"},"overridden":true}`
 	if string(raw) != want {
 		t.Errorf("ciJobs view = %s\nwant %s", raw, want)
 	}
@@ -146,7 +147,7 @@ func TestCIJobsSettingReadWrite(t *testing.T) {
 	cfgSession := k.userOnMain(true, "acme/widgets")
 	s := getJSON[RepositoryDetailView](k, cfgSession, "/api/repositories/main/acme/widgets").Settings["ciJobs"]
 	raw, _ = json.Marshal(s)
-	if want := `{"value":{"wait":"10m","jobs":[{"name":"build","read":"status","blocksApproval":true}]},"overridden":true}`; string(raw) != want {
+	if want := `{"value":{"jobs":[{"blocksApproval":true,"name":"build","read":"status"}],"wait":"10m"},"overridden":true}`; string(raw) != want {
 		t.Errorf("config ciJobs = %s\nwant %s", raw, want)
 	}
 	wantCode(t, k.send(cfgSession, "PUT", "/api/repositories/main/acme/widgets/settings", ciJobsBody), "PUT on a config repository", http.StatusConflict)
@@ -174,6 +175,8 @@ func TestCIJobNames(t *testing.T) {
 	e.addRun(runFix{instance: "gh", project: "acme/widgets", number: 1, head: head('a'), at: e.clock.now().Add(-2 * time.Hour)})
 	e.addRun(runFix{instance: "gh", project: "acme/widgets", number: 2, head: head('b'), at: e.clock.now().Add(-time.Hour)})
 	e.aliceOn("gh", store.RoleMaintainer)
+	e.dashboardRepo("main", "acme/gadgets", nil)
+	e.aliceOn("main", store.RoleMaintainer)
 	c := e.aliceSession()
 
 	got := getJSON[CIJobNamesView](e, c, "/api/repositories/gh/acme/widgets/ci-job-names")
@@ -189,7 +192,7 @@ func TestCIJobNames(t *testing.T) {
 	}
 
 	// No CI reader on the instance: an empty list, never null.
-	rec := e.get(c, "/api/repositories/main/acme/widgets/ci-job-names")
+	rec := e.get(c, "/api/repositories/main/acme/gadgets/ci-job-names")
 	wantCode(t, rec, "no reader", http.StatusOK)
 	if body := strings.TrimSpace(rec.Body.String()); body != `{"names":[]}` {
 		t.Errorf("no reader body = %s; want {\"names\":[]}", body)

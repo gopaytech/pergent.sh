@@ -1078,7 +1078,7 @@ func TestRepositoryDetail(t *testing.T) {
 		t.Errorf("repo = %+v", v.Repo)
 	}
 	settings, _ := json.Marshal(v.Settings)
-	want := `{"approve":{"value":false,"overridden":true},"checkDeleted":{"value":false,"overridden":false},"ciJobs":{"value":{"wait":"30m","jobs":[]},"overridden":false},` +
+	want := `{"approve":{"value":false,"overridden":true},"checkDeleted":{"value":false,"overridden":false},"ciJobs":{"value":{"jobs":[],"wait":"30m"},"overridden":false},` +
 		`"commandsAuthorAndMaintainersOnly":{"value":true,"overridden":false},` +
 		`"commentLayout":{"value":["summary:open","findings:collapsed","dismissed:collapsed","checks:open","files:collapsed"],"overridden":false},` +
 		`"failureStatus":{"value":"failed","overridden":false},` +

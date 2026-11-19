@@ -280,13 +280,15 @@ func TestCIRunsForHead(t *testing.T) {
 // published run, whatever their head; no other merge request's.
 func TestCIRunsForMR(t *testing.T) {
 	s := newStore(t)
-	pending := enqueue(t, s, mr1, sha('a'))
-	if _, err := s.HoldForCI(ctx, pending, ciDeadline); err != nil {
-		t.Fatal(err)
-	}
 	published(t, s, mr1, sha('b'), "main")
 	newest := published(t, s, mr1, sha('c'), "main")
 	published(t, s, mr2, sha('d'), "main")
+	// The push after the reviews: enqueuing a head supersedes the merge
+	// request's older waiting runs, so the waiting run comes last.
+	pending := enqueue(t, s, mr1, sha('e'))
+	if _, err := s.HoldForCI(ctx, pending, ciDeadline); err != nil {
+		t.Fatal(err)
+	}
 
 	got, err := s.CIRunsForMR(ctx, mr1.Instance, "acme/widgets", mr1.IID)
 	if err != nil {
