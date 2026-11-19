@@ -12,6 +12,16 @@
 
 Migration `0042` runs at startup and adds one column with a default (`dashboard_repos.enabled`, `true`), so back up Postgres first, as for any migration. The previous release keeps working on the migrated database, **but it ignores the column: after a rollback every paused repository is switched on again** at the next reconcile. Remove the ones you don't want before you roll back. There is no config change.
 
+**A repository can choose CI jobs to read and to gate on.** The setting is **CI jobs**, `repositories[].ci_jobs`: [CI jobs](concepts/ci-jobs.md). Nothing changes until a repository sets it.
+
+Migration `0043` runs at startup and only adds columns (one to `dashboard_repos`, three to `runs`, two to `projects`) and one partial index, with NULL or a default, dropping nothing. Back up Postgres first, as for any migration.
+
+- **GitHub: `Actions: Read` and the `Check run` event.** `Actions: Read` is needed only by repositories whose CI jobs read `log` or `report` from GitHub Actions; a `status` read uses Checks, which the App already has. The `Check run` event is optional: without it pergent.sh notices CI changes on its 2-minute check instead of at once. Add them under **Permissions & events** ([GitHub setup](setup/github.md)). GitHub applies a new permission to an installation only after its owner accepts it. Until then, logs and reports from Actions are `unreadable`. Readiness warns, for repositories that have CI jobs, while an installation lacks either one.
+- **GitLab hooks gain Pipeline and Job events** on the next reconcile (startup, then every hour). pergent.sh turns them on itself. Repositories without `ci_jobs` ignore them.
+- **The model sees the results only with a pergent image that reads `--ci-results`.** The version is named in the release notes. An older image ignores the file and reviews as before, and the gate still applies.
+- **To roll back, first remove `repositories[].ci_jobs` from the config.** The previous release refuses an unknown key.
+- **After a rollback, runs waiting for CI stay waiting** until someone starts them or a push supersedes them. GitLab hooks keep the extra events, and the previous release ignores them.
+
 ## Upgrading to 0.17.1
 
 **On GitLab, `failure_status: neutral` now sets the `pergent` commit status to `success`.** It used to set `skipped`, which GitLab refuses once the status is `running`, so a review that couldn't be done kept its status `running` through about 50 minutes of retries and then ended `failed`, blocking the merge request. Now the pipeline passes. The review is still not approved, and its comment and the status description still say it failed.

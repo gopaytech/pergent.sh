@@ -318,6 +318,17 @@ func TestUpdateComment(t *testing.T) {
 	}
 }
 
+func TestCommentBody(t *testing.T) {
+	f := newFake(t)
+	f.on(http.MethodGet, mr+"/notes/42", http.StatusOK, map[string]any{"id": 42, "body": "hello"})
+	if got, err := f.forge().CommentBody(context.Background(), 7, 3, 42); err != nil || got != "hello" {
+		t.Fatalf("CommentBody = %q, %v", got, err)
+	}
+	if _, err := newFake(t).forge().CommentBody(context.Background(), 7, 3, 43); !errors.Is(err, forge.ErrNotFound) {
+		t.Fatalf("CommentBody of a deleted note = %v, want forge.ErrNotFound", err)
+	}
+}
+
 func TestGetFileAndListTree(t *testing.T) {
 	f := newFake(t)
 	f.on(http.MethodGet, "/projects/7/repository/files/.pergent%2Finstructions.md/raw", http.StatusOK, "be kind")

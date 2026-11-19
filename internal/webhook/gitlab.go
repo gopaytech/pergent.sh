@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,15 +23,17 @@ import (
 )
 
 const (
-	maxBodyBytes  = 5 << 20
-	mrHookEvent   = "Merge Request Hook"
-	noteHookEvent = "Note Hook"
-	tokenHeader   = "X-Gitlab-Token"
-	eventHeader   = "X-Gitlab-Event"
-	mrObjectKind  = "merge_request"
-	noteKind      = "note"
-	instancePath  = "instance"
-	outcomeIgnore = "ignored"
+	maxBodyBytes      = 5 << 20
+	mrHookEvent       = "Merge Request Hook"
+	noteHookEvent     = "Note Hook"
+	pipelineHookEvent = "Pipeline Hook"
+	jobHookEvent      = "Job Hook"
+	tokenHeader       = "X-Gitlab-Token"
+	eventHeader       = "X-Gitlab-Event"
+	mrObjectKind      = "merge_request"
+	noteKind          = "note"
+	instancePath      = "instance"
+	outcomeIgnore     = "ignored"
 )
 
 // fatesRequestTimeout bounds recording the end of a change, which the answer
@@ -103,7 +106,43 @@ type Handler struct {
 	// Wake nudges the dispatcher after a new run or command was queued. May
 	// be nil.
 	Wake func()
-	Log  *slog.Logger
+	// CI is told of Pipeline and Job events of repositories that choose CI
+	// jobs. Nil ignores them.
+	CI  CINotifier
+	Log *slog.Logger
+}
+
+// CINotifier is told that CI changed on a head of a project. It must not
+// block.
+type CINotifier interface {
+	CIChanged(instance, project, head string)
+	// CIChangedMR is for a merged-results pipeline, whose sha is the merge
+	// commit's: it names the merge request.
+	CIChangedMR(instance, project string, iid int64)
+}
+
+// ciEvent holds only the fields of a Pipeline Hook or Job Hook that are read.
+type ciEvent struct {
+	ObjectKind string `json:"object_kind"`
+	// SHA is the Job Hook's commit.
+	SHA string `json:"sha"`
+	// BuildName is the Job Hook's job name.
+	BuildName string `json:"build_name"`
+	Ref       string `json:"ref"`
+	ProjectID int64  `json:"project_id"`
+	Project   struct {
+		ID                int64  `json:"id"`
+		PathWithNamespace string `json:"path_with_namespace"`
+	} `json:"project"`
+	// MergeRequest is set on a merge request pipeline's Pipeline Hook.
+	MergeRequest *struct {
+		IID int64 `json:"iid"`
+	} `json:"merge_request"`
+	ObjectAttributes struct {
+		// SHA is the Pipeline Hook's commit.
+		SHA string `json:"sha"`
+		Ref string `json:"ref"`
+	} `json:"object_attributes"`
 }
 
 // noteEvent holds only the fields of a Note Hook that are read.
@@ -205,7 +244,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	event := r.Header.Get(eventHeader)
 	log = log.With("event", event)
-	if event != mrHookEvent && event != noteHookEvent {
+	if event != mrHookEvent && event != noteHookEvent && event != pipelineHookEvent && event != jobHookEvent {
 		log.Info("webhook handled", "outcome", outcomeIgnore, "reason", "other_event")
 		w.WriteHeader(http.StatusOK)
 		return
@@ -218,6 +257,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer release()
 	if event == noteHookEvent {
 		h.note(w, r, log, name, body)
+		return
+	}
+	if event == pipelineHookEvent || event == jobHookEvent {
+		h.ci(w, r, log, name, event, body)
 		return
 	}
 	var ev mergeRequestEvent
@@ -363,6 +406,97 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// ci handles a Pipeline Hook or Job Hook: a repository that chooses CI jobs
+// has its waiting and published runs of the head checked again. Nothing here
+// calls GitLab, and the payload's text is never kept.
+func (h *Handler) ci(w http.ResponseWriter, r *http.Request, log *slog.Logger, instance, event string, body []byte) {
+	ignore := func(reason string) {
+		log.Debug("webhook handled", "outcome", outcomeIgnore, "reason", reason)
+		w.WriteHeader(http.StatusOK)
+	}
+	failed := func(err error) {
+		log.Error("webhook failed", "outcome", "lookup_error", "err", err)
+		w.WriteHeader(http.StatusOK)
+	}
+	if h.CI == nil {
+		ignore("ci_off")
+		return
+	}
+	var ev ciEvent
+	if err := json.Unmarshal(body, &ev); err != nil {
+		unusable(w, log, "malformed_json")
+		return
+	}
+	head, ref, path, id := ev.SHA, ev.Ref, ev.Project.PathWithNamespace, ev.Project.ID
+	if event == pipelineHookEvent {
+		head, ref = ev.ObjectAttributes.SHA, ev.ObjectAttributes.Ref
+	}
+	iid := mergeRequestRef(ref)
+	// A merge request pipeline names its merge request, whatever its ref is.
+	if event == pipelineHookEvent && ev.MergeRequest != nil && ev.MergeRequest.IID > 0 {
+		iid = ev.MergeRequest.IID
+	}
+	if id == 0 {
+		id = ev.ProjectID
+	}
+	if path == "" && id != 0 && h.Projects != nil {
+		p, found, err := h.Projects.Project(r.Context(), instance, id)
+		if err != nil {
+			failed(err)
+			return
+		}
+		if found {
+			path = p.Path
+		}
+	}
+	if path == "" || (iid == 0 && !validSHA(head)) {
+		ignore("no_project_or_head")
+		return
+	}
+	eff, ok, err := lookup(r.Context(), repositories(h.Repos, h.Config, h.registry()), config.PlatformGitLab, instance, path)
+	if err != nil {
+		failed(err)
+		return
+	}
+	if !ok || len(eff.CIJobs.Jobs) == 0 {
+		ignore("no_ci_jobs")
+		return
+	}
+	// A job not chosen changes nothing that is read. A Pipeline Hook always
+	// counts: a pipeline ending can end the wait.
+	if event == jobHookEvent && !chosenJob(eff.CIJobs.Jobs, ev.BuildName) {
+		ignore("job_not_chosen")
+		return
+	}
+	// No sameProject check: the event is only a signal to read again, and
+	// the API read decides, so a mismatched ID and path cost one read.
+	if iid != 0 {
+		h.CI.CIChangedMR(instance, eff.Project, iid)
+	} else {
+		h.CI.CIChanged(instance, eff.Project, head)
+	}
+	log.Debug("webhook handled", "outcome", "ci_changed", "project", eff.Project)
+	w.WriteHeader(http.StatusOK)
+}
+
+// mergeRequestRef is the merge request a merged-results pipeline's ref
+// (refs/merge-requests/<iid>/merge or /head) names, 0 for any other ref.
+func mergeRequestRef(ref string) int64 {
+	rest, ok := strings.CutPrefix(ref, "refs/merge-requests/")
+	if !ok {
+		return 0
+	}
+	num, kind, ok := strings.Cut(rest, "/")
+	if !ok || (kind != "merge" && kind != "head") {
+		return 0
+	}
+	n, err := strconv.ParseInt(num, 10, 64)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
 // note handles a Note Hook: a new plain comment on a merge request may carry
 // a command, which is stored for the engine. Nothing here calls GitLab.
 func (h *Handler) note(w http.ResponseWriter, r *http.Request, log *slog.Logger, instance string, body []byte) {
@@ -437,6 +571,17 @@ func lookup(ctx context.Context, repos Repositories, platform, instance, path st
 		return settings.Effective{}, false, err
 	}
 	return eff, true, nil
+}
+
+// chosenJob reports whether name is one of jobs' names, exactly as the
+// reader matches them.
+func chosenJob(jobs []store.CIJob, name string) bool {
+	for _, j := range jobs {
+		if j.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // registry is Instances, or the config's instances alone when it is nil.

@@ -190,6 +190,9 @@ type User struct {
 var (
 	// ErrNotFound is returned (or matched with errors.Is) for a 404 response.
 	ErrNotFound = errors.New("gitlab: not found")
+	// ErrForbidden is matched (errors.Is) by a 401 or 403 response: the
+	// token may not read what was asked for.
+	ErrForbidden = errors.New("gitlab: forbidden")
 	// ErrHeadMoved is returned by Approve when the MR head is no longer the given SHA.
 	ErrHeadMoved = errors.New("gitlab: merge request head moved")
 	// ErrPartialDiff is returned when a diff may not list every changed
@@ -219,9 +222,11 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("gitlab: status %d: %s", e.Status, body)
 }
 
-// Is lets errors.Is(err, ErrNotFound) match any 404 response.
+// Is lets errors.Is(err, ErrNotFound) match any 404 response and
+// errors.Is(err, ErrForbidden) any 401 or 403.
 func (e *APIError) Is(target error) bool {
-	return target == ErrNotFound && e.Status == 404
+	return (target == ErrNotFound && e.Status == 404) ||
+		(target == ErrForbidden && (e.Status == 401 || e.Status == 403))
 }
 
 // truncateUTF8 cuts s to at most max bytes without splitting a rune.

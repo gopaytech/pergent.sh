@@ -51,6 +51,9 @@ type cachedToken struct {
 	expires time.Time
 }
 
+// ID is the App's id.
+func (a *App) ID() int64 { return a.appID }
+
 // NewApp returns the App appID whose private key is privateKeyPEM (PKCS#1
 // "RSA PRIVATE KEY" or PKCS#8 "PRIVATE KEY" holding an RSA key). An empty
 // apiURL is GitHub.com; hc is handled as in NewTokenClient. Errors never
@@ -184,6 +187,9 @@ func (a *App) Bot(ctx context.Context) (string, int64, error) {
 type InstallationInfo struct {
 	ID          int64
 	Permissions map[string]string
+	// Events are the webhook events the App subscribes to; nil when the
+	// reply carried none.
+	Events []string
 }
 
 // PullRequestsWrite reports whether the installation may write pull
@@ -205,6 +211,31 @@ func (i InstallationInfo) AdministrationRead() bool {
 	return level == "read" || level == "write"
 }
 
+// ActionsRead reports whether the installation may read Actions (job logs,
+// workflow runs, artifacts). As with AdministrationRead, a reply that carries
+// no permissions can't say and counts as allowed.
+func (i InstallationInfo) ActionsRead() bool {
+	if i.Permissions == nil {
+		return true
+	}
+	level := i.Permissions["actions"]
+	return level == "read" || level == "write"
+}
+
+// HasEvent reports whether the App subscribes to the webhook event name. A
+// reply that carries no events can't say and counts as subscribed.
+func (i InstallationInfo) HasEvent(name string) bool {
+	if i.Events == nil {
+		return true
+	}
+	for _, e := range i.Events {
+		if e == name {
+			return true
+		}
+	}
+	return false
+}
+
 // Installation returns the ID of the App's installation that covers
 // owner/repo. An App not installed there is ErrNotFound.
 func (a *App) Installation(ctx context.Context, owner, repo string) (int64, error) {
@@ -222,6 +253,7 @@ func (a *App) InstallationInfo(ctx context.Context, owner, repo string) (Install
 	var out struct {
 		ID          int64             `json:"id"`
 		Permissions map[string]string `json:"permissions"`
+		Events      []string          `json:"events"`
 	}
 	if err := a.api.getJSON(ctx, p, nil, &out); err != nil {
 		return InstallationInfo{}, err
@@ -229,7 +261,7 @@ func (a *App) InstallationInfo(ctx context.Context, owner, repo string) (Install
 	if out.ID == 0 {
 		return InstallationInfo{}, errors.New("github: installation has no id")
 	}
-	return InstallationInfo{ID: out.ID, Permissions: out.Permissions}, nil
+	return InstallationInfo{ID: out.ID, Permissions: out.Permissions, Events: out.Events}, nil
 }
 
 // Installations returns the IDs of the App's installations (GET

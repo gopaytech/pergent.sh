@@ -19,10 +19,11 @@ In the organization's settings, **Developer settings → GitHub Apps → New Git
   - Pull requests: **Read and write** when this App approves too (the one-App setup) or posts [inline findings](../concepts/inline-findings.md), else **Read-only**. With Read-only, inline findings are off for that instance: findings stay in the comment, and the Integrations page says so.
   - Contents: **Read-only**
   - Checks: **Read and write**
+  - Actions: **Read-only** (optional). It lets pergent.sh read the logs and report artifacts of GitHub Actions jobs for [CI jobs](../concepts/ci-jobs.md). It is needed only by repositories whose CI jobs read `log` or `report` from GitHub Actions; a `status` read uses Checks, which the App already has. Without it, those jobs read as `unreadable`.
   - Issues: **Read and write** (pull request comments are issue comments; this also covers the 👀, 👍 and 👎 reactions on a command comment)
   - Metadata: **Read-only** (always on; this also covers reading a commenter's repository permission)
   - Administration: **Read-only** (optional). It lets pergent.sh read the classic branch protection's conversation-resolution rule for [inline findings](../concepts/inline-findings.md); without it only rulesets are read, and the classic rule is treated as off. It also lets the [readiness scan](../concepts/dashboard.md#readiness-scan) read classic branch protection. Without it, on a branch that has classic protection, 3 rows of the scan can say "Couldn't check" and name this permission; nothing else changes.
-- **Subscribe to events:** **Pull request**, **Issue comment** and **Pull request review comment**. The Issue comment event delivers the comments that commands are read from, and the Pull request review comment event the replies in a finding's thread.
+- **Subscribe to events:** **Pull request**, **Issue comment**, **Pull request review comment** and, optionally, **Check run**. The Issue comment event delivers the comments that commands are read from, the Pull request review comment event the replies in a finding's thread, and the optional Check run event tells pergent.sh that a [CI job](../concepts/ci-jobs.md) changed. Without it, pergent.sh notices CI changes on its 2-minute check instead of at once.
 - **Where can this GitHub App be installed:** "Only on this account", or "Any account" to install it on several organizations.
 
 Create it, note its **App ID** and generate a **private key** (a `.pem` file).
@@ -32,6 +33,8 @@ Create it, note its **App ID** and generate a **private key** (a `.pem` file).
 Changing who approves (another App, the review App, a bot user) doesn't withdraw approvals the old approver left. Turn approval off for the repositories first and wait until their approvals are withdrawn, or dismiss them by hand.
 
 **An existing review App** needs one change to run commands: under **Permissions & events → Subscribe to events**, tick **Issue comment** and save. It asks for no new permission, as it already has the ones above. Without the event the App still reviews, but no command is ever received.
+
+**An existing review App** that should read [CI jobs](../concepts/ci-jobs.md) can add **Actions: Read-only** (needed only by repositories whose CI jobs read `log` or `report` from GitHub Actions) and the optional **Check run** event, under **Permissions & events**. GitHub applies a new permission to an installation only after its owner accepts it. Nothing changes for a repository that doesn't choose CI jobs. The dashboard's readiness warns, for repositories that have CI jobs, while an installation lacks either one.
 
 **Administration: Read** is optional too. To turn it on, open **Permissions & events → Repository permissions**, set **Administration** to **Read-only** and save; the owner of each installation then has to accept the new permission. The [readiness scan](../concepts/dashboard.md#readiness-scan) uses it for the rows "Approvals needed to merge", "Default branch protected" and "Required checks before merge". Reviews never need it.
 

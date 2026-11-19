@@ -35,6 +35,11 @@ type PodResult struct {
 	Approvals      PodItem `json:"approvals"`
 	Protected      PodItem `json:"protected"`
 	RequiredChecks PodItem `json:"requiredChecks"`
+	// ActionsRead and CheckRunEvent are what the review App may do for a
+	// repository's CI jobs. They are set only when the repository has chosen
+	// some (on GitHub), and left out otherwise.
+	ActionsRead   *PodItem `json:"actionsRead,omitempty"`
+	CheckRunEvent *PodItem `json:"checkRunEvent,omitempty"`
 }
 
 // Flags are the readiness items that go to Needs attention. BudgetKnown is
@@ -171,6 +176,19 @@ func BuildChecklist(in ChecklistInput) Checklist {
 	if job != nil {
 		c.Suggested = suggested(job, a.effective)
 	}
+	process := []Item{
+		finish(codeOwnersItem(fileOK("codeowners"))(job)),
+		finish(approvalsItem(in)),
+		finish(podItem("protected", in.Pod, func(p *PodResult) PodItem { return p.Protected }, whyProtected, fixProtected)),
+		finish(podItem("required_checks", in.Pod, func(p *PodResult) PodItem { return p.RequiredChecks }, whyChecks, fixChecks)),
+	}
+	// The CI access items are there only for a repository that chose CI jobs.
+	if in.Pod != nil && in.Pod.ActionsRead != nil {
+		process = append(process, finish(podItem("ci_actions", in.Pod, func(p *PodResult) PodItem { return *p.ActionsRead }, whyCIActions, fixCIActions)))
+	}
+	if in.Pod != nil && in.Pod.CheckRunEvent != nil {
+		process = append(process, finish(podItem("ci_check_runs", in.Pod, func(p *PodResult) PodItem { return *p.CheckRunEvent }, whyCICheckRuns, fixCICheckRuns)))
+	}
 	c.Sections = []Section{
 		{Key: "context", Items: []Item{
 			finish(agentFileItem(fileOK("agent_file"))(job)),
@@ -178,12 +196,7 @@ func BuildChecklist(in ChecklistInput) Checklist {
 			finish(contributingItem(fileOK("contributing"))(job)),
 			finish(instructionsItem(fileOK("instructions"))(job)),
 		}},
-		{Key: "process", Items: []Item{
-			finish(codeOwnersItem(fileOK("codeowners"))(job)),
-			finish(approvalsItem(in)),
-			finish(podItem("protected", in.Pod, func(p *PodResult) PodItem { return p.Protected }, whyProtected, fixProtected)),
-			finish(podItem("required_checks", in.Pod, func(p *PodResult) PodItem { return p.RequiredChecks }, whyChecks, fixChecks)),
-		}},
+		{Key: "process", Items: process},
 		{Key: "skills", Items: []Item{
 			finish(skillMatchItem(fileOK("skill_match"))(a)),
 			finish(unmatchedItem(fileOK("skills_unmatched"))(a)),
@@ -214,6 +227,10 @@ const (
 	whyProtected    = "An unprotected default branch accepts direct pushes, which skip the review."
 	fixProtected    = "Protect the default branch against direct pushes."
 	whyChecks       = "Without a required check, a change can merge before its checks pass."
+	whyCIActions    = "Without the Actions: Read permission, a review can't read the logs and reports of the CI jobs it waits for, so those jobs count as unreadable."
+	fixCIActions    = "Accept the Actions: Read permission for the review App in the installation's settings."
+	whyCICheckRuns  = "Without the Check run event, a review learns that its CI jobs ended only at the next sweep, so a gate can lag."
+	fixCICheckRuns  = "Turn on the Check run event for the review App."
 	fixChecks       = "GitHub: require at least one status check in branch protection. GitLab: turn on \"Pipelines must succeed\"."
 	whySkillMatch   = "When no skill matches the repository's files, a review has nothing to check the code against and comes back thin."
 	fixSkillMatch   = "Turn on a library skill whose paths match this repository's files, or add a skill under .pergent/skills."

@@ -891,6 +891,11 @@ var openAPISchemas = map[string]schemaType{
 	"DefaultValues":           outputSchema(DefaultValues{}),
 	"LLMView":                 outputSchema(LLMView{}),
 	"AvailableView":           outputSchema(AvailableView{}),
+	"CIJobsView":              outputSchema(CIJobsView{}),
+	"CIJobView":               outputSchema(CIJobView{}),
+	"CIReportView":            outputSchema(CIReportView{}),
+	"CIJobResultView":         outputSchema(CIJobResultView{}),
+	"CIJobNamesView":          outputSchema(CIJobNamesView{}),
 	"LinkView":                outputSchema(LinkView{}),
 	"LinkableView":            outputSchema(LinkableView{}),
 	"LinkableRepo":            outputSchema(LinkableRepo{}),
@@ -1358,7 +1363,7 @@ func stringConsts(t *testing.T, glob, prefix, block string) map[string]string {
 // here until it is in a list and in openapi.yaml.
 func TestOpenAPIEnumsMatchCode(t *testing.T) {
 	d := loadSpec(t)
-	outcomes := []string{OutcomeRunning, OutcomeApproved, OutcomeBlocking, OutcomeDraft, OutcomeNoBlocking,
+	outcomes := []string{OutcomeRunning, OutcomeApproved, OutcomeBlocking, OutcomeCI, OutcomeDraft, OutcomeNoBlocking,
 		OutcomeFailed, OutcomeSuperseded, OutcomeSkipped, OutcomeUnknown, OutcomeWaiting}
 	roles := []string{store.RoleAdmin, store.RoleMaintainer, store.RoleViewer}
 	teamRoles := []string{store.RoleMaintainer, store.RoleViewer}

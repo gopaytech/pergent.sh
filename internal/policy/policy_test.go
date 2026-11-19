@@ -15,6 +15,7 @@ import (
 
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/result"
+	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
 const findingsBlock = "<!-- pergent:findings eyJ9 -->"
@@ -368,8 +369,113 @@ func TestMarkerPrepended(t *testing.T) {
 
 func TestErrorComment(t *testing.T) {
 	want := Marker + "\n⚠️ **pergent couldn't review this MR:** reason."
-	if got := ErrorComment("reason"); got != want {
+	if got := ErrorComment("reason", ""); got != want {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestErrorCommentCILine(t *testing.T) {
+	line := "CI: test failed (blocks approval)"
+	want := Marker + "\n⚠️ **pergent couldn't review this MR:** reason.\n\n_" + line + "_"
+	if got := ErrorComment("reason", line); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got, base := ErrorComment("reason", ""), Marker+"\n⚠️ **pergent couldn't review this MR:** reason."; got != base {
+		t.Errorf("an empty line must change nothing: %q", got)
+	}
+}
+
+func ciJob(name, res string, blocks bool) store.CIJobResult {
+	return store.CIJobResult{Name: name, Result: res, Read: "status", Blocks: blocks}
+}
+
+func TestDecideCI(t *testing.T) {
+	const line = "_CI: test failed (blocks approval)_"
+	clean := func() *result.Result { return completed(skill("a", "no_blocking_issues", "f.go")) }
+	blockingRes := func() *result.Result { return completed(skill("a", "has_blocking_issues", "f.go")) }
+	failing := []store.CIJobResult{ciJob("test", "failed", true)}
+	cases := []struct {
+		name        string
+		o           Outcome
+		failure     config.FailureStatus
+		kind        Kind
+		status      Status
+		approve     bool
+		desc        string
+		wantInLine  string
+		wantNothing bool
+	}{
+		{name: "clean review, blocking job failed", o: Outcome{Result: clean(), CI: failing}, kind: KindCI, status: StatusFailed, desc: "CI blocks approval: test failed", wantInLine: line},
+		{name: "clean review, blocking job passed", o: Outcome{Result: clean(), CI: []store.CIJobResult{ciJob("test", "passed", true)}}, kind: KindApprove, status: StatusSuccess, approve: true, desc: descClean, wantInLine: "_CI: test passed_"},
+		{name: "clean review, non-blocking job failed", o: Outcome{Result: clean(), CI: []store.CIJobResult{ciJob("lint", "failed", false)}}, kind: KindApprove, status: StatusSuccess, approve: true, desc: descClean, wantInLine: "_CI: lint failed_"},
+		{name: "blocking findings and a blocking CI failure", o: Outcome{Result: blockingRes(), CI: failing}, kind: KindBlocking, status: StatusFailed, desc: "Blocking issues found; CI blocks approval: test failed", wantInLine: line},
+		{name: "failure reason and a blocking CI failure", o: Outcome{FailureReason: "the job timed out", CI: failing}, failure: config.FailureStatusNeutral, kind: KindFailed, status: StatusFailed, desc: "pergent couldn't review this MR; CI blocks approval: test failed", wantInLine: line},
+		{name: "no result and a blocking CI failure", o: Outcome{CI: failing}, failure: config.FailureStatusNeutral, kind: KindFailed, status: StatusFailed, desc: "pergent couldn't review this MR; CI blocks approval: test failed", wantInLine: line},
+		{name: "draft and a blocking CI failure", o: Outcome{Result: clean(), Draft: true, CI: failing}, kind: KindCI, status: StatusFailed, desc: "CI blocks approval: test failed", wantInLine: line},
+		{name: "approval off and a blocking CI failure", o: Outcome{Result: clean(), ApprovalOff: true, CI: failing}, kind: KindCI, status: StatusFailed, desc: "CI blocks approval: test failed", wantInLine: line},
+		{name: "nothing reviewed and a blocking CI failure", o: Outcome{Result: completed(result.Skill{Name: "a", Verdict: "no_blocking_issues", Files: result.Files{Skipped: []result.Skipped{{Path: "go.sum", Rule: "lockfile"}}}}), CI: failing}, kind: KindCI, status: StatusFailed, desc: "CI blocks approval: test failed", wantInLine: line},
+		{name: "a failed skill and a blocking CI failure", o: Outcome{Result: completed(skill("a", "failed")), CI: failing}, failure: config.FailureStatusNeutral, kind: KindFailed, status: StatusFailed, desc: "Review failed for 1 of 1 skills; CI blocks approval: test failed", wantInLine: line},
+		{name: "two failures", o: Outcome{Result: clean(), CI: []store.CIJobResult{ciJob("test", "failed", true), ciJob("scan", "missing", true)}}, kind: KindCI, status: StatusFailed, desc: "CI blocks approval: test failed, +1 more", wantInLine: "_CI: test failed (blocks approval) · scan missing (blocks approval)_"},
+		{name: "a running blocking job", o: Outcome{Result: clean(), CI: []store.CIJobResult{ciJob("test", "running", true)}}, kind: KindCI, status: StatusFailed, desc: "CI blocks approval: test running", wantInLine: "_CI: test running (blocks approval)_"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := Decide(tc.o, tc.failure)
+			if d.Kind != tc.kind || d.Status != tc.status || d.Approve != tc.approve || d.Description != tc.desc {
+				t.Fatalf("got kind %q status %q approve %v desc %q\nwant %q %q %v %q", d.Kind, d.Status, d.Approve, d.Description, tc.kind, tc.status, tc.approve, tc.desc)
+			}
+			if !strings.Contains(d.Comment, tc.wantInLine) {
+				t.Errorf("comment lacks %q:\n%s", tc.wantInLine, d.Comment)
+			}
+		})
+	}
+}
+
+func TestDecideCIPlacesLineAfterHeader(t *testing.T) {
+	r := completed(skill("a", "no_blocking_issues", "f.go"))
+	d := Decide(Outcome{Result: r, CI: []store.CIJobResult{ciJob("test", "failed", true)}}, config.FailureStatusFailed)
+	if !strings.Contains(d.Comment, "\n_CI: test failed (blocks approval)_\n") {
+		t.Errorf("line is not on its own line:\n%s", d.Comment)
+	}
+}
+
+func TestDecideCIDescriptionIsShort(t *testing.T) {
+	r := completed(skill("a", "no_blocking_issues", "f.go"))
+	d := Decide(Outcome{Result: r, CI: []store.CIJobResult{ciJob(strings.Repeat("x", 500), "failed", true)}}, config.FailureStatusFailed)
+	if n := len([]rune(d.Description)); n > 140 {
+		t.Errorf("description is %d characters, want at most 140", n)
+	}
+	if !strings.HasPrefix(d.Description, "CI blocks approval: xxx") {
+		t.Errorf("description = %q", d.Description)
+	}
+}
+
+// With no CI jobs every decision is what it was before.
+func TestDecideNoCIChangesNothing(t *testing.T) {
+	r := completed(skill("a", "no_blocking_issues", "f.go"))
+	a := Decide(Outcome{Result: r}, config.FailureStatusFailed)
+	b := Decide(Outcome{Result: r, CI: []store.CIJobResult{}}, config.FailureStatusFailed)
+	if a != b {
+		t.Errorf("an empty CI list changed the decision:\n%+v\n%+v", a, b)
+	}
+	if strings.Contains(a.Comment, "CI:") {
+		t.Errorf("comment mentions CI:\n%s", a.Comment)
+	}
+	// A non-blocking, passed job never changes the verdict either.
+	c := Decide(Outcome{Result: r, CI: []store.CIJobResult{ciJob("x", "failed", false)}}, config.FailureStatusFailed)
+	if c.Kind != a.Kind || c.Status != a.Status || c.Approve != a.Approve || c.Description != a.Description {
+		t.Errorf("a non-blocking job changed the decision: %+v", c)
+	}
+}
+
+// An empty CI list is the same as none, for every noCICases case.
+func TestDecideEmptyCIIsNoCI(t *testing.T) {
+	for name, c := range noCICases() {
+		o := c.o
+		o.CI = []store.CIJobResult{}
+		if a, b := Decide(c.o, c.failure), Decide(o, c.failure); a != b {
+			t.Errorf("%s: an empty CI list changed the decision:\n%+v\n%+v", name, a, b)
+		}
 	}
 }
 
@@ -1847,5 +1953,63 @@ func TestRedactedDeletedPathsKeepTheirMarks(t *testing.T) {
 	}
 	if n := strings.Count(d.Comment, "-deleted.go`"); n != 1 {
 		t.Errorf("the deleted file is listed %d times, want once:\n%s", n, d.Comment)
+	}
+}
+
+// A job name is an admin's free text: in the error comment's CI line it is one
+// line with nothing that notifies or marks up.
+func TestErrorCommentCILineIsInert(t *testing.T) {
+	line := "CI: a\n@team <b>x</b> [l](u) `c` *e* scan_x"
+	got := ErrorComment("reason", line)
+	for _, bad := range []string{"\n@team", "<b>", "[l]", "`c`", "*e*"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("comment keeps %q:\n%s", bad, got)
+		}
+	}
+	if strings.Count(got, "\n") != 3 { // marker line, blank, CI line
+		t.Errorf("the CI line is not one line:\n%q", got)
+	}
+}
+
+// A failed review's own comment (an error result) gets the line too.
+func TestDecideErrorResultCILine(t *testing.T) {
+	e := &result.Result{SchemaVersion: 1, Status: "error", Error: &result.Error{Code: "x", Message: "boom"},
+		Comment: result.Comment{Markdown: Marker + "\n⚠️ failed"}}
+	d := Decide(Outcome{Result: e, CI: []store.CIJobResult{ciJob("test", "failed", true)}}, config.FailureStatusNeutral)
+	if d.Kind != KindFailed || d.Status != StatusFailed || !strings.HasSuffix(d.Comment, "\n\n_CI: test failed (blocks approval)_") {
+		t.Errorf("got %+v", d)
+	}
+}
+
+// An error result's own comment that ends in a hidden findings block keeps
+// the block last: the CI line goes before it, so the next review still reads
+// the block.
+func TestDecideErrorResultCILineBeforeFindingsBlock(t *testing.T) {
+	block := "<!-- pergent:findings W10= -->"
+	for name, md := range map[string]string{
+		"block last":         Marker + "\n⚠️ failed\n\n" + block,
+		"block, newline end": Marker + "\n⚠️ failed\n\n" + block + "\n",
+	} {
+		e := &result.Result{SchemaVersion: 1, Status: "error", Comment: result.Comment{Markdown: md}}
+		d := Decide(Outcome{Result: e, CI: []store.CIJobResult{ciJob("test", "failed", true)}}, config.FailureStatusFailed)
+		want := Marker + "\n⚠️ failed\n\n_CI: test failed (blocks approval)_\n\n" + block
+		if !strings.HasPrefix(d.Comment, want) || strings.TrimRight(d.Comment, "\n") != want {
+			t.Errorf("%s: comment = %q, want %q", name, d.Comment, want)
+		}
+	}
+	// No CI: the comment is the result's own, byte for byte.
+	md := Marker + "\n⚠️ failed\n\n" + block + "\n"
+	e := &result.Result{SchemaVersion: 1, Status: "error", Comment: result.Comment{Markdown: md}}
+	if d := Decide(Outcome{Result: e}, config.FailureStatusFailed); d.Comment != md {
+		t.Errorf("no CI: comment = %q, want %q", d.Comment, md)
+	}
+}
+
+// The review's own description stays, the CI part follows and is cut first.
+func TestDecideCIDescriptionJoinedAndCapped(t *testing.T) {
+	r := completed(skill("a", "has_blocking_issues", "f.go"))
+	d := Decide(Outcome{Result: r, CI: []store.CIJobResult{ciJob(strings.Repeat("x", 500), "failed", true)}}, config.FailureStatusFailed)
+	if !strings.HasPrefix(d.Description, "Blocking issues found; CI blocks approval: xxx") || len([]rune(d.Description)) > 140 || !strings.HasSuffix(d.Description, "… failed") {
+		t.Errorf("description = %q (%d)", d.Description, len([]rune(d.Description)))
 	}
 }

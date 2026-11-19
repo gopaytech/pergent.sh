@@ -46,6 +46,8 @@ const itemTitle: Record<string, string> = {
   approvals: "Approvals needed to merge",
   protected: "Default branch protected",
   required_checks: "Required checks before merge",
+  ci_actions: "Actions read access for CI jobs",
+  ci_check_runs: "Check run events for CI jobs",
   skill_match: "Skills that match files",
   skills_unmatched: "Assigned skills that match nothing",
   languages: "Languages no skill covers",

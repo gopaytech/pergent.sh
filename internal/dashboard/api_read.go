@@ -56,7 +56,7 @@ const (
 var errNotSynced = errors.New("the repository isn't stored yet (reconcile hasn't reached it)")
 
 var outcomes = map[string]bool{
-	OutcomeRunning: true, OutcomeApproved: true, OutcomeBlocking: true, OutcomeDraft: true,
+	OutcomeRunning: true, OutcomeApproved: true, OutcomeBlocking: true, OutcomeCI: true, OutcomeDraft: true,
 	OutcomeNoBlocking: true, OutcomeFailed: true, OutcomeSuperseded: true, OutcomeSkipped: true, OutcomeUnknown: true, OutcomeWaiting: true,
 }
 
@@ -588,11 +588,16 @@ func (d *Dashboard) run(w http.ResponseWriter, r *http.Request) {
 	view := RunDetailView{
 		Run: runSummary(digests[idx], prev, j), Instance: run.MR.Instance, Project: run.ProjectPath, Number: run.MR.IID,
 		Status: j.status, Approved: run.Approved, ApprovalReason: j.reason, Model: run.Model, Provider: run.Provider, MaxTurns: run.MaxTurns, Quiet: run.Quiet,
+		CIJobs: ciResultViews(run.CIJobs),
 		Files:  FilesView{Reviewed: []string{}, Skipped: []SkippedFile{}, NotReviewed: []NotReviewedFile{}},
 		Skills: []SkillView{},
 	}
 	if run.Approved {
 		view.ApprovalReason = ""
+	}
+	// The deadline is shown only while the run waits for CI: it is kept after.
+	if run.State == store.Waiting && run.SkipReason == store.WaitCIPending {
+		view.CIDeadline = run.CIDeadline
 	}
 	// The cluster's names and its words about a failure are for admins: a
 	// viewer's JSON has no kubernetes key at all.
@@ -926,6 +931,12 @@ func (d *Dashboard) repository(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if project, ok := strings.CutSuffix(rest, "/ci-job-names"); ok {
+		if repo, ok := find(project); ok {
+			d.ciJobNames(w, r, repo)
+			return
+		}
+	}
 	notFound(w)
 }
 
@@ -985,6 +996,7 @@ func settingViews(repo settings.Effective) map[string]SettingView {
 		"quietReviews":                     {repo.QuietReviews, ov[settings.KeyQuietReviews]},
 		"checkDeleted":                     {repo.CheckDeleted, ov[settings.KeyCheckDeleted]},
 		"commentLayout":                    {layoutText(repo.CommentLayout), ov[settings.KeyCommentLayout]},
+		"ciJobs":                           {ciJobsView(repo.CIJobs), ov[settings.KeyCIJobs]},
 		"linkedReposEnabled":               {repo.LinkedReposEnabled, ov[settings.KeyLinkedReposEnabled]},
 		"linkedRepos":                      {linksView(repo.LinkedRepos), len(repo.LinkedRepos) > 0},
 		"failureStatus":                    {string(repo.FailureStatus), ov[settings.KeyFailureStatus]},

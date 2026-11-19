@@ -1165,6 +1165,31 @@ func TestPublishGitHubGiveUpNeutralCheckRun(t *testing.T) {
 
 // With neutral, a review with blocking findings that can't be posted still
 // completes its Check Run as a failure.
+func TestPublishGitHubGiveUpNeutralCIBlockedIsFailure(t *testing.T) {
+	env := newTestEnv(t)
+	gh := addGitHub(t, env, true)
+	for i := range env.Engine.Config.Repositories {
+		if env.Engine.Config.Repositories[i].GitHub == ghInstance {
+			env.Engine.Config.Repositories[i].FailureStatus = config.FailureStatusNeutral
+		}
+	}
+	head := sha('a')
+	id := ghReport(t, env, 3, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	if err := env.Store.SetRunCI(env.ctx, id, []store.CIJobResult{{Name: "test", Result: "failed", Read: "status", Blocks: true}}); err != nil {
+		t.Fatal(err)
+	}
+	servePublishGitHub(gh, 3, head)
+	gh.Reply(http.MethodPost, ghRepoAPI+"/issues/3/comments", http.StatusUnprocessableEntity,
+		map[string]any{"message": "Validation Failed", "errors": []any{map[string]any{"message": "body is too long (maximum is 65536 characters)"}}})
+
+	publishUntilGivenUp(t, env, id)
+
+	run := onlyCheckRun(t, gh)
+	if run["status"] != "completed" || run["conclusion"] != "failure" {
+		t.Errorf("check run = %v", run)
+	}
+}
+
 func TestPublishGitHubGiveUpNeutralBlockingIsFailure(t *testing.T) {
 	env := newTestEnv(t)
 	gh := addGitHub(t, env, true)
@@ -1298,5 +1323,37 @@ func TestReconcileSingleApprovalSkippedWithoutApprover(t *testing.T) {
 
 	if reqs := gh.Requests(http.MethodGet, ghRepoAPI+"/rules/branches/main"); len(reqs) != 0 {
 		t.Errorf("read the rules %d times, want never", len(reqs))
+	}
+}
+
+// The review App's Actions: Read permission and check_run subscription are
+// stored on every pass, for logs and reports and for waking a waiting run; an
+// installation that reports neither counts as allowed.
+func TestReconcileGitHubCIAccess(t *testing.T) {
+	env := newTestEnv(t)
+	gh := addGitHub(t, env, true)
+	reconcileGitHubSetup(env, gh)
+	perms := map[string]string{"pull_requests": "write"}
+	events := []string{"pull_request"}
+	gh.Handle(http.MethodGet, ghRepoAPI+"/installation", func(w http.ResponseWriter, r *http.Request) {
+		if jwtApp(r.Header.Get("Authorization")) == ghReviewApp {
+			writeJSON(w, http.StatusOK, map[string]any{"id": ghInstallation, "permissions": perms, "events": events})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": ghApproveInstallation, "permissions": map[string]string{"pull_requests": "write"}})
+	})
+
+	reconcile(t, env)
+	p, ok := ghProject(t, env)
+	if !ok || p.ActionsReadable == nil || *p.ActionsReadable || p.CheckRunEvents == nil || *p.CheckRunEvents {
+		t.Fatalf("stored = %+v; want no Actions read and no check_run event", p)
+	}
+
+	perms = map[string]string{"pull_requests": "write", "actions": "read"}
+	events = []string{"pull_request", "check_run"}
+	reconcile(t, env)
+	p, _ = ghProject(t, env)
+	if p.ActionsReadable == nil || !*p.ActionsReadable || p.CheckRunEvents == nil || !*p.CheckRunEvents {
+		t.Fatalf("stored = %+v; want Actions read and check_run event", p)
 	}
 }

@@ -59,6 +59,9 @@ type DashboardRepo struct {
 	// and checks what still uses deleted files and renamed files' old paths
 	// (nil: the default, off).
 	CheckDeleted *bool
+	// CIJobs are the CI jobs a review waits for and reads: the wait and the
+	// jobs (nil: off). They belong to the repository, not to the defaults.
+	CIJobs *CIJobs
 	// CommentLayout is the shape of the review comment, "block:state" entries
 	// in order (nil: the default layout).
 	CommentLayout []string
@@ -173,15 +176,15 @@ func readLinks(b []byte) ([]Link, error) {
 const dashboardRepoColumns = `instance, project, approve, review_drafts, failure_status, skills, repo_skills,
 	job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by, created_at, updated_at,
 	inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
-	linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id, monthly_token_quota, check_deleted, enabled`
+	linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id, monthly_token_quota, check_deleted, ci_jobs, enabled`
 
 func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 	var r DashboardRepo
-	var links, trusted []byte
+	var links, trusted, ci []byte
 	err := row.Scan(&r.Instance, &r.Project, &r.Approve, &r.ReviewDrafts, &r.FailureStatus, &r.Skills, &r.RepoSkills,
 		&r.JobTimeoutSeconds, &r.MaxTurns, &r.JobMemory, &r.RerunLimitPerMR, &r.RerunLimitPerRepo, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt,
 		&r.InlineFindings, &r.CommandsAuthorAndMaintainersOnly, &r.IncrementalReviews, &r.LearnFromDismissals, &r.QuietReviews, &r.CommentLayout,
-		&r.LinkedReposEnabled, &links, &r.TrustedAuthorsOnly, &trusted, &r.ModelID, &r.MonthlyTokenQuota, &r.CheckDeleted, &r.Enabled)
+		&r.LinkedReposEnabled, &links, &r.TrustedAuthorsOnly, &trusted, &r.ModelID, &r.MonthlyTokenQuota, &r.CheckDeleted, &ci, &r.Enabled)
 	if len(r.Skills) == 0 {
 		r.Skills = nil
 	}
@@ -195,6 +198,9 @@ func scanDashboardRepo(row pgx.Row) (DashboardRepo, error) {
 		return r, err
 	}
 	if r.LinkedRepos, err = readLinks(links); err != nil {
+		return r, err
+	}
+	if r.CIJobs, err = readCIJobs(ci); err != nil {
 		return r, err
 	}
 	r.TrustedAuthors, err = readTrusted(trusted)
@@ -274,6 +280,10 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 	if err != nil {
 		return err
 	}
+	ci, err := ciJobsParam(r.CIJobs)
+	if err != nil {
+		return err
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -288,8 +298,8 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 	if _, err := tx.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
 			failure_status, skills, repo_skills, job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by,
 			inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
-			linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id, monthly_token_quota, check_deleted)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22, $23::jsonb, $24, $25, $26)
+			linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id, monthly_token_quota, check_deleted, ci_jobs)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22, $23::jsonb, $24, $25, $26, $27::jsonb)
 		ON CONFLICT (instance, lower(project)) DO UPDATE SET
 			project = EXCLUDED.project, approve = EXCLUDED.approve, review_drafts = EXCLUDED.review_drafts,
 			failure_status = EXCLUDED.failure_status, skills = EXCLUDED.skills, repo_skills = EXCLUDED.repo_skills,
@@ -305,11 +315,11 @@ func (s *Store) UpsertDashboardRepo(ctx context.Context, r DashboardRepo) error 
 			linked_repos = EXCLUDED.linked_repos,
 			trusted_authors_only = EXCLUDED.trusted_authors_only, trusted_authors = EXCLUDED.trusted_authors,
 			model_id = EXCLUDED.model_id, monthly_token_quota = EXCLUDED.monthly_token_quota,
-			check_deleted = EXCLUDED.check_deleted, updated_at = now()`,
+			check_deleted = EXCLUDED.check_deleted, ci_jobs = EXCLUDED.ci_jobs, updated_at = now()`,
 		r.Instance, r.Project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, repoSkills,
 		r.JobTimeoutSeconds, r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy, r.InlineFindings,
 		r.CommandsAuthorAndMaintainersOnly, r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout),
-		r.LinkedReposEnabled, links, r.TrustedAuthorsOnly, trusted, r.ModelID, r.MonthlyTokenQuota, r.CheckDeleted); err != nil {
+		r.LinkedReposEnabled, links, r.TrustedAuthorsOnly, trusted, r.ModelID, r.MonthlyTokenQuota, r.CheckDeleted, ci); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -339,6 +349,10 @@ func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (creat
 	if err != nil {
 		return false, err
 	}
+	ci, err := ciJobsParam(r.CIJobs)
+	if err != nil {
+		return false, err
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -353,13 +367,13 @@ func (s *Store) InsertDashboardRepo(ctx context.Context, r DashboardRepo) (creat
 	tag, err := tx.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, approve, review_drafts,
 			failure_status, skills, repo_skills, job_timeout_seconds, max_turns, job_memory, rerun_limit_per_mr, rerun_limit_per_repo, created_by,
 			inline_findings, commands_author_and_maintainers_only, incremental_reviews, learn_from_dismissals, quiet_reviews, comment_layout,
-			linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id, monthly_token_quota, check_deleted)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22, $23::jsonb, $24, $25, $26)
+			linked_repos_enabled, linked_repos, trusted_authors_only, trusted_authors, model_id, monthly_token_quota, check_deleted, ci_jobs)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22, $23::jsonb, $24, $25, $26, $27::jsonb)
 		ON CONFLICT (instance, lower(project)) DO NOTHING`,
 		r.Instance, r.Project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, nilIfEmpty(r.RepoSkills),
 		r.JobTimeoutSeconds, r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.CreatedBy, r.InlineFindings,
 		r.CommandsAuthorAndMaintainersOnly, r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout),
-		r.LinkedReposEnabled, links, r.TrustedAuthorsOnly, trusted, r.ModelID, r.MonthlyTokenQuota, r.CheckDeleted)
+		r.LinkedReposEnabled, links, r.TrustedAuthorsOnly, trusted, r.ModelID, r.MonthlyTokenQuota, r.CheckDeleted, ci)
 	if err != nil {
 		return false, err
 	}
@@ -402,6 +416,10 @@ func (s *Store) UpdateDashboardRepo(ctx context.Context, instance, project strin
 	if err != nil {
 		return false, err
 	}
+	ci, err := ciJobsParam(r.CIJobs)
+	if err != nil {
+		return false, err
+	}
 	if err := lockNamedSkills(ctx, tx, skills); err != nil {
 		return false, err
 	}
@@ -413,12 +431,12 @@ func (s *Store) UpdateDashboardRepo(ctx context.Context, instance, project strin
 			rerun_limit_per_mr = $11, rerun_limit_per_repo = $12, inline_findings = $13,
 			commands_author_and_maintainers_only = $14, incremental_reviews = $15, learn_from_dismissals = $16, quiet_reviews = $17, comment_layout = $18,
 			linked_repos_enabled = $19, linked_repos = $20::jsonb, trusted_authors_only = $21, trusted_authors = $22::jsonb, model_id = $23,
-			monthly_token_quota = $24, check_deleted = $25, updated_at = now()
+			monthly_token_quota = $24, check_deleted = $25, ci_jobs = $26::jsonb, updated_at = now()
 		WHERE instance = $1 AND lower(project) = lower($2)`,
 		instance, project, r.Approve, r.ReviewDrafts, r.FailureStatus, skills, nilIfEmpty(r.RepoSkills), r.JobTimeoutSeconds,
 		r.MaxTurns, r.JobMemory, r.RerunLimitPerMR, r.RerunLimitPerRepo, r.InlineFindings, r.CommandsAuthorAndMaintainersOnly,
 		r.IncrementalReviews, r.LearnFromDismissals, r.QuietReviews, nilIfEmpty(r.CommentLayout), r.LinkedReposEnabled, links,
-		r.TrustedAuthorsOnly, trusted, r.ModelID, r.MonthlyTokenQuota, r.CheckDeleted); err != nil {
+		r.TrustedAuthorsOnly, trusted, r.ModelID, r.MonthlyTokenQuota, r.CheckDeleted, ci); err != nil {
 		return false, err
 	}
 	return true, tx.Commit(ctx)

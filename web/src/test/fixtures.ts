@@ -172,6 +172,8 @@ export const runDetail: RunDetailView = {
   maxTurns: 40,
   incrementalNote: "",
   quiet: false,
+  ciJobs: null,
+  ciDeadline: null,
   tokens: { in: 48200, out: 6100 },
   files: {
     reviewed: ["internal/refund/handler.go", "internal/refund/key.go"],
@@ -312,6 +314,7 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
     learnFromDismissals: { value: true, overridden: false },
     quietReviews: { value: false, overridden: false },
     checkDeleted: { value: false, overridden: false },
+    ciJobs: { value: { wait: "30m", jobs: [] }, overridden: false },
     linkedReposEnabled: { value: false, overridden: false },
     linkedRepos: { value: [], overridden: false },
     commentLayout: { value: builtInLayout, overridden: false },

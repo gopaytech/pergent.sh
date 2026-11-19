@@ -604,3 +604,31 @@ func TestInstallations(t *testing.T) {
 		t.Fatal("installations listing not authenticated with the JWT")
 	}
 }
+
+func TestInstallationInfoEvents(t *testing.T) {
+	a, _, _ := testApp(t, jsonReply(map[string]any{"id": 42,
+		"permissions": map[string]string{"actions": "read", "pull_requests": "write"},
+		"events":      []string{"pull_request", "check_run"}}))
+	info, err := a.InstallationInfo(ctx, "acme", "widgets")
+	if err != nil || !info.ActionsRead() || !info.HasEvent("check_run") || info.HasEvent("push") {
+		t.Fatalf("info = %+v, %v", info, err)
+	}
+	for _, tc := range []struct {
+		name string
+		info InstallationInfo
+		read bool
+		ev   bool
+	}{
+		{"write", InstallationInfo{Permissions: map[string]string{"actions": "write"}}, true, true},
+		{"not granted", InstallationInfo{Permissions: map[string]string{"checks": "write"}}, false, true},
+		{"not told", InstallationInfo{}, true, true},
+		{"empty events", InstallationInfo{Events: []string{}}, true, false},
+	} {
+		if got := tc.info.ActionsRead(); got != tc.read {
+			t.Errorf("%s: ActionsRead = %v, want %v", tc.name, got, tc.read)
+		}
+		if got := tc.info.HasEvent("check_run"); got != tc.ev {
+			t.Errorf("%s: HasEvent = %v, want %v", tc.name, got, tc.ev)
+		}
+	}
+}

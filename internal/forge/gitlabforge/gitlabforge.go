@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gopaytech/pergent.sh/internal/forge"
@@ -22,6 +23,10 @@ type Forge struct {
 	c *gitlab.Client
 	// user is the review bot: FindComment only finds its notes.
 	user gitlab.User
+
+	// parents memoizes commits' parents (commitParents), which never change.
+	parentsMu sync.Mutex
+	parents   map[parentsKey][]string
 }
 
 // NewForge returns the review bot's Forge; user is who c's token belongs to.
@@ -83,6 +88,7 @@ func (f *Forge) DefaultBranch(ctx context.Context, projectID int64) (string, err
 var _ forge.SourceReader = (*Forge)(nil)
 
 var _ forge.CommentReader = (*Forge)(nil)
+var _ forge.CommentBodyReader = (*Forge)(nil)
 
 // unreadable reports whether err says the review bot may not read what it
 // asked for: GitLab's 404 (it hides what a user can't see) or 403 (a bot below
@@ -311,6 +317,12 @@ func (f *Forge) Comment(ctx context.Context, projectID, iid, noteID int64) (forg
 		return forge.Comment{}, mapErr(err)
 	}
 	return forge.Comment{AuthorID: n.Author.ID, Author: n.Author.Username, Body: n.Body, System: n.System}, nil
+}
+
+// CommentBody is the text of note noteID of merge request iid.
+func (f *Forge) CommentBody(ctx context.Context, projectID, iid, noteID int64) (string, error) {
+	c, err := f.Comment(ctx, projectID, iid, noteID)
+	return c.Body, err
 }
 
 // ChangeRef is the ref GitLab keeps merge request iid's head at.

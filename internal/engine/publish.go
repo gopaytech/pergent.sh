@@ -11,6 +11,7 @@ import (
 	"github.com/gopaytech/pergent/render"
 
 	"github.com/gopaytech/pergent.sh/internal/actions"
+	"github.com/gopaytech/pergent.sh/internal/ci"
 	"github.com/gopaytech/pergent.sh/internal/config"
 	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/kube"
@@ -134,7 +135,7 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 	if run, err = e.holdImpact(ctx, run, log); err != nil {
 		return err
 	}
-	o := e.outcome(run, log)
+	o := e.outcome(run, chosenCI(run, repo, ok), log)
 	// A repository switched off since the run was queued approves nothing
 	// more: its review is posted as with approval turned off.
 	o.ApprovalOff = !ok || !repo.Approve
@@ -497,6 +498,8 @@ func decisionOf(o policy.Outcome, d policy.Decision, approved bool, held heldBac
 	switch d.Kind {
 	case policy.KindBlocking:
 		rd.Outcome = store.OutcomeBlocking
+	case policy.KindCI:
+		rd.Outcome = store.OutcomeCI
 	case policy.KindNotApproved:
 		rd.Outcome = store.OutcomeNoBlocking
 	case policy.KindDraft:
@@ -550,8 +553,33 @@ func (e *Engine) approveInputs(ctx context.Context, plat Platform, run store.Run
 // outcome is what the run produced. A stored result is checked again: it has
 // to parse and be for the run's own base and head, or the run is decided as a
 // failure. A usable result carries the run's own Quiet and comment layout,
-// recorded at dispatch, never the repository's current settings.
-func (e *Engine) outcome(run store.Run, log *slog.Logger) policy.Outcome {
+// recorded at dispatch, never the repository's current settings. chosen is
+// the repository's current CI jobs for the run (chosenCI).
+func (e *Engine) outcome(run store.Run, chosen []store.CIJob, log *slog.Logger) policy.Outcome {
+	o := e.outcomeOf(run, log)
+	// Every outcome carries the run's CI snapshot, a failed review too: the
+	// gate holds back whatever else decides, and the comment shows the line.
+	o.CI = run.CIJobs
+	if len(o.CI) == 0 && len(chosen) > 0 && (o.FailureReason != "" || o.Result == nil) {
+		// The run failed before its CI was read (at dispatch, or a retry
+		// that gave up): with no snapshot the gate would be skipped, and a
+		// neutral failure is success on GitLab. Every chosen job is
+		// unreadable, so a blocking one holds the status failed.
+		o.CI = unreadableCI(run.HeadSHA, chosen).Results()
+	}
+	return o
+}
+
+// chosenCI is the CI jobs the repository's current settings choose for run
+// (ciApplies), nil when the repository wasn't found.
+func chosenCI(run store.Run, repo settings.Effective, found bool) []store.CIJob {
+	if !found || !ciApplies(run, repo) {
+		return nil
+	}
+	return repo.CIJobs.Jobs
+}
+
+func (e *Engine) outcomeOf(run store.Run, log *slog.Logger) policy.Outcome {
 	if run.FailureReason != "" || run.Result == nil {
 		return policy.Outcome{FailureReason: run.FailureReason}
 	}
@@ -600,6 +628,9 @@ func (e *Engine) upsertComment(ctx context.Context, f forge.Forge, run store.Run
 		return fmt.Errorf("load note id: %w", err)
 	}
 	if stored != 0 {
+		if commentUnchanged(ctx, f, pid, iid, stored, body) {
+			return nil
+		}
 		err := f.UpdateComment(ctx, pid, iid, stored, body)
 		if err == nil {
 			return nil
@@ -614,7 +645,10 @@ func (e *Engine) upsertComment(ctx context.Context, f forge.Forge, run store.Run
 		return fmt.Errorf("find note: %w", err)
 	}
 	if found && noteID != stored {
-		err := f.UpdateComment(ctx, pid, iid, noteID, body)
+		var err error
+		if !commentUnchanged(ctx, f, pid, iid, noteID, body) {
+			err = f.UpdateComment(ctx, pid, iid, noteID, body)
+		}
 		if err != nil && !errors.Is(err, forge.ErrNotFound) {
 			return err
 		}
@@ -631,6 +665,19 @@ func (e *Engine) upsertComment(ctx context.Context, f forge.Forge, run store.Run
 		return fmt.Errorf("record note id: %w", err)
 	}
 	return nil
+}
+
+// commentUnchanged is true when comment id already holds body, so a republish
+// that decided the same comment edits nothing (a CI event that changed no
+// result, a retry). A forge that can't read a comment back, a comment that
+// can't be read and one that differs are all false: the comment is written.
+func commentUnchanged(ctx context.Context, f forge.Forge, projectID, number, id int64, body string) bool {
+	r, ok := f.(forge.CommentBodyReader)
+	if !ok {
+		return false
+	}
+	got, err := r.CommentBody(ctx, projectID, number, id)
+	return err == nil && got == body
 }
 
 // approve approves the run's head with the approve bot, only while the merge
@@ -797,7 +844,10 @@ func (e *Engine) gaveUpStatus(ctx context.Context, run store.Run, log *slog.Logg
 			return forge.StatusFailed
 		}
 	}
-	if policy.Decide(e.outcome(stored, log), config.FailureStatusNeutral).Kind == policy.KindBlocking {
+	// Blocking findings and a blocking CI job that isn't passed are never
+	// softened to neutral, which GitLab reads as success.
+	o := e.outcome(stored, chosenCI(stored, repo, ok), log)
+	if policy.Decide(o, config.FailureStatusNeutral).Kind == policy.KindBlocking || len(ci.Blocking(o.CI)) > 0 {
 		return forge.StatusFailed
 	}
 	return forge.StatusNeutral

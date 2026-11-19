@@ -1251,7 +1251,9 @@ paths:
         `learnFromDismissals`, `quietReviews`, `checkDeleted` (review the
         lines a change deletes and check what still uses deleted files and
         renamed files' old paths; off unless set, a repository setting only
-        with no instance default), `commentLayout` (the
+        with no instance default), `ciJobs` (the CI jobs a review waits for
+        and reads, a `CIJobsView`; `overridden` is true while any are set; a
+        repository setting only, with no instance default), `commentLayout` (the
         `block:state` list; while `overridden` is false it is the default in
         effect: the admin default, else the built-in layout),
         `linkedReposEnabled` (the impact check across linked repositories;
@@ -1565,6 +1567,35 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/repositories/{instance}/{project}/ci-job-names:
+    get:
+      operationId: getRepositoryCIJobNames
+      tags: [Repositories]
+      summary: CI job names seen lately
+      description: |
+        Maintainers of the repository and admins (403 for a viewer). The job
+        names (GitLab) or check run names (GitHub) in the repository's last 10
+        pipelines or the heads of its last 10 runs, sorted, to suggest in the
+        `ciJobs` setting. An empty list when the platform can't list them or
+        the repository is not stored yet. A platform that fails is 502.
+      x-pergent-access: session
+      x-pergent-pattern: GET /api/repositories/{instance}/{rest...}
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/InstanceName'
+        - $ref: '#/components/parameters/ProjectPath'
+      responses:
+        '200':
+          description: The names.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CIJobNamesView'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '502': {$ref: '#/components/responses/BadGateway'}
   /api/repositories/{instance}/{project}/teams:
     get:
       operationId: getRepositoryTeams
@@ -4251,14 +4282,16 @@ components:
       description: |
         `running` (queued, being reviewed, or not posted yet), `approved` (the
         approve bot approved this run), `blocking` (a skill found blocking
-        issues), `draft` (clean, not approved because the change was a draft),
+        issues), `ci_blocked` (the review found nothing blocking, but a
+        blocking CI job isn't passed), `draft` (clean, not approved because
+        the change was a draft),
         `no_blocking` (clean but not approved, for the reason given), `failed`
         (no usable review), `superseded` (replaced by a newer push, or the
         change was closed), `skipped` (the repository has no skills; never a
         review or a failure), `unknown` (published before outcomes were
         recorded), `waiting` (the repository doesn't trust the change's
         author; held until someone with write access starts the review).
-      enum: [running, approved, blocking, draft, no_blocking, failed, superseded, skipped, unknown, waiting]
+      enum: [running, approved, blocking, ci_blocked, draft, no_blocking, failed, superseded, skipped, unknown, waiting]
     # ----------------------------------------------------------- request bodies
     PasswordSignInRequest:
       type: object
@@ -4588,6 +4621,18 @@ components:
             deleted files and renamed files' old paths. Costs more tokens.
             Null follows the default (off). A repository setting only: the
             admin defaults have no such key.
+        ciJobs:
+          description: |
+            The CI jobs a review waits for and reads, a `CIJobsView`, or null
+            (or no jobs) for none. Maintainers and admins change it. The rules
+            are the config's `ci_jobs`: a wait from 5m to 2h, at most 10 jobs
+            with unique names (never `pergent`), `read` one of `status`, `log`
+            or `report`, a `report` only with `read: report`, with a relative
+            path with no `..` and, on GitHub, an artifact. A rule that fails is
+            400 with the reason.
+          oneOf:
+            - {$ref: '#/components/schemas/CIJobsView'}
+            - {type: 'null'}
         linkedReposEnabled:
           type: [boolean, 'null']
           description: Admins only (403 for a maintainer). Null follows the default (off).
@@ -5814,7 +5859,7 @@ components:
           type: object
           additionalProperties: {$ref: '#/components/schemas/SettingView'}
           description: Keyed approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews,
-            learnFromDismissals, quietReviews, checkDeleted, commentLayout, linkedReposEnabled, linkedRepos, failureStatus, skills, repoSkills, jobTimeoutSeconds, maxTurns, jobMemory,
+            learnFromDismissals, quietReviews, checkDeleted, ciJobs (a CIJobsView), commentLayout, linkedReposEnabled, linkedRepos, failureStatus, skills, repoSkills, jobTimeoutSeconds, maxTurns, jobMemory,
             rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly (the mode in
             effect, follow_visibility, on or off), trustedAuthors (a list of TrustedAuthor)
             model (the ID of the entry of the list of models the repository names, null
@@ -5958,10 +6003,85 @@ components:
         webURL:
           type: string
           description: The change's page on the platform; "" when unknown.
+    CIJobsView:
+      description: A repository's CI jobs setting.
+      type: object
+      required: [wait, jobs]
+      additionalProperties: false
+      properties:
+        wait:
+          type: string
+          description: How long a run waits for the jobs to end, such as `30m` or `1h30m`, from `5m` to `2h`. Left out when saving, it is `30m`.
+        jobs:
+          type: array
+          maxItems: 10
+          items: {$ref: '#/components/schemas/CIJobView'}
+    CIJobView:
+      type: object
+      required: [name, read, blocksApproval]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: The GitLab job name, a GitLab trigger job's name, or the GitHub check run name, matched exactly.
+        read:
+          type: string
+          enum: [status, log, report]
+        report:
+          description: Only with `read` report; left out otherwise.
+          oneOf:
+            - {$ref: '#/components/schemas/CIReportView'}
+            - {type: 'null'}
+        blocksApproval: {type: boolean}
+    CIReportView:
+      type: object
+      required: [path]
+      additionalProperties: false
+      properties:
+        artifact:
+          type: string
+          description: The workflow artifact's name. GitHub only, and required there.
+        path:
+          type: string
+          description: A relative path inside the job's artifacts, with no `..`.
+    CIJobResultView:
+      description: One chosen CI job of a run, as it was when the run was decided. It holds no CI text.
+      type: object
+      required: [name, result, read, size, cut, blocks]
+      additionalProperties: false
+      properties:
+        name: {type: string}
+        result:
+          type: string
+          enum: [passed, failed, cancelled, skipped, missing, running, unreadable]
+        reason:
+          type: string
+          description: Why a job is `unreadable` (`no permission` or `error`); left out otherwise.
+        read:
+          type: string
+          enum: [status, log, report]
+        size:
+          type: integer
+          description: The bytes of text read for the job.
+        cut:
+          type: boolean
+          description: The text was cut to fit.
+        blocks:
+          type: boolean
+          description: The job blocks approval.
+    CIJobNamesView:
+      description: Body of `GET /api/repositories/{instance}/{project}/ci-job-names`.
+      type: object
+      required: [names]
+      additionalProperties: false
+      properties:
+        names:
+          type: array
+          items: {type: string}
     RunDetailView:
       description: One run. A run without a usable result has no skills or files.
       type: object
-      required: [run, instance, project, number, status, approved, approvalReason, pergentVersion, model, provider, maxTurns, quiet, incrementalNote, tokens, files, skills, latestDecided]
+      required: [run, instance, project, number, status, approved, approvalReason, pergentVersion, model, provider, maxTurns, quiet, incrementalNote, ciJobs, ciDeadline, tokens, files, skills, latestDecided]
       properties:
         run: {$ref: '#/components/schemas/RunSummary'}
         instance: {type: string}
@@ -5993,6 +6113,14 @@ components:
         incrementalNote:
           type: string
           description: What an incremental review covered; "" for a full review.
+        ciJobs:
+          type: [array, 'null']
+          description: The CI jobs the repository chose, as the run was decided with them. Null for a run that has none. Never any CI text.
+          items: {$ref: '#/components/schemas/CIJobResultView'}
+        ciDeadline:
+          type: [string, 'null']
+          format: date-time
+          description: When a run waiting for CI stops waiting; null when it is not waiting for CI.
         tokens: {$ref: '#/components/schemas/TokensView'}
         files: {$ref: '#/components/schemas/FilesView'}
         skills:

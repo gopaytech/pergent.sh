@@ -1741,3 +1741,83 @@ func mustRead(t *testing.T, path string) string {
 	}
 	return string(b)
 }
+
+func TestCIJobsConfig(t *testing.T) {
+	cfg, err := withRepoKey(t, `    ci_jobs:
+      wait: 30m
+      jobs:
+        - name: test
+          read: log
+          blocks_approval: true
+        - name: cycode-scan
+          read: report
+          report:
+            path: cycode.json
+        - name: lint
+          read: status
+`)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := &store.CIJobs{WaitSeconds: 1800, Jobs: []store.CIJob{
+		{Name: "test", Read: "log", BlocksApproval: true},
+		{Name: "cycode-scan", Read: "report", Report: &store.CIReport{Path: "cycode.json"}},
+		{Name: "lint", Read: "status"},
+	}}
+	if got := cfg.Repositories[0].CIJobs; !reflect.DeepEqual(got, want) {
+		t.Errorf("CIJobs = %+v, want %+v", got, want)
+	}
+
+	// With no wait, the wait is 30m.
+	cfg, err = withRepoKey(t, "    ci_jobs:\n      jobs:\n        - name: test\n          read: status\n")
+	if err != nil {
+		t.Fatalf("Load without wait: %v", err)
+	}
+	if got := cfg.Repositories[0].CIJobs; got == nil || got.WaitSeconds != 1800 {
+		t.Errorf("default wait: CIJobs = %+v, want WaitSeconds 1800", got)
+	}
+
+	// Left out, the setting is nil. An empty jobs list is allowed.
+	if got := loadGitHub(t).Repositories[1].CIJobs; got != nil {
+		t.Errorf("unset: CIJobs = %+v, want nil", got)
+	}
+	if _, err := withRepoKey(t, "    ci_jobs:\n      jobs: []\n"); err != nil {
+		t.Errorf("Load with empty jobs: %v", err)
+	}
+
+	// A GitHub report names its artifact.
+	cfg, err = withGitHubRepoKey(t, "    ci_jobs:\n      jobs:\n        - name: scan\n          read: report\n          report:\n            artifact: a\n            path: r.json\n")
+	if err != nil {
+		t.Fatalf("Load GitHub: %v", err)
+	}
+	if got := cfg.Repositories[1].CIJobs; got == nil || got.Jobs[0].Report.Artifact != "a" {
+		t.Errorf("GitHub CIJobs = %+v", got)
+	}
+}
+
+func TestCIJobsRefused(t *testing.T) {
+	for _, tt := range []struct {
+		name, extra, wantErr string
+		github               bool
+	}{
+		{"a bad read", "    ci_jobs:\n      jobs:\n        - name: a\n          read: logs\n", "repositories[0] (acme/widgets): ci_jobs.jobs[0].read", false},
+		{"a bad path", "    ci_jobs:\n      jobs:\n        - name: a\n          read: report\n          report:\n            path: /etc/x\n", "repositories[0] (acme/widgets): ci_jobs.jobs[0].report.path must be relative", false},
+		{"a wait of 4m", "    ci_jobs:\n      wait: 4m\n      jobs: []\n", "repositories[0] (acme/widgets): ci_jobs.wait", false},
+		{"a wait of 0s", "    ci_jobs:\n      wait: 0s\n      jobs: []\n", "ci_jobs.wait", false},
+		{"a GitHub report with no artifact", "    ci_jobs:\n      jobs:\n        - name: a\n          read: report\n          report:\n            path: r\n", "ci_jobs.jobs[0].report.artifact", true},
+		{"an unknown ci_jobs key", "    ci_jobs:\n      waits: 10m\n", "waits", false},
+		{"an unknown job key", "    ci_jobs:\n      jobs:\n        - name: a\n          read: log\n          block: true\n", "block", false},
+		{"an unknown report key", "    ci_jobs:\n      jobs:\n        - name: a\n          read: report\n          report:\n            file: r\n", "file", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			load := withRepoKey
+			if tt.github {
+				load = withGitHubRepoKey
+			}
+			_, err := load(t, tt.extra)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Load() = %v, want an error containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}

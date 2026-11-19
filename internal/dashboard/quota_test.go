@@ -384,3 +384,16 @@ func TestIsQuotaKey(t *testing.T) {
 		t.Error("isQuotaKey is true for exactly monthlyTokenQuota")
 	}
 }
+
+// A waiting run held for CI says so, and a review a CI job blocks keeps its
+// own outcome and reason.
+func TestJudgeCI(t *testing.T) {
+	got := judge(store.RunDigest{Outcome: OutcomeWaiting, State: store.Waiting, SkipReason: store.WaitCIPending})
+	if got.outcome != OutcomeWaiting || got.reason != reasonWaitingCI || got.status != "" {
+		t.Errorf("judge = %+v; want waiting / %q", got, reasonWaitingCI)
+	}
+	got = judge(store.RunDigest{Outcome: OutcomeCI, State: store.Published, OutcomeReason: "CI blocks approval: test failed", DecisionStatus: "failed"})
+	if got.outcome != "ci_blocked" || got.reason != "CI blocks approval: test failed" || got.status != "failed" {
+		t.Errorf("judge = %+v", got)
+	}
+}

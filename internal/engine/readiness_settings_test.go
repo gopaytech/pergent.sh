@@ -704,3 +704,78 @@ func TestSettingsStopReasons(t *testing.T) {
 		}
 	})
 }
+
+// The CI access items are read only for a GitHub repository that has ci_jobs:
+// the review App's Actions: Read permission and its Check run event.
+func TestSettingsGitHubCIAccess(t *testing.T) {
+	env := newTestEnv(t)
+	gh := addGitHub(t, env, true)
+	serveGitHubSettings(gh)
+	p, ok, err := env.Store.ProjectByPath(env.ctx, ghInstance, ghRepoPath)
+	if err != nil || !ok {
+		t.Fatalf("ProjectByPath = %v, %v", ok, err)
+	}
+
+	// No ci_jobs: no items, whatever the access is.
+	if err := env.Store.SetProjectCIAccess(env.ctx, ghInstance, p.ProjectID, false, false); err != nil {
+		t.Fatal(err)
+	}
+	target, err := scanSettings(t, env, ghInstance, ghRepoPath)
+	if err != nil {
+		t.Fatalf("scanSettings: %v", err)
+	}
+	if target.Pod.ActionsRead != nil || target.Pod.CheckRunEvent != nil {
+		t.Errorf("without ci_jobs the pod has %+v and %+v; want no CI items", target.Pod.ActionsRead, target.Pod.CheckRunEvent)
+	}
+
+	// With ci_jobs: neither is allowed, so both are named.
+	for i := range env.Engine.Config.Repositories {
+		if r := &env.Engine.Config.Repositories[i]; r.Project == ghRepoPath {
+			r.CIJobs = &store.CIJobs{WaitSeconds: 1800, Jobs: []store.CIJob{{Name: "test", Read: "log"}}}
+		}
+	}
+	target, err = scanSettings(t, env, ghInstance, ghRepoPath)
+	if err != nil {
+		t.Fatalf("scanSettings: %v", err)
+	}
+	a, c := target.Pod.ActionsRead, target.Pod.CheckRunEvent
+	if a == nil || a.State != readiness.Missing || !strings.Contains(a.Reason, "Actions: Read") {
+		t.Errorf("actions = %+v; want missing, naming Actions: Read", a)
+	}
+	if c == nil || c.State != readiness.Missing || !strings.Contains(c.Reason, "Check run") {
+		t.Errorf("check run event = %+v; want missing, naming the Check run event", c)
+	}
+
+	// Allowed: both pass.
+	if err := env.Store.SetProjectCIAccess(env.ctx, ghInstance, p.ProjectID, true, true); err != nil {
+		t.Fatal(err)
+	}
+	target, _ = scanSettings(t, env, ghInstance, ghRepoPath)
+	if a, c = target.Pod.ActionsRead, target.Pod.CheckRunEvent; a == nil || a.State != readiness.Passed || c == nil || c.State != readiness.Passed {
+		t.Errorf("allowed: actions = %+v, check run event = %+v; want passed", a, c)
+	}
+
+}
+
+// An access nobody has checked yet is unknown, never passed; a refused one
+// names what to turn on; an allowed one passes.
+func TestCIAccessItem(t *testing.T) {
+	yes, no := true, false
+	const cant = "the review App can't do X (turn on X)"
+	for _, c := range []struct {
+		name  string
+		in    *bool
+		state string
+	}{{"unchecked", nil, readiness.Unknown}, {"refused", &no, readiness.Missing}, {"allowed", &yes, readiness.Passed}} {
+		got := ciAccessItem(c.in, "it is on", cant, "not checked")
+		if got.State != c.state {
+			t.Errorf("%s: state = %q; want %q", c.name, got.State, c.state)
+		}
+		if c.state == readiness.Missing && got.Reason != cant {
+			t.Errorf("%s: reason = %q; want %q", c.name, got.Reason, cant)
+		}
+		if c.state == readiness.Unknown && got.Reason != "not checked" {
+			t.Errorf("%s: reason = %q; want the not-checked reason", c.name, got.Reason)
+		}
+	}
+}

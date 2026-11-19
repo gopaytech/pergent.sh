@@ -51,6 +51,7 @@ const (
 	KeyLearnFromDismissals              = "learn_from_dismissals"
 	KeyQuietReviews                     = "quiet_reviews"
 	KeyCheckDeleted                     = "check_deleted"
+	KeyCIJobs                           = "ci_jobs"
 	KeyCommentLayout                    = "comment_layout"
 	KeyLinkedReposEnabled               = "linked_repos_enabled"
 	KeyTrustedAuthorsOnly               = "trusted_authors_only"
@@ -91,6 +92,10 @@ type Effective struct {
 	// A repository setting only, with no instance default. The default is
 	// false.
 	CheckDeleted bool
+	// CIJobs are the CI jobs a review waits for and reads, with how long it
+	// waits. A repository setting only, with no instance default. The zero
+	// value (no jobs) is off: a run is reviewed as if there were no CI jobs.
+	CIJobs store.CIJobs
 	// CommentLayout is the shape of the review comment, "block:state" entries
 	// in order; nil means the default layout.
 	CommentLayout []string
@@ -328,7 +333,7 @@ func (r *Resolver) defaultsFor(source Source, platform, instance, project string
 			KeyTrustedAuthorsOnly: false, KeyTrustedAuthors: false, KeyMonthlyTokenQuota: false,
 			KeyApprove: false, KeyReviewDrafts: false, KeyInlineFindings: false, KeyFailureStatus: false,
 			KeySkills: false, KeyRepoSkills: false, KeyJobTimeout: false, KeyMaxTurns: false, KeyJobMemory: false, KeyModel: false,
-			KeyRerunLimitPerMR: false, KeyRerunLimitPerRepo: false, KeyCommandsAuthorAndMaintainersOnly: false, KeyIncrementalReviews: false, KeyLearnFromDismissals: false, KeyQuietReviews: false, KeyCheckDeleted: false, KeyCommentLayout: false, KeyLinkedReposEnabled: false,
+			KeyRerunLimitPerMR: false, KeyRerunLimitPerRepo: false, KeyCommandsAuthorAndMaintainersOnly: false, KeyIncrementalReviews: false, KeyLearnFromDismissals: false, KeyQuietReviews: false, KeyCheckDeleted: false, KeyCIJobs: false, KeyCommentLayout: false, KeyLinkedReposEnabled: false,
 		},
 	}
 	if source != SourceDashboard {
@@ -416,6 +421,26 @@ func (r *Resolver) usableMemory(s string) (resource.Quantity, bool) {
 	return q, true
 }
 
+// cloneCIJobs copies a repository's ci_jobs, so no caller changes the stored
+// or configured ones; nil is the zero value, which is off.
+func cloneCIJobs(c *store.CIJobs) store.CIJobs {
+	if c == nil {
+		return store.CIJobs{}
+	}
+	out := store.CIJobs{WaitSeconds: c.WaitSeconds}
+	if len(c.Jobs) > 0 {
+		out.Jobs = make([]store.CIJob, len(c.Jobs))
+		for i, j := range c.Jobs {
+			out.Jobs[i] = j
+			if j.Report != nil {
+				rep := *j.Report
+				out.Jobs[i].Report = &rep
+			}
+		}
+	}
+	return out
+}
+
 // cloneLinks copies a repository's links, so no caller changes the stored or
 // configured ones; an empty list is nil.
 func cloneLinks(ls []store.Link) []store.Link {
@@ -490,6 +515,9 @@ func (r *Resolver) fromConfig(repo config.Repository) (Effective, bool) {
 	}
 	if repo.CheckDeleted != nil {
 		eff.CheckDeleted, eff.Overridden[KeyCheckDeleted] = *repo.CheckDeleted, true
+	}
+	if repo.CIJobs != nil {
+		eff.CIJobs, eff.Overridden[KeyCIJobs] = cloneCIJobs(repo.CIJobs), true
 	}
 	if len(repo.CommentLayout) > 0 {
 		eff.CommentLayout, eff.Overridden[KeyCommentLayout] = slices.Clone(repo.CommentLayout), true
@@ -569,6 +597,9 @@ func (r *Resolver) fromDashboard(row store.DashboardRepo, stored store.RepoDefau
 	}
 	if row.CheckDeleted != nil {
 		eff.CheckDeleted, eff.Overridden[KeyCheckDeleted] = *row.CheckDeleted, true
+	}
+	if row.CIJobs != nil {
+		eff.CIJobs, eff.Overridden[KeyCIJobs] = cloneCIJobs(row.CIJobs), true
 	}
 	if len(row.CommentLayout) > 0 {
 		eff.CommentLayout, eff.Overridden[KeyCommentLayout] = slices.Clone(row.CommentLayout), true

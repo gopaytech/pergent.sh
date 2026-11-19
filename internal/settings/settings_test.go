@@ -90,7 +90,7 @@ func get(t *testing.T, r *Resolver, instance, project string) Effective {
 }
 
 var allKeys = []string{KeyApprove, KeyReviewDrafts, KeyInlineFindings, KeyFailureStatus, KeySkills, KeyJobTimeout, KeyMaxTurns, KeyJobMemory,
-	KeyRerunLimitPerMR, KeyRerunLimitPerRepo, KeyRepoSkills, KeyCommandsAuthorAndMaintainersOnly, KeyIncrementalReviews, KeyLearnFromDismissals, KeyQuietReviews, KeyCheckDeleted, KeyCommentLayout, KeyLinkedReposEnabled, KeyMonthlyTokenQuota}
+	KeyRerunLimitPerMR, KeyRerunLimitPerRepo, KeyRepoSkills, KeyCommandsAuthorAndMaintainersOnly, KeyIncrementalReviews, KeyLearnFromDismissals, KeyQuietReviews, KeyCheckDeleted, KeyCommentLayout, KeyLinkedReposEnabled, KeyMonthlyTokenQuota, KeyCIJobs}
 
 // wantOverridden checks exactly the given keys are overridden.
 func wantOverridden(t *testing.T, eff Effective, keys ...string) {
@@ -181,6 +181,7 @@ func TestResolverConfigKeys(t *testing.T) {
 		CommentLayout:      []string{"findings:open", "files:collapsed"},
 		LinkedReposEnabled: ptr(true),
 		MonthlyTokenQuota:  ptr(int64(5000)),
+		CIJobs:             &store.CIJobs{WaitSeconds: 600, Jobs: []store.CIJob{{Name: "test", Read: "status"}}},
 	})
 	r := &Resolver{Config: cfg, Instances: instances.New(cfg, nil, nil)} // no store: config only
 
@@ -268,6 +269,7 @@ func TestResolverDefaultsAndOverrides(t *testing.T) {
 		CommentLayout:      []string{"findings:open", "files:collapsed"},
 		LinkedReposEnabled: ptr(true),
 		MonthlyTokenQuota:  ptr(int64(5000)),
+		CIJobs:             &store.CIJobs{WaitSeconds: 600, Jobs: []store.CIJob{{Name: "test", Read: "status"}}},
 	})
 	// A row of an instance no longer configured is not a repository.
 	upsert(t, st, store.DashboardRepo{Instance: "gone", Project: "acme/old"})
@@ -948,6 +950,41 @@ func TestConfigQuotaWins(t *testing.T) {
 	eff := get(t, r, "main", "acme/widgets")
 	if eff.Source != SourceConfig || eff.MonthlyTokenQuota == nil || *eff.MonthlyTokenQuota != 3 || !eff.Overridden[KeyMonthlyTokenQuota] {
 		t.Errorf("Get = %v source=%s overridden=%v, want 3 from the config", eff.MonthlyTokenQuota, eff.Source, eff.Overridden[KeyMonthlyTokenQuota])
+	}
+}
+
+func TestResolverCIJobs(t *testing.T) {
+	st := newStore(t)
+	jobs := store.CIJobs{WaitSeconds: 1800, Jobs: []store.CIJob{
+		{Name: "test", Read: "log", BlocksApproval: true},
+		{Name: "lint", Read: "report", Report: &store.CIReport{Path: "out/lint.txt"}},
+	}}
+	upsert(t, st, store.DashboardRepo{Instance: "gh", Project: "acme/gadgets", CIJobs: &jobs})
+	upsert(t, st, store.DashboardRepo{Instance: "main", Project: "acme/payments"})
+	cfg := testConfig()
+	cfg.Repositories[0].CIJobs = &store.CIJobs{WaitSeconds: 300, Jobs: []store.CIJob{{Name: "build", Read: "status"}}}
+	r := &Resolver{Config: cfg, Store: st, Instances: instances.New(cfg, st, nil)}
+
+	fromConfig := get(t, r, "main", "acme/widgets")
+	if fromConfig.CIJobs.WaitSeconds != 300 || len(fromConfig.CIJobs.Jobs) != 1 || fromConfig.CIJobs.Jobs[0].Name != "build" || !fromConfig.Overridden[KeyCIJobs] {
+		t.Errorf("config repository CIJobs = %+v, overridden %v", fromConfig.CIJobs, fromConfig.Overridden[KeyCIJobs])
+	}
+	fromConfig.CIJobs.Jobs[0].Name = "changed"
+	if cfg.Repositories[0].CIJobs.Jobs[0].Name != "build" {
+		t.Error("changing the effective CIJobs changed the config")
+	}
+
+	row := get(t, r, "gh", "acme/gadgets")
+	if !reflect.DeepEqual(row.CIJobs, jobs) || !row.Overridden[KeyCIJobs] {
+		t.Errorf("dashboard repository CIJobs = %+v, overridden %v; want %+v", row.CIJobs, row.Overridden[KeyCIJobs], jobs)
+	}
+
+	none := get(t, r, "main", "acme/payments")
+	if !reflect.DeepEqual(none.CIJobs, store.CIJobs{}) || none.Overridden[KeyCIJobs] {
+		t.Errorf("repository with no ci_jobs: CIJobs = %+v, overridden %v; want zero, false", none.CIJobs, none.Overridden[KeyCIJobs])
+	}
+	if v, ok := none.Overridden[KeyCIJobs]; !ok || v {
+		t.Errorf("Overridden has no %q entry set to false", KeyCIJobs)
 	}
 }
 

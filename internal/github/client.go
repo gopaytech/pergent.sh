@@ -406,7 +406,10 @@ func (c *Client) paginateTimed(ctx context.Context, path string, pageTimeout tim
 	if err != nil {
 		return errors.New("github: invalid API URL or path")
 	}
-	u.RawQuery = url.Values{"per_page": {perPage}}.Encode()
+	// A query already in path (check_name, filter) stays.
+	q := u.Query()
+	q.Set("per_page", perPage)
+	u.RawQuery = q.Encode()
 	next := u.String()
 	for page := 0; ; page++ {
 		if page >= maxPages {
@@ -890,6 +893,18 @@ func (c *Client) IssueComments(ctx context.Context, owner, repo string, number i
 		return nil, err
 	}
 	return out, nil
+}
+
+// IssueComment returns one conversation comment. A missing comment is
+// ErrNotFound.
+func (c *Client) IssueComment(ctx context.Context, owner, repo string, commentID int64) (Comment, error) {
+	var cm Comment
+	p, err := repoPath(owner, repo, "/issues/comments", id(commentID))
+	if err != nil {
+		return cm, err
+	}
+	err = c.getJSON(ctx, p, nil, &cm)
+	return cm, err
 }
 
 // CreateIssueComment adds a conversation comment to a pull request and

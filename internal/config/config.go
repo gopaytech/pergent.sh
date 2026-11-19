@@ -22,6 +22,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
+	"github.com/gopaytech/pergent.sh/internal/ci"
 	"github.com/gopaytech/pergent.sh/internal/links"
 	"github.com/gopaytech/pergent.sh/internal/store"
 )
@@ -208,6 +209,9 @@ type Repository struct {
 	GitLab  string
 	GitHub  string
 	Project string
+	// CIJobs is the CI jobs whose results a review waits for and reads (nil:
+	// not set, a review runs at once). A set value has its wait filled in.
+	CIJobs *store.CIJobs
 	// Skills names library skills (nil: the default list). RepoSkills names
 	// the detected repository skills to turn on (nil: none).
 	Skills, RepoSkills []string
@@ -334,6 +338,8 @@ type fileRepository struct {
 	LinkedReposEnabled *bool      `yaml:"linked_repos_enabled"`
 	LinkedRepos        []fileLink `yaml:"linked_repos"`
 
+	CIJobs *fileCIJobs `yaml:"ci_jobs"`
+
 	TrustedAuthorsOnly *string               `yaml:"trusted_authors_only"`
 	TrustedAuthors     []store.TrustedAuthor `yaml:"trusted_authors"`
 
@@ -345,6 +351,24 @@ type fileLink struct {
 	Target   string   `yaml:"target"`
 	Watched  []string `yaml:"watched"`
 	CanBlock *bool    `yaml:"can_block"`
+}
+
+// fileCIJobs is ci_jobs. wait defaults to ci.DefaultWait; blocks_approval to false.
+type fileCIJobs struct {
+	Wait *duration   `yaml:"wait"`
+	Jobs []fileCIJob `yaml:"jobs"`
+}
+
+type fileCIJob struct {
+	Name           string        `yaml:"name"`
+	Read           string        `yaml:"read"`
+	Report         *fileCIReport `yaml:"report"`
+	BlocksApproval *bool         `yaml:"blocks_approval"`
+}
+
+type fileCIReport struct {
+	Artifact string `yaml:"artifact"`
+	Path     string `yaml:"path"`
 }
 
 func (f fileRepository) repository() Repository {
@@ -371,6 +395,21 @@ func (f fileRepository) repository() Repository {
 		for _, l := range f.LinkedRepos {
 			r.LinkedRepos = append(r.LinkedRepos, store.Link{Target: l.Target, Watched: l.Watched, CanBlock: l.CanBlock == nil || *l.CanBlock})
 		}
+	}
+	if f.CIJobs != nil {
+		wait := ci.DefaultWait
+		if f.CIJobs.Wait != nil {
+			wait = time.Duration(*f.CIJobs.Wait)
+		}
+		cj := &store.CIJobs{WaitSeconds: int64(wait / time.Second), Jobs: make([]store.CIJob, 0, len(f.CIJobs.Jobs))}
+		for _, j := range f.CIJobs.Jobs {
+			job := store.CIJob{Name: j.Name, Read: j.Read, BlocksApproval: j.BlocksApproval != nil && *j.BlocksApproval}
+			if j.Report != nil {
+				job.Report = &store.CIReport{Artifact: j.Report.Artifact, Path: j.Report.Path}
+			}
+			cj.Jobs = append(cj.Jobs, job)
+		}
+		r.CIJobs = cj
 	}
 	if f.JobTimeout != nil {
 		d := time.Duration(*f.JobTimeout)
@@ -754,6 +793,11 @@ func (c *Config) Validate() error {
 		case len(repo.LinkedRepos) > 0:
 			if err := links.Validate(repo.Project, repo.LinkedRepos); err != nil {
 				add("repositories[%d] (%s): linked_repos: %v", i, repo.Project, err)
+			}
+		}
+		if repo.CIJobs != nil {
+			if err := ci.Validate(*repo.CIJobs, repo.GitHub != ""); err != nil {
+				add("repositories[%d] (%s): %v", i, repo.Project, err)
 			}
 		}
 		if n := repo.MaxTurns; n != nil && (*n < MinMaxTurns || *n > MaxMaxTurns) {

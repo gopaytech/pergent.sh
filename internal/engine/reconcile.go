@@ -482,6 +482,11 @@ func (e *Engine) reconcileGitHubRepo(ctx context.Context, repo settings.Effectiv
 	if err := e.Store.UpsertGitHubProject(ctx, p); err != nil {
 		return 0, fmt.Errorf("store project: %w", err)
 	}
+	// What the CI results need: Actions: Read for logs and reports, and the
+	// check_run event, which wakes a waiting run without the sweep.
+	if err := e.Store.SetProjectCIAccess(ctx, instance, gr.ID, info.ActionsRead(), info.HasEvent("check_run")); err != nil {
+		return 0, fmt.Errorf("store CI access: %w", err)
+	}
 	if reachErr != nil {
 		return 0, fmt.Errorf("check whether the approve side reaches the repository: %w", reachErr)
 	}

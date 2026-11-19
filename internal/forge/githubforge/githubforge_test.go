@@ -338,6 +338,18 @@ func TestCreateAndUpdateComment(t *testing.T) {
 	}
 }
 
+func TestCommentBody(t *testing.T) {
+	f := newFake(t)
+	f.reply("GET", "/repos/acme/widgets/issues/comments/31", 200, map[string]any{"id": 31, "body": "hello"})
+	fg := f.forge(t)
+	if got, err := fg.CommentBody(ctx, repoID, 3, 31); err != nil || got != "hello" {
+		t.Fatalf("CommentBody = %q, %v", got, err)
+	}
+	if _, err := fg.CommentBody(ctx, repoID, 3, 32); !errors.Is(err, forge.ErrNotFound) {
+		t.Fatalf("CommentBody(deleted) = %v; want forge.ErrNotFound", err)
+	}
+}
+
 func TestGetFileAndListTree(t *testing.T) {
 	f := newFake(t)
 	f.handle("GET", "/repos/acme/widgets/contents/.pergent/instructions.md", func(w http.ResponseWriter, _ *http.Request) {

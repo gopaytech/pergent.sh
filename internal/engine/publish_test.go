@@ -27,6 +27,7 @@ import (
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/policy"
 	"github.com/gopaytech/pergent.sh/internal/result"
+	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 	"github.com/gopaytech/pergent.sh/internal/syncmap"
 	"github.com/gopaytech/pergent.sh/internal/threads"
@@ -552,8 +553,8 @@ func TestPublishFailureReasonComment(t *testing.T) {
 
 	publish(t, env)
 
-	if body := createdComment(t, env, 1); body != policy.ErrorComment(reason) {
-		t.Errorf("comment = %q, want %q", body, policy.ErrorComment(reason))
+	if body := createdComment(t, env, 1); body != policy.ErrorComment(reason, "") {
+		t.Errorf("comment = %q, want %q", body, policy.ErrorComment(reason, ""))
 	}
 	wantStatus(t, env, head, gitlab.StatusFailed, "pergent couldn't review this MR")
 	wantPublished(t, env, id)
@@ -1449,6 +1450,88 @@ func TestPublishGiveUpNeutralBlockingIsFailed(t *testing.T) {
 	}
 }
 
+// A blocking CI job that isn't passed is never softened to neutral by a
+// give-up, whether the review itself is clean or failed.
+func TestPublishGiveUpNeutralCIBlockedIsFailed(t *testing.T) {
+	for name, tc := range map[string]struct {
+		result func(t *testing.T, head string) []byte
+	}{
+		"clean review": {func(t *testing.T, head string) []byte {
+			return resultFor(t, head, reviewed("no_blocking_issues", "a.go"))
+		}},
+		"failed review": {func(t *testing.T, head string) []byte { return resultFor(t, head, reviewed("failed", "a.go")) }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := newTestEnv(t)
+			env.Engine.Config.Repositories[0].FailureStatus = config.FailureStatusNeutral
+			head := sha('a')
+			id := env.Report(1, head, tc.result(t, head))
+			if err := env.Store.SetRunCI(env.ctx, id, []store.CIJobResult{{Name: "test", Result: "failed", Read: "status", Blocks: true}}); err != nil {
+				t.Fatal(err)
+			}
+			servePublish(env, 1, head)
+			env.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusUnprocessableEntity, `{"message":"Note is too long"}`)
+
+			publishUntilGivenUp(t, env, id)
+
+			wantStatus(t, env, head, gitlab.StatusFailed, "pergent couldn't post its review")
+			wantNoApproval(t, env, 1)
+			if r := env.Run(id); r.DecisionStatus != "failed" {
+				t.Errorf("recorded status = %q, want failed", r.DecisionStatus)
+			}
+		})
+	}
+}
+
+// A run that failed before its CI was read has no snapshot; a give-up still
+// holds its repository's blocking job to the gate, so neutral is not used.
+func TestPublishGiveUpNeutralFailedWithoutCIIsFailed(t *testing.T) {
+	env := newTestEnv(t)
+	env.Engine.Config.Repositories[0].FailureStatus = config.FailureStatusNeutral
+	env.Engine.Config.Repositories[0].CIJobs = &store.CIJobs{WaitSeconds: 1800, Jobs: []store.CIJob{
+		{Name: "test", Read: "status", BlocksApproval: true},
+	}}
+	head := sha('a')
+	id := env.Enqueue(1, head)
+	if ok, err := env.Store.ReportFailure(env.ctx, id, store.Failure{Reason: "the review Job couldn't be created"}, env.Now()); err != nil || !ok {
+		t.Fatalf("ReportFailure = %v, %v", ok, err)
+	}
+	servePublish(env, 1, head)
+	env.GitLab.Reply(http.MethodPost, notesPath(1), http.StatusUnprocessableEntity, `{"message":"Note is too long"}`)
+
+	publishUntilGivenUp(t, env, id)
+
+	wantStatus(t, env, head, gitlab.StatusFailed, "pergent couldn't post its review")
+	wantNoApproval(t, env, 1)
+	if r := env.Run(id); r.DecisionStatus != "failed" {
+		t.Errorf("recorded status = %q, want failed", r.DecisionStatus)
+	}
+}
+
+// A run that failed at dispatch, before its CI was read, is published failed
+// on a neutral repository with a blocking job: the gate isn't skipped.
+func TestPublishNeutralFailedWithoutCIIsFailed(t *testing.T) {
+	env := newTestEnv(t)
+	env.Engine.Config.Repositories[0].FailureStatus = config.FailureStatusNeutral
+	env.Engine.Config.Repositories[0].CIJobs = &store.CIJobs{WaitSeconds: 1800, Jobs: []store.CIJob{
+		{Name: "test", Read: "status", BlocksApproval: true},
+	}}
+	head := sha('a')
+	id := env.Enqueue(1, head)
+	if ok, err := env.Store.ReportFailure(env.ctx, id, store.Failure{Reason: "the review Job couldn't be created"}, env.Now()); err != nil || !ok {
+		t.Fatalf("ReportFailure = %v, %v", ok, err)
+	}
+	servePublish(env, 1, head)
+
+	publish(t, env)
+
+	if got := onlyStatus(t, env, head)["state"]; got != string(gitlab.StatusFailed) {
+		t.Errorf("status = %v, want failed", got)
+	}
+	wantPublished(t, env, id)
+	wantNoApproval(t, env, 1)
+}
+
 // A repository removed before the give-up can't say it wants neutral: the
 // final status fails closed.
 func TestPublishGiveUpRepositoryGoneIsFailed(t *testing.T) {
@@ -2128,8 +2211,8 @@ func TestIncrementalFailureReasonPublishedAsIs(t *testing.T) {
 
 	publish(t, env)
 
-	if body := createdComment(t, env, 1); body != policy.ErrorComment(reason) {
-		t.Errorf("comment = %q, want %q", body, policy.ErrorComment(reason))
+	if body := createdComment(t, env, 1); body != policy.ErrorComment(reason, "") {
+		t.Errorf("comment = %q, want %q", body, policy.ErrorComment(reason, ""))
 	}
 	wantStatus(t, env, headB, gitlab.StatusFailed, "pergent couldn't review this MR")
 	wantPublished(t, env, id)
@@ -2149,7 +2232,7 @@ func TestOutcomeCarriesTheRunsQuiet(t *testing.T) {
 	head := sha('a')
 	res := resultFor(t, head, reviewed("no_blocking_issues", "a.go"))
 	for _, quiet := range []bool{true, false} {
-		o := e.outcome(store.Run{BaseSHA: sha('b'), HeadSHA: head, Result: res, Quiet: quiet}, log)
+		o := e.outcome(store.Run{BaseSHA: sha('b'), HeadSHA: head, Result: res, Quiet: quiet}, nil, log)
 		if o.Result == nil || o.FailureReason != "" || o.Quiet != quiet {
 			t.Errorf("outcome of a run with Quiet %v = %+v, want its result and Quiet %v", quiet, o, quiet)
 		}
@@ -2315,12 +2398,12 @@ func TestOutcomeCarriesTheRunsLayout(t *testing.T) {
 	head := sha('a')
 	res := resultFor(t, head, reviewed("no_blocking_issues", "a.go"))
 	for _, layout := range [][]string{{"findings:collapsed"}, {"checks:open", "findings:open"}, nil} {
-		o := e.outcome(store.Run{BaseSHA: sha('b'), HeadSHA: head, Result: res, CommentLayout: layout}, log)
+		o := e.outcome(store.Run{BaseSHA: sha('b'), HeadSHA: head, Result: res, CommentLayout: layout}, nil, log)
 		if o.Result == nil || o.FailureReason != "" || !slices.Equal(o.Layout, layout) {
 			t.Errorf("outcome of a run with layout %v = %+v, want its result and that layout", layout, o)
 		}
 	}
-	if o := e.outcome(store.Run{FailureReason: "the Job died", CommentLayout: []string{"findings:open"}}, log); o.Result != nil || o.FailureReason != "the Job died" {
+	if o := e.outcome(store.Run{FailureReason: "the Job died", CommentLayout: []string{"findings:open"}}, nil, log); o.Result != nil || o.FailureReason != "the Job died" {
 		t.Errorf("outcome of a failed run = %+v, want its reason", o)
 	}
 }
@@ -2524,5 +2607,238 @@ func TestPublishUsesFooterNote(t *testing.T) {
 	}
 	if strings.Contains(body, policy.DefaultFooterNote) {
 		t.Errorf("comment still has the built-in text:\n%s", body)
+	}
+}
+
+func TestDecisionOfKindCI(t *testing.T) {
+	d := policy.Decision{Kind: policy.KindCI, Status: policy.StatusFailed, Description: "CI blocks approval: test failed"}
+	got := decisionOf(policy.Outcome{}, d, false, approvalMade)
+	want := store.RunDecision{Outcome: store.OutcomeCI, Status: "failed", Reason: "CI blocks approval: test failed"}
+	if got != want {
+		t.Errorf("decisionOf = %+v, want %+v", got, want)
+	}
+	if store.OutcomeCI != "ci_blocked" {
+		t.Errorf("OutcomeCI = %q", store.OutcomeCI)
+	}
+}
+
+func TestOutcomeCarriesRunCI(t *testing.T) {
+	e := &Engine{}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	jobs := []store.CIJobResult{{Name: "test", Result: "failed", Read: "status", Blocks: true}}
+	// A stored result, a failure reason, an unusable result and no result at
+	// all: each carries the snapshot, or a failed review would drop the line.
+	head := sha('a')
+	good := store.Run{HeadSHA: head, BaseSHA: sha('b'), Result: resultFor(t, head, reviewed("no_blocking_issues", "a.go")), CIJobs: jobs}
+	for name, run := range map[string]store.Run{
+		"result":         good,
+		"failure reason": {FailureReason: "boom", CIJobs: jobs},
+		"no result":      {CIJobs: jobs},
+		"bad result":     {HeadSHA: head, BaseSHA: sha('b'), Result: []byte(`{`), CIJobs: jobs},
+		"other commit":   {HeadSHA: sha('c'), BaseSHA: sha('b'), Result: good.Result, CIJobs: jobs},
+	} {
+		if o := e.outcome(run, ciJobsSet.Jobs, log); !slices.Equal(o.CI, jobs) {
+			t.Errorf("%s: Outcome.CI = %+v, want %+v", name, o.CI, jobs)
+		}
+	}
+	if o := e.outcome(store.Run{FailureReason: "x"}, nil, log); len(o.CI) != 0 {
+		t.Errorf("a run with no jobs got CI %+v", o.CI)
+	}
+}
+
+// A run that failed before its CI was read (at dispatch, or a retry that gave
+// up) has no snapshot. When the repository chooses CI jobs, every chosen job
+// is decided unreadable: a failed review on a neutral repository would
+// otherwise skip the gate and be success on GitLab.
+func TestOutcomeFailedRunWithoutCISnapshot(t *testing.T) {
+	e := &Engine{}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	head := sha('a')
+	want := unreadableCI(head, ciJobsSet.Jobs).Results()
+	for name, run := range map[string]store.Run{
+		"failure reason": {HeadSHA: head, FailureReason: "boom"},
+		"no result":      {HeadSHA: head},
+		"bad result":     {HeadSHA: head, BaseSHA: sha('b'), Result: []byte(`{`)},
+	} {
+		o := e.outcome(run, ciJobsSet.Jobs, log)
+		if !slices.Equal(o.CI, want) {
+			t.Errorf("%s: Outcome.CI = %+v, want %+v", name, o.CI, want)
+		}
+		if d := policy.Decide(o, config.FailureStatusNeutral); d.Status != policy.StatusFailed || d.Approve {
+			t.Errorf("%s: decided %s, approve %v; want failed, no approval", name, d.Status, d.Approve)
+		}
+	}
+	// A review that finished without a snapshot (CI chosen after it was
+	// dispatched) and a repository with no CI jobs are decided as before.
+	good := store.Run{HeadSHA: head, BaseSHA: sha('b'), Result: resultFor(t, head, reviewed("no_blocking_issues", "a.go"))}
+	if o := e.outcome(good, ciJobsSet.Jobs, log); len(o.CI) != 0 {
+		t.Errorf("a finished review got CI %+v", o.CI)
+	}
+	if o := e.outcome(store.Run{HeadSHA: head, FailureReason: "boom"}, nil, log); len(o.CI) != 0 {
+		t.Errorf("a repository with no CI jobs got CI %+v", o.CI)
+	}
+}
+
+// chosenCI is the repository's current chosen jobs for run: none for an API
+// review, a repository not found or one with no CI jobs.
+func TestChosenCI(t *testing.T) {
+	if got := chosenCI(store.Run{}, ciRepo(), true); !slices.Equal(got, ciJobsSet.Jobs) {
+		t.Errorf("chosen = %+v", got)
+	}
+	if got := chosenCI(store.Run{}, ciRepo(), false); got != nil {
+		t.Errorf("not found: chosen = %+v", got)
+	}
+	if got := chosenCI(store.Run{Kind: store.KindAPI}, ciRepo(), true); got != nil {
+		t.Errorf("API review: chosen = %+v", got)
+	}
+	if got := chosenCI(store.Run{}, settings.Effective{}, true); got != nil {
+		t.Errorf("no CI jobs: chosen = %+v", got)
+	}
+}
+
+// bodyForge is a forge that reads a comment's body back.
+type bodyForge struct {
+	forge.Forge
+	body string
+	err  error
+}
+
+func (f *bodyForge) CommentBody(context.Context, int64, int64, int64) (string, error) {
+	return f.body, f.err
+}
+
+type noReaderForge struct{ forge.Forge }
+
+func TestCommentUnchanged(t *testing.T) {
+	ctx := context.Background()
+	for name, tc := range map[string]struct {
+		f    forge.Forge
+		want bool
+	}{
+		"same body":      {&bodyForge{body: "a"}, true},
+		"other body":     {&bodyForge{body: "b"}, false},
+		"read failed":    {&bodyForge{body: "a", err: errors.New("boom")}, false},
+		"note gone":      {&bodyForge{body: "a", err: forge.ErrNotFound}, false},
+		"cannot read it": {&noReaderForge{}, false},
+	} {
+		if got := commentUnchanged(ctx, tc.f, 1, 2, 3, "a"); got != tc.want {
+			t.Errorf("%s: commentUnchanged = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+// serveNote serves note id of merge request iid with body.
+func serveNote(env *testEnv, iid, id int64, body string) {
+	env.GitLab.Handle(http.MethodGet, notePath(iid, id), func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"id": id, "body": body})
+	})
+}
+
+// A republish whose comment is byte-identical to the one on the change edits
+// nothing.
+func TestUpsertSkipsIdenticalBody(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "api/handler.go")))
+	servePublish(env, 1, head)
+	publish(t, env)
+	body := createdComment(t, env, 1)
+	serveNote(env, 1, createdNote, body)
+	env.GitLab.Reply(http.MethodPut, notePath(1, createdNote), http.StatusOK, `{"id":555}`)
+
+	again := func() {
+		if _, err := env.Store.Republish(env.ctx, env.MRKey(1), head, "main"); err != nil {
+			t.Fatal(err)
+		}
+		publish(t, env)
+	}
+	again()
+	if n := len(env.GitLab.Requests(http.MethodPut, notePath(1, createdNote))); n != 0 {
+		t.Errorf("an identical comment was updated %d times", n)
+	}
+	// A comment that differs is edited.
+	serveNote(env, 1, createdNote, "something else")
+	again()
+	if n := len(env.GitLab.Requests(http.MethodPut, notePath(1, createdNote))); n != 1 {
+		t.Errorf("a changed comment was updated %d times, want 1", n)
+	}
+}
+
+// A blocking CI job that turns passed approves, one that turns failed
+// withdraws the approval, and an unchanged result edits no comment.
+func TestCIRedecideAfterPublish(t *testing.T) {
+	env := newTestEnv(t)
+	head := sha('a')
+	id := env.Report(1, head, resultFor(t, head, reviewed("no_blocking_issues", "a.go")))
+	job := func(res string) []store.CIJobResult {
+		return []store.CIJobResult{{Name: "test", Result: res, Read: "status", Blocks: true}}
+	}
+	if err := env.Store.SetRunCI(env.ctx, id, job("failed")); err != nil {
+		t.Fatal(err)
+	}
+	servePublish(env, 1, head)
+	env.GitLab.Reply(http.MethodPut, notePath(1, createdNote), http.StatusOK, `{"id":555}`)
+	env.GitLab.Reply(http.MethodPost, unapprovePath(1), http.StatusCreated, `{}`)
+
+	// Failed: no approval, the CI outcome, the line in the comment.
+	publish(t, env)
+	body := createdComment(t, env, 1)
+	if !strings.Contains(body, "_CI: test failed (blocks approval)_") {
+		t.Errorf("comment lacks the CI line:\n%s", body)
+	}
+	if n := len(env.GitLab.Requests(http.MethodPost, approvePath(1))); n != 0 {
+		t.Errorf("approved %d times with a blocking job failed", n)
+	}
+	if r := env.Run(id); r.Outcome != store.OutcomeCI || r.Approved {
+		t.Errorf("run = outcome %q approved %v, want %q, not approved", r.Outcome, r.Approved, store.OutcomeCI)
+	}
+	serveNote(env, 1, createdNote, body)
+	// lastStatus is the newest commit status set on head.
+	lastStatus := func(wantState gitlab.StatusState, wantDesc string) {
+		t.Helper()
+		reqs := env.GitLab.Requests(http.MethodPost, statusPath(head))
+		if len(reqs) == 0 {
+			t.Fatal("no commit status was set")
+		}
+		got := reqs[len(reqs)-1].JSON(t)
+		if got["state"] != string(wantState) || got["description"] != wantDesc {
+			t.Errorf("commit status = %v, want %q / %q", got, wantState, wantDesc)
+		}
+	}
+	lastStatus(gitlab.StatusFailed, "CI blocks approval: test failed")
+
+	redecide := func(res string) {
+		t.Helper()
+		if _, err := env.Store.Republish(env.ctx, env.MRKey(1), head, "main"); err != nil {
+			t.Fatal(err)
+		}
+		if err := env.Store.SetRunCI(env.ctx, id, job(res)); err != nil {
+			t.Fatal(err)
+		}
+		publish(t, env)
+	}
+	// An unchanged result: published again, no comment edit.
+	redecide("failed")
+	if n := len(env.GitLab.Requests(http.MethodPut, notePath(1, createdNote))); n != 0 {
+		t.Errorf("an unchanged CI result edited the comment %d times", n)
+	}
+	lastStatus(gitlab.StatusFailed, "CI blocks approval: test failed")
+	// Passed: approves.
+	redecide("passed")
+	if n := len(env.GitLab.Requests(http.MethodPost, approvePath(1))); n != 1 {
+		t.Fatalf("approved %d times after the job passed, want 1", n)
+	}
+	if r := env.Run(id); r.Outcome != store.OutcomeApproved || !r.Approved {
+		t.Errorf("run = outcome %q approved %v, want approved", r.Outcome, r.Approved)
+	}
+	lastStatus(gitlab.StatusSuccess, "No blocking issues")
+	// Failed again: the status turns failed and the approval is withdrawn.
+	redecide("failed")
+	lastStatus(gitlab.StatusFailed, "CI blocks approval: test failed")
+	if n := len(env.GitLab.Requests(http.MethodPost, unapprovePath(1))); n != 1 {
+		t.Errorf("the approval was withdrawn %d times, want 1", n)
+	}
+	if r := env.Run(id); r.Outcome != store.OutcomeCI || r.Approved {
+		t.Errorf("run = outcome %q approved %v after the job failed again", r.Outcome, r.Approved)
 	}
 }

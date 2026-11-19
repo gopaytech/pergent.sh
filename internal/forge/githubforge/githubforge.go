@@ -67,6 +67,9 @@ type Forge struct {
 	// slug[bot].
 	slug  string
 	repos Repos
+	// ownApps are the ids of pergent.sh's own Apps besides the review App:
+	// their check runs are never read as CI.
+	ownApps map[int64]bool
 }
 
 // NewForge returns the review App's Forge. botUserID and slug are the App's
@@ -74,6 +77,20 @@ type Forge struct {
 // unauthenticated and rate-limited, and the slug is not asked per comment.
 func NewForge(app *github.App, botUserID int64, slug string, repos Repos) *Forge {
 	return &Forge{app: app, bot: botUserID, slug: slug, repos: repos}
+}
+
+// IgnoreApps makes ReadCI skip the check runs of these Apps (pergent.sh's own
+// approve App) as well as the review App's, and returns f.
+func (f *Forge) IgnoreApps(ids ...int64) *Forge {
+	if f.ownApps == nil {
+		f.ownApps = map[int64]bool{}
+	}
+	for _, id := range ids {
+		if id > 0 {
+			f.ownApps[id] = true
+		}
+	}
+	return f
 }
 
 // client returns the review installation's client for repoID.
@@ -447,6 +464,17 @@ func (f *Forge) UpdateComment(ctx context.Context, repoID, _, commentID int64, b
 		return err
 	}
 	return mapErr(c.UpdateIssueComment(ctx, r.Owner, r.Name, commentID, body))
+}
+
+// CommentBody is the text of conversation comment commentID. A deleted
+// comment is forge.ErrNotFound.
+func (f *Forge) CommentBody(ctx context.Context, repoID, _, commentID int64) (string, error) {
+	c, r, err := f.client(ctx, repoID)
+	if err != nil {
+		return "", err
+	}
+	cm, err := c.IssueComment(ctx, r.Owner, r.Name, commentID)
+	return cm.Body, mapErr(err)
 }
 
 // Bot is the review App's bot user: the login is "<slug>[bot]".

@@ -188,6 +188,9 @@ type dispatcher struct {
 	// reasons reach the caller, so a retry that gives up says only that the
 	// review couldn't start; the cause is logged.
 	api bool
+	// cis is where the CI wait's store calls go; nil is the engine's Store.
+	// Tests set it.
+	cis ciStore
 }
 
 func (d *dispatcher) dispatch(ctx context.Context) error {
@@ -305,6 +308,14 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		}
 		if usedUp {
 			return d.holdForQuota(ctx, plat)
+		}
+	}
+	if ciApplies(run, repo) && !run.CIChecked {
+		// After trust and quota: a run held for either doesn't also wait for
+		// CI until it is released. Each run checks CI once: a run released
+		// from the wait, or started during it, is marked.
+		if held, err := d.gateCI(ctx, plat, repo); held || err != nil {
+			return err
 		}
 	}
 	if mr.HeadSHA == "" || mr.BaseSHA == "" || mr.StartSHA == "" {
@@ -453,6 +464,18 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	withImpact := d.mayLink(plat, repo)
 	in.Dismissals, dismissalCounts = d.pastDismissals(ctx, repo, in, mr.AuthorID, withImpact)
 	in.AddDescription(mr.Title, mr.Description)
+	// The CI results are read now, with their text, and added before Fit,
+	// which drops them first.
+	if ciApplies(run, repo) {
+		if err := d.addCIResults(ctx, plat, repo, in); err != nil {
+			if errors.Is(err, store.ErrRunGone) {
+				d.log.Debug("run superseded while its CI jobs were read")
+				return nil
+			}
+			return d.retry(ctx, fmt.Errorf("record the CI jobs' results: %w", err))
+		}
+	}
+	hadCI := len(in.CIResults) > 0
 	hadCarried := len(in.Carried) > 0
 	hadDismissals := len(in.Dismissals) > 0
 	hadDescription := len(in.Description) > 0
@@ -465,6 +488,9 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			return d.fail(ctx, reasonTooLarge)
 		}
 		return d.fail(ctx, err.Error())
+	}
+	if hadCI && in.CIResults == nil {
+		d.log.Warn(ciDroppedMsg)
 	}
 	if hadDescription && in.Description == nil {
 		d.log.Warn("reviewing without the change's title and description: the inputs are too large for them")
@@ -494,6 +520,11 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		in.Dismissals, _ = d.pastDismissals(ctx, repo, in, mr.AuthorID, false)
 	}
 	if len(links.Entries) > 0 {
+		if in.Size() > inputs.ConfigMapLimit && in.CIResults != nil {
+			// The CI results go first, as in Fit.
+			in.CIResults = nil
+			d.log.Warn(ciDroppedMsg)
+		}
 		if in.Size() > inputs.ConfigMapLimit {
 			return d.fail(ctx, reasonTooLarge)
 		}

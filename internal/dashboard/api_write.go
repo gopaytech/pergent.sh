@@ -62,7 +62,7 @@ const (
 	msgWriteFailed    = "could not save the change, please try again"
 	msgUserLookup     = "could not look the user up on the platform, please try again"
 	msgBadProjectBody = `the body must be {"project": "<path>"}`
-	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, checkDeleted, commentLayout, linkedReposEnabled, linkedRepos, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly, trustedAuthors, model, monthlyTokenQuota"
+	msgBadSettings    = "the body must be a JSON object of settings: approve, reviewDrafts, inlineFindings, commandsAuthorAndMaintainersOnly, incrementalReviews, learnFromDismissals, quietReviews, checkDeleted, commentLayout, ciJobs, linkedReposEnabled, linkedRepos, failureStatus, skills, jobTimeoutSeconds, maxTurns, jobMemory, rerunLimitPerMR, rerunLimitPerRepo, trustedAuthorsOnly, trustedAuthors, model, monthlyTokenQuota"
 	msgNameInstance   = `name the instance: {"instance": "<name>", "project": "<path>"}`
 	msgNeedsAdminCaps = "only admins can change its re-run caps"
 	msgNeedsRole      = "only maintainers of this repository and admins can change its settings"
@@ -608,6 +608,15 @@ func (d *Dashboard) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// ci.Validate needs the platform (GitHub's report needs an artifact).
+	if slices.Contains(keys, "ciJobs") {
+		var probe store.DashboardRepo
+		edit(&probe)
+		if msg := checkCIJobs(repo, probe.CIJobs); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
+	}
 	// The rules for links that need the platform run before the save; a link
 	// that fails them is never stored.
 	if slices.Contains(keys, "linkedRepos") {
@@ -788,6 +797,7 @@ func (d *Dashboard) resetSettings(w http.ResponseWriter, r *http.Request) {
 		row.CommandsAuthorAndMaintainersOnly, row.IncrementalReviews, row.LearnFromDismissals, row.QuietReviews = nil, nil, nil, nil
 		row.CheckDeleted = nil
 		row.CommentLayout = nil
+		row.CIJobs = nil
 		row.Skills, row.RepoSkills, row.JobTimeoutSeconds, row.MaxTurns, row.JobMemory = nil, nil, nil, nil, nil
 		if admin {
 			row.RerunLimitPerMR, row.RerunLimitPerRepo = nil, nil
@@ -871,6 +881,8 @@ func (d *Dashboard) parseSettings(r *http.Request) (func(*store.DashboardRepo), 
 			edit, msg = boolSetting(key, raw, null)
 		case "commentLayout":
 			edit, msg = commentLayoutSetting(raw, null, msgBadSettings)
+		case "ciJobs":
+			edit, msg = ciJobsSetting(raw, null)
 		case "linkedRepos":
 			edit, msg = linkedReposSetting(raw, null)
 		case "failureStatus":

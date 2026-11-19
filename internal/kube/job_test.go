@@ -550,6 +550,34 @@ func TestConfigMapItems(t *testing.T) {
 			t.Errorf("item key %s not in data", it.Key)
 		}
 	}
+
+	// ci-results.md is an item and a key only with content.
+	p.Inputs.CIResults = []byte("Job test: passed")
+	cm = BuildConfigMap(p, owner)
+	if cm.Data["ci-results.md"] != "Job test: passed" || len(cm.Data) != 5 {
+		t.Errorf("data with ci results = %v", cm.Data)
+	}
+	items = nil
+	for _, v := range BuildJob(p).Spec.Template.Spec.Volumes {
+		if v.ConfigMap != nil {
+			items = v.ConfigMap.Items
+		}
+	}
+	var sawCI bool
+	for _, it := range items {
+		if it.Key == "ci-results.md" && it.Path == "ci-results.md" {
+			sawCI = true
+		}
+	}
+	if !sawCI || len(items) != len(want)+1 {
+		t.Errorf("items with ci results = %+v", items)
+	}
+
+	p.Inputs.CIResults = nil
+	cm = BuildConfigMap(p, owner)
+	if _, ok := cm.Data["ci-results.md"]; ok || len(cm.Data) != 4 {
+		t.Errorf("data without ci results = %v", cm.Data)
+	}
 }
 
 // wantCheckoutScript is the exact script the init container runs. The token
@@ -724,6 +752,59 @@ func TestBuildJobDescription(t *testing.T) {
 	}
 	if item(p) {
 		t.Error("change-description.md item without a description")
+	}
+}
+
+func TestBuildJobCIResults(t *testing.T) {
+	env := func(p JobParams) (string, bool) {
+		for _, e := range containerByName(t, BuildJob(p).Spec.Template.Spec.Containers, "pergent").Env {
+			if e.Name == "PERGENT_CI_RESULTS" {
+				return e.Value, true
+			}
+		}
+		return "", false
+	}
+	item := func(p JobParams) bool {
+		for _, v := range BuildJob(p).Spec.Template.Spec.Volumes {
+			if v.ConfigMap == nil {
+				continue
+			}
+			for _, it := range v.ConfigMap.Items {
+				if it.Key == "ci-results.md" && it.Path == "ci-results.md" {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	p := testParams()
+	p.Inputs.CIResults = []byte("Job test: passed")
+	if got, _ := env(p); got != "/in/ci-results.md" {
+		t.Errorf("PERGENT_CI_RESULTS = %q", got)
+	}
+	// A flag would make an older image exit 2.
+	for _, a := range containerByName(t, BuildJob(p).Spec.Template.Spec.Containers, "pergent").Args {
+		if strings.HasPrefix(a, "--ci-results") {
+			t.Errorf("unexpected arg %q", a)
+		}
+	}
+	if got := BuildConfigMap(p, nil).Data["ci-results.md"]; got != "Job test: passed" {
+		t.Errorf("ci-results.md = %q", got)
+	}
+	if !item(p) {
+		t.Error("no ci-results.md item in the inputs volume")
+	}
+
+	p.Inputs.CIResults = nil
+	if _, ok := env(p); ok {
+		t.Error("PERGENT_CI_RESULTS set without ci results")
+	}
+	if _, ok := BuildConfigMap(p, nil).Data["ci-results.md"]; ok {
+		t.Error("ci-results.md present without ci results")
+	}
+	if item(p) {
+		t.Error("ci-results.md item without ci results")
 	}
 }
 

@@ -7,6 +7,9 @@ package forge
 import (
 	"context"
 	"errors"
+
+	"github.com/gopaytech/pergent.sh/internal/ci"
+	"github.com/gopaytech/pergent.sh/internal/store"
 )
 
 // ChangeState is the state of a change.
@@ -297,6 +300,15 @@ type Comment struct {
 	System bool
 }
 
+// CommentBodyReader reads one comment's text. The publisher uses it to leave
+// a comment alone when the new body is the same. It is not CommentReader: a
+// platform that has this one need not vouch for a comment's author.
+type CommentBodyReader interface {
+	// CommentBody returns the body of a comment on the change. A comment
+	// that is gone is ErrNotFound.
+	CommentBody(ctx context.Context, projectID, number, commentID int64) (string, error)
+}
+
 // CommentReader reads a comment back from the platform. A platform whose
 // webhooks are only as good as a secret shared by its projects implements it,
 // so a command is taken from the platform and not from a payload. GitHub signs
@@ -321,6 +333,27 @@ type Approver interface {
 	HasApproved(ctx context.Context, projectID, number int64, sha string) (bool, error)
 	// Bot is the approve bot, whose comments are never commands.
 	Bot() Identity
+}
+
+// CITarget names one head of one change for a CI read. Change is the merge
+// request iid or pull request number. RecentHeads is used only by
+// RecentCINames on GitHub: the head SHAs of the repository's last 10 runs.
+type CITarget struct {
+	ProjectID   int64
+	Project     string
+	Change      int64
+	Head        string
+	RecentHeads []string
+}
+
+// CIReader reads the CI jobs of a head. A platform that can implements it.
+type CIReader interface {
+	// ReadCI reads the chosen jobs on t.Head. withText also reads the log or
+	// report each job asks for; false reads the status only.
+	ReadCI(ctx context.Context, t CITarget, jobs []store.CIJob, withText bool) (ci.Snapshot, error)
+	// RecentCINames lists job names seen lately, unique and sorted, to
+	// suggest in the settings.
+	RecentCINames(ctx context.Context, t CITarget) ([]string, error)
 }
 
 var (
