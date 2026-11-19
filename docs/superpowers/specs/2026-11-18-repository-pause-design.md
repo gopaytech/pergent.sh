@@ -29,7 +29,9 @@ credentials are removed. This can't be undone."
 - Nothing starts a Job or calls the platform for it. Such actions (for example readiness "Scan now") return 409 with
   `the repository is paused`, and their buttons are hidden.
 - A late webhook is ignored and a command is dropped, as for a repository that is not switched on.
-- The bot's approvals on open MRs are left in place, as today. No note is posted on MRs.
+- The bot's approvals are not withdrawn on pause, and no note is posted on MRs. The 5-minute approval sweep still runs
+  for every repository, paused or not: it withdraws an approval when the MR is closed or its head or target moves.
+  Only an approval on the exact reviewed head stays, and that review is still valid.
 - The **+ Add repository** picker hides it. `POST /api/repositories` on a paused repository resumes it and keeps its
   settings.
 - Resume is refused (409) while its instance is being removed, and the switch is drawn disabled.
@@ -93,9 +95,11 @@ The owner picked A: one source of truth for settings, and the risk is limited to
 - `openapi_test.go` covers the new route and its admin gate. Vitest covers the switch both ways with no confirm, the
   `Paused` pill, the Remove confirm, and the `paused` / `removed` wording.
 
-## Parked
+## Dropped
 
-- Withdraw the bot's approvals on open MRs on pause and on Remove (today's switch off has the same gap).
+- Withdraw the bot's approvals on pause and on Remove. The approval sweep (`SweepApprovals`) already covers it: it
+  reads every row in `merge_requests`, which pause and Remove both keep, and it uses the approve bot, not the deploy
+  token. The owner dropped the follow-up on 2026-11-19.
 
 ## Left to the builder
 
