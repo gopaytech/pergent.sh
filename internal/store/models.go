@@ -69,6 +69,16 @@ func (s *Store) LLMModels(ctx context.Context) ([]LLMModel, error) {
 	return out, rows.Err()
 }
 
+// modelTaken reports whether an entry has this provider, model and base URL.
+// The database no longer refuses it (0045 dropped the rule), so the store
+// does, under the list lock, until names tell entries apart in the API.
+func modelTaken(ctx context.Context, tx pgx.Tx, provider, model, baseURL string) (bool, error) {
+	var taken bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM llm_models
+		WHERE provider = $1 AND model = $2 AND base_url = $3)`, provider, model, baseURL).Scan(&taken)
+	return taken, err
+}
+
 // lockModelList takes the lock that serialises changes to the list until the
 // transaction ends.
 func lockModelList(ctx context.Context, tx pgx.Tx) error {
@@ -105,6 +115,12 @@ func (s *Store) CreateLLMModel(ctx context.Context, m LLMModel, at time.Time) (L
 	if err := lockModelList(ctx, tx); err != nil {
 		return LLMModel{}, err
 	}
+	if taken, err := modelTaken(ctx, tx, m.Provider, m.Model, m.BaseURL); err != nil || taken {
+		if taken {
+			err = ErrExists
+		}
+		return LLMModel{}, err
+	}
 	out, err := scanModel(tx.QueryRow(ctx, `INSERT INTO llm_models (id, provider, model, base_url, api_key_sealed, is_default, created_at, updated_at)
 		VALUES (gen_random_uuid()::text, $1, $2, $3, $4, NOT EXISTS (SELECT 1 FROM llm_models WHERE is_default), $5, $5)
 		RETURNING `+modelColumns, m.Provider, m.Model, m.BaseURL, m.APIKeySealed, at))
@@ -135,6 +151,15 @@ func (s *Store) UpdateLLMModel(ctx context.Context, id, baseURL string, keySeale
 
 	if err := lockModelList(ctx, tx); err != nil {
 		return false, err
+	}
+	// The same check as modelTaken, for the entry's own provider and model.
+	var taken bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM llm_models o JOIN llm_models m ON m.id = $1
+		WHERE o.id <> m.id AND o.provider = m.provider AND o.model = m.model AND o.base_url = $2)`, id, baseURL).Scan(&taken); err != nil {
+		return false, err
+	}
+	if taken {
+		return false, ErrExists
 	}
 	m, err := scanModel(tx.QueryRow(ctx, `UPDATE llm_models SET base_url = $2, api_key_sealed = COALESCE($3, api_key_sealed), updated_at = $4
 		WHERE id = $1 RETURNING `+modelColumns, id, baseURL, keySealed, at))
