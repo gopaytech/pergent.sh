@@ -153,6 +153,8 @@ It gets a `file-rules.md` with the rules of the files of the findings it checks,
 
 The cross-batch run and the `impact` check get no rules.
 
+**With the review panel** (`2026-11-20-review-panel-design.md`): the member Jobs A and B skip the skill verification, and the judge runs in Job P take its place. Each member's batch runs get rules as above. Job P gets the same `PERGENT_RULES` and built-in switch as the members, and each judge run gets the rules of its findings' files with the same sentence as the verification run, so a finding that rests on a project convention is judged with that convention in view. The single-model fallback in Job P is today's verification and gets rules the same way. A and B use the same rule list, so their `rule` fields agree.
+
 ### Result
 
 Each file entry of a skill gets `rule`: `repo:<glob>`, `dashboard:<set>:<glob>`, `built-in:<name>`, or empty. The result also gets a top-level `rules` object, `{"built_in": true, "entries": 7}`, written whenever pergent ran with rule support, so a caller can tell "no file had a rule" from "this image does not know rules". The fields are copied in `redactSkill` (`internal/result/result.go`), documented in `docs/agent-result-schema.md`, and tested through `Encode`.
