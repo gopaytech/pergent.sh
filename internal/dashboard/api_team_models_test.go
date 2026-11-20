@@ -44,11 +44,14 @@ func newTeamsEnv(t *testing.T) *teamsEnv {
 
 func teamURL(id int64, rest string) string { return "/api/teams/" + strconv.FormatInt(id, 10) + rest }
 
-// addTeamModel adds an entry to team through the API, as c.
+// addTeamModel adds an entry to team through the API, as c. The list is
+// ordered by when entries were added, so the clock moves on.
 func (te *teamsEnv) addTeamModel(c *http.Cookie, team int64, name, key string) TeamModelView {
 	te.t.Helper()
-	return decode[TeamModelView](te.t, te.sendJSON(c, "POST", teamURL(team, "/models"),
+	m := decode[TeamModelView](te.t, te.sendJSON(c, "POST", teamURL(team, "/models"),
 		map[string]any{"name": name, "provider": "openai", "model": "gpt-" + name, "apiKey": key}), "POST team model", http.StatusCreated)
+	te.clock.advance(time.Second)
+	return m
 }
 
 // A second owner at the same level is 409 with the exact text, for a
