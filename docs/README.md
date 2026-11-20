@@ -39,6 +39,7 @@
 | [Linked repositories](concepts/linked-repositories.md) | Check a change against the repositories that depend on it |
 | [Deleted and renamed files](concepts/deleted-files.md) | Review the lines a change deletes, and what still uses them |
 | [CI jobs](concepts/ci-jobs.md) | Read the results of chosen CI jobs, and gate approval on them |
+| [Code graph](concepts/code-graph.md) | Give reviews the callers and callees of the changed code (off by default) |
 | [Trusted authors](concepts/trusted-authors.md) | Who gets reviewed without being started |
 | [Monthly token quota](concepts/token-quota.md) | A ceiling on the tokens an instance or repository spends |
 | [What a Job can and cannot see](concepts/job-isolation.md) | How a review is sandboxed |

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+**Repositories can turn on a code graph.** It is off by default, per repository, and nothing changes until both the install and a repository turn it on: [Code graph](concepts/code-graph.md).
+
+- **Migration `0044`** runs at startup. It adds one column with a default (`dashboard_repos.graph_context`, `false`) and one table (`repo_graphs`), dropping nothing. Back up Postgres first, as for any migration. The previous release keeps working on the migrated database and ignores both.
+- **Chart:** new values `graphs.enabled` (default `false`), `graphs.persistence.size`, `graphs.persistence.storageClass` and `graphs.image`. With `graphs.enabled: false` the chart renders the same objects as before. `graphs.enabled: true` needs `config.dashboard.url`, adds a PersistentVolumeClaim, `fsGroup: 65532` on the pod and two environment variables, and uses the new image `ghcr.io/gopaytech/pergent.sh-graph`.
+- **The review image must know `--graph`** before a repository turns the switch on: the pergent release after v0.10.0. An older image fails every review of that repository on the unknown flag. The version is named in the release notes.
+- With a public `callback_url`, route `/graphs/` like `/runs/`.
+- The audit log has `graph_on` and `graph_off`. `RepositoryDetailView` has a new `graph` field.
+- There is no config change, so a rollback needs no config edit. After a rollback the graphs volume and the `repo_graphs` rows stay unused.
+
 **The switch on Repositories now pauses a repository instead of removing it.** A paused repository stays in the list with all its settings, its dismissals and its review history. pergent.sh takes its webhook and deploy token off the platform and reviews nothing for it until it is switched on again: [Pausing and removing a repository](concepts/switching-off.md). The switch calls `PUT /api/admin/repositories/{instance}/{project}` with `{"enabled": false}` to pause and `{"enabled": true}` to resume. **Remove repository**, on the repository's page, deletes it for good.
 
 - **`DELETE /api/repositories/{instance}/{project}` now removes the repository for good, and also deletes its team links.** A script that used it to switch a repository off now loses the settings and team links: use the `PUT` above to pause instead.

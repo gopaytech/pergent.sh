@@ -126,5 +126,7 @@ For GitHub, put the Apps' private keys (the whole `.pem` file of each) and the r
 | each `github[].approve_app.private_key_env` or `github[].approve_token_env` | When the instance is in the config file and doesn't set `approve_with_review_app`: the approve App's private key, or the approve bot user's fine-grained personal access token. Required, and checked at startup. With `approve_with_review_app: true` there is none: the review App's key approves. |
 | each `github[].webhook_secret_env` | When the instance is in the config file: the review App's webhook secret. Required. |
 | each `gitlab[].oauth_client_id_env`, `oauth_client_secret_env`, and the same on `github[]` | No longer used: signing in to the [dashboard](../concepts/dashboard.md) with GitLab or GitHub is gone. An old config that names them still loads, even half of a pair, and pergent.sh logs a warning for each instance that does; nothing reads the variables. A later release refuses them. |
+| `PERGENT_SH_IMAGE` | pergent.sh's own image, which skill fetch, readiness scan and code graph Jobs run their small commands in. The chart sets it. |
+| `PERGENT_SH_GRAPHS_DIR`, `PERGENT_SH_GRAPH_IMAGE` | The [code graph](../concepts/code-graph.md) volume and the graph build image. The chart sets both with `graphs.enabled`. Either unset keeps code graphs off, and the Code graph switch can't be turned on. |
 
 pergent.sh also reads `KUBECONFIG` when it runs outside a cluster, which is handy for local development.
