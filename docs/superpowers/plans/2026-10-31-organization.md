@@ -62,7 +62,6 @@
   - `go vet ./...`;
   - for web changes, `cd web && npm test -- --run && npm run lint && npx tsc --noEmit`.
 - **Commits:**
-  - `git -c user.email=zufardhiyaulhaq@gmail.com commit`;
   - conventional subjects;
   - the message ends with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - **Never run** `go clean`, `docker build` or `docker builder prune`, or do any cache or disk cleanup.

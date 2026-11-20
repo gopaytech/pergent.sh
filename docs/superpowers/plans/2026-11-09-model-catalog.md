@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Never start a container (no `docker`, `orbctl`). Never push, merge, tag or release. Store, dashboard and engine tests skip without `PERGENT_SH_TEST_DATABASE_URL`; write them anyway, they must compile, and say so in the report.
-- Commit with `git -c user.email=zufardhiyaulhaq@gmail.com commit`, ending with the `Co-Authored-By` line your session gives you. Before each commit: `gofmt -l .` empty, `go vet ./...`, `go test ./...`, and `git grep -niE 'golabs|gojek|gopay[^t]|goto\b' -- . ':!go.sum' ':!docs/superpowers/plans/*' ':!web/package-lock.json'` prints nothing.
+- End each commit message with the `Co-Authored-By` line your session gives you. Before each commit: `gofmt -l .` empty, `go vet ./...`, `go test ./...`, and `git grep -niE 'golabs|gojek|gopay[^t]|goto\b' -- . ':!go.sum' ':!docs/superpowers/plans/*' ':!web/package-lock.json'` prints nothing.
 - Break new code on purpose once per task where a test can run without a database, and record which test failed.
 - Migration only adds. The previous release must keep working on the migrated database.
 - A key is sealed with `PERGENT_SH_SECRET_KEY`, never returned by the API, never logged. A Job receives only the key of the model it runs.

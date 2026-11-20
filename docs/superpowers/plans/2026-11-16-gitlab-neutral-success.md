@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Worktree `/Users/zufardhiyaulhaq/Documents/personal/github/pergent.sh-neutral`, branch `fix/gitlab-neutral-success`. No push, no PR, no tag, no version bump, no release.
+- Worktree `pergent.sh-neutral`, branch `fix/gitlab-neutral-success`. No push, no PR, no tag, no version bump, no release.
 - A review that couldn't be done is never approved, and its comment still says it failed.
 - Blocking findings are always `failed`, whatever `failure_status` says.
 - When pergent.sh can't tell what the repository wants, it fails closed (`failed`).
@@ -20,7 +20,7 @@
 - API reviews (`store.KindAPI`) set no status; their give-up path does not change.
 - Docs: plain style, short sentences, no em dashes. Release notes go under `## Unreleased` in `docs/upgrading.md`.
 - Public repo: before every commit, run the private-name scan from the agent memory and expect empty output. The owner's screenshots are private: nothing from them goes in code, docs or commits.
-- Commit with `git -c user.email=zufardhiyaulhaq@gmail.com commit`, conventional subject, ending with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- Commit with a conventional subject, ending with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - Engine tests need the test DB: `PERGENT_SH_TEST_DATABASE_URL='postgres://postgres:postgres@localhost:55432/pergent_test?sslmode=disable'`. Check `nc -z localhost 55432` first; never start a container. Without the DB the engine tests skip, and a green run then proves nothing.
 
 ## Review Focus
@@ -50,7 +50,7 @@ The uncommitted sketch in the worktree already holds this task's changes (spec-a
 
 - [ ] **Step 1: Confirm the sketch matches the list above**
 
-Run: `git -C /Users/zufardhiyaulhaq/Documents/personal/github/pergent.sh-neutral diff`
+Run: `git diff` in the `pergent.sh-neutral` worktree
 Expected: only the six files above, with the changes described. Fix anything that differs.
 
 - [ ] **Step 2: Watch the tests fail without the code change**
@@ -67,7 +67,7 @@ Expected: PASS.
 
 ```bash
 git add internal/forge/gitlabforge docs/reference/configuration.md docs/concepts/approval.md docs/upgrading.md internal/engine/publish_test.go
-git -c user.email=zufardhiyaulhaq@gmail.com commit -m "fix(gitlab): set failure_status neutral as success"
+git commit -m "fix(gitlab): set failure_status neutral as success"
 ```
 
 ### Task 2: Give-up follows `failure_status`
@@ -140,7 +140,7 @@ Expected: PASS.
 
 ```bash
 git add internal/engine/publish.go internal/engine/publish_test.go internal/engine/github_test.go docs/concepts/approval.md docs/upgrading.md
-git -c user.email=zufardhiyaulhaq@gmail.com commit -m "fix(engine): give-up status follows failure_status"
+git commit -m "fix(engine): give-up status follows failure_status"
 ```
 
 ### Task 3: Help text in the settings pages
@@ -167,7 +167,7 @@ Expected: all four pass.
 
 ```bash
 git add web/src/pages/RepositorySettings.tsx web/src/pages/AdminSettings.tsx
-git -c user.email=zufardhiyaulhaq@gmail.com commit -m "fix(web): explain failure_status neutral on GitLab"
+git commit -m "fix(web): explain failure_status neutral on GitLab"
 ```
 
 ### Task 4: Final gate

@@ -29,7 +29,7 @@ Implementers have no network, so these belong to the owner's main session.
 
 - Never run docker, orbctl or anything that starts a container. No `gh`, `glab`, `curl` or other network step in a task. No push, tag or PR. No disk or cache cleanup. Delete nothing outside your own scratch. Don't run `go get`.
 - Tests marked **[CI]** need Postgres. Write them with the same care, confirm they compile with `go vet ./...`, and report them as not run.
-- **Go gate:** `go vet ./...`, `go test ./...`. **Web gate:** in a scratch `git archive` with a `web/node_modules` symlink to `/Users/zufardhiyaulhaq/Documents/personal/github/pergent.sh-061/web/node_modules`: `npm run typecheck && npm run lint && npx vitest run && npm run build`. Not while `go test` runs.
+- **Go gate:** `go vet ./...`, `go test ./...`. **Web gate:** in a scratch `git archive` with a `web/node_modules` symlink to `web/node_modules` in an existing pergent.sh checkout: `npm run typecheck && npm run lint && npx vitest run && npm run build`. Not while `go test` runs.
 - **Private-name scan** before every commit must print nothing: `git grep -niE 'gol[a]bs|goj[e]k|gop[a]y[^t]|got[o]\b' -- . ':!go.sum' ':!docs/superpowers/plans/*' ':!web/package-lock.json'`
 - Commit with the owner's email as the agent definition says, staged by path, ending with a `Co-Authored-By:` line naming the model that wrote the change. Gate the commit on its checks with `&&`.
 - The bot, Apps, webhooks and `@<bot>` commands stay unchanged. If a change reaches `internal/engine`, `internal/webhook` or `internal/actions`, stop and report it.

@@ -20,7 +20,7 @@
 - Labels: `pergent.sh/instance`, `pergent.sh/project-id`, `pergent.sh/mr`, `pergent.sh/head` (full 40-character SHA). Annotations: `pergent.sh/project`, `pergent.sh/mr-url`. An invalid label value is left out.
 - 10 minutes for both start rules. Clone log tail 64 KB. Last 10 events of every type. Diagnostics pruned with the logs after 30 days.
 - Name scan before every commit: `git grep -niE 'golabs|gojek|gopay[^t]|goto\b' -- . ':!go.sum' ':!docs/superpowers/plans/*' ':!web/package-lock.json'` prints nothing.
-- Commit with `git -c user.email=zufardhiyaulhaq@gmail.com commit`, ending with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. One PR, no release.
+- End each commit message with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. One PR, no release.
 
 ## Review Focus
 

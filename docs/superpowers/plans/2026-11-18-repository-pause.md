@@ -23,10 +23,10 @@
 - UI words, exact: the `Paused` pill (list Health column), the `Paused` note (repository page), `paused` and `removed` (Usage and Teams pages).
 - Audit actions: `repository_paused`, `repository_resumed`, `repository_removed`. `repository_on` stays for a new switch-on. `repository_off` is no longer written.
 - No release: no version bump, tag, chart version or version number. Upgrade notes go under `## Unreleased` at the top of `docs/upgrading.md`.
-- Public repository: no employer or internal names. Before each commit run, in `~/Documents/personal/github/pergent.sh`: `git grep -niE 'golabs|gojek|gopay[^t]|goto\b' -- . ':!go.sum' ':!docs/superpowers/plans/*' ':!web/package-lock.json'` and a per-file `grep` over new untracked files. Both must print nothing.
+- Public repository: no employer or internal names. Before each commit run, in the pergent.sh checkout: `git grep -niE 'golabs|gojek|gopay[^t]|goto\b' -- . ':!go.sum' ':!docs/superpowers/plans/*' ':!web/package-lock.json'` and a per-file `grep` over new untracked files. Both must print nothing.
 - Never start a container (no `docker`, `orbctl`). Database tests run only when `nc -z localhost 55432` succeeds, with the variable in the same command: `PERGENT_SH_TEST_DATABASE_URL='postgres://postgres:postgres@localhost:55432/pergent_test?sslmode=disable' go test -count=1 -timeout 30m <pkgs>`. If the port is closed, say so and leave those tests to CI. A run without the variable proves nothing for `internal/store`, `internal/settings`, `internal/dashboard` or `internal/engine`.
 - No `gh`, `glab` or `curl`.
-- Work on branch `feat/repository-pause` off `main`. Commit with `git -c user.email=zufardhiyaulhaq@gmail.com commit`, a conventional subject, and a `Co-Authored-By:` line that names the model that wrote the change. Run tests and commits as separate commands.
+- Work on branch `feat/repository-pause` off `main`. Commit with a conventional subject and a `Co-Authored-By:` line that names the model that wrote the change. Run tests and commits as separate commands.
 - Docs are the behaviour contract (`CLAUDE.md`: "User-facing behaviour goes in `docs/`"). Change them with the behaviour, in Task 8 at the latest.
 
 ## Choices this plan makes (the spec left them to the builder)
@@ -385,7 +385,7 @@ Expected: PASS. Prove it can fail: put `DashboardRepos` back without `WHERE enab
 
 - [ ] **Step 2: Run them and watch them fail**
 
-Run (with no `go test` running): `cd ~/Documents/personal/github/pergent.sh/web && npx vitest run src/pages/Repositories.test.tsx src/pages/RepositoryDetail.test.tsx src/pages/Readiness.test.tsx src/pages/Usage.test.tsx src/pages/Teams.test.tsx`
+Run (with no `go test` running): `cd web && npx vitest run src/pages/Repositories.test.tsx src/pages/RepositoryDetail.test.tsx src/pages/Readiness.test.tsx src/pages/Usage.test.tsx src/pages/Teams.test.tsx`
 Expected: FAIL. No PUT is sent, a confirm is shown, and the words are missing.
 
 - [ ] **Step 3: Implement**
@@ -394,7 +394,7 @@ Expected: FAIL. No PUT is sent, a confirm is shown, and the words are missing.
 
 - [ ] **Step 4: Run the web gate**
 
-Run: `cd ~/Documents/personal/github/pergent.sh/web && npm run typecheck && npm run lint && npx vitest run && npm run build`
+Run: `cd web && npm run typecheck && npm run lint && npx vitest run && npm run build`
 Expected: all pass. If a different test fails on each run, the machine is loaded: rerun when it is quiet before you judge.
 
 - [ ] **Step 5: Commit** `feat(web): the switch pauses a repository; Remove is on its page`
@@ -429,7 +429,7 @@ Every string the docs quote must be in the code: `the repository is paused`, `th
 - [ ] **Step 3: Run the full gate** (each command on its own)
 
 ```bash
-cd ~/Documents/personal/github/pergent.sh
+cd pergent.sh
 nc -z localhost 55432 && PERGENT_SH_TEST_DATABASE_URL='postgres://postgres:postgres@localhost:55432/pergent_test?sslmode=disable' go test -count=1 -timeout 30m ./...
 go vet ./...
 cd web && npm run typecheck && npm run lint && npx vitest run && npm run build

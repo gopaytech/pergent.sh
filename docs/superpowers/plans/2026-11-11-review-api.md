@@ -16,7 +16,7 @@
 - **No external platforms:** no `gh`, `glab`, `curl`.
 - **No release:** no version bump, tag, chart version, release notes or version number anywhere. Upgrade notes go in `docs/upgrading.md` under a top heading `## Unreleased`. Leave `openapi.yaml`'s `info.version` alone.
 - **Public repo.** Before every commit run, and expect empty output: `git grep -niE 'golabs|gojek|gopay[^t]|goto\b' -- . ':!go.sum' ':!docs/superpowers/plans/*' ':!web/package-lock.json'`. `git grep` misses untracked files: `git add` first, then scan.
-- Commit with `git -c user.email=zufardhiyaulhaq@gmail.com commit`. Messages end with exactly `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Never merge, push, tag or open a PR unless the owner asks.
+- Messages end with exactly `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Never merge, push, tag or open a PR unless the owner asks.
 - **Migrations only add:** `0038_api_clients.sql` (Part 1), `0039_api_reviews.sql` (Part 2), `0040_api_callbacks.sql` (Part 3). New tables, plus new columns with a default or NULL. Nothing renamed or dropped. The previous release must keep running MR reviews on the migrated database.
 - **The forge path does not change.** `internal/kube/testdata/job-no-links.golden.json` stays byte for byte. `TestJobUnchangedWithoutLinks` and every existing engine, store and dashboard test pass unchanged.
 - Admin dashboard routes register only through `Dashboard.adminRoute` and carry `x-pergent-access: admin`. The `/v1/` routes are gated by `reviewapi.Handler.RequireKey` and carry `x-pergent-access: key`. `internal/dashboard/openapi_test.go` and `routes_test.go` check both.
@@ -25,7 +25,7 @@
 - **No new config key.** The `/v1/` routes exist only when the dashboard is on (`dashboard.url` set), as the skill fetch route does.
 - **Docs are short and scannable.** User-facing behaviour goes in `docs/` in the same commit. A new page gets a line in `docs/README.md`.
 - The API's JSON uses snake_case (`end_line`, `tokens_in`). The dashboard API keeps camelCase.
-- Web gate in a worktree with no `web/node_modules`: `ln -s ~/Documents/personal/github/pergent.sh/web/node_modules web/node_modules`, run the gate, then remove the link, `web/tsconfig.tsbuildinfo` and `internal/web/dist/{assets,index.html}`. Never run vitest while `go test` runs.
+- Web gate in a worktree with no `web/node_modules`: `ln -s <pergent.sh checkout>/web/node_modules web/node_modules`, run the gate, then remove the link, `web/tsconfig.tsbuildinfo` and `internal/web/dist/{assets,index.html}`. Never run vitest while `go test` runs.
 
 ## Review Focus
 

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-**Repositories can turn on a code graph.** It is off by default, per repository, and nothing changes until both the install and a repository turn it on: [Code graph](concepts/code-graph.md).
+**Repositories can turn on a code graph.** It is off by default, per repository, and nothing changes until both the install and a repository turn it on: [Code graph](concepts/code-graph.md). It is experimental: in our tests it did not lower the cost and did not find more bugs, so keep it off unless you are measuring it.
 
 - **Migration `0044`** runs at startup. It adds one column with a default (`dashboard_repos.graph_context`, `false`) and one table (`repo_graphs`), dropping nothing. Back up Postgres first, as for any migration. The previous release keeps working on the migrated database and ignores both.
 - **Chart:** new values `graphs.enabled` (default `false`), `graphs.persistence.size`, `graphs.persistence.storageClass` and `graphs.image`. With `graphs.enabled: false` the chart renders the same objects as before. `graphs.enabled: true` needs `config.dashboard.url`, adds a PersistentVolumeClaim, `fsGroup: 65532` on the pod and two environment variables, and uses the new image `ghcr.io/gopaytech/pergent.sh-graph`.

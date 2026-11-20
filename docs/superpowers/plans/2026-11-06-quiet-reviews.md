@@ -20,7 +20,7 @@ Implementers have no network, so these steps belong to the owner's main session,
 
 | When | Who | What |
 |---|---|---|
-| **H0**, before Task 1 | Main session | `git fetch` both repos. Check `grep 'gopaytech/pergent ' go.mod` on `origin/main` shows v0.5.4 or later, and `defaultImage` matches it. Check `ls internal/store/migrations \| tail -1` shows `0024`; if 0.8.1 took `0025`, renumber this plan's migration. Create the worktree: `git worktree add ~/Documents/personal/github/pergent.sh-quiet -b feat/quiet-reviews origin/main`. |
+| **H0**, before Task 1 | Main session | `git fetch` both repos. Check `grep 'gopaytech/pergent ' go.mod` on `origin/main` shows v0.5.4 or later, and `defaultImage` matches it. Check `ls internal/store/migrations \| tail -1` shows `0024`; if 0.8.1 took `0025`, renumber this plan's migration. Create the worktree: `git worktree add ../pergent.sh-quiet -b feat/quiet-reviews origin/main`. |
 | **H1**, after Task 1 | Owner | Merge the pergent branch and tag the next pergent release. Tasks 2 to 5 go on meanwhile: they don't need it. |
 | **H2 (STOP)**, before Task 6 | Owner, then main session | Execution stops here until the owner names the released pergent tag and the pergent.sh version for the Upgrading note. Never assume either. Then the main session, in the pergent.sh worktree, runs `go get github.com/gopaytech/pergent@<tag>` and `go mod tidy`, sets `defaultImage` in `internal/config/config.go` and the assertion in `internal/config/config_test.go` to `ghcr.io/gopaytech/pergent:<tag>`, runs the Go gate and commits `chore(deps): pergent <tag>` by itself. The pin and the image move together, so the commit also shows what that release changes in pergent.sh's tests. |
 | **H3**, after the final review | Owner | Push the branch and open the PR. Postgres-backed tests first run here. Read the `test` job log and check the `internal/store`, `internal/dashboard` and `internal/engine` timings: a fast `ok` means they skipped. |
@@ -53,7 +53,7 @@ Implementers have no network, so these steps belong to the owner's main session,
 
 ### Task 1: `render.Options.Short`
 
-**Repo:** pergent, `~/Documents/personal/github/pergent`. **Branch:** `feat/render-short` off `origin/master` (at or after v0.5.4).
+**Repo:** pergent. **Branch:** `feat/render-short` off `origin/master` (at or after v0.5.4).
 
 **Files:**
 - Modify: `render/render.go` (`Options`, the `Comment` doc comment, the `writeChecks` call in `render`), `render/details.go` (`writeChecks`, `writeFiles`), `CLAUDE.md` (the `render/` line: add `Short` and `MetaNote` to its Options list)
@@ -92,7 +92,7 @@ Implementers have no network, so these steps belong to the owner's main session,
 
 ### Task 2: The setting: migration, config, resolver, store
 
-**Repo:** pergent.sh. **Worktree:** `~/Documents/personal/github/pergent.sh-quiet`. **Branch:** `feat/quiet-reviews`, with `go.mod` at pergent v0.5.4 or later. Tasks 3 to 6 use the same worktree and branch.
+**Repo:** pergent.sh. **Worktree:** `../pergent.sh-quiet`. **Branch:** `feat/quiet-reviews`, with `go.mod` at pergent v0.5.4 or later. Tasks 3 to 6 use the same worktree and branch.
 
 **Files:**
 - Create: `internal/store/migrations/0025_quiet_reviews.sql`
