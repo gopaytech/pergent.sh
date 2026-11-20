@@ -1,6 +1,8 @@
 // Package quota answers whether a repository's or an instance's monthly token
 // quota is used up. The month is the calendar month in UTC, and what counts
-// is the tokens (in plus out) the reviews reported in it.
+// is the tokens (in plus out) the reviews reported in it: every token for a
+// repository, only those spent on global keys for an instance (a team pays
+// for its own).
 package quota
 
 import (
@@ -42,33 +44,37 @@ func Read(ctx context.Context, st *store.Store, now time.Time, instance string, 
 			return Usage{}, err
 		}
 	}
-	if u.Instance, err = st.TokensSince(ctx, instance, 0, since); err != nil {
+	if u.Instance, err = st.InstanceGlobalTokensSince(ctx, instance, since); err != nil {
 		return Usage{}, err
 	}
 	return u, nil
 }
 
-// Check reports whether a quota of repo is used up this month. It asks only
-// for the sums that have a limit, so with none it makes no query.
-func Check(ctx context.Context, st *store.Store, now time.Time, instance string, projectID int64, repo settings.Effective) (usedUp bool, err error) {
+// Check reports whether repo's quota (repoUsedUp) or its instance's
+// (instanceUsedUp) is used up this month. A used-up repository holds the
+// whole run; a used-up instance only stops entries on global keys. The
+// repository is read first, and when it is used up the instance is not read
+// (false). It asks only for the sums that have a limit, so with none it makes
+// no query.
+func Check(ctx context.Context, st *store.Store, now time.Time, instance string, projectID int64, repo settings.Effective) (repoUsedUp, instanceUsedUp bool, err error) {
 	since := MonthStart(now)
 	if repo.MonthlyTokenQuota != nil && projectID != 0 {
 		n, err := st.TokensSince(ctx, instance, projectID, since)
 		if err != nil {
-			return false, err
+			return false, false, err
 		}
 		if n >= *repo.MonthlyTokenQuota {
-			return true, nil
+			return true, false, nil
 		}
 	}
 	if repo.InstanceMonthlyTokenQuota != nil {
-		n, err := st.TokensSince(ctx, instance, 0, since)
+		n, err := st.InstanceGlobalTokensSince(ctx, instance, since)
 		if err != nil {
-			return false, err
+			return false, false, err
 		}
 		if n >= *repo.InstanceMonthlyTokenQuota {
-			return true, nil
+			return false, true, nil
 		}
 	}
-	return false, nil
+	return false, false, nil
 }

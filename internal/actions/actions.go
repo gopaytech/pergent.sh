@@ -168,11 +168,13 @@ func quotaUsedUp(ctx context.Context, st *store.Store, pastQuota bool, now time.
 	if pastQuota {
 		return false, nil
 	}
-	used, err := quota.Check(ctx, st, now, mr.Instance, mr.ProjectID, repo)
+	// Either quota refuses, as before chains: whether the review would run on
+	// a team's key is known only when it is dispatched.
+	repoUsed, instanceUsed, err := quota.Check(ctx, st, now, mr.Instance, mr.ProjectID, repo)
 	if err != nil {
 		return false, fmt.Errorf("check the token quota: %w", err)
 	}
-	return used, nil
+	return repoUsed || instanceUsed, nil
 }
 
 // StartRequest asks for the review of an untrusted author's change mr at

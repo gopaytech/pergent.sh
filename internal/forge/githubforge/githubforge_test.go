@@ -303,6 +303,50 @@ func TestSetStatusCreatesCheckRun(t *testing.T) {
 	}
 }
 
+// SetStatusRef creates the Check Run when it has no ref and returns its ID,
+// and updates that one after.
+func TestSetStatusRefUpdates(t *testing.T) {
+	f := newFake(t)
+	f.reply("POST", "/repos/acme/widgets/check-runs", 201, map[string]any{"id": 41})
+	f.reply("PATCH", "/repos/acme/widgets/check-runs/41", 200, map[string]any{"id": 41})
+	fg := f.forge(t)
+	var su forge.StatusUpdater = fg
+	ref, err := su.SetStatusRef(ctx, repoID, sha('a'), 0, forge.StatusRunning, "")
+	if err != nil || ref != 41 {
+		t.Fatalf("SetStatusRef(0) = %d, %v; want 41", ref, err)
+	}
+	ref, err = su.SetStatusRef(ctx, repoID, sha('a'), 41, forge.StatusFailed, "desc")
+	if err != nil || ref != 41 {
+		t.Fatalf("SetStatusRef(41) = %d, %v; want 41", ref, err)
+	}
+	if n := len(f.requests("POST", "/repos/acme/widgets/check-runs")); n != 1 {
+		t.Errorf("%d check runs created, want 1", n)
+	}
+	patches := f.requests("PATCH", "/repos/acme/widgets/check-runs/41")
+	if len(patches) != 1 {
+		t.Fatalf("%d updates, want 1", len(patches))
+	}
+	jsonEq(t, patches[0].Body, `{"status":"completed","conclusion":"failure","output":{"title":"desc","summary":"See the pergent comment on this pull request."}}`)
+}
+
+// A Check Run that is gone (deleted with its suite, or made by another App)
+// is created again, and the new ID returned.
+func TestSetStatusRefRecreatesOn404(t *testing.T) {
+	f := newFake(t)
+	f.reply("PATCH", "/repos/acme/widgets/check-runs/41", 404, map[string]any{"message": "Not Found"})
+	f.reply("POST", "/repos/acme/widgets/check-runs", 201, map[string]any{"id": 42})
+	ref, err := f.forge(t).SetStatusRef(ctx, repoID, sha('a'), 41, forge.StatusRunning, "retrying on backup model (2 of 3)")
+	if err != nil || ref != 42 {
+		t.Fatalf("SetStatusRef = %d, %v; want a new one, 42", ref, err)
+	}
+	posts := f.requests("POST", "/repos/acme/widgets/check-runs")
+	if len(posts) != 1 {
+		t.Fatalf("%d check runs created, want 1", len(posts))
+	}
+	// A running status with a description of its own shows it.
+	jsonEq(t, posts[0].Body, `{"name":"pergent","head_sha":"`+sha('a')+`","status":"in_progress","output":{"title":"retrying on backup model (2 of 3)","summary":"See the pergent comment on this pull request."}}`)
+}
+
 func TestFindCommentOnlyTheReviewBots(t *testing.T) {
 	f := newFake(t)
 	f.reply("GET", "/repos/acme/widgets/issues/3/comments", 200, []map[string]any{

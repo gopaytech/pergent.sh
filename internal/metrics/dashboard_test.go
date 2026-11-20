@@ -62,11 +62,11 @@ func TestDashboardNamesRealMetrics(t *testing.T) {
 // Switching a repository off moves its whole count to "(switched off)", which
 // increase() reads as a burst of usage: no query counts that series. The API
 // metrics have a client label and no repository, so they are left to the next
-// test.
+// test; the model chains' metrics name entries and no repository.
 func TestDashboardLeavesOutSwitchedOff(t *testing.T) {
 	for _, expr := range dashboardExprs(t) {
 		for _, sel := range regexp.MustCompile(`pergent_[a-z_]+\{[^}]*\}`).FindAllString(expr, -1) {
-			if strings.HasPrefix(sel, "pergent_api_") {
+			if strings.HasPrefix(sel, "pergent_api_") || strings.HasPrefix(sel, "pergent_model_") {
 				continue
 			}
 			if !strings.Contains(sel, `repository!="(switched off)"`) {

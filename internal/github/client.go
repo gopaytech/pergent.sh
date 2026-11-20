@@ -1016,6 +1016,31 @@ func (c *Client) CreateCheckRun(ctx context.Context, owner, repo, name, headSHA,
 	return c.postID(ctx, http.MethodPost, p, run)
 }
 
+// checkRunUpdate is the body of an update: a check run keeps its name and
+// commit.
+type checkRunUpdate struct {
+	Status     string         `json:"status"`
+	Conclusion string         `json:"conclusion,omitempty"`
+	Output     checkRunOutput `json:"output"`
+}
+
+// UpdateCheckRun changes check run id in place (PATCH, the checks: write the
+// App already has; it works on a check run this App created). The conclusion
+// is sent only when status is "completed". A check run that is gone is
+// ErrNotFound.
+func (c *Client) UpdateCheckRun(ctx context.Context, owner, repo string, checkRunID int64, status, conclusion, title, summary string) error {
+	p, err := repoPath(owner, repo, "/check-runs", id(checkRunID))
+	if err != nil {
+		return err
+	}
+	run := checkRunUpdate{Status: status, Output: checkRunOutput{Title: title, Summary: summary}}
+	if status == "completed" {
+		run.Conclusion = conclusion
+	}
+	_, err = c.do(ctx, http.MethodPatch, p, nil, run, acceptJSON)
+	return err
+}
+
 // CreateReview submits a review with event (for example "APPROVE") on
 // commitID and returns its ID.
 func (c *Client) CreateReview(ctx context.Context, owner, repo string, number int64, commitID, event string) (int64, error) {

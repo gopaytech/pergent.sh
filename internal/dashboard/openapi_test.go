@@ -993,6 +993,7 @@ var openAPISchemas = map[string]schemaType{
 	"result.Renamed":          inputSchema(result.Renamed{}),
 	"result.Skipped":          inputSchema(result.Skipped{}),
 	"result.Error":            inputSchema(result.Error{}),
+	"result.ProviderError":    inputSchema(result.ProviderError{}),
 	"result.Comment":          inputSchema(result.Comment{}),
 }
 

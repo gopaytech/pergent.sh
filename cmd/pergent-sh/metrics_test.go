@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/metrics"
 	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
@@ -297,7 +298,7 @@ func TestMetricsSourceReadsAllThree(t *testing.T) {
 		totals:  store.MetricsTotals{Dismissals: []store.DismissalTotal{{Instance: "main", Project: "acme/widgets", Skill: "security", Dismissals: 1}}},
 		library: []store.LibrarySkill{{Name: "security"}},
 	}
-	snap, err := metricsSource(st, fakeRepos{on: []settings.Effective{metricsEff("main", "acme/widgets", nil, nil)}})(context.Background())
+	snap, err := metricsSource(st, fakeRepos{on: []settings.Effective{metricsEff("main", "acme/widgets", nil, nil)}}, nil)(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,10 +306,10 @@ func TestMetricsSourceReadsAllThree(t *testing.T) {
 		t.Errorf("page = %s", out)
 	}
 	boom := errors.New("boom")
-	if _, err := metricsSource(fakeMetricsStore{err: boom}, fakeRepos{})(context.Background()); !errors.Is(err, boom) {
+	if _, err := metricsSource(fakeMetricsStore{err: boom}, fakeRepos{}, nil)(context.Background()); !errors.Is(err, boom) {
 		t.Errorf("a failing store gave %v, want its error", err)
 	}
-	if _, err := metricsSource(st, fakeRepos{err: boom})(context.Background()); !errors.Is(err, boom) {
+	if _, err := metricsSource(st, fakeRepos{err: boom}, nil)(context.Background()); !errors.Is(err, boom) {
 		t.Errorf("a failing repository list gave %v, want its error", err)
 	}
 }
@@ -441,5 +442,89 @@ func TestAPIMetricsHaveClientLabel(t *testing.T) {
 		if strings.HasPrefix(line, "# TYPE pergent_api_") && !strings.HasSuffix(line, " counter") {
 			t.Errorf("%s: an API metric only goes up", line)
 		}
+	}
+}
+
+// Fallbacks are counted by the entries' names, the class and the source of
+// the entry that was dropped.
+func TestMetricsFallbackTotal(t *testing.T) {
+	totals := store.MetricsTotals{Fallbacks: []store.FallbackTotal{
+		{From: "Main", To: "Backup", Class: store.ClassQuota, Source: store.SourceGlobal, Count: 2},
+		{From: "team-a", To: "none", Class: store.ClassAuth, Source: store.SourceTeam, Count: 1},
+		{From: "", To: "none", Class: "made up", Source: "", Count: 1},
+	}}
+	snap := snapshotOf(totals, nil, nil)
+	modelMetrics(&snap, totals, nil)
+	out := metricsText(t, snap)
+	for _, want := range []string{
+		`pergent_model_fallback_total{from_model="Main",to_model="Backup",class="quota",source="global"} 2`,
+		`pergent_model_fallback_total{from_model="team-a",to_model="none",class="auth",source="team"} 1`,
+		`pergent_model_fallback_total{from_model="(none)",to_model="none",class="(other)",source="(other)"} 1`,
+	} {
+		if !strings.Contains(out, want+"\n") {
+			t.Errorf("missing %s\nin:\n%s", want, out)
+		}
+	}
+}
+
+// Each entry with a live mark is one series of 1: a config entry by its name,
+// a removed one as "(removed)".
+func TestMetricsEntryExhaustedGauge(t *testing.T) {
+	totals := store.MetricsTotals{Exhausted: []store.ExhaustedEntry{
+		{ID: "11111111-2222-3333-4444-555555555555", Name: "Main", Source: store.SourceGlobal, Class: store.ClassQuota},
+		{ID: "config-1", Name: "config-1", Source: store.SourceGlobal, Class: store.ClassBilling},
+		{ID: "66666666-7777-8888-9999-000000000000", Name: "66666666-7777-8888-9999-000000000000", Source: store.SourceTeam, Class: store.ClassAuth},
+	}}
+	entries := []instances.Model{{ID: "config-1", Name: "openai/gpt-fallback", Source: instances.SourceConfig}}
+	snap := snapshotOf(totals, nil, nil)
+	modelMetrics(&snap, totals, entries)
+	out := metricsText(t, snap)
+	for _, want := range []string{
+		`pergent_model_entry_exhausted{model="Main",source="global",class="quota"} 1`,
+		`pergent_model_entry_exhausted{model="openai/gpt-fallback",source="global",class="billing"} 1`,
+		`pergent_model_entry_exhausted{model="(removed)",source="team",class="auth"} 1`,
+	} {
+		if !strings.Contains(out, want+"\n") {
+			t.Errorf("missing %s\nin:\n%s", want, out)
+		}
+	}
+}
+
+// No key, key prefix or entry ID reaches a label.
+func TestMetricsNoKeyInLabels(t *testing.T) {
+	const id = "11111111-2222-3333-4444-555555555555"
+	totals := store.MetricsTotals{
+		Fallbacks: []store.FallbackTotal{{From: "team-a", To: "team-b", Class: store.ClassQuota, Source: store.SourceTeam, Count: 1}},
+		Exhausted: []store.ExhaustedEntry{{ID: id, Name: "team-a", Source: store.SourceTeam, Class: store.ClassQuota},
+			{ID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", Name: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", Source: store.SourceGlobal, Class: store.ClassAuth}},
+	}
+	entries := []instances.Model{{ID: id, Name: "team-a", Key: "sk-team-secret-key", Source: instances.SourceTeam, TeamID: 7}}
+	snap := snapshotOf(totals, nil, nil)
+	modelMetrics(&snap, totals, entries)
+	out := metricsText(t, snap)
+	for _, leak := range []string{"sk-team-secret-key", "sk-", id, "aaaaaaaa-bbbb"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("the page holds %q:\n%s", leak, out)
+		}
+	}
+}
+
+// A dropped attempt is no review: the counts of reviews come from the totals
+// that leave them out, and only the fallback counter has them.
+func TestMetricsFailureRateIgnoresFellBack(t *testing.T) {
+	on := []settings.Effective{metricsEff("main", "acme/widgets", nil, nil)}
+	totals := store.MetricsTotals{
+		Reviews:   []store.ReviewTotal{{Instance: "main", Project: "acme/widgets", Trigger: "push", Reviews: 1}},
+		Fallbacks: []store.FallbackTotal{{From: "a", To: "b", Class: store.ClassQuota, Source: store.SourceGlobal, Count: 3}},
+	}
+	snap := snapshotOf(totals, on, nil)
+	modelMetrics(&snap, totals, nil)
+	out := metricsText(t, snap)
+	if !strings.Contains(out, `pergent_reviews_total{platform_instance="main",repository="acme/widgets",trigger="push",incremental="false"} 1`+"\n") ||
+		strings.Contains(out, "pergent_reviews_no_result_total{") {
+		t.Errorf("reviews counted the dropped attempts:\n%s", out)
+	}
+	if !strings.Contains(out, `pergent_model_fallback_total{from_model="a",to_model="b",class="quota",source="global"} 3`+"\n") {
+		t.Errorf("fallbacks missing:\n%s", out)
 	}
 }

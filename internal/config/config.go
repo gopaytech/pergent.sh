@@ -63,9 +63,38 @@ type Config struct {
 	GitHub        []GitHubInstance `yaml:"github"`
 	Repositories  []Repository     `yaml:"repositories"`
 	LLM           LLM              `yaml:"llm"`
-	Jobs          Jobs             `yaml:"jobs"`
-	Dashboard     Dashboard        `yaml:"dashboard"`
+	// LLMFallbacks is llm.fallbacks: the entries after llm's in the global
+	// chain, at most MaxLLMFallbacks. They are kept beside LLM, not in it, so
+	// LLM stays comparable.
+	LLMFallbacks []LLM
+	Fallback     Fallback
+	Jobs         Jobs      `yaml:"jobs"`
+	Dashboard    Dashboard `yaml:"dashboard"`
 }
+
+// Fallback sets how a chain falls back to its next entry.
+type Fallback struct {
+	// QuotaCooldown is how long an entry the provider said is out of quota
+	// or credit is skipped: at least MinQuotaCooldown. Load sets
+	// DefaultQuotaCooldown when the file has none; 0, in a Config built in
+	// code, means the default too (Cooldown).
+	QuotaCooldown time.Duration
+}
+
+// Cooldown is QuotaCooldown, or DefaultQuotaCooldown when it is 0.
+func (f Fallback) Cooldown() time.Duration {
+	if f.QuotaCooldown == 0 {
+		return DefaultQuotaCooldown
+	}
+	return f.QuotaCooldown
+}
+
+// The limits of the fallback settings.
+const (
+	MaxLLMFallbacks      = 4
+	MinQuotaCooldown     = time.Minute
+	DefaultQuotaCooldown = time.Hour
+)
 
 // Dashboard is the web dashboard. It is enabled when URL is set.
 type Dashboard struct {
@@ -301,13 +330,24 @@ type fileConfig struct {
 	GitLab        []Instance       `yaml:"gitlab"`
 	GitHub        []GitHubInstance `yaml:"github"`
 	Repositories  []fileRepository `yaml:"repositories"`
-	LLM           LLM              `yaml:"llm"`
+	LLM           fileLLM          `yaml:"llm"`
+	Fallback      fileFallback     `yaml:"fallback"`
 	Jobs          fileJobs         `yaml:"jobs"`
 	Dashboard     Dashboard        `yaml:"dashboard"`
 
 	// SkillsDir is kept only to refuse it: the skill library lives in the
 	// dashboard now, not in a directory.
 	SkillsDir yaml.Node `yaml:"skills_dir"`
+}
+
+// fileLLM is llm: the main entry and its fallbacks.
+type fileLLM struct {
+	LLM       `yaml:",inline"`
+	Fallbacks []LLM `yaml:"fallbacks"`
+}
+
+type fileFallback struct {
+	QuotaCooldown *duration `yaml:"quota_cooldown"`
 }
 
 type fileRepository struct {
@@ -454,6 +494,35 @@ func (d *duration) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
+// checkFallbacks checks llm.fallbacks and fallback:. A fallback needs the
+// entry it follows, and its own key variable: a default one would be the
+// main entry's key.
+func (c *Config) checkFallbacks() []error {
+	var errs []error
+	add := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
+	if len(c.LLMFallbacks) > 0 && !c.HasLLM() {
+		add("llm.fallbacks needs the llm: entry it follows")
+	}
+	if len(c.LLMFallbacks) > MaxLLMFallbacks {
+		add("llm.fallbacks: at most %d entries", MaxLLMFallbacks)
+	}
+	for i, f := range c.LLMFallbacks {
+		if f.Provider == "" {
+			add("llm.fallbacks[%d].provider is required", i)
+		}
+		if f.Model == "" {
+			add("llm.fallbacks[%d].model is required", i)
+		}
+		if f.APIKeyEnv == "" {
+			add("llm.fallbacks[%d].api_key_env is required", i)
+		}
+	}
+	if c.Fallback.QuotaCooldown != 0 && c.Fallback.QuotaCooldown < MinQuotaCooldown {
+		add("fallback.quota_cooldown must be at least 1m, got %s", c.Fallback.QuotaCooldown)
+	}
+	return errs
+}
+
 // LayoutEntries is the comment_layout list: each entry is a one-key map such
 // as `- findings: collapsed`, held as "findings:collapsed". A list that is
 // left out stays nil; one written out as `[]` is empty, which Validate
@@ -537,7 +606,9 @@ func Load(path string) (*Config, error) {
 		GitLab:        raw.GitLab,
 		GitHub:        raw.GitHub,
 		Repositories:  make([]Repository, 0, len(raw.Repositories)),
-		LLM:           raw.LLM,
+		LLM:           raw.LLM.LLM,
+		LLMFallbacks:  raw.LLM.Fallbacks,
+		Fallback:      Fallback{QuotaCooldown: DefaultQuotaCooldown},
 		Dashboard:     raw.Dashboard,
 		Jobs: Jobs{
 			Namespace:   raw.Jobs.Namespace,
@@ -570,9 +641,16 @@ func Load(path string) (*Config, error) {
 	if raw.Jobs.MaxTurns != nil {
 		cfg.Jobs.MaxTurns = *raw.Jobs.MaxTurns
 	}
+	var cooldownErr error
+	if raw.Fallback.QuotaCooldown != nil {
+		// Validate reads 0 as unset; one written in the file is too short.
+		if cfg.Fallback.QuotaCooldown = time.Duration(*raw.Fallback.QuotaCooldown); cfg.Fallback.QuotaCooldown == 0 {
+			cooldownErr = errors.New("fallback.quota_cooldown must be at least 1m, got 0s")
+		}
+	}
 
 	cfg.applyDefaults()
-	err = cfg.Validate()
+	err = errors.Join(cfg.Validate(), cooldownErr)
 	if !raw.SkillsDir.IsZero() {
 		err = errors.Join(errors.New(`skills_dir was removed: skills live in the dashboard (see the README, "Skills and instructions")`), err)
 	}
@@ -826,6 +904,7 @@ func (c *Config) Validate() error {
 			add("llm.api_key_env is required")
 		}
 	}
+	errs = append(errs, c.checkFallbacks()...)
 
 	if c.Jobs.Namespace == "" {
 		add("jobs.namespace is required")

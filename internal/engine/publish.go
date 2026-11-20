@@ -77,11 +77,17 @@ func (e *Engine) PublishOnce(ctx context.Context) error {
 	for _, run := range runs {
 		log := e.log().With("run", run.ID, "instance", run.MR.Instance, "project", run.ProjectPath,
 			"mr", run.MR.IID, "head", run.HeadSHA)
-		var err error
 		if run.Kind == store.KindAPI {
 			log = e.log().With("run", run.ID, "kind", store.KindAPI, "head", run.HeadSHA)
+		}
+		// Before anything is posted: a dropped attempt posts nothing but the
+		// shared status.
+		handled, err := e.fallBack(ctx, run, log)
+		switch {
+		case err != nil || handled:
+		case run.Kind == store.KindAPI:
 			err = e.publishAPI(ctx, run, log)
-		} else {
+		default:
 			err = e.publish(ctx, run, log)
 		}
 		if err == nil {
@@ -157,6 +163,10 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 	} else {
 		o.FooterNote = note
 	}
+	if run.ChainPosition > 1 && run.ModelEntryName != "" {
+		// A backup entry reviewed it: the comment says which, and why.
+		o.FallbackNote = policy.FallbackLine(run.ModelEntryName, run.FallbackClass)
+	}
 	if policy.Decide(o, failure).Approve {
 		// Only a review that would be approved depends on whether the
 		// change is a draft and the approve side can reach the repository.
@@ -170,7 +180,7 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 	if err := e.upsertComment(ctx, plat.Forge, run, d.Comment); err != nil {
 		return fmt.Errorf("post comment: %w", err)
 	}
-	if err := plat.Forge.SetStatus(ctx, run.MR.ProjectID, run.HeadSHA, StatusState(d.Status), d.Description); err != nil {
+	if err := e.setStatus(ctx, plat, run, StatusState(d.Status), d.Description); err != nil {
 		return fmt.Errorf("set commit status: %w", err)
 	}
 	approved, held := false, approvalMade
@@ -373,7 +383,7 @@ func (e *Engine) hideModel(run store.Run) func(string) string {
 		return nil
 	}
 	var urls []string
-	for _, m := range e.registry().Models() {
+	for _, m := range e.registry().AllModels() {
 		if m.LLM.Provider == provider && m.LLM.Model == model && m.LLM.BaseURL != "" {
 			urls = append(urls, m.LLM.BaseURL)
 		}
@@ -807,7 +817,7 @@ func (e *Engine) giveUp(ctx context.Context, run store.Run, log *slog.Logger) {
 
 	sctx, cancel := settleCtx(ctx)
 	defer cancel()
-	if err := plat.Forge.SetStatus(sctx, run.MR.ProjectID, run.HeadSHA, status, gaveUpDescription); err != nil {
+	if err := e.setStatus(sctx, plat, run, status, gaveUpDescription); err != nil {
 		log.Warn("couldn't set the final status of the review that wasn't posted", "error", e.redact(err.Error()))
 	}
 }
@@ -985,7 +995,7 @@ func (e *Engine) cleanUp(ctx context.Context, run store.Run, log *slog.Logger) e
 		case newer:
 			log.Debug("not setting the canceled status: a newer run of the head owns it")
 		case ok && plat.Forge != nil:
-			if err := plat.Forge.SetStatus(ctx, run.MR.ProjectID, run.HeadSHA, forge.StatusCanceled, supersededDescription); err != nil {
+			if err := e.setStatus(ctx, plat, run, forge.StatusCanceled, supersededDescription); err != nil {
 				return fmt.Errorf("set canceled status: %w", err)
 			}
 		default:

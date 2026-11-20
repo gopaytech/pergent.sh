@@ -421,7 +421,7 @@ func serve(ctx context.Context, configPath string, log *slog.Logger) error {
 	}
 	if metricsLn != nil {
 		log.Info("serving metrics", "listen", cfg.MetricsListen)
-		source := metricsSource(st, &settings.Resolver{Config: cfg, Store: st, Instances: reg})
+		source := metricsSource(st, &settings.Resolver{Config: cfg, Store: st, Instances: reg}, reg.AllModels)
 		loops = append(loops, serveMetrics(metricsLn, metricsHandler(source, log), log))
 	}
 	if dash != nil {

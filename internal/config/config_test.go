@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1819,5 +1820,75 @@ func TestCIJobsRefused(t *testing.T) {
 				t.Fatalf("Load() = %v, want an error containing %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestConfigFallbacks(t *testing.T) {
+	body := minimalYAML + "dashboard:\n  url: https://pergent.example.com\n"
+	main := "llm:\n  provider: anthropic\n  model: claude-sonnet-4\n"
+	fb := func(n int) string {
+		s := "  fallbacks:\n"
+		for i := range n {
+			s += fmt.Sprintf("    - provider: openai\n      model: gpt-%d\n      api_key_env: KEY_%d\n", i, i)
+		}
+		return s
+	}
+	cfg, err := Load(writeConfig(t, body+main+fb(2)+"    - provider: openai\n      model: gpt-x\n      base_url: https://llm.example.com/v1\n      api_key_env: KEY_X\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []LLM{
+		{Provider: "openai", Model: "gpt-0", APIKeyEnv: "KEY_0"},
+		{Provider: "openai", Model: "gpt-1", APIKeyEnv: "KEY_1"},
+		{Provider: "openai", Model: "gpt-x", BaseURL: "https://llm.example.com/v1", APIKeyEnv: "KEY_X"},
+	}
+	if !slices.Equal(cfg.LLMFallbacks, want) || cfg.LLM.Model != "claude-sonnet-4" {
+		t.Fatalf("LLM = %+v, LLMFallbacks = %+v", cfg.LLM, cfg.LLMFallbacks)
+	}
+	if !cfg.HasLLM() {
+		t.Error("HasLLM is false with an llm: block and fallbacks")
+	}
+
+	for _, tc := range []struct{ yaml, want string }{
+		{main + fb(5), "llm.fallbacks: at most 4 entries"},
+		{main + "  fallbacks:\n    - model: gpt\n      api_key_env: K\n", "llm.fallbacks[0].provider is required"},
+		{main + "  fallbacks:\n    - provider: openai\n      api_key_env: K\n", "llm.fallbacks[0].model is required"},
+		// No default key variable: it would be the main entry's key.
+		{main + "  fallbacks:\n    - provider: openai\n      model: gpt\n", "llm.fallbacks[0].api_key_env is required"},
+		{"llm:\n" + fb(1), "llm.fallbacks needs the llm: entry it follows"},
+	} {
+		if _, err := Load(writeConfig(t, body+tc.yaml)); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("Load(%q) = %v; want %s", tc.yaml, err, tc.want)
+		}
+	}
+	// Without fallbacks nothing changes.
+	cfg, err = Load(writeConfig(t, body+main))
+	if err != nil || cfg.LLMFallbacks != nil {
+		t.Fatalf("Load without fallbacks = %+v, %v", cfg, err)
+	}
+}
+
+func TestConfigQuotaCooldown(t *testing.T) {
+	body := minimalYAML + "dashboard:\n  url: https://pergent.example.com\n"
+	cfg, err := Load(writeConfig(t, body))
+	if err != nil || cfg.Fallback.QuotaCooldown != time.Hour {
+		t.Fatalf("default = %v, %v; want 1h", cfg, err)
+	}
+	cfg, err = Load(writeConfig(t, body+"fallback:\n  quota_cooldown: 90m\n"))
+	if err != nil || cfg.Fallback.QuotaCooldown != 90*time.Minute {
+		t.Fatalf("90m = %v, %v", cfg, err)
+	}
+	if _, err := Load(writeConfig(t, body+"fallback:\n  quota_cooldown: 1m\n")); err != nil {
+		t.Errorf("1m refused: %v", err)
+	}
+	for _, v := range []string{"30s", "0s"} {
+		want := "fallback.quota_cooldown must be at least 1m, got " + v
+		if _, err := Load(writeConfig(t, body+"fallback:\n  quota_cooldown: "+v+"\n")); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s = %v; want %s", v, err, want)
+		}
+	}
+	// A Config built in code with none reads the default.
+	if got := (Fallback{}).Cooldown(); got != time.Hour {
+		t.Errorf("Cooldown() of none = %v", got)
 	}
 }

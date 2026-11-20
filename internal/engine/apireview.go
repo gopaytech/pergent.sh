@@ -11,12 +11,14 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/gopaytech/pergent.sh/internal/actions"
+	"github.com/gopaytech/pergent.sh/internal/chain"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
 	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/quota"
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/reviewapi"
+	"github.com/gopaytech/pergent.sh/internal/settings"
 	"github.com/gopaytech/pergent.sh/internal/store"
 	"github.com/gopaytech/pergent.sh/internal/usage"
 )
@@ -99,11 +101,21 @@ func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 			return d.fail(ctx, reasonClientModel)
 		}
 	} else {
-		var ok bool
-		if model, ok = e.registry().DefaultModel(); !ok {
+		// The global chain, marked entries skipped. There is no fallback
+		// within the review: its inputs are gone once its Job has them.
+		dec, err := d.resolve(ctx, settings.Effective{}, false)
+		if err != nil {
+			return d.retry(ctx, fmt.Errorf("read the model chain: %w", err))
+		}
+		switch {
+		case dec.Wait:
 			e.warnEvery("no-llm", msgNoLLM)
 			return d.postpone(ctx, e.now().Add(waitDelay))
+		case dec.Exhausted, dec.Hold:
+			d.log.Warn("no entry of the global model chain can be used")
+			return d.fail(ctx, chain.FailureText(dec))
 		}
+		model = dec.Entry
 	}
 	llm, llmKey := model.LLM, model.Key
 	d.provider, d.model = llm.Provider, llm.Model
@@ -188,6 +200,11 @@ func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 
 	if err := e.Store.SetRunModel(ctx, run.ID, d.provider, d.model); err != nil {
 		return d.retry(ctx, fmt.Errorf("record the review's model: %w", err))
+	}
+	if d.entry.Position > 0 {
+		if err := e.Store.SetRunEntry(ctx, run.ID, runEntry(d.entry)); err != nil {
+			return d.retry(ctx, fmt.Errorf("record the review's model entry: %w", err))
+		}
 	}
 	token, tokenHash, err := mintToken()
 	if err != nil {

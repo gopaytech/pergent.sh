@@ -36,6 +36,10 @@ type Result struct {
 	Skills         []Skill `json:"skills"`
 	Error          *Error  `json:"error"`
 	Comment        Comment `json:"comment"`
+	// ProviderError is the most severe classified provider error of the
+	// skills' failures (a completed result only; nil from a pergent that
+	// doesn't classify them). It is what a fallback is decided from.
+	ProviderError *ProviderError `json:"provider_error,omitempty"`
 
 	// Merged is set by Merge on a result that carries kept skills of an
 	// earlier run: its comment covers only the skills that were re-run, so
@@ -188,6 +192,17 @@ type Skipped struct {
 type Error struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+// ProviderError is what pergent read from the provider's error: Class is
+// quota, billing, auth or rate_limit, kept as the text it came as (a class a
+// later pergent adds reads as no known one). Status is the HTTP status, 0
+// when opencode gave none; Provider and Model are what the run was given.
+type ProviderError struct {
+	Class    string `json:"class"`
+	Status   int    `json:"status,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
 }
 
 // Comment is the rendered comment, ready to post.

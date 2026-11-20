@@ -18,10 +18,10 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 
+	"github.com/gopaytech/pergent.sh/internal/chain"
 	"github.com/gopaytech/pergent.sh/internal/forge"
 	"github.com/gopaytech/pergent.sh/internal/github"
 	"github.com/gopaytech/pergent.sh/internal/inputs"
-	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/kube"
 	"github.com/gopaytech/pergent.sh/internal/quota"
 	"github.com/gopaytech/pergent.sh/internal/result"
@@ -88,9 +88,9 @@ var settleTimeout = 10 * time.Second
 // dispatchAPI. One run's trouble never stops the others. The returned error
 // joins store failures only.
 func (e *Engine) DispatchOnce(ctx context.Context) error {
-	if len(e.registry().Models()) == 0 {
+	if !e.registry().HasAnyModel() {
 		// Nothing can be reviewed: runs stay queued, not claimed, until an
-		// operator adds a model.
+		// operator or a team adds a model.
 		e.warnEvery("no-llm", msgNoLLM)
 		return nil
 	}
@@ -184,6 +184,11 @@ type dispatcher struct {
 	// provider and model are those the run's Job reviews with, set once they
 	// are resolved. Empty, the run is not compared with the last review's.
 	provider, model string
+	// entry is the chain's choice for the run (resolve sets it), scope the
+	// chain's, attempt the run's number in its review (1 for the first).
+	entry   chain.Decision
+	scope   string
+	attempt int
 	// api is true for an API review (dispatchAPI sets it). Its failure
 	// reasons reach the caller, so a retry that gives up says only that the
 	// review couldn't start; the cause is logged.
@@ -264,8 +269,9 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		e.Wake()
 		return nil
 	}
-	if run.Trigger == store.TriggerPush {
-		// Before any token, Job or model call. The retries of a check that
+	if run.Trigger == store.TriggerPush && run.AttemptOf == nil {
+		// Before any token, Job or model call. A later attempt is the same
+		// review of the same head, its author checked by the first. The retries of a check that
 		// fails run for trustPatience from its first failure: a push of an author the
 		// repository doesn't trust waits for someone with write access to
 		// start it. A run asked for (a re-run, a start) was asked for by
@@ -295,6 +301,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			return d.hold(ctx, plat, store.WaitUntrusted, waitingDescription, true)
 		}
 	}
+	var instanceUsedUp bool
 	if !run.QuotaChecked && run.Trigger != store.TriggerStart {
 		// An automatic run (a push, pergent.sh's own full re-run) on a
 		// used-up monthly token quota waits. A run somebody asked for was
@@ -302,13 +309,37 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		// person's request, even when the previous release queued it without
 		// the flag: HoldForQuota refuses it too, so checking it would
 		// postpone it and check it again, for ever.
-		usedUp, err := quota.Check(ctx, e.Store, e.now(), run.MR.Instance, run.MR.ProjectID, repo)
+		// The repository's quota counts every token and holds the run; the
+		// instance's counts global keys only, so it just stops global
+		// entries (the resolver holds when nothing else is left).
+		repoUsedUp, instUsedUp, err := quota.Check(ctx, e.Store, e.now(), run.MR.Instance, run.MR.ProjectID, repo)
 		if err != nil {
 			return d.retry(ctx, fmt.Errorf("read the token quota: %w", err))
 		}
-		if usedUp {
+		if repoUsedUp {
 			return d.holdForQuota(ctx, plat)
 		}
+		instanceUsedUp = instUsedUp
+	}
+	// The model is picked from the chain in effect, read now, so an edit made
+	// meanwhile is what runs. It falls back only on what the provider said
+	// (quota, billing, auth: a mark, or an earlier attempt of this review),
+	// never because an entry is missing: a 1-entry chain runs on its entry or
+	// fails, never on another model the repository did not ask for.
+	dec, err := d.resolve(ctx, repo, instanceUsedUp)
+	if err != nil {
+		return d.retry(ctx, fmt.Errorf("read the model chain: %w", err))
+	}
+	switch {
+	case dec.Wait:
+		// No entry at all, or no usable one in the chain of before chains:
+		// the run waits, as when the list is empty.
+		e.warnEvery("no-llm", msgNoLLM)
+		return d.postpone(ctx, e.now().Add(waitDelay))
+	case dec.Hold:
+		return d.holdForQuota(ctx, plat)
+	case dec.Exhausted:
+		return d.failExhausted(ctx, dec)
 	}
 	if ciApplies(run, repo) && !run.CIChecked {
 		// After trust and quota: a run held for either doesn't also wait for
@@ -353,37 +384,8 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 			return d.retry(ctx, fmt.Errorf("open the clone token: %w", err))
 		}
 	}
-	// A repository that chose a model runs on it or on nothing: if the entry
-	// is gone or has no usable key, falling back to the default would review
-	// on a model, and send the code to a provider, the repository never
-	// asked for. The reason names no entry, since it reaches the comment.
-	var model instances.Model
-	if repo.ModelID != "" {
-		var ok bool
-		if model, ok = e.registry().ModelByID(repo.ModelID); !ok {
-			d.log.Warn("the model chosen for this repository can't be used", "model_id", repo.ModelID)
-			// An entry that exists but has no usable key is the model this run
-			// tried: the dashboard shows it on the failed review. Best effort,
-			// since the run fails either way.
-			models := e.registry().Models()
-			if i := slices.IndexFunc(models, func(m instances.Model) bool { return m.ID == repo.ModelID }); i >= 0 {
-				tried := models[i].LLM
-				if err := e.Store.SetRunModel(ctx, run.ID, tried.Provider, tried.Model); err != nil {
-					d.log.Error("couldn't record the model the failed review tried", "model_id", repo.ModelID, "error", e.redact(err.Error()))
-				}
-			}
-			return d.fail(ctx, reasonModelUnusable)
-		}
-	} else {
-		var ok bool
-		if model, ok = e.registry().DefaultModel(); !ok {
-			// The default has no usable key, or was removed since the pass
-			// began: the run waits, as when the list is empty.
-			e.warnEvery("no-llm", msgNoLLM)
-			return d.postpone(ctx, e.now().Add(waitDelay))
-		}
-	}
-	llm, llmKey := model.LLM, model.Key
+	// The entry resolve picked; only its key goes in the Job.
+	llm, llmKey := d.entry.Entry.LLM, d.entry.Entry.Key
 	d.provider, d.model = llm.Provider, llm.Model
 	d.secrets = append(d.secrets, string(gitToken), llmKey)
 
@@ -581,6 +583,11 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 	if err := e.Store.SetRunModel(ctx, run.ID, d.provider, d.model); err != nil {
 		return d.retry(ctx, fmt.Errorf("record the review's model: %w", err))
 	}
+	// And the entry: a later attempt skips it, and the footer and the
+	// review page name it.
+	if err := e.Store.SetRunEntry(ctx, run.ID, runEntry(d.entry)); err != nil {
+		return d.retry(ctx, fmt.Errorf("record the review's model entry: %w", err))
+	}
 
 	token, tokenHash, err := mintToken()
 	if err != nil {
@@ -706,7 +713,7 @@ func (d *dispatcher) dispatch(ctx context.Context) error {
 		d.log.Info("couldn't record the review's model, step limit and skills for the dashboard", "error", d.redact(err.Error()))
 	}
 
-	if err := plat.Forge.SetStatus(ctx, run.MR.ProjectID, run.HeadSHA, forge.StatusRunning, runningDescription); err != nil {
+	if err := e.setStatus(ctx, plat, run, forge.StatusRunning, d.runningText()); err != nil {
 		d.log.Warn("couldn't set the running commit status", "error", d.redact(err.Error()))
 	}
 	return nil
@@ -1086,7 +1093,7 @@ type holdNote struct {
 // can't be set or posted is logged: the run waits either way.
 func (d *dispatcher) announceHold(ctx context.Context, plat Platform, description string, note *holdNote) {
 	run := d.run
-	if err := plat.Forge.SetStatus(ctx, run.MR.ProjectID, run.HeadSHA, forge.StatusPending, description); err != nil {
+	if err := d.e.setStatus(ctx, plat, run, forge.StatusPending, description); err != nil {
 		d.log.Warn("the pending status can't be set", "error", d.redact(err.Error()))
 	}
 	if note == nil {

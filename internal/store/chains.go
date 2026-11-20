@@ -344,3 +344,17 @@ func upsertMark(ctx context.Context, tx pgx.Tx, m Mark) error {
 		m.Ref.Source, m.Ref.ID, m.Class, m.Until, m.SetAt)
 	return err
 }
+
+// SetMark stores m on its own (upsertMark's rule): an API review marks the
+// entry the provider refused with no attempt to queue.
+func (s *Store) SetMark(ctx context.Context, m Mark) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	if err := upsertMark(ctx, tx, m); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}

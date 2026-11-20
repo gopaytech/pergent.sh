@@ -76,7 +76,7 @@ func TestSnapshotAdd(t *testing.T) {
 	out := buf.String()
 	for _, name := range names {
 		typ := "counter"
-		if name == FindingsDismissed {
+		if gauges[name] {
 			typ = "gauge"
 		}
 		if strings.Count(out, "# TYPE "+name+" "+typ+"\n") != 1 {
@@ -204,5 +204,18 @@ func TestHandlerRunsOneScrapeAtATime(t *testing.T) {
 	h.ServeHTTP(again, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if again.Code != http.StatusOK {
 		t.Errorf("a scrape after the first finished = %d, want 200", again.Code)
+	}
+}
+
+// The fallback counter and the exhausted gauge are declared with their types.
+func TestFallbackMetricsDeclared(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Write(&buf, New()); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"# TYPE pergent_model_fallback_total counter\n", "# TYPE pergent_model_entry_exhausted gauge\n"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("missing %q in:\n%s", want, buf.String())
+		}
 	}
 }

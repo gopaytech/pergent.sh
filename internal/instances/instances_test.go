@@ -972,3 +972,138 @@ func TestInstanceTokenQuota(t *testing.T) {
 		t.Error("SetTokenQuota changed a config instance")
 	}
 }
+
+// addTeamModel adds an entry to a new team and returns it.
+func addTeamModel(t *testing.T, st *store.Store, team, name string, sealedKey []byte) store.TeamModel {
+	t.Helper()
+	tm, err := st.CreateTeam(ctx, team, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := st.CreateTeamModel(ctx, store.TeamModel{TeamID: tm.ID, Name: name, Provider: "openai", Model: "gpt", APIKeySealed: sealedKey}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// A team's key is held like a global one: in LLMKeys, so Redact hides it,
+// and in HeldSecrets.
+func TestTeamKeysAreHeldAndRedacted(t *testing.T) {
+	st := newStore(t)
+	box := newBox(t, 1)
+	m := addTeamModel(t, st, "Payments", "team-gpt", box.Seal([]byte("team-key-secret")))
+	r := New(testConfig(), st, box)
+	if err := r.LoadLLM(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := r.TeamModels(m.TeamID)
+	if len(got) != 1 || got[0].ID != m.ID || got[0].Name != "team-gpt" || got[0].Key != "team-key-secret" ||
+		got[0].Source != SourceTeam || got[0].TeamID != m.TeamID || got[0].TeamsMayUse {
+		t.Fatalf("TeamModels = %+v", got)
+	}
+	if !r.HasAnyModel() {
+		t.Error("HasAnyModel is false with a team entry")
+	}
+	if all := r.AllModels(); len(all) != 1 || all[0].ID != m.ID {
+		t.Errorf("AllModels = %+v", all)
+	}
+	if got := r.Redact("x team-key-secret y"); got != "x *** y" {
+		t.Errorf("Redact = %q", got)
+	}
+	held, err := r.HeldSecrets(ctx)
+	if err != nil || !slices.Contains(held, "team-key-secret") {
+		t.Fatalf("HeldSecrets = %v, %v; want the team key", held, err)
+	}
+	// A team entry is no global one: it never becomes a default.
+	if _, ok := r.DefaultModel(); ok || len(r.Models()) != 0 || len(r.GlobalModels()) != 0 {
+		t.Errorf("a team entry reached the global list: %+v", r.GlobalModels())
+	}
+}
+
+// A team key that can't be opened leaves its entry in the list with no key,
+// and the log names the entry, never the key.
+func TestTeamKeyUnsealFails(t *testing.T) {
+	st := newStore(t)
+	m := addTeamModel(t, st, "Payments", "team-gpt", newBox(t, 2).Seal([]byte("team-key-unopened")))
+	r := New(testConfig(), st, newBox(t, 1))
+	var logs strings.Builder
+	r.SetLog(slog.New(slog.NewTextHandler(&logs, nil)))
+	if err := r.LoadLLM(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := r.TeamModels(m.TeamID)
+	if len(got) != 1 || got[0].ID != m.ID || got[0].Key != "" {
+		t.Fatalf("TeamModels = %+v; want the entry with no key", got)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "a team model's api_key couldn't be opened") || !strings.Contains(out, "model_id="+m.ID) ||
+		strings.Contains(out, "team-key-unopened") {
+		t.Errorf("log = %q", out)
+	}
+}
+
+// The global entries: the config's, its fallbacks as config-1.., then the
+// stored ones. This needs no database.
+func TestGlobalModelsOrder(t *testing.T) {
+	cfg := testConfig()
+	cfg.LLM = config.LLM{Provider: "anthropic", Model: "main", APIKeyEnv: "T_LLM_KEY"}
+	cfg.LLMFallbacks = []config.LLM{
+		{Provider: "openai", Model: "fb1", APIKeyEnv: "T_FB1_KEY"},
+		{Provider: "openai", Model: "fb2", APIKeyEnv: "T_FB2_KEY"},
+	}
+	t.Setenv("T_LLM_KEY", "key-main")
+	t.Setenv("T_FB1_KEY", "key-fb1")
+	t.Setenv("T_FB2_KEY", "")
+	r := New(cfg, nil, nil)
+	got := r.GlobalModels()
+	if len(got) != 3 {
+		t.Fatalf("GlobalModels = %+v", got)
+	}
+	for i, want := range []struct{ id, name, key string }{
+		{ConfigModelID, "anthropic/main", "key-main"}, {"config-1", "openai/fb1", "key-fb1"}, {"config-2", "openai/fb2", ""},
+	} {
+		if m := got[i]; m.ID != want.id || m.Name != want.name || m.Key != want.key || m.Source != SourceConfig || m.TeamsMayUse {
+			t.Errorf("GlobalModels[%d] = %+v, want %+v", i, m, want)
+		}
+	}
+	if !got[0].Default || got[1].Default {
+		t.Errorf("default = %v, %v; want the config entry alone", got[0].Default, got[1].Default)
+	}
+	// The fallbacks aren't the default's list: Models keeps today's entries.
+	if ms := r.Models(); len(ms) != 1 || ms[0].ID != ConfigModelID {
+		t.Errorf("Models = %+v", ms)
+	}
+	if got := r.Redact("key-fb1"); got != "***" {
+		t.Errorf("Redact of a fallback key = %q", got)
+	}
+	if !r.HasAnyModel() {
+		t.Error("HasAnyModel is false")
+	}
+	if r := New(testConfig(), nil, nil); r.HasAnyModel() {
+		t.Error("HasAnyModel is true with nothing")
+	}
+}
+
+// Stored entries follow the config's, with their names and teams may use.
+func TestGlobalModelsStoredAfterConfig(t *testing.T) {
+	st := newStore(t)
+	box := newBox(t, 1)
+	a := addModel(t, st, "openai", "a", "", box.Seal([]byte("key-a")), time.Now())
+	name, yes := "Team A", true
+	if found, err := st.SetLLMModelMeta(ctx, a.ID, &name, &yes, time.Now()); err != nil || !found {
+		t.Fatalf("SetLLMModelMeta = %v, %v", found, err)
+	}
+	cfg := testConfig()
+	cfg.LLM = config.LLM{Provider: "anthropic", Model: "main", APIKeyEnv: "T_LLM_KEY"}
+	cfg.LLMFallbacks = []config.LLM{{Provider: "openai", Model: "fb1", APIKeyEnv: "T_FB1_KEY"}}
+	r := New(cfg, st, box)
+	if err := r.LoadLLM(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := r.GlobalModels()
+	if len(got) != 3 || got[0].ID != ConfigModelID || got[1].ID != "config-1" || got[2].ID != a.ID ||
+		got[2].Name != "Team A" || !got[2].TeamsMayUse || got[2].Default {
+		t.Fatalf("GlobalModels = %+v", got)
+	}
+}
