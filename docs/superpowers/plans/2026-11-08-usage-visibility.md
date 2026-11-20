@@ -12,7 +12,7 @@
 
 **Rules for whoever runs this plan:**
 - Never start a container (no `docker`, `orbctl`, or anything that wakes OrbStack). The store, dashboard and engine tests skip without `PERGENT_SH_TEST_DATABASE_URL`; they run in CI only. Say so when you report.
-- Never merge, push, tag or release without the owner asking. Commit with `git -c user.email=zufardhiyaulhaq@gmail.com commit`, and end every commit message with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- Never merge, push, tag or release without the owner asking. End every commit message with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - Before every commit in either repo, run the public-name scan and expect no output:
   `git grep -niE 'golabs|gojek|gopay[^t]|goto\b' -- . ':!go.sum' ':!docs/superpowers/plans/*' ':!web/package-lock.json'`
 - After each task that changes code, break the new code on purpose once (a condition flipped, a field dropped) and check a test fails, then put it back. Note it in the PR body.
@@ -22,7 +22,7 @@
 
 ## PR 1: pergent reports cache and reasoning tokens
 
-Repository: `~/Documents/personal/github/pergent`, a new branch `feat/usage-tokens` from `origin/master`. Check the pin first: pergent.sh pins pergent `v0.8.0`; work on `master`.
+Repository: pergent, a new branch `feat/usage-tokens` from `origin/master`. Check the pin first: pergent.sh pins pergent `v0.8.0`; work on `master`.
 
 `internal/runner/parser.go` already decodes `reasoning`, `cache.read` and `cache.write` (`openCodeTokens`, lines 46–55). Only `Usage` drops them. Every sum goes through `Usage.Add`, so nothing in `internal/review/` changes.
 
@@ -96,7 +96,7 @@ In `internal/runner/runner_test.go`, give `usageStep` a variant that sets `"cach
 
 ```bash
 git add internal/runner/
-git -c user.email=zufardhiyaulhaq@gmail.com commit -m "feat(runner): count reasoning and cache tokens apart from input and output"
+git commit -m "feat(runner): count reasoning and cache tokens apart from input and output"
 ```
 
 ### Task 2: Put them in the result
@@ -153,7 +153,7 @@ Expected: PASS, no gofmt output.
 
 ```bash
 git add internal/result/
-git -c user.email=zufardhiyaulhaq@gmail.com commit -m "feat(result): report reasoning and cache tokens per skill"
+git commit -m "feat(result): report reasoning and cache tokens per skill"
 ```
 
 ### Task 3: Document it, open PR 1
@@ -177,7 +177,7 @@ Use the real next version number in place of `v0.9.0`: check `git tag --sort=-v:
 
 ## PR 2: pergent.sh records usage and shows it to admins
 
-Repository: `~/Documents/personal/github/pergent.sh-usage`, branch `feat/usage` from current `origin/main` (the vision doc is untracked there; commit it in the first commit of this PR).
+Repository: pergent.sh (worktree `pergent.sh-usage`), branch `feat/usage` from current `origin/main` (the vision doc is untracked there; commit it in the first commit of this PR).
 
 ### Task 4: The `run_usage` table
 

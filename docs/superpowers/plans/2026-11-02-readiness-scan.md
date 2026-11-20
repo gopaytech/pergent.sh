@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **Two repositories.** Task 1 is in pergent (`/Users/zufar.dhiyaullhaq/Documents/personal/github/pergent`, branch `feat/scope` off `master`). Tasks 2 to 12 are in pergent.sh (`/Users/zufar.dhiyaullhaq/Documents/personal/github/pergent.sh`, branch `feat/readiness-scan` off `main`). No pergent release, no chart change. Ships as pergent.sh 0.5.0; the release waits for the owner.
+- **Two repositories.** Task 1 is in pergent (branch `feat/scope` off `master`). Tasks 2 to 12 are in pergent.sh (branch `feat/readiness-scan` off `main`). No pergent release, no chart change. Ships as pergent.sh 0.5.0; the release waits for the owner.
 - **The Task 1 commit must be on pergent `master` on GitHub before Task 2 pins it** (`go get` fetches it through the module proxy). That push needs the owner's go-ahead at execution time: the controller stops after Task 1 and asks.
 - States, exact: `passed`, `warning`, `missing`, `unknown` (shown as "Couldn't check: <reason>"). `unknown` is never shown or counted as passed.
 - Numbers: at most **2** scan Jobs at once, outside `jobs.max_running`; Scan now at most once per repository per **5 minutes**; noise = an included file over **512 KiB** (524288 bytes) or with a noise name; at most **50** noise paths, largest first, plus a count of the rest; a language is listed when it is over **10%** of source files and no assigned skill reviews any of its files; budget **900 KiB** (`inputs.ConfigMapLimit`).
@@ -28,7 +28,7 @@
 - **pergent suite (Task 1):** `docker run --rm -v "$PWD":/src -w /src golang:1.24-trixie sh -c 'git config --global --add safe.directory "*" && go test -count=1 ./...'` (the Mac's git is too old for the `cmd` agent tests), plus `make vet`.
 - **Web checks:** `cd web && npm run typecheck && npm run lint && npx vitest run && npm run build`, never while `go test` runs.
 - Private-name scan prints nothing, in each repo: run the private-name scan kept in the pergent-developer memory (its pattern stays out of this public repository), excluding `go.sum`, `docs/superpowers/plans/` and `web/package-lock.json`.
-- Commits: `git -c user.email=zufardhiyaulhaq@gmail.com commit`, conventional subjects, ending `Co-Authored-By: Claude <model> <noreply@anthropic.com>` for the model that wrote it. Never push, tag or release without the owner. Never run `go clean`, `docker builder prune` or any cache cleanup.
+- Commits: conventional subjects, ending `Co-Authored-By: Claude <model> <noreply@anthropic.com>` for the model that wrote it. Never push, tag or release without the owner. Never run `go clean`, `docker builder prune` or any cache cleanup.
 
 ## Review Focus
 

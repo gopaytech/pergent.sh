@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Branch `feat/skills-library` off `main` in `/Users/zufar.dhiyaullhaq/Documents/personal/github/pergent.sh`. The pergent CLI is not changed. Ships as app and chart **0.3.0**; the release itself waits for the owner.
+- Branch `feat/skills-library` off `main` in the pergent.sh checkout. The pergent CLI is not changed. Ships as app and chart **0.3.0**; the release itself waits for the owner.
 - Skill name: `^[A-Za-z0-9][A-Za-z0-9._-]*$`, fixed after create or install; a frontmatter `name`, when present, must equal it (D4).
 - Limits: **128 KiB** per skill, **200** library skills; frontmatter must parse; `paths` and `exclude` are string lists, `cross_batch` is a boolean, other fields are ignored (D6).
 - Budget: saving the default list or a repository's `skills` is refused with 400 naming the total when the library text alone is over **900 KiB** (`inputs.ConfigMapLimit`) (D6).
@@ -38,7 +38,7 @@
 - **Web checks:** `cd web && npm run typecheck && npm run lint && npx vitest run && npm run build`.
 - **Chart checks:** `helm lint charts/pergent-sh -f charts/pergent-sh/ci-values.yaml` and `helm lint charts/pergent-sh`.
 - Private-name scan prints nothing: `git grep -niE 'golabs|gojek|gopay[^t]|goto\b' -- . ':!go.sum' ':!docs/superpowers/plans/*' ':!web/package-lock.json'`.
-- Commits: `git -c user.email=zufardhiyaulhaq@gmail.com commit`, conventional subjects, message ends `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Never push, tag or release. Never run `go clean`, `docker builder prune` or any cache or disk cleanup.
+- Commits: conventional subjects, message ends `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Never push, tag or release. Never run `go clean`, `docker builder prune` or any cache or disk cleanup.
 
 ## Review Focus
 

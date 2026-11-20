@@ -41,7 +41,7 @@
   - web: `cd web && npm run typecheck && npm run lint && npx vitest run`;
   - chart: `helm lint charts/pergent-sh -f charts/pergent-sh/ci-values.yaml`.
 - **Name scan before each commit:** `git grep -niE 'golabs|gojek|gopay[^t]|goto\b' -- . ':!go.sum' ':!docs/superpowers/plans/*' ':!web/package-lock.json'` prints nothing.
-- **Commits:** `git -c user.email=zufardhiyaulhaq@gmail.com commit`, ending `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Never push, tag or open a PR unless the owner asks.
+- **Commits:** end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Never push, tag or open a PR unless the owner asks.
 
 ## Rulings on the spec
 

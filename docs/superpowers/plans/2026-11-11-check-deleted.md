@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go (both repos), Postgres (pergent.sh, pgx), React + TypeScript + vitest (pergent.sh web), OpenAPI.
 
-**Spec:** `docs/superpowers/specs/2026-11-11-check-deleted-design.md` (pergent.sh repo). Code map with file:line for every touch point: `/private/tmp/claude-501/-Users-zufardhiyaulhaq-Documents-personal-github-pergent/00c2dbe3-c1fe-40e3-955f-c7e64f6c1850/scratchpad/check-deleted-code-map.md`.
+**Spec:** `docs/superpowers/specs/2026-11-11-check-deleted-design.md` (pergent.sh repo). Code map with file:line for every touch point: `check-deleted-code-map.md` in the planning session's scratch folder (not in the repo).
 
 ## Global Constraints
 
@@ -38,7 +38,7 @@
 
 ---
 
-## Part A: pergent (worktree `/Users/zufardhiyaulhaq/Documents/personal/github/pergent-check-deleted`)
+## Part A: pergent (worktree `pergent-check-deleted`)
 
 ### Task A1: Switch off by default, drop the leftover tests
 
