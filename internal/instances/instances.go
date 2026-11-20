@@ -545,12 +545,18 @@ const ConfigModelID = store.ConfigModelID
 // Model is one entry of the list of models. Key is in the clear and empty
 // when the entry has none, its env var is empty or the stored one can't be
 // opened. Default is the entry reviews use when a repository names none.
+// Name is what people and the MR comment see; TeamsMayUse lets team chains
+// name a global entry; TeamID is the team of a team entry, 0 for a global
+// one.
 type Model struct {
-	ID      string
-	LLM     config.LLM
-	Key     string
-	Default bool
-	Source  Source
+	ID          string
+	Name        string
+	LLM         config.LLM
+	Key         string
+	Default     bool
+	Source      Source
+	TeamsMayUse bool
+	TeamID      int64
 }
 
 // LLMState is the default LLM as the dashboard shows it. Source is
