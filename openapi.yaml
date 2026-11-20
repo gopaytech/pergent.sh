@@ -4408,11 +4408,14 @@ components:
         the change was a draft),
         `no_blocking` (clean but not approved, for the reason given), `failed`
         (no usable review), `superseded` (replaced by a newer push, or the
-        change was closed), `skipped` (the repository has no skills; never a
+        change was closed), `fell_back` (an attempt dropped because the
+        provider refused its model entry: out of quota or credit, or its key
+        rejected; the review went on with the next entry of its chain, and it
+        is never a failure), `skipped` (the repository has no skills; never a
         review or a failure), `unknown` (published before outcomes were
         recorded), `waiting` (the repository doesn't trust the change's
         author; held until someone with write access starts the review).
-      enum: [running, approved, blocking, ci_blocked, draft, no_blocking, failed, superseded, skipped, unknown, waiting]
+      enum: [running, approved, blocking, ci_blocked, draft, no_blocking, failed, superseded, fell_back, skipped, unknown, waiting]
     # ----------------------------------------------------------- request bodies
     PasswordSignInRequest:
       type: object

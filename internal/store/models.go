@@ -27,12 +27,15 @@ var (
 const modelsLockKey = 0x6d6f646c // "modl"
 
 // LLMModel is an entry of the list of models. APIKeySealed is the API key
-// sealed with PERGENT_SH_SECRET_KEY; nil when none is set.
+// sealed with PERGENT_SH_SECRET_KEY; nil when none is set. Name is unique
+// among global entries ignoring case; a row with no name (the previous
+// release writes none) reads as provider/model. TeamsMayUse lets team and
+// repository chains name it.
 type LLMModel struct {
-	ID, Provider, Model, BaseURL string
-	APIKeySealed                 []byte
-	Default                      bool
-	CreatedAt, UpdatedAt         time.Time
+	ID, Name, Provider, Model, BaseURL string
+	APIKeySealed                       []byte
+	Default, TeamsMayUse               bool
+	CreatedAt, UpdatedAt               time.Time
 }
 
 // ModelInUseError is returned by DeleteLLMModel for a model a repository
@@ -43,12 +46,24 @@ func (e *ModelInUseError) Error() string {
 	return fmt.Sprintf("store: model is in use by %d repositories", len(e.Repos))
 }
 
-const modelColumns = `id, provider, model, base_url, api_key_sealed, is_default, created_at, updated_at`
+const modelColumns = `id, COALESCE(name, provider || '/' || model), provider, model, base_url, api_key_sealed, is_default,
+	teams_may_use, created_at, updated_at`
 
 func scanModel(row pgx.Row) (LLMModel, error) {
 	var m LLMModel
-	err := row.Scan(&m.ID, &m.Provider, &m.Model, &m.BaseURL, &m.APIKeySealed, &m.Default, &m.CreatedAt, &m.UpdatedAt)
+	err := row.Scan(&m.ID, &m.Name, &m.Provider, &m.Model, &m.BaseURL, &m.APIKeySealed, &m.Default, &m.TeamsMayUse,
+		&m.CreatedAt, &m.UpdatedAt)
 	return m, err
+}
+
+// nameTaken reports whether a global entry other than except reads as name,
+// ignoring case. An entry with no name reads as provider/model, so that is
+// taken too, which the index on name alone can't see.
+func nameTaken(ctx context.Context, tx pgx.Tx, name, except string) (bool, error) {
+	var taken bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM llm_models
+		WHERE lower(COALESCE(name, provider || '/' || model)) = lower($1) AND id <> $2)`, name, except).Scan(&taken)
+	return taken, err
 }
 
 // LLMModels returns every entry, oldest first.
@@ -67,6 +82,16 @@ func (s *Store) LLMModels(ctx context.Context) ([]LLMModel, error) {
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// modelTaken reports whether an entry has this provider, model and base URL.
+// The database no longer refuses it (0045 dropped the rule), so the store
+// does, under the list lock, until names tell entries apart in the API.
+func modelTaken(ctx context.Context, tx pgx.Tx, provider, model, baseURL string) (bool, error) {
+	var taken bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM llm_models
+		WHERE provider = $1 AND model = $2 AND base_url = $3)`, provider, model, baseURL).Scan(&taken)
+	return taken, err
 }
 
 // lockModelList takes the lock that serialises changes to the list until the
@@ -94,7 +119,8 @@ func writeDefaultToSettings(ctx context.Context, tx pgx.Tx, m LLMModel, at time.
 // CreateLLMModel adds m (its ID, Default and times are ignored; at is both
 // times) and returns it as stored. The entry becomes the default when there
 // is none, which the first one is. The same provider, model and base URL as
-// an entry already there is ErrExists.
+// an entry already there is ErrExists; a name taken is ErrNameTaken. An empty
+// name stores none, which reads as provider/model.
 func (s *Store) CreateLLMModel(ctx context.Context, m LLMModel, at time.Time) (LLMModel, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -105,12 +131,28 @@ func (s *Store) CreateLLMModel(ctx context.Context, m LLMModel, at time.Time) (L
 	if err := lockModelList(ctx, tx); err != nil {
 		return LLMModel{}, err
 	}
-	out, err := scanModel(tx.QueryRow(ctx, `INSERT INTO llm_models (id, provider, model, base_url, api_key_sealed, is_default, created_at, updated_at)
-		VALUES (gen_random_uuid()::text, $1, $2, $3, $4, NOT EXISTS (SELECT 1 FROM llm_models WHERE is_default), $5, $5)
-		RETURNING `+modelColumns, m.Provider, m.Model, m.BaseURL, m.APIKeySealed, at))
+	if taken, err := modelTaken(ctx, tx, m.Provider, m.Model, m.BaseURL); err != nil || taken {
+		if taken {
+			err = ErrExists
+		}
+		return LLMModel{}, err
+	}
+	if m.Name != "" {
+		if taken, err := nameTaken(ctx, tx, m.Name, ""); err != nil || taken {
+			if taken {
+				err = ErrNameTaken
+			}
+			return LLMModel{}, err
+		}
+	}
+	out, err := scanModel(tx.QueryRow(ctx, `INSERT INTO llm_models (id, name, provider, model, base_url, api_key_sealed, is_default,
+			teams_may_use, created_at, updated_at)
+		VALUES (gen_random_uuid()::text, NULLIF($1, ''), $2, $3, $4, $5, NOT EXISTS (SELECT 1 FROM llm_models WHERE is_default),
+			$6, $7, $7)
+		RETURNING `+modelColumns, m.Name, m.Provider, m.Model, m.BaseURL, m.APIKeySealed, m.TeamsMayUse, at))
 	if err != nil {
 		if isUniqueViolation(err) {
-			return LLMModel{}, ErrExists
+			return LLMModel{}, ErrNameTaken
 		}
 		return LLMModel{}, err
 	}
@@ -125,7 +167,8 @@ func (s *Store) CreateLLMModel(ctx context.Context, m LLMModel, at time.Time) (L
 // UpdateLLMModel changes the base URL and, unless keySealed is nil, the key
 // of an entry; its provider and model never change. found is false when
 // there is no such entry. A base URL that makes it the same as another entry
-// is ErrExists. The default entry is written to llm_settings again.
+// is ErrExists. The default entry is written to llm_settings again. A new key
+// clears the entry's auth mark in the same transaction.
 func (s *Store) UpdateLLMModel(ctx context.Context, id, baseURL string, keySealed []byte, at time.Time) (found bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -136,21 +179,67 @@ func (s *Store) UpdateLLMModel(ctx context.Context, id, baseURL string, keySeale
 	if err := lockModelList(ctx, tx); err != nil {
 		return false, err
 	}
+	// The same check as modelTaken, for the entry's own provider and model.
+	var taken bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM llm_models o JOIN llm_models m ON m.id = $1
+		WHERE o.id <> m.id AND o.provider = m.provider AND o.model = m.model AND o.base_url = $2)`, id, baseURL).Scan(&taken); err != nil {
+		return false, err
+	}
+	if taken {
+		return false, ErrExists
+	}
 	m, err := scanModel(tx.QueryRow(ctx, `UPDATE llm_models SET base_url = $2, api_key_sealed = COALESCE($3, api_key_sealed), updated_at = $4
 		WHERE id = $1 RETURNING `+modelColumns, id, baseURL, keySealed, at))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
-		if isUniqueViolation(err) {
-			return false, ErrExists
-		}
 		return false, err
+	}
+	if keySealed != nil {
+		if err := clearAuthMark(ctx, tx, EntryRef{SourceGlobal, id}); err != nil {
+			return false, err
+		}
 	}
 	if m.Default {
 		if err := writeDefaultToSettings(ctx, tx, m, at); err != nil {
 			return false, err
 		}
+	}
+	return true, tx.Commit(ctx)
+}
+
+// SetLLMModelMeta changes the name and the teams may use switch of an entry,
+// each unless nil. found is false when there is no such entry. A name another
+// entry reads as, ignoring case, is ErrNameTaken.
+func (s *Store) SetLLMModelMeta(ctx context.Context, id string, name *string, teamsMayUse *bool, at time.Time) (found bool, err error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+
+	if err := lockModelList(ctx, tx); err != nil {
+		return false, err
+	}
+	if name != nil {
+		if taken, err := nameTaken(ctx, tx, *name, id); err != nil || taken {
+			if taken {
+				err = ErrNameTaken
+			}
+			return false, err
+		}
+	}
+	tag, err := tx.Exec(ctx, `UPDATE llm_models SET name = COALESCE($2, name), teams_may_use = COALESCE($3, teams_may_use),
+		updated_at = $4 WHERE id = $1`, id, name, teamsMayUse, at)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return false, ErrNameTaken
+		}
+		return false, err
+	}
+	if tag.RowsAffected() == 0 {
+		return false, nil
 	}
 	return true, tx.Commit(ctx)
 }
@@ -168,6 +257,14 @@ func (s *Store) SetDefaultLLMModel(ctx context.Context, id string, at time.Time)
 	if err := lockModelList(ctx, tx); err != nil {
 		return false, err
 	}
+	if found, err := setDefault(ctx, tx, id, at); err != nil || !found {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
+}
+
+// setDefault is SetDefaultLLMModel inside tx, which holds the list lock.
+func setDefault(ctx context.Context, tx pgx.Tx, id string, at time.Time) (found bool, err error) {
 	var exists bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM llm_models WHERE id = $1)`, id).Scan(&exists); err != nil {
 		return false, err
@@ -185,10 +282,7 @@ func (s *Store) SetDefaultLLMModel(ctx context.Context, id string, at time.Time)
 	if err != nil {
 		return false, err
 	}
-	if err := writeDefaultToSettings(ctx, tx, m, at); err != nil {
-		return false, err
-	}
-	return true, tx.Commit(ctx)
+	return true, writeDefaultToSettings(ctx, tx, m, at)
 }
 
 // DeleteLLMModel removes an entry. The default is refused with

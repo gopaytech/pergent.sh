@@ -108,12 +108,13 @@ func visibleCond(v Visibility, n int) (string, []any) {
 // recorded decision (published before decisions were recorded) is
 // "unknown": nothing is guessed. A skipped run (no skills) has its own
 // outcome, "skipped": it was not reviewed, and it is neither running,
-// failed nor superseded.
+// failed nor superseded. A run dropped for the next entry of its chain is
+// "fell_back".
 const outcomeSQL = `(CASE r.state
 	WHEN 'queued' THEN 'running'
 	WHEN 'running' THEN 'running'
 	WHEN 'reported' THEN CASE WHEN r.failure_reason <> '' THEN 'failed' ELSE 'running' END
-	WHEN 'superseded' THEN 'superseded'
+	WHEN 'superseded' THEN CASE WHEN r.outcome = 'fell_back' THEN 'fell_back' ELSE 'superseded' END
 	WHEN 'skipped' THEN 'skipped'
 	WHEN 'waiting' THEN 'waiting'
 	WHEN 'publish_failed' THEN 'failed'
@@ -244,14 +245,15 @@ func (s *Store) RunStats(ctx context.Context, v Visibility, since time.Time) (ma
 }
 
 // MRRunDigests returns the runs of a merge request that v lets be read,
-// oldest first.
+// oldest first: one per review, so an attempt dropped for the next entry of
+// its chain is left out (Attempts lists them).
 func (s *Store) MRRunDigests(ctx context.Context, mr MRKey, v Visibility) ([]RunDigest, error) {
 	if v.none() {
 		return nil, nil
 	}
 	cond, args := visibleCond(v, 4)
 	return s.queryDigests(ctx, `SELECT `+digestColumns+` FROM runs r
-		WHERE r.instance = $1 AND r.project_id = $2 AND r.mr_iid = $3`+cond+`
+		WHERE r.instance = $1 AND r.project_id = $2 AND r.mr_iid = $3 AND r.outcome <> 'fell_back'`+cond+`
 		ORDER BY r.created_at, r.id`, append([]any{mr.Instance, mr.ProjectID, mr.IID}, args...)...)
 }
 

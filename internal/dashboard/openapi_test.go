@@ -1366,7 +1366,7 @@ func stringConsts(t *testing.T, glob, prefix, block string) map[string]string {
 func TestOpenAPIEnumsMatchCode(t *testing.T) {
 	d := loadSpec(t)
 	outcomes := []string{OutcomeRunning, OutcomeApproved, OutcomeBlocking, OutcomeCI, OutcomeDraft, OutcomeNoBlocking,
-		OutcomeFailed, OutcomeSuperseded, OutcomeSkipped, OutcomeUnknown, OutcomeWaiting}
+		OutcomeFailed, OutcomeSuperseded, OutcomeFellBack, OutcomeSkipped, OutcomeUnknown, OutcomeWaiting}
 	roles := []string{store.RoleAdmin, store.RoleMaintainer, store.RoleViewer}
 	teamRoles := []string{store.RoleMaintainer, store.RoleViewer}
 	accountRoles := []string{store.RoleAdmin, store.RoleUser}

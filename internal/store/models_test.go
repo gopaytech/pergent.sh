@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 func newModel(t *testing.T, s *Store, provider, model, baseURL string, key []byte) LLMModel {
@@ -80,6 +82,22 @@ func TestModelInUseErrorCountsRepositories(t *testing.T) {
 	}
 }
 
+// modelsAt33 reads the list with the columns 0033 made, for a database
+// migrated that far: LLMModels reads columns later migrations add.
+func modelsAt33(t *testing.T, s *Store) ([]LLMModel, error) {
+	t.Helper()
+	rows, err := s.pool.Query(ctx, `SELECT id, provider, model, base_url, api_key_sealed, is_default, created_at, updated_at
+		FROM llm_models ORDER BY created_at, id`)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (LLMModel, error) {
+		var m LLMModel
+		err := row.Scan(&m.ID, &m.Provider, &m.Model, &m.BaseURL, &m.APIKeySealed, &m.Default, &m.CreatedAt, &m.UpdatedAt)
+		return m, err
+	})
+}
+
 // The row of llm_settings becomes the first entry and the default, with the
 // same sealed key; no row is an empty list.
 func TestMigrationCopiesLLMSettings(t *testing.T) {
@@ -90,9 +108,9 @@ func TestMigrationCopiesLLMSettings(t *testing.T) {
 	}
 	applyUpTo(t, s, 33)
 
-	models, err := s.LLMModels(ctx)
+	models, err := modelsAt33(t, s)
 	if err != nil || len(models) != 1 {
-		t.Fatalf("LLMModels = %+v, %v; want one entry", models, err)
+		t.Fatalf("models = %+v, %v; want one entry", models, err)
 	}
 	m := models[0]
 	if !m.Default || m.Provider != "anthropic" || m.Model != "claude-sonnet-4" || m.BaseURL != "https://llm.example.com" ||
@@ -107,8 +125,8 @@ func TestMigrationCopiesLLMSettings(t *testing.T) {
 
 func TestMigrationWithoutLLMSettingsIsEmpty(t *testing.T) {
 	s := newStoreAt(t, 33)
-	if models, err := s.LLMModels(ctx); err != nil || len(models) != 0 {
-		t.Errorf("LLMModels = %+v, %v; want none", models, err)
+	if models, err := modelsAt33(t, s); err != nil || len(models) != 0 {
+		t.Errorf("models = %+v, %v; want none", models, err)
 	}
 }
 
@@ -777,5 +795,59 @@ func TestSetRunModel(t *testing.T) {
 	}
 	if err := s.SetRunModel(ctx, "bad", "a", "b"); err == nil {
 		t.Error("a malformed id was accepted")
+	}
+}
+
+// Entry names are unique among global entries, ignoring case.
+func TestLLMModelNameUnique(t *testing.T) {
+	s := newStore(t)
+	a := newModel(t, s, "openai", "gpt-5", "", []byte("k1"))
+	b := newModel(t, s, "openai", "gpt-5", "https://llm.example.com", []byte("k2"))
+	if found, err := s.SetLLMModelMeta(ctx, a.ID, strp("Main key"), nil, t0); err != nil || !found {
+		t.Fatalf("SetLLMModelMeta = %v, %v", found, err)
+	}
+	if _, err := s.SetLLMModelMeta(ctx, b.ID, strp("main KEY"), nil, t0); !errors.Is(err, ErrNameTaken) {
+		t.Errorf("a name taken ignoring case = %v; want ErrNameTaken", err)
+	}
+	// An unnamed entry is read as provider/model, so that name is taken too.
+	if _, err := s.SetLLMModelMeta(ctx, a.ID, strp("OpenAI/GPT-5"), nil, t0); !errors.Is(err, ErrNameTaken) {
+		t.Errorf("the name an unnamed entry reads as = %v; want ErrNameTaken", err)
+	}
+	// Its own name again, and teams may use alone, are fine.
+	yes := true
+	if found, err := s.SetLLMModelMeta(ctx, a.ID, strp("main key"), &yes, t0.Add(time.Hour)); err != nil || !found {
+		t.Fatalf("SetLLMModelMeta of its own name = %v, %v", found, err)
+	}
+	got := modelByID(t, s, a.ID)
+	if got.Name != "main key" || !got.TeamsMayUse || !got.UpdatedAt.Equal(t0.Add(time.Hour)) {
+		t.Errorf("entry = %+v; want the new name and teams may use", got)
+	}
+	if found, err := s.SetLLMModelMeta(ctx, "no-such-id", strp("x"), nil, t0); err != nil || found {
+		t.Errorf("SetLLMModelMeta of a missing entry = %v, %v; want not found", found, err)
+	}
+	// A name given at create counts as well.
+	if _, err := s.CreateLLMModel(ctx, LLMModel{Name: "MAIN KEY", Provider: "anthropic", Model: "sonnet"}, t0); !errors.Is(err, ErrNameTaken) {
+		t.Errorf("CreateLLMModel with a taken name = %v; want ErrNameTaken", err)
+	}
+	c, err := s.CreateLLMModel(ctx, LLMModel{Name: "Backup", Provider: "anthropic", Model: "sonnet"}, t0)
+	if err != nil || c.Name != "Backup" || c.TeamsMayUse {
+		t.Errorf("CreateLLMModel with a name = %+v, %v", c, err)
+	}
+}
+
+// A row the previous release wrote has no name and reads as provider/model.
+func TestLLMModelNameNullReadsProviderModel(t *testing.T) {
+	s := newStore(t)
+	if _, err := s.pool.Exec(ctx, `INSERT INTO llm_models (id, provider, model, base_url, is_default, created_at, updated_at)
+		VALUES ('old', 'anthropic', 'sonnet', '', true, $1, $1)`, t0); err != nil {
+		t.Fatal(err)
+	}
+	if got := modelByID(t, s, "old"); got.Name != "anthropic/sonnet" || got.TeamsMayUse {
+		t.Errorf("entry with no name = %+v; want anthropic/sonnet", got)
+	}
+	// So does one created without a name.
+	m := newModel(t, s, "openai", "gpt-5", "", nil)
+	if m.Name != "openai/gpt-5" {
+		t.Errorf("created with no name = %+v; want openai/gpt-5", m)
 	}
 }
