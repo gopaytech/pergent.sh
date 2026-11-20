@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -172,6 +171,9 @@ func (e *Engine) checkGraphHead(ctx context.Context, instance, project string) {
 	}
 }
 
+// graphLog starts the code graph's log lines.
+const graphLog = "code graph: "
+
 // graphTarget is the default branch of instance's repository project, its
 // head, and where the Job clones it. With token it also holds the read-only
 // clone token (dispatch's: the GitLab deploy token, or a GitHub token for
@@ -200,36 +202,16 @@ func (e *Engine) graphTarget(ctx context.Context, instance, project string, toke
 func (e *Engine) gitLabGraphTarget(ctx context.Context, gl *gitlab.Client, p store.Project, token bool) (scanTarget, error) {
 	log := e.log().With("instance", p.Instance, "project", p.Path, "project_id", p.ProjectID)
 	t := scanTarget{RepoURL: p.HTTPURLToRepo, GitUser: p.DeployTokenUsername}
-	gp, err := gl.GetProject(ctx, strconv.FormatInt(p.ProjectID, 10))
+	gp, commit, err := e.gitLabHead(ctx, log, graphLog, gl, p)
 	if err != nil {
-		log.Info("code graph: couldn't read the project", "error", e.redact(err.Error()))
-		return t, errDefaultBranch
-	}
-	if gp.DefaultBranch == "" {
-		return t, errNoDefaultBranch
-	}
-	commit, err := gl.CommitSHA(ctx, p.ProjectID, gp.DefaultBranch)
-	if errors.Is(err, gitlab.ErrNotFound) {
-		return t, errNoDefaultBranch
-	}
-	if err != nil {
-		log.Info("code graph: couldn't read the default branch", "error", e.redact(err.Error()))
-		return t, errDefaultBranch
+		return t, err
 	}
 	t.Branch, t.Commit = gp.DefaultBranch, commit
 	if !token {
 		return t, nil
 	}
-	if len(p.DeployTokenSealed) == 0 {
-		return t, errNoCloneToken
-	}
-	tok, err := e.Box.Open(p.DeployTokenSealed)
-	if err != nil {
-		log.Warn("code graph: the stored deploy token can't be decrypted", "error", e.redact(err.Error()))
-		return t, errNoCloneToken
-	}
-	t.GitToken = tok
-	return t, nil
+	t.GitToken, err = e.gitLabCloneToken(log, graphLog, p)
+	return t, err
 }
 
 func (e *Engine) gitHubGraphTarget(ctx context.Context, app *github.App, p store.Project, token bool) (scanTarget, error) {
@@ -239,37 +221,16 @@ func (e *Engine) gitHubGraphTarget(ctx context.Context, app *github.App, p store
 		return t, errNotSetUp
 	}
 	owner, name, _ := strings.Cut(p.Path, "/")
-	c := app.Client(p.InstallationID)
-	repo, err := c.Repo(ctx, owner, name)
+	defaultBranch, branch, err := e.gitHubHead(ctx, log, graphLog, app.Client(p.InstallationID), owner, name)
 	if err != nil {
-		log.Info("code graph: couldn't read the repository", "error", e.redact(err.Error()))
-		return t, errDefaultBranch
+		return t, err
 	}
-	if repo.DefaultBranch == "" {
-		return t, errNoDefaultBranch
-	}
-	branch, err := c.Branch(ctx, owner, name, repo.DefaultBranch)
-	if errors.Is(err, github.ErrNotFound) {
-		return t, errNoDefaultBranch
-	}
-	if err == nil && branch.Commit == "" {
-		err = errors.New("GitHub returned no commit")
-	}
-	if err != nil {
-		log.Info("code graph: couldn't read the default branch", "error", e.redact(err.Error()))
-		return t, errDefaultBranch
-	}
-	t.Branch, t.Commit = repo.DefaultBranch, branch.Commit
+	t.Branch, t.Commit = defaultBranch, branch.Commit
 	if !token {
 		return t, nil
 	}
-	tok, _, err := app.CloneToken(ctx, p.InstallationID, p.ProjectID)
-	if err != nil {
-		log.Warn("code graph: couldn't mint the clone token", "error", e.redact(err.Error()))
-		return t, errNoCloneToken
-	}
-	t.GitToken = []byte(tok)
-	return t, nil
+	t.GitToken, err = e.gitHubCloneToken(ctx, log, graphLog, app, p)
+	return t, err
 }
 
 // launchGraphs claims queued builds and starts them while fewer than
