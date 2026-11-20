@@ -81,13 +81,14 @@ func (e *Engine) repoChain(ctx context.Context, repo settings.Effective, in *cha
 	}
 	switch {
 	case found && len(c.Entries) > 0:
-		in.Scope, in.Refs = store.ScopeRepo, c.Entries
+		in.Scope, in.Refs, in.SavedByAdmin = store.ScopeRepo, c.Entries, c.SavedByAdmin
 		return nil
 	case !found && repo.ModelID != "":
 		// A model set with no chain row: written by the previous release
 		// after a rollback. It is the 1-entry chain the upgrade would have
-		// made, so the repository keeps the model it asked for.
-		in.Scope, in.Refs = store.ScopeRepo, []store.EntryRef{{Source: store.SourceGlobal, ID: repo.ModelID}}
+		// made, so the repository keeps the model it asked for; only an admin
+		// sets it there.
+		in.Scope, in.Refs, in.SavedByAdmin = store.ScopeRepo, []store.EntryRef{{Source: store.SourceGlobal, ID: repo.ModelID}}, true
 		return nil
 	}
 	if !owned {

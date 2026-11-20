@@ -377,3 +377,26 @@ func TestAPIReviewSkipsMarkedGlobal(t *testing.T) {
 		t.Errorf("run entry = %q at %d", r.ModelEntryID, r.ChainPosition)
 	}
 }
+
+// A repository chain an admin saved runs a global entry no team may use, even
+// once a team owns the repository (owner ruling 2026-11-20): the seeded chain
+// of the upgrade is an admin's. The same chain saved by the team's maintainer
+// skips it.
+func TestDispatchAdminSavedRepoChainKeepsGlobal(t *testing.T) {
+	env := newTestEnv(t)
+	team := teamOwning(t, env, "Payments")
+	global := globalRef(t, env, "gpt-global", "key-global")
+	own := addTeamModel(t, env, team, "team-a", "gpt-a", "key-team-a")
+	saveChain(t, env, store.Chain{Scope: store.ScopeRepo, Instance: testInstance, Project: testProjectPath,
+		SavedByAdmin: true, Entries: []store.EntryRef{global, own}})
+	id := dispatchMR(t, env, 3, sha('a'))
+	wantJobKey(t, env, id, "key-global")
+
+	saveChain(t, env, store.Chain{Scope: store.ScopeRepo, Instance: testInstance, Project: testProjectPath,
+		Entries: []store.EntryRef{global, own}})
+	id = dispatchMR(t, env, 4, sha('b'))
+	wantJobKey(t, env, id, "key-team-a")
+	if r := env.Run(id); r.FallbackClass != "not_allowed" {
+		t.Errorf("fallback class = %q, want not_allowed", r.FallbackClass)
+	}
+}

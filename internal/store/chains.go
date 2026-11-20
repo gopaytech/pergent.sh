@@ -26,13 +26,16 @@ const (
 type EntryRef struct{ Source, ID string }
 
 // Chain is an ordered list of entries, Entries[0] being position 1. TeamID is
-// set for ScopeTeam, Instance and Project for ScopeRepo.
+// set for ScopeTeam, Instance and Project for ScopeRepo. SavedByAdmin is
+// whether an admin saved it last: a repository chain an admin saved may name
+// global entries teams may not use.
 type Chain struct {
 	ID                int64
 	Scope             string
 	TeamID            int64
 	Instance, Project string
 	Entries           []EntryRef
+	SavedByAdmin      bool
 	UpdatedAt         time.Time
 }
 
@@ -43,14 +46,14 @@ type rowsQuerier interface {
 // loadChains reads the chains matching where (on model_chains c, with args),
 // by ID, with their entries in position order.
 func loadChains(ctx context.Context, q rowsQuerier, where string, args ...any) ([]Chain, error) {
-	rows, err := q.Query(ctx, `SELECT c.id, c.scope, COALESCE(c.team_id, 0), c.instance, c.project, c.updated_at
+	rows, err := q.Query(ctx, `SELECT c.id, c.scope, COALESCE(c.team_id, 0), c.instance, c.project, c.saved_by_admin, c.updated_at
 		FROM model_chains c `+where+` ORDER BY c.id`, args...)
 	if err != nil {
 		return nil, err
 	}
 	chains, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Chain, error) {
 		var c Chain
-		err := row.Scan(&c.ID, &c.Scope, &c.TeamID, &c.Instance, &c.Project, &c.UpdatedAt)
+		err := row.Scan(&c.ID, &c.Scope, &c.TeamID, &c.Instance, &c.Project, &c.SavedByAdmin, &c.UpdatedAt)
 		return c, err
 	})
 	if err != nil || len(chains) == 0 {
@@ -191,7 +194,8 @@ func (s *Store) ChainsNaming(ctx context.Context, ref EntryRef) ([]Chain, error)
 }
 
 // SaveChain stores c's entries in place of the ones its scope target had,
-// creating the chain when there is none; at is its updated_at. More than
+// creating the chain when there is none; at is its updated_at, and
+// c.SavedByAdmin replaces what the chain had. More than
 // MaxChain entries is ErrChainTooLong; a team entry that is not there is
 // ErrModelNotFound (it is locked, so it can't be removed meanwhile). Nothing
 // else is checked here: who may name which entry is the caller's.
@@ -231,10 +235,11 @@ func (s *Store) SaveChain(ctx context.Context, c Chain, at time.Time) error {
 		}
 	}
 	var id int64
-	if err := tx.QueryRow(ctx, `INSERT INTO model_chains (scope, team_id, instance, project, updated_at)
-		VALUES ($1, NULLIF($2::bigint, 0), $3, $4, $5)
-		ON CONFLICT (scope, COALESCE(team_id, 0), instance, lower(project)) DO UPDATE SET updated_at = EXCLUDED.updated_at
-		RETURNING id`, c.Scope, c.TeamID, c.Instance, c.Project, at).Scan(&id); err != nil {
+	if err := tx.QueryRow(ctx, `INSERT INTO model_chains (scope, team_id, instance, project, saved_by_admin, updated_at)
+		VALUES ($1, NULLIF($2::bigint, 0), $3, $4, $5, $6)
+		ON CONFLICT (scope, COALESCE(team_id, 0), instance, lower(project))
+		DO UPDATE SET saved_by_admin = EXCLUDED.saved_by_admin, updated_at = EXCLUDED.updated_at
+		RETURNING id`, c.Scope, c.TeamID, c.Instance, c.Project, c.SavedByAdmin, at).Scan(&id); err != nil {
 		return err
 	}
 	if err := writeChainEntries(ctx, tx, id, c.Entries); err != nil {
@@ -275,7 +280,8 @@ func (s *Store) ResetRepoChain(ctx context.Context, instance, project string) er
 
 // setRepoModelChain writes the repository chain the old model setting means:
 // a model is a custom chain of that 1 entry, none is no chain and inherit.
-// model_id is set to match.
+// model_id is set to match. Only an admin changes that setting, so the chain
+// is admin-saved.
 func setRepoModelChain(ctx context.Context, tx pgx.Tx, instance, project string, modelID *string) error {
 	if _, err := tx.Exec(ctx, `DELETE FROM model_chains WHERE scope = 'repo' AND instance = $1 AND lower(project) = lower($2)`,
 		instance, project); err != nil {
@@ -285,8 +291,8 @@ func setRepoModelChain(ctx context.Context, tx pgx.Tx, instance, project string,
 	if modelID != nil {
 		mode = "custom"
 		var id int64
-		if err := tx.QueryRow(ctx, `INSERT INTO model_chains (scope, instance, project, updated_at)
-			VALUES ('repo', $1, $2, now()) RETURNING id`, instance, project).Scan(&id); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO model_chains (scope, instance, project, saved_by_admin, updated_at)
+			VALUES ('repo', $1, $2, true, now()) RETURNING id`, instance, project).Scan(&id); err != nil {
 			return err
 		}
 		if err := writeChainEntries(ctx, tx, id, []EntryRef{{SourceGlobal, *modelID}}); err != nil {

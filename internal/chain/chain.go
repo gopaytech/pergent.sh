@@ -28,9 +28,11 @@ const (
 // with its key ("" when it has none or it can't be opened); a ref missing
 // from it is a removed entry. OwnerTeam is the team that owns the repository,
 // 0 for none. Tried is the entries earlier attempts of this review ran.
+// SavedByAdmin is whether an admin saved the chain (store.Chain's).
 type Input struct {
 	Scope               string // store.ScopeGlobal, ScopeTeam or ScopeRepo
 	Refs                []store.EntryRef
+	SavedByAdmin        bool
 	Entries             map[store.EntryRef]instances.Model
 	OwnerTeam           int64
 	Marks               map[store.EntryRef]store.Mark
@@ -127,11 +129,13 @@ func skipReason(in Input, ref store.EntryRef, m instances.Model, known bool) str
 	return ""
 }
 
-// teamSaved reports whether a team's maintainers may have saved the chain:
-// a team chain, or the chain of a repository a team owns. The global chain,
-// and a repository chain with no owner, only an admin saves.
+// teamSaved reports whether the chain is held to what teams may use: a team
+// chain, or the chain of a repository a team owns that a team's maintainer
+// saved. The global chain, a repository chain with no owner (only an admin
+// saves either) and a repository chain an admin saved may name any global
+// entry (owner ruling 2026-11-20).
 func teamSaved(in Input) bool {
-	return in.Scope == store.ScopeTeam || (in.Scope == store.ScopeRepo && in.OwnerTeam != 0)
+	return in.Scope == store.ScopeTeam || (in.Scope == store.ScopeRepo && in.OwnerTeam != 0 && !in.SavedByAdmin)
 }
 
 // live reports whether a mark still applies at now: an auth mark until it is
