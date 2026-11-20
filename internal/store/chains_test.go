@@ -286,3 +286,21 @@ func TestChainsNaming(t *testing.T) {
 		t.Errorf("chains naming a team entry with the global ID = %v; want none", got)
 	}
 }
+
+// SetMark stores a mark on its own, as upsertMark does inside a transaction:
+// an API review marks the entry it ran on with no attempt to queue.
+func TestSetMark(t *testing.T) {
+	s := newStore(t)
+	ref := EntryRef{SourceGlobal, "m1"}
+	until := t0.Add(time.Hour)
+	if err := s.SetMark(ctx, Mark{Ref: ref, Class: ClassQuota, Until: &until, SetAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetMark(ctx, Mark{Ref: ref, Class: ClassAuth, SetAt: t0.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	marks, err := s.Marks(ctx)
+	if err != nil || len(marks) != 1 || marks[0].Class != ClassAuth || marks[0].Until != nil {
+		t.Fatalf("Marks = %+v, %v; want one auth mark", marks, err)
+	}
+}

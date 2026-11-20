@@ -77,11 +77,17 @@ func (e *Engine) PublishOnce(ctx context.Context) error {
 	for _, run := range runs {
 		log := e.log().With("run", run.ID, "instance", run.MR.Instance, "project", run.ProjectPath,
 			"mr", run.MR.IID, "head", run.HeadSHA)
-		var err error
 		if run.Kind == store.KindAPI {
 			log = e.log().With("run", run.ID, "kind", store.KindAPI, "head", run.HeadSHA)
+		}
+		// Before anything is posted: a dropped attempt posts nothing but the
+		// shared status.
+		handled, err := e.fallBack(ctx, run, log)
+		switch {
+		case err != nil || handled:
+		case run.Kind == store.KindAPI:
 			err = e.publishAPI(ctx, run, log)
-		} else {
+		default:
 			err = e.publish(ctx, run, log)
 		}
 		if err == nil {
@@ -156,6 +162,10 @@ func (e *Engine) publish(ctx context.Context, run store.Run, log *slog.Logger) e
 		log.Warn("couldn't read the comment's footer text", "error", err.Error())
 	} else {
 		o.FooterNote = note
+	}
+	if run.ChainPosition > 1 && run.ModelEntryName != "" {
+		// A backup entry reviewed it: the comment says which, and why.
+		o.FallbackNote = policy.FallbackLine(run.ModelEntryName, run.FallbackClass)
 	}
 	if policy.Decide(o, failure).Approve {
 		// Only a review that would be approved depends on whether the
@@ -373,7 +383,7 @@ func (e *Engine) hideModel(run store.Run) func(string) string {
 		return nil
 	}
 	var urls []string
-	for _, m := range e.registry().Models() {
+	for _, m := range e.registry().AllModels() {
 		if m.LLM.Provider == provider && m.LLM.Model == model && m.LLM.BaseURL != "" {
 			urls = append(urls, m.LLM.BaseURL)
 		}

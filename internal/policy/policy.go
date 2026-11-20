@@ -153,7 +153,10 @@ type Outcome struct {
 	Mention    string
 	// FooterNote is the footer's text an admin set; "" is the built-in text.
 	FooterNote string
-	FileURL    func(path string, line, endLine int) string
+	// FallbackNote is FallbackLine of a review that ran on a backup entry,
+	// "" otherwise. It follows the footer's text.
+	FallbackNote string
+	FileURL      func(path string, line, endLine int) string
 
 	// InlineOn says findings are posted as inline threads: Inline holds the
 	// fingerprints shown on the diff, FindingNotes why each other finding is in
@@ -407,19 +410,39 @@ func renderOptions(o Outcome, r *result.Result, changed []string) render.Options
 			opts.Footer = "Run again: `@" + o.Mention + " review` · or reply `@" + o.Mention + " dismiss <reason>` in a finding's thread"
 		}
 	}
-	opts.Footer = withFooterNote(o.FooterNote, opts.Footer)
+	opts.Footer = withFooterNote(o.FooterNote, o.FallbackNote, opts.Footer)
 	return opts
+}
+
+// FallbackLine is the footer line of a review that ran on the entry name, a
+// backup: firstSkip is why the chain's first entry was passed over (a mark's
+// class, or another reason).
+func FallbackLine(name, firstSkip string) string {
+	reason := "the main model could not be used"
+	switch firstSkip {
+	case "quota":
+		reason = "the main model was out of quota"
+	case "billing":
+		reason = "the main model was out of credit"
+	case "auth":
+		reason = "the main model's key was rejected"
+	}
+	return "Reviewed with " + name + " (backup model, " + reason + ")"
 }
 
 // DefaultFooterNote is the footer's text when an admin set none.
 const DefaultFooterNote = "Reviewed by [pergent](https://github.com/gopaytech/pergent.sh)"
 
-// withFooterNote puts the note, or the built-in text, in front of the footer.
-func withFooterNote(note, footer string) string {
+// withFooterNote puts the note, or the built-in text, and then the fallback
+// line when there is one, in front of the footer. Neither can mention anyone.
+func withFooterNote(note, fallback, footer string) string {
 	if note == "" {
 		note = DefaultFooterNote
 	}
 	note = noMentions(note)
+	if fallback != "" {
+		note += " · " + noMentions(fallback)
+	}
 	if footer == "" {
 		return note
 	}

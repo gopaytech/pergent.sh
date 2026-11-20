@@ -92,11 +92,16 @@ func wantJobKey(t *testing.T, env *testEnv, id, key string) {
 // had run on entry ref at position pos of a chain of length n.
 func reportedOn(t *testing.T, env *testEnv, iid int64, head string, ref store.EntryRef, name string, pos, n int) store.Run {
 	t.Helper()
+	return reportedWith(t, env, iid, head, ref, name, pos, n, []byte(`{"schema_version":1,"status":"failed","skills":[]}`))
+}
+
+// reportedWith is reportedOn with body as the stored result.
+func reportedWith(t *testing.T, env *testEnv, iid int64, head string, ref store.EntryRef, name string, pos, n int, body []byte) store.Run {
+	t.Helper()
 	id := env.Dispatched(iid, head)
 	if err := env.Store.SetRunEntry(env.ctx, id, store.RunEntry{Source: ref.Source, ID: ref.ID, Name: name, Position: pos, Length: n}); err != nil {
 		t.Fatal(err)
 	}
-	body := []byte(`{"schema_version":1,"status":"failed","skills":[]}`)
 	if out, err := env.Store.StoreResult(env.ctx, id, "seed-token", body, env.Now()); err != nil || out != store.ResultStored {
 		t.Fatalf("StoreResult = %v, %v", out, err)
 	}

@@ -2,6 +2,7 @@ package result
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -1154,5 +1155,32 @@ func TestMergeWithoutDeletedFieldsIsUnchanged(t *testing.T) {
 	}
 	if strings.Contains(string(out), `"deleted"`) || strings.Contains(string(out), `"renamed"`) {
 		t.Errorf("the merge wrote the new keys: %s", out)
+	}
+}
+
+// provider_error at the top of a completed result is what pergent.sh decides
+// a fallback from. An older pergent has none; a class this release doesn't
+// know is kept as text, so it can't be read as one it knows.
+func TestParseProviderError(t *testing.T) {
+	const body = `{"schema_version":1,"status":"completed","skills":[{"name":"a","verdict":"failed",
+  "files":{"reviewed":[],"skipped":[],"not_reviewed":[]}}],%s"comment":{"markdown":"x"}}`
+	for name, tc := range map[string]struct {
+		field string
+		want  *ProviderError
+	}{
+		"absent":  {"", nil},
+		"quota":   {`"provider_error":{"class":"quota","status":429,"provider":"openai","model":"gpt"},`, &ProviderError{Class: "quota", Status: 429, Provider: "openai", Model: "gpt"}},
+		"auth":    {`"provider_error":{"class":"auth"},`, &ProviderError{Class: "auth"}},
+		"unknown": {`"provider_error":{"class":"overloaded","status":529},`, &ProviderError{Class: "overloaded", Status: 529}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, err := Parse([]byte(fmt.Sprintf(body, tc.field)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (r.ProviderError == nil) != (tc.want == nil) || (tc.want != nil && *r.ProviderError != *tc.want) {
+				t.Errorf("ProviderError = %+v, want %+v", r.ProviderError, tc.want)
+			}
+		})
 	}
 }

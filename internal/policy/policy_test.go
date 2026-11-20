@@ -2013,3 +2013,39 @@ func TestDecideCIDescriptionJoinedAndCapped(t *testing.T) {
 		t.Errorf("description = %q (%d)", d.Description, len([]rune(d.Description)))
 	}
 }
+
+// The footer line of a review that ran on a backup entry, for each reason the
+// main entry was passed over.
+func TestFallbackLine(t *testing.T) {
+	for skip, want := range map[string]string{
+		"quota":          "Reviewed with qwen3.5 (backup model, the main model was out of quota)",
+		"billing":        "Reviewed with qwen3.5 (backup model, the main model was out of credit)",
+		"auth":           "Reviewed with qwen3.5 (backup model, the main model's key was rejected)",
+		"tried":          "Reviewed with qwen3.5 (backup model, the main model could not be used)",
+		"removed":        "Reviewed with qwen3.5 (backup model, the main model could not be used)",
+		"instance_quota": "Reviewed with qwen3.5 (backup model, the main model could not be used)",
+		"":               "Reviewed with qwen3.5 (backup model, the main model could not be used)",
+	} {
+		if got := FallbackLine("qwen3.5", skip); got != want {
+			t.Errorf("FallbackLine(%q) = %q, want %q", skip, got, want)
+		}
+	}
+	// It follows the footer's text, before the commands.
+	got := renderOptions(Outcome{FallbackNote: FallbackLine("qwen3.5", "quota"), Mention: "bot"}, &result.Result{}, nil).Footer
+	want := DefaultFooterNote + " · Reviewed with qwen3.5 (backup model, the main model was out of quota) · Run again: `@bot review`"
+	if got != want {
+		t.Errorf("Footer = %q\nwant %q", got, want)
+	}
+	if got := renderOptions(Outcome{}, &result.Result{}, nil).Footer; got != DefaultFooterNote {
+		t.Errorf("Footer with no fallback = %q", got)
+	}
+}
+
+// An entry name reaches every comment the entry reviews: it can't notify
+// anyone.
+func TestFallbackLineInert(t *testing.T) {
+	got := renderOptions(Outcome{FallbackNote: FallbackLine("x@y @team", "quota")}, &result.Result{}, nil).Footer
+	if !strings.Contains(got, "x@y @‍team") || strings.Contains(got, " @team") {
+		t.Errorf("Footer = %q, want the mention broken", got)
+	}
+}

@@ -7235,6 +7235,12 @@ components:
           - $ref: '#/components/schemas/result.Error'
           - type: 'null'
         comment: {$ref: '#/components/schemas/result.Comment'}
+        provider_error:
+          oneOf:
+          - $ref: '#/components/schemas/result.ProviderError'
+          - type: 'null'
+          description: The most severe classified provider error of the skills' failures. `quota`,
+            `billing` and `auth` move the review to the next entry of its model chain.
         merged:
           type: boolean
           description: Set only by pergent.sh after it merged an incremental result. A result that carries
@@ -7281,6 +7287,21 @@ components:
           description: The model's own score, 1 to 5 (0 when it gave none).
         confidence_reason: {type: string}
       additionalProperties: true
+    result.ProviderError:
+      description: What pergent read from the provider's error. The provider's response body is never in it.
+      type: object
+      properties:
+        class:
+          type: string
+          description: '"quota", "billing", "auth" or "rate_limit"; a class this release does not know is
+            kept as text.'
+        status:
+          type: integer
+          description: The HTTP status; absent when opencode gave none.
+        provider: {type: string}
+        model: {type: string}
+      additionalProperties: true
+      required: [class]
     result.Renamed:
       description: A reviewed file the change renamed. `path` is its new path, which `reviewed` also lists.
       type: object
