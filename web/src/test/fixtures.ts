@@ -338,6 +338,19 @@ export const repoDetail = (repo: RepositoryView, role: Role = "admin"): Reposito
   model: "anthropic / claude-sonnet",
   // Only an admin is given the usage against the quotas.
   quota: null,
+  graph: {
+    enabled: false,
+    available: true,
+    branch: "",
+    commit: "",
+    builtAt: null,
+    sizeBytes: 0,
+    nodes: 0,
+    edges: 0,
+    building: "",
+    error: "",
+    failedAt: null,
+  },
   // Only an admin of the repository is given the choices.
   modelChoices:
     role === "admin"

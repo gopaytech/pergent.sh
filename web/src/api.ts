@@ -365,6 +365,25 @@ export type RepositoryDetailView = {
   // quota is this month's tokens against the quotas; null for anyone but an
   // admin, and when the usage could not be read.
   quota: QuotaView | null;
+  // graph is the Code graph switch and the stored graph's status.
+  graph: GraphView;
+};
+
+// GraphView is a repository's Code graph: the switch, whether the install
+// keeps graphs (available), and the stored graph (commit "" is none yet), the
+// build under way and the last build's error. Never the graph itself.
+export type GraphView = {
+  enabled: boolean;
+  available: boolean;
+  branch: string;
+  commit: string;
+  builtAt: string | null;
+  sizeBytes: number;
+  nodes: number;
+  edges: number;
+  building: "" | "queued" | "running";
+  error: string;
+  failedAt: string | null;
 };
 
 // QuotaUseView is the tokens used this UTC month against a quota (limit null:
@@ -1279,6 +1298,7 @@ export const paths = {
   // apiAdminRepo pauses (PUT {"enabled": false}) and resumes ({"enabled": true}) a repository.
   apiAdminRepo: (instance: string, project: string) => `/api/admin/repositories/${seg(instance)}/${proj(project)}`,
   apiRepoInputs: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/inputs`,
+  apiRepoGraph: (instance: string, project: string) => `/api/repositories/${seg(instance)}/${proj(project)}/graph`,
   apiRepoPastDismissals: (instance: string, project: string) =>
     `/api/repositories/${seg(instance)}/${proj(project)}/past-dismissals`,
   // days is 30 or 90.
