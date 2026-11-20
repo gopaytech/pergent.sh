@@ -379,3 +379,27 @@ func TestChains(t *testing.T) {
 		t.Errorf("Chains = %+v, %v", chains, err)
 	}
 }
+
+// Removing a repository drops its own chain with its settings and team
+// links, so one added again starts by inheriting, as its settings do.
+func TestRemoveRepoDropsItsChain(t *testing.T) {
+	s := newStore(t)
+	g := newModel(t, s, "openai", "gpt-5", "", nil)
+	for _, p := range []string{"acme/api", "acme/web"} {
+		if err := s.UpsertDashboardRepo(ctx, DashboardRepo{Instance: "main", Project: p}); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.SaveChain(ctx, Chain{Scope: ScopeRepo, Instance: "main", Project: p, Entries: []EntryRef{{SourceGlobal, g.ID}}}, t0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if found, err := s.RemoveDashboardRepo(ctx, "main", "ACME/api"); err != nil || !found {
+		t.Fatalf("RemoveDashboardRepo = %v, %v", found, err)
+	}
+	if _, found := mustChain(t, s, ScopeRepo, 0, "main", "acme/api"); found {
+		t.Error("the removed repository's chain is still there")
+	}
+	if _, found := mustChain(t, s, ScopeRepo, 0, "main", "acme/web"); !found {
+		t.Error("another repository's chain went too")
+	}
+}
