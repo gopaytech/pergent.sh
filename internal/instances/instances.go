@@ -39,6 +39,9 @@ type Source string
 const (
 	SourceConfig    Source = "config"
 	SourceDashboard Source = "dashboard"
+	// SourceTeam is a model entry of a team (store.TeamModel). Instances
+	// never have it.
+	SourceTeam Source = "team"
 )
 
 // Instance is one GitLab or GitHub instance, whichever source it comes from.
@@ -126,10 +129,14 @@ type Registry struct {
 	llmMu   sync.RWMutex
 	llm     []llmEntry
 	llmSeen []string
+	// team is every team's entries (store.TeamModel), their keys opened.
+	team []Model
 
 	// loadMu serialises LoadLLM from the read to the swap, so a slow read
 	// that began before a change can't replace the list a later read set.
 	loadMu sync.Mutex
+	// teamLoadMu does the same for LoadTeamModels.
+	teamLoadMu sync.Mutex
 
 	log *slog.Logger // nil: slog.Default()
 }
@@ -661,13 +668,122 @@ func (r *Registry) configModel() (Model, bool) {
 	}
 	key := envValue(r.cfg.LLM.APIKeyEnv)
 	r.noteKey(key)
-	return Model{ID: ConfigModelID, LLM: r.cfg.LLM, Key: key, Default: true, Source: SourceConfig}, true
+	return Model{ID: ConfigModelID, Name: entryName(r.cfg.LLM), LLM: r.cfg.LLM, Key: key, Default: true, Source: SourceConfig}, true
 }
 
-// LoadLLM reads the list of models from the store again: at startup, and
-// after the dashboard changed it. A key that can't be opened, because
+// ConfigFallbackID is the fixed ID of the entry llm.fallbacks[n-1] supplies:
+// config-1 to config-4.
+func ConfigFallbackID(n int) string { return fmt.Sprintf("%s-%d", ConfigModelID, n) }
+
+// fallbackModels are the entries of llm.fallbacks, read-only like the
+// config's, their keys from the env vars they name. They are never the
+// default, and no team may use them.
+func (r *Registry) fallbackModels() []Model {
+	if !r.cfg.HasLLM() {
+		return nil
+	}
+	out := make([]Model, 0, len(r.cfg.LLMFallbacks))
+	for i, llm := range r.cfg.LLMFallbacks {
+		key := envValue(llm.APIKeyEnv)
+		r.noteKey(key)
+		out = append(out, Model{ID: ConfigFallbackID(i + 1), Name: entryName(llm), LLM: llm, Key: key, Source: SourceConfig})
+	}
+	return out
+}
+
+// entryName is the name of a config entry, which has none of its own.
+func entryName(llm config.LLM) string { return llm.Provider + "/" + llm.Model }
+
+// GlobalModels returns the global entries a chain may name: those of Models,
+// with llm.fallbacks right after the config's entry.
+func (r *Registry) GlobalModels() []Model {
+	out := r.Models()
+	if fb := r.fallbackModels(); len(fb) > 0 {
+		out = slices.Insert(out, 1, fb...) // the config's entry is first whenever fallbacks exist
+	}
+	return out
+}
+
+// TeamModels returns the entries of the team, oldest first. Entries without
+// a usable key are in the list, with an empty Key.
+func (r *Registry) TeamModels(teamID int64) []Model {
+	r.llmMu.RLock()
+	defer r.llmMu.RUnlock()
+	var out []Model
+	for _, m := range r.team {
+		if m.TeamID == teamID {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// AllModels returns every entry: the global ones (GlobalModels), then every
+// team's, by team.
+func (r *Registry) AllModels() []Model {
+	out := r.GlobalModels()
+	r.llmMu.RLock()
+	defer r.llmMu.RUnlock()
+	return append(out, r.team...)
+}
+
+// HasAnyModel reports whether there is any entry at all, global or a team's,
+// with a key or not: with none, no review can run.
+func (r *Registry) HasAnyModel() bool {
+	if len(r.GlobalModels()) > 0 {
+		return true
+	}
+	r.llmMu.RLock()
+	defer r.llmMu.RUnlock()
+	return len(r.team) > 0
+}
+
+// LoadTeamModels reads every team's entries from the store again: LoadLLM
+// does it, and the dashboard after it changed a team's entries. A key that
+// can't be opened counts as not set; the log names the entry, never the key.
+func (r *Registry) LoadTeamModels(ctx context.Context) error {
+	if r.st == nil {
+		return nil
+	}
+	r.teamLoadMu.Lock()
+	defer r.teamLoadMu.Unlock()
+	rows, err := r.st.AllTeamModels(ctx)
+	if err != nil {
+		return fmt.Errorf("read the team models: %w", err)
+	}
+	next := make([]Model, 0, len(rows))
+	for _, row := range rows {
+		m := Model{ID: row.ID, Name: row.Name, LLM: config.LLM{Provider: row.Provider, Model: row.Model, BaseURL: row.BaseURL},
+			Source: SourceTeam, TeamID: row.TeamID}
+		if len(row.APIKeySealed) > 0 && r.box != nil {
+			if plain, err := r.box.Open(row.APIKeySealed); err == nil {
+				m.Key = string(plain)
+			} else {
+				r.logger().Warn("a team model's api_key couldn't be opened with PERGENT_SH_SECRET_KEY; it counts as not set",
+					"field", "api_key", "model_id", row.ID)
+			}
+		}
+		r.noteKey(m.Key)
+		next = append(next, m)
+	}
+	r.llmMu.Lock()
+	r.team = next
+	r.llmMu.Unlock()
+	return nil
+}
+
+// LoadLLM reads the list of models, and every team's entries
+// (LoadTeamModels), from the store again: at startup, and after the
+// dashboard changed it. A key that can't be opened, because
 // PERGENT_SH_SECRET_KEY changed, counts as not set.
 func (r *Registry) LoadLLM(ctx context.Context) error {
+	if err := r.loadGlobal(ctx); err != nil {
+		return err
+	}
+	return r.LoadTeamModels(ctx)
+}
+
+func (r *Registry) loadGlobal(ctx context.Context) error {
 	if r.st == nil {
 		return nil
 	}
@@ -680,8 +796,8 @@ func (r *Registry) LoadLLM(ctx context.Context) error {
 	next := make([]llmEntry, 0, len(rows))
 	for _, row := range rows {
 		e := llmEntry{updatedAt: row.UpdatedAt, Model: Model{
-			ID: row.ID, LLM: config.LLM{Provider: row.Provider, Model: row.Model, BaseURL: row.BaseURL},
-			Default: row.Default, Source: SourceDashboard,
+			ID: row.ID, Name: row.Name, LLM: config.LLM{Provider: row.Provider, Model: row.Model, BaseURL: row.BaseURL},
+			Default: row.Default, Source: SourceDashboard, TeamsMayUse: row.TeamsMayUse,
 		}}
 		if len(row.APIKeySealed) > 0 && r.box != nil {
 			if plain, err := r.box.Open(row.APIKeySealed); err == nil {
@@ -705,6 +821,9 @@ func (r *Registry) LoadLLM(ctx context.Context) error {
 func (r *Registry) LLMKeys() []string {
 	if r.cfg.HasLLM() {
 		r.noteKey(envValue(r.cfg.LLM.APIKeyEnv))
+		for _, fb := range r.cfg.LLMFallbacks {
+			r.noteKey(envValue(fb.APIKeyEnv))
+		}
 	}
 	r.llmMu.RLock()
 	defer r.llmMu.RUnlock()
