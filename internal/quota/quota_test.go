@@ -94,14 +94,14 @@ func TestCheckSkipsQueriesWithoutLimits(t *testing.T) {
 	st.Close() // any query on it fails now
 	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
 
-	if used, err := Check(ctx, st, now, "main", 1, settings.Effective{}); err != nil || used {
-		t.Errorf("Check with no limits = %v, %v; want false, nil", used, err)
+	if r, i, err := Check(ctx, st, now, "main", 1, settings.Effective{}); err != nil || r || i {
+		t.Errorf("Check with no limits = %v, %v, %v; want false, false, nil", r, i, err)
 	}
 	// A repository limit with an unknown project (0) is not asked either.
-	if used, err := Check(ctx, st, now, "main", 0, settings.Effective{MonthlyTokenQuota: i64(10)}); err != nil || used {
-		t.Errorf("Check with a repository limit and project 0 = %v, %v; want false, nil", used, err)
+	if r, i, err := Check(ctx, st, now, "main", 0, settings.Effective{MonthlyTokenQuota: i64(10)}); err != nil || r || i {
+		t.Errorf("Check with a repository limit and project 0 = %v, %v, %v; want false, false, nil", r, i, err)
 	}
-	if _, err := Check(ctx, st, now, "main", 1, settings.Effective{MonthlyTokenQuota: i64(10)}); err == nil {
+	if _, _, err := Check(ctx, st, now, "main", 1, settings.Effective{MonthlyTokenQuota: i64(10)}); err == nil {
 		t.Error("Check with a limit on a closed store succeeded, want an error")
 	}
 	if _, err := Read(ctx, st, now, "main", 1, settings.Effective{}); err == nil {
@@ -112,6 +112,13 @@ func TestCheckSkipsQueriesWithoutLimits(t *testing.T) {
 // seedUsage stores a reported run of the given project and merge request, as
 // the Job's result came in at at, using in+out tokens.
 func seedUsage(t *testing.T, st *store.Store, instance string, projectID, iid int64, at time.Time, in, out int64) {
+	t.Helper()
+	seedUsageOn(t, st, instance, projectID, iid, at, in, out, nil)
+}
+
+// seedUsageOn is seedUsage of a run that ran on entry (nil: none recorded,
+// a global key).
+func seedUsageOn(t *testing.T, st *store.Store, instance string, projectID, iid int64, at time.Time, in, out int64, entry *store.RunEntry) {
 	t.Helper()
 	mr := store.MRKey{Instance: instance, ProjectID: projectID, IID: iid}
 	id, _, err := st.EnqueueRun(ctx, mr, fmt.Sprintf("acme/p%d", projectID), fmt.Sprintf("head%d", iid), "main")
@@ -125,6 +132,11 @@ func seedUsage(t *testing.T, st *store.Store, instance string, projectID, iid in
 	sum := sha256.Sum256([]byte(token))
 	if err := st.MarkDispatched(ctx, id, "job-"+id, "base", "start", sum[:], at.Add(time.Hour), at); err != nil {
 		t.Fatalf("MarkDispatched: %v", err)
+	}
+	if entry != nil {
+		if err := st.SetRunEntry(ctx, id, *entry); err != nil {
+			t.Fatalf("SetRunEntry: %v", err)
+		}
 	}
 	body := []byte(`{"schema_version":1,"status":"completed","skills":[]}`)
 	if out, err := st.StoreResult(ctx, id, token, body, at); err != nil || out != store.ResultStored {
@@ -167,8 +179,38 @@ func TestCheckCountsThisMonth(t *testing.T) {
 		{"instance limit above usage", settings.Effective{InstanceMonthlyTokenQuota: i64(1151)}, false},
 		{"repository has room, instance used up", settings.Effective{MonthlyTokenQuota: i64(151), InstanceMonthlyTokenQuota: i64(1150)}, true},
 	} {
-		if used, err := Check(ctx, st, now, "main", 1, tc.repo); err != nil || used != tc.want {
-			t.Errorf("%s: Check = %v, %v; want %v", tc.name, used, err, tc.want)
+		if r, i, err := Check(ctx, st, now, "main", 1, tc.repo); err != nil || (r || i) != tc.want {
+			t.Errorf("%s: Check = %v, %v, %v; want %v", tc.name, r, i, err, tc.want)
 		}
+	}
+}
+
+// The repository quota counts every token; the instance quota only those
+// spent on global keys, so a team's own key never uses it up.
+func TestCheckSplitsRepositoryAndInstance(t *testing.T) {
+	st := newStore(t)
+	at := time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)
+	now := at.Add(13 * 24 * time.Hour)
+	team, err := st.CreateTeam(ctx, "Payments", at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedUsage(t, st, "main", 1, 1, at, 100, 0)
+	seedUsageOn(t, st, "main", 1, 2, at, 900, 0, &store.RunEntry{Source: store.SourceTeam, ID: "t1", Name: "team", TeamID: team.ID, Position: 1, Length: 1})
+
+	r, i, err := Check(ctx, st, now, "main", 1, settings.Effective{MonthlyTokenQuota: i64(1000)})
+	if err != nil || !r || i {
+		t.Errorf("repository at 1000 of 1000 = %v, %v, %v; want used up, instance not", r, i, err)
+	}
+	r, i, err = Check(ctx, st, now, "main", 1, settings.Effective{InstanceMonthlyTokenQuota: i64(101)})
+	if err != nil || r || i {
+		t.Errorf("instance at 100 of 101 global tokens = %v, %v, %v; want room", r, i, err)
+	}
+	r, i, err = Check(ctx, st, now, "main", 1, settings.Effective{InstanceMonthlyTokenQuota: i64(100)})
+	if err != nil || r || !i {
+		t.Errorf("instance at 100 of 100 global tokens = %v, %v, %v; want the instance used up", r, i, err)
+	}
+	if u, err := Read(ctx, st, now, "main", 1, settings.Effective{}); err != nil || u.Repository != 1000 || u.Instance != 100 {
+		t.Errorf("Read = %+v, %v; want repository 1000, instance 100 (global keys only)", u, err)
 	}
 }
