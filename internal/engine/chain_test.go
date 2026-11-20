@@ -400,3 +400,47 @@ func TestDispatchAdminSavedRepoChainKeepsGlobal(t *testing.T) {
 		t.Errorf("fallback class = %q, want not_allowed", r.FallbackClass)
 	}
 }
+
+// A run somebody asked for under a used-up instance quota (it started
+// because a team entry was left, owner ruling 2026-11-20) runs on the team's
+// entry, not on the global one in front of it. With no team entry it goes
+// ahead on the global one, as a checked run did before chains.
+func TestCheckedRunUnderInstanceQuotaPrefersTeamEntry(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		teamEntry bool
+		wantKey   string
+	}{
+		{"team entry left", true, "key-team-a"},
+		{"global only", false, "key-global"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := quotaPushEnv(t, 0, 0)
+			instQuota := int64(500)
+			env.Engine.Config.GitLab[0].MonthlyTokenQuota = &instQuota
+			seedQuotaUsage(t, env, 500)
+			team := teamOwning(t, env, "Payments")
+			global := globalRef(t, env, "gpt-global", "key-global")
+			if found, err := env.Store.SetLLMModelMeta(env.ctx, global.ID, nil, boolPtr(true), env.Now()); err != nil || !found {
+				t.Fatalf("SetLLMModelMeta = %v, %v", found, err)
+			}
+			if err := env.Engine.Instances.LoadLLM(env.ctx); err != nil {
+				t.Fatal(err)
+			}
+			refs := []store.EntryRef{global}
+			if tc.teamEntry {
+				refs = append(refs, addTeamModel(t, env, team, "team-a", "gpt-a", "key-team-a"))
+			}
+			saveChain(t, env, store.Chain{Scope: store.ScopeTeam, TeamID: team, Entries: refs})
+
+			head := sha('a')
+			servePush(env, head)
+			id, _, err := env.Store.EnqueueRerun(env.ctx, env.MRKey(3), testProjectPath, head, "main", store.TriggerRerun, nil, nil, false, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dispatch(t, env)
+			wantJobKey(t, env, id, tc.wantKey)
+		})
+	}
+}

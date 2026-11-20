@@ -103,7 +103,7 @@ func (d *dispatcher) dispatchAPI(ctx context.Context) error {
 	} else {
 		// The global chain, marked entries skipped. There is no fallback
 		// within the review: its inputs are gone once its Job has them.
-		dec, err := d.resolve(ctx, settings.Effective{}, false)
+		dec, err := d.resolve(ctx, settings.Effective{}, false, false)
 		if err != nil {
 			return d.retry(ctx, fmt.Errorf("read the model chain: %w", err))
 		}

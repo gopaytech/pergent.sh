@@ -297,3 +297,21 @@ func TestResolveAdminSavedRepoChain(t *testing.T) {
 		t.Fatalf("admin-saved, foreign team entry: decision = %+v", d)
 	}
 }
+
+// Runs is what the re-run and start requests ask under a used-up instance
+// quota: only a team's entry is left to run.
+func TestDecisionRunsUnderInstanceQuota(t *testing.T) {
+	in := input(store.ScopeTeam, g("a"), tm("b"))
+	in.InstanceQuotaUsedUp = true
+	if d := Resolve(in); !d.Runs() || d.Ref != tm("b") {
+		t.Fatalf("with a team entry: decision = %+v", d)
+	}
+	in = input(store.ScopeTeam, g("a"))
+	in.InstanceQuotaUsedUp = true
+	if d := Resolve(in); d.Runs() || !d.Hold {
+		t.Fatalf("global only: decision = %+v", d)
+	}
+	if d := Resolve(Input{}); d.Runs() {
+		t.Fatalf("empty chain: decision = %+v", d)
+	}
+}

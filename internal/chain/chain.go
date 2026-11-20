@@ -1,7 +1,7 @@
 // Package chain picks the entry a review attempt runs on, from the chain in
-// effect for its repository. It reads nothing and writes nothing: the caller
-// loads the chain, the entries, the marks and what the review already tried,
-// and acts on the Decision.
+// effect for its repository. Resolve reads nothing and writes nothing: Load
+// reads the chain, the entries, the marks and what the review already tried,
+// and the caller acts on the Decision.
 package chain
 
 import (

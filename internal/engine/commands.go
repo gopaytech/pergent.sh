@@ -621,7 +621,7 @@ func (c *commandRun) rerun(ctx context.Context, failedOnly bool) (verdict, error
 
 	res, err := actions.Rerun(ctx, c.e.Store, actions.RerunRequest{
 		MR: c.cmd.MR, ProjectPath: c.cmd.ProjectPath, Head: c.change.HeadSHA, TargetBranch: c.change.TargetBranch,
-		FailedOnly: failedOnly, Repo: c.repo, Now: c.e.now(),
+		FailedOnly: failedOnly, Repo: c.repo, Now: c.e.now(), Models: c.e.registry(),
 	})
 	if err != nil {
 		return verdict{}, err
@@ -694,7 +694,7 @@ func (c *commandRun) start(ctx context.Context) (verdict, error) {
 	}
 	res, err := actions.Start(ctx, c.e.Store, actions.StartRequest{
 		MR: c.cmd.MR, ProjectPath: c.cmd.ProjectPath, Head: c.change.HeadSHA, TargetBranch: c.change.TargetBranch,
-		Repo: c.repo, Now: c.e.now(),
+		Repo: c.repo, Now: c.e.now(), Models: c.e.registry(),
 	})
 	if err != nil {
 		return verdict{}, err

@@ -16,7 +16,9 @@ import (
 
 	"github.com/gopaytech/pergent/render"
 
+	"github.com/gopaytech/pergent.sh/internal/chain"
 	"github.com/gopaytech/pergent.sh/internal/config"
+	"github.com/gopaytech/pergent.sh/internal/instances"
 	"github.com/gopaytech/pergent.sh/internal/quota"
 	"github.com/gopaytech/pergent.sh/internal/result"
 	"github.com/gopaytech/pergent.sh/internal/settings"
@@ -77,7 +79,9 @@ const (
 // to be run again. ProjectPath is the repository's path as the platform
 // spells it. Repo holds the caps and the quotas, and Now is the clock they
 // count by. PastQuota is set only for an admin's dashboard action, which goes
-// past a used-up quota.
+// past a used-up quota. Models is the list of entries, for asking the chain
+// whether a team's entry is left under a used-up instance quota; nil refuses
+// as a used-up quota did before chains.
 type RerunRequest struct {
 	MR                 store.MRKey
 	ProjectPath        string
@@ -86,6 +90,7 @@ type RerunRequest struct {
 	Repo               settings.Effective
 	Now                time.Time
 	PastQuota          bool
+	Models             *instances.Registry
 }
 
 // RerunResult is what Rerun did. Action and Detail are what the audit log
@@ -127,7 +132,7 @@ func Rerun(ctx context.Context, st *store.Store, req RerunRequest) (RerunResult,
 		}
 	}
 
-	used, err := quotaUsedUp(ctx, st, req.PastQuota, req.Now, req.MR, req.Repo)
+	used, err := quotaUsedUp(ctx, st, req.PastQuota, req.Now, req.MR, req.Repo, req.Models)
 	if err != nil {
 		return RerunResult{}, err
 	}
@@ -163,24 +168,40 @@ func Rerun(ctx context.Context, st *store.Store, req RerunRequest) (RerunResult,
 
 // quotaUsedUp tells whether a request for the change mr is refused because a
 // monthly token quota of its repository or instance is used up. An admin's
-// request (pastQuota) is checked nowhere.
-func quotaUsedUp(ctx context.Context, st *store.Store, pastQuota bool, now time.Time, mr store.MRKey, repo settings.Effective) (bool, error) {
+// request (pastQuota) is checked nowhere. The repository's quota counts every
+// token and refuses. The instance's counts global keys only, so it refuses
+// only when the chain in effect, read as the dispatcher reads it, has no
+// entry left once global entries are stopped (owner ruling 2026-11-20): a
+// team's entry left lets the review start, and the dispatcher stops global
+// entries for it too.
+func quotaUsedUp(ctx context.Context, st *store.Store, pastQuota bool, now time.Time, mr store.MRKey, repo settings.Effective, models *instances.Registry) (bool, error) {
 	if pastQuota {
 		return false, nil
 	}
-	// Either quota refuses, as before chains: whether the review would run on
-	// a team's key is known only when it is dispatched.
 	repoUsed, instanceUsed, err := quota.Check(ctx, st, now, mr.Instance, mr.ProjectID, repo)
 	if err != nil {
 		return false, fmt.Errorf("check the token quota: %w", err)
 	}
-	return repoUsed || instanceUsed, nil
+	if repoUsed || !instanceUsed {
+		return repoUsed, nil
+	}
+	if models == nil {
+		return true, nil
+	}
+	// A new review: no attempt of it ran yet.
+	in, err := chain.Load(ctx, st, models, now, store.Run{MR: mr}, repo)
+	if err != nil {
+		return false, fmt.Errorf("read the model chain: %w", err)
+	}
+	in.InstanceQuotaUsedUp = true
+	return !chain.Resolve(in).Runs(), nil
 }
 
 // StartRequest asks for the review of an untrusted author's change mr at
 // Head and TargetBranch to be started. Repo holds the change's cap and the
 // quotas, and Now is the clock they count by. PastQuota is set only for an
-// admin's dashboard action, which goes past a used-up quota.
+// admin's dashboard action, which goes past a used-up quota. Models is
+// RerunRequest's.
 type StartRequest struct {
 	MR                 store.MRKey
 	ProjectPath        string
@@ -188,6 +209,7 @@ type StartRequest struct {
 	Repo               settings.Effective
 	Now                time.Time
 	PastQuota          bool
+	Models             *instances.Registry
 }
 
 // Start is what a comment command and a button follow to start the review of
@@ -199,7 +221,7 @@ type StartRequest struct {
 // access, drafts and the change's state first, and wakes the engine and
 // audits when the result is RerunQueued.
 func Start(ctx context.Context, st *store.Store, req StartRequest) (RerunResult, error) {
-	used, err := quotaUsedUp(ctx, st, req.PastQuota, req.Now, req.MR, req.Repo)
+	used, err := quotaUsedUp(ctx, st, req.PastQuota, req.Now, req.MR, req.Repo, req.Models)
 	if err != nil {
 		return RerunResult{}, err
 	}

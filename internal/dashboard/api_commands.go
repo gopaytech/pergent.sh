@@ -242,7 +242,7 @@ func (d *Dashboard) rerun(w http.ResponseWriter, r *http.Request, b reviewButton
 
 	res, err := actions.Rerun(ctx, d.Store, actions.RerunRequest{
 		MR: b.mr, ProjectPath: b.project, Head: change.HeadSHA, TargetBranch: change.TargetBranch,
-		FailedOnly: failedOnly, Repo: b.repo, Now: d.now(), PastQuota: b.pastQuota(session(r)),
+		FailedOnly: failedOnly, Repo: b.repo, Now: d.now(), PastQuota: b.pastQuota(session(r)), Models: d.registry,
 	})
 	if err != nil {
 		d.failed(w, r, "queueing a re-run", err)
@@ -296,7 +296,7 @@ func (d *Dashboard) start(w http.ResponseWriter, r *http.Request, b reviewButton
 	}
 	res, err := actions.Start(ctx, d.Store, actions.StartRequest{
 		MR: b.mr, ProjectPath: b.project, Head: change.HeadSHA, TargetBranch: change.TargetBranch,
-		Repo: b.repo, Now: d.now(), PastQuota: b.pastQuota(session(r)),
+		Repo: b.repo, Now: d.now(), PastQuota: b.pastQuota(session(r)), Models: d.registry,
 	})
 	if err != nil {
 		d.failed(w, r, "starting a review", err)
