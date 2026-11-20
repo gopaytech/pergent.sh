@@ -1,10 +1,16 @@
 package store
 
 import (
+	"bytes"
+	"errors"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // columnInfo is a column's type and nullability, as information_schema says.
@@ -246,5 +252,302 @@ func TestOneOwnerPerLevel(t *testing.T) {
 	// Not an owner: any number of teams may cover it.
 	if _, err := s.pool.Exec(ctx, `INSERT INTO team_repos (team_id, instance, project) VALUES ($1, 'main', 'acme/api')`, b); err != nil {
 		t.Errorf("a team that does not own it: %v", err)
+	}
+}
+
+func newTeam(t *testing.T, s *Store, name string) int64 {
+	t.Helper()
+	team, err := s.CreateTeam(ctx, name, t0)
+	if err != nil {
+		t.Fatalf("CreateTeam(%s): %v", name, err)
+	}
+	return team.ID
+}
+
+func newTeamModel(t *testing.T, s *Store, teamID int64, name string, key []byte) TeamModel {
+	t.Helper()
+	m, err := s.CreateTeamModel(ctx, TeamModel{TeamID: teamID, Name: name, Provider: "openai", Model: "gpt-5", APIKeySealed: key}, t0)
+	if err != nil {
+		t.Fatalf("CreateTeamModel(%s): %v", name, err)
+	}
+	return m
+}
+
+func teamModelByID(t *testing.T, s *Store, teamID int64, id string) (TeamModel, bool) {
+	t.Helper()
+	ms, err := s.TeamModels(ctx, teamID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range ms {
+		if m.ID == id {
+			return m, true
+		}
+	}
+	return TeamModel{}, false
+}
+
+func TestTeamModelCRUD(t *testing.T) {
+	s := newStore(t)
+	team := newTeam(t, s, "Payments")
+	m, err := s.CreateTeamModel(ctx, TeamModel{ID: "ignored", TeamID: team, Name: "Team key", Provider: "anthropic",
+		Model: "sonnet", BaseURL: "https://llm.example.com", APIKeySealed: []byte("k1")}, t0)
+	if err != nil {
+		t.Fatalf("CreateTeamModel: %v", err)
+	}
+	if m.ID == "" || m.ID == "ignored" || m.TeamID != team || m.Name != "Team key" || m.Provider != "anthropic" ||
+		m.Model != "sonnet" || m.BaseURL != "https://llm.example.com" || !bytes.Equal(m.APIKeySealed, []byte("k1")) ||
+		!m.CreatedAt.Equal(t0) || !m.UpdatedAt.Equal(t0) {
+		t.Errorf("created = %+v", m)
+	}
+	second := newTeamModel(t, s, team, "Another", nil)
+
+	// Update with no key keeps it; a name, base URL and key change.
+	if found, err := s.UpdateTeamModel(ctx, team, m.ID, strp("Renamed"), nil, nil, t0.Add(time.Hour)); err != nil || !found {
+		t.Fatalf("UpdateTeamModel name = %v, %v", found, err)
+	}
+	got, _ := teamModelByID(t, s, team, m.ID)
+	if got.Name != "Renamed" || got.BaseURL != "https://llm.example.com" || !bytes.Equal(got.APIKeySealed, []byte("k1")) ||
+		!got.UpdatedAt.Equal(t0.Add(time.Hour)) {
+		t.Errorf("after a rename = %+v", got)
+	}
+	if found, err := s.UpdateTeamModel(ctx, team, m.ID, nil, strp(""), []byte("k2"), t0); err != nil || !found {
+		t.Fatalf("UpdateTeamModel key = %v, %v", found, err)
+	}
+	got, _ = teamModelByID(t, s, team, m.ID)
+	if got.BaseURL != "" || !bytes.Equal(got.APIKeySealed, []byte("k2")) || got.Name != "Renamed" {
+		t.Errorf("after a key change = %+v", got)
+	}
+	if _, err := s.UpdateTeamModel(ctx, team, second.ID, strp("renamed"), nil, nil, t0); !errors.Is(err, ErrNameTaken) {
+		t.Errorf("rename to a taken name = %v; want ErrNameTaken", err)
+	}
+
+	// Another team can't see or change it.
+	other := newTeam(t, s, "Growth")
+	if found, err := s.UpdateTeamModel(ctx, other, m.ID, strp("x"), nil, nil, t0); err != nil || found {
+		t.Errorf("UpdateTeamModel from another team = %v, %v; want not found", found, err)
+	}
+	if ms, err := s.TeamModels(ctx, other); err != nil || len(ms) != 0 {
+		t.Errorf("TeamModels(other) = %+v, %v; want none", ms, err)
+	}
+	if _, err := s.DeleteTeamModel(ctx, other, m.ID); !errors.Is(err, ErrModelNotFound) {
+		t.Errorf("DeleteTeamModel from another team = %v; want ErrModelNotFound", err)
+	}
+
+	ms, err := s.TeamModels(ctx, team)
+	if err != nil || len(ms) != 2 || ms[0].ID != m.ID || ms[1].ID != second.ID {
+		t.Errorf("TeamModels = %+v, %v; want both, oldest first", ms, err)
+	}
+	newTeamModel(t, s, other, "Growth key", nil)
+	if all, err := s.AllTeamModels(ctx); err != nil || len(all) != 3 {
+		t.Errorf("AllTeamModels = %+v, %v; want 3", all, err)
+	}
+	if _, err := s.DeleteTeamModel(ctx, team, m.ID); err != nil {
+		t.Fatalf("DeleteTeamModel: %v", err)
+	}
+	if _, found := teamModelByID(t, s, team, m.ID); found {
+		t.Error("the entry is still there")
+	}
+	if _, err := s.DeleteTeamModel(ctx, team, m.ID); !errors.Is(err, ErrModelNotFound) {
+		t.Errorf("DeleteTeamModel twice = %v; want ErrModelNotFound", err)
+	}
+}
+
+// A name is unique in its team, ignoring case; 2 teams may use the same one.
+func TestTeamModelNameUniquePerTeam(t *testing.T) {
+	s := newStore(t)
+	a, b := newTeam(t, s, "Payments"), newTeam(t, s, "Growth")
+	newTeamModel(t, s, a, "Main", nil)
+	if _, err := s.CreateTeamModel(ctx, TeamModel{TeamID: a, Name: "MAIN", Provider: "openai", Model: "gpt-5"}, t0); !errors.Is(err, ErrNameTaken) {
+		t.Errorf("a taken name = %v; want ErrNameTaken", err)
+	}
+	newTeamModel(t, s, b, "Main", nil)
+}
+
+func markOf(t *testing.T, s *Store, source, id string) (string, bool) {
+	t.Helper()
+	var class string
+	err := s.pool.QueryRow(ctx, `SELECT class FROM model_entry_marks WHERE source = $1 AND model_id = $2`, source, id).Scan(&class)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return class, true
+}
+
+func setMark(t *testing.T, s *Store, source, id, class string) {
+	t.Helper()
+	var until any = t0.Add(time.Hour)
+	if class == "auth" {
+		until = nil
+	}
+	if _, err := s.pool.Exec(ctx, `INSERT INTO model_entry_marks (source, model_id, class, until, set_at) VALUES ($1, $2, $3, $4, $5)`,
+		source, id, class, until, t0); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Editing a key clears that entry's auth mark, and only that: a quota mark
+// stays, and so does the mark of an entry whose key did not change.
+func TestKeyEditClearsAuthMark(t *testing.T) {
+	s := newStore(t)
+	team := newTeam(t, s, "Payments")
+	g1 := newModel(t, s, "openai", "gpt-5", "", []byte("k1"))
+	g2 := newModel(t, s, "anthropic", "sonnet", "", []byte("k2"))
+	t1 := newTeamModel(t, s, team, "Rejected", []byte("k3"))
+	t2 := newTeamModel(t, s, team, "Out of quota", []byte("k4"))
+	setMark(t, s, "global", g1.ID, "auth")
+	setMark(t, s, "global", g2.ID, "auth")
+	setMark(t, s, "team", t1.ID, "auth")
+	setMark(t, s, "team", t2.ID, "quota")
+
+	if _, err := s.UpdateLLMModel(ctx, g2.ID, "https://llm.example.com", nil, t0); err != nil {
+		t.Fatal(err)
+	}
+	if _, marked := markOf(t, s, "global", g2.ID); !marked {
+		t.Error("a base URL edit cleared the auth mark")
+	}
+	if _, err := s.UpdateLLMModel(ctx, g1.ID, "", []byte("new"), t0); err != nil {
+		t.Fatal(err)
+	}
+	if _, marked := markOf(t, s, "global", g1.ID); marked {
+		t.Error("a global key edit left the auth mark")
+	}
+	if _, err := s.UpdateTeamModel(ctx, team, t1.ID, nil, nil, []byte("new"), t0); err != nil {
+		t.Fatal(err)
+	}
+	if _, marked := markOf(t, s, "team", t1.ID); marked {
+		t.Error("a team key edit left the auth mark")
+	}
+	if _, err := s.UpdateTeamModel(ctx, team, t2.ID, nil, nil, []byte("new"), t0); err != nil {
+		t.Fatal(err)
+	}
+	if class, marked := markOf(t, s, "team", t2.ID); !marked || class != "quota" {
+		t.Errorf("quota mark after a key edit = %q, %v; want it kept", class, marked)
+	}
+}
+
+func insertChain(t *testing.T, s *Store, scope string, teamID *int64, instance, project string, entries ...EntryRef) int64 {
+	t.Helper()
+	var id int64
+	if err := s.pool.QueryRow(ctx, `INSERT INTO model_chains (scope, team_id, instance, project, updated_at)
+		VALUES ($1, $2, $3, $4, $5) RETURNING id`, scope, teamID, instance, project, t0).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	for i, e := range entries {
+		if _, err := s.pool.Exec(ctx, `INSERT INTO model_chain_entries (chain_id, position, source, model_id) VALUES ($1, $2, $3, $4)`,
+			id, i+1, e.Source, e.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return id
+}
+
+func chainEntries(t *testing.T, s *Store, chainID int64) []EntryRef {
+	t.Helper()
+	rows, err := s.pool.Query(ctx, `SELECT position, source, model_id FROM model_chain_entries WHERE chain_id = $1 ORDER BY position`, chainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []EntryRef
+	for rows.Next() {
+		var pos int
+		var e EntryRef
+		if err := rows.Scan(&pos, &e.Source, &e.ID); err != nil {
+			t.Fatal(err)
+		}
+		if pos != len(out)+1 {
+			t.Errorf("chain %d has position %d at place %d", chainID, pos, len(out)+1)
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// Removing a team entry takes it out of every chain that names it, the rest
+// moved up, and returns those chains as they are now. Its mark goes too.
+func TestDeleteTeamModelLeavesChains(t *testing.T) {
+	s := newStore(t)
+	team := newTeam(t, s, "Payments")
+	g := newModel(t, s, "openai", "gpt-5", "", nil)
+	gone := newTeamModel(t, s, team, "Gone", nil)
+	kept := newTeamModel(t, s, team, "Kept", nil)
+	G, Gone, Kept := EntryRef{SourceGlobal, g.ID}, EntryRef{SourceTeam, gone.ID}, EntryRef{SourceTeam, kept.ID}
+	teamChain := insertChain(t, s, "team", &team, "", "", Gone, G, Kept)
+	if _, err := s.pool.Exec(ctx, `INSERT INTO dashboard_repos (instance, project, chain_mode) VALUES ('main', 'acme/api', 'custom')`); err != nil {
+		t.Fatal(err)
+	}
+	repoChain := insertChain(t, s, "repo", nil, "main", "acme/api", Gone, G)
+	untouched := insertChain(t, s, "repo", nil, "main", "acme/web", Kept)
+	setMark(t, s, "team", gone.ID, "auth")
+
+	changed, err := s.DeleteTeamModel(ctx, team, gone.ID)
+	if err != nil {
+		t.Fatalf("DeleteTeamModel: %v", err)
+	}
+	ids := map[int64][]EntryRef{}
+	for _, c := range changed {
+		ids[c.ID] = c.Entries
+	}
+	if len(changed) != 2 || !slices.Equal(ids[teamChain], []EntryRef{G, Kept}) || !slices.Equal(ids[repoChain], []EntryRef{G}) {
+		t.Errorf("changed chains = %+v; want the team and the repository chain, without the entry", changed)
+	}
+	if got := chainEntries(t, s, teamChain); !slices.Equal(got, []EntryRef{G, Kept}) {
+		t.Errorf("team chain = %+v", got)
+	}
+	if got := chainEntries(t, s, repoChain); !slices.Equal(got, []EntryRef{G}) {
+		t.Errorf("repository chain = %+v", got)
+	}
+	if got := chainEntries(t, s, untouched); !slices.Equal(got, []EntryRef{Kept}) {
+		t.Errorf("a chain that did not name it = %+v", got)
+	}
+	// The repository chain now starts with a global entry: model_id follows.
+	repo, _, err := s.AnyDashboardRepo(ctx, "main", "acme/api")
+	if err != nil || repo.ModelID == nil || *repo.ModelID != g.ID {
+		t.Errorf("model_id = %v, %v; want %s", repo.ModelID, err, g.ID)
+	}
+	if _, marked := markOf(t, s, "team", gone.ID); marked {
+		t.Error("the mark of the removed entry is still there")
+	}
+}
+
+// Deleting a team deletes its entries, its chain and their marks, and takes
+// its entries out of the repository chains that named them.
+func TestDeleteTeamCascades(t *testing.T) {
+	s := newStore(t)
+	team, other := newTeam(t, s, "Payments"), newTeam(t, s, "Growth")
+	g := newModel(t, s, "openai", "gpt-5", "", nil)
+	m := newTeamModel(t, s, team, "Team key", nil)
+	keep := newTeamModel(t, s, other, "Other key", nil)
+	insertChain(t, s, "team", &team, "", "", EntryRef{SourceTeam, m.ID})
+	otherChain := insertChain(t, s, "team", &other, "", "", EntryRef{SourceTeam, keep.ID})
+	repoChain := insertChain(t, s, "repo", nil, "main", "acme/api", EntryRef{SourceTeam, m.ID}, EntryRef{SourceGlobal, g.ID})
+	setMark(t, s, "team", m.ID, "quota")
+	setMark(t, s, "team", keep.ID, "quota")
+
+	if ok, err := s.DeleteTeam(ctx, team, nil); err != nil || !ok {
+		t.Fatalf("DeleteTeam = %v, %v", ok, err)
+	}
+	var n int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM team_models WHERE team_id = $1`, team).Scan(&n); err != nil || n != 0 {
+		t.Errorf("team models left = %d, %v", n, err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM model_chains WHERE team_id = $1`, team).Scan(&n); err != nil || n != 0 {
+		t.Errorf("team chains left = %d, %v", n, err)
+	}
+	if _, marked := markOf(t, s, "team", m.ID); marked {
+		t.Error("the mark of a deleted team's entry is still there")
+	}
+	if _, marked := markOf(t, s, "team", keep.ID); !marked {
+		t.Error("another team's mark went")
+	}
+	if got := chainEntries(t, s, otherChain); !slices.Equal(got, []EntryRef{{SourceTeam, keep.ID}}) {
+		t.Errorf("another team's chain = %+v", got)
+	}
+	if got := chainEntries(t, s, repoChain); !slices.Equal(got, []EntryRef{{SourceGlobal, g.ID}}) {
+		t.Errorf("repository chain = %+v; want the team entry gone", got)
 	}
 }

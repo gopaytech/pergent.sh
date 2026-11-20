@@ -240,8 +240,9 @@ func (s *Store) UpdateTeam(ctx context.Context, id int64, apply func(*Team) erro
 	return true, nil
 }
 
-// DeleteTeam removes a team with its members and repositories (not the
-// accounts); ok is false when there is no such team. When check is not nil
+// DeleteTeam removes a team with its members, repositories, entries, chain
+// and the marks of its entries (not the accounts), and takes its entries out
+// of the repository chains that name them; ok is false when there is no such team. When check is not nil
 // it is handed the team under the lock UpdateTeam takes, so what it decides
 // on can't change before the team goes; an error from it keeps the team and
 // is returned.
@@ -269,6 +270,21 @@ func (s *Store) DeleteTeam(ctx context.Context, id int64, check func(Team) error
 			return false, err
 		}
 	}
+	var modelIDs []string
+	rows, err := tx.Query(ctx, `SELECT id FROM team_models WHERE team_id = $1 FOR UPDATE`, id)
+	if err != nil {
+		return false, err
+	}
+	if modelIDs, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil {
+		return false, err
+	}
+	if _, err := removeFromChains(ctx, tx, SourceTeam, modelIDs, time.Now()); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM model_entry_marks WHERE source = $1 AND model_id = ANY($2)`, SourceTeam, modelIDs); err != nil {
+		return false, err
+	}
+	// team_models and the team's chain go with the team (ON DELETE CASCADE).
 	if _, err := tx.Exec(ctx, `DELETE FROM teams WHERE id = $1`, id); err != nil {
 		return false, err
 	}
